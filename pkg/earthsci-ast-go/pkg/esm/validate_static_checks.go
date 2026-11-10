@@ -287,9 +287,6 @@ func (s *structuralScan) checkFAQBareArrayOperands(expr Expression, shaped map[s
 			for sym := range node.Ranges {
 				inner[sym] = true
 			}
-			if node.Arg != nil {
-				inner[*node.Arg] = true
-			}
 			for _, part := range []struct {
 				field string
 				expr  Expression
@@ -373,17 +370,13 @@ func (s *structuralScan) checkAggregateUndefinedIndexSet(node ExprNode, fieldPat
 // itself (esm-spec §4.3.1 "Ragged ranges"), so its `values` gather is implicit
 // rather than authored.
 var valueInventionBodyOps = map[string]bool{
-	"skolem": true, "rank": true, "distinct": true, "argmin": true, "argmax": true,
+	"distinct": true,
 }
 
 // isValueInventionFAQ reports whether node is a value-invention `faq`:
-// `distinct: true`, a `skolem` key, or a skolem / rank / distinct / arg-witness
-// body.
+// `distinct: true`, or a `distinct` body.
 func isValueInventionFAQ(node ExprNode) bool {
 	if node.Distinct != nil && *node.Distinct {
-		return true
-	}
-	if key, ok := asExprNode(node.Key); ok && key.Op == "skolem" {
 		return true
 	}
 	body, ok := asExprNode(node.Expr)

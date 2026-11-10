@@ -52,8 +52,8 @@ func TestAggregateValidFixtures(t *testing.T) {
 //     (RFC semiring-faq-unified-ir §5.2). Go must ACCEPT these (Load returns
 //     nil); see TestAggregateInvalidFixtures and bead ess-my4.1.6.
 //   - Checks Go DOES run — the §9.6.4 post-expansion validators, e.g. the
-//     closed-set `manifold` enum. Go must REJECT these, carrying exactly the
-//     pinned code; see TestGeometryInvalidFixtures.
+//     `makearray` region bounds. Go must REJECT these, carrying exactly the
+//     pinned code.
 func resolverOnlyPins(t *testing.T, repoRoot string) map[string]string {
 	t.Helper()
 	path := filepath.Join(repoRoot, "tests", "invalid", "expected_errors.json")
@@ -344,8 +344,8 @@ func TestIndexSetsDocumentScopeRoundTrip(t *testing.T) {
 			// document scope, idempotently. The re-parse uses FromJSON
 			// (json.Unmarshal + struct validation) rather than LoadString so
 			// this stays focused on the index_sets scope change: these fixtures
-			// carry `faq` / `intersect_polygon` op nodes whose required
-			// fields (output_idx/expr/ranges/manifold) the Go ExprNode does not
+			// carry `faq` op nodes whose required fields
+			// (output_idx/expr/ranges) the Go ExprNode does not
 			// yet serialize (a pre-existing gap, see indexing_roundtrip_test.go),
 			// so a full schema-validating LoadString of the re-serialized file
 			// would fail for reasons unrelated to index_sets.

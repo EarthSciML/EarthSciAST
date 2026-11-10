@@ -7,9 +7,9 @@ import (
 
 // jsonutil.go provides the single generic raw-JSON tree walker that the
 // bespoke recursive walkers in lower_expression_templates.go
-// (validateGeometryManifolds, assertNoNestedApply, validateMakearrayRegions,
-// findApplyPaths) each re-implement by hand today. Consolidating them here
-// removes four near-identical traversals that had already drifted in their
+// (assertNoNestedApply, validateMakearrayRegions, findApplyPaths) each
+// re-implement by hand today. Consolidating them here removes near-identical
+// traversals that had already drifted in their
 // path formatting and their expression_templates-skip behavior.
 
 // walkJSONTree recursively walks a decoded-JSON tree (map[string]interface{} /
@@ -20,7 +20,7 @@ import (
 // key k extends the path with "/"+k, and an array's element i extends it with
 // fmt.Sprintf("/%d", i). Call the root with path == "" (or "#", as a caller
 // prefers). visit is called on the object node itself BEFORE its children are
-// visited (pre-order), so a caller can inspect a node's "op"/"manifold"/… and
+// visited (pre-order), so a caller can inspect a node's "op"/"regions"/… and
 // still have its descendants walked afterward. Arrays and scalars are not
 // passed to visit; only object nodes are.
 //
@@ -31,11 +31,11 @@ import (
 // and halts the walk.
 //
 // This base form visits the whole tree, matching assertNoNestedApply and
-// findApplyPaths. To replicate the validateGeometryManifolds /
-// validateMakearrayRegions convention of NOT descending into
-// `expression_templates` blocks (pre-substitution template bodies may legally
-// carry parameter names in scalar slots), use walkJSONTreeSkipping with a skip
-// set — the skip is a parameter, so the base form stays skip-free.
+// findApplyPaths. To replicate the validateMakearrayRegions convention of NOT
+// descending into `expression_templates` blocks (pre-substitution template
+// bodies may legally carry parameter names in scalar slots), use
+// walkJSONTreeSkipping with a skip set — the skip is a parameter, so the base
+// form stays skip-free.
 func walkJSONTree(tree any, path string, visit func(path string, obj map[string]any) error) error {
 	return walkJSONTreeSkipping(tree, path, nil, visit)
 }
@@ -46,7 +46,7 @@ func walkJSONTree(tree any, path string, visit func(path string, obj map[string]
 // Passing skipKeys == nil is equivalent to walkJSONTree.
 //
 // Pass e.g. map[string]struct{}{"expression_templates": {}} to reproduce the
-// validateGeometryManifolds / validateMakearrayRegions convention.
+// validateMakearrayRegions convention.
 func walkJSONTreeSkipping(tree any, path string, skipKeys map[string]struct{}, visit func(path string, obj map[string]any) error) error {
 	switch t := tree.(type) {
 	case map[string]any:

@@ -512,24 +512,19 @@ var canonicalEmissibleFields = map[string]struct{}{
 // them denote the same value, and both appear on ordinary documents
 // (tests/valid/cadence/*.esm) — so rejecting them would make CanonicalJSON fail
 // on legitimate files. They are dropped from the canonical encoding, not
-// rejected. `label` is deliberately NOT here: it is non-emissible and rejected,
-// matching TS's E_CANONICAL_UNSUPPORTED_FIELD.
+// rejected.
 var canonicalIgnoredFields = map[string]struct{}{
-	"arg": {}, "bindings": {}, "id": {}, "expect_cadence": {},
+	"bindings": {}, "id": {}, "expect_cadence": {},
 }
 
 // exprNodeHasNonEmissibleField reports whether n carries any SET field that the
 // canonical encoding has no slot for.
 //
 // ALLOW-LIST, derived by reflection over the ExprNode struct — the point being
-// that it FAILS CLOSED. The previous implementation was a hand-maintained
-// DENY-list which claimed "every OTHER field is listed here explicitly" and then
-// omitted `label`: a skolem node's documentary relation tag was silently DROPPED
-// from the canonical JSON instead of being rejected (audit G9), and `id` /
-// `expect_cadence` would have been dropped the same way the moment they were
-// modeled. Enumerating the struct's own json tags means a NEW field is
-// non-emissible by default and cannot slip through unnoticed — the fail-closed
-// discipline Julia gets from deriving its list from `fieldnames(OpExpr)`.
+// that it FAILS CLOSED (audit G9). Enumerating the struct's own json tags means
+// a NEW field is non-emissible by default and cannot slip through unnoticed —
+// the fail-closed discipline Julia gets from deriving its list from
+// `fieldnames(OpExpr)`.
 func exprNodeHasNonEmissibleField(n ExprNode) bool {
 	v := reflect.ValueOf(n)
 	t := v.Type()

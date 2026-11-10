@@ -28,7 +28,7 @@ func (e *EvaluationError) DiagnosticCode() string { return e.Code }
 // FreeVariables returns the set of all variable names that appear in an
 // expression, including those reachable ONLY through a sidecar (non-`args`)
 // field — an aggregate's `expr`/`filter`/`key`/`join`, an integral's
-// `lower`/`upper`, a table_lookup's `axes`, a makearray's `values`, an
+// `lower`/`upper`, a makearray's `values`, an
 // apply_expression_template's `bindings`, … The walk is the shared
 // field-preserving one (mapExprChildren), so a name can never again hide from
 // it in a field the walker was not taught about (audit G1 — and G2, where a
@@ -94,9 +94,9 @@ func Simplify(expr Expression) Expression {
 // simplifyExprNode performs simplification on an expression node.
 //
 // Children are recursively simplified through the shared field-preserving
-// walker so a non-arithmetic node (integral, table_lookup, aggregate, …) keeps
-// EVERY field — the old rebuild copied only Op/Args/Wrt/Dim and silently
-// stripped Var/Lower/Upper/axes/output/…
+// walker so a non-arithmetic node (integral, aggregate, …) keeps EVERY field —
+// the old rebuild copied only Op/Args/Wrt/Dim and silently stripped
+// Var/Lower/Upper/…
 func simplifyExprNode(node ExprNode) Expression {
 	simplified, _ := mapExprChildren(node, func(child Expression) (Expression, error) {
 		return Simplify(child), nil
@@ -309,7 +309,7 @@ func logApply(a []float64) (float64, error) {
 // arithOpTable is the single source of truth for the scalar-evaluable /
 // foldable operator set (esm-spec §4.2) AND for the arity of every SCALAR
 // operator the format admits. Non-evaluable ops handled before argument
-// evaluation (const/enum/fn/D/grad/div/laplacian) are intentionally absent.
+// evaluation (const/enum/D/grad/div/laplacian) are intentionally absent.
 //
 // The structural validator reads the bounds here through scalarOpArity
 // (op_registry.go) to decide whether a `broadcast` node's `fn`/`args` pair is
@@ -538,9 +538,7 @@ func evalLazyOp(node ExprNode, bindings map[string]float64) (float64, error) {
 // op that needs none (esm-spec §9.6.6).
 var closedNonScalarOps = map[string]struct{}{
 	"faq": {}, "makearray": {}, "index": {}, "broadcast": {}, "reshape": {},
-	"transpose": {}, "concat": {}, "skolem": {}, "rank": {}, "distinct": {},
-	"argmin": {}, "argmax": {},
-	"intersect_polygon": {}, "polygon_intersection_area": {}, "table_lookup": {},
+	"transpose": {}, "concat": {}, "distinct": {},
 	"apply_expression_template": {}, "ic": {},
 }
 
@@ -605,14 +603,6 @@ func checkEvaluable(expr Expression) error {
 		return unloweredDerivativeError(node)
 	case "enum":
 		return enumNotLoweredError()
-	case "fn":
-		// Operands only: a closed function is identified by `name`, not `op`.
-		for _, arg := range node.Args {
-			if err := checkEvaluable(arg); err != nil {
-				return err
-			}
-		}
-		return nil
 	case "index":
 		// Only the scalar read of a 1-D `const` literal has a rule here (see
 		// constVectorIndex); every other `index` stays unevaluable.
@@ -661,9 +651,8 @@ func evaluateExpr(expr Expression, bindings map[string]float64) (float64, error)
 
 // evaluateExprNode evaluates an expression node
 func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, error) {
-	// `const` and `fn` carry inline literals / typed payloads that the
-	// scalar-only fast path below would reject (a `const` array is not a
-	// float; a closed-fn arg may legally be one). Handle them first.
+	// `const` carries an inline literal payload that the scalar-only fast path
+	// below would reject (a `const` array is not a float). Handle it first.
 	switch node.Op {
 	case "const":
 		f, ok := toFloat64(node.Value)
@@ -675,8 +664,6 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 		// `enum` MUST have been lowered to `const` at load time
 		// (esm-spec §9.3). Reaching it here is a bug in the loader.
 		return 0, enumNotLoweredError()
-	case "fn":
-		return evaluateFnNode(node, bindings)
 	case "index":
 		return evaluateConstVectorIndex(node, bindings)
 	case "D":
@@ -718,9 +705,7 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 
 // constVectorIndex recognizes the one `index` form the scalar evaluator reduces:
 // `index(<const 1-D numeric array>, i)`, a single 1-based subscript into an
-// inline literal (esm-spec §4.3.3). It is what the §9.5.3 `nearest` lowering of
-// a `table_lookup` produces, so without it a nearest lookup would lower but not
-// evaluate. It returns the literal's entries.
+// inline literal (esm-spec §4.3.3). It returns the literal's entries.
 func constVectorIndex(node ExprNode) ([]float64, bool) {
 	if len(node.Args) != 2 {
 		return nil, false
@@ -831,8 +816,7 @@ func unevaluableOpError(node ExprNode) error {
 
 // toFloat64 is the LENIENT numeric coercion: it converts the numeric Go types
 // AND parses numeric strings (via strconv.ParseFloat, which also accepts
-// "NaN"/"Inf"). It exists for TABLE / closed-function extraction
-// (registered_functions.go) and `const`-value coercion, where an argument may
+// "NaN"/"Inf"). It exists for `const`-value coercion, where an argument may
 // legitimately arrive as a numeric string literal. It MUST NOT be used to test
 // whether an expression is a numeric literal for Simplify/folding, because a
 // bare string there is a variable reference, not a number — use
@@ -903,90 +887,4 @@ func isPositive(expr any) bool {
 		return num > 0.0
 	}
 	return false
-}
-
-// evaluateFnNode dispatches a closed-registry `fn` op (esm-spec §4.4 / §9.2).
-// Each argument is normally evaluated as a scalar; a `const`-op array
-// argument (e.g. the `xs` table to `interp.searchsorted`) is passed
-// through to the closed function as []float64 without reduction.
-//
-// The result is lifted to float64 so the rest of the scalar evaluator can
-// continue with no special casing — integer outputs of datetime.* widen
-// losslessly (≤ 31-bit per the §9.2 contract).
-func evaluateFnNode(node ExprNode, bindings map[string]float64) (float64, error) {
-	if node.Name == nil || *node.Name == "" {
-		return 0, fmt.Errorf("fn op missing required `name` field (esm-spec §4.4)")
-	}
-	// Load ran the full §9.2 argument checks (load_time_checks.go); a tree
-	// built in memory gets them here: the AST half now, the value half in
-	// EvaluateClosedFunction.
-	if err := checkInterpArgsAreConst(node); err != nil {
-		return 0, err
-	}
-	args := make([]any, len(node.Args))
-	for i, raw := range node.Args {
-		v, err := evaluateFnArg(raw, bindings)
-		if err != nil {
-			return 0, err
-		}
-		args[i] = v
-	}
-	out, err := EvaluateClosedFunction(*node.Name, args)
-	if err != nil {
-		return 0, err
-	}
-	switch v := out.(type) {
-	case float64:
-		return v, nil
-	case int32:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	default:
-		return 0, fmt.Errorf("closed function %q returned unsupported scalar type %T", *node.Name, out)
-	}
-}
-
-// describeFnArg names a non-`const` closed-function argument for a diagnostic.
-func describeFnArg(arg any) string {
-	switch a := arg.(type) {
-	case string:
-		return fmt.Sprintf("the variable reference %q", a)
-	case ExprNode:
-		return fmt.Sprintf("a non-`const` %q expression", a.Op)
-	case *ExprNode:
-		if a != nil {
-			return fmt.Sprintf("a non-`const` %q expression", a.Op)
-		}
-	}
-	return fmt.Sprintf("a %T", arg)
-}
-
-// evaluateFnArg evaluates a single argument to a `fn` op. Most args are
-// reduced to scalar float64 via the standard evaluator. A `const`-op
-// child carrying an array Value is passed through as []interface{} so
-// that closed functions like `interp.searchsorted` receive the table.
-func evaluateFnArg(arg any, bindings map[string]float64) (any, error) {
-	switch a := arg.(type) {
-	case ExprNode:
-		if a.Op == "const" {
-			return constNodeValue(a)
-		}
-	case *ExprNode:
-		if a != nil && a.Op == "const" {
-			return constNodeValue(*a)
-		}
-	}
-	// Scalar path.
-	return evaluateExpr(arg, bindings)
-}
-
-// constNodeValue returns the typed payload of a `const`-op node. Numeric
-// values come back as float64 / int64 (the parser's normalized literal
-// types); arrays come back as []interface{}.
-func constNodeValue(node ExprNode) (any, error) {
-	if node.Value == nil {
-		return nil, fmt.Errorf("const op missing required `value` field (esm-spec §4.2)")
-	}
-	return node.Value, nil
 }

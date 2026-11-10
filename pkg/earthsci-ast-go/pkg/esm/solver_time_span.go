@@ -143,6 +143,11 @@ func daysFromCivil(y, m, d int64) int64 {
 	return era*146097 + doe - 719468
 }
 
+// isLeapYear: proleptic-Gregorian. Pure integer arithmetic.
+func isLeapYear(y int64) bool {
+	return (y%4 == 0 && y%100 != 0) || y%400 == 0
+}
+
 func daysInMonth(y, m int64) int64 {
 	switch m {
 	case 1, 3, 5, 7, 8, 10, 12:

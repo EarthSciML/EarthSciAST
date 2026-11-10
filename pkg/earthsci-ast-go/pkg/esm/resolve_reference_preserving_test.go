@@ -122,7 +122,6 @@ func TestReferencePreserving_RejectsInvalidFixtures(t *testing.T) {
 		{"constraint_unknown_index_set", "template_constraint_unknown_index_set"},
 		{"import_where_rename_unknown_index_set", "template_constraint_unknown_index_set"},
 		{"nonterminating_rewrite", "rewrite_rule_nonterminating"},
-		{"per_instantiation_validation", "geometry_manifold_invalid"},
 	} {
 		t.Run(tc.group, func(t *testing.T) {
 			path := tiConfDir(t, tc.group, "fixture.esm")

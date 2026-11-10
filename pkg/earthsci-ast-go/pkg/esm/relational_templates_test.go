@@ -237,8 +237,8 @@ func TestRelationalKeyAndWhereTemplatesExpand(t *testing.T) {
 	}
 }
 
-// TestRelationalRewritesLoad loads every template rewrite of the skolem /
-// rank / gated-argmin fixtures: each resolves its lib/relational.esm import and
+// TestRelationalRewritesLoad loads every template rewrite of the relational
+// fixtures: each resolves its lib/relational.esm import and
 // no template reference survives load.
 func TestRelationalRewritesLoad(t *testing.T) {
 	repoRoot := filepath.Join(closedFunctionsFixturesDir(t), "..", "..")

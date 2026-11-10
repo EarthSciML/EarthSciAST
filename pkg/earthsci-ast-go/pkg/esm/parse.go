@@ -543,15 +543,6 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 		return nil, err
 	}
 
-	// esm-spec §9.2 / §9.5.5 (ruling Q-106): the closed-function argument
-	// checks on every interp.* `fn` node and the ten table checks on every
-	// `function_tables` entry run HERE, on the document as loaded — templates
-	// applied, enums lowered — whether or not anything evaluates the node or
-	// references the table. A document that fails one does not load.
-	if err := checkFunctionsAtLoad(&esmFile); err != nil {
-		return nil, err
-	}
-
 	// According to spec Section 2.1a: load() should succeed for valid JSON that
 	// passes schema validation but fails structural validation. Structural issues
 	// should only be reported by the separate validate() function.
@@ -741,7 +732,7 @@ func rejectDeprecatedV02Blocks(jsonStr string) error {
 	}
 	if _, ok := top["registered_functions"]; ok {
 		return fmt.Errorf("deprecated_v02_block: top-level `registered_functions` was removed in v0.3.0 " +
-			"(closed-function-registry RFC §6); rewrite call ops as AST or use the closed registry (esm-spec §9.2)")
+			"(closed-function-registry RFC §6); rewrite call ops as AST")
 	}
 	return nil
 }

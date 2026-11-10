@@ -18,7 +18,6 @@ package esm
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -35,7 +34,7 @@ import (
 // evaluable-core meaning and therefore would not be caught by the generic
 // `!evaluableCoreOps` fallback in opInT: `D` (evaluable-core in its structural
 // equation-LHS role, a rewrite target everywhere else) and the load-eliminated
-// forms `enum`/`table_lookup`/`integral`. Every OTHER open-tier rewrite target —
+// forms `enum`/`integral`. Every OTHER open-tier rewrite target —
 // an unregistered user op, and the spatial-calculus sugar grad/div/laplacian,
 // which carry NO privileged semantics — is NOT in evaluableCoreOps and so
 // reaches T through that generic fallback, not this hand-list.
@@ -43,7 +42,7 @@ import (
 // through the §9.7.3 reference DAG, not by op membership. Mirrors the Julia
 // `_REWRITE_TARGET_OPS`.
 var rewriteTargetOps = map[string]struct{}{
-	"D": {}, "integral": {}, "table_lookup": {}, "enum": {},
+	"D": {}, "integral": {}, "enum": {},
 }
 
 // evaluableCoreOps is the evaluable-core operator registry (the Julia
@@ -67,8 +66,8 @@ var evaluableCoreOps = map[string]struct{}{
 	"floor": {}, "ceil": {}, "min": {}, "max": {},
 	// Constants
 	"pi": {}, "π": {}, "e": {}, "true": {}, "false": {},
-	// Functions / retired closure marker
-	"fn": {}, "call": {},
+	// Retired closure marker
+	"call": {},
 	// Const data / enum marker
 	"const": {}, "enum": {},
 	// Calculus / IC markers. NOTE: grad/div/laplacian are NOT evaluable-core —
@@ -81,9 +80,6 @@ var evaluableCoreOps = map[string]struct{}{
 	"index": {}, "makearray": {}, "broadcast": {}, "reshape": {}, "transpose": {}, "concat": {},
 	// Aggregates
 	"faq": {},
-	// Geometry kernel leaves / value invention
-	"intersect_polygon": {}, "polygon_intersection_area": {}, "skolem": {},
-	"rank": {}, "argmin": {}, "argmax": {},
 }
 
 // opInT reports whether op is a member of the rewrite-target tier T (esm-spec
@@ -652,183 +648,6 @@ func validateMakearrayRegionsInRegistries(registries map[string]map[string]any) 
 				continue
 			}
 			if err := validateMakearrayRegions(body, "expression_templates."+tname+"/body"); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// templateManifoldBearing reports which templates can produce a geometry-kernel
-// node (geometryManifoldOps) — directly in the body or transitively through a
-// referenced template. Only references to these templates need per-instantiation
-// manifold validation (§9.6.9). Mirrors `_template_manifold_bearing`.
-func templateManifoldBearing(named map[string]any) map[string]bool {
-	var direct func(node any, seen map[uintptr]struct{}) bool
-	direct = func(node any, seen map[uintptr]struct{}) bool {
-		switch n := node.(type) {
-		case []any:
-			for _, c := range n {
-				if direct(c, seen) {
-					return true
-				}
-			}
-		case map[string]any:
-			key := reflect.ValueOf(n).Pointer()
-			if _, dup := seen[key]; dup {
-				return false
-			}
-			seen[key] = struct{}{}
-			if op, ok := n["op"].(string); ok {
-				if _, geo := geometryManifoldOps[op]; geo {
-					return true
-				}
-			}
-			for _, v := range n {
-				if direct(v, seen) {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	mb := map[string]bool{}
-	inprog := map[string]bool{}
-	var visit func(name string) bool
-	visit = func(name string) bool {
-		if v, ok := mb[name]; ok {
-			return v
-		}
-		if inprog[name] {
-			return false
-		}
-		declRaw, ok := named[name]
-		if !ok {
-			mb[name] = false
-			return false
-		}
-		decl, _ := declRaw.(map[string]any)
-		inprog[name] = true
-		body := decl["body"]
-		res := body != nil && direct(body, map[uintptr]struct{}{})
-		if !res {
-			var refs []string
-			collectApplyNames(&refs, body)
-			for _, r := range refs {
-				if _, ok := named[r]; !ok {
-					continue
-				}
-				if visit(r) {
-					res = true
-					break
-				}
-			}
-		}
-		delete(inprog, name)
-		mb[name] = res
-		return res
-	}
-	for name := range named {
-		visit(name)
-	}
-	return mb
-}
-
-// validateGeometryManifoldsRefaware discharges `geometry_manifold_invalid`
-// per-instantiation (a `manifold` may be a template param), memoized (esm-spec
-// §9.6.9). Direct geometry nodes in the reference-preserving tree are checked as
-// before; every surviving reference whose template can produce a geometry kernel
-// is additionally expanded ONCE and its expansion validated. The diagnostic
-// names the call-site path and template. Mirrors `_validate_geometry_manifolds_refaware`.
-func validateGeometryManifoldsRefaware(view map[string]any, registries map[string]map[string]any) error {
-	if err := validateGeometryManifolds(view, ""); err != nil {
-		return err
-	}
-	for _, kind := range templateComponentKinds {
-		comps, ok := view[kind].(map[string]any)
-		if !ok {
-			continue
-		}
-		for _, cname := range sortedKeys(comps) {
-			comp, ok := comps[cname].(map[string]any)
-			if !ok {
-				continue
-			}
-			named, ok := registries[cname]
-			if !ok {
-				continue
-			}
-			mb := templateManifoldBearing(named)
-			anyMB := false
-			for _, v := range mb {
-				if v {
-					anyMB = true
-					break
-				}
-			}
-			if !anyMB {
-				continue
-			}
-			memo := map[uintptr]struct{}{}
-			for _, k := range sortedKeys(comp) {
-				if k == "expression_templates" {
-					continue
-				}
-				if err := validateManifoldsInRefs(comp[k], named, mb,
-					fmt.Sprintf("%s.%s.%s", kind, cname, k), memo); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func validateManifoldsInRefs(node any, named map[string]any, mb map[string]bool, path string, memo map[uintptr]struct{}) error {
-	switch n := node.(type) {
-	case []any:
-		for i, c := range n {
-			if err := validateManifoldsInRefs(c, named, mb, fmt.Sprintf("%s/%d", path, i), memo); err != nil {
-				return err
-			}
-		}
-	case map[string]any:
-		key := reflect.ValueOf(n).Pointer()
-		if _, dup := memo[key]; dup {
-			return nil
-		}
-		memo[key] = struct{}{}
-		name := ""
-		if op, _ := n["op"].(string); op == applyExpressionTemplateOp {
-			name, _ = n["name"].(string)
-		}
-		if name != "" && mb[name] {
-			expansion, err := expandAll(n, named, path)
-			if err == nil {
-				if verr := validateGeometryManifolds(expansion, ""); verr != nil {
-					var et *ExpressionTemplateError
-					if errors.As(verr, &et) && et.Code == CodeGeometryManifoldInvalid {
-						return newETErr(CodeGeometryManifoldInvalid,
-							fmt.Sprintf("%s: instantiation of template '%s' — %s (esm-spec §9.6.9; per-instantiation manifold check)", path, name, et.Message))
-					}
-					return verr
-				}
-			}
-		}
-		// An EQUATION names the unknown it defines; carry that name into the path
-		// so a diagnostic raised inside its RHS names the offending CALL SITE and
-		// not merely its index. Before esm 1.0.0 a template call site sat at
-		// `variables/<name>/expression` and the name came for free; now that an
-		// observed unknown is defined by an equation, the name has to be picked
-		// up from the LHS.
-		childPath := path
-		if lhs, ok := n["lhs"].(string); ok && lhs != "" {
-			if _, hasRHS := n["rhs"]; hasRHS {
-				childPath = path + "[" + lhs + "]"
-			}
-		}
-		for _, k := range sortedKeys(n) {
-			if err := validateManifoldsInRefs(n[k], named, mb, childPath+"/"+k, memo); err != nil {
 				return err
 			}
 		}
