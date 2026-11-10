@@ -1183,6 +1183,14 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
             return f"({result})"
         return result
 
+    def call_arg(arg: Expr) -> str:
+        """A function-call argument: parenthesized only when it is a logical
+        `or`, the loosest level (tests/display/RENDERING_CONTRACT.md)."""
+        result = _fmt(arg)
+        if _is_op_node(arg) and _node_field(arg, "op") == "or":
+            return f"({result})"
+        return result
+
     def _latex_func(name, arg_str):
         """Wrap function call: use \\left/\\right when arg contains \\frac."""
         if "\\frac" in arg_str:
@@ -1316,7 +1324,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
         if op == "atan2":
             if format_type == "latex":
                 return f"\\mathrm{{atan2}}({to_latex(left)}, {to_latex(right)})"
-            return f"atan2({_fmt(left)}, {_fmt(right)})"
+            return f"atan2({call_arg(left)}, {call_arg(right)})"
 
     # ---- Unary operators ----
     if len(args) == 1:
@@ -1448,7 +1456,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 f"\\text{{if }} {to_latex(cond)} \\\\ "
                 f"{to_latex(if_false)} & \\text{{otherwise}} \\end{{cases}}"
             )
-        return f"ifelse({_fmt(cond)}, {_fmt(if_true)}, {_fmt(if_false)})"
+        return f"ifelse({call_arg(cond)}, {call_arg(if_true)}, {call_arg(if_false)})"
 
     # Generic fallback: function-call notation. This is the correct rendering for
     # every op that reaches here — the relational build-time ops
@@ -1457,13 +1465,11 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
     # ordinary unregistered document sugar a rewrite rule lowers before eval,
     # rendered identically to any custom user op (`godunov_hamiltonian`). None of
     # these is an error, so no "unknown op" warning is emitted. Only `args` shown.
-    if format_type == "unicode":
-        arg_list = ", ".join(to_unicode(arg) for arg in args)
+    if format_type in ("unicode", "ascii"):
+        arg_list = ", ".join(call_arg(arg) for arg in args)
     elif format_type == "latex":
         arg_list = ", ".join(to_latex(arg) for arg in args)
         return f"\\mathrm{{{_latex_name(op)}}}({arg_list})"
-    elif format_type == "ascii":
-        arg_list = ", ".join(to_ascii(arg) for arg in args)
     else:
         arg_list = ", ".join(str(arg) for arg in args)
 

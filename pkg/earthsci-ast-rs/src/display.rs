@@ -1125,6 +1125,10 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
     let needs_parens = op_prec > 0 && op_prec <= parent_prec;
     // Renders an argument at precedence 0 (used inside delimited contexts).
     let r0 = |arg: &Expr| render_at(arg, fmt, 0);
+    // A function-call argument: parenthesized only when it is a logical `or`,
+    // the loosest level (tests/display/RENDERING_CONTRACT.md). LaTeX keeps
+    // its own delimiters.
+    let rc = |arg: &Expr| render_at(arg, fmt, if fmt == Fmt::Latex { 0 } else { 1 });
 
     // `\frac{...}{...}` groups its OWN operands visually, so the numerator and
     // denominator render at precedence 0 — but the fraction still takes
@@ -1147,7 +1151,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
             } else if args.len() >= 2 {
                 infix_chain(op, op_prec, args, " + ", fmt)
             } else {
-                call_form("+", args, r0)
+                call_form("+", args, rc)
             }
         }
         "-" => {
@@ -1178,7 +1182,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     render_at(&args[1], fmt, op_prec)
                 )
             } else {
-                call_form(minus, args, r0)
+                call_form(minus, args, rc)
             }
         }
         "*" => {
@@ -1193,7 +1197,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                 };
                 infix_chain(op, op_prec, args, sep, fmt)
             } else {
-                call_form(pick(fmt, "·", "\\cdot", "*"), args, r0)
+                call_form(pick(fmt, "·", "\\cdot", "*"), args, rc)
             }
         }
         "/" => {
@@ -1209,7 +1213,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     render_at(&args[1], fmt, op_prec)
                 )
             } else {
-                call_form(pick(fmt, "÷", "\\div", "/"), args, r0)
+                call_form(pick(fmt, "÷", "\\div", "/"), args, rc)
             }
         }
         "^" => {
@@ -1240,7 +1244,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     ),
                 }
             } else {
-                call_form("^", args, r0)
+                call_form("^", args, rc)
             }
         }
         "D" => {
@@ -1271,7 +1275,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     Fmt::Ascii => format!("D({})/D{wrt_var}", r0(arg)),
                 }
             } else {
-                call_form("D", args, r0)
+                call_form("D", args, rc)
             }
         }
         ">" => comparison_or_call(op, op_prec, args, ">", ">", fmt),
@@ -1318,14 +1322,14 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     fmt,
                 )
             } else {
-                call_form(pick(fmt, "and", "\\land", "and"), args, r0)
+                call_form(pick(fmt, "and", "\\land", "and"), args, rc)
             }
         }
         "or" => {
             if args.len() >= 2 {
                 infix_chain(op, op_prec, args, pick(fmt, " ∨ ", " \\lor ", " or "), fmt)
             } else {
-                call_form(pick(fmt, "or", "\\lor", "or"), args, r0)
+                call_form(pick(fmt, "or", "\\lor", "or"), args, rc)
             }
         }
         "not" => {
@@ -1338,7 +1342,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     format!("{prefix}{}", r0(&args[0]))
                 }
             } else {
-                call_form(pick(fmt, "not", "\\neg", "not"), args, r0)
+                call_form(pick(fmt, "not", "\\neg", "not"), args, rc)
             }
         }
         "exp" => match fmt {
@@ -1351,10 +1355,10 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                         format!("\\exp({})", r0(arg))
                     }
                 } else {
-                    call_form("\\exp", args, r0)
+                    call_form("\\exp", args, rc)
                 }
             }
-            _ => call_form("exp", args, r0),
+            _ => call_form("exp", args, rc),
         },
         "ifelse" => match fmt {
             Fmt::Latex if args.len() == 3 => format!(
@@ -1363,14 +1367,14 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                 r0(&args[0]),
                 r0(&args[2])
             ),
-            Fmt::Latex => call_form("\\mathrm{ifelse}", args, r0),
-            _ => call_form("ifelse", args, r0),
+            Fmt::Latex => call_form("\\mathrm{ifelse}", args, rc),
+            _ => call_form("ifelse", args, rc),
         },
         "log" => {
             if args.len() == 1 {
-                call_form(pick(fmt, "ln", "\\ln", "log"), args, r0)
+                call_form(pick(fmt, "ln", "\\ln", "log"), args, rc)
             } else {
-                call_form(pick(fmt, "log", "\\log", "log"), args, r0)
+                call_form(pick(fmt, "log", "\\log", "log"), args, rc)
             }
         }
         "log10" => {
@@ -1379,7 +1383,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
             } else {
                 pick(fmt, "log10", "\\log_{10}", "log10")
             };
-            call_form(sym, args, r0)
+            call_form(sym, args, rc)
         }
         "sqrt" => match fmt {
             Fmt::Unicode => {
@@ -1391,14 +1395,14 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                         format!("√{}", r0(arg))
                     }
                 } else {
-                    call_form("sqrt", args, r0)
+                    call_form("sqrt", args, rc)
                 }
             }
             Fmt::Latex => format!(
                 "\\sqrt{{{}}}",
                 args.iter().map(&r0).collect::<Vec<_>>().join(", ")
             ),
-            Fmt::Ascii => call_form("sqrt", args, r0),
+            Fmt::Ascii => call_form("sqrt", args, rc),
         },
         "asin" => {
             let sym = if args.len() == 1 {
@@ -1406,7 +1410,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
             } else {
                 pick(fmt, "asin", "\\arcsin", "asin")
             };
-            call_form(sym, args, r0)
+            call_form(sym, args, rc)
         }
         "acos" => {
             let sym = if args.len() == 1 {
@@ -1414,7 +1418,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
             } else {
                 pick(fmt, "acos", "\\arccos", "acos")
             };
-            call_form(sym, args, r0)
+            call_form(sym, args, rc)
         }
         "atan" => {
             let sym = if args.len() == 1 {
@@ -1422,47 +1426,47 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
             } else {
                 pick(fmt, "atan", "\\arctan", "atan")
             };
-            call_form(sym, args, r0)
+            call_form(sym, args, rc)
         }
         "abs" => match fmt {
             Fmt::Unicode => {
                 if args.len() == 1 {
                     format!("|{}|", r0(&args[0]))
                 } else {
-                    call_form("abs", args, r0)
+                    call_form("abs", args, rc)
                 }
             }
             Fmt::Latex => format!("|{}|", args.iter().map(&r0).collect::<Vec<_>>().join(", ")),
-            Fmt::Ascii => call_form("abs", args, r0),
+            Fmt::Ascii => call_form("abs", args, rc),
         },
-        "sign" => call_form(pick(fmt, "sgn", "\\mathrm{sgn}", "sign"), args, r0),
+        "sign" => call_form(pick(fmt, "sgn", "\\mathrm{sgn}", "sign"), args, rc),
         "floor" => match fmt {
             Fmt::Unicode => {
                 if args.len() == 1 {
                     format!("⌊{}⌋", r0(&args[0]))
                 } else {
-                    call_form("floor", args, r0)
+                    call_form("floor", args, rc)
                 }
             }
             Fmt::Latex => format!(
                 "\\lfloor {} \\rfloor",
                 args.iter().map(&r0).collect::<Vec<_>>().join(", ")
             ),
-            Fmt::Ascii => call_form("floor", args, r0),
+            Fmt::Ascii => call_form("floor", args, rc),
         },
         "ceil" => match fmt {
             Fmt::Unicode => {
                 if args.len() == 1 {
                     format!("⌈{}⌉", r0(&args[0]))
                 } else {
-                    call_form("ceil", args, r0)
+                    call_form("ceil", args, rc)
                 }
             }
             Fmt::Latex => format!(
                 "\\lceil {} \\rceil",
                 args.iter().map(&r0).collect::<Vec<_>>().join(", ")
             ),
-            Fmt::Ascii => call_form("ceil", args, r0),
+            Fmt::Ascii => call_form("ceil", args, rc),
         },
         "asinh" => {
             let sym = if args.len() == 1 {
@@ -1470,7 +1474,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
             } else {
                 pick(fmt, "asinh", "\\sinh^{-1}", "asinh")
             };
-            call_form(sym, args, r0)
+            call_form(sym, args, rc)
         }
         "acosh" => {
             let sym = if args.len() == 1 {
@@ -1478,7 +1482,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
             } else {
                 pick(fmt, "acosh", "\\cosh^{-1}", "acosh")
             };
-            call_form(sym, args, r0)
+            call_form(sym, args, rc)
         }
         "atanh" => {
             let sym = if args.len() == 1 {
@@ -1486,11 +1490,11 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
             } else {
                 pick(fmt, "atanh", "\\tanh^{-1}", "atanh")
             };
-            call_form(sym, args, r0)
+            call_form(sym, args, rc)
         }
-        "min" => call_form(pick(fmt, "min", "\\min", "min"), args, r0),
-        "max" => call_form(pick(fmt, "max", "\\max", "max"), args, r0),
-        "atan2" => call_form(pick(fmt, "atan2", "\\mathrm{atan2}", "atan2"), args, r0),
+        "min" => call_form(pick(fmt, "min", "\\min", "min"), args, rc),
+        "max" => call_form(pick(fmt, "max", "\\max", "max"), args, rc),
+        "atan2" => call_form(pick(fmt, "atan2", "\\mathrm{atan2}", "atan2"), args, rc),
         "sin" | "cos" | "tan" | "sinh" | "cosh" | "tanh" => {
             // LaTeX prefixes a backslash (`\sin`); the others use the bare name.
             let latex = format!("\\{op}");
@@ -1501,11 +1505,11 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     op
                 },
                 args,
-                r0,
+                rc,
             )
         }
         // `Pre` renders as a call form, matching the cross-language contract.
-        "Pre" => call_form(pick(fmt, "Pre", "\\mathrm{Pre}", "Pre"), args, r0),
+        "Pre" => call_form(pick(fmt, "Pre", "\\mathrm{Pre}", "Pre"), args, rc),
         // Generic fallback: open-tier sugar (grad/div/laplacian) and any
         // unknown user op. LaTeX wraps in `\mathrm{…}`, escaping underscores.
         _ => {
@@ -1517,7 +1521,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     op
                 },
                 args,
-                r0,
+                rc,
             )
         }
     };
