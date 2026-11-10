@@ -1536,8 +1536,9 @@ _CSECache() = _CSECache(
 
 Tell the tree-walk evaluator that the contents of a live forcing buffer (a
 `param_arrays` buffer bound into `build_evaluator`) were mutated in place, so any
-memoized time-cadence values that gather it are invalidated before the next
-RHS call. With `buffer`, only the builds that read that buffer are invalidated;
+memoized time-cadence values that gather it, and any discrete-cadence cache
+([`DiscreteMaterializer`](@ref)) derived from it, are refilled on the next RHS
+call. With `buffer`, only the builds that read that buffer are invalidated;
 without it, every build in the process is.
 
 The supported refresh surfaces call this automatically: the data-refresh callback

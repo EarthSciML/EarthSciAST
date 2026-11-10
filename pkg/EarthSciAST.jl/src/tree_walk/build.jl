@@ -3037,7 +3037,11 @@ end
 # of the last fill), and the returned `_DiscreteRefill` — which the in-place
 # right-hand side calls first on every call — refills them when the call's `p` is
 # not that one. That is what makes `remake(prob; p = …)` reach a
-# forcing-derived field. Returns `nothing` when there is nothing to fill.
+# forcing-derived field. The caches also belong to the forcing they were filled
+# from: `_DiscreteRefill` refills them when the build's forcing epoch has moved
+# since the last fill, so a direct in-place write to a live buffer followed by
+# `notify_forcing_refresh!` reaches a forcing-derived field too, as it reaches
+# the time tiers. Returns `nothing` when there is nothing to fill.
 function _build_discrete_materializer!(
         mut::DiscreteMaterializer,
         discrete_vars, discrete_defs::Dict{String, ASTExpr}, resolved_obs::Dict{String, ASTExpr},
@@ -3163,6 +3167,8 @@ function _build_discrete_materializer!(
     filled_p = Ref{Any}(pp)
     stamp = Ref{Any}(_pstamp(pp))
     epoch = mut.epoch
+    # The build's forcing epoch as the last fill left it.
+    filled_epoch = Ref{UInt64}(0)
     function materialize!(q = filled_p[])
         for fill in fills
             fill(q)
@@ -3174,29 +3180,45 @@ function _build_discrete_materializer!(
         # (B3, const_tier.jl): a refresh fires AT its tstop, so the next RHS call
         # is at a `t` the t-tier stamp may already hold.
         _bump_epoch!(epoch)
+        filled_epoch[] = _epoch_value(epoch)
         return nothing
     end
     materialize!()          # initial fill — valid caches for u0 seeding + first step
     mut.caches = caches
     mut.materialize! = materialize!
     mut.var_order = order
-    return _DiscreteRefill{typeof(pp), typeof(materialize!)}(stamp, materialize!)
+    return _DiscreteRefill{typeof(pp), typeof(materialize!)}(stamp, materialize!, epoch, filled_epoch)
 end
 
-# The right-hand side's check that the discrete caches hold its own `p`, and the
-# refill when they do not. The compare is the const tier's (`_pstamp_same`,
-# cadence_stamp.jl): a same-`p` call is a compare and never allocates. A `p` of another type than the build's — dual
-# numbers, for a derivative with respect to parameters — leaves the caches as
-# they are: they hold Float64 values and cannot carry a derivative.
+# The right-hand side's check that the discrete caches hold its own `p` and the
+# forcing they were filled from, and the refill when they do not. The `p`
+# compare is the const tier's (`_pstamp_same`, cadence_stamp.jl): a same-`p`
+# call is a compare and never allocates. The forcing compare is the time
+# tier's: the build's forcing epoch (cadence_stamp.jl) moves on every refresh
+# of a buffer the build reads — the refresh callback's `_write_forcing!`, or a
+# direct in-place write announced with `notify_forcing_refresh!` — and the
+# caches are stale when it has moved since their last fill. (The refresh
+# callback refills them itself, through its `post_refresh` hook, so the call
+# after it finds them current.) A `p` of another type than the build's — dual
+# numbers, for a derivative with respect to parameters — leaves the caches at
+# their `p`: they hold Float64 values and cannot carry a derivative; a moved
+# epoch still refills them, with that `p`.
 struct _DiscreteRefill{P, F}
     stamp::Base.RefValue{Any}
     materialize!::F
+    epoch::_ForcingEpoch
+    filled_epoch::Base.RefValue{UInt64}
 end
+@inline _discrete_forcing_current(g::_DiscreteRefill) =
+    g.filled_epoch[] === _epoch_value(g.epoch)
 @inline function (g::_DiscreteRefill{P})(p::P) where {P}
-    _pstamp_same(g.stamp[], p) || g.materialize!(p)
+    (_pstamp_same(g.stamp[], p) && _discrete_forcing_current(g)) || g.materialize!(p)
     return nothing
 end
-@inline (g::_DiscreteRefill)(p) = nothing
+@inline function (g::_DiscreteRefill)(p)
+    _discrete_forcing_current(g) || g.materialize!()
+    return nothing
+end
 
 # The in-place right-hand side with the discrete caches brought up to its `p`
 # before the state equations read them.

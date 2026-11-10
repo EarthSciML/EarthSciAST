@@ -488,3 +488,65 @@ _dmp_expected(src, offset) = _dm_g(src) .* offset .+ _dm_k(offset)
         end
     end
 end
+
+# A direct in-place write to a live buffer, announced with
+# `notify_forcing_refresh!`, reaches a discrete-cadence cache derived from it,
+# as it reaches the time tiers (cadence_refresh_test.jl). Before, the cache kept
+# the forcing of its last `materialize!` until the next refresh callback or `p`
+# change, so a caller that evaluates one Problem's `f!` at several forcing
+# fields (EarthSciIntegrator's planner, which differentiates `f!` with
+# ForwardDiff at sampled forcing) read a field derived from the old forcing
+# beside raw reads of the new one.
+using ForwardDiff
+@testset "an announced direct write reaches the discrete caches" begin
+    ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+    for compiler in (:native, :interpreter)
+        @testset "$compiler, build_evaluator" begin
+            src = [1.0, 1.0]
+            dm = _DM_ESS.DiscreteMaterializer()
+            f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+                _DM_ESS.load_path(_dm_fixture()); compiler = compiler, initial_conditions = ics,
+                const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => src),
+                materialize_out = dm
+            )
+            @test haskey(dm.caches, "g")
+            rhs() = (du = zero(u0); f!(du, u0, p, 0.0); [du[vm["c[$j]"]] for j in 1:3])
+            @test rhs() ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)
+            src .= [2.0, 3.0]
+            _DM_ESS.notify_forcing_refresh!(src)                 # the buffer's builds
+            @test rhs() ≈ _dm_g([2.0, 3.0]) .+ _dm_k(1.0)
+            @test dm.caches["g"] ≈ _dm_g([2.0, 3.0])
+            src .= [5.0, 7.0]
+            _DM_ESS.notify_forcing_refresh!()                    # every build
+            @test rhs() ≈ _dm_g([5.0, 7.0]) .+ _dm_k(1.0)
+            # Refilled once per announcement, not on every call.
+            g = copy(dm.caches["g"]); src .= [0.0, 0.0]
+            @test rhs() ≈ _dm_g([5.0, 7.0]) .+ _dm_k(1.0)       # unannounced: stale, as before
+            @test dm.caches["g"] == g
+        end
+    end
+    @testset "esm_problem f!, Float64 and dual numbers, bit for bit across the compilers" begin
+        runs = Dict{Symbol, Any}()
+        for compiler in (:native, :interpreter)
+            src = [1.0, 2.0]
+            prob = _DM_ESS.esm_problem(
+                _DM_ESS.load_path(_dm_fixture()), (0.0, 1.0); compiler = compiler,
+                const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => src)
+            )
+            cells = [prob.var_map["M.c[$j]"] for j in 1:3]
+            u = collect(range(0.5, 1.5; length = length(prob.u0)))
+            f(x) = (du = zero(x); prob.f!(du, x, prob.p, 0.25); du)
+            before = f(u)[cells]
+            src .= [4.0, 9.0]
+            _DM_ESS.notify_forcing_refresh!(src)
+            after = f(u)[cells]
+            @test after ≈ before .+ (_dm_g([4.0, 9.0]) .- _dm_g([1.0, 2.0]))
+            J = ForwardDiff.jacobian(f, u)
+            @test ForwardDiff.value.(f(ForwardDiff.Dual.(u, 1.0)))[cells] == after
+            runs[compiler] = (before, after, J)
+        end
+        @test all(runs[:native][1] .=== runs[:interpreter][1])
+        @test all(runs[:native][2] .=== runs[:interpreter][2])
+        @test runs[:native][3] == runs[:interpreter][3]
+    end
+end
