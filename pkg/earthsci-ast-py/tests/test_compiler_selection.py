@@ -144,7 +144,7 @@ def test_native_refuses_an_unvectorizable_map_at_construction_and_names_the_rule
     # The reason is the DEEPEST decline, and the whole chain travels with it.
     assert "does not evaluate or broadcast over the box" in err.reason
     tiers = [tier for tier, _ in err.declines]
-    assert tiers == ["batched-leaf", "einsum", "map"]
+    assert tiers == ["einsum", "map"]
 
 
 def test_the_same_document_builds_and_runs_under_the_interpreter() -> None:
@@ -480,7 +480,6 @@ def test_a_landing_carries_the_chain_of_declines_that_led_to_it() -> None:
     # that answered says why it could not.
     for entry in landed:
         assert [tier for tier, _ in entry.declines] == [
-            "batched-leaf",
             "prefix-scan",
             "operator-cache",
         ]
