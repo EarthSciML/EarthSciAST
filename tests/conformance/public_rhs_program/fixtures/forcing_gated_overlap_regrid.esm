@@ -1,5 +1,5 @@
 {
-  "esm": "1.2.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "forcing_gated_overlap_regrid",
     "description": "A gated conservative overlap regrid (join.overlap on ring envelopes plus a sliver filter A_ij > 1e-12, the conservative_overlap_*_gated template shape) whose source field F is data-fed, so it is a forcing slot of the program and the gated apply must read it from the forcing set on every call. F is a 1 x 3 loader field read through a flattened cell-to-row reindex, PHI[c] = F[floor((c-1)/3)+1, c-3 floor((c-1)/3)] (1 + 0.1 src_poly[c,1,1]), as reseact's NEI emissions read theirs. The regridded field F_tgt is spread over a 3-level column with a surface-only ifelse (Fm) and drives D(u[j,k]) = Fm[j,k] - kd u[j,k]. Source cells: unit squares at x = 0, 1.5, 3; targets [0,2] and [3.5,4.5]; surviving overlaps (1,1) = 1, (2,1) = 0.5, (3,2) = 0.5. Issue #665: Julia rhs_program used to refuse this under native. The ring pitch and the sliver tolerance are literals, not parameters: the Problem's reference fills its per-refresh cache with the parameters it was built with, while the program reads p on every call.",
@@ -52,6 +52,14 @@
   },
   "models": {
     "Regrid": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/geometry.esm",
+          "only": [
+            "overlap_area_planar"
+          ]
+        }
+      ],
       "variables": {
         "kd": {
           "type": "parameter",
@@ -299,24 +307,17 @@
               }
             },
             "expr": {
-              "op": "polygon_intersection_area",
-              "manifold": "planar",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "src_poly",
-                    "i"
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "tgt_poly",
-                    "j"
-                  ]
-                }
-              ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "overlap_area_planar",
+              "bindings": {
+                "ring_a": "src_poly",
+                "cell_a": "i",
+                "nv_a": 4,
+                "ring_b": "tgt_poly",
+                "cell_b": "j",
+                "nv_b": 4
+              }
             },
             "join": [
               {

@@ -1,28 +1,45 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "per_instantiation_validation",
-    "description": "esm-spec §9.6.9 (RFC out-of-line-expression-templates §8, §9.2): a `manifold`-param template referenced at TWO call sites. `geometry_manifold_invalid` is discharged per-instantiation on the reference-preserving form: the first call site (manifold=spherical) is admissible, the second (manifold=bogus) is not. The offending call site is named in the diagnostic. INVALID fixture — load MUST reject.",
+    "description": "esm-spec §9.6.9 (RFC out-of-line-expression-templates §8, §9.2): a `semiring`-param template referenced at TWO call sites. The admissibility of the bound semiring (the closed registry of the `faq` `semiring` field) is discharged per-instantiation on the reference-preserving form: the first call site (max_sum) is admissible, the second (bogus) is not. The offending call site is named in the diagnostic. INVALID fixture — load MUST reject. Re-pointed from the `manifold` field of the geometry leaf removed at esm 2.0.0.",
     "authors": [
       "out-of-line-expression-templates conformance"
     ]
   },
+  "index_sets": {
+    "k": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
   "models": {
     "m": {
       "expression_templates": {
-        "overlap": {
+        "total": {
           "params": [
             "a",
-            "b",
-            "man"
+            "semi"
           ],
           "body": {
-            "op": "polygon_intersection_area",
-            "manifold": "man",
+            "op": "faq",
             "args": [
-              "a",
-              "b"
-            ]
+              "a"
+            ],
+            "semiring": "semi",
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "k"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "a",
+                "i"
+              ]
+            }
           }
         }
       },
@@ -30,46 +47,45 @@
         "pa": {
           "type": "parameter",
           "units": "1",
-          "default": 1.0
+          "shape": [
+            "k"
+          ],
+          "default": [
+            1.0,
+            2.0
+          ]
         },
-        "pb": {
-          "type": "parameter",
-          "units": "1",
-          "default": 1.0
-        },
-        "area_ok": {
+        "total_ok": {
           "type": "unknown",
           "units": "1"
         },
-        "area_bad": {
+        "total_bad": {
           "type": "unknown",
           "units": "1"
         }
       },
       "equations": [
         {
-          "lhs": "area_ok",
+          "lhs": "total_ok",
           "rhs": {
             "op": "apply_expression_template",
             "args": [],
-            "name": "overlap",
+            "name": "total",
             "bindings": {
               "a": "pa",
-              "b": "pb",
-              "man": "spherical"
+              "semi": "max_sum"
             }
           }
         },
         {
-          "lhs": "area_bad",
+          "lhs": "total_bad",
           "rhs": {
             "op": "apply_expression_template",
             "args": [],
-            "name": "overlap",
+            "name": "total",
             "bindings": {
               "a": "pa",
-              "b": "pb",
-              "man": "bogus"
+              "semi": "bogus"
             }
           }
         }

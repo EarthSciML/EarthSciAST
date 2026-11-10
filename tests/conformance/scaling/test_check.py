@@ -122,7 +122,7 @@ def main():
             "regrid",
             100,
             status="refused",
-            reason="polygon_intersection_area",
+            reason="compiler_refused_rule",
             code_size=None,
             allocs_per_call=None,
             hand_loop_max_abs_diff=None,

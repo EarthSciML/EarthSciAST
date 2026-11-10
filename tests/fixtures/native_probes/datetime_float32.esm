@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "native_probe_datetime_float32",
     "description": "The datetime closed functions evaluated for Float32 variables (esm-spec 11.3.1) in a Float64 document: each observed c_k is one calendar field (every entry but julian_day, which Float32 may not use) of a 6-cell array of instants that advance with the solver time, and a Float32 state integrates their sum. The interpreter evaluates the calendar in binary64 on the binary32 argument and hands the result back unrounded; native must return the same bits, which a binary32 expansion of the calendar arithmetic does not.",
@@ -20,6 +20,21 @@
   },
   "models": {
     "T": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/calendar.esm",
+          "only": [
+            "year",
+            "month",
+            "day",
+            "hour",
+            "minute",
+            "second",
+            "day_of_year",
+            "is_leap_year"
+          ]
+        }
+      ],
       "variables": {
         "epoch": {
           "type": "parameter",
@@ -142,10 +157,11 @@
               ]
             },
             "expr": {
-              "op": "fn",
-              "name": "datetime.year",
-              "args": [
-                {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "year",
+              "bindings": {
+                "t": {
                   "op": "+",
                   "args": [
                     "epoch",
@@ -182,7 +198,7 @@
                     }
                   ]
                 }
-              ]
+              }
             }
           }
         },
@@ -220,10 +236,11 @@
               ]
             },
             "expr": {
-              "op": "fn",
-              "name": "datetime.month",
-              "args": [
-                {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "month",
+              "bindings": {
+                "t": {
                   "op": "+",
                   "args": [
                     "epoch",
@@ -260,7 +277,7 @@
                     }
                   ]
                 }
-              ]
+              }
             }
           }
         },
@@ -298,10 +315,11 @@
               ]
             },
             "expr": {
-              "op": "fn",
-              "name": "datetime.day",
-              "args": [
-                {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "day",
+              "bindings": {
+                "t": {
                   "op": "+",
                   "args": [
                     "epoch",
@@ -338,7 +356,7 @@
                     }
                   ]
                 }
-              ]
+              }
             }
           }
         },
@@ -376,10 +394,11 @@
               ]
             },
             "expr": {
-              "op": "fn",
-              "name": "datetime.hour",
-              "args": [
-                {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "hour",
+              "bindings": {
+                "t": {
                   "op": "+",
                   "args": [
                     "epoch",
@@ -416,7 +435,7 @@
                     }
                   ]
                 }
-              ]
+              }
             }
           }
         },
@@ -454,10 +473,11 @@
               ]
             },
             "expr": {
-              "op": "fn",
-              "name": "datetime.minute",
-              "args": [
-                {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "minute",
+              "bindings": {
+                "t": {
                   "op": "+",
                   "args": [
                     "epoch",
@@ -494,7 +514,7 @@
                     }
                   ]
                 }
-              ]
+              }
             }
           }
         },
@@ -532,10 +552,11 @@
               ]
             },
             "expr": {
-              "op": "fn",
-              "name": "datetime.second",
-              "args": [
-                {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "second",
+              "bindings": {
+                "t": {
                   "op": "+",
                   "args": [
                     "epoch",
@@ -572,7 +593,7 @@
                     }
                   ]
                 }
-              ]
+              }
             }
           }
         },
@@ -610,10 +631,11 @@
               ]
             },
             "expr": {
-              "op": "fn",
-              "name": "datetime.day_of_year",
-              "args": [
-                {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "day_of_year",
+              "bindings": {
+                "t": {
                   "op": "+",
                   "args": [
                     "epoch",
@@ -650,7 +672,7 @@
                     }
                   ]
                 }
-              ]
+              }
             }
           }
         },
@@ -688,10 +710,11 @@
               ]
             },
             "expr": {
-              "op": "fn",
-              "name": "datetime.is_leap_year",
-              "args": [
-                {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "is_leap_year",
+              "bindings": {
+                "t": {
                   "op": "+",
                   "args": [
                     "epoch",
@@ -728,7 +751,7 @@
                     }
                   ]
                 }
-              ]
+              }
             }
           }
         },

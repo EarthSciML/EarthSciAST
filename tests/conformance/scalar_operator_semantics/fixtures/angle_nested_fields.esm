@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "AngleNestedFields",
     "description": "esm-spec \u00a74.8.3 'And an angle is CONVERTED', in the expression-bearing fields beyond `args`: a circular-trig argument in `deg` is brought to radians wherever the call sits, including a `makearray` region value and a `table_lookup` axis input. With latitude = 30 deg, `v` integrates dv/dt = [sin 30, cos 30, cos 30] = [0.5, sqrt(3)/2, sqrt(3)/2] to t = 1, and `tl` = T(sin 30) with T(x) = 10 x on [0, 1], so 5. Rust's rewrite used to descend only into `args`, `lower`, `upper` and `expr`, so these reached its evaluator in degrees: sin(30 rad) = -0.988. Sibling of angle_array_element.",
@@ -22,28 +22,16 @@
       "size": 3
     }
   },
-  "function_tables": {
-    "T": {
-      "description": "T(x) = 10 x on [0, 1].",
-      "axes": [
+  "models": {
+    "AngleNestedFields": {
+      "expression_template_imports": [
         {
-          "name": "x",
-          "values": [
-            0.0,
-            1.0
+          "ref": "esm:std/interp.esm",
+          "only": [
+            "linear"
           ]
         }
       ],
-      "interpolation": "linear",
-      "out_of_bounds": "clamp",
-      "data": [
-        0.0,
-        10.0
-      ]
-    }
-  },
-  "models": {
-    "AngleNestedFields": {
       "variables": {
         "latitude": {
           "type": "parameter",
@@ -117,17 +105,34 @@
         {
           "lhs": "tl",
           "rhs": {
-            "op": "table_lookup",
-            "table": "T",
-            "axes": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0
+                ]
+              },
               "x": {
                 "op": "sin",
                 "args": [
                   "latitude"
                 ]
-              }
-            },
-            "args": []
+              },
+              "n": 2
+            }
           }
         },
         {

@@ -1,5 +1,5 @@
 {
- "esm": "1.2.0",
+ "esm": "2.0.0",
  "metadata": {
   "name": "overlap_gated_regrid_ode",
   "description": "Issue #535: a construction-time observed whose `faq` carries a spatial `overlap` join gate (CONFORMANCE_SPEC §5.5.6), the candidate-gated conservative regrid of EarthSciDiscretizations' regridding/conservative_overlap.esm (A_ij, A_j, W/F_tgt through the _gated templates) at three source and two target cells. The gate is built from each ring's envelope; the third source square lies far from the first target and the first two far from the second, so four of the six pairs are pruned and never clipped. A_ij = 1, 1, 0.5 on the surviving pairs and 0 elsewhere; A_j = 2, 0.5; F_tgt = 1.5, 3. Two states integrate A_j and F_tgt from zero over one unit of time.",
@@ -35,6 +35,14 @@
  },
  "models": {
   "OverlapGatedRegrid": {
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/geometry.esm",
+     "only": [
+      "overlap_area_planar"
+     ]
+    }
+   ],
    "tolerance": {
     "rel": 1e-12,
     "abs": 1e-12
@@ -269,24 +277,17 @@
        }
       ],
       "expr": {
-       "op": "polygon_intersection_area",
-       "manifold": "planar",
-       "args": [
-        {
-         "op": "index",
-         "args": [
-          "src_poly",
-          "i"
-         ]
-        },
-        {
-         "op": "index",
-         "args": [
-          "tgt_poly",
-          "j"
-         ]
-        }
-       ]
+       "op": "apply_expression_template",
+       "args": [],
+       "name": "overlap_area_planar",
+       "bindings": {
+        "ring_a": "src_poly",
+        "cell_a": "i",
+        "nv_a": 4,
+        "ring_b": "tgt_poly",
+        "cell_b": "j",
+        "nv_b": 4
+       }
       }
      }
     },

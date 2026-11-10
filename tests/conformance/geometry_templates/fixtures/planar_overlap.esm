@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "geometry_planar_overlap_template",
     "description": "The `overlap_area_planar` template of lib/geometry.esm against the `polygon_intersection_area` leaf (esm-spec \u00a78.6.1) on cells that exercise every special case: identical cells, an adjacent pair (shared edge, opposite directions), corner and edge touches, nested and partial overlaps, a clockwise ring, a pentagon, and rings padded by a closing duplicate, trailing repeats and a leading repeat. Every coordinate and area is dyadic, so the template, the template behind the overlap join gate, and the leaf are each asserted exactly (tolerance 0). Run by the `geometry_templates` inline-test conformance tier.",
@@ -395,24 +395,17 @@
               }
             },
             "expr": {
-              "op": "polygon_intersection_area",
-              "manifold": "planar",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "src_poly",
-                    "i"
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "tgt_poly",
-                    "j"
-                  ]
-                }
-              ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "overlap_area_planar",
+              "bindings": {
+                "ring_a": "src_poly",
+                "cell_a": "i",
+                "nv_a": 6,
+                "ring_b": "tgt_poly",
+                "cell_b": "j",
+                "nv_b": 6
+              }
             }
           }
         },

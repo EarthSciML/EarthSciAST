@@ -1,7 +1,7 @@
 {
   "esm": "1.1.0",
   "metadata": {
-    "description": "esm-spec 9.7.6: the fourth structural family (loop symbols, references, enums, units, free text) and the name-keyed-map rule. Four metaparameters are spelled exactly like structural string values in the model - `row_id` like a join key column (`on`) and like free text (`notes`), `m` like a `default_units` unit symbol, `edge` like a `location` tag, a `_comment` and the citation text, `ode` like the `system_kind` enum - and every one ALSO occurs in a genuine expression position, where it closes to its integer default (22 / 5 / 7 / 3). A fifth, `a`, is a dense range bound (11) in nodes whose loop-symbol fields (`syms` / `output_idx` / `arg`) bind `p`; a metaparameter spelled like a loop symbol is metaparameter_name_conflict. Two variables are named like structural keys, `source` and `type`; a map key is a declared name, not a field, so their `guesses` entries still close. The golden pins every structural value verbatim and every expression position closed.",
+    "description": "esm-spec 9.7.6: the fourth structural family (loop symbols, references, enums, units, free text) and the name-keyed-map rule. Four metaparameters are spelled exactly like structural string values in the model - `row_id` like a join key column (`on`) and like free text (`notes`), `m` like a `default_units` unit symbol, `edge` like a `location` tag, a `_comment` and the citation text, `ode` like the `system_kind` enum - and every one ALSO occurs in a genuine expression position, where it closes to its integer default (22 / 5 / 7 / 3). A fifth, `a`, is a dense range bound (11) in nodes whose loop-symbol fields (`syms` / `output_idx`) bind `p`; a metaparameter spelled like a loop symbol is metaparameter_name_conflict. Two variables are named like structural keys, `source` and `type`; a map key is a declared name, not a field, so their `guesses` entries still close. The golden pins every structural value verbatim and every expression position closed.",
     "name": "metaparam_structural_field_collision"
   },
   "metaparameters": {
@@ -95,7 +95,6 @@
         {
           "lhs": "k",
           "rhs": {
-            "arg": "p",
             "args": [
               "c"
             ],
@@ -106,14 +105,15 @@
               ],
               "op": "*"
             },
-            "op": "argmax",
+            "op": "faq",
             "output_idx": [],
             "ranges": {
               "p": [
                 1,
                 11
               ]
-            }
+            },
+            "reduce": "max"
           }
         },
         {

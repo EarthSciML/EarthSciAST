@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "native_probe_fill_shared_invariant",
     "description": "A materialized array observed w whose fill kernel carries a lane-invariant closed-function subtree (interp.linear over t) that the state kernels also carry. Native shares the state kernels' copy through the scalar prelude and keeps the fill level's in its own invariant tier; the interpreter inlines everything. The two must agree bit for bit.",
@@ -13,6 +13,14 @@
   },
   "models": {
     "Fill": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/interp.esm",
+          "only": [
+            "linear"
+          ]
+        }
+      ],
       "variables": {
         "u": {
           "type": "unknown",
@@ -54,10 +62,11 @@
                   ]
                 },
                 {
-                  "op": "fn",
-                  "name": "interp.linear",
-                  "args": [
-                    {
+                  "op": "apply_expression_template",
+                  "args": [],
+                  "name": "linear",
+                  "bindings": {
+                    "table": {
                       "op": "const",
                       "args": [],
                       "value": [
@@ -67,7 +76,7 @@
                         2.0
                       ]
                     },
-                    {
+                    "axis": {
                       "op": "const",
                       "args": [],
                       "value": [
@@ -77,8 +86,9 @@
                         2.0
                       ]
                     },
-                    "t"
-                  ]
+                    "x": "t",
+                    "n": 4
+                  }
                 }
               ]
             }
@@ -171,10 +181,11 @@
                       "op": "*",
                       "args": [
                         {
-                          "op": "fn",
-                          "name": "interp.linear",
-                          "args": [
-                            {
+                          "op": "apply_expression_template",
+                          "args": [],
+                          "name": "linear",
+                          "bindings": {
+                            "table": {
                               "op": "const",
                               "args": [],
                               "value": [
@@ -184,7 +195,7 @@
                                 2.0
                               ]
                             },
-                            {
+                            "axis": {
                               "op": "const",
                               "args": [],
                               "value": [
@@ -194,8 +205,9 @@
                                 2.0
                               ]
                             },
-                            "t"
-                          ]
+                            "x": "t",
+                            "n": 4
+                          }
                         },
                         {
                           "op": "index",
