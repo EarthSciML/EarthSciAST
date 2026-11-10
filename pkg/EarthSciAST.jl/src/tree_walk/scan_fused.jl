@@ -309,23 +309,20 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer =
     ln = LineNumberNode(0, Symbol("ess-scan-fused"))
     ngrp = length(ctx.tab_types)
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    # `u` read-only in an alias scope, as in the kernel section: the term
-    # reads no slot the scan writes (a level's `(ue, ue)` call included).
+    # No alias scope, as in the kernel section (JuliaLang/julia#63129). The
+    # term reads no slot the scan writes (a level's `(ue, ue)` call included).
     run = Expr(
-        :macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
+        :let, _cg_section_bindings(
+            consumer === nothing ? nst : 0,
+            _AccKernel[K]
+        ),
         Expr(
-            :let, _cg_section_bindings(
-                consumer === nothing ? nst : 0,
-                _AccKernel[K]
-            ),
+            :block,
             Expr(
-                :block,
-                Expr(
-                    :macrocall, Symbol("@inbounds"), ln,
-                    Expr(:block, ctx.prologue...)
-                ),
-                Expr(:macrocall, Symbol("@inbounds"), ln, blk)
-            )
+                :macrocall, Symbol("@inbounds"), ln,
+                Expr(:block, ctx.prologue...)
+            ),
+            Expr(:macrocall, Symbol("@inbounds"), ln, blk)
         )
     )
     body = Expr(
@@ -630,21 +627,20 @@ function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer 
     ln = LineNumberNode(0, Symbol("ess-scan-column"))
     ngrp = length(ctx.tab_types)
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
+    # No alias scope, as in the kernel section (JuliaLang/julia#63129): the
+    # per-lane buffer is stored and read back level after level.
     run = Expr(
-        :macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
+        :let, _cg_section_bindings(
+            consumer === nothing ? nst : 0,
+            _AccKernel[K]
+        ),
         Expr(
-            :let, _cg_section_bindings(
-                consumer === nothing ? nst : 0,
-                _AccKernel[K]
-            ),
+            :block,
             Expr(
-                :block,
-                Expr(
-                    :macrocall, Symbol("@inbounds"), ln,
-                    Expr(:block, ctx.prologue...)
-                ),
-                Expr(:macrocall, Symbol("@inbounds"), ln, blk)
-            )
+                :macrocall, Symbol("@inbounds"), ln,
+                Expr(:block, ctx.prologue...)
+            ),
+            Expr(:macrocall, Symbol("@inbounds"), ln, blk)
         )
     )
     body = Expr(

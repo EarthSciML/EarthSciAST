@@ -242,6 +242,11 @@ function _find_direct_emit_error(e, depth::Int = 0)
     return nothing
 end
 
+# A document with no state has no right-hand side: nothing is integrated, so
+# no program is emitted (as in the Rust lane) and `f!` has no `du` to write.
+struct _XlaNoState <: Function end
+(::_XlaNoState)(du, u, p, t) = nothing
+
 """
     _xla_problem_rhs(f_oop, var_map, u0, p, report) -> callable
 
@@ -259,9 +264,11 @@ Refuses, never falls back:
   `Reactant.@compile` wrapped it.
 
 Availability and the device were both answered by `_compiler_plan(:xla)` before
-the document was loaded, so neither is asked again here.
+the document was loaded, so neither is asked again here. A state-free document
+gets `_XlaNoState`, which writes nothing.
 """
 function _xla_problem_rhs(f_oop, var_map, u0, p, report::CompilerReport)
+    isempty(u0) && return _XlaNoState()
     device = _xla_device()
     bufs = forcing_buffers(f_oop)
     isempty(bufs) || _xla_refuse_live_buffers(keys(bufs))

@@ -1,0 +1,57 @@
+{
+  "fixture": "edge_enumeration_area_eff",
+  "reference_binding": "python",
+  "reference_compiler": "interpreter",
+  "reference_form": "op",
+  "cases": [
+    {
+      "sets": {
+        "edge_set": {
+          "members": [
+            [
+              1,
+              2
+            ],
+            [
+              1,
+              3
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              2,
+              4
+            ],
+            [
+              3,
+              4
+            ]
+          ],
+          "extent": 5
+        }
+      },
+      "rank": {
+        "variable": "edge_dense_id",
+        "values": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0
+        ]
+      },
+      "rhs": {
+        "state": {
+          "area_eff[1]": 1.0,
+          "area_eff[2]": 1.0361615431964961
+        },
+        "dy": {
+          "area_eff[1]": 43.0,
+          "area_eff[2]": 143.75
+        }
+      }
+    }
+  ]
+}

@@ -171,6 +171,7 @@ fn walk_raw(
             }
             Ok(())
         }
+        Value::Array(items) if crate::json_visit::is_number_data(items) => Ok(()),
         Value::Array(items) => {
             for (i, child) in items.iter().enumerate() {
                 walk_raw(child, &JsonPath::Index(path, i), tables, sink)?;

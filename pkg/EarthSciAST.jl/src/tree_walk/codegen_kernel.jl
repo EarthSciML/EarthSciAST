@@ -2480,17 +2480,10 @@ function _cg_emit_box_rank_n(
     end
 end
 
-# The read-only view of `u` the generated section's alias scope reads through
-# (see `_build_codegen_rhs`). `Const` wraps an `Array` only.
-@inline _cg_readonly(u::Array) = Base.Experimental.Const(u)
-@inline _cg_readonly(s::_ObsSplitVec) =
-    _ObsSplitVec(_cg_readonly(s.u), _cg_readonly(s.o), s.n)
-@inline _cg_readonly(u) = u
-
-# The `let` bindings a generated section runs its kernels under: `u` read-only,
-# and on a two-buffer slot space `du` as the buffer all of `Ks`' cells write.
+# The `let` bindings a generated section runs its kernels under: on a
+# two-buffer slot space, `du` as the buffer all of `Ks`' cells write.
 function _cg_section_bindings(nst::Int, Ks::AbstractVector{_AccKernel})
-    b = Expr(:block, :(u = _cg_readonly(u)))
+    b = Expr(:block)
     if nst > 0
         side = _cg_slot_side(nst, _cg_oln_extent(Ks)...)
         side === :x || push!(b.args, :(du = _cg_dview(du, Val($(QuoteNode(side))))))
@@ -3323,28 +3316,24 @@ function _build_codegen_rhs(
     # `tabs` is now a tuple of the by-type containers; hoist each to its `_cggrpG`
     # local (a handful of statements, not one per object).
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    # The kernels run in an alias scope with `u` read-only (`_cg_readonly`): no
-    # `du` store aliases a `u` load. The section already rests on that — no cell
-    # reads a slot any cell of the section writes, which is what lets the
-    # threaded path run its chunks concurrently, and what an observed level's
-    # `(ue, ue)` call relies on — and it is what lets the compiler vectorize a
-    # row whose reads sit at run-time slot offsets (`_cg_geo!`) without a
-    # run-time overlap check per offset. Loads and stores only move relative to
-    # each other; no arithmetic changes.
+    # No `Base.Experimental.@aliasscope` here: on Julia 1.11 to 1.13 it tags
+    # every load in the scope, not only `Const` ones, so it would let LLVM
+    # move any load ahead of a store to the same element (JuliaLang/julia#63129),
+    # and this section does store and read back (`du` accumulators, row
+    # fission). No cell reads a slot any cell of the section writes, which is
+    # what lets the threaded path run its chunks concurrently and what an
+    # observed level's `(ue, ue)` call relies on.
     # On a two-buffer slot space `du` is rebound to the one buffer every cell
     # of the section writes (`_cg_dview`), when there is one.
     kernels = Expr(
-        :macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
+        :let, _cg_section_bindings(nst, acc_kernels),
         Expr(
-            :let, _cg_section_bindings(nst, acc_kernels),
+            :block,
             Expr(
-                :block,
-                Expr(
-                    :macrocall, Symbol("@inbounds"), ln,
-                    Expr(:block, ctx.prologue...)
-                ),
-                callstmts...
-            )
+                :macrocall, Symbol("@inbounds"), ln,
+                Expr(:block, ctx.prologue...)
+            ),
+            callstmts...
         )
     )
     body = Expr(

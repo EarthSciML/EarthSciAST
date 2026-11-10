@@ -53,7 +53,11 @@ builds both forms (Julia `test/relational_rewrites_test.jl`, Python
 `tests/test_relational_rewrites.py`, Rust `tests/relational_rewrites.rs`):
 identical members (the template's integer keys decoded back to the op's
 tuples), dense IDs (the op's 0-based rank plus one), assignment buffers and
-right-hand sides; Go and TypeScript load every rewrite. The two
+right-hand sides. Entries with values carry `"golden": "golden/<id>.json"`,
+expected values computed from the op form by the Python interpreter
+(`rewrites/goldens.py` regenerates them, `--check` fails on a stale one); the
+Python, Julia and Rust harnesses assert both forms against them. Go and
+TypeScript load every rewrite. The two
 value_invention_geometry rewrites run in this tier against the op documents'
 goldens, and the three value_invention_materialize rewrites (plus
 `key_out_of_range`) in that tier.

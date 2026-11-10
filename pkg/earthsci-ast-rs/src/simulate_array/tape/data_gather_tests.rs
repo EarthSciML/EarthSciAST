@@ -646,3 +646,182 @@ fn a_filtered_out_const_gather_never_faults() {
         );
     }
 }
+
+/// A subscript that saturates (`±inf`, `±1e300` → `i64::MIN`/`i64::MAX`)
+/// under a periodic policy folds to the exact residue `(r − 1) mod n` of the
+/// saturated integer — the interpreter's `index_into` — with no overflow, in
+/// both the scalar read and the computed-subscript gather.
+#[test]
+fn a_saturated_subscript_folds_periodically_without_overflow() {
+    use super::ir::{DataAt, DataGatherSpec, ScalarReadAt, ScalarReadKind, ScalarReadSpec};
+    use smallvec::smallvec;
+    let kind = ScalarReadKind::ConstArray {
+        name: "M".into(),
+        policy: smallvec![BoundaryKind::Periodic],
+    };
+    let gather = DataGatherSpec {
+        subs: smallvec![],
+        kind: kind.clone(),
+        src_shape: smallvec![5],
+        shape: smallvec![],
+        order: None,
+        reversed: false,
+    };
+    let read = ScalarReadSpec {
+        subs: smallvec![],
+        kind,
+    };
+    for v in [
+        f64::NEG_INFINITY,
+        -1e300,
+        f64::INFINITY,
+        1e300,
+        -7.0,
+        0.0,
+        6.0,
+    ] {
+        let r = super::ir::subscript_of(v);
+        let want = (i128::from(r) - 1).rem_euclid(5) as usize;
+        assert_eq!(gather.at(|_| v), DataAt::Elem(want), "{v:?}");
+        match read.resolve(&[r], &[5], &[], &[]) {
+            ScalarReadAt::Elem(ix) => assert_eq!(ix.as_slice(), &[want], "{v:?}"),
+            _ => panic!("{v:?}: periodic read must resolve to an element"),
+        }
+    }
+}
+
+/// Two and three data subscripts into a rank-2 / rank-3 source over a
+/// rank-1 box (the `table[i[k], j[k]]` shape the bilinear template reads):
+/// whole-number subscripts inside the source, fractional ones rounded half
+/// away from zero, and ones past either end under each boundary policy, the
+/// fail-closed fault, and a state's zero ghost.
+#[test]
+fn several_data_subscripts_over_a_rank_1_box() {
+    let n = 8;
+    let u = || idx(json!("u"), &[json!("i")]);
+    // Whole numbers in [-1, 6) and fractions in [-1.4, 5.4).
+    let whole = plus(floor(u()), json!(3));
+    let frac = plus(json!({"op": "*", "args": [json!(1.7), u()]}), json!(2));
+    let c2 = json!([
+        [1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0],
+        [7.0, 8.0, 9.0],
+        [10.0, 11.0, 12.0]
+    ]);
+    let c3 = json!([
+        [[1.0, 2.0], [3.0, 4.0]],
+        [[5.0, 6.0], [7.0, 8.0]],
+        [[9.0, 10.0], [11.0, 12.0]]
+    ]);
+    let bodies = [
+        idx(json!("C"), &[whole.clone(), frac.clone()]),
+        idx(json!("C"), &[frac.clone(), json!(2)]),
+        idx(json!("D"), &[frac.clone(), whole.clone(), json!(1)]),
+        idx(json!("W"), &[json!("i"), whole.clone()]),
+    ];
+    for policy in [
+        None,
+        Some(BoundaryKind::Clamp),
+        Some(BoundaryKind::Periodic),
+    ] {
+        for body in &bodies {
+            let mut compiled = compile(doc(
+                json!({
+                    "u": {"type": "unknown", "shape": ["i"]},
+                    "W": {"type": "unknown", "shape": ["i", "j"]},
+                    "C": {"type": "unknown", "shape": ["a", "b"]},
+                    "D": {"type": "unknown", "shape": ["a", "b", "c"]}
+                }),
+                vec![
+                    json!({"lhs": "C", "rhs": {"op": "const", "args": [], "value": c2}}),
+                    json!({"lhs": "D", "rhs": {"op": "const", "args": [], "value": c3}}),
+                    d_eq("u", n, body.clone()),
+                    json!({
+                        "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                                "expr": {"op": "D", "args": [idx(json!("W"), &[json!("i"), json!("j")])], "wrt": "t"},
+                                "ranges": {"i": [1, n], "j": [1, 4]}},
+                        "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                                "ranges": {"i": [1, n], "j": [1, 4]},
+                                "expr": minus(json!(0), idx(json!("W"), &[json!("i"), json!("j")]))}
+                    }),
+                ],
+            ));
+            if let Some(kind) = policy {
+                compiled.const_scope = std::sync::Arc::new(
+                    ConstArrayScope::default()
+                        .with_boundary("C", vec![kind, kind])
+                        .with_boundary("D", vec![kind, kind, kind]),
+                );
+            }
+            ab(&compiled, &no_params());
+        }
+    }
+}
+
+/// [`DataGatherSpec::direct_offset`], the executors' shared fast path, places
+/// an element exactly where [`DataGatherSpec::at`] does, under every source
+/// kind and stored order, and declines only subscripts `at` must resolve.
+#[test]
+fn the_direct_offset_is_the_element_at_resolves() {
+    use super::ir::{DataAt, DataGatherSpec, ScalarReadKind};
+    let values = [
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        -1e300,
+        1e300,
+        -0.0,
+        0.0,
+        0.5,
+        0.999_999_999_999_999_9,
+        1.0,
+        1.0 + f64::EPSILON,
+        1.5,
+        2.0,
+        2.5,
+        3.0,
+        3.5,
+        4.0,
+        4.000_000_000_000_001,
+        5.0,
+        -1.0,
+        9.3e18,
+    ];
+    let kinds = [
+        ScalarReadKind::ZeroGhost,
+        ScalarReadKind::ConstArray {
+            name: "C".into(),
+            policy: [BoundaryKind::Periodic, BoundaryKind::Clamp]
+                .into_iter()
+                .collect(),
+        },
+    ];
+    for kind in kinds {
+        for reversed in [false, true] {
+            let spec = DataGatherSpec {
+                subs: Default::default(),
+                kind: kind.clone(),
+                src_shape: [3usize, 4].into_iter().collect(),
+                shape: Default::default(),
+                order: None,
+                reversed,
+            };
+            for &x in &values {
+                for &y in &values {
+                    let v = [x, y];
+                    let at = spec.at(|d| v[d]);
+                    match DataGatherSpec::direct_offset(&[3, 4], &v) {
+                        Some(p) => assert_eq!(at, DataAt::Elem(p), "({x}, {y})"),
+                        None => assert!(
+                            x.fract() != 0.0
+                                || y.fract() != 0.0
+                                || !(1.0..=3.0).contains(&x)
+                                || !(1.0..=4.0).contains(&y),
+                            "({x}, {y}) is a whole in-range subscript"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1003,10 +1003,10 @@ impl FoldedIndex {
     }
 }
 
-/// A same-rank gather plan with no fixed, broadcast or permuted axes, read
-/// over a flat range of its output box: the element at row-major output
-/// position `(i_0, .., i_{d-1})` is the source element at `src_off + Σ
-/// strides[a] · (so_a + i_a - o_a)` when every `i_a` lies in a segment
+/// A gather plan with no permuted axes, read over a flat range of its output
+/// box: the element at row-major output position `(i_0, .., i_{d-1})` is the
+/// source element at `base + Σ strides[a] · (so_a + i_a - o_a)` (a broadcast
+/// axis has stride 0, a fixed source axis is in `base`) when every `i_a` lies in a segment
 /// `(o_a, len, so_a)` of axis `a`, and the zero ghost otherwise — the
 /// element `Instr::Gather` would write there (its segments are disjoint).
 #[derive(Clone, Debug, PartialEq)]
@@ -1023,6 +1023,9 @@ pub(crate) struct ChunkGather {
     /// group so light, that the per-row work of a chunk read costs more. The
     /// choice changes no instruction, so it may depend on the box.
     pub whole: bool,
+    /// The flat source offset every element adds: the source axes the
+    /// gather holds fixed, at their fixed index.
+    pub base: i64,
 }
 
 impl ChunkGather {
@@ -1046,7 +1049,7 @@ impl ChunkGather {
             rest /= self.shape[a];
             off += self.strides[a] * self.coord(a, i)? as i64;
         }
-        Some(off)
+        Some(off + self.base)
     }
 
     /// Write output positions `at .. at + c` into `dst[0 .. c]`, one row of
@@ -1060,8 +1063,13 @@ impl ChunkGather {
     /// elements, disjoint from it.
     #[inline(always)]
     pub(crate) unsafe fn fill(&self, src: *const f64, at: usize, c: usize, dst: *mut f64) {
+        let src = unsafe { src.offset(self.base as isize) };
         if let Some(delta) = self.flat_shift() {
             unsafe { self.fill_shifted(delta, src, at, c, dst) };
+            return;
+        }
+        if self.covers_box() {
+            unsafe { self.fill_covered(src, at, c, dst) };
             return;
         }
         let nd = self.shape.len();
@@ -1152,6 +1160,56 @@ impl ChunkGather {
             stride *= self.shape[a] as i64;
         }
         Some(delta)
+    }
+
+    /// Whether every axis is one segment over its whole extent: no ghost
+    /// anywhere (a broadcast of a smaller source, a fixed slice of one).
+    fn covers_box(&self) -> bool {
+        self.segs
+            .iter()
+            .zip(&self.shape)
+            .all(|(s, &n)| matches!(s[..], [(0, l, _)] if l == n))
+    }
+
+    /// [`Self::fill`] for a gather that [`covers_box`](Self::covers_box): each
+    /// element's source offset carried from the previous one, the innermost
+    /// axis fastest.
+    ///
+    /// # Safety
+    /// As for [`Self::fill`].
+    #[inline(always)]
+    unsafe fn fill_covered(&self, src: *const f64, at: usize, c: usize, dst: *mut f64) {
+        let nd = self.shape.len();
+        let mut idx: SmallVec<[usize; 4]> = SmallVec::from_elem(0, nd);
+        let mut off = 0i64;
+        let mut rest = at;
+        for a in (0..nd).rev() {
+            idx[a] = rest % self.shape[a];
+            rest /= self.shape[a];
+            off += self.strides[a] * (self.segs[a][0].2 + idx[a]) as i64;
+        }
+        let last = nd - 1;
+        let (n_last, s_last) = (self.shape[last], self.strides[last]);
+        for k in 0..c {
+            unsafe { *dst.add(k) = *src.offset(off as isize) };
+            idx[last] += 1;
+            off += s_last;
+            if idx[last] == n_last {
+                idx[last] = 0;
+                off -= s_last * n_last as i64;
+                let mut a = last;
+                while a > 0 {
+                    a -= 1;
+                    idx[a] += 1;
+                    off += self.strides[a];
+                    if idx[a] < self.shape[a] {
+                        break;
+                    }
+                    idx[a] = 0;
+                    off -= self.strides[a] * self.shape[a] as i64;
+                }
+            }
+        }
     }
 
     /// [`Self::fill`] for a [`Self::flat_shift`] gather: the window's part of
@@ -2036,7 +2094,7 @@ impl ScalarReadSpec {
                     } else {
                         match policy[d] {
                             BoundaryKind::Periodic if n >= 1 => {
-                                Some((r - 1).rem_euclid(n) as usize)
+                                Some(crate::simulate_array::eval::periodic_offset(r, n))
                             }
                             BoundaryKind::Clamp if n >= 1 => Some((r.clamp(1, n) - 1) as usize),
                             _ => None,
@@ -2201,22 +2259,26 @@ pub(crate) fn count_rel(
         return (0..n).filter(|&j| rel.holds(at(j), x)).count() as f64;
     }
     // The first position where `in_prefix` turns false (it is true on a
-    // prefix of the window).
-    let split = |in_prefix: &dyn Fn(f64) -> bool| {
-        let (mut lo, mut hi) = (0usize, n);
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if in_prefix(at(mid)) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
+    // prefix of the window): the answer lies in `base..=base + size`, and
+    // each step halves `size` with a select rather than a branch.
+    fn split(n: usize, at: &impl Fn(usize) -> f64, in_prefix: impl Fn(f64) -> bool) -> usize {
+        if n == 0 {
+            return 0;
         }
-        lo
-    };
+        let (mut base, mut size) = (0usize, n);
+        while size > 1 {
+            let half = size / 2;
+            let mid = base + half;
+            base = if in_prefix(at(mid)) { mid } else { base };
+            size -= half;
+        }
+        base + usize::from(in_prefix(at(base)))
+    }
     let c = match rel {
-        CountRel::Le | CountRel::Lt => split(&|a| rel.holds(a, x)),
-        CountRel::Ge | CountRel::Gt => n - split(&|a| !rel.holds(a, x)),
+        CountRel::Le => split(n, &at, |a| a <= x),
+        CountRel::Lt => split(n, &at, |a| a < x),
+        CountRel::Ge => n - split(n, &at, |a| !CountRel::Ge.holds(a, x)),
+        CountRel::Gt => n - split(n, &at, |a| !CountRel::Gt.holds(a, x)),
     };
     c as f64
 }
@@ -2524,7 +2586,9 @@ impl DataGatherSpec {
             } else {
                 match &self.kind {
                     ScalarReadKind::ConstArray { policy, .. } => match policy[d] {
-                        BoundaryKind::Periodic if n_i >= 1 => (r - 1).rem_euclid(n_i) as usize,
+                        BoundaryKind::Periodic if n_i >= 1 => {
+                            crate::simulate_array::eval::periodic_offset(r, n_i)
+                        }
                         BoundaryKind::Clamp if n_i >= 1 => (r.clamp(1, n_i) - 1) as usize,
                         _ => {
                             let logical = if self.reversed { m - 1 - d } else { d };
@@ -2547,6 +2611,34 @@ impl DataGatherSpec {
             None if ghost => DataAt::Ghost,
             None => DataAt::Elem(flat),
         }
+    }
+
+    /// The row-major offset [`Self::at`] resolves at subscripts `v` (one per
+    /// source axis, in stored order, over extents `ext`) when every one is a
+    /// whole number inside its axis, or `None` for any other subscript
+    /// (fractional, out of range, NaN), which `at` itself resolves. The one
+    /// fast path every executor's computed-subscript gather takes.
+    #[inline(always)]
+    pub(crate) fn direct_offset<const M: usize>(ext: &[usize; M], v: &[f64; M]) -> Option<usize> {
+        let mut flat = 0usize;
+        let mut inside = true;
+        for d in 0..M {
+            let x = v[d];
+            // In range first (false for NaN), so the conversion is exact and
+            // needs no saturation; then a whole number.
+            let ok = x >= 1.0 && x <= ext[d] as f64;
+            let i = if ok {
+                // SAFETY: `x` is finite and inside `1 ..= ext[d]`.
+                unsafe { x.to_int_unchecked::<i64>() }
+            } else {
+                1
+            };
+            inside &= ok && i as f64 == x;
+            flat = flat
+                .wrapping_mul(ext[d])
+                .wrapping_add((i as usize).wrapping_sub(1));
+        }
+        inside.then_some(flat)
     }
 
     /// The message of a fault [`Self::at`] reports on LOGICAL axis `d`.

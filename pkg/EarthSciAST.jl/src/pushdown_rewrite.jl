@@ -206,7 +206,7 @@ function _pd_detection_defs(model::Model, reg)
     # one expansion. Rule 2 requires exactly that they be structurally identical
     # with bit-equal constants, and this walk is read-only, so the sharing is
     # unobservable — the same guarantee `_expand_model_refs!` relies on.
-    memo = Dict{Tuple{String, String}, OpExpr}()
+    memo = _ExpandCache()
     for (name, ex) in defs
         _pd_has_apply(ex) || continue
         lowered = try

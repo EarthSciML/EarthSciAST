@@ -90,6 +90,44 @@ struct _Node
     children::Vector{_Node}
 end
 
+# A map keyed by `_Node` with `IdDict` semantics (keys equal iff `===`). An
+# `IdDict` hashes an immutable key by its whole content through `objectid`,
+# which costs microseconds per `_Node`; this hashes the fields that tell nodes
+# apart cheaply (the children vector and the payload by `objectid`, which for a
+# mutable object is its address) and compares with `===`. Iteration order is
+# unspecified, as for `IdDict`.
+struct _NodeKey
+    n::_Node
+end
+Base.:(==)(a::_NodeKey, b::_NodeKey) = a.n === b.n
+Base.isequal(a::_NodeKey, b::_NodeKey) = a.n === b.n
+Base.hash(k::_NodeKey, h::UInt) = hash(
+    objectid(k.n.children),
+    hash(objectid(k.n.payload), hash(k.n.op, hash(k.n.idx, hash(reinterpret(UInt64, k.n.literal), h))))
+)
+
+struct _NodeMap{V}
+    d::Dict{_NodeKey, V}
+end
+_NodeMap{V}() where {V} = _NodeMap{V}(Dict{_NodeKey, V}())
+Base.get(m::_NodeMap, n::_Node, default) = get(m.d, _NodeKey(n), default)
+Base.get!(f::Function, m::_NodeMap, n::_Node) = get!(f, m.d, _NodeKey(n))
+Base.get!(m::_NodeMap, n::_Node, default) = get!(m.d, _NodeKey(n), default)
+Base.getindex(m::_NodeMap, n::_Node) = m.d[_NodeKey(n)]
+Base.setindex!(m::_NodeMap, v, n::_Node) = (m.d[_NodeKey(n)] = v; m)
+Base.haskey(m::_NodeMap, n::_Node) = haskey(m.d, _NodeKey(n))
+Base.empty!(m::_NodeMap) = (empty!(m.d); m)
+Base.length(m::_NodeMap) = length(m.d)
+Base.isempty(m::_NodeMap) = isempty(m.d)
+Base.values(m::_NodeMap) = values(m.d)
+Base.keys(m::_NodeMap) = (k.n for k in keys(m.d))
+function Base.iterate(m::_NodeMap, st...)
+    r = iterate(m.d, st...)
+    r === nothing && return nothing
+    (k, v), s = r
+    return (k.n => v, s)
+end
+
 # Build-time side channel from `_resolve_indices` to `_compile` (ess-14f.3): a
 # RESOLVED live-forcing gather, carried in the `value` slot of a synthetic
 # argless `index` node. It exists only between the resolve and compile passes of
@@ -321,8 +359,13 @@ struct _BuildMemo
     resolve::IdDict{OpExpr, ASTExpr}
     compile::IdDict{OpExpr, _Node}
     deferrals::Base.RefValue{Int}
+    # An inline `const` array node => its interned array and registry name
+    # (`_intern_inline_const`): one node read at many subscripts is interned once.
+    inline::IdDict{OpExpr, Tuple{Any, String}}
 end
-_BuildMemo() = _BuildMemo(IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, _Node}(), Ref(0))
+_BuildMemo() = _BuildMemo(
+    IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, _Node}(), Ref(0), IdDict{OpExpr, Tuple{Any, String}}()
+)
 const _MaybeMemo = Union{Nothing, _BuildMemo}
 
 function _mknode(;
@@ -1285,9 +1328,45 @@ end
 # ONE memo pair (via `_CSEContext`) for the same reason they share `pgctx`.
 struct _CSEKeyMemos
     canon::IdDict{OpExpr, Any}   # ASTExpr result or CanonicalizeError
-    key::IdDict{OpExpr, Any}     # String or nothing
+    key::IdDict{OpExpr, Any}     # Int or nothing
+    num::IdDict{OpExpr, Int}     # canonical node => its number (`_cse_node_number!`)
+    ids::Dict{Any, Int}          # a node's fields and operand numbers => its number
 end
-_CSEKeyMemos() = _CSEKeyMemos(IdDict{OpExpr, Any}(), IdDict{OpExpr, Any}())
+_CSEKeyMemos() = _CSEKeyMemos(
+    IdDict{OpExpr, Any}(), IdDict{OpExpr, Any}(), IdDict{OpExpr, Int}(), Dict{Any, Int}()
+)
+
+# The number of a canonical node: two nodes get one number exactly when their
+# canonical JSON (`_emit_node_json`) is equal. The JSON is a function of the
+# node's own fields and its operands' JSON, injectively (strings are quoted,
+# numbers and nested values are canonical), so the tuple of those fields, with
+# each operand node's NUMBER in place of its JSON, is equal exactly when the
+# JSON is, by induction on the operands. A bare operand keeps the JSON text
+# (or its name, for a variable, whose JSON is the quoted name); the fields the
+# JSON cannot carry raise as the emission does. Keying a template call site
+# this way costs one node's fields, where its JSON is its whole body.
+function _cse_node_number!(e::OpExpr, M::_CSEKeyMemos)
+    v = get(M.num, e, 0)
+    v == 0 || return v
+    _check_emissible(e)
+    ops = Vector{Any}(undef, length(e.args))
+    for (i, a) in enumerate(e.args)
+        ops[i] = a isa OpExpr ? _cse_node_number!(a, M) :
+            a isa VarExpr ? (:var, a.name) : _emit_json(a)
+    end
+    key = (
+        e.op, ops, e.wrt, e.dim, e.fn, e.name,
+        e.value === nothing ? nothing : _emit_canonical_value(e.value), e.units,
+    )
+    n = get!(M.ids, key, length(M.ids) + 1)
+    M.num[e] = n
+    return n
+end
+
+# The number of a canonical form that is a bare variable (`x * 1`), in the
+# same numbering: such a key's JSON is the quoted name.
+_cse_leaf_number!(e::ASTExpr, M::_CSEKeyMemos) =
+    get!(M.ids, (:leaf, e isa VarExpr ? (:var, e.name) : _emit_json(e)), length(M.ids) + 1)
 
 # Identity-memoized `canonicalize`: drives the recursion over unique nodes
 # only, delegating the per-node work to `_canonicalize_shallow`
@@ -1333,7 +1412,8 @@ function _cse_key(
         # canonical NODE can be inspected before it is flattened to bytes.
         canon = _canonicalize_memo(keyed, memos.canon)
         # Fail-close on a non-value-preserving collapse to a literal.
-        (canon isa NumExpr || canon isa IntExpr) ? nothing : _emit_json(canon)
+        (canon isa NumExpr || canon isa IntExpr) ? nothing :
+            canon isa OpExpr ? _cse_node_number!(canon, memos) : _cse_leaf_number!(canon, memos)
     catch err
         err isa CanonicalizeError || rethrow()
         nothing
@@ -1384,7 +1464,7 @@ const _CSE_KEY_UNSET = _CSEKeyUnset()
 # `typemax(Int)` so a deeply-shared DAG cannot overflow the tally (the hoist
 # rule only ever asks >= 2 / >= 1).
 function _cse_count!(
-        e::ASTExpr, counts::Dict{String, Tuple{Int, Int}},
+        e::ASTExpr, counts::Dict{Int, Tuple{Int, Int}},
         pgctx::Union{Nothing, _PGatherKeyCtx},
         memos::_CSEKeyMemos = _CSEKeyMemos()
     )
@@ -1881,8 +1961,8 @@ end
 # COUNTED with (`nothing` on a build with no forcing buffers). The count pass and
 # the compile pass MUST key with the same `pgctx` or their keys would not match.
 mutable struct _CSEContext
-    cached::Set{String}
-    slot::Dict{String, Int}
+    cached::Set{Int}
+    slot::Dict{Int, Int}
     defs::Vector{_Node}
     cache::_CSECache
     pgctx::Union{Nothing, _PGatherKeyCtx}
@@ -1996,7 +2076,7 @@ function _cse_compile_scalar(
     pgctx = has_pgather ? _PGatherKeyCtx() : nothing
     # One memo pair for BOTH passes: count and compile must key identically.
     keymemos = _CSEKeyMemos()
-    counts = Dict{String, Tuple{Int, Int}}()
+    counts = Dict{Int, Tuple{Int, Int}}()
     # Observed def bodies participate in anonymous CSE alongside the equations
     # (a subtree shared between a def and an equation gets one slot); each def
     # root is an unconditional occurrence — the prelude evaluates it every call.
@@ -2006,7 +2086,7 @@ function _cse_compile_scalar(
     for (_, e) in entries
         _cse_count!(e, counts, pgctx, keymemos)
     end
-    cached = Set{String}()
+    cached = Set{Int}()
     n_occ = 0
     for (k, (total, uncond)) in counts
         # Hoist iff it is WORTH it (>= 2 occurrences) and SAFE (>= 1 of them
@@ -2019,7 +2099,7 @@ function _cse_compile_scalar(
     end
     cache = _CSECache()
     ctx = _CSEContext(
-        cached, Dict{String, Int}(), _Node[], cache, pgctx,
+        cached, Dict{Int, Int}(), _Node[], cache, pgctx,
         keymemos, IdDict{OpExpr, _Node}(), Dict{String, Int}()
     )
     # ---- Named observed prelude defs, in dependency order (ess-obs-slots) ----

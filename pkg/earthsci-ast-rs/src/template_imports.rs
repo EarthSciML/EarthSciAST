@@ -2826,10 +2826,69 @@ pub(crate) fn resolve_template_machinery_scoped(
         }
         return Ok(None);
     }
-    let mut root: Map<String, Value> = raw_data
+    let doc_meta = collect_metaparam_decls(raw_data, "document")?;
+    let root: Map<String, Value> = raw_data
         .as_object()
         .cloned()
         .expect("has_import_machinery implies an object");
+    resolve_machinery_owned(
+        root,
+        doc_meta,
+        base_path,
+        metaparameters,
+        mount_declared,
+        mounted_leaf,
+    )
+    .map(Some)
+}
+
+/// [`resolve_template_machinery_scoped`] on a document the caller gives up:
+/// the document is resolved in place of a copy (its const data is not
+/// duplicated). `value` is left `null` on an error.
+pub(crate) fn resolve_template_machinery_scoped_owned(
+    value: &mut Value,
+    base_path: &Path,
+    metaparameters: &BTreeMap<String, i64>,
+    mount_declared: &BTreeSet<String>,
+    mounted_leaf: bool,
+) -> Result<(), ExpressionTemplateError> {
+    if !has_import_machinery(value) {
+        if let Some(resolved) = resolve_template_machinery_scoped(
+            value,
+            base_path,
+            metaparameters,
+            mount_declared,
+            mounted_leaf,
+        )? {
+            *value = resolved;
+        }
+        return Ok(());
+    }
+    let doc_meta = collect_metaparam_decls(value, "document")?;
+    let Value::Object(root) = std::mem::take(value) else {
+        unreachable!("has_import_machinery implies an object");
+    };
+    *value = resolve_machinery_owned(
+        root,
+        doc_meta,
+        base_path,
+        metaparameters,
+        mount_declared,
+        mounted_leaf,
+    )?;
+    Ok(())
+}
+
+/// The §9.7 resolution of a document with import machinery, consuming its
+/// root object; `doc_meta` is its own metaparameter declarations.
+fn resolve_machinery_owned(
+    mut root: Map<String, Value>,
+    mut doc_meta: Map<String, Value>,
+    base_path: &Path,
+    metaparameters: &BTreeMap<String, i64>,
+    mount_declared: &BTreeSet<String>,
+    mounted_leaf: bool,
+) -> Result<Value, ExpressionTemplateError> {
     let mut stack: Vec<String> = Vec::new();
 
     // Snapshot the §9.7.1 DECLARATIONS exactly as authored, before any phase
@@ -2838,7 +2897,6 @@ pub(crate) fn resolve_template_machinery_scoped(
     let original_templates = root.get("expression_templates").cloned();
     let original_metaparameters = root.get("metaparameters").cloned();
 
-    let mut doc_meta = collect_metaparam_decls(raw_data, "document")?;
     let mut doc_isets: Map<String, Value> = root
         .get("index_sets")
         .and_then(|v| v.as_object())
@@ -2932,7 +2990,7 @@ pub(crate) fn resolve_template_machinery_scoped(
     if !doc_isets.is_empty() {
         root.insert("index_sets".to_string(), Value::Object(doc_isets));
     }
-    Ok(Some(Value::Object(root)))
+    Ok(Value::Object(root))
 }
 
 /// Phase 1 of [`resolve_template_machinery`]: resolve the ROOT document's own

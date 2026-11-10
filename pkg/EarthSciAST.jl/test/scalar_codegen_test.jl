@@ -118,6 +118,80 @@ end
 
 _scg_tiers(rep) = Dict(ESM.tier_histogram(rep))
 
+# S scalar template call sites over per-site constant tables, summed into one
+# observed `acc` that `D(u)` reads (a second state `w` reads site 1 alone).
+# `odd`: the aliasing, non-ascending and repeated axes of the per-member testset.
+_scg_jop(o, a...; kw...) = Dict{String, Any}("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
+_scg_jconst(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
+function _scg_sites_doc(S::Int; odd::Bool = false)
+    vars = Dict{String, Any}(
+        "u" => Dict("type" => "unknown", "default" => 0.0),
+        "w" => Dict("type" => "unknown", "default" => 0.5),
+        "acc" => Dict("type" => "unknown")
+    )
+    eqs = Any[]
+    sites = Any[]
+    for i in 1:S
+        x = _scg_jop("+", _scg_jop("+", "u", 0.001 * i), _scg_jop("*", 0.001, "t"))
+        ax = [0.5 * k + 0.01 * i for k in 1:8]
+        tab = [sin(0.7k + i) for k in 1:8]
+        if odd && (i == 1 || i == 5)
+            tab = copy(ax)
+        elseif odd && i == 7
+            ax[3], ax[6] = ax[6], ax[3]
+        elseif odd && i == 9
+            ax[4] = ax[5]
+        end
+        site = if i % 3 == 0
+            ay = [0.25 * k + 0.02 * i for k in 1:8]
+            tb = [[cos(0.3k + 0.11j + i) for j in 1:8] for k in 1:8]
+            Dict{String, Any}(
+                "op" => "apply_expression_template", "args" => Any[], "name" => "bilinear",
+                "bindings" => Dict{String, Any}(
+                    "table" => _scg_jconst(tb), "axis_x" => _scg_jconst(ax),
+                    "axis_y" => _scg_jconst(ay), "x" => _scg_jop("+", 2.5, x),
+                    "y" => _scg_jop("+", 1.25, x), "nx" => 8, "ny" => 8
+                )
+            )
+        else
+            Dict{String, Any}(
+                "op" => "apply_expression_template", "args" => Any[], "name" => "linear",
+                "bindings" => Dict{String, Any}(
+                    "table" => _scg_jconst(tab), "axis" => _scg_jconst(ax),
+                    "x" => _scg_jop("+", 2.0 + 0.37 * (i % 5), x), "n" => 8
+                )
+            )
+        end
+        vars["r$i"] = Dict("type" => "unknown")
+        push!(eqs, Dict("lhs" => "r$i", "rhs" => site))
+        push!(sites, "r$i")
+    end
+    push!(eqs, Dict("lhs" => "acc", "rhs" => length(sites) == 1 ? sites[1] : _scg_jop("+", sites...)))
+    push!(eqs, Dict("lhs" => _scg_jop("D", "u"; wrt = "t"), "rhs" => _scg_jop("-", _scg_jop("*", 1.0e-3, "acc"), "u")))
+    push!(eqs, Dict("lhs" => _scg_jop("D", "w"; wrt = "t"), "rhs" => _scg_jop("-", "r1", "w")))
+    imports = Any[
+        Dict("ref" => joinpath(TESTUTILS_REPO_ROOT, "lib", "interp.esm"), "only" => Any["linear", "bilinear"]),
+    ]
+    model = Dict{String, Any}("variables" => vars, "equations" => eqs, "expression_template_imports" => imports)
+    return Dict{String, Any}(
+        "esm" => "1.2.0", "metadata" => Dict("name" => "sites_$S", "description" => "scalar template sites"),
+        "models" => Dict("M" => model)
+    )
+end
+function _scg_sites_build(S::Int; odd::Bool = false, compiler = :native)
+    path = joinpath(mktempdir(), "sites.esm")
+    write(path, JSON3.write(_scg_sites_doc(S; odd = odd)))
+    prob = ESM.esm_problem(path, (0.0, 1.0); compiler = compiler)
+    return (; f! = prob.f!, u0 = prob.u0, p = prob.p)
+end
+function _scg_sites_agree(bn, bi)
+    for (k, t) in ((1, 0.0), (2, 0.7), (3, 1.3), (4, 1800.0))
+        u = bn.u0 .+ 0.37k .* sin.(0.3 .* (1:length(bn.u0)) .+ k)
+        _scg_bitsame(_scg_du(bn.f!, u, bn.p, t), _scg_du(bi.f!, u, bi.p, t)) || return false
+    end
+    return true
+end
+
 @testset "scalar equations and prelude as generated code" begin
     @testset "bit-identical with the interpreter ($B boxes)" for B in (1, 3, 7)
         bn = _scg_build(_scg_model(B))
@@ -242,6 +316,71 @@ _scg_tiers(rep) = Dict(ESM.tier_histogram(rep))
         @testset "zero allocations per steady call" begin
             bn = _scg_build(_scg_model(5))
             @test rhs_alloc_bytes(bn.f!, zeros(length(bn.u0)), bn.u0, bn.p, 0.8) == 0
+        end
+    end
+
+    @testset "one sum of many large alike terms is cut into a class of terms" begin
+        # S template call sites (`linear`, and `bilinear` for every third),
+        # each its own observed over per-site constant tables, summed into
+        # one observed that one equation reads: one unit of ~S large terms.
+        # Cut at the large slots, the terms of each template are one class
+        # whose tables are per-member holes, and the sum runs a level later.
+        tiny = _scg_sites_build(1)
+        @test getfield(tiny.f!, :dynp) isa ESM._ScalarProgram     # small: not cut
+        for S in (12, 24)
+            bn = _scg_sites_build(S)
+            bi = _scg_sites_build(S; compiler = :interpreter)
+            @test getfield(bn.f!, :dynp) isa ESM._ScalarLevels
+            @test _scg_sites_agree(bn, bi)
+            u = bn.u0 .+ 0.25
+            J(b) = ForwardDiff.jacobian((d, uu) -> b.f!(d, uu, b.p, 0.8), zeros(length(u)), u)
+            @test _scg_bitsame(J(bn), J(bi))
+            # Each level chunked as the threaded path runs it.
+            cache = ESM._cse_buf(getfield(bn.f!, :cse_cache), Float64)
+            d1 = zeros(length(u)); d3 = zeros(length(u))
+            bn.f!(d1, u, bn.p, 0.8)
+            for P in getfield(bn.f!, :dynp).progs
+                ESM._run_scgens!(P.gens, d1, u, bn.p, 0.8, cache, 1, 1)
+            end
+            for P in getfield(bn.f!, :dynp).progs, c in 1:3
+                ESM._run_scgens!(P.gens, d3, u, bn.p, 0.8, cache, c, 3)
+            end
+            @test _scg_bitsame(d1, d3)
+        end
+        # The terms' code is the same at 12 and 24 sites (only the tables
+        # grow); the sum reads each term, so it grows with them.
+        sz(b) = [
+            [ESM._cg_expr_size(ESM.RuntimeGeneratedFunctions.get_expression(g.f)) for g in P.gens]
+                for P in getfield(b.f!, :dynp).progs
+        ]
+        # A site reads each of its tables at many subscripts; the reads of one
+        # table are one per-member array (two tables per `linear` site, three
+        # per `bilinear` one), so the repeated reads in a body still share.
+        b12 = _scg_sites_build(12)
+        code = join(
+            string(ESM.RuntimeGeneratedFunctions.get_expression(g.f))
+                for g in getfield(b12.f!, :dynp).progs[1].gens
+        )
+        @test length(unique(m.match for m in eachmatch(r"_cgot\d+", code))) <= 5
+        s12, s24 = sz(b12), sz(_scg_sites_build(24))
+        @test length(s12) == length(s24) >= 2
+        @test s12[1] == s24[1]
+        @test sum(sum, s12[2:end]) < sum(s12[1])
+        if VERSION >= v"1.12"
+            b = _scg_sites_build(12)
+            @test rhs_alloc_bytes(b.f!, zeros(length(b.u0)), b.u0, b.p, 0.8) == 0
+        end
+    end
+
+    @testset "per-member tables: aliasing, unsorted and repeated axes" begin
+        # Sites 1 (the class representative) and 5 read equal arrays as their
+        # table and their axis (equal reads in them, not in the others), site 7's
+        # axis does not ascend (the counted bracket searches a sorted copy,
+        # per member) and site 9's repeats an entry.
+        for S in (12, 13)
+            bn = _scg_sites_build(S; odd = true)
+            bi = _scg_sites_build(S; odd = true, compiler = :interpreter)
+            @test _scg_sites_agree(bn, bi)
         end
     end
 end

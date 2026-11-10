@@ -29,6 +29,16 @@ tolerances are read the way the inline-test runner reads them (each bound
 resolved assertion -> test -> model, `authored_assertions` in
 scripts/run-inline-tests-conformance.py); a zero band is a bit-for-bit match.
 
+It also scores the template form of every relational rewrite that has a golden
+file (`tests/conformance/relational_templates/rewrites/manifest.json`, the
+values computed from the op form by the reference binding): `esm-lean templates
+<rewrite> <model> <case.json>` on each caller-data case, checking each derived
+set's members (the template's integer keys decoded with the entry's `decode`)
+and extent, the `rank` and `rank_lookup` variables and the arg-witness
+`assignments`, bit for bit. The right-hand side and inline-test values need a
+simulation and count as skipped, as does a quantity the adapter reports outside
+its slice.
+
 Prints one summary line; exits 1 on any mismatch or adapter failure.
 
     python3 scripts/run-closed-functions-lean.py [--no-build] [-v] [fixture.json ...]
@@ -41,6 +51,7 @@ import math
 import struct
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +60,7 @@ FIXTURES = ROOT / "tests" / "closed_functions"
 BINARY = FORMAL / ".lake" / "build" / "bin" / "esm-lean"
 TABLE_LEDGER = ROOT / "tests" / "conformance" / "function_tables" / "load_errors" / "cases.json"
 CONFORMANCE = ROOT / "tests" / "conformance"
+REWRITES = CONFORMANCE / "relational_templates" / "rewrites"
 # Standard-library template tiers: manifest -> {fixture id: why the adapter skips it}.
 TEMPLATE_TIERS = [
     (CONFORMANCE / "interp_templates" / "manifest.json", {}),
@@ -59,9 +71,9 @@ TEMPLATE_TIERS = [
             "nearest_generator_template_ode": "asserts an ODE trajectory; esm-lean evaluates "
             "expressions and does not simulate",
             "edge_enumeration_ode_template": "asserts an ODE trajectory over invented index "
-            "sets; esm-lean does not simulate or run value invention",
+            "sets; esm-lean does not simulate",
             "bin_skolem_count_ode_template": "asserts an ODE trajectory over invented index "
-            "sets; esm-lean does not simulate or run value invention",
+            "sets; esm-lean does not simulate",
         },
     ),
     (CONFORMANCE / "geometry_templates" / "manifest.json", {}),
@@ -269,6 +281,107 @@ def check_template_doc(manifest_path, fx):
     return passed, failed, skipped, msgs
 
 
+def _rewrite_case(entry, gold, case):
+    """One caller-data case of a relational rewrite against its golden values.
+    Returns (passed, failed, skipped, messages)."""
+    path = ROOT / entry["out"] if "out" in entry else REWRITES / f"{entry['id']}.esm"
+    rel = path.relative_to(ROOT)
+    model = entry["models"][0]
+    cmp = entry["compare"]
+    checks = []  # (label, kind, want)
+    for faq, want in (gold.get("sets") or {}).items():
+        checks.append((f"set {faq}", "set", (faq, want)))
+    for key in ("rank", "rank_lookup"):
+        if key in gold:
+            checks.append(
+                (
+                    f"{key} {gold[key]['variable']}",
+                    "field",
+                    (gold[key]["variable"], gold[key]["values"]),
+                )
+            )
+    for var, want in (gold.get("assignments") or {}).items():
+        checks.append((f"assignments {var}", "field", (var, want)))
+    skipped = 1 if "rhs" in gold else 0
+    if not checks:
+        return 0, 0, skipped, []
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(case, fh)
+        case_path = fh.name
+    try:
+        proc = subprocess.run(
+            [str(BINARY), "templates", str(path), model, case_path], capture_output=True, text=True
+        )
+    finally:
+        Path(case_path).unlink()
+    if proc.returncode != 0:
+        return (
+            0,
+            len(checks),
+            skipped,
+            [f"FAIL {rel}: esm-lean exited {proc.returncode}: {proc.stderr.strip()}"],
+        )
+    results = json.loads(proc.stdout)["results"]
+    decode = {s["faq"]: s["decode"] for s in cmp.get("sets", [])}
+    passed = failed = 0
+    msgs = []
+    for label, kind, want in checks:
+        if kind == "set":
+            faq, w = want
+            rs = [r for r in results if r.get("set") == faq]
+            if not rs or "skipped" in rs[0]:
+                skipped += 1
+                continue
+            r = rs[0]
+            if "members" not in r:
+                ok, got = False, r.get("error", "no result")
+            else:
+                d = decode[faq]
+                keys = [exact_value({"bits": m["bits"]}) for m in r["members"]]
+                got = [
+                    [int(k // d["n_b"]) + d["lo"][0], int(k % d["n_b"]) + d["lo"][1]] for k in keys
+                ]
+                ok = (
+                    all(k == math.floor(k) for k in keys)
+                    and got == w["members"]
+                    and r["extent"] == w["extent"]
+                )
+        else:
+            var, w = want
+            rs = [r for r in results if r.get("name") == var]
+            if any("skipped" in r for r in rs):
+                skipped += 1
+                continue
+            got = [r.get("bits") for r in rs]
+            ok = got == [bits(x) for x in w]
+            got = [r.get("value", r.get("error")) for r in rs]
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+            msgs.append(f"FAIL {rel} {label}: expected {want!r}, got {got!r}")
+    return passed, failed, skipped, msgs
+
+
+def check_rewrites():
+    """The relational rewrites with golden files. Returns
+    (passed, failed, skipped, fixtures, messages)."""
+    manifest = json.loads((REWRITES / "manifest.json").read_text(encoding="utf-8"))
+    tp = tf = ts = nf = 0
+    msgs = []
+    for entry in manifest["rewrites"]:
+        if not entry.get("golden"):
+            continue
+        nf += 1
+        gold = json.loads((REWRITES / entry["golden"]).read_text(encoding="utf-8"))
+        ts += len(gold.get("inline_tests") or [])
+        for case, gc in zip(entry["cases"], gold["cases"]):
+            p, f, s, m = _rewrite_case(entry, gc, case)
+            tp, tf, ts = tp + p, tf + f, ts + s
+            msgs += m
+    return tp, tf, ts, nf, msgs
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("fixtures", nargs="*", type=Path)
@@ -316,6 +429,11 @@ def main():
             tp, tf, ts = tp + passed, tf + failed, ts + skipped
             for m in msgs:
                 print(m)
+    if not args.fixtures and (REWRITES / "manifest.json").exists():
+        passed, failed, skipped, n, msgs = check_rewrites()
+        tp, tf, ts, nf = tp + passed, tf + failed, ts + skipped, nf + n
+        for m in msgs:
+            print(m)
     print(f"closed-functions (lean): {tp} passed, {tf} failed, {ts} skipped in {nf} fixtures")
     sys.exit(1 if tf else 0)
 

@@ -661,10 +661,10 @@ fn benchmark_interp_bracket(c: &mut Criterion) {
 
 // ---------------------------------------------------------------------------
 // Standard-library templates against the closed forms they replace
-// (bench/closed_templates: calendar, geometry, relational).
+// (bench/closed_templates/generate.py: calendar, geometry, relational).
 // ---------------------------------------------------------------------------
 
-/// One right-hand side of a `bench/closed_templates` document under `native`
+/// One right-hand side of a `bench/closed_templates/generate.py` document under `native`
 /// (or the per-cell oracle), with what it cost to get there.
 struct TemplateRhs {
     prob: earthsci_ast::EsmProblem,
@@ -759,13 +759,31 @@ impl TemplateRhs {
     }
 }
 
-/// Each template document of `CLOSED_TEMPLATES_DIR` (default
-/// `bench/closed_templates`) beside the closed-form document it mirrors, by
-/// file name: `*_fn_*` / `*_leaf_*` / `*_op_*` against `*_tpl_*`.
-/// `CLOSED_TEMPLATES_FILTER` keeps the names containing it.
+/// Each template document of `CLOSED_TEMPLATES_DIR` beside the closed-form
+/// document it mirrors, by file name: `*_fn_*` / `*_leaf_*` / `*_op_*` against
+/// `*_tpl_*`. `CLOSED_TEMPLATES_FILTER` keeps the names containing it. The
+/// documents are not committed: with `CLOSED_TEMPLATES_DIR` unset,
+/// `bench/closed_templates/generate.py` writes its default set into
+/// `closed_templates` under the temporary directory first.
 fn closed_template_pairs() -> Vec<(String, std::path::PathBuf, std::path::PathBuf)> {
     let dir = std::env::var("CLOSED_TEMPLATES_DIR").map_or_else(
-        |_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/closed_templates"),
+        |_| {
+            let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../bench/closed_templates/generate.py");
+            let dir = std::env::temp_dir().join("closed_templates");
+            let status = std::process::Command::new("python3")
+                .arg(&script)
+                .arg("--out")
+                .arg(&dir)
+                .status();
+            assert!(
+                status.is_ok_and(|s| s.success()),
+                "python3 {} --out {} failed",
+                script.display(),
+                dir.display()
+            );
+            dir
+        },
         std::path::PathBuf::from,
     );
     let filter = std::env::var("CLOSED_TEMPLATES_FILTER").unwrap_or_default();

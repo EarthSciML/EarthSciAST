@@ -39,9 +39,14 @@ The evaluator covers exactly the slice the `lib/interp.esm` templates use:
   it, and every other op refuses it. The same `faq` with a `filter` (reduce `+`,
   `min` or `max`) folds only the terms at whose index the filter holds. A `faq`
   nested in another's body is evaluated afresh at each outer index.
+* the same `faq`s with the one range `{"from": S}` over an index set whose size
+  `n` the environment binds (under `setKey S`; the adapter binds every interval
+  set's declared `size`): the same fold over the positions `1, …, n` (§4.3.1,
+  §9.6.1). A set with no size bound (a derived set, whose size value invention
+  fixes, or a ragged set) is refused.
 
 Everything else — another op, a `faq` with output indices, another reduction,
-a stepped or `from` range, several range symbols — evaluates to
+a stepped range, several range symbols — evaluates to
 `EvalError.unsupported`, never to a value. Signed zeros are not modelled by
 `Num`/`Bin64` (so `min`/`max` do not order `-0.0` below `+0.0`).
 -/
@@ -411,6 +416,63 @@ def infMinMax : StrictOp → List (Val α) → Except EvalError (Val α)
 def faqStep (acc : α) (v : Val α) : Except EvalError α := do
   return add acc (← asNum v)
 
+/-- The environment key under which the size of the index set `S` is bound
+(§4.3.1 `{"from": S}`). It is not an identifier, so it never collides with a
+variable, parameter or loop symbol. -/
+def setKey (S : String) : String := "{\"from\": \"" ++ S ++ "\"}"
+
+/-- The number of positions a `{"from": S}` range visits: the size bound under
+`setKey S` (an interval set's declared `size`). A set with no size bound — a
+derived set before value invention, a ragged set — is refused. -/
+def setSize (S : String) (env : Env α) : Except EvalError Int :=
+  match env.lookup (setKey S) with
+  | some (.num v) => asInt v
+  | some _ => .error (.typeError s!"index set {S}: size is not a scalar")
+  | none => .error (.unsupported s!"\{\"from\": \"{S}\"}: index set {S} has no size bound")
+
+/-- A `faq` reduction `+`, `*`, `min` or `max` over the index values `js`, the
+term at `j` given by `term j`: the same folds as the dense-range cases of
+`eval`, in the order of `js`. -/
+def foldRed (red : String) (js : List Int) (term : Int → Except EvalError (Val α)) :
+    Except EvalError (Val α) :=
+  if red = "+" then do
+    let r ← js.foldlM (fun acc j => do faqStep acc (← term j)) (zero : α)
+    return .num r
+  else if red = "*" then do
+    let r ← js.foldlM (fun acc j => do return mul acc (← asNum (← term j))) (one : α)
+    return .num r
+  else if red = "min" then
+    match js with
+    | [] => .ok (.inf false)
+    | j :: js => do
+      let v ← asNum (← term j)
+      let r ← js.foldlM (fun acc i => do return fmin acc (← asNum (← term i))) v
+      return .num r
+  else if red = "max" then
+    match js with
+    | [] => .ok (.inf true)
+    | j :: js => do
+      let v ← asNum (← term j)
+      let r ← js.foldlM (fun acc i => do return fmax acc (← asNum (← term i))) v
+      return .num r
+  else .error (.unsupported s!"faq with reduce {red}")
+
+/-- A filtered `faq` reduction over `js`: `pred j` is the filter, `term j` the
+term, as in the dense-range filtered case of `eval`. -/
+def foldWhere (red : String) (js : List Int) (pred term : Int → Except EvalError (Val α)) :
+    Except EvalError (Val α) := do
+  let r ← js.foldlM (fun (acc : Option α) j => do
+    if truthy (← asNum (← pred j)) then
+      let v ← asNum (← term j)
+      return some (match acc with
+        | none => if red = "+" then add zero v else v
+        | some x => if red = "+" then add x v else if red = "min" then fmin x v else fmax x v)
+    else return acc) none
+  if red = "+" then return .num (r.getD zero)
+  else if red = "min" then return (match r with | some x => .num x | none => .inf false)
+  else if red = "max" then return (match r with | some x => .num x | none => .inf true)
+  else .error (.unsupported s!"filtered faq with reduce {red}")
+
 mutual
 
 /-- Evaluation of the modelled slice (§4.2, §4.3.1, §4.3.3). -/
@@ -478,11 +540,19 @@ def eval : Ast → Env α → Except EvalError (Val α)
     else if red = "min" then return (match r with | some x => .num x | none => .inf false)
     else if red = "max" then return (match r with | some x => .num x | none => .inf true)
     else .error (.unsupported s!"filtered faq with reduce {red}")
+  | .faq [] red (.fromSet k S .nil) body _, env => do
+    -- §4.3.1: a range over an index set visits its positions `1 … |S|` in order
+    let n ← setSize S env
+    foldRed red (indices 1 n) (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
+  | .faqWhere [] red (.fromSet k S .nil) p body _, env => do
+    let n ← setSize S env
+    foldWhere red (indices 1 n) (fun j => eval p ((k, .num (Lits.ofDec j 0)) :: env))
+      (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
   | .faqWhere _ _ _ _ _ _, _ =>
-    .error (.unsupported "filtered faq outside output_idx [], one dense [start, stop] range")
+    .error (.unsupported "filtered faq outside output_idx [], one dense [start, stop] or from range")
   | .apply n _, _ => .error (.unsupported s!"apply_expression_template {n}: not expanded")
   | .faq _ _ _ _ _, _ =>
-    .error (.unsupported "faq outside output_idx [], reduce + * min max, one dense [start, stop] range")
+    .error (.unsupported "faq outside output_idx [], reduce + * min max, one dense [start, stop] or from range")
 
 def evalList : List Ast → Env α → Except EvalError (List (Val α))
   | [], _ => .ok []

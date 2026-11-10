@@ -10,12 +10,14 @@ use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
 #[cfg(not(target_arch = "wasm32"))]
 use super::kernels::scan_leading_cols;
 use super::kernels::{
-    copy_strided, data_gather, data_gather_sub, ew_select, ew1, ew2, exec_gather, fill_strided,
-    index_gather, reduce_axis, reduce_rows, scan_axis, seg_reduce, table_gather,
+    copy_strided, count_bisects, count_many, count_one, data_gather, data_gather_sub, ew_select,
+    ew1, ew2, exec_gather, fill_strided, index_gather, reduce_axis, reduce_rows, scan_axis,
+    seg_reduce, table_gather,
 };
 use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides, src_base};
 use super::*;
 use crate::simulate_array::eval::{latch_gather_fault, latch_ordered_fault};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A resolved source viewed as a ring table.
 fn ring_table(v: &SrcView) -> RingTable<'_> {
@@ -59,6 +61,9 @@ pub(super) fn run_range(
         pending,
         scode,
         slanes,
+        sblocks,
+        sblock_at,
+        sregs,
         plan_full,
         asm_covered,
         scratch,
@@ -100,6 +105,46 @@ pub(super) fn run_range(
         #[cfg(not(target_arch = "wasm32"))]
         for ch in seg_chains.iter() {
             scode[ch.start] = ScalarOp::None;
+        }
+        sblocks.clear();
+        sblock_at.clear();
+        sblock_at.resize(scode.len(), u32::MAX);
+        if prog.precision.is_empty() {
+            // A block lies inside one arm of every conditional region around
+            // it: it may not span a region's start, the start of its false
+            // arm or its end (a jump or a pending skip lands there), nor sit in
+            // a recurrence body.
+            let n = scode.len();
+            let mut cut = vec![false; n + 1];
+            let mut guarded = vec![false; n];
+            for (j, ins) in prog.instrs.iter().enumerate() {
+                match ins {
+                    Instr::JmpIfZero {
+                        n_true, n_false, ..
+                    } => {
+                        let t = j + 1 + *n_true as usize;
+                        for b in [j + 1, t, t + *n_false as usize] {
+                            cut[b.min(n)] = true;
+                        }
+                    }
+                    Instr::Sweep { spec } => {
+                        let len = prog.sweeps[*spec as usize].body_len as usize;
+                        guarded[j + 1..(j + 1 + len).min(n)].fill(true);
+                    }
+                    _ => {}
+                }
+            }
+            let mut pc = 0;
+            while pc < scode.len() {
+                match ScalarBlock::build(prog, scode, slanes, &guarded, &cut, pc) {
+                    Some(b) => {
+                        sblock_at[pc] = sblocks.len() as u32;
+                        pc = b.end;
+                        sblocks.push(b);
+                    }
+                    None => pc += 1,
+                }
+            }
         }
     }
     // Runs of scalar elementwise ops execute in the loop at the top of each
@@ -165,6 +210,12 @@ pub(super) fn run_range(
                 }
                 if pc >= range.end {
                     break;
+                }
+                if let Some(b) = sblocks.get(sblock_at[pc] as usize)
+                    && b.end <= range.end
+                {
+                    pc = unsafe { b.run(env, slab_ptr, dy, sregs) };
+                    continue;
                 }
                 let op = &scode[pc];
                 if let ScalarOp::Jmp {
@@ -509,6 +560,24 @@ pub(super) enum ScalarOp {
         spec: u32,
         out: usize,
     },
+    /// `+ - * /` on two scalar slots (slab offsets), or a slot and a
+    /// literal on either side: the commonest scalar instruction, with its
+    /// kernel and operand kinds decoded into the variant.
+    Arith(Arith, usize, usize, usize),
+    ArithL(Arith, usize, f64, usize),
+    ArithR(Arith, f64, usize, usize),
+    /// [`Instr::DataGather`] of a rank-2 source at two subscripts: whole
+    /// numbers inside the source read their element directly, anything else
+    /// resolves through `spec`.
+    Gather2 {
+        src: ScalarBase,
+        a: ScalarSrc,
+        b: ScalarSrc,
+        n0: u32,
+        n1: u32,
+        spec: u32,
+        out: usize,
+    },
     /// [`Instr::DataGather`] at one element, any rank: its spec.
     Gather {
         src: ScalarBase,
@@ -539,6 +608,27 @@ pub(super) enum ScalarOp {
     ///
     /// [`exec_lanes`]: super::lanes::exec_lanes
     Lanes(u32),
+}
+
+/// The four arithmetic kernels of [`ScalarOp::Arith`].
+#[derive(Clone, Copy)]
+pub(super) enum Arith {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl Arith {
+    #[inline(always)]
+    fn apply(self, x: f64, y: f64) -> f64 {
+        match self {
+            Arith::Add => x + y,
+            Arith::Sub => x - y,
+            Arith::Mul => x * y,
+            Arith::Div => x / y,
+        }
+    }
 }
 
 /// A lane program's register or scalar operand, decoded.
@@ -738,15 +828,42 @@ impl ScalarOp {
                 SrcRef::State(ix) => &prog.state_vars[*ix as usize].shape[..],
             }
         };
+        let arith = |op: &BinCode| match op {
+            BinCode::Add => Some(Arith::Add),
+            BinCode::Sub => Some(Arith::Sub),
+            BinCode::Mul => Some(Arith::Mul),
+            BinCode::Div => Some(Arith::Div),
+            _ => None,
+        };
         let op = match ins {
-            Instr::Bin { op, a, b, out } if scalar(out) => (|| {
-                Some(ScalarOp::Bin(
-                    ScalarBin::of(*op),
-                    src(a)?,
-                    src(b)?,
-                    off(out),
-                ))
-            })(),
+            Instr::Bin { op, a, b, out } if scalar(out) => {
+                // The f64 arithmetic fast path: one slot operand at least, the
+                // other a slot or a literal.
+                let fast = if crate::precision::is_f32() {
+                    None
+                } else {
+                    match (arith(op), src(a), src(b)) {
+                        (Some(k), Some(ScalarSrc::Slot(p)), Some(ScalarSrc::Slot(q))) => {
+                            Some(ScalarOp::Arith(k, p, q, off(out)))
+                        }
+                        (Some(k), Some(ScalarSrc::Slot(p)), Some(ScalarSrc::Lit(v))) => {
+                            Some(ScalarOp::ArithL(k, p, v, off(out)))
+                        }
+                        (Some(k), Some(ScalarSrc::Lit(v)), Some(ScalarSrc::Slot(q))) => {
+                            Some(ScalarOp::ArithR(k, v, q, off(out)))
+                        }
+                        _ => None,
+                    }
+                };
+                fast.or_else(|| {
+                    Some(ScalarOp::Bin(
+                        ScalarBin::of(*op),
+                        src(a)?,
+                        src(b)?,
+                        off(out),
+                    ))
+                })
+            }
             Instr::Un { op, a, out } if scalar(out) => {
                 (|| Some(ScalarOp::Un(unary_kernel_of(*op), src(a)?, off(out))))()
             }
@@ -773,6 +890,23 @@ impl ScalarOp {
                 let sp = &prog.data_gathers[*spec as usize];
                 if !sp.shape.is_empty() || sp.subs.len() > 4 {
                     None
+                } else if sp.subs.len() == 2 && sp.src_shape.len() == 2 {
+                    (|| {
+                        Some(ScalarOp::Gather2 {
+                            src: base(s),
+                            a: src(&sp.subs[0])?,
+                            b: src(&sp.subs[1])?,
+                            n0: u32::try_from(sp.src_shape[0]).ok()?,
+                            n1: u32::try_from(sp.src_shape[1]).ok()?,
+                            spec: *spec,
+                            out: off(out),
+                        })
+                    })()
+                    .or(Some(ScalarOp::Gather {
+                        src: base(s),
+                        spec: *spec,
+                        out: off(out),
+                    }))
                 } else if sp.subs.len() == 1 && sp.src_shape.len() == 1 {
                     src(&sp.subs[0]).map(|sub| ScalarOp::Gather1 {
                         src: base(s),
@@ -896,6 +1030,36 @@ impl ScalarOp {
                     }
                 }
             }
+            ScalarOp::Arith(k, a, b, out) => unsafe {
+                *slab_ptr.add(*out) = k.apply(*slab_ptr.add(*a), *slab_ptr.add(*b))
+            },
+            ScalarOp::ArithL(k, a, v, out) => unsafe {
+                *slab_ptr.add(*out) = k.apply(*slab_ptr.add(*a), *v)
+            },
+            ScalarOp::ArithR(k, v, b, out) => unsafe {
+                *slab_ptr.add(*out) = k.apply(*v, *slab_ptr.add(*b))
+            },
+            ScalarOp::Gather2 {
+                src,
+                a,
+                b,
+                n0,
+                n1,
+                spec,
+                out,
+            } => {
+                let v = [get(a), get(b)];
+                let base = base_ptr(src);
+                if let Some(p) = DataGatherSpec::direct_offset(&[*n0 as usize, *n1 as usize], &v) {
+                    put(*out, unsafe { *base.add(p) });
+                } else {
+                    match env.prog.data_gathers[*spec as usize].at(|d| v[d]) {
+                        DataAt::Elem(p) => put(*out, unsafe { *base.add(p) }),
+                        DataAt::Ghost => put(*out, 0.0),
+                        DataAt::Fault { .. } => return false,
+                    }
+                }
+            }
             ScalarOp::Gather { src, spec, out } => {
                 let sp = &env.prog.data_gathers[*spec as usize];
                 let mut v = [0.0f64; 4];
@@ -922,9 +1086,8 @@ impl ScalarOp {
                 let win = unsafe {
                     std::slice::from_raw_parts(base_ptr(axis).add(*lo as usize), *n as usize)
                 };
-                let at = |j: usize| win[j];
-                let sorted = *sorted || non_decreasing(win.len(), at);
-                put(*out, count_rel(*rel, win.len(), at, sorted, get(x)));
+                let bisect = count_bisects(win, *sorted);
+                put(*out, count_one(*rel, win, bisect, get(x)));
             }
             ScalarOp::Jmp { .. } => return false,
             ScalarOp::Lane(i) => unsafe { slanes[*i as usize].run(env, slab_ptr, dy) },
@@ -1370,24 +1533,16 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             // Rank 1, row-major: the window is contiguous. `out` never shares
             // storage with the axis (the slab coloring keeps them apart).
             let win = unsafe { std::slice::from_raw_parts(aptr.add(*lo as usize), *n as usize) };
-            let at = |j: usize| win[j];
-            // A window the lowering could not see is checked here, once per
-            // execution: O(n) against the O(n) per element it can save.
-            let sorted = *sorted || non_decreasing(win.len(), at);
-            let rel = *rel;
             let desc = &prog.slots[*out as usize];
             let off = slot_off[*out as usize];
             if desc.scalar {
                 let xv = resolve_scalar(x, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = count_rel(rel, win.len(), at, sorted, xv) };
+                let bisect = count_bisects(win, *sorted);
+                unsafe { *slab_ptr.add(off) = count_one(*rel, win, bisect, xv) };
             } else {
                 let xv = resolve_rv(x, &desc.shape, env, slab_ptr, slot_off);
                 let dst = unsafe { slab_ptr.add(off) };
-                unsafe {
-                    ew1(dst, &desc.shape, &xv, |q| {
-                        count_rel(rel, win.len(), at, sorted, q)
-                    })
-                };
+                unsafe { count_many(dst, &desc.shape, &xv, *rel, win, *sorted) };
             }
         }
         Instr::Calendar { func, a, out } => {
@@ -1909,5 +2064,456 @@ pub(super) unsafe fn exec_share(
             };
         }
         _ => unreachable!("not a shared instruction: {}", ins.opcode()),
+    }
+}
+
+/// The fewest scalar instructions worth running as one [`ScalarBlock`].
+const BLOCK_MIN: usize = 6;
+
+/// One operation of a [`ScalarBlock`], on its register file.
+#[derive(Clone, Copy)]
+enum BlockOp {
+    Arith(Arith, u16, u16, u16),
+    Bin(ScalarBin, u16, u16, u16),
+    Un(fn(f64) -> f64, u16, u16),
+    Neg(u16, u16),
+    Select(u16, u16, u16, u16),
+    Load(ScalarBase, usize, u16),
+    Gather1 {
+        src: ScalarBase,
+        x: u16,
+        n: usize,
+        spec: u32,
+        out: u16,
+    },
+    Gather2 {
+        src: ScalarBase,
+        a: u16,
+        b: u16,
+        n0: u32,
+        n1: u32,
+        spec: u32,
+        out: u16,
+    },
+    Count {
+        rel: CountRel,
+        axis: ScalarBase,
+        lo: u32,
+        n: u32,
+        sorted: bool,
+        x: u16,
+        out: u16,
+    },
+}
+
+/// Where a [`ScalarBlock`] puts a value at its end.
+#[derive(Clone, Copy)]
+enum BlockOut {
+    Slab(usize),
+    Dy(usize),
+}
+
+/// A straight run of scalar instructions (their [`ScalarOp`] forms, one-lane
+/// programs inlined) run as one program over a register file of its own:
+/// each operand the run reads from before it is read into a register, every
+/// value it computes stays in one, and at the end each slab offset it wrote
+/// gets its last value and each `dy` position its value, in program order.
+/// Within the run nothing reads a value it stores (a scalar run writes only
+/// scalar slots and `dy`; its arrays are read from the slab, written before
+/// it), so deferring the stores changes no read, and each operation is the
+/// [`ScalarOp`] arm's kernel on the same operand values.
+pub(super) struct ScalarBlock {
+    /// One past its last instruction.
+    end: usize,
+    inputs: Vec<(ScalarSrc, u16)>,
+    ops: Vec<BlockOp>,
+    outs: Vec<(u16, BlockOut)>,
+    n_regs: usize,
+}
+
+impl ScalarBlock {
+    /// The block starting at `start` (instructions `start..` up to the first
+    /// that has no block form, the end of a section, a boundary of a
+    /// conditional region (`cut`) or a recurrence body (`guarded`)), or
+    /// `None` when that run is shorter than [`BLOCK_MIN`].
+    pub(super) fn build(
+        prog: &TapeProgram,
+        scode: &[ScalarOp],
+        slanes: &[ScalarLane],
+        guarded: &[bool],
+        cut: &[bool],
+        start: usize,
+    ) -> Option<ScalarBlock> {
+        let sec = prog.section_of(start);
+        let mut b = Builder::default();
+        let mut pc = start;
+        while pc < scode.len()
+            && !guarded[pc]
+            && !(pc > start && cut[pc])
+            && prog.section_of(pc) == sec
+        {
+            let gather_ok = || matches!(prog.instrs[pc], Instr::DataGather { faults: false, .. });
+            let ok = match scode[pc] {
+                ScalarOp::Arith(k, a, c, out) => {
+                    let (x, y) = (b.slab(a), b.slab(c));
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Arith(k, x, y, o));
+                    true
+                }
+                ScalarOp::ArithL(k, a, v, out) => {
+                    let (x, y) = (b.slab(a), b.src(ScalarSrc::Lit(v)));
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Arith(k, x, y, o));
+                    true
+                }
+                ScalarOp::ArithR(k, v, c, out) => {
+                    let (x, y) = (b.src(ScalarSrc::Lit(v)), b.slab(c));
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Arith(k, x, y, o));
+                    true
+                }
+                ScalarOp::Bin(k, a, c, out) => {
+                    let (x, y) = (b.src(a), b.src(c));
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Bin(k, x, y, o));
+                    true
+                }
+                ScalarOp::Un(f, a, out) => {
+                    let x = b.src(a);
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Un(f, x, o));
+                    true
+                }
+                ScalarOp::Neg(a, out) => {
+                    let x = b.src(a);
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Neg(x, o));
+                    true
+                }
+                ScalarOp::Copy(a, out) => {
+                    // A copy is its source's value under a new offset.
+                    let x = b.src(a);
+                    b.alias(out, x);
+                    true
+                }
+                ScalarOp::Select(c, a, d, out) => {
+                    let (c, x, y) = (b.src(c), b.src(a), b.src(d));
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Select(c, x, y, o));
+                    true
+                }
+                ScalarOp::Load(base, at, out) => {
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Load(base, at, o));
+                    true
+                }
+                ScalarOp::Gather1 {
+                    src,
+                    sub,
+                    n,
+                    spec,
+                    out,
+                } if gather_ok() => {
+                    let x = b.src(sub);
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Gather1 {
+                        src,
+                        x,
+                        n,
+                        spec,
+                        out: o,
+                    });
+                    true
+                }
+                ScalarOp::Gather2 {
+                    src,
+                    a,
+                    b: c,
+                    n0,
+                    n1,
+                    spec,
+                    out,
+                } if gather_ok() => {
+                    let (x, y) = (b.src(a), b.src(c));
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Gather2 {
+                        src,
+                        a: x,
+                        b: y,
+                        n0,
+                        n1,
+                        spec,
+                        out: o,
+                    });
+                    true
+                }
+                ScalarOp::Count {
+                    rel,
+                    axis,
+                    lo,
+                    n,
+                    sorted,
+                    x,
+                    out,
+                } => {
+                    let x = b.src(x);
+                    let o = b.def(out);
+                    b.ops.push(BlockOp::Count {
+                        rel,
+                        axis,
+                        lo,
+                        n,
+                        sorted,
+                        x,
+                        out: o,
+                    });
+                    true
+                }
+                ScalarOp::Lane(i) => {
+                    b.inline_lane(&slanes[i as usize]);
+                    true
+                }
+                _ => false,
+            };
+            if !ok || b.regs > u16::MAX as usize - 64 {
+                break;
+            }
+            pc += 1;
+        }
+        if pc - start < BLOCK_MIN {
+            return None;
+        }
+        let mut outs: Vec<(u16, BlockOut)> = b
+            .written
+            .iter()
+            .map(|&off| (b.at[&off], BlockOut::Slab(off)))
+            .collect();
+        outs.extend(b.dy.iter().map(|&(r, p)| (r, BlockOut::Dy(p))));
+        Some(ScalarBlock {
+            end: pc,
+            inputs: b.inputs,
+            ops: b.ops,
+            outs,
+            n_regs: b.regs,
+        })
+    }
+
+    /// Run the block; `regs` is scratch the block sizes.
+    ///
+    /// # Safety
+    /// As [`ScalarOp::run`].
+    #[inline(never)]
+    pub(super) unsafe fn run(
+        &self,
+        env: &Env,
+        slab_ptr: *mut f64,
+        dy: &mut [f64],
+        regs: &mut Vec<f64>,
+    ) -> usize {
+        if regs.len() < self.n_regs {
+            regs.resize(self.n_regs, 0.0);
+        }
+        let r = regs.as_mut_ptr();
+        let base_ptr = |b: &ScalarBase| -> *const f64 {
+            match *b {
+                ScalarBase::Slab(o) => unsafe { slab_ptr.add(o) },
+                ScalarBase::State(ix) => super::resolve::state_ptr(env, ix),
+            }
+        };
+        unsafe {
+            for &(s, i) in &self.inputs {
+                *r.add(i as usize) = scalar_get(&s, env, slab_ptr);
+            }
+            let g = |i: u16| *r.add(i as usize);
+            let put = |i: u16, v: f64| *r.add(i as usize) = v;
+            for op in &self.ops {
+                match *op {
+                    BlockOp::Arith(k, a, b, o) => put(o, k.apply(g(a), g(b))),
+                    BlockOp::Bin(k, a, b, o) => put(o, k.apply(g(a), g(b))),
+                    BlockOp::Un(f, a, o) => put(o, f(g(a))),
+                    BlockOp::Neg(a, o) => put(o, -g(a)),
+                    BlockOp::Select(c, a, b, o) => {
+                        let (c, x, y) = (g(c), g(a), g(b));
+                        put(o, if c != 0.0 { x } else { y });
+                    }
+                    BlockOp::Load(b, at, o) => put(o, *base_ptr(&b).add(at)),
+                    BlockOp::Gather1 {
+                        src,
+                        x,
+                        n,
+                        spec,
+                        out,
+                    } => {
+                        let v = g(x);
+                        let k = subscript_of(v);
+                        let base = base_ptr(&src);
+                        let y = if k >= 1 && k <= n as i64 {
+                            *base.add((k - 1) as usize)
+                        } else {
+                            gather_at(env, spec, base, &[v])
+                        };
+                        put(out, y);
+                    }
+                    BlockOp::Gather2 {
+                        src,
+                        a,
+                        b,
+                        n0,
+                        n1,
+                        spec,
+                        out,
+                    } => {
+                        let v = [g(a), g(b)];
+                        let base = base_ptr(&src);
+                        let y = match DataGatherSpec::direct_offset(&[n0 as usize, n1 as usize], &v)
+                        {
+                            Some(p) => *base.add(p),
+                            None => gather_at(env, spec, base, &v),
+                        };
+                        put(out, y);
+                    }
+                    BlockOp::Count {
+                        rel,
+                        axis,
+                        lo,
+                        n,
+                        sorted,
+                        x,
+                        out,
+                    } => {
+                        let win = std::slice::from_raw_parts(
+                            base_ptr(&axis).add(lo as usize),
+                            n as usize,
+                        );
+                        let bisect = count_bisects(win, sorted);
+                        put(out, count_one(rel, win, bisect, g(x)));
+                    }
+                }
+            }
+            for &(i, o) in &self.outs {
+                match o {
+                    BlockOut::Slab(off) => *slab_ptr.add(off) = g(i),
+                    BlockOut::Dy(p) => dy[p] = g(i),
+                }
+            }
+        }
+        self.end
+    }
+}
+
+/// A gather a block reads at subscripts outside the fast path: the spec's
+/// own resolution. The block holds only gathers the lowering proved cannot
+/// fault (`faults: false`).
+#[inline(never)]
+fn gather_at(env: &Env, spec: u32, base: *const f64, v: &[f64]) -> f64 {
+    match env.prog.data_gathers[spec as usize].at(|d| v[d]) {
+        DataAt::Elem(p) => unsafe { *base.add(p) },
+        DataAt::Ghost => 0.0,
+        DataAt::Fault { .. } => unreachable!("a non-faulting gather faulted"),
+    }
+}
+
+/// [`ScalarBlock::build`]'s register assignment.
+#[derive(Default)]
+struct Builder {
+    regs: usize,
+    inputs: Vec<(ScalarSrc, u16)>,
+    ops: Vec<BlockOp>,
+    /// Slab offset -> the register holding its current value.
+    at: FxHashMap<usize, u16>,
+    /// Slab offsets written, in first-write order.
+    written: Vec<usize>,
+    seen: FxHashSet<usize>,
+    dy: Vec<(u16, usize)>,
+}
+
+impl Builder {
+    fn fresh(&mut self) -> u16 {
+        self.regs += 1;
+        (self.regs - 1) as u16
+    }
+
+    fn slab(&mut self, off: usize) -> u16 {
+        self.src(ScalarSrc::Slot(off))
+    }
+
+    /// The register an operand is read from: a slab offset written earlier
+    /// in the block is its register, anything else an input read at entry.
+    fn src(&mut self, s: ScalarSrc) -> u16 {
+        if let ScalarSrc::Slot(off) = s
+            && let Some(&r) = self.at.get(&off)
+        {
+            return r;
+        }
+        let r = self.fresh();
+        self.inputs.push((s, r));
+        if let ScalarSrc::Slot(off) = s {
+            self.at.insert(off, r);
+        }
+        r
+    }
+
+    /// A fresh register for a write to slab offset `off`.
+    fn def(&mut self, off: usize) -> u16 {
+        let r = self.fresh();
+        self.bind(off, r);
+        r
+    }
+
+    fn bind(&mut self, off: usize, r: u16) {
+        self.at.insert(off, r);
+        if self.seen.insert(off) {
+            self.written.push(off);
+        }
+    }
+
+    fn alias(&mut self, off: usize, r: u16) {
+        self.bind(off, r);
+    }
+
+    fn inline_lane(&mut self, l: &ScalarLane) {
+        let sc: SmallVec<[u16; 8]> = l.scalars.iter().map(|&s| self.src(s)).collect();
+        let mut lr = [0u16; LANE_MAX];
+        let rd = |m: LaneRef, lr: &[u16; LANE_MAX]| match m {
+            LaneRef::Reg(x) => lr[x as usize],
+            LaneRef::Scal(i) => sc[i as usize],
+        };
+        for op in &l.micro {
+            let (bop, out) = match *op {
+                LaneOp::Bin(k, a, b, out) => {
+                    let o = self.fresh();
+                    (BlockOp::Bin(k, rd(a, &lr), rd(b, &lr), o), (out, o))
+                }
+                LaneOp::Un(f, a, out) => {
+                    let o = self.fresh();
+                    (BlockOp::Un(f, rd(a, &lr), o), (out, o))
+                }
+                LaneOp::Neg(a, out) => {
+                    let o = self.fresh();
+                    (BlockOp::Neg(rd(a, &lr), o), (out, o))
+                }
+                LaneOp::Select(c, a, b, out) => {
+                    let o = self.fresh();
+                    (
+                        BlockOp::Select(rd(c, &lr), rd(a, &lr), rd(b, &lr), o),
+                        (out, o),
+                    )
+                }
+                LaneOp::Mov(a, out) => {
+                    // A move is its source's register.
+                    lr[out as usize] = rd(a, &lr);
+                    continue;
+                }
+            };
+            self.ops.push(bop);
+            lr[out.0 as usize] = out.1;
+        }
+        for &(src, dst) in &l.writes {
+            let r = rd(src, &lr);
+            match dst {
+                LaneOut::Dy(p) => self.dy.push((r, p)),
+                LaneOut::Slab(off) => self.bind(off, r),
+            }
+        }
     }
 }

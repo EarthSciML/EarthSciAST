@@ -703,7 +703,7 @@ enum GatherFold {
     /// at once, so the program does not depend on the box's extents. Holds
     /// the source stride of each output axis: a broadcast (an output axis the
     /// source lacks) reads that axis with stride 0, the other axes in order.
-    Chunk(SmallVec<[i64; 4]>),
+    Chunk(SmallVec<[i64; 4]>, i64),
 }
 
 /// How fusion absorbs a gather of `plan` into a box of `out_shape`, or
@@ -728,14 +728,12 @@ fn gather_fold(plan: &GatherPlan, out_shape: &[usize]) -> Option<GatherFold> {
         return Some(GatherFold::Shifted(g));
     }
     if foldable_plan(plan) {
-        Some(GatherFold::Chunk(rm_strides(&plan.src_shape)))
-    } else if plan.fixed_desc.is_empty() {
+        Some(GatherFold::Chunk(rm_strides(&plan.src_shape), 0))
+    } else {
         match broadcast_fold(plan) {
-            Some(ShiftedGeom::Segs { strides, .. }) => Some(GatherFold::Chunk(strides)),
+            Some(ShiftedGeom::Segs { strides, base, .. }) => Some(GatherFold::Chunk(strides, base)),
             _ => None,
         }
-    } else {
-        None
     }
 }
 
@@ -2255,8 +2253,13 @@ fn reads_own_columns(fs: &FusedSpec, out: SlotId, lead: usize, n_inner: usize) -
 /// `lead` leading axes adds nothing to the source offset (the read is
 /// broadcast along it), and each later axis maps every position it copies
 /// to the same position at the box's own row-major stride, so the offset is
-/// the element's column.
+/// the element's column. Every element adds `base` (the source axes the
+/// gather holds fixed), so only a gather with `base == 0` reads its own
+/// column.
 fn chunk_gather_own_columns(g: &ChunkGather, lead: usize) -> bool {
+    if g.base != 0 {
+        return false;
+    }
     let mut stride = 1i64;
     for a in (0..g.shape.len()).rev() {
         let ok = if a < lead {
@@ -2849,7 +2852,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 i += 1;
                 continue;
             }
-            if let Some(GatherFold::Chunk(strides)) = fold {
+            if let Some(GatherFold::Chunk(strides, base)) = fold {
                 flush_hazards(ins, None, &mut open, fx);
                 let shape = out_desc.shape.clone();
                 let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);
@@ -2867,6 +2870,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                         .shape
                         .last()
                         .is_none_or(|&l| l < MIN_CHUNK_GATHER_ROW),
+                    base,
                 };
                 open[gi].add_chunk_gather(i as u32, *src, g, &plan_ref.src_shape, *out);
                 i += 1;
@@ -3376,5 +3380,37 @@ mod run_schedule_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod chunk_gather_own_columns_tests {
+    use super::*;
+
+    /// A box of 2 rows by 6 columns reading a 6-element slot through a chunk
+    /// gather whose last axis copies positions 0..3 at their own offsets.
+    fn gather(base: i64) -> ChunkGather {
+        ChunkGather {
+            segs: smallvec::smallvec![
+                smallvec::smallvec![(0, 2, 0)],
+                smallvec::smallvec![(0, 3, 0)],
+            ],
+            strides: smallvec::smallvec![0, 1],
+            shape: SmallVec::from_slice(&[2, 6]),
+            whole: false,
+            base,
+        }
+    }
+
+    #[test]
+    fn a_gather_from_the_slot_reads_its_own_columns() {
+        assert!(chunk_gather_own_columns(&gather(0), 1));
+    }
+
+    /// A fixed source axis adds `base` to every element's offset: column `j`
+    /// reads source element `base + j`, another range's column.
+    #[test]
+    fn a_fixed_slice_offset_is_not_its_own_column() {
+        assert!(!chunk_gather_own_columns(&gather(3), 1));
     }
 }

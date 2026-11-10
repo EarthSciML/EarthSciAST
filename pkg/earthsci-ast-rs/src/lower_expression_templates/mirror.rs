@@ -41,6 +41,12 @@ pub(super) enum SNode {
     Str(String),
     Arr(Vec<Sv>),
     Obj(Vec<(String, Sv)>),
+    /// A long array of numbers ([`crate::json_visit::is_number_data`], at
+    /// any depth, e.g. a `const` node's mesh
+    /// connectivity), kept as the JSON it is. It holds no string or object,
+    /// so no template reference, parameter or rule can occur inside it, and
+    /// every walk treats it as one leaf instead of one node per number.
+    Data(Rc<Value>),
 }
 
 /// A shared (reference-counted) expression node.
@@ -54,6 +60,9 @@ pub(super) fn to_shared(v: &Value) -> Sv {
         Value::Bool(b) => SNode::Bool(*b),
         Value::Number(n) => SNode::Num(n.clone()),
         Value::String(s) => SNode::Str(s.clone()),
+        Value::Array(arr) if crate::json_visit::is_number_data(arr) => {
+            SNode::Data(Rc::new(v.clone()))
+        }
         Value::Array(arr) => SNode::Arr(arr.iter().map(to_shared).collect()),
         Value::Object(obj) => {
             SNode::Obj(obj.iter().map(|(k, v)| (k.clone(), to_shared(v))).collect())
@@ -73,6 +82,7 @@ pub(super) fn to_value(s: &SNode) -> Value {
         SNode::Num(n) => Value::Number(n.clone()),
         SNode::Str(st) => Value::String(st.clone()),
         SNode::Arr(items) => Value::Array(items.iter().map(|c| to_value(c)).collect()),
+        SNode::Data(v) => (**v).clone(),
         SNode::Obj(fields) => {
             let mut out = Map::new();
             for (k, v) in fields {
@@ -112,6 +122,7 @@ pub(super) fn sv_eq(a: &Sv, b: &Sv) -> bool {
         (SNode::Arr(x), SNode::Arr(y)) => {
             x.len() == y.len() && x.iter().zip(y.iter()).all(|(cx, cy)| sv_eq(cx, cy))
         }
+        (SNode::Data(x), y) | (y, SNode::Data(x)) => value_eq_sv(x, y),
         (SNode::Obj(x), SNode::Obj(y)) => {
             x.len() == y.len()
                 && x.iter()
@@ -133,6 +144,7 @@ pub(super) fn value_eq_sv(p: &Value, t: &SNode) -> bool {
         (Value::Array(x), SNode::Arr(y)) => {
             x.len() == y.len() && x.iter().zip(y.iter()).all(|(px, ty)| value_eq_sv(px, ty))
         }
+        (_, SNode::Data(y)) => p == &**y,
         (Value::Object(x), SNode::Obj(y)) => {
             x.len() == y.len()
                 && x.iter()
@@ -592,5 +604,53 @@ fn subst_shared(node: &Sv, bindings: &Binds, memo: &mut PtrMemo<Sv>) -> Sv {
             res
         }
         _ => node.clone(),
+    }
+}
+
+/// Whether `v` holds an `apply_expression_template` op anywhere.
+fn has_apply(v: &Value) -> bool {
+    match v {
+        Value::Object(o) => {
+            o.get("op").and_then(|w| w.as_str()) == Some(APPLY_OP) || o.values().any(has_apply)
+        }
+        Value::Array(a) if crate::json_visit::is_number_data(a) => false,
+        Value::Array(a) => a.iter().any(has_apply),
+        _ => false,
+    }
+}
+
+/// Take every element of the array `v` that holds no template reference out
+/// of it, leaving `null` in its place, and return them with their positions
+/// ([`unpark_plain`] puts them back). A pass with no `match` rule to fire
+/// leaves such an element as it is, so it need not mirror it (an equation of
+/// const data is most of a document's size). Nothing is taken when `rules` is
+/// true, or when `v` is not an array.
+pub(super) fn park_plain(v: &mut Value, rules: bool) -> Vec<(usize, Value)> {
+    let Value::Array(items) = v else {
+        return Vec::new();
+    };
+    if rules {
+        return Vec::new();
+    }
+    items
+        .iter_mut()
+        .enumerate()
+        .filter(|(_, e)| !e.is_null() && !has_apply(e))
+        .map(|(i, e)| (i, std::mem::take(e)))
+        .collect()
+}
+
+/// Put back what [`park_plain`] took out of `v` (or out of the array that
+/// replaced it, which has the same length: a pass with no `match` rule
+/// rewrites inside elements, never the list).
+pub(super) fn unpark_plain(v: &mut Value, parked: Vec<(usize, Value)>) {
+    if parked.is_empty() {
+        return;
+    }
+    let Value::Array(items) = v else {
+        unreachable!("only an array's elements are parked");
+    };
+    for (i, e) in parked {
+        items[i] = e;
     }
 }
