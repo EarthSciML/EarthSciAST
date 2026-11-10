@@ -460,7 +460,7 @@ function _encode_join_keys(vals_l::Vector{Any}, vals_r::Vector{Any})
             )
         )
     end
-    # Keys of one concrete type (the integer IDs, a skolem's integer tuples)
+    # Keys of one concrete type (the integer IDs)
     # are coded through a typed table: the same values, the same `isless`
     # order and the same `isequal` buckets as the `Any` table, without a
     # dynamic dispatch per comparison.
@@ -495,7 +495,7 @@ _join_on_gate_disabled() = !_compiler_plan_now().join_on_gate
 #
 # `group` is every resolved pair of the clause over the SAME two loop symbols —
 # §5.5.8's COMPOSITE KEY, which matches iff every listed pair agrees. The key of
-# a position is therefore the §5.5.1 rule-4 skolem TUPLE of that position's
+# a position is therefore the §5.5.1 rule-4 key TUPLE of that position's
 # per-pair bucket codes, in the order the pairs are listed (spelled below as a
 # code vector, which orders lexicographically exactly as the tuple does).
 #
@@ -521,7 +521,7 @@ function _on_gate_match_pairs(group, coded::AbstractVector)
     # A SINGLE pair — the overwhelmingly common case, and the one that has to
     # stay cheap at 1e5 rows — keys on the bucket code itself; a composite key
     # keys on the per-pair code vector, which orders lexicographically exactly as
-    # the §5.5.1 rule-4 skolem tuple does.
+    # the §5.5.1 rule-4 key tuple does.
     length(coded) == 1 && return _int_code_equijoin(pos_l, pos_r, coded[1][1], coded[1][2])
     kl = Dict{Int, Vector{Int}}(p => Int[c[1][i] for c in coded] for (i, p) in enumerate(pos_l))
     kr = Dict{Int, Vector{Int}}(p => Int[c[2][i] for c in coded] for (i, p) in enumerate(pos_r))
@@ -612,10 +612,9 @@ function _join_key_column_values(
         var_shapes::AbstractDict = Dict{String, Vector{String}}()
     )
     if haskey(vi_maps.maps, col)
-        # Deliberately UNVALIDATED: a skolem bin id is whatever the value-
-        # invention front door minted (an integer, a tuple), it is only ever
-        # compared against another buffer minted the same way, and validating it
-        # here would reject documents that work today.
+        # Deliberately UNVALIDATED: a bin id is whatever the value-invention
+        # front door minted (an integer), it is only ever compared against
+        # another buffer minted the same way.
         buf = vi_maps.maps[col]
         return Any[buf[p] for p in positions]
     end
@@ -1145,7 +1144,7 @@ end
 # resolution pre-pass (and stay byte-identical) for join-free documents.
 # INTENTIONAL field subset (behavior-pinned — do NOT widen to `child_exprs`
 # coverage without a spec decision): walks args / expr_body / values / filter
-# only, NOT lower / upper / key / table_axes / ranges bounds. A join buried in
+# only, NOT lower / upper / key / ranges bounds. A join buried in
 # e.g. an integral bound would therefore skip the pre-pass even though
 # `_resolve_join_in_expr` does recurse those fields — flagged for Wave 3.
 # Identity-deduped (ESS-0hh): a pure existence predicate is path-multiplicity-

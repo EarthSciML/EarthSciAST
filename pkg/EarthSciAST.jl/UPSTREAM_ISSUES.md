@@ -208,20 +208,17 @@ era. A simplifier that only applied the rewrite when `1/c` is exactly
 representable (a power of two) would keep the optimization where it is free and
 drop it where it is not.
 
-**Where it bit us.** The closed `datetime.*` calendar
-(`src/registered_functions.jl`) decomposes `t_utc` with `floor(a/b)`, and both
+**Where it bit us.** A calendar decomposes `t_utc` with `floor(a/b)`, and both
 unsafe constants are divisors in it: `3600000` ms per hour and `146097` days per
-400-year era. Compiled through either backend, `datetime.hour` returned the
+400-year era. Compiled through either backend, the hour came back as the
 previous hour at exactly the top of every hour. The host path was never wrong,
-so nothing in the interpreter's exhaustive `Dates` oracle
-(`test/datetime_arithmetic_test.jl`) could see it.
+so no host-side oracle could see it.
 
-**Our workaround.** `_cdiv` recovers the floor from the remainder rather than
-trusting the quotient: `r = a - q*b` is exact for exact-integer operands, and two
-selects repair any quotient that is within one unit of the truth. Branch-free,
+**Our workaround.** Recover the floor from the remainder rather than trusting
+the quotient: `r = a - q*b` is exact for exact-integer operands, and two selects
+repair any quotient that is within one unit of the truth. Branch-free,
 value-identical on the host, and independent of which constants a given
-simplifier decides are safe. See the note above `_cdiv` in
-`src/registered_functions.jl`, and the tier-level reading in
+simplifier decides are safe. See the tier-level reading in
 `tests/conformance/compiled_rhs/README.md` (§"Readings taken", item 8), which is
 where the next binding to lower a calendar will look.
 

@@ -142,8 +142,8 @@ _de_lookup_place(d) =
 #
 # The two places under the walk that DO want Reactant's own semantics say so by
 # name instead: `Reactant.Ops.reduce` re-enters the interpreter itself when it
-# traces a reduction body, and interp.jl hands its lane evaluators back with an
-# explicit `Reactant.call_with_reactant`. Both are O(1) in the grid and neither
+# traces a reduction body, and closed.jl hands the comparison count back with
+# an explicit `Reactant.call_with_reactant`. Both are O(1) in the grid and neither
 # nests, so the generator depth under `@compile` is now a small constant.
 function _de_skip_rewrite!()
     Reactant.@skip_rewrite_func _de_lookup_place

@@ -756,7 +756,7 @@ format_expression_ascii(expr::ASTExpr) = format_expression(expr, :ascii)
 # `args` (esm-spec §4.2) plus `integral`. `format_structural_op` returns a
 # fully-formatted string, or `nothing` for ops handled by the scalar-op dispatch
 # (arithmetic, elementary functions, comparisons, D, Pre, …) or by the generic
-# fallback (open-tier sugar grad/div/laplacian, unknown user ops, skolem/rank).
+# fallback (open-tier sugar grad/div/laplacian, unknown user ops).
 
 """Escape LaTeX-special underscores in a bare operator / identifier name."""
 latex_name(name::AbstractString) = replace(String(name), "_" => "\\_")
@@ -826,7 +826,7 @@ function aggregate_symbol(semiring, reduce, format::Symbol)
     return format == :unicode ? u : format == :latex ? l : a
 end
 
-"""Render the ` where {…}` range clause shared by aggregate and argmin/argmax."""
+"""Render the ` where {…}` range clause of an aggregate."""
 function format_ranges_clause(ranges, format::Symbol)
     in_sym = format == :latex ? " \\in " : format == :unicode ? "∈" : " in "
     parts = String[]
@@ -862,7 +862,7 @@ function _display_join_clause(clause, format::Symbol)
     return syms === nothing ? body : "$body, syms=[$(syms[1]), $(syms[2])]"
 end
 
-"""Render the ` join(…)` clause shared by `faq` and `argmin`/`argmax` (`""` if none)."""
+"""Render the ` join(…)` clause of a `faq` (`""` if none)."""
 function format_join_clause(joins, format::Symbol)
     (joins === nothing || isempty(joins)) && return ""
     return " join($(join([_display_join_clause(c, format) for c in joins], "; ")))"
@@ -893,35 +893,12 @@ function format_aggregate(node::OpExpr, format::Symbol)
         out *= " key=$(r(node.key))"
     end
     # `id` (RFC §6.1 node identity) is a bare-name clause rather than part of
-    # the `[…]` suffix so it adds no new bracket ambiguity with
-    # `table_lookup`'s `name[axis=…]` surface.
+    # the `[…]` suffix.
     if node.id !== nothing
         out *= " id=$(node.id)"
     end
     if semiring !== nothing && semiring != "sum_product"
         out *= " [semiring=$semiring]"
-    end
-    return out
-end
-
-"""Render an `argmin` / `argmax` arg-witness node per the rendering contract."""
-function format_arg_witness(node::OpExpr, format::Symbol)
-    r(e) = format_expression(e, format)
-    arg = node.arg === nothing ? "" : node.arg
-    expr_str = node.expr_body === nothing ? "" : r(node.expr_body)
-    idx_part = format == :latex ? "_{$arg}" : "[$arg]"
-    name = format == :latex ? "\\mathrm{$(node.op)}" : node.op
-    out = "$name$idx_part ($expr_str)"
-    if node.ranges !== nothing && !isempty(node.ranges)
-        out *= format_ranges_clause(node.ranges, format)
-    end
-    # The candidate-pruning join and filter, spelled exactly as on `faq`.
-    out *= format_join_clause(node.join, format)
-    if node.filter !== nothing
-        out *= " if $(r(node.filter))"
-    end
-    if node.id !== nothing
-        out *= " id=$(node.id)"
     end
     return out
 end
@@ -941,10 +918,6 @@ function format_structural_op(node::OpExpr, format::Symbol)
         return format_const_value(node.value, format)
     elseif op == "true" || op == "false"
         return op
-    elseif op == "fn"
-        name = node.name === nothing ? "" : node.name
-        inner = join([r(a) for a in args], ", ")
-        return format == :latex ? "\\mathrm{$(latex_name(name))}($inner)" : "$name($inner)"
     elseif op == "enum"
         length(args) >= 2 || return nothing
         label = "$(_enum_name(args[1])).$(_enum_name(args[2]))"
@@ -970,15 +943,6 @@ function format_structural_op(node::OpExpr, format::Symbol)
         else
             return "integral($f, $v, $lo, $hi)"
         end
-    elseif op == "table_lookup"
-        table = node.table === nothing ? "" : node.table
-        axes = node.table_axes === nothing ? Dict{String, ASTExpr}() : node.table_axes
-        eq = format == :latex ? " = " : "="
-        bindings = join(["$k$eq$(r(axes[k]))" for k in sort(collect(keys(axes)))], ", ")
-        outv = node.output
-        out_str = outv === nothing ? "" : ":$(outv)"
-        name = format == :latex ? "\\mathrm{$(latex_name(table))}" : table
-        return "$name[$bindings]$out_str"
     elseif op == "apply_expression_template"
         name = node.name === nothing ? "" : node.name
         binds = node.bindings === nothing ? Dict{String, ASTExpr}() : node.bindings
@@ -1033,26 +997,8 @@ function format_structural_op(node::OpExpr, format::Symbol)
         axis = node.axis === nothing ? 0 : node.axis
         name = format == :latex ? "\\mathrm{concat}" : "concat"
         return "$name($inner, axis=$axis)"
-    elseif op == "intersect_polygon" || op == "polygon_intersection_area"
-        inner = join([r(a) for a in args], ", ")
-        manifold = node.manifold === nothing ? "" : node.manifold
-        name = format == :latex ? "\\mathrm{$(latex_name(op))}" : op
-        # `id` (RFC §6.1 node identity) is emitted as a trailing named argument
-        # when present, so a node addressable as a derived index set's `from_faq`
-        # referent survives the text round-trip. Absent `id` prints exactly as
-        # before, so every existing rendering is unchanged.
-        id_part = node.id === nothing ? "" : ", id=$(node.id)"
-        return "$name($inner, manifold=$manifold$id_part)"
-    elseif op == "skolem" && node.label !== nothing
-        # The documentary `label` is a trailing named argument, like
-        # intersect_polygon's `manifold=`; an unlabeled skolem is a plain call.
-        inner = join([r(a) for a in args], ", ")
-        name = format == :latex ? "\\mathrm{skolem}" : "skolem"
-        return "$name($inner, label=$(node.label))"
     elseif op == "faq"
         return format_aggregate(node, format)
-    elseif op == "argmin" || op == "argmax"
-        return format_arg_witness(node, format)
     else
         return nothing
     end
@@ -1347,7 +1293,7 @@ function format_operator_expression(node::OpExpr, format::Symbol)
     rendered === nothing || return rendered
 
     # Generic fallback: function-call notation for open-tier sugar
-    # (grad/div/laplacian), skolem/rank, and any unknown user op. Only `args`
+    # (grad/div/laplacian) and any unknown user op. Only `args`
     # are shown; a non-`args` field (e.g. grad's `dim`) is NOT rendered.
     arg_list = join([format_expression(arg, format) for arg in args], ", ")
     return format == :latex ? "\\mathrm{$(latex_name(op))}($arg_list)" : "$op($arg_list)"

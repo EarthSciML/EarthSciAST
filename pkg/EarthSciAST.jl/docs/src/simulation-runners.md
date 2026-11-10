@@ -213,8 +213,8 @@ is no parallel dispatch table. Unbound variables raise
 ### Supported ops
 
 `tree_walk` consumes scalarized canonical-form AST. It supports the full
-arithmetic, comparison, logical, elementary-function, and `fn` (closed
-function registry) op set per `esm-spec` §4 / §9.2:
+arithmetic, comparison, logical and elementary-function op set per
+`esm-spec` §4:
 
 - Arithmetic: `+`, `-`, `*`, `/`, `^` / `pow`
 - Comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
@@ -223,24 +223,13 @@ function registry) op set per `esm-spec` §4 / §9.2:
   `atan2`, `exp`, `log`, `log10`, `sqrt`, `abs`, `sign`, `floor`, `ceil`,
   n-ary `min`, n-ary `max`
 - Constants: `pi` / `π`, `e`
-- Closed functions (`fn` op): `interp.searchsorted`, `interp.linear`,
-  `interp.bilinear`, the `datetime.*` family, etc.
 
-!!! warning "Closed functions must be total"
-    A closed function **must be total over real inputs**: it returns a value
-    for every finite argument and **never throws** — an out-of-domain input
-    yields `NaN` (or a spec-pinned clamp), not an exception. The vectorized
-    access-kernel form — `f!`'s wherever a kernel plans vectorizable, and the
-    compiled backend's always — evaluates a closed `fn` eagerly for **every**
-    cell, then blends, including cells a guard (`ifelse`/`and`/`or`) discards.
-    The scalar reference walk short-circuits instead, so a `fn` that throws
-    off-domain is observable only as a difference between tiers, and is a
-    **contract violation by the function author, not an evaluator bug**. The
-    built-in `datetime.*` / `interp.*` set honors this contract.
+Interpolation, calendar and geometry are `esm:std/*.esm` expression templates
+built from these ops, so they need no evaluator support of their own.
 
 Array-typed ops outside a position that consumes them (`faq`, `makearray`,
-`reshape`, `transpose`, `concat`) and the value-invention ops (`skolem`,
-`rank`, `distinct`, `argmin`, `argmax`) are refused while the evaluator is
+`reshape`, `transpose`, `concat`) and the value-invention op `distinct` are
+refused while the evaluator is
 built with `unevaluable_operator`; PDE ops (`grad`, `div`, `laplacian`) are
 refused with `unlowered_operator` (esm-spec §9.6.6). Either way they must be
 discretized, scalarized or materialized **before** the build. The `D` op is only
@@ -263,7 +252,6 @@ cross-binding operator codes):
 | `E_TREEWALK_UNBOUND_VARIABLE` | Free variable is neither a state, parameter, nor `t`. |
 | `E_TREEWALK_DUPLICATE_DERIVATIVE` | More than one equation defines `D(state, wrt=t)` for the same state. |
 | `E_TREEWALK_OBSERVED_CYCLE` | Observed variables form a substitution cycle. |
-| `E_TREEWALK_FN_*` | Closed-function arity / argument-shape error. |
 
 ## `compiler = :mtk` — events, implicit equations, structural simplification
 
@@ -299,8 +287,6 @@ and the reason for:
   `ModelingToolkit.PDESystem` plus a discretizer this compiler does not run. A
   document already discretized into a `faq` stencil has no spatial
   independent variable and builds normally.
-* a geometry operator (`polygon_intersection_area`, `intersect_polygon`), which
-  is resolved against loaded polygons at build time and has no symbolic form.
 * `D(<expression>)` — a time derivative of an expression credits no state, so it
   is an implicit equation spelled wrong; ModelingToolkit rejects the system and
   this names the equation instead.

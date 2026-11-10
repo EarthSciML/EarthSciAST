@@ -45,12 +45,6 @@ function _ew_expansion(e::OpExpr, ctx::Union{Nothing, _ElementwiseContext})
     end
 end
 
-# The argument positions of a closed function that take a whole array.
-_whole_array_fn_args(name) =
-    name == "interp.linear" ? (1, 2) :
-    name == "interp.bilinear" ? (1, 2, 3) :
-    name == "interp.searchsorted" ? (2,) : ()
-
 _is_rank0_faq(e::OpExpr) =
     e.op in _ARRAY_PRODUCER_OPS && e.op != "makearray" &&
     (e.output_idx === nothing || !any(s -> s isa AbstractString, e.output_idx))
@@ -64,9 +58,8 @@ _is_anonymous_array(e::OpExpr) =
     e.op == "reshape" || (e.op == "const" && e.value isa AbstractVector)
 
 # Visit every value position of `expr` (esm-spec §9.6.11). Outside a template
-# application those are the operands of elementwise operators and the scalar
-# arguments of closed functions, the positions the per-cell reading commutes
-# with. Inside one (an expanded reference, a node carrying `template_origin`,
+# application those are the operands of elementwise operators, the positions
+# the per-cell reading commutes with. Inside one (an expanded reference, a node carrying `template_origin`,
 # and everything below it) they are also the body and filter of a reduction
 # `faq` and the subscripts of an `index`, where the template reads its
 # scalar-role parameters. `on_read(name, inside)` is called for every bare
@@ -96,11 +89,6 @@ function _ew_visit(
     rec(a, b = bound, i = inside) = _ew_visit(a, shapes, ctx, b, i, on_read, on_anonymous)
     if op == "index"
         inside && foreach(a -> rec(a, bound, true), expr.args[2:end])
-    elseif op == "fn"
-        whole = _whole_array_fn_args(expr.name)
-        for (i, a) in enumerate(expr.args)
-            i in whole || rec(a)
-        end
     elseif op == "const" || op == "reshape"
         inside && on_anonymous !== nothing && _is_anonymous_array(expr) && on_anonymous(expr)
     elseif op in _ARRAY_PRODUCER_OPS
@@ -182,11 +170,6 @@ function _ew_at_cell(
         inside || return expr
         return reconstruct(
             expr; args = ASTExpr[expr.args[1], (rec(a, bound, true) for a in expr.args[2:end])...]
-        )
-    elseif op == "fn"
-        whole = _whole_array_fn_args(expr.name)
-        return reconstruct(
-            expr; args = ASTExpr[i in whole ? a : rec(a) for (i, a) in enumerate(expr.args)]
         )
     elseif op in _ARRAY_PRODUCER_OPS
         (inside && _is_rank0_faq(expr)) || return expr

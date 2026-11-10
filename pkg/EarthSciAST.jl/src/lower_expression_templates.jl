@@ -113,7 +113,6 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
     ERROR_CODES.REWRITE_RULE_NONTERMINATING,
     ERROR_CODES.TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
-    ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
     ERROR_CODES.MAKEARRAY_REGION_INVERTED,
     # Flatten-time shadow-registry guard (flatten.jl): a surviving registry
     # body references a variable a coupling `variable_map` rewrote in the
@@ -578,8 +577,7 @@ references are handled through the §9.7.3 reference DAG, not by op membership.
 const _REWRITE_TARGET_OPS =
     Set{String}(
     [
-        "D", "grad", "div", "laplacian", "integral",
-        "table_lookup", "enum",
+        "D", "grad", "div", "laplacian", "integral", "enum",
     ]
 )
 
@@ -646,7 +644,7 @@ _direct_T_op(node) = _direct_op_hit(node, _op_in_T)
     _transitive_op_flags(templates, pred) -> Dict{String,Bool}
 
 The ONE transitive DAG-flag DFS behind [`_template_target_bearing`](@ref)
-(§9.6.4 rule 3) and [`_template_manifold_bearing`](@ref) (§9.6.9): a template
+(§9.6.4 rule 3) and the enum-bearing check: a template
 is flagged iff its body contains an op satisfying `pred` anywhere (including
 inside nested references' `bindings`), OR it references — transitively through
 the §9.7.3-checked acyclic DAG — a flagged template. Memoized DFS; defensive
@@ -1331,77 +1329,6 @@ end
 # ---------------------------------------------------------------------------
 
 """
-Geometry-kernel ops whose `manifold` scalar field is restricted to the closed
-set [`GEOMETRY_MANIFOLD_VALUES`](@ref) (CONFORMANCE_SPEC §5.8.4).
-"""
-const GEOMETRY_MANIFOLD_OPS = ("intersect_polygon", "polygon_intersection_area")
-
-"""
-The closed manifold registry. The document schema admits any string in the
-`manifold` position so a template `body` can carry a parameter name there
-(esm-spec §9.6.1 scalar-field substitution site); the closed set is enforced
-here, on the EXPANDED form, per esm-spec §9.6.4.
-"""
-const GEOMETRY_MANIFOLD_VALUES = ("planar", "spherical", "geodesic")
-
-"""
-    _validate_geometry_manifolds(x, path="")
-
-Post-expansion validator (esm-spec §9.6.4): every `intersect_polygon` /
-`polygon_intersection_area` node OUTSIDE an `expression_templates` block must
-carry a `manifold` drawn from the closed set {planar, spherical, geodesic}.
-Template bodies are skipped — a parameter name in the `manifold` position of a
-`body` is a legal substitution site (esm-spec §9.6.1); by the time this
-validator runs on a loaded document, every such site has been substituted, so
-an out-of-set value here is a real defect (e.g. a template invocation binding
-the manifold parameter to a non-member literal). Throws
-[`ExpressionTemplateError`](@ref) with code `geometry_manifold_invalid`.
-"""
-function _validate_geometry_manifolds(
-        x, path::String = "",
-        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
-    )
-    if _is_array(x)
-        _may_hold_object(x) || return
-        haskey(seen, x) && return
-        seen[x] = nothing
-        for (i, child) in enumerate(x)
-            (_is_array(child) || _is_object(child)) || continue
-            _validate_geometry_manifolds(child, "$path/$(i - 1)", seen)
-        end
-        return
-    end
-    _is_object(x) || return
-    haskey(seen, x) && return
-    seen[x] = nothing
-    op = _raw_get(x, "op")
-    op_str = op === nothing ? "" : string(op)
-    if op_str in GEOMETRY_MANIFOLD_OPS
-        m = _raw_get(x, "manifold")
-        if m !== nothing && !(m isa AbstractString && string(m) in GEOMETRY_MANIFOLD_VALUES)
-            throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
-                    "$path: `$op_str` carries manifold $(repr(m)), not a member of the " *
-                        "closed set {planar, spherical, geodesic}. The manifold enum is " *
-                        "enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC " *
-                        "§5.8.4) — a template parameter substituted into this scalar field " *
-                        "must be bound to one of the closed-set literals."
-                )
-            )
-        end
-    end
-    for (k, v) in pairs(x)
-        ks = string(k)
-        # Template bodies/matches are pre-substitution trees; params may
-        # legally occupy the manifold position there (esm-spec §9.6.1).
-        ks == "expression_templates" && continue
-        _validate_geometry_manifolds(v, "$path/$ks", seen)
-    end
-    return
-end
-
-"""
     _validate_makearray_regions(x, path="")
 
 Post-expansion validator (esm-spec §4.3.2 / §9.6.4): every `makearray` region
@@ -1501,122 +1428,6 @@ function _validate_makearray_regions_in_registries(registries)
                 body,
                 "expression_templates.$tname/body"
             )
-        end
-    end
-    return
-end
-
-"""
-    _template_manifold_bearing(named) -> Dict{String,Bool}
-
-Which templates can produce a geometry-kernel node (`GEOMETRY_MANIFOLD_OPS`) —
-directly in the body or transitively through a referenced template. Only
-references to these templates need per-instantiation manifold validation
-(§9.6.9); everything else is skipped, so a geometry-free document pays nothing.
-[`_transitive_op_flags`](@ref) with the geometry-kernel predicate.
-"""
-_template_manifold_bearing(named::AbstractDict)::Dict{String, Bool} =
-    _transitive_op_flags(named, op -> op in GEOMETRY_MANIFOLD_OPS)
-
-"""
-    _validate_geometry_manifolds_refaware(root, registries)
-
-esm-spec §9.6.9: `geometry_manifold_invalid` is discharged per-instantiation (a
-`manifold` may be a template param), memoized. Direct geometry nodes in the
-reference-preserving tree are checked as before; every surviving
-`apply_expression_template` reference whose template can produce a geometry
-kernel is additionally expanded ONCE (memoized) and its expansion validated, so
-an inadmissible manifold bound at a call site is caught. The diagnostic reports
-(call-site path, template name, intra-body path).
-"""
-function _validate_geometry_manifolds_refaware(root, registries)
-    # Direct nodes on the reference-preserving tree (skips template blocks and
-    # does not see manifold params hidden behind references).
-    _validate_geometry_manifolds(root)
-    for compkind in ("models", "reaction_systems")
-        comps = get(root, compkind, nothing)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            reg = get(registries, string(cname), nothing)
-            reg === nothing && continue
-            manifold_bearing = _template_manifold_bearing(reg.named)
-            any(values(manifold_bearing)) || continue   # no geometry: nothing to check
-            memo = IdDict{Any, Nothing}()
-            for (k, v) in pairs(comp)
-                string(k) == "expression_templates" && continue
-                base = "$compkind.$(string(cname)).$(string(k))"
-                # An equation whose LHS is a bare variable DEFINES that variable
-                # (esm-spec §6.3.1), so label the site with the name as well as
-                # the index. Before 1.0.0 the body lived at
-                # `variables/<name>/expression` and the pointer named the
-                # variable by construction; keeping the name here is what stops
-                # the diagnostic losing that when the body moved.
-                if string(k) in ("equations", "initialization_equations") && _is_array(v)
-                    for (i, eq) in enumerate(v)
-                        lhs = _is_object(eq) ? _raw_get(eq, "lhs") : nothing
-                        label = lhs isa AbstractString ? "$(base)/$(i - 1)[$(lhs)]" :
-                            "$(base)/$(i - 1)"
-                        _validate_manifolds_in_refs(
-                            eq, reg.named, manifold_bearing,
-                            label, memo
-                        )
-                    end
-                else
-                    _validate_manifolds_in_refs(v, reg.named, manifold_bearing, base, memo)
-                end
-            end
-        end
-    end
-    return
-end
-
-function _validate_manifolds_in_refs(
-        node, named::AbstractDict,
-        manifold_bearing::Dict{String, Bool},
-        path::String,
-        memo::IdDict{Any, Nothing}
-    )
-    if _is_array(node)
-        haskey(memo, node) && return
-        memo[node] = nothing
-        for (i, c) in enumerate(node)
-            _validate_manifolds_in_refs(c, named, manifold_bearing, "$path/$(i - 1)", memo)
-        end
-    elseif _is_object(node)
-        haskey(memo, node) && return
-        memo[node] = nothing
-        op = _raw_get(node, "op")
-        name = op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP ?
-            string(something(_raw_get(node, "name"), "")) : ""
-        # Per-instantiation manifold check (§9.6.9): expand ONLY references whose
-        # template can produce a geometry-kernel node; everything else is cheap.
-        if name != "" && get(manifold_bearing, name, false)
-            expansion = try
-                _expand_all(node, named, path)
-            catch err
-                _is_resource_error(err) && rethrow()
-                nothing
-            end
-            if expansion !== nothing
-                try
-                    _validate_geometry_manifolds(expansion)
-                catch e
-                    e isa ExpressionTemplateError &&
-                        e.code == ERROR_CODES.GEOMETRY_MANIFOLD_INVALID || rethrow()
-                    throw(
-                        ExpressionTemplateError(
-                            ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
-                            "$path: instantiation of template '$name' — $(e.message) " *
-                                "(esm-spec §9.6.9; per-instantiation manifold check)"
-                        )
-                    )
-                end
-            end
-        end
-        for (k, v) in pairs(node)
-            _validate_manifolds_in_refs(v, named, manifold_bearing, "$path/$(string(k))", memo)
         end
     end
     return
@@ -1779,9 +1590,8 @@ function lower_expression_templates(raw_data)
     # `_lower_and_coerce` / `emit_document` use to tell the fast path from a
     # processed document.
     if !_has_template_machinery(raw_data)
-        # No expansion to run, but the §9.6.4 expanded-form validators still
-        # apply — the raw tree IS the expanded form.
-        _validate_geometry_manifolds(raw_data)
+        # No expansion to run, but the §9.6.4 expanded-form validator still
+        # applies — the raw tree IS the expanded form.
         _validate_makearray_regions(raw_data)
         return raw_data
     end
@@ -1939,14 +1749,10 @@ function lower_expression_templates(raw_data)
     # references are errors — already checked per component / per transform by
     # `_check_surviving_refs`. No global "no apply ops remain" gate.
 
-    # Validation discharge (esm-spec §9.6.9): geometry-manifold and
-    # makearray-region checks on the reference-preserving form. The manifold
-    # check is per-instantiation (a `manifold` may be a template param), so it
-    # descends through surviving references' single-instantiation expansions,
-    # memoized. Region bounds cannot carry template params, so the makearray
-    # check runs on the reference-preserving tree AND the retained folded
-    # template bodies directly.
-    _validate_geometry_manifolds_refaware(root, registries)
+    # Validation discharge (esm-spec §9.6.9): the makearray-region check on the
+    # reference-preserving form. Region bounds cannot carry template params, so
+    # it runs on the reference-preserving tree AND the retained folded template
+    # bodies directly.
     _validate_makearray_regions(root)
     _validate_makearray_regions_in_registries(registries)
 

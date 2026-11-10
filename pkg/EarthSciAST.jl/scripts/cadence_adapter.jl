@@ -26,7 +26,7 @@
 module CadenceConformanceAdapter
 
     using EarthSciAST
-    using EarthSciAST.Relational: skolem_edge, distinct
+    using EarthSciAST.Relational: distinct
     const C = EarthSciAST.Cadence
     import JSON3
 
@@ -178,8 +178,8 @@ module CadenceConformanceAdapter
     fold_to_zero_based(arr) = [[x - 1 for x in row] for row in arr]
     fold_identity(arr) = arr
 
-    """Enumerate the unique edges from the (lo, hi) endpoint tables: `skolem_edge`
-    canonicalises each pair (undirected → sorted), `distinct` sorts by the total
+    """Enumerate the unique edges from the (lo, hi) endpoint tables: each pair is
+    canonicalised (undirected → sorted), `distinct` sorts by the total
     order and drops adjacent duplicates (§5.5 rules 2 & 4). Identical to the
     determinism `edge_enumeration` reference."""
     function fold_edge_enumeration(face_lo, face_hi, mode)
@@ -188,7 +188,7 @@ module CadenceConformanceAdapter
             for (lo, hi) in zip(flo, fhi)
                 (isa(lo, AbstractFloat) || isa(hi, AbstractFloat)) &&
                     throw(C.CadenceError("float component forbidden in a topology key (§5.5 rule 1)"))
-                push!(pairs, mode == "undirected" ? skolem_edge(lo, hi) : (lo, hi))
+                push!(pairs, mode == "undirected" && hi < lo ? (hi, lo) : (lo, hi))
             end
         end
         return distinct(pairs)

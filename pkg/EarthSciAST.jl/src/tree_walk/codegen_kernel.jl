@@ -24,13 +24,7 @@
 #   * leaves keep their native types (a literal stays `Float64`, so `x ^ 2.0`
 #     lands on `Dual^Float64` under AD exactly as the walker's leaf discipline
 #     guarantees); CSE slot values convert to `T` exactly where the
-#     interpreter's `buf[i] = …` store does;
-#   * `fn` nodes call the SAME functions the interpreter calls
-#     (`_interp_*_core` with the node's typed `_Interp*Spec` — or, for the
-#     per-lane `_Interp*LaneSpec` tables the kernel-class merge mints, the
-#     member spec selected by the interpreter's exact `_interp_lane` box
-#     addressing — boxed `_eval_closed_fn` for `datetime.*`) — interpolation
-#     is not reimplemented.
+#     interpreter's `buf[i] = …` store does.
 #
 # ELTYPE-GENERIC: the emitted function derives `T = _rhs_value_type(u, p, t)`
 # exactly as the interpreter does, so the SAME generated code integrates at
@@ -147,7 +141,7 @@ _dual_codegen_node_budget() =
 _f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow
 
 # ---- Shared-prelude (xcse) cache reads (ess-cgfsc) ---------------------------
-# The cross-kernel fn-CSE pass (xcse.jl, plan B4) rewrites kernel invariant-tier
+# The cross-kernel CSE pass (xcse.jl, plan B4) rewrites kernel invariant-tier
 # defs into bare `_NK_CACHED` reads of the build's SCALAR prelude cache — a
 # `_CSECache` payload that is no kernel's scratch. The emitter used to decline
 # every such kernel (`:foreign_scratch`), dropping it to the interpreter.
@@ -182,7 +176,7 @@ end
 # ---- Emission context (one per generated function) --------------------------
 mutable struct _CGCtx
     # Runtime objects the generated code needs (const arrays, connectivity /
-    # valence tables, interp specs, outs vectors), GROUPED BY CONCRETE TYPE into
+    # valence tables, outs vectors), GROUPED BY CONCRETE TYPE into
     # homogeneous containers (ess-iip-tabgroup). The generated code indexes a
     # concrete-element container — `_cggrpG[pos]` — so its element type infers in
     # O(1); the runtime `tabs` argument is a small tuple of those containers, one
@@ -1245,8 +1239,6 @@ function _cg_emit_op(ctx::_CGCtx, kc, nd::_Node)
     elseif op === :Pre
         length(ch) == 1 || throw(_CodegenDecline(:unsupported_op))
         return ev(ch[1])
-    elseif op === :fn
-        return _cg_emit_fn(ctx, kc, nd)
     end
     fnsym = get(_CG_BINARY_FN, op, nothing)
     if fnsym !== nothing
@@ -1269,107 +1261,6 @@ function _cg_emit_op(ctx::_CGCtx, kc, nd::_Node)
         return _cg_foldl(fnsym, Any[ev(c) for c in ch])
     end
     throw(_CodegenDecline(:unsupported_op))
-end
-
-# Closed function — the SAME payload dispatch and the SAME core kernels as the
-# interpreters' `:fn` arms (compile.jl / access_kernel.jl), so interpolation
-# is never reimplemented here. Specs ride the `tabs` tuple (field loads are
-# hoisted by the compiler; the spec object is the very one the node carries).
-function _cg_emit_fn(ctx::_CGCtx, kc, nd::_Node)
-    pl = nd.payload
-    ch = nd.children
-    if pl isa Tuple{String, _InterpLinearSpec}
-        sp = _cg_tab!(ctx, pl[2])
-        return :(_interp_linear_core($sp, $(_cg_emit(ctx, kc, ch[1]))))
-    elseif pl isa Tuple{String, _InterpBilinearSpec}
-        sp = _cg_tab!(ctx, pl[2])
-        return :(
-            _interp_bilinear_core(
-                $sp, $(_cg_emit(ctx, kc, ch[1])),
-                $(_cg_emit(ctx, kc, ch[2]))
-            )
-        )
-    elseif pl isa Tuple{String, _InterpSearchsortedSpec}
-        sp = _cg_tab!(ctx, pl[2])
-        # `convert(T, …)` exactly as the eval arms: the discrete index must
-        # land in the evaluator's value type.
-        return :(convert(_cgT, _interp_searchsorted_core($sp, $(_cg_emit(ctx, kc, ch[1])))))
-    elseif pl isa Tuple{String, _InterpLinearLaneSpec}
-        # Per-LANE spec table (kernel-class merge, oop_merge.jl): select THIS
-        # cell's member spec by the box lane addressing, then call the SAME
-        # core on the member's own table/axis — the interpreter's lane-spec
-        # arm verbatim, bit-identical per lane by construction. The lane index
-        # is `_interp_lane(h, midx)` on the loop multi-index, which is exactly
-        # `_cg_boxaddr`'s exact-Int address (the `_AccStateTblBox` addressing;
-        # its literal-1/zero-stride folding cannot change the index).
-        h = pl[2]
-        hs = _cg_tab!(ctx, h)
-        sp = _cg_name(ctx, "sp")
-        addr = _cg_boxaddr(ctx, kc, h.s1, h.s2, h.s3, h.off, _AK_NO_CONN, h)
-        return :(
-            let $sp = $hs.specs[$addr]
-                _interp_linear_core($sp, $(_cg_emit(ctx, kc, ch[1])))
-            end
-        )
-    elseif pl isa Tuple{String, _InterpBilinearLaneSpec}
-        h = pl[2]
-        hs = _cg_tab!(ctx, h)
-        sp = _cg_name(ctx, "sp")
-        addr = _cg_boxaddr(ctx, kc, h.s1, h.s2, h.s3, h.off, _AK_NO_CONN, h)
-        return :(
-            let $sp = $hs.specs[$addr]
-                _interp_bilinear_core(
-                    $sp, $(_cg_emit(ctx, kc, ch[1])),
-                    $(_cg_emit(ctx, kc, ch[2]))
-                )
-            end
-        )
-    elseif pl isa Tuple{String, _InterpSearchsortedLaneSpec}
-        # `convert(_cgT, …)` exactly as the scalar-spec arm above (and the
-        # interpreter's lane-spec arm): the discrete index must land in the
-        # evaluator's value type.
-        h = pl[2]
-        hs = _cg_tab!(ctx, h)
-        sp = _cg_name(ctx, "sp")
-        addr = _cg_boxaddr(ctx, kc, h.s1, h.s2, h.s3, h.off, _AK_NO_CONN, h)
-        return :(
-            let $sp = $hs.specs[$addr]
-                convert(_cgT, _interp_searchsorted_core($sp, $(_cg_emit(ctx, kc, ch[1]))))
-            end
-        )
-    elseif pl isa Tuple{String, _FnTypedCoreSpec}
-        # Registry-declared typed scalar core (ess-dtcore). `_cgT === Float64`
-        # folds under the constant propagation the per-chunk `local _cgT =
-        # _rhs_value_type(u, p, t)` exists to enable: the Float64 specialization
-        # calls the typed core with the row id spliced as a LITERAL — the
-        # ladder in `_fn_typed_core_call` then folds to the one core, no arg
-        # box — and the `Dual` specialization keeps the boxed registry-on-`T`
-        # route below verbatim (AD widening unchanged). The `let` binds the
-        # query once so the two arms cannot double-evaluate it.
-        spec = pl[2]
-        x = _cg_name(ctx, "x")
-        return :(
-            let $x = $(_cg_emit(ctx, kc, ch[1]))
-                _cgT === Float64 ?
-                    _fn_typed_core_call($(spec.id), $x) :
-                    convert(_cgT, _eval_closed_fn($(pl[1]::String), Any[$x], _cgT))
-            end
-        )
-    elseif pl isa Tuple{String, Nothing}
-        # Boxed all-scalar closed fn WITHOUT a typed-core row (none in the
-        # v0.3.0 set): same eager `Any[…]` arg boxing, same `_eval_closed_fn`
-        # registry-on-`T` call, same convert.
-        args = Any[_cg_emit(ctx, kc, c) for c in ch]
-        return :(
-            convert(
-                _cgT, _eval_closed_fn(
-                    $(pl[1]::String),
-                    $(Expr(:ref, :Any, args...)), _cgT
-                )
-            )
-        )
-    end
-    throw(_CodegenDecline(:fn_payload))
 end
 
 # ---- Invariant tier → prologue locals (mirrors `_fill_invariant!`) ----------
@@ -1893,16 +1784,6 @@ function _cg_fuse_leading(K::_AccKernel)
     function scan(n::_Node)
         ok[] || return
         n.kind === _NK_SUBCALL && (ok[] = false; return)
-        if n.kind === _NK_OP && n.op === :fn
-            pl = n.payload
-            (
-                pl isa Tuple && length(pl) == 2 &&
-                    (
-                    pl[2] isa _InterpLinearLaneSpec || pl[2] isa _InterpBilinearLaneSpec ||
-                        pl[2] isa _InterpSearchsortedLaneSpec
-                )
-            ) && (ok[] = false; return)
-        end
         return foreach(scan, n.children)
     end
     scan(K.spine)

@@ -151,22 +151,13 @@ end
 # null-as-absent), so each wire key is named exactly once — in the table.
 # Op-conditional structural validation is spliced in at the same positions the
 # historical hand-written extraction performed it (integral bounds directly
-# after `upper`, `intersect_polygon` manifold directly after `manifold`), so
-# ParseError precedence on multiply-invalid nodes is unchanged. `table_axes`
-# is the one op-conditional extraction: the `axes` key is only parsed for a
-# `table_lookup` node, and its coercer needs the already-extracted `table` id
-# and `args` (the table row order guarantees `table` is bound first).
+# after `upper`), so ParseError precedence on multiply-invalid nodes is
+# unchanged.
 function _parse_op_field_stmt(f::Symbol, spec)::Union{Expr, Nothing}
     (f === :op || f === :args) && return nothing        # structural, hand-parsed
     spec.kind === :internal && return nothing           # never on the wire
     w = QuoteNode(spec.wire)
-    rhs = if f === :table_axes
-        :(
-            op == "table_lookup" ?
-                _coerce_table_lookup_axes(table, _get_field(data, $w, nothing), args) :
-                nothing
-        )
-    elseif spec.kind === :expr
+    rhs = if spec.kind === :expr
         :(_maybe(expression_from_json, _get_field(data, $w, nothing)))
     elseif spec.kind === :expr_vec
         :(
@@ -214,12 +205,6 @@ function _parse_op_field_stmt(f::Symbol, spec)::Union{Expr, Nothing}
         :(_coerce_shape(_get_field(data, $w, nothing)))
     elseif spec.parse === :attrs
         :(_coerce_attrs(_get_field(data, $w, nothing)))
-    elseif spec.parse === :int_or_string
-        :(
-            let raw = _get_field(data, $w, nothing)
-                raw === nothing ? nothing : (raw isa Integer ? Int(raw) : string(raw))
-            end
-        )
     else
         error(
             "OPEXPR_FIELD_TABLE row $(f) has no parse recipe " *
@@ -232,7 +217,6 @@ end
 # Per-op structural validators spliced in AFTER the named field's extraction.
 const _PARSE_OP_VALIDATOR_AFTER = Dict{Symbol, Expr}(
     :upper => :(op == "integral" && _validate_integral_op(int_var, lower, upper)),
-    :manifold => :(op == "intersect_polygon" && _validate_intersect_polygon_op(manifold)),
 )
 
 @eval function _parse_op_optional_fields(data, op::String, args::Vector{ASTExpr})
@@ -278,23 +262,26 @@ function _parse_op_dict(data)
             )
         )
     end
-    if op == "aggregate"
-        # Deprecated alias for `faq`, removed at esm 2.0.0. The load pipeline
-        # normalizes the whole document at the wire boundary
-        # (`_prepare_document_ops!`) and warns once; this silent fallback covers
-        # callers that reach `expression_from_json` directly with an
-        # un-normalized node.
-        op = "faq"
+    if op in _REMOVED_OPS_2_0_0
+        # Removed at esm 2.0.0. The wire boundary (`_reject_removed_2_0_0!`)
+        # rejects the whole document first, with the node's path; this guards
+        # callers that build a node directly.
+        throw(
+            ParseError(
+                "[E_REMOVED_OP] `\"op\": \"$(op)\"` was $(_REMOVED_2_0_0_HINT).";
+                code = ERROR_CODES.REMOVED_OP
+            )
+        )
     end
     if op == "call"
         # The `call` op + `registered_functions` extension point was removed in
         # v0.3.0 (esm-spec §9 closure, RFC `closed-function-registry.md`).
         # Files written against the v0.2.x escape hatch must migrate to AST
-        # ops or `fn` invocations of closed registry entries.
+        # ops or `esm:std/*.esm` expression templates.
         throw(
             ParseError(
                 "`call` op is not valid in v0.3.0+ (removed by esm-spec §9 closure). " *
-                    "Migrate to AST ops or `fn` invocations of the closed function registry."
+                    "Migrate to AST ops or `esm:std/*.esm` expression templates."
             )
         )
     end
@@ -329,46 +316,6 @@ function _validate_integral_op(int_var, lower, upper)
     end
     if upper === nothing
         throw(ParseError("`integral` op requires `upper` field"))
-    end
-    return nothing
-end
-
-# `table_lookup` (esm-spec §9.5, v0.4.0): requires the `table` id and the
-# per-axis input expression map (wire key `axes` — struct field `table_axes`);
-# ``args`` MUST be empty (per-axis inputs live under `axes`). Returns the
-# parsed axes map.
-function _coerce_table_lookup_axes(table, axes_raw, args::Vector{ASTExpr})::Dict{String, ASTExpr}
-    if table === nothing
-        throw(ParseError("`table_lookup` op requires `table` field (esm-spec §9.5)"))
-    end
-    if axes_raw === nothing
-        throw(ParseError("`table_lookup` op requires `axes` field (per-axis input expression map, esm-spec §9.5)"))
-    end
-    axes = Dict{String, ASTExpr}()
-    for (k, v) in pairs(axes_raw)
-        axes[string(k)] = expression_from_json(v)
-    end
-    if !isempty(args)
-        throw(
-            ParseError(
-                "`table_lookup` op must have empty `args` (per-axis inputs live under `axes`, esm-spec §9.5.2)";
-                code = ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY
-            )
-        )
-    end
-    return axes
-end
-
-# `intersect_polygon` (RFC §8.1 / Appendix B) is strictly manifold-required
-# (the schema enforces it); fail fast here so a hand-built node mirrors that.
-function _validate_intersect_polygon_op(manifold)
-    if manifold === nothing
-        throw(
-            ParseError(
-                "`intersect_polygon` op requires a `manifold` field " *
-                    "(planar / spherical / geodesic); it carries no default"
-            )
-        )
     end
     return nothing
 end
@@ -706,7 +653,7 @@ function coerce_esm_file(
     end
 
     # esm-spec v0.3.0 (§9 closure) removed the top-level `operators` block:
-    # Track-A parameterizations migrate to AST + closed-function calls;
+    # Track-A parameterizations migrate to AST expressions;
     # Track-B state-mutating schemes route through the discretization
     # RFC's named schemes (`docs/rfcs/closed-function-registry.md` §6).
     # File-loaded `operators` are now a hard error. (The typed `EsmFile`
@@ -726,8 +673,8 @@ function coerce_esm_file(
         throw(
             ParseError(
                 "`registered_functions` block is not valid in v0.3.0+ " *
-                    "(removed by esm-spec §9 closure). Use the closed " *
-                    "function registry via `fn` ops with spec-defined names."
+                    "(removed by esm-spec §9 closure). Use AST ops or " *
+                    "`esm:std/*.esm` expression templates."
             )
         )
     end
@@ -748,13 +695,6 @@ function coerce_esm_file(
     # immediately after parsing so the in-memory tree never carries strings.
     enums = _maybe(coerce_enums, _get_field(data, :enums, nothing))
 
-    # Component-scoped sampled function tables (esm-spec §9.5, v0.4.0). Each
-    # entry carries named axes plus a literal nested-array data block;
-    # referenced by table_lookup AST nodes via the table id key.
-    function_tables = _maybe(
-        coerce_function_tables,
-        _get_field(data, :function_tables, nothing)
-    )
 
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2;
     # esm-spec v0.8.0). A single top-level `index_sets` object — sibling of
@@ -824,7 +764,6 @@ function coerce_esm_file(
         coupling = coupling,
         domain = domain,
         enums = enums,
-        function_tables = function_tables,
         index_sets = index_sets,
         component_templates = component_templates,
         coupling_roles = coupling_roles,
@@ -935,67 +874,6 @@ function coerce_enums(data)::Dict{String, Dict{String, Int}}
     _check_enum_values_unique(out)
     return out
 end
-
-"""
-    coerce_function_tables(data) -> OrderedDict{String,FunctionTable}
-
-Coerce the top-level `function_tables` JSON block into the typed map
-carried on [`EsmFile`](@ref) (esm-spec §9.5, v0.4.0). Each entry holds
-ordered named axes plus a literal nested-array data block referenced by
-`table_lookup` AST nodes.
-"""
-function coerce_function_tables(data)::OrderedDict{String, FunctionTable}
-    out = OrderedDict{String, FunctionTable}()
-    for (table_name_raw, entry_raw) in pairs(data)
-        table_name = string(table_name_raw)
-        if isempty(table_name)
-            throw(ParseError("function_tables: table name must be non-empty"))
-        end
-        if !(entry_raw isa AbstractDict)
-            throw(ParseError("function_tables.$(table_name): entry must be a JSON object"))
-        end
-        axes_raw = get(entry_raw, "axes", nothing)
-        if axes_raw === nothing
-            throw(ParseError("function_tables.$(table_name): `axes` is required (esm-spec §9.5)"))
-        end
-        axes_vec = Vector{FunctionTableAxis}()
-        for ax_raw in axes_raw
-            ax_name = string(get(ax_raw, "name", ""))
-            if isempty(ax_name)
-                throw(ParseError("function_tables.$(table_name).axes: axis `name` must be non-empty"))
-            end
-            ax_values_raw = get(ax_raw, "values", nothing)
-            if ax_values_raw === nothing
-                throw(ParseError("function_tables.$(table_name).axes.$(ax_name): `values` is required"))
-            end
-            ax_values = Vector{Float64}([Float64(v) for v in ax_values_raw])
-            ax_units = _maybe(string, get(ax_raw, "units", nothing))
-            push!(axes_vec, FunctionTableAxis(ax_name, ax_values; units = ax_units))
-        end
-        if !haskey(entry_raw, "data")
-            throw(ParseError("function_tables.$(table_name): `data` is required (esm-spec §9.5)"))
-        end
-        data_native = _to_native_json(entry_raw["data"])
-        description = _maybe(string, get(entry_raw, "description", nothing))
-        interpolation = _maybe(string, get(entry_raw, "interpolation", nothing))
-        out_of_bounds = _maybe(string, get(entry_raw, "out_of_bounds", nothing))
-        outputs = _maybe(_get_field(entry_raw, :outputs, nothing)) do os
-            Vector{String}([string(s) for s in os])
-        end
-        shape = _maybe(_get_field(entry_raw, :shape, nothing)) do shp
-            Vector{Int}([Int(s) for s in shp])
-        end
-        schema_version = _opt_string(entry_raw, :schema_version)
-        out[table_name] = FunctionTable(
-            axes_vec, data_native;
-            description = description, interpolation = interpolation,
-            out_of_bounds = out_of_bounds, outputs = outputs, shape = shape,
-            schema_version = schema_version
-        )
-    end
-    return out
-end
-
 
 """
     _coerce_subsystem_entry(name::String, v) -> Union{Model,SubsystemRef}

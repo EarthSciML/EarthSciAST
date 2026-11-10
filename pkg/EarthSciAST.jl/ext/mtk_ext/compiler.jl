@@ -28,8 +28,7 @@
 #
 # THE SHAPE OF THE BUILD. `esm_problem(file; compiler = :mtk)` runs
 #
-#     load → flatten → lower_table_lookups → ModelingToolkit.System
-#          → mtkcompile → ODEProblem
+#     load → flatten → ModelingToolkit.System → mtkcompile → ODEProblem
 #
 # and wraps the result in the SAME `EsmProblem` every other compiler returns,
 # so `solve`, `remake`, `callbacks`, `observed_field`, `compiler_report` and
@@ -43,9 +42,7 @@
 # that path calls `_refuse_flat_events`, which is exactly the §5.39 refusal this
 # compiler exists to lift, and it applies the tree-walk shape transforms
 # (`algebraic_states_to_observeds`, `promote_downstream_shapes`) whose job
-# `mtkcompile` does here. So the coercion below is its own, and the only ESM
-# document rewrite it keeps is `lower_table_lookups` (esm-spec §9.5.3, the
-# first transform inside any build).
+# `mtkcompile` does here. So the coercion below is its own.
 
 const _MTK_SII = ModelingToolkit.SciMLBase.SymbolicIndexingInterface
 
@@ -202,16 +199,6 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     end
 
     for eq in flat.equations
-        # A GEOMETRY LEAF. `polygon_intersection_area` / `intersect_polygon` are
-        # evaluated against loaded geometry at BUILD by the native setup pass;
-        # they are not symbolic functions and have no ModelingToolkit lowering.
-        geo = _mtk_find_op(eq.rhs, ("polygon_intersection_area", "intersect_polygon"))
-        geo === nothing || _mtk_refuse(
-            _mtk_equation_label(eq),
-            "its right-hand side carries the geometry operator `$geo`, which is " *
-                "resolved against loaded polygons at build time and has no symbolic " *
-                "form a ModelingToolkit system can hold. $_MTK_TRY_INSTEAD"
-        )
         # `D(<expression>)`. esm-spec calls an equation whose LHS is a time
         # derivative of an EXPRESSION implicit, not a derivative (it credits no
         # state), and `mtkcompile` rejects it outright: "Differential(t)(a + b)
@@ -257,27 +244,6 @@ function _mtk_array_region_value(expr)::Bool
             any(EarthSciAST._is_array_producer, x.values) && (found = true)
     end
     return found
-end
-
-# The first argument's op name if any node in the tree is one of `ops`.
-function _mtk_find_op(expr, ops)::Union{String, Nothing}
-    expr isa OpExpr || return nothing
-    expr.op in ops && return expr.op
-    for a in expr.args
-        hit = _mtk_find_op(a, ops)
-        hit === nothing || return hit
-    end
-    if expr.expr_body !== nothing
-        hit = _mtk_find_op(expr.expr_body, ops)
-        hit === nothing || return hit
-    end
-    if expr.values !== nothing
-        for v in expr.values
-            hit = _mtk_find_op(v, ops)
-            hit === nothing || return hit
-        end
-    end
-    return nothing
 end
 
 # A rule label for one equation: the name it DEFINES, component-qualified the
@@ -518,9 +484,7 @@ EarthSciAST.param_map(::ModelingToolkit.MTKParameters) = Dict{String, Int}()
 # The run system. Deliberately NOT `EarthSciAST._prepare_run_doc`: that path
 # calls `_refuse_flat_events`, which is the §5.39 refusal this compiler exists
 # to lift, and it runs the tree-walk shape transforms whose job `mtkcompile`
-# does here. `lower_table_lookups` is kept — esm-spec §9.5.3 puts it at the
-# first point inside ANY build, and a `table_lookup` that reached the symbolic
-# lowering un-lowered would have no arm there.
+# does here.
 function _mtk_run_system(input; metaparameters, base_path, renames_out)
     if input isa AbstractString
         isfile(input) ||
@@ -545,7 +509,7 @@ function _mtk_run_system(input; metaparameters, base_path, renames_out)
                 "EsmFile, FlattenedSystem, or native ESM Dict"
         )
     )
-    flat = EarthSciAST.lower_table_lookups(input)
+    flat = input
     EarthSciAST._refuse_parameter_definitions(
         flat.equations,
         merge(flat.state_variables, flat.observed_variables, flat.parameters)

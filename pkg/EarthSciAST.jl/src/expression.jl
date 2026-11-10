@@ -22,8 +22,7 @@ transparently extends the folder.
 # Every walker below is `@eval`-generated from `OPEXPR_FIELD_TABLE` (types.jl),
 # so the expression-bearing field set exists in EXACTLY ONE place. Traversal
 # order is struct-field order: `args`, `lower`, `upper`, `expr_body`, dense
-# `ranges` bounds, `values`, `table_axes` (sorted keys), `filter`, `key`,
-# `bindings` (sorted keys).
+# `ranges` bounds, `values`, `filter`, `key`, `bindings` (sorted keys).
 
 # Build one visit statement per expression-bearing table row. `wrap` maps the
 # child-element expression (a `Symbol` naming a local bound to one child) to
@@ -99,15 +98,15 @@ All immediate sub-expressions of `e`, drawn from EVERY expression-bearing
 [`free_variables`](@ref), [`Base.contains`](@ref contains), and (field-wise)
 [`substitute`](@ref), so dependency analysis sees variables nested inside
 faq bodies (`expr_body`), filter predicates (`filter`), integral
-bounds (`lower`/`upper`), makearray `values`, table-lookup axis inputs
-(`table_axes`), expression-valued dense `ranges` bounds, value-invention
+bounds (`lower`/`upper`), makearray `values`, expression-valued dense
+`ranges` bounds, value-invention
 `key` expressions, AND expression-template `bindings` values (historically the
 one field this traversal missed while validate's copy missed `ranges` — both
 walkers are now generated from `OPEXPR_FIELD_TABLE` and traverse both).
 
 Non-expression fields (kind `:scalar`/`:join`/`:internal` in the table: `wrt`,
 `dim`, `int_var`, `output_idx`, `join`, `regions`, `shape`, `perm`, `axis`,
-`fn`, `name`, `value`, `table`, `output`, `id`, `manifold`, `distinct`, …)
+`fn`, `name`, `value`, `id`, `distinct`, …)
 carry strings/ints/const data, not `ASTExpr` sub-trees, and are not traversed.
 `wrt` names a variable and is handled separately by
 `free_variables`/`contains`. Literal and variable leaves have no children.
@@ -129,7 +128,7 @@ Apply `f` to `expr` and to every descendant expression node, depth-first,
 parent before children, drawing children from [`child_exprs`](@ref) — so `f`
 sees expressions nested in EVERY expression-bearing `OpExpr` field
 (faq bodies, filters, integral bounds, makearray `values`,
-table-lookup axis inputs, dense `ranges` bounds, value-invention `key`s,
+dense `ranges` bounds, value-invention `key`s,
 template `bindings` values), not just `args`.
 
 Build predicate scans and collectors on this instead of hand-rolling a
@@ -349,9 +348,8 @@ shared traversal.
 # binders, not references to enclosing-scope variables.
 #
 # NOT the same set as validate.jl's `_bound_index_symbols`, deliberately: that
-# checker additionally credits an argmin/argmax `arg` witness, subscript-
-# position index names (`index(u, i+1)`), a `skolem` first-arg binder, and
-# `bindings` KEYS (template formal parameters — the table's `binds_scope`
+# checker additionally credits subscript-position index names
+# (`index(u, i+1)`) and `bindings` KEYS (template formal parameters — the table's `binds_scope`
 # flag) into reference-check scope, because validation answers "could this
 # name legally appear here?" while this helper answers the narrower
 # "does THIS node bind this symbol for `free_variables` subtraction?".
@@ -384,8 +382,8 @@ Return a copy of `e` with `f` applied to each immediate sub-expression, preservi
 `e`'s concrete type and every non-expression field. Leaf nodes (`NumExpr`,
 `IntExpr`, `VarExpr`) are returned unchanged. For `OpExpr`, `f` is applied to every
 expression-bearing field — the SAME set [`child_exprs`](@ref) traverses (`args`,
-`lower`, `upper`, `expr_body`, dense `ranges` bounds, `values`, `table_axes`,
-`filter`, `key`, and `bindings` values) — and the node is rebuilt via
+`lower`, `upper`, `expr_body`, dense `ranges` bounds, `values`, `filter`,
+`key`, and `bindings` values) — and the node is rebuilt via
 [`reconstruct`](@ref), so a newly added `OpExpr` field can never be silently
 dropped by a rewrite.
 
@@ -501,10 +499,10 @@ end
 # Field-preserving substitution: recurse into EVERY sub-expression the node
 # carries (via the shared `map_children` rewrite) — not just `args` — so
 # substitution is complete inside faq bodies, filter predicates,
-# integral bounds, makearray values, table-lookup axis inputs, value-invention
-# `key` expressions, and expression-valued dense `ranges` bounds. `map_children`
-# routes through `reconstruct`, preserving all non-expression fields (semiring,
-# output_idx, table, manifold, id, join, …) that earlier hand-listed rebuilds
+# integral bounds, makearray values, value-invention `key` expressions, and
+# expression-valued dense `ranges` bounds. `map_children` routes through
+# `reconstruct`, preserving all non-expression fields (semiring, output_idx,
+# id, join, …) that earlier hand-listed rebuilds
 # silently dropped. Bound locals (index vars, `int_var`) are short local symbols
 # never present in `bindings` (namespaced globals / parameter names), so
 # recursing cannot capture them.
@@ -572,8 +570,8 @@ function _free_variables_dag(
     cached === nothing || return cached
     # Union of free variables from EVERY expression-bearing field (via the
     # shared `child_exprs` traversal), so dependency analysis sees references
-    # inside faq bodies, filter predicates, integral bounds,
-    # makearray values, and table-lookup axis inputs.
+    # inside faq bodies, filter predicates, integral bounds and
+    # makearray values.
     result = Set{String}()
     for c in child_exprs(expr)
         if c isa OpExpr
@@ -607,9 +605,8 @@ end
 
 Check if an expression contains a specific variable name.
 Returns true if the variable appears anywhere in the expression — including
-inside faq bodies, filter predicates, integral bounds,
-makearray values, and table-lookup axis inputs (the shared `child_exprs`
-traversal). Unlike [`free_variables`](@ref), node-local binder symbols are
+inside faq bodies, filter predicates, integral bounds and
+makearray values (the shared `child_exprs` traversal). Unlike [`free_variables`](@ref), node-local binder symbols are
 NOT subtracted: this is a pure containment check.
 
 Defined as methods of `Base.contains` (haystack/needle semantics match);
@@ -749,7 +746,7 @@ _int64_exactly_representable(f::Float64)::Bool =
 # fold" (fall through to the algebraic rules) rather than a bug:
 #  - `UnboundVariableError` / `TreeWalkError` — a node `evaluate_expr` cannot
 #    compile or evaluate without bindings (e.g. an aggregate whose empty `args`
-#    are vacuously "all literal", or a `table_lookup` with no table registry);
+#    are vacuously "all literal");
 #  - `DomainError` (`sqrt`/`log` of a negative literal), `DivideError`,
 #    `OverflowError` — literal math outside the reals / machine range;
 #  - `InexactError` — the `Int64(result_value)` boundary case admitted by

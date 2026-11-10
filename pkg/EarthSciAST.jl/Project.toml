@@ -24,16 +24,12 @@ ComponentArrays = "b0b7db55-cfe3-40fc-9ded-d10e2dbeff66"
 DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
 DomainSets = "5b8099bc-c8ec-5219-889f-1d9e522a28bf"
 EarthSciIO = "180e2c70-dda6-501b-9997-3c819c50e0c3"
-Extents = "411431e0-e8b7-467b-b5e0-f676ba4f2910"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
-GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
-GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
 ModelingToolkitBase = "7771a370-6774-4173-bd38-47e70ca0b839"
 OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
-SortTileRecursiveTree = "746ee33f-1797-42c2-866d-db2fce69d14d"
 Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 
 [extensions]
@@ -43,7 +39,6 @@ EarthSciASTDataOutputExt = ["DiffEqCallbacks", "SciMLBase"]
 EarthSciASTDataRefreshExt = ["DiffEqCallbacks", "SciMLBase"]
 EarthSciASTEarthSciIOExt = "EarthSciIO"
 EarthSciASTForwardDiffExt = "ForwardDiff"
-EarthSciASTGeometryOpsExt = ["GeometryOps", "GeoInterface", "SortTileRecursiveTree", "Extents"]
 EarthSciASTMTKExt = ["DomainSets", "ModelingToolkit", "Symbolics"]
 EarthSciASTReactantExt = "Reactant"
 EarthSciASTSimulateExt = "SciMLBase"
@@ -57,12 +52,8 @@ ForwardDiff = "1"
 Catalyst = "16, 17.0"
 DiffEqCallbacks = "4"
 DomainSets = "0.7, 0.8"
-Extents = "0.1"
-GeoInterface = "1"
-GeometryOps = "0.1"
 LinearAlgebra = "1.10"
 Printf = "1.10"
-SortTileRecursiveTree = "0.1"
 JSON3 = "1"
 JSONSchema = "1"
 ModelingToolkit = "11"
@@ -126,9 +117,6 @@ ZipFile = "a5390f91-8eb1-5f08-bee0-b1d1ffed6cea"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 ComponentArrays = "b0b7db55-cfe3-40fc-9ded-d10e2dbeff66"
 DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
-Extents = "411431e0-e8b7-467b-b5e0-f676ba4f2910"
-GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
-GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 OrdinaryDiffEqNonlinearSolve = "127b3ac7-2247-4354-8eb6-78cf4e7c58e8"
 OrdinaryDiffEqRosenbrock = "43230ef6-c299-4910-a778-202eb28ce4ce"
 OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
@@ -136,7 +124,6 @@ Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
-SortTileRecursiveTree = "746ee33f-1797-42c2-866d-db2fce69d14d"
 SymbolicUtils = "d1185830-fcd6-423d-90d6-eec64667417b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
@@ -146,4 +133,4 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 # environment (test/mtk/Project.toml) that .github/workflows/mtk-compiler.yml
 # runs. Adding one of them back here would make every `Pkg.test()` resolve and
 # precompile the SciML symbolic stack again.
-test = ["Test", "Logging", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "Extents", "GeoInterface", "GeometryOps", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "EarthSciIO", "Blosc", "JSON", "SnoopCompileCore", "ZipFile"]
+test = ["Test", "Logging", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "EarthSciIO", "Blosc", "JSON", "SnoopCompileCore", "ZipFile"]

@@ -45,7 +45,7 @@ Python (`dataclasses.replace`), and Rust (`node.clone()`) canonicalizers,
 every `OpExpr` field is PRESERVED on the rebuilt node (via `reconstruct`),
 and canonicalization recurses into `args` only — sub-expressions carried by
 aggregate fields (`expr_body`, `filter`, `lower`/`upper`, `values`,
-`table_axes`, …) pass through verbatim, exactly as in the other bindings.
+`bindings`, …) pass through verbatim, exactly as in the other bindings.
 RFC §5.4 pins rewrite rules only for the scalar arithmetic subset
 (`+ * - / neg`); all other ops are structure-preserving pass-throughs.
 Emission of such aggregate-carrying nodes is the restricted step — see
@@ -72,8 +72,8 @@ function canonicalize(e::OpExpr)
     for (i, a) in enumerate(e.args)
         new_args[i] = canonicalize(a)
     end
-    # `reconstruct` copies EVERY OpExpr field (semiring, table/table_axes,
-    # output, join, filter, join_gates, id, manifold, distinct, key, …) —
+    # `reconstruct` copies EVERY OpExpr field (semiring, join, filter,
+    # join_gates, id, distinct, key, …) —
     # matching the field-preserving rebuilds in the TS/Python/Rust bindings.
     # A hand-listed keyword subset here previously dropped ~11 fields.
     work = reconstruct(e; args = new_args)
@@ -294,8 +294,8 @@ Emissible node fields: every binding (TS/Python/Rust/Julia) serializes exactly
 `op`, `args`, `wrt`, `dim`, `fn`, `name`, `value` — the field set the
 cross-language canonical fixtures (`tests/conformance/canonical/`) pin.
 A node carrying any OTHER set field (aggregate `expr_body`/`ranges`/
-`output_idx`/`semiring`, `table`/`table_axes`/`output`, `join`/`filter`,
-geometry `id`/`manifold`, …) has NO faithful canonical JSON in this format:
+`output_idx`/`semiring`, `join`/`filter`, node `id`, …) has NO faithful
+canonical JSON in this format:
 emitting only the pinned fields would make structurally-different aggregates
 byte-identical (the defect class behind the `fn` bc-node bug). Rather than
 emit ambiguous bytes — or diverge unilaterally from the other bindings by
@@ -336,12 +336,10 @@ end
 const _EMISSIBLE_FIELDS = (:op, :args, :wrt, :dim, :fn, :name, :value, :units)
 
 # OpExpr fields that are TOLERATED-AND-IGNORED by the canonical emitter: a node
-# carrying them still canonicalizes, emitting the pinned fields only. Both are
-# display/rendering conveniences with no wire slot of their own (`arg` — the
-# argmin/argmax witness index for the pretty-printer; `bindings` — the
-# apply_expression_template parameter map, normally lowered away before typed
-# parsing), and both were absent from the historical hand-maintained
-# non-emissible tuple — that tolerance is pinned by op_registry_test.jl.
+# carrying them still canonicalizes, emitting the pinned fields only:
+# `bindings` — the apply_expression_template parameter map, a rendering
+# convenience normally lowered away before typed parsing (pinned by
+# op_registry_test.jl) — and `template_origin`, load provenance.
 #
 # `expect_cadence` and `attrs` are deliberately NOT here. Both are author
 # annotations with no canonical wire slot, and
@@ -351,7 +349,7 @@ const _EMISSIBLE_FIELDS = (:op, :args, :wrt, :dim, :fn, :name, :value, :units)
 # (before that, parse dropped both and the emitter never saw one). They fall
 # through to the derived `_NON_EMISSIBLE_FIELDS` below, so no edit is needed
 # here; this note records that the omission is a decision, not an oversight.
-const _CANONICAL_IGNORED_FIELDS = (:arg, :bindings, :template_origin)
+const _CANONICAL_IGNORED_FIELDS = (:bindings, :template_origin)
 
 # OpExpr fields WITHOUT a pinned slot in the cross-binding canonical JSON node
 # encoding (see `canonical_json` docstring). If any is set, the node cannot be

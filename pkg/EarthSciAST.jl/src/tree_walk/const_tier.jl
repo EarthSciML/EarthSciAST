@@ -59,11 +59,7 @@
 #     _NK_PARAM_GATHER              → TIME      (see below — epoch-stamped)
 #     _NK_LITERAL / _NK_PARAM       → CONST
 #     _NK_CACHED on slot r          → tier[r]   (clause 2 — the trap)
-#     _NK_OP / _NK_CONTRACTION      → max over children (pure functions; `fn`
-#                                     included — the closed-function registry is
-#                                     closed and deterministic, esm-spec §9.2; an
-#                                     `interp.*` const table lives in `payload` as
-#                                     frozen Float64 DATA and constrains nothing)
+#     _NK_OP / _NK_CONTRACTION      → max over children (pure functions)
 #
 # Clause (2) is the trap, and a naive "does this subtree contain a state leaf?" scan
 # walks straight into it. An `_NK_CACHED` node carries NO state/time/gather leaf of its

@@ -34,7 +34,7 @@ are otherwise internal to the evaluator closure:
   read can reach them.
 * `const_arrays::Dict{String,Any}` — the full const-array registry as
   registered for the build: caller-supplied arrays, `const`-op array
-  observeds, keyed-factor aliases, materialized clip rings and setup arrays.
+  observeds, keyed-factor aliases and materialized setup arrays.
 * `observed_exprs::Dict{String,ASTExpr}` — the resolved observed substitution
   map (post index-set-range resolution and observed-into-observed inlining),
   exactly as inlined into the compiled RHS.
@@ -282,13 +282,10 @@ end
 
 # ---- Stage: geometry variable discovery ----
 # Classify the geometry-related observeds of the model:
-#  * `ring_vars` — (array-shaped) observeds whose defining expression is a
-#    direct intersect_polygon clip; materialized into const_arrays at setup
-#    (RFC §8.1) rather than treated as scalar observeds.
-#  * `setup_vars` / `defs` — geometry-derived ARRAY observeds (ranged clips,
-#    per-pair areas, A_ij), materialized at setup and excluded from the ODE
-#    partition / observed substitution — build-once functions of the const
-#    polygon inputs.
+#  * `setup_vars` / `defs` — build-once ARRAY observeds (per-pair overlap
+#    areas, A_ij, constant reduction tables), materialized at setup and
+#    excluded from the ODE partition / observed substitution — build-once
+#    functions of the const inputs.
 #  * `inline_vars` — live-field geometry observeds (ess-14f.4): array observeds
 #    that are NOT build-once setup vars because they read a live `param_arrays`
 #    buffer (the conservative-regrid output F_tgt = A_ij ⊗ F_src / A_j is the
@@ -298,34 +295,18 @@ end
 #    aggregate kernel (const A_ij/A_j + live F_src), the met→fire coupling
 #    edge. Empty (byte-identical) for files whose geometry outputs are all
 #    const-fed (they stay setup vars).
-# The FUSED `polygon_intersection_area` leaf (§8.6.1) triggers the SAME
-# setup-geometry machinery as `intersect_polygon`: an array observed whose
-# aggregate body is the fused leaf (`A_ij[i,j] = polygon_intersection_area(
-# src[i], tgt[j])`) is a build-once setup const over the in-file polygon rings.
-# `has_setup_geometry` gates the setup-vars discovery / materialization so the
-# ranged narrow phase compiles even when NO `intersect_polygon` node survives.
+# `has_setup_geometry` gates the setup-vars discovery / materialization.
 function _discover_geometry_vars(
         model::Model, equations::Vector{Equation},
         param_arrays::AbstractDict, vi_vars; index_sets = nothing
     )
-    has_geometry = _model_has_intersect_polygon(model)
-    has_pia = _model_has_polygon_intersection_area(model, equations)
-    has_geometry_seed = has_geometry || has_pia || _model_has_setup_join_reduction(equations)
+    has_geometry_seed = _model_has_setup_join_reduction(equations)
     pre_state_names = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
     has_setup_geometry = has_geometry_seed ||
         _model_has_setup_const_reduction(
         model, equations, index_sets,
         union(pre_state_names, (String(k) for k in keys(param_arrays)))
     )
-    ring_vars = Set{String}()
-    if has_geometry
-        for eq in equations
-            if eq.lhs isa VarExpr && eq.rhs isa OpExpr &&
-                    (eq.rhs::OpExpr).op == "intersect_polygon"
-                push!(ring_vars, (eq.lhs::VarExpr).name)
-            end
-        end
-    end
     setup_vars = Set{String}()
     defs = Dict{String, ASTExpr}()
     inline_vars = Set{String}()
@@ -333,7 +314,7 @@ function _discover_geometry_vars(
         live_param_names = Set{String}(String(k) for k in keys(param_arrays))
         setup_vars, defs, live_tainted =
             _geometry_setup_vars(
-            model, equations, ring_vars,
+            model, equations,
             pre_state_names, live_param_names; index_sets = index_sets
         )
         # GEOMETRY-DERIVED restriction. `live_tainted` is a DOCUMENT-WIDE set:
@@ -345,7 +326,7 @@ function _discover_geometry_vars(
         # nearly every array observed is live-tainted, because `flatten` merges
         # all models and the met forcing reaches all of them.
         #
-        # Without this restriction ONE `polygon_intersection_area` — in ONE model
+        # Without this restriction ONE overlap-area regrid — in ONE model
         # — inlined every live array observed of every UNRELATED model into its
         # readers. Adding an NEI regrid to reseact.esm swept in ~500 observeds
         # across DryDepositionGas / FastJX / WetDeposition / Transport3D,
@@ -357,7 +338,7 @@ function _discover_geometry_vars(
         # grid. Geometry in one model must not change how another model's
         # equations compile.
         #
-        # Derived = reads a geometry setup var / clip ring, transitively. The
+        # Derived = reads a geometry setup var, transitively. The
         # regrid's own outputs still qualify (they read `A_ij`), so the motivating
         # met→fire coupling edge is unchanged.
         geom_derived = Set{String}()
@@ -367,7 +348,7 @@ function _discover_geometry_vars(
             for (name, rhs) in defs
                 name in geom_derived && continue
                 refs = get!(() -> _referenced_var_names(rhs), refmemo, name)
-                if any(r -> r in setup_vars || r in ring_vars || r in geom_derived, refs)
+                if any(r -> r in setup_vars || r in geom_derived, refs)
                     push!(geom_derived, name); changed = true
                 end
             end
@@ -379,7 +360,7 @@ function _discover_geometry_vars(
         for (name, v) in model.variables
             (
                 has_geometry_seed && name in obs_here && _is_array_shape(v.shape) &&
-                    !(name in setup_vars) && !(name in ring_vars) &&
+                    !(name in setup_vars) &&
                     name in live_tainted && name in geom_derived && haskey(defs, name) &&
                     defs[name] isa OpExpr
             ) || continue
@@ -387,8 +368,7 @@ function _discover_geometry_vars(
         end
     end
     return (;
-        has_geometry, has_pia, has_setup_geometry,
-        ring_vars, setup_vars, defs, inline_vars,
+        has_setup_geometry, setup_vars, defs, inline_vars,
     )
 end
 
@@ -470,8 +450,7 @@ end
 # producer and keeps the scalar-observed path.
 function _collect_array_inline_vars(
         model::Model, equations::Vector{Equation},
-        geom_setup_vars, geom_ring_vars,
-        geom_inline_vars
+        geom_setup_vars, geom_inline_vars
     )
     array_inline_vars = Set{String}()
     observed_here = Set{String}(observed_unknowns(model))
@@ -479,8 +458,7 @@ function _collect_array_inline_vars(
         eq.lhs isa VarExpr || continue
         name = (eq.lhs::VarExpr).name
         (
-            name in geom_setup_vars || name in geom_ring_vars ||
-                name in geom_inline_vars
+            name in geom_setup_vars || name in geom_inline_vars
         ) && continue
         haskey(model.variables, name) || continue
         v = model.variables[name]
@@ -520,8 +498,8 @@ end
 # `pgather` cache — a state-FREE field — could not be reused here).
 #
 # WHAT STAYS INLINED (every one of these keeps its own path, untouched):
-#   * geometry `inline_vars` / clip rings / setup vars / `polygon_intersection_area`
-#     operand arrays / `const`-op + bare-alias array observeds — none of them is
+#   * geometry `inline_vars` / setup vars / `const`-op + bare-alias array
+#     observeds — none of them is
 #     in `array_inline_vars` to begin with;
 #   * the discrete-cadence and const-cadence cadence cuts (they are removed from
 #     `array_inline_vars` BEFORE this selection runs, so a per-refresh cache is
@@ -617,7 +595,7 @@ function _collect_materialized_array_obs(
     # STRUCTURAL positions (mirrors the scalar slot plan's `_obs_structural_refs!`):
     # a buffer read is a RUNTIME value, so an observed referenced where the build
     # needs a CONCRETE value — a gather SUBSCRIPT, an aggregate range bound, an
-    # integral bound, a value-invention key, a table-lookup axis — must stay
+    # integral bound, a value-invention key — must stay
     # inlined. The gather TARGET itself is exempt: `index(obs, i…)` naming a
     # materialized observed is exactly the buffer read.
     if !isempty(out)
@@ -733,11 +711,6 @@ function _array_obs_structural_refs!(
     e.lower === nothing || _obs_mark_refs!(e.lower::ASTExpr, names, hits, seen)
     e.upper === nothing || _obs_mark_refs!(e.upper::ASTExpr, names, hits, seen)
     e.key === nothing || _obs_mark_refs!(e.key::ASTExpr, names, hits, seen)
-    if e.table_axes !== nothing
-        for (_, ax) in e.table_axes
-            _obs_mark_refs!(ax, names, hits, seen)
-        end
-    end
     for a in e.args
         _array_obs_structural_refs!(
             a, names, hits, seen;
@@ -828,67 +801,13 @@ function _materialized_obs_dims(
     return dims
 end
 
-# ---- Stage: polygon_intersection_area fused-leaf operands (esm-spec §8.6.1) ----
-# `polygon_intersection_area(a, b)` is a SCALAR overlap-area leaf (the fused
-# clip+shoelace). Its polygon operands are build-time-known const vertex rings;
-# resolve each into a matrix (a `const_arrays` kwarg entry wins, else the
-# operand's own `const`-op observed value) so the leaf const-folds in
-# `_resolve_indices`. Each operand array observed is materialized into
-# the const-array registry and excluded from the ODE partition — it carries no state,
-# exactly like an intersect_polygon clip ring (RFC §8.1). Empty (byte-identical)
-# for every file without a polygon_intersection_area node. (`has_pia` is
-# computed in `_discover_geometry_vars`, where it also arms the setup-geometry
-# machinery for the RANGED narrow phase — an indexed-operand fused leaf inside
-# an array aggregate.) Returns `(operand_vars, operand_arrays)`.
-function _collect_pia_operand_arrays(
-        model::Model, equations::Vector{Equation},
-        const_arrays::AbstractDict, has_pia::Bool
-    )
-    pia_operand_vars = Set{String}()
-    pia_operand_arrays = Dict{String, Matrix{Float64}}()
-    if has_pia
-        pia_names = Set{String}()
-        for eq in equations
-            _collect_pia_operands!(eq.lhs, pia_names)
-            _collect_pia_operands!(eq.rhs, pia_names)
-        end
-        # An observed unknown's definition is an equation from esm 1.0.0, and
-        # the equation loop above already scanned every one of them; there is no
-        # separate variable-level expression left to collect from.
-        obs_defs = observed_definitions(model)
-        for name in pia_names
-            var = get(model.variables, name, nothing)
-            defn = get(obs_defs, name, nothing)
-            mat = if haskey(const_arrays, name)
-                Matrix{Float64}(const_arrays[name])
-            elseif defn isa OpExpr && (defn::OpExpr).op == "const"
-                _pia_const_matrix((defn::OpExpr).value)
-            else
-                throw(
-                    TreeWalkError(
-                        "E_TREEWALK_GEOMETRY_OPERAND",
-                        "polygon_intersection_area operand '$(name)' must be a const polygon " *
-                            "ring (supplied via `const_arrays` or a `const`-op observed)"
-                    )
-                )
-            end
-            pia_operand_arrays[name] = mat
-            (var !== nothing && _is_array_shape(var.shape)) &&
-                push!(pia_operand_vars, name)
-        end
-    end
-    return pia_operand_vars, pia_operand_arrays
-end
-
 # ---- Stage: const-op array observeds (in-file polygon rings / source fields) ----
 # A `const`-op observed with an ARRAY shape (`src_poly[cell,vert,coord]`, a
 # `F_src[cell]` field, an MPAS mesh subsystem's connectivity/geometry factors)
 # is build-time literal data, not a scalar observed and not a state.
 # Materialize each into the const-array registry (so a fused-leaf aggregate
 # gathers `index(src_poly,i)` at setup and an ODE reads `index(F_src,i)`) and
-# exclude it from the ODE partition — exactly like an intersect_polygon clip
-# ring (RFC §8.1) or a fused-leaf operand. Operands already owned by the
-# scalar-leaf `_pia` path or a setup ring are left to those. This used to be
+# exclude it from the ODE partition. This used to be
 # gated on the setup-geometry machinery, which left the const mesh data of a
 # geometry-free unstructured document (the MPAS keyed-factor wiring, esm-spec
 # §4.6) rejected as E_TREEWALK_UNSUPPORTED_SHAPE; the materialization only ADDS
@@ -900,12 +819,11 @@ end
 # geometry, e.g. `src_lon[i] = min_v src_poly[i,v,1]`) is derived once by the
 # AbstractDict front-door and supplied to the typed build as a `const_arrays`
 # entry (RFC §8.6.1 purity). Like a `const`-op ring stack it is build-time
-# literal data feeding the broad-phase skolem, so materialize it into the const
+# literal data feeding the broad phase, so materialize it into the const
 # arrays and drop it from the ODE partition — not a scalar observed / state.
 # Returns `(const_obs_vars, const_obs_arrays)`.
 function _collect_const_obs_arrays(
         model::Model, const_arrays::AbstractDict,
-        pia_operand_vars, geom_ring_vars,
         register_coord_buffers::Bool
     )
     const_obs_vars = Set{String}()
@@ -915,8 +833,7 @@ function _collect_const_obs_arrays(
         defn = get(obs_defs, name, nothing)
         (
             defn !== nothing && _is_array_shape(v.shape) &&
-                _is_const_op(defn) && !(name in pia_operand_vars) &&
-                !(name in geom_ring_vars)
+                _is_const_op(defn)
         ) || continue
         const_obs_arrays[name] = _const_op_to_array((defn::OpExpr).value)
         push!(const_obs_vars, name)
@@ -927,7 +844,6 @@ function _collect_const_obs_arrays(
             (
                 defn !== nothing && _is_array_shape(v.shape) &&
                     haskey(const_arrays, name) && !(name in const_obs_vars) &&
-                    !(name in pia_operand_vars) && !(name in geom_ring_vars) &&
                     !_is_const_op(defn)
             ) || continue
             const_obs_arrays[name] = Array{Float64}(const_arrays[name])
@@ -955,7 +871,6 @@ function _register_bare_alias_arrays!(
         const_obs_vars::Set{String},
         model::Model, equations::Vector{Equation};
         const_arrays::AbstractDict,
-        pia_operand_vars, geom_ring_vars,
         geom_setup_vars, geom_inline_vars,
         array_inline_vars
     )
@@ -967,8 +882,7 @@ function _register_bare_alias_arrays!(
     for (name, v) in model.variables
         (haskey(obs_defs, name) && _is_array_shape(v.shape)) || continue
         (
-            name in const_obs_vars || name in pia_operand_vars ||
-                name in geom_ring_vars || name in geom_setup_vars ||
+            name in const_obs_vars || name in geom_setup_vars ||
                 name in geom_inline_vars || name in array_inline_vars
         ) && continue
         get(alias_defs, name, nothing) isa VarExpr || continue
@@ -1000,19 +914,18 @@ end
 # Split `model.variables` into the ODE partition: scalar parameter names
 # (sorted), scalar observed names, and state-variable names. Variables owned by
 # a setup/inline/fold mechanism (value invention, geometry setup, live-field or
-# promoted inlining, WS4 folds, fused-leaf operands, const-op arrays) carry no
-# partition slot. Array-shaped parameters must be array-backed (const data or a
-# live `param_arrays` buffer — the scalar `p` NamedTuple stays homogeneous
-# Float64, see the JL-J0 note); array-shaped observeds are supported only as
-# intersect_polygon clip rings. The ownership-exclusion sets are keyword-only:
+# promoted inlining, WS4 folds, const-op arrays) carry no partition slot.
+# Array-shaped parameters must be array-backed (const data or a live
+# `param_arrays` buffer — the scalar `p` NamedTuple stays homogeneous Float64,
+# see the JL-J0 note); an array-shaped observed must be owned by one of those
+# mechanisms. The ownership-exclusion sets are keyword-only:
 # they are all same-typed `Set{String}`s, so positional passing could silently
 # swap two of them. Returns `(param_names, observed_names, state_var_names)`.
 function _partition_variables(
         model::Model;
         vi_vars, geom_setup_vars,
         geom_inline_vars, array_inline_vars,
-        folded_array_obs, pia_operand_vars,
-        const_obs_vars, geom_ring_vars,
+        folded_array_obs, const_obs_vars,
         const_arrays::AbstractDict,
         param_arrays::AbstractDict,
         discrete_vars = Set{String}()
@@ -1030,9 +943,9 @@ function _partition_variables(
     observed_here = Set{String}(observed_unknowns(model))
     unknown_state_names = Set{String}(solver_unknowns(model))
     for (name, v) in model.variables
-        # Value-invention outputs (skolem/distinct/rank) are materialized once at
-        # setup (RFC §6.1) and never enter the ODE — drop them from every
-        # partition, exactly as a geometry clip-ring observed is not a scalar.
+        # Value-invention outputs (distinct sets, key columns) are materialized
+        # once at setup (RFC §6.1) and never enter the ODE — drop them from every
+        # partition.
         name in vi_vars && continue
         # Geometry-setup vars are materialized at setup; not an ODE partition member.
         name in geom_setup_vars && continue
@@ -1047,10 +960,6 @@ function _partition_variables(
         # Elementwise array observeds folded into their readers (WS4): their
         # defining equation is gone and their value lives inline in the state RHS.
         name in folded_array_obs && continue
-        # polygon_intersection_area operand rings (const polygon vertex rings) are
-        # materialized into const_arrays and read by the fused leaf; not a partition
-        # member (they carry no state — like an intersect_polygon clip ring).
-        name in pia_operand_vars && continue
         # const-op array observeds (in-file ring stacks / source fields) are
         # materialized into const_arrays; build-time data, not a partition member.
         name in const_obs_vars && continue
@@ -1068,8 +977,8 @@ function _partition_variables(
             # from looking like a typo.
             if _is_array_shape(v.shape)
                 # An array-shaped parameter is supported only when supplied as
-                # const data (e.g. the polygon operands of an intersect_polygon
-                # clip, RFC Appendix B.1; or the connectivity / coordinate factors
+                # const data (e.g. polygon vertex rings, or the connectivity /
+                # coordinate factors
                 # a value-invention key is computed from, §5.2) OR as a live
                 # forcing buffer via `param_arrays` (a discrete-cadence loader
                 # buffer, ess-14f.3). Either way it is array-backed, not a scalar
@@ -1086,11 +995,9 @@ function _partition_variables(
             end
         elseif name in observed_here
             if _is_array_shape(v.shape)
-                # An array-shaped observed is supported only for an
-                # intersect_polygon clip ring, materialized into a const_array at
-                # setup (RFC §8.1); the polygon_area FAQ then ranges over it.
-                (name in geom_ring_vars) ||
-                    throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE", name))
+                # Every supported array-shaped observed is owned (and skipped)
+                # above.
+                throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE", name))
             else
                 push!(observed_names, name)
             end
@@ -1816,8 +1723,7 @@ const _PARAM_READS = Ref{Union{Nothing, Set{String}}}(nothing)
 end
 
 # Run `f` with build-time name resolutions recorded into `sink`. Save/restore
-# (not clear-on-exit) so a nested build cannot clobber an outer one's sink,
-# mirroring `_LANE_INTERN_POOL`.
+# (not clear-on-exit) so a nested build cannot clobber an outer one's sink.
 function _with_param_reads(f, sink::Union{Nothing, Set{String}})
     sink === nothing && return f()
     prev = _PARAM_READS[]
@@ -2291,8 +2197,7 @@ end
 # named prelude def instead of splicing the resolved chain into every reader.
 function _split_observed_and_derivatives(
         equations::Vector{Equation},
-        observed_names, geom_ring_vars,
-        geom_setup_vars, geom_inline_vars,
+        observed_names, geom_setup_vars, geom_inline_vars,
         array_inline_vars,
         mat_array_vars = _EMPTY_NAME_SET,
         array_shaped_vars = _EMPTY_NAME_SET
@@ -2308,13 +2213,10 @@ function _split_observed_and_derivatives(
             mat_defs[(eq.lhs::VarExpr).name] = eq.rhs
             continue
         end
-        if eq.lhs isa VarExpr && (
-                (eq.lhs::VarExpr).name in geom_ring_vars ||
-                    (eq.lhs::VarExpr).name in geom_setup_vars
-            )
-            # intersect_polygon clip ring / ranged-clip / per-pair area / A_ij —
-            # materialized into a const_array at setup (RFC §8.1, §6.1); not a
-            # scalar observed and produces no ODE.
+        if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in geom_setup_vars
+            # A build-once setup array (per-pair area / A_ij / …) — materialized
+            # into a const_array at setup (RFC §6.1); not a scalar observed and
+            # produces no ODE.
             continue
         elseif _is_scalar_D_lhs(eq.lhs)
             push!(derivative_eqs, eq)
@@ -2534,30 +2436,16 @@ end
 # both go through it, so a gate and the body it gates can never read two
 # different arrays under one name.
 #
-#   * clip rings, setup geometry and fused-leaf operand rings OVERWRITE a caller
-#     const array of the same name (the document's definition wins);
+#   * setup arrays OVERWRITE a caller const array of the same name (the
+#     document's definition wins);
 #   * const-op array observeds only FILL names no other storage holds.
 function _overlay_build_time_arrays!(
-        dest::AbstractDict, geom_rings, geom_setup_arrays,
-        pia_operand_arrays, const_obs_arrays
+        dest::AbstractDict, geom_setup_arrays, const_obs_arrays
     )
-    # M4 (RFC §8.1): each materialized intersect_polygon clip ring, as a 2D const
-    # array under its observed-variable name, so the polygon_area FAQ body reads
-    # its vertices via `index(clip, v, c)`. The CLOSED ring (n+1 rows) makes the
-    # wrap edge an ordinary `v+1` lookup.
-    for (k, ring) in geom_rings
-        dest[k] = ring
-    end
-    # M4+: each setup-materialized geometry array (per-pair area, A_ij, ring
+    # Each setup-materialized geometry array (per-pair area, A_ij, ring
     # stacks built from parameters, …), read via `index(area, p)` / `index(A_ij, i, j)`.
     for (k, arr) in geom_setup_arrays
         dest[k] = arr
-    end
-    # polygon_intersection_area operands: the const polygon vertex rings the fused
-    # leaf clips + areas, so `_resolve_indices` folds
-    # `polygon_intersection_area(src, tgt)` to its scalar overlap area (§8.6.1).
-    for (k, ring) in pia_operand_arrays
-        dest[k] = ring
     end
     # const-op array observeds (in-file ring stacks / source fields): an ODE reads
     # `index(F_src, i)` and a setup aggregate gathers `index(src_poly, i)`.
@@ -2573,14 +2461,12 @@ end
 # mesh reductions). 1D entries are stored as Vector{Float64}; higher-rank
 # entries as plain Array{Float64,N}. An array named in `const_array_boundaries`
 # is wrapped in a BoundedConstArray so OOB stencil gathers resolve per its
-# declared per-dimension policy (ess-gj4). Setup-materialized geometry (clip
-# rings, per-pair areas), fused-leaf operand rings, and const-op array
-# observeds are registered on top.
+# declared per-dimension policy (ess-gj4). Setup-materialized arrays (per-pair
+# areas, …) and const-op array observeds are registered on top.
 function _register_const_arrays(
         const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict,
-        geom_rings, geom_setup_arrays,
-        pia_operand_arrays, const_obs_arrays
+        geom_setup_arrays, const_obs_arrays
     )
     const_boundaries = Dict{String, Any}(String(k) => v for (k, v) in const_array_boundaries)
     registry = Dict{String, AbstractArray{Float64}}()
@@ -2594,10 +2480,7 @@ function _register_const_arrays(
         bnd = get(const_boundaries, k_str, nothing)
         registry[k_str] = bnd === nothing ? arr : _wrap_bounded_const(arr, bnd, k_str)
     end
-    _overlay_build_time_arrays!(
-        registry, geom_rings, geom_setup_arrays,
-        pia_operand_arrays, const_obs_arrays
-    )
+    _overlay_build_time_arrays!(registry, geom_setup_arrays, const_obs_arrays)
     return registry
 end
 
@@ -2848,7 +2731,7 @@ end
 # a reshape `(gy−1)·NX+gx`) references no scalar parameter and is NOT flagged.
 # The scan visits EVERY expression-bearing field via the shared traversal (not a
 # hand-rolled args/expr_body/values subset), so a coordinate gather buried in an
-# aggregate `filter` predicate or a table-lookup axis is seen too.
+# aggregate `filter` predicate is seen too.
 # IDENTITY-MEMOIZED (`foreach_subexpr_once`): a pure existence predicate is
 # path-multiplicity-insensitive, and the cadence-split def bodies scanned here
 # are DAGs after template lowering / `_sub_preserving` — the per-path walk
@@ -4041,15 +3924,15 @@ function _build_lower_and_classify(
     equations, folded_array_obs = _prepare_model_equations(model; vi_vars = vi_vars)
 
     # ---- Geometry variable discovery ----
-    # (see `_discover_geometry_vars`: direct clip rings, build-once setup vars,
-    # live-field inline vars, and the has_* gates)
+    # (see `_discover_geometry_vars`: build-once setup vars, live-field inline
+    # vars, and the has_* gate)
     geo = _discover_geometry_vars(model, equations, param_arrays, vi_vars; index_sets = index_sets)
     geom_inline_vars = geo.inline_vars
 
     # ---- Promoted array observeds (shape-promotion inlining) ----
     array_inline_vars = _collect_array_inline_vars(
         model, equations,
-        geo.setup_vars, geo.ring_vars, geom_inline_vars
+        geo.setup_vars, geom_inline_vars
     )
 
     # ---- Cadence materialization split (discrete + const cuts) ----
@@ -4119,22 +4002,16 @@ function _build_lower_and_classify(
         geom_inline_vars, array_inline_vars, equations
     )
 
-    # ---- polygon_intersection_area fused-leaf operands (esm-spec §8.6.1) ----
-    pia_operand_vars, pia_operand_arrays =
-        _collect_pia_operand_arrays(model, equations, const_arrays, geo.has_pia)
-
     # ---- const-op array observeds (in-file polygon rings / source fields) ----
     const_obs_vars, const_obs_arrays = _collect_const_obs_arrays(
         model,
-        const_arrays, pia_operand_vars, geo.ring_vars,
-        geo.has_setup_geometry || has_value_invention
+        const_arrays, geo.has_setup_geometry || has_value_invention
     )
 
     # ---- bare-alias array observeds (keyed-factor re-exposure, esm-spec §4.6) ----
     _register_bare_alias_arrays!(
         const_obs_arrays, const_obs_vars, model, equations;
-        const_arrays = const_arrays, pia_operand_vars = pia_operand_vars,
-        geom_ring_vars = geo.ring_vars, geom_setup_vars = geo.setup_vars,
+        const_arrays = const_arrays, geom_setup_vars = geo.setup_vars,
         geom_inline_vars = geom_inline_vars, array_inline_vars = array_inline_vars
     )
 
@@ -4166,12 +4043,10 @@ function _build_lower_and_classify(
 
     return (;
         equations, folded_array_obs,
-        has_geometry = geo.has_geometry,
         has_setup_geometry = geo.has_setup_geometry,
-        geom_ring_vars = geo.ring_vars, geom_setup_vars = geo.setup_vars,
+        geom_setup_vars = geo.setup_vars,
         geom_defs = geo.defs, geom_inline_vars, array_inline_vars,
-        discrete_vars, pia_operand_vars, pia_operand_arrays,
-        const_obs_vars, const_obs_arrays, mat_array_vars, recur_vars,
+        discrete_vars, const_obs_vars, const_obs_arrays, mat_array_vars, recur_vars,
         gated_geom_vars,
     )
 end
@@ -4200,7 +4075,7 @@ end
 # ---- Phase 2: ODE variable partition + setup materialization + equation rewrites ----
 # From the classified equation stream (`cls`) to the ODE-ready one: partition
 # the variables, resolve the scalar parameter scope, materialize the setup-time
-# geometry (clip rings / ranged clips / A_ij) and the derived index-set extents,
+# arrays (A_ij, …) and the derived index-set extents,
 # then run the equation rewrites in their pinned order — setup-equation drop,
 # join-gate resolution, index-set range resolution, value-invention drop,
 # discrete-cadence def extraction, and the `ic` fold.
@@ -4223,8 +4098,7 @@ function _build_partition_and_materialize(
         geom_inline_vars = cls.geom_inline_vars,
         array_inline_vars = cls.array_inline_vars,
         folded_array_obs = cls.folded_array_obs,
-        pia_operand_vars = cls.pia_operand_vars,
-        const_obs_vars = cls.const_obs_vars, geom_ring_vars = cls.geom_ring_vars,
+        const_obs_vars = cls.const_obs_vars,
         const_arrays = const_arrays, param_arrays = param_arrays,
         discrete_vars = cls.discrete_vars
     )
@@ -4236,39 +4110,22 @@ function _build_partition_and_materialize(
     )
     merge!(param_scope, supplied_scalars)
 
-    # ---- M4: materialize intersect_polygon clip rings at setup time ----
-    # Each clip is evaluated now (operands are const_arrays) into a CLOSED ring,
-    # registered in phase 4 as a 2D const_array; `derived_extents` maps each
-    # clip's `from_faq` key to its distinct-vertex count so the derived clip-ring
-    # index set resolves to `[1, n]` for the polygon_area FAQ.
-    geom_rings = Dict{String, Matrix{Float64}}()
-    derived_extents = (cls.has_geometry || has_value_invention) ?
-        Dict{String, Int}() : _EMPTY_DERIVED_EXTENTS
-    if cls.has_geometry
-        geom_rings, geom_extents =
-            _materialize_geometry_rings(
-            cls.equations, const_arrays, cls.geom_ring_vars,
-            cls.const_obs_arrays
-        )
-        merge!(derived_extents, geom_extents)
-    end
-    # Value-invention derived index sets (skolem/distinct/rank) materialized via
+    # Value-invention derived index sets (distinct producers) materialized via
     # the relational engine in the AbstractDict front-door (RFC §6.1 / §5.5):
     # supply each producer's distinct-set cardinality as the resolver's dense
-    # extent `[1, n]`, generalizing the geometry handoff to the relational engine.
+    # extent `[1, n]`.
     #
-    # Merged BEFORE the geometry-setup materialization below, not after, because
-    # a setup-time geometry body may now RANGE over a derived set. The projection
-    # pushdown re-points a binning aggregate onto `pd_support__<C>`, and when that
-    # aggregate's weight is an intersection area the body is setup-time geometry —
-    # so `_geo_index_extent` must be able to resolve the derived extent. The merge
-    # order relative to `geom_extents` is unchanged (value invention still wins a
-    # name collision), so nothing downstream sees a different `derived_extents`.
-    merge!(derived_extents, Dict{String, Int}(String(k) => Int(v) for (k, v) in vi_extents))
+    # Merged BEFORE the geometry-setup materialization below, because a
+    # setup-time body may RANGE over a derived set. The projection pushdown
+    # re-points a binning aggregate onto `pd_support__<C>`, and when that
+    # aggregate's weight is an overlap-area template the body is setup-time
+    # geometry — so `_geo_index_extent` must be able to resolve the derived extent.
+    derived_extents = has_value_invention ?
+        Dict{String, Int}(String(k) => Int(v) for (k, v) in vi_extents) :
+        _EMPTY_DERIVED_EXTENTS
 
-    # M4+: materialize the ranged-clip / per-pair-area / A_ij geometry into const
-    # arrays (and record the per-pair clip_ring extent) BEFORE index-set ranges are
-    # resolved, so the polygon_area FAQ's `clip_ring` range lowers to `[1, maxn]`.
+    # Materialize the per-pair-area / A_ij setup arrays into const arrays BEFORE
+    # index-set ranges are resolved.
     geom_setup_arrays = Dict{String, AbstractArray{Float64}}()
     if !isempty(cls.geom_setup_vars)
         geom_setup_arrays = _with_param_reads(param_reads) do
@@ -4281,21 +4138,17 @@ function _build_partition_and_materialize(
             )
         end
     end
-    # Geometry-setup vars (ranged clips / per-pair area / A_ij / their bin buffers)
-    # and direct clip rings are materialized at setup — drop their equations before
-    # the ODE-lowering passes so their join/filter/intersect_polygon nodes never
-    # reach the join-gate / index-set-range resolvers (those expect the relational/
-    # value-invention vocabulary, not the setup-geometry one).
-    # A polygon_intersection_area operand's const-ring equation is likewise dropped:
-    # its ring is materialized into const_arrays above, so its synthetic
-    # `operand = const(...)` equation must not reach the ODE-lowering passes.
+    # Geometry-setup vars (per-pair area / A_ij / their bin buffers) are
+    # materialized at setup — drop their equations before the ODE-lowering passes
+    # so their join/filter nodes never reach the join-gate / index-set-range
+    # resolvers (those expect the relational/value-invention vocabulary, not the
+    # setup-geometry one). A const-op array observed's equation is likewise
+    # dropped: its value is in const_arrays.
     ode_equations = Equation[
         eq for eq in cls.equations
             if !(
                 eq.lhs isa VarExpr && (
-                    (eq.lhs::VarExpr).name in cls.geom_ring_vars ||
                     (eq.lhs::VarExpr).name in cls.geom_setup_vars ||
-                    (eq.lhs::VarExpr).name in cls.pia_operand_vars ||
                     (eq.lhs::VarExpr).name in cls.const_obs_vars
                 )
             )
@@ -4316,15 +4169,14 @@ function _build_partition_and_materialize(
     # A §5.5.8 `on` key column and a §5.5.6 overlap envelope factor are both
     # build-time data, so the resolver gets the same storage the right-hand side
     # will read: the caller's const arrays overlaid with everything this build
-    # materialized (clip rings, setup geometry such as a `[pos, verts, coord]`
-    # ring stack built from parameters, fused-leaf operand rings, const-op array
-    # observeds), by the one precedence rule in `_overlay_build_time_arrays!`.
+    # materialized (setup arrays such as a `[pos, verts, coord]` ring stack built
+    # from parameters, const-op array observeds), by the one precedence rule in
+    # `_overlay_build_time_arrays!`.
     # The equations of all of these were dropped from the ODE partition above.
     # A document-literal key column that is still an equation is materialized on
     # demand from the observed definitions by `_join_key_column_values`.
     join_key_arrays = _overlay_build_time_arrays!(
-        Dict{String, Any}(const_arrays), geom_rings, geom_setup_arrays,
-        cls.pia_operand_arrays, cls.const_obs_arrays
+        Dict{String, Any}(const_arrays), geom_setup_arrays, cls.const_obs_arrays
     )
     join_obs_defs = observed_definitions(model)
     # A key column computed from scalar parameters folds their values into the
@@ -4377,7 +4229,7 @@ function _build_partition_and_materialize(
     )
 
     # ---- Drop value-invention equations from the ODE (RFC §6.1) ----
-    # The skolem/distinct/rank LHS vars are materialized at setup, not integrated;
+    # The value-invention LHS vars are materialized at setup, not integrated;
     # their defining equations (a relational aggregate RHS) must not reach the
     # numeric pipeline. Their derived index-set extents were already harvested
     # above, so the index-set ranges resolved before this filter.
@@ -4421,7 +4273,7 @@ function _build_partition_and_materialize(
 
     return (;
         param_names, observed_names, state_var_names, param_scope,
-        geom_rings, geom_setup_arrays, derived_extents,
+        geom_setup_arrays, derived_extents,
         equations, init_equations, discrete_defs, eq_ics, field_ics,
     )
 end
@@ -4633,7 +4485,7 @@ function _build_compile_evaluator(
     # ---- Observed substitution / derivative-equation split ----
     derivative_eqs, resolved_obs, raw_obs, mat_defs = @_bench :split_obs _split_observed_and_derivatives(
         parts.equations,
-        parts.observed_names, cls.geom_ring_vars, cls.geom_setup_vars,
+        parts.observed_names, cls.geom_setup_vars,
         cls.geom_inline_vars, cls.array_inline_vars, mat_vars,
         Set{String}(n for (n, v) in model.variables if _is_array_shape(v.shape))
     )
@@ -4647,8 +4499,7 @@ function _build_compile_evaluator(
     # ---- Const-array registry (caller arrays + boundaries + setup geometry) ----
     const_registry = @_bench :const_registry _register_const_arrays(
         const_arrays, const_array_boundaries,
-        parts.geom_rings, parts.geom_setup_arrays, cls.pia_operand_arrays,
-        cls.const_obs_arrays
+        parts.geom_setup_arrays, cls.const_obs_arrays
     )
 
     # ---- Build observability (the `inspect` kwarg; see BuildInspection) ----
@@ -5078,8 +4929,8 @@ function _build_compile_evaluator(
     )
     scalar_cache.epoch = forcing_epoch
 
-    # ---- Cross-kernel / kernel↔prelude fn-CSE (perf plan B4; xcse.jl) ----
-    # A lane-invariant fn/interp subtree appearing in several array kernels'
+    # ---- Cross-kernel / kernel↔prelude CSE (perf plan B4; xcse.jl) ----
+    # A lane-invariant expensive subtree appearing in several array kernels'
     # invariant tiers (and possibly in scalar equations too) collapses to ONE
     # shared scalar prelude slot; each kernel's inv def becomes a bare cache
     # read. `:inplace` only — a compiled backend emits the prelude itself and
@@ -5266,7 +5117,7 @@ function _build_compile_evaluator(
         n_invariant_slots = 0,
         n_invariant_shared = 0,
         n_invariant_scalar_shared = 0,
-        # Cross-kernel fn-CSE (plan B4; xcse.jl): shared prelude slots
+        # Cross-kernel CSE (plan B4; xcse.jl): shared prelude slots
         # minted by the pass / kernel inv defs rewritten to shared-slot
         # reads / scalar RHS sites rewritten onto new shared slots.
         n_xcse_slots = xcse_diag.n_xcse_slots,
@@ -5300,16 +5151,8 @@ function _build_compile_evaluator(
     return f!, u0, p, tspan_default, layout.var_map, diag
 end
 
-# Build-scoped lane-table intern pool (acc_merge.jl): every `_Interp*Spec` mint
-# and every lane-spec `.specs` collection inside this build canonicalizes
-# content-equal interp tables to ONE object. The pool is installed here — the
-# single entry every build path funnels through — and torn down in `finally`,
-# save/restore so a nested build cannot clobber an outer one's pool. Under
-# `:interpreter` the pool stays `nothing` and the build is the un-interned one.
-#
 # `compiler` (API_SPEC §5.8) is resolved FIRST, because the plan it expands to
-# is what every tier gate below — starting with the two pool gates on the next
-# lines — reads its own on/off state from.
+# is what every tier gate below reads its own on/off state from.
 function _build_evaluator_impl(
         model::Model;
         compiler::Union{Symbol, CompilerPlan} = :native,
@@ -5343,18 +5186,10 @@ function _build_evaluator_impl(
     end
 end
 
-function _build_evaluator_impl_pools(model::Model; kwargs...)
-    prev = _LANE_INTERN_POOL[]
-    _LANE_INTERN_POOL[] = _lane_intern_disabled() ? nothing :
-        Dict{_LaneInternKey, Any}()
-    try
-        # The shifted-scatter kernels this build holds out of the class merge
-        # (scatter.jl).
-        return _with_scatter_keep(() -> _build_evaluator_impl_inner(model; kwargs...))
-    finally
-        _LANE_INTERN_POOL[] = prev
-    end
-end
+# The shifted-scatter kernels this build holds out of the class merge
+# (scatter.jl).
+_build_evaluator_impl_pools(model::Model; kwargs...) =
+    _with_scatter_keep(() -> _build_evaluator_impl_inner(model; kwargs...))
 
 function _build_evaluator_impl_inner(
         model::Model;
@@ -6388,9 +6223,6 @@ end
 #                         rescue firings, not final routing.
 #
 # Class-emission observability keys (also non-routing) ride the same tally:
-#   :direct_class_kernel  — the per-cell scalarizer emitted a kernel carrying
-#                           a per-lane spec table (acc_merge.jl, direct class
-#                           emission); one bump per such kernel.
 #   :direct_classmerge_round{1,2}_merge
 #                         — the assembled-kernel DIRECT emission stage
 #                           (oop_merge.jl `_merge_acc_kernel_classes` under
@@ -8374,8 +8206,7 @@ function _feed_back_vi_members(index_sets, vi_members::AbstractDict, model)
         faq = String(is.from_faq)
         haskey(vi_members, faq) || continue
         mem = vi_members[faq]
-        # single-component skolem keys degrade to scalar ids (value_invention.jl);
-        # a multi-component (tuple) member has no scalar factor form.
+        # members are scalar integer keys (value_invention.jl).
         vec = Vector{Float64}(undef, length(mem))
         ok = true
         for (i, m) in enumerate(mem)
@@ -8389,8 +8220,8 @@ function _feed_back_vi_members(index_sets, vi_members::AbstractDict, model)
         ok || throw(
             TreeWalkError(
                 "E_TREEWALK_VI_MEMBER_FACTOR",
-                "derived index set member_factor '$mf' requires SCALAR members " *
-                    "(a single-component skolem key); got a composite member for faq '$faq'"
+                "derived index set member_factor '$mf' requires SCALAR members; " *
+                    "got a non-numeric member for faq '$faq'"
             )
         )
         for k in _const_factor_aliases(model, String(mf))
@@ -8623,15 +8454,14 @@ function _build_evaluator_dict(
 
     # `coerce_esm_file` normalizes every dict-like carrier (JSON3 object,
     # native Dict, JSONLikeDict) itself — no JSON-string round-trip.
-    file = coerce_esm_file(esm)
+    file = _coerce_or_load(esm)
     _refuse_float32(file, model_name)
 
     # ---- Value-invention front-door (RFC §6.1), on the TYPED IR ----
     # `OpExpr` preserves the full value-invention vocabulary (`id`, `distinct`,
-    # `key`, `arg`, `join`, `label`; see OPEXPR_FIELD_TABLE), so any derived
-    # index set is materialised from the typed model and the extents threaded
-    # into the typed path. A no-op (and byte-identical) for models without a
-    # skolem/distinct/rank node.
+    # `key`, `join`; see OPEXPR_FIELD_TABLE), so any derived index set is
+    # materialised from the typed model and the extents threaded into the typed
+    # path. A no-op (and byte-identical) for models without a `distinct` producer.
     model = _select_model_or_nothing(file, model_name)
 
     # ---- §9.6.4 rule 2 at the FRONT-DOOR pre-passes ----
@@ -8704,7 +8534,7 @@ function _build_evaluator_dict(
     # A broad-phase binning coordinate declared INLINE as a reduce aggregate over the
     # in-file `const` geometry (e.g. `src_lon[i] = min_v src_poly[i,v,1]`) is a
     # build-time constant. Evaluate it once from the const-op arrays and thread it
-    # into `const_arrays`, so `floor(index(src_lon,i)/dx)→skolem` resolves at setup
+    # into `const_arrays`, so a key over `floor(index(src_lon,i)/dx)` resolves at setup
     # without the host supplying the coordinate. No-op (byte-identical) when no such
     # observed exists.
     _params = get(kwd, :parameter_overrides, Dict{String, Float64}())
@@ -8718,11 +8548,11 @@ function _build_evaluator_dict(
     _preads === nothing && (_preads = Set{String}())
     kwd[:_param_reads] = _preads
     if model !== nothing
-        # The coordinate buffers a value-invention skolem GATHERS from (`src_lon`,
+        # The coordinate buffers a value-invention key GATHERS from (`src_lon`,
         # `tgt_lon`): a build-time-constant one is derived here so a
         # TEMPLATE-CONSTRUCTED (aggregate-valued) coordinate is admissible as a
-        # skolem-bin index target (not only a const-supplied / reduce-over-const one).
-        _vi_targets = _vi_skolem_index_targets(model)
+        # key index target (not only a const-supplied / reduce-over-const one).
+        _vi_targets = _vi_index_targets(model)
         # Thread the model's registered functions so a coordinate whose body needs
         # the GENERAL build-time evaluator (an LCC projection's trig/`^`/`fn`
         # expansion — ops outside the setup-time geometry vocabulary) is projected
@@ -8759,21 +8589,6 @@ function _build_evaluator_dict(
                 model, file.index_sets,
                 _vi_ca, _params
             )
-    end
-
-    # ---- Arg-witness and grouped buffers as const factors ----
-    # An `argmin`/`argmax` assignment and the grouped / derived buffers keyed on
-    # it are CONST-cadence data materialized above and dropped from the ODE; a
-    # right-hand side that reads one (`index(gx, index(assign, i))`) reads that
-    # buffer, exactly as it reads a supplied const array.
-    if _vi !== nothing && (!isempty(_vi.assignments) || !isempty(_vi.groups))
-        for (n, buf) in _vi.assignments
-            haskey(_ca, n) || (_ca[n] = Float64.(buf))
-        end
-        for (n, buf) in _vi.groups
-            haskey(_ca, n) || (_ca[n] = Vector{Float64}(buf))
-        end
-        kwd[:const_arrays] = _ca
     end
 
     # ---- Phase 2b Hook 1: value-invention MEMBERS fed back as const factors ----

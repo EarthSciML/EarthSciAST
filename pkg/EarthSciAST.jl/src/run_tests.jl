@@ -785,7 +785,6 @@ function _run_container_tests!(
         name::AbstractString, container,
         compile::Function, label::AbstractString;
         esm_container = nothing,
-        function_tables = nothing,
         renames::AbstractDict = _NO_RENAMES,
         stiff_files = STIFF_SOLVER_OVERRIDE_FILENAMES,
         stiffness = nothing, solver_hints = nothing
@@ -794,14 +793,6 @@ function _run_container_tests!(
     sys_name = Symbol(name)
     local simp
     try
-        # esm-spec §9.5.3: `table_lookup` is SUGAR over the §9.2 closed
-        # functions, and nothing downstream of here speaks it — so it is lowered
-        # on the way INTO the build, never at load, where it would break the
-        # §9.5.4 round trip of the authored form. Lowering per CONTAINER (rather
-        # than per file) keeps the refusal §9.5.3a owes an unimplementable table
-        # attached to a build that actually happens: a container with no tests
-        # is never compiled, so it is never lowered.
-        lower_table_lookups!(container, function_tables)
         simp = compile(container, sys_name)
     catch err
         for t in container.tests
@@ -851,10 +842,6 @@ function run_file_tests!(
         return
     end
 
-    # The document's sampled-table registry (esm-spec §9.5), passed to each
-    # container build so its `table_lookup` nodes can be lowered there.
-    tables = esm_file.function_tables
-
     # The document's own stiffness declaration (esm-spec §2.2), which
     # `_pick_solver` prefers over the basename fallback set. Document-scoped,
     # so it applies to every container in the file.
@@ -862,11 +849,7 @@ function run_file_tests!(
 
     # The document flatten every in-document container is built from, computed
     # at most ONCE per file and only when a container that needs it actually
-    # has tests (a container with no tests is never compiled, so it is never
-    # lowered — the §9.5.3a refusal stays attached to a build that happens).
-    # Table lowering runs at FILE scope here because the flatten happens once,
-    # ahead of the per-container builds that would otherwise each lower their
-    # own.
+    # has tests.
     #
     # A container in a document this engine cannot build gets that document's
     # failure, NOT a private per-container build that would paper over it. One
@@ -901,7 +884,6 @@ function run_file_tests!(
     doc_flat_err = nothing
     if has_model_tests || has_mixed_rs_tests
         try
-            lower_table_lookups!(esm_file)
             doc_flat = flatten(
                 esm_file;
                 base_path = dirname(abspath(String(path)))
@@ -936,7 +918,7 @@ function run_file_tests!(
             _run_container_tests!(
                 results, path, :model, String(mname), model,
                 compile, "Model";
-                function_tables = tables, renames = doc_renames,
+                renames = doc_renames,
                 stiff_files = stiff_files, stiffness = stiffness,
                 solver_hints = esm_file.solver
             )
@@ -951,7 +933,7 @@ function run_file_tests!(
                     String(rname), rs,
                     (_c, sym) -> _compile_model_in_document(doc_flat, sym),
                     "ReactionSystem";
-                    function_tables = tables, renames = doc_renames,
+                    renames = doc_renames,
                     stiff_files = stiff_files, stiffness = stiffness,
                     solver_hints = esm_file.solver
                 )
@@ -960,7 +942,6 @@ function run_file_tests!(
                     results, path, :reaction_system,
                     String(rname), rs, _compile_reaction_system,
                     "ReactionSystem"; esm_container = rs,
-                    function_tables = tables,
                     stiff_files = stiff_files, stiffness = stiffness,
                     solver_hints = esm_file.solver
                 )

@@ -93,7 +93,7 @@ end
 # the residual diagnostics, the model name, and the component template registry
 # the emission side needs to expand references with.
 function _pd_analyze(esm::AbstractDict, model_name)
-    file = coerce_esm_file(esm)
+    file = _coerce_or_load(esm)
     m = _select_model_or_nothing(file, model_name)
     m === nothing && return nothing
     mname = _pd_model_name(file, model_name)
@@ -1277,10 +1277,7 @@ function _pd_apply(esm, mname::AbstractString, plan, reg = nothing)
             "distinct" => true, "semiring" => "bool_and_or", "id" => faqid,
             "join" => Any[_pd_overlap_clause(plan.src_env, plan.tgt_env)],
             "filter" => prod_filter,
-            "key" => Dict{String, Any}(
-                "op" => "skolem", "label" => "cell",
-                "args" => Any[plan.rep_csym]
-            ),
+            "key" => plan.rep_csym,
             "args" => Any[unique(vcat(plan.src_env, plan.tgt_env))...]
         )
     )

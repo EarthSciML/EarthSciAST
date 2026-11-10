@@ -212,8 +212,7 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     # (the right-hand side's build already materialized each of them).
     shaped_vars = Set{String}(n for (n, vv) in model.variables if _is_array_shape(vv.shape))
     _, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
-        parts.equations, parts.observed_names, cls.geom_ring_vars,
-        cls.geom_setup_vars, cls.geom_inline_vars, cls.array_inline_vars,
+        parts.equations, parts.observed_names, cls.geom_setup_vars, cls.geom_inline_vars, cls.array_inline_vars,
         union(mat, _recurrence_names(ctx.defs, shaped_vars)), shaped_vars
     )
     # The extended layout: the state, then one block per materialized observed.
