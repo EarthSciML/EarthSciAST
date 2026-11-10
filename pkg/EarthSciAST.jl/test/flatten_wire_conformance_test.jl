@@ -5,8 +5,10 @@
 # "Pointwise lift: operands read per cell"). This binding keeps template
 # references through flatten, so the surviving ones are expanded first, as a
 # consumer that writes the flattened system out does. Each written-out system is
-# also read back and built under both compilers: the bare expansion it held
-# before was refused there with `faq_bare_array_operand`.
+# also read back and built under both compilers, and gives the initial state and
+# right-hand side the original gives, bit for bit, or is refused where the
+# original is: the bare expansion it held before was refused there
+# with `faq_bare_array_operand`.
 
 using Test
 using EarthSciAST
@@ -60,8 +62,9 @@ function _fw_form(flat)
         shapes[k] = v.shape === nothing ? nothing : String[string(s) for s in v.shape]
     end
     eqs = Any[Dict("lhs" => _fw_wire(e.lhs), "rhs" => _fw_wire(e.rhs)) for e in flat.equations]
+    ics = Any[Dict("target" => t, "rhs" => _fw_wire(r)) for (t, r) in flat.field_ics]
     return sprint() do io
-        _fw_canonical(io, Dict("equations" => eqs, "shapes" => shapes))
+        _fw_canonical(io, Dict("equations" => eqs, "field_ics" => ics, "shapes" => shapes))
         print(io, '\n')
     end
 end
@@ -89,6 +92,12 @@ function _fw_document(flat)
         subject = match(r"\"([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_.]+)\"", JSON3.write(lhs))[1]
         push!(models[owner(subject)[1]]["equations"], Dict("lhs" => lhs, "rhs" => EarthSciAST.serialize_expression(e.rhs)))
     end
+    for (target, rhs) in flat.field_ics
+        push!(
+            models[owner(target)[1]]["equations"],
+            Dict("lhs" => Dict("op" => "ic", "args" => [target]), "rhs" => EarthSciAST.serialize_expression(rhs))
+        )
+    end
     sets = Dict(k => Dict("kind" => v.kind, "size" => v.size) for (k, v) in flat.index_sets)
     return Dict("esm" => "1.3.0", "metadata" => Dict("name" => "written"), "index_sets" => sets, "models" => models)
 end
@@ -106,12 +115,21 @@ function _fw_rhs(file, compiler)
     for (k, v) in prob.var_map
         names[Int(v)] = String(k)
     end
-    return Dict(zip(names, du))
+    return Dict(n => (prob.u0[i], du[i]) for (i, n) in enumerate(names))
 end
+
+_fw_built(file, compiler) = try
+    _fw_rhs(file, compiler)
+catch e
+    e isa EarthSciAST.EarthSciASTError || rethrow()
+    nothing
+end
+
+_fw_bits((u, d)) = (reinterpret(UInt64, Float64(u)), reinterpret(UInt64, Float64(d)))
 
 @testset "flatten_wire conformance" begin
     cases = JSON3.read(read(joinpath(_FW_DIR, "cases.json"), String))["cases"]
-    @test length(cases) == 2
+    @test length(cases) == 5
     for case in cases
         @testset "$(case["name"])" begin
             file = EarthSciAST.load_path(joinpath(_FW_DIR, case["fixture"]))
@@ -119,11 +137,67 @@ end
             @test _fw_form(flat) == read(joinpath(_FW_DIR, case["golden"]), String)
             back = EarthSciAST.load_string(JSON3.write(_fw_document(flat)))
             for compiler in (:interpreter, :native)
-                want = _fw_rhs(file, compiler)
-                got = _fw_rhs(back, compiler)
+                want = _fw_built(file, compiler)
+                got = _fw_built(back, compiler)
+                # The original and the read-back system agree: both build, to
+                # the same bits, or both are refused. `builds` is the reference
+                # evaluator's verdict; a strict compiler may refuse more.
+                @test (want === nothing) == (got === nothing)
+                compiler === :interpreter && @test (want !== nothing) == case["builds"]
+                (want === nothing || got === nothing) && continue
                 @test keys(got) == keys(want)
-                @test all(k -> reinterpret(UInt64, got[k]) == reinterpret(UInt64, want[k]), keys(want))
+                @test all(k -> _fw_bits(got[k]) == _fw_bits(want[k]), keys(want))
             end
         end
     end
+end
+
+# The template-origin mark is load provenance (esm-spec §9.6.11): a document
+# that spells it is refused by the schema, as in every binding, rather than
+# read as a template application.
+@testset "an authored template-origin mark is refused" begin
+    doc = Dict(
+        "esm" => "1.3.0", "metadata" => Dict("name" => "authored_mark"),
+        "index_sets" => Dict("c" => Dict("kind" => "interval", "size" => 3)),
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "parameter", "shape" => ["c"], "default" => [1.0, 2.0, 3.0]),
+                    "y" => Dict("type" => "unknown"),
+                ),
+                "equations" => [
+                    Dict(
+                        "lhs" => "y",
+                        "rhs" => Dict(
+                            "op" => "faq", "args" => [], "output_idx" => [],
+                            "ranges" => Dict("k" => Dict("from" => "c")),
+                            "__esm_template_origin" => "linear", "expr" => "u"
+                        )
+                    ),
+                ],
+            )
+        ),
+    )
+    err = try
+        EarthSciAST.load_string(JSON3.write(doc))
+        nothing
+    catch e
+        e
+    end
+    @test err isa EarthSciAST.SchemaValidationError
+    @test occursin("__esm_template_origin", sprint(showerror, err))
+    @test occursin("/models/M/equations/0/rhs", sprint(showerror, err))
+end
+
+# The lift's loop symbols avoid every name the right-hand side reads or binds,
+# in any field (esm-spec §9.6.11): here an integral's variable.
+@testset "loop symbols avoid a name bound in any field" begin
+    ESM = EarthSciAST
+    area = ESM.OpExpr(
+        "integral", ESM.ASTExpr[ESM.NumExpr(1.0)];
+        int_var = "_p0", lower = ESM.NumExpr(0.0), upper = ESM.NumExpr(1.0)
+    )
+    rhs = ESM.OpExpr("*", ESM.ASTExpr[ESM.VarExpr("rho"), area])
+    @test ESM._ew_fresh_loops(rhs, 2, nothing) == ["__p0", "__p1"]
+    @test ESM._ew_fresh_loops(ESM.VarExpr("rho"), 1, nothing) == ["_p0"]
 end

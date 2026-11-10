@@ -2085,9 +2085,47 @@ _marking_template_origins() = get(task_local_storage(), _MARK_TEMPLATE_ORIGINS_K
 # serialization never emits `template_origin`.
 const _TEMPLATE_ORIGIN_WIRE_KEY = "__esm_template_origin"
 
+# The JSON-pointer path of the first `_TEMPLATE_ORIGIN_WIRE_KEY` in `node`, or
+# `nothing`.
+function _template_origin_key_path(node, path::String = "")
+    if _is_object(node)
+        haskey(node, _TEMPLATE_ORIGIN_WIRE_KEY) && return path
+        for (k, v) in pairs(node)
+            p = _template_origin_key_path(v, string(path, "/", k))
+            p === nothing || return p
+        end
+    elseif _is_array(node)
+        _may_hold_object(node) || return nothing
+        for (i, v) in enumerate(node)
+            p = _template_origin_key_path(v, string(path, "/", i - 1))
+            p === nothing || return p
+        end
+    end
+    return nothing
+end
+
+# Refuse an authored document that spells `_TEMPLATE_ORIGIN_WIRE_KEY`: the key
+# is load provenance, and the schema admits no such property, so an authored
+# one fails the schema check as it does in every binding. Runs on each file as
+# authored, before a mount splices in content the load itself marked, which the
+# schema check below then reads through `_strip_template_origins`.
+function _reject_authored_template_origins(raw)
+    path = _template_origin_key_path(raw)
+    path === nothing && return nothing
+    err = SchemaError(
+        isempty(path) ? "/" : path,
+        "Additional property '$(_TEMPLATE_ORIGIN_WIRE_KEY)' is not allowed: it is " *
+            "load provenance, which no document carries (esm-spec §9.6.11)",
+        "additionalProperties"
+    )
+    throw(SchemaValidationError(_format_schema_errors([err]), [err]))
+end
+
 # `node` without any `_TEMPLATE_ORIGIN_WIRE_KEY`: the document as authored and
 # expanded, for the schema check, which the private key would fail. Copies only
 # the containers on a path to a mark; returns `node` itself when it holds none.
+# Every authored file was refused above if it spelled the key, so what this
+# removes is only the load's own marks.
 function _strip_template_origins(node, memo::IdDict{Any, Any} = IdDict{Any, Any}())
     if _is_object(node)
         r = get(memo, node, _JSON_DESCEND)

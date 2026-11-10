@@ -1517,7 +1517,7 @@ function flatten(
     # reaction/model state ODE with the spatial operator's advection; array-ify
     # those merged equations (promote the species to the grid shape and wrap in an
     # `faq` over the grid) so the lifted reaction network runs pointwise.
-    _apply_pointwise_lift!(
+    pointwise = _apply_pointwise_lift!(
         equations, contribs, states, params, observeds, index_sets,
         file.coupling;
         template_registry = (
@@ -1590,10 +1590,14 @@ function flatten(
         continuous_events, discrete_events
     )
 
-    # Step 9: write each elementwise template application (esm-spec §9.6.11)
-    # as its per-cell `faq`. See `_lift_elementwise_applications_flat!`.
-    _lift_elementwise_applications_flat!(
-        equations, contribs, states, params, observeds, template_registry
+    # Step 9: write each elementwise template application (esm-spec §9.6.11),
+    # in an equation or a field initial condition, as its per-cell `faq`,
+    # reusing the shapes the pointwise lift inferred. See
+    # `_lift_elementwise_applications_flat!`.
+    field_ics = _lift_elementwise_applications_flat!(
+        equations, contribs, field_ics, states, params, observeds, template_registry;
+        seed = pointwise === nothing ? nothing : pointwise.shapes,
+        stale = pointwise === nothing ? () : pointwise.stale
     )
 
     return FlattenedSystem(
