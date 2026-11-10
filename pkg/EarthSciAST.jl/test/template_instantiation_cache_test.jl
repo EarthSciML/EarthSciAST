@@ -275,12 +275,14 @@ end
         n = 0
         for (d, _, fs) in walkdir(dir), f in fs
             endswith(f, ".esm") || continue
-            flat = ESM.flatten(load_path(joinpath(d, f)))
-            reg = flat.template_registry
+            file = load_path(joinpath(d, f))
+            reg = ESM.flatten(file).template_registry
             isempty(reg) && continue
             cached = ESM._ElementwiseContext(reg)
             direct = ESM._ElementwiseContext(reg, nothing)
-            for eq in flat.equations
+            # The authored applications: flatten writes every elementwise one
+            # as its lift (esm-spec §9.6.11), so its equations hold none.
+            for m in values(file.models), eq in m.equations
                 apps = ESM.OpExpr[]
                 walk(e) = (
                     e isa ESM.OpExpr && (

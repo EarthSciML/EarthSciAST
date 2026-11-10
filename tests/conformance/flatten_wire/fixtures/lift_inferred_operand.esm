@@ -1,0 +1,169 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "lift_inferred_operand",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "description": "A 0-D mechanism lifted pointwise (esm-spec 10.5) whose loss coefficient a variable_map feeds from Grid.kk = 0.1 * rho. kk declares no shape and is an array because rho is (esm-spec 4.3.4). The authored equations read it elementwise and outside any faq; the pointwise lift reads it at the cell, index(Grid.kk, i), as it reads a declared array (esm-libraries-spec 4.7.5, 'Pointwise lift: operands read per cell')."
+  },
+  "index_sets": {
+    "cell": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "c"
+            ]
+          }
+        }
+      ]
+    },
+    "Grid": {
+      "variables": {
+        "rho": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "cell"
+          ],
+          "default": [
+            1.0,
+            2.0,
+            3.0,
+            4.0
+          ]
+        },
+        "kk": {
+          "type": "unknown",
+          "units": "1/s"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "kk",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.1,
+              "rho"
+            ]
+          }
+        }
+      ]
+    },
+    "Dep": {
+      "variables": {
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "_var"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  4
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    4
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        "kd"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "_var",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Dep"
+      ],
+      "lifting": "pointwise"
+    },
+    {
+      "type": "variable_map",
+      "from": "Grid.kk",
+      "to": "Chem.k",
+      "transform": "param_to_var"
+    }
+  ]
+}

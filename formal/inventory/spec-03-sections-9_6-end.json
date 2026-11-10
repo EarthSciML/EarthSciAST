@@ -510,6 +510,15 @@
       "note": "A const array literal or a reshape result read in a value position of a template application's expansion is rejected at build with array_shape_mismatch."
     },
     {
+      "id": "spec.9.6.11.flatten-writes-elementwise-lift",
+      "section": "9.6.11",
+      "quote": "Every binding's flatten MUST therefore write the lift above into the flattened equations themselves",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Flatten writes each elementwise template application, in an equation or a field initial condition, as the per-cell faq the build would lift it to, so the flattened system written out and read back denotes the same system. A variable declared shape [] is never lifted; when the lift refuses any right-hand side, nothing is lifted."
+    },
+    {
       "id": "spec.9.7.1.library-no-component-payload",
       "section": "9.7.1",
       "quote": "It MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain`",

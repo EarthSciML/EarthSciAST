@@ -1,0 +1,107 @@
+{
+ "esm": "1.3.0",
+ "metadata": {
+  "name": "field_ic_application",
+  "authors": [
+   "EarthSciAST test suite"
+  ],
+  "description": "A field initial condition defined by an elementwise application (esm-spec 9.6.11): ic(c) = linear(..., x = rho) with rho over [cell]. Flatten writes it as its per-cell faq over c's index sets, so the written-out system reads rho at the cell."
+ },
+ "index_sets": {
+  "cell": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "M": {
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/interp.esm",
+     "only": [
+      "linear"
+     ]
+    }
+   ],
+   "variables": {
+    "rho": {
+     "type": "parameter",
+     "shape": [
+      "cell"
+     ],
+     "default": [
+      1.5,
+      2.5,
+      3.5
+     ]
+    },
+    "c": {
+     "type": "unknown",
+     "shape": [
+      "cell"
+     ],
+     "default": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "c"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "*",
+      "args": [
+       -1.0,
+       "c"
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "c"
+      ]
+     },
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "linear",
+      "bindings": {
+       "table": {
+        "op": "const",
+        "args": [],
+        "value": [
+         10.0,
+         20.0,
+         30.0,
+         40.0
+        ]
+       },
+       "axis": {
+        "op": "const",
+        "args": [],
+        "value": [
+         1.0,
+         2.0,
+         3.0,
+         4.0
+        ]
+       },
+       "x": "rho",
+       "n": 4
+      }
+     }
+    }
+   ]
+  }
+ }
+}
