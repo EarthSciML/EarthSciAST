@@ -2613,6 +2613,34 @@ impl DataGatherSpec {
         }
     }
 
+    /// The row-major offset [`Self::at`] resolves at subscripts `v` (one per
+    /// source axis, in stored order, over extents `ext`) when every one is a
+    /// whole number inside its axis, or `None` for any other subscript
+    /// (fractional, out of range, NaN), which `at` itself resolves. The one
+    /// fast path every executor's computed-subscript gather takes.
+    #[inline(always)]
+    pub(crate) fn direct_offset<const M: usize>(ext: &[usize; M], v: &[f64; M]) -> Option<usize> {
+        let mut flat = 0usize;
+        let mut inside = true;
+        for d in 0..M {
+            let x = v[d];
+            // In range first (false for NaN), so the conversion is exact and
+            // needs no saturation; then a whole number.
+            let ok = x >= 1.0 && x <= ext[d] as f64;
+            let i = if ok {
+                // SAFETY: `x` is finite and inside `1 ..= ext[d]`.
+                unsafe { x.to_int_unchecked::<i64>() }
+            } else {
+                1
+            };
+            inside &= ok && i as f64 == x;
+            flat = flat
+                .wrapping_mul(ext[d])
+                .wrapping_add((i as usize).wrapping_sub(1));
+        }
+        inside.then_some(flat)
+    }
+
     /// The message of a fault [`Self::at`] reports on LOGICAL axis `d`.
     pub(crate) fn fault_message(&self, d: usize, raw: i64) -> String {
         let name = match &self.kind {

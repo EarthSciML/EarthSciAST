@@ -1048,20 +1048,11 @@ impl ScalarOp {
                 spec,
                 out,
             } => {
-                let (x, y) = (get(a), get(b));
-                let (i, j) = (x as i64, y as i64);
+                let v = [get(a), get(b)];
                 let base = base_ptr(src);
-                if i as f64 == x
-                    && j as f64 == y
-                    && i >= 1
-                    && j >= 1
-                    && i <= *n0 as i64
-                    && j <= *n1 as i64
-                {
-                    let p = (i - 1) as usize * *n1 as usize + (j - 1) as usize;
+                if let Some(p) = DataGatherSpec::direct_offset(&[*n0 as usize, *n1 as usize], &v) {
                     put(*out, unsafe { *base.add(p) });
                 } else {
-                    let v = [x, y];
                     match env.prog.data_gathers[*spec as usize].at(|d| v[d]) {
                         DataAt::Elem(p) => put(*out, unsafe { *base.add(p) }),
                         DataAt::Ghost => put(*out, 0.0),
@@ -2372,21 +2363,14 @@ impl ScalarBlock {
                         spec,
                         out,
                     } => {
-                        let (x, y) = (g(a), g(b));
-                        let (i, j) = (x as i64, y as i64);
+                        let v = [g(a), g(b)];
                         let base = base_ptr(&src);
-                        let v = if i as f64 == x
-                            && j as f64 == y
-                            && i >= 1
-                            && j >= 1
-                            && i <= n0 as i64
-                            && j <= n1 as i64
+                        let y = match DataGatherSpec::direct_offset(&[n0 as usize, n1 as usize], &v)
                         {
-                            *base.add((i - 1) as usize * n1 as usize + (j - 1) as usize)
-                        } else {
-                            gather_at(env, spec, base, &[x, y])
+                            Some(p) => *base.add(p),
+                            None => gather_at(env, spec, base, &v),
                         };
-                        put(out, v);
+                        put(out, y);
                     }
                     BlockOp::Count {
                         rel,

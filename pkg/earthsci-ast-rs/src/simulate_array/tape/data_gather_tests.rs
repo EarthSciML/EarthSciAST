@@ -757,3 +757,71 @@ fn several_data_subscripts_over_a_rank_1_box() {
         }
     }
 }
+
+/// [`DataGatherSpec::direct_offset`], the executors' shared fast path, places
+/// an element exactly where [`DataGatherSpec::at`] does, under every source
+/// kind and stored order, and declines only subscripts `at` must resolve.
+#[test]
+fn the_direct_offset_is_the_element_at_resolves() {
+    use super::ir::{DataAt, DataGatherSpec, ScalarReadKind};
+    let values = [
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        -1e300,
+        1e300,
+        -0.0,
+        0.0,
+        0.5,
+        0.999_999_999_999_999_9,
+        1.0,
+        1.0 + f64::EPSILON,
+        1.5,
+        2.0,
+        2.5,
+        3.0,
+        3.5,
+        4.0,
+        4.000_000_000_000_001,
+        5.0,
+        -1.0,
+        9.3e18,
+    ];
+    let kinds = [
+        ScalarReadKind::ZeroGhost,
+        ScalarReadKind::ConstArray {
+            name: "C".into(),
+            policy: [BoundaryKind::Periodic, BoundaryKind::Clamp]
+                .into_iter()
+                .collect(),
+        },
+    ];
+    for kind in kinds {
+        for reversed in [false, true] {
+            let spec = DataGatherSpec {
+                subs: Default::default(),
+                kind: kind.clone(),
+                src_shape: [3usize, 4].into_iter().collect(),
+                shape: Default::default(),
+                order: None,
+                reversed,
+            };
+            for &x in &values {
+                for &y in &values {
+                    let v = [x, y];
+                    let at = spec.at(|d| v[d]);
+                    match DataGatherSpec::direct_offset(&[3, 4], &v) {
+                        Some(p) => assert_eq!(at, DataAt::Elem(p), "({x}, {y})"),
+                        None => assert!(
+                            x.fract() != 0.0
+                                || y.fract() != 0.0
+                                || !(1.0..=3.0).contains(&x)
+                                || !(1.0..=4.0).contains(&y),
+                            "({x}, {y}) is a whole in-range subscript"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+}

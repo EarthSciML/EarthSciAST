@@ -35,9 +35,8 @@ fn total(shape: &[usize]) -> usize {
 }
 
 /// [`data_gather`] of `M` subscripts each read at `ps[d] + k * step[d]`: an
-/// element whose subscripts are all whole numbers inside the source box
-/// reads its position directly (what [`DataGatherSpec::at`] gives it); any
-/// other element goes through `at` itself.
+/// element [`DataGatherSpec::direct_offset`] places reads its position
+/// directly; any other element goes through [`DataGatherSpec::at`].
 #[inline(never)]
 unsafe fn gather_direct<const M: usize>(
     dst: *mut f64,
@@ -52,28 +51,12 @@ unsafe fn gather_direct<const M: usize>(
     ext.copy_from_slice(&spec.src_shape[..M]);
     for k in 0..n {
         let mut v = [0.0f64; M];
-        let mut flat = 0usize;
-        let mut inside = true;
         for d in 0..M {
-            let x = unsafe { *ps[d].add(k * step[d]) };
-            v[d] = x;
-            // In range first (false for NaN), so the conversion below is exact
-            // and needs no saturation; then a whole number.
-            let ok = x >= 1.0 && x <= ext[d] as f64;
-            let i = if ok {
-                unsafe { x.to_int_unchecked::<i64>() }
-            } else {
-                1
-            };
-            inside &= ok && i as f64 == x;
-            flat = flat
-                .wrapping_mul(ext[d])
-                .wrapping_add((i as usize).wrapping_sub(1));
+            v[d] = unsafe { *ps[d].add(k * step[d]) };
         }
-        let y = if inside {
-            unsafe { *src.add(flat) }
-        } else {
-            unsafe { gather_resolved(spec, src, &v, faulted) }
+        let y = match DataGatherSpec::direct_offset(&ext, &v) {
+            Some(p) => unsafe { *src.add(p) },
+            None => unsafe { gather_resolved(spec, src, &v, faulted) },
         };
         unsafe { *dst.add(k) = y };
     }
