@@ -2264,6 +2264,17 @@
     "is_valid": false,
     "notes": "Structural invalid (issue #259; esm-spec \u00a74.3.1 \"Ragged ranges\"; CONFORMANCE_SPEC \u00a75.6.4). The `faq` ranges `j` over the ragged index set `members_of_parent`, but its body `index(flatValue, j)` never reads the set's `values` array `parentMember`. A ragged range symbol binds the POSITION k in 1..offsets[parent], not a member, so the body reads positions 1..offsets[i] of the flat payload (10, 30, 60) where the author meant each parent's own members (10, 50, 150). SCHEMA-VALID, and it evaluated without complaint before this code existed. Decidable from the single document, so every binding's validate() rejects it with `ragged_values_not_gathered` at the containing field. Positive control: tests/valid/faq/ragged_member_gather.esm (padded [parent, max length] `values`, explicit `index(parentMember, i, j)` gather)."
   },
+  "continuous_relational_node.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/ContinuousRelationalNode/equations/0/rhs",
+        "code": "relational_node_in_continuous"
+      }
+    ],
+    "is_valid": false,
+    "notes": "Cadence-partition-level invalid (bead ess-my4.3.11; RFC semiring-faq-unified-ir \u00a76.1, CONFORMANCE_SPEC.md \u00a75.7.6 guard 2). A value-invention `faq` (`distinct: true` under `bool_and_or`) whose integer `key` reads the `state` variable `u`, so the partition pass classifies the node CONTINUOUS (class = max over inputs) and guard 2 \u2014 no relational engine on the hot path \u2014 rejects it. Its key was a one-component `skolem` until esm 2.0.0; the codemod wrote it as the bare component. The document is SCHEMA-VALID, so schema-only bindings (TypeScript, Go) accept it. Contrast tests/valid/cadence/pure_topology.esm, where the keys read CONST mesh literals."
+  },
   "continuous_relational_node_template.esm": {
     "schema_errors": [],
     "structural_errors": [
