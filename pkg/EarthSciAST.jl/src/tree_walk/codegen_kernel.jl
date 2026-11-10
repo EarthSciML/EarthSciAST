@@ -221,9 +221,7 @@ mutable struct _CGCtx
     # was first minted as. Reset per kernel so a declined kernel's rolled-back
     # helpers are never referenced (dedup scope is one kernel — where the
     # redundancy is; distinct kernels are distinct equations).
-    # In the by-value transport (`_cg_split_by_value`) the stored value is the
-    # `_cgfns[k]` INDEX EXPRESSION rather than a name, so the field is `Any`.
-    helper_dedup::Dict{String, Any}
+    helper_dedup::Dict{String, Symbol}
     # Sub-kernel function memo (ess-cg-subcall-fn): sub-`_AccKernel` → the
     # `@noinline` function serving its body, as `(fname, extra_params,
     # int_consts::Vector{Int}, flt_consts::Vector{Float64})`, or `:inline` for
@@ -295,7 +293,7 @@ _CGCtx(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst::Int 
     _CGCtx(
     DataType[], Vector{Any}[], IdDict{Any, Tuple{Int, Int}}(),
     IdDict{Any, Vector{Symbol}}(),
-    Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String, Any}(),
+    Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String, Symbol}(),
     IdDict{Any, Any}(), Any[],
     Dict{String, Tuple{Symbol, Vector{Symbol}}}(), String[], false,
     Int[], Any[], IdDict{Any, Symbol}(), false, false, Symbol[], nothing,
@@ -1023,9 +1021,10 @@ end
 # A tiny body (≤ `_cg_subcall_fn_min_nodes()`) stays inlined per site, and
 # Julia < 1.12 keeps the pre-tier inlining wholesale — the emitted function is
 # the same inner-`function`-under-RGF mechanism as the split's inner-definition
-# transport, which boxes and segfaults there (`_cg_split_supported`). This tier
-# has not been ported to the by-value transport the split takes instead; it
-# ships off, so nothing on those versions depends on it.
+# transport, which boxes and segfaults there (`_cg_split_supported`). On 1.12+
+# its functions take whichever transport the split picks, by value included
+# (codegen_subcall_fn_test.jl runs both); below 1.12 it is not enabled at all.
+# It ships off, so nothing on those versions depends on it.
 # Canonicalizer/parametrizer for one emitted sub-kernel body
 # (ess-cg-subcall-struct). Rewrites the expression so that everything that
 # varies between two structurally-equal sub-kernels becomes an ARGUMENT:
@@ -2620,14 +2619,14 @@ end
 # node function OOMs a 40 GB host). Loop nests are packed into `@noinline`
 # sub-functions up to this cap so LLVM compiles bounded pieces. Override with
 # ESS_CODEGEN_FN_NODE_CAP; 0 disables splitting (one function, one flat body).
-# Every supported Julia can split (`_cg_split_by_value` picks the transport), so
-# an oversized body is compiled rather than declined, on every version.
+# Every supported Julia can split (`_cg_split_transport` picks the transport),
+# so an oversized body is compiled rather than declined, on every version.
 _codegen_fn_node_cap() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_FN_NODE_CAP", "")), 20_000)
 
 # Whether this Julia can carry an emitted sub-function as an INNER DEFINITION —
 # a `function` written inside the emitted body. Julia < 1.12 cannot, and takes
-# the by-value transport instead (`_cg_split_by_value`); the split itself is
+# the by-value transport instead (`_cg_carry_by_value`); the split itself is
 # available on every version.
 #
 # Why an inner definition is version-dependent. The emitted body becomes a
@@ -2642,40 +2641,309 @@ _codegen_fn_node_cap() =
 # inner-definition transport is allocation-free and stable only there.
 #
 # This also gates the EXPERIMENTAL sub-kernel function tier
-# (`_cg_subcall_fn`/`_cg_cell_fn!`), which emits inner definitions of its own and
-# has not been ported to the by-value transport. That tier ships off.
+# (`_cg_subcall_fn`/`_cg_cell_fn!`), which emits inner definitions of its own;
+# where it is enabled they go through the same transport choice as the split's.
+# That tier ships off.
 _cg_split_supported() = VERSION >= v"1.12"
 
 # The name a by-value build gives the tuple of emitted sub-functions.
 const _CG_FNS = :_cgfns
 
-# TRANSPORT for the emitted sub-functions. There are two, and they emit the same
+# TRANSPORT for the emitted sub-functions. There are two, and they run the same
 # code — they differ only in how a sub-function reaches the body that calls it.
+# Emission always writes INNER DEFINITIONS; `_cg_split_transport` then picks the
+# transport for the finished generated function, and rewrites it into the
+# by-value form when that is the one picked.
 #
-#   INNER DEFINITION (Julia ≥ 1.12): the sub-function is an `@noinline function`
-#     written inside the generated body and called by name. Cheapest, and what
-#     the split shipped as, but it only works where RGF's rewrite of an inner
-#     definition into an opaque closure is typed — see `_cg_split_supported`.
+#   INNER DEFINITION: the sub-function is an `@noinline function` written inside
+#     the generated body and called by name. Only one generated function per
+#     section, which is the cheaper build for a small body, but it only works
+#     where RGF's rewrite of an inner definition into an opaque closure is typed
+#     — see `_cg_split_supported` — and the whole body, every sub-function in
+#     it, goes through type inference as ONE unit.
 #
-#   BY VALUE (Julia < 1.12, or `ESS_CODEGEN_SPLIT_TRANSPORT=value`): each
-#     sub-function is compiled as its OWN `RuntimeGeneratedFunction` and handed
-#     to the body at run time in a tuple, appended to the `tabs` argument; a call
-#     site is `_cgfns[k](…)` at a LITERAL `k`, so the callee is a concrete
-#     callable the compiler resolves statically — no closure is constructed, and
-#     nothing is boxed. The tuple is threaded into every sub-function that calls
-#     another, so nesting works to any depth.
+#   BY VALUE: each sub-function is compiled on its own, as a `_CGSubFn` (a
+#     generated function of this module, not an RGF — see there for why), and
+#     handed to the body at run time in a tuple, appended to the `tabs`
+#     argument; a call site is `_cgfns[k](…)` at a LITERAL `k`, so the callee is
+#     a concrete callable the compiler resolves statically — no closure is
+#     constructed, and nothing is boxed. The tuple is the last argument of every
+#     sub-function, so nesting works to any depth.
 #
-# The second exists so `compiler=:native` can split a body on EVERY supported
-# Julia. `native` is the tier that has to be universally available — no heavy
-# external dependency, and no version where an oversized kernel has nowhere to
-# go but the per-cell interpreter, which under the strict compiler is a refusal.
-# (`:interpreter` stays the simple oracle; `sympy`/`mtk` only take some
-# documents; `xla` needs heavy dependencies.) Both transports emit the SAME
-# partitioned expression, so a build is value-identical either way — which is
-# what the transport override is for: it makes the by-value path testable on a
-# Julia that would otherwise never take it.
-_cg_split_by_value() =
-    !_cg_split_supported() || get(ENV, "ESS_CODEGEN_SPLIT_TRANSPORT", "") == "value"
+# Which one a build takes (`_cg_carry_by_value`):
+#   - Julia < 1.12: by value, always (the inner definition boxes there).
+#   - `ESS_CODEGEN_SPLIT_TRANSPORT=value` / `=definition` forces one; that is
+#     the override, and what makes either path testable on any body.
+#   - Otherwise by size: by value when the generated function, inner
+#     definitions included, exceeds `_CG_BY_VALUE_MIN_NODES` emitted expression
+#     nodes (`_cg_expr_size`). Separate generated functions are inferred and
+#     optimised one at a time, so first-call compile memory and time follow the
+#     largest piece rather than the whole body; under the threshold the single
+#     generated function is kept, as it always was.
+#
+# The by-value transport is also what lets `compiler=:native` split a body on
+# EVERY supported Julia. `native` is the tier that has to be universally
+# available — no heavy external dependency, and no version where an oversized
+# kernel has nowhere to go but the per-cell interpreter, which under the strict
+# compiler is a refusal. Both transports run the SAME partitioned expression, so
+# a build is value-identical either way.
+
+# Emitted-node size of a generated function (inner definitions included) above
+# which its sub-functions are carried by value. A count of expression nodes, so
+# a build's transport is a function of the document alone. Chosen from first-call
+# measurements: every split section of the test suite sits well under it, and
+# the reseact transport section sits well over it (see the PR that set it).
+# A `Ref` so a test can lower it to reach the size-based choice on a small body.
+const _CG_BY_VALUE_MIN_NODES = Ref(100_000)
+
+_cg_split_transport_override() = get(ENV, "ESS_CODEGEN_SPLIT_TRANSPORT", "")
+
+# The transport the Julia version or the override fixes regardless of size:
+# `true` (by value), `false` (inner definitions), or `nothing` (decide by size).
+function _cg_fixed_transport()
+    _cg_split_supported() || return true
+    o = _cg_split_transport_override()
+    o == "value" && return true
+    o == "definition" && return false
+    return nothing
+end
+
+# Whether a generated function of `nodes` emitted nodes carries its
+# sub-functions by value (see the TRANSPORT note above).
+function _cg_carry_by_value(nodes::Integer)
+    fixed = _cg_fixed_transport()
+    return fixed === nothing ? nodes > _CG_BY_VALUE_MIN_NODES[] : fixed
+end
+
+# The same choice for the generated function `ex`. Its size is counted only
+# when nothing else decides, and only until it passes the threshold.
+function _cg_carry_by_value(ex::Expr)
+    fixed = _cg_fixed_transport()
+    fixed === nothing || return fixed
+    lim = _CG_BY_VALUE_MIN_NODES[]
+    return _cg_expr_size_upto(ex, lim) > lim
+end
+
+# `_cg_expr_size(ex)`, or any count above `lim` once the walk passes it.
+function _cg_expr_size_upto(ex, lim::Int, n::Int = 0)
+    n += 1
+    ex isa Expr || return n
+    for a in ex.args
+        n > lim && return n
+        n = _cg_expr_size_upto(a, lim, n)
+    end
+    return n
+end
+
+# `(name, params, body)` of an emitted inner definition — `@noinline function
+# name(params…) … end`, every parameter a plain name — or `nothing`.
+function _cg_inner_def(s)
+    s isa Expr || return nothing
+    if s.head === :macrocall && length(s.args) == 3 && s.args[1] === Symbol("@noinline")
+        s = s.args[3]
+    end
+    (s isa Expr && s.head === :function && length(s.args) == 2) || return nothing
+    sig = s.args[1]
+    (sig isa Expr && sig.head === :call && !isempty(sig.args)) || return nothing
+    fname = sig.args[1]
+    fname isa Symbol || return nothing
+    params = sig.args[2:end]
+    all(a -> a isa Symbol, params) || return nothing
+    return (fname, Symbol[a for a in params], s.args[2])
+end
+
+# Rewrite every call `name(args…)` of an inner definition in `idx` to the
+# by-value call `_cgfns[k](args…, _cgfns)`. `left` counts the names in `idx` met
+# anywhere other than a call head, which the rewrite cannot carry.
+function _cg_calls_by_value(ex, idx::Dict{Symbol, Int}, left::Base.RefValue{Int})
+    if ex isa Symbol
+        haskey(idx, ex) && (left[] += 1)
+        return ex
+    end
+    ex isa Expr || return ex
+    if ex.head === :call && !isempty(ex.args)
+        f = ex.args[1]
+        if f isa Symbol && haskey(idx, f)
+            return Expr(
+                :call, Expr(:ref, _CG_FNS, idx[f]),
+                Any[_cg_calls_by_value(a, idx, left) for a in @view(ex.args[2:end])]...,
+                _CG_FNS
+            )
+        end
+    end
+    return Expr(ex.head, Any[_cg_calls_by_value(a, idx, left) for a in ex.args]...)
+end
+
+# Choose the transport of a finished generated function `ex`, `function (…,
+# tabs, …) … end` whose body holds its sub-functions as top-level inner
+# definitions and whose `tabs` argument packs `ngrp` tab groups. Returns `(ex,
+# nothing)` to keep the inner definitions, or `(ex′, fns)`: `ex′` reads the
+# sub-function tuple from `tabs[ngrp + 1]` and calls `_cgfns[k]`, and `fns` are
+# the sub-functions' own definitions, in that tuple's order (`_cg_pack_fns`).
+function _cg_split_transport(ex::Expr, ngrp::Int)
+    body = ex.args[2]::Expr
+    defs = Tuple{Symbol, Vector{Symbol}, Any}[]
+    rest = Any[]
+    idx = Dict{Symbol, Int}()
+    for s in body.args
+        d = _cg_inner_def(s)
+        if d === nothing
+            push!(rest, s)
+        else
+            push!(defs, d)
+            idx[d[1]] = length(defs)
+        end
+    end
+    isempty(defs) && return (ex, nothing)
+    _cg_carry_by_value(ex) || return (ex, nothing)
+    left = Ref(0)
+    fns = Expr[
+        Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left))
+            for (_, params, fb) in defs
+    ]
+    stmts = Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])]
+    for s in rest
+        push!(stmts, _cg_calls_by_value(s, idx, left))
+    end
+    # The emitter only ever CALLS a sub-function; a bare reference would be left
+    # pointing at a definition the by-value form no longer has.
+    left[] == 0 || error("codegen: an emitted sub-function is referenced other than by a call")
+    _tally_cascade!(:cg_split_by_value)
+    return (Expr(:function, ex.args[1], Expr(:block, stmts...)), fns)
+end
+
+# A by-value sub-function: a callable whose call is a generated function of this
+# module, keyed by the CONTENT of its definition — `ID` is a digest of the
+# serialized `function (params…) body end` expression (`_cg_subfn_id`), so one
+# `ID` names one body, in every session, and a literal's type is part of the
+# content (`x^2` and `x^2.0` are different sub-functions).
+#
+# Why not a `RuntimeGeneratedFunction`. Every RGF of this module is called
+# through the one method RGF defines for it, so an RGF calling another RGF is,
+# to inference, that method calling itself; inference treats it as recursion
+# and widens the callee's signature, and the call is made through the generic
+# boxed calling convention — every argument heap-allocated, on every call. A
+# sub-function called through its own method is an ordinary static call.
+#
+# Where the generator finds the body. The instance holds its definition (`def`),
+# and the generator, which sees only the type, reads it from
+# `_CG_SUBFN_TABLE` — `ID` to a weak reference to that same `Expr`. Every way an
+# instance comes to exist puts its definition there first: built
+# (`_cg_subfns`), deserialized on another process (the `deserialize` method
+# below), or deep-copied (which returns the instance itself). So while an
+# instance can be called, the entry is live.
+#
+# Why that read is safe inside a generator, which may run during inference, on
+# any thread, any number of times. It takes no lock: the table is an immutable
+# snapshot that a registration replaces whole (copy, add, publish atomically),
+# so a reader sees one consistent `Dict` and never waits on a writer. And it is
+# pure in effect: an `ID` only ever maps to its own content, so every run of the
+# generator — in this session, or one whose result was cached in a precompile
+# image — produces the same body for the same `ID`. The one way a lookup can
+# fail is a call made with no instance alive, which cannot be a real call.
+struct _CGSubFn{ID}
+    def::Expr
+end
+
+mutable struct _CGSubFnTable
+    @atomic defs::Dict{UInt128, WeakRef}
+end
+const _CG_SUBFN_TABLE = _CGSubFnTable(Dict{UInt128, WeakRef}())
+# Serializes registrations against each other; never taken by a reader.
+const _CG_SUBFN_LOCK = ReentrantLock()
+
+# The content address of a sub-function definition: the first 128 bits of the
+# SHA-256 of its serialization, which records every literal's type and value
+# and every name by its text, so it is the same in every session.
+function _cg_subfn_id(def::Expr)
+    io = IOBuffer()
+    Serialization.serialize(io, def)
+    d = SHA.sha256(take!(io))
+    id = UInt128(0)
+    for i in 1:16
+        id = (id << 8) | d[i]
+    end
+    return id
+end
+
+# Register `defs` under `ids`; return, per entry, the `Expr` an instance must
+# hold — the one already registered for that `ID` when it is still alive (so
+# every instance of one `ID` keeps the same entry alive), else its own. Dead
+# entries are dropped while the snapshot is copied.
+function _cg_subfn_register!(ids::Vector{UInt128}, defs::Vector{Expr})
+    return lock(_CG_SUBFN_LOCK) do
+        old = @atomic :acquire _CG_SUBFN_TABLE.defs
+        new = Dict{UInt128, WeakRef}()
+        sizehint!(new, length(old) + length(ids))
+        for (k, w) in old
+            w.value === nothing || (new[k] = w)
+        end
+        live = Vector{Expr}(undef, length(ids))
+        for i in eachindex(ids)
+            w = get(new, ids[i], nothing)
+            v = w === nothing ? nothing : w.value
+            if v === nothing
+                new[ids[i]] = WeakRef(defs[i])
+                live[i] = defs[i]
+            else
+                live[i] = v::Expr
+            end
+        end
+        @atomic :release _CG_SUBFN_TABLE.defs = new
+        live
+    end
+end
+
+# The sub-functions of one build, as the tuple a body indexes.
+function _cg_subfns(defs::Vector{Expr})
+    ids = UInt128[_cg_subfn_id(d) for d in defs]
+    live = _cg_subfn_register!(ids, defs)
+    return Tuple(_CGSubFn{ids[i]}(live[i]) for i in eachindex(ids))
+end
+
+# The registered definition of `id`, or `nothing`. Lock-free (see `_CGSubFn`).
+function _cg_subfn_def(id::UInt128)
+    w = get(@atomic(:acquire, _CG_SUBFN_TABLE.defs), id, nothing)
+    return w === nothing ? nothing : w.value
+end
+
+# Another process's instance arrives with its definition and registers it here.
+function Serialization.deserialize(
+        s::Serialization.AbstractSerializer, ::Type{_CGSubFn{ID}}
+    ) where {ID}
+    def = Serialization.deserialize(s)::Expr
+    return _CGSubFn{ID}(only(_cg_subfn_register!(UInt128[ID], Expr[def])))
+end
+
+# A deep copy is the instance itself, as for an RGF or any other function; the
+# copy keeps the original's entry alive.
+Base.deepcopy_internal(f::_CGSubFn, ::IdDict) = f
+
+# The method's own argument and parameter names are not ones the emitter mints
+# (they hold a `#`), so no sub-function parameter or local can rebind them.
+@generated function (::_CGSubFn{var"##id"})(
+        var"##args"::Vararg{Any, var"##n"}
+    ) where {var"##id", var"##n"}
+    def = _cg_subfn_def(var"##id")
+    def === nothing && error("codegen: by-value sub-function $(var"##id") has no definition")
+    params = (def::Expr).args[1].args
+    length(params) == var"##n" ||
+        error("codegen: by-value sub-function $(var"##id") takes $(length(params)) arguments, called with $(var"##n")")
+    args = Symbol("##args")
+    return Expr(
+        :block,
+        # Compiled on its own, as the inner definition it replaces would be.
+        Expr(:meta, :noinline),
+        Any[:($(params[i]) = @inbounds $args[$i]) for i in 1:var"##n"]...,
+        def.args[2],
+    )
+end
+
+# The runtime `tabs` tuple, plus — in the by-value transport — the sub-function
+# tuple as one more element: a heterogeneous tuple of concrete callables, so a
+# call site reading it at a LITERAL index resolves its callee statically.
+_cg_pack_fns(tabpack::Tuple, ::Nothing) = tabpack
+_cg_pack_fns(tabpack::Tuple, fns::Vector{Expr}) = (tabpack..., _cg_subfns(fns))
 
 # Every Symbol referenced anywhere in `ex` (recursively). Used to compute the
 # exact set of outer-scope locals a chunk function must receive as arguments.
@@ -2723,12 +2991,7 @@ _cg_expr_size(ex) = ex isa Expr ? 1 + sum(_cg_expr_size, ex.args; init = 0)::Int
 function _cg_is_spill_call(ex)
     (ex isa Expr && ex.head === :call && !isempty(ex.args)) || return false
     f = ex.args[1]
-    f isa Symbol && return startswith(String(f::Symbol), "_cgh")
-    # By-value transport: the callee is `_cgfns[k]`, not a name. Recognising it
-    # is what keeps `_cg_partition!` terminating — re-spilling a call wraps one
-    # call in another of the same size.
-    return f isa Expr && (f::Expr).head === :ref && !isempty((f::Expr).args) &&
-        (f::Expr).args[1] === _CG_FNS
+    return f isa Symbol && startswith(String(f::Symbol), "_cgh")
 end
 
 # A head that introduces its own scope / bindings (a `_NK_REDUCE`/subcall body is
@@ -2788,12 +3051,6 @@ function _cg_spill!(ctx::_CGCtx, sub)
     extra = sort!([s for s in syms if _cg_is_passable(s) && !(s in bound)]; by = string)
     params = Symbol[:u, :p, :t]
     append!(params, extra)
-    # By-value transport: the helper is its own generated function, so the tuple
-    # of helpers has to travel INTO it — a helper may call another. It is the
-    # last parameter, and it is added unconditionally so the parameter list is a
-    # function of the body alone, which is what the dedup key assumes.
-    byval = _cg_split_by_value()
-    (byval && !(_CG_FNS in params)) && push!(params, _CG_FNS)
     # Helper dedup: an identical body (same code ⇒ same params, since params are
     # exactly the passable names it references) reuses the first helper minted for
     # it. Only the CALL is re-emitted; the compiled function is shared. Value-exact
@@ -2812,21 +3069,6 @@ function _cg_spill!(ctx::_CGCtx, sub)
     stmts = Any[]
     (:_cgT in syms) && push!(stmts, :(local _cgT = _rhs_value_type(u, p, t)))
     push!(stmts, Expr(:macrocall, Symbol("@inbounds"), ln, :(return $sub)))
-    if byval
-        # An ARGUMENT-TUPLE definition, compiled on its own at the end of the
-        # build; `ctx.helpers` holds it at the position its call sites name, and
-        # the decline rollback truncates that vector, so a declined kernel's
-        # helpers and the calls to them disappear together.
-        push!(
-            ctx.helpers, Expr(
-                :function, Expr(:tuple, params...),
-                Expr(:block, stmts...)
-            )
-        )
-        callee = Expr(:ref, _CG_FNS, length(ctx.helpers))
-        dedup && (ctx.helper_dedup[key] = callee)
-        return Expr(:call, callee, params...)
-    end
     fname = _cg_name(ctx, "h")
     fdef = Expr(:function, Expr(:call, fname, params...), Expr(:block, stmts...))
     push!(ctx.helpers, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
@@ -2855,10 +3097,7 @@ function _cg_partition!(ctx::_CGCtx, ex, cap::Int)
     while total > cap
         bi = 0; bs = 0
         for i in eachindex(ex.args)
-            # The CALLEE position of a call is not a value to hoist. Under the
-            # inner-definition transport it is a bare name and could never be
-            # chosen anyway; under the by-value one it is `_cgfns[k]`, and
-            # spilling it would mint a helper returning a FUNCTION.
+            # The CALLEE position of a call is not a value to hoist.
             (iscall && i == 1) && continue
             a = ex.args[i]
             # Only a genuine sub-expression is worth spilling; an already-spilled
@@ -2888,7 +3127,7 @@ function _cg_bound_body!(ctx::_CGCtx, ex)
     cap <= 0 && return ex
     _cg_expr_size(ex) <= cap && return ex
     # Oversized: partition it. Which TRANSPORT carries the pieces depends on the
-    # Julia (`_cg_split_by_value`), but every supported Julia has one, so an
+    # Julia and the body's size (`_cg_carry_by_value`), but every supported Julia has one, so an
     # oversized body is compiled rather than declined to the per-cell
     # interpreter — which under a strict compiler is a refusal, and would make
     # `native` unavailable on Julia < 1.12 for exactly the largest kernels.
@@ -3028,10 +3267,6 @@ function _build_codegen_rhs(
     # sym-collection below forwards it into each `@noinline` sub-function.
     push!(outer_passed, :_cgci)
     push!(outer_passed, :_cgnc)
-    # The helper tuple is an outer local in the by-value transport, so a chunk
-    # that calls a helper receives it like any other outer name.
-    byval = _cg_split_by_value()
-    byval && push!(outer_passed, _CG_FNS)
 
     # Partition the loop nests into chunks capped by emitted-node count. A
     # non-positive cap means "one chunk".
@@ -3053,10 +3288,9 @@ function _build_codegen_rhs(
     # its loops go straight into the kernel function instead, with no
     # sub-function at all.
     #
-    # A genuine split (several chunks) emits one sub-function per chunk, carried
-    # by whichever transport this Julia uses (`_cg_split_by_value`): an inner
-    # `@noinline` definition called by name, or its own generated function
-    # called out of the helper tuple.
+    # A genuine split (several chunks) emits one sub-function per chunk, as an
+    # inner `@noinline` definition called by name; `_cg_split_transport` below
+    # decides whether it stays one or becomes its own generated function.
     fndefs = Any[]; callstmts = Any[]
     if length(chunks) == 1
         push!(
@@ -3076,39 +3310,19 @@ function _build_codegen_rhs(
                 Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, chunk...)),
                 :(return nothing)
             )
-            if byval
-                vparams = Symbol[:du, :u, :p, :t]
-                append!(vparams, passed)
-                push!(ctx.helpers, Expr(:function, Expr(:tuple, vparams...), fbody))
-                push!(
-                    callstmts, Expr(
-                        :call, Expr(:ref, _CG_FNS, length(ctx.helpers)),
-                        vparams...
-                    )
-                )
-            else
-                fname = Symbol("_cgchunk_", ci)
-                fdef = Expr(
-                    :function, Expr(:call, fname, :du, :u, :p, :t, passed...),
-                    fbody
-                )
-                push!(fndefs, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
-                push!(callstmts, Expr(:call, fname, :du, :u, :p, :t, passed...))
-            end
+            fname = Symbol("_cgchunk_", ci)
+            fdef = Expr(
+                :function, Expr(:call, fname, :du, :u, :p, :t, passed...),
+                fbody
+            )
+            push!(fndefs, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
+            push!(callstmts, Expr(:call, fname, :du, :u, :p, :t, passed...))
         end
     end
 
     # `tabs` is now a tuple of the by-type containers; hoist each to its `_cggrpG`
     # local (a handful of statements, not one per object).
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    # By-value transport: every emitted sub-function is compiled on its own and
-    # arrives in a tuple appended to `tabs`, hoisted to a local FIRST so the
-    # invariant prologue, the chunk sub-functions and the helpers themselves can
-    # all call out of it. Inner-definition transport splices the definitions in
-    # instead, exactly as before.
-    fnstmts = byval && !isempty(ctx.helpers) ?
-        Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
-    helperdefs = byval ? Any[] : ctx.helpers
     # The kernels run in an alias scope with `u` read-only (`_cg_readonly`): no
     # `du` store aliases a `u` load. The section already rests on that — no cell
     # reads a slot any cell of the section writes, which is what lets the
@@ -3136,17 +3350,19 @@ function _build_codegen_rhs(
     body = Expr(
         :block,
         grpstmts...,
-        fnstmts...,
         :(local _cgT = _rhs_value_type(u, p, t)),
         # Intra-kernel split helpers (ess-iip-split): defined FIRST so the
         # invariant prologue and every chunk sub-function can call them by
         # name. Each is `@noinline`, params-only (captures nothing).
-        helperdefs...,
+        ctx.helpers...,
         fndefs...,
         kernels,
         :(return nothing)
     )
     ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
+    # By value, every sub-function becomes its own generated function, arriving
+    # in a tuple appended to `tabs` (`_cg_split_transport`).
+    ex, fns = _cg_split_transport(ex, ngrp)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
         @__MODULE__, @__MODULE__, ex
     )
@@ -3157,20 +3373,7 @@ function _build_codegen_rhs(
     # The runtime `tabs` argument: one HOMOGENEOUS container per group, converted
     # to the group's concrete element type (`Vector{Vector{Int}}`, …), packed in a
     # small tuple. `_cggrpG[pos]` then reads a concrete-element container.
-    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
-    # …plus, in the by-value transport, the sub-function tuple as one more
-    # element. It is a heterogeneous tuple of concrete callables, so a call site
-    # reading it at a LITERAL index resolves its callee statically.
-    if byval && !isempty(ctx.helpers)
-        tabpack = (
-            tabpack...,
-            Tuple(
-                RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-                    @__MODULE__, @__MODULE__, h
-                ) for h in ctx.helpers
-            )
-        )
-    end
+    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
     ntabs = sum(length, ctx.tab_objs; init = 0)
     return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint, work, rmw)
 end

@@ -34,6 +34,8 @@ using LinearAlgebra   # wall2 Phase D: BLAS `mul!` accelerator for linear mat-ve
 # compiled sections whenever Julia runs with more than one thread.
 using Polyester: Polyester
 using RuntimeGeneratedFunctions
+using SHA: SHA
+using Serialization: Serialization
 using Tullio
 
 # The tree-walk codegen tier (tree_walk/codegen_kernel.jl) compiles emitted

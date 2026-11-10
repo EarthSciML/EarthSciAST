@@ -309,10 +309,6 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer =
     ln = LineNumberNode(0, Symbol("ess-scan-fused"))
     ngrp = length(ctx.tab_types)
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    byval = _cg_split_by_value()
-    fnstmts = byval && !isempty(ctx.helpers) ?
-        Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
-    helperdefs = byval ? Any[] : ctx.helpers
     # `u` read-only in an alias scope, as in the kernel section: the term
     # reads no slot the scan writes (a level's `(ue, ue)` call included).
     run = Expr(
@@ -333,25 +329,16 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer =
         )
     )
     body = Expr(
-        :block, grpstmts..., fnstmts...,
+        :block, grpstmts...,
         :(local _cgT = _rhs_value_type(u, p, t)),
-        helperdefs...,
+        ctx.helpers...,
         run,
         :(return nothing)
     )
     ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
+    ex, fns = _cg_split_transport(ex, ngrp)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
-    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
-    if byval && !isempty(ctx.helpers)
-        tabpack = (
-            tabpack...,
-            Tuple(
-                RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-                    @__MODULE__, @__MODULE__, h
-                ) for h in ctx.helpers
-            )
-        )
-    end
+    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
     nlanes = div(length(S.slots), S.len)
     _tally_cascade!(:scan_fused)
     if consumer !== nothing
@@ -643,10 +630,6 @@ function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer 
     ln = LineNumberNode(0, Symbol("ess-scan-column"))
     ngrp = length(ctx.tab_types)
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    byval = _cg_split_by_value()
-    fnstmts = byval && !isempty(ctx.helpers) ?
-        Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
-    helperdefs = byval ? Any[] : ctx.helpers
     run = Expr(
         :macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
         Expr(
@@ -665,25 +648,16 @@ function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer 
         )
     )
     body = Expr(
-        :block, grpstmts..., fnstmts...,
+        :block, grpstmts...,
         :(local _cgT = _rhs_value_type(u, p, t)),
-        helperdefs...,
+        ctx.helpers...,
         run,
         :(return nothing)
     )
     ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
+    ex, fns = _cg_split_transport(ex, ngrp)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
-    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
-    if byval && !isempty(ctx.helpers)
-        tabpack = (
-            tabpack...,
-            Tuple(
-                RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-                    @__MODULE__, @__MODULE__, h
-                ) for h in ctx.helpers
-            )
-        )
-    end
+    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
     _tally_cascade!(:scan_colscan)
     if consumer !== nothing
         _tally_cascade!(:scan_colscan_consumer)
