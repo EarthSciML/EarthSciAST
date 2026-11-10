@@ -30,7 +30,7 @@ describe('Structural validation integration', () => {
 
   it('should validate a correct model', () => {
     const validData = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: {
         name: 'ValidTest',
       },
@@ -60,7 +60,7 @@ describe('Structural validation integration', () => {
   it('should detect undefined species in reaction system', async () => {
     // Read a reaction system file and modify it to have undefined species
     const validReactionData = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: {
         name: 'InvalidReactionTest',
       },

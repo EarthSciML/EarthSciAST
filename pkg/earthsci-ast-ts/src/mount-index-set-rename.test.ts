@@ -104,7 +104,7 @@ describe('mount-edge index_set_rename (esm-spec §4.7)', () => {
     writeFileSync(
       path.join(dir, 'leaf.esm'),
       JSON.stringify({
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: { name: 'leaf' },
         models: {
           Leaf: {
@@ -126,7 +126,7 @@ describe('mount-edge index_set_rename (esm-spec §4.7)', () => {
       }),
     )
     const host = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'host' },
       models: { Mounted: { ref: './leaf.esm' } },
     } as unknown as EsmFile
@@ -171,7 +171,7 @@ describe('mount-edge index_set_rename (esm-spec §4.7)', () => {
   it('reports a mount cycle that only exists across the chain', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'esm-mount-cycle-'))
     const doc = (name: string, ref: string) => ({
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name },
       models: { M: { ref } },
     })
@@ -267,7 +267,7 @@ describe('the raised floor, at the seam the §4.7 inline/merge reorder needs it'
       readFileSync(path.join(TESTS, 'valid/mount_rename_atm_column.esm'), 'utf8'),
     ) as Record<string, unknown>
     const inlined: Record<string, unknown> = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: {
         name: 'inlined_assembly',
         description: 'a 1.0.0 assembly that CONTAINS faq only because a mount was inlined into it',
@@ -424,7 +424,7 @@ describe('a top-level reaction_systems.<k> {ref} runs the edge pipeline (esm-spe
   writeFileSync(
     path.join(dir, 'leaf.esm'),
     JSON.stringify({
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'rs_leaf', description: 'probe' },
       metaparameters: { N: { type: 'integer', default: 2 } },
       index_sets: { x: { kind: 'interval', size: 'N' } },
@@ -447,7 +447,7 @@ describe('a top-level reaction_systems.<k> {ref} runs the edge pipeline (esm-spe
   const load = (edge: Record<string, unknown>): Record<string, { size?: unknown }> => {
     const file = loadString(
       JSON.stringify({
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: { name: 'rs_host', description: 'probe' },
         reaction_systems: { Chem: { ref: './leaf.esm', ...edge } },
       }),
@@ -476,7 +476,7 @@ describe('index_set_rename leaves an axis spelled like an Object.prototype key a
     writeFileSync(
       path.join(dir, 'leaf.esm'),
       JSON.stringify({
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: { name: 'proto_leaf', description: 'probe' },
         index_sets: {
           lev: { kind: 'interval', size: 3 },
@@ -495,7 +495,7 @@ describe('index_set_rename leaves an axis spelled like an Object.prototype key a
     )
     const file = loadString(
       JSON.stringify({
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: { name: 'proto_host', description: 'probe' },
         models: { Col: { ref: './leaf.esm', index_set_rename: { lev: 'soil_lev' } } },
       }),

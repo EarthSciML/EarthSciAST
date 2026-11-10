@@ -96,7 +96,7 @@ describe('resolveSubsystemRefs', () => {
     // unresolved-ref diagnostic then reports, rather than the reference
     // silently binding to ingest configuration.
     const refContent = JSON.stringify({
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'met' },
       data_sources: {
         Weather: {

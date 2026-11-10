@@ -336,7 +336,7 @@ describe('coupling-library refs resolve against roles, not systems', () => {
   // resolution with a check against `coupling_roles` at every §10.10.2
   // occurrence site.
   const lib = {
-    esm: '1.1.0',
+    esm: '2.0.0',
     metadata: { name: 'RoleScopedLib' },
     coupling_roles: {
       Source: { description: 'provides x' },

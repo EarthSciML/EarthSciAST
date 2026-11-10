@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { loadPath, loadString } from './parse.js'
+import { loadPath, loadString, prepareDocumentOps } from './parse.js'
 import { toJson } from './serialize.js'
 import { resolveSubsystemRefsSync } from './ref-loading.js'
 import { fixturesDir } from './test-helpers.js'
@@ -119,9 +119,12 @@ describe('deprecated op alias: aggregate → faq', () => {
   it('accepts the alias below 1.1.0 and raises the declared version', () => {
     // `aggregate` IS the pre-1.1.0 spelling, so the gate must not catch it: it
     // reads the AUTHORED form, and normalization raises the version with it.
+    // A 1.x root is refused by the major-version check after this step, so the
+    // wire boundary is driven directly.
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const f = loadPath(atVersion('aliased.esm', '1.0.0')) as any
-    expect(f.esm).toBe('1.1.0')
+    const doc = JSON.parse(fs.readFileSync(atVersion('aliased.esm', '1.0.0'), 'utf-8'))
+    expect(prepareDocumentOps(doc)).toBe(2)
+    expect(doc.esm).toBe('1.1.0')
   })
 
   it('does not gate a 1.0.0 parent that MOUNTS a `faq`-using child', () => {

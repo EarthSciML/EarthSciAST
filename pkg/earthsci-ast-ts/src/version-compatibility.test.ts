@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   loadString,
+  loadDocument,
   migrate,
   canMigrate,
   MigrationError,
@@ -11,13 +12,17 @@ import {
 import { readFixture } from './test-helpers.js'
 
 /**
- * Version gating for esm 1.0.0.
+ * Version gating for esm 2.0.0.
  *
- * The library implements major version 1, so a DIFFERENT major is rejected
- * outright (`ParseError`) and a newer MINOR loads with a warning. 1.0.0 is a
- * clean break with no deprecation path, which puts every 0.x document on the
- * rejected side of that line — the polarity of this whole suite is inverted
- * from its 0.x form, where major 1 was the thing being refused.
+ * The library implements major version 2, so a DIFFERENT major is rejected
+ * outright (`ParseError`) and a newer MINOR loads with a warning. 1.0.0 and
+ * 2.0.0 are both breaks: a 0.x or 1.x document is on the rejected side of the
+ * line. A 1.x document that uses none of what 2.0.0 removed is carried across by
+ * `migrate()`, which relabels it; one that does is refused with `removed_op`.
+ *
+ * The suite reads the current major from `SCHEMA_VERSION` rather than spelling
+ * it, so it states the same rules whichever major the embedded schema declares;
+ * only the literal pin at the end names 2.0.0.
  *
  * Most cases apply the version under test to a base document IN MEMORY rather
  * than reading a per-version fixture: the gate is a function of the version
@@ -35,6 +40,8 @@ describe('Version Compatibility', () => {
 
   /** The base document re-stamped with `version`. */
   const atVersion = (version: string) => ({ ...baseDocument(), esm: version })
+
+  const MAJOR = Number(SCHEMA_VERSION.split('.')[0])
 
   // Capture console.warn output around a callback
   const captureWarnings = <T>(fn: () => T): { result: T; warnings: string[] } => {
@@ -58,34 +65,30 @@ describe('Version Compatibility', () => {
       expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
     })
 
-    it('loads the 1.0.0 baseline fixture as committed, without warnings', () => {
-      const fixture = JSON.parse(readFixture('version_compatibility', 'version_1_0_0_baseline.esm'))
-      const { result, warnings } = captureWarnings(() => loadString(fixture))
+    it('loads the first release of the current major without warnings', () => {
+      const { result, warnings } = captureWarnings(() => loadString(atVersion(`${MAJOR}.0.0`)))
 
-      expect(result.esm).toBe('1.0.0')
-      expect(result.metadata.name).toBe('Version_1_0_0_Baseline')
+      expect(result.esm).toBe(`${MAJOR}.0.0`)
       expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
     })
 
     it('loads a newer patch on the same minor without warnings', () => {
-      const fixture = JSON.parse(
-        readFixture('version_compatibility', 'version_1_0_5_patch_upgrade.esm'),
-      )
-      const { result, warnings } = captureWarnings(() => loadString(fixture))
+      const { result, warnings } = captureWarnings(() => loadString(atVersion(`${MAJOR}.0.5`)))
 
-      expect(result.esm).toBe('1.0.5')
+      expect(result.esm).toBe(`${MAJOR}.0.5`)
       expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
     })
   })
 
   describe('Forward Compatibility', () => {
     it('warns when loading a newer minor version', () => {
-      const { result, warnings } = captureWarnings(() => loadString(atVersion('1.10.0')))
+      const newer = `${MAJOR}.10.0`
+      const { result, warnings } = captureWarnings(() => loadString(atVersion(newer)))
 
-      expect(result.esm).toBe('1.10.0')
+      expect(result.esm).toBe(newer)
       expect(
         warnings.some((w) =>
-          w.includes(`1.10.0 is newer than the current library version ${SCHEMA_VERSION}`),
+          w.includes(`${newer} is newer than the current library version ${SCHEMA_VERSION}`),
         ),
       ).toBe(true)
     })
@@ -96,7 +99,10 @@ describe('Version Compatibility', () => {
     // saying so, with `version_1_2_0_with_unknown_fields.esm` pinning it in the
     // shared corpus. What this asserts is the behavior the five bindings share.
     it('does not weaken schema validation for newer minor versions', () => {
-      const withUnknownField = { ...atVersion('1.10.0'), definitely_not_a_schema_field: true }
+      const withUnknownField = {
+        ...atVersion(`${MAJOR}.10.0`),
+        definitely_not_a_schema_field: true,
+      }
 
       const { result } = captureWarnings(() =>
         (() => {
@@ -121,8 +127,17 @@ describe('Version Compatibility', () => {
       }
     })
 
+    it.runIf(MAJOR === 2)('rejects the 1.x line outright', () => {
+      for (const version of ['1.0.0', '1.0.5', '1.1.0', '1.3.0']) {
+        expect(() => loadString(atVersion(version))).toThrow('Unsupported major version 1')
+      }
+    })
+
     it('rejects a newer major version', () => {
-      expect(() => loadString(atVersion('2.5.1'))).toThrow('Unsupported major version 2')
+      const next = MAJOR + 1
+      expect(() => loadString(atVersion(`${next}.5.1`))).toThrow(
+        `Unsupported major version ${next}`,
+      )
       expect(() => loadString(atVersion('12.34.56'))).toThrow('Unsupported major version 12')
     })
   })
@@ -142,10 +157,11 @@ describe('Version Compatibility', () => {
   })
 
   describe('Migration', () => {
-    // A migration is a pure version-MARKER bump, sound only along an additive
-    // line. Nothing crosses the 1.0.0 boundary: the variable-model collapse,
-    // the observed-expression relocation and the data_sources rename all
-    // RESHAPE the document, so a 0.x source has no supported target at all
+    // A migration is a pure version-MARKER bump, sound along an additive line
+    // and, for a document that uses none of the removed constructs, across the
+    // 2.0.0 break. Nothing crosses the 1.0.0 boundary: the variable-model
+    // collapse, the observed-expression relocation and the data_sources rename
+    // all RESHAPE the document, so a 0.x source has no supported target at all
     // rather than a bump that would leave a file claiming 1.0.0 while still
     // carrying 0.x shapes.
     it('offers no migration path out of the 0.x line', () => {
@@ -154,24 +170,25 @@ describe('Version Compatibility', () => {
       expect(canMigrate('0.9.0', '1.0.0')).toBe(false)
     })
 
-    it('canMigrate reports the additive-line bump to the current version', () => {
+    it.runIf(MAJOR === 2)('canMigrate reports the 1.x relabel to the current version', () => {
       expect(canMigrate('1.0.0', SCHEMA_VERSION)).toBe(true)
       // Only the CURRENT version is offered as a target, never an arbitrary
       // intermediate one.
       expect(canMigrate('1.0.0', '1.0.1')).toBe(false)
     })
 
-    it('migrate bumps the version marker for a supported step', () => {
+    it.runIf(MAJOR === 2)('migrate relabels a 1.x document, which then loads', () => {
       const source = atVersion('1.0.0')
 
       const migrated = migrate(source, SCHEMA_VERSION)
       expect(migrated.esm).toBe(SCHEMA_VERSION)
       // Input is not mutated
       expect(source.esm).toBe('1.0.0')
+      expect(loadDocument(migrated).esm).toBe(SCHEMA_VERSION)
     })
 
     it('migrate throws for unsupported version pairs', () => {
-      expect(() => migrate(atVersion('1.0.0'), '2.0.0')).toThrow(MigrationError)
+      expect(() => migrate(atVersion('1.0.0'), '3.0.0')).toThrow(MigrationError)
       expect(() => migrate(atVersion('0.9.0'), SCHEMA_VERSION)).toThrow(MigrationError)
     })
   })
@@ -184,13 +201,14 @@ describe('Version Compatibility', () => {
     // test asserting lockstep encoded that coincidence as a rule -- which broke
     // the moment the bindings were released as 0.1.0 against the 1.0.0 format.
     it('exposes the schema version, derived from the embedded schema $id', () => {
-      // Moved 1.2.0 -> 1.3.0 with `solver.external` and `solver.time_span`
-      // (esm-spec §2.2.6, §2.2.7).
+      // Moved 1.3.0 -> 2.0.0 with the removal of `fn`, `function_tables` /
+      // `table_lookup`, `skolem`, `rank`, `argmin`, `argmax` and the geometry
+      // ops.
       // The literal is the point of the test: SCHEMA_VERSION is DERIVED from the
       // embedded schema `$id`, so this pins that the derivation still reads the
       // schema rather than a stale copy, and it is expected to be updated by
       // hand on each format bump.
-      expect(SCHEMA_VERSION).toBe('1.3.0')
+      expect(SCHEMA_VERSION).toBe('2.0.0')
     })
 
     it('exposes the package version separately, under its own name', () => {

@@ -70,7 +70,7 @@ describe('units_dimensionless_literal_mismatch (esm-spec §4.8.6)', () => {
 
 describe('the warning pass and validity', () => {
   const doc = (models: unknown) =>
-    JSON.stringify({ esm: '1.3.0', metadata: { name: 'T', authors: ['T'] }, models })
+    JSON.stringify({ esm: '2.0.0', metadata: { name: 'T', authors: ['T'] }, models })
 
   afterEach(() => {
     vi.doUnmock('./units.js')

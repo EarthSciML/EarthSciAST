@@ -591,8 +591,8 @@ describe('edit', () => {
     it('merge omits collections that neither input contributes', () => {
       // Deliberately schema-incomplete fixtures: only esm/metadata, no models,
       // reaction_systems, data_sources, or coupling.
-      const a = { esm: '1.0.0', metadata: { name: 'a' } } as unknown as EsmFile
-      const b = { esm: '1.0.0', metadata: { name: 'b' } } as unknown as EsmFile
+      const a = { esm: '2.0.0', metadata: { name: 'a' } } as unknown as EsmFile
+      const b = { esm: '2.0.0', metadata: { name: 'b' } } as unknown as EsmFile
 
       const result = merge(a, b)
 

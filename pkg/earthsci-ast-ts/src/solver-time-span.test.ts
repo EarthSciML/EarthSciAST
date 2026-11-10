@@ -18,6 +18,7 @@ import {
   toJson,
 } from './index.js'
 import { ERROR_CODES } from './errors.js'
+import { rejectRootLoadGates } from './parse.js'
 import { REPO_ROOT } from './test-helpers.js'
 import type { EsmFile } from './types.js'
 
@@ -140,23 +141,29 @@ describe('solver.time_span load gates', () => {
     ],
     // … and the `${` refusal precedes the interval check.
     [
-      '1.3.0',
+      '2.0.0',
       '{"external":"${X}","time_span":{"start":1,"end":0}}',
       ERROR_CODES.SOLVER_EXTERNAL_UNRESOLVED,
     ],
-    ['1.3.0', '{"time_span":{"start":1,"end":0}}', ERROR_CODES.SOLVER_TIME_SPAN_INVALID],
+    ['2.0.0', '{"time_span":{"start":1,"end":0}}', ERROR_CODES.SOLVER_TIME_SPAN_INVALID],
     // Interval check runs before schema validation.
-    ['1.3.0', '{"time_span":{"start":1,"end":0},"bogus":1}', ERROR_CODES.SOLVER_TIME_SPAN_INVALID],
+    ['2.0.0', '{"time_span":{"start":1,"end":0},"bogus":1}', ERROR_CODES.SOLVER_TIME_SPAN_INVALID],
     // A bound with no schema-valid form is the schema's to report.
-    ['1.3.0', '{"time_span":{"start":"yesterday","end":0}}', 'schema_validation_failed'],
-    ['1.3.0', '{"time_span":{"start":0}}', 'schema_validation_failed'],
-    ['1.3.0', '{"time_span":{"start":0,"end":1}}', null],
+    ['2.0.0', '{"time_span":{"start":"yesterday","end":0}}', 'schema_validation_failed'],
+    ['2.0.0', '{"time_span":{"start":0}}', 'schema_validation_failed'],
+    ['2.0.0', '{"time_span":{"start":0,"end":1}}', null],
     // A number past binary64 parses to Infinity and is refused, not skipped.
-    ['1.3.0', '{"time_span":{"start":1e400,"end":1e400}}', ERROR_CODES.SOLVER_TIME_SPAN_INVALID],
-    ['1.3.0', '{"time_span":{"start":0,"end":1e400}}', ERROR_CODES.SOLVER_TIME_SPAN_INVALID],
+    ['2.0.0', '{"time_span":{"start":1e400,"end":1e400}}', ERROR_CODES.SOLVER_TIME_SPAN_INVALID],
+    ['2.0.0', '{"time_span":{"start":0,"end":1e400}}', ERROR_CODES.SOLVER_TIME_SPAN_INVALID],
     ['1.2.0', '{"reltol":1e-6}', null],
   ])('esm %s, solver %s -> %s', (esm, solver, want) => {
-    const got = codeOf(() => loadString(doc(esm, solver)))
+    const got = codeOf(() =>
+      // A 1.x root is refused by the major-version check before any gate runs,
+      // so the 1.x rows drive the gates themselves.
+      esm.startsWith('1.')
+        ? rejectRootLoadGates(JSON.parse(doc(esm, solver)))
+        : loadString(doc(esm, solver)),
+    )
     if (want === 'schema_validation_failed') {
       expect(got).not.toBeNull()
       expect(got).not.toBe(ERROR_CODES.SOLVER_TIME_SPAN_INVALID)
@@ -174,10 +181,10 @@ describe('solver.time_span load gates', () => {
   it('names the start origin field when it is unreadable', () => {
     const domain = '"domain":{"temporal":{"start":"2019-07-01T25:00:00Z"}},'
     const ts = '{"time_span":{"start":"2019-07-01T00:00:00Z","end":"2019-07-02T00:00:00Z"}}'
-    expect(() => loadString(doc('1.3.0', ts, domain))).toThrow(/\/domain\/temporal\/start/)
+    expect(() => loadString(doc('2.0.0', ts, domain))).toThrow(/\/domain\/temporal\/start/)
     // A number-only interval never reads the origin.
     expect(
-      codeOf(() => loadString(doc('1.3.0', '{"time_span":{"start":0,"end":1}}', domain))),
+      codeOf(() => loadString(doc('2.0.0', '{"time_span":{"start":0,"end":1}}', domain))),
     ).not.toBe(ERROR_CODES.SOLVER_TIME_SPAN_INVALID)
   })
 
@@ -197,7 +204,7 @@ describe('solver.time_span load gates', () => {
 describe('resolveTimeSpan on a document built in memory', () => {
   const inMemory = (time_span?: unknown, temporal?: unknown) =>
     ({
-      esm: '1.3.0',
+      esm: '2.0.0',
       metadata: { name: 'T' },
       ...(time_span !== undefined ? { solver: { time_span } } : {}),
       ...(temporal !== undefined ? { domain: { temporal } } : {}),

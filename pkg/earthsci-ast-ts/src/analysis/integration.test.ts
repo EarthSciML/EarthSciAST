@@ -172,7 +172,7 @@ describe('Analysis Integration Tests', () => {
 
   it('should handle complex ESM file analysis', () => {
     const esmFile: EsmFile = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: {
         name: 'Test System',
         description: 'Integration test system',

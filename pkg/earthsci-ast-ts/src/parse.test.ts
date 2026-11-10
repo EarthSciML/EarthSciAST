@@ -13,7 +13,7 @@ import type { Model } from './types.js'
 
 describe('Parse and Serialize', () => {
   const validMinimalEsm = {
-    esm: '1.0.0',
+    esm: '2.0.0',
     metadata: {
       name: 'test-model',
     },
@@ -30,13 +30,13 @@ describe('Parse and Serialize', () => {
   describe('loadString()', () => {
     it('should parse valid JSON string', () => {
       const result = loadString(validMinimalEsmJson)
-      expect(result.esm).toBe('1.0.0')
+      expect(result.esm).toBe('2.0.0')
       expect(result.metadata.name).toBe('test-model')
     })
 
     it('should accept pre-parsed object', () => {
       const result = loadDocument(validMinimalEsm)
-      expect(result.esm).toBe('1.0.0')
+      expect(result.esm).toBe('2.0.0')
       expect(result.metadata.name).toBe('test-model')
     })
 
@@ -47,7 +47,7 @@ describe('Parse and Serialize', () => {
     })
 
     it('should throw SchemaValidationError on missing required fields', () => {
-      const invalid = { esm: '1.0.0' } // missing metadata and models/reaction_systems
+      const invalid = { esm: '2.0.0' } // missing metadata and models/reaction_systems
       expect(() => {
         loadDocument(invalid)
       }).toThrow(SchemaValidationError)
@@ -66,15 +66,15 @@ describe('Parse and Serialize', () => {
     it('should loadString forward-compatible minor version (0.2.0) without error', () => {
       const forwardCompat = {
         ...validMinimalEsm,
-        esm: '1.0.0',
+        esm: '2.0.0',
       }
       const result = loadDocument(forwardCompat)
-      expect(result.esm).toBe('1.0.0')
+      expect(result.esm).toBe('2.0.0')
     })
 
     it('should handle Expression union types', () => {
       const esmWithExpression = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: { name: 'expr-test' },
         models: {
           test: {
@@ -142,7 +142,7 @@ describe('Parse and Serialize', () => {
 
     it('should handle CouplingEntry discriminated unions', () => {
       const esmWithCoupling = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: { name: 'coupling-test' },
         models: {
           model1: { variables: {}, equations: [] },
@@ -170,7 +170,7 @@ describe('Parse and Serialize', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
         const badDimensions = {
-          esm: '1.0.0',
+          esm: '2.0.0',
           metadata: { name: 'bad-dims' },
           models: {
             mech: {
@@ -200,7 +200,7 @@ describe('Parse and Serialize', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
         const goodDimensions = {
-          esm: '1.0.0',
+          esm: '2.0.0',
           metadata: { name: 'good-dims' },
           models: {
             mech: {
@@ -231,7 +231,7 @@ describe('Parse and Serialize', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
         const badDimensions = {
-          esm: '1.0.0',
+          esm: '2.0.0',
           metadata: { name: 'located' },
           models: {
             mech: {
@@ -262,7 +262,7 @@ describe('Parse and Serialize', () => {
 
     describe('canonical-mode loading (gt-4cx3)', () => {
       const canonicalEsmJson = JSON.stringify({
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: { name: 'canonical' },
         models: {
           m: {
@@ -297,7 +297,7 @@ describe('Parse and Serialize', () => {
       })
 
       it('canonical mode still validates against the schema', () => {
-        const invalid = '{"esm": "1.0.0","metadata":{"name":"x"}}' // missing models/reaction_systems
+        const invalid = '{"esm": "2.0.0","metadata":{"name":"x"}}' // missing models/reaction_systems
         expect(() => loadString(invalid, { canonical: true })).toThrow(SchemaValidationError)
       })
 
@@ -316,7 +316,7 @@ describe('Parse and Serialize', () => {
 
     it('should handle optional vs required fields correctly', () => {
       const esmWithOptionalFields = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: {
           name: 'optional-test',
           description: 'A test model',
@@ -343,7 +343,7 @@ describe('Parse and Serialize', () => {
 
       // Should be valid JSON
       const parsed = JSON.parse(result)
-      expect(parsed.esm).toBe('1.0.0')
+      expect(parsed.esm).toBe('2.0.0')
       expect(parsed.metadata.name).toBe('test-model')
     })
 
@@ -366,7 +366,7 @@ describe('Parse and Serialize', () => {
 
     it('should handle complex structures in round-trip', () => {
       const complexEsm = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: {
           name: 'complex-model',
           description: 'A complex test model',
@@ -433,7 +433,7 @@ describe('Parse and Serialize', () => {
   describe('v0.5.0 inline multi-series y (plots.y array form)', () => {
     it('should accept array-form plots.y without schema error', () => {
       const esmWithArrayY = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: { name: 'multi_y_test' },
         models: {
           AB: {
