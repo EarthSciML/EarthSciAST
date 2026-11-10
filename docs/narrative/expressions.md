@@ -29,7 +29,7 @@ Exponentiation binds tighter than multiplication:
 
 ## Functions
 
-The closed function registry (esm-spec §9.2) covers the elementary functions:
+The elementary functions (esm-spec §4.2) are written as calls:
 
 ::esm-example[exp(-E_a / (R*T))]
 

@@ -37,8 +37,8 @@ C[i - 1]
 which is the `C[i-1]` of a stencil. Indices are **1-based**.
 
 Fewer indices than axes selects a sub-array rather than an element — which is
-how one cell's vertex ring is handed to a
-[geometry kernel](../geometry/) from an array shaped `[cells, verts, coord]`.
+how one cell's vertex ring is read from an array shaped `[cells, verts, coord]`
+(see [geometry](../geometry/)).
 
 The array operand may itself be an expression, commonly a `const` table:
 

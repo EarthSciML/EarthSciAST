@@ -1,6 +1,6 @@
 ---
 title: "Aggregation"
-description: "faq, its relational surface, argmin/argmax, and value invention with skolem and rank."
+description: "faq, its relational surface, and arg-witnesses, keys and ranks from the relational templates."
 ---
 
 ## `faq`
@@ -286,14 +286,12 @@ only the number of tuples visited changes. There is no text form for an
 ### `distinct` and `key` — producing an index set
 
 With `distinct`, the node has set semantics and materializes an **index set**
-rather than an array: it enumerates the unique `key` values it discovers. This
-is meaningful only under `bool_and_or`. Deriving the unique undirected edges of
-a mesh from its face→vertex relation:
+rather than an array: it enumerates the unique `key` values it discovers, in
+ascending order. This is meaningful only under `bool_and_or`. A key is a scalar
+integer expression; a composite key is built with the `pair_key` / `edge_key`
+templates of `esm:std/relational.esm` (below). Deriving the unique undirected
+edges of a mesh from its face→vertex relation:
 
-**Text**
-```text
-any[] (true) where {f in faces, v in verts_of_face(f), w in verts_of_face(f)} distinct key=skolem(min(v, w), max(v, w)) id=edges [semiring=bool_and_or]
-```
 **JSON**
 ```json
 {
@@ -308,11 +306,8 @@ any[] (true) where {f in faces, v in verts_of_face(f), w in verts_of_face(f)} di
     "w": { "from": "verts_of_face", "of": ["f"] }
   },
   "key": {
-    "op": "skolem",
-    "args": [
-      { "op": "min", "args": ["v", "w"] },
-      { "op": "max", "args": ["v", "w"] }
-    ]
+    "op": "apply_expression_template", "args": [], "name": "edge_key",
+    "bindings": { "u": "v", "v": "w", "lo": 1, "n": "n_verts" }
   },
   "expr": { "op": "true", "args": [] },
   "args": []
@@ -321,95 +316,56 @@ any[] (true) where {f in faces, v in verts_of_face(f), w in verts_of_face(f)} di
 
 The `id` is what an [`index_sets`](../../file-structure/data-and-shape/) entry
 of kind `derived` names through `from_faq` to shape variables over the result.
+Value invention runs at **build/setup time**, so every column a key reads must
+be build-time data; a NaN key (a key template's out-of-range component) is
+refused with `value_invention_key_out_of_range`.
 
-## `argmin` and `argmax`
+## Arg-witnesses, keys and ranks
 
-Index-returning reductions: instead of the extremum of the body, they return the
-**index at which it is attained**. `arg` names the contracted range symbol whose
-value is returned; `expr` is the body; `ranges` is the candidate domain.
+The relational helpers are expression templates in `esm:std/relational.esm`,
+written in core operators. A component imports them with
+`expression_template_imports` and calls them with `apply_expression_template`.
 
-**Text**
-```text
-argmin[g] (cost[g]) where {g in gens}
-```
+| Template | Value |
+|---|---|
+| `argmin(f, n)`, `argmax(f, n)` | the 1-based index `k` in `1..n` at which the candidate value `f` is smallest (largest); ties go to the smallest index |
+| `argmin_where(f, p, n)`, `argmax_where(f, p, n)` | the same over the candidates passing the predicate `p`; `n + 1` when none does |
+| `pair_key(a, b, lo_a, lo_b, n_a, n_b)` | `(a − lo_a)·n_b + (b − lo_b)`: a directed composite key that sorts in the pairs' lexicographic order |
+| `edge_key(u, v, lo, n)` | `pair_key(min(u, v), max(u, v), lo, lo, n, n)`: the undirected key, so `(u, v)` and `(v, u)` coincide |
+| `rank_of(x, members, n)` | the 1-based rank of key `x` among `n` ascending members |
+| `rank_of_set(x, members, S)` | the same over the members of the index set `S` (a derived set's `member_factor`) |
+
+`f` and `p` are written over the template's loop symbol — `k_argmin_1` for
+`argmin`, `k_argmin_where_1` for `argmin_where`, and so on — so the caller
+writes the candidate's value with that symbol as its index. The nearest
+generator of each point:
+
 **JSON**
 ```json
 {
-  "op": "argmin",
-  "args": ["cost"],
-  "arg": "g",
-  "ranges": { "g": { "from": "gens" } },
-  "expr": { "op": "index", "args": ["cost", "g"] }
+  "op": "faq", "args": [], "output_idx": ["i"],
+  "ranges": { "i": { "from": "points" } },
+  "expr": {
+    "op": "apply_expression_template", "args": [], "name": "argmin",
+    "bindings": {
+      "f": { "op": "^", "args": [
+        { "op": "-", "args": [{ "op": "index", "args": ["px", "i"] }, { "op": "index", "args": ["gx", "k_argmin_1"] }] },
+        2
+      ] },
+      "n": "n_gens"
+    }
+  }
 }
 ```
 
-**Text**
-```text
-argmax[g] (cost[g]) where {g in gens}
-```
-**JSON**
-```json
-{
-  "op": "argmax",
-  "args": ["cost"],
-  "arg": "g",
-  "ranges": { "g": { "from": "gens" } },
-  "expr": { "op": "index", "args": ["cost", "g"] }
-}
-```
+The result is a float holding an integer, usable directly as an `index`
+subscript. A candidate set pruned by a gate is written with `argmin_where`,
+whose predicate compares the gate columns at the point and the candidate.
 
-The returned value is a 1-based generator id, so it can be used directly as an
-index. They accept the same `join` and `filter` gates as `faq`, which is
-how a nearest-neighbour search is pruned to a candidate set.
-
-## `skolem` — value invention
-
-`skolem` mints a canonical **value** — a tuple, not a hash — identifying a
-relation instance. It is how a document names a thing it has not enumerated: an
-edge, a bin, a source/target pair.
-
-**Text**
-```text
-skolem(min(u, v), max(u, v))
-```
-**JSON**
-```json
-{
-  "op": "skolem",
-  "args": [
-    { "op": "min", "args": ["u", "v"] },
-    { "op": "max", "args": ["u", "v"] }
-  ]
-}
-```
-
-Sorting the endpoints is what makes the key canonical: `(u,v)` and `(v,u)` mint
-the same edge. A *directed* relation simply keeps its argument order.
-
-An optional `label` field (`"edge"`, `"bin"`, `"pair"`) is documentary only — it
-does not participate in the key, and the text form does not carry it.
-
-`skolem` runs at **build/setup time**, not per timestep: the invented values are
-frozen into the compiled system.
-
-## `rank`
-
-`rank` assigns a dense 0-based integer to each element by its position in the
-sorted `distinct` sequence of its input. Where `skolem` invents the identity,
-`rank` turns identities into contiguous array offsets:
-
-**Text**
-```text
-area[rank(edge_key)]
-```
-**JSON**
-```json
-{
-  "op": "index",
-  "args": ["area", { "op": "rank", "args": ["edge_key"] }]
-}
-```
-
-Together the two let a document say "group these cells by their bin key, then
-give me a contiguous index over the groups that result" without knowing the
-groups in advance. Like `skolem`, `rank` is build-time.
+The rank of a set's own member is its loop index: `edge_dense_id[e] = e` over
+`e ∈ edges`. `rank_of_set` looks up the rank of any other key among a derived
+set's members. Together, a key template, `distinct` and a rank let a document
+say "group these cells by their bin key, then give me a contiguous index over
+the groups that result" without knowing the groups in advance. The
+[standard library](../../standard_library/) page gives the bodies and edge
+cases.

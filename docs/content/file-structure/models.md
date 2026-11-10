@@ -8,7 +8,7 @@ fields: `variables` and `equations`.
 
 ```json
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "SimpleDecay" },
   "models": {
     "ExponentialDecay": {

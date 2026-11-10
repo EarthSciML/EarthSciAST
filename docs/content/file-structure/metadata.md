@@ -7,7 +7,7 @@ description: "Identity and provenance for the document."
 
 ```json
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "SimpleDecay",
     "description": "Exponential decay with a known analytical solution",
