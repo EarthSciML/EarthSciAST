@@ -263,7 +263,7 @@ fn the_version_gate_refuses_external_below_1_3_0_and_the_block_gate_runs_first()
 
     // Below 1.1.0 the whole block is refused, under the older code.
     let text = serde_json::json!({
-        "esm": "2.0.0",
+        "esm": "1.0.0",
         "metadata": {"name": "t"},
         "solver": external,
         "models": {"M": {"variables": {}, "equations": []}}

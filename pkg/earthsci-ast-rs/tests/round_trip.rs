@@ -243,8 +243,7 @@ fn test_data_sources_round_trip() {
 /// Round-trip the version-compatibility fixtures this library ACCEPTS.
 ///
 /// The compatibility matrix keeps one fixture per version it describes, and
-/// this binding implements esm 1.0.0 — so only the major-1 fixtures load at
-/// all; the major-0 ones are rejected by the same
+/// this binding loads majors 1 and 2 — the major-0 ones are rejected by the same
 /// `check_version_compatibility` gate that `test_major_version_rejection`
 /// pins from the other side (esm-libraries-spec §8). Round-tripping a document
 /// the loader refuses is not a thing this test can assert.
@@ -783,7 +782,7 @@ fn test_tests_analyses_comprehensive_round_trip() {
 fn test_inline_multi_y_schema_validation() {
     let esm = r#"
         {
-          "esm": "2.0.0",
+          "esm": "1.0.0",
           "metadata": {
             "name": "multi_y_test"
           },

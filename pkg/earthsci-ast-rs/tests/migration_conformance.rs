@@ -66,9 +66,10 @@ fn matrix_library_version_is_the_one_this_binding_implements() {
 }
 
 /// Every fixture version the matrix declares has an automated target IFF it
-/// sits on the additive line — which, for a 1.0.0 library, is exactly the 1.0.0
-/// fixtures. Every `reject`ed 0.x and 2.x+ fixture is out of reach of a marker
-/// bump.
+/// is a released 1.x version, 1.0.0 to 1.3.0 (relabelled to 2.0.0 when it
+/// uses no removed op), or sits
+/// on the 2.x additive line at or below this library. Every 0.x fixture, and
+/// one newer than this library, is out of reach of a marker bump.
 #[test]
 fn matrix_fixture_versions_have_targets_only_on_the_additive_line() {
     let current = parse_semver(SCHEMA_VERSION).expect("SCHEMA_VERSION is semver");
@@ -91,7 +92,8 @@ fn matrix_fixture_versions_have_targets_only_on_the_additive_line() {
             checked += 1;
             continue;
         };
-        let on_line = version.0 == current.0 && version >= (1, 0, 0) && version <= current;
+        let on_line = (version >= (1, 0, 0) && version <= (1, 3, 0))
+            || (version.0 == current.0 && version <= current);
         assert_eq!(
             !supported_migration_targets(file_version).is_empty(),
             on_line,

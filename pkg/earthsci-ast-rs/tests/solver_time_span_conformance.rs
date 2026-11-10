@@ -171,7 +171,7 @@ fn the_version_gate_refuses_time_span_below_1_3_0_before_the_schema() {
 
     // A schema-invalid bound beside the gate: the gate still answers first.
     let text = serde_json::json!({
-        "esm": "2.0.0",
+        "esm": "1.2.0",
         "metadata": {"name": "t"},
         "solver": {"time_span": {"start": "yesterday", "end": 1}},
         "models": {"M": {"variables": {}, "equations": []}}
@@ -185,7 +185,7 @@ fn the_version_gate_refuses_time_span_below_1_3_0_before_the_schema() {
 
 fn decay_doc(solver: Value, temporal: Option<Value>) -> String {
     let mut d = serde_json::json!({
-        "esm": "2.0.0",
+        "esm": "1.3.0",
         "metadata": {"name": "t"},
         "solver": solver,
         "models": {"M": {
@@ -579,7 +579,7 @@ fn the_clock_accessors_on_a_domain() {
             check_clock_case(case, "typed", d);
         }
         check_clock_case(case, "optional", &typed);
-        let mut doc = serde_json::json!({"esm": "2.0.0", "metadata": {"name": "m"}});
+        let mut doc = serde_json::json!({"esm": "1.3.0", "metadata": {"name": "m"}});
         if !raw.is_null() {
             doc["domain"] = raw.clone();
         }
@@ -593,7 +593,7 @@ fn the_accessors_take_a_document_behind_a_pointer() {
     // The generic source still accepts what the old `&EsmFile` parameter
     // reached by deref: a document in a `Box`, an `Rc` or an `Arc`.
     let doc = serde_json::json!({
-        "esm": "2.0.0",
+        "esm": "1.3.0",
         "metadata": {"name": "m"},
         "domain": {"temporal": {"reference_time": "2019-07-01T00:00:00Z"}},
     });

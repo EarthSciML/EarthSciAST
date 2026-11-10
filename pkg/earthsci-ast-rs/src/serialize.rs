@@ -32,7 +32,7 @@ use std::path::Path;
 /// };
 ///
 /// let json = to_json(&esm_file).expect("Failed to serialize ESM file");
-/// assert!(json.contains("\"esm\": \"2.0.0\""));
+/// assert!(json.contains("\"esm\": \"1.0.0\""));
 /// ```
 pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
     let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;

@@ -214,16 +214,19 @@ fn test_version_compatibility_validation_errors() {
     }
 }
 
-/// A document whose MAJOR version this library does not implement is rejected
-/// (esm-libraries-spec §8), on BOTH sides of the supported major.
+/// A document from a MAJOR version newer than this library's, or from before
+/// the esm 1.0.0 clean break, is rejected (esm-libraries-spec §8); a 1.x
+/// document that uses no removed op loads.
 #[test]
 fn test_major_version_rejection() {
     // Ahead of this library.
     let ahead =
-        include_str!("../../../tests/version_compatibility/version_2_5_1_major_rejection.esm");
+        include_str!("../../../tests/version_compatibility/version_2_5_1_major_rejection.esm")
+            .replacen("\"2.5.1\"", "\"3.0.0\"", 1);
+    let err = load_string(&ahead).expect_err("Expected major version 3.x.x to be rejected");
     assert!(
-        load_string(ahead).is_err(),
-        "Expected major version 2.x.x to be rejected"
+        err.to_string().contains("Unsupported major version 3"),
+        "{err}"
     );
 
     // ...and behind it. esm 1.0.0 is a clean break with no deprecation path, so
@@ -235,6 +238,19 @@ fn test_major_version_rejection() {
         load_string(behind).is_err(),
         "Expected major version 0.x.x to be rejected"
     );
+
+    // A 1.x document with no removed op is not refused for its major version.
+    let one_x = r#"{"esm": "1.3.0", "metadata": {"name": "OneX"},
+        "models": {"M": {"variables": {"x": {"type": "unknown", "default": 1.0}},
+            "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "x"}]}}}"#;
+    load_string(one_x).expect("a 1.x document with no removed op loads");
+    // A removed op in it is refused by name.
+    let removed = one_x.replace(
+        r#""rhs": "x""#,
+        r#""rhs": {"op": "fn", "name": "datetime.year", "args": ["t"]}"#,
+    );
+    let err = load_string(&removed).expect_err("a removed op is refused");
+    assert!(err.to_string().contains("removed_op"), "{err}");
 }
 
 /// Test coupling validation errors

@@ -12,9 +12,7 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 
 /// Library version supported by this implementation (major, minor, patch),
-/// derived from [`crate::SCHEMA_VERSION`] so the two can never drift. Files
-/// with a major version mismatch are rejected per the version compatibility
-/// rules in esm-libraries-spec §8.
+/// derived from [`crate::SCHEMA_VERSION`] so the two can never drift.
 fn library_version() -> (u32, u32, u32) {
     crate::diagnostic::parse_semver(crate::SCHEMA_VERSION)
         .expect("SCHEMA_VERSION is a valid major.minor.patch string")
@@ -88,7 +86,7 @@ fn get_schema_value() -> &'static Value {
 /// "#;
 ///
 /// let esm_file = load_string(json).expect("Failed to load ESM file");
-/// assert_eq!(esm_file.esm, "1.0.0");
+/// assert_eq!(esm_file.esm, "2.0.0");
 /// ```
 pub fn load_string(json_str: &str) -> Result<EsmFile, EsmError> {
     load_string_with_options(json_str, &LoadOptions::default())
@@ -1074,11 +1072,13 @@ fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
     }
 }
 
-/// Reject files whose major version does not match this library.
+/// Reject files whose major version this library cannot read.
 ///
-/// The schema already enforces the `\d+\.\d+\.\d+` pattern; this check runs
-/// after that and rejects mismatched major versions with the standardized
-/// message string the Julia / Python libraries use.
+/// A 1.x document loads at 2.0.0: the removed ops are refused by name at the
+/// wire boundary (`removed_op`) and the 1.x version gates stay live, so the
+/// major version alone never refuses a 1.x document. A pre-1.0.0 document and
+/// one from a major newer than this library's are refused here, with the
+/// standardized message string the Julia / Python libraries use.
 fn check_version_compatibility(obj: &serde_json::Map<String, Value>, errors: &mut Vec<String>) {
     let Some(ver) = obj.get("esm").and_then(|v| v.as_str()) else {
         return;
@@ -1087,12 +1087,16 @@ fn check_version_compatibility(obj: &serde_json::Map<String, Value>, errors: &mu
         return;
     };
     let supported_major = library_version().0;
-    if major != supported_major {
+    if !(OLDEST_LOADABLE_MAJOR..=supported_major).contains(&major) {
         errors.push(format!(
-            "Unsupported major version {major}. This library supports major version {supported_major} only."
+            "Unsupported major version {major}. This library supports major versions \
+             {OLDEST_LOADABLE_MAJOR} to {supported_major} only."
         ));
     }
 }
+
+/// The oldest major version a document may declare and still load.
+const OLDEST_LOADABLE_MAJOR: u32 = 1;
 
 /// Reject reaction stoichiometries that are not positive finite numbers.
 ///
@@ -2145,7 +2149,7 @@ mod tests {
         assert!(result.is_ok());
 
         let esm_file = result.unwrap();
-        assert_eq!(esm_file.esm, "1.0.0");
+        assert_eq!(esm_file.esm, "2.0.0");
         assert!(esm_file.models.is_some());
     }
 
