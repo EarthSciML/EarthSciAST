@@ -763,7 +763,10 @@ numbers by one shared scheme, pinned to what the Julia reference's
 2. **Shortest-roundtrip float formatting.** A non-integral finite float
    serializes with the **shortest** digit string that round-trips to the same
    IEEE-754 double (the Ryu-shortest digits every binding's default `repr`
-   produces), laid out Julia-style. With `e10` the decimal exponent of the
+   produces; when the exact value lies halfway between two shortest
+   candidates, the one with the even last digit — `705129328097.90625` →
+   `7.051293280979062e11` — which Rust's `{:e}` / `Display` do not pick and a
+   Rust writer must correct), laid out Julia-style. With `e10` the decimal exponent of the
    value's first significant digit (`value = ±d.dd… × 10^e10`, so
    `e10(999999.5) = 5`, `e10(0.000123456) = −4`):
 

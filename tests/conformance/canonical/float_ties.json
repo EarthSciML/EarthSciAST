@@ -1,0 +1,7 @@
+{
+  "id": "float_ties",
+  "description": "Decimal ties in shortest-round-trip float emission (RFC §5.4.6). Each coefficient's exact binary value lies halfway between two shortest decimal candidates that both read back (705129328097.90625 between 705129328097.9062 and .9063); every binding writes the one with the even last digit, as Julia's Ryu, Python's repr, JavaScript's Number::toString and Go's strconv do. Covers plain and exponent layout and negative values. The last coefficient is 2^-24 = 5.9604644775390625e-8, a tie whose even candidate (...062) does not read back because the rounding interval below a power of two is half as wide, so ...063 is written.",
+  "input": {"op":"+","args":[{"op":"*","args":[7.051293280979062e11,"a"]},{"op":"*","args":[2.2782122790378262e14,"b"]},{"op":"*","args":[1.4249539237812062e15,"c"]},{"op":"*","args":[-3.0713577270507812,"d"]},{"op":"*","args":[2.9802322387695312e-8,"e"]},{"op":"*","args":[-5.960464477539062e-7,"f"]},{"op":"*","args":[5.960464477539063e-8,"g"]}]},
+  "expected": "{\"args\":[{\"args\":[-3.0713577270507812,\"d\"],\"op\":\"*\"},{\"args\":[-5.960464477539062e-7,\"f\"],\"op\":\"*\"},{\"args\":[1424953923781206.2,\"c\"],\"op\":\"*\"},{\"args\":[2.9802322387695312e-8,\"e\"],\"op\":\"*\"},{\"args\":[227821227903782.62,\"b\"],\"op\":\"*\"},{\"args\":[5.960464477539063e-8,\"g\"],\"op\":\"*\"},{\"args\":[705129328097.9062,\"a\"],\"op\":\"*\"}],\"op\":\"+\"}",
+  "tags": ["float", "tie", "ordering"]
+}

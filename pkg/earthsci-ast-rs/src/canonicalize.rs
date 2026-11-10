@@ -662,44 +662,65 @@ pub fn format_canonical_float(f: f64) -> String {
             "0.0".into()
         };
     }
-    let abs = f.abs();
-    let use_exp = !(1e-6..1e21).contains(&abs);
-    if use_exp {
-        // Use Rust's shortest round-trip; format!("{:e}", f) emits e.g. "1e25", "3e-7"
-        // (no leading + on exponent).
-        let s = format!("{f:e}");
-        // Strip leading + (Rust doesn't emit it but be safe) and leading exponent zeros.
-        normalize_exponent(&s)
+    let (digits, exp) = shortest_digits(f);
+    let sign = if f < 0.0 { "-" } else { "" };
+    if (1e-6..1e21).contains(&f.abs()) {
+        // plain decimal, with a `.0` on an integral value
+        format!("{sign}{}", positional(&digits, exp))
     } else {
-        // Plain decimal — Rust's `Display` gives the shortest round-trip and, in
-        // the `[1e-6, 1e21)` range, always emits plain decimal (never exponent
-        // form). It may print an integer-valued float as e.g. `1` (no `.`), so add
-        // a trailing `.0` when no decimal point is present.
-        let s = format!("{f}");
-        if !s.contains('.') {
-            format!("{s}.0")
-        } else {
-            s
+        // `d[.ddd]e<exp>`, no `+` on the exponent ("1e25", "3e-7")
+        match &digits[1..] {
+            "" => format!("{sign}{}e{exp}", &digits[..1]),
+            frac => format!("{sign}{}.{frac}e{exp}", &digits[..1]),
         }
     }
 }
 
-fn normalize_exponent(s: &str) -> String {
-    if let Some(idx) = s.find('e') {
-        let (mant, exp) = s.split_at(idx);
-        let exp = &exp[1..]; // strip 'e'
-        let exp = exp.strip_prefix('+').unwrap_or(exp);
-        let (sign, digits) = if let Some(rest) = exp.strip_prefix('-') {
-            ("-", rest)
-        } else {
-            ("", exp)
-        };
-        let digits = digits.trim_start_matches('0');
-        let digits = if digits.is_empty() { "0" } else { digits };
-        format!("{mant}e{sign}{digits}")
+/// The shortest decimal digits that read back as `|f|` (finite, non-zero),
+/// and the decimal exponent of the first one: `705129328097.90625` gives
+/// (`"7051293280979062"`, 11). Every float writer that must match the other
+/// bindings byte for byte takes its digits from here.
+///
+/// `{:e}` finds the shortest digit count, but when the exact binary value lies
+/// exactly halfway between two candidates of that length that both read back
+/// (705129328097.90625, between …9062 and …9063) it takes the upper one, where
+/// Julia's Ryu, Python's `repr`, JavaScript's Number::toString and Go's
+/// `strconv` take the one with the even last digit. Printing again at that
+/// precision converts exactly and rounds half to even, which gives the even
+/// candidate — unless that one falls outside the rounding interval, which
+/// happens at a power of two, where the interval below is half as wide as the
+/// one above (2^-24 = 5.9604644775390625e-8 reads back from …063 but not from
+/// …062). Then only `{:e}`'s candidate reads back, and the other bindings
+/// write it too.
+pub(crate) fn shortest_digits(f: f64) -> (String, i32) {
+    let a = f.abs();
+    let sci = format!("{a:e}");
+    // digits after the point in `d[.ddd]e<exp>`
+    let prec = sci.find('e').map_or(0, |i| i.saturating_sub(2));
+    let even = format!("{a:.prec$e}");
+    let pick = if even.parse::<f64>() == Ok(a) {
+        even
     } else {
-        s.into()
+        sci
+    };
+    let (mant, exp) = pick.split_once('e').expect("`{:e}` always has an exponent");
+    (
+        mant.replace('.', ""),
+        exp.parse().expect("`{:e}` exponent is an integer"),
+    )
+}
+
+/// `digits` × 10^(`exp` − digits + 1) in positional notation, with at least
+/// one digit after the point (`("25", 0)` → `2.5`, `("1", 2)` → `100.0`,
+/// `("5", -3)` → `0.005`).
+pub(crate) fn positional(digits: &str, exp: i32) -> String {
+    if exp < 0 {
+        return format!("0.{}{digits}", "0".repeat((-exp - 1) as usize));
     }
+    let k = exp as usize + 1;
+    let int = format!("{:0<k$}", &digits[..k.min(digits.len())]);
+    let frac = digits.get(k..).filter(|s| !s.is_empty()).unwrap_or("0");
+    format!("{int}.{frac}")
 }
 
 #[cfg(test)]
@@ -731,6 +752,49 @@ mod tests {
         }
         let mixed = 0.1_f64 + 0.2_f64;
         assert_eq!(format_canonical_float(mixed), "0.30000000000000004");
+    }
+
+    #[test]
+    fn decimal_ties_take_the_even_digit() {
+        // An exact value halfway between two shortest candidates that both
+        // read back is written with the even last digit, as every other
+        // binding writes it (tests/conformance/canonical/float_ties.json).
+        // Each literal is that shortest form; the exact values are
+        // 705129328097.90625, -227821227903782.625, 2^-25 and
+        // -5.9604644775390625e-7.
+        let x = |bits: u64| f64::from_bits(bits);
+        let cases = [
+            (705129328097.9062, "705129328097.9062"),
+            (-227821227903782.62, "-227821227903782.62"),
+            (2.0_f64.powi(-25), "2.9802322387695312e-8"),
+            (-5.960464477539062e-7, "-5.960464477539062e-7"),
+            // 2^-24: the even candidate (…062) does not read back, since the
+            // rounding interval below a power of two is half as wide
+            (2.0_f64.powi(-24), "5.960464477539063e-8"),
+            // RFC 8785 Appendix B (an integral value keeps its `.0`, and an
+            // exponent has no `+`)
+            (x(0x43143ff3c1cb0959), "1424953923781206.2"),
+            (x(0x41b3de4355555553), "333333333.3333332"),
+            (x(0x41b3de4355555554), "333333333.33333325"),
+            (x(0x41b3de4355555555), "333333333.3333333"),
+            (x(0x41b3de4355555556), "333333333.3333334"),
+            (x(0x41b3de4355555557), "333333333.33333343"),
+            (x(0x44b52d02c7e14af5), "9.999999999999997e22"),
+            (x(0x44b52d02c7e14af6), "1e23"),
+            (x(0x44b52d02c7e14af7), "1.0000000000000001e23"),
+            (x(0x444b1ae4d6e2ef4e), "999999999999999700000.0"),
+            (x(0x444b1ae4d6e2ef4f), "999999999999999900000.0"),
+            (x(0x444b1ae4d6e2ef50), "1e21"),
+            (x(0x4430000000000000), "295147905179352830000.0"),
+            (x(0x3eb0c6f7a0b5ed8c), "9.999999999999997e-7"),
+            (x(0x3eb0c6f7a0b5ed8d), "0.000001"),
+            (x(0xbecbf647612f3696), "-0.0000033333333333333333"),
+            (x(0x7fefffffffffffff), "1.7976931348623157e308"),
+            (x(0x000fffffffffffff), "2.225073858507201e-308"),
+        ];
+        for (v, want) in cases {
+            assert_eq!(format_canonical_float(v), want, "for {:016x}", v.to_bits());
+        }
     }
 
     #[test]
