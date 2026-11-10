@@ -51,7 +51,7 @@ describe('enum_duplicate_value (esm-spec §9.3)', () => {
 
   it('checks the block even when the document has no `enum` op', () => {
     const doc = {
-      esm: '2.0.0',
+      esm: '1.0.0',
       metadata: { name: 'D' },
       enums: { m: { a: 1, b: 1 } },
       models: {

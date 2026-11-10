@@ -36,7 +36,7 @@ import type { EsmFile, Model, ReactionSystem } from './types.js'
  * all, and `kind` is no longer a reference-stub discriminator.
  */
 const file: EsmFile = {
-  esm: '2.0.0',
+  esm: '1.0.0',
   metadata: { name: 'traverse-fixture' },
   models: {
     M1: {

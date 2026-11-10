@@ -74,7 +74,7 @@ describe('lib/relational.esm argmin/argmax templates', () => {
       variables[`out_${i}`] = { type: 'unknown', default: 0.0, units: '1' }
     })
     const doc = {
-      esm: '2.0.0',
+      esm: '1.1.0',
       metadata: { name: 'relational_templates' },
       models: {
         Probe: {
@@ -132,7 +132,7 @@ describe('lib/relational.esm argmin/argmax templates', () => {
       variables[`out_${i}`] = { type: 'unknown', default: 0.0, units: '1' }
     })
     const doc = {
-      esm: '2.0.0',
+      esm: '1.1.0',
       metadata: { name: 'relational_key_templates' },
       index_sets: { cells: { kind: 'interval', size: 3 } },
       models: {

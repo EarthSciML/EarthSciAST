@@ -147,7 +147,7 @@ export function validateSchema(data: unknown): SchemaError[] {
     return [
       {
         path: '/esm',
-        message: `Unsupported major version ${version.major}; this validator supports major version ${CURRENT_VERSION.major}`,
+        message: `Unsupported major version ${version.major}; this validator supports ${SUPPORTED_MAJORS_TEXT}`,
         keyword: 'major_version_mismatch',
       },
     ]
@@ -216,6 +216,28 @@ function parseSemanticVersion(
 const CURRENT_VERSION = parseSemanticVersion(SCHEMA_VERSION)!
 
 /**
+ * The last release of the esm 1.x line. A 1.x document loads at 2.0.0 (user
+ * ruling): 2.0.0 removed ops and blocks and changed nothing else, so a 1.x
+ * document that uses none of them means what it meant, and one that does is
+ * refused with `removed_op` by name, not by its version. The 1.x version gates
+ * stay live for it.
+ */
+export const LAST_V1_VERSION = '1.3.0'
+const LAST_V1 = parseSemanticVersion(LAST_V1_VERSION)!
+
+/** The newest release of each major this build loads, keyed by major. */
+const NEWEST_BY_MAJOR: ReadonlyMap<number, { major: number; minor: number; patch: number }> =
+  new Map([
+    [LAST_V1.major, LAST_V1],
+    [CURRENT_VERSION.major, CURRENT_VERSION],
+  ])
+
+/** The supported majors, for messages: `major versions 1 and 2`. */
+const SUPPORTED_MAJORS_TEXT =
+  (NEWEST_BY_MAJOR.size > 1 ? 'major versions ' : 'major version ') +
+  [...NEWEST_BY_MAJOR.keys()].sort().join(' and ')
+
+/**
  * The `esm` version declared by `data`, parsed into components, or `null` when
  * `data` is not an object, carries no string `esm`, or the string is not a
  * well-formed semantic version (those cases are deliberately left to schema
@@ -236,7 +258,7 @@ function parseFileVersion(data: unknown): { major: number; minor: number; patch:
  * separately-pinned diagnostic wording).
  */
 function isUnsupportedMajor(v: { major: number }): boolean {
-  return v.major !== CURRENT_VERSION.major
+  return !NEWEST_BY_MAJOR.has(v.major)
 }
 
 /**
@@ -271,14 +293,16 @@ function checkVersionCompatibility(
   // Reject unsupported major versions
   if (isUnsupportedMajor(versionComponents)) {
     throw new ParseError(
-      `Unsupported major version ${versionComponents.major}. This parser supports major version ${CURRENT_VERSION.major}.`,
+      `Unsupported major version ${versionComponents.major}. This parser supports ${SUPPORTED_MAJORS_TEXT}.`,
     )
   }
 
-  // Warn about newer minor versions
-  if (versionComponents.minor > CURRENT_VERSION.minor) {
+  // Warn about a minor newer than the newest release of its major
+  const newest = NEWEST_BY_MAJOR.get(versionComponents.major)!
+  if (versionComponents.minor > newest.minor) {
+    const latest = `${newest.major}.${newest.minor}.${newest.patch}`
     const message =
-      `${version} is newer than the current library version ${SCHEMA_VERSION}. ` +
+      `${version} is newer than the current library version ${latest}. ` +
       `Some features may not be supported.`
     if (onVersionWarning) {
       onVersionWarning(message)
@@ -999,10 +1023,9 @@ function declaredBelowV11(doc: unknown): boolean {
  * version check and before schema validation: every file-level version gate
  * ({@link rejectVersionGatedConstructs}), the template-library purity check,
  * and the root-only `solver.external` / `solver.time_span` checks, in that
- * order. Exported so the gates can be exercised on a document whose declared
- * version the major check would refuse first.
+ * order.
  */
-export function rejectRootLoadGates(validationView: unknown): void {
+function rejectRootLoadGates(validationView: unknown): void {
   // A mounted leaf runs the same list against its own `esm` (esm-spec §4.7).
   rejectVersionGatedConstructs(validationView)
   // Top-level `expression_templates` beside a component payload is a

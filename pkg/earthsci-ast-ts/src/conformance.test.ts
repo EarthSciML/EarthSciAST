@@ -192,7 +192,7 @@ describe('Conformance Test Suite', () => {
   describe('RFC §5.1 — `index` outside faq', () => {
     it('should round-trip scalar `index` RHS (integer and composite args)', () => {
       const original = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: {
           name: 'index_scalar_rhs',
           authors: ['EarthSciAST/polecats/chrome'],

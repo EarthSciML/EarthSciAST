@@ -9,16 +9,20 @@ import {
   SCHEMA_VERSION,
   SchemaValidationError,
 } from './index.js'
+import { LAST_V1_VERSION } from './parse.js'
 import { readFixture } from './test-helpers.js'
 
 /**
  * Version gating for esm 2.0.0.
  *
- * The library implements major version 2, so a DIFFERENT major is rejected
- * outright (`ParseError`) and a newer MINOR loads with a warning. 1.0.0 and
- * 2.0.0 are both breaks: a 0.x or 1.x document is on the rejected side of the
- * line. A 1.x document that uses none of what 2.0.0 removed is carried across by
- * `migrate()`, which relabels it; one that does is refused with `removed_op`.
+ * The library implements major version 2 and still LOADS major 1 (user
+ * ruling): 2.0.0 only removed ops and blocks, so a 1.x document that uses none
+ * of them loads as it is, under its own 1.x version gates, and one that uses
+ * one is refused with `removed_op` by name, never by its major. Any other major
+ * is rejected outright (`ParseError`), and a minor newer than the newest
+ * release of its major loads with a warning. 1.0.0 was a clean break, so every
+ * 0.x document is on the rejected side. `migrate()` relabels a 1.x document to
+ * the current version.
  *
  * The suite reads the current major from `SCHEMA_VERSION` rather than spelling
  * it, so it states the same rules whichever major the embedded schema declares;
@@ -118,18 +122,41 @@ describe('Version Compatibility', () => {
     })
   })
 
+  describe('The 1.x line', () => {
+    it('loads the 1.0.0 baseline fixture as committed, without warnings', () => {
+      const fixture = JSON.parse(readFixture('version_compatibility', 'version_1_0_0_baseline.esm'))
+      const { result, warnings } = captureWarnings(() => loadString(fixture))
+
+      expect(result.esm).toBe('1.0.0')
+      expect(result.metadata.name).toBe('Version_1_0_0_Baseline')
+      expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
+    })
+
+    it('loads every 1.x release without warnings', () => {
+      for (const version of ['1.0.0', '1.0.5', '1.1.0', '1.2.0', '1.3.0']) {
+        const { result, warnings } = captureWarnings(() => loadString(atVersion(version)))
+        expect(result.esm).toBe(version)
+        expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
+      }
+    })
+
+    it('warns on a 1.x minor newer than the last 1.x release', () => {
+      const { result, warnings } = captureWarnings(() => loadString(atVersion('1.10.0')))
+      expect(result.esm).toBe('1.10.0')
+      expect(
+        warnings.some((w) =>
+          w.includes(`1.10.0 is newer than the current library version ${LAST_V1_VERSION}`),
+        ),
+      ).toBe(true)
+    })
+  })
+
   describe('Major Version Rejection', () => {
     // 1.0.0 is a clean break: a 0.x document is not "an older file that still
     // loads", it is a file written to a format this parser no longer speaks.
     it('rejects the 0.x line outright', () => {
       for (const version of ['0.0.1', '0.1.0', '0.8.0', '0.9.0', '0.10.0']) {
         expect(() => loadString(atVersion(version))).toThrow('Unsupported major version 0')
-      }
-    })
-
-    it.runIf(MAJOR === 2)('rejects the 1.x line outright', () => {
-      for (const version of ['1.0.0', '1.0.5', '1.1.0', '1.3.0']) {
-        expect(() => loadString(atVersion(version))).toThrow('Unsupported major version 1')
       }
     })
 

@@ -107,7 +107,7 @@ describe('esm-spec §8.2.1 data-source location resolution', () => {
     // already-resolved URL -- which, against a different base, silently reads a
     // different file. That is the silent-wrong-value shape, so it is pinned.
     const doc = {
-      esm: '2.0.0',
+      esm: '1.0.0',
       metadata: { name: 'M', description: 'd', authors: ['a'], license: 'MIT' },
       data_sources: {
         t: { kind: 'static', source: { url_template: './tables/probe.parquet' } },

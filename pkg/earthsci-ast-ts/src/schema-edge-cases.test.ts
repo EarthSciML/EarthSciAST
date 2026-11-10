@@ -6,7 +6,7 @@ describe('Schema Edge Cases', () => {
   describe('anyOf constraint: models OR reaction_systems required', () => {
     it('should fail when neither models nor reaction_systems are present', () => {
       const invalid = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         // Missing both models AND reaction_systems
       }
@@ -20,7 +20,7 @@ describe('Schema Edge Cases', () => {
 
     it('should pass with only models', () => {
       const withModels = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         models: {
           test_model: {
@@ -35,12 +35,12 @@ describe('Schema Edge Cases', () => {
 
       // Should not throw when using loadString()
       const result = loadDocument(withModels)
-      expect(result.esm).toBe('2.0.0')
+      expect(result.esm).toBe('1.0.0')
     })
 
     it('should pass with only reaction_systems', () => {
       const withReactionSystems = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         reaction_systems: {
           test_rs: {
@@ -56,7 +56,7 @@ describe('Schema Edge Cases', () => {
 
       // Should not throw when using loadString()
       const result = loadDocument(withReactionSystems)
-      expect(result.esm).toBe('2.0.0')
+      expect(result.esm).toBe('1.0.0')
     })
 
     it('should pass with only data_sources (source-only file)', () => {
@@ -67,7 +67,7 @@ describe('Schema Edge Cases', () => {
       // component, so it exposes nothing and is not a coupling endpoint. A
       // consuming parameter names it through `update.source`.
       const sourceOnly = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         data_sources: {
           weather: {
@@ -82,7 +82,7 @@ describe('Schema Edge Cases', () => {
 
       // Should not throw when using loadString()
       const result = loadDocument(sourceOnly)
-      expect(result.esm).toBe('2.0.0')
+      expect(result.esm).toBe('1.0.0')
       expect(result.data_sources?.['weather']?.kind).toBe('grid')
     })
 
@@ -92,7 +92,7 @@ describe('Schema Edge Cases', () => {
       // DataSource is additionalProperties:false — so a document still carrying
       // the old shape must fail loudly rather than have the map ignored.
       const withLoaderVariables = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         data_sources: {
           weather: {
@@ -112,7 +112,7 @@ describe('Schema Edge Cases', () => {
 
     it('should pass with both models and reaction_systems', () => {
       const withBoth = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         models: {
           test_model: {
@@ -134,7 +134,7 @@ describe('Schema Edge Cases', () => {
 
       // Should not throw when using loadString()
       const result = loadDocument(withBoth)
-      expect(result.esm).toBe('2.0.0')
+      expect(result.esm).toBe('1.0.0')
     })
   })
 
@@ -153,7 +153,7 @@ describe('Schema Edge Cases', () => {
       // is no `variables.*.expression` sidecar to hang one on, and the observed
       // quantity is an ordinary unknown whose bare-LHS equation defines it.
       const validDeepNested = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'deep_test' },
         models: {
           deep_model: {
@@ -170,7 +170,7 @@ describe('Schema Edge Cases', () => {
 
       // Should also work with loadString()
       const result = loadDocument(validDeepNested)
-      expect(result.esm).toBe('2.0.0')
+      expect(result.esm).toBe('1.0.0')
     })
 
     it('should handle nested expression with multiple operators', () => {
@@ -208,7 +208,7 @@ describe('Schema Edge Cases', () => {
       }
 
       const validComplexNested = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'complex_test' },
         models: {
           complex_model: {
@@ -230,7 +230,7 @@ describe('Schema Edge Cases', () => {
       // An unknown identifier op is a legal rewrite-target string at schema time
       // — the typo-catch moved to the `unlowered_operator` evaluation gate.
       const openOp = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'open_op_test' },
         models: {
           m: {
@@ -259,7 +259,7 @@ describe('Schema Edge Cases', () => {
   describe('scientific notation and extreme numbers', () => {
     it('should handle very large numbers in scientific notation', () => {
       const validLargeNumbers = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'large_numbers_test' },
         models: {
           large_model: {
@@ -293,7 +293,7 @@ describe('Schema Edge Cases', () => {
 
     it('should handle edge case numeric values', () => {
       const edgeCaseNumbers = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'edge_numbers_test' },
         models: {
           edge_model: {
@@ -327,7 +327,7 @@ describe('Schema Edge Cases', () => {
       }
 
       const validExtremeExpr = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'extreme_expr_test' },
         models: {
           extreme_model: {
@@ -347,7 +347,7 @@ describe('Schema Edge Cases', () => {
   describe('unicode characters in variable names', () => {
     it('should allow unicode characters in variable names', () => {
       const unicodeVariables = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'unicode_test' },
         models: {
           unicode_model: {
@@ -381,7 +381,7 @@ describe('Schema Edge Cases', () => {
 
     it('should allow unicode characters in reaction species names', () => {
       const unicodeReaction = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'unicode_reaction_test' },
         reaction_systems: {
           unicode_rs: {
@@ -417,7 +417,7 @@ describe('Schema Edge Cases', () => {
 
     it('should allow unicode in metadata and descriptions', () => {
       const unicodeMetadata = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: {
           name: 'test_模型',
           description: '这是一个测试模型 with émissions atmosphériques',
@@ -444,7 +444,7 @@ describe('Schema Edge Cases', () => {
   describe('empty and null field handling', () => {
     it('should handle empty objects and arrays', () => {
       const emptyFields = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: {
           name: 'empty_test',
           authors: [], // Empty array should be valid
@@ -468,7 +468,7 @@ describe('Schema Edge Cases', () => {
 
     it('should handle null values where allowed', () => {
       const nullFields = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'null_test' },
         reaction_systems: {
           null_rs: {
@@ -510,7 +510,7 @@ describe('Schema Edge Cases', () => {
       // document declares the CURRENT version so the rejection is provably the
       // stray field and not the version gate.
       const withCoupletype = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'coupletype_removed_test' },
         models: {
           test_model: {
@@ -528,7 +528,7 @@ describe('Schema Edge Cases', () => {
 
     it('should fail when required fields are null', () => {
       const invalidNull = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: null }, // name is required, cannot be null
         models: {
           test: {
@@ -554,7 +554,7 @@ describe('Schema Edge Cases', () => {
   describe('additional properties validation', () => {
     it('should fail with additional properties at root level', () => {
       const extraProps = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         models: {
           test: {
@@ -577,7 +577,7 @@ describe('Schema Edge Cases', () => {
 
     it('should fail with additional properties in metadata', () => {
       const extraMetadata = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: {
           name: 'test',
           unknown_metadata: 'not allowed', // additionalProperties: false in Metadata
@@ -603,7 +603,7 @@ describe('Schema Edge Cases', () => {
 
     it('should fail with additional properties in ExpressionNode', () => {
       const extraExprProps = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         models: {
           test: {
@@ -635,7 +635,7 @@ describe('Schema Edge Cases', () => {
 
     it('should allow additional properties in data source metadata', () => {
       const configProps = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         models: {
           test: {
@@ -693,10 +693,12 @@ describe('Schema Edge Cases', () => {
 
     it('should handle version compatibility for minor version differences', () => {
       const minorVersionUpgrade = {
-        // A minor NEWER than the library. 2.10.0 also keeps the numeric
-        // ordering honest — it is newer than 2.2.0, which a lexicographic
+        // A minor NEWER than the library. Was 1.1.0 until the `solver` block
+        // (esm-spec §2.2) took the library itself to 1.1.0, which made this an
+        // exact match and stopped it warning. 1.10.0 also keeps the numeric
+        // ordering honest — it is newer than 1.2.0, which a lexicographic
         // compare gets backwards.
-        esm: '2.10.0',
+        esm: '1.10.0',
         metadata: { name: 'test' },
         models: {
           test: {
@@ -713,7 +715,7 @@ describe('Schema Edge Cases', () => {
 
       // Load succeeds, with a forward-compatibility warning.
       const { result, warnings } = captureWarnings(() => loadDocument(minorVersionUpgrade))
-      expect(result.esm).toBe('2.10.0')
+      expect(result.esm).toBe('1.10.0')
       expect(result.metadata.name).toBe('test')
       expect(warnings.some((w) => w.includes('newer than'))).toBe(true)
     })
@@ -739,13 +741,15 @@ describe('Schema Edge Cases', () => {
       expect(() => loadDocument(majorVersionUpgrade)).toThrow(ParseError)
       expect(() => loadDocument(majorVersionUpgrade)).toThrow('Unsupported major version 3')
 
-      // A 0.x or 1.x document is refused the same way: 1.0.0 and 2.0.0 are
-      // breaks (a 1.x document crosses 2.0.0 only through `migrate()`).
-      for (const esm of ['0.8.0', '1.3.0']) {
-        const legacy = { ...majorVersionUpgrade, esm }
-        expect(validateSchema(legacy)[0]?.keyword).toBe('major_version_mismatch')
-        expect(() => loadDocument(legacy)).toThrow(`Unsupported major version ${esm[0]}`)
-      }
+      // A 0.x document is refused the same way: 1.0.0 has no deprecation path.
+      const legacy = { ...majorVersionUpgrade, esm: '0.8.0' }
+      expect(validateSchema(legacy)[0]?.keyword).toBe('major_version_mismatch')
+      expect(() => loadDocument(legacy)).toThrow('Unsupported major version 0')
+
+      // Major 1 is NOT a mismatch: a 1.x document loads beside 2.0.0 ones.
+      const v1 = { ...majorVersionUpgrade, esm: '1.3.0' }
+      expect(validateSchema(v1)).toEqual([])
+      expect(loadDocument(v1).esm).toBe('1.3.0')
     })
 
     it('should fail with invalid version format', () => {
@@ -776,7 +780,7 @@ describe('Schema Edge Cases', () => {
 
     it('should validate ISO 8601 datetime formats', () => {
       const validDates = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: {
           name: 'datetime_test',
           created: '2024-01-15T10:30:00Z',
@@ -799,7 +803,7 @@ describe('Schema Edge Cases', () => {
 
     it('should fail with invalid datetime formats', () => {
       const invalidDate = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: {
           name: 'bad_datetime_test',
           created: '2024-13-15T25:30:00Z', // Invalid month and hour
@@ -826,7 +830,7 @@ describe('Schema Edge Cases', () => {
 
     it('should validate URI formats', () => {
       const validURI = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: {
           name: 'uri_test',
           references: [
@@ -851,7 +855,7 @@ describe('Schema Edge Cases', () => {
 
     it('should fail with invalid URI formats', () => {
       const invalidURI = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: {
           name: 'bad_uri_test',
           references: [
@@ -898,7 +902,7 @@ describe('Schema Edge Cases', () => {
   describe('clean break: the removed `observed` type and `expression` field', () => {
     it('should reject the removed `observed` variable type', () => {
       const invalid = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         models: {
           test: {
@@ -927,7 +931,7 @@ describe('Schema Edge Cases', () => {
       // expression sidecar was left behind. Silently ignoring it would keep the
       // document loading while the equation it describes goes missing.
       const invalid = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         models: {
           test: {
@@ -954,7 +958,7 @@ describe('Schema Edge Cases', () => {
 
     it('should accept both 1.0.0 variable types, neither carrying an expression', () => {
       const valid = {
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         models: {
           test: {
@@ -979,7 +983,7 @@ describe('Schema Edge Cases', () => {
       expect(errors).toEqual([])
 
       const result = loadDocument(valid)
-      expect(result.esm).toBe('2.0.0')
+      expect(result.esm).toBe('1.0.0')
     })
   })
 })

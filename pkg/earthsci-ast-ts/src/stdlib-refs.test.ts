@@ -132,7 +132,7 @@ describe('esm:std refs', () => {
 
   const lib = (name: string, importRef?: string): string =>
     JSON.stringify({
-      esm: '2.0.0',
+      esm: '1.1.0',
       metadata: { name },
       ...(importRef ? { expression_template_imports: [{ ref: importRef }] } : {}),
       expression_templates: {
@@ -141,7 +141,7 @@ describe('esm:std refs', () => {
     })
 
   const consumer = JSON.stringify({
-    esm: '2.0.0',
+    esm: '1.1.0',
     metadata: { name: 'consumer' },
     models: {
       M: {
@@ -186,7 +186,7 @@ describe('esm:std refs', () => {
   it('a bundled subsystem file mounts its sibling', () => {
     setStdlibFilesForTesting({
       'outer.esm': JSON.stringify({
-        esm: '2.0.0',
+        esm: '1.1.0',
         metadata: { name: 'outer' },
         models: {
           Outer: {
@@ -197,7 +197,7 @@ describe('esm:std refs', () => {
         },
       }),
       'inner.esm': JSON.stringify({
-        esm: '2.0.0',
+        esm: '1.1.0',
         metadata: { name: 'inner' },
         models: {
           Inner: {
@@ -209,7 +209,7 @@ describe('esm:std refs', () => {
     })
     const f = loadString(
       JSON.stringify({
-        esm: '2.0.0',
+        esm: '1.1.0',
         metadata: { name: 'mounter' },
         models: {
           Top: {

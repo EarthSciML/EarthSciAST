@@ -30,7 +30,7 @@ const POINTER = '/models/Met/variables/K/update'
  */
 function doc(options: { component?: string; ownShape?: string[]; mapToBox: boolean }): string {
   return JSON.stringify({
-    esm: '2.0.0',
+    esm: '1.3.0',
     metadata: { name: 'RecordsPerSampleMountedIndexSet' },
     data_sources: {
       met_source: {

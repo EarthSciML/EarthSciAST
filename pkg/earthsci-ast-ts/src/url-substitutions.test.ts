@@ -198,13 +198,13 @@ describe('esm-spec §4.7 "Bindings reach through an assembly": a catalogue on th
   const sized = fs.readFileSync(path.join(SUITE, 'catalogue', 'sized.esm'), 'utf8')
   const catalogue = (ref: string): string =>
     JSON.stringify({
-      esm: '2.0.0',
+      esm: '1.0.0',
       metadata: { name: 'remote_catalogue' },
       models: { Inner: { ref } },
     })
   const run = (ref: string): string =>
     JSON.stringify({
-      esm: '2.0.0',
+      esm: '1.0.0',
       metadata: { name: 'remote_run' },
       models: {
         Run: {

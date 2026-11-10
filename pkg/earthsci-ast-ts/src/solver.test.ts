@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadDocument, loadString, toJson } from './index.js'
-import { rejectRootLoadGates } from './parse.js'
 import { ERROR_CODES } from './errors.js'
 import { resolveTolerances, DEFAULT_ABSTOL, DEFAULT_RELTOL } from './solver.js'
 
@@ -54,10 +53,8 @@ describe('the document-scoped `solver` block (esm-spec §2.2)', () => {
     // CALLED from the load path, so this binding accepted a 1.0.0 document
     // carrying the block. Nothing caught it — the invalid fixture is pinned
     // `resolver_only`, which asks the schema layer to ACCEPT it.
-    // A 1.x root is refused by the major-version check first, so the gates are
-    // driven directly.
     expect(() =>
-      rejectRootLoadGates({ ...base, esm: '1.0.0', solver: { stiffness: 'high' } }),
+      loadString(JSON.stringify({ ...base, esm: '1.0.0', solver: { stiffness: 'high' } })),
     ).toThrowError(expect.objectContaining({ code: ERROR_CODES.SOLVER_VERSION_TOO_OLD }))
   })
 

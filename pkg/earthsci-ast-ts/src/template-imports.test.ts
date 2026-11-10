@@ -570,7 +570,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
 
   const modelJson = (extraModelFields: string, topFields = '') => `
   {
-    "esm": "2.0.0",
+    "esm": "1.0.0",
     "metadata": {"name": "t"},${topFields}
     "models": {
       "M": {${extraModelFields}
@@ -611,7 +611,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     fs.writeFileSync(
       path.join(tmpDir, 'lib_only.esm'),
       JSON.stringify({
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'lib' },
         expression_templates: {
           t_inner: { params: [], body: 7 },
@@ -663,7 +663,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     fs.writeFileSync(
       path.join(tmpDir, 'grid.esm'),
       JSON.stringify({
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'grid' },
         metaparameters: { NC: { type: 'integer' } },
         index_sets: { cells: { kind: 'interval', size: 'NC' } },
@@ -694,7 +694,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     fs.writeFileSync(
       path.join(tmpDir, 'lib_n.esm'),
       JSON.stringify({
-        esm: '2.0.0',
+        esm: '1.0.0',
         metadata: { name: 'lib' },
         metaparameters: { N: { type: 'integer', default: 8 } },
         expression_templates: { n: { params: [], body: 'N' } },
@@ -727,7 +727,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     // has to stay balanced, esm-spec §4.4).
     const f = loadStr(`
     {
-      "esm": "2.0.0",
+      "esm": "1.1.0",
       "metadata": {"name": "fold"},
       "metaparameters": {"N": {"type": "integer", "default": 6}},
       "index_sets": {"cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}},
@@ -788,7 +788,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
   it('expression-position substitution never folds', () => {
     const f = loadStr(`
     {
-      "esm": "2.0.0",
+      "esm": "1.0.0",
       "metadata": {"name": "subst"},
       "metaparameters": {"N": {"type": "integer", "default": 144}},
       "models": {
@@ -849,7 +849,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
             }
     }
     return {
-      esm: '2.0.0',
+      esm: '1.0.0',
       metadata: { name: 'chain' },
       models: {
         M: {
@@ -865,7 +865,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     // A 3-deep local chain: under Option B (esm-spec §9.6.4) the target-free
     // references survive loadString and `Expand` reproduces the inlined chain.
     const doc = {
-      esm: '2.0.0',
+      esm: '1.0.0',
       metadata: { name: 'chain3' },
       models: {
         M: {
@@ -989,7 +989,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     ['domain', '"domain": {"temporal": {}}'],
   ])('root document: top-level templates beside %s are rejected', (_key, snippet) => {
     const head =
-      '{"esm": "2.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, '
+      '{"esm": "1.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, '
     expect(errCode(() => loadString(head + snippet + '}'))).toBe('template_library_illegal_payload')
   })
 

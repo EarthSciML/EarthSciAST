@@ -37,7 +37,7 @@
  */
 
 import type { EsmFile } from './types.js'
-import { SCHEMA_VERSION, findRemovedConstruct } from './parse.js'
+import { LAST_V1_VERSION, SCHEMA_VERSION, findRemovedConstruct } from './parse.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /**
@@ -81,7 +81,7 @@ const CURRENT_VERSION = parseVersion(SCHEMA_VERSION)!
 // The 1.x line that crosses the 2.0.0 break by relabelling: 1.0.0 up to the last
 // 1.x release.
 const V1_FLOOR: SemVer = { major: 1, minor: 0, patch: 0 }
-const V1_LAST: SemVer = { major: 1, minor: 3, patch: 0 }
+const V1_LAST: SemVer = parseVersion(LAST_V1_VERSION)!
 
 /**
  * True when `version` sits on the additive line `2.0.0 … <current>` and can be

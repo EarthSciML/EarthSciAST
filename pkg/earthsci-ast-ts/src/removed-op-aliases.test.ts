@@ -15,7 +15,6 @@ import {
   SCHEMA_VERSION,
   loadDocument,
   loadPath,
-  prepareDocumentOps,
   raiseFaqVersionFloor,
 } from './parse.js'
 import { resolveSubsystemRefsSync } from './ref-loading.js'
@@ -72,13 +71,11 @@ describe('removed_spellings conformance tier', () => {
   }
 
   it('faq_requires_v11: `faq` below esm 1.1.0 is faq_version_too_old', () => {
-    // A 1.x root is refused by the major-version check after the wire boundary,
-    // so the boundary is driven directly.
     const doc = JSON.parse(fs.readFileSync(conf('canonical.esm'), 'utf-8'))
     doc.esm = '1.0.0'
-    expect(() => prepareDocumentOps(doc)).toThrow(/faq_version_too_old/)
+    expect(() => loadDocument(doc)).toThrow(/faq_version_too_old/)
     doc.esm = '1.1.0'
-    expect(() => prepareDocumentOps(doc)).not.toThrow()
+    expect(loadDocument(doc).esm).toBe('1.1.0')
   })
 })
 

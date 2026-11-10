@@ -67,7 +67,7 @@ describe('Brownian (SDE) support', () => {
     // `distribution` and `update` are parameter-only: an unknown's behaviour is
     // stated by the equations and nowhere else.
     const bad = JSON.stringify({
-      esm: '2.0.0',
+      esm: '1.0.0',
       metadata: { name: 'Bad' },
       models: {
         M: {
@@ -88,7 +88,7 @@ describe('Brownian (SDE) support', () => {
 
   it('schema rejects a wiener update with no distribution to resample', () => {
     const bad = JSON.stringify({
-      esm: '2.0.0',
+      esm: '1.0.0',
       metadata: { name: 'Bad' },
       models: {
         M: {
