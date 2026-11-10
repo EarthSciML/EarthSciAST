@@ -1013,7 +1013,8 @@ func authoredDeclarationBlocks(jsonStr string) (templates, metaparams json.RawMe
 }
 
 // scanOpAliases rewrites `"op": "aggregate"` to `"op": "faq"` directly in the
-// JSON TEXT, and reports whether a `"op": "arrayop"` is present.
+// JSON TEXT, and reports the first removed op (removedOps) the text spells, or
+// "" when there is none.
 //
 // Textual rather than decode-and-re-marshal on purpose: Go's encoder writes map
 // keys SORTED, so round-tripping the document through map[string]any destroys
@@ -1023,7 +1024,7 @@ func authoredDeclarationBlocks(jsonStr string) (templates, metaparams json.RawMe
 //
 // The scanner tracks string boundaries (including escapes) so an `"op"`
 // appearing INSIDE some other string value is never mistaken for a key.
-func scanOpAliases(src string) (out string, aliases int, hasRemoved bool, hasFaq bool) {
+func scanOpAliases(src string) (out string, aliases int, removed string, hasFaq bool) {
 	var b strings.Builder
 	b.Grow(len(src))
 	i := 0
@@ -1083,18 +1084,18 @@ func scanOpAliases(src string) (out string, aliases int, hasRemoved bool, hasFaq
 		case "aggregate":
 			b.WriteString(`"faq"`)
 			aliases++
-		case "arrayop":
-			b.WriteString(vRaw)
-			hasRemoved = true
 		case "faq":
 			b.WriteString(vRaw)
 			hasFaq = true
 		default:
 			b.WriteString(vRaw)
+			if _, gone := removedOps[vContent]; gone && removed == "" {
+				removed = vContent
+			}
 		}
 		i = vNext
 	}
-	return b.String(), aliases, hasRemoved, hasFaq
+	return b.String(), aliases, removed, hasFaq
 }
 
 // declaredEsmBelowV11 reports whether the document's `esm` field is below 1.1.0.
@@ -1123,10 +1124,12 @@ func declaredEsmBelowV11(jsonStr string) (declared string, below bool) {
 //
 // Three steps, in this order:
 //
-//  1. `arrayop` (removed at esm 0.8.0) is rejected BY NAME. It is a well-formed
-//     identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
-//     rewrite-target op: the document would load silently and fail much later
-//     as `unlowered_operator`, or never.
+//  1. A removed op (removedOps) or a `function_tables` block is rejected BY
+//     NAME as `removed_op` (checkRemovedConstructs). A removed op's name is a
+//     well-formed identifier, so esm-spec §4.2 would otherwise admit it as an
+//     OPEN rewrite-target op: the document would load silently and fail much
+//     later as `unlowered_operator`, or never. This runs before schema
+//     validation, which would otherwise report the removed fields first.
 //  2. The `faq` version gate, on the AUTHORED form — `faq` arrives at esm 1.1.0
 //     (esm-spec §2.2.4). Deliberately BEFORE normalization: `aggregate` is the
 //     pre-1.1.0 spelling, so a 1.0.0 document carrying the alias is legal.
@@ -1135,12 +1138,9 @@ func declaredEsmBelowV11(jsonStr string) (declared string, below bool) {
 //
 // See docs/content/rfcs/faq-node-rename.md.
 func prepareDocumentOps(jsonStr string) (string, error) {
-	rewritten, aliases, hasRemoved, hasFaq := scanOpAliases(jsonStr)
-	if hasRemoved {
-		return "", fmt.Errorf(
-			"removed_op: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a " +
-				"deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query " +
-				"node). See docs/content/rfcs/faq-node-rename.md")
+	rewritten, aliases, removed, hasFaq := scanOpAliases(jsonStr)
+	if err := checkRemovedConstructs(jsonStr, removed); err != nil {
+		return "", err
 	}
 	declared, below := declaredEsmBelowV11(jsonStr)
 	// The gate reads the AUTHORED form: `hasFaq` counts only nodes that spelled
