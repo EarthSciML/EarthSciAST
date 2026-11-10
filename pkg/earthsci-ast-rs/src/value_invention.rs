@@ -1714,20 +1714,16 @@ struct FastExpr<'a> {
 
 impl<'a> FastExpr<'a> {
     fn compile(node: &'a Value, ctx: &'a ViCtx, ranges: &Map<String, Value>) -> Option<Self> {
-        // Every operator sub-tree, by its text, and how often it occurs.
-        fn tally(node: &Value, seen: &mut HashMap<String, usize>) {
-            if let Value::Object(_) = node {
-                *seen.entry(node.to_string()).or_default() += 1;
-                for a in node_args(node) {
-                    tally(a, seen);
-                }
-            }
+        let mut ids = TreeIds::default();
+        ids.id(node);
+        let mut count: HashMap<usize, usize> = HashMap::new();
+        for &id in ids.of.values() {
+            *count.entry(id).or_default() += 1;
         }
-        let mut seen = HashMap::new();
-        tally(node, &mut seen);
-        seen.retain(|_, n| *n > 1);
+        count.retain(|_, n| *n > 1);
         let mut cse = FastCse {
-            repeated: seen,
+            of: ids.of,
+            repeated: count,
             slot: HashMap::new(),
             shared: Vec::new(),
         };
@@ -1746,12 +1742,62 @@ impl<'a> FastExpr<'a> {
     }
 }
 
-/// [`FastExpr::compile`]'s shared sub-expressions: the repeated sub-trees'
-/// texts, the slot each has been given, and the slots' compiled nodes.
+/// [`FastExpr::compile`]'s shared sub-expressions: each operator sub-tree's
+/// structural id, the ids written more than once, the slot each has been
+/// given, and the slots' compiled nodes.
 struct FastCse<'a> {
-    repeated: HashMap<String, usize>,
-    slot: HashMap<String, usize>,
+    of: HashMap<*const Value, usize>,
+    repeated: HashMap<usize, usize>,
+    slot: HashMap<usize, usize>,
     shared: Vec<Fast<'a>>,
+}
+
+/// One part of a [`TreeIds`] key: an operand that is an operator sub-tree,
+/// by its id, or any other value, by its text.
+#[derive(PartialEq, Eq, Hash)]
+enum TreePart {
+    Tree(usize),
+    Text(String),
+}
+
+/// Structural ids of the operator sub-trees of an expression, numbered
+/// bottom-up: two sub-trees share an id exactly when their JSON text is the
+/// same. A node's key is its fields other than `args` as text and its
+/// operands' parts, so each value is serialized once and the numbering is
+/// linear in the tree.
+#[derive(Default)]
+struct TreeIds {
+    /// Each operator sub-tree visited, by address, and its id.
+    of: HashMap<*const Value, usize>,
+    by_key: HashMap<Vec<TreePart>, usize>,
+}
+
+impl TreeIds {
+    fn id(&mut self, node: &Value) -> Option<usize> {
+        let Value::Object(map) = node else {
+            return None;
+        };
+        let mut key: Vec<TreePart> = Vec::new();
+        for (k, v) in map {
+            match v {
+                Value::Array(args) if k == "args" => {
+                    key.push(TreePart::Text("args".into()));
+                    for a in args {
+                        key.push(match self.id(a) {
+                            Some(i) => TreePart::Tree(i),
+                            None => TreePart::Text(a.to_string()),
+                        });
+                    }
+                    key.push(TreePart::Text(String::new()));
+                }
+                _ => key.push(TreePart::Text(format!("{k:?}:{v}"))),
+            }
+        }
+        let n = self.by_key.len();
+        let id = *self.by_key.entry(key).or_insert(n);
+        self.of.insert(node as *const Value, id);
+        Some(id)
+    }
 }
 
 /// A comparison [`Fast`] evaluates.
@@ -1774,17 +1820,16 @@ impl<'a> Fast<'a> {
     ) -> Option<Self> {
         if let Value::Object(_) = node
             && !cse.repeated.is_empty()
+            && let Some(&id) = cse.of.get(&(node as *const Value))
         {
-            let text = node.to_string();
-            if let Some(&i) = cse.slot.get(&text) {
+            if let Some(&i) = cse.slot.get(&id) {
                 return Some(Fast::Shared(i));
             }
-            if cse.repeated.contains_key(&text) {
-                cse.repeated.remove(&text);
+            if cse.repeated.remove(&id).is_some() {
                 let f = Self::compile(node, ctx, ranges, cse)?;
                 cse.shared.push(f);
                 let i = cse.shared.len() - 1;
-                cse.slot.insert(text, i);
+                cse.slot.insert(id, i);
                 return Some(Fast::Shared(i));
             }
         }
@@ -3482,5 +3527,41 @@ mod tests {
             materialize_value_invention(&model, &const_arrays, &HashMap::new(), &no_bounds())
                 .is_err()
         );
+    }
+
+    /// Two operator sub-trees share a structural id exactly when their JSON
+    /// text is the same: an operand, a field other than `args`, or the field
+    /// order apart gives a new id.
+    #[test]
+    fn tree_ids_match_equal_json_text() {
+        let tree = serde_json::json!({"op": "+", "args": [
+            {"op": "min", "args": ["u", "v"]},
+            {"op": "min", "args": ["u", "v"]},
+            {"op": "min", "args": ["v", "u"]},
+            {"op": "min", "args": ["u", 1]},
+            {"op": "min", "args": ["u", "1"]},
+            {"op": "min", "args": ["u", "v"], "wrt": "t"},
+            {"args": ["u", "v"], "op": "min"},
+            {"op": "*", "args": [{"op": "min", "args": ["u", "v"]}, 2]},
+            {"op": "*", "args": [{"op": "min", "args": ["u", "v"]}, 2]}
+        ]});
+        let mut ids = TreeIds::default();
+        ids.id(&tree);
+        let a = node_args(&tree);
+        let id = |v: &Value| ids.of[&(v as *const Value)];
+        let text: Vec<String> = a.iter().map(Value::to_string).collect();
+        for i in 0..a.len() {
+            for j in 0..a.len() {
+                assert_eq!(
+                    id(&a[i]) == id(&a[j]),
+                    text[i] == text[j],
+                    "{} vs {}",
+                    a[i],
+                    a[j]
+                );
+            }
+        }
+        assert_eq!(id(&a[0]), id(&node_args(&a[7])[0]));
+        assert_eq!(ids.of.len(), 12);
     }
 }
