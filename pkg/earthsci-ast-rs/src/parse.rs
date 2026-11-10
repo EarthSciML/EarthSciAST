@@ -1090,7 +1090,11 @@ fn check_version_compatibility(obj: &serde_json::Map<String, Value>, errors: &mu
     if !(OLDEST_LOADABLE_MAJOR..=supported_major).contains(&major) {
         errors.push(format!(
             "Unsupported major version {major}. This library supports major versions \
-             {OLDEST_LOADABLE_MAJOR} to {supported_major} only."
+             {}.",
+            (OLDEST_LOADABLE_MAJOR..=supported_major)
+                .map(|m| m.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
 }

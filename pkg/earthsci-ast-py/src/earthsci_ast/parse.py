@@ -221,11 +221,15 @@ def _check_version_compatibility(version_string: str) -> None:
             f"This library supports major versions {', '.join(map(str, sorted(newest)))}."
         )
 
-    # Warn about newer minor versions
+    # Warn about a minor newer than the newest release of its major
     if minor > newest[major]:
+        latest = (
+            ".".join(str(v) for v in _CURRENT_VERSION)
+            if major == _CURRENT_VERSION[0]
+            else f"{major}.{newest[major]}.0"
+        )
         warnings.warn(
-            f"{version_string} is newer than the current library version "
-            f"{'.'.join(str(v) for v in _CURRENT_VERSION)}. "
+            f"{version_string} is newer than the current library version {latest}. "
             f"Some features may not be supported.",
             UserWarning,
             stacklevel=3,

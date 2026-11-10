@@ -232,10 +232,10 @@ const NEWEST_BY_MAJOR: ReadonlyMap<number, { major: number; minor: number; patch
     [CURRENT_VERSION.major, CURRENT_VERSION],
   ])
 
-/** The supported majors, for messages: `major versions 1 and 2`. */
+/** The supported majors, for messages: `major versions 1, 2`. */
 const SUPPORTED_MAJORS_TEXT =
   (NEWEST_BY_MAJOR.size > 1 ? 'major versions ' : 'major version ') +
-  [...NEWEST_BY_MAJOR.keys()].sort().join(' and ')
+  [...NEWEST_BY_MAJOR.keys()].sort().join(', ')
 
 /**
  * The `esm` version declared by `data`, parsed into components, or `null` when
@@ -293,7 +293,7 @@ function checkVersionCompatibility(
   // Reject unsupported major versions
   if (isUnsupportedMajor(versionComponents)) {
     throw new ParseError(
-      `Unsupported major version ${versionComponents.major}. This parser supports ${SUPPORTED_MAJORS_TEXT}.`,
+      `Unsupported major version ${versionComponents.major}. This library supports ${SUPPORTED_MAJORS_TEXT}.`,
     )
   }
 

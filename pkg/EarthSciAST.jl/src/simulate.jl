@@ -148,7 +148,7 @@ function _refuse_unsupported_major_version(version)
     (major == supported || major == 1) || throw(
         ParseError(
             "Unsupported major version $major. This library supports major versions " *
-                "1 and $supported only."
+                "1, $supported."
         )
     )
     return nothing

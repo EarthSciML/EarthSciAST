@@ -95,7 +95,7 @@
         "expected_behavior": "load_with_warning",
         "description": "Double-digit minor version - 1.10.0 is newer than 1.3.0, the last 1.x minor, which a lexicographic comparison gets wrong",
         "warnings": [
-          "File version 1.10.0 is newer than library version 1.0.0. Unknown fields will be ignored."
+          "1.10.0 is newer than the current library version 1.3.0. Some features may not be supported."
         ]
       },
       {
@@ -131,7 +131,9 @@
         "file_version": "2.5.1",
         "expected_behavior": "load_with_warning",
         "description": "2.5.1 - a NEWER minor of the supported major 2: loaded with a warning. It was the future-major rejection while the library was 1.x; version_3_0_0_major_rejection.esm took that role.",
-        "warning": "2.5.1 is newer than the current library version 2.0.0. Some features may not be supported."
+        "warnings": [
+          "2.5.1 is newer than the current library version 2.0.0. Some features may not be supported."
+        ]
       },
       {
         "file": "version_3_0_0_major_rejection.esm",
