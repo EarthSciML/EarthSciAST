@@ -2171,7 +2171,11 @@ function _tpl_instantiate(
     root = _tpl_subst(st, sk.root)
     if sites !== nothing
         for (r, ap) in sk.roots
-            img = haskey(sk.live, r) ? get(st.img, r, nothing) : r
+            # A nested root outside the skeleton tree has no instance, and
+            # recorded as itself it would name a node holding parameter
+            # sentinels; only a sentinel-free one is shared as it is.
+            img = haskey(sk.live, r) ? get(st.img, r, nothing) :
+                (_tpl_holds_sentinel(r) ? nothing : r)
             img === nothing || _record_site!(sites, memo, img, ap)
         end
         for s in sk.root_params
@@ -2180,6 +2184,9 @@ function _tpl_instantiate(
     end
     return root
 end
+
+# Whether a parameter sentinel occurs anywhere in the expression `r`.
+_tpl_holds_sentinel(r) = _tpl_scan!(r, IdDict{OpExpr, Nothing}(), IdDict{OpExpr, Nothing}(), IdDict{OpExpr, Bool}()) !== false
 
 struct _TplInst
     sk::_TplSkel
