@@ -111,7 +111,7 @@ export interface UnitWarning {
    *   neutral-literal rule passes or skips fails once a nonzero bare numeric
    *   literal is read as dimensionless at scale 1 (esm-spec §4.8.6). Emitted by
    *   {@link dimensionlessLiteralWarnings}, never by `validateUnits`. →
-   *   WARNING at this stage; it becomes an error at the next major esm version.
+   *   WARNING at this stage; it becomes an error in a future version of EarthSciAST.
    *
    * An unknown VARIABLE is an `analysis` finding here and nothing more: it is
    * separately a hard `undefined_variable` error, so the units layer does not
@@ -2216,8 +2216,8 @@ export function dimensionlessLiteralWarnings(file: EsmFile): UnitWarning[] {
     out.push({
       message:
         `${pointer}: with bare numeric literals read as dimensionless (esm-spec §4.8.6), ` +
-        `${found}; bare literal(s): ${literals.join(', ')}. This becomes an error at the next ` +
-        `major esm version; a literal that carries a unit is written const(value, units "...") ` +
+        `${found}; bare literal(s): ${literals.join(', ')}. This becomes an error in a future ` +
+        `version of EarthSciAST; a literal that carries a unit is written const(value, units "...") ` +
         `(esm-spec §4.8.5)`,
       code: ERROR_CODES.UNITS_DIMENSIONLESS_LITERAL_MISMATCH,
       location: pointer,

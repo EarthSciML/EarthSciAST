@@ -2398,8 +2398,8 @@ impl LiteralWalk<'_> {
         }
         let message = format!(
             "{pointer}: with bare numeric literals read as dimensionless (esm-spec §4.8.6), \
-             {found}; bare literal(s): {}. This becomes an error at the next major esm \
-             version; a literal that carries a unit is written const(value, units \"...\") \
+             {found}; bare literal(s): {}. This becomes an error in a future version of \
+             EarthSciAST; a literal that carries a unit is written const(value, units \"...\") \
              (esm-spec §4.8.5)",
             literals.join(", ")
         );

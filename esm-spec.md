@@ -2046,7 +2046,7 @@ With `speed_ms` declared `m/s` and `speed_mph` declared `mi/h`, the right-hand s
 1. **Only on `const`.** `units` is legal on a `const` node and on no other; the schema rejects it elsewhere.
 2. **Resolved like a variable's units.** The string is resolved against the §4.8.1 registry with the §4.8.2 grammar. A string that does not resolve is `unit_parse_error`, reported at the **containing expression field** — `/models/<M>/equations/<i>/rhs` or `.../lhs` — the same pointer an undefined name in that expression is reported at.
 3. **The unit, not the number.** A unit-bearing `const` has the declared dimension and exact scale in every §4.8.3 rule. In particular it is NOT a neutral literal in a `+`/`-` position, and neither is its unary negation: `x [m] + const(1, units "kg")` and `x [m] + -(const(1, units "kg"))` are mismatches, while `x [m] + const(1)` stays neutral. Its numeric `value` is NEVER checked against its units: `const(0.4470, units "m*h/(mi*s)")` is accepted just as `const(0.44704, ...)` is.
-4. **Nothing else changes.** A bare numeric literal, and a `const` without `units`, keep the undeterminable dimension of §4.8.4. §4.8.6 states the rule that will replace this at the next major esm version, and the warning that announces it now.
+4. **Nothing else changes.** A bare numeric literal, and a `const` without `units`, keep the undeterminable dimension of §4.8.4. §4.8.6 states the rule that will replace this in a future version of EarthSciAST, and the warning that announces it now.
 5. **Templates are checked through their expansion.** An `apply_expression_template` call has the dimension of its expansion (§9.6.4 rule 2), so a unit-bearing `const` inside a template body makes every call of that template checkable. A checker that sees an unexpanded call expands it before propagating dimensions.
 6. **Version gate.** A document declaring `esm` below `1.2.0` that carries `units` on any expression node is rejected with `const_units_version_too_old`, naming the offending node's pointer. The gate reads the node's OWN file (§4.7 "Each file is held to its own declared `esm` version"): a unit-bearing `const` inside a mounted 1.2.0 file is legal even when the mounting file declares an older version.
 
@@ -2077,15 +2077,15 @@ The unit environment of a site is its component's own declarations plus the scop
 
 **Validity is unchanged.** Errors and `is_valid` MUST be decided by the current rule alone: `units_dimensionless_literal_mismatch` never makes a document invalid, and no document changes validity at this stage.
 
-**The next major esm version makes the dimensionless-literal rule the rule.** These warnings then become `unit_dimension_mismatch` errors (§4.8.4), and items 1 and 2 above replace the neutral-literal text of §4.8.3–§4.8.5. An author clears a warning now by writing the unit the literal carries: `T - const(273.15, units "K")`, `P_pa / const(101325, units "Pa/atm")`, `exp(-const(1370, units "K") / T)`. Where a literal really is a pure number and the warning is for the quantity next to it (`dx [m] = 1 / 64`), the left-hand side's unit belongs on a `const` instead: `dx = const(0.015625, units "m")`.
+**A future version of EarthSciAST makes the dimensionless-literal rule the rule.** These warnings then become `unit_dimension_mismatch` errors (§4.8.4), and items 1 and 2 above replace the neutral-literal text of §4.8.3–§4.8.5. An author clears a warning now by writing the unit the literal carries: `T - const(273.15, units "K")`, `P_pa / const(101325, units "Pa/atm")`, `exp(-const(1370, units "K") / T)`. Where a literal really is a pure number and the warning is for the quantity next to it (`dx [m] = 1 / 64`), the left-hand side's unit belongs on a `const` instead: `dx = const(0.015625, units "m")`.
 
-**No version bump.** The warning adds a diagnostic and changes no document's shape or validity, so it applies to a document of any declared `esm` version and arrives without a version bump, as purely additive changes do. The rule change at the next major version is a breaking change and carries that version.
+**No version bump.** The warning adds a diagnostic and changes no document's shape or validity, so it applies to a document of any declared `esm` version and arrives without a version bump, as purely additive changes do. The rule change, when it arrives in a future version of EarthSciAST, is a breaking change and is announced as one.
 
 `tests/conformance/dimensionless_literal/` pins the warning: one equation per pattern class above, controls that must not warn, and the exact warnings that the `tests/valid` files pinning today's neutral literal now carry.
 
 | Code | Meaning |
 |---|---|
-| `units_dimensionless_literal_mismatch` | WARNING. A check site that the current neutral-literal rule passes or skips fails when bare numeric literals other than zero are dimensionless at scale 1 (§4.8.6). It becomes an error at the next major esm version. |
+| `units_dimensionless_literal_mismatch` | WARNING. A check site that the current neutral-literal rule passes or skips fails when bare numeric literals other than zero are dimensionless at scale 1 (§4.8.6). It becomes an error in a future version of EarthSciAST. |
 
 ### 4.9 Name Resolution: what a checker MUST NOT call undefined
 

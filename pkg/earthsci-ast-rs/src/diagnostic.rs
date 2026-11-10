@@ -532,7 +532,7 @@ diagnostic_code_registry! {
     // ---- unit FINDING kinds (`units.rs`): a second, smaller vocabulary
     // carried on `UnitWarning.code` rather than on a `StructuralError`. The
     // first two state a defect in the FILE, the third a limit of the ANALYSIS,
-    // the fourth a warning ahead of the next major version's literal rule.
+    // the fourth a warning ahead of a future version's literal rule.
     // Shared verbatim with Go's `UnitFinding*` and TypeScript's
     // `UnitWarning['code']` union. ----
 
