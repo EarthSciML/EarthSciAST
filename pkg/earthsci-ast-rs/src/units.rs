@@ -381,7 +381,22 @@ impl std::fmt::Display for ExactScale {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.ratio_string() {
             Some(s) => write!(f, "{s}"),
-            None => write!(f, "{:e}", self.to_f64()),
+            None => {
+                // `{:e}`'s layout (`1e25`, `3.5e-7`) with digits whose decimal
+                // ties take the even last digit, as the other bindings write
+                // them; `{:e}` itself takes the upper one
+                let v = self.to_f64();
+                if !v.is_finite() || v == 0.0 {
+                    return write!(f, "{v:e}");
+                }
+                let d = crate::canonicalize::shortest_digits(v);
+                let mut out = String::with_capacity(32);
+                if v < 0.0 {
+                    out.push('-');
+                }
+                crate::canonicalize::push_scientific(&mut out, d.as_str(), d.exp, false);
+                f.write_str(&out)
+            }
         }
     }
 }

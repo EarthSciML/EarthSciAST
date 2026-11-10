@@ -762,8 +762,14 @@ numbers by one shared scheme, pinned to what the Julia reference's
 
 2. **Shortest-roundtrip float formatting.** A non-integral finite float
    serializes with the **shortest** digit string that round-trips to the same
-   IEEE-754 double (the Ryu-shortest digits every binding's default `repr`
-   produces), laid out Julia-style. With `e10` the decimal exponent of the
+   IEEE-754 double (the Ryu-shortest digits), laid out Julia-style. When the
+   exact value lies halfway between two shortest candidates that both
+   round-trip, the one with the even last digit is written
+   (`705129328097.90625` → `7.051293280979062e11`); when the even candidate
+   does not round-trip to the same double — at a power of two, where the
+   rounding interval below is half as wide as the one above (`2^-24` →
+   `5.960464477539063e-8`, not `…062e-8`) — the other candidate is written.
+   With `e10` the decimal exponent of the
    value's first significant digit (`value = ±d.dd… × 10^e10`, so
    `e10(999999.5) = 5`, `e10(0.000123456) = −4`):
 

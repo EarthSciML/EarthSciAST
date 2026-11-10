@@ -2926,12 +2926,14 @@ fn write_csv_rows(
     Ok(())
 }
 
-/// A float rendered for CSV without losing a bit: `{}` on an f64 is Rust's
-/// shortest round-tripping form, which is what a comparator reading with
-/// `float()` needs. Non-finite values are written as-is (`NaN`, `inf`) rather
-/// than blanked, so a wrong answer stays visible instead of reading as missing.
+/// A float rendered for CSV without losing a bit: the shortest round-tripping
+/// digits (a decimal tie takes the even last digit, as the other bindings
+/// write it), laid out as std's `Display` lays them out (`100`, `0.25`), which
+/// is what a comparator reading with `float()` needs. Non-finite values are
+/// written as-is (`NaN`, `inf`) rather than blanked, so a wrong answer stays
+/// visible instead of reading as missing.
 fn format_csv_float(v: f64) -> String {
-    format!("{v}")
+    earthsci_ast::extension::canonicalize::format_plain_float(v)
 }
 
 /// The `simulate --format grid` document: [`earthsci_ast::derive_output_plan`]
@@ -4046,14 +4048,9 @@ struct TestRow {
 }
 
 /// Render a float the way Julia's `print` does, so the two runners' summaries
-/// read the same: Rust's `{}` prints `100` where Julia prints `100.0`.
+/// read the same (`100.0`, `1.0e6`, a decimal tie with the even last digit).
 fn julia_float(v: f64) -> String {
-    let rendered = format!("{v}");
-    if v.is_finite() && !rendered.contains(['.', 'e', 'E']) {
-        format!("{rendered}.0")
-    } else {
-        rendered
-    }
+    earthsci_ast::extension::canonicalize::format_julia_float(v)
 }
 
 /// Every `.esm` file named by `paths`: a path that is a directory is walked
