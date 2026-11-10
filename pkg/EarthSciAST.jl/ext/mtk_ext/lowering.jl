@@ -68,8 +68,7 @@ function _resolve_lowering_var(
 end
 
 # The MTK-specific OpExpr arms: calculus operators, control flow,
-# comparisons, the array/aggregate vocabulary, and registered closed
-# functions. Reached from `_esm_to_symbolic_core` for every op outside the
+# comparisons and the array/aggregate vocabulary. Reached from `_esm_to_symbolic_core` for every op outside the
 # shared scalar arms.
 function _mtk_extended_op(
         op::AbstractString, expr::OpExpr,
@@ -148,16 +147,13 @@ function _mtk_extended_op(
         return _build_transpose(expr, var_dict, t_sym, dim_dict)
     elseif op == "concat"
         return _build_concat(expr, var_dict, t_sym, dim_dict)
-    elseif op == "fn"
-        return _build_fn(expr, var_dict, t_sym, dim_dict)
     elseif op == "const"
         # esm-spec §9.2: a `const` node IS its value. A scalar lowers to the
         # number. An ARRAY lowers to a dense `Array{Float64}` (`value[i][j]` is
         # element `(i, j)`): it is the RHS of a const-array observed, which the
         # system builders lower element by element (`_push_lowered_equation!`).
         # An array read through `index` never reaches this arm — `_build_index`
-        # takes it as a const-array gather — and an `interp.*` table is
-        # extracted at its call site by `_build_fn`.
+        # takes it as a const-array gather.
         expr.value isa Real && return expr.value
         expr.value isa AbstractVector && return EarthSciAST._const_op_to_array(expr.value)
         throw(
@@ -329,7 +325,11 @@ end
 @register_symbolic _esm_const_gather(table::Vector{Float64}, name::String, i) false
 @register_symbolic _esm_const_gather(table::Matrix{Float64}, name::String, i, j) false
 @register_symbolic _esm_const_gather(table::Array{Float64, 3}, name::String, i, j, k) false
-# See the `interp.*` registrations: a rebuilt call must stay a real scalar.
+# The registration's symtype promotion does not match a call whose table
+# argument is a constant, which is how every call looks once MTK rebuilds it
+# (alias elimination substitutes an observed into the index): the rebuilt call
+# gets symtype `Any` and `mtkcompile` cannot subtract it. Every one of these
+# calls is a real scalar, so say so for any argument types.
 Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_const_gather), args...) = Real
 
 function _build_const_gather(
@@ -568,207 +568,6 @@ function _build_concat(
     expr.axis === nothing && throw(ArgumentError("concat node missing 'axis'"))
     arrs = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
     return cat(arrs...; dims = expr.axis + 1)
-end
-
-# ========================================
-# Closed function `fn` op (esm-spec §9.2)
-# ========================================
-#
-# `interp.linear` and `interp.bilinear` are registered as opaque symbolic
-# operators here so that MTK `structural_simplify` does NOT decompose each
-# call into the ~10 underlying searchsorted+index+blend nodes — components
-# with hundreds of lookups (e.g. fastjx 18 wavelengths × 13 species ≈ 230
-# lookups) blew up the alias-elimination pass otherwise (esm-94w / esm-q7a;
-# rationale documented at esm-spec §9.2 + escalation hq-wisp-y6g6).
-#
-# The const table and axis arrays carried by the `fn` AST node are extracted
-# at lowering time and passed as concrete `Vector{Float64}` (axes / 1-D
-# tables) or `Vector{Vector{Float64}}` (2-D tables). These container types
-# act as the non-symbolic-arg discriminators in `@register_symbolic`; the
-# scalar query argument(s) are the only symbolic args MTK traces.
-#
-# `interp.searchsorted` is registered too, as an opaque integer-valued scalar:
-# it composes with `min` / `max` / `-` and a run-time `index` into a `const`
-# array (`_esm_const_gather`), which is the §9.5.3 `nearest` lowering.
-
-# 1-D linear interp registered op. The `table` and `axis` arguments are
-# concrete vectors; `x` is the symbolic query that MTK's tracer flows.
-function _esm_interp_linear(table::Vector{Float64}, axis::Vector{Float64}, x::Real)::Float64
-    return EarthSciAST.evaluate_closed_function(
-        "interp.linear",
-        Any[table, axis, Float64(x)]
-    )::Float64
-end
-
-# `interp.searchsorted` registered op: the 1-based index as a Float64, so it
-# flows through symbolic arithmetic; `_esm_const_gather` rounds it back.
-function _esm_interp_searchsorted(xs::Vector{Float64}, x::Real)::Float64
-    return Float64(
-        EarthSciAST.evaluate_closed_function(
-            "interp.searchsorted",
-            Any[Float64(x), xs]
-        )
-    )
-end
-
-# 2-D bilinear interp registered op. The `table` is a row-major nested
-# vector (`table[i][j]` at `(axis_x[i], axis_y[j])`).
-function _esm_interp_bilinear(
-        table::Vector{Vector{Float64}},
-        axis_x::Vector{Float64}, axis_y::Vector{Float64},
-        x::Real, y::Real
-    )::Float64
-    return EarthSciAST.evaluate_closed_function(
-        "interp.bilinear",
-        Any[table, axis_x, axis_y, Float64(x), Float64(y)]
-    )::Float64
-end
-
-# Register both with `@register_symbolic` so MTK treats each call as a
-# single opaque scalar node rather than alias-eliminating the underlying
-# blend ASTs. The `false` flag suppresses automatic differentiation
-# definition — the spec contract is bit-exact at exact-knot inputs but
-# piecewise-linear in between, and a derivative-of-clamp lookup is not part
-# of the spec contract; downstream users who need analytic gradients must
-# define them separately.
-@register_symbolic _esm_interp_linear(table::Vector{Float64}, axis::Vector{Float64}, x) false
-@register_symbolic _esm_interp_searchsorted(xs::Vector{Float64}, x) false
-@register_symbolic _esm_interp_bilinear(table::Vector{Vector{Float64}}, axis_x::Vector{Float64}, axis_y::Vector{Float64}, x, y) false
-
-# The registration's symtype promotion does not match a call whose table
-# arguments are constants, which is how every call looks once MTK rebuilds it
-# (alias elimination substitutes an observed into the query): the rebuilt call
-# gets symtype `Any` and `mtkcompile` cannot subtract it. Every one of these
-# calls is a real scalar, so say so for any argument types.
-Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_linear), args...) = Real
-Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_bilinear), args...) = Real
-Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_searchsorted), args...) = Real
-
-# Recursively coerce a JSON-parsed const-array value into the concrete
-# vector type the registered op expects. Inputs may be Vector{Any} of
-# Float64 (after JSON3 decode) or Vector{Float64}/Matrix-like.
-function _to_float64_vector(v)::Vector{Float64}
-    v isa Vector{Float64} && return v
-    if v isa AbstractVector
-        return Float64[Float64(x) for x in v]
-    end
-    throw(ArgumentError("expected a vector value, got $(typeof(v))"))
-end
-
-function _to_float64_table_2d(v)::Vector{Vector{Float64}}
-    v isa Vector{Vector{Float64}} && return v
-    if v isa AbstractVector
-        out = Vector{Vector{Float64}}(undef, length(v))
-        for (i, row) in enumerate(v)
-            out[i] = _to_float64_vector(row)
-        end
-        return out
-    end
-    throw(ArgumentError("expected a 2-D nested vector, got $(typeof(v))"))
-end
-
-# Pull a `const`-op array value out of an AST argument node, or raise the
-# esm-spec §9.2 `interp_table_not_const` / `interp_axis_not_const` code (`code`)
-# as the `ClosedFunctionError` the tree-walk build raises for the same node.
-function _extract_const_array_node(
-        arg::EsmExpr, fname::String, label::String,
-        code::String
-    )
-    if arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector
-        return arg.value
-    end
-    throw(
-        EarthSciAST.ClosedFunctionError(
-            code,
-            "$(fname): `$(label)` argument must be a `const`-op array " *
-                "(esm-spec §9.2); got $(arg isa OpExpr ? "a `$(arg.op)` node" : typeof(arg))"
-        )
-    )
-end
-
-function _build_fn(
-        expr::OpExpr, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
-    )
-    fname = expr.name
-    fname === nothing && throw(ArgumentError("`fn` op missing required `name` field (esm-spec §4.4)"))
-    # A lookup lowered from an `out_of_bounds: "error"` table (lower_table_lookup.jl)
-    # must raise for a query outside its axis; the registered symbolic `interp.*`
-    # functions clamp, and a solve has no channel for the error, so the lookup is
-    # refused rather than answered in the mode the author did not declare.
-    expr.table === nothing || throw(
-        EarthSciAST.TableLookupError(
-            EarthSciAST.ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
-            "table `$(expr.table)` declares `out_of_bounds: \"error\"`, which the " *
-                "ModelingToolkit lowering does not implement; it would answer with " *
-                "clamping semantics (esm-spec §9.5.3a)"
-        )
-    )
-    if fname == "interp.linear"
-        length(expr.args) == 3 ||
-            throw(ArgumentError("interp.linear expects 3 args, got $(length(expr.args))"))
-        table = _to_float64_vector(
-            _extract_const_array_node(
-                expr.args[1], fname, "table",
-                EarthSciAST.ERROR_CODES.INTERP_TABLE_NOT_CONST
-            )
-        )
-        axis = _to_float64_vector(
-            _extract_const_array_node(
-                expr.args[2], fname, "axis",
-                EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST
-            )
-        )
-        x_sym = _esm_to_symbolic(expr.args[3], var_dict, t_sym, dim_dict)
-        return _esm_interp_linear(table, axis, x_sym)
-    elseif fname == "interp.bilinear"
-        length(expr.args) == 5 ||
-            throw(ArgumentError("interp.bilinear expects 5 args, got $(length(expr.args))"))
-        table = _to_float64_table_2d(
-            _extract_const_array_node(
-                expr.args[1], fname, "table",
-                EarthSciAST.ERROR_CODES.INTERP_TABLE_NOT_CONST
-            )
-        )
-        axis_x = _to_float64_vector(
-            _extract_const_array_node(
-                expr.args[2], fname, "axis_x",
-                EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST
-            )
-        )
-        axis_y = _to_float64_vector(
-            _extract_const_array_node(
-                expr.args[3], fname, "axis_y",
-                EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST
-            )
-        )
-        x_sym = _esm_to_symbolic(expr.args[4], var_dict, t_sym, dim_dict)
-        y_sym = _esm_to_symbolic(expr.args[5], var_dict, t_sym, dim_dict)
-        return _esm_interp_bilinear(table, axis_x, axis_y, x_sym, y_sym)
-    elseif fname == "interp.searchsorted"
-        length(expr.args) == 2 ||
-            throw(ArgumentError("interp.searchsorted expects 2 args, got $(length(expr.args))"))
-        xs_raw = _extract_const_array_node(
-            expr.args[2], fname, "xs",
-            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST
-        )
-        # Validate at build, as the tree-walk build does: the registered call is
-        # opaque, so a bad table would otherwise surface mid-solve. BEFORE the
-        # Float64 coercion, so a nested `xs` is `interp_axis_not_const` and not
-        # a conversion error.
-        EarthSciAST._validate_searchsorted_table(fname, xs_raw)
-        xs = _to_float64_vector(xs_raw)
-        x_sym = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-        return _esm_interp_searchsorted(xs, x_sym)
-    end
-    # The datetime.* closed functions are not exposed as registered symbolic ops.
-    throw(
-        ArgumentError(
-            "Unsupported `fn` name in MTK lowering: `$(fname)`. " *
-                "Only `interp.linear`, `interp.bilinear` and `interp.searchsorted` are " *
-                "registered as @register_symbolic operators (esm-94w)."
-        )
-    )
 end
 
 function _get_or_make_dim(dim_dict::Dict{String, Any}, name::AbstractString)

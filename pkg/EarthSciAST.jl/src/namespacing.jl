@@ -204,7 +204,7 @@ function _namespace_expr(
     # Recurse into EVERY variable-bearing sub-expression via the shared
     # field-preserving rewrite so prefix rewrites reach faq / makearray
     # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
-    # table_lookup per-axis input expressions, makearray `values`, value-invention
+    # makearray `values`, value-invention
     # `key`, expression-valued dense `ranges` bounds, AND expression-template
     # `bindings` values (esm-spec §9.6.4 rule 7 / §10.7: template `params` —
     # the map's KEYS — never namespace, they are the template's formal
@@ -212,9 +212,7 @@ function _namespace_expr(
     # rewrites exactly the values). An explicit `bindings` carve-out used to
     # live here because `map_children` skipped that field. `map_children`
     # routes through `reconstruct`, preserving all non-expression fields
-    # (semiring, output_idx, table, output, int_var, join/join_gates,
-    # manifold, …) — earlier this rebuild hand-listed keywords and silently
-    # dropped int_var/lower/upper/table/table_axes/output.
+    # (semiring, output_idx, int_var, join/join_gates, manifold, …).
     result = map_children(
         x -> _namespace_expr(
             x, prefix, local_names, child_shadowed, child_memo,

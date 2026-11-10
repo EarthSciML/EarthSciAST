@@ -29,7 +29,6 @@
 #   values.jl   the emitted value, the context, constants, shape plumbing, slot
 #               maps, the slices-plus-concatenate read form, forcing buffers
 #   ops.jl      the elementwise ladder, the ⊕-folds, the host const-fold
-#   interp.jl   closed functions (`:fn`): the six `interp.*` forms
 #   closed.jl   the standard-library shapes: a const-array read at a computed
 #               subscript, and the comparison count
 #   emit.jl     the walk — spines, kernels, sub-kernels, reduces, scans, the RHS
@@ -54,7 +53,6 @@ const _chlo = Reactant.MLIR.Dialects.chlo
 
 include("values.jl")
 include("ops.jl")
-include("interp.jl")
 include("closed.jl")
 include("emit.jl")
 include("batch.jl")

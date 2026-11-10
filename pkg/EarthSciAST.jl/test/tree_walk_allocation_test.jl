@@ -119,69 +119,6 @@ function _advection_esm(n)
 end
 
 
-# Closed-function (`interp.*`) leaves on the array RHS (ess-wrh). Each is a single
-# faq `D(u[i]) = interp.<op>(<const table/axis>, …, u[i])` — the const table &
-# axis ride on the fn payload (lowered to a typed `_Interp*Spec` at build time);
-# the per-cell query `u[i]` merges to a GATHER. These exercise the de-boxed
-# whole-array interp path (`_eval_acc_op`'s `:fn` arm): the only Float64 arrays are the
-# preallocated buffers, so a steady-state `f!` call must allocate 0 bytes even
-# though the RHS contains a table lookup. This coverage gap is exactly why the
-# per-lane `Float64`→`Any` box went unnoticed before ess-wrh.
-_interp_linear_model(N) = ESM.Model(
-    Dict("u" => ModelVariable(UnknownVariable)),
-    [
-        ESM.Equation(
-            _ao1(_Didx("u", _v("i")), "i", 1, N),
-            _ao1(
-                _op(
-                    "fn", _const([10.0, 20.0, 40.0, 80.0, 160.0]),
-                    _const([0.0, 1.0, 2.0, 3.0, 4.0]),
-                    _idx("u", _v("i")); name = "interp.linear"
-                ), "i", 1, N
-            )
-        ),
-    ]
-)
-
-_interp_searchsorted_model(N) = ESM.Model(
-    Dict("u" => ModelVariable(UnknownVariable)),
-    [
-        ESM.Equation(
-            _ao1(_Didx("u", _v("i")), "i", 1, N),
-            _ao1(
-                _op(
-                    "fn", _idx("u", _v("i")),
-                    _const([1.0, 2.0, 3.0, 4.0, 5.0]);
-                    name = "interp.searchsorted"
-                ), "i", 1, N
-            )
-        ),
-    ]
-)
-
-# Bilinear: x-query is the per-cell state `u[i]` (→ GATHER); y-query is a broadcast
-# parameter (→ PARAM). Both children stay non-constant, so the leaf runs the
-# whole-array kernel rather than folding.
-_interp_bilinear_model(N) = ESM.Model(
-    Dict(
-        "u" => ModelVariable(UnknownVariable),
-        "cz" => ModelVariable(ParameterVariable; default = 0.5)
-    ),
-    [
-        ESM.Equation(
-            _ao1(_Didx("u", _v("i")), "i", 1, N),
-            _ao1(
-                _op(
-                    "fn",
-                    _const(Any[Any[1.0, 1.5, 2.0], Any[1.1, 1.6, 2.1], Any[1.2, 1.7, 2.2]]),
-                    _const([10.0, 100.0, 1000.0]), _const([0.1, 0.5, 1.0]),
-                    _idx("u", _v("i")), _v("cz"); name = "interp.bilinear"
-                ), "i", 1, N
-            )
-        ),
-    ]
-)
-
 # Live forcing gather (ess-14f.3): D(u[i]) = forcing[i] + u[i]. `forcing` is a
 # refreshable buffer bound BY REFERENCE via `param_arrays` and read through the
 # new `_VK_PGATHER` kernel — the zero-alloc dual of a frozen const-array gather.
@@ -198,15 +135,6 @@ _forcing_gather_model(N) = ESM.Model(
     ]
 )
 
-# Scalar (non-faq) `interp.*` observeds on the RHS (perf-interp-alloc). Each
-# is a plain scalar equation `D(z) = interp.<op>(<const table/axis>, …, <state>)`,
-# so the RHS compiles to a scalar `_Node` tree walked by `_eval_node_op`'s `:fn`
-# arm — the FastJX-box hot path. The const table/axis are validated + coerced to
-# typed `_Interp*Spec` ONCE at build time and read via a concrete-tuple `isa`
-# match, so a steady-state `f!` call allocates 0 bytes (the fix moved all
-# per-call, value-independent work — the fresh axis `Vector`, the monotonicity
-# re-walk, the `Vector{Any}` splice, the `_fn_const_arg_spec` scan, the boxed
-# `evaluate_closed_function` dispatch — to build time).
 # Scalar CSE over a LIVE forcing buffer (ess-qic): `F[1]*k` occurs three times
 # across two scalar equations, so it is now hoisted into the CSE prelude — whose
 # slot is filled by a live `_NK_PARAM_GATHER` read. Before ess-qic the gather's
@@ -230,36 +158,6 @@ function _cse_forcing_scalar_model()
     )
 end
 
-function _scalar_interp_linear_model()
-    axis = _const([0.0, 1.0, 2.0, 3.0]); tab = _const([10.0, 20.0, 30.0, 40.0])
-    vars = Dict(
-        "x" => ModelVariable(UnknownVariable; default = 1.5),
-        "z" => ModelVariable(UnknownVariable; default = 0.0)
-    )
-    body = _op("fn", tab, axis, _v("x"); name = "interp.linear")
-    return ESM.Model(vars, [ESM.Equation(_D("z"), body)])
-end
-function _scalar_interp_searchsorted_model()
-    xs = _const([1.0, 2.0, 3.0, 4.0, 5.0])
-    vars = Dict(
-        "x" => ModelVariable(UnknownVariable; default = 2.5),
-        "z" => ModelVariable(UnknownVariable; default = 0.0)
-    )
-    body = _op("fn", _v("x"), xs; name = "interp.searchsorted")
-    return ESM.Model(vars, [ESM.Equation(_D("z"), body)])
-end
-function _scalar_interp_bilinear_model()
-    tab = _const([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
-    ax = _const([0.0, 1.0, 2.0]); ay = _const([0.0, 10.0, 20.0])
-    vars = Dict(
-        "x" => ModelVariable(UnknownVariable; default = 0.5),
-        "y" => ModelVariable(UnknownVariable; default = 5.0),
-        "z" => ModelVariable(UnknownVariable; default = 0.0)
-    )
-    body = _op("fn", tab, ax, ay, _v("x"), _v("y"); name = "interp.bilinear")
-    return ESM.Model(vars, [ESM.Equation(_D("z"), body)])
-end
-
 # Bytes a scalar `_NK_CONTRACTION` `:+` fold over `n` states allocates per call,
 # plus the folded value. Measured INSIDE a function — the discipline
 # `rhs_alloc_bytes` follows, and the way the RHS actually calls the walker. At
@@ -281,6 +179,7 @@ function _contract_fold_alloc(n; warmup::Int = 3, samples::Int = 5)
     return (best, ESM._eval_node(cnode, u, p, 0.0), sum(u))
 end
 
+
 # Force the SERIAL path for every exact-zero measurement below, so the numbers
 # are a property of the kernels rather than of whichever packages a previously
 # included test file happened to load. `_sec_prep_threads!` reads this once per
@@ -290,15 +189,6 @@ const _SERIAL_PIN = ("ESS_THREADS_MIN_CELLS" => string(typemax(Int)),)
 
 withenv(_SERIAL_PIN...) do
     @testset "tree_walk PDE RHS is allocation-free (ess-9cc)" begin
-
-        @testset "scalar interp.* observed RHS: 0 bytes (perf-interp-alloc)" begin
-            # The FastJX box hot path: a scalar `interp.linear` observed. Must be
-            # allocation-free after the build-time-spec fix.
-            @test built_rhs_alloc_bytes(_scalar_interp_linear_model()) == 0
-            @test built_rhs_alloc_bytes(_scalar_interp_searchsorted_model()) == 0
-            @test built_rhs_alloc_bytes(_scalar_interp_bilinear_model()) == 0
-        end
-
 
         @testset "vectorized stencil RHS: 0 bytes, N-independent" begin
             # Two+ grid sizes — the steady-state allocation must be EXACTLY 0 at
@@ -320,28 +210,6 @@ withenv(_SERIAL_PIN...) do
                     _contraction_model(M);
                     initial_conditions = ics, const_arrays = Dict("A" => A)
                 ) == 0
-            end
-        end
-
-        @testset "vectorized interp.linear RHS: 0 bytes, N-independent (ess-wrh)" begin
-            # Query lands strictly inside the axis so the blend (not a clamp) runs.
-            for N in (32, 128)
-                ics = Dict("u[$k]" => 0.5 + 3.0 * (k - 1) / N for k in 1:N)
-                @test built_rhs_alloc_bytes(_interp_linear_model(N); initial_conditions = ics) == 0
-            end
-        end
-
-        @testset "vectorized interp.searchsorted RHS: 0 bytes, N-independent (ess-wrh)" begin
-            for N in (32, 128)
-                ics = Dict("u[$k]" => 1.0 + 4.0 * (k - 1) / N for k in 1:N)
-                @test built_rhs_alloc_bytes(_interp_searchsorted_model(N); initial_conditions = ics) == 0
-            end
-        end
-
-        @testset "vectorized interp.bilinear RHS: 0 bytes, N-independent (ess-wrh)" begin
-            for N in (32, 128)
-                ics = Dict("u[$k]" => 10.0 + 990.0 * (k - 1) / N for k in 1:N)
-                @test built_rhs_alloc_bytes(_interp_bilinear_model(N); initial_conditions = ics) == 0
             end
         end
 

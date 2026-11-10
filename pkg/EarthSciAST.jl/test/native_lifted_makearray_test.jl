@@ -45,7 +45,7 @@ _nlm_ma(regions, values) = Dict{String, Any}(
 # One model `M` with array state `u` over `sets` (name => size), `D(u) = rhs`.
 function _nlm_doc(sets::Vector{Pair{String, Int}}, rhs)
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "NativeLifted"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "NativeLifted"),
         "index_sets" => Dict{String, Any}(
             n => Dict("kind" => "interval", "size" => s)
                 for (n, s) in sets

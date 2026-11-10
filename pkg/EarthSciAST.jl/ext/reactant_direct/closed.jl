@@ -26,7 +26,7 @@
 # 1 and every partial sum an integer far below 2^53, so the fold is the count
 # of keys satisfying the comparison, exactly, whatever the association — and
 # any algorithm computing that count gives the fold's bits. It is lowered
-# through the interp lane's knot count (`_knot_count`, ext/reactant_interp.jl:
+# through the knot count (`_knot_count`, ext/reactant_knot_count.jl:
 # the compare ladder for short key lists, the verified affine guess on a
 # uniform axis, else one compare against a constant key row and one reduce),
 # over the keys with the NaNs set aside (a NaN key satisfies nothing) and
@@ -366,7 +366,7 @@ function _de_acck_keyval(nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan)
         v1 = vals[1]
         all(v -> isequal(v, v1), vals) || return nothing
         return v1
-    elseif k === _E._NK_OP && nd.op !== :fn && nd.op !== Symbol("")
+    elseif k === _E._NK_OP && nd.op !== Symbol("")
         c = Any[]
         for ch in nd.children
             v = _de_acck_keyval(ch, K, plan)

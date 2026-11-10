@@ -112,11 +112,10 @@ function _resolve_one_index_set_ref(
         append!(idx_args, ASTExpr[VarExpr(p) for p in ref.of])
         return Any[1, OpExpr("index", idx_args)]
     elseif is.kind == "derived"
-        # A derived index set names its producing FAQ node via `from_faq`. Both
-        # producers are materialized at setup: an intersect_polygon clip ring
-        # (`_materialize_geometry_rings`, RFC §8.1) and a skolem/distinct
-        # value-invention producer (`materialize_value_invention`, §5.5). Either
-        # way its cardinality is the dense extent `[1, n]`. A set with no extent
+        # A derived index set names its producing FAQ node via `from_faq`: a
+        # `distinct` value-invention producer materialized at setup
+        # (`materialize_value_invention`, §5.5). Its cardinality is the dense
+        # extent `[1, n]`. A set with no extent
         # is refused rather than contracted as empty: an empty range would fold
         # to the additive identity and read as a plausible 0 (esm-spec §9.6.6).
         faq = is.from_faq
@@ -2088,28 +2087,6 @@ function _resolve_indices_op(
         memo::_MaybeMemo = nothing,
         bound_syms::Set{String} = _EMPTY_BOUND_SYMS
     )
-    if expr.op == "polygon_intersection_area"
-        # FUSED clip+area scalar leaf (esm-spec §8.6.1). Both operands are
-        # build-time-known const polygon rings (registered in `const_arrays`), so the
-        # whole leaf const-folds to the scalar overlap area: clip under `manifold`,
-        # then shoelace / spherical-excess area over the CLOSED ring. Reuses the
-        # existing `intersect_polygon` + `polygon_area` FAQ kernels verbatim.
-        length(expr.args) == 2 || throw(
-            TreeWalkError(
-                "E_TREEWALK_GEOMETRY_ARITY",
-                "polygon_intersection_area is strictly binary; got $(length(expr.args)) operand(s)"
-            )
-        )
-        expr.manifold === nothing && throw(
-            TreeWalkError(
-                "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-                "polygon_intersection_area requires a `manifold` (planar / spherical / geodesic)"
-            )
-        )
-        a = _pia_operand_ring(expr.args[1], const_arrays)
-        b = _pia_operand_ring(expr.args[2], const_arrays)
-        return NumExpr(_polygon_intersection_area(a, b, expr.manifold))
-    end
     if (
             expr.op == "ifelse" && length(expr.args) == 3 ||
                 (expr.op == "and" || expr.op == "or") && length(expr.args) >= 2

@@ -174,7 +174,7 @@ function _scg_sites_doc(S::Int; odd::Bool = false)
     ]
     model = Dict{String, Any}("variables" => vars, "equations" => eqs, "expression_template_imports" => imports)
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "sites_$S", "description" => "scalar template sites"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "sites_$S", "description" => "scalar template sites"),
         "models" => Dict("M" => model)
     )
 end

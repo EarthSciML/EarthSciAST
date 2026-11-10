@@ -233,7 +233,7 @@ function _doc()
     )
 
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict{String, Any}("name" => "observed_materialization"),
         "data_sources" => Dict{String, Any}(
             "MockSR" => Dict{String, Any}(

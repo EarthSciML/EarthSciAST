@@ -355,7 +355,7 @@ end
 # class-emitted scalar unit reads per member is its HOLE (`_CGUnitCtx.holes`),
 # so there a literal or a state read is the same only when its hole expression
 # is. A node kind with no structural key here (a ragged loop, a recurrence
-# read, a cached slot, a closed function) is never shared, and nothing under it
+# read, a cached slot) is never shared, and nothing under it
 # is looked at. Plan field `share_subtrees`; off, every occurrence is emitted
 # where it stands.
 
@@ -427,7 +427,7 @@ function _cg_share_inner(K::_CGShareKeys, nd::_Node)
     elseif k === _NK_LIVE_GATHER
         return (_cg_share_obj!(K, (nd.payload::_ConstGatherArray).flat), _cg_share_pay!(K, nd.payload))
     elseif k === _NK_OP
-        return (nd.op === :fn || nd.payload !== nothing) ? nothing : 0
+        return nd.payload !== nothing ? nothing : 0
     elseif k === _NK_CONTRACTION
         return 0
     end
@@ -496,7 +496,7 @@ end
 _cg_share_opaque(kc, nd::_Node) =
     haskey(kc.loops, nd) || nd.kind === _NK_CONTRACTION_LOOP ||
     nd.kind === _NK_RAGGED_LOOP || nd.kind === _NK_RECUR_GATHER ||
-    nd.kind === _NK_CACHED || (nd.kind === _NK_OP && nd.op === :fn)
+    nd.kind === _NK_CACHED
 
 const _CG_NO_KIDS = _Node[]
 
@@ -589,7 +589,7 @@ function _ac_cell_only(nd::_Node, refs)
     end
     (
         k === _NK_LITERAL || k === _NK_CONST_GATHER ||
-            (k === _NK_OP && nd.op !== :fn)
+            k === _NK_OP
     ) || return false
     return _allof(c -> _ac_cell_only(c, refs), nd.children)
 end
@@ -1286,10 +1286,8 @@ function _ac_entry_local(ctx::_CGCtx, col, en = nothing)
     return s
 end
 
-# A lane-spec `interp.*` payload reaches `_cg_emit_fn` only from a kernel-CLASS
-# merge, which no scalar spine goes through. Declining keeps that arm's address
-# arithmetic a kernel-only concern instead of a `MethodError` escaping the
-# emitter's decline protocol.
+# Box addressing is a kernel-only concern; a scalar spine declines it rather
+# than letting a `MethodError` escape the emitter's decline protocol.
 _cg_boxaddr(::_CGCtx, ::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
     throw(_CodegenDecline(:lane_spec_on_scalar_spine))
 

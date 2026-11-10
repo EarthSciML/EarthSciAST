@@ -465,7 +465,7 @@ function _obs_scan_doc(n; filt = "<=", reduce = "+", extra = false, other = fals
         push!(vars, var("s"))
         push!(eqs, "{\"lhs\":\"s\",\"rhs\":$(faq("{\"op\":\"sin\",\"args\":[$(ix("u", "i"))]}"))}")
     end
-    return "{\"esm\":\"1.1.0\",\"metadata\":{\"name\":\"obs_scan\",\"authors\":[\"test\"]}," *
+    return "{\"esm\":\"2.0.0\",\"metadata\":{\"name\":\"obs_scan\",\"authors\":[\"test\"]}," *
         "\"index_sets\":{\"x\":{\"kind\":\"interval\",\"size\":$n}}," *
         "\"models\":{\"Column\":{\"variables\":{$(join(vars, ","))}," *
         "\"equations\":[$(join(eqs, ","))]}}}"

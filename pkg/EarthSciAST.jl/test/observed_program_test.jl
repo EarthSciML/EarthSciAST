@@ -32,7 +32,7 @@ function _op_doc(N; decay = 0.0, tests = Any[])
         "ranges" => Dict("i" => Dict("from" => "x")), "expr" => body
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "observed_program"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => N)),
         "models" => Dict(
@@ -381,7 +381,7 @@ function _avp_doc(N)
         "value" => [[10.0 * i + j for j in 1:2] for i in 1:N]
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "avp"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "avp"),
         "index_sets" => Dict(
             "cells" => Dict("kind" => "interval", "size" => N),
             "two" => Dict("kind" => "interval", "size" => 2)

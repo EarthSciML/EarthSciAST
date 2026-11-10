@@ -72,7 +72,7 @@ function _cto_doc(NI::Int, NJ::Int, NK::Int)
         "expr" => 0.0
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "cto_colsum"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "cto_colsum"),
         "models" => Dict(
             "R" => Dict{String, Any}(
                 "variables" => Dict(

@@ -4,7 +4,7 @@ Shared raw-JSON traversal helpers for the load-time lowering passes.
 Documents are normalized ONCE at the wire boundary (`_read_json_document`,
 `coerce_esm_file`) into the ONE post-wire carrier — `OrderedDict{String,Any}`
 objects, `Vector{Any}` arrays, scalar leaves — via [`_to_ordered`](@ref)
-below. Every pre-parse lowering pass (closed-function enum lowering,
+below. Every pre-parse lowering pass (enum lowering,
 expression templates §9.6, template-library imports §9.7, coupling imports
 §10.9–§10.11, value-invention front door) walks that shape, plus the raw
 `JSON3.Object`/`JSON3.Array` a wire-boundary gate inspects BEFORE

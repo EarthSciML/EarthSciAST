@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "ReactionSystemFullSurface",
     "description": "Every esm-schema.json ReactionSystem property in one document. The five below the reaction block (constraint_equations, discrete_events, continuous_events, subsystems, analyses) had NO fixture anywhere in the corpus, so Julia's load could — and did — drop them with nothing to notice. `subsystems` is the load-bearing one: the field existed on the struct but was never populated or emitted, so a hierarchy flattened to its root at load."

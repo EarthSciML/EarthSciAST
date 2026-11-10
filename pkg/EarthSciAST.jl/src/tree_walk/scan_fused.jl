@@ -103,7 +103,7 @@ const _SCAN_CONSUMER_KINDS = (
 
 # Whether a consumer's spine (or recipe) uses only leaves and plain operators:
 # nothing addressed by the cell ordinal or the loop index, no reduction, no
-# sub-kernel, no per-lane spec table.
+# sub-kernel.
 function _scan_consumer_node_ok(nd::_Node)
     k = nd.kind
     if k === _NK_OP

@@ -76,7 +76,6 @@ struct CompilerPlan
     oop_batch::Bool
     direct_class_emit::Bool
     cross_eq_class_emit::Bool
-    lane_intern::Bool
     xcse::Bool
     # ---- prelude cadence ----
     tiered::Bool                  # the const/time cadence tiers
@@ -103,7 +102,7 @@ _plan_all(name::Symbol, strict::Bool, on::Bool) =
     name, strict,
     on, on, on, on, on, on, on, on, on,
     on, on, on, on, on, on, on, on, on,
-    on, on, on, on, on, on, on,
+    on, on, on, on, on, on,
     on, on,
     on, on, on, on
 )

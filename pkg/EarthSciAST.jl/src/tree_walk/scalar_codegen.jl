@@ -394,10 +394,7 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
     elseif k === _NK_TIME
         push!(sig, 4)
     elseif k === _NK_OP
-        push!(
-            sig, 5, _sc_sym(S, nd.op), length(nd.children),
-            nd.op === :fn ? _sc_obj(S, nd.payload) : 0
-        )
+        push!(sig, 5, _sc_sym(S, nd.op), length(nd.children), 0)
         for c in nd.children
             _sc_sig!(S, c)
         end

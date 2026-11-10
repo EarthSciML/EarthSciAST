@@ -66,7 +66,6 @@ include("testutils.jl")
         caught = Symbol[]
         for f in (
                 () -> parse_expression("1 +"),                              # parse_expression_text.jl
-                () -> evaluate_closed_function("no_such_function", Any[1.0]),  # registered_functions.jl
                 () -> canonicalize(NumExpr(NaN)),                           # canonicalize.jl
                 () -> migrate(EsmFile("0.5.0", Metadata("m")), "1.0.0"),     # migration.jl
                 bad_json,
@@ -123,7 +122,7 @@ include("testutils.jl")
                 "undefined_variable", "equation_count_mismatch",
                 "unit_inconsistency", "unit_parse_error",
                 "unresolved_subsystem_ref", "template_import_unresolved",
-                "coupling_library_illegal_payload", "unknown_closed_function",
+                "coupling_library_illegal_payload", "removed_op",
                 "metaparameter_type_error", "unlowered_operator",
             )
             @test c in error_code_names()

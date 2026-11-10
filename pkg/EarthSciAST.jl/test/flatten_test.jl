@@ -844,7 +844,7 @@ end
         @test to_ascii(_find_eq(flat, "Edges.a").rhs) ==
             "Edges.z * integral(z * Edges.a, z, 0, 1)"
         @test to_ascii(_find_eq(flat, "Edges.b").rhs) ==
-            "Edges.g * argmin[g] (Edges.w[g]) where {g in 1:3}"
+            "Edges.g * argmin<f=Edges.w[k_argmin_1], n=3>"
         @test to_ascii(_find_eq(flat, "Outer.u").rhs) ==
             "sum[j] (Outer.u[j] * Outer.j.x) where {j in 1:3}"
     end
@@ -974,12 +974,12 @@ end
 
     @testset "placeholder substitution preserves non-args fields (regression)" begin
         E = EarthSciAST
-        # A `_var` template whose RHS carries a table_lookup (table/table_axes)
+        # A `_var` template whose RHS carries an integral (int_var/bounds)
         # and an aggregate with filter/bounds — fields the old hand-listed
         # rebuild dropped and never recursed into.
         tl = E.OpExpr(
-            "table_lookup", E.ASTExpr[]; table = "fuel", output = 1,
-            table_axes = Dict{String, E.ASTExpr}("code" => _V("_var"))
+            "integral", E.ASTExpr[_V("w")]; int_var = "z",
+            lower = _N(0.0), upper = _V("_var")
         )
         agg = E.OpExpr(
             "faq", E.ASTExpr[];
@@ -992,9 +992,9 @@ end
         tmpl = _op("+", tl, agg)
         out = E._substitute_placeholder(tmpl, "_var", "Chem.O3")
         otl, oagg = out.args[1], out.args[2]
-        # table/table_axes survive AND the axis input was substituted.
-        @test otl.table == "fuel" && otl.output == 1
-        @test otl.table_axes["code"] == _V("Chem.O3")
+        # int_var survives AND the bound was substituted.
+        @test otl.int_var == "z"
+        @test otl.upper == _V("Chem.O3")
         # filter / bounds / body recursed; ranges preserved.
         @test _uses_var(oagg.expr_body, "Chem.O3")
         @test _uses_var(oagg.filter, "Chem.O3")
@@ -1038,7 +1038,7 @@ end
         # stamped with the format version this binding implements, and it is
         # expected to be updated by hand on each format bump. 1.2.0 -> 1.3.0
         # with `solver.external` (esm-spec §2.2.6).
-        @test E.SCHEMA_VERSION == "1.3.0"
+        @test E.SCHEMA_VERSION == "2.0.0"
     end
 
     # The one placement rule for an equation that joins a component after

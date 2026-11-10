@@ -5,11 +5,8 @@
 #   * `_parse_cell_key` — the shared inverse of `_cell_key` (also consumed by
 #     simulate.jl / inline_tests.jl);
 #   * `_sub_preserving` preserves EVERY OpExpr field (now routed through
-#     `reconstruct`), including `table`/`table_axes`/`output`/`distinct`/`key`
-#     which the hand-rolled rebuild used to drop;
-#   * the resolve→compile live-forcing side channel is a typed `_PGatherRef`;
-#   * the `:fn` eval arm throws explicitly instead of falling through to
-#     `nothing` when const-args are present but no interp.* case matches.
+#     `reconstruct`), including `distinct`/`key`;
+#   * the resolve→compile live-forcing side channel is a typed `_PGatherRef`.
 
 using Test
 using EarthSciAST
@@ -94,34 +91,26 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
 
     # ----------------------------------------------------------------
     @testset "_sub_preserving preserves every OpExpr field" begin
-        # A node carrying the fields the old hand-rolled rebuild dropped
-        # (`table`, `table_axes`, `output`, `distinct`, `key`) plus `ranges`
-        # (which forces the reconstruct path even when nothing binds).
-        keyexpr = _af_op("skolem", _af_v("i"))
+        # A node carrying optional fields (`distinct`, `key`, `id`) plus
+        # `ranges` (which forces the reconstruct path even when nothing binds).
+        keyexpr = _af_op("floor", _af_v("i"))
         node = OpExpr(
             "faq", ESM.ASTExpr[_af_v("q")];
             output_idx = Any["i"],
             ranges = Dict{String, Any}("i" => [1, 3]),
             expr_body = _af_op("+", _af_v("q"), _af_v("z")),
             reduce = "+", semiring = "sum_product",
-            table = "tbl0",
-            table_axes = Dict{String, Any}("T" => _af_v("q")),
-            output = 1,
             join = Any[], filter = _af_op(">", _af_v("q"), _af_n(0)),
-            id = "node0", manifold = "planar",
+            id = "node0",
             distinct = true, key = keyexpr
         )
         subd = ESM._sub_preserving(
             node,
             Dict{String, ESM.ASTExpr}("z" => _af_n(7.0))
         )
-        @test subd.table == "tbl0"
-        @test subd.table_axes !== nothing
-        @test subd.output == 1
         @test subd.distinct === true
         @test subd.key === keyexpr
         @test subd.id == "node0"
-        @test subd.manifold == "planar"
         @test subd.reduce == "+"
         @test subd.semiring == "sum_product"
         # The substitution itself happened (body z → 7.0).
@@ -150,30 +139,5 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         # Live: an in-place refresh of the caller's buffer shows through.
         buf[2, 1] = 99.0
         @test ESM._eval_node(node, Float64[], NamedTuple(), 0.0) == 99.0
-    end
-
-    # ----------------------------------------------------------------
-    @testset ":fn arm throws explicitly on a non-interp const-args payload" begin
-        # Hand-construct the (compile-unreachable) node shape: const args
-        # present, but the name matches no interp.* eval case. The arm must
-        # throw, never return `nothing`.
-        bad = ESM._mknode(
-            kind = ESM._NK_OP, op = :fn,
-            payload = ("datetime.julian_day", Any[[1.0]]),
-            children = ESM._Node[
-                ESM._mknode(
-                    kind = ESM._NK_LITERAL,
-                    literal = 0.0
-                ),
-            ]
-        )
-        err = try
-            ESM._eval_node(bad, Float64[], NamedTuple(), 0.0)
-            nothing
-        catch e
-            e
-        end
-        @test err isa ESM.TreeWalkError
-        @test err.code == "E_TREEWALK_UNKNOWN_CLOSED_FUNCTION"
     end
 end

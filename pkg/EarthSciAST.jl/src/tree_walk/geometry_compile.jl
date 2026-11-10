@@ -22,12 +22,11 @@
 #   * scalar `index` reads  → `:geo_gather` nodes (payload = the SOURCE:
 #                             an env array or a ring reference; children =
 #                             the index expressions, rounded per cell);
-#   * ring-valued operands  → `_GeoRingRef` (partial index → `view`, no copy)
-#                             / `_GeoClipRef` (a per-cell clip) payloads;
-#   * polygon_intersection_area / skolem / nested scalar aggregates
-#                           → `:geo_pia` / `:geo_skolem` / `:geo_agg` nodes,
-#                             evaluated by `_eval_geo_op` — the cold tail arm
-#                             of `_eval_node_op`;
+#   * ring-valued operands  → `_GeoRingRef` payloads (partial index →
+#                             `view`, no copy);
+#   * nested scalar aggregates → `:geo_agg` nodes, evaluated by
+#                             `_eval_geo_op` — the cold tail arm of
+#                             `_eval_node_op`;
 #   * scalar ops            → plain `_NK_OP` nodes (the registry-generated
 #                             `_eval_node_op` arms), gated at COMPILE time by
 #                             `_GEO_SCALAR_OPS` so an op outside the geometry
@@ -53,8 +52,7 @@
 # ladder's unevaluable_operator).
 const _GEO_STRUCTURAL_OPS = Set{String}(
     [
-        "index", "intersect_polygon", "polygon_intersection_area", "skolem",
-        "true", "false", "faq",
+        "index", "true", "false", "faq",
     ]
 )
 const _GEO_SCALAR_OPS = setdiff(_GEO_EVAL_OPS, _GEO_STRUCTURAL_OPS)
@@ -65,27 +63,10 @@ const _GEO_SCALAR_OPS = setdiff(_GEO_EVAL_OPS, _GEO_STRUCTURAL_OPS)
 # leading subscripts; the tail dims stay whole. Resolved per cell to a `view`
 # (no data copy — the const source outlives every walk and is never mutated;
 # read-only consumers only), exactly the interpreter's partial-index behavior.
-# `src` is an `AbstractArray`, another `_GeoRingRef`, or a `_GeoClipRef`.
+# `src` is an `AbstractArray` or another `_GeoRingRef`.
 struct _GeoRingRef
     src::Any
     idx::Vector{_Node}
-end
-
-# A per-cell clip: `close_ring(intersect_polygon(a, b, manifold))` of two ring
-# sources — the compiled form of the interpreter's general (non-ranged)
-# `intersect_polygon` arm.
-struct _GeoClipRef
-    a::Any
-    b::Any
-    manifold::String
-end
-
-# `polygon_intersection_area` payload (`:geo_pia`): two ring sources + the
-# declared manifold (validated non-nothing at compile).
-struct _GeoPiaSpec
-    a::Any
-    b::Any
-    manifold::String
 end
 
 # One slot-addressed join-key equality — `_resolve_geo_join_gates`'
@@ -198,26 +179,6 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
             )
             children = _Node[_geo_compile(expr.args[k], g) for k in 2:length(expr.args)]
             return _mknode(kind = _NK_OP, op = :geo_gather, children = children, payload = src)
-        elseif op == "polygon_intersection_area"
-            expr.manifold === nothing && throw(
-                TreeWalkError(
-                    "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-                    "polygon_intersection_area requires a manifold"
-                )
-            )
-            return _mknode(
-                kind = _NK_OP, op = :geo_pia,
-                payload = _GeoPiaSpec(
-                    _geo_source(expr.args[1], g),
-                    _geo_source(expr.args[2], g),
-                    expr.manifold
-                )
-            )
-        elseif op == "skolem"
-            # Deterministic per-arg-tuple id, only ever COMPARED within one
-            # build (see `_SKOLEM_HASH_CAP`); args are scalar quantizations.
-            children = _Node[_geo_compile(a, g) for a in expr.args]
-            return _mknode(kind = _NK_OP, op = :geo_skolem, children = children)
         elseif op == "true"
             return _mknode(kind = _NK_LITERAL, literal = 1.0)
         elseif op == "false"
@@ -255,8 +216,8 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
     )
 end
 
-# A ring/array SOURCE: an env array by name, a partial `index` slice of a
-# source, or a nested `intersect_polygon` clip of two sources. Rank is static
+# A ring/array SOURCE: an env array by name or a partial `index` slice of a
+# source. Rank is static
 # at compile (`_geo_source_rank`), which is what lets scalar `index` compile
 # to a full-rank gather and partial `index` stay a view-producing reference.
 function _geo_source(expr, g::_GeoCompileCtx)
@@ -283,30 +244,18 @@ function _geo_source(expr, g::_GeoCompileCtx)
             base,
             _Node[_geo_compile(expr.args[k], g) for k in 2:length(expr.args)]
         )
-    elseif expr isa OpExpr && expr.op == "intersect_polygon"
-        expr.manifold === nothing && throw(
-            TreeWalkError(
-                "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-                "intersect_polygon requires a manifold"
-            )
-        )
-        return _GeoClipRef(
-            _geo_source(expr.args[1], g),
-            _geo_source(expr.args[2], g), expr.manifold
-        )
     end
     throw(
         TreeWalkError(
             "E_TREEWALK_GEOMETRY_SETUP",
-            "operand must be a build-time array (a const/setup array name, an index " *
-                "slice of one, or an intersect_polygon clip) in setup-time geometry"
+            "operand must be a build-time array (a const/setup array name or an index " *
+                "slice of one) in setup-time geometry"
         )
     )
 end
 
 _geo_source_rank(a::AbstractArray) = ndims(a)
 _geo_source_rank(r::_GeoRingRef) = _geo_source_rank(r.src) - length(r.idx)
-_geo_source_rank(::_GeoClipRef) = 2
 
 # Nested scalar aggregate → `:geo_agg`. Loop vars come from `ranges` in key
 # order (the interpreter's `collect(keys(...))` order — it fixes the product
@@ -468,20 +417,10 @@ end
 # Resolve a compiled ring/array source at the current frame. A partial index
 # resolves to a `view` for the ranks the geometry FAQ uses (matching the
 # interpreter's fast paths); the general fallback materializes a dense slice,
-# as before. A clip source runs the Sutherland–Hodgman kernel per cell.
+# as before.
 _geo_ring_value(a::AbstractArray, u, p, t, ::Type{T}) where {T} = a
-function _geo_ring_value(r::_GeoClipRef, u, p, t, ::Type{T}) where {T}
-    return close_ring(
-        intersect_polygon(
-            _geo_ring_value(r.a, u, p, t, T),
-            _geo_ring_value(r.b, u, p, t, T),
-            r.manifold
-        )
-    )
-end
 function _geo_ring_value(r::_GeoRingRef, u, p, t, ::Type{T}) where {T}
-    # `r.src` is typed `Any` (an array, another `_GeoRingRef`, or a
-    # `_GeoClipRef`), so resolving and slicing it IN THIS FRAME would leave `base`
+    # `r.src` is typed `Any` (an array or another `_GeoRingRef`), so resolving and slicing it IN THIS FRAME would leave `base`
     # — and every `ndims`/`view`/`getindex` of the slice — inferred as `Any`: a
     # dynamic dispatch per subscript, per cell, for the whole sweep. The slice
     # moves to a barrier method (`_geo_ring_slice`) taking the base as an
@@ -540,7 +479,7 @@ function _geo_gather_value(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
     # A concrete `isa` then narrows `pl` to the shapes a geometry sweep actually
     # reads — a dense `Array{Float64,1..3}`, which is what every const/materialized
     # `env` entry is — making the barrier call static. Anything else (a
-    # bounded-const wrapper, a `_GeoRingRef`, a `_GeoClipRef`, a non-Float64 or
+    # bounded-const wrapper, a `_GeoRingRef`, a non-Float64 or
     # higher-rank array) falls to the same generic call as before.
     pl = n.payload
     if pl isa Array{Float64, 1}
@@ -618,8 +557,7 @@ end
 # the sub-tree runs: while those slots hold the values it last saw, the walk
 # returns the value it computed then. The sub-tree's value is a function of
 # those slots alone (the env is fixed for the sweep), so the result is the
-# walk's own, bit for bit. A sub-tree holding a geometry leaf, a ring
-# reference or a skolem is left alone.
+# walk's own, bit for bit. A sub-tree holding a ring reference is left alone.
 mutable struct _GeoMemo
     slots::Vector{Int}
     last::Vector{Float64}
@@ -642,7 +580,7 @@ function _geo_memoize!(roots::Vector{_Node})
             Set{Int}(n.idx)
         elseif n.kind == _NK_LITERAL
             Set{Int}()
-        elseif n.kind == _NK_OP && !(n.op in (:geo_pia, :geo_skolem, :geomemo)) &&
+        elseif n.kind == _NK_OP && n.op !== :geomemo &&
                 !(n.op === :geo_agg && (n.payload::_GeoAggSpec).gates !== nothing) &&
                 !(n.op === :geo_gather && !(n.payload isa AbstractArray))
             acc = Set{Int}()
@@ -728,15 +666,6 @@ end
 # fields) are compared at their concrete types.
 _geo_slot_eq(a, b, i::Int, j::Int) = a[i] == b[j]
 
-# `polygon_intersection_area` of two resolved ring sources. Split out of the
-# `:geo_pia` arm so the operand types can be narrowed at the call site.
-function _geo_pia_value(a, b, manifold::String, u, p, t, ::Type{T})::Float64 where {T}
-    return _polygon_intersection_area(
-        _geo_ring_value(a, u, p, t, T),
-        _geo_ring_value(b, u, p, t, T), manifold
-    )
-end
-
 # The `:geo_*` dispatch — the cold tail arm of `_eval_node_op` (compile.jl).
 # Only setup-time compiled trees carry these ops, so the RHS hot path never
 # reaches here; `::Float64` keeps the ladder's inferred union small.
@@ -744,24 +673,6 @@ function _eval_geo_op(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
     op = n.op
     if op === :geo_gather
         return _geo_gather_value(n, u, p, t, T)
-    elseif op === :geo_pia
-        # Both operands are `Any` on the spec, so resolving them here costs two
-        # dynamic dispatches per PAIR — and a dense `A_ij[i,j] =
-        # polygon_intersection_area(src[i], tgt[j])` evaluates this once per
-        # (source, target) pair. Narrow the near-universal `_GeoRingRef` operands
-        # with a concrete `isa` and resolve them in a specialization. Operand
-        # evaluation order (a, then b) is unchanged.
-        spec = n.payload::_GeoPiaSpec
-        a = spec.a
-        b = spec.b
-        if a isa _GeoRingRef && b isa _GeoRingRef
-            return _geo_pia_value(a, b, spec.manifold, u, p, t, T)
-        end
-        return _geo_pia_value(a, b, spec.manifold, u, p, t, T)
-    elseif op === :geo_skolem
-        c = n.children
-        vals = Any[_eval_node(c[k], u, p, t, T) for k in eachindex(c)]
-        return Float64(hash(Tuple(vals)) % _SKOLEM_HASH_CAP)
     elseif op === :geo_agg
         return _geo_eval_agg(n.payload::_GeoAggSpec, u, p, t, T)
     elseif op === :geo_count
@@ -787,8 +698,8 @@ end
 # local memo, reset where the innermost of those slots is set, and filled at
 # its first use — so a value only an untaken branch reads is never computed.
 # Bit-exactness is the contract, as in codegen_kernel.jl: no `@fastmath`, no
-# `muladd`, no reassociation. A body the emitter has no arm for (a geometry
-# leaf, a ring reference, a skolem, a gated nested reduction) keeps the walker.
+# `muladd`, no reassociation. A body the emitter has no arm for (a ring
+# reference, a gated nested reduction) keeps the walker.
 struct _GeoKernel{F, S}
     f::F
     srcs::S

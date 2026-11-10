@@ -12,6 +12,12 @@
 
 # _is_scalar_D_lhs is defined in the array helpers section (5b).
 
+# Strip an AD dual number down to its underlying real primal; identity on
+# everything else. Specialized for `ForwardDiff.Dual` in
+# `ext/EarthSciASTForwardDiffExt.jl`; a `Dual` cannot exist in a session that has
+# not loaded ForwardDiff, so the identity method is complete without it.
+@inline _value(x) = x
+
 function _equation_tag(eq::Equation)
     if eq._comment !== nothing
         return eq._comment
@@ -611,7 +617,7 @@ end
 #   * `index` gather args — the target is resolved and the subscripts are folded
 #     by `_eval_const_int`, which knows only loop indices and const arrays;
 #   * aggregate range BOUNDS (`_expand_int_range_dyn` folds expression bounds);
-#   * `lower`/`upper` integral bounds, value-invention `key`s, table-lookup axes.
+#   * `lower`/`upper` integral bounds and value-invention `key`s.
 # `expr_body` / `filter` / `values` / plain args are EXPRESSION positions — an
 # observed reference there survives to the compiled tree and reads its slot —
 # so the scan recurses rather than flags. Visits are (node, mode)-memoized via
@@ -644,11 +650,6 @@ function _obs_structural_refs!(
     e.lower === nothing || _obs_mark_refs!(e.lower::ASTExpr, names, hits, seen)
     e.upper === nothing || _obs_mark_refs!(e.upper::ASTExpr, names, hits, seen)
     e.key === nothing || _obs_mark_refs!(e.key::ASTExpr, names, hits, seen)
-    if e.table_axes !== nothing
-        for (_, ax) in e.table_axes
-            _obs_mark_refs!(ax, names, hits, seen)
-        end
-    end
     for a in e.args
         _obs_structural_refs!(a, names, hits, seen)
     end
@@ -1053,7 +1054,7 @@ function _ic_body_is_closed_form(e)::Bool
     _is_array_producer(e) && return false
     (
         e.lower !== nothing || e.upper !== nothing || e.filter !== nothing ||
-            e.key !== nothing || e.table_axes !== nothing || e.ranges !== nothing
+            e.key !== nothing || e.ranges !== nothing
     ) && return false
     for a in e.args
         _ic_body_is_closed_form(a) || return false
@@ -1346,7 +1347,7 @@ function _cellwise_compile_once_impl(
         cellwise = _index_at_cell_sym(expr, syms_str)
         # One build memo for the resolve and the compile: a sub-tree shared by
         # reference (an inner reduction that does not read the enclosing
-        # unrolled loop's symbol, such as argmin's minimum) resolves and
+        # unrolled loop's symbol, such as the `argmin` template's minimum) resolves and
         # compiles to one node, which `_cell_memoize!` then evaluates once per
         # cell.
         bmemo = _BuildMemo()

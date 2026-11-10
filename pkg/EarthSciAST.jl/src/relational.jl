@@ -1,23 +1,25 @@
 """
     EarthSciAST.Relational
 
-Build-time relational engine — the five primitives the unified-IR value-invention
+Build-time relational engine — the primitives the unified-IR value-invention
 pass (RFC `semiring-faq-unified-ir` §5.5, §6.1) runs **once at setup**, off the
-per-timestep hot path, to materialise the data-derived index sets and dense IDs
-that the numeric stencil then consumes:
+per-timestep hot path, to materialise the data-derived index sets that the
+numeric stencil then consumes:
 
-1. [`distinct`](@ref)        — deduplicate tuples (unique mesh edges from face→vertex lists)
+1. [`distinct`](@ref)        — deduplicate keys (unique mesh edges from face→vertex lists)
 2. [`equijoin`](@ref)        — value-equality equi-join (connectivity inversion, *edges of cell i*)
-3. [`skolem`](@ref) / [`skolem_edge`](@ref) — deterministic content-addressed key from a tuple
-4. [`rank`](@ref)            — dense integer renumbering of a distinct set
-5. [`group_aggregate`](@ref) — group-by + associative/commutative semiring `⊕` (sum/min/max/…)
+3. [`group_aggregate`](@ref) — group-by + associative/commutative semiring `⊕` (sum/min/max/…)
+
+A key is a scalar integer: the `pair_key` / `edge_key` templates of
+`lib/relational.esm` encode a tuple as one integer, and a key's dense position in
+the distinct set is the `rank_of` / `rank_of_set` template.
 
 # Determinism (the reason this module exists)
 
 `EarthSciAST` is **parallel native implementations** (Julia, Rust, Python)
 verified by a conformance suite, not one core behind FFI. So the hard problem is
-**bit-for-bit determinism across the bindings**: identical deduped sets, identical
-dense IDs, identical skolem keys. The governing principle (`CONFORMANCE_SPEC.md`
+**bit-for-bit determinism across the bindings**: identical deduped sets and
+identical dense IDs. The governing principle (`CONFORMANCE_SPEC.md`
 §5.5 = RFC §5.7) is that *every emitted set, key, and dense ID is a pure function
 of a defined total order over tuples* — **no observable output may depend on
 `Dict`/`Set` iteration order or on a `Base.hash` value** (Julia's `Dict`/`Set`
@@ -33,12 +35,6 @@ Concretely, per `CONFORMANCE_SPEC.md` §5.5.1:
   at the boundary by [`FloatKeyError`](@ref).
 - **`distinct`** — sort by the total order, drop *adjacent* duplicates; output
   order *is* sorted order, never first-seen / `Set` order (rule 2).
-- **`rank`** — dense IDs by position in the sorted distinct sequence. Julia emits
-  **1-based** (rule 3); the conformance adapter normalises to canonical 0-based
-  via `canonical = reported − base`.
-- **`skolem`** — a canonical *tuple*, never a hash (rule 4): sort components for a
-  symmetric relation (undirected edge `(min,max)`), preserve order for a directed
-  one.
 - **`join` / group-by** — hashing may bucket only; the result is emitted **sorted
   by the canonical key** (rule 5). The semiring `⊕` must be associative +
   commutative; for a floating-point `⊕` the per-bucket reduction is done
@@ -56,8 +52,7 @@ This formalises and pins the order of the distinct/join/group-by patterns
 `src/graph.jl` already hand-rolls informally (`Set{String}` dedup, composite-key
 string joins, `Dict` node-maps) — patterns that worked but carried no ordering
 guarantee. The Rust (`ess-my4.3.4`) and Python (`ess-my4.3.5`) bindings implement
-the same §5.5 contract, so all three produce byte-identical index sets and
-identical (base-normalised) dense-ID arrays.
+the same §5.5 contract, so all three produce byte-identical index sets.
 """
 module Relational
 
@@ -68,9 +63,7 @@ import JSON3
 using ..EarthSciAST: EarthSciASTError
 
 export FloatKeyError,
-    skolem, skolem_edge,
     distinct,
-    rank, Ranking,
     equijoin,
     group_aggregate,
     canonical_index_set_json
@@ -115,37 +108,6 @@ _has_float(_) = false                         # other exact/categorical scalars
     return k
 end
 
-# ── Primitive 3: skolem (canonical-tuple content-addressed key) ─────────────
-
-"""
-    skolem_edge(a, b) -> Tuple
-
-Canonical key for an **undirected** pair (a symmetric relation): `(min(a,b),
-max(a,b))`. The deterministic, content-addressed identity of a mesh edge (RFC
-§5.5 generalises ESI `pack`). It is **not** a hash (rule 4) — the tuple itself is
-the key, so the dense ID later assigned by [`rank`](@ref) is reproducible across
-bindings. `a` and `b` must be order-comparable and non-float.
-"""
-@inline function skolem_edge(a, b)
-    _assert_key((a, b))
-    return a <= b ? (a, b) : (b, a)
-end
-
-"""
-    skolem(components::Tuple; symmetric::Bool=false) -> Tuple
-
-Canonical-tuple Skolem key (rule 4). For a `symmetric` relation the components
-are sorted (generalising [`skolem_edge`](@ref) to arity > 2); for a directed
-relation the order is preserved, so `(1, 2)` and `(2, 1)` stay distinct. Never a
-`Base.hash` — the tuple *is* the content-addressed key. The dense ID then comes
-from [`rank`](@ref).
-"""
-function skolem(components::Tuple; symmetric::Bool = false)
-    _assert_key(components)
-    symmetric || return components
-    return Tuple(sort!(collect(components)))
-end
-
 # ── Primitive 1: distinct (sort + drop adjacent duplicates) ─────────────────
 
 """
@@ -183,44 +145,6 @@ function _dedup_adjacent!(sorted::Vector)
     end
     resize!(sorted, w)
     return sorted
-end
-
-# ── Primitive 4: rank (dense integer renumbering) ───────────────────────────
-
-"""
-    Ranking{T}
-
-Result of [`rank`](@ref):
-
-- `order::Vector{T}` — the distinct tuples in §5.5.1 total order.
-- `id::Dict{T,Int}`  — `id[t]` is the dense integer assigned to tuple `t`.
-- `base::Int`        — the emission base. Julia emits **1-based** (`CONFORMANCE_SPEC.md`
-  §5.5.1 rule 3); the conformance adapter recovers the canonical 0-based ID via
-  `canonical = reported − base`.
-"""
-struct Ranking{T}
-    order::Vector{T}
-    id::Dict{T, Int}
-    base::Int
-end
-
-"""
-    rank(rows; base::Int=1) -> Ranking
-
-Dense integer renumbering (rule 3): assign IDs by position in the sorted
-[`distinct`](@ref) sequence. `base` is the emission base — Julia's native
-**1-based** is the default; pass `base = 0` for the canonical 0-based numbering
-the conformance suite asserts on. Equivalent to SQL `dense_rank() OVER (ORDER BY
-…)` over the deduplicated rows.
-"""
-function rank(rows; base::Int = 1)
-    order = distinct(rows)
-    T = eltype(order)
-    id = Dict{T, Int}()
-    @inbounds for (i, t) in enumerate(order)
-        id[t] = (i - 1) + base
-    end
-    return Ranking{T}(order, id, base)
 end
 
 # ── Primitive 2: equijoin (value-equality equi-join) ────────────────────────
@@ -261,7 +185,7 @@ function equijoin(left, right; on_left = identity, on_right = identity)
     return out
 end
 
-# ── Primitive 5: group-by + semiring aggregate ──────────────────────────────
+# ── Primitive 3: group-by + semiring aggregate ──────────────────────────────
 
 """
     group_aggregate(rows; key, value, op) -> Vector{Pair}

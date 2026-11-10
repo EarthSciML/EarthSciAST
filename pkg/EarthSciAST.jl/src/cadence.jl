@@ -74,10 +74,8 @@ const CLASS_RANK = Dict("const" => 0, "discrete" => 1, "continuous" => 2)
 const RANK_CLASS = Dict(0 => "const", 1 => "discrete", 2 => "continuous")
 
 # The relational / value-invention ops that may not run on the hot path (§5.7
-# guard 2): one classifying `continuous` is a hard error. Includes the arg-witness
-# reducers (`argmin`/`argmax`, §5.7 rule 6) — a state-dependent assignment is
-# out of scope for v1, exactly like a state-dependent `distinct`.
-const RELATIONAL_OPS = Set(["distinct", "join", "skolem", "rank", "argmin", "argmax"])
+# guard 2): one classifying `continuous` is a hard error.
+const RELATIONAL_OPS = Set(["distinct", "join"])
 
 """
     CadenceError(msg)
@@ -472,7 +470,7 @@ end
 """
     assert_no_continuous_relational(node, model)
 
-§5.7 guard 2: a `distinct`/`join`/`skolem`/`rank` node (or a `distinct`
+§5.7 guard 2: a `distinct`/`join` node (or a `distinct`
 aggregate) that classifies `continuous` is rejected — state-dependent topology
 may not run on the per-step hot path in v1. Throws [`CadenceError`](@ref).
 """
@@ -486,7 +484,7 @@ function assert_no_continuous_relational(node, model, memo::ClassMemo = ClassMem
             CadenceError(
                 "relational/value-invention node op=$(repr(op)) classifies CONTINUOUS — " *
                     "it may not run on the hot path (§5.7 guard 2). A state-dependent " *
-                    "distinct/join/skolem/rank is out of scope for v1."
+                    "distinct/join is out of scope for v1."
             )
         )
     end

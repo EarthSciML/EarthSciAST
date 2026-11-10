@@ -37,7 +37,7 @@ const _CL_ESS = EarthSciAST
 # Constant-RHS ODE from zero ICs, so du(u0) IS the derivative at t=0.
 # Σ_{k=0..M} k = M(M+1)/2, so du[s] = x0 · M(M+1)/2.
 _cl_doc(M::Int; expr = Dict("op" => "*", "args" => Any["k", "x"])) = Dict{String, Any}(
-    "esm" => "1.1.0",
+    "esm" => "2.0.0",
     "metadata" => Dict("name" => "contraction_loop_repro"),
     "models" => Dict(
         "Repro" => Dict{String, Any}(
@@ -68,7 +68,7 @@ _cl_doc(M::Int; expr = Dict("op" => "*", "args" => Any["k", "x"])) = Dict{String
 # array. The loop var reaches a const-array subscript → runtime `_NK_CONST_GATHER`
 # with an `_NK_LOOPVAR` subscript; still one compiled body.
 _cl_doc_weighted(W::Vector{Float64}) = Dict{String, Any}(
-    "esm" => "1.1.0",
+    "esm" => "2.0.0",
     "metadata" => Dict("name" => "contraction_loop_weighted"),
     "models" => Dict(
         "Repro" => Dict{String, Any}(
@@ -259,7 +259,7 @@ function _cl_doc2d_weighted(M::Int)
         )
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "cl_einsum2d_w"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "cl_einsum2d_w"),
         "models" => Dict(
             "R" => Dict{String, Any}(
                 "variables" => Dict("out" => Dict("type" => "unknown", "shape" => Any["i", "j"])),
@@ -299,7 +299,7 @@ function _cl_doc2d_arith(M::Int)
         )
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "cl_einsum2d_a"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "cl_einsum2d_a"),
         "models" => Dict(
             "R" => Dict{String, Any}(
                 "variables" => Dict(
@@ -411,7 +411,7 @@ end
             )
         )
         doc = Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict("name" => "cl_state_src"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "cl_state_src"),
             "models" => Dict(
                 "R" => Dict{String, Any}(
                     "variables" => Dict(
@@ -484,7 +484,7 @@ function _cl_halo(M::Int; ghost::Bool = false)
         )
     )
     doc = Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "cl_halo"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "cl_halo"),
         "models" => Dict(
             "R" => Dict{String, Any}(
                 "variables" => Dict(
@@ -585,7 +585,7 @@ end
 function _cl_long_doc(n::Int, K::Int; orsr::Bool = false)
     W = [1.0 + k / 8 for k in 1:(2K - 1)]
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "cl_long_nonstrict"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "cl_long_nonstrict"),
         "models" => Dict(
             "M" => Dict{String, Any}(
                 "variables" => Dict{String, Any}(
