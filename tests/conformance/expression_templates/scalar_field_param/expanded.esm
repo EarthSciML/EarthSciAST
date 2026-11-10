@@ -10,17 +10,17 @@
   "authors": [
    "esm conformance"
   ],
-  "description": "Scalar-field template-parameter substitution (esm-spec \u00a79.6.1 / \u00a79.6.3 constraint 5): one `total` template whose `body` carries a parameter name (`K_semiring`) as the string VALUE of the scalar `semiring` field of a `faq` node \u2014 a substitution site, the exact mirror of the match-side scalar-field binding rule \u2014 instantiated twice with different semiring literals (sum_product, max_sum). All five bindings MUST expand both observeds to the same post-substitution nodes (expanded.esm); the bound value must be a literal admissible for the field, enforced on the EXPANDED form (\u00a79.6.9; tests/conformance/expression_templates/per_instantiation_validation). Re-pointed from the `manifold` field of the geometry leaf removed at esm 2.0.0.",
+  "description": "Scalar-field template-parameter substitution (esm-spec \u00a79.6.1 / \u00a79.6.3 constraint 5): one `combine` template whose `body` carries a parameter name (`K_fn`) as the string VALUE of the scalar `fn` field of a `broadcast` node \u2014 a substitution site, the exact mirror of the match-side scalar-field binding rule \u2014 instantiated twice with different operator literals (`+`, `*`). All five bindings MUST expand both observeds to the same post-substitution nodes (expanded.esm); the bound value must be a literal admissible for the field, enforced on the EXPANDED form (\u00a79.6.9, `invalid_broadcast_fn`; tests/conformance/expression_templates/per_instantiation_validation). Until esm 2.0.0 the site was the `manifold` field of the removed geometry leaf.",
   "name": "expression_templates_scalar_field_param",
   "tags": [
    "expression_templates",
    "scalar-field-substitution",
-   "semiring",
+   "broadcast",
    "conformance"
   ]
  },
  "models": {
-  "Total": {
+  "Combine": {
    "equations": [
     {
      "lhs": {
@@ -38,69 +38,30 @@
      }
     },
     {
-     "lhs": "total_sum",
+     "lhs": "sum_ab",
      "rhs": {
       "args": [
-       "w"
+       "a",
+       "b"
       ],
-      "expr": {
-       "args": [
-        "w",
-        "i"
-       ],
-       "op": "index"
-      },
-      "op": "faq",
-      "output_idx": [],
-      "ranges": {
-       "i": {
-        "from": "k"
-       }
-      },
-      "semiring": "sum_product"
+      "fn": "+",
+      "op": "broadcast"
      }
     },
     {
-     "lhs": "total_max",
+     "lhs": "prod_ab",
      "rhs": {
       "args": [
-       "w"
+       "a",
+       "b"
       ],
-      "expr": {
-       "args": [
-        "w",
-        "i"
-       ],
-       "op": "index"
-      },
-      "op": "faq",
-      "output_idx": [],
-      "ranges": {
-       "i": {
-        "from": "k"
-       }
-      },
-      "semiring": "max_sum"
+      "fn": "*",
+      "op": "broadcast"
      }
     }
    ],
    "variables": {
-    "total_max": {
-     "description": "Second instantiation: the SAME template bound to 'max_sum'.",
-     "type": "unknown",
-     "units": "1"
-    },
-    "total_sum": {
-     "description": "First instantiation: the semiring parameter bound to the literal 'sum_product'.",
-     "type": "unknown",
-     "units": "1"
-    },
-    "u": {
-     "default": 0.5,
-     "type": "unknown",
-     "units": "1"
-    },
-    "w": {
+    "a": {
      "default": [
       1.0,
       3.0,
@@ -110,6 +71,39 @@
       "k"
      ],
      "type": "parameter",
+     "units": "1"
+    },
+    "b": {
+     "default": [
+      0.5,
+      0.25,
+      4.0
+     ],
+     "shape": [
+      "k"
+     ],
+     "type": "parameter",
+     "units": "1"
+    },
+    "prod_ab": {
+     "description": "Second instantiation: the SAME template bound to '*'.",
+     "shape": [
+      "k"
+     ],
+     "type": "unknown",
+     "units": "1"
+    },
+    "sum_ab": {
+     "description": "First instantiation: the fn parameter bound to the literal '+'.",
+     "shape": [
+      "k"
+     ],
+     "type": "unknown",
+     "units": "1"
+    },
+    "u": {
+     "default": 0.5,
+     "type": "unknown",
      "units": "1"
     }
    }

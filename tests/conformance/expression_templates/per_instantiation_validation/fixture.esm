@@ -2,44 +2,27 @@
   "esm": "2.0.0",
   "metadata": {
     "name": "per_instantiation_validation",
-    "description": "esm-spec §9.6.9 (RFC out-of-line-expression-templates §8, §9.2): a `semiring`-param template referenced at TWO call sites. The admissibility of the bound semiring (the closed registry of the `faq` `semiring` field) is discharged per-instantiation on the reference-preserving form: the first call site (max_sum) is admissible, the second (bogus) is not. The offending call site is named in the diagnostic. INVALID fixture — load MUST reject. Re-pointed from the `manifold` field of the geometry leaf removed at esm 2.0.0.",
+    "description": "esm-spec §9.6.9 (RFC out-of-line-expression-templates §8, §9.2): an `fn`-param template (the scalar `fn` field of a `broadcast` node) referenced at TWO call sites. `invalid_broadcast_fn` is discharged per-instantiation on the reference-preserving form: the first call site (fn = max) is admissible, the second (fn = bogus) is not. The offending call site is named in the diagnostic. INVALID fixture — load MUST reject. Until esm 2.0.0 the site was the `manifold` field of the removed geometry leaf.",
     "authors": [
       "out-of-line-expression-templates conformance"
     ]
   },
-  "index_sets": {
-    "k": {
-      "kind": "interval",
-      "size": 2
-    }
-  },
   "models": {
     "m": {
       "expression_templates": {
-        "total": {
+        "combine": {
           "params": [
             "a",
-            "semi"
+            "b",
+            "f"
           ],
           "body": {
-            "op": "faq",
+            "op": "broadcast",
+            "fn": "f",
             "args": [
-              "a"
-            ],
-            "semiring": "semi",
-            "output_idx": [],
-            "ranges": {
-              "i": {
-                "from": "k"
-              }
-            },
-            "expr": {
-              "op": "index",
-              "args": [
-                "a",
-                "i"
-              ]
-            }
+              "a",
+              "b"
+            ]
           }
         }
       },
@@ -47,45 +30,46 @@
         "pa": {
           "type": "parameter",
           "units": "1",
-          "shape": [
-            "k"
-          ],
-          "default": [
-            1.0,
-            2.0
-          ]
+          "default": 1.0
         },
-        "total_ok": {
+        "pb": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0
+        },
+        "r_ok": {
           "type": "unknown",
           "units": "1"
         },
-        "total_bad": {
+        "r_bad": {
           "type": "unknown",
           "units": "1"
         }
       },
       "equations": [
         {
-          "lhs": "total_ok",
+          "lhs": "r_ok",
           "rhs": {
             "op": "apply_expression_template",
             "args": [],
-            "name": "total",
+            "name": "combine",
             "bindings": {
               "a": "pa",
-              "semi": "max_sum"
+              "b": "pb",
+              "f": "max"
             }
           }
         },
         {
-          "lhs": "total_bad",
+          "lhs": "r_bad",
           "rhs": {
             "op": "apply_expression_template",
             "args": [],
-            "name": "total",
+            "name": "combine",
             "bindings": {
               "a": "pa",
-              "semi": "bogus"
+              "b": "pb",
+              "f": "bogus"
             }
           }
         }

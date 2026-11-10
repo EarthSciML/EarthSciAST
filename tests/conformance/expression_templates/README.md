@@ -43,15 +43,15 @@ the executing bindings' unit suites.
 ### `scalar_field_param/` (expanded.esm)
 
 Scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6.3
-constraint 5): one `total` template whose `body` carries a parameter name
-(`K_semiring`) as the string VALUE of the scalar `semiring` field of a `faq`
-node — a substitution site, the exact mirror of the match-side scalar-field
-binding rule — instantiated twice with different semiring literals
-(`sum_product`, `max_sum`). All five bindings MUST expand both observeds to the
-same post-substitution nodes (`expanded.esm`). The value bound to a
-scalar-field parameter must be a literal admissible for the field, enforced on
-the EXPANDED form per §9.6.9 (`per_instantiation_validation/`). Until esm 2.0.0
-the site was the `manifold` field of the removed geometry leaf.
+constraint 5): one `combine` template whose `body` carries a parameter name
+(`K_fn`) as the string VALUE of the scalar `fn` field of a `broadcast` node — a
+substitution site, the exact mirror of the match-side scalar-field binding
+rule — instantiated twice with different operator literals (`+`, `*`). All
+five bindings MUST expand both observeds to the same post-substitution nodes
+(`expanded.esm`). The value bound to a scalar-field parameter must be a literal
+admissible for the field, enforced on the EXPANDED form per §9.6.9
+(`invalid_broadcast_fn`, `per_instantiation_validation/`). Until esm 2.0.0 the
+site was the `manifold` field of the removed geometry leaf.
 
 ### `ranges_param/` (expanded.esm)
 

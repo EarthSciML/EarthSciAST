@@ -2,14 +2,14 @@
  "esm": "2.0.0",
  "metadata": {
   "name": "expression_templates_scalar_field_param",
-  "description": "Scalar-field template-parameter substitution (esm-spec \u00a79.6.1 / \u00a79.6.3 constraint 5): one `total` template whose `body` carries a parameter name (`K_semiring`) as the string VALUE of the scalar `semiring` field of a `faq` node \u2014 a substitution site, the exact mirror of the match-side scalar-field binding rule \u2014 instantiated twice with different semiring literals (sum_product, max_sum). All five bindings MUST expand both observeds to the same post-substitution nodes (expanded.esm); the bound value must be a literal admissible for the field, enforced on the EXPANDED form (\u00a79.6.9; tests/conformance/expression_templates/per_instantiation_validation). Re-pointed from the `manifold` field of the geometry leaf removed at esm 2.0.0.",
+  "description": "Scalar-field template-parameter substitution (esm-spec \u00a79.6.1 / \u00a79.6.3 constraint 5): one `combine` template whose `body` carries a parameter name (`K_fn`) as the string VALUE of the scalar `fn` field of a `broadcast` node \u2014 a substitution site, the exact mirror of the match-side scalar-field binding rule \u2014 instantiated twice with different operator literals (`+`, `*`). All five bindings MUST expand both observeds to the same post-substitution nodes (expanded.esm); the bound value must be a literal admissible for the field, enforced on the EXPANDED form (\u00a79.6.9, `invalid_broadcast_fn`; tests/conformance/expression_templates/per_instantiation_validation). Until esm 2.0.0 the site was the `manifold` field of the removed geometry leaf.",
   "authors": [
    "esm conformance"
   ],
   "tags": [
    "expression_templates",
    "scalar-field-substitution",
-   "semiring",
+   "broadcast",
    "conformance"
   ]
  },
@@ -20,9 +20,9 @@
   }
  },
  "models": {
-  "Total": {
+  "Combine": {
    "variables": {
-    "w": {
+    "a": {
      "type": "parameter",
      "units": "1",
      "shape": [
@@ -34,20 +34,38 @@
       2.0
      ]
     },
+    "b": {
+     "type": "parameter",
+     "units": "1",
+     "shape": [
+      "k"
+     ],
+     "default": [
+      0.5,
+      0.25,
+      4.0
+     ]
+    },
     "u": {
      "type": "unknown",
      "units": "1",
      "default": 0.5
     },
-    "total_sum": {
+    "sum_ab": {
      "type": "unknown",
      "units": "1",
-     "description": "First instantiation: the semiring parameter bound to the literal 'sum_product'."
+     "shape": [
+      "k"
+     ],
+     "description": "First instantiation: the fn parameter bound to the literal '+'."
     },
-    "total_max": {
+    "prod_ab": {
      "type": "unknown",
      "units": "1",
-     "description": "Second instantiation: the SAME template bound to 'max_sum'."
+     "shape": [
+      "k"
+     ],
+     "description": "Second instantiation: the SAME template bound to '*'."
     }
    },
    "equations": [
@@ -67,55 +85,46 @@
      }
     },
     {
-     "lhs": "total_sum",
+     "lhs": "sum_ab",
      "rhs": {
       "op": "apply_expression_template",
       "args": [],
-      "name": "total",
+      "name": "combine",
       "bindings": {
-       "K_semiring": "sum_product",
-       "a": "w"
+       "K_fn": "+",
+       "x": "a",
+       "y": "b"
       }
      }
     },
     {
-     "lhs": "total_max",
+     "lhs": "prod_ab",
      "rhs": {
       "op": "apply_expression_template",
       "args": [],
-      "name": "total",
+      "name": "combine",
       "bindings": {
-       "K_semiring": "max_sum",
-       "a": "w"
+       "K_fn": "*",
+       "x": "a",
+       "y": "b"
       }
      }
     }
    ],
    "expression_templates": {
-    "total": {
+    "combine": {
      "params": [
-      "K_semiring",
-      "a"
+      "K_fn",
+      "x",
+      "y"
      ],
      "body": {
-      "op": "faq",
+      "op": "broadcast",
+      "fn": "K_fn",
       "args": [
-       "a"
-      ],
-      "semiring": "K_semiring",
-      "output_idx": [],
-      "ranges": {
-       "i": {
-        "from": "k"
-       }
-      },
-      "expr": {
-       "op": "index",
-       "args": [
-        "a",
-        "i"
-       ]
-      }
+       "x",
+       "y"
+      ]
      }
     }
    }
