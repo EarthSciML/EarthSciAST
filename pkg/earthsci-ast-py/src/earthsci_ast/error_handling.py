@@ -333,7 +333,8 @@ ENUM_DUPLICATE_VALUE = "enum_duplicate_value"
 # ===========================================================================
 
 #: A document spells an op or a field the format has removed: ``arrayop``
-#: (0.8.0), or at 2.0.0 the ops ``fn``, ``table_lookup``, ``skolem``, ``rank``,
+#: (0.8.0), or at 2.0.0 the ``aggregate`` alias of ``faq``, the ops ``fn``,
+#: ``table_lookup``, ``skolem``, ``rank``,
 #: ``intersect_polygon``, ``polygon_intersection_area``, ``argmin``,
 #: ``argmax`` and the ``function_tables`` block. Rejected by name, so the open
 #: rewrite-target tier never admits one as ``unlowered_operator``.

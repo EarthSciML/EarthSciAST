@@ -1,6 +1,6 @@
 """Ops and fields removed at esm 2.0.0 are a coded load error, ``removed_op``.
 
-``fn``, ``table_lookup``, ``skolem``, ``rank``, ``intersect_polygon``,
+``aggregate`` (the old alias of ``faq``), ``fn``, ``table_lookup``, ``skolem``, ``rank``, ``intersect_polygon``,
 ``polygon_intersection_area``, ``argmin``, ``argmax`` and the ``function_tables``
 block (top-level or on a component) are rejected BY NAME at the wire boundary
 (``parse.prepare_document_ops``), before schema validation, so none of them can
@@ -49,6 +49,7 @@ def _load_error(doc: dict) -> ParseError:
 def test_the_removed_set_is_the_contract_list():
     assert REMOVED_AT_2_0_0 == sorted(
         [
+            "aggregate",
             "fn",
             "table_lookup",
             "skolem",
@@ -72,7 +73,7 @@ def test_each_removed_op_is_removed_op_naming_op_path_and_codemod(op):
     assert f'"op": "{op}"' in msg
     assert "/models/M/equations/0/rhs/args/1" in msg
     assert "esm 2.0.0" in msg
-    assert "earthsci-ast migrate" in msg and "earthsci_ast.migration" in msg
+    assert "python -m earthsci_ast.migrate" in msg
 
 
 @pytest.mark.parametrize("op", REMOVED_AT_2_0_0)
@@ -91,7 +92,7 @@ def test_top_level_function_tables_is_removed_op_naming_the_field():
     assert err.code == "removed_op"
     assert "`function_tables`" in str(err)
     assert "/function_tables" in str(err)
-    assert "earthsci-ast migrate" in str(err)
+    assert "python -m earthsci_ast.migrate" in str(err)
 
 
 def test_component_function_tables_is_removed_op_naming_the_field():
@@ -140,6 +141,7 @@ def test_validate_reports_the_load_error():
     "text",
     [
         "fn(a)",
+        "aggregate(a)",
         "skolem(a, b)",
         "rank(a)",
         "argmin(a)",

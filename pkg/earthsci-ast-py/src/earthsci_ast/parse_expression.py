@@ -810,7 +810,7 @@ def _make_call(name: str, args: list[Any], named: dict[str, Any], pos: int) -> A
     if removed_at is not None:
         raise ExpressionParseError(
             f"removed_op: '{name}' was removed at esm {removed_at}; write the "
-            "esm:std/... template application instead (earthsci-ast migrate)",
+            "esm:std/... template application instead (python -m earthsci_ast.migrate)",
             pos,
         )
     # A dotted callee named a closed function (`fn`), removed at esm 2.0.0.
@@ -818,7 +818,7 @@ def _make_call(name: str, args: list[Any], named: dict[str, Any], pos: int) -> A
         raise ExpressionParseError(
             f"removed_op: the dotted call '{name}(…)' spelled a closed function "
             "(`fn`), removed at esm 2.0.0; write the esm:std/... template "
-            "application instead (earthsci-ast migrate)",
+            "application instead (python -m earthsci_ast.migrate)",
             pos,
         )
     # Call-shaped structural ops: reconstruct their non-`args` fields from the

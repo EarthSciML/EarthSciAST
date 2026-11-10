@@ -121,6 +121,7 @@ CATEGORIES: frozenset[str] = frozenset(
 #: rewrite-target tier could admit it, and the text parser refuses to spell one.
 REMOVED_OPS: dict[str, str] = {
     "arrayop": "0.8.0",
+    "aggregate": "2.0.0",
     "fn": "2.0.0",
     "table_lookup": "2.0.0",
     "skolem": "2.0.0",

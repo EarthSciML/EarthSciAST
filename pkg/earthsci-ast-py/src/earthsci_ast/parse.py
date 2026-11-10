@@ -11,7 +11,6 @@ import copy
 import json
 import os
 import re
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -1705,8 +1704,8 @@ def _load_ref_data(
                 path=mount_pointer,
             ) from exc
     # A REFERENCED document is a document: same wire boundary as the root
-    # (docs/content/rfcs/faq-node-rename.md §5.2). Without this the `aggregate`
-    # alias and `arrayop` both survive a `{ref}` all the way into `emit`.
+    # (docs/content/rfcs/faq-node-rename.md §5.2). Without this a removed op in
+    # a child would survive a `{ref}` all the way into `emit`.
     prepare_document_ops(ref_data)
 
     # Determine the new base_path for nested refs (and template imports): a
@@ -3093,10 +3092,9 @@ def _load_data(
     entry points above say which they are.
     """
 
-    # esm 1.1.0: rewrite the deprecated `aggregate` op spelling to the canonical
-    # `faq` at the wire boundary, ahead of every other pass, so the version
-    # gates, the schema, the typed tree and `emit` all see exactly one tag
-    # (docs/content/rfcs/faq-node-rename.md).
+    # Reject removed op spellings (`aggregate`, `arrayop`, the esm 2.0.0 ops)
+    # and fields at the wire boundary, ahead of every other pass, so none of
+    # them reaches the version gates, the schema or the open rewrite-target tier.
     prepare_document_ops(data)
 
     # Strip top-level events (not allowed by schema, but accepted for tooling roundtrip)
@@ -3379,34 +3377,6 @@ def _load_data(
     return esm_file
 
 
-class EsmDeprecationWarning(UserWarning):
-    """A deprecated ESM construct was accepted and normalized.
-
-    Subclasses :class:`UserWarning`, not :class:`DeprecationWarning`, on
-    purpose: Python filters ``DeprecationWarning`` outside ``__main__``, so a
-    library-issued one is invisible to exactly the users who need it — the four
-    other bindings all print unconditionally.
-    """
-
-
-def _rewrite_op_aliases(node: object) -> int:
-    """Depth-first rewrite of ``"op": "aggregate"`` to ``"op": "faq"``.
-
-    Returns how many nodes were rewritten.
-    """
-    n = 0
-    if isinstance(node, dict):
-        if node.get("op") == "aggregate":
-            node["op"] = "faq"
-            n += 1
-        for value in node.values():
-            n += _rewrite_op_aliases(value)
-    elif isinstance(node, list):
-        for value in node:
-            n += _rewrite_op_aliases(value)
-    return n
-
-
 def _find_op(node: object, op: str, at: str = "") -> str | None:
     """Path of the first node carrying ``"op": <op>``, or ``None``."""
     if isinstance(node, dict):
@@ -3449,8 +3419,8 @@ _REMOVED_OPS_2_0_0: frozenset[str] = frozenset(
 
 #: The codemod a ``removed_op`` message points at.
 _CODEMOD_HINT = (
-    "Run the codemod (`earthsci-ast migrate`, Python `earthsci_ast.migration`) to "
-    "rewrite the document to esm 2.0.0 (esm:std/... templates)."
+    "Run the codemod (`python -m earthsci_ast.migrate`) to rewrite the document to "
+    "esm 2.0.0 (`aggregate` -> `faq`, removed ops -> esm:std/... templates)."
 )
 
 
@@ -3503,31 +3473,25 @@ def reject_removed_constructs(data: object) -> None:
     raise err
 
 
-def prepare_document_ops(data: object) -> int:
+def prepare_document_ops(data: object) -> None:
     """The wire boundary for expression-node ``op`` spellings, applied to EVERY
     document — root, ``{ref}``-loaded child, template library, coupling library.
 
-    Three steps, in this order:
+    Two steps, in this order:
 
     1. Removed constructs are rejected BY NAME with ``removed_op``
        (:func:`reject_removed_constructs`): ``arrayop`` (esm 0.8.0), and at esm
-       2.0.0 ``fn``, ``table_lookup``, ``skolem``, ``rank``,
+       2.0.0 the ``aggregate`` alias of ``faq``, ``fn``, ``table_lookup``,
+       ``skolem``, ``rank``,
        ``intersect_polygon``, ``polygon_intersection_area``, ``argmin``,
        ``argmax`` and the ``function_tables`` block. Each op is a well-formed
        identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
        rewrite-target op: the document would load silently and fail much later
        as ``unlowered_operator``, or never.
-    2. The ``faq`` version gate, on the AUTHORED form — ``faq`` arrives at esm
-       1.1.0 (esm-spec §2.2.4, same rule as the top-level ``solver`` block).
-       This runs BEFORE normalization deliberately: ``aggregate`` *is* the
-       pre-1.1.0 spelling, so a 1.0.0 document carrying the alias is legal and
-       must not be caught here.
-    3. ``aggregate`` is normalized to ``faq`` and the declared version is raised
-       to the 1.1.0 floor with it, so the upgraded document is self-consistent
-       rather than spelling a 1.1.0 construct under an older version.
+    2. The ``faq`` version gate — ``faq`` arrives at esm 1.1.0 (esm-spec
+       §2.2.4, same rule as the top-level ``solver`` block).
 
-    Returns the number of nodes normalized. See
-    ``docs/content/rfcs/faq-node-rename.md``.
+    See ``docs/content/rfcs/faq-node-rename.md``.
     """
     reject_removed_constructs(data)
     faq_at = _find_op(data, "faq")
@@ -3535,21 +3499,6 @@ def prepare_document_ops(data: object) -> int:
         declared = data.get("esm") if isinstance(data, dict) else None
         raise ParseError(
             f"faq_version_too_old at {faq_at}: the `faq` op arrives at esm 1.1.0; file "
-            f'declares {declared}. Use \'"op": "aggregate"\' (the deprecated pre-1.1.0 '
-            "spelling) or raise the declared version. "
+            f"declares {declared}. Raise the declared version. "
             "See docs/content/rfcs/faq-node-rename.md."
         )
-    n = _rewrite_op_aliases(data)
-    if n:
-        if isinstance(data, dict) and _version_below_v11(data):
-            data["esm"] = "1.1.0"
-        warnings.warn(
-            'deprecated_op_alias: \'"op": "aggregate"\' is the pre-1.1.0 spelling of '
-            f'\'"op": "faq"\' (Functional Aggregate Query); {n} '
-            f"{'node was' if n == 1 else 'nodes were'} normalized on load. The alias is "
-            "REMOVED at esm 2.0.0 -- re-emit this document to migrate it "
-            "(docs/content/rfcs/faq-node-rename.md).",
-            EsmDeprecationWarning,
-            stacklevel=2,
-        )
-    return n

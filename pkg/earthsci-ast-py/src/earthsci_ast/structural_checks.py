@@ -2878,7 +2878,7 @@ def _lhs_base_name(lhs: Any):
     e = lhs
     while isinstance(e, dict):
         op = e.get("op")
-        if op in ("faq", "aggregate") and isinstance(e.get("expr"), (dict, str)):
+        if op == "faq" and isinstance(e.get("expr"), (dict, str)):
             e = e["expr"]
         elif op == "index" and e.get("args"):
             e = e["args"][0]
@@ -2896,7 +2896,7 @@ def _lhs_defined_name(lhs: Any):
     e = lhs
     while isinstance(e, dict):
         op = e.get("op")
-        if op in ("faq", "aggregate") and isinstance(e.get("expr"), (dict, str)):
+        if op == "faq" and isinstance(e.get("expr"), (dict, str)):
             e = e["expr"]
         elif op in ("index", "D") and e.get("args"):
             e = e["args"][0]
@@ -2912,7 +2912,7 @@ def _lhs_free_index_symbols(lhs: Any, bound: set, names: set) -> list[str]:
         if not isinstance(e, dict):
             return
         op = e.get("op")
-        if op in ("faq", "aggregate"):
+        if op == "faq":
             nb = set(b)
             nb.update(x for x in (e.get("output_idx") or []) if isinstance(x, str))
             nb.update((e.get("ranges") or {}).keys())
@@ -2968,7 +2968,7 @@ def _check_equation_lhs_names(data: dict[str, Any], errors: list) -> None:
                 )
             rhs = eq.get("rhs")
             bound = set()
-            if isinstance(rhs, dict) and rhs.get("op") in ("faq", "aggregate"):
+            if isinstance(rhs, dict) and rhs.get("op") == "faq":
                 bound = {x for x in (rhs.get("output_idx") or []) if isinstance(x, str)}
             free = _lhs_free_index_symbols(lhs, bound, names)
             defining = _lhs_defined_name(lhs) if free else None
