@@ -11,7 +11,6 @@ import type { EsmFile } from './types.js'
 import { validateUnits, type UnitWarning } from './units.js'
 import { losslessJsonParse, stripNumericLiterals } from './numeric-literal.js'
 import { lowerEnums } from './lower-enums.js'
-import { checkFunctionTablesAndClosedFunctionCalls } from './load-function-checks.js'
 import {
   expandDocument,
   lowerExpressionTemplates,
@@ -68,14 +67,17 @@ export interface SchemaError {
 }
 
 /**
- * Parse error - thrown when JSON parsing fails
+ * Parse error - thrown when JSON parsing fails, or when the wire boundary
+ * refuses a document before schema validation. `code` defaults to
+ * `parse_error`; a removed op or field carries `removed_op`.
  */
 export class ParseError extends EsmDiagnosticError {
   constructor(
     message: string,
     public originalError?: Error,
+    code: string = ERROR_CODES.PARSE_ERROR,
   ) {
-    super(ERROR_CODES.PARSE_ERROR, message)
+    super(code, message)
     this.name = 'ParseError'
   }
 }
@@ -476,27 +478,14 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   checkVersionCompatibility(validationView, options?.onVersionWarning)
 
   // Step 2a: v0.3.0 file-boundary rejection of removed v0.2.x extension
-  // points (esm-spec §9 / closed function registry RFC). Mirrors the
+  // points (esm-spec §9). Mirrors the
   // Julia ref `parse.jl` rejection so cross-binding behavior is uniform.
   rejectRemovedV02Blocks(validationView)
 
-  // Steps 2b–2e: every file-level version gate, before schema validation so
-  // the user sees the version hint instead of a generic "extra property" error.
-  // A mounted leaf runs the same list against its own `esm` (esm-spec §4.7).
-  rejectVersionGatedConstructs(validationView)
-  // Top-level `expression_templates` beside a component payload is a
-  // template-library payload no component can see (esm-spec §9.7.1).
-  rejectImpureTemplateLibrary(validationView)
-  // `solver.external` and `solver.time_span` arrive at esm 1.3.0 (§2.2.4); a
-  // `${` in `external` is refused (§2.2.6), and `time_span` must describe an
-  // interval once its bounds are converted to seconds (§2.2.7). Root only: a
-  // mounted leaf's block never reaches these passes. After the whole-block
-  // gate, so a document below 1.1.0 is told about the block first. Skips a
-  // bound the schema will report.
-  rejectSolverExternalPreV13(validationView)
-  rejectSolverTimeSpanPreV13(validationView)
-  rejectSolverExternalUnresolved(validationView)
-  rejectSolverTimeSpanInvalid(validationView)
+  // Steps 2b–2e: every file-level version gate and the root-only solver checks,
+  // before schema validation so the user sees the version hint instead of a
+  // generic "extra property" error.
+  rejectRootLoadGates(validationView)
   // Then §2.2's one normalization — an EMPTY block means what absence means, so
   // it is dropped here rather than surviving to emit. Applied to BOTH views for
   // the same reason `resolveDataSourceUrls` is: in canonical mode
@@ -623,13 +612,6 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // codegen runner sees only `const` — `evaluateExpression()` rejects
   // any leftover `enum` op as an unlowered file.
   const loweredData = lowerEnums(typedData)
-
-  // Step 4a: the esm-spec §9.5.5 table checks on EVERY `function_tables` entry,
-  // referenced or not, and the §9.2 argument checks on EVERY `interp.*` `fn`
-  // call, wherever it sits (ruling Q-106). On the document as loaded — after
-  // template expansion and enum lowering — so a call inside a template body is
-  // checked where the template was applied. A failure does not load.
-  checkFunctionTablesAndClosedFunctionCalls(loweredData)
 
   // Attach the captured Option-B registries (NON-SCHEMA, loader-populated —
   // see `EsmFile.componentTemplates` in `types.ts`). Omitted entirely when the
@@ -806,9 +788,9 @@ function captureComponentTemplates(data: unknown): Record<string, unknown> {
  *
  *   - top-level `operators` block — replaced by AST equations + named
  *     `discretizations` schemes.
- *   - top-level `registered_functions` block — replaced by the closed
- *     `fn`-op registry (datetime + interp.searchsorted).
- *   - any expression-tree `call` op — replaced by `fn`.
+ *   - top-level `registered_functions` block — replaced by AST equations
+ *     and expression templates.
+ *   - any expression-tree `call` op — likewise.
  *
  * Throws `SchemaValidationError` with one entry per offending location
  * so the caller surfaces all of them at once. Operates on the
@@ -833,7 +815,7 @@ function rejectRemovedV02Blocks(view: unknown): void {
       path: '/registered_functions',
       keyword: 'removed_in_v0_3',
       message:
-        "top-level 'registered_functions' block was removed in ESM v0.3.0; migrate to the closed 'fn'-op registry (esm-spec §9.2).",
+        "top-level 'registered_functions' block was removed in ESM v0.3.0; migrate to AST equations or expression templates (esm-spec §9.6).",
     })
   }
 
@@ -856,7 +838,7 @@ function rejectRemovedV02Blocks(view: unknown): void {
       path: p,
       keyword: 'removed_in_v0_3',
       message:
-        "'call' AST op was removed in ESM v0.3.0; migrate to AST equations or the closed 'fn'-op registry (esm-spec §9.2).",
+        "'call' AST op was removed in ESM v0.3.0; migrate to AST equations or expression templates (esm-spec §9.6).",
     })
   }
 
@@ -902,6 +884,118 @@ function findOp(node: unknown, op: string, at = ''): string | null {
   return null
 }
 
+/**
+ * Ops removed at esm 2.0.0, each with what replaces it. Rejected BY NAME at the
+ * wire boundary ({@link prepareDocumentOps}): every one is a well-formed
+ * identifier, so the open rewrite-target tier (esm-spec §4.2) would otherwise
+ * admit it and the document would fail much later as `unlowered_operator`.
+ */
+const REMOVED_OPS_V2: ReadonlyMap<string, string> = new Map([
+  ['fn', 'the esm:std/interp.esm, esm:std/calendar.esm and esm:std/solar.esm templates'],
+  ['table_lookup', 'the `linear` / `bilinear` templates of esm:std/interp.esm over the table data'],
+  ['skolem', '`pair_key` / `edge_key` from esm:std/relational.esm, keyed into a `distinct` `faq`'],
+  ['rank', 'the `rank_of` / `rank_of_set` templates of esm:std/relational.esm'],
+  ['intersect_polygon', 'nothing (it has no replacement)'],
+  [
+    'polygon_intersection_area',
+    'the `overlap_area_planar` / `overlap_area_spherical` templates of esm:std/geometry.esm',
+  ],
+  ['argmin', 'the `argmin` template of esm:std/relational.esm'],
+  ['argmax', 'the `argmax` template of esm:std/relational.esm'],
+])
+
+/** Where a removed construct's message sends the author. */
+const MIGRATE_HINT =
+  'Convert the document with the codemod: `earthsci-ast migrate` ' +
+  '(Python `earthsci_ast.migration`).'
+
+/** Path and name of the first node (pre-order) whose `op` is in `ops`, or `null`. */
+function findFirstOp(
+  node: unknown,
+  ops: ReadonlyMap<string, string>,
+  at = '',
+): { path: string; op: string } | null {
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const hit = findFirstOp(node[i], ops, `${at}/${i}`)
+      if (hit !== null) return hit
+    }
+  } else if (node !== null && typeof node === 'object') {
+    const obj = node as Record<string, unknown>
+    if (typeof obj.op === 'string' && ops.has(obj.op)) return { path: at, op: obj.op }
+    for (const k of Object.keys(obj)) {
+      const hit = findFirstOp(obj[k], ops, `${at}/${k}`)
+      if (hit !== null) return hit
+    }
+  }
+  return null
+}
+
+/**
+ * Path of the first `function_tables` block (removed at esm 2.0.0) on the
+ * document root or on any component — a `models` / `reaction_systems` entry or
+ * one of their `subsystems`, at any depth — or `null`.
+ */
+function findFunctionTables(doc: unknown): string | null {
+  const isObj = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+  const visit = (component: unknown, at: string): string | null => {
+    if (!isObj(component)) return null
+    if ('function_tables' in component) return `${at}/function_tables`
+    const subs = component.subsystems
+    if (isObj(subs)) {
+      for (const [k, sub] of Object.entries(subs)) {
+        const hit = visit(sub, `${at}/subsystems/${k}`)
+        if (hit !== null) return hit
+      }
+    }
+    return null
+  }
+  if (!isObj(doc)) return null
+  if ('function_tables' in doc) return '/function_tables'
+  for (const kind of ['models', 'reaction_systems']) {
+    const block = doc[kind]
+    if (!isObj(block)) continue
+    for (const [k, component] of Object.entries(block)) {
+      const hit = visit(component, `/${kind}/${k}`)
+      if (hit !== null) return hit
+    }
+  }
+  return null
+}
+
+/**
+ * The `removed_op` message for the first construct removed at esm 2.0.0 that
+ * `doc` uses — the `function_tables` block, then the ops in
+ * {@link REMOVED_OPS_V2} in pre-order — naming the construct, where it sits,
+ * and the codemod; `null` when it uses none. Shared by the load-time rejection
+ * and `migrate()`, which refuses to relabel such a 1.x document.
+ */
+export function removedV2ConstructMessage(doc: unknown): string | null {
+  const tablesAt = findFunctionTables(doc)
+  if (tablesAt !== null) {
+    return (
+      `removed_op at ${tablesAt}: the \`function_tables\` block was removed at esm 2.0.0; ` +
+      `read the table data with the \`linear\` / \`bilinear\` templates of ` +
+      `esm:std/interp.esm instead. ${MIGRATE_HINT}`
+    )
+  }
+  const hit = findFirstOp(doc, REMOVED_OPS_V2)
+  if (hit !== null) {
+    return (
+      `removed_op at ${hit.path}: \`"op": "${hit.op}"\` was removed at esm 2.0.0; ` +
+      `use ${REMOVED_OPS_V2.get(hit.op)} instead. ${MIGRATE_HINT}`
+    )
+  }
+  return null
+}
+
+/** Throw `removed_op` for the first construct removed at esm 2.0.0 that `doc` uses. */
+function rejectRemovedV2Constructs(doc: unknown): void {
+  const message = removedV2ConstructMessage(doc)
+  if (message !== null) throw new ParseError(message, undefined, ERROR_CODES.REMOVED_OP)
+}
+
 /** Does `doc` declare an `esm` version below 1.1.0? */
 function declaredBelowV11(doc: unknown): boolean {
   if (doc === null || typeof doc !== 'object') return false
@@ -910,6 +1004,32 @@ function declaredBelowV11(doc: unknown): boolean {
   const [major, minor] = esm.split('.').map((x) => Number.parseInt(x, 10))
   if (Number.isNaN(major) || Number.isNaN(minor)) return false
   return major < 1 || (major === 1 && minor < 1)
+}
+
+/**
+ * The checks {@link loadDocument} runs on the ROOT document after the major
+ * version check and before schema validation: every file-level version gate
+ * ({@link rejectVersionGatedConstructs}), the template-library purity check,
+ * and the root-only `solver.external` / `solver.time_span` checks, in that
+ * order. Exported so the gates can be exercised on a document whose declared
+ * version the major check would refuse first.
+ */
+export function rejectRootLoadGates(validationView: unknown): void {
+  // A mounted leaf runs the same list against its own `esm` (esm-spec §4.7).
+  rejectVersionGatedConstructs(validationView)
+  // Top-level `expression_templates` beside a component payload is a
+  // template-library payload no component can see (esm-spec §9.7.1).
+  rejectImpureTemplateLibrary(validationView)
+  // `solver.external` and `solver.time_span` arrive at esm 1.3.0 (§2.2.4); a
+  // `${` in `external` is refused (§2.2.6), and `time_span` must describe an
+  // interval once its bounds are converted to seconds (§2.2.7). Root only: a
+  // mounted leaf's block never reaches these passes. After the whole-block
+  // gate, so a document below 1.1.0 is told about the block first. Skips a
+  // bound the schema will report.
+  rejectSolverExternalPreV13(validationView)
+  rejectSolverTimeSpanPreV13(validationView)
+  rejectSolverExternalUnresolved(validationView)
+  rejectSolverTimeSpanInvalid(validationView)
 }
 
 /**
@@ -971,10 +1091,11 @@ export function raiseFaqVersionFloor(doc: unknown): void {
  *
  * Three steps, in this order:
  *
- * 1. `arrayop` (removed at esm 0.8.0) is rejected BY NAME. It is a well-formed
- *    identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
- *    rewrite-target op: the document would load silently and fail much later as
- *    `unlowered_operator`, or never.
+ * 1. `arrayop` (removed at esm 0.8.0), the ops removed at esm 2.0.0 and the
+ *    `function_tables` block are rejected BY NAME with `removed_op`. Each op is
+ *    a well-formed identifier, so esm-spec §4.2 would otherwise admit it as an
+ *    OPEN rewrite-target op: the document would load silently and fail much
+ *    later as `unlowered_operator`, or never.
  * 2. The `faq` version gate, on the AUTHORED form — `faq` arrives at esm 1.1.0
  *    (esm-spec §2.2.4). Deliberately BEFORE normalization: `aggregate` is the
  *    pre-1.1.0 spelling, so a 1.0.0 document carrying the alias is legal.
@@ -991,8 +1112,11 @@ export function prepareDocumentOps(doc: unknown, opts?: { warn?: boolean }): num
       `removed_op at ${removedAt}: \`"op": "arrayop"\` was removed at esm 0.8.0 and is not a ` +
         `deprecated alias; use \`"op": "faq"\` (the Functional Aggregate Query node). ` +
         `See docs/content/rfcs/faq-node-rename.md.`,
+      undefined,
+      ERROR_CODES.REMOVED_OP,
     )
   }
+  rejectRemovedV2Constructs(doc)
   const faqAt = findOp(doc, 'faq')
   if (faqAt !== null && declaredBelowV11(doc)) {
     const declared = (doc as Record<string, unknown>).esm

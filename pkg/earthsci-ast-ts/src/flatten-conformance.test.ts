@@ -100,7 +100,6 @@ interface FlattenCase {
     callbacks: string[]
   }
   index_sets: string[]
-  function_tables: string[]
   template_registry: string[]
   field_ics: Array<{ state: string; expr: string }>
   loader_fields: LoaderFieldCase[]
@@ -322,9 +321,8 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
       expect(flat.metadata.callbacks).toEqual(expected.metadata.callbacks)
     })
 
-    it('index_sets / function_tables / template_registry (ordered keys)', () => {
+    it('index_sets / template_registry (ordered keys)', () => {
       expect(Object.keys(flat.indexSets)).toEqual(expected.index_sets)
-      expect(Object.keys(flat.functionTables)).toEqual(expected.function_tables)
       expect(Object.keys(flat.templateRegistry)).toEqual(expected.template_registry)
     })
 

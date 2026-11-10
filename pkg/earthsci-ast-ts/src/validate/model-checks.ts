@@ -339,8 +339,8 @@ export function validateArrayDefaultsHaveShape(
  *   1. `variables` — states, parameters and observed alike (one map, §4.2).
  *   2. `index_sets` — the document-scoped registry; a `faq` may name a
  *      set positionally, so the name is an identifier, not a variable.
- *   3. BINDER symbols — `faq` `output_idx`, `argmin`/`argmax`
- *      witnesses, an `integral`'s integration `var`. Scope-local, so they are
+ *   3. BINDER symbols — `faq` `output_idx`, an `integral`'s integration
+ *      `var`. Scope-local, so they are
  *      supplied per-scope by the caller, not here.
  *   4. IMPLICIT coordinates — the domain's `independent_variable` and the
  *      spatial coordinate names. Independent coordinates are not unknowns and
@@ -1141,18 +1141,11 @@ export function validateAggregateIndexSets(
  * range binds the MEMBER `values[parent, k]` itself (esm-spec §4.3.1 "Ragged
  * ranges"), so its `values` gather is implicit rather than authored.
  */
-const VALUE_INVENTION_BODY_OPS: ReadonlySet<string> = new Set([
-  'skolem',
-  'rank',
-  'distinct',
-  'argmin',
-  'argmax',
-])
+const VALUE_INVENTION_BODY_OPS: ReadonlySet<string> = new Set(['distinct'])
 
-/** A value-invention `faq`: `distinct: true`, a `skolem` key, or a skolem / rank / distinct / arg-witness body. */
+/** A value-invention `faq`: `distinct: true` or a `distinct` body. */
 function isValueInventionFaq(agg: ExpressionNode): boolean {
   if (agg.distinct === true) return true
-  if (isExprNode(agg.key) && agg.key.op === 'skolem') return true
   return isExprNode(agg.expr) && VALUE_INVENTION_BODY_OPS.has(agg.expr.op)
 }
 
@@ -1295,7 +1288,7 @@ export function validateRelationalNodesInContinuous(
         const semiring = agg.semiring ?? 'sum_product'
         if (!RELATIONAL_SEMIRINGS.has(semiring)) continue
 
-        // A state variable read in the `key` (the Skolem term whose distinct
+        // A state variable read in the `key` (the term whose distinct
         // values are enumerated) or the `expr` body makes the invented set
         // depend on the continuously-evolving state.
         const referenced = new Set<string>()

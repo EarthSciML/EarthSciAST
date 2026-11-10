@@ -12,15 +12,12 @@
  *  - scalar tier: arithmetic, powers, comparisons, boolean logic, elementary
  *    functions, derivatives (`D(x)/Dt` and `D(x, t)`), open/user function calls;
  *  - array & call-shaped tier: array literals `[…]` (`const`), indexing
- *    `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
- *    the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
+ *    `a[i, j]` (`index`), the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
  *  - reduction & array-query tier: `faq` reductions
  *    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
- *    key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax` arg-witnesses
- *    `argmin[g] (expr) where {…}`, template application
- *    `name<binding = value, …>` (`apply_expression_template`),
- *    `polygon_intersection_area(a, b, manifold=…)`, and the piecewise-region
- *    array `makearray([lo:hi, …] = value, …)`.
+ *    key=k [semiring=…]` (all clause shapes), template application
+ *    `name<binding = value, …>` (`apply_expression_template`), and the
+ *    piecewise-region array `makearray([lo:hi, …] = value, …)`.
  *
  * Aggregate `args` is a derived operand cache the printer doesn't emit; it's
  * reconstructed best-effort (see {@link deriveAggregateArgs}) and is
@@ -29,8 +26,9 @@
  * (semantically identical there) is not recovered; both reprint identically.
  *
  * Still deferred (need dedicated surface syntax — a later pass): `broadcast` and
- * `enum`. Those are refused with an {@link ExpressionParseError}, as is the
- * call spelling `table_lookup(…)` (its real surface is `visc[T=temp]`).
+ * `enum`. Those are refused with an {@link ExpressionParseError}, as are a
+ * dotted call `a.b(…)` and a call to an op removed at esm 2.0.0
+ * ({@link REMOVED_CALL_OPS}).
  *
  * Design rules: multiplication is ALWAYS explicit (`k * A`) — no implicit
  * juxtaposition, because identifiers are multi-letter (`NO2`, `O3`, `k_photo`).
@@ -105,15 +103,27 @@ const TEMPLATE_ARG_MIN = opPrecedence('+')
 /**
  * Structural ops whose defining data lives OUTSIDE `args` AND which have no
  * text surface yet — refused, pending a dedicated syntax pass. (`integral`,
- * `reshape`, `transpose`, `concat`, `fn`, `const`, `index`, `true`, `false`, `faq`,
- * `apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
- * `makearray` DO have a surface and are reconstructed below; they are
- * intentionally absent here. `table_lookup` IS listed: its surface is the
- * bracket form `visc[T=temp]`, parsed in `parseTableLookup` without going
- * through `makeCall`, so the CALL spelling `table_lookup(a)` — which the printer
- * never emits — stays refused.)
+ * `reshape`, `transpose`, `concat`, `const`, `index`, `true`, `false`, `faq`,
+ * `apply_expression_template` and `makearray` DO have a surface and are
+ * reconstructed below; they are intentionally absent here.)
  */
-const STRUCTURAL_OPS = new Set<string>(['table_lookup', 'broadcast', 'enum'])
+const STRUCTURAL_OPS = new Set<string>(['broadcast', 'enum'])
+
+/**
+ * Ops removed at esm 2.0.0. A call spelled with one of these names would
+ * otherwise parse as an open-tier op that no document can load (`removed_op`),
+ * so the parser refuses it up front.
+ */
+const REMOVED_CALL_OPS = new Set<string>([
+  'fn',
+  'table_lookup',
+  'skolem',
+  'rank',
+  'intersect_polygon',
+  'polygon_intersection_area',
+  'argmin',
+  'argmax',
+])
 
 /** An overlap (envelope-candidacy) join gate. */
 interface OverlapGate {
@@ -131,8 +141,6 @@ type JoinClause = { on: [string, string][]; syms?: [string, string] } | { overla
  * `any` carry no `reduce` field (plain `+` / semiring-only).
  */
 const AGG_SYMS = new Set<string>(['sum', 'prod', 'max', 'min', 'any'])
-/** Arg-witness reductions (`formatArgWitness`): `argmin[g] (expr) where {…}`. */
-const ARGWITNESS_SYMS = new Set<string>(['argmin', 'argmax'])
 const REDUCE_BY_SYM: Record<string, string | undefined> = {
   sum: undefined,
   prod: '*',
@@ -165,8 +173,7 @@ const SINGLE_OPS = new Set(['+', '-', '*', '/', '^', '>', '<'])
 const NUM_RE = /^(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/
 // Identifiers allow Unicode letters (Greek variables like `ΔF_net`, `Φ`),
 // Unicode numbers (subscript/superscript digits in names like `k₀`, `M₁`), and
-// dots (qualified refs like `Emissions.NO`, and dotted closed-function names
-// like `datetime.year`, which makeCall turns into `fn` nodes). A leading digit
+// dots (qualified refs like `Emissions.NO`). A leading digit
 // still can't start an identifier (numbers lex first).
 //
 // `∂` (U+2202) and `∇` (U+2207) are also name-constituents: source variables are
@@ -336,14 +343,6 @@ class Parser {
       // A trailing `[semiring=…]` is an aggregate suffix, never an index — leave
       // it for parseAggregate's tail (it can follow a `key=`/`if` expression).
       if (this.peek(1).k === 'name' && (this.peek(1) as { v: string }).v === 'semiring') break
-      // `name[axis=expr, …]` is a `table_lookup` (formatStructuralOp), not an
-      // index: `=` is never an expression operator, so a `name` `=` pair inside
-      // the brackets discriminates the two unambiguously. Only a bare variable
-      // can name a table.
-      if (typeof node === 'string' && this.peek(1).k === 'name' && this.peek(2).k === 'eq') {
-        node = this.parseTableLookup(node)
-        continue
-      }
       this.next() // '['
       const idx: Expr[] = [this.parseExpr(0)]
       while (this.peek().k === ',') {
@@ -399,10 +398,6 @@ class Parser {
       // ordinary index into a variable that happens to be named `sum`/`max`/….
       if (AGG_SYMS.has(t.v) && this.peek().k === '[' && this.aggregateAhead()) {
         return this.parseAggregate(t.v)
-      }
-      // Arg-witness reduction `argmin[g] (expr) where {…}` (same `[…] (` shape).
-      if (ARGWITNESS_SYMS.has(t.v) && this.peek().k === '[' && this.aggregateAhead()) {
-        return this.parseArgWitness(t.v)
       }
       return t.v // bare variable / species / qualified reference
     }
@@ -588,93 +583,6 @@ class Parser {
     if (id !== undefined) node.id = id
     node.expr = expr
     node.args = deriveAggregateArgs(expr, join, filter, key)
-    return node as unknown as Expr
-  }
-
-  /**
-   * Parse a `table_lookup` from the surface `formatStructuralOp` emits:
-   * `table '[' axis '=' expr (',' axis '=' expr)* ']' (':' <integer>)?`, e.g.
-   * `visc[T=temp]` and `k_rate[T=temp, p=pres]:1`. The printer sorts the axis
-   * names, so the reconstructed `axes` map is rebuilt in the emitted order and
-   * reprints identically.
-   */
-  private parseTableLookup(table: string): Expr {
-    this.expect('[', "'['")
-    const axes: Record<string, Expr> = {}
-    for (;;) {
-      const nm = this.next()
-      if (nm.k !== 'name') this.fail('Expected an axis name in table[axis=…]', nm)
-      this.expect('eq', "'=' in table[axis=…]")
-      axes[nm.v] = this.parseExpr(0)
-      if (this.peek().k === ',') {
-        this.next()
-        continue
-      }
-      break
-    }
-    this.expect(']', "']' after table[axis=…]")
-    const node: Record<string, unknown> = { op: 'table_lookup', args: [], table, axes }
-    // The optional `:N` output selector picks one column of a multi-output table.
-    if (this.peek().k === ':') {
-      this.next()
-      const out = this.next()
-      if (out.k !== 'num' || !Number.isInteger(out.v)) {
-        this.fail('Expected an integer output index after table[…]:', out)
-      }
-      node.output = (out as { v: number }).v
-    }
-    return node as unknown as Expr
-  }
-
-  /**
-   * Parse an `argmin` / `argmax` arg-witness (esm-spec §4.2) — the inverse of
-   * `formatArgWitness`: `op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?`.
-   * Like aggregate, its `args` operand cache isn't printed and is derived.
-   */
-  private parseArgWitness(op: string): Expr {
-    this.next() // '['
-    const at = this.next()
-    if (at.k !== 'name') this.fail('Expected the arg-witness index name', at)
-    this.expect(']', "']' after the arg-witness index")
-    this.expect('(', "'(' before the arg-witness body")
-    const expr = this.parseExpr(0)
-    this.expect(')', "')' after the arg-witness body")
-    let ranges: Record<string, unknown> = {}
-    if (this.atWord('where')) {
-      this.next()
-      ranges = this.parseRanges()
-    }
-    // The candidate-pruning `join(…)` and `if` filter, exactly as on `faq`.
-    const join: JoinClause[] = []
-    if (this.atWord('join')) {
-      this.next()
-      join.push(...this.parseJoin())
-    }
-    let filter: Expr | undefined
-    if (this.atWord('if')) {
-      this.next()
-      filter = this.parseExpr(0)
-    }
-    // `id=<name>` (RFC §6.1 node identity), emitted by formatArgWitness after
-    // the where-clause. Mirrors the aggregate tail.
-    let id: string | undefined
-    if (this.atWord('id') && this.peek(1).k === 'eq') {
-      this.next() // 'id'
-      this.next() // '='
-      const nm = this.next()
-      if (nm.k !== 'name') this.fail('Expected a name after id=', nm)
-      id = nm.v
-    }
-    const node: Record<string, unknown> = {
-      op,
-      args: deriveAggregateArgs(expr, join, filter, undefined),
-      arg: at.v,
-      ranges,
-      expr,
-    }
-    if (join.length > 0) node.join = join
-    if (filter !== undefined) node.filter = filter
-    if (id !== undefined) node.id = id
     return node as unknown as Expr
   }
 
@@ -913,10 +821,14 @@ function noNamed(named: Record<string, Expr>, name: string, pos: number): void {
 }
 
 function makeCall(name: string, args: Expr[], named: Record<string, Expr>, pos: number): Expr {
-  // A dotted callee is a closed function — an `fn` node carrying the name.
-  if (name.includes('.')) {
-    noNamed(named, name, pos)
-    return { op: 'fn', name, args }
+  // A dotted callee was a closed function (`fn`), removed at esm 2.0.0 with
+  // the ops in REMOVED_CALL_OPS; the esm:std templates replace both.
+  if (name.includes('.') || REMOVED_CALL_OPS.has(name)) {
+    throw new ExpressionParseError(
+      `'${name}(...)' is not expressible: \`${name.includes('.') ? 'fn' : name}\` was ` +
+        `removed at esm 2.0.0; apply an esm:std template instead (name<param = value, …>)`,
+      pos,
+    )
   }
   // Call-shaped structural ops: reconstruct their non-`args` fields from the
   // positional / named arguments `toAscii` renders.
@@ -938,38 +850,6 @@ function makeCall(name: string, args: Expr[], named: Record<string, Expr>, pos: 
     const axis = named.axis
     if (axis === undefined) throw new ExpressionParseError('concat(...) requires axis=<n>', pos)
     return { op: 'concat', args, axis }
-  }
-  // Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
-  // `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
-  // node identity) is optional and only emitted by the printer when present.
-  if (name === 'polygon_intersection_area' || name === 'intersect_polygon') {
-    const manifold = named.manifold
-    if (typeof manifold !== 'string') {
-      throw new ExpressionParseError(`${name}(...) requires manifold=<name>`, pos)
-    }
-    for (const k of Object.keys(named)) {
-      if (k !== 'manifold' && k !== 'id') {
-        throw new ExpressionParseError(`unexpected ${k}=… in ${name}(...)`, pos)
-      }
-    }
-    const node: Record<string, unknown> = { op: name, args, manifold }
-    if (named.id !== undefined) {
-      if (typeof named.id !== 'string') {
-        throw new ExpressionParseError(`${name}(...) id=… must be a name`, pos)
-      }
-      node.id = named.id
-    }
-    return node as unknown as Expr
-  }
-  // `skolem(a, b, label=<name>)` — the documentary relation tag.
-  if (name === 'skolem' && named.label !== undefined) {
-    for (const k of Object.keys(named)) {
-      if (k !== 'label') throw new ExpressionParseError(`unexpected ${k}=… in skolem(...)`, pos)
-    }
-    if (typeof named.label !== 'string') {
-      throw new ExpressionParseError('skolem(...) label=… must be a name', pos)
-    }
-    return { op: 'skolem', args, label: named.label } as unknown as Expr
   }
   noNamed(named, name, pos)
   if (STRUCTURAL_OPS.has(name)) {
@@ -1044,8 +924,7 @@ function deriveAggregateArgs(
 function flatten(e: Expr): Expr {
   if (!isExprNode(e)) return e
   const args = (e.args as Expr[]).map(flatten)
-  // The reduction-body fields of `faq` / `argmin` / `argmax` are expressions
-  // in their own right and are normalized the same way.
+  // The reduction-body fields of `faq` are expressions in their own right and are normalized the same way.
   const fields: Record<string, Expr> = {}
   for (const k of FLATTENED_FIELDS) {
     const v = (e as Record<string, unknown>)[k]

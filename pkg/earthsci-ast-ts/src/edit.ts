@@ -673,7 +673,7 @@ function forEachModelExpressionSite(
  *
  * Recursion is delegated to the shared `forEachChild` walker (expression.ts),
  * so EVERY expression-bearing field is covered — aggregate `expr`/`filter`,
- * integral bounds, `makearray` values, `table_lookup` axes, etc. — not just
+ * integral bounds, `makearray` values, template bindings — not just
  * `args`.
  *
  * @param expr Expression to check
