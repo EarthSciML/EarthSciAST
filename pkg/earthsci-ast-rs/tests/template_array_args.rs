@@ -21,12 +21,15 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn rhs_at_u0(path: &PathBuf, compiler: Compiler) -> Vec<(String, f64)> {
-    let file = load_path(path).expect("load");
+    rhs_of(&load_path(path).expect("load"), compiler)
+}
+
+fn rhs_of(file: &earthsci_ast::EsmFile, compiler: Compiler) -> Vec<(String, f64)> {
     let opts = ProblemOptions {
         compiler: Some(compiler),
         ..Default::default()
     };
-    let prob = esm_problem(&file, (0.0, 1.0), opts).expect("esm_problem");
+    let prob = esm_problem(file, (0.0, 1.0), opts).expect("esm_problem");
     let prog = rhs_program(&prob).expect("rhs_program");
     let u = initial_state(&prob).expect("initial_state");
     let p = prog.parameter_vector(&HashMap::new()).expect("parameters");
@@ -59,6 +62,91 @@ fn coupled_scalar_parameters_fed_grid_arrays_match_the_fn_form() {
                 rv.to_bits(),
                 tv.to_bits(),
                 "{rn} under {compiler:?}: {rv} vs {tv}"
+            );
+        }
+    }
+}
+
+/// The flattened system written as a document and read back, as a consumer
+/// that splits it into derived documents does: one model per component, each
+/// variable with its declared type, `shape` and `default`, and each equation,
+/// every reference fully qualified.
+fn flattened_document(flat: &earthsci_ast::FlattenedSystem) -> serde_json::Value {
+    use serde_json::{Value, json};
+    let mut models = serde_json::Map::new();
+    fn owner(name: &str) -> (&str, &str) {
+        name.rsplit_once('.').expect("dotted")
+    }
+    for (kind, part) in [
+        ("unknown", &flat.state_variables),
+        ("parameter", &flat.parameters),
+        ("unknown", &flat.observed_variables),
+    ] {
+        for (name, var) in part {
+            let (component, local) = owner(name);
+            let model = models
+                .entry(component.to_string())
+                .or_insert_with(|| json!({"variables": {}, "equations": []}));
+            let mut decl = json!({"type": kind});
+            if let Some(shape) = var.shape.as_ref().filter(|s| !s.is_empty()) {
+                decl["shape"] = json!(shape);
+            }
+            if let Some(d) = &var.default {
+                decl["default"] = serde_json::to_value(d).unwrap();
+            }
+            model["variables"][local] = decl;
+        }
+    }
+    for eq in &flat.equations {
+        let lhs = serde_json::to_value(&eq.lhs).unwrap();
+        let subject = match &lhs {
+            Value::String(s) => s.clone(),
+            Value::Object(o) => o["args"][0].as_str().unwrap().to_string(),
+            other => panic!("left-hand side {other}"),
+        };
+        let rhs = serde_json::to_value(&eq.rhs).unwrap();
+        models[owner(&subject).0]["equations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"lhs": lhs, "rhs": rhs}));
+    }
+    let sets: serde_json::Map<String, Value> = flat
+        .index_sets
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap()))
+        .collect();
+    json!({"esm": "1.2.0", "metadata": {"name": "flattened"}, "index_sets": sets, "models": models})
+}
+
+/// The coupled case's flattened system keeps its meaning on the wire
+/// (esm-spec §9.6.11, "A flattened system keeps its applications' meaning on
+/// the wire"). This binding expands templates at load, and the mark that makes
+/// an expansion an application is not serialized; unlifted, the flattened
+/// `linear` and `bilinear` expansions read `Grid.levc` and the other coupled
+/// grid fields by bare name inside their bracket counts, and the written-out
+/// document is refused with `faq_bare_array_operand`. Flatten writes the lift,
+/// so the read-back document builds, bit for bit the `fn` form.
+#[test]
+fn the_flattened_coupled_case_written_out_and_read_back_matches_the_fn_form() {
+    let file = load_path(&fixture("template.esm")).expect("load");
+    let flat = earthsci_ast::flatten(&file).expect("flatten");
+    let text = flattened_document(&flat).to_string();
+    assert!(
+        !text.contains("apply_expression_template"),
+        "the flattened system holds expansions"
+    );
+    let read_back = load_string(&text).expect("load the written-out flattened system");
+    for compiler in [Compiler::Interpreter, Compiler::Native] {
+        let reference = rhs_at_u0(&fixture("fn.esm"), compiler);
+        let written = rhs_of(&read_back, compiler);
+        assert_eq!(reference.len(), 48);
+        assert_eq!(reference.len(), written.len());
+        for ((rn, rv), (wn, wv)) in reference.iter().zip(&written) {
+            assert_eq!(rn, wn);
+            assert_eq!(
+                rv.to_bits(),
+                wv.to_bits(),
+                "{rn} under {compiler:?}: {rv} vs {wv}"
             );
         }
     }

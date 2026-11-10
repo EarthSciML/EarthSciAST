@@ -1109,6 +1109,10 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // (esm-spec §4.8.3, issue #409). See [`normalize_angle_arguments`].
     normalize_angle_arguments(&mut parts);
 
+    // Phase 5h: write each elementwise template application (esm-spec
+    // §9.6.11) as its per-cell `faq`. See [`lift_elementwise_applications`].
+    lift_elementwise_applications(&mut parts);
+
     let AssembledParts {
         state_variables,
         parameters,
@@ -1169,6 +1173,78 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             coupling_rewritten_names,
         },
     })
+}
+
+/// Write every elementwise template application of the flattened equations
+/// (esm-spec §9.6.11) as the per-cell `faq` the build would lift it to.
+///
+/// This binding expands every template reference at load, and an expansion
+/// is elementwise only because it came from an application: the build reads
+/// that from the mark the load leaves on the expansion
+/// ([`ExpressionNode::template_origin`]), which is load provenance and never
+/// goes on the wire. Whether an argument is an array is decided on the
+/// flattened system, after coupling: the lookup of a 0-D component that a
+/// `variable_map` feeds a grid field is elementwise only once flattened. Left
+/// as the bare expansion, a flattened system written out and read back is a
+/// different document: the expansion reads the array by bare name inside
+/// the template's bracket count, which no longer marks an application, and
+/// the build refuses it (`faq_bare_array_operand`, esm-spec §4.3.1). Writing
+/// the lift here gives the flattened equations the meaning the build gives
+/// them, in a form that survives serialization; the build's own lift then
+/// finds nothing left to lift.
+///
+/// No declared `shape` changes (esm-libraries-spec §4.7.5): a variable
+/// declared without one keeps none, and its shape is the one its `faq`
+/// definition ranges over. A lifted equation's contributions collapse into
+/// the one `faq`, their origins united, since the per-cell form is computed
+/// whole. When the lift refuses a right-hand side (`array_shape_mismatch`),
+/// every equation is left as it was, for the build to refuse.
+fn lift_elementwise_applications(flat: &mut AssembledParts) {
+    fn marked(e: &Expr) -> bool {
+        let Expr::Operator(n) = e else { return false };
+        if n.template_origin.is_some() {
+            return true;
+        }
+        let mut found = false;
+        n.for_each_child(&mut |c| found = found || marked(c));
+        found
+    }
+    if !flat.equations.iter().any(|fe| marked(&fe.eq.rhs)) {
+        return;
+    }
+    let mut variables: IndexMap<String, ModelVariable> = IndexMap::new();
+    for part in [
+        &flat.state_variables,
+        &flat.parameters,
+        &flat.observed_variables,
+    ] {
+        for (k, v) in part {
+            variables.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    let mut model = Model {
+        variables,
+        equations: flat.equations.iter().map(|fe| fe.eq.clone()).collect(),
+        ..Default::default()
+    };
+    if crate::elementwise_lift::lift_elementwise_applications(&mut model).is_err() {
+        return;
+    }
+    for (fe, eq) in flat.equations.iter_mut().zip(model.equations) {
+        let unchanged = match (&fe.eq.rhs, &eq.rhs) {
+            (Expr::Operator(a), Expr::Operator(b)) => std::sync::Arc::ptr_eq(a, b),
+            (a, b) => a == b,
+        };
+        if unchanged {
+            continue;
+        }
+        fe.contributions = vec![Contribution {
+            expr: eq.rhs.clone(),
+            origins: union_origins(&fe.contributions, None),
+        }];
+        fe.eq.rhs = eq.rhs;
+        fe.lifted = false;
+    }
 }
 
 /// Fold the declared angle scale into every circular-trig argument, so the
@@ -2612,10 +2688,41 @@ fn maybe_apply_pointwise_lift(
                 }
             }
         }
+        // The operands read per cell are every ARRAY on the flattened system,
+        // not only those that declare a shape: a variable declared without one
+        // whose definition is elementwise over arrays is an array too (esm-spec
+        // §4.3.4), as the build sees it ([`crate::structural::promoted_var_shapes`]).
+        // A 0-D component's coefficient `k = v * rho / dp`, fed grid fields by
+        // `variable_map`, is one. Left bare inside the lifted `faq`, the read
+        // says nothing about which loop each of its axes is, and the build
+        // refuses it (`faq_bare_array_operand`, esm-spec §4.3.1): the lift, not
+        // the author, put it there. Such a variable names no index set for
+        // the grid (rule 1 reads declared shapes only).
+        let read_shapes = {
+            let mut variables: IndexMap<String, ModelVariable> = IndexMap::new();
+            for map in [
+                &parts.parameters,
+                &parts.observed_variables,
+                &parts.state_variables,
+            ] {
+                for (k, v) in map {
+                    variables.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+            }
+            let model = Model {
+                variables,
+                equations: parts.equations.iter().map(|fe| fe.eq.clone()).collect(),
+                ..Default::default()
+            };
+            let mut inferred = crate::structural::promoted_var_shapes(&model);
+            inferred.retain(|_, s| !s.is_empty());
+            inferred
+        };
         let lift = PointwiseLift {
             lifted_shapes: &mut parts.lifted_shapes,
             state_variables: &mut parts.state_variables,
             var_shapes: &var_shapes,
+            read_shapes: &read_shapes,
             index_sets,
         };
         apply_pointwise_lift(&mut parts.equations, lift)?;
@@ -5720,6 +5827,9 @@ struct PointwiseLift<'a> {
     state_variables: &'a mut IndexMap<String, ModelVariable>,
     /// Every declared shape, by namespaced name.
     var_shapes: &'a HashMap<String, Vec<String>>,
+    /// Every array's shape, declared or inferred from an elementwise
+    /// definition: the operands the lift reads per cell.
+    read_shapes: &'a HashMap<String, Vec<String>>,
     /// The flattened index-set registry.
     index_sets: &'a mut IndexMap<String, IndexSet>,
 }
@@ -5746,6 +5856,7 @@ fn apply_pointwise_lift(
         lifted_shapes,
         state_variables,
         var_shapes,
+        read_shapes,
         index_sets,
     } = lift;
     // Only a set the document declares is matched by size; the lift's own
@@ -5777,9 +5888,10 @@ fn apply_pointwise_lift(
     if lifted.is_empty() {
         return Ok(());
     }
-    // Operands read per cell: the lifted species and every shaped variable.
+    // Operands read per cell: the lifted species and every array.
     let mut arrayvars: HashSet<String> = lifted.clone();
     arrayvars.extend(var_shapes.keys().cloned());
+    arrayvars.extend(read_shapes.keys().cloned());
 
     for fe in equations.iter_mut() {
         let eq = &fe.eq;
@@ -5872,7 +5984,7 @@ fn apply_pointwise_lift(
             axes: &axes,
             species: &species,
         };
-        fe.try_map_contributions(|e| lift_rhs_to_cell(e, &arrayvars, var_shapes, &grid, true))?;
+        fe.try_map_contributions(|e| lift_rhs_to_cell(e, &arrayvars, read_shapes, &grid, true))?;
     }
     Ok(())
 }
@@ -6184,6 +6296,7 @@ mod tests {
             lifted_shapes: &mut lifted_shapes,
             state_variables: &mut state_variables,
             var_shapes: &HashMap::new(),
+            read_shapes: &HashMap::new(),
             index_sets: &mut index_sets,
         };
         let err = apply_pointwise_lift(&mut equations, lift).unwrap_err();
@@ -6297,6 +6410,7 @@ mod tests {
             lifted_shapes: &mut lifted_shapes,
             state_variables: &mut state_variables,
             var_shapes: &HashMap::new(),
+            read_shapes: &HashMap::new(),
             index_sets: &mut index_sets,
         };
         apply_pointwise_lift(&mut equations, lift).unwrap();
@@ -6361,6 +6475,7 @@ mod tests {
             lifted_shapes: &mut lifted_shapes,
             state_variables: &mut state_variables,
             var_shapes: &var_shapes,
+            read_shapes: &var_shapes,
             index_sets: &mut index_sets,
         };
         apply_pointwise_lift(&mut equations, lift)?;
