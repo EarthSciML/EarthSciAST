@@ -4596,5 +4596,55 @@
     ],
     "is_valid": false,
     "notes": "Structural invalid (esm-spec \u00a74.3.1; CONFORMANCE_SPEC \u00a75.6.4). The `faq` body is `twice(x = v) + w`. The template application is opaque: `v`, bound to its argument, is not a bare read (on the authored form, in a binding that expands templates at load). The bare `w` beside it is, so exactly one finding is reported, for `w`."
+  },
+  "removed_op_fn.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `fn` op was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "removed_op_table_lookup.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `table_lookup` op was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`. It also carries the `function_tables` block the lookup reads; either is enough to reject it."
+  },
+  "removed_op_function_tables.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `function_tables` block (a field, not an op) was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "removed_op_skolem.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `skolem` op was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "removed_op_rank.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `rank` op was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "removed_op_argmin.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `argmin` op was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "removed_op_argmax.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `argmax` op was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "removed_op_intersect_polygon.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `intersect_polygon` op was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "removed_op_polygon_intersection_area.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `polygon_intersection_area` op was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "removed_op_aggregate.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: `\"op\": \"aggregate\"`, the deprecated alias of `faq`, was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
   }
 }

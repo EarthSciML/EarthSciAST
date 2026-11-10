@@ -2,8 +2,7 @@
 """Generate lib/geometry.esm, the pure-AST convex overlap-area templates
 (esm-spec §8.6.1, §9.7.1).
 
-Three public match-less templates stand in for the `polygon_intersection_area`
-leaf:
+Three public match-less templates give the overlap area of two convex polygons:
 
     overlap_area_planar(ring_a, cell_a, nv_a, ring_b, cell_b, nv_b)
     overlap_area_spherical(ring_a, cell_a, nv_a, ring_b, cell_b, nv_b)
@@ -471,9 +470,8 @@ def library():
             "description": (
                 "Overlap area of two convex polygons with straight edges in the plane: cell `cell_a` "
                 "of the `[cells, nv_a, 2]` ring stack `ring_a` and cell `cell_b` of `ring_b` "
-                "(vertex v = [x, y], e.g. [lon, lat]). The value of `polygon_intersection_area` "
-                'with `manifold: "planar"` within the esm-spec §8.6.1 / CONFORMANCE_SPEC §5.8.2 '
-                "tolerance. Either ring orientation; repeated vertices contribute exactly zero. "
+                "(vertex v = [x, y], e.g. [lon, lat]), in squared coordinate units (esm-spec §8.6.1). "
+                "Either ring orientation; repeated vertices contribute exactly zero. "
                 "Contributions are taken about the first vertex of `ring_a`, so translating both "
                 "polygons together changes the result only by rounding. A half-plane test within "
                 "`geo_tol2` of zero counts as on the line, which is what makes shared edges and "
@@ -488,9 +486,7 @@ def library():
                 "Overlap area in steradians (unit sphere) of two convex spherical polygons with "
                 "great-circle edges: cell `cell_a` of the `[cells, nv_a, 3]` unit-vector stack "
                 "`ring_a` and cell `cell_b` of `ring_b` (build a stack from lon-lat degrees with "
-                "`lonlat_to_unit`). The value of `polygon_intersection_area` with `manifold: "
-                '"spherical"` (or `"geodesic"`, the same great-circle model) within the '
-                "CONFORMANCE_SPEC §5.8.2 tolerance; multiply by R^2 for a physical area. Either ring "
+                "`lonlat_to_unit`); multiply by R^2 for a physical area (esm-spec §8.6.1). Either ring "
                 "orientation (the interior is the side of less than a hemisphere); repeated vertices "
                 "contribute exactly zero. Half-space tests are linear in the chord parameter; each "
                 "clipped edge contributes the signed area of the spherical triangle it spans with the "
@@ -518,19 +514,18 @@ def library():
         for name, (params, fn, description) in HELPERS.items():
             templates[name] = {"params": params, "description": description, "body": fn(*params)}
     return {
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "Geometry",
             "description": (
                 "Standard-library polygon-overlap templates (esm-spec §9.7.1 template-library file). "
                 "Match-less expression templates giving the pure-AST overlap area of two convex "
-                "polygons, the quantity the `polygon_intersection_area` geometry leaf returns "
-                "(esm-spec §8.6.1). `overlap_area_planar(ring_a, cell_a, nv_a, ring_b, cell_b, nv_b)` "
+                "polygons (esm-spec §8.6.1). `overlap_area_planar(ring_a, cell_a, nv_a, ring_b, cell_b, nv_b)` "
                 "takes two `[cells, verts, 2]` lon-lat (or x-y) ring stacks and returns the area with "
-                "straight edges, in squared coordinate units (the leaf's `planar` manifold). "
+                "straight edges, in squared coordinate units. "
                 "`overlap_area_spherical(ring_a, cell_a, nv_a, ring_b, cell_b, nv_b)` takes two "
                 "`[cells, verts, 3]` stacks of unit vectors and returns the area with great-circle "
-                "edges, in steradians (the leaf's `spherical` and `geodesic` manifolds); "
+                "edges, in steradians; "
                 "`lonlat_to_unit(ring, cell, vert, comp)` gives component `comp` of the unit vector of "
                 "a lon-lat vertex in degrees, so a caller builds the unit-vector stack once per cell "
                 "with a `faq`. `cell` is the cell index and `nv` the number of vertex slots (an integer "
@@ -555,12 +550,12 @@ def library():
                 "standard-library",
                 "geometry",
                 "conservative-regridding",
-                "polygon_intersection_area",
+                "overlap-area",
                 "expression-templates",
             ],
             "references": [
                 {
-                    "citation": "esm-spec.md §8.6.1 (the polygon_intersection_area leaf, operand rings, padding); §9.6 (expression templates); §9.7.1 (template-library files); §9.7.3 (references between templates); CONFORMANCE_SPEC.md §5.8 (geometry tolerance contract)."
+                    "citation": "esm-spec.md §8.6.1 (overlap weights, rings, padding); §9.6 (expression templates); §9.7.1 (template-library files); §9.7.3 (references between templates); CONFORMANCE_SPEC.md §5.8 (geometry tolerance contract)."
                 },
                 {
                     "citation": "Van Oosterom, A. and Strackee, J. (1983). The solid angle of a plane triangle. IEEE Transactions on Biomedical Engineering BME-30(2), 125-126.",

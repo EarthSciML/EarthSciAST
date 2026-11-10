@@ -1,5 +1,12 @@
 # Closed function registry — removing `call` and §9 from the spec (esm-tzp)
 
+> **Superseded at esm 2.0.0.** The `fn` op and the closed function registry
+> this RFC introduced are removed; a document using `fn` is rejected with
+> `removed_op`. The `datetime.*` functions are the templates of
+> `lib/calendar.esm` and the `interp.*` functions those of `lib/interp.esm`
+> (docs/content/standard_library.md); the 2.0.0 codemod rewrites old documents
+> (MIGRATION.md). The removal of `call` and `registered_functions` stands.
+
 This RFC closes the two open extension points in `esm-spec.md` that defeat
 ESS's cross-language conformance goal:
 

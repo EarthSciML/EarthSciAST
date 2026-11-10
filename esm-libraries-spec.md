@@ -337,11 +337,7 @@ follow-up work. Until it lands, those findings stay `validate`'s to report.
 **A build refuses what it cannot answer for, even where nothing reads it.**
 Construction evaluates every state-free observed it materializes, including one
 that no state derivative reads. When that value is invalid by the spec, the
-build raises the spec's error rather than dropping the observed. The first such
-value pinned is a degenerate polygon operand: a ring of fewer than 3 distinct
-vertices (esm-spec §8.6.1, `E_TREEWALK_GEOMETRY_CLIP`), which
-`tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm`'s all-zero
-default rings produce. A value that is only not yet available — a parameter with
+build raises the spec's error rather than dropping the observed. A value that is only not yet available — a parameter with
 no default, a field a provider fills later — is not invalid, and construction
 may still leave it unmaterialized. Likewise, an equation that reads a variable a
 `callback` coupling injects is refused with `callback_unregistered`
@@ -1557,7 +1553,6 @@ TypeScript `camelCase`, others verbatim).
 | `domain` | domain or null | The file's `domain` section, unchanged. |
 | `metadata` | record | Which components were flattened, which coupling rules applied, and `merged_variable_renames` — every state spelling an `operator_compose` renaming match DELETED, mapped onto the survivor it was folded into (step 3, CONFORMANCE_SPEC §5.35). Empty for a document with no renaming merge. |
 | `index_sets` | ordered map | Document-scoped index-set registry; required to interpret arrayed equations. |
-| `function_tables` | ordered map | Merged function-table registry; resolves `table_lookup`. |
 | `template_registry` | ordered map | The merged expression-template registry specified above. |
 | `field_ics` | list of (state, expr) | Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1), at most one per state; two for one state are refused with `ConflictingDerivativeError`. |
 | `loader_fields` | list | Provider-served loaded fields the system consumes, one per data-fed parameter ("Loader fields" below). |
@@ -1725,8 +1720,8 @@ sum every resulting term inherits the contribution's origins. A pass that only R
 
 **`rhs` is authoritative over a stale list (normative).** A flattened equation's right-hand side
 is public and a caller may edit it after flatten, leaving the list stale. A pass that rebuilds the
-right-hand side from the list on a system it did not just build itself (e.g. `esm_problem`'s
-`table_lookup` lowering of a caller-supplied flattened system) MUST first check that the list's
+right-hand side from the list on a system it did not just build itself (e.g. a lowering
+`esm_problem` applies to a caller-supplied flattened system) MUST first check that the list's
 left fold is structurally equal to the current `body(eq)`. If it is not, the pass MUST treat the
 list as ONE contribution, `expr = body(eq)`, origins the union of the list's origins in
 first-appearance order, and proceed from that; it MUST NOT revert the caller's edit. A spurious
@@ -2378,7 +2373,7 @@ try {
 }
 ```
 
-Both entry points walk the whole expression before evaluating any of it (esm-spec §9.6.6). An operator outside the esm-spec §4.2 evaluable core (`grad`, `div`, `laplacian`, `integral`, a user operator, a spatial or right-hand-side `D`) raises `UnloweredOperatorError`. A core operator with no scalar rule (the array and query operators, `Pre`, an unlowered `enum`) raises `UnevaluableOperatorError`. That holds even inside an untaken `ifelse` branch. An unbound variable or a malformed node raises `EvaluatorError`. A `table_lookup` node needs the document's tables, passed as `{ functionTables: file.function_tables }`.
+Both entry points walk the whole expression before evaluating any of it (esm-spec §9.6.6). An operator outside the esm-spec §4.2 evaluable core (`grad`, `div`, `laplacian`, `integral`, a user operator, a spatial or right-hand-side `D`) raises `UnloweredOperatorError`. A core operator with no scalar rule (the array and query operators, `Pre`, an unlowered `enum`) raises `UnevaluableOperatorError`. That holds even inside an untaken `ifelse` branch. An unbound variable or a malformed node raises `EvaluatorError`.
 
 ---
 
@@ -2608,8 +2603,7 @@ pub struct ExpressionNode {
     pub dim: Option<String>,
     // ... one optional field per operator-specific key in esm-schema.json:
     // `ranges` / `reduce` / `semiring` / `join` / `filter` for `faq`,
-    // `lower` / `upper` for `integral`, `value` for `const`, `table` / `axes`
-    // for `table_lookup`, and so on.
+    // `lower` / `upper` for `integral`, `value` for `const`, and so on.
 }
 ```
 

@@ -1,8 +1,8 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "Interp",
-    "description": "Standard-library interpolation templates (esm-spec §9.7.1 template-library file). Three match-less expression templates give the pure-AST definitions of 1-D search, 1-D linear and 2-D bilinear interpolation, written with `faq` comparison counts, the `index` op and arithmetic in the evaluation order esm-spec §9.2 pins: `searchsorted(x, xs, n)`, `linear(table, axis, x, n)` and `bilinear(table, axis_x, axis_y, x, y, nx, ny)`. Each axis length is an explicit integer parameter. On the scenarios of tests/closed_functions/interp/ each template gives the same bits as the matching `interp.*` closed function. Import with `expression_template_imports` and invoke with `apply_expression_template`; see docs/content/standard_library.md.",
+    "description": "Standard-library interpolation templates (esm-spec §9.7.1 template-library file). Three match-less expression templates give the pure-AST definitions of 1-D search, 1-D linear and 2-D bilinear interpolation, written with `faq` comparison counts, the `index` op and arithmetic: `searchsorted(x, xs, n)`, `linear(table, axis, x, n)` and `bilinear(table, axis_x, axis_y, x, y, nx, ny)`. Each axis length is an explicit integer parameter. Import with `expression_template_imports` and invoke with `apply_expression_template`; see docs/content/standard_library.md.",
     "authors": [
       "EarthSciML"
     ],
@@ -15,7 +15,7 @@
     ],
     "references": [
       {
-        "citation": "esm-spec.md §9.2 (interp.searchsorted, interp.linear, interp.bilinear semantics); §9.6 (expression templates); §9.7.1 (template-library files); §4.3.3 (index op)."
+        "citation": "esm-spec.md §9.6 (expression templates); §9.7.1 (template-library files); §4.3.3 (index op)."
       }
     ]
   },
@@ -26,7 +26,7 @@
         "xs",
         "n"
       ],
-      "description": "1-based index of the first entry of the non-decreasing axis `xs` (n entries) that is >= x: 1 plus the number of entries for which `xs[k] >= x` is false. Equal entries give the smallest such index, x above every entry (or NaN) gives n + 1, and n = 0 gives 1, as esm-spec §9.2 specifies for interp.searchsorted.",
+      "description": "1-based index of the first entry of the non-decreasing axis `xs` (n entries) that is >= x: 1 plus the number of entries for which `xs[k] >= x` is false. Equal entries give the smallest such index, x above every entry (or NaN) gives n + 1, and n = 0 gives 1.",
       "body": {
         "op": "+",
         "args": [
@@ -75,7 +75,7 @@
         "x",
         "n"
       ],
-      "description": "1-D linear interpolation of `table` over the strictly increasing `axis` (both n >= 2 entries) at x, flat outside the axis. The cell index is the number of axis entries <= x held to [1, n - 1]; the blend is table[i] + w * (table[i+1] - table[i]) with w = (x - axis[i]) / (axis[i+1] - axis[i]), the order esm-spec §9.2 pins for interp.linear. NaN x gives NaN.",
+      "description": "1-D linear interpolation of `table` over the strictly increasing `axis` (both n >= 2 entries) at x, flat outside the axis. The cell index is the number of axis entries <= x held to [1, n - 1]; the blend is table[i] + w * (table[i+1] - table[i]) with w = (x - axis[i]) / (axis[i+1] - axis[i]), evaluated in that order. NaN x gives NaN.",
       "body": {
         "op": "ifelse",
         "args": [
@@ -528,7 +528,7 @@
         "nx",
         "ny"
       ],
-      "description": "2-D bilinear interpolation of the row-major `table` (nx rows of ny entries) over the strictly increasing axes `axis_x` (nx >= 2) and `axis_y` (ny >= 2). Each query is clamped to its axis, the cell index on each axis is the number of entries <= the clamped query held to [1, n - 1] (so a query on an interior knot k selects cell k), and the two x-blends then the y-blend follow the order esm-spec §9.2 pins for interp.bilinear.",
+      "description": "2-D bilinear interpolation of the row-major `table` (nx rows of ny entries) over the strictly increasing axes `axis_x` (nx >= 2) and `axis_y` (ny >= 2). Each query is clamped to its axis, the cell index on each axis is the number of entries <= the clamped query held to [1, n - 1] (so a query on an interior knot k selects cell k), and the two x-blends, then the y-blend, are each the blend `linear` uses.",
       "body": {
         "op": "+",
         "args": [
