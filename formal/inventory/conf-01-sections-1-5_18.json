@@ -43,7 +43,7 @@
       "class": "semantic",
       "phase": 2,
       "area": "determinism",
-      "note": "Every value-invention output (distinct, skolem, rank, arg-witness, joins) is a function of the input multiset under the defined total order, independent of input order and hashing."
+      "note": "Every value-invention output (distinct, arg-witness, joins) is a function of the input multiset under the defined total order, independent of input order and hashing."
     },
     {
       "id": "conf.5.5.1.float-key-normalized",
