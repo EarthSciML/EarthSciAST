@@ -244,13 +244,17 @@ fn gather_doc(n: usize) -> Value {
     )
 }
 
-/// Subscript states at every rounding and saturation edge but those below the
-/// s64 range, where the oracle's own `r - 1` overflows in a debug build.
+/// Subscript states at every rounding and saturation edge, both ends of the
+/// s64 range included: a subscript below it saturates to `i64::MIN`, whose
+/// periodic fold is the exact residue of that integer.
 fn subscript_states() -> Vec<f64> {
     vec![
         f64::NAN,
         f64::INFINITY,
+        f64::NEG_INFINITY,
         1e300,
+        -1e300,
+        -9.3e18,
         9.3e18,
         4.6e18,
         -4.6e18,

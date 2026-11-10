@@ -2288,7 +2288,8 @@ pub(super) fn index_into(
                 }
             }
         }
-        indices.push((resolved - 1).max(0) as usize);
+        // A zero-ghost index left out of range may be a saturated `i64::MIN`.
+        indices.push(resolved.saturating_sub(1).max(0) as usize);
     }
     if !in_bounds {
         return Value::Scalar(0.0);
@@ -7194,5 +7195,16 @@ mod saturated_subscript_tests {
     fn clamp_of_a_saturated_subscript() {
         assert_eq!(read(i64::MIN, BoundaryKind::Clamp), 10.0);
         assert_eq!(read(i64::MAX, BoundaryKind::Clamp), 50.0);
+    }
+
+    #[test]
+    fn zero_ghost_of_a_saturated_subscript() {
+        let arr = ArrayD::from_shape_vec(IxDyn(&[5]), vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap();
+        for raw in [i64::MIN, i64::MAX] {
+            match index_into(&arr, &[raw], true, GatherKind::ZeroGhost) {
+                Value::Scalar(v) => assert_eq!(v.to_bits(), 0.0f64.to_bits(), "{raw}"),
+                _ => panic!("scalar expected"),
+            }
+        }
     }
 }

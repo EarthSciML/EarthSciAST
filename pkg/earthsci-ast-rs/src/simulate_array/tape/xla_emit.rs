@@ -2224,9 +2224,11 @@ impl<'a> Emitter<'a> {
             };
             let pos = match policy {
                 Some(BoundaryKind::Periodic) if n_i >= 1 => {
-                    // `(r - 1).rem_euclid(n)`, with the wrapping `r - 1`.
+                    // `periodic_offset`'s `(r - 1) mod n`, as
+                    // `((r rem n) - 1) mod n`: the remainder comes first, so
+                    // no step overflows, even at a saturated `i64::MIN`.
                     let m =
-                        self.wrap(ri.sub_(&one).and_then(|x| x.rem_(&nv)), "data gather: rem")?;
+                        self.wrap(ri.rem_(&nv).and_then(|x| x.sub_(&one)), "data gather: rem")?;
                     let neg = self.wrap(m.lt(&zero_i), "data gather: rem sign")?;
                     let wrapped = self.wrap(m.add_(&nv), "data gather: rem + n")?;
                     let m = self.wrap(neg.select(&wrapped, &m), "data gather: rem_euclid")?;

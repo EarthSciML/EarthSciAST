@@ -7340,7 +7340,7 @@ impl<'m> TapeBuilder<'m> {
             if one_based < 1 || one_based > dim {
                 in_bounds = false;
             }
-            idx.push((one_based - 1).max(0) as usize);
+            idx.push(one_based.saturating_sub(1).max(0) as usize);
         }
         if !in_bounds {
             return Ok(LV::Lit(0.0));
