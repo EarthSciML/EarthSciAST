@@ -1,24 +1,20 @@
 #![cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
-//! The convex overlap-area templates of `lib/geometry.esm` against the
-//! `polygon_intersection_area` leaf.
+//! The convex overlap-area templates of `lib/geometry.esm`.
 //!
 //! Every polygon pair of `tests/conformance/geometry_templates/pairs.json` (the
 //! cell pairs the repository's polygon and regridding documents clip, generated
 //! by `scripts/gen-geometry-template-pairs.py`) runs through the expanded
 //! template (`overlap_area_planar`, or `overlap_area_spherical` over unit vectors
-//! built with `lonlat_to_unit`) under the interpreter, and through the leaf (the
-//! planar Sutherland–Hodgman clip, the `s2rst` spherical clip). The template must
-//! agree with the leaf and with the pair's exact / 40-digit reference area within
-//! the CONFORMANCE_SPEC §5.8.2 tolerance, give the planar reference exactly on a
-//! pair of cells from one grid, and give the same bits on the padded copy of
-//! every group (repeated vertices contribute exactly zero).
+//! built with `lonlat_to_unit`) under the interpreter. The template must agree
+//! with the pair's exact / 40-digit reference area within the CONFORMANCE_SPEC
+//! §5.8.2 tolerance, give the planar reference exactly on a pair of cells from
+//! one grid, and give the same bits on the padded copy of every group (repeated
+//! vertices contribute exactly zero).
 
 use std::collections::HashMap;
 
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{
-    LoadOptions, Manifold, intersect_polygon, load_string_with_options, polygon_area,
-};
+use earthsci_ast::{LoadOptions, load_string_with_options};
 use serde_json::{Value, json};
 
 use crate::common;
@@ -52,7 +48,7 @@ fn values(rhs: &[Value]) -> Vec<f64> {
         equations.push(json!({"lhs": {"op": "D", "args": [v], "wrt": "t"}, "rhs": r}));
     }
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "geometry_template_probe", "authors": ["test"]},
         "models": {"M": {
             "expression_template_imports": [{"ref": "lib/geometry.esm"}],
@@ -176,31 +172,6 @@ fn template_values(groups: &[Value]) -> HashMap<String, Vec<f64>> {
     out
 }
 
-fn ring(stack: &Value, k: &Value) -> Vec<(f64, f64)> {
-    let k = k.as_u64().unwrap() as usize;
-    stack[k - 1]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap()))
-        .collect()
-}
-
-/// The leaf's area, or `None` when it refuses an operand.
-fn leaf(g: &Value, p: &Value) -> Option<f64> {
-    let manifold = Manifold::from_flag(g["manifold"].as_str().unwrap()).unwrap();
-    let clip = intersect_polygon(
-        &ring(&g["ring_a"], &p["i"]),
-        &ring(&g["ring_b"], &p["j"]),
-        manifold,
-    )
-    .ok()?;
-    if clip.len() < 3 {
-        return Some(0.0);
-    }
-    polygon_area(&clip, manifold).ok()
-}
-
 fn atol(g: &Value, factor: f64) -> f64 {
     if g["manifold"] != "planar" {
         return factor;
@@ -219,7 +190,7 @@ fn atol(g: &Value, factor: f64) -> f64 {
 }
 
 #[test]
-fn geometry_templates_agree_with_polygon_intersection_area() {
+fn geometry_templates_agree_with_the_reference_areas() {
     let corpus = pairs();
     let rtol = corpus["tolerance"]["rtol"].as_f64().unwrap();
     let factor = corpus["tolerance"]["atol_factor"].as_f64().unwrap();
@@ -229,7 +200,7 @@ fn geometry_templates_agree_with_polygon_intersection_area() {
     for g in groups {
         let id = g["id"].as_str().unwrap();
         let tol = atol(g, factor);
-        let (mut max_ref, mut max_leaf) = (0.0_f64, 0.0_f64);
+        let mut max_ref = 0.0_f64;
         for (p, &t) in g["pairs"].as_array().unwrap().iter().zip(&tvals[id]) {
             let label = format!("{id} ({}, {})", p["i"], p["j"]);
             if !t.is_finite() {
@@ -246,12 +217,6 @@ fn geometry_templates_agree_with_polygon_intersection_area() {
                     failures.push(format!("{label}: same-grid pair not exact: {t:?} vs {r:?}"));
                 }
             }
-            if let Some(l) = leaf(g, p) {
-                max_leaf = max_leaf.max((t - l).abs());
-                if (t - l).abs() > tol + rtol * l.abs() {
-                    failures.push(format!("{label}: template {t:?} vs leaf {l:?}"));
-                }
-            }
         }
         if let Some(of) = g["padding_of"].as_str() {
             for (a, b) in tvals[id].iter().zip(&tvals[of]) {
@@ -261,16 +226,14 @@ fn geometry_templates_agree_with_polygon_intersection_area() {
             }
         }
         if std::env::var("ESM_GEOMETRY_TEMPLATE_REPORT").as_deref() == Ok("1") {
-            println!(
-                "geometry template {id}: max |template - reference| = {max_ref:e}, max |template - leaf| = {max_leaf:e}"
-            );
+            println!("geometry template {id}: max |template - reference| = {max_ref:e}");
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
-fn lonlat_to_unit_is_the_leaf_conversion() {
+fn lonlat_to_unit_is_the_degree_conversion() {
     let ring = json!([[[0.0, 0.0], [30.0, 45.0], [-120.5, -60.25], [179.9, 89.0]]]);
     let got = values(&unit_calls(&ring));
     let mut k = 0;

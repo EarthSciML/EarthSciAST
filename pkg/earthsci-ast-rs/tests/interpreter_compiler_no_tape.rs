@@ -20,7 +20,7 @@ use earthsci_ast::{
 
 const MODEL: &str = r#"
     {
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {
         "name": "tape_kill_switch"
       },

@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 /// A coupling-library file: roles + role-scoped edges, no models/loaders.
 fn lib() -> Value {
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "RothermelFuelCoupling" },
         "coupling_roles": {
             "Fuel": { "description": "fuel-property source" },
@@ -32,7 +32,7 @@ fn lib() -> Value {
 /// An assembly mounting the two components the library wires.
 fn assembly(coupling: Value) -> EsmFile {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "wildfire" },
         "models": {
             "FuelModelLookup": {
@@ -86,7 +86,7 @@ fn import_entry(bind: Value) -> Value {
 fn identifies_a_coupling_library_by_top_level_coupling_roles() {
     assert!(is_coupling_library_doc(&lib()));
     assert!(!is_coupling_library_doc(
-        &json!({ "esm": "1.0.0", "models": {} })
+        &json!({ "esm": "2.0.0", "models": {} })
     ));
     assert!(!is_coupling_library_doc(&Value::Null));
 }
@@ -211,7 +211,7 @@ fn not_library_when_the_ref_is_not_a_coupling_library() {
     let file = assembly(import_entry(json!({
         "Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"
     })));
-    let opts = opts_for(json!({ "esm": "1.0.0", "metadata": { "name": "x" }, "models": {} }));
+    let opts = opts_for(json!({ "esm": "2.0.0", "metadata": { "name": "x" }, "models": {} }));
     assert_eq!(
         err_code(expand_coupling_imports(&file, &opts)),
         "coupling_import_not_library"
@@ -301,7 +301,7 @@ fn subsystem_ref_targeting_a_coupling_library_is_rejected() {
     .unwrap();
     let wrapper = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "t"
           },
@@ -359,7 +359,7 @@ fn template_import_targeting_a_coupling_library_is_rejected() {
     .unwrap();
     let wrapper = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "t"
           },
@@ -540,7 +540,7 @@ fn validate_reports_a_mis_bound_import_on_the_source_document() {
 #[test]
 fn a_default_less_coupling_target_makes_an_omitted_import_an_error() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "required_target" },
         "models": {
             "FuelModelLookup": {

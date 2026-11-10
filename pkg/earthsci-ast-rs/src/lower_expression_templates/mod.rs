@@ -58,25 +58,19 @@ mod tests {
     use serde_json::json;
 
     /// A document with no template machinery is checked by one walk, which
-    /// must report what the two expanded-form validators report run one
-    /// after the other over the whole document (a geometry error first, at
-    /// its path), skip `expression_templates` subtrees as they do, and leave
+    /// must report what the expanded-form validator reports run over the whole
+    /// document, skip `expression_templates` subtrees as it does, and leave
     /// the document unchanged.
     #[test]
     fn the_untemplated_fast_path_reports_as_the_validators_do() {
-        let geo = json!({"op": "polygon_intersection_area", "manifold": "flat", "args": []});
         let inv = json!({"op": "makearray", "regions": [[[3, 0]]], "values": [0]});
         let docs = [
-            json!({"esm": "1.1.0", "models": {"M": {"equations": [{"lhs": "x", "rhs": inv.clone()}, {"lhs": "y", "rhs": geo.clone()}]}}}),
-            json!({"esm": "1.1.0", "models": {"M": {"equations": [{"lhs": "x", "rhs": inv.clone()}]}}}),
-            json!({"esm": "1.1.0", "models": {"M": {"expression_templates": {}, "equations": [{"lhs": "y", "rhs": geo.clone()}]}}}),
-            json!({"esm": "1.1.0", "models": {"M": {"expression_templates": {}, "x": {"expression_templates": [geo.clone(), inv.clone()]}}}}),
-            json!({"esm": "1.1.0", "models": {"M": {"equations": [{"lhs": "x", "rhs": {"op": "+", "args": [1, 2]}}]}}}),
+            json!({"esm": "2.0.0", "models": {"M": {"equations": [{"lhs": "x", "rhs": inv.clone()}]}}}),
+            json!({"esm": "2.0.0", "models": {"M": {"expression_templates": {}, "x": {"expression_templates": [inv.clone()]}}}}),
+            json!({"esm": "2.0.0", "models": {"M": {"equations": [{"lhs": "x", "rhs": {"op": "+", "args": [1, 2]}}]}}}),
         ];
         for doc in docs {
-            let want = validate_geometry_manifolds(&doc, "")
-                .and_then(|()| validate_makearray_regions(&doc, ""))
-                .map_err(|e| e.to_string());
+            let want = validate_makearray_regions(&doc, "").map_err(|e| e.to_string());
             let mut got_doc = doc.clone();
             let got = lower_expression_templates_found(&mut got_doc).map_err(|e| e.to_string());
             match (&want, &got) {
@@ -90,7 +84,7 @@ mod tests {
 
     fn arrhenius_fixture() -> Value {
         json!({
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {"name": "expr_template_smoke", "authors": ["esm-giy"]},
           "reaction_systems": {
             "chem": {
@@ -215,7 +209,7 @@ mod tests {
             );
         }
         let mut v = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "deep_chain", "authors": ["t"]},
             "reaction_systems": {"chem": {
                 "species": {"A": {"default": 1.0}, "B": {"default": 0.5}},
@@ -333,7 +327,7 @@ mod tests {
     #[test]
     fn no_templates_block_is_a_noop() {
         let mut v = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "no_templates", "authors": ["t"]},
             "reaction_systems": {
                 "chem": {
@@ -362,7 +356,7 @@ mod tests {
     #[test]
     fn match_rule_lowers_grad_operator() {
         let mut v = json!({
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {"name": "grad_lowering", "authors": ["t"]},
           "models": {
             "Diff": {
@@ -406,7 +400,7 @@ mod tests {
     #[test]
     fn match_rule_binds_scalar_field_metavariable() {
         let mut v = json!({
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {"name": "scalar_meta", "authors": ["t"]},
           "models": {
             "M": {
@@ -438,7 +432,7 @@ mod tests {
     #[test]
     fn rejects_nonterminating_match_rule() {
         let mut v = json!({
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {"name": "nonterm", "authors": ["t"]},
           "models": {
             "M": {
@@ -467,7 +461,7 @@ mod tests {
     #[test]
     fn match_rules_apply_in_declaration_order() {
         let mut v = json!({
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {"name": "order", "authors": ["t"]},
           "models": {
             "M": {
@@ -501,7 +495,7 @@ mod tests {
     #[test]
     fn higher_priority_rule_wins_over_earlier_declared() {
         let mut v = json!({
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {"name": "prio", "authors": ["t"]},
           "models": {
             "M": {
@@ -538,7 +532,7 @@ mod tests {
     #[test]
     fn produced_body_is_rescanned_in_a_later_pass() {
         let mut v = json!({
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {"name": "fixpoint", "authors": ["t"]},
           "models": {
             "M": {
@@ -573,7 +567,7 @@ mod tests {
 
     fn scalar_field_doc(templates: Value, bindings: Value, name: &str) -> Value {
         json!({
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {"name": "scalar_field_param_unit", "authors": ["t"]},
           "models": {"M": {
             "variables": {
@@ -595,34 +589,31 @@ mod tests {
     #[test]
     fn scalar_field_substitution_happy_path() {
         let mut v = scalar_field_doc(
-            json!({"overlap_area": {
-              "params": ["K_manifold", "a", "b"],
-              "body": {"op": "polygon_intersection_area",
-                       "manifold": "K_manifold", "args": ["a", "b"]}}}),
-            json!({"K_manifold": "planar", "a": "pa", "b": "pb"}),
-            "overlap_area",
+            json!({"combine": {
+              "params": ["K_fn", "a", "b"],
+              "body": {"op": "broadcast", "fn": "K_fn", "args": ["a", "b"]}}}),
+            json!({"K_fn": "*", "a": "pa", "b": "pb"}),
+            "combine",
         );
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
             *crate::classification::observed_definition_json(&v["models"]["M"], "area")
                 .expect("area defining equation"),
-            json!({"op": "polygon_intersection_area", "manifold": "planar",
-                   "args": ["pa", "pb"]})
+            json!({"op": "broadcast", "fn": "*", "args": ["pa", "pb"]})
         );
     }
 
     /// A scalar-field param passed through a §9.7.3 registration-time body
     /// composition (outer body applies inner, forwarding its own param into
-    /// the inner manifold slot) substitutes end-to-end.
+    /// the inner `fn` slot) substitutes end-to-end.
     #[test]
     fn scalar_field_param_threads_through_body_composition() {
         let mut v = scalar_field_doc(
             json!({
               "inner": {
                 "params": ["m", "x", "y"],
-                "body": {"op": "polygon_intersection_area", "manifold": "m",
-                         "args": ["x", "y"]}},
+                "body": {"op": "broadcast", "fn": "m", "args": ["x", "y"]}},
               "outer": {
                 "params": ["K", "p", "q"],
                 "body": {"op": "*", "args": [
@@ -630,7 +621,7 @@ mod tests {
                    "bindings": {"m": "K", "x": "p", "y": "q"}},
                   2.0]}}
             }),
-            json!({"K": "spherical", "p": "pa", "q": "pb"}),
+            json!({"K": "max", "p": "pa", "q": "pb"}),
             "outer",
         );
         lower_expression_templates(&mut v).expect("rewrite");
@@ -639,27 +630,9 @@ mod tests {
             *crate::classification::observed_definition_json(&v["models"]["M"], "area")
                 .expect("area defining equation"),
             json!({"op": "*", "args": [
-              {"op": "polygon_intersection_area", "manifold": "spherical",
-               "args": ["pa", "pb"]},
+              {"op": "broadcast", "fn": "max", "args": ["pa", "pb"]},
               2.0]})
         );
-    }
-
-    /// Validators run on the expanded form (esm-spec §9.6.4): a template
-    /// invocation binding the manifold parameter to a non-member literal is
-    /// rejected with `geometry_manifold_invalid`.
-    #[test]
-    fn scalar_field_invalid_substituted_manifold_rejected() {
-        let mut v = scalar_field_doc(
-            json!({"overlap_area": {
-              "params": ["K_manifold", "a", "b"],
-              "body": {"op": "polygon_intersection_area",
-                       "manifold": "K_manifold", "args": ["a", "b"]}}}),
-            json!({"K_manifold": "bogus", "a": "pa", "b": "pb"}),
-            "overlap_area",
-        );
-        let err = lower_expression_templates(&mut v).expect_err("must reject");
-        assert_eq!(err.code, "geometry_manifold_invalid");
     }
 
     /// Pinned shadowing resolution (esm-spec §9.6.1): a declared param name
@@ -670,18 +643,17 @@ mod tests {
     fn scalar_field_params_shadow_literals() {
         let mut v = scalar_field_doc(
             json!({"shadowed": {
-              "params": ["planar", "x", "y"],
-              "body": {"op": "polygon_intersection_area",
-                       "manifold": "planar", "args": ["x", "y"]}}}),
-            json!({"planar": "spherical", "x": "pa", "y": "pb"}),
+              "params": ["max", "x", "y"],
+              "body": {"op": "broadcast", "fn": "max", "args": ["x", "y"]}}}),
+            json!({"max": "min", "x": "pa", "y": "pb"}),
             "shadowed",
         );
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
             crate::classification::observed_definition_json(&v["models"]["M"], "area")
-                .expect("area defining equation")["manifold"],
-            json!("spherical")
+                .expect("area defining equation")["fn"],
+            json!("min")
         );
     }
 }

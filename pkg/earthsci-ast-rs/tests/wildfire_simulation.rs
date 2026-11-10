@@ -5,14 +5,14 @@
 //! The fixture is a COUPLED multi-model system (atmosphere + wildfire + ocean +
 //! algebraic fire/flux calculators) whose air-sea coupling remaps a spatially-
 //! varying atmosphere-grid flux onto a different ocean grid by an INLINE
-//! conservative regrid (`polygon_intersection_area` narrow phase + a bin-skolem
-//! broad phase). It exercises, through the array runtime:
+//! conservative regrid (`overlap_area_planar` narrow phase + a `pair_key`
+//! bin broad phase). It exercises, through the array runtime:
 //!   * coupled flatten → `ArrayCompiled::from_flattened` with the document
 //!     `index_sets` registry carried through;
 //!   * a whole-array `D(SST)` lifted to per-cell integration over `ocean_cells`;
 //!   * `ic`-only array/scalar states (`u_ocean`, `phi`, `wind_*`) held at ic with
 //!     zero derivative (so `phi` feeding `heat_release` cannot drift);
-//!   * the inline regrid: `polygon_intersection_area` over `[cells, verts, coord]`
+//!   * the inline regrid: `overlap_area_planar` over `[cells, verts, coord]`
 //!     geometry with partial indexing, the value-invention bin scaffolding dropped
 //!     and its inert broad-phase `join.on` elided (the dense narrow phase is
 //!     numerically identical — pruned pairs have zero overlap area).
@@ -83,9 +83,7 @@ fn run(file: &EsmFile, test: &ModelTest) -> Solution {
             p: HashMap::new().clone(),
             u0: ics.clone(),
             rhs: earthsci_ast::Rhs::Always,
-            // The conservative-regrid geometry these fixtures build runs through
-            // `polygon_intersection_area`, which has no tape lowering, so `native`
-            // refuses them by NAME (API_SPEC §5.8).
+            // The regrid trajectory is checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
@@ -168,9 +166,7 @@ fn wildfire_regrid_trajectory_and_constant_states() {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
             rhs: earthsci_ast::Rhs::Always,
-            // The conservative-regrid geometry these fixtures build runs through
-            // `polygon_intersection_area`, which has no tape lowering, so `native`
-            // refuses them by NAME (API_SPEC §5.8).
+            // The regrid trajectory is checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },

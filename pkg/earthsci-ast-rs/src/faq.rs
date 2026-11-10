@@ -26,12 +26,11 @@
 //!   materialized extents to [`resolve_aggregate_ranges_with_extents`] and a
 //!   derived reference resolves to the dense `[1, n]` on either an output or a
 //!   contracted axis. Without them a derived set is still only admissible as a
-//!   contracted axis, whose bound the geometry clip-ring registry supplies at
-//!   eval time (RFC §8.1); a derived *output* axis errors clearly.
+//!   contracted axis, whose bound the extents handed to the evaluation supply
+//!   at eval time; a derived *output* axis errors clearly.
 //! - **§5.6 Op tag.** [`is_faq_op`] accepts the canonical `"faq"` tag ONLY.
-//!   `"aggregate"` is the deprecated pre-1.1.0 spelling: the loader normalizes
-//!   it away before anything reaches here (see `parse::normalize_deprecated_op_aliases`),
-//!   so it is not accepted at this level. `"arrayop"` was removed at v0.8.0.
+//!   `"aggregate"` (the pre-1.1.0 spelling, removed at 2.0.0) and `"arrayop"`
+//!   (removed at v0.8.0) are refused by name at load.
 
 use std::collections::HashMap;
 
@@ -418,9 +417,9 @@ fn is_array_valued_numeric_reduction(node: &crate::types::ExpressionNode) -> boo
 
 /// Whether `op` is the Functional Aggregate Query node tag.
 ///
-/// `"faq"` is the canonical tag from esm 1.1.0. The deprecated `"aggregate"`
-/// spelling is normalized away at the wire boundary, and `"arrayop"` was
-/// removed at v0.8.0 — neither reaches this predicate
+/// `"faq"` is the tag from esm 1.1.0. `"aggregate"` (removed at 2.0.0) and
+/// `"arrayop"` (removed at v0.8.0) are refused at load — neither reaches this
+/// predicate
 /// (docs/content/rfcs/faq-node-rename.md).
 pub fn is_faq_op(op: &str) -> bool {
     op == "faq"
@@ -483,7 +482,7 @@ pub(crate) fn empty_derived_extents() -> &'static HashMap<String, i64> {
 /// Pass an empty map (or use [`resolve_aggregate_ranges`]) for the
 /// no-value-invention case; a derived set then keeps its prior treatment — a
 /// dynamic [`RangeSpec::DerivedDyn`] contracted bound resolved per-eval from the
-/// geometry clip-ring registry (RFC §8.1).
+/// extents the evaluation is given.
 pub fn resolve_aggregate_ranges_with_extents(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
@@ -641,9 +640,9 @@ enum ResolvedRange {
         offsets: String,
         of: Vec<String>,
     },
-    /// A FAQ-materialized derived range (RFC §5.5 / §8.1): its extent is the
-    /// vertex count of the ring the `from_faq` producer node materializes at
-    /// eval time, so it carries only the producer id (resolved dynamically).
+    /// A FAQ-materialized derived range (RFC §5.5) with no build-time extent:
+    /// its extent is supplied at eval time, so it carries only the producer id
+    /// (resolved dynamically).
     Derived {
         from_faq: String,
     },
@@ -673,12 +672,12 @@ enum ResolvedRange {
 ///    legal as an OUTPUT index as well: the axis is no less statically sized
 ///    than an `interval` set's. (Julia `_resolve_one_index_set_ref`, Python
 ///    `_resolve_range_spec`.)
-/// 2. **Not materialized** — the geometry clip-ring case (RFC §8.1). It resolves
-///    to a [`ResolvedRange::Derived`] dynamic bound carrying its `from_faq`
-///    producer id, and, like a ragged set, only as a contracted (inner) index: a
-///    derived *output* index is rejected (`is_output`), since the result array's
-///    extent must be statically known. The per-eval upper bound is the vertex
-///    count of the ring the `from_faq` node materializes at runtime.
+/// 2. **Not materialized here** — it resolves to a [`ResolvedRange::Derived`]
+///    dynamic bound carrying its `from_faq` producer id, and, like a ragged set,
+///    only as a contracted (inner) index: a derived *output* index is rejected
+///    (`is_output`), since the result array's extent must be statically known.
+///    The per-eval upper bound is the extent the evaluation is handed
+///    (`eval_expression_with_extents`); with none it is refused.
 fn resolve_index_set_ref(
     from: &str,
     of: Option<&[String]>,
@@ -749,7 +748,7 @@ fn resolve_index_set_ref(
             })
         }
         "derived" => {
-            // A FAQ-materialized derived set (RFC §5.5 / §8.1) is sized by the
+            // A FAQ-materialized derived set (RFC §5.5) is sized by the
             // producer named in its `from_faq`. Which producer that is decides
             // *when* the extent is known, and hence which of the two arms below
             // applies — so read the id first, and fail loudly if it is absent
@@ -764,20 +763,19 @@ fn resolve_index_set_ref(
                         ))
                     })?;
             // (1) The BUILD-TIME relational producer: the value-invention engine
-            //     (skolem/distinct/rank, RFC §6.1) already enumerated the distinct
+            //     (`distinct`, RFC §6.1) already enumerated the distinct
             //     member set and handed us its cardinality, keyed by the producing
             //     aggregate's `id`. That is a constant by the time any evaluation
-            //     happens, so the axis is dense `[1, n]` — and, unlike the runtime
-            //     ring below, it is a legal OUTPUT extent: this is what lets an
+            //     happens, so the axis is dense `[1, n]` — and, unlike the deferred
+            //     bound below, it is a legal OUTPUT extent: this is what lets an
             //     ISRM emission factor be *shaped on* the invented cell set.
             if let Some(&n) = derived_extents.get(&from_faq) {
                 return Ok(ResolvedRange::Static([1, n]));
             }
-            // (2) The RUNTIME geometry producer (the `intersect_polygon` clip):
-            //     the extent is the registered ring's distinct-vertex count, read
-            //     per-eval. Like a ragged set it has no statically-known extent,
-            //     so it may size a reduction (contracted index) but not an output
-            //     array (`is_output`).
+            // (2) Deferred: the extent is read per-eval from the extents the
+            //     evaluation is handed. Like a ragged set it has no
+            //     statically-known extent here, so it may size a reduction
+            //     (contracted index) but not an output array (`is_output`).
             if is_output {
                 return Err(CompileError::UnsupportedFeatureError {
                     feature: "derived output index".to_string(),
@@ -786,7 +784,7 @@ fn resolve_index_set_ref(
                          a derived (FAQ-materialized) set's extent is data-dependent and may only \
                          be a contracted (reduction) index, not an output index, unless its \
                          `from_faq` producer '{from_faq}' has a build-time value-invention extent \
-                         (RFC semiring-faq-unified-ir §5.5 / §8.1)"
+                         (RFC semiring-faq-unified-ir §5.5)"
                     ),
                 });
             }
@@ -1123,8 +1121,7 @@ mod tests {
     #[test]
     fn faq_op_tag_is_exact() {
         assert!(is_faq_op("faq"));
-        // Neither legacy spelling is accepted here: `aggregate` is normalized
-        // at load, `arrayop` was removed at v0.8.0.
+        // Neither removed spelling is accepted here.
         assert!(!is_faq_op("aggregate"));
         assert!(!is_faq_op("arrayop"));
         assert!(!is_faq_op("makearray"));
@@ -1229,18 +1226,18 @@ mod tests {
 
     #[test]
     fn derived_index_set_resolves_as_contracted_but_rejects_as_output() {
-        // A `derived` (FAQ-materialized) set sizes a reduction from the ring its
-        // `from_faq` producer materializes at runtime (RFC §8.1): as a contracted
+        // A `derived` (FAQ-materialized) set with no build-time extent sizes a
+        // reduction from the extent the evaluation is handed: as a contracted
         // index it resolves to a deferred `Derived` bound; as an output index it
         // is rejected (its extent is not statically known to size the result).
         let mut index_sets = HashMap::new();
         index_sets.insert(
-            "clip_ring".to_string(),
+            "members_set".to_string(),
             IndexSet {
                 kind: "derived".into(),
                 size: None,
                 members: None,
-                from_faq: Some("overlap_clip".into()),
+                from_faq: Some("producer".into()),
                 member_factor: None,
                 of: None,
                 offsets: None,
@@ -1248,12 +1245,12 @@ mod tests {
             },
         );
         // Contracted (is_output=false): resolves, carrying the producer id.
-        match resolve_ref("clip_ring", None, "v", false, &index_sets).unwrap() {
-            ResolvedRange::Derived { from_faq } => assert_eq!(from_faq, "overlap_clip"),
+        match resolve_ref("members_set", None, "v", false, &index_sets).unwrap() {
+            ResolvedRange::Derived { from_faq } => assert_eq!(from_faq, "producer"),
             other => panic!("expected Derived, got {other:?}"),
         }
         // Output (is_output=true): rejected.
-        let err = resolve_ref("clip_ring", None, "v", true, &index_sets).unwrap_err();
+        let err = resolve_ref("members_set", None, "v", true, &index_sets).unwrap_err();
         let msg = format!("{err:?}");
         assert!(
             msg.contains("derived output index"),

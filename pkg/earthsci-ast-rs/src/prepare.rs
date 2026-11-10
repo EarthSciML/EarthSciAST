@@ -62,7 +62,7 @@
 //! * the derived set's `member_factor` parameter is filled with the
 //!   materialised member ids (pushdown hook 1), so the generated
 //!   `pd_cell__*[c] = index(F, index(member_factor, c))` gathers resolve;
-//! * VI skolem/overlap factor observeds that are themselves join-free
+//! * VI key/overlap factor observeds that are themselves join-free
 //!   observed expressions (the in-model LCC projections `X`/`Y` over raw
 //!   `emis_lon`/`emis_lat`) are evaluated through the FULL expression
 //!   evaluator ahead of value-invention — the Rust analogue of Julia's
@@ -1830,8 +1830,6 @@ struct BuildState<'o> {
     fields: HashMap<String, ArrayD<f64>>,
     /// Value-invention products.
     members: HashMap<String, Vec<i64>>,
-    /// Producers whose members are tuples, so carry no member ids.
-    tuple_keyed: HashSet<String>,
     extents: HashMap<String, i64>,
     /// The gated providers' keys, sorted — [`PreparedBuild::gated_provider_keys`].
     gated_keys: Vec<String>,
@@ -1910,13 +1908,8 @@ impl<'o> BuildState<'o> {
             base_path: opts.base_path.clone(),
             metaparameters,
         };
-        let mut file = crate::parse::load_string_with_options(&text, &load_opts)
+        let file = crate::parse::load_string_with_options(&text, &load_opts)
             .map_err(|e| err(format!("load rewritten document: {e}")))?;
-        // esm-spec §9.5.3: a `table_lookup` is lowered before anything
-        // evaluates it, on this route as on the compile path — the reference
-        // evaluator has no rule for the node itself.
-        crate::lower_table_lookup::lower_table_lookups(&mut file)
-            .map_err(|e| err(format!("lower table lookups: {e}")))?;
         let mut index_sets: HashMap<String, IndexSet> = file
             .index_sets
             .clone()
@@ -1968,7 +1961,6 @@ impl<'o> BuildState<'o> {
             order: Vec::new(),
             fields: HashMap::new(),
             members: HashMap::new(),
-            tuple_keyed: HashSet::new(),
             extents: HashMap::new(),
             gated_keys: Vec::new(),
             rules: Vec::new(),
@@ -2502,34 +2494,23 @@ impl<'o> BuildState<'o> {
             &self.opts.parameters,
         )
         .map_err(|e| err(format!("value invention: {e}")))?;
-        // A member id is only needed where a set feeds one back (a
-        // `member_factor`, a gated fetch), and only a scalar key is an id. A
-        // tuple-keyed producer (an undirected edge `skolem(a, b)`, a composite
-        // key) is sized by its extent alone; a consumer that needs its ids
-        // refuses where it looks them up.
-        let mut members: HashMap<String, Vec<i64>> = HashMap::new();
-        let mut tuple_keyed: HashSet<String> = HashSet::new();
-        for (faq, mem) in &vi.members {
-            let ids: Option<Vec<i64>> = mem
-                .iter()
-                .map(|k| match k {
-                    crate::relational::Key::Int(i) => Some(*i),
-                    _ => None,
-                })
-                .collect();
-            match ids {
-                Some(ids) => {
-                    members.insert(faq.clone(), ids);
-                }
-                None => {
-                    tuple_keyed.insert(faq.clone());
-                }
-            }
-        }
-        // Recorded, not refused: the array runtime's own build runs the same
-        // relational pass for every compiler, so refusing it here alone would
-        // make the pipeline stricter than the route it feeds.
-        let mut producers: Vec<&String> = members.keys().chain(tuple_keyed.iter()).collect();
+        // A member id is needed where a set feeds one back (a `member_factor`,
+        // a gated fetch). Every key is a scalar integer.
+        let members: HashMap<String, Vec<i64>> = vi
+            .members
+            .iter()
+            .map(|(faq, mem)| {
+                let ids = mem
+                    .iter()
+                    .map(|k| match k {
+                        crate::relational::Key::Int(i) => *i,
+                        other => unreachable!("value-invention keys are scalar: {other:?}"),
+                    })
+                    .collect();
+                (faq.clone(), ids)
+            })
+            .collect();
+        let mut producers: Vec<&String> = members.keys().collect();
         producers.sort();
         for faq in producers {
             self.rules.push(PipelineRule {
@@ -2539,24 +2520,7 @@ impl<'o> BuildState<'o> {
             });
         }
         self.members = members;
-        self.tuple_keyed = tuple_keyed;
         self.extents = vi.extents.clone();
-        // An arg-witness assignment and the grouped / derived buffers keyed on
-        // it are build-time products: later observeds read them (`den[g]` sums
-        // over `assign`), and they are fields in their own right, so the
-        // observed graph does not evaluate their defining relational bodies.
-        let buffers = vi
-            .assignments
-            .iter()
-            .map(|(n, b)| (n, b.iter().map(|&i| i as f64).collect::<Vec<f64>>()))
-            .chain(vi.groups.iter().map(|(n, b)| (n, b.clone())));
-        for (name, values) in buffers {
-            let n = values.len();
-            let a = ArrayD::from_shape_vec(ndarray::IxDyn(&[n]), values)
-                .map_err(|e| err(format!("value-invention buffer '{name}': {e}")))?;
-            self.arrays.insert(name.clone(), a.clone());
-            self.fields.insert(name.clone(), a);
-        }
         Ok(())
     }
 
@@ -2566,24 +2530,6 @@ impl<'o> BuildState<'o> {
     /// verbose narration are deterministic; `index_sets` is a `HashMap` and
     /// iterating it directly made the order vary run to run.
     fn feed_member_factors(&mut self) -> Result<(), PrepareError> {
-        let mut tuple_fed: Vec<&String> = self
-            .index_sets
-            .iter()
-            .filter(|(_, is)| is.kind == "derived" && is.member_factor.is_some())
-            .filter(|(_, is)| {
-                is.from_faq
-                    .as_ref()
-                    .is_some_and(|f| self.tuple_keyed.contains(f))
-            })
-            .map(|(sname, _)| sname)
-            .collect();
-        tuple_fed.sort();
-        if let Some(sname) = tuple_fed.first() {
-            return Err(err(format!(
-                "derived index set '{sname}' names a member_factor, but its producer's members \
-                 are tuples, not scalar member ids"
-            )));
-        }
         let mut mf_sets: Vec<(&String, &String, &Vec<i64>)> = self
             .index_sets
             .iter()
@@ -3034,7 +2980,7 @@ mod first_cell_stop_tests {
 
     fn doc(n: usize, variables: Value, equations: Value) -> Value {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "FirstCellStop"},
             "index_sets": {"rows": {"kind": "interval", "size": n}},
             "models": {"Rel": {"variables": variables, "equations": equations}},
@@ -3155,7 +3101,7 @@ mod first_cell_stop_tests {
         std::collections::HashMap<String, ndarray::ArrayD<f64>>,
     ) {
         let d = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "FirstCellStopCoordinates"},
             "index_sets": {
                 "records": {"kind": "interval", "size": n},
@@ -3188,7 +3134,7 @@ mod first_cell_stop_tests {
                              "join": [{"overlap": {"src_env": ["X", "Y"],
                                                    "tgt_env": ["W", "S", "E", "N"],
                                                    "eps": 0.0}}],
-                             "key": {"op": "skolem", "label": "cell", "args": ["c"]},
+                             "key": "c",
                              "expr": {"op": "true", "args": []}}}
                 ]
             }}
@@ -3345,7 +3291,7 @@ mod mounted_subsystem_tests {
     /// `theta = 40 deg` and the state-dependent observed `v = 2*u`.
     fn doc(name: &str, units: &str, rhs: Value) -> Value {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "Mounted"},
             "models": {"P": {
                 "variables": {
@@ -3538,7 +3484,7 @@ mod whole_document_tests {
     }
 
     fn doc(models: Value) -> Value {
-        json!({"esm": "1.2.0", "metadata": {"name": "w"}, "models": models})
+        json!({"esm": "2.0.0", "metadata": {"name": "w"}, "models": models})
     }
 
     #[test]

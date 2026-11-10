@@ -1062,7 +1062,7 @@ fn eval_vec_op_code<'a>(
             eval_vec_op_code(vec_op_code(fn_name), node, bx, ctx, pool, ops)
         }
         // Everything else (array-valued ifelse, aggregate, reshape, transpose,
-        // concat, `fn` closed-registry calls, atan2, D, …) falls back.
+        // concat, atan2, D, …) falls back.
         VecOp::Unsupported => None,
     }
 }
@@ -2816,9 +2816,8 @@ mod op_dispatch_equivalence {
     fn unvectorized_operators_still_bail() {
         #[rustfmt::skip]
         const OTHERS: &[&str] = &[
-            "D", "Pre", "fn", "arrayop", "reshape", "transpose", "concat",
-            "intersect_polygon", "polygon_intersection_area", "integral", "grad",
-            "skolem", "rank", "ic", "table_lookup", "apply_expression_template",
+            "D", "Pre", "arrayop", "reshape", "transpose", "concat", "integral",
+            "grad", "distinct", "ic", "enum", "apply_expression_template",
             "", " ", "PLUS", "Log", "expp",
         ];
         for op in OTHERS {

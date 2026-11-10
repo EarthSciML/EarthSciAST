@@ -34,7 +34,7 @@ fn write(dir: &Path, name: &str, body: &str) -> PathBuf {
 /// A leaf whose single axis is sized by the leaf's OWN metaparameter. The rest
 /// of the file is the minimum that makes it a loadable component.
 const SELF_CONTAINED_LEAF: &str = r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {"name": "leaf"},
   "metaparameters": {"NLEV": {"type": "integer", "default": 4}},
   "index_sets": {"lev": {"kind": "interval", "size": "NLEV"}},
@@ -55,7 +55,7 @@ fn leaf_metaparameter_sized_axis_folds_at_the_edge_and_merges() {
     let host = write(
         &dir,
         "host.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"host"},
+        r#"{"esm": "2.0.0","metadata":{"name":"host"},
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
     );
 
@@ -76,7 +76,7 @@ fn edge_bindings_close_the_leaf_at_a_toplevel_mount() {
     let host = write(
         &dir,
         "host.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"host"},
+        r#"{"esm": "2.0.0","metadata":{"name":"host"},
             "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":9}}}}"#,
     );
 
@@ -102,7 +102,7 @@ fn a_folded_leaf_axis_still_collides_loudly() {
     let host = write(
         &dir,
         "host.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"host"},
+        r#"{"esm": "2.0.0","metadata":{"name":"host"},
             "index_sets":{"lev":{"kind":"interval","size":59}},
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
     );
@@ -139,7 +139,7 @@ fn an_assembler_scoped_axis_merges_symbolically_with_or_without_restatement() {
         &dir,
         "leaf.esm",
         r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {"name": "leaf"},
   "index_sets": {"rows": {"kind": "interval", "size": "n_rows"}},
   "models": {"Census": {
@@ -152,7 +152,7 @@ fn an_assembler_scoped_axis_merges_symbolically_with_or_without_restatement() {
     let verbose = write(
         &dir,
         "verbose.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"verbose"},
+        r#"{"esm": "2.0.0","metadata":{"name":"verbose"},
             "metaparameters":{"n_rows":{"type":"integer","default":7}},
             "index_sets":{"rows":{"kind":"interval","size":"n_rows"}},
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
@@ -161,7 +161,7 @@ fn an_assembler_scoped_axis_merges_symbolically_with_or_without_restatement() {
     let terse = write(
         &dir,
         "terse.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"terse"},
+        r#"{"esm": "2.0.0","metadata":{"name":"terse"},
             "metaparameters":{"n_rows":{"type":"integer","default":7}},
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
     );
@@ -193,7 +193,7 @@ fn a_consumed_mount_edge_round_trips_to_a_fixed_point() {
     let host = write(
         &dir,
         "host.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"host"},
+        r#"{"esm": "2.0.0","metadata":{"name":"host"},
             "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":6},
                            "index_set_rename":{"lev":"soil.lev"}}}}"#,
     );
@@ -266,7 +266,7 @@ fn a_mounted_leaf_defers_an_assembler_scoped_size_to_the_assemblers_close() {
         &dir,
         "leaf.esm",
         r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {"name": "leaf"},
   "metaparameters": {"UNRELATED": {"type": "integer", "default": 1}},
   "index_sets": {"rows": {"kind": "interval", "size": "n_rows"}},
@@ -278,7 +278,7 @@ fn a_mounted_leaf_defers_an_assembler_scoped_size_to_the_assemblers_close() {
     let host = write(
         &dir,
         "host.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"host"},
+        r#"{"esm": "2.0.0","metadata":{"name":"host"},
             "metaparameters":{"n_rows":{"type":"integer","default":7}},
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
     );
@@ -313,7 +313,7 @@ fn an_assemblers_own_default_never_overrides_a_leafs_own() {
     let top = write(
         &dir,
         "top.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"top"},
+        r#"{"esm": "2.0.0","metadata":{"name":"top"},
             "metaparameters":{"NLEV":{"type":"integer","default":12}},
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
     );
@@ -321,7 +321,7 @@ fn an_assemblers_own_default_never_overrides_a_leafs_own() {
     let sub = write(
         &dir,
         "sub.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"sub"},
+        r#"{"esm": "2.0.0","metadata":{"name":"sub"},
             "metaparameters":{"NLEV":{"type":"integer","default":12}},
             "models":{"Host":{
               "subsystems":{"M":{"ref":"./leaf.esm"}},
@@ -368,14 +368,14 @@ fn the_loader_api_backfills_a_leaf_and_an_edge_binding_outranks_it() {
     let bare = write(
         &dir,
         "bare.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"bare"},
+        r#"{"esm": "2.0.0","metadata":{"name":"bare"},
             "metaparameters":{"NLEV":{"type":"integer","default":12}},
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
     );
     let bound = write(
         &dir,
         "bound.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"bound"},
+        r#"{"esm": "2.0.0","metadata":{"name":"bound"},
             "metaparameters":{"NLEV":{"type":"integer","default":12}},
             "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":7}}}}"#,
     );
@@ -407,7 +407,7 @@ fn the_loader_api_backfills_a_leaf_and_an_edge_binding_outranks_it() {
     let other = write(
         &dir,
         "other.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"other"},
+        r#"{"esm": "2.0.0","metadata":{"name":"other"},
             "metaparameters":{"NROWS":{"type":"integer","default":2}},
             "models":{"M":{"ref":"./leaf.esm"}}}"#,
     );
@@ -440,7 +440,7 @@ fn a_concrete_restatement_of_a_symbolic_leaf_axis_is_idempotent() {
         &dir,
         "leaf.esm",
         r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {"name": "leaf"},
   "index_sets": {"rows": {"kind": "interval", "size": "n_rows"}},
   "models": {"Census": {
@@ -451,7 +451,7 @@ fn a_concrete_restatement_of_a_symbolic_leaf_axis_is_idempotent() {
     let host = write(
         &dir,
         "host.esm",
-        r#"{"esm":"1.0.0","metadata":{"name":"host"},
+        r#"{"esm": "2.0.0","metadata":{"name":"host"},
             "metaparameters":{"n_rows":{"type":"integer","default":7}},
             "index_sets":{"rows":{"kind":"interval","size":7}},
             "models":{"M":{"ref":"./leaf.esm"}}}"#,

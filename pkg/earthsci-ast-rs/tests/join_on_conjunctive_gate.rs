@@ -196,7 +196,7 @@ impl TwoClause {
             );
         }
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "join_on_conjunctive_gate"},
             "index_sets": {
                 "lrows": {"kind": "interval", "size": self.nl()},
@@ -473,7 +473,7 @@ impl ThreeClause {
             );
         }
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "join_on_conjunctive_gate_3"},
             "index_sets": {
                 "lrows": {"kind": "interval", "size": self.lkey_a.len()},

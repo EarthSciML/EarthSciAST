@@ -178,7 +178,7 @@ fn mirrored_doc() -> Value {
         "expr": {"op": "+", "args": [ix("src_W", "c"), ix("src_S", "c")]}
     }}));
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "dense_overlap_mirror"},
         "index_sets": {
             "points": {"kind": "interval", "size": NPTS},
@@ -362,7 +362,7 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
         ]}
     }}));
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "dense_overlap_forward"},
         "index_sets": {
             "records": {"kind": "interval", "size": NPTS},
@@ -539,7 +539,7 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
         "expr": {"op": "+", "args": [ix("src_W", "c"), ix("px", "r")]}
     }}));
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "overlap_pair_drive"},
         "index_sets": pir_index_sets(),
         "models": {"Pairs": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
@@ -605,7 +605,7 @@ fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
         "expr": {"op": "ifelse", "args": [contains("c", "r"), 1.0, 0.0]}
     }}));
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "overlap_membership"},
         "index_sets": pir_index_sets(),
         "models": {"Member": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}

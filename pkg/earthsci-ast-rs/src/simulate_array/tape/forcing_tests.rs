@@ -23,7 +23,7 @@ use std::sync::Arc;
 fn forced_doc(n: i64) -> serde_json::Value {
     let fed = |var: &str| json!({"kind": "data", "source": "met", "from": {"file_variable": var}});
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Forced"},
         "index_sets": {"cells": {"kind": "interval", "size": n}},
         "data_sources": {"met": {"kind": "grid", "source": {"url_template": "file:///met.nc"}}},
@@ -436,7 +436,7 @@ fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
             [scaled.clone(), flagged.clone()]
         };
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "ForcedMixedPrecision"},
             "index_sets": {"cells": {"kind": "interval", "size": 3}},
             "data_sources": {"met": {"kind": "grid", "source": {"url_template": "file:///met.nc"}}},

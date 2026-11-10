@@ -115,10 +115,9 @@ fn cross_model_from_faq_corpus_fixture_resolves() {
 ///
 ///   - #2: `rg_candidate_pairs.from_faq` names `rg_candidate_set`, which lives
 ///     in `OceanDynamics` while the registry entry is document-scoped.
-///   - #3: that producing node carries `join.on == [["rg_src_bin",
-///     "rg_tgt_bin"]]`, naming declared model VARIABLES — per-cell
-///     value-invention bin buffers written by equations 0 and 1 — rather than
-///     node-local binders. Both columns now resolve through the variable class
+///   - #3: that producing node carries `join.on` pairs such as
+///     `["rg_src_bin_c1", "rg_tgt_bin_c1"]`, naming declared model VARIABLES —
+///     per-cell bin-component buffers — rather than node-local binders. Both columns now resolve through the variable class
 ///     of `join_binder_class`.
 #[test]
 fn wildfire_fixture_resolves_fully() {
@@ -129,8 +128,8 @@ fn wildfire_fixture_resolves_fully() {
         ocean
             .edges_of_kind(EdgeKind::JoinFactor)
             .iter()
-            .any(|e| e.target == "factor:rg_src_bin"),
-        "no join_factor edge to factor:rg_src_bin"
+            .any(|e| e.target == "factor:rg_src_bin_c1"),
+        "no join_factor edge to factor:rg_src_bin_c1"
     );
 }
 

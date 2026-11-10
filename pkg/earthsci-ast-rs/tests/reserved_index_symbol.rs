@@ -131,7 +131,7 @@ fn the_control_spelling_loads_and_answers_two() {
 /// renamed independent variable.
 fn doc_binding(sym: &str, independent: Option<&str>) -> Value {
     let mut doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": { "name": "BinderProbe" },
         "index_sets": { "rows": { "kind": "interval", "size": 3 } },
         "models": {
@@ -202,7 +202,7 @@ fn the_operator_placeholder_is_rejected_on_both_binding_fields() {
 #[test]
 fn an_integral_over_the_independent_variable_still_loads() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "TimeIntegral" },
         "models": {
             "M": {

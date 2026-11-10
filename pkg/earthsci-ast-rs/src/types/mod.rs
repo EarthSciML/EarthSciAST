@@ -3,7 +3,7 @@
 //! This module provides Rust types that correspond to the ESM JSON Schema.
 //!
 //! The types are grouped by concern:
-//! - [`document`]: top-level file structure, metadata, references, tables
+//! - [`document`]: top-level file structure, metadata, references
 //! - [`expression`]: expression AST nodes and their child-visit machinery
 //! - [`analysis`]: inline model tests, parameter sweeps, and plot definitions
 //! - [`model`]: models, variables, parameter updates, and equations

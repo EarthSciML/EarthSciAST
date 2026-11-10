@@ -725,16 +725,6 @@ fn format_const_value(value: &serde_json::Value, fmt: Fmt) -> String {
     }
 }
 
-/// Stringify a scalar JSON value (e.g. a `table_lookup` `output` selector).
-fn json_scalar_string(v: &serde_json::Value) -> String {
-    match v {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        other => other.to_string(),
-    }
-}
-
 /// Big-operator symbol for a `faq` reduction (semiring supersedes the
 /// bare `reduce`). See tests/display/RENDERING_CONTRACT.md.
 fn aggregate_symbol(semiring: Option<&str>, reduce: &str, fmt: Fmt) -> &'static str {
@@ -788,8 +778,8 @@ fn format_range_spec(rng: &RangeSpec) -> String {
     }
 }
 
-/// Render the ` where {…}` range clause shared by aggregate and argmin/argmax
-/// (keys sorted for determinism).
+/// Render the ` where {…}` range clause of an aggregate (keys sorted for
+/// determinism).
 fn format_ranges_clause(ranges: &std::collections::HashMap<String, RangeSpec>, fmt: Fmt) -> String {
     let in_sym = match fmt {
         Fmt::Latex => " \\in ",
@@ -809,8 +799,7 @@ fn format_ranges_clause(ranges: &std::collections::HashMap<String, RangeSpec>, f
     }
 }
 
-/// Render the ` join(…)` clause shared by `faq` and `argmin`/`argmax`, or `""`
-/// when there is none. Clauses are joined `; `. An equality clause lists its
+/// Render the ` join(…)` clause of a `faq`, or `""` when there is none. Clauses are joined `; `. An equality clause lists its
 /// key-column pairs `l=r` and then, when present, the self-join side assignment
 /// `syms=[left, right]`; an overlap clause is the keyword call
 /// `overlap(src=[…], tgt=[…])` with `, eps=E` whenever `eps` is present
@@ -890,8 +879,7 @@ fn format_aggregate(node: &ExpressionNode, fmt: Fmt) -> String {
     if let Some(key) = node.key.as_deref() {
         out.push_str(&format!(" key={}", render_fmt(key, fmt)));
     }
-    // `id` is a bare-name clause rather than part of the `[…]` suffix so it adds
-    // no new bracket ambiguity with `table_lookup`'s `name[axis=…]` surface.
+    // `id` is a bare-name clause rather than part of the `[…]` suffix.
     if let Some(id) = node.id.as_deref() {
         out.push_str(&format!(" id={id}"));
     }
@@ -899,40 +887,6 @@ fn format_aggregate(node: &ExpressionNode, fmt: Fmt) -> String {
         && sr != "sum_product"
     {
         out.push_str(&format!(" [semiring={sr}]"));
-    }
-    out
-}
-
-/// Render an `argmin` / `argmax` arg-witness node.
-fn format_arg_witness(node: &ExpressionNode, fmt: Fmt) -> String {
-    let arg = node.arg.as_deref().unwrap_or("");
-    let expr_str = node
-        .expr
-        .as_deref()
-        .map(|e| render_fmt(e, fmt))
-        .unwrap_or_default();
-    let idx_part = if fmt == Fmt::Latex {
-        format!("_{{{arg}}}")
-    } else {
-        format!("[{arg}]")
-    };
-    let name = if fmt == Fmt::Latex {
-        format!("\\mathrm{{{}}}", node.op)
-    } else {
-        node.op.clone()
-    };
-    let mut out = format!("{name}{idx_part} ({expr_str})");
-    if let Some(ranges) = &node.ranges
-        && !ranges.is_empty()
-    {
-        out.push_str(&format_ranges_clause(ranges, fmt));
-    }
-    out.push_str(&format_join_clause(node.join.as_deref(), fmt));
-    if let Some(filter) = node.filter.as_deref() {
-        out.push_str(&format!(" if {}", render_fmt(filter, fmt)));
-    }
-    if let Some(id) = node.id.as_deref() {
-        out.push_str(&format!(" id={id}"));
     }
     out
 }
@@ -955,19 +909,6 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
         )),
 
         "true" | "false" => Some(op.to_string()),
-
-        "fn" => {
-            let name = node.name.as_deref().unwrap_or("");
-            let inner = args
-                .iter()
-                .map(|a| render_fmt(a, fmt))
-                .collect::<Vec<_>>()
-                .join(", ");
-            Some(match fmt {
-                Fmt::Latex => format!("\\mathrm{{{}}}({})", latex_name(name), inner),
-                _ => format!("{name}({inner})"),
-            })
-        }
 
         "enum" => {
             let a0 = args.first().map(expr_raw_string).unwrap_or_default();
@@ -1022,32 +963,6 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
                 Fmt::Unicode => format!("∫[{lo}, {hi}] {f} d{v}"),
                 Fmt::Ascii => format!("integral({f}, {v}, {lo}, {hi})"),
             })
-        }
-
-        "table_lookup" => {
-            let table = node.table.as_deref().unwrap_or("");
-            let bindings = node
-                .axes
-                .as_ref()
-                .map(|axes| {
-                    let mut keys: Vec<&String> = axes.keys().collect();
-                    keys.sort();
-                    keys.iter()
-                        .map(|k| format!("{}{}{}", k, eq, render_fmt(&axes[*k], fmt)))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            let out_str = match &node.output {
-                Some(v) if !v.is_null() => format!(":{}", json_scalar_string(v)),
-                _ => String::new(),
-            };
-            let name = if fmt == Fmt::Latex {
-                format!("\\mathrm{{{}}}", latex_name(table))
-            } else {
-                table.to_string()
-            };
-            Some(format!("{name}[{bindings}]{out_str}"))
         }
 
         "apply_expression_template" => {
@@ -1183,50 +1098,7 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
             Some(format!("{name}({inner}, axis={axis})"))
         }
 
-        "intersect_polygon" | "polygon_intersection_area" => {
-            let inner = args
-                .iter()
-                .map(|a| render_fmt(a, fmt))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let name = if fmt == Fmt::Latex {
-                format!("\\mathrm{{{}}}", latex_name(op))
-            } else {
-                op.to_string()
-            };
-            let manifold = node.manifold.as_deref().unwrap_or("");
-            // `id` (RFC §6.1 node identity) is emitted as a trailing named
-            // argument when present, so a node addressable as a derived index
-            // set's `from_faq` referent survives the text round-trip. Absent
-            // `id` prints exactly as before.
-            let id_part = match node.id.as_deref() {
-                Some(id) => format!(", id={id}"),
-                None => String::new(),
-            };
-            Some(format!("{name}({inner}, manifold={manifold}{id_part})"))
-        }
-
-        // The documentary `label` is a trailing named argument, like
-        // `intersect_polygon`'s `manifold=`; an unlabeled skolem is a plain
-        // call (the generic fallback).
-        "skolem" => {
-            let label = node.label.as_deref()?;
-            let inner = args
-                .iter()
-                .map(|a| render_fmt(a, fmt))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let name = if fmt == Fmt::Latex {
-                "\\mathrm{skolem}"
-            } else {
-                "skolem"
-            };
-            Some(format!("{name}({inner}, label={label})"))
-        }
-
         "faq" => Some(format_aggregate(node, fmt)),
-
-        "argmin" | "argmax" => Some(format_arg_witness(node, fmt)),
 
         _ => None,
     }

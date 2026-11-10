@@ -293,20 +293,15 @@ macro_rules! corpus_doc {
 }
 
 /// `(path under tests/, document)` for the corpus documents whose geometry
-/// (`polygon_intersection_area`, a build-time `intersect_polygon` ring) the
-/// tape lowers: native must build each one, and agree with the interpreter on
-/// the build-time fields and the right-hand side.
+/// (the `lib/geometry.esm` overlap areas) the tape lowers: native must build
+/// each one, and agree with the interpreter on the build-time fields and the
+/// right-hand side.
 pub const GEOMETRY_DOCS: &[(&str, &str)] = &[
     corpus_doc!("conformance/build_once_spatial_field/fixtures/build_once_spatial_ode.esm"),
-    corpus_doc!("conformance/expression_templates/scalar_field_param/expanded.esm"),
-    corpus_doc!("conformance/expression_templates/scalar_field_param/fixture.esm"),
     corpus_doc!("conformance/pushdown/fixtures/pushdown_polygon_area.esm"),
     corpus_doc!("coupling/cross_domain_coupling.esm"),
     corpus_doc!("coupling/interfaces.esm"),
     corpus_doc!("valid/geometry/conservative_regrid_assembly.esm"),
-    corpus_doc!("valid/geometry/intersect_polygon_clip_area.esm"),
-    corpus_doc!("valid/geometry/intersect_polygon_planar_area.esm"),
-    corpus_doc!("valid/geometry/intersect_polygon_planar_ode.esm"),
     corpus_doc!("valid/geometry/polygon_intersection_area_padded_ring.esm"),
     corpus_doc!("valid/geometry/polygon_intersection_area_planar.esm"),
     corpus_doc!("valid/wildfire_atmosphere_ocean.esm"),

@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "Float32DocumentWithBinary64Keys",
     "description": "One document, two element types. The quantities follow domain.element_type: \"Float32\" and round per operation; the KEYS declare `element_type: \"Float64\"` and stay exact. A ten-digit category code is ~2.26e9, 135x above binary32's exact-integer limit of 2^24, so under one document-wide precision 2260007005 reads back as 2260006912, floor(scc/1000)*1000 gives 2260006912 instead of 2260007000, and 2260007005 and 2260007015 test EQUAL — three different ways for a relational model to merge rows that are not the same row."

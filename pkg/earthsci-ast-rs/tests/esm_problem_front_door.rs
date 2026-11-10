@@ -48,7 +48,7 @@ fn a_document_that_does_not_load_is_refused() {
     for (rel, needle) in [
         ("tests/invalid/missing_metadata.esm", "Schema validation"),
         (
-            "tests/version_compatibility/version_2_5_1_major_rejection.esm",
+            "tests/version_compatibility/version_0_1_0_pre_break.esm",
             "major version",
         ),
         ("tests/invalid/faq/arrayop_op_removed.esm", "removed_op"),
@@ -113,22 +113,6 @@ fn a_callback_variable_no_callback_supplies_is_refused() {
         let msg = refusal("tests/coupling/callback_examples.esm", compiler);
         assert!(
             msg.contains("callback_unregistered") && msg.contains("CropWeatherCoupling"),
-            "{compiler:?}: {msg}"
-        );
-    }
-}
-
-#[test]
-fn a_degenerate_polygon_operand_nothing_reads_is_refused() {
-    // esm-spec §8.6.1: the all-zero default rings are degenerate operands; the
-    // state-free observed that clips them is evaluated at build, so refused.
-    for compiler in COMPILERS {
-        let msg = refusal(
-            "tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm",
-            compiler,
-        );
-        assert!(
-            msg.contains("E_TREEWALK_GEOMETRY_CLIP"),
             "{compiler:?}: {msg}"
         );
     }

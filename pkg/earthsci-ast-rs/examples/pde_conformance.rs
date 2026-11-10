@@ -381,7 +381,7 @@ fn reproj_wrapper_doc(lib_file_name: &str, params: &Value) -> Result<Value, Stri
                "bindings": bindings})
     };
     Ok(json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "lambert_conformal_eval",
                      "description": "Runner-built template invocation (manifest fixture: null)."},
         "models": {"Reproject": {

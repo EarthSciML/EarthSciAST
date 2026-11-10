@@ -70,32 +70,25 @@ fn build_standalone_program(
     pipeline: bool,
 ) -> LResult<TapeProgram> {
     let name = observed_rule_var(rule);
-    with_standalone_builder(
-        name,
-        param_names,
-        const_arrays,
-        crate::precision::is_f32(),
-        pipeline,
-        |mut b| {
-            let _rule_precision = crate::precision::has_variable_overrides()
-                .then(|| crate::precision::enter(crate::precision::of_variable(name)));
-            for (input, value) in inputs {
-                let lv = if value.ndim() == 0 {
-                    // `lookup_variable`'s 0-d arm: a scalar, rounded to the
-                    // precision in force.
-                    LV::Lit(crate::precision::active().round(value[ndarray::IxDyn(&[])]))
-                } else {
-                    b.standalone_array_input(value)?
-                };
-                b.obs_defined
-                    .insert((*input).to_string(), ObsVal::Taped(lv));
-            }
-            let v = b.lower_observed_rule(rule)?;
-            b.flush_rule_fault()?;
-            b.obs_defined.insert(name.clone(), v);
-            Ok(b.finish_standalone(rule))
-        },
-    )
+    with_standalone_builder(name, param_names, const_arrays, pipeline, |mut b| {
+        let _rule_precision = crate::precision::has_variable_overrides()
+            .then(|| crate::precision::enter(crate::precision::of_variable(name)));
+        for (input, value) in inputs {
+            let lv = if value.ndim() == 0 {
+                // `lookup_variable`'s 0-d arm: a scalar, rounded to the
+                // precision in force.
+                LV::Lit(crate::precision::active().round(value[ndarray::IxDyn(&[])]))
+            } else {
+                b.standalone_array_input(value)?
+            };
+            b.obs_defined
+                .insert((*input).to_string(), ObsVal::Taped(lv));
+        }
+        let v = b.lower_observed_rule(rule)?;
+        b.flush_rule_fault()?;
+        b.obs_defined.insert(name.clone(), v);
+        Ok(b.finish_standalone(rule))
+    })
 }
 
 /// Run `f` on a fresh builder for the CONST observed `name` alone, inside its
@@ -106,7 +99,6 @@ pub(super) fn with_standalone_builder<R>(
     name: &str,
     param_names: &[String],
     const_arrays: &ConstArrayScope,
-    f32_document: bool,
     pipeline: bool,
     f: impl for<'b> FnOnce(TapeBuilder<'b>) -> R,
 ) -> R {
@@ -119,14 +111,7 @@ pub(super) fn with_standalone_builder<R>(
     };
     let mut obs_tier: FxHashMap<String, Cadence> = FxHashMap::default();
     obs_tier.insert(name.to_string(), Cadence::Const);
-    let mut b = TapeBuilder::new(
-        &var_shapes,
-        param_names,
-        obs_tier,
-        const_arrays,
-        f32_document,
-        &forcing,
-    );
+    let mut b = TapeBuilder::new(&var_shapes, param_names, obs_tier, const_arrays, &forcing);
     b.array_bool_reductions = pipeline;
     b.begin_rule(RuleInfo {
         name: name.to_string(),

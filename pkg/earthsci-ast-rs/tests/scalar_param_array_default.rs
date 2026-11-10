@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 /// reads it. A scope that binds `k` to 0.0 answers `y = 0`.
 fn doc() -> Value {
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "scalar_param_array_default"},
         "models": {"M": {
             "variables": {

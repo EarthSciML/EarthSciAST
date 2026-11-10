@@ -115,12 +115,6 @@ pub struct EsmFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<Domain>,
 
-    /// Component-scoped sampled function tables (esm-spec §9.5, v0.4.0).
-    /// Keys are table ids; values are `FunctionTable` entries referenced by
-    /// `table_lookup` AST nodes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub function_tables: Option<IndexMap<String, FunctionTable>>,
-
     /// The per-component `expression_templates` registries, captured at LOAD
     /// before the Expand-at-build pass strips them from the document
     /// (esm-spec §9.6.4 Option B, RFC out-of-line-expression-templates §7.7).
@@ -196,73 +190,11 @@ impl Default for EsmFile {
             coupling: None,
             coupling_roles: None,
             domain: None,
-            function_tables: None,
             component_templates: None,
             coupling_import_base: None,
             document_base: None,
         }
     }
-}
-
-/// A single named axis inside a [`FunctionTable`] (esm-spec §9.5).
-///
-/// `values` MUST be strictly-increasing finite floats with at least 2 entries
-/// (mirrors the §9.2 interp.linear / interp.bilinear axis contract). `units`
-/// is advisory only in v0.4.0 — recorded for documentation, not used for
-/// load-time unit-checking.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FunctionTableAxis {
-    /// Axis identifier; used as the key in `table_lookup.axes`.
-    pub name: String,
-
-    /// Strictly-increasing finite floats, ≥ 2 entries.
-    pub values: Vec<f64>,
-
-    /// Optional advisory units string.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub units: Option<String>,
-}
-
-/// A sampled function table referenced by `table_lookup` AST op nodes
-/// (esm-spec §9.5, v0.4.0).
-///
-/// Tables are syntactic sugar over §9.2's `interp.linear` / `interp.bilinear`
-/// / `index` — a `table_lookup` query MUST be bit-equivalent to the
-/// equivalent inline-`const` lookup. Shape of `data` is
-/// `[len(outputs), len(axes[0].values), len(axes[1].values), ...]` when
-/// `outputs` is `Some`; `[len(axes[0].values), ...]` otherwise.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FunctionTable {
-    /// Ordered list of named axes (1 or 2 in v0.4.0, matching the
-    /// `interp.linear` / `interp.bilinear` arity).
-    pub axes: Vec<FunctionTableAxis>,
-
-    /// Nested-array literal of finite numbers.
-    pub data: serde_json::Value,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-
-    /// `"linear"` | `"bilinear"` | `"nearest"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interpolation: Option<String>,
-
-    /// `"clamp"` | `"error"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub out_of_bounds: Option<String>,
-
-    /// Optional ordered output names.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outputs: Option<Vec<String>>,
-
-    /// Optional redundant shape assertion.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shape: Option<Vec<u64>>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schema_version: Option<String>,
 }
 
 /// Academic citation or data source reference

@@ -17,7 +17,7 @@ pub(super) fn derivative_target(lhs: &Expr) -> Option<&str> {
     loop {
         match e {
             Expr::Variable(v) => return saw_d.then_some(v.as_str()),
-            Expr::Operator(n) if n.op == "faq" || n.op == "aggregate" => e = n.expr.as_deref()?,
+            Expr::Operator(n) if n.op == "faq" => e = n.expr.as_deref()?,
             Expr::Operator(n) if n.op == "D" && matches!(n.wrt.as_deref(), None | Some("t")) => {
                 saw_d = true;
                 e = n.args.first()?;
@@ -35,7 +35,7 @@ fn defined_name(lhs: &Expr) -> Option<&str> {
     loop {
         match e {
             Expr::Variable(v) => return Some(v),
-            Expr::Operator(n) if n.op == "faq" || n.op == "aggregate" => e = n.expr.as_deref()?,
+            Expr::Operator(n) if n.op == "faq" => e = n.expr.as_deref()?,
             Expr::Operator(n) if n.op == "index" => e = n.args.first()?,
             _ => return None,
         }
