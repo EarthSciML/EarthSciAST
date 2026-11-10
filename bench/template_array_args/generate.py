@@ -34,10 +34,15 @@ The ``levcol`` ``fn`` spelling is not a baseline today: Julia refuses it
 (``E_TREEWALK_INDEX_NDIM``) and Rust evaluates the replicated column to NaN,
 under both compilers. Compare its ``tpl`` against ``faq`` only.
 
+No document is committed: the harnesses run this script when given no
+directory. It writes to ``--out`` (default ``$TEMPLATE_ARRAY_ARGS_DIR``, else
+``template_array_args`` under ``$TMPDIR``). The template imports name the
+bundled standard library (``esm:std/interp.esm``); ``--lib`` points them
+instead at another directory holding ``interp.esm``.
+
 Usage:
 
-    python3 bench/template_array_args/generate.py            # the committed documents
-    python3 bench/template_array_args/generate.py --check    # committed documents are current
+    python3 bench/template_array_args/generate.py                     # the default sizes
     python3 bench/template_array_args/generate.py --out DIR --large   # also the large sizes
 
 Timing: ``bench_julia.jl`` (Julia native) and the Rust criterion group
@@ -49,9 +54,8 @@ import json
 import math
 import os
 import sys
+import tempfile
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 ESM_VERSION = "1.2.0"
 SPELLINGS = ("fn", "tpl", "faq")
 
@@ -152,6 +156,14 @@ def relax(state, shape, target):
     }
 
 
+def interp_ref(lib, out_dir):
+    """The bundled standard library's `interp.esm` (`esm:std/interp.esm`), or,
+    with `--lib`, a relative path to that directory's copy."""
+    if lib is None:
+        return "esm:std/interp.esm"
+    return os.path.relpath(os.path.join(lib, "interp.esm"), out_dir)
+
+
 def document(case, spelling, size, out_dir, lib):
     """`size` is a dict: shape (index-set sizes), t, ty."""
     dims = size["dims"]
@@ -227,9 +239,7 @@ def document(case, spelling, size, out_dir, lib):
 
     model = {"variables": variables, "equations": eqs}
     if spelling != "fn":
-        model["expression_template_imports"] = [
-            {"ref": os.path.relpath(os.path.join(lib, "interp.esm"), out_dir), "only": [kind]}
-        ]
+        model["expression_template_imports"] = [{"ref": interp_ref(lib, out_dir), "only": [kind]}]
     what = {
         "fn": f"fn interp.{kind} on an array query",
         "tpl": f"the lib/interp.esm {kind} template on an array query (elementwise, esm-spec 9.6.11)",
@@ -255,7 +265,7 @@ def tag(size):
 
 
 G3 = ["lon", "lat", "lev"]
-COMMITTED = [
+DEFAULT = [
     ("lin1d", {"dims": [100], "names": ["c"], "t": 10}),
     ("lin1d", {"dims": [100], "names": ["c"], "t": 256}),
     ("lin1d", {"dims": [10000], "names": ["c"], "t": 10}),
@@ -283,7 +293,7 @@ LARGE = [
 
 def documents(out_dir, lib, large):
     docs = {}
-    for case, size in COMMITTED + (LARGE if large else []):
+    for case, size in DEFAULT + (LARGE if large else []):
         for s in SPELLINGS:
             docs[f"{case}_{s}_{tag(size)}.esm"] = document(case, s, size, out_dir, lib)
     return docs
@@ -293,33 +303,29 @@ def dumps(d):
     return json.dumps(d, indent=1) + "\n"
 
 
+def default_out():
+    """Where the harnesses look when given no directory: `$TEMPLATE_ARRAY_ARGS_DIR`,
+    else `template_array_args` under the temporary directory (`$TMPDIR`)."""
+    return os.environ.get("TEMPLATE_ARRAY_ARGS_DIR") or os.path.join(
+        tempfile.gettempdir(), "template_array_args"
+    )
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--check", action="store_true", help="exit 1 if a committed document is stale")
-    ap.add_argument("--out", default=HERE)
-    ap.add_argument("--lib", default=os.path.join(REPO, "lib"))
+    ap.add_argument("--out", default=None, help="output directory (default: default_out())")
+    ap.add_argument("--lib", default=None, help="a lib/ directory to import from instead of esm:std/")
     ap.add_argument("--large", action="store_true", help="also the 72 x 46 x 72 grids")
     a = ap.parse_args(argv)
-    out = os.path.abspath(a.out)
+    out = os.path.abspath(a.out or default_out())
     os.makedirs(out, exist_ok=True)
-    docs = documents(out, os.path.abspath(a.lib), a.large)
-    stale = []
+    docs = documents(out, os.path.abspath(a.lib) if a.lib else None, a.large)
     for name, d in docs.items():
-        path = os.path.join(out, name)
-        text = dumps(d)
-        if a.check:
-            if not os.path.exists(path) or open(path).read() != text:
-                stale.append(name)
-        else:
-            with open(path, "w") as fh:
-                fh.write(text)
-    if stale:
-        print("stale: " + ", ".join(stale), file=sys.stderr)
-        return 1
-    if not a.check:
-        print(f"wrote {len(docs)} documents to {out}")
+        with open(os.path.join(out, name), "w") as fh:
+            fh.write(dumps(d))
+    print(f"wrote {len(docs)} documents to {out}")
     return 0
 
 
