@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "Relational",
     "description": "Standard-library relational templates (esm-spec §9.7.1 template-library file), the pure-AST definitions of the arg-witness reducers and of value-invention keys and ranks. `argmin(f, n)` / `argmax(f, n)`: the 1-based index in [1, n] of the smallest (largest) candidate value `f`, an expression over the template's loop symbol (`k_argmin_1`, `k_argmax_1`); ties go to the smallest index and a NaN candidate wins at its first occurrence. `argmin_where(f, p, n)` / `argmax_where(f, p, n)`: the same over the candidates passing the predicate `p`, n + 1 when none does. `pair_key(a, b, lo_a, lo_b, n_a, n_b)` and `edge_key(u, v, lo, n)`: scalar integer composite keys (directed, undirected) for a `distinct` key, NaN for an out-of-range component. `rank_of(x, members, n)` / `rank_of_set(x, members, S)`: the 1-based rank of a key among n ascending members, or among the members of the index set S (a derived set's `member_factor`). Core ops only. Import with `expression_template_imports` and invoke with `apply_expression_template`; see docs/content/standard_library.md.",
