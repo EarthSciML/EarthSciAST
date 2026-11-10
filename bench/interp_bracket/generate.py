@@ -50,7 +50,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COMMITTED_N = [59, 200]
-ESM_VERSION = "1.2.0"  # a unit-bearing `const` (esm-spec 4.8.5)
+ESM_VERSION = "2.0.0"
 SPELLINGS = ["const_compose", "runtime_compose"]
 
 

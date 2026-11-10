@@ -1,44 +1,42 @@
 #!/usr/bin/env python3
-"""Closed-AST phase-4 benchmark workloads: the standard-library templates against
-the closed forms they replace, plus the data a hand-written or external-library
-version of each workload needs.
+"""Closed-AST benchmark workloads: the standard-library templates, plus the data a
+hand-written or external-library version of each workload needs.
 
-Each workload is written once per spelling; everything but the spelling is the
-same, so a timing difference is the spelling's. Every document carries a state
+A workload with more than one spelling writes each; everything but the spelling
+is the same, so a timing difference is the spelling's. Every document carries a state
 per cell, defaulting to 0, whose derivative reads the looked-up value, so a
 right-hand-side call evaluates every lookup, and the query moves with `t`, so
 nothing is a build constant.
 
 * ``search_<sp>_K<k>``: Q queries ``x[q] = (c[q] + u[q]) + 0.001 t`` searched in
-  a k-knot const axis, ``D(u[q]) = r[q] - u[q]``. ``fn``: `fn interp.searchsorted`;
-  ``tpl``: the `lib/interp.esm` `searchsorted` template on the ascending axis
+  a k-knot const axis, ``D(u[q]) = r[q] - u[q]``. ``tpl``: the
+  `lib/interp.esm` `searchsorted` template on the ascending axis
   (the compilers' binary-search count); ``lin``: the same template on a
   shuffled copy of the axis. The template is a count of the knots below x,
   which does not depend on their order, so ``lin`` gives the same bits while
   the compilers fall back to a linear count.
-* ``linear_<sp>_K<k>``: the same queries through `interp.linear` (``fn``) or the
-  `linear` template (``tpl``) over a k-knot table.
-* ``bilinear_<sp>_K<nx>x<ny>``: queries ``(x[q], y[q])`` through
-  `interp.bilinear` or the `bilinear` template over an nx x ny table.
-* ``calendar_<sp>_H<h>``: h hourly timestamps
-  ``tq[h] = (T0 + 3600 (h - 1)) + (t + u[h])``, the nine `datetime.*` fields of
-  each summed in a fixed order, ``D(u[h]) = f[h] - u[h]``.
-* ``overlap_<manifold>_<sp>_N<n>``: the overlap areas of every source/target
+* ``linear_tpl_K<k>``: the same queries through the `linear` template over a
+  k-knot table.
+* ``bilinear_tpl_K<nx>x<ny>``: queries ``(x[q], y[q])`` through the `bilinear`
+  template over an nx x ny table.
+* ``calendar_tpl_H<h>``: h hourly timestamps
+  ``tq[h] = (T0 + 3600 (h - 1)) + (t + u[h])``, the nine `lib/calendar.esm`
+  fields of each summed in a fixed order, ``D(u[h]) = f[h] - u[h]``.
+* ``overlap_<manifold>_tpl_N<n>``: the overlap areas of every source/target
   cell pair whose bounding boxes meet (touching pairs included) of the n x n
   1-degree grid and the 2/3-degree grid over it (the regrid workload's pairs),
-  ``D(s[p]) = area[p]``, so the derivative is the area list. ``leaf``:
-  `polygon_intersection_area`; ``tpl``: the `lib/geometry.esm` template.
-* ``fastjx_<sp>_C<c>``: a workload shaped like Fast-JX photolysis over a grid
+  ``D(s[p]) = area[p]``, so the derivative is the area list, by the
+  `lib/geometry.esm` template.
+* ``fastjx_tpl_C<c>``: a workload shaped like Fast-JX photolysis over a grid
   of c cells, each with its own temperature ``T[c] = (Tc[c] + 0.001 t) + z[c]``:
-  180 `interp.linear` cross-section lookups per cell on 2- and 3-entry
+  180 `linear` template cross-section lookups per cell on 2- and 3-entry
   temperature axes (126 and 54, as in Fast-JX), each weighted by its
   wavelength bin's flux, summed into 12 outputs, and ``D(z[c])`` the sum of the
   outputs minus ``z[c]``. The tables are synthetic, of Fast-JX's magnitudes
-  (1e-21 to 1e-17, some all zero). ``fn``: `fn interp.linear`; ``tpl``: the
-  template.
-* ``size_<family>_<sp>_S<s>``: s independent scalar sites of one template
-  family (or its closed form), for build time against expression size.
-* ``size_mixed_<sp>_L<nl>B<nb>``: nl linear and nb bilinear sites in one
+  (1e-21 to 1e-17, some all zero).
+* ``size_<family>_tpl_S<s>``: s independent scalar sites of one template
+  family, for build time against expression size.
+* ``size_mixed_tpl_L<nl>B<nb>``: nl linear and nb bilinear sites in one
   document (written with the size family; ``--mix NL,NB`` for other counts).
 
 Each workload has a sidecar ``<workload>_<size>.data.json`` (the document name
@@ -67,7 +65,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
-ESM_VERSION = "1.2.0"
+ESM_VERSION = "2.0.0"
 T0 = 1767225600.0  # 2026-01-01T00:00:00Z
 QUERIES = 512
 
@@ -79,7 +77,7 @@ DEFAULTS = {
     "overlap": [6],
     "fastjx": [256],
     "size": [1, 8, 64],
-    # EarthSciModels' interpolation call sites: 420 interp.linear, 58 bilinear.
+    # EarthSciModels' interpolation call sites: 420 linear, 58 bilinear.
     "mix": [(420, 58)],
 }
 CALENDAR = ["year", "month", "day", "hour", "minute", "second", "day_of_year", "julian_day", "is_leap_year"]
@@ -182,19 +180,15 @@ def search_doc(sp, k):
         shuffled = list(axis)
         random.Random(300 + k).shuffle(shuffled)
         data["shuffled"] = shuffled
-    if sp == "fn":
-        look = op("fn", ix("x", "q"), const(axis), name="interp.searchsorted")
-    else:
-        look = apply("searchsorted", x=ix("x", "q"), xs=const(data.get("shuffled", axis)), n=k)
+    look = apply("searchsorted", x=ix("x", "q"), xs=const(data.get("shuffled", axis)), n=k)
     model = {
         "variables": {"u": unknown(["queries"], 0.0), "c": unknown(["queries"]), "x": unknown(["queries"]),
                       "r": unknown(["queries"])},
         "equations": [{"lhs": "c", "rhs": const(c)}, moving_query("x", "c"),
                       {"lhs": "r", "rhs": over(look, "q", "queries")}, relax("u", "r")],
     }
-    if sp != "fn":
-        model["expression_template_imports"] = std_imports([("interp", ["searchsorted"])])
-    what = {"fn": "fn interp.searchsorted", "tpl": "the searchsorted template, ascending axis",
+    model["expression_template_imports"] = std_imports([("interp", ["searchsorted"])])
+    what = {"tpl": "the searchsorted template, ascending axis",
             "lin": "the searchsorted template, shuffled axis"}[sp]
     return doc(f"search_{sp}_K{k}", f"{QUERIES} moving queries searched in a {k}-knot const axis by {what}.",
                {"queries": QUERIES}, model), data
@@ -204,19 +198,15 @@ def linear_doc(sp, k):
     axis = knots(k, 400 + k)
     tab = table(k, 500 + k)
     c = offsets(QUERIES, -1.0, k + 1.0, 600 + k)
-    if sp == "fn":
-        look = op("fn", const(tab), const(axis), ix("x", "q"), name="interp.linear")
-    else:
-        look = apply("linear", table=const(tab), axis=const(axis), x=ix("x", "q"), n=k)
+    look = apply("linear", table=const(tab), axis=const(axis), x=ix("x", "q"), n=k)
     model = {
         "variables": {"u": unknown(["queries"], 0.0), "c": unknown(["queries"]), "x": unknown(["queries"]),
                       "r": unknown(["queries"])},
         "equations": [{"lhs": "c", "rhs": const(c)}, moving_query("x", "c"),
                       {"lhs": "r", "rhs": over(look, "q", "queries")}, relax("u", "r")],
     }
-    if sp == "tpl":
-        model["expression_template_imports"] = std_imports([("interp", ["linear"])])
-    what = "fn interp.linear" if sp == "fn" else "the linear template"
+    model["expression_template_imports"] = std_imports([("interp", ["linear"])])
+    what = "the linear template"
     return doc(f"linear_{sp}_K{k}", f"{QUERIES} moving queries through a {k}-knot table by {what}.",
                {"queries": QUERIES}, model), {"axis": axis, "table": tab, "c": c}
 
@@ -228,11 +218,8 @@ def bilinear_doc(sp, nx, ny):
     tab = [[lattice(rng, -50.0, 50.0, 1.0 / 256) for _ in range(ny)] for _ in range(nx)]
     c = offsets(QUERIES, -1.0, nx + 1.0, 1000 + nx)
     d = offsets(QUERIES, -1.0, ny + 1.0, 1100 + ny)
-    if sp == "fn":
-        look = op("fn", const(tab), const(ax), const(ay), ix("x", "q"), ix("y", "q"), name="interp.bilinear")
-    else:
-        look = apply("bilinear", table=const(tab), axis_x=const(ax), axis_y=const(ay), x=ix("x", "q"),
-                     y=ix("y", "q"), nx=nx, ny=ny)
+    look = apply("bilinear", table=const(tab), axis_x=const(ax), axis_y=const(ay), x=ix("x", "q"),
+                 y=ix("y", "q"), nx=nx, ny=ny)
     model = {
         "variables": {"u": unknown(["queries"], 0.0), "c": unknown(["queries"]), "d": unknown(["queries"]),
                       "x": unknown(["queries"]), "y": unknown(["queries"]), "r": unknown(["queries"])},
@@ -240,9 +227,8 @@ def bilinear_doc(sp, nx, ny):
                       moving_query("x", "c"), moving_query("y", "d"),
                       {"lhs": "r", "rhs": over(look, "q", "queries")}, relax("u", "r")],
     }
-    if sp == "tpl":
-        model["expression_template_imports"] = std_imports([("interp", ["bilinear"])])
-    what = "fn interp.bilinear" if sp == "fn" else "the bilinear template"
+    model["expression_template_imports"] = std_imports([("interp", ["bilinear"])])
+    what = "the bilinear template"
     return doc(f"bilinear_{sp}_K{nx}x{ny}", f"{QUERIES} moving queries through a {nx}x{ny} table by {what}.",
                {"queries": QUERIES}, model), {"axis_x": ax, "axis_y": ay, "table": tab, "c": c, "d": d}
 
@@ -252,15 +238,15 @@ def bilinear_doc(sp, nx, ny):
 # ---------------------------------------------------------------------------
 
 
-def calendar_field(field, t, sp):
-    return op("fn", t, name="datetime." + field) if sp == "fn" else apply(field, t=t)
+def calendar_field(field, t):
+    return apply(field, t=t)
 
 
 def calendar_doc(sp, hours):
     t = ix("tq", "h")
-    total = calendar_field(CALENDAR[0], t, sp)
+    total = calendar_field(CALENDAR[0], t)
     for f in CALENDAR[1:]:
-        total = op("+", total, calendar_field(f, t, sp))
+        total = op("+", total, calendar_field(f, t))
     model = {
         "variables": {"u": unknown(["hours"], 0.0), "tq": unknown(["hours"]), "f": unknown(["hours"])},
         "equations": [
@@ -270,9 +256,8 @@ def calendar_doc(sp, hours):
             relax("u", "f", "h", "hours"),
         ],
     }
-    if sp == "tpl":
-        model["expression_template_imports"] = std_imports([("calendar", CALENDAR)])
-    what = "datetime.* fn calls" if sp == "fn" else "the lib/calendar.esm templates"
+    model["expression_template_imports"] = std_imports([("calendar", CALENDAR)])
+    what = "the lib/calendar.esm templates"
     return doc(f"calendar_{sp}_H{hours}",
                f"The nine calendar fields of {hours} hourly timestamps from 2026-01-01, summed in the order "
                f"{', '.join(CALENDAR)}, by {what}.", {"hours": hours}, model), {"T0": T0, "fields": CALENDAR}
@@ -322,9 +307,7 @@ def overlap_doc(manifold, sp, n):
          "area": unknown(["pairs"]), "s": unknown(["pairs"], 0.0)}
     eqs = [{"lhs": "ring_a", "rhs": const(a)}, {"lhs": "ring_b", "rhs": const(b)}]
     sets = {"pairs": len(a), "cell_verts": 4, "coord": 2}
-    if sp == "leaf":
-        area = op("polygon_intersection_area", ix("ring_a", "p"), ix("ring_b", "p"), manifold=manifold)
-    elif manifold == "planar":
+    if manifold == "planar":
         area = apply("overlap_area_planar", ring_a="ring_a", cell_a="p", nv_a=4, ring_b="ring_b", cell_b="p", nv_b=4)
     else:
         sets["xyz"] = 3
@@ -336,10 +319,9 @@ def overlap_doc(manifold, sp, n):
     eqs.append({"lhs": "area", "rhs": over(area, "p", "pairs")})
     eqs.append({"lhs": d_lhs("s", "p", "pairs"), "rhs": over(ix("area", "p"), "p", "pairs")})
     model = {"variables": v, "equations": eqs}
-    if sp == "tpl":
-        names = ["overlap_area_planar"] if manifold == "planar" else ["overlap_area_spherical", "lonlat_to_unit"]
-        model["expression_template_imports"] = std_imports([("geometry", names)])
-    what = "polygon_intersection_area" if sp == "leaf" else "the lib/geometry.esm template"
+    names = ["overlap_area_planar"] if manifold == "planar" else ["overlap_area_spherical", "lonlat_to_unit"]
+    model["expression_template_imports"] = std_imports([("geometry", names)])
+    what = "the lib/geometry.esm template"
     return doc(f"overlap_{manifold}_{sp}_N{n}",
                f"{manifold} overlap areas of the {len(a)} cell pairs whose bounding boxes meet, {n}x{n} 1-degree grid "
                f"against the 2/3-degree grid over it, by {what}.", sets, model), {"ring_a": a, "ring_b": b}
@@ -386,8 +368,7 @@ def fastjx_doc(sp, ncells):
         terms = []
         for w in range(FASTJX_BINS):
             tab, axis = looks[k * FASTJX_BINS + w]
-            look = (op("fn", const(tab), const(axis), T, name="interp.linear") if sp == "fn"
-                    else apply("linear", table=const(tab), axis=const(axis), x=T, n=len(axis)))
+            look = apply("linear", table=const(tab), axis=const(axis), x=T, n=len(axis))
             terms.append(op("*", flux[w], look))
         j = f"j{k + 1}"
         v[j] = unknown(["cells"])
@@ -396,12 +377,11 @@ def fastjx_doc(sp, ncells):
     eqs.append({"lhs": "jsum", "rhs": over(op("+", *outs), "c", "cells")})
     eqs.append(relax("z", "jsum", "c", "cells"))
     model = {"variables": v, "equations": eqs}
-    if sp == "tpl":
-        model["expression_template_imports"] = std_imports([("interp", ["linear"])])
+    model["expression_template_imports"] = std_imports([("interp", ["linear"])])
     n = len(looks)
-    what = "fn interp.linear" if sp == "fn" else "the linear template"
+    what = "the linear template"
     return doc(f"fastjx_{sp}_C{ncells}",
-               f"A Fast-JX-shaped workload over {ncells} cells of differing temperature: {n} interp.linear "
+               f"A Fast-JX-shaped workload over {ncells} cells of differing temperature: {n} linear-template "
                f"cross-section lookups per cell ({FASTJX_THREE} on 3-entry and {n - FASTJX_THREE} on 2-entry "
                f"temperature axes), weighted by a flux per wavelength bin into {FASTJX_OUTPUTS} outputs that are "
                f"summed, lookups by {what}.", {"cells": ncells}, model), {"Tc": tc, "lookups": n,
@@ -417,7 +397,7 @@ SIZE_FAMILIES = ["searchsorted", "linear", "bilinear", "calendar", "argmin", "ov
 
 def size_doc(family, sp, s, mix=None):
     """s independent scalar sites of `family`, each reading the scalar state u
-    (the argmin sites read constants only: the op requires them). With
+    (the argmin sites read constants only). With
     `mix = (nl, nb)` (family "mixed"), nl linear sites then nb bilinear ones."""
     rng = random.Random(77 + s)
     v = {"u": unknown(None, 0.0), "acc": unknown()}
@@ -433,40 +413,32 @@ def size_doc(family, sp, s, mix=None):
             axis = knots(8, 1000 * i + 1)
             xi = op("+", 3.0 + (i % 5) * 0.37, x)
             if family == "searchsorted":
-                site = (op("fn", xi, const(axis), name="interp.searchsorted") if sp == "fn"
-                        else apply("searchsorted", x=xi, xs=const(axis), n=8))
+                site = apply("searchsorted", x=xi, xs=const(axis), n=8)
             else:
                 tab = table(8, 1000 * i + 2)
-                site = (op("fn", const(tab), const(axis), xi, name="interp.linear") if sp == "fn"
-                        else apply("linear", table=const(tab), axis=const(axis), x=xi, n=8))
+                site = apply("linear", table=const(tab), axis=const(axis), x=xi, n=8)
             file, names = "interp", [family]
         elif family == "bilinear":
             ax, ay = knots(8, 1000 * i + 3), knots(8, 1000 * i + 4)
             tab = [[lattice(rng, -5.0, 5.0, 1.0 / 256) for _ in range(8)] for _ in range(8)]
             xi, yi = op("+", 2.5, x), op("+", 4.25, x)
-            site = (op("fn", const(tab), const(ax), const(ay), xi, yi, name="interp.bilinear") if sp == "fn"
-                    else apply("bilinear", table=const(tab), axis_x=const(ax), axis_y=const(ay), x=xi, y=yi, nx=8, ny=8))
+            site = apply("bilinear", table=const(tab), axis_x=const(ax), axis_y=const(ay), x=xi, y=yi, nx=8, ny=8)
             file, names = "interp", ["bilinear"]
         elif family == "calendar":
             field = CALENDAR[(i - 1) % len(CALENDAR)]
-            site = calendar_field(field, op("+", T0 + 86400.0 * 37 * i, op("*", 1000, x)), sp)
+            site = calendar_field(field, op("+", T0 + 86400.0 * 37 * i, op("*", 1000, x)))
             file, names = "calendar", CALENDAR
         elif family == "argmin":
             g = f"g{i}"
             v[g] = unknown(["gens"])
             eqs.append({"lhs": g, "rhs": const([lattice(rng, 0.0, 1.0, 1.0 / 64) for _ in range(16)])})
             sets["gens"] = 16
-            # A build-time query: the argmin op requires constant inputs.
+            # A build-time query over constant inputs.
             xi = 0.01 * (i % 97) + 0.003
             sets["one"] = 1
-            if sp == "op":
-                dk = op("-", ix(g, "k"), xi)
-                site = op("argmin", g, arg="k", ranges={"k": {"from": "gens"}}, expr=op("*", dk, dk))
-            else:
-                dk = op("-", ix(g, "k_argmin_1"), xi)
-                site = apply("argmin", f=op("*", dk, dk), n=16)
-            # The argmin op is defined inside a `faq` (as in the nearest workload):
-            # each site is a one-cell array.
+            dk = op("-", ix(g, "k_argmin_1"), xi)
+            site = apply("argmin", f=op("*", dk, dk), n=16)
+            # Each site is a one-cell array (as in the nearest workload).
             r = f"r{i}"
             v[r] = unknown(["one"])
             eqs.append({"lhs": ix(r, "j"), "rhs": faq(site, ["j"], {"j": {"from": "one"}}, args=[g])})
@@ -475,7 +447,7 @@ def size_doc(family, sp, s, mix=None):
             continue
         else:  # overlap_planar
             # One pair per site, each ring a one-cell stack read at the cell of
-            # a one-cell faq: the leaf takes only a ring read at a loop symbol.
+            # a one-cell faq.
             sets.update({"cell_verts": 4, "coord": 2, "one": 1})
             if i == 1:
                 pa, pb = overlap_pairs(12)
@@ -485,8 +457,7 @@ def size_doc(family, sp, s, mix=None):
             for name, ring in ((ra, pairs[i - 1][0]), (rb, pairs[i - 1][1])):
                 v[name] = unknown(["one", "cell_verts", "coord"])
                 eqs.append({"lhs": name, "rhs": const([ring])})
-            area = (op("polygon_intersection_area", ix(ra, "j"), ix(rb, "j"), manifold="planar") if sp == "leaf"
-                    else apply("overlap_area_planar", ring_a=ra, cell_a="j", nv_a=4, ring_b=rb, cell_b="j", nv_b=4))
+            area = apply("overlap_area_planar", ring_a=ra, cell_a="j", nv_a=4, ring_b=rb, cell_b="j", nv_b=4)
             # The area is build-time geometry (constant rings only); the site
             # scales it by the state outside that faq.
             r = f"r{i}"
@@ -504,16 +475,12 @@ def size_doc(family, sp, s, mix=None):
     model = {"variables": v, "equations": eqs}
     if mix is not None:
         names = ["linear", "bilinear"]
-    if sp == "tpl":
-        model["expression_template_imports"] = std_imports([(file, names)])
+    model["expression_template_imports"] = std_imports([(file, names)])
     if mix is not None:
         return doc(f"size_mixed_{sp}_L{mix[0]}B{mix[1]}",
                    f"{mix[0]} independent scalar linear sites and {mix[1]} bilinear ones ({sp} spelling).",
                    sets, model), None
     return doc(f"size_{family}_{sp}_S{s}", f"{s} independent scalar {family} sites ({sp} spelling).", sets, model), None
-
-
-CLOSED = {"searchsorted": "fn", "linear": "fn", "bilinear": "fn", "calendar": "fn", "argmin": "op", "overlap_planar": "leaf"}
 
 
 # Family name (as `--only` and the harnesses spell it) -> its size option.
@@ -524,38 +491,31 @@ FAMILIES = {"search": "search", "linear": "linear", "bilinear": "bilinear", "cal
 def documents(a):
     docs = {}
     for k in a.search:
-        for sp in ("fn", "tpl", "lin"):
+        for sp in ("tpl", "lin"):
             docs[f"search_{sp}_K{k}"] = search_doc(sp, k)
     for k in a.linear:
-        for sp in ("fn", "tpl"):
-            docs[f"linear_{sp}_K{k}"] = linear_doc(sp, k)
+        docs[f"linear_tpl_K{k}"] = linear_doc("tpl", k)
     for nx, ny in a.bilinear:
-        for sp in ("fn", "tpl"):
-            docs[f"bilinear_{sp}_K{nx}x{ny}"] = bilinear_doc(sp, nx, ny)
+        docs[f"bilinear_tpl_K{nx}x{ny}"] = bilinear_doc("tpl", nx, ny)
     for h in a.hours:
-        for sp in ("fn", "tpl"):
-            docs[f"calendar_{sp}_H{h}"] = calendar_doc(sp, h)
+        docs[f"calendar_tpl_H{h}"] = calendar_doc("tpl", h)
     for n in a.overlap:
         for mf in ("planar", "spherical"):
-            for sp in ("leaf", "tpl"):
-                docs[f"overlap_{mf}_{sp}_N{n}"] = overlap_doc(mf, sp, n)
+            docs[f"overlap_{mf}_tpl_N{n}"] = overlap_doc(mf, "tpl", n)
     for c in a.fastjx_cells:
-        for sp in ("fn", "tpl"):
-            docs[f"fastjx_{sp}_C{c}"] = fastjx_doc(sp, c)
+        docs[f"fastjx_tpl_C{c}"] = fastjx_doc("tpl", c)
     for fam in SIZE_FAMILIES:
         for s in a.size:
-            for sp in (CLOSED[fam], "tpl"):
-                docs[f"size_{fam}_{sp}_S{s}"] = size_doc(fam, sp, s)
+            docs[f"size_{fam}_tpl_S{s}"] = size_doc(fam, "tpl", s)
     for nl, nb in a.mix:
-        for sp in ("fn", "tpl"):
-            docs[f"size_mixed_{sp}_L{nl}B{nb}"] = size_doc("mixed", sp, 0, mix=(nl, nb))
+        docs[f"size_mixed_tpl_L{nl}B{nb}"] = size_doc("mixed", "tpl", 0, mix=(nl, nb))
     return docs
 
 
 def data_stem(name):
     """The sidecar's name: the document's without its spelling (and manifold),
     shared by every spelling of the workload."""
-    parts = [p for p in name.split("_") if p not in ("fn", "tpl", "lin", "leaf", "op", "planar", "spherical")]
+    parts = [p for p in name.split("_") if p not in ("tpl", "lin", "planar", "spherical")]
     return "_".join(parts)
 
 

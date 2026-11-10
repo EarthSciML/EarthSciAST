@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""Elementwise template application (esm-spec §9.6.11) against the forms it replaces.
+"""Elementwise template application (esm-spec §9.6.11) against the per-cell `faq`.
 
-Each workload is written three times, the same model in each, so a timing
-difference is the spelling's:
+Each workload is written twice, the same model in each, so a timing difference
+is the spelling's:
 
-* ``fn``  - the closed function (``interp.linear`` / ``interp.bilinear`` /
-  ``interp.searchsorted``) applied to an array query, the form models used
-  before the elementwise rule;
 * ``tpl`` - the ``lib/interp.esm`` template applied to the same array query,
   defining an observed declared without a shape, which the build lifts into a
   per-cell ``faq`` (the elementwise lift);
@@ -30,10 +27,6 @@ Workloads (``<case>_<spelling>_<size>.esm``):
   parameter / both x and y over ``[c]``, a TX x TY table;
 * ``ssorted`` - ``searchsorted`` over a ``[c]`` query.
 
-The ``levcol`` ``fn`` spelling is not a baseline today: Julia refuses it
-(``E_TREEWALK_INDEX_NDIM``) and Rust evaluates the replicated column to NaN,
-under both compilers. Compare its ``tpl`` against ``faq`` only.
-
 No document is committed: the harnesses run this script when given no
 directory. It writes to ``--out`` (default ``$TEMPLATE_ARRAY_ARGS_DIR``, else
 ``template_array_args`` under ``$TMPDIR``). The template imports name the
@@ -56,8 +49,8 @@ import os
 import sys
 import tempfile
 
-ESM_VERSION = "1.2.0"
-SPELLINGS = ("fn", "tpl", "faq")
+ESM_VERSION = "2.0.0"
+SPELLINGS = ("tpl", "faq")
 
 
 def op(o, *args, **fields):
@@ -102,13 +95,9 @@ def lookup(kind, spelling, x, y=None, t=10, ty=None):
     """The lookup of query x (and y) in the given spelling; x / y are expressions."""
     if kind == "linear":
         tb, ax = const(table(t)), const(axis(t))
-        if spelling == "fn":
-            return op("fn", tb, ax, x, name="interp.linear")
         return apply("linear", table=tb, axis=ax, x=x, n=t)
     if kind == "searchsorted":
         ax = const(axis(t))
-        if spelling == "fn":
-            return op("fn", x, ax, name="interp.searchsorted")
         return apply("searchsorted", x=x, xs=ax, n=t)
     if kind == "bilinear":
         tb = const(
@@ -121,8 +110,6 @@ def lookup(kind, spelling, x, y=None, t=10, ty=None):
             ]
         )
         axx, axy = const(axis(t)), const([v * 0.5 for v in axis(ty)])
-        if spelling == "fn":
-            return op("fn", tb, axx, axy, x, y, name="interp.bilinear")
         return apply("bilinear", table=tb, axis_x=axx, axis_y=axy, x=x, y=y, nx=t, ny=ty)
     raise ValueError(kind)
 
@@ -238,10 +225,8 @@ def document(case, spelling, size, out_dir, lib):
             eqs.append(relax("v", full, op("*", 0.2, ix("L", *cols))))
 
     model = {"variables": variables, "equations": eqs}
-    if spelling != "fn":
-        model["expression_template_imports"] = [{"ref": interp_ref(lib, out_dir), "only": [kind]}]
+    model["expression_template_imports"] = [{"ref": interp_ref(lib, out_dir), "only": [kind]}]
     what = {
-        "fn": f"fn interp.{kind} on an array query",
         "tpl": f"the lib/interp.esm {kind} template on an array query (elementwise, esm-spec 9.6.11)",
         "faq": f"a hand-written per-cell faq over the {kind} template",
     }[spelling]

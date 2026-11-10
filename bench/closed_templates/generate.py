@@ -1,39 +1,30 @@
 #!/usr/bin/env python3
-"""Template-versus-closed-form workloads for the phase-3 standard-library templates.
+"""Workloads for the phase-3 standard-library templates of `lib/*.esm`.
 
-Each workload is written twice, once with the closed form it replaces (an `fn`
-call, a geometry leaf, a relational op) and once with the pure-AST template of
-`lib/*.esm` applied in its place. Everything else in the two documents is the
-same, so a timing difference is the template's.
-
-* ``solar_year_<spelling>_H<h>``: `lib/solar.esm` over a year of hourly
-  timestamps. Each solar observed becomes an array over an `hours` index set
+* ``solar_year_tpl_H<h>``: `lib/solar.esm` over a year of hourly timestamps.
+  Each solar observed becomes an array over an `hours` index set
   (t_utc[h] = T0 + 3600 (h - 1) + t, so every call moves every timestamp and
   nothing is a build constant), and a state per hour relaxes toward the zenith
-  angle. `fn` spelling: `fn datetime.*`; `tpl`: the `lib/calendar.esm`
-  templates.
-* ``regrid_<manifold>_<spelling>_N<n>``: conservative regrid of an n x n
-  lat-lon grid of 1-degree cells onto a 2/3-degree grid (the
-  `tests/conformance/scaling` `regrid` family's assembly: bin-skolem broad
-  phase, overlap area per candidate pair, row-sum normalisation, applied every
-  call). Every target cell lies inside one broad-phase bin, so the candidate
-  set keeps every overlapping pair. `leaf` spelling: `polygon_intersection_area`;
-  `tpl`: the `lib/geometry.esm` overlap-area template.
-* ``nearest_<spelling>_P<p>_G<g>``: the nearest-generator assignment of
-  `tests/conformance/value_invention_geometry` at p points and g generators,
-  feeding a right-hand side through a gather. `op` spelling: `argmin`; `tpl`:
-  the `lib/relational.esm` argmin template.
-* ``mesh_rank_<spelling>_E<e>``: edge enumeration of a triangulated n x n
-  vertex-grid mesh with e unique edges (the MPAS-scale rank workload, modelled
-  on `edge_enumeration_*` and `skolem_distinct_rank`): a `distinct` over every
-  face's three vertex pairs invents the edge set, each edge gets its dense id,
-  `n_edges` grows by the set's size, a state per edge id (an interval set of
-  the known edge count, as `edge_enumeration_ode`'s `edge_ids`) relaxes toward
-  its id and a state per face toward the sum of its edges' states, read through
-  each face's edge ids. `op` spelling: a
-  `skolem` key, `rank`, and the face edge ids as mesh connectivity data (what
-  an MPAS mesh file supplies); `tpl`: an `edge_key` key, the loop index, and
-  the face edge ids computed by `rank_of_set` over the derived set.
+  angle, through the `lib/calendar.esm` templates.
+* ``regrid_<manifold>_tpl_N<n>``: conservative regrid of an n x n lat-lon grid
+  of 1-degree cells onto a 2/3-degree grid (the `tests/conformance/scaling`
+  `regrid` family's assembly: a broad phase joining equal integer bin columns,
+  the `lib/geometry.esm` overlap area per candidate pair, row-sum
+  normalisation, applied every call). Every target cell lies inside one
+  broad-phase bin, so the candidate set keeps every overlapping pair.
+* ``nearest_tpl_P<p>_G<g>``: the nearest-generator assignment of
+  `tests/conformance/value_invention_geometry` at p points and g generators by
+  the `lib/relational.esm` argmin template, feeding a right-hand side through a
+  gather.
+* ``mesh_rank_tpl_E<e>``: edge enumeration of a triangulated n x n vertex-grid
+  mesh with e unique edges (the MPAS-scale rank workload, modelled on
+  `edge_enumeration_*` and `skolem_distinct_rank`): a `distinct` over every
+  face's three vertex pairs keyed by `edge_key` invents the edge set, each edge
+  gets its dense id (the loop index), `n_edges` grows by the set's size, a
+  state per edge id (an interval set of the known edge count, as
+  `edge_enumeration_ode`'s `edge_ids`) relaxes toward its id and a state per
+  face toward the sum of its edges' states, read through each face's edge ids
+  (`rank_of_set` over the derived set).
 
 Nothing here is committed: the harnesses call this script, writing into
 ``--out`` (default ``$CLOSED_TEMPLATES_DIR``, else ``closed_templates`` under
@@ -61,7 +52,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
-ESM_VERSION = "1.2.0"
+ESM_VERSION = "2.0.0"
 T0 = 1767225600.0  # 2026-01-01T00:00:00Z
 
 DEFAULTS = {
@@ -126,18 +117,13 @@ def strip_units(e):
 
 
 def calendar_spelling(e, spelling):
-    """Every datetime field call in `e` as an `fn` call or a calendar template."""
+    """`e` with every calendar field call a calendar template."""
     if isinstance(e, list):
         return [calendar_spelling(v, spelling) for v in e]
     if not isinstance(e, dict):
         return e
-    if e.get("op") == "fn" and e.get("name", "").startswith("datetime."):
-        field = e["name"].split(".", 1)[1]
-        arg = calendar_spelling(e["args"][0], spelling)
-        return e if spelling == "fn" else apply(field, t=arg)
     if e.get("op") == "apply_expression_template" and e.get("name") in CALENDAR:
-        arg = calendar_spelling(e["bindings"]["t"], spelling)
-        return apply(e["name"], t=arg) if spelling == "tpl" else op("fn", arg, name="datetime." + e["name"])
+        return apply(e["name"], t=calendar_spelling(e["bindings"]["t"], spelling))
     return {k: calendar_spelling(v, spelling) for k, v in e.items()}
 
 
@@ -179,12 +165,11 @@ def solar_year(spelling, hours, lib, out_dir):
     eqs.append({"lhs": faq_lhs("z", ["h"], H),
                 "rhs": faq(op("*", 0.01, op("-", ix("solar_zenith_angle", "h"), ix("z", "h"))), ["h"], H)})
     model = {"variables": variables, "equations": eqs}
-    if spelling == "tpl":
-        model["expression_template_imports"] = imports(lib, out_dir, [("calendar.esm", CALENDAR)])
+    model["expression_template_imports"] = imports(lib, out_dir, [("calendar.esm", CALENDAR)])
     return {
         "esm": ESM_VERSION,
         "metadata": {"name": f"solar_year_{spelling}_H{hours}",
-                     "description": f"lib/solar.esm over {hours} hourly timestamps from 2026-01-01, datetime fields as {'fn calls' if spelling == 'fn' else 'lib/calendar.esm templates'}."},
+                     "description": f"lib/solar.esm over {hours} hourly timestamps from 2026-01-01, calendar fields as lib/calendar.esm templates."},
         "index_sets": {"hours": {"kind": "interval", "size": hours}},
         "models": {"SolarYear": model},
     }
@@ -235,30 +220,26 @@ def regrid(manifold, spelling, n, lib, out_dir):
     tgt = latlon_cells(te, ta)
     ns, nt = len(src), len(tgt)
     S, T = {"from": "src_cells"}, {"from": "tgt_cells"}
-    join = [{"on": [["src_bin", "tgt_bin"]]}]
+    join = [{"on": [["src_bx", "tgt_bx"], ["src_by", "tgt_by"]]}]
     alive = op(">", ix("A_ij", "i", "j"), "atol")
 
     def bbox_min(var, cells, poly, sym, coord):
         return {"lhs": var, "rhs": faq(ix(poly, sym, "v", coord), [sym], {sym: {"from": cells}, "v": {"from": "cell_verts"}},
                                          reduce="min")}
 
-    def binkey(var, lon, lat, sym, cells):
-        return {"lhs": ix(var, sym), "rhs": faq(
-            {"op": "skolem", "label": "bin", "args": [op("floor", op("/", ix(lon, sym), "dx")),
-                                                      op("floor", op("/", ix(lat, sym), "dy"))]},
-            [sym], {sym: {"from": cells}}, semiring="sum_product")}
+    def bincol(var, coord, width, sym, cells):
+        return {"lhs": ix(var, sym), "rhs": faq(op("floor", op("/", ix(coord, sym), width)),
+                                                [sym], {sym: {"from": cells}}, semiring="sum_product")}
 
-    if spelling == "leaf":
-        area = op("polygon_intersection_area", ix("src_poly", "i"), ix("tgt_poly", "j"), manifold=manifold)
-    else:
-        area = overlap_template(manifold)
+    area = overlap_template(manifold)
     u = lambda shape=None, d=None: {k: v for k, v in (("type", "unknown"), ("shape", shape), ("default", d)) if v is not None}
     v = {
         "src_poly": u(["src_cells", "cell_verts", "coord"]),
         "tgt_poly": u(["tgt_cells", "cell_verts", "coord"]),
         "src_lon": u(["src_cells"]), "src_lat": u(["src_cells"]),
         "tgt_lon": u(["tgt_cells"]), "tgt_lat": u(["tgt_cells"]),
-        "src_bin": u(["src_cells"]), "tgt_bin": u(["tgt_cells"]),
+        "src_bx": u(["src_cells"]), "src_by": u(["src_cells"]),
+        "tgt_bx": u(["tgt_cells"]), "tgt_by": u(["tgt_cells"]),
         "A_ij": u(["src_cells", "tgt_cells"]), "A_j": u(["tgt_cells"]),
         "W_ij": u(["src_cells", "tgt_cells"]), "F_rg": u(["tgt_cells"]),
         "F_src": u(["src_cells"], 10.0), "F_tgt": u(["tgt_cells"], 0.0),
@@ -272,8 +253,10 @@ def regrid(manifold, spelling, n, lib, out_dir):
         bbox_min("src_lat", "src_cells", "src_poly", "i", 2),
         bbox_min("tgt_lon", "tgt_cells", "tgt_poly", "j", 1),
         bbox_min("tgt_lat", "tgt_cells", "tgt_poly", "j", 2),
-        binkey("src_bin", "src_lon", "src_lat", "i", "src_cells"),
-        binkey("tgt_bin", "tgt_lon", "tgt_lat", "j", "tgt_cells"),
+        bincol("src_bx", "src_lon", "dx", "i", "src_cells"),
+        bincol("src_by", "src_lat", "dy", "i", "src_cells"),
+        bincol("tgt_bx", "tgt_lon", "dx", "j", "tgt_cells"),
+        bincol("tgt_by", "tgt_lat", "dy", "j", "tgt_cells"),
         {"lhs": "A_ij", "rhs": faq(area, ["i", "j"], {"i": S, "j": T}, semiring="sum_product", join=join)},
         {"lhs": "A_j", "rhs": faq(ix("A_ij", "i", "j"), ["j"], {"i": S, "j": T}, semiring="sum_product", join=join, filter=alive)},
         {"lhs": "W_ij", "rhs": faq(op("/", ix("A_ij", "i", "j"), ix("A_j", "j")), ["i", "j"], {"i": S, "j": T},
@@ -284,18 +267,17 @@ def regrid(manifold, spelling, n, lib, out_dir):
         {"lhs": faq_lhs("F_tgt", ["j"], {"j": T}), "rhs": faq(op("-", ix("F_rg", "j"), ix("F_tgt", "j")), ["j"], {"j": T})},
     ]
     names = [GEOMETRY_TEMPLATE[manifold]]
-    if spelling == "tpl" and manifold == "spherical":
+    if manifold == "spherical":
         v["src_xyz"] = u(["src_cells", "cell_verts", "xyz"])
         v["tgt_xyz"] = u(["tgt_cells", "cell_verts", "xyz"])
         eqs[2:2] = [unit_stack("src_xyz", "src_poly", "src_cells"), unit_stack("tgt_xyz", "tgt_poly", "tgt_cells")]
         names.append("lonlat_to_unit")
     model = {"variables": v, "equations": eqs}
-    if spelling == "tpl":
-        model["expression_template_imports"] = imports(lib, out_dir, [("geometry.esm", names)])
+    model["expression_template_imports"] = imports(lib, out_dir, [("geometry.esm", names)])
     return {
         "esm": ESM_VERSION,
         "metadata": {"name": f"regrid_{manifold}_{spelling}_N{n}",
-                     "description": f"{manifold} conservative regrid of an {n}x{n} 1-degree lat-lon grid onto the 2/3-degree grid over it, overlap areas by {'polygon_intersection_area' if spelling == 'leaf' else 'the lib/geometry.esm template'}."},
+                     "description": f"{manifold} conservative regrid of an {n}x{n} 1-degree lat-lon grid onto the 2/3-degree grid over it, overlap areas by the lib/geometry.esm template."},
         "index_sets": {"coord": {"kind": "interval", "size": 2}, "xyz": {"kind": "interval", "size": 3}, "cell_verts": {"kind": "interval", "size": 4},
                        "src_cells": {"kind": "interval", "size": ns}, "tgt_cells": {"kind": "interval", "size": nt}},
         "models": {"Regrid": model},
@@ -330,10 +312,7 @@ def nearest(spelling, p, g, lib, out_dir):
         return op("+", op("*", dx, dx), op("*", dy, dy))
 
     P = {"i": {"from": "points"}}
-    if spelling == "op":
-        assign = op("argmin", "px", "py", "gx", "gy", arg="g", ranges={"g": {"from": "generators"}}, expr=dist("g"))
-    else:
-        assign = apply("argmin", f=dist(ARGMIN_SYMBOL), n=g)
+    assign = apply("argmin", f=dist(ARGMIN_SYMBOL), n=g)
     v = {k: {"type": "unknown", "shape": [s]} for k, s in
          (("px", "points"), ("py", "points"), ("gx", "generators"), ("gy", "generators"), ("assign", "points"))}
     v["w"] = {"type": "unknown", "shape": ["points"], "default": 0.0}
@@ -345,12 +324,11 @@ def nearest(spelling, p, g, lib, out_dir):
          "rhs": faq(op("-", ix("gx", ix("assign", "i")), ix("w", "i")), ["i"], P, args=["gx", "assign"])},
     ]
     model = {"variables": v, "equations": eqs}
-    if spelling == "tpl":
-        model["expression_template_imports"] = imports(lib, out_dir, [("relational.esm", ["argmin"])])
+    model["expression_template_imports"] = imports(lib, out_dir, [("relational.esm", ["argmin"])])
     return {
         "esm": ESM_VERSION,
         "metadata": {"name": f"nearest_{spelling}_P{p}_G{g}",
-                     "description": f"nearest-generator assignment of {p} points among {g} generators by {'the argmin op' if spelling == 'op' else 'the lib/relational.esm argmin template'}, feeding a gather."},
+                     "description": f"nearest-generator assignment of {p} points among {g} generators by the lib/relational.esm argmin template, feeding a gather."},
         "index_sets": {"points": {"kind": "interval", "size": p}, "generators": {"kind": "interval", "size": g}},
         "models": {"Nearest": model},
     }
@@ -403,24 +381,15 @@ def mesh_rank(spelling, n, lib, out_dir):
     v["q"] = {"type": "unknown", "shape": ["faces"], "default": 0.0}
     v["q_in"] = {"type": "unknown", "shape": ["faces"]}
     a, b = ix("edge_lo", "f", "le"), ix("edge_hi", "f", "le")
-    if spelling == "op":
-        key = op("skolem", a, b, label="edge")
-        dense = op("rank", "edges")
-        face_edge = "edges_on_face"
-        keys = sorted({k for f in faces for k in f})
-        rank = {k: r + 1 for r, k in enumerate(keys)}
-        v[face_edge] = {"type": "unknown", "shape": ["faces", "local_edges"]}
-        extra = [{"lhs": face_edge, "rhs": const([[rank[k] for k in f] for f in faces])}]
-    else:
-        key = apply("edge_key", u=a, v=b, lo=1, n=nv)
-        dense = op("-", "e", 1)
-        face_edge = "face_edge_rank"
-        v["edge_members"] = {"type": "parameter", "shape": ["edges"], "default": 0.0}
-        v[face_edge] = {"type": "unknown", "shape": ["faces", "local_edges"]}
-        extra = [{"lhs": ix(face_edge, "f", "le"),
-                  "rhs": faq(apply("rank_of_set", x=apply("edge_key", u=a, v=b, lo=1, n=nv),
-                                   members="edge_members", S="edges"),
-                             ["f", "le"], FL, args=["edge_lo", "edge_hi", "edge_members"])}]
+    key = apply("edge_key", u=a, v=b, lo=1, n=nv)
+    dense = op("-", "e", 1)
+    face_edge = "face_edge_rank"
+    v["edge_members"] = {"type": "parameter", "shape": ["edges"], "default": 0.0}
+    v[face_edge] = {"type": "unknown", "shape": ["faces", "local_edges"]}
+    extra = [{"lhs": ix(face_edge, "f", "le"),
+              "rhs": faq(apply("rank_of_set", x=apply("edge_key", u=a, v=b, lo=1, n=nv),
+                               members="edge_members", S="edges"),
+                         ["f", "le"], FL, args=["edge_lo", "edge_hi", "edge_members"])}]
     eqs = [
         {"lhs": "edge_lo", "rhs": const(lo)}, {"lhs": "edge_hi", "rhs": const(hi)},
         {"lhs": ix("edge_exists", "e"),
@@ -437,17 +406,13 @@ def mesh_rank(spelling, n, lib, out_dir):
         {"lhs": faq_lhs("q", ["f"], F), "rhs": faq(op("-", ix("q_in", "f"), ix("q", "f")), ["f"], F)},
     ]
     model = {"variables": v, "equations": eqs}
-    edges = {"kind": "derived", "from_faq": "edge_set"}
-    if spelling == "tpl":
-        model["expression_template_imports"] = imports(lib, out_dir, [("relational.esm", ["edge_key", "rank_of_set"])])
-        edges["member_factor"] = "edge_members"
+    edges = {"kind": "derived", "from_faq": "edge_set", "member_factor": "edge_members"}
+    model["expression_template_imports"] = imports(lib, out_dir, [("relational.esm", ["edge_key", "rank_of_set"])])
     return {
         "esm": ESM_VERSION,
         "metadata": {"name": f"mesh_rank_{spelling}_E{ne}",
                      "description": f"edge enumeration of a {n} x {n} triangulated grid ({len(faces)} faces, {ne} unique edges) by "
-                     + ("a skolem key and rank, the face edge ids given as connectivity data"
-                        if spelling == "op" else
-                        "an edge_key key and the loop index, the face edge ids by rank_of_set over the derived set")
+                     + "an edge_key key and the loop index, the face edge ids by rank_of_set over the derived set"
                      + "; a state per edge id and per face, the face's read through its edge ids."},
         "index_sets": {"faces": {"kind": "interval", "size": len(faces)},
                        "local_edges": {"kind": "interval", "size": 3}, "edges": edges,
@@ -457,7 +422,7 @@ def mesh_rank(spelling, n, lib, out_dir):
 
 
 # ---------------------------------------------------------------------------
-# The scaling family's regrid documents, with the template in the leaf's place.
+# The scaling family's regrid documents, on either manifold.
 # ---------------------------------------------------------------------------
 
 SCALING = os.path.join(REPO, "tests", "conformance", "scaling", "fixtures", "regrid")
@@ -465,26 +430,22 @@ SCALING = os.path.join(REPO, "tests", "conformance", "scaling", "fixtures", "reg
 
 def scaling_regrid(manifold, spelling, n, lib, out_dir):
     """tests/conformance/scaling/fixtures/regrid/regrid_N<n>.esm on `manifold`,
-    its overlap areas by the leaf or by the lib/geometry.esm template."""
+    its overlap areas by the lib/geometry.esm template."""
     d = json.load(open(os.path.join(SCALING, f"regrid_N{n}.esm")))
     d["esm"] = ESM_VERSION
     d["metadata"]["name"] = f"regrid_scaling_{manifold}_{spelling}_N{n}"
     m = d["models"]["Regrid"]
     for e in m["equations"]:
         if e["lhs"] == "A_ij":
-            if spelling == "leaf":
-                e["rhs"]["expr"]["manifold"] = manifold
-            else:
-                e["rhs"]["expr"] = overlap_template(manifold)
-    if spelling == "tpl":
-        names = [GEOMETRY_TEMPLATE[manifold]]
-        if manifold == "spherical":
-            d["index_sets"]["xyz"] = {"kind": "interval", "size": 3}
-            for xyz, poly, cells in (("src_xyz", "src_poly", "src_cells"), ("tgt_xyz", "tgt_poly", "tgt_cells")):
-                m["variables"][xyz] = {"type": "unknown", "units": "1", "shape": [cells, "cell_verts", "xyz"]}
-                m["equations"].insert(2, unit_stack(xyz, poly, cells))
-            names.append("lonlat_to_unit")
-        m["expression_template_imports"] = imports(lib, out_dir, [("geometry.esm", names)])
+            e["rhs"]["expr"] = overlap_template(manifold)
+    names = [GEOMETRY_TEMPLATE[manifold]]
+    if manifold == "spherical":
+        d["index_sets"]["xyz"] = {"kind": "interval", "size": 3}
+        for xyz, poly, cells in (("src_xyz", "src_poly", "src_cells"), ("tgt_xyz", "tgt_poly", "tgt_cells")):
+            m["variables"][xyz] = {"type": "unknown", "units": "1", "shape": [cells, "cell_verts", "xyz"]}
+            m["equations"].insert(2, unit_stack(xyz, poly, cells))
+        names.append("lonlat_to_unit")
+    m["expression_template_imports"] = imports(lib, out_dir, [("geometry.esm", names)])
     return d
 
 
@@ -492,20 +453,20 @@ def documents(out_dir, lib, hours, ns, near, manifolds=("planar", "spherical"), 
     docs = {}
     for n in scaling:
         for mf in manifolds:
-            for s in ("leaf", "tpl"):
+            for s in ("tpl",):
                 docs[f"regrid_scaling_{mf}_{s}_N{n}.esm"] = scaling_regrid(mf, s, n, lib, out_dir)
     for h in hours:
-        for s in ("fn", "tpl"):
+        for s in ("tpl",):
             docs[f"solar_year_{s}_H{h}.esm"] = solar_year(s, h, lib, out_dir)
     for n in ns:
         for mf in manifolds:
-            for s in ("leaf", "tpl"):
+            for s in ("tpl",):
                 docs[f"regrid_{mf}_{s}_N{n}.esm"] = regrid(mf, s, n, lib, out_dir)
     for p, g in near:
-        for s in ("op", "tpl"):
+        for s in ("tpl",):
             docs[f"nearest_{s}_P{p}_G{g}.esm"] = nearest(s, p, g, lib, out_dir)
     for n in meshes:
-        for s in ("op", "tpl"):
+        for s in ("tpl",):
             docs[f"mesh_rank_{s}_E{mesh_edge_count(n)}.esm"] = mesh_rank(s, n, lib, out_dir)
     return docs
 

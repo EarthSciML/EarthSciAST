@@ -1,13 +1,12 @@
-//! Closed-AST phase-4 benchmarks, Rust tape side.
+//! Closed-AST template benchmarks, Rust tape side.
 //!
 //! Times the documents `bench/closed_templates/generate_p4.py` writes (and
-//! `generate.py`'s `nearest_*` pair) under `Compiler::Native`: one right-hand-side
-//! call of each spelling, its build, and, where the workload has one, a
-//! hand-written loop and an external library computing the same derivative
-//! from the document's sidecar data. Every spelling's derivative is checked
-//! against the closed form's bits (or, for the geometry leaf and the external
-//! libraries, by its largest difference), and the template's against the
-//! per-cell oracle's.
+//! `generate.py`'s `nearest_tpl_*`) under `Compiler::Native`: one right-hand-side
+//! call of each template spelling, its build, and, where the workload has one,
+//! a hand-written loop and an external library computing the same derivative
+//! from the document's sidecar data. The hand-written loops are checked against
+//! the template's bits, the external libraries by their largest difference, and
+//! the template against the per-cell oracle.
 //!
 //! ```text
 //! RUSTFLAGS="-C llvm-args=-align-loops=64" cargo run --release -- <family> [DIR]
@@ -275,29 +274,26 @@ fn search(dir: &Path) {
     );
     header(&[
         "K",
-        "fn",
         "tpl_binary",
         "tpl_linear(shuffled)",
         "tpl_fold(count off)",
         "hand_linear",
         "hand_binary",
         "partition_point",
-        "tpl/fn",
         "tpl_lin/tpl_bin",
         "bits",
         "oracle",
     ]);
-    for size in sizes(dir, "search_fn_") {
+    for size in sizes(dir, "search_tpl_") {
         let p = |sp: &str| dir.join(format!("search_{sp}_{size}.esm"));
         let data = load_json(&dir.join(format!("search_{size}.data.json")));
         let (axis, c) = (f64s(&data["axis"]), f64s(&data["c"]));
-        let mut f = Model::build(&p("fn"), true, false);
         let mut tb = Model::build(&p("tpl"), true, false);
         let mut tl = Model::build(&p("lin"), true, false);
         let mut tf = Model::build(&p("tpl"), false, false);
-        let reference = f.dy(T_BASE);
-        let idx = slots(&f.names);
-        let u = f.state.clone();
+        let reference = tb.dy(T_BASE);
+        let idx = slots(&tb.names);
+        let u = tb.state.clone();
         let hand = |t: f64, dy: &mut [f64], how: u8| {
             for (s, &q) in idx.iter().enumerate() {
                 let x = (c[q] + u[s]) + 0.001 * t;
@@ -320,17 +316,14 @@ fn search(dir: &Path) {
                 dy[s] = (1 + below) as f64 - u[s];
             }
         };
-        let mut ok = bits_eq(&tb.dy(T_BASE), &reference)
-            && bits_eq(&tl.dy(T_BASE), &reference)
-            && bits_eq(&tf.dy(T_BASE), &reference);
+        let mut ok = bits_eq(&tl.dy(T_BASE), &reference) && bits_eq(&tf.dy(T_BASE), &reference);
         let mut dy = vec![0.0; reference.len()];
         for how in 0..3 {
             hand(T_BASE, &mut dy, how);
             ok &= bits_eq(&dy, &reference);
         }
         let oracle = oracle_check(&p("lin"), &mut tl);
-        let (a, b, cc, d) = (
-            time_model(&mut f),
+        let (b, cc, d) = (
             time_model(&mut tb),
             time_model(&mut tl),
             time_model(&mut tf),
@@ -343,11 +336,10 @@ fn search(dir: &Path) {
             });
         }
         println!(
-            "{size}\t{a:.0}\t{b:.0}\t{cc:.0}\t{d:.0}\t{:.0}\t{:.0}\t{:.0}\t{:.2}\t{:.2}\t{ok}\t{oracle}",
+            "{size}\t{b:.0}\t{cc:.0}\t{d:.0}\t{:.0}\t{:.0}\t{:.0}\t{:.2}\t{ok}\t{oracle}",
             h[0],
             h[1],
             h[2],
-            b / a,
             cc / b
         );
     }
@@ -399,21 +391,19 @@ fn interp(dir: &Path, family: &str) {
     println!("# {family}: ns per right-hand-side call (512 queries)");
     header(&[
         "K",
-        "fn",
         "tpl",
         "hand",
-        "tpl/fn",
-        "bits(tpl,hand vs fn)",
+        "hand/tpl",
+        "bits(hand vs tpl)",
         "oracle",
     ]);
-    for size in sizes(dir, &format!("{family}_fn_")) {
+    for size in sizes(dir, &format!("{family}_tpl_")) {
         let p = |sp: &str| dir.join(format!("{family}_{sp}_{size}.esm"));
         let data = load_json(&dir.join(format!("{family}_{size}.data.json")));
-        let mut f = Model::build(&p("fn"), true, false);
         let mut tp = Model::build(&p("tpl"), true, false);
-        let reference = f.dy(T_BASE);
-        let idx = slots(&f.names);
-        let u = f.state.clone();
+        let reference = tp.dy(T_BASE);
+        let idx = slots(&tp.names);
+        let u = tp.state.clone();
         let c = f64s(&data["c"]);
         let hand: Box<dyn Fn(f64, &mut [f64])> = if family == "linear" {
             let (axis, table) = (f64s(&data["axis"]), f64s(&data["table"]));
@@ -440,17 +430,14 @@ fn interp(dir: &Path, family: &str) {
         };
         let mut dy = vec![0.0; reference.len()];
         hand(T_BASE, &mut dy);
-        let ok = bits_eq(&tp.dy(T_BASE), &reference) && bits_eq(&dy, &reference);
+        let ok = bits_eq(&dy, &reference);
         let oracle = oracle_check(&p("tpl"), &mut tp);
-        let (a, b) = (time_model(&mut f), time_model(&mut tp));
+        let b = time_model(&mut tp);
         let h = time_ns(|k| {
             hand(t_of(k), &mut dy);
             black_box(&dy);
         });
-        println!(
-            "{size}\t{a:.0}\t{b:.0}\t{h:.0}\t{:.2}\t{ok}\t{oracle}",
-            b / a
-        );
+        println!("{size}\t{b:.0}\t{h:.0}\t{:.2}\t{ok}\t{oracle}", h / b);
     }
 }
 
@@ -458,7 +445,7 @@ fn interp(dir: &Path, family: &str) {
 // calendar
 // ---------------------------------------------------------------------------
 
-/// The nine §9.2 fields of `t`, summed in generate_p4.py's order, by Hinnant's
+/// The nine calendar fields of `t`, summed in generate_p4.py's order, by Hinnant's
 /// civil_from_days in integer arithmetic.
 fn hand_calendar(t: f64) -> f64 {
     let ft = t.floor();
@@ -518,23 +505,21 @@ fn calendar(dir: &Path) {
     println!("# calendar: ns per right-hand-side call (nine fields per timestamp)");
     header(&[
         "H",
-        "fn",
         "tpl",
         "hand",
         "chrono",
-        "tpl/fn",
-        "bits(tpl,hand,chrono vs fn)",
+        "hand/tpl",
+        "bits(hand,chrono vs tpl)",
         "oracle",
     ]);
-    for size in sizes(dir, "calendar_fn_") {
+    for size in sizes(dir, "calendar_tpl_") {
         let p = |sp: &str| dir.join(format!("calendar_{sp}_{size}.esm"));
         let data = load_json(&dir.join(format!("calendar_{size}.data.json")));
         let t0 = data["T0"].as_f64().unwrap();
-        let mut f = Model::build(&p("fn"), true, false);
         let mut tp = Model::build(&p("tpl"), true, false);
-        let reference = f.dy(T_BASE);
-        let idx = slots(&f.names);
-        let u = f.state.clone();
+        let reference = tp.dy(T_BASE);
+        let idx = slots(&tp.names);
+        let u = tp.state.clone();
         let run = |t: f64, dy: &mut [f64], g: fn(f64) -> f64| {
             for (s, &h) in idx.iter().enumerate() {
                 let tq = (t0 + 3600.0 * h as f64) + (t + u[s]);
@@ -542,13 +527,13 @@ fn calendar(dir: &Path) {
             }
         };
         let mut dy = vec![0.0; reference.len()];
-        let mut ok = vec![bits_eq(&tp.dy(T_BASE), &reference)];
+        let mut ok = Vec::new();
         for g in [hand_calendar as fn(f64) -> f64, chrono_calendar] {
             run(T_BASE, &mut dy, g);
             ok.push(bits_eq(&dy, &reference));
         }
         let oracle = oracle_check(&p("tpl"), &mut tp);
-        let (a, b) = (time_model(&mut f), time_model(&mut tp));
+        let b = time_model(&mut tp);
         let mut hs = [0.0; 2];
         for (i, g) in [hand_calendar as fn(f64) -> f64, chrono_calendar]
             .into_iter()
@@ -560,10 +545,10 @@ fn calendar(dir: &Path) {
             });
         }
         println!(
-            "{size}\t{a:.0}\t{b:.0}\t{:.0}\t{:.0}\t{:.2}\t{ok:?}\t{oracle}",
+            "{size}\t{b:.0}\t{:.0}\t{:.0}\t{:.2}\t{ok:?}\t{oracle}",
             hs[0],
             hs[1],
-            b / a
+            hs[0] / b
         );
     }
 }
@@ -605,33 +590,27 @@ fn overlap(dir: &Path) {
         "manifold",
         "N",
         "pairs",
-        "leaf_setup_s",
         "tpl_setup_s",
-        "tpl/leaf setup",
-        "leaf_call_ns",
         "tpl_call_ns",
         "s2rst_per_pair_ns",
-        "max|tpl-leaf|",
-        "max|s2rst-leaf|",
         "max|s2rst-tpl|",
         "oracle",
     ]);
-    for size in sizes(dir, "overlap_planar_leaf_") {
+    for size in sizes(dir, "overlap_planar_tpl_") {
         let data = load_json(&dir.join(format!("overlap_{size}.data.json")));
         let (ra, rb) = (rings(&data["ring_a"]), rings(&data["ring_b"]));
         for mf in ["planar", "spherical"] {
             let p = |sp: &str| dir.join(format!("overlap_{mf}_{sp}_{size}.esm"));
-            let mut leaf = build_median(&p("leaf"), true);
             let mut tp = build_median(&p("tpl"), true);
-            let idx = slots(&leaf.names);
-            let (al, at) = (leaf.dy(T_BASE), tp.dy(T_BASE));
+            let idx = slots(&tp.names);
+            let at = tp.dy(T_BASE);
             let oracle = if ra.len() <= 2000 {
                 oracle_check(&p("tpl"), &mut tp)
             } else {
                 "skipped"
             };
-            let (cl, ct) = (time_model(&mut leaf), time_model(&mut tp));
-            let (ext, d_ext_leaf, d_ext_tpl) = if mf == "spherical" {
+            let ct = time_model(&mut tp);
+            let (ext, d_ext_tpl) = if mf == "spherical" {
                 let areas: Vec<f64> = idx
                     .iter()
                     .map(|&q| {
@@ -650,40 +629,15 @@ fn overlap(dir: &Path) {
                 });
                 (
                     format!("{per:.0}"),
-                    format!("{:.3e}", max_diff(&areas, &al)),
                     format!("{:.3e}", max_diff(&areas, &at)),
                 )
             } else {
-                ("-".into(), "-".into(), "-".into())
+                ("-".into(), "-".into())
             };
-            let worst = (0..al.len())
-                .max_by(|&i, &j| (al[i] - at[i]).abs().total_cmp(&(al[j] - at[j]).abs()))
-                .unwrap();
-            if (al[worst] - at[worst]).abs() > 1.0e-9 {
-                let q = idx[worst];
-                eprintln!(
-                    "{mf} {size}: worst pair {} (state {}): leaf {:e} template {:e}\n  a {:?}\n  b {:?}",
-                    q + 1,
-                    leaf.names[worst],
-                    al[worst],
-                    at[worst],
-                    ra[q],
-                    rb[q]
-                );
-                let bad: Vec<usize> = (0..al.len())
-                    .filter(|&i| (al[i] - at[i]).abs() > 1.0e-9)
-                    .collect();
-                let ids: Vec<(usize, f64, f64)> =
-                    bad.iter().map(|&i| (idx[i] + 1, al[i], at[i])).collect();
-                eprintln!("  {} pairs differ by more than 1e-9: {ids:?}", bad.len());
-            }
             println!(
-                "{mf}\t{size}\t{}\t{:.4}\t{:.4}\t{:.2}\t{cl:.0}\t{ct:.0}\t{ext}\t{:.3e}\t{d_ext_leaf}\t{d_ext_tpl}\t{oracle}",
+                "{mf}\t{size}\t{}\t{:.4}\t{ct:.0}\t{ext}\t{d_ext_tpl}\t{oracle}",
                 ra.len(),
-                leaf.setup_s(),
                 tp.setup_s(),
-                tp.setup_s() / leaf.setup_s(),
-                max_diff(&al, &at)
             );
         }
     }
@@ -705,32 +659,29 @@ fn nearest(dir: &Path) {
     println!("# nearest-generator argmin: ns per right-hand-side call");
     header(&[
         "size",
-        "op_call_ns",
         "tpl_call_ns",
         "hand_call_ns",
-        "tpl/op",
-        "op_setup_s",
+        "hand/tpl",
         "tpl_setup_s",
         "hand_setup_s",
-        "bits(tpl,hand vs op)",
+        "bits(hand vs tpl)",
         "oracle",
     ]);
-    for size in sizes(dir, "nearest_op_") {
+    for size in sizes(dir, "nearest_tpl_") {
         let p = |sp: &str| dir.join(format!("nearest_{sp}_{size}.esm"));
-        let doc = load_json(&p("op"));
+        let doc = load_json(&p("tpl"));
         let (px, py, gx, gy) = (
             const_eq(&doc, "px"),
             const_eq(&doc, "py"),
             const_eq(&doc, "gx"),
             const_eq(&doc, "gy"),
         );
-        let mut o = build_median(&p("op"), true);
         let mut tp = build_median(&p("tpl"), true);
-        let reference = o.dy(T_BASE);
-        let idx = slots(&o.names);
-        let w = o.state.clone();
-        // The assignment depends only on const data, so both compilers compute
-        // it once at build; the hand-written version does the same: an argmin
+        let reference = tp.dy(T_BASE);
+        let idx = slots(&tp.names);
+        let w = tp.state.clone();
+        // The assignment depends only on const data, so the compiler computes it
+        // once at build; the hand-written version does the same: an argmin
         // per point at setup, a gather per call.
         let assign = |assign: &mut Vec<usize>| {
             assign.clear();
@@ -763,17 +714,16 @@ fn nearest(dir: &Path) {
         };
         let mut dy = vec![0.0; reference.len()];
         hand(&mut dy);
-        let ok = bits_eq(&tp.dy(T_BASE), &reference) && bits_eq(&dy, &reference);
+        let ok = bits_eq(&dy, &reference);
         let oracle = oracle_check(&p("tpl"), &mut tp);
-        let (a, b) = (time_model(&mut o), time_model(&mut tp));
+        let b = time_model(&mut tp);
         let h = time_ns(|_| {
             hand(&mut dy);
             black_box(&dy);
         });
         println!(
-            "{size}\t{a:.0}\t{b:.0}\t{h:.0}\t{:.2}\t{:.4}\t{:.4}\t{:.6}\t{ok}\t{oracle}",
-            b / a,
-            o.setup_s(),
+            "{size}\t{b:.0}\t{h:.0}\t{:.2}\t{:.4}\t{:.6}\t{ok}\t{oracle}",
+            h / b,
             tp.setup_s(),
             setup_ns / 1.0e9
         );
@@ -786,30 +736,16 @@ fn nearest(dir: &Path) {
 
 fn fastjx(dir: &Path) {
     println!("# fastjx: Fast-JX-shaped lookups over a grid; ns per right-hand-side call");
-    header(&[
-        "cells",
-        "lookups/cell",
-        "fn",
-        "tpl",
-        "tpl/fn",
-        "fn_setup_s",
-        "tpl_setup_s",
-        "bits",
-        "oracle",
-    ]);
-    for size in sizes(dir, "fastjx_fn_") {
+    header(&["cells", "lookups/cell", "tpl", "tpl_setup_s", "oracle"]);
+    for size in sizes(dir, "fastjx_tpl_") {
         let p = |sp: &str| dir.join(format!("fastjx_{sp}_{size}.esm"));
         let data = load_json(&dir.join(format!("fastjx_{size}.data.json")));
-        let mut f = build_median(&p("fn"), true);
         let mut tp = build_median(&p("tpl"), true);
-        let ok = bits_eq(&tp.dy(T_BASE), &f.dy(T_BASE));
         let oracle = oracle_check(&p("tpl"), &mut tp);
-        let (a, b) = (time_model(&mut f), time_model(&mut tp));
+        let b = time_model(&mut tp);
         println!(
-            "{size}\t{}\t{a:.0}\t{b:.0}\t{:.2}\t{:.4}\t{:.4}\t{ok}\t{oracle}",
+            "{size}\t{}\t{b:.0}\t{:.4}\t{oracle}",
             data["lookups"],
-            b / a,
-            f.setup_s(),
             tp.setup_s()
         );
     }
@@ -821,36 +757,19 @@ fn fastjx(dir: &Path) {
 
 fn size(dir: &Path) {
     println!("# setup (esm_problem + tape + first call) against site count; median of BUILDS");
-    header(&[
-        "family",
-        "sites",
-        "closed_setup_s",
-        "tpl_setup_s",
-        "tpl/closed",
-        "closed_call_ns",
-        "tpl_call_ns",
-        "max|tpl-closed|",
-    ]);
-    for (fam, closed) in [
-        ("searchsorted", "fn"),
-        ("linear", "fn"),
-        ("bilinear", "fn"),
-        ("calendar", "fn"),
-        ("argmin", "op"),
-        ("overlap_planar", "leaf"),
+    header(&["family", "sites", "tpl_setup_s", "tpl_call_ns"]);
+    for fam in [
+        "searchsorted",
+        "linear",
+        "bilinear",
+        "calendar",
+        "argmin",
+        "overlap_planar",
     ] {
-        for s in sizes(dir, &format!("size_{fam}_{closed}_")) {
-            let p = |sp: &str| dir.join(format!("size_{fam}_{sp}_{s}.esm"));
-            let mut c = build_median(&p(closed), true);
-            let mut tp = build_median(&p("tpl"), true);
-            let d = max_diff(&tp.dy(T_BASE), &c.dy(T_BASE));
-            let (a, b) = (time_model(&mut c), time_model(&mut tp));
-            println!(
-                "{fam}\t{s}\t{:.4}\t{:.4}\t{:.2}\t{a:.0}\t{b:.0}\t{d:.3e}",
-                c.setup_s(),
-                tp.setup_s(),
-                tp.setup_s() / c.setup_s()
-            );
+        for s in sizes(dir, &format!("size_{fam}_tpl_")) {
+            let mut tp = build_median(&dir.join(format!("size_{fam}_tpl_{s}.esm")), true);
+            let b = time_model(&mut tp);
+            println!("{fam}\t{s}\t{:.4}\t{b:.0}", tp.setup_s());
         }
     }
 }
@@ -955,7 +874,7 @@ fn main() {
             &["--only", "nearest"],
             "CLOSED_TEMPLATES_DIR",
             "closed_templates",
-            "nearest_",
+            "nearest_tpl_",
         );
         nearest(&d)
     });
