@@ -63,14 +63,6 @@ pub mod aggregate {
     };
 }
 
-/// `polygon_area` expressed as a `sum_product` FAQ over the clip ring,
-/// evaluated through the array simulator. Native-only, like the runtime it
-/// drives; the wasm regridder keeps the imperative `polygon_area`.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod area_faq {
-    pub use crate::area_faq::polygon_area_faq;
-}
-
 /// Pure, I/O-free structural and expression analysis helpers. Written for the
 /// `esm` CLI's `analyze` subcommand, which is a separate crate target.
 pub mod analysis {
@@ -146,11 +138,6 @@ pub mod error {
 pub mod flatten {
     pub use crate::flatten::first_unresolved_rhs_time_derivative;
     pub use crate::flatten::reject_unlowered_operators;
-}
-
-/// Geometry kernels with no cross-binding counterpart.
-pub mod geometry {
-    pub use crate::geometry::{DEFAULT_LAT_ATOL, densify_parallel_edges, spherical_area};
 }
 
 /// The load-time `expression_templates` rewrite (esm-spec §9.6). Raw-JSON by

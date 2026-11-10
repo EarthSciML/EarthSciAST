@@ -133,7 +133,7 @@ fn an_inline_const_gather_over_a_whole_axis_fails_closed() {
     use earthsci_ast::{Alg, SolveOptions, load_string};
     let gather = |offset: i64| {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "inline_const_array_oob"},
             "index_sets": {"k": {"kind": "interval", "size": 4}},
             "models": {"Gather": {
@@ -212,7 +212,7 @@ fn an_inline_const_gather_over_a_whole_axis_fails_closed() {
 #[test]
 fn off_the_end_flat_gather_through_prepare_fails_closed() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "const_array_oob"},
         "index_sets": {"k": {"kind": "interval", "size": 4}},
         "models": {"Gather": {
@@ -271,7 +271,7 @@ fn a_const_gather_at_an_out_of_range_data_subscript_fails_closed_under_native() 
     use earthsci_ast::{Alg, Compiler, SolveOptions, load_string};
     let doc = |idx: [f64; 3]| {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "data_subscript"},
             "index_sets": {"p": {"kind": "interval", "size": 3}},
             "models": {"M": {

@@ -175,42 +175,6 @@ fn an_unknown_element_type_is_an_error() {
     );
 }
 
-/// The constructs whose numeric work is hand-written binary64 are refused under
-/// Float32, naming themselves. Evaluating one in binary64 while everything
-/// around it rounded is the silent fallback the brief forbids.
-#[test]
-fn constructs_binary32_cannot_carry_are_named() {
-    for (op, name) in [
-        ("intersect_polygon", None),
-        ("polygon_intersection_area", None),
-        ("fn", Some("interp.linear")),
-        ("fn", Some("interp.bilinear")),
-        ("fn", Some("datetime.julian_day")),
-    ] {
-        let hit = precision::f32_unsupported_reason(op, name);
-        let (construct, _) =
-            hit.unwrap_or_else(|| panic!("{op}/{name:?} must be rejected under Float32"));
-        let expected = name.unwrap_or(op);
-        assert!(
-            construct.contains(expected),
-            "the diagnostic must name the construct: {construct}"
-        );
-    }
-    // Exact-integer closed functions are representable and stay allowed.
-    for (op, name) in [
-        ("fn", Some("interp.searchsorted")),
-        ("fn", Some("datetime.year")),
-        ("fn", Some("datetime.day_of_year")),
-        ("+", None),
-        ("faq", None),
-    ] {
-        assert!(
-            precision::f32_unsupported_reason(op, name).is_none(),
-            "{op}/{name:?} must remain evaluable under Float32"
-        );
-    }
-}
-
 /// An index set larger than binary32's exact-integer range is refused naming
 /// itself: index expressions share the value kernels, so a subscript that
 /// large would round and a gather would read the wrong cell.

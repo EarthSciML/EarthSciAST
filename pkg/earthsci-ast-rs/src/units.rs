@@ -957,7 +957,7 @@ fn propagate_operator_dim(
             None => literal_dim(op.value.as_ref().and_then(serde_json::Value::as_f64), env),
         },
         // No dimensional rule for this operator — an unregistered user op, or a
-        // rewrite-target sugar op (`grad`/`div`/`laplacian`/`fn`/`table_lookup`/
+        // rewrite-target sugar op (`grad`/`div`/`laplacian`/
         // `godunov_hamiltonian`/…) whose dimension is UNDETERMINABLE until a
         // discretization rule lowers it (esm-spec §4.8.4). The checker reports
         // UNKNOWN and SKIPS: it emits NO finding, matching the other four
@@ -1474,8 +1474,8 @@ pub fn normalize_angle_arguments(expr: &Expr, env: &HashMap<String, Unit>) -> Op
 
     // Rewrite the children first, so a nested `sin(deg)` is converted too —
     // EVERY expression-bearing child (`ExpressionNode::for_each_child`), not a
-    // hand list: a trig call in a `makearray` region value, a `table_lookup`
-    // axis input, a `faq` filter or an aggregate key is as much an evaluated
+    // hand list: a trig call in a `makearray` region value, a `faq` filter or
+    // an aggregate key is as much an evaluated
     // argument as one in `args`. The node is cloned only when something in it
     // changes.
     let mut children: Vec<Option<Expr>> = Vec::new();
@@ -4030,8 +4030,8 @@ mod tests {
     }
 
     /// The rewrite reaches a circular function in EVERY expression-bearing
-    /// field, not only `args`: a `makearray` region value, a `table_lookup`
-    /// axis input, a `faq` filter and an aggregate key.
+    /// field, not only `args`: a `makearray` region value, a template binding,
+    /// a `faq` filter and an aggregate key.
     #[test]
     fn test_normalize_angle_arguments_reaches_every_child() {
         let env = env_of(&[("lat", "deg")]);
@@ -4049,8 +4049,8 @@ mod tests {
                 ..Default::default()
             },
             ExpressionNode {
-                op: "table_lookup".into(),
-                axes: Some([("x".to_string(), sin())].into_iter().collect()),
+                op: "apply_expression_template".into(),
+                bindings: Some([("x".to_string(), sin())].into_iter().collect()),
                 ..Default::default()
             },
             ExpressionNode {

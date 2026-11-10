@@ -59,7 +59,7 @@ fn cone_document(with_bad: bool) -> Value {
             "op": "table_lookup", "table": "tab", "axes": {"q": "q"}, "args": []}}));
     }
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Cone"},
         "index_sets": {
             "rows": {"kind": "interval", "size": 3},
@@ -79,7 +79,7 @@ fn cone_document(with_bad: bool) -> Value {
 /// irrational terms), so a field that moved by one ulp is caught.
 fn rounding_document() -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Rounding"},
         "index_sets": {"rows": {"kind": "interval", "size": 7}},
         "models": {"Rel": {
@@ -217,7 +217,7 @@ fn a_bare_name_seeds_every_observed_it_is_the_tail_of() {
 /// A range over the set never names its offsets, so no definition does.
 fn ragged_document() -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Ragged"},
         "index_sets": {
             "parent_rows": {"kind": "interval", "size": 3},
@@ -294,7 +294,7 @@ fn refused_document() -> Value {
         "expr": {"op": "*", "args": [
             {"op": "index", "args": ["s", {"op": "-", "args": ["k", 1]}]}, "j"]}});
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Refused"},
         "index_sets": {"steps": {"kind": "interval", "size": 4}},
         "models": {"R": {
@@ -349,7 +349,7 @@ fn a_request_for_a_data_fed_parameter_alone_is_answered_by_the_pipeline() {
     let fed = json!({"type": "parameter", "units": "1", "default": 0.0, "shape": ["rows"],
         "update": {"kind": "data", "source": "table", "from": {"file_variable": "p"}}});
     let doc = json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "DataFedOnly"},
         "data_sources": {"table": {"kind": "static",
             "source": {"url_template": "./table.parquet"}}},
@@ -502,7 +502,7 @@ mod cli {
         if with_sink {
             models["Sink"] = component("O3");
         }
-        json!({"esm": "1.1.0", "metadata": {"name": "Two"}, "models": models})
+        json!({"esm": "2.0.0", "metadata": {"name": "Two"}, "models": models})
     }
 
     fn esm_grid(dir: &std::path::Path, doc: &Value, observed: &str) -> (bool, String) {

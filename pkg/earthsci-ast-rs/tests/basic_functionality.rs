@@ -11,7 +11,7 @@ use std::collections::HashMap;
 fn test_basic_round_trip() {
     let json = r#"
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {
         "name": "test_model"
       },
@@ -356,7 +356,7 @@ fn test_coupling_event_rejects_removed_0x_keys() {
     fn doc(extra: &str) -> String {
         format!(
             r#"{{
-              "esm": "1.0.0",
+              "esm": "2.0.0",
               "metadata": {{ "name": "removed_event_keys" }},
               "models": {{
                 "a": {{

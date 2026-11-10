@@ -119,8 +119,8 @@ const NODE_HEADER_KEYS: [&str; 3] = ["op", "id", "expect_cadence"];
 /// the kind is kept distinct because the two answer different questions about a
 /// node (what it IS vs how its op is parameterized). `from`, `wrt`/`dim`,
 /// apply-`name`, and `of` are handled positionally.
-const REGISTRY_KEYS: [&str; 9] = [
-    "reduce", "semiring", "manifold", "fn", "table", "side", "attrs", "members", "from_faq",
+const REGISTRY_KEYS: [&str; 7] = [
+    "reduce", "semiring", "fn", "side", "attrs", "members", "from_faq",
 ];
 
 /// Loop symbols, references, ids, enums, units and free text: not expression
@@ -128,18 +128,15 @@ const REGISTRY_KEYS: [&str; 9] = [
 /// metaparameter substitution ONLY. `of` and `on` keep their dedicated
 /// rename-walk branches. Mirrors the `:opaque` kind of `_STRUCTURAL_FIELDS` in
 /// the Julia reference.
-const OPAQUE_KEYS: [&str; 34] = [
+const OPAQUE_KEYS: [&str; 32] = [
     // Loop symbols and bound index names of a `faq` node. `metaparameter_name_conflict`
     // refuses a metaparameter spelled like a loop symbol, so a metaparameter reaches
     // these fields only as an `on` data-column name; they are names wherever they
     // appear, so they are skipped rather than left to that check.
     "on",
     "syms",
-    "arg",
     "output_idx",
     "of",
-    // A `table_lookup` output name.
-    "output",
     "handler_id",
     // References to files, components, data sources, data columns and the
     // import-edge rename vocabulary.
@@ -1373,8 +1370,7 @@ pub(crate) fn apply_mount_index_set_rename(
 
 /// Bound index symbols (loop symbols) of a subtree: the `output_idx` entries and
 /// `ranges` keys of every Expression node, at any nesting depth — the binder
-/// definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1), which is
-/// not limited to `faq` (`argmin` / `argmax` bind the same way). Rebinding one
+/// definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1). Rebinding one
 /// would desynchronize the ranges KEYS from their `expr` occurrences, so it is
 /// rejected; a metaparameter spelled like one is `metaparameter_name_conflict`.
 /// Mirrors the Julia `_collect_bound_syms!`.

@@ -94,7 +94,7 @@ fn bystander(cross: bool) -> Value {
 
 fn document(models: Value) -> Value {
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "multi_model_ingest"},
         "index_sets": {"rows": {"kind": "interval", "size": 2}},
         "data_sources": {

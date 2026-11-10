@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn typed_lower_enums_is_pure_and_agrees_with_the_raw_pass() {
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "enum_doc"},
             "enums": {"season": {"winter": 1, "summer": 3}},
             "models": {
@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn typed_lower_enums_raises_enum_lowering_error() {
         let file: crate::EsmFile = serde_json::from_value(json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "bad_enum"},
             "enums": {"season": {"winter": 1}},
             "models": {

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "ProbeChainConstAggregate",
     "description": "Issue #207, the spelling that already WORKED: byte-for-byte the same chain as `probe_chain_const.esm`, mounting the leaf whose table is wrapped in an `aggregate` instead of being read as a bare `const` array. Its answer is the contrast that shows the two spellings must agree.",

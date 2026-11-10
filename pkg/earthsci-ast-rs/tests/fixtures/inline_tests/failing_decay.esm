@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "FailingDecayFixture",
     "description": "Inline-test fixture with an intentionally-wrong expected value: the same first-order decay as passing_decay.esm, but the t=100 assertion expects 0.5 where the truth is 0.367879. Exercises the `esm test` FAIL verdict and its non-zero exit — a FAIL, not an ERROR, because the run reaches the tolerance comparison and loses. Mirrors pkg/EarthSciAST.jl/test/fixtures/inline_tests/failing_decay.esm.",

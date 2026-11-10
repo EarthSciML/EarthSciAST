@@ -54,7 +54,7 @@ fn doc(nl: usize, ng: usize, state_leaf: bool) -> String {
     };
     format!(
         r#"{{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {{"name": "StateLeaf", "license": "MIT",
   "description": "Self-referential faq recurrence over a column that is either an observed or a state."}},
  "metaparameters": {{
@@ -350,7 +350,7 @@ fn a_run_that_never_advances_still_makes_its_step_zero_report() {
 /// reaches the scalar one.
 fn scalar_doc() -> String {
     r#"{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {"name": "Decay", "license": "MIT",
   "description": "One scalar state."},
  "models": {

@@ -60,7 +60,7 @@ fn wrap(inner: Value, lo: i64, hi: i64) -> Value {
 
 fn doc(name: &str, variables: Value, equations: Vec<Value>, domain: Option<Value>) -> Value {
     let mut d = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": name},
         "models": {"M": {"variables": variables, "equations": equations}}
     });
@@ -957,7 +957,7 @@ fn mesh_rank_template_doc(n: usize) -> Value {
                      "v": ix("edge_hi", vec![json!("f"), json!("le")]), "lo": 1, "n": nv}});
     let unknown = |shape: Value| json!({"type": "unknown", "shape": shape});
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "mesh_rank_tpl"},
         "index_sets": {
             "faces": {"kind": "interval", "size": nf},
@@ -1372,7 +1372,7 @@ fn pointwise_gated_faq_numbers_its_box() {
     let sin_u = op("sin", vec![ix("u", vec![json!("i"), json!("j")])]);
     let make = |bg: Value| {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "pointwise_gated_sharing"},
             "index_sets": {"s": {"kind": "interval", "size": 3},
                            "g": {"kind": "interval", "size": 4}},

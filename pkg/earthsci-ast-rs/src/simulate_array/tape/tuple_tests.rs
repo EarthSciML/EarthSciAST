@@ -55,7 +55,7 @@ fn self_join_doc(n: usize) -> Value {
     let ranges = json!({"a": {"from": "rows"}, "b": {"from": "rows"}});
     let join = json!([{"on": [["row_prior", "row_id"]]}]);
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "self_join_scaling", "authors": ["tape tests"]},
         "index_sets": {"rows": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -122,7 +122,7 @@ fn a_many_to_many_data_column_join_folds_in_the_interpreters_order() {
         .map(|k| (0.7 + k as f64) * 10f64.powi((k % 5) as i32 - 2))
         .collect();
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "m2m_data_columns", "authors": ["tape tests"]},
         "index_sets": {"ls": {"kind": "interval", "size": nl}, "rs": {"kind": "interval", "size": nr}},
         "models": {"M": {
@@ -170,7 +170,7 @@ fn a_gate_on_an_output_index_restricts_each_cells_run() {
     // Records land on cells 1, 2 and 4 only; cells 3 and 5 stay empty.
     let rec_cell: Vec<f64> = (0..nrec).map(|k| [1.0, 2.0, 4.0][k % 3]).collect();
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "gate_restrict", "authors": ["tape tests"]},
         "index_sets": {"cells": {"kind": "interval", "size": ncell}, "recs": {"kind": "interval", "size": nrec}},
         "models": {"M": {
@@ -219,7 +219,7 @@ fn a_gate_on_an_output_index_restricts_each_cells_run() {
 #[test]
 fn a_ragged_gather_of_a_two_dimensional_state_reads_it_in_place() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ragged_state_gather", "authors": ["tape tests"]},
         "index_sets": {
             "rows": {"kind": "interval", "size": 3},
@@ -290,7 +290,7 @@ fn ragged_doc(cnt: Value, body: Value, filter: Option<Value>) -> Value {
         rhs["filter"] = f;
     }
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ragged_review", "authors": ["tape tests"]},
         "index_sets": {
             "rows": {"kind": "interval", "size": 3},
@@ -468,7 +468,7 @@ fn star_join_doc(
         idx(json!("w"), &[json!("f")])
     };
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "star_join_budget", "authors": ["tape tests"]},
         "index_sets": {
             "bigs": {"kind": "interval", "size": n_big},
@@ -698,7 +698,7 @@ fn hot_soak_doc(n_g: usize, n_v: usize, n_i: usize, n_s: usize, n_h: usize) -> V
     let out = json!({"g": {"from": "gs"}, "v": {"from": "vs"}, "h": {"from": "hs"}});
     let gvh = [json!("g"), json!("v"), json!("h")];
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "hot_soak_fold", "authors": ["tape tests"]},
         "index_sets": {
             "gs": {"kind": "interval", "size": n_g},
@@ -1088,7 +1088,7 @@ fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
         .collect();
     let ones = vec![1.0f64; n];
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "gate_planner", "authors": ["tape tests"]},
         "index_sets": {"ls": {"kind": "interval", "size": n}, "rs": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -1194,7 +1194,7 @@ fn contracted_parent_doc(free_output: bool) -> Value {
         )
     };
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ragged_contracted_parent", "authors": ["tape tests"]},
         "index_sets": {
             "rows": {"kind": "interval", "size": 4},

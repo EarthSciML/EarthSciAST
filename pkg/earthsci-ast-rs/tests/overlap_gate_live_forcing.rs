@@ -91,7 +91,7 @@ fn document(fed: bool) -> Value {
         f["default"] = json!([1.0, 2.0, 3.0]);
     }
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "overlap_gate_live_forcing"},
         "index_sets": {
             "src_cells": {"kind": "interval", "size": 3},

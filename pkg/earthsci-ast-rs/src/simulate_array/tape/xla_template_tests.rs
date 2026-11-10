@@ -344,7 +344,7 @@ fn every_template_family_lowers_and_matches_the_oracle() {
     }
     use super::closed_template_tests as ct;
     let cases: Vec<(&str, Value, f64)> = vec![
-        ("calendar", ct::calendar_doc(1.6e9, true), 1e-13),
+        ("calendar", ct::calendar_doc(1.6e9), 1e-13),
         ("planar overlap", ct::overlap_doc(false), 1e-11),
         ("spherical overlap", ct::overlap_doc(true), 1e-11),
         ("argmin", ct::argmin_doc(), 1e-13),

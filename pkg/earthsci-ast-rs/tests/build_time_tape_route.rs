@@ -83,7 +83,7 @@ fn check_pipeline(
 
 fn model_doc(index_sets: Value, variables: Value, equations: Value) -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "BuildTimeTape"},
         "index_sets": index_sets,
         "models": {"M": {"variables": variables, "equations": equations}},

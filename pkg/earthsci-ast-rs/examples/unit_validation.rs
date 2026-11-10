@@ -6,7 +6,7 @@ fn main() {
     // Test data with dimensional inconsistency
     let test_data_inconsistent = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "Unit Validation Test - Inconsistent"
           },
@@ -63,7 +63,7 @@ fn main() {
     // Test data with dimensional consistency
     let test_data_consistent = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "Unit Validation Test - Consistent"
           },

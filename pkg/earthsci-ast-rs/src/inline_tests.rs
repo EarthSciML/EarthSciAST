@@ -2983,15 +2983,6 @@ fn run_inline_tests_seeded(
     // same convention as the Julia and Python bindings.
     let source: String = source.map(|p| p.display().to_string()).unwrap_or_default();
 
-    // Lower `table_lookup` ONCE for the whole run (esm-spec §9.5.3).
-    // `esm_problem` lowers its own copy, which covers everything it compiles —
-    // but this runner also evaluates §6.6.5 analytic `reference` expressions
-    // itself, outside any problem build, so those would otherwise be the one
-    // position where an authored `table_lookup` still reached an evaluator.
-    // A document that will not lower is passed through UNCHANGED and refused
-    // by the build, in the vocabulary this runner already reports.
-    let lowered = crate::lower_table_lookup::lowered_copy(file);
-    let file: &EsmFile = lowered.as_ref().unwrap_or(file);
     let index_sets: HashMap<String, IndexSet> = file
         .index_sets
         .clone()
@@ -3262,7 +3253,7 @@ mod tests {
     fn decay_doc() -> serde_json::Value {
         let idx = json!({"op": "index", "args": ["u", "i"]});
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "pde_inline_decay"},
             "index_sets": {"x": {"kind": "interval", "size": N}},
             "models": {"M": {
@@ -3791,7 +3782,7 @@ mod tests {
     #[test]
     fn scalar_only_component_is_assertable() {
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "scalar_only"},
             "models": {"ScalarOnly": {
                 "variables": {
@@ -3838,7 +3829,7 @@ mod tests {
     #[test]
     fn scalar_observed_of_an_ode_component_is_assertable() {
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "scalar_ode_observed"},
             "models": {"M": {
                 "variables": {
@@ -3929,7 +3920,7 @@ mod tests {
             }],
         });
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "zero_length_span"},
             "models": {"M": model},
         });
@@ -3990,7 +3981,7 @@ mod tests {
     #[test]
     fn an_unmaterialized_scalar_assertion_is_an_error_not_a_zero() {
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "scalar_missing"},
             "models": {"ScalarOnly": {
                 "variables": {
@@ -4369,7 +4360,7 @@ mod tests {
                        "expr": {"op": "+",
                                 "args": [{"op": "index", "args": ["u", "i"]}, 1]}});
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "observed_assertions"},
             "index_sets": {"x": {"kind": "interval", "size": 3}},
             "models": {"M": {
@@ -4507,7 +4498,7 @@ mod tests {
     fn run_inline_tests_coords_on_scalar_variable_rejected() {
         // coords on a scalar (0-D) variable is ill-formed per §6.6.5.
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "scalar_coords"},
             "models": {"M": {
                 "variables": {"z": {"type": "unknown", "units": "1", "default": 1.0}},
@@ -4550,7 +4541,7 @@ mod tests {
         let idx = json!({"op": "index", "args": ["u", "i", "j"]});
         let ranges = json!({"i": [1, 4], "j": [1, ny]});
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "pde_inline_2d"},
             "index_sets": {"x": {"kind": "interval", "size": 4},
                            "y": {"kind": "interval", "size": ny}},
@@ -4789,7 +4780,7 @@ mod tests {
             })
         };
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "scalar_observed_param_override"},
             "index_sets": {"s": {"kind": "interval", "size": 1}},
             "models": {
@@ -4863,7 +4854,7 @@ mod tests {
     /// indistinguishable in the result list from one that was never looked at.
     fn reaction_decay_doc() -> serde_json::Value {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "inline_test_reaction_system"},
             "reaction_systems": {"Decay": {
                 "species": {
@@ -4932,7 +4923,7 @@ mod tests {
             test["parameter_overrides"] = ov;
         }
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "ramp"},
             "models": {"M": {
                 "variables": {
@@ -5142,7 +5133,7 @@ mod tests {
             })
         };
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "ShapedStatic", "license": "MIT",
                          "description": "state-free, shaped, time-invariant"},
             "index_sets": {"x": {"kind": "interval", "size": 3}},
@@ -5199,7 +5190,7 @@ mod tests {
     /// evaluator sweeps cell by cell.
     fn shaped_static_with_cumulative() -> serde_json::Value {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "ShapedStaticCumulative", "license": "MIT",
                          "description": "state-free, shaped, with a running sum"},
             "index_sets": {"x": {"kind": "interval", "size": 3}},

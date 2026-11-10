@@ -1835,7 +1835,7 @@ impl<'p> PdEmit<'p> {
                 "id": self.faqid.clone(),
                 "join": [pd_overlap_clause(&self.plan.src_env, &self.plan.tgt_env)],
                 "filter": prod_filter,
-                "key": {"op": "skolem", "label": "cell", "args": [self.plan.rep_csym.clone()]},
+                "key": self.plan.rep_csym.clone(),
                 "args": prod_args,
             },
         });

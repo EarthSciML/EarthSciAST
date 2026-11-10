@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "ProbeSingleModelConst",
     "description": "The control for issue #207: ONE model, no `ref` mounts, no `coupling` at all — the same bare-`const` table gathered at an index computed from a chain of state-free observeds. If this fails the same way `probe_chain_const.esm` does, the defect has nothing to do with when couplings are applied.",

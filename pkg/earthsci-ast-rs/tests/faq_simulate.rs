@@ -45,7 +45,7 @@ fn build(
     };
     format!(
         r#"{{
-          "esm": "1.1.0",
+          "esm": "2.0.0",
           "metadata": {{ "name": "aggregate_eval_test" }},
           {index_sets_field}
           "models": {{ "M": {{
@@ -376,7 +376,7 @@ fn shared_invalid_undeclared_from_fixture_is_rejected() {
 fn ragged_index_set_drives_dynamic_reduction_bound() {
     let model = r#"
         {
-          "esm": "1.1.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "ragged_dynamic_bound"
           },

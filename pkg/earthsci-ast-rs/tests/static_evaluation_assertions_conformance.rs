@@ -133,7 +133,7 @@ fn an_algebraic_document_is_evaluated_at_every_asserted_time() {
     let doc = |time: f64, expected: f64| {
         format!(
             r#"{{
-              "esm": "1.1.0",
+              "esm": "2.0.0",
               "metadata": {{"name": "TimeProbe", "description": "algebraic-only", "license": "MIT"}},
               "models": {{"TimeProbe": {{
                 "variables": {{
@@ -176,7 +176,7 @@ fn declaring_system_kind_nonlinear_changes_nothing() {
     let doc = |declared: &str| {
         format!(
             r#"{{
-              "esm": "1.1.0",
+              "esm": "2.0.0",
               "metadata": {{"name": "TimeProbe", "description": "algebraic-only", "license": "MIT"}},
               "models": {{"TimeProbe": {{
                 {declared}
@@ -218,7 +218,7 @@ fn declaring_system_kind_nonlinear_changes_nothing() {
 #[test]
 fn a_static_assertion_outside_the_declared_span_is_refused() {
     let doc = r#"{
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {"name": "TimeProbe", "description": "algebraic-only", "license": "MIT"},
       "models": {"TimeProbe": {
         "variables": {
@@ -272,7 +272,7 @@ fn a_static_assertion_outside_the_declared_span_is_refused() {
 #[test]
 fn a_state_free_shaped_observed_is_answered_at_every_asserted_time() {
     let doc = r#"{
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {"name": "ShapedStatic", "description": "state-free, shaped, time-invariant", "license": "MIT"},
       "index_sets": {"x": {"kind": "interval", "size": 3}},
       "models": {"ShapedStatic": {
@@ -318,7 +318,7 @@ fn a_state_free_shaped_observed_is_answered_at_every_asserted_time() {
 #[test]
 fn a_shaped_state_free_observed_of_t_is_refused_by_name() {
     let doc = r#"{
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {"name": "ShapedOfT", "description": "state-free, shaped, a function of t", "license": "MIT"},
       "index_sets": {"x": {"kind": "interval", "size": 3}},
       "models": {"ShapedOfT": {
@@ -384,7 +384,7 @@ fn a_shaped_state_free_observed_of_t_is_refused_by_name() {
 #[test]
 fn a_reference_that_mentions_t_is_refused() {
     let doc = r#"{
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {"name": "RefT", "description": "a reference that mentions t", "license": "MIT"},
       "index_sets": {"x": {"kind": "interval", "size": 2}},
       "models": {"RefT": {

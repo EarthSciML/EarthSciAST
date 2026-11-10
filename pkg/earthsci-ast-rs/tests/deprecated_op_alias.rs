@@ -1,60 +1,28 @@
-//! The `aggregate` -> `faq` deprecated-op-alias contract (esm 1.1.0).
+//! The `aggregate` spelling of `faq` (deprecated at esm 1.1.0, removed at
+//! 2.0.0) and `arrayop` (removed at 0.8.0) are rejected by name with
+//! `removed_op`, in the root and in a referenced child.
 //!
-//! Gates `tests/conformance/deprecated_op_alias/` and the `removed_op`
-//! rejection of `arrayop`. See CONFORMANCE_SPEC §7 and
+//! Gates `tests/conformance/deprecated_op_alias/`. See CONFORMANCE_SPEC §7 and
 //! `docs/content/rfcs/faq-node-rename.md`.
 
 use crate::common;
 
-use earthsci_ast::{load_string, to_json};
+use earthsci_ast::load_string;
 
 fn conf(name: &str) -> String {
     let path = common::repo_fixture("conformance/deprecated_op_alias").join(name);
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
-/// Every `op` string in a decoded document, depth-first.
-fn all_ops(v: &serde_json::Value, out: &mut Vec<String>) {
-    match v {
-        serde_json::Value::Object(map) => {
-            if let Some(op) = map.get("op").and_then(|o| o.as_str()) {
-                out.push(op.to_string());
-            }
-            for child in map.values() {
-                all_ops(child, out);
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for child in items {
-                all_ops(child, out);
-            }
-        }
-        _ => {}
-    }
-}
-
 #[test]
-fn the_alias_never_survives_the_loader() {
-    let f = load_string(&conf("aliased.esm")).expect("the deprecated alias must still load");
-    let emitted = to_json(&f).expect("emit");
-    let doc: serde_json::Value = serde_json::from_str(&emitted).expect("decode emit");
-    let mut ops = Vec::new();
-    all_ops(&doc, &mut ops);
+fn the_removed_alias_is_rejected_by_name() {
+    let err = load_string(&conf("aliased.esm")).expect_err("`aggregate` is removed at 2.0.0");
+    let e = err.to_string();
     assert!(
-        !ops.iter().any(|o| o == "aggregate"),
-        "the deprecated alias reached emit"
+        e.contains("removed_op") && e.contains("aggregate"),
+        "got: {e}"
     );
-    assert!(ops.iter().any(|o| o == "faq"), "no `faq` node in emit");
-}
-
-#[test]
-fn emitting_the_alias_document_reproduces_the_canonical_one() {
-    // The two fixtures differ ONLY in the op tag, so normalization at the wire
-    // boundary must make their emitted forms byte-identical.
-    let aliased = to_json(&load_string(&conf("aliased.esm")).expect("load aliased")).expect("emit");
-    let canonical =
-        to_json(&load_string(&conf("canonical.esm")).expect("load canonical")).expect("emit");
-    assert_eq!(aliased, canonical);
+    load_string(&conf("canonical.esm")).expect("the `faq` spelling loads");
 }
 
 #[test]
@@ -82,16 +50,12 @@ fn conf_path(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn the_alias_is_normalized_inside_a_referenced_child() {
-    let f = earthsci_ast::load_path(conf_path("ref_parent_aliased.esm").to_str().unwrap())
-        .expect("a parent mounting an aliased child must load");
-    let emitted = to_json(&f).expect("emit");
-    let doc: serde_json::Value = serde_json::from_str(&emitted).expect("decode emit");
-    let mut ops = Vec::new();
-    all_ops(&doc, &mut ops);
+fn the_removed_alias_inside_a_referenced_child_is_rejected() {
+    let err = earthsci_ast::load_path(conf_path("ref_parent_aliased.esm").to_str().unwrap())
+        .expect_err("a child's `aggregate` must be rejected");
     assert!(
-        !ops.iter().any(|o| o == "aggregate"),
-        "the alias survived a {{ref}} into emit"
+        err.to_string().contains("removed_op"),
+        "rejection must carry `removed_op`, got: {err}"
     );
 }
 
@@ -127,13 +91,4 @@ fn faq_below_v11_is_rejected() {
         err.to_string().contains("faq_version_too_old"),
         "got: {err}"
     );
-}
-
-#[test]
-fn the_alias_below_v11_is_legal_and_raises_the_floor() {
-    // `aggregate` IS the pre-1.1.0 spelling, so the gate reads the AUTHORED
-    // form and must not catch it; normalization raises the version with it.
-    let f = earthsci_ast::load_path(at_version("aliased.esm", "1.0.0").to_str().unwrap())
-        .expect("the alias below 1.1.0 is legal");
-    assert_eq!(f.esm, "1.1.0");
 }

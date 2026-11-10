@@ -44,7 +44,7 @@ fn sample_state(n: usize) -> Vec<f64> {
 /// evaluated at two different N.
 fn heat1d_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {"name": "heat1d_param"},
  "models": {
   "Heat1D": {
@@ -208,7 +208,7 @@ fn kernel_op_count_is_independent_of_grid_size() {
 /// shape the vectorized evaluator must handle.
 fn advection1d_json(n: usize, c: f64) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {"name": "advection1d"},
  "models": {
   "Adv1D": {
@@ -330,7 +330,7 @@ fn advection_1d_integrates_end_to_end_via_vectorized_path() {
 /// `sum_k 25·ifelse(k==0,-2,1)·u[i+k]` contracts `k ∈ [-1,1]`.
 fn einsum_heat1d_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {"name": "einsum_heat1d_param"},
  "models": {
   "Heat1DEinsum": {
@@ -361,7 +361,7 @@ fn einsum_heat1d_json(n: usize) -> String {
 /// grid size — identical stencil AST at every size. Mirrors fixture 17.
 fn latlon_heat_json(nlon: usize, nlat: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {"name": "latlon_heat_param"},
  "models": {
   "HeatLatLon": {
@@ -414,7 +414,7 @@ fn latlon_heat_json(nlon: usize, nlat: usize) -> String {
 /// field feeding the spatial derivative) in miniature.
 fn varying_array_observed_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {"name": "obs_vec"},
  "models": {
   "ObsVec": {
@@ -494,7 +494,7 @@ fn varying_array_observed_vectorizes_and_matches_oracle() {
 /// vectorized contraction fold (`eval_vec_contracted`).
 fn filtered_einsum_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {"name": "filtered_einsum"},
  "models": {"M": {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -553,7 +553,7 @@ fn filtered_contraction_vectorizes_and_matches_oracle() {
 /// select exercises the whole-array comparison + `vec_select` path.
 fn array_ifelse_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {"name": "array_ifelse"},
  "models": {"M": {
    "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -612,7 +612,7 @@ fn array_valued_ifelse_vectorizes_and_matches_oracle() {
 /// constant per RHS call and read as plain source arrays.
 fn regrid_gather_json(ni: usize, nj: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {"name": "regrid_gather"},
  "models": {"M": {
    "variables": {
@@ -735,7 +735,7 @@ fn periodic_wrap_kernel_op_count_is_independent_of_grid_size() {
 /// Every legal arity of the ops that used to diverge, in one vectorizable body.
 fn all_legal_arities_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {"name": "arity_matrix"},
  "models": {
   "ArityMatrix": {
@@ -806,7 +806,7 @@ fn vectorized_matches_oracle_on_every_legal_arity() {
 fn array_filter_json() -> String {
     r#"
         {
-          "esm": "1.1.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "array_filter"
           },

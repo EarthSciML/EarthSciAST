@@ -67,10 +67,8 @@ impl Cadence {
 }
 
 /// The relational / value-invention ops that may not run on the hot path (§5.7
-/// guard 2): one classifying `CONTINUOUS` is a hard error. Includes the
-/// arg-witness reducers (`argmin`/`argmax`, §5.7 rule 6) — a state-dependent
-/// assignment is out of scope for v1, exactly like a state-dependent `distinct`.
-const RELATIONAL_OPS: [&str; 6] = ["distinct", "join", "skolem", "rank", "argmin", "argmax"];
+/// guard 2): one classifying `CONTINUOUS` is a hard error.
+const RELATIONAL_OPS: [&str; 2] = ["distinct", "join"];
 
 // === Leaf seeds + classification ==========================================
 
@@ -455,7 +453,7 @@ impl Ctx<'_> {
 
 // === Guards ===============================================================
 
-/// §5.7.6 guard 2: a `distinct`/`join`/`skolem`/`rank` node (or a `distinct`
+/// §5.7.6 guard 2: a `distinct`/`join` node (or a `distinct`
 /// aggregate) that classifies `CONTINUOUS` is rejected — state-dependent
 /// topology may not run per step in v1.
 pub fn assert_no_continuous_relational(node: &Value, model: &Value) -> Result<(), CadenceError> {
@@ -478,7 +476,7 @@ impl Ctx<'_> {
             return Err(err(format!(
                 "relational/value-invention node op={op:?} classifies CONTINUOUS — it may \
              not run on the hot path (§5.7 guard 2). A state-dependent \
-             distinct/join/skolem/rank is out of scope for v1."
+             distinct/join is out of scope for v1."
             )));
         }
         for c in child_exprs(map) {
@@ -1162,7 +1160,7 @@ mod tests {
                 "rhs": {
                     "op": "faq", "distinct": true, "semiring": "bool_and_or",
                     "output_idx": ["e"], "ranges": {"f": {"from": "faces"}},
-                    "key": {"op": "skolem", "label": "edge", "args": [{"op": "index", "args": ["u", "f"]}]},
+                    "key": {"op": "index", "args": ["u", "f"]},
                     "expr": {"op": "true", "args": []}
                 }
             }]

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "HostMountsJoinLeaf",
     "description": "Regression fixture: a relational leaf mounted as a NESTED §4.7 subsystem keeps its `join.on` key columns.\n\nThe array runtime's mount renames every mounted variable to `<key>.<name>` and rewrites the `Expr::Variable` references that read them. A `join.on` key column is a plain STRING on the aggregate node rather than a child expression (CONFORMANCE_SPEC §5.5.6), so before `rename_free_symbol` learned to carry the join names it was left naming the leaf's bare `left_key` / `right_key`, and the build died with\n\n  Unsupported feature 'value-equality join over data-derived columns': join key column 'left_key' does not resolve to a loop index of this aggregate\n\nThe scalar flatten path never had this hole (`flatten.rs::namespace_join_names`); the array path — `simulate_array/compile.rs::mount_subsystems` — did.\n\n`join_leaf.esm` passes standalone, which is what attributes a failure here to the mount rather than to the leaf. Reported by the downstream EPA MOVES port as finding F1.",

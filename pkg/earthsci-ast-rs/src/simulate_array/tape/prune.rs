@@ -68,7 +68,6 @@ pub(super) fn split_output_only(prog: &mut TapeProgram) {
                 | Instr::FaultScan { .. }
                 | Instr::ScalarRead { .. }
                 | Instr::DataGather { faults: true, .. }
-                | Instr::Interp { .. }
                 | Instr::LoadForcing { .. }
                 | Instr::Sweep { .. }
         )

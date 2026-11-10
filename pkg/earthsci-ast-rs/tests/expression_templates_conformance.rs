@@ -163,7 +163,7 @@ fn unlowered_integral_loads_but_is_gated_before_evaluation() {
 fn attrs_on_rewrite_target_op_bind_as_scalar_metavariables() {
     let src = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "attrs_match",
             "authors": [

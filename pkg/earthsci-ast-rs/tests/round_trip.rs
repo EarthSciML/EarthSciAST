@@ -783,7 +783,7 @@ fn test_tests_analyses_comprehensive_round_trip() {
 fn test_inline_multi_y_schema_validation() {
     let esm = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "multi_y_test"
           },

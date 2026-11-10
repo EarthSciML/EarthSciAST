@@ -181,7 +181,7 @@ pub(super) fn lit(v: &[f64]) -> serde_json::Value {
 
 pub(super) fn doc(vars: serde_json::Value, eqs: Vec<serde_json::Value>) -> serde_json::Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_array_forms"},
         "models": {"M": {"variables": vars, "equations": eqs}}
     })
@@ -411,7 +411,7 @@ fn makearray_lower_rank_region_values() {
     ]});
     for rhs in [along_i, along_j] {
         let compiled = compile(json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "tape_makearray_faces"},
             "index_sets": {"x": {"kind": "interval", "size": n}, "y": {"kind": "interval", "size": m}},
             "models": {"M": {
@@ -429,7 +429,7 @@ fn makearray_lower_rank_region_values() {
 #[test]
 fn makearray_empty_region_is_skipped() {
     let compiled = compile(json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_makearray_empty"},
         "index_sets": {"x": {"kind": "interval", "size": 2}},
         "models": {"M": {
@@ -456,7 +456,7 @@ fn makearray_empty_region_is_skipped() {
 fn makearray_empty_region_with_a_mismatched_value_is_the_oracles_nan() {
     let n = 3;
     let compiled = compile(json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_makearray_empty_mismatch"},
         "index_sets": {"x": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -493,7 +493,7 @@ fn makearray_empty_region_with_a_mismatched_value_is_the_oracles_nan() {
 #[test]
 fn empty_output_box_is_an_empty_array() {
     let compiled = compile(json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_empty_box"},
         "index_sets": {"r": {"kind": "interval", "size": 0}, "c": {"kind": "interval", "size": 3}},
         "models": {"M": {
@@ -597,7 +597,7 @@ fn whole_array_shape_ops() {
         eqs.push(json!({"lhs": {"op": "D", "args": [var], "wrt": "t"}, "rhs": 0.0}));
     }
     let compiled = compile(json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_shape_ops"},
         "index_sets": {
             "six": {"kind": "interval", "size": 6},
@@ -649,7 +649,7 @@ fn filtered_rank0_reduction() {
 #[test]
 fn shaped_ifelse_with_a_scalar_arm() {
     let compiled = compile(json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_shaped_ifelse"},
         "index_sets": {"r": {"kind": "interval", "size": 3}},
         "models": {"M": {
@@ -703,7 +703,7 @@ fn undeclared_mixed_doc(
     let mut eqs = vec![json!({"lhs": "X", "rhs": body})];
     eqs.extend(readers);
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_undeclared_mixed_ifelse"},
         "index_sets": {
             "cell": {"kind": "interval", "size": 3},

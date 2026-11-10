@@ -59,7 +59,7 @@ fn valid_dir() -> std::path::PathBuf {
 /// particular environment to resolve.
 fn importer(import_ref: &str) -> String {
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "env_var_ref_importer",
                       "description": "Imports a template library through a ref (esm-spec 4.7)." },
         "models": { "M": {
@@ -194,7 +194,7 @@ fn a_set_variable_expands_in_a_subsystem_ref() {
     let _lock = env_lock();
     let dir = tempfile::tempdir().expect("temp dir");
     let leaf = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "leaf" },
         "models": { "Leaf": {
             "variables": { "x": { "type": "unknown", "units": "1", "default": 1.0 } },
@@ -207,7 +207,7 @@ fn a_set_variable_expands_in_a_subsystem_ref() {
     write(&dir.path().join("leaves"), "leaf.esm", &leaf);
 
     let parent = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "parent" },
         "models": { "Parent": {
             "variables": { "y": { "type": "unknown", "units": "1", "default": 1.0 } },
@@ -226,7 +226,7 @@ fn a_set_variable_expands_in_a_subsystem_ref() {
 /// A coupling-library file: roles + role-scoped edges (esm-spec §10.9).
 fn coupling_lib() -> Value {
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "EnvRefCouplingLib" },
         "coupling_roles": { "Src": { "description": "source" }, "Dst": { "description": "sink" } },
         "coupling": [
@@ -238,7 +238,7 @@ fn coupling_lib() -> Value {
 /// An assembly whose `coupling_import` reaches the library through `import_ref`.
 fn coupling_assembly(import_ref: &str) -> EsmFile {
     serde_json::from_value(json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "env_ref_assembly" },
         "models": {
             "A": { "variables": { "a": { "type": "parameter", "units": "1", "default": 1 } },

@@ -124,7 +124,7 @@ fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> Checked {
 
 fn doc(index_sets: Value, variables: Value, equations: Value) -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_loops"},
         "index_sets": index_sets,
         "models": {"M": {"variables": variables, "equations": equations}}

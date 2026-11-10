@@ -66,7 +66,7 @@ fn coupled_scalar_parameters_fed_grid_arrays_match_the_fn_form() {
 
 #[test]
 fn arrays_over_unrelated_index_sets_are_refused() {
-    let doc = r#"{"esm": "1.2.0", "metadata": {"name": "taa_mismatch"},
+    let doc = r#"{"esm": "2.0.0", "metadata": {"name": "taa_mismatch"},
       "index_sets": {"a": {"kind": "interval", "size": 2}, "b": {"kind": "interval", "size": 3}},
       "models": {"M": {
         "expression_template_imports": [{"ref": "esm:std/interp.esm", "only": ["bilinear"]}],
@@ -97,7 +97,7 @@ fn arrays_over_unrelated_index_sets_are_refused() {
 /// is spliced into the model object.
 fn model_doc(variables: &str, equations: &str, extra: &str) -> String {
     format!(
-        r#"{{"esm": "1.2.0", "metadata": {{"name": "taa_probe"}},
+        r#"{{"esm": "2.0.0", "metadata": {{"name": "taa_probe"}},
           "index_sets": {{"c": {{"kind": "interval", "size": 3}},
                          "verts": {{"kind": "interval", "size": 4}},
                          "coord": {{"kind": "interval", "size": 2}}}},

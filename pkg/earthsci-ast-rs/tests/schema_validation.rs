@@ -268,7 +268,7 @@ fn test_coupling_validation_errors() {
 #[test]
 fn test_source_catalog_document_loads() {
     let fixture = r#"{
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "source-catalog" },
         "data_sources": {
             "MetData": {

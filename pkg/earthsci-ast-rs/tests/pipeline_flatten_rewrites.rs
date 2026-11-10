@@ -18,7 +18,7 @@ fn doc(lat_default: Option<Value>) -> Value {
         lat["default"] = d;
     }
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "DegreeArguments"},
         "index_sets": {"cells": {"kind": "interval", "size": 3}},
         "models": {"Deg": {
@@ -113,7 +113,7 @@ fn the_build_pipeline_takes_a_degree_argument_in_radians() {
 
 fn scalar_doc(equations: Value) -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Rewrites"},
         "models": {"M": {
             "variables": {
@@ -172,7 +172,7 @@ fn nested_doc() -> Value {
     let sin30 = json!({"op": "sin", "args": ["latitude"]});
     let cos30 = json!({"op": "cos", "args": ["latitude"]});
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "DegreeArgumentsNested"},
         "index_sets": {"cells": {"kind": "interval", "size": 3}},
         "function_tables": {"T": {

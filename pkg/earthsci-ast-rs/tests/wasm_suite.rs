@@ -28,7 +28,7 @@ use earthsci_ast::{
 /// `x(t) = e^{-t}`. Exercises the pure-ODE (diffsol/Faer) path in wasm.
 const SCALAR_ODE: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {
         "name": "decay",
         "description": "scalar exponential decay"
@@ -74,7 +74,7 @@ const HEAT_1D: &str = include_str!("../../../tests/fixtures/faq/15_discretized_1
 
 /// Minimal reaction system `A → B` for the stoichiometry subsystem.
 const REACTIONS: &str = r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "chem", "description": "minimal A -> B reaction" },
   "reaction_systems": {
     "Chem": {

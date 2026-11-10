@@ -151,7 +151,7 @@ fn the_array_route_converts_a_degree_argument_and_leaves_radians_alone() {
     // what makes that route skip `flatten`. Each state integrates a constant
     // over [0, 1], so its value at t = 1 IS that constant, in every cell.
     let doc = r#"{
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {"name": "AngleUnitsDegreesArray"},
       "index_sets": {"cells": {"kind": "interval", "size": 2}},
       "models": {"AngleUnitsArray": {

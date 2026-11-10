@@ -249,7 +249,7 @@ fn a_fallback_rule_is_refused_by_name() {
         return;
     }
     let text = r#"{
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "XlaFallback"},
         "index_sets": {"steps": {"kind": "interval", "size": 4}},
         "models": {"R": {
@@ -615,7 +615,7 @@ fn datetime_doc() -> String {
         })
         .collect();
     format!(
-        r#"{{"esm": "1.1.0",
+        r#"{{"esm": "2.0.0",
              "metadata": {{"name": "CompiledDatetime"}},
              "models": {{"M": {{"variables": {{{}}}, "equations": [{}]}}}}}}"#,
         vars.join(","),
@@ -711,7 +711,7 @@ fn interp_lowers_and_matches_the_interpreter() {
     // A non-uniform axis (so a wrong cell cannot hide behind even spacing), a
     // 3x4 bilinear grid, and a searchsorted table with a duplicate run.
     let doc = r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "XlaInterpProbe", "description": "One state per §9.2 interp entry, each reading query states, so a probe places every query independently." },
   "models": { "M": { "variables": {
       "qa": { "type": "unknown", "units": "1", "default": 0.0 },
@@ -827,7 +827,7 @@ fn scans_assemblies_and_promoted_contractions_lower() {
     let u_i = r#"{"op": "index", "args": ["u", "i"]}"#;
     let doc = format!(
         r#"{{
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {{"name": "XlaLoopProbe"}},
   "index_sets": {{"x": {{"kind": "interval", "size": {n}}}}},
   "models": {{"M": {{
@@ -904,7 +904,7 @@ fn scan_doc(n: usize) -> String {
     let u_j = r#"{"op": "index", "args": ["u", "j"]}"#;
     format!(
         r#"{{
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {{"name": "XlaScanProbe"}},
   "index_sets": {{"x": {{"kind": "interval", "size": {n}}}}},
   "models": {{"M": {{
@@ -1002,7 +1002,7 @@ fn scan_lowering_is_flat_in_the_scanned_length() {
 fn forced_doc(n: i64) -> String {
     let fed = |var: &str| serde_json::json!({"kind": "data", "source": "met", "from": {"file_variable": var}});
     serde_json::json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Forced"},
         "index_sets": {"cells": {"kind": "interval", "size": n}},
         "data_sources": {"met": {"kind": "grid", "source": {"url_template": "file:///met.nc"}}},
@@ -1274,7 +1274,7 @@ fn a_strict_table_lookup_is_refused_by_name() {
         return;
     }
     let doc = r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "XlaStrictTable", "authors": ["test"] },
   "function_tables": {
     "ramp_tab": {

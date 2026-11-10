@@ -119,7 +119,7 @@ fn shaped_parameter_broadcast_matches_golden() {
 #[test]
 fn bare_whole_array_derivative_over_a_broadcast_parameter() {
     let text = r#"{
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": { "name": "MinimalShapedColumn", "authors": ["conformance"] },
       "index_sets": { "lev": { "kind": "interval", "size": 4 } },
       "models": {

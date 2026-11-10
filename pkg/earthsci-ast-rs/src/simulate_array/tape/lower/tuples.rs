@@ -616,7 +616,6 @@ impl TapeBuilder<'_> {
             name,
             &[],
             self.const_arrays,
-            self.f32_document,
             self.array_bool_reductions,
             |mut b| {
                 b.defer_consts = true;
@@ -940,12 +939,9 @@ impl TapeBuilder<'_> {
                         parents,
                     }
                 }
-                ContractDim::Derived { from_faq } => match self.ring_extent(from_faq) {
-                    Some(n) => DimBound::Static(1, n),
-                    None => {
-                        bail_tape!("contracted: derived contraction bound (from `{from_faq}`)")
-                    }
-                },
+                ContractDim::Derived { from_faq } => {
+                    bail_tape!("contracted: derived contraction bound (from `{from_faq}`)")
+                }
             });
         }
         Ok(out)

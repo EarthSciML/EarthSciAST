@@ -175,7 +175,6 @@ fn rename(
         }
         Instr::Un { a, .. }
         | Instr::Neg { a, .. }
-        | Instr::Calendar { a, .. }
         | Instr::Copy { a, .. }
         | Instr::Fill { v: a, .. }
         | Instr::JmpIfZero { cond: a, .. } => op(a),
@@ -190,10 +189,6 @@ fn rename(
         | Instr::Scan { src: s, .. }
         | Instr::TableGather { src: s, .. }
         | Instr::Reshape { src: s, .. } => src(s),
-        Instr::PolyArea { a, b, .. } => {
-            src(a);
-            src(b);
-        }
         Instr::IndexGather { src: s, idx, .. } => {
             src(s);
             op(idx);
@@ -201,12 +196,6 @@ fn rename(
         Instr::Count { axis, x, .. } => {
             src(axis);
             op(x);
-        }
-        Instr::Interp { x, y, .. } => {
-            op(x);
-            if let Some(y) = y {
-                op(y);
-            }
         }
         Instr::Region { base, src: s, .. } => {
             *base = canon[*base as usize];

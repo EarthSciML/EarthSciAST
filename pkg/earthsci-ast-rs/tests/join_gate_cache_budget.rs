@@ -170,7 +170,7 @@ impl Tables {
             .insert("args".into(), json!(["lkey", "rkey", "activity", "rate"]));
 
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "join_gate_cache_budget"},
             "index_sets": self.index_sets(),
             "models": {"J": {
@@ -219,7 +219,7 @@ impl Tables {
             .insert("args".into(), json!(["lkey", "rkey", "decay", "E"]));
 
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "join_gate_cache_budget_dynamic"},
             "index_sets": self.index_sets(),
             "models": {"J": {

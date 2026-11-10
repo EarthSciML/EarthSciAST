@@ -74,7 +74,7 @@ fn get_schema_value() -> &'static Value {
 ///
 /// let json = r#"
 /// {
-///   "esm": "1.0.0",
+///   "esm": "2.0.0",
 ///   "metadata": {
 ///     "name": "test_model"
 ///   },
@@ -157,10 +157,8 @@ pub fn load_string_with_options(
 fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmError> {
     let mut json_value = json_value;
 
-    // esm 1.1.0: rewrite the deprecated `aggregate` op spelling to the
-    // canonical `faq` at the wire boundary, ahead of every other pass, so the
-    // version gates, the schema, the typed tree and `emit` all see exactly one
-    // tag (docs/content/rfcs/faq-node-rename.md).
+    // Removed ops (and `function_tables`) are refused by name at the wire
+    // boundary, ahead of every other pass (esm-spec §4.2).
     let authored = prepare_document_ops_scanned(&mut json_value)?;
 
     let base = options.base_path.clone().unwrap_or_else(|| {
@@ -351,13 +349,11 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // reserved binders, which are then not walked for again.
     let mut reserved = ReservedIndexScan::new(&json_value);
     let mut has_enum_ops = false;
-    let mut has_checked_node = false;
     let (has_templates, scanned_whole) =
         crate::lower_expression_templates::lower_expression_templates_visiting(
             &mut json_value,
             &mut |path, value| {
                 has_enum_ops |= crate::lower_enums::is_enum_node(value);
-                has_checked_node |= crate::load_checks::is_load_checked_node(value);
                 reserved.visit(path, value);
             },
         )
@@ -399,24 +395,6 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         None => reject_reserved_index_symbols(&json_value),
     }
     .map_err(|e| EsmError::StructuralValidation(e.to_string()))?;
-
-    // esm-spec §9.5.5 and §9.2 "When the … checks run" (rulings Q-106, Q-112,
-    // Q-113): the ten table checks on EVERY `function_tables` entry, referenced
-    // or not, and only then the argument checks on every `interp.*` `fn` node
-    // and the lookup checks on every `table_lookup` node, wherever they appear.
-    // HERE, on the fully rewritten form, so a node a template expansion
-    // produced is checked with the arguments the application gave it. Raised
-    // as a `[code]`-prefixed structural error, as the reserved-index-symbol
-    // check above is: the document is schema-valid, and `validate_text`
-    // reports it invalid with the code among its structural errors. The template scan above
-    // already saw the whole document when it carried no template machinery,
-    // so a document it found no such node in is not walked again.
-    let tables = crate::load_checks::check_raw_function_tables(&json_value)
-        .map_err(|f| EsmError::StructuralValidation(f.to_string()))?;
-    if has_checked_node || !scanned_whole {
-        crate::load_checks::check_raw_expression_nodes(&json_value, &tables)
-            .map_err(|f| EsmError::StructuralValidation(f.to_string()))?;
-    }
 
     // Deserialize into our types. The interning scope makes every
     // structurally repeated operator subtree share ONE allocation as it is
@@ -1898,18 +1876,10 @@ fn is_iso8601_duration(s: &str) -> bool {
     any_component && chars.next().is_none()
 }
 
-/// Rewrite every deprecated expression-node `op` spelling to its canonical tag,
-/// in place, and warn once for the document.
-///
-/// The one alias is `aggregate` → `faq` (esm 1.1.0,
-/// `docs/content/rfcs/faq-node-rename.md`). Normalizing at the wire boundary is
-/// what lets the rest of the crate recognize exactly one spelling: nothing
-/// downstream of the loader — [`crate::faq::is_faq_op`] included — ever sees the
-/// alias, and a document authored with `aggregate` is upgraded exactly once, on
-/// its first load.
-///
-/// The older `arrayop` spelling is NOT normalized: it was removed at esm 0.8.0
-/// and is rejected like any other unknown non-rewrite-target op.
+/// The wire-boundary op checks: a removed op (`arrayop`, removed at esm 0.8.0,
+/// and the ops and the `function_tables` block esm 2.0.0 removed,
+/// [`REMOVED_AT_V2`], `aggregate` among them) is rejected by name with
+/// `removed_op`, and `faq` is refused in a document declaring esm below 1.1.0.
 pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), EsmError> {
     prepare_document_ops_scanned(value).map(|_| ())
 }
@@ -1926,12 +1896,10 @@ pub(crate) struct AuthoredFacts {
 pub(crate) fn prepare_document_ops_scanned(
     value: &mut serde_json::Value,
 ) -> Result<AuthoredFacts, EsmError> {
-    // The three steps below read and rewrite `op` tags, so they share ONE walk
-    // over the document: it finds the first `arrayop` node, the first
-    // AUTHORED `faq` node (looked for only when the declared version is below
-    // 1.1.0, the one case the gate can fire), and rewrites every `aggregate`
-    // node, in pre-order. On an error the rewritten document is discarded, so
-    // the error is the one the steps would report taken one at a time.
+    // The two steps below read `op` tags, so they share ONE walk over the
+    // document: it finds the first removed op node and the first `faq` node
+    // (looked for only when the declared version is below 1.1.0, the one case
+    // the gate can fire), in pre-order.
     let faq_too_old = value
         .get("esm")
         .and_then(|v| v.as_str())
@@ -1946,50 +1914,113 @@ pub(crate) fn prepare_document_ops_scanned(
         ..OpScan::default()
     };
     scan_document_ops(value, &crate::json_visit::JsonPath::Root(""), &mut scan);
+    if scan.removed.is_none()
+        && let Some(path) = function_tables_path(value)
+    {
+        scan.removed = Some(Removed::FunctionTables { path });
+    }
     let facts = AuthoredFacts {
         op_with_units: scan.op_with_units.take(),
     };
-    // 1. `arrayop` was REMOVED at 0.8.0 — rejected by name, before anything else.
-    if let Some(path) = scan.removed {
-        return Err(EsmError::SchemaValidation(format!(
-            "removed_op at {path}: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a \
-             deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query node). \
-             See docs/content/rfcs/faq-node-rename.md."
-        )));
+    // 1. A removed op or block — rejected by name, before anything else.
+    if let Some(removed) = scan.removed {
+        return Err(EsmError::SchemaValidation(removed.message()));
     }
-    // 2. Version gate, on the AUTHORED form. `faq` arrives at esm 1.1.0, so a
-    //    document that spells it while declaring less is rejected — the same
-    //    rule the top-level `solver` block follows (esm-spec §2.2.4). The walk
-    //    judged each node BEFORE rewriting it on purpose: `aggregate` IS the
-    //    pre-1.1.0 spelling, so a 1.0.0 document carrying the alias is legal
-    //    and must not be caught by this gate.
+    // 2. Version gate. `faq` arrives at esm 1.1.0, so a document that spells
+    //    it while declaring less is rejected — the same rule the top-level
+    //    `solver` block follows (esm-spec §2.2.4).
     if let Some(path) = scan.faq
         && let Some(esm) = esm_declared
     {
         return Err(EsmError::SchemaValidation(format!(
             "faq_version_too_old at {path}: the `faq` op arrives at esm 1.1.0; file \
-             declares {esm}. Use `\"op\": \"aggregate\"` (the deprecated pre-1.1.0 \
-             spelling) or raise the declared version. \
+             declares {esm}. Raise the declared version. \
              See docs/content/rfcs/faq-node-rename.md."
         )));
     }
-    // 3. The alias was normalized by the walk; raise the declared version with
-    //    it so the upgraded document is self-consistent (a floor, never a
-    //    downgrade).
-    let n = scan.rewritten;
-    if n > 0 {
-        raise_esm_floor_to_v11(value);
-    }
-    if n > 0 {
-        let plural = if n == 1 { "node was" } else { "nodes were" };
-        eprintln!(
-            "warning: deprecated_op_alias: `\"op\": \"aggregate\"` is the pre-1.1.0 spelling \
-             of `\"op\": \"faq\"` (Functional Aggregate Query); {n} {plural} normalized on \
-             load. The alias is REMOVED at esm 2.0.0 — re-emit this document to migrate it \
-             (docs/content/rfcs/faq-node-rename.md)."
-        );
-    }
     Ok(facts)
+}
+
+/// The expression ops esm 2.0.0 removed (esm-spec, "2.0.0 is a break"):
+/// `aggregate`, the pre-1.1.0 spelling of `faq`, and the external functions,
+/// each of which has a pure-AST replacement in the `esm:std/*.esm` template
+/// library. The
+/// offline codemod (`earthsci_ast.migration`, Python) rewrites a 1.x document
+/// to it. Loaders carry no rewrite of their own.
+pub(crate) const REMOVED_AT_V2: [&str; 9] = [
+    "aggregate",
+    "fn",
+    "table_lookup",
+    "skolem",
+    "rank",
+    "intersect_polygon",
+    "polygon_intersection_area",
+    "argmin",
+    "argmax",
+];
+
+/// The first removed construct a document uses, and where.
+pub(crate) enum Removed {
+    /// An `"op"` naming a removed op (`arrayop`, or one of [`REMOVED_AT_V2`]).
+    Op { path: String, op: String },
+    /// The `function_tables` block, removed at esm 2.0.0.
+    FunctionTables { path: String },
+}
+
+impl Removed {
+    /// The `removed_op` diagnostic for this construct.
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Removed::Op { path, op } if op == "arrayop" => format!(
+                "removed_op at {path}: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is \
+                 not a deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query \
+                 node). See docs/content/rfcs/faq-node-rename.md."
+            ),
+            Removed::Op { path, op } if op == "aggregate" => format!(
+                "removed_op at {path}: `\"op\": \"aggregate\"`, the pre-1.1.0 spelling of \
+                 `\"op\": \"faq\"`, was removed at esm 2.0.0; write `faq` (the codemod, \
+                 `python -m earthsci_ast.migrate`, renames it)."
+            ),
+            Removed::Op { path, op } => format!(
+                "removed_op at {path}: `\"op\": \"{op}\"` was removed at esm 2.0.0; its \
+                 replacement is an `esm:std/*.esm` expression template. Convert the document \
+                 with the codemod (`python -m earthsci_ast.migrate`, see MIGRATION.md)."
+            ),
+            Removed::FunctionTables { path } => format!(
+                "removed_op at {path}: the `function_tables` block was removed at esm 2.0.0 \
+                 together with `table_lookup`; its replacement is the `linear` / `bilinear` \
+                 templates of `esm:std/interp.esm` over the table's data. Convert the document \
+                 with the codemod (`python -m earthsci_ast.migrate`, see MIGRATION.md)."
+            ),
+        }
+    }
+}
+
+/// Is `op` an op name a loader rejects by name with `removed_op`?
+pub(crate) fn is_removed_op(op: &str) -> bool {
+    op == "arrayop" || REMOVED_AT_V2.contains(&op)
+}
+
+/// The path of a `function_tables` block in a raw document: at the top level,
+/// or on a component under `models` / `reaction_systems`.
+fn function_tables_path(value: &serde_json::Value) -> Option<String> {
+    let obj = value.as_object()?;
+    if obj.contains_key("function_tables") {
+        return Some("/function_tables".to_string());
+    }
+    for block in ["models", "reaction_systems"] {
+        for (name, comp) in obj
+            .get(block)
+            .and_then(|v| v.as_object())
+            .into_iter()
+            .flatten()
+        {
+            if comp.get("function_tables").is_some() {
+                return Some(format!("/{block}/{name}/function_tables"));
+            }
+        }
+    }
+    None
 }
 
 /// What [`scan_document_ops`] found.
@@ -1997,25 +2028,21 @@ pub(crate) fn prepare_document_ops_scanned(
 struct OpScan {
     /// Look for authored `faq` nodes at all.
     want_faq: bool,
-    /// The path of the first `"op": "arrayop"` node. `arrayop` is REMOVED,
-    /// not deprecated: without this check it is a perfectly well-formed
-    /// identifier and would fall into the OPEN rewrite-target tier (esm-spec
-    /// §4.2), loading silently and failing only much later as an
-    /// `unlowered_operator`.
-    removed: Option<String>,
-    /// The path of the first `"op": "faq"` node as authored.
+    /// The first removed op node. A removed op is not deprecated: without this
+    /// check it is a perfectly well-formed identifier and would fall into the
+    /// OPEN rewrite-target tier (esm-spec §4.2), loading silently and failing
+    /// only much later as an `unlowered_operator`.
+    removed: Option<Removed>,
+    /// The path of the first `"op": "faq"` node.
     faq: Option<String>,
-    /// `aggregate` nodes rewritten to `faq`.
-    rewritten: usize,
     /// See [`AuthoredFacts`].
     op_with_units: Option<String>,
 }
 
 /// Pre-order walk (the root included, a container before its elements, array
 /// elements in index order, object entries in map order): record the first
-/// `arrayop` node's path and, when asked, the first authored `faq` node's,
-/// and rewrite each `"op": "aggregate"` to `"op": "faq"`. A removed op ends
-/// the walk, since the document is then rejected.
+/// removed op node's path and, when asked, the first `faq` node's. A removed
+/// op ends the walk, since the document is then rejected.
 fn scan_document_ops(
     value: &mut serde_json::Value,
     at: &crate::json_visit::JsonPath<'_>,
@@ -2032,19 +2059,15 @@ fn scan_document_ops(
                 scan.op_with_units = Some(at.to_string());
             }
             match op.and_then(|v| v.as_str()) {
-                Some("arrayop") => {
-                    scan.removed = Some(at.to_string());
+                Some(op) if is_removed_op(op) => {
+                    scan.removed = Some(Removed::Op {
+                        path: at.to_string(),
+                        op: op.to_string(),
+                    });
                     return;
                 }
                 Some("faq") if scan.want_faq && scan.faq.is_none() => {
                     scan.faq = Some(at.to_string());
-                }
-                Some("aggregate") => {
-                    map.insert(
-                        "op".to_string(),
-                        serde_json::Value::String("faq".to_string()),
-                    );
-                    scan.rewritten += 1;
                 }
                 _ => {}
             }
@@ -2067,35 +2090,14 @@ fn scan_document_ops(
     }
 }
 
-/// Raise a document's declared `esm` to 1.1.0 when it sits below that floor.
-///
-/// Normalizing `aggregate` to `faq` would otherwise produce a document that
-/// spells a 1.1.0 construct while declaring an older version — precisely what
-/// the gate above rejects. The stamp is a FLOOR: a document already at or above
-/// 1.1.0 keeps its own version.
-fn raise_esm_floor_to_v11(value: &mut serde_json::Value) {
-    let below = value
-        .get("esm")
-        .and_then(|v| v.as_str())
-        .and_then(crate::diagnostic::parse_semver)
-        .is_some_and(|(major, minor, _)| (major, minor) < (1, 1));
-    if below && let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "esm".to_string(),
-            serde_json::Value::String("1.1.0".to_string()),
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The one walk of `prepare_document_ops` reports what its three steps
-    /// did taken one at a time: the first `arrayop` anywhere wins over an
-    /// earlier authored `faq`, the version gate names the first authored
-    /// `faq` (never a rewritten `aggregate`), and every `aggregate` is
-    /// rewritten.
+    /// The one walk of `prepare_document_ops` reports what its two steps did
+    /// taken one at a time: the first removed op anywhere wins over an earlier
+    /// `faq`, and the version gate names the first `faq`. `aggregate`, the
+    /// pre-1.1.0 spelling of `faq`, is a removed op at 2.0.0.
     #[test]
     fn prepare_document_ops_reports_as_its_steps_did() {
         use serde_json::json;
@@ -2108,26 +2110,25 @@ mod tests {
             run(json!({"esm": "1.0.0", "a": {"op": "faq"}, "b": [{"op": "x"}, {"op": "arrayop"}]}))
                 .unwrap_err();
         assert!(e.contains("removed_op at /b/1:"), "{e}");
-        let e = run(json!({"esm": "1.0.0", "a": {"op": "aggregate", "args": [{"op": "faq"}]}, "b": {"op": "faq"}}))
+        let e = run(json!({"esm": "2.0.0", "a": {"op": "faq", "args": [{"op": "aggregate"}]}}))
             .unwrap_err();
+        assert!(e.contains("removed_op at /a/args/0:"), "{e}");
+        assert!(e.contains("\"aggregate\""), "{e}");
+        let e = run(
+            json!({"esm": "1.0.0", "a": {"op": "+", "args": [{"op": "faq"}]}, "b": {"op": "faq"}}),
+        )
+        .unwrap_err();
         assert!(e.contains("faq_version_too_old at /a/args/0:"), "{e}");
         assert!(e.contains("file declares 1.0.0"), "{e}");
-        let v =
-            run(json!({"esm": "1.0.0", "a": {"op": "aggregate", "args": [{"op": "aggregate"}]}}))
-                .unwrap();
-        assert_eq!(
-            v,
-            json!({"esm": "1.1.0", "a": {"op": "faq", "args": [{"op": "faq"}]}})
-        );
-        let v = run(json!({"esm": "1.1.0", "a": {"op": "faq"}})).unwrap();
-        assert_eq!(v, json!({"esm": "1.1.0", "a": {"op": "faq"}}));
+        let v = run(json!({"esm": "2.0.0", "a": {"op": "faq"}})).unwrap();
+        assert_eq!(v, json!({"esm": "2.0.0", "a": {"op": "faq"}}));
     }
 
     #[test]
     fn test_load_minimal_model() {
         let json = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "test_model"
           },
@@ -2202,7 +2203,7 @@ mod tests {
     fn test_load_missing_content() {
         let json = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "test_model"
           }
@@ -2223,7 +2224,7 @@ mod tests {
 
         let json = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "test_model"
           },

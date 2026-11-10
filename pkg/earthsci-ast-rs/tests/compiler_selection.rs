@@ -175,7 +175,7 @@ fn refused_doc() -> Value {
         "expr": {"op": "*", "args": [
             {"op": "index", "args": ["s", {"op": "-", "args": ["k", 1]}]}, "j"]}});
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "RefusedRecurrence"},
         "index_sets": {"steps": {"kind": "interval", "size": 4}},
         "models": {"R": {
