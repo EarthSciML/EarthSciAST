@@ -870,6 +870,9 @@ pub(crate) struct TapeBuilder<'m> {
     tuple_frames: Vec<tuples::TupleFrame>,
     /// The id the next tuple-list box gets (0 means "not a tuple box").
     next_tuple: u32,
+    /// The enclosing list and repeat count of the next tuple-list box, when
+    /// it is a nested reduction's list (`tuples::lower_nested_scalar_in_tuples`).
+    next_tuple_parent: Option<(u32, usize)>,
     /// Tuples this program's tuple lists hold so far, against
     /// `tuples::tuple_list_budget`.
     tuples_held: u64,
@@ -1199,6 +1202,7 @@ impl<'m> TapeBuilder<'m> {
             range_defs: HashSet::new(),
             tuple_frames: Vec::new(),
             next_tuple: 1,
+            next_tuple_parent: None,
             tuples_held: 0,
             faults: Vec::new(),
             fault_scans: Vec::new(),
@@ -4850,7 +4854,7 @@ impl<'m> TapeBuilder<'m> {
             if spec.has_drivable_overlap() || node.key.is_some() || node.distinct == Some(true) {
                 bail_tape!("aggregate: a gated or keyed rank-0 output that reads its tuple list");
             }
-            return self.lower_nested_scalar_in_tuples(spec, bx);
+            return self.lower_nested_scalar_in_tuples(node, spec, bx);
         }
         if nested_aggregate_capture(spec, bx.syms.iter().chain(bx.cnames.iter())).is_none() {
             let level = self.enter_fault_level(Some(bx));
@@ -7670,6 +7674,9 @@ impl<'m> TapeBuilder<'m> {
         // The attempt's value numbers in the frame it ran in: one naming a
         // rolled-back slot goes (a value it shadowed is simply recomputed).
         if let Some(frame) = self.scope_frames.last_mut() {
+            frame.retain_live(n_slots);
+        }
+        for frame in &mut self.tuple_frames {
             frame.retain_live(n_slots);
         }
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {

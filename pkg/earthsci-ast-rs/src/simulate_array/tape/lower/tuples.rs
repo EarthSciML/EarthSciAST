@@ -52,6 +52,13 @@ pub(in crate::simulate_array::tape) struct TupleFrame {
     cols: Vec<Vec<f64>>,
     slots: Vec<Option<SlotId>>,
     len: usize,
+    /// For a nested reduction's list: the enclosing list's id and how many
+    /// times each of its tuples is repeated here (tuple `e` here is tuple
+    /// `e / repeat` there).
+    parent: Option<(u32, usize)>,
+    /// Nested reductions hoisted to this list (by node address), each a slot
+    /// over the list.
+    hoisted: FxHashMap<usize, SlotId>,
 }
 
 /// One contracted dimension's bound, before an output cell is chosen.
@@ -76,6 +83,12 @@ pub(super) enum Parent {
 }
 
 impl TupleFrame {
+    /// Forget every hoisted value naming a slot at or past `n_slots` (a
+    /// rolled-back slot's id is handed out again).
+    pub(super) fn retain_live(&mut self, n_slots: SlotId) {
+        self.hoisted.retain(|_, s| *s < n_slots);
+    }
+
     /// The list's id (its box's [`LBox::tuple`]).
     pub(super) fn id(&self) -> u32 {
         self.id
@@ -406,6 +419,8 @@ impl TapeBuilder<'_> {
             cols: list.cols,
             slots: vec![None; idx_names.len() + contract_names.len()],
             len: m,
+            parent: self.next_tuple_parent.take(),
+            hoisted: FxHashMap::default(),
         });
         self.push_scope();
         let bx = LBox {
@@ -516,12 +531,127 @@ impl TapeBuilder<'_> {
     /// is an array over the enclosing list, folded in the oracle's order.
     pub(super) fn lower_nested_scalar_in_tuples(
         &mut self,
+        node: &Arc<ExpressionNode>,
         spec: &ArrayOpSpec<'_>,
         bx: &LBox,
     ) -> LResult<LV> {
         let Some(fi) = self.tuple_frames.iter().rposition(|f| f.id == bx.tuple) else {
             bail_tape!("aggregate: a rank-0 output nested in a tuple list with no open frame");
         };
+        // A reduction that reads only the loop symbols of an enclosing list
+        // has one value per tuple of that list, whichever of its repeats
+        // reads it: lowered once there and gathered here by repeat.
+        let unread = |f: &TupleFrame, n: &String| -> bool {
+            !f.names.contains(n)
+                || crate::simulate_array::vectorized::nested_aggregate_capture(
+                    spec,
+                    std::iter::once(n),
+                )
+                .is_none()
+        };
+        let mut target = fi;
+        let mut repeat = 1usize;
+        while let Some((pid, per)) = self.tuple_frames[target].parent {
+            let Some(pi) = self.tuple_frames.iter().rposition(|f| f.id == pid) else {
+                break;
+            };
+            let frame = &self.tuple_frames[target];
+            let parent = &self.tuple_frames[pi];
+            if !frame
+                .names
+                .iter()
+                .all(|n| parent.names.contains(n) || unread(frame, n))
+            {
+                break;
+            }
+            repeat *= per;
+            target = pi;
+        }
+        if target != fi {
+            return self.hoisted_nested_scalar(node, spec, fi, target, repeat);
+        }
+        self.lower_nested_scalar_here(spec, fi)
+    }
+
+    /// [`Self::lower_nested_scalar_in_tuples`] lowered over the enclosing list
+    /// `target` and gathered to the list `fi`, whose tuple `e` repeats tuple
+    /// `e / repeat` of `target`.
+    fn hoisted_nested_scalar(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        spec: &ArrayOpSpec<'_>,
+        fi: usize,
+        target: usize,
+        repeat: usize,
+    ) -> LResult<LV> {
+        let key = Arc::as_ptr(node) as usize;
+        let m_t = self.tuple_frames[target].len;
+        let m = self.tuple_frames[fi].len;
+        if m != m_t * repeat {
+            bail_tape!("aggregate: a nested tuple list that is not its enclosing list repeated");
+        }
+        let base = match self.tuple_frames[target].hoisted.get(&key) {
+            Some(&s) => LV::Arr(s),
+            None => {
+                let v = self.lower_nested_scalar_here(spec, target)?;
+                let v = match v {
+                    LV::Lit(_) => return Ok(v),
+                    v => match (&v, self.lv_box(&v)) {
+                        (LV::Arr(_), Some((sh, o)))
+                            if sh.as_slice() == [m_t] && o.as_slice() == [1] =>
+                        {
+                            v
+                        }
+                        _ => self.emit_fill(&v, &[m_t], &[1], Cadence::Const),
+                    },
+                };
+                if let LV::Arr(s) = v
+                    && !self.in_branch()
+                {
+                    self.tuple_frames[target].hoisted.insert(key, s);
+                }
+                v
+            }
+        };
+        let LV::Arr(src_slot) = base else {
+            unreachable!("a hoisted reduction is an array over its list");
+        };
+        let pos: Vec<u32> = (0..m).map(|e| (e / repeat) as u32).collect();
+        let vals = self
+            .known_slice(src_slot)
+            .map(|b| pos.iter().map(|&p| b[p as usize]).collect::<Vec<f64>>());
+        if self.defer_consts
+            && self.lv_cadence(&base) == Cadence::Const
+            && let Some(v) = vals
+        {
+            return Ok(LV::Arr(self.emit_const_data(
+                &[m],
+                &[1],
+                Arc::new(v),
+                false,
+            )?));
+        }
+        let table = tape_index(self.gather_tables.len(), "gather tables")?;
+        self.gather_tables.push(GatherTable {
+            src_shape: DimU::from_elem(m_t, 1),
+            pos,
+        });
+        let sec = self.placement(self.lv_cadence(&base));
+        let out = self.new_slot(&[m], &[1], false, sec);
+        let instr = Instr::TableGather {
+            src: self.src_of(&base),
+            table,
+            out,
+        };
+        self.emit(instr, sec);
+        if let Some(v) = vals {
+            self.known.insert(out, Known::Vals(Arc::new(v)));
+        }
+        Ok(LV::Arr(out))
+    }
+
+    /// [`Self::lower_nested_scalar_in_tuples`] over the open list `fi`.
+    fn lower_nested_scalar_here(&mut self, spec: &ArrayOpSpec<'_>, fi: usize) -> LResult<LV> {
         let m = self.tuple_frames[fi].len;
         // The enclosing loop symbols the nested contraction does not shadow
         // (the oracle rebinds a shadowed name around the nested body).
@@ -621,13 +751,16 @@ impl TapeBuilder<'_> {
             init: spec.reduce.identity(),
         };
         let notes = self.fault_notes;
-        let v = self.lower_tuple_list(
+        self.next_tuple_parent = Some((self.tuple_frames[fi].id, per));
+        let lowered = self.lower_tuple_list(
             &tspec,
             TupleList { rows, cols },
             &DimI::from_elem(1, 1),
             &DimU::from_elem(m, 1),
             scalar_combine_op(spec.reduce),
-        )?;
+        );
+        self.next_tuple_parent = None;
+        let v = lowered?;
         // A fault here would sort by the nested list's tuples, which do not
         // place it among the enclosing list's own faults: refused instead.
         if self.fault_notes != notes {
@@ -1406,9 +1539,10 @@ impl TapeBuilder<'_> {
             if n.op == "-" && parts.len() > 2 || n.op == "/" && parts.len() != 2 {
                 return Ok(None);
             }
+            let k = binary_kernel_for(&n.op);
             for p in &parts[1..] {
                 for (a, &b) in acc.iter_mut().zip(p.iter()) {
-                    *a = apply_binary(&n.op, *a, b);
+                    *a = k(*a, b);
                 }
             }
             return Ok(Some(Arc::new(acc)));
@@ -1429,10 +1563,11 @@ impl TapeBuilder<'_> {
                     }
                 }
                 let out: Vec<f64> = if cmp {
+                    let k = binary_kernel_for(&n.op);
                     parts[0]
                         .iter()
                         .zip(parts[1].iter())
-                        .map(|(&x, &y)| apply_binary(&n.op, x, y))
+                        .map(|(&x, &y)| k(x, y))
                         .collect()
                 } else {
                     (0..m)
@@ -2240,6 +2375,18 @@ pub(super) fn ragged_bound(
 pub(super) fn round_to_i64(x: f64) -> i64 {
     let i = x as i64;
     if i as f64 == x { i } else { x.round() as i64 }
+}
+
+/// [`apply_binary`]'s kernel for `op` under the current precision, resolved
+/// once for a whole column (`binary_kernels_match_apply_binary` pins the two
+/// to the same bits).
+fn binary_kernel_for(op: &str) -> fn(f64, f64) -> f64 {
+    use crate::simulate_array::eval::{BinCode, binary_kernel_f32_of, binary_kernel_of};
+    if crate::precision::is_f32() {
+        binary_kernel_f32_of(BinCode::of(op))
+    } else {
+        binary_kernel_of(BinCode::of(op))
+    }
 }
 
 #[cfg(test)]
