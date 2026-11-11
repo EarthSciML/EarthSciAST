@@ -18,7 +18,11 @@
 > uses none of them still loads, on its own and as a mounted or referenced
 > document of a 2.0.0 root, and the 1.x version gates still apply to it (§4.2,
 > "Removed ops"). The 2.0.0 codemod rewrites a 1.x document that does use one;
-> see `MIGRATION.md`.
+> see `MIGRATION.md`. Also made with the 2.0.0 break: `records_per_sample` is
+> deprecated and no longer obeyed, only checked; the number of records a
+> data-fed parameter receives is said by its record shape, whose first axis is
+> a record axis (`"records": true`) or not, so a document writing `2` over a
+> plain size-2 first axis is now refused (§8.3, §8.5.1).
 
 > **1.0.0 is a clean break.** The five declared variable types collapse to two:
 > `unknown` (the solver solves for it; its behavior is stated by **equations**)
