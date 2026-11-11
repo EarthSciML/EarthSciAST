@@ -529,7 +529,7 @@ fn native_builds_a_makearray_with_a_prefix_scan_region_bit_identically() {
                 "regions": [[[1, 1]], [[2, n + 1]]], "values": [0.0, scan("<=")]}),
         };
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "MakearrayScan"},
             "index_sets": {
                 "lev": {"kind": "interval", "size": n},

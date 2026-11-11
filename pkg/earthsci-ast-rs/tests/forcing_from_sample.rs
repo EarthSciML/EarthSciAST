@@ -72,7 +72,7 @@ fn fed_doc(nx: usize, ny: usize) -> Value {
     };
     let i = || json!("i");
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "forcing_from_sample", "authors": ["test"]},
         "index_sets": {
             "x": {"kind": "interval", "size": nx},

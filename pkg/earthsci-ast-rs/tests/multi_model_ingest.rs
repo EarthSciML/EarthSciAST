@@ -94,7 +94,7 @@ fn bystander(cross: bool) -> Value {
 
 fn document(models: Value) -> Value {
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "multi_model_ingest"},
         "index_sets": {"rows": {"kind": "interval", "size": 2}},
         "data_sources": {
@@ -293,8 +293,7 @@ fn gated_model() -> Value {
              "rhs": {"op": "faq", "id": "cell_set", "args": [],
                      "semiring": "bool_and_or", "distinct": true,
                      "output_idx": ["e"], "ranges": {"n": {"from": "rows4"}},
-                     "key": {"op": "skolem", "label": "cell",
-                             "args": [{"op": "index", "args": ["cell_id", "n"]}]},
+                     "key": {"op": "index", "args": ["cell_id", "n"]},
                      "filter": {"op": "true", "args": []},
                      "expr": {"op": "true", "args": []}}},
             {"lhs": "total_sr",

@@ -35,19 +35,10 @@
 //!   `eval_const`/`json_to_value` produce for that node, in row-major order,
 //!   already precision-rounded at ingress — the same `f64`s the interpreter
 //!   would have read out of the same `Value::Array`.
-//! * [`Instr::Interp`] evaluates one esm-spec §9.2 `interp.*` entry over a
-//!   compile-time-constant table, elementwise in the query. Its element
-//!   semantics are the registry functions themselves, which is what the
-//!   per-cell oracle's `eval_fn` calls, so the agreement is by shared code.
 //! * [`Instr::Count`] counts the entries of a rank-1 array window that stand
 //!   in one comparison to the query, elementwise in the query: the rank-0
 //!   indicator sum of an interpolation bracket, whose fold of `0.0`/`1.0`
 //!   terms is that count exactly, however it is computed.
-//! * [`Instr::Calendar`] evaluates one esm-spec §9.2 `datetime.*` entry
-//!   elementwise through the registry, on the binary64 argument, and keeps the
-//!   binary64 result: `eval_fn`'s arithmetic, by sharing its code. Only a
-//!   Float32 document emits it; under Float64 the family is expanded into the
-//!   instructions above.
 //! * [`Instr::Reduce`] folds a source box down over a set of axes with a
 //!   binary kernel, visiting the source in ROW-MAJOR order. That order is the
 //!   per-cell oracle's contraction odometer (`CartesianTuples`, LAST name
@@ -57,11 +48,6 @@
 //! * [`Instr::Scan`] is `run_prefix_scan` over a whole box: a running fold
 //!   along one axis, ascending (descending for a reverse scan), independently for every position of the
 //!   other axes, writing the inclusive or exclusive partial result.
-//! * [`Instr::PolyArea`] is `eval_polygon_intersection_area` per element of
-//!   its box: each element's two rings are read out of the two ring tables
-//!   and measured by the interpreter's own `clip_area_value`. Pairs a planar
-//!   broad phase proves bounding-box disjoint are not clipped; they hold the
-//!   value the kernel's own bounding-box reject returns for them.
 //! * [`Instr::IndexGather`] is `index_into` with one subscript that is DATA:
 //!   the subscript operand is rounded (`f64::round`, then `as i64`, exactly
 //!   `eval_index_args`) and an out-of-range position reads the zero ghost.
@@ -224,27 +210,6 @@ pub(crate) enum Instr {
     /// writes computes, with no per-region copy of the box. `out` never
     /// aliases a part's source.
     Assemble { table: u32, out: SlotId },
-    /// Evaluate the §9.2 `interp.*` entry `interp_tables[table]` elementwise
-    /// over `out`'s box: `out[k] = f(table, x[k], y[k])`, with a scalar query
-    /// operand broadcasting exactly as [`Instr::Bin`]'s operands do.
-    ///
-    /// The table and axes are COMPILE-TIME CONSTANTS — esm-spec §9.2's
-    /// "argument shape contract" requires literal `const`-op arrays, and their
-    /// load-time validity (lengths, strict monotonicity, NaN-freedom) is
-    /// checked once at lowering — so the instruction carries only the query.
-    /// `y` is `Some` exactly for [`InterpKind::Bilinear`].
-    ///
-    /// Element semantics ARE the closed-function registry's own arithmetic
-    /// ([`crate::registered_functions::interp_linear_at`] and its siblings):
-    /// the same functions the per-cell oracle reaches through `eval_fn`,
-    /// called on the same operands. A taped `interp.*` is bit-identical to the
-    /// interpreter by sharing its code, not by restating it.
-    Interp {
-        table: u32,
-        x: Operand,
-        y: Option<Operand>,
-        out: SlotId,
-    },
     /// `out[k] = #{ j in 0..n : rel(axis[lo + j], x[k]) }`, as an `f64`: how
     /// many entries of the window `lo .. lo + n` of the rank-1 array `axis`
     /// stand in relation `rel` to the query, per element of `out`'s box (a
@@ -273,19 +238,6 @@ pub(crate) enum Instr {
         x: Operand,
         out: SlotId,
     },
-    /// `out[k] = f(a[k])` for the §9.2 calendar entry `f =
-    /// CALENDAR_FNS[func]`, evaluated by the closed-function registry on the
-    /// binary64 value of `a[k]`, the result kept unrounded and a registry
-    /// error read as `NaN` ([`calendar_at`]) — what the per-cell oracle's
-    /// `eval_fn` computes, by calling the same function. A scalar `a`
-    /// broadcasts as [`Instr::Un`]'s operand does.
-    ///
-    /// Emitted for a Float32 document only. There the tape's arithmetic
-    /// kernels are binary32, so the expansion the Float64 lowering uses (an
-    /// exact integer decomposition in binary64) would round at every step,
-    /// while the oracle runs the registry in binary64 and hands back its
-    /// result without rounding it.
-    Calendar { func: u8, a: Operand, out: SlotId },
     /// Materialize the inline array literal `const_data[data]` into `out`:
     /// a straight row-major store of the literal's elements, origin all-1s.
     ///
@@ -366,16 +318,6 @@ pub(crate) enum Instr {
         reverse: bool,
         /// The expected source (and output) box (validation).
         src_shape: DimU,
-        out: SlotId,
-    },
-    /// `polygon_intersection_area` over `out`'s box (a scalar slot for a
-    /// single pair): element `k`'s rings are `a` and `b` read at the positions
-    /// `geoms[geom]` derives from `k`, and its value is the interpreter's
-    /// `clip_area_value` of the two. See [`GeomSpec`] for the broad phase.
-    PolyArea {
-        a: SrcRef,
-        b: SrcRef,
-        geom: u32,
         out: SlotId,
     },
     /// `out[k] = src[pos(k)]`, where source axis `index_gathers[spec].data_axis`
@@ -544,12 +486,9 @@ impl Instr {
             | Instr::Assemble { out, .. }
             | Instr::ConstArray { out, .. }
             | Instr::LoadForcing { out, .. }
-            | Instr::Interp { out, .. }
             | Instr::Count { out, .. }
-            | Instr::Calendar { out, .. }
             | Instr::Reduce { out, .. }
             | Instr::Scan { out, .. }
-            | Instr::PolyArea { out, .. }
             | Instr::IndexGather { out, .. }
             | Instr::TableGather { out, .. }
             | Instr::DataGather { out, .. }
@@ -623,7 +562,7 @@ impl Instr {
                 op(a);
                 op(b);
             }
-            Instr::Un { a, .. } | Instr::Neg { a, .. } | Instr::Calendar { a, .. } => op(a),
+            Instr::Un { a, .. } | Instr::Neg { a, .. } => op(a),
             Instr::Select { cond, a, b, .. } => {
                 op(cond);
                 op(a);
@@ -637,13 +576,6 @@ impl Instr {
             | Instr::Reshape { src, .. } => {
                 if let SrcRef::Slot(s) = src {
                     f(*s);
-                }
-            }
-            Instr::PolyArea { a, b, .. } => {
-                for src in [a, b] {
-                    if let SrcRef::Slot(s) = src {
-                        f(*s);
-                    }
                 }
             }
             Instr::IndexGather { src, idx, .. } => {
@@ -670,12 +602,6 @@ impl Instr {
                 }
                 for sc in &ls.scalars {
                     op(sc);
-                }
-            }
-            Instr::Interp { x, y, .. } => {
-                op(x);
-                if let Some(y) = y {
-                    op(y);
                 }
             }
             Instr::Count { axis, x, .. } => {
@@ -773,12 +699,9 @@ impl Instr {
             Instr::Assemble { .. } => "Assemble",
             Instr::ConstArray { .. } => "ConstArray",
             Instr::LoadForcing { .. } => "LoadForcing",
-            Instr::Interp { .. } => "Interp",
             Instr::Count { .. } => "Count",
-            Instr::Calendar { .. } => "Calendar",
             Instr::Reduce { .. } => "Reduce",
             Instr::Scan { .. } => "Scan",
-            Instr::PolyArea { .. } => "PolyArea",
             Instr::IndexGather { .. } => "IndexGather",
             Instr::TableGather { .. } => "TableGather",
             Instr::DataGather { .. } => "DataGather",
@@ -2167,30 +2090,6 @@ pub(crate) struct ForcingRef {
     pub shape: DimU,
 }
 
-/// The nine calendar entries of the esm-spec §9.2 closed-function registry;
-/// [`Instr::Calendar`]'s `func` indexes here.
-pub(crate) const CALENDAR_FNS: [&str; 9] = [
-    "datetime.year",
-    "datetime.month",
-    "datetime.day",
-    "datetime.hour",
-    "datetime.minute",
-    "datetime.second",
-    "datetime.day_of_year",
-    "datetime.julian_day",
-    "datetime.is_leap_year",
-];
-
-/// [`Instr::Calendar`]'s element: the registry's answer for `CALENDAR_FNS[func]`
-/// at the binary64 `t_utc`, promoted to `f64` without rounding, or `NaN` when
-/// the registry refuses the argument — `eval_fn`'s own reading of a `fn` node.
-pub(crate) fn calendar_at(func: u8, t_utc: f64) -> f64 {
-    use crate::registered_functions::{ClosedArg, evaluate_closed_function};
-    evaluate_closed_function(CALENDAR_FNS[func as usize], &[ClosedArg::Scalar(t_utc)])
-        .map(|v| v.as_f64())
-        .unwrap_or(f64::NAN)
-}
-
 /// The comparison an [`Instr::Count`] counts: `axis[j] REL x`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CountRel {
@@ -2281,170 +2180,6 @@ pub(crate) fn count_rel(
         CountRel::Gt => n - split(n, &at, |a| !CountRel::Gt.holds(a, x)),
     };
     c as f64
-}
-
-/// Which esm-spec §9.2 `interp.*` entry an [`Instr::Interp`] evaluates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InterpKind {
-    /// `interp.linear(table, axis, x)`.
-    Linear,
-    /// `interp.bilinear(table, axis_x, axis_y, x, y)`.
-    Bilinear,
-    /// `interp.searchsorted(x, xs)`.
-    SearchSorted,
-}
-
-impl InterpKind {
-    /// The kind a §9.2 registry name selects, or `None` for a name outside
-    /// the `interp.*` family.
-    pub(crate) fn from_name(name: &str) -> Option<InterpKind> {
-        match name {
-            "interp.linear" => Some(InterpKind::Linear),
-            "interp.bilinear" => Some(InterpKind::Bilinear),
-            "interp.searchsorted" => Some(InterpKind::SearchSorted),
-            _ => None,
-        }
-    }
-
-    /// The registry name this kind evaluates, for diagnostics.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            InterpKind::Linear => "interp.linear",
-            InterpKind::Bilinear => "interp.bilinear",
-            InterpKind::SearchSorted => "interp.searchsorted",
-        }
-    }
-}
-
-/// The constant payload of one [`Instr::Interp`]: the §9.2 lookup table and
-/// its axes, as `eval_const` produced them (so a taped call reads exactly the
-/// `f64`s the per-cell oracle would have read out of the same `const` node,
-/// including the Float32 ingress rounding).
-///
-/// Validated ONCE, at lowering, against the registry itself: a table the
-/// registry would reject never reaches here, because the lowering bails and
-/// the rule falls back to the oracle, which is what produces the registry's
-/// NaN sentinel.
-#[derive(Clone, Debug)]
-pub(crate) struct InterpTable {
-    pub kind: InterpKind,
-    /// `interp.linear`: `table`. `interp.bilinear`: `table` flattened
-    /// row-major (`table[i * axis_y.len() + j]`, the §9.2 layout).
-    /// `interp.searchsorted`: empty — the entry has no table beyond `xs`.
-    pub table: Vec<f64>,
-    /// `axis` (linear), `axis_x` (bilinear) or `xs` (searchsorted).
-    pub axis_x: Vec<f64>,
-    /// `axis_y`; empty for every kind but [`InterpKind::Bilinear`].
-    pub axis_y: Vec<f64>,
-    /// The id of the `out_of_bounds: "error"` table this call was lowered
-    /// from (esm-spec §9.5.1), or `None` for a clamping lookup. When set,
-    /// every query is checked against its axis before the blend.
-    pub strict: Option<String>,
-}
-
-impl InterpTable {
-    /// Evaluate this entry at one query point — the SINGLE definition the fast
-    /// executor, the reference executor and the build-time constant fold all
-    /// call. `y` is read only by [`InterpKind::Bilinear`].
-    ///
-    /// A strict table's out-of-range query latches the oracle's
-    /// `table_lookup_out_of_bounds` fault and yields the `NaN` the oracle
-    /// substitutes alongside it.
-    pub(crate) fn at(&self, x: f64, y: f64) -> f64 {
-        use crate::registered_functions::{interp_bilinear_at, interp_linear_at, searchsorted_at};
-        if let Some(fault) = self.out_of_bounds(x, y) {
-            crate::simulate_array::eval::latch_gather_fault(fault);
-            return f64::NAN;
-        }
-        match self.kind {
-            InterpKind::Linear => interp_linear_at(&self.table, &self.axis_x, x),
-            InterpKind::Bilinear => {
-                interp_bilinear_at(&self.table, &self.axis_x, &self.axis_y, x, y)
-            }
-            // `eval_fn` lifts the registry's integer result with
-            // `ClosedValue::as_f64`, so the tape stores the same `f64`.
-            InterpKind::SearchSorted => searchsorted_at(x, &self.axis_x) as f64,
-        }
-    }
-
-    /// The fault a strict table raises for this query point, checked in the
-    /// oracle's order (the first axis, then the second), or `None`.
-    pub(crate) fn out_of_bounds(&self, x: f64, y: f64) -> Option<String> {
-        use crate::lower_table_lookup::out_of_bounds_fault;
-        let id = self.strict.as_deref()?;
-        out_of_bounds_fault(id, 1, &self.axis_x, x).or_else(|| match self.kind {
-            InterpKind::Bilinear => out_of_bounds_fault(id, 2, &self.axis_y, y),
-            InterpKind::Linear | InterpKind::SearchSorted => None,
-        })
-    }
-}
-
-/// Where one [`Instr::PolyArea`] element reads a ring along one LEADING axis
-/// of the ring table (the table is `[.., V, 2]`: the last two axes are the
-/// ring's vertices and its `(lon, lat)` pair).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RingSel {
-    /// This 0-based position, for every element.
-    Fixed(usize),
-    /// Position `p + off` for the element at position `p` along output axis
-    /// `axis` (a partial `index(table, i)` whose subscript is `i + k`). Every
-    /// position the box reaches is inside the table, checked at lowering.
-    Axis { axis: u8, off: i64 },
-    /// Position `RingRef::lists[list][p]` for the element at position `p`
-    /// along output axis `axis`: a ring subscript that is build-time data
-    /// over a tuple list (a loop symbol of a join-gated `faq`). Every
-    /// position is inside the table, checked at lowering.
-    List { axis: u8, list: u32 },
-}
-
-/// One ring operand of an [`Instr::PolyArea`]: the table's box and how each
-/// of its leading axes is addressed. No selectors means the operand is the
-/// whole `[V, 2]` array, the same ring for every element.
-#[derive(Clone, Debug)]
-pub(crate) struct RingRef {
-    /// The expected table box (validation).
-    pub src_shape: DimU,
-    pub sel: SmallVec<[RingSel; 3]>,
-    /// The position lists [`RingSel::List`] selectors index.
-    pub lists: Vec<Vec<u32>>,
-}
-
-impl RingRef {
-    /// The output axes this operand's ring varies along.
-    pub(crate) fn axes(&self) -> SmallVec<[u8; 3]> {
-        let mut v: SmallVec<[u8; 3]> = SmallVec::new();
-        for s in &self.sel {
-            if let RingSel::Axis { axis, .. } | RingSel::List { axis, .. } = s
-                && !v.contains(axis)
-            {
-                v.push(*axis);
-            }
-        }
-        v
-    }
-}
-
-/// The constant part of one [`Instr::PolyArea`].
-///
-/// `pairs` is the broad phase: `Some((axis_a, axis_b))` when the manifold is
-/// planar and ring `a` varies along output axis `axis_a` only and ring `b`
-/// along the different axis `axis_b` only. The instruction then clips just
-/// the candidate pairs whose bounding boxes are not strictly disjoint (an
-/// R*-tree query over the two rings' boxes, so the work is `O(n log n)` plus
-/// the candidates, not the product) and writes every other element the value
-/// the kernel's own disjoint-box reject returns. That reject is part of
-/// `crate::geometry::intersect_polygon`, which is what makes the skipped
-/// pairs exact rather than approximately zero. Every element is still a pure
-/// function of its own pair, so the order pairs are visited in cannot reach
-/// a result, and a fold over the box downstream is unchanged.
-#[derive(Clone, Debug)]
-pub(crate) struct GeomSpec {
-    pub manifold: crate::geometry::Manifold,
-    pub a: RingRef,
-    pub b: RingRef,
-    /// The output box (empty for a scalar slot).
-    pub shape: DimU,
-    pub pairs: Option<(u8, u8)>,
 }
 
 /// How one source axis of an [`Instr::IndexGather`] is addressed.
@@ -2927,10 +2662,6 @@ pub(crate) struct TapeProgram {
     pub assemblies: Vec<AssembleSpec>,
     /// Inline array-literal payloads (`Instr::ConstArray` indexes here).
     pub const_data: Vec<ConstArrayData>,
-    /// §9.2 `interp.*` constant tables (`Instr::Interp` indexes here).
-    pub interp_tables: Vec<InterpTable>,
-    /// Geometry instructions' constant parts (`Instr::PolyArea` indexes here).
-    pub geoms: Vec<GeomSpec>,
     /// Data-subscript gathers' constant parts (`Instr::IndexGather` indexes
     /// here).
     pub index_gathers: Vec<IndexGatherSpec>,

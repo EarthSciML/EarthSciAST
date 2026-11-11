@@ -4,11 +4,10 @@
 Runs `esm simulate --compiler native` on the documents `generate.py` writes,
 alternating the spellings within every repeat (and rotating which goes first),
 and reports the median CPU and wall seconds of each, plus whether every
-spelling's trajectory is bit-identical to the `interp.linear` one's.
+spelling's trajectory is bit-identical to the unfused const composition's.
 
 Spellings per N:
 
-    fn_const                 interp.linear on const tables (the fast form)
     compose_const_fused      the composition, bracket counted (the default)
     compose_const_unfused    the same, --no-count-fold (the general fold)
     compose_runtime_fused    the composition over a parameter-built axis
@@ -71,7 +70,6 @@ def main(argv=None):
         doc = lambda sp: os.path.join(a.work, generate.filename(sp, n))  # noqa: E731
         off = ["--no-count-fold"]
         configs = [
-            ("fn_const", a.esm, doc("const_fn"), []),
             ("compose_const_fused", a.esm, doc("const_compose"), []),
             ("compose_const_unfused", a.esm, doc("const_compose"), off),
             ("compose_runtime_fused", a.esm, doc("runtime_compose"), []),
@@ -93,15 +91,15 @@ def main(argv=None):
                 times[label].append((cpu, wall))
                 records.append({"n": n, "label": label, "repeat": rep, "cpu_s": cpu, "wall_s": wall})
                 outputs[label] = out
-        ref = json.load(open(outputs["fn_const"]))
+        ref = json.load(open(outputs["compose_const_unfused"]))
         print(f"\nN = {n}, {a.repeats} interleaved repeats, simulated {a.time} s")
-        print(f"{'spelling':28s} {'cpu med':>9s} {'wall med':>9s} {'cpu / fn':>9s}  trajectory")
-        fn_cpu = statistics.median(c for c, _ in times["fn_const"])
+        print(f"{'spelling':28s} {'cpu med':>9s} {'wall med':>9s} {'cpu / unf':>9s}  trajectory")
+        ref_cpu = statistics.median(c for c, _ in times["compose_const_unfused"])
         for label, *_ in configs:
             cpu = statistics.median(c for c, _ in times[label])
             wall = statistics.median(w for _, w in times[label])
             same = json.load(open(outputs[label])) == ref
-            print(f"{label:28s} {cpu:9.3f} {wall:9.3f} {cpu / fn_cpu:9.2f}  "
+            print(f"{label:28s} {cpu:9.3f} {wall:9.3f} {cpu / ref_cpu:9.2f}  "
                   f"{'bit-identical' if same else 'DIFFERS'}")
     if a.json:
         with open(a.json, "w") as f:

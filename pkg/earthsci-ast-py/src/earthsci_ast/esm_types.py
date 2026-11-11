@@ -67,21 +67,9 @@ class ExprNode:
     # schema completeness; data-derived index-set materialization is not part of
     # the M2 join work.
     distinct: bool | None = field(default=None, metadata={"kind": "scalar"})
-    # Skolem-term expression for an index-set-producing aggregate (RFC §5.5).
+    # Key expression for an index-set-producing aggregate (RFC §5.5): a scalar
+    # integer naming each member the `distinct` node emits.
     key: Expr | None = field(default=None, metadata={"kind": "expr"})
-    # argmin / argmax (RFC semiring-faq-unified-ir §5.7 rule 6): names the
-    # contracted `ranges` index symbol whose VALUE (a 1-based generator id) is
-    # returned at the optimum, rather than the reduced value. Mirrors the Julia
-    # reference's `arg` field and Rust's `pub arg`; `canonicalize` already lists
-    # it in ``_CANONICAL_IGNORED_FIELDS`` for exactly this node.
-    arg: str | None = field(default=None, metadata={"kind": "scalar"})
-    # Documentary relation tag for a `skolem` node (e.g. "edge"/"bin"/"pair").
-    # Purely descriptive: it names the relation the emitted key belongs to and is
-    # NEVER part of the key itself. ``args`` are PURE key components (exact integer
-    # IDs, §5.5.1 rule 4) — a leading string in ``args`` is no longer overloaded as
-    # the tag (which silently masked a real component on a typo). JSON wire key
-    # "label". Mirrors the Julia reference `label` field.
-    label: str | None = field(default=None, metadata={"kind": "scalar"})
     # makearray:
     regions: list[list[list[int]]] | None = field(
         default=None, metadata={"kind": "canonical_nested"}
@@ -96,9 +84,7 @@ class ExprNode:
     # broadcast:
     fn: str | None = field(default=None, metadata={"kind": "scalar"})
     # Node addressing (RFC §6.1): a node-local id by which a `kind:"derived"`
-    # index set names its producer via `from_faq`. Carried on an
-    # `intersect_polygon` leaf so its data-dependent clip ring is exposed as a
-    # derived index set the `polygon_area` FAQ ranges over (RFC §8.1).
+    # index set names its producer via `from_faq`.
     id: str | None = field(default=None, metadata={"kind": "scalar"})
     # Optional AUTHOR assertion on this node's cadence class — "const" |
     # "discrete" | "continuous" (CONFORMANCE_SPEC.md §5.7.6 rule 3). A
@@ -122,43 +108,19 @@ class ExprNode:
     # Dropping it on load lost a custom op's configuration outright. Likewise
     # non-emissible in canonical form.
     attrs: dict[str, Any] | None = field(default=None, metadata={"kind": "scalar"})
-    # Geometry interpretation for the `intersect_polygon` leaf — "planar" |
-    # "spherical" | "geodesic" (RFC §8.1 / Appendix B; CONFORMANCE_SPEC.md
-    # §5.8.4). REQUIRED on every intersect_polygon node, no default; matched
-    # EXACTLY across bindings (two bindings compare only same-manifold).
-    # Meaningful only for intersect_polygon; ignored on any other op.
-    manifold: str | None = field(default=None, metadata={"kind": "scalar"})
     # call (registered function invocation, see esm-spec §4.4 / §9.2):
     handler_id: str | None = field(default=None, metadata={"kind": "scalar"})
-    # fn (closed function registry — esm-spec §9.2): the dotted module path of
-    # a function in the spec-defined closed set (e.g. "datetime.year",
-    # "interp.searchsorted").
+    # apply_expression_template (esm-spec §9.6): the referenced template's name.
     name: str | None = field(default=None, metadata={"kind": "scalar"})
     # const (inline literal): the carried value. Any JSON number or nested
     # array thereof. Used to thread const-array tables through the AST without
-    # premature numeric collapse (notably as `xs` for `interp.searchsorted`).
+    # premature numeric collapse (notably as a template's sorted axis).
     # Written in canonical-number form (§5.5.3.1): ``[100.0, 0.5]`` -> ``[100, 0.5]``.
     value: Any | None = field(default=None, metadata={"kind": "canonical_nested"})
     # const (esm 1.2.0): the declared unit ``value`` is in. A unit-bearing
     # constant has that dimension and exact scale in dimensional analysis
     # (esm-spec §4.8.5); legal on no other op.
     units: str | None = field(default=None, metadata={"kind": "scalar"})
-    # table_lookup (esm-spec §9.5, v0.4.0): the function_tables entry id this
-    # node references. ``args`` MUST be empty for a table_lookup node — the
-    # per-axis input expressions live in ``table_axes``.
-    table: str | None = field(default=None, metadata={"kind": "scalar"})
-    # table_lookup: per-axis input-coordinate expression map. Keys MUST match
-    # the axis names declared on the referenced FunctionTable; values are
-    # arbitrary scalar Expressions (number, variable reference, or AST node).
-    # Stored under the JSON key ``axes`` on the wire.
-    table_axes: dict[str, Expr] | None = field(
-        default=None, metadata={"wire": "axes", "kind": "expr_dict"}
-    )
-    # table_lookup: which output of a multi-output table to return. Either a
-    # non-negative integer (0-based index into the leading data dimension) or
-    # a string (an entry of the table's outputs list). Single-output tables
-    # MAY omit this (defaults to 0 at lowering time).
-    output: int | str | None = field(default=None, metadata={"kind": "scalar"})
     # Load provenance, never on the wire: the name of the template whose
     # ``apply_expression_template`` expansion this node is the root of, set when
     # the load expands a component's references. The elementwise lift (esm-spec
@@ -190,12 +152,11 @@ Expr = Union[int, float, str, ExprNode]
 #
 # Per-field metadata (attached on the dataclass fields above):
 #   "wire": JSON key on the wire (defaults to the Python field name; only
-#           ``table_axes`` differs — wire key ``axes``).
+#           ``template_origin`` differs — private key ``__esm_template_origin``).
 #   "kind": codec class —
 #       "scalar"           plain JSON passthrough (str/num/bool/list/dict data)
 #       "expr"             one nested Expression, (de)serialized recursively
 #       "expr_list"        a list of nested Expressions
-#       "expr_dict"        a {name: Expression} map (table_lookup axes)
 #       "canonical_nested" integer descriptor array canonicalized on emit
 #       "internal"         load-time annotation: parsed from its private key,
 #                          never emitted
@@ -203,9 +164,8 @@ Expr = Union[int, float, str, ExprNode]
 
 # Authored WIRE ORDER of ExprNode fields — the exact key order emitted by
 # ``_serialize_expression`` and pinned BYTE-FOR-BYTE by the cross-language golden
-# fixtures. It equals the dataclass field order EXCEPT ``label``, which the wire
-# emits between ``name`` and ``value`` (verified against the goldens). This tuple
-# pins ORDER only; each field's wire key and codec kind live in its metadata.
+# fixtures. This tuple pins ORDER only; each field's wire key and codec kind
+# live in its metadata.
 _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "op",
     "args",
@@ -223,7 +183,6 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "filter",
     "distinct",
     "key",
-    "arg",
     "regions",
     "values",
     "shape",
@@ -233,15 +192,10 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "id",
     "expect_cadence",
     "attrs",
-    "manifold",
     "handler_id",
     "name",
-    "label",
     "value",
     "units",
-    "table",
-    "table_axes",
-    "output",
     "template_origin",
 )
 
@@ -250,7 +204,7 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
 _EXPR_REQUIRED_FIELDS = frozenset({"op", "args"})
 
 #: Codec kinds whose value is (or contains) nested child Expressions.
-_EXPR_CHILD_KINDS = frozenset({"expr", "expr_list", "expr_dict"})
+_EXPR_CHILD_KINDS = frozenset({"expr", "expr_list"})
 
 
 def _build_expr_wire_spec() -> tuple[tuple[str, str, str, bool], ...]:
@@ -284,7 +238,7 @@ def _build_expr_wire_spec() -> tuple[tuple[str, str, str, bool], ...]:
 EXPR_WIRE_SPEC: tuple[tuple[str, str, str, bool], ...] = _build_expr_wire_spec()
 
 #: ``(field_name, kind)`` for the child-bearing fields only, in canonical visit
-#: order (args, then the single-expr slots, then values, then table_axes) — the
+#: order (args, then the single-expr slots, then values) — the
 #: ONE child-field declaration ``expr_walk`` reads.
 EXPR_CHILD_SPEC: tuple[tuple[str, str], ...] = tuple(
     (name, kind) for name, _wire, kind, _req in EXPR_WIRE_SPEC if kind in _EXPR_CHILD_KINDS
@@ -306,13 +260,8 @@ def is_aggregate_op(op: Any) -> bool:
 # so the set is defined exactly once.
 #
 # DERIVED from the canonical op registry so it cannot drift: the ``array``
-# category (aggregate/makearray/index/broadcast/reshape/transpose/concat) PLUS the
-# ``geometry`` category. The two geometry leaves are array-routed too:
-# ``intersect_polygon`` (RFC §8.1) yields an array-valued clipped overlap ring,
-# and ``polygon_intersection_area`` (esm-spec §8.6.1) is scalar-valued but reads
-# array-valued polygon-ring operands the SymPy path cannot clip/area — so a model
-# carrying only one of those observeds must still take the NumPy simulate path.
-ARRAY_OPS = _by_category("array") | _by_category("geometry")
+# category (faq/makearray/index/broadcast/reshape/transpose/concat).
+ARRAY_OPS = _by_category("array")
 
 
 @dataclass
@@ -1338,43 +1287,6 @@ class Metadata:
 
 
 @dataclass
-class FunctionTableAxis:
-    """A single named axis inside a FunctionTable (esm-spec §9.5).
-
-    ``values`` MUST be strictly-increasing finite floats with at least 2
-    entries (mirrors the §9.2 interp.linear / interp.bilinear axis contract).
-    ``units`` is advisory only in v0.4.0 — recorded for documentation, not
-    used for load-time unit-checking.
-    """
-
-    name: str
-    values: list[float]
-    units: str | None = None
-
-
-@dataclass
-class FunctionTable:
-    """A sampled function table referenced by table_lookup AST ops
-    (esm-spec §9.5, v0.4.0).
-
-    Tables are syntactic sugar over §9.2's interp.linear / interp.bilinear /
-    index — a table_lookup query MUST be bit-equivalent to the equivalent
-    inline-const lookup. The shape of ``data`` is
-    ``[len(outputs), len(axes[0].values), len(axes[1].values), ...]`` when
-    ``outputs`` is non-empty; ``[len(axes[0].values), ...]`` otherwise.
-    """
-
-    axes: list[FunctionTableAxis]
-    data: Any  # Nested-array literal of finite numbers
-    description: str | None = None
-    interpolation: str | None = None  # 'linear' | 'bilinear' | 'nearest'
-    out_of_bounds: str | None = None  # 'clamp' | 'error'
-    outputs: list[str] | None = None
-    shape: list[int] | None = None
-    schema_version: str | None = None
-
-
-@dataclass
 class EsmFile:
     """Root container for an ESM format file."""
 
@@ -1395,10 +1307,6 @@ class EsmFile:
     # a source table's zero- or negative-valued code can be named). Resolved
     # at load time by `lower_enums` before expression evaluation.
     enums: dict[str, dict[str, int]] = field(default_factory=dict)
-    # Component-scoped sampled function tables (esm-spec §9.5, v0.4.0). Keyed
-    # by table id; each value is a FunctionTable referenced by table_lookup
-    # AST nodes.
-    function_tables: dict[str, FunctionTable] = field(default_factory=dict)
     # A single shared spatiotemporal domain (v0.8.0). Spatiality of individual
     # variables is expressed via their ``shape``; there is one domain per file,
     # not a map of named domains.

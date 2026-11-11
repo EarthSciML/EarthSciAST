@@ -5,8 +5,7 @@ import Esm.Closed.Datetime.Calendar
 
 These pin `Calendar.lean`'s formulas to the calendar rules: the year and month
 lengths they imply, the inverse pair `civilFromDays`/`daysFromCivil`, ranges,
-lexicographic monotonicity, and the domain on which the Fliegel–van Flandern
-formula agrees with the day count.
+and lexicographic monotonicity.
 -/
 
 namespace Esm.Closed.Datetime
@@ -249,118 +248,5 @@ theorem civilFromDays_key_mono {n n' : ℤ} (h : n ≤ n') :
     (lt_of_not_ge hlt)
   rw [daysFromCivil_civilFromDays, daysFromCivil_civilFromDays] at this
   omega
-
-/-! ## Fliegel–van Flandern -/
-
-/-- The first date on which every dividend in the FvF formula is non-negative:
--4800-03-01 (Gregorian). -/
-def fvfFirstDate : Date := ⟨-4800, 3, 1⟩
-
-theorem fvf_month_term (m : ℤ) (h1 : 1 ≤ m) (h2 : m ≤ 12) :
-    Int.tdiv (m - 14) 12 = if m ≤ 2 then -1 else 0 := by
-  have : m = 1 ∨ m = 2 ∨ m = 3 ∨ m = 4 ∨ m = 5 ∨ m = 6 ∨ m = 7 ∨ m = 8 ∨ m = 9 ∨ m = 10 ∨
-      m = 11 ∨ m = 12 := by omega
-  rcases this with h|h|h|h|h|h|h|h|h|h|h|h <;> subst h <;> decide
-
-theorem leapInt_eq (y : ℤ) : (if isLeapYear y then (1 : ℤ) else 0) =
-    if (y % 4 = 0 ∧ y % 100 ≠ 0) ∨ y % 400 = 0 then 1 else 0 := by
-  unfold isLeapYear
-  by_cases h1 : y % 4 = 0 <;> by_cases h2 : y % 100 = 0 <;> by_cases h3 : y % 400 = 0 <;>
-    simp [h1, h2, h3]
-
-/-! Floor identities that reduce FvF's terms to `⌊y/4⌋, ⌊y/100⌋, ⌊y/400⌋`
-(omega cannot find these unaided). -/
-
-theorem fvf_century_mar (y : ℤ) : 3 * ((y + 4900) / 100) / 4 = y / 100 + 36 - y / 400 := by
-  have hA : y / 100 / 4 = y / 400 := by omega
-  omega
-
-theorem fvf_century_jan (y : ℤ) :
-    3 * ((y + 4900 + -1) / 100) / 4 = (y - 1) / 100 + 36 - (y - 1) / 400 := by
-  have hA : (y - 1) / 100 / 4 = (y - 1) / 400 := by omega
-  omega
-
-theorem leap_count_incl (y : ℤ) : (y + 3) / 4 - (y + 99) / 100 + (y + 399) / 400 +
-    (if (y % 4 = 0 ∧ y % 100 ≠ 0) ∨ y % 400 = 0 then 1 else 0) = y / 4 - y / 100 + y / 400 + 1 := by
-  split_ifs <;> omega
-
-theorem leap_count_excl (y : ℤ) : (y + 3) / 4 - (y + 99) / 100 + (y + 399) / 400 =
-    (y - 1) / 4 - (y - 1) / 100 + (y - 1) / 400 + 1 := by
-  omega
-
-set_option maxHeartbeats 4000000 in
-/-- On and after -4800-03-01 the FvF JDN is the day count plus the JDN of
-1970-01-01 (2440588). -/
-theorem fvfJdn_eq {c : Date} (hc : c.Valid) (hd : daysFromCivil fvfFirstDate ≤ daysFromCivil c) :
-    fvfJdn c = daysFromCivil c + 2440588 := by
-  obtain ⟨h1, h2, h3, h4⟩ := hc
-  have hfirst : daysFromCivil fvfFirstDate = -2472632 := by decide
-  rw [hfirst] at hd
-  -- The year is at least -4800 (and -4799 for January and February).
-  have hy : -4800 ≤ c.year ∧ (c.month ≤ 2 → -4799 ≤ c.year) := by
-    by_contra hneg
-    have hlt : c.key < fvfFirstDate.key := by
-      rw [Date.key_lt_iff]; unfold fvfFirstDate; simp only; omega
-    have := daysFromCivil_lt_of_key_lt ⟨h1, h2, h3, h4⟩ (by decide) hlt
-    omega
-  unfold fvfJdn daysFromCivil
-  simp only
-  rw [fvf_month_term _ h1 h2]
-  obtain ⟨hy1, hy2⟩ := hy
-  generalize c.year = y at *
-  generalize c.month = m at *
-  generalize c.day = d at *
-  unfold daysBeforeMonth daysBeforeYear epochOffset
-  rw [leapInt_eq]
-  have := fvf_century_mar y
-  have := fvf_century_jan y
-  have := leap_count_incl y
-  have := leap_count_excl y
-  have : m = 1 ∨ m = 2 ∨ m = 3 ∨ m = 4 ∨ m = 5 ∨ m = 6 ∨ m = 7 ∨ m = 8 ∨ m = 9 ∨ m = 10 ∨
-      m = 11 ∨ m = 12 := by omega
-  rcases this with h|h|h|h|h|h|h|h|h|h|h|h <;> subst h <;> norm_num at hy2 ⊢ <;>
-    simp (disch := omega) only [Int.tdiv_eq_ediv_of_nonneg] <;> omega
-
-theorem tdiv_bounds (a b : ℤ) (hb : 0 < b) : a / b ≤ a.tdiv b ∧ a.tdiv b ≤ a / b + 1 := by
-  rw [Int.tdiv_eq_ediv]
-  split_ifs <;> simp [Int.sign_eq_one_of_pos hb]
-
-/-- Everywhere, the FvF JDN is within 3 days of the day count plus 2440588
-(each truncating division is at most one off the floor). -/
-theorem fvfJdn_near {c : Date} (hc : c.Valid) : |fvfJdn c - (daysFromCivil c + 2440588)| ≤ 3 := by
-  obtain ⟨h1, h2, h3, h4⟩ := hc
-  unfold fvfJdn daysFromCivil
-  simp only
-  rw [fvf_month_term _ h1 h2]
-  generalize c.year = y at *
-  generalize c.month = m at *
-  generalize c.day = d at *
-  have b1 := tdiv_bounds (1461 * (y + 4800 + if m ≤ 2 then -1 else 0)) 4 (by norm_num)
-  have b2 := tdiv_bounds (367 * (m - 2 - 12 * if m ≤ 2 then -1 else 0)) 12 (by norm_num)
-  have b3 := tdiv_bounds (y + 4900 + if m ≤ 2 then -1 else 0) 100 (by norm_num)
-  generalize Int.tdiv (1461 * (y + 4800 + if m ≤ 2 then -1 else 0)) 4 = T1 at *
-  generalize Int.tdiv (367 * (m - 2 - 12 * if m ≤ 2 then -1 else 0)) 12 = T2 at *
-  generalize Int.tdiv (y + 4900 + if m ≤ 2 then -1 else 0) 100 = T3 at *
-  have b4 := tdiv_bounds (3 * T3) 4 (by norm_num)
-  generalize Int.tdiv (3 * T3) 4 = T4 at *
-  unfold daysBeforeMonth daysBeforeYear epochOffset
-  rw [leapInt_eq]
-  have := fvf_century_mar y
-  have := fvf_century_jan y
-  have := leap_count_incl y
-  have := leap_count_excl y
-  have : m = 1 ∨ m = 2 ∨ m = 3 ∨ m = 4 ∨ m = 5 ∨ m = 6 ∨ m = 7 ∨ m = 8 ∨ m = 9 ∨ m = 10 ∨
-      m = 11 ∨ m = 12 := by omega
-  rw [abs_le]
-  rcases this with h|h|h|h|h|h|h|h|h|h|h|h <;> subst h <;> norm_num at b1 b2 b3 ⊢ <;>
-    constructor <;> omega
-
-/-- Before -4800-03-01 the formula is off: on -4800-02-29 it gives the JDN of
--4800-03-01. -/
-theorem fvfJdn_ne_before :
-    ¬ ∀ c : Date, c.Valid → fvfJdn c = daysFromCivil c + 2440588 := by
-  intro h
-  have := h ⟨-4800, 2, 29⟩ (by decide)
-  revert this; decide
 
 end Esm.Closed.Datetime

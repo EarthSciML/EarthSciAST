@@ -211,7 +211,7 @@ def _obs(expr_json):
 
 def test_binning_coords_seeded_from_overlap_producer():
     # A join-free observed coordinate (X = 2*lon) that ONLY the producer's
-    # overlap envelope references; no skolem bin_specs at all.
+    # overlap envelope references.
     x_expr = _obs(
         {
             "op": "faq",
@@ -233,14 +233,13 @@ def test_binning_coords_seeded_from_overlap_producer():
             "join": [
                 {"overlap": {"src_env": ["X", "Y"], "tgt_env": ["W", "S", "E", "N"], "eps": 0.0}}
             ],
-            "key": {"op": "skolem", "label": "cell", "args": ["c"]},
+            "key": "c",
             "args": ["X", "Y", "W", "S", "E", "N"],
         }
     )
     index_sets = {"recs": {"kind": "interval", "size": 3}, "cells": {"kind": "interval", "size": 2}}
     out = _binning_coord_arrays(
         [("X", x_expr)],
-        [],  # no bin specs
         index_sets,
         {},
         {},
@@ -254,7 +253,7 @@ def test_binning_coords_seeded_from_overlap_producer():
 
 def test_binning_coords_seeded_producer_missing_input_degrades():
     # Without `lon` the seeded-only closure must NOT hard-fail (fail-closed:
-    # the VI front-door then degrades to maps_only exactly as before).
+    # the VI front-door then refuses the derived set it cannot materialize).
     x_expr = _obs(
         {
             "op": "faq",
@@ -277,7 +276,6 @@ def test_binning_coords_seeded_producer_missing_input_degrades():
     )
     out = _binning_coord_arrays(
         [("X", x_expr)],
-        [],
         {"recs": {"kind": "interval", "size": 3}},
         {},
         {},
@@ -315,7 +313,6 @@ def test_join_column_seeds_only_the_observed_it_names():
     assert seeds == [producer]
     out = _binning_coord_arrays(
         [("bx", bx), ("Other.cx", other_cx), ("Other.bx", other_bx)],
-        [],
         {"recs": {"kind": "interval", "size": 3}},
         {},
         {},
@@ -328,8 +325,8 @@ def test_join_column_seeds_only_the_observed_it_names():
     assert "Other.bx" not in out and "Other.cx" not in out
 
 
-def test_binning_coords_no_specs_no_seeds_is_noop():
-    assert _binning_coord_arrays([], [], {}, {}, {}, {}, 0) == {}
+def test_binning_coords_no_seeds_is_noop():
+    assert _binning_coord_arrays([], {}, {}, {}, {}, 0) == {}
 
 
 # --------------------------------------------------------------------------- #

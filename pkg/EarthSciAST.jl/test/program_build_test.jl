@@ -25,7 +25,7 @@ function _pbt_doc(nx::Int, ny::Int)
         "expr" => e
     )
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pbt"),
         "index_sets" => Dict(
             "x" => Dict("kind" => "interval", "size" => nx),
@@ -271,7 +271,7 @@ function _pbt_fed_doc(n::Int)
     )
     fed(fv) = Dict("kind" => "data", "source" => "met", "from" => Dict("file_variable" => fv))
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pbt_fed"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => n)),
         "data_sources" => Dict(

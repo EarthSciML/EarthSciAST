@@ -28,7 +28,7 @@ Fields:
   conventions live outside the scalar ladders.
 - `category::Symbol` — coarse family, one of `:arithmetic`, `:comparison`,
   `:logical`, `:control`, `:elementary`, `:constant`, `:calculus`, `:array`,
-  `:aggregate`, `:function`, `:data`, `:geometry`, `:value_invention`.
+  `:aggregate`, `:function`, `:data`, `:value_invention`.
 - `scalar_fn::Union{Function,Nothing}` — the scalar Julia function the
   elementwise evaluator arms apply per value/lane (`sin`, `+`, …). For the
   comparison ops this is the Base predicate (`<`, `==`, …); the evaluator arms
@@ -392,16 +392,8 @@ const _OP_TABLE = _OpSpec[
     _op("true"; arity = 0:0, category = :constant, geo = true),
     _op("false"; arity = 0:0, category = :constant, geo = true),
 
-    # ── Closed functions & the retired v0.2.x closure marker (esm-spec §9.2) ──
-    #    `fn` is NOT `cse_opaque`: a closed-function call is a pure, deterministic
-    #    scalar function of its scalar args (the `interp.*` / `datetime.*` registry
-    #    is closed), so both the call and the subexpressions beneath it are sound
-    #    CSE hoist candidates. Flagging it opaque made every closed-function call a
-    #    sharing BARRIER, so an observed chain reaching a costly subtree through an
-    #    `interp.*` lookup (FastJX actinic-flux bands over `Solar.cos_zenith`) was
-    #    re-walked once per occurrence — see `_CSE_OPAQUE_OPS` (tree_walk/compile.jl).
-    #    `call` stays opaque: it was removed in v0.3.0 and always throws at compile.
-    _op("fn"; category = :function, known = true, xcse = true),
+    # ── The retired v0.2.x closure marker: removed in v0.3.0, it always throws
+    #    at compile, and stays a CSE barrier until then ──
     _op("call"; category = :function, cse = true, known = true),
 
     # ── Const data / enum markers ──
@@ -469,18 +461,11 @@ const _OP_TABLE = _OpSpec[
         arrprod = true, selfidx = true
     ),
 
-    # ── Geometry kernel leaves (RFC §8.1) & value invention (RFC §5.5) ──
-    _op("intersect_polygon"; category = :geometry, geo = true),
-    _op("polygon_intersection_area"; category = :geometry, geo = true),
-    _op("skolem"; category = :value_invention, geo = true),
-    # The rest of the §4.2 value-invention family. Registered so they are read as
-    # evaluable-core ops rather than open-tier rewrite targets (`_op_in_T`): the
-    # tree-walk evaluator has no rule for any of them, so one reaching the build
-    # is refused with `unevaluable_operator`, not `unlowered_operator`.
-    _op("rank"; category = :value_invention),
+    # ── Value invention (RFC §5.5). Registered so `distinct` is read as an
+    #    evaluable-core op rather than an open-tier rewrite target (`_op_in_T`):
+    #    the tree-walk evaluator has no rule for it, so one reaching the build is
+    #    refused with `unevaluable_operator`, not `unlowered_operator`. ──
     _op("distinct"; category = :value_invention),
-    _op("argmin"; category = :value_invention),
-    _op("argmax"; category = :value_invention),
 ]
 
 # Name → spec lookup (load-time derived; ops are unique by construction —
@@ -563,8 +548,8 @@ lifted over an array. This is the positive half of esm-spec §4.3.4's
 comparison, etc.)"; its complement is the STRUCTURAL half of the vocabulary —
 `:array` (`index`/`makearray`/`broadcast`/`reshape`/`transpose`/`concat`),
 `:aggregate` (`faq`), `:calculus` (`D`/`ic`/`grad`/`div`/
-`laplacian`), `:function` (`fn`/`call`), `:data` (`const`/`enum`),
-`:geometry`, `:value_invention` — none of which is a scalar operator.
+`laplacian`), `:function` (`call`), `:data` (`const`/`enum`),
+`:value_invention` — none of which is a scalar operator.
 
 `:constant` (the niladic `pi`/`e`/`true`/`false`) IS a scalar category; a
 `broadcast` naming one is nonetheless rejected, by the ARITY half of the

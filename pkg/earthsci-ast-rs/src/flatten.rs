@@ -632,12 +632,6 @@ pub struct FlattenedSystem {
     /// file that declares no index sets, so the ordinary ODE path is unaffected.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub index_sets: IndexMap<String, IndexSet>,
-    /// The document-scoped `function_tables` registry (esm-spec §9.5), copied
-    /// from the source [`EsmFile`] in document order. Carried so a surviving
-    /// `table_lookup` node resolves without re-reading the source document
-    /// (esm-libraries-spec §4.7.5 step 4).
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub function_tables: IndexMap<String, crate::types::FunctionTable>,
     /// The MERGED expression-template registry (esm-spec §9.6.4 rule 7, §10.7;
     /// esm-libraries-spec §4.7.5 step 4): the union of the per-component
     /// registries with each model's carried bodies component-SCOPED first,
@@ -686,62 +680,6 @@ impl FlattenedSystem {
             view.entry(name.clone()).or_insert_with(|| var.clone());
         }
         crate::classification::Classification::from_parts(&view, &self.equations).system_kind
-    }
-
-    /// Rewrite every equation's right-hand side with `f` INSIDE each of its
-    /// contributions, origins unchanged, and rebuild the right-hand side from
-    /// the rewritten list (esm-libraries-spec §4.7.5: a pass over flattened
-    /// equations never moves a term across a contribution boundary).
-    /// Left-hand sides are not touched.
-    ///
-    /// The system may have been edited by its caller since [`flatten`], so the
-    /// list is not trusted to match: an equation whose list no longer sums to
-    /// its right-hand side (or `faq` body) has the list collapsed to ONE
-    /// contribution — the current right-hand side, with the union of the
-    /// list's origins — before `f` runs, so the caller's edit survives. An
-    /// equation with no list (a system assembled by hand) is one contribution
-    /// with no origins. A non-empty list whose length differs from
-    /// [`Self::equations`]' is refused rather than paired up by position.
-    pub(crate) fn map_rhs_per_contribution(
-        &mut self,
-        mut f: impl FnMut(&Expr) -> Expr,
-    ) -> Result<(), FlattenError> {
-        let n = self.equations.len();
-        for (field, entries) in [
-            ("equation_contributions", self.equation_contributions.len()),
-            ("equation_lifted", self.equation_lifted.len()),
-        ] {
-            if entries != 0 && entries != n {
-                return Err(FlattenError::ContributionsOutOfStep {
-                    field,
-                    entries,
-                    equations: n,
-                });
-            }
-        }
-        if self.equation_contributions.is_empty() {
-            self.equation_contributions = vec![Vec::new(); n];
-        }
-        for (i, eq) in self.equations.iter_mut().enumerate() {
-            let lifted = self.equation_lifted.get(i).copied().unwrap_or(false);
-            let wrapper = lift_wrapper(&eq.rhs, lifted).cloned();
-            let body = wrapper
-                .as_ref()
-                .and_then(|node| node.expr.as_deref())
-                .unwrap_or(&eq.rhs);
-            let contributions = &mut self.equation_contributions[i];
-            if contributions.is_empty() || fold_contributions(contributions) != *body {
-                *contributions = vec![Contribution {
-                    expr: body.clone(),
-                    origins: union_origins(contributions, None),
-                }];
-            }
-            for c in contributions.iter_mut() {
-                c.expr = f(&c.expr);
-            }
-            eq.rhs = rebuild_body(wrapper, fold_contributions(contributions));
-        }
-        Ok(())
     }
 }
 
@@ -1156,11 +1094,6 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         discrete_events,
         domain: file.domain.clone(),
         index_sets,
-        function_tables: file
-            .function_tables
-            .as_ref()
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default(),
         template_registry,
         loader_fields,
         lifted_shapes,
@@ -1547,9 +1480,8 @@ impl ConditionalShapes<'_, '_> {
 
 /// Keys of an expression node whose STRING value names something other than a
 /// variable, so a raw-body walk must not read them as references.
-const TEMPLATE_BODY_NON_OPERAND_KEYS: &[&str] = &[
-    "op", "wrt", "dim", "fn", "table", "id", "manifold", "name", "semiring", "reduce",
-];
+const TEMPLATE_BODY_NON_OPERAND_KEYS: &[&str] =
+    &["op", "wrt", "dim", "fn", "id", "name", "semiring", "reduce"];
 
 /// Every variable name a RAW (unparsed) template body references.
 ///
@@ -5674,9 +5606,8 @@ struct LiftGrid<'a> {
 ///
 /// Where the variable sits decides what happens when it shares NO index set
 /// with the grid. Under an elementwise operator it must be read per cell, so
-/// that is an error. As an argument of any other op (a closed `fn`, say, whose
-/// lookup table is a shaped parameter) it is consumed whole under that op's
-/// contract and stays bare. The whole-array shape ops (`reshape`,
+/// that is an error. As an argument of any other op it is consumed whole under
+/// that op's contract and stays bare. The whole-array shape ops (`reshape`,
 /// `transpose`, `concat`) have no per-cell reading at all, so any array
 /// operand beneath one is an error.
 fn lift_rhs_to_cell(
@@ -6559,22 +6490,6 @@ mod tests {
         }
     }
 
-    // A shaped variable sharing no index set with the grid, passed to a closed
-    // function, is that function's whole-array argument (a lookup table, say)
-    // and stays bare. A grid operand beside it is still read per cell.
-    #[test]
-    fn pointwise_lift_leaves_a_whole_array_fn_argument_bare() {
-        let call = Expr::operator(ExpressionNode {
-            op: "fn".to_string(),
-            name: Some("interp.searchsorted".to_string()),
-            args: vec![Expr::Variable("p".into()), Expr::Variable("table".into())],
-            ..Default::default()
-        });
-        let body = lift_2d(over(call), &[("p", &["x"]), ("table", &["z"])]).unwrap();
-        assert_eq!(body["args"][1]["args"][0], gather(&["p", "i"]), "{body}");
-        assert_eq!(body["args"][1]["args"][1], "table", "{body}");
-    }
-
     // A whole-array shape op has no per-cell reading of its operand, so the
     // lift refuses instead of gathering one cell into it.
     #[test]
@@ -6718,38 +6633,6 @@ mod tests {
         }
     }
 
-    /// A pass over a FINISHED flattened system rewrites inside each
-    /// contribution and rebuilds the right-hand side from the list, keeping the
-    /// pointwise lift's `faq` wrapper around the sum (esm-libraries-spec §4.7.5).
-    #[test]
-    fn map_rhs_per_contribution_keeps_the_lift_wrapper() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/conformance/term_provenance/fixtures/pointwise_lift.esm");
-        let file = crate::load_path(&path).expect("loads");
-        let mut flat = flatten(&file).expect("flattens");
-        let i = flat
-            .equation_contributions
-            .iter()
-            .position(|cs| cs.len() == 3)
-            .expect("the lifted equation has three contributions");
-        let subs: HashMap<String, Expr> =
-            std::iter::once(("Src.e".to_string(), Expr::Variable("Src.e2".to_string()))).collect();
-        assert!(flat.equation_lifted[i], "the lift wrapped the equation");
-        flat.map_rhs_per_contribution(|e| crate::substitute::substitute(e, &subs))
-            .expect("the lists are in step");
-
-        let contributions = &flat.equation_contributions[i];
-        assert_eq!(contributions[1].expr, Expr::Variable("Src.e2".to_string()));
-        let Expr::Operator(node) = &flat.equations[i].rhs else {
-            panic!("the lifted right-hand side is an operator");
-        };
-        assert_eq!(node.op, "faq");
-        assert_eq!(
-            node.expr.as_deref(),
-            Some(&fold_contributions(contributions))
-        );
-    }
-
     /// esm-spec §4.3.4: an unshaped variable whose `ifelse` arms differ in
     /// rank is BUILT at the array arm's shape, and a chain through it is too.
     /// Neither the loaded document nor the flattened system records that
@@ -6759,7 +6642,7 @@ mod tests {
     #[test]
     fn flatten_keeps_an_unshaped_mixed_ifelse_unshaped() {
         let doc = serde_json::json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "mixed_ifelse"},
             "index_sets": {"cell": {"kind": "interval", "size": 3}},
             "models": {"M": {

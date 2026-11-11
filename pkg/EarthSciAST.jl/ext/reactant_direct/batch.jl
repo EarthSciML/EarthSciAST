@@ -84,7 +84,6 @@ function _de_bstatic_uncached(ctx::_DECtx, b::_E._OopBatchNode)::Bool
     elseif k === _E._NK_CONTRACTION_LOOP
         return _de_bstatic(ctx, b.children[1])
     elseif k === _E._NK_OP
-        b.op === :fn && return false
         (
             haskey(_DE_UNARY, b.op) || haskey(_DE_COMPARE, b.op) ||
                 haskey(_DE_UNARY_CHLO, b.op) ||
@@ -236,12 +235,6 @@ function _de_batch(
         terms = _DEVal[_de_batch(ctx, c, L, cache) for c in b.children]
         return _de_fold_terms(ctx, b.op, b.literal, terms)
     elseif k === _E._NK_OP
-        if b.op === :fn
-            return _de_fn_pl(
-                ctx, b.payload,
-                _DEVal[_de_batch(ctx, c, L, cache) for c in b.children]
-            )
-        end
         if (b.op === :^ || b.op === :pow) && length(b.children) == 2
             e = b.children[2]
             if e.kind === _E._NK_LITERAL && isempty(e.lanes_f)

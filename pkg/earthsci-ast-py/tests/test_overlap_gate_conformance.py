@@ -96,7 +96,7 @@ def test_l1_overlap_producer_members_match_julia_golden():
 
     vi = materialize_value_invention(model, const_arrays=l1_const_arrays())
 
-    # skolem("cell", [c]) is a single-component key => the scalar cell index; the
+    # The key is the scalar cell index; the
     # distinct set is the exact hand-computed containing cells.
     assert vi.members["emis_src_cells_faq"] == [1, 2, 4, 9], (
         "Python overlap-gate support set must equal the Julia L1 golden [1,2,4,9]"
@@ -249,7 +249,7 @@ MICRO_DOC = {
                             ],
                         },
                         "args": ["X", "Y", "W", "S", "E", "N"],
-                        "key": {"op": "skolem", "label": "cell", "args": ["j"]},
+                        "key": "j",
                         "expr": {"op": "true", "args": []},
                     },
                 }

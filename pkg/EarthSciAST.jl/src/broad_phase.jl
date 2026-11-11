@@ -8,29 +8,16 @@
 # a uniform-grid bin-equality join gate (tree-walk `_join_admits`,
 # src/tree_walk/semiring.jl); here we deliver ONLY the primitive + its oracle.
 #
-# Two layers so there is a reference oracle:
-#
-#   1. CORE (this file, no heavy deps): the brute-force reference method + the
-#      generic seam. `broad_phase_candidates(query_envs, cell_envs; eps)` walks
-#      every pair and tests envelope intersection. This method is BOTH the
-#      dependency-free fallback AND the conformance oracle for the fast path.
-#
-#   2. EXT (ext/EarthSciASTGeometryOpsExt.jl): a fast method dispatched on a
-#      spatial-index marker (`build_spatial_index(cell_envs)`), using a
-#      `SortTileRecursiveTree.STRtree` driven through GeometryOps'
-#      `SpatialTreeInterface` dual-tree traversal — the exact machinery
-#      `ConservativeRegridding.jl` uses. Over exact envelopes the STRtree yields
-#      EXACTLY the envelope-intersecting pairs, so the fast path returns a vector
-#      byte-identical to this brute-force method for the same `eps`.
+# `broad_phase_candidates(query_envs, cell_envs; eps)` tests envelope
+# intersection pair by pair (with a uniform-grid binning above a size cutoff,
+# returning the same pairs).
 #
 # ENVELOPE CONVENTION. A feature envelope is `(xmin, ymin, xmax, ymax)` — any
 # 4-element indexable (an `NTuple{4,Float64}`, a length-4 `Vector`, …). Note this
-# ORDER differs from geometry.jl's internal `_ring_xybbox` tuple, which is
-# `(xmin, xmax, ymin, ymax)`; a Phase-3b consumer deriving envelopes from a cell
-# ring must remap. The intersection predicate is CLOSED (edge-touching boxes are
-# candidates), matching `Extents.intersects` and the negation of geometry.jl's
-# `_bbox_disjoint` planar reject — so at `eps=0` this candidate set is exactly the
-# set of pairs `_bbox_disjoint` does not reject.
+# ORDER differs from the `_ring_xybbox` tuple below, which is
+# `(xmin, xmax, ymin, ymax)`; a consumer deriving envelopes from a cell ring must
+# remap. The intersection predicate is CLOSED (edge-touching boxes are
+# candidates).
 #
 # `eps` SEMANTICS. Both envelopes of a pair are inflated OUTWARD by `eps` before
 # testing: `xmin -= eps, ymin -= eps, xmax += eps, ymax += eps`. `eps >= 0` grows
@@ -50,23 +37,23 @@ whose geometries actually overlap has intersecting envelopes and so appears here
 (with `eps >= 0`). Missing a true overlap is impossible by construction — the
 envelope of a geometry contains it.
 
-This `(AbstractVector, AbstractVector)` method is the dependency-free brute-force
-reference. Loading `GeometryOps` (+ `GeoInterface`, `SortTileRecursiveTree`,
-`Extents`) adds a fast `(AbstractVector, <spatial index>)` method — see
-[`build_spatial_index`](@ref) — that returns an identical vector.
 """
 function broad_phase_candidates end
 
-"""
-    build_spatial_index(cell_envs; eps=0.0) -> <spatial index>
-
-Build a spatial index over `cell_envs` (envelopes inflated outward by `eps`) for
-the fast [`broad_phase_candidates`](@ref) path. Only available when the
-`EarthSciASTGeometryOpsExt` extension is loaded (needs `GeometryOps`,
-`SortTileRecursiveTree`, `Extents`); the returned index is passed as the second
-argument to `broad_phase_candidates`, which must be called with the SAME `eps`.
-"""
-function build_spatial_index end
+# The `(xmin, xmax, ymin, ymax)` bounding box of a `[verts, 2]` vertex ring.
+@inline function _ring_xybbox(m::AbstractMatrix)
+    n = size(m, 1)
+    @inbounds begin
+        xmin = xmax = m[1, 1]
+        ymin = ymax = m[1, 2]
+        for i in 2:n
+            x = m[i, 1]; y = m[i, 2]
+            x < xmin && (xmin = x); x > xmax && (xmax = x)
+            y < ymin && (ymin = y); y > ymax && (ymax = y)
+        end
+    end
+    return (xmin, xmax, ymin, ymax)
+end
 
 # Coerce any 4-element indexable envelope to `(xmin, ymin, xmax, ymax)::NTuple{4,Float64}`.
 @inline _env4(e) = (Float64(e[1]), Float64(e[2]), Float64(e[3]), Float64(e[4]))
@@ -90,8 +77,7 @@ function broad_phase_candidates(
             cxmin, cymin, cxmax, cymax = _env4(cell_envs[cj])
             cxmin -= e; cymin -= e; cxmax += e; cymax += e
             # Closed-interval AABB intersection per axis (edge-touching admitted),
-            # bit-for-bit the predicate `Extents.intersects` applies to the same
-            # eps-inflated endpoints in the fast path.
+            # on the eps-inflated endpoints.
             if qxmin <= cxmax && cxmin <= qxmax && qymin <= cymax && cymin <= qymax
                 push!(out, (qi, cj))
             end
@@ -275,23 +261,14 @@ side and `tgt_env` the indexed cell side. The vector method takes the two
 envelope vectors directly; the name+registry method resolves envelope factor
 arrays out of `arrays` first (see [`_envelope_vectors`](@ref)).
 
-Uses the exported Phase-3a primitive: the fast STRtree path
-([`build_spatial_index`](@ref) on the cell/`tgt` side) when the GeometryOps
-extension is loaded, else the dependency-free brute-force
-[`broad_phase_candidates`](@ref). Both return an identical pair set, so the gate
-is deterministic and backend-independent.
+Uses the exported Phase-3a primitive [`broad_phase_candidates`](@ref), so the
+gate is deterministic.
 """
 function _overlap_candidate_set(
         src_envs::AbstractVector, tgt_envs::AbstractVector;
         eps::Real = 0.0
     )
-    e = Float64(eps)
-    pairs = if hasmethod(build_spatial_index, Tuple{AbstractVector})
-        idx = build_spatial_index(tgt_envs; eps = e)
-        broad_phase_candidates(src_envs, idx; eps = e)
-    else
-        broad_phase_candidates(src_envs, tgt_envs; eps = e)
-    end
+    pairs = broad_phase_candidates(src_envs, tgt_envs; eps = Float64(eps))
     return Set{Tuple{Int, Int}}(pairs)
 end
 
@@ -340,7 +317,7 @@ end
 # Instrumentation: number of leaf bindings an OVERLAP-GATED enumerator VISITED
 # (a tuple its callback was invoked on / a product tuple its unroll entered).
 # Reset by callers/tests; proves that an overlap-gated walk — the value-invention
-# producer, its arg-witness reducer and the dense aggregate expansion alike — visits
+# producer and the dense aggregate expansion alike — visits
 # O(|candidates|·∏ungated) tuples, NOT the full O(∏ranges) product
 # (projection-pushdown Wall #1).
 #

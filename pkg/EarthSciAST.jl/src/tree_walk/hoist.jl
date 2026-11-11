@@ -107,7 +107,7 @@ end
 _hoist_scalar_reduction(e::OpExpr) = _is_faq_op(e.op) &&
     (e.output_idx === nothing || !any(x -> x isa AbstractString, e.output_idx))
 
-_hoist_plain(e::OpExpr) = e.op != "index" && e.op != "fn" && !_is_faq_op(e.op) &&
+_hoist_plain(e::OpExpr) = e.op != "index" && !_is_faq_op(e.op) &&
     e.op != "makearray" && e.ranges === nothing && e.output_idx === nothing &&
     e.expr_body === nothing && e.values === nothing && e.filter === nothing &&
     e.lower === nothing && e.upper === nothing && e.key === nothing

@@ -1,5 +1,5 @@
 {
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {
   "name": "alias_export_order_control",
   "description": "The control for bare_alias_observed.esm: mathematically identical, with the alias removed. It was green throughout, so a failure here indicts the fixtures rather than the export ordering.",

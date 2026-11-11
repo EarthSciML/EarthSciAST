@@ -1114,7 +1114,7 @@ fn rendered_rhs(flat: &earthsci_ast::FlattenedSystem, target: &str) -> String {
 #[test]
 fn operator_compose_expands_the_var_placeholder_over_every_state() {
     let doc = r#"{
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {"name": "T"},
       "models": {
         "Chem": {
@@ -1170,7 +1170,7 @@ fn operator_compose_expands_the_var_placeholder_over_every_state() {
 #[test]
 fn operator_compose_translate_is_a_keyed_and_carries_the_factor() {
     let doc = r#"{
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {"name": "T"},
       "models": {
         "Chem": {
@@ -1249,7 +1249,7 @@ fn operator_compose_translate_endpoints_may_be_authored_bare() {
       },"#;
     let mk = |translate: &str| {
         let doc = format!(
-            r#"{{"esm": "1.0.0", "metadata": {{"name": "T"}},{body}
+            r#"{{"esm": "2.0.0", "metadata": {{"name": "T"}},{body}
             "coupling": [{{"type": "operator_compose", "systems": ["Chem", "Diff"],
                           "translate": {translate}}}]}}"#
         );
@@ -1292,7 +1292,7 @@ fn operator_compose_translate_endpoints_may_be_authored_bare() {
 #[test]
 fn operator_compose_prunes_the_merged_away_name_after_a_document_wide_retarget() {
     let doc = r#"{
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {"name": "T"},
       "models": {
         "Chem": {
@@ -1378,11 +1378,11 @@ fn operator_compose_translate_to_the_placeholder_is_harmless() {
         }
       },"#;
     let without = format!(
-        r#"{{"esm": "1.0.0", "metadata": {{"name": "T"}},{body}
+        r#"{{"esm": "2.0.0", "metadata": {{"name": "T"}},{body}
         "coupling": [{{"type": "operator_compose", "systems": ["Chem", "Adv"]}}]}}"#
     );
     let with = format!(
-        r#"{{"esm": "1.0.0", "metadata": {{"name": "T"}},{body}
+        r#"{{"esm": "2.0.0", "metadata": {{"name": "T"}},{body}
         "coupling": [{{"type": "operator_compose", "systems": ["Chem", "Adv"],
                       "translate": {{"Chem.O3": "Adv._var"}}}}]}}"#
     );
@@ -1404,7 +1404,7 @@ fn operator_compose_translate_to_the_placeholder_is_harmless() {
 #[test]
 fn couple_multiplicative_without_a_tendency_is_an_error() {
     let doc = r#"{
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {"name": "T"},
       "models": {
         "Chem": {
@@ -1444,7 +1444,7 @@ fn couple_multiplicative_without_a_tendency_is_an_error() {
 #[test]
 fn couple_multiplicative_scales_the_tendency_not_a_later_bare_equation() {
     let doc = r#"{
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {"name": "T"},
       "models": {
         "Chem": {
@@ -1493,7 +1493,7 @@ fn couple_multiplicative_scales_the_tendency_not_a_later_bare_equation() {
 #[test]
 fn couple_additive_without_a_tendency_is_not_an_error() {
     let doc = r#"{
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {"name": "T"},
       "models": {
         "Chem": {
@@ -1529,7 +1529,7 @@ fn couple_additive_without_a_tendency_is_not_an_error() {
 #[test]
 fn nested_subsystems_are_lowered_into_the_parent() {
     let doc = r#"{
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {"name": "T"},
       "models": {
         "Outer": {

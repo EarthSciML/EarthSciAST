@@ -430,11 +430,10 @@ function _evaluate_cellwise_gated(
     agg = aggs[1]
     gates = agg.join_gates
     gates === nothing && return nothing
-    # A PLAIN gated contraction: no value invention, no table lookup, no
-    # integral. Each of these means something the term compile does not express.
+    # A PLAIN gated contraction: no value invention, no integral. Each of these
+    # means something the term compile does not express.
     (
-        agg.distinct === nothing && agg.key === nothing && agg.table === nothing &&
-            agg.table_axes === nothing && agg.int_var === nothing &&
+        agg.distinct === nothing && agg.key === nothing && agg.int_var === nothing &&
             agg.lower === nothing && agg.upper === nothing
     ) || return nothing
     body = agg.expr_body
@@ -2217,12 +2216,7 @@ function _ephemeral_injected_file(
         )
     )
     f = load_string(JSON3.write(raw); base_path = String(base_dir))
-    f = resolve_subsystem_refs!(f, String(base_dir))
-    # The ephemeral file is a BUILD input (and the file this test's §6.6.5
-    # `reference` expressions evaluate against), and the raw base may have come
-    # straight off disk — so it gets the same §9.5.3 lowering `run_inline_tests`
-    # gave the persisted one. In place: this file exists only for this test.
-    return lower_table_lookups!(f)
+    return resolve_subsystem_refs!(f, String(base_dir))
 end
 
 # Relative slack when matching an assertion's `time` against the solver's
@@ -2954,13 +2948,6 @@ function _run_document_tests!(
         results, file::EsmFile, document, o;
         model_name, alg, reltol, abstol, base_dir, compiler
     )
-    # esm-spec §9.5.3, at the build boundary rather than at load (§9.5.4 wants
-    # the authored form to round-trip). `esm_problem` lowers the flattened
-    # system it builds, but the file kept HERE is also an evaluated artifact:
-    # `_evaluate_assertion` reads a §6.6.5 `reference` expression straight off
-    # it. The pure form leaves a caller's `EsmFile` untouched, and returns it
-    # as-is — no copy — for the documents that declare no tables.
-    file = lower_table_lookups(file)
     d_model_name = _opt_or(o, :model_name, model_name)
     # Resolved BEFORE anything is picked or built for this document, because a
     # document with no tests is most of a corpus and must cost nothing — and,

@@ -1,8 +1,8 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "native_probe_fill_shared_invariant",
-    "description": "A materialized array observed w whose fill kernel carries a lane-invariant closed-function subtree (interp.linear over t) that the state kernels also carry. Native shares the state kernels' copy through the scalar prelude and keeps the fill level's in its own invariant tier; the interpreter inlines everything. The two must agree bit for bit.",
+    "description": "A materialized array observed w whose fill kernel carries a lane-invariant subtree ((exp(t) + 0.5) / (t + 2), one transcendental so the cross-kernel sharing pass's cost gate admits it) that the state kernels also carry. Native shares the state kernels' copy through the scalar prelude and keeps the fill level's in its own invariant tier; the interpreter inlines everything. The two must agree bit for bit.",
     "authors": [
       "EarthSciML"
     ],
@@ -54,30 +54,27 @@
                   ]
                 },
                 {
-                  "op": "fn",
-                  "name": "interp.linear",
+                  "op": "/",
                   "args": [
                     {
-                      "op": "const",
-                      "args": [],
-                      "value": [
-                        1.0,
-                        1.5,
-                        0.75,
-                        2.0
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "exp",
+                          "args": [
+                            "t"
+                          ]
+                        },
+                        0.5
                       ]
                     },
                     {
-                      "op": "const",
-                      "args": [],
-                      "value": [
-                        0.0,
-                        0.5,
-                        1.0,
+                      "op": "+",
+                      "args": [
+                        "t",
                         2.0
                       ]
-                    },
-                    "t"
+                    }
                   ]
                 }
               ]
@@ -171,30 +168,27 @@
                       "op": "*",
                       "args": [
                         {
-                          "op": "fn",
-                          "name": "interp.linear",
+                          "op": "/",
                           "args": [
                             {
-                              "op": "const",
-                              "args": [],
-                              "value": [
-                                1.0,
-                                1.5,
-                                0.75,
-                                2.0
+                              "op": "+",
+                              "args": [
+                                {
+                                  "op": "exp",
+                                  "args": [
+                                    "t"
+                                  ]
+                                },
+                                0.5
                               ]
                             },
                             {
-                              "op": "const",
-                              "args": [],
-                              "value": [
-                                0.0,
-                                0.5,
-                                1.0,
+                              "op": "+",
+                              "args": [
+                                "t",
                                 2.0
                               ]
-                            },
-                            "t"
+                            }
                           ]
                         },
                         {

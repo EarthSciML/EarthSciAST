@@ -17,7 +17,7 @@
 //! // Load an ESM file
 //! let esm_data = r#"
 //! {
-//!   "esm": "1.0.0",
+//!   "esm": "2.0.0",
 //!   "metadata": {
 //!     "name": "test_model"
 //!   },
@@ -105,16 +105,13 @@ pub(crate) mod faq;
 pub(crate) mod expression;
 pub mod extension;
 pub(crate) mod flatten;
-pub(crate) mod geometry;
 pub(crate) mod graph;
 pub(crate) mod inline_test_checks;
 pub mod intern;
 pub(crate) mod join;
 pub(crate) mod json_visit;
-pub(crate) mod load_checks;
 pub(crate) mod lower_enums;
 pub(crate) mod lower_expression_templates;
-pub(crate) mod lower_table_lookup;
 pub(crate) mod migration;
 pub(crate) mod observed_cone;
 pub(crate) mod op_registry;
@@ -132,7 +129,6 @@ pub mod provider;
 pub(crate) mod reactions;
 pub(crate) mod ref_loading;
 pub(crate) mod reference_resolution;
-pub(crate) mod registered_functions;
 pub(crate) mod relational;
 pub(crate) mod serialize;
 pub(crate) mod solver;
@@ -161,8 +157,7 @@ pub(crate) mod compile_error;
 pub(crate) mod simulate;
 
 // Compiled for wasm too (EarthSciAST-akz): the array/PDE runtime is
-// wasm-clean — planar / geometry-free PDEs run client-side; only spherical
-// geometry degrades to a runtime `GeometryError` stub (native-only s2 kernel).
+// wasm-clean, so PDEs run client-side.
 pub mod simulate_array;
 
 // §6.6.5 inline PDE tests over the array simulation pathway (field
@@ -185,14 +180,11 @@ pub(crate) mod inline_tests;
 #[doc(hidden)]
 pub mod inline_tests_adapter;
 
-// `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
-// array simulator, so native-only like `simulate_array` (the wasm regridder keeps
-// the imperative `geometry::polygon_area`).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod area_faq;
+mod determinism_adapter;
 
-// Build-time value-invention front-door — derived index-sets (skolem/distinct/
-// rank) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
+// Build-time value-invention front-door — derived index-sets (`distinct`
+// producers) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
 pub(crate) mod value_invention;
 
 // Automatic projection-pushdown desugar (the Julia/Python `desugar_pushdown`
@@ -260,10 +252,6 @@ pub use flatten::{
     LoaderField, TermOrigin, capture_coupling_diagnostics, flatten, flatten_model,
     flatten_with_options,
 };
-pub use geometry::{
-    GeometryError, Manifold, SLIVER_ATOL_FACTOR, area_tolerance_ok, intersect_polygon,
-    polygon_area, shoelace_area, shoelace_signed_area, sliver_atol,
-};
 pub use graph::{
     ComponentGraph, ComponentMetadata, ComponentNode, ComponentType, CouplingEdge, DependencyEdge,
     DependencyRelationship, ExpressionGraph, ExpressionGraphInput, ExpressionGraphOptions, Graph,
@@ -294,12 +282,9 @@ pub use reference_resolution::build_reference_graph_with_index_sets;
 // `allow(deprecated)` so the re-export itself does not warn.
 #[allow(deprecated)]
 pub use reference_resolution::ReferenceError;
-pub use registered_functions::{
-    ClosedArg, ClosedFunctionError, ClosedValue, closed_function_names, evaluate_closed_function,
-};
 pub use relational::{
-    FloatKeyError, Key, Num, Ranking, SemiringOp, canonical_index_set_json, distinct,
-    group_aggregate, rank, rank_with_base, serialize_keys, serialize_pairs, skolem, skolem_edge,
+    FloatKeyError, Key, Num, SemiringOp, canonical_index_set_json, distinct, group_aggregate,
+    serialize_keys, serialize_pairs,
 };
 pub use serialize::{to_json, to_json_compact, write_path};
 pub use substitute::{
@@ -436,7 +421,7 @@ pub const LIBRARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// version in `esm-schema.json`'s `$id` / esm-spec.md; the
 /// `schema_version_matches_bundled_schema` test enforces it, and
 /// `parse::library_version()` (major-compat gating) derives from it.
-pub const SCHEMA_VERSION: &str = "1.3.0";
+pub const SCHEMA_VERSION: &str = "2.0.0";
 
 #[cfg(test)]
 mod version_tests {

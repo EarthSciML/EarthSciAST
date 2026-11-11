@@ -311,7 +311,7 @@ end
         @test E.observed_field(prob, "Sweep.Problem.ramp"; u = [3.0], t = 0.0) == [3.0, 6.0]
     end
     ramp(shape) = Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "R"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "R"),
         "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
@@ -357,7 +357,7 @@ end
         a = Dict{String, Any}("type" => "unknown")
         a_shape === nothing || (a["shape"] = a_shape)
         return Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict("name" => "P"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "P"),
             "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(

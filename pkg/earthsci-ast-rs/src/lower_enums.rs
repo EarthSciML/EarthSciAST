@@ -7,7 +7,7 @@
 //! the in-memory representation — downstream consumers (evaluators,
 //! canonicalize, codegen) only ever see resolved integer constants.
 //!
-//! Mirrors the Python (`registered_functions.lower_enums`) and Julia
+//! Mirrors the Python (`lower_enums`) and Julia
 //! (`lower_enums!`) passes for cross-binding parity, with the same
 //! diagnostic codes (`unknown_enum`, `unknown_enum_symbol`).
 //!
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn typed_lower_enums_is_pure_and_agrees_with_the_raw_pass() {
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "enum_doc"},
             "enums": {"season": {"winter": 1, "summer": 3}},
             "models": {
@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn typed_lower_enums_raises_enum_lowering_error() {
         let file: crate::EsmFile = serde_json::from_value(json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "bad_enum"},
             "enums": {"season": {"winter": 1}},
             "models": {

@@ -203,22 +203,6 @@ end
     end
 
     # -----------------------------------------------------------------------
-    # per_instantiation_validation (§9.6.9): manifold param, two call sites,
-    # one inadmissible → geometry_manifold_invalid naming the call site.
-    # -----------------------------------------------------------------------
-    @testset "per_instantiation_validation: memoized manifold check names call site" begin
-        err = try
-            _load("per_instantiation_validation"); nothing
-        catch e
-            e
-        end
-        @test err isa ExpressionTemplateError
-        @test err.code == "geometry_manifold_invalid"
-        @test occursin("area_bad", err.message)     # offending call site named
-        @test occursin("overlap", err.message)       # template name named
-    end
-
-    # -----------------------------------------------------------------------
     # flatten_registry_merge (§9.6.4 rule 7, §10.7): dedup + owner-path rename.
     # -----------------------------------------------------------------------
     @testset "flatten_registry_merge: dedup + deterministic collision rename" begin
@@ -490,7 +474,7 @@ end
             open(
                 io -> JSON3.write(
                     io, Dict{String, Any}(
-                        "esm" => "1.0.0",
+                        "esm" => "2.0.0",
                         "metadata" => Dict{String, Any}("name" => "trivial"),
                         "models" => Dict{String, Any}(
                             "m" => Dict{String, Any}(

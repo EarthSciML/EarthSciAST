@@ -90,7 +90,6 @@ function _rebuild(
         coupling = coupling,
         domain = domain,
         enums = file.enums,
-        function_tables = file.function_tables,
         index_sets = file.index_sets,
         # The verbatim top-level declaration blocks. This helper's whole
         # premise is that a rebuild carries every field it does not replace,

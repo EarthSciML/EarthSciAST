@@ -55,7 +55,7 @@ Spelled `ESM_FORMAT_VERSION` until the bindings converged: TypeScript, Rust and
 Go all called this `SCHEMA_VERSION`, and Julia was the only one that did not.
 NOT the version of this PACKAGE — that is [`LIBRARY_VERSION`](@ref).
 """
-const SCHEMA_VERSION = "1.3.0"
+const SCHEMA_VERSION = "2.0.0"
 
 """
     LIBRARY_VERSION
@@ -313,36 +313,22 @@ an optional keyword (default `nothing`) that only some operators use. The
 - `perm`: for `transpose`, optional 0-based axis permutation.
 - `axis`: for `concat`, 0-based axis to concatenate along.
 - `fn`: for `broadcast`, the scalar operator to apply element-wise.
-- `name`: for the `fn` op, the dotted module path of a function in the closed
-  function registry (esm-spec §9.2). The set of valid `name` values is fixed by
-  the spec version; bindings MUST reject unknown names with diagnostic
-  `unknown_closed_function`.
+- `name`: for `apply_expression_template`, the template name (esm-spec §9.6).
 - `value`: for the `const` op, the inline literal value carried by this node.
   Any JSON value (number, integer, or nested array thereof); `args` MUST be
   empty for a const node.
-- `label`: optional documentary relation tag for a `skolem` node (e.g. "edge",
-  "bin", "pair") — the human-facing name of the relation the emitted key belongs
-  to. Purely documentary: it is NOT part of the emitted key (it renders as a
-  trailing `label=L` named argument); `args` are the pure key components.
 - `units`: for `const`, the declared unit of `value` (esm-spec §4.8.5).
-- `table`, `table_axes`, `output`: for `table_lookup` (esm-spec §9.5), the
-  `function_tables` entry id, the per-axis input-coordinate expressions (wire
-  key `"axes"`; `args` MUST be empty), and, for a multi-output table, the
-  output selector (a 0-based integer or an output name).
 - `join`, `filter`: for `faq`, the equi-join clauses (each a list of
   `[left, right]` key-column pairs that must compare equal) and an optional
   boolean predicate; a combination for which the predicate is false contributes
   the additive identity.
 - `join_gates`: internal, build-time resolution of `join`; never parsed or
   serialized.
-- `id`, `manifold`: for `intersect_polygon`, the node-local identifier a
-  `kind: "derived"` index set names through `from_faq`, and the geometry
-  interpretation (`"planar"`, `"spherical"` or `"geodesic"`; required).
+- `id`: the node-local identifier a `kind: "derived"` index set names through
+  `from_faq`.
 - `distinct`, `key`: for a value-inventing `faq`, whether it produces a
-  deduplicated index set, and the `skolem` key expression it emits per
+  deduplicated index set, and the scalar integer key expression it emits per
   surviving index combination.
-- `arg`: for `argmin` / `argmax`, the index symbol whose value at the optimum
-  is returned.
 - `bindings`: for `apply_expression_template`, the parameter → argument
   expression map (esm-spec §9.6).
 - `expect_cadence`: an optional author assertion of this node's cadence class
@@ -374,16 +360,6 @@ mutable struct OpExpr <: ASTExpr
     value::Any
     # const (esm 1.2.0): the declared unit `value` is in (esm-spec §4.8.5).
     units::Union{String, Nothing}
-    # table_lookup (esm-spec §9.5, v0.4.0): the function_tables entry id this
-    # node references. ``args`` MUST be empty for a table_lookup node — the
-    # per-axis input expressions live in ``table_axes``.
-    table::Union{String, Nothing}
-    # Per-axis input-coordinate expression map for a table_lookup node.
-    # Stored under the JSON key ``axes`` on the wire.
-    table_axes::Union{Dict{String, ASTExpr}, Nothing}
-    # Output selector for a multi-output table_lookup. Either a non-negative
-    # integer (0-based index) or a string (entry of the table's outputs).
-    output::Any
 
     # ── M2: value-equality joins + filter predicates on faq ──
     # (RFC semiring-faq-unified-ir §5.3 / §7.2; schema bead ess-my4.2.1).
@@ -407,28 +383,17 @@ mutable struct OpExpr <: ASTExpr
     filter::Union{ASTExpr, Nothing}
     join_gates::Union{Vector{_JoinGate}, Nothing}
 
-    # ── M4 geometry kernel (RFC semiring-faq-unified-ir §8.1 / Appendix B;
-    #    schema bead ess-my4.4.2; Julia kernel ess-my4.4.3) ──
-    #
-    # `id`       — node-local identifier (RFC §6.1) by which a `kind:"derived"`
-    #              index set names its producer via `from_faq`. Carried on an
-    #              `intersect_polygon` leaf so its data-dependent clip ring is
-    #              exposed as the derived index set a `polygon_area` FAQ ranges
-    #              over (§8.1). Emitted only when present (byte-identical round-trip
-    #              for non-geometry nodes).
-    # `manifold` — geometry interpretation for the `intersect_polygon` leaf:
-    #              "planar" | "spherical" | "geodesic" (CONFORMANCE_SPEC.md §5.8.4).
-    #              REQUIRED on every `intersect_polygon` node, no default; matched
-    #              EXACTLY across bindings. Meaningful only for `intersect_polygon`.
+    # `id` — node-local identifier (RFC §6.1) by which a `kind:"derived"`
+    #        index set names its producer via `from_faq`. Emitted only when
+    #        present.
     id::Union{String, Nothing}
-    manifold::Union{String, Nothing}
 
     # ── Value-invention aggregate vocabulary (RFC §5.5 / §6.1) ──
     # `distinct` — an index-set-PRODUCING aggregate (a `distinct:true` relational
     #              set former); its emitted `key`s are deduplicated in §5.5.1 sorted
     #              order to materialise a derived index set (matched by `from_faq`).
-    # `key`       — the skolem/tuple KEY expression the producer emits per surviving
-    #              index combination (`{op:skolem, args:[…]}`). Both live ONLY in the
+    # `key`       — the scalar integer KEY expression the producer emits per
+    #              surviving index combination. Both live ONLY in the
     #              raw value-invention front-door (they are read off the raw JSON),
     #              but MUST survive the typed-IR round-trip so a flattened multi-model
     #              document's producer is still recognised (else the derived set is
@@ -436,29 +401,11 @@ mutable struct OpExpr <: ASTExpr
     distinct::Union{Bool, Nothing}
     key::Union{ASTExpr, Nothing}
 
-    # ── Arg-witness / expression-template display fields ──
-    # `arg`      — for `argmin`/`argmax`, the witnessing index symbol name whose
-    #              value at the optimum is returned (RENDERING_CONTRACT.md §argmin/
-    #              argmax: `{op, arg, expr, ranges?}`). Carried on the typed node so
-    #              the pretty-printer can render `argmin[arg] (expr)`.
     # `bindings` — for `apply_expression_template`, the parameter→argument-expression
     #              map (esm-spec §9.6). Templates are normally lowered before typed
     #              parsing, but the node is renderable directly so the pretty-printer
     #              can emit `name⟨p=e, …⟩` byte-identically to the other bindings.
-    arg::Union{String, Nothing}
     bindings::Union{Dict{String, ASTExpr}, Nothing}
-
-    # ── Skolem documentary relation tag ──
-    # `label` — an OPTIONAL documentary relation tag on a `skolem` node (e.g.
-    #           "edge"/"bin"/"pair"): the human-facing name of the relation the
-    #           emitted key belongs to. Formerly this tag was overloaded onto the
-    #           FIRST `args` position, where a typo silently masqueraded as a real
-    #           key component; it now lives in its own field so `args` are PURE key
-    #           components. Purely documentary — NOT part of the emitted key
-    #           (`_vi_skolem` reads it for provenance only). The pretty-printer
-    #           shows it as a trailing named argument, `skolem(<args>, label=L)`,
-    #           so the text form stays lossless.
-    label::Union{String, Nothing}
 
     # ── Author annotations: carried verbatim, never interpreted here ──
     # `expect_cadence` — an OPTIONAL author assertion on this node's cadence
@@ -508,11 +455,10 @@ mutable struct OpExpr <: ASTExpr
         ranges = nothing, regions = nothing, values = nothing,
         shape = nothing, perm = nothing, axis = nothing, fn = nothing,
         name = nothing, value = nothing, units = nothing,
-        table = nothing, table_axes = nothing, output = nothing,
         join = nothing, filter = nothing, join_gates = nothing,
-        id = nothing, manifold = nothing,
+        id = nothing,
         distinct = nothing, key = nothing,
-        arg = nothing, bindings = nothing, label = nothing,
+        bindings = nothing,
         expect_cadence = nothing, attrs = nothing, template_origin = nothing,
         # `handler_id` was the v0.2.x field for the now-removed `call`
         # op (esm-spec §9.2 closure). Accept and ignore on construction
@@ -524,8 +470,8 @@ mutable struct OpExpr <: ASTExpr
         OpExpr, op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
         semiring, ranges,
         regions, values, shape, perm, axis, fn, name, value, units,
-        table, table_axes, output, join, filter, join_gates,
-        id, manifold, distinct, key, arg, bindings, label,
+        join, filter, join_gates,
+        id, distinct, key, bindings,
         expect_cadence, attrs, template_origin
     )
 end
@@ -558,9 +504,8 @@ One row per struct field, in exact struct-field order (asserted at load).
 Columns:
 
 - `wire`: the JSON key the field is parsed from / serialized to (`nothing`
-  for an internal, never-serialized field). Three fields are spelled
-  differently on the wire: `int_var` ↔ `var`, `expr_body` ↔ `expr`,
-  `table_axes` ↔ `axes`.
+  for an internal, never-serialized field). Two fields are spelled
+  differently on the wire: `int_var` ↔ `var` and `expr_body` ↔ `expr`.
 - `kind`: the field's shape class, which determines BOTH its wire encoding
   and whether/how the expression walkers traverse it:
     - `:expr`      — optional nested `ASTExpr` (traversed),
@@ -583,7 +528,7 @@ Columns:
     - `:internal`  — build-time only; never parsed, serialized or traversed.
 - `parse`: for `:scalar` fields, the parse-recipe tag `_parse_op_optional_fields`
   dispatches on (`:string`, `:int`, `:int_vec`, `:bool`, `:json`,
-  `:output_idx`, `:regions`, `:shape`, `:int_or_string`, `:attrs`); `nothing`
+  `:output_idx`, `:regions`, `:shape`, `:attrs`); `nothing`
   when the `kind` alone determines parsing.
 - `binds_scope`: `true` for the one field whose KEYS validate's
   `_bound_index_symbols` credits into reference-check scope (`bindings` —
@@ -616,19 +561,13 @@ const OPEXPR_FIELD_TABLE = (
     name = (wire = :name, kind = :scalar, parse = :string, binds_scope = false),
     value = (wire = :value, kind = :scalar, parse = :json, binds_scope = false),
     units = (wire = :units, kind = :scalar, parse = :string, binds_scope = false),
-    table = (wire = :table, kind = :scalar, parse = :string, binds_scope = false),
-    table_axes = (wire = :axes, kind = :expr_map, parse = nothing, binds_scope = false),
-    output = (wire = :output, kind = :scalar, parse = :int_or_string, binds_scope = false),
     join = (wire = :join, kind = :join, parse = nothing, binds_scope = false),
     filter = (wire = :filter, kind = :expr, parse = nothing, binds_scope = false),
     join_gates = (wire = nothing, kind = :internal, parse = nothing, binds_scope = false),
     id = (wire = :id, kind = :scalar, parse = :string, binds_scope = false),
-    manifold = (wire = :manifold, kind = :scalar, parse = :string, binds_scope = false),
     distinct = (wire = :distinct, kind = :scalar, parse = :bool, binds_scope = false),
     key = (wire = :key, kind = :expr, parse = nothing, binds_scope = false),
-    arg = (wire = :arg, kind = :scalar, parse = :string, binds_scope = false),
     bindings = (wire = :bindings, kind = :expr_map, parse = nothing, binds_scope = true),
-    label = (wire = :label, kind = :scalar, parse = :string, binds_scope = false),
     expect_cadence = (wire = :expect_cadence, kind = :scalar, parse = :string, binds_scope = false),
     attrs = (wire = :attrs, kind = :scalar, parse = :attrs, binds_scope = false),
     template_origin = (wire = nothing, kind = :internal, parse = nothing, binds_scope = false),
@@ -703,14 +642,11 @@ the keywords explicitly passed. This is the ONE canonical, field-preserving way
 to reconstruct a node after a structural rewrite (substitution, namespacing,
 simplification, canonicalization, …).
 
-It exists because `OpExpr` carries ~26 optional fields (geometry `manifold`/`id`,
-`table`/`table_axes`/`output`, aggregate `semiring`/`ranges`/`output_idx`/
-`expr_body`/`reduce`, relational `join`/`filter`/`join_gates`, `int_var`/`lower`/
-`upper`, …) and the historical reconstruction sites each hand-listed a different
-subset of keywords — silently dropping whatever they forgot. That made
-`flatten`/`substitute`/`namespace_expr` LOSSY: e.g. a coupling `substitute`
-erased an `intersect_polygon`'s `manifold`, and `namespace_expr` erased a
-`table_lookup`'s `table`. Routing every rewrite through `reconstruct` makes
+It exists because `OpExpr` carries ~25 optional fields (aggregate
+`semiring`/`ranges`/`output_idx`/`expr_body`/`reduce`, relational
+`join`/`filter`/`join_gates`/`distinct`/`key`, `int_var`/`lower`/`upper`, …) and
+hand-listed reconstruction sites each drop whatever they forget, which makes
+`flatten`/`substitute`/`namespace_expr` lossy. Routing every rewrite through `reconstruct` makes
 field preservation the default and a drop an explicit, visible choice — and the
 method is GENERATED from `fieldnames(OpExpr)`, so a newly added field is
 preserved automatically.
@@ -2400,61 +2336,11 @@ struct Metadata
 end
 
 """
-    FunctionTableAxis
-
-A single named axis inside a [`FunctionTable`](@ref) (esm-spec §9.5).
-`values` MUST be strictly-increasing finite floats with at least 2 entries
-(mirrors the §9.2 interp.linear / interp.bilinear axis contract). `units`
-is advisory only in v0.4.0.
-"""
-struct FunctionTableAxis
-    name::String
-    values::Vector{Float64}
-    units::Union{String, Nothing}
-    FunctionTableAxis(
-        name::AbstractString, values::AbstractVector;
-        units = nothing
-    ) =
-        new(String(name), _dynamic(Vector{Float64}, values)::Vector{Float64}, units)
-end
-
-"""
-    FunctionTable
-
-A sampled function table referenced by `table_lookup` AST op nodes
-(esm-spec §9.5, v0.4.0). Tables are syntactic sugar over §9.2's
-`interp.linear` / `interp.bilinear` / `index` — a `table_lookup` query
-MUST be bit-equivalent to the equivalent inline-`const` lookup. Shape of
-`data` is `[len(outputs), len(axes[0].values), len(axes[1].values), ...]`
-when `outputs` is non-`nothing`; `[len(axes[0].values), ...]` otherwise.
-"""
-struct FunctionTable
-    axes::Vector{FunctionTableAxis}
-    data::Any  # Nested-array literal of finite numbers
-    description::Union{String, Nothing}
-    interpolation::Union{String, Nothing}  # "linear" | "bilinear" | "nearest"
-    out_of_bounds::Union{String, Nothing}  # "clamp" | "error"
-    outputs::Union{Vector{String}, Nothing}
-    shape::Union{Vector{Int}, Nothing}
-    schema_version::Union{String, Nothing}
-    FunctionTable(
-        axes::AbstractVector{FunctionTableAxis}, data;
-        description = nothing, interpolation = nothing,
-        out_of_bounds = nothing, outputs = nothing,
-        shape = nothing, schema_version = nothing
-    ) =
-        new(
-        Vector{FunctionTableAxis}(axes), data, description,
-        interpolation, out_of_bounds, outputs, shape, schema_version
-    )
-end
-
-"""
     EsmFile
 
 Main ESM file structure containing all components.
 
-`models`, `reaction_systems`, `index_sets`, `function_tables` and
+`models`, `reaction_systems`, `index_sets` and
 `component_templates` are `OrderedDict`s populated by the parser in DOCUMENT
 ORDER — see [`Model`](@ref) for why, and esm-libraries-spec §4.7.5 step 4 for the
 normative rule.
@@ -2481,10 +2367,6 @@ struct EsmFile
     # `enum`-op nodes are lowered to `const`-int nodes at load time, so the
     # in-memory expression tree never carries enum strings.
     enums::Union{Dict{String, Dict{String, Int}}, Nothing}
-    # Component-scoped sampled function tables (esm-spec §9.5, v0.4.0).
-    # Keys are table ids; values are FunctionTable entries referenced by
-    # table_lookup AST nodes.
-    function_tables::Union{OrderedDict{String, FunctionTable}, Nothing}
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2;
     # esm-spec v0.8.0). A single registry, sibling of `models`/`domain`, shared
     # by every component: `ranges[*]` `{from: <name>}` references, array-variable
@@ -2572,7 +2454,6 @@ struct EsmFile
         coupling = CouplingEntry[],
         domain = nothing,
         enums = nothing,
-        function_tables = nothing,
         index_sets = OrderedDict{String, IndexSet}(),
         expression_templates = nothing,
         metaparameters = nothing,
@@ -2589,8 +2470,6 @@ struct EsmFile
             OrderedDict{String, ReactionSystem}(reaction_systems),
         data_sources,
         coupling, domain, enums,
-        function_tables === nothing ? nothing :
-            OrderedDict{String, FunctionTable}(function_tables),
         OrderedDict{String, IndexSet}(index_sets),
         expression_templates, metaparameters,
         component_templates === nothing ? nothing :
@@ -3018,9 +2897,8 @@ discriminated-union sniffing (`coerce_coupling_entry`, `coerce_trigger` /
 name-keyed-map↔vector conversions with injected names (`ReactionSystem`),
 `Reaction` (null-vs-absent substrates/products + `_emit_stoich`),
 `CouplingVariableMap` (transform union + constructor-error rebranding),
-`FunctionTable`/`FunctionTableAxis` and `coerce_enums`/
-`coerce_function_tables` (table-name-context-threaded ParseError messages),
-and the `EsmFile` orchestrator.
+`coerce_enums` (enum-name-context-threaded ParseError messages), and the
+`EsmFile` orchestrator.
 
 A load-time assert (below) pins each entry's rows to `fieldnames(T)` exactly;
 `round_trip_regression_test.jl` / `conformance_round_trip_test.jl` pin the

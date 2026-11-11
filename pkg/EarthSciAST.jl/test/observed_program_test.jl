@@ -32,7 +32,7 @@ function _op_doc(N; decay = 0.0, tests = Any[])
         "ranges" => Dict("i" => Dict("from" => "x")), "expr" => body
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "observed_program"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => N)),
         "models" => Dict(
@@ -215,7 +215,9 @@ _OP.sink_observed_names(s::_OPSink) = s.names
         observed_field(pn, "k"; u = pn.u0, t = 1.0)
         @test ctx.programs["M.k"] === prog           # built once, reused
         @test _op_rows(pn, "h") == [:output_compiled]
-        @test _op_rows(pi_, "h") == [:output_percell]
+        # The interpreter's cellwise reader compiles a makearray observed once
+        # too (its region is chosen per cell at run time).
+        @test _op_rows(pi_, "h") == [:output_compiled_once]
     end
 
     @testset "the program's generated code is shared across N" begin
@@ -381,7 +383,7 @@ function _avp_doc(N)
         "value" => [[10.0 * i + j for j in 1:2] for i in 1:N]
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "avp"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "avp"),
         "index_sets" => Dict(
             "cells" => Dict("kind" => "interval", "size" => N),
             "two" => Dict("kind" => "interval", "size" => 2)

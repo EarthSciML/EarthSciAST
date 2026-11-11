@@ -256,7 +256,6 @@ fn record(flat: &FlattenedSystem, reaction_systems: &BTreeSet<String>) -> Value 
             .collect::<Vec<_>>(),
         "source_systems": flat.metadata.source_systems,
         "index_sets": keys(&flat.index_sets),
-        "function_tables": keys(&flat.function_tables),
         "template_registry": keys(&flat.template_registry),
         "field_ics": flat
             .field_ics
@@ -314,7 +313,6 @@ fn expected(case: &Value) -> Value {
             .collect::<Vec<_>>(),
         "source_systems": case["metadata"]["source_systems"],
         "index_sets": case["index_sets"],
-        "function_tables": case["function_tables"],
         "template_registry": case["template_registry"],
         "field_ics": case["field_ics"],
         "loader_fields": case["loader_fields"],

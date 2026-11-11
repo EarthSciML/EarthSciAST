@@ -1,10 +1,11 @@
 import Mathlib.Tactic
 
 /-!
-# The proleptic-Gregorian calendar over ℤ (esm-spec §9.2, `datetime.*`)
+# The proleptic-Gregorian calendar over ℤ
 
-Everything here is integer arithmetic and executable; the adapter runs these
-definitions directly. Years are astronomical (`0` = 1 BC, `-1` = 2 BC, the ISO
+The reference calendar the `lib/calendar.esm` templates are proven against
+(`Esm/Closed/Datetime/TemplateAst.lean`). Everything here is integer
+arithmetic and executable. Years are astronomical (`0` = 1 BC, `-1` = 2 BC, the ISO
 8601 convention the spec names). Day numbers count days since 1970-01-01.
 
 The definitions are written to be checked by eye against the calendar rules:
@@ -97,29 +98,19 @@ def civilFromDays (n : ℤ) : Date :=
 /-- One-based day of the year of day number `n` (1 = January 1). -/
 def dayOfYearOfDays (n : ℤ) : ℤ := doy0OfDays n + 1
 
-/-- The Fliegel–van Flandern (1968) Julian Day Number of a Gregorian date, as
-published: FORTRAN integer division, which truncates toward zero
-(`Int.tdiv`). -/
-def fvfJdn (c : Date) : ℤ :=
-  let a := Int.tdiv (c.month - 14) 12
-  Int.tdiv (1461 * (c.year + 4800 + a)) 4
-    + Int.tdiv (367 * (c.month - 2 - 12 * a)) 12
-    - Int.tdiv (3 * Int.tdiv (c.year + 4900 + a) 100) 4
-    + c.day - 32075
-
-/-! ## The signed 32-bit result rule (`closed_function_overflow`) -/
+/-! ## The signed 32-bit result rule -/
 
 def int32Min : ℤ := -2147483648
 def int32Max : ℤ := 2147483647
 
-/-- An integer-valued closed-function result. -/
+/-- An integer-valued calendar result. -/
 inductive IntResult where
   | ok (v : ℤ)
   | overflow
 deriving DecidableEq, Repr
 
-/-- §9.2: every integer output is signed 32-bit; a result outside that range
-raises `closed_function_overflow`. -/
+/-- Every integer output is signed 32-bit; a result outside that range is
+`overflow`. -/
 def toInt32 (v : ℤ) : IntResult :=
   if int32Min ≤ v ∧ v ≤ int32Max then .ok v else .overflow
 

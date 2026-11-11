@@ -2,7 +2,7 @@
 # Julia determinism-conformance adapter (CONFORMANCE_SPEC.md §5.5.4). The thin
 # bridge the cross-binding determinism harness (scripts/run-determinism-conformance.py)
 # invokes to exercise the REAL Julia value-invention primitives
-# (EarthSciAST.Relational: skolem / distinct / rank + group-by) over the
+# (EarthSciAST.Relational: distinct + group-by) over the
 # shared golden fixtures in tests/conformance/determinism/manifest.json. The runner
 # discovers it via $EARTHSCI_DETERMINISM_ADAPTER_JULIA or as
 # earthsci-determinism-adapter-julia on PATH, and calls:
@@ -11,8 +11,8 @@
 #
 # For each fixture it runs the primitives over inputs.canonical AND every
 # adversarial inputs.variants payload, writing the canonical serialized index set,
-# its index_set, and the dense-ID array in Julia's NATIVE 1-based emission base
-# (the runner normalizes via rank_base_pin: julia=1). Keep this thin — the contract
+# its index_set, and the dense-ID array (1-based, a key's `rank_of` value in the
+# distinct set). Keep this thin — the contract
 # lives in src/relational.jl, not here.
 
 using EarthSciAST
@@ -66,19 +66,21 @@ end
 function compute_payload(fx, payload)
     primitive = fx["primitive"]
     if primitive == "skolem_distinct_rank"
+        # An undirected edge's key is its (min, max) pair, a directed one's the
+        # pair as written; a key's dense id is its 1-based position in the
+        # distinct set.
         mode = fx["skolem"]
         edges = edges_from_payload(payload)
         keys = if mode == "undirected"
-            [R.skolem_edge(e[1], e[2]) for e in edges]
+            [e[1] <= e[2] ? (e[1], e[2]) : (e[2], e[1]) for e in edges]
         elseif mode == "directed"
-            [R.skolem(Tuple(e)) for e in edges]
+            [Tuple(e) for e in edges]
         else
-            error("unknown skolem mode $(repr(mode))")
+            error("unknown key mode $(repr(mode))")
         end
         index_set = R.distinct(keys)
         serialized = R.canonical_index_set_json(keys)
-        ranking = R.rank(keys)                       # native 1-based
-        dense = [ranking.id[t] for t in index_set]
+        dense = collect(1:length(index_set))
         return Dict{String, Any}(
             "index_set" => [collect(t) for t in index_set],
             "serialized" => serialized,
@@ -94,7 +96,7 @@ function compute_payload(fx, payload)
         return Dict{String, Any}(
             "index_set" => [[first(p), last(p)] for p in pairs],
             "serialized" => serialized,
-            "dense_ids_canonical" => collect(1:length(pairs)),   # native 1-based
+            "dense_ids_canonical" => collect(1:length(pairs)),
         )
     else
         error("unknown primitive $(repr(primitive))")

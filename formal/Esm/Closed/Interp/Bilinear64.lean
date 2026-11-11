@@ -1,9 +1,9 @@
 import Esm.Closed.Interp.Rounding
 
 /-!
-# Q-6 for `interp.bilinear`: FMA versus the pinned order, composed
+# Q-6 for `bilinear`: FMA versus the pinned order, composed
 
-§9.2 bilinear is two x-blends and one y-blend, each `t + w·(u − t)`. The pinned
+The reference bilinear is two x-blends and one y-blend, each `t + w·(u − t)`. The pinned
 (non-FMA) evaluation rounds every operation; an FMA evaluation fuses each
 blend's multiply-add. With `M` the largest corner magnitude and `g = ulp M`:
 
@@ -230,7 +230,7 @@ theorem bilinear_errs (t00 t10 t01 t11 wx wy : ℝ) (h00 : Repr t00) (h10 : Repr
       _ ≤ (g / 2 + g) + 3 / 2 * g := by linarith
       _ = 3 * g := by ring
 
-/-- **Q-6 for `interp.bilinear`.** For double corners and weights in `[0, 1]`
+/-- **Q-6 for `bilinear`.** For double corners and weights in `[0, 1]`
 (the pinned binary64 weights of a query in its cell are, `weight64_mem`), the
 all-FMA and the pinned evaluations differ by at most `17/2 · ulp(max |corner|)`. -/
 theorem bilinear_fma_le (t00 t10 t01 t11 wx wy : ℝ) (h00 : Repr t00) (h10 : Repr t10)

@@ -57,12 +57,31 @@ LOADER_GOLDEN = _TESTS / "conformance" / "subsystem_loader" / "golden" / "subsys
 #: phase. It walked per cell by construction until the gated pure-map tier
 #: landed (the census's largest structural hole); `native` runs it now.
 GATED_PURE_MAP = _TESTS / "valid" / "geometry" / "conservative_regrid_assembly.esm"
-#: A pure map whose BODY the whole-box tiers cannot express — a partial `index`
-#: into a rank-3 array. Nothing gated about it, and no tier below the per-cell
-#: walk, so it is what a `native` refusal looks like today.
-UNVECTORIZABLE_MAP = (
+#: The build-once spatial field fixture, whose per-cell `area` the test below
+#: re-spells with a body the whole-box tiers cannot express.
+_BUILD_ONCE_SPATIAL = (
     _TESTS / "conformance" / "build_once_spatial_field" / "fixtures" / "build_once_spatial_ode.esm"
 )
+
+
+@pytest.fixture(scope="module")
+def unvectorizable_map(tmp_path_factory) -> Path:
+    """A pure map whose BODY the whole-box tiers cannot express — a partial
+    `index` into a rank-3 array, then indexed again. Nothing gated about it, and
+    no tier below the per-cell walk, so it is what a `native` refusal looks like
+    today. `area[c]` is vertex 2's x coordinate of ring `c` (10, 30, 60), the
+    same values as the fixture's overlap-area call, so the rest of the document
+    is unchanged. Written at run time: generated documents are not checked in.
+    """
+    doc = json.loads(_BUILD_ONCE_SPATIAL.read_text())
+    field = doc["models"]["Field"]
+    field.pop("expression_template_imports", None)
+    (area,) = [eq for eq in field["equations"] if eq["lhs"] == "area"]
+    ring = {"op": "index", "args": ["poly", "c"]}
+    area["rhs"]["expr"] = {"op": "index", "args": [ring, 2, 1]}
+    path = tmp_path_factory.mktemp("unvectorizable_map") / "unvectorizable_map.esm"
+    path.write_text(json.dumps(doc))
+    return path
 
 
 def _loader_provider():
@@ -129,9 +148,11 @@ def test_no_compiler_named_means_the_strict_native_default() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_native_refuses_an_unvectorizable_map_at_construction_and_names_the_rule() -> None:
+def test_native_refuses_an_unvectorizable_map_at_construction_and_names_the_rule(
+    unvectorizable_map: Path,
+) -> None:
     with pytest.raises(CompilerRefusedRuleError) as excinfo:
-        esm_problem(str(UNVECTORIZABLE_MAP), (0.0, 1.0))
+        esm_problem(str(unvectorizable_map), (0.0, 1.0))
     err = excinfo.value
     assert err.code == "compiler_refused_rule"
     assert err.compiler == "native"
@@ -144,20 +165,22 @@ def test_native_refuses_an_unvectorizable_map_at_construction_and_names_the_rule
     # The reason is the DEEPEST decline, and the whole chain travels with it.
     assert "does not evaluate or broadcast over the box" in err.reason
     tiers = [tier for tier, _ in err.declines]
-    assert tiers == ["batched-leaf", "einsum", "map"]
+    assert tiers == ["einsum", "map"]
 
 
-def test_the_same_document_builds_and_runs_under_the_interpreter() -> None:
-    prob = esm_problem(str(UNVECTORIZABLE_MAP), (0.0, 1.0), compiler="interpreter")
+def test_the_same_document_builds_and_runs_under_the_interpreter(unvectorizable_map: Path) -> None:
+    prob = esm_problem(str(unvectorizable_map), (0.0, 1.0), compiler="interpreter")
     assert prob.compiler == "interpreter"
     # The rule `native` refused landed on the per-cell walk, which is where the
     # reference puts every aggregate.
     assert "observed Field.area" in prob.compiler_report.per_cell_rules()
 
 
-def test_a_refusal_names_how_to_get_an_answer_instead_of_only_failing() -> None:
+def test_a_refusal_names_how_to_get_an_answer_instead_of_only_failing(
+    unvectorizable_map: Path,
+) -> None:
     with pytest.raises(CompilerRefusedRuleError) as excinfo:
-        esm_problem(str(UNVECTORIZABLE_MAP), (0.0, 1.0))
+        esm_problem(str(unvectorizable_map), (0.0, 1.0))
     message = str(excinfo.value)
     assert "not a fallback" in message
     assert "compiler='interpreter'" in message
@@ -168,11 +191,13 @@ def test_a_refusal_names_how_to_get_an_answer_instead_of_only_failing() -> None:
 BROKEN_BODY = _TESTS / "valid" / "faq" / "faq_semiring_indexset.esm"
 
 
-def test_a_refusal_stands_only_when_the_per_cell_walk_would_have_answered() -> None:
+def test_a_refusal_stands_only_when_the_per_cell_walk_would_have_answered(
+    unvectorizable_map: Path,
+) -> None:
     """The genuine side: the walk succeeds, so the refusal is a true statement
     about the compiler and survives verification."""
     with pytest.raises(CompilerRefusedRuleError) as excinfo:
-        esm_problem(str(UNVECTORIZABLE_MAP), (0.0, 1.0))
+        esm_problem(str(unvectorizable_map), (0.0, 1.0))
     assert excinfo.value.verified, "a refusal must be confirmed before it is raised"
     assert excinfo.value.rule == "observed Field.area"
 
@@ -480,7 +505,6 @@ def test_a_landing_carries_the_chain_of_declines_that_led_to_it() -> None:
     # that answered says why it could not.
     for entry in landed:
         assert [tier for tier, _ in entry.declines] == [
-            "batched-leaf",
             "prefix-scan",
             "operator-cache",
         ]

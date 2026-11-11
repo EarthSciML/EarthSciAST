@@ -41,7 +41,7 @@ function _fb_doc(nx::Int, ny::Int)
     )
     fed(fv) = Dict("kind" => "data", "source" => "met", "from" => Dict("file_variable" => fv))
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "forcing_from_sample"),
         "index_sets" => Dict(
             "x" => Dict("kind" => "interval", "size" => nx),

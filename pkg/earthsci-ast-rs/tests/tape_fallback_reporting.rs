@@ -32,7 +32,7 @@ use earthsci_ast::{CompileError, SimulateError, SolveOptions, load_string};
 /// tape lowers both now, so neither exercises this path any more.
 const FALLBACK_MODEL: &str = r#"
     {
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {
         "name": "fallback_reporting"
       },
@@ -162,7 +162,7 @@ const FALLBACK_MODEL: &str = r#"
 /// fully taped.
 const TAPED_MODEL: &str = r#"
     {
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {
         "name": "taped_reporting"
       },

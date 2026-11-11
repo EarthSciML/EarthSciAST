@@ -2,7 +2,7 @@ using Test
 using EarthSciAST
 const R = EarthSciAST.Relational
 
-# Build-time relational engine — the five value-invention primitives and the
+# Build-time relational engine — the value-invention primitives and the
 # cross-binding determinism contract (CONFORMANCE_SPEC.md §5.5 = RFC
 # `semiring-faq-unified-ir` §5.7). Golden values are the DuckDB throwaway oracle
 # (`SELECT DISTINCT … ORDER BY …`, `dense_rank() OVER (ORDER BY …)`) — DuckDB.jl
@@ -10,21 +10,6 @@ const R = EarthSciAST.Relational
 # return, hand-encoded.
 
 @testset "Relational engine (RFC §5.5 / CONFORMANCE_SPEC §5.5)" begin
-
-    @testset "skolem — canonical tuple, never a hash (rule 4)" begin
-        # undirected edge ⇒ (min, max); reversed orientation collapses to one key
-        @test R.skolem_edge(5, 2) == (2, 5)
-        @test R.skolem_edge(2, 5) == (2, 5)
-        @test R.skolem_edge(7, 7) == (7, 7)
-        @test R.skolem_edge(3, 8) == R.skolem_edge(8, 3)
-        # symmetric, arity > 2: components sorted
-        @test R.skolem((9, 1, 5); symmetric = true) == (1, 5, 9)
-        @test R.skolem(("b", "a"); symmetric = true) == ("a", "b")
-        # directed: order preserved, so (1,2) and (2,1) stay distinct
-        @test R.skolem((1, 2)) == (1, 2)
-        @test R.skolem((2, 1)) == (2, 1)
-        @test R.skolem((2, 1)) != R.skolem((1, 2))
-    end
 
     @testset "distinct — sorted set semantics (rules 1, 2)" begin
         @test R.distinct([3, 1, 2, 1, 3]) == [1, 2, 3]
@@ -35,20 +20,6 @@ const R = EarthSciAST.Relational
         # strings by Unicode code-point / UTF-8 byte order: "B" < "Z" < "a"
         @test R.distinct(["a", "Z", "B", "a"]) == ["B", "Z", "a"]
         @test R.distinct(Int[]) == Int[]
-    end
-
-    @testset "rank — dense IDs, Julia 1-based (rule 3)" begin
-        rk = R.rank([30, 10, 20, 10])
-        @test rk.order == [10, 20, 30]
-        @test rk.base == 1
-        @test (rk.id[10], rk.id[20], rk.id[30]) == (1, 2, 3)
-        # canonical 0-based (what conformance asserts on) via base = 0
-        rk0 = R.rank([30, 10, 20, 10]; base = 0)
-        @test (rk0.id[10], rk0.id[20], rk0.id[30]) == (0, 1, 2)
-        # base-normalisation round-trip: reported − base is binding-independent
-        for t in rk.order
-            @test rk.id[t] - rk.base == rk0.id[t] - rk0.base
-        end
     end
 
     @testset "equijoin — emit sorted by canonical key (rule 5)" begin
@@ -93,22 +64,18 @@ const R = EarthSciAST.Relational
     @testset "mesh-edge enumeration vs DuckDB oracle + adversarial collapse (§5.5.4)" begin
         # Two triangles sharing edge (2,3); faces → vertex triples.
         faces = [(1, 2, 3), (2, 4, 3)]
-        # Undirected edges of a face list as canonical skolem tuples.
-        edges_of(fs) = reduce(
-            vcat,
-            [[R.skolem_edge(a, b), R.skolem_edge(b, c), R.skolem_edge(c, a)] for (a, b, c) in fs]
-        )
+        # Undirected edges of a face list as canonical (min, max) tuples.
+        ue(a, b) = a <= b ? (a, b) : (b, a)
+        edges_of(fs) = reduce(vcat, [[ue(a, b), ue(b, c), ue(c, a)] for (a, b, c) in fs])
 
         # Golden = DuckDB throwaway oracle output:
-        #   SELECT DISTINCT e ORDER BY e   ;   dense_rank() OVER (ORDER BY e)
+        #   SELECT DISTINCT e ORDER BY e
         golden_set = [(1, 2), (1, 3), (2, 3), (2, 4), (3, 4)]
         golden_json = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
-        golden_ids = [1, 2, 3, 4, 5]              # Julia 1-based
 
         base = edges_of(faces)
         @test R.distinct(base) == golden_set
         @test R.canonical_index_set_json(base) == golden_json
-        @test [R.rank(base).id[e] for e in golden_set] == golden_ids
 
         # Adversarial variants — all must collapse to the identical canonical output.
         variants = [
@@ -121,7 +88,6 @@ const R = EarthSciAST.Relational
             @testset "$name" begin
                 @test R.distinct(variant) == golden_set
                 @test R.canonical_index_set_json(variant) == golden_json
-                @test [R.rank(variant).id[e] for e in golden_set] == golden_ids
             end
         end
     end
@@ -135,9 +101,7 @@ const R = EarthSciAST.Relational
 
     @testset "negative controls (§5.5.4): float keys rejected (rule 1)" begin
         @test_throws R.FloatKeyError R.distinct([1.0, 2.0])
-        @test_throws R.FloatKeyError R.rank([(1, 2.5)])
-        @test_throws R.FloatKeyError R.skolem_edge(1.0, 2.0)
-        @test_throws R.FloatKeyError R.skolem((1, 2.0))
+        @test_throws R.FloatKeyError R.distinct([(1, 2.5)])
         @test_throws R.FloatKeyError R.equijoin([(1.0,)], [(1.0,)]; on_left = x -> x[1], on_right = x -> x[1])
         @test_throws R.FloatKeyError R.group_aggregate([(1.5, 2)]; key = r -> r[1], value = r -> r[2], op = +)
         # Bool keys ARE allowed (Bool <: Integer): boolean-or-style grouping

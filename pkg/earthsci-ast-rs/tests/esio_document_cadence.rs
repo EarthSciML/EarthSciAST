@@ -60,7 +60,7 @@ fn doc(dir: &Path) -> Value {
         write_month(&mirror.join(format!("nei_agr_{m:02}.ncf")), [v, v + 1.0]);
     }
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "data_sources": {"NEI": {
             "kind": "grid",
             "source": {

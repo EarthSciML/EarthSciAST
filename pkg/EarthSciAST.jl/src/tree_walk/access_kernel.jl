@@ -723,71 +723,6 @@ function _eval_acc_op(
         return Float64(ℯ)
     elseif op === :Pre
         return ev(ch[1])
-
-    elseif op === :fn
-        # Interp / closed function. MIRRORS `_eval_node_op`'s `:fn` arm
-        # (compile.jl) exactly — SAME `(fname, spec)` payload dispatch, SAME
-        # validation-free `_interp_*_core` kernels, SAME const tables — so the
-        # affine path stays bit-identical on interp leaves. The scalar query
-        # children are `ev`'d (through the access evaluator) instead of
-        # `_eval_node`'d; everything else is identical. `isa`-matching the whole
-        # concrete tuple type keeps the inline spec unboxed (see compile.jl).
-        pl = nd.payload
-        if pl isa Tuple{String, _InterpLinearSpec}
-            spec = pl[2]
-            return _interp_linear_core(spec, ev(ch[1]))
-        elseif pl isa Tuple{String, _InterpBilinearSpec}
-            spec = pl[2]
-            return _interp_bilinear_core(spec, ev(ch[1]), ev(ch[2]))
-        elseif pl isa Tuple{String, _InterpSearchsortedSpec}
-            spec = pl[2]
-            # `convert(T, …)` not `Float64(…)` — same reasoning as the mirrored
-            # `:fn` arm in compile.jl: keep the arm in the evaluator's value type
-            # so it stays AD-clean and concretely inferred.
-            return convert(T, _interp_searchsorted_core(spec, ev(ch[1])))
-        elseif pl isa Tuple{String, _InterpLinearLaneSpec}
-            # Per-LANE spec table (kernel-class merge): select THIS cell's
-            # member spec by the box lane addressing, then call the SAME core
-            # the member kernel called — bit-identical per lane by construction.
-            h = pl[2]
-            sp = @inbounds h.specs[_interp_lane(h, midx)]
-            return _interp_linear_core(sp, ev(ch[1]))
-        elseif pl isa Tuple{String, _InterpBilinearLaneSpec}
-            h = pl[2]
-            sp = @inbounds h.specs[_interp_lane(h, midx)]
-            return _interp_bilinear_core(sp, ev(ch[1]), ev(ch[2]))
-        elseif pl isa Tuple{String, _InterpSearchsortedLaneSpec}
-            h = pl[2]
-            sp = @inbounds h.specs[_interp_lane(h, midx)]
-            return convert(T, _interp_searchsorted_core(sp, ev(ch[1])))
-        elseif pl isa Tuple{String, _FnTypedCoreSpec}
-            # Registry-declared typed scalar core — MIRRORS compile.jl's `:fn`
-            # arm: `T === Float64` folds at compile time and calls the unary
-            # core directly (no `Any[]` box, bit-identical to the boxed
-            # registry by construction); every other `T` keeps the boxed
-            # route below verbatim (AD/traced widening unchanged).
-            if T === Float64
-                return _fn_typed_core_call(pl[2].id, ev(ch[1]))
-            end
-            args_evaluated = Any[ev(ci) for ci in ch]
-            return convert(T, _eval_closed_fn(pl[1], args_evaluated, T))
-        elseif pl isa Tuple{String, Nothing}
-            # Undeclared all-scalar closed fn (none in the v0.3.0 set — kept
-            # as the registry's boxed fallback contract). `_eval_closed_fn`
-            # selects the pinned vs. AD registry on the compile-time `T` —
-            # mirrors compile.jl's `:fn` arm, and keeps this arm's inference
-            # (and the affine kernel's zero-alloc property) identical at
-            # `T === Float64`.
-            fname = pl[1]
-            args_evaluated = Any[ev(ci) for ci in ch]
-            return convert(T, _eval_closed_fn(fname, args_evaluated, T))
-        end
-        throw(
-            TreeWalkError(
-                "E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
-                "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"
-            )
-        )
     end
     throw(TreeWalkError("E_TREEWALK_ACC_UNSUPPORTED_OP", String(op)))
 end
@@ -925,84 +860,9 @@ function _acc_has_kind(n::_Node, kind::UInt8, seen::_NodeIdMap{Nothing})
     return false
 end
 
-# Content identity for a closed-function (`:fn`) payload in the vn key. Keying by
-# `objectid` was sound but needlessly conservative: `_compile_fn_node` mints a fresh
-# spec object per SOURCE `fn` node, so two calls over content-equal const tables
-# never shared a slot. A shared slot is sound iff content-equal payloads always
-# compute equal values — true here: every admitted function is a pure, deterministic
-# function of (spec, scalar args), and the args are already pinned by `childvns`.
-# Collision-proofing is structural, not probabilistic: `key_to_vn` is a `Dict`, which
-# confirms `isequal` after the hash bucket, and this wrapper's `isequal` re-checks
-# spec CONTENT — a hash collision degrades to a duplicate slot, never to aliasing
-# two different tables. (`==` follows `isequal` — same NaN-tolerant contract as the
-# merge guard; a table holding a NaN must still share with its content-twin.)
-struct _AccFnPayKey
-    fname::String
-    spec::Any
-end
-Base.hash(k::_AccFnPayKey, h::UInt) = hash(k.fname, hash(_acc_fn_spec_hash0(k.spec), h))
-Base.isequal(a::_AccFnPayKey, b::_AccFnPayKey) =
-    a.fname == b.fname && _acc_fn_spec_eq(a.spec, b.spec)
-Base.:(==)(a::_AccFnPayKey, b::_AccFnPayKey) = isequal(a, b)
-
-# Spec content hash/equality behind `_AccFnPayKey`. The `Nothing`/`_Interp*Spec`
-# families delegate to acc_merge.jl's `_fn_spec_hash`/`_fn_spec_content_equal` — the
-# SAME matched (hash, isequal) pair the merge guard trusts. The `_Interp*LaneSpec`
-# families never reach that guard (they are minted AFTER grouping, by
-# `_oop_merge_fn_payload`), so acc_merge deliberately does not model them; they are
-# keyed here on (per-lane spec content, s1/s2/s3/off lane addressing) — the derived
-# `*_cols` fields are pure functions of `specs`, so they carry no extra identity,
-# while the addressing decides WHICH lane a cell reads and so must split the key.
-# `isequal ⇒ equal hash` holds arm by arm: each eq/hash pair folds the same fields.
-_acc_fn_spec_hash0(s) = _fn_spec_hash(s)
-_acc_fn_spec_eq(a, b) = _fn_spec_content_equal(a, b)
-for (LS, seed) in (
-        (:_InterpLinearLaneSpec, 0x44), (:_InterpBilinearLaneSpec, 0x55),
-        (:_InterpSearchsortedLaneSpec, 0x66),
-    )
-    @eval function _acc_fn_spec_hash0(h::$LS)
-        x = UInt($seed)
-        for s in h.specs
-            x = hash(_fn_spec_hash(s), x)
-        end
-        return hash(h.off, hash(h.s3, hash(h.s2, hash(h.s1, x))))
-    end
-    @eval _acc_fn_spec_eq(a::$LS, b::$LS) =
-        a.s1 == b.s1 && a.s2 == b.s2 && a.s3 == b.s3 && a.off == b.off &&
-        length(a.specs) == length(b.specs) &&
-        all(i -> _fn_spec_content_equal(a.specs[i], b.specs[i]), eachindex(a.specs))
-end
-
-# The closed set of spec types `_acc_fn_pay_key` content-keys. Anything else —
-# a spec type added without updating the methods above — stays on the IDENTITY
-# path below (the pre-content behavior): declining to share costs a recompute,
-# guessing costs correctness. Deliberately NOT `_acc_fn_spec_hash0 !== objectid`
-# introspection — an explicit list fails closed under method-table drift too.
-_acc_fn_spec_keyable(::Nothing) = true
-_acc_fn_spec_keyable(::_InterpLinearSpec) = true
-_acc_fn_spec_keyable(::_InterpBilinearSpec) = true
-_acc_fn_spec_keyable(::_InterpSearchsortedSpec) = true
-_acc_fn_spec_keyable(::_InterpLinearLaneSpec) = true
-_acc_fn_spec_keyable(::_InterpBilinearLaneSpec) = true
-_acc_fn_spec_keyable(::_InterpSearchsortedLaneSpec) = true
-# A typed-core spec is a pure function of the fname (isbits `id`/`arity` row
-# handle) — content IS the two ints, so `_fn_spec_hash`/`_fn_spec_content_equal`
-# (acc_merge.jl) key it exactly.
-_acc_fn_spec_keyable(::_FnTypedCoreSpec) = true
-_acc_fn_spec_keyable(::Any) = false
-
-function _acc_fn_pay_key(payload)
-    if payload isa Tuple{String, Any}
-        fname, spec = payload
-        _acc_fn_spec_keyable(spec) && return _AccFnPayKey(fname, spec)
-    end
-    return objectid(payload)       # unmodelled payload — fail closed on identity
-end
-
 # Structural key: two nodes share a value number iff their keys are equal. ACCESS
-# keys on descriptor CONTENT (`_desc_key`); an OP with a payload (interp `:fn`)
-# keys on the payload's CONTENT (`_AccFnPayKey`, above) so content-equal specs
-# minted as distinct objects still merge; unmodelled payloads key on identity.
+# keys on descriptor CONTENT (`_desc_key`); an OP with a payload keys it on
+# identity.
 function _acc_vn_key(n::_Node, childvns::Vector{Int}, acc::Vector{_AccDesc})
     k = n.kind
     k === _NK_ACCESS  && return (0x01, _desc_key(acc[n.idx]))
@@ -1011,8 +871,7 @@ function _acc_vn_key(n::_Node, childvns::Vector{Int}, acc::Vector{_AccDesc})
     k === _NK_TIME    && return (0x04, :t)
     k === _NK_OP      && return (
         0x05, n.op,
-        n.payload === nothing ? UInt(0) :
-            _acc_fn_pay_key(n.payload),
+        n.payload === nothing ? UInt(0) : objectid(n.payload),
         childvns,
     )
     return (0xff, objectid(n))     # _NK_CACHED / anything else — never merged
@@ -1024,23 +883,6 @@ end
 # STATE_INDIRECT[_COL]) is addressed by the cell.
 @inline _acc_desc_invariant(k::UInt8) =
     k === _AK_STATE_FIXED || k === _AK_ARR_FIXED || k === _AK_SCALAR
-
-# A `:fn` payload carrying a per-LANE spec table (`_Interp*LaneSpec` — minted
-# by the direct class emitter in `_acc_merge_nodes`, or reaching a hand-built
-# spine) selects per-lane data by the CELL multi-index, so the node is
-# cell-VARYING even when every scalar child is invariant: hoisting it to the
-# invariant tier — evaluated ONCE per call at the dummy midx (1,1,1) — would
-# read lane 1's table for every lane. The post-hoc class merge pins the same
-# hazard on its side (the kept-inv `nacc0` assert, oop_merge.jl); this is the
-# scalarizer-side twin. Ordinary scalar specs stay hoistable exactly as before
-# (no lane spec existed pre-CSE before direct emission, so the disabled build
-# is byte-identical).
-@inline function _acc_fn_pay_lane_varying(pl)
-    pl isa Tuple && length(pl) >= 2 || return false
-    s = pl[2]
-    return s isa _InterpLinearLaneSpec || s isa _InterpBilinearLaneSpec ||
-        s isa _InterpSearchsortedLaneSpec
-end
 
 # A value-number key (`_acc_vn_key`) with its hash, compared type first. The
 # keys are tuples of several types; in a `Dict{Any}` two keys whose hashes share
@@ -1104,10 +946,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
             k = n.kind
             inv = k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ? true :
                 k === _NK_ACCESS ? _acc_desc_invariant(acc[n.idx].kind) :
-                k === _NK_OP ? (
-                    all(v -> is_inv[v], childvns) &&
-                    !_acc_fn_pay_lane_varying(n.payload)
-                ) :
+                k === _NK_OP ? all(v -> is_inv[v], childvns) :
                 false                       # _NK_REDUCE excluded upstream; be safe
             push!(counts, 0); push!(is_op, k === _NK_OP); push!(is_inv, inv); push!(rep, n)
         end

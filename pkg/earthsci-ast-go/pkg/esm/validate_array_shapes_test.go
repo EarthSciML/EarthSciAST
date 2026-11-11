@@ -129,12 +129,6 @@ func TestArrayBroadcastShapeAlignment(t *testing.T) {
 			rhs:      ExprNode{Op: "concat", Args: []any{"z1", "z1"}},
 		},
 		{
-			name:     "a geometry kernel returns a result of an unrelated shape",
-			dpShape:  []string{"lon", "lat"},
-			operands: map[string][]string{"z1": {"lev"}},
-			rhs:      ExprNode{Op: "intersect_polygon", Args: []any{"z1", "z1"}},
-		},
-		{
 			name:     "a broadcast whose fn is not a scalar operator is not descended",
 			dpShape:  []string{"lon", "lat"},
 			operands: map[string][]string{"z1": {"lev"}},

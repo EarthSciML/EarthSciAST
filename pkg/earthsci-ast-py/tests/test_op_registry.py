@@ -197,11 +197,9 @@ def test_structural_arity_derives_from_registry():
 
 
 def test_esm_types_array_ops_matches_registry():
-    # ARRAY_OPS routes a model to the NumPy simulate path. It is the union of the
-    # `array` category (aggregate/makearray/index/broadcast/reshape/transpose/
-    # concat) and the `geometry` category (intersect_polygon,
-    # polygon_intersection_area) — both carry array-valued operands.
-    assert set(esm_types.ARRAY_OPS) == _cat("array") | _cat("geometry")
+    # ARRAY_OPS routes a model to the NumPy simulate path: the `array` category
+    # (faq/makearray/index/broadcast/reshape/transpose/concat).
+    assert set(esm_types.ARRAY_OPS) == _cat("array")
 
 
 # ---------------------------------------------------------------------------
@@ -258,8 +256,8 @@ def test_numpy_cmp_ufuncs_matches_registry():
 
 
 def test_cadence_relational_ops_matches_registry():
-    # RELATIONAL_OPS DERIVES from the `relational` category (value-invention +
-    # index-returning reducers): skolem/rank/argmin/argmax/distinct/join. This
+    # RELATIONAL_OPS DERIVES from the `relational` category (the value-invention
+    # companions distinct/join). This
     # guards the derivation against a regression that re-hardcodes a stale set.
     assert set(cadence.RELATIONAL_OPS) == _cat("relational")
 
@@ -302,13 +300,11 @@ def _op_literals_in_source(module) -> set[str]:
 # Registered ops for which display's generic `op(args)` fallback IS the intended
 # rendering (they carry no dedicated math notation): the equation-LHS `ic` and the
 # build-time relational ops. Every OTHER registered op must be specifically rendered.
-# (`skolem` is NOT listed: it has a structural branch for its `label=` named arg.)
 # (The open-tier spatial sugar grad/div/laplacian/curl is UNregistered — it also
 # renders via the generic fallback, but is not a *registered* op, so it is not
 # listed here.)
 DISPLAY_GENERIC_OK = {
     "ic",  # equation-LHS declaration
-    "rank",
     "distinct",
     "join",  # build-time value-invention ops
 }
@@ -459,3 +455,15 @@ def test_grad_renders_identically_to_an_arbitrary_user_op():
             assert g == _sub(u), (
                 f"grad and an arbitrary user op diverge in {render.__name__}: {g!r} vs {u!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Removed ops (esm 2.0.0) are not in the vocabulary
+# ---------------------------------------------------------------------------
+
+
+def test_removed_ops_are_not_registered():
+    # A removed op is rejected by name at load (`removed_op`), so no table
+    # derived from the registry may still carry it.
+    for op in reg.REMOVED_OPS:
+        assert op not in reg.OPS, op

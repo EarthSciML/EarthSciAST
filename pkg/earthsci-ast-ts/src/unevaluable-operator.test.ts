@@ -57,11 +57,7 @@ describe('unevaluable_operator versus unlowered_operator', () => {
 
   // Closed-core ops with no scalar rule: never the open-tier rewrite-rule advice.
   for (const op of [
-    'skolem',
-    'rank',
     'distinct',
-    'argmin',
-    'argmax',
     'apply_expression_template',
     'ic',
     'faq',
@@ -71,8 +67,6 @@ describe('unevaluable_operator versus unlowered_operator', () => {
     'reshape',
     'transpose',
     'concat',
-    'intersect_polygon',
-    'polygon_intersection_area',
     'Pre',
   ]) {
     it(`${op} is unevaluable_operator`, () => {

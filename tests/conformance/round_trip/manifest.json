@@ -137,7 +137,11 @@
 
     { "id": "valid/expr_graphs_variable_deps",      "path": "valid/expr_graphs_variable_deps.esm",      "tags": ["expressions"] },
     { "id": "valid/tests_analyses_comprehensive",   "path": "valid/tests_analyses_comprehensive.esm",   "tags": ["tests_blocks", "divergent"] },
-    { "id": "valid/wildfire_atmosphere_ocean",      "path": "valid/wildfire_atmosphere_ocean.esm",      "tags": ["coupling", "end_to_end"] },
+    { "id": "valid/wildfire_atmosphere_ocean",      "path": "valid/wildfire_atmosphere_ocean.esm",      "tags": ["coupling", "end_to_end", "template-imports", "transforming"],
+      "load_transforms": [
+        { "transform": "template_import_consumption", "spec": "esm-spec 9.7.6",
+          "detail": "OceanDynamics imports `pair_key` (esm:std/relational.esm) for its broad-phase `distinct` key and `overlap_area_planar` (esm:std/geometry.esm) for the regrid overlap areas. expression_template_imports is consumed at load and the imported bodies expand into their call sites, as for template_import_minimal. The document carries models, so it is never a library file and takes the INSTANTIATING mode. All five bindings." }
+      ] },
     { "id": "valid/structural_issues",              "path": "valid/structural_issues.esm",              "tags": ["core"] },
     { "id": "valid/full_coupled",                   "path": "valid/full_coupled.esm",                   "tags": ["coupling", "comprehensive", "esm-umm"] },
     { "id": "valid/model_only",                     "path": "valid/model_only.esm",                     "tags": ["model", "esm-umm"] },
@@ -180,17 +184,6 @@
         { "transform": "enum_lowering", "spec": "esm-spec 9.3",
           "detail": "Same lowering as above, on a zero-valued and a negative-valued member: the member domain is the whole integer range (CONFORMANCE_SPEC, \"An `enums` Member Is a Code, Not a Position\"), so `Braking: 0` lowers to `const 0` and `Unassociated: -1` to `const -1`. A binding that clamped either would round-trip to a different document, not merely a differently-shaped one." }
       ] },
-
-    { "id": "closed_functions/datetime/year",        "path": "closed_functions/datetime/year/canonical.esm",        "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
-    { "id": "closed_functions/datetime/month",       "path": "closed_functions/datetime/month/canonical.esm",       "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
-    { "id": "closed_functions/datetime/day",         "path": "closed_functions/datetime/day/canonical.esm",         "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
-    { "id": "closed_functions/datetime/hour",        "path": "closed_functions/datetime/hour/canonical.esm",        "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
-    { "id": "closed_functions/datetime/minute",      "path": "closed_functions/datetime/minute/canonical.esm",      "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
-    { "id": "closed_functions/datetime/second",      "path": "closed_functions/datetime/second/canonical.esm",      "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
-    { "id": "closed_functions/datetime/day_of_year", "path": "closed_functions/datetime/day_of_year/canonical.esm", "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
-    { "id": "closed_functions/datetime/julian_day",  "path": "closed_functions/datetime/julian_day/canonical.esm",  "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
-    { "id": "closed_functions/datetime/is_leap_year","path": "closed_functions/datetime/is_leap_year/canonical.esm","tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
-    { "id": "closed_functions/interp/searchsorted",  "path": "closed_functions/interp/searchsorted/canonical.esm",  "tags": ["closed-function-registry", "interp", "esm-tzp", "esm-4aw"] },
 
     { "id": "spatial/pde_tests_analyses",            "path": "spatial/pde_tests_analyses.esm",            "tags": ["pde", "spatial-assertions", "expression-ic", "field-plots", "gt-vzwk", "divergent"] },
 

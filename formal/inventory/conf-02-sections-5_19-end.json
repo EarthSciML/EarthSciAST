@@ -790,40 +790,11 @@
     {
       "id": "conf.7.1.removed-op-arrayop",
       "section": "7.1",
-      "quote": "It MUST be rejected BY NAME at the wire boundary, not left to fall through",
+      "quote": "It MUST be rejected BY NAME at the wire boundary, before schema validation, not left to fall through",
       "class": "semantic",
       "phase": 2,
       "area": "diagnostics",
-      "note": "A node with op \"arrayop\" is rejected at load with removed_op naming the node's path, rather than accepted as an open rewrite-target op."
-    },
-    {
-      "id": "conf.7.1.faq-version-gate-authored-form",
-      "section": "7.1",
-      "quote": "The gate MUST read the AUTHORED form, before alias normalization",
-      "class": "semantic",
-      "phase": 2,
-      "area": "diagnostics",
-      "note": "faq_version_too_old fires only when the authored document spells op \"faq\" under esm < 1.1.0; an authored aggregate under 1.0.0 is normalized to faq with the declared version raised to 1.1.0, not rejected.",
-      "concern": "The next sentence ('a document whose EXPANDED form contains `faq` declares 1.1.0 even when its authored bytes do not') does not say whether a pre-1.1.0 document whose expansion produces faq is rejected or has its version raised, and sits awkwardly with the gate reading only the authored form."
-    },
-    {
-      "id": "conf.7.1.alias-normalized-every-document",
-      "section": "7.1",
-      "quote": "The loader MUST normalize the node to `faq` at ONE wire boundary per binding, applied to EVERY document a load touches",
-      "class": "semantic",
-      "phase": 2,
-      "area": "canonical",
-      "note": "Loading replaces every aggregate node with faq in every document a load touches (root, ref-loaded children, template and coupling libraries) before version gates and schema validation, so emit never writes aggregate."
-    },
-    {
-      "id": "conf.7.1.alias-warning-once-per-document",
-      "section": "7.1",
-      "quote": "and MUST report this once per DOCUMENT per alias, naming the count, not once per node.",
-      "class": "semantic",
-      "phase": 2,
-      "area": "diagnostics",
-      "note": "The deprecated_op_alias warning is issued once per document per alias with the node count.",
-      "concern": "The sentence is a fragment ('…reaches `emit` untouched. and MUST report this…') whose subject and 'this' are unclear, and it does not say whether a ref-loaded child or library counts as a separate DOCUMENT for the once-per-document count, though the preceding sentence treats each as a document the load touches."
+      "note": "A node whose op is a removed spelling (arrayop; at 2.0.0 aggregate, fn, table_lookup, skolem, rank, argmin, argmax, intersect_polygon, polygon_intersection_area) or a function_tables block is rejected at load with removed_op naming the node's path, rather than accepted as an open rewrite-target op."
     },
     {
       "id": "conf.7.1.1.undeterminable-not-dimensionless",

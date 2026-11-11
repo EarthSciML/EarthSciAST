@@ -24,7 +24,7 @@
 //! relational engine ([`crate::relational`], bead ess-my4.3.4) in the
 //! `CONST`/`DISCRETE` phase — never on the hot path.
 
-use crate::relational::{Key, canonical_index_set_json, rank, skolem};
+use crate::relational::{Key, canonical_index_set_json, distinct};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
@@ -67,10 +67,8 @@ impl Cadence {
 }
 
 /// The relational / value-invention ops that may not run on the hot path (§5.7
-/// guard 2): one classifying `CONTINUOUS` is a hard error. Includes the
-/// arg-witness reducers (`argmin`/`argmax`, §5.7 rule 6) — a state-dependent
-/// assignment is out of scope for v1, exactly like a state-dependent `distinct`.
-const RELATIONAL_OPS: [&str; 6] = ["distinct", "join", "skolem", "rank", "argmin", "argmax"];
+/// guard 2): one classifying `CONTINUOUS` is a hard error.
+const RELATIONAL_OPS: [&str; 2] = ["distinct", "join"];
 
 // === Leaf seeds + classification ==========================================
 
@@ -292,6 +290,13 @@ fn child_exprs(node: &Map<String, Value>) -> Vec<&Value> {
             out.push(v);
         }
     }
+    // A standard-library template call reads what its call site binds: the
+    // bound expressions are its operands.
+    if node.get("op").and_then(Value::as_str) == Some("apply_expression_template")
+        && let Some(Value::Object(bindings)) = node.get("bindings")
+    {
+        out.extend(bindings.values());
+    }
     out
 }
 
@@ -455,7 +460,7 @@ impl Ctx<'_> {
 
 // === Guards ===============================================================
 
-/// §5.7.6 guard 2: a `distinct`/`join`/`skolem`/`rank` node (or a `distinct`
+/// §5.7.6 guard 2: a `distinct`/`join` node (or a `distinct`
 /// aggregate) that classifies `CONTINUOUS` is rejected — state-dependent
 /// topology may not run per step in v1.
 pub fn assert_no_continuous_relational(node: &Value, model: &Value) -> Result<(), CadenceError> {
@@ -478,7 +483,7 @@ impl Ctx<'_> {
             return Err(err(format!(
                 "relational/value-invention node op={op:?} classifies CONTINUOUS — it may \
              not run on the hot path (§5.7 guard 2). A state-dependent \
-             distinct/join/skolem/rank is out of scope for v1."
+             distinct/join is out of scope for v1."
             )));
         }
         for c in child_exprs(map) {
@@ -623,10 +628,10 @@ fn fold_to_zero_based(arr: &Value) -> Result<Value, CadenceError> {
     Ok(Value::Array(out))
 }
 
-/// Enumerate the unique edges from the `(lo, hi)` endpoint tables, through the
-/// build-time relational engine (ess-my4.3.4): `skolem` canonicalises each pair
-/// (undirected → sorted), `distinct` sorts by the §5.5 total order and drops
-/// adjacent duplicates. Identical to the determinism `edge_enumeration`
+/// The canonical key of every face-local edge in the `(lo, hi)` endpoint
+/// tables: `(min, max)` for an undirected edge, `(lo, hi)` as written for a
+/// directed one. `distinct` then sorts by the §5.5 total order and drops
+/// adjacent duplicates, identical to the determinism `edge_enumeration`
 /// reference; `Key::try_from_json` rejects a float component (§5.5 rule 1).
 fn edge_keys(face_lo: &Value, face_hi: &Value, mode: &str) -> Result<Vec<Key>, CadenceError> {
     let symmetric = mode == "undirected";
@@ -655,7 +660,12 @@ fn edge_keys(face_lo: &Value, face_hi: &Value, mode: &str) -> Result<Vec<Key>, C
                     "float component forbidden in a topology key (§5.5 rule 1): {e}"
                 ))
             })?;
-            keys.push(skolem(vec![klo, khi], symmetric));
+            let (a, b) = if symmetric && khi < klo {
+                (khi, klo)
+            } else {
+                (klo, khi)
+            };
+            keys.push(Key::Tuple(vec![a, b]));
         }
     }
     Ok(keys)
@@ -694,11 +704,8 @@ pub fn compute_fold(label: &str, spec: &Value, inputs: &Value) -> Result<String,
         }
         "rank" => {
             let keys = edge_keys(input("face_lo")?, input("face_hi")?, mode)?;
-            let ids: Vec<Value> = rank(&keys)
-                .canonical_dense_ids()
-                .into_iter()
-                .map(Value::from)
-                .collect();
+            // Dense 0-based ids: each key's position in the `distinct` sequence.
+            let ids: Vec<Value> = (0..distinct(&keys).len() as i64).map(Value::from).collect();
             Ok(canonical_serialize(&Value::Array(ids)))
         }
         other => Err(err(format!(
@@ -992,7 +999,7 @@ mod tests {
         assert_eq!(
             p.class_summary,
             ClassSummary {
-                const_: 6,
+                const_: 4,
                 discrete: 0,
                 continuous: 0
             }
@@ -1162,7 +1169,7 @@ mod tests {
                 "rhs": {
                     "op": "faq", "distinct": true, "semiring": "bool_and_or",
                     "output_idx": ["e"], "ranges": {"f": {"from": "faces"}},
-                    "key": {"op": "skolem", "label": "edge", "args": [{"op": "index", "args": ["u", "f"]}]},
+                    "key": {"op": "index", "args": ["u", "f"]},
                     "expr": {"op": "true", "args": []}
                 }
             }]

@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 fn box_with_ic(ic_rhs: Value) -> earthsci_ast::FlattenedSystem {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "FieldIcGate", "authors": ["test"]},
         "models": {"Box": {
             "variables": {"c": {"type": "unknown", "units": "1", "default": 1.0}},

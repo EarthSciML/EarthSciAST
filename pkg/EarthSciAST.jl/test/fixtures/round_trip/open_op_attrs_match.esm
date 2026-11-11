@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "OpenOpAttrsMatch",
     "description": "The half of `attrs` most likely to break silently: a rewrite rule whose `match` names `attrs.<key>` with a BARE PARAM NAME, which binds that param to the matched literal (esm-spec §9.6.1). `gamma` binds to 1.4 and `f` to the operand, so the custom op lowers to `1.4 * phi`. Deliberately listed in corpus_fidelity_test.jl's TRANSFORMED_AT_LOAD: §9.6.3 rewrites the op away at load and §9.6.4 rule 5 drops the match-only registry, so this document is REQUIRED not to round-trip. Its companion open_op_attrs.esm is the exact-fidelity half.",

@@ -88,50 +88,6 @@ func TestVersionGateReadsTheMountingRootsOwnVersion(t *testing.T) {
 	}
 }
 
-// The gates read a file's declared `esm` AS RAISED by the `aggregate` → `faq`
-// normalization (the 1.1.0 floor), and the root's are run in one place whether
-// or not it mounts anything: a 1.0.0 root spelling `aggregate` beside a
-// `solver` block is a 1.1.0 document either way.
-func TestVersionGateReadsTheRaisedVersionWithAndWithoutAMount(t *testing.T) {
-	dir := t.TempDir()
-	writePerFileGateDoc(t, dir, "leaf.esm", `{
-  "esm": "1.0.0",
-  "metadata": {"name": "leaf"},
-  "models": {"Leaf": {
-    "variables": {"p_abs": {"type": "parameter", "units": "Pa", "default": 1.0}},
-    "equations": []
-  }}
-}`)
-	doc := func(mount string) string {
-		return `{
-  "esm": "1.0.0",
-  "metadata": {"name": "root"},
-  "solver": {"stiffness": "high"},
-  "models": {"Station": {
-    "variables": {
-      "p": {"type": "parameter", "units": "Pa", "default": 1.0},
-      "p_reading": {"type": "unknown", "units": "Pa"}
-    },
-    "equations": [{"lhs": "p_reading",
-      "rhs": {"op": "aggregate", "args": [], "output_idx": [], "ranges": {}, "expr": "p"}}]` + mount + `
-  }}
-}`
-	}
-	alone := writePerFileGateDoc(t, dir, "alone.esm", doc(""))
-	if _, err := LoadPath(alone); err != nil {
-		t.Fatalf("a 1.0.0 root using `aggregate` with a `solver` block must load: %v", err)
-	}
-	if _, err := LoadString(doc("")); err != nil {
-		t.Fatalf("the same document through LoadString must load: %v", err)
-	}
-	mounted := writePerFileGateDoc(t, dir, "mounted.esm",
-		doc(`,
-    "subsystems": {"Leaf": {"ref": "./leaf.esm"}}`))
-	if _, err := LoadPath(mounted); err != nil {
-		t.Fatalf("mounting a subsystem must not change that verdict: %v", err)
-	}
-}
-
 // A mounted leaf's top-level `solver` block is gated against the leaf's own
 // version, like every other gate.
 func TestVersionGateReadsTheMountedLeafsSolverBlock(t *testing.T) {

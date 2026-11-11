@@ -31,7 +31,7 @@ end
 function _uw_box(extra_rhs; shaped = false)
     shape = shaped ? ["lev"] : nothing
     doc = Dict{String, Any}(
-        "esm" => "1.0.0",
+        "esm" => "2.0.0",
         "metadata" => Dict{String, Any}("name" => "UnloweredWalk", "authors" => ["test"]),
         "models" => Dict{String, Any}(
             "Box" => Dict{String, Any}(
@@ -114,7 +114,7 @@ end
 
     @testset "a structural time D under an equation-LHS faq is still core" begin
         doc = Dict{String, Any}(
-            "esm" => "1.1.0",
+            "esm" => "2.0.0",
             "metadata" => Dict{String, Any}("name" => "FaqLhsD", "authors" => ["test"]),
             "index_sets" => Dict{String, Any}("lev" => Dict{String, Any}("kind" => "interval", "size" => 4)),
             "models" => Dict{String, Any}(

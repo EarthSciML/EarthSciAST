@@ -73,12 +73,12 @@ const E = EarthSciAST
         @test length(acc) == 3           # qW dropped to literal; qC, qE, fixed remain
     end
 
-    # an interp `:fn` node now LOWERS: the op passes through carrying its
-    # `(fname, spec)` payload, its lane children lowered like any subtree.
-    let fn = E._mknode(kind = E._NK_OP, op = :fn, children = E._Node[st(-1)], payload = ("f", nothing))
+    # an op node LOWERS: the op passes through, its lane children lowered like
+    # any subtree.
+    let nd = E._mknode(kind = E._NK_OP, op = :sin, children = E._Node[st(-1)])
         acc = E._AccDesc[]
-        out = E._lower_to_access(fn, E._LaneRepl[Acc(SA(0))], acc)
-        @test out.kind === E._NK_OP && out.op === :fn && out.payload == ("f", nothing)
+        out = E._lower_to_access(nd, E._LaneRepl[Acc(SA(0))], acc)
+        @test out.kind === E._NK_OP && out.op === :sin && out.payload === nothing
         @test length(acc) == 1 && acc[1].kind === E._AK_STATE_AFFINE
     end
     # a contraction node is the remaining unmodelled kind → still a fallback.

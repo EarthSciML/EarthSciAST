@@ -21,9 +21,9 @@
 #     `_resolve_indices` returns.
 #
 # Applicability is intentionally narrow. `_stencilize` keeps ONLY the whitelisted
-# elementwise ops + `index(state/const/pgather, …)` gathers + `fn` leaves + bare
+# elementwise ops + `index(state/const/pgather, …)` gathers + bare
 # loop-index literals; ANY loop-var-dependent construct outside that set
-# (`faq`/`makearray`/`integral`/`index`-of-those/`table_lookup`/…)
+# (`faq`/`makearray`/`integral`/`index`-of-those/…)
 # throws `_StencilFallback` and the caller runs the unchanged per-cell path. So the
 # fast path is provably identical WHERE it applies and simply absent elsewhere.
 # ONE refinement keeps the failure mode SUBTERM-granular instead of
@@ -279,8 +279,8 @@ _nested_site_big(e::OpExpr, tctx::_TemplateCtx) =
 # Does `expr` reference any of the output loop indices in `idxset`? EXHAUSTIVE
 # over every `ASTExpr`-typed field of `OpExpr` via the shared `child_exprs`
 # traversal (`foreach_subexpr`, expression.jl) — args / expr_body / lower /
-# upper / values / filter / key / table_axes / ranges bounds — so a loop index
-# buried in an aggregate body, a reduction bound, or a table-axis map routes
+# upper / values / filter / key / ranges bounds — so a loop index
+# buried in an aggregate body or a reduction bound routes
 # that op to the fallback and is NEVER mis-seen as loop-invariant (a false
 # negative would return an unsubstituted loop var to resolve → a hard build
 # error instead of a fallback). Cold path — called once per branch template,
@@ -419,18 +419,13 @@ function _stencilize_op_core(e::OpExpr, ctx::_StencilCtx)
     op = e.op
     if op == "index"
         return _stencilize_index(e, ctx)
-    elseif op == "fn"
-        # Closed function: recurse into the (scalar) query args; the const-array
-        # table/axis args are loop-invariant and returned verbatim by recursion.
-        new_args = ASTExpr[_stencilize(a, ctx) for a in e.args]
-        return reconstruct(e; args = new_args)
     elseif op in _STENCIL_ELEMENTWISE_OPS
         # Pure elementwise op — must carry no sub-expression structure (a defensive
         # guard: elementwise ops never legitimately do; if one does, fall back).
         (
             e.expr_body === nothing && e.values === nothing && e.ranges === nothing &&
                 e.output_idx === nothing && e.filter === nothing && e.lower === nothing &&
-                e.upper === nothing && e.table_axes === nothing && e.key === nothing
+                e.upper === nothing && e.key === nothing
         ) ||
             throw(_StencilFallback("elementwise op '$op' carries structural fields"))
         new_args = ASTExpr[_stencilize(a, ctx) for a in e.args]
@@ -514,7 +509,7 @@ end
 # `_cellwise_compile_once_impl` is wrapped in try/catch and any failure
 # restores the original whole-equation decline. Field coverage mirrors
 # `_scan_refs_idxset` (args / lower / upper / expr_body / filter / key /
-# values / table_axes / ranges bounds), so nothing an expression can carry
+# values / ranges bounds), so nothing an expression can carry
 # slips through unchecked; `bindings` (pre-lowered template sugar) is
 # conservatively rejected outright. Cold path — once per offending subtree
 # per branch template, never per cell.
@@ -565,11 +560,6 @@ function _exprtbl_evaluable(
     ) || return false
     if o.values !== nothing
         for v in o.values
-            chk(v) || return false
-        end
-    end
-    if o.table_axes !== nothing
-        for (_, v) in o.table_axes
             chk(v) || return false
         end
     end
@@ -1031,8 +1021,7 @@ end
 
 # Memoized set of every variable name appearing anywhere in `e`, drawing
 # children from the SAME shared `child_exprs` traversal `_refs_loop_var` uses
-# (args / expr_body / lower / upper / filter / key / values / table_axes /
-# ranges) so `_refs_idxset` below is exactly equivalent to a fresh
+# (args / expr_body / lower / upper / filter / key / values / ranges) so `_refs_idxset` below is exactly equivalent to a fresh
 # `_refs_loop_var` call. Built lazily, once per node, and reused across every
 # cell — turning the per-cell branch-key guard from an O(subtree) re-walk into
 # an O(|idxset|) probe of the cached set. (Hand-rolled memoized recursion, not
@@ -1069,11 +1058,6 @@ function _scan_refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr, 
     end
     if e.values !== nothing
         for v in e.values
-            _child_refs_idxset(v, idxset, memo) && return true
-        end
-    end
-    if e.table_axes !== nothing
-        for (_, v) in e.table_axes
             _child_refs_idxset(v, idxset, memo) && return true
         end
     end

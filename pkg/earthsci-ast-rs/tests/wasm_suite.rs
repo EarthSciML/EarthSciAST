@@ -10,25 +10,22 @@
 //! builds only the library plus this file, NOT the native-only unit tests and
 //! the other 40-odd integration tests — those read fixtures off disk and use
 //! tempfiles, neither of which works on `wasm32-unknown-unknown`. Fixtures are
-//! embedded with `include_str!` since wasm has no filesystem. (The geometry
-//! kernel is no longer on that exclusion list: since it became the pure-Rust
-//! `s2rst` it compiles here like any other dependency, so the spherical clip and
-//! area are exercised below rather than asserted to be unavailable.)
+//! embedded with `include_str!` since wasm has no filesystem.
 #![cfg(target_arch = "wasm32")]
 
 use std::collections::HashMap;
 use wasm_bindgen_test::*;
 
 use earthsci_ast::{
-    Alg, Manifold, SolveOptions, component_graph, free_variables, intersect_polygon, load_string,
-    polygon_area, shoelace_area, stoichiometric_matrix, to_json, validate,
+    Alg, SolveOptions, component_graph, free_variables, load_string, stoichiometric_matrix,
+    to_json, validate,
 };
 
 /// Scalar exponential-decay ODE: `dx/dt = k·x`, `k = -1`, `x(0) = 1` ⇒
 /// `x(t) = e^{-t}`. Exercises the pure-ODE (diffsol/Faer) path in wasm.
 const SCALAR_ODE: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {
         "name": "decay",
         "description": "scalar exponential decay"
@@ -74,7 +71,7 @@ const HEAT_1D: &str = include_str!("../../../tests/fixtures/faq/15_discretized_1
 
 /// Minimal reaction system `A → B` for the stoichiometry subsystem.
 const REACTIONS: &str = r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "chem", "description": "minimal A -> B reaction" },
   "reaction_systems": {
     "Chem": {
@@ -206,59 +203,6 @@ fn array_pde_heat_matches_analytic() {
     }
 }
 
-// --- geometry ----------------------------------------------------------------
-
-#[wasm_bindgen_test]
-fn planar_geometry_is_pure_rust() {
-    // Planar area needs no s2 — pure-Rust shoelace.
-    let tri = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)];
-    let area = polygon_area(&tri, Manifold::Planar).expect("planar area");
-    assert!((area - 0.5).abs() < 1e-12, "triangle area = {area}");
-
-    // Planar clip (Sutherland–Hodgman) of two unit squares offset by (½,½):
-    // overlap is a ½×½ square of area ¼.
-    let a = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
-    let b = [(0.5, 0.5), (1.5, 0.5), (1.5, 1.5), (0.5, 1.5)];
-    let clip = intersect_polygon(&a, &b, Manifold::Planar).expect("planar clip");
-    assert!(clip.len() >= 3, "clip should be non-empty: {clip:?}");
-    assert!(
-        (shoelace_area(&clip) - 0.25).abs() < 1e-12,
-        "clip area = {}",
-        shoelace_area(&clip)
-    );
-}
-
-#[wasm_bindgen_test]
-fn spherical_geometry_runs_natively_on_wasm() {
-    // Was `spherical_geometry_errors_without_s2`: the spherical kernel used to be
-    // a C++ module that could not be linked into a wasm build, so this asserted a
-    // clean *failure* unless the host had wired up `globalThis.__earthsci_s2`.
-    // The pure-Rust `s2rst` kernel compiles to wasm like any other dependency, so
-    // the assertion inverts — spherical geometry just works here, with no host
-    // setup and no JS boundary crossing.
-    let tri = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
-    let area = polygon_area(&tri, Manifold::Spherical).expect("spherical area on wasm");
-    assert!(
-        (area - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
-        "an octant is π/2 steradians, got {area}"
-    );
-}
-
-#[wasm_bindgen_test]
-fn spherical_clip_runs_natively_on_wasm() {
-    // The clip half of the same story: `intersect_polygon` on a spherical
-    // manifold was unreachable on wasm without the Emscripten bridge.
-    let a = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
-    let b = [(45.0, 0.0), (135.0, 0.0), (45.0, 90.0)];
-    let ring = intersect_polygon(&a, &b, Manifold::Spherical).expect("spherical clip on wasm");
-    assert!(ring.len() >= 3, "expected a non-empty overlap ring");
-    let area = polygon_area(&ring, Manifold::Spherical).expect("overlap area on wasm");
-    assert!(
-        (area - std::f64::consts::FRAC_PI_4).abs() < 1e-9,
-        "the two octant sectors overlap in π/4 steradians, got {area}"
-    );
-}
-
 // --- reactions ---------------------------------------------------------------
 
 #[wasm_bindgen_test]
@@ -344,8 +288,8 @@ scaling_family!(scaling_ragged_contraction, "ragged_contraction");
 scaling_family!(scaling_makearray_nested_sum, "makearray_nested_sum");
 scaling_family!(scaling_band_transpose, "band_transpose");
 
-/// The corpus geometry documents the tape lowers (`polygon_intersection_area`,
-/// a build-time `intersect_polygon` ring), native against the interpreter.
+/// The corpus geometry documents (the `lib/geometry.esm` overlap-area
+/// templates), native against the interpreter.
 #[wasm_bindgen_test]
 fn geometry_documents() {
     for (id, text) in portable::GEOMETRY_DOCS {

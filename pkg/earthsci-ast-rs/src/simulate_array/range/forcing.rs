@@ -73,9 +73,8 @@ impl std::fmt::Display for RhsError {
 impl std::error::Error for RhsError {}
 
 /// The fail-closed codes a fault message may lead with.
-const FAULT_CODES: [&str; 9] = [
+const FAULT_CODES: [&str; 8] = [
     "E_TREEWALK_CONSTARRAY_OOB",
-    "E_TREEWALK_GEOMETRY_CLIP",
     "E_TREEWALK_INDEX_ON_SCALAR",
     "E_TREEWALK_MISSING_DATA",
     "E_TREEWALK_MISSING_INITIAL_VALUE",

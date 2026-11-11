@@ -927,7 +927,6 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
     );
     FlattenedSystem {
         algebraic_variables: Default::default(),
-        function_tables: Default::default(),
         template_registry: Default::default(),
         loader_fields: Default::default(),
         lifted_shapes: Default::default(),
@@ -1183,7 +1182,6 @@ fn test_error_unknown_variable_in_array_model_rejected() {
 fn dummy_flat() -> FlattenedSystem {
     FlattenedSystem {
         algebraic_variables: Default::default(),
-        function_tables: Default::default(),
         template_registry: Default::default(),
         loader_fields: Default::default(),
         lifted_shapes: Default::default(),

@@ -6,9 +6,9 @@ import Esm.Closed.Interp.Bilinear64
 
 `lib/interp.esm` writes `searchsorted`, `linear` and `bilinear` as expression
 templates (esm-spec §9.7.1) built from `faq`, `ifelse`, `index`, `min`, `max`
-and the four arithmetic operations, instead of the `fn` primitives of §9.2.
-This file states that the template expansions compute what the primitives
-compute.
+and the four arithmetic operations. This file states that the template
+expansions compute what the reference definitions of `Esm/Closed/Interp.lean`
+(the primitives below) compute.
 
 The three templates are written below as Lean functions that mirror the AST
 bodies term for term. They are the proof route for the theorems about the
@@ -24,7 +24,7 @@ evaluation (`Esm.Expr.eval`) is shown to reduce to these functions:
   `clamp_binary64` that the `min(max(·, 1), n − 1)` around it is too, so a
   binary64 evaluation of the AST indexes the same knot;
 * the cell index `i` is `cellIdx` written out at each use, as the template
-  writes it; the arithmetic is in the template's (= §9.2's pinned) order.
+  writes it; the arithmetic is in the template's (= the reference's pinned) order.
 
 Everything else is generic over `Scalar`, like the primitives. The equalities
 are proven for every scalar type satisfying `RealNaN` (finite reals plus one
@@ -41,7 +41,7 @@ Main results:
   query (NaN included) on a non-decreasing `xs`, `n = |xs|`, including `n = 0`.
 * `cellIdx_eq_cell`: `count(axis[k] ≤ q)` clamped to `[1, n − 1]` is one more
   than the primitives' 0-based `cell`, for every real `q`; `cellIdx_spec`
-  restates it as §9.2's "largest `i ∈ [1, n−1]` with `a_i ≤ q`".
+  restates it as the "largest `i ∈ [1, n−1]` with `a_i ≤ q`".
 * `linear_eq`, `bilinear_eq`: the templates equal `Esm.Closed.linear` /
   `Esm.Closed.bilinear` for every query (NaN included) and every table,
   on non-decreasing axes with `n ≥ 2` (a strictly increasing axis is one).
@@ -179,7 +179,6 @@ noncomputable instance : Scalar Bin64 where
   le := le
   lt := lt
   isNaN := isNaN
-  nonFinite := isNaN
 
 noncomputable instance : RealNaN Bin64 where
   fin := fin
@@ -258,7 +257,7 @@ theorem searchsorted_eq_of_upward {β : Type} [Scalar β] (x : β) (xs : List β
   rw [faqSum_not_eq_findIdx xs (fun a => le x a) nan hup]
   omega
 
-/-- §9.2 `searchsorted`, as a template: on a non-decreasing `xs` of length
+/-- the reference `searchsorted`, as a template: on a non-decreasing `xs` of length
 `n`, `1 + count(not(xs[k] >= x))` is the primitive's result for every query,
 NaN included (`n + 1`), and for `n = 0` (`1`). -/
 theorem searchsorted_eq (a : List ℝ) (ha : a.Pairwise (· ≤ ·)) (x : α) :
@@ -316,7 +315,7 @@ theorem cellIdx_eq_cell (a : List ℝ) (ha : a.Pairwise (· ≤ ·)) (hn : 2 ≤
   rw [countLe_eq_findIdx a ha q, List.length_map]
   omega
 
-/-- §9.2's cell, read off the template: on a strictly increasing axis of
+/-- The reference's cell, read off the template: on a strictly increasing axis of
 `n ≥ 2` knots and a query `q ∈ [a_1, a_n]`, the template's 1-based `i` lies in
 `[1, n − 1]` with `a_i ≤ q < a_{i+1}`, or `q` is the last knot and
 `i = n − 1`; so `i` is the largest index in `[1, n − 1]` with `a_i ≤ q`.
@@ -345,7 +344,7 @@ theorem cellIdx_knot (a : List ℝ) (ha : a.Pairwise (· < ·)) (k : ℕ) (hk : 
 
 /-! ## `linear` -/
 
-/-- §9.2 `interp.linear`, as a template: on a non-decreasing axis of `n ≥ 2`
+/-- the reference `linear`, as a template: on a non-decreasing axis of `n ≥ 2`
 knots, the template equals the primitive for every table and every query, NaN
 included. Equality is of the scalar values, so at `Bin64` it is bit-for-bit. -/
 theorem linear_eq (t : List α) (a : List ℝ) (ha : a.Pairwise (· ≤ ·)) (hn : 2 ≤ a.length)
@@ -367,7 +366,7 @@ theorem bilinearCell_nan_y (T : List (List α)) (ax ay : List α) (i j : ℕ) (x
     bilinearCell T ax ay i j xq nan = nan := by
   simp only [bilinearCell, blend, weight, nan_sub, nan_div, nan_mul, add_nan]
 
-/-- §9.2 `interp.bilinear`, as a template: on non-decreasing axes of at least
+/-- the reference `bilinear`, as a template: on non-decreasing axes of at least
 two knots each, the template equals the primitive for every table and every
 query, NaN in either coordinate included. -/
 theorem bilinear_eq (T : List (List α)) (ax ay : List ℝ) (hax : ax.Pairwise (· ≤ ·))

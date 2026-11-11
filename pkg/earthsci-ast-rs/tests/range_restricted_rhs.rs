@@ -49,7 +49,7 @@ static GLOBAL: Counting = Counting;
 fn stencil(n: i64) -> serde_json::Value {
     let idx = |e: serde_json::Value| json!({"op": "index", "args": ["u", e]});
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "stencil", "authors": ["test"]},
         "index_sets": {"x": {"kind": "interval", "size": n}},
         "models": {"S": {
@@ -229,7 +229,7 @@ fn model(
     equations: serde_json::Value,
 ) -> serde_json::Value {
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "review", "authors": ["test"]},
         "index_sets": index_sets,
         "models": {"M": {"variables": variables, "equations": equations}}
@@ -304,7 +304,7 @@ fn select_builds_an_unshaped_mixed_ifelse_at_its_whole_system_shape() {
     // must be built at the shapes the whole system was.
     let n = 3;
     let doc = json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "review", "authors": ["test"]},
         "index_sets": {"cell": {"kind": "interval", "size": n}},
         "models": {

@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn a_document_with_no_data_sources_is_untouched() {
-        let mut doc = json!({"esm": "1.0.0", "models": {}});
+        let mut doc = json!({"esm": "2.0.0", "models": {}});
         let before = doc.clone();
         resolve_data_source_urls(&mut doc, Path::new("/a/b")).expect("no-op");
         assert_eq!(doc, before);

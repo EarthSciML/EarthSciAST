@@ -72,7 +72,7 @@ fn document(base_decl: Value, base_eq: Option<Value>, base_read: Value) -> Value
                 "expr": {"op": "+", "args": [base_read, "k"]}}
     }));
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ScalarOperand", "authors": ["regression"], "tags": ["probe"],
                      "description": "base is a scalar; s[k] = base + k."},
         "index_sets": {"rows": {"kind": "interval", "size": N}, "one": {"kind": "interval", "size": 1}},

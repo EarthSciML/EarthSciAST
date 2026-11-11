@@ -276,7 +276,7 @@ fn join_on_self_join_syms_transposes_the_sides() {
 
 /// §7.3 DOWNSTREAM geometric FAQ — the second half of the value-invention
 /// end-to-end chain (bead ess-my4.3.10). The first half (mesh-edge enumeration:
-/// bool_and_or + distinct + skolem, then rank) MINTS the `edges` index set as a
+/// bool_and_or + distinct over an edge key, then the dense id) MINTS the `edges` index set as a
 /// CONST-fold whose byte-identical output is pinned by the determinism
 /// `edge_enumeration` and cadence `pure_topology` goldens. Post-fold, `edges` is
 /// a PRIMITIVE index set, and this is the ordinary `sum_product` contraction that

@@ -193,7 +193,7 @@ include("testutils.jl")
         # Python's validate_text and Go's ValidateText both do. Text is the only
         # input that can carry SCHEMA errors, since a typed EsmFile can exist
         # only by having passed the schema at load.
-        schema_bad = validate_text("""{"esm":"1.0.0","metadata":{"name":"x"}}""")
+        schema_bad = validate_text("""{"esm":"2.0.0","metadata":{"name":"x"}}""")
         @test !schema_bad.is_valid
         @test !isempty(schema_bad.schema_errors)
 

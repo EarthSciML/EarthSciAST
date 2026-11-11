@@ -3,8 +3,8 @@ import Esm.Closed.Geometry.TemplateAst
 /-!
 # Padding a ring with a repeated vertex does not change the planar overlap
 
-esm-spec §8.6.1 lets a polygon ring carry an explicit closing duplicate or
-consecutive duplicate vertices. `lib/geometry.esm` has no deduplication step:
+A polygon ring may carry an explicit closing duplicate or consecutive
+duplicate vertices. `lib/geometry.esm` has no deduplication step:
 it relies on a zero-length edge contributing exactly nothing. This file proves
 that in binary64 (`Bin64`), for the algorithm `planarRef` that the template
 computes (`planar_template_eq`):

@@ -1,8 +1,8 @@
 {
-  "esm": "1.2.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "WildfireAtmosphereOcean",
-    "description": "Coupled wildfire-atmosphere-ocean system. The air-sea coupling remaps the atmosphere-grid sensible heat flux (a SPATIALLY-VARYING field on the 4-cell atmosphere surface grid) onto the DIFFERENT 3-cell ocean surface grid by a REAL conservative regrid whose overlap weights W[a,o] = A[a,o]/A_o are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. 0-D<->spatial maps use the coupling lifting field.",
+    "description": "Coupled wildfire-atmosphere-ocean system. The air-sea coupling remaps the atmosphere-grid sensible heat flux (a SPATIALLY-VARYING field on the 4-cell atmosphere surface grid) onto the DIFFERENT 3-cell ocean surface grid by a REAL conservative regrid whose overlap weights W[a,o] = A[a,o]/A_o are computed INLINE from cell geometry (bin-key broad phase + `overlap_area_planar` narrow phase from esm:std/geometry.esm), not supplied. 0-D<->spatial maps use the coupling lifting field.",
     "authors": [
       "EarthSciML"
     ],
@@ -82,7 +82,12 @@
               "T"
             ]
           },
-          "rhs": {"op": "const", "args": [], "value": 288.0, "units": "K"}
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 288.0,
+            "units": "K"
+          }
         },
         {
           "lhs": {
@@ -173,7 +178,12 @@
               "fuel"
             ]
           },
-          "rhs": {"op": "const", "args": [], "value": 10.0, "units": "kg/m^2"}
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 10.0,
+            "units": "kg/m^2"
+          }
         },
         {
           "lhs": {
@@ -221,7 +231,12 @@
                       0
                     ]
                   },
-                  {"op": "const", "args": [], "value": 18000.0, "units": "m/s^2"},
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": 18000.0,
+                    "units": "m/s^2"
+                  },
                   0.0
                 ]
               }
@@ -323,6 +338,20 @@
       ]
     },
     "OceanDynamics": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/relational.esm",
+          "only": [
+            "pair_key"
+          ]
+        },
+        {
+          "ref": "esm:std/geometry.esm",
+          "only": [
+            "overlap_area_planar"
+          ]
+        }
+      ],
       "reference": {
         "notes": "Per-cell ocean surface temperature on the 3-cell ocean grid. Each cell integrates independently (no inter-cell transport: u_ocean is ic-only), driven by the conservatively-regridded atmosphere flux: D(SST[o]) = surface_heat_flux[o]/4.18e6."
       },
@@ -418,26 +447,12 @@
           "description": "Sliver floor: an overlap area at or below atol is dropped.",
           "default": 1e-12
         },
-        "rg_src_bin": {
-          "type": "unknown",
-          "shape": [
-            "atmos_cells"
-          ],
-          "description": "Integer bin key of each source cell: skolem(\"bin\", floor(lon/dx), floor(lat/dy)) — the equi-join column."
-        },
-        "rg_tgt_bin": {
-          "type": "unknown",
-          "shape": [
-            "ocean_cells"
-          ],
-          "description": "Integer bin key of each target cell, identically quantized."
-        },
         "rg_pairs": {
           "type": "unknown",
           "shape": [
             "rg_candidate_pairs"
           ],
-          "description": "Membership over the bin-skolem candidate overlap-pair set (broad phase), materialized as the derived rg_candidate_pairs index set via from_faq:\"rg_candidate_set\"."
+          "description": "Membership over the bin-key candidate overlap-pair set (broad phase), materialized as the derived rg_candidate_pairs index set via from_faq:\"rg_candidate_set\"."
         },
         "rg_A": {
           "type": "unknown",
@@ -445,14 +460,14 @@
             "atmos_cells",
             "ocean_cells"
           ],
-          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[a,o] = polygon_intersection_area(rg_src_poly[a], rg_tgt_poly[o]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md §8.6.1), ranged over the SAME bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. The fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel, so this is a DENSE faq over the candidate set with NO ragged intermediate — replacing the earlier ragged-ring narrow phase. The weights are computed from cell geometry, not supplied."
+          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[a,o] = the `overlap_area_planar` template of esm:std/geometry.esm applied to rg_src_poly[a] and rg_tgt_poly[o], computed INLINE from the in-file geometry, ranged over the SAME bin-key candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. the template returns the SCALAR overlap area (its body clips one convex ring against the other and takes the shoelace area) with no intersection ring in the document, so this is a DENSE faq over the candidate set with NO ragged intermediate. The weights are computed from cell geometry, not supplied."
         },
         "rg_At": {
           "type": "unknown",
           "shape": [
             "ocean_cells"
           ],
-          "description": "Target-cell area denominator A_j = Σ_i A_ij over the bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) with the sliver filter — the row-sum normalization, computed from geometry, not supplied."
+          "description": "Target-cell area denominator A_j = Σ_i A_ij over the bin-key candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) with the sliver filter — the row-sum normalization, computed from geometry, not supplied."
         },
         "rg_W": {
           "type": "unknown",
@@ -468,15 +483,43 @@
             "ocean_cells"
           ],
           "description": "Net heat flux from the atmosphere on the ocean grid, regridded from the atmosphere-grid sensible flux via the INLINE conservative weights: surface_heat_flux[o] = Σ_a W[a,o]·flux_atmos[a], W = A/A_o from cell geometry (the old sea-surface interface as a real overlap-weighted regrid)."
+        },
+        "rg_src_bin_c1": {
+          "type": "unknown",
+          "shape": [
+            "atmos_cells"
+          ],
+          "description": "Component 1 of the key formerly `rg_src_bin` (an integer join column)."
+        },
+        "rg_src_bin_c2": {
+          "type": "unknown",
+          "shape": [
+            "atmos_cells"
+          ],
+          "description": "Component 2 of the key formerly `rg_src_bin` (an integer join column)."
+        },
+        "rg_tgt_bin_c1": {
+          "type": "unknown",
+          "shape": [
+            "ocean_cells"
+          ],
+          "description": "Component 1 of the key formerly `rg_tgt_bin` (an integer join column)."
+        },
+        "rg_tgt_bin_c2": {
+          "type": "unknown",
+          "shape": [
+            "ocean_cells"
+          ],
+          "description": "Component 2 of the key formerly `rg_tgt_bin` (an integer join column)."
         }
       },
       "equations": [
         {
-          "_comment": "BROAD PHASE (1a): bin each SOURCE cell to an integer lon-lat bin key.",
+          "_comment": "Component 1 of the former `skolem` key `rg_src_bin`: an integer join column.",
           "lhs": {
             "op": "index",
             "args": [
-              "rg_src_bin",
+              "rg_src_bin_c1",
               "a"
             ]
           },
@@ -493,43 +536,19 @@
             },
             "args": [],
             "expr": {
-              "op": "skolem",
-              "label": "bin",
+              "op": "floor",
               "args": [
                 {
-                  "op": "floor",
+                  "op": "/",
                   "args": [
                     {
-                      "op": "/",
+                      "op": "index",
                       "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "rg_src_lon",
-                            "a"
-                          ]
-                        },
-                        "rg_dx"
+                        "rg_src_lon",
+                        "a"
                       ]
-                    }
-                  ]
-                },
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "rg_src_lat",
-                            "a"
-                          ]
-                        },
-                        "rg_dy"
-                      ]
-                    }
+                    },
+                    "rg_dx"
                   ]
                 }
               ]
@@ -537,11 +556,52 @@
           }
         },
         {
-          "_comment": "BROAD PHASE (1b): bin each TARGET cell identically.",
+          "_comment": "Component 2 of the former `skolem` key `rg_src_bin`: an integer join column.",
           "lhs": {
             "op": "index",
             "args": [
-              "rg_tgt_bin",
+              "rg_src_bin_c2",
+              "a"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "a"
+            ],
+            "ranges": {
+              "a": {
+                "from": "atmos_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "floor",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "rg_src_lat",
+                        "a"
+                      ]
+                    },
+                    "rg_dy"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Component 1 of the former `skolem` key `rg_tgt_bin`: an integer join column.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_tgt_bin_c1",
               "o"
             ]
           },
@@ -558,43 +618,19 @@
             },
             "args": [],
             "expr": {
-              "op": "skolem",
-              "label": "bin",
+              "op": "floor",
               "args": [
                 {
-                  "op": "floor",
+                  "op": "/",
                   "args": [
                     {
-                      "op": "/",
+                      "op": "index",
                       "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "rg_tgt_lon",
-                            "o"
-                          ]
-                        },
-                        "rg_dx"
+                        "rg_tgt_lon",
+                        "o"
                       ]
-                    }
-                  ]
-                },
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "rg_tgt_lat",
-                            "o"
-                          ]
-                        },
-                        "rg_dy"
-                      ]
-                    }
+                    },
+                    "rg_dx"
                   ]
                 }
               ]
@@ -602,7 +638,48 @@
           }
         },
         {
-          "_comment": "BROAD PHASE (1c): candidate overlap-pair set = the bin-skolem equi-join (distinct bool_and_or): keep (i,j) whose bin keys are EQUAL.",
+          "_comment": "Component 2 of the former `skolem` key `rg_tgt_bin`: an integer join column.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_tgt_bin_c2",
+              "o"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "o"
+            ],
+            "ranges": {
+              "o": {
+                "from": "ocean_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "floor",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "rg_tgt_lat",
+                        "o"
+                      ]
+                    },
+                    "rg_dy"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "BROAD PHASE (1c): candidate overlap-pair set = the bin-key equi-join (distinct bool_and_or): keep (i,j) whose bin keys are EQUAL.",
           "lhs": {
             "op": "index",
             "args": [
@@ -630,19 +707,28 @@
               {
                 "on": [
                   [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
+                    "rg_src_bin_c1",
+                    "rg_tgt_bin_c1"
+                  ],
+                  [
+                    "rg_src_bin_c2",
+                    "rg_tgt_bin_c2"
                   ]
                 ]
               }
             ],
             "key": {
-              "op": "skolem",
-              "label": "pair",
-              "args": [
-                "a",
-                "o"
-              ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "pair_key",
+              "bindings": {
+                "a": "a",
+                "b": "o",
+                "lo_a": 1,
+                "lo_b": 1,
+                "n_a": 4,
+                "n_b": 3
+              }
             },
             "args": [],
             "expr": {
@@ -658,7 +744,12 @@
               "SST"
             ]
           },
-          "rhs": {"op": "const", "args": [], "value": 290.0, "units": "K"}
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 290.0,
+            "units": "K"
+          }
         },
         {
           "lhs": {
@@ -970,32 +1061,29 @@
               {
                 "on": [
                   [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
+                    "rg_src_bin_c1",
+                    "rg_tgt_bin_c1"
+                  ],
+                  [
+                    "rg_src_bin_c2",
+                    "rg_tgt_bin_c2"
                   ]
                 ]
               }
             ],
             "args": [],
             "expr": {
-              "op": "polygon_intersection_area",
-              "manifold": "planar",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_src_poly",
-                    "a"
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_tgt_poly",
-                    "o"
-                  ]
-                }
-              ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "overlap_area_planar",
+              "bindings": {
+                "ring_a": "rg_src_poly",
+                "cell_a": "a",
+                "nv_a": 4,
+                "ring_b": "rg_tgt_poly",
+                "cell_b": "o",
+                "nv_b": 4
+              }
             }
           }
         },
@@ -1019,8 +1107,12 @@
               {
                 "on": [
                   [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
+                    "rg_src_bin_c1",
+                    "rg_tgt_bin_c1"
+                  ],
+                  [
+                    "rg_src_bin_c2",
+                    "rg_tgt_bin_c2"
                   ]
                 ]
               }
@@ -1071,8 +1163,12 @@
               {
                 "on": [
                   [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
+                    "rg_src_bin_c1",
+                    "rg_tgt_bin_c1"
+                  ],
+                  [
+                    "rg_src_bin_c2",
+                    "rg_tgt_bin_c2"
                   ]
                 ]
               }
@@ -1134,8 +1230,12 @@
               {
                 "on": [
                   [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
+                    "rg_src_bin_c1",
+                    "rg_tgt_bin_c1"
+                  ],
+                  [
+                    "rg_src_bin_c2",
+                    "rg_tgt_bin_c2"
                   ]
                 ]
               }
@@ -1181,7 +1281,7 @@
       "tests": [
         {
           "id": "regrid_driven_sst_growth",
-          "description": "SST rises linearly under the conservatively-regridded atmosphere-grid flux. The inline overlap weights (bin-skolem broad phase + polygon_intersection_area narrow phase) regrid flux_field=[50,150,250,350] onto the ocean grid as surface_heat_flux=[100, 283.333, 350] W/m^2; u_ocean stays 0 so advection vanishes and SST(t)=290 + t*surface_heat_flux/4.18e6. Asserting SST(3600) validates the inline conservative regrid indirectly but precisely (a wrong weight matrix moves these values).",
+          "description": "SST rises linearly under the conservatively-regridded atmosphere-grid flux. The inline overlap weights (bin-key broad phase + `overlap_area_planar` narrow phase) regrid flux_field=[50,150,250,350] onto the ocean grid as surface_heat_flux=[100, 283.333, 350] W/m^2; u_ocean stays 0 so advection vanishes and SST(t)=290 + t*surface_heat_flux/4.18e6. Asserting SST(3600) validates the inline conservative regrid indirectly but precisely (a wrong weight matrix moves these values).",
           "time_span": {
             "start": 0,
             "end": 3600

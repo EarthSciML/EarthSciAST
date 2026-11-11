@@ -9,8 +9,9 @@
 # with it — not only the four envelope bounds of the containment predicate.
 #
 # Polygon allocation is the shape that makes the difference visible. Its weight
-# is `polygon_intersection_area(cell_ring[c], rec_ring[r]) / cell_area[c]`, so
-# the body reads a rank-3 [cells, vertex, xy] ring stack and a rank-1 area, and
+# is `overlap_area_planar(cell_ring, c, 5, rec_ring, r, 5) / cell_area[c]`
+# (lib/geometry.esm), so the body reads a rank-3 [cells, vertex, xy] ring stack
+# and a rank-1 area, and
 # neither is an envelope factor. Gathering only the envelopes leaves both
 # pointing at the full grid while the axis is compact: full-grid values read at
 # support positions, wrong numbers, no diagnostic anywhere.
@@ -19,6 +20,7 @@ module PushdownCellGeometryTests
 
 using Test
 using EarthSciAST
+
 const EA = EarthSciAST
 
 _ix(f, idx...) = Dict{String, Any}("op" => "index", "args" => Any[f, idx...])
@@ -52,8 +54,18 @@ _env_overlap() = _op(
     _op("<=", _ix("rec_ymin", "r"), _ix("src_N", "c"))
 )
 
-# The polygon-allocation document: an envelope broad phase, an intersection area
-# for the narrow phase, and a data-fed SR array for the mat-vec.
+# The overlap area of `cell_ring[c]` and `rec_ring[r]` (5 vertex slots each,
+# the last the closing duplicate).
+_overlap() = Dict{String, Any}(
+    "op" => "apply_expression_template", "args" => Any[], "name" => "overlap_area_planar",
+    "bindings" => Dict{String, Any}(
+        "ring_a" => "cell_ring", "cell_a" => "c", "nv_a" => 5,
+        "ring_b" => "rec_ring", "cell_b" => "r", "nv_b" => 5
+    )
+)
+
+# The polygon-allocation document: an envelope broad phase, an overlap area for
+# the narrow phase, and a data-fed SR array for the mat-vec.
 function _doc()
     v = Dict{String, Any}()
     for n in ("src_W", "src_S", "src_E", "src_N", "cell_area")
@@ -81,14 +93,7 @@ function _doc()
         _op(
             "*", _ix("emis_annual", "r"),
             _op(
-                "/", Dict{String, Any}(
-                    "op" => "polygon_intersection_area",
-                    "manifold" => "planar",
-                    "args" => Any[
-                        _ix("cell_ring", "c"),
-                        _ix("rec_ring", "r"),
-                    ]
-                ),
+                "/", _overlap(),
                 _ix("cell_area", "c")
             )
         )
@@ -122,7 +127,7 @@ function _doc()
         ),
     ]
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict{String, Any}("name" => "pushdown_cell_geometry"),
         "data_sources" => Dict{String, Any}(
             "MockSR" => Dict{String, Any}(
@@ -138,16 +143,18 @@ function _doc()
         ),
         "models" => Dict{String, Any}(
             "Binned" =>
-                Dict{String, Any}("variables" => v, "equations" => eqs)
+                Dict{String, Any}(
+                "expression_template_imports" => Any[
+                    Dict{String, Any}("ref" => "esm:std/geometry.esm", "only" => Any["overlap_area_planar"]),
+                ],
+                "variables" => v, "equations" => eqs
+            )
         )
     )
 end
 
-# A binning body carrying `polygon_intersection_area` is SETUP-TIME geometry, so
-# its result is materialized into `insp.setup_arrays` rather than left as a
-# build-time observed. Read whichever the engine chose.
 # The plain public read. It used to be unusable on this document: a body
-# carrying a geometry leaf is materialized into `insp.setup_arrays` at setup,
+# carrying a geometry weight is materialized into `insp.setup_arrays` at setup,
 # and so, transitively, is everything downstream of it, so `observed_field`
 # refused every observed here with "not a build-time-evaluable observed" while
 # the build had computed all of them. `observed_field` now falls back to the
@@ -160,7 +167,8 @@ _defs(out) = Dict(
         if get(e, "lhs", nothing) isa AbstractString
 )
 
-# Every `index(F, …)` base name reachable from `node`.
+# Every array name reachable from `node`: `index(F, …)` bases and a template
+# call's bare-name bindings.
 function _bases!(node, out::Set{String})
     if node isa AbstractDict
         if get(node, "op", nothing) == "index"
@@ -168,26 +176,18 @@ function _bases!(node, out::Set{String})
             a isa AbstractVector && !isempty(a) && a[1] isa AbstractString &&
                 push!(out, String(a[1]))
         end
+        # A template call reads an array through a bare-name binding.
+        if get(node, "op", nothing) == "apply_expression_template"
+            for b in values(get(node, "bindings", Dict{String, Any}()))
+                b isa AbstractString && push!(out, String(b))
+            end
+        end
         for v in values(node)
             _bases!(v, out)
         end
     elseif node isa AbstractVector
         for x in node
             _bases!(x, out)
-        end
-    end
-    return out
-end
-
-function _find_pia(node, out::Vector{Any})
-    if node isa AbstractDict
-        get(node, "op", nothing) == "polygon_intersection_area" && push!(out, node)
-        for v in values(node)
-            _find_pia(v, out)
-        end
-    elseif node isa AbstractVector
-        for x in node
-            _find_pia(x, out)
         end
     end
     return out
@@ -260,12 +260,12 @@ end
     @test "pd_cell__src_cells__cell_ring" in bases
     @test "pd_cell__src_cells__cell_area" in bases
 
-    # The polygon operand keeps its SLICED spelling: the base name changed and
+    # The template call keeps its spelling: the ring stack's name changed and
     # nothing else did, which is what rank preservation buys.
-    pia = _find_pia(body, Any[])
-    @test length(pia) == 1
-    @test pia[1]["args"][1] == _ix("pd_cell__src_cells__cell_ring", "c")
-    @test pia[1]["args"][2] == _ix("rec_ring", "r")
+    b = body["expr"]["args"][2]["args"][2]["args"][1]["bindings"]
+    @test b["ring_a"] == "pd_cell__src_cells__cell_ring"
+    @test b["cell_a"] == "c"
+    @test b["ring_b"] == "rec_ring"
 end
 
 @testset "pushdown: a computed cell position is refused loudly" begin

@@ -15,31 +15,19 @@ import pytest
 from conftest import CONFORMANCE_DIR
 
 from earthsci_ast.canonicalize import CanonicalizeError, canonical_json
-from earthsci_ast.esm_types import ExprNode
+from earthsci_ast.parse import _parse_expression
 
 FIXTURES_DIR = CONFORMANCE_DIR / "canonical"
 
 
-# Wire JSON keys that differ from the ``ExprNode`` field name (see esm_types.py).
-_WIRE_FIELD_RENAMES = {"axes": "table_axes"}
-
-
 def _wire_to_expr(node):
-    """Convert a JSON-deserialized fixture into an ESM expression tree."""
-    if isinstance(node, dict) and "op" in node and "args" in node:
-        kwargs = {
-            _WIRE_FIELD_RENAMES.get(k, k): v for k, v in node.items() if k not in ("op", "args")
-        }
-        return ExprNode(
-            op=node["op"],
-            args=[_wire_to_expr(a) for a in node["args"]],
-            **kwargs,
-        )
-    if isinstance(node, list):
-        return [_wire_to_expr(a) for a in node]
-    # Bare numbers / strings round-trip natively. Python's json preserves int
-    # vs float on parse, so {"op":"+","args":[1, 2.5]} yields an int and a float.
-    return node
+    """Convert a JSON-deserialized fixture into an ESM expression tree through
+    the binding's own wire parser, so a fixture carrying a key that is not an
+    expression field (a retired one such as ``manifold``) is read the way a
+    document's expression is, rather than crashing a hand-built constructor.
+    Python's json preserves int vs float on parse, so {"op":"+","args":[1, 2.5]}
+    yields an int and a float."""
+    return _parse_expression(node)
 
 
 def _load_manifest():

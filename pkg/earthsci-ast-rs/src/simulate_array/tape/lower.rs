@@ -807,15 +807,6 @@ pub(crate) struct TapeBuilder<'m> {
     /// the rule when the base is one; an in-range gather
     /// compiles exactly as before.
     const_arrays: &'m ConstArrayScope,
-    /// The DOCUMENT's working precision, read off the compiled model rather
-    /// than off the thread-local (`crate::precision::is_f32`), which is not
-    /// guaranteed to be standing while the tape is built. Only the §9.2
-    /// closed-function lowering consults it: the `datetime.*` expansion is
-    /// exact integer arithmetic carried in `f64`, and the kernels it emits are
-    /// resolved at EXECUTION, so under Float32 they would be binary32 kernels
-    /// running on day counts and Julian day numbers that binary32 cannot hold
-    /// ([`Self::lower_calendar`] takes [`Instr::Calendar`] instead).
-    f32_document: bool,
     /// The shaped parameters whose declared default the compiler lowered into
     /// a `const` observed, as the dense row-major data that literal was
     /// written from ([`ArrayCompiled::inline_param_arrays`]), so the tape takes
@@ -855,14 +846,7 @@ pub(crate) struct TapeBuilder<'m> {
     assemblies: Vec<AssembleSpec>,
     /// Inline array-literal payloads, one per lowered array-valued `const`.
     const_data: Vec<ConstArrayData>,
-    interp_tables: Vec<InterpTable>,
-    geoms: Vec<GeomSpec>,
     index_gathers: Vec<IndexGatherSpec>,
-    /// `(producer id, distinct-vertex count)` of every `intersect_polygon`
-    /// ring evaluated at build ([`TapeBuilder::lower_intersect_polygon`]):
-    /// the extent a `kind: "derived"` range over that ring has, which the
-    /// interpreter reads off its runtime ring registry (`derived_extent`).
-    rings: Vec<(String, i64)>,
     gather_tables: Vec<GatherTable>,
     seg_tables: Vec<SegTable>,
     /// Slots whose VALUES the build knows: array literals, and what the
@@ -886,6 +870,9 @@ pub(crate) struct TapeBuilder<'m> {
     tuple_frames: Vec<tuples::TupleFrame>,
     /// The id the next tuple-list box gets (0 means "not a tuple box").
     next_tuple: u32,
+    /// The enclosing list and repeat count of the next tuple-list box, when
+    /// it is a nested reduction's list (`tuples::lower_nested_scalar_in_tuples`).
+    next_tuple_parent: Option<(u32, usize)>,
     /// Tuples this program's tuple lists hold so far, against
     /// `tuples::tuple_list_budget`.
     tuples_held: u64,
@@ -1118,10 +1105,7 @@ struct RuleTxn {
     regions: usize,
     assemblies: usize,
     const_data: usize,
-    interp_tables: usize,
-    geoms: usize,
     index_gathers: usize,
-    rings: usize,
     gather_tables: usize,
     seg_tables: usize,
     faults: usize,
@@ -1148,8 +1132,6 @@ struct SubTxn {
     regions: usize,
     assemblies: usize,
     const_data: usize,
-    interp_tables: usize,
-    geoms: usize,
     index_gathers: usize,
     gather_tables: usize,
     seg_tables: usize,
@@ -1177,7 +1159,6 @@ impl<'m> TapeBuilder<'m> {
         param_names: &'m [String],
         obs_tier: FxHashMap<String, Cadence>,
         const_arrays: &'m ConstArrayScope,
-        f32_document: bool,
         forcing: &ForcingInputs<'m>,
     ) -> Self {
         let mut state_vars = Vec::with_capacity(var_shapes.len());
@@ -1201,7 +1182,6 @@ impl<'m> TapeBuilder<'m> {
             param_ix,
             obs_tier,
             const_arrays,
-            f32_document,
             inline_params: None,
             observed_rules: &[],
             baked_params: FxHashMap::default(),
@@ -1213,10 +1193,7 @@ impl<'m> TapeBuilder<'m> {
             regions: Vec::new(),
             assemblies: Vec::new(),
             const_data: Vec::new(),
-            interp_tables: Vec::new(),
-            geoms: Vec::new(),
             index_gathers: Vec::new(),
-            rings: Vec::new(),
             gather_tables: Vec::new(),
             seg_tables: Vec::new(),
             known: FxHashMap::default(),
@@ -1225,6 +1202,7 @@ impl<'m> TapeBuilder<'m> {
             range_defs: HashSet::new(),
             tuple_frames: Vec::new(),
             next_tuple: 1,
+            next_tuple_parent: None,
             tuples_held: 0,
             faults: Vec::new(),
             fault_scans: Vec::new(),
@@ -1548,11 +1526,9 @@ impl<'m> TapeBuilder<'m> {
                 | Instr::Region { .. }
                 | Instr::Assemble { .. }
                 | Instr::ConstArray { .. }
-                | Instr::Interp { .. }
                 | Instr::Count { .. }
                 | Instr::Reduce { .. }
                 | Instr::Scan { .. }
-                | Instr::PolyArea { .. }
                 | Instr::IndexGather { .. }
                 | Instr::TableGather { .. }
                 | Instr::DataGather { faults: false, .. }
@@ -2445,23 +2421,7 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// Mirror of `eval_vec_op`'s dispatch (via the SAME `vec_op_code`).
-    ///
-    /// One operator is dispatched AHEAD of that mirror: the §9.2 closed-function
-    /// call `fn`. The overlay has no arm for it (`vec_op_code` classifies it
-    /// `Unsupported`, which is what routes it to the per-cell oracle in
-    /// production), so there is no overlay decision to compile — the tape
-    /// lowers the `datetime.*` family into its own arithmetic instead, and the
-    /// reference it is pinned against is the oracle's closed-function registry.
     fn lower_op(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
-        if node.op == "fn" {
-            return self.lower_closed_fn(node, bx);
-        }
-        // The overlay has no geometry arm either (`vec_op_code` classifies it
-        // `Unsupported`), so the reference here is the per-cell oracle's
-        // `eval_polygon_intersection_area`, called on each cell's two rings.
-        if node.op == "polygon_intersection_area" {
-            return self.lower_poly_area(node, Some(bx));
-        }
         self.lower_op_code(vec_op_code(&node.op), node, bx)
     }
 
@@ -2743,700 +2703,6 @@ impl<'m> TapeBuilder<'m> {
         LV::Arr(out)
     }
 
-    // -- closed functions (esm-spec §9.2): the `datetime.*` family ------------
-    //
-    // The family is lowered HERE, into instructions the tape already has, so
-    // the fast executor, the reference executor and the XlaBuilder emitter all
-    // gain it without a new opcode and without three chances to disagree.
-    //
-    // That is possible because the spec's own recipe — ONE floored divmod of
-    // `t_utc` by 86400, then exact integer arithmetic on the resulting (days,
-    // seconds-of-day) pair — carries in `f64` with no rounding at all. The
-    // divmod is taken of `floor(t_utc)`, which is exact and gives the same
-    // pair (86400 is an integer), so the fields floor toward −∞ (ruling Q-3)
-    // and the time of day is never rounded up into the next day. Every
-    // intermediate is an integer well inside binary64's 2^53 exact-integer
-    // range, where `+`, `-` and `*` are exact; and `floor(a / b)` for integer
-    // `a`, `b` is the integer quotient whenever `|a| << 2^52`, because the
-    // division's <= 0.5 ulp error is then far smaller than the `1/b` gap that
-    // separates a non-integral quotient from the integer below it. IEEE-754
-    // pins `floor`, `ceil`, `+`, `-` and `*` identically in the interpreter's
-    // kernels and in XLA, so the compiled lane returns the same bits rather
-    // than merely the same numbers.
-    //
-    // `/` IS THE ONE EXCEPTION, and it is why every floored and truncated
-    // division below recovers its quotient from the remainder instead of
-    // trusting it: a compiled backend may answer `x / c` with `x * fl(1/c)`,
-    // which is a second rounding, and at an exact-integer quotient that reads
-    // one short. See `dt_floor_div`.
-    //
-    // The reference reproduced step for step is `crate::registered_functions`
-    // (Hinnant's `civil_from_days` for the calendar, the linear day number for
-    // the Julian Date), because that is what the per-cell oracle evaluates for
-    // a `fn` node and what a taped rule has to agree with bit for bit. Where
-    // the reference raises `closed_function_overflow` — a NaN or ±Inf `t_utc`,
-    // or a year outside Int32, for every entry alike (esm-spec §9.2) — the
-    // oracle's `eval_fn` answers NaN, and so does the tape (`dt_in_range`).
-    //
-    // DOMAIN: the agreement holds wherever the reference's own `i64` pipeline
-    // is meaningful, i.e. for `t_utc` whose day count stays far inside 2^52.
-    // Beyond that the reference is casting a non-integral `f64` to `i64`
-    // anyway, so there is no shared answer to reproduce.
-
-    /// Lower a §9.2 closed-function call inside an output box. The `datetime.*`
-    /// family is expanded into tape arithmetic, the `interp.*` family into one
-    /// [`Instr::Interp`]; everything else in the registry bails by name.
-    fn lower_closed_fn(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
-        let name = self.closed_fn_name(node)?;
-        if let Some(kind) = InterpKind::from_name(name) {
-            return self.lower_interp(kind, node, Some(bx));
-        }
-        self.datetime_call_ok(name, node)?;
-        let t = self.lower_expr(&node.args[0], bx)?;
-        // A value whose box IS the enclosing output box is the vectorization of
-        // a per-cell SCALAR, which is what the registry wants; anything else
-        // (an inline array literal, say) is an array argument, which the
-        // registry rejects with `closed_function_arg_type`.
-        if let Some((shape, origin)) = self.lv_box(&t)
-            && (shape.as_slice() != bx.shape.as_slice() || origin.as_slice() != bx.lo.as_slice())
-        {
-            bail_tape!(
-                "op: closed function `{name}` on an array-valued argument (the registry \
-                 takes a scalar `t_utc`)"
-            );
-        }
-        self.lower_calendar(name, t)
-    }
-
-    /// [`Self::lower_closed_fn`] on the wholesale (scalar-`eval` mirror) path,
-    /// where there is no output box: an array-valued argument is simply an
-    /// array argument, which the registry rejects.
-    fn lower_wholesale_closed_fn(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
-        let name = self.closed_fn_name(node)?;
-        if let Some(kind) = InterpKind::from_name(name) {
-            return self.lower_interp(kind, node, None);
-        }
-        self.datetime_call_ok(name, node)?;
-        let t = self.lower_wholesale(&node.args[0])?;
-        if self.lv_box(&t).is_some() {
-            bail_tape!(
-                "wholesale: closed function `{name}` on an array-valued argument (the \
-                 registry takes a scalar `t_utc`)"
-            );
-        }
-        self.lower_calendar(name, t)
-    }
-
-    /// The name of a `fn` node this lowering can expand, or a bail saying why
-    /// not. Only membership is decided here; each family checks its own arity
-    /// (they differ) in [`Self::datetime_call_ok`] / [`Self::lower_interp`].
-    fn closed_fn_name<'n>(&self, node: &'n Arc<ExpressionNode>) -> LResult<&'n str> {
-        let Some(name) = node.name.as_deref() else {
-            bail_tape!("op: `fn` with no `name`");
-        };
-        if !CALENDAR_FNS.contains(&name) && InterpKind::from_name(name).is_none() {
-            bail_tape!("op: closed function `{name}` has no tape lowering (esm-spec §9.2)");
-        }
-        Ok(name)
-    }
-
-    /// The `datetime.*`-only half of what [`Self::closed_fn_name`] used to
-    /// check: unary arity. Both call sites run it, so they agree on what they
-    /// refuse.
-    fn datetime_call_ok(&self, name: &str, node: &Arc<ExpressionNode>) -> LResult<()> {
-        if node.args.len() != 1 {
-            // The registry answers a wrong arity with `closed_function_arity`,
-            // which `eval_fn` turns into its NaN sentinel. Bailing routes the
-            // rule to the oracle, which produces exactly that.
-            bail_tape!(
-                "op: closed function `{name}` with arity {}",
-                node.args.len()
-            );
-        }
-        Ok(())
-    }
-
-    /// Lower one `datetime.*` entry over an already-lowered `t_utc`: the
-    /// arithmetic expansion where every kernel is binary64, one
-    /// [`Instr::Calendar`] wherever one might be binary32 — a Float32
-    /// document, or a Float32 variable's rule. There the expansion's kernels
-    /// would round the exact integer decomposition at every step, where the
-    /// oracle runs the registry in binary64 and lifts its answer unrounded.
-    /// The instruction is that same registry call, so it is right at either
-    /// precision.
-    fn lower_calendar(&mut self, name: &str, t: LV) -> LResult<LV> {
-        if !self.f32_document && !crate::precision::is_f32() {
-            return self.lower_datetime(name, t);
-        }
-        let func = CALENDAR_FNS
-            .iter()
-            .position(|n| *n == name)
-            .expect("a calendar entry") as u8;
-        if let LV::Lit(x) = t {
-            return Ok(LV::Lit(calendar_at(func, x)));
-        }
-        let sec = self.placement(self.lv_cadence(&t));
-        let (shape, origin, scalar) = match self.lv_box(&t) {
-            None => (DimU::new(), DimI::new(), true),
-            Some((s, o)) => (s, o, false),
-        };
-        let out = self.new_slot(&shape, &origin, scalar, sec);
-        let instr = Instr::Calendar {
-            func,
-            a: self.op_of(&t),
-            out,
-        };
-        self.emit(instr, sec);
-        Ok(if scalar {
-            LV::Scalar(out)
-        } else {
-            LV::Arr(out)
-        })
-    }
-
-    // -- closed functions (esm-spec §9.2): the `interp.*` family -------------
-    //
-    // Unlike `datetime.*`, this family is NOT expanded into tape arithmetic.
-    // Its cell search is a scan of a table whose length is fixed at build time
-    // but is not small — the corpus runs to 94x49 — and unrolling that into a
-    // select chain would put thousands of instructions on the tape per call
-    // site, times the 460-odd call sites the corpus has. So it gets one
-    // instruction whose element semantics ARE the registry functions
-    // (`Instr::Interp`), which is what `eval_fn` calls: the taped rule and the
-    // per-cell oracle run the same code on the same operands.
-    //
-    // The instruction agrees with the oracle at either document precision:
-    // it emits no arithmetic kernel, and `eval_fn` lifts the registry's
-    // binary64 result without rounding it. A Float32 document's `datetime.*`
-    // takes the same road (`Instr::Calendar`), for the same reason.
-    //
-    // The table and the axes are read at build time, which the format
-    // guarantees: §9.2's argument shape contract requires them to be literal
-    // `const`-op arrays (diagnostics `interp_table_not_const` /
-    // `interp_axis_not_const`), so there is no runtime-table case to lower.
-
-    /// Lower one §9.2 `interp.*` call into a single [`Instr::Interp`].
-    ///
-    /// `bx` is `Some` inside an output box — where an array-valued query is
-    /// the vectorization of a per-cell scalar and must therefore span exactly
-    /// that box — and `None` on the wholesale path, where an array-valued
-    /// query is evaluated elementwise over its own box, as the oracle's
-    /// `eval_fn` does.
-    fn lower_interp(
-        &mut self,
-        kind: InterpKind,
-        node: &Arc<ExpressionNode>,
-        bx: Option<&LBox>,
-    ) -> LResult<LV> {
-        let name = kind.name();
-        // §9.2 puts the query LAST for the two tensor entries and FIRST for
-        // the search entry.
-        let (arity, ix, iy) = match kind {
-            InterpKind::Linear => (3, 2, None),
-            InterpKind::Bilinear => (5, 3, Some(4)),
-            InterpKind::SearchSorted => (2, 0, None),
-        };
-        if node.args.len() != arity {
-            bail_tape!(
-                "op: closed function `{name}` with arity {}",
-                node.args.len()
-            );
-        }
-        let table = self.interp_table(kind, node)?;
-        let x = self.lower_interp_query(&node.args[ix], bx)?;
-        let y = match iy {
-            Some(i) => Some(self.lower_interp_query(&node.args[i], bx)?),
-            None => None,
-        };
-
-        // The output box, taken from whichever queries are arrays.
-        let mut obox: Option<(DimU, DimI)> = None;
-        for q in [Some(&x), y.as_ref()].into_iter().flatten() {
-            let Some((shape, origin)) = self.lv_box(q) else {
-                continue;
-            };
-            match &obox {
-                None => obox = Some((shape, origin)),
-                Some((s, o)) => {
-                    if s.as_slice() != shape.as_slice() || o.as_slice() != origin.as_slice() {
-                        bail_tape!(
-                            "op: closed function `{name}` with query arguments in \
-                             different boxes"
-                        );
-                    }
-                }
-            }
-        }
-        if let Some((shape, origin)) = &obox {
-            match bx {
-                // Inside a box, anything that is not THE box is a real array
-                // argument, which the registry rejects with
-                // `closed_function_arg_type`.
-                Some(b)
-                    if shape.as_slice() != b.shape.as_slice()
-                        || origin.as_slice() != b.lo.as_slice() =>
-                {
-                    bail_tape!(
-                        "op: closed function `{name}` on an array-valued query (the \
-                         registry takes a scalar)"
-                    );
-                }
-                // Wholesale, `eval_fn` broadcasts the registry call over an
-                // array query (`eval_interp_elementwise`), which is this
-                // instruction's elementwise form — except that it reads a
-                // 0-D query of the two non-`linear` entries as the scalar it
-                // holds, where the instruction would produce a 0-D array.
-                None if kind != InterpKind::Linear && shape.is_empty() => {
-                    bail_tape!("wholesale: closed function `{name}` on a 0-D array query");
-                }
-                Some(_) | None => {}
-            }
-        }
-
-        // A call whose queries are all compile-time known is one number —
-        // unless it is a strict table's out-of-range query, whose fault must
-        // be raised by the evaluation that reads it, not by this lowering.
-        let lit_y = match &y {
-            None => Some(f64::NAN),
-            Some(LV::Lit(v)) => Some(*v),
-            Some(_) => None,
-        };
-        if let (LV::Lit(xv), Some(yv)) = (&x, lit_y)
-            && table.out_of_bounds(*xv, yv).is_none()
-        {
-            return Ok(LV::Lit(table.at(*xv, yv)));
-        }
-
-        let tix = self.interp_tables.len() as u32;
-        self.interp_tables.push(table);
-        let want = self
-            .lv_cadence(&x)
-            .max(y.as_ref().map_or(Cadence::Const, |v| self.lv_cadence(v)));
-        let sec = self.placement(want);
-        let (shape, origin, scalar) = match &obox {
-            None => (DimU::new(), DimI::new(), true),
-            Some((s, o)) => (s.clone(), o.clone(), false),
-        };
-        let out = self.new_slot(&shape, &origin, scalar, sec);
-        let instr = Instr::Interp {
-            table: tix,
-            x: self.op_of(&x),
-            y: y.as_ref().map(|v| self.op_of(v)),
-            out,
-        };
-        self.emit(instr, sec);
-        Ok(if scalar {
-            LV::Scalar(out)
-        } else {
-            LV::Arr(out)
-        })
-    }
-
-    /// Lower one query argument of an `interp.*` call, on whichever of the two
-    /// paths the call arrived by.
-    fn lower_interp_query(&mut self, arg: &Expr, bx: Option<&LBox>) -> LResult<LV> {
-        match bx {
-            Some(b) => self.lower_expr(arg, b),
-            None => self.lower_wholesale(arg),
-        }
-    }
-
-    /// Read and validate the constant table + axes of an `interp.*` call.
-    ///
-    /// Validation is delegated to the registry itself — the table is offered
-    /// to `evaluate_closed_function` with a probe query, and every §9.2
-    /// load-time diagnostic (length mismatch, too-short axis, NaN in an axis,
-    /// non-monotonic axis) is raised there before the query is looked at. So
-    /// the tape's acceptance condition IS the registry's, with no second
-    /// statement of the rules to drift from it, and a table the registry
-    /// rejects bails to the oracle, which is what turns the registry error
-    /// into `eval_fn`'s NaN sentinel.
-    fn interp_table(&self, kind: InterpKind, node: &Arc<ExpressionNode>) -> LResult<InterpTable> {
-        use crate::registered_functions::{ClosedArg, evaluate_closed_function};
-        let name = kind.name();
-        let (table, axis_x, axis_y, probe) = match kind {
-            InterpKind::Linear => {
-                let (_, t) = self.interp_const_arg(name, &node.args[0], "table", 1)?;
-                let (_, ax) = self.interp_const_arg(name, &node.args[1], "axis", 1)?;
-                let probe = vec![
-                    ClosedArg::Array(t.clone()),
-                    ClosedArg::Array(ax.clone()),
-                    ClosedArg::Scalar(0.0),
-                ];
-                (t, ax, Vec::new(), probe)
-            }
-            InterpKind::Bilinear => {
-                let (_, ax) = self.interp_const_arg(name, &node.args[1], "axis_x", 1)?;
-                let (_, ay) = self.interp_const_arg(name, &node.args[2], "axis_y", 1)?;
-                let t = self.interp_const_arg_2d(name, &node.args[0], ay.len())?;
-                let probe = vec![
-                    ClosedArg::Array2D(t.chunks(ay.len().max(1)).map(<[f64]>::to_vec).collect()),
-                    ClosedArg::Array(ax.clone()),
-                    ClosedArg::Array(ay.clone()),
-                    ClosedArg::Scalar(0.0),
-                    ClosedArg::Scalar(0.0),
-                ];
-                (t, ax, ay, probe)
-            }
-            InterpKind::SearchSorted => {
-                let (_, xs) = self.interp_const_arg(name, &node.args[1], "xs", 1)?;
-                let probe = vec![ClosedArg::Scalar(0.0), ClosedArg::Array(xs.clone())];
-                (Vec::new(), xs, Vec::new(), probe)
-            }
-        };
-        if let Err(e) = evaluate_closed_function(name, &probe) {
-            bail_tape!(
-                "op: closed function `{name}` whose table the registry rejects ({}): {}",
-                e.code,
-                e.message
-            );
-        }
-        Ok(InterpTable {
-            kind,
-            table,
-            axis_x,
-            axis_y,
-            strict: crate::lower_table_lookup::strict_table(node).map(str::to_string),
-        })
-    }
-
-    /// One rank-1 `const`-op array argument of an `interp.*` call, flattened
-    /// through `eval_const` — the same walk the oracle's `eval` performs on
-    /// that node, so the two read the same numbers (Float32 ingress rounding
-    /// included).
-    fn interp_const_arg(
-        &self,
-        name: &str,
-        arg: &Expr,
-        label: &str,
-        rank: usize,
-    ) -> LResult<(Vec<usize>, Vec<f64>)> {
-        // esm-spec §9.2 names the refusal: `interp_table_not_const` for the
-        // `table`, `interp_axis_not_const` for an axis and for
-        // `interp.searchsorted`'s `xs`. The tape decides it first, before the
-        // registry probe looks at any entry (NaN, monotonicity).
-        let code = if label == "table" {
-            crate::diagnostic::codes::INTERP_TABLE_NOT_CONST
-        } else {
-            crate::diagnostic::codes::INTERP_AXIS_NOT_CONST
-        };
-        let Expr::Operator(n) = arg else {
-            bail_tape!(
-                "op: closed function `{name}`'s `{label}` argument is not an inline \
-                 `const` array (esm-spec §9.2 requires a literal `const`): {code}"
-            );
-        };
-        if n.op != "const" {
-            bail_tape!(
-                "op: closed function `{name}`'s `{label}` argument is a `{}` node, not \
-                 an inline `const` array (esm-spec §9.2): {code}",
-                n.op
-            );
-        }
-        match eval_const(n) {
-            // `iter()` is the LOGICAL row-major walk, which for the rank-2
-            // `interp.bilinear` table is §9.2's `table[i][j]` layout.
-            Value::Array(a) if a.ndim() == rank => {
-                Ok((a.shape().to_vec(), a.iter().copied().collect()))
-            }
-            _ => bail_tape!(
-                "op: closed function `{name}`'s `{label}` argument is not a rank-{rank} \
-                 `const` array: {code}"
-            ),
-        }
-    }
-
-    /// The rank-2 `table` argument of `interp.bilinear`, flattened ROW-MAJOR.
-    ///
-    /// The inner extent is taken from the LITERAL's own shape and checked
-    /// against `len(axis_y)` here, rather than inferred by dividing the
-    /// element count: the oracle builds its nested `ClosedArg::Array2D` from
-    /// that same shape, so a table whose rows are the wrong length has to be
-    /// refused even when the element count happens to divide.
-    fn interp_const_arg_2d(&self, name: &str, arg: &Expr, ny: usize) -> LResult<Vec<f64>> {
-        let (shape, flat) = self.interp_const_arg(name, arg, "table", 2)?;
-        if shape[1] != ny {
-            bail_tape!(
-                "op: closed function `{name}`'s `table` row length {} != len(axis_y)={ny} \
-                 (interp_axis_length_mismatch)",
-                shape[1]
-            );
-        }
-        Ok(flat)
-    }
-
-    /// Expand one `datetime.*` entry over an already-lowered `t_utc`.
-    ///
-    /// Each arm computes only the half of the divmod it reads: the tape has no
-    /// dead-code pass, so an unconditional seconds-of-day would be six
-    /// instructions the interpreter runs on every call of `datetime.year`.
-    fn lower_datetime(&mut self, name: &str, t: LV) -> LResult<LV> {
-        let whole = self.emit_un(UnCode::Floor, t.clone());
-        let day = self.dt_day_count(whole.clone())?;
-        let in_range = self.dt_in_range(day.clone())?;
-        let value = self.lower_datetime_field(name, t, whole, day)?;
-        self.dt_select(in_range, value, LV::Lit(f64::NAN))
-    }
-
-    /// The field [`Self::lower_datetime`] guards, before the guard.
-    fn lower_datetime_field(&mut self, name: &str, t: LV, whole: LV, day: LV) -> LResult<LV> {
-        match name {
-            "datetime.hour" | "datetime.minute" | "datetime.second" => {
-                let sec = self.dt_sec_of_day(whole, day)?;
-                let (hour, minute, second) = self.dt_hms(sec)?;
-                Ok(match name {
-                    "datetime.hour" => hour,
-                    "datetime.minute" => minute,
-                    _ => second,
-                })
-            }
-            "datetime.julian_day" => {
-                let sec = self.dt_sec_of_day(whole.clone(), day.clone())?;
-                // `t − floor(t)`, as the reference rounds it (exact except
-                // for −0.5 < t < 0).
-                let frac = self.emit_bin(BinCode::Sub, t, whole)?;
-                self.dt_julian_day(day, sec, frac)
-            }
-            _ => {
-                let (y, m, d) = self.dt_civil_from_days(day)?;
-                match name {
-                    "datetime.year" => Ok(y),
-                    "datetime.month" => Ok(m),
-                    "datetime.day" => Ok(d),
-                    "datetime.is_leap_year" => self.dt_is_leap_year(y),
-                    // `datetime.day_of_year`
-                    _ => self.dt_day_of_year(y, m, d),
-                }
-            }
-        }
-    }
-
-    /// `a <op> literal` — the shape nearly every step of the decomposition takes.
-    fn dt_op(&mut self, code: BinCode, a: LV, k: f64) -> LResult<LV> {
-        self.emit_bin(code, a, LV::Lit(k))
-    }
-
-    /// [`Self::emit_select`] that folds a compile-time-known condition, so a
-    /// `datetime.*` call on a literal time collapses to one literal at build
-    /// time instead of leaving a dozen dead instructions on the tape.
-    fn dt_select(&mut self, cond: LV, a: LV, b: LV) -> LResult<LV> {
-        if let LV::Lit(c) = cond {
-            return Ok(if c != 0.0 { a } else { b });
-        }
-        self.emit_select(cond, a, b)
-    }
-
-    /// `floor(a / k)` — floored integer division (`k > 0`), with the quotient
-    /// RECOVERED FROM THE REMAINDER rather than trusted.
-    ///
-    /// The module header's argument — `floor(a / k)` on exact integers is the
-    /// exact integer quotient, because the division's rounding is far smaller
-    /// than the gap separating a non-integral quotient from the integer below
-    /// it — assumes a CORRECTLY ROUNDED DIVIDE, and a compiled backend is not
-    /// obliged to give one. XLA's algebraic simplifier rewrites `x / c` for a
-    /// constant `c` into `x * fl(1/c)`, and a reciprocal is a second rounding.
-    /// Of this family's divisors, `146097` (days per 400-year era) is the one
-    /// that does not survive it: `fl(1/146097)` is below the true reciprocal,
-    /// so a `z` sitting exactly on an era boundary comes back a hair under the
-    /// integer and `floor` reads the era one short. Nothing about the calendar
-    /// is wrong there — the DIVIDE is, by one unit in the last place — but the
-    /// result is a whole day of error in the date, which no tolerance class
-    /// covers and none should.
-    ///
-    /// It is also the kind of defect a compiled lane ships with: it fires only
-    /// where the quotient is an exact integer, so every other day of the era is
-    /// right, and the host path (which the A/B tests exercise) is never
-    /// affected at all.
-    ///
-    /// So the quotient is a CANDIDATE. `r = a - q*k` is exact whenever `a` and
-    /// `q*k` are exact integers below `2^53`, which this family's precondition
-    /// already guarantees, and the true floor is the unique `q` with
-    /// `0 <= r < k`. Two selects therefore repair any quotient within one unit
-    /// of the truth — which every divide of any kind is, correctly rounded or
-    /// not — and on a host, where `q` was already right, both are no-ops and
-    /// the value is bit for bit what the bare `floor(a / k)` returned. Branch
-    /// free, so it stays the same kind of program a bare divide was.
-    fn dt_floor_div(&mut self, a: LV, k: f64) -> LResult<LV> {
-        let q = self.dt_op(BinCode::Div, a.clone(), k)?;
-        let q = self.emit_un(UnCode::Floor, q);
-        let whole = self.dt_op(BinCode::Mul, q.clone(), k)?;
-        let r = self.emit_bin(BinCode::Sub, a, whole)?;
-        let below = self.dt_op(BinCode::Lt, r.clone(), 0.0)?;
-        let above = self.dt_op(BinCode::Ge, r, k)?;
-        let down = self.dt_op(BinCode::Sub, q.clone(), 1.0)?;
-        let up = self.dt_op(BinCode::Add, q.clone(), 1.0)?;
-        let inner = self.dt_select(above, up, q)?;
-        self.dt_select(below, down, inner)
-    }
-
-    /// `a / k` rounded TOWARD ZERO — Rust's `i64` division, which the
-    /// reference's hour/minute/second split uses.
-    ///
-    /// Built on [`Self::dt_floor_div`]'s repaired quotient rather than on a raw
-    /// one, for the reason spelled out there, and then stepped back toward zero
-    /// on the negative side: for `k > 0` the two roundings agree except where
-    /// `a` is negative AND the division does not come out even, and the
-    /// repaired remainder is exactly the evenness test.
-    fn dt_trunc_div(&mut self, a: LV, k: f64) -> LResult<LV> {
-        let q = self.dt_floor_div(a.clone(), k)?;
-        let whole = self.dt_op(BinCode::Mul, q.clone(), k)?;
-        let r = self.emit_bin(BinCode::Sub, a.clone(), whole)?; // exact, in [0, k)
-        let uneven = self.dt_op(BinCode::Gt, r, 0.0)?;
-        let neg = self.dt_op(BinCode::Lt, a, 0.0)?;
-        let step = self.emit_bin(BinCode::And, neg, uneven)?;
-        let up = self.dt_op(BinCode::Add, q.clone(), 1.0)?;
-        self.dt_select(step, up, q)
-    }
-
-    /// `1.0` when the reference returns a value rather than
-    /// `closed_function_overflow`: the day count lies in the Int32 years
-    /// (`DAY_OF_INT32_MIN_YEAR <= day < DAY_OF_INT32_YEAR_END`, the
-    /// reference's own test). A NaN or ±Inf `t_utc` fails it too, with no
-    /// separate check: `floor(NaN)` stays NaN through `dt_floor_div`, ±Inf
-    /// stays ±Inf, and every comparison with those is false (or out of range).
-    fn dt_in_range(&mut self, day: LV) -> LResult<LV> {
-        use crate::registered_functions::{DAY_OF_INT32_MIN_YEAR, DAY_OF_INT32_YEAR_END};
-        let lo = self.dt_op(BinCode::Ge, day.clone(), DAY_OF_INT32_MIN_YEAR as f64)?;
-        let hi = self.dt_op(BinCode::Lt, day, DAY_OF_INT32_YEAR_END as f64)?;
-        self.emit_bin(BinCode::And, lo, hi)
-    }
-
-    /// The day half of `floor_div_mod` — the ONE floored divmod by 86400 the
-    /// spec allows before all the arithmetic goes integer — of the whole
-    /// second `floor(t_utc)`.
-    fn dt_day_count(&mut self, whole: LV) -> LResult<LV> {
-        self.dt_floor_div(whole, 86400.0)
-    }
-
-    /// The whole second of the day, in `[0, 86400)`: the exact remainder of the
-    /// same divmod, so it needs no re-mapping and always agrees with the day.
-    fn dt_sec_of_day(&mut self, whole: LV, day: LV) -> LResult<LV> {
-        let off = self.dt_op(BinCode::Mul, day, 86400.0)?;
-        self.emit_bin(BinCode::Sub, whole, off)
-    }
-
-    /// Hinnant's `civil_from_days`: a day count since 1970-01-01 to
-    /// `(year, month, day)` on the proleptic-Gregorian calendar.
-    fn dt_civil_from_days(&mut self, day_count: LV) -> LResult<(LV, LV, LV)> {
-        let z = self.dt_op(BinCode::Add, day_count, 719468.0)?;
-        // The reference spells `era` as `(z >= 0 ? z : z - 146096) / 146097`
-        // with C's truncating `/`, which is the standard way to write
-        // `floor(z / 146097)` in integers — so emit the floored division.
-        let era = self.dt_floor_div(z.clone(), 146097.0)?;
-        let era_days = self.dt_op(BinCode::Mul, era.clone(), 146097.0)?;
-        let doe = self.emit_bin(BinCode::Sub, z, era_days)?; // [0, 146096]
-        // yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365, left to right.
-        let q1460 = self.dt_floor_div(doe.clone(), 1460.0)?;
-        let q36524 = self.dt_floor_div(doe.clone(), 36524.0)?;
-        let q146096 = self.dt_floor_div(doe.clone(), 146096.0)?;
-        let acc = self.emit_bin(BinCode::Sub, doe.clone(), q1460)?;
-        let acc = self.emit_bin(BinCode::Add, acc, q36524)?;
-        let acc = self.emit_bin(BinCode::Sub, acc, q146096)?;
-        let yoe = self.dt_floor_div(acc, 365.0)?; // [0, 399]
-        let y = self.dt_op(BinCode::Mul, era, 400.0)?;
-        let y = self.emit_bin(BinCode::Add, y, yoe.clone())?;
-        // doy = doe - (365*yoe + yoe/4 - yoe/100)
-        let leap_days = self.dt_op(BinCode::Mul, yoe.clone(), 365.0)?;
-        let q4 = self.dt_floor_div(yoe.clone(), 4.0)?;
-        let q100 = self.dt_floor_div(yoe, 100.0)?;
-        let start = self.emit_bin(BinCode::Add, leap_days, q4)?;
-        let start = self.emit_bin(BinCode::Sub, start, q100)?;
-        let doy = self.emit_bin(BinCode::Sub, doe, start)?; // [0, 365], March-based
-        // mp = (5*doy + 2) / 153
-        let n = self.dt_op(BinCode::Mul, doy.clone(), 5.0)?;
-        let n = self.dt_op(BinCode::Add, n, 2.0)?;
-        let mp = self.dt_floor_div(n, 153.0)?; // [0, 11]
-        // d = doy - (153*mp + 2)/5 + 1
-        let off = self.dt_op(BinCode::Mul, mp.clone(), 153.0)?;
-        let off = self.dt_op(BinCode::Add, off, 2.0)?;
-        let off = self.dt_floor_div(off, 5.0)?;
-        let d = self.emit_bin(BinCode::Sub, doy, off)?;
-        let d = self.dt_op(BinCode::Add, d, 1.0)?; // [1, 31]
-        // m = mp < 10 ? mp + 3 : mp - 9
-        let early = self.dt_op(BinCode::Lt, mp.clone(), 10.0)?;
-        let m_early = self.dt_op(BinCode::Add, mp.clone(), 3.0)?;
-        let m_late = self.dt_op(BinCode::Sub, mp, 9.0)?;
-        let m = self.dt_select(early, m_early, m_late)?; // [1, 12]
-        // The March-based year rolls over at January: y += (m <= 2).
-        let jan_feb = self.dt_op(BinCode::Le, m.clone(), 2.0)?;
-        let y_next = self.dt_op(BinCode::Add, y.clone(), 1.0)?;
-        let y = self.dt_select(jan_feb, y_next, y)?;
-        Ok((y, m, d))
-    }
-
-    /// `(hour, minute, second)` from the whole second of the day. The
-    /// reference does `i64` `/` and `%` — both round toward zero, and the
-    /// operand is never negative.
-    fn dt_hms(&mut self, sec_of_day: LV) -> LResult<(LV, LV, LV)> {
-        let s = sec_of_day;
-        let hour = self.dt_trunc_div(s.clone(), 3600.0)?;
-        let whole_hours = self.dt_op(BinCode::Mul, hour.clone(), 3600.0)?;
-        let rem = self.emit_bin(BinCode::Sub, s.clone(), whole_hours)?; // s % 3600
-        let minute = self.dt_trunc_div(rem, 60.0)?;
-        let whole_minutes = self.dt_trunc_div(s.clone(), 60.0)?;
-        let whole_minutes = self.dt_op(BinCode::Mul, whole_minutes, 60.0)?;
-        let second = self.emit_bin(BinCode::Sub, s, whole_minutes)?; // s % 60
-        Ok((hour, minute, second))
-    }
-
-    /// `1.0` when `y` is a proleptic-Gregorian leap year, else `0.0`.
-    ///
-    /// The remainders are FLOORED where the reference's `%` truncates; the two
-    /// conventions differ only in the sign of a non-zero remainder, and every
-    /// test here is against zero.
-    fn dt_is_leap_year(&mut self, y: LV) -> LResult<LV> {
-        let r4 = self.dt_rem(y.clone(), 4.0)?;
-        let r100 = self.dt_rem(y.clone(), 100.0)?;
-        let r400 = self.dt_rem(y, 400.0)?;
-        let by4 = self.dt_op(BinCode::Eq, r4, 0.0)?;
-        let not100 = self.dt_op(BinCode::Ne, r100, 0.0)?;
-        let by400 = self.dt_op(BinCode::Eq, r400, 0.0)?;
-        let common = self.emit_bin(BinCode::And, by4, not100)?;
-        self.emit_bin(BinCode::Or, common, by400)
-    }
-
-    /// `a - k * floor(a / k)` — the floored remainder.
-    fn dt_rem(&mut self, a: LV, k: f64) -> LResult<LV> {
-        let q = self.dt_floor_div(a.clone(), k)?;
-        let whole = self.dt_op(BinCode::Mul, q, k)?;
-        self.emit_bin(BinCode::Sub, a, whole)
-    }
-
-    /// Day of year, 1 = January 1.
-    ///
-    /// The reference adds a cumulative-days table lookup to the day of month
-    /// and then a leap-day correction for March onwards. The table is
-    /// `floor((367*m - 362) / 12) - 2` for `m >= 3` and `floor((367*m - 362) /
-    /// 12)` for January and February — the classic closed form, which agrees
-    /// with all twelve of its entries — so the whole thing is
-    /// `floor((367*m - 362) / 12) + d` minus 2 for March onwards, plus 1 back
-    /// in a leap year. No 12-way select, and no per-element table read.
-    fn dt_day_of_year(&mut self, y: LV, m: LV, d: LV) -> LResult<LV> {
-        let leap = self.dt_is_leap_year(y)?;
-        let base = self.dt_op(BinCode::Mul, m.clone(), 367.0)?;
-        let base = self.dt_op(BinCode::Sub, base, 362.0)?;
-        let base = self.dt_floor_div(base, 12.0)?;
-        let jan_feb = self.dt_op(BinCode::Le, m, 2.0)?;
-        let shift = self.emit_bin(BinCode::Sub, LV::Lit(2.0), leap)?;
-        let shift = self.dt_select(jan_feb, LV::Lit(0.0), shift)?;
-        let doy = self.emit_bin(BinCode::Add, base, d)?;
-        self.emit_bin(BinCode::Sub, doy, shift)
-    }
-
-    /// The standard Julian Date, as the reference evaluates it from the exact
-    /// split: `(day + 2440588) + ((sec_of_day - 43200) + frac) / 86400`. The
-    /// two integer sums are exact, so the inner add, the divide and the outer
-    /// add are the only roundings, in the reference's order; the day term is
-    /// the linear day number (not the Fliegel-van Flandern JDN of the date).
-    fn dt_julian_day(&mut self, day_count: LV, sec_of_day: LV, frac: LV) -> LResult<LV> {
-        let jdn = self.dt_op(BinCode::Add, day_count, 2440588.0)?;
-        // (jdn as f64) + (((sec_of_day - 43200) as f64) + frac) / 86400.0
-        let from_noon = self.dt_op(BinCode::Sub, sec_of_day, 43200.0)?;
-        let from_noon = self.emit_bin(BinCode::Add, from_noon, frac)?;
-        let from_noon = self.dt_op(BinCode::Div, from_noon, 86400.0)?;
-        self.emit_bin(BinCode::Add, jdn, from_noon)
-    }
-
     // -- ifelse ---------------------------------------------------------------
 
     /// The operand of a precision-boundary marker (`crate::precision_infer`)
@@ -3665,8 +2931,8 @@ impl<'m> TapeBuilder<'m> {
         let vb = bx.as_vecbox();
 
         // A const array read at a subscript that is itself build-time data
-        // (`gx[assign[i]]`, an arg-witness buffer gathered by a right-hand
-        // side) has no affine form; its positions are resolved here.
+        // (`gx[assign[i]]`, a build-time index buffer gathered by a
+        // right-hand side) has no affine form; its positions are resolved here.
         if const_base
             && out_ndim == 1
             && (0..n).any(|d| classify_axis_role(&node.args[1 + d], &vb).is_none())
@@ -4150,8 +3416,7 @@ impl<'m> TapeBuilder<'m> {
 
     /// The box axes `e` reads, as a bit mask over `bx.syms`, for
     /// [`Self::lower_on_sub_box`]; `None` when `e` holds anything that rule
-    /// does not take (a reduction, an array builder, a closed function, a
-    /// whole-array name). `memo` keys a node by address: an expanded
+    /// does not take (a reduction, an array builder, a whole-array name). `memo` keys a node by address: an expanded
     /// template shares its subterms, and a tree walk of the sharing would
     /// repeat them.
     fn sub_box_axes(
@@ -4224,7 +3489,7 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// Whether `e` reads nothing that can fault (no const array or array
-    /// literal, no closed function, no nested aggregate or array builder),
+    /// literal, no nested aggregate or array builder),
     /// marking in `used` each box axis whose symbol it names.
     fn fault_free_reads(&self, e: &Expr, bx: &LBox, used: &mut [bool]) -> bool {
         match e {
@@ -4236,10 +3501,8 @@ impl<'m> TapeBuilder<'m> {
                 !self.const_arrays.is_const(v)
             }
             Expr::Operator(n) => {
-                if matches!(
-                    n.op.as_str(),
-                    "const" | "fn" | "faq" | "aggregate" | "makearray" | "broadcast"
-                ) && !(n.op == "const" && n.value.as_ref().is_some_and(|v| v.is_number()))
+                if matches!(n.op.as_str(), "const" | "faq" | "makearray" | "broadcast")
+                    && !(n.op == "const" && n.value.as_ref().is_some_and(|v| v.is_number()))
                 {
                     return false;
                 }
@@ -5152,299 +4415,10 @@ impl<'m> TapeBuilder<'m> {
 
     // -- geometry -------------------------------------------------------------
 
-    /// `polygon_intersection_area` (esm-spec §4.2): one [`Instr::PolyArea`]
-    /// over the box `bx`, or over a scalar slot when `bx` is `None` (the
-    /// wholesale form, or a box neither ring varies over).
-    ///
-    /// Mirrors `eval_polygon_intersection_area` / `eval_clip_operands`: a
-    /// required in-enum `manifold`, exactly two operands, each a `[V, 2]`
-    /// ring, and the NaN sentinel wherever that contract fails in a way the
-    /// box alone decides (the wrong arity, no manifold, an operand that is a
-    /// scalar or not `[V, 2]`). What the tape takes as a ring is narrower than
-    /// what the oracle evaluates — a partial `index(table, s…)` whose
-    /// subscripts are affine in one output symbol or constant, or a whole
-    /// array — and every other operand, and any ring position outside its
-    /// table, is a refusal naming it rather than a guess at the oracle.
-    fn lower_poly_area(&mut self, node: &Arc<ExpressionNode>, bx: Option<&LBox>) -> LResult<LV> {
-        use crate::geometry::Manifold;
-        if self.f32_document {
-            bail_tape!("geometry: `polygon_intersection_area` in a Float32 document");
-        }
-        let [a_expr, b_expr] = node.args.as_slice() else {
-            return Ok(LV::Lit(f64::NAN));
-        };
-        let Some(manifold) = node.manifold.as_deref().and_then(Manifold::from_flag) else {
-            return Ok(LV::Lit(f64::NAN));
-        };
-        let Some((ta, ra)) = self.lower_ring_operand(a_expr, bx)? else {
-            return Ok(LV::Lit(f64::NAN));
-        };
-        let Some((tb, rb)) = self.lower_ring_operand(b_expr, bx)? else {
-            return Ok(LV::Lit(f64::NAN));
-        };
-        let (axes_a, axes_b) = (ra.axes(), rb.axes());
-        // A box neither ring varies over holds one value: compute it once.
-        let bx = bx.filter(|_| !axes_a.is_empty() || !axes_b.is_empty());
-        let pairs = match (&axes_a[..], &axes_b[..]) {
-            ([x], [y]) if manifold == Manifold::Planar && x != y => Some((*x, *y)),
-            _ => None,
-        };
-        let (shape, lo) = match bx {
-            Some(bx) => (bx.shape.clone(), bx.lo.clone()),
-            None => (DimU::new(), DimI::new()),
-        };
-        let cad = self.lv_cadence(&ta).max(self.lv_cadence(&tb));
-        let sec = self.placement(cad);
-        let geom = self.geoms.len() as u32;
-        self.geoms.push(GeomSpec {
-            manifold,
-            a: ra,
-            b: rb,
-            shape: shape.clone(),
-            pairs,
-        });
-        let scalar = bx.is_none();
-        let out = self.new_slot(&shape, &lo, scalar, sec);
-        let instr = Instr::PolyArea {
-            a: self.src_of(&ta),
-            b: self.src_of(&tb),
-            geom,
-            out,
-        };
-        self.emit(instr, sec);
-        Ok(if scalar {
-            LV::Scalar(out)
-        } else {
-            LV::Arr(out)
-        })
-    }
-
-    /// One ring operand of [`Self::lower_poly_area`]: the table it reads
-    /// (the WHOLE array, as the oracle's `eval` of the base yields it) and how
-    /// each leading table axis is addressed. `None` when the operand is, for
-    /// every cell, not a `[V, 2]` array — a scalar, or a table whose ring is
-    /// not two-column — which `eval_clip_operands` answers with NaN.
-    fn lower_ring_operand(
-        &mut self,
-        e: &Expr,
-        bx: Option<&LBox>,
-    ) -> LResult<Option<(LV, RingRef)>> {
-        let (base, subs): (&Expr, &[Expr]) = match e {
-            Expr::Operator(n) if n.op == "index" => match n.args.split_first() {
-                Some((base, subs)) => (base, subs),
-                None => return Ok(None),
-            },
-            other => (other, &[]),
-        };
-        let table = self.lower_wholesale(base)?;
-        let Some((tshape, torigin)) = self.lv_box(&table) else {
-            if subs.is_empty() {
-                return Ok(None);
-            }
-            // Subscripts on a 0-D value are the interpreter's fail-closed
-            // fault, which only the oracle can raise.
-            bail_tape!("geometry: ring operand subscripts a scalar");
-        };
-        if torigin.iter().any(|&o| o != 1) {
-            bail_tape!("geometry: ring table is not origin-1");
-        }
-        if tshape.len() != subs.len() + 2 || tshape[tshape.len() - 1] != 2 {
-            if subs.is_empty() {
-                return Ok(None);
-            }
-            bail_tape!(
-                "geometry: ring operand of box {:?} with {} subscripts is not a [V, 2] ring",
-                &tshape[..],
-                subs.len()
-            );
-        }
-        let mut sel: SmallVec<[RingSel; 3]> = SmallVec::new();
-        let mut lists: Vec<Vec<u32>> = Vec::new();
-        for (d, sub) in subs.iter().enumerate() {
-            let extent = tshape[d] as i64;
-            let s = match bx {
-                Some(bx) => match classify_axis_role(sub, &bx.as_vecbox()) {
-                    Some(AxisRole::Map {
-                        out_axis,
-                        ax: AxisIndex::Affine(k),
-                    }) => {
-                        // 0-based table position `p + off` at output position p.
-                        let off = bx.lo[out_axis] + k - 1;
-                        let last = off + bx.shape[out_axis] as i64 - 1;
-                        if off < 0 || last >= extent {
-                            bail_tape!(
-                                "geometry: ring subscript {d} leaves its table (1..{extent})"
-                            );
-                        }
-                        RingSel::Axis {
-                            axis: out_axis as u8,
-                            off,
-                        }
-                    }
-                    Some(AxisRole::Const(i1)) => Self::ring_fixed(i1, extent, d)?,
-                    // A tuple-list body: the subscript's per-tuple values, when
-                    // the build knows them (a loop symbol of the join).
-                    _ if bx.tuple != 0 => {
-                        let Some(vals) = self.tuple_known_values(sub, bx)? else {
-                            bail_tape!(
-                                "geometry: ring subscript {d} is not build-time data over the list"
-                            );
-                        };
-                        let mut pos = Vec::with_capacity(vals.len());
-                        for &v in vals.iter() {
-                            let i1 = v.round() as i64;
-                            if i1 < 1 || i1 > extent {
-                                bail_tape!(
-                                    "geometry: ring subscript {d} leaves its table (1..{extent})"
-                                );
-                            }
-                            pos.push((i1 - 1) as u32);
-                        }
-                        lists.push(pos);
-                        RingSel::List {
-                            axis: 0,
-                            list: (lists.len() - 1) as u32,
-                        }
-                    }
-                    _ => bail_tape!(
-                        "geometry: ring subscript {d} is neither affine in one output symbol nor constant"
-                    ),
-                },
-                None => match self.lower_wholesale(sub)? {
-                    LV::Lit(f) => Self::ring_fixed(f.round() as i64, extent, d)?,
-                    _ => bail_tape!("geometry: ring subscript {d} is not a literal"),
-                },
-            };
-            sel.push(s);
-        }
-        Ok(Some((
-            table,
-            RingRef {
-                src_shape: tshape,
-                sel,
-                lists,
-            },
-        )))
-    }
-
-    /// `intersect_polygon` (RFC §8.1) evaluated wholesale: the closed overlap
-    /// ring, `[n + 1, 2]`, with `n` data-dependent.
-    ///
-    /// A slot's box is fixed when the tape is built, and the length of a clip
-    /// is known only once the clip has run, so the ring is computed HERE, at
-    /// build, when both operands are compile-time constants (literal `const`
-    /// data), by the interpreter's own `eval_intersect_polygon` steps: the
-    /// kernel clip, then `close_ring`. The ring becomes an ordinary
-    /// [`Instr::ConstArray`], and its distinct-vertex count is recorded under
-    /// the node's `id` for a `kind: "derived"` range over it, which is what the
-    /// interpreter's ring registry would answer. Where the interpreter's clip
-    /// yields its NaN sentinel and registers nothing (an operand that is not a
-    /// `[V, 2]` array, no manifold, a clip the kernel refuses), so does this,
-    /// and the derived range is empty. Operands that are rings but not
-    /// constants (a parameter, the state, an observed computed at run time)
-    /// and an empty ring are refusals naming the reason.
-    fn lower_intersect_polygon(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
-        use crate::geometry::Manifold;
-        if self.f32_document {
-            bail_tape!("geometry: `intersect_polygon` in a Float32 document");
-        }
-        let no_ring = |b: &mut Self| {
-            if let Some(id) = &node.id {
-                b.rings.push((id.clone(), 0));
-            }
-            Ok(LV::Lit(f64::NAN))
-        };
-        let [a_expr, b_expr] = node.args.as_slice() else {
-            return no_ring(self);
-        };
-        let Some(manifold) = node.manifold.as_deref().and_then(Manifold::from_flag) else {
-            return no_ring(self);
-        };
-        let mut rings: [Vec<(f64, f64)>; 2] = [Vec::new(), Vec::new()];
-        for (k, e) in [a_expr, b_expr].into_iter().enumerate() {
-            let Some((table, r)) = self.lower_ring_operand(e, None)? else {
-                return no_ring(self);
-            };
-            let Some((dshape, dvals)) = self.const_slot_data(&table) else {
-                bail_tape!(
-                    "geometry: `intersect_polygon` of a ring that is not a compile-time \
-                     constant: its overlap has a data-dependent length, and a tape slot's \
-                     box is fixed when the tape is built"
-                );
-            };
-            let lead = r.sel.len();
-            // Row-major strides of the literal, which is how it is stored.
-            let mut st = vec![1usize; dshape.len()];
-            for d in (0..dshape.len().saturating_sub(1)).rev() {
-                st[d] = st[d + 1] * dshape[d + 1];
-            }
-            let mut base = 0usize;
-            for (d, s) in r.sel.iter().enumerate() {
-                let RingSel::Fixed(i) = *s else {
-                    unreachable!("a wholesale ring subscript is fixed");
-                };
-                base += st[d] * i;
-            }
-            rings[k] = (0..dshape[lead])
-                .map(|v| {
-                    let p = base + st[lead] * v;
-                    (dvals[p], dvals[p + st[lead + 1]])
-                })
-                .collect();
-        }
-        let ring = match crate::geometry::intersect_polygon(&rings[0], &rings[1], manifold) {
-            Ok(ring) => super::super::eval::close_ring(&ring),
-            Err(_) => return no_ring(self),
-        };
-        if ring.is_empty() {
-            bail_tape!("geometry: `intersect_polygon` ring is empty (a disjoint clip)");
-        }
-        let arr = super::super::eval::lonlat_to_arrayd(&ring);
-        if let Some(id) = &node.id {
-            self.rings.push((id.clone(), ring.len() as i64 - 1));
-        }
-        self.emit_const_array(&arr)
-    }
-
-    /// The extents and row-major values of an array LV whose values the
-    /// build knows ([`Self::known_slice`]): a `ConstArray` payload, one
-    /// still deferred, or values the build computed.
-    fn const_slot_data(&self, lv: &LV) -> Option<(&[usize], &[f64])> {
-        let LV::Arr(slot) = lv else {
-            return None;
-        };
-        let shape = &self.slots[*slot as usize].shape;
-        self.known_slice(*slot)
-            .filter(|v| v.len() == shape.iter().product::<usize>())
-            .map(|v| (&shape[..], v))
-    }
-
-    /// The distinct-vertex count of the build-time ring produced under `id`.
-    fn ring_extent(&self, id: &str) -> Option<i64> {
-        self.rings
-            .iter()
-            .rev()
-            .find(|(r, _)| r == id)
-            .map(|(_, n)| *n)
-    }
-
     /// Whether a contracted dimension has one extent for every output cell: a
-    /// static interval, or a derived range over an `intersect_polygon` ring
-    /// evaluated at build ([`Self::ring_extent`]).
+    /// static interval.
     fn dim_is_fixed(&self, d: &ContractDim) -> bool {
-        match d {
-            ContractDim::Static(..) => true,
-            ContractDim::Derived { from_faq } => self.ring_extent(from_faq).is_some(),
-            ContractDim::Ragged { .. } => false,
-        }
-    }
-
-    /// A constant 1-based ring subscript as a fixed 0-based table position.
-    fn ring_fixed(one_based: i64, extent: i64, d: usize) -> LResult<RingSel> {
-        if one_based < 1 || one_based > extent {
-            bail_tape!("geometry: ring subscript {d} leaves its table (1..{extent})");
-        }
-        Ok(RingSel::Fixed((one_based - 1) as usize))
+        matches!(d, ContractDim::Static(..))
     }
 
     /// The indexed-gather arm of [`Self::lower_index`]: source axis `data_d`
@@ -5864,7 +4838,23 @@ impl<'m> TapeBuilder<'m> {
         bx: &LBox,
     ) -> LResult<LV> {
         if bx.tuple != 0 {
-            bail_tape!("aggregate: rank-0 output nested inside a tuple-list contraction body");
+            let frame_names: Vec<String> = self
+                .tuple_frames
+                .iter()
+                .rev()
+                .find(|f| f.id() == bx.tuple)
+                .map(|f| f.names().to_vec())
+                .unwrap_or_default();
+            if nested_aggregate_capture(spec, frame_names.iter()).is_none() {
+                let level = self.enter_fault_level(Some(bx));
+                let v = self.lower_wholesale_aggregate_in_level(node);
+                self.leave_fault_level(level);
+                return v;
+            }
+            if spec.has_drivable_overlap() || node.key.is_some() || node.distinct == Some(true) {
+                bail_tape!("aggregate: a gated or keyed rank-0 output that reads its tuple list");
+            }
+            return self.lower_nested_scalar_in_tuples(node, spec, bx);
         }
         if nested_aggregate_capture(spec, bx.syms.iter().chain(bx.cnames.iter())).is_none() {
             let level = self.enter_fault_level(Some(bx));
@@ -5910,9 +4900,6 @@ impl<'m> TapeBuilder<'m> {
         for d in &spec.contract_dims {
             let (l, n) = match d {
                 ContractDim::Static(l, h) => (*l, (h - l + 1).max(0) as usize),
-                ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_some() => {
-                    (1, self.ring_extent(from_faq).unwrap_or(0).max(0) as usize)
-                }
                 other => bail_tape!(
                     "aggregate: a rank-0 output that reads its enclosing box, over a \
                      non-static contraction dim ({other:?})"
@@ -6271,10 +5258,6 @@ impl<'m> TapeBuilder<'m> {
                 ContractDim::Static(l, h) => {
                     clo[i] = *l;
                     chi[i] = *h;
-                }
-                ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_some() => {
-                    clo[i] = 1;
-                    chi[i] = self.ring_extent(from_faq).unwrap_or(0);
                 }
                 other => bail_tape!("contracted: non-static contraction dim ({other:?})"),
             }
@@ -6865,7 +5848,6 @@ impl<'m> TapeBuilder<'m> {
                 }
                 self.lower_wholesale_op_named(fn_name, node)
             }
-            "fn" => self.lower_wholesale_closed_fn(node),
             crate::precision_infer::MARKER_OP => {
                 let (arg, _precision) = self.marker_operand(node)?;
                 self.lower_wholesale(arg)
@@ -6876,8 +5858,6 @@ impl<'m> TapeBuilder<'m> {
             "index" => self.lower_wholesale_index(node),
             "faq" => self.lower_wholesale_aggregate(node),
             "makearray" => self.lower_wholesale_makearray(node),
-            "polygon_intersection_area" => self.lower_poly_area(node, None),
-            "intersect_polygon" => self.lower_intersect_polygon(node),
             other => bail_tape!("wholesale: unsupported op `{other}`"),
         }
     }
@@ -7462,10 +6442,6 @@ impl<'m> TapeBuilder<'m> {
                 ContractDim::Static(l, h) => {
                     lo.push(*l);
                     shape.push((h - l + 1).max(0) as usize);
-                }
-                ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_some() => {
-                    lo.push(1);
-                    shape.push(self.ring_extent(from_faq).unwrap_or(0).max(0) as usize);
                 }
                 _ => {
                     return self.lower_tuple_contraction(
@@ -8347,14 +7323,7 @@ pub(super) fn build_tape_program(
         obs_tier.insert(name.clone(), tier);
     }
 
-    let mut b = TapeBuilder::new(
-        var_shapes,
-        param_names,
-        obs_tier,
-        const_arrays,
-        compiled.precision.is_f32(),
-        forcing,
-    );
+    let mut b = TapeBuilder::new(var_shapes, param_names, obs_tier, const_arrays, forcing);
     b.inline_params = Some(&compiled.inline_param_arrays);
     b.observed_rules = observed_rules;
     b.tile = tile;
@@ -8581,10 +7550,7 @@ impl<'m> TapeBuilder<'m> {
             regions: self.regions.len(),
             assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
-            interp_tables: self.interp_tables.len(),
-            geoms: self.geoms.len(),
             index_gathers: self.index_gathers.len(),
-            rings: self.rings.len(),
             gather_tables: self.gather_tables.len(),
             seg_tables: self.seg_tables.len(),
             faults: self.faults.len(),
@@ -8611,10 +7577,7 @@ impl<'m> TapeBuilder<'m> {
         self.regions.truncate(txn.regions);
         self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
-        self.interp_tables.truncate(txn.interp_tables);
-        self.geoms.truncate(txn.geoms);
         self.index_gathers.truncate(txn.index_gathers);
-        self.rings.truncate(txn.rings);
         self.gather_tables.truncate(txn.gather_tables);
         self.seg_tables.truncate(txn.seg_tables);
         let n_slots = self.slots.len() as SlotId;
@@ -8675,8 +7638,6 @@ impl<'m> TapeBuilder<'m> {
             regions: self.regions.len(),
             assemblies: self.assemblies.len(),
             const_data: self.const_data.len(),
-            interp_tables: self.interp_tables.len(),
-            geoms: self.geoms.len(),
             index_gathers: self.index_gathers.len(),
             gather_tables: self.gather_tables.len(),
             seg_tables: self.seg_tables.len(),
@@ -8702,8 +7663,6 @@ impl<'m> TapeBuilder<'m> {
         self.regions.truncate(txn.regions);
         self.assemblies.truncate(txn.assemblies);
         self.const_data.truncate(txn.const_data);
-        self.interp_tables.truncate(txn.interp_tables);
-        self.geoms.truncate(txn.geoms);
         self.index_gathers.truncate(txn.index_gathers);
         self.gather_tables.truncate(txn.gather_tables);
         self.seg_tables.truncate(txn.seg_tables);
@@ -8715,6 +7674,9 @@ impl<'m> TapeBuilder<'m> {
         // The attempt's value numbers in the frame it ran in: one naming a
         // rolled-back slot goes (a value it shadowed is simply recomputed).
         if let Some(frame) = self.scope_frames.last_mut() {
+            frame.retain_live(n_slots);
+        }
+        for frame in &mut self.tuple_frames {
             frame.retain_live(n_slots);
         }
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
@@ -9356,8 +8318,6 @@ impl<'m> TapeBuilder<'m> {
             regions: std::mem::take(&mut self.regions),
             assemblies: std::mem::take(&mut self.assemblies),
             const_data: std::mem::take(&mut self.const_data),
-            interp_tables: std::mem::take(&mut self.interp_tables),
-            geoms: std::mem::take(&mut self.geoms),
             index_gathers: std::mem::take(&mut self.index_gathers),
             gather_tables: std::mem::take(&mut self.gather_tables),
             seg_tables: std::mem::take(&mut self.seg_tables),
@@ -9510,7 +8470,6 @@ fn color_slab(prog: &mut TapeProgram) {
                 | Instr::Count { .. }
                 | Instr::Scan { .. }
                 | Instr::Assemble { .. }
-                | Instr::PolyArea { .. }
                 | Instr::IndexGather { .. }
                 | Instr::TableGather { .. }
                 | Instr::DataGather { .. }

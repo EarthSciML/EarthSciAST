@@ -477,7 +477,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # §6.3.1's partition-by-complement has a category for "no equation names
         # it", and this is it.
         doc = """
-        {"esm": "1.0.0",
+        {"esm": "2.0.0",
          "metadata": {"name": "InertSpecies",
                       "description": "Xe is declared and appears in no reaction."},
          "reaction_systems": {

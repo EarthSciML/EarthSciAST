@@ -1,0 +1,48 @@
+{
+  "properties": [
+    {
+      "id": "P-enum-unique-values",
+      "clauses": [
+        "spec.9.3.enum-values-unique",
+        "conf.5.26.enum-values-unique",
+        "conf.5.26.5.uniqueness-restated",
+        "spec.9.3.enum-zero-negative-allowed"
+      ],
+      "statement": "Q-2/Q-8: an enums block loads iff values are unique within each enum (no constraint on the values themselves, so 0 and negatives load); a duplicate is enum_duplicate_value.",
+      "lean_statement": "∀ (es : Esm.Closed.Enums.EnumsBlock), (Esm.Closed.Enums.validateEnums es = Except.ok () ↔ ∀ e ∈ es, (List.map Prod.snd e.2).Nodup) ∧ ((∃ e ∈ es, ¬(List.map Prod.snd e.2).Nodup) → Esm.Closed.Enums.validateEnums es = Except.error \"enum_duplicate_value\")",
+      "status": "proven",
+      "theorem": "Esm.Closed.Enums.validateEnums_iff"
+    },
+    {
+      "id": "P-enum-cross-collision",
+      "clauses": [
+        "spec.9.3.enum-values-unique"
+      ],
+      "statement": "Values may coincide across enums.",
+      "lean_statement": "∀ (n₁ n₂ : String) (m₁ m₂ : Esm.Closed.Enums.Enum), (List.map Prod.snd m₁).Nodup → (List.map Prod.snd m₂).Nodup → Esm.Closed.Enums.validateEnums [(n₁, m₁), (n₂, m₂)] = Except.ok ()",
+      "status": "proven",
+      "theorem": "Esm.Closed.Enums.validateEnums_cross"
+    },
+    {
+      "id": "P-enum-resolve-exact",
+      "clauses": [
+        "conf.5.26.enum-any-integer",
+        "spec.9.3.enum-zero-negative-allowed"
+      ],
+      "statement": "An enum op resolves to exactly its declared integer (zero and negatives included; no clamping or defaulting).",
+      "lean_statement": "∀ (es : Esm.Closed.Enums.EnumsBlock) (name sym : String) (m : Esm.Closed.Enums.Enum) (v : ℤ), List.lookup name es = Option.some m → List.lookup sym m = Option.some v → Esm.Closed.Enums.resolve es name sym = Except.ok v",
+      "status": "proven",
+      "theorem": "Esm.Closed.Enums.resolve_exact"
+    },
+    {
+      "id": "P-enum-unknown-codes",
+      "clauses": [
+        "spec.9.3.enum-unknown-rejected"
+      ],
+      "statement": "An undeclared enum is unknown_enum, an undeclared symbol unknown_enum_symbol.",
+      "lean_statement": "∀ (es : Esm.Closed.Enums.EnumsBlock) (name sym : String), (List.lookup name es = Option.none → Esm.Closed.Enums.resolve es name sym = Except.error \"unknown_enum\") ∧ ∀ (m : Esm.Closed.Enums.Enum), List.lookup name es = Option.some m → List.lookup sym m = Option.none → Esm.Closed.Enums.resolve es name sym = Except.error \"unknown_enum_symbol\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Enums.resolve_unknown"
+    }
+  ]
+}

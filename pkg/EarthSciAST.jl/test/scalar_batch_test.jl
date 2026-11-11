@@ -67,7 +67,7 @@ function _sb_halo(M::Int)
         )
     )
     doc = Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "sb_halo"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "sb_halo"),
         "models" => Dict(
             "R" => Dict{String, Any}(
                 "variables" => Dict(

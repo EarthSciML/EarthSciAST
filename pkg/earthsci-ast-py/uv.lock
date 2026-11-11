@@ -688,9 +688,6 @@ dev = [
     { name = "ruff" },
     { name = "twine" },
 ]
-geometry = [
-    { name = "spherely" },
-]
 plot = [
     { name = "matplotlib" },
 ]
@@ -732,13 +729,12 @@ requires-dist = [
     { name = "scipy", marker = "extra == 'conformance'", specifier = ">=1.7" },
     { name = "scipy", marker = "extra == 'simulate'", specifier = ">=1.7" },
     { name = "scipy", marker = "extra == 'test'", specifier = ">=1.7" },
-    { name = "spherely", marker = "extra == 'geometry'", specifier = "==0.1.1" },
     { name = "sympy", specifier = ">=1.9" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "xarray", marker = "extra == 'data'", specifier = ">=0.20" },
     { name = "xarray", marker = "extra == 'test'", specifier = ">=0.20" },
 ]
-provides-extras = ["data", "simulate", "plot", "dev", "conformance", "test", "geometry"]
+provides-extras = ["data", "simulate", "plot", "dev", "conformance", "test"]
 
 [[package]]
 name = "flexcache"
@@ -2483,38 +2479,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88", size = 30594, upload-time = "2021-05-16T22:03:42.897Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0", size = 29575, upload-time = "2021-05-16T22:03:41.177Z" },
-]
-
-[[package]]
-name = "spherely"
-version = "0.1.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/26/82f2508c8084b110f290139e2987cb28889845a5bad74d0f2e375b01494c/spherely-0.1.1.tar.gz", hash = "sha256:db1719fd5f2b51ca79f74109fde09be1fe021576d4e0169062d2fb7e7309d7df", size = 342088, upload-time = "2026-04-01T19:45:58.671Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/d4/ad2fb2117b5fcdbdf8451398377953660fded0f671c895199c6e9971ef35/spherely-0.1.1-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:72d4ef2310f32b3a28317c69c18413e07b4a98fc0614e0774792c510e60b90d4", size = 5248192, upload-time = "2026-04-01T19:45:21.989Z" },
-    { url = "https://files.pythonhosted.org/packages/c3/a7/6553309407ffb294e5b3e3408bf50188b058a08ffe4e00f7ed1a47fd538e/spherely-0.1.1-cp311-cp311-macosx_15_0_x86_64.whl", hash = "sha256:a651ee151cba155b48c8b2f512b182931e700a5a2117e361641b09305aa8adbd", size = 5228944, upload-time = "2026-04-01T19:45:23.989Z" },
-    { url = "https://files.pythonhosted.org/packages/c8/ac/170878b9a43ec409962c426dc51143eb2a511ea2fb3859436a0cfd22dc97/spherely-0.1.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:408985c88f5eea1aa4bcb6c7eae4f8d6b4c4bbf6addda2e14692595a8856a87b", size = 3405594, upload-time = "2026-04-01T19:45:25.853Z" },
-    { url = "https://files.pythonhosted.org/packages/48/eb/70188daa8deb48b4541bdf5c1e11b9dd872d45e5d41ad4a36975b375b1a2/spherely-0.1.1-cp311-cp311-win_amd64.whl", hash = "sha256:12168b613d0b112b5511585086ec9589272ff4dacd5b173d0cd08efcac52d3b1", size = 3686205, upload-time = "2026-04-01T19:45:27.679Z" },
-    { url = "https://files.pythonhosted.org/packages/4e/52/b6fadac78cf34d1f01dad18765d06b3dd43acb7f2f975c8d2785ea26958a/spherely-0.1.1-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:7611d3f564880602462e932965af96e48ed70c5ba9ee6c8c092861163e071974", size = 5248945, upload-time = "2026-04-01T19:45:29.542Z" },
-    { url = "https://files.pythonhosted.org/packages/41/9b/702c07184b77a49a9275070b3b5ba00e2bd0583c248d5e9a94ba93e33b4f/spherely-0.1.1-cp312-cp312-macosx_15_0_x86_64.whl", hash = "sha256:da8286230ca4d2fe24703e4274f0f3d4b597c446daae1dd87ec540bd27e7d86a", size = 5233320, upload-time = "2026-04-01T19:45:31.209Z" },
-    { url = "https://files.pythonhosted.org/packages/cc/5d/c3b0627e4cc8d10a24aa1ae463f7acf5faed529df7bb6d6540b964a4a5e3/spherely-0.1.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:340f07ca1b4f861633e0509d4504f1890c25d5e21b98fc2c67c83399ef4744cd", size = 3401689, upload-time = "2026-04-01T19:45:32.888Z" },
-    { url = "https://files.pythonhosted.org/packages/e6/af/a7b6ce10c70181c24ad38264e6293b34f6391b3275224039abe6d6b9e523/spherely-0.1.1-cp312-cp312-win_amd64.whl", hash = "sha256:c63f7265a49598aa15610c16b539d37b972be468d0f4725614286a77b2bc23f1", size = 3687916, upload-time = "2026-04-01T19:45:34.529Z" },
-    { url = "https://files.pythonhosted.org/packages/62/e0/0c4788434d09b644c636a52c02e9588c5e86c62617d16f59b754de6e7226/spherely-0.1.1-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:ececbe0109d5e8b6190e9a1e42de4cb73fe672361d3f05e0258ae2c68ed0a78a", size = 5248974, upload-time = "2026-04-01T19:45:36.475Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/5d/94b7c58b70aafc49c24786cc7efe2417ad7785265f9f41d4fb0d6c45ed68/spherely-0.1.1-cp313-cp313-macosx_15_0_x86_64.whl", hash = "sha256:c0d75543c43ec9d8bad8217b7cbb3b3eb2d54f23bc97e198e7675789f9dd0382", size = 5233401, upload-time = "2026-04-01T19:45:39.823Z" },
-    { url = "https://files.pythonhosted.org/packages/20/ad/6892bc0a5cb78cce9b0c5acf0ef0bc4faef6bf732657cb05100af0411627/spherely-0.1.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:62fe5b09e3b99ded9c8132eb915b9e71c56025fbe2aa6d00175d7470e6319007", size = 3401744, upload-time = "2026-04-01T19:45:41.473Z" },
-    { url = "https://files.pythonhosted.org/packages/29/8b/ad367bf038895de95621f085c2756d66c6b93a657a24739fbbd3ba13d92b/spherely-0.1.1-cp313-cp313-win_amd64.whl", hash = "sha256:cc813d5f2a8feaa2f70592f0a9a66bd833572548fefcf9583e37066ab2da5d02", size = 3687876, upload-time = "2026-04-01T19:45:43.271Z" },
-    { url = "https://files.pythonhosted.org/packages/bc/f2/8d94dcdcfe8e4bb0e3e316d551e3fc45dfd12cb7d6bfb2ae29a31a122fef/spherely-0.1.1-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:880de7ad86b01ce5c1433d16036c77e012ed929cbe29c2f822c0009bb61c20a0", size = 5250013, upload-time = "2026-04-01T19:45:44.836Z" },
-    { url = "https://files.pythonhosted.org/packages/f6/7e/eb06b5205fec3c13d9b048086fec1a3ba4c1bcc32cee7cb8b43effa3923e/spherely-0.1.1-cp314-cp314-macosx_15_0_x86_64.whl", hash = "sha256:11b795203ffbaf100b1bdc437eb960a55c5735364cff6ab61bd3918f04004a4d", size = 5233730, upload-time = "2026-04-01T19:45:46.937Z" },
-    { url = "https://files.pythonhosted.org/packages/4a/0d/260dcaa6f3373a7b0aed3dec1dec043de5c5b62c3335e3eb70e3fd2e4b36/spherely-0.1.1-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b75cccbfec727570a1ddb2c74819aea3cfce92802e0ea1328cc1154d9b0d99f0", size = 3402035, upload-time = "2026-04-01T19:45:48.496Z" },
-    { url = "https://files.pythonhosted.org/packages/0e/52/3a7cc741f646fef9bc004e2a75e2fa3cdcd0f525aa619f98272c29f1ba22/spherely-0.1.1-cp314-cp314-win_amd64.whl", hash = "sha256:1385101e240e7521796e7a120be43ae5bcf9d1a12057d2c10d34bc2efdd87000", size = 3813112, upload-time = "2026-04-01T19:45:50.364Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/67/02bb1a2ba7e3216af94a60b6f41c7c4e79eaf61fe928a48ad846e245a40b/spherely-0.1.1-cp314-cp314t-macosx_14_0_arm64.whl", hash = "sha256:b6e9001c2a436ad0f7402c4b639044a18e32879091d7ba92dd52eab2b23f08a6", size = 5263628, upload-time = "2026-04-01T19:45:51.988Z" },
-    { url = "https://files.pythonhosted.org/packages/ad/cd/1f3f7aa7dc672dcf271d91accef8cbd0ab782ea6f545f7a159e98bc66f8a/spherely-0.1.1-cp314-cp314t-macosx_15_0_x86_64.whl", hash = "sha256:b4bf1b8915102d1de23e941e3e390fd42532554956abf9f0a8153e0e59444f76", size = 5246551, upload-time = "2026-04-01T19:45:53.635Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/91/4ebe685dcea1e7315fa1ea12b9b815acac3c82aff29d258bc02e6c0b200e/spherely-0.1.1-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:57570ad93000ba2ab4e50d5542d56733e5549647f5778dc70299e24c20b7d1f3", size = 3405747, upload-time = "2026-04-01T19:45:55.461Z" },
-    { url = "https://files.pythonhosted.org/packages/33/79/81b53db31ef5f47ec1443d5948928c4b029ec19939fe7dd0c08126d69d0d/spherely-0.1.1-cp314-cp314t-win_amd64.whl", hash = "sha256:aea382d759f1ae6238ac7653b84d419d1a8c1f72fd26aa795fd98d57a2f862c2", size = 3838631, upload-time = "2026-04-01T19:45:57.026Z" },
 ]
 
 [[package]]

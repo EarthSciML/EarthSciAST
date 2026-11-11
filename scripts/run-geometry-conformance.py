@@ -10,12 +10,12 @@ harness. This is the **tolerance-mode analogue** of the determinism gate
 combined relative + absolute tolerance and a sliver floor, and the PRIMARY gate
 is the physical invariants — global conservation and partition-of-unity. The one
 thing that stays byte-identical is the integer broad-phase **candidate
-overlap-pair index set** (the bin-Skolem equi-join), which falls under the §5.5
+overlap-pair index set** (the bin-key equi-join), which falls under the §5.5
 determinism contract.
 
 The gate asserts, in priority order (CONFORMANCE_SPEC.md §5.8.6):
 
-  1. Candidate set — the bin-Skolem candidate overlap-pair index set is
+  1. Candidate set — the bin-key candidate overlap-pair index set is
      byte-identical across bindings (after base normalization), INCLUDING the
      adversarial permuted-input-order variant, which MUST collapse to the
      identical candidate set (§5.8.5).
@@ -29,7 +29,7 @@ The gate asserts, in priority order (CONFORMANCE_SPEC.md §5.8.6):
 Two phases, one harness (mirrors the determinism gate):
 
   * NOW (skeleton, gated by `--self-test`): the runner asserts the contract
-    against an embedded REFERENCE implementation (pure-Python bin-Skolem broad
+    against an embedded REFERENCE implementation (pure-Python bin-key broad
     phase + planar Sutherland–Hodgman clip + shoelace area) over the static
     golden example (tests/conformance/geometry/manifest.json). It verifies the
     candidate set reproduces the golden byte-for-byte (planar AND spherical —
@@ -145,7 +145,7 @@ def _bbox(poly: list[list[float]]) -> tuple[float, float, float, float]:
 
 
 def cell_bin_keys(poly: list[list[float]], dx: float, dy: float) -> list[tuple]:
-    """Every integer spatial-bin Skolem key the cell's bbox spans — quantize to
+    """Every integer spatial-bin key the cell's bbox spans — quantize to
     floor(coord/step) and mint ("bin", bx, by) for each spanned bin. Binning by
     the full bbox span (not one corner) keeps the broad phase complete."""
     lo_x, hi_x, lo_y, hi_y = _bbox(poly)
@@ -161,7 +161,7 @@ def cell_bin_keys(poly: list[list[float]], dx: float, dy: float) -> list[tuple]:
 def candidate_overlap_pairs(
     src_polys: list, tgt_polys: list, dx: float, dy: float
 ) -> list[tuple[int, int]]:
-    """The bin-Skolem candidate overlap-pair set {(i, j)} (broad phase), 0-based.
+    """The bin-key candidate overlap-pair set {(i, j)} (broad phase), 0-based.
     Equi-join of the (bin_key, cell) tables on the shared bin key, then distinct
     over the surviving (i, j) pairs — emitted in sorted total order, so the result
     is the byte-identical, permutation-invariant candidate set the gate asserts

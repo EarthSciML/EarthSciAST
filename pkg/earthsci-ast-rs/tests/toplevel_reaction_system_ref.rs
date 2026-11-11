@@ -83,7 +83,7 @@ fn a_bad_reaction_system_mount_is_refused() {
 fn a_non_string_ref_is_not_a_mount_edge() {
     for block in ["reaction_systems", "models"] {
         let doc = serde_json::json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "non_string_ref"},
             block: {"Chem": {"ref": 5}},
         });
@@ -115,7 +115,7 @@ fn a_bad_model_mount_raises_the_reaction_system_forms_code() {
     write(
         "two_models.esm",
         serde_json::json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "two_models"},
             "models": {
                 "A": {"variables": {}, "equations": []},
@@ -140,7 +140,7 @@ fn a_bad_model_mount_raises_the_reaction_system_forms_code() {
         write(
             "mounter.esm",
             serde_json::json!({
-                "esm": "1.0.0",
+                "esm": "2.0.0",
                 "metadata": {"name": "mounter"},
                 "models": {"M": entry},
             }),

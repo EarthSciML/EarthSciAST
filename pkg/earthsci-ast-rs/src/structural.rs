@@ -1744,7 +1744,7 @@ impl<'a> LhsModel<'a> {
                     let faq_idx = match &eq.rhs {
                         // An integer entry is written as a number, which
                         // names no subscript (as `json_output_idx` reads it).
-                        crate::Expr::Operator(n) if n.op == "faq" || n.op == "aggregate" => Some(
+                        crate::Expr::Operator(n) if n.op == "faq" => Some(
                             n.output_idx
                                 .iter()
                                 .flatten()
@@ -1768,12 +1768,7 @@ impl<'a> LhsModel<'a> {
                     let Some(lhs) = eq.get("lhs") else { continue };
                     let faq_idx = eq
                         .get("rhs")
-                        .filter(|rhs| {
-                            matches!(
-                                rhs.get("op").and_then(|o| o.as_str()),
-                                Some("faq") | Some("aggregate")
-                            )
-                        })
+                        .filter(|rhs| matches!(rhs.get("op").and_then(|o| o.as_str()), Some("faq")))
                         .map(json_output_idx);
                     f(k, LhsSide::Json(lhs), faq_idx);
                 }
@@ -1810,7 +1805,7 @@ impl<'a> LhsSide<'a> {
                         };
                     };
                     e = match n.op.as_str() {
-                        "faq" | "aggregate" => n.expr.as_deref()?,
+                        "faq" => n.expr.as_deref()?,
                         "index" => n.args.first()?,
                         "D" if matches!(n.wrt.as_deref(), None | Some("t")) => n.args.first()?,
                         _ => return None,
@@ -1833,7 +1828,7 @@ impl<'a> LhsSide<'a> {
                         };
                     };
                     e = match n.op.as_str() {
-                        "faq" | "aggregate" => n.expr.as_deref()?,
+                        "faq" => n.expr.as_deref()?,
                         "index" | "D" => n.args.first()?,
                         _ => return None,
                     };
@@ -1948,7 +1943,7 @@ fn lhs_defined_name(lhs: &serde_json::Value) -> Option<&str> {
             return Some(s);
         }
         match e.get("op").and_then(|o| o.as_str())? {
-            "faq" | "aggregate" => e = e.get("expr")?,
+            "faq" => e = e.get("expr")?,
             "index" => e = e.get("args")?.as_array()?.first()?,
             "D" if matches!(e.get("wrt").and_then(|w| w.as_str()), None | Some("t")) => {
                 e = e.get("args")?.as_array()?.first()?
@@ -1985,7 +1980,7 @@ fn lhs_subject_name(lhs: &serde_json::Value) -> Option<&str> {
             return Some(s);
         }
         match e.get("op").and_then(|o| o.as_str())? {
-            "faq" | "aggregate" => e = e.get("expr")?,
+            "faq" => e = e.get("expr")?,
             "index" | "D" => e = e.get("args")?.as_array()?.first()?,
             _ => return None,
         }
@@ -2024,7 +2019,7 @@ fn collect_free_lhs_subscripts(
         .map(Vec::as_slice)
         .unwrap_or(&[]);
     match op {
-        "faq" | "aggregate" => {
+        "faq" => {
             let mut inner = bound.clone();
             inner.extend(json_output_idx(e));
             if let Some(r) = obj.get("ranges").and_then(|r| r.as_object()) {
@@ -2071,7 +2066,7 @@ fn collect_free_lhs_subscripts_typed(
         return;
     };
     match node.op.as_str() {
-        "faq" | "aggregate" => {
+        "faq" => {
             let mut inner = bound.clone();
             inner.extend(
                 node.output_idx
@@ -3083,9 +3078,7 @@ fn check_operand_axes(
 /// — because those are the only ones for which "corresponding elements" is
 /// what the expression means. Every other op consumes its operands whole under
 /// its own contract: a `faq` and a `makearray` name their axes, an
-/// `index` gathers, the shape ops restructure, and a geometry kernel like
-/// `intersect_polygon` legitimately takes `[src_verts, coord]` operands and
-/// returns a `[clip_ring, coord]` result.
+/// `index` gathers, and the shape ops restructure.
 /// This mirrors the descent the array-runtime lowering uses when it wraps
 /// leaves in per-cell gathers
 /// (`simulate_array::compile::collect_wrapped_array_leaves`) — the two must
@@ -3130,8 +3123,8 @@ fn collect_bare_array_operands<'a>(
 ///
 /// The descent is the one [`collect_bare_array_operands`] uses (elementwise
 /// operators only): a shaped variable consumed whole by its own operator
-/// contract (an `index` base, a nested `faq`, a shape op, a geometry or
-/// closed-function argument) is not a per-tuple read. A name bound as a loop
+/// contract (an `index` base, a nested `faq`, a shape op) is not a per-tuple
+/// read. A name bound as a loop
 /// symbol by this node or an enclosing one shadows the declaration and is not
 /// a variable read. Nested `faq` nodes are checked in their own right.
 ///
@@ -3413,10 +3406,7 @@ fn infer_expr_axes(
     if let Some(hit) = memo.get(&key) {
         return hit.clone();
     }
-    let out = if matches!(
-        node.op.as_str(),
-        "index" | "intersect_polygon" | "polygon_intersection_area"
-    ) {
+    let out = if node.op == "index" {
         Vec::new()
     } else if is_array_producer_op(&node.op) {
         node.output_idx
@@ -3582,24 +3572,16 @@ fn check_join_sides(
     }
 }
 
-/// Body ops that make a `faq` a value-invention node. Over such a node a ragged
-/// range binds the MEMBER `values[parent, k]` itself (esm-spec §4.3.1 "Ragged
-/// ranges"), so its `values` gather is implicit rather than authored.
-const VALUE_INVENTION_BODY_OPS: [&str; 5] = ["skolem", "rank", "distinct", "argmin", "argmax"];
-
-/// Whether `node` is a value-invention `faq`: `distinct: true`, a `skolem`
-/// key, or a skolem / rank / distinct / arg-witness body.
+/// Whether `node` is a value-invention `faq`: `distinct: true`, or a
+/// `distinct` body. Over such a node a ragged range binds the MEMBER
+/// `values[parent, k]` itself (esm-spec §4.3.1 "Ragged ranges"), so its
+/// `values` gather is implicit rather than authored.
 fn is_value_invention_faq(node: &crate::types::ExpressionNode) -> bool {
-    if node.distinct == Some(true) {
-        return true;
-    }
-    if matches!(node.key.as_deref(), Some(crate::Expr::Operator(key)) if key.op == "skolem") {
-        return true;
-    }
-    matches!(
-        node.expr.as_deref(),
-        Some(crate::Expr::Operator(body)) if VALUE_INVENTION_BODY_OPS.contains(&body.op.as_str())
-    )
+    node.distinct == Some(true)
+        || matches!(
+            node.expr.as_deref(),
+            Some(crate::Expr::Operator(body)) if body.op == "distinct"
+        )
 }
 
 /// Whether `expr` holds a surviving `apply_expression_template` reference
@@ -4523,8 +4505,8 @@ fn reaction_rate_units_str(rate: &crate::Expr, rs: &crate::ReactionSystem) -> St
 }
 
 /// The index / integration symbols an operator node BINDS for its own body:
-/// `output_idx` and `ranges` keys (`faq`), the `integral` op's
-/// `var`, and the `argmin`/`argmax` witness `arg`. These are in scope for the
+/// `output_idx` and `ranges` keys (`faq`) and the `integral` op's `var`.
+/// These are in scope for the
 /// node's child expressions (the aggregate body, filter predicate, grouping
 /// key, integral bounds) but are NOT model/parameter declarations, so a
 /// reference-checking walk that descends into those children (via
@@ -4541,9 +4523,6 @@ fn bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
     }
     if let Some(v) = &node.int_var {
         syms.push(v.clone());
-    }
-    if let Some(a) = &node.arg {
-        syms.push(a.clone());
     }
     // `index(array, i, j, …)` BINDS its element positions: the names after the
     // array head are loop positions, not declared variables. This is the binder
@@ -4568,8 +4547,8 @@ fn bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
 }
 
 /// Collect every binder-introduced symbol anywhere in an expression subtree —
-/// `index` element positions, `output_idx`/`ranges` keys, integral vars,
-/// argmin/argmax witnesses and template `bindings`. Per-node scoping alone binds
+/// `index` element positions, `output_idx`/`ranges` keys, integral vars and
+/// template `bindings`. Per-node scoping alone binds
 /// a symbol only for the subtree UNDER the node that introduces it, which is too
 /// narrow for a `makearray` stencil: it binds the grid indices `i`/`j` for ALL
 /// its `values`, yet an index spelled `i + 1` in one value is a USE of the `i`

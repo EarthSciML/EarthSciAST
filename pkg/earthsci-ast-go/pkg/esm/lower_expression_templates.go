@@ -51,61 +51,6 @@ import (
 
 const applyExpressionTemplateOp = "apply_expression_template"
 
-// Geometry-kernel ops whose `manifold` scalar field is restricted to the
-// closed manifold registry (CONFORMANCE_SPEC §5.8.4). The document schema
-// admits any string in the `manifold` position so a template `body` can carry
-// a parameter name there (esm-spec §9.6.1 scalar-field substitution site); the
-// closed set is enforced by validateGeometryManifolds on the EXPANDED form per
-// esm-spec §9.6.4.
-var geometryManifoldOps = map[string]struct{}{
-	"intersect_polygon":         {},
-	"polygon_intersection_area": {},
-}
-
-var geometryManifoldValues = map[string]struct{}{
-	"planar":    {},
-	"spherical": {},
-	"geodesic":  {},
-}
-
-// validateGeometryManifolds is the post-expansion validator (esm-spec §9.6.4):
-// every `intersect_polygon` / `polygon_intersection_area` node OUTSIDE an
-// `expression_templates` block must carry a `manifold` drawn from the closed
-// set {planar, spherical, geodesic}. Template bodies are skipped — a parameter
-// name in the `manifold` position of a `body` is a legal scalar-field
-// substitution site (esm-spec §9.6.1); by the time this validator runs on a
-// loaded document every such site has been substituted, so an out-of-set value
-// here is a real defect (e.g. a template invocation binding the manifold
-// parameter to a non-member literal). Returns an *ExpressionTemplateError with
-// code `geometry_manifold_invalid`.
-func validateGeometryManifolds(tree any, path string) error {
-	// Pre-substitution template trees may legally carry a param name in the
-	// manifold position (esm-spec §9.6.1), so `expression_templates` is skipped.
-	// The expanded form is a shared DAG (structural sharing, substituteParams),
-	// so each unique node is validated once (pointer-identity visited set).
-	return walkJSONTreeUniqueSkipping(tree, path, expressionTemplatesSkip, func(p string, t map[string]any) error {
-		op, ok := t["op"].(string)
-		if !ok {
-			return nil
-		}
-		if _, geomOp := geometryManifoldOps[op]; !geomOp {
-			return nil
-		}
-		m, present := t["manifold"]
-		if !present {
-			return nil
-		}
-		ms, isStr := m.(string)
-		if _, member := geometryManifoldValues[ms]; !isStr || !member {
-			return newETErr(
-				CodeGeometryManifoldInvalid,
-				fmt.Sprintf("%s: `%s` carries manifold %#v, not a member of the closed set {planar, spherical, geodesic}. The manifold enum is enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter substituted into this scalar field must be bound to one of the closed-set literals.", p, op, m),
-			)
-		}
-		return nil
-	})
-}
-
 // expressionTemplatesSkip is the skip-set the §9.6.4 expanded-form validators
 // pass to walkJSONTreeSkipping so they do NOT descend into pre-substitution
 // `expression_templates` bodies (which may legally carry parameter names in
@@ -1411,12 +1356,9 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 	// `apply_expression_template` op need no rewriting (strip is a no-op).
 	if !hasTemplateMachinery(view) {
 		stripExpressionTemplates(view)
-		// No expansion to run, but the §9.6.4 expanded-form validators still
-		// apply — the raw tree IS the expanded form (esm-spec §4.3.2 makearray
-		// bounds + geometry manifolds).
-		if err := validateGeometryManifolds(view, ""); err != nil {
-			return err
-		}
+		// No expansion to run, but the §9.6.4 expanded-form validator still
+		// applies — the raw tree IS the expanded form (esm-spec §4.3.2 makearray
+		// bounds).
 		return validateMakearrayRegions(view, "")
 	}
 	// The consuming document's merged index_sets registry (post-§9.7.5): the
@@ -1526,14 +1468,9 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 	// references are errors — already checked per component / per transform by
 	// checkSurvivingRefs. No global "no apply ops remain" gate.
 	//
-	// Validation discharge (esm-spec §9.6.9): the geometry-manifold check is
-	// per-instantiation (a `manifold` may be a template param), so it descends
-	// through surviving references' single-instantiation expansions, memoized.
-	// Region bounds cannot carry template params, so the makearray check runs
-	// on the reference-preserving tree AND the retained folded template bodies.
-	if err := validateGeometryManifoldsRefaware(view, registries); err != nil {
-		return err
-	}
+	// Validation discharge (esm-spec §9.6.9): region bounds cannot carry
+	// template params, so the makearray check runs on the reference-preserving
+	// tree AND the retained folded template bodies.
 	if err := validateMakearrayRegions(view, ""); err != nil {
 		return err
 	}

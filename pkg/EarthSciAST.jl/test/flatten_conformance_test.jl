@@ -406,7 +406,6 @@ function _fc_record(flat)
             ],
         ),
         "index_sets" => String[k for k in keys(flat.index_sets)],
-        "function_tables" => String[k for k in keys(flat.function_tables)],
         "template_registry" => String[String(k) for k in keys(flat.template_registry)],
         "field_ics" => [
             Dict{String, Any}("state" => st, "expr" => to_ascii(ex))
@@ -530,7 +529,7 @@ end
         end
         for key in (
                 "algebraic_variables", "brownian_parameters", "discrete_parameters",
-                "index_sets", "function_tables", "template_registry",
+                "index_sets", "template_registry",
             )
             _fc_compare(id, key) || continue
             @test (id, key, act[key]) == (id, key, exp[key])
@@ -910,7 +909,7 @@ end
         # strands it as an unknown nothing defines. Only the DEPENDENT variable
         # is rewritten: `T.w` is a parameter of B and keeps its name.
         doc = """
-        {"esm": "1.0.0",
+        {"esm": "2.0.0",
          "metadata": {"name": "TranslateMatch",
                       "description": "operator_compose across differently-named states",
                       "authors": ["EarthSciAST test suite"],
@@ -952,7 +951,7 @@ end
         # not one ever matched. The map missed, the bare-name fallback searched A
         # for B's SHORT name and missed too, and the entry silently no-op'd.
         doc(k, v) = """
-        {"esm": "1.0.0",
+        {"esm": "2.0.0",
          "metadata": {"name": "TranslateSpelling",
                       "description": "bare vs scoped translate endpoints",
                       "authors": ["EarthSciAST test suite"],
@@ -985,7 +984,7 @@ end
         # one broken system for another. `C.flux` below is exactly that third
         # party, and its reference must follow the quantity to `A.x`.
         doc = """
-        {"esm": "1.0.0",
+        {"esm": "2.0.0",
          "metadata": {"name": "RetargetDocumentWide",
                       "description": "a third system references the merged-away name",
                       "authors": ["EarthSciAST test suite"],
@@ -1095,7 +1094,7 @@ end
         # `(rhs * scale) + advection` for the other; under the rule both must
         # flatten identically.
         doc(order) = """
-        {"esm": "1.0.0",
+        {"esm": "2.0.0",
          "metadata": {"name": "ResolutionOrder",
                       "description": "same edges, two declaration orders",
                       "authors": ["EarthSciAST test suite"],
@@ -1203,7 +1202,7 @@ end
         # has been migrated to the §10.4 `variable_map` spelling, so the ruling
         # would otherwise have lost its only test.
         doc = """
-        {"esm": "1.0.0",
+        {"esm": "2.0.0",
          "metadata": {"name": "MultiplicativeNoTendency",
                       "description": "multiplicative onto a parameter",
                       "authors": ["EarthSciAST test suite"],

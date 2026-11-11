@@ -141,18 +141,6 @@ test = [
     # Property-based / fuzz testing (gt-72z)
     "hypothesis>=6.0",
 ]
-# Conservative-regridding geometry kernel (RFC semiring-faq-unified-ir §8.1 /
-# Appendix B.2; bead ess-my4.4.4). The `intersect_polygon` leaf's spherical /
-# geodesic manifolds clip on the sphere via `spherely` (vectorized S2 bindings
-# over s2geography). `spherely` is PRE-1.0 — its Python API still moves between
-# releases — so it is PINNED here and imported lazily by
-# `earthsci_ast.geometry`; the stable surface beneath it is the
-# s2geography / s2geometry C++ API. Track spherely releases and bump this pin
-# deliberately. The `planar` manifold needs no backend (numpy-only
-# Sutherland–Hodgman), so the rest of the toolkit never requires this extra.
-geometry = [
-    "spherely==0.1.1",
-]
 [tool.setuptools.packages.find]
 where = ["src"]
 

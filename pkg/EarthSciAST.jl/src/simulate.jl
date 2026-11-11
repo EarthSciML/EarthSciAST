@@ -137,15 +137,18 @@ end
 # esm-libraries-spec §8.1: a library MUST reject a document whose major version
 # it does not implement. Python and Rust refuse it at load; here it is refused at
 # the build, before a document of another major is run as if it were this one.
+# Major 1 is implemented too: a 1.x document that uses none of the constructs
+# 2.0.0 removed means the same thing under 2.0.0 (a removed one is refused by
+# name at load, `removed_op`), so the major version alone never refuses it.
 function _refuse_unsupported_major_version(version)
     m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(version))
     m === nothing && return nothing
     supported = parse(Int, match(r"^(\d+)\.", SCHEMA_VERSION).captures[1])
     major = parse(Int, m.captures[1])
-    major == supported || throw(
+    (major == supported || major == 1) || throw(
         ParseError(
-            "Unsupported major version $major. This library supports major version " *
-                "$supported only."
+            "Unsupported major version $major. This library supports major versions " *
+                "1, $supported."
         )
     )
     return nothing
@@ -313,14 +316,6 @@ function _prepare_run_doc(
         _refuse_flat_events(input)
         _refuse_flat_wiener_noise(input)
         _refuse_flat_symbolic_updates(input)
-        # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
-        # the one point every input kind (path, native Dict, EsmFile,
-        # already-flattened system) has funnelled into, and the first point
-        # inside a BUILD. Not at load: §9.5.4 requires the authored form to
-        # round-trip, and `save` re-serializes the very image `load` produced.
-        # First in the block, so the shape transforms below see the closed-
-        # function tree rather than an op they would have to know about.
-        input = lower_table_lookups(input)
         renames_out === nothing ||
             merge!(renames_out, input.metadata.merged_variable_renames)
         # The last point the per-term provenance (`equation_contributions`) is
@@ -2349,8 +2344,8 @@ function _observed_field_impl(
         end
     end
     if fld === nothing
-        # MATERIALIZED observeds. A body carrying a geometry leaf
-        # (`polygon_intersection_area`, `intersect_polygon`) is materialized at
+        # MATERIALIZED observeds. A build-once body (an overlap-area weight, a
+        # gated reduction) is materialized at
         # SETUP into `insp.setup_arrays` rather than left as a build-time
         # observed — and so, transitively, is everything downstream of it, since
         # a setup array is a build constant and its readers fold against it.

@@ -220,8 +220,8 @@ fn serialize_canonical_eps<S: serde::Serializer>(
 /// inline value written in canonical-number form (§5.5.3.1 rule 1). Every
 /// number at any depth (nested arrays, and the objects a `bc` value may hold)
 /// goes through [`serialize_canonical_f64`], so `[100.0, 0.5]` is written
-/// `[100,0.5]` whether it was parsed from a document or built in code (a
-/// lowered `table_lookup`), as the Julia binding writes it. The value in
+/// `[100,0.5]` whether it was parsed from a document or built in code, as the
+/// Julia binding writes it. The value in
 /// memory is left as it was parsed or built.
 fn serialize_canonical_value<S: serde::Serializer>(
     value: &Option<serde_json::Value>,
@@ -366,18 +366,18 @@ pub enum RangeSpec {
         of: Vec<String>,
     },
     /// A resolved **derived** (FAQ-materialized) inner range (RFC
-    /// `semiring-faq-unified-ir` §5.5 / §8.1): the lower bound is implicitly `1`
-    /// and the upper bound is the data-dependent vertex count of the ring its
-    /// producing FAQ node materialized at runtime, looked up by that node's id
-    /// (`from_faq`). Produced only by [`crate::faq::resolve_aggregate_ranges`]
+    /// `semiring-faq-unified-ir` §5.5): the lower bound is implicitly `1`
+    /// and the upper bound is the data-dependent member count its producing FAQ
+    /// node materialized, looked up by that node's id (`from_faq`) in the
+    /// extents the evaluation is handed. Produced only by [`crate::faq::resolve_aggregate_ranges`]
     /// on the simulation clone (it bakes the producer's id into the range so the
     /// evaluator needs no registry); like [`RangeSpec::RaggedDyn`] it is never
     /// authored in or serialized back to a file, so it appears **last** in this
     /// untagged enum (no authored range carries a `from_faq` field, so existing
     /// `[lo,hi]` / `{from}` inputs still parse to `Interval` / `IndexSetRef`).
     DerivedDyn {
-        /// FAQ producer node id (the `intersect_polygon` clip's `id`) whose
-        /// materialized overlap ring sizes this contraction at eval time.
+        /// FAQ producer node id whose materialized member count sizes this
+        /// contraction at eval time.
         from_faq: String,
     },
 }
@@ -690,21 +690,12 @@ pub struct ExpressionNode {
     #[serde(default, rename = "fn", skip_serializing_if = "Option::is_none")]
     pub broadcast_fn: Option<String>,
 
-    /// For the `fn` op: dotted module path of the closed-registry function to
-    /// invoke (esm-spec §4.4 / §9.2). Also used by the `enum` op (§4.5) when
-    /// authors prefer a named-form `name`/symbol pair, though the canonical
-    /// encoding for `enum` is positional `args`.
+    /// For the `apply_expression_template` op (esm-spec §9.6): the name of the
+    /// template to apply. Also used by the `enum` op (§4.5) when authors prefer
+    /// a named-form `name`/symbol pair, though the canonical encoding for
+    /// `enum` is positional `args`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-
-    /// Documentary relation tag for a `skolem` node (e.g. `"edge"`, `"bin"`,
-    /// `"pair"`). Purely a human-readable annotation of which relation the
-    /// invented key belongs to — it is NOT a key component and is ignored by
-    /// value invention. Kept out of `args` so a mistyped key component can never
-    /// masquerade as a tag (and vice versa). A scalar, so it is deliberately not
-    /// traversed by `for_each_child`/`map_children`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
 
     /// For the `const` op: inline literal value (any JSON number, integer,
     /// or nested array thereof). `args` MUST be empty when this is set.
@@ -724,45 +715,13 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub units: Option<String>,
 
-    /// For the `table_lookup` op (esm-spec §9.5, v0.4.0): the
-    /// `function_tables` entry id this node references. ``args`` MUST be
-    /// empty for a `table_lookup` node — the per-axis input expressions live
-    /// in `axes`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub table: Option<String>,
-
-    /// For the `table_lookup` op: per-axis input-coordinate expression map.
-    /// Keys MUST match the axis names declared on the referenced
-    /// `FunctionTable`; values are arbitrary scalar `Expr`s. Stored under
-    /// the JSON key `axes` on the wire.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub axes: Option<HashMap<String, Expr>>,
-
-    /// For the `table_lookup` op: which output of a multi-output table to
-    /// return. Either a non-negative integer index (0-based) or a string
-    /// (entry of the table's `outputs` list). Single-output tables MAY omit
-    /// this (defaults to 0 at lowering time).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output: Option<serde_json::Value>,
-
     /// Stable node id for value-invention (M3 / RFC semiring-faq-unified-ir
-    /// §5.2, §8.1). A node that produces a data-dependent index set — a
-    /// `distinct` aggregate, or an `intersect_polygon` clip whose overlap ring
-    /// has data-dependent length — carries an `id`, and an `index_sets` entry
-    /// with `kind:"derived"` references it via `from_faq`. Preserved through
+    /// §5.2). A node that produces a data-dependent index set — a `distinct`
+    /// aggregate — carries an `id`, and an `index_sets` entry with
+    /// `kind:"derived"` references it via `from_faq`. Preserved through
     /// canonicalization so the producer↔derived-set linkage survives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-
-    /// Geometry manifold for the `intersect_polygon` op — one of `planar`,
-    /// `spherical`, or `geodesic` (RFC semiring-faq-unified-ir §8.1;
-    /// CONFORMANCE_SPEC.md §5.8.4). REQUIRED on every `intersect_polygon` node
-    /// (the schema gives it no default): the geometric interpretation is part of
-    /// the op's contract — `spherical`/`geodesic` clip along great-circle edges,
-    /// `planar` along straight lon/lat edges — and two bindings may be compared
-    /// only under the same declared manifold.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub manifold: Option<String>,
 
     /// For the `apply_expression_template` op (esm-spec §9.7): template
     /// parameter → argument-expression map. Keys are the template's formal
@@ -770,11 +729,6 @@ pub struct ExpressionNode {
     /// instantiation. Rendered in sorted-key order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bindings: Option<HashMap<String, Expr>>,
-
-    /// For the `argmin` / `argmax` arg-witness ops: the single output index
-    /// name the witness is reported over.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub arg: Option<String>,
 
     /// For the `faq` op: when `true`, contract over distinct key values
     /// only (RFC semiring-faq-unified-ir §5.3).
@@ -837,7 +791,7 @@ pub struct ExpressionNode {
 // field, forget a walker (or a key constant)" drift class is now impossible.
 //
 // Traversal order is CONTRACT (other crates depend on it): args, lower, upper,
-// expr, filter, values, axes (sorted key), key, bindings (sorted key).
+// expr, filter, values, key, bindings (sorted key).
 
 /// Child-field wire-shape tags for each [`EXPR_CHILD_FIELDS`] entry. The two
 /// array shapes (`Vec<Expr>` for `args`, `Option<Vec<Expr>>` for `values`) share
@@ -1007,8 +961,8 @@ macro_rules! expr_children {
         impl ExpressionNode {
             /// Visit every expression-bearing child of this node, in the
             /// contractual order: `args` first, then the scalar sidecars `lower`,
-            /// `upper`, `expr`, `filter`, then `values`, then `axes` entries
-            /// sorted by key, then `key`, then `bindings` entries sorted by key.
+            /// `upper`, `expr`, `filter`, then `values`, then `key`, then
+            /// `bindings` entries sorted by key.
             ///
             /// This is the ONE canonical definition of which fields carry child
             /// `Expr`s. Every AST traversal in this crate must go through this
@@ -1017,10 +971,10 @@ macro_rules! expr_children {
             /// than enumerating fields by hand — hand-rolled walkers historically
             /// each covered a different subset and missed variables hidden in
             /// aggregate bodies, `filter` predicates, integral bounds,
-            /// `table_lookup` axes, aggregate `key`s, or template `bindings`.
+            /// aggregate `key`s, or template `bindings`.
             ///
-            /// Note: this enumerates children only. `output_idx`, `ranges`,
-            /// `int_var` (and `arg`) *bind* index symbols for the node's body;
+            /// Note: this enumerates children only. `output_idx`, `ranges` and
+            /// `int_var` *bind* index symbols for the node's body;
             /// callers that resolve variable names decide how to treat them.
             pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Expr)) {
                 $( expr_child_visit!(@each $shape, self, f, $field); )*
@@ -1047,8 +1001,8 @@ macro_rules! expr_children {
             /// This is the safe replacement for the
             /// `ExpressionNode { op, args, ..Default::default() }` rebuild
             /// pattern, which silently drops sidecar fields (`expr`, `filter`,
-            /// `values`, `regions`, `ranges`, …) and corrupts array / integral /
-            /// table nodes — see the corruption note on `crate::flatten`'s
+            /// `values`, `regions`, `ranges`, …) and corrupts array / integral
+            /// nodes — see the corruption note on `crate::flatten`'s
             /// variable substitution.
             pub fn map_children(&self, f: &mut impl FnMut(&Expr) -> Expr) -> ExpressionNode {
                 let mut out = self.clone();
@@ -1069,7 +1023,6 @@ expr_children! {
     expr: scalar,
     filter: scalar,
     values: opt_array,
-    axes: map,
     key: scalar,
     bindings: map,
 }
@@ -1130,7 +1083,7 @@ pub(crate) const EXPR_SCALAR_CHILD_KEYS: [&str; 5] = child_keys::<5>(CHILD_SCALA
 pub(crate) const EXPR_ARRAY_CHILD_KEYS: [&str; 2] = child_keys::<2>(CHILD_ARRAY);
 /// Name→child-`Expr` map slots (`Option<HashMap<String, Expr>>`), visited in
 /// sorted-key order.
-pub(crate) const EXPR_MAP_CHILD_KEYS: [&str; 2] = child_keys::<2>(CHILD_MAP);
+pub(crate) const EXPR_MAP_CHILD_KEYS: [&str; 1] = child_keys::<1>(CHILD_MAP);
 
 /// Pins the JSON-token → [`Expr`] variant mapping that the hand-written
 /// `Deserialize` impl performs, INCLUDING the corner cases where it has to
@@ -1190,7 +1143,7 @@ mod expr_deserialize_token_mapping_tests {
                 serde_json::json!({"op": "*", "args": [2, "k"]})
             );
         }
-        // Built in code (a lowered `table_lookup` holds `f64`s): same bytes.
+        // Built in code (holding `f64`s): same bytes.
         let built = Expr::operator(ExpressionNode {
             op: "const".to_string(),
             value: Some(serde_json::json!([100.0, 0.5])),
@@ -1307,12 +1260,12 @@ mod expr_deserialize_token_mapping_tests {
         // The nesting is the whole reason the untagged derive was expensive
         // (each level re-buffered its own subtree); make sure the streaming
         // impl still reaches children in `args`, the scalar slots, and the
-        // map slots.
+        // map slot.
         let src = r#"{
             "op":"faq","args":[],"output_idx":["i"],
             "expr":{"op":"*","args":[{"op":"-","args":["a",1]},2.0]},
             "filter":{"op":">","args":["i",0]},
-            "axes":{"z":{"op":"+","args":["b",3]}}
+            "bindings":{"z":{"op":"+","args":["b",3]}}
         }"#;
         let Expr::Operator(node) = parse(src).expect("nested fixture parses") else {
             panic!("expected an operator node");
@@ -1327,7 +1280,7 @@ mod expr_deserialize_token_mapping_tests {
         };
         assert_eq!(lhs.args, vec![Expr::Variable("a".into()), Expr::Integer(1)]);
         assert!(node.filter.is_some());
-        assert!(node.axes.as_ref().is_some_and(|m| m.contains_key("z")));
+        assert!(node.bindings.as_ref().is_some_and(|m| m.contains_key("z")));
     }
 
     #[test]
@@ -1359,7 +1312,7 @@ mod expr_child_spec_tests {
             EXPR_SCALAR_CHILD_KEYS,
             ["lower", "upper", "expr", "filter", "key"]
         );
-        assert_eq!(EXPR_MAP_CHILD_KEYS, ["axes", "bindings"]);
+        assert_eq!(EXPR_MAP_CHILD_KEYS, ["bindings"]);
 
         let bucketed =
             EXPR_ARRAY_CHILD_KEYS.len() + EXPR_SCALAR_CHILD_KEYS.len() + EXPR_MAP_CHILD_KEYS.len();
@@ -1369,7 +1322,7 @@ mod expr_child_spec_tests {
 
     /// Drift guard 2: `for_each_child` visits exactly one child per
     /// child-bearing field, in the CONTRACTUAL order (args, lower, upper, expr,
-    /// filter, values, axes sorted, key, bindings sorted). `any_child` and
+    /// filter, values, key, bindings sorted). `any_child` and
     /// `map_children` agree on the same set. Adding a child-bearing field without
     /// wiring it into the spec changes the visited sequence and fails here.
     #[test]
@@ -1385,10 +1338,6 @@ mod expr_child_spec_tests {
             key: Some(Box::new(Expr::Variable("key".into()))),
             ..Default::default()
         };
-        let mut axes = HashMap::new();
-        axes.insert("z_axis".to_string(), Expr::Variable("axes_z".into()));
-        axes.insert("a_axis".to_string(), Expr::Variable("axes_a".into()));
-        node.axes = Some(axes);
         let mut bindings = HashMap::new();
         bindings.insert("z_bind".to_string(), Expr::Variable("bind_z".into()));
         bindings.insert("a_bind".to_string(), Expr::Variable("bind_a".into()));
@@ -1403,9 +1352,8 @@ mod expr_child_spec_tests {
         assert_eq!(
             seen,
             vec![
-                "args0", "lower", "upper", "expr", "filter", "values0", "axes_a",
-                "axes_z", // axes: sorted by key
-                "key", "bind_a", "bind_z", // bindings: sorted by key
+                "args0", "lower", "upper", "expr", "filter", "values0", "key", "bind_a",
+                "bind_z", // bindings: sorted by key
             ]
         );
 

@@ -126,10 +126,9 @@ func TestAuditG3_SubstituteReachesSidecar(t *testing.T) {
 // --- G4: Flatten must not drop non-`args` fields on rebuild ------------------
 
 // The rebuild used to spell `ExprNode{Op, Args, Wrt, Dim}`, silently destroying
-// every other field — an event affect calling the closed-registry function
-// `datetime.year` came out of Flatten with its `name` GONE, i.e. an unnamed
-// function call.
-func TestAuditG4_FlattenPreservesFnName(t *testing.T) {
+// every other field — an event affect applying `broadcast` came out of Flatten
+// with its `fn` GONE, i.e. a broadcast of nothing.
+func TestAuditG4_FlattenPreservesBroadcastFn(t *testing.T) {
 	src := `{
 	  "esm":"1.1.0",
 	  "metadata":{"name":"g4"},
@@ -142,7 +141,7 @@ func TestAuditG4_FlattenPreservesFnName(t *testing.T) {
 	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":1.0}],
 	    "discrete_events":[{
 	      "trigger":{"type":"periodic","interval":1.0},
-	      "affects":[{"lhs":"yr","rhs":{"op":"fn","name":"datetime.year","args":["t_utc"]}}]
+	      "affects":[{"lhs":"yr","rhs":{"op":"broadcast","fn":"sin","args":["t_utc"]}}]
 	    }]}}}`
 
 	file, err := LoadString(src)
@@ -160,15 +159,15 @@ func TestAuditG4_FlattenPreservesFnName(t *testing.T) {
 	if len(ev.Affects) == 0 {
 		t.Fatal("expected the affect to survive Flatten")
 	}
-	rhs, err := SerializeExpression(ev.Affects[0].RHS)
+	rhs, err := SerializeExpressionCompact(ev.Affects[0].RHS)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(rhs, "datetime.year") {
-		t.Errorf("Flatten dropped the `fn` node's `name`, leaving an unnamed function call: %s", rhs)
+	if !strings.Contains(rhs, `"fn":"sin"`) {
+		t.Errorf("Flatten dropped the `broadcast` node's `fn`: %s", rhs)
 	}
 	if !strings.Contains(rhs, "M.t_utc") {
-		t.Errorf("Flatten failed to namespace the fn argument: %s", rhs)
+		t.Errorf("Flatten failed to namespace the broadcast argument: %s", rhs)
 	}
 }
 
@@ -464,18 +463,17 @@ func TestAuditG8_IDAndExpectCadenceRoundTrip(t *testing.T) {
 
 // --- G9: the canonical emitter's field gate is an allow-list ----------------
 
-// The gate used to be a hand-maintained DENY-list that omitted `label`, so a
-// skolem node's relation tag was silently dropped from the canonical JSON
-// instead of being rejected. It is now derived from the struct by reflection, so
-// it fails closed.
-func TestAuditG9_CanonicalRejectsNonEmissibleLabel(t *testing.T) {
-	expr, err := UnmarshalExpression([]byte(`{"op":"skolem","args":["a","b"],"label":"edge"}`))
+// The gate is derived from the struct by reflection, so a field the canonical
+// encoding has no slot for (here an open op's `attrs`) is rejected rather than
+// silently dropped from the canonical JSON.
+func TestAuditG9_CanonicalRejectsNonEmissibleField(t *testing.T) {
+	expr, err := UnmarshalExpression([]byte(`{"op":"godunov_hamiltonian","args":["a","b"],"attrs":{"scheme":"upwind"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	out, err := CanonicalJSON(expr)
 	if err == nil {
-		t.Fatalf("CanonicalJSON silently dropped `label` and emitted %s; want ErrCanonicalUnsupportedField", out)
+		t.Fatalf("CanonicalJSON silently dropped `attrs` and emitted %s; want ErrCanonicalUnsupportedField", out)
 	}
 	if !errors.Is(err, ErrCanonicalUnsupportedField) {
 		t.Errorf("error = %v, want ErrCanonicalUnsupportedField", err)
@@ -489,13 +487,13 @@ func TestAuditG9_CanonicalRejectsNonEmissibleLabel(t *testing.T) {
 // on the REWRITTEN tree, a non-emissible field on a `+`/`*`/`neg` node was
 // silently dropped before the gate could ever see it — so the fail-closed gate
 // was a fiction for exactly the most common operators. The gate now screens the
-// input tree, so a `label` is rejected wherever it appears, not just on the ops
+// input tree, so an `attrs` is rejected wherever it appears, not just on the ops
 // that happen to survive canonicalization unrewritten.
 func TestAuditG9_GateSurvivesTheAlgebraicRewrites(t *testing.T) {
 	for _, src := range []string{
-		`{"op":"*","args":["a",2.0],"label":"edge"}`,
-		`{"op":"+","args":["a",0],"label":"edge"}`,
-		`{"op":"neg","args":["a"],"label":"edge"}`,
+		`{"op":"*","args":["a",2.0],"attrs":{"k":"edge"}}`,
+		`{"op":"+","args":["a",0],"attrs":{"k":"edge"}}`,
+		`{"op":"neg","args":["a"],"attrs":{"k":"edge"}}`,
 	} {
 		expr, err := UnmarshalExpression([]byte(src))
 		if err != nil {
@@ -503,7 +501,7 @@ func TestAuditG9_GateSurvivesTheAlgebraicRewrites(t *testing.T) {
 		}
 		out, err := CanonicalJSON(expr)
 		if err == nil {
-			t.Errorf("%s: CanonicalJSON silently dropped `label` and emitted %s; want a rejection", src, out)
+			t.Errorf("%s: CanonicalJSON silently dropped `attrs` and emitted %s; want a rejection", src, out)
 			continue
 		}
 		if !errors.Is(err, ErrCanonicalUnsupportedField) {
@@ -821,9 +819,8 @@ func TestAuditT4_UndeterminableFindingsStayWarnings(t *testing.T) {
 	//
 	//   - `x ^ alpha`  — a SYMBOLIC exponent: the dimension depends on alpha's
 	//                    runtime VALUE.
-	//   - `table_lookup` — an operator the units engine has no rule for. It is a
-	//                    well-formed lookup into a declared table, because load and
-	//                    validate() check every lookup (esm-spec §9.5.5, ruling Q-112).
+	//   - an open rewrite-target op — an operator the units engine has no rule
+	//                    for.
 	//
 	// Built as structs (not JSON) so the case is about the units policy and not
 	// about satisfying the schema's shape rules for these ops.
@@ -846,17 +843,11 @@ func TestAuditT4_UndeterminableFindingsStayWarnings(t *testing.T) {
 					},
 				},
 			},
-			FunctionTables: map[string]FunctionTable{
-				"T": {Axes: []FunctionTableAxis{{Name: "x", Values: []float64{0, 1}}},
-					Data: []any{1.0, 2.0}},
-			},
 		}
 	}
-	lookupTable := "T"
 	cases := map[string]Expression{
 		"symbolic_exponent": ExprNode{Op: "^", Args: []any{"x", "alpha"}},
-		"unknown_op": ExprNode{Op: OpTableLookup, Table: &lookupTable,
-			TableAxes: map[string]Expression{"x": "x"}, Args: []any{}},
+		"unknown_op":        ExprNode{Op: "godunov_hamiltonian", Args: []any{"x"}},
 	}
 	for label, expr := range cases {
 		t.Run(label, func(t *testing.T) {

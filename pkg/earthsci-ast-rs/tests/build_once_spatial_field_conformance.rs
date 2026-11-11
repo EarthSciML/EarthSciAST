@@ -3,8 +3,8 @@
 //! `tests/conformance/build_once_spatial_field/` (CONFORMANCE_SPEC.md §5.12).
 //!
 //! Model `Field` declares three const polygon cells (`poly`), derives a per-cell
-//! `area[c] = polygon_intersection_area(poly[c], poly[c], planar) = [10, 30, 60]`
-//! (a geometry-leaf aggregate), takes a build-once centered first difference
+//! `area[c] = overlap_area_planar(poly[c], poly[c]) = [10, 30, 60]`
+//! (the `lib/geometry.esm` template in an aggregate), takes a build-once centered first difference
 //! authored as the periodic `makearray` stencil a discretization rule lowers `D`
 //! to (`darea = [-15, 25, -10]`), and integrates the per-cell ODE
 //! `D(u[c]) = darea[c] - u[c]`, u(0)=0. The forcing is CONST, so
@@ -14,7 +14,7 @@
 //! resolves the build-once `area`/`darea` observeds at the RHS through the same
 //! per-cell array pipeline the ODE uses for `index(darea, c)` — so the numeric
 //! result matches the Julia setup-materialized path. This suite drives the
-//! composed `polygon_intersection_area` + `makearray` + array-ODE path
+//! composed overlap-area + `makearray` + array-ODE path
 //! end-to-end through [`earthsci_ast::simulate`] and checks the trajectory
 //! against the analytic golden within the manifest's trajectory band.
 
@@ -139,9 +139,7 @@ fn build_once_spatial_field_trajectory_matches_golden() {
             p: HashMap::new().clone(),
             u0: HashMap::new().clone(),
             rhs: earthsci_ast::Rhs::Always,
-            // The build-once spatial field is a `polygon_intersection_area` regrid,
-            // which has no tape lowering, so `native` refuses it by NAME (API_SPEC
-            // §5.8).
+            // The reference evaluator's answer, against the analytic golden.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },

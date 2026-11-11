@@ -17,7 +17,7 @@
       "equations": [
         {
           "lhs": { "op": "D", "args": ["__proto__"], "wrt": "t" },
-          "rhs": { "op": "fn", "name": "constructor.toString", "args": [] }
+          "rhs": { "op": "apply_expression_template", "name": "constructor.toString", "args": [], "bindings": {} }
         }
       ]
     }

@@ -1,41 +1,38 @@
-# Closed Function Registry — cross-binding conformance fixtures
+# Closed-function scenarios — reference data for the standard-library templates
 
-Fixtures pinning the bit-exact-where-possible semantics of the v0.3.0 closed
-function registry (esm-spec.md §9.2 / `docs/rfcs/closed-function-registry.md`).
-
-Every binding (Julia, Rust, Python, Go, TypeScript) MUST exercise these
-fixtures from its test harness and assert per-element agreement with each
-`expected.json` reference output, within the per-function tolerance declared
-in esm-spec.md §9.2.
+At esm 2.0.0 the `fn` op and its closed function registry were removed; the
+`datetime.*` and `interp.*` functions are now the pure-AST templates of
+`lib/calendar.esm` and `lib/interp.esm` (`esm:std/calendar.esm`,
+`esm:std/interp.esm`). The `expected.json` files here stay as the pinned
+`binary64` reference values those templates must reproduce (esm-spec 1.x §9.2
+pinned them for the functions), and each directory's `template.esm` applies the
+template to a subset of the scenarios. 1.x documents that called the functions
+are converted with `python -m earthsci_ast.migrate`.
 
 ## Layout
 
 ```
 tests/closed_functions/
 ├── datetime/
-│   ├── year/                 (datetime.year — proleptic-Gregorian year)
-│   │   ├── canonical.esm     (trivial ODE invoking the function from RHS)
+│   ├── year/                 (year — proleptic-Gregorian year)
 │   │   ├── expected.json     (input vectors + expected outputs + tolerance)
 │   │   └── template.esm      (the lib/calendar.esm template on a subset of the scenarios)
-│   ├── month/                (datetime.month; each datetime/<fn>/ has the same three files)
-│   ├── day/                  (datetime.day)
-│   ├── hour/                 (datetime.hour)
-│   ├── minute/               (datetime.minute)
-│   ├── second/               (datetime.second)
-│   ├── day_of_year/          (datetime.day_of_year)
-│   ├── julian_day/           (datetime.julian_day)
-│   └── is_leap_year/         (datetime.is_leap_year)
+│   ├── month/                (month; each datetime/<fn>/ has the same two files)
+│   ├── day/                  (day)
+│   ├── hour/                 (hour)
+│   ├── minute/               (minute)
+│   ├── second/               (second)
+│   ├── day_of_year/          (day_of_year)
+│   ├── julian_day/           (julian_day)
+│   └── is_leap_year/         (is_leap_year)
 └── interp/
-    ├── searchsorted/         (interp.searchsorted)
-    │   ├── canonical.esm
+    ├── searchsorted/         (searchsorted)
     │   ├── expected.json
     │   └── template.esm      (the lib/interp.esm template on a subset of the scenarios)
-    ├── linear/               (interp.linear — 1-D tensor interpolation)
-    │   ├── canonical.esm
+    ├── linear/               (linear — 1-D tensor interpolation)
     │   ├── expected.json
     │   └── template.esm
-    └── bilinear/             (interp.bilinear — 2-D tensor interpolation)
-        ├── canonical.esm
+    └── bilinear/             (bilinear — 2-D tensor interpolation)
         ├── expected.json
         └── template.esm
 ```
@@ -45,20 +42,28 @@ templates `searchsorted`, `linear`, `bilinear`) and applies the template to
 scenarios of the sibling `expected.json`, asserting each value exactly in an
 inline test. The `interp_templates` conformance tier
 (`tests/conformance/interp_templates/`) runs those documents in every binding
-with an inline-test runner. Each binding's harness additionally runs every
-success scenario, NaN queries included, through the expanded template and
-asserts the same bits as the `fn` form.
+with an inline-test runner.
 
 Each `datetime/<fn>/template.esm` likewise imports `lib/calendar.esm` (the nine
 pure-AST templates `year`, `month`, `day`, `hour`, `minute`, `second`,
 `day_of_year`, `julian_day`, `is_leap_year`, each of one parameter `t`) and
 applies the template to scenarios of the sibling `expected.json` inside the
 templates' domain `|t| < 2^52` s; the `datetime_templates` tier
-(`tests/conformance/datetime_templates/`) runs them. Each binding's harness runs
-every scenario, the error scenarios included, through the expanded template:
-inside the domain it must give the `fn` form's bits, outside it (the two
-int32-year success scenarios, the `closed_function_overflow` scenarios) NaN.
-Julia, Python and Rust check the value; TypeScript and Go check the expansion.
+(`tests/conformance/datetime_templates/`) runs them. Outside that domain (the
+two int32-year success scenarios, the `closed_function_overflow` scenarios) the
+templates return NaN.
+
+The full scenario sets, NaN queries and out-of-domain instants included, are
+evaluated against the template contract of esm-spec §9.8 by three harnesses:
+Python `pkg/earthsci-ast-py/tests/test_template_scenarios.py` (scalar
+interpreter), Julia `pkg/EarthSciAST.jl/test/template_scenarios_test.jl` and
+Rust `pkg/earthsci-ast-rs/tests/template_scenarios.rs` (interpreter and
+native). Every interp success scenario must match bit for bit. Every datetime
+instant, `error_scenarios` included, must give the scenario's `expected` inside
+`|t| < 2^52` s and NaN outside it, and the domain edges `±(2^52 − 1)` and
+`±(2^52 − 0.5)` are checked against an exact integer calendar computation in
+the test, `±2^52` against NaN. Go and TypeScript cannot evaluate a `faq`, so
+the Go suite checks the expansion of every scenario instead.
 
 ## `expected.json` schema
 
@@ -89,27 +94,20 @@ written as the string `"NaN"`, `"Inf"` or `"-Inf"`.
 
 ## What bindings MUST do
 
-For each `expected.json`:
-
-1. Parse `canonical.esm` (this exercises the parser's `fn`-op handling).
-2. For each scenario in `scenarios`, evaluate the named function with the
-   given inputs and assert the result agrees with `expected` within the
-   declared `tolerance`.
-   For each scenario in `error_scenarios` of an `interp.*` function, build
-   the `fn` node with the inputs as `const` arguments and run it through the
-   binding's LOAD-time argument check (the one `load` and `validate()` run on
-   every `fn` call, esm-spec §9.2, ruling Q-106), asserting
-   `expected_error_code`. The cases JSON can express also live as documents
-   under `tests/invalid/closed_fn_*.esm`; the ones here that need a NaN stay
-   in this in-memory form.
-3. Report per-binding pass/fail in the cross-language harness
-   (`scripts/test-conformance.sh`).
-
-A binding that fails any fixture fails CI (esm-spec §9.4).
+For each `expected.json`, run every success scenario through the expanded
+template and assert the result agrees with `expected` within the declared
+`tolerance` (the `interp_templates` and `datetime_templates` tiers run the
+`template.esm` documents, which hold the scenarios JSON can write).
+The `error_scenarios` record the checks the removed `fn` op made on its
+arguments; the templates do not repeat them. The datetime ones are instants
+outside the templates' domain and must give NaN; the interp ones are invalid
+tables (non-monotonic axis, NaN in an axis, length mismatch), for which the
+templates have no contract, so a binding does not run them.
 
 ## Boundary-case coverage
 
-The scenario sets cover the boundary semantics pinned in esm-spec §9.2:
+The scenario sets cover the boundary semantics esm-spec 1.x §9.2 pinned for
+the functions:
 
 - **Leap-year edges**: 2000 (div by 400), 2100 (div by 100, not 400),
   2400 (div by 400) — the trio that catches naïve `year % 4` implementations.
@@ -117,19 +115,20 @@ The scenario sets cover the boundary semantics pinned in esm-spec §9.2:
   rollover (especially day 366 in leap years).
 - **Pre-epoch (negative `t_utc`)**: 1969-12-31, 1900-01-01 — extends the
   proleptic-Gregorian calendar backwards without modification.
-- **Sub-second / fractional days**: julian_day is the only registry entry
+- **Sub-second / fractional days**: julian_day is the only calendar field
   with fractional output; its scenarios pin the noon-UTC offset.
 - **julian_day before -4800-03-01**: the standard Julian Date, where the
   informative Fliegel–van Flandern formula is off by +1, -1 or -2 days, and
   around Julian Date 0.
-- **Overflow**: every `datetime.*` function raises `closed_function_overflow`
-  one instant past each end of the Int32 year range and for NaN / ±Inf.
+- **Overflow**: the 1.x `datetime.*` functions raised `closed_function_overflow`
+  one instant past each end of the Int32 year range and for NaN / ±Inf; the
+  templates return NaN there.
   The `datetime.*` fixtures are generated by `scripts/gen-datetime-fixtures.py`
   (exact rational arithmetic; `--check` in CI).
 - **searchsorted**: empty array (`xs = []` returns 1, ruling Q-108), single element, duplicates, exact-on-
   boundary, x ≤ xs[1], x > xs[N], NaN x, NaN-in-xs (error), non-monotonic
   xs (error).
-- **interp.linear / interp.bilinear**: exact-at-knot (every position),
+- **linear / bilinear**: exact-at-knot (every position),
   midpoint and quarter-point blends, below/above each axis (extrapolate-
   flat), NaN x or y (NaN out), minimal-size grid (N=2 / 2x2), non-uniform
   axis spacing. Load-time error scenarios cover non-monotonic axis,

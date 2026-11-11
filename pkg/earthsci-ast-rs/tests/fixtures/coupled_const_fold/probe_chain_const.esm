@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "ProbeChainConst",
     "description": "Issue #207, the FAILING spelling: top-level `ref` mounts chained by `coupling.variable_map` `param_to_var`, whose tail gathers from a table declared as a bare `const` array at an index computed from the coupled-in temperature.\n\nThe chain is Sun.T_surface -> Atm.T_in -> (Atm.T) -> Rtrn.T, so `Rtrn.T` is 163 in the coupled system and the gather is totplnk[4] = 40. `Rtrn.T`'s own declared default is 161 (which would gather 20) and an unbound read is 0 (which indexes -159 and raises E_TREEWALK_CONSTARRAY_OOB) — the three outcomes are distinguishable by value.",

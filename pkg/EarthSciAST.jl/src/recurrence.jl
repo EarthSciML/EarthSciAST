@@ -544,10 +544,9 @@ function _walk_self_reference!(
             _walk_self_reference!(v, name, indexed, bare)
         end
     end
-    for m in (e.table_axes, e.bindings)
-        m === nothing && continue
-        for k in sort!(collect(keys(m)))
-            _walk_self_reference!(m[k], name, indexed, bare)
+    if e.bindings !== nothing
+        for k in sort!(collect(keys(e.bindings)))
+            _walk_self_reference!(e.bindings[k], name, indexed, bare)
         end
     end
     if e.ranges !== nothing

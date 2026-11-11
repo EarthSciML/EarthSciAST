@@ -1,14 +1,16 @@
-"""Build-time relational engine — the five value-invention primitives.
+"""Build-time relational engine — the value-invention primitives.
 
 The unified-IR value-invention pass (RFC ``semiring-faq-unified-ir`` §5.5, §6.1)
 runs these **once at setup**, off the per-timestep hot path, to materialise the
 data-derived index sets and dense IDs the numeric stencil then consumes:
 
-1. :func:`distinct`        — deduplicate tuples (unique mesh edges from face→vertex lists)
+1. :func:`distinct`        — deduplicate keys (unique mesh edges from face→vertex lists)
 2. :func:`equijoin`        — value-equality equi-join (connectivity inversion, *edges of cell i*)
-3. :func:`skolem` / :func:`skolem_edge` — deterministic content-addressed key from a tuple
-4. :func:`rank`            — dense integer renumbering of a distinct set
-5. :func:`group_aggregate` — group-by + associative/commutative semiring ``⊕`` (sum/min/max/…)
+3. :func:`group_aggregate` — group-by + associative/commutative semiring ``⊕`` (sum/min/max/…)
+
+A key is a scalar integer: the ``pair_key`` / ``edge_key`` templates of
+``lib/relational.esm`` encode a tuple as one integer, and a key's dense position
+in the distinct set is the ``rank_of`` / ``rank_of_set`` template.
 
 Determinism (the reason this module exists)
 ===========================================
@@ -16,7 +18,7 @@ Determinism (the reason this module exists)
 ``earthsci-ast`` is **parallel native implementations** (Julia, Rust,
 Python) verified by a conformance suite, not one core behind FFI. So the hard
 problem is **bit-for-bit determinism across the bindings**: identical deduped
-sets, identical dense IDs, identical skolem keys. The governing principle
+sets, identical dense IDs. The governing principle
 (``CONFORMANCE_SPEC.md`` §5.5 = RFC §5.7) is that *every emitted set, key, and
 dense ID is a pure function of a defined total order over tuples* — **no
 observable output may depend on ``set``/``dict`` iteration order or on a
@@ -32,12 +34,6 @@ Concretely, per ``CONFORMANCE_SPEC.md`` §5.5.1:
   keys** (rule 1) — rejected at the boundary by :class:`FloatKeyError`.
 - **distinct** — sort by the total order, drop *adjacent* duplicates; output
   order *is* sorted order, never first-seen / ``set`` order (rule 2).
-- **rank** — dense IDs by position in the sorted distinct sequence. Python emits
-  **0-based** (the canonical numbering; ``CONFORMANCE_SPEC.md`` §5.5.1 rule 3
-  pins Julia 1-based, Rust/Python 0-based).
-- **skolem** — a canonical *tuple*, never a hash (rule 4): sort components for a
-  symmetric relation (undirected edge ``(min, max)``), preserve order for a
-  directed one.
 - **join / group-by** — hashing may *bucket* only; the result is emitted **sorted
   by the canonical key** (rule 5). The semiring ``⊕`` must be associative +
   commutative; for a floating-point ``⊕`` the per-bucket reduction is done
@@ -68,7 +64,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
 from typing import Any, Callable
 
 import numpy as np
@@ -78,11 +73,7 @@ from .errors import EarthSciAstError
 
 __all__ = [
     "FloatKeyError",
-    "skolem",
-    "skolem_edge",
     "distinct",
-    "rank",
-    "Ranking",
     "equijoin",
     "group_aggregate",
     "canonical_index_set_json",
@@ -139,38 +130,6 @@ def _is_int_scalar(value: Any) -> bool:
     # ``bool`` is an ``int`` subclass but routes through the categorical path so
     # NumPy never coerces a True/False key into 1/0 silently.
     return isinstance(value, (int, np.integer)) and not isinstance(value, bool)
-
-
-# ── Primitive 3: skolem (canonical-tuple content-addressed key) ─────────────
-
-
-def skolem_edge(a: Any, b: Any) -> tuple[Any, Any]:
-    """Canonical key for an **undirected** pair (a symmetric relation):
-    ``(min(a, b), max(a, b))``.
-
-    The deterministic, content-addressed identity of a mesh edge (RFC §5.5
-    generalises ESI ``pack``). It is **not** a hash (rule 4) — the tuple itself
-    is the key, so the dense ID later assigned by :func:`rank` is reproducible
-    across bindings. ``a`` and ``b`` must be order-comparable and non-float.
-    """
-    _assert_key((a, b))
-    return (a, b) if a <= b else (b, a)
-
-
-def skolem(components: Sequence[Any], *, symmetric: bool = False) -> tuple[Any, ...]:
-    """Canonical-tuple Skolem key (rule 4).
-
-    For a ``symmetric`` relation the components are sorted (generalising
-    :func:`skolem_edge` to arity > 2); for a directed relation the order is
-    preserved, so ``(1, 2)`` and ``(2, 1)`` stay distinct. Never a ``hash()`` —
-    the tuple *is* the content-addressed key. The dense ID then comes from
-    :func:`rank`.
-    """
-    key = tuple(components)
-    _assert_key(key)
-    if not symmetric:
-        return key
-    return tuple(sorted(key))
 
 
 # ── Primitive 1: distinct (sort + drop adjacent duplicates) ─────────────────
@@ -235,43 +194,6 @@ def _distinct_numpy_int(items: list[Any]) -> list[Any] | None:
     return None
 
 
-# ── Primitive 4: rank (dense integer renumbering) ───────────────────────────
-
-
-@dataclass
-class Ranking:
-    """Result of :func:`rank`.
-
-    - ``order`` — the distinct tuples in §5.5.1 total order.
-    - ``ids``   — ``ids[t]`` is the dense integer assigned to tuple ``t``.
-    - ``base``  — the emission base. Python emits **0-based** (the canonical
-      numbering; ``CONFORMANCE_SPEC.md`` §5.5.1 rule 3). The conformance adapter
-      declares this base and the harness normalises via
-      ``canonical = reported − base``.
-    """
-
-    order: list[Any]
-    ids: dict[Any, int]
-    base: int
-
-    def __getitem__(self, key: Any) -> int:
-        return self.ids[key]
-
-
-def rank(rows: Iterable[Any], *, base: int = 0) -> Ranking:
-    """Dense integer renumbering (rule 3): assign IDs by position in the sorted
-    :func:`distinct` sequence.
-
-    ``base`` is the emission base — Python's native **0-based** is the default
-    (the canonical numbering the conformance suite asserts on); pass ``base=1``
-    for a 1-based numbering. Equivalent to SQL ``dense_rank() OVER (ORDER BY …)``
-    over the deduplicated rows.
-    """
-    order = distinct(rows)
-    ids = {tuple_key: index + base for index, tuple_key in enumerate(order)}
-    return Ranking(order=order, ids=ids, base=base)
-
-
 # ── Primitive 2: equijoin (value-equality equi-join) ────────────────────────
 
 
@@ -333,7 +255,7 @@ def equijoin(
     return out
 
 
-# ── Primitive 5: group-by + semiring aggregate ──────────────────────────────
+# ── Primitive 3: group-by + semiring aggregate ──────────────────────────────
 
 
 def group_aggregate(

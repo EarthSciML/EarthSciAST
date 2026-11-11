@@ -1,38 +1,26 @@
-# The count-locate seam under a TRACE, without a reduction
-# (ext/reactant_interp.jl, `_knot_count`).
+# The comparison count under a TRACE, without a reduction
+# (ext/reactant_knot_count.jl, `_knot_count`).
 #
-# WHAT THIS PINS. The locate seam was emitting one `stablehlo.reduce` per interp
-# call site — ~32 per ReSEACT chemistry RHS evaluation, ~103 per ROS23 step — and
-# locating elementwise instead MEASURES 1.27x faster on the chemistry RHS at
-# ReSEACT/CONUS, bit-exact, for +2.7% emitted ops. (An earlier rationale credited
-# that to reduces being hard fusion boundaries, priced by a toy at ~6x; that
-# model was FALSIFIED — see the `count-locate` header in
-# ext/reactant_interp.jl, which records the retraction.) The seam now
-# computes the count elementwise in three tiers (LADDER for a small axis, AFFINE
+# WHAT THIS PINS. The count is computed elementwise in three tiers (LADDER for a small axis, AFFINE
 # guess + two-gather correction for a big uniform one, and the old REDUCE as the
 # documented fallback), selectable with `ESS_RX_LOCATE` for A/B measurement.
 #
 # The tiers are an EMISSION choice, so the whole assertion is that they are
 # observationally identical:
 #
-#   1. every tier is BIT-IDENTICAL to the host ladder in tree_walk/interp_lanes.jl —
-#      `==`, not `isapprox`. That is assertable here where it is not for the
-#      interp evaluators as a whole (XLA reassociates the blend) because the
-#      count is a sum of exact 0.0/1.0 terms with `n ≪ 2^53`, and the affine
+#   1. every tier is BIT-IDENTICAL to the host ladder in tree_walk/knot_count.jl —
+#      `==`, not `isapprox`, because the count is a sum of exact 0.0/1.0 terms with `n ≪ 2^53`, and the affine
 #      tier only ever adds exact small integers to an exact small integer;
 #   2. over the queries that actually break a locate: exactly ON each knot, one
 #      ULP either side of each knot, below the first, above the last, ±Inf, NaN,
-#      and ±0.0. The on-knot case is the load-bearing one — landing one cell low
-#      there returns `t_{k-1} + 1·(t_k − t_{k-1})` where the reference returns
-#      `t_k`, equal in real arithmetic and not in Float64. The ONE carve-out is
+#      and ±0.0. The on-knot case is the load-bearing one. The ONE carve-out is
 #      a SUBNORMAL query, where XLA:CPU disagrees with the host for reasons that
 #      have nothing to do with this seam — see the flush-to-zero testset, which
 #      pins the cause and pins that the reduce tier does exactly the same;
 #   3. the LADDER and AFFINE tiers emit no `stablehlo.reduce` at all, which is
 #      the point of the change;
-#   4. both knot SHAPES (one shared axis, and one column per lane) and both
-#      query shapes (a lane vector, and a lane-invariant scalar — the `Lq` trap
-#      `_rx_knot_matrix` documents) go through every tier.
+#   4. both query shapes (a lane vector, and a lane-invariant scalar) go
+#      through every tier.
 #
 # The affine tier's ±1 fit is verified on the HOST at trace time
 # (`_rx_affine_ok`); the testset "the affine fit is a proof obligation" pins
@@ -105,9 +93,8 @@ function _lc_withmode(mode::String, body)
 end
 
 # The axes that matter. `flux_x`/`flux_y` are Fast-JX's actinic-flux table axes
-# verbatim — the two that were reducing over 61 and 23 knots at every one of the
-# 18 bands; `sigma2`/`sigma3` are its cross-section TEMPERATURE axes, the shape
-# 180 of its 198 interp call sites actually have (a reduce over two elements).
+# verbatim (61 and 23 knots); `sigma2`/`sigma3` are its cross-section
+# TEMPERATURE axes (two or three knots).
 const _LC_AXES = Dict{String, Vector{Float64}}(
     "flux_x (61, uniform 0.02)" => collect(range(-0.2; step = 0.02, length = 61)),
     "flux_y (23, uniform 4500)" => collect(range(1000.0; step = 4500.0, length = 23)),
@@ -263,93 +250,17 @@ const _LC_AXES = Dict{String, Vector{Float64}}(
         @test off > 0
     end
 
-    @testset "both knot shapes and both query shapes, through every tier" begin
-        # Lane-tabled knots (`Vector{Vector{Float64}}`, one column per lane) —
-        # the kernel-class merge's shape. Two lane groups so the D>1 path with
-        # its gid map is traced, plus the all-equal case that dedups to D == 1.
-        L = 6
-        for (label, cols) in (
-                "D == 1 (one shared axis)" =>
-                    [fill(x, L) for x in _LC_AXES["flux_y (23, uniform 4500)"]],
-                "D == 2 (two lane axes)" =>
-                    [
-                    Float64[l <= 3 ? x : x + 0.5 for l in 1:L]
-                        for x in _LC_AXES["big uniform (40)"]
-                ],
-                "D == 2, small (ladder)" =>
-                    [
-                    Float64[l <= 3 ? x : 2x for l in 1:L]
-                        for x in _LC_AXES["sigma3 (3, uniform)"]
-                ],
+    @testset "a lane-invariant scalar query, through every tier" begin
+        for (label, ax) in _LC_AXES, mode in ("auto", "ladder", "reduce"), cmp in (<=, <)
+            q = 0.5 * (ax[1] + ax[end])
+            gs = _lc_withmode(
+                mode, () -> begin
+                    f = x -> ESM._knot_count(ax, x, cmp)
+                    qr = RX.ConcreteRNumber(q)
+                    (RX.@compile sync = true f(qr))(qr)
+                end
             )
-            for mode in ("auto", "ladder", "reduce"), cmp in (<=, <)
-                # (a) a lane VECTOR query.
-                qs = Float64[(-1.0)^l * 1000l + 220.0 for l in 1:L]
-                ref = ESM._knot_count(cols, qs, cmp)
-                got = _lc_withmode(mode, () -> _lc_traced(cols, qs, cmp))
-                @test got == ref
-                # (b) a lane-INVARIANT scalar query still yields L lanes — the
-                # `Lq` trap: the result's lane axis comes from the KNOTS here.
-                gs = _lc_withmode(
-                    mode, () -> begin
-                        f = x -> ESM._knot_count(cols, x, cmp)
-                        qr = RX.ConcreteRNumber(2200.0)
-                        Array((RX.@compile sync = true f(qr))(qr))
-                    end
-                )
-                @test length(gs) == L
-                @test gs == ESM._knot_count(cols, 2200.0, cmp)
-            end
+            @test Float64(gs) == _lc_ref(ax, q, cmp)
         end
-    end
-
-    @testset "the interp evaluators agree with the scalar cores on the edges" begin
-        # End to end, through the seam: the three lane evaluators against the
-        # `_interp_*_core` kernels the in-place path calls, on the same edge
-        # queries. The blend is XLA-reassociable, so a few ULP is the honest
-        # tolerance for the VALUE — but a locate that is off by one cell is not
-        # a few ULP, it is a different table entry, which this catches.
-        ax = _LC_AXES["flux_x (61, uniform 0.02)"]
-        tbl = Float64[sinpi(0.7x) + 2x for x in ax]
-        h = ESM._InterpLinearSpec(tbl, copy(ax))
-        qs = _lc_normal(_lc_queries(ax))
-        ref = Float64[ESM._interp_linear_core(tbl, ax, q) for q in qs]
-        got = _lc_withmode(
-            "auto", () -> begin
-                f = x -> ESM._interp_linear_lanes(h, x)
-                qr = RX.ConcreteRArray(qs)
-                Array((RX.@compile sync = true f(qr))(qr))
-            end
-        )
-        for (g, r) in zip(got, ref)
-            @test (isnan(g) && isnan(r)) || isapprox(g, r; rtol = 1.0e-14, atol = 0.0)
-        end
-        # ON a knot the answer is the table entry EXACTLY (no blend runs), which
-        # is the case a wrong locate silently turns into `t_{k-1} + 1·Δ`.
-        onknot = _lc_withmode(
-            "auto", () -> begin
-                f = x -> ESM._interp_linear_lanes(h, x)
-                qr = RX.ConcreteRArray(copy(ax))
-                Array((RX.@compile sync = true f(qr))(qr))
-            end
-        )
-        @test onknot == tbl
-
-        # searchsorted: an integer-valued result, so `==` is the right assertion.
-        xs = _LC_AXES["hours (24, integers)"]
-        s = ESM._InterpSearchsortedSpec(copy(xs))
-        sq = _lc_normal(_lc_queries(xs))
-        sref = Float64[
-            ESM._interp_searchsorted_core("interp.searchsorted", q, xs)
-                for q in sq
-        ]
-        sgot = _lc_withmode(
-            "auto", () -> begin
-                f = x -> ESM._interp_searchsorted_lanes(s, x)
-                qr = RX.ConcreteRArray(sq)
-                Array((RX.@compile sync = true f(qr))(qr))
-            end
-        )
-        @test sgot == sref
     end
 end

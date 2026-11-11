@@ -7,6 +7,15 @@
 > category — an unknown some equation DEFINES, its LHS naming it either bare
 > (`y ~ f(…)`) or indexed (`y[i] ~ f(…)`) — not a declared type. See esm-spec
 > §6.3.1 and `docs/content/rfcs/unified-variable-model.md`.
+>
+> **esm 2.0.0.** The closed-function `fn` op, the `function_tables` block and
+> `table_lookup` op, the `skolem`, `rank`, `argmin` and `argmax` ops, and the
+> geometry leaves `intersect_polygon` / `polygon_intersection_area` (with their
+> `manifold` flag) are removed; a document using one is rejected at load with
+> `removed_op` (§7). Their replacements are the pure-AST templates of the
+> standard library (`lib/*.esm`), whose tiers are listed in §5.45.4. Sections that
+> existed only for a removed op are kept as "(Removed at 2.0.0)" stubs so that
+> section numbers stay stable.
 
 **Version 1.0 — Test Fixture Format and Execution Protocol**
 
@@ -513,10 +522,10 @@ The categories a divergence can be scored against, and what "agree" means in eac
 | **Expression round-trip (property corpus)** | Byte-identical canonical form | §5.5.3. A divergence here is a different *document*. |
 | **Graph Structure** | Node / edge sets identical (as multisets) | Enforced by `tests/conformance/graph/cases.json`, which every binding drives. Node and edge ORDER is not a conformance property — bindings iterate their own maps — so lists compare as sorted multisets. The DOT / Mermaid BYTES are excluded: §4.8.3 requires both formats and specifies neither, and the bindings do not split in a way any tie-break resolves (see that corpus's README). |
 | **Simulation** | Numeric tolerance (§5.9) | The ONE category where a tolerance is legitimate, because the quantity being compared is a floating-point trajectory, not a serialization. Governed by §5.9's explicit rel/abs tolerances — a stated numeric tolerance on a numeric quantity, which is a different thing from a percentage of fixtures allowed to disagree. |
-| **Relational index sets / dense IDs** | Byte-identical | Outputs of the value-invention primitives (`distinct`, `skolem`, `rank`) and group-by / value-equality joins. Governed by the **§5.5 cross-binding determinism contract** — these outputs are consumed by other nodes, so a divergence is a different *model*, not different formatting. |
+| **Relational index sets / dense IDs** | Byte-identical | Outputs of the value-invention primitive `distinct` (over a scalar integer `key`, e.g. a `pair_key` / `edge_key` template), the `rank_of` / `rank_of_set` templates over its members, and group-by / value-equality joins. Governed by the **§5.5 cross-binding determinism contract** — these outputs are consumed by other nodes, so a divergence is a different *model*, not different formatting. |
 | **Cumulative (prefix and suffix) reductions** | Bit-identical | A `faq` whose `filter` is a monotone comparison of its one contracted index against an output index (esm-spec §4.3.1). A **forward** scan (`<=` / `<`, and the mirrored `i >= j` / `i > j`) folds its window ascending, lowest `j` first; a **reverse** scan (`>=` / `>`, and the mirrored `i <= j` / `i < j`) folds its window descending, highest `j` first. Either way the value is a fully determined left fold and not an "irreducibly floating-point" quantity, which is exactly what licenses a binding to evaluate it with an `O(N)` running accumulator (swept up for a forward scan, down for a reverse one) instead of the `O(N²)` triangle. Every executing binding computes both directions this way, interpreter and compiled path alike — Rust and Python with a running accumulator inside the array evaluator, Julia by splitting the equation into an elementwise term pass plus a post-pass fold (`tree_walk/scan.jl`) so its per-cell kernel model stays intact. The forward scans are pinned against an independent triangular oracle at catastrophic-cancellation magnitudes (`pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs`, `pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py`, `pkg/EarthSciAST.jl/test/scan_prefix_test.jl`); the reverse scans by the to-top fixtures of `tests/conformance/native_model_shapes/` (`makearray_prefix_scan_*`) and the `makearray_scan` scaling family. |
 | **Causal self-reference (recurrence) along an index axis** | Bit-identical | An equation whose defining `faq` body reads the array being defined at a strictly earlier position on one output axis (esm-spec §4.3.1.1). The sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is — there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact. Governed by the **§5.19 recurrence contract**, which also forbids every reordering implementation strategy and requires fixtures that pin the arithmetic ORDER (a cancellation ladder, a lag > 1, a symbol-valued lag) rather than an exactly-representable answer a wrong order would also reach. |
-| **Conservative-regridding geometry (areas / weights)** | Invariants exact; areas within rel + abs tol | The M4 geometry kernel (`intersect_polygon`, the `polygon_area` FAQ, the weights `W_ij`) is **tolerance-based** — FP polygon clipping cannot be made bit-identical. Gated primarily on the physical invariants (conservation + partition-of-unity), with a combined rel + abs area tolerance and a sliver floor; the integer **candidate overlap-pair index set** stays byte-identical (§5.5). Governed by the **§5.8 geometry tolerance contract**. |
+| **Conservative-regridding geometry (areas / weights)** | Invariants exact; areas within rel + abs tol | The overlap areas `A_ij` (the `overlap_area_planar` / `overlap_area_spherical` templates of `lib/geometry.esm`) and the weights `W_ij` are **tolerance-based** — a floating-point overlap area depends on the summation order of its edge contributions. Gated primarily on the physical invariants (conservation + partition-of-unity), with a combined rel + abs area tolerance and a sliver floor; the integer **candidate overlap-pair index set** stays byte-identical (§5.5). Governed by the **§5.8 geometry tolerance contract**. |
 
 > **Note.** The only two places a tolerance is legitimate are the ones where the
 > compared quantity is irreducibly floating-point: the **§5.9** simulation
@@ -565,9 +574,9 @@ The comparison system categorizes divergences as:
 - **Critical**: Different validation results, expression structure changes, **any
   byte-level difference in a relational index set or any difference in a
   dense-ID array** (the §5.5 determinism contract — these are never "minor"), a
-  **byte-level difference in the bin-Skolem candidate overlap set** or a
-  **conservation / partition-of-unity invariant violation** in the M4 geometry
-  kernel (the §5.8 tolerance contract)
+  **byte-level difference in the bin-key candidate overlap set** or a
+  **conservation / partition-of-unity invariant violation** in conservative
+  regridding (the §5.8 tolerance contract)
 - **Major**: Significant display formatting differences, graph topology changes
 - **Minor**: Cosmetic differences in formatting, property metadata
 - **Acceptable**: Known implementation limitations or language-specific
@@ -622,11 +631,10 @@ The comparison system categorizes divergences as:
 
 `EarthSciAST` is **parallel native implementations** (Julia, Rust,
 Python, …) verified by this suite — not one core behind FFI. The
-value-invention primitives `distinct`, `skolem`, and `rank`, the arg-witness
-reducers `argmin`/`argmax` (§5.5.1 rule 6), together with
-value-equality and group-by joins, produce **index sets, dense IDs, and
-assignment buffers that
-other nodes consume**. Two bindings that disagree on the *order* or *numbering*
+value-invention primitive `distinct`, the `rank_of` / `rank_of_set` and
+`argmin` / `argmax` templates of `lib/relational.esm` (§5.5.1 rules 3 and 6),
+together with value-equality and group-by joins, produce **index sets, dense
+IDs, and assignment buffers that other nodes consume**. Two bindings that disagree on the *order* or *numbering*
 of those outputs produce **different models**, not merely different formatting.
 This determinism is therefore **normative spec**, not an implementation detail,
 and the §5.2 "minor formatting differences" tolerances explicitly do **not**
@@ -653,30 +661,20 @@ on hash-table iteration order or a language-native hash value.
    Julia `Dict`/`Set` order is unspecified, Python `set` order is
    `PYTHONHASHSEED`-sensitive — see §5.5.2).
 
-3. **`rank`** = dense IDs assigned by position in the sorted `distinct`
-   sequence. Conformance asserts on the **canonical 0-based numbering** (position
-   in the sequence, language-neutral). Each binding emits in its own base and
-   converts at the boundary; the conformance adapter declares its base and the
-   harness normalizes reported IDs via `canonical = reported − emission_base`.
-   The bases are **pinned**:
+3. **Dense IDs** come from the `rank_of` / `rank_of_set` templates of
+   `lib/relational.esm`: the 1-based rank of a key among the ascending members
+   of a `distinct` set, an ordinary value of the expanded AST and therefore the
+   same number in every binding. (The `rank` op and its per-binding emission
+   bases were removed at 2.0.0.)
 
-   | Binding | Emission base | Role |
-   |---|---|---|
-   | **Conformance (canonical)** | **0** | The numbering the suite asserts on. |
-   | Julia | 1 | Native 1-based arrays; converts +1 at its boundary. |
-   | Rust | 0 | Native 0-based. |
-   | Python | 0 | Native 0-based. |
-   | Go, TypeScript | — | Additive schema only; no evaluator/producer (N/A). |
-
-4. **`skolem`** = a canonical **tuple**, never a hash. For a **symmetric**
-   relation, sort the components (an undirected edge is `(min(u,v), max(u,v))`);
-   for a **directed** relation, preserve order (so `(1,2)` and `(2,1)` are
-   distinct). The dense ID then comes from `rank`. Hashing stays off the
-   determinism-critical path entirely. *If* a fixed-width fingerprint is ever
-   genuinely required, it MUST be a **portable, seed-pinned, non-cryptographic
-   hash** (e.g. XXH3-64 seed 0) over a **canonical byte serialization** (fixed
-   field order, little-endian ints, length-prefixed UTF-8 strings) — **never** a
-   native `hash()` / `Base.hash` / `DefaultHasher`.
+4. **Composite keys** are scalar integers: the `pair_key` / `edge_key`
+   templates of `lib/relational.esm` (`edge_key` sorts its endpoints, so an
+   undirected edge is `(min(u,v), max(u,v))`; `pair_key` preserves order, so
+   `(1,2)` and `(2,1)` are distinct). They keep equality and the lexicographic
+   order of the component tuples, so `distinct` over them is rule 2 over the
+   tuples. Hashing stays off the determinism-critical path entirely: a key is
+   never a native `hash()` / `Base.hash` / `DefaultHasher` value. (The `skolem`
+   op was removed at 2.0.0.)
 
 5. **`join` / group-by aggregate.** Hashing MAY be used only to *bucket*; the
    emitted result MUST be **sorted by the canonical key**. The semiring `⊕` used
@@ -686,25 +684,22 @@ on hash-table iteration order or a language-native hash value.
    reduction MUST be done sequentially in canonical order to avoid last-ULP
    drift.
 
-6. **Arg-witness reducers (`argmin` / `argmax`).** A build-time reduction over a
-   contracted candidate range that emits the **arg** — the witnessing index — not
-   the reduced value (`assign[i] = argmin_g dist(point_i, gen_g)`, the
-   nearest-generator INDEX). The closed semiring registry (§5.6) reduces to
-   *values* and `distinct`/`skolem`/`rank` produce *sets*; neither yields the arg,
-   so this is a distinct primitive. The tie-break is **normative: the smallest arg
-   (smallest candidate id) wins** on an equal reduced value (`<` selects for
-   `argmin`, `>` for `argmax`; on an exact tie the smaller index). The comparison
-   is explicit — never enumeration order — so the emitted integer buffer is a pure
-   function of the candidate ids and the metric, byte-identical across bindings.
-   The reduced value is an ordinary FAQ over the candidate factors; a float value
-   participates only in the comparison, never in a key (use a squared metric, not
-   `sqrt`, to keep ties bit-exact). An empty candidate set is an error. The buffer
-   is a CONST/DISCRETE build-time materialization off the hot path; a continuous
-   (state-dependent) arg-witness is rejected by §5.7.6 guard 2, like a continuous
-   `distinct`.
+6. **Arg-witness reducers.** The `argmin` / `argmax` (and `argmin_where` /
+   `argmax_where`) templates of `lib/relational.esm` return the **arg** — the
+   witnessing index — not the reduced value (`assign[i] = argmin_g
+   dist(point_i, gen_g)`, the nearest-generator INDEX). The tie-break is
+   **normative and written into the template body: the smallest index wins** on
+   an equal reduced value, and a NaN candidate wins at its first occurrence.
+   Because the templates are ordinary `faq` reductions, the emitted index is a
+   pure function of the candidate ids and the metric, byte-identical across
+   bindings. A float value participates only in the comparison, never in a key
+   (use a squared metric, not `sqrt`, to keep ties bit-exact). An arg-witness
+   template over state-dependent candidates is an ordinary `faq` and is allowed
+   in a continuous equation; no cadence rule rejects it. (The `argmin` /
+   `argmax` ops were removed at 2.0.0.)
 
 7. **Grouped reduction over an arg-witness key (the SCVT centroid step).** A
-   group-by aggregate (rule 5) MAY be keyed on an arg-witness assignment buffer
+   group-by aggregate (rule 5) MAY be keyed on an arg-witness assignment
    (rule 6): `num[g] = Σ_{p : assign[p]=g} ρ_p·x_p`, `den[g] = Σ_{p : assign[p]=g}
    ρ_p`, `centroid[g] = num[g]/den[g]` — the per-generator density-weighted
    centroid. The group KEY is the *value-dependent* `assign` buffer (not a loop
@@ -712,9 +707,9 @@ on hash-table iteration order or a language-native hash value.
    bucket by the canonical integer key, reduce each bucket's floats sequentially in
    canonical value order, and emit `0̄` for an empty group (an unattended generator
    then has `den=0` and a NaN `centroid` — division is IEEE, never an exception, so
-   every binding agrees). The whole step is materialized off the hot path through
-   the value-invention front-door (the same CONST/DISCRETE point as the `assign`
-   buffer it consumes) and dropped from the ODE; `num`/`den`/`centroid` are pure
+   every binding agrees). When `assign` and the step's inputs are CONST/DISCRETE,
+   the whole step is materialized off the hot path through the value-invention
+   front-door and dropped from the ODE; `num`/`den`/`centroid` are pure
    functions of the inputs and the rule-5/rule-6 orders, hence byte/tolerance-
    identical across bindings. A grouped/derived buffer reading a live ODE state is
    rejected by §5.7.6 guard 2 (its inputs MUST be CONST/DISCRETE).
@@ -739,8 +734,7 @@ JSON** (`,` and `:` separators, no spaces), **UTF-8** (no `\uXXXX` escaping),
 tuples serialized as arrays, in the §5.5.1-rule-2 sorted order. This is the same
 canonical-JSON discipline the round-trip idempotence contract relies on
 (`tests/conformance/README.md`). Two conforming bindings MUST produce
-byte-for-byte identical serialized index sets and identical dense-ID arrays
-(after rule-3 base normalization).
+byte-for-byte identical serialized index sets and identical dense-ID arrays.
 
 ##### 5.5.3.1 Canonical number formatting (normative)
 
@@ -1050,7 +1044,7 @@ index-set-producing `distinct` producer; nothing in the contract distinguishes
 them, and a binding MUST NOT restrict the driver to the producer. The gate binds
 its two gated symbols from the candidate set rather than testing every tuple of
 the full product, so the cost is `O(|candidates|·∏ungated)` rather than
-`O(∏ranges)`. Which side is **skolemised**, reduced, or output is FREE: the gate
+`O(∏ranges)`. Which side is **keyed**, reduced, or output is FREE: the gate
 resolves `src_env` → one loop symbol and `tgt_env` → the other purely from each
 side's declared 1-D shape, and the `faq`'s own `output_idx` decides the
 result's orientation independently. Concretely:
@@ -1257,8 +1251,8 @@ parameter shaped `[C, out]`, the rewrite emits:
    `member_factor` naming (4);
 2. a `distinct:true`, `bool_and_or` producer over `R × C` carrying the derived
    `join.overlap` clause, the containment comparisons as its `filter`, and
-   `key: skolem(label:"cell", args:[<cell symbol>])` — the skolem is what makes
-   the produced member set CELL-oriented;
+   `key: <cell symbol>` — the scalar integer key is what makes the produced
+   member set CELL-oriented;
 3. an `unknown` member variable and (4) a `parameter` member factor, both shaped
    on the derived set;
 4. one observed cell-gather per **cell-axis array the binning bodies read** (an
@@ -1289,7 +1283,8 @@ therefore **not** the four envelope bounds — it is every array `F` such that
 Both subscript spellings on such an `F` MUST be carried, and by the SAME gather:
 the full subscript `index(F, c, v, d)`, and the PARTIAL subscript `index(F, c)`
 that yields the trailing slice — the spelling a rank-3 `[C, vertex, xy]` ring
-stack takes when it is a `polygon_intersection_area` operand. This is why the
+stack takes when it is bound to a `lib/geometry.esm` overlap-area template's
+ring parameter. This is why the
 gather MUST be **rank-preserving**: `pd_cell__<C>__<F>` is declared
 `[pd_support__<C>, …F's trailing axes]` and defined by a map (not a reduction)
 whose `output_idx` names the support symbol and one generated symbol per
@@ -1515,8 +1510,8 @@ three rejections under `tests/invalid/faq/build_time/`, pinned by
 
 A **composite key** is a clause listing several pairs over the same two loop
 symbols. It matches iff **every** pair agrees, which is tuple equality; the
-canonical composite key is the §5.5.1 rule-4 `skolem` tuple of the per-pair
-values, in the order the pairs are listed. Several pairs over *different* symbol
+canonical composite key is the tuple of the per-pair values, in the order the
+pairs are listed (§5.5.1 rule 4). Several pairs over *different* symbol
 pairs are several gates; so are several `join` clauses on one node. When a node
 carries more than one gate, **every** gate restricts the admitted set — they
 compose by conjunction — and **§5.24 says how a binding SHOULD drive that
@@ -1640,7 +1635,7 @@ computed from a scalar parameter — a relational port's `runYearID` or
 any other input above: the parameter's value at the build (its
 `parameter_overrides` entry or its `default`) is folded into the key column and
 so into the match set. The parameter is then a **baked parameter**, the same
-status a scalar parameter has when value invention reads it (a skolem bin
+status a scalar parameter has when value invention reads it (a bin-key bin
 width): a `remake` that changes it MUST be refused, naming the parameter and
 telling the caller to build a new Problem, rather than silently keeping the
 match set built from the old value. This holds identically under every compiler
@@ -1745,7 +1740,7 @@ The enum spelling is normative: `"sum_product"`, `"max_product"`, `"min_sum"`,
 `"max_sum"`, `"bool_and_or"`. The schema (`esm-schema.json`, the `semiring`
 property on `ExpressionNode`) restates the identities inline and pins the
 `default` to `sum_product`. `bool_and_or` is the only index-set-producing
-semiring (it drives `distinct` / `skolem`, §5.5); the M1 numeric evaluators
+semiring (it drives `distinct`, §5.5); the M1 numeric evaluators
 reject it for array-valued reductions — a `faq` with an output index that
 contracts another, other than a value-invention node (`distinct`, a `key`) or
 an addressable producer (`id`).
@@ -1793,10 +1788,9 @@ resolved against the document `index_sets` registry (RFC §5.2): `interval` →
 `[1, size]`, `categorical` → `[1, |members|]`, `ragged` → a per-cell dynamic
 bound `[1, offsets[i]]` over POSITIONS (below). An undeclared `from` name is a
 hard error — no implicit interval is inferred. The canonical tag is
-`op: "faq"`. The pre-1.1.0
-`op: "aggregate"` spelling is a DEPRECATED ALIAS, normalized to `faq` at the wire
-boundary and removed at esm 2.0.0; `op: "arrayop"` was removed at 0.8.0 and is
-not accepted (§5.6, docs/content/rfcs/faq-node-rename.md).
+`op: "faq"`. The earlier spellings `op: "arrayop"` (removed at 0.8.0) and
+`op: "aggregate"` (a deprecated alias from 1.1.0, removed at 2.0.0) are not
+accepted: both are `removed_op` (§7, docs/content/rfcs/faq-node-rename.md).
 
 **Ragged ranges bind positions (normative; esm-spec §4.3.1 "Ragged ranges").**
 A range `{"from": <ragged set>, "of": ["i"]}` binds the POSITION `k` in
@@ -1809,8 +1803,8 @@ reads, with `ragged_values_not_gathered` at the containing expression field —
 such a body reads positions where members were meant. Two cases are not decided:
 a body still holding an `apply_expression_template` reference, and a set the
 document does not declare. **The one exception is value invention:** a
-value-invention `faq` (`distinct: true`, a `skolem` `key`, or a `skolem` /
-`rank` / `distinct` / `argmin` / `argmax` body, §5.5) binds the member
+value-invention `faq` (`distinct: true`, a `key`, or a `distinct` body,
+§5.5) binds the member
 `values[i, k]` itself, so no gather is authored and the check does not apply.
 Positive control: `tests/valid/faq/ragged_member_gather.esm` (10, 50, 150);
 rejection: `tests/invalid/faq/ragged_values_not_gathered.esm`.
@@ -1927,8 +1921,8 @@ Two points fix the semantics:
    between events and must recompute every step. Classifying by cadence keeps
    such forcings out of `DISCRETE`, where they would silently go stale.
 2. **There is no "grid" class.** With topology first-class (§5.6.4), the mesh is
-   not a primitive input — it is `faq` nodes (`distinct`, `join`, `rank`)
-   over mesh primitive arrays. When those primitives are document literals the
+   not a primitive input — it is `faq` nodes (`distinct`, `join`, and the
+   `rank_of` templates) over mesh primitive arrays. When those primitives are document literals the
    topology partition is `CONST` and folds into the artifact; when the mesh is
    reloaded at discrete events (AMR, moving meshes) the same nodes are
    `DISCRETE`. "Grid" is a *consequence* of where its leaves sit, not a category.
@@ -2078,9 +2072,9 @@ cadence, not equation tearing. This is a *checked* property:
    implicit/iterative solve, out of scope (use a `call` handler). Reject with a
    diagnostic **naming the cycle**.
 2. **No relational engine on the hot path.** A
-   `distinct`/`join`/`skolem`/`rank`/`argmin`/`argmax`
+   `distinct`/`join`
    node that classifies `CONTINUOUS` is **rejected** — state-dependent topology
-   (or a state-dependent arg-witness assignment) may not run per step in v1.
+   may not run per step in v1.
 3. **Optional author assertion.** `expect_cadence: "const"|"discrete"|
    "continuous"` on a node (`esm-schema.json`, the `expect_cadence` property on
    `ExpressionNode`) is a test/diagnostic hook only; the pass errors if the
@@ -2136,31 +2130,27 @@ partition pass in all three evaluators.
 
 > This is the normative form of RFC `semiring-faq-unified-ir` §8.1 and
 > Appendix B (especially **B.5**). It is the deliberate **inverse** of the
-> byte-identity contracts in §5.5–§5.7: the M4 conservative-regridding geometry
-> kernel — the `intersect_polygon` leaf, the `polygon_area` FAQ built on it, and
-> the regridding weights `W_ij` — is the **one** place where floating-point
-> polygon clipping makes bit-for-bit cross-binding identity *unachievable*, so
-> its conformance is **tolerance-based**. The rules below are the contract; the
-> M4 conformance gate (`ess-my4.4.8`) and the per-binding kernels (`ess-my4.4.3`
-> Julia, `ess-my4.4.4` Python, `ess-my4.4.11`/`.12` Rust) implement them.
+> byte-identity contracts in §5.5–§5.7: the per-pair overlap areas `A_ij` of
+> conservative regridding and the weights `W_ij` built from them are compared
+> under a **tolerance**. The areas come from the `overlap_area_planar` /
+> `overlap_area_spherical` templates of `lib/geometry.esm` (esm-spec §8.6.1);
+> the rules below are the contract.
 
 **Why geometry is the exception.** The relational engine (§5.5) is made
-byte-identical by sorting integer tuples; that lever does not exist here.
-`intersect_polygon` produces a **floating-point area from polygon clipping**, and
-FP clipping is irreducibly implementation-dependent — intersection ordering,
-area-summation order, robust-predicate strategy, and snapping all differ between
-independent spherical-geometry stacks (Julia → GeometryOps.jl, Python →
-spherely/S2, Rust → an S2 FFI binding). Bit-identity across them is **not
-pursued** (no shared C++ core, no compute-once-and-serialize): each binding uses
-its language's best native stack and cross-binding conformance is tolerance-based
-(RFC §B.1).
+byte-identical by sorting integer tuples; that lever does not exist here. An
+overlap area is a **floating-point sum of per-edge contributions**, and the
+spherical template's contributions go through transcendental functions whose
+last-ulp results differ between the bindings' math libraries. The quantities
+are also checked against analytic oracles (rectangle areas, Girard's theorem),
+which the templates meet only to rounding. Cross-binding conformance on areas is
+therefore tolerance-based (RFC §B.1).
 
 **Governing principle.** Conservation of the *physics* is the contract, not
 agreement on the *geometry*. Conformance has **two exact anchors** and **one
 tolerance band**:
 
 1. **Exact (combinatorial).** The **candidate overlap-pair index set** — the
-   broad-phase spatial join, expressed as a **bin-Skolem equi-join on integer
+   broad-phase spatial join, expressed as a **bin-key equi-join on integer
    spatial-bin keys** — is **byte-identical** across bindings, governed by the
    §5.5 determinism contract.
 2. **Exact (physical invariants).** Global **conservation** and
@@ -2177,13 +2167,13 @@ tolerance defined here.
 
 | Output | Conformance mode | Governed by |
 |---|---|---|
-| candidate overlap-pair set `{(i, j)}` (bin-Skolem spatial join) | **byte-identical** (integer keys) | §5.5 determinism contract |
-| `manifold` flag (`planar` / `spherical` / `geodesic`) | **exact** match — compare same-manifold only | §5.8.4 |
+| candidate overlap-pair set `{(i, j)}` (bin-key spatial join) | **byte-identical** (integer keys) | §5.5 determinism contract |
+| edge model (which overlap-area template) | **exact** match — compare same-template only | §5.8.4 |
 | global conservation `Σ_j A_j·F_tgt[j] = Σ_i A_i·F_src[i]` | invariant gate (tight tol) | §5.8.3 |
 | partition-of-unity `Σ_i W_ij = 1` | **exact by construction** | §5.8.3 |
 | per-pair overlap area `A_ij`, weight `W_ij` | rel + abs tolerance + sliver floor | §5.8.2 |
 
-This is the §8.1 split made testable: the clip's **combinatorial** structure
+This is the §8.1 split made testable: the join's **combinatorial** structure
 (*which* pairs are candidates) is integer and deterministic; only its
 **geometric** result (the *area* of each overlap) is floating point.
 
@@ -2198,23 +2188,12 @@ tolerance** against the reference binding:
 
 - `atol ≈ 1e-15·R²` (R = sphere radius / characteristic length) is a real
   **sliver floor**, not a formality. Near-tangent overlaps are the regime where
-  two clippers legitimately disagree on whether a tiny intersection even
-  *exists*; `atol` absorbs that. **Sub-`atol` areas are treated as
-  equal-to-zero** — "present-but-tiny" and "absent" **both pass**. This snapping /
-  tie-break regime MUST NOT fail conformance, and it does not affect weights.
+  a last-ulp difference decides whether a tiny intersection even *exists*;
+  `atol` absorbs that. **Sub-`atol` areas are treated as equal-to-zero** —
+  "present-but-tiny" and "absent" **both pass**. This snapping / tie-break regime
+  MUST NOT fail conformance, and it does not affect weights.
 - `rtol` is **empirically calibrated** and MUST accommodate the **loosest binding
-  pair**. Python and Rust run the **same S2 algorithms** and agree to a much
-  tighter `rtol` than either agrees with Julia/GeometryOps; the spec tolerance is
-  set by the GeometryOps-vs-S2 pair, never the S2-vs-S2 pair.
-  - They no longer share the same *binary*: Python's `spherely` wraps Google's
-    C++ s2geometry, while Rust uses `s2rst`, a pure-Rust port of it (chosen so the
-    kernel cross-compiles to wasm — the C++ build cannot). Two implementations of
-    the same algorithms are not automatically the same numbers, so this is pinned
-    by a test rather than assumed: `pkg/earthsci-ast-rs/tests/geometry_s2_differential.rs`
-    (opt-in `s2-cpp` feature) links BOTH kernels and diffs area and overlap area
-    across the regimes that actually separate clippers — pole, antimeridian,
-    near-tangent sliver, disjoint, edge-touching — at `rtol = 1e-12`, three orders
-    tighter than the spec tolerance. Run it when bumping the pinned `s2rst`.
+  pair**.
 
 Per-pair area equality is **secondary**: it is precisely the unstable sliver
 regime, which is why the primary gate is the invariants (§5.8.3), not per-pair
@@ -2242,40 +2221,35 @@ area / global-mean correction**, and the residual shrinks with resolution. So th
 epsilon** — partition-of-unity-by-construction is the part that is exact
 everywhere.
 
-#### 5.8.4 Manifold declaration
+#### 5.8.4 Edge model
 
-The geometry interpretation is part of the op's contract: `intersect_polygon`
-carries a **`manifold` flag** — `planar`, `spherical`, or `geodesic`
-(`esm-schema.json`; additive schema in `ess-my4.4.2`) — matching
-`ConservativeRegridding.jl`'s `Manifold`. **Two bindings may be compared only
-under the same declared manifold.** The clip must be done on the sphere (a flat
-lat-lon plane is wrong at the poles and the antimeridian). Because GeometryOps
-(Julia) and S2 (Python, Rust) share the **great-circle-edge** assumption, the
-three bindings share the *same geometric model* — their residual differences are
-floating-point, not modelling, which is what keeps the §5.8.2 tolerances small. A
-lat-lon edge along a parallel is a *small circle*, not a great circle, so coarse
-polar cells carry a real edge-model error (RFC §B.4); the contract offers an
-**opt-in** densification — `densify_parallel_edges(ring, max_segment_deg)` in the
-per-binding kernels, subdividing each parallel edge into short great-circle
-segments — where polar accuracy matters. It is **off by default**, so the
-great-circle-edge behaviour (and every existing conformance result) is unchanged
-unless a producer requests it.
+The edge model is chosen by the template a document applies:
+`overlap_area_planar` takes straight edges in the coordinate plane (areas in
+squared coordinate units), `overlap_area_spherical` takes great-circle edges on
+the unit sphere (areas in steradians; build its unit-vector stacks with
+`lonlat_to_unit`). **Two bindings' areas may be compared only under the same
+template.** Global lon-lat meshes need the spherical template (a flat lat-lon
+plane is wrong at the poles and the antimeridian). A lat-lon edge along a
+parallel is a *small circle*, not a great circle, so coarse polar cells carry a
+real edge-model error under the spherical template (RFC §B.4); where polar
+accuracy matters, the document supplies rings with extra vertices along those
+edges. There is no ellipsoidal-geodesic edge model.
 
 #### 5.8.5 The byte-identical candidate set
 
 Even though areas are tolerance-based, the **candidate overlap-pair set is not**.
-The broad phase of the spatial (θ-) join is expressed as a **bin-Skolem
+The broad phase of the spatial (θ-) join is expressed as a **bin-key
 equi-join**: each cell is assigned an **integer** spatial-bin key, and the
 candidate pairs are the equi-join of source and target cells sharing a bin. That
 key set is a relational index set over **integer** keys, so it falls squarely
 under the §5.5 determinism contract — sorted total order, no floats in keys, no
 native-hash iteration order — and MUST be **byte-identical** across bindings
 (reusing the M3 determinism machinery; the overlap-join idiom is the worked
-fixture `tests/valid/geometry/conservative_regrid_overlap_join.esm`, bead
-`ess-my4.4.5`, which composes the broad-phase join with the `A_ij → A_j →
-apply → normalize` assembly and makes the candidate-vs-surviving boundary
-explicit — the `join.on` produces this byte-identical candidate set, a
-`filter: A_ij > atol` produces the tolerance-dependent surviving-overlap set).
+fixture `tests/valid/geometry/conservative_regrid_overlap_join.esm`, which
+composes the broad-phase join with the `A_ij → A_j → apply → normalize` assembly
+and makes the candidate-vs-surviving boundary explicit — the `join.on` produces
+this byte-identical candidate set, a `filter: A_ij > atol` produces the
+tolerance-dependent surviving-overlap set).
 
 Two consequences are load-bearing:
 
@@ -2286,16 +2260,16 @@ Two consequences are load-bearing:
   differently per binding and the candidate set would diverge. Floating-point
   coordinates enter **only** the narrow-phase area (§5.8.2).
 - **Candidate set ≠ surviving-overlap set.** The byte-identity guarantee is on the
-  *candidate* set (broad phase). After clipping, *which* candidates have a
-  **nonzero** overlap MAY differ between bindings in the sliver regime — that is
-  expected and **passes**, because sub-`atol` areas are equal-to-zero (§5.8.2).
+  *candidate* set (broad phase). *Which* candidates have a **nonzero** overlap
+  MAY differ between bindings in the sliver regime — that is expected and
+  **passes**, because sub-`atol` areas are equal-to-zero (§5.8.2).
 
 #### 5.8.6 Conformance requirement
 
-The M4 conformance gate (`ess-my4.4.8`) feeds **identical** mesh inputs to every
-producing binding under a **declared manifold** and asserts, in priority order:
+The gate feeds **identical** mesh inputs to every producing binding under the
+same template and asserts, in priority order:
 
-1. **Candidate set** — byte-identical bin-Skolem candidate overlap-pair index set
+1. **Candidate set** — byte-identical bin-key candidate overlap-pair index set
    across bindings (§5.8.5; the §5.5 harness machinery applies verbatim,
    including the adversarial **permuted-input-order** variant, which MUST collapse
    to the identical candidate set).
@@ -2307,41 +2281,26 @@ producing binding under a **declared manifold** and asserts, in priority order:
 
 Adversarial inputs target the geometry failure modes specifically: **near-tangent
 slivers** (must pass via the floor), **antimeridian- and pole-crossing cells**
-(must be clipped on the sphere, not the plane), and **permuted input order** (the
-candidate set must stay byte-identical). The §5.8 contract is asserted by the
-harness **self-test** (against the embedded reference + golden, including the
-permuted and negative-control variants) together with the per-binding broad-phase
-+ `polygon_area`-FAQ suites and the reference-binding `.esm`-through-evaluator test
-(below); the earlier per-binding producer adapters were retired (`ess-3lj.3`). The
-golden inputs live under `tests/conformance/geometry/`, the tolerance-mode analogue
-of `tests/conformance/determinism/` (§5.5.4). Unlike the determinism and cadence
+(must use the spherical template, not the planar one), and **permuted input
+order** (the candidate set must stay byte-identical). The harness
+`scripts/run-geometry-conformance.py --self-test` guards the candidate-set /
+invariant / area contract against its embedded reference + static golden
+(`tests/conformance/geometry/`, the tolerance-mode analogue of
+`tests/conformance/determinism/`, §5.5.4). Unlike the determinism and cadence
 gates, the assertion is **tolerance + invariant** on areas / weights and
 **byte-identity** only on the integer candidate index set.
 
 The conservative regridder is realized as a **single end-to-end-evaluable
-document**, `tests/valid/geometry/conservative_regrid_overlap_join.esm` (bead
-ess-3lj.3), rather than an imperative per-binding assembly. The document composes
-the whole A.8 pipeline — broad-phase bin-Skolem candidate join (the value-invention
-front-door, §5.5 / RFC §6.1) → `A_ij` `intersect_polygon` clip + `polygon_area`
-FAQ → `A_j` row-sum → apply → normalize — and is driven through the evaluator. The
-reference binding (**Julia**) evaluates it end-to-end and asserts the conservation
-+ partition-of-unity invariants and the spherical Van Oosterom–Strackee /
-analytic-rectangle oracle values in
-`pkg/EarthSciAST.jl/test/geometry_overlap_join_conformance_test.jl`.
-The two cross-binding building blocks run in every evaluating binding: the
-**broad-phase candidate set** is materialized by the value-invention front-door
-(`materialize_value_invention`, Julia/Python/Rust, §5.5) and the **`polygon_area`
-FAQ** is the executable area path (`area_faq`'s `polygon_area_via_faq` /
-`polygon_area_faq`, Julia/Python/Rust, bead ess-d4g.1). **Go / TypeScript** schema-
-and structurally validate the document (no evaluator / polygon clip — §5.8 N/A per
-the table above).
-
-The earlier imperative producing-binding assemblies (`conservative_regrid.jl` /
-`regrid.rs` / `conservative_regrid.py`, `build_regridder` / `Regridder`, beads
-ess-my4.4.6 / .4.7 / .4.12) and their §5.8.6 cross-binding adapters were **retired**
-with this consolidation. The harness `scripts/run-geometry-conformance.py` still
-guards the §5.8 candidate-set / invariant / area contract against its embedded
-reference + static golden via `--self-test`.
+document**, `tests/valid/geometry/conservative_regrid_overlap_join.esm`: a
+broad-phase bin-key candidate join (the value-invention front-door, §5.5 / RFC
+§6.1) → `A_ij` from an overlap-area template → `A_j` row-sum → apply →
+normalize, driven through the evaluator. The reference binding (**Julia**)
+evaluates it end-to-end and asserts the conservation + partition-of-unity
+invariants and the analytic oracle values in
+`pkg/EarthSciAST.jl/test/geometry_overlap_join_conformance_test.jl`; the
+per-template cross-binding gate is the `geometry_templates` tier (§5.45.4).
+**Go / TypeScript** schema- and structurally validate the document (no
+evaluator — §5.8 N/A per the table above).
 
 ### 5.9 Cross-Language PDE-Simulation Conformance (normative)
 
@@ -2620,9 +2579,9 @@ deterministic and CI-safe.
 #### 5.12.3 Coverage
 
 The fixture `build_once_spatial_ode` is a 0-D-per-cell array ODE whose model
-`Field` declares three const polygon cells, derives `area[c] =
-polygon_intersection_area(poly[c], poly[c], planar)` (a geometry leaf arming the
-build-once setup machinery), differentiates it build-once with a periodic
+`Field` declares three const polygon cells, derives `area[c]` as the
+`overlap_area_planar` template (`lib/geometry.esm`) of cell `c` with itself (a
+const-only array arming the build-once setup machinery), differentiates it build-once with a periodic
 `makearray` (`darea = D_c(area)`), and forces `D(u[c]) = darea[c] - u[c]`. It
 exercises: setup-time materialization of a **makearray** (Gap 1), a build-once
 array **gathered into the ODE RHS** (Gap 2), and CONST build-once materialization.
@@ -2638,7 +2597,7 @@ committed golden: **Julia** —
 `pkg/earthsci-ast-rs/tests/build_once_spatial_field_conformance.rs`.
 `bindings_required` is `["julia", "python", "rust"]` (Julia is where the two gaps
 were fixed — the setup-materializer + const-array crossing; Python and Rust
-already evaluate `polygon_intersection_area` + `makearray` + the array ODE
+already evaluate the overlap-area template + `makearray` + the array ODE
 end-to-end, resolving the build-once field at the RHS rather than at a separate
 setup pass, so the numeric result matches Julia's setup-materialized path). Rust
 drives the composed path through its `simulate_array` runtime with no source
@@ -3104,14 +3063,10 @@ Three refusals, each naming what it refused:
 
 1. An `element_type` that is neither `"Float64"` nor `"Float32"` is an error
    (`unsupported_element_type`), never a quiet binary64 evaluation.
-2. A construct whose numeric work is hand-written binary64 — polygon clipping
-   and area (`intersect_polygon`, `polygon_intersection_area`), the
-   interpolating closed functions (`interp.linear`, `interp.bilinear`), and
-   `datetime.julian_day`, whose value exceeds binary32's exact-integer range —
-   is an error under `"Float32"` (`float32_unsupported`) naming the construct.
-   The closed functions that return small exact integers (`interp.searchsorted`,
-   `datetime.year`, `datetime.day_of_year`, `datetime.is_leap_year`) stay
-   evaluable.
+2. A construct whose numeric work is hand-written binary64 is an error under
+   `"Float32"` (`float32_unsupported`) naming the construct. No core op is such
+   a construct; the standard-library templates (`lib/*.esm`) are ordinary AST
+   and evaluate at the working precision like any other expression.
 3. **Time integration** of a `"Float32"` document is an error naming it. An
    ODE/DAE solver's step-size control, error norms and Newton solve are binary64
    in every binding here, so integrating would give a binary64 trajectory around
@@ -4302,8 +4257,8 @@ member to something else is still non-conforming. A binding MUST show, on
 | Binding | Loads | Resolves to | Evidence |
 |---|---|---|---|
 | Rust | yes | `0`, `-1`, arithmetic `9` | `tests/lower_enums_integration.rs`; `esm test` on the fixture, 3/3 assertions |
-| Python | yes | `0`, `-1`, arithmetic `9` | `tests/test_closed_functions.py::test_zero_and_negative_enum_members_load_and_resolve_to_themselves` |
-| Julia | yes | `0`, `-1`, arithmetic `9` | `test/closed_functions_test.jl`, "zero and negative enum members" |
+| Python | yes | `0`, `-1`, arithmetic `9` | `tests/test_enums.py::test_zero_and_negative_enum_members_load_and_resolve_to_themselves` |
+| Julia | yes | `0`, `-1`, arithmetic `9` | `test/enum_lowering_test.jl`, testset "zero and negative enum members (esm-spec §9.3)" |
 | TypeScript | yes | `0`, `-1`, arithmetic `9` | `src/enums-zero-negative.test.ts` |
 | Go | yes | `0`, `-1`, arithmetic `9` | `pkg/esm/lower_enums_test.go::TestZeroAndNegativeEnumMembers` |
 
@@ -4669,8 +4624,8 @@ output index). It must NOT descend into, or re-wrap:
 - an `index` node — already a scalar; the gather it carries is its own;
 - a SCALAR reduction (a `faq` whose `output_idx` is empty) — it
   produces a scalar and gathering it is a rank error;
-- any non-elementwise op (a closed function `fn`, a geometry kernel, an
-  unlowered rewrite target), which consumes whole arrays under its own contract.
+- an unlowered rewrite target, which consumes whole arrays under its own
+  contract.
 
 #### 5.29.2 Gate
 
@@ -6892,20 +6847,24 @@ binding that got better is the one way a ratchet can run backwards.
 | Tier | What it gates |
 |---|---|
 | `broadcast_alignment` | esm-spec §4.3.4 name-based operand alignment in an array-level equation, its ANONYMOUS-shape boundary, and the one-operand `broadcast` node |
-| `scalar_operator_semantics` | what each scalar operator of esm-spec §9.2's evaluable core COMPUTES |
+| `scalar_operator_semantics` | what each scalar operator of esm-spec §4.2's evaluable core COMPUTES |
 | `faq_pointwise_filter` | a `faq` `filter` on a node with no contracted index: each output cell is one combination, and a false predicate makes it the semiring's 0̄ (esm-schema `filter`) |
 | `recurrence` | a causal self-reference along one index axis (esm-spec §4.3.1.1): the ordered sweep's values at zero tolerance, under every compiler each fixture's `required` map names (§5.19) |
-| `value_invention_geometry` | build-time value invention (a `distinct` producer over a ragged set, an `argmin` arg-witness buffer, a bin-skolem candidate set) and setup-time polygon geometry (`intersect_polygon`, `polygon_intersection_area` over unequal rings) feeding a right-hand side, every producer input a constant factor held in the document (esm-spec §4.2) |
+| `value_invention_geometry` | build-time value invention (a `distinct` producer over a ragged set, an `argmin` template assignment, a bin-key candidate set) and polygon overlap areas (the `lib/geometry.esm` overlap-area templates over unequal rings) feeding a right-hand side, every producer input a constant factor held in the document (esm-spec §4.2) |
 | `array_expression_forms` | esm-spec §4.3.5 `index` over a `reshape` / `transpose` / `concat` (an element of the operand at other subscripts), a positional §4.3.4 `broadcast` of anonymous operands, and a §6.3.1 arrayed definition of an observed whose shape was never declared |
 | `bool_and_or_reductions` | §5.6.1 scalar (rank-0) `bool_and_or` reductions: a crisp OR over the admitted terms, 0 when none is non-zero, under every compiler |
 | `native_model_shapes` | the shapes the downstream models need from `native`: computed and data-dependent subscripts, reversed / offset / clamped / mod-floor subscripts into const arrays, a rank-0 `faq` nested in an array `faq`, an `ifelse` with a scalar condition and branches of different shapes, an out-of-range const subscript no cell takes, an initial condition gathered from a const array, a `join` keyed on a computed observed (§5.5.8), an overlap-gated `faq`, and `polygon_intersection_area` in a `faq`; each as a state-free document and as one a right-hand side reads |
-| `interp_templates` | the pure-AST `searchsorted` / `linear` / `bilinear` templates of `lib/interp.esm` (esm-spec §9.2, §9.7.1), each applied to scenarios of `tests/closed_functions/interp/<fn>/expected.json`: the expanded template reproduces the closed function's pinned `binary64` result at tolerance 0, under every compiler |
-| `template_array_args` | a `lib/interp.esm` template applied with an array bound to a scalar-role parameter (esm-spec §9.6.11): elementwise over the array's index sets, a level column replicated over a 3-D field, `bilinear` with one and with both coordinates arrays; every element equals the `interp.*` result at tolerance 0, under every compiler |
-| `datetime_templates` | the nine pure-AST calendar templates of `lib/calendar.esm` (esm-spec §9.2, §9.7.1), each applied to scenarios of `tests/closed_functions/datetime/<fn>/expected.json` inside the templates' domain `|t| < 2^52` s: the expanded template reproduces the closed function's pinned `binary64` result at tolerance 0, under every compiler |
-| `relational_templates` | the pure-AST `argmin` / `argmax` templates of `lib/relational.esm` (esm-spec §4.2, §9.7.1): on ties, signed zeros, infinities and NaN candidates the expanded template returns the smallest index attaining the extremum, or the first NaN index, at tolerance 0, and the nearest-generator document rewritten with the template integrates to the `argmin` op document's golden, under every compiler; `rewrites/` pairs every `skolem` / `rank` / gated-`argmin` fixture with its template form, and Python, Julia and Rust check both forms against `rewrites/golden/<id>.json` (computed from the op form by the Python interpreter; `rewrites/goldens.py` regenerates them, `--check` fails on a stale one) |
-| `geometry_templates` | the pure-AST convex overlap-area templates of `lib/geometry.esm` (esm-spec §8.6.1, §9.7.1): `overlap_area_planar` applied inside a `faq` over cell pairs, and behind the overlap join gate, gives the exact planar areas of identical, adjacent, corner-touching, nested, partially overlapping, clockwise and repeated-vertex-padded cells at tolerance 0, equal to the `polygon_intersection_area` leaf's; `overlap_area_spherical` over unit-vector stacks built with `lonlat_to_unit` gives Girard's-theorem areas of a meridian fan within the §5.8.2 band, under every compiler |
+| `interp_templates` | the pure-AST `searchsorted` / `linear` / `bilinear` templates of `lib/interp.esm` (esm-spec §9.7.1), each applied to the scenarios of `tests/closed_functions/interp/<fn>/expected.json`: the expanded template reproduces the scenario's pinned `binary64` result at tolerance 0, under every compiler |
+| `template_array_args` | a `lib/interp.esm` template applied with an array bound to a scalar-role parameter (esm-spec §9.6.11): elementwise over the array's index sets, a level column replicated over a 3-D field, `bilinear` with one and with both coordinates arrays; every element equals the scalar template's result at tolerance 0, under every compiler |
+| `datetime_templates` | the nine pure-AST calendar templates of `lib/calendar.esm` (esm-spec §9.7.1), each applied to the scenarios of `tests/closed_functions/datetime/<fn>/expected.json` inside the templates' domain `|t| < 2^52` s: the expanded template reproduces the scenario's pinned `binary64` result at tolerance 0, under every compiler |
+| `relational_templates` | the pure-AST `argmin` / `argmax` templates of `lib/relational.esm` (esm-spec §4.2, §9.7.1): on ties, signed zeros, infinities and NaN candidates the expanded template returns the smallest index attaining the extremum, or the first NaN index, at tolerance 0, and the nearest-generator document integrates to its golden, under every compiler; `rewrites/` holds the `pair_key` / `edge_key` / `rank_of` / `rank_of_set` / `argmin_where` documents, which Python, Julia and Rust check against `rewrites/golden/<id>.json` |
+| `geometry_templates` | the pure-AST convex overlap-area templates of `lib/geometry.esm` (esm-spec §8.6.1, §9.7.1): `overlap_area_planar` applied inside a `faq` over cell pairs, and behind the overlap join gate, gives the exact planar areas of identical, adjacent, corner-touching, nested, partially overlapping, clockwise and repeated-vertex-padded cells at tolerance 0; `overlap_area_spherical` over unit-vector stacks built with `lonlat_to_unit` gives Girard's-theorem areas of a meridian fan within the §5.8.2 band, under every compiler |
 
 Each tier's `README.md` is its contract and records what did NOT move into it.
+The `interp_templates` and `datetime_templates` documents hold only the
+scenarios a JSON literal can write; the full scenario sets, NaN queries and
+out-of-domain instants included, are evaluated against esm-spec §9.8 by the
+Python, Julia and Rust harnesses that `tests/closed_functions/README.md` names.
 A tier is added by writing that README, a manifest with `"runner":
 "inline_tests"`, its fixtures, its goldens, and one stage per binding per
 compiler in `scripts/test-conformance.sh`.
@@ -7154,9 +7113,9 @@ existing corpus case `chained_operator_compose`. Each fixture is a case of the
 flatten corpus, tier `term_provenance`, id `term_provenance_<fixture name>`, so
 no new runner is involved.
 
-**A caller-edited `rhs`.** Each binding's own suite checks that a pass that
+**A caller-edited `rhs`.** Each binding's own suite checks that any pass that
 rebuilds right-hand sides from contributions on a caller-supplied flattened
-system (Python: `esm_problem`'s `table_lookup` lowering) keeps an `rhs` the
+system keeps an `rhs` the
 caller edited after flatten and collapses the stale list to one contribution with
 the union of its origins (esm-libraries-spec §4.7.5). The corpus cannot pin it:
 it records flatten's output, where the two never disagree.
@@ -7680,11 +7639,10 @@ ever emitted it, and the code had zero real coverage.
 | `event_var_undeclared` | Structural | Event affects undeclared variable. NOT emitted for `_var` (esm-spec §6.4, §4.9.1) or for the independent variable. |
 | `equation_count_mismatch` (see above) | Structural | Unknowns vs equations. Algebraic and expression-LHS equations COUNT (esm-spec §4.9.4). |
 | `unit_dimension_mismatch` | Units | Dimensional analysis failure — a PROVABLE inconsistency (esm-spec §4.8.4). Emitted by the structural layer as `unit_inconsistency`. Hard error. |
-| `removed_op` | Structural | **Hard error.** An expression node uses an `op` spelling that was REMOVED rather than deprecated. Currently exactly one: `arrayop`, the pre-0.8.0 spelling of `faq`, removed at esm 0.8.0. It MUST be rejected BY NAME at the wire boundary, not left to fall through: `arrayop` is a well-formed identifier, so esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op, load it silently, and fail much later (or never) as `unlowered_operator`. Names the offending node's path. Julia's removed `call` op (v0.3.0) is the precedent. Fixture: `tests/invalid/faq/arrayop_op_removed.esm`. |
-| `faq_version_too_old` | Structural | **Hard error.** A document spells `"op": "faq"` while declaring `esm` below 1.1.0. `faq` arrives at esm 1.1.0, the same version gate the top-level `solver` block follows (esm-spec §2.2.4). The gate MUST read the AUTHORED form, before alias normalization: `aggregate` is the legal pre-1.1.0 spelling, so a 1.0.0 document carrying the alias must NOT be caught — it is normalized instead, with its declared version raised to the 1.1.0 floor so the upgraded document is self-consistent. The rule is transitive through lowering: a document whose EXPANDED form contains `faq` declares 1.1.0 even when its authored bytes do not. Fixtures: `tests/conformance/deprecated_op_alias/`. |
-| `deprecated_op_alias` | Structural | **WARNING, not an error.** An expression node uses a deprecated `op` spelling. The one alias is `aggregate`, the pre-1.1.0 spelling of `faq` (the Functional Aggregate Query node, docs/content/rfcs/faq-node-rename.md). The loader MUST normalize the node to `faq` at ONE wire boundary per binding, applied to EVERY document a load touches — the root, a `{ref}`-loaded child, a template library, a coupling library — ahead of the version gates and schema validation, so nothing downstream of the loader, `emit` included, sees the alias. Normalizing only the root is NOT sufficient and was the shipped bug: ref resolution then parses child files raw, and a child's alias reaches `emit` untouched. and MUST report this once per DOCUMENT per alias, naming the count, not once per node. The alias is REMOVED at esm 2.0.0. Like `operator_compose_partial_merge`, this is a CLASSIFICATION: each binding asserts it idiomatically (Julia `@warn`, Python `DeprecationWarning`, TypeScript `console.warn`, Rust/Go stderr). The older `arrayop` spelling is NOT an alias — it was removed at 0.8.0 and is rejected. Fixtures: `tests/conformance/deprecated_op_alias/`, `tests/invalid/faq/arrayop_op_removed.esm`. |
+| `removed_op` | Structural | **Hard error.** A document uses an `op` spelling, or a top-level field, that was REMOVED rather than deprecated: `arrayop` (the pre-0.8.0 spelling of `faq`, removed at esm 0.8.0); and, removed at esm 2.0.0, `aggregate` (the pre-1.1.0 spelling of `faq`, a deprecated alias from 1.1.0, which the codemod renames to `faq`), the ops `fn`, `table_lookup`, `skolem`, `rank`, `argmin`, `argmax`, `intersect_polygon` and `polygon_intersection_area`, and the `function_tables` block. It MUST be rejected BY NAME at the wire boundary, before schema validation, not left to fall through: each removed op is a well-formed identifier, so esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op, load it silently, and fail much later (or never) as `unlowered_operator`. The message names the op or field and the offending path, and for a 2.0.0 removal points at the offline codemod (`python -m earthsci_ast.migrate`, module `earthsci_ast.migration`), which rewrites a 1.x document onto the `lib/*.esm` templates. A binding's `migrate()` refuses such a document with this code rather than rewriting it. Julia's removed `call` op (v0.3.0) is the precedent. Fixtures: `tests/invalid/faq/arrayop_op_removed.esm` and `tests/invalid/removed_ops/removed_op_<name>.esm`, one per 2.0.0 removal, each pinned `parse_error` (§7.1.2); `tests/conformance/removed_spellings/` covers the two removed `faq` spellings in a referenced child. |
+| `faq_version_too_old` | Structural | **Hard error.** A document spells `"op": "faq"` while declaring `esm` below 1.1.0. `faq` arrives at esm 1.1.0, the same version gate the top-level `solver` block follows (esm-spec §2.2.4). The rule is transitive through lowering: a document whose EXPANDED form contains `faq` declares 1.1.0 even when its authored bytes do not. Fixtures: `tests/conformance/removed_spellings/` (case `faq_requires_v11`). |
 | `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
-| `units_dimensionless_literal_mismatch` | Units | **WARNING, not an error.** A check site (an equation, initialization equation or constraint equation, or a reaction rate, of any model or reaction system, inline subsystems included) that the current neutral-literal rule passes or skips fails once every bare numeric literal other than zero is read as dimensionless at scale 1 (esm-spec §4.8.6). Emitted once per site on `unit_warnings`, with `path` the site's pointer (`/models/<M>/equations/<i>`, `/models/<M>/subsystems/<Sub>/initialization_equations/<i>`, `/reaction_systems/<S>/reactions/<i>`, …), and never changes `is_valid`. A site the current rule already rejects carries no warning. The next major esm version makes the dimensionless-literal rule the rule, and these sites become `unit_dimension_mismatch` errors. Fixtures: `tests/conformance/dimensionless_literal/` (its golden pins the exact warnings of every `tests/valid` file). |
+| `units_dimensionless_literal_mismatch` | Units | **WARNING, not an error.** A check site (an equation, initialization equation or constraint equation, or a reaction rate, of any model or reaction system, inline subsystems included) that the current neutral-literal rule passes or skips fails once every bare numeric literal other than zero is read as dimensionless at scale 1 (esm-spec §4.8.6). Emitted once per site on `unit_warnings`, with `path` the site's pointer (`/models/<M>/equations/<i>`, `/models/<M>/subsystems/<Sub>/initialization_equations/<i>`, `/reaction_systems/<S>/reactions/<i>`, …), and never changes `is_valid`. A site the current rule already rejects carries no warning. A future version of EarthSciAST makes the dimensionless-literal rule the rule, and these sites become `unit_dimension_mismatch` errors. Fixtures: `tests/conformance/dimensionless_literal/` (its golden pins the exact warnings of every `tests/valid` file). |
 | `array_shape_mismatch` | Structural | An operand of a BARE array-level expression is declared over an index set the result is not shaped over (esm-spec §4.3.4). Operands align by index-set NAME: one declared over a SUBSET of the result's sets broadcasts along the missing axes and axis order is immaterial, but one carrying an EXTRA set has no axis to align to. Pointer: the containing expression field (`…/equations/i/rhs`, `…/variables/v/expression`). Both shapes are declared, so this is static — hard error, NOT a warning, and NOT a runtime concern. Fixture: `tests/invalid/array_broadcast/operand_index_set_not_in_result.esm`. |
 | `observed_cycle` | Structural | A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6): each observed on the cycle is defined by an equation whose RHS names the next, so no evaluation order satisfies every definition. Decidable from the equations alone — hard error in `validate`, in EVERY binding, executing or not. Pointer: `/models/<M>` (a cycle belongs to no single equation). `details.cycle` is the path in traversal order with the entry node repeated to close it — a PATH, so it is ordered semantically, not by §7.1.0. The self-edge of a §4.3.1.1 recurrence CANDIDATE is dropped (§5.19.5); every other self-reference (`x ~ x + 1`, `s ~ s + 1`) is a cycle of length one and IS reported. Fixture: `tests/invalid/observed_cycle_array_elementwise.esm`. |
 | `circular_dependency` | Structural | A cycle among OBSERVED unknowns (esm-spec §4.9.7) that crosses a scope boundary: two top-level models, or a model and one of its subsystems. The graph is §4.9.6's, built over the whole document: nodes are observeds by full scoped name, and `V → W` when `W` occurs in `V`'s defining RHS. States, parameters, species, algebraic unknowns and undefined unknowns are not nodes, so reading them is never an edge. A cycle inside one model or subsystem is `observed_cycle`. Hard error in `validate` in EVERY binding; Rust and Python also refuse at load. Pointer: `/models`. `details.cycle` is the scoped names on the cycle with the entry node repeated, found by the pinned depth-first search of §4.9.7. Fixtures: `tests/invalid/circular_coupling.esm`, `tests/invalid/circular_coupling_subsystem.esm` (invalid); `tests/valid/cross_model_state_reads.esm`, `tests/valid/cross_model_mixing_observed_state_cycle.esm`, `tests/valid/cross_model_observed_reads_no_loop.esm` (valid). |
@@ -7697,9 +7655,6 @@ ever emitted it, and the code had zero real coverage.
 | `reserved_variable_name` | Structural | A declaration spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope in every model and resolve BY NAME, so the declaration is unreachable and every reader silently gets the implicit symbol instead. Covers all three declaration maps: `models[M].variables` (recursing into every INLINE subsystem, at any depth), `reaction_systems[S].species`, `reaction_systems[S].parameters`. Pointer: the offending key, e.g. `/models/M/variables/t`, `/models/M/subsystems/S/variables/t`. Hard error in EVERY binding — the pre-fix behaviour was a validated document whose equations silently read the simulation clock. The reserved set FOLLOWS the document, exactly as `reserved_index_symbol` does; a binding that hard-codes the literal `"t"` fails `tests/valid/independent_variable_renamed.esm`. |
 | `array_default_without_shape` | Structural | Inline array data as the `default` of a variable that declares no `shape` — omitted, `null` or empty (esm-spec §6.3). Inline array data is a shaped variable's value, so with no shape there is nothing for it to fill and no scalar reading of it. Covers both declared types and the `variables` of every INLINE subsystem, at any depth. Pointer: the offending `default`, e.g. `/models/M/variables/k/default`, `/models/M/subsystems/S/variables/x/default`. Hard error in every binding, and a structural check rather than a schema constraint because whether an array is legal depends on the sibling `shape` field. Fixture: `tests/invalid/array_default_without_shape.esm`. |
 | `enum_duplicate_value` | Load | Two symbols of ONE `enums` entry map to the same integer (esm-spec §9.3, §5.26.5). Raised on the block itself, whether or not an `enum` op names either symbol; `0` is a value like any other. Values MAY coincide across different enums. Hard error in every binding. Fixtures: `tests/invalid/enum_duplicate_value.esm`, `tests/invalid/enum_duplicate_zero_value.esm` (`resolver_only`). |
-| `searchsorted_nan` | Load | The `xs` of an `interp.searchsorted` call contains a NaN (esm-spec §9.2). Checked BEFORE `searchsorted_non_monotonic`, so an `xs` holding a NaN is reported with this code whatever its other entries. The same precedence holds for `interp_nan_in_axis` over `interp_non_monotonic_axis` (§9.2) and `table_axis_nan` over `table_axis_non_monotonic` (§9.5.5). An `xs` that is not a rank-1 `const`-op array is neither: it is `interp_axis_not_const`, checked before both (esm-spec §9.2). Fixture: `tests/closed_functions/interp/searchsorted/expected.json` (`error_scenarios`). |
-| `table_lookup_args_nonempty` | Load | A `table_lookup` node carries a non-empty `args` (esm-spec §9.5.2); an absent `args` means `[]`. The schema rejects the same node (`maxItems: 0`), so a document reaches the code only by not passing through schema validation — a node built in memory, or a binding that lowers before it validates. |
-| `table_axis_too_short` | Load | An axis of a `function_tables` entry has fewer than 2 `values` (esm-spec §9.5.1, §9.5.5). The schema rejects the same axis (`minItems: 2`), so a document reaches the code only by not passing through schema validation — a table built in memory, or a binding that lowers before it validates. Sixth in the pinned order of the §9.5.5 table checks: after `table_axis_nan` and `table_axis_non_monotonic` (over every axis), before `table_outputs_length_mismatch`. Fixture: `tests/conformance/function_tables/load_errors/cases.json`. |
 | `E_NO_DAE_SUPPORT` | DAE | A model's equations contain algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
 | `E_TREEWALK_RECUR_UNAVAILABLE` | Runtime | A causal self-read (esm-spec §4.3.1.1) named a position outside the recurrence axis, or a cell the sweep has not published yet. Fail-closed: never the §5.5.5 zero ghost, and never a bare NaN (a `max(x, 0)` in the body would launder one). See §5.19.4. |
 | `E_TREEWALK_UNBOUND_NAME` | Runtime | An expression referenced a name bound in NO resolution scope — not the independent variable, a loop binder, a state, an observed, a parameter or a forcing channel. Fail-closed: never a NaN sentinel, which `max(x, floor)` or any comparison launders by DROPPING the operand rather than propagating it. The general case of the previous row. See §5.23. |

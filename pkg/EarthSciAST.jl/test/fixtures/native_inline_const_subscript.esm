@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "native_probe_inline_const_subscript",
     "description": "Inline const tables used as index subscripts: a table read at an enum-resolved subscript (the enum lowers to a scalar const) and a state read through an inline permutation table. Both compilers must build it and agree bit for bit.",

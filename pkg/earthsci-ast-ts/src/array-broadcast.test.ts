@@ -19,7 +19,7 @@ import type { EsmFile, Expression } from './types.js'
 /** A one-state model whose single equation is `D(x) ~ rhs`. */
 function scalarModel(rhs: Expression): EsmFile {
   return {
-    esm: '1.1.0',
+    esm: '2.0.0',
     metadata: { name: 'BroadcastFnTest' },
     models: {
       TestModel: {
@@ -66,7 +66,7 @@ function arrayModel(rhs: Expression, operandShapes: Record<string, string[]>): E
     })
   }
   return {
-    esm: '1.1.0',
+    esm: '2.0.0',
     metadata: { name: 'ArrayShapeTest' },
     index_sets: {
       lon: { kind: 'interval', size: 3 },
@@ -126,19 +126,13 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
     'reshape',
     'transpose',
     'concat',
-    'fn',
     'D',
     'ic',
     'Pre',
     'const',
     'enum',
-    'table_lookup',
     'apply_expression_template',
-    'skolem',
-    'rank',
-    'argmin',
-    'intersect_polygon',
-    'polygon_intersection_area',
+    'distinct',
     '=',
     'pow',
     'grad',
@@ -192,7 +186,7 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
     // entry stands in for all of them: what is pinned is that the checker rides
     // that enumeration rather than walking `equations` alone.
     const file = {
-      esm: '1.1.0',
+      esm: '2.0.0',
       metadata: { name: 'Sidecar' },
       models: {
         M: {

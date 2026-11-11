@@ -2,8 +2,8 @@
 //! refuse, each now built natively and bit-identical to the interpreter:
 //!
 //! * a build-time observed the whole-array overlay declines — a join-gated
-//!   binning `faq`, an equi-join over ingested key columns, a
-//!   `polygon_intersection_area` inside a `faq`, a recurrence — is lowered on
+//!   binning `faq`, an equi-join over ingested key columns, the
+//!   `overlap_area_planar` template inside a `faq`, a recurrence — is lowered on
 //!   a standalone tape instead of being walked per cell, and reported
 //!   `"taped"`;
 //! * a join keyed on a CONST-cadence computed observed (CONFORMANCE_SPEC
@@ -83,7 +83,7 @@ fn check_pipeline(
 
 fn model_doc(index_sets: Value, variables: Value, equations: Value) -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "BuildTimeTape"},
         "index_sets": index_sets,
         "models": {"M": {"variables": variables, "equations": equations}},
@@ -181,11 +181,27 @@ fn an_equi_join_over_ingested_columns_in_the_pipeline_is_taped() {
     assert_eq!(tier(&native, "M.present"), "taped");
 }
 
-/// isrm's polygon documents: `polygon_intersection_area` of each record's
-/// ring with each grid cell's, inside a `faq`.
+/// `overlap_area_planar` (`lib/geometry.esm`) of record ring `r` with grid
+/// cell ring `c`.
+fn overlap_area() -> Value {
+    json!({"op": "apply_expression_template", "args": [], "name": "overlap_area_planar",
+           "bindings": {"ring_a": "pring", "cell_a": "r", "nv_a": 4,
+                        "ring_b": "cring", "cell_b": "c", "nv_b": 4}})
+}
+
+/// `model_doc` importing `lib/geometry.esm`.
+fn geometry_doc(index_sets: Value, variables: Value, equations: Value) -> Value {
+    let mut doc = model_doc(index_sets, variables, equations);
+    doc["models"]["M"]["expression_template_imports"] =
+        json!([{"ref": "esm:std/geometry.esm", "only": ["overlap_area_planar"]}]);
+    doc
+}
+
+/// isrm's polygon documents: the overlap area of each record's ring with each
+/// grid cell's, inside a `faq`.
 #[test]
-fn polygon_intersection_area_in_a_pipeline_faq_is_taped() {
-    let doc = model_doc(
+fn an_overlap_area_in_a_pipeline_faq_is_taped() {
+    let doc = geometry_doc(
         json!({"cells": {"kind": "interval", "size": 2}, "recs": {"kind": "interval", "size": 1},
                "vert": {"kind": "interval", "size": 4}, "xy": {"kind": "interval", "size": 2}}),
         json!({"cring": {"type": "parameter", "default": 0.0, "shape": ["cells", "vert", "xy"]},
@@ -195,8 +211,7 @@ fn polygon_intersection_area_in_a_pipeline_faq_is_taped() {
             "op": "faq", "output_idx": ["c"], "reduce": "+",
             "ranges": {"c": {"from": "cells"}, "r": {"from": "recs"}},
             "args": ["cring", "pring"],
-            "expr": {"op": "polygon_intersection_area", "manifold": "planar", "args": [
-                {"op": "index", "args": ["pring", "r"]}, {"op": "index", "args": ["cring", "c"]}]}}}]),
+            "expr": overlap_area()}}]),
     );
     let consts: HashMap<String, ArrayD<f64>> = [
         (
@@ -224,9 +239,9 @@ fn polygon_intersection_area_in_a_pipeline_faq_is_taped() {
 /// `overlap` join on the rings' bounding boxes, so each ring is read at a loop
 /// symbol of the tuple list.
 #[test]
-fn polygon_intersection_area_in_a_join_gated_pipeline_faq_is_taped() {
+fn an_overlap_area_in_a_join_gated_pipeline_faq_is_taped() {
     let env = |set: &str| json!({"type": "parameter", "default": 0.0, "shape": [set]});
-    let doc = model_doc(
+    let doc = geometry_doc(
         json!({"cells": {"kind": "interval", "size": 3}, "recs": {"kind": "interval", "size": 2},
                "vert": {"kind": "interval", "size": 4}, "xy": {"kind": "interval", "size": 2}}),
         json!({"cring": {"type": "parameter", "default": 0.0, "shape": ["cells", "vert", "xy"]},
@@ -237,8 +252,7 @@ fn polygon_intersection_area_in_a_join_gated_pipeline_faq_is_taped() {
         json!([{"lhs": "out", "rhs": {
             "op": "faq", "args": [], "output_idx": ["c"], "reduce": "+",
             "ranges": {"c": {"from": "cells"}, "r": {"from": "recs"}},
-            "expr": {"op": "polygon_intersection_area", "manifold": "planar", "args": [
-                {"op": "index", "args": ["pring", "r"]}, {"op": "index", "args": ["cring", "c"]}]},
+            "expr": overlap_area(),
             "join": [{"overlap": {"src_env": ["px0", "py0", "px1", "py1"],
                                   "tgt_env": ["cx0", "cy0", "cx1", "cy1"], "eps": 0.0}}]}}]),
     );
@@ -262,6 +276,90 @@ fn polygon_intersection_area_in_a_join_gated_pipeline_faq_is_taped() {
     .collect();
     let native = check_pipeline(&doc, &consts, "M.out", &["M.out"]);
     assert_eq!(values(&native, "M.out"), vec![0.375, 0.5, 0.0]);
+}
+
+/// The same join-gated overlap area over a 5x5 grid and a dozen records of
+/// assorted sizes, some straddling several cells and some sharing an edge with
+/// one: native folds each candidate pair's nested vertex reductions in the
+/// oracle's order, bit for bit.
+#[test]
+fn a_join_gated_overlap_area_agrees_bit_for_bit_on_a_larger_grid() {
+    let nx = 5usize;
+    let ncell = nx * nx;
+    let env = |set: &str| json!({"type": "parameter", "default": 0.0, "shape": [set]});
+    let sq = |x0: f64, y0: f64, x1: f64, y1: f64| vec![x0, y0, x1, y0, x1, y1, x0, y1];
+    let (mut cring, mut cx0, mut cy0, mut cx1, mut cy1) = (vec![], vec![], vec![], vec![], vec![]);
+    for j in 0..nx {
+        for i in 0..nx {
+            let (x, y) = (i as f64, j as f64);
+            cring.extend(sq(x, y, x + 1., y + 1.));
+            cx0.push(x);
+            cy0.push(y);
+            cx1.push(x + 1.);
+            cy1.push(y + 1.);
+        }
+    }
+    let recs: [(f64, f64, f64, f64); 12] = [
+        (0.5, 0.25, 1.5, 1.25),
+        (1.25, 0.5, 1.75, 0.75),
+        (2.0, 2.0, 3.0, 3.0),
+        (0.1, 3.3, 2.9, 4.7),
+        (3.3, 0.2, 4.6, 1.1),
+        (1.0, 1.0, 1.0, 2.0),
+        (2.25, 1.75, 3.125, 2.625),
+        (4.0, 4.0, 4.9, 4.9),
+        (0.0, 0.0, 5.0, 0.5),
+        (1.7, 2.3, 2.1, 4.4),
+        (3.0, 3.5, 3.0, 3.5),
+        (2.5, 0.3, 3.75, 1.0),
+    ];
+    let (mut pring, mut px0, mut py0, mut px1, mut py1) = (vec![], vec![], vec![], vec![], vec![]);
+    for &(x0, y0, x1, y1) in &recs {
+        pring.extend(sq(x0, y0, x1, y1));
+        px0.push(x0);
+        py0.push(y0);
+        px1.push(x1);
+        py1.push(y1);
+    }
+    let nrec = recs.len();
+    let doc = geometry_doc(
+        json!({"cells": {"kind": "interval", "size": ncell}, "recs": {"kind": "interval", "size": nrec},
+               "vert": {"kind": "interval", "size": 4}, "xy": {"kind": "interval", "size": 2}}),
+        json!({"cring": {"type": "parameter", "default": 0.0, "shape": ["cells", "vert", "xy"]},
+               "pring": {"type": "parameter", "default": 0.0, "shape": ["recs", "vert", "xy"]},
+               "cx0": env("cells"), "cy0": env("cells"), "cx1": env("cells"), "cy1": env("cells"),
+               "px0": env("recs"), "py0": env("recs"), "px1": env("recs"), "py1": env("recs"),
+               "out": {"type": "unknown", "shape": ["cells"]}}),
+        json!([{"lhs": "out", "rhs": {
+            "op": "faq", "args": [], "output_idx": ["c"], "reduce": "+",
+            "ranges": {"c": {"from": "cells"}, "r": {"from": "recs"}},
+            "expr": overlap_area(),
+            "join": [{"overlap": {"src_env": ["px0", "py0", "px1", "py1"],
+                                  "tgt_env": ["cx0", "cy0", "cx1", "cy1"], "eps": 0.0}}]}}]),
+    );
+    let consts: HashMap<String, ArrayD<f64>> = [
+        ("cring", arr(&[ncell, 4, 2], &cring)),
+        ("pring", arr(&[nrec, 4, 2], &pring)),
+        ("cx0", arr(&[ncell], &cx0)),
+        ("cy0", arr(&[ncell], &cy0)),
+        ("cx1", arr(&[ncell], &cx1)),
+        ("cy1", arr(&[ncell], &cy1)),
+        ("px0", arr(&[nrec], &px0)),
+        ("py0", arr(&[nrec], &py0)),
+        ("px1", arr(&[nrec], &px1)),
+        ("py1", arr(&[nrec], &py1)),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let native = check_pipeline(&doc, &consts, "M.out", &["M.out"]);
+    // Every record's area lands somewhere: the cells' total is the records'.
+    let total: f64 = values(&native, "M.out").iter().sum();
+    let want: f64 = recs
+        .iter()
+        .map(|(x0, y0, x1, y1)| (x1 - x0) * (y1 - y0))
+        .sum();
+    assert!((total - want).abs() < 1e-9, "{total} vs {want}");
 }
 
 /// A causal self-reference (esm-spec §4.3.1.1) in an ingesting document runs

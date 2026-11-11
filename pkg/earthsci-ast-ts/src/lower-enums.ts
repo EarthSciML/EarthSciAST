@@ -151,11 +151,11 @@ function lowerExprUncached(expr: object, enums: EnumsMap, memo: Map<object, unkn
     // uses `EXPRESSION_CHILD_KEYS` — the SAME single source of truth the shared
     // walker (`mapChildren`/`forEachChild`) and the rest of the package trust —
     // rather than a local `/expr/i` heuristic that both diverged from that set
-    // and skipped aggregate `filter`/`key`, `table_lookup` `axes`, and template
-    // `bindings`. Non-child fields (`op`, `wrt`, `dim`, `reduce`, `value`, …)
-    // are copied verbatim, preserving key order and structural sharing (map
-    // fields `axes`/`bindings` recurse through the plain-object branch below,
-    // which keeps their key order).
+    // and skipped aggregate `filter`/`key` and template `bindings`. Non-child
+    // fields (`op`, `wrt`, `dim`, `reduce`, `value`, …) are copied verbatim,
+    // preserving key order and structural sharing (the map field `bindings`
+    // recurses through the plain-object branch below, which keeps its key
+    // order).
     const out: Record<string, unknown> = {}
     let changed = false
     for (const key of Object.keys(node)) {

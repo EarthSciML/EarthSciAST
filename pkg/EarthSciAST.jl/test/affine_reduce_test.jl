@@ -54,7 +54,7 @@ function _ar_doc(
     merge!(vars, evars)
     eqs = Any[Dict("lhs" => _ar_lhs("y", out_idx, zip(out_idx, out_ranges)), "rhs" => agg)]
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "ar"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "ar"),
         "models" => Dict("R" => Dict{String, Any}("variables" => vars, "equations" => eqs))
     )
 end

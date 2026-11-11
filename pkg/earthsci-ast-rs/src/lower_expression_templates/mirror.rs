@@ -169,8 +169,7 @@ pub(super) fn binds_get<'a>(binds: &'a Binds, key: &str) -> Option<&'a Sv> {
 /// stable identity for as long as the allocation lives, and several walks
 /// deliberately recurse **with the same memo** into freshly substituted template
 /// bodies ([`expand_all`] / [`expand_eager`] re-enter on the result of
-/// [`expand_apply`]) or over successive `to_shared` roots
-/// ([`validate_manifolds_in_refs`]). Those trees are dropped as soon as their
+/// [`expand_apply`]). Those trees are dropped as soon as their
 /// expansion is spliced in; without the keep-alive their addresses are free for
 /// the allocator to hand back to the very next `Rc::new`, and the memo then
 /// reports a hit for a structurally unrelated node — silently splicing a foreign

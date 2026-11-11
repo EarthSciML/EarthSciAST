@@ -4,7 +4,7 @@
 # `searchsorted`, `linear` and `bilinear` written as expression templates
 # (CONTRACT_P2: the bracket is a comparison count, `i` written out at each of
 # its uses) must build under strict native and give the bits of the
-# interpreter and of the `fn interp.*` form they replace, serial and threaded,
+# interpreter, serial and threaded,
 # for a scalar query and for a per-cell query inside a `faq` over an index
 # set (`faq_l linear(table, axis, ix(q, l), n)`, the shape #660's array-valued
 # query is rewritten to). Two emitter rewrites carry the speed and are pinned
@@ -91,11 +91,10 @@ _ti_ya() = Float64[0.5 * j for j in 1:_TI_NY]
 _ti_t2(n) = [_ti_tabs(n)[1][i] + 0.25 * j for i in 1:n, j in 1:_TI_NY]
 _ti_rows(m) = Any[Any[m[i, j] for j in axes(m, 2)] for i in axes(m, 1)]
 
-# One model, per `shape`, in the template (`tpl = true`) or the `fn`
-# spelling. `scalar`: three relaxations toward `linear` at one moving query;
+# One model, per `shape`. `scalar`: three relaxations toward `linear` at one moving query;
 # `cell`: the same per level, the query `xq[l]`; `bil`: `bilinear` per level
 # at (`xq[l]`, a scalar `yq`); `ss`: `searchsorted` per level.
-function _ti_doc(shape::Symbol, n::Int; tpl::Bool)
+function _ti_doc(shape::Symbol, n::Int)
     z = _ti_z(n)
     tabs = _ti_tabs(n)
     zt = 0.5 * z[end]
@@ -105,9 +104,7 @@ function _ti_doc(shape::Symbol, n::Int; tpl::Bool)
         v = Dict{String, Any}("type" => "unknown");
         shape === nothing || (v["shape"] = shape); d === nothing || (v["default"] = d); v
     )
-    lookup(t, x) = tpl ?
-        _ti_apply("linear"; table = _ti_const(t), axis = _ti_const(z), x = x, n = n) :
-        _ti_op("fn", _ti_const(t), _ti_const(z), x; name = "interp.linear")
+    lookup(t, x) = _ti_apply("linear"; table = _ti_const(t), axis = _ti_const(z), x = x, n = n)
     # The query moves with t and passes below the axis, through every knot
     # interval and above it, so every branch of the template is taken.
     sweep = _ti_op("+", zt, _ti_op("*", 1.3 * zt, _ti_op("sin", _ti_op("*", 0.3, "t"))))
@@ -129,27 +126,24 @@ function _ti_doc(shape::Symbol, n::Int; tpl::Bool)
             end
         elseif shape === :ss
             vars["u"] = sv(["lev"], 0.0)
-            look = tpl ? _ti_apply("searchsorted"; x = _ti_ix("xq", "l"), xs = _ti_const(z), n = n) :
-                _ti_op("fn", _ti_ix("xq", "l"), _ti_const(z); name = "interp.searchsorted")
+            look = _ti_apply("searchsorted"; x = _ti_ix("xq", "l"), xs = _ti_const(z), n = n)
             push!(eqs, Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", look, _ti_ix("u", "l")))))
         else
             vars["yq"] = sv()
             push!(eqs, Dict("lhs" => "yq", "rhs" => _ti_op("+", 2.25, _ti_op("*", 2.5, _ti_op("sin", _ti_op("*", 0.2, "t"))))))
             vars["u"] = sv(["lev"], 10.0)
             t2, ya = _ti_rows(_ti_t2(n)), _ti_ya()
-            look = tpl ?
-                _ti_apply(
-                    "bilinear"; table = _ti_const(t2), axis_x = _ti_const(z), axis_y = _ti_const(ya),
-                    x = _ti_ix("xq", "l"), y = "yq", nx = n, ny = _TI_NY
-                ) :
-                _ti_op("fn", _ti_const(t2), _ti_const(z), _ti_const(ya), _ti_ix("xq", "l"), "yq"; name = "interp.bilinear")
+            look = _ti_apply(
+                "bilinear"; table = _ti_const(t2), axis_x = _ti_const(z), axis_y = _ti_const(ya),
+                x = _ti_ix("xq", "l"), y = "yq", nx = n, ny = _TI_NY
+            )
             push!(eqs, Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", look, _ti_ix("u", "l")))))
         end
     end
     model = Dict{String, Any}("variables" => vars, "equations" => eqs)
-    tpl && (model["expression_templates"] = _ti_templates())
+    model["expression_templates"] = _ti_templates()
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "closed_interp_$(shape)_$(tpl)"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "closed_interp_$(shape)"),
         "index_sets" => Dict("lev" => Dict("kind" => "interval", "size" => n)),
         "models" => Dict("Column" => model)
     )
@@ -197,14 +191,11 @@ _ti_count_fired(t) = get(t, :count_fold_search, 0) + get(t, :count_fold_sorted, 
 
     n = 59
     @testset "$shape" for shape in (:scalar, :cell, :ss, :bil)
-        doc = _ti_doc(shape, n; tpl = true)
+        doc = _ti_doc(shape, n)
         dn, tn, _ = _ti_eval(doc, :native)
         di, ti, _ = _ti_eval(doc, :interpreter; times = _TI_TIMES[1:3])
-        dfn, _, _ = _ti_eval(_ti_doc(shape, n; tpl = false), :native)
         # The interpreter's bits, at the times it ran.
         @test _ti_same(Dict(k => v[1:3] for (k, v) in dn), di)
-        # The `fn` form's bits, every time.
-        @test _ti_same(dn, dfn)
         @test _ti_count_fired(tn) >= 1
         @test _ti_count_fired(ti) == 0
         # `searchsorted` has one count and nothing to share.
@@ -223,24 +214,24 @@ _ti_count_fired(t) = get(t, :count_fold_search, 0) + get(t, :count_fold_sorted, 
     # copy sits in its innermost branch, so that branch computes it once and
     # the count is emitted once per lookup (three lookups).
     @testset "the bracket index runs once per lookup" begin
-        doc = _ti_doc(:cell, n; tpl = true)
+        doc = _ti_doc(:cell, n)
         _, tn, _ = _ti_eval(doc, :native; times = (0.0,))
         _, ts, _ = _ti_eval(doc, _TI_NOSHARE; times = (0.0,))
         @test get(ts, :count_fold_search, 0) == 6 * get(tn, :count_fold_search, 0)
         @test get(tn, :count_fold_search, 0) == 3
     end
 
-    @testset "N = 200 against the fn form" for shape in (:scalar, :cell, :ss, :bil)
-        dn, tn, _ = _ti_eval(_ti_doc(shape, 200; tpl = true), :native)
-        dfn, _, _ = _ti_eval(_ti_doc(shape, 200; tpl = false), :native)
-        @test _ti_same(dn, dfn)
+    @testset "N = 200 against the interpreter" for shape in (:scalar, :cell, :ss, :bil)
+        dn, tn, _ = _ti_eval(_ti_doc(shape, 200), :native; times = _TI_TIMES[1:2])
+        di, _, _ = _ti_eval(_ti_doc(shape, 200), :interpreter; times = _TI_TIMES[1:2])
+        @test _ti_same(dn, di)
         @test _ti_count_fired(tn) >= 1
     end
 
     # Threaded: every section chunked (work floor 1) gives the serial bits.
     if Threads.nthreads() > 1
         @testset "threaded = serial ($shape)" for shape in (:cell, :ss, :bil)
-            doc = _ti_doc(shape, n; tpl = true)
+            doc = _ti_doc(shape, n)
             ser, _, _ = withenv(() -> _ti_eval(doc, :native), "ESS_THREADS_MIN_WORK" => "1000000000")
             empty!(_TI._THREAD_TALLY)
             thr, _, _ = withenv(() -> _ti_eval(doc, :native), "ESS_THREADS_MIN_WORK" => "1")
@@ -251,7 +242,7 @@ _ti_count_fired(t) = get(t, :count_fold_search, 0) + get(t, :count_fold_sorted, 
 
     if VERSION >= v"1.12"
         @testset "zero allocation per call ($shape)" for shape in (:scalar, :cell, :bil)
-            _, _, (f!, u0, p) = _ti_eval(_ti_doc(shape, n; tpl = true), :native; times = (0.0,))
+            _, _, (f!, u0, p) = _ti_eval(_ti_doc(shape, n), :native; times = (0.0,))
             du = similar(u0)
             f!(du, u0, p, 0.3)
             @test (@allocated f!(du, u0, p, 0.4)) == 0
@@ -279,7 +270,7 @@ end
             Dict("lhs" => _ti_dl("q"), "rhs" => _ti_lev(rhs_of(_ti_ix("q", "l")))),
         ]
         return Dict{String, Any}(
-            "esm" => "1.2.0", "metadata" => Dict("name" => "share"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "share"),
             "index_sets" => Dict("lev" => Dict("kind" => "interval", "size" => n)),
             "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs))
         )
@@ -383,7 +374,7 @@ end
     )
     qr = Dict("a" => Any[1, M], "b" => Any[1, M])
     doc = Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "lazy_gather_subscript"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "lazy_gather_subscript"),
         "models" => Dict(
             "M" => Dict{String, Any}(
                 "variables" => Dict{String, Any}(
@@ -545,7 +536,7 @@ _ti_sub_doc(sub; n = 9, nl = 23) = begin
         Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", _ti_ix("r", "l"), _ti_ix("u", "l")))),
     ]
     Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "gather_span"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "gather_span"),
         "index_sets" => Dict(
             "lev" => Dict("kind" => "interval", "size" => nl),
             "kk" => Dict("kind" => "interval", "size" => n)
@@ -574,7 +565,7 @@ _ti_ngens(_) = 1
 
 @testset "interpolation template cells around the count (closed-AST phase 4)" begin
     @testset "bracket table reads skip the boundary policy ($shape)" for shape in (:cell, :bil, :scalar)
-        doc = _ti_doc(shape, 59; tpl = true)
+        doc = _ti_doc(shape, 59)
         dn, tn, _ = _ti_eval(doc, :native)
         di, _, _ = _ti_eval(doc, :interpreter; times = _TI_TIMES[1:3])
         @test _ti_same(Dict(k => v[1:3] for (k, v) in dn), di)
@@ -617,7 +608,7 @@ _ti_ngens(_) = 1
         )
         look = _ti_apply("linear"; table = _ti_const(tab), axis = _ti_const(z), x = x, n = n)
         doc = Dict{String, Any}(
-            "esm" => "1.2.0", "metadata" => Dict("name" => "nest_2d_consumer"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "nest_2d_consumer"),
             "index_sets" => Dict(
                 "ii" => Dict("kind" => "interval", "size" => ni),
                 "jj" => Dict("kind" => "interval", "size" => nj)
@@ -662,7 +653,7 @@ _ti_ngens(_) = 1
         end
         push!(eqs, Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", _ti_op("+", terms...), _ti_ix("u", "l")))))
         doc = Dict{String, Any}(
-            "esm" => "1.2.0", "metadata" => Dict("name" => "many_contractions"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "many_contractions"),
             "index_sets" => Dict("lev" => Dict("kind" => "interval", "size" => nl)),
             "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs, "expression_templates" => _ti_templates()))
         )
@@ -702,7 +693,7 @@ end
         ],
         "expression_templates" => _ti_templates(),
     )
-    doc = Dict{String, Any}("esm" => "1.2.0", "metadata" => Dict("name" => "site"), "models" => Dict("M" => model))
+    doc = Dict{String, Any}("esm" => "2.0.0", "metadata" => Dict("name" => "site"), "models" => Dict("M" => model))
     withenv("ESS_CODEGEN_FN_NODE_CAP" => string(cap)) do
         dn, _, _ = _ti_eval(doc, :native)
         di, _, _ = _ti_eval(doc, :interpreter)

@@ -2,7 +2,7 @@
  "category": "native_model_shapes",
  "runner": "inline_tests",
  "version": "1.0",
- "description": "The document shapes the downstream models (EqWeFiC, eqice, moves.esm, isrm.esm) need and the native compiler refused or mis-evaluated on 2026-10-15: computed and data-dependent subscripts, reversed / offset / clamped / mod-floor subscripts into const arrays, a rank-0 faq nested in an array faq, an ifelse with a scalar condition and branches of different shapes, an out-of-range const subscript in a branch no cell takes, an initial condition gathered from a const array, a join keyed on a computed observed, an overlap-gated faq, and polygon_intersection_area in a faq. Each shape has a STATIC variant (no state: every rule is a build-time observed) and a DYNAMIC one (the same rules read by a right-hand side). Every value is checked against a hand computation in the document's own `tests` block; the goldens are the Julia interpreter's actuals.",
+ "description": "The document shapes the downstream models (EqWeFiC, eqice, moves.esm, isrm.esm) need and the native compiler refused or mis-evaluated on 2026-10-15: computed and data-dependent subscripts, reversed / offset / clamped / mod-floor subscripts into const arrays, a rank-0 faq nested in an array faq, an ifelse with a scalar condition and branches of different shapes, an out-of-range const subscript in a branch no cell takes, an initial condition gathered from a const array, a join keyed on a computed observed, an overlap-gated faq, and a polygon overlap area (now the `overlap_area_planar` template) in a faq. Each shape has a STATIC variant (no state: every rule is a build-time observed) and a DYNAMIC one (the same rules read by a right-hand side). Every value is checked against a hand computation in the document's own `tests` block; the goldens are the Julia interpreter's actuals.",
  "reference_binding": "julia",
  "reference_compiler": "interpreter",
  "bindings_required": [
@@ -586,7 +586,7 @@
    "tags": [
     "faq",
     "geometry",
-    "polygon_intersection_area",
+    "overlap_area_planar",
     "static"
    ],
    "note": "Authored here; see README.md for the downstream documents it stands for.",
@@ -610,7 +610,7 @@
    "tags": [
     "faq",
     "geometry",
-    "polygon_intersection_area",
+    "overlap_area_planar",
     "dynamic"
    ],
    "note": "Authored here; see README.md for the downstream documents it stands for.",

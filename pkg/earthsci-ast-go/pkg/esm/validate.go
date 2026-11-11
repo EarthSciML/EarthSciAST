@@ -535,7 +535,6 @@ func collectStructuralErrors(file *ESMFile) []StructuralError {
 	s.validateCircularReferences()
 	s.validateDataSourceReferences()
 	s.validateInlineTests()
-	s.validateFunctionChecks()
 
 	return s.errors
 }
@@ -836,7 +835,7 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// The document-scoped `index_sets` registry is a legitimate non-variable
 	// identifier namespace (RFC semiring-faq-unified-ir §5.2): a `faq`
 	// may name an index set as a positional operand (value-invention form
-	// `aggregate(args:["faces"], …)`) or reduce over it (`rank(edges)`). Credit
+	// `aggregate(args:["faces"], …)`). Credit
 	// those names so the full-child descent below does not mis-flag them as
 	// undefined, mirroring TS `validateReferenceIntegrity`'s `declaredIndexSets`.
 	// (Redundant but harmless for the coupled branch, which already credited them
@@ -1153,7 +1152,7 @@ func (s *structuralScan) creditCoordinateNames(allVars map[string]bool) {
 
 // equationBoundSymbols returns every binder-introduced symbol an equation
 // scopes, collected across BOTH sides (aggregate `output_idx` / `ranges` keys,
-// argmin/argmax witnesses, `index` element positions, integral integration
+// `index` element positions, integral integration
 // variables, apply_expression_template parameter names). Mirrors TS
 // `collectIndexSymbols` applied to lhs ∪ rhs.
 func equationBoundSymbols(eq Equation) map[string]bool {
@@ -1202,7 +1201,7 @@ func unionScope(base map[string]bool, extra map[string]bool) map[string]bool {
 // how the sidecars went unchecked: descending only `args` silently accepted an
 // undefined variable hidden in an aggregate body (`expr`), an aggregate
 // `filter`/`key`, integral `lower`/`upper` bounds, a `makearray` `values` list,
-// `table_lookup` `axes`, an `apply_expression_template` `bindings` map, a
+// an `apply_expression_template` `bindings` map, a
 // `ranges` loop bound, or a makearray `regions` bound. Routing through the
 // keystone makes that class of omission structurally impossible: a NEW
 // expression-bearing field on ExprNode is either a reference child or a declared
@@ -1274,15 +1273,10 @@ func (s *structuralScan) validateExprNodeChildren(node ExprNode, allVars map[str
 // `collectIndexSymbols` (validate/expr-utils.ts). Binder sources:
 //
 //   - OutputIdx     — aggregate surviving (free) index names
-//   - Ranges keys   — aggregate / argmin / argmax contraction loop variables
+//   - Ranges keys   — aggregate contraction loop variables
 //   - Var           — the integral integration variable
-//   - Arg           — the argmin / argmax witness index
 //   - Args[1:]      — `index(array, i, j, …)` element positions (bare names)
 //   - Bindings keys — apply_expression_template formal parameter names
-//
-// A `skolem` node binds nothing: its `args` are pure key components (references
-// to symbols bound by the enclosing aggregate), and its documentary relation
-// tag lives in the dedicated `label` field, so its args are checked normally.
 func boundIndexSymbols(node ExprNode) []string {
 	var syms []string
 	for _, idx := range node.OutputIdx {
@@ -1295,9 +1289,6 @@ func boundIndexSymbols(node ExprNode) []string {
 	}
 	if node.Var != nil {
 		syms = append(syms, *node.Var)
-	}
-	if node.Arg != nil {
-		syms = append(syms, *node.Arg)
 	}
 	switch node.Op {
 	case "index":

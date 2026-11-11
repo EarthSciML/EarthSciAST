@@ -48,7 +48,7 @@ function _self_join_doc(
     clause = Dict{String, Any}("on" => [[key_col, "row_id"]])
     syms === nothing || (clause["syms"] = syms)
     return Dict(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "self_join"),
         "index_sets" => Dict("rows" => Dict("kind" => "interval", "size" => n)),
         "models" => Dict(

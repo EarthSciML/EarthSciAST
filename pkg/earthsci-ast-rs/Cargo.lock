@@ -972,7 +972,6 @@ dependencies = [
  "rstar",
  "rustc-hash",
  "ryu",
- "s2rst",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -3586,16 +3585,6 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
-
-[[package]]
-name = "s2rst"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dddc6271fb9012d6609955bfc08fde21f62327b6aafb7437d113bf111aded51f"
-dependencies = [
- "num-bigint 0.4.8",
- "num-traits",
-]
 
 [[package]]
 name = "safe_arch"

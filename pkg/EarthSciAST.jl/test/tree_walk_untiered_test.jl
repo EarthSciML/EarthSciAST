@@ -79,14 +79,11 @@ _ut_arrhenius() = ESM.Model(
 )
 
 # ---------------------------------------------------------------------------
-# Fixture 2 — the FastJX-shaped model: K photolysis bands interpolated over a
-# shared solar-angle chain in `t`, plus a met gather from a LIVE buffer, feeding
+# Fixture 2 — the FastJX-shaped model: K photolysis band rates over a shared
+# solar-angle chain in `t`, plus a met gather from a LIVE buffer, feeding
 # M chemistry states. Every observed is state-blind, so the slots are TIME.
 # ---------------------------------------------------------------------------
-_ut_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name = String(name))
-_ut_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
-_ut_axis() = Float64[0.0, 0.25, 0.5, 0.75, 1.0]
-_ut_table(i) = Float64[0.1i, 0.22i, 0.35i, 0.51i, 0.8i]
+_ut_coef(i) = 0.3i
 
 function _ut_fastjx_model(K::Int, M::Int)
     vars = Dict{String, ModelVariable}(
@@ -112,10 +109,7 @@ function _ut_fastjx_model(K::Int, M::Int)
         push!(
             eqs, ESM.Equation(
                 _v("band$i"),
-                _ut_fn(
-                    "interp.linear", _ut_const(_ut_table(i)), _ut_const(_ut_axis()),
-                    _v("sza")
-                )
+                _op("exp", _op("*", _n(_ut_coef(i)), _v("sza")))
             )
         )
     end
@@ -259,10 +253,6 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
             (
                 "units_propagation.esm", "UnitPropagationModel",
                 p -> merge(p, (; temperature = 310.0, pressure = 90000.0)),
-            ),
-            (
-                "geometry/polygon_intersection_area_planar.esm",
-                "PolygonIntersectionAreaPlanar", nothing,
             ),
         )
         for (rel, name, bump) in cases

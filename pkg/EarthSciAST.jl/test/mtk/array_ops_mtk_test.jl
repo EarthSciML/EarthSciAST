@@ -172,8 +172,7 @@ function _fixture_system(file, mname::AbstractString, model)
     one_model = EarthSciAST.EsmFile(
         file.esm, file.metadata;
         models = Dict{String, EarthSciAST.Model}(String(mname) => model),
-        index_sets = file.index_sets,
-        function_tables = file.function_tables
+        index_sets = file.index_sets
     )
     return MTK2.System(EarthSciAST.flatten(one_model); name = Symbol(mname))
 end

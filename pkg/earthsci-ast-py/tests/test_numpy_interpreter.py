@@ -616,21 +616,3 @@ def test_matvec_contraction_with_two_indices_sum_product() -> None:
     )
     # [1*5+2*6, 3*5+4*6] = [17, 39]
     np.testing.assert_allclose(eval_expr(node, ctx), [17.0, 39.0])
-
-
-def test_closed_fn_lifts_over_grid_point_arg() -> None:
-    """A scalar closed function (interp.linear) lifts element-wise over a grid-
-    valued point argument — a per-cell LANDFIRE fuel code into a table lookup —
-    while keeping the 0-D float result for scalar args. Regression for the
-    'only size-1 arrays can be converted to Python scalars' coupled-RHS failure."""
-    from earthsci_ast.numpy_interpreter import _eval_fn_lifted
-
-    table, axis = [10.0, 20.0, 30.0], [1.0, 2.0, 3.0]  # interp.linear const args (0,1)
-    # scalar point -> Python float (0-D contract preserved)
-    out = _eval_fn_lifted("interp.linear", [table, axis, 2.5], (0, 1))
-    assert isinstance(out, float) and abs(out - 25.0) < 1e-9
-    # grid point -> per-element array (interp at 1->10, 2->20, 2.5->25, 3->30)
-    x = np.array([[1.0, 2.0], [2.5, 3.0]])
-    g = _eval_fn_lifted("interp.linear", [table, axis, x], (0, 1))
-    assert isinstance(g, np.ndarray) and g.shape == (2, 2)
-    np.testing.assert_allclose(g, [[10.0, 20.0], [25.0, 30.0]])

@@ -12,16 +12,12 @@
 //!  - scalar tier: arithmetic, powers, comparisons, boolean logic, elementary
 //!    functions, derivatives (`D(x)/Dt` and `D(x, t)`), open/user function calls;
 //!  - array & call-shaped tier: array literals `[…]` (`const`), indexing
-//!    `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
-//!    the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
+//!    `a[i, j]` (`index`), the `true` and `false` literals, and `integral` /
+//!    `reshape` / `transpose` / `concat`;
 //!  - reduction & array-query tier: `faq` reductions
 //!    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
-//!    key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax` arg-witnesses,
-//!    template application `name<binding = value, …>`
-//!    (`apply_expression_template`), the geometry ops
-//!    `polygon_intersection_area(a, b, manifold=…)` and
-//!    `intersect_polygon(a, b, manifold=…[, id=…])`, the `table_lookup` bracket
-//!    surface `visc[T=temp]` / `k_rate[T=temp, p=pres]:1`, and the
+//!    key=k [semiring=…]` (all clause shapes), template application
+//!    `name<binding = value, …>` (`apply_expression_template`), and the
 //!    piecewise-region array `makearray([lo:hi, …] = value, …)`.
 //!
 //! Aggregate `args` is a derived operand cache the printer doesn't emit; it's
@@ -29,8 +25,11 @@
 //! reprint-neutral.
 //!
 //! Still deferred (they need a dedicated surface syntax): `broadcast` and
-//! `enum`. Those are refused with an [`ExpressionParseError`], as is the call
-//! spelling `table_lookup(…)` (its real surface is `visc[T=temp]`).
+//! `enum`. Those are refused with an [`ExpressionParseError`]. So is a call of
+//! an op esm 2.0.0 removed (`fn`, written as a dotted callee `datetime.year(t)`,
+//! `skolem`, `rank`, `argmin`, `argmax`, `intersect_polygon`,
+//! `polygon_intersection_area`, `table_lookup`): the text names the
+//! `removed_op` diagnostic, as the loader does.
 //!
 //! Design rules: multiplication is ALWAYS explicit (`k * A`) — no implicit
 //! juxtaposition, because identifiers are multi-letter (`NO2`, `O3`, `k_photo`).
@@ -112,20 +111,12 @@ const TEMPLATE_ARG_MIN: i32 = 4;
 
 /// Structural ops whose defining data lives OUTSIDE `args` AND which have no
 /// text surface yet — refused, pending a dedicated syntax pass.
-///
-/// `table_lookup` IS listed even though it round-trips: its surface is the
-/// bracket form `visc[T=temp]`, parsed in [`Parser::parse_table_lookup`] without
-/// going through [`make_call`], so the CALL spelling `table_lookup(a)` — which
-/// the printer never emits — stays refused. `intersect_polygon` is absent: it
-/// has a surface now that its `id` is printed.
-const STRUCTURAL_OPS: &[&str] = &["table_lookup", "broadcast", "enum"];
+const STRUCTURAL_OPS: &[&str] = &["broadcast", "enum"];
 
 /// The aggregate reduction symbols `to_ascii` emits. Each maps to a default
 /// `reduce` when no explicit `[semiring=…]` supersedes it; `sum` and `any` carry
 /// no `reduce` field (plain `+` / semiring-only).
 const AGG_SYMS: &[&str] = &["sum", "prod", "max", "min", "any"];
-/// Arg-witness reductions: `argmin[g] (expr) where {…}`.
-const ARGWITNESS_SYMS: &[&str] = &["argmin", "argmax"];
 
 fn reduce_by_sym(sym: &str) -> Option<&'static str> {
     match sym {
@@ -195,8 +186,7 @@ fn is_single_op(c: char) -> bool {
 
 /// Identifiers allow Unicode letters (Greek variables like `ΔF_net`, `Φ`),
 /// Unicode numbers (subscript digits in names like `k₀`), and dots (qualified
-/// refs like `Emissions.NO`, and dotted closed-function names like
-/// `datetime.year`). A leading digit still can't start an identifier (numbers
+/// refs like `Emissions.NO`). A leading digit still can't start an identifier (numbers
 /// lex first).
 ///
 /// `∂` (U+2202) and `∇` (U+2207) are also name constituents: source variables
@@ -473,20 +463,6 @@ impl Parser {
             if self.peek_at(1).is(Kind::Name, "semiring") {
                 break;
             }
-            // `name[axis=expr, …]` is a `table_lookup` (format_structural_op),
-            // not an index: `=` is never an expression operator (only `==` is),
-            // so a `name` `=` pair inside the brackets discriminates the two
-            // unambiguously. Only a bare variable can name a table.
-            if matches!(n, Expr::Variable(_))
-                && self.peek_at(1).kind == Kind::Name
-                && self.peek_at(2).kind == Kind::Eq
-            {
-                let Expr::Variable(table) = n else {
-                    unreachable!("matched above")
-                };
-                n = self.parse_table_lookup(table)?;
-                continue;
-            }
             self.next(); // '['
             let mut idx = vec![self.parse_expr(0)?];
             while self.peek().kind == Kind::Comma {
@@ -575,13 +551,6 @@ impl Parser {
                     && self.aggregate_ahead()
                 {
                     return self.parse_aggregate(&name);
-                }
-                // Arg-witness reduction `argmin[g] (expr) where {…}`.
-                if ARGWITNESS_SYMS.contains(&name.as_str())
-                    && self.peek().kind == Kind::LBrack
-                    && self.aggregate_ahead()
-                {
-                    return self.parse_arg_witness(&name);
                 }
                 Ok(Expr::Variable(name)) // bare variable / species / qualified ref
             }
@@ -772,59 +741,8 @@ impl Parser {
         Ok(Expr::operator(n))
     }
 
-    /// Parse an `argmin` / `argmax` arg-witness — the inverse of the printer's
-    /// `formatArgWitness`: `op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?
-    /// ('join' '(' … ')')? ('if' filter)? ('id' '=' name)?`.
-    fn parse_arg_witness(&mut self, op: &str) -> PResult<Expr> {
-        self.next(); // '['
-        let at = self.next();
-        if at.kind != Kind::Name {
-            return Err(ExpressionParseError::new(
-                "Expected the arg-witness index name",
-                at.pos,
-            ));
-        }
-        self.expect(Kind::RBrack, "']' after the arg-witness index")?;
-        self.expect(Kind::LParen, "'(' before the arg-witness body")?;
-        let expr = self.parse_expr(0)?;
-        self.expect(Kind::RParen, "')' after the arg-witness body")?;
-        let mut ranges: HashMap<String, RangeSpec> = HashMap::new();
-        if self.at_word("where") {
-            self.next();
-            ranges = self.parse_ranges()?;
-        }
-        // The candidate-pruning `join(…)` and `if` filter, exactly as on `faq`.
-        let mut join: Vec<JoinClause> = Vec::new();
-        if self.at_word("join") {
-            self.next();
-            join = self.parse_join()?;
-        }
-        let mut filter: Option<Expr> = None;
-        if self.at_word("if") {
-            self.next();
-            filter = Some(self.parse_expr(0)?);
-        }
-        // `id=<name>` (RFC §6.1 node identity), emitted by `format_arg_witness`
-        // after the filter. Mirrors the aggregate tail.
-        let id = self.parse_id_clause()?;
-        let mut n = ExpressionNode {
-            op: op.to_string(),
-            args: derive_aggregate_args(&expr, &join, filter.as_ref(), None),
-            ..Default::default()
-        };
-        n.arg = Some(at.text);
-        n.ranges = Some(ranges);
-        if !join.is_empty() {
-            n.join = Some(join);
-        }
-        n.filter = filter.map(Box::new);
-        n.expr = Some(Box::new(expr));
-        n.id = id;
-        Ok(Expr::operator(n))
-    }
-
     /// Read an optional `id=<name>` clause (RFC §6.1 stable node identity) off
-    /// the tail of an aggregate / arg-witness. Consumes nothing when absent.
+    /// the tail of an aggregate. Consumes nothing when absent.
     fn parse_id_clause(&mut self) -> PResult<Option<String>> {
         if !(self.at_word("id") && self.peek_at(1).kind == Kind::Eq) {
             return Ok(None);
@@ -839,55 +757,6 @@ impl Parser {
             ));
         }
         Ok(Some(nm.text))
-    }
-
-    /// Parse a `table_lookup` from the surface `format_structural_op` emits:
-    /// `table '[' axis '=' expr (',' axis '=' expr)* ']' (':' <integer>)?`, e.g.
-    /// `visc[T=temp]` and `k_rate[T=temp, p=pres]:1`. The printer sorts the axis
-    /// names, so the reconstructed `axes` map reprints identically.
-    fn parse_table_lookup(&mut self, table: String) -> PResult<Expr> {
-        self.expect(Kind::LBrack, "'['")?;
-        let mut axes: HashMap<String, Expr> = HashMap::new();
-        loop {
-            let nm = self.next();
-            if nm.kind != Kind::Name {
-                return Err(ExpressionParseError::new(
-                    "Expected an axis name in table[axis=…]",
-                    nm.pos,
-                ));
-            }
-            self.expect(Kind::Eq, "'=' in table[axis=…]")?;
-            let v = self.parse_expr(0)?;
-            axes.insert(nm.text, v);
-            if self.peek().kind == Kind::Comma {
-                self.next();
-                continue;
-            }
-            break;
-        }
-        self.expect(Kind::RBrack, "']' after table[axis=…]")?;
-        let mut n = ExpressionNode {
-            op: "table_lookup".to_string(),
-            args: Vec::new(),
-            ..Default::default()
-        };
-        n.table = Some(table);
-        n.axes = Some(axes);
-        // The optional `:N` output selector picks one column of a multi-output
-        // table. Emitted as a JSON integer, never a float, so the wire form is
-        // byte-identical to the other bindings'.
-        if self.peek().kind == Kind::Colon {
-            self.next();
-            let out = self.next();
-            if out.kind != Kind::Num || out.num.fract() != 0.0 || !out.num.is_finite() {
-                return Err(ExpressionParseError::new(
-                    "Expected an integer output index after table[…]:",
-                    out.pos,
-                ));
-            }
-            n.output = Some(Value::from(out.num as i64));
-        }
-        Ok(Expr::operator(n))
     }
 
     /// Parse a `{ k in <rhs>, … }` where-body into a ranges map.
@@ -1308,16 +1177,24 @@ fn take_named(named: &[(String, Expr)], key: &str) -> Option<Expr> {
 }
 
 fn make_call(name: &str, args: Vec<Expr>, named: Vec<(String, Expr)>, pos: usize) -> PResult<Expr> {
-    // A dotted callee is a closed function — an `fn` node carrying the name.
-    if name.contains('.') {
-        no_named(&named, name, pos)?;
-        let mut n = ExpressionNode {
-            op: "fn".to_string(),
-            args,
-            ..Default::default()
-        };
-        n.name = Some(name.to_string());
-        return Ok(Expr::operator(n));
+    // A dotted callee was a closed-function call (`fn`), and the ops below
+    // are the others esm 2.0.0 removed: refused by name, as the loader does.
+    let removed = if name.contains('.') {
+        Some("fn")
+    } else {
+        crate::parse::REMOVED_AT_V2
+            .iter()
+            .copied()
+            .find(|op| *op == name)
+    };
+    if let Some(op) = removed {
+        return Err(ExpressionParseError::new(
+            format!(
+                "removed_op: `{op}` was removed at esm 2.0.0; use its `esm:std/*.esm` \
+                 expression template (the codemod: `python -m earthsci_ast.migrate`)"
+            ),
+            pos,
+        ));
     }
     // Call-shaped structural ops: reconstruct their non-`args` fields from the
     // positional / named arguments `to_ascii` renders.
@@ -1386,64 +1263,6 @@ fn make_call(name: &str, args: Vec<Expr>, named: Vec<(String, Expr)>, pos: usize
             ..Default::default()
         };
         n.axis = Some(axis);
-        return Ok(Expr::operator(n));
-    }
-    // Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
-    // `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
-    // node identity) is optional and only emitted by the printer when present.
-    if name == "polygon_intersection_area" || name == "intersect_polygon" {
-        let manifold = match take_named(&named, "manifold") {
-            Some(Expr::Variable(s)) => s,
-            _ => {
-                return Err(ExpressionParseError::new(
-                    format!("{name}(...) requires manifold=<name>"),
-                    pos,
-                ));
-            }
-        };
-        if let Some((k, _)) = named.iter().find(|(k, _)| k != "manifold" && k != "id") {
-            return Err(ExpressionParseError::new(
-                format!("unexpected {k}=… in {name}(...)"),
-                pos,
-            ));
-        }
-        let mut n = ExpressionNode {
-            op: name.to_string(),
-            args,
-            ..Default::default()
-        };
-        n.manifold = Some(manifold);
-        if let Some(id) = take_named(&named, "id") {
-            let Expr::Variable(id) = id else {
-                return Err(ExpressionParseError::new(
-                    format!("{name}(...) id=… must be a name"),
-                    pos,
-                ));
-            };
-            n.id = Some(id);
-        }
-        return Ok(Expr::operator(n));
-    }
-    // `skolem(a, b, label=<name>)` — the documentary relation tag.
-    if name == "skolem" && take_named(&named, "label").is_some() {
-        if let Some((k, _)) = named.iter().find(|(k, _)| k != "label") {
-            return Err(ExpressionParseError::new(
-                format!("unexpected {k}=… in skolem(...)"),
-                pos,
-            ));
-        }
-        let Some(Expr::Variable(label)) = take_named(&named, "label") else {
-            return Err(ExpressionParseError::new(
-                "skolem(...) label=… must be a name",
-                pos,
-            ));
-        };
-        let mut n = ExpressionNode {
-            op: "skolem".to_string(),
-            args,
-            ..Default::default()
-        };
-        n.label = Some(label);
         return Ok(Expr::operator(n));
     }
     no_named(&named, name, pos)?;
@@ -1546,7 +1365,7 @@ fn flatten(e: &Expr) -> Expr {
     };
     let args: Vec<Expr> = nd.args.iter().map(flatten).collect();
     let mut out = (**nd).clone();
-    // The reduction-body fields of `faq` / `argmin` / `argmax` are expressions
+    // The reduction-body fields of `faq` are expressions
     // in their own right and are normalized the same way.
     for field in [&mut out.expr, &mut out.filter, &mut out.key] {
         if let Some(v) = field.as_deref() {
@@ -1577,9 +1396,9 @@ fn flatten(e: &Expr) -> Expr {
 ///
 /// # Errors
 ///
-/// Returns an [`ExpressionParseError`] on malformed input, or on an operator
-/// that has no text surface yet (`table_lookup` in its CALL spelling — the
-/// bracket form `visc[T=temp]` parses — `broadcast`, and `enum`).
+/// Returns an [`ExpressionParseError`] on malformed input, on an operator
+/// that has no text surface yet (`broadcast`, and `enum`), or on a call of an
+/// op esm 2.0.0 removed.
 ///
 /// # Examples
 ///

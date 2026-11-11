@@ -1,11 +1,13 @@
 """Version compatibility for the ESM format, per Section 8 of the ESM Libraries
 Specification and ``tests/version_compatibility/compatibility_matrix.json``.
 
-The library implements MAJOR VERSION 1, so a different major is rejected in
-either direction and a newer minor loads with a warning. esm 1.0.0 is a CLEAN
+The library implements MAJOR VERSION 2 and still reads major 1: esm 2.0.0
+removed ops and fields but did not change what the rest of a 1.x document means,
+so a 1.x document that uses no removed construct loads (a removed one is
+``removed_op``). Any other major is rejected, and a minor newer than the newest
+the library knows for its major loads with a warning. esm 1.0.0 was a CLEAN
 BREAK with no deprecation path, which puts every 0.x document on the rejected
-side of that line — the polarity of this suite is inverted from its 0.x form,
-where major 1 was the thing being refused.
+side.
 
 Every case reads the fixture that DECLARES the version under test. The shared
 fixtures are named for the version they carry, and keeping the two in step is
@@ -66,8 +68,11 @@ class TestVersionCompatibility:
         """
         for name in ("version_1_3_0_solver_external.esm", "version_1_3_0_solver_time_span.esm"):
             fixture = load_fixture(name)
-            assert fixture["esm"] == _EXPECTED_VERSION
-
+            # The newest 1.x documents load as written, with no warning ...
+            with no_version_warning():
+                assert load_document(fixture).esm == fixture["esm"]
+            # ... and the same document restamped with the library's version.
+            fixture["esm"] = _EXPECTED_VERSION
             with no_version_warning():
                 result = load_document(fixture)
 
@@ -142,9 +147,11 @@ class TestVersionCompatibility:
         with pytest.raises(SchemaValidationError, match="speculative_1_1_field"):
             load_document(fixture)
 
-    def test_major_version_rejection_2_5_1(self):
-        """A FUTURE major is rejected in the other direction."""
-        with pytest.raises(UnsupportedVersionError, match="Unsupported major version 2"):
+    def test_major_version_2_5_1(self):
+        """2.5.1 is a newer minor of the current major: it loads with a warning.
+        A future major is rejected (``test_large_version_numbers_rejection``)."""
+        assert _CURRENT_VERSION[0] == 2
+        with pytest.warns(UserWarning, match="2.5.1 is newer than"):
             load_document(load_fixture("version_2_5_1_major_rejection.esm"))
 
     def test_invalid_version_string(self):
@@ -161,7 +168,7 @@ class TestVersionCompatibility:
         """The semver pattern admits major.minor.patch only. The fixture carries
         a SUPPORTED major so this is the one rule that can fire."""
         fixture = load_fixture("version_with_prerelease.esm")
-        assert fixture["esm"].startswith(f"{_CURRENT_VERSION[0]}.")
+        assert int(fixture["esm"].split(".")[0]) in (1, _CURRENT_VERSION[0])
 
         with pytest.raises(SchemaValidationError):
             load_document(fixture)
@@ -296,7 +303,7 @@ class TestLibraryVersionInfo:
         # This would be part of the actual implementation
         def get_compatibility_info():
             return {
-                "supported_major_version": _CURRENT_VERSION[0],
+                "supported_major_versions": [1, _CURRENT_VERSION[0]],
                 "current_version": _EXPECTED_VERSION,
                 # 1.0.0 is the floor of the supported major version — major 0
                 # is rejected outright, so there is no older minor to read.
@@ -305,7 +312,7 @@ class TestLibraryVersionInfo:
             }
 
         info = get_compatibility_info()
-        assert info["supported_major_version"] == 1
+        assert info["supported_major_versions"] == [1, 2]
         assert info["current_version"] == _EXPECTED_VERSION
 
 
