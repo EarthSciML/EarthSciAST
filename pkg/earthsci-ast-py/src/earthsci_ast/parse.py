@@ -11,6 +11,7 @@ import copy
 import json
 import os
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -3437,6 +3438,16 @@ def _version_below_v11(data: object) -> bool:
     except (IndexError, ValueError):
         return False
     return (major, minor) < (1, 1)
+
+
+class EsmDeprecationWarning(UserWarning):
+    """A deprecated ESM construct was accepted.
+
+    Subclasses :class:`UserWarning`, not :class:`DeprecationWarning`, on
+    purpose: Python filters ``DeprecationWarning`` outside ``__main__``, so a
+    library-issued one is invisible to exactly the users who need it — the four
+    other bindings all print unconditionally.
+    """
 
 
 def _pointer_token(name: object) -> str:
