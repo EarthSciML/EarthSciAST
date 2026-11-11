@@ -1498,7 +1498,7 @@ def _ic_observed_definitions(
     (esm-spec §6.3.1), as the array build classifies them; a state is every
     other unknown the solver advances. Value-invention producers are neither:
     they are materialized at setup."""
-    vi_var_names, _bins = _detect_value_invention_states(flat)
+    vi_var_names = _detect_value_invention_states(flat)
     alg = _algebraically_defined_states(flat, vi_var_names)
     observed_names = set(flat.observed_variables) | alg
     definitions: dict[str, list[Expr]] = {}
