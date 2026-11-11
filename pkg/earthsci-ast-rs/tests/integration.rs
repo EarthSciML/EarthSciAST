@@ -373,6 +373,8 @@ mod tape_loop_lowering;
 mod template_array_args;
 #[path = "template_imports_conformance.rs"]
 mod template_imports_conformance;
+#[path = "template_scenarios.rs"]
+mod template_scenarios;
 #[path = "term_provenance.rs"]
 mod term_provenance;
 #[path = "tests_blocks_execution.rs"]
