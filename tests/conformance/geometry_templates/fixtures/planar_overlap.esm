@@ -2,13 +2,12 @@
   "esm": "2.0.0",
   "metadata": {
     "name": "geometry_planar_overlap_template",
-    "description": "The `overlap_area_planar` template of lib/geometry.esm against the `polygon_intersection_area` leaf (esm-spec \u00a78.6.1) on cells that exercise every special case: identical cells, an adjacent pair (shared edge, opposite directions), corner and edge touches, nested and partial overlaps, a clockwise ring, a pentagon, and rings padded by a closing duplicate, trailing repeats and a leading repeat. Every coordinate and area is dyadic, so the template, the template behind the overlap join gate, and the leaf are each asserted exactly (tolerance 0). Run by the `geometry_templates` inline-test conformance tier.",
+    "description": "The `overlap_area_planar` template of lib/geometry.esm on cells that exercise every special case: identical cells, an adjacent pair (shared edge, opposite directions), corner and edge touches, nested and partial overlaps, a clockwise ring, a pentagon, and rings padded by a closing duplicate, trailing repeats and a leading repeat. Every coordinate and area is dyadic, so the template, the template behind the overlap join gate, and the template again in `A_leaf` are each asserted exactly (tolerance 0). Run by the `geometry_templates` inline-test conformance tier.",
     "authors": [
       "EarthSciML"
     ],
     "tags": [
       "geometry",
-      "polygon_intersection_area",
       "expression_templates",
       "faq",
       "planar",
@@ -90,7 +89,7 @@
             "src_cells",
             "tgt_cells"
           ],
-          "description": "The same areas by the `polygon_intersection_area` leaf (planar)."
+          "description": "The same areas again by the `overlap_area_planar` template (this variable held the removed `polygon_intersection_area` leaf before esm 2.0.0)."
         },
         "s": {
           "type": "unknown",

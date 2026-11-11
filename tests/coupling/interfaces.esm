@@ -2,7 +2,7 @@
   "esm": "2.0.0",
   "metadata": {
     "name": "InterfaceDefinitions",
-    "description": "Cross-grid tropopause coupling. Stratospheric ozone (a SPATIALLY-VARYING field on the 3-cell stratospheric grid) is remapped onto the DIFFERENT 4-cell tropospheric grid by a REAL conservative regrid whose overlap weights W[u,l] = A[u,l]/A_l are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. The regridded boundary O3_boundary drives D(O3) (stratosphere-troposphere exchange). Spatial<->0-D maps use the coupling lifting field.",
+    "description": "Cross-grid tropopause coupling. Stratospheric ozone (a SPATIALLY-VARYING field on the 3-cell stratospheric grid) is remapped onto the DIFFERENT 4-cell tropospheric grid by a REAL conservative regrid whose overlap weights W[u,l] = A[u,l]/A_l are computed INLINE from cell geometry (bin-key broad phase + `overlap_area_planar` narrow phase from esm:std/geometry.esm), not supplied. The regridded boundary O3_boundary drives D(O3) (stratosphere-troposphere exchange). Spatial<->0-D maps use the coupling lifting field.",
     "authors": [
       "EarthSciML"
     ],
@@ -251,7 +251,7 @@
           "shape": [
             "rg_candidate_pairs"
           ],
-          "description": "Membership over the bin-skolem candidate overlap-pair set (broad phase), materialized as the derived rg_candidate_pairs index set via from_faq:\"rg_candidate_set\"."
+          "description": "Membership over the bin-key candidate overlap-pair set (broad phase), materialized as the derived rg_candidate_pairs index set via from_faq:\"rg_candidate_set\"."
         },
         "rg_A": {
           "type": "unknown",
@@ -259,14 +259,14 @@
             "upper_cells",
             "lower_cells"
           ],
-          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[u,l] = polygon_intersection_area(rg_src_poly[u], rg_tgt_poly[l]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md §8.6.1), ranged over the SAME bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. The fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel, so this is a DENSE faq over the candidate set with NO ragged intermediate — replacing the earlier ragged-ring narrow phase. The weights are computed from cell geometry, not supplied."
+          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[u,l] = the `overlap_area_planar` template of esm:std/geometry.esm applied to rg_src_poly[u] and rg_tgt_poly[l], computed INLINE from the in-file geometry, ranged over the SAME bin-key candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. the template returns the SCALAR overlap area (its body clips one convex ring against the other and takes the shoelace area) with no intersection ring in the document, so this is a DENSE faq over the candidate set with NO ragged intermediate. The weights are computed from cell geometry, not supplied."
         },
         "rg_At": {
           "type": "unknown",
           "shape": [
             "lower_cells"
           ],
-          "description": "Target-cell area denominator A_j = Σ_i A_ij over the bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) with the sliver filter — the row-sum normalization, computed from geometry, not supplied."
+          "description": "Target-cell area denominator A_j = Σ_i A_ij over the bin-key candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) with the sliver filter — the row-sum normalization, computed from geometry, not supplied."
         },
         "rg_W": {
           "type": "unknown",
@@ -478,7 +478,7 @@
           }
         },
         {
-          "_comment": "BROAD PHASE (1c): candidate overlap-pair set = the bin-skolem equi-join (distinct bool_and_or): keep (i,j) whose bin keys are EQUAL.",
+          "_comment": "BROAD PHASE (1c): candidate overlap-pair set = the bin-key equi-join (distinct bool_and_or): keep (i,j) whose bin keys are EQUAL.",
           "lhs": {
             "op": "index",
             "args": [

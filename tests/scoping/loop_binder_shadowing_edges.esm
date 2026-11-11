@@ -2,7 +2,7 @@
   "esm": "2.0.0",
   "metadata": {
     "name": "LoopBinderShadowingEdges",
-    "description": "The edges of the loop-symbol shadowing rule (esm-spec §4.3, \"Shadowing\") that index_symbol_shadows_variable.esm does not reach. Model Edges declares parameters `z` and `g`. Its first equation holds an `integral` whose `var` is `z`, so the `z` inside the integrand is the integration variable while the outer factor `z` is the parameter. Its second equation holds an `argmin` (not a `faq`) whose `ranges` key is `g`, so the `g` inside its body is the loop index while the outer factor `g` is the parameter. Model Outer mounts a subsystem named `j` and holds a faq that binds `j`: the bare `j` in the body is the loop index, but the dotted `j.x` is never a loop index and must become Outer.j.x.",
+    "description": "The edges of the loop-symbol shadowing rule (esm-spec §4.3, \"Shadowing\") that index_symbol_shadows_variable.esm does not reach. Model Edges declares parameters `z` and `g`. Its first equation holds an `integral` whose `var` is `z`, so the `z` inside the integrand is the integration variable while the outer factor `z` is the parameter. Its second equation multiplies the parameter `g` by an `argmin` template call (esm:std/relational.esm) whose candidate expression ranges over the template's own loop symbol `k_argmin_1`, so `g` stays the parameter everywhere. Model Outer mounts a subsystem named `j` and holds a faq that binds `j`: the bare `j` in the body is the loop index, but the dotted `j.x` is never a loop index and must become Outer.j.x.",
     "authors": [
       "ESM Test Suite"
     ],
@@ -39,7 +39,7 @@
         "b": {
           "type": "unknown",
           "default": 1.0,
-          "description": "Driven by an argmin"
+          "description": "Driven by an `argmin` template call"
         },
         "w": {
           "type": "parameter",
@@ -57,7 +57,7 @@
         "g": {
           "type": "parameter",
           "default": 2.0,
-          "description": "Parameter spelled like the argmin range symbol"
+          "description": "Parameter read beside the `argmin` template call"
         }
       },
       "equations": [

@@ -2,14 +2,14 @@
   "esm": "2.0.0",
   "metadata": {
     "name": "polygon_intersection_area_padded_ring",
-    "description": "Conformance fixture for the esm-spec §8.6.1 'Operand rings, padding, and degenerate vertices' pin: `polygon_intersection_area` operands carrying CONSECUTIVE DUPLICATE (padded) vertices MUST be accepted and evaluated as the deduplicated ring. This is the rectangular-storage padding a mixed-valence mesh needs — an MPAS pentagon stored in a hexagon-shaped [cells, NVERT, 2] ring stack repeats its final vertex to fill the fixed NVERT slots. Here src_poly is the square (0.5,0.5)-(2.5,0.5)-(2.5,2.5)-(0.5,2.5) padded to 5 vertices (final vertex repeated once) and tgt_poly is the square (1.5,1.5)-(3.5,1.5)-(3.5,3.5)-(1.5,3.5) padded to 6 vertices (final vertex repeated twice); the planar overlap is the [1.5,2.5]x[1.5,2.5] box, area exactly 1.0 — identical to the unpadded rings. Deduplication is the binding kernel's job, performed in operand coercion BEFORE the backend clip (S2 backends reject zero-length edges as degenerate; Sutherland-Hodgman treats them as no-ops — the contract must not depend on the backend). Sibling of polygon_intersection_area_planar.esm, which exercises the unpadded convention.",
+    "description": "Conformance fixture for padded rings: the `overlap_area_planar` template of esm:std/geometry.esm applied to rings carrying CONSECUTIVE DUPLICATE (padded) vertices MUST give the area of the deduplicated rings. This is the rectangular-storage padding a mixed-valence mesh needs — an MPAS pentagon stored in a hexagon-shaped [cells, NVERT, 2] ring stack repeats its final vertex to fill the fixed NVERT slots. Here src_poly is the square (0.5,0.5)-(2.5,0.5)-(2.5,2.5)-(0.5,2.5) padded to 5 vertices (final vertex repeated once) and tgt_poly is the square (1.5,1.5)-(3.5,1.5)-(3.5,3.5)-(1.5,3.5) padded to 6 vertices (final vertex repeated twice); the planar overlap is the [1.5,2.5]x[1.5,2.5] box, area exactly 1.0 — identical to the unpadded rings. The template handles the repeated vertices in its own body; no binding deduplicates the rings first. Sibling of polygon_intersection_area_planar.esm, which exercises the unpadded convention.",
     "authors": [
       "EarthSciAST"
     ],
     "created": "2026-07-02T00:00:00Z",
     "tags": [
       "geometry",
-      "polygon_intersection_area",
+      "overlap_area_planar",
       "manifold",
       "planar",
       "padded-ring",
@@ -67,7 +67,7 @@
         "overlap_area": {
           "type": "unknown",
           "units": "1",
-          "description": "Scalar planar overlap area of the two PADDED rings via the fused polygon_intersection_area leaf. MUST equal the area of the deduplicated rings: the [1.5,2.5]x[1.5,2.5] box, exactly 1.0 (esm-spec §8.6.1 padding pin)."
+          "description": "Scalar planar overlap area of the two PADDED rings by the `overlap_area_planar` template. MUST equal the area of the deduplicated rings: the [1.5,2.5]x[1.5,2.5] box, exactly 1.0."
         },
         "area_state": {
           "type": "unknown",

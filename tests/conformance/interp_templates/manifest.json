@@ -2,7 +2,7 @@
  "category": "interp_templates",
  "runner": "inline_tests",
  "version": "1.0",
- "description": "The pure-AST interpolation templates of lib/interp.esm (`searchsorted`, `linear`, `bilinear`), each applied to scenarios of tests/closed_functions/interp/<fn>/expected.json and asserted at tolerance 0, so every binding's expanded template reproduces the bits the `interp.*` closed functions are pinned to (esm-spec §9.2). The query is a parameter, the arrays `const` nodes and each axis length an integer template argument used as a `faq` `ranges` bound (esm-spec §9.6.1).",
+ "description": "The pure-AST interpolation templates of lib/interp.esm (`searchsorted`, `linear`, `bilinear`), each applied to scenarios of tests/closed_functions/interp/<fn>/expected.json and asserted at tolerance 0, so every binding's expanded template reproduces the pinned binary64 reference values there. The query is a parameter, the arrays `const` nodes and each axis length an integer template argument used as a `faq` `ranges` bound (esm-spec §9.6.1).",
  "reference_binding": "julia",
  "reference_compiler": "interpreter",
  "bindings_required": [
@@ -34,7 +34,7 @@
  "tolerances": {
   "golden_rtol": 0,
   "golden_atol": 0,
-  "detail": "Every asserted value is the closed function's pinned binary64 result, matched bit for bit."
+  "detail": "Every asserted value is the pinned binary64 reference value of tests/closed_functions, matched bit for bit."
  },
  "fixtures": [
   {
@@ -45,8 +45,7 @@
    "tags": [
     "expression_templates",
     "faq",
-    "closed-function-registry",
-    "interp.searchsorted"
+    "searchsorted"
    ],
    "note": "Referenced from tests/closed_functions/interp/searchsorted/, beside the expected.json whose scenarios it applies.",
    "required": {
@@ -73,8 +72,7 @@
    "tags": [
     "expression_templates",
     "faq",
-    "closed-function-registry",
-    "interp.linear"
+    "linear"
    ],
    "note": "Referenced from tests/closed_functions/interp/linear/, beside the expected.json whose scenarios it applies.",
    "required": {
@@ -101,8 +99,7 @@
    "tags": [
     "expression_templates",
     "faq",
-    "closed-function-registry",
-    "interp.bilinear"
+    "bilinear"
    ],
    "note": "Referenced from tests/closed_functions/interp/bilinear/, beside the expected.json whose scenarios it applies.",
    "required": {

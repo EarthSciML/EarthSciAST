@@ -2,7 +2,7 @@
   "esm": "1.1.0",
   "metadata": {
     "name": "continuous_relational_nodeTemplate",
-    "description": "The continuous_relational_node.esm document with its one-component skolem key written as the bare integer expression u[f] (the template rewrite of a one-component key, lib/relational.esm rulings). The producer still reads the state u, so it is refused exactly as the skolem form is.",
+    "description": "The continuous_relational_node.esm document, whose one-component key is the bare integer expression u[f] (the template form of a one-component key, lib/relational.esm rulings). The producer reads the state u, so it is refused.",
     "authors": [
       "EarthSciAST/polecats/gastown.furiosa"
     ],
@@ -32,7 +32,7 @@
       },
       "equations": [
         {
-          "_comment": "REJECTED by §5.7 guard 2: this distinct/value-invention node reads the state variable u in its Skolem key, so class(node) = CONTINUOUS. Relational work may not run on the per-step hot path; declare the leaves CONST (document literals) or DISCRETE (a `discrete` variable refreshed at events) instead.",
+          "_comment": "REJECTED by §5.7 guard 2: this distinct/value-invention node reads the state variable u in its key, so class(node) = CONTINUOUS. Relational work may not run on the per-step hot path; declare the leaves CONST (document literals) or DISCRETE (a `discrete` variable refreshed at events) instead.",
           "lhs": {
             "op": "index",
             "args": [

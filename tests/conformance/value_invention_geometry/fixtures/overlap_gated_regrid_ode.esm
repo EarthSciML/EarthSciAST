@@ -11,7 +11,7 @@
    "join",
    "overlap",
    "geometry",
-   "polygon_intersection_area",
+   "overlap_area_planar",
    "construction"
   ]
  },
@@ -87,7 +87,7 @@
       "src_cells",
       "tgt_cells"
      ],
-     "description": "Overlap-gated narrow phase: polygon_intersection_area over the candidate pairs the envelope gate admits."
+     "description": "Overlap-gated narrow phase: the `overlap_area_planar` template over the candidate pairs the envelope gate admits."
     },
     "A_j": {
      "type": "unknown",

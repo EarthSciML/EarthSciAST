@@ -2,7 +2,7 @@
  "esm": "2.0.0",
  "metadata": {
   "name": "polygon_area_in_faq_dynamic",
-  "description": "`polygon_intersection_area` as the body of a `faq`, reading partial-rank ring slices `index(ring, r)` (the isrm polygon `E_*` shape), with and without an `overlap` gate over the rings' bounding boxes; the third cell overlaps nothing. Dynamic variant: the same rules beside a state whose right-hand side reads them, so they are lowered on the run-time path.",
+  "description": "The `overlap_area_planar` template (esm:std/geometry.esm) as the body of a `faq`, reading partial-rank ring slices `index(ring, r)` (the isrm polygon `E_*` shape), with and without an `overlap` gate over the rings' bounding boxes; the third cell overlaps nothing. Dynamic variant: the same rules beside a state whose right-hand side reads them, so they are lowered on the run-time path.",
   "authors": [
    "EarthSciML Authors and Contributors"
   ],

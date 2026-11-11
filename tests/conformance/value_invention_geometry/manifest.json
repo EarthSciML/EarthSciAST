@@ -2,7 +2,7 @@
  "category": "value_invention_geometry",
  "runner": "inline_tests",
  "version": "1.0",
- "description": "Build-time value invention and setup-time polygon geometry feeding a right-hand side, under every compiler. Each document's producer inputs are constant factors held in the document itself (unknowns defined by array `const` nodes, esm-spec §4.2), so no caller data is involved: a `distinct` producer over a ragged set whose size a state integrates, an `argmin` arg-witness buffer a state gathers through, a bin-skolem candidate-pair set a state counts, an `intersect_polygon` clip of two const rings whose area drives a state, and `polygon_intersection_area` over rings of different vertex counts. Before this tier, Julia refused the ragged, arg-witness and clip documents under both compilers and failed the unequal-ring documents with a shape-promotion conflict, and Rust's native compiler refused the arg-witness gather.",
+ "description": "Build-time value invention and setup-time polygon geometry, written with the esm:std/relational.esm and esm:std/geometry.esm templates, feeding a right-hand side, under every compiler. Each document's producer inputs are constant factors held in the document itself (unknowns defined by array `const` nodes, esm-spec §4.2), so no caller data is involved: a `distinct` producer over a ragged set whose size a state integrates, an `argmin` arg-witness buffer a state gathers through, a bin-key candidate-pair set a state counts, and `overlap_area_planar` over rings of different vertex counts. Before this tier, Julia refused the ragged, arg-witness and clip documents under both compilers and failed the unequal-ring documents with a shape-promotion conflict, and Rust's native compiler refused the arg-witness gather.",
  "reference_binding": "julia",
  "reference_compiler": "interpreter",
  "bindings_required": [
@@ -45,7 +45,7 @@
    "tags": [
     "value-invention",
     "distinct",
-    "skolem",
+    "pair_key",
     "ragged",
     "derived-index-set"
    ],
@@ -100,7 +100,7 @@
    "golden": "golden/bin_skolem_count_ode.json",
    "tags": [
     "value-invention",
-    "skolem",
+    "pair_key",
     "join",
     "derived-index-set"
    ],
@@ -128,7 +128,7 @@
    "golden": "golden/polygon_intersection_area_padded_ring.json",
    "tags": [
     "geometry",
-    "polygon_intersection_area",
+    "overlap_area_planar",
     "padded-ring"
    ],
    "note": "Owned by tests/valid/geometry.",
@@ -155,7 +155,7 @@
    "golden": "golden/polygon_intersection_area_planar.json",
    "tags": [
     "geometry",
-    "polygon_intersection_area"
+    "overlap_area_planar"
    ],
    "note": "Owned by tests/valid/geometry.",
    "required": {
@@ -183,7 +183,7 @@
     "join",
     "overlap",
     "geometry",
-    "polygon_intersection_area",
+    "overlap_area_planar",
     "construction"
    ],
    "note": "Authored here for issue #535 (EarthSciDiscretizations gated regridding cases).",

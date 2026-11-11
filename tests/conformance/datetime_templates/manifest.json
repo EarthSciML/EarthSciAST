@@ -2,7 +2,7 @@
  "category": "datetime_templates",
  "runner": "inline_tests",
  "version": "1.0",
- "description": "The pure-AST calendar templates of lib/calendar.esm (`year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`), each applied to scenarios of tests/closed_functions/datetime/<fn>/expected.json and asserted at tolerance 0, so every binding's expanded template reproduces the bits the `datetime.*` closed functions are pinned to (esm-spec §9.2). The instant is a parameter in seconds; the templates use no `faq`.",
+ "description": "The pure-AST calendar templates of lib/calendar.esm (`year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`), each applied to scenarios of tests/closed_functions/datetime/<fn>/expected.json and asserted at tolerance 0, so every binding's expanded template reproduces the pinned binary64 reference values there. The instant is a parameter in seconds; the templates use no `faq`.",
  "reference_binding": "julia",
  "reference_compiler": "interpreter",
  "bindings_required": [
@@ -34,7 +34,7 @@
  "tolerances": {
   "golden_rtol": 0,
   "golden_atol": 0,
-  "detail": "Every asserted value is the closed function's pinned binary64 result, matched bit for bit."
+  "detail": "Every asserted value is the pinned binary64 reference value of tests/closed_functions, matched bit for bit."
  },
  "fixtures": [
   {
@@ -44,8 +44,7 @@
    "golden": "golden/year_template.json",
    "tags": [
     "expression_templates",
-    "closed-function-registry",
-    "datetime.year"
+    "year"
    ],
    "note": "Referenced from tests/closed_functions/datetime/year/, beside the expected.json whose scenarios it applies.",
    "required": {
@@ -71,8 +70,7 @@
    "golden": "golden/month_template.json",
    "tags": [
     "expression_templates",
-    "closed-function-registry",
-    "datetime.month"
+    "month"
    ],
    "note": "Referenced from tests/closed_functions/datetime/month/, beside the expected.json whose scenarios it applies.",
    "required": {
@@ -98,8 +96,7 @@
    "golden": "golden/day_template.json",
    "tags": [
     "expression_templates",
-    "closed-function-registry",
-    "datetime.day"
+    "day"
    ],
    "note": "Referenced from tests/closed_functions/datetime/day/, beside the expected.json whose scenarios it applies.",
    "required": {
@@ -125,8 +122,7 @@
    "golden": "golden/hour_template.json",
    "tags": [
     "expression_templates",
-    "closed-function-registry",
-    "datetime.hour"
+    "hour"
    ],
    "note": "Referenced from tests/closed_functions/datetime/hour/, beside the expected.json whose scenarios it applies.",
    "required": {
@@ -152,8 +148,7 @@
    "golden": "golden/minute_template.json",
    "tags": [
     "expression_templates",
-    "closed-function-registry",
-    "datetime.minute"
+    "minute"
    ],
    "note": "Referenced from tests/closed_functions/datetime/minute/, beside the expected.json whose scenarios it applies.",
    "required": {
@@ -179,8 +174,7 @@
    "golden": "golden/second_template.json",
    "tags": [
     "expression_templates",
-    "closed-function-registry",
-    "datetime.second"
+    "second"
    ],
    "note": "Referenced from tests/closed_functions/datetime/second/, beside the expected.json whose scenarios it applies.",
    "required": {
@@ -206,8 +200,7 @@
    "golden": "golden/day_of_year_template.json",
    "tags": [
     "expression_templates",
-    "closed-function-registry",
-    "datetime.day_of_year"
+    "day_of_year"
    ],
    "note": "Referenced from tests/closed_functions/datetime/day_of_year/, beside the expected.json whose scenarios it applies.",
    "required": {
@@ -233,8 +226,7 @@
    "golden": "golden/julian_day_template.json",
    "tags": [
     "expression_templates",
-    "closed-function-registry",
-    "datetime.julian_day"
+    "julian_day"
    ],
    "note": "Referenced from tests/closed_functions/datetime/julian_day/, beside the expected.json whose scenarios it applies.",
    "required": {
@@ -260,8 +252,7 @@
    "golden": "golden/is_leap_year_template.json",
    "tags": [
     "expression_templates",
-    "closed-function-registry",
-    "datetime.is_leap_year"
+    "is_leap_year"
    ],
    "note": "Referenced from tests/closed_functions/datetime/is_leap_year/, beside the expected.json whose scenarios it applies.",
    "required": {

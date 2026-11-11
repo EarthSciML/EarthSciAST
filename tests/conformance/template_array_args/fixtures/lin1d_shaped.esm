@@ -2,7 +2,7 @@
  "esm": "1.2.0",
  "metadata": {
   "name": "template_array_args_lin1d_shaped",
-  "description": "esm-spec \u00a79.6.11: `linear` applied to a `[c]` parameter, defining an observed declared over `[c]`. Every element must equal the `interp.*` closed function at that element's argument, bit for bit."
+  "description": "esm-spec \u00a79.6.11: `linear` applied to a `[c]` parameter, defining an observed declared over `[c]`. Every element must equal the template applied to that element's argument as a scalar, bit for bit."
  },
  "index_sets": {
   "c": {

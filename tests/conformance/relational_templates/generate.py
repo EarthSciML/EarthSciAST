@@ -102,9 +102,9 @@ def scenarios():
             'candidate values in index order ("NaN", "Inf" and "-Inf" stand for the non-finite values '
             "JSON cannot write); `expected` is the 1-based index the template returns: the smallest "
             "index on a tie, the first NaN index when any candidate is NaN. `op_expected`, where "
-            "present, is what the `argmin` / `argmax` op returns today on the same candidates: the op "
-            "ignores a NaN candidate unless it is the first one, so it differs from the template only "
-            "when a NaN is present after the first candidate."
+            "present, is what the `argmin` / `argmax` operator form removed at esm 2.0.0 returned on the "
+            "same candidates: it ignored a NaN candidate unless it was the first one, so it differs "
+            "from the template only when a NaN comes after the first candidate."
         ),
         "scenarios": out,
     }
@@ -193,17 +193,16 @@ def argmin_document():
 
 def nearest_generator_document():
     """The value_invention_geometry nearest-generator document with its
-    `argmin` op replaced by the template."""
+    arg-witness written as the `argmin` template."""
     src = ROOT / "tests/conformance/value_invention_geometry/fixtures/nearest_generator_ode.esm"
     d = copy.deepcopy(json.loads(src.read_text()))
     d["metadata"]["name"] = "RelationalNearestGeneratorTemplateODE"
     d["metadata"]["description"] = (
-        "The value_invention_geometry document nearest_generator_ode.esm with its `argmin` "
-        "arg-witness replaced by the `argmin` template of lib/relational.esm: the same squared "
-        "distance, written over the template's loop symbol `k_argmin_1` in place of the op's `g`, "
-        "with n = 3 generators. Point 3 is exactly 0.25 (squared) from generators 2 and 3 and the "
-        "template takes the smaller index, so assign = [1, 2, 2, 3] as with the op, and "
-        "w = [0, 1, 1, 2] at t = 1. Written by generate.py."
+        "The value_invention_geometry document nearest_generator_ode.esm with its arg-witness "
+        "written as the `argmin` template of lib/relational.esm: the squared distance over the "
+        "template's loop symbol `k_argmin_1`, with n = 3 generators. Point 3 is exactly 0.25 "
+        "(squared) from generators 2 and 3 and the template takes the smaller index, so "
+        "assign = [1, 2, 2, 3], and w = [0, 1, 1, 2] at t = 1. Written by generate.py."
     )
     m = d["models"].pop("NearestGeneratorODE")
     for eq in m["equations"]:

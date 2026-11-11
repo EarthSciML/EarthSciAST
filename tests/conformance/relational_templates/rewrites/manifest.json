@@ -1,5 +1,5 @@
 {
- "description": "Template rewrites of every fixture carrying a skolem, rank or gated argmin (generate.py writes them). `cases` are the caller data each binding harness builds both forms with; `compare` names what must agree: derived-set members (`sets`, the op's tuples against the template's integer keys decoded with `decode`: a = floor(k / n_b) + lo[0], b = k - n_b*floor(k / n_b) + lo[1]), the dense IDs (`rank`: the op set's 0-based rank + 1 against the template's loop-index variable), a rank looked up against a derived set (`rank_lookup`: the template variable against the op set's 0-based rank of each row's (columns) tuple, sorted, plus one), arg-witness buffers (`assignments`), the right-hand side at the initial state (`rhs`), inline tests (`inline_tests`), or load only (`load_only`, for documents a harness does not build). A `tier` entry is compared by that conformance tier instead.",
+ "description": "The lib/relational.esm template forms, written by hand, of every fixture that used the `skolem`, `rank` or gated `argmin` operators removed at esm 2.0.0; `source` names the converted fixture each one mirrors. `cases` are the caller data each binding harness builds the rewrite with; `compare` names what must match the golden: derived-set members (`sets`, the template's integer keys decoded with `decode`: a = floor(k / n_b) + lo[0], b = k - n_b*floor(k / n_b) + lo[1]), the 1-based dense IDs (`rank`: the template's loop-index variable), a rank looked up against a derived set (`rank_lookup`: the template variable, the 1-based position of each row's (columns) tuple in the sorted set), arg-witness buffers (`assignments`), the right-hand side at the initial state (`rhs`), inline tests (`inline_tests`), or load only (`load_only`, for documents a harness does not build). A `tier` entry is compared by that conformance tier instead.",
  "rewrites": [
   {
    "id": "bin_skolem_spatial_join",
@@ -116,7 +116,7 @@
      "n": 6
     }
    },
-   "note": "The edge key is edge_key(edge_lo, edge_hi, 1, 6); rank(edges) is the loop index. face_edge_rank looks up each face edge's rank among the derived set with rank_of_set over {\"from\": \"edges\"}.",
+   "note": "The edge key is edge_key(edge_lo, edge_hi, 1, 6); the dense edge ID is the loop index. face_edge_rank looks up each face edge's rank among the derived set with rank_of_set over {\"from\": \"edges\"}.",
    "cases": [
     {
      "const_arrays": {
@@ -385,7 +385,7 @@
      "n": 4
     }
    },
-   "note": "The edge key is edge_key(a, b, 1, 4) over the ragged face members; rank(edges) is the loop index.",
+   "note": "The edge key is edge_key(a, b, 1, 4) over the ragged face members; the dense edge ID is the loop index.",
    "cases": [
     {
      "const_arrays": {
@@ -473,7 +473,7 @@
      "n": 4
     }
    },
-   "note": "The edge key is edge_key(face_lo, face_hi, 1, 4); rank(edges) is the loop index.",
+   "note": "The edge key is edge_key(face_lo, face_hi, 1, 4); the dense edge ID is the loop index.",
    "cases": [
     {
      "const_arrays": {
@@ -746,7 +746,7 @@
      "n": 4
     }
    },
-   "note": "The edge key is edge_key(a, b, 1, 4). Run by the relational_templates tier; its golden equals the op document's.",
+   "note": "The edge key is edge_key(a, b, 1, 4). Run by the relational_templates tier; its golden equals that document's.",
    "cases": [],
    "compare": {
     "tier": "relational_templates"
@@ -771,7 +771,7 @@
      ]
     }
    },
-   "note": "Bin keys split into per-component join columns; the pair key is pair_key(i, j, 1, 1, 4, 4). Run by the relational_templates tier; its golden equals the op document's.",
+   "note": "Bin keys split into per-component join columns; the pair key is pair_key(i, j, 1, 1, 4, 4). Run by the relational_templates tier; its golden equals that document's.",
    "cases": [],
    "compare": {
     "tier": "relational_templates"

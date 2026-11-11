@@ -2,7 +2,7 @@
   "esm": "2.0.0",
   "metadata": {
     "name": "conservative_regrid_assembly",
-    "description": "Conservative-regridding assembly with weights computed INLINE from cell geometry (RFC semiring-faq-unified-ir §A.8 / §8.1; CONFORMANCE_SPEC.md §5.8; esm-spec.md §8.6.1; bead ess-my4.4.6). The source (F_src=[10,20,30,40]) is a SPATIALLY-VARYING field on a 4-cell source grid, remapped onto a DIFFERENT 4-cell target grid whose cell boundaries are shifted so the overlaps are fractional. Both grids tile [0,4]x[0,1] as in-file `const` vertex rings (src_poly / tgt_poly). The overlap weights are NOT supplied: A_ij = polygon_intersection_area(src_i, tgt_j) is declared inline via the FUSED planar clip+area leaf (§8.6.1), ranged over the bin-skolem candidate pairs; the candidate pairs come from the bin-skolem broad phase (floor → skolem bin keys → distinct equi-join on the materialized bin buffers), A_j = Σ_i A_ij is the row-sum normalization, and W_ij = A_ij/A_j. F_tgt[j] = Σ_i W_ij·F_src[i] = [40/3, 20, 100/3, 40], conserving global mass Σ_j A_j·F_tgt = Σ_i A_i·F_src = 100 with partition-of-unity Σ_i W_ij = 1 by construction. Because the fused leaf returns the SCALAR overlap area (defined to equal the intersect_polygon clip + shoelace area) and hides the clip ring inside the kernel, A_ij is an ordinary DENSE faq over the candidate set with NO ragged intermediate — the densely-evaluable narrow phase of §8.6.1, unlike the earlier ragged-clip form conservative_regrid_overlap_join.esm still documents. The dedicated Julia test geometry_assembly_conformance_test.jl asserts the inline fused-leaf provenance and drives the narrow phase (A_ij) plus apply/normalize (A_j, F_tgt, conservation, partition-of-unity) numerically from the in-file geometry.",
+    "description": "Conservative-regridding assembly with weights computed INLINE from cell geometry (RFC semiring-faq-unified-ir §A.8 / §8.1; CONFORMANCE_SPEC.md §5.8; esm-spec.md §8.6.1; bead ess-my4.4.6). The source (F_src=[10,20,30,40]) is a SPATIALLY-VARYING field on a 4-cell source grid, remapped onto a DIFFERENT 4-cell target grid whose cell boundaries are shifted so the overlaps are fractional. Both grids tile [0,4]x[0,1] as in-file `const` vertex rings (src_poly / tgt_poly). The overlap weights are NOT supplied: A_ij = overlap_area_planar(src_i, tgt_j), the template of esm:std/geometry.esm, is declared inline, ranged over the bin-key candidate pairs; the candidate pairs come from the bin-key broad phase (floor → integer bin-key columns → distinct equi-join on the materialized bin buffers), A_j = Σ_i A_ij is the row-sum normalization, and W_ij = A_ij/A_j. F_tgt[j] = Σ_i W_ij·F_src[i] = [40/3, 20, 100/3, 40], conserving global mass Σ_j A_j·F_tgt = Σ_i A_i·F_src = 100 with partition-of-unity Σ_i W_ij = 1 by construction. Because the template returns the SCALAR overlap area (a convex clip and shoelace area written out in its body), A_ij is an ordinary DENSE faq over the candidate set with NO ragged intermediate. The dedicated Julia test geometry_assembly_conformance_test.jl drives the narrow phase (A_ij) plus apply/normalize (A_j, F_tgt, conservation, partition-of-unity) numerically from the in-file geometry.",
     "authors": [
       "EarthSciAST/polecats/gastown.nux"
     ],
@@ -11,9 +11,8 @@
       "conservative-regridding",
       "assembly",
       "overlap-join",
-      "bin-skolem",
-      "polygon_intersection_area",
-      "fused-leaf",
+      "bin-key",
+      "overlap_area_planar",
       "sum_product",
       "join",
       "filter",
@@ -139,7 +138,7 @@
           "shape": [
             "candidate_pairs"
           ],
-          "description": "Membership over the bin-skolem candidate overlap-pair set (the broad phase), materialized as the derived candidate_pairs index set via from_faq:\"candidate_set\"."
+          "description": "Membership over the bin-key candidate overlap-pair set (the broad phase), materialized as the derived candidate_pairs index set via from_faq:\"candidate_set\"."
         },
         "A_ij": {
           "type": "unknown",
@@ -147,14 +146,14 @@
             "src_cells",
             "tgt_cells"
           ],
-          "description": "NARROW PHASE (densely evaluable): the overlap-area matrix A_ij[i,j] = polygon_intersection_area(src_poly[i], tgt_poly[j]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md §8.6.1). Ranged over the SAME bin-skolem candidate pairs (join.on [[src_bin,tgt_bin]]) as the row-sum / apply, so it is dense over the broad-phase candidate set with NO ragged intermediate: the fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel. This replaces the earlier ragged-ring narrow phase (which surfaced a data-dependent per-clip vertex set and was only structurally valid). The weights are DECLARED from cell geometry in-file, not hand-supplied; the row-sum / apply halves below consume A_ij as the per-pair overlap-area factor."
+          "description": "NARROW PHASE (densely evaluable): the overlap-area matrix A_ij[i,j] = the `overlap_area_planar` template of esm:std/geometry.esm applied to src_poly[i] and tgt_poly[j], computed INLINE from the in-file geometry. Ranged over the SAME bin-key candidate pairs (join.on [[src_bin,tgt_bin]]) as the row-sum / apply, so it is dense over the broad-phase candidate set with NO ragged intermediate: the template returns the SCALAR overlap area (its body clips one convex ring against the other and takes the shoelace area) with no intersection ring in the document. The weights are DECLARED from cell geometry in-file, not hand-supplied; the row-sum / apply halves below consume A_ij as the per-pair overlap-area factor."
         },
         "A_j": {
           "type": "unknown",
           "shape": [
             "tgt_cells"
           ],
-          "description": "Target-cell area denominator A_j[j] = Σ_i A_ij[i,j] — the group-by-`j` row-sum over the bin-skolem CANDIDATE pairs (join.on [[src_bin,tgt_bin]]) with the sub-atol sliver filter. The normalize denominator; = ConservativeRegridding.jl's `dst_areas`, here computed from geometry, not supplied."
+          "description": "Target-cell area denominator A_j[j] = Σ_i A_ij[i,j] — the group-by-`j` row-sum over the bin-key CANDIDATE pairs (join.on [[src_bin,tgt_bin]]) with the sub-atol sliver filter. The normalize denominator; = ConservativeRegridding.jl's `dst_areas`, here computed from geometry, not supplied."
         },
         "W_ij": {
           "type": "unknown",
@@ -373,7 +372,7 @@
           }
         },
         {
-          "_comment": "(1c) BROAD PHASE — candidate overlap-pair set = the bin-skolem equi-join (distinct bool_and_or, id candidate_set): keep (i,j) whose bin keys are EQUAL; skolem(\"pair\",i,j) names each surviving candidate.",
+          "_comment": "(1c) BROAD PHASE — candidate overlap-pair set = the bin-key equi-join (distinct bool_and_or, id candidate_set): keep (i,j) whose bin keys are EQUAL; a `pair_key` integer key names each surviving candidate.",
           "lhs": {
             "op": "index",
             "args": [
@@ -432,7 +431,7 @@
           }
         },
         {
-          "_comment": "(3) A_j[j] = Σ_i A_ij[i,j] over the bin-skolem candidate pairs (join on the materialized bin buffers) with the sliver filter. A_ij is computed inline from geometry above. Zero IC ⇒ du[A_j_check] = A_j.",
+          "_comment": "(3) A_j[j] = Σ_i A_ij[i,j] over the bin-key candidate pairs (join on the materialized bin buffers) with the sliver filter. A_ij is computed inline from geometry above. Zero IC ⇒ du[A_j_check] = A_j.",
           "lhs": {
             "op": "faq",
             "semiring": "sum_product",
@@ -514,7 +513,7 @@
           }
         },
         {
-          "_comment": "(4)+(5) APPLY + NORMALIZE — D(F_tgt[j]) = Σ_i W_ij[i,j]·F_src[i], W_ij = A_ij/A_j (normalize folded into the inline weights). Same bin-skolem candidate join + zero-area filter. Zero IC ⇒ du[F_tgt] = F_tgt.",
+          "_comment": "(4)+(5) APPLY + NORMALIZE — D(F_tgt[j]) = Σ_i W_ij[i,j]·F_src[i], W_ij = A_ij/A_j (normalize folded into the inline weights). Same bin-key candidate join + zero-area filter. Zero IC ⇒ du[F_tgt] = F_tgt.",
           "lhs": {
             "op": "faq",
             "semiring": "sum_product",

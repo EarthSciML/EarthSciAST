@@ -1,5 +1,5 @@
 {
-  "description": "Scenarios for the `argmin` / `argmax` templates of lib/relational.esm. `values` are the candidate values in index order (\"NaN\", \"Inf\" and \"-Inf\" stand for the non-finite values JSON cannot write); `expected` is the 1-based index the template returns: the smallest index on a tie, the first NaN index when any candidate is NaN. `op_expected`, where present, is what the `argmin` / `argmax` op returns today on the same candidates: the op ignores a NaN candidate unless it is the first one, so it differs from the template only when a NaN is present after the first candidate.",
+  "description": "Scenarios for the `argmin` / `argmax` templates of lib/relational.esm. `values` are the candidate values in index order (\"NaN\", \"Inf\" and \"-Inf\" stand for the non-finite values JSON cannot write); `expected` is the 1-based index the template returns: the smallest index on a tie, the first NaN index when any candidate is NaN. `op_expected`, where present, is what the `argmin` / `argmax` operator form removed at esm 2.0.0 returned on the same candidates: it ignored a NaN candidate unless it was the first one, so it differs from the template only when a NaN comes after the first candidate.",
   "scenarios": [
     {
       "name": "distinct_minimum",

@@ -5,7 +5,7 @@
     "authors": [
       "EarthSciML Authors and Contributors"
     ],
-    "description": "The broad phase of a conservative regrid, counted by a right-hand side. Each source and target cell is binned by skolem(floor(lon/dx), floor(lat/dy)); the candidate-pair set is the `distinct` equi-join of the two bin columns. Source longitudes 0.2, 0.5, 1.2, 3.2 fall in bins 0, 0, 1, 3 and target longitudes 0.1, 0.9, 1.5, 9.9 in 0, 0, 1, 9, so the pairs are (1,1), (1,2), (2,1), (2,2), (3,3). The coordinates are unknowns defined by `const` nodes and the bin widths are scalar parameters with defaults. d(n_pairs)/dt = |candidate_pairs|, so n_pairs(1) = 5."
+    "description": "The broad phase of a conservative regrid, counted by a right-hand side. Each source and target cell is binned by floor(lon/dx) and floor(lat/dy), one integer join column per component; the candidate-pair set is the `distinct` equi-join on those columns, keyed by pair_key(i, j, 1, 1, 4, 4). Source longitudes 0.2, 0.5, 1.2, 3.2 fall in bins 0, 0, 1, 3 and target longitudes 0.1, 0.9, 1.5, 9.9 in 0, 0, 1, 9, so the pairs are (1,1), (1,2), (2,1), (2,2), (3,3). The coordinates are unknowns defined by `const` nodes and the bin widths are scalar parameters with defaults. d(n_pairs)/dt = |candidate_pairs|, so n_pairs(1) = 5."
   },
   "index_sets": {
     "src_cells": {
