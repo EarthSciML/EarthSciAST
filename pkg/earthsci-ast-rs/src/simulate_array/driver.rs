@@ -954,22 +954,27 @@ impl ArrayCompiled {
         // A data-fed field is read at the start of the run (esm-spec §11.4.2):
         // from `start.at_t0` where the caller sampled it there, and never as
         // a discrete-cadence record the buffer holds for another time.
-        let buffer = self.forcing.borrow();
-        let without_discrete: Option<HashMap<String, ArrayD<f64>>> =
-            (start.exclude.iter().any(|name| buffer.contains_key(name))
-                || start.at_t0.is_some_and(|m| !m.is_empty()))
-            .then(|| {
-                let mut m: HashMap<String, ArrayD<f64>> = buffer
-                    .iter()
-                    .filter(|(name, _)| !start.exclude.contains(*name))
-                    .map(|(name, arr)| (name.clone(), arr.clone()))
-                    .collect();
-                if let Some(at) = start.at_t0 {
-                    m.extend(at.iter().map(|(k, v)| (k.clone(), v.clone())));
-                }
-                m
-            });
-        let borrowed: &HashMap<String, ArrayD<f64>> = without_discrete.as_ref().unwrap_or(&buffer);
+        //
+        // Only the fields the evaluation reads are taken, each from
+        // `start.at_t0` first, then from the buffer unless excluded.
+        let mut borrowed: HashMap<String, ArrayD<f64>> = {
+            let buffer = self.forcing.borrow();
+            self.ic_read_names()
+                .into_iter()
+                .filter_map(|name| {
+                    let value = start
+                        .at_t0
+                        .and_then(|m| m.get(&name))
+                        .or_else(|| {
+                            (!start.exclude.contains(&name))
+                                .then(|| buffer.get(&name))
+                                .flatten()
+                        })?
+                        .clone();
+                    Some((name, value))
+                })
+                .collect()
+        };
         let mut scope: Option<HashMap<String, ArrayD<f64>>> = None;
         // A scalar-valued scope definition (`dz = H/N`) binds where a
         // parameter does, for the definitions after it and for the targets.
@@ -999,7 +1004,7 @@ impl ArrayCompiled {
                     stack.extend(def.deps.iter().map(String::as_str));
                 }
             }
-            let mut built: HashMap<String, ArrayD<f64>> = borrowed.clone();
+            let mut built: HashMap<String, ArrayD<f64>> = std::mem::take(&mut borrowed);
             let mut bound: HashMap<String, f64> = params.clone();
             // In dependency order: everything a definition reads is built (or
             // known not to be) by the time it is reached, so one pass is enough.
@@ -1062,7 +1067,7 @@ impl ArrayCompiled {
             scope = Some(built);
             scope_params = Some(bound);
         }
-        let forcing: &HashMap<String, ArrayD<f64>> = scope.as_ref().unwrap_or(borrowed);
+        let forcing: &HashMap<String, ArrayD<f64>> = scope.as_ref().unwrap_or(&borrowed);
         let params: &HashMap<String, f64> = scope_params.as_ref().unwrap_or(params);
         for (target, rhs) in &self.field_ics {
             let vs = self.var_shapes.get(target).ok_or_else(|| {
@@ -1332,9 +1337,18 @@ impl ArrayCompiled {
         let stop = strict.then(crate::simulate_array::StopAtFirstCell::arm);
         // No discrete-cadence field is in the buffer before the first refresh:
         // each stands in at its declared default.
-        let stand_ins: HashMap<String, ArrayD<f64>> = discrete_forcing
-            .iter()
-            .filter_map(|n| Some((n.clone(), self.forcing_default(n)??)))
+        let discrete_read: Vec<String> = self
+            .ic_forcing_reads()
+            .into_iter()
+            .filter(|n| discrete_forcing.contains(n))
+            .collect();
+        let reads_discrete = !discrete_read.is_empty();
+        let stand_ins: HashMap<String, ArrayD<f64>> = discrete_read
+            .into_iter()
+            .filter_map(|n| {
+                let value = self.forcing_default(&n)??;
+                Some((n, value))
+            })
             .collect();
         let start = IcStart {
             t0,
@@ -1360,7 +1374,7 @@ impl ArrayCompiled {
         }
         if let Ok(slots) = result
             && !stopped
-            && discrete_forcing.is_empty()
+            && !reads_discrete
         {
             *self.field_ic_memo.borrow_mut() = Some(FieldIcMemo {
                 params: param_bits(&param_vec),
@@ -1370,6 +1384,31 @@ impl ArrayCompiled {
             });
         }
         records
+    }
+
+    /// Every name an evaluation of the `ic` right-hand sides may read from
+    /// the forcing: what each right-hand side names, and what each
+    /// definition of their state-free scope reads.
+    fn ic_read_names(&self) -> HashSet<String> {
+        let mut names: HashSet<String> = self
+            .field_ics
+            .iter()
+            .flat_map(|(_, rhs)| super::compile::free_names(rhs))
+            .collect();
+        for def in &self.ic_scope.defs {
+            names.extend(def.needs.iter().cloned());
+        }
+        names
+    }
+
+    /// The forcing fields an evaluation of the `ic` right-hand sides may
+    /// read: the provider-fed fields whose value at the start of the run
+    /// it needs (esm-spec §11.4.2).
+    #[cfg(feature = "solve")]
+    pub(crate) fn ic_forcing_reads(&self) -> HashSet<String> {
+        let mut names = self.ic_read_names();
+        names.retain(|n| self.serves_forcing(n));
+        names
     }
 
     /// Refuse an `ic` right-hand side that reads a state, directly or through
@@ -4549,6 +4588,85 @@ mod field_ic_memo_tests {
             let sol = solve(&prob, &SolveOptions::default()).expect("solves");
             assert_eq!(field_ic_resolutions() - before, 1, "[{compiler}]");
             assert_eq!(first_column(&sol), [1.0, 2.0, 3.0], "[{compiler}]");
+        }
+    }
+
+    /// A DISCRETE provider serving the scalar `b = 1` at every time.
+    struct One;
+
+    impl crate::provider::CadenceProvider for One {
+        fn materialize(
+            &mut self,
+        ) -> Result<
+            std::collections::HashMap<String, crate::provider::NativeField>,
+            crate::provider::ProviderError,
+        > {
+            unreachable!("a discrete provider is not materialized")
+        }
+        fn refresh(
+            &mut self,
+            _t: f64,
+        ) -> Result<
+            Option<std::collections::HashMap<String, crate::provider::NativeField>>,
+            crate::provider::ProviderError,
+        > {
+            let one = ndarray::ArrayD::from_elem(ndarray::IxDyn(&[]), 1.0);
+            Ok(Some(
+                [("b".to_string(), crate::provider::NativeField::new(one))].into(),
+            ))
+        }
+        fn refresh_times(&self) -> Vec<f64> {
+            vec![0.5]
+        }
+    }
+
+    /// A discrete-cadence field no `ic` reads does not stop the first solve
+    /// from taking the construction's resolution.
+    #[test]
+    fn a_discrete_field_no_ic_reads_keeps_the_memo() {
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "FieldIcMemoDiscrete"},
+            "index_sets": {"x": {"kind": "interval", "size": 3}},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "units": "1", "shape": ["x"]},
+                    "a": {"type": "parameter", "units": "1", "default": 0.5},
+                    "b": {"type": "parameter", "units": "1", "default": 1.0}
+                },
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": scaled_index()},
+                    {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": {"from": "x"}},
+                             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}],
+                                      "wrt": "t"}},
+                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": {"from": "x"}},
+                             "expr": {"op": "*", "args": ["b", {"op": "-", "args": [
+                                 {"op": "index", "args": ["u", "i"]}]}]}}},
+                ],
+            }},
+        });
+        let file = load_string(&doc.to_string()).expect("loads");
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            let options = ProblemOptions {
+                providers: [(
+                    "b".to_string(),
+                    Box::new(One) as Box<dyn crate::provider::CadenceProvider>,
+                )]
+                .into(),
+                ..opts(compiler)
+            };
+            let before = field_ic_resolutions();
+            let prob = esm_problem(&file, (0.0, 1.0), options)
+                .unwrap_or_else(|e| panic!("[{compiler}] {e}"));
+            let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(
+                field_ic_resolutions() - before,
+                1,
+                "[{compiler}] the first solve must take the construction's resolution"
+            );
+            assert_eq!(first_column(&sol), [0.5, 1.0, 1.5], "[{compiler}]");
         }
     }
 }

@@ -224,3 +224,198 @@ fn remake_to_a_new_start_reevaluates_the_ic() {
     let a = names.iter().position(|n| n == "T.a").unwrap();
     assert_eq!(u0[a], 1.0, "a = 2*0 + 1 at the new start");
 }
+
+/// [`Linear`] as a stateful, record-based provider: the record in effect at
+/// `t` is the one at its latest refresh time at or before `t`, and it answers
+/// `None` ("record unchanged") when that is the record it last delivered, as
+/// an EarthSciIO provider does when its record anchor did not move. Counts
+/// every ask.
+struct Stateful {
+    inner: Linear,
+    anchor: Option<f64>,
+    asks: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl CadenceProvider for Stateful {
+    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+        self.inner.materialize()
+    }
+    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+        self.asks.set(self.asks.get() + 1);
+        let Some(a) = self
+            .inner
+            .times
+            .iter()
+            .copied()
+            .filter(|&a| a <= t)
+            .reduce(f64::max)
+        else {
+            return Ok(None);
+        };
+        if self.anchor == Some(a) {
+            return Ok(None);
+        }
+        self.anchor = Some(a);
+        Ok(Some(self.inner.at(a)))
+    }
+    fn refresh_times(&self) -> Vec<f64> {
+        self.inner.times.clone()
+    }
+}
+
+/// The case `id` of the manifest.
+fn case(id: &str) -> Value {
+    manifest()["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == id)
+        .cloned()
+        .unwrap_or_else(|| panic!("no case {id}"))
+}
+
+/// `c`'s fixture (edited by `edit`) built over `tspan` with stateful
+/// providers; also returns each provider's ask counter, by key.
+#[allow(clippy::type_complexity)]
+fn build_stateful(
+    c: &Value,
+    tspan: (f64, f64),
+    edit: impl FnOnce(&mut Value),
+) -> (
+    earthsci_ast::EsmProblem,
+    HashMap<String, std::rc::Rc<std::cell::Cell<usize>>>,
+) {
+    let mut asks = HashMap::new();
+    let providers: HashMap<String, Box<dyn CadenceProvider>> = c["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            let mut inner = Linear::from_manifest(p);
+            // A record at the start of the run, so the record in effect there
+            // is the manifest's value at `t0 = 5`.
+            inner.times = vec![5.0, 8.0];
+            let count = std::rc::Rc::new(std::cell::Cell::new(0));
+            asks.insert(inner.key.clone(), count.clone());
+            let key = inner.key.clone();
+            let p = Stateful {
+                inner,
+                anchor: None,
+                asks: count,
+            };
+            (key, Box::new(p) as Box<dyn CadenceProvider>)
+        })
+        .collect();
+    let path = suite_dir().join(c["fixture"].as_str().unwrap());
+    let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    edit(&mut doc);
+    let prob = esm_problem(
+        &doc,
+        tspan,
+        ProblemOptions {
+            compiler: Some(Compiler::Native),
+            providers,
+            p: numbers(&c["p"]),
+            sample_time: c["sample_time"].as_f64(),
+            ..Default::default()
+        },
+    )
+    .expect("builds");
+    (prob, asks)
+}
+
+fn expect_start(id: &str, prob: &earthsci_ast::EsmProblem, u0: &[f64], c: &Value) {
+    let names = prob.state_variable_names();
+    for (n, want) in numbers(&c["expected"]) {
+        let k = names.iter().position(|x| *x == n).expect("a state");
+        assert_eq!(u0[k], want, "{id}: {n}");
+    }
+}
+
+/// A provider whose record did not change since construction sampled it
+/// answers `None`; the initial state still reads that record.
+#[test]
+fn initial_state_reads_an_unchanged_record() {
+    let c = case("data_fed_discrete_at_start");
+    let (prob, _) = build_stateful(&c, (5.0, 9.0), |_| {});
+    let u0 = initial_state(&prob).expect("an initial state");
+    expect_start("unchanged record", &prob, &u0, &c);
+}
+
+/// `initial_state` between two solves leaves the providers able to give the
+/// second solve the record in effect at its start, not the first solve's last.
+#[test]
+fn a_solve_after_initial_state_starts_from_the_record_at_its_start() {
+    let c = case("data_fed_discrete_at_start");
+    let (prob, _) = build_stateful(&c, (5.0, 9.0), |_| {});
+    // The state rows; the observed rows a solution carries after them are not
+    // part of the initial state.
+    let n = prob.state_variable_names().len();
+    let at_start = |sol: &earthsci_ast::Solution| -> Vec<f64> {
+        sol.state[..n].iter().map(|row| row[0]).collect()
+    };
+    let opts = SolveOptions {
+        saveat: Some(vec![5.0]),
+        ..Default::default()
+    };
+    let first = solve(&prob, &opts).expect("the first solve");
+    let u0 = initial_state(&prob).expect("an initial state");
+    expect_start("between solves", &prob, &u0, &c);
+    let second = solve(&prob, &opts).expect("the second solve");
+    assert_eq!(at_start(&first), u0);
+    assert_eq!(at_start(&second), u0);
+}
+
+/// `initial_state` asks only the providers whose fields an `ic` reads.
+#[test]
+fn initial_state_samples_only_the_providers_an_ic_reads() {
+    let c = case("data_fed_discrete_sample_time_differs");
+    // `s` starts at a constant: no `ic` reads `q` any more.
+    let (prob, asks) = build_stateful(&c, (5.0, 9.0), |doc| {
+        for eq in doc["models"]["H"]["equations"].as_array_mut().unwrap() {
+            if eq["lhs"] == serde_json::json!({"op": "ic", "args": ["s"]}) {
+                eq["rhs"] = serde_json::json!(27.5);
+            }
+        }
+    });
+    let (f, q) = (asks["H.F"].get(), asks["H.q"].get());
+    let u0 = initial_state(&prob).expect("an initial state");
+    expect_start("read cone", &prob, &u0, &c);
+    assert!(asks["H.F"].get() > f, "F is read by ic(m)");
+    assert_eq!(asks["H.q"].get(), q, "no ic reads q");
+}
+
+/// An unknown an algebraic `faq` equation defines (no `D`) is an observed
+/// (esm-spec §6.3.1): an `ic` reading it is evaluated, not refused.
+#[test]
+fn an_ic_reads_an_algebraically_defined_unknown() {
+    let path = suite_dir().join("fixtures/ic_reads_t.esm");
+    let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    for eq in doc["models"]["T"]["equations"].as_array_mut().unwrap() {
+        if eq["lhs"] == "rate" {
+            eq["lhs"] = serde_json::json!({
+                "op": "faq", "args": [], "output_idx": ["i"],
+                "ranges": {"i": {"from": "x"}},
+                "expr": {"op": "index", "args": ["rate", "i"]}
+            });
+        }
+    }
+    let prob = esm_problem(
+        &doc,
+        (10.0, 11.0),
+        ProblemOptions {
+            compiler: Some(Compiler::Native),
+            ..Default::default()
+        },
+    )
+    .expect("builds");
+    let u0 = initial_state(&prob).expect("an initial state");
+    let names = prob.state_variable_names();
+    let u: Vec<f64> = (1..=3)
+        .map(|i| {
+            let cell = format!("T.u[{i}]");
+            u0[names.iter().position(|n| *n == cell).expect("a cell")]
+        })
+        .collect();
+    assert_eq!(u, [6.0, 7.0, 8.0], "u = i + 0.5*10");
+}

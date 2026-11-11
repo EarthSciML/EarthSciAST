@@ -1799,8 +1799,8 @@ impl<'a> StateTaint<'a> {
 ///
 /// State-freedom is TRANSITIVE: an observed that reads another observed
 /// reading state (`Mz_conv` ← `div_h` ← `conv_x` ← `u`) is not state-free
-/// either, and a state is any unknown that is not observed — an eliminated
-/// algebraic one too. Only the cone the `ic` right-hand sides actually read is
+/// either. A state is an unknown the solver advances; one an algebraic
+/// equation defines and this build eliminates is an observed. Only the cone the `ic` right-hand sides actually read is
 /// kept, as the Python binding's `_buildtime_observed_arrays` keeps it, so an
 /// unrelated observed is never evaluated; it is ordered so one pass evaluates
 /// each definition after everything it reads. A definition on a dependency
@@ -1835,7 +1835,7 @@ fn capture_ic_scope(
         return IcScope::default();
     }
     let observed: HashSet<&str> = observed_names.iter().map(String::as_str).collect();
-    let defs: BTreeMap<String, (Expr, HashSet<String>)> = observed_bodies(model)
+    let mut defs: BTreeMap<String, (Expr, HashSet<String>)> = observed_bodies(model)
         .into_iter()
         .filter(|(name, _)| observed.contains(name.as_str()))
         .map(|(name, body)| {
@@ -1843,7 +1843,29 @@ fn capture_ic_scope(
             (name, (body, reads))
         })
         .collect();
-    let is_state = |n: &str| state_names.contains_key(n) || eliminated.contains(n);
+    // An unknown an algebraic equation defines, with no `D` (one this build
+    // eliminates to an observed rule), is an observed too (esm-spec §6.3.1),
+    // not a state: its whole-array body is the defining `faq` with the
+    // right-hand side's cell expression as its own, or the right-hand side
+    // itself.
+    for eq in &model.equations {
+        let (name, body) = match (&eq.lhs, extract_algebraic_faq(&eq.lhs, &eq.rhs)) {
+            (Expr::Operator(lhs), Some(a)) if eliminated.contains(&a.var) => {
+                let mut node = lhs.clone();
+                std::sync::Arc::make_mut(&mut node).expr = Some(Box::new(a.body));
+                (a.var, Expr::Operator(node))
+            }
+            (Expr::Variable(name), None) if eliminated.contains(name) => {
+                (name.clone(), eq.rhs.clone())
+            }
+            _ => continue,
+        };
+        defs.entry(name).or_insert_with(|| {
+            let reads = free_names(&body);
+            (body, reads)
+        });
+    }
+    let is_state = |n: &str| state_names.contains_key(n);
     let mut taint = StateTaint {
         defs: &defs,
         is_state: &is_state,

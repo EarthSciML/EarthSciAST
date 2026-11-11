@@ -4666,57 +4666,51 @@ fn sample_discrete_providers(
     vacant.append(&mut empty);
     vacant.sort();
     vacant.dedup();
-    seed_vacant_discrete(compiled, &vacant, given, "sample_time", sample_time)
+    seed_vacant_discrete(
+        compiled,
+        &vacant,
+        given,
+        "sample_time",
+        sample_time,
+        &mut forcing.borrow_mut(),
+    )
 }
 
-/// The DISCRETE-fed fields at `t0`, the start of the run, in a buffer of
-/// their own: each provider's record in effect at `t0`, else the declared
-/// default (as a solve's start gives it), without touching the Problem's
-/// forcing. What an `ic` right-hand side reads (esm-spec §11.4.2).
+/// The DISCRETE-fed fields an `ic` right-hand side reads, at `t0`, the start
+/// of the run (esm-spec §11.4.2), in a buffer of their own: each provider's
+/// record in effect at `t0`, else the declared default (as a solve's start
+/// gives it). Only the providers feeding a field the `ic` right-hand sides
+/// read are asked, and the Problem's forcing is not written
+/// ([`crate::provider::RefreshExecutor::sample_detached`]).
 #[cfg(all(feature = "solve", not(target_arch = "wasm32")))]
 fn discrete_at_start(
     compiled: &ArrayCompiled,
     exec: &SharedRefresh,
-    discrete: &std::collections::HashSet<String>,
+    read: &std::collections::HashSet<String>,
     t0: f64,
     given: &HashMap<String, String>,
 ) -> Result<HashMap<String, ndarray::ArrayD<f64>>, SimulateError> {
-    let scratch: crate::provider::ForcingBuffer = Rc::new(std::cell::RefCell::new(HashMap::new()));
-    let vacant = exec
+    let (mut out, vacant) = exec
         .borrow_mut()
-        .sample_in_effect(t0, &scratch, &mut Vec::new())
+        .sample_detached(t0, read, &compiled.forcing_buffer())
         .map_err(|e| loader_error(given, e))?;
-    let mut out = std::mem::take(&mut *scratch.borrow_mut());
-    for name in discrete.iter().filter(|n| vacant.contains(n)) {
-        if !compiled.serves_forcing(name) {
-            continue;
-        }
-        match declared_default_forcing(compiled, name) {
-            Some(Some(value)) => {
-                out.insert(name.clone(), value);
-            }
-            Some(None) => {}
-            None => {
-                let key = given.get(name).map_or(name.as_str(), String::as_str);
-                return Err(SimulateError::ProviderError {
-                    name: key.to_string(),
-                    details: format!(
-                        "the provider has no record in effect at the start of the run {t0} \
-                         (it delivered nothing there, nor at a refresh time before it), and \
-                         the parameter `{name}` it feeds declares no default"
-                    ),
-                });
-            }
-        }
-    }
+    seed_vacant_discrete(
+        compiled,
+        &vacant,
+        given,
+        "the start of the run",
+        t0,
+        &mut out,
+    )?;
     Ok(out)
 }
 
 /// Give each DISCRETE-fed name in `vacant` (no record in effect at `t`) its
-/// declared default (esm-spec §6.3). Only a parameter the model reads from
-/// the forcing buffer is required to have a value: one that declares no
-/// default is refused (§10.10), naming the provider by the caller's key. A
-/// name the model does not read as a forcing parameter is left as it is.
+/// declared default (esm-spec §6.3) in `target`: the Problem's forcing
+/// buffer, or a buffer of its own. Only a parameter the model reads from the
+/// forcing buffer is required to have a value: one that declares no default
+/// is refused (§10.10), naming the provider by the caller's key. A name the
+/// model does not read as a forcing parameter is left as it is.
 #[cfg(not(target_arch = "wasm32"))]
 fn seed_vacant_discrete(
     compiled: &ArrayCompiled,
@@ -4724,15 +4718,15 @@ fn seed_vacant_discrete(
     given: &HashMap<String, String>,
     at: &str,
     t: f64,
+    target: &mut HashMap<String, ArrayD<f64>>,
 ) -> Result<(), SimulateError> {
-    let forcing = compiled.forcing_buffer();
     for name in vacant {
         if !compiled.serves_forcing(name) {
             continue;
         }
         match declared_default_forcing(compiled, name) {
             Some(Some(value)) => {
-                forcing.borrow_mut().insert(name.clone(), value);
+                target.insert(name.clone(), value);
             }
             // A default over a shape that does not resolve yet has no field
             // to fill here, as in the missing-data gate.
@@ -4826,7 +4820,14 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
                             let vacant = exec
                                 .sample_in_effect(t, &forcing, &mut Vec::new())
                                 .map_err(|e| loader_error(given, e))?;
-                            seed_vacant_discrete(compiled, &vacant, given, "the solve's start", t)
+                            seed_vacant_discrete(
+                                compiled,
+                                &vacant,
+                                given,
+                                "the solve's start",
+                                t,
+                                &mut forcing.borrow_mut(),
+                            )
                         };
                         compiled.solve_with_refresh_inspect(
                             prob.tspan,
@@ -4882,11 +4883,13 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
 /// their defaults) bound in every initial condition's scope (§6.6.5).
 /// [`crate::RhsProgram::default_state`] is the declared defaults alone.
 ///
-/// Nothing is integrated, and the result does not depend on `tspan` or on any
-/// solver option. A field initial condition reads the provider forcing as
-/// construction bound it, without the discrete-cadence fields a solve
-/// refreshes from `tspan.0` on, so calling this before or after a solve gives
-/// the same state. Julia's equivalent is the `prob.u0` field, indexed through
+/// Nothing is integrated, and the result does not depend on any solver
+/// option. An `ic` right-hand side reads each data-fed field at `tspan.0`
+/// (esm-spec §11.4.2): the providers of the discrete-cadence fields it reads
+/// are sampled there into a buffer of their own, without writing the
+/// Problem's forcing, so calling this before or after a solve gives the same
+/// state, and a solve after it still starts from the record in effect at its
+/// start. Julia's equivalent is the `prob.u0` field, indexed through
 /// `prob.var_map`.
 ///
 /// # Errors
@@ -4909,21 +4912,31 @@ pub fn initial_state(prob: &EsmProblem) -> Result<Vec<f64>, SimulateError> {
     // side reads each at its value at the start of the run (esm-spec
     // §11.4.2), which is not necessarily the record the forcing buffer holds
     // (construction sampled `sample_time`; a solve leaves a later record), so
-    // the providers are sampled at `tspan.0` into a buffer of their own.
+    // the providers of the ones it reads are sampled at `tspan.0` into a
+    // buffer of their own.
     let none = std::collections::HashSet::new();
     let t0 = prob.tspan.0;
     #[cfg(not(target_arch = "wasm32"))]
     let (discrete_forcing, at_t0) = match (&prob.refresh, &*prob.backend) {
-        (Some(exec), Backend::Array(compiled)) if !prob.discrete_forcing.is_empty() => (
-            &prob.discrete_forcing,
-            Some(discrete_at_start(
-                compiled,
-                exec,
-                &prob.discrete_forcing,
-                t0,
-                &prob.provider_keys,
-            )?),
-        ),
+        (Some(exec), Backend::Array(compiled)) if !prob.discrete_forcing.is_empty() => {
+            let read: std::collections::HashSet<String> = compiled
+                .ic_forcing_reads()
+                .into_iter()
+                .filter(|n| prob.discrete_forcing.contains(n))
+                .collect();
+            let at_t0 = if read.is_empty() {
+                None
+            } else {
+                Some(discrete_at_start(
+                    compiled,
+                    exec,
+                    &read,
+                    t0,
+                    &prob.provider_keys,
+                )?)
+            };
+            (&prob.discrete_forcing, at_t0)
+        }
         _ => (&none, None),
     };
     #[cfg(target_arch = "wasm32")]

@@ -261,6 +261,12 @@ struct LoaderProvider {
     /// The provider's `refresh_times()`, sorted and deduplicated, read once
     /// when the loader is bound.
     anchors: Vec<f64>,
+    /// The provider's last delivery when it went to a detached sample
+    /// ([`RefreshExecutor::sample_detached`]) rather than to the forcing
+    /// buffer. A provider answers `None` for a record that has not changed
+    /// since it last delivered, so until it delivers again that record is
+    /// this one, not the buffer's.
+    detached: Option<HashMap<String, NativeField>>,
 }
 
 impl LoaderProvider {
@@ -272,6 +278,43 @@ impl LoaderProvider {
             binding,
             provider,
             anchors,
+            detached: None,
+        }
+    }
+
+    /// Ask the provider for the record in effect at `t`: `Ok(None)` when it
+    /// has none there (no answer at `t` and no refresh time at or before it),
+    /// `Ok(Some(None))` when its record did not change since it last
+    /// delivered, `Ok(Some(Some(fields)))` for a new delivery.
+    #[allow(clippy::type_complexity)]
+    fn ask_in_effect(
+        &mut self,
+        t: f64,
+    ) -> Result<Option<Option<HashMap<String, NativeField>>>, ProviderError> {
+        let fields = self.provider.refresh(t)?;
+        if fields.is_some() || self.is_anchor(t) {
+            return Ok(Some(fields));
+        }
+        match self.anchor_before(t) {
+            Some(a) => self.provider.refresh(a).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Write a delivery into the forcing buffer: a new one, or on `None` (no
+    /// change) the one a detached sample took, which the buffer does not
+    /// hold yet. Either way the buffer then holds the provider's last
+    /// delivery.
+    fn write_delivery(
+        &mut self,
+        fields: Option<HashMap<String, NativeField>>,
+        forcing: &ForcingBuffer,
+        written: &mut Vec<String>,
+    ) -> Result<(), ProviderError> {
+        let stashed = self.detached.take();
+        match fields.or(stashed) {
+            Some(fields) => write_fields(&fields, forcing, written),
+            None => Ok(()),
         }
     }
 
@@ -614,15 +657,16 @@ impl RefreshExecutor {
             if lp.binding.cadence != Cadence::Discrete {
                 continue;
             }
+            let loader = lp.binding.loader.clone();
             let named = |error| LoaderError {
-                loader: lp.binding.loader.clone(),
+                loader: loader.clone(),
                 error,
             };
             // `None` (record unchanged, or `t` not this provider's anchor) → skip
             // the buffer write (None-skip); the previously-loaded field stays put.
-            if let Some(fields) = lp.provider.refresh(t).map_err(named)? {
-                write_fields(&fields, forcing, &mut written).map_err(named)?;
-            }
+            let fields = lp.provider.refresh(t).map_err(named)?;
+            lp.write_delivery(fields, forcing, &mut written)
+                .map_err(named)?;
         }
         written.sort();
         written.dedup();
@@ -644,27 +688,81 @@ impl RefreshExecutor {
             if lp.binding.cadence != Cadence::Discrete {
                 continue;
             }
+            let loader = lp.binding.loader.clone();
             let named = |error| LoaderError {
-                loader: lp.binding.loader.clone(),
+                loader: loader.clone(),
                 error,
             };
-            let mut fields = lp.provider.refresh(t).map_err(named)?;
-            if fields.is_none() && !lp.is_anchor(t) {
-                match lp.anchor_before(t) {
-                    Some(a) => fields = lp.provider.refresh(a).map_err(named)?,
-                    None => {
-                        vacant.extend(lp.binding.variables.iter().cloned());
-                        continue;
-                    }
-                }
-            }
-            if let Some(fields) = fields {
-                write_fields(&fields, forcing, written).map_err(named)?;
+            match lp.ask_in_effect(t).map_err(named)? {
+                Some(fields) => lp.write_delivery(fields, forcing, written).map_err(named)?,
+                None => vacant.extend(lp.binding.variables.iter().cloned()),
             }
         }
         vacant.sort();
         vacant.dedup();
         Ok(vacant)
+    }
+
+    /// The record in effect at `t` of every DISCRETE provider feeding a name
+    /// in `only`, without writing the forcing buffer: what a reader needs at
+    /// a time other than the one the buffer holds (an `ic` right-hand side
+    /// at the start of the run, esm-spec §11.4.2). Returns the fields, and
+    /// the names in `only` with no record in effect at `t` (sorted).
+    ///
+    /// A provider whose record did not change since it last delivered gives
+    /// that delivery: the buffer's field, or the one an earlier detached
+    /// sample took. A new delivery is kept for the buffer's next write from
+    /// that provider ([`LoaderProvider::write_delivery`]), so a solve after
+    /// this one still starts from the record in effect at its start.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn sample_detached(
+        &mut self,
+        t: f64,
+        only: &std::collections::HashSet<String>,
+        forcing: &ForcingBuffer,
+    ) -> Result<(HashMap<String, ArrayD<f64>>, Vec<String>), LoaderError> {
+        let RefreshExecutor { loaders } = self;
+        let mut out: HashMap<String, ArrayD<f64>> = HashMap::new();
+        let mut vacant = Vec::new();
+        for lp in loaders.iter_mut() {
+            if lp.binding.cadence != Cadence::Discrete
+                || !lp.binding.variables.iter().any(|v| only.contains(v))
+            {
+                continue;
+            }
+            let loader = lp.binding.loader.clone();
+            let named = |error| LoaderError {
+                loader: loader.clone(),
+                error,
+            };
+            match lp.ask_in_effect(t).map_err(named)? {
+                Some(Some(fields)) => {
+                    out.extend(fields.iter().map(|(k, f)| (k.clone(), f.array.clone())));
+                    lp.detached = Some(fields);
+                }
+                Some(None) => match &lp.detached {
+                    Some(fields) => {
+                        out.extend(fields.iter().map(|(k, f)| (k.clone(), f.array.clone())));
+                    }
+                    None => {
+                        let buffer = forcing.borrow();
+                        for v in &lp.binding.variables {
+                            if let Some(a) = buffer.get(v) {
+                                out.insert(v.clone(), a.clone());
+                            }
+                        }
+                    }
+                },
+                None => vacant.extend(lp.binding.variables.iter().cloned()),
+            }
+        }
+        out.retain(|k, _| only.contains(k));
+        // A name no delivery holds has no record in effect at `t`.
+        vacant.extend(only.iter().filter(|n| !out.contains_key(*n)).cloned());
+        vacant.retain(|n| only.contains(n));
+        vacant.sort();
+        vacant.dedup();
+        Ok((out, vacant))
     }
 }
 
