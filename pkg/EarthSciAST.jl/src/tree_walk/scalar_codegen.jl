@@ -348,12 +348,13 @@ mutable struct _ScSigCtx
     ohpos::IdDict{Any, Int}
     ohkey::Dict{Any, Int}
     shapes::Dict{Any, Int}
+    flats::_FlatContentIds
 end
 _ScSigCtx(cache::_CSECache, syms, objs) =
     _ScSigCtx(
     cache, syms, objs, Int[], Int[], UInt8[], Float64[],
     _NodeMap{Int}(), 0, Any[], Dict{Int, Int}(), nothing,
-    Any[], IdDict{Any, Int}(), Dict{Any, Int}(), Dict{Any, Int}()
+    Any[], IdDict{Any, Int}(), Dict{Any, Int}(), Dict{Any, Int}(), _FlatContentIds()
 )
 
 function _sc_reset!(S::_ScSigCtx)
@@ -425,7 +426,7 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
             # Arrays with equal contents (and name: the error a read past the
             # array raises names it) are one hole, as the repeated-sub-tree
             # keys take them (`_cg_share_pay!`).
-            ck = (reinterpret(UInt64, cg.flat), cg.strides, cg.dims, cg.boundary, cg.name)
+            ck = (_flat_content_id!(S.flats, cg.flat), cg.strides, cg.dims, cg.boundary, cg.name)
             o = get(S.ohkey, ck, 0)
             if o == 0
                 push!(S.oh, cg)
