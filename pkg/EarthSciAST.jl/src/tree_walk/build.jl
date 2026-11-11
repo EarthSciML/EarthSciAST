@@ -7404,19 +7404,23 @@ function _try_compile_array_contraction(
     # The term, resolved once with every index symbolic; the emitter writes the
     # fold around it (array_contraction.jl, `_ACFold`). A scalar reduction nested
     # in it stays a loop (`_NEST_SCALAR_LOOPS`).
+    # A memo of this symbolic body's own: it shares nothing with the concrete
+    # per-cell builds (the isolation the per-cell loop tier's compile relies
+    # on), but a sub-tree the body reaches from several parents resolves and
+    # compiles to one node, which the emitter's sharing then computes once.
+    smemo = _BuildMemo()
     got = _resolve_array_contraction_term(
         body, idx_names, contract_names,
-        array_var_info, var_map, const_registry, pgather; nest_scalar_loops = true
+        array_var_info, var_map, const_registry, pgather;
+        nest_scalar_loops = true, memo = smemo
     )
     if got === nothing
         _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
         return nothing
     end
     out_refs, contract_refs, marker = got
-    # `memo=nothing`: the symbolic body shares nothing with the concrete per-cell
-    # builds, the same isolation the per-cell loop tier's compile relies on.
     node = try
-        _compile(marker, var_map, param_sym_set, reg_funcs)
+        _compile(marker, var_map, param_sym_set, reg_funcs, smemo)
     catch err
         # errors.jl: running out of memory, blowing the stack or being
         # interrupted says nothing about whether this tier can model the
