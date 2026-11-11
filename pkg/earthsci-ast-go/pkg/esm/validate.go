@@ -537,6 +537,9 @@ func collectStructuralErrors(file *ESMFile) []StructuralError {
 	s.validateDataSourceReferences()
 	// esm-spec §8.5.1 rule 1: a record axis has size 2.
 	s.validateRecordAxes()
+	// esm-spec §8.5.1: record shapes and the deprecated `records_per_sample`,
+	// for every model and reaction system at any depth.
+	s.validateRecordsPerSample()
 	s.validateInlineTests()
 	s.validateFunctionChecks()
 
@@ -887,8 +890,6 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// source is not a coupling endpoint any more — so it is the whole of
 	// `data_source_undefined`.
 	s.validateUpdateSources(modelName, model, basePath)
-	// esm-spec §8.5.1: record shapes and the deprecated `records_per_sample`.
-	s.validateRecordsPerSample(modelName, model, basePath)
 
 	// `initialization_equations` hold at t=0 but are ordinary equations, and
 	// `guesses` seed a nonlinear solve. Both name variables; neither was reached.
@@ -1724,14 +1725,6 @@ func (s *structuralScan) validateUpdateSources(modelName string, model *Model, b
 	}
 }
 
-// isRecordAxis reports whether name is a RECORD AXIS: an `interval` index set
-// carrying `"records": true` (esm-spec §8.5.1). Its size is rule 1's business
-// (validateRecordAxes), not this test's.
-func isRecordAxis(file *ESMFile, name string) bool {
-	set, ok := file.IndexSets[name]
-	return ok && set.Kind == "interval" && set.Records != nil && *set.Records
-}
-
 // validateRecordAxes reports `record_axis_invalid` (esm-spec §8.5.1 rule 1)
 // for every index set that carries `"records": true` with a size other than 2.
 // A size still held as a metaparameter expression is not decidable here and is
@@ -1753,54 +1746,134 @@ func (s *structuralScan) validateRecordAxes() {
 	}
 }
 
-// declaredShapeOf is the declared shape of the model variable a scoped name
-// `Model[.Sub…].var` names (empty for a scalar). found is false when the
-// declaration cannot be reached: no such model, subsystem or variable, or a
-// path that runs through a subsystem still held as an unresolved `ref`. Such a
-// target is not decidable (esm-spec §8.5.1), which is not the same as empty.
+// recordAxisState reports whether name is a RECORD AXIS: an `interval` index
+// set carrying `"records": true` (esm-spec §8.5.1). decided is false when that
+// cannot be known yet: the document does not declare name while an unmounted
+// `{ref}` (unmountedRefs) could still declare it (esm-spec §4.7). Its size is
+// rule 1's business (validateRecordAxes), not this test's.
+func recordAxisState(file *ESMFile, name string, unmountedRefs bool) (isRecord, decided bool) {
+	set, ok := file.IndexSets[name]
+	if !ok {
+		return false, !unmountedRefs
+	}
+	return set.Kind == "interval" && set.Records != nil && *set.Records, true
+}
+
+// hasUnmountedRefs reports whether the document still holds a `{ref}` mount: a
+// subsystem, at any depth of a model or reaction system, that is still a
+// `{"ref": …}` edge. Mounting one merges its file's `index_sets` into the
+// document's (esm-spec §4.7), so an undeclared index set may still arrive.
+func hasUnmountedRefs(file *ESMFile) bool {
+	var walk func(raw any) bool
+	walk = func(raw any) bool {
+		if _, _, isRef := extractRefWithBindings(raw); isRef {
+			return true
+		}
+		m, _ := raw.(map[string]any)
+		subs, _ := m["subsystems"].(map[string]any)
+		for _, sub := range subs {
+			if walk(sub) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, model := range file.Models {
+		for _, sub := range model.Subsystems {
+			if walk(sub) {
+				return true
+			}
+		}
+	}
+	for _, rs := range file.ReactionSystems {
+		for _, sub := range rs.Subsystems {
+			if walk(sub) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// declaredShapeOf is the declared shape of the variable a scoped name
+// `Model[.Sub…].var` (or a reaction system's `System[.Sub…].parameter` or
+// `…species`) names (empty for a scalar). found is false when the declaration
+// cannot be reached: no such component, subsystem or variable, or a path that
+// runs through a subsystem still held as an unresolved `ref`. Such a target is
+// not decidable (esm-spec §8.5.1), which is not the same as empty. Subsystems
+// are read as raw JSON, never decoded.
 func declaredShapeOf(file *ESMFile, scoped string) (shape []string, found bool) {
 	parts := strings.Split(scoped, ".")
 	if len(parts) < 2 {
 		return nil, false
 	}
-	model, ok := file.Models[parts[0]]
+	name, path := parts[len(parts)-1], parts[1:len(parts)-1]
+	var subsystems map[string]any
+	var tables []string
+	if model, ok := file.Models[parts[0]]; ok {
+		if len(path) == 0 {
+			v, ok := model.Variables[name]
+			return v.Dims(), ok
+		}
+		subsystems, tables = model.Subsystems, []string{"variables"}
+	} else if rs, ok := file.ReactionSystems[parts[0]]; ok {
+		if len(path) == 0 {
+			if p, ok := rs.Parameters[name]; ok {
+				return p.Dims(), true
+			}
+			_, ok := rs.Species[name]
+			return nil, ok
+		}
+		subsystems, tables = rs.Subsystems, []string{"parameters", "species"}
+	} else {
+		return nil, false
+	}
+	node, ok := subsystems[path[0]].(map[string]any)
+	for _, seg := range path[1:] {
+		if !ok {
+			break
+		}
+		subs, _ := node["subsystems"].(map[string]any)
+		node, ok = subs[seg].(map[string]any)
+	}
 	if !ok {
 		return nil, false
 	}
-	cur := &model
-	for _, seg := range parts[1 : len(parts)-1] {
-		raw, ok := cur.Subsystems[seg]
-		if !ok {
-			return nil, false
-		}
-		if _, _, isRef := extractRefWithBindings(raw); isRef {
-			return nil, false
-		}
-		sub, ok := decodeSubsystemAs[Model](raw)
-		if !ok {
-			return nil, false
-		}
-		cur = &sub
-	}
-	v, ok := cur.Variables[parts[len(parts)-1]]
-	if !ok {
+	if _, _, isRef := extractRefWithBindings(node); isRef {
 		return nil, false
 	}
-	return v.Dims(), true
+	for _, table := range tables {
+		vars, _ := node[table].(map[string]any)
+		decl, ok := vars[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		dims, _ := decl["shape"].([]any)
+		for _, d := range dims {
+			s, ok := d.(string)
+			if !ok {
+				return nil, false
+			}
+			shape = append(shape, s)
+		}
+		return shape, true
+	}
+	return nil, false
 }
 
 // sourceIsTimeVarying reports whether source declares a `temporal` block with
-// a non-empty `start` (esm-spec §8.5.1 rule 2): one without is time-invariant
+// a non-empty `start` (esm-spec §8.5.1 rule 3): one without is time-invariant
 // and has no successor record.
 func sourceIsTimeVarying(source *DataSource) bool {
 	return source.Temporal != nil && source.Temporal.Start != nil && *source.Temporal.Start != ""
 }
 
-// paramToVarTargets lists, in coupling order, the `to` of every `variable_map`
-// entry in coupling whose transform is `param_to_var` and whose `from` is the
-// scoped name from.
-func paramToVarTargets(coupling []CouplingEntry, from string) []string {
-	var out []string
+// paramToVarTargets maps the `from` of every `variable_map` entry in coupling
+// whose transform is `param_to_var` to the `to` of each such entry, in
+// coupling order. Built once per pass, so a parameter's record shapes cost one
+// lookup rather than a coupling scan.
+func paramToVarTargets(coupling []CouplingEntry) map[string][]string {
+	out := map[string][]string{}
 	for _, entry := range coupling {
 		var vm VariableMapCoupling
 		switch e := entry.(type) {
@@ -1814,8 +1887,8 @@ func paramToVarTargets(coupling []CouplingEntry, from string) []string {
 		default:
 			continue
 		}
-		if vm.From == from && vm.TransformKind() == "param_to_var" {
-			out = append(out, vm.To)
+		if vm.TransformKind() == "param_to_var" {
+			out[vm.From] = append(out[vm.From], vm.To)
 		}
 	}
 	return out
@@ -1833,9 +1906,10 @@ func hasCouplingImport(coupling []CouplingEntry) bool {
 }
 
 // recordsPerSampleSite is one `update` rule carrying a `from` binding, on a
-// variable of a top-level model or of an inline subsystem at any depth.
+// variable of a model or a parameter of a reaction system, top-level or in an
+// inline subsystem at any depth.
 type recordsPerSampleSite struct {
-	// scoped is the variable's scoped name, `Model[.Sub…].var`.
+	// scoped is the variable's scoped name, `Component[.Sub…].var`.
 	scoped  string
 	varName string
 	// shape is the variable's declared shape, empty for a scalar.
@@ -1850,41 +1924,96 @@ type recordsPerSampleSite struct {
 	path string
 }
 
-// walkRecordsPerSampleSites visits every site of model and of its inline
-// subsystems, recursively, in sorted order. A subsystem still held as an
-// unresolved `ref` has no declarations to visit.
-func walkRecordsPerSampleSites(model *Model, scope, basePath string, visit func(recordsPerSampleSite)) {
-	for _, varName := range sortedKeys(model.Variables) {
-		v := model.Variables[varName]
-		_, isArray := v.Update.([]ParameterUpdate)
-		for i, rule := range v.UpdateRules() {
-			if rule.From == nil {
-				continue
+// visitUpdateRules visits each rule carrying a `from` binding of the variable
+// declared at varPath.
+func visitUpdateRules(scoped, varName, varPath string, update any, shape *[]string, dims []string, visit func(recordsPerSampleSite)) {
+	_, isArray := update.([]ParameterUpdate)
+	for i, rule := range updateSpecRules(update) {
+		if rule.From == nil {
+			continue
+		}
+		path := varPath + "/update"
+		if isArray {
+			path = fmt.Sprintf("%s/%d", path, i)
+		}
+		visit(recordsPerSampleSite{
+			scoped:        scoped,
+			varName:       varName,
+			shape:         dims,
+			shapeDeclared: shape != nil,
+			rule:          rule,
+			path:          path,
+		})
+	}
+}
+
+// walkRawSubsystemSites visits the sites of raw (inline) subsystem raw and of
+// its own subsystems, recursively, in sorted order. Only a declaration of
+// table ("variables" for a model, "parameters" for a reaction system) that
+// carries an `update` key is decoded; a subsystem still held as an unresolved
+// `ref` has no declarations to visit.
+func walkRawSubsystemSites(raw any, table, scope, basePath string, visit func(recordsPerSampleSite)) {
+	if _, _, isRef := extractRefWithBindings(raw); isRef {
+		return
+	}
+	node, ok := raw.(map[string]any)
+	if !ok {
+		return
+	}
+	vars, _ := node[table].(map[string]any)
+	for _, name := range sortedKeys(vars) {
+		decl, ok := vars[name].(map[string]any)
+		if !ok || decl["update"] == nil {
+			continue
+		}
+		varPath := basePath + "/" + table + "/" + name
+		if table == "parameters" {
+			p, ok := decodeSubsystemAs[Parameter](decl)
+			if ok {
+				visitUpdateRules(scope+"."+name, name, varPath, p.Update, p.Shape, p.Dims(), visit)
 			}
-			path := fmt.Sprintf("%s/variables/%s/update", basePath, varName)
-			if isArray {
-				path = fmt.Sprintf("%s/%d", path, i)
-			}
-			visit(recordsPerSampleSite{
-				scoped:        scope + "." + varName,
-				varName:       varName,
-				shape:         v.Dims(),
-				shapeDeclared: v.Shape != nil,
-				rule:          rule,
-				path:          path,
-			})
+			continue
+		}
+		v, ok := decodeSubsystemAs[ModelVariable](decl)
+		if ok {
+			visitUpdateRules(scope+"."+name, name, varPath, v.Update, v.Shape, v.Dims(), visit)
 		}
 	}
-	for _, name := range sortedKeys(model.Subsystems) {
-		raw := model.Subsystems[name]
-		if _, _, isRef := extractRefWithBindings(raw); isRef {
-			continue
+	subs, _ := node["subsystems"].(map[string]any)
+	for _, name := range sortedKeys(subs) {
+		walkRawSubsystemSites(subs[name], table, scope+"."+name, basePath+"/subsystems/"+name, visit)
+	}
+}
+
+// walkRecordsPerSampleSites visits every site of every model and reaction
+// system of file, top-level and in inline subsystems at any depth, components
+// in sorted order and declarations in sorted order within each.
+func walkRecordsPerSampleSites(file *ESMFile, visit func(recordsPerSampleSite)) {
+	for _, modelName := range sortedKeys(file.Models) {
+		model := file.Models[modelName]
+		basePath := "/models/" + modelName
+		for _, varName := range sortedKeys(model.Variables) {
+			v := model.Variables[varName]
+			visitUpdateRules(modelName+"."+varName, varName, basePath+"/variables/"+varName,
+				v.Update, v.Shape, v.Dims(), visit)
 		}
-		sub, ok := decodeSubsystemAs[Model](raw)
-		if !ok {
-			continue
+		for _, name := range sortedKeys(model.Subsystems) {
+			walkRawSubsystemSites(model.Subsystems[name], "variables", modelName+"."+name,
+				basePath+"/subsystems/"+name, visit)
 		}
-		walkRecordsPerSampleSites(&sub, scope+"."+name, basePath+"/subsystems/"+name, visit)
+	}
+	for _, rsName := range sortedKeys(file.ReactionSystems) {
+		rs := file.ReactionSystems[rsName]
+		basePath := "/reaction_systems/" + rsName
+		for _, pName := range sortedKeys(rs.Parameters) {
+			p := rs.Parameters[pName]
+			visitUpdateRules(rsName+"."+pName, pName, basePath+"/parameters/"+pName,
+				p.Update, p.Shape, p.Dims(), visit)
+		}
+		for _, name := range sortedKeys(rs.Subsystems) {
+			walkRawSubsystemSites(rs.Subsystems[name], "parameters", rsName+"."+name,
+				basePath+"/subsystems/"+name, visit)
+		}
 	}
 }
 
@@ -1896,46 +2025,58 @@ type recordShape struct {
 	target string
 }
 
+// recordPass is what one pass over a document's record shapes knows, computed
+// once: the `param_to_var` edges of the coupling it judges against, whether
+// an empty record shape is final (atFlatten, or no `coupling_import` could
+// still bring a target), and whether an undeclared index set may still be
+// declared by an unmounted `{ref}`.
+type recordPass struct {
+	file          *ESMFile
+	targets       map[string][]string
+	atFlatten     bool
+	pendingImport bool
+	unmountedRefs bool
+}
+
+func newRecordPass(file *ESMFile, coupling []CouplingEntry, atFlatten bool) *recordPass {
+	return &recordPass{
+		file:          file,
+		targets:       paramToVarTargets(coupling),
+		atFlatten:     atFlatten,
+		pendingImport: !atFlatten && hasCouplingImport(file.Coupling),
+		unmountedRefs: hasUnmountedRefs(file),
+	}
+}
+
 // siteRecordShapes is every record shape of the parameter at site that can be
-// decided against coupling (esm-spec §8.5.1 "The record shape"): its declared
-// `shape` when it declares one, `[]` included; otherwise the declared `shape`
-// of each `param_to_var` target it is the `from` of in coupling, and the empty
-// shape when there is none. A target whose declaration cannot be reached is
-// not decidable and is skipped, never read as empty.
+// decided (esm-spec §8.5.1 "The record shape"): its declared `shape` when it
+// declares one, `[]` included; otherwise the declared `shape` of each
+// `param_to_var` target it is the `from` of, and the empty shape when there is
+// none. A target whose declaration cannot be reached is not decidable and is
+// skipped, never read as empty.
 //
 // decided is false when no record shape could be decided: every target was
-// unreachable, or — at structural validation (atFlatten false) — the
-// parameter has no inline target while the document's `coupling` holds a
-// `coupling_import`, whose expanded edges could still bring one. Flatten
-// passes the expanded sequence and atFlatten true, so there the empty shape is
-// final.
-func siteRecordShapes(file *ESMFile, coupling []CouplingEntry, site recordsPerSampleSite, atFlatten bool) (shapes []recordShape, decided bool) {
+// unreachable, or — at structural validation — the parameter has no inline
+// target while the document's `coupling` holds a `coupling_import`, whose
+// expanded edges could still bring one. Flatten passes the expanded sequence,
+// so there the empty shape is final.
+func (p *recordPass) siteRecordShapes(site recordsPerSampleSite) (shapes []recordShape, decided bool) {
 	if site.shapeDeclared {
 		return []recordShape{{shape: site.shape}}, true
 	}
-	targets := paramToVarTargets(coupling, site.scoped)
+	targets := p.targets[site.scoped]
 	if len(targets) == 0 {
-		if !atFlatten && hasCouplingImport(file.Coupling) {
+		if p.pendingImport {
 			return nil, false
 		}
 		return []recordShape{{}}, true
 	}
 	for _, to := range targets {
-		if shape, found := declaredShapeOf(file, to); found {
+		if shape, found := declaredShapeOf(p.file, to); found {
 			shapes = append(shapes, recordShape{shape: shape, target: to})
 		}
 	}
 	return shapes, len(shapes) > 0
-}
-
-// recordCount is the number of records a parameter with these record shapes
-// receives per query time: 2 when its (first) record shape begins with a
-// record axis, else 1 (esm-spec §8.5.1).
-func recordCount(file *ESMFile, shapes []recordShape) int {
-	if len(shapes) > 0 && len(shapes[0].shape) > 0 && isRecordAxis(file, shapes[0].shape[0]) {
-		return 2
-	}
-	return 1
 }
 
 // describeRecordShape names a record shape in a diagnostic message.
@@ -1955,10 +2096,11 @@ type recordFinding struct {
 
 // recordShapeFindings checks one `data` rule of a data-fed parameter against
 // the record shapes that can be decided (siteRecordShapes) — esm-spec §8.5.1
-// rules 2 and 3 and `records_per_sample_invalid` case 2:
+// rules 2 and 3 and `records_per_sample_invalid` case 2 — and returns the
+// number of records the parameter receives (0 when that is not decidable):
 //
-//   - `record_axis_misplaced` when a record shape names a record axis at a
-//     position other than first, or the parameter's several record shapes
+//   - `record_axis_misplaced` when a record shape names a known record axis at
+//     a position other than first, or the parameter's decidable record shapes
 //     disagree about beginning with one. Nothing else is checked then: the
 //     record count is not well defined.
 //   - `record_axis_time_invariant_source` when the parameter receives two
@@ -1966,16 +2108,19 @@ type recordFinding struct {
 //   - `records_per_sample_invalid` when the deprecated written value (the
 //     rule's own, else the source's) disagrees with the count.
 //
-// Validation and flatten both call this: validation against the inline
-// coupling, flatten against the sequence after `coupling_import` expansion.
-func recordShapeFindings(file *ESMFile, coupling []CouplingEntry, site recordsPerSampleSite, source *DataSource, atFlatten bool) []recordFinding {
-	shapes, decided := siteRecordShapes(file, coupling, site, atFlatten)
+// A record shape whose first entry names an index set an unmounted `{ref}`
+// could still declare is not decidable and is skipped (esm-spec §8.5.1 "When
+// rules 2 and 3 are checked"). Validation and flatten both call this:
+// validation against the inline coupling, flatten against the sequence after
+// `coupling_import` expansion.
+func (p *recordPass) recordShapeFindings(site recordsPerSampleSite, source *DataSource) ([]recordFinding, int) {
+	shapes, decided := p.siteRecordShapes(site)
 	if !decided {
-		return nil
+		return nil, 0
 	}
 	for _, sh := range shapes {
 		for i, dim := range sh.shape {
-			if i > 0 && isRecordAxis(file, dim) {
+			if isRecord, _ := recordAxisState(p.file, dim, p.unmountedRefs); i > 0 && isRecord {
 				details := map[string]any{"variable": site.varName, "shape": sh.shape, "index_set": dim}
 				if sh.target != "" {
 					details["target"] = sh.target
@@ -1986,17 +2131,31 @@ func recordShapeFindings(file *ESMFile, coupling []CouplingEntry, site recordsPe
 						"Data-fed parameter '%s' names record axis '%s' at position %d of %s; a record axis may only be the first entry of a record shape",
 						site.varName, dim, i+1, describeRecordShape(sh)),
 					details: details,
-				}}
+				}}, 0
 			}
 		}
 	}
 	var withAxis, without []string
-	for _, sh := range shapes {
-		if len(sh.shape) > 0 && isRecordAxis(file, sh.shape[0]) {
+	var first *recordShape
+	for i, sh := range shapes {
+		begins, known := false, true
+		if len(sh.shape) > 0 {
+			begins, known = recordAxisState(p.file, sh.shape[0], p.unmountedRefs)
+		}
+		if !known {
+			continue
+		}
+		if first == nil {
+			first = &shapes[i]
+		}
+		if begins {
 			withAxis = append(withAxis, sh.target)
 		} else {
 			without = append(without, sh.target)
 		}
+	}
+	if first == nil {
+		return nil, 0
 	}
 	if len(withAxis) > 0 && len(without) > 0 {
 		return []recordFinding{{
@@ -2005,16 +2164,19 @@ func recordShapeFindings(file *ESMFile, coupling []CouplingEntry, site recordsPe
 				"Data-fed parameter '%s' has several record shapes that disagree about beginning with a record axis: param_to_var targets %v begin with one, %v do not",
 				site.varName, withAxis, without),
 			details: map[string]any{"variable": site.varName, "targets_with_record_axis": withAxis, "targets_without_record_axis": without},
-		}}
+		}}, 0
 	}
-	count := recordCount(file, shapes)
+	count := 1
+	if len(withAxis) > 0 {
+		count = 2
+	}
 	var out []recordFinding
 	if count == 2 && !sourceIsTimeVarying(source) {
 		out = append(out, recordFinding{
 			code: ErrorRecordAxisTimeInvariantSource,
 			message: fmt.Sprintf(
 				"Data-fed parameter '%s' receives two records (%s begins with a record axis) from data source '%s', which is time-invariant (it declares no temporal start) and so has no successor record",
-				site.varName, describeRecordShape(shapes[0]), site.rule.Source),
+				site.varName, describeRecordShape(*first), site.rule.Source),
 			details: map[string]any{"variable": site.varName, "source": site.rule.Source},
 		})
 	}
@@ -2023,22 +2185,24 @@ func recordShapeFindings(file *ESMFile, coupling []CouplingEntry, site recordsPe
 			code: ErrorRecordsPerSampleInvalid,
 			message: fmt.Sprintf(
 				"Data-fed parameter '%s' is written with records_per_sample %d, but %s gives it %d record(s): two exactly when the first entry is a record axis (an interval index set with \"records\": true)",
-				site.varName, *written, describeRecordShape(shapes[0]), count),
+				site.varName, *written, describeRecordShape(*first), count),
 			details: map[string]any{"variable": site.varName, "written": *written, "records": count},
 		})
 	}
-	return out
+	return out, count
 }
 
-// validateRecordsPerSample checks, for every `update` rule of model and of its
-// inline subsystems at any depth, esm-spec §8.5.1: `records_per_sample_invalid`
-// for `from.records_per_sample` on a rule that is not `data`, and, on a `data`
-// rule, rules 2 and 3 and the agreement of a deprecated written count
-// (recordShapeFindings), against every record shape the loaded document lets
-// validation decide. What it cannot decide — a target arriving through a
-// `coupling_import` — is left to flatten (checkRecordShapesAfterImports).
-func (s *structuralScan) validateRecordsPerSample(modelName string, model *Model, basePath string) {
-	walkRecordsPerSampleSites(model, modelName, basePath, func(site recordsPerSampleSite) {
+// validateRecordsPerSample checks, for every `update` rule of every model and
+// reaction system, top-level and in inline subsystems at any depth, esm-spec
+// §8.5.1: `records_per_sample_invalid` for `from.records_per_sample` on a rule
+// that is not `data`, and, on a `data` rule, rules 2 and 3 and the agreement of
+// a deprecated written count (recordShapeFindings), against every record shape
+// the loaded document lets validation decide. What it cannot decide — a target
+// arriving through a `coupling_import`, or an index set an unmounted `{ref}`
+// could declare — is left to flatten (checkRecordShapesAfterImports).
+func (s *structuralScan) validateRecordsPerSample() {
+	pass := newRecordPass(s.file, s.file.Coupling, false)
+	walkRecordsPerSampleSites(s.file, func(site recordsPerSampleSite) {
 		rule := site.rule
 		if rule.Kind != UpdateKindData {
 			if rule.From.RecordsPerSample != nil {
@@ -2057,7 +2221,8 @@ func (s *structuralScan) validateRecordsPerSample(modelName string, model *Model
 		if !ok {
 			return // data_source_undefined reports it
 		}
-		for _, f := range recordShapeFindings(s.file, s.file.Coupling, site, &source, false) {
+		findings, _ := pass.recordShapeFindings(site, &source)
+		for _, f := range findings {
 			s.addErr(StructuralError{Path: site.path, Code: f.code, Message: f.message, Details: f.details})
 		}
 	})
@@ -2067,47 +2232,114 @@ func (s *structuralScan) validateRecordsPerSample(modelName string, model *Model
 // the agreement of a deprecated written count at flatten, against coupling,
 // the sequence after `coupling_import` expansion, for every data-fed parameter
 // at any depth. Structural validation could not see an imported edge, so this
-// is where such a record shape is first decidable. It returns the first
-// refusal, naming the rule pointer, and otherwise the number of records each
-// data-fed parameter receives, keyed by its scoped name (the loader_fields
-// count).
+// is where such a record shape is first decidable. A non-`data` rule carrying
+// `from.records_per_sample` is validation's alone and is not judged here. It
+// returns the first refusal, naming the rule pointer, and otherwise the number
+// of records each data-fed parameter receives, keyed by its scoped name (the
+// loader_fields count).
 func checkRecordShapesAfterImports(file *ESMFile, coupling []CouplingEntry) (map[string]int, error) {
 	counts := map[string]int{}
+	pass := newRecordPass(file, coupling, true)
 	var refusal error
-	for _, modelName := range sortedKeys(file.Models) {
-		model := file.Models[modelName]
-		walkRecordsPerSampleSites(&model, modelName, "/models/"+modelName, func(site recordsPerSampleSite) {
-			if refusal != nil || site.rule.Kind != UpdateKindData {
-				return
-			}
-			source, ok := file.DataSources[site.rule.Source]
-			if !ok {
-				return
-			}
-			if findings := recordShapeFindings(file, coupling, site, &source, true); len(findings) > 0 {
-				refusal = &ExpressionTemplateError{
-					Code:    findings[0].code,
-					Message: fmt.Sprintf("%s: %s", site.path, findings[0].message),
-					Path:    site.path,
-				}
-				return
-			}
-			shapes, _ := siteRecordShapes(file, coupling, site, true)
-			counts[site.scoped] = recordCount(file, shapes)
-		})
-		if refusal != nil {
-			return nil, refusal
+	walkRecordsPerSampleSites(file, func(site recordsPerSampleSite) {
+		if refusal != nil || site.rule.Kind != UpdateKindData {
+			return
 		}
+		source, ok := file.DataSources[site.rule.Source]
+		if !ok {
+			return
+		}
+		findings, count := pass.recordShapeFindings(site, &source)
+		if len(findings) > 0 {
+			refusal = &ExpressionTemplateError{
+				Code:    findings[0].code,
+				Message: fmt.Sprintf("%s: %s", site.path, findings[0].message),
+				Path:    site.path,
+			}
+			return
+		}
+		if count == 0 {
+			count = 1
+		}
+		counts[site.scoped] = count
+	})
+	if refusal != nil {
+		return nil, refusal
 	}
 	return counts, nil
 }
 
+// rawUpdateSites appends the pointer of every rule of the raw `update` value
+// of the declaration at varPath that writes `from.records_per_sample`.
+func rawUpdateSites(update any, varPath string, out []string) []string {
+	written := func(rule any) bool {
+		r, _ := rule.(map[string]any)
+		from, _ := r["from"].(map[string]any)
+		_, ok := from["records_per_sample"]
+		return ok
+	}
+	if rules, ok := update.([]any); ok {
+		for i, rule := range rules {
+			if written(rule) {
+				out = append(out, fmt.Sprintf("%s/update/%d/from/records_per_sample", varPath, i))
+			}
+		}
+	} else if written(update) {
+		out = append(out, varPath+"/update/from/records_per_sample")
+	}
+	return out
+}
+
+// rawSubsystemSites scans raw subsystem raw, and its own subsystems at any
+// depth, for the deprecated `from.records_per_sample` without decoding it.
+func rawSubsystemSites(raw any, table, basePath string, out []string) []string {
+	node, ok := raw.(map[string]any)
+	if !ok {
+		return out
+	}
+	if _, isRef := node["ref"]; isRef {
+		return out
+	}
+	vars, _ := node[table].(map[string]any)
+	for name, decl := range vars {
+		d, _ := decl.(map[string]any)
+		if update, ok := d["update"]; ok {
+			out = rawUpdateSites(update, basePath+"/"+table+"/"+name, out)
+		}
+	}
+	subs, _ := node["subsystems"].(map[string]any)
+	for name, sub := range subs {
+		out = rawSubsystemSites(sub, table, basePath+"/subsystems/"+name, out)
+	}
+	return out
+}
+
+// typedUpdateSites appends the pointer of every rule of a decoded `update`
+// that writes `from.records_per_sample`.
+func typedUpdateSites(update any, varPath string, out []string) []string {
+	_, isArray := update.([]ParameterUpdate)
+	for i, rule := range updateSpecRules(update) {
+		if rule.From == nil || rule.From.RecordsPerSample == nil {
+			continue
+		}
+		if isArray {
+			out = append(out, fmt.Sprintf("%s/update/%d/from/records_per_sample", varPath, i))
+		} else {
+			out = append(out, varPath+"/update/from/records_per_sample")
+		}
+	}
+	return out
+}
+
 // DeprecatedRecordsPerSampleSites lists, sorted, the JSON pointers at which a
 // loaded document writes the deprecated `records_per_sample` (esm-spec §8.3,
-// §8.5.1; removed at esm 1.4.0): `/data_sources/<S>/temporal/records_per_sample`
-// and `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`
+// §8.5.1; removed at esm 3.0.0): `/data_sources/<S>/temporal/records_per_sample`,
+// `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`
+// and
+// `/reaction_systems/<R>[/subsystems/<S>…]/parameters/<p>/update[/<i>]/from/records_per_sample`
 // (`/<i>` only for an array-form update). These are the places the load-time
-// `deprecated_records_per_sample` warning names.
+// `deprecated_records_per_sample` warning names. It runs on every load, so a
+// subsystem is scanned as raw JSON for the key, never decoded.
 func DeprecatedRecordsPerSampleSites(file *ESMFile) []string {
 	if file == nil {
 		return nil
@@ -2119,12 +2351,22 @@ func DeprecatedRecordsPerSampleSites(file *ESMFile) []string {
 		}
 	}
 	for modelName, model := range file.Models {
-		model := model
-		walkRecordsPerSampleSites(&model, modelName, "/models/"+modelName, func(site recordsPerSampleSite) {
-			if site.rule.From.RecordsPerSample != nil {
-				out = append(out, site.path+"/from/records_per_sample")
-			}
-		})
+		basePath := "/models/" + modelName
+		for varName, v := range model.Variables {
+			out = typedUpdateSites(v.Update, basePath+"/variables/"+varName, out)
+		}
+		for name, sub := range model.Subsystems {
+			out = rawSubsystemSites(sub, "variables", basePath+"/subsystems/"+name, out)
+		}
+	}
+	for rsName, rs := range file.ReactionSystems {
+		basePath := "/reaction_systems/" + rsName
+		for pName, p := range rs.Parameters {
+			out = typedUpdateSites(p.Update, basePath+"/parameters/"+pName, out)
+		}
+		for name, sub := range rs.Subsystems {
+			out = rawSubsystemSites(sub, "parameters", basePath+"/subsystems/"+name, out)
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -2140,7 +2382,7 @@ func warnDeprecatedRecordsPerSample(file *ESMFile) {
 		return
 	}
 	fmt.Fprintf(os.Stderr,
-		"warning: %s: `records_per_sample` is deprecated and is removed at esm 1.4.0; "+
+		"warning: %s: `records_per_sample` is deprecated and is removed at esm 3.0.0; "+
 			"the number of records a data-fed parameter receives is said by its record shape, "+
 			"two when its first axis is an interval index set with \"records\": true (esm-spec §8.5.1). "+
 			"Written at: %s.\n", codeDeprecatedRecordsPerSample, strings.Join(sites, ", "))

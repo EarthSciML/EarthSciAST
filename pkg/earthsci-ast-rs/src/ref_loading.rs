@@ -187,7 +187,7 @@ fn show_index_set(decl: &Value) -> String {
         return decl.to_string();
     };
     let parts: Vec<String> = [
-        "kind", "size", "members", "of", "offsets", "values", "from_faq",
+        "kind", "size", "members", "of", "offsets", "values", "from_faq", "records",
     ]
     .iter()
     .filter_map(|k| obj.get(*k).map(|v| format!("{k}={v}")))
@@ -199,11 +199,34 @@ fn show_index_set(decl: &Value) -> String {
     }
 }
 
+/// Are two raw index-set declarations the same declaration (esm-spec §4.7
+/// "Index-set merge")? Structural JSON equality, except that `"records": false`
+/// and an absent `records` are one declaration (esm-spec §8.5.1), so a mount
+/// that spells the default out never conflicts with one that leaves it out.
+/// `"records": true` against either is a real disagreement.
+pub(crate) fn index_set_decls_equal(a: &Value, b: &Value) -> bool {
+    fn records_flag(v: &Value) -> bool {
+        v.get("records").and_then(Value::as_bool) == Some(true)
+    }
+    match (a.as_object(), b.as_object()) {
+        (Some(x), Some(y)) => {
+            fn rest(m: &Map<String, Value>) -> BTreeMap<&str, &Value> {
+                m.iter()
+                    .filter(|(k, _)| k.as_str() != "records")
+                    .map(|(k, v)| (k.as_str(), v))
+                    .collect()
+            }
+            records_flag(a) == records_flag(b) && rest(x) == rest(y)
+        }
+        _ => a == b,
+    }
+}
+
 /// Merge a referenced subsystem file's top-level `index_sets` into the
 /// importing document's `registry` (esm-spec §4.7). Deep-equal redeclaration is
 /// idempotent; a non-deep-equal collision is `subsystem_index_set_conflict`.
-/// (`serde_json` `Map` equality is order-independent structural equality, the
-/// JSON-level analogue of the Julia typed field-wise deep-equal.)
+/// Deep equality is [`index_set_decls_equal`]: order-independent structural
+/// equality, with `"records": false` the same as an absent `records`.
 fn merge_subsystem_index_sets(
     registry: &mut Map<String, Value>,
     loaded: &Map<String, Value>,
@@ -218,7 +241,7 @@ fn merge_subsystem_index_sets(
         let owned = crate::template_imports::fold_mount_contribution(raw, env);
         let decl = &owned;
         if let Some(existing) = registry.get(n) {
-            if existing != decl {
+            if !index_set_decls_equal(existing, decl) {
                 return Err(err(
                     codes::SUBSYSTEM_INDEX_SET_CONFLICT,
                     format!(

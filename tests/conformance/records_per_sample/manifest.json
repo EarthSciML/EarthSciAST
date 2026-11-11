@@ -213,6 +213,17 @@
       ]
     },
     {
+      "id": "records_per_sample_deprecated_reaction_system",
+      "path": "fixtures/records_per_sample_deprecated_reaction_system.esm",
+      "expect": "valid",
+      "loader_fields": [],
+      "deprecated_fields": [
+        "/data_sources/Reanalysis/temporal/records_per_sample",
+        "/reaction_systems/Chem/parameters/T/update/from/records_per_sample"
+      ],
+      "note": "A reaction system's data-fed parameter: its deprecated site is named, and validation accepts the written value because the record shape agrees. loader_fields is empty because not every binding reports a loader field for a reaction-system parameter."
+    },
+    {
       "id": "record_axis_size_not_two",
       "path": "fixtures/record_axis_size_not_two.esm",
       "expect": "invalid",
@@ -390,6 +401,15 @@
       "pointer": "/models/Met/variables/K/update",
       "variable": "K",
       "cause": "deprecated 2, param_to_var target first axis an interval of size 2 without records: true"
+    },
+    {
+      "id": "records_per_sample_2_reaction_system_plain_axis",
+      "path": "fixtures/records_per_sample_2_reaction_system_plain_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/reaction_systems/Chem/parameters/T/update",
+      "variable": "T",
+      "cause": "reaction-system parameter shaped over an ordinary axis inherits records_per_sample 2 from its source"
     },
     {
       "id": "records_per_sample_2_coupling_import_plain_pair_axis",

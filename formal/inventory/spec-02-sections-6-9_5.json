@@ -478,6 +478,15 @@
       "note": "A deprecated records_per_sample (the rule's own, else its source's) that differs from the count the record shape gives (2 when it begins with a record axis, else 1) is rejected with records_per_sample_invalid."
     },
     {
+      "id": "spec.8.5.1.unmounted-ref-undecidable",
+      "section": "8.5.1",
+      "quote": "A binding that validates before mounting refs MUST treat what a",
+      "class": "semantic",
+      "phase": 5,
+      "area": "data_sources",
+      "note": "Before refs are mounted, a param_to_var target behind an unmounted ref, and a record shape whose first entry is an index set the document does not declare while a ref remains unmounted, are skipped rather than judged; the reachable record shapes are still judged, and flatten checks the rest."
+    },
+    {
       "id": "spec.8.5.1.provider-refuses-unseen-record-shape",
       "section": "8.5.1",
       "quote": "and with none written the provider MUST refuse the parameter, naming it, rather than assume one record.",

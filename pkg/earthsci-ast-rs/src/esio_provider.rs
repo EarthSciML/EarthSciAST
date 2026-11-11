@@ -1539,6 +1539,7 @@ mod prepare_impl {
     }
 
     /// The declared `shape` of the variable a scoped name `Model[.Sub…].var`
+    /// (or a reaction system's `System[.Sub…].parameter`/`…species`)
     /// names in raw document `doc`: `Some(None)` when it declares none,
     /// `None` when the document does not reach that declaration.
     fn raw_declared_shape<'a>(
@@ -1548,12 +1549,74 @@ mod prepare_impl {
         let mut parts: Vec<&str> = scoped.split('.').collect();
         let var = parts.pop()?;
         let (first, rest) = parts.split_first()?;
-        let mut node = doc.get("models")?.get(*first)?;
+        let (mut node, tables): (_, &[&str]) = match doc.get("models").and_then(|m| m.get(*first)) {
+            Some(model) => (model, &["variables"]),
+            None => (
+                doc.get("reaction_systems")?.get(*first)?,
+                &["parameters", "species"],
+            ),
+        };
         for seg in rest {
             node = node.get("subsystems")?.get(*seg)?;
         }
-        let vdef = node.get("variables")?.get(var)?;
+        let vdef = tables
+            .iter()
+            .find_map(|t| node.get(*t).and_then(|vars| vars.get(var)))?;
         Some(vdef.get("shape").filter(|v| !v.is_null()))
+    }
+
+    /// What [`raw_records_received`] reads from a raw document once per
+    /// provider construction rather than once per consumer: the
+    /// `param_to_var` edges of its `coupling` keyed by `from`, whether that
+    /// coupling still holds a `coupling_import` (expanded only by `flatten`),
+    /// and whether a subsystem is still an unmounted `{ref}` (whose file may
+    /// declare an index set the document does not).
+    struct RawRecordContext<'d> {
+        targets: HashMap<&'d str, Vec<&'d str>>,
+        pending_import: bool,
+        unmounted_refs: bool,
+    }
+
+    impl<'d> RawRecordContext<'d> {
+        fn new(doc: &'d serde_json::Value) -> Self {
+            let str_of =
+                |e: &'d serde_json::Value, k: &str| e.get(k).and_then(serde_json::Value::as_str);
+            let mut targets: HashMap<&str, Vec<&str>> = HashMap::new();
+            let mut pending_import = false;
+            for e in doc
+                .get("coupling")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                match str_of(e, "type") {
+                    Some("coupling_import") => pending_import = true,
+                    Some("variable_map") if str_of(e, "transform") == Some("param_to_var") => {
+                        if let (Some(from), Some(to)) = (str_of(e, "from"), str_of(e, "to")) {
+                            targets.entry(from).or_default().push(to);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            fn has_ref(node: &serde_json::Value) -> bool {
+                node.get("ref").is_some()
+                    || node
+                        .get("subsystems")
+                        .and_then(serde_json::Value::as_object)
+                        .is_some_and(|s| s.values().any(has_ref))
+            }
+            let unmounted_refs = ["models", "reaction_systems"].iter().any(|section| {
+                doc.get(*section)
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|comps| comps.values().any(has_ref))
+            });
+            Self {
+                targets,
+                pending_import,
+                unmounted_refs,
+            }
+        }
     }
 
     /// The number of records consuming parameter `key`, declaring raw
@@ -1562,9 +1625,11 @@ mod prepare_impl {
     /// `param_to_var` target it is the `from` of in the raw `coupling` (a
     /// target the document does not reach is skipped), and it receives 2 when
     /// that begins with an `index_sets` entry that is an `interval` carrying
-    /// `"records": true`. A misplaced record axis is refused.
+    /// `"records": true`. `None` when the document as given cannot show the
+    /// count. A misplaced record axis is refused.
     fn raw_records_received(
         doc: &serde_json::Value,
+        ctx: &RawRecordContext<'_>,
         key: &str,
         shape: Option<&serde_json::Value>,
     ) -> Result<Option<u32>, PrepareError> {
@@ -1577,25 +1642,10 @@ mod prepare_impl {
                 })
                 .unwrap_or_default()
         };
-        let coupling: Vec<&serde_json::Value> = doc
-            .get("coupling")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .collect();
         let shapes: Vec<Vec<String>> = match shape {
             Some(own) => vec![as_dims(own)],
             None => {
-                let targets: Vec<&str> = coupling
-                    .iter()
-                    .filter(|e| {
-                        e.get("type").and_then(serde_json::Value::as_str) == Some("variable_map")
-                            && e.get("transform").and_then(serde_json::Value::as_str)
-                                == Some("param_to_var")
-                            && e.get("from").and_then(serde_json::Value::as_str) == Some(key)
-                    })
-                    .filter_map(|e| e.get("to").and_then(serde_json::Value::as_str))
-                    .collect();
+                let targets = ctx.targets.get(key).map(Vec::as_slice).unwrap_or_default();
                 let shapes: Vec<Vec<String>> = targets
                     .iter()
                     .filter_map(|to| raw_declared_shape(doc, to))
@@ -1605,25 +1655,22 @@ mod prepare_impl {
                 // target is unreachable (behind an unmounted ref), or none is
                 // mapped inline while a coupling_import (expanded only by
                 // `flatten`) could still bring one. The count is unknown.
-                let pending_import = coupling.iter().any(|e| {
-                    e.get("type").and_then(serde_json::Value::as_str) == Some("coupling_import")
-                });
-                if shapes.is_empty() && (!targets.is_empty() || pending_import) {
+                if shapes.is_empty() && (!targets.is_empty() || ctx.pending_import) {
                     return Ok(None);
                 }
                 shapes
             }
         };
-        let is_record_axis = |d: &str| {
-            doc.get("index_sets")
-                .and_then(|s| s.get(d))
-                .is_some_and(|set| {
-                    set.get("kind").and_then(serde_json::Value::as_str) == Some("interval")
-                        && set.get("records").and_then(serde_json::Value::as_bool) == Some(true)
-                })
+        let is_record_axis = |d: &str| match doc.get("index_sets").and_then(|s| s.get(d)) {
+            Some(set) => Some(
+                set.get("kind").and_then(serde_json::Value::as_str) == Some("interval")
+                    && set.get("records").and_then(serde_json::Value::as_bool) == Some(true),
+            ),
+            None if ctx.unmounted_refs => None,
+            None => Some(false),
         };
         crate::structural::records_from_shapes(&shapes, is_record_axis)
-            .map(|n| Some(u32::from(n)))
+            .map(|n| n.map(u32::from))
             .map_err(|bad| {
                 perr(format!(
                     "providers_from_document: parameter '{key}': record_axis_misplaced: its \
@@ -1696,6 +1743,7 @@ mod prepare_impl {
                 perr("providers_from_document: the document declares no data_sources")
             })?;
         let bindings = document_bindings(doc);
+        let record_ctx = RawRecordContext::new(doc);
         let mut out = Vec::new();
         for (lname, ld) in dls {
             if let Some(want) = loaders
@@ -1806,7 +1854,7 @@ mod prepare_impl {
             let mut effective_rps = Vec::with_capacity(consumers.len());
             for b in consumers {
                 let key = &b.key;
-                let shaped = raw_records_received(doc, key, b.shape)?;
+                let shaped = raw_records_received(doc, &record_ctx, key, b.shape)?;
                 // The deprecated written value (its own, else the source's) is
                 // still read strictly, and must agree with the record shape.
                 let own = written_records_per_sample(

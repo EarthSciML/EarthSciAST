@@ -9,9 +9,13 @@ with a **record axis**, an `interval` index set of size 2 carrying
 `"records": true`, the parameter receives two records; otherwise one.
 
 The older fields `from.records_per_sample` and `temporal.records_per_sample`
-(§8.3) are **deprecated** and removed at esm 1.4.0. Until then they load with
-one `deprecated_records_per_sample` warning per load and must agree with the
-record shape.
+(§8.3) are **deprecated** and removed at esm 3.0.0. They are no longer obeyed:
+until removal they load with one `deprecated_records_per_sample` warning per
+load and are checked, so a written value must equal the count the record shape
+gives. That is a breaking change, made with the esm 2.0.0 break: a document
+written before the record axis with `records_per_sample: 2` over a plain
+size-2 first axis is now `records_per_sample_invalid`, and is fixed by adding
+`"records": true` to that axis.
 
 `manifest.json` drives one consumer per binding (Julia, Python, Rust,
 TypeScript, Go). `record_codes` lists the four diagnostics this tier owns.
@@ -27,7 +31,9 @@ TypeScript, Go). `record_codes` lists the four diagnostics this tier owns.
   not at all when it is empty. `record_axis` and its `param_to_var`,
   `coupling_import` and `ref` variants use the record axis alone;
   `records_per_sample_deprecated*` keep the deprecated form, agreeing with the
-  shape, to cover the warning path.
+  shape, to cover the warning path; `records_per_sample_deprecated_reaction_system`
+  does so for a reaction system's data-fed parameter, whose site is a
+  `/reaction_systems/...` pointer (it lists no `loader_fields`).
 - **Invalid cases** (`expect: "invalid"`) are schema-valid and must be refused
   by structural validation with exactly one diagnostic from `record_codes`,
   `code` at `pointer`:
@@ -46,7 +52,8 @@ TypeScript, Go). `record_codes` lists the four diagnostics this tier owns.
     on a non-`data` rule, or a written value (own or inherited from the source)
     that disagrees with the record shape — 2 on a shape with no record axis
     first (including a pre-record-axis document whose first axis is a plain
-    interval of size 2), or 1 on one with.
+    interval of size 2), or 1 on one with — for a model variable or a
+    reaction-system parameter alike.
 - **Flatten-invalid cases** (`expect: "flatten_invalid"`) pass structural
   validation and are refused by `flatten` with `code`: the target arrives
   through a `coupling_import`, which expands only at flatten.

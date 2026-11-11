@@ -313,3 +313,113 @@ fn loading_warns_once_exactly_when_the_field_is_written() {
         }
     }
 }
+
+fn case_by_id<'a>(m: &'a Value, id: &str) -> &'a Value {
+    m["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == id)
+        .unwrap_or_else(|| panic!("no case {id}"))
+}
+
+#[test]
+fn flatten_never_reports_records_per_sample_on_a_non_data_rule() {
+    // The deprecated field on a non-`data` rule is validation's finding alone
+    // (esm-spec §8.5.1): flatten does not refuse the document for it.
+    let m = manifest();
+    let case = case_by_id(&m, "records_on_non_data_rule");
+    let file = load(case);
+    if let Err(e) = flatten_case(case, &file) {
+        assert!(
+            !e.to_string().contains("records_per_sample_invalid"),
+            "flatten reported validation's finding: {e}"
+        );
+    }
+}
+
+#[test]
+fn a_reaction_system_parameter_counts_its_records_from_its_record_shape() {
+    let m = manifest();
+    let valid = case_by_id(&m, "records_per_sample_deprecated_reaction_system");
+    let flat = flatten_case(valid, &load(valid)).unwrap();
+    let lf = flat
+        .loader_fields
+        .iter()
+        .find(|lf| lf.name == "Chem.T")
+        .expect("a loader field for the reaction-system parameter");
+    assert_eq!(lf.records_per_sample, 2);
+    // A written 2 over an ordinary axis is refused, not silently read as 1.
+    let invalid = case_by_id(&m, "records_per_sample_2_reaction_system_plain_axis");
+    assert_flatten_refuses(invalid, &load(invalid));
+}
+
+#[test]
+fn an_index_set_an_unmounted_ref_could_declare_is_not_judged() {
+    // F writes records_per_sample 2 over `rec`. Drop the document's own `rec`
+    // and leave a subsystem `{ref}` unmounted: the ref's file may declare
+    // `rec` as a record axis, so the count is not decidable at validation.
+    let m = manifest();
+    let case = case_by_id(&m, "records_per_sample_2_on_plain_pair_axis");
+    let mut file = load(case);
+    file.index_sets.as_mut().unwrap().shift_remove("rec");
+    let box_model = file.models.as_mut().unwrap().get_mut("Box").unwrap();
+    box_model.subsystems = Some(
+        [("Grid".to_string(), serde_json::json!({"ref": "./grid.esm"}))]
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(record_findings(&m, &file), vec![]);
+    // With nothing left to mount, the undeclared `rec` is an ordinary axis.
+    file.models
+        .as_mut()
+        .unwrap()
+        .get_mut("Box")
+        .unwrap()
+        .subsystems = None;
+    assert_eq!(record_findings(&m, &file), expected_finding(case));
+}
+
+/// A two-file document: `main.esm` declares `rec` with `main_rec` and mounts
+/// `grid.esm`, which declares `rec` with `grid_rec`. Returns the load result.
+fn mount_with_rec(name: &str, main_rec: Value, grid_rec: Value) -> Result<EsmFile, String> {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = |subsystems: Value| {
+        serde_json::json!({
+            "variables": {"c": {"type": "unknown", "units": "1", "default": 1.0}},
+            "equations": [{"lhs": {"op": "D", "args": ["c"], "wrt": "t"}, "rhs": "c"}],
+            "subsystems": subsystems
+        })
+    };
+    let grid = serde_json::json!({
+        "esm": "1.3.0", "metadata": {"name": "Grid"},
+        "index_sets": {"rec": grid_rec},
+        "models": {"Grid": model(serde_json::json!({}))}
+    });
+    let main = serde_json::json!({
+        "esm": "1.3.0", "metadata": {"name": "Main"},
+        "index_sets": {"rec": main_rec},
+        "models": {"Box": model(serde_json::json!({"Grid": {"ref": "./grid.esm"}}))}
+    });
+    std::fs::write(dir.join("grid.esm"), grid.to_string()).unwrap();
+    std::fs::write(dir.join("main.esm"), main.to_string()).unwrap();
+    load_path(dir.join("main.esm")).map_err(|e| e.to_string())
+}
+
+#[test]
+fn records_false_is_an_absent_records_at_an_index_set_merge() {
+    let plain = serde_json::json!({"kind": "interval", "size": 2});
+    let falsy = serde_json::json!({"kind": "interval", "size": 2, "records": false});
+    let truthy = serde_json::json!({"kind": "interval", "size": 2, "records": true});
+    mount_with_rec("rec_false_vs_absent", falsy.clone(), plain.clone())
+        .expect("records: false merges with an absent records");
+    mount_with_rec("rec_absent_vs_false", plain.clone(), falsy)
+        .expect("an absent records merges with records: false");
+    let err = mount_with_rec("rec_true_vs_absent", truthy, plain)
+        .expect_err("records: true conflicts with an absent records");
+    assert!(
+        err.contains("subsystem_index_set_conflict") && err.contains("records=true"),
+        "{err}"
+    );
+}

@@ -999,7 +999,7 @@ pub struct DataSourceBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<serde_json::Value>,
 
-    /// DEPRECATED (removed at esm 1.4.0): how many records of the source the
+    /// DEPRECATED (removed at esm 3.0.0): how many records of the source the
     /// parameter receives per query time, 1 or 2. The record shape says it
     /// now (esm-spec §8.5.1); a written value is kept as written and must
     /// agree with the shape (`records_per_sample_invalid`). `None` when not
