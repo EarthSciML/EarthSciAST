@@ -4159,6 +4159,10 @@ parameter's `/update` when `update` is a single rule, and `/update/<i>` (the
 rule's 0-based position) when it is an array of rules. A record axis in the
 shape of a variable that is not a data-fed parameter, at any position, is not
 an error.
+When rule 2 holds for a parameter, rule 3 and the `records_per_sample`
+agreement below are not checked for it (its count is not defined); otherwise
+rule 3 and that agreement are independent, and a rule that breaks both reports
+both.
 
 **When rules 2 and 3 are checked.** Structural validation checks them against
 every record shape it can see in the loaded document: the parameter's own
@@ -4207,6 +4211,17 @@ on the consumer's shape instead.
 parameter's `update`, and every binding's `loader_fields` entry reports the
 number of records the parameter receives (esm-libraries-spec §4.7.5,
 `tests/conformance/records_per_sample/`).
+
+A binding's document-driven provider construction (`providers_from_document`,
+§8.1.1) reads the record shape from the document it is given, without
+expanding `coupling_import` entries or mounting refs it was not given mounted.
+When a parameter's record shape depends on a `param_to_var` target that
+document does not show (the parameter declares no `shape` and either no inline
+entry maps it while a `coupling_import` could, or every target it maps to is
+unreachable), the count is unknown there: a written deprecated
+`records_per_sample` then stands in (`flatten` checks it against the shape),
+and with none written the provider MUST refuse the parameter, naming it,
+rather than assume one record.
 
 ### 8.6 Regridding — a coupling expression
 
