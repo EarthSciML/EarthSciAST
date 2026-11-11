@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -308,24 +308,17 @@
                     {
                       "args": [
                         {
-                          "args": [
-                            {
-                              "args": [
-                                "pd_cell__src_cells__cell_ring",
-                                "c"
-                              ],
-                              "op": "index"
-                            },
-                            {
-                              "args": [
-                                "rec_ring",
-                                "r"
-                              ],
-                              "op": "index"
-                            }
-                          ],
-                          "manifold": "planar",
-                          "op": "polygon_intersection_area"
+                          "args": [],
+                          "bindings": {
+                            "cell_a": "c",
+                            "cell_b": "r",
+                            "nv_a": 5,
+                            "nv_b": 5,
+                            "ring_a": "pd_cell__src_cells__cell_ring",
+                            "ring_b": "rec_ring"
+                          },
+                          "name": "overlap_area_planar",
+                          "op": "apply_expression_template"
                         },
                         {
                           "args": [
@@ -749,6 +742,14 @@
               }
             }
           }
+        }
+      ],
+      "expression_template_imports": [
+        {
+          "only": [
+            "overlap_area_planar"
+          ],
+          "ref": "esm:std/geometry.esm"
         }
       ],
       "variables": {

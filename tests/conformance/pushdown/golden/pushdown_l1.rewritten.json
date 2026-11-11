@@ -37,7 +37,7 @@
       }
     }
   },
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",

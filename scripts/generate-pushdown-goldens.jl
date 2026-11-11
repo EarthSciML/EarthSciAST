@@ -350,7 +350,7 @@ function build_l1_doc()
     # carries `faq` nodes (`_agg`), which arrive at esm 1.1.0. It is also what
     # the committed fixtures declare, so the generator reproduces them.
     doc = Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict{String, Any}("name" => "prepare_pushdown_L1"),
         "index_sets" => Dict{String, Any}(
             "src_cells" => Dict("kind" => "interval", "size" => GRID),
@@ -421,7 +421,7 @@ function build_gated_dense_doc()
     )
     # `faq` floor, as in `build_l1_doc` above.
     doc = Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict{String, Any}("name" => "pushdown_gated_dense"),
         "index_sets" => Dict{String, Any}(
             "src_cells" => Dict("kind" => "interval", "size" => NC),
@@ -594,8 +594,9 @@ end
 #     be captured.
 #
 # The predicate is the envelope-vs-envelope AABB shape, because a polygon record
-# has extent; `polygon_intersection_area` is the exact narrow phase behind the
-# `overlap_frac` stand-in of `pushdown_envelope_overlap`.
+# has extent; the `overlap_area_planar` template of `lib/geometry.esm` is the
+# exact narrow phase behind the `overlap_frac` stand-in of
+# `pushdown_envelope_overlap`.
 # ---------------------------------------------------------------------------
 function build_polygon_area_doc()
     d = build_envelope_overlap_doc()
@@ -618,12 +619,13 @@ function build_polygon_area_doc()
                     "*", _ix("emis_annual", "r"),
                     _op(
                         "/", Dict(
-                            "op" => "polygon_intersection_area",
-                            "manifold" => "planar",
-                            "args" => Any[
-                                _ix("cell_ring", "c"),
-                                _ix("rec_ring", "r"),
-                            ]
+                            "op" => "apply_expression_template",
+                            "args" => Any[],
+                            "name" => "overlap_area_planar",
+                            "bindings" => Dict(
+                                "ring_a" => "cell_ring", "cell_a" => "c", "nv_a" => 5,
+                                "ring_b" => "rec_ring", "cell_b" => "r", "nv_b" => 5,
+                            )
                         ),
                         _ix("cell_area", "c")
                     )
@@ -638,6 +640,9 @@ function build_polygon_area_doc()
     # The MIRROR stays as `build_envelope_overlap_doc` left it: a per-record
     # aggregate keeps the FULL cell axis, so nothing about it is re-pointed and
     # it needs no gathers even though it reads cell factors.
+    d["models"]["Binned"]["expression_template_imports"] = Any[
+        Dict("ref" => "esm:std/geometry.esm", "only" => ["overlap_area_planar"]),
+    ]
     _split_observeds!(d["models"]["Binned"])
     return d
 end
