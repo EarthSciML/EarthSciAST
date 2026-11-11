@@ -24,7 +24,7 @@
 //! relational engine ([`crate::relational`], bead ess-my4.3.4) in the
 //! `CONST`/`DISCRETE` phase — never on the hot path.
 
-use crate::relational::{Key, canonical_index_set_json, rank, skolem};
+use crate::relational::{Key, canonical_index_set_json, distinct};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
@@ -628,10 +628,10 @@ fn fold_to_zero_based(arr: &Value) -> Result<Value, CadenceError> {
     Ok(Value::Array(out))
 }
 
-/// Enumerate the unique edges from the `(lo, hi)` endpoint tables, through the
-/// build-time relational engine (ess-my4.3.4): `skolem` canonicalises each pair
-/// (undirected → sorted), `distinct` sorts by the §5.5 total order and drops
-/// adjacent duplicates. Identical to the determinism `edge_enumeration`
+/// The canonical key of every face-local edge in the `(lo, hi)` endpoint
+/// tables: `(min, max)` for an undirected edge, `(lo, hi)` as written for a
+/// directed one. `distinct` then sorts by the §5.5 total order and drops
+/// adjacent duplicates, identical to the determinism `edge_enumeration`
 /// reference; `Key::try_from_json` rejects a float component (§5.5 rule 1).
 fn edge_keys(face_lo: &Value, face_hi: &Value, mode: &str) -> Result<Vec<Key>, CadenceError> {
     let symmetric = mode == "undirected";
@@ -660,7 +660,12 @@ fn edge_keys(face_lo: &Value, face_hi: &Value, mode: &str) -> Result<Vec<Key>, C
                     "float component forbidden in a topology key (§5.5 rule 1): {e}"
                 ))
             })?;
-            keys.push(skolem(vec![klo, khi], symmetric));
+            let (a, b) = if symmetric && khi < klo {
+                (khi, klo)
+            } else {
+                (klo, khi)
+            };
+            keys.push(Key::Tuple(vec![a, b]));
         }
     }
     Ok(keys)
@@ -699,11 +704,8 @@ pub fn compute_fold(label: &str, spec: &Value, inputs: &Value) -> Result<String,
         }
         "rank" => {
             let keys = edge_keys(input("face_lo")?, input("face_hi")?, mode)?;
-            let ids: Vec<Value> = rank(&keys)
-                .canonical_dense_ids()
-                .into_iter()
-                .map(Value::from)
-                .collect();
+            // Dense 0-based ids: each key's position in the `distinct` sequence.
+            let ids: Vec<Value> = (0..distinct(&keys).len() as i64).map(Value::from).collect();
             Ok(canonical_serialize(&Value::Array(ids)))
         }
         other => Err(err(format!(

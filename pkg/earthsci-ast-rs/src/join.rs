@@ -182,8 +182,8 @@ pub enum KeyColumn {
 ///
 /// A multi-pair `on` clause (a **composite key**) resolving to the same symbol
 /// pair collapses into ONE gate carrying one column per pair; the evaluator
-/// combines them with the relational engine's tuple constructor
-/// [`crate::relational::skolem`] into a canonical composite key, so a `[["a1","b1"],["a2","b2"]]` clause matches iff BOTH pairs agree —
+/// combines them into one composite key, the tuple of the column values in
+/// column order ([`crate::relational::Key::Tuple`]), so a `[["a1","b1"],["a2","b2"]]` clause matches iff BOTH pairs agree —
 /// the inner-join semantics of §5.3, not two independent gates.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OnGate {

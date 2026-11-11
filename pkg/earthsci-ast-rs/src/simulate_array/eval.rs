@@ -3921,11 +3921,11 @@ pub(super) fn data_key_column(a: &ArrayD<f64>) -> Option<(Vec<i64>, Vec<crate::r
 }
 
 /// One side's per-position key: the single column's key for a simple `on`, or
-/// the canonical composite tuple ([`crate::relational::skolem`]) over every
-/// listed pair's column for a multi-pair (COMPOSITE-KEY) clause. A composite
+/// the tuple ([`crate::relational::Key::Tuple`]) of every listed pair's column
+/// value, in pair order, for a multi-pair (COMPOSITE-KEY) clause. A composite
 /// key matches iff EVERY pair agrees, which is exactly tuple equality; the
-/// tuple is the directed (order-preserving) canonical tuple, so the left and right
-/// sides build comparable keys as long as the pairs are listed in one order —
+/// left and right sides build comparable keys as long as the pairs are listed
+/// in one order —
 /// which the build-time grouping guarantees by construction.
 fn side_keys(
     cols: &[crate::join::KeyColumn],
@@ -3955,7 +3955,7 @@ pub(super) fn composite_side_keys(
         return None;
     }
     let keys = (0..positions.len())
-        .map(|t| crate::relational::skolem(parts.iter().map(|p| p.1[t].clone()).collect(), false))
+        .map(|t| crate::relational::Key::Tuple(parts.iter().map(|p| p.1[t].clone()).collect()))
         .collect();
     Some((positions, keys))
 }

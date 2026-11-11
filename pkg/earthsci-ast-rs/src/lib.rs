@@ -180,6 +180,10 @@ pub(crate) mod inline_tests;
 #[doc(hidden)]
 pub mod inline_tests_adapter;
 
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub mod determinism_adapter;
+
 // Build-time value-invention front-door — derived index-sets (`distinct`
 // producers) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
 pub(crate) mod value_invention;
@@ -280,8 +284,8 @@ pub use reference_resolution::build_reference_graph_with_index_sets;
 #[allow(deprecated)]
 pub use reference_resolution::ReferenceError;
 pub use relational::{
-    FloatKeyError, Key, Num, Ranking, SemiringOp, canonical_index_set_json, distinct,
-    group_aggregate, rank, rank_with_base, serialize_keys, serialize_pairs, skolem, skolem_edge,
+    FloatKeyError, Key, Num, SemiringOp, canonical_index_set_json, distinct, group_aggregate,
+    serialize_keys, serialize_pairs,
 };
 pub use serialize::{to_json, to_json_compact, write_path};
 pub use substitute::{
