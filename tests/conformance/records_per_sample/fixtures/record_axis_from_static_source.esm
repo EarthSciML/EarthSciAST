@@ -1,13 +1,14 @@
 {
   "esm": "1.3.0",
   "metadata": {
-    "name": "pair_without_record_axis",
-    "description": "records_per_sample 2 on a parameter whose first dimension has 3 members, not 2 (esm-spec 8.5.1 rule 3)."
+    "name": "RecordAxisFromStaticSource",
+    "description": "F is shaped [rec, x], rec a record axis, so it asks for two records, but its source declares no temporal block: there is no successor record (esm-spec 8.5.1 rule 3, record_axis_time_invariant_source)."
   },
   "index_sets": {
     "rec": {
       "kind": "interval",
-      "size": 2
+      "size": 2,
+      "records": true
     },
     "x": {
       "kind": "interval",
@@ -22,17 +23,10 @@
     }
   },
   "data_sources": {
-    "Met": {
-      "kind": "grid",
+    "Static": {
+      "kind": "static",
       "source": {
         "url_template": "file:///data/met/{date:%Y%m%d}.nc"
-      },
-      "temporal": {
-        "start": "2024-05-01T00:00:00Z",
-        "end": "2024-05-31T21:00:00Z",
-        "file_period": "P1D",
-        "frequency": "PT3H",
-        "records_per_file": 8
       },
       "metadata": {
         "esio_format": "netcdf"
@@ -56,15 +50,15 @@
           "type": "parameter",
           "units": "1",
           "shape": [
+            "rec",
             "x"
           ],
           "default": 1.0,
           "update": {
             "kind": "data",
-            "source": "Met",
+            "source": "Static",
             "from": {
-              "file_variable": "PBLH",
-              "records_per_sample": 2
+              "file_variable": "FRLAND"
             }
           }
         }

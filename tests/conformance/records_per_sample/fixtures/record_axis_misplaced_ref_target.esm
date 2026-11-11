@@ -1,8 +1,8 @@
 {
   "esm": "1.3.0",
   "metadata": {
-    "name": "PairRefTargetWithoutRecordAxis",
-    "description": "As records_per_sample_ref_target, but the mounted target is shaped [x, rec]. A binding refuses it at validation once the ref is mounted, or at flatten (esm-spec 8.5.1 'When rule 3 is checked')."
+    "name": "RecordAxisMisplacedRefTarget",
+    "description": "As record_axis_ref_target, but the mounted target is shaped [x, rec], rec a record axis. A binding refuses it at validation once the ref is mounted, or at flatten."
   },
   "data_sources": {
     "met_source": {
@@ -33,8 +33,7 @@
             "kind": "data",
             "source": "met_source",
             "from": {
-              "file_variable": "K",
-              "records_per_sample": 2
+              "file_variable": "K"
             }
           }
         }

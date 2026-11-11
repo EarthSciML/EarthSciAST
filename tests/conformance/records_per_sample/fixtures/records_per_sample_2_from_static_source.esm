@@ -1,0 +1,92 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "RecordsPerSample2FromStaticSource",
+    "description": "F writes the deprecated from.records_per_sample 2 and is shaped [rec, x], rec a record axis, so the field agrees with the shape; the source declares no temporal block, so the one finding is record_axis_time_invariant_source (esm-spec 8.5.1)."
+  },
+  "index_sets": {
+    "rec": {
+      "kind": "interval",
+      "size": 2,
+      "records": true
+    },
+    "x": {
+      "kind": "interval",
+      "size": 3
+    },
+    "pair": {
+      "kind": "categorical",
+      "members": [
+        "before",
+        "after"
+      ]
+    }
+  },
+  "data_sources": {
+    "Static": {
+      "kind": "static",
+      "source": {
+        "url_template": "file:///data/met/{date:%Y%m%d}.nc"
+      },
+      "metadata": {
+        "esio_format": "netcdf"
+      }
+    }
+  },
+  "models": {
+    "Box": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "F": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "rec",
+            "x"
+          ],
+          "default": 1.0,
+          "update": {
+            "kind": "data",
+            "source": "Static",
+            "from": {
+              "file_variable": "FRLAND",
+              "records_per_sample": 2
+            }
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "c"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

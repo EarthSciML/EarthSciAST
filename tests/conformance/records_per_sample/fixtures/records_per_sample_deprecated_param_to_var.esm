@@ -1,13 +1,14 @@
 {
   "esm": "1.3.0",
   "metadata": {
-    "name": "RecordsPerSampleParamToVar",
-    "description": "A data-fed parameter declaring no shape, with records_per_sample 2, mapped by param_to_var onto a parameter shaped [rec, x], rec of size 2: its record shape is the target's (esm-spec 8.5.1 rule 3), so the document is valid. This is reseact's GEOSFP.PBLH -> Transport3D.F_PBLH."
+    "name": "RecordsPerSampleDeprecatedParamToVar",
+    "description": "As record_axis_param_to_var, but Met.K still writes the deprecated from.records_per_sample 2. Its target's record shape begins with a record axis, so the two agree: the document loads with a deprecated_records_per_sample warning and Met.K receives two records."
   },
   "index_sets": {
     "rec": {
       "kind": "interval",
-      "size": 2
+      "size": 2,
+      "records": true
     },
     "x": {
       "kind": "interval",

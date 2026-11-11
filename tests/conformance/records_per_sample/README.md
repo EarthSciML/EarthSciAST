@@ -1,34 +1,58 @@
-# `records_per_sample` — one record, or the pair that brackets the time
+# Record axes — one record, or the pair that brackets the time
 
-A data-fed parameter's `update.from.records_per_sample` (esm-spec §8.5.1) says
-whether the parameter receives the record at or before the query time (`1`) or
-that record and its successor, stacked along the parameter's first dimension
-(`2`), for the model to blend in time. The source's
-`temporal.records_per_sample` (§8.3) is the default; absent both, it is `1`.
+A data-fed parameter receives, at a query time, either the record at or before
+it or that record and its successor, stacked along the parameter's first axis
+(esm-spec §8.5.1). Which one is said by the parameter's **record shape**: its
+declared `shape`, or, for a parameter that declares none, the declared `shape`
+of each `param_to_var` target it is the `from` of. When the record shape begins
+with a **record axis**, an `interval` index set of size 2 carrying
+`"records": true`, the parameter receives two records; otherwise one.
+
+The older fields `from.records_per_sample` and `temporal.records_per_sample`
+(§8.3) are **deprecated** and removed at esm 1.4.0. Until then they load with
+one `deprecated_records_per_sample` warning per load and must agree with the
+record shape.
 
 `manifest.json` drives one consumer per binding (Julia, Python, Rust,
-TypeScript, Go):
+TypeScript, Go). `record_codes` lists the four diagnostics this tier owns.
 
-- **Valid cases** load, validate with no `records_per_sample_invalid`, and
-  flatten. Each listed `loader_fields` entry must report the EFFECTIVE value,
-  and `flattened_from_records_per_sample` pins that the flattened parameter's
-  `update.from` keeps the field exactly as written (`null` = absent). The field
-  must also survive emit then load.
+- **Valid cases** load, validate with none of `record_codes`, and flatten. Each
+  listed `loader_fields` entry must report the number of records the parameter
+  receives, and `flattened_from_records_per_sample` pins that the flattened
+  parameter's `update.from` keeps the deprecated field exactly as written
+  (`null` = absent). The `records` flag and the field must survive emit then
+  load. `deprecated_fields` is the sorted list of JSON pointers at which the
+  deprecated field is written: each binding's deprecated-site function must
+  return exactly that list, and loading must warn once when it is non-empty and
+  not at all when it is empty. `record_axis` and its `param_to_var`,
+  `coupling_import` and `ref` variants use the record axis alone;
+  `records_per_sample_deprecated*` keep the deprecated form, agreeing with the
+  shape, to cover the warning path.
 - **Invalid cases** (`expect: "invalid"`) are schema-valid and must be refused
-  by structural validation with exactly one `records_per_sample_invalid` at
-  `pointer`: a non-`data` rule carrying the field, a pair from a source with no
-  `temporal` or a `temporal` with no `start` (a time-invariant source), and a
-  pair whose record shape's first dimension is not an index set of two members,
-  whether the 2 is written on `from` or inherited from the source, whether the
-  parameter sits in a top-level model or a subsystem, whether `update` is one
-  rule or an array (the pointer then ends in the rule's index), and whether the record shape is declared or comes from a
-  `param_to_var` target (every target is checked, not just the first).
+  by structural validation with exactly one diagnostic from `record_codes`,
+  `code` at `pointer`:
+  - `record_axis_invalid` at `/index_sets/<name>`: a record axis whose size is
+    not 2;
+  - `record_axis_misplaced` at the rule's pointer: a data-fed record shape
+    naming a record axis anywhere but first, or several record shapes that
+    disagree about beginning with one — in a top-level model or a subsystem,
+    in a one-rule or array-form `update` (the pointer then ends in the rule's
+    index), with the record shape declared or coming from a `param_to_var`
+    target (every target is checked);
+  - `record_axis_time_invariant_source` at the rule's pointer: a record shape
+    beginning with a record axis on a source with no `temporal` block or no
+    `temporal.start`;
+  - `records_per_sample_invalid` at the rule's pointer: the deprecated field
+    on a non-`data` rule, or a written value (own or inherited from the source)
+    that disagrees with the record shape — 2 on a shape with no record axis
+    first (including a pre-record-axis document whose first axis is a plain
+    interval of size 2), or 1 on one with.
 - **Flatten-invalid cases** (`expect: "flatten_invalid"`) pass structural
-  validation and are refused by `flatten` with the same code: the target
-  arrives through a `coupling_import`, which expands only at flatten.
-- **Refused cases** (`expect: "refused"`) are refused with the code by
-  validation or by `flatten`, whichever first sees the record shape: the target
-  sits in a model mounted by `ref`.
+  validation and are refused by `flatten` with `code`: the target arrives
+  through a `coupling_import`, which expands only at flatten.
+- **Refused cases** (`expect: "refused"`) are refused with `code` by validation
+  or by `flatten`, whichever first sees the record shape: the target sits in a
+  model mounted by `ref`.
 
 The files under `fixtures/components/` (a coupling library and two mounted
 components) are referenced by the cases and are not cases themselves.
