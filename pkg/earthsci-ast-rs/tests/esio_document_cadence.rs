@@ -82,6 +82,17 @@ fn doc(dir: &Path) -> Value {
     })
 }
 
+/// Gives `Emis.nox` the record axis `rec` (an interval of size 2 carrying
+/// `"records": true`) first, so it receives two records per sample
+/// (esm-spec §8.5.1).
+fn give_nox_a_record_axis(d: &mut Value) {
+    d["index_sets"] = json!({
+        "rec": {"kind": "interval", "size": 2, "records": true},
+        "row": {"kind": "interval", "size": 2}
+    });
+    d["models"]["Emis"]["variables"]["nox"]["shape"] = json!(["rec", "row"]);
+}
+
 fn options(rps: Option<u32>) -> DocumentProviderOptions {
     let mut subs = HashMap::new();
     subs.insert(
@@ -146,10 +157,10 @@ fn an_unbound_sector_is_refused() {
 }
 
 #[test]
-fn the_two_record_bracket_is_the_consumers_choice() {
+fn the_two_record_bracket_is_the_record_shapes() {
     let dir = tempfile::tempdir().unwrap();
     let mut d = doc(dir.path());
-    d["models"]["Emis"]["variables"]["nox"]["update"]["from"]["records_per_sample"] = json!(2);
+    give_nox_a_record_axis(&mut d);
     // A run-time entry equal to the document's value is accepted.
     let mut provs =
         providers_from_document_with(&d, &dir.path().join("cache"), &options(Some(2))).unwrap();
@@ -269,7 +280,7 @@ fn a_record_table_refuses_the_two_record_bracket() {
     let dir = tempfile::tempdir().unwrap();
     let mut d = doc(dir.path());
     d["data_sources"]["NEI"]["record_filter"] = json!({"require_finite": ["NOX"]});
-    from_mut(&mut d).insert("records_per_sample".into(), json!(2));
+    give_nox_a_record_axis(&mut d);
     let e = build_err(&d, dir.path(), &options(None));
     assert!(e.contains("two records per sample"), "{e}");
     assert!(e.contains("record table"), "{e}");
@@ -284,7 +295,7 @@ fn a_fixed_select_addresses_the_record_axes_not_the_bracket() {
     let mut p = build(&d, dir.path(), &options(None));
     assert_eq!(values(&mut p, MAR - JAN), vec![62.0]);
     // the bracket: ROW 1 of [Feb, Mar], the leading record axis taken whole
-    from_mut(&mut d).insert("records_per_sample".into(), json!(2));
+    give_nox_a_record_axis(&mut d);
     let mut p = build(&d, dir.path(), &options(None));
     assert_eq!(values(&mut p, 1455494400.0 - JAN), vec![42.0, 62.0]);
 }
@@ -313,14 +324,17 @@ fn an_empty_url_override_is_refused() {
     assert!(e.contains(r#"url_overrides["NEI"] is empty"#), "{e}");
 }
 
-/// `doc` with three parameters reading NEI: `pair` sets
-/// `from.records_per_sample: 2` and declares the record axis `rec` (an interval
-/// of size 2) first, `single` sets 1, and `inherited` sets nothing, so it takes
-/// the source's `temporal.records_per_sample`.
+/// `doc` with three parameters reading NEI: `pair` declares the record axis
+/// `rec` (an interval of size 2 carrying `"records": true`) first and so
+/// receives two records, `single` is shaped `[row]` and receives one, and
+/// `inherited` is shaped like `pair` exactly when the source writes the
+/// deprecated `temporal.records_per_sample: 2`. With a source value, `single`
+/// writes the deprecated `from.records_per_sample: 1`, which overrides it;
+/// every written value agrees with its record shape.
 fn two_record_doc(dir: &Path, source_rps: Option<u32>) -> Value {
     let mut d = doc(dir);
     d["index_sets"] = json!({
-        "rec": {"kind": "interval", "size": 2},
+        "rec": {"kind": "interval", "size": 2, "records": true},
         "row": {"kind": "interval", "size": 2}
     });
     if let Some(n) = source_rps {
@@ -340,8 +354,8 @@ fn two_record_doc(dir: &Path, source_rps: Option<u32>) -> Value {
         json!(["row"])
     };
     d["models"]["Emis"]["variables"] = json!({
-        "pair": param(json!(["rec", "row"]), Some(2)),
-        "single": param(json!(["row"]), Some(1)),
+        "pair": param(json!(["rec", "row"]), None),
+        "single": param(json!(["row"]), source_rps.map(|_| 1)),
         "inherited": param(inherited_shape, None),
     });
     d
@@ -381,7 +395,7 @@ fn a_two_record_parameter_gets_the_records_before_and_after_t() {
 }
 
 #[test]
-fn the_sources_records_per_sample_is_the_default() {
+fn a_deprecated_written_value_agreeing_with_the_shape_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     let mut provs = providers_from_document_with(
         &two_record_doc(dir.path(), Some(2)),
@@ -396,7 +410,7 @@ fn the_sources_records_per_sample_is_the_default() {
         field(&mut provs[i].1, jan1),
         (vec![10.0, 11.0, 20.0, 21.0], vec![2, 2])
     );
-    // A parameter's own value overrides the source's.
+    // A parameter's own (deprecated) value overrides the source's.
     let i = by_key(&provs, "Emis.single");
     assert_eq!(field(&mut provs[i].1, jan1).0, vec![10.0, 11.0]);
 }
@@ -416,7 +430,7 @@ fn the_run_time_option_may_not_contradict_the_document() {
         .expect("a contradicting entry is refused")
         .to_string();
         assert!(e.contains(key), "{e}");
-        assert!(e.contains("update.from.records_per_sample"), "{e}");
+        assert!(e.contains("record shape"), "{e}");
     }
     // An entry outside 1 and 2 is refused as a value.
     let mut opts = options(None);
@@ -465,6 +479,7 @@ fn refusal(d: &Value, dir: &Path) -> String {
 
 #[test]
 fn an_integral_float_is_accepted() {
+    // The deprecated written value is still read strictly: `2.0` is 2.
     let dir = tempfile::tempdir().unwrap();
     let mut d = two_record_doc(dir.path(), None);
     d["models"]["Emis"]["variables"]["pair"]["update"]["from"]["records_per_sample"] = json!(2.0);
@@ -529,14 +544,14 @@ fn two_records_from_a_source_without_a_temporal_start_are_refused() {
     let e = refusal(&d, dir.path());
     assert!(e.contains("Emis.pair") && e.contains("'NEI'"), "{e}");
 
-    // Validation reports the same document as records_per_sample_invalid.
+    // Validation reports the same document as record_axis_time_invariant_source.
     d["metadata"] = json!({"name": "startless"});
     d["models"]["Emis"]["equations"] = json!([]);
     let file = earthsci_ast::load_string(&d.to_string()).unwrap();
     let found: Vec<String> = earthsci_ast::validate(&file)
         .structural_errors
         .iter()
-        .filter(|e| e.code.to_string() == "records_per_sample_invalid")
+        .filter(|e| e.code.to_string() == "record_axis_time_invariant_source")
         .map(|e| e.path.clone())
         .collect();
     assert_eq!(
@@ -586,4 +601,75 @@ fn a_selection_at_t_reads_the_records_of_t() {
         .sample_with_selection_at(FEB15, &[AxisSel::Indices(vec![1])])
         .unwrap();
     assert_eq!(a.iter().copied().collect::<Vec<_>>(), vec![21.0]);
+}
+
+#[test]
+fn a_written_value_disagreeing_with_the_record_shape_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    // 2 on `[row]` (no record axis first), and 1 on `[rec, row]`.
+    for (key, n) in [("single", 2), ("pair", 1)] {
+        let mut d = two_record_doc(dir.path(), None);
+        d["models"]["Emis"]["variables"][key]["update"]["from"]["records_per_sample"] = json!(n);
+        let e = refusal(&d, dir.path());
+        assert!(
+            e.contains(&format!("Emis.{key}")) && e.contains("records_per_sample_invalid"),
+            "{key}: {e}"
+        );
+    }
+}
+
+#[test]
+fn a_misplaced_record_axis_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = two_record_doc(dir.path(), None);
+    d["models"]["Emis"]["variables"]["pair"]["shape"] = json!(["row", "rec"]);
+    let e = refusal(&d, dir.path());
+    assert!(
+        e.contains("Emis.pair") && e.contains("record_axis_misplaced"),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_record_shape_behind_a_coupling_import_is_refused_not_guessed() {
+    // A shapeless parameter whose param_to_var target would arrive through a
+    // coupling_import: the raw document cannot show its record shape, so the
+    // count is unknown and the provider refuses rather than assume one record.
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = two_record_doc(dir.path(), None);
+    d["models"]["Emis"]["variables"]["pair"]
+        .as_object_mut()
+        .unwrap()
+        .remove("shape");
+    d["coupling"] = json!([{
+        "type": "coupling_import", "ref": "./lib.esm", "bind": {"Data": "Emis"}
+    }]);
+    let e = refusal(&d, dir.path());
+    assert!(
+        e.contains("Emis.pair") && e.contains("coupling_import"),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_shapeless_parameter_takes_its_param_to_var_targets_record_shape() {
+    // `Emis.nox` declares no shape; the consumer it replaces is shaped
+    // `[rec, row]`, so it receives two records (esm-spec §8.5.1).
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = doc(dir.path());
+    give_nox_a_record_axis(&mut d);
+    d["models"]["Emis"]["variables"]["nox"]
+        .as_object_mut()
+        .unwrap()
+        .remove("shape");
+    d["models"]["Box"] = json!({"variables": {"F": {
+        "type": "parameter", "units": "mol/s", "shape": ["rec", "row"], "default": 0.0
+    }}});
+    d["coupling"] = json!([{
+        "type": "variable_map", "from": "Emis.nox", "to": "Box.F", "transform": "param_to_var"
+    }]);
+    let mut p = build(&d, dir.path(), &options(Some(2)));
+    let (v, shape) = field(&mut p, FEB15);
+    assert_eq!(v, vec![40.0, 42.0, 60.0, 62.0]);
+    assert_eq!(shape, vec![2, 2]);
 }

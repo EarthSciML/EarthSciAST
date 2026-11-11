@@ -6651,6 +6651,7 @@ mod subsystem_ragged_and_inspection_tests {
             IndexSet {
                 kind: "ragged".to_string(),
                 size: None,
+                records: None,
                 members: None,
                 from_faq: None,
                 member_factor: None,

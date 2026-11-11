@@ -996,14 +996,15 @@ pub struct DocumentProviderOptions {
     pub window: Option<earthsciio::Window>,
     /// Consuming parameter key ⇒ records per sample (1, or 2 for the bracket),
     /// a run-time restatement of the document's value, never a change to it.
-    /// Each parameter receives its EFFECTIVE value from the document (esm-spec
-    /// §8.5.1): its own `update.from.records_per_sample`, else the source's
-    /// `temporal.records_per_sample`, else 1. With 2 the provider returns the
+    /// Each parameter receives the number its record shape gives it (esm-spec
+    /// §8.5.1): 2 when the record shape (its declared `shape`, else its
+    /// `param_to_var` targets' declared shapes) begins with an interval index
+    /// set carrying `"records": true`, else 1. With 2 the provider returns the
     /// record at or before `t` and the next one, stacked along the first
     /// dimension. An entry for a consuming parameter must equal that value: a
     /// different one would change the rank of the delivered array away from
-    /// the declared shape validation approved, so it is refused (set
-    /// `update.from.records_per_sample` in the document instead). Each
+    /// the declared shape validation approved, so it is refused (give the
+    /// record shape a record axis in the document instead). Each
     /// consuming parameter has its own provider, so two parameters may read
     /// one source with different values.
     pub records_per_sample: HashMap<String, u32>,
@@ -1336,6 +1337,8 @@ mod prepare_impl {
         /// The parameter's `update.from` binding object (`file_variable`,
         /// `codes`, `unit_conversion`, …).
         from: &'a serde_json::Value,
+        /// The parameter's declared `shape`, `None` when it declares none.
+        shape: Option<&'a serde_json::Value>,
     }
 
     /// `{data_sources key -> [ParamBinding]}` — per source, the consuming
@@ -1406,6 +1409,7 @@ mod prepare_impl {
                             key,
                             local: vname.to_string(),
                             from: binding,
+                            shape: vdef.get("shape").filter(|v| !v.is_null()),
                         });
                     break; // the FIRST data rule of an `update` (esm-spec §5.4)
                 }
@@ -1532,6 +1536,101 @@ mod prepare_impl {
                  must be the number 1 or 2, got {v}"
             ))),
         }
+    }
+
+    /// The declared `shape` of the variable a scoped name `Model[.Sub…].var`
+    /// names in raw document `doc`: `Some(None)` when it declares none,
+    /// `None` when the document does not reach that declaration.
+    fn raw_declared_shape<'a>(
+        doc: &'a serde_json::Value,
+        scoped: &str,
+    ) -> Option<Option<&'a serde_json::Value>> {
+        let mut parts: Vec<&str> = scoped.split('.').collect();
+        let var = parts.pop()?;
+        let (first, rest) = parts.split_first()?;
+        let mut node = doc.get("models")?.get(*first)?;
+        for seg in rest {
+            node = node.get("subsystems")?.get(*seg)?;
+        }
+        let vdef = node.get("variables")?.get(var)?;
+        Some(vdef.get("shape").filter(|v| !v.is_null()))
+    }
+
+    /// The number of records consuming parameter `key`, declaring raw
+    /// `shape`, receives (esm-spec §8.5.1), read from raw document `doc`: its
+    /// record shape is its own `shape`, else the declared `shape` of each
+    /// `param_to_var` target it is the `from` of in the raw `coupling` (a
+    /// target the document does not reach is skipped), and it receives 2 when
+    /// that begins with an `index_sets` entry that is an `interval` carrying
+    /// `"records": true`. A misplaced record axis is refused.
+    fn raw_records_received(
+        doc: &serde_json::Value,
+        key: &str,
+        shape: Option<&serde_json::Value>,
+    ) -> Result<Option<u32>, PrepareError> {
+        let as_dims = |v: &serde_json::Value| -> Vec<String> {
+            v.as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|d| d.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let coupling: Vec<&serde_json::Value> = doc
+            .get("coupling")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .collect();
+        let shapes: Vec<Vec<String>> = match shape {
+            Some(own) => vec![as_dims(own)],
+            None => {
+                let targets: Vec<&str> = coupling
+                    .iter()
+                    .filter(|e| {
+                        e.get("type").and_then(serde_json::Value::as_str) == Some("variable_map")
+                            && e.get("transform").and_then(serde_json::Value::as_str)
+                                == Some("param_to_var")
+                            && e.get("from").and_then(serde_json::Value::as_str) == Some(key)
+                    })
+                    .filter_map(|e| e.get("to").and_then(serde_json::Value::as_str))
+                    .collect();
+                let shapes: Vec<Vec<String>> = targets
+                    .iter()
+                    .filter_map(|to| raw_declared_shape(doc, to))
+                    .map(|s| s.map(as_dims).unwrap_or_default())
+                    .collect();
+                // The document as given cannot show the record shape: every
+                // target is unreachable (behind an unmounted ref), or none is
+                // mapped inline while a coupling_import (expanded only by
+                // `flatten`) could still bring one. The count is unknown.
+                let pending_import = coupling.iter().any(|e| {
+                    e.get("type").and_then(serde_json::Value::as_str) == Some("coupling_import")
+                });
+                if shapes.is_empty() && (!targets.is_empty() || pending_import) {
+                    return Ok(None);
+                }
+                shapes
+            }
+        };
+        let is_record_axis = |d: &str| {
+            doc.get("index_sets")
+                .and_then(|s| s.get(d))
+                .is_some_and(|set| {
+                    set.get("kind").and_then(serde_json::Value::as_str) == Some("interval")
+                        && set.get("records").and_then(serde_json::Value::as_bool) == Some(true)
+                })
+        };
+        crate::structural::records_from_shapes(&shapes, is_record_axis)
+            .map(|n| Some(u32::from(n)))
+            .map_err(|bad| {
+                perr(format!(
+                    "providers_from_document: parameter '{key}': record_axis_misplaced: its \
+                     record shape {bad:?} names a record axis anywhere but first, or its \
+                     record shapes disagree about beginning with one (esm-spec §8.5.1)"
+                ))
+            })
     }
 
     /// Whether esm source `ld` is time-varying: its `temporal` block anchors at
@@ -1700,15 +1799,16 @@ mod prepare_impl {
             // A record filter or a code map makes the loader a TABLE: one
             // decode, one keep mask, columns that stay aligned.
             let is_table = !require_finite.is_empty() || columns.iter().any(|c| c.codes.is_some());
-            // Each consumer's effective records_per_sample, checked against the
-            // document and the run-time option before EarthSciIO reads the
-            // source, so a refusal names the parameter whatever EarthSciIO
-            // would make of the source.
+            // Each consumer's record count, from its record shape (esm-spec
+            // §8.5.1), checked against any written (deprecated) value and the
+            // run-time option before EarthSciIO reads the source, so a refusal
+            // names the parameter whatever EarthSciIO would make of the source.
             let mut effective_rps = Vec::with_capacity(consumers.len());
             for b in consumers {
                 let key = &b.key;
-                // The parameter's effective value from the document (esm-spec
-                // §8.5.1).
+                let shaped = raw_records_received(doc, key, b.shape)?;
+                // The deprecated written value (its own, else the source's) is
+                // still read strictly, and must agree with the record shape.
                 let own = written_records_per_sample(
                     key,
                     "update.from",
@@ -1719,7 +1819,32 @@ mod prepare_impl {
                     &format!("data_sources.{lname}.temporal"),
                     ld.get("temporal").and_then(|t| t.get("records_per_sample")),
                 )?;
-                let rps = crate::flatten::records_per_sample_rule(own, inherited);
+                // Where the document cannot show the record shape, a written
+                // value stands in (`flatten` checks it against the shape); with
+                // none written the count is unknown, and the parameter is
+                // refused rather than guessed.
+                let Some(rps) = shaped.or(own.or(inherited)) else {
+                    return Err(perr(format!(
+                        "providers_from_document: parameter '{key}': its record shape \
+                         (esm-spec §8.5.1) comes from a param_to_var target this document does \
+                         not show yet (it arrives through a coupling_import, or sits in a model \
+                         behind an unmounted ref), so providers_from_document cannot tell \
+                         whether it receives one record or two. Pass a document whose \
+                         coupling_import entries are expanded and refs mounted, or declare the \
+                         parameter's shape."
+                    )));
+                };
+                if let Some(written) = own.or(inherited)
+                    && written != rps
+                {
+                    return Err(perr(format!(
+                        "providers_from_document: parameter '{key}': records_per_sample_invalid: \
+                         the deprecated records_per_sample {written} disagrees with its record \
+                         shape, which gives it {rps} record(s) per sample (two exactly when the \
+                         record shape begins with an interval index set carrying \
+                         \"records\": true; esm-spec §8.5.1)"
+                    )));
+                }
                 // A run-time entry may restate the value, never change it.
                 if let Some(&n) = opts.records_per_sample.get(key.as_str()) {
                     if n != 1 && n != 2 {
@@ -1733,8 +1858,9 @@ mod prepare_impl {
                             "providers_from_document: parameter '{key}': the run-time \
                              records_per_sample option asks for {n}, but the document gives \
                              {rps}; a different value would change the rank of the delivered \
-                             array away from the declared shape, so set \
-                             update.from.records_per_sample in the document instead"
+                             array away from the declared shape, so give the parameter's record \
+                             shape a record axis (an interval index set carrying \
+                             \"records\": true) first in the document instead"
                         )));
                     }
                 }

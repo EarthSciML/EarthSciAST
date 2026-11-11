@@ -413,11 +413,13 @@ pub enum FlattenError {
     #[error("{0}")]
     ExpressionTemplate(crate::diagnostic::DiagnosticError),
 
-    /// A data-fed parameter with an effective `records_per_sample` of 2 whose
-    /// record shape, decided only once `coupling_import` edges are expanded,
-    /// does not begin with an index set of exactly two members (esm-spec
-    /// §8.5.1). Carries the `records_per_sample_invalid` code; the message
-    /// leads with the JSON pointer of the parameter's `update` rule.
+    /// A data-fed parameter's record shape, decided only once
+    /// `coupling_import` edges are expanded, breaks esm-spec §8.5.1: a
+    /// misplaced record axis (`record_axis_misplaced`), a record axis on a
+    /// time-invariant source (`record_axis_time_invariant_source`), or a
+    /// written deprecated `records_per_sample` that disagrees with it
+    /// (`records_per_sample_invalid`). Carries that code; the message leads
+    /// with the JSON pointer of the parameter's `update` rule.
     #[error("{0}")]
     RecordsPerSample(crate::diagnostic::DiagnosticError),
 
@@ -896,29 +898,20 @@ pub struct LoaderField {
     /// integration) or `"discrete"` (time-varying — refreshed at its cadence).
     /// The source-seeded cadence refinement of CONFORMANCE_SPEC §5.7.2.
     pub cadence: String,
-    /// The EFFECTIVE number of records the parameter receives per query time,
-    /// 1 or 2 (esm-spec §8.5.1): the binding's `from.records_per_sample`, else
-    /// the source's `temporal.records_per_sample`, else 1. With 2 the field
-    /// holds the record at or before the query time and its successor,
-    /// stacked along the parameter's first dimension. Absent from a serialized
-    /// entry means 1.
+    /// The number of records the parameter receives per query time, 1 or 2
+    /// (esm-spec §8.5.1): 2 when its record shape (its declared `shape`, or
+    /// a shapeless parameter's `param_to_var` targets' declared shapes)
+    /// begins with an interval index set carrying `"records": true`, else 1.
+    /// With 2 the field holds the record at or before the query time and its
+    /// successor, stacked along the parameter's first dimension. The name is
+    /// kept although the document fields of that name are deprecated. Absent
+    /// from a serialized entry means 1.
     #[serde(default = "one_record_per_sample")]
     pub records_per_sample: u8,
 }
 
 fn one_record_per_sample() -> u8 {
     1
-}
-
-/// The esm-spec §8.5.1 rule for a parameter's EFFECTIVE `records_per_sample`,
-/// over the two values a document may write: the parameter's own
-/// `update.from.records_per_sample`, else the source's
-/// `temporal.records_per_sample`, else 1. The one statement of the rule; the
-/// typed path (`DataSourceBinding::effective_records_per_sample`) and the
-/// raw-JSON provider path (`esio_provider::providers_from_document_with`,
-/// which first checks each written value) both call it.
-pub(crate) fn records_per_sample_rule<T: From<u8>>(own: Option<T>, source: Option<T>) -> T {
-    own.or(source).unwrap_or_else(|| T::from(1))
 }
 
 // ============================================================================
@@ -1004,7 +997,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // esm-spec §8.5.1: a record shape structural validation could not decide
     // (a `param_to_var` target behind a `coupling_import`) is checked here,
     // against the expanded coupling sequence.
-    crate::structural::check_records_per_sample_at_flatten(file)
+    crate::structural::check_record_axes_at_flatten(file)
         .map_err(FlattenError::RecordsPerSample)?;
 
     // Phase 1: collect per-system lowered equations and namespaced variables.
@@ -2072,6 +2065,18 @@ fn collect_loader_fields(
             };
             let declared = file.data_sources.as_ref().and_then(|ds| ds.get(source));
             let has_temporal = declared.is_some_and(|ds| ds.temporal.is_some());
+            // The record shape is read from the document (the parameter's own
+            // declaration, else its `param_to_var` targets' in the expanded
+            // coupling); a parameter the document does not declare in a model
+            // falls back to its flattened `shape`.
+            let own_shape = crate::structural::declared_variable_shape(file, name)
+                .unwrap_or_else(|| var.shape.clone());
+            let records = crate::structural::records_received(
+                file,
+                file.coupling.as_deref().unwrap_or_default(),
+                name,
+                own_shape.as_deref(),
+            );
             out.push(LoaderField {
                 name: name.clone(),
                 owner: name
@@ -2081,7 +2086,7 @@ fn collect_loader_fields(
                 source: source.to_string(),
                 file_variable: binding.file_variable.clone(),
                 cadence: if has_temporal { "discrete" } else { "const" }.to_string(),
-                records_per_sample: binding.effective_records_per_sample(declared),
+                records_per_sample: records,
             });
             break; // one parameter is fed by one source
         }
@@ -5620,6 +5625,7 @@ fn lift_index_sets(
                     IndexSet {
                         kind: "interval".to_string(),
                         size: Some(extent),
+                        records: None,
                         members: None,
                         from_faq: None,
                         member_factor: None,
@@ -6323,6 +6329,7 @@ mod tests {
         IndexSet {
             kind: "interval".to_string(),
             size: Some(size),
+            records: None,
             members: None,
             from_faq: None,
             member_factor: None,
