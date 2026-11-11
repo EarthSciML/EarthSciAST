@@ -2,7 +2,7 @@
   "esm": "2.0.0",
   "metadata": {
     "name": "native_probe_fill_shared_invariant",
-    "description": "A materialized array observed w whose fill kernel carries a lane-invariant subtree (pure arithmetic in t, (t*t + 0.5) / (t + 2)) that the state kernels also carry. Native shares the state kernels' copy through the scalar prelude and keeps the fill level's in its own invariant tier; the interpreter inlines everything. The two must agree bit for bit.",
+    "description": "A materialized array observed w whose fill kernel carries a lane-invariant subtree ((exp(t) + 0.5) / (t + 2), one transcendental so the cross-kernel sharing pass's cost gate admits it) that the state kernels also carry. Native shares the state kernels' copy through the scalar prelude and keeps the fill level's in its own invariant tier; the interpreter inlines everything. The two must agree bit for bit.",
     "authors": [
       "EarthSciML"
     ],
@@ -60,9 +60,8 @@
                       "op": "+",
                       "args": [
                         {
-                          "op": "*",
+                          "op": "exp",
                           "args": [
-                            "t",
                             "t"
                           ]
                         },
@@ -175,9 +174,8 @@
                               "op": "+",
                               "args": [
                                 {
-                                  "op": "*",
+                                  "op": "exp",
                                   "args": [
-                                    "t",
                                     "t"
                                   ]
                                 },
