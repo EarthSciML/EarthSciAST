@@ -52,3 +52,7 @@ pub fn write_report(
     )?;
     Ok(())
 }
+
+/// The determinism conformance adapter's body (`earthsci-determinism-adapter-rust`).
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::determinism_adapter::run as run_determinism_adapter;
