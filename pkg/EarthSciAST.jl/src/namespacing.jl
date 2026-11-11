@@ -425,8 +425,8 @@ function _collect_model!(
     _ns(e) = tpl_rename === nothing ?
         namespace_expr(e, prefix, local_names; captures = tpl_captures) :
         _rename_expr_apply_refs(
-        namespace_expr(e, prefix, local_names; captures = tpl_captures), tpl_rename
-    )
+            namespace_expr(e, prefix, local_names; captures = tpl_captures), tpl_rename
+        )
 
     # esm-spec v0.8.0: index sets are a single document-scoped registry (seeded
     # once by `flatten` from the top-level object) with plain names shared by every

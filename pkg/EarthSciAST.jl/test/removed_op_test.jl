@@ -12,12 +12,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 const _ALIAS_CONF = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "removed_spellings")
 
 _removed_op_error(f) =
-    try
-        f()
-        nothing
-    catch e
-        e
-    end
+try
+    f()
+    nothing
+catch e
+    e
+end
 
 @testset "removed op spellings" begin
     @testset "aggregate is a removed op, at the root and through a ref" begin
@@ -35,8 +35,10 @@ _removed_op_error(f) =
 
     @testset "every op esm 2.0.0 removed is refused by name, with its path" begin
         node(op) = Dict{String, Any}("op" => op, "args" => Any["x"])
-        for op in ("fn", "table_lookup", "skolem", "rank", "intersect_polygon",
-                "polygon_intersection_area", "argmin", "argmax", "aggregate")
+        for op in (
+                "fn", "table_lookup", "skolem", "rank", "intersect_polygon",
+                "polygon_intersection_area", "argmin", "argmax", "aggregate",
+            )
             doc = Dict{String, Any}(
                 "esm" => EarthSciAST.SCHEMA_VERSION,
                 "metadata" => Dict{String, Any}("name" => "m"),

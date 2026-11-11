@@ -152,10 +152,10 @@ function _twb_gap1_doc()
                     [coord], _twb_bincol(coord, step, sym)
                 )
             )
-            for (col, coord, step, sym, cells) in (
-                ("src_bx", "src_lon", "bin_dx", "i", "src_cells"), ("src_by", "src_lat", "bin_dy", "i", "src_cells"),
-                ("tgt_bx", "tgt_lon", "bin_dx", "j", "tgt_cells"), ("tgt_by", "tgt_lat", "bin_dy", "j", "tgt_cells"),
-            )
+                for (col, coord, step, sym, cells) in (
+                    ("src_bx", "src_lon", "bin_dx", "i", "src_cells"), ("src_by", "src_lat", "bin_dy", "i", "src_cells"),
+                    ("tgt_bx", "tgt_lon", "bin_dx", "j", "tgt_cells"), ("tgt_by", "tgt_lat", "bin_dy", "j", "tgt_cells"),
+                )
         ]...,
         # DENSE narrow phase (oracle).
         _twb_def(
