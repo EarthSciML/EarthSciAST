@@ -292,9 +292,7 @@ _REGISTRY_KEYS = frozenset(
     {
         "reduce",
         "semiring",
-        "manifold",
         "fn",
-        "table",
         "side",
         "attrs",
         "members",
@@ -316,11 +314,8 @@ _OPAQUE_KEYS = frozenset(
         # skipped rather than left to that check.
         "on",
         "syms",
-        "arg",
         "output_idx",
         "of",
-        # A `table_lookup` output name.
-        "output",
         "handler_id",
         # References to files, components, data sources, data columns and the
         # import-edge rename vocabulary.
@@ -391,7 +386,6 @@ _NAME_KEYED_MAP_KEYS = frozenset(
         "subsystems",
         "expression_templates",
         "ranges",
-        "axes",
         "bindings",
         "config",
         "coords",
