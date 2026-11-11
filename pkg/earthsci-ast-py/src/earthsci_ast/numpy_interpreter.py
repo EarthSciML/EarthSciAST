@@ -45,9 +45,6 @@ from .errors import EarthSciAstError
 from .esm_types import ARRAY_OPS, Expr, ExprNode
 from .expr_walk import any_child, iter_children
 from .index_ranges import expand_range as _expand_range
-from .registered_functions import (
-    INTERP_CONST_ARG_POSITIONS as _INTERP_CONST_ARG_POSITIONS,
-)
 
 Shape = tuple[int, ...]
 
@@ -57,10 +54,6 @@ Shape = tuple[int, ...]
 #: subscript labels are single lowercase ASCII letters (``chr(ord("a") + i)``),
 #: so beyond this the fast path declines (→ ``None``) to the generic reduce.
 _EINSUM_MAX_LABELS = 26
-#: BLAKE2b digest width (bytes) for the skolem key hash: 6 bytes = 48 bits, the
-#: widest integer exactly representable in float64 and stable across processes
-#: (mirrors the Julia setup-geometry evaluator's ``hash(Tuple(vals))`` skolem).
-_SKOLEM_DIGEST_BYTES = 6
 
 
 @dataclass
@@ -78,22 +71,15 @@ class EvalContext:
     # keyed by name. Used to resolve faq range references of the
     # form {"from": <name>}. Empty ⇒ no named sets are declared.
     index_sets: dict[str, Any] = field(default_factory=dict)
-    # Runtime materialization of data-derived index sets (RFC §5.5 / §8.1),
-    # keyed by the producing node's `id`. An `intersect_polygon` leaf registers
-    # its clipped overlap ring here under its `id`; a `kind:"derived"` index set
-    # with `from_faq: <id>` then resolves its extent (the vertex count) from the
-    # registered ring, and the ring is readable as a bare symbol by that id so a
-    # `polygon_area` FAQ body can `index(<id>, v, c)` into it. Each value is the
-    # CLOSED ring ndarray (first vertex repeated) of shape [n+1, 2]; the derived
-    # set's extent is the n distinct vertices. Empty ⇒ none materialized yet.
+    # Materialized ARRAY-valued observeds, keyed by (flattened) name, readable as
+    # a bare symbol or through `index`. Empty ⇒ none materialized yet.
     derived_rings: dict[str, np.ndarray] = field(default_factory=dict)
     # Build-time value-invention derived-index-set extents (RFC §6.1 / §5.5),
     # keyed by the producing aggregate's `id` (the `from_faq` target). Populated
     # ONCE at setup by `value_invention.materialize_value_invention` — the
-    # skolem/distinct/rank engine runs off the per-step hot path and hands its
-    # distinct-set cardinality here, generalizing the geometry clip-ring handoff
-    # (`derived_rings`) to the relational engine. A `kind:"derived"` set whose
-    # `from_faq` is here resolves to the dense extent `[1, n]`. Empty ⇒ none.
+    # `distinct` engine runs off the per-step hot path and hands its
+    # distinct-set cardinality here. A `kind:"derived"` set whose `from_faq` is
+    # here resolves to the dense extent `[1, n]`. Empty ⇒ none.
     derived_extents: dict[str, int] = field(default_factory=dict)
     # Externally-injected read-only input arrays (RFC pure-io-data-loaders §4.3),
     # keyed by the flattened observed-array symbol (e.g. ``ERA5.pl.u``). The
@@ -116,19 +102,6 @@ class EvalContext:
     # loader field referenced bare resolves to its value). Empty ⇒ no
     # engine-derived axis-valued inputs are bound.
     axis_valued_input_names: frozenset[str] = field(default_factory=frozenset)
-    # Build-time value-invention MAP buffers (RFC §5.3): a per-cell key buffer
-    # (e.g. the broad-phase bins ``rg_src_bin`` / ``rg_tgt_bin``) that an
-    # aggregate ``join.on [[rg_src_bin, rg_tgt_bin]]`` gates on. Each value is a
-    # 0-based ndarray of integer bin codes; ``join_key_index_sets`` records the
-    # buffer's 1-D declared-shape index set so the join resolver can map the key
-    # column to the range symbol whose ``{"from": <set>}`` matches. Materialized
-    # ONCE at setup by the value-invention front-door
-    # (:func:`value_invention.materialize_value_invention`, surfaced as
-    # :attr:`ValueInventionResult.join_key_buffers` and consumed by
-    # :func:`simulation_array._frontdoor_join_keys_and_extents`) — the skolem/floor
-    # bins run off the per-step hot path. Empty ⇒ no buffer joins.
-    join_key_buffers: dict[str, np.ndarray] = field(default_factory=dict)
-    join_key_index_sets: dict[str, str] = field(default_factory=dict)
     # Keyed-factor scope map (esm-spec §5.4 / RFC semiring-faq-unified-ir §5.2):
     # a RAGGED index set's `offsets` / `values` keyed factors bind by BARE name
     # in the model scope (the grids' wiring contract), but flattening prefixes
@@ -162,7 +135,7 @@ class EvalContext:
     # operator path declines and #1's dense reduce handles the node.
     invariant_names: frozenset[str] = field(default_factory=frozenset)
     # FIRST declared shape INDEX SET of each document array, keyed by the
-    # (flattened) variable name — the general form of ``join_key_index_sets``.
+    # (flattened) variable name.
     # A §5.5.6 ``join.overlap`` gate names its envelope FACTORS, not loop
     # symbols, and resolves each side to a range symbol through the first
     # factor's declared shape's FIRST axis — rank-agnostic on purpose, so an
@@ -259,12 +232,6 @@ class ConstArrayOutOfRangeError(NumpyInterpreterError):
     """``E_TREEWALK_CONSTARRAY_OOB``: a const-array gather read outside an axis
     (CONFORMANCE_SPEC §5.5.5). A fault in the document, never an observed that is
     merely not evaluable yet, so a tolerant build pass must not skip it."""
-
-
-class DegenerateOperandError(NumpyInterpreterError):
-    """``E_TREEWALK_GEOMETRY_CLIP``: a polygon operand has fewer than 3 distinct
-    vertices (esm-spec §8.6.1). An invalid value in the document, not an observed
-    that is merely not evaluable yet, so a tolerant build pass must not skip it."""
 
 
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
@@ -373,9 +340,7 @@ def _resolve_symbol(name: str, ctx: EvalContext) -> float | np.ndarray:
             f"definition — the whole array does not exist during the sweep. Read it through "
             f"`index` at a strictly earlier position instead (esm-spec §4.3.1.1)."
         )
-    # A materialized derived ring (RFC §8.1): an `intersect_polygon` node id
-    # resolves to its CLOSED clip ring so a `polygon_area` FAQ body can
-    # `index(<id>, v, c)` into the overlap vertices.
+    # A materialized array-valued observed.
     if name in ctx.derived_rings:
         return ctx.derived_rings[name]
     # An externally-injected data-loader field (RFC pure-io-data-loaders §4.3):
@@ -481,14 +446,10 @@ _NO_RULE_OPS: frozenset[str] = frozenset(
     {
         "=",
         "apply_expression_template",
-        "argmax",
-        "argmin",
         "distinct",
         "enum",
         "ic",
         "join",
-        "rank",
-        "table_lookup",
     }
 )
 
@@ -606,35 +567,25 @@ def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
             values=entry.get("values"),
         )
     if kind == "derived":
-        # A data-derived index set (RFC §5.5 / §8.1) resolves its extent from a
-        # producer materialized off the per-step hot path. Two front-doors share
-        # this resolution, exactly as in the Julia reference:
-        #   (a) the build-time value-invention engine (skolem/distinct/rank via
-        #       the relational engine, §6.1) hands its distinct-set cardinality in
-        #       `ctx.derived_extents`, keyed by the producer `id`; and
-        #   (b) the `intersect_polygon` clip case materializes a closed ring into
-        #       `ctx.derived_rings` at runtime (the producer is evaluated first —
-        #       observed clip variables run before the FAQ that consumes them).
-        # The derived set's extent is the dense `[1, n]` either way.
+        # A data-derived index set (RFC §5.5) resolves its extent from a
+        # producer materialized off the per-step hot path: the build-time
+        # value-invention engine (`distinct` via the relational engine, §6.1)
+        # hands its distinct-set cardinality in `ctx.derived_extents`, keyed by
+        # the producer `id`. The derived set's extent is the dense `[1, n]`.
         faq = entry.get("from_faq")
         if faq is None:
             raise NumpyInterpreterError(
                 f"derived index set {name!r} is missing 'from_faq' (RFC §5.5)"
             )
         extent = ctx.derived_extents.get(faq)
-        if extent is not None:
-            return [1, int(extent)]
-        ring = ctx.derived_rings.get(faq)
-        if ring is None:
+        if extent is None:
             raise NumpyInterpreterError(
                 f"derived_index_set_unmaterialized: derived index set {name!r} "
                 f"(from_faq {faq!r}) is not materialized; "
-                f"its producing node has not been evaluated. Materialized rings: "
-                f"{sorted(ctx.derived_rings)}, value-invention extents: "
-                f"{sorted(ctx.derived_extents)} (RFC §5.5 / §8.1)"
+                f"its producing node has not been evaluated. Value-invention extents: "
+                f"{sorted(ctx.derived_extents)} (RFC §5.5)"
             )
-        n_vertices = max(int(ring.shape[0]) - 1, 0)  # closed ring has n+1 rows
-        return [1, n_vertices]
+        return [1, int(extent)]
     raise NumpyInterpreterError(f"index set {name!r} has unknown kind {kind!r}")
 
 
@@ -670,38 +621,6 @@ def _expand_ragged(rr: _RaggedRange, ctx: EvalContext, binding: dict[str, int]) 
     else:
         n = int(round(float(off)))
     return list(range(1, n + 1))
-
-
-def _eval_fn_lifted(name: str, args: list[Any], const_positions: Sequence[int]):
-    """Evaluate a closed function, LIFTING it element-wise over grid-valued args.
-
-    The registered closed functions (``interp.linear``, …) are scalar (0-D). When
-    a coupled/discretized system feeds a grid-valued "point" argument — e.g. a
-    per-cell LANDFIRE fuel code into ``FuelModelLookup``'s ``interp.linear`` — the
-    scalar function must be applied at every cell. The ``const_positions`` args
-    (interp tables/axes) are passed whole; the remaining "point" args are
-    broadcast together and the function is evaluated per element, returning the
-    matching grid. All-scalar point args keep the 0-D fast path (one call → a
-    Python float).
-    """
-    from .registered_functions import evaluate_closed_function
-
-    const = set(const_positions or ())
-    point_positions = [i for i in range(len(args)) if i not in const]
-    point_arrs = [np.asarray(args[i]) for i in point_positions]
-    if not point_arrs or all(a.ndim == 0 for a in point_arrs):
-        return float(evaluate_closed_function(name, args))
-    # np.broadcast_arrays (long-standing) instead of np.broadcast_shapes (>=1.20).
-    bcast = np.broadcast_arrays(*point_arrs)
-    shape = np.asarray(bcast[0]).shape
-    cols = [np.asarray(b, dtype=float).ravel() for b in bcast]
-    out = np.empty(cols[0].size, dtype=float)
-    scratch = list(args)
-    for k in range(out.size):
-        for pos, col in zip(point_positions, cols):
-            scratch[pos] = float(col[k])
-        out[k] = float(evaluate_closed_function(name, scratch))
-    return out.reshape(shape)
 
 
 # --- Shared per-op scalar/array semantics (single source of truth) ---
@@ -979,12 +898,12 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
     op = expr.op
     # `index` is the most frequent interior op in a discretized stencil body
     # (every array read is one); dispatch it before the long arithmetic /
-    # closed-function chain so an `index` node does not pay ~18 failed string
+    # dispatch chain so an `index` node does not pay ~18 failed string
     # comparisons per evaluation. The duplicate `index` case further down the
     # chain is removed.
     if op == "index":
         return _eval_index(expr, ctx)
-    # --- closed function registry ops (esm-spec §9.2 / §9.3) ---
+    # --- inline constants and the load-time-lowered `enum` ---
     if op == "const":
         v = expr.value
         if isinstance(v, (list, tuple)):
@@ -994,22 +913,6 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
         raise NumpyInterpreterError(
             f"`const` op value must be a number or nested array, got {type(v).__name__}"
         )
-    if op == "fn":
-        from .registered_functions import extract_const_arg
-
-        if expr.name is None:
-            raise NumpyInterpreterError("`fn` op requires a `name` field")
-        evaluated_args = []
-        const_arg_positions = _INTERP_CONST_ARG_POSITIONS.get(expr.name, ())
-        for i, a in enumerate(expr.args):
-            if i in const_arg_positions:
-                # A table / axis slot takes literal data only (esm-spec §9.2): a
-                # variable or computed expression there is refused with the
-                # slot's code, never evaluated and passed through.
-                evaluated_args.append(extract_const_arg(expr.name, i, a))
-            else:
-                evaluated_args.append(eval_expr(a, ctx))
-        return _eval_fn_lifted(expr.name, evaluated_args, const_arg_positions)
     if op == "enum":
         raise _enum_not_lowered()
 
@@ -1130,14 +1033,6 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
         return _eval_transpose(expr, ctx)
     if op == "concat":
         return _eval_concat(expr, ctx)
-    # --- conservative-regridding geometry kernel (RFC §8.1) ---
-    if op == "intersect_polygon":
-        return _eval_intersect_polygon(expr, ctx)
-    if op == "polygon_intersection_area":
-        return _eval_polygon_intersection_area(expr, ctx)
-    # --- value-invention skolem key (RFC §5.3 / §5.7) ---
-    if op == "skolem":
-        return _eval_skolem(expr, ctx)
     if op == "true":
         return 1.0
     if op == "false":
@@ -1180,8 +1075,8 @@ def refuse_unevaluable_operators(expr: Expr) -> None:
 
 
 #: Ops the expression compiler lowers to closures. Everything else (aggregate,
-#: makearray, fn, broadcast/reshape/transpose/concat, the geometry leaves,
-#: skolem, const, the unlowered-operator gates …) is left to :func:`eval_expr`
+#: makearray, broadcast/reshape/transpose/concat, const, the unlowered-operator
+#: gates …) is left to :func:`eval_expr`
 #: verbatim — the compiler only removes the per-node dispatch of the scalar
 #: arithmetic / index / elementwise-math layer that a discretized stencil body
 #: is overwhelmingly made of.
@@ -1379,161 +1274,6 @@ def _build_compiled_node(expr: ExprNode) -> Callable[[EvalContext], Any]:
         return lambda ctx: 0.0
 
     return _compile_delegate(expr)  # unreachable (op in _COMPILED_OPS covers all)
-
-
-def _skolem_atom(value: float) -> tuple[str, Any]:
-    """Canonicalise one numeric skolem component (integers kept exact)."""
-    fv = float(value)
-    return ("i", int(fv)) if fv == int(fv) else ("f", repr(fv))
-
-
-def _skolem_code(parts: Sequence[tuple[str, Any]]) -> float:
-    """Hash a canonical skolem-argument tuple to a 48-bit integer code (float).
-
-    BLAKE2b to 48 bits — exactly representable in float64 and stable across
-    processes — mirroring the Julia setup-geometry evaluator's
-    ``hash(Tuple(vals))`` skolem (tree_walk.jl §433).
-    """
-    import hashlib
-
-    digest = hashlib.blake2b(
-        repr(tuple(parts)).encode("utf-8"), digest_size=_SKOLEM_DIGEST_BYTES
-    ).digest()
-    return float(int.from_bytes(digest, "big"))
-
-
-def _eval_skolem(expr: ExprNode, ctx: EvalContext) -> float | np.ndarray:
-    """Evaluate a ``skolem`` key node to a deterministic integer code (as float).
-
-    A skolem term is a deterministic identity for its argument tuple; it is only
-    ever COMPARED (the broad-phase equi-join, RFC §5.3), so any injective
-    encoding of the tuple suffices. EVERY ``args`` entry is a PURE key component:
-    it is evaluated and canonicalised (integers kept exact). The relation tag
-    lives in the dedicated ``label`` field — it is DOCUMENTARY (both sides of a
-    join carry the same label, so it does no disambiguation work) and is NOT
-    hashed into the code, which therefore encodes only the pure ``args``.
-
-    Array-aware: when the vectorized map path binds an index symbol to a whole
-    range (so a subscript evaluates to an ndarray), the codes are computed
-    ELEMENT-WISE and returned as an ndarray — otherwise the per-cell bins would
-    collapse to a single code. Scalar args yield a single float code.
-    """
-    _label = expr.label  # documentary relation tag; NOT encoded into the join code
-    evaled: list[tuple[str, Any]] = []
-    n: int | None = None
-    for a in expr.args:
-        arr = np.asarray(eval_expr(a, ctx), dtype=float)
-        if arr.ndim == 0:
-            evaled.append(("scalar", float(arr)))
-        else:
-            flat = arr.reshape(-1)
-            if n is None:
-                n = flat.size
-            elif n != flat.size:
-                raise NumpyInterpreterError(
-                    f"skolem array args have mismatched lengths ({n} vs {flat.size})"
-                )
-            evaled.append(("array", flat))
-    if n is None:
-        parts = [_skolem_atom(v) for _, v in evaled]
-        return _skolem_code(parts)
-    codes = np.empty(n, dtype=float)
-    for i in range(n):
-        parts = []
-        for kind, val in evaled:
-            if kind == "scalar":
-                parts.append(_skolem_atom(val))
-            else:
-                parts.append(_skolem_atom(val[i]))
-        codes[i] = _skolem_code(parts)
-    return codes
-
-
-def _eval_intersect_polygon(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
-    """Evaluate the ``intersect_polygon`` clip leaf (RFC §8.1).
-
-    Clips the two operand polygon rings under the node's required ``manifold``
-    and returns the overlap ring as a CLOSED ``[n+1, 2]`` lon-lat array (first
-    vertex repeated) so the ``polygon_area`` FAQ can read the wrap edge as an
-    ordinary ``index(ring, v+1, …)``. When the node carries an ``id`` the ring is
-    registered in ``ctx.derived_rings`` so the ``kind:"derived"`` clip-ring index
-    set (``from_faq: <id>``) resolves its extent and the ring is addressable by
-    that id — making ``polygon_area`` an ordinary ``sum_product`` FAQ over it.
-
-    The clip is the only geometry-specific kernel; the area is *not* computed
-    here. For ``spherical``/``geodesic`` the clip is delegated to the pinned
-    optional ``spherely`` (S2); ``planar`` is dependency-free. An empty overlap
-    yields an empty ``(0, 2)`` array (registered as an extent-0 derived set).
-    """
-    from . import geometry
-
-    manifold = getattr(expr, "manifold", None)
-    if manifold is None:
-        raise NumpyInterpreterError(
-            "intersect_polygon requires a 'manifold' field (planar / spherical / "
-            "geodesic); it carries no default (CONFORMANCE_SPEC.md §5.8.4)"
-        )
-    if len(expr.args) != 2:
-        raise NumpyInterpreterError(
-            f"intersect_polygon is strictly binary; got {len(expr.args)} operand(s)"
-        )
-    poly_a = _as_array(eval_expr(expr.args[0], ctx))
-    poly_b = _as_array(eval_expr(expr.args[1], ctx))
-    try:
-        ring = geometry.intersect_polygon(poly_a, poly_b, manifold)
-    except geometry.DegenerateRingError as exc:
-        raise DegenerateOperandError(f"E_TREEWALK_GEOMETRY_CLIP: {exc}") from exc
-    except geometry.GeometryError as exc:
-        raise NumpyInterpreterError(str(exc)) from exc
-    closed = geometry.close_ring(ring)
-    node_id = getattr(expr, "id", None)
-    if node_id is not None:
-        ctx.derived_rings[node_id] = closed
-    return closed
-
-
-def _eval_polygon_intersection_area(expr: ExprNode, ctx: EvalContext) -> float:
-    """Evaluate the fused ``polygon_intersection_area`` leaf (esm-spec.md §8.6.1).
-
-    The SCALAR overlap area of the two operand polygon rings under the node's
-    required ``manifold`` — defined to equal
-    ``polygon_area(intersect_polygon(a, b))`` at the same manifold, but as a
-    single fused leaf with NO exposed clip ring / derived index set. It is the
-    fused form of the existing clip + shoelace: it reuses the very same
-    :func:`geometry.intersect_polygon` clip and the ``polygon_area`` ``sum_product``
-    FAQ (:func:`earthsci_ast.area_faq.polygon_area_via_faq`) that the
-    unfused ``intersect_polygon`` + area-FAQ fixture drives — no geometry is
-    reimplemented here.
-
-    Because it returns a scalar (a plain ``float``), it evaluates as an ordinary
-    scalar leaf: no ring is registered in ``ctx.derived_rings`` and no node ``id``
-    is materialized, so it is equally usable inside an ``faq`` body or as a
-    bare observed. ``planar`` is dependency-free (Sutherland–Hodgman clip +
-    shoelace); ``spherical`` / ``geodesic`` inherit the pinned S2 clip + the
-    great-circle spherical-excess FAQ. A non-overlapping pair yields ``0.0``.
-    """
-    from . import geometry
-    from .area_faq import polygon_area_via_faq
-
-    manifold = getattr(expr, "manifold", None)
-    if manifold is None:
-        raise NumpyInterpreterError(
-            "polygon_intersection_area requires a 'manifold' field (planar / "
-            "spherical / geodesic); it carries no default (CONFORMANCE_SPEC.md §5.8.4)"
-        )
-    if len(expr.args) != 2:
-        raise NumpyInterpreterError(
-            f"polygon_intersection_area is strictly binary; got {len(expr.args)} operand(s)"
-        )
-    poly_a = _as_array(eval_expr(expr.args[0], ctx))
-    poly_b = _as_array(eval_expr(expr.args[1], ctx))
-    try:
-        ring = geometry.intersect_polygon(poly_a, poly_b, manifold)
-    except geometry.DegenerateRingError as exc:
-        raise DegenerateOperandError(f"E_TREEWALK_GEOMETRY_CLIP: {exc}") from exc
-    except geometry.GeometryError as exc:
-        raise NumpyInterpreterError(str(exc)) from exc
-    return float(polygon_area_via_faq(ring, manifold))
 
 
 #: The name ``E_TREEWALK_CONSTARRAY_OOB`` reports for a ``const`` literal written
@@ -2280,28 +2020,6 @@ def _eval_faq_contraction_broadcast(
     return np.array(acc, dtype=float)
 
 
-def _batched_ring_gather(
-    arg: Expr, out_syms: list[str], ctx: EvalContext
-) -> tuple[np.ndarray, str] | None:
-    """For a per-cell ring gather ``index(P, s)`` return ``(P_array, s)``.
-
-    ``P_array`` is the full ``[N, V, 2]`` ring-per-cell array and ``s`` the single
-    output index symbol it is gathered by; ``None`` if ``arg`` is not that shape
-    (so the batched leaf path declines and the caller falls back)."""
-    if not (isinstance(arg, ExprNode) and arg.op == "index" and len(arg.args) == 2):
-        return None
-    sym = arg.args[1]
-    if not (isinstance(sym, str) and sym in out_syms):
-        return None
-    try:
-        arr = np.asarray(eval_expr(arg.args[0], ctx), dtype=float)
-    except (NumpyInterpreterError, KeyError, TypeError, ValueError):
-        return None
-    if arr.ndim != 3 or arr.shape[2] != 2:
-        return None
-    return arr, sym
-
-
 def _join_admits_mask(
     gates: list[_JoinGate],
     out_syms: list[str],
@@ -2344,94 +2062,6 @@ def _join_admits_mask(
         shp_r[ar] = col_r.size
         mask = mask & (col_l.reshape(shp_l) == col_r.reshape(shp_r))
     return mask
-
-
-def _eval_faq_batched_leaf(
-    expr: ExprNode,
-    ctx: EvalContext,
-    out_syms: list[str],
-    out_ranges_exp: list[list[int]],
-    out_shape: tuple[int, ...],
-    reduce_syms: list[str],
-    raw_ranges: dict[str, Any],
-    reducer: str,
-    empty_zero: float,
-    filter_expr: Expr | None,
-) -> np.ndarray | None:
-    """Batched fast path for a fused-geometry-leaf pure map (esm-spec §8.6.1).
-
-    Recognizes the conservative-regrid narrow phase
-    ``A[i,j] = polygon_intersection_area(index(P_a, i), index(P_b, j))`` — a
-    ``sum_product`` aggregate whose output indices are its only ranges — and
-    evaluates the leaf over every join-admitted ``(i, j)`` in ONE batched kernel
-    call (:func:`geometry.intersect_polygon_area_batch`) instead of one scalar
-    Sutherland–Hodgman clip per cell (the per-cell loop in
-    :func:`_eval_faq_scalar`). Semantics are identical:
-    an admitted cell gets the leaf value, a non-admitted cell the semiring
-    identity ``empty_zero`` (0 for ``sum_product``).
-
-    Returns ``None`` — caller falls back to the exact scalar path — for anything
-    outside this shape: a contraction (``reduce_syms``), a ``filter``, a
-    non-``sum_product`` ⊕, a non-planar manifold, operands that are not per-cell
-    ``index`` gathers, or a batch the kernel declines. Generalizes to other
-    control-flow leaves (interp / table lifts) by widening the leaf/kernel switch.
-    """
-    if reduce_syms or filter_expr is not None:
-        return _decline(
-            "batched-leaf", "the node contracts or carries a filter; this tier is a pure map"
-        )
-    if reducer != "+":  # sum_product ⊕; other semirings keep the scalar path
-        return _decline(
-            "batched-leaf", f"⊕ is {reducer!r}, not the sum_product '+' this kernel computes"
-        )
-    body = expr.expr
-    if not (isinstance(body, ExprNode) and body.op == "polygon_intersection_area"):
-        return _decline("batched-leaf", "the body is not a polygon_intersection_area leaf")
-    if getattr(body, "manifold", None) != "planar" or len(body.args) != 2 or len(out_syms) != 2:
-        return _decline(
-            "batched-leaf",
-            "the leaf is not a planar two-operand clip over exactly two output indices",
-        )
-    ga = _batched_ring_gather(body.args[0], out_syms, ctx)
-    gb = _batched_ring_gather(body.args[1], out_syms, ctx)
-    if ga is None or gb is None:
-        return _decline("batched-leaf", "an operand is not a per-cell `index` ring gather")
-    arr_a, sym_a = ga
-    arr_b, sym_b = gb
-    axis_of = {s: k for k, s in enumerate(out_syms)}
-    if sym_a == sym_b or sym_a not in axis_of or sym_b not in axis_of:
-        return _decline(
-            "batched-leaf",
-            "both operands gather on one symbol, or a gathered symbol is not a box axis",
-        )
-
-    try:
-        sym_positions = {s: list(r) for s, r in zip(out_syms, out_ranges_exp)}
-        gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
-        mask = _join_admits_mask(gates, out_syms, out_ranges_exp, out_shape)
-        if mask is None:
-            return _decline("batched-leaf", "the equi-join does not code to a dense box mask")
-        out = np.full(out_shape, empty_zero, dtype=float)
-        positions = np.nonzero(mask)
-        if positions[0].size == 0:
-            return out
-        ax_a, ax_b = axis_of[sym_a], axis_of[sym_b]
-        base_a = arr_a[np.asarray(out_ranges_exp[ax_a], dtype=np.intp) - 1]
-        base_b = arr_b[np.asarray(out_ranges_exp[ax_b], dtype=np.intp) - 1]
-        batch_a = base_a[positions[ax_a]]
-        batch_b = base_b[positions[ax_b]]
-    except (NumpyInterpreterError, IndexError, ValueError, TypeError) as exc:
-        return _decline(
-            "batched-leaf", f"the gather/mask construction raised {type(exc).__name__}: {exc}"
-        )
-
-    from . import geometry
-
-    areas = geometry.intersect_polygon_area_batch(batch_a, batch_b, "planar")
-    if areas is None:
-        return _decline("batched-leaf", "the batched clip kernel declined this batch shape")
-    out[positions] = areas
-    return out
 
 
 def _join_has_overlap(expr: ExprNode) -> bool:
@@ -2767,29 +2397,6 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             empty_zero,
             filter_expr,
         )
-
-    # Batched vectorized fast path for a fused geometry-leaf pure map — the planar
-    # conservative-regrid narrow phase A_ij = polygon_intersection_area(src_i,
-    # tgt_j). Evaluates the whole (join-admitted) candidate set in one kernel call
-    # instead of a per-cell Sutherland–Hodgman clip; declines (→ None) to the
-    # scalar join/fallback paths below for anything it does not recognize.
-    if not ragged_reduce and not overlap_gated:
-        batched = _eval_faq_batched_leaf(
-            expr,
-            ctx,
-            out_syms,
-            out_ranges_exp,
-            out_shape,
-            reduce_syms,
-            raw_ranges,
-            reducer,
-            empty_zero,
-            filter_expr,
-        )
-        if batched is not None:
-            if policy is not None:
-                policy.land("batched-leaf")
-            return batched
 
     if ragged_reduce and join_clauses:
         raise NumpyInterpreterError(
@@ -3609,38 +3216,6 @@ def _value_positions(range_vals: list[int], probe: np.ndarray) -> tuple[np.ndarr
     return found, sorter[pos_c]
 
 
-def _batched_leaf_entries(
-    body: Expr, ctx: EvalContext, bindings: dict[str, np.ndarray]
-) -> np.ndarray | None:
-    """The planar ``polygon_intersection_area(index(P_a, s), index(P_b, t))``
-    leaf over flat entries, through the same batched clip kernel the dense
-    :func:`_eval_faq_batched_leaf` tier uses; ``None`` for any other body."""
-    if not (isinstance(body, ExprNode) and body.op == "polygon_intersection_area"):
-        return None
-    if getattr(body, "manifold", None) != "planar" or len(body.args) != 2:
-        return None
-    rings = []
-    for arg in body.args:
-        if not (isinstance(arg, ExprNode) and arg.op == "index" and len(arg.args) == 2):
-            return None
-        sym = arg.args[1]
-        if not (isinstance(sym, str) and sym in bindings):
-            return None
-        try:
-            arr = np.asarray(eval_expr(arg.args[0], ctx), dtype=float)
-        except (NumpyInterpreterError, KeyError, TypeError, ValueError):
-            return None
-        if arr.ndim != 3 or arr.shape[2] != 2:
-            return None
-        idx = np.asarray(bindings[sym], dtype=np.int64) - 1
-        if idx.size and (idx.min() < 0 or idx.max() >= arr.shape[0]):
-            return None
-        rings.append(arr[idx])
-    from . import geometry
-
-    return geometry.intersect_polygon_area_batch(rings[0], rings[1], "planar")
-
-
 def _eval_faq_overlap_driven(
     expr: ExprNode,
     ctx: EvalContext,
@@ -3668,9 +3243,6 @@ def _eval_faq_overlap_driven(
     per-cell walk's, so the answer is bit-for-bit its answer, at
     O(candidates × the ungated ranges) work; a cell no candidate reaches is the
     semiring identity (§5.5.6 identity fill).
-
-    The planar ``polygon_intersection_area`` leaf (the regrid narrow phase) runs
-    through the batched clip kernel the dense batched-leaf tier uses.
     """
     tier = "overlap-driven"
     if ctx.recur is not None:
@@ -3763,11 +3335,9 @@ def _eval_faq_overlap_driven(
         cols = [c[kept] for c in cols]
 
     n_ent = cols[0].size
-    vals = _batched_leaf_entries(expr.expr, ctx, bindings)
+    vals = _eval_body_on_entries(expr.expr, ctx, bindings, n_ent, tier)
     if vals is None:
-        vals = _eval_body_on_entries(expr.expr, ctx, bindings, n_ent, tier)
-        if vals is None:
-            return None
+        return None
     if out_syms:
         row = np.ravel_multi_index(tuple(cols[: len(out_syms)]), out_shape)
     else:
@@ -4100,7 +3670,7 @@ def _scoped_array_name(name: str, registry: Any) -> str | None:
     SEVERAL suffix matches are not automatically an ambiguity, and treating them
     as one was a live defect. Two rules break the tie, in this order — the SAME
     two the value-invention front-door applies when it surfaces const arrays
-    under their bare tails (``simulation_array._materialize_join_key_buffers``),
+    under their bare tails (``simulation_array._frontdoor_extents_and_members``),
     stated once here so the two sites cannot drift apart again:
 
       1. **Shallowest scope wins.** ``ISRM.src_W`` outranks
@@ -4170,7 +3740,7 @@ def _overlap_env_sym(
     """The range symbol an overlap gate's envelope side binds (§5.5.6).
 
     Resolved from the FIRST factor's declared shape's FIRST index-set axis —
-    never from the clause's position — so which side is skolemised / reduced /
+    never from the clause's position — so which side is keyed / reduced /
     output stays free and the aggregate's own ``output_idx`` decides the
     orientation independently. Rank-agnostic like the Julia geometry-setup
     resolver (``_geo_loopvar_for``): an arity-1 ``[pos, verts, coord]`` ring
@@ -4329,55 +3899,17 @@ def _resolve_join_key_column(
 ) -> tuple[str, list[Any]]:
     """Resolve one join key column to ``(range_symbol, key_values)`` (RFC §5.3).
 
-    Three key kinds are supported, in the CONFORMANCE_SPEC §5.5.8 precedence
+    Two key kinds are supported, in the CONFORMANCE_SPEC §5.5.8 precedence
     order ("binders shadow declarations" — the same order §5.5.6 fixes for
     namespacing):
 
-    * A **materialized value-invention MAP buffer** (``rg_src_bin``): the key
-      names a per-cell bin buffer in ``ctx.join_key_buffers``. The range symbol
-      is the one whose ``{"from": <set>}`` matches the buffer's 1-D declared
-      shape index set (``ctx.join_key_index_sets[key]``), and the key value at
-      each 1-based position is the buffer's integer bin code — the broad-phase
-      bin-skolem equi-join.
     * A **range symbol / index set** — the categorical / interval key column,
       resolved via :func:`_join_sym_for_key` / :func:`_key_member_values`.
     * A **data column** (§5.5.8): a declared 1-D variable whose shape index set
       names one of this node's ranges, whose materialised values ARE the key
       values. This is how a relational port (EPA MOVES/NONROAD) spells every
-      join — one table's ``sourceTypeID`` column against another's — and it
-      generalises the bin-buffer case above, which is just the same thing for a
-      buffer the value-invention pass happened to mint.
+      join — one table's ``sourceTypeID`` column against another's.
     """
-    # A join key may name a value-invention MAP buffer. Match it against the
-    # materialized buffers by exact name OR namespaced suffix: flatten prefixes
-    # the bin STATE with its model (``OceanDynamics.rg_src_bin``) but leaves the
-    # ``join.on`` key column bare (``rg_src_bin``), so the two must be reconciled
-    # here (the intra-model-reference namespacing gap, RFC §5.3).
-    buf_key = None
-    if key in ctx.join_key_buffers:
-        buf_key = key
-    else:
-        _suffix = [b for b in ctx.join_key_buffers if b == key or b.endswith("." + key)]
-        if len(_suffix) == 1:
-            buf_key = _suffix[0]
-    if buf_key is not None:
-        key = buf_key
-        set_name = ctx.join_key_index_sets.get(key)
-        candidates = [
-            s
-            for s in sym_positions
-            if isinstance(raw_ranges.get(s), dict) and raw_ranges[s].get("from") == set_name
-        ]
-        if len(candidates) != 1:
-            raise NumpyInterpreterError(
-                f"join key buffer {key!r} (over index set {set_name!r}) does not "
-                f"map to exactly one range symbol of this aggregate (found "
-                f"{sorted(candidates)}); RFC §5.3"
-            )
-        sym = candidates[0]
-        buf = np.asarray(ctx.join_key_buffers[key], dtype=float).reshape(-1)
-        vals = [int(round(float(buf[p - 1]))) for p in sym_positions[sym]]
-        return sym, vals
     # BINDERS FIRST (§5.5.8 / §5.5.6): a key naming one of this node's own range
     # symbols, or the index set one of them draws {from}, is the iterated-index
     # spelling and takes precedence over any same-named declared variable.
@@ -4941,7 +4473,7 @@ def _gated_box_term(
         with _bound_index_box(ctx, all_syms, all_ranges_exp):
             # A non-admitted term divides by A_j=0 in the regrid body; that value
             # is discarded by the mask, so silence the transient divide/invalid
-            # warnings (mirrors the batched-leaf kernel).
+            # warnings.
             with np.errstate(divide="ignore", invalid="ignore"):
                 term = np.asarray(
                     _require_real(_compile_expr(expr.expr)(ctx), "aggregate body"),
@@ -4980,9 +4512,8 @@ def _eval_faq_gated_map(
 
     The gated counterpart of :func:`_materialize_map`, and the tier that closes
     the one structural hole the compiler census found: every other gated tier
-    needs a contraction (:func:`_eval_faq_batched_leaf` is a pure map but only
-    for the planar ``polygon_intersection_area`` leaf,
-    :func:`_eval_faq_prefix_scan`, :func:`_eval_faq_operator_cached` and
+    needs a contraction (:func:`_eval_faq_prefix_scan`,
+    :func:`_eval_faq_operator_cached` and
     :func:`_eval_faq_reduce_vectorized` all require one), so before this a node
     whose output indices are its ONLY ranges walked per cell by construction —
     the conservative-regrid narrow phase ``W_ij``, among others.

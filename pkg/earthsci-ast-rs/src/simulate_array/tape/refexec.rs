@@ -5,7 +5,6 @@
 //! slab coloring entirely (per-slot owned buffers) so that a coloring bug
 //! cannot mask a lowering bug, and it clones freely.
 
-use super::super::eval::clip_area_value;
 use super::super::*;
 use super::exec::{eval_micro_op, forcing_len, load_forcing};
 use super::ir::*;
@@ -279,34 +278,6 @@ pub(super) fn run_reference(
                     )
                 });
             }
-            Instr::Interp { table, x, y, out } => {
-                let tbl = &prog.interp_tables[*table as usize];
-                let xv = resolve(prog, &slots, &state_arrays, params, t, x);
-                // `y` is read only by `interp.bilinear`; NaN stands in for the
-                // unread argument of the other two entries.
-                let yv = match y {
-                    Some(y) => resolve(prog, &slots, &state_arrays, params, t, y),
-                    None => RefVal::Scalar(f64::NAN),
-                };
-                let desc = &prog.slots[*out as usize];
-                let v = if desc.scalar {
-                    let (RefVal::Scalar(a), RefVal::Scalar(b)) = (&xv, &yv) else {
-                        panic!("scalar Interp with array operands");
-                    };
-                    RefVal::Scalar(tbl.at(*a, *b))
-                } else {
-                    let shape: Vec<usize> = desc.shape.to_vec();
-                    let xf = to_shape(&xv, &shape);
-                    let yf = to_shape(&yv, &shape);
-                    let mut o = ArrayD::<f64>::zeros(IxDyn(&shape));
-                    ndarray::Zip::from(&mut o)
-                        .and(&xf)
-                        .and(&yf)
-                        .for_each(|s, &a, &b| *s = tbl.at(a, b));
-                    RefVal::Arr(o)
-                };
-                slots[*out as usize] = Some(v);
-            }
             // The reference counts every entry, whatever the window holds.
             Instr::Count {
                 rel,
@@ -337,20 +308,6 @@ pub(super) fn run_reference(
                 } else {
                     let shape: Vec<usize> = desc.shape.to_vec();
                     RefVal::Arr(to_shape(&xv, &shape).mapv(count))
-                };
-                slots[*out as usize] = Some(v);
-            }
-            Instr::Calendar { func, a, out } => {
-                let av = resolve(prog, &slots, &state_arrays, params, t, a);
-                let desc = &prog.slots[*out as usize];
-                let v = if desc.scalar {
-                    let RefVal::Scalar(x) = av else {
-                        panic!("scalar Calendar with an array operand");
-                    };
-                    RefVal::Scalar(calendar_at(*func, x))
-                } else {
-                    let shape: Vec<usize> = desc.shape.to_vec();
-                    RefVal::Arr(to_shape(&av, &shape).mapv(|x| calendar_at(*func, x)))
                 };
                 slots[*out as usize] = Some(v);
             }
@@ -437,49 +394,6 @@ pub(super) fn run_reference(
                     }
                 }
                 slots[*out as usize] = Some(RefVal::Arr(o));
-            }
-            Instr::PolyArea { a, b, geom, out } => {
-                // Every element clipped DENSELY, with no broad phase: the
-                // definition the fast executor's candidate enumeration is
-                // pinned against.
-                let spec = &prog.geoms[*geom as usize];
-                let av = resolve_src(prog, &slots, &state_arrays, a);
-                let bv = resolve_src(prog, &slots, &state_arrays, b);
-                assert_eq!(av.shape(), &spec.a.src_shape[..], "PolyArea table a");
-                assert_eq!(bv.shape(), &spec.b.src_shape[..], "PolyArea table b");
-                let ring = |t: &ArrayD<f64>, r: &RingRef, pos: &[usize]| -> Vec<(f64, f64)> {
-                    let mut view = t.view();
-                    for s in &r.sel {
-                        let i = match *s {
-                            RingSel::Fixed(i) => i,
-                            RingSel::Axis { axis, off } => {
-                                (pos[axis as usize] as i64 + off) as usize
-                            }
-                            RingSel::List { axis, list } => {
-                                r.lists[list as usize][pos[axis as usize]] as usize
-                            }
-                        };
-                        view = view.index_axis_move(Axis(0), i);
-                    }
-                    (0..view.shape()[0])
-                        .map(|v| (view[IxDyn(&[v, 0])], view[IxDyn(&[v, 1])]))
-                        .collect()
-                };
-                let desc = &prog.slots[*out as usize];
-                let val = if desc.scalar {
-                    let (ra, rb) = (ring(&av, &spec.a, &[]), ring(&bv, &spec.b, &[]));
-                    RefVal::Scalar(clip_area_value(&ra, &rb, spec.manifold))
-                } else {
-                    let mut o = ArrayD::<f64>::zeros(IxDyn(&desc.shape[..]));
-                    for (pos, y) in o.indexed_iter_mut() {
-                        let pos = ndarray::Dimension::slice(&pos).to_vec();
-                        let pos = &pos[..];
-                        let (ra, rb) = (ring(&av, &spec.a, pos), ring(&bv, &spec.b, pos));
-                        *y = clip_area_value(&ra, &rb, spec.manifold);
-                    }
-                    RefVal::Arr(o)
-                };
-                slots[*out as usize] = Some(val);
             }
             Instr::IndexGather {
                 src,

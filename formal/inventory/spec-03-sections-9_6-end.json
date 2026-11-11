@@ -711,6 +711,159 @@
       "note": "Loading a document never applies Test/Analysis injections: the component's rewrite-targets and the emitted document are unchanged by them."
     },
     {
+      "id": "spec.9.8.1.searchsorted-least-index",
+      "section": "9.8.1",
+      "quote": "For an array `xs` of `n` entries, `n` below 2^53, `searchsorted(x, xs, n)` MUST evaluate to 1 plus the number of `k` in `[1, n]` for which `xs[k] >= x` is false.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "searchsorted(x, xs, n) = 1 + #{k : not(xs[k] >= x)}; on non-decreasing xs the least index with xs[i] >= x, n+1 if none (NaN x included), 1 for n = 0."
+    },
+    {
+      "id": "spec.9.8.1.linear-contract",
+      "section": "9.8.1",
+      "quote": "For `table` and `axis` of `n >= 2` entries each, `axis` strictly increasing, `linear(table, axis, x, n)` MUST evaluate to `table[1]` when `x <= axis[1]`, to `table[n]` when `x >= axis[n]`, and otherwise to `table[i] + ((x - axis[i]) / (axis[i+1] - axis[i])) * (table[i+1] - table[i])`, each operation rounded once in that order, where `i` is the number of `k` in `[1, n]` with `axis[k] <= x`, held to `[1, n - 1]`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "linear: flat edge values outside the axis, else the pinned blend with the clamped count index; NaN x gives NaN."
+    },
+    {
+      "id": "spec.9.8.1.bilinear-contract",
+      "section": "9.8.1",
+      "quote": "For a row-major `table` of `nx` rows of `ny` entries and strictly increasing axes `axis_x` (`nx >= 2`) and `axis_y` (`ny >= 2`), `bilinear(table, axis_x, axis_y, x, y, nx, ny)` MUST first clamp each query to its axis: `cx` is `axis_x[1]` when `x <= axis_x[1]`, `axis_x[nx]` when `x >= axis_x[nx]`, and `x` otherwise, and `cy` likewise from `y`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "bilinear: queries clamped to the axes, clamped count indices, two x-blends then the y-blend in the pinned order; NaN in either query gives NaN."
+    },
+    {
+      "id": "spec.9.8.2.calendar-domain",
+      "section": "9.8.2",
+      "quote": "Each public template of `lib/calendar.esm` (`year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`, `seconds_since_midnight`) MUST evaluate to NaN for a NaN or infinite `t` and for a finite `t` with `|t| >= 2^52` s.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "Every public calendar template is NaN for NaN, infinite or |t| >= 2^52 s."
+    },
+    {
+      "id": "spec.9.8.2.calendar-fields",
+      "section": "9.8.2",
+      "quote": "For finite `t` with `|t| < 2^52` s, the integer templates MUST evaluate exactly, in binary64, to the field of the UTC instant `t`: `year` the proleptic-Gregorian year in astronomical numbering (0 is 1 BC); `month` in 1..12 (1 is January); `day` the day of the month in 1..31; `hour` in 0..23; `minute` in 0..59; `second` in 0..59 (no leap-second slot); `day_of_year` in 1..366 (1 is January 1); `is_leap_year` 1 when the year is divisible by 4 and not by 100 unless by 400, else 0; and `seconds_since_midnight` the whole second of the day `s`, in 0..86399, in seconds.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "On |t| < 2^52 s the integer calendar templates are the exact proleptic-Gregorian fields of t (ranges stated), in binary64."
+    },
+    {
+      "id": "spec.9.8.2.julian-day-formula",
+      "section": "9.8.2",
+      "quote": "For finite `t` with `|t| < 2^52` s, `julian_day(t)` MUST evaluate to `(d + 2440588) + ((s - 43200) + (t - floor(t))) / 86400`, each operation rounded once in that order: the Julian Date of `t`, including the fraction of the day.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "julian_day is the pinned binary64 formula on the exact split, each operation rounded once in order."
+    },
+    {
+      "id": "spec.9.8.3.argmin-contract",
+      "section": "9.8.3",
+      "quote": "For `n >= 1`, `argmin(f, n)` MUST evaluate to the index of the first NaN candidate when some `v_k` is NaN, and otherwise to the least `k` at which `v_k` equals the minimum of the candidates. `argmax(f, n)` MUST evaluate the same way with the maximum.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "argmin/argmax for n >= 1: first NaN candidate if any, else least index of the extremum; n = 0 gives +Inf."
+    },
+    {
+      "id": "spec.9.8.3.argmin-where-contract",
+      "section": "9.8.3",
+      "quote": "`argmin_where(f, p, n)` MUST evaluate to `n + 1` when no `k` in `[1, n]` satisfies the predicate `p` (so `n = 0` gives 1), and otherwise to `argmin` over the candidates that do: the first such `k` whose `v_k` is NaN when one is NaN, else the least such `k` at which `v_k` equals their minimum. `argmax_where(f, p, n)` MUST evaluate the same way with the maximum.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "argmin_where/argmax_where: n + 1 when no candidate passes p; else the argmin/argmax rule over the passing candidates."
+    },
+    {
+      "id": "spec.9.8.3.pair-key-contract",
+      "section": "9.8.3",
+      "quote": "`pair_key(a, b, lo_a, lo_b, n_a, n_b)` MUST evaluate to `(a - lo_a) * n_b + (b - lo_b)` when `a` and `b` are integers with `lo_a <= a < lo_a + n_a` and `lo_b <= b < lo_b + n_b`, and to NaN (`0 / 0`) otherwise, including when either is NaN.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "pair_key is (a - lo_a) n_b + (b - lo_b) for in-range integers, NaN otherwise; exact for magnitudes <= 2^25; lexicographic order."
+    },
+    {
+      "id": "spec.9.8.3.edge-key-contract",
+      "section": "9.8.3",
+      "quote": "`edge_key(u, v, lo, n)` MUST evaluate to `pair_key(min(u, v), max(u, v), lo, lo, n, n)`, so it gives the same value with `u` and `v` swapped, NaN included.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "edge_key is pair_key of (min, max); symmetric in u, v including NaN."
+    },
+    {
+      "id": "spec.9.8.3.rank-of-contract",
+      "section": "9.8.3",
+      "quote": "`rank_of(x, members, n)` MUST evaluate to 1 plus the number of `k` in `[1, n]` for which `members[k] >= x` is false, and `rank_of_set(x, members, S)` to the same count over the positions of the index set `S` in place of `[1, n]`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "rank_of / rank_of_set = 1 + #{k : not(members[k] >= x)}; on ascending members equal to searchsorted."
+    },
+    {
+      "id": "spec.9.8.4.overlap-convex-only",
+      "section": "9.8.4",
+      "quote": "The overlap templates MUST be applied to convex polygons, and on the sphere to polygons that each lie within a hemisphere.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "The overlap templates' contract covers convex polygons (each within a hemisphere on the sphere) only; no check, no claim otherwise."
+    },
+    {
+      "id": "spec.9.8.4.overlap-planar-definition",
+      "section": "9.8.4",
+      "quote": "`overlap_area_planar` MUST evaluate to 0 when the orientation fan sum of either ring is exactly 0, and otherwise to the sum, over every edge `p -> q` of each polygon, of `s · max(0, t1 - t0) · ((p - o) × (q - o)) / 2`, where `o` is the first vertex of A, `s` is the sign of the edge's polygon's fan sum (+1 when it is `>= 0`), `(u × w)` is `u_x w_y - u_y w_x`, and `[t0, t1]` is the part of the edge inside the other polygon: `t0` the `max` and `t1` the `min`, over that polygon's edges, of the bounds each one's closed half-plane imposes on the chord parameter. For two convex polygons this is the area of their intersection, in squared coordinate units.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "overlap_area_planar: 0 on a zero fan sum, else the edge-clipping Green's-theorem sum about the first vertex of A."
+    },
+    {
+      "id": "spec.9.8.4.overlap-planar-tolerance",
+      "section": "9.8.4",
+      "quote": "In the planar template a vertex `p` MUST count as on the line of edge `a -> b` when `|(b - a) × (p - a)|` is at most `1e-12 · L1(b - a) · (L1(p) + L1(q) + L1(a))`, with `p -> q` the edge being clipped and `L1` the sum of absolute coordinates.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "Planar on-the-line test: |cross| <= 1e-12 L1(b - a)(L1(p) + L1(q) + L1(a)); collinear edges count once same way, not at all opposite."
+    },
+    {
+      "id": "spec.9.8.4.overlap-spherical-definition",
+      "section": "9.8.4",
+      "quote": "`overlap_area_spherical` MUST evaluate the same construction on the unit sphere, with great-circle edges: 0 when either fan sum is exactly 0; the side of a point `p` against edge `a -> b` is `(a × b) · p`, on the great circle when its magnitude is at most `1e-14`; and an edge `a -> q` clipped to `[t0, t1]` contributes `s · (F(t1) - F(t0))` when `t1 > t0` and nothing otherwise, where `F(t)` is the signed solid angle, `2 · atan2(...)` in the Van Oosterom-Strackee form, of the spherical triangle with corners `o`, `a` and the chord point `a + t (q - a)`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "overlap_area_spherical: the same construction on the unit sphere with side (a x b).p, tolerance 1e-14, Van Oosterom-Strackee contributions."
+    },
+    {
+      "id": "spec.9.8.4.overlap-padding",
+      "section": "9.8.4",
+      "quote": "A vertex repeated exactly (an explicit closing duplicate, or the rectangular-storage padding of a cell with fewer vertices than its stack has slots) makes a zero-length edge, which contributes exactly zero and bounds nothing. For finite coordinates `overlap_area_planar` MUST therefore give the same binary64 value on a padded ring as on the unpadded one.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "Exactly repeated vertices (padding) leave overlap_area_planar's binary64 value unchanged."
+    },
+    {
+      "id": "spec.9.8.4.lonlat-to-unit",
+      "section": "9.8.4",
+      "quote": "`lonlat_to_unit(ring, cell, vert, comp)` MUST evaluate, with `lon = ring[cell, vert, 1]` and `lat = ring[cell, vert, 2]` in degrees and `c` the binary64 constant `0.017453292519943295` (π/180), to `cos(lat · c) · cos(lon · c)` for `comp = 1`, `cos(lat · c) · sin(lon · c)` for `comp = 2`, and `sin(lat · c)` for any other `comp`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "closed_functions",
+      "note": "lonlat_to_unit component formulas with the binary64 pi/180 constant; comp other than 1, 2 gives sin(lat)."
+    },
+    {
       "id": "spec.10.2.translate-var-redundant",
       "section": "10.2",
       "quote": "Writing it MUST produce the same flattened system as omitting it",

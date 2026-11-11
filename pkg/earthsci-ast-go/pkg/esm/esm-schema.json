@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://earthsciml.org/schemas/esm/1.3.0/esm.schema.json",
+  "$id": "https://earthsciml.org/schemas/esm/2.0.0/esm.schema.json",
   "title": "ESM Format",
-  "description": "EarthSciML Abstract Syntax Tree Format — v1.3.0 adds two OPTIONAL `solver` fields (esm-spec §2.2): `external`, a reference to a run-configuration document that EarthSciAST resolves but never opens (§2.2.6), and `time_span`, the interval the document is meant to be simulated over, as numbers in seconds or RFC 3339 UTC timestamps (§2.2.7). Both are advisory and change no flattened system; a document declaring esm below 1.3.0 that carries either is rejected (`solver_external_version_too_old` / `solver_time_span_version_too_old`). v1.2.0 adds an OPTIONAL declared `units` string on a `const` expression node (esm-spec §4.8.5): the unit the constant's value is in, so a conversion constant such as `{\"op\": \"const\", \"args\": [], \"value\": 0.44704, \"units\": \"m*h/(mi*s)\"}` makes its equation dimensionally checkable. Purely additive: `units` is legal on no other node, and a document declaring esm below 1.2.0 that carries it is rejected with `const_units_version_too_old`. v1.1.0 renames the unified query node from `aggregate` to `faq`, the Functional Aggregate Query it has always been (docs/content/rfcs/faq-node-rename.md). `aggregate` names only one of the node's specializations: it also joins, filters, and — under `bool_and_or` with `distinct` — produces an index set rather than an array, reducing nothing. `faq` is the canonical tag; `aggregate` is accepted as a DEPRECATED ALIAS, normalized to `faq` at load with the warning `deprecated_op_alias`, and REMOVED at esm 2.0.0. The text surface is unchanged: the head keyword there is the \u2295-word (`sum`/`prod`/`max`/`min`/`any`), not the node name. The `arrayop` alias — nominally removed at 0.8.0 but still live in all five bindings — is removed for real. Also at v1.1.0: the top-level `solver` block. (v1.0.0) — a `faq`'s `join` clause carries the optional `syms`, naming the two RANGE SYMBOLS its `on` pairs are read at, so a relation can be joined to ITSELF: two ranges over one index set, whose key columns' shared axis cannot say which side is which (CONFORMANCE_SPEC §5.5.8, docs/content/rfcs/self-join-two-ranges-over-one-index-set.md). Purely additive — every document written before it stays valid and unchanged, which is why it lands without a version bump; see that note's §4. v1.0.0 — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v1.0.0 is a clean break with no deprecation path and no compatibility shims (docs/content/rfcs/unified-variable-model.md): the five declared variable types collapse to TWO. `unknown` is a quantity the solver solves for — its behavior is given by EQUATIONS and never by a field on the variable — and `parameter` is a quantity supplied to the solver, carrying a number or a `distribution` plus an optional `update` block saying when and from what it refreshes. Removed: `state` and `observed` (with the `expression` field — an observed variable becomes an unknown plus a bare-variable-LHS equation); `brownian` (with `noise_kind` / `correlation_group` — a noise source is a parameter with a `distribution` and `update.kind: \"wiener\"`, correlated noise being ONE vector-valued parameter whose distribution carries a `cov` matrix, which closes the gap the 0.x schema explicitly deferred); `discrete` (with `refresh` and the `RefreshTrigger` def — a refreshing input is a parameter with a `schedule` / `data` / `remesh` update); the `discrete_parameters` event lists and the event `functional_affect` (parameter mutation moves onto the parameter itself as a `condition` / `crossing` update carrying an `expression`, a `from` binding, or a `handler`; events now affect UNKNOWNS only); and the `data_loaders` COMPONENT kind together with `DataLoader.variables` (top-level `data_sources` is now a pure registry of ingest configuration — source, temporal, select, record_filter, extent, reader_options, determinism — that parameters draw from via `update.from`; a data source is no longer a coupling endpoint, a subsystem, or a scoped-name path root). Everything the solver needs is DERIVED rather than declared — which unknowns are ODE states, observed, or algebraic, and which parameters are Brownian, discrete, sampled, or constant — and every binding exposes the same classification functions to derive it (esm-spec §6.3.1). v0.9.0 changes no on-disk shape: it replaces the Option A (always-expanded) template round-trip with Option B (reference-preserving; esm-spec §9.6.4, docs/content/rfcs/out-of-line-expression-templates.md). Template references survive load and parse-then-emit; emit materializes each component's referenced templates into its `expression_templates` registry (authored entries first in authored order, materialized entries after in lexicographic UTF-8 name order; registry keys may be dotted post-rename names); eager references (target-bearing, esm-spec §9.6.4 rule 3) still expand at load, so no rewrite-target op survives inside a reference; `emit ∘ load` is a byte-wise fixed point; emitted documents carrying surviving references or materialized registries declare `esm: 0.9.0` or later. v0.8.0 is a clean break that removes all bespoke spatial-grid machinery in favor of expressing grid geometry directly with the unified Functional Aggregate Query (`faq`) IR (RFC semiring-faq-unified-ir), and retains no backward-compatibility shims. Removed: the top-level `grids`, `staggering_rules`, and `discretizations` blocks; the `Grid` / `GridExtent` / `GridMetricArray` / `GridMetricGenerator` / `GridConnectivity` / `GridCRS` defs; the entire stencil-template discretization rule grammar (`Discretization`, `DiscretizationVariant`, `MultiOutputStencilRule`, `DiscretizationRef`, `GridDiscretizationDescriptor`, and the `Rule` / `PatternNode` / `NeighborSelector` / `StencilEntry` / `RuleBinding` / `BoundaryPolicy` / `BoundaryPolicySpec` / `GhostWidth` / `GhostVarDecl` / `RuleRegion` / `RuleGuard` machinery, including `Equation.region`); all regridding configuration (`Model.regrid`, `RegridSpec`, `Interface.regridding`); the `Domain.spatial` / `SpatialDimension` / `CoordinateTransform` geometry block and the deprecated domain-level `boundary_conditions`; the `DataLoader.grid` / `DataLoader.mesh` descriptors and the `DataLoaderMesh` def; and the `grid_discretization_descriptor` document kind with its `grid_refs` test/example fields. Grid geometry — coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays — is now ordinary data: loaded from a `data_loaders` primitive or declared as variables/parameters, with topology and metrics constructed declaratively as `faq` nodes (the `intersect_polygon` kernel leaf remains for polygon clipping). Iteration domains are declared once in the document-scoped `index_sets` registry. Regridding is expressed as an ordinary coupling expression between two variables. Earlier additive features are retained: the `integral` AST op (PIDEs), array-or-single `plots.y`, sampled `function_tables` + `table_lookup`, in-file `expression_templates` + `apply_expression_template`, and the closed `enums` + `fn` / `enum` ops. The template-library RFC (docs/content/rfcs/template-library-imports.md; esm-spec §9.7) adds cross-file template sharing at esm 0.8.0: template-library files (top-level `expression_templates`), ordered `expression_template_imports` with §4.7 reference semantics, and load-time integer `metaparameters` admissible in `index_sets` sizes, `faq` dense ranges, and `makearray` regions — all resolved and folded at load, before validation and before the §9.6.3 rewrite fixpoint.",
+  "description": "EarthSciML Abstract Syntax Tree Format — v2.0.0 is a break: every external function leaves the expression AST (esm-spec §4.2 \"Removed ops\"). Removed: the `fn` op and the closed function registry (every `datetime.*` and `interp.*` name); the top-level `function_tables` block, the `FunctionTable` / `FunctionTableAxis` defs and the `table_lookup` op; the `skolem` and `rank` value-invention ops and the `argmin` / `argmax` ops; the geometry leaves `intersect_polygon` and `polygon_intersection_area`; and the expression-node fields only they used (`name` for `fn`, `table`, `axes`, `output`, `label`, `arg`, `manifold`). Each is a standard-library expression template (lib/*.esm, imported from `esm:std/<file>.esm`): calendar.esm and interp.esm for the closed functions and tables, relational.esm for keys, ranks and arg-witnesses, geometry.esm for overlap areas; `intersect_polygon` has no replacement. The deprecated `aggregate` spelling of `faq` is removed as well. A loader rejects a document using any of them, by name at the wire boundary, with `removed_op`; the 2.0.0 codemod (MIGRATION.md) rewrites a 1.x document. v1.3.0 adds two OPTIONAL `solver` fields (esm-spec §2.2): `external`, a reference to a run-configuration document that EarthSciAST resolves but never opens (§2.2.6), and `time_span`, the interval the document is meant to be simulated over, as numbers in seconds or RFC 3339 UTC timestamps (§2.2.7). Both are advisory and change no flattened system; a document declaring esm below 1.3.0 that carries either is rejected (`solver_external_version_too_old` / `solver_time_span_version_too_old`). v1.2.0 adds an OPTIONAL declared `units` string on a `const` expression node (esm-spec §4.8.5): the unit the constant's value is in, so a conversion constant such as `{\"op\": \"const\", \"args\": [], \"value\": 0.44704, \"units\": \"m*h/(mi*s)\"}` makes its equation dimensionally checkable. Purely additive: `units` is legal on no other node, and a document declaring esm below 1.2.0 that carries it is rejected with `const_units_version_too_old`. v1.1.0 renames the unified query node from `aggregate` to `faq`, the Functional Aggregate Query it has always been (docs/content/rfcs/faq-node-rename.md). `aggregate` names only one of the node's specializations: it also joins, filters, and — under `bool_and_or` with `distinct` — produces an index set rather than an array, reducing nothing. `faq` is the canonical tag; `aggregate` is accepted as a DEPRECATED ALIAS, normalized to `faq` at load with the warning `deprecated_op_alias`, and REMOVED at esm 2.0.0. The text surface is unchanged: the head keyword there is the \u2295-word (`sum`/`prod`/`max`/`min`/`any`), not the node name. The `arrayop` alias — nominally removed at 0.8.0 but still live in all five bindings — is removed for real. Also at v1.1.0: the top-level `solver` block. (v1.0.0) — a `faq`'s `join` clause carries the optional `syms`, naming the two RANGE SYMBOLS its `on` pairs are read at, so a relation can be joined to ITSELF: two ranges over one index set, whose key columns' shared axis cannot say which side is which (CONFORMANCE_SPEC §5.5.8, docs/content/rfcs/self-join-two-ranges-over-one-index-set.md). Purely additive — every document written before it stays valid and unchanged, which is why it lands without a version bump; see that note's §4. v1.0.0 — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v1.0.0 is a clean break with no deprecation path and no compatibility shims (docs/content/rfcs/unified-variable-model.md): the five declared variable types collapse to TWO. `unknown` is a quantity the solver solves for — its behavior is given by EQUATIONS and never by a field on the variable — and `parameter` is a quantity supplied to the solver, carrying a number or a `distribution` plus an optional `update` block saying when and from what it refreshes. Removed: `state` and `observed` (with the `expression` field — an observed variable becomes an unknown plus a bare-variable-LHS equation); `brownian` (with `noise_kind` / `correlation_group` — a noise source is a parameter with a `distribution` and `update.kind: \"wiener\"`, correlated noise being ONE vector-valued parameter whose distribution carries a `cov` matrix, which closes the gap the 0.x schema explicitly deferred); `discrete` (with `refresh` and the `RefreshTrigger` def — a refreshing input is a parameter with a `schedule` / `data` / `remesh` update); the `discrete_parameters` event lists and the event `functional_affect` (parameter mutation moves onto the parameter itself as a `condition` / `crossing` update carrying an `expression`, a `from` binding, or a `handler`; events now affect UNKNOWNS only); and the `data_loaders` COMPONENT kind together with `DataLoader.variables` (top-level `data_sources` is now a pure registry of ingest configuration — source, temporal, select, record_filter, extent, reader_options, determinism — that parameters draw from via `update.from`; a data source is no longer a coupling endpoint, a subsystem, or a scoped-name path root). Everything the solver needs is DERIVED rather than declared — which unknowns are ODE states, observed, or algebraic, and which parameters are Brownian, discrete, sampled, or constant — and every binding exposes the same classification functions to derive it (esm-spec §6.3.1). v0.9.0 changes no on-disk shape: it replaces the Option A (always-expanded) template round-trip with Option B (reference-preserving; esm-spec §9.6.4, docs/content/rfcs/out-of-line-expression-templates.md). Template references survive load and parse-then-emit; emit materializes each component's referenced templates into its `expression_templates` registry (authored entries first in authored order, materialized entries after in lexicographic UTF-8 name order; registry keys may be dotted post-rename names); eager references (target-bearing, esm-spec §9.6.4 rule 3) still expand at load, so no rewrite-target op survives inside a reference; `emit ∘ load` is a byte-wise fixed point; emitted documents carrying surviving references or materialized registries declare `esm: 0.9.0` or later. v0.8.0 is a clean break that removes all bespoke spatial-grid machinery in favor of expressing grid geometry directly with the unified Functional Aggregate Query (`faq`) IR (RFC semiring-faq-unified-ir), and retains no backward-compatibility shims. Removed: the top-level `grids`, `staggering_rules`, and `discretizations` blocks; the `Grid` / `GridExtent` / `GridMetricArray` / `GridMetricGenerator` / `GridConnectivity` / `GridCRS` defs; the entire stencil-template discretization rule grammar (`Discretization`, `DiscretizationVariant`, `MultiOutputStencilRule`, `DiscretizationRef`, `GridDiscretizationDescriptor`, and the `Rule` / `PatternNode` / `NeighborSelector` / `StencilEntry` / `RuleBinding` / `BoundaryPolicy` / `BoundaryPolicySpec` / `GhostWidth` / `GhostVarDecl` / `RuleRegion` / `RuleGuard` machinery, including `Equation.region`); all regridding configuration (`Model.regrid`, `RegridSpec`, `Interface.regridding`); the `Domain.spatial` / `SpatialDimension` / `CoordinateTransform` geometry block and the deprecated domain-level `boundary_conditions`; the `DataLoader.grid` / `DataLoader.mesh` descriptors and the `DataLoaderMesh` def; and the `grid_discretization_descriptor` document kind with its `grid_refs` test/example fields. Grid geometry — coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays — is now ordinary data: loaded from a `data_loaders` primitive or declared as variables/parameters, with topology and metrics constructed declaratively as `faq` nodes (the `intersect_polygon` kernel leaf remains for polygon clipping). Iteration domains are declared once in the document-scoped `index_sets` registry. Regridding is expressed as an ordinary coupling expression between two variables. Earlier additive features are retained: the `integral` AST op (PIDEs), array-or-single `plots.y`, sampled `function_tables` + `table_lookup`, in-file `expression_templates` + `apply_expression_template`, and the closed `enums` + `fn` / `enum` ops. The template-library RFC (docs/content/rfcs/template-library-imports.md; esm-spec §9.7) adds cross-file template sharing at esm 0.8.0: template-library files (top-level `expression_templates`), ordered `expression_template_imports` with §4.7 reference semantics, and load-time integer `metaparameters` admissible in `index_sets` sizes, `faq` dense ranges, and `makearray` regions — all resolved and folded at load, before validation and before the §9.6.3 rewrite fixpoint.",
   "type": "object",
   "required": [
     "esm",
@@ -101,14 +101,6 @@
     "domain": {
       "$ref": "#/$defs/Domain",
       "description": "The single temporal domain shared by every component in the document (temporal extent + numeric representation). A document has at most one domain; all spatial models live on it, and 0-D models simply have scalar-shaped variables."
-    },
-    "function_tables": {
-      "propertyNames": { "$ref": "#/$defs/Identifier" },
-      "type": "object",
-      "description": "Component-scoped sampled function tables (v0.4.0). Each entry declares ordered named axes plus a literal nested-array data block, optionally tagged with output names; the `table_lookup` AST op references a table by id, supplies a per-axis input-coordinate expression map, and selects which output to return. Tables are syntactic sugar over `interp.linear` / `interp.bilinear` / `index`: a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup. See esm-spec.md §9.5 and docs/rfcs/sampled-tables.md.",
-      "additionalProperties": {
-        "$ref": "#/$defs/FunctionTable"
-      }
     },
     "index_sets": {
       "propertyNames": { "$ref": "#/$defs/Identifier" },
@@ -305,7 +297,7 @@
           "type": "string",
           "minLength": 1,
           "pattern": "^([A-Za-z_][A-Za-z0-9_.]*|[-+*/^<>=!]+)$",
-          "description": "Operator name. TWO TIERS (esm-spec §4.2). (1) The CLOSED evaluable-core set — every binding's evaluator implements each one directly: `+ - * / ^` and `pow` (the word spelling of `^`), the comparisons/booleans (`> < >= <= == != and or not`), the elementary functions (`exp log log10 sqrt abs sign sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh atanh min max floor ceil`), `ifelse`, the calculus form-ops `D` and `ic` (structural / equation-LHS use only), `Pre`, the boolean literals `true` and `false`, and the array/query ops (`faq makearray index broadcast reshape transpose concat skolem rank argmin argmax intersect_polygon polygon_intersection_area fn enum const table_lookup apply_expression_template`). (2) The OPEN rewrite-target tier — ANY other identifier: a spatial `D` on a right-hand side, the optional sugar ops `grad`/`div`/`laplacian`/`integral`, or a user op such as `godunov_hamiltonian`. A rewrite-target op carries NO evaluator implementation and MUST be eliminated by a rewrite rule (§9.6) before evaluation. Loading is permissive — a file MAY load with rewrite-target ops still present (e.g. a coupling/scoping example that never simulates) — but one reaching evaluation/compilation without being lowered is rejected with `unlowered_operator`. The `pattern` only rejects malformed strings — it does NOT enforce membership in the core set, so the open tier stays expressible. The evaluable-core set is the ONLY set the format privileges. The array/query node `faq` is a FUNCTIONAL AGGREGATE QUERY (docs/content/rfcs/semiring-faq-unified-ir.md): a semiring reduction of a body over named index sets, carrying joins, filters and set semantics, so under `bool_and_or` + `distinct` it produces an INDEX SET rather than an array and reduces nothing. DEPRECATED ALIAS: `aggregate` is the pre-1.1.0 spelling of `faq`. A loader MUST accept it, MUST normalize the node to `faq` before validation so that nothing downstream of the loader sees the alias, and MUST report the warning diagnostic `deprecated_op_alias` once per document per alias. It is REMOVED at esm 2.0.0 (docs/content/rfcs/faq-node-rename.md). The older `arrayop` spelling is NOT accepted. It was removed at 0.8.0 and is rejected BY NAME with the hard error `removed_op` — NOT left to the open tier: `arrayop` is a well-formed identifier, so the open rewrite-target tier would otherwise admit it and the document would load silently, failing much later as `unlowered_operator`, or never. A loader MUST also reject a document that spells `faq` while declaring esm < 1.1.0 (`faq_version_too_old`), the same version gate the top-level `solver` block follows; the gate reads the AUTHORED form, so a pre-1.1.0 document carrying the `aggregate` alias stays legal and is normalized with its declared version raised to the 1.1.0 floor.",
+          "description": "Operator name. TWO TIERS (esm-spec §4.2). (1) The CLOSED evaluable-core set — every binding's evaluator implements each one directly: `+ - * / ^` and `pow` (the word spelling of `^`), the comparisons/booleans (`> < >= <= == != and or not`), the elementary functions (`exp log log10 sqrt abs sign sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh atanh min max floor ceil`), `ifelse`, the calculus form-ops `D` and `ic` (structural / equation-LHS use only), `Pre`, the boolean literals `true` and `false`, and the array/query ops (`faq makearray index broadcast reshape transpose concat enum const apply_expression_template`). (2) The OPEN rewrite-target tier — ANY other identifier: a spatial `D` on a right-hand side, the optional sugar ops `grad`/`div`/`laplacian`/`integral`, or a user op such as `godunov_hamiltonian`. A rewrite-target op carries NO evaluator implementation and MUST be eliminated by a rewrite rule (§9.6) before evaluation. Loading is permissive — a file MAY load with rewrite-target ops still present (e.g. a coupling/scoping example that never simulates) — but one reaching evaluation/compilation without being lowered is rejected with `unlowered_operator`. The `pattern` only rejects malformed strings — it does NOT enforce membership in the core set, so the open tier stays expressible. The evaluable-core set is the ONLY set the format privileges. The array/query node `faq` is a FUNCTIONAL AGGREGATE QUERY (docs/content/rfcs/semiring-faq-unified-ir.md): a semiring reduction of a body over named index sets, carrying joins, filters and set semantics, so under `bool_and_or` + `distinct` it produces an INDEX SET rather than an array and reduces nothing. REMOVED ops (esm-spec §4.2 \"Removed ops\") are rejected BY NAME, at the wire boundary, with the hard error `removed_op` — NOT left to the open tier: each is a well-formed identifier, so the open rewrite-target tier would otherwise admit it and the document would load silently, failing much later as `unlowered_operator`, or never. The list: `arrayop` (removed at 0.8.0; use `faq`), and, removed at 2.0.0, `aggregate` (the pre-1.1.0 spelling of `faq`, a deprecated alias from 1.1.0; use `faq`), `fn`, `table_lookup`, `skolem`, `rank`, `argmin`, `argmax`, `intersect_polygon` and `polygon_intersection_area` (use the standard-library templates; the 2.0.0 codemod rewrites a 1.x document). The top-level `function_tables` block is rejected with the same code. A loader MUST also reject a document that spells `faq` while declaring esm < 1.1.0 (`faq_version_too_old`), the same version gate the top-level `solver` block follows.",
           "$comment": "The evaluable-core set is normative and closed; each binding pins it as its evaluator's op registry. It is documented (not enum-enforced) so the open rewrite-target tier remains expressible. grad/div/laplacian/integral are NOT core — they are optional author sugar lowered by rewrite rules (esm-spec §9.6.8); the discretization rule std-lib lives in ../earthscidiscretizations, not this repo."
         },
         "id": {
@@ -457,7 +449,7 @@
             "properties": {
               "on": {
                 "type": "array",
-                "description": "The key-column pairs to equi-join on. Each pair is a 2-element array [left, right] naming the two factor key columns whose values must compare equal. At least one pair is required. Each name resolves, in this order (CONFORMANCE_SPEC §5.5.8): a LOOP SYMBOL of this node, or the INDEX SET one of its ranges draws {from} — key values are that set's declared members / integer IDs; otherwise a DATA COLUMN, a declared 1-D variable whose single shape index set names one of this node's ranges, whose values are read as data (the relational-port spelling: one table's sourceTypeID column against another's). Listing several pairs over the same two loop symbols is ONE composite key — a combination is admitted iff every listed pair agrees, i.e. tuple equality on the canonical skolem tuple, not several independent gates. The match set is built ONCE per node and DRIVES enumeration exactly as an `overlap` gate's candidate set does, so the contraction costs O(|matches|) rather than O(|left|*|right|), and an output position with no match takes the semiring identity.",
+                "description": "The key-column pairs to equi-join on. Each pair is a 2-element array [left, right] naming the two factor key columns whose values must compare equal. At least one pair is required. Each name resolves, in this order (CONFORMANCE_SPEC §5.5.8): a LOOP SYMBOL of this node, or the INDEX SET one of its ranges draws {from} — key values are that set's declared members / integer IDs; otherwise a DATA COLUMN, a declared 1-D variable whose single shape index set names one of this node's ranges, whose values are read as data (the relational-port spelling: one table's sourceTypeID column against another's). Listing several pairs over the same two loop symbols is ONE composite key — a combination is admitted iff every listed pair agrees, i.e. tuple equality on the key components, not several independent gates. The match set is built ONCE per node and DRIVES enumeration exactly as an `overlap` gate's candidate set does, so the contraction costs O(|matches|) rather than O(|left|*|right|), and an output position with no match takes the semiring identity.",
                 "minItems": 1,
                 "items": {
                   "type": "array",
@@ -479,7 +471,7 @@
               },
               "overlap": {
                 "type": "object",
-                "description": "Spatial OVERLAP gate — the alternative to an `on` value-equality gate (CONFORMANCE_SPEC §5.5). Replaces uniform-grid bin-equality with envelope candidacy: a contracted (src_pos, tgt_pos) tuple is admitted iff the two range positions are in a broad-phase candidate set computed once from two envelope factor arrays. The narrow phase (exact rectangle / polygon test) stays as the `faq`'s `filter`; this gate is ONLY the conservative broad phase, so the materialized result is identical to the full-product path. The candidate set also DRIVES enumeration of the `faq` it is attached to — ANY `faq`, an ordinary dense reduction as much as an index-set-producing `distinct` producer, and either side may be the skolemised/output one; an output position with no candidate pair is filled with the semiring identity (CONFORMANCE_SPEC §5.5.6 Join admission).",
+                "description": "Spatial OVERLAP gate — the alternative to an `on` value-equality gate (CONFORMANCE_SPEC §5.5). Replaces uniform-grid bin-equality with envelope candidacy: a contracted (src_pos, tgt_pos) tuple is admitted iff the two range positions are in a broad-phase candidate set computed once from two envelope factor arrays. The narrow phase (exact rectangle / polygon test) stays as the `faq`'s `filter`; this gate is ONLY the conservative broad phase, so the materialized result is identical to the full-product path. The candidate set also DRIVES enumeration of the `faq` it is attached to — ANY `faq`, an ordinary dense reduction as much as an index-set-producing `distinct` producer, and either side may be the keyed/output one; an output position with no candidate pair is filled with the semiring identity (CONFORMANCE_SPEC §5.5.6 Join admission).",
                 "additionalProperties": false,
                 "required": [
                   "src_env",
@@ -520,35 +512,11 @@
         "distinct": {
           "type": "boolean",
           "default": false,
-          "description": "For faq: when true, the node has set semantics (dedup) and is index-set-producing — it materializes a data-derived index set rather than an array (RFC semiring-faq-unified-ir §5.5). Only meaningful under the `bool_and_or` semiring (the relational specialization, §5.1); combined with `key`, it enumerates the unique Skolem terms (e.g. the unique edges discovered from a face→vertex relation) and exposes the result as a `kind:\"derived\"` index set (§5.2) that a downstream geometric `faq` consumes. The output order is fixed by the normative determinism rules (§5.7): sort by the total tuple order, then drop adjacent duplicates — never first-seen / insertion order. Absent ⇒ false (ordinary array-producing reduction), exactly as today."
+          "description": "For faq: when true, the node has set semantics (dedup) and is index-set-producing — it materializes a data-derived index set rather than an array (RFC semiring-faq-unified-ir §5.5). Only meaningful under the `bool_and_or` semiring (the relational specialization, §5.1); combined with `key`, it enumerates the unique keys (e.g. the unique edges discovered from a face→vertex relation) and exposes the result as a `kind:\"derived\"` index set (§5.2) that a downstream geometric `faq` consumes. The output order is fixed by the normative determinism rules (§5.7): sort by the total tuple order, then drop adjacent duplicates — never first-seen / insertion order. Absent ⇒ false (ordinary array-producing reduction), exactly as today."
         },
         "key": {
           "$ref": "#/$defs/Expression",
-          "description": "For faq: optional Skolem term — a deterministic, content-addressed key naming each member an index-set-producing (`distinct`) node emits (RFC semiring-faq-unified-ir §5.5). Typically a `{ \"op\": \"skolem\", \"label\": <tag>, \"args\": [<component>…] }` node; the components are canonicalized (a symmetric relation sorts its components, e.g. an undirected edge (min(u,v), max(u,v)); a directed one preserves order) so the same member is named identically across bindings (§5.7). Dense integer ids for the array backend then come from a `{ \"op\": \"rank\" }` over the resulting set. Floats are forbidden in keys (§5.7 / §A.5) — keys are integer or categorical ids."
-        },
-        "label": {
-          "type": "string",
-          "description": "Optional documentary relation tag for a skolem node (e.g. \"edge\", \"bin\", \"pair\"). Does NOT affect the emitted key; the key components are the node's args."
-        },
-        "arg": {
-          "type": "string",
-          "description": "For the arg-witness reducers `argmin` / `argmax` (RFC semiring-faq-unified-ir §5.7 rule 6): names the contracted `ranges` index symbol whose value (a 1-based generator id) is RETURNED at the optimum. The op reduces its `expr` body (a declarative scalar FAQ, e.g. a squared-distance metric) over the inner `ranges` candidate domain — optionally pruned by a bin-Skolem `join` / `filter` — and emits the witnessing INDEX rather than the reduced value: `assign[i] = argmin_g dist(point_i, gen_g)`, the nearest-generator assignment. NET-NEW because the closed semiring registry (§5.1) returns values and the value-invention primitives distinct/skolem/rank (§5.5) return sets — neither returns the arg. Materialized at build time as an integer per-element buffer (CONST/DISCRETE cadence, like the §A.8 bin-Skolem `:map` buffers; a CONTINUOUS arg-witness is rejected by §5.7 guard 2). The NORMATIVE tie-break is the SMALLEST arg (smallest generator id): equal `expr` values resolve to the lower index, making the buffer byte-identical across bindings (§5.7). REQUIRED on `argmin` / `argmax`; ignored on any other op. An empty candidate set is an error (no index witnesses the optimum)."
-        },
-        "manifold": {
-          "type": "string",
-          "description": "For the `intersect_polygon` and `polygon_intersection_area` geometry-kernel leaf ops (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8.4): the geometry interpretation under which the two operand polygons are clipped, and the part of the op's contract that makes its tolerance-based conformance comparable. \"planar\": Cartesian/flat clipping (Sutherland–Hodgman / Foster–Hormann) — straight edges in the coordinate plane; wrong at the poles and across the antimeridian, valid only for a small projected patch. \"spherical\": great-circle edges on the unit sphere (the ConservativeRegridding.jl / GeometryOps.jl / S2 default for lon-lat earth meshes) — the correct model for global regridding. \"geodesic\": ellipsoidal-geodesic edges. Great-circle-edge assumption: under \"spherical\"/\"geodesic\" every edge — including a lon-lat edge running along a parallel, which is a small circle, not a great circle — is modelled as a great-circle geodesic, so a coarse polar cell carries a real area error (~4% for a 30° cell next to the pole, growing with the square of the cell's longitude width; RFC §B.4 / §5.8.4). The per-binding kernels offer an opt-in densification of parallel edges into short great-circle segments (`densify_parallel_edges`) to reduce it; it is off by default, so default clip behaviour is unchanged. REQUIRED on every `intersect_polygon` / `polygon_intersection_area` node (the op carries no default — the manifold must be declared, never inferred). Two bindings' clip results may be compared ONLY under the same declared manifold; the flag itself is matched EXACTLY across bindings (it is a discrete label, not a tolerance-based quantity). Meaningful only for `intersect_polygon` and `polygon_intersection_area`; ignored on any other op. TEMPLATE PARAMETERIZATION (esm-spec §9.6.1 / §9.6.3 constraint 5): inside an `expression_templates` entry's `body`, this field MAY carry a declared template-parameter name — a bare string outside the closed set — as a scalar-field substitution site, so the schema admits any string here. The closed set {planar, spherical, geodesic} is enforced on the EXPANDED form per §9.6.4: bindings MUST reject, at post-expansion validation, any `intersect_polygon` / `polygon_intersection_area` node whose `manifold` is not a member of the closed set.",
-          "anyOf": [
-            {
-              "enum": [
-                "planar",
-                "spherical",
-                "geodesic"
-              ]
-            },
-            {
-              "type": "string"
-            }
-          ]
+          "description": "For faq: optional key naming each member an index-set-producing (`distinct`) node emits (RFC semiring-faq-unified-ir §5.5): a scalar integer-valued expression, e.g. a composite key built with the `pair_key` / `edge_key` templates of lib/relational.esm (an undirected edge keyed on (min(u,v), max(u,v)); a directed one preserves order), so the same member is named identically across bindings (§5.7). The members are emitted in ascending key order; dense ranks then come from the `rank_of` / `rank_of_set` templates. Floats are forbidden in keys (§5.7 / §A.5) — keys are integer or categorical ids; a NaN key is `value_invention_key_out_of_range`."
         },
         "regions": {
           "type": "array",
@@ -603,11 +571,11 @@
         },
         "fn": {
           "type": "string",
-          "description": "For broadcast: the name of the scalar operator to apply element-wise to the operands in args (esm-spec.md §4.3.4). `{op: 'broadcast', fn: F, args: A}` means exactly what `{op: F, args: A}` means, applied element-wise — so a ONE-operand broadcast applies `fn` UNARILY (`broadcast(fn:'-',[x])` is `-x`), and MUST NOT be treated as the identity on its operand. The value MUST be an ExpressionNode op name drawn from the closed SCALAR subset — the pointwise ops: arithmetic (`+ - * / ^ neg`), elementary functions (`exp log ln log10 sqrt abs sign floor ceil sin cos tan asin acos atan sinh cosh tanh asinh acosh atanh atan2 min max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name a non-pointwise op (`faq makearray index broadcast reshape transpose concat fn D ic Pre const true enum table_lookup apply_expression_template skolem rank distinct argmin argmax intersect_polygon polygon_intersection_area`), and `args.length` MUST satisfy the named operator's §4.2 arity. Bindings MUST reject a violation — including an absent `fn`, for which there is no default — with diagnostic 'invalid_broadcast_fn'; loading MUST fail. This is a VALUE constraint the schema deliberately does not enum-enforce, for the same reason `op` and the closed-registry `name` are not enum-enforced: the admissible set is fixed by the file's declared `esm` version, and the check must also cover arity, which a schema `enum` cannot express."
+          "description": "For broadcast: the name of the scalar operator to apply element-wise to the operands in args (esm-spec.md §4.3.4). `{op: 'broadcast', fn: F, args: A}` means exactly what `{op: F, args: A}` means, applied element-wise — so a ONE-operand broadcast applies `fn` UNARILY (`broadcast(fn:'-',[x])` is `-x`), and MUST NOT be treated as the identity on its operand. The value MUST be an ExpressionNode op name drawn from the closed SCALAR subset — the pointwise ops: arithmetic (`+ - * / ^ neg`), elementary functions (`exp log ln log10 sqrt abs sign floor ceil sin cos tan asin acos atan sinh cosh tanh asinh acosh atanh atan2 min max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name a non-pointwise op (`faq makearray index broadcast reshape transpose concat D ic Pre const true false enum apply_expression_template`), and `args.length` MUST satisfy the named operator's §4.2 arity. Bindings MUST reject a violation — including an absent `fn`, for which there is no default — with diagnostic 'invalid_broadcast_fn'; loading MUST fail. This is a VALUE constraint the schema deliberately does not enum-enforce, for the same reason `op` is not enum-enforced: the admissible set is fixed by the file's declared `esm` version, and the check must also cover arity, which a schema `enum` cannot express."
         },
         "name": {
           "type": "string",
-          "description": "For fn: the dotted module path of a function in the closed function registry (esm-spec.md §9.2). The set of valid names is fixed by the spec version; bindings MUST reject unknown names with diagnostic 'unknown_closed_function'. v0.3.0 set: datetime.year, datetime.month, datetime.day, datetime.hour, datetime.minute, datetime.second, datetime.day_of_year, datetime.julian_day, datetime.is_leap_year, interp.searchsorted, interp.linear, interp.bilinear. For apply_expression_template: the id of an `expression_templates` entry declared in the same component (esm-spec.md §9.6 / docs/rfcs/ast-expression-templates.md). Bindings MUST reject references to undeclared template names at file-load time with diagnostic 'apply_expression_template_unknown_template'."
+          "description": "For apply_expression_template: the id of an `expression_templates` entry declared in the same component (esm-spec.md §9.6 / docs/rfcs/ast-expression-templates.md). Bindings MUST reject references to undeclared template names at file-load time with diagnostic 'apply_expression_template_unknown_template'."
         },
         "value": {
           "description": "For const: the inline literal value carried by this expression node (any JSON number, integer, or nested array thereof; `args` MUST be empty). For the 'bc' op with kind 'constant'/'dirichlet': the boundary value — a number, a parameter/variable-reference string, or an Expression AST node."
@@ -615,29 +583,6 @@
         "units": {
           "type": "string",
           "description": "For const only: the declared units of the constant's `value`, resolved against the esm-spec §4.8.1 registry with the §4.8.2 grammar exactly as a variable's `units` are. A unit-bearing constant has that dimension and exact scale in dimensional analysis (esm-spec §4.8.5); a `const` without `units`, like a bare numeric literal, stays undeterminable. The numeric value is never checked against the units. Legal on no other op. Arrives at esm 1.2.0 (`const_units_version_too_old`)."
-        },
-        "table": {
-          "type": "string",
-          "description": "For table_lookup: the id of the function_tables entry to evaluate. Bindings MUST reject references to undeclared tables at file-load time with diagnostic 'table_lookup_unknown_table'."
-        },
-        "axes": {
-          "type": "object",
-          "description": "For table_lookup: a map from axis name (matching one of the referenced table's `axes[].name` entries) to the scalar input expression supplying that coordinate at evaluation time. Every axis declared on the table MUST appear as a key; extra keys are rejected with 'table_lookup_axis_name_mismatch'. `args` MUST be empty for a table_lookup node — the per-axis expressions live here.",
-          "additionalProperties": {
-            "$ref": "#/$defs/Expression"
-          }
-        },
-        "output": {
-          "description": "For table_lookup: which output of a multi-output table to return. Either a non-negative integer (0-based index into the leading data dimension) or a string (an entry in the table's `outputs` array). MAY be omitted whether or not the table declares `outputs`; an omitted output means 0. Out-of-range or unknown-name selectors are rejected with 'table_lookup_output_out_of_range'.",
-          "oneOf": [
-            {
-              "type": "integer",
-              "minimum": 0
-            },
-            {
-              "type": "string"
-            }
-          ]
         },
         "bindings": {
           "type": "object",
@@ -653,10 +598,7 @@
           "if": {
             "properties": {
               "op": {
-                "enum": [
-                  "faq",
-                  "aggregate"
-                ]
+                "const": "faq"
               }
             },
             "required": [
@@ -743,23 +685,6 @@
           "if": {
             "properties": {
               "op": {
-                "const": "fn"
-              }
-            },
-            "required": [
-              "op"
-            ]
-          },
-          "then": {
-            "required": [
-              "name"
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "op": {
                 "const": "const"
               }
             },
@@ -793,30 +718,6 @@
                 "items": {
                   "type": "string"
                 }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "op": {
-                "const": "table_lookup"
-              }
-            },
-            "required": [
-              "op"
-            ]
-          },
-          "then": {
-            "required": [
-              "table",
-              "axes"
-            ],
-            "properties": {
-              "args": {
-                "type": "array",
-                "maxItems": 0
               }
             }
           }
@@ -892,33 +793,6 @@
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 1
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "op": {
-                "enum": [
-                  "intersect_polygon",
-                  "polygon_intersection_area"
-                ]
-              }
-            },
-            "required": [
-              "op"
-            ]
-          },
-          "then": {
-            "required": [
-              "manifold"
-            ],
-            "properties": {
-              "args": {
-                "type": "array",
-                "minItems": 2,
-                "maxItems": 2
               }
             }
           }
@@ -1140,7 +1014,7 @@
       }
     },
     "Distribution": {
-      "description": "A parameter's value drawn from a probability distribution rather than fixed. The closed set is `normal`, `lognormal`, and `uniform` (esm-spec §9.1's closed-registry principle applies here too: bindings implement exactly these and reject anything else). WHEN it is drawn is decided by the parameter's `update`, and that is the whole difference between the two uses of this field: with NO update the value is sampled ONCE at setup and held for the run (the uncertainty-quantification / ensemble case), while `update.kind: \"wiener\"` resamples it every step with √dt increment scaling (the stochastic-process case that promotes the model to an SDE). A distribution is univariate when its location parameter is a number and multivariate when it is an array, in which case the parameter's `shape` MUST agree.",
+      "description": "A parameter's value drawn from a probability distribution rather than fixed. The closed set is `normal`, `lognormal`, and `uniform` (a closed set: bindings implement exactly these and reject anything else). WHEN it is drawn is decided by the parameter's `update`, and that is the whole difference between the two uses of this field: with NO update the value is sampled ONCE at setup and held for the run (the uncertainty-quantification / ensemble case), while `update.kind: \"wiener\"` resamples it every step with √dt increment scaling (the stochastic-process case that promotes the model to an SDE). A distribution is univariate when its location parameter is a number and multivariate when it is an array, in which case the parameter's `shape` MUST agree.",
       "oneOf": [
         {
           "type": "object",
@@ -1647,7 +1521,7 @@
     },
     "FunctionalUpdate": {
       "type": "object",
-      "description": "A registered handler that computes this parameter's new value when the update fires. This is the 0.x event `functional_affect` relocated: a handler's only write channel was `modified_params`, so it now lives ON the parameter it writes and needs no write list at all. Handlers stay deliberately out of scope for the §9 closed function registry — they mutate simulator state at update time, while §9 entries are pure expression-embedded callables. `handler_id` is the sole remaining registration mechanism in the format.",
+      "description": "A registered handler that computes this parameter's new value when the update fires. This is the 0.x event `functional_affect` relocated: a handler's only write channel was `modified_params`, so it now lives ON the parameter it writes and needs no write list at all. Handlers stay deliberately out of expressions — they mutate simulator state at update time, while an expression is a pure tree of esm-spec §4.2 operators. `handler_id` is the sole remaining registration mechanism in the format.",
       "required": [
         "handler_id"
       ],
@@ -4141,7 +4015,7 @@
         },
         "values": {
           "type": "array",
-          "description": "Inline literal 1-D coordinate vector for the simple rectilinear case, mirroring `FunctionTableAxis.values` (finite floats). Mutually exclusive with `source`. Use `source` for anything not a plain 1-D literal (unstructured/curvilinear coordinates live in data arrays).",
+          "description": "Inline literal 1-D coordinate vector for the simple rectilinear case, (finite floats). Mutually exclusive with `source`. Use `source` for anything not a plain 1-D literal (unstructured/curvilinear coordinates live in data arrays).",
           "items": {
             "type": "number"
           },
@@ -4153,7 +4027,7 @@
         },
         "units": {
           "type": "string",
-          "description": "CF/UDUNITS units string (e.g. \"degrees_north\", \"degrees_east\", \"Pa\"). Emitted as the coordinate variable's `units` attribute. Advisory at load time (no unit checking), matching `FunctionTableAxis.units`."
+          "description": "CF/UDUNITS units string (e.g. \"degrees_north\", \"degrees_east\", \"Pa\"). Emitted as the coordinate variable's `units` attribute. Advisory at load time (no unit checking)."
         },
         "axis": {
           "type": "string",
@@ -4214,7 +4088,7 @@
         },
         "values": {
           "type": "string",
-          "description": "ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — a PADDED [parent, max length] array whose row i holds parent i's members in positions 1…offsets[i] (e.g. MPAS edgesOnCell); entries past offsets[i] are padding and are never read. Because a range over the set binds the position k, a `faq` body reads a member by gathering it explicitly, index(values, i, k); a body that never reads this array is `ragged_values_not_gathered`. The one exception is a value-invention `faq` (distinct / skolem / rank / argmin / argmax), whose ragged range binds the member values[i, k] itself (esm-spec §4.3.1 \"Ragged ranges\"). Required when kind is \"ragged\"."
+          "description": "ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — a PADDED [parent, max length] array whose row i holds parent i's members in positions 1…offsets[i] (e.g. MPAS edgesOnCell); entries past offsets[i] are padding and are never read. Because a range over the set binds the position k, a `faq` body reads a member by gathering it explicitly, index(values, i, k); a body that never reads this array is `ragged_values_not_gathered`. The one exception is a value-invention `faq` (`distinct: true`), whose ragged range binds the member values[i, k] itself (esm-spec §4.3.1 \"Ragged ranges\"). Required when kind is \"ragged\"."
         }
       },
       "allOf": [
@@ -4331,100 +4205,6 @@
           "type": "string",
           "description": "Array backend (e.g., \"Array\", \"CuArray\").",
           "default": "Array"
-        }
-      }
-    },
-    "FunctionTable": {
-      "type": "object",
-      "description": "A sampled function table (esm-spec.md §9.5). Carries one or more named axes and a literal nested-array data block. The shape of `data` is [len(outputs), len(axes[0].values), len(axes[1].values), ...] when `outputs` is declared; otherwise [len(axes[0].values), ...] (single-output convenience form). `table_lookup` AST nodes evaluate this table by supplying a per-axis input expression and selecting an output. Tables are syntactic sugar over `interp.linear` (1 axis) / `interp.bilinear` (2 axes) / the nearest-knot `index` composition (nearest, esm-spec 9.5.3); the materialized AST a binding produces from a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup.",
-      "required": [
-        "axes",
-        "data"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "axes": {
-          "type": "array",
-          "description": "Ordered list of named axes. The order of entries defines the order of inner dimensions in `data` (after the leading output dimension when `outputs` is present). Axis names within a single table MUST be unique.",
-          "items": {
-            "$ref": "#/$defs/FunctionTableAxis"
-          },
-          "minItems": 1,
-          "maxItems": 2
-        },
-        "interpolation": {
-          "type": "string",
-          "description": "Interpolation kind applied by `table_lookup`. 'linear' (1 axis) lowers to `interp.linear`. 'bilinear' (2 axes) lowers to `interp.bilinear`. 'nearest' returns the table value at the knot nearest the query, ties to the lower knot, clamped to the end values (an AST composition over `interp.searchsorted` and `index`, esm-spec 9.5.3). The chosen kind MUST be consistent with the number of axes; mismatch is rejected at load time with diagnostic 'table_interpolation_axes_mismatch'.",
-          "enum": [
-            "linear",
-            "bilinear",
-            "nearest"
-          ],
-          "default": "linear"
-        },
-        "out_of_bounds": {
-          "type": "string",
-          "description": "Out-of-bounds policy applied to query coordinates that fall outside an axis range. 'clamp' pins to the nearest edge — this matches the semantics of `interp.linear` and `interp.bilinear` (extrapolate-flat). 'error' MUST raise at evaluation time; bindings emit diagnostic 'table_lookup_out_of_bounds' on first violation. v0.4.0: 'clamp' is the only policy required of all five bindings; 'error' is conformant when the binding implements it.",
-          "enum": [
-            "clamp",
-            "error"
-          ],
-          "default": "clamp"
-        },
-        "outputs": {
-          "type": "array",
-          "description": "Optional ordered list of output names. When present, `table_lookup.output` MAY name an entry of this list (in addition to using a 0-based integer index). Names within a table MUST be unique. The leading dimension of `data` MUST equal the length of `outputs`.",
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1
-        },
-        "data": {
-          "description": "Nested-array literal carrying the table's sampled values. Leaves MUST be finite numbers (NaN entries are rejected at load time with 'table_data_nan'). Shape: [len(outputs), len(axes[0].values), ...] when `outputs` is present; [len(axes[0].values), ...] otherwise. Mismatched nesting is rejected with 'table_data_shape_mismatch'."
-        },
-        "shape": {
-          "type": "array",
-          "description": "Optional redundant shape assertion. If present, MUST match the actual nesting of `data`; loaders verify and reject mismatches with 'table_data_shape_mismatch'. `data` is the canonical representation; `shape` is a load-time assertion only.",
-          "items": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "minItems": 1
-        },
-        "schema_version": {
-          "type": "string",
-          "description": "Optional pin of the table-schema minor version this entry was authored against. Bindings ignore the value beyond a same-major-version compatibility check; informational for tooling.",
-          "pattern": "^\\d+\\.\\d+\\.\\d+$"
-        }
-      }
-    },
-    "FunctionTableAxis": {
-      "type": "object",
-      "description": "A single named axis inside a FunctionTable. The `values` array supplies the sample coordinates along this axis; it MUST be strictly increasing finite floats with at least 2 entries (mirrors the `interp.linear` / `interp.bilinear` axis contract in §9.2).",
-      "required": [
-        "name",
-        "values"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "Axis identifier. Used as the key in `table_lookup.axes` to bind the input-coordinate expression."
-        },
-        "units": {
-          "type": "string",
-          "description": "Optional advisory units string (e.g. 'Pa', 'K'). v0.4.0 records this for documentation only — no load-time unit checking is performed against the supplied input expression. Promotion to enforcement is deferred to a future units RFC."
-        },
-        "values": {
-          "type": "array",
-          "description": "Strictly-increasing finite floats. Bindings MUST reject non-monotonic axes at load time with diagnostic 'table_axis_non_monotonic' and NaN entries with 'table_axis_nan'.",
-          "items": {
-            "type": "number"
-          },
-          "minItems": 2
         }
       }
     }

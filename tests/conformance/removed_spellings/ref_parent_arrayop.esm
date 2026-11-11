@@ -1,0 +1,42 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "ref_parent_arrayop",
+    "description": "Mounts ref_child_arrayop.esm, which spells the removed `arrayop`. Loading this document (and resolving its subsystem refs) MUST fail with `removed_op`.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "faq",
+      "removed_spellings",
+      "ref",
+      "conformance"
+    ]
+  },
+  "models": {
+    "Host": {
+      "subsystems": {
+        "Kid": {
+          "ref": "ref_child_arrayop.esm"
+        }
+      },
+      "variables": {
+        "u": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ]
+    }
+  }
+}

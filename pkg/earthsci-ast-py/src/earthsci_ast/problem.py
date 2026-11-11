@@ -79,7 +79,6 @@ from .flatten import (
     flatten,
     infer_variable_shapes,
 )
-from .lower_table_lookup import lower_flattened_table_lookups, lower_table_lookups
 from .numpy_interpreter import (
     _EVALUABLE_CORE_OPS,
     UnevaluableOperatorError,
@@ -714,26 +713,12 @@ def _esm_problem_under(
     else:
         file = load_path(input, metaparameters=closed_metaparameters)
 
-    # esm-spec §9.5.3: `table_lookup` is SUGAR over the §9.2 closed functions,
-    # and nothing downstream of the loader evaluates it — the interpreter
-    # refuses the op outright. The lowering runs HERE, not in `parse`, because
-    # §9.5.4 makes the AUTHORED form round-trip and this binding serializes the
-    # typed document it loaded, so a load-time rewrite would emit the lowered
-    # `fn` tree (issue #188). Pure and idempotent, and not even a walk for a
-    # document declaring no `function_tables`.
     if file is not None:
-        file = lower_table_lookups(file)
         _refuse_ic_in_reaction_system(file)
         _refuse_unregistered_callback_reads(file)
         _refuse_reference_integrity_errors(file, base_path)
 
-    # A caller-flattened system has no document, but `flatten` carries
-    # `function_tables` so that this carrier can be lowered too.
-    flat = (
-        lower_flattened_table_lookups(input)
-        if isinstance(input, FlattenedSystem)
-        else flatten(file)
-    )
+    flat = input if isinstance(input, FlattenedSystem) else flatten(file)
 
     # esm-spec §4.7.6.12: an ODE backend MUST reject a system with a surviving
     # spatial dimension. A spatial independent variable means an unlowered
@@ -1626,8 +1611,8 @@ def _promoted_axes(flat: FlattenedSystem) -> dict[str, tuple[str, ...]]:
 
     The inference is Julia's ``promote_downstream_shapes`` (``shape_promotion.jl``):
     a ``faq`` / ``makearray`` over named ranges has its output axes' index sets;
-    one over inline ``[1, n]`` ranges has anonymous axes; an ``index`` gather and
-    a geometry kernel are scalar; every other op broadcasts its operands' axes
+    one over inline ``[1, n]`` ranges has anonymous axes; an ``index`` gather is
+    scalar; every other op broadcasts its operands' axes
     by name, the superset winning. Iterated to a fixed point over the defining
     equations. A variable declared ``shape: []`` is a scalar and never
     promoted."""
@@ -1681,7 +1666,7 @@ def _infer_expr_axes(expr: Any, axes: dict[str, tuple[str, ...]]) -> tuple[str, 
         return axes.get(expr, ())
     if not isinstance(expr, ExprNode):
         return ()
-    if expr.op == "index" or expr.op in op_registry.by_category("geometry"):
+    if expr.op == "index":
         return ()
     if expr.op in _ARRAY_PRODUCER_OPS:
         if expr.output_idx is None:
@@ -2105,10 +2090,10 @@ def _refuse_array_valued_bool_and_or(expr: Any) -> None:
 #: Evaluable-core ops no Python pathway evaluates, refused at the front door with
 #: ``unevaluable_operator`` (esm-spec §9.6.6) when they stand OUTSIDE a ``faq``.
 #: Inside one they may be a value-invention producer (``value_invention``'s
-#: ``_VI_BODY_OPS`` / ``_VI_ARGWITNESS_OPS``), which the build materializes before
-#: anything is evaluated, so the walk leaves those to that stage.
+#: ``_VI_BODY_OPS``), which the build materializes before anything is evaluated,
+#: so the walk leaves those to that stage.
 _FRONT_DOOR_UNEVALUABLE_OPS: frozenset[str] = frozenset(
-    {"rank", "distinct", "argmin", "argmax", "enum", "apply_expression_template"}
+    {"distinct", "enum", "apply_expression_template"}
 )
 
 

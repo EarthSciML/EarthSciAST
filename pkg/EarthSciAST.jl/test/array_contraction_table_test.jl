@@ -222,7 +222,7 @@ end
             "ranges" => Dict(i => Any[1, n]), "expr" => op("*", -0.2, idx(v, i))
         )
         doc = Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict("name" => "act_two"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "act_two"),
             "models" => Dict(
                 "M" => Dict{String, Any}(
                     "variables" => Dict(
@@ -272,7 +272,7 @@ end
             ]
             flat = [10.0 + 0.5k + 0.01k^2 for k in 1:sum(sizes)]
             Dict{String, Any}(
-                "esm" => "1.1.0", "metadata" => Dict("name" => "act_ragged"),
+                "esm" => "2.0.0", "metadata" => Dict("name" => "act_ragged"),
                 "index_sets" => Dict(
                     "parents" => Dict("kind" => "interval", "size" => n),
                     "maxm" => Dict("kind" => "interval", "size" => mx),
@@ -402,7 +402,7 @@ end
             "ranges" => Dict(i => Dict("from" => set)), "expr" => op("*", -0.1, idx(v, i))
         )
         mk(term) = Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict("name" => "act_entry"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "act_entry"),
             "index_sets" => Dict(
                 "parents" => Dict("kind" => "interval", "size" => n),
                 "maxm" => Dict("kind" => "interval", "size" => mx),
@@ -518,7 +518,7 @@ end
         n = 8
         idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
         doc = Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict("name" => "act_pf"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "act_pf"),
             "models" => Dict(
                 "M" => Dict{String, Any}(
                     "variables" => Dict{String, Any}(
@@ -601,7 +601,7 @@ end
                 op("+", 1.0, op("*", 0.1, "i"))
             )
             Dict{String, Any}(
-                "esm" => "1.2.0", "metadata" => Dict("name" => "act_mpas"),
+                "esm" => "2.0.0", "metadata" => Dict("name" => "act_mpas"),
                 "index_sets" => Dict(
                     "cells" => Dict("kind" => "interval", "size" => n),
                     "edges" => Dict("kind" => "interval", "size" => ne),
@@ -764,7 +764,7 @@ end
             "expr" => Dict("op" => "D", "args" => Any[idx(v, i)], "wrt" => "t")
         )
         doc = Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict("name" => "act_ragged_contracted_parent"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "act_ragged_contracted_parent"),
             "index_sets" => Dict(
                 "parents" => Dict("kind" => "interval", "size" => 4),
                 "maxm" => Dict("kind" => "interval", "size" => 3),

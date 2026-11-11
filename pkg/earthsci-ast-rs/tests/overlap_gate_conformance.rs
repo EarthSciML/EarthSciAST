@@ -97,8 +97,8 @@ fn l1_overlap_producer_members_match_julia_golden() {
     )
     .expect("overlap-gate producer materialises");
 
-    // skolem("cell", [c]) is a single-component key => the scalar cell index; the
-    // distinct set is the exact hand-computed containing cells.
+    // The key is the scalar cell index; the distinct set is the exact
+    // hand-computed containing cells.
     let members = &vi.members["emis_src_cells_faq"];
     assert_eq!(
         *members,
@@ -168,7 +168,7 @@ fn point_in_rect_micro_fixture_members_match_julia_golden() {
     // The producer: point-in-rect over points x cells, overlap gate + strict
     // rectangle-interior narrow filter (X-W)(E-X)(Y-S)(N-Y) > 0.
     let doc: Value = serde_json::json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": { "name": "overlap_gate_point_in_rect_micro" },
         "index_sets": {
             "points": { "kind": "interval", "size": 5 },
@@ -205,7 +205,7 @@ fn point_in_rect_micro_fixture_members_match_julia_golden() {
                                 { "op": "-", "args": [ {"op":"index","args":["N","j"]}, {"op":"index","args":["Y","i"]} ] } ] } ] },
                         0.0 ] },
                     "args": ["X", "Y", "W", "S", "E", "N"],
-                    "key": { "op": "skolem", "label": "cell", "args": ["j"] },
+                    "key": "j",
                     "expr": { "op": "true", "args": [] }
                 }
             } ]

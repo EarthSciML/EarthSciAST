@@ -345,19 +345,19 @@ describe('substitute', () => {
     })
   })
 
-  it('substitutes into table_lookup axis expressions', () => {
+  it('substitutes into template-apply binding expressions', () => {
     const expr = {
-      op: 'table_lookup',
+      op: 'apply_expression_template',
       args: [],
-      table: 'k_table',
-      axes: { temperature: 'T', pressure: { op: '*', args: ['P', 'scale'] } },
+      name: 'k_rate',
+      bindings: { temperature: 'T', pressure: { op: '*', args: ['P', 'scale'] } },
     } as unknown as Expr
     const bindings = { T: 300, scale: 2 }
     expect(substitute(expr, bindings)).toEqual({
-      op: 'table_lookup',
+      op: 'apply_expression_template',
       args: [],
-      table: 'k_table',
-      axes: { temperature: 300, pressure: { op: '*', args: ['P', 2] } },
+      name: 'k_rate',
+      bindings: { temperature: 300, pressure: { op: '*', args: ['P', 2] } },
     })
   })
 

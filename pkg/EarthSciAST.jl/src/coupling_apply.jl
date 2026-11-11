@@ -1150,7 +1150,7 @@ function _substitute_placeholder(
     elseif expr isa OpExpr
         # Recurse into EVERY expression-bearing field via the shared field-preserving
         # rewrite and rebuild via `reconstruct`, which preserves all other fields
-        # (table/table_axes, int_var, join, id, manifold, key, …) that a hand-listed
+        # (int_var, join, id, manifold, key, …) that a hand-listed
         # keyword subset used to drop. `placeholder`/`target` are namespaced
         # dependent-variable names, never node-local binders, so recursing into
         # every field cannot capture a bound index or `int_var`.
@@ -1497,7 +1497,7 @@ function _apply_expression_transform!(
     to = entry.to
     transform = entry.transform::ASTExpr
     # `contains` (expression.jl) walks EVERY expression-bearing field —
-    # aggregate bodies, filter predicates, bounds, table-lookup axes — so
+    # aggregate bodies, filter predicates, bounds — so
     # the reference check is not blind to nested aggregate transforms.
     if !contains(transform, from)
         throw(

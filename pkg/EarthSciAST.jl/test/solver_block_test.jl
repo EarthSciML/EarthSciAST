@@ -75,7 +75,7 @@ _solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String, Any})
     @testset "the block reaches the RUN DOCUMENT (§2.2.2 is not dead code)" begin
         # Regression: `_document_solver` reads the problem's run doc, but the run
         # doc is `flattened_to_esm` output — a fresh dict of
-        # esm/metadata/models/index_sets/function_tables/domain — so the key was
+        # esm/metadata/models/index_sets/domain — so the key was
         # never there and the whole §2.2.2 chain silently reduced to the binding
         # defaults. The block is captured pre-flatten and re-attached, exactly
         # like the `coordinates` registry beside it.

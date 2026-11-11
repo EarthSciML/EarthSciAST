@@ -119,7 +119,7 @@ func ToJSON(file *ESMFile) (string, error) {
 // The load-time gate cannot catch it — the parent's AUTHORED bytes are legal — so the stamp closes it here.
 // See docs/content/rfcs/faq-node-rename.md §5.5.
 func raiseFaqEsmFloor(jsonStr string) string {
-	_, _, _, hasFaq := scanOpAliases(jsonStr)
+	_, hasFaq := scanOps(jsonStr)
 	if !hasFaq {
 		return jsonStr
 	}

@@ -78,6 +78,30 @@ function load_path(
     return _load_document(raw_data, base_path; metaparameters = metaparameters)
 end
 
+# Does the raw document `doc` import expression templates (`expression_template_imports`
+# at the root or on a model / reaction system)?
+function _has_template_imports(doc)::Bool
+    _is_object(doc) || return false
+    _get_field(doc, :expression_template_imports, nothing) === nothing || return true
+    for section in (:models, :reaction_systems)
+        comps = _get_field(doc, section, nothing)
+        _is_object(comps) || continue
+        for (_, comp) in pairs(comps)
+            _get_field(comp, :expression_template_imports, nothing) === nothing || return true
+        end
+    end
+    return false
+end
+
+# The typed document of a raw dict for the build-side front doors that coerce
+# without loading (`_build_evaluator(::AbstractDict)`, the pushdown desugar). A
+# document that imports templates — `esm:std/*.esm` is how interpolation,
+# calendar, geometry and the relational keys are written — goes through
+# [`load_document`](@ref), which resolves the imports into the component
+# template registries; coercion alone would leave every reference to them
+# unresolvable.
+_coerce_or_load(doc) = _has_template_imports(doc) ? load_document(doc) : coerce_esm_file(doc)
+
 """
     load_document(doc::AbstractDict; base_path=nothing, metaparameters=Dict{String,Int}()) -> EsmFile
 
@@ -256,11 +280,6 @@ function _load_document(
     # document with no location of its own leaves `flatten`'s `base_path` in
     # charge, as it does in the other four bindings.
     record_import_base && _record_coupling_import_base!(file, base_path)
-    # esm-spec §9.2 "When the argument checks run" / §9.5.5 "When the table
-    # checks run": on the document AS LOADED — templates lowered, enums lowered,
-    # mounts resolved — every `interp.*` call and every function table. A
-    # document that fails one does not load.
-    check_closed_functions_and_tables(file)
     return file
 end
 
@@ -392,8 +411,7 @@ function _read_json_document(json_string::AbstractString)
     # Expression-node `op` spellings are settled HERE, at the one wire boundary,
     # so every document gets identical treatment — root, `{ref}`-loaded child,
     # template library, coupling library (docs/content/rfcs/faq-node-rename.md
-    # §5.2). Doing it per-caller is what let `arrayop` survive its own 0.8.0
-    # removal, and what let the `aggregate` alias reach `emit` through a `{ref}`.
+    # §5.2), so a removed op cannot slip in through a `{ref}`.
     _prepare_document_ops!(doc)
     return doc
 end
@@ -707,7 +725,6 @@ _with_declarations(
         coupling = file.coupling,
         domain = file.domain,
         enums = file.enums,
-        function_tables = file.function_tables,
         index_sets = file.index_sets,
         expression_templates = templates,
         metaparameters = metaparams,
@@ -734,7 +751,7 @@ _with_declarations(
 # requires a `Model` with `variables`, so the reference is inlined at the
 # raw-JSON level — before schema validation, expression-template lowering, and
 # coercion — and the blocks the model's AST references by name
-# (`function_tables`, `data_sources`) are merged in from the component; `enums` stay
+# (`data_sources`) are merged in from the component; `enums` stay
 # file-local and are lowered at the edge (esm-spec §9.3).
 # Nested subsystem `{ref}`s inside the component are rewritten to absolute paths
 # so the later `resolve_subsystem_refs!` pass (anchored at the *parent* dir)
@@ -921,7 +938,7 @@ end
 
 Return a native ESM dict with every top-level `models.<k>` and
 `reaction_systems.<k>` `{ref}` stub replaced by the referenced component (and
-its `index_sets` / `function_tables` / `data_sources` merged in), or `nothing`
+its `index_sets` / `data_sources` merged in), or `nothing`
 when `raw_data` has no such stub (schema §4.7: each block's entry is
 `oneOf [component, {ref}]`). The stub path copies the document (`_to_ordered`,
 order-preserving) so the in-place worker never mutates the caller's tree, and
@@ -1598,20 +1615,6 @@ function _inline_model_subsystems!(
                     _absolutize_nested_refs!(cmodel, compdir)
                     subs[sub_key] = cmodel
                     _merge_native_index_sets!(native, comp, ref; staged = staged, staged_refs = staged_refs)
-                    # The by-name blocks the leaf's AST references travel up with
-                    # it, exactly as at a top-level `models.<k>` mount (the two
-                    # forms are one mechanism, esm-spec §4.7; a hoisted
-                    # `data_sources` block is §8.2.1's case). The parent wins on a
-                    # key clash.
-                    src = get(comp, "function_tables", nothing)
-                    if src isa AbstractDict && !isempty(src)
-                        dst = get!(() -> Dict{String, Any}(), native, "function_tables")
-                        if dst isa AbstractDict
-                            for (k, v) in src
-                                haskey(dst, k) || (dst[k] = v)
-                            end
-                        end
-                    end
                     # esm-spec §4.7 "A mounted document's data sources": own entry wins; two
                     # mounts must contribute identical entries (`data_source_merge_conflict`).
                     _hoist_mounted_sources!(native, comp, "models.$(parent_name).subsystems.$(sub_name) (ref '$(ref)')")
@@ -1688,8 +1691,7 @@ mechanism" forbids the attachment points from differing:
 Only the extraction differs between the two forms: the leaf's single component
 in the matching block, or the one named by the form's selector (`"model"` /
 `"reaction_system"`), is spliced in under the mount key. On top of the shared
-pipeline the leaf's `function_tables` / `data_sources` merge up (parent wins on
-a key clash) and the leaf's inline `tests` are dropped (esm-spec §6.6: they do
+pipeline the leaf's `data_sources` merge up and the leaf's inline `tests` are dropped (esm-spec §6.6: they do
 not cross a mount edge). Cycle detection is PATH-scoped (push on enter, pop on
 exit), so the same single-component file may be mounted under several keys.
 
@@ -1826,19 +1828,8 @@ function _inline_toplevel_form!(
             # importer does NOT silently win a clash: a non-deep-equal collision
             # is the load-time error `subsystem_index_set_conflict`.
             _merge_native_index_sets!(native, comp, ref; staged = staged, staged_refs = staged_refs)
-            # Merge the by-name blocks the component's AST references; the parent
-            # wins on a key clash (its own definitions take precedence). `enums`
-            # is not one of them: it is file-local (esm-spec §9.3), and the leaf's
-            # `enum` ops were already lowered against it at the edge.
-            src = get(comp, "function_tables", nothing)
-            if src isa AbstractDict && !isempty(src)
-                dst = get!(() -> Dict{String, Any}(), native, "function_tables")
-                if dst isa AbstractDict
-                    for (k, v) in src
-                        haskey(dst, k) || (dst[k] = v)
-                    end
-                end
-            end
+            # `enums` do not travel up: they are file-local (esm-spec §9.3), and
+            # the leaf's `enum` ops were already lowered against it at the edge.
             # esm-spec §4.7 "A mounted document's data sources": own entry wins; two
             # mounts must contribute identical entries (`data_source_merge_conflict`).
             _hoist_mounted_sources!(native, comp, "$(form.block).$(name) (ref '$(ref)')")
@@ -2885,7 +2876,7 @@ function _load_remote_ref(
 end
 
 """
-    _prepare_document_ops!(doc) -> Int
+    _prepare_document_ops!(doc; gate = true) -> Nothing
 
 Settle expression-node `op` spellings for ONE document, in three steps:
 
@@ -2893,19 +2884,16 @@ Settle expression-node `op` spellings for ONE document, in three steps:
    identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
    rewrite-target op — the document would load silently and fail much later as
    `unlowered_operator`, or never.
-2. The `faq` version gate, on the AUTHORED form: `faq` arrives at esm 1.1.0
-   (esm-spec §2.2.4, the rule the top-level `solver` block follows). This runs
-   BEFORE normalization deliberately — `aggregate` IS the pre-1.1.0 spelling,
-   so a 1.0.0 document carrying the alias is legal and must not trip this gate.
-3. `aggregate` is normalized to `faq`, ONE `E_DEPRECATED_OP_ALIAS` warning is
-   raised for the document naming the count, and the declared version is raised
-   to the 1.1.0 floor so the upgraded document is self-consistent rather than
-   spelling a 1.1.0 construct under an older version.
-
-Returns the number of nodes normalized.
-See `docs/content/rfcs/faq-node-rename.md`.
+2. The ops and the block esm 2.0.0 removed (`_REMOVED_OPS_2_0_0`, among them
+   `aggregate`, the pre-1.1.0 spelling of `faq`) are rejected BY NAME, for the
+   same reason (`_reject_removed_2_0_0!`).
+3. The `faq` version gate: `faq` arrives at esm 1.1.0 (esm-spec §2.2.4, the
+   rule the top-level `solver` block follows). With `gate = false`
+   (post-inlining: a 1.0.0 parent whose mounted child uses `faq`), the declared
+   version is raised to the 1.1.0 floor instead, the same rule `emit` applies
+   (docs/content/rfcs/faq-node-rename.md §5.5).
 """
-function _prepare_document_ops!(doc; gate::Bool = true)::Int
+function _prepare_document_ops!(doc; gate::Bool = true)::Nothing
     at = _find_op_path(doc, "arrayop")
     if at !== nothing
         throw(
@@ -2913,83 +2901,104 @@ function _prepare_document_ops!(doc; gate::Bool = true)::Int
                 "[E_REMOVED_OP] removed_op at $(at): `\"op\": \"arrayop\"` was " *
                     "removed at esm 0.8.0 and is not a deprecated alias; use " *
                     "`\"op\": \"faq\"` (the Functional Aggregate Query node). " *
-                    "See docs/content/rfcs/faq-node-rename.md."
+                    "See docs/content/rfcs/faq-node-rename.md.";
+                code = ERROR_CODES.REMOVED_OP, path = at
             )
         )
     end
+    _reject_removed_2_0_0!(doc)
     faq_at = _find_op_path(doc, "faq")
-    if gate && faq_at !== nothing && _declared_below_v11(doc)
+    (faq_at !== nothing && _declared_below_v11(doc)) || return nothing
+    if gate
         declared = _get_field(doc, :esm, nothing)
         throw(
             ParseError(
                 "[E_FAQ_VERSION_TOO_OLD] faq_version_too_old at $(faq_at): the " *
-                    "`faq` op arrives at esm 1.1.0; file declares $(declared). Use " *
-                    "`\"op\": \"aggregate\"` (the deprecated pre-1.1.0 spelling) or " *
-                    "raise the declared version. " *
+                    "`faq` op arrives at esm 1.1.0; file declares $(declared). " *
+                    "Raise the declared version. " *
                     "See docs/content/rfcs/faq-node-rename.md."
             )
         )
     end
-    n = _rewrite_op_aliases!(doc)
-    if !gate && faq_at !== nothing && _declared_below_v11(doc)
-        # Post-inlining: the document CONTAINS `faq` without having spelled it
-        # — a legal 1.0.0 parent whose mounted child uses `faq`. Raise the floor
-        # rather than reject, the same rule `emit` applies
-        # (docs/content/rfcs/faq-node-rename.md §5.5).
-        for key in (:esm, "esm")
-            if haskey(doc, key)
-                doc[key] = "1.1.0"
-                break
+    for key in (:esm, "esm")
+        if haskey(doc, key)
+            doc[key] = "1.1.0"
+            break
+        end
+    end
+    return nothing
+end
+
+# The ops and the block esm 2.0.0 removed. Each is replaced by an
+# `esm:std/*.esm` expression template (`aggregate` by `faq`, of which it was
+# the deprecated pre-1.1.0 spelling), and the offline codemod
+# (`python -m earthsci_ast.migrate`) rewrites a 1.x document that uses them.
+const _REMOVED_OPS_2_0_0 = (
+    "fn", "table_lookup", "skolem", "rank", "intersect_polygon",
+    "polygon_intersection_area", "argmin", "argmax", "aggregate",
+)
+
+const _REMOVED_2_0_0_HINT =
+    "removed at esm 2.0.0; run the codemod (`python -m earthsci_ast.migrate`) " *
+    "to rewrite the document onto the `esm:std/*.esm` expression templates"
+
+"""
+    _removed_2_0_0_finding(doc) -> Union{Nothing, Tuple{String, String}}
+
+`(name, path)` of the first construct esm 2.0.0 removed that `doc` uses: an
+expression node whose `op` is one of `_REMOVED_OPS_2_0_0`, or a
+`function_tables` block at the top level or on a model / reaction system.
+`nothing` when there is none.
+"""
+function _removed_2_0_0_finding(doc)
+    _is_object(doc) || return nothing
+    for key in (:function_tables, "function_tables")
+        haskey(doc, key) && return ("function_tables", "/function_tables")
+    end
+    for section in ("models", "reaction_systems")
+        comps = _get_field(doc, Symbol(section), nothing)
+        _is_object(comps) || continue
+        for (cname, comp) in pairs(comps)
+            _is_object(comp) || continue
+            for key in (:function_tables, "function_tables")
+                haskey(comp, key) &&
+                    return ("function_tables", "/$(section)/$(cname)/function_tables")
             end
         end
     end
-    if n > 0
-        if _declared_below_v11(doc)
-            for key in (:esm, "esm")
-                if haskey(doc, key)
-                    doc[key] = "1.1.0"
-                    break
-                end
-            end
-        end
-        @warn string(
-            "[E_DEPRECATED_OP_ALIAS] `\"op\": \"aggregate\"` is the pre-1.1.0 ",
-            "spelling of `\"op\": \"faq\"` (Functional Aggregate Query); ", n,
-            n == 1 ? " node was" : " nodes were", " normalized on load. ",
-            "The alias is REMOVED at esm 2.0.0 — re-emit this document to ",
-            "migrate it (docs/content/rfcs/faq-node-rename.md)."
-        )
+    hit = n -> (op = _get_field(n, :op, nothing); op isa AbstractString && op in _REMOVED_OPS_2_0_0)
+    segs = _find_json_segs(hit, doc)
+    segs === nothing && return nothing
+    path = string((string("/", s) for s in Iterators.reverse(segs))...)
+    node = doc
+    for s in Iterators.reverse(segs)
+        node = s isa Integer ? node[s + 1] : _get_field(node, Symbol(s), nothing)
     end
-    return n
+    return (String(_get_field(node, :op, "")), path)
 end
 
 """
-    _rewrite_op_aliases!(node) -> Int
+    _reject_removed_2_0_0!(doc)
 
-Rewrite every `"op": "aggregate"` to `"op": "faq"` in place; return the count.
-The document arrives both symbol-keyed (in-memory callers) and string-keyed
-(the JSON wire), so the key is probed in both spellings.
+Throw the `removed_op` [`ParseError`](@ref) for the first construct esm 2.0.0
+removed (`_removed_2_0_0_finding`). Runs BY NAME at the wire boundary, before
+schema validation: every removed op is a well-formed identifier, so esm-spec
+§4.2 would otherwise admit it as an open rewrite-target op and the document
+would fail much later as `unlowered_operator`.
 """
-function _rewrite_op_aliases!(node)::Int
-    n = 0
-    if node isa AbstractDict
-        for key in (:op, "op")
-            if haskey(node, key) && get(node, key, nothing) == "aggregate"
-                node[key] = "faq"
-                n += 1
-                break
-            end
-        end
-        for v in values(node)
-            n += _rewrite_op_aliases!(v)
-        end
-    elseif node isa AbstractVector
-        for v in node
-            _is_json_leaf(v) && continue
-            n += _rewrite_op_aliases!(v)
-        end
-    end
-    return n
+function _reject_removed_2_0_0!(doc)
+    f = _removed_2_0_0_finding(doc)
+    f === nothing && return nothing
+    name, at = f
+    what = name == "function_tables" ? "the `function_tables` block" :
+        "`\"op\": \"$(name)\"`"
+    throw(
+        ParseError(
+            "[E_REMOVED_OP] removed_op at $(at): $(what) was $(_REMOVED_2_0_0_HINT).";
+            code = ERROR_CODES.REMOVED_OP, path = at,
+            details = Dict{String, Any}("name" => name)
+        )
+    )
 end
 
 """

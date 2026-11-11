@@ -233,16 +233,6 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
                     push!(offenders, "$(relpath(path, src)):$(n)")
             end
         end
-        # `.strict` also names a table lookup's strictness (`_Interp*Spec`), which
-        # is a property of the document, not of the compiler.
-        filter!(
-            o -> !any(
-                occursin(f, o) for f in (
-                        "acc_merge.jl", "xcse.jl",
-                        "registered_functions.jl",
-                    )
-            ), offenders
-        )
         @test isempty(offenders)
     end
 end

@@ -1,10 +1,10 @@
 import Esm.Float64
 
 /-!
-# Rounding claims of §9.2 `interp.linear` / `interp.bilinear` in binary64
+# Rounding claims of the reference `linear` / `bilinear` in binary64
 
 Against the binary64 model of `Esm/Float64.lean` (finite values, round to
-nearest even, no NaN/∞/signed zero/overflow). The pinned blend of §9.2 is
+nearest even, no NaN/∞/signed zero/overflow). The pinned blend of the reference is
 
 ```
 w      = (x − aᵢ) ⊘ (aᵢ₊₁ − aᵢ)          -- weight64
@@ -344,7 +344,7 @@ theorem weight64_mem (x lo hi : ℝ) (h1 : lo ≤ x) (h2 : x ≤ hi) :
     · rw [← r1]; exact rn_mono ((div_le_one hb).mpr hab)
   · rw [← hb, div_zero, r0]; norm_num
 
-/-- **Q-6**, for `interp.linear` / each blend of `interp.bilinear`: a query `x`
+/-- **Q-6**, for `linear` / each blend of `bilinear`: a query `x`
 in the cell `[lo, hi]` (pinned weight), table values `t, u` doubles: the FMA
 result is within `2 · ulp(max(|t|, |u|))` of the pinned non-FMA result. -/
 theorem linear_fma_le_two_ulp (t u x lo hi : ℝ) (ht : Repr t) (hu : Repr u)
@@ -354,7 +354,7 @@ theorem linear_fma_le_two_ulp (t u x lo hi : ℝ) (ht : Repr t) (hu : Repr u)
   obtain ⟨w0, w1⟩ := weight64_mem x lo hi h1 h2
   exact blend_fma_le_two_ulp t u _ ht hu w0 w1
 
-/-- The constant 2 is attained: `interp.linear([t, u], [0, 1], 0.75)` with
+/-- The constant 2 is attained: `linear([t, u], [0, 1], 0.75)` with
 `t = −(2^53 − 1)·2^-55`, `u = (2^53 − 3)·2^-54` differs between the pinned and
 FMA evaluations by exactly `2 · ulp(max(|t|, |u|))`. -/
 theorem blend_fma_two_ulp_attained :
@@ -380,14 +380,14 @@ theorem blend_fma_two_ulp_attained :
     rw [this]; push_cast; ring
 
 /-- The spec's mixed-FMA relaxation `{ abs: 0, rel: 4e-16 }`, as a claim about
-`interp.linear`: the FMA result is within `4e-16 · |pinned|` of the pinned one.
+`linear`: the FMA result is within `4e-16 · |pinned|` of the pinned one.
 -/
 def RelClaim : Prop :=
   ∀ t u x lo hi : ℝ, Repr t → Repr u → Repr x → Repr lo → Repr hi → lo ≤ x → x ≤ hi →
     |blendFMA t u (weight64 x lo hi) - blend64 t u (weight64 x lo hi)| ≤
       4e-16 * |blend64 t u (weight64 x lo hi)|
 
-/-- The relaxation fails by cancellation: `interp.linear([1, −2], [0, 3], 1)`
+/-- The relaxation fails by cancellation: `linear([1, −2], [0, 3], 1)`
 is `0` pinned (the exact value) and `2^-54` with FMA. -/
 theorem linear_fma_rel_refuted : ¬ RelClaim := by
   intro h
@@ -405,7 +405,7 @@ theorem linear_fma_rel_refuted : ¬ RelClaim := by
 
 /-! ## The endpoint claims -/
 
-/-- §9.2 "w = 0 ⇒ result = tᵢ exactly" holds in binary64 (signed zero aside). -/
+/-- "w = 0 ⇒ result = tᵢ exactly" holds in binary64 (signed zero aside). -/
 theorem blend64_w_zero (t u : ℝ) (ht : Repr t) : blend64 t u 0 = t := by
   simp only [blend64, fadd, fmul, zero_mul, rn_of_repr repr_zero, add_zero, rn_of_repr ht]
 

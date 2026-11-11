@@ -1,0 +1,38 @@
+{
+  "suite": "removed_spellings",
+  "spec": "CONFORMANCE_SPEC.md \u00a77 (`removed_op`); esm-spec \u00a74.2 \"Removed ops\" and \"The `faq` tag\"; docs/content/rfcs/faq-node-rename.md",
+  "description": "The two removed spellings of the Functional Aggregate Query node: `arrayop` (removed at esm 0.8.0) and `aggregate` (a deprecated alias from 1.1.0, removed at 2.0.0). Neither is normalized; both are rejected BY NAME with `removed_op`, in the root and in every referenced document.",
+  "cases": [
+    {
+      "id": "canonical_loads",
+      "input": "canonical.esm",
+      "assert": "loads with no diagnostic, and emit(load(x)) == x (the \u00a79.6.4 fixed point)"
+    },
+    {
+      "id": "aggregate_rejected",
+      "input": "../../invalid/removed_ops/removed_op_aggregate.esm",
+      "assert": "REJECTED with `removed_op` \u2014 `aggregate` was removed at esm 2.0.0 and is no longer normalized"
+    },
+    {
+      "id": "arrayop_rejected",
+      "input": "../../invalid/faq/arrayop_op_removed.esm",
+      "assert": "REJECTED with `removed_op` \u2014 `arrayop` was removed at esm 0.8.0"
+    },
+    {
+      "id": "aggregate_in_referenced_child",
+      "input": "ref_parent_aliased.esm",
+      "assert": "REJECTED with `removed_op` \u2014 the child's removed spelling is caught at the child's own wire boundary"
+    },
+    {
+      "id": "arrayop_in_referenced_child",
+      "input": "ref_parent_arrayop.esm",
+      "assert": "REJECTED with `removed_op` \u2014 the child's removed spelling is caught at the child's own wire boundary"
+    },
+    {
+      "id": "faq_requires_v11",
+      "input": "(any document spelling `faq` while declaring esm < 1.1.0)",
+      "assert": "REJECTED with `faq_version_too_old`"
+    }
+  ],
+  "note": "Some bindings resolve subsystem `{ref}`s during load; TypeScript exposes it as a separate `resolveSubsystemRefs` API. A binding's adapter invokes whatever its load path requires \u2014 the CONTRACT is that once refs are resolved, no removed spelling survives anywhere in the document."
+}

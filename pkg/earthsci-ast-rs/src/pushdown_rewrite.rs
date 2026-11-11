@@ -589,11 +589,24 @@ const APPLY_OP: &str = "apply_expression_template";
 /// from exactly these blocks) — a top-level authored registry is a DECLARATION
 /// that load materialises into the components, so on the `prepare` input form
 /// the per-component block is the registry.
-fn pd_templates(model: &Value) -> Option<&Map<String, Value>> {
-    model
+///
+/// A raw document may still carry the component's `expression_template_imports`
+/// (an `esm:std/...` library, say): those are resolved into the effective
+/// sequence load would fold into the block (imports first, then the
+/// component's own declarations). An import that cannot be resolved leaves only
+/// the component's own block, so the call sites that needed it stay unexpanded
+/// and the pass declines rather than raises.
+fn pd_templates(model: &Value) -> Option<Cow<'_, Map<String, Value>>> {
+    let own = model
         .get("expression_templates")
         .and_then(Value::as_object)
-        .filter(|m| !m.is_empty())
+        .filter(|m| !m.is_empty());
+    let base = std::env::current_dir().unwrap_or_default();
+    match crate::template_imports::component_effective_templates(model, &base, "pushdown_rewrite") {
+        Some(Ok(merged)) if !merged.is_empty() => Some(Cow::Owned(merged)),
+        Some(Ok(_)) => None,
+        _ => own.map(Cow::Borrowed),
+    }
 }
 
 /// Does `node` carry a surviving `apply_expression_template` reference?
@@ -656,9 +669,8 @@ fn pd_expand_for_detection(node: &Value, templates: Option<&Map<String, Value>>)
 /// DETECTION ONLY. The emission side reads [`pd_def`] / [`pd_def_mut`] so it
 /// edits the AUTHORED body (and, for a template-factored one, the call site's
 /// `bindings`) rather than a detached expansion.
-fn pd_detection_defs(model: &Value) -> Map<String, Value> {
+fn pd_detection_defs(model: &Value, templates: Option<&Map<String, Value>>) -> Map<String, Value> {
     let mut out = Map::new();
-    let templates = pd_templates(model);
     if templates.is_none() {
         return out;
     }
@@ -1835,7 +1847,7 @@ impl<'p> PdEmit<'p> {
                 "id": self.faqid.clone(),
                 "join": [pd_overlap_clause(&self.plan.src_env, &self.plan.tgt_env)],
                 "filter": prod_filter,
-                "key": {"op": "skolem", "label": "cell", "args": [self.plan.rep_csym.clone()]},
+                "key": self.plan.rep_csym.clone(),
                 "args": prod_args,
             },
         });
@@ -2004,9 +2016,10 @@ pub fn pushdown_diagnostics(esm: &Value, model_name: Option<&str>) -> Vec<Value>
 #[allow(clippy::type_complexity)]
 fn pd_analyze(model: &Value) -> Option<(Option<Plan>, Vec<Value>, Option<Map<String, Value>>)> {
     model.get("variables")?.as_object()?;
-    let defs = pd_detection_defs(model);
+    let templates = pd_templates(model);
+    let defs = pd_detection_defs(model, templates.as_deref());
     let (plan, diags) = pd_detect(model, &defs);
-    Some((plan, diags, pd_templates(model).cloned()))
+    Some((plan, diags, templates.map(Cow::into_owned)))
 }
 
 // --------------------------------------------------------------------------- //

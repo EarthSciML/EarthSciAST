@@ -310,17 +310,7 @@ const NODE_HEADER_KEYS = ['op', 'id', 'expect_cadence'] as const
 // metaparameter substitution AND copied verbatim by the rename walk; the kind is
 // kept distinct because the two answer different questions about a node (what it
 // IS vs how its op is parameterized).
-const REGISTRY_KEYS = [
-  'reduce',
-  'semiring',
-  'manifold',
-  'fn',
-  'table',
-  'side',
-  'attrs',
-  'members',
-  'from_faq',
-] as const
+const REGISTRY_KEYS = ['reduce', 'semiring', 'fn', 'side', 'attrs', 'members', 'from_faq'] as const
 
 // `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
 // Expression positions — a numeric literal, a parameter reference, an AST
@@ -342,11 +332,8 @@ const OPAQUE_KEYS = [
   // appear, so they are skipped rather than left to that check.
   'on',
   'syms',
-  'arg',
   'output_idx',
   'of',
-  // A `table_lookup` output name.
-  'output',
   'handler_id',
   // References to files, components, data sources, data columns and the
   // import-edge rename vocabulary.
@@ -419,7 +406,6 @@ export const NAME_KEYED_MAP_KEYS: ReadonlySet<string> = new Set<string>([
   'subsystems',
   'expression_templates',
   'ranges',
-  'axes',
   'bindings',
   'config',
   'coords',
@@ -1181,7 +1167,7 @@ function renameDecl(
  * Bound index symbols (loop symbols) of a subtree: the `output_idx` entries and
  * `ranges` keys of every Expression node, at any nesting depth — the binder
  * definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1), which is
- * not limited to `faq` (`argmin` / `argmax` bind the same way). Rebinding one
+ * not limited to `faq`. Rebinding one
  * would desynchronize the ranges KEYS (object keys, unreachable by value
  * substitution) from their `expr` occurrences, so it is rejected outright; a
  * metaparameter spelled like one is `metaparameter_name_conflict`.
@@ -2921,8 +2907,8 @@ function mountRenameWalk(x: unknown, m: Record<string, string>): void {
   } else if (Array.isArray(obj.shape)) {
     // ModelVariable/Parameter `shape` and a `where` constraint's `shape` are
     // ordered index-set names; an ExpressionNode `shape` (reshape's target
-    // extents) and a FunctionTable `shape` are integers, so the `isNode` guard
-    // plus the string test cover both.
+    // extents) is integers, so the `isNode` guard plus the string test cover
+    // both.
     obj.shape = (obj.shape as unknown[]).map((e) => (typeof e === 'string' && e in m ? m[e] : e))
   }
 

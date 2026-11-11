@@ -3,7 +3,7 @@ name = "closed-templates-bench"
 version = "0.0.0"
 edition = "2024"
 publish = false
-description = "Closed-AST phase-4 benchmarks: standard-library templates against the closed forms they replace, hand-written loops and external libraries (Rust tape side)."
+description = "Closed-AST benchmarks: standard-library templates against hand-written loops and external libraries (Rust tape side)."
 license = "AGPL-3.0-only"
 
 # Standalone: not a member of any workspace, so the external-library

@@ -27,7 +27,7 @@ fn diffusion_doc(n: usize) -> String {
     };
     format!(
         r#"{{
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {{"name": "diffusion_1d", "description": "1-D diffusion"}},
  "index_sets": {{"x": {{"kind": "interval", "size": {n}}}}},
  "models": {{"Diffusion": {{

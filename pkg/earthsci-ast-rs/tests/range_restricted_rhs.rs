@@ -49,7 +49,7 @@ static GLOBAL: Counting = Counting;
 fn stencil(n: i64) -> serde_json::Value {
     let idx = |e: serde_json::Value| json!({"op": "index", "args": ["u", e]});
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "stencil", "authors": ["test"]},
         "index_sets": {"x": {"kind": "interval", "size": n}},
         "models": {"S": {
@@ -229,7 +229,7 @@ fn model(
     equations: serde_json::Value,
 ) -> serde_json::Value {
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "review", "authors": ["test"]},
         "index_sets": index_sets,
         "models": {"M": {"variables": variables, "equations": equations}}
@@ -304,7 +304,7 @@ fn select_builds_an_unshaped_mixed_ifelse_at_its_whole_system_shape() {
     // must be built at the shapes the whole system was.
     let n = 3;
     let doc = json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "review", "authors": ["test"]},
         "index_sets": {"cell": {"kind": "interval", "size": n}},
         "models": {
@@ -357,6 +357,79 @@ fn select_builds_an_unshaped_mixed_ifelse_at_its_whole_system_shape() {
             assert_eq!(got, want, "{compiler:?}: du(acc) at w = {w}");
         }
     }
+}
+
+/// esm-spec §4.3.4 in a tile: `X = ifelse(lev < 2, F / D, 0.0)` with
+/// `F: [x]` and `D` a gather from a `const` table is built at the whole `x`
+/// shape, so a tile of `D(u[i]) = X[i] + u[i]` reads the same cells as the
+/// whole program on both arms, the array arm first and second. (An observed
+/// that is a whole-array expression of a STATE is not tiled at all.)
+#[test]
+fn a_tile_builds_an_unshaped_mixed_ifelse_at_the_whole_shape() {
+    let n = 8;
+    let table = json!({"op": "const", "args": [], "value": [31.0, 28.0, 31.0]});
+    let f: Vec<f64> = (1..=n).map(|k| 28.0 * k as f64).collect();
+    let ud = json!({"op": "/", "args": ["F", "D"]});
+    let bodies = [
+        json!({"op": "ifelse", "args": [{"op": "<", "args": ["lev", 2.0]}, ud.clone(), 0.0]}),
+        json!({"op": "ifelse", "args": [{"op": ">=", "args": ["lev", 2.0]}, 0.0, ud]}),
+    ];
+    for body in bodies {
+        for lev in [1.0, 3.0] {
+            let doc = model(
+                json!({"x": {"kind": "interval", "size": n}}),
+                json!({
+                    "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+                    "lev": {"type": "parameter", "units": "1", "default": lev},
+                    "F": {"type": "parameter", "units": "1", "shape": ["x"], "default": f.clone()},
+                    "D": {"type": "unknown", "units": "1"},
+                    "X": {"type": "unknown", "units": "1"}
+                }),
+                json!([
+                    {"lhs": "D", "rhs": ix_expr(table.clone(), json!(2))},
+                    {"lhs": "X", "rhs": body.clone()},
+                    faq_eq(d_of(ix("u", vec![json!("i")])),
+                        json!({"op": "+", "args": [ix("X", vec![json!("i")]), ix("u", vec![json!("i")])]}),
+                        json!({"i": {"from": "x"}}), &["i"])
+                ]),
+            );
+            let prog = program(&doc, Compiler::Native);
+            let gu = varied(prog.layout().u_len);
+            let want = whole_du(&prog, &gu, &[]);
+            let whole = prog.layout().clone();
+            for (lo, hi) in [(1, 2), (3, 5), (6, 8)] {
+                let tile = prog
+                    .tile(&dec(), &tile_box((lo, hi), (lo, hi)))
+                    .unwrap_or_else(|e| panic!("lev = {lev}: tile ({lo}, {hi}): {e}"));
+                let lay = tile.layout().clone();
+                let (b, g) = (&lay.u[0], &whole.u[0]);
+                let mut u = vec![0.0; lay.u_len];
+                for i in lo..=hi {
+                    u[b.slot(&[i]).unwrap()] = gu[g.slot(&[i]).unwrap()];
+                }
+                let p = prog
+                    .parameter_vector(&Default::default())
+                    .expect("defaults");
+                let fs = prog.default_forcing();
+                let mut du = vec![f64::NAN; lay.u_len];
+                let mut ws = tile.new_workspace();
+                tile.eval_into(&u, &[], &p, 0.0, &fs, &mut du, &mut ws)
+                    .expect("eval");
+                for i in lo..=hi {
+                    let (s, w) = (b.slot(&[i]).unwrap(), g.slot(&[i]).unwrap());
+                    assert_eq!(du[s].to_bits(), want[w].to_bits(), "lev = {lev}: u[{i}]");
+                }
+            }
+            for (k, w) in want.iter().enumerate() {
+                let x = if lev < 2.0 { (k + 1) as f64 } else { 0.0 };
+                assert_eq!(*w, x + gu[k], "lev = {lev}: whole du[{k}]");
+            }
+        }
+    }
+}
+
+fn ix_expr(base: serde_json::Value, sub: serde_json::Value) -> serde_json::Value {
+    json!({"op": "index", "args": [base, sub]})
 }
 
 #[test]

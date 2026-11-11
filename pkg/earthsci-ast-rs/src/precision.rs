@@ -70,7 +70,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::compile_error::CompileError;
-use crate::types::Expr;
 
 /// The evaluator's working floating-point precision.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
@@ -599,89 +598,6 @@ pub fn check_index_set_extent(name: &str, size: i64) -> Result<(), CompileError>
     Ok(())
 }
 
-/// Operators whose numeric work happens **outside** the shared scalar kernel
-/// layer, in hand-written binary64 code, and which therefore cannot honour a
-/// Float32 declaration.
-///
-/// Returning the reason (rather than a bare bool) keeps the diagnostic
-/// specific: a Float32 document that uses one of these gets an error naming the
-/// construct, never a subexpression that quietly evaluated in binary64.
-#[must_use]
-pub fn f32_unsupported_reason(op: &str, fn_name: Option<&str>) -> Option<(String, String)> {
-    let geometry = |op: &str| {
-        (
-            format!("operator `{op}`"),
-            "polygon clipping and area are computed by the binary64 geometry \
-             kernels (`crate::geometry`), which have no binary32 form"
-                .to_string(),
-        )
-    };
-    match op {
-        "intersect_polygon" | "polygon_intersection_area" => Some(geometry(op)),
-        "fn" => match fn_name {
-            // Interpolation walks a binary64 table and blends in binary64.
-            Some(n @ ("interp.linear" | "interp.bilinear")) => Some((
-                format!("closed function `{n}`"),
-                "table interpolation is evaluated by the binary64 closed-function \
-                 registry, which has no binary32 form"
-                    .to_string(),
-            )),
-            // A Julian day is ~2.46e6 with a fractional part; binary32 cannot
-            // hold it to better than ~0.25 s, so returning one under Float32
-            // would be a silent precision cliff rather than a rounding.
-            Some(n @ "datetime.julian_day") => Some((
-                format!("closed function `{n}`"),
-                "a Julian day number exceeds binary32's exact-integer range, so \
-                 its fractional part would be destroyed by the declared precision"
-                    .to_string(),
-            )),
-            // The remaining closed functions (`datetime.year`,
-            // `datetime.day_of_year`, `datetime.is_leap_year`,
-            // `interp.searchsorted`) return small exact integers, which binary32
-            // represents exactly.
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Reject every construct in `expr` that cannot be evaluated in binary32.
-///
-/// A no-op unless the active precision is [`Precision::Float32`]; call it from
-/// the compile paths alongside the other operator gates.
-///
-/// # Errors
-///
-/// [`CompileError::Float32Unsupported`] naming the first offending construct.
-pub fn check_f32_supported(expr: &Expr) -> Result<(), CompileError> {
-    if !is_f32() {
-        return Ok(());
-    }
-    check_f32_supported_tree(expr)
-}
-
-fn check_f32_supported_tree(expr: &Expr) -> Result<(), CompileError> {
-    let Expr::Operator(node) = expr else {
-        return Ok(());
-    };
-    let fn_name = node.name.as_deref();
-    if let Some((construct, reason)) = f32_unsupported_reason(&node.op, fn_name) {
-        return Err(CompileError::Float32Unsupported { construct, reason });
-    }
-    let mut first_err: Option<CompileError> = None;
-    node.for_each_child(&mut |child| {
-        if first_err.is_none()
-            && let Err(e) = check_f32_supported_tree(child)
-        {
-            first_err = Some(e);
-        }
-    });
-    match first_err {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,18 +646,6 @@ mod tests {
         // Not a silent fallback to f64.
         assert!(Precision::from_element_type(Some("Float16")).is_err());
         assert!(Precision::from_element_type(Some("float32")).is_err());
-    }
-
-    #[test]
-    fn f32_unsupported_set() {
-        assert!(f32_unsupported_reason("intersect_polygon", None).is_some());
-        assert!(f32_unsupported_reason("polygon_intersection_area", None).is_some());
-        assert!(f32_unsupported_reason("fn", Some("interp.linear")).is_some());
-        assert!(f32_unsupported_reason("fn", Some("interp.bilinear")).is_some());
-        assert!(f32_unsupported_reason("fn", Some("datetime.julian_day")).is_some());
-        assert!(f32_unsupported_reason("fn", Some("interp.searchsorted")).is_none());
-        assert!(f32_unsupported_reason("fn", Some("datetime.year")).is_none());
-        assert!(f32_unsupported_reason("+", None).is_none());
     }
 
     #[test]

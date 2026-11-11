@@ -3,7 +3,10 @@ title: "Renaming the `aggregate` node to `faq`"
 description: "The unified query node is renamed from `aggregate` to `faq` (Functional Aggregate Query) at esm 1.1.0. `aggregate` becomes a deprecated alias, normalized on load with a warning and removed at 2.0.0. The `arrayop` alias — declared removed at 0.8.0 but still live in all five bindings — is removed for real."
 ---
 
-> **Status:** accepted, implemented.
+> **Status:** accepted, implemented. At esm 2.0.0 the `aggregate` alias was
+> removed as planned: it is now rejected with `removed_op`, and
+> `deprecated_op_alias` no longer exists. The 2.0.0 codemod (MIGRATION.md)
+> renames `aggregate` to `faq`.
 > **Scope:** the `op` tag of the unified query node (RFC
 > [`semiring-faq-unified-ir`](semiring-faq-unified-ir.md) §5.6), its schema
 > conditional, its five binding implementations, and the corpus.

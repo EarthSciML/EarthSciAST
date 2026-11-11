@@ -47,8 +47,11 @@ const ESM = EarthSciAST
 _gi_Dt(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
 _gi_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
 _gi_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
-_gi_cst(v) = Dict{String, Any}("op" => "const", "value" => v)
-_gi_fn(nm, a...) = Dict{String, Any}("op" => "fn", "name" => nm, "args" => Any[a...])
+_gi_cst(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
+_gi_apply(nm; b...) = Dict{String, Any}(
+    "op" => "apply_expression_template", "args" => Any[], "name" => nm,
+    "bindings" => Dict{String, Any}(String(k) => v for (k, v) in b)
+)
 _gi_ao(e) = Dict{String, Any}(
     "op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
@@ -62,7 +65,7 @@ _gi_param(v) = Dict{String, Any}("type" => "parameter", "default" => v)
 
 function _gi_doc(name, vars, eqs; index_sets = nothing)
     d = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => name),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => name),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
                 "variables" => vars, "equations" => eqs
@@ -82,8 +85,8 @@ end
 
 # ---- The model battery -------------------------------------------------------
 # Chosen so every access-kernel kind that OWNS a buffer is walked at a Dual value type:
-# GATHER + ghost CONSTVEC (the stencil), INVARIANT (the hoisted `exp(-Ea/T)`), FN (an
-# interp table), STATE/PARAM/TIME/LITERAL, plus the scalar `_Node` path with a live
+# GATHER + ghost CONSTVEC (the stencil), INVARIANT (the hoisted `exp(-Ea/T)`), an
+# interpolation template, STATE/PARAM/TIME/LITERAL, plus the scalar `_Node` path with a live
 # CSE prelude (`_NK_CACHED` — the other eltype-hardwired buffer).
 
 # 1-D reaction–diffusion. `c[i]^2` is the literal-exponent case, and `exp(-Ea/T)`
@@ -165,12 +168,12 @@ function _gi_tv(N)
     )
 end
 
-# interp.linear with a STATE query — the table (`Vector{Float64}` DATA that must NOT
-# be widened) is differentiated through.
+# The `linear` template of lib/interp.esm with a STATE query — the table
+# (`const` DATA that must NOT be widened) is differentiated through.
 function _gi_interp()
     table = Any[0.0, 1.0, 4.0, 9.0, 16.0]
     axis = Any[0.0, 1.0, 2.0, 3.0, 4.0]
-    return _gi_doc(
+    doc = _gi_doc(
         "ITG",
         Dict{String, Any}("y" => _gi_state(default = 1.5), "k" => _gi_param(2.0)),
         Any[
@@ -178,11 +181,18 @@ function _gi_interp()
                 "lhs" => _gi_Dt("y"),
                 "rhs" => _gi_o(
                     "*", "k",
-                    _gi_fn("interp.linear", _gi_cst(table), _gi_cst(axis), "y")
+                    _gi_apply(
+                        "linear"; table = _gi_cst(table), axis = _gi_cst(axis),
+                        x = "y", n = length(axis)
+                    )
                 )
             ),
         ]
     )
+    doc["models"]["M"]["expression_template_imports"] = Any[
+        Dict{String, Any}("ref" => "esm:std/interp.esm", "only" => Any["linear"]),
+    ]
+    return doc
 end
 
 # Deliberately SIGNED: `c[i]^2` must sit on a negative base or the `^` trap is unarmed.
@@ -233,7 +243,7 @@ end
             "reaction-diffusion N=129" => _gi_rd(129),
             "0-D with a CSE prelude" => _gi_zerod(),
             "time-varying + ifelse/trig" => _gi_tv(64),
-            "interp.linear on a state" => _gi_interp(),
+            "linear template on a state" => _gi_interp(),
         ]
         for (name, doc) in cases
             @testset "$name" begin

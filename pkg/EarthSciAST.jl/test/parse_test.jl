@@ -534,7 +534,7 @@ using JSON3
         # rule-1 narrowing at the parse boundary removes.
         doc = """
         {
-          "esm": "1.1.0",
+          "esm": "2.0.0",
           "metadata": { "name": "agg_int_ratio_regression" },
           "index_sets": { "x": { "kind": "interval", "size": 8 } },
           "models": { "M": {

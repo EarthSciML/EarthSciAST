@@ -213,7 +213,7 @@ impl Tables {
         }
 
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "join_on_equality_gate"},
             "index_sets": {
                 "lrows": {"kind": "interval", "size": self.nl()},
@@ -481,7 +481,7 @@ fn categorical_member_key_columns_join_many_to_many() {
     let rate = [10.0, 20.0, 30.0];
 
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "join_on_categorical_members"},
         "index_sets": {
             "lrows": {"kind": "categorical", "members": lmem},
@@ -579,7 +579,7 @@ fn scalar_reduction_drives_both_contracted_symbols_from_the_pairs() {
             obj.insert("filter".into(), eq_filter("lkey", "l", "rkey", "r"));
         }
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "join_on_pairs_drive"},
             "index_sets": {
                 "one": {"kind": "interval", "size": 1},
@@ -725,7 +725,7 @@ fn extra_contracted_axis_still_drives_the_later_gated_symbol() {
         "expr": {"op": "*", "args": [ix("activity", "l"), ix("rate", "r"), "m"]}
     });
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "join_on_extra_axis"},
         "index_sets": {
             "one": {"kind": "interval", "size": 1},

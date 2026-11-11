@@ -1,14 +1,14 @@
 # Elementwise template application (esm-spec §9.6.11), Julia native side.
 #
-# For each `<case>_{fn,tpl,faq}_<size>.esm` triple written by generate.py (in
+# For each `<case>_{tpl,faq}_<size>.esm` pair written by generate.py (in
 # DIR, or, with no DIR or `-`, generated at the default sizes into
 # $TEMPLATE_ARRAY_ARGS_DIR, else template_array_args under $TMPDIR; no document
 # is committed), it reports the build (first,
 # which includes Julia compilation, and a second build of the same document,
 # each with the bytes it allocated), the first right-hand-side call of the first
 # build (which compiles its kernels), the median steady call and
-# the bytes one call allocates, and checks the derivative of `tpl` and `faq`
-# against `fn` bit for bit.
+# the bytes one call allocates, and checks the derivative of `faq` against
+# `tpl` bit for bit.
 #
 # Usage (an environment with EarthSciAST):
 #
@@ -116,11 +116,11 @@ else
     dir = bench_docs(isempty(ARGS) || ARGS[1] == "-" ? nothing : ARGS[1])
     filters = length(ARGS) > 1 ? ARGS[2:end] : String[]
     for f in sort(readdir(dir))
-        m = match(r"^(\w+?)_fn_(.+)\.esm$", f)
+        m = match(r"^(\w+?)_tpl_(.+)\.esm$", f)
         m === nothing && continue
         isempty(filters) || any(occursin(x, f) for x in filters) || continue
         ref = nothing
-        for s in ("fn", "tpl", "faq")
+        for s in ("tpl", "faq")
             path = joinpath(dir, "$(m[1])_$(s)_$(m[2]).esm")
             isfile(path) || continue
             b = try
@@ -133,7 +133,7 @@ else
             if ref === nothing
                 ref = d
             else
-                @printf("    %s bit-identical to fn: %s\n", s, same(d, ref))
+                @printf("    %s bit-identical to tpl: %s\n", s, same(d, ref))
             end
         end
         flush(stdout)

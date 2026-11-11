@@ -1,11 +1,11 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "ValueInventionEdgeEnumerationODE",
     "authors": [
       "EarthSciML Authors and Contributors"
     ],
-    "description": "Build-time value invention feeding a right-hand side. Two triangles {1,2,3} and {2,3,4} share the edge (2,3), so the `distinct` producer over the ragged face_vertices set, keyed by skolem(a, b) with a < b, invents 5 undirected edges. Every key column is an unknown defined by an array `const` node, a constant factor (esm-spec §4.2), so no caller data is needed. `n_edges` integrates the size of the derived set; `area_eff[i]` integrates a contraction over each cell's ragged edge list, gathering per-edge lengths by edge id. From zero initial values at t = 1: n_edges = 5, area_eff = [43, 143.75]."
+    "description": "Build-time value invention feeding a right-hand side. Two triangles {1,2,3} and {2,3,4} share the edge (2,3), so the `distinct` producer over the ragged face_vertices set, keyed by pair_key(a, b, 1, 1, 4, 4) with a < b, invents 5 undirected edges. Every key column is an unknown defined by an array `const` node, a constant factor (esm-spec §4.2), so no caller data is needed. `n_edges` integrates the size of the derived set; `area_eff[i]` integrates a contraction over each cell's ragged edge list, gathering per-edge lengths by edge id. From zero initial values at t = 1: n_edges = 5, area_eff = [43, 143.75]."
   },
   "index_sets": {
     "faces": {
@@ -51,6 +51,14 @@
   },
   "models": {
     "EdgeEnumerationODE": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/relational.esm",
+          "only": [
+            "pair_key"
+          ]
+        }
+      ],
       "variables": {
         "n_verts_on_face": {
           "type": "unknown",
@@ -240,12 +248,17 @@
               ]
             },
             "key": {
-              "op": "skolem",
-              "label": "edge",
-              "args": [
-                "a",
-                "b"
-              ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "pair_key",
+              "bindings": {
+                "a": "a",
+                "b": "b",
+                "lo_a": 1,
+                "lo_b": 1,
+                "n_a": 4,
+                "n_b": 4
+              }
             },
             "expr": {
               "op": "true",

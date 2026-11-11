@@ -25,7 +25,7 @@ function _collect_makearrays!(acc::Vector{OpExpr}, expr::ASTExpr)
     expr.op == "makearray" && push!(acc, expr)
     # Walk every immediate sub-expression via the shared traversal instead of a
     # hand-listed {args, expr_body, values} field walk. `child_exprs` is a strict
-    # superset (it also visits `lower`/`upper`/`filter`/`key`/`table_axes`/dense
+    # superset (it also visits `lower`/`upper`/`filter`/`key`/dense
     # `ranges` bounds), but a `makearray` — a materialized spatial array — never
     # lives inside those scalar-valued fields, so both the set of collected nodes
     # and their depth-first order (`args`, then `expr_body`, then `values`) are
@@ -98,7 +98,7 @@ function _detect_lift_loops(
         end
         # NOTE: this walk deliberately covers only {args, expr_body, values} —
         # NOT the full `child_exprs` field set (which also visits
-        # lower/upper/filter/key/table_axes/dense-ranges bounds). The
+        # lower/upper/filter/key/dense-ranges bounds). The
         # interior-stencil gather this searches for lives in a makearray's
         # `values` (or a body nested under them); widening the walk into the
         # scalar-valued fields could match a gather inside a filter/bound and

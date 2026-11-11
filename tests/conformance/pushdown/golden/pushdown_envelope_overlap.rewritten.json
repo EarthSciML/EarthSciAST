@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -165,13 +165,7 @@
                 }
               }
             ],
-            "key": {
-              "args": [
-                "c"
-              ],
-              "label": "cell",
-              "op": "skolem"
-            },
+            "key": "c",
             "op": "faq",
             "output_idx": [
               "m"

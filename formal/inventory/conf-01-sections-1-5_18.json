@@ -43,7 +43,7 @@
       "class": "semantic",
       "phase": 2,
       "area": "determinism",
-      "note": "Every value-invention output (distinct, skolem, rank, arg-witness, joins) is a function of the input multiset under the defined total order, independent of input order and hashing."
+      "note": "Every value-invention output (distinct, arg-witness, joins) is a function of the input multiset under the defined total order, independent of input order and hashing."
     },
     {
       "id": "conf.5.5.1.float-key-normalized",
@@ -63,14 +63,6 @@
       "phase": 2,
       "area": "determinism",
       "note": "distinct returns the sorted, adjacent-deduplicated sequence under the total order, so its output is invariant under permutation of its input."
-    },
-    {
-      "id": "conf.5.5.1.fingerprint-hash-portable",
-      "section": "5.5.1",
-      "quote": "it MUST be a **portable, seed-pinned, non-cryptographic hash** (e.g. XXH3-64 seed 0) over a **canonical byte serialization**",
-      "class": "out_of_scope",
-      "area": "determinism",
-      "note": "Constrains the hashing technique of an optional, unspecified fingerprint; the model uses canonical tuples and no fingerprint exists in the format to formalize."
     },
     {
       "id": "conf.5.5.1.join-output-sorted",

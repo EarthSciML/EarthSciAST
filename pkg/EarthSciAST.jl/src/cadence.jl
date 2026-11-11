@@ -74,10 +74,8 @@ const CLASS_RANK = Dict("const" => 0, "discrete" => 1, "continuous" => 2)
 const RANK_CLASS = Dict(0 => "const", 1 => "discrete", 2 => "continuous")
 
 # The relational / value-invention ops that may not run on the hot path (§5.7
-# guard 2): one classifying `continuous` is a hard error. Includes the arg-witness
-# reducers (`argmin`/`argmax`, §5.7 rule 6) — a state-dependent assignment is
-# out of scope for v1, exactly like a state-dependent `distinct`.
-const RELATIONAL_OPS = Set(["distinct", "join", "skolem", "rank", "argmin", "argmax"])
+# guard 2): one classifying `continuous` is a hard error.
+const RELATIONAL_OPS = Set(["distinct", "join"])
 
 """
     CadenceError(msg)
@@ -331,8 +329,9 @@ end
 """
     child_exprs(node) -> Vector
 
-Every sub-Expression of a RAW operator node: the operand list `args` plus the
-aggregate/integral sub-fields `expr`, `key`, `filter`, `lower`, `upper`.
+Every sub-Expression of a RAW operator node: the operand list `args`, the
+aggregate/integral sub-fields `expr`, `key`, `filter`, `lower`, `upper`, and an
+`apply_expression_template` call's `bindings` values.
 `output_idx`, `ranges`, `wrt`, `dim`, `var` are index/metadata declarations
 (`const`), not value inputs, and are excluded. (The typed-IR analogue is the
 generated `child_exprs` walker in expression.jl; this raw twin exists only
@@ -348,6 +347,12 @@ function child_exprs(node::AbstractDict)
     end
     for field in ("expr", "key", "filter", "lower", "upper")
         haskey(node, field) && push!(out, node[field])
+    end
+    # A template body reads only its bindings, so a call's class is the join
+    # of its bindings' classes.
+    if get(node, "op", nothing) == "apply_expression_template"
+        b = get(node, "bindings", nothing)
+        b isa AbstractDict && append!(out, values(b))
     end
     return out
 end
@@ -472,7 +477,7 @@ end
 """
     assert_no_continuous_relational(node, model)
 
-§5.7 guard 2: a `distinct`/`join`/`skolem`/`rank` node (or a `distinct`
+§5.7 guard 2: a `distinct`/`join` node (or a `distinct`
 aggregate) that classifies `continuous` is rejected — state-dependent topology
 may not run on the per-step hot path in v1. Throws [`CadenceError`](@ref).
 """
@@ -486,7 +491,7 @@ function assert_no_continuous_relational(node, model, memo::ClassMemo = ClassMem
             CadenceError(
                 "relational/value-invention node op=$(repr(op)) classifies CONTINUOUS — " *
                     "it may not run on the hot path (§5.7 guard 2). A state-dependent " *
-                    "distinct/join/skolem/rank is out of scope for v1."
+                    "distinct/join is out of scope for v1."
             )
         )
     end

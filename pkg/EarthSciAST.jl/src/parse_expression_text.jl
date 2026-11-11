@@ -16,21 +16,15 @@ Coverage:
  - scalar tier: arithmetic, powers, comparisons, boolean logic, elementary
    functions, derivatives (`D(x)/Dt` and `D(x, t)`), open/user function calls;
  - array & call-shaped tier: array literals `[…]` (`const`), indexing
-   `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
-   the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
+   `a[i, j]` (`index`), the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
  - reduction & array-query tier: `faq` reductions
    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
    key=k [semiring=…]` (all clause shapes, including `syms=[…]` and
-   `overlap(src=[…], tgt=[…], eps=…)` join clauses), the `argmin`/`argmax`
-   arg-witnesses `argmin[g] (expr) where {…} join(…) if pred`, the labeled
-   `skolem(a, b, label=edge)`, template application
-   `name<binding = value, …>` (`apply_expression_template`),
-   `polygon_intersection_area(a, b, manifold=…)`,
-   `intersect_polygon(a, b, manifold=…[, id=…])`, the `table_lookup` bracket
-   form `visc[T=temp]` / `k_rate[T=temp, p=pres]:1`, and the piecewise-region
-   array `makearray([lo:hi, …] = value, …)`. The RFC §6.1 node `id` is read
-   back wherever `to_ascii` emits it: as a trailing named argument on the
-   geometry ops, and as a bare-name clause on aggregates and arg-witnesses.
+   `overlap(src=[…], tgt=[…], eps=…)` join clauses), template application
+   `name<binding = value, …>` (`apply_expression_template`), and the
+   piecewise-region array `makearray([lo:hi, …] = value, …)`. The RFC §6.1
+   node `id` is read back where `to_ascii` emits it: as a bare-name clause on
+   aggregates.
 
 Aggregate `args` is a derived operand cache the printer doesn't emit; it's
 reconstructed best-effort (see `_tp_derive_aggregate_args`) and is
@@ -39,8 +33,8 @@ reconstructs as a plain `+` reduction — the join-less `sum_product` annotation
 (semantically identical there) is not recovered; both reprint identically.
 
 Still deferred (need dedicated surface syntax — a later pass): `broadcast` and
-`enum`. Those are refused with an [`ExpressionParseError`](@ref), as is the
-CALL spelling `table_lookup(…)` (its real surface is `visc[T=temp]`).
+`enum`. Those are refused with an [`ExpressionParseError`](@ref), as is a
+dotted callee (`a.b(x)`), which names no op.
 
 Design rules: multiplication is ALWAYS explicit (`k * A`) — no implicit
 juxtaposition, because identifiers are multi-letter (`NO2`, `O3`, `k_photo`).
@@ -49,8 +43,8 @@ serialization, and unary-minus operands being under-parenthesized (`-(a+b)` and
 `(-a)+b` both print `-a + b`) — the parser matches the printer's loose
 convention. Because the printer is not injective,
 `parse_expression(to_ascii(ast))` is a faithful SEMANTIC round-trip but may
-normalize structure (flat vs. nested `+`; a scalar `const`/`fn` with a
-non-dotted name reprints identically to a plain number/op). Editors should
+normalize structure (flat vs. nested `+`; a scalar `const` reprints
+identically to a plain number). Editors should
 treat text as a derived view and re-parse only dirtied expressions.
 
 Note that the JSON (wire → typed IR) decoder is a DIFFERENT entry point,
@@ -109,15 +103,11 @@ const _TP_TEMPLATE_ARG_MIN = get_operator_precedence("+")
 """
 Structural ops whose defining data lives OUTSIDE `args` AND which have no text
 surface yet — refused, pending a dedicated syntax pass. (`integral`, `reshape`,
-`transpose`, `concat`, `fn`, `const`, `index`, `true`, `false`, `faq`,
-`apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
-`makearray` DO have a surface and are reconstructed below; they are
-intentionally absent here. `table_lookup` IS listed: its surface is the bracket
-form `visc[T=temp]`, parsed in `_tp_parse_table_lookup` without going through
-`_tp_make_call`, so the CALL spelling `table_lookup(a)` — which the printer
-never emits — stays refused.)
+`transpose`, `concat`, `const`, `index`, `true`, `false`, `faq`,
+`apply_expression_template`, `makearray` DO have a surface and are
+reconstructed below; they are intentionally absent here.)
 """
-const _TP_STRUCTURAL_OPS = Set{String}(["table_lookup", "broadcast", "enum"])
+const _TP_STRUCTURAL_OPS = Set{String}(["broadcast", "enum"])
 
 """
 The aggregate reduction symbols `to_ascii` emits (`format_aggregate`). Each maps
@@ -125,8 +115,6 @@ to a default `reduce` when no explicit `[semiring=…]` supersedes it; `sum` and
 `any` carry no `reduce` field (plain `+` / semiring-only).
 """
 const _TP_AGG_SYMS = Set{String}(["sum", "prod", "max", "min", "any"])
-"""Arg-witness reductions (`format_arg_witness`): `argmin[g] (expr) where {…}`."""
-const _TP_ARGWITNESS_SYMS = Set{String}(["argmin", "argmax"])
 const _TP_REDUCE_BY_SYM = Dict{String, Union{String, Nothing}}(
     "sum" => nothing,
     "prod" => "*",
@@ -166,8 +154,7 @@ _tp_isdigit(c::Char) = '0' <= c <= '9'
 
 # Identifiers allow Unicode letters (Greek variables like `ΔF_net`, `Φ`),
 # Unicode numbers (subscript/superscript digits in names like `k₀`, `M₁`), and
-# dots (qualified refs like `Emissions.NO`, and dotted closed-function names
-# like `datetime.year`, which `_tp_make_call` turns into `fn` nodes). A leading
+# dots (qualified refs like `Emissions.NO`). A leading
 # digit still can't start an identifier (numbers lex first).
 #
 # `∂` (U+2202) and `∇` (U+2207) are also name-constituents: source variables are
@@ -399,14 +386,6 @@ function _tp_parse_postfix(ps::_TPParser)
         # expression).
         nxt = _tp_peek(ps, 1)
         (nxt.kind === :name && nxt.val == "semiring") && break
-        # `name[axis=expr, …]` is a `table_lookup` (format_structural_op), not an
-        # index: `=` is never an expression operator (only `==` is), so a `name`
-        # `=` pair inside the brackets discriminates the two unambiguously. Only
-        # a bare variable can name a table.
-        if node isa VarExpr && nxt.kind === :name && _tp_peek(ps, 2).kind === :eq
-            node = _tp_parse_table_lookup(ps, (node::VarExpr).name)
-            continue
-        end
         _tp_next!(ps)  # '['
         idx = ASTExpr[_tp_parse_expr(ps, 0)]
         while _tp_peek(ps).kind === :comma
@@ -470,11 +449,6 @@ function _tp_parse_atom(ps::_TPParser)
         if name in _TP_AGG_SYMS && _tp_peek(ps).kind === :lbracket &&
                 _tp_aggregate_ahead(ps)
             return _tp_parse_aggregate(ps, name)
-        end
-        # Arg-witness reduction `argmin[g] (expr) where {…}` (same `[…] (` shape).
-        if name in _TP_ARGWITNESS_SYMS && _tp_peek(ps).kind === :lbracket &&
-                _tp_aggregate_ahead(ps)
-            return _tp_parse_arg_witness(ps, name)
         end
         return VarExpr(name)  # bare variable / species / qualified reference
     end
@@ -656,55 +630,8 @@ function _tp_parse_aggregate(ps::_TPParser, sym::AbstractString)
 end
 
 """
-Parse an `argmin` / `argmax` arg-witness (esm-spec §4.2) — the inverse of
-`format_arg_witness`: `op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?
-('join' '(' … ')')? ('if' filter)? ('id' '=' name)?`.
-Like aggregate, its `args` operand cache isn't printed and is derived.
-"""
-function _tp_parse_arg_witness(ps::_TPParser, op::AbstractString)
-    _tp_next!(ps)  # '['
-    at = _tp_next!(ps)
-    at.kind === :name || _tp_fail_at(at, "Expected the arg-witness index name")
-    _tp_expect!(ps, :rbracket, "']' after the arg-witness index")
-    _tp_expect!(ps, :lparen, "'(' before the arg-witness body")
-    body = _tp_parse_expr(ps, 0)
-    _tp_expect!(ps, :rparen, "')' after the arg-witness body")
-    ranges = Dict{String, Any}()
-    if _tp_at_word(ps, "where")
-        _tp_next!(ps)
-        ranges = _tp_parse_ranges(ps)
-    end
-    # The candidate-pruning `join(…)` and `if` filter, exactly as on `faq`.
-    joins = Any[]
-    if _tp_at_word(ps, "join")
-        _tp_next!(ps)
-        append!(joins, _tp_parse_join(ps))
-    end
-    filt = nothing
-    if _tp_at_word(ps, "if")
-        _tp_next!(ps)
-        filt = _tp_parse_expr(ps, 0)
-    end
-    # `id=<name>` (RFC §6.1 node identity), emitted by `format_arg_witness`
-    # after the filter. Mirrors the aggregate tail.
-    id = _tp_parse_id_clause!(ps)
-    return OpExpr(
-        String(op),
-        ASTExpr[
-            VarExpr(n) for n in
-                _tp_derive_aggregate_args(body, joins, filt, nothing)
-        ];
-        arg = at.val::String, ranges = ranges,
-        join = isempty(joins) ? nothing : joins, filter = filt,
-        id = id, expr_body = body
-    )
-end
-
-"""
 Read the optional bare-name `id=<name>` clause (RFC §6.1 node identity) that
-`format_aggregate` / `format_arg_witness` emit, returning `nothing` when absent.
-Deliberately NOT part of the `[…]` suffix — putting it there would collide with
-`table_lookup`'s `name[axis=…]` bracket surface.
+`format_aggregate` emits, returning `nothing` when absent.
 """
 function _tp_parse_id_clause!(ps::_TPParser)
     (_tp_at_word(ps, "id") && _tp_peek(ps, 1).kind === :eq) || return nothing
@@ -713,42 +640,6 @@ function _tp_parse_id_clause!(ps::_TPParser)
     nm = _tp_next!(ps)
     nm.kind === :name || _tp_fail_at(nm, "Expected a name after id=")
     return nm.val::String
-end
-
-"""
-Parse a `table_lookup` from the surface `format_structural_op` emits:
-`table '[' axis '=' expr (',' axis '=' expr)* ']' (':' <integer>)?`, e.g.
-`visc[T=temp]` and `k_rate[T=temp, p=pres]:1`. The printer sorts the axis names,
-so the reconstructed `axes` map reprints identically.
-"""
-function _tp_parse_table_lookup(ps::_TPParser, table::AbstractString)
-    _tp_expect!(ps, :lbracket, "'['")
-    axes = Dict{String, ASTExpr}()
-    while true
-        nm = _tp_next!(ps)
-        nm.kind === :name || _tp_fail_at(nm, "Expected an axis name in table[axis=…]")
-        _tp_expect!(ps, :eq, "'=' in table[axis=…]")
-        axes[nm.val::String] = _tp_parse_expr(ps, 0)
-        if _tp_peek(ps).kind === :comma
-            _tp_next!(ps)
-            continue
-        end
-        break
-    end
-    _tp_expect!(ps, :rbracket, "']' after table[axis=…]")
-    # The optional `:N` output selector picks one column of a multi-output table.
-    output = nothing
-    if _tp_peek(ps).kind === :colon
-        _tp_next!(ps)
-        out = _tp_next!(ps)
-        (out.kind === :num && isinteger(out.val::Float64)) ||
-            _tp_fail_at(out, "Expected an integer output index after table[…]:")
-        output = Int(out.val::Float64)
-    end
-    return OpExpr(
-        "table_lookup", ASTExpr[];
-        table = String(table), table_axes = axes, output = output
-    )
 end
 
 """Parse a `{ k in <rhs>, … }` where-body into a ranges map."""
@@ -1045,10 +936,13 @@ function _tp_make_call(
         name::String, args::Vector{ASTExpr},
         named::Dict{String, ASTExpr}, order::Vector{String}, pos::Int
     )
-    # A dotted callee is a closed function — an `fn` node carrying the name.
+    # A removed op is refused by name, as the wire boundary refuses it.
+    if name in _REMOVED_OPS_2_0_0
+        throw(ExpressionParseError("removed_op: '$name' was $(_REMOVED_2_0_0_HINT)", pos))
+    end
+    # A dotted name is a qualified variable reference, never an op.
     if occursin('.', name)
-        _tp_no_named(named, order, name, pos)
-        return OpExpr("fn", args; name = name)
+        throw(ExpressionParseError("'$name' names no op: a dotted name cannot be called", pos))
     end
     # Call-shaped structural ops: reconstruct their non-`args` fields from the
     # positional / named arguments `to_ascii` renders.
@@ -1088,38 +982,6 @@ function _tp_make_call(
             "concat", args;
             axis = _tp_int_literal(axis, "concat(...) axis", pos)
         )
-    end
-    # Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
-    # `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
-    # node identity) is optional and only emitted by the printer when present.
-    if name == "polygon_intersection_area" || name == "intersect_polygon"
-        manifold = get(named, "manifold", nothing)
-        manifold isa VarExpr ||
-            throw(ExpressionParseError("$name(...) requires manifold=<name>", pos))
-        for k in order
-            (k == "manifold" || k == "id") ||
-                throw(ExpressionParseError("unexpected $k=… in $name(...)", pos))
-        end
-        idv = get(named, "id", nothing)
-        if idv !== nothing && !(idv isa VarExpr)
-            throw(ExpressionParseError("$name(...) id=… must be a name", pos))
-        end
-        return OpExpr(
-            name, args;
-            manifold = (manifold::VarExpr).name,
-            id = idv === nothing ? nothing : (idv::VarExpr).name
-        )
-    end
-    # `skolem(a, b, label=<name>)` — the documentary relation tag.
-    if name == "skolem" && haskey(named, "label")
-        for k in order
-            k == "label" ||
-                throw(ExpressionParseError("unexpected $k=… in skolem(...)", pos))
-        end
-        lbl = named["label"]
-        lbl isa VarExpr ||
-            throw(ExpressionParseError("skolem(...) label=… must be a name", pos))
-        return OpExpr("skolem", args; label = (lbl::VarExpr).name)
     end
     _tp_no_named(named, order, name, pos)
     if name in _TP_STRUCTURAL_OPS
@@ -1210,7 +1072,7 @@ function _tp_bases!(out::Vector{String}, e)
             end
         end
     end
-    for f in (:bindings, :table_axes)
+    for f in (:bindings,)
         m = getfield(e, f)
         m === nothing && continue
         for k in sort(collect(keys(m)))
@@ -1226,7 +1088,7 @@ end
 Flatten nested same-op `+` / `*` / `and` / `or` in `args` into the n-ary form the
 printer emits and authored ASTs use: `a + b + c` → one `+` with three args, not
 left-nested pairs. (`-` and `/` are binary and stay as parsed.) A reduction's
-`expr` / `filter` / `key` (`faq`, `argmin`, `argmax`) are flattened too; other
+`expr` / `filter` / `key` (`faq`) are flattened too; other
 non-`args` expression fields (integral bounds, …) are left as parsed — exactly as
 in the reference implementation.
 

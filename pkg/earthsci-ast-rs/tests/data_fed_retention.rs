@@ -46,7 +46,7 @@ fn document(integrating: bool) -> Value {
         equations.push(json!({"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "total"}));
     }
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Retention", "description": "Two ingested columns, one read."},
         "data_sources": {"table": {"kind": "static", "source": {"url_template": "./table.parquet"}}},
         "index_sets": {"rows": {"kind": "interval", "size": 4}},

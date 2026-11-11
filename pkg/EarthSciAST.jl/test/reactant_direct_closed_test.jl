@@ -76,7 +76,7 @@ function _ct_doc(body, libs; np = 12, ng = 6, extra_vars = Dict{String, Any}(), 
         ),
     ]
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict{String, Any}("name" => "ClosedShapes"),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "ClosedShapes"),
         "index_sets" => Dict{String, Any}(
             "p" => Dict{String, Any}("kind" => "interval", "size" => np),
             "g" => Dict{String, Any}("kind" => "interval", "size" => ng)

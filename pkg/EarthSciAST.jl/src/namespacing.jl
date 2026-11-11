@@ -81,19 +81,49 @@ end
 const _NO_SHADOW = Set{String}()
 const _NsMemo = IdDict{OpExpr, ASTExpr}
 const _NsMemos = Dict{Set{String}, _NsMemo}
+# Template name → the loop symbols its body binds (`template_captures`).
+const _TplCaptures = Dict{String, Set{String}}
+const _NO_CAPTURES = _TplCaptures()
 _namespace_expr(
     e::NumExpr, ::String, ::Set{String}, ::Set{String}, ::_NsMemo,
-    ::_NsMemos
+    ::_NsMemos, ::_TplCaptures
 ) = e
 _namespace_expr(
     e::IntExpr, ::String, ::Set{String}, ::Set{String}, ::_NsMemo,
-    ::_NsMemos
+    ::_NsMemos, ::_TplCaptures
 ) = e
 _namespace_expr(
     e::VarExpr, prefix::String, local_names::Set{String},
-    shadowed::Set{String}, ::_NsMemo, ::_NsMemos
+    shadowed::Set{String}, ::_NsMemo, ::_NsMemos, ::_TplCaptures
 ) =
     namespace_expr(e, prefix, local_names, shadowed)
+
+"""
+    template_captures(block) -> Dict{String, Set{String}}
+
+For each template of a component's `expression_templates` block (raw JSON),
+the loop symbols its body binds (`output_idx` entries, `ranges` keys,
+`integral` variables). Template application is pure substitution, so a name in
+a call's binding value that the body binds at the substitution site is that
+loop index after expansion, not a reference to a component variable of the
+same name (`lib/relational.esm`'s `argmin` relies on this: its candidate
+binding reads the body's loop symbol).
+"""
+function template_captures(block)::_TplCaptures
+    out = _TplCaptures()
+    (block === nothing || !_is_object(block)) && return out
+    for (tname, decl) in pairs(block)
+        body_raw = _raw_get(decl, "body")
+        body_raw === nothing && continue
+        bound = Set{String}()
+        visit(x) = (x isa OpExpr && union!(bound, _bound_symbols(x)); nothing)
+        body = expression_from_json(body_raw)
+        visit(body)
+        foreach_subexpr(visit, body)
+        isempty(bound) || (out[string(tname)] = bound)
+    end
+    return out
+end
 
 # The binder set is THIS node's own loop symbols: its `output_idx` entries and
 # `ranges` keys. A join column is resolved against this node's `ranges`, so its
@@ -164,19 +194,24 @@ end
 
 function namespace_expr(
         expr::OpExpr, prefix::String,
-        local_names::Set{String}
+        local_names::Set{String};
+        captures::_TplCaptures = _NO_CAPTURES
     )::ASTExpr
     memo = _NsMemo()
     return _namespace_expr(
         expr, prefix, local_names, _NO_SHADOW, memo,
-        _NsMemos(_NO_SHADOW => memo)
+        _NsMemos(_NO_SHADOW => memo), captures
     )
 end
+namespace_expr(
+    expr::Union{NumExpr, IntExpr, VarExpr}, prefix::String,
+    local_names::Set{String}; captures::_TplCaptures = _NO_CAPTURES
+) = namespace_expr(expr, prefix, local_names)
 
 function _namespace_expr(
         expr::OpExpr, prefix::String,
         local_names::Set{String}, shadowed::Set{String},
-        memo::_NsMemo, memos::_NsMemos
+        memo::_NsMemo, memos::_NsMemos, captures::_TplCaptures
     )::ASTExpr
     r = get(memo, expr, nothing)
     r === nothing || return r
@@ -201,10 +236,25 @@ function _namespace_expr(
         child_shadowed === shadowed ||
             (child_memo = get!(_NsMemo, memos, child_shadowed))
     end
+    # A template call's bindings are substituted into its body, so a binding
+    # name the body binds as a loop symbol is that loop index (see
+    # `template_captures`), not the component variable of the same name.
+    if expr.op == "apply_expression_template" && expr.name !== nothing
+        cap = get(captures, expr.name::String, nothing)
+        if cap !== nothing
+            for b in cap
+                (b in local_names && !(b in child_shadowed)) || continue
+                child_shadowed === shadowed && (child_shadowed = copy(shadowed))
+                push!(child_shadowed, b)
+            end
+            child_shadowed === shadowed ||
+                (child_memo = get!(_NsMemo, memos, child_shadowed))
+        end
+    end
     # Recurse into EVERY variable-bearing sub-expression via the shared
     # field-preserving rewrite so prefix rewrites reach faq / makearray
     # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
-    # table_lookup per-axis input expressions, makearray `values`, value-invention
+    # makearray `values`, value-invention
     # `key`, expression-valued dense `ranges` bounds, AND expression-template
     # `bindings` values (esm-spec §9.6.4 rule 7 / §10.7: template `params` —
     # the map's KEYS — never namespace, they are the template's formal
@@ -212,13 +262,11 @@ function _namespace_expr(
     # rewrites exactly the values). An explicit `bindings` carve-out used to
     # live here because `map_children` skipped that field. `map_children`
     # routes through `reconstruct`, preserving all non-expression fields
-    # (semiring, output_idx, table, output, int_var, join/join_gates,
-    # manifold, …) — earlier this rebuild hand-listed keywords and silently
-    # dropped int_var/lower/upper/table/table_axes/output.
+    # (semiring, output_idx, int_var, join/join_gates, manifold, …).
     result = map_children(
         x -> _namespace_expr(
             x, prefix, local_names, child_shadowed, child_memo,
-            memos
+            memos, captures
         ),
         expr
     )::OpExpr
@@ -363,7 +411,8 @@ function _collect_model!(
         continuous_events::Vector{ContinuousEvent},
         discrete_events::Vector{DiscreteEvent},
         model::Model, prefix::String;
-        tpl_rename::Union{Nothing, AbstractDict{String, String}} = nothing
+        tpl_rename::Union{Nothing, AbstractDict{String, String}} = nothing,
+        tpl_captures::_TplCaptures = _NO_CAPTURES
     )
     local_names = Set{String}(keys(model.variables))
     # Also include subsystem-qualified names from this level's subsystems so
@@ -373,8 +422,11 @@ function _collect_model!(
     end
 
     # Namespace, then follow the registry rename (identity when there is none).
-    _ns(e) = tpl_rename === nothing ? namespace_expr(e, prefix, local_names) :
-        _rename_expr_apply_refs(namespace_expr(e, prefix, local_names), tpl_rename)
+    _ns(e) = tpl_rename === nothing ?
+        namespace_expr(e, prefix, local_names; captures = tpl_captures) :
+        _rename_expr_apply_refs(
+            namespace_expr(e, prefix, local_names; captures = tpl_captures), tpl_rename
+        )
 
     # esm-spec v0.8.0: index sets are a single document-scoped registry (seeded
     # once by `flatten` from the top-level object) with plain names shared by every
@@ -445,7 +497,7 @@ function _collect_model!(
             states, params, observeds, equations, contribs,
             continuous_events, discrete_events,
             sub_model, "$(prefix).$(sub_name)";
-            tpl_rename = tpl_rename
+            tpl_rename = tpl_rename, tpl_captures = tpl_captures
         )
     end
     return

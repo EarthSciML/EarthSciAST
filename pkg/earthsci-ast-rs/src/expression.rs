@@ -57,7 +57,7 @@ pub fn contains(expr: &Expr, var_name: &str) -> bool {
 /// Applies constant folding and the identity/absorbing-element rules for
 /// binary `+`, `*`, and `^`. Children are simplified first — including
 /// sidecar expressions (aggregate bodies, `filter`, integral bounds,
-/// makearray `values`, `table_lookup` axes) — and operator nodes are rebuilt
+/// makearray `values`) — and operator nodes are rebuilt
 /// with [`crate::types::ExpressionNode::map_children`], so all node metadata
 /// is preserved.
 pub fn simplify(expr: &Expr) -> Expr {
@@ -145,7 +145,7 @@ fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
 /// variable names if any variable in `expr` is missing from `bindings`, or
 /// carrying the diagnostic (`unlowered_operator` / `unevaluable_operator`, with
 /// the op named) for an operator this evaluator cannot evaluate — including the
-/// array, tensor and geometry ops, which have no value over scalar bindings.
+/// array and tensor ops, which have no value over scalar bindings.
 /// That check runs over the whole expression before any of it is evaluated
 /// (esm-spec §9.6.6). Genuine MATH errors (division by zero, the log of a
 /// non-positive number) are not errors: they come back as `NaN` or `±inf` in
@@ -370,8 +370,8 @@ mod tests {
     /// behaviour change. Every member is refused BY NAME, as
     /// `unevaluable_operator`.
     ///
-    /// It is the array oracle's own nine-op gap plus what has no value over
-    /// scalar bindings: the array / tensor and geometry ops, an array `const`
+    /// It is the array oracle's own four-op gap plus what has no value over
+    /// scalar bindings: the array / tensor ops, an array `const`
     /// (the bare node here carries no value at all), and a structural `D`,
     /// which never legitimately reaches evaluation (esm-spec §4.2) and would
     /// otherwise come back as the oracle's `NaN` sentinel.
@@ -422,9 +422,7 @@ mod tests {
             "Pre",
             "const",
             "true",
-            "fn",
             "enum",
-            "table_lookup",
             "apply_expression_template",
             "faq",
             "makearray",
@@ -433,13 +431,7 @@ mod tests {
             "reshape",
             "transpose",
             "concat",
-            "skolem",
-            "rank",
             "distinct",
-            "argmin",
-            "argmax",
-            "intersect_polygon",
-            "polygon_intersection_area",
         ];
         let mut gap: Vec<&str> = Vec::new();
         for op in CORE {
@@ -462,8 +454,6 @@ mod tests {
             vec![
                 "D",
                 "apply_expression_template",
-                "argmax",
-                "argmin",
                 "broadcast",
                 "concat",
                 "const",
@@ -472,13 +462,8 @@ mod tests {
                 "faq",
                 "ic",
                 "index",
-                "intersect_polygon",
                 "makearray",
-                "polygon_intersection_area",
-                "rank",
                 "reshape",
-                "skolem",
-                "table_lookup",
                 "transpose",
             ]
         );
@@ -490,13 +475,14 @@ mod tests {
     fn a_nested_op_with_no_scalar_value_is_refused_too() {
         let outer = Expr::operator(ExpressionNode {
             op: "+".to_string(),
-            args: vec![Expr::Number(1.0), node_with_legal_arity("rank")],
+            args: vec![Expr::Number(1.0), node_with_legal_arity("distinct")],
             ..Default::default()
         });
-        let err = evaluate(&outer, &HashMap::new()).expect_err("a nested `rank` must not evaluate");
+        let err =
+            evaluate(&outer, &HashMap::new()).expect_err("a nested `distinct` must not evaluate");
         assert!(
             err.iter()
-                .any(|m| m.contains("unevaluable_operator") && m.contains("rank")),
+                .any(|m| m.contains("unevaluable_operator") && m.contains("distinct")),
             "{err:?}"
         );
     }
@@ -533,49 +519,5 @@ mod tests {
                 .any(|m| m.contains("unevaluable_operator") && m.contains("const")),
             "{err:?}"
         );
-    }
-
-    /// The scalar-value gate runs BEFORE the §11.3 Float32 gate. The two
-    /// geometry ops trip both — `precision::f32_unsupported_reason` names them
-    /// — and `unevaluable_operator` is the more fundamental answer: declaring
-    /// `Float64` would not make either evaluable over scalar bindings.
-    #[test]
-    fn the_scalar_value_gate_precedes_the_float32_gate() {
-        for op in ["intersect_polygon", "polygon_intersection_area"] {
-            assert!(
-                crate::precision::f32_unsupported_reason(op, None).is_some(),
-                "{op} must be one of the ops that trips BOTH gates, or this pins nothing"
-            );
-            let _f32 = crate::precision::enter(crate::precision::Precision::Float32);
-            let err = crate::simulate_array::check_scalar_evaluable(&node_with_legal_arity(op))
-                .expect_err("an op with no scalar value must be refused under Float32 too");
-            assert!(
-                matches!(
-                    err,
-                    crate::compile_error::CompileError::UnevaluableOperatorError { op: ref got }
-                        if got == op
-                ),
-                "{op} must report `unevaluable_operator`, not `float32_unsupported`: {err:?}"
-            );
-        }
-    }
-
-    /// A `fn` call's inline table and axis are array `const`s, and they are
-    /// what `interp.linear` reads — the gate admits them there, and the call
-    /// evaluates.
-    #[test]
-    fn a_fn_table_argument_is_admitted() {
-        let expr: Expr = serde_json::from_value(serde_json::json!({
-            "op": "fn",
-            "name": "interp.linear",
-            "args": [
-                { "op": "const", "value": [10.0, 20.0, 40.0], "args": [] },
-                { "op": "const", "value": [0.0, 1.0, 2.0], "args": [] },
-                "code"
-            ]
-        }))
-        .expect("expression decodes");
-        let bindings: HashMap<String, f64> = [("code".to_string(), 1.5)].into_iter().collect();
-        assert_eq!(evaluate(&expr, &bindings).expect("evaluates"), 30.0);
     }
 }

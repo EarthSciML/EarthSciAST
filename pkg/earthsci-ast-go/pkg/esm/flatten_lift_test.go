@@ -141,28 +141,6 @@ func TestPointwiseLiftRefusesAnOperandOnAForeignIndexSet(t *testing.T) {
 	}
 }
 
-// A shaped variable sharing no index set with the grid, passed to a closed
-// function, is that function's whole-array argument (a lookup table, say) and
-// stays bare. A grid operand beside it is still read per cell.
-func TestPointwiseLiftLeavesAWholeArrayFnArgumentBare(t *testing.T) {
-	name := "interp.searchsorted"
-	call := ExprNode{Op: "fn", Name: &name, Args: []any{"p", "table"}}
-	body, err := lift2D(t, liftOver(call), []liftShaped{
-		{"p", []string{"x"}}, {"table", []string{"z"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fn, ok := liftOperand(t, body).(ExprNode)
-	if !ok || fn.Op != "fn" || len(fn.Args) != 2 {
-		t.Fatalf("divisor is not the fn call: %#v", body)
-	}
-	assertGather(t, fn.Args[0], "p", "i")
-	if fn.Args[1] != "table" {
-		t.Fatalf("table must stay bare, got %#v", fn.Args[1])
-	}
-}
-
 // A whole-array shape op has no per-cell reading of its operand, so the lift
 // refuses instead of gathering one cell into it.
 func TestPointwiseLiftRefusesAnOperandOfAWholeArrayOp(t *testing.T) {

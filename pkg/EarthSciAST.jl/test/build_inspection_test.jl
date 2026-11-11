@@ -7,13 +7,12 @@
 #    registry, and the resolved observed map — the official surface the ESD
 #    conformance runner reads the per-pair regrid A_ij / A_j / W_ij from
 #    (CONFORMANCE_SPEC §5.8). The 3x3 → 2x2 uniform planar coarsening has
-#    EXACT rational expectations (hand geometry, no evaluator): every interior
-#    1.5° target edge splits a 1° source cell at its midpoint, so each target
-#    cell overlaps its corner source cell fully (1.0 deg²), two edge cells by
-#    half (0.5), and the shared center cell by a quarter (0.25); the row-sum is
-#    A_j = 2.25 = 1.5² exactly and the weights are the exact rationals
-#    4/9 / 2/9 / 1/9 (all representable-quotient divisions, so the Float64
-#    results are bit-exact).
+#    rational expectations (hand geometry, no evaluator): every interior 1.5°
+#    target edge splits a 1° source cell at its midpoint, so each target cell
+#    overlaps its corner source cell fully (1.0 deg²), two edge cells by half
+#    (0.5), and the shared center cell by a quarter (0.25); the row-sum is
+#    A_j = 2.25 = 1.5² and the weights are 4/9 / 2/9 / 1/9. The overlap areas
+#    are lib/geometry.esm's `overlap_area_planar`, checked within 1e-12.
 #
 # 2. Ragged evaluation for the MPAS-style keyed-factor wiring (esm-spec §4.3.1
 #    / §4.6; RFC semiring-faq-unified-ir §5.2): a general array-shaped
@@ -64,7 +63,7 @@ function _bi_regrid_doc()
         "j" => Dict("from" => "tgt_cells")
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict(
             "name" => "build_inspection_regrid",
             "description" => "3x3 -> 2x2 exact-rational overlap regrid"
@@ -79,6 +78,9 @@ function _bi_regrid_doc()
         # here is a plain `unknown` DEFINED by a bare-variable-LHS equation.
         "models" => Dict{String, Any}(
             "Regrid" => Dict{String, Any}(
+                "expression_template_imports" => Any[
+                    Dict{String, Any}("ref" => "esm:std/geometry.esm", "only" => Any["overlap_area_planar"]),
+                ],
                 "variables" => Dict{String, Any}(
                     "atol" => Dict("type" => "parameter", "units" => "1", "default" => 1.0e-12),
                     "src_poly" => Dict(
@@ -114,12 +116,12 @@ function _bi_regrid_doc()
                         "rhs" => _bi_agg(
                             Any["i", "j"], ranges_ij,
                             Dict{String, Any}(
-                                "op" => "polygon_intersection_area",
-                                "manifold" => "planar",
-                                "args" => Any[
-                                    _bi_index("src_poly", "i"),
-                                    _bi_index("tgt_poly", "j"),
-                                ]
+                                "op" => "apply_expression_template", "args" => Any[],
+                                "name" => "overlap_area_planar",
+                                "bindings" => Dict{String, Any}(
+                                    "ring_a" => "src_poly", "cell_a" => "i", "nv_a" => 4,
+                                    "ring_b" => "tgt_poly", "cell_b" => "j", "nv_b" => 4
+                                )
                             );
                             args = Any["src_poly", "tgt_poly"]
                         )
@@ -155,7 +157,7 @@ function _bi_regrid_doc()
     )
 end
 
-@testset "BuildInspection — per-pair regrid setup arrays (exact rationals)" begin
+@testset "BuildInspection — per-pair regrid setup arrays (rational areas)" begin
     doc = _bi_regrid_doc()
     insp = BuildInspection()
     f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(doc; inspect = insp)
@@ -177,11 +179,9 @@ end
         ]
         expected_A[i, j] = a
     end
-    @test A == expected_A                       # planar clip of exact rectangles
-    @test all(Aj .== 2.25)                      # 1 + 0.5 + 0.5 + 0.25, exact
-    # Exact rational weights: representable-quotient divisions, so bit-exact.
-    @test W == expected_A ./ 2.25
-    @test W[1, 1] == 4 / 9 && W[2, 1] == 2 / 9 && W[5, 1] == 1 / 9
+    @test isapprox(A, expected_A; atol = 1.0e-12)
+    @test all(a -> isapprox(a, 2.25; atol = 1.0e-12), Aj)   # 1 + 0.5 + 0.5 + 0.25
+    @test isapprox(W, expected_A ./ 2.25; atol = 1.0e-12)
     # Partition of unity from the exposed matrix itself.
     @test all(j -> isapprox(sum(W[:, j]), 1.0; atol = 4eps()), 1:4)
 
@@ -223,7 +223,7 @@ function _bi_ragged_doc()
         args = Any["sgn", "edgesOnCell", "F"]
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict(
             "name" => "build_inspection_ragged",
             "description" => "2-cell ragged CSR contraction miniature"

@@ -84,7 +84,7 @@ function _sx_doc(
         )
     end
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "sx"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "sx"),
         "index_sets" => isets,
         "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs))
     )
@@ -207,7 +207,7 @@ function _sx_ragged_doc(
         Dict("lhs" => _sx_lhs("c", outs, osets), "rhs" => rhs),
     ]
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "sxr"), "index_sets" => isets,
+        "esm" => "2.0.0", "metadata" => Dict("name" => "sxr"), "index_sets" => isets,
         "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs))
     )
 end

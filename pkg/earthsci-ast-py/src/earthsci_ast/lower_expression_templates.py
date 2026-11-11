@@ -55,7 +55,6 @@ from .error_handling import (
     APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
     APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
     APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
-    GEOMETRY_MANIFOLD_INVALID,
     MAKEARRAY_REGION_INVERTED,
     REWRITE_RULE_NONTERMINATING,
     TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
@@ -83,15 +82,6 @@ from .json_walk import (  # noqa: F401 — re-exported for the historical import
 # package ``__init__`` and tests, alongside :func:`emit_document`) keeps working.
 from .serialize import emit_esm_string  # noqa: F401 — re-exported historical path
 from .template_imports import _collect_apply_names, _compose_template_bodies
-
-# Geometry-kernel ops whose `manifold` scalar field is restricted to the closed
-# manifold registry (CONFORMANCE_SPEC §5.8.4). The document schema admits any
-# string in the `manifold` position so a template `body` can carry a parameter
-# name there (esm-spec §9.6.1 scalar-field substitution site); the closed set
-# is enforced by :func:`_validate_geometry_manifolds` on the EXPANDED form per
-# esm-spec §9.6.4.
-_GEOMETRY_MANIFOLD_OPS = ("intersect_polygon", "polygon_intersection_area")
-_GEOMETRY_MANIFOLD_VALUES = ("planar", "spherical", "geodesic")
 
 
 def _assert_no_nested_apply(body: Any, template_name: str, path: str) -> None:
@@ -571,12 +561,12 @@ def _check_surviving_refs(node: Any, templates: dict, scope: str) -> None:
 
 #: The named evaluable-core registry ops that are ALSO rewrite targets in these
 #: positions: a right-hand-side / spatial ``D`` (core only in its equation-LHS
-#: role) and the two load-eliminated forms ``table_lookup`` / ``enum``. The
+#: role) and the load-eliminated form ``enum``. The
 #: open-tier sugar (grad/div/laplacian/curl/integral) is UNregistered, so it is
 #: NOT named here — it lands in T through the ``not op_registry.is_known(op)``
 #: fallback in :func:`_op_in_T`, exactly like any open-namespace custom op no
 #: evaluator implements. ``apply_expression_template`` is excluded.
-_REWRITE_TARGET_OPS = frozenset({"D", "table_lookup", "enum"})
+_REWRITE_TARGET_OPS = frozenset({"D", "enum"})
 
 
 def _op_in_T(op: str) -> bool:
@@ -596,8 +586,8 @@ def _contains_op(node: Any, pred) -> bool:
     field, including the ``bindings`` of nested ``apply_expression_template``
     nodes), an object whose ``op`` string satisfies ``pred``. Does NOT follow
     references to other templates — that transitive step is
-    :func:`_template_bearing`. The shared direct-scan of both the target-bearing
-    (``pred=_op_in_T``) and manifold-bearing (op ∈ geometry set) DFS passes."""
+    :func:`_template_bearing`. The direct scan of the target-bearing DFS pass
+    (``pred=_op_in_T``)."""
     found = [False]
 
     def _visit(obj: dict, _path: str) -> None:
@@ -616,11 +606,9 @@ def _template_bearing(named: dict, direct_pred) -> dict[str, bool]:
     whose op satisfies ``direct_pred`` — directly in its body
     (:func:`_contains_op`, including inside nested references' ``bindings``), OR
     transitively through a referenced template in the §9.7.3-checked acyclic DAG.
-    Two policies share this memoized DFS: the **target-bearing** flag (esm-spec
+    The policy using this memoized DFS is the **target-bearing** flag (esm-spec
     §9.6.4 rule 3, ``direct_pred=_op_in_T``) that drives eager expansion and the
-    surviving-reference leaf semantics, and the **manifold-bearing** flag
-    (§9.6.9, ``direct_pred`` = op ∈ :data:`_GEOMETRY_MANIFOLD_OPS`) that selects
-    which references need per-instantiation manifold validation. The DAG is
+    surviving-reference leaf semantics. The DAG is
     acyclic (checked by :func:`_compose_template_bodies`), so the DFS
     terminates."""
     bearing: dict[str, bool] = {}
@@ -1104,45 +1092,10 @@ def _rewrite_coupling_transforms(
         _check_surviving_refs(entry["transform"], templates, f"coupling[{idx}].transform")
 
 
-#: The two post-expansion validators skip ``expression_templates`` blocks:
-#: those hold pre-substitution trees where a param may legally occupy a scalar
-#: field (manifold, makearray bound); enforcement is on the expanded form only.
+#: The post-expansion validator skips ``expression_templates`` blocks: those
+#: hold pre-substitution trees where a param may legally occupy a scalar field
+#: (a makearray bound); enforcement is on the expanded form only.
 _EXPR_TEMPLATES_SKIP = frozenset({"expression_templates"})
-
-
-def _validate_geometry_manifolds(tree: Any, path: str = "") -> None:
-    """Post-expansion validator (esm-spec §9.6.4): every ``intersect_polygon``
-    / ``polygon_intersection_area`` node OUTSIDE an ``expression_templates``
-    block must carry a ``manifold`` drawn from the closed set
-    {planar, spherical, geodesic}.
-
-    Template bodies are skipped — a parameter name in the ``manifold`` position
-    of a ``body`` is a legal scalar-field substitution site (esm-spec §9.6.1);
-    by the time this validator runs on a loaded document every such site has
-    been substituted, so an out-of-set value here is a real defect (e.g. a
-    template invocation binding the manifold parameter to a non-member
-    literal). Raises :class:`ExpressionTemplateError` with code
-    ``geometry_manifold_invalid``.
-    """
-
-    def _check(node: dict, p: str) -> None:
-        if node.get("op") in _GEOMETRY_MANIFOLD_OPS and "manifold" in node:
-            m = node["manifold"]
-            if not (isinstance(m, str) and m in _GEOMETRY_MANIFOLD_VALUES):
-                raise ExpressionTemplateError(
-                    GEOMETRY_MANIFOLD_INVALID,
-                    f"{p}: `{node.get('op')}` carries manifold {m!r}, not a "
-                    "member of the closed set {planar, spherical, geodesic}. The "
-                    "manifold enum is enforced on the expanded form (esm-spec "
-                    "§9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter "
-                    "substituted into this scalar field must be bound to one of "
-                    "the closed-set literals.",
-                )
-
-    # dedup: runs on the expanded (possibly shared-DAG) form; a defect node
-    # shared under many parents raises once, at its first pre-order path —
-    # identical to the unshared behavior.
-    _walk_json(tree, on_obj=_check, skip_keys=_EXPR_TEMPLATES_SKIP, path=path, dedup=True)
 
 
 def _validate_makearray_regions(x: Any, path: str = "") -> None:
@@ -1191,7 +1144,9 @@ def _validate_makearray_regions(x: Any, path: str = "") -> None:
                         "minimum extent (§9.6.8).",
                     )
 
-    # dedup: same shared-DAG rationale as _validate_geometry_manifolds.
+    # dedup: runs on the expanded (possibly shared-DAG) form; a defect node
+    # shared under many parents raises once, at its first pre-order path —
+    # identical to the unshared behavior.
     _walk_json(x, on_obj=_check, skip_keys=_EXPR_TEMPLATES_SKIP, path=path, dedup=True)
 
 
@@ -1216,94 +1171,6 @@ def _validate_makearray_regions_in_registries(
                 body = decl.get("body") if _is_object(decl) else None
                 if body is not None:
                     _validate_makearray_regions(body, f"expression_templates.{tname}/body")
-
-
-def _template_manifold_bearing(named: dict) -> dict[str, bool]:
-    """Which templates can produce a geometry-kernel node
-    (:data:`_GEOMETRY_MANIFOLD_OPS`) — directly in the body or transitively
-    through a referenced template. Only references to these templates need
-    per-instantiation manifold validation (§9.6.9); everything else is skipped,
-    so a geometry-free document pays nothing."""
-    return _template_bearing(named, lambda op: op in _GEOMETRY_MANIFOLD_OPS)
-
-
-def _validate_manifolds_in_refs(
-    node: Any,
-    named: dict,
-    manifold_bearing: dict[str, bool],
-    path: str,
-    seen: dict[int, Any],
-) -> None:
-    if _is_array(node):
-        if id(node) in seen:
-            return
-        seen[id(node)] = node
-        for i, c in enumerate(node):
-            _validate_manifolds_in_refs(c, named, manifold_bearing, f"{path}/{i}", seen)
-        return
-    if not _is_object(node):
-        return
-    if id(node) in seen:
-        return
-    seen[id(node)] = node
-    name = node.get("name") if node.get("op") == APPLY_OP else None
-    # Per-instantiation manifold check (§9.6.9): expand ONLY references whose
-    # template can produce a geometry-kernel node; everything else is cheap.
-    if isinstance(name, str) and manifold_bearing.get(name, False):
-        try:
-            expansion = _expand_all(node, named, path)
-        except ExpressionTemplateError:
-            expansion = None
-        if expansion is not None:
-            try:
-                _validate_geometry_manifolds(expansion)
-            except ExpressionTemplateError as e:
-                if e.code != GEOMETRY_MANIFOLD_INVALID:
-                    raise
-                raise ExpressionTemplateError(
-                    GEOMETRY_MANIFOLD_INVALID,
-                    f"{path}: instantiation of template '{name}' — {e} "
-                    "(esm-spec §9.6.9; per-instantiation manifold check)",
-                ) from e
-    for k, v in node.items():
-        _validate_manifolds_in_refs(v, named, manifold_bearing, f"{path}/{k}", seen)
-
-
-def _validate_geometry_manifolds_refaware(
-    root: dict,
-    registries: dict[str, dict[str, tuple[dict, list, dict, dict]]],
-) -> None:
-    """esm-spec §9.6.9: ``geometry_manifold_invalid`` is discharged
-    per-instantiation (a ``manifold`` may be a template param), memoized. Direct
-    geometry nodes in the reference-preserving tree are checked as before; every
-    surviving ``apply_expression_template`` reference whose template can produce
-    a geometry kernel is additionally expanded ONCE (memoized) and its expansion
-    validated, so an inadmissible manifold bound at a call site is caught. The
-    diagnostic reports (call-site path, template name, intra-body path)."""
-    # Direct nodes on the reference-preserving tree (skips template blocks and
-    # does not see manifold params hidden behind references).
-    _validate_geometry_manifolds(root)
-    for compkind in ("models", "reaction_systems"):
-        comps = root.get(compkind)
-        if not _is_object(comps):
-            continue
-        for cname, comp in comps.items():
-            if not _is_object(comp):
-                continue
-            reg = registries.get(compkind, {}).get(cname)
-            if reg is None:
-                continue
-            named = reg[0]
-            manifold_bearing = _template_manifold_bearing(named)
-            if not any(manifold_bearing.values()):
-                continue  # no geometry: nothing to check
-            seen: dict[int, Any] = {}
-            for k, v in comp.items():
-                if k == "expression_templates":
-                    continue
-                _validate_manifolds_in_refs(
-                    v, named, manifold_bearing, f"{compkind}.{cname}.{k}", seen
-                )
 
 
 def lower_expression_templates(file: dict) -> dict:
@@ -1337,7 +1204,6 @@ def lower_expression_templates(file: dict) -> dict:
     if not _has_template_machinery(out):
         # No expansion to run, but the §9.6.4 expanded-form validators still
         # apply — the raw tree IS the expanded form.
-        _validate_geometry_manifolds(out)
         _validate_makearray_regions(out)
         return out
 
@@ -1397,14 +1263,10 @@ def lower_expression_templates(file: dict) -> dict:
     # references are errors — already checked per component / per transform by
     # ``_check_surviving_refs``. No global "no apply ops remain" gate.
 
-    # Validation discharge (esm-spec §9.6.9): geometry-manifold and
-    # makearray-region checks on the reference-preserving form. The manifold
-    # check is per-instantiation (a ``manifold`` may be a template param), so it
-    # descends through surviving references' single-instantiation expansions,
-    # memoized. Region bounds cannot carry template params, so the makearray
-    # check runs on the reference-preserving tree AND the retained folded
+    # Validation discharge (esm-spec §9.6.9): makearray-region checks on the
+    # reference-preserving form. Region bounds cannot carry template params, so
+    # the check runs on the reference-preserving tree AND the retained folded
     # template bodies directly.
-    _validate_geometry_manifolds_refaware(out, registries)
     _validate_makearray_regions(out)
     _validate_makearray_regions_in_registries(registries)
     return out

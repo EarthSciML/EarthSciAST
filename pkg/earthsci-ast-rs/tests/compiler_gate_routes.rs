@@ -87,7 +87,7 @@ fn relational_cumulative() -> Value {
 
 fn relational_doc(variables: Value, equations: Vec<Value>) -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "GateRelational"},
         "index_sets": {"rows": {"kind": "interval", "size": 3}},
         "models": {"Rel": {"variables": variables, "equations": equations}},
@@ -173,7 +173,7 @@ fn native_refuses_a_state_free_rule_the_tape_cannot_lower() {
         "expr": {"op": "*", "args": [
             {"op": "index", "args": ["s", {"op": "-", "args": ["k", 1]}]}, "j"]}});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "GateRefused"},
         "index_sets": {"steps": {"kind": "interval", "size": 4}},
         "models": {"R": {
@@ -307,7 +307,7 @@ fn a_pipeline_observed_the_overlay_takes_is_reported_vectorized() {
 /// `u` over three cells with `D(u) = -u` and `ic(u) = rhs_ic`.
 fn with_ic(rhs_ic: Value) -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "GateFieldIc"},
         "index_sets": {"x": {"kind": "interval", "size": 3}},
         "models": {"M": {
@@ -573,13 +573,13 @@ fn an_ic_reading_a_state_dependent_observed_says_why() {
 // (d) Value invention
 // ---------------------------------------------------------------------------
 
-/// `value_invention_materialize/composite_key_axis.esm` with a one-column key,
+/// `value_invention_materialize/composite_key_axis_template.esm` with a one-column key,
 /// the form the build pipeline's member ids take: four rows carrying the
 /// process ids `[101, 201, 101, 101]`, a `distinct` producer over them, and a
 /// count over the derived axis it sizes.
 fn one_key_value_invention() -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "OneKeyValueInvention"},
         "index_sets": {
             "rows": {"kind": "interval", "size": 4},
@@ -598,8 +598,7 @@ fn one_key_value_invention() -> Value {
                  "rhs": {"op": "faq", "id": "process_set", "args": [],
                          "semiring": "bool_and_or", "distinct": true,
                          "output_idx": ["e"], "ranges": {"n": {"from": "rows"}},
-                         "key": {"op": "skolem", "label": "process",
-                                 "args": [{"op": "index", "args": ["polProcessID", "n"]}]},
+                         "key": {"op": "index", "args": ["polProcessID", "n"]},
                          "filter": {"op": "true", "args": []},
                          "expr": {"op": "true", "args": []}}},
                 {"lhs": "nProcesses",
@@ -681,8 +680,9 @@ fn distinct_producer_fixtures() -> Vec<PathBuf> {
 fn a_native_build_of_a_distinct_producer_fixture_has_nothing_on_the_oracle() {
     let fixtures = distinct_producer_fixtures();
     assert!(
-        fixtures.iter().any(|p| p
-            .ends_with("conformance/value_invention_materialize/fixtures/composite_key_axis.esm")),
+        fixtures.iter().any(|p| p.ends_with(
+            "conformance/value_invention_materialize/fixtures/composite_key_axis_template.esm"
+        )),
         "the value_invention_materialize fixtures must be among {fixtures:?}"
     );
     let mut built = 0;
@@ -726,7 +726,7 @@ fn a_native_build_of_a_distinct_producer_fixture_has_nothing_on_the_oracle() {
 #[test]
 fn a_variable_named_like_its_model_is_qualified_on_every_route() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "SameName"},
         "models": {"fuel": {
             "variables": {

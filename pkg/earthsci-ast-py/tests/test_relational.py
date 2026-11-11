@@ -1,13 +1,13 @@
-"""Tests for the build-time relational engine — the five value-invention
+"""Tests for the build-time relational engine — the value-invention
 primitives and the cross-binding determinism contract (``CONFORMANCE_SPEC.md``
 §5.5 = RFC ``semiring-faq-unified-ir`` §5.7).
 
-Golden values are the DuckDB throwaway oracle (``SELECT DISTINCT … ORDER BY …``,
-``dense_rank() OVER (ORDER BY …)``) — the same hand-derived goldens the Julia
-binding (``pkg/EarthSciAST.jl/test/relational_test.jl``) and the
-cross-binding manifest (``tests/conformance/determinism/manifest.json``) assert
-on. The only intentional difference from Julia is the rank emission base: Python
-is **0-based**, Julia 1-based (``CONFORMANCE_SPEC.md`` §5.5.1 rule 3).
+Golden values are the DuckDB throwaway oracle (``SELECT DISTINCT … ORDER BY …``)
+— the same hand-derived goldens the Julia binding
+(``pkg/EarthSciAST.jl/test/relational_test.jl``) and the cross-binding manifest
+(``tests/conformance/determinism/manifest.json``) assert on. The determinism
+adapter emits dense ids 0-based, Julia 1-based (``CONFORMANCE_SPEC.md`` §5.5.1
+rule 3).
 """
 
 from __future__ import annotations
@@ -28,10 +28,7 @@ from earthsci_ast.relational import (
     distinct,
     equijoin,
     group_aggregate,
-    rank,
     serialize_canonical,
-    skolem,
-    skolem_edge,
 )
 
 MANIFEST = CONFORMANCE_DIR / "determinism" / "manifest.json"
@@ -40,30 +37,6 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 
 _first = operator.itemgetter(0)  # key   = row[0]
 _second = operator.itemgetter(1)  # value = row[1]
-
-
-# ── skolem — canonical tuple, never a hash (rule 4) ─────────────────────────
-
-
-def test_skolem_edge_undirected_min_max():
-    # undirected edge ⇒ (min, max); reversed orientation collapses to one key
-    assert skolem_edge(5, 2) == (2, 5)
-    assert skolem_edge(2, 5) == (2, 5)
-    assert skolem_edge(7, 7) == (7, 7)
-    assert skolem_edge(3, 8) == skolem_edge(8, 3)
-
-
-def test_skolem_symmetric_and_directed():
-    # symmetric, arity > 2: components sorted
-    assert skolem((9, 1, 5), symmetric=True) == (1, 5, 9)
-    assert skolem(("b", "a"), symmetric=True) == ("a", "b")
-    # directed: order preserved, so (1,2) and (2,1) stay distinct
-    assert skolem((1, 2)) == (1, 2)
-    assert skolem((2, 1)) == (2, 1)
-    assert skolem((2, 1)) != skolem((1, 2))
-
-
-# ── distinct — sorted set semantics (rules 1, 2) ────────────────────────────
 
 
 def test_distinct_scalars_sorted_unique():
@@ -88,27 +61,6 @@ def test_distinct_empty():
 def test_distinct_normalises_list_rows_to_tuples():
     # JSON arrays arrive as lists; they must canonicalise like tuples.
     assert distinct([[2, 1], [1, 2], [2, 1]]) == [(1, 2), (2, 1)]
-
-
-# ── rank — dense IDs, Python 0-based (rule 3) ───────────────────────────────
-
-
-def test_rank_zero_based_default():
-    rk = rank([30, 10, 20, 10])
-    assert rk.order == [10, 20, 30]
-    assert rk.base == 0
-    assert (rk.ids[10], rk.ids[20], rk.ids[30]) == (0, 1, 2)
-    # __getitem__ convenience mirrors the Julia Ranking.id lookup
-    assert (rk[10], rk[20], rk[30]) == (0, 1, 2)
-
-
-def test_rank_base_pin_round_trip():
-    rk0 = rank([30, 10, 20, 10])  # canonical 0-based
-    rk1 = rank([30, 10, 20, 10], base=1)  # 1-based emission (e.g. Julia)
-    assert (rk1.ids[10], rk1.ids[20], rk1.ids[30]) == (1, 2, 3)
-    # reported − base is binding-independent
-    for t in rk0.order:
-        assert rk0.ids[t] - rk0.base == rk1.ids[t] - rk1.base
 
 
 # ── equijoin — emit sorted by canonical key (rule 5) ────────────────────────
@@ -193,10 +145,11 @@ def test_group_aggregate_float_values_canonical_order():
 
 
 def _edges_of(faces):
-    """Undirected edges of a triangle face list as canonical skolem tuples."""
+    """Undirected edges of a triangle face list as canonical ``(min, max)``
+    tuples."""
     out = []
     for a, b, c in faces:
-        out.extend([skolem_edge(a, b), skolem_edge(b, c), skolem_edge(c, a)])
+        out.extend([(min(p, q), max(p, q)) for p, q in ((a, b), (b, c), (c, a))])
     return out
 
 
@@ -205,13 +158,10 @@ def test_mesh_edge_enumeration_matches_oracle():
     faces = [(1, 2, 3), (2, 4, 3)]
     golden_set = [(1, 2), (1, 3), (2, 3), (2, 4), (3, 4)]
     golden_json = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
-    golden_ids = [0, 1, 2, 3, 4]  # Python 0-based
 
     base = _edges_of(faces)
     assert distinct(base) == golden_set
     assert canonical_index_set_json(base) == golden_json
-    rk = rank(base)
-    assert [rk.ids[e] for e in golden_set] == golden_ids
 
 
 @pytest.mark.parametrize(
@@ -227,11 +177,8 @@ def test_mesh_edge_adversarial_collapse(name, variant):
     # All adversarial variants must collapse to the identical canonical output.
     golden_set = [(1, 2), (1, 3), (2, 3), (2, 4), (3, 4)]
     golden_json = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
-    golden_ids = [0, 1, 2, 3, 4]
     assert distinct(variant) == golden_set
     assert canonical_index_set_json(variant) == golden_json
-    rk = rank(variant)
-    assert [rk.ids[e] for e in golden_set] == golden_ids
 
 
 # ── canonical_index_set_json — compact JSON, sorted, escaped (§5.5.3) ────────
@@ -259,11 +206,7 @@ def test_float_keys_rejected():
     with pytest.raises(FloatKeyError):
         distinct([1.0, 2.0])
     with pytest.raises(FloatKeyError):
-        rank([(1, 2.5)])
-    with pytest.raises(FloatKeyError):
-        skolem_edge(1.0, 2.0)
-    with pytest.raises(FloatKeyError):
-        skolem((1, 2.0))
+        distinct([(1, 2.5)])
     with pytest.raises(FloatKeyError):
         equijoin([(1.0,)], [(1.0,)], on_left=lambda x: x[0], on_right=lambda x: x[0])
     with pytest.raises(FloatKeyError):

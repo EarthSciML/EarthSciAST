@@ -16,6 +16,16 @@ description: "Concrete proposal to generalize the ESS arrayop node into a Functi
 > the arrayop→aggregate transition and rewriting its tags would turn it into a
 > tautology. Read every `aggregate` node tag in it as `faq`.
 >
+> **AMENDED at esm 2.0.0.** The `skolem` and `rank` ops, the `argmin` /
+> `argmax` op forms, and the geometry leaves `intersect_polygon` and
+> `polygon_intersection_area` (with their `manifold` field) are removed and
+> rejected with `removed_op`. Keys are scalar integers built with `pair_key` /
+> `edge_key`, ranks come from `rank_of` / `rank_of_set`, arg-witnesses from the
+> `argmin` / `argmax` / `*_where` templates (`lib/relational.esm`), and overlap
+> areas from `overlap_area_planar` / `overlap_area_spherical`
+> (`lib/geometry.esm`); see docs/content/standard_library.md and MIGRATION.md.
+> `distinct`, `join` and `filter` stay. The text below is unchanged.
+>
 > **Status:** Draft proposal (concrete IR). **Bead:** unassigned.
 > **Target repo:** EarthSciAST (`pkg/EarthSciAST.jl`, the
 > `arrayop` IR and `tree_walk.jl` evaluator). Relocated here from

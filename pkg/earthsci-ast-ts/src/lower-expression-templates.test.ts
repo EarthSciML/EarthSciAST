@@ -24,7 +24,7 @@ import type { ReactionSystem } from './types.js'
 // Canonical Arrhenius template fixture: 5 reactions sharing one
 // `arrhenius` template and one inline rate, plus an arithmetic check.
 const ARRHENIUS_FIXTURE = {
-  esm: '1.0.0',
+  esm: '2.0.0',
   metadata: { name: 'expr_template_smoke', authors: ['esm-giy'] },
   reaction_systems: {
     chem: {
@@ -127,7 +127,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
 
   it('files without templates parse unchanged', () => {
     const noTemplates = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'no_templates', authors: ['t'] },
       reaction_systems: {
         chem: {
@@ -258,7 +258,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
 
 function gradModel(templates: Record<string, unknown>, rhs: unknown) {
   return {
-    esm: '1.0.0',
+    esm: '2.0.0',
     metadata: { name: 'rewrite_rules', authors: ['t'] },
     models: {
       M: {
@@ -420,7 +420,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
 
   it('ignores node fields the pattern omits; leaves non-matching nodes untouched', () => {
     const file = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'partial_match', authors: ['t'] },
       models: {
         M: {
@@ -447,7 +447,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
 
   it('accepts the `match` field through loadString() and auto-applies the rule', () => {
     const fixture = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'match_load', authors: ['t'] },
       reaction_systems: {
         chem: {
@@ -599,7 +599,7 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     // matched literal. Falls out of generic structural matching — no engine
     // special-casing.
     const src = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'attrs_match', authors: ['t'] },
       models: {
         m: {
@@ -633,7 +633,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
   // Model "Sink" (the RECEIVER — first dot-segment of the entry's `to`)
   // declares the template; the coupling transform invokes it.
   const couplingFixture = () => ({
-    esm: '1.0.0',
+    esm: '2.0.0',
     metadata: { name: 'coupling_transform_expansion' },
     models: {
       Src: {
@@ -691,7 +691,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
 
   it('auto-applies the receiving component match rules to the transform (fixpoint)', () => {
     const src = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'coupling_match_rule' },
       models: {
         Sink: {
@@ -725,7 +725,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
 
   it('resolves a reaction_systems receiver when no model shares the name', () => {
     const src = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'coupling_rs_receiver' },
       reaction_systems: {
         Chem: {
@@ -805,7 +805,7 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
     bindings: Record<string, unknown>,
     name = 'overlap_area',
   ) => ({
-    esm: '1.0.0',
+    esm: '2.0.0',
     metadata: { name: 'scalar_field_param_unit', authors: ['t'] },
     models: {
       M: {
@@ -837,22 +837,18 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
     const src = scalarFieldDoc(
       {
         overlap_area: {
-          params: ['K_manifold', 'a', 'b'],
-          body: {
-            op: 'polygon_intersection_area',
-            manifold: 'K_manifold',
-            args: ['a', 'b'],
-          },
+          params: ['K_op', 'a', 'b'],
+          body: { op: 'broadcast', fn: 'K_op', args: ['a', 'b'] },
         },
       },
-      { K_manifold: 'planar', a: 'pa', b: 'pb' },
+      { K_op: 'max', a: 'pa', b: 'pb' },
     )
-    // Option B: `polygon_intersection_area` is evaluable-core (not a T-op), so
-    // the reference survives lowering; Expand instantiates the scalar-field param.
+    // Option B: `broadcast` is evaluable-core (not a T-op), so the reference
+    // survives lowering; Expand instantiates the scalar-field param.
     const out = expandDocument(lowerExpressionTemplates(src)) as any
     expect(definingRhs(out.models.M, 'area')).toEqual({
-      op: 'polygon_intersection_area',
-      manifold: 'planar',
+      op: 'broadcast',
+      fn: 'max',
       args: ['pa', 'pb'],
     })
   })
@@ -862,11 +858,7 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
       {
         inner: {
           params: ['m', 'x', 'y'],
-          body: {
-            op: 'polygon_intersection_area',
-            manifold: 'm',
-            args: ['x', 'y'],
-          },
+          body: { op: 'broadcast', fn: 'm', args: ['x', 'y'] },
         },
         outer: {
           params: ['K', 'p', 'q'],
@@ -884,7 +876,7 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
           },
         },
       },
-      { K: 'spherical', p: 'pa', q: 'pb' },
+      { K: 'min', p: 'pa', q: 'pb' },
       'outer',
     )
     // Option B: the `outer`→`inner` DAG is checked (not inlined) at registration
@@ -892,33 +884,8 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
     const out = expandDocument(lowerExpressionTemplates(src)) as any
     expect(definingRhs(out.models.M, 'area')).toEqual({
       op: '*',
-      args: [
-        {
-          op: 'polygon_intersection_area',
-          manifold: 'spherical',
-          args: ['pa', 'pb'],
-        },
-        2.0,
-      ],
+      args: [{ op: 'broadcast', fn: 'min', args: ['pa', 'pb'] }, 2.0],
     })
-  })
-
-  it('rejects an invalid substituted manifold post-expansion (§9.6.4)', () => {
-    const src = scalarFieldDoc(
-      {
-        overlap_area: {
-          params: ['K_manifold', 'a', 'b'],
-          body: {
-            op: 'polygon_intersection_area',
-            manifold: 'K_manifold',
-            args: ['a', 'b'],
-          },
-        },
-      },
-      { K_manifold: 'bogus', a: 'pa', b: 'pb' },
-    )
-    expect(() => lowerExpressionTemplates(src)).toThrow(EsmMachineryError)
-    expect(() => lowerExpressionTemplates(src)).toThrow(/geometry_manifold_invalid/)
   })
 
   it('params shadow literals: a param named after a field literal substitutes', () => {
@@ -928,26 +895,23 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
     const src = scalarFieldDoc(
       {
         shadowed: {
-          params: ['planar', 'x', 'y'],
-          body: {
-            op: 'polygon_intersection_area',
-            manifold: 'planar',
-            args: ['x', 'y'],
-          },
+          params: ['max', 'x', 'y'],
+          body: { op: 'broadcast', fn: 'max', args: ['x', 'y'] },
         },
       },
-      { planar: 'spherical', x: 'pa', y: 'pb' },
+      { max: 'min', x: 'pa', y: 'pb' },
       'shadowed',
     )
     const out = expandDocument(lowerExpressionTemplates(src)) as any
-    expect(definingRhs(out.models.M, 'area').manifold).toBe('spherical')
+    expect(definingRhs(out.models.M, 'area').fn).toBe('min')
   })
 })
 
 describe('scalar_field_param conformance fixture', () => {
   // Drives tests/conformance/expression_templates/scalar_field_param — the
-  // scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
-  // (planar / spherical) — against its pinned Julia-generated expanded.esm.
+  // scalar-field substitution site rule (esm-spec §9.6.1): one template whose
+  // `broadcast` `fn` field carries a parameter name, instantiated twice (`+` /
+  // `*`) — against its pinned Julia-generated expanded.esm.
   const caseDir = fixturesDir('conformance/expression_templates/scalar_field_param')
 
   it('matches the canonical expanded form', () => {
@@ -956,9 +920,9 @@ describe('scalar_field_param conformance fixture', () => {
     // Option B: Expand reproduces the pinned Option-A expanded form (RFC bridge).
     const out = expandDocument(lowerExpressionTemplates(fixture)) as any
     expect(out.models).toEqual(expanded.models)
-    const overlap = out.models.Overlap
-    expect(definingRhs(overlap, 'area_planar').manifold).toBe('planar')
-    expect(definingRhs(overlap, 'area_spherical').manifold).toBe('spherical')
+    const combine = out.models.Combine
+    expect(definingRhs(combine, 'sum_ab').fn).toBe('+')
+    expect(definingRhs(combine, 'prod_ab').fn).toBe('*')
   })
 })
 
@@ -1039,7 +1003,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     // because F_cell is not over [edges]; a low-priority (0) generic rule must
     // still fire there. Pins that `where` is part of eligibility, not selection.
     const src = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'filter_before_priority', authors: ['t'] },
       index_sets: { cells: { kind: 'interval', size: 3 }, edges: { kind: 'interval', size: 5 } },
       models: {
@@ -1081,7 +1045,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     // compound sub-AST fails conservatively — the node is left un-lowered, and
     // loading stays permissive (no error).
     const src = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'compound_arg_conservative', authors: ['t'] },
       index_sets: { edges: { kind: 'interval', size: 5 } },
       models: {
@@ -1115,7 +1079,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
 
   it('`where` without `match` is a malformed declaration', () => {
     const src = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'where_without_match', authors: ['t'] },
       index_sets: { edges: { kind: 'interval', size: 5 } },
       models: {
@@ -1189,7 +1153,7 @@ describe('rulePriority — non-finite priority does not poison rule selection', 
     // comparator fall back to declaration order, so `ruleNaN` (declIndex 0)
     // shadowed `rule5`. With the fix (`NaN` -> 0) the priority-5 rule wins.
     const file = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'nan_priority' },
       models: {
         m: {
@@ -1287,7 +1251,7 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
     // schema validation first and this would pin nothing about the scan.
     const stray = () =>
       loadDocument({
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: { name: 'stray' },
         models: {
           M: {

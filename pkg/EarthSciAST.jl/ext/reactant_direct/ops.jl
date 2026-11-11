@@ -324,10 +324,6 @@ function _de_static_uncached(ctx::_DECtx, nd::_E._Node)::Bool
     elseif k === _E._NK_CONTRACTION_LOOP
         return _de_static(ctx, nd.children[1])
     elseif k === _E._NK_OP
-        # `:fn` is deliberately excluded: a closed function's host core is not
-        # this file's contract to reproduce, and the interp lowering below is
-        # already O(1).
-        nd.op === :fn && return false
         (
             haskey(_DE_UNARY, nd.op) || haskey(_DE_COMPARE, nd.op) ||
                 haskey(_DE_UNARY_CHLO, nd.op) ||

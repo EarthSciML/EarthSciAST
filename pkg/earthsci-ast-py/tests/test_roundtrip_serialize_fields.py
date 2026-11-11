@@ -62,9 +62,42 @@ def test_roundtrip_preserves_join_and_filter(fixture_name):
             assert "filter" in new
 
 
-def test_roundtrip_preserves_distinct_and_key():
-    """distinct/key survive a load→save cycle on a real fixture."""
-    fixture = _VALID / "faq" / "skolem_distinct_rank.esm"
+def test_roundtrip_preserves_distinct_and_key(tmp_path):
+    """distinct/key survive a load→save cycle."""
+    doc = {
+        "esm": "1.3.0",
+        "metadata": {"name": "distinct_key_roundtrip"},
+        "index_sets": {
+            "faces": {"kind": "interval", "size": 2},
+            "edges": {"kind": "derived", "from_faq": "edge_set"},
+        },
+        "models": {
+            "M": {
+                "variables": {
+                    "lo": {"type": "parameter", "shape": ["faces"], "default": 1.0},
+                    "edge_exists": {"type": "unknown", "shape": ["edges"]},
+                },
+                "equations": [
+                    {
+                        "lhs": {"op": "index", "args": ["edge_exists", "e"]},
+                        "rhs": {
+                            "op": "faq",
+                            "id": "edge_set",
+                            "args": ["lo"],
+                            "semiring": "bool_and_or",
+                            "distinct": True,
+                            "output_idx": ["e"],
+                            "ranges": {"f": {"from": "faces"}},
+                            "key": {"op": "index", "args": ["lo", "f"]},
+                            "expr": {"op": "true", "args": []},
+                        },
+                    }
+                ],
+            }
+        },
+    }
+    fixture = tmp_path / "distinct_key.esm"
+    fixture.write_text(json.dumps(doc))
     original = json.loads(fixture.read_text())
     orig_nodes = _find_nodes(original, lambda n: "op" in n and ("distinct" in n or "key" in n))
     assert orig_nodes, "fixture carries no distinct/key nodes; bad fixture pick"

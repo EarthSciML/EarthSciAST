@@ -6,15 +6,13 @@
 
 use super::*;
 use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
-use crate::flatten::{BuiltShapes, FlattenedSystem};
+use crate::flatten::{BuiltShapes, ConditionalShapes, FlattenedSystem};
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{
     EsmFile, ExpressionNode, JoinClause, Model, ModelVariable, OverlapClause, VariableType,
 };
-use crate::value_invention::{
-    ValueInventionResult, materialize_value_invention, rewrite_derived_index_sets,
-};
+use crate::value_invention::{ValueInventionResult, materialize_value_invention};
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -416,7 +414,7 @@ pub(super) fn apply_ragged_factor_scope(
 pub(crate) fn apply_flatten_rewrites(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
-) -> Result<BuiltShapes, CompileError> {
+) -> Result<ConditionalShapes, CompileError> {
     let time_invariant: std::collections::HashSet<String> = model
         .variables
         .iter()
@@ -486,10 +484,15 @@ pub(crate) fn refuse_faq_bare_array_operands(model: &Model) -> Result<(), Compil
 /// (esm-spec §9.6.11) is lifted to a per-cell `faq`
 /// ([`crate::elementwise_lift`]); a variable declared without a `shape` that
 /// the lift defines takes the lift's index sets, and is returned with the rest.
+///
+/// A variable whose shape only data can decide (its only arrays are unshaped
+/// data-fed parameters) is returned in [`ConditionalShapes::data_shaped`] and
+/// left undeclared here; the build records it on the variable's rule
+/// ([`AlgebraicRule::Scalar`]'s `data_shaped`).
 pub(crate) fn promote_conditional_shapes(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
-) -> Result<BuiltShapes, CompileError> {
+) -> Result<ConditionalShapes, CompileError> {
     let lifted = crate::elementwise_lift::lift_elementwise_applications(model)
         .map_err(CompileError::build_err)?;
     let mut promoted = crate::flatten::conditional_shape_promotions(
@@ -497,8 +500,8 @@ pub(crate) fn promote_conditional_shapes(
         model.equations.iter(),
         index_sets,
     );
-    set_declared_shapes(model, &promoted);
-    promoted.extend(lifted);
+    set_declared_shapes(model, &promoted.built);
+    promoted.built.extend(lifted);
     Ok(promoted)
 }
 
@@ -878,7 +881,10 @@ impl ArrayCompiled {
         // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
         // (see `from_file_owned`). Runs after mounting so a subsystem's
         // equations and declarations are in scope under their mounted names.
-        let conditional_shapes = apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
+        let ConditionalShapes {
+            built: conditional_shapes,
+            data_shaped,
+        } = apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
         // Lower every SHAPED parameter whose value the document supplies —
         // inline array data, or one scalar broadcast over the grid (esm-spec
         // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
@@ -907,60 +913,26 @@ impl ArrayCompiled {
                 }
             }
         }
-        // Materialize genuine relational OUTPUTS — the arg-witness reducer
-        // (`argmin`/`argmax`, RFC §5.7 rule 6) and the grouped/derived SCVT chain
-        // (`group_aggregate`) — to CONSTANT DATA at build setup, then rewrite each
-        // output's defining equation to a `const` literal the per-cell oracle
-        // already evaluates. This runs the byte-conformant [`crate::value_invention`]
-        // engine (the previously-unwired front door) and mirrors the Julia
-        // reference's "materialize to data" and the live Python interpreter, so
-        // `argmin` / `group_aggregate` now SIMULATE end-to-end instead of raising
-        // [`CompileError::UnevaluableOperatorError`]. Runs BEFORE
-        // [`strip_value_invention`] so a bin-skolem `join` feeding an argmin is still
-        // intact when the buffer is computed. A NO-OP (byte-identical) for every
-        // model without an arg-witness op; `skolem`/`distinct` producers are
-        // handled by the two passes below.
-        // One walk says which value-invention producers the model has at all;
-        // the passes below look only for those. A pass that rewrites the
-        // equations is followed by a fresh look.
-        let mut vi = ViCensus::of(&model_owned);
-        if vi.arg_witness {
-            materialize_vi_outputs_to_data(&mut model_owned, &mut index_sets_owned, vi_arrays)?;
-            vi = ViCensus::of(&model_owned);
-        }
-        // Build-time value invention for every non-geometry derived index set
-        // (`skolem`/`distinct`/`rank`, RFC §6.1): the producer's member count sizes
-        // a range over the set. Runs before `strip_value_invention` drops the
+        // Build-time value invention for every derived index set (a
+        // `distinct` producer, RFC §6.1): the producer's member count sizes a
+        // range over the set. Runs before `strip_value_invention` drops the
         // producer. A producer that cannot run is recorded rather than raised, and
         // is refused below only if a surviving expression ranges over its set.
-        let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays, &vi);
+        let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays);
         bind_member_factors(&mut model_owned, &derived.member_factors);
-        // A skolem map buffer (a broad-phase bin key per cell) becomes constant
-        // data, so a `join.on` gate comparing two of them stays a gate — a
-        // value-equality filter on data columns — rather than being dropped.
-        let mut map_names: Vec<&String> = derived.map_codes.keys().collect();
-        map_names.sort();
-        if !map_names.is_empty() {
-            for name in map_names {
-                rewrite_equation_to_const(&mut model_owned, name, &derived.map_codes[name]);
-            }
-            vi = ViCensus::of(&model_owned);
-        }
         let index_sets = &index_sets_owned;
-        // Drop value-invention (relational) scaffolding — skolem-id bin maps and
-        // membership sets over `kind: "derived"` index sets — plus the broad-phase
-        // `join.on` gates keyed on them, BEFORE join/range resolution. The extents
-        // counted above are all that survive of such a set: its members and
-        // skolem maps are not materialized, and the elided gate is numerically
-        // inert only where a dense narrow phase follows (see
-        // `strip_value_invention`). A no-op unless a `skolem` op, a
+        // Drop value-invention (relational) scaffolding — `distinct` producers
+        // and membership sets over `kind: "derived"` index sets — plus the
+        // `join.on` gates keyed on them, BEFORE join/range resolution. The
+        // extents counted above (and the fed-back member factors) are all that
+        // survive of such a set (see `strip_value_invention`). A no-op unless a
         // `distinct` producer or a derived-set-shaped variable is present.
         // A producer that could not run leaves its derived set with no
         // members: a stage that then trips over the stripped producer (a
         // surviving read of one of its outputs, an output shaped on its set)
         // names that set (`derived_index_set_unmaterialized`, esm-spec §4.2)
         // rather than the operator or the axis it met.
-        strip_value_invention(&mut model_owned, index_sets, &vi)
+        strip_value_invention(&mut model_owned, index_sets)
             .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
         // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
         // `const`-literal factor variables — Fornberg weights, mesh
@@ -1140,7 +1112,17 @@ impl ArrayCompiled {
             // The shapes as declared, before inference sizes the unsized
             // ones from how the equations index them: what a provider's
             // sample is checked against.
-            let declared_forcing_shapes = forcing_decls.clone();
+            // A data-fed parameter declared without a shape takes the shape
+            // of its data (esm-spec §4.3.4), so a provider's sample of it is
+            // not checked against the one-value box its read defaults to.
+            let mut declared_forcing_shapes = forcing_decls.clone();
+            for (name, var) in &observed_vars {
+                if is_data_fed_unshaped(var)
+                    && let Some(decl) = declared_forcing_shapes.get_mut(*name)
+                {
+                    *decl = None;
+                }
+            }
             infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
             let forcing_defaults = forcing_default_values(&observed_vars, &forcing_decls)?;
             (
@@ -1172,8 +1154,13 @@ impl ArrayCompiled {
 
         // (6)+(6b) Build the dependency-ordered observed algebraic rules,
         // MOVING each declared observed's body expression out of the model.
-        let observed_rules =
-            build_observed_rules(&mut model_owned, &observed_names, &eliminated, index_sets)?;
+        let observed_rules = build_observed_rules(
+            &mut model_owned,
+            &observed_names,
+            &eliminated,
+            index_sets,
+            &data_shaped,
+        )?;
 
         let model = &model_owned;
 
@@ -1257,8 +1244,7 @@ impl ArrayCompiled {
 /// a typo), which the canonical pipeline requires ESD discretization to have
 /// rewritten before the simulator sees it (esm-i7b), AND the evaluable-core ops
 /// that have no rule in this evaluator because an earlier stage was supposed to
-/// eliminate them (`skolem`, `rank`, `distinct`, `argmin`, `argmax`, `ic`,
-/// `enum`, `table_lookup`, `apply_expression_template`).
+/// eliminate them (`distinct`, `ic`, `enum`, `apply_expression_template`).
 ///
 /// The second half is [`check_evaluable`]'s `is_evaluable_op` gate, and it is
 /// here because [`eval_op`]'s backstop for an ungated op is `unreachable!` — a
@@ -1267,14 +1253,13 @@ impl ArrayCompiled {
 /// this path did not, and `hoist_static_observeds` walked straight into the
 /// backstop. Gating the whole model once, at the single funnel every
 /// array-runtime build passes through, closes the class rather than the one op
-/// that was reported: any of the nine now raises `unevaluable_operator` naming
+/// that was reported: any of them now raises `unevaluable_operator` naming
 /// itself.
 ///
-/// Ordering matters and is already right: `materialize_vi_outputs_to_data`,
-/// `materialize_derived_extents` and `strip_value_invention` run BEFORE the
-/// staged build, so by the time this sees the model an arg-witness output has
-/// become `const` data and a skolem or derived-set producer has been dropped —
-/// what remains is genuinely unevaluable.
+/// Ordering matters and is already right: `materialize_derived_extents` and
+/// `strip_value_invention` run BEFORE the staged build, so by the time this
+/// sees the model a derived-set producer has been dropped — what remains is
+/// genuinely unevaluable.
 fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
     for eq in &model.equations {
         // The `ic` exemption is for the LHS and only the LHS (esm-spec
@@ -1357,7 +1342,7 @@ type NameSet = HashSet<String, rustc_hash::FxBuildHasher>;
 ///    defines these to BE coordinate expressions) and every spatial-op `dim`;
 ///  * loop / index binders introduced anywhere in the equation — `faq` /
 ///    `makearray` `output_idx` & `ranges`, bare `index(array, i…)` subscript
-///    positions, an `integral` `int_var`, an argmin/argmax `arg`, and
+///    positions, an `integral` `int_var`, and
 ///    `apply_expression_template` `bindings` keys. Collected over the WHOLE
 ///    equation (both sides unioned) so a stencil offset `index(u, i+1)` sees the
 ///    `i` bound as a bare position elsewhere in the same equation, and so a
@@ -1501,7 +1486,7 @@ fn is_ic_lhs(lhs: &Expr) -> bool {
 
 /// The index / integration symbols a single node BINDS for its body (mirrors
 /// `structural.rs` `bound_index_symbols`): `output_idx` / `ranges` keys, an
-/// `integral` `int_var`, an argmin/argmax `arg`, the BARE subscript positions of
+/// `integral` `int_var`, the BARE subscript positions of
 /// an `index(array, i…)` node, and `apply_expression_template` `bindings` keys.
 fn node_binders(node: &ExpressionNode, out: &mut NameSet) {
     node_loop_binders(node, out);
@@ -1527,9 +1512,6 @@ fn node_loop_binders(node: &ExpressionNode, out: &mut NameSet) {
     }
     if let Some(v) = &node.int_var {
         out.insert(v.clone());
-    }
-    if let Some(a) = &node.arg {
-        out.insert(a.clone());
     }
     if let Some(bindings) = &node.bindings {
         out.extend(bindings.keys().cloned());
@@ -1624,7 +1606,6 @@ fn collect_dims_heads_and_binders(
             let carries = node.output_idx.is_some()
                 || node.ranges.is_some()
                 || node.int_var.is_some()
-                || node.arg.is_some()
                 || node.bindings.is_some();
             if enclosed || node.op != "index" {
                 node_binders(node, binders);
@@ -3131,9 +3112,8 @@ pub(super) fn lower_recurrence(
 /// (6) Build observed algebraic rules from eliminated state variables AND
 /// from declared observed variables that define an expression, then (6b)
 /// dependency-order them so each rule is evaluated only after the observeds it
-/// reads (RFC §8.1): the geometry chain `const` polygons → `clip =
-/// intersect_polygon` → `area = FAQ(clip)` must materialize the ring before
-/// the FAQ over it. The rules are collected in sorted/equation order, which is
+/// reads: a chain `const` table → `w = FAQ(table)` → `area = FAQ(w)` must
+/// materialize `w` before the FAQ over it. The rules are collected in sorted/equation order, which is
 /// NOT dependency order; the stable Kahn sweep ([`dependency_order_observed`])
 /// preserves declaration order among independent observeds (mirrors Python
 /// `simulation._order_observed_equations`).
@@ -3142,6 +3122,7 @@ fn build_observed_rules(
     observed_names: &[String],
     eliminated: &HashSet<String>,
     index_sets: &HashMap<String, IndexSet>,
+    data_shaped: &HashMap<String, Vec<String>>,
 ) -> Result<Vec<AlgebraicRule>, CompileError> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
     let array_axes = declared_axis_names(model);
@@ -3174,6 +3155,13 @@ fn build_observed_rules(
     // * a bare-variable LHS lowers WHOLESALE through [`lower_algebraic_body`]:
     //   `eval` materializes the body's arrays and broadcasts the elementwise ops
     //   over them, so a readable intermediate decomposition runs as authored.
+    // The variables whose shape their data-fed parameters' data decides:
+    // see [`AlgebraicRule::Scalar`]'s `data_shaped`.
+    let data_shaped_of = |name: &str| {
+        data_shaped
+            .get(name)
+            .map(|fed| std::sync::Arc::from(fed.as_slice()))
+    };
     let mut def_eq: HashMap<&str, &crate::types::Equation> = HashMap::new();
     for eq in &model.equations {
         if let crate::classification::LhsFormRef::Bare(name) =
@@ -3226,6 +3214,7 @@ fn build_observed_rules(
                 eq.rhs.clone(),
                 &array_axes,
                 index_sets,
+                data_shaped_of(name),
             )?);
         }
     }
@@ -3272,6 +3261,7 @@ fn build_observed_rules(
                 eq.rhs.clone(),
                 &array_axes,
                 index_sets,
+                data_shaped_of(name),
             )?);
         }
     }
@@ -3391,6 +3381,7 @@ fn lower_algebraic_body(
     body: Expr,
     array_axes: &HashMap<String, Vec<String>>,
     index_sets: &HashMap<String, IndexSet>,
+    data_shaped: Option<std::sync::Arc<[String]>>,
 ) -> Result<AlgebraicRule, CompileError> {
     let declared_shape = array_axes
         .get(name)
@@ -3399,6 +3390,7 @@ fn lower_algebraic_body(
         var: name.to_string(),
         body: std::sync::Arc::new(body),
         declared_shape: declared_shape.clone(),
+        data_shaped: data_shaped.clone(),
     };
     let Some(target_axes) = array_axes.get(name) else {
         return Ok(scalar_rule(body));
@@ -4055,59 +4047,11 @@ pub(super) fn collect_algebraic_defined(equations: &[crate::types::Equation]) ->
     out
 }
 
-/// True if `expr` (or any subexpression) uses a `skolem` op — the marker of a
-/// value-invention (relational) producer whose integer-id buffer the dense
-/// array evaluator does not materialize.
-pub(super) fn expr_contains_skolem(expr: &Expr) -> bool {
-    match expr {
-        Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => false,
-        Expr::Operator(node) => node.op == "skolem" || node.any_child(&mut expr_contains_skolem),
-    }
-}
-
-/// Whether `expr` contains a `rank` over a `kind: "derived"` index set — the
-/// dense ids of an invented set, a build-time relational output.
-fn ranks_a_derived_set(expr: &Expr, index_sets: &HashMap<String, IndexSet>) -> bool {
-    match expr {
-        Expr::Operator(node) => {
-            (node.op == "rank"
-                && node.args.iter().any(|a| {
-                    matches!(a, Expr::Variable(v)
-                        if index_sets.get(v).is_some_and(|is| is.kind == "derived"))
-                }))
-                || node.any_child(&mut |c| ranks_a_derived_set(c, index_sets))
-        }
-        _ => false,
-    }
-}
-
-/// Collect the `id`s of every geometry ring producer (`intersect_polygon` /
-/// `polygon_intersection_area`) reachable from `expr`. A `kind: "derived"` index
-/// set whose `from_faq` names one of these is the materialized clip ring (kept),
-/// distinguishing it from a relational membership set (dropped).
-pub(super) fn collect_geometry_producer_ids(expr: &Expr, out: &mut HashSet<String>) {
-    let Expr::Operator(node) = expr else {
-        return;
-    };
-    if matches!(
-        node.op.as_str(),
-        "intersect_polygon" | "polygon_intersection_area"
-    ) {
-        if let Some(id) = &node.id {
-            out.insert(id.clone());
-        }
-    }
-    node.for_each_child(&mut |child| collect_geometry_producer_ids(child, out));
-}
-
 /// Strip every `join.on` key-pair that references a dropped value-invention
 /// variable, dropping a clause whose pairs all vanish and clearing an empty
-/// `join`. A bin-skolem broad-phase gate keyed on such a column cannot be
-/// evaluated by the dense array runtime (the integer-id buffer is not
-/// materialized); eliding it degrades the aggregate to the dense contraction
-/// over all index combinations — the pruned combinations contribute the
-/// additive identity, which for a geometric narrow phase (`polygon_intersection_area`,
-/// zero on non-overlapping pairs) they already do, so the result is unchanged.
+/// `join`. A gate keyed on such a column cannot be evaluated by the dense array
+/// runtime (the column is not materialized); eliding it degrades the aggregate
+/// to the dense contraction over all index combinations.
 pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
     // Sharing-aware gate: after load-time interning (`crate::intern`)
     // operator payloads are shared `Arc`s, and a mutable descent
@@ -4155,46 +4099,22 @@ pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
 /// strip broad-phase `join.on` gates that reference them, BEFORE join / range
 /// resolution and shape inference.
 ///
-/// The dense Rust array runtime evaluates FAQ aggregates and the fused geometry
-/// leaf, but does NOT materialize value-invention buffers — skolem-id maps
-/// (`skolem`/`rank`) or a membership set over a `kind: "derived"` (FAQ-produced)
-/// index set. [`materialize_derived_extents`] has already counted each such
-/// set's members, so a range over it is sized; its per-element values are not
-/// available. A variable that is one of these, and the `join.on` gate keyed on
-/// it, are relational scaffolding around a densely-evaluable narrow phase. For a
-/// conservative regrid the narrow phase is `polygon_intersection_area`, which is
-/// zero on exactly the pairs the bin-skolem gate would prune, so the dense
-/// contraction is numerically identical (see [`strip_vi_joins`]). Genuine
-/// (loop-symbol) joins and non-VI models stay byte-identical: the pass is a
-/// no-op unless a `skolem` op, a `distinct` producer or a derived-set-shaped
-/// variable is present.
+/// The dense Rust array runtime evaluates FAQ aggregates, but does NOT
+/// materialize a membership set over a `kind: "derived"` (FAQ-produced) index
+/// set. [`materialize_derived_extents`] has already counted each such set's
+/// members, so a range over it is sized; its per-element values are not
+/// available beyond the fed-back `member_factor`. A variable that is one of
+/// these, and the `join.on` gate keyed on it, are relational scaffolding.
+/// Genuine (loop-symbol) joins and non-VI models stay byte-identical: the pass
+/// is a no-op unless a `distinct` producer or a derived-set-shaped variable is
+/// present.
 pub(super) fn strip_value_invention(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
-    vi: &ViCensus,
 ) -> Result<(), CompileError> {
     let mut vi_vars: HashSet<String> = HashSet::new();
-    // Ids of geometry ring producers (`intersect_polygon` / `polygon_intersection_area`).
-    // A `kind: "derived"` index set whose `from_faq` names one of these IS
-    // materialized by the dense runtime (the clipped overlap ring), so a variable
-    // shaped over it — e.g. a geometry `clip` — must be KEPT.
-    let any_derived = index_sets.values().any(|is| is.kind == "derived");
-    // Only read for a shape over a derived set, so not collected without one.
-    let mut geom_ids: HashSet<String> = HashSet::new();
-    if any_derived && vi.geometry {
-        for eq in &model.equations {
-            collect_geometry_producer_ids(&eq.rhs, &mut geom_ids);
-        }
-        // An observed unknown's defining body is one of those equation RHSs from
-        // esm 1.0.0, so the loop above already covers it; what is left on a
-        // variable is a parameter `update`'s expressions.
-        for var in model.variables.values() {
-            var.for_each_expression(&mut |expr| collect_geometry_producer_ids(expr, &mut geom_ids));
-        }
-    }
-    // (a) A variable shaped over a `kind: "derived"` index set whose FAQ producer
-    //     is NOT a geometry ring producer — a relational membership / candidate
-    //     set the dense runtime does not enumerate. Build-time DATA over such a
+    // (a) A variable shaped over a `kind: "derived"` index set — a relational
+    //     membership / candidate set the dense runtime does not enumerate. Build-time DATA over such a
     //     set (a parameter, or an unknown defined by a `const` node, e.g. a
     //     per-edge length over invented edges) is an ordinary array sized by the
     //     set's extent, and is kept.
@@ -4209,32 +4129,18 @@ pub(super) fn strip_value_invention(
             continue;
         }
         if let Some(shape) = &var.shape {
-            if shape.iter().any(|s| {
-                index_sets
-                    .get(s)
-                    .filter(|is| is.kind == "derived")
-                    .map(|is| {
-                        !is.from_faq
-                            .as_deref()
-                            .map(|f| geom_ids.contains(f))
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false)
-            }) {
+            if shape
+                .iter()
+                .any(|s| index_sets.get(s).is_some_and(|is| is.kind == "derived"))
+            {
                 vi_vars.insert(name.clone());
             }
         }
     }
-    // (b) A variable defined by an equation whose RHS produces a skolem id, a
-    //     `rank` dense id over an invented set, or is a `distinct` producer
-    //     (whatever its key): build-time relational outputs, dropped as the
-    //     other bindings drop them.
+    // (b) A variable defined by a `distinct` producer (whatever its key): a
+    //     build-time relational output, dropped as the other bindings drop it.
     for eq in &model.equations {
-        let distinct = matches!(&eq.rhs, Expr::Operator(n) if n.distinct == Some(true));
-        if distinct
-            || (vi.skolem && expr_contains_skolem(&eq.rhs))
-            || (any_derived && ranks_a_derived_set(&eq.rhs, index_sets))
-        {
+        if matches!(&eq.rhs, Expr::Operator(n) if n.distinct == Some(true)) {
             if let Some(v) = equation_defined_var(&eq.lhs) {
                 vi_vars.insert(v);
             }
@@ -4297,7 +4203,7 @@ pub(super) fn strip_value_invention(
         find(&eq.rhs);
         if let Some(name) = hit {
             let op = stripped_producer_op(&name, &stripped_bodies)
-                .unwrap_or_else(|| "skolem".to_string());
+                .unwrap_or_else(|| "distinct".to_string());
             return Err(CompileError::UnevaluableOperatorError { op });
         }
     }
@@ -4340,80 +4246,6 @@ fn stripped_producer_op(name: &str, bodies: &HashMap<String, Expr>) -> Option<St
         }
     }
     head(bodies.get(name)?)
-}
-
-// ===========================================================================
-// Value-invention OUTPUT front-door — materialize the arg-witness / grouped
-// relational outputs to constant data (the previously-unwired engine).
-// ===========================================================================
-
-/// True iff any equation or observed expression in `model` contains an
-/// arg-witness reducer (`argmin` / `argmax`). Mirrors [`expr_contains_skolem`]:
-/// its presence is the marker of a genuine relational OUTPUT — a per-element
-/// nearest-witness INDEX buffer (RFC §5.7 rule 6) — that the dense evaluator
-/// cannot run and [`strip_value_invention`] does not remove (it is neither a
-/// derived-set-shaped var nor a skolem producer). This gates the build-time
-/// materialize pass so every model WITHOUT one stays byte-identical.
-fn expr_contains_arg_witness(expr: &Expr) -> bool {
-    match expr {
-        Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => false,
-        Expr::Operator(node) => {
-            node.op == "argmin"
-                || node.op == "argmax"
-                || node.any_child(&mut expr_contains_arg_witness)
-        }
-    }
-}
-
-/// Which value-invention producers a model's expressions (the equations, both
-/// sides, and the variables' own expressions) contain anywhere: an
-/// `argmin`/`argmax` witness, a `skolem`, a geometry ring producer.
-pub(super) struct ViCensus {
-    arg_witness: bool,
-    skolem: bool,
-    geometry: bool,
-}
-
-impl ViCensus {
-    fn of(model: &Model) -> Self {
-        fn walk(expr: &Expr, c: &mut ViCensus) {
-            let Expr::Operator(node) = expr else {
-                return;
-            };
-            match node.op.as_str() {
-                "argmin" | "argmax" => c.arg_witness = true,
-                "skolem" => c.skolem = true,
-                "intersect_polygon" | "polygon_intersection_area" => c.geometry = true,
-                _ => {}
-            }
-            node.for_each_child(&mut |child| walk(child, c));
-        }
-        let mut c = ViCensus {
-            arg_witness: false,
-            skolem: false,
-            geometry: false,
-        };
-        for eq in &model.equations {
-            walk(&eq.lhs, &mut c);
-            walk(&eq.rhs, &mut c);
-        }
-        for var in model.variables.values() {
-            var.for_each_expression(&mut |expr| walk(expr, &mut c));
-        }
-        c
-    }
-}
-
-fn model_contains_arg_witness(model: &Model) -> bool {
-    model
-        .equations
-        .iter()
-        .any(|eq| expr_contains_arg_witness(&eq.lhs) || expr_contains_arg_witness(&eq.rhs))
-        || model.variables.values().any(|v| {
-            let mut found = false;
-            v.for_each_expression(&mut |e| found |= expr_contains_arg_witness(e));
-            found
-        })
 }
 
 /// The declared `default` of every parameter the forcing buffer serves that
@@ -4467,6 +4299,14 @@ fn forcing_default_values(
 /// `kind: "data"` carrying a `from` binding (esm-spec §5.4). Lives here rather
 /// than in `data_fed` because that module is not built for wasm32, while the
 /// classifier is.
+/// A parameter declared with NO `shape` (`shape: []` declares a scalar) that a
+/// data source feeds: its shape is its data's (esm-spec §4.3.4).
+pub(crate) fn is_data_fed_unshaped(var: &crate::types::ModelVariable) -> bool {
+    var.var_type == VariableType::Parameter
+        && var.shape.is_none()
+        && var.update.as_ref().and_then(data_feed_source).is_some()
+}
+
 pub(crate) fn data_feed_source(spec: &crate::types::ParameterUpdateSpec) -> Option<&str> {
     spec.rules().iter().find_map(|r| {
         r.data_source()
@@ -4564,7 +4404,7 @@ fn vi_factor_arrays<S: std::hash::BuildHasher>(
 }
 
 /// The value-invention engine's scalar `params` map (e.g. the bin width of a
-/// broad-phase skolem quantization): each 0-D parameter's caller override —
+/// broad-phase key quantization): each 0-D parameter's caller override —
 /// keyed by its name or its model-local tail — else its `default`. An array
 /// parameter carries no scalar and is supplied (if at all) through
 /// [`collect_const_factor_arrays`].
@@ -4591,8 +4431,8 @@ fn collect_scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> Has
 
 /// Rewrite the equation (or observed `expression`) that DEFINES `name` into a
 /// whole-array `const` literal carrying the materialized dense `buf` — the
-/// "materialize to data" step. The relational op (`argmin` / `group_aggregate`)
-/// that produced `name` is thereby replaced by data the existing oracle
+/// "materialize to data" step. The relational producer that defined `name` is
+/// thereby replaced by data the existing oracle
 /// evaluates, so it never reaches the run path as an
 /// [`CompileError::UnevaluableOperatorError`]. The LHS collapses to the bare
 /// variable (a whole-array assignment); the eliminated-state machinery then
@@ -4635,7 +4475,7 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
 /// Run the build-time value-invention engine over a TYPED [`Model`] plus the
 /// document-scoped `index_sets` registry, with a caller-supplied factor-array
 /// channel — the front door a Rust runner needs, and the one the in-tree build
-/// path (`materialize_vi_outputs_to_data`) uses internally.
+/// path (`materialize_derived_extents`) uses internally.
 ///
 /// [`materialize_value_invention`] itself takes a raw `serde_json::Value` and a
 /// finished array map, which leaves a caller holding a typed model with two
@@ -4652,7 +4492,7 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
 /// `vi_factor_arrays`). Scalar `params` come from the model's own 0-D
 /// parameter defaults.
 ///
-/// A model with no `skolem`/`distinct`/`rank` producer yields an empty result
+/// A model with no `distinct` producer yields an empty result
 /// rather than an error — the engine's own no-op contract.
 ///
 /// # Errors
@@ -4711,18 +4551,13 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     })
 }
 
-/// The build-time extents of a model's non-geometry derived index sets, and why
-/// value invention failed when it did.
+/// The build-time extents of a model's derived index sets, and why value
+/// invention failed when it did.
 pub(super) struct DerivedMaterialization {
     /// `from_faq` producer id → member count, as [`run_value_invention`] reports.
     pub(super) extents: HashMap<String, i64>,
-    /// Ids of the geometry ring producers, whose sets the runtime sizes itself.
-    geometry_ids: HashSet<String>,
     /// The engine's error, if it could not run.
     failure: Option<CompileError>,
-    /// The skolem map buffers as integer codes
-    /// ([`ValueInventionResult::map_codes`]).
-    map_codes: HashMap<String, Vec<f64>>,
     /// Each derived set's `member_factor` parameter with the member ids the
     /// engine invented for it, in member order: the column the build pipeline
     /// feeds back (`crate::prepare`'s `feed_member_factors`), so a read of the
@@ -4730,43 +4565,21 @@ pub(super) struct DerivedMaterialization {
     member_factors: Vec<(String, Vec<f64>)>,
 }
 
-/// Run value invention when the model has a derived index set whose producer is
-/// not a geometry ring. A model without one pays only the scan.
+/// Run value invention when the model has a derived index set. A model without
+/// one pays only the scan.
 fn materialize_derived_extents(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
     caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
-    vi: &ViCensus,
 ) -> DerivedMaterialization {
-    let mut geometry_ids = HashSet::new();
-    if vi.geometry {
-        for eq in &model.equations {
-            collect_geometry_producer_ids(&eq.rhs, &mut geometry_ids);
-        }
-        for var in model.variables.values() {
-            var.for_each_expression(&mut |expr| {
-                collect_geometry_producer_ids(expr, &mut geometry_ids)
-            });
-        }
-    }
     let mut out = DerivedMaterialization {
         extents: HashMap::new(),
-        geometry_ids,
         failure: None,
-        map_codes: HashMap::new(),
         member_factors: Vec::new(),
     };
-    // A skolem bin map that a `join.on` gate compares needs the engine too,
-    // derived set or not: its codes keep the gate (`map_codes` below), which
-    // is what makes the gated contraction cost its admitted pairs rather than
-    // the full product on every evaluation.
-    let needs_value_invention = index_sets.values().any(|is| {
-        is.kind == "derived"
-            && is
-                .from_faq
-                .as_deref()
-                .is_some_and(|f| !out.geometry_ids.contains(f))
-    }) || (vi.skolem && skolem_map_keys_a_join(model));
+    let needs_value_invention = index_sets
+        .values()
+        .any(|is| is.kind == "derived" && is.from_faq.is_some());
     if needs_value_invention {
         let factors = value_invention_factors(model, index_sets, caller_arrays);
         let lean = without_factor_literals(model, &factors);
@@ -4774,7 +4587,6 @@ fn materialize_derived_extents(
             Ok(result) => {
                 out.member_factors = member_factor_columns(index_sets, &result, caller_arrays);
                 out.extents = result.extents;
-                out.map_codes = result.map_codes;
             }
             Err(e) => out.failure = Some(e),
         }
@@ -4783,9 +4595,7 @@ fn materialize_derived_extents(
 }
 
 /// The member ids each derived set with a `member_factor` feeds back, sorted by
-/// set name. Only a set whose members are all scalar keys has ids; a
-/// tuple-keyed producer is sized by its extent alone, as on the build
-/// pipeline. A factor the caller supplies stays the caller's.
+/// set name. A factor the caller supplies stays the caller's.
 fn member_factor_columns(
     index_sets: &HashMap<String, IndexSet>,
     result: &ValueInventionResult,
@@ -4843,41 +4653,11 @@ fn bind_member_factors(model: &mut Model, columns: &[(String, Vec<f64>)]) {
     }
 }
 
-/// Whether a `join.on` key pair anywhere in `model` names a variable defined by
-/// a `skolem` (a broad-phase bin map). A column matches by its qualified name
-/// or its unqualified suffix, as [`strip_value_invention`] matches it.
-fn skolem_map_keys_a_join(model: &Model) -> bool {
-    let mut maps: HashSet<String> = HashSet::new();
-    for eq in &model.equations {
-        if expr_contains_skolem(&eq.rhs)
-            && let Some(v) = equation_defined_var(&eq.lhs)
-        {
-            if let Some(pos) = v.rfind('.') {
-                maps.insert(v[pos + 1..].to_string());
-            }
-            maps.insert(v);
-        }
-    }
-    if maps.is_empty() {
-        return false;
-    }
-    fn keys_on(e: &Expr, maps: &HashSet<String>) -> bool {
-        let Expr::Operator(node) = e else {
-            return false;
-        };
-        node.join.as_ref().is_some_and(|j| {
-            j.iter()
-                .any(|c| c.on.iter().flatten().any(|col| maps.contains(col)))
-        }) || node.any_child(&mut |c| keys_on(c, maps))
-    }
-    model.equations.iter().any(|eq| keys_on(&eq.rhs, &maps))
-}
-
 /// The factor arrays value invention reads: the `const`-literal variables and
 /// the caller's arrays ([`vi_factor_arrays`]), plus the build-time coordinates
-/// a skolem map gathers from (`src_lon` in `skolem("bin", floor(index(src_lon,
-/// i) / dx), ...)`) when they are observeds of that data alone, so the engine
-/// can read them as factors. The analogue of Julia's `_derive_binning_coords`.
+/// a `join.on` key column gathers from (`src_lon` in `floor(index(src_lon, i)
+/// / dx)`) when they are observeds of that data alone, so the engine can read
+/// them as factors. The analogue of Julia's `_derive_binning_coords`.
 /// A coordinate that reads a parameter, a state or anything else stays out
 /// (the engine then reports it as before).
 fn value_invention_factors(
@@ -4943,12 +4723,12 @@ fn value_invention_factors(
         }
     }
 
-    /// The `join.on` column names of every `distinct` producer and arg-witness.
+    /// The `join.on` column names of every `distinct` producer.
     fn vi_join_columns(e: &Expr, out: &mut BTreeSet<String>) {
         let Expr::Operator(node) = e else {
             return;
         };
-        if node.distinct == Some(true) || matches!(node.op.as_str(), "argmin" | "argmax") {
+        if node.distinct == Some(true) {
             for clause in node.join.iter().flatten() {
                 out.extend(clause.on.iter().flatten().cloned());
             }
@@ -4959,13 +4739,10 @@ fn value_invention_factors(
     for eq in &model.equations {
         vi_join_columns(&eq.rhs, &mut columns);
     }
-    // The coordinates a skolem map gathers from, and those a plain join column
-    // (a per-component bin column) reads.
+    // The coordinates a plain join column (a per-component bin column) reads.
     let mut targets = BTreeSet::new();
     for eq in &model.equations {
-        if expr_contains_skolem(&eq.rhs)
-            || equation_defined_var(&eq.lhs).is_some_and(|v| columns.contains(&v))
-        {
+        if equation_defined_var(&eq.lhs).is_some_and(|v| columns.contains(&v)) {
             index_targets(&eq.rhs, &mut targets);
         }
     }
@@ -5000,12 +4777,11 @@ fn without_factor_literals(model: &Model, factors: &HashMap<String, ArrayD<f64>>
     lean
 }
 
-/// The `from_faq` of the first range in `expr` over a derived set that neither
-/// `extents` sizes nor a geometry producer in `geometry_ids` materializes.
+/// The `from_faq` of the first range in `expr` over a derived set that
+/// `extents` does not size.
 pub(super) fn first_unmaterialized_derived_range(
     expr: &Expr,
     extents: &HashMap<String, i64>,
-    geometry_ids: &HashSet<String>,
 ) -> Option<String> {
     let Expr::Operator(node) = expr else {
         return None;
@@ -5014,7 +4790,7 @@ pub(super) fn first_unmaterialized_derived_range(
         let mut unmaterialized: Vec<&str> = ranges
             .values()
             .filter_map(|spec| spec.derived())
-            .filter(|f| !extents.contains_key(*f) && !geometry_ids.contains(*f))
+            .filter(|f| !extents.contains_key(*f))
             .collect();
         unmaterialized.sort_unstable();
         if let Some(f) = unmaterialized.first() {
@@ -5023,7 +4799,7 @@ pub(super) fn first_unmaterialized_derived_range(
     }
     let mut found = None;
     node.any_child(&mut |child| {
-        found = first_unmaterialized_derived_range(child, extents, geometry_ids);
+        found = first_unmaterialized_derived_range(child, extents);
         found.is_some()
     });
     found
@@ -5073,15 +4849,15 @@ pub(super) fn unmaterialized_derived_error(
                 "{subject} is not materialized: {}",
                 reason
                     .as_deref()
-                    .unwrap_or("no geometry or value-invention producer supplied its extent")
+                    .unwrap_or("no value-invention producer supplied its extent")
             ),
         },
     }
 }
 
 impl DerivedMaterialization {
-    /// The refusal for the first (by set name) non-geometry derived set, when
-    /// value invention failed.
+    /// The refusal for the first (by set name) derived set, when value
+    /// invention failed.
     fn refuse_on_failure(
         &self,
         index_sets: &HashMap<String, IndexSet>,
@@ -5093,7 +4869,6 @@ impl DerivedMaterialization {
             .iter()
             .filter(|(_, is)| is.kind == "derived")
             .filter_map(|(n, is)| Some((n, is.from_faq.as_deref()?)))
-            .filter(|(_, f)| !self.geometry_ids.contains(*f))
             .collect();
         sets.sort();
         match sets.first() {
@@ -5157,8 +4932,7 @@ fn refuse_unmaterialized_derived_ranges(
     let mut found: Option<String> = None;
     let mut visit = |expr: &Expr| {
         if found.is_none() {
-            found =
-                first_unmaterialized_derived_range(expr, &derived.extents, &derived.geometry_ids);
+            found = first_unmaterialized_derived_range(expr, &derived.extents);
         }
     };
     for eq in &model.equations {
@@ -5180,48 +4954,6 @@ fn refuse_unmaterialized_derived_ranges(
         )),
         None => Ok(()),
     }
-}
-
-/// Wire the value-invention front door into the array run path: run the
-/// byte-conformant [`materialize_value_invention`] engine over the raw-JSON model
-/// and rewrite each materialized relational OUTPUT to constant data
-/// ([`rewrite_equation_to_const`]), so `argmin` / `argmax` / `group_aggregate`
-/// simulate end-to-end. Derived index sets named by a materialized producer are
-/// densified to intervals via [`rewrite_derived_index_sets`] (the same handoff
-/// [`apply_value_invention`] performs). A NO-OP — and byte-identical — for any
-/// model without an arg-witness op (gated by [`model_contains_arg_witness`]). A
-/// `skolem`/`distinct` producer in such a model is sized by
-/// [`materialize_derived_extents`] and then dropped by
-/// [`strip_value_invention`].
-///
-/// `caller_arrays` is the caller-supplied factor-array channel (see
-/// [`vi_factor_arrays`]): loader-fed envelope/connectivity factors that are not
-/// `const` literals in the document. `None` reproduces the previous behaviour
-/// exactly.
-fn materialize_vi_outputs_to_data(
-    model: &mut Model,
-    index_sets: &mut HashMap<String, IndexSet>,
-    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
-) -> Result<(), CompileError> {
-    if !model_contains_arg_witness(model) {
-        return Ok(());
-    }
-    let result = run_value_invention(model, index_sets, caller_arrays)?;
-
-    // Densify any derived index set named by a materialized producer (§8.1 handoff).
-    rewrite_derived_index_sets(index_sets, &result.extents);
-
-    // Materialize-to-data: the arg-witness assignment (integer nearest-witness
-    // index) and the grouped/derived SCVT chain (num / den / centroid) become
-    // constant observeds.
-    for (name, buf) in &result.assignments {
-        let as_f64: Vec<f64> = buf.iter().map(|&i| i as f64).collect();
-        rewrite_equation_to_const(model, name, &as_f64);
-    }
-    for (name, buf) in &result.groups {
-        rewrite_equation_to_const(model, name, buf);
-    }
-    Ok(())
 }
 
 /// Resolve a declared `shape` (index-set names) to concrete dense sizes against
@@ -6425,9 +6157,8 @@ mod subsystem_ragged_and_inspection_tests {
             crate::problem::ProblemOptions {
                 inspect: true,
                 rhs: crate::problem::Rhs::Always,
-                // These documents carry a `polygon_intersection_area` regrid
-                // and a RAGGED contraction bound, neither of which the tape
-                // can lower, so `native` refuses them by NAME (API_SPEC
+                // These documents carry a RAGGED contraction bound, which the
+                // tape cannot lower, so `native` refuses them by NAME (API_SPEC
                 // §5.8). What they pin is the ragged/overlap arithmetic and
                 // the inspection sink, which is the reference evaluator's
                 // answer to give.
@@ -6599,7 +6330,7 @@ mod subsystem_ragged_and_inspection_tests {
     /// contraction (a silently unresolved offsets factor) cannot pass.
     fn ragged_miniature_doc() -> serde_json::Value {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "ragged_subsystem_miniature"},
             "index_sets": {
                 "cells": {"kind": "interval", "size": 2},
@@ -6611,7 +6342,7 @@ mod subsystem_ragged_and_inspection_tests {
             },
             "models": {"M": {
                 "subsystems": {"mesh": {
-                    "esm": "1.0.0",
+                    "esm": "2.0.0",
                     "metadata": {"name": "mini_mesh"},
                     "models": {"MiniMesh": {
                         "variables": {
@@ -6816,14 +6547,14 @@ mod subsystem_ragged_and_inspection_tests {
 
     /// The conservative-overlap exact rationals through the inspection
     /// surface: two unit source squares tiling one 2x1 target rectangle. The
-    /// per-pair overlap areas, the filtered row-sum, and the normalized
-    /// weights are the library-shaped aggregates of the ESD fixture (narrow
-    /// phase `polygon_intersection_area`, sliver filter `> atol`), and every
-    /// captured value is BIT-EXACT: A_ij = [1, 1], A_j = [2], W = [1/2, 1/2].
+    /// per-pair overlap areas (given here as data), the filtered row-sum, and
+    /// the normalized weights are the library-shaped aggregates of the ESD
+    /// fixture (sliver filter `> atol`), and every captured value is
+    /// BIT-EXACT: A_ij = [1, 1], A_j = [2], W = [1/2, 1/2].
     #[test]
     fn exact_rational_overlap_weights_through_inspection() {
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "inspect_overlap"},
             "index_sets": {
                 "src_cells": {"kind": "interval", "size": 2},
@@ -6834,25 +6565,12 @@ mod subsystem_ragged_and_inspection_tests {
                     "q": {"type": "unknown", "units": "1", "shape": ["tgt_cells"],
                           "default": 0.0},
                     "atol": {"type": "parameter", "units": "1", "default": 1e-12},
-                    "src_poly": {"type": "unknown"},
-                    "tgt_poly": {"type": "unknown"},
                     "A_ij": {"type": "unknown"},
                     "A_j": {"type": "unknown"},
                     "W_ij": {"type": "unknown"}
                 },
                 "equations": [
-                {"lhs": "src_poly", "rhs": {"op": "const", "args": [], "value": [
-                            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                            [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]]]}},
-                {"lhs": "tgt_poly", "rhs": {"op": "const", "args": [], "value": [
-                            [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]]}},
-                {"lhs": "A_ij", "rhs": {
-                        "op": "faq", "args": ["src_poly", "tgt_poly"],
-                        "output_idx": ["i", "j"], "semiring": "sum_product",
-                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
-                        "expr": {"op": "polygon_intersection_area", "manifold": "planar",
-                                 "args": [{"op": "index", "args": ["src_poly", "i"]},
-                                          {"op": "index", "args": ["tgt_poly", "j"]}]}}},
+                {"lhs": "A_ij", "rhs": {"op": "const", "args": [], "value": [[1.0], [1.0]]}},
                 {"lhs": "A_j", "rhs": {
                         "op": "faq", "args": ["A_ij"],
                         "output_idx": ["j"], "semiring": "sum_product",
@@ -6941,7 +6659,7 @@ mod subsystem_ragged_and_inspection_tests {
     #[test]
     fn self_qualified_references_inside_subsystem_bodies_resolve() {
         let file = typed(json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "nested_self_refs"},
             "models": {"M": {
                 "variables": {"k": {"type": "parameter", "units": "1", "default": 2.0}},
@@ -7002,7 +6720,7 @@ mod event_driven_update_refusal_tests {
     fn an_expression_update_is_refused_naming_its_kinds() {
         let file = crate::parse::load_string(
             r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "ExprUpdates", "authors": ["test"] },
   "models": { "M": {
     "variables": {
@@ -7039,7 +6757,7 @@ mod updated_array_default_tests {
 
     fn model_of(vars: Value, equations: Value) -> (Model, HashMap<String, IndexSet>) {
         let file: EsmFile = serde_json::from_value(json!({
-            "esm": "1.2.0",
+            "esm": "2.0.0",
             "metadata": {"name": "updated_array_default"},
             "index_sets": {"x": {"kind": "interval", "size": 3}},
             "data_sources": {"met": {"kind": "grid", "source": {"url_template": "file:///m.nc"}}},

@@ -13,7 +13,7 @@
 #       point-in-cell computation (correctness), AND
 #   (b) the producer VISITED ~O(|candidates|)=200 tuples — not O(200·20000)=4e6 —
 #       and completes in well under a couple seconds (the scaling fix).
-# It also confirms the candidate-set CONSTRUCTION takes the STRtree fast path.
+# It also bounds the candidate-set CONSTRUCTION time (the binned broad phase).
 
 # Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
 # stay isolated from other test files' identically-named helpers in the shared
@@ -26,14 +26,6 @@ using Test
 using EarthSciAST
 import JSON3
 using Random
-# These four weakdeps load EarthSciASTGeometryOpsExt → the STRtree fast path for
-# the broad phase (so candidate construction is O(N log N), not O(N·M)). All four
-# are the extension's trigger set, imported explicitly so the fast path is
-# exercised even when this file runs standalone.
-import GeometryOps
-import GeoInterface
-import SortTileRecursiveTree
-import Extents
 
 const ESS = EarthSciAST
 
@@ -42,10 +34,6 @@ _ix(f, args...) = Dict("op" => "index", "args" => Any[f, args...])
 _op(o, args...) = Dict("op" => o, "args" => Any[args...])
 
 @testset "VI overlap-gate producer scaling (Wall #1)" begin
-
-    # STRtree fast path is available (ext loaded) → candidate construction is the
-    # O(N log N) dual-tree descent, not the O(N·M) brute pass.
-    @test hasmethod(ESS.build_spatial_index, Tuple{AbstractVector})
 
     # ---- grid of cells + points at distinct cell centres ------------------
     Random.seed!(0x00C0FFEE)
@@ -73,7 +61,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         "X" => PX, "Y" => PY, "W" => CW, "S" => CS, "E" => CE, "N" => CN
     )
 
-    # ---- candidate set construction: O(N log N) STRtree, |cands| == npts ---
+    # ---- candidate set construction: binned broad phase, |cands| == npts ---
     # WARM UP on a tiny same-typed input first (the same JIT-vs-runtime
     # discipline the value-invention timing below already uses): the assertion
     # is about the SCALING of the candidate pass, not about compile time.
@@ -88,7 +76,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         ESS._overlap_candidate_set(["X", "Y"], ["W", "S", "E", "N"], const_arrays; eps = 0.0)
     # each point centre intersects exactly ONE closed cell envelope
     @test length(cands) == npts
-    # Blow-up guard, NOT a benchmark. What this must catch is the fast path
+    # Blow-up guard, NOT a benchmark. What this must catch is the binned path
     # silently falling back to the O(N*M) brute pass (20000 cells x 200 points),
     # which is orders of magnitude slower -- not a few hundred ms of runner
     # jitter. The old 2.0 s bound sat barely above the pass's own typical
@@ -124,7 +112,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     )
 
     _mkdoc(np, nc) = Dict(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "vi_overlap_scaling"),
         "index_sets" => Dict(
             "points" => Dict("kind" => "interval", "size" => np),
@@ -166,7 +154,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                             ],
                             "filter" => _filter,
                             "args" => ["X", "Y", "W", "S", "E", "N"],
-                            "key" => Dict("op" => "skolem", "label" => "cell", "args" => ["j"]),
+                            "key" => "j",
                             "expr" => Dict("op" => "true", "args" => [])
                         )
                     ),
@@ -265,7 +253,7 @@ end
         "N" => Dict("type" => "parameter", "shape" => ["cells"])
     )
     _mirror_doc(np, nc) = Dict(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "dense_overlap_mirror"),
         "index_sets" => Dict(
             "points" => Dict("kind" => "interval", "size" => np),

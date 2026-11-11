@@ -822,7 +822,7 @@ pub(crate) struct BuildProducts {
     pub baked_parameters: Vec<String>,
     /// Why a state-free document's observed graph could not be evaluated at
     /// construction — a fail-closed evaluation fault such as
-    /// `table_lookup_out_of_bounds` — so [`observed_field`] can name the cause
+    /// `E_TREEWALK_CONSTARRAY_OOB` — so [`observed_field`] can name the cause
     /// instead of only the name it cannot answer.
     pub static_eval_error: Option<String>,
 }
@@ -1973,35 +1973,6 @@ pub fn esm_problem<'a>(
         inferred = true;
     }
 
-    // ---- (1d) Lower `table_lookup` (esm-spec §9.5.3). ---------------------
-    // `table_lookup` is sugar over `interp.linear` / `interp.bilinear` /
-    // `index`, and NOTHING downstream evaluates it — the array runtime's
-    // stage-(0) gate refuses it as `unevaluable_operator`. Lowering happens
-    // here rather than in `parse::load_value` because §9.5.4 requires the
-    // AUTHORED form to round-trip and this binding serializes the typed
-    // document it loaded; a load-time rewrite would emit the lowered `fn`
-    // tree (issue #188).
-    //
-    // Done for a TYPED input before the block below re-serializes it, so the
-    // build pipeline's own observed-graph evaluation sees the lowered form
-    // too; a raw-JSON input gets the same treatment at stage (3c), after its
-    // typed parse. The pass is idempotent, so a document that goes through
-    // both is lowered once.
-    if let Some(f) = owned_file.as_mut() {
-        crate::lower_table_lookup::lower_table_lookups(f).map_err(SimulateError::Compile)?;
-    }
-    // A caller-flattened system has no document, but `flatten` carries
-    // `function_tables` so that this carrier can be lowered too. The lowered
-    // system is a copy the build owns; the caller's keeps the authored form.
-    let lowered_flat;
-    if let Some(flat) = flat_only
-        && let Some(lowered) = crate::lower_table_lookup::lowered_flattened_copy(flat)
-            .map_err(SimulateError::Compile)?
-    {
-        lowered_flat = lowered;
-        flat_only = Some(&lowered_flat);
-    }
-
     // ---- (2) The deterministic build pipeline. ----------------------------
     // `mut` on wasm32 only in the sense that the pipeline that writes these is
     // native-only; the bindings themselves exist on both targets.
@@ -2238,14 +2209,6 @@ pub fn esm_problem<'a>(
         pipeline_flat = None;
     }
 
-    // ---- (3c) Lower `table_lookup`, for a RAW-JSON input. ------------------
-    // The counterpart of stage (1d) for a document that had no typed form
-    // until stage (3). Idempotent, so a typed input already lowered above
-    // walks nothing here.
-    if let Some(f) = owned_file.as_mut() {
-        crate::lower_table_lookup::lower_table_lookups(f).map_err(SimulateError::Compile)?;
-    }
-
     // ---- (3d) Caller arrays for shaped parameters. ------------------------
     // CONFORMANCE_SPEC §5.32.5: a caller's `const_arrays` entry that gives a
     // shaped parameter its value is the same binding as an inline-array
@@ -2264,7 +2227,7 @@ pub fn esm_problem<'a>(
     if !opts.p.is_empty() {
         pipeline_flat = None;
     }
-    // A scalar parameter value invention reads (a skolem bin width) is
+    // A scalar parameter value invention reads (a key's bin width) is
     // build-time data: the invented set's size depends on it, so the caller's
     // `p` entry lands on its `default`, which the compile's value invention
     // reads, and the parameter is baked into the build.
@@ -2944,16 +2907,9 @@ fn static_observed_fields(
     )?;
     let values = match compiled.evaluate_stateless_fields(p, t0) {
         Ok(values) => values,
-        // A value the spec makes invalid (a degenerate polygon operand,
-        // esm-spec §8.6.1) is refused, not handed back as a Problem with no
-        // fields; a value that is only not yet available (a parameter with no
-        // default, a field a provider fills later) still is.
-        Err(e)
-            if e.to_string()
-                .contains(crate::simulate_array::GEOMETRY_CLIP_CODE) =>
-        {
-            return Err(e);
-        }
+        // A value that is only not yet available (a parameter with no
+        // default, a field a provider fills later) leaves the Problem with no
+        // fields rather than refusing it.
         Err(e) => return Ok((HashMap::new(), report.rules, Some(e.to_string()))),
     };
     let fields = values
@@ -3428,12 +3384,10 @@ fn refuse_parameter_definitions(
             let name = loop {
                 match lhs {
                     crate::types::Expr::Variable(v) => break Some(v.as_str()),
-                    crate::types::Expr::Operator(n) if n.op == "faq" || n.op == "aggregate" => {
-                        match n.expr.as_deref() {
-                            Some(x) => lhs = x,
-                            None => break None,
-                        }
-                    }
+                    crate::types::Expr::Operator(n) if n.op == "faq" => match n.expr.as_deref() {
+                        Some(x) => lhs = x,
+                        None => break None,
+                    },
                     crate::types::Expr::Operator(n)
                         if n.op == "index"
                             || (n.op == "D" && matches!(n.wrt.as_deref(), None | Some("t"))) =>
@@ -4243,8 +4197,8 @@ impl SuppliedData {
     }
 }
 
-/// Set each 0-D parameter a value-invention node reads (inside a `skolem`,
-/// `rank` or arg-witness node, or a `distinct` / keyed `faq`) to the caller's
+/// Set each 0-D parameter a value-invention node reads (inside a `distinct` /
+/// keyed `faq`) to the caller's
 /// `p` entry for it — keyed `Model.param` or bare — and return the `p` keys
 /// used.
 fn bind_value_invention_params(file: &mut EsmFile, p: &HashMap<String, f64>) -> Vec<String> {
@@ -4256,10 +4210,7 @@ fn bind_value_invention_params(file: &mut EsmFile, p: &HashMap<String, f64>) -> 
                 out.insert(v.clone());
             }
             Expr::Operator(n) => {
-                let vi = inside
-                    || matches!(n.op.as_str(), "skolem" | "rank" | "argmin" | "argmax")
-                    || n.distinct == Some(true)
-                    || n.key.is_some();
+                let vi = inside || n.distinct == Some(true) || n.key.is_some();
                 n.for_each_child(&mut |c| collect(c, vi, out));
             }
             _ => {}
@@ -5342,7 +5293,7 @@ mod stepping_tolerance_tests {
 
     fn doc(solver: &str) -> serde_json::Value {
         serde_json::from_str(&format!(
-            r#"{{"esm":"1.1.0","metadata":{{"name":"T"}},{solver}"models":{{"M":{{
+            r#"{{"esm": "2.0.0","metadata":{{"name":"T"}},{solver}"models":{{"M":{{
                  "variables":{{"y":{{"type":"unknown","units":"m","default":1.0}}}},
                  "equations":[{{"lhs":{{"op":"D","args":["y"],"wrt":"t"}},
                                 "rhs":{{"op":"neg","args":["y"]}}}}]}}}}}}"#

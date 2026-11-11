@@ -1,17 +1,12 @@
-# Template rewrites of the skolem / rank / gated-argmin fixtures against the op
-# forms (tests/conformance/relational_templates/rewrites/manifest.json).
-#
-# Each rewrite replaces the value-invention ops with lib/relational.esm
-# templates (`pair_key` / `edge_key` keys, per-component join columns, the loop
-# index for a set's own rank, `argmin_where` for a gated arg-witness). Both forms
-# are built with the same caller data and must agree: the derived set's members
-# (the op's tuples against the template's integer keys, decoded), its extent,
-# the 1-based dense IDs, the arg-witness buffers, and the right-hand side at the
-# initial state, bit for bit, with the template built under the interpreter and
-# strict native. Both forms are also checked against the expected values the
-# manifest's `golden` files hold (computed from the op form by the reference
-# binding, rewrites/goldens.py). A `value_invention_key_out_of_range` refusal
-# names the column.
+# The lib/relational.esm template forms of the relational fixtures
+# (tests/conformance/relational_templates/rewrites/manifest.json): `pair_key` /
+# `edge_key` keys, per-component join columns, the loop index for a set's own
+# rank, `argmin_where` for a gated arg-witness. Each is built with the case's
+# caller data, under the interpreter and strict native, and checked against the
+# expected values the manifest's `golden` files hold: the derived set's members
+# (the template's integer keys, decoded) and extent, the 1-based dense IDs, the
+# arg-witness buffers and the right-hand side at the golden probe state, bit for
+# bit. A `value_invention_key_out_of_range` refusal names the column.
 
 using Test
 using JSON3
@@ -77,7 +72,7 @@ function _rr_vi(path, case, model)
     params = _rr_params(case)
     merge!(
         ca, EarthSciAST._derive_binning_coords(
-            m, file.index_sets, ca, params, EarthSciAST._vi_skolem_index_targets(m)
+            m, file.index_sets, ca, params, EarthSciAST._vi_index_targets(m)
         )
     )
     for (n, defn) in EarthSciAST.observed_definitions(m)
@@ -92,7 +87,7 @@ _rr_decode(k, lo, n_b) = (div(k, n_b) + lo[1], mod(k, n_b) + lo[2])
 # `rank_of(x, members, n)` from lib/relational.esm, as the derivative of a state.
 function _rr_rank_of(x, members)
     doc = Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict{String, Any}("name" => "rank_of_probe", "authors" => Any["t"]),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
@@ -124,13 +119,6 @@ function _rr_rank_of(x, members)
     return du[vm["r"]]
 end
 
-# The right-hand side at the initial state, keyed by state-element name.
-function _rr_rhs(prob)
-    du = similar(prob.u0)
-    prob.f!(du, copy(prob.u0), prob.p, 0.0)
-    return Dict(n => du[i] for (n, i) in prob.var_map)
-end
-
 # A state element's golden key: `Model.var[1, 2]` -> `var[1,2]`.
 _rr_key(n, model) = replace(startswith(n, model * ".") ? n[(length(model) + 2):end] : n, " " => "")
 
@@ -153,18 +141,16 @@ const _RR_CASES = [
         if !haskey(e.compare, :tier)
 ]
 
-@testset "lib/relational.esm rewrites of the skolem / rank / gated-argmin fixtures" begin
-    @testset "relational template rewrites agree with the op forms" begin
+@testset "lib/relational.esm template forms of the relational fixtures" begin
+    @testset "relational template forms match the goldens" begin
         @testset "$(e.id) case $i [$(compiler)]" for (e, i, case) in _RR_CASES,
                 compiler in (:interpreter, :native)
             cmp = e.compare
             model = String(e.models[1])
-            src = joinpath(_RR_ROOT, String(e.source))
             tpl = _rr_path(e)
             gold = _RR_GOLDEN[String(e.id)].cases[i]
-            # Derived sets: members and extents, from value invention on each form.
+            # Derived sets: members and extents, from value invention.
             if haskey(cmp, :sets)
-                op_vi = _rr_vi(src, case, model)
                 tp_vi = _rr_vi(tpl, case, model)
                 for s in cmp.sets
                     faq = String(s.faq)
@@ -172,85 +158,54 @@ const _RR_CASES = [
                     @test all(m -> m isa Integer, tp_members)
                     @test tp_members == sort(unique(tp_members))
                     decoded = [_rr_decode(m, s.decode.lo, Int(s.decode.n_b)) for m in tp_members]
-                    @test decoded == [Tuple(m) for m in op_vi.members[faq]]
-                    @test tp_vi.extents[faq] == op_vi.extents[faq]
                     gs = gold.sets[Symbol(faq)]
-                    want = [Tuple(Int.(m)) for m in gs.members]
-                    @test [Tuple(m) for m in op_vi.members[faq]] == want   # op form vs golden
-                    @test decoded == want                                  # template vs golden
+                    @test decoded == [Tuple(Int.(m)) for m in gs.members]
                     @test tp_vi.extents[faq] == gs.extent
                 end
             end
             get(cmp, :vi_only, false) && continue
-            op_prob = _rr_build(src, case, :interpreter, model)
             tp_prob = _rr_build(tpl, case, compiler, model)
             if haskey(cmp, :rank)
                 faq = String(cmp.rank.faq)
-                op_members = [Tuple(m) for m in _rr_vi(src, case, model).members[faq]]
-                ids = EarthSciAST.Relational.rank(op_members; base = 0)
-                want = Float64[ids.id[m] + 1 for m in op_members]   # the 0 -> 1 base shift
                 rvar = String(cmp.rank.variable)
-                @test vec(observed_field(tp_prob, rvar)) == want
-                @test _rr_bits(want) == _rr_bits(gold.rank.values)
-                @test _rr_bits(vec(observed_field(tp_prob, rvar))) == _rr_bits(gold.rank.values)
+                want = Float64.(collect(gold.rank.values))
+                @test _rr_bits(vec(observed_field(tp_prob, rvar))) == _rr_bits(want)
                 tp_members = _rr_vi(tpl, case, model).members[faq]
                 @test [_rr_rank_of(m, tp_members) for m in tp_members] == want
             end
             if haskey(cmp, :rank_lookup)
-                # A rank looked up against the derived set (rank_of_set over
-                # its members): the op set's 0-based rank of each row's tuple, + 1.
+                # A rank looked up against the derived set (rank_of_set over its
+                # members). The field is flat, rows outermost.
                 rl = cmp.rank_lookup
-                op_members = [Tuple(m) for m in _rr_vi(src, case, model).members[String(rl.faq)]]
-                ids = EarthSciAST.Relational.rank(op_members; base = 0)
-                cols = [reduce(vcat, permutedims.(Vector{Float64}.(case.const_arrays[Symbol(c)]))) for c in rl.columns]
-                want = map(CartesianIndices(cols[1])) do I
-                    t = Tuple(sort([Int(c[I]) for c in cols]))
-                    Float64(ids.id[t] + 1)
-                end
-                # The field is flat, rows outermost (the order of the case's nested arrays).
                 got = Float64.(vec(observed_field(tp_prob, String(rl.variable))))
-                @test reinterpret(UInt64, got) == reinterpret(UInt64, vec(permutedims(want)))
-                @test _rr_bits(vec(permutedims(want))) == _rr_bits(gold.rank_lookup.values)
                 @test _rr_bits(got) == _rr_bits(gold.rank_lookup.values)
             end
             for a in get(cmp, :assignments, [])
-                op_buf = Float64.(_rr_vi(src, case, model).assignments[String(a.op)])
                 tp_buf = Float64.(vec(observed_field(tp_prob, String(a.template))))
-                @test tp_buf == op_buf
-                @test reinterpret(UInt64, tp_buf) == reinterpret(UInt64, op_buf)
-                @test _rr_bits(op_buf) == _rr_bits(gold.assignments[Symbol(a.template)])
+                @test _rr_bits(tp_buf) == _rr_bits(gold.assignments[Symbol(a.template)])
             end
             if get(cmp, :rhs, false)
-                dy_op, dy_tp = _rr_rhs(op_prob), _rr_rhs(tp_prob)
-                @test Set(keys(dy_tp)) == Set(keys(dy_op))
-                @test all(n -> dy_tp[n] === dy_op[n], keys(dy_op))
                 want = Dict(String(k) => Float64(v) for (k, v) in gold.rhs.dy)
-                for prob in (op_prob, tp_prob)
-                    got = _rr_rhs_at(prob, model, gold.rhs.state)
-                    @test Set(keys(got)) == Set(keys(want))
-                    @test all(n -> got[n] === want[n], keys(want))
-                end
+                got = _rr_rhs_at(tp_prob, model, gold.rhs.state)
+                @test Set(keys(got)) == Set(keys(want))
+                @test all(n -> got[n] === want[n], keys(want))
             end
         end
     end
 
-    @testset "rewrites load, and run their inline tests like the op form" begin
+    @testset "template forms load, and run their inline tests to the goldens" begin
         @testset "$(e.id)" for e in _RR_MANIFEST
             cmp = e.compare
             (get(cmp, :inline_tests, false) || get(cmp, :load_only, false)) || continue
             path = _rr_path(e)
             @test load_path(path) isa EsmFile
             if get(cmp, :inline_tests, false)
-                op = run_inline_tests(joinpath(_RR_ROOT, String(e.source)); compiler = :interpreter)
                 tp = run_inline_tests(path; compiler = :interpreter)
-                @test [r.actual for r in tp] == [r.actual for r in op]
                 # Integrator outputs: within each assertion's tolerance, not bit for bit.
                 gold = _RR_GOLDEN[String(e.id)].inline_tests
-                for res in (op, tp)
-                    @test length(res) == length(gold)
-                    @test all(zip(res, gold)) do (r, g)
-                        abs(r.actual - g.actual) <= max(g.atol, g.rtol * abs(g.actual))
-                    end
+                @test length(tp) == length(gold)
+                @test all(zip(tp, gold)) do (r, g)
+                    abs(r.actual - g.actual) <= max(g.atol, g.rtol * abs(g.actual))
                 end
             end
         end

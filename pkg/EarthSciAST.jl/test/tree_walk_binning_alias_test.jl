@@ -2,13 +2,13 @@
 # regridding broad phase hit (ess: julia-treewalk gaps 1 & 2).
 #
 #  GAP 1 — a TEMPLATE-CONSTRUCTED (aggregate-valued) binning coordinate is now an
-#          admissible value-invention skolem index target. Previously only a
+#          admissible build-time bin-key input. Previously only a
 #          const-supplied / reduce-over-const coordinate was admitted, so a
 #          coordinate derived from constructed cell rings (an aggregate over a grid
 #          spec) threw E_TREEWALK_VI_INDEX. Determinism is preserved: only a
 #          statically-determinable (state-free) build-time coordinate is admitted.
 #
-#  GAP 2 — a setup-geometry var (a fused-leaf `A_ij` aggregate) may reference a
+#  GAP 2 — a setup-geometry var (an overlap-area `A_ij` aggregate) may reference a
 #          BARE-ALIAS array observed (`src_poly := base_poly`, the MPAS keyed-factor
 #          re-exposure). Previously the geometry-setup backward pass pulled the bare
 #          alias into the setup vars and `_materialize_geom_array` crashed on the
@@ -36,15 +36,17 @@ _twb_floor(x) = Dict{String, Any}("op" => "floor", "args" => [x])
 _twb_div(a, b) = Dict{String, Any}("op" => "/", "args" => [a, b])
 _twb_eq(a, b) = Dict{String, Any}("op" => "==", "args" => [a, b])
 _twb_mul(a...) = Dict{String, Any}("op" => "*", "args" => collect(Any, a))
-# skolem[bin](floor(lon[sym]/bin_dx), floor(lat[sym]/bin_dy))
-# The "bin" relation tag lives in the dedicated `label` field (esm-spec skolem
-# key shape); `args` are the pure key components.
-_twb_binkey(lon, lat, sym) = Dict{String, Any}(
-    "op" => "skolem", "label" => "bin", "args" => [
-        _twb_floor(_twb_div(_twb_ix(lon, sym), "bin_dx")),
-        _twb_floor(_twb_div(_twb_ix(lat, sym), "bin_dy")),
-    ]
+# One integer bin column: floor(coord[sym] / step).
+_twb_bincol(coord, step, sym) = _twb_floor(_twb_div(_twb_ix(coord, sym), step))
+# The planar overlap area of `ra[i]` and `rb[j]` (lib/geometry.esm), 4 vertex
+# slots each.
+_twb_overlap(ra, rb) = Dict{String, Any}(
+    "op" => "apply_expression_template", "args" => [], "name" => "overlap_area_planar",
+    "bindings" => Dict{String, Any}(
+        "ring_a" => ra, "cell_a" => "i", "nv_a" => 4, "ring_b" => rb, "cell_b" => "j", "nv_b" => 4
+    )
 )
+const _TWB_IMPORTS = Any[Dict{String, Any}("ref" => "esm:std/geometry.esm", "only" => Any["overlap_area_planar"])]
 
 # The GAP 1 document: a gated conservative-regridding broad phase whose target
 # rings AND binning coordinate are TEMPLATE-CONSTRUCTED (an affine aggregate over
@@ -70,7 +72,8 @@ function _twb_gap1_doc()
     )
 
     rng_ij = Dict{String, Any}("i" => Dict("from" => "src_cells"), "j" => Dict("from" => "tgt_cells"))
-    joinbin = Any[Dict{String, Any}("on" => Any[Any["src_bin", "tgt_bin"]])]
+    # The bin key is one integer column per component, one `on` pair each.
+    joinbin = Any[Dict{String, Any}("on" => Any[Any["src_bx", "tgt_bx"], Any["src_by", "tgt_by"]])]
     filt = Dict{String, Any}("op" => ">", "args" => [_twb_ix("A_ij_gated", "i", "j"), "atol"])
 
     # esm 1.0.0 (esm-spec §6.3.1): an observed unknown carries NO
@@ -90,8 +93,10 @@ function _twb_gap1_doc()
         "src_lat" => Dict{String, Any}("type" => "unknown", "shape" => ["src_cells"]),
         "tgt_lon" => Dict{String, Any}("type" => "unknown", "shape" => ["tgt_cells"]),
         "tgt_lat" => Dict{String, Any}("type" => "unknown", "shape" => ["tgt_cells"]),
-        "src_bin" => Dict{String, Any}("type" => "unknown", "shape" => ["src_cells"]),
-        "tgt_bin" => Dict{String, Any}("type" => "unknown", "shape" => ["tgt_cells"]),
+        "src_bx" => Dict{String, Any}("type" => "unknown", "shape" => ["src_cells"]),
+        "src_by" => Dict{String, Any}("type" => "unknown", "shape" => ["src_cells"]),
+        "tgt_bx" => Dict{String, Any}("type" => "unknown", "shape" => ["tgt_cells"]),
+        "tgt_by" => Dict{String, Any}("type" => "unknown", "shape" => ["tgt_cells"]),
         "A_ij" => Dict{String, Any}("type" => "unknown", "shape" => ["src_cells", "tgt_cells"]),
         "A_ij_gated" => Dict{String, Any}("type" => "unknown", "shape" => ["src_cells", "tgt_cells"]),
         "A_j_gated" => Dict{String, Any}("type" => "unknown", "shape" => ["tgt_cells"]),
@@ -139,49 +144,42 @@ function _twb_gap1_doc()
                 ["tgt_poly"], _twb_ix("tgt_poly", "j", "v", 2), Dict("reduce" => "min")
             )
         ),
-        # bin keys: skolem over the CONSTRUCTED coordinate (the gap-1 admission).
-        _twb_def(
-            "src_bin", _twb_agg(
-                ["i"], Dict{String, Any}("i" => Dict("from" => "src_cells")),
-                ["src_lon", "src_lat"], _twb_binkey("src_lon", "src_lat", "i")
+        # bin columns over the CONSTRUCTED coordinate (the gap-1 admission).
+        [
+            _twb_def(
+                col, _twb_agg(
+                    [sym], Dict{String, Any}(sym => Dict("from" => cells)),
+                    [coord], _twb_bincol(coord, step, sym)
+                )
             )
-        ),
-        _twb_def(
-            "tgt_bin", _twb_agg(
-                ["j"], Dict{String, Any}("j" => Dict("from" => "tgt_cells")),
-                ["tgt_lon", "tgt_lat"], _twb_binkey("tgt_lon", "tgt_lat", "j")
-            )
-        ),
+                for (col, coord, step, sym, cells) in (
+                    ("src_bx", "src_lon", "bin_dx", "i", "src_cells"), ("src_by", "src_lat", "bin_dy", "i", "src_cells"),
+                    ("tgt_bx", "tgt_lon", "bin_dx", "j", "tgt_cells"), ("tgt_by", "tgt_lat", "bin_dy", "j", "tgt_cells"),
+                )
+        ]...,
         # DENSE narrow phase (oracle).
         _twb_def(
             "A_ij", _twb_agg(
-                ["i", "j"], rng_ij, ["src_poly", "tgt_poly"],
-                Dict{String, Any}(
-                    "op" => "polygon_intersection_area", "manifold" => "planar",
-                    "args" => [_twb_ix("src_poly", "i"), _twb_ix("tgt_poly", "j")]
-                )
+                ["i", "j"], rng_ij, ["src_poly", "tgt_poly"], _twb_overlap("src_poly", "tgt_poly")
             )
         ),
         # GATED narrow phase (join on the constructed-coordinate bins).
         _twb_def(
             "A_ij_gated", _twb_agg(
-                ["i", "j"], rng_ij, ["src_poly", "tgt_poly", "src_bin", "tgt_bin"],
-                Dict{String, Any}(
-                    "op" => "polygon_intersection_area", "manifold" => "planar",
-                    "args" => [_twb_ix("src_poly", "i"), _twb_ix("tgt_poly", "j")]
-                ),
+                ["i", "j"], rng_ij, ["src_poly", "tgt_poly", "src_bx", "src_by", "tgt_bx", "tgt_by"],
+                _twb_overlap("src_poly", "tgt_poly"),
                 Dict("join" => joinbin)
             )
         ),
         _twb_def(
             "A_j_gated", _twb_agg(
-                ["j"], rng_ij, ["A_ij_gated", "src_bin", "tgt_bin"],
+                ["j"], rng_ij, ["A_ij_gated", "src_bx", "src_by", "tgt_bx", "tgt_by"],
                 _twb_ix("A_ij_gated", "i", "j"), Dict("join" => joinbin, "filter" => filt)
             )
         ),
         _twb_def(
             "F_tgt_gated", _twb_agg(
-                ["j"], rng_ij, ["A_ij_gated", "A_j_gated", "F_src", "src_bin", "tgt_bin"],
+                ["j"], rng_ij, ["A_ij_gated", "A_j_gated", "F_src", "src_bx", "src_by", "tgt_bx", "tgt_by"],
                 _twb_div(
                     _twb_mul(_twb_ix("A_ij_gated", "i", "j"), _twb_ix("F_src", "i")),
                     _twb_ix("A_j_gated", "j")
@@ -190,7 +188,7 @@ function _twb_gap1_doc()
         ),
         _twb_def(
             "F_unit_gated", _twb_agg(
-                ["j"], rng_ij, ["A_ij_gated", "A_j_gated", "unit_src", "src_bin", "tgt_bin"],
+                ["j"], rng_ij, ["A_ij_gated", "A_j_gated", "unit_src", "src_bx", "src_by", "tgt_bx", "tgt_by"],
                 _twb_div(
                     _twb_mul(_twb_ix("A_ij_gated", "i", "j"), _twb_ix("unit_src", "i")),
                     _twb_ix("A_j_gated", "j")
@@ -199,7 +197,7 @@ function _twb_gap1_doc()
         ),
     ]
     doc = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "gated_constructed"),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "gated_constructed"),
         "index_sets" => Dict{String, Any}(
             "src_cells" => Dict{String, Any}("kind" => "interval", "size" => 2),
             "tgt_cells" => Dict{String, Any}("kind" => "interval", "size" => 2),
@@ -208,6 +206,7 @@ function _twb_gap1_doc()
         ),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
+                "expression_template_imports" => _TWB_IMPORTS,
                 "variables" => vars, "equations" => vcat(
                     obs_defs, Any[
                         Dict{String, Any}("lhs" => Dict{String, Any}("op" => "ic", "args" => ["regrid_state"]), "rhs" => 0.0),
@@ -230,7 +229,7 @@ end
     # spec), not const-supplied. Two DISJOINT clusters make the bbox-min bin
     # admissible AND pruning real: src1/tgt1 at the origin, src2/tgt2 far at x≈10.
     # ===================================================================
-    @testset "GAP 1: aggregate-constructed coordinate is an admissible skolem-bin index target" begin
+    @testset "GAP 1: aggregate-constructed coordinate is an admissible bin-key input" begin
         doc = _twb_gap1_doc()
         insp = _TWB.BuildInspection()
         f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(doc; model_name = "M", inspect = insp)
@@ -296,7 +295,7 @@ end
     end
 
     # ===================================================================
-    # GAP 2 — a setup-geometry var (the fused-leaf A_ij) references a BARE-ALIAS
+    # GAP 2 — a setup-geometry var (the overlap-area A_ij) references a BARE-ALIAS
     # array observed. The build must resolve the alias to its const-backed rings in
     # the setup env instead of crashing in _materialize_geom_array.
     # ===================================================================
@@ -320,16 +319,12 @@ end
                 "A_ij", _twb_agg(
                     ["i", "j"],
                     Dict{String, Any}("i" => Dict("from" => "src_cells"), "j" => Dict("from" => "tgt_cells")),
-                    ["src_poly", "tgt_poly"],
-                    Dict{String, Any}(
-                        "op" => "polygon_intersection_area", "manifold" => "planar",
-                        "args" => [_twb_ix("src_poly", "i"), _twb_ix("tgt_poly", "j")]
-                    )
+                    ["src_poly", "tgt_poly"], _twb_overlap("src_poly", "tgt_poly")
                 )
             ),
         ]
         doc = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "alias_setup"),
+            "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "alias_setup"),
             "index_sets" => Dict{String, Any}(
                 "src_cells" => Dict{String, Any}("kind" => "interval", "size" => 1),
                 "tgt_cells" => Dict{String, Any}("kind" => "interval", "size" => 1),
@@ -338,6 +333,7 @@ end
             ),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
+                    "expression_template_imports" => _TWB_IMPORTS,
                     "variables" => vars, "equations" => vcat(
                         obs_defs, Any[
                             Dict{String, Any}("lhs" => Dict{String, Any}("op" => "ic", "args" => ["s"]), "rhs" => 0.0),

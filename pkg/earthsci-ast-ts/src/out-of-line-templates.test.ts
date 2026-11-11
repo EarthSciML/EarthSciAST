@@ -6,7 +6,7 @@
  * `pkg/EarthSciAST.jl/test/out_of_line_templates_test.jl`.
  *
  * Drives tests/conformance/expression_templates/{emit_*, eager_*, opacity_*,
- * per_instantiation_validation, flatten_registry_merge}.
+ * flatten_registry_merge}.
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -17,7 +17,6 @@ import {
   emitEsmString,
   flattenTemplateRegistries,
   collectApplyNames,
-  EsmMachineryError,
 } from './lower-expression-templates.js'
 import { resolveTemplateMachinery, emitDocument } from './template-imports.js'
 import { fixturesDir } from './test-helpers.js'
@@ -169,9 +168,12 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     const adv = doc.models.Advection
     // Rule 8 version stamp: emitting a surviving reference requires Option B,
     // i.e. `esm >= 0.9.0`. It is a FLOOR, not an assignment — a source document
-    // above the floor must not be stamped back down to an unloadable 0.9.0.
-    // This fixture is 1.1.0: its imported rules lower to `faq`.
-    expect(doc.esm).toBe('1.1.0')
+    // above the floor must not be stamped back down to an unloadable 0.9.0, so
+    // the emitted version is the source's own.
+    const source = JSON.parse(
+      fs.readFileSync(conf('emit_materialized_registry', 'fixture.esm'), 'utf-8'),
+    ) as { esm: string }
+    expect(doc.esm).toBe(source.esm)
     expect('expression_template_imports' in adv).toBe(false) // imports consumed
     const reg = adv.expression_templates
     expect(new Set(Object.keys(reg))).toEqual(new Set(['central_D_lon_interior', 'dlon_deg']))
@@ -249,28 +251,6 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     expect(emit('opacity_priority_shadowing')).toBe(
       fs.readFileSync(conf('opacity_priority_shadowing', 'emitted.esm'), 'utf-8'),
     )
-  })
-
-  // -------------------------------------------------------------------------
-  // per_instantiation_validation (§9.6.9): manifold param, two call sites,
-  // one inadmissible → geometry_manifold_invalid naming the call site.
-  // -------------------------------------------------------------------------
-  it('per_instantiation_validation: memoized manifold check names call site', () => {
-    let err: unknown
-    try {
-      loadRefPreserving('per_instantiation_validation')
-    } catch (e) {
-      err = e
-    }
-    expect(err).toBeInstanceOf(EsmMachineryError)
-    expect((err as EsmMachineryError).code).toBe('geometry_manifold_invalid')
-    // The offending call site is named by PATH. In esm 1.0.0 `area_bad` is an
-    // unknown defined by the document's second equation, so the path that
-    // localizes the bad instantiation is `models.m.equations/1/rhs` (index 1 —
-    // NOT index 0, which is the admissible `area_ok` call site) rather than the
-    // old `variables.area_bad.expression`.
-    expect((err as EsmMachineryError).message).toContain('models.m.equations/1/rhs')
-    expect((err as EsmMachineryError).message).toContain('overlap') // template name
   })
 
   // -------------------------------------------------------------------------

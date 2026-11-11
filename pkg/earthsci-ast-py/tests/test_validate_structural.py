@@ -1371,7 +1371,6 @@ class TestReferenceIntegrityEveryExpressionBearingField:
             "undefined_variable_in_filter.esm",
             "undefined_variable_in_integral_bound.esm",
             "undefined_variable_in_makearray_values.esm",
-            "undefined_variable_in_table_lookup_axes.esm",
             "undefined_variable_in_template_bindings.esm",
             "undefined_variable_in_nested_expr.esm",
         ],

@@ -56,7 +56,7 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         file = _load("mixed")
         @test file.solver.time_span == EarthSciAST.SolverTimeSpan(0, "2019-07-01T01:00:00Z")
         # A rebuild through migrate keeps it.
-        @test EarthSciAST.migrate(file, file.esm).solver == file.solver
+        @test EarthSciAST.migrate(file, EarthSciAST.SCHEMA_VERSION).solver == file.solver
     end
 
     @testset "a document built in memory is checked by the accessor" begin
@@ -138,10 +138,7 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         end
     end
 
-    @testset "the time-span calendar does not capture datetime.day_of_year's kernel" begin
-        # registered_functions.jl's traceable `_days_from_civil` keeps its own
-        # dispatch for `Int` arguments (it returns the `_cdiv` float).
-        @test EarthSciAST._days_from_civil(2019, 1, 1) === 17897.0
+    @testset "the time-span calendar's day count" begin
         @test EarthSciAST._epoch_days(2019, 1, 1) === 17897
     end
 

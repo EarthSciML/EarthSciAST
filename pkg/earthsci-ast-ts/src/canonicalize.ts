@@ -52,8 +52,8 @@ const EMISSIBLE_FIELDS = ['op', 'args', 'wrt', 'dim', 'fn', 'name', 'value', 'un
  * Fields TOLERATED-AND-IGNORED by the canonical emitter: a node carrying them
  * still canonicalizes, emitting the pinned fields only (matches Julia's
  * `_CANONICAL_IGNORED_FIELDS`). Both are display/rendering conveniences with no
- * wire slot of their own (`arg` — the argmin/argmax witness index for the
- * pretty-printer; `bindings` — the apply_expression_template parameter map).
+ * wire slot of their own (`arg` — an arg-witness index; `bindings` — the
+ * apply_expression_template parameter map).
  */
 const CANONICAL_IGNORED_FIELDS = ['arg', 'bindings'] as const
 

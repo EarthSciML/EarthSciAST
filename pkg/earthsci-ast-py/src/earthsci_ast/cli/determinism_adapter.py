@@ -31,16 +31,13 @@ from earthsci_ast.relational import (
     canonical_index_set_json,
     distinct,
     group_aggregate,
-    rank,
     serialize_canonical,
-    skolem,
-    skolem_edge,
 )
 
 
 def _directed_edges_from_faces(faces: list[list[Any]]) -> list[tuple[Any, Any]]:
     """Traverse consecutive vertices of each face (with wraparound) into directed
-    edges — the realistic producer step a mesh FAQ performs before skolem
+    edges — the realistic producer step a mesh FAQ performs before key
     canonicalisation (mirrors the runner's reference shaping)."""
     edges: list[tuple[Any, Any]] = []
     for face in faces:
@@ -69,17 +66,19 @@ def _compute_payload(fixture: dict[str, Any], payload: dict[str, Any]) -> dict[s
         else:
             raise ValueError(f"fixture {fixture['id']}: input needs 'faces' or 'tuples'")
 
+        # An undirected edge's key is its (min, max) pair, a directed one's the
+        # pair as written; a key's dense id is its position in the distinct
+        # set (native 0-based).
         if mode == "undirected":
-            keys = [skolem_edge(a, b) for (a, b) in edges]
+            keys = [(a, b) if a <= b else (b, a) for (a, b) in edges]
         elif mode == "directed":
-            keys = [skolem(t) for t in edges]
+            keys = [tuple(t) for t in edges]
         else:
-            raise ValueError(f"fixture {fixture['id']}: unknown skolem mode {mode!r}")
+            raise ValueError(f"fixture {fixture['id']}: unknown key mode {mode!r}")
 
         index_set = distinct(keys)
         serialized = canonical_index_set_json(keys)
-        ranking = rank(keys)  # native 0-based
-        dense = [ranking.ids[t] for t in index_set]
+        dense = list(range(len(index_set)))
 
     elif primitive == "group_by_sum":
         pairs = group_aggregate(

@@ -1,14 +1,10 @@
-//! The `argmin` / `argmax` templates of `lib/relational.esm` against the
-//! `argmin` / `argmax` arg-witness ops.
+//! The `argmin` / `argmax` templates of `lib/relational.esm`.
 //!
 //! Every scenario of `tests/conformance/relational_templates/scenarios.json`
 //! runs through the expanded template, under the interpreter and the strict
-//! native tape, and must give the scenario's `expected` 1-based index; the op
-//! (value invention, with the candidates as a caller array) must give the
-//! same index, except where the scenario pins `op_expected` (a NaN candidate
-//! after the first, which the op skips and the template picks). The
-//! nearest-generator fixtures, each op node rewritten as the template, give
-//! the op's assignment buffer under both compilers.
+//! native tape, and must give the scenario's `expected` 1-based index. The
+//! nearest-generator fixtures give the expected assignment buffer under both
+//! compilers.
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 
@@ -67,7 +63,7 @@ fn template_values(op: &str, values: &[Value], label: &str) -> [f64; 2] {
         {"op": "index", "args": [{"op": "const", "args": [], "value": dens}, sym]}
     ]});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "relational_template_probe", "authors": ["test"]},
         "models": {"M": {
             "expression_template_imports": [{"ref": library()}],
@@ -145,37 +141,8 @@ fn field_both(doc: &Value, arrays: &[(&str, Vec<f64>)], name: &str, label: &str)
     out.pop().unwrap()
 }
 
-fn op_value(op: &str, values: &[Value], label: &str) -> f64 {
-    let doc = json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "relational_op_probe", "authors": ["test"]},
-        "index_sets": {
-            "points": {"kind": "interval", "size": 1},
-            "cands": {"kind": "interval", "size": values.len()}
-        },
-        "models": {"M": {
-            "variables": {
-                "c": {"type": "parameter", "shape": ["cands"]},
-                "a": {"type": "unknown", "shape": ["points"]}
-            },
-            "equations": [{
-                "lhs": {"op": "index", "args": ["a", "i"]},
-                "rhs": {"op": "faq", "output_idx": ["i"], "args": ["c"],
-                        "ranges": {"i": {"from": "points"}},
-                        "expr": {"op": op, "args": ["c"], "arg": "g",
-                                 "ranges": {"g": {"from": "cands"}},
-                                 "expr": {"op": "index", "args": ["c", "g"]}}}
-            }]
-        }}
-    });
-    let c: Vec<f64> = values.iter().map(decode).collect();
-    let got = field_both(&doc, &[("c", c)], "a", label);
-    assert_eq!(got.len(), 1);
-    got[0]
-}
-
 #[test]
-fn relational_template_scenarios_match_the_op() {
+fn relational_template_scenarios_give_the_expected_index() {
     let path = repo_root().join("tests/conformance/relational_templates/scenarios.json");
     let spec: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     for s in spec["scenarios"].as_array().unwrap() {
@@ -193,91 +160,14 @@ fn relational_template_scenarios_match_the_op() {
                 "{name} ({who}): template gives {got:?}, expected {expected}"
             );
         }
-        let op_expected = s
-            .get("op_expected")
-            .and_then(Value::as_f64)
-            .unwrap_or(expected);
-        let got = op_value(op, values, name);
-        assert_eq!(
-            got, op_expected,
-            "{name}: op gives {got}, expected {op_expected}"
-        );
     }
-}
-
-fn rename(e: &Value, from: &str, to: &str) -> Value {
-    match e {
-        Value::String(s) if s == from => Value::String(to.to_string()),
-        Value::Array(a) => Value::Array(a.iter().map(|x| rename(x, from, to)).collect()),
-        Value::Object(o) => Value::Object(
-            o.iter()
-                .map(|(k, v)| (k.clone(), rename(v, from, to)))
-                .collect(),
-        ),
-        other => other.clone(),
-    }
-}
-
-/// Each `argmin`/`argmax` node (no `join`/`filter`) becomes the template:
-/// the op's `arg` renamed to the template's loop symbol, n the size of its
-/// candidate set.
-fn to_template(e: &Value, index_sets: &Value) -> Value {
-    match e {
-        Value::Object(o)
-            if matches!(
-                o.get("op").and_then(Value::as_str),
-                Some("argmin" | "argmax")
-            ) =>
-        {
-            assert!(!o.contains_key("join") && !o.contains_key("filter"));
-            let op = o["op"].as_str().unwrap();
-            let arg = o["arg"].as_str().unwrap();
-            let ranges = o["ranges"].as_object().unwrap();
-            assert_eq!(ranges.len(), 1);
-            let set = ranges[arg]["from"].as_str().unwrap();
-            let n = index_sets[set]["size"].as_u64().unwrap();
-            json!({"op": "apply_expression_template", "args": [], "name": op,
-                   "bindings": {"f": rename(&o["expr"], arg, &format!("k_{op}_1")), "n": n}})
-        }
-        Value::Object(o) => Value::Object(
-            o.iter()
-                .map(|(k, v)| (k.clone(), to_template(v, index_sets)))
-                .collect(),
-        ),
-        Value::Array(a) => Value::Array(a.iter().map(|x| to_template(x, index_sets)).collect()),
-        other => other.clone(),
-    }
-}
-
-/// The fixture's model with only its arg-witness equations kept, each
-/// rewritten as the template.
-fn template_document(rel: &str, model: &str) -> Value {
-    let text = std::fs::read_to_string(common::repo_fixture(rel)).unwrap();
-    let mut doc: Value = serde_json::from_str(&text).unwrap();
-    let isets = doc["index_sets"].clone();
-    let m = doc["models"][model].clone();
-    let equations: Vec<Value> = m["equations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|eq| eq["rhs"].to_string().contains("\"argm"))
-        .map(|eq| json!({"lhs": eq["lhs"], "rhs": to_template(&eq["rhs"], &isets)}))
-        .collect();
-    let mut model_out = m.clone();
-    model_out["equations"] = Value::Array(equations);
-    model_out["expression_template_imports"] = json!([{"ref": library()}]);
-    if let Some(vars) = model_out["variables"].as_object_mut() {
-        vars.retain(|k, _| !matches!(k.as_str(), "num" | "den" | "centroid"));
-    }
-    doc["models"] = json!({ model: model_out });
-    doc
 }
 
 /// Caller arrays by name.
 type Arrays = Vec<(&'static str, Vec<f64>)>;
 
 #[test]
-fn nearest_generator_fixtures_rewritten_as_the_template_give_the_op_buffer() {
+fn nearest_generator_fixtures_give_the_assignment_buffer() {
     let generators = [("gx", vec![0., 1., 2.]), ("gy", vec![0., 0., 0.])];
     let cases: Vec<(&str, &str, Arrays, Vec<f64>)> = vec![
         (
@@ -316,20 +206,10 @@ fn nearest_generator_fixtures_rewritten_as_the_template_give_the_op_buffer() {
     ];
     for (rel, model, arrays, want) in cases {
         let text = std::fs::read_to_string(common::repo_fixture(rel)).unwrap();
-        let mut op_doc: Value = serde_json::from_str(&text).unwrap();
-        let only_model = op_doc["models"][model].clone();
-        op_doc["models"] = json!({ model: only_model });
+        let mut doc: Value = serde_json::from_str(&text).unwrap();
+        let only_model = doc["models"][model].clone();
+        doc["models"] = json!({ model: only_model });
         let label = format!("{rel} {model}");
-        assert_eq!(
-            field_both(&op_doc, &arrays, "assign", &label),
-            want,
-            "{label}: op"
-        );
-        let t_doc = template_document(rel, model);
-        assert_eq!(
-            field_both(&t_doc, &arrays, "assign", &label),
-            want,
-            "{label}: template"
-        );
+        assert_eq!(field_both(&doc, &arrays, "assign", &label), want, "{label}");
     }
 }

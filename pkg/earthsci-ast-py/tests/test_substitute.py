@@ -148,15 +148,15 @@ class TestSubstitutionFunctions:
         assert result == expected
 
     def test_substitute_preserves_const_value_metadata(self):
-        """Substituting through a closed-function lookup must keep ``const``
-        ``value`` and ``fn`` ``name`` (regression: param_to_var coupling once
-        dropped the table, leaving an empty ``{op: const, args: []}`` that
-        failed schema validation)."""
-        # fn:interp.linear over a const table axis, indexed by a coupled var.
+        """Substituting through a node must keep ``const`` ``value`` and the
+        node's scalar fields (regression: param_to_var coupling once dropped a
+        table, leaving an empty ``{op: const, args: []}`` that failed schema
+        validation)."""
+        # A broadcast over two const arrays and a coupled var.
         expr = ExprNode(
-            op="fn",
-            fn="interp.linear",
-            name="interp.linear",
+            op="broadcast",
+            fn="+",
+            id="lookup",
             args=[
                 ExprNode(op="const", args=[], value=[10.0, 20.0, 30.0]),
                 ExprNode(op="const", args=[], value=[1.0, 2.0, 3.0]),
@@ -166,8 +166,8 @@ class TestSubstitutionFunctions:
         result = substitute(expr, {"code": "fuel_code"})
 
         assert isinstance(result, ExprNode)
-        assert result.name == "interp.linear"
-        assert result.fn == "interp.linear"
+        assert result.id == "lookup"
+        assert result.fn == "+"
         assert result.args[0].op == "const"
         assert result.args[0].value == [10.0, 20.0, 30.0]
         assert result.args[1].value == [1.0, 2.0, 3.0]

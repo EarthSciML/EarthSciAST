@@ -460,7 +460,7 @@ impl Rewriter<'_> {
             Expr::Operator(node) => match node.op.as_str() {
                 "index" if !node.args.is_empty() => self.index(node, sc),
                 "makearray" => self.refuse("holds a makearray outside a subscripted read"),
-                "faq" | "aggregate" => {
+                "faq" => {
                     if node.output_idx.as_ref().is_some_and(|o| !o.is_empty()) {
                         return self.refuse("holds an array-valued faq in an elementwise position");
                     }
@@ -627,7 +627,7 @@ impl Rewriter<'_> {
                 }
             }
             if let Expr::Operator(v) = value
-                && (v.op == "faq" || v.op == "aggregate")
+                && (v.op == "faq")
                 && v.output_idx.as_ref().is_some_and(|o| !o.is_empty())
             {
                 return self.refuse("holds a faq region value");

@@ -114,35 +114,17 @@ serde = { version = "1.0", features = ["derive"] }
 # fast path is 1 ulp off on some such literals (e.g. -104.52369275835723,
 # 42.059133583516356), which broke AST byte identity on parse→emit round-trips.
 serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
-jsonschema = { version = "0.60", default-features = false }
+jsonschema = { version = "0.61", default-features = false }
 thiserror = "2.0"
 indexmap = { version = "2", features = ["serde"] }
 ndarray = "0.17"
 # rstar (ess pushdown Phase 3a): a pure-Rust R*-tree for the planar broad-phase
 # spatial index behind the overlap join-gate (src/broad_phase.rs). Pure Rust with
-# no C/FFI/OS deps, so it cross-compiles CLEAN to wasm32 (the in-browser target) —
-# unlike the s2 kernel. Its `AABB` intersection is closed (`<=`/`>=`), matching
+# no C/FFI/OS deps, so it cross-compiles CLEAN to wasm32 (the in-browser target).
+# Its `AABB` intersection is closed (`<=`/`>=`), matching
 # the brute-force oracle exactly (see the `rstar == brute-force` self-conformance
 # tests), so the fast path is byte-identical to the reference for a given `eps`.
 rstar = "0.13"
-# s2rst — the spherical geometry kernel behind the `intersect_polygon` /
-# `polygon_area` leaf ops (RFC semiring-faq-unified-ir §8.1; CONFORMANCE_SPEC.md
-# §5.8). A PURE-RUST port of Google's s2geometry (S2Builder + S2BooleanOperation +
-# the exact predicates), cross-validated in its own suite against C++ and Go
-# reference vectors. It replaces the `s2bindings` C++ FFI kernel on EVERY target,
-# which is the point: unlike the C++ build it cross-compiles to wasm32, so the
-# in-browser engine runs the spherical clip natively instead of marshalling every
-# overlap pair out to a separate Emscripten module across the JS boundary. Also
-# drops the CMake/abseil/OpenSSL build requirement and the `libs2bindings_shim.so`
-# runtime dependency that made the `esm` binary non-relocatable.
-#
-# Pinned EXACTLY: this crate decides conservative-regridding areas, and its
-# upstream is young (0.x, self-described beta). Bump deliberately, and re-check
-# the geometry results in `src/geometry.rs` against the s2geometry reference
-# vectors when you do — the former `s2-cpp` C++ differential oracle was removed
-# when the crate was published to crates.io (git dependencies are not allowed
-# there), so there is no longer an in-tree cross-check against C++ S2.
-s2rst = "=0.5.1"
 # diffsol (gt-5ws) — the ODE simulation backend, on BOTH native and wasm32: its
 # Faer backend is pure Rust and cross-compiles (spike S1), so the in-browser
 # `simulate` export (src/wasm.rs) can run pure-ODE / 0-D box models client-side.

@@ -1,5 +1,5 @@
 {
- "esm": "1.1.0",
+ "esm": "2.0.0",
  "metadata": {
   "name": "alias_export_order_observed",
   "description": "Four-cell column whose per-cell tendency reads a BARE alias between two unknowns (Tsfc = Tsfc_raw). Regression fixture for EarthSciAST issue #234, fixed by PR #255: an observed whose body is a bare variable emits nothing into its home chunk, and its Export used to be appended at the END of the cadence stream \u2014 after the Fallback of the later rule that reads it, which then read the preallocated 0.0.",

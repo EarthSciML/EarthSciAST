@@ -30,7 +30,7 @@
 #      `_AccKernel`'s `_AccCSE` tiers. An emitted program assigns its own
 #      buffers, and XLA has nothing to do with a host one.
 #   2. NO PER-LANE SCALAR LOOPS. `f!` still walks lanes one at a time in several
-#      arms — the gather, the pgather, the `du` scatter, the interp kernels. XLA
+#      arms — the gather, the pgather, the `du` scatter. XLA
 #      rejects scalar indexing of a traced array outright, so the plan data
 #      here (`_OopAccPlan`) describes every access as a whole-array op instead.
 #
@@ -106,7 +106,7 @@ _oop_batch_enabled() = _compiler_plan_now().oop_batch
 #   _NK_CONTRACTION_LOOP  shared `op`/`literal`/`lo:step:hi`; `refs` all lanes'
 #                     counters; `children[1]` the batched body
 #   _NK_CONTRACTION   shared `op`/`literal`; batched children
-#   _NK_OP            shared `op` (+ `payload` for `:fn`); batched children
+#   _NK_OP            shared `op` and `payload`; batched children
 struct _OopBatchNode
     kind::UInt8
     op::Symbol
@@ -159,8 +159,7 @@ const _OOP_NO_BATCH = _OopScalarBatches(_OopScalarBatch[], Tuple{Int, _Node}[], 
 # kind the batch walker does not model (the entry then stays single). What is
 # PINNED (in the key) vs WILDCARDED (varies per lane):
 #   pinned:    tree shape, every op, param syms, cache slot ids, loop ranges +
-#              ⊕ + 0̄, fn identity (typed-core id / boxed name / interp spec
-#              object), the forcing BUFFER identity, pow's literal exponent
+#              ⊕ + 0̄, the forcing BUFFER identity, pow's literal exponent
 #              (so a Dual walk keeps the power rule)
 #   wildcard:  state slot idx, forcing offset idx, value-position literals,
 #              const/state-gather payloads AND their whole subscript subtrees
@@ -203,29 +202,7 @@ function _oop_batch_sig!(io::IO, n::_Node, fixed_lit::Bool)::Bool
         print(io, "}")
     elseif k === _NK_OP
         op = n.op
-        if op === :fn
-            pl = n.payload
-            if pl isa Tuple{String, _FnTypedCoreSpec}
-                print(io, "fn(", pl[1], ",", pl[2].id, ")")
-            elseif pl isa Tuple{String, Nothing}
-                print(io, "fn0(", pl[1], ")")
-            elseif pl isa Tuple{String, _InterpLinearSpec} ||
-                    pl isa Tuple{String, _InterpBilinearSpec} ||
-                    pl isa Tuple{String, _InterpSearchsortedSpec}
-                # Spec OBJECT identity: the build memo shares one compiled node
-                # (hence one spec) across cells; content-equal distinct objects
-                # merely fragment the group, never miscompile it.
-                print(io, "fni", objectid(pl[2]))
-            else
-                return false
-            end
-            print(io, "{")
-            for c in n.children
-                _oop_batch_sig!(io, c, false) || return false
-                print(io, ",")
-            end
-            print(io, "}")
-        elseif op === :^ || op === :pow
+        if op === :^ || op === :pow
             length(n.children) == 2 || return false
             print(io, "pw{")
             _oop_batch_sig!(io, n.children[1], false) || return false
@@ -319,35 +296,6 @@ function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing, _OopBatchNode}
                     (k !== _NK_CONTRACTION || isequal(nd.literal, n1.literal))
             ) ||
                 return nothing
-        end
-        if k === _NK_OP && n1.op === :fn
-            pl = n1.payload
-            ok = if pl isa Tuple{String, _FnTypedCoreSpec}
-                all(
-                    nd -> (
-                        q = nd.payload;
-                        q isa Tuple{String, _FnTypedCoreSpec} &&
-                            q[1] == pl[1] && q[2].id === pl[2].id
-                    ), nodes
-                )
-            elseif pl isa Tuple{String, Nothing}
-                all(
-                    nd -> (
-                        q = nd.payload;
-                        q isa Tuple{String, Nothing} && q[1] == pl[1]
-                    ), nodes
-                )
-            elseif pl isa Tuple{String, _InterpLinearSpec} ||
-                    pl isa Tuple{String, _InterpBilinearSpec} ||
-                    pl isa Tuple{String, _InterpSearchsortedSpec}
-                all(
-                    nd -> nd.payload isa Tuple && length(nd.payload) == 2 &&
-                        nd.payload[2] === pl[2], nodes
-                )
-            else
-                false
-            end
-            ok || return nothing
         end
         children = Vector{_OopBatchNode}(undef, nc)
         for i in 1:nc

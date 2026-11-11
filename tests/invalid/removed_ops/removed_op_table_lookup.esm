@@ -1,0 +1,81 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "removed_op_table_lookup",
+    "description": "INVALID: the `table_lookup` op was removed at esm 2.0.0, with the `function_tables` block it reads. A loader rejects it BY NAME at the wire boundary with `removed_op`. Replacement: the `linear` template of esm:std/interp.esm over the table's data. The 2.0.0 codemod (MIGRATION.md) rewrites it.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "invalid",
+      "removed_op",
+      "esm-2.0.0",
+      "table_lookup"
+    ]
+  },
+  "function_tables": {
+    "sigma_O3_298": {
+      "description": "O3 absorption cross-section vs. wavelength bin index, T=298 K (synthetic).",
+      "axes": [
+        {
+          "name": "lambda_idx",
+          "values": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ]
+        }
+      ],
+      "interpolation": "linear",
+      "out_of_bounds": "clamp",
+      "data": [
+        1.1e-17,
+        1e-17,
+        9.5e-18,
+        8.7e-18,
+        7.9e-18,
+        7e-18,
+        6.1e-18,
+        5.2e-18
+      ]
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "k_O3": {
+          "type": "unknown",
+          "default": 0.0
+        },
+        "lambda": {
+          "type": "parameter",
+          "default": 4.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "k_O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "table_lookup",
+            "table": "sigma_O3_298",
+            "axes": {
+              "lambda_idx": "lambda"
+            },
+            "args": []
+          }
+        }
+      ]
+    }
+  }
+}

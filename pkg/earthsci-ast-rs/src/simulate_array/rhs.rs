@@ -48,8 +48,8 @@ pub struct RhsScratch {
     /// hoist). Their arrays are seeded into `observed_arrays` ONCE by
     /// [`Self::set_static`] and then RETAINED in place across every RHS eval
     /// (never cleared, never re-cloned), so a build-once product — the
-    /// conservative-regrid geometry (`intersect_polygon` over the src×tgt cell
-    /// rings, incl. the large `A_ij`/`W_ij` weight matrices), the regridded
+    /// conservative-regrid weights (the large `A_ij`/`W_ij` matrices over the
+    /// src×tgt cell pairs), the regridded
     /// terrain + slopes, the Rothermel coefficients derived from the CONST
     /// forcing — is materialized once, not recomputed on every step. The
     /// `observed_rules` the RHS is handed is correspondingly the *varying*
@@ -548,11 +548,7 @@ pub(super) fn materialize_observeds_pass(
         // `precision_infer::MARKER_OP` and re-arms.
         let _rule_precision = precision_of_rule(rule);
         match rule {
-            AlgebraicRule::Scalar {
-                var,
-                body,
-                declared_shape,
-            } => {
+            AlgebraicRule::Scalar { var, body, .. } => {
                 // `derived_extents` is EMPTY on every compiled-RHS context in
                 // this file, and deliberately so: `ArrayCompiled::from_model`
                 // densifies each value-invented derived set to an `interval`
@@ -562,10 +558,17 @@ pub(super) fn materialize_observeds_pass(
                 // its keep on the standalone `eval_expression_with_extents`
                 // entry point instead. See `EvalCtx::derived_extents`.
                 let mut ctx = env.ctx(&*dst);
-                let arr = match (eval(body, &mut ctx), declared_shape) {
-                    (Value::Array(a), _) => *a,
-                    (Value::Scalar(s), Some(shape)) => ArrayD::from_elem(IxDyn(shape), s),
-                    (Value::Scalar(s), None) => ArrayD::from_elem(IxDyn(&[]), s),
+                let arr = match eval(body, &mut ctx) {
+                    Value::Array(a) => *a,
+                    // A scalar fills the rule's shape (esm-spec §4.3.4): its
+                    // declared one, or the one the data bound to its data-fed
+                    // parameters has — the same buffer the tape's build reads.
+                    Value::Scalar(s) => {
+                        let shape = rule
+                            .fill_shape(|n| ctx.forcing.borrow().get(n).map(|a| a.shape().to_vec()))
+                            .unwrap_or_default();
+                        ArrayD::from_elem(IxDyn(&shape), s)
+                    }
                 };
                 dst.insert(var.clone(), arr);
             }
@@ -880,20 +883,6 @@ fn evaluate_rhs_legacy(
         (all, arrays)
     });
 
-    // FAQ-materialized derived rings (RFC §8.1), keyed by producer node id. An
-    // `intersect_polygon` clip self-registers its closed overlap ring here as it
-    // evaluates (see `eval_intersect_polygon`); a downstream `faq` over a
-    // `kind:"derived"` index set then sizes its contraction from the ring's
-    // vertex count. Shared (interior-mutable) across the observed materialization
-    // and the RHS rules so a ring registered while `clip` materializes is visible
-    // both when `area` runs and in any state derivative that reads a derived set.
-    // Empty (no allocation) for models without geometry, i.e. the stencil path —
-    // and, on the hoisted `simulate` path, for the *varying* observeds too: any
-    // geometry op is state-free (a build-once regrid), so it is a static observed
-    // materialized once at setup with its rings produced-and-consumed there, and
-    // no varying rule reads a static ring.
-    let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-
     // (b) Materialize observed algebraic rules (dependency-ordered at build time)
     //     into the reused observed container before the state derivatives read
     //     them. RETAIN the hoisted STATE-FREE/`t`-free observeds in place (seeded
@@ -920,7 +909,6 @@ fn evaluate_rhs_legacy(
                 params,
                 param_names,
                 t,
-                derived_rings: &derived_rings,
                 derived_extents: empty_derived_extents(),
                 forcing,
                 // ess-cse: the observed bodies are where the expanded
@@ -948,7 +936,6 @@ fn evaluate_rhs_legacy(
         params,
         param_names,
         t,
-        derived_rings: &derived_rings,
         derived_extents: empty_derived_extents(),
         forcing,
         cse: Some(&scratch.cse),
@@ -1181,7 +1168,7 @@ mod elementwise_array_observed_tests {
     #[test]
     fn elementwise_array_observed_chain_drives_state_per_cell() {
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "ew_obs"},
             "index_sets": {"c": {"kind": "interval", "size": 3}},
             "models": {"M": {

@@ -4,8 +4,8 @@ import Esm.Closed.Datetime.TemplateAst
 /-!
 # The key, rank and gated arg-witness templates of `lib/relational.esm`
 
-The templates that stand in for the `skolem` and `rank` value-invention ops and
-for a `join`-gated arg-witness:
+The templates that key, rank and pick from candidates for value invention
+(`distinct` producers and `join`-gated arg-witnesses):
 
 * `pair_key_in_range`, `pair_key_nan`: `pair_key(a, b, lo_a, lo_b, n_a, n_b)`
   is `(a − lo_a)·n_b + (b − lo_b)` when `a` and `b` are integers in
@@ -16,7 +16,7 @@ for a `join`-gated arg-witness:
   pair of values, NaN included; `edge_key_eq_pair` gives its value as the pair
   key of `min(u, v)`, `max(u, v)`;
 * `rank_of_eq_searchsorted`, `searchsorted_sorted_count`: `rank_of(x, members,
-  n)` is §9.2's `interp.searchsorted(x, members)`, which on ascending real
+  n)` is the reference `searchsorted(x, members)`, which on ascending real
   members is `1 + #{members < x}`;
 * `argmin_where_template`, `argmax_where_template`: with the filter `p`, the
   result is `n + 1` when no candidate passes, and otherwise the index the
@@ -319,9 +319,9 @@ theorem ev_rank (A : List α) (x : α) (h53 : A.length < 2 ^ 53) :
   unfold rankA Template.searchsorted
   rw [ev_add (ev_lit1 env) hs, add_nat (by omega)]
 
-/-- **`rank_of` is `interp.searchsorted`.** With the key bound to `X`, ascending
-members bound to `A` and `n` their count, the template evaluates to §9.2's
-`interp.searchsorted(x, members)` for every key, NaN included. -/
+/-- **`rank_of` is `searchsorted`.** With the key bound to `X`, ascending
+members bound to `A` and `n` their count, the template evaluates to the reference
+`searchsorted(x, members)` for every key, NaN included. -/
 theorem rank_of_template_eq (a : List ℝ) (ha : a.Pairwise (· ≤ ·)) (h53 : a.length < 2 ^ 53)
     (x : α) :
     evalApply Esm.Lib.Relational.rank_of
@@ -332,7 +332,7 @@ theorem rank_of_template_eq (a : List ℝ) (ha : a.Pairwise (· ≤ ·)) (h53 : 
   rw [List.length_map] at h
   rw [evalApply_of (expand_rank_of a.length) h, Template.searchsorted_eq a ha x]
 
-/-- On ascending real members, `interp.searchsorted(x, members)` is
+/-- On ascending real members, `searchsorted(x, members)` is
 `1 + #{members < x}`. -/
 theorem searchsorted_sorted_count (a : List ℝ) (ha : a.Pairwise (· ≤ ·)) (x : ℝ) :
     Esm.Closed.searchsorted (fin x : α) (a.map fin) = 1 + (a.filter (fun b => decide (b < x))).length := by

@@ -1,11 +1,11 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "ValueInventionNearestGeneratorODE",
     "authors": [
       "EarthSciML Authors and Contributors"
     ],
-    "description": "An `argmin` arg-witness assignment feeding a right-hand side through a gather. Points at x = 0, 1, 1.5, 2 (y = 0, 0.5, 0, 0) are assigned the index of their nearest generator among x = 0, 1, 2 (y = 0). Point 3 is exactly 0.25 (squared) from generators 2 and 3; the smallest id wins (CONFORMANCE_SPEC §5.5.1 rule 6), so assign = [1, 2, 2, 3]. The coordinates are unknowns defined by `const` nodes (constant factors, esm-spec §4.2). d(w[i])/dt = gx[assign[i]], so from zero at t = 1: w = [0, 1, 1, 2]."
+    "description": "An arg-witness assignment, the `argmin` template of esm:std/relational.esm, feeding a right-hand side through a gather. Points at x = 0, 1, 1.5, 2 (y = 0, 0.5, 0, 0) are assigned the index of their nearest generator among x = 0, 1, 2 (y = 0). Point 3 is exactly 0.25 (squared) from generators 2 and 3; the smallest id wins (CONFORMANCE_SPEC §5.5.1 rule 6), so assign = [1, 2, 2, 3]. The coordinates are unknowns defined by `const` nodes (constant factors, esm-spec §4.2). d(w[i])/dt = gx[assign[i]], so from zero at t = 1: w = [0, 1, 1, 2]."
   },
   "index_sets": {
     "points": {
@@ -19,6 +19,14 @@
   },
   "models": {
     "NearestGeneratorODE": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/relational.esm",
+          "only": [
+            "argmin"
+          ]
+        }
+      ],
       "variables": {
         "px": {
           "type": "unknown",
@@ -110,7 +118,7 @@
           }
         },
         {
-          "_comment": "assign[i] = argmin over g of the squared distance from point i to generator g.",
+          "_comment": "assign[i] = the `argmin` template over the squared distance from point i to generator k_argmin_1.",
           "lhs": {
             "op": "index",
             "args": [
@@ -135,109 +143,102 @@
               "gy"
             ],
             "expr": {
-              "op": "argmin",
-              "args": [
-                "px",
-                "py",
-                "gx",
-                "gy"
-              ],
-              "arg": "g",
-              "ranges": {
-                "g": {
-                  "from": "generators"
-                }
-              },
-              "expr": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "*",
-                    "args": [
-                      {
-                        "op": "-",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "px",
-                              "i"
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "gx",
-                              "g"
-                            ]
-                          }
-                        ]
-                      },
-                      {
-                        "op": "-",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "px",
-                              "i"
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "gx",
-                              "g"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "op": "*",
-                    "args": [
-                      {
-                        "op": "-",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "py",
-                              "i"
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "gy",
-                              "g"
-                            ]
-                          }
-                        ]
-                      },
-                      {
-                        "op": "-",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "py",
-                              "i"
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "gy",
-                              "g"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "argmin",
+              "bindings": {
+                "f": {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "px",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gx",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "px",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gx",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "py",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gy",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "py",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gy",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "n": 3
               }
             }
           }

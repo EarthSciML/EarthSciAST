@@ -37,7 +37,7 @@ fn run(doc: serde_json::Value) -> Vec<AssertionResult> {
 /// suite on the reaction system and no model in the document at all.
 fn decay_mechanism(tests: serde_json::Value) -> serde_json::Value {
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "RsOnly",
             "description": "A document whose only inline tests live on a reaction system.",
@@ -139,7 +139,7 @@ fn reaction_system_tolerance_is_the_component_level() {
 #[test]
 fn models_and_reaction_systems_both_run_models_first() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "BothKinds", "description": "d", "authors": ["issue-206"],
             "created": "2026-09-07T00:00:00Z"

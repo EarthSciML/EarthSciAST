@@ -181,7 +181,7 @@ fn a_bare_name_is_refused_on_a_multi_component_document() {
 fn an_unshaped_observed_is_rank_zero_down_either_path() {
     // Pure scalar algebra with no state: the shape both paths can build.
     let doc = serde_json::json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ScalarOnly", "description": "One unshaped observed."},
         "models": {"ScalarOnly": {
             "variables": {

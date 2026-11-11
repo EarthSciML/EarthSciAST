@@ -48,7 +48,7 @@ end
 @testset "EsmProblem — build once, solve many" begin
     _D(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
     scalar_esm(rhs) = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "S"),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "S"),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
                 "variables" => Dict{String, Any}(
@@ -157,7 +157,7 @@ end
         # keeps them from drifting; this pins that they have not.
         with_solver(block) = merge(
             scalar_esm(1.0), Dict{String, Any}(
-                "esm" => "1.1.0", "solver" => block
+                "esm" => "2.0.0", "solver" => block
             )
         )
         declared = init(
@@ -335,11 +335,6 @@ end
     # reserved_variable_name (§4.9.1.1) and undefined_species.
     @test occursin("reserved_variable_name", refusal("tests/invalid/reserved_variable_name_observed.esm"))
     @test occursin("undefined_species", refusal("tests/invalid/undefined_species.esm"))
-    # A degenerate polygon operand in a state-free observed nothing reads (§8.6.1).
-    @test occursin(
-        "E_TREEWALK_GEOMETRY_CLIP",
-        refusal("tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm")
-    )
     # A reference-integrity finding refuses the build with the validator's code
     # (esm-libraries-spec §2.5.2).
     @test occursin(

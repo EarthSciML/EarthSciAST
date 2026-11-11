@@ -3,8 +3,7 @@
 //! an index set, lower with no declined rule and write the per-cell oracle's
 //! `dy` bit for bit through every executor ([`oracle_ab`]):
 //!
-//!   * the nine calendar fields per cell, also against the `fn datetime.*`
-//!     spelling;
+//!   * the nine calendar fields per cell;
 //!   * the planar and spherical overlap areas of every source x target cell
 //!     pair, whose next-vertex subscript `ifelse(k < nv, k + 1, 1)` is known
 //!     to stay in range ([`super::lower`]'s `int_range`), so the gathers at it
@@ -61,7 +60,7 @@ fn library(file: &str) -> Value {
 }
 
 fn document(name: &str, sets: Value, model: Value) -> Value {
-    json!({"esm": "1.2.0", "metadata": {"name": name}, "index_sets": sets, "models": {"M": model}})
+    json!({"esm": "2.0.0", "metadata": {"name": name}, "index_sets": sets, "models": {"M": model}})
 }
 
 /// The taped `dy` of `doc` at a few seeded states, as bits.
@@ -102,7 +101,7 @@ const FIELDS: [&str; 9] = [
 
 /// Per cell `l` of 24, `tu[l] = t0 + 3601 l + 1e5 u[l]` (the state moves it
 /// across days and years), and each field relaxes a state of its own.
-pub(super) fn calendar_doc(t0: f64, template: bool) -> Value {
+pub(super) fn calendar_doc(t0: f64) -> Value {
     let l = json!({"l": [1, 24]});
     let mut vars = json!({
         "u": {"type": "unknown", "shape": ["lev"], "default": 1.0},
@@ -116,20 +115,14 @@ pub(super) fn calendar_doc(t0: f64, template: bool) -> Value {
     ];
     for f in FIELDS {
         let at = ix("tu", vec![json!("l")]);
-        let call = if template {
-            apply(f, json!({"t": at}))
-        } else {
-            json!({"op": "fn", "name": format!("datetime.{f}"), "args": [at]})
-        };
+        let call = apply(f, json!({"t": at}));
         let s = format!("s_{f}");
         vars[&s] = json!({"type": "unknown", "shape": ["lev"], "default": 0.0});
         eqs.push(json!({"lhs": d_lhs(&s, vec!["l"], l.clone()),
             "rhs": faq(op("-", vec![call, ix(&s, vec![json!("l")])]), vec!["l"], l.clone())}));
     }
     let mut model = json!({"variables": vars, "equations": eqs});
-    if template {
-        model["expression_templates"] = library("calendar.esm");
-    }
+    model["expression_templates"] = library("calendar.esm");
     document(
         "calendar_on_the_tape",
         json!({"lev": {"kind": "interval", "size": 24}}),
@@ -138,14 +131,9 @@ pub(super) fn calendar_doc(t0: f64, template: bool) -> Value {
 }
 
 #[test]
-fn calendar_templates_match_the_oracle_and_the_fn_form() {
+fn calendar_templates_match_the_oracle() {
     for t0 in [1.6e9, -2.2e9, 951_782_400.0] {
-        oracle_ab(calendar_doc(t0, true));
-        assert_eq!(
-            taped_dy(&calendar_doc(t0, true)),
-            taped_dy(&calendar_doc(t0, false)),
-            "t0 {t0}: the templates' derivative is the fn form's"
-        );
+        oracle_ab(calendar_doc(t0));
     }
 }
 

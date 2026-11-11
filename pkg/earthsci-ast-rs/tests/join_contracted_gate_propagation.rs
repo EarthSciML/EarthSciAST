@@ -278,7 +278,7 @@ impl Fixture {
                    "shape": self.out.iter().map(|d| format!("{}rows", d.0)).collect::<Vec<_>>()}),
         );
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "join_contracted_gate_propagation"},
             "index_sets": index_sets,
             "models": {"J": {"variables": variables, "equations": [{"lhs": "E", "rhs": node}]}}

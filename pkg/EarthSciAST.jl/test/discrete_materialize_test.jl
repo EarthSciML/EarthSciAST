@@ -94,7 +94,7 @@ end
 # a name-reachability closure over `_referenced_var_names`, which used to walk only
 # `args`/`expr_body`/`lower`/`upper`/`values`. A state read from an aggregate `filter`
 # predicate (a RUNTIME `ifelse(pred, term, 0̄)` guard — resolve.jl), a value-invention
-# `key`, a table-lookup axis (`table_axes`) or an expression-valued dense `ranges`
+# `key` or an expression-valued dense `ranges`
 # bound was therefore INVISIBLE, and the def was silently frozen. Two layers now:
 #   (a) the walker goes through the shared `child_exprs` enumeration → every field;
 #   (b) `_build_discrete_materializer!` CHECKS the compiled fill node for a state /
@@ -160,21 +160,7 @@ _dmc_split(rhs) = first(
     @testset "state in `key` ⇒ NOT discrete" begin
         agg = _dmc_agg(
             distinct = true,
-            key = _dmc_op("skolem", _dmc_idx("u", _dmc_v("j")))
-        )
-        @test "u" in _DM_ESS._referenced_var_names(agg)
-        @test _dmc_split(agg) == Set{String}()
-    end
-
-    @testset "state in `table_axes` ⇒ NOT discrete" begin
-        # A table lookup whose axis coordinate is a state value.
-        lookup = _dmc_op(
-            "table_lookup"; table = "T",
-            table_axes = Dict{String, _DM_ESS.ASTExpr}("x" => _dmc_idx("u", _dmc_v("j")))
-        )
-        agg = _dmc_op(
-            "faq"; output_idx = Any["j"], ranges = Dict("j" => [1, 4]),
-            reduce = "+", expr_body = _dmc_op("*", _dmc_idx("raw", _dmc_v("j")), lookup)
+            key = _dmc_idx("u", _dmc_v("j"))
         )
         @test "u" in _DM_ESS._referenced_var_names(agg)
         @test _dmc_split(agg) == Set{String}()
@@ -287,7 +273,7 @@ end
 # land the field on the same tier, and fill a cache bit-identical to the
 # interpreter's per-cell walk.
 _dmn_doc(N) = Dict{String, Any}(
-    "esm" => "1.1.0",
+    "esm" => "2.0.0",
     "metadata" => Dict("name" => "dm_across_n"),
     "models" => Dict(
         "M" => Dict{String, Any}(

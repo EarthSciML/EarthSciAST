@@ -1,17 +1,15 @@
-//! Template rewrites of the skolem / rank / gated-argmin fixtures against the
-//! op forms (`tests/conformance/relational_templates/rewrites/manifest.json`).
+//! The template forms of the value-invention fixtures
+//! (`tests/conformance/relational_templates/rewrites/manifest.json`) against
+//! the expected values the manifest's `golden` files hold.
 //!
-//! Each rewrite replaces the value-invention ops with lib/relational.esm
-//! templates (`pair_key` / `edge_key` keys, per-component join columns, the
-//! loop index for a set's own rank, `argmin_where` for a gated arg-witness).
-//! Both forms are built with the same caller data and must agree: the derived
-//! set's members (the op's tuples against the template's integer keys,
+//! Each rewrite writes value invention with lib/relational.esm templates
+//! (`pair_key` / `edge_key` keys, per-component join columns, the loop index
+//! for a set's own rank, `argmin_where` for a gated arg-witness). Built with
+//! the case's caller data, under the interpreter and the strict native tape,
+//! it must give the golden derived set's members (the template's integer keys,
 //! decoded), the extents, the 1-based dense IDs, the arg-witness buffers, and
-//! the right-hand side at a probe state, bit for bit. The template form is
-//! built under the interpreter and the strict native tape. Both forms are also
-//! checked against the expected values the manifest's `golden` files hold
-//! (computed from the op form by the reference binding, `rewrites/goldens.py`).
-//! A `value_invention_key_out_of_range` refusal names the column.
+//! the right-hand side at the golden probe state, bit for bit. A
+//! `value_invention_key_out_of_range` refusal names the column.
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 
@@ -115,7 +113,12 @@ fn single_model(path: &Path, model: &str) -> Value {
         .and_then(Value::as_array_mut)
     {
         for imp in imports {
-            imp["ref"] = Value::String(library());
+            if imp["ref"]
+                .as_str()
+                .is_some_and(|r| r.ends_with("relational.esm"))
+            {
+                imp["ref"] = Value::String(library());
+            }
         }
     }
     doc["models"] = json!({ model: m });
@@ -197,59 +200,11 @@ fn engine_model(doc: &Value, model: &str) -> Value {
     m
 }
 
-/// The op form's value invention, with the observeds the op reads that are
-/// not value-invention outputs (a coordinate, `src_lon` from a polygon table)
-/// supplied as factors alongside the caller's arrays. They are read from
-/// `fields`, the template form's build-pipeline problem: both documents
-/// define them identically, and the op form's skolem bin maps hide them from
-/// its own pipeline.
-fn op_value_invention(
-    doc: &Value,
-    model: &str,
-    case: &Value,
-    fields: &EsmProblem,
-) -> earthsci_ast::ValueInventionResult {
-    let mut arrays = case_arrays(case);
-    for name in doc["models"][model]["variables"]
-        .as_object()
-        .unwrap()
-        .keys()
-    {
-        if arrays.contains_key(name) {
-            continue;
-        }
-        if let Ok(f) = observed_field(fields, name) {
-            arrays.insert(name.clone(), f);
-        }
-    }
-    materialize_value_invention(
-        &engine_model(doc, model),
-        &arrays,
-        &case_params(case),
-        &HashMap::new(),
-    )
-    .unwrap_or_else(|e| panic!("{model}: op value invention: {e}"))
-}
-
 fn decode(k: i64, lo: &[i64], n_b: i64) -> Key {
     Key::Tuple(vec![
         Key::Int(k.div_euclid(n_b) + lo[0]),
         Key::Int(k.rem_euclid(n_b) + lo[1]),
     ])
-}
-
-/// `dy` at `u = 1 + 0.1 sin(0.37 k)`: the interpreter, or the strict native
-/// tape with no rule off it.
-fn rhs_at_probe(prob: &EsmProblem, compiler: Compiler, label: &str) -> (Vec<String>, Vec<f64>) {
-    let n = prob
-        .debug_array_compiled()
-        .expect("a right-hand side")
-        .state_variable_names()
-        .len();
-    let state: Vec<f64> = (0..n)
-        .map(|k| 1.0 + 0.1 * (0.37 * k as f64).sin())
-        .collect();
-    rhs_at(prob, compiler, label, &state)
 }
 
 /// `dy` at the golden probe state, keyed like it.
@@ -326,7 +281,7 @@ fn rank_of_each(members: &[i64]) -> Vec<f64> {
         }));
     }
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "rank_of_probe", "authors": ["test"]},
         "models": {"M": {
             "expression_template_imports": [{"ref": library()}],
@@ -348,46 +303,14 @@ fn rank_of_each(members: &[i64]) -> Vec<f64> {
 fn check_case(entry: &Value, idx: usize, case: &Value, label: &str) {
     let cmp = &entry["compare"];
     let model = entry["models"][0].as_str().unwrap();
-    let source = repo_root().join(entry["source"].as_str().unwrap());
-    let op_doc = single_model(&source, model);
     let tp_doc = single_model(&rewrite_path(entry), model);
     let gold = &golden(entry)["cases"][idx];
     if cmp.get("vi_only").and_then(Value::as_bool) == Some(true) {
-        check_vi_only(entry, case, &op_doc, &tp_doc, model, label, gold);
+        check_vi_only(entry, case, &tp_doc, model, label, gold);
         return;
     }
-    let op_prob = build(&op_doc, case, Compiler::Interpreter)
-        .unwrap_or_else(|e| panic!("{label}: op build: {e}"));
-    let needs_vi = cmp.get("sets").is_some()
-        || cmp.get("rank").is_some()
-        || cmp.get("rank_lookup").is_some()
-        || cmp.get("assignments").is_some();
-    let op_vi = needs_vi.then(|| {
-        let fields = build_with(&tp_doc, case, Compiler::Interpreter, true)
-            .unwrap_or_else(|e| panic!("{label}: template pipeline build: {e}"));
-        op_value_invention(&op_doc, model, case, &fields)
-    });
-    let op_rhs = (cmp.get("rhs").and_then(Value::as_bool) == Some(true))
-        .then(|| rhs_at_probe(&op_prob, Compiler::Interpreter, label));
-    let golden_dy = |dy: &HashMap<String, f64>, form: &str| {
-        let want = gold["rhs"]["dy"].as_object().unwrap();
-        assert_eq!(dy.len(), want.len(), "{label}: {form} form state elements");
-        for (n, w) in want {
-            let w = w.as_f64().unwrap();
-            assert_eq!(
-                dy[n].to_bits(),
-                w.to_bits(),
-                "{label}: {form} form vs golden at {n}: {} vs {w}",
-                dy[n]
-            );
-        }
-    };
-    if op_rhs.is_some() {
-        golden_dy(
-            &rhs_at_golden(&op_prob, Compiler::Interpreter, label, model, &gold["rhs"]),
-            "op",
-        );
-    }
+    let needs_vi =
+        cmp.get("sets").is_some() || cmp.get("rank").is_some() || cmp.get("rank_lookup").is_some();
     for compiler in [Compiler::Interpreter, Compiler::Native] {
         let label = format!("{label} [{}]", compiler.as_str());
         let tp = build(&tp_doc, case, compiler)
@@ -422,34 +345,24 @@ fn check_case(entry: &Value, idx: usize, case: &Value, label: &str) {
             sorted.dedup();
             assert_eq!(*members, sorted, "{label}: members not ascending distinct");
             let decoded: Vec<Key> = members.iter().map(|&k| decode(k, &lo, n_b)).collect();
-            let op = op_vi.as_ref().unwrap();
-            assert_eq!(decoded, op.members[faq], "{label}: {faq} members");
-            let tp_extent = pipe.as_ref().unwrap().extents()[faq];
-            assert_eq!(tp_extent, op.extents[faq], "{label}: {faq} extent");
             let want = golden_members(&gold["sets"][faq]);
-            assert_eq!(op.members[faq], want, "{label}: op form {faq} vs golden");
             assert_eq!(decoded, want, "{label}: template {faq} vs golden");
             assert_eq!(
-                tp_extent as u64,
+                pipe.as_ref().unwrap().extents()[faq] as u64,
                 gold["sets"][faq]["extent"].as_u64().unwrap(),
                 "{label}: {faq} extent vs golden"
             );
         }
         if let Some(r) = cmp.get("rank") {
             let faq = r["faq"].as_str().unwrap();
-            let n = op_vi.as_ref().unwrap().members[faq].len();
-            // The op set is in sorted order, so its 0-based rank is the
-            // position; the 0 -> 1 shift gives the template's loop index.
-            let want: Vec<f64> = (1..=n).map(|k| k as f64).collect();
+            let want = golden_floats(&gold["rank"]["values"]);
             let got = observed_field(pipe.as_ref().unwrap(), r["variable"].as_str().unwrap())
                 .unwrap_or_else(|e| panic!("{label}: rank variable: {e}"));
             assert_eq!(
-                got.iter().copied().collect::<Vec<_>>(),
-                want,
-                "{label}: dense ids"
+                bits(&got.iter().copied().collect::<Vec<_>>()),
+                bits(&want),
+                "{label}: dense ids vs golden"
             );
-            let gw = golden_floats(&gold["rank"]["values"]);
-            assert_eq!(bits(&want), bits(&gw), "{label}: op dense ids vs golden");
             assert_eq!(
                 rank_of_each(&tp_members[faq]),
                 want,
@@ -457,39 +370,14 @@ fn check_case(entry: &Value, idx: usize, case: &Value, label: &str) {
             );
         }
         if let Some(rl) = cmp.get("rank_lookup") {
-            // A rank looked up against the derived set (rank_of_set over its
-            // members): the op set's 0-based rank of each row's tuple, + 1.
-            let op_members = &op_vi.as_ref().unwrap().members[rl["faq"].as_str().unwrap()];
-            let cols: Vec<ArrayD<f64>> = rl["columns"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|c| json_array(&case["const_arrays"][c.as_str().unwrap()]))
-                .collect();
-            let want: Vec<f64> = (0..cols[0].len())
-                .map(|i| {
-                    let mut t: Vec<i64> = cols
-                        .iter()
-                        .map(|c| c.as_slice().unwrap()[i] as i64)
-                        .collect();
-                    t.sort_unstable();
-                    let key = Key::Tuple(t.into_iter().map(Key::Int).collect());
-                    let pos = op_members
-                        .iter()
-                        .position(|m| *m == key)
-                        .unwrap_or_else(|| panic!("{label}: {key:?} is not a member"));
-                    (pos + 1) as f64
-                })
-                .collect();
             let got: Vec<f64> =
                 observed_field(pipe.as_ref().unwrap(), rl["variable"].as_str().unwrap())
                     .unwrap_or_else(|e| panic!("{label}: rank lookup: {e}"))
                     .iter()
                     .copied()
                     .collect();
-            assert_eq!(bits(&got), bits(&want), "{label}: {got:?} vs {want:?}");
             let gw = golden_floats(&gold["rank_lookup"]["values"]);
-            assert_eq!(bits(&want), bits(&gw), "{label}: op rank lookup vs golden");
+            assert_eq!(bits(&got), bits(&gw), "{label}: rank lookup vs golden");
         }
         for a in cmp
             .get("assignments")
@@ -497,42 +385,38 @@ fn check_case(entry: &Value, idx: usize, case: &Value, label: &str) {
             .into_iter()
             .flatten()
         {
-            let op_buf: Vec<f64> = op_vi.as_ref().unwrap().assignments[a["op"].as_str().unwrap()]
-                .iter()
-                .map(|&i| i as f64)
-                .collect();
-            let tp_buf: Vec<f64> = observed_field(&tp, a["template"].as_str().unwrap())
+            let name = a["template"].as_str().unwrap();
+            let tp_buf: Vec<f64> = observed_field(&tp, name)
                 .unwrap_or_else(|e| panic!("{label}: assignment: {e}"))
                 .iter()
                 .copied()
                 .collect();
-            assert_eq!(
-                bits(&tp_buf),
-                bits(&op_buf),
-                "{label}: {tp_buf:?} vs {op_buf:?}"
-            );
-            let gw = golden_floats(&gold["assignments"][a["template"].as_str().unwrap()]);
-            assert_eq!(bits(&op_buf), bits(&gw), "{label}: op assignment vs golden");
+            let gw = golden_floats(&gold["assignments"][name]);
+            assert_eq!(bits(&tp_buf), bits(&gw), "{label}: assignment vs golden");
         }
-        if let Some((op_names, op_dy)) = &op_rhs {
-            let (names, dy) = rhs_at_probe(&tp, compiler, &label);
-            assert_eq!(names, *op_names, "{label}: state order");
-            assert_eq!(bits(&dy), bits(op_dy), "{label}: {dy:?} vs {op_dy:?}");
-            golden_dy(
-                &rhs_at_golden(&tp, compiler, &label, model, &gold["rhs"]),
-                "template",
-            );
+        if cmp.get("rhs").and_then(Value::as_bool) == Some(true) {
+            let dy = rhs_at_golden(&tp, compiler, &label, model, &gold["rhs"]);
+            let want = gold["rhs"]["dy"].as_object().unwrap();
+            assert_eq!(dy.len(), want.len(), "{label}: state elements");
+            for (n, w) in want {
+                let w = w.as_f64().unwrap();
+                assert_eq!(
+                    dy[n].to_bits(),
+                    w.to_bits(),
+                    "{label}: template vs golden at {n}: {} vs {w}",
+                    dy[n]
+                );
+            }
         }
     }
 }
 
 /// Value invention alone, for a document whose right-hand side needs data the
-/// manifest does not carry: the op form's raw model against the template
-/// form's model as loaded (templates expanded).
+/// manifest does not carry: the template form's model as loaded (templates
+/// expanded) against the golden.
 fn check_vi_only(
     entry: &Value,
     case: &Value,
-    op_doc: &Value,
     tp_doc: &Value,
     model: &str,
     label: &str,
@@ -540,13 +424,6 @@ fn check_vi_only(
 ) {
     let arrays = case_arrays(case);
     let params = case_params(case);
-    let op = materialize_value_invention(
-        &engine_model(op_doc, model),
-        &arrays,
-        &params,
-        &HashMap::new(),
-    )
-    .unwrap_or_else(|e| panic!("{label}: op: {e}"));
     let options = LoadOptions {
         base_path: Some(repo_root()),
         ..Default::default()
@@ -582,11 +459,8 @@ fn check_vi_only(
                 other => panic!("{label}: template key {other:?} is not an integer"),
             })
             .collect();
-        assert_eq!(decoded, op.members[faq], "{label}: {faq} members");
-        assert_eq!(tp.extents[faq], op.extents[faq], "{label}: {faq} extent");
         let want = golden_members(&gold["sets"][faq]);
         assert_eq!(decoded, want, "{label}: template {faq} vs golden");
-        assert_eq!(op.members[faq], want, "{label}: op form {faq} vs golden");
         assert_eq!(
             tp.extents[faq] as u64,
             gold["sets"][faq]["extent"].as_u64().unwrap(),
@@ -596,7 +470,7 @@ fn check_vi_only(
 }
 
 #[test]
-fn every_rewrite_agrees_with_its_op_form() {
+fn every_rewrite_matches_its_golden() {
     let mut ran = 0;
     for entry in manifest() {
         if entry["compare"].get("tier").is_some() {
@@ -608,7 +482,7 @@ fn every_rewrite_agrees_with_its_op_form() {
             ran += 1;
         }
     }
-    assert!(ran >= 9, "only {ran} rewrite cases ran");
+    assert!(ran >= 8, "only {ran} rewrite cases ran");
 }
 
 /// Inline-test results of `path` under `compiler`: `(passed, actual)` per
@@ -633,7 +507,7 @@ fn inline(path: &Path, compiler: Compiler) -> Vec<(bool, Option<f64>, String)> {
 }
 
 #[test]
-fn rewrites_load_and_inline_tests_match_the_op_form() {
+fn rewrites_load_and_inline_tests_match_the_golden() {
     for entry in manifest() {
         let cmp = &entry["compare"];
         let id = entry["id"].as_str().unwrap();
@@ -647,32 +521,24 @@ fn rewrites_load_and_inline_tests_match_the_op_form() {
             let text = std::fs::read_to_string(&path).unwrap();
             load_string_with_options(&text, &options).unwrap_or_else(|e| panic!("{id}: load: {e}"));
         } else if cmp.get("inline_tests").and_then(Value::as_bool) == Some(true) {
-            let source = repo_root().join(entry["source"].as_str().unwrap());
-            let op: Vec<Option<f64>> = inline(&source, Compiler::Interpreter)
-                .into_iter()
-                .map(|r| r.1)
-                .collect();
             let tp: Vec<Option<f64>> = inline(&path, Compiler::Interpreter)
                 .into_iter()
                 .map(|r| r.1)
                 .collect();
-            assert_eq!(tp, op, "{id}: inline-test actuals");
             // Integrator outputs: within each assertion's tolerance, not bit for bit.
             let gold = golden(&entry)["inline_tests"].as_array().unwrap().clone();
-            for (form, res) in [("op", &op), ("template", &tp)] {
-                assert_eq!(res.len(), gold.len(), "{id}: {form} inline-test count");
-                for (r, g) in res.iter().zip(&gold) {
-                    let (want, rtol, atol) = (
-                        g["actual"].as_f64().unwrap(),
-                        g["rtol"].as_f64().unwrap(),
-                        g["atol"].as_f64().unwrap(),
-                    );
-                    let got = r.unwrap_or_else(|| panic!("{id}: {form}: no actual"));
-                    assert!(
-                        (got - want).abs() <= atol.max(rtol * want.abs()),
-                        "{id}: {form} inline-test actual {got} vs golden {want}"
-                    );
-                }
+            assert_eq!(tp.len(), gold.len(), "{id}: inline-test count");
+            for (r, g) in tp.iter().zip(&gold) {
+                let (want, rtol, atol) = (
+                    g["actual"].as_f64().unwrap(),
+                    g["rtol"].as_f64().unwrap(),
+                    g["atol"].as_f64().unwrap(),
+                );
+                let got = r.unwrap_or_else(|| panic!("{id}: no actual"));
+                assert!(
+                    (got - want).abs() <= atol.max(rtol * want.abs()),
+                    "{id}: inline-test actual {got} vs golden {want}"
+                );
             }
         } else if tier == Some("relational_templates") {
             // The rewrite's own inline tests, under both compilers.

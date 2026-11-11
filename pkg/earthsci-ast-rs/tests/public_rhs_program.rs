@@ -94,7 +94,7 @@ fn forced_1d(n: i64) -> serde_json::Value {
     let refresh =
         json!({"kind": "schedule", "interval": 60.0, "handler": {"handler_id": "reload"}});
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "forced_1d", "authors": ["test"]},
         "index_sets": {"x": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -129,7 +129,7 @@ fn forced_2d(nx: i64, ny: i64) -> serde_json::Value {
         json!({"kind": "schedule", "interval": 60.0, "handler": {"handler_id": "reload"}});
     let ranges = json!({"i": {"from": "x"}, "j": {"from": "y"}});
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "forced_2d", "authors": ["test"]},
         "index_sets": {"x": {"kind": "interval", "size": nx}, "y": {"kind": "interval", "size": ny}},
         "models": {"M": {
@@ -159,7 +159,7 @@ fn forced_2d(nx: i64, ny: i64) -> serde_json::Value {
 fn weighted(n: i64) -> serde_json::Value {
     let w: Vec<f64> = (1..=n).map(|i| 0.5 + 0.125 * i as f64).collect();
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "weighted", "authors": ["test"]},
         "index_sets": {"x": {"kind": "interval", "size": n}},
         "models": {"M": {

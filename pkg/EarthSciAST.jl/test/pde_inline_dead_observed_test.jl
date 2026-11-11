@@ -55,7 +55,7 @@ _dob_var(shape) = Dict{String, Any}(
 # observed graph, not the integrator.
 function _dob_doc(assertions::Vector)
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pde_inline_dead_observed"),
         "index_sets" => Dict{String, Any}(
             "x" => Dict("kind" => "interval", "size" => _DOB_NX),
@@ -221,7 +221,7 @@ _dob_coords(var, coords, expected; time = 0.0) =
 # testset can build, and this one exists only to be unevaluable.
 function _dob_unbound_doc()
     return Dict{String, Any}(
-        "esm" => "1.0.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pde_inline_dead_observed_unbound"),
         "index_sets" => Dict{String, Any}(
             "x" => Dict("kind" => "interval", "size" => _DOB_NX)
@@ -299,7 +299,7 @@ function _dob_sibling_doc(model_name::AbstractString, assertions::Vector)
         ),
     ]
     return Dict{String, Any}(
-        "esm" => "1.0.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pde_inline_dead_observed_siblings"),
         "index_sets" => Dict{String, Any}(
             "x" => Dict("kind" => "interval", "size" => _DOB_NX)

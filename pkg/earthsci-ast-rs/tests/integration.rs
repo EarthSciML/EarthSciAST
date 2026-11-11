@@ -55,10 +55,6 @@ mod cli_static_evaluation_output;
 mod cli_test_command;
 #[path = "cli_units_command.rs"]
 mod cli_units_command;
-#[path = "closed_function_load_checks.rs"]
-mod closed_function_load_checks;
-#[path = "closed_functions_conformance.rs"]
-mod closed_functions_conformance;
 #[path = "compiled_rhs_adapter.rs"]
 mod compiled_rhs_adapter;
 #[path = "compiler_gate_routes.rs"]
@@ -95,8 +91,6 @@ mod data_source_extent_scope;
 mod data_source_unbound_conformance;
 #[path = "data_source_url_conformance.rs"]
 mod data_source_url_conformance;
-#[path = "deprecated_op_alias.rs"]
-mod deprecated_op_alias;
 #[path = "discrete_materialize_conformance.rs"]
 mod discrete_materialize_conformance;
 #[path = "display_conformance.rs"]
@@ -145,16 +139,6 @@ mod forcing_from_sample;
 mod forcing_native_agreement;
 #[path = "from_faq_document_scope.rs"]
 mod from_faq_document_scope;
-#[path = "function_tables.rs"]
-mod function_tables;
-#[path = "function_tables_inline_tests.rs"]
-mod function_tables_inline_tests;
-#[path = "function_tables_lowering.rs"]
-mod function_tables_lowering;
-#[path = "geometry_conformance.rs"]
-mod geometry_conformance;
-#[path = "geometry_simulate_conformance.rs"]
-mod geometry_simulate_conformance;
 #[path = "geometry_templates.rs"]
 mod geometry_templates;
 #[path = "graph_conformance.rs"]
@@ -163,6 +147,8 @@ mod graph_conformance;
 mod graph_structure;
 #[path = "ic_at_start_conformance.rs"]
 mod ic_at_start_conformance;
+#[path = "ifelse_shape_at_build.rs"]
+mod ifelse_shape_at_build;
 #[path = "index_set_member_factor.rs"]
 mod index_set_member_factor;
 #[path = "index_sets_document_scope.rs"]
@@ -319,6 +305,8 @@ mod refresh_conformance;
 mod relational_rewrites;
 #[path = "relational_templates.rs"]
 mod relational_templates;
+#[path = "removed_spellings.rs"]
+mod removed_spellings;
 #[path = "reserved_index_symbol.rs"]
 mod reserved_index_symbol;
 #[path = "reservoir_constant_species.rs"]
@@ -385,14 +373,14 @@ mod subsystem_mount_join_names;
 mod tape_exec;
 #[path = "tape_fallback_reporting.rs"]
 mod tape_fallback_reporting;
-#[path = "tape_interp_lowering.rs"]
-mod tape_interp_lowering;
 #[path = "tape_loop_lowering.rs"]
 mod tape_loop_lowering;
 #[path = "template_array_args.rs"]
 mod template_array_args;
 #[path = "template_imports_conformance.rs"]
 mod template_imports_conformance;
+#[path = "template_scenarios.rs"]
+mod template_scenarios;
 #[path = "term_provenance.rs"]
 mod term_provenance;
 #[path = "tests_blocks_execution.rs"]
@@ -427,8 +415,6 @@ mod value_invention_arrays_and_extents;
 mod value_invention_caller_data;
 #[path = "value_invention_materialize_conformance.rs"]
 mod value_invention_materialize_conformance;
-#[path = "value_invention_simulate.rs"]
-mod value_invention_simulate;
 #[path = "variable_map_expression_transform.rs"]
 mod variable_map_expression_transform;
 #[path = "vec_coverage_frontier.rs"]

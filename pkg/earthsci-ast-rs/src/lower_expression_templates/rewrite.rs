@@ -8,8 +8,7 @@ use crate::json_visit::JsonPath;
 
 /// The tier-**T** ops that ARE evaluable-core registry entries and so cannot be
 /// derived from "not in the core": the structural derivative `D` (a SPATIAL `D`
-/// is a rewrite target) and the two load-eliminated forms `table_lookup` /
-/// `enum` (esm-spec §4.5 / §9.5).
+/// is a rewrite target) and the load-eliminated form `enum` (esm-spec §4.5).
 ///
 /// The open rewrite-target sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/
 /// `integral`) and any unregistered custom op are DELIBERATELY not hand-listed
@@ -18,7 +17,7 @@ use crate::json_visit::JsonPath;
 /// (`op_registry`) and this list never drifts from it (that is precisely why a
 /// hand-list previously carried `grad`/`div`/`laplacian`/`integral` but silently
 /// omitted `curl`/`∇`). `apply_expression_template` itself is excluded.
-const REWRITE_TARGET_OPS: [&str; 3] = ["D", "table_lookup", "enum"];
+const REWRITE_TARGET_OPS: [&str; 2] = ["D", "enum"];
 
 /// True iff op string `op` is a member of the rewrite-target tier **T**
 /// (esm-spec §9.6.4 rule 3): one of the named rewrite-target ops, or an op with
@@ -132,8 +131,8 @@ pub(super) fn decl_has_match(decl: &Sv) -> bool {
 }
 
 /// Generic transitive-reachability over the `apply_expression_template`
-/// body-reference DAG, shared by [`template_target_bearing`] and
-/// [`template_manifold_bearing`]. For every template in `named` the flag is
+/// body-reference DAG, shared by [`template_target_bearing`] and the
+/// expansion's own reachability check. For every template in `named` the flag is
 /// `true` iff `direct_pred` holds on the template's own body, OR —
 /// transitively through the §9.7.3-checked acyclic reference DAG — the template
 /// reaches another template whose body satisfies `direct_pred`. Memoized DFS
@@ -1248,13 +1247,11 @@ fn declares_templates(value: &Value) -> bool {
 /// machinery after all), and if not, the first error each §9.6.4
 /// expanded-form validator reports on it, in that validator's pre-order.
 /// Equivalent to looking for the op and then running
-/// [`validate_geometry_manifolds`] and [`validate_makearray_regions`], each
-/// over the whole document; the op is looked for inside `expression_templates`
+/// [`validate_makearray_regions`] over the whole document; the op is looked for inside `expression_templates`
 /// subtrees too, which the validators skip.
 #[derive(Default)]
 struct UntemplatedScan {
     uses_apply: bool,
-    geometry: Option<ExpressionTemplateError>,
     makearray: Option<ExpressionTemplateError>,
 }
 
@@ -1281,13 +1278,8 @@ fn scan_without_templates(
                 out.uses_apply = true;
                 return;
             }
-            if !in_templates && let Some(op) = op {
-                if out.geometry.is_none() && GEOMETRY_MANIFOLD_OPS.contains(&op) {
-                    out.geometry = check_geometry_manifold(obj, at).err();
-                }
-                if out.makearray.is_none() && op == "makearray" {
-                    out.makearray = check_makearray_regions(obj, at).err();
-                }
+            if !in_templates && op == Some("makearray") && out.makearray.is_none() {
+                out.makearray = check_makearray_regions(obj, at).err();
             }
             for (k, v) in obj {
                 let skip = in_templates || k == "expression_templates";
@@ -1348,7 +1340,7 @@ pub(crate) fn lower_expression_templates_visiting(
         let mut scan = UntemplatedScan::default();
         scan_without_templates(value, &JsonPath::Root(""), false, &mut scan, visit);
         if !scan.uses_apply {
-            if let Some(e) = scan.geometry.or(scan.makearray) {
+            if let Some(e) = scan.makearray {
                 return Err(e);
             }
             return Ok((false, true));
@@ -1501,106 +1493,14 @@ pub(crate) fn lower_expression_templates_visiting(
     // references are errors — already checked per component / per transform by
     // `check_surviving_refs`. No global "no apply ops remain" gate.
 
-    // Validation discharge (esm-spec §9.6.9): geometry-manifold and
-    // makearray-region checks on the reference-preserving form. The manifold
-    // check is per-instantiation (a `manifold` may be a template param), so it
-    // descends through surviving references' single-instantiation expansions.
-    // Region bounds cannot carry template params, so the makearray check runs
-    // on the reference-preserving tree AND the retained folded template bodies.
-    validate_geometry_manifolds_refaware(value, &registries)?;
+    // Validation discharge (esm-spec §9.6.9): the makearray-region check on
+    // the reference-preserving form. Region bounds cannot carry template
+    // params, so it runs on the reference-preserving tree AND the retained
+    // folded template bodies.
     validate_makearray_regions(value, "")?;
     validate_makearray_regions_in_registries(&registries)?;
 
     Ok((true, false))
-}
-
-/// Geometry-kernel ops whose `manifold` scalar field is restricted to the
-/// closed manifold registry (CONFORMANCE_SPEC §5.8.4).
-pub(super) const GEOMETRY_MANIFOLD_OPS: [&str; 2] =
-    ["intersect_polygon", "polygon_intersection_area"];
-
-/// The closed manifold registry. The document schema admits any string in the
-/// `manifold` position so a template `body` can carry a parameter name there
-/// (esm-spec §9.6.1 scalar-field substitution site); the closed set is
-/// enforced by [`validate_geometry_manifolds`] on the EXPANDED form per
-/// esm-spec §9.6.4.
-const GEOMETRY_MANIFOLD_VALUES: [&str; 3] = ["planar", "spherical", "geodesic"];
-
-/// Post-expansion validator (esm-spec §9.6.4): every `intersect_polygon` /
-/// `polygon_intersection_area` node OUTSIDE an `expression_templates` block
-/// must carry a `manifold` drawn from the closed set {planar, spherical,
-/// geodesic}. Template bodies are skipped — a parameter name in the `manifold`
-/// position of a `body` is a legal scalar-field substitution site (esm-spec
-/// §9.6.1); by the time this validator runs on a loaded document every such
-/// site has been substituted, so an out-of-set value here is a real defect
-/// (e.g. a template invocation binding the manifold parameter to a non-member
-/// literal). Errors with code `geometry_manifold_invalid`.
-///
-/// Hand-rolled rather than `crate::json_visit`: descent is key-dependent
-/// (`expression_templates` subtrees are skipped) and the diagnostic needs the
-/// offender's path with an early error return.
-pub fn validate_geometry_manifolds(
-    tree: &Value,
-    path: &str,
-) -> Result<(), ExpressionTemplateError> {
-    validate_geometry_manifolds_at(tree, &JsonPath::Root(path))
-}
-
-fn validate_geometry_manifolds_at(
-    tree: &Value,
-    at: &JsonPath<'_>,
-) -> Result<(), ExpressionTemplateError> {
-    match tree {
-        Value::Array(arr) if crate::json_visit::is_number_data(arr) => Ok(()),
-        Value::Array(arr) => {
-            for (i, child) in arr.iter().enumerate() {
-                validate_geometry_manifolds_at(child, &JsonPath::Index(at, i))?;
-            }
-            Ok(())
-        }
-        Value::Object(obj) => {
-            check_geometry_manifold(obj, at)?;
-            for (k, v) in obj {
-                // Pre-substitution template trees; params may legally occupy
-                // the manifold position there (esm-spec §9.6.1).
-                if k == "expression_templates" {
-                    continue;
-                }
-                validate_geometry_manifolds_at(v, &JsonPath::Key(at, k))?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
-/// [`validate_geometry_manifolds`]' check on one object node at `at`.
-fn check_geometry_manifold(
-    obj: &Map<String, Value>,
-    at: &JsonPath<'_>,
-) -> Result<(), ExpressionTemplateError> {
-    if let Some(op) = obj.get("op").and_then(|v| v.as_str())
-        && GEOMETRY_MANIFOLD_OPS.contains(&op)
-        && let Some(m) = obj.get("manifold")
-    {
-        let ok = m
-            .as_str()
-            .is_some_and(|s| GEOMETRY_MANIFOLD_VALUES.contains(&s));
-        if !ok {
-            return Err(err(
-                codes::GEOMETRY_MANIFOLD_INVALID,
-                format!(
-                    "{at}: `{op}` carries manifold {m}, not a member of the \
-                     closed set {{planar, spherical, geodesic}}. The manifold \
-                     enum is enforced on the expanded form (esm-spec §9.6.4; \
-                     CONFORMANCE_SPEC §5.8.4) — a template parameter substituted \
-                     into this scalar field must be bound to one of the \
-                     closed-set literals."
-                ),
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// Post-expansion validator (esm-spec §4.3.2 / §9.6.4): every `makearray`

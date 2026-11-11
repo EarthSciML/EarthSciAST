@@ -15,8 +15,7 @@ each expansion with its template's name (``ExprNode.template_origin``). The
 rule applies to those marked applications only: an observed equation whose
 right-hand side holds, in elementwise position, an application whose expansion
 reads a shaped variable in a value position (an operand of an elementwise
-operator, a scalar argument of a closed function, the body or filter of a
-reduction, an ``index`` subscript) is rewritten into a ``faq`` over the
+operator, the body or filter of a reduction, an ``index`` subscript) is rewritten into a ``faq`` over the
 result's index sets. Its body is the right-hand side with each such read, and
 each bare shaped read outside the applications in elementwise position,
 gathered at that cell, aligned by index-set name (§4.3.4). An equation with no
@@ -33,12 +32,6 @@ from collections.abc import Callable
 from .esm_types import Expr, ExprNode
 from .flatten import Contribution, FlattenedSystem, _union_origins
 from .op_registry import resolve_alias, scalar_fn_names
-
-_WHOLE_ARRAY_FN_ARGS: dict[str, tuple[int, ...]] = {
-    "interp.linear": (0, 1),
-    "interp.bilinear": (0, 1, 2),
-    "interp.searchsorted": (1,),
-}
 
 
 class ElementwiseLiftError(ValueError):
@@ -72,9 +65,8 @@ def _visit(
     on_anonymous: Callable[[ExprNode], None] | None = None,
 ) -> None:
     """Visit every value position of ``expr`` (esm-spec §9.6.11). Outside a
-    template application those are the operands of elementwise operators and
-    the scalar arguments of closed functions, the positions the per-cell
-    reading commutes with. Inside one (a node carrying ``template_origin``, and
+    template application those are the operands of elementwise operators, the
+    positions the per-cell reading commutes with. Inside one (a node carrying ``template_origin``, and
     everything below it) they are also the body and filter of a reduction
     ``faq`` and the subscripts of an ``index``, where the template reads its
     scalar-role parameters. ``on_read(name, inside)`` is called for every bare
@@ -105,11 +97,6 @@ def _visit(
             for b in (expr.expr, expr.filter):
                 if b is not None:
                     rec(b, inner, True)
-    elif op == "fn":
-        whole = _WHOLE_ARRAY_FN_ARGS.get(expr.name or "", ())
-        for i, a in enumerate(expr.args):
-            if i not in whole:
-                rec(a, i=inside)
     elif op in ("const", "reshape"):
         if (
             inside
@@ -241,11 +228,6 @@ def _at_cell(
             expr,
             expr=None if expr.expr is None else rec(expr.expr, inner, True),
             filter=None if expr.filter is None else rec(expr.filter, inner, True),
-        )
-    if op == "fn":
-        whole = _WHOLE_ARRAY_FN_ARGS.get(expr.name or "", ())
-        return dataclasses.replace(
-            expr, args=[a if i in whole else rec(a) for i, a in enumerate(expr.args)]
         )
     if _is_elementwise(expr):
         return dataclasses.replace(expr, args=[rec(a) for a in expr.args])

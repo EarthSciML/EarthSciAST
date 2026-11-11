@@ -478,8 +478,8 @@ class UnparseableUnitError(ValueError):
     other bindings make (Go's ``UnitFindingUnparseable``, TS's ``unit_error``).
 
     Contrast with a GENUINELY UNDETERMINABLE dimension — a symbolic exponent
-    (``x^n``), an op with no dimensional rule (``faq``/``index``/``fn``/
-    ``table_lookup``), an undeclared variable — which is a statement about the
+    (``x^n``), an op with no dimensional rule (``faq``/``index``), an
+    undeclared variable — which is a statement about the
     checker and stays a WARNING (signalled by ``None``, never by an exception).
     """
 
@@ -2504,7 +2504,7 @@ class UnitValidator:
             )
 
         # Structural / array / query / rewrite-target ops (index, aggregate,
-        # fn, const, makearray, table_lookup, grad, ...) carry no dimensional
+        # const, makearray, grad, ...) carry no dimensional
         # rule here. Report UNKNOWN, not dimensionless.
         return None
 
@@ -2748,7 +2748,7 @@ def dimensionless_literal_findings(esm_file: EsmFile) -> list[tuple[str, str]]:
                 pointer,
                 f"{pointer}: with bare numeric literals read as dimensionless "
                 f"(esm-spec §4.8.6), {found[0]}; bare literal(s): {', '.join(literals)}. "
-                "This becomes an error at the next major esm version; a literal that "
+                "This becomes an error in a future version of EarthSciAST; a literal that "
                 'carries a unit is written const(value, units "...") '
                 "(esm-spec §4.8.5)",
             )

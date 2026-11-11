@@ -194,7 +194,7 @@ def _first_order_decay(state, t):
     return {"u": -0.01 * state["u"]}
 
 
-# --- the `datetime.*` + `log10` anchor ------------------------------------
+# --- the calendar-template + `log10` anchor -------------------------------
 #
 # Python's own proleptic-Gregorian calendar (`datetime.date`) plus the spec's
 # arithmetic, which is what makes this an INDEPENDENT anchor: nothing below

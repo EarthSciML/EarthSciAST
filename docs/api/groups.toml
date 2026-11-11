@@ -59,8 +59,7 @@ ops = [
   "affect_equation", "species", "reaction", "reaction_system", "reference",
   "domain", "coordinate", "dimension", "temporal_domain", "time_span",
   "continuous_event", "discrete_event", "discrete_event_trigger",
-  "functional_update", "parameter_update", "function_table",
-  "function_table_axis", "operator", "solver", "tolerance", "distribution",
+  "functional_update", "parameter_update", "operator", "solver", "tolerance", "distribution",
   "coupling_entry", "coupling_couple", "coupling_import",
   "coupling_import_options", "coupling_role",
   "data_source", "data_source_binding", "data_source_determinism",
@@ -94,8 +93,7 @@ ops = [
   "substitute", "substitute_with_context", "substitute_in_equations",
   "substitute_in_model", "substitute_in_model_with_context",
   "substitute_in_reaction_system", "substitute_in_reaction_system_with_context",
-  "simplify", "expand", "evaluate", "evaluate_closed_function",
-  "closed_function_names", "closed_function_error",
+  "simplify", "expand", "evaluate",
 ]
 
 [[group]]
@@ -219,13 +217,9 @@ ops = [
 
 [[group]]
 id = "relational"
-title = "Relational keys and geometry"
-description = "Deterministic keys, ranking and grouping for relational index sets, and the polygon geometry used by regridding."
-ops = [
-  "skolem", "skolem_edge", "distinct", "rank", "ranking", "group_aggregate",
-  "float_key_error", "polygon_area", "intersect_polygon", "area_tolerance_ok",
-  "geometry_error",
-]
+title = "Relational index sets"
+description = "Deterministic deduplication and grouping for relational index sets."
+ops = ["distinct", "group_aggregate", "float_key_error"]
 
 [[group]]
 id = "errors"

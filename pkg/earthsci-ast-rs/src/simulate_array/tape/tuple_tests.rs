@@ -55,7 +55,7 @@ fn self_join_doc(n: usize) -> Value {
     let ranges = json!({"a": {"from": "rows"}, "b": {"from": "rows"}});
     let join = json!([{"on": [["row_prior", "row_id"]]}]);
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "self_join_scaling", "authors": ["tape tests"]},
         "index_sets": {"rows": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -122,7 +122,7 @@ fn a_many_to_many_data_column_join_folds_in_the_interpreters_order() {
         .map(|k| (0.7 + k as f64) * 10f64.powi((k % 5) as i32 - 2))
         .collect();
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "m2m_data_columns", "authors": ["tape tests"]},
         "index_sets": {"ls": {"kind": "interval", "size": nl}, "rs": {"kind": "interval", "size": nr}},
         "models": {"M": {
@@ -170,7 +170,7 @@ fn a_gate_on_an_output_index_restricts_each_cells_run() {
     // Records land on cells 1, 2 and 4 only; cells 3 and 5 stay empty.
     let rec_cell: Vec<f64> = (0..nrec).map(|k| [1.0, 2.0, 4.0][k % 3]).collect();
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "gate_restrict", "authors": ["tape tests"]},
         "index_sets": {"cells": {"kind": "interval", "size": ncell}, "recs": {"kind": "interval", "size": nrec}},
         "models": {"M": {
@@ -219,7 +219,7 @@ fn a_gate_on_an_output_index_restricts_each_cells_run() {
 #[test]
 fn a_ragged_gather_of_a_two_dimensional_state_reads_it_in_place() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ragged_state_gather", "authors": ["tape tests"]},
         "index_sets": {
             "rows": {"kind": "interval", "size": 3},
@@ -290,7 +290,7 @@ fn ragged_doc(cnt: Value, body: Value, filter: Option<Value>) -> Value {
         rhs["filter"] = f;
     }
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ragged_review", "authors": ["tape tests"]},
         "index_sets": {
             "rows": {"kind": "interval", "size": 3},
@@ -468,7 +468,7 @@ fn star_join_doc(
         idx(json!("w"), &[json!("f")])
     };
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "star_join_budget", "authors": ["tape tests"]},
         "index_sets": {
             "bigs": {"kind": "interval", "size": n_big},
@@ -698,7 +698,7 @@ fn hot_soak_doc(n_g: usize, n_v: usize, n_i: usize, n_s: usize, n_h: usize) -> V
     let out = json!({"g": {"from": "gs"}, "v": {"from": "vs"}, "h": {"from": "hs"}});
     let gvh = [json!("g"), json!("v"), json!("h")];
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "hot_soak_fold", "authors": ["tape tests"]},
         "index_sets": {
             "gs": {"kind": "interval", "size": n_g},
@@ -1015,61 +1015,6 @@ fn a_list_given_part_of_the_shared_budget_switches_to_folding_mid_walk() {
     }
 }
 
-/// A chunk's tape resolves `intersect_polygon` of CONST observed rings at
-/// build, as the whole list's tape does, though its inputs are bound
-/// without a `ConstArray` of their own: the hot-soak body's kept term is
-/// scaled by a vertex of the clip of two literal rings, and the fold still
-/// folds, bit for bit the interpreter's answer at every budget.
-#[test]
-fn a_fold_whose_body_clips_const_rings_still_folds() {
-    use super::lower::set_tuple_list_budget;
-    let (n_g, n_v, n_i, n_s, n_h) = (2usize, 3usize, 12usize, 3usize, 4usize);
-    let mut doc = hot_soak_doc(n_g, n_v, n_i, n_s, n_h);
-    let m = &mut doc["models"]["M"];
-    for v in ["src", "tgt"] {
-        m["variables"][v] = json!({"type": "unknown", "units": "1", "shape": ["vtx", "coord"]});
-    }
-    let eqs = m["equations"].as_array_mut().unwrap();
-    eqs.insert(
-        0,
-        json!({"lhs": "src", "rhs": cnst(json!([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]))}),
-    );
-    eqs.insert(
-        1,
-        json!({"lhs": "tgt", "rhs": cnst(json!([[1.0, 1.0], [3.0, 1.5], [2.5, 3.0], [0.5, 2.5]]))}),
-    );
-    let total = eqs
-        .iter_mut()
-        .find(|e| e["lhs"] == json!("total"))
-        .expect("the contraction");
-    let clip = json!({"op": "intersect_polygon", "manifold": "planar", "args": ["src", "tgt"]});
-    let vertex = json!({"op": "+", "args": [
-        {"op": "index", "args": [clip, 2, 1]}, 1.0]});
-    total["rhs"]["expr"]["args"][1]["args"]
-        .as_array_mut()
-        .unwrap()
-        .push(vertex);
-    doc["index_sets"]["vtx"] = json!({"kind": "interval", "size": 4});
-    doc["index_sets"]["coord"] = json!({"kind": "interval", "size": 2});
-    let tuples = n_g * n_h * n_i * n_s;
-    let prev = set_tuple_list_budget(usize::MAX);
-    let prog = ab_check(doc.clone(), -2.0, 2.0);
-    set_tuple_list_budget(prev);
-    assert_eq!(count(&prog, "SegReduce"), 1, "under budget, the whole list");
-    assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
-    let run = n_i / n_v * n_s;
-    let mut payloads = Vec::new();
-    for budget in [run, 3] {
-        let prev = set_tuple_list_budget(budget);
-        let prog = ab_check(doc.clone(), -2.0, 2.0);
-        set_tuple_list_budget(prev);
-        assert_eq!(count(&prog, "SegReduce"), 0, "budget {budget}: folded");
-        payloads.push(folded_payload(&prog, n_g * n_v * n_h));
-    }
-    assert!(payloads.iter().all(|p| *p == payloads[0]));
-    assert!(payloads[0].iter().any(|&b| f64::from_bits(b) != 0.0));
-}
-
 /// The tape PRICES an `on` gate before building it, as the interpreter's
 /// planner does (PR #423): a clause whose key barely discriminates — here a
 /// constant, so it matches the whole product — is declined once a selective
@@ -1088,7 +1033,7 @@ fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
         .collect();
     let ones = vec![1.0f64; n];
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "gate_planner", "authors": ["tape tests"]},
         "index_sets": {"ls": {"kind": "interval", "size": n}, "rs": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -1194,7 +1139,7 @@ fn contracted_parent_doc(free_output: bool) -> Value {
         )
     };
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ragged_contracted_parent", "authors": ["tape tests"]},
         "index_sets": {
             "rows": {"kind": "interval", "size": 4},

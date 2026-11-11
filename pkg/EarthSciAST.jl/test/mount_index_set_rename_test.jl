@@ -55,7 +55,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # says the refusal "closes when that gap does".
         dir = mktempdir()
         leaf = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => Dict("name" => "leaf"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "leaf"),
             "index_sets" => Dict("ax" => Dict("kind" => "interval", "size" => 3)),
             "models" => Dict(
                 "Leaf" => Dict(
@@ -76,7 +76,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         )
         write(joinpath(dir, "leaf.esm"), JSON3.write(leaf))
         host = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => Dict("name" => "host"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "host"),
             "models" => Dict(
                 "L" => Dict(
                     "ref" => "./leaf.esm",
@@ -97,7 +97,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # A key the resolved mounted document does not declare is still
         # `subsystem_index_set_rename_unknown_name` — renames never invent names.
         bad_host = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => Dict("name" => "host_bad"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "host_bad"),
             "models" => Dict(
                 "L" => Dict(
                     "ref" => "./leaf.esm",
@@ -123,7 +123,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # merge, and the rename applies.
         dir = mktempdir()
         leaf = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => Dict("name" => "rs_leaf"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "rs_leaf"),
             "metaparameters" => Dict("N" => Dict("type" => "integer", "default" => 2)),
             "index_sets" => Dict("ax" => Dict("kind" => "interval", "size" => "N")),
             "reaction_systems" => Dict(
@@ -146,7 +146,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         )
         write(joinpath(dir, "rs_leaf.esm"), JSON3.write(leaf))
         host(edge) = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => Dict("name" => "rs_host"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "rs_host"),
             "reaction_systems" => Dict("R" => merge(Dict{String, Any}("ref" => "./rs_leaf.esm"), edge))
         )
         load(edge) = begin
@@ -250,7 +250,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         dir = mktempdir()
         doc(name, ref) = JSON3.write(
             Dict(
-                "esm" => "1.0.0",
+                "esm" => "2.0.0",
                 "metadata" => Dict("name" => name, "description" => "mount cycle probe"),
                 "models" => Dict("M" => Dict("ref" => ref)),
             )

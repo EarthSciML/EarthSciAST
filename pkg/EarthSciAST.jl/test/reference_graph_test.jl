@@ -345,7 +345,7 @@ eqn(lhs, rhs) = Dict{String, Any}("lhs" => lhs, "rhs" => rhs)
         consumer = agg(output_idx = ["e"], ranges = Dict("e" => Dict("from" => "edges")))
         model = Dict{String, Any}("equations" => [eqn(producer, 0), eqn(consumer, 1)])
         document = Dict{String, Any}(
-            "esm" => "1.0.0",
+            "esm" => "2.0.0",
             "index_sets" => Dict(
                 "faces" => Dict("kind" => "interval", "size" => 8),
                 "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")
@@ -391,7 +391,7 @@ eqn(lhs, rhs) = Dict{String, Any}("lhs" => lhs, "rhs" => rhs)
                 [eqn(agg(output_idx = ["f"], ranges = Dict("f" => Dict("from" => "faces"))), 0)]
         )
         doc2 = Dict{String, Any}(
-            "esm" => "1.0.0",
+            "esm" => "2.0.0",
             "index_sets" => Dict("faces" => Dict("kind" => "interval", "size" => 8)),
             "models" => Dict("A" => m2, "B" => deepcopy(m2))
         )
@@ -551,7 +551,7 @@ eqn(lhs, rhs) = Dict{String, Any}("lhs" => lhs, "rhs" => rhs)
         graphs = resolve_references(doc)
         ocean = graphs["OceanDynamics"]
         targets = Set(e.target for e in ESS.edges_of_kind(ocean, ESS.REF_EDGE_JOIN_FACTOR))
-        @test "factor:rg_src_bin" in targets
+        @test "factor:rg_src_bin_c1" in targets && "factor:rg_src_bin_c2" in targets
     end
 
     # The other instance of CORPUS_DEFECTS #3: six aggregates in

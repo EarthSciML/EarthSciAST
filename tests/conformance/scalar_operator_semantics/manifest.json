@@ -190,10 +190,10 @@
         "angle",
         "esm-spec-4.8.3",
         "makearray",
-        "table_lookup",
+        "linear",
         "static-evaluation"
       ],
-      "note": "Authored here. The nested-field half of esm-spec \u00a74.8.3's angle conversion: a `deg` argument inside a `makearray` region value or a `table_lookup` axis input is converted as one in `args` is. Sibling of angle_array_element.",
+      "note": "Authored here. The nested-field half of esm-spec \u00a74.8.3's angle conversion: a `deg` argument inside a `makearray` region value or an `apply_expression_template` binding (a `linear` query) is converted as one in `args` is. Sibling of angle_array_element.",
       "required": {
         "julia": [
           "interpreter",

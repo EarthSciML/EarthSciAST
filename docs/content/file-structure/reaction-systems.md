@@ -8,7 +8,7 @@ description: "Species and reactions, lowerable to ODEs."
 
 ```json
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "MinimalChem" },
   "reaction_systems": {
     "SimpleOzone": {

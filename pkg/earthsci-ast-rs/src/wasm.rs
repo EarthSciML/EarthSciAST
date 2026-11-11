@@ -264,12 +264,6 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
 /// client-side. Pure-ODE / 0-D box models and — since the `simulate_array` wasm
 /// gate was lifted (EarthSciAST-akz) — array-op and discretized-PDE
 /// files both run here through the same dispatch the native backend uses.
-/// **Spherical/geodesic geometry** (conservative regridding) runs here too, as of
-/// the move to the pure-Rust `s2rst` kernel: it links into this
-/// `wasm32-unknown-unknown` build like any other dependency, so the clip runs
-/// in-module with no host setup. (Previously these leaf ops hit a wasm stub and
-/// returned a runtime `GeometryError`, because the C++ s2geometry kernel could
-/// not be linked and had to be reached through a separate Emscripten module.)
 ///
 /// Arguments:
 /// - `json_str`: the `.esm` file as a JSON string.
@@ -606,38 +600,6 @@ pub fn component_graph(json_str: &str) -> Result<JsValue, JsValue> {
     to_js(&graph)
 }
 
-/// Area of a lon/lat polygon `ring` under `manifold` (RFC §8.1). `ring_json` is a
-/// JSON array of `[lon, lat]` pairs in **degrees**; `manifold` is one of
-/// `"planar" | "spherical" | "geodesic"`. Returns the planar shoelace area for
-/// `planar`, or the great-circle area in **steradians** for `spherical`/`geodesic`.
-///
-/// The spherical/geodesic path runs the in-module `s2rst` kernel — no host setup,
-/// no JS bridge. Only a degenerate ring errors.
-#[wasm_bindgen]
-pub fn polygon_area(ring_json: &str, manifold: &str) -> Result<f64, JsValue> {
-    let ring: Vec<(f64, f64)> =
-        serde_json::from_str(ring_json).map_err(js_err("ring parse error"))?;
-    let m = crate::geometry::Manifold::from_flag(manifold)
-        .ok_or_else(|| JsValue::from_str(&format!("unknown manifold '{manifold}'")))?;
-    crate::geometry::polygon_area(&ring, m).map_err(|e| JsValue::from_str(&e.to_string()))
-}
-
-/// Clip lon/lat polygon rings `a` and `b` on `manifold` and return the overlap
-/// ring as a JSON array of `[lon, lat]` pairs (degrees; `[]` for a disjoint or
-/// edge-touching clip). `a_json`/`b_json` are JSON `[lon, lat]` arrays; `manifold`
-/// is `"planar" | "spherical" | "geodesic"`. Like [`polygon_area`], every
-/// manifold is served in-module — the spherical/geodesic clip needs no host setup.
-#[wasm_bindgen]
-pub fn intersect_polygon(a_json: &str, b_json: &str, manifold: &str) -> Result<String, JsValue> {
-    let a: Vec<(f64, f64)> = serde_json::from_str(a_json).map_err(js_err("a parse error"))?;
-    let b: Vec<(f64, f64)> = serde_json::from_str(b_json).map_err(js_err("b parse error"))?;
-    let m = crate::geometry::Manifold::from_flag(manifold)
-        .ok_or_else(|| JsValue::from_str(&format!("unknown manifold '{manifold}'")))?;
-    let ring = crate::geometry::intersect_polygon(&a, &b, m)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    serde_json::to_string(&ring).map_err(js_err("serialize error"))
-}
-
 /// Report the crate and supported-schema versions. (The native performance
 /// feature flags were dropped from this report: they are never enabled in a
 /// wasm build, so advertising them here was misleading.)
@@ -673,7 +635,7 @@ mod tests {
     fn test_new_wasm_exports_compile() {
         let json = r#"
             {
-              "esm": "1.0.0",
+              "esm": "2.0.0",
               "metadata": {
                 "name": "Test Model",
                 "description": "A simple test model for WASM exports"

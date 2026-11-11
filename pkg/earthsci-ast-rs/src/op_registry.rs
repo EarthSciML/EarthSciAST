@@ -46,8 +46,7 @@ pub enum Arity {
     /// At least `n` (`+`/`*` are n-ary; `min`/`max` are n-ary with `n >= 2`).
     AtLeast(usize),
     /// Any arity, including zero. Used by the ops whose operands do not live in
-    /// `args` at all (`faq`/`makearray` carry them in `expr`/`values`;
-    /// `fn` defers to the closed-function registry's own signature check).
+    /// `args` at all (`faq`/`makearray` carry them in `expr`/`values`).
     Any,
 }
 
@@ -263,14 +262,8 @@ pub fn arity_of(op: &str) -> Option<Arity> {
         // 1.0 / 0.0 boolean encoding.
         "true" | "false" => Arity::Exact(0),
 
-        // --- Closed-registry invocation (§4.2 / §9.2). The registry checks the
-        // per-function signature itself (`unknown_closed_function`), so arity is
-        // open here.
-        "fn" => Arity::Any,
-        // Lowered at load time (§4.5 / §9.5). `enum` is `[enum_name, symbol]`;
-        // `table_lookup` carries its inputs in `axes`, so "`args` MUST be empty".
+        // Lowered at load time (§4.5). `enum` is `[enum_name, symbol]`.
         "enum" => Arity::Exact(2),
-        "table_lookup" => Arity::Exact(0),
         // Expanded at load time (§9.6); its operands live in `bindings`.
         "apply_expression_template" => Arity::Any,
 
@@ -285,14 +278,12 @@ pub fn arity_of(op: &str) -> Option<Arity> {
         "reshape" | "transpose" => Arity::Exact(1),
         "concat" => Arity::AtLeast(1),
 
-        // --- Relational / value-invention & geometry (§4.3 companions). These
+        // --- Relational / value-invention (§4.3 companions). These
         // are BUILD-TIME ops, evaluated by `value_invention.rs` (not by the
         // per-cell oracle), so they are known-and-legal here even though
         // `eval_op` has no arm for them. Their operand shapes are checked by
         // that evaluator.
-        "skolem" | "rank" | "distinct" => Arity::Any,
-        "argmin" | "argmax" => Arity::Any,
-        "intersect_polygon" | "polygon_intersection_area" => Arity::Exact(2),
+        "distinct" => Arity::Any,
 
         _ => return None,
     };
@@ -376,7 +367,7 @@ pub fn is_builtin_function_name(name: &str) -> bool {
 ///   be brought onto a common index space (§4.3.4). Every other op consumes its
 ///   operands WHOLE and defines its own operand contract — a `faq` and a
 ///   `makearray` name their axes, an `index` gathers, the shape ops restructure,
-///   the relational and geometry kernels return arrays of an unrelated shape —
+///   the relational kernels return arrays of an unrelated shape —
 ///   so alignment must not reach inside them. [`is_elementwise_node`] lifts this
 ///   predicate to nodes.
 ///
@@ -392,13 +383,10 @@ pub fn is_builtin_function_name(name: &str) -> bool {
 ///   `transpose`, `concat`, and `broadcast` itself) — they RESHAPE, so
 ///   "apply element-wise" is not defined for them (and a self-referential
 ///   `fn: "broadcast"` would recurse forever in the evaluators);
-/// * the closed-registry invocation `fn` — its callee lives in `name`, not in
-///   the `broadcast` node's `fn` field, so it can never be spelled here;
 /// * the form/lowering ops (`D`, `ic`, `Pre`, `const`, `true`, `enum`,
-///   `table_lookup`, `apply_expression_template`) — consumed by system
-///   assembly or a lowering pass, never evaluated element-wise;
-/// * the build-time relational and geometry ops (`skolem`, `rank`, `distinct`,
-///   `argmin`, `argmax`, `intersect_polygon`, `polygon_intersection_area`).
+///   `apply_expression_template`) — consumed by system assembly or a lowering
+///   pass, never evaluated element-wise;
+/// * the build-time relational op `distinct`.
 ///
 /// Every name here is also in [`arity_of`]: this is a SUBSET of the evaluable
 /// core, never an extension of it (pinned by `every_scalar_operator_has_an_arity`
@@ -830,9 +818,7 @@ mod tests {
         "const",
         "true",
         "false",
-        "fn",
         "enum",
-        "table_lookup",
         "apply_expression_template",
         "faq",
         "makearray",
@@ -841,13 +827,7 @@ mod tests {
         "reshape",
         "transpose",
         "concat",
-        "skolem",
-        "rank",
         "distinct",
-        "argmin",
-        "argmax",
-        "intersect_polygon",
-        "polygon_intersection_area",
     ];
 
     /// [`is_scalar_operator`] may only CLASSIFY registry ops, never invent them.
@@ -900,8 +880,8 @@ mod tests {
             assert!(is_core_op(name), "`{name}` is excused but not a core op");
         }
         for name in [
-            "neg", "ln", "and", "or", "not", "D", "ic", "const", "true", "fn", "faq", "index",
-            "expp", "t",
+            "neg", "ln", "and", "or", "not", "D", "ic", "const", "true", "faq", "index", "expp",
+            "t",
         ] {
             assert!(
                 !is_builtin_function_name(name),
@@ -997,7 +977,7 @@ mod tests {
     /// §4.3.4 requires a SCALAR operator.
     #[test]
     fn non_scalar_broadcast_fn_is_rejected() {
-        for f in ["faq", "index", "makearray", "broadcast", "fn", "D"] {
+        for f in ["faq", "index", "makearray", "broadcast", "enum", "D"] {
             let e = check_expr(&node(serde_json::json!({
                 "op": "broadcast", "fn": f, "args": ["x"]
             })))
@@ -1109,6 +1089,6 @@ mod tests {
         };
         assert!(is_elementwise_node(&named("*")));
         assert!(!is_elementwise_node(&named("index")));
-        assert!(!is_elementwise_node(&named("intersect_polygon")));
+        assert!(!is_elementwise_node(&named("distinct")));
     }
 }

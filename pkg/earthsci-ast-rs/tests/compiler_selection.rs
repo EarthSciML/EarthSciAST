@@ -161,9 +161,7 @@ fn a_value_outside_the_vocabulary_is_compiler_unknown() {
 
 /// The document `native` refuses, and the reason it refuses for.
 ///
-/// This was an `interp.linear` fixture, then a `polygon_intersection_area`
-/// one, then a causal self-reference; all three are on the tape now. What
-/// stays refused is a recurrence whose self-read sits inside an ARRAY-VALUED
+/// What stays refused is a recurrence whose self-read sits inside an ARRAY-VALUED
 /// part of its cell body — here a nested `faq` over `j` — which the tape's
 /// sweep does not lower (it evaluates a self-read one scalar cell at a time)
 /// and the interpreter evaluates. Inline rather than a corpus file: a corpus
@@ -175,7 +173,7 @@ fn refused_doc() -> Value {
         "expr": {"op": "*", "args": [
             {"op": "index", "args": ["s", {"op": "-", "args": ["k", 1]}]}, "j"]}});
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "RefusedRecurrence"},
         "index_sets": {"steps": {"kind": "interval", "size": 4}},
         "models": {"R": {
@@ -340,8 +338,9 @@ fn native_runs_per_variable_element_types_bit_for_bit() {
 /// The probe fixtures for constructs the tape used to refuse and the corpus
 /// does not reach: more than four contracted indices, a periodic wrap that is
 /// not a full roll, a derivative left-hand side that is not a constant shift,
-/// `datetime.*` for Float32 variables, an array observed whose ranges start
-/// past 1, and `interp.*` on an array-valued query (#660). Each builds under
+/// the calendar templates for Float32 variables, an array observed whose
+/// ranges start past 1, and the interpolation templates on an array-valued
+/// query (#660). Each builds under
 /// `native` with every rule on the tape, with the routing decided
 /// (`Rhs::Auto`) and forced, and lands where the interpreter does.
 #[test]
@@ -685,11 +684,9 @@ fn xla_refuses_a_rule_the_tape_cannot_lower_and_names_it() {
     }
 }
 
-/// The two tape forms the XLA emitter has no lowering for — a derivative
-/// written through a per-cell position table, and a `datetime.*` call where
-/// the kernels are binary32 — are refused by name, never approximated. (The
-/// calendar probe declares per-variable element types, which the lane refuses
-/// before it reaches the instruction.)
+/// Two documents the XLA lane has no lowering for — a derivative written
+/// through a per-cell position table, and the calendar probe, which declares
+/// per-variable element types — are refused by name, never approximated.
 #[cfg(feature = "xla")]
 #[test]
 fn xla_refuses_the_scatter_and_calendar_forms_by_name() {

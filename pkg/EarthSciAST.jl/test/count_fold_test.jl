@@ -82,7 +82,7 @@ function _cf_doc(n; axis = :const, body = _cf_le, kw...)
         )
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "count_fold"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "count_fold"),
         "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs))
     )
 end
@@ -265,7 +265,7 @@ end
             ) for j in 1:6
         ]
         doc = Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict("name" => "count_fold_scalar"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "count_fold_scalar"),
             "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs))
         )
         ics = Dict{String, Any}("s$j" => qs[j] for j in 1:6)

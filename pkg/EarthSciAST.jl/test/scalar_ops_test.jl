@@ -142,7 +142,7 @@ const ESM = EarthSciAST
     # `EarthSciASTDiff` does, so that pair is pinned here too.
     @testset "an out-of-place build refuses host evaluation, by name" begin
         doc = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => Dict("name" => "sop"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "sop"),
             "models" => Dict(
                 "M" => Dict{String, Any}(
                     "variables" => Dict("a" => Dict("type" => "unknown", "default" => 2.0)),

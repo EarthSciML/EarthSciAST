@@ -7,8 +7,7 @@
 //!
 //! Without its data each document is refused by name — a shaped parameter with
 //! no value (`E_TREEWALK_MISSING_DATA`), or the derived set it cannot size
-//! (`derived_index_set_unmaterialized`) — never by an operator the relational
-//! pass should have removed (`unevaluable_operator skolem`).
+//! (`derived_index_set_unmaterialized`) — never as an `unevaluable_operator`.
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 
@@ -122,7 +121,6 @@ fn extent(rel: &str, arrays: &[(&str, ArrayD<f64>)], p: &[(&str, f64)], faq: &st
 }
 
 const EDGE: &str = "valid/faq/edge_enumeration_area_eff.esm";
-const REGRID: &str = "valid/geometry/conservative_regrid_overlap_join.esm";
 
 fn edge_arrays() -> Vec<(&'static str, ArrayD<f64>)> {
     vec![
@@ -136,16 +134,16 @@ fn edge_arrays() -> Vec<(&'static str, ArrayD<f64>)> {
 }
 
 #[test]
-fn edge_enumeration_tuple_keys_size_the_derived_edge_set() {
-    // Undirected edges skolem(a, b) are tuple keys; five of them over the two
-    // triangles. area_eff[i] = 1/4 sum over the cell's edges of dc dv.
+fn edge_enumeration_keys_size_the_derived_edge_set() {
+    // Undirected edges, keyed by the `pair_key` template; five of them over
+    // the two triangles. area_eff[i] = 1/4 sum over the cell's edges of dc dv.
     let dy = rhs_both(EDGE, &edge_arrays(), &[]);
     assert_eq!(dy["area_eff[1]"], 43.0);
     assert_eq!(dy["area_eff[2]"], 143.75);
 }
 
 #[test]
-fn skolem_distinct_rank_builds_with_its_edge_endpoints() {
+fn distinct_edge_ranks_build_with_their_edge_endpoints() {
     let (mut lo, mut hi) = (Vec::new(), Vec::new());
     for f in 1..=12usize {
         for l in 1..=3usize {
@@ -163,9 +161,9 @@ fn skolem_distinct_rank_builds_with_its_edge_endpoints() {
 }
 
 #[test]
-fn composite_tuple_keys_count_three_members() {
+fn composite_keys_count_three_members() {
     let arrays = [("engTechID", arr(&[4], &[1., 2., 1., 2.]))];
-    let rel = "conformance/value_invention_materialize/fixtures/absent_key_factor.esm";
+    let rel = "conformance/value_invention_materialize/fixtures/absent_key_factor_template.esm";
     assert_eq!(extent(rel, &arrays, &[], "key_set"), 3);
     assert_eq!(
         field_both(rel, &arrays, &[], None, "distinctKeyCount"),
@@ -237,48 +235,16 @@ fn nearest_generator_centroid_reads_the_assignment() {
 }
 
 #[test]
-fn a_bin_join_gate_stays_a_gate() {
-    // Source bins 0, 1, 2 and target bins 1, 2, 9: only (2,1) and (3,2) share a
-    // bin, so with every A_ij = 1 the gated sums are A_j = [1, 1, 0] and
-    // F_tgt = [F_src[2], F_src[3], 0] — not the ungated column sums.
-    let sq_a = arr(&[4, 2], &[0., 0., 2., 0., 2., 2., 0., 2.]);
-    let sq_b = arr(&[4, 2], &[1., 1., 3., 1., 3., 3., 1., 3.]);
-    let arrays = [
-        ("src_lon", arr(&[3], &[0.2, 1.2, 2.2])),
-        ("src_lat", arr(&[3], &[0.; 3])),
-        ("tgt_lon", arr(&[3], &[1.2, 2.2, 9.9])),
-        ("tgt_lat", arr(&[3], &[0.; 3])),
-        ("src_poly_rep", sq_a),
-        ("tgt_poly_rep", sq_b),
-        ("A_ij", arr(&[3, 3], &[1.; 9])),
-        ("F_src", arr(&[3], &[1., 2., 3.])),
-        ("dst_areas", arr(&[3], &[1., 1., 1.])),
-    ];
-    let p = [("dx", 1.0), ("dy", 1.0), ("atol", 1e-12)];
-    let dy = rhs_both(REGRID, &arrays, &p);
-    let got: Vec<f64> = [
-        "A_j[1]", "A_j[2]", "A_j[3]", "F_tgt[1]", "F_tgt[2]", "F_tgt[3]",
-    ]
-    .iter()
-    .map(|n| dy[*n])
-    .collect();
-    assert_eq!(got, vec![1.0, 1.0, 0.0, 2.0, 3.0, 0.0]);
-}
-
-#[test]
 fn without_its_data_a_producer_is_refused_by_name() {
-    for rel in [EDGE, REGRID] {
-        for c in [Compiler::Interpreter, Compiler::Native] {
-            let e = build(rel, &[], &[], None, c, Rhs::Always)
-                .err()
-                .unwrap_or_else(|| panic!("{rel} built with no data"));
-            assert!(
-                e.contains("derived_index_set_unmaterialized")
-                    || e.contains("E_TREEWALK_MISSING_DATA"),
-                "{rel} [{}]: {e}",
-                c.as_str()
-            );
-            assert!(!e.contains("unevaluable_operator"), "{rel}: {e}");
-        }
+    for c in [Compiler::Interpreter, Compiler::Native] {
+        let e = build(EDGE, &[], &[], None, c, Rhs::Always)
+            .err()
+            .unwrap_or_else(|| panic!("{EDGE} built with no data"));
+        assert!(
+            e.contains("derived_index_set_unmaterialized") || e.contains("E_TREEWALK_MISSING_DATA"),
+            "{EDGE} [{}]: {e}",
+            c.as_str()
+        );
+        assert!(!e.contains("unevaluable_operator"), "{EDGE}: {e}");
     }
 }

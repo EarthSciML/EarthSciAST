@@ -159,7 +159,7 @@ fn index_set_rename_applies_at_a_toplevel_model_ref_mount() {
     std::fs::create_dir_all(&dir).expect("scratch dir");
     std::fs::write(
         dir.join("leaf.esm"),
-        r#"{"esm":"1.0.0","metadata":{"name":"leaf"},
+        r#"{"esm": "2.0.0","metadata":{"name":"leaf"},
             "index_sets":{"ax":{"kind":"interval","size":3}},
             "models":{"Leaf":{
               "variables":{"u":{"type":"unknown","units":"1","shape":["ax"],"default":1.0}},
@@ -169,7 +169,7 @@ fn index_set_rename_applies_at_a_toplevel_model_ref_mount() {
     .expect("write leaf");
     std::fs::write(
         dir.join("host.esm"),
-        r#"{"esm":"1.0.0","metadata":{"name":"host"},
+        r#"{"esm": "2.0.0","metadata":{"name":"host"},
             "models":{"L":{"ref":"./leaf.esm","index_set_rename":{"ax":"renamed_ax"}}}}"#,
     )
     .expect("write host");
@@ -194,7 +194,7 @@ fn index_set_rename_applies_at_a_toplevel_model_ref_mount() {
     // `subsystem_index_set_rename_unknown_name` — renames never invent names.
     std::fs::write(
         dir.join("host_bad.esm"),
-        r#"{"esm":"1.0.0","metadata":{"name":"host_bad"},
+        r#"{"esm": "2.0.0","metadata":{"name":"host_bad"},
             "models":{"L":{"ref":"./leaf.esm","index_set_rename":{"nope":"renamed_ax"}}}}"#,
     )
     .expect("write host_bad");

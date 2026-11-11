@@ -40,7 +40,7 @@ function _prt_doc(nx::Int, ny::Int)
         )
     )
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "prt"),
         "index_sets" => Dict(
             "x" => Dict("kind" => "interval", "size" => nx),
@@ -442,7 +442,7 @@ end
 function _prt_fault_doc()
     two(e) = _prt_op("+", e, e)
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "prt_fault"),
         "models" => Dict(
             "M" => Dict(
@@ -504,7 +504,7 @@ function _prt_ap_doc(n::Int)
         "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e
     )
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "prt_ap"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => n)),
         "models" => Dict(
@@ -590,7 +590,7 @@ function _prt_lane_doc(nx::Int, ny::Int)
         "expr" => e
     )
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "prt_lane"),
         "index_sets" => Dict(
             "x" => Dict("kind" => "interval", "size" => nx),
@@ -753,7 +753,7 @@ function _prt_fed_doc(n::Int)
     )
     fed(fv) = Dict("kind" => "data", "source" => "met", "from" => Dict("file_variable" => fv))
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "prt_fed"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => n)),
         "data_sources" => Dict(

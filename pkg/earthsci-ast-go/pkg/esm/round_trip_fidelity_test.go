@@ -155,6 +155,22 @@ var transformingFixtures = map[string]string{
 	"template_import_minimal.esm":               "template-library import + eager expansion",
 	"template_import_faq_axis.esm":              "template-library import consumed + the imported axis merged and folded",
 
+	// Fixtures the esm 2.0.0 codemod converted from the retired built-in ops
+	// (skolem, rank, argmin, intersect_polygon, polygon_intersection_area) to
+	// `esm:std/*.esm` template calls: the standard-library import is consumed
+	// at load and every call site expands, exactly as for
+	// template_import_minimal.esm (esm-spec §9.7.6).
+	"pure_topology.esm":                         "esm:std template-library import + eager expansion",
+	"edge_enumeration_area_eff.esm":             "esm:std template-library import + eager expansion",
+	"nearest_generator_argmin.esm":              "esm:std template-library import + eager expansion",
+	"nearest_generator_centroid.esm":            "esm:std template-library import + eager expansion",
+	"skolem_distinct_rank.esm":                  "esm:std template-library import + eager expansion",
+	"bin_skolem_spatial_join.esm":               "esm:std template-library import + eager expansion",
+	"conservative_regrid_assembly.esm":          "esm:std template-library import + eager expansion",
+	"polygon_intersection_area_padded_ring.esm": "esm:std template-library import + eager expansion",
+	"polygon_intersection_area_planar.esm":      "esm:std template-library import + eager expansion",
+	"wildfire_atmosphere_ocean.esm":             "esm:std template-library import + eager expansion",
+
 	// Metaparameter close+fold (esm-spec §9.7.1): symbolic extents such as
 	// `"size": "N"` are folded to their integer values at load.
 	"data_sources_ingest_and_select.esm":    "metaparameter folding (N_REC/N_POP/N_SRC -> integers)",

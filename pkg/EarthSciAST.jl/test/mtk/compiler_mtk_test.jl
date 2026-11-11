@@ -58,7 +58,7 @@ const _MTKC_ATOL = 1.0e-9
 # nodes is what makes `z` an independent variable (esm-spec §4.9.1(ii)), which
 # is the ODE-vs-PDE split this compiler refuses on.
 _mtkc_pde_doc() = Dict{String, Any}(
-    "esm" => "1.1.0",
+    "esm" => "2.0.0",
     "metadata" => Dict{String, Any}("name" => "MtkPde"),
     "models" => Dict{String, Any}(
         "Diffuse" => Dict{String, Any}(
@@ -92,7 +92,7 @@ _mtkc_pde_doc() = Dict{String, Any}(
 # state-DEPENDENT one (`scaled ~ 3*x`) — the two sides of `observed_field`'s
 # build-time contract.
 _mtkc_obs_doc() = Dict{String, Any}(
-    "esm" => "1.1.0",
+    "esm" => "2.0.0",
     "metadata" => Dict{String, Any}("name" => "MtkObs"),
     "models" => Dict{String, Any}(
         "M" => Dict{String, Any}(
@@ -149,7 +149,7 @@ _mtkc_decay_model(x0, k) = Dict{String, Any}(
 )
 _mtkc_doc(models; index_sets = nothing) = begin
     d = Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict{String, Any}("name" => "MtkDoc"),
         "models" => Dict{String, Any}(models)
     )

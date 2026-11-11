@@ -1,6 +1,6 @@
 ---
 title: "Data and shape"
-description: "index_sets, coordinates, metaparameters, domain, data_sources, function_tables, enums."
+description: "index_sets, coordinates, metaparameters, domain, data_sources, enums."
 ---
 
 These sections describe *where numbers come from* and *what shape they have*.
@@ -13,7 +13,7 @@ set names, and index expressions resolve against them.
 
 ```json
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "Shapes" },
   "index_sets": {
     "lon":     { "kind": "interval", "size": 4 },
@@ -52,7 +52,7 @@ declares a `type` and usually a `default`; a caller may override it at load.
 
 ```json
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "Parameterized" },
   "metaparameters": {
     "nlev": { "type": "integer", "default": 72, "description": "Vertical levels" }
@@ -168,15 +168,10 @@ coordinate either carries literal `values` or names a `source` variable.
 }
 ```
 
-## `function_tables`
-
-Sampled function tables: ordered named axes plus the sampled values. They are
-what [`interp.*`](../../operators/closed-functions/) reads.
-
 ## `enums`
 
 File-local symbol-to-positive-integer maps, used by the
-[`enum`](../../operators/closed-functions/) op to make categorical lookups
+[`enum`](../../operators/constants-and-conditionals/) op to make categorical lookups
 readable.
 
 ```json

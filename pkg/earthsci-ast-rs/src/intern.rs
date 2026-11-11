@@ -48,9 +48,8 @@
 //!   pattern, arrays element by element, so the repeated `const` tables of an
 //!   expanded template collapse onto one node — and with them every subtree
 //!   that reads them;
-//! * a node carrying a field this module does not key **exactly** —
-//!   `output` (an arbitrary `serde_json::Value` payload) or `join` (clauses
-//!   with float `eps`) — is refused outright ([`internable`]) and allocated
+//! * a node carrying a field this module does not key **exactly** — `join`
+//!   (clauses with float `eps`) — is refused outright ([`internable`]) and allocated
 //!   fresh, so an unkeyed attribute can never cause two different nodes to
 //!   merge.
 //!
@@ -154,12 +153,11 @@ pub fn intern_node(node: ExpressionNode) -> Arc<ExpressionNode> {
     })
 }
 
-/// Whether this module can key `node` exactly. `output` carries an
-/// arbitrary `serde_json::Value` payload and `join` float-bearing clause
-/// structs; rather than invent a keying for those rare fields, a node
+/// Whether this module can key `node` exactly. `join` carries float-bearing
+/// clause structs; rather than invent a keying for that rare field, a node
 /// carrying one is simply never shared.
 fn internable(node: &ExpressionNode) -> bool {
-    node.output.is_none() && node.join.is_none()
+    node.join.is_none()
 }
 
 /// A JSON number by its exact representation: a float never equals an
@@ -350,16 +348,10 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
         axis,
         broadcast_fn,
         name,
-        label,
         value,
         units,
-        table,
-        axes,
-        output,
         id,
-        manifold,
         bindings,
-        arg,
         distinct,
         key,
         expect_cadence,
@@ -367,8 +359,8 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
         template_origin,
     } = a;
     // `internable` refused these; assert the contract rather than compare.
-    debug_assert!(output.is_none() && join.is_none());
-    debug_assert!(b.output.is_none() && b.join.is_none());
+    debug_assert!(join.is_none());
+    debug_assert!(b.join.is_none());
     op == &b.op
         && match (value, &b.value) {
             (None, None) => true,
@@ -399,13 +391,8 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
         && axis == &b.axis
         && broadcast_fn == &b.broadcast_fn
         && name == &b.name
-        && label == &b.label
-        && table == &b.table
-        && child_map_eq(axes, &b.axes)
         && id == &b.id
-        && manifold == &b.manifold
         && child_map_eq(bindings, &b.bindings)
-        && arg == &b.arg
         && distinct == &b.distinct
         && opt_child_eq(key, &b.key)
         // Both are author-supplied annotations with no bearing on the value a
@@ -443,16 +430,10 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
         axis,
         broadcast_fn,
         name,
-        label,
         value,
         units,
-        table,
-        axes,
-        output: _,
         id,
-        manifold,
         bindings,
-        arg,
         distinct,
         key,
         expect_cadence,
@@ -537,13 +518,8 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
     axis.hash(h);
     broadcast_fn.hash(h);
     name.hash(h);
-    label.hash(h);
-    table.hash(h);
-    child_map_hash(axes, h);
     id.hash(h);
-    manifold.hash(h);
     child_map_hash(bindings, h);
-    arg.hash(h);
     distinct.hash(h);
     opt_child_hash(key, h);
     expect_cadence.hash(h);
@@ -684,21 +660,21 @@ mod tests {
         assert!(!Arc::ptr_eq(x1, y), "different ranges must not merge");
     }
 
-    /// Nodes carrying fields this module refuses to key (`output` /
-    /// `join`) are never shared, even when byte-identical.
+    /// Nodes carrying a field this module refuses to key (`join`) are never
+    /// shared, even when byte-identical.
     #[test]
     fn unkeyed_fields_refuse_interning() {
         let _scope = InternScope::new();
         let mk = || {
-            let mut n = op("table_lookup", vec![]);
-            n.output = Some(serde_json::json!(0));
+            let mut n = op("faq", vec![]);
+            n.join = Some(vec![crate::types::JoinClause::default()]);
             Expr::operator(n)
         };
         let (a, b) = (mk(), mk());
         let (Expr::Operator(x), Expr::Operator(y)) = (&a, &b) else {
             unreachable!()
         };
-        assert!(!Arc::ptr_eq(x, y), "output-bearing nodes are never merged");
+        assert!(!Arc::ptr_eq(x, y), "join-bearing nodes are never merged");
     }
 
     /// `const` literals are keyed exactly: the same array interns to one

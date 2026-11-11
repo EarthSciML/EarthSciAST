@@ -1,0 +1,694 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ifelse_gathered_scalar_dynamic",
+  "description": "An observed with NO declared shape, `X = ifelse(lev < 2, F / D, 0.0)`, whose array arm divides a `cell`-shaped parameter by a scalar observed defined by a gather from an inline `const` table: `D = const[31, 28, 31][m]`, and (`D2`) the same table at interp.linear's cell index, a rank-0 `faq` count (the NEI2016 emission observeds as reseact builds them, `flux_CO / days_in_month …`). A gather with scalar subscripts is a scalar, so the build gives `X` the `cell` shape before it evaluates anything (esm-spec §4.3.4), and the scalar arm fills every element: condition true and false, the array arm first and second. Dynamic variant: the same rules beside states whose right-hand sides gather them, and the condition flipping during the run on a state.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "cell": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "IfelseGatheredScalar": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "F": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      28.0,
+      56.0,
+      84.0
+     ],
+     "shape": [
+      "cell"
+     ]
+    },
+    "m": {
+     "type": "parameter",
+     "units": "1",
+     "default": 2.0
+    },
+    "xq": {
+     "type": "parameter",
+     "units": "1",
+     "default": 15.0
+    },
+    "lev_on": {
+     "type": "parameter",
+     "units": "1",
+     "default": 1.0
+    },
+    "lev_off": {
+     "type": "parameter",
+     "units": "1",
+     "default": 3.0
+    },
+    "D": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "D2": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_on": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_off": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_rev_on": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_rev_off": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "R_on": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_off": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_rev_on": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_rev_off": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "w": {
+     "type": "unknown",
+     "units": "1",
+     "default": 0.0
+    },
+    "X_flip": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "acc": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ],
+     "default": 0.0
+    },
+    "R_flip": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "D",
+     "rhs": {
+      "op": "index",
+      "args": [
+       {
+        "op": "const",
+        "args": [],
+        "value": [
+         31.0,
+         28.0,
+         31.0
+        ]
+       },
+       "m"
+      ]
+     }
+    },
+    {
+     "lhs": "D2",
+     "rhs": {
+      "op": "index",
+      "args": [
+       {
+        "op": "const",
+        "args": [],
+        "value": [
+         31.0,
+         28.0,
+         31.0
+        ]
+       },
+       {
+        "op": "faq",
+        "args": [],
+        "output_idx": [],
+        "reduce": "+",
+        "ranges": {
+         "j": [
+          1,
+          3
+         ]
+        },
+        "expr": {
+         "op": "ifelse",
+         "args": [
+          {
+           "op": "<=",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              {
+               "op": "const",
+               "args": [],
+               "value": [
+                0.0,
+                10.0,
+                20.0
+               ]
+              },
+              "j"
+             ]
+            },
+            "xq"
+           ]
+          },
+          1,
+          0
+         ]
+        }
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "X_on",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       {
+        "op": "/",
+        "args": [
+         "F",
+         "D"
+        ]
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "X_off",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_off",
+         2.0
+        ]
+       },
+       {
+        "op": "/",
+        "args": [
+         "F",
+         "D"
+        ]
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "X_rev_on",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": ">=",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       0.0,
+       {
+        "op": "/",
+        "args": [
+         "F",
+         "D2"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "X_rev_off",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": ">=",
+        "args": [
+         "lev_off",
+         2.0
+        ]
+       },
+       0.0,
+       {
+        "op": "/",
+        "args": [
+         "F",
+         "D2"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "R_on",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_on",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_off",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_off",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_rev_on",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_rev_on",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_rev_off",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_rev_off",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "w"
+      ],
+      "wrt": "t"
+     },
+     "rhs": 1.0
+    },
+    {
+     "lhs": "X_flip",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": ">",
+        "args": [
+         "w",
+         1.0
+        ]
+       },
+       0.0,
+       {
+        "op": "/",
+        "args": [
+         "F",
+         "D"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "D",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "acc",
+          "i"
+         ]
+        }
+       ],
+       "wrt": "t"
+      }
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "X_on",
+          "i"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "X_off",
+          "i"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "X_rev_on",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_flip",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_flip",
+        "i"
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 2.0
+     },
+     "assertions": [
+      {
+       "variable": "R_on",
+       "time": 2.0,
+       "expected": 1.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_on",
+       "time": 2.0,
+       "expected": 2.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_on",
+       "time": 2.0,
+       "expected": 3.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_rev_on",
+       "time": 2.0,
+       "expected": 1.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_rev_on",
+       "time": 2.0,
+       "expected": 2.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_rev_on",
+       "time": 2.0,
+       "expected": 3.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_rev_off",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_rev_off",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_rev_off",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 0.0,
+       "expected": 3.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 2.0,
+       "expected": 4.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 2.0,
+       "expected": 8.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 2.0,
+       "expected": 12.0,
+       "coords": {
+        "cell": 3
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

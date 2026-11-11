@@ -1,0 +1,196 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "removed_op_argmax",
+    "description": "INVALID: the `argmax` op was removed at esm 2.0.0. A loader rejects it BY NAME at the wire boundary with `removed_op`. Replacement: the `argmax` / `argmax_where` templates of esm:std/relational.esm. The 2.0.0 codemod (MIGRATION.md) rewrites it.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "invalid",
+      "removed_op",
+      "esm-2.0.0",
+      "argmax"
+    ]
+  },
+  "index_sets": {
+    "points": {
+      "kind": "interval",
+      "size": 4
+    },
+    "generators": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "NearestGeneratorArgmin": {
+      "variables": {
+        "px": {
+          "type": "parameter",
+          "shape": [
+            "points"
+          ]
+        },
+        "py": {
+          "type": "parameter",
+          "shape": [
+            "points"
+          ]
+        },
+        "gx": {
+          "type": "parameter",
+          "shape": [
+            "generators"
+          ]
+        },
+        "gy": {
+          "type": "parameter",
+          "shape": [
+            "generators"
+          ]
+        },
+        "assign": {
+          "type": "unknown",
+          "shape": [
+            "points"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "index",
+            "args": [
+              "assign",
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "points"
+              }
+            },
+            "args": [
+              "px",
+              "py",
+              "gx",
+              "gy"
+            ],
+            "expr": {
+              "op": "argmax",
+              "args": [
+                "px",
+                "py",
+                "gx",
+                "gy"
+              ],
+              "arg": "g",
+              "ranges": {
+                "g": {
+                  "from": "generators"
+                }
+              },
+              "expr": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "px",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gx",
+                              "g"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "px",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gx",
+                              "g"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "py",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gy",
+                              "g"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "py",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gy",
+                              "g"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

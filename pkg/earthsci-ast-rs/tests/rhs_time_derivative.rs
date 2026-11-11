@@ -43,7 +43,7 @@ fn run(doc: &serde_json::Value) -> Vec<AssertionResult> {
 /// asserted at `t = 0`: the tendency is `-6`, and used to read `0`.
 fn own_state_doc() -> serde_json::Value {
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "DObsOwn",
             "description": "An observed defined as D(x, t) of this model's own ODE state.",
@@ -101,7 +101,7 @@ fn observed_derivative_of_own_state_is_the_tendency() {
 #[test]
 fn observed_derivative_of_a_sibling_reaction_systems_species() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "RsScoped",
             "description": "A model observing a sibling reaction system's species tendency.",
@@ -157,7 +157,7 @@ fn observed_derivative_of_a_sibling_reaction_systems_species() {
 #[test]
 fn a_chained_tendency_resolves_transitively() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "Chained", "description": "d", "authors": ["issue-206"],
             "created": "2026-09-07T00:00:00Z"
@@ -222,7 +222,7 @@ fn the_flattened_form_carries_the_substituted_tendency() {
 #[test]
 fn a_spatial_derivative_is_left_for_the_discretization_rule() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "Spatial", "description": "d", "authors": ["issue-206"],
             "created": "2026-09-07T00:00:00Z"
@@ -267,7 +267,7 @@ fn a_spatial_derivative_is_left_for_the_discretization_rule() {
 #[test]
 fn d_of_an_observed_resolves_through_its_definition() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "DObsChain",
             "description": "D of an observed, resolved by the chain rule.",
@@ -313,7 +313,7 @@ fn d_of_an_observed_resolves_through_its_definition() {
 #[test]
 fn d_of_a_parameter_is_a_folded_zero() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "DParam", "description": "D of a parameter.",
             "authors": ["issue-206"], "created": "2026-09-08T00:00:00Z"
@@ -360,7 +360,7 @@ fn d_of_a_parameter_is_a_folded_zero() {
 #[test]
 fn a_cyclic_tendency_terminates_and_is_refused() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "DCycle", "description": "A self-referential tendency.",
             "authors": ["issue-206"], "created": "2026-09-08T00:00:00Z"

@@ -87,7 +87,7 @@ function _rs_dynamic(n::Int)
         )
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "RecurDyn"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "RecurDyn"),
         "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => n)),
         "models" => Dict(
             "M" => Dict(
@@ -112,7 +112,7 @@ end
 # A static one-variable recurrence with the given body over `steps`.
 function _rs_static(body; n::Int = 4, extra = Dict{String, Any}())
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "RecurProbe"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "RecurProbe"),
         "index_sets" => Dict("steps" => Dict("kind" => "interval", "size" => n)),
         "models" => Dict(
             "M" => Dict(

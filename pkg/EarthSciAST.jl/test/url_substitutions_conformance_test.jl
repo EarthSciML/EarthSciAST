@@ -132,7 +132,7 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
     @testset "a forwarded binding stops at the first declarer, over a URL" begin
         sized(name, axis, default, sub) = JSON3.write(
             OrderedDict{String, Any}(
-                "esm" => "1.0.0", "metadata" => Dict("name" => name),
+                "esm" => "2.0.0", "metadata" => Dict("name" => name),
                 "metaparameters" => Dict(
                     "n_rows" => Dict("type" => "integer", "default" => default)
                 ),
@@ -157,7 +157,7 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         docs = Dict(
             "https://example.org/lib/cat.esm" => JSON3.write(
                 OrderedDict{String, Any}(
-                    "esm" => "1.0.0", "metadata" => Dict("name" => "cat"),
+                    "esm" => "2.0.0", "metadata" => Dict("name" => "cat"),
                     "models" => Dict(
                         "Cat" => Dict(
                             "variables" => Dict(), "equations" => Any[],
@@ -171,7 +171,7 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         )
         root = JSON3.write(
             OrderedDict{String, Any}(
-                "esm" => "1.0.0", "metadata" => Dict("name" => "run"),
+                "esm" => "2.0.0", "metadata" => Dict("name" => "run"),
                 "models" => Dict(
                     "Run" => Dict(
                         "variables" => Dict(), "equations" => Any[],

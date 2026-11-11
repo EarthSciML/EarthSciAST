@@ -102,7 +102,7 @@ func lhsBaseName(e Expression) (string, bool) {
 			return "", false
 		}
 		switch n.Op {
-		case "faq", "aggregate":
+		case "faq":
 			e = n.Expr
 		case "index":
 			if len(n.Args) == 0 {
@@ -136,7 +136,7 @@ func lhsDefinedName(e Expression) string {
 			return ""
 		}
 		switch n.Op {
-		case "faq", "aggregate":
+		case "faq":
 			e = n.Expr
 		case "index", "D", "ic":
 			if len(n.Args) == 0 {
@@ -157,7 +157,7 @@ func lhsFreeSymbols(e Expression, bound map[string]bool, declared func(string) b
 		return
 	}
 	switch n.Op {
-	case "faq", "aggregate":
+	case "faq":
 		inner := make(map[string]bool, len(bound)+len(n.Ranges))
 		for k := range bound {
 			inner[k] = true
@@ -204,7 +204,7 @@ func lhsFreeSymbols(e Expression, bound map[string]bool, declared func(string) b
 func rhsOutputIdx(e Expression) map[string]bool {
 	out := map[string]bool{}
 	n, ok := asExprNode(e)
-	if !ok || (n.Op != "faq" && n.Op != "aggregate") {
+	if !ok || n.Op != "faq" {
 		return out
 	}
 	for _, x := range n.OutputIdx {

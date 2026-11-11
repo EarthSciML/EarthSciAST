@@ -35,11 +35,6 @@ const ESM = EarthSciAST
     end
 
     @testset "_CSE_OPAQUE_OPS membership (pre-registry literal)" begin
-        # `fn` was dropped from this set (ess-obs): a closed-function call is a
-        # pure scalar function of its scalar args, so CSE may hoist it AND share
-        # subexpressions beneath it. Keeping it opaque made every `interp.*` /
-        # `datetime.*` call a sharing barrier, which is what let an inlined
-        # observed chain under an `interp.*` lookup be re-walked per occurrence.
         # grad/div/laplacian are NO LONGER here (esm-spec §4.2): they carry no
         # bespoke registry flag at all. What routes a rewrite-target op through
         # `_compile_op`'s `unlowered_operator` gate (instead of the guardless
@@ -56,7 +51,6 @@ const ESM = EarthSciAST
             ]
         )
         @test ESM._CSE_OPAQUE_OPS isa Set{String}
-        @test !("fn" in ESM._CSE_OPAQUE_OPS)
     end
 
     @testset "_STENCIL_ELEMENTWISE_OPS membership (pre-registry literal)" begin
@@ -90,8 +84,7 @@ const ESM = EarthSciAST
                 "atan2",
                 "ifelse", "floor", "ceil", ">", "<", ">=", "<=", "==", "!=",
                 "and", "or", "not",
-                "index", "intersect_polygon", "polygon_intersection_area", "skolem",
-                "true", "false", "faq", "faq",
+                "index", "true", "false", "faq", "faq",
             ]
         )
         @test ESM._GEO_EVAL_OPS isa Set{String}
@@ -114,7 +107,7 @@ const ESM = EarthSciAST
                 "D",  # grad/div/laplacian dropped (§4.2): unregistered user-op tier
                 "faq", "faq", "makearray", "index", "broadcast",
                 "reshape", "transpose",
-                "concat", "Pre", "ifelse", "call", "fn", "ic",
+                "concat", "Pre", "ifelse", "call", "ic",
             ]
         )
         @test ESM._ops_with(:mtk_known) isa Set{String}
@@ -290,9 +283,8 @@ end
     @test ESM._NON_EMISSIBLE_FIELDS == (
         :int_var, :lower, :upper, :output_idx, :expr_body, :reduce, :semiring,
         :ranges, :regions, :values, :shape, :perm, :axis,
-        :table, :table_axes, :output,
         :join, :filter, :join_gates,
-        :id, :manifold, :distinct, :key, :label,
+        :id, :distinct, :key,
         :expect_cadence, :attrs,
     )
     # The two annotations fail CLOSED rather than being silently dropped.
@@ -308,10 +300,10 @@ end
     # declared unit is meaning-bearing, so canonical JSON carries it and two
     # nodes differing only in it do not canonicalize alike (esm-spec §4.8.5).
     @test ESM._EMISSIBLE_FIELDS == (:op, :args, :wrt, :dim, :fn, :name, :value, :units)
-    # `arg`/`bindings` were historically tolerated-and-ignored (absent from the
-    # non-emissible literal): a node carrying them still canonicalizes.
-    # `template_origin` is load provenance, never on the wire (esm-spec §9.6.11).
-    @test ESM._CANONICAL_IGNORED_FIELDS == (:arg, :bindings, :template_origin)
+    # `bindings` is tolerated-and-ignored (absent from the non-emissible
+    # literal): a node carrying it still canonicalizes. `template_origin` is
+    # load provenance, never on the wire (esm-spec §9.6.11).
+    @test ESM._CANONICAL_IGNORED_FIELDS == (:bindings, :template_origin)
     # Fail-closed: the three tuples exactly partition fieldnames(OpExpr).
     @test sort(
         collect(
@@ -330,7 +322,7 @@ end
                 VarExpr("a"),
                 VarExpr("b"),
             ];
-            arg = "i"
+            bindings = Dict{String, EarthSciAST.ASTExpr}("f" => VarExpr("u"))
         )
     ) ==
         ESM._emit_node_json(

@@ -1157,7 +1157,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # (esm-spec §6.3.1), so `D(a + b) ~ 3` leaves `a` the observed its
         # `a ~ 0.1 * N.c` makes it, and the cross-model loop through it is found.
         doc = """
-        {"esm": "1.0.0", "metadata": {"name": "DOfSum", "authors": ["Test"]},
+        {"esm": "2.0.0", "metadata": {"name": "DOfSum", "authors": ["Test"]},
          "models": {
           "M": {"variables": {"a": {"type": "unknown"}, "b": {"type": "unknown"}},
                 "equations": [
@@ -1173,7 +1173,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # An unknown no equation defines (here supplied by nothing at all, as a
         # `variable_map` alias would supply it) is not a node: no cycle.
         doc2 = """
-        {"esm": "1.0.0", "metadata": {"name": "NoDef", "authors": ["Test"]},
+        {"esm": "2.0.0", "metadata": {"name": "NoDef", "authors": ["Test"]},
          "models": {
           "M": {"variables": {"a": {"type": "unknown"}, "u": {"type": "unknown"}},
                 "equations": [{"lhs": "a", "rhs": {"op": "*", "args": [0.1, "N.c"]}}]},
@@ -1187,7 +1187,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # reads `Sub.Inner.v`, which is `N.Sub.Inner.v`. Inside `N.Sub`,
         # `D(Inner.v)` makes that variable a state, so the loop is gone.
         nested(sub_eqs) = """
-        {"esm": "1.0.0", "metadata": {"name": "Nested", "authors": ["Test"]},
+        {"esm": "2.0.0", "metadata": {"name": "Nested", "authors": ["Test"]},
          "models": {
           "N": {"variables": {"a": {"type": "unknown"}},
                 "equations": [{"lhs": "a", "rhs": {"op": "*", "args": [0.1, "Sub.Inner.v"]}}],

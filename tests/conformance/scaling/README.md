@@ -89,7 +89,7 @@ between binaries built the same way. The deterministic gates do not need it.
 | `chemistry_grid` | a 20-species reaction system lifted pointwise onto a lon x lat grid by `operator_compose`, plus lon advection | grid cells (20 states each) | 10^2 .. 10^6 |
 | `prefix_scan` | an inclusive measure-weighted prefix scan (filtered `faq`) over a non-uniform layer thickness, feeding the right-hand side | cells | 10^2 .. 10^6 |
 | `source_receptor` | a dense square contraction `sum_j K[i,j] e[j]` over a non-uniform `K[i,j] = 0.001 (1 + sin(i j))` the document defines by formula | receptors | 10^2 .. 3162 |
-| `regrid` | conservative regrid: bin-skolem broad phase, inline `polygon_intersection_area`, apply every call | source cells | 10^2 .. 3162 |
+| `regrid` | conservative regrid: bin-key broad phase (integer join columns), the `overlap_area_planar` template, apply every call | source cells | 10^2 .. 3162 |
 | `unstructured_gather` | the indirect gather `u[nbr[i,k]]` over a permuted periodic mesh | cells | 10^2 .. 10^6 |
 | `scalar_chemistry` | N/20 scalar Pollu boxes written as one scalar ODE per state | states | 10^2 .. 10^5 |
 | `gather_index` | a gather through a computed 64-class index array into two inline `const` tables, `-rate[cls[i]] u[i] + emis[cls[i]]` | cells | 10^2 .. 10^6 |

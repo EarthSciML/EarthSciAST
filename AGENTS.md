@@ -78,7 +78,6 @@ valid file declares nothing but its own identity.
   data reaches a model as a parameter whose `update` draws from it.
 - **`index_sets`** — named index sets that array dimensions range over.
 - **`coordinates`** — coordinate variables for output.
-- **`function_tables`** — sampled function tables with named axes.
 - **`enums`** — file-local symbol-to-integer mappings for categorical lookups.
 - **`metaparameters`** — values bound at load, so one document serves many
   resolutions.
@@ -87,9 +86,10 @@ valid file declares nothing but its own identity.
 
 **Expressions** are built from operators in two tiers. The **evaluable core is
 closed** — arithmetic, comparison, logical, elementary functions, constants,
-`D`/`ic`, conditionals, array construction and indexing, aggregation, closed
-function calls, geometry, and value invention — and every binding implements all
-of it. That is deliberate: a conforming reader in any language can evaluate any
+`D`/`ic`, conditionals, array construction and indexing, aggregation and value
+invention — and every binding implements all of it. Calendar fields,
+interpolation, keys and ranks, and polygon overlap are standard-library
+templates over that core (`lib/*.esm`). That is deliberate: a conforming reader in any language can evaluate any
 document without executing author-supplied code. The second tier is
 **rewrite-target** ops (`grad`, `div`, `laplacian`, a spatial `D`, or an op you
 invent); these have no evaluator and must be lowered by a template rewrite

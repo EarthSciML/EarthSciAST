@@ -86,10 +86,8 @@ func TestUnevaluableOperatorConformanceFixture(t *testing.T) {
 // closed-core op must never receive the rewrite-rule advice.
 func TestUnevaluableOperatorClassification(t *testing.T) {
 	closed := []string{
-		"skolem", "rank", "distinct", "argmin", "argmax", "enum",
-		"apply_expression_template", "table_lookup", "ic",
+		"distinct", "enum", "apply_expression_template", "ic",
 		"faq", "makearray", "index", "broadcast", "reshape", "transpose", "concat",
-		"intersect_polygon", "polygon_intersection_area",
 	}
 	for _, op := range closed {
 		_, err := Evaluate(ExprNode{Op: op, Args: []any{"x"}}, map[string]float64{"x": 1})
@@ -99,19 +97,6 @@ func TestUnevaluableOperatorClassification(t *testing.T) {
 		_, err := Evaluate(ExprNode{Op: op, Args: []any{"x"}}, map[string]float64{"x": 1})
 		requireEvaluationCode(t, op, err, "unlowered_operator", op)
 	}
-}
-
-// The walk reaches operands of a closed-registry `fn` call, and leaves the
-// inline `const` table operands such a call legitimately carries alone.
-func TestUnevaluableOperatorWalkReachesFnOperands(t *testing.T) {
-	name := "interp.linear"
-	node := ExprNode{Op: "fn", Name: &name, Args: []any{
-		ExprNode{Op: "const", Args: []any{}, Value: []any{1.0, 2.0}},
-		ExprNode{Op: "const", Args: []any{}, Value: []any{0.0, 1.0}},
-		ExprNode{Op: "ifelse", Args: []any{0.0, ExprNode{Op: "rank", Args: []any{"x"}}, 0.5}},
-	}}
-	_, err := Evaluate(node, map[string]float64{"x": 1})
-	requireEvaluationCode(t, "fn operand", err, "unevaluable_operator", "rank")
 }
 
 // The same up-front walk carries the §9.6.3 constraint 6 `unlowered_operator`

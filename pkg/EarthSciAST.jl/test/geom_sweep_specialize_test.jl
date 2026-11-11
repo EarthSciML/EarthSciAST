@@ -285,12 +285,13 @@ end
         end
     end
 
-    @testset "polygon_intersection_area sweep (the A_ij shape)" begin
-        # The dominant sweep of a conservative regrid: a dense `A_ij[i,j] =
-        # polygon_intersection_area(src[i], tgt[j])` MAP whose body is ONE
-        # `:geo_pia` node over two `_GeoRingRef` operands. Most pairs are
-        # disjoint, so the matrix is mostly exact `0.0` — which is what makes
-        # `isequal` (not `≈`) the right bar: a `-0.0` here would be a bug.
+    @testset "overlap-area sweep (the A_ij shape)" begin
+        # The dominant sweep of a conservative regrid: a dense `A_ij[i,j]` MAP
+        # of the overlap area of `src[i]` and `tgt[j]` (here two axis-aligned
+        # squares, the product of the axes' clamped interval overlaps). Most
+        # pairs are disjoint, so the matrix is mostly exact `0.0` — which is
+        # what makes `isequal` (not `≈`) the right bar: a `-0.0` here would be a
+        # bug.
         srcp = zeros(Float64, 6, 4, 2)
         tgtp = zeros(Float64, 3, 4, 2)
         function sq!(R, p, x, y, w)
@@ -306,11 +307,15 @@ end
             sq!(tgtp, p, (p - 1) * 1.0, 0.0, 1.0)
         end
         env = Dict{String, Any}("src_poly" => srcp, "tgt_poly" => tgtp)
-        pia = Dict{String, Any}(
-            "op" => "polygon_intersection_area",
-            "manifold" => "planar",
-            "args" => Any[_ix("src_poly", "i"), _ix("tgt_poly", "j")]
+        # The SW (vertex 1) and NE (vertex 3) corners of the two squares.
+        ov(c) = _op(
+            "max", 0.0, _op(
+                "-",
+                _op("min", _ix("src_poly", "i", 3, c), _ix("tgt_poly", "j", 3, c)),
+                _op("max", _ix("src_poly", "i", 1, c), _ix("tgt_poly", "j", 1, c))
+            )
         )
+        pia = _op("*", ov(1), ov(2))
         j = _agg(["i", "j"], ["i" => "S", "j" => "T"], pia)
         idx = Dict{String, Int}("S" => 6, "T" => 3)
         rhs = EA.expression_from_json(j)
@@ -330,28 +335,6 @@ end
         @test count(!iszero, fast) == 6          # each src square sits in one tgt
         @test any(iszero, fast)                  # ... and the rest are exact zero
         @test all(x -> !(x === -0.0), fast)
-
-        # The `:geo_pia` arm narrows `_GeoRingRef` operands with a concrete
-        # `isa`; a WHOLE-ARRAY operand misses that arm and takes the generic
-        # call. Same two polygons either way ⇒ same area, bit for bit.
-        env2 = merge(
-            copy(env), Dict{String, Any}(
-                "ring_a" => Array{Float64}(srcp[1, :, :]),
-                "ring_b" => Array{Float64}(tgtp[1, :, :])
-            )
-        )
-        whole = Dict{String, Any}(
-            "op" => "polygon_intersection_area",
-            "manifold" => "planar",
-            "args" => Any["ring_a", "ring_b"]
-        )
-        jw = _agg(["i"], ["i" => "S"], whole)
-        got = EA._materialize_geom_array(
-            EA.expression_from_json(jw), env2, nothing,
-            idx, Dict{String, Vector{String}}()
-        )
-        @test all(x -> isequal(x, fast[1, 1]), got)
-        @test !iszero(fast[1, 1])
     end
 
     @testset "the interpreter keeps the rank-abstract reference available" begin

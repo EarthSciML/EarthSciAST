@@ -2,7 +2,7 @@
  "esm": "1.2.0",
  "metadata": {
   "name": "template_array_args_lin3d_levcol",
-  "description": "esm-spec \u00a79.6.11: `linear` applied to a `[z]` level column, alone and multiplied by a `[x, y, z]` field: the column replicates over `x` and `y` (esm-spec \u00a74.3.4). Every element must equal the `interp.*` closed function at that element's argument, bit for bit."
+  "description": "esm-spec \u00a79.6.11: `linear` applied to a `[z]` level column, alone and multiplied by a `[x, y, z]` field: the column replicates over `x` and `y` (esm-spec \u00a74.3.4). Every element must equal the template applied to that element's argument as a scalar, bit for bit."
  },
  "index_sets": {
   "x": {

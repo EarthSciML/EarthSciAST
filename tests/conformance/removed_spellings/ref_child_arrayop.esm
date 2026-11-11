@@ -1,0 +1,97 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "ref_child_arrayop",
+    "description": "A REFERENCED child spelling the removed `\"op\": \"arrayop\"` (removed at esm 0.8.0). The by-name `removed_op` check runs at one wire boundary per binding, applied to every document a load touches \u2014 root, `{ref}` child, template library, coupling library \u2014 so this child is rejected at its own boundary when ref_parent_arrayop.esm mounts it.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "faq",
+      "removed_spellings",
+      "ref",
+      "conformance"
+    ]
+  },
+  "index_sets": {
+    "faces": {
+      "kind": "interval",
+      "size": 8
+    },
+    "edges": {
+      "kind": "derived",
+      "from_faq": "edge_enum"
+    }
+  },
+  "models": {
+    "Sub": {
+      "variables": {
+        "u": {
+          "type": "unknown"
+        },
+        "flux": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "arrayop",
+            "id": "edge_enum",
+            "args": [],
+            "semiring": "bool_and_or",
+            "output_idx": [
+              "edge"
+            ],
+            "expr": {
+              "op": "index",
+              "args": [
+                "u",
+                "f"
+              ]
+            },
+            "ranges": {
+              "f": {
+                "from": "faces"
+              }
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "flux"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "arrayop",
+            "args": [],
+            "semiring": "sum_product",
+            "output_idx": [],
+            "expr": {
+              "op": "index",
+              "args": [
+                "u",
+                "e"
+              ]
+            },
+            "ranges": {
+              "e": {
+                "from": "edges"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

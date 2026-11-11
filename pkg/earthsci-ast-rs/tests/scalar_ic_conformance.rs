@@ -205,7 +205,7 @@ fn faq_initialization_equations_seed_in_order_on_both_compilers() {
     let d = |v: &str| serde_json::json!({"op": "D", "wrt": "t", "args": [idx(v)]});
     let all = serde_json::json!({"i": [1, 4]});
     let doc = serde_json::json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "faq_init_order"},
         "index_sets": {"x": {"kind": "interval", "size": 4}},
         "models": {"M": {

@@ -332,7 +332,7 @@ fn with_the_right_hand_side_forced_on_native_agrees_bit_for_bit() {
 /// `s[1] = u`, `s[k] = s[k-1]/2 + u·k`, `D(u) = -s[N]/100`.
 fn state_driven(n: usize) -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "StateDriven"},
         "index_sets": {"steps": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -408,7 +408,7 @@ fn the_program_is_the_same_length_at_every_frame_size() {
 #[test]
 fn an_unguarded_self_read_faults_under_native_as_under_the_interpreter() {
     let doc = json!({
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": { "name": "R", "description": "probe", "authors": ["t"] },
       "index_sets": { "steps": { "kind": "interval", "size": 4 } },
       "models": { "R": {

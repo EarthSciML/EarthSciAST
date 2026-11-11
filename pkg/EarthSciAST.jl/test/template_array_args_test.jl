@@ -34,7 +34,7 @@ function _taa_doc(variables, equations; templates = nothing, imports = nothing)
     extra = (templates === nothing ? "" : ", \"expression_templates\": $(templates)") *
         (imports === nothing ? "" : ", \"expression_template_imports\": $(imports)")
     return """
-    {"esm": "1.2.0", "metadata": {"name": "taa_probe"},
+    {"esm": "2.0.0", "metadata": {"name": "taa_probe"},
      "index_sets": {"c": {"kind": "interval", "size": 3}, "verts": {"kind": "interval", "size": 4},
                     "coord": {"kind": "interval", "size": 2}},
      "models": {"M": {"variables": $(variables), "equations": $(equations)$(extra)}}}
@@ -42,9 +42,9 @@ function _taa_doc(variables, equations; templates = nothing, imports = nothing)
 end
 
 @testset "template_array_args (esm-spec §9.6.11)" begin
-    @testset "coupled: scalar-declared parameters fed grid arrays ($compiler)" for compiler in (:interpreter, :native)
-        ref = _taa_rhs(joinpath(_TAA_DIR, "coupled", "fn.esm"), compiler)
-        got = _taa_rhs(joinpath(_TAA_DIR, "coupled", "template.esm"), compiler)
+    @testset "coupled: scalar-declared parameters fed grid arrays, native = interpreter" begin
+        ref = _taa_rhs(joinpath(_TAA_DIR, "coupled", "template.esm"), :interpreter)
+        got = _taa_rhs(joinpath(_TAA_DIR, "coupled", "template.esm"), :native)
         @test length(ref) == 48
         @test keys(got) == keys(ref)
         # Bit for bit, element by element.
@@ -53,7 +53,7 @@ end
 
     @testset "arrays over unrelated index sets are refused" begin
         doc = """
-        {"esm": "1.2.0", "metadata": {"name": "taa_mismatch"},
+        {"esm": "2.0.0", "metadata": {"name": "taa_mismatch"},
          "index_sets": {"a": {"kind": "interval", "size": 2}, "b": {"kind": "interval", "size": 3}},
          "models": {"M": {
            "expression_template_imports": [{"ref": "esm:std/interp.esm", "only": ["bilinear"]}],
@@ -102,9 +102,9 @@ end
         @test occursin("anonymous array", sprint(showerror, err))
     end
 
-    @testset "a template over geometry operands is not lifted ($compiler)" for compiler in (:interpreter, :native)
-        # Both rings are array-role (a geometry operator takes them whole), so
-        # binding arrays to them is not an elementwise application.
+    @testset "a template over whole-array operands is not lifted ($compiler)" for compiler in (:interpreter, :native)
+        # Both rings are array-role (the body gathers from them), so binding
+        # arrays to them is not an elementwise application.
         doc = _taa_doc(
             """{"pa": {"type": "parameter", "shape": ["verts", "coord"],
                   "default": [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]},
@@ -114,8 +114,10 @@ end
             """[{"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [], "name": "overlap",
               "bindings": {"a": "pa", "b": "pb"}}},
             {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "area"}]""";
-            templates = """{"overlap": {"params": ["a", "b"], "body": {"op": "polygon_intersection_area",
-            "manifold": "planar", "args": ["a", "b"]}}}"""
+            templates = """{"overlap": {"params": ["a", "b"], "body": {"op": "faq", "output_idx": [],
+            "ranges": {"v": [1, 4], "c": [1, 2]}, "args": ["a", "b"],
+            "expr": {"op": "*", "args": [{"op": "index", "args": ["a", "v", "c"]},
+                                         {"op": "index", "args": ["b", "v", "c"]}]}}}}"""
         )
         file = EarthSciAST.load_string(doc)
         flat = EarthSciAST.promote_downstream_shapes(EarthSciAST.flatten(file))
@@ -124,7 +126,7 @@ end
         prob = EarthSciAST.esm_problem(file, (0.0, 1.0); compiler = compiler)
         du = fill(NaN, length(prob.u0))
         prob.f!(du, copy(prob.u0), prob.p, 0.0)
-        @test du[prob.var_map["M.s"]] == 1.0
+        @test du[prob.var_map["M.s"]] == 24.0    # Σ_v,c pa[v,c]·pb[v,c]
     end
 
     @testset "a shaped read written by hand is not lifted" begin

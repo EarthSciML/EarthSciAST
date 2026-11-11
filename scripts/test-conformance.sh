@@ -450,7 +450,7 @@ run_determinism_conformance_self_test() {
     fi
 }
 
-# Drive the REAL value-invention primitives (skolem / distinct / rank + group-by,
+# Drive the REAL value-invention primitives (integer keys / distinct / dense IDs + group-by,
 # ess-my4.3.3/.4/.5) through the determinism harness: each binding's adapter runs
 # the relational engine over the golden fixtures and EVERY adversarial variant
 # (permuted / duplicated / reversed), and the runner asserts the serialized index
@@ -502,7 +502,7 @@ run_determinism_conformance_python() {
 # Sanity-check the cross-binding conservative-regridding geometry harness
 # (ess-my4.4.8) — the tolerance-mode analogue of the determinism gate. The
 # --self-test asserts the §5.8 geometry contract against an embedded reference
-# (bin-Skolem broad phase + planar Sutherland–Hodgman clip + shoelace area) and
+# (bin-key broad phase + planar Sutherland–Hodgman clip + shoelace area) and
 # the static golden (tests/conformance/geometry/manifest.json): the candidate
 # overlap-pair set is byte-identical, every permuted variant collapses to it,
 # planar areas + invariants reproduce the golden, and the harness rejects

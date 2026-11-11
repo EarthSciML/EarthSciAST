@@ -236,13 +236,13 @@ mod tests {
 
     // -- loader-level rules over a substitute bundle -------------------------
 
-    const TWICE_LIB: &str = r#"{"esm": "1.1.0", "metadata": {"name": "b"},
+    const TWICE_LIB: &str = r#"{"esm": "2.0.0", "metadata": {"name": "b"},
         "expression_templates": {"twice": {"params": ["x"],
             "body": {"op": "*", "args": [2, "x"]}}}}"#;
 
     fn importing_lib(name: &str, import: &str) -> String {
         format!(
-            r#"{{"esm": "1.1.0", "metadata": {{"name": "{name}"}},
+            r#"{{"esm": "2.0.0", "metadata": {{"name": "{name}"}},
             "expression_template_imports": [{{"ref": "{import}"}}],
             "expression_templates": {{"quad": {{"params": ["x"], "body":
                 {{"op": "apply_expression_template", "args": [], "name": "twice",
@@ -253,7 +253,7 @@ mod tests {
 
     fn consumer(import: &str, template: &str) -> String {
         format!(
-            r#"{{"esm": "1.1.0", "metadata": {{"name": "consumer"}},
+            r#"{{"esm": "2.0.0", "metadata": {{"name": "consumer"}},
             "models": {{"M": {{
                 "expression_template_imports": [{{"ref": "{import}"}}],
                 "variables": {{"x": {{"type": "parameter", "units": "1", "default": 1.0}},
@@ -317,10 +317,10 @@ mod tests {
 
     #[test]
     fn a_bundled_file_has_one_identity_for_cycle_detection() {
-        let c1 = r#"{"esm": "1.1.0", "metadata": {"name": "c1"},
+        let c1 = r#"{"esm": "2.0.0", "metadata": {"name": "c1"},
             "expression_template_imports": [{"ref": "esm:std/c2.esm"}],
             "expression_templates": {"one": {"params": [], "body": 1}}}"#;
-        let c2 = r#"{"esm": "1.1.0", "metadata": {"name": "c2"},
+        let c2 = r#"{"esm": "2.0.0", "metadata": {"name": "c2"},
             "expression_template_imports": [{"ref": "c1.esm"}],
             "expression_templates": {"two": {"params": [], "body": 2}}}"#;
         let _bundle = with_test_bundle(&[("c1.esm", c1), ("c2.esm", c2)]);
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn a_bundled_subsystem_resolves_its_own_imports_in_the_bundle() {
-        let sub = r#"{"esm": "1.1.0", "metadata": {"name": "sub"},
+        let sub = r#"{"esm": "2.0.0", "metadata": {"name": "sub"},
             "models": {"Sub": {
                 "expression_template_imports": [{"ref": "b.esm"}],
                 "variables": {"u": {"type": "parameter", "units": "1", "default": 3.0},
@@ -344,7 +344,7 @@ mod tests {
                 "equations": [{"lhs": "z", "rhs": "S.w"}]}}"#,
             r#""models": {"S": {"ref": "esm:std/sub.esm"}}"#,
         ] {
-            let text = format!(r#"{{"esm": "1.1.0", "metadata": {{"name": "mount"}}, {mount}}}"#);
+            let text = format!(r#"{{"esm": "2.0.0", "metadata": {{"name": "mount"}}, {mount}}}"#);
             let file = load_elsewhere(&text).unwrap_or_else(|e| panic!("{mount}: {e}"));
             let json = expanded_equations(&file);
             assert!(!json.contains("apply_expression_template"), "{json}");
