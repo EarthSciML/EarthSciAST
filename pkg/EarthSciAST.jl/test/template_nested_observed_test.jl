@@ -40,7 +40,7 @@ _faq(out, ranges, e; kw...) = Dict{String, Any}(
 # `n` layers, `n + 1` interfaces. `q` is the layer state, `W` its suffix sum on
 # the interfaces, `alw` a clamped log of it, `R` the bilinear table read at
 # (`mu`, `alw[kn]`), `dR` the per-layer increment of `R` (read by the state's
-# right-hand side) and `xr` a ratio of `R` that nothing reads.
+# right-hand side) and `xr` a multiple of `dR` that nothing reads.
 function nested_doc(n::Int; tests::Bool = false)
     lev = Dict("from" => "lev")
     nodes = Dict("from" => "lev_nodes")
@@ -79,11 +79,12 @@ function nested_doc(n::Int; tests::Bool = false)
     eqs = Any[
         Dict("lhs" => "mu", "rhs" => _op("+", 0.45, _op("*", 0.4, _op("sin", "t")))),
         Dict("lhs" => "W", "rhs" => W),
+        # Written elementwise over the shaped `W` (no `faq`), as a scheme
+        # writes it: the build folds such an observed into its readers, which
+        # is what puts the `makearray` inside the template's query.
         Dict(
-            "lhs" => "alw", "rhs" => _faq(
-                ("kn",), Dict("kn" => nodes),
-                _op("min", _op("log10", _op("+", _op("/", _ix("W", "kn"), _op("*", "mu", 0.01)), 1.0)), 3.999)
-            )
+            "lhs" => "alw",
+            "rhs" => _op("min", _op("log10", _op("+", _op("/", "W", _op("*", "mu", 0.01)), 1.0)), 3.999),
         ),
         Dict("lhs" => "R", "rhs" => _faq(("kn",), Dict("kn" => nodes), _op("/", look, 100.0))),
         Dict(
@@ -92,12 +93,7 @@ function nested_doc(n::Int; tests::Bool = false)
                 _op("-", _ix("R", "k"), _ix("R", _op("+", "k", 1)))
             )
         ),
-        Dict(
-            "lhs" => "xr", "rhs" => _faq(
-                ("k",), Dict("k" => lev),
-                _op("/", _ix("dR", "k"), _op("max", _ix("R", "k"), 0.01))
-            )
-        ),
+        Dict("lhs" => "xr", "rhs" => _op("/", "dR", 0.01)),
         Dict(
             "lhs" => _faq(("k",), Dict("k" => lev), _op("D", _ix("q", "k"); wrt = "t")),
             "rhs" => _faq(("k",), Dict("k" => lev), _op("-", _ix("dR", "k"), _op("*", 0.1, _ix("q", "k")))),
