@@ -10,6 +10,7 @@
 import {
   validateSchema,
   loadDocument,
+  findRemovedConstruct,
   ParseError,
   SchemaValidationError,
   ROOT_PATH,
@@ -18,8 +19,6 @@ import {
 import { EsmMachineryError } from '../lower-expression-templates.js'
 import { CircularReferenceError, RefLoadError, resolveSubsystemRefsSync } from '../ref-loading.js'
 import { EnumLoweringError } from '../lower-enums.js'
-import { ClosedFunctionError } from '../closed-functions.js'
-import { TableLookupLoweringError } from '../lower-table-lookups.js'
 import {
   LosslessJsonParseError,
   CanonicalNonfiniteError,
@@ -412,14 +411,10 @@ function loadErrorCode(error: Error): string {
   if (error instanceof RefLoadError) return error.code
   if (error instanceof CircularReferenceError) return ERROR_CODES.CIRCULAR_DEPENDENCY
   if (error instanceof SchemaValidationError) return ERROR_CODES.SCHEMA_VALIDATION_ERROR
-  if (error instanceof ParseError) return ERROR_CODES.PARSE_ERROR
+  // `parse_error`, or the code the wire boundary named (`removed_op`).
+  if (error instanceof ParseError) return error.code
   if (error instanceof EsmMachineryError) return ERROR_CODES.EXPRESSION_TEMPLATE_ERROR
   if (error instanceof EnumLoweringError) return ERROR_CODES.ENUM_LOWERING_ERROR
-  // The load-time closed-function argument and function-table checks (esm-spec
-  // §9.2, §9.5.5; ruling Q-106) each carry the one code the spec names for the
-  // defect, so report that code rather than a generic `load_error`.
-  if (error instanceof ClosedFunctionError) return error.code
-  if (error instanceof TableLookupLoweringError) return error.code
   if (error instanceof LosslessJsonParseError) return ERROR_CODES.JSON_PARSE_ERROR
   if (error instanceof CanonicalNonfiniteError) return ERROR_CODES.NONFINITE_NUMBER
   return ERROR_CODES.LOAD_ERROR
@@ -550,6 +545,26 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
       }
     } else {
       parsedData = data
+    }
+
+    // A removed op or block is refused by name ahead of schema validation, as
+    // the loader does: the schema no longer describes its fields, so it would
+    // otherwise surface as a pile of shape errors instead of `removed_op`.
+    const removed = findRemovedConstruct(parsedData)
+    if (removed !== null) {
+      return {
+        is_valid: false,
+        schema_errors: [
+          {
+            path: removed.path === '' ? ROOT_PATH : removed.path,
+            message: removed.message,
+            code: ERROR_CODES.REMOVED_OP,
+            details: {},
+          },
+        ],
+        structural_errors: [],
+        unit_warnings: [],
+      }
     }
 
     // Validate against schema

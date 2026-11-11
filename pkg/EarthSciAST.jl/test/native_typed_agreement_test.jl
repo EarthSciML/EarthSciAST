@@ -174,7 +174,7 @@ end
 @testset "a subsystem leaf's own top-level reaction-system mount: paths agree" begin
     dir = mktempdir()
     chem = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict("name" => "chem"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "chem"),
         "index_sets" => Dict("rs_ax" => Dict("kind" => "interval", "size" => 4)),
         "reaction_systems" => Dict(
             "Chem" => Dict(
@@ -195,7 +195,7 @@ end
         )
     )
     mid = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict("name" => "mid"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "mid"),
         "models" => Dict(
             "Mid" => Dict(
                 "variables" => Dict(
@@ -213,7 +213,7 @@ end
         "reaction_systems" => Dict("R" => Dict("ref" => "../chem.esm"))
     )
     root = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict("name" => "root"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "root"),
         "models" => Dict(
             "Host" => Dict(
                 "variables" => Dict(

@@ -33,6 +33,15 @@ const GATE = Any[Dict("overlap" => Dict("src_env" => ["src_poly"], "tgt_env" => 
 const IJ = ("i" => "src_cells", "j" => "tgt_cells")
 const SLIVER = _op(">", _ix("A_ij", "i", "j"), "atol")
 
+# The overlap area of `src_poly[i]` and `tgt_poly[j]` (lib/geometry.esm).
+const OVERLAP = Dict{String, Any}(
+    "op" => "apply_expression_template", "args" => Any[], "name" => "overlap_area_planar",
+    "bindings" => Dict{String, Any}(
+        "ring_a" => "src_poly", "cell_a" => "i", "nv_a" => 4,
+        "ring_b" => "tgt_poly", "cell_b" => "j", "nv_b" => 4
+    )
+)
+
 # Source cells: unit squares [0,1], [1.5,2.5], [3,4] (× [0,1]) — a RING STACK
 # built from the parameter `pitch` by a faq, so it is setup geometry, not a
 # const-op observed. Targets: [0,2] and [3.5,4.5] (× [0,1]). Surviving overlaps:
@@ -48,7 +57,7 @@ function document()
         _op("ifelse", _op("<", "v", 3), 0.0, 1.0)
     )
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "overlap_gate_live_forcing"),
         "index_sets" => Dict(
             "src_cells" => Dict("kind" => "interval", "size" => 3),
@@ -59,6 +68,9 @@ function document()
         "data_sources" => Dict("Src" => Dict("kind" => "static", "source" => Dict("url_template" => "{unused_placeholder}"))),
         "models" => Dict(
             "M" => Dict(
+                "expression_template_imports" => Any[
+                    Dict("ref" => "esm:std/geometry.esm", "only" => Any["overlap_area_planar"]),
+                ],
                 "variables" => Dict(
                     "pitch" => Dict("type" => "parameter", "units" => "1", "default" => 1.5),
                     "atol" => Dict("type" => "parameter", "units" => "1", "default" => 1.0e-12),
@@ -82,12 +94,7 @@ function document()
                         )
                     ),
                     Dict(
-                        "lhs" => "A_ij", "rhs" => _faq(
-                            ("i", "j"), IJ, Dict(
-                                "op" => "polygon_intersection_area", "manifold" => "planar",
-                                "args" => Any[_ix("src_poly", "i"), _ix("tgt_poly", "j")]
-                            ); join = GATE
-                        )
+                        "lhs" => "A_ij", "rhs" => _faq(("i", "j"), IJ, OVERLAP; join = GATE)
                     ),
                     Dict("lhs" => "A_j", "rhs" => _faq(("j",), IJ, _ix("A_ij", "i", "j"); join = GATE, filter = SLIVER)),
                     Dict(
@@ -573,7 +580,7 @@ end
 # alone decides, so the producer's members are exactly [1].
 @testset "value invention: overlap gate with a ring envelope factor" begin
     doc = Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "vi_overlap_ring"),
         "index_sets" => Dict(
             "src_cells" => Dict("kind" => "interval", "size" => 3),
@@ -608,7 +615,7 @@ end
                                 ),
                             ],
                             "args" => ["ring", "W", "S", "E", "N"],
-                            "key" => Dict("op" => "skolem", "label" => "cell", "args" => ["j"]),
+                            "key" => "j",
                             "expr" => Dict("op" => "true", "args" => [])
                         )
                     ),

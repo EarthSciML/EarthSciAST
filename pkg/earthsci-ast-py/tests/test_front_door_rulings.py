@@ -29,12 +29,6 @@ def test_callback_variable_without_a_registered_callback_is_refused():
     assert CALLBACK_UNREGISTERED in msg and "CropWeatherCoupling" in msg
 
 
-def test_degenerate_polygon_operand_is_refused_at_build():
-    assert "E_TREEWALK_GEOMETRY_CLIP" in _refusal(
-        "tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm"
-    )
-
-
 def test_self_recomputing_parameter_update_is_refused():
     msg = _refusal("tests/events/mixed_event_interactions.esm")
     assert "unsupported_construct" in msg and "update of parameter" in msg

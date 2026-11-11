@@ -5,11 +5,21 @@ package esm
 // the typed MigrationError.
 //
 // A migration here is a pure version-MARKER bump: it changes the `esm` field
-// and touches nothing else. That is only ever sound along an ADDITIVE line — a
-// run of schema releases each of which introduced its changes as additive,
-// backward-compatible fields, so an older file already loads under the newer
-// schema without any mechanical transform. The current additive line is
-// `1.0.0 … <current schema version>`.
+// and touches nothing else. Two lines of versions can be carried to the current
+// schema version that way:
+//
+//   - the ADDITIVE line `2.0.0 … <current schema version>`: a run of schema
+//     releases each of which introduced its changes as additive,
+//     backward-compatible fields, so an older file already loads under the
+//     newer schema without any mechanical transform;
+//   - the 1.x line `1.0.0 … 1.3.0` (last1x). esm 2.0.0 is a break that only
+//     REMOVES constructs — the closed-function call `fn`, `function_tables` and
+//     `table_lookup`, `skolem`, `rank`, the geometry leaves and the `argmin` /
+//     `argmax` op forms (removed_ops.go) — so a 1.x document that uses none of
+//     them means the same under 2.0.0 and is relabelled. One that uses any is
+//     REFUSED with the `removed_op` diagnostic: rewriting it to the esm:std
+//     templates is the job of the one codemod (`python -m earthsci_ast.migrate`),
+//     not of a marker bump.
 //
 // THERE IS NO MIGRATION ACROSS THE 1.0.0 BOUNDARY. esm 1.0.0 is a clean break
 // with no deprecation path: the five declared variable types collapse to two,
@@ -19,28 +29,19 @@ package esm
 // them RESHAPES the document, and several need information (which unknowns are
 // ODE states) that only the equations carry. A 0.x source therefore yields no
 // supported targets rather than a bump that would produce a file claiming
-// 1.0.0 while still carrying 0.x shapes. Converting a 0.x document is a
-// rewrite, and deliberately not offered as an automated one — the canonical
-// statement of this is `tests/version_compatibility/compatibility_matrix.json`
-// ("under a clean break migration is a rewrite a human performs, not something
-// the loader does") and its migration_test_from_0_0_5 → migration_test_to_1_0_0
-// fixture pair, whose SOURCE is deliberately unloadable by this library.
+// a 1.x or 2.x version while still carrying 0.x shapes. The canonical statement
+// of this is `tests/version_compatibility/compatibility_matrix.json` and its
+// migration_test_from_0_0_5 → migration_test_to_1_0_0 fixture pair, whose
+// SOURCE is deliberately unloadable by this library.
 //
-// The single supported target for an additive-line source is the CURRENT schema
-// version (SchemaVersion); arbitrary intermediate targets are deliberately NOT
-// offered — there is no per-minor transform to encode, only "bring this file up
-// to current". Sources outside that line (newer than current, a different
-// major, or malformed) yield no supported targets.
-//
-// Reference binding: TypeScript `pkg/earthsci-ast-ts/src/migration.ts`, whose
-// semantics this reproduces exactly. It deliberately does NOT reproduce Rust's
-// `src/migration.rs`, which still encodes a single pre-break rule (0.0.5 →
-// 0.1.x ppbv→mol/mol species-unit conversion): both of those versions are on
-// the far side of the 1.0.0 clean break, so a 1.x library cannot load either
-// endpoint, and the shared fixture corpus records the TypeScript rule as the
-// contract.
+// The single supported target is the CURRENT schema version (SchemaVersion);
+// arbitrary intermediate targets are deliberately NOT offered — there is no
+// per-minor transform to encode, only "bring this file up to current". Sources
+// outside both lines (newer than current, another major, a 1.x minor past
+// last1x, or malformed) yield no supported targets.
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -68,7 +69,15 @@ type MigrationError struct {
 	Message     string
 	FromVersion string
 	ToVersion   string
+	// Code is the diagnostic code of a refusal that has one: `removed_op` for a
+	// 1.x document that uses a construct esm 2.0.0 removed. Empty otherwise.
+	Code  string
+	cause error
 }
+
+// Unwrap returns the diagnostic behind a coded refusal, so errors.As reaches
+// it as a DiagnosticError.
+func (e *MigrationError) Unwrap() error { return e.cause }
 
 func (e *MigrationError) Error() string {
 	if e.FromVersion == "" && e.ToVersion == "" {
@@ -126,13 +135,18 @@ func sign(n int) int {
 	}
 }
 
-// additiveFloor is the oldest version a marker bump can carry forward.
-//
-// It is 1.0.0, not 0.1.0: the 0.x line ended at a clean break, so no 0.x
-// version can be carried forward. `onAdditiveLine` already requires the majors
-// to agree, which makes a 0.x source ineligible on its own; the floor is stated
-// at 1.0.0 as well so the intent survives the next major.
-var additiveFloor = semVer{Major: 1, Minor: 0, Patch: 0}
+// additiveFloor is the oldest version of the additive line. The 1.x line ended
+// at the 2.0.0 break, so it is 2.0.0; a 1.x source is carried forward only by
+// the relabel of onRelabelLine.
+var additiveFloor = semVer{Major: 2, Minor: 0, Patch: 0}
+
+// first1x and last1x bound the 1.x line a 2.x library relabels: 1.3.0 is the
+// last 1.x schema release, so a later 1.x minor names a format that never
+// existed and is not offered.
+var (
+	first1x = semVer{Major: 1, Minor: 0, Patch: 0}
+	last1x  = semVer{Major: 1, Minor: 3, Patch: 0}
+)
 
 // currentSchemaSemVer is SchemaVersion parsed once.
 var currentSchemaSemVer = func() semVer {
@@ -144,28 +158,44 @@ var currentSchemaSemVer = func() semVer {
 }()
 
 // onAdditiveLine reports whether `v` sits on the additive line
-// `1.0.0 … <current schema version>` and can therefore be carried to the
-// current schema version by a marker-only, no-op migration.
-func onAdditiveLine(v semVer) bool {
-	return v.Major == currentSchemaSemVer.Major &&
+// `2.0.0 … current` and can therefore be carried to current by a marker-only,
+// no-op migration.
+func onAdditiveLine(v, current semVer) bool {
+	return v.Major == current.Major &&
 		compareSemVer(v, additiveFloor) >= 0 &&
-		compareSemVer(v, currentSchemaSemVer) <= 0
+		compareSemVer(v, current) <= 0
+}
+
+// onRelabelLine reports whether `v` is a 1.x version a 2.x library relabels to
+// current when the document uses no removed construct.
+func onRelabelLine(v, current semVer) bool {
+	return current.Major == 2 &&
+		compareSemVer(v, first1x) >= 0 &&
+		compareSemVer(v, last1x) <= 0
+}
+
+// migrationTargets is SupportedMigrationTargets against an explicit current
+// schema version.
+func migrationTargets(sourceVersion string, current semVer, currentStr string) []string {
+	if v, ok := parseSemVer(sourceVersion); ok && (onAdditiveLine(v, current) || onRelabelLine(v, current)) {
+		return []string{currentStr}
+	}
+	return []string{}
 }
 
 // SupportedMigrationTargets returns the schema versions `sourceVersion` can be
 // migrated to.
 //
-//   - any version on the additive line `1.0.0 … <current schema version>` →
-//     [SchemaVersion] (a no-op marker bump to the current schema).
+//   - any version on the additive line `2.0.0 … <current schema version>`, or
+//     on the 1.x line `1.0.0 … 1.3.0` → [SchemaVersion]. A 1.x source is
+//     offered by VERSION; Migrate still refuses a 1.x document that uses a
+//     removed construct.
 //   - everything else — including EVERY 0.x version, which 1.0.0's clean break
 //     puts out of reach of a marker bump — → an empty slice.
 //
 // The canonical name drops TypeScript's `get` prefix.
 func SupportedMigrationTargets(sourceVersion string) []string {
-	if v, ok := parseSemVer(sourceVersion); ok && onAdditiveLine(v) {
-		return []string{SchemaVersion}
-	}
-	return []string{}
+	return migrationTargets(sourceVersion, currentSchemaSemVer, SchemaVersion)
 }
 
 // CanMigrate reports whether a migration from `sourceVersion` to
@@ -183,10 +213,13 @@ func CanMigrate(sourceVersion, targetVersion string) bool {
 // `targetVersion`.
 //
 // Every supported step is a pure version-marker bump with no structural
-// transform: an additive-line source (`1.0.0 … <current>`) advanced to the
-// current schema version (see the file header). Any other version pair — a 0.x
-// source included — returns a *MigrationError. Content-level changes are not
-// performed; they are modeling decisions, not mechanical migrations.
+// transform: a source on the additive line or the 1.x line advanced to the
+// current schema version (see the file header). A 1.x document that uses a
+// removed op returns a *MigrationError whose Code is `removed_op`, naming the
+// op, where it is, and the codemod; errors.As finds the underlying diagnostic
+// as a DiagnosticError. Any other version pair — a 0.x source included —
+// returns a *MigrationError. Content-level changes are not performed; they are
+// modeling decisions, not mechanical migrations.
 //
 // The input file is never mutated: a shallow copy carrying the updated `esm`
 // marker is returned. A shallow copy is exactly what the marker bump needs and
@@ -194,6 +227,11 @@ func CanMigrate(sourceVersion, targetVersion string) bool {
 // nothing else is written, the copy and the original may share their component
 // maps and slices.
 func Migrate(file *ESMFile, targetVersion string) (*ESMFile, error) {
+	return migrateAgainst(file, targetVersion, currentSchemaSemVer, SchemaVersion)
+}
+
+// migrateAgainst is Migrate against an explicit current schema version.
+func migrateAgainst(file *ESMFile, targetVersion string, current semVer, currentStr string) (*ESMFile, error) {
 	if file == nil {
 		return nil, &MigrationError{Message: "cannot migrate a nil file", ToVersion: targetVersion}
 	}
@@ -204,15 +242,51 @@ func Migrate(file *ESMFile, targetVersion string) (*ESMFile, error) {
 			ToVersion: targetVersion,
 		}
 	}
-	if !CanMigrate(sourceVersion, targetVersion) {
+	supported := false
+	for _, t := range migrationTargets(sourceVersion, current, currentStr) {
+		supported = supported || t == targetVersion
+	}
+	if !supported {
 		return nil, &MigrationError{
 			Message:     fmt.Sprintf("migration from %s to %s is not supported", sourceVersion, targetVersion),
 			FromVersion: sourceVersion,
 			ToVersion:   targetVersion,
 		}
 	}
+	if v, _ := parseSemVer(sourceVersion); onRelabelLine(v, current) {
+		if removed, err := findRemovedInFile(file); err != nil {
+			return nil, &MigrationError{
+				Message:     err.Error(),
+				FromVersion: sourceVersion,
+				ToVersion:   targetVersion,
+			}
+		} else if removed != nil {
+			return nil, &MigrationError{
+				Message:     removed.Message,
+				FromVersion: sourceVersion,
+				ToVersion:   targetVersion,
+				Code:        codeRemovedOp,
+				cause:       removed,
+			}
+		}
+	}
 
 	migrated := *file
 	migrated.ESM = targetVersion
 	return &migrated, nil
+}
+
+// findRemovedInFile reports the first removed construct an in-memory document
+// uses, by the same walk the wire boundary runs (findRemovedConstruct). The
+// typed model has no `function_tables` field, so only an op can be found.
+func findRemovedInFile(file *ESMFile) (*removedOpError, error) {
+	raw, err := json.Marshal(file)
+	if err != nil {
+		return nil, err
+	}
+	var doc any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	return findRemovedConstruct(doc), nil
 }

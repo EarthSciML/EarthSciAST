@@ -314,7 +314,7 @@ fn ab_multi_rule_stencil_wrap_and_ghost() {
         idx("v", json!({"op": "+", "args": ["i", 1]}))
     ]});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_stencil"},
         "models": {"M": {
             "variables": {
@@ -348,7 +348,7 @@ fn ab_nested_aggregate() {
         idx("u", json!("j"))
     ]}});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_nested"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -381,7 +381,7 @@ fn ab_nested_aggregate_shadowing_enclosing_index() {
         idx("u", json!("i"))
     ]}});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_nested_shadow"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -432,7 +432,7 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
         "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
         "values": [interior, left, right]});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_nested_makearray_agg"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -464,7 +464,7 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_declines() {
     "ranges": {"j": [1, n]},
     "expr": {"op": "*", "args": [idx("u", json!("j")), "i"]}});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_nested_capture"},
         "models": {"M": {
             "variables": {
@@ -505,7 +505,7 @@ fn ab_makearray_regions() {
         "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
         "values": [interior, 0.5, {"op": "*", "args": [2.0, idx("u", json!("i"))]}]});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_makearray"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -524,7 +524,7 @@ fn ab_makearray_regions() {
 fn ab_contraction_weights() {
     let n = 8;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_einsum"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -549,7 +549,7 @@ fn ab_contraction_weights() {
 fn ab_contraction_with_filter_mask() {
     let n = 6;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_filter"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -591,7 +591,7 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
     ]});
     let safe = json!({"op": "*", "args": [3.0, idx("u", json!("i"))]});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_shortcircuit"},
         "models": {"M": {
             "variables": {
@@ -673,7 +673,7 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
 fn ab_select_nan_semantics() {
     let n = 8;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_select_nan"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -725,7 +725,7 @@ fn ab_select_nan_semantics() {
 fn ab_signed_zero() {
     let n = 4;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_signed_zero"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -749,7 +749,7 @@ fn ab_signed_zero() {
 fn ab_nary_fold_order() {
     let n = 6;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_fold_order"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -774,7 +774,7 @@ fn ab_nary_fold_order() {
 #[test]
 fn ab_subblock_dy_scatter() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_subblock"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -813,7 +813,7 @@ fn ab_observed_chain_and_broadcast() {
     let ni = 5;
     let nj = 4;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_obs"},
         "models": {"M": {
             "variables": {
@@ -875,7 +875,7 @@ fn ab_observed_chain_and_broadcast() {
 fn a_declined_rule_leaves_no_program() {
     let n = 3;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_declined"},
         "index_sets": {"c": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -929,7 +929,7 @@ fn a_declined_rule_leaves_no_program() {
 #[test]
 fn ab_scalar_rules() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_scalar"},
         "models": {"M": {
             "variables": {
@@ -982,7 +982,7 @@ fn ab_species_major_lanes_read_and_write_in_place() {
             "rhs": {"op": "-", "args": [r, {"op": "max", "args": [c, 0.5]}]}}));
     }
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_reroll_species_major"},
         "models": {"M": {"variables": vars, "equations": eqs}}
     });
@@ -1042,7 +1042,7 @@ fn ab_rerolled_scalar_boxes() {
     eqs.push(json!({"lhs": {"op": "D", "args": ["a_1x"], "wrt": "t"},
         "rhs": {"op": "*", "args": ["a_1x", "a_1x", "k1"]}}));
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_reroll"},
         "models": {"M": {"variables": vars, "equations": eqs}}
     });
@@ -1136,7 +1136,7 @@ fn ab_folded_lane_strips() {
     eqs.push(json!({"lhs": {"op": "D", "args": ["a_050x"], "wrt": "t"},
         "rhs": {"op": "*", "args": ["a_050x", "k1"]}}));
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_folded_lanes"},
         "models": {"M": {"variables": vars, "equations": eqs}}
     });
@@ -1172,7 +1172,7 @@ fn ab_folded_lane_strips() {
 fn coloring_invariants() {
     let n = 8;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_coloring"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -1257,7 +1257,7 @@ fn value_numbering_scope_behaviour() {
     let d = json!({"op": "-", "args": [idx("u", json!("i")),
                                        idx("u", json!({"op": "-", "args": ["i", 1]}))]});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_vn"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -1295,7 +1295,7 @@ fn value_numbering_scope_behaviour() {
 fn tape_build_is_side_effect_free() {
     let n = 6;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_pure_build"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -1319,7 +1319,7 @@ fn tape_build_is_side_effect_free() {
 #[test]
 fn exports_materialize_as_observed_arrays() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_export_shape"},
         "models": {"M": {
             "variables": {
@@ -1368,7 +1368,7 @@ fn ab_prefix_scan_observeds() {
             "expr": {"op": "*", "args": [0.3, {"op": "index", "args": ["u", "i", "m"]}]}})
     };
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_scan"},
         "models": {"M": {
             "variables": {
@@ -1491,7 +1491,7 @@ fn makearray_scan_doc(n: i64, ni: i64, variant: &str) -> serde_json::Value {
         rhs_ranges["i"] = json!([1, ni]);
     }
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_makearray_scan"},
         "index_sets": {
             "i": {"kind": "interval", "size": ni.max(1)},
@@ -1608,7 +1608,7 @@ fn broadcast_const_doc(reader: &str) -> serde_json::Value {
         _ => unreachable!(),
     };
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_broadcast_const"},
         "index_sets": {
             "i": {"kind": "interval", "size": 20},
@@ -1677,7 +1677,7 @@ fn a_reverse_window_that_is_not_a_scan_folds_from_the_top() {
         {"op": "+", "args": ["i", 0.25]}]});
     for (cmp, body) in [(">=", &body_box), (">", &body_box), (">=", &body_mixed)] {
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "tape_reverse_window"},
             "models": {"M": {
                 "variables": {
@@ -1733,7 +1733,7 @@ fn ab_scan_absorbed_into_its_group() {
                 {"op": "index", "args": ["w", "i", "m"]}]}})
     };
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_scan_fused"},
         "models": {"M": {
             "variables": {
@@ -1793,7 +1793,7 @@ fn ab_scan_fused_with_its_neighbours() {
             "ranges": ranges, "filter": {"op": cmp, "args": ["m", "k"]}, "expr": term})
     };
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_scan_neighbours"},
         "models": {"M": {
             "variables": {
@@ -1927,7 +1927,7 @@ fn ab_chunk_gathers_on_short_rows() {
         ]});
         let ranges = json!({"i": [1, ni], "j": [1, nj], "k": [1, nk]});
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "tape_chunk_gather"},
             "models": {"M": {
                 "variables": {"u": {"type": "unknown", "shape": ["i", "j", "k"]}},
@@ -1978,7 +1978,7 @@ fn ab_pre_reduction_absorbed_only_for_own_column_reads() {
     let perm: Vec<f64> = (0..nc).map(|c| ((c * 7 + 3) % nc + 1) as f64).collect();
     let doc = |read: serde_json::Value| {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "tape_pre_reduce_reads"},
             "models": {"M": {
                 "variables": {
@@ -2064,7 +2064,7 @@ fn ab_index_gather_reduction_interleaved() {
         })
         .collect();
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_mesh_gather"},
         "models": {"M": {
             "variables": {
@@ -2113,7 +2113,7 @@ fn ab_index_gather_reduction_interleaved() {
 fn ab_dense_contraction_folds_its_product() {
     let n = 40i64;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_source_receptor"},
         "models": {"M": {
             "variables": {
@@ -2165,7 +2165,7 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
         "ranges": {"i": [n, n]},
         "expr": {"op": "*", "args": [2.0, idx("u", json!("i"))]}});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_wholesale"},
         "models": {"M": {
             "variables": {
@@ -2204,7 +2204,7 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
 fn fallback_ifelse_array_condition_doc(reader: serde_json::Value) -> serde_json::Value {
     let n = 3;
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_fallback_ifelse"},
         "index_sets": {"c": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -2409,7 +2409,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
                "ranges": {"i": [1, ni], "j": [1, nj]}, "expr": body})
     };
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_fold"},
         "models": {"M": {
             "variables": {
@@ -2476,7 +2476,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
 #[test]
 fn output_only_observeds_leave_the_rhs() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_output_only"},
         "models": {"M": {
             "variables": {
@@ -2541,7 +2541,7 @@ fn output_only_observeds_leave_the_rhs() {
 #[test]
 fn export_demotion_skips_unread_publishes() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_export_demote"},
         "models": {"M": {
             "variables": {
@@ -2638,7 +2638,7 @@ fn ab_superop_bin3_and_extended_pairs() {
         u.clone()
     ]});
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_superops"},
         "models": {"M": {
             "variables": {
@@ -2744,7 +2744,7 @@ fn ab_superop_bin3_and_extended_pairs() {
 /// whole point of #101 is that the three evaluators disagreed.
 fn bcast_doc(name: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": name},
         "models": {"M": {
             "variables": {
@@ -2960,7 +2960,7 @@ fn reductions(prog: &TapeProgram) -> Vec<(DimU, usize, SlotId)> {
 fn ab_const_array_observed() {
     let n = 4;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_const_array"},
         "models": {"M": {
             "variables": {
@@ -3010,7 +3010,7 @@ fn ab_rank0_scalar_reductions() {
                "expr": {"op": "*", "args": [idx("u", json!("j")), 1.5]}})
     };
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_rank0_reduce"},
         "models": {"M": {
             "variables": {
@@ -3050,7 +3050,7 @@ fn ab_rank0_scalar_reductions() {
 fn ab_rank0_reduction_two_contracted_axes() {
     let n = 4;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_rank0_reduce_2d"},
         "models": {"M": {
             "variables": {
@@ -3083,7 +3083,7 @@ fn ab_rank0_reduction_two_contracted_axes() {
 fn ab_rank0_reduction_with_a_filter() {
     let n = 4;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_rank0_filter"},
         "models": {"M": {
             "variables": {
@@ -3112,7 +3112,7 @@ fn ab_rank0_reduction_with_a_filter() {
 fn a_reader_of_a_declined_observed_declines_at_the_read() {
     let n = 6;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_declined_producer_shape"},
         "models": {"M": {
             "variables": {
@@ -3226,283 +3226,6 @@ fn ab_elementwise_observed_gather_fixture() {
 }
 
 // ---------------------------------------------------------------------------
-// Closed functions: the esm-spec §9.2 `datetime.*` family.
-// ---------------------------------------------------------------------------
-
-/// The probe times the datetime tests sweep: the epoch, both sides of a day
-/// boundary, a fractional second on each side of the epoch, a leap day, the
-/// last second of a leap day, two year boundaries, a leap century (2000), two
-/// non-leap centuries (1900 backwards, 2100 forwards) and a deeply negative
-/// time (0001-01-01, several eras before the epoch), and four 400-year era
-/// boundaries, where a reciprocal-rewritten divide floors the era one short.
-const DATETIME_TIMES: &[f64] = &[
-    0.0,
-    -1.0,
-    -0.5,
-    86_399.999,
-    86_400.0,
-    946_684_800.0,     // 2000-01-01T00:00:00Z
-    951_782_400.0,     // 2000-02-29T00:00:00Z (leap day)
-    951_868_799.0,     // 2000-02-29T23:59:59Z
-    1_709_164_800.0,   // 2024-02-29T00:00:00Z
-    1_735_689_599.0,   // 2024-12-31T23:59:59Z
-    1_735_689_600.0,   // 2025-01-01T00:00:00Z
-    -2_208_988_800.0,  // 1900-01-01T00:00:00Z (non-leap century)
-    -2_203_891_201.0,  // 1900-02-28T23:59:59Z
-    4_102_444_800.0,   // 2100-01-01T00:00:00Z (non-leap century)
-    -62_135_596_800.0, // 0001-01-01T00:00:00Z
-    1_500_000_000.25,
-    -1_500_000_000.25,
-    // The start of a 400-year Gregorian era (March 1 of 0400, 0800, 1600 —
-    // `z = day + 719468` an exact multiple of 146097). `fl(1/146097)` is below
-    // the true reciprocal, so a backend that answers `z / 146097` with
-    // `z * fl(1/146097)` floors the era one short and the whole date moves by
-    // a day; these three are the multiples at which that product actually
-    // rounds low.
-    -49_539_254_400.0, // 0400-03-01T00:00:00Z (era boundary)
-    -36_916_473_600.0, // 0800-03-01T00:00:00Z (era boundary)
-    -11_670_912_000.0, // 1600-03-01T00:00:00Z (era boundary)
-    951_868_800.0,     // 2000-03-01T00:00:00Z (era boundary, product exact)
-    // Fractional times one step from a boundary, which floor toward -inf
-    // (esm-spec §9.2, ruling Q-3): the smallest subnormal below the epoch
-    // (where `86400 - 5e-324` rounds to 86400), the ruling's worked examples,
-    // and one ulp below a second, a day and a month boundary on each side of
-    // the epoch.
-    -5e-324,
-    -1e-7,
-    59.9999999,
-    86_399.9999999,
-    0.999_999_999_999_999_9,
-    86_399.999_999_999_99,
-    -86_400.000_000_000_01,
-    2_678_399.999_999_999_5,
-    // The Int32 year range edges: the last double of year 2147483647 and the
-    // first instant of year -2147483648, where the day count is ~7.8e11.
-    6.776_797_623_353_279e16,
-    -6.776_810_056_797_12e16,
-    // One instant past each edge, where every entry raises
-    // `closed_function_overflow` and the oracle answers NaN, and ±Inf.
-    6.776_797_623_353_28e16,
-    -6.776_810_056_797_121e16,
-    f64::INFINITY,
-    f64::NEG_INFINITY,
-    // Julian dates before -4800-03-01, where the Fliegel-van Flandern JDN
-    // is +1, -1 and -2 days off and the linear day number is the answer, and
-    // around Julian Date 0 (-4713-11-24T12:00Z).
-    -213_635_448_000.0, // -4800-02-29T12:00:00Z
-    -314_608_449_600.0, // -8000-06-15T12:00:00Z
-    -377_605_281_600.0, // -9996-03-01T12:00:00Z
-    -210_866_760_000.0,
-    -210_866_759_999.999_97,
-    -210_866_785_920.0,
-];
-
-/// The nine calendar entries of the closed-function registry, in the order the
-/// fixture below declares its tendencies.
-const DATETIME_NAMES: &[&str] = &[
-    "datetime.year",
-    "datetime.month",
-    "datetime.day",
-    "datetime.hour",
-    "datetime.minute",
-    "datetime.second",
-    "datetime.day_of_year",
-    "datetime.julian_day",
-    "datetime.is_leap_year",
-];
-
-/// One 0-d tendency per `datetime.*` entry, all reading the solver time, plus
-/// one ARRAY tendency that multiplies a calendar field into a coordinate ramp
-/// (so the scalar result is exercised as a broadcast operand of an array box,
-/// not only as a 0-d rule).
-fn datetime_doc() -> serde_json::Value {
-    let n = 3i64;
-    let mut vars = serde_json::Map::new();
-    let mut eqs: Vec<serde_json::Value> = Vec::new();
-    for (k, name) in DATETIME_NAMES.iter().enumerate() {
-        let var = format!("f{k}");
-        vars.insert(var.clone(), json!({"type": "unknown"}));
-        eqs.push(json!({
-            "lhs": {"op": "D", "args": [var], "wrt": "t"},
-            "rhs": {"op": "fn", "name": name, "args": ["t"]}
-        }));
-    }
-    vars.insert("u".to_string(), json!({"type": "unknown", "shape": ["i"]}));
-    eqs.push(d_eq(
-        "u",
-        n,
-        agg(
-            n,
-            json!({"op": "*", "args": [
-                "i",
-                {"op": "fn", "name": "datetime.hour", "args": ["t"]}
-            ]}),
-        ),
-    ));
-    json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "tape_datetime"},
-        "models": {"M": {"variables": vars, "equations": eqs}}
-    })
-}
-
-/// Build the tape for `doc`, assert nothing fell back, and assert BITWISE
-/// equality of `dy` against the production interpreter — whose `fn` arm is the
-/// per-cell closed-function registry, i.e. the reference the lowering has to
-/// reproduce — at every probe time, on the reference executor (fused and
-/// unfused programs) and on the Step 3b fast executor.
-fn datetime_ab_check(doc: serde_json::Value, times: &[f64]) {
-    let compiled = compile(doc);
-    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
-    assert!(
-        report.fallbacks.is_empty(),
-        "the datetime family must lower with no fallback, else the tape path is \
-         untested: {:?}",
-        report.fallbacks
-    );
-    let (prog_uf, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
-    let n = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut scratch = compiled
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    let state = vec![0.0f64; n];
-    for &t in times {
-        let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
-        for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
-            let mut dy = vec![0.0f64; n];
-            run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
-            assert_bits_eq(&dy, &dy_ref, &format!("t={t} tape-ref {label}"));
-        }
-        assert_fast_matches(
-            &compiled,
-            &mut scratch,
-            &param_vec,
-            &state,
-            t,
-            &dy_ref,
-            &format!("t={t} fast"),
-        );
-    }
-}
-
-/// Every `datetime.*` entry, taped, bit-identical to the closed-function
-/// registry the per-cell oracle calls — including the integer fields, which
-/// the spec pins to zero ulp drift, and `julian_day`, which the lowering
-/// happens to reproduce exactly (its single divide is IEEE-754 pinned) rather
-/// than merely inside the spec's 1 ulp.
-#[test]
-fn ab_datetime_family() {
-    datetime_ab_check(datetime_doc(), DATETIME_TIMES);
-}
-
-/// The registry raises `closed_function_overflow` for a NaN argument in
-/// every `datetime.*` entry (esm-spec §9.2), which the oracle's `eval_fn`
-/// answers with NaN. The tape has to do the same, or a NaN state during a
-/// rejected solver step would be the one input on which the two paths
-/// disagree.
-#[test]
-fn ab_datetime_nan_argument() {
-    // `x / x` with x = 0 is the NaN the per-cell registry sees.
-    let nan = json!({"op": "/", "args": ["x", "x"]});
-    let mut vars = serde_json::Map::new();
-    vars.insert("x".to_string(), json!({"type": "unknown"}));
-    let mut eqs = vec![json!({"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 0.0})];
-    for (k, name) in DATETIME_NAMES.iter().enumerate() {
-        let var = format!("f{k}");
-        vars.insert(var.clone(), json!({"type": "unknown"}));
-        eqs.push(json!({
-            "lhs": {"op": "D", "args": [var], "wrt": "t"},
-            "rhs": {"op": "fn", "name": name, "args": [nan]}
-        }));
-    }
-    let doc = json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "tape_datetime_nan"},
-        "models": {"M": {"variables": vars, "equations": eqs}}
-    });
-    datetime_ab_check(doc, &[0.0, 1.0]);
-}
-
-/// A `datetime.*` call on a compile-time-known time folds all the way to one
-/// literal: the whole decomposition is constant, so the tape must not carry a
-/// single instruction for it.
-#[test]
-fn datetime_on_a_literal_time_folds_at_build_time() {
-    let doc = json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "tape_datetime_const"},
-        "models": {"M": {
-            "variables": {"x": {"type": "unknown"}},
-            "equations": [
-                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                 "rhs": {"op": "fn", "name": "datetime.year", "args": [946684800.0]}}
-            ]
-        }}
-    });
-    let compiled = compile(doc);
-    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
-    assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
-    for op in ["Bin", "Un", "Select"] {
-        assert_eq!(
-            opcount(&prog, op),
-            0,
-            "a constant `datetime.year` left a `{op}` instruction behind:\n{report}"
-        );
-    }
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut dy = vec![0.0f64; 1];
-    run_reference(&prog, &compiled, &[0.0], &param_vec, 0.0, &mut dy);
-    assert_eq!(dy[0], 2000.0, "datetime.year(946684800) is 2000");
-}
-
-/// The `interp.*` entries lower to ONE `Instr::Interp` each, whatever the
-/// table's size — the instruction carries an index into `interp_tables`, not
-/// the table — and the per-element answer is the registry's own.
-///
-/// This test used to assert the opposite (a named fallback), which is what the
-/// tape did before the family was lowered. The shape of the assertion is kept:
-/// what is checked is the INSTRUCTION, not just the absence of a fallback,
-/// because a family lowered into a select chain per knot would also report no
-/// fallback while putting a table's worth of instructions on the tape.
-#[test]
-fn interp_closed_functions_lower_to_one_instruction() {
-    let doc = json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "tape_interp"},
-        "models": {"M": {
-            "variables": {"x": {"type": "unknown"}},
-            "equations": [
-                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                 "rhs": {"op": "fn", "name": "interp.searchsorted", "args": [
-                     "t", {"op": "const", "args": [], "value": [0.0, 1.0, 2.0]}]}}
-            ]
-        }}
-    });
-    let compiled = compile(doc);
-    let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
-    assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
-    assert_eq!(opcount(&prog, "Interp"), 1, "{report}");
-    // The table is on the PROGRAM, and the `const` literal that carried it
-    // into the call is not materialized at all: nothing reads it any more.
-    assert_eq!(prog.interp_tables.len(), 1);
-    assert_eq!(opcount(&prog, "ConstArray"), 0, "{report}");
-
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut dy = vec![0.0f64; 1];
-    // `t = 1.5` sits between `xs[2]` and `xs[3]`, so the first entry >= t is
-    // the third, 1-based.
-    run_reference(&prog, &compiled, &[0.0], &param_vec, 1.5, &mut dy);
-    assert_eq!(dy[0], 3.0);
-    // Past the end: N + 1, one past the last index.
-    run_reference(&prog, &compiled, &[0.0], &param_vec, 9.0, &mut dy);
-    assert_eq!(dy[0], 4.0);
-}
-
-// ---------------------------------------------------------------------------
 // Index widths (#474).
 // ---------------------------------------------------------------------------
 
@@ -3557,7 +3280,7 @@ fn ab_state_and_parameter_indices_past_u16() {
         })
         .collect();
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_wide_state_indices"},
         "models": {"M": {"variables": vars, "equations": eqs}}
     });
@@ -3577,7 +3300,7 @@ fn ab_fused_box_past_u16_splits_into_groups() {
         .map(|j| json!({"op": "*", "args": [j as f64 * 0.5, idx("u", json!("i"))]}))
         .collect();
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_wide_fused_box"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
@@ -3613,7 +3336,7 @@ fn ab_fused_box_past_u16_splits_into_groups() {
 #[test]
 fn a_shaped_parameter_default_is_taped_from_its_data() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "shaped_param_data", "authors": ["tape tests"]},
         "index_sets": {"x": {"kind": "interval", "size": 3}, "y": {"kind": "interval", "size": 2}},
         "models": {"M": {
@@ -3672,279 +3395,8 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: `Instr::PolyArea` (with its planar broad phase), the build-time
-// `intersect_polygon` ring, and `Instr::IndexGather`.
+// `Instr::IndexGather`.
 // ---------------------------------------------------------------------------
-
-/// A square ring `[x0, x0 + w] × [y0, y0 + h]`, counter-clockwise.
-fn quad(x0: f64, y0: f64, w: f64, h: f64) -> serde_json::Value {
-    json!([[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]])
-}
-
-/// A regrid-shaped document: `A[i, j] = polygon_intersection_area(src[i],
-/// tgt[j])` over `src × tgt`, and `D(F[j]) = Σ_i A[i, j] · G[i] - F[j]`, so
-/// every element of `A` reaches `dy`.
-fn regrid_doc(
-    manifold: &str,
-    src: Vec<serde_json::Value>,
-    tgt: Vec<serde_json::Value>,
-) -> serde_json::Value {
-    let (ns, nt) = (src.len() as i64, tgt.len() as i64);
-    json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "tape_poly_area"},
-        "index_sets": {
-            "s": {"kind": "interval", "size": ns},
-            "t": {"kind": "interval", "size": nt},
-            "v": {"kind": "interval", "size": 4},
-            "c": {"kind": "interval", "size": 2}
-        },
-        "models": {"M": {
-            "variables": {
-                "src": {"type": "unknown", "shape": ["s", "v", "c"]},
-                "tgt": {"type": "unknown", "shape": ["t", "v", "c"]},
-                "A": {"type": "unknown", "shape": ["s", "t"]},
-                "G": {"type": "unknown", "shape": ["s"]},
-                "F": {"type": "unknown", "shape": ["t"]}
-            },
-            "equations": [
-                {"lhs": "src", "rhs": {"op": "const", "args": [], "value": src}},
-                {"lhs": "tgt", "rhs": {"op": "const", "args": [], "value": tgt}},
-                {"lhs": "A", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
-                    "ranges": {"i": {"from": "s"}, "j": {"from": "t"}},
-                    "expr": {"op": "polygon_intersection_area", "manifold": manifold,
-                             "args": [idx("src", json!("i")), idx("tgt", json!("j"))]}}},
-                {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                         "expr": {"op": "D", "args": [idx("G", json!("i"))], "wrt": "t"},
-                         "ranges": {"i": {"from": "s"}}},
-                 "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                         "ranges": {"i": {"from": "s"}},
-                         "expr": {"op": "-", "args": [idx("G", json!("i"))]}}},
-                {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
-                         "expr": {"op": "D", "args": [idx("F", json!("j"))], "wrt": "t"},
-                         "ranges": {"j": {"from": "t"}}},
-                 "rhs": {"op": "faq", "args": [], "output_idx": ["j"],
-                         "ranges": {"i": {"from": "s"}, "j": {"from": "t"}},
-                         "expr": {"op": "-", "args": [
-                             {"op": "*", "args": [
-                                 {"op": "index", "args": ["A", "i", "j"]},
-                                 idx("G", json!("i"))]},
-                             {"op": "/", "args": [idx("F", json!("j")), ns]}]}}}
-            ]
-        }}
-    })
-}
-
-/// The one `PolyArea` of a program and its spec.
-fn only_poly_area(prog: &TapeProgram) -> &GeomSpec {
-    assert_eq!(opcount(prog, "PolyArea"), 1, "one geometry instruction");
-    assert_eq!(prog.geoms.len(), 1);
-    let at = prog
-        .instrs
-        .iter()
-        .position(|i| matches!(i, Instr::PolyArea { .. }))
-        .expect("PolyArea emitted");
-    assert_eq!(
-        prog.section_of(at),
-        Cadence::Const,
-        "clipped once per solve"
-    );
-    &prog.geoms[0]
-}
-
-/// The planar broad phase against the dense definition: the fast executor
-/// clips only the candidate pairs, the reference executor clips every pair,
-/// and both must reproduce the interpreter's `dy` bit for bit. The rings
-/// cover what the candidate enumeration has to get right: a strip layout
-/// with a single diagonal band of overlaps, an edge-touching pair (a
-/// candidate whose clip is a zero-area sliver), a corner-touching pair, a
-/// target overlapping nothing, a padded ring, a clockwise ring, and a ring
-/// with a NaN vertex (a box the R*-tree is never shown).
-#[test]
-fn ab_poly_area_planar_broad_phase() {
-    let mut src: Vec<serde_json::Value> = (0..6).map(|k| quad(k as f64, 0.0, 1.0, 1.0)).collect();
-    // Padded: the last vertex repeated in place of the fourth.
-    src.push(json!([[6.0, 0.0], [7.0, 0.0], [7.0, 1.0], [7.0, 1.0]]));
-    // Clockwise.
-    src.push(json!([[8.0, 0.0], [8.0, 1.0], [9.0, 1.0], [9.0, 0.0]]));
-    // A NaN coordinate: the ring's box is not finite.
-    src.push(json!([[10.0, 0.0], [11.0, 0.0], [null, 1.0], [10.0, 1.0]]));
-    let mut tgt: Vec<serde_json::Value> = (0..6)
-        .map(|k| quad(k as f64 + 0.5, 0.25, 1.0, 1.0))
-        .collect();
-    tgt.push(quad(3.0, 1.0, 1.0, 1.0)); // shares an edge with src[3]
-    tgt.push(quad(7.0, 1.0, 1.0, 1.0)); // shares a corner with src[6]
-    tgt.push(quad(40.0, 40.0, 1.0, 1.0)); // overlaps nothing
-    let prog = ab_check(regrid_doc("planar", src, tgt), 0.5, 2.0);
-    let spec = only_poly_area(&prog);
-    assert_eq!(
-        spec.pairs,
-        Some((0, 1)),
-        "the pair axes drive the broad phase"
-    );
-}
-
-/// A null (NaN) literal is not what a document carries; keep the broad-phase
-/// test's NaN ring honest by checking the same pairs without it too.
-#[test]
-fn ab_poly_area_planar_regular_grids() {
-    let src: Vec<serde_json::Value> = (0..5)
-        .flat_map(|i| (0..4).map(move |j| quad(i as f64, j as f64, 1.0, 1.0)))
-        .collect();
-    let tgt: Vec<serde_json::Value> = (0..3)
-        .flat_map(|i| (0..3).map(move |j| quad(1.7 * i as f64 - 0.3, 1.3 * j as f64, 1.7, 1.3)))
-        .collect();
-    let prog = ab_check(regrid_doc("planar", src, tgt), 0.5, 2.0);
-    assert!(only_poly_area(&prog).pairs.is_some());
-}
-
-/// A spherical clip has no broad phase: every pair is clipped, densely, by
-/// the same S2 kernel the interpreter calls.
-#[test]
-fn ab_poly_area_spherical_dense() {
-    let src: Vec<serde_json::Value> = (0..3)
-        .map(|k| quad(10.0 * k as f64, 0.0, 10.0, 10.0))
-        .collect();
-    let tgt: Vec<serde_json::Value> = (0..2)
-        .map(|k| quad(10.0 * k as f64 + 5.0, 5.0, 10.0, 10.0))
-        .collect();
-    let prog = ab_check(regrid_doc("spherical", src, tgt), 0.5, 2.0);
-    assert_eq!(only_poly_area(&prog).pairs, None);
-}
-
-/// The scaling tier's conservative regrid: a bin-skolem `join.on` gate whose
-/// bin maps read coordinates the document derives from its `const` rings
-/// (`src_lon[i] = min_v src_poly[i, v, 1]`), with no derived index set. The
-/// build evaluates those coordinates so value invention can key the bins and
-/// the gate drives the contractions, so a call applies the regrid over the
-/// admitted pairs only — no per-call instruction spans the `src × tgt` box —
-/// bit for bit as the interpreter does.
-#[test]
-fn ab_regrid_bin_skolem_gate_drives_the_apply() {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
-    let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
-    let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
-    let prog = ab_check(doc, 0.5, 2.0);
-    let n = 100usize;
-    let cont = (prog.n_const + prog.n_segment) as usize;
-    let mut seg = 0;
-    for ins in &prog.instrs[cont..] {
-        let elems = match ins {
-            Instr::Fused { spec } => prog.fused[*spec as usize].shape.iter().product::<usize>(),
-            _ => ins.out().map_or(0, |o| {
-                prog.slots[o as usize].shape.iter().product::<usize>()
-            }),
-        };
-        assert!(
-            elems <= 2 * n,
-            "a per-call instruction spans {elems} elements: {ins:?}"
-        );
-        seg += usize::from(matches!(ins, Instr::SegReduce { .. }));
-    }
-    assert_eq!(seg, 1, "the apply is one gated segmented sum");
-}
-
-/// The wholesale form — `polygon_intersection_area` of two whole `[V, 2]`
-/// arrays — is one scalar area; a ring drawn by a literal subscript is the
-/// same instruction with a fixed selector, and a same-axis pair (`poly[c]`
-/// against itself) is the dense per-element form.
-#[test]
-fn ab_poly_area_wholesale_and_same_axis() {
-    let doc = json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "tape_poly_area_scalar"},
-        "index_sets": {"c": {"kind": "interval", "size": 3},
-                       "v": {"kind": "interval", "size": 4},
-                       "x": {"kind": "interval", "size": 2}},
-        "models": {"M": {
-            "variables": {
-                "a": {"type": "unknown", "shape": ["v", "x"]},
-                "b": {"type": "unknown", "shape": ["v", "x"]},
-                "poly": {"type": "unknown", "shape": ["c", "v", "x"]},
-                "whole": {"type": "unknown"},
-                "picked": {"type": "unknown"},
-                "self_area": {"type": "unknown", "shape": ["c"]},
-                "y": {"type": "unknown", "default": 1.0},
-                "u": {"type": "unknown", "shape": ["c"]}
-            },
-            "equations": [
-                {"lhs": "a", "rhs": {"op": "const", "args": [], "value": quad(0.0, 0.0, 2.0, 2.0)}},
-                {"lhs": "b", "rhs": {"op": "const", "args": [], "value": quad(1.0, 1.0, 2.0, 2.0)}},
-                {"lhs": "poly", "rhs": {"op": "const", "args": [], "value": [
-                    quad(0.0, 0.0, 1.0, 1.0), quad(0.0, 0.0, 2.0, 3.0), quad(5.0, 5.0, 0.5, 0.25)]}},
-                {"lhs": "whole", "rhs": {"op": "polygon_intersection_area", "manifold": "planar",
-                                         "args": ["a", "b"]}},
-                {"lhs": "picked", "rhs": {"op": "polygon_intersection_area", "manifold": "planar",
-                                          "args": [{"op": "index", "args": ["poly", 2]}, "b"]}},
-                {"lhs": "self_area", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                    "ranges": {"i": {"from": "c"}},
-                    "expr": {"op": "polygon_intersection_area", "manifold": "planar",
-                             "args": [idx("poly", json!("i")), idx("poly", json!("i"))]}}},
-                {"lhs": {"op": "D", "args": ["y"], "wrt": "t"},
-                 "rhs": {"op": "*", "args": [-1.0, "whole", "picked", "y"]}},
-                d_eq("u", 3, agg(3, json!({"op": "*", "args": [
-                    idx("self_area", json!("i")), idx("u", json!("i"))]})))
-            ]
-        }}
-    });
-    let prog = ab_check(doc, 0.5, 2.0);
-    assert_eq!(opcount(&prog, "PolyArea"), 3);
-    assert!(prog.geoms.iter().all(|g| g.pairs.is_none()));
-}
-
-/// `intersect_polygon` of two literal rings is evaluated at build: the closed
-/// ring is a literal, and the derived range over it (`from_faq` naming the
-/// clip's `id`) has the ring's distinct-vertex count, as the interpreter's
-/// ring registry says.
-#[test]
-fn ab_intersect_polygon_build_time_ring() {
-    let doc = json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "tape_intersect_polygon"},
-        "index_sets": {
-            "sv": {"kind": "interval", "size": 4},
-            "tv": {"kind": "interval", "size": 4},
-            "coord": {"kind": "interval", "size": 2},
-            "clip_ring": {"kind": "derived", "from_faq": "ov"}
-        },
-        "models": {"M": {
-            "variables": {
-                "src": {"type": "unknown", "shape": ["sv", "coord"]},
-                "tgt": {"type": "unknown", "shape": ["tv", "coord"]},
-                "clip": {"type": "unknown", "shape": ["clip_ring", "coord"]},
-                "area": {"type": "unknown"},
-                "y": {"type": "unknown", "default": 1.0}
-            },
-            "equations": [
-                {"lhs": "src", "rhs": {"op": "const", "args": [], "value": quad(0.0, 0.0, 2.0, 2.0)}},
-                {"lhs": "tgt", "rhs": {"op": "const", "args": [],
-                    "value": [[1.0, 1.0], [3.0, 1.5], [2.5, 3.0], [0.5, 2.5]]}},
-                {"lhs": "clip", "rhs": {"op": "intersect_polygon", "id": "ov", "manifold": "planar",
-                                        "args": ["src", "tgt"]}},
-                {"lhs": "area", "rhs": {"op": "faq", "args": [], "output_idx": [],
-                    "ranges": {"k": {"from": "clip_ring"}},
-                    "expr": {"op": "*", "args": [0.5, {"op": "-", "args": [
-                        {"op": "*", "args": [
-                            {"op": "index", "args": ["clip", "k", 1]},
-                            {"op": "index", "args": ["clip", {"op": "+", "args": ["k", 1]}, 2]}]},
-                        {"op": "*", "args": [
-                            {"op": "index", "args": ["clip", {"op": "+", "args": ["k", 1]}, 1]},
-                            {"op": "index", "args": ["clip", "k", 2]}]}]}]}}},
-                {"lhs": {"op": "D", "args": ["y"], "wrt": "t"},
-                 "rhs": {"op": "*", "args": [-1.0, "area", "y"]}}
-            ]
-        }}
-    });
-    let prog = ab_check(doc, 0.5, 2.0);
-    assert_eq!(opcount(&prog, "PolyArea"), 0);
-    assert!(
-        prog.const_data
-            .iter()
-            .any(|d| d.shape[1] == 2 && d.shape[0] >= 4),
-        "the closed ring is a literal"
-    );
-}
 
 /// `D(u[i]) = Σ_k κ (u[nbr[i, k]] - u[i])` on an unstructured neighbour
 /// table: one `IndexGather` over the promoted `(k, i)` box, with subscripts
@@ -3954,7 +3406,7 @@ fn ab_intersect_polygon_build_time_ring() {
 fn ab_index_gather_unstructured() {
     let n = 6;
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_index_gather"},
         "index_sets": {"cells": {"kind": "interval", "size": n},
                        "nb": {"kind": "interval", "size": 3}},
@@ -4002,7 +3454,7 @@ fn ab_index_gather_unstructured() {
 #[test]
 fn ab_index_gather_mixed_axes() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_index_gather_mixed"},
         "index_sets": {"cells": {"kind": "interval", "size": 4},
                        "lev": {"kind": "interval", "size": 3}},
@@ -4118,7 +3570,7 @@ fn recurrence_doc(n: i64) -> serde_json::Value {
         {"op": "index", "args": ["r", "i", {"op": "-", "args": ["j", "L"]}]}
     ]});
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_recurrence"},
         "models": {"M": {
             "variables": {
@@ -4179,7 +3631,7 @@ fn doc_2d(vars: serde_json::Value, rhs_expr: serde_json::Value) -> serde_json::V
         variables[k] = v.clone();
     }
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "lazy_shapes", "authors": ["tape tests"]},
         "index_sets": {"x": {"kind": "interval", "size": 3}, "y": {"kind": "interval", "size": 2}},
         "models": {"M": {
@@ -4357,7 +3809,7 @@ fn two_rule_doc(rhs_u: serde_json::Value, rhs_v: serde_json::Value) -> serde_jso
     let state = json!({"type": "unknown", "units": "1", "default": 0.5, "shape": ["x", "y"]});
     let param = json!({"type": "parameter", "units": "1", "default": 2.0});
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "rule_faults", "authors": ["tape tests"]},
         "index_sets": {"x": {"kind": "interval", "size": 3}, "y": {"kind": "interval", "size": 2}},
         "models": {"M": {
@@ -4544,7 +3996,7 @@ fn neg_zero_sum_doc(variant: &str) -> serde_json::Value {
             "ranges": {"k": [1, n]}},
         "rhs": rhs}));
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "tape_neg_zero_sum"},
         "index_sets": {
             "k": {"kind": "interval", "size": n},
@@ -4593,7 +4045,7 @@ fn ab_sub_box_term_is_evaluated_once_per_axis_it_reads() {
     let n = 5i64;
     let doc = |term: serde_json::Value| {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "tape_sub_box_term"},
             "models": {"M": {
                 "variables": {

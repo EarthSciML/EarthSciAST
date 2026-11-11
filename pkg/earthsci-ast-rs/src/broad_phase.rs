@@ -21,9 +21,8 @@
 //!      self-conformance oracle (see the `rstar == brute-force` tests).
 //!
 //! ENVELOPE CONVENTION. A feature envelope is `(xmin, ymin, xmax, ymax)` — an
-//! [`Envelope`] = `[f64; 4]`. (Note this ORDER differs from `geometry.rs`'s
-//! internal ring bbox `(xmin, xmax, ymin, ymax)`; the 1-name ring arm below
-//! remaps.) The intersection predicate is CLOSED (edge-touching boxes are
+//! [`Envelope`] = `[f64; 4]`. (A ring bbox is computed `(xmin, xmax, ymin,
+//! ymax)`; the 1-name ring arm below remaps.) The intersection predicate is CLOSED (edge-touching boxes are
 //! candidates), matching the negation of a planar bbox-disjoint reject: at
 //! `eps=0` this candidate set is exactly the set of pairs a closed AABB overlap
 //! does not reject.

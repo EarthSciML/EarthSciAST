@@ -100,7 +100,7 @@ fn validate_emissible(e: &Expr) -> Result<(), CanonicalizeError> {
 /// EMISSIBLE (have a wire slot): `op`, `args`, `wrt`, `dim`, `fn`
 /// (`broadcast_fn`), `name`, `value`. TOLERATED-AND-IGNORED (may be present, no
 /// wire slot, NOT an error — matching Julia's `_CANONICAL_IGNORED_FIELDS`):
-/// `arg`, `bindings`. Every OTHER `ExpressionNode` field is NON-EMISSIBLE.
+/// `bindings`. Every OTHER `ExpressionNode` field is NON-EMISSIBLE.
 ///
 /// SINGLE-SOURCE / FAIL-CLOSED: the leading `let ExpressionNode { … } = n;`
 /// destructures EVERY field with no `..` rest pattern, so classifying each field
@@ -123,7 +123,6 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
         units: _,
         // TOLERATED-AND-IGNORED — no wire slot, presence is NOT an error
         // (Julia's `_CANONICAL_IGNORED_FIELDS`).
-        arg: _,
         bindings: _,
         // Load provenance, never on the wire (Julia lists it ignored too).
         template_origin: _,
@@ -144,12 +143,7 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
         shape,
         perm,
         axis,
-        label,
-        table,
-        axes,
-        output,
         id,
-        manifold,
         distinct,
         key,
         expect_cadence,
@@ -203,29 +197,8 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
     if axis.is_some() {
         return Some("axis");
     }
-    // `label` (skolem documentary relation tag) has NO canonical wire slot. It is
-    // non-emissible in every sibling binding's derived set (it is a field of
-    // Julia's `OpExpr`, so `setdiff` lands it in `_NON_EMISSIBLE_FIELDS`), so a
-    // node carrying it must fail closed — previously `label` was omitted here and
-    // silently DROPPED, making two `skolem` nodes that differ only in `label`
-    // canonicalize to byte-identical JSON (bug fix).
-    if label.is_some() {
-        return Some("label");
-    }
-    if table.is_some() {
-        return Some("table");
-    }
-    if axes.is_some() {
-        return Some("axes");
-    }
-    if output.is_some() {
-        return Some("output");
-    }
     if id.is_some() {
         return Some("id");
-    }
-    if manifold.is_some() {
-        return Some("manifold");
     }
     if distinct.is_some() {
         return Some("distinct");
@@ -250,11 +223,11 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
 fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
     let mut work = node.clone();
     // Canonicalize EVERY expression-bearing child — `args` plus the sidecar
-    // bodies (`lower`/`upper`/`expr`/`filter`/`values`/`axes`/`key`/`bindings`),
+    // bodies (`lower`/`upper`/`expr`/`filter`/`values`/`key`/`bindings`),
     // enumerated once by `ExpressionNode::for_each_child_mut` (the crate's single
     // source of truth for which fields carry child `Expr`s). This guarantees a
     // non-finite float or `0/0` buried in an aggregate body, integral bound,
-    // `filter` predicate, `table_lookup` axis, or template binding is caught by
+    // `filter` predicate, or template binding is caught by
     // the same `NonFinite`/`DivByZero` guards as one in `args` — previously only
     // `args` was descended, so such a NaN escaped the guard.
     //
@@ -569,8 +542,8 @@ fn emit_canonical_json(e: &Expr) -> String {
 // the siblings and break the byte contract.
 //
 // The former field-coverage gap (a node's other set fields — `expr`/`ranges`/
-// `reduce`/`semiring`/`join`/`filter`, `regions`/`values`, `table`/`axes`/
-// `output`, `shape`/`perm`/`axis`, `id`/`manifold`, `key`/`distinct`, … — had
+// `reduce`/`semiring`/`join`/`filter`, `regions`/`values`,
+// `shape`/`perm`/`axis`, `id`, `key`/`distinct`, … — had
 // no slot here, so two nodes differing ONLY in those fields produced identical
 // canonical JSON) is now CLOSED by failing closed: `validate_emissible` rejects
 // any such node with `E_CANONICAL_UNSUPPORTED_FIELD`, matching Julia.
@@ -1116,7 +1089,7 @@ mod tests {
     /// A node carrying any NON-EMISSIBLE field fails closed with the pinned
     /// cross-language code `E_CANONICAL_UNSUPPORTED_FIELD`, matching Julia's
     /// `_emit_node_json` guard. Covers a single-child sidecar (`filter`,
-    /// `expr`), a scalar sidecar (`table`), and a bare-string sidecar (`id`).
+    /// `expr`), a scalar sidecar (`distinct`), and a bare-string sidecar (`id`).
     #[test]
     fn non_emissible_field_fails_closed() {
         // filter (Option<Box<Expr>>).
@@ -1133,21 +1106,21 @@ mod tests {
             expr: Some(Box::new(Expr::Variable("A".into()))),
             ..ExpressionNode::default()
         });
-        // table (Option<String>).
-        let tabled = Expr::operator(ExpressionNode {
-            op: "table_lookup".into(),
+        // distinct (Option<bool>).
+        let distinct = Expr::operator(ExpressionNode {
+            op: "faq".into(),
             args: vec![],
-            table: Some("t".into()),
+            distinct: Some(true),
             ..ExpressionNode::default()
         });
         // id (Option<String>).
         let ided = Expr::operator(ExpressionNode {
-            op: "intersect_polygon".into(),
+            op: "faq".into(),
             args: vec![Expr::Variable("poly".into())],
             id: Some("g0".into()),
             ..ExpressionNode::default()
         });
-        for e in [&filtered, &bodied, &tabled, &ided] {
+        for e in [&filtered, &bodied, &distinct, &ided] {
             let err = canonical_json(e).unwrap_err();
             assert!(
                 matches!(err, CanonicalizeError::UnsupportedField(_)),
@@ -1155,33 +1128,6 @@ mod tests {
             );
             assert_eq!(err.to_string(), "E_CANONICAL_UNSUPPORTED_FIELD");
         }
-    }
-
-    /// Regression (bug A): a `skolem` node's documentary `label` tag has no
-    /// canonical wire slot, so a node carrying it MUST fail closed (matching
-    /// Julia's derived `_NON_EMISSIBLE_FIELDS`). Previously `label` was omitted
-    /// from the guard and silently DROPPED, so two `skolem` nodes differing only
-    /// in `label` canonicalized to byte-identical JSON.
-    #[test]
-    fn skolem_label_fails_closed() {
-        let edge = Expr::operator(ExpressionNode {
-            op: "skolem".into(),
-            args: vec![Expr::Variable("u".into()), Expr::Variable("v".into())],
-            label: Some("edge".into()),
-            ..ExpressionNode::default()
-        });
-        let err = canonical_json(&edge).unwrap_err();
-        assert_eq!(err, CanonicalizeError::UnsupportedField("label".into()));
-        assert_eq!(err.to_string(), "E_CANONICAL_UNSUPPORTED_FIELD");
-
-        // The bare (label-less) skolem node still canonicalizes fine, so it is
-        // specifically the `label` tag that fails closed — not the `skolem` op.
-        let bare = Expr::operator(ExpressionNode {
-            op: "skolem".into(),
-            args: vec![Expr::Variable("u".into()), Expr::Variable("v".into())],
-            ..ExpressionNode::default()
-        });
-        assert!(canonical_json(&bare).is_ok());
     }
 
     /// A non-emissible field on a node reached through the `args` spine (not
@@ -1193,9 +1139,9 @@ mod tests {
             vec![
                 Expr::Variable("x".into()),
                 Expr::operator(ExpressionNode {
-                    op: "table_lookup".into(),
+                    op: "faq".into(),
                     args: vec![],
-                    table: Some("t".into()),
+                    id: Some("t".into()),
                     ..ExpressionNode::default()
                 }),
             ],
@@ -1207,7 +1153,7 @@ mod tests {
     }
 
     /// The EMISSIBLE `fn`/`name` fields still round-trip (they have a wire
-    /// slot), and the TOLERATED-AND-IGNORED `arg`/`bindings` fields are NOT an
+    /// slot), and the TOLERATED-AND-IGNORED `bindings` field is NOT an
     /// error — they canonicalize, emitting the pinned fields only. Matches
     /// Julia's `_EMISSIBLE_FIELDS` / `_CANONICAL_IGNORED_FIELDS`.
     #[test]
@@ -1224,7 +1170,7 @@ mod tests {
 
         // `name` is emissible → emitted.
         let named = Expr::operator(ExpressionNode {
-            op: "fn".into(),
+            op: "enum".into(),
             args: vec![Expr::Variable("x".into())],
             name: Some("m.f".into()),
             ..ExpressionNode::default()
@@ -1234,18 +1180,16 @@ mod tests {
             "name not emitted"
         );
 
-        // `arg` and `bindings` are tolerated-and-ignored → no error, not emitted.
+        // `bindings` is tolerated-and-ignored → no error, not emitted.
         let mut bindings = std::collections::HashMap::new();
         bindings.insert("t".to_string(), Expr::Variable("z".into()));
         let tolerated = Expr::operator(ExpressionNode {
-            op: "argmax".into(),
+            op: "apply_expression_template".into(),
             args: vec![Expr::Variable("x".into())],
-            arg: Some("i".into()),
             bindings: Some(bindings),
             ..ExpressionNode::default()
         });
         let got = canonical_json(&tolerated).expect("tolerated fields must not error");
-        assert!(!got.contains("\"arg\""), "arg leaked into emission: {got}");
         assert!(
             !got.contains("bindings"),
             "bindings leaked into emission: {got}"
@@ -1258,17 +1202,17 @@ mod tests {
     #[test]
     fn canonicalize_alone_preserves_fields() {
         let e = Expr::operator(ExpressionNode {
-            op: "table_lookup".into(),
+            op: "faq".into(),
             args: vec![],
-            table: Some("mytable".into()),
-            output: Some(serde_json::json!(0)),
+            id: Some("mytable".into()),
+            distinct: Some(true),
             ..ExpressionNode::default()
         });
         let c = canonicalize(&e).expect("canonicalize must not fail-close");
         match c {
             Expr::Operator(n) => {
-                assert_eq!(n.table.as_deref(), Some("mytable"));
-                assert_eq!(n.output, Some(serde_json::json!(0)));
+                assert_eq!(n.id.as_deref(), Some("mytable"));
+                assert_eq!(n.distinct, Some(true));
             }
             other => panic!("expected preserved operator, got {other:?}"),
         }

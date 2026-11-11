@@ -98,14 +98,38 @@ end
 # numbering `_vn!` of access_kernel.jl), an object by identity, a payload by its
 # contents, and each node's number under each environment of loop binders it
 # was keyed in.
+# Content numbers of constant-array buffers: equal contents, equal numbers.
+# Every gather site's `_ConstGatherArray` holds its own `vec` of the source
+# array, aliasing one buffer (`_const_gather_node`), so a buffer is looked up by
+# its address and length first and its contents hashed once, not once per site.
+# The table holds each buffer it has seen, so no address is reused under it.
+struct _FlatContentIds
+    bufs::Dict{Tuple{UInt, Int}, Tuple{Vector{Float64}, Int}}
+    ids::Dict{_VNKey, Int}
+end
+_FlatContentIds() = _FlatContentIds(
+    Dict{Tuple{UInt, Int}, Tuple{Vector{Float64}, Int}}(), Dict{_VNKey, Int}()
+)
+
+function _flat_content_id!(t::_FlatContentIds, flat::Vector{Float64})
+    at = (UInt(pointer(flat)), length(flat))
+    got = get(t.bufs, at, nothing)
+    got === nothing || return got[2]
+    id = _vn!(t.ids, reinterpret(UInt64, flat))
+    t.bufs[at] = (flat, id)
+    return id
+end
+
 struct _CGShareKeys
     ids::Dict{_VNKey, Int}
     objs::IdDict{Any, Int}
     pays::IdDict{Any, Int}
     memo::Dict{Tuple, _NodeMap{Int}}
+    flats::_FlatContentIds
 end
 _CGShareKeys() = _CGShareKeys(
-    Dict{_VNKey, Int}(), IdDict{Any, Int}(), IdDict{Any, Int}(), Dict{Tuple, _NodeMap{Int}}()
+    Dict{_VNKey, Int}(), IdDict{Any, Int}(), IdDict{Any, Int}(), Dict{Tuple, _NodeMap{Int}}(),
+    _FlatContentIds()
 )
 
 # Emission context for a scalar spine. `loops` maps a loop counter `Ref` — the
@@ -355,7 +379,7 @@ end
 # class-emitted scalar unit reads per member is its HOLE (`_CGUnitCtx.holes`),
 # so there a literal or a state read is the same only when its hole expression
 # is. A node kind with no structural key here (a ragged loop, a recurrence
-# read, a cached slot, a closed function) is never shared, and nothing under it
+# read, a cached slot) is never shared, and nothing under it
 # is looked at. Plan field `share_subtrees`; off, every occurrence is emitted
 # where it stands.
 
@@ -399,7 +423,7 @@ function _cg_share_pay!(K::_CGShareKeys, pl)
     got = get(K.pays, pl, 0)
     got == 0 || return got
     key = if pl isa _ConstGatherArray
-        (:cga, reinterpret(UInt64, pl.flat), pl.strides, pl.dims, pl.boundary, pl.name)
+        (:cga, _flat_content_id!(K.flats, pl.flat), pl.strides, pl.dims, pl.boundary, pl.name)
     elseif pl isa _StateGather
         (:sg, pl.slot_flat, pl.strides, pl.lo, pl.hi, pl.len)
     else
@@ -427,7 +451,7 @@ function _cg_share_inner(K::_CGShareKeys, nd::_Node)
     elseif k === _NK_LIVE_GATHER
         return (_cg_share_obj!(K, (nd.payload::_ConstGatherArray).flat), _cg_share_pay!(K, nd.payload))
     elseif k === _NK_OP
-        return (nd.op === :fn || nd.payload !== nothing) ? nothing : 0
+        return nd.payload !== nothing ? nothing : 0
     elseif k === _NK_CONTRACTION
         return 0
     end
@@ -496,7 +520,7 @@ end
 _cg_share_opaque(kc, nd::_Node) =
     haskey(kc.loops, nd) || nd.kind === _NK_CONTRACTION_LOOP ||
     nd.kind === _NK_RAGGED_LOOP || nd.kind === _NK_RECUR_GATHER ||
-    nd.kind === _NK_CACHED || (nd.kind === _NK_OP && nd.op === :fn)
+    nd.kind === _NK_CACHED
 
 const _CG_NO_KIDS = _Node[]
 
@@ -589,7 +613,7 @@ function _ac_cell_only(nd::_Node, refs)
     end
     (
         k === _NK_LITERAL || k === _NK_CONST_GATHER ||
-            (k === _NK_OP && nd.op !== :fn)
+            k === _NK_OP
     ) || return false
     return _allof(c -> _ac_cell_only(c, refs), nd.children)
 end
@@ -1286,10 +1310,8 @@ function _ac_entry_local(ctx::_CGCtx, col, en = nothing)
     return s
 end
 
-# A lane-spec `interp.*` payload reaches `_cg_emit_fn` only from a kernel-CLASS
-# merge, which no scalar spine goes through. Declining keeps that arm's address
-# arithmetic a kernel-only concern instead of a `MethodError` escaping the
-# emitter's decline protocol.
+# Box addressing is a kernel-only concern; a scalar spine declines it rather
+# than letting a `MethodError` escape the emitter's decline protocol.
 _cg_boxaddr(::_CGCtx, ::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
     throw(_CodegenDecline(:lane_spec_on_scalar_spine))
 

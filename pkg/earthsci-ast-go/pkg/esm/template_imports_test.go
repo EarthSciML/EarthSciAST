@@ -338,7 +338,7 @@ func TestTemplateImports_MetaparamStructuralFieldCollision(t *testing.T) {
 	want("r.join", r["join"], `[{"on":[["row_id","row_id"]],"syms":["p","b"]}]`)
 	want("r.expr.args", r["expr"].(map[string]any)["args"], `[22,5]`)
 	k := defRHS("k")
-	want("k.arg", k["arg"], `"p"`)
+	want("k.reduce", k["reduce"], `"max"`)
 	want("k.ranges.p", k["ranges"].(map[string]any)["p"], `[1,11]`)
 	want("k.expr.args", k["expr"].(map[string]any)["args"], `["c",7]`)
 

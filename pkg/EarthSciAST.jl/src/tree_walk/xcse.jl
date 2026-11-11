@@ -2,7 +2,7 @@
 # tree_walk/xcse.jl — part of the tree-walk evaluator.
 # Included by src/tree_walk.jl; see that file for the full layout and
 # include order. Section 4e: CROSS-KERNEL and KERNEL↔PRELUDE sharing of
-# lane-invariant fn/interp subtrees via shared scalar prelude slots
+# lane-invariant expensive subtrees via shared scalar prelude slots
 # (perf-gap-closure plan item B4).
 # ========================================================================
 #
@@ -19,7 +19,7 @@
 #     eval per RHS call instead of one per cell, but PER KERNEL, shared with
 #     nothing.
 #
-# So a FastJX-style photolysis rate `interp.linear(tbl, ax, cos_zenith(t))`
+# So a lane-invariant subtree such as a solar-zenith factor `cos(f(t))`
 # feeding the balances of K species — K array kernels — is evaluated K times per
 # RHS call (once per kernel's `_fill_invariant!`), and a K+1'th time if a scalar
 # equation or observed carries the same expression (which `_cse_count!` sees as
@@ -35,8 +35,8 @@
 #      `_AK_SCALAR` ≡ `_NK_LITERAL`) so a kernel-side `u[5]` matches a
 #      prelude-side `u[5]`;
 #   3. a value number seen by ≥ 2 kernel defs whose body is at least as
-#      expensive as an fn/interp call (the `:xcse_expensive` registry gate — a `:fn`
-#      node or a transcendental; never bare arithmetic) gets ONE new prelude
+#      expensive as a transcendental (the `:xcse_expensive` registry gate —
+#      never bare arithmetic) gets ONE new prelude
 #      slot, built by TRANSLATING the first-seen kernel def into scalar `_Node`
 #      form (its inv-slot refs become shared-slot refs, hoisted as
 #      dependencies); a value number that already matches an existing prelude
@@ -74,15 +74,10 @@
 # BIT-EXACTNESS. A shared slot's value is produced by the SAME arithmetic the
 # per-kernel defs performed — the value number is exact over every field that
 # can affect the result (literal BITS, state slot, param symbol, forcing-buffer
-# IDENTITY + offset, fn name + spec CONTENT by raw bits, op + child value
-# numbers in order) — evaluated once instead of K times. That is bitwise
-# identical for pure deterministic operations, which every candidate is: the
-# closed-function registry (esm-spec §9.2 — `interp.*`, `datetime.*`) is a
-# CLOSED set of pure, deterministic, total functions of their arguments (no
-# clock, no RNG, no I/O; registered_functions.jl), and every other spine op is
-# IEEE float arithmetic. If an impure closed function is ever admitted to the
-# registry, its name must be excluded from `_xfn_content_key` (fail-closed:
-# return `nothing` there and the node — and every ancestor — declines sharing).
+# IDENTITY + offset, op + child value numbers in order) — evaluated once
+# instead of K times. That is bitwise identical for pure deterministic
+# operations, which every candidate is: every spine op is IEEE float
+# arithmetic.
 #
 # SCOPE / FORM. The pass runs for `form = :inplace` ONLY. The `:oop` emitter
 # fills its OWN per-call prelude vector (`_make_rhs_oop`), never the
@@ -97,9 +92,8 @@
 _xcse_disabled() = !_compiler_plan_now().xcse
 
 # ---- The cost gate (plan B4 criterion (c)) ------------------------------------
-# A NEW shared slot is only minted for a def at least as expensive as an
-# fn/interp call: a closed-function call itself, or a transcendental /
-# power-class op. Bare arithmetic (`+`, `*`, `-`, `/`, comparisons, min/max) is
+# A NEW shared slot is only minted for a def at least as expensive as a
+# transcendental / power-class op. Bare arithmetic (`+`, `*`, `-`, `/`, comparisons, min/max) is
 # never worth a store + K loads on its own. Two deliberate asymmetries:
 #   * DEPENDENCIES of a hoisted def are hoisted regardless of their own cost
 #     (the def's translated body must read them from somewhere, and they are
@@ -129,12 +123,9 @@ const _XCSE_EXPENSIVE_OPS =
 # NOTE — this is emphatically NOT `_struct_sig!` (acc_merge.jl). That signature
 # DELIBERATELY ignores leaf values so cells differing only in them merge into
 # one vectorized template; keying sharing on it would merge nodes that compute
-# different values. Nor is it `_acc_vn_key` (access_kernel.jl): that key now also
-# reaches through `fn` payloads to spec CONTENT (`_acc_fn_pay_key`, isequal-
-# flavoured like the merge guard), but it numbers ONE kernel's spine in isolation —
-# this pass is the one that shares across kernels and with the scalar prelude, and
-# its bit-level content key (`_xfn_content_key`, strictly finer: raw-bits, so NaN
-# payload bits split where `isequal` merges) stays its own.
+# different values. Nor is it `_acc_vn_key` (access_kernel.jl): that numbers ONE
+# kernel's spine in isolation — this pass is the one that shares across kernels
+# and with the scalar prelude.
 
 const _XVN_NONE = 0    # "unkeyable" — never a real value number (those start at 1)
 
@@ -152,13 +143,12 @@ mutable struct _XShareCtx
     cache::_CSECache                # the scalar prelude scratch every shared read lands on
     vn::Dict{_XVNKey, Int}           # structural key → value number (the hash-cons table)
     ident_ids::IdDict{Any, Int}      # payloads keyed by IDENTITY (forcing buffers)
-    content_ids::Dict{Any, Int}      # payloads keyed by CONTENT (`fn` name + spec bits)
     expensive::Vector{Bool}         # per-vn: body contains an `_XCSE_EXPENSIVE_OPS` op
     next_pay::Int
 end
 _XShareCtx(cache::_CSECache) =
     _XShareCtx(
-    cache, Dict{_XVNKey, Int}(), IdDict{Any, Int}(), Dict{Any, Int}(),
+    cache, Dict{_XVNKey, Int}(), IdDict{Any, Int}(),
     Bool[], 0
 )
 
@@ -168,50 +158,6 @@ function _xpay_ident!(ctx::_XShareCtx, obj)::Int
     ctx.next_pay += 1
     ctx.ident_ids[obj] = ctx.next_pay
     return ctx.next_pay
-end
-
-function _xpay_content!(ctx::_XShareCtx, key)::Int
-    id = get(ctx.content_ids, key, 0)
-    id == 0 || return id
-    ctx.next_pay += 1
-    ctx.content_ids[key] = ctx.next_pay
-    return ctx.next_pay
-end
-
-# The raw bits of a Float64 vector — a bit-exact, `isequal`-flavoured stand-in
-# that distinguishes `0.0` from `-0.0` and makes two identical NaNs compare
-# equal. Tables are §9.2-capped at ≤1024 entries and this runs once per distinct
-# spec at BUILD time.
-_xf64_bits(v::AbstractVector{Float64}) = UInt64[reinterpret(UInt64, x) for x in v]
-
-# The CONTENT key of an `:fn` node's `(fname, spec)` payload, or `nothing` if
-# the payload is not one this pass understands (fail closed). Content — every
-# table/axis element by raw bits — and not the spec object's identity, because
-# `_build_interp_spec` mints a fresh spec per compile, so two `interp.linear`
-# calls over the SAME table in two kernels hold two different objects and must
-# still share; and not the name alone, because two calls over DIFFERENT tables
-# must never share. Every function admitted here is pure and deterministic
-# (see the BIT-EXACTNESS header note).
-function _xfn_content_key(payload)
-    payload isa Tuple{String, Any} || return nothing
-    fname, spec = payload
-    if spec === nothing
-        return (fname, :none)                      # boxed all-scalar path (undeclared fn)
-    elseif spec isa _FnTypedCoreSpec
-        # Typed-core rider (ess-dtcore): the spec is a pure function of the
-        # fname, so the name plus the row id is the whole content.
-        return (fname, :typed_core, spec.id)
-    elseif spec isa _InterpLinearSpec
-        return (fname, :linear, _xf64_bits(spec.table), _xf64_bits(spec.axis), spec.strict)
-    elseif spec isa _InterpBilinearSpec
-        return (
-            fname, :bilinear, [_xf64_bits(r) for r in spec.table],
-            _xf64_bits(spec.axis_x), _xf64_bits(spec.axis_y), spec.strict,
-        )
-    elseif spec isa _InterpSearchsortedSpec
-        return (fname, :searchsorted, _xf64_bits(spec.xs), spec.strict)
-    end
-    return nothing
 end
 
 # One numbering context: the container whose defs are being numbered. For a
@@ -321,10 +267,6 @@ function _xnode_vn_uncached(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx)::Int
         buf = n.payload
         buf isa Vector{Float64} || return _XVN_NONE
         pay = _xpay_ident!(ctx, buf)
-    elseif k === _NK_OP && n.op === :fn
-        ck = _xfn_content_key(n.payload)
-        ck === nothing && return _XVN_NONE
-        pay = _xpay_content!(ctx, ck)
     elseif k === _NK_LITERAL || k === _NK_STATE || k === _NK_PARAM || k === _NK_TIME ||
             k === _NK_OP || k === _NK_CONTRACTION
         # A payload on a kind that is not supposed to carry one means the IR

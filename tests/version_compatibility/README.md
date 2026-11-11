@@ -7,11 +7,14 @@ or error text that behavior should produce.
 
 ## The contract
 
-The library implements **major version 1**. Section 8 of the ESM Libraries
-Specification asks for:
+The library implements **major version 2** and still loads **major 1**: esm
+2.0.0 only removed constructs (each a `removed_op` load error naming
+`python -m earthsci_ast.migrate`), so a 1.x document that uses none of them
+loads as written and its own 1.x version gates still apply. Section 8 of the ESM
+Libraries Specification asks for:
 
-- **Reject** a file whose major version differs from the library's, in *either*
-  direction.
+- **Reject** a file whose major version the library does not implement, in
+  *either* direction (0.x and 3.x).
 - **Accept** a file with a minor version ≤ the library's, within that major
   (backward compatible).
 - **Warn** on a higher minor version but attempt to load it (forward compatible).

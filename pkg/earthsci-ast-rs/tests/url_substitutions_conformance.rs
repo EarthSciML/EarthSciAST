@@ -181,7 +181,7 @@ mod ingest {
         write(
             &tmp.join("lib/catalogue.esm"),
             &json!({
-                "esm": "1.2.0",
+                "esm": "2.0.0",
                 "metadata": {"name": "catalogue"},
                 "data_sources": {
                     "segment": {"kind": "static",
@@ -209,7 +209,7 @@ mod ingest {
         write(
             &p,
             &json!({
-                "esm": "1.2.0",
+                "esm": "2.0.0",
                 "metadata": {"name": name},
                 "models": {"Snap": {"ref": "lib/catalogue.esm", "url_substitutions": subs}}
             }),
@@ -279,7 +279,7 @@ mod ingest {
         write(
             &deep,
             &json!({
-                "esm": "1.2.0",
+                "esm": "2.0.0",
                 "metadata": {"name": "deep"},
                 "models": {"Snap": {"ref": "../lib/catalogue.esm",
                     "url_substitutions": {"snapshot": "b", "data": "../snapshots/a"}}}
@@ -310,7 +310,7 @@ mod ingest {
         write(&t.join("lib/sources.esm"), &cat);
         write(
             &t.join("lib/logic.esm"),
-            &json!({"esm": "1.2.0", "metadata": {"name": "logic"},
+            &json!({"esm": "2.0.0", "metadata": {"name": "logic"},
                     "index_sets": {"rows": {"kind": "interval", "size": 4}},
                     "models": {"Logic": logic}}),
         );
@@ -319,7 +319,7 @@ mod ingest {
             write(
                 &doc,
                 &json!({
-                    "esm": "1.2.0",
+                    "esm": "2.0.0",
                     "metadata": {"name": "run"},
                     "models": {
                         "Sources": {"ref": "lib/sources.esm",

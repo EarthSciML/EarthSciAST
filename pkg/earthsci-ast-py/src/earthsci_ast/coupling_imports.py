@@ -129,11 +129,10 @@ def _rewrite_expr(expr: Any, fn: RefFn) -> Any:
     for k in DICT_LIST_CHILD_FIELDS:
         if isinstance(node.get(k), list):
             node[k] = [_rewrite_expr(a, fn) for a in node[k]]
-    # ``axes`` and ``bindings`` are the two raw-dict MAP child fields
-    # (:data:`json_walk.DICT_MAP_CHILD_FIELDS`) — handled by name because their
-    # scopes differ: ``axes`` values are per-axis input Expressions on any node,
-    # while ``bindings`` values are free-variable-target Expressions only on an
-    # ``apply_expression_template`` node (esm-spec §10.10.2).
+    # ``bindings`` is the raw-dict MAP child field
+    # (:data:`json_walk.DICT_MAP_CHILD_FIELDS`): its values are free-variable-
+    # target Expressions only on an ``apply_expression_template`` node (esm-spec
+    # §10.10.2).
     for k in DICT_MAP_CHILD_FIELDS:
         m = node.get(k)
         if not _is_object(m):

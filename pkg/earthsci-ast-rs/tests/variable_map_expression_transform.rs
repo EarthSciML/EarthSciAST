@@ -302,7 +302,7 @@ fn factor_with_expression_transform_rejected_by_load() {
     // NAMED transforms, so an object-valued transform alongside `factor`
     // fails schema validation inside `load`.
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "factor_expr_reject", "authors": ["t"]},
         "models": {
             "Src": {"variables": {"F": {"type": "unknown"}}, "equations": [
@@ -430,7 +430,7 @@ fn flatten_expression_transform_missing_from_reference_errors() {
 #[test]
 fn lower_templates_expands_coupling_transform_against_receiving_component() {
     let mut doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "coupling_transform_templates", "authors": ["t"]},
         "models": {
             "Src": {
@@ -493,7 +493,7 @@ fn lower_templates_leaves_apply_free_coupling_transform_untouched() {
     let transform =
         json!({"op": "+", "args": [{"op": "*", "args": [2.0, "Src.F"]}, "Sink.offset"]});
     let mut doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "no_templates_coupling", "authors": ["t"]},
         "models": {
             "Src": {

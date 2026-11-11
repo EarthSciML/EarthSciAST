@@ -274,8 +274,8 @@ func LowerEnums(file *ESMFile) (*ESMFile, error) {
 // cloneForExprLowering copies exactly the containers a mapFileExprs pass writes
 // into — the models and reaction-systems maps, the equation / event / reaction
 // slices inside them, and the coupling slice — so that lowering the copy cannot
-// be observed through the original. It backs the PURE form of both lowering
-// passes (LowerEnums and lowerTableLookups).
+// be observed through the original. It backs the PURE form of the lowering
+// pass (LowerEnums).
 //
 // It is deliberately NOT a deep copy of the whole document: expression trees
 // are rewritten functionally (mapExprChildren allocates rather than mutating),

@@ -61,7 +61,7 @@ func dimensionlessLiteralFindings(file *ESMFile, scoped *scopedUnitIndex) (out [
 			Path: pointer,
 			Code: UnitFindingDimensionlessLiteral,
 			Message: fmt.Sprintf("%s: with bare numeric literals read as dimensionless (esm-spec §4.8.6), %s; "+
-				"bare literal(s): %s. This becomes an error at the next major esm version; a literal that "+
+				"bare literal(s): %s. This becomes an error in a future version of EarthSciAST; a literal that "+
 				`carries a unit is written const(value, units "...") (esm-spec §4.8.5)`,
 				pointer, found.Message, strings.Join(lits, ", ")),
 		})

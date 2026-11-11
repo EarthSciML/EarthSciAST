@@ -18,15 +18,17 @@ contract** — `CONFORMANCE_SPEC.md` §5.8, the normative form of RFC
 
 ## Why this exists
 
-`EarthSciAST` is **parallel native implementations** (Julia/GeometryOps,
-Python/S2, …) verified by a conformance suite — not one core behind FFI. The
-conservative regridder (`F_tgt[j] = (1/A_j)·Σ_i A_ij·F_src[i]`) is the place
-where the two stacks' geometry kernels meet, and they will **not** agree
-bit-for-bit on overlap areas: a great-circle clip on the sphere and a
-GeometryOps clip legitimately disagree in the sliver regime. So this gate is the
+`EarthSciAST` is **parallel native implementations** verified by a conformance
+suite — not one core behind FFI. The conservative regridder
+(`F_tgt[j] = (1/A_j)·Σ_i A_ij·F_src[i]`) is where geometry computations meet, and
+they need **not** agree bit-for-bit on overlap areas: a great-circle clip on the
+sphere and a planar clip legitimately disagree in the sliver regime. (The
+GeometryOps / S2 backends this gate was written against were removed at esm
+2.0.0; overlap areas are now the `overlap_area_planar` / `overlap_area_spherical`
+templates of `esm:std/geometry.esm`.) So this gate is the
 deliberate **inverse** of the byte-identity contracts in §5.5–§5.7. It asserts:
 
-1. **Exact (combinatorial).** The integer **bin-Skolem candidate overlap-pair
+1. **Exact (combinatorial).** The integer **bin-key candidate overlap-pair
    index set** — the broad-phase spatial join — is **byte-identical** across
    bindings (governed by the §5.5 determinism contract). This is the one hard
    anchor, and it is manifold-independent (pure integer binning).
@@ -50,7 +52,7 @@ tests/conformance/geometry/
 
 The runner is `scripts/run-geometry-conformance.py` (a self-contained sibling of
 `scripts/run-determinism-conformance.py`). It embeds the **reference
-implementation** — a pure-Python bin-Skolem broad phase plus a planar
+implementation** — a pure-Python bin-key broad phase plus a planar
 Sutherland–Hodgman clip + shoelace area — and the committed golden in
 `manifest.json` is hand-derived and checked against it.
 

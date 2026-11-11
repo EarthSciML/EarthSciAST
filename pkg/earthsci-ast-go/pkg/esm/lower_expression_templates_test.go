@@ -323,20 +323,20 @@ func scalarFieldAreaExpr(t *testing.T, v map[string]any) map[string]any {
 // scalar-field binding rule, esm-spec §9.6.1).
 func TestScalarFieldSubstitution_HappyPath(t *testing.T) {
 	doc := scalarFieldParamDoc(
-		`{"overlap_area": {
-           "params": ["K_manifold", "a", "b"],
-           "body": {"op": "polygon_intersection_area",
-                    "manifold": "K_manifold", "args": ["a", "b"]}}}`,
-		`{"K_manifold": "planar", "a": "pa", "b": "pb"}`,
-		"overlap_area",
+		`{"pointwise": {
+           "params": ["K_op", "a", "b"],
+           "body": {"op": "broadcast",
+                    "fn": "K_op", "args": ["a", "b"]}}}`,
+		`{"K_op": "*", "a": "pa", "b": "pb"}`,
+		"pointwise",
 	)
 	v := decodeFixture(t, doc)
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("expansion failed: %v", err)
 	}
 	expr := scalarFieldAreaExpr(t, v)
-	if expr["op"] != "polygon_intersection_area" || expr["manifold"] != "planar" {
-		t.Errorf("expanded expr = %v; want polygon_intersection_area with manifold 'planar'", expr)
+	if expr["op"] != "broadcast" || expr["fn"] != "*" {
+		t.Errorf("expanded expr = %v; want broadcast with fn '*'", expr)
 	}
 	args := expr["args"].([]any)
 	if len(args) != 2 || args[0] != "pa" || args[1] != "pb" {
@@ -346,12 +346,12 @@ func TestScalarFieldSubstitution_HappyPath(t *testing.T) {
 
 // A scalar-field param passed through a §9.7.3 registration-time body
 // composition (outer body applies inner, forwarding its own param into the
-// inner manifold slot) substitutes end-to-end.
+// inner `fn` slot) substitutes end-to-end.
 func TestScalarFieldSubstitution_ThreadsThroughBodyComposition(t *testing.T) {
 	doc := scalarFieldParamDoc(
 		`{"inner": {
            "params": ["m", "x", "y"],
-           "body": {"op": "polygon_intersection_area", "manifold": "m",
+           "body": {"op": "broadcast", "fn": "m",
                     "args": ["x", "y"]}},
           "outer": {
            "params": ["K", "p", "q"],
@@ -359,7 +359,7 @@ func TestScalarFieldSubstitution_ThreadsThroughBodyComposition(t *testing.T) {
              {"op": "apply_expression_template", "args": [], "name": "inner",
               "bindings": {"m": "K", "x": "p", "y": "q"}},
              2.0]}}}`,
-		`{"K": "spherical", "p": "pa", "q": "pb"}`,
+		`{"K": "max", "p": "pa", "q": "pb"}`,
 		"outer",
 	)
 	v := decodeFixture(t, doc)
@@ -371,30 +371,8 @@ func TestScalarFieldSubstitution_ThreadsThroughBodyComposition(t *testing.T) {
 		t.Fatalf("expanded expr op = %v; want *", expr["op"])
 	}
 	area := expr["args"].([]any)[0].(map[string]any)
-	if area["op"] != "polygon_intersection_area" || area["manifold"] != "spherical" {
-		t.Errorf("inner expr = %v; want polygon_intersection_area with manifold 'spherical'", area)
-	}
-}
-
-// Validators run on the expanded form (esm-spec §9.6.4): a template invocation
-// binding the manifold parameter to a non-member literal is rejected with
-// `geometry_manifold_invalid`.
-func TestScalarFieldSubstitution_InvalidManifoldRejected(t *testing.T) {
-	doc := scalarFieldParamDoc(
-		`{"overlap_area": {
-           "params": ["K_manifold", "a", "b"],
-           "body": {"op": "polygon_intersection_area",
-                    "manifold": "K_manifold", "args": ["a", "b"]}}}`,
-		`{"K_manifold": "bogus", "a": "pa", "b": "pb"}`,
-		"overlap_area",
-	)
-	v := decodeFixture(t, doc)
-	err := LowerExpressionTemplates(v)
-	if err == nil {
-		t.Fatalf("expected geometry_manifold_invalid, got nil error")
-	}
-	if !strings.Contains(err.Error(), "geometry_manifold_invalid") {
-		t.Errorf("error = %v; want code geometry_manifold_invalid", err)
+	if area["op"] != "broadcast" || area["fn"] != "max" {
+		t.Errorf("inner expr = %v; want broadcast with fn 'max'", area)
 	}
 }
 
@@ -404,10 +382,10 @@ func TestScalarFieldSubstitution_InvalidManifoldRejected(t *testing.T) {
 func TestScalarFieldSubstitution_ParamsShadowLiterals(t *testing.T) {
 	doc := scalarFieldParamDoc(
 		`{"shadowed": {
-           "params": ["planar", "x", "y"],
-           "body": {"op": "polygon_intersection_area",
-                    "manifold": "planar", "args": ["x", "y"]}}}`,
-		`{"planar": "spherical", "x": "pa", "y": "pb"}`,
+           "params": ["max", "x", "y"],
+           "body": {"op": "broadcast",
+                    "fn": "max", "args": ["x", "y"]}}}`,
+		`{"max": "min", "x": "pa", "y": "pb"}`,
 		"shadowed",
 	)
 	v := decodeFixture(t, doc)
@@ -415,14 +393,14 @@ func TestScalarFieldSubstitution_ParamsShadowLiterals(t *testing.T) {
 		t.Fatalf("expansion failed: %v", err)
 	}
 	expr := scalarFieldAreaExpr(t, v)
-	if expr["manifold"] != "spherical" {
-		t.Errorf("manifold = %v; want 'spherical' (params shadow literals)", expr["manifold"])
+	if expr["fn"] != "min" {
+		t.Errorf("fn = %v; want 'min' (params shadow literals)", expr["fn"])
 	}
 }
 
 // Drives tests/conformance/expression_templates/scalar_field_param — the
-// scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
-// (planar / spherical) — against its pinned Julia-generated expanded.esm.
+// scalar-field substitution site rule (esm-spec §9.6.1) — against its pinned
+// Julia-generated expanded.esm.
 func TestExpressionTemplates_ScalarFieldParamConformanceFixture(t *testing.T) {
 	const fixtureRel = "../../../../tests/conformance/expression_templates/scalar_field_param/fixture.esm"
 	const expandedRel = "../../../../tests/conformance/expression_templates/scalar_field_param/expanded.esm"
@@ -443,31 +421,5 @@ func TestExpressionTemplates_ScalarFieldParamConformanceFixture(t *testing.T) {
 	want := mustJSON(t, expanded["models"])
 	if got != want {
 		t.Errorf("models diverge from expanded.esm:\n got=%s\nwant=%s", got, want)
-	}
-	// The two substitution sites are the DEFINING EQUATIONS of the two observed
-	// unknowns; esm 1.0.0 has no `expression` field on a variable to read them
-	// from. The equations are keyed by their bare-variable LHS.
-	eqs, _ := v["models"].(map[string]any)["Overlap"].(map[string]any)["equations"].([]any)
-	rhsByLHS := map[string]map[string]any{}
-	for _, e := range eqs {
-		eq, ok := e.(map[string]any)
-		if !ok {
-			continue
-		}
-		lhs, ok := eq["lhs"].(string)
-		if !ok {
-			continue
-		}
-		if rhs, ok := eq["rhs"].(map[string]any); ok {
-			rhsByLHS[lhs] = rhs
-		}
-	}
-	planar, hasPlanar := rhsByLHS["area_planar"]
-	spherical, hasSpherical := rhsByLHS["area_spherical"]
-	if !hasPlanar || !hasSpherical {
-		t.Fatalf("expected defining equations for area_planar and area_spherical, got %v", rhsByLHS)
-	}
-	if planar["manifold"] != "planar" || spherical["manifold"] != "spherical" {
-		t.Errorf("manifolds = %v / %v; want planar / spherical", planar["manifold"], spherical["manifold"])
 	}
 }

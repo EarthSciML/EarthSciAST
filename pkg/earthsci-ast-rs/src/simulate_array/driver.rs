@@ -1880,8 +1880,8 @@ impl ArrayCompiled {
     /// buffer is constant (the free `simulate` never refreshes it between
     /// segments), so a rule whose transitive references reach no state
     /// variable and no `t` is CONSTANT across the whole solve: the
-    /// conservative-regrid geometry (`intersect_polygon` over the src×tgt cell
-    /// rings), the regridded terrain and its slopes, the Rothermel
+    /// conservative-regrid weights over the src×tgt cell pairs, the regridded
+    /// terrain and its slopes, the Rothermel
     /// coefficients derived from the CONST forcing. Materialize them ONCE here
     /// and seed them into every RHS eval, rather than recomputing the
     /// (expensive) regrid on every step. A model with no such observeds hoists
@@ -1914,18 +1914,12 @@ impl ArrayCompiled {
                 static_obs: ArrMap::default(),
             };
         }
-        let static_rings_cell: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
         let mut static_obs = ArrMap::default();
         let env = EvalEnv {
             state_arrays: &sa0,
             params: param_vec,
             param_names: &self.param_names,
             t: t0,
-            // The regrid's FAQ rings are produced AND consumed within this
-            // one-time static pass (its ring-consuming aggregates are themselves
-            // static), so the sink is discarded after — no varying rule reads a
-            // static ring, and each RHS eval starts from empty `derived_rings`.
-            derived_rings: &static_rings_cell,
             derived_extents: empty_derived_extents(),
             forcing: &self.forcing,
             // One-shot materialization: no CSE memo (nothing to amortize the
@@ -1947,7 +1941,6 @@ impl ArrayCompiled {
             },
             &mut RhsStats::default(),
         );
-        drop(static_rings_cell);
         SolveSetup {
             cadence,
             sa0,
@@ -2004,7 +1997,6 @@ impl ArrayCompiled {
         // a caller reading the build-time per-cell forcing (the runner's
         // forcing print) then still sees the ERA5 fields at their t=0 record.
         if !boundaries.is_empty() {
-            let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
             let mut snapshot = setup.static_obs.clone();
             materialize_observeds_pass(
                 &mut snapshot,
@@ -2015,7 +2007,6 @@ impl ArrayCompiled {
                         params: param_vec,
                         param_names: &self.param_names,
                         t: t0,
-                        derived_rings: &dr,
                         derived_extents: empty_derived_extents(),
                         forcing: &self.forcing,
                         cse: None,
@@ -2341,7 +2332,6 @@ impl ArrayCompiled {
             static_obs.clone()
         } else {
             let sa_seg = build_state_arrays(&self.var_shapes, u0);
-            let seg_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
             let mut seed = static_obs.clone();
             materialize_observeds_pass(
                 &mut seed,
@@ -2352,7 +2342,6 @@ impl ArrayCompiled {
                         params: param_vec,
                         param_names: &self.param_names,
                         t: t0,
-                        derived_rings: &seg_rings,
                         derived_extents: empty_derived_extents(),
                         forcing: &self.forcing,
                         cse: None,
@@ -2753,7 +2742,7 @@ impl ArrayCompiled {
     /// **Scalar observeds are always exposed; array-valued ones only on
     /// request.** `requested` is [`SolveOptions::output_observed`] — the
     /// caller-named subset of streaming-output-sinks RFC decision 8. An
-    /// array-valued observed (the clip ring, the const polygons, a gridded
+    /// array-valued observed (a regrid weight matrix, a const table, a gridded
     /// emissions field) is `n_cells` rows, not one, so materializing every one
     /// of them unasked would multiply the trajectory's memory by the grid size;
     /// a requested one is flattened to one row per cell named exactly like a
@@ -2822,7 +2811,6 @@ impl ArrayCompiled {
         for (name, arr) in static_obs {
             obs.insert(name.clone(), arr.clone());
         }
-        let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
 
         // ess-cse: this pass walks the SAME expanded discretization bodies the
         // RHS does (one `simpleclimate` advection observed is 45k+ operator
@@ -2847,11 +2835,10 @@ impl ArrayCompiled {
         // actually read.
         //
         // The cone is computed from `Expr::Variable` leaves, so it is only valid
-        // for rules whose dependency edges are all expressible that way: a FAQ
-        // ring producer/consumer pair and a ragged/derived contraction bound
-        // couple two rules through the `derived_rings` registry / an `offsets`
-        // factor name instead, and a `join` couples them through key COLUMN
-        // names. A model using any of those keeps the old un-pruned behaviour.
+        // for rules whose dependency edges are all expressible that way: a
+        // ragged/derived contraction bound couples two rules through an
+        // `offsets` factor name or a producer id instead, and a `join` couples
+        // them through key COLUMN names. A model using any of those keeps the old un-pruned behaviour.
         let prune = varying_rules
             .iter()
             .all(|r| !expr_blocks_output_pruning(observed_rule_body(r)));
@@ -2892,7 +2879,6 @@ impl ArrayCompiled {
                         params: param_vec,
                         param_names: &self.param_names,
                         t: time[0],
-                        derived_rings: &dr,
                         derived_extents: empty_derived_extents(),
                         forcing: &self.forcing,
                         cse: Some(&cse),
@@ -2998,7 +2984,6 @@ impl ArrayCompiled {
                 }
                 refill_state_arrays(&mut sa, &self.var_shapes, &flat);
                 obs.retain(|name, _| static_keys.contains(name));
-                dr.borrow_mut().clear();
                 materialize_observeds_pass(
                     &mut obs,
                     value_rules,
@@ -3008,7 +2993,6 @@ impl ArrayCompiled {
                             params: param_vec,
                             param_names: &self.param_names,
                             t: time[k],
-                            derived_rings: &dr,
                             derived_extents: empty_derived_extents(),
                             forcing: &self.forcing,
                             cse: Some(&cse),
@@ -3445,10 +3429,9 @@ pub(super) fn observed_rule_is_array_valued(rule: &AlgebraicRule) -> bool {
 /// Such an edge makes the observed-trajectory dependency cone unsound, so the
 /// pruning is disabled wholesale for a model containing one:
 ///
-///   * `intersect_polygon` / `polygon_intersection_area` register a FAQ overlap
-///     ring in `derived_rings` under their node id, and a `kind:"derived"`
-///     contraction bound elsewhere consumes it by that id — not by name;
-///   * a `distinct` aggregate likewise produces a data-dependent index set;
+///   * a `distinct` aggregate produces a data-dependent index set, and a
+///     `kind:"derived"` contraction bound elsewhere consumes it by its node id
+///     — not by name;
 ///   * a ragged range names its `offsets` FACTOR as a bare string;
 ///   * a `join` clause couples factors through key COLUMN names.
 ///
@@ -3459,10 +3442,7 @@ pub(super) fn expr_blocks_output_pruning(expr: &Expr) -> bool {
     let Expr::Operator(node) = expr else {
         return false;
     };
-    if matches!(
-        node.op.as_str(),
-        "intersect_polygon" | "polygon_intersection_area" | "skolem" | "rank" | "distinct"
-    ) {
+    if matches!(node.op.as_str(), "distinct") {
         return true;
     }
     if node.join.is_some() || node.distinct == Some(true) {
@@ -3701,7 +3681,7 @@ mod forcing_channel_tests {
     fn forced_model() -> ArrayCompiled {
         let json = r#"
             {
-              "esm": "1.1.0",
+              "esm": "2.0.0",
               "metadata": {
                 "name": "forcing_channel"
               },
@@ -3853,7 +3833,7 @@ mod forcing_channel_tests {
         // resolved last and only fills otherwise-unbound names.
         let json = r#"
             {
-              "esm": "1.1.0",
+              "esm": "2.0.0",
               "metadata": {
                 "name": "param_path"
               },
@@ -3954,133 +3934,6 @@ mod forcing_channel_tests {
             vec![6.0, 10.0],
             "an unrelated forcing entry must not perturb the parameter path"
         );
-    }
-
-    #[test]
-    fn fn_op_interp_linear_in_array_runtime() {
-        // A scalar observed computed via `interp.linear` (a fuel-table lookup,
-        // as in the coupled fire stack's FuelModelLookup) drives an array
-        // state: D(u[i]) = looked_up. Before the `fn` arm existed, the observed
-        // NaN-ed out and poisoned the whole RHS. At code = 2.0 the lookup is
-        // the exact knot 40.0, so both cells' derivative must be 40.0.
-        let json = r#"
-            {
-              "esm": "1.1.0",
-              "metadata": {
-                "name": "fn_array_path"
-              },
-              "models": {
-                "F": {
-                  "variables": {
-                    "u": {
-                      "type": "unknown",
-                      "shape": [
-                        "i"
-                      ]
-                    },
-                    "code": {
-                      "type": "parameter"
-                    },
-                    "looked_up": {
-                      "type": "unknown"
-                    }
-                  },
-                  "equations": [
-                    {
-                      "lhs": {
-                        "op": "faq",
-                        "args": [],
-                        "output_idx": [
-                          "i"
-                        ],
-                        "expr": {
-                          "op": "D",
-                          "args": [
-                            {
-                              "op": "index",
-                              "args": [
-                                "u",
-                                "i"
-                              ]
-                            }
-                          ],
-                          "wrt": "t"
-                        },
-                        "ranges": {
-                          "i": [
-                            1,
-                            2
-                          ]
-                        }
-                      },
-                      "rhs": {
-                        "op": "faq",
-                        "args": [],
-                        "output_idx": [
-                          "i"
-                        ],
-                        "ranges": {
-                          "i": [
-                            1,
-                            2
-                          ]
-                        },
-                        "expr": "looked_up"
-                      }
-                    },
-                    {
-                      "lhs": "looked_up",
-                      "rhs": {
-                        "op": "fn",
-                        "name": "interp.linear",
-                        "args": [
-                          {
-                            "op": "const",
-                            "value": [
-                              10.0,
-                              20.0,
-                              40.0,
-                              80.0,
-                              160.0
-                            ],
-                            "args": []
-                          },
-                          {
-                            "op": "const",
-                            "value": [
-                              0.0,
-                              1.0,
-                              2.0,
-                              3.0,
-                              4.0
-                            ],
-                            "args": []
-                          },
-                          "code"
-                        ]
-                      }
-                    }
-                  ]
-                }
-              }
-            }
-            "#;
-        let file = load_string(json).expect("parse fn model");
-        let compiled = ArrayCompiled::from_file(&file).expect("compile fn model");
-        let mut params = HashMap::new();
-        params.insert("code".to_string(), 2.0);
-        let state = vec![0.0, 0.0];
-        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
-        assert_eq!(
-            dy,
-            vec![40.0, 40.0],
-            "interp.linear(...,2.0)=40 must drive both cells (was NaN before the `fn` arm)"
-        );
-
-        // The blend (not just a knot): code = 0.5 -> 15.0.
-        params.insert("code".to_string(), 0.5);
-        let (dy2, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
-        assert_eq!(dy2, vec![15.0, 15.0], "interp.linear(...,0.5)=15");
     }
 }
 
@@ -4231,7 +4084,7 @@ mod field_ic_memo_tests {
     /// parameter `a = 0.5` the `ic` may read.
     fn with_ic(n: usize, rhs_ic: Value) -> crate::EsmFile {
         let doc = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "FieldIcMemo"},
             "index_sets": {"x": {"kind": "interval", "size": n}},
             "models": {"M": {

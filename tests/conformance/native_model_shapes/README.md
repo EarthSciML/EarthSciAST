@@ -20,12 +20,13 @@ is required for every fixture in Julia and Rust, as everywhere.
 | `makearray_nested_reduction_*` | a `makearray` whose region value is an array `faq` with a rank-0 `faq` sum nested in its body: one region, `[0, nested]` over the same box, overlapping regions (last wins) with an inner window and a rank-0 total, a gap at the 0 default, an all-`-0.0` fold, a rank-1 face value beside a rank-2 one; dynamic: two states whose right-hand sides are such makearrays, one summing a state; data alternating 1e16 magnitudes so any other fold order shows | EarthSciASTDiff's derived evaluation model, every contracted-index band (issue #547) |
 | `ifelse_mixed_boxes_*` | `ifelse` with a runtime scalar condition and branches of different shapes (scalar vs array element) | eqice `strain_term`, `hadv_term`, `w_eff` |
 | `ifelse_mixed_whole_*` | a variable declared with NO `shape`, defined by an `ifelse` whose condition is a runtime scalar and whose branches are an array over a declared index set and a scalar (`X = ifelse(lev < 2, F*2, 0.0)`); the scalar branch first; the `ifelse` inside elementwise arithmetic; dynamic: the condition flipping on a state. The variable has the array branch's shape whichever branch is taken, and each is read through a declared-shape gather `R[i] = X[i]`, since an assertion cannot put `coords` on a variable declared without a shape (esm-spec §6.6.5) | NEI2016 emission observeds (69 species) in EarthSciModels `nei2016_monthly.esm`, read by reseact (issue #664) |
+| `ifelse_gathered_scalar_*` | the same unshaped `X = ifelse(lev < 2, F / D, 0.0)`, where the array arm divides by a scalar observed defined by a gather from an inline `const` table (`D = const[31,28,31][m]`, and at `interp.linear`'s cell index, a rank-0 `faq` count); both arm orders. A gather with scalar subscripts is a scalar, so `X` takes `F`'s shape at build | NEI2016 `CO = ifelse(lev < 2, flux_CO / days_in_month …, 0.0)` as reseact builds it, `days_in_month` and `delp_dry_surface` table lookups (PR #692) |
 | `guarded_out_of_range_*` | a const subscript that would be out of range, in an `ifelse` branch no cell takes, and one a `faq` filter excludes: nothing may fault | chem_vertical_mixing `rho_w` |
 | `ic_const_gather` | `ic(u)` defined by a `faq` gather of an inline `const` (plain, reversed, through a `const` index array) | level_set_tendency_wrffire `ic(psi)` |
 | `join_on_computed_key_*` | a value-equality `join` keyed on a const-cadence computed observed (CONFORMANCE_SPEC §5.5.8) | moves F57/F58 controls, seven moves components, gates/equijoin_driven |
 | `join_on_parameter_key_*` | a value-equality `join` whose key column is computed from a scalar parameter, which the build bakes (CONFORMANCE_SPEC §5.5.8): the default and a test's `parameter_overrides` both decide the match set | moves fuel_properties, geographic_allocation, liquid_leaking_emissions (`runYearID`, `runCountyID`) |
 | `overlap_join_binning_*` | a containment-binning `faq` with an `overlap` gate, beside the same body ungated | every isrm `E_*` rule |
-| `polygon_area_in_faq_*` | `polygon_intersection_area` as a `faq` body over partial-rank ring slices, gated and ungated | isrm polygon `E_*` rules |
+| `polygon_area_in_faq_*` | the `overlap_area_planar` template as a `faq` body over partial-rank ring slices, gated and ungated | isrm polygon `E_*` rules |
 | `makearray_prefix_scan_*` | a two-region `makearray` whose first region is a prefix-scan `faq` (`filter j < k`, and a `j >= k` suffix variant) and whose second is the rank-0 column total (or 0), on a non-uniform column (#533) | EarthSciDiscretizations column_nonuniform_1d `integral_lev_nodes_cumulative_from_bottom` / `_to_top` (`integral_column_*`) |
 | `ragged_contraction_*` | a contraction over a ragged range bounded through an `offsets` factor (`k from edges_of_cell of [i]`), rows of 3, 2, 4 and 1 edges with out-of-range padding; dynamic: inline under a negation, the lowered `u_t = -div(F)` (#534) | EarthSciDiscretizations MPAS `fv_divergence_cell`, `fv_laplacian_cell` (`divergence_mpas`, `laplacian_mpas`) |
 
@@ -55,6 +56,19 @@ switched on; both must pass every assertion and native must equal the
 interpreter bit for bit. Julia is not gated on `ingest/`: reading parquet needs
 Parquet2, which is not in EarthSciAST.jl's test target, and Julia evaluates
 these shapes through the same evaluator as the fixtures above.
+
+## Data bound at run time: `runtime_data/`
+
+`runtime_data/ifelse_data_fed_unshaped.esm` is the §4.3.4 case only data
+decides: a data-fed parameter `F` declared with NO `shape`, read by unshaped
+observeds `X = ifelse(lev < 2, F * 2, 0.25)` (both arm orders). Its data is the
+three-element array `[1.5, -2.0, 0.75]`, which a document cannot carry, so it is
+not in the manifest: each binding's own test supplies it through a provider
+and checks that every `X` is a three-element array on both arms
+(`[3, -4, 1.5]` at `lev = 1`, `[0.25, 0.25, 0.25]` at `lev = 3`), native equal
+to the interpreter. Rust: `pkg/earthsci-ast-rs/tests/ifelse_shape_at_build.rs`,
+which reads it beside a state that gathers the `X`s (a state-free document is
+built by the static backend, which takes no providers).
 
 ## Python
 

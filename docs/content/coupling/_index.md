@@ -22,7 +22,7 @@ derivative, the composed system's derivative is the **sum** of theirs.
 
 ```json
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "Composed" },
   "models": {
     "Chemistry": {

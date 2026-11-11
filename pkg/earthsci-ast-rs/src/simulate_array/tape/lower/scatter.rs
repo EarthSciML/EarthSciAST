@@ -390,7 +390,7 @@ impl TapeBuilder<'_> {
                         }
                     }
                 }
-                ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_none() => {
+                ContractDim::Derived { .. } => {
                     return Ok(None);
                 }
                 _ => {}

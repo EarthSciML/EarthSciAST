@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   resolveSubsystemRefs,
   resolveSubsystemRefsSync,
@@ -6,7 +6,7 @@ import {
   RefLoadError,
 } from './ref-loading.js'
 import type { EsmFile, Model, ReactionSystem } from './types.js'
-import { loadPath } from './parse.js'
+import { SCHEMA_VERSION, loadPath } from './parse.js'
 import { validate } from './validate.js'
 import { fixturesDir } from './test-helpers.js'
 import * as fs from 'node:fs/promises'
@@ -305,32 +305,57 @@ describe('a mounted leaf runs every version gate on its own esm', () => {
     const result = validate(file)
     expect(result.structural_errors).toEqual([])
   })
-
-  it('reads the leaf version as raised by the aggregate normalization', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'esm-leaf-gate-'))
-    try {
-      const alias = fixturesDir('conformance', 'deprecated_op_alias')
-      const child = JSON.parse(
-        await fs.readFile(path.join(alias, 'ref_child_aliased.esm'), 'utf-8'),
-      )
-      // A 1.0.0 leaf spelling `aggregate` is raised to 1.1.0, so its `solver`
-      // block is in range.
-      child.esm = '1.0.0'
-      child.solver = { stiffness: 'high' }
-      await fs.writeFile(path.join(dir, 'ref_child_aliased.esm'), JSON.stringify(child))
-      await fs.copyFile(
-        path.join(alias, 'ref_parent_aliased.esm'),
-        path.join(dir, 'ref_parent_aliased.esm'),
-      )
-      const quiet = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      try {
-        expect(await codeOf(path.join(dir, 'ref_parent_aliased.esm'))).toBe(null)
-      } finally {
-        quiet.mockRestore()
-      }
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true })
+  // A 1.x document loads at 2.0.0 on its own and as a mounted leaf (user
+  // ruling); only a removed construct refuses it, by name.
+  describe('a 1.x leaf under a current-version root', () => {
+    const leaf = (rhs: unknown) => ({
+      esm: '1.3.0',
+      metadata: { name: 'leaf', authors: ['t'] },
+      models: {
+        Leaf: {
+          variables: { y: { type: 'unknown', units: '1', default: 1.0 } },
+          equations: [{ lhs: { op: 'D', args: ['y'], wrt: 't' }, rhs }],
+        },
+      },
+    })
+    const root = {
+      esm: SCHEMA_VERSION,
+      metadata: { name: 'root', authors: ['t'] },
+      models: {
+        Host: {
+          subsystems: { Kid: { ref: 'leaf.esm' } },
+          variables: { v: { type: 'unknown', units: '1', default: 0.0 } },
+          equations: [{ lhs: { op: 'D', args: ['v'], wrt: 't' }, rhs: 0 }],
+        },
+      },
     }
+    const mount = async (leafDoc: unknown): Promise<string> => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'esm-v1-leaf-'))
+      await fs.writeFile(path.join(dir, 'leaf.esm'), JSON.stringify(leafDoc))
+      await fs.writeFile(path.join(dir, 'root.esm'), JSON.stringify(root))
+      return path.join(dir, 'root.esm')
+    }
+
+    it('loads, resolves and validates', async () => {
+      const p = await mount(leaf({ op: '-', args: ['y'] }))
+      try {
+        expect(await codeOf(p)).toBe(null)
+        const file = loadPath(p)
+        await resolveSubsystemRefs(file, path.dirname(p))
+        expect(validate(file).structural_errors).toEqual([])
+      } finally {
+        await fs.rm(path.dirname(p), { recursive: true, force: true })
+      }
+    })
+
+    it('refuses the leaf by name when it uses a removed op', async () => {
+      const p = await mount(leaf({ op: 'fn', name: 'datetime.year', args: ['t'] }))
+      try {
+        expect(await codeOf(p)).toBe('removed_op')
+      } finally {
+        await fs.rm(path.dirname(p), { recursive: true, force: true })
+      }
+    })
   })
 })
 

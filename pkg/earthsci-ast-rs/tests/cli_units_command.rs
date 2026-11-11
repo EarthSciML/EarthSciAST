@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 /// declared in `c_units`, is defined by `rhs`.
 fn document(c_units: &str, rhs: Value) -> Value {
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "u", "description": "units report probe" },
         "index_sets": { "r": { "kind": "interval", "size": 1 } },
         "models": { "U": {
@@ -49,7 +49,7 @@ fn document(c_units: &str, rhs: Value) -> Value {
 /// it can surface.
 fn reaction_document(rate: Value) -> Value {
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "r", "description": "reaction rate report probe" },
         "reaction_systems": { "R": {
             "species": {

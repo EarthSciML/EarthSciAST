@@ -665,10 +665,6 @@ class FlattenedSystem:
     # Parameters carrying any OTHER update — piecewise-constant between
     # refreshes. A SUBSET of `parameters`.
     discrete_parameters: OrderedDict[str, FlattenedVariable] = field(default_factory=OrderedDict)
-    # The document-scoped `function_tables` registry (esm-spec §9.5), copied
-    # from the source document. Required to resolve a surviving `table_lookup`
-    # node without re-reading the file.
-    function_tables: dict[str, Any] = field(default_factory=dict)
     # The MERGED expression-template registry (esm-spec §9.6.4 rule 7, §10.7;
     # esm-libraries-spec §4.7.5 step 4): the union of the component registries
     # with their bodies component-scoped first, deep-equal same-name entries
@@ -921,7 +917,7 @@ def _namespace_expr(
     if isinstance(expr, ExprNode):
         # A node's loop symbols — its ``output_idx`` entries, ``ranges`` keys
         # and an ``integral``'s ``var``, whatever its ``op`` (``faq``,
-        # ``argmin`` / ``argmax`` arg-witnesses, ``integral``, …) — are local to
+        # ``integral``, …) — are local to
         # its children and must not be namespaced. They are binder NAMES, not
         # child expressions — expr_walk never visits them — so the only special
         # handling needed is adding them to ``bound`` for the children that may
@@ -933,7 +929,7 @@ def _namespace_expr(
         child_bound = bound.union(syms) if syms else bound
         # Aggregate filter / key sub-nodes reference the SAME model-local
         # variables the body does (a sliver ``filter rg_A[a,o] > rg_atol``, a
-        # ``key`` skolem), so they must be namespaced identically — otherwise the
+        # ``distinct`` ``key``), so they must be namespaced identically — otherwise the
         # area matrix / bin key a downstream aggregate reads stays bare and
         # cannot be resolved after flatten (RFC §5.3). Range symbols stay local
         # via ``child_bound``.
@@ -2723,7 +2719,7 @@ def _expr_references_var(expr: Expr, name: str) -> bool:
 
     Recursively walks every Expression-valued slot of the AST — ``args``,
     integral bounds (``lower``/``upper``), aggregate body/``filter``/``key``,
-    ``makearray`` values, and ``table_lookup`` per-axis inputs (the canonical
+    and ``makearray`` values (the canonical
     :mod:`.expr_walk` child set). ``ranges`` (integer index-range / index-set
     specs) are NOT variable references and are excluded, as are scalar
     metadata fields (``wrt``, ``dim``, ``fn``, …).
@@ -2978,13 +2974,6 @@ def _assemble_system(
     doc_index_sets = getattr(esm_file, "index_sets", None)
     if doc_index_sets:
         flat.index_sets.update(doc_index_sets)
-    # The document-scoped `function_tables` registry (esm-spec §9.5) travels with
-    # the flattened form for the same reason `index_sets` does: a surviving
-    # `table_lookup` node names a table id, and a consumer handed only the
-    # FlattenedSystem has nowhere else to resolve it (§4.7.5 step 4).
-    doc_function_tables = getattr(esm_file, "function_tables", None)
-    if doc_function_tables:
-        flat.function_tables.update(doc_function_tables)
     # Fold every component into one bag via the shared merge (same last-writer /
     # order-preserving semantics as the previous per-field loops), then copy its
     # variable tables into the FlattenedSystem's (differently named) fields.
@@ -3707,7 +3696,7 @@ def _normalize_angle_arguments(flat: FlattenedSystem) -> None:
 # Keys of an expression node whose STRING value names something other than a
 # variable, so a raw-body walk must not read them as references.
 _TEMPLATE_BODY_NON_OPERAND_KEYS = frozenset(
-    {"op", "wrt", "dim", "fn", "table", "id", "manifold", "name", "semiring", "reduce"}
+    {"op", "wrt", "dim", "fn", "id", "name", "semiring", "reduce"}
 )
 
 
@@ -4327,8 +4316,8 @@ def _lift_rhs_to_cell(
 
     Where the variable sits decides what happens when it shares NO index set
     with the grid. Under an elementwise operator it must be read per cell, so
-    that is an error. As an argument of any other op (a closed ``fn``, say,
-    whose lookup table is a shaped parameter) it is consumed whole under that
+    that is an error. As an argument of any other op (an open-tier lookup op,
+    say, whose table is a shaped parameter) it is consumed whole under that
     op's contract and stays bare. The whole-array shape ops (``reshape``,
     ``transpose``, ``concat``) have no per-cell reading at all, so any array
     operand beneath one is an error."""

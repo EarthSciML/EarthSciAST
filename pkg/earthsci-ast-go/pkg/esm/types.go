@@ -20,8 +20,7 @@ type ExprNode struct {
 	Var   *string `json:"var,omitempty"`   // integration variable name (for integral)
 	Lower any     `json:"lower,omitempty"` // lower integration bound (for integral)
 	Upper any     `json:"upper,omitempty"` // upper integration bound (for integral)
-	// Name carries the dotted module path of a closed-registry function
-	// (esm-spec §4.4 / §9.2) for `fn` op nodes — e.g. "datetime.julian_day".
+	// Name is the template name of an `apply_expression_template` op.
 	Name *string `json:"name,omitempty"`
 	// Value carries the inline literal payload of a `const` op node
 	// (esm-spec §4.2 / §9.3); `Args` MUST be empty for a const node. Any
@@ -31,19 +30,6 @@ type ExprNode struct {
 	// esm 1.2.0): a unit-bearing constant has that dimension and exact scale in
 	// dimensional analysis. Legal on no other op.
 	Units *string `json:"units,omitempty"`
-	// Table is the function_tables entry id targeted by a `table_lookup` op
-	// (esm-spec §9.5).
-	Table *string `json:"table,omitempty"`
-	// TableAxes is the per-axis input-coordinate expression map for a
-	// `table_lookup` op. Keys MUST match the names declared on the referenced
-	// FunctionTable's Axes; values are arbitrary scalar Expressions. Args MUST
-	// be empty for a table_lookup node.
-	TableAxes map[string]Expression `json:"axes,omitempty"`
-	// Output selects which output of a multi-output table to return for a
-	// `table_lookup` op. Either a non-negative integer (0-based index into the
-	// leading data dimension) or a string (an entry of the table's Outputs
-	// list). Single-output tables MAY omit this (defaults to 0).
-	Output any `json:"output,omitempty"`
 	// Attrs carries optional named scalar attributes for an OPEN rewrite-target
 	// op (esm-spec §4.2). Mirrors the fixed `dim`/`side`/`wrt` slots the core ops
 	// use, but is open: a custom op (e.g. `godunov_hamiltonian`) carries its
@@ -74,25 +60,21 @@ type ExprNode struct {
 	Perm []any `json:"perm,omitempty"`
 	// Axis is the concatenation axis of a `concat` op.
 	Axis any `json:"axis,omitempty"`
-	// Manifold is the geometry manifold of `intersect_polygon` /
-	// `polygon_intersection_area` ops.
-	Manifold *string `json:"manifold,omitempty"`
 	// OutputIdx are the surviving (free) index names of a `faq` op.
 	// `esm:"keepempty"`: esm-schema.json REQUIRES `output_idx` on every
 	// aggregate, so an allocated-but-empty list (a full reduction, `sum[] (…)`)
 	// must still serialize as `[]` rather than vanishing.
 	OutputIdx []any `json:"output_idx,omitempty" esm:"keepempty"`
-	// Expr is the reduced sub-expression of a `faq` / `argmin` / `argmax`
-	// op.
+	// Expr is the reduced sub-expression of a `faq` op.
 	Expr any `json:"expr,omitempty"`
 	// Reduce is the scalar reduction operator of a `faq` op.
 	Reduce *string `json:"reduce,omitempty"`
 	// Semiring is the optional named semiring of a `faq` op.
 	Semiring *string `json:"semiring,omitempty"`
-	// Ranges maps a bound index name to its iteration range for `faq` /
-	// `argmin` / `argmax` ops. `esm:"keepempty"`: an allocated-but-empty map (an
-	// aggregate authored with no `where` clause) serializes as `{}`, matching
-	// the other language bindings; a nil map is still omitted.
+	// Ranges maps a bound index name to its iteration range for `faq` ops.
+	// `esm:"keepempty"`: an allocated-but-empty map (an aggregate authored with
+	// no `where` clause) serializes as `{}`, matching the other language
+	// bindings; a nil map is still omitted.
 	Ranges map[string]any `json:"ranges,omitempty" esm:"keepempty"`
 	// Join is the optional list of join clauses of a `faq` op.
 	Join []any `json:"join,omitempty"`
@@ -102,13 +84,6 @@ type ExprNode struct {
 	Distinct *bool `json:"distinct,omitempty"`
 	// Key is the optional grouping key of a `faq` op.
 	Key any `json:"key,omitempty"`
-	// Label is the optional documentary relation tag of a `skolem` op
-	// (esm-spec §4.2; e.g. "edge", "bin", "pair"). Purely documentary — it does
-	// NOT affect the emitted key; the key components are the node's Args. Modeled
-	// so a label-bearing skolem node round-trips.
-	Label *string `json:"label,omitempty"`
-	// Arg is the witness index name of an `argmin` / `argmax` op.
-	Arg *string `json:"arg,omitempty"`
 	// ID is the schema-declared `id` of an ExpressionNode: the stable handle a
 	// derived index set names in `index_sets.<x>.from_faq`. Dropping it on a
 	// round-trip silently breaks that linkage, so it is modeled explicitly.
@@ -894,11 +869,6 @@ func writtenRecordsPerSample(binding *DataSourceBinding, source *DataSource) *in
 	return nil
 }
 
-// The top-level `operators` and `registered_functions` blocks (and the `call`
-// AST op that referenced them) were removed in v0.3.0 by the closed function
-// registry RFC; their Go types have been deleted in lockstep. The closed
-// registry lives in registered_functions.go.
-
 // ========================================
 // 6. Coupling
 // ========================================
@@ -1279,7 +1249,7 @@ type Coordinate struct {
 	// `standard_name` attribute.
 	StandardName *string `json:"standard_name,omitempty"`
 	// Units is the CF/UDUNITS units string. Advisory at load time (no unit
-	// checking), matching FunctionTableAxis.Units.
+	// checking).
 	Units *string `json:"units,omitempty"`
 	// Axis is the optional CF axis role ("X"|"Y"|"Z"|"T") of a 1-D monotonic
 	// dimension coordinate; auxiliary coordinates have no single axis and omit
@@ -1315,10 +1285,6 @@ type ESMFile struct {
 	// Domain is the single temporal domain shared by every component in the
 	// document. A document has at most one domain. See esm-spec §11.
 	Domain *Domain `json:"domain,omitempty"`
-	// FunctionTables holds top-level sampled function tables (esm-spec §9.5,
-	// v0.4.0). Each entry is a FunctionTable referenced by `table_lookup` AST
-	// op nodes via its key.
-	FunctionTables map[string]FunctionTable `json:"function_tables,omitempty"`
 	// IndexSets is the document-scoped registry of named index sets
 	// (RFC semiring-faq-unified-ir §5.2), keyed by name — the single,
 	// document-level declaration site for every iteration domain shared by all
@@ -1441,32 +1407,6 @@ func (esm *ESMFile) declarationOrder(path string) []string {
 		return nil
 	}
 	return esm.keyOrders[path]
-}
-
-// FunctionTableAxis is a single named axis inside a FunctionTable.
-// `Values` MUST be strictly-increasing finite floats with at least 2 entries
-// (mirrors the §9.2 interp.linear / interp.bilinear axis contract).
-type FunctionTableAxis struct {
-	Name   string    `json:"name"`
-	Units  *string   `json:"units,omitempty"`
-	Values []float64 `json:"values"`
-}
-
-// FunctionTable is a sampled function table (esm-spec §9.5). The shape of
-// Data is [len(Outputs), len(Axes[0].Values), len(Axes[1].Values), ...] when
-// Outputs is non-empty; [len(Axes[0].Values), ...] otherwise. Tables are
-// syntactic sugar over interp.linear / interp.bilinear / index — a
-// table_lookup query MUST be bit-equivalent to the equivalent inline-const
-// lookup.
-type FunctionTable struct {
-	Description   *string             `json:"description,omitempty"`
-	Axes          []FunctionTableAxis `json:"axes"`
-	Interpolation *string             `json:"interpolation,omitempty"`
-	OutOfBounds   *string             `json:"out_of_bounds,omitempty"`
-	Outputs       []string            `json:"outputs,omitempty"`
-	Data          any                 `json:"data"`
-	Shape         []int               `json:"shape,omitempty"`
-	SchemaVersion *string             `json:"schema_version,omitempty"`
 }
 
 // ========================================

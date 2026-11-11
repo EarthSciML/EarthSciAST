@@ -172,7 +172,7 @@ as one equation's RHS. There is no public JSON-to-expression entry point.
 """
 function _parse_target_expression(payload)
     doc = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => _TARGET_METADATA,
+        "esm" => "2.0.0", "metadata" => _TARGET_METADATA,
         "models" => Dict{String, Any}(
             "T" => Dict{String, Any}(
                 "variables" => Dict{String, Any}(),
@@ -201,19 +201,19 @@ function _build_target(case)
     payload = JSON3.read(JSON3.write(case["target"]), Dict{String, Any})
     if kind == "model"
         doc = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => _TARGET_METADATA,
+            "esm" => "2.0.0", "metadata" => _TARGET_METADATA,
             "models" => Dict{String, Any}("T" => payload)
         )
         return load_document(doc; base_path = _VALID_DIR).models["T"]
     elseif kind == "reaction_system"
         doc = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => _TARGET_METADATA,
+            "esm" => "2.0.0", "metadata" => _TARGET_METADATA,
             "reaction_systems" => Dict{String, Any}("T" => payload)
         )
         return load_document(doc; base_path = _VALID_DIR).reaction_systems["T"]
     elseif kind == "equation"
         doc = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => _TARGET_METADATA,
+            "esm" => "2.0.0", "metadata" => _TARGET_METADATA,
             "models" => Dict{String, Any}(
                 "T" => Dict{String, Any}(
                     "variables" => Dict{String, Any}(),
@@ -241,7 +241,7 @@ function _build_target(case)
                 for name in free_variables(_parse_target_expression(rxn["rate"]))
         )
         doc = Dict{String, Any}(
-            "esm" => "1.0.0", "metadata" => _TARGET_METADATA,
+            "esm" => "2.0.0", "metadata" => _TARGET_METADATA,
             "reaction_systems" => Dict{String, Any}(
                 "T" => Dict{String, Any}(
                     "species" => species,

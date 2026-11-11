@@ -20,7 +20,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
     _D(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
     _idx(v, i) = Dict{String, Any}("op" => "index", "args" => Any[v, i])
     scalar_esm(rhs) = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "S"),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "S"),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
                 "variables" => Dict{String, Any}("y" => Dict{String, Any}("type" => "unknown")),
@@ -40,7 +40,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
     # and is schema-invalid besides (`reactions` has minItems: 1).
     K1, KSINK, A0 = 0.3, 0.1, 2.0
     additive_couple_esm() = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "AdditiveCouple"),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "AdditiveCouple"),
         "reaction_systems" => Dict{String, Any}(
             "Chem" => Dict{String, Any}(
                 "species" => Dict{String, Any}(
@@ -155,7 +155,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
 
     @testset "array state with seed_ic! + element IC override" begin
         esm = Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict{String, Any}("name" => "A"),
+            "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "A"),
             "index_sets" => Dict{String, Any}("n" => Dict{String, Any}("kind" => "interval", "size" => 3)),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
@@ -189,7 +189,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
     @testset "seed_expression_ic! over a grid" begin
         # u[i] state on a 4-cell axis; seed u(x) = x^2 at coords [10,20,30,40].
         esm = Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict{String, Any}("name" => "G"),
+            "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "G"),
             "index_sets" => Dict{String, Any}("n" => Dict{String, Any}("kind" => "interval", "size" => 4)),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(

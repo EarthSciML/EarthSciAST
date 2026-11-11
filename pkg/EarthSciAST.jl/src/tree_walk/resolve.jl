@@ -112,11 +112,10 @@ function _resolve_one_index_set_ref(
         append!(idx_args, ASTExpr[VarExpr(p) for p in ref.of])
         return Any[1, OpExpr("index", idx_args)]
     elseif is.kind == "derived"
-        # A derived index set names its producing FAQ node via `from_faq`. Both
-        # producers are materialized at setup: an intersect_polygon clip ring
-        # (`_materialize_geometry_rings`, RFC §8.1) and a skolem/distinct
-        # value-invention producer (`materialize_value_invention`, §5.5). Either
-        # way its cardinality is the dense extent `[1, n]`. A set with no extent
+        # A derived index set names its producing FAQ node via `from_faq`: a
+        # `distinct` value-invention producer materialized at setup
+        # (`materialize_value_invention`, §5.5). Its cardinality is the dense
+        # extent `[1, n]`. A set with no extent
         # is refused rather than contracted as empty: an empty range would fold
         # to the additive identity and read as a plausible 0 (esm-spec §9.6.6).
         faq = is.from_faq
@@ -725,16 +724,20 @@ function _resolve_index_of_faq(
 
     gates = faq_expr.join_gates
     filt0 = faq_expr.filter
-    # Build-time join gates / runtime filter guards need CONCRETE output-index
-    # bindings (the join binding is seeded from `_out_idx_env`; the filter is
-    # substituted with `idx_exprs`). A symbolic output index has neither, so
-    # refuse the fast path here — the compile-once wrapper catches this and falls
-    # back to the exact per-cell expansion (concrete mode is unaffected).
-    any_symbolic && (gates !== nothing || filt0 !== nothing) &&
+    # Build-time join gates need CONCRETE output-index bindings (the join
+    # binding is seeded from `_out_idx_env`). A symbolic output index has none,
+    # so refuse the fast path here — the compile-once wrapper catches this and
+    # falls back to the exact per-cell expansion (concrete mode is unaffected).
+    # A filter is a run-time guard on each term either way: substituted with
+    # the symbolic output index it is the `ifelse(pred, term, 0̄)` the concrete
+    # expansion builds, over the same terms in the same order (`_window_iters`
+    # judges the order on the unsubstituted filter), so the taken branch of
+    # each term is the concrete term.
+    any_symbolic && gates !== nothing &&
         throw(
         TreeWalkError(
             "E_TREEWALK_COMPILE_ONCE_UNSUPPORTED",
-            "aggregate join_gates/filter are not supported on the symbolic " *
+            "aggregate join_gates are not supported on the symbolic " *
                 "compile-once path; falling back to per-cell resolution"
         )
     )
@@ -870,6 +873,12 @@ function _resolve_index_of_makearray(
                 "($(length(regions)) vs $(length(values)))"
         )
     )
+    if !isempty(bound_syms) && any(a -> _reads_bound_sym(a, bound_syms), idx_args)
+        return _resolve_index_of_makearray_symbolic(
+            regions, values, idx_args, array_var_info, var_map,
+            const_arrays, pgather, memo, bound_syms
+        )
+    end
     k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
     ndim = length(k_vals)
     result_expr::ASTExpr = NumExpr(0.0)  # default: 0 if no region covers the point
@@ -934,6 +943,111 @@ function _resolve_index_of_makearray(
         result_expr, array_var_info, var_map, const_arrays,
         pgather, memo, bound_syms
     )
+end
+
+# `index(makearray, k…)` with a subscript that reads a symbol bound on the
+# symbolic path (an output index of the compile-once form, a loop counter of
+# the whole-array contraction tier): the region is chosen at run time. The
+# selection is a chain of `ifelse`s, one per region in document order with the
+# last region outermost, so the last region covering the point wins and a
+# point no region covers reads 0, as the concrete selection above does. Each
+# branch is the value the concrete selection picks for a point in that region,
+# read at the same subscripts, so the taken branch computes what the per-cell
+# expansion computes. A region that a constant subscript misses is dropped.
+#
+# Only subscripts in exact integer arithmetic (`+`, `-`, `*` of integers and
+# symbols) and integer region bounds are taken; anything else declines as the
+# symbolic path always has.
+function _resolve_index_of_makearray_symbolic(
+        regions, values, idx_args::Vector{ASTExpr},
+        array_var_info, var_map, const_arrays,
+        pgather::AbstractDict, memo::_MaybeMemo, bound_syms::Set{String}
+    )
+    decline(why) = throw(
+        TreeWalkError(
+            "E_TREEWALK_COMPILE_ONCE_UNSUPPORTED",
+            "makearray read at a symbolic subscript: " * why
+        )
+    )
+    all(_is_exact_int_subscript, idx_args) ||
+        decline("a subscript that is not a sum, difference or product of integers and symbols")
+    ndim = length(idx_args)
+    k_const = Union{Nothing, Int}[
+        _reads_bound_sym(a, bound_syms) ? nothing :
+            _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args
+    ]
+    acc::ASTExpr = NumExpr(0.0)
+    for (region, val_expr) in zip(regions, values)
+        length(region) == ndim ||
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_MAKEARRAY_NDIM",
+                "makearray region has $(length(region)) dims but $(ndim) indices"
+            )
+        )
+        conds = ASTExpr[]
+        covers = true
+        for d in 1:ndim
+            lo, hi = region[d][1], region[d][2]
+            (lo isa Integer && hi isa Integer) || decline("a region bound that is not an integer")
+            if k_const[d] === nothing
+                push!(conds, OpExpr(">=", ASTExpr[idx_args[d], IntExpr(Int64(lo))]))
+                push!(conds, OpExpr("<=", ASTExpr[idx_args[d], IntExpr(Int64(hi))]))
+            elseif !(lo <= k_const[d] <= hi)
+                covers = false
+                break
+            end
+        end
+        covers || continue
+        branch = val_expr
+        if _is_array_producer(val_expr)
+            re = val_expr::OpExpr
+            rank = re.op == "makearray" ?
+                ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
+                length(_output_idx_strings(re))
+            sel = rank == ndim ? collect(1:ndim) :
+                [d for d in 1:ndim if region[d][1] != region[d][2]]
+            rank == length(sel) ||
+                throw(
+                TreeWalkError(
+                    "E_TREEWALK_MAKEARRAY_VALUE_RANK",
+                    "makearray region value produces a rank-$(rank) array " *
+                        "but the region has $(length(sel)) non-singleton " *
+                        "axis/axes of $(ndim) total"
+                )
+            )
+            branch = OpExpr("index", ASTExpr[re; idx_args[sel]])
+        end
+        acc = isempty(conds) ? branch :
+            OpExpr(
+                "ifelse", ASTExpr[
+                    length(conds) == 1 ? conds[1] : OpExpr("and", conds), branch, acc,
+                ]
+            )
+    end
+    return _resolve_indices(
+        acc, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+    )
+end
+
+# Whether `e` reads one of `syms` as a free name.
+function _reads_bound_sym(e::ASTExpr, syms::Set{String})::Bool
+    e isa VarExpr && return (e::VarExpr).name in syms
+    e isa OpExpr || return false
+    for a in (e::OpExpr).args
+        _reads_bound_sym(a, syms) && return true
+    end
+    return false
+end
+
+# A subscript whose value is the same in integer and in floating-point
+# arithmetic: integers and names under `+`, `-` and `*`.
+function _is_exact_int_subscript(e::ASTExpr)::Bool
+    (e isa IntExpr || e isa VarExpr) && return true
+    e isa OpExpr || return false
+    o = e::OpExpr
+    (o.op in ("+", "-", "*") && o.expr_body === nothing && o.ranges === nothing) || return false
+    return all(_is_exact_int_subscript, o.args)
 end
 
 # ── Shape ops as index maps (esm-spec §4.3.5) ────────────────────────────────
@@ -1363,7 +1477,12 @@ function _resolve_array_contraction_term(
         array_var_info, var_map, const_arrays, pgather::AbstractDict;
         # The whole-array nest's own resolve, whose emitter writes a nested
         # scalar reduction as a loop (`_NEST_SCALAR_LOOPS`).
-        nest_scalar_loops::Bool = false
+        nest_scalar_loops::Bool = false,
+        # A build memo of THIS resolve's own (never the concrete RHS build's):
+        # a sub-tree reached from several parents (a template parameter written
+        # at each of its uses) then resolves once, and the caller compiles the
+        # result with the same memo, so the emitter sees one shared node.
+        memo::_MaybeMemo = nothing
     )
     nout = length(out_names)
     all_names = vcat(out_names, contract_names)
@@ -1377,11 +1496,11 @@ function _resolve_array_contraction_term(
     bsyms = Set{String}(fresh)
     nest_scalar_loops && push!(bsyms, _NEST_SCALAR_LOOPS)
     resolved = try
-        # memo=nothing, as in `_try_build_contraction_loop`: a symbolic resolve
-        # must never share the concrete RHS-build memo.
+        # Never the concrete RHS-build memo (as in `_try_build_contraction_loop`):
+        # `memo` is `nothing` or one made for this symbolic resolve alone.
         _resolve_indices(
             subbed, array_var_info, var_map, const_arrays,
-            pgather, nothing, bsyms
+            pgather, memo, bsyms
         )
     catch err
         # errors.jl: the three resource errors are never a tier decline. The
@@ -2088,28 +2207,6 @@ function _resolve_indices_op(
         memo::_MaybeMemo = nothing,
         bound_syms::Set{String} = _EMPTY_BOUND_SYMS
     )
-    if expr.op == "polygon_intersection_area"
-        # FUSED clip+area scalar leaf (esm-spec §8.6.1). Both operands are
-        # build-time-known const polygon rings (registered in `const_arrays`), so the
-        # whole leaf const-folds to the scalar overlap area: clip under `manifold`,
-        # then shoelace / spherical-excess area over the CLOSED ring. Reuses the
-        # existing `intersect_polygon` + `polygon_area` FAQ kernels verbatim.
-        length(expr.args) == 2 || throw(
-            TreeWalkError(
-                "E_TREEWALK_GEOMETRY_ARITY",
-                "polygon_intersection_area is strictly binary; got $(length(expr.args)) operand(s)"
-            )
-        )
-        expr.manifold === nothing && throw(
-            TreeWalkError(
-                "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-                "polygon_intersection_area requires a `manifold` (planar / spherical / geodesic)"
-            )
-        )
-        a = _pia_operand_ring(expr.args[1], const_arrays)
-        b = _pia_operand_ring(expr.args[2], const_arrays)
-        return NumExpr(_polygon_intersection_area(a, b, expr.manifold))
-    end
     if (
             expr.op == "ifelse" && length(expr.args) == 3 ||
                 (expr.op == "and" || expr.op == "or") && length(expr.args) >= 2

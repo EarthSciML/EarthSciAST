@@ -73,7 +73,7 @@ function _hrs_doc(nx::Int, ny::Int)
         )
     )
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "hrs"),
         "index_sets" => Dict(
             "x" => Dict("kind" => "interval", "size" => nx),

@@ -240,9 +240,7 @@ _days_in_month(y::Int, m::Int) =
 
 # Days from 1970-01-01 to y-m-d in the proleptic Gregorian calendar (Hinnant's
 # `days_from_civil`), so no host date library decides the range or the rules.
-# Exact `Int` arithmetic, and deliberately NOT a method of the `_days_from_civil`
-# in registered_functions.jl: that one is the traceable `_cdiv` kernel behind
-# `datetime.day_of_year`, and an `Int` method here would take over its dispatch.
+# Exact `Int` arithmetic.
 function _epoch_days(y::Int, m::Int, d::Int)
     y -= m <= 2
     era = fld(y, 400)

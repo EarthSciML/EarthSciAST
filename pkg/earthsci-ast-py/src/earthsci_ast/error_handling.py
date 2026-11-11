@@ -10,12 +10,11 @@ to look -- this module:
 
 * :class:`ErrorCode` -- an ``Enum`` of the *validation* codes emitted by the
   dataclass-level validator (:mod:`earthsci_ast.validation`) as coded
-  ``ValidationError`` records, plus the esm-spec §9.5.5 ``table_lookup``
-  codes (see the comment on those members).
+  ``ValidationError`` records.
 * module-level ``str`` constants -- the *template*, *coupling*,
-  *metaparameter*, *geometry*, and *closed-function* code families raised as
-  ``ExpressionTemplateError`` / ``ClosedFunctionError`` during load-time
-  lowering, where the code travels as a bare ``code=`` string.
+  *metaparameter*, *enum*, and *load* code families raised as
+  ``ExpressionTemplateError`` / ``EnumLoweringError`` / ``ParseError`` during
+  load-time lowering, where the code travels as a bare ``code=`` string.
 
 These ``str`` constants are *defined* here and imported directly by their
 consumers (``from earthsci_ast.error_handling import <CODE>``).
@@ -36,13 +35,13 @@ The two forms are a deliberate, load-bearing distinction, not an accident:
 * ``ErrorCode`` members are emitted as coded ``ValidationError`` records by the
   validator, so an ``Enum`` gives them identity, ``repr`` and exhaustiveness for
   the validator path.
-* The template / coupling / closed-function codes are attached as bare
+* The template / coupling / enum codes are attached as bare
   ``code=`` strings on ``ExpressionTemplateError`` (the cross-binding raise
   path), where consumers pass the constant directly -- e.g.
   ``code=TEMPLATE_IMPORT_UNRESOLVED`` -- so bare ``str`` constants avoid a
   ``.value`` unwrap at every raise site and keep the five importer modules
   (``lower_expression_templates``, ``coupling_imports``,
-  ``registered_functions``, ``template_imports``, ``parse``) unchanged.
+  ``enums``, ``template_imports``, ``parse``) unchanged.
 
 Import-cycle safety
 -------------------
@@ -70,7 +69,7 @@ class ErrorCode(Enum):
 
     The values are stable machine-readable diagnostic strings shared across
     the language bindings: they are part of the cross-binding contract and must
-    never change. The template / coupling / closed-function code families live
+    never change. The template / coupling / enum / load code families live
     alongside this enum as module-level ``str`` constants (see the module
     docstring for why the two representations coexist).
     """
@@ -155,31 +154,6 @@ class ErrorCode(Enum):
     SCHEMA = "schema"
     PARSE = "parse"
     VALIDATION_ERROR = "validation_error"
-    # esm-spec §9.5.5 `table_lookup` diagnostics, raised as
-    # `lower_table_lookup.TableLookupError` when the §9.5.3 lowering runs on the
-    # way into a build. Not validator findings — a table_lookup is well-formed
-    # until it is resolved against the `function_tables` entry it names — but
-    # they live here because §9.5.5 makes the code strings cross-binding
-    # contract exactly like every other value in this module.
-    TABLE_LOOKUP_UNKNOWN_TABLE = "table_lookup_unknown_table"
-    TABLE_LOOKUP_AXIS_NAME_MISMATCH = "table_lookup_axis_name_mismatch"
-    TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE = "table_lookup_output_out_of_range"
-    TABLE_INTERPOLATION_AXES_MISMATCH = "table_interpolation_axes_mismatch"
-    TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch"
-    TABLE_AXIS_NAN = "table_axis_nan"
-    TABLE_AXIS_NON_MONOTONIC = "table_axis_non_monotonic"
-    TABLE_AXIS_TOO_SHORT = "table_axis_too_short"
-    TABLE_AXIS_DUPLICATE_NAME = "table_axis_duplicate_name"
-    TABLE_OUTPUTS_DUPLICATE_NAME = "table_outputs_duplicate_name"
-    TABLE_OUTPUTS_LENGTH_MISMATCH = "table_outputs_length_mismatch"
-    TABLE_DATA_NAN = "table_data_nan"
-    TABLE_LOOKUP_ARGS_NONEMPTY = "table_lookup_args_nonempty"
-    # §9.5.3a: `out_of_bounds: "error"` is "conformant when implemented"
-    # (§9.5.1) and this binding does not implement it, so the lookup is REFUSED
-    # where it would otherwise lower. Silently substituting clamp semantics for
-    # a declared error semantics is a wrong answer with nothing in the result to
-    # say so.
-    TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported"
     # §9.6.6: an expression ranges over a `kind: "derived"` index set whose
     # producer could not be materialized at build. Refused rather than contracted
     # as an empty range, which would read as a plausible 0.
@@ -201,7 +175,6 @@ APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY = "apply_expression_template_recursive_
 APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD = "apply_expression_template_version_too_old"
 REWRITE_RULE_NONTERMINATING = "rewrite_rule_nonterminating"
 TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "template_constraint_unknown_index_set"
-GEOMETRY_MANIFOLD_INVALID = "geometry_manifold_invalid"
 MAKEARRAY_REGION_INVERTED = "makearray_region_inverted"
 # Projection-pushdown desugar post-condition (``pushdown_rewrite.py``,
 # CONFORMANCE_SPEC §5.5.7): a rect factor the rewrite must re-point onto the
@@ -358,31 +331,28 @@ COUPLING_IMPORT_ROLE_UNBOUND = "coupling_import_role_unbound"
 COUPLING_IMPORT_BIND_NOT_A_COMPONENT = "coupling_import_bind_not_a_component"
 
 # ===========================================================================
-# Closed function registry codes (esm-spec §9.1–§9.3), raised as
-# ``ClosedFunctionError`` (or ``ValueError`` for the enum codes) from
-# ``registered_functions.py``.
+# Enum codes (esm-spec §9.3), raised as ``EnumLoweringError`` from ``enums.py``.
 # ===========================================================================
 
-UNKNOWN_CLOSED_FUNCTION = "unknown_closed_function"
-CLOSED_FUNCTION_ARITY = "closed_function_arity"
-CLOSED_FUNCTION_OVERFLOW = "closed_function_overflow"
-SEARCHSORTED_NON_MONOTONIC = "searchsorted_non_monotonic"
-SEARCHSORTED_NAN = "searchsorted_nan"
-INTERP_NON_MONOTONIC_AXIS = "interp_non_monotonic_axis"
-INTERP_AXIS_LENGTH_MISMATCH = "interp_axis_length_mismatch"
-INTERP_NAN_IN_AXIS = "interp_nan_in_axis"
-INTERP_AXIS_TOO_SHORT = "interp_axis_too_short"
-#: A table / axis argument of an ``interp.*`` call is not a literal ``const``-op
-#: array (a variable reference, a non-``const`` expression). ``interp_axis_not_const``
-#: is also ``interp.searchsorted``'s code for an ``xs`` that is not a rank-1
-#: ``const`` array, checked before ``searchsorted_nan`` (esm-spec §9.2).
-INTERP_TABLE_NOT_CONST = "interp_table_not_const"
-INTERP_AXIS_NOT_CONST = "interp_axis_not_const"
 UNKNOWN_ENUM = "unknown_enum"
 UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol"
 #: Two symbols of one enum map to the same integer (esm-spec §9.3). A defect of
 #: the `enums` block itself, reported before any `enum` op resolves.
 ENUM_DUPLICATE_VALUE = "enum_duplicate_value"
+
+
+# ===========================================================================
+# Removed constructs (esm-spec §4.2), raised as ``ParseError`` at the wire
+# boundary (``parse.prepare_document_ops``), before schema validation.
+# ===========================================================================
+
+#: A document spells an op or a field the format has removed: ``arrayop``
+#: (0.8.0), or at 2.0.0 the ``aggregate`` alias of ``faq``, the ops ``fn``,
+#: ``table_lookup``, ``skolem``, ``rank``,
+#: ``intersect_polygon``, ``polygon_intersection_area``, ``argmin``,
+#: ``argmax`` and the ``function_tables`` block. Rejected by name, so the open
+#: rewrite-target tier never admits one as ``unlowered_operator``.
+REMOVED_OP = "removed_op"
 
 
 # ===========================================================================

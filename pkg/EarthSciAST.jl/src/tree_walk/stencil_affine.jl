@@ -53,7 +53,6 @@ end
 #   * `_NK_STATE(idx ≥ 0)`     invariant fixed state slot  → `_AccStateFixed`
 #   * `_NK_PARAM_GATHER`       invariant forcing gather    → `_AccArrFixed`
 #   * `_NK_LITERAL/PARAM/TIME`  pass through (the access evaluator handles them)
-#   * `_NK_OP :fn` (interp)     op node carrying its `(fname, spec)` payload
 # Anything not modelled (a contraction node) throws `_StencilFallback` so the
 # caller runs the per-cell path — never a wrong kernel.
 #
@@ -118,10 +117,7 @@ function _lower_to_access_node(
     elseif k === _NK_CONTRACTION
         throw(_StencilFallback("affine lowering: contraction node in template"))
     elseif k === _NK_OP
-        # `payload` is carried through: `nothing` for every arithmetic op, and the
-        # concrete `(fname, spec)` tuple for an interp `:fn` — the access evaluator's
-        # `:fn` arm reads it exactly as `_eval_node_op` does. The fn's scalar query
-        # args are ordinary children, lowered like any lane subtree.
+        # `payload` is carried through (`nothing` for every arithmetic op).
         ch = _Node[
             _lower_to_access(c, lane_repl, acc, subcalls, memo)
                 for c in tmpl.children

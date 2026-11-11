@@ -2,18 +2,15 @@
 #
 # The tree-walk engine evaluates the same spine through two tiers —
 # the scalar interpreter (`_eval_acc`, access_kernel.jl) and the B1 codegen
-# tier (`_cg_emit_op`/`_cg_emit_fn`, codegen_kernel.jl) — plus the
-# xcse cost gate. Capability drift between them
-# is never an ERROR at runtime (the codegen tier declines and falls
-# back), which is exactly why it goes unnoticed: an op or fn-payload shape
+# tier (`_cg_emit_op`, codegen_kernel.jl) — plus the xcse cost gate.
+# Capability drift between them is never an ERROR at runtime (the codegen
+# tier declines and falls back), which is exactly why it goes unnoticed: an op
 # added to one tier but not the other silently forfeits the faster tier.
 #
 # This file makes that drift LOUD. Every deliberate capability gap is pinned
 # in an explicit expected-decline manifest below, each entry with its reason;
 # an unlisted gap (or a stale manifest entry) fails a test whose testset name
-# says which manifest to update. Acceptance is probed BEHAVIORALLY where a
-# tier expresses it only as an isa/if ladder, so the audit tracks the code,
-# not a parallel hand copy of it.
+# says which manifest to update.
 
 using Test
 using EarthSciAST
@@ -71,122 +68,11 @@ const ESM = EarthSciAST
         # never match a spine op; dropping them changed no behavior).
         @test ESM._XCSE_EXPENSIVE_OPS == Set{Symbol}(
             [
-                :fn,
                 :exp, :log, :log10,
                 :sin, :cos, :tan, :asin, :acos, :atan, :atan2,
                 :sinh, :cosh, :tanh, :asinh, :acosh, :atanh,
                 :sqrt, :^, :pow,
             ]
         )
-    end
-
-    # ---- fn-payload shape parity across the tiers ---------------------------
-    #
-    # Acceptance of a `:fn` node's payload is expressed as an isa-ladder in
-    # each tier, so it is probed BEHAVIORALLY: build a real `:fn` node around
-    # a real spec object and observe accept vs. the tier's decline signal
-    # (interpreter: E_TREEWALK_UNKNOWN_CLOSED_FUNCTION;
-    # codegen: _CodegenDecline). Any other exception is a probe bug and
-    # rethrows.
-
-    lin = ESM._InterpLinearSpec([0.0, 1.0], [0.0, 1.0])
-    bil = ESM._InterpBilinearSpec([[0.0, 1.0], [1.0, 2.0]], [0.0, 1.0], [0.0, 1.0])
-    ss = ESM._InterpSearchsortedSpec([0.0, 1.0])
-    # Lane-spec boxes with degenerate addressing (s=0, off=1): every midx
-    # resolves to lane 1, so the scalar probe below is well-defined.
-    linL = ESM._InterpLinearLaneSpec([lin], 0, 0, 0, 1)
-    bilL = ESM._InterpBilinearLaneSpec([bil], 0, 0, 0, 1)
-    ssL = ESM._InterpSearchsortedLaneSpec([ss], 0, 0, 0, 1)
-
-    # The payload-shape universe: everything ANY tier accepts today, keyed for
-    # the manifests below. (name, payload, nargs) — nargs matches the interp
-    # kernel's query arity so the interpreter probe really evaluates.
-    # Typed-core rider (ess-dtcore): what `_compile_fn_node` now mints for a
-    # registry-declared all-scalar fn (`datetime.*`). The `:boxed` shape stays
-    # in the universe as the fallback contract for UNDECLARED all-scalar fns —
-    # unminted by the compiler for the v0.3.0 set, but every tier must keep
-    # accepting it (it is what a declaration-less future fn compiles to).
-    tcore = ESM._fn_typed_core_spec("datetime.hour")
-    @test tcore isa ESM._FnTypedCoreSpec   # datetime.* must be declared
-    shapes = [
-        (:linear, ("interp.linear", lin), 1),
-        (:bilinear, ("interp.bilinear", bil), 2),
-        (:searchsorted, ("interp.searchsorted", ss), 1),
-        (:linear_lane, ("interp.linear", linL), 1),
-        (:bilinear_lane, ("interp.bilinear", bilL), 2),
-        (:searchsorted_lane, ("interp.searchsorted", ssL), 1),
-        (:boxed, ("datetime.hour", nothing), 1),
-        (:typed_core, ("datetime.hour", tcore), 1),
-    ]
-    ALL_SHAPES = Set(first.(shapes))
-
-    # ---- Expected-acceptance manifests (fn payloads) ------------------------
-    # The interpreter is the widest tier and MUST accept every shape — it is
-    # the fallback the codegen tier declines to. The
-    # codegen tier is the interpreter minus CG_FN_PAYLOAD_GAP.
-    INTERP_FN_ACCEPTS = ALL_SHAPES
-    # No known gaps: `_cg_emit_fn` covers the per-lane spec boxes too, so a
-    # kernel the class merge produced stays on the compiled tier. A shape
-    # added to one tier but not the others belongs here, one line per shape,
-    # with the reason — not silently dropped from ALL_SHAPES.
-    CG_FN_PAYLOAD_GAP = Set(Symbol[])
-    CG_FN_ACCEPTS = setdiff(ALL_SHAPES, CG_FN_PAYLOAD_GAP)
-
-    fnnode(payload, nargs) = ESM._mknode(
-        kind = ESM._NK_OP, op = :fn,
-        children = ESM._Node[ESM._alit(0.5) for _ in 1:nargs],
-        payload = payload
-    )
-
-    # Minimal kernel context: literal-only children never touch the descriptor
-    # table, bound, or CSE scratch, so the empty kernel is sufficient.
-    K = ESM._AccKernel(
-        ESM._contig_cells(1), ESM._alit(0.0), ESM._AccDesc[],
-        ESM._FixedBound(0), 0.0
-    )
-
-    function interp_accepts(payload, nargs)
-        nd = fnnode(payload, nargs)
-        try
-            ESM._eval_acc(nd, Float64[], (;), 0.0, 1, 0, 1, (1, 1, 1), K, Float64)
-            return true
-        catch err
-            (
-                err isa ESM.TreeWalkError &&
-                    err.code == "E_TREEWALK_UNKNOWN_CLOSED_FUNCTION"
-            ) && return false
-            rethrow()
-        end
-    end
-
-    function cg_accepts(payload, nargs)
-        ctx = ESM._CGCtx(10_000)
-        kc = ESM._CGKernCtx(K, :c, :n, :oln, 1, 1, 1, Symbol[], Symbol[])
-        nd = fnnode(payload, nargs)
-        try
-            ESM._cg_emit_fn(ctx, kc, nd)
-            return true
-        catch err
-            err isa ESM._CodegenDecline && return false
-            rethrow()
-        end
-    end
-
-    @testset "probes distinguish accept from decline" begin
-        # A fabricated payload shape no tier knows: every probe must observe
-        # a DECLINE, or the acceptance comparisons below prove nothing.
-        bogus = ("interp.linear", :not_a_spec)
-        @test !interp_accepts(bogus, 1)
-        @test !cg_accepts(bogus, 1)
-    end
-
-    @testset "interpreter fn-payload shapes (else update INTERP_FN_ACCEPTS/shapes)" begin
-        @test Set(k for (k, pl, n) in shapes if interp_accepts(pl, n)) ==
-            INTERP_FN_ACCEPTS
-    end
-
-    @testset "codegen fn-payload shapes (else update CG_FN_PAYLOAD_GAP/shapes)" begin
-        @test Set(k for (k, pl, n) in shapes if cg_accepts(pl, n)) ==
-            CG_FN_ACCEPTS
     end
 end

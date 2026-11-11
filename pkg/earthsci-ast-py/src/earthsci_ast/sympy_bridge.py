@@ -236,8 +236,8 @@ def _lambdify(
     printer settings it would have chosen for a NumPy module list are
     reproduced here: unqualified names (the generated module does
     ``from numpy import *``), inline printing, and unknown functions — the
-    ``_ess_numeric_abs`` / ``_ess_fn_<idx>`` placeholders this tier injects
-    through its module dicts — printed as bare calls.
+    ``_ess_numeric_abs`` placeholder this tier injects through its module
+    dict — printed as bare calls.
 
     The printer is built per call rather than shared: it accumulates the
     boolean CSE temporaries of the expression it is printing, which are
@@ -285,7 +285,6 @@ def _topo_sort(names: list[str], deps: dict[str, list[str]], label: str) -> list
 
 def _flat_to_sympy_rhs(
     flat: FlattenedSystem,
-    fn_callable_map: dict[str, Callable] | None = None,
 ) -> tuple[
     list[str],
     list[str],
@@ -365,9 +364,6 @@ def _flat_to_sympy_rhs(
     for name in state_names + parameter_names:
         symbol_map[name] = sp.Symbol(name)
 
-    if fn_callable_map is None:
-        fn_callable_map = {}
-
     # Classify equations: differential (D(var, t) = …) vs algebraic (var = …).
     diff_rhs: dict[str, sp.Expr] = {}
     alg_rhs: dict[str, sp.Expr] = {}
@@ -384,18 +380,10 @@ def _flat_to_sympy_rhs(
         if isinstance(lhs, ExprNode) and lhs.op == "D" and lhs.args:
             inner = lhs.args[0]
             if isinstance(inner, str) and inner in flat.state_variables:
-                diff_rhs[inner] = _expr_to_sympy(
-                    eq.rhs,
-                    dict(symbol_map),
-                    fn_callable_map,
-                )
+                diff_rhs[inner] = _expr_to_sympy(eq.rhs, dict(symbol_map))
                 continue
         if isinstance(lhs, str) and (lhs in flat.state_variables or lhs in flat.observed_variables):
-            rhs_sym = _expr_to_sympy(
-                eq.rhs,
-                dict(symbol_map),
-                fn_callable_map,
-            )
+            rhs_sym = _expr_to_sympy(eq.rhs, dict(symbol_map))
             duplicate = lhs in first_bare_rhs
             if not duplicate:
                 first_bare_rhs[lhs] = rhs_sym
@@ -553,7 +541,6 @@ def _flat_to_sympy_rhs(
 def _observed_to_sympy_value_exprs(
     flat: FlattenedSystem,
     symbol_map: dict[str, sp.Symbol],
-    fn_callable_map: dict[str, Callable] | None = None,
 ) -> tuple[list[str], dict[str, sp.Expr]]:
     """Build SymPy value expressions for ``flat.observed_variables``.
 
@@ -594,18 +581,11 @@ def _observed_to_sympy_value_exprs(
         if name not in sym_map:
             sym_map[name] = sp.Symbol(name)
 
-    if fn_callable_map is None:
-        fn_callable_map = {}
-
     obs_rhs: dict[str, sp.Expr] = {}
     for eq in flat.equations:
         lhs = eq.lhs
         if isinstance(lhs, str) and lhs in flat.observed_variables:
-            obs_rhs[lhs] = _expr_to_sympy(
-                eq.rhs,
-                dict(sym_map),
-                fn_callable_map,
-            )
+            obs_rhs[lhs] = _expr_to_sympy(eq.rhs, dict(sym_map))
 
     observed_with_eq = [n for n in observed_names_all if n in obs_rhs]
     if not observed_with_eq:
@@ -700,14 +680,6 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     if cached is not None:
         return cached
 
-    # A single fn_callable_map is shared across the differential-RHS,
-    # algebraic, and observed conversions so all three lambdify calls below
-    # see the same set of synthetic ``_ess_fn_<idx>`` placeholders. After
-    # observed substitution into rhs_exprs / algebraic_value_exprs, fn-call
-    # placeholders from observed bodies appear in the differential RHS and
-    # must resolve against the same module dict.
-    fn_callable_map: dict[str, Callable] = {}
-
     (
         state_names,
         parameter_names,
@@ -717,13 +689,9 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
         algebraic_value_exprs,  # unexpanded per-alg bodies
         sorted_alg,
         alg_deps,
-    ) = _flat_to_sympy_rhs(flat, fn_callable_map)
+    ) = _flat_to_sympy_rhs(flat)
 
-    observed_names, observed_value_exprs = _observed_to_sympy_value_exprs(
-        flat,
-        symbol_map,
-        fn_callable_map,
-    )
+    observed_names, observed_value_exprs = _observed_to_sympy_value_exprs(flat, symbol_map)
 
     # Observed-symbol substitution: replace dotted-name observed symbols in
     # rhs_exprs (and alg bodies that may reference observed variables) with
@@ -743,14 +711,7 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     param_symbols = [symbol_map[name] for name in parameter_names]
     all_args = state_symbols + param_symbols
 
-    # Merge any fn-op closures into the lambdify module list so each
-    # ``_ess_fn_<idx>`` placeholder resolves to its captured Python callable
-    # at runtime. Built fresh per compile so module dicts don't leak across
-    # FlattenedSystems (each call site is unique to its source AST).
-    if fn_callable_map:
-        modules = [fn_callable_map, *_LAMBDIFY_MODULES]
-    else:
-        modules = _LAMBDIFY_MODULES
+    modules = _LAMBDIFY_MODULES
 
     # -------------------------------------------------------------------------
     # Algebraic states — sequential lambdified closures.

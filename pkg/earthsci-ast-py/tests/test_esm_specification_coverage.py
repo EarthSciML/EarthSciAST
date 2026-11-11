@@ -80,12 +80,12 @@ class TestSection01Overview:
             with pytest.raises(ValidationError):
                 jsonschema.validate(invalid_data, schema)
 
-        # Incompatible major versions should fail at library level. 1.0.0 is a
-        # CLEAN BREAK with no deprecation path, so major version 0 is rejected
-        # exactly as an unreleased future major is.
+        # Incompatible major versions should fail at library level. The library
+        # reads majors 1 and 2; 1.0.0 is a CLEAN BREAK with no deprecation path,
+        # so major version 0 is rejected exactly as an unreleased future major is.
         from earthsci_ast.parse import UnsupportedVersionError, load_document
 
-        for version in ["0.1.0", "0.9.0", "2.0.0"]:
+        for version in ["0.1.0", "0.9.0", "3.0.0"]:
             invalid_data = {
                 "esm": version,
                 "metadata": {"name": "Test"},

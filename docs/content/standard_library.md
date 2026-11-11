@@ -1,11 +1,12 @@
 # ESS Standard Subsystem Library
 
-The `lib/` directory ships ESS subsystems authored entirely in pure AST and the
-spec's closed-function registry (`esm-spec.md` §9.2). `lib/solar.esm` is a
+The `lib/` directory ships ESS subsystems and expression templates authored
+entirely in the core expression AST (`esm-spec.md` §4). `lib/solar.esm` is a
 self-contained subsystem includable from any consumer model via subsystem
 reference (`esm-spec.md` §4.7); `lib/calendar.esm`, `lib/interp.esm`,
 `lib/relational.esm` and `lib/geometry.esm` are template libraries (below),
-imported rather than mounted:
+imported rather than mounted. What each template computes is stated normatively
+in `esm-spec.md` §9.8; this page describes how to use them.
 
 ```json
 {
@@ -59,33 +60,23 @@ Where each binding keeps its copy:
 (and the docs site's `docs/static/lib/`) from it, and `scripts/sync-lib.sh --check`
 fails CI when any copy differs from `lib/`.
 
-## Design principle: AST compositions go here, not in the registry
+## Design principle: compositions go here, not into new operators
 
-The closed function registry (`esm-spec.md` §9.1) is a deliberately narrow
-extension point. A function only belongs there when it is **not expressible in
-finite closed form using the §4.2 AST ops and the existing registry entries**
-(plus the cross-binding-semantics and no-cleaner-data-loader-path tests).
+The evaluable core of `esm-spec.md` §4.2 is closed: adding an operator is a spec
+change, and every operator is one more thing each binding, and the formal model
+of the spec, must implement. Calendar arithmetic, table interpolation, keys and
+ranks, and polygon overlap areas are all finite compositions of core
+operators, so they live here as templates rather than as operators. The
+library is authored once, validated against the spec, and shipped alongside it,
+so downstream models include it by reference instead of reimplementing (and
+silently disagreeing on) the math.
 
-The registry's v1 set — the `datetime.*` calendar decompositions and
-`interp.searchsorted` — gives authors enough primitives that the *common* Earth
-science compositions (solar geometry, tabulated lookups, calendar helpers) all
-collapse to AST. The standard library is the home for those compositions:
-authored once, validated against the spec, and shipped alongside the spec so
-that downstream models can include them by reference instead of reimplementing
-(and silently disagreeing on) the math.
-
-The bar to add a new file under `lib/` is the inverse of the bar to add a new
-registry entry:
-
-| Question | Belongs in `lib/` | Belongs in §9 registry |
-|---|---|---|
-| Expressible in pure AST + existing §9 entries? | Yes | No |
-| Bit-exact across bindings without per-binding code? | Yes (the AST is the contract) | Requires §9.4 conformance fixture |
-| New primitive for the spec? | No | Yes — RFC required |
-
-The `call` op and per-file `registered_functions` block are gone (RFC: closed
-function registry; spec v0.3.0). When reviewing changes that propose adding
-either a new `lib/` file or a new §9 entry, apply the table above.
+Bindings recover speed by recognising small algebraic shapes in the expanded
+AST (a comparison count, a sorted search), never by recognising a template by
+name, and every such rewrite gives the same bits as evaluating the expansion.
+A new `lib/` file therefore needs no binding code. A computation that genuinely
+cannot be written as a finite tree of core operators needs an RFC against
+`esm-spec.md` §4.2, not a `lib/` entry.
 
 ## Files
 
@@ -100,8 +91,8 @@ either a new `lib/` file or a new §9 entry, apply the table above.
 ### `lib/calendar.esm`
 
 A template-library file (`esm-spec.md` §9.7.1), like `lib/interp.esm`: ten
-public match-less expression templates — one per `datetime.*` closed function
-of §9.2, and `seconds_since_midnight` — each of one parameter `t`, UTC seconds
+public match-less expression templates — the nine calendar fields and
+`seconds_since_midnight` — each of one parameter `t`, UTC seconds
 since 1970-01-01T00:00:00Z (binary64, proleptic Gregorian, no leap seconds). A
 component imports the templates it needs and applies them:
 
@@ -127,7 +118,7 @@ component imports the templates it needs and applies them:
 | `day` | day of month, 1..31 |
 | `hour`, `minute`, `second` | UTC clock fields, 0..23 and 0..59 (no leap-second slot); a fractional `t` floors toward −∞ |
 | `day_of_year` | 1..366 (1 = January 1) |
-| `julian_day` | the Julian Date, by §9.2's pinned binary64 formula `(d + 2440588) + ((s − 43200) + (t − floor(t))) / 86400` |
+| `julian_day` | the Julian Date, by the binary64 formula `(d + 2440588) + ((s − 43200) + (t − floor(t))) / 86400`, in that order |
 | `is_leap_year` | 1 for a leap year, else 0 |
 | `seconds_since_midnight` | the whole second of the day, 0..86399 s, in seconds (`3600·hour + 60·minute + second`) |
 
@@ -135,8 +126,7 @@ Each body splits `t` exactly into the day number `d = floor(floor(t) / 86400)`
 and the whole second of the day `s = floor(t) − 86400·d`, then runs Howard
 Hinnant's `civil_from_days` (400-year eras counted from 0000-03-01, the day of
 the era, the year of the era, the day of the year from March 1, the month from
-`(5·doy + 2) / 153`), every integer division written `floor(a / b)`; §9.2's
-composition note gives the formulas. Each step is written once, as a helper
+`(5·doy + 2) / 153`), every integer division written `floor(a / b)`. Each step is written once, as a helper
 template named `civil_*` (`civil_day_number`, `civil_second_of_day`,
 `civil_era`, `civil_day_of_era`, `civil_year_of_era`, `civil_day_of_year`,
 `civil_month_index`, `civil_is_jan_feb`, `civil_leap`, `civil_leap_next`), and
@@ -145,14 +135,9 @@ the later steps call it by reference (§9.7.3); importing a public template with
 file is generated by `scripts/gen-lib-calendar.py`, which is the readable form
 of the algorithm (`--check` reports a stale file). **Domain:** finite `t` with `|t| < 2^52`
 s, about ±142 million years. There every intermediate is an integer below
-`2^53`, so each `floor` is exact and each template gives the same bits as the
-matching `fn` form; outside it, and for a NaN or infinite `t`, every template
-returns NaN (the `fn` forms answer up to the signed 32-bit year range and raise
-`closed_function_overflow` beyond it). Each binding's closed-function harness runs every
-scenario of `tests/closed_functions/datetime/*/expected.json` through the
-expanded templates, and `tests/closed_functions/datetime/*/template.esm`
-carries a subset as inline tests for the cross-binding `datetime_templates`
-conformance tier.
+`2^53`, so each `floor` is exact; outside it, and for a NaN or infinite `t`,
+every template returns NaN. The cross-binding `datetime_templates` conformance
+tier runs the templates against committed calendar values.
 
 The datetime fields are dimensionless numbers (`hour` is the count 14, not a
 duration of 14 hours), `julian_day` included; `seconds_since_midnight` is in
@@ -162,11 +147,6 @@ validates cleanly, one in hours is a scale mismatch, and a dimensionless one
 is a dimension mismatch. A consumer that wants a quantity multiplies by its own
 conversion factor, as `lib/solar.esm` does with `rad_per_day` and
 `min_of_clock`.
-
-The templates replace the earlier `Calendar` subsystem, which wrapped the `fn`
-calls in equations; a template library cannot declare a model. Its
-`seconds_since_midnight` helper is now a template, and its `fractional_year`
-lives on as `gamma` in `lib/solar.esm`.
 
 ### `lib/solar.esm`
 
@@ -178,15 +158,14 @@ templates of `lib/calendar.esm` for its calendar fields through the
 standard-library ref `esm:std/calendar.esm`, so a mount of `lib/solar.esm`
 resolves that import wherever the mounting document lives (§4.7). Every
 constant is a binary64 literal, so the result is bit-defined relative to the
-calendar templates (which give the §9.2 `datetime.*` values) and the §4.2
-elementary-function ops; for `|t_utc| ≥ 2^52` s the outputs are NaN. Cross-binding tolerance is ≤ 10 ulp,
+calendar templates and the §4.2 elementary-function ops; for `|t_utc| ≥ 2^52` s the outputs are NaN. Cross-binding tolerance is ≤ 10 ulp,
 within the algorithm's intrinsic ~2 arcminute accuracy.
 
 To use:
 
 ```json
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "models": {
     "MyChem": {
       "subsystems": {
@@ -236,32 +215,30 @@ mounted as a subsystem.
 }
 ```
 
-The three templates are the pure-AST definitions of the `interp.*` closed
-functions of §9.2, written with `faq` comparison counts, the `index` op and
-arithmetic. Each axis length is an explicit integer parameter, used as the
-upper bound of a `faq` dense `ranges` entry (a substitution site, §9.6.1):
+The three templates are 1-D search, 1-D linear and 2-D bilinear interpolation,
+written with `faq` comparison counts, the `index` op and arithmetic. Each axis
+length is an explicit integer parameter, used as the upper bound of a `faq`
+dense `ranges` entry (a substitution site, §9.6.1):
 
 | Template | Parameters | Value |
 |---|---|---|
 | `searchsorted` | `x`, `xs`, `n` | `1 + Σ_{k=1..n} ifelse(xs[k] ≥ x, 0, 1)`: the first index with `xs[k] ≥ x`; `n + 1` when there is none, or `x` is NaN; `1` for `n = 0` |
 | `linear` | `table`, `axis`, `x`, `n` | flat outside the axis; inside, `i = min(max(Σ_k ifelse(axis[k] ≤ x, 1, 0), 1), n − 1)` and `table[i] + w·(table[i+1] − table[i])` with `w = (x − axis[i]) / (axis[i+1] − axis[i])` |
-| `bilinear` | `table`, `axis_x`, `axis_y`, `x`, `y`, `nx`, `ny` | each query clamped to its axis, the cell on each axis found by the same count, then the two x-blends and the y-blend in §9.2's order |
+| `bilinear` | `table`, `axis_x`, `axis_y`, `x`, `y`, `nx`, `ny` | each query clamped to its axis, the cell on each axis found by the same count, then the two x-blends and the y-blend |
 
-The evaluation order of each body is the one §9.2 pins for the matching
-function, including the interior-knot convention of `bilinear` (a clamped
-query on interior knot `k` selects cell `k`, so the weight is `0`). On every
-success scenario of `tests/closed_functions/interp/*/expected.json` the
-expanded template gives the same bits as the `fn` form, NaN queries included;
-the Julia harness (`test/closed_functions_test.jl`) checks this scenario by
-scenario, and `tests/closed_functions/interp/*/template.esm` carries a subset
-as inline tests for the cross-binding `interp_templates` conformance tier.
-The templates do not repeat the load-time axis checks of the `fn` form (a
-non-monotonic or NaN axis is not rejected); the caller supplies a valid axis.
+A clamped query on an interior knot `k` of `bilinear` selects cell `k`, so its
+weight is `0`. The templates do not check their axes: a non-monotonic or NaN
+axis is not rejected, so the caller supplies a valid one. The cross-binding
+`interp_templates` conformance tier pins the values, NaN queries included.
+
+A sampled table (the `function_tables` block of esm 1.x) is a `linear` or
+`bilinear` call over the table's data and axes; a multi-output table becomes one
+call per output.
 
 Each template takes one query, but `x` and `y` may be arrays: an array bound to
 a scalar-role parameter (one the body reads only as a value, never whole) makes
-the application elementwise (esm-spec §9.6.11), one lookup per element, bit for bit the
-`interp.*` result at that element. This holds when the array arrives by
+the application elementwise (esm-spec §9.6.11), one lookup per element, bit for
+bit the scalar call at that element. This holds when the array arrives by
 coupling too: a component that declares `lev` a scalar and computes
 `linear(table, axis, lev, n)` gets one lookup per grid cell when a
 `variable_map` binds a gridded `lev` to it. The `template_array_args`
@@ -269,16 +246,14 @@ conformance tier pins these cases.
 
 ### `lib/relational.esm`
 
-`lib/relational.esm` is a template-library file like `lib/interp.esm`. Its two
-templates, `argmin(f, n)` and `argmax(f, n)`, are the pure-AST definitions of
-the `argmin` / `argmax` arg-witness reducers (`esm-spec.md` §4.2): the 1-based
+`lib/relational.esm` is a template-library file like `lib/interp.esm`. Its
+arg-witness templates `argmin(f, n)` and `argmax(f, n)` give the 1-based
 index `k` in `1..n` at which the candidate value `f` is smallest (largest).
 `f` is an expression over the template's loop symbol — `k_argmin_1` for
 `argmin`, `k_argmax_1` for `argmax` — which the template binds to each
 candidate index in turn, so the caller writes the candidate's value with that
 symbol as its index. `n`, the number of candidates, is an integer used as a
-`faq` `ranges` bound. The nearest-generator assignment of
-`tests/valid/faq/nearest_generator_argmin.esm`, as a template call:
+`faq` `ranges` bound. A nearest-generator assignment:
 
 ```json
 {
@@ -321,22 +296,17 @@ Each body is two `faq` reductions over `k` in `[1, n]`:
 So equal candidates resolve to the smallest index (RFC semiring-faq-unified-ir
 §5.7 rule 6, `-0.0` and `0.0` being equal), and because a NaN term makes a
 `min` / `max` reduction NaN, a NaN candidate wins at its first occurrence.
-`n = 0` gives `+Inf`, the identity of the `min` reduction, where the op refuses
-an empty candidate set. The result is a float holding an integer, usable as an
+`n = 0` gives `+Inf`, the identity of the `min` reduction. The result is a float holding an integer, usable as an
 `index` subscript. `f` appears twice in the expansion (in `m` and in the
 selection), and `m` is nested inside the selecting reduction; it does not
 depend on that reduction's `k`, so an evaluator may compute it once per call.
-On every scenario of `tests/conformance/relational_templates/scenarios.json`
-the template returns the op's index, except where a NaN candidate follows the
-first one: the op skips such a candidate, the template picks it. The
-`relational_templates` conformance tier runs those scenarios and the
-nearest-generator document rewritten with the template; a gated arg-witness
-is written with `argmin_where` (below).
+The `relational_templates` conformance tier pins the values; a gated
+arg-witness is written with `argmin_where` (below).
 
 #### Gated arg-witnesses, keys and ranks
 
-The other templates replace the `skolem` and `rank` value-invention ops and the
-`join` of an arg-witness (the ops themselves are unchanged):
+The other templates give composite keys for value invention, ranks among a
+set's members, and arg-witnesses gated by a predicate:
 
 | Template | Value |
 |---|---|
@@ -346,12 +316,11 @@ The other templates replace the `skolem` and `rank` value-invention ops and the
 | `rank_of(x, members, n)` | `1 + Σ_k ifelse(members[k] ≥ x, 0, 1)`: the 1-based rank of the key `x` among `n` ascending members, the same count as `searchsorted`. |
 | `rank_of_set(x, members, S)` | the same count with the candidate range `{"from": S}` (a template parameter may name an index set there, esm-spec §9.6.1): the rank of `x` among the members of the index set `S`, read as `members[k]` for `k` in `S`. For a derived set, `members` is its `member_factor` array, so the set's size need not be known when the document is written. |
 
-How a document uses them in place of the ops:
+How a document uses them:
 
 - **A `distinct` key** is a scalar integer expression: `edge_key(...)` for an
   undirected edge, `pair_key(...)` for a directed pair (nest two calls for
-  three components), or the bare component for a one-component key. The
-  skolem `label` has no counterpart; its meaning goes in a `_comment`.
+  three components), or the bare component for a one-component key.
 - **A key read only as a `join.on` column** (a bin key) is written as one
   integer column per component, `src_bx[i] = floor(src_lon[i] / dx)` and
   `src_by[i] = floor(src_lat[i] / dy)`, joined with one `on` pair per
@@ -359,24 +328,20 @@ How a document uses them in place of the ops:
 - **The rank of a set's own member** is its loop index: `edge_dense_id[e] = e`
   over `e ∈ edges`. `rank_of_set` looks up the rank of any other key among a
   derived set's members.
-- **A gated arg-witness** (`argmin` with a `join`) becomes `argmin_where` whose
-  predicate compares the per-component columns at the point and the candidate.
+- **A gated arg-witness** is `argmin_where` whose predicate compares the
+  per-component columns at the point and the candidate.
 
 The value-invention layer of each binding accepts a `distinct` `key` that is
 any integer-valued expression, and a `join.on` column that is a plain observed
 over constant factors. A NaN key or column value (a key template's
 out-of-range component) is refused with `value_invention_key_out_of_range`,
-naming the column. `tests/conformance/relational_templates/rewrites/` holds the
-template form of every fixture that uses `skolem`, `rank` or a gated `argmin`,
-and each binding's harness checks it against the op form: the same members,
-the same dense IDs (the op's 0-based rank plus one), the same assignment
-buffers and the same right-hand side. Both forms are also checked against
-committed golden values computed from the op form
-(`rewrites/golden/<id>.json`, regenerated by `rewrites/goldens.py`).
+naming the column. The documents under
+`tests/conformance/relational_templates/rewrites/` use these forms and are
+checked against committed golden members, dense IDs, assignment buffers and
+right-hand sides.
 
-`rank_of_set` ranks against a derived set by name; in
-`tests/conformance/relational_templates/rewrites/skolem_distinct_rank.esm` each
-face edge's rank among the derived `edges` set is
+`rank_of_set` ranks against a derived set by name: each face edge's rank among
+a derived `edges` set is
 `rank_of_set(edge_key(edge_lo, edge_hi, 1, 6), edge_members, "edges")`, with
 `edge_members` the set's `member_factor`. A name that is not a declared index
 set is `undefined_index_set`. `argmin_where` / `argmax_where` keep `[1, n]`:
@@ -386,15 +351,14 @@ their "none passed" answer `n + 1` needs the count.
 
 A template-library file like `lib/interp.esm`: three match-less expression
 templates giving the overlap area of two convex polygons in the core AST, the
-quantity the `polygon_intersection_area` geometry leaf returns (`esm-spec.md`
-§8.6.1). Each polygon operand is one cell of a ring stack: the stack, the cell
+weight of a conservative regrid (`esm-spec.md` §8.6.1). Each polygon operand is one cell of a ring stack: the stack, the cell
 index (usually the loop symbol of the enclosing `faq` over candidate pairs) and
 the number of vertex slots (an integer, used as a `faq` `ranges` bound).
 
 | Template | Parameters | Value |
 |---|---|---|
-| `overlap_area_planar` | `ring_a`, `cell_a`, `nv_a`, `ring_b`, `cell_b`, `nv_b` | overlap area of cell `cell_a` of the `[cells, nv_a, 2]` stack `ring_a` and cell `cell_b` of `ring_b`, straight edges, in squared coordinate units: the leaf with `manifold: "planar"` |
-| `overlap_area_spherical` | the same, over `[cells, nv, 3]` stacks of unit vectors | the same with great-circle edges on the unit sphere, in steradians: the leaf with `manifold: "spherical"` or `"geodesic"` |
+| `overlap_area_planar` | `ring_a`, `cell_a`, `nv_a`, `ring_b`, `cell_b`, `nv_b` | overlap area of cell `cell_a` of the `[cells, nv_a, 2]` stack `ring_a` and cell `cell_b` of `ring_b`, straight edges, in squared coordinate units |
+| `overlap_area_spherical` | the same, over `[cells, nv, 3]` stacks of unit vectors | the same with great-circle edges on the unit sphere, in steradians |
 | `lonlat_to_unit` | `ring`, `cell`, `vert`, `comp` | component `comp` (1, 2, 3) of the unit vector `(cos φ cos λ, cos φ sin λ, sin φ)` of vertex `vert` of a `[cells, verts, 2]` lon-lat stack in degrees |
 
 A conservative-regridding narrow phase over the planar manifold:
@@ -453,8 +417,7 @@ interior is the side of less than a hemisphere, as with S2).
   rectangular-storage padding of a mixed-valence mesh) makes a zero-length edge,
   which contributes exactly zero and imposes no half-plane constraint. No
   deduplication step is needed, and a padded ring gives the bits of its
-  unpadded form. The leaf deduplicates with the `np.allclose` tolerance
-  instead; the two differ only on distinct vertices closer than that tolerance.
+  unpadded form. Distinct vertices are never merged, however close.
 - **Shared edges and vertices.** A half-plane test counts a point as on the
   line when its signed value `g` satisfies
   `|g| ≤ 1e-12 · L1(b − a) · (L1(p) + L1(q) + L1(a))` on the plane (edge
@@ -467,39 +430,34 @@ interior is the side of less than a hemisphere, as with S2).
   template gives the exact area, and touching cells give `0`. Edges that are
   genuinely distinct but closer than these tolerances are treated as collinear.
 - **Contract.** Convex cells (CONFORMANCE_SPEC §5.8's conservative-regridding
-  cells), each spherical cell within a hemisphere. Three behaviours differ from
-  the leaf by design: a ring of no extent (every vertex on one line or point, a
-  zero fan sum) gives `0` where the leaf raises `E_TREEWALK_GEOMETRY_CLIP`;
-  non-convex input is outside the contract and is not rejected; and distinct
-  vertices closer than the leaf's `np.allclose` point-equality tolerance are not
-  merged (only exactly repeated vertices are padding).
+  cells), each spherical cell within a hemisphere. A ring of no extent (every
+  vertex on one line or point, a zero fan sum) gives `0`; non-convex input is
+  outside the contract and is not rejected.
 
 `tests/conformance/geometry_templates/pairs.json` (generated by
 `scripts/gen-geometry-template-pairs.py`) lists the cell pairs every polygon and
 regridding document in `tests/` clips, with an exact (planar) or 40-digit
-(spherical) reference area; the Julia, Python and Rust test suites run each pair
-through the template and the leaf and hold them to the CONFORMANCE_SPEC §5.8.2
-tolerance, the planar same-grid pairs exactly, and the padded copy of every pair
-to the same bits. The template is often closer to the reference than the leaf:
-taking contributions about a vertex of the cell rather than the coordinate
-origin avoids the cancellation of a shoelace sum far from the origin.
+(spherical) reference area; the bindings' test suites hold the template to the
+CONFORMANCE_SPEC §5.8.2 tolerance against that reference, the planar same-grid
+pairs exactly, and the padded copy of every pair to the same bits. Taking
+contributions about a vertex of the cell rather than the coordinate origin
+avoids the cancellation of a shoelace sum far from the origin.
 
 ## Validation and conformance
 
 Each `lib/*.esm` is a schema-valid file under `esm-schema.json`, swept by every
 binding's validation corpus. `tests/valid/lib_solar_subsystem_inclusion.esm`
-mounts `lib/solar.esm` (and through it imports `lib/calendar.esm`), and the
-`template.esm` documents under `tests/closed_functions/` apply the calendar
-and interpolation templates. Cross-binding numerical agreement is enforced by the
-per-function conformance fixtures under `tests/closed_functions/` (see
-`esm-spec.md` §9.4); the lib subsystems are AST compositions of those
-primitives and inherit their tolerance contracts.
+mounts `lib/solar.esm` (and through it imports `lib/calendar.esm`).
+Cross-binding numerical agreement is pinned by the template conformance tiers
+(`datetime_templates`, `interp_templates`, `relational_templates`,
+`geometry_templates`; see CONFORMANCE_SPEC.md). A lib file is an AST
+composition, so it needs no per-binding code to conform.
 
 ## Adding a new lib subsystem
 
 1. Identify a composition that recurs across model components (e.g.,
    atmospheric standard-pressure profile, saturation vapor pressure) and is
-   expressible in AST + the §9.2 registry.
+   expressible as a finite tree of the §4.2 core operators.
 2. Author `lib/<name>.esm` as a single self-contained subsystem, with
    parameter inputs and unknown outputs defined by equations. A ref to another
    library file is written relative (`calendar.esm`) or as `esm:std/calendar.esm`.
@@ -508,6 +466,5 @@ primitives and inherit their tolerance contracts.
    composition's algebraic form.
 4. Add a fixture under `tests/valid/lib_<name>_inclusion.esm` exercising
    subsystem inclusion.
-5. If the composition turns out to require a primitive not yet in §9.2, file
-   an RFC against `esm-spec.md` §9 *before* adding the lib entry — the lib is
-   not a back door for closed-registry growth.
+5. If the composition turns out to need an operator the core does not have,
+   file an RFC against `esm-spec.md` §4.2 *before* adding the lib entry.

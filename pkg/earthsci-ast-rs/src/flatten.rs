@@ -634,12 +634,6 @@ pub struct FlattenedSystem {
     /// file that declares no index sets, so the ordinary ODE path is unaffected.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub index_sets: IndexMap<String, IndexSet>,
-    /// The document-scoped `function_tables` registry (esm-spec §9.5), copied
-    /// from the source [`EsmFile`] in document order. Carried so a surviving
-    /// `table_lookup` node resolves without re-reading the source document
-    /// (esm-libraries-spec §4.7.5 step 4).
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub function_tables: IndexMap<String, crate::types::FunctionTable>,
     /// The MERGED expression-template registry (esm-spec §9.6.4 rule 7, §10.7;
     /// esm-libraries-spec §4.7.5 step 4): the union of the per-component
     /// registries with each model's carried bodies component-SCOPED first,
@@ -688,62 +682,6 @@ impl FlattenedSystem {
             view.entry(name.clone()).or_insert_with(|| var.clone());
         }
         crate::classification::Classification::from_parts(&view, &self.equations).system_kind
-    }
-
-    /// Rewrite every equation's right-hand side with `f` INSIDE each of its
-    /// contributions, origins unchanged, and rebuild the right-hand side from
-    /// the rewritten list (esm-libraries-spec §4.7.5: a pass over flattened
-    /// equations never moves a term across a contribution boundary).
-    /// Left-hand sides are not touched.
-    ///
-    /// The system may have been edited by its caller since [`flatten`], so the
-    /// list is not trusted to match: an equation whose list no longer sums to
-    /// its right-hand side (or `faq` body) has the list collapsed to ONE
-    /// contribution — the current right-hand side, with the union of the
-    /// list's origins — before `f` runs, so the caller's edit survives. An
-    /// equation with no list (a system assembled by hand) is one contribution
-    /// with no origins. A non-empty list whose length differs from
-    /// [`Self::equations`]' is refused rather than paired up by position.
-    pub(crate) fn map_rhs_per_contribution(
-        &mut self,
-        mut f: impl FnMut(&Expr) -> Expr,
-    ) -> Result<(), FlattenError> {
-        let n = self.equations.len();
-        for (field, entries) in [
-            ("equation_contributions", self.equation_contributions.len()),
-            ("equation_lifted", self.equation_lifted.len()),
-        ] {
-            if entries != 0 && entries != n {
-                return Err(FlattenError::ContributionsOutOfStep {
-                    field,
-                    entries,
-                    equations: n,
-                });
-            }
-        }
-        if self.equation_contributions.is_empty() {
-            self.equation_contributions = vec![Vec::new(); n];
-        }
-        for (i, eq) in self.equations.iter_mut().enumerate() {
-            let lifted = self.equation_lifted.get(i).copied().unwrap_or(false);
-            let wrapper = lift_wrapper(&eq.rhs, lifted).cloned();
-            let body = wrapper
-                .as_ref()
-                .and_then(|node| node.expr.as_deref())
-                .unwrap_or(&eq.rhs);
-            let contributions = &mut self.equation_contributions[i];
-            if contributions.is_empty() || fold_contributions(contributions) != *body {
-                *contributions = vec![Contribution {
-                    expr: body.clone(),
-                    origins: union_origins(contributions, None),
-                }];
-            }
-            for c in contributions.iter_mut() {
-                c.expr = f(&c.expr);
-            }
-            eq.rhs = rebuild_body(wrapper, fold_contributions(contributions));
-        }
-        Ok(())
     }
 }
 
@@ -1150,11 +1088,6 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         discrete_events,
         domain: file.domain.clone(),
         index_sets,
-        function_tables: file
-            .function_tables
-            .as_ref()
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default(),
         template_registry,
         loader_fields,
         lifted_shapes,
@@ -1371,9 +1304,21 @@ fn normalize_angle_arguments(flat: &mut AssembledParts) {
 /// (esm-spec §4.3.4), by variable name. See [`conditional_shape_promotions`].
 pub(crate) type BuiltShapes = HashMap<String, Vec<String>>;
 
+/// What [`conditional_shape_promotions`] decides.
+#[derive(Debug, Default)]
+pub(crate) struct ConditionalShapes {
+    /// The variables whose shape the declarations decide: their index sets.
+    pub(crate) built: BuiltShapes,
+    /// The variables whose only arrays are unshaped data-fed parameters: the
+    /// names of those parameters (sorted). Such a variable takes the one shape
+    /// their data has, which the build reads where the data is bound
+    /// ([`data_fill_shape`]).
+    pub(crate) data_shaped: HashMap<String, Vec<String>>,
+}
+
 /// Give a shape to every variable declared WITHOUT one whose value is an array
 /// on one arm of an `ifelse` and a scalar on the other (esm-spec §4.3.4): the
-/// index sets of its array arm. `X = ifelse(lev < 2, F * 2, 0.0)` with
+/// shape of its array arm. `X = ifelse(lev < 2, F * 2, 0.0)` with
 /// `F: ["cell"]` is a `cell`-shaped array of zeros when `lev >= 2`, not a
 /// scalar `0.0` (issue #664, the NEI2016 emission observeds).
 ///
@@ -1397,19 +1342,29 @@ pub(crate) type BuiltShapes = HashMap<String, Vec<String>>;
 /// which cannot hold an array arm, so it is left as it is (and a binding
 /// refuses the mixed `ifelse` on it).
 ///
-/// The inference reads declarations and elementwise structure only, and gives
-/// up — leaving the variable unshaped — wherever that cannot decide the shape:
-/// a reduction, gather or shape op on the value path, operands over different
-/// index sets, or a name whose rank is not known statically (see
-/// [`ConditionalShapes::var_axes`]). Each inferred shape feeds the inference
-/// of the variables that read it, so a chain `Y = ifelse(c, X, 0.0)` over a
-/// promoted `X` is promoted too. A body with no `ifelse` on its value path is
-/// left alone: it is an array or a scalar whichever way it is evaluated.
+/// The inference reads declarations and elementwise structure only. A gather
+/// whose subscripts are all scalars, and a `faq` with no output indices, are
+/// scalars whatever they read, so a table lookup (`days_in_month =
+/// index(const [...], m)`, an `interp.linear` expansion) is a scalar operand.
+/// It gives up — leaving the variable unshaped — wherever that cannot decide
+/// the shape: any other op that consumes an operand whole on the value path,
+/// operands over different index sets, or a name whose rank is not known
+/// statically (see [`ShapeInference::var_spans`]). Each inferred shape feeds
+/// the inference of the variables that read it, so a chain
+/// `Y = ifelse(c, X, 0.0)` over a promoted `X` is promoted too. A body with no
+/// `ifelse` on its value path is left alone: it is an array or a scalar
+/// whichever way it is evaluated.
+///
+/// A data-fed parameter declared without a shape has the shape of its data,
+/// which no declaration fixes. A variable whose value path reaches a declared
+/// array is decided by that array (data of another shape could not meet it
+/// elementwise); one whose only arrays are such parameters is returned in
+/// [`ConditionalShapes::data_shaped`], to be decided where the data is bound.
 pub(crate) fn conditional_shape_promotions<'a>(
     variable: &dyn Fn(&str) -> Option<&'a ModelVariable>,
     equations: impl Iterator<Item = &'a Equation> + Clone,
     index_sets: &HashMap<String, IndexSet>,
-) -> BuiltShapes {
+) -> ConditionalShapes {
     let mut defs: HashMap<&'a str, &'a Expr> = HashMap::new();
     let mut ode_states: HashSet<&'a str> = HashSet::new();
     for eq in equations.clone() {
@@ -1425,14 +1380,14 @@ pub(crate) fn conditional_shape_promotions<'a>(
             _ => {}
         }
     }
-    let mut inference = ConditionalShapes {
+    let mut inference = ShapeInference {
         variable,
         defs: &defs,
         ode_states: &ode_states,
         memo: HashMap::new(),
         depth: 0,
     };
-    let mut out = BuiltShapes::new();
+    let mut out = ConditionalShapes::default();
     for eq in equations {
         let Expr::Variable(name) = &eq.lhs else {
             continue;
@@ -1443,95 +1398,160 @@ pub(crate) fn conditional_shape_promotions<'a>(
         if var.shape.is_some() || var.var_type == VariableType::Parameter {
             continue;
         }
-        if let Some((axes, true)) = inference.body_axes(&eq.rhs)
-            && !axes.is_empty()
-            && crate::simulate_array::resolve_declared_shape(&axes, index_sets).is_some()
-        {
-            out.insert(name.clone(), axes);
+        let Some((spans, true)) = inference.body_spans(&eq.rhs) else {
+            continue;
+        };
+        if !spans.axes.is_empty() {
+            if crate::simulate_array::resolve_declared_shape(&spans.axes, index_sets).is_some() {
+                out.built.insert(name.clone(), spans.axes);
+            }
+        } else if !spans.fed.is_empty() {
+            out.data_shaped
+                .insert(name.clone(), spans.fed.into_iter().collect());
         }
     }
     out
 }
 
+/// The shape a variable [`ConditionalShapes::data_shaped`] names takes: the
+/// one non-scalar shape `shape_of` gives its data-fed parameters (`None`: a
+/// parameter with no data bound, which reads its scalar default). `None` when
+/// they are all scalars, or two arrays differ; the variable's rank then
+/// follows its value, and a compiler that cannot hold that refuses it.
+pub(crate) fn data_fill_shape(
+    fed: &[String],
+    mut shape_of: impl FnMut(&str) -> Option<Vec<usize>>,
+) -> Option<Vec<usize>> {
+    let mut out: Vec<usize> = Vec::new();
+    for name in fed {
+        let s = shape_of(name).unwrap_or_default();
+        if s.is_empty() || s == out {
+            continue;
+        }
+        if !out.is_empty() {
+            return None;
+        }
+        out = s;
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// What an expression's value spans, as far as declarations say: the index
+/// sets of its declared arrays (empty: none), and the unshaped data-fed
+/// parameters whose data's shape it also takes.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Spans {
+    axes: Vec<String>,
+    fed: BTreeSet<String>,
+}
+
+impl Spans {
+    fn is_scalar(&self) -> bool {
+        self.axes.is_empty() && self.fed.is_empty()
+    }
+}
+
 /// The shape inference behind [`conditional_shape_promotions`].
-struct ConditionalShapes<'a, 'd> {
+struct ShapeInference<'a, 'd> {
     variable: &'d dyn Fn(&str) -> Option<&'a ModelVariable>,
     /// Each bare-LHS (`x = …`) definition's right-hand side.
     defs: &'d HashMap<&'a str, &'a Expr>,
     /// The names a `D(x, t)` equation defines.
     ode_states: &'d HashSet<&'a str>,
-    /// Each name's inferred index sets (`None`: not decidable, or a definition
+    /// Each name's inferred spans (`None`: not decidable, or a definition
     /// still being inferred — a cycle).
-    memo: HashMap<String, Option<Vec<String>>>,
+    memo: HashMap<String, Option<Spans>>,
     depth: usize,
 }
 
-/// How deep [`ConditionalShapes::var_axes`] follows definitions before it
+/// How deep [`ShapeInference::var_spans`] follows definitions before it
 /// gives up (and leaves the variable unshaped) rather than risk the stack.
 const CONDITIONAL_SHAPE_MAX_DEPTH: usize = 256;
 
-impl ConditionalShapes<'_, '_> {
-    /// The index sets a name's value spans, empty for a scalar, or `None` when
-    /// its rank is not known statically. A declared `shape` is authoritative
-    /// (`[]` is a scalar), and so are `t`, an unshaped parameter that no data
-    /// source feeds, and an unshaped ODE state. An unshaped variable a bare
-    /// `x = …` equation defines spans what its body does. Anything else
-    /// unshaped — a data-fed parameter, whose shape the provider's data
-    /// supplies, or an unknown defined some other way (an indexed LHS, an
-    /// algebraic constraint) — is undecided.
-    fn var_axes(&mut self, name: &str) -> Option<Vec<String>> {
+impl ShapeInference<'_, '_> {
+    /// What a name's value spans, or `None` when its rank is not known
+    /// statically. A declared `shape` is authoritative (`[]` is a scalar), and
+    /// so are `t`, an unshaped parameter that no data source feeds, and an
+    /// unshaped ODE state. An unshaped data-fed parameter spans its data. An
+    /// unshaped variable a bare `x = …` equation defines spans what its body
+    /// does. Anything else unshaped — an unknown defined some other way (an
+    /// indexed LHS, an algebraic constraint) — is undecided.
+    fn var_spans(&mut self, name: &str) -> Option<Spans> {
         if name == "t" {
-            return Some(Vec::new());
+            return Some(Spans::default());
         }
         if let Some(known) = self.memo.get(name) {
             return known.clone();
         }
         let var = (self.variable)(name)?;
-        let axes = match (&var.shape, var.var_type) {
-            (Some(shape), _) => Some(shape.clone()),
-            (None, VariableType::Parameter) => var
-                .update
-                .as_ref()
-                .is_none_or(|u| crate::simulate_array::data_feed_source(u).is_none())
-                .then(Vec::new),
+        let spans = match (&var.shape, var.var_type) {
+            (Some(shape), _) => Some(Spans {
+                axes: shape.clone(),
+                fed: BTreeSet::new(),
+            }),
+            (None, VariableType::Parameter) => Some(Spans {
+                axes: Vec::new(),
+                fed: var
+                    .update
+                    .as_ref()
+                    .and_then(crate::simulate_array::data_feed_source)
+                    .map(|_| name.to_string())
+                    .into_iter()
+                    .collect(),
+            }),
             (None, VariableType::Unknown) => match self.defs.get(name) {
                 Some(body) if self.depth < CONDITIONAL_SHAPE_MAX_DEPTH => {
                     self.memo.insert(name.to_string(), None);
                     self.depth += 1;
-                    let axes = self.body_axes(body).map(|(axes, _)| axes);
+                    let spans = self.body_spans(body).map(|(spans, _)| spans);
                     self.depth -= 1;
-                    axes
+                    spans
                 }
                 Some(_) => None,
-                None => self.ode_states.contains(name).then(Vec::new),
+                None => self.ode_states.contains(name).then(Spans::default),
             },
         };
-        self.memo.insert(name.to_string(), axes.clone());
-        axes
+        self.memo.insert(name.to_string(), spans.clone());
+        spans
     }
 
-    /// The index sets an expression that is elementwise throughout spans
-    /// (empty for a scalar), and whether an `ifelse` is on its value path; or
-    /// `None` when any op in it consumes an operand whole, or two operands
-    /// span different index sets.
-    fn body_axes(&mut self, e: &Expr) -> Option<(Vec<String>, bool)> {
+    /// What an expression that is elementwise down to its leaves spans, and
+    /// whether an `ifelse` is on its value path; or `None` when an op in it
+    /// consumes an operand whole, or two operands span different index sets.
+    /// A gather with scalar subscripts and a `faq` with no output indices are
+    /// leaves: scalars, with no `ifelse` on the value path.
+    fn body_spans(&mut self, e: &Expr) -> Option<(Spans, bool)> {
         match e {
-            Expr::Number(_) | Expr::Integer(_) => Some((Vec::new(), false)),
-            Expr::Variable(v) => self.var_axes(v).map(|axes| (axes, false)),
+            Expr::Number(_) | Expr::Integer(_) => Some((Spans::default(), false)),
+            Expr::Variable(v) => self.var_spans(v).map(|spans| (spans, false)),
+            Expr::Operator(node) if node.op == "index" => {
+                for sub in node.args.iter().skip(1) {
+                    if !self.body_spans(sub)?.0.is_scalar() {
+                        return None;
+                    }
+                }
+                Some((Spans::default(), false))
+            }
+            Expr::Operator(node)
+                if node.op == "faq" && node.output_idx.as_ref().is_some_and(Vec::is_empty) =>
+            {
+                Some((Spans::default(), false))
+            }
             Expr::Operator(node) => {
                 let op = crate::op_registry::elementwise_op(node)?;
                 let mut saw_ifelse = op == "ifelse";
-                let mut out: Vec<String> = Vec::new();
+                let mut out = Spans::default();
                 for a in &node.args {
-                    let (axes, ifelse) = self.body_axes(a)?;
+                    let (spans, ifelse) = self.body_spans(a)?;
                     saw_ifelse |= ifelse;
-                    if axes.is_empty() || axes == out {
+                    out.fed.extend(spans.fed);
+                    if spans.axes.is_empty() || spans.axes == out.axes {
                         continue;
                     }
-                    if !out.is_empty() {
+                    if !out.axes.is_empty() {
                         return None;
                     }
-                    out = axes;
+                    out.axes = spans.axes;
                 }
                 Some((out, saw_ifelse))
             }
@@ -1541,9 +1561,8 @@ impl ConditionalShapes<'_, '_> {
 
 /// Keys of an expression node whose STRING value names something other than a
 /// variable, so a raw-body walk must not read them as references.
-const TEMPLATE_BODY_NON_OPERAND_KEYS: &[&str] = &[
-    "op", "wrt", "dim", "fn", "table", "id", "manifold", "name", "semiring", "reduce",
-];
+const TEMPLATE_BODY_NON_OPERAND_KEYS: &[&str] =
+    &["op", "wrt", "dim", "fn", "id", "name", "semiring", "reduce"];
 
 /// Every variable name a RAW (unparsed) template body references.
 ///
@@ -5682,9 +5701,8 @@ struct LiftGrid<'a> {
 ///
 /// Where the variable sits decides what happens when it shares NO index set
 /// with the grid. Under an elementwise operator it must be read per cell, so
-/// that is an error. As an argument of any other op (a closed `fn`, say, whose
-/// lookup table is a shaped parameter) it is consumed whole under that op's
-/// contract and stays bare. The whole-array shape ops (`reshape`,
+/// that is an error. As an argument of any other op it is consumed whole under
+/// that op's contract and stays bare. The whole-array shape ops (`reshape`,
 /// `transpose`, `concat`) have no per-cell reading at all, so any array
 /// operand beneath one is an error.
 fn lift_rhs_to_cell(
@@ -6568,22 +6586,6 @@ mod tests {
         }
     }
 
-    // A shaped variable sharing no index set with the grid, passed to a closed
-    // function, is that function's whole-array argument (a lookup table, say)
-    // and stays bare. A grid operand beside it is still read per cell.
-    #[test]
-    fn pointwise_lift_leaves_a_whole_array_fn_argument_bare() {
-        let call = Expr::operator(ExpressionNode {
-            op: "fn".to_string(),
-            name: Some("interp.searchsorted".to_string()),
-            args: vec![Expr::Variable("p".into()), Expr::Variable("table".into())],
-            ..Default::default()
-        });
-        let body = lift_2d(over(call), &[("p", &["x"]), ("table", &["z"])]).unwrap();
-        assert_eq!(body["args"][1]["args"][0], gather(&["p", "i"]), "{body}");
-        assert_eq!(body["args"][1]["args"][1], "table", "{body}");
-    }
-
     // A whole-array shape op has no per-cell reading of its operand, so the
     // lift refuses instead of gathering one cell into it.
     #[test]
@@ -6727,38 +6729,6 @@ mod tests {
         }
     }
 
-    /// A pass over a FINISHED flattened system rewrites inside each
-    /// contribution and rebuilds the right-hand side from the list, keeping the
-    /// pointwise lift's `faq` wrapper around the sum (esm-libraries-spec §4.7.5).
-    #[test]
-    fn map_rhs_per_contribution_keeps_the_lift_wrapper() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/conformance/term_provenance/fixtures/pointwise_lift.esm");
-        let file = crate::load_path(&path).expect("loads");
-        let mut flat = flatten(&file).expect("flattens");
-        let i = flat
-            .equation_contributions
-            .iter()
-            .position(|cs| cs.len() == 3)
-            .expect("the lifted equation has three contributions");
-        let subs: HashMap<String, Expr> =
-            std::iter::once(("Src.e".to_string(), Expr::Variable("Src.e2".to_string()))).collect();
-        assert!(flat.equation_lifted[i], "the lift wrapped the equation");
-        flat.map_rhs_per_contribution(|e| crate::substitute::substitute(e, &subs))
-            .expect("the lists are in step");
-
-        let contributions = &flat.equation_contributions[i];
-        assert_eq!(contributions[1].expr, Expr::Variable("Src.e2".to_string()));
-        let Expr::Operator(node) = &flat.equations[i].rhs else {
-            panic!("the lifted right-hand side is an operator");
-        };
-        assert_eq!(node.op, "faq");
-        assert_eq!(
-            node.expr.as_deref(),
-            Some(&fold_contributions(contributions))
-        );
-    }
-
     /// esm-spec §4.3.4: an unshaped variable whose `ifelse` arms differ in
     /// rank is BUILT at the array arm's shape, and a chain through it is too.
     /// Neither the loaded document nor the flattened system records that
@@ -6768,7 +6738,7 @@ mod tests {
     #[test]
     fn flatten_keeps_an_unshaped_mixed_ifelse_unshaped() {
         let doc = serde_json::json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "mixed_ifelse"},
             "index_sets": {"cell": {"kind": "interval", "size": 3}},
             "models": {"M": {
@@ -6807,9 +6777,9 @@ mod tests {
         let built = crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
             .expect("promote");
         let cell = vec!["cell".to_string()];
-        assert_eq!(built.get("M.X"), Some(&cell));
-        assert_eq!(built.get("M.Y"), Some(&cell));
-        assert_eq!(built.get("M.S"), None);
+        assert_eq!(built.built.get("M.X"), Some(&cell));
+        assert_eq!(built.built.get("M.Y"), Some(&cell));
+        assert_eq!(built.built.get("M.S"), None);
         assert_eq!(model.variables["M.X"].shape.as_ref(), Some(&cell));
         assert_eq!(model.variables["M.Y"].shape.as_ref(), Some(&cell));
         // The flattened system round-trips through JSON with no `shape` on X/Y.

@@ -95,9 +95,9 @@ value — a number, an integer, or a nested array.
 ```
 
 `const` exists for AST positions that need a literal **array** where a bare
-number will not do: an `index` lookup table, an `interp.searchsorted` query
-vector, a small coefficient set, an in-file polygon ring. A scalar literal does
-not need it — just write the number.
+number will not do: an `index` lookup table, the axis of a `searchsorted`
+template call, a small coefficient set, an in-file polygon ring. A scalar
+literal does not need it — just write the number.
 
 Keep these small. A large table belongs in a
 [`data_sources`](../../file-structure/data-and-shape/) entry, not inline in the
@@ -138,7 +138,7 @@ In a whole document:
 
 ```json
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "EnumExample" },
   "enums": {
     "land_use_class": { "urban": 1, "grassland": 2, "water": 3 }

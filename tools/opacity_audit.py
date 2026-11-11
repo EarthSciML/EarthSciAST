@@ -43,10 +43,17 @@ CLOSED_CORE = {
     "sinh","cosh","tanh","asinh","acosh","atanh","min","max","floor","ceil",
     "Pre","const","true",
     "faq","makearray","index","broadcast","reshape","transpose","concat",
-    "skolem","rank","argmin","argmax","intersect_polygon","polygon_intersection_area",
-    "fn","apply_expression_template","table_lookup","enum",
+    "apply_expression_template","enum",
 }
-SUGAR_T = {"grad","div","laplacian","integral","table_lookup","enum"}
+# Removed at esm 2.0.0 (a 2.0.0 document carrying one is refused with
+# `removed_op`; the esm:std templates replace them). The audit reads 1.x
+# documents too, so it still classes them as it did when they were core ops,
+# with `table_lookup` a rewrite-target sugar.
+REMOVED_2_0_0 = {
+    "skolem","rank","argmin","argmax","intersect_polygon","polygon_intersection_area",
+    "fn","table_lookup",
+}
+SUGAR_T = {"grad","div","laplacian","integral","enum"} | {"table_lookup"}
 
 def is_T(node):
     """Is this op-node a rewrite-target (member of T)? D counts always: template
@@ -57,7 +64,7 @@ def is_T(node):
     op = node["op"]
     if op == "D": return True
     if op in SUGAR_T: return True
-    if op not in CLOSED_CORE: return True   # open-namespace custom op
+    if op not in CLOSED_CORE and op not in REMOVED_2_0_0: return True   # open-namespace custom op
     return False
 
 def walk(node):

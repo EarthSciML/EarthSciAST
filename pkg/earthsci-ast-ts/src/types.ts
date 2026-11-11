@@ -498,7 +498,7 @@ export type {
   DataSourceTemporal,
   DataSourceSelect,
 
-  // Closed function registry (v0.3.0)
+  // Enums (esm-spec §9.3)
   EnumDeclaration,
 
   // System configuration

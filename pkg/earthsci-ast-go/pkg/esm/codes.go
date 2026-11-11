@@ -29,7 +29,7 @@ package esm
 // four F-6 codes and validate_array_shapes.go's CodeArrayShapeMismatch (whose
 // file headers enumerate them), and the non-code literal sets
 // (lower_expression_templates.go's applyExpressionTemplateOp,
-// template_imports.go's templateComponentKinds, the geometryManifold* sets).
+// template_imports.go's templateComponentKinds).
 
 // --- Diagnostic codes: §9.7 template imports / §9.6.6 metaparameters
 // (raised via newETErr from template_imports.go and subsystem_ref.go). ---
@@ -135,10 +135,6 @@ const (
 	// CodeMakearrayRegionInverted: a `makearray` region's stop precedes its
 	// start, so the region denotes no cells (esm-spec §4.3.5).
 	CodeMakearrayRegionInverted = "makearray_region_inverted"
-	// CodeGeometryManifoldInvalid: a geometry kernel declares a manifold that is
-	// not one of the spec's manifold kinds, or one inconsistent with the
-	// coordinates it is given.
-	CodeGeometryManifoldInvalid = "geometry_manifold_invalid"
 	// CodeApplyExpressionTemplateVersionTooOld: a file declaring esm < 0.4.0
 	// carries `expression_templates` or `apply_expression_template`.
 	CodeApplyExpressionTemplateVersionTooOld = "apply_expression_template_version_too_old"
@@ -475,111 +471,6 @@ const (
 	codeDeprecatedRecordsPerSample = "deprecated_records_per_sample"
 )
 
-// --- Diagnostic codes: §9.5 sampled function tables — the §9.5.5 table
-// checks and the §9.5.3 `table_lookup` lowering (raised via
-// newTableLookupError from lower_table_lookup.go).
-//
-// A CROSS-BINDING vocabulary: every binding raises these same strings from its
-// own §9.5.3 lowering, so they belong in the shared registry rather than beside
-// the pass. Only the codes THIS binding actually emits are declared. It emits
-// all ten §9.5.5 table-well-formedness codes (validateFunctionTable runs them
-// in the spec's pinned order on every table a lookup resolves to) and every
-// `table_lookup_*` code except `table_lookup_out_of_bounds`, which belongs to
-// the `out_of_bounds: "error"` mode this binding refuses instead
-// (CodeTableOutOfBoundsUnsupported, esm-spec §9.5.3a). ---
-const (
-	// CodeTableLookupUnknownTable: a `table_lookup` names no table, or one the
-	// document's `function_tables` block does not declare.
-	CodeTableLookupUnknownTable = "table_lookup_unknown_table"
-	// CodeTableLookupAxisNameMismatch: the key set of `table_lookup.axes` does
-	// not match the axis names the referenced table declares.
-	CodeTableLookupAxisNameMismatch = "table_lookup_axis_name_mismatch"
-	// CodeTableLookupArgsNonempty: a `table_lookup` node carries a non-empty
-	// positional `args` (esm-spec §9.5.2); an absent `args` means `[]`. The
-	// schema rejects the same node, so this is what a node that skipped
-	// schema validation (one built in memory) reports.
-	CodeTableLookupArgsNonempty = "table_lookup_args_nonempty"
-	// CodeTableLookupOutputOutOfRange: `table_lookup.output` selects no output
-	// of the referenced table — an index past `len(outputs)` (or past 0 for a
-	// single-output table), a name absent from `outputs`, or a non-integer /
-	// non-string selector.
-	CodeTableLookupOutputOutOfRange = "table_lookup_output_out_of_range"
-	// CodeTableAxisDuplicateName: two axes of one table share a `name`.
-	CodeTableAxisDuplicateName = "table_axis_duplicate_name"
-	// CodeTableOutputsDuplicateName: two entries of `outputs` share a name.
-	CodeTableOutputsDuplicateName = "table_outputs_duplicate_name"
-	// CodeTableInterpolationAxesMismatch: `interpolation` and the axis count
-	// disagree — `linear` and `nearest` require 1 axis, `bilinear` 2.
-	CodeTableInterpolationAxesMismatch = "table_interpolation_axes_mismatch"
-	// CodeTableAxisNaN: an axis's `values` carries a value that is not finite
-	// (NaN, +Inf or -Inf; esm-spec §9.5.5, ruling Q-109).
-	CodeTableAxisNaN = "table_axis_nan"
-	// CodeTableAxisNonMonotonic: an axis's `values` is not strictly increasing.
-	CodeTableAxisNonMonotonic = "table_axis_non_monotonic"
-	// CodeTableAxisTooShort: an axis's `values` has fewer than 2 entries. The
-	// schema rejects such an axis too; this is what a table built in memory
-	// reports.
-	CodeTableAxisTooShort = "table_axis_too_short"
-	// CodeTableOutputsLengthMismatch: `outputs` is declared, `data` is an
-	// array, and its length is not `len(outputs)`.
-	CodeTableOutputsLengthMismatch = "table_outputs_length_mismatch"
-	// CodeTableDataShapeMismatch: `data`'s nesting does not match the shape
-	// `axes` (and `outputs`, when present) imply, or the redundant `shape`
-	// assertion does not match that shape.
-	CodeTableDataShapeMismatch = "table_data_shape_mismatch"
-	// CodeTableDataNaN: a leaf of `data` is not finite (NaN, +Inf or -Inf;
-	// esm-spec §9.5.5, ruling Q-109).
-	CodeTableDataNaN = "table_data_nan"
-	// CodeTableOutOfBoundsUnsupported: the referenced table declares
-	// `out_of_bounds: "error"`, which this binding does not implement. Per
-	// esm-spec §9.5.3a the lookup is REFUSED at the point it would otherwise
-	// lower — answering it under the `"clamp"` mode the binding does have would
-	// return a number the author did not ask for with nothing in the result to
-	// say so. The document still LOADS and still round-trips; it simply does not
-	// evaluate.
-	CodeTableOutOfBoundsUnsupported = "table_out_of_bounds_unsupported"
-)
-
-// --- Diagnostic codes: §9.2 closed-function registry (raised via
-// newClosedFunctionError from registered_functions.go). ---
-const (
-	// CodeUnknownClosedFunction: an `fn` node names a function outside the
-	// closed registry.
-	CodeUnknownClosedFunction = "unknown_closed_function"
-	// CodeClosedFunctionArity: a closed function received the wrong number or
-	// kind of arguments, or an empty table.
-	CodeClosedFunctionArity = "closed_function_arity"
-	// CodeClosedFunctionOverflow: an integer-valued result overflows Int32.
-	CodeClosedFunctionOverflow = "closed_function_overflow"
-	// CodeSearchsortedNonMonotonic: a `searchsorted` table is not
-	// non-decreasing.
-	CodeSearchsortedNonMonotonic = "searchsorted_non_monotonic"
-	// CodeSearchsortedNaN: a `searchsorted` table contains a NaN. Checked
-	// before CodeSearchsortedNonMonotonic (esm-spec §9.2).
-	CodeSearchsortedNaN = "searchsorted_nan"
-	// CodeInterpNonMonotonicAxis: an `interp` axis is not strictly increasing.
-	CodeInterpNonMonotonicAxis = "interp_non_monotonic_axis"
-	// CodeInterpAxisLengthMismatch: an `interp` axis length does not match the
-	// table's.
-	CodeInterpAxisLengthMismatch = "interp_axis_length_mismatch"
-	// CodeInterpNaNInAxis: an `interp` axis contains a NaN.
-	CodeInterpNaNInAxis = "interp_nan_in_axis"
-	// CodeInterpAxisTooShort: an `interp` axis has fewer than two points.
-	CodeInterpAxisTooShort = "interp_axis_too_short"
-	// CodeInterpAxisNotConst: an axis of `interp.linear` / `interp.bilinear`,
-	// or the `xs` of `interp.searchsorted`, is not a rank-1 `const`-op array —
-	// a variable reference, a non-`const` expression, or a `const` whose value
-	// is a scalar or a nested array (esm-spec §9.2, ruling Q-108). Checked
-	// before CodeSearchsortedNaN and CodeSearchsortedNonMonotonic.
-	CodeInterpAxisNotConst = "interp_axis_not_const"
-	// codeInterpTableNotConst: the `table` of `interp.linear` /
-	// `interp.bilinear` is not a `const`-op array of the required rank (1 for
-	// linear, 2 for bilinear) — a variable reference, a non-`const`
-	// expression, or a `const` of the wrong rank (esm-spec §9.2, ruling Q-108).
-	// Unexported until api-surface.json records it.
-	codeInterpTableNotConst = "interp_table_not_const"
-)
-
 // --- Diagnostic codes: §9.3 enum lowering (raised via newEnumLoweringError
 // from lower_enums.go). ---
 const (
@@ -690,13 +581,11 @@ const (
 // (esm-spec §4.2 / §9). applyExpressionTemplateOp already lives in
 // lower_expression_templates.go and is intentionally not redeclared here. ---
 const (
-	OpDerivative  = "D"            // derivative op (structural time derivative, or a spatial rewrite target)
-	OpIC          = "ic"           // initial-condition wrapper
-	OpConst       = "const"        // inline literal payload node
-	OpFn          = "fn"           // closed-registry function call
-	OpEnum        = "enum"         // enum symbol (lowered to const at load)
-	OpMakearray   = "makearray"    // hyper-rectangular array constructor
-	OpTableLookup = "table_lookup" // sampled function-table query
+	OpDerivative = "D"         // derivative op (structural time derivative, or a spatial rewrite target)
+	OpIC         = "ic"        // initial-condition wrapper
+	OpConst      = "const"     // inline literal payload node
+	OpEnum       = "enum"      // enum symbol (lowered to const at load)
+	OpMakearray  = "makearray" // hyper-rectangular array constructor
 )
 
 // --- Spec enum literal: Model.SystemKind and the ode/dae DAE classification
@@ -757,12 +646,11 @@ const (
 
 // DiagnosticError is implemented by the package's code-bearing error types
 // (EvaluationError, ExpressionTemplateError, RuleEngineError, EnumLoweringError,
-// ClosedFunctionError, CoupleMultiplicativeNoTendencyError, tableLookupError,
-// OperatorComposeNoMergeError, OperatorComposeAmbiguousBareNameError,
-// OperatorComposeRequireMatchError). It lets a caller recover the stable
-// diagnostic code from any of them uniformly — errors.As(err, &de) then
-// de.DiagnosticCode() — without switching over the concrete types. All ten
-// render Error() in the shared "[code] message" form.
+// CoupleMultiplicativeNoTendencyError, OperatorComposeNoMergeError,
+// OperatorComposeAmbiguousBareNameError, OperatorComposeRequireMatchError). It
+// lets a caller recover the stable diagnostic code from any of them uniformly —
+// errors.As(err, &de) then de.DiagnosticCode() — without switching over the
+// concrete types. All eight render Error() in the shared "[code] message" form.
 type DiagnosticError interface {
 	error
 	DiagnosticCode() string
@@ -775,9 +663,7 @@ var (
 	_ DiagnosticError = (*ExpressionTemplateError)(nil)
 	_ DiagnosticError = (*RuleEngineError)(nil)
 	_ DiagnosticError = (*EnumLoweringError)(nil)
-	_ DiagnosticError = (*ClosedFunctionError)(nil)
 	_ DiagnosticError = (*CoupleMultiplicativeNoTendencyError)(nil)
-	_ DiagnosticError = (*tableLookupError)(nil)
 	_ DiagnosticError = (*OperatorComposeNoMergeError)(nil)
 	_ DiagnosticError = (*OperatorComposeAmbiguousBareNameError)(nil)
 	_ DiagnosticError = (*OperatorComposeRequireMatchError)(nil)

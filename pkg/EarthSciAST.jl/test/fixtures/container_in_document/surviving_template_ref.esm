@@ -1,5 +1,5 @@
 {
- "esm": "1.0.0",
+ "esm": "2.0.0",
  "metadata": {
   "name": "GapATemplateRef",
   "description": "Minimal repro: a model whose equation RHS is a NON-EAGER `apply_expression_template` reference, the esm-spec 9.6.4 Option B form that SURVIVES the load-time fixpoint as a leaf and is resolved by the build against the component's retained `expression_templates` registry. The Rust CLI evaluates it; the Julia MTK lowering fails with 'Unsupported operator: apply_expression_template'.",

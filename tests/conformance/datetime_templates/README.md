@@ -1,16 +1,17 @@
 # Calendar templates (`datetime_templates`)
 
 `lib/calendar.esm` is a template-library file (esm-spec §9.7.1) carrying the
-pure-AST definitions of the nine `datetime.*` closed functions as match-less
+pure-AST calendar decomposition (the nine fields the 1.x `datetime.*` closed
+functions returned) as match-less
 expression templates of one parameter `t`, UTC seconds: `year`, `month`, `day`,
 `hour`, `minute`, `second`, `day_of_year`, `julian_day` and `is_leap_year`. Each
 splits `t` exactly into the day number `d = floor(floor(t) / 86400)` and the
 whole second of the day `s = floor(t) − 86400·d`, runs Howard Hinnant's
 `civil_from_days` with every integer division written `floor(a / b)`, and
 returns NaN outside the domain `|t| < 2^52` s (and for a NaN or infinite `t`).
-`julian_day` is §9.2's pinned formula. This tier checks, in every binding with an
+`julian_day` is the formula esm-spec 1.x §9.2 pinned. This tier checks, in every binding with an
 inline-test runner and under every compiler, that the expanded template
-reproduces the `binary64` result the closed function is pinned to.
+reproduces the pinned `binary64` reference values of `tests/closed_functions`.
 
 ## The fixtures
 
@@ -30,18 +31,18 @@ is the Julia interpreter's.
 ## What is not here
 
 - The scenarios outside the domain `|t| < 2^52` s: the two int32-year success
-  scenarios (`|t|` about `6.8e16`, where the `fn` form still answers) and the
+  scenarios (`|t|` about `6.8e16`, where the 1.x `fn` form answered) and the
   `closed_function_overflow` error scenarios (out-of-range years, NaN, ±Inf).
-  The template returns NaN for all of them, which JSON cannot write. Each
-  binding's harness runs every scenario of `expected.json`, these included, plus
-  the domain edges `±(2^52 − 1)`, `±(2^52 − 0.5)` and `±2^52`, through the
-  expanded template (Julia: `test/closed_functions_test.jl`).
+  The template returns NaN for all of them, which JSON cannot write. The
+  per-binding harnesses that ran them, plus the domain edges `±(2^52 − 1)`,
+  `±(2^52 − 0.5)` and `±2^52`, through the expanded template compared it with
+  the `fn` form and were deleted with it at esm 2.0.0; Go still checks the
+  expansion of every scenario.
 - `julian_day`'s scenario `jd_plus_0_7_frac`: its `expected` is the correctly
-  rounded Julian Date, one ulp from §9.2's pinned formula, which the `fn` form
-  and the template both give (the fixture's tolerance admits either). The
-  harnesses compare the template with the `fn` form bit for bit there.
+  rounded Julian Date, one ulp from the pinned formula, which the template
+  gives (the fixture's tolerance admits either).
 
 ## Named exclusions
 
 None. Go and TypeScript are scope-excluded: neither has an inline-test runner.
-Each checks the expansion of every template in its closed-function harness.
+Go checks the expansion of every scenario (`pkg/esm/library_templates_test.go`).

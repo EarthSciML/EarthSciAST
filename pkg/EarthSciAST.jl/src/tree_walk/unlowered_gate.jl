@@ -16,12 +16,11 @@
 # lowered is untouched (CONFORMANCE_SPEC §5.27.3).
 
 # The rewrite-target tier is `_op_in_T`, the same predicate `_compile`'s gate
-# uses, less three members this walk cannot judge by name: `D` (core in its
-# equation-LHS role, handled below), `table_lookup` (lowered further into the
-# build), and `enum` (lowered at load; `_compile` reports a surviving one as
-# `unevaluable_operator`).
+# uses, less two members this walk cannot judge by name: `D` (core in its
+# equation-LHS role, handled below) and `enum` (lowered at load; `_compile`
+# reports a surviving one as `unevaluable_operator`).
 _is_unlowered_op(op::String) =
-    _op_in_T(op) && !(op in ("D", "table_lookup", "enum"))
+    _op_in_T(op) && !(op in ("D", "enum"))
 
 # The first (pre-order) node of `e` outside the evaluable core, or `nothing`.
 # `lhs` marks an equation left-hand side, the one position where a time `D` is

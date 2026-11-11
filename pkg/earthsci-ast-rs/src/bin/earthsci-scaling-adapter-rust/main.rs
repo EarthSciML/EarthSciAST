@@ -601,7 +601,7 @@ fn options(compiler: Compiler) -> ProblemOptions {
 /// costs (schema compilation, lazily built tables).
 fn warm_up() {
     let doc = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "warm_up", "authors": ["scaling tier"]},
         "models": {"M": {
             "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0},

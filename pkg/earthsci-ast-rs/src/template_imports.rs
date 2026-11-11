@@ -119,8 +119,8 @@ const NODE_HEADER_KEYS: [&str; 3] = ["op", "id", "expect_cadence"];
 /// the kind is kept distinct because the two answer different questions about a
 /// node (what it IS vs how its op is parameterized). `from`, `wrt`/`dim`,
 /// apply-`name`, and `of` are handled positionally.
-const REGISTRY_KEYS: [&str; 9] = [
-    "reduce", "semiring", "manifold", "fn", "table", "side", "attrs", "members", "from_faq",
+const REGISTRY_KEYS: [&str; 7] = [
+    "reduce", "semiring", "fn", "side", "attrs", "members", "from_faq",
 ];
 
 /// Loop symbols, references, ids, enums, units and free text: not expression
@@ -128,18 +128,15 @@ const REGISTRY_KEYS: [&str; 9] = [
 /// metaparameter substitution ONLY. `of` and `on` keep their dedicated
 /// rename-walk branches. Mirrors the `:opaque` kind of `_STRUCTURAL_FIELDS` in
 /// the Julia reference.
-const OPAQUE_KEYS: [&str; 34] = [
+const OPAQUE_KEYS: [&str; 32] = [
     // Loop symbols and bound index names of a `faq` node. `metaparameter_name_conflict`
     // refuses a metaparameter spelled like a loop symbol, so a metaparameter reaches
     // these fields only as an `on` data-column name; they are names wherever they
     // appear, so they are skipped rather than left to that check.
     "on",
     "syms",
-    "arg",
     "output_idx",
     "of",
-    // A `table_lookup` output name.
-    "output",
     "handler_id",
     // References to files, components, data sources, data columns and the
     // import-edge rename vocabulary.
@@ -180,7 +177,7 @@ const OPAQUE_KEYS: [&str; 34] = [
 /// so it is never tested with [`is_meta_subst_skipped`]: a variable named
 /// `source` or a template param named `label` still has its value substituted.
 /// A key that is also skipped (`where`, `rename`, …) is skipped whole.
-const NAME_KEYED_MAP_KEYS: [&str; 20] = [
+const NAME_KEYED_MAP_KEYS: [&str; 19] = [
     "variables",
     "species",
     "parameters",
@@ -188,7 +185,6 @@ const NAME_KEYED_MAP_KEYS: [&str; 20] = [
     "subsystems",
     "expression_templates",
     "ranges",
-    "axes",
     "bindings",
     "config",
     "coords",
@@ -1202,8 +1198,8 @@ fn mount_rename_walk(x: &mut Value, m: &IndexMap<String, String>) {
             } else if let Some(Value::Array(shape)) = obj.get_mut("shape") {
                 // `ModelVariable`/`Parameter` `shape` and a `where` constraint's
                 // `shape` are ordered index-set names; an ExpressionNode `shape`
-                // (`reshape`'s target extents) and a `FunctionTable` `shape` are
-                // integers, so the `is_node` guard plus the string test cover both.
+                // (`reshape`'s target extents) is integers, so the `is_node`
+                // guard plus the string test cover both.
                 for e in shape.iter_mut() {
                     if let Value::String(s) = e
                         && let Some(n) = m.get(s.as_str())
@@ -1373,8 +1369,7 @@ pub(crate) fn apply_mount_index_set_rename(
 
 /// Bound index symbols (loop symbols) of a subtree: the `output_idx` entries and
 /// `ranges` keys of every Expression node, at any nesting depth — the binder
-/// definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1), which is
-/// not limited to `faq` (`argmin` / `argmax` bind the same way). Rebinding one
+/// definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1). Rebinding one
 /// would desynchronize the ranges KEYS from their `expr` occurrences, so it is
 /// rejected; a metaparameter spelled like one is `metaparameter_name_conflict`.
 /// Mirrors the Julia `_collect_bound_syms!`.
@@ -3064,6 +3059,37 @@ fn resolve_top_level_scope(
         )?;
     }
     Ok(top_scope.templates)
+}
+
+/// The effective template registry of ONE component as load would fold it
+/// (esm-spec §9.7.4): its `expression_template_imports` resolved in order
+/// (relative refs against `base_path`), then its own `expression_templates`.
+/// `None` when the component imports nothing; `Some(Err)` when an import
+/// cannot be resolved or two imports collide.
+pub(crate) fn component_effective_templates(
+    comp: &Value,
+    base_path: &Path,
+    origin: &str,
+) -> Option<Result<Map<String, Value>, ExpressionTemplateError>> {
+    let entries = comp
+        .get("expression_template_imports")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())?;
+    let resolve = || {
+        let mut scope = TemplateScope::default();
+        let mut stack = Vec::new();
+        for entry in entries {
+            let sub = resolve_import_entry(entry, base_path, &mut stack, origin)?;
+            merge_scope(&mut scope, sub, origin)?;
+        }
+        if let Some(own) = comp.get("expression_templates").and_then(Value::as_object) {
+            for (n, d) in own {
+                scope.templates.insert(n.clone(), d.clone());
+            }
+        }
+        Ok(scope.templates)
+    };
+    Some(resolve())
 }
 
 /// Phase 2 of [`resolve_template_machinery`]: per-component imports (models /

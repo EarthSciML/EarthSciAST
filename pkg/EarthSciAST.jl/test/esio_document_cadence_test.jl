@@ -23,7 +23,7 @@ function _cadence_doc(dir)
         end
     end
     return Dict{String, Any}(
-        "esm" => "1.0.0",
+        "esm" => "2.0.0",
         "data_sources" => Dict{String, Any}(
             "NEI" => Dict{String, Any}(
                 "kind" => "grid",
@@ -317,7 +317,7 @@ function _grid_doc(dir; ds_extra = Dict{String, Any}(), from_extra = Dict{String
     vars = table ? Dict{String, Any}("x" => par("X"), "y" => par("Y")) :
         Dict{String, Any}("f" => par("F"; extra = from_extra))
     return Dict{String, Any}(
-        "esm" => "1.0.0",
+        "esm" => "2.0.0",
         "domain" => Dict{String, Any}(
             "temporal" => Dict{String, Any}("start" => "2016-01-01T00:00:00Z")
         ),

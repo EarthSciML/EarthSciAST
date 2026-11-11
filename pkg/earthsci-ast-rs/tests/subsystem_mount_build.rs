@@ -67,7 +67,7 @@ fn data_leaf(element_type: Option<&str>) -> Value {
 /// leaf reads. The source is never opened: the test supplies the provider.
 fn data_document(models: Value) -> Value {
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "subsystem_mount_build"},
         "index_sets": {"rows": {"kind": "interval", "size": 2}},
         "data_sources": {
@@ -272,7 +272,7 @@ fn precision_leaf(quantity: Option<&str>) -> Value {
 
 fn host(leaf: Value, extra_equations: Vec<Value>, domain: Option<&str>) -> Value {
     let mut doc = json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "subsystem_precision"},
         "models": {
             "Host": {

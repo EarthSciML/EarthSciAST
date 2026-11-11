@@ -83,6 +83,29 @@ include("testutils.jl")
             "esm-spec §9.7.6: metaparameter folding sizes `index_sets.lev`",
         "tests/valid/template_import_rename_lib.esm" =>
             "esm-spec §9.7.6: metaparameter folding sizes `index_sets.edges`",
+        # The 2.0.0 codemod output: each removed op became an `esm:std/*.esm`
+        # template call, and the import is consumed at load like the one in
+        # template_import_minimal.esm.
+        "tests/valid/cadence/pure_topology.esm" =>
+            "esm-spec §9.7.6: the `esm:std/relational.esm` import is consumed at load",
+        "tests/valid/faq/edge_enumeration_area_eff.esm" =>
+            "esm-spec §9.7.6: the `esm:std/relational.esm` import is consumed at load",
+        "tests/valid/faq/nearest_generator_argmin.esm" =>
+            "esm-spec §9.7.6: the `esm:std/relational.esm` imports are consumed at load",
+        "tests/valid/faq/nearest_generator_centroid.esm" =>
+            "esm-spec §9.7.6: the `esm:std/relational.esm` import is consumed at load",
+        "tests/valid/faq/skolem_distinct_rank.esm" =>
+            "esm-spec §9.7.6: the `esm:std/relational.esm` import is consumed at load",
+        "tests/valid/geometry/bin_skolem_spatial_join.esm" =>
+            "esm-spec §9.7.6: the `esm:std/relational.esm` import is consumed at load",
+        "tests/valid/geometry/conservative_regrid_assembly.esm" =>
+            "esm-spec §9.7.6: the `esm:std/relational.esm` and `esm:std/geometry.esm` imports are consumed at load",
+        "tests/valid/geometry/polygon_intersection_area_padded_ring.esm" =>
+            "esm-spec §9.7.6: the `esm:std/geometry.esm` import is consumed at load",
+        "tests/valid/geometry/polygon_intersection_area_planar.esm" =>
+            "esm-spec §9.7.6: the `esm:std/geometry.esm` import is consumed at load",
+        "tests/valid/wildfire_atmosphere_ocean.esm" =>
+            "esm-spec §9.7.6: the `esm:std/relational.esm` and `esm:std/geometry.esm` imports are consumed at load",
         # §9.7.6 metaparameter folding.
         "tests/valid/data_sources_ingest_and_select.esm" =>
             "esm-spec §9.7.6: metaparameters N_SRC / N_REC / N_POP fold to integers",
@@ -393,7 +416,7 @@ include("testutils.jl")
     # such a file a hard `KeyError` at load — a rejection, not a drop.
     @testset "a distribution-valued parameter needs no `default`" begin
         doc = Dict{String, Any}(
-            "esm" => "1.0.0",
+            "esm" => "2.0.0",
             "metadata" => Dict{String, Any}("name" => "DistOnly"),
             "reaction_systems" => Dict{String, Any}(
                 "RS" => Dict{String, Any}(

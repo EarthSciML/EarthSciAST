@@ -269,8 +269,8 @@ end
 Apply the expression rewrite `f` inside every contribution of every equation of
 the flattened system `flat` (and `lhs_rewrite` to each left-hand side), and
 rebuild each right-hand side from its list. The shared path for a pass over a
-`FlattenedSystem` that rewrites node by node — template expansion, table-lookup
-lowering — so provenance survives it; pass both results to the keyword copy
+`FlattenedSystem` that rewrites node by node — template expansion — so
+provenance survives it; pass both results to the keyword copy
 constructor.
 """
 function _rewrite_flat_equations(f, flat; lhs_rewrite = f)

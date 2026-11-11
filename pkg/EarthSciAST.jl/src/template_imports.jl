@@ -271,26 +271,21 @@ const _STRUCTURAL_FIELDS = (
     "expect_cadence" => :node,
     "reduce" => :registry,
     "semiring" => :registry,
-    "manifold" => :registry,
     "fn" => :registry,
-    "table" => :registry,
     "side" => :registry,
     "attrs" => :registry,
     "members" => :registry,
     "from_faq" => :registry,
     # Loop symbols and bound index names of a `faq` node (join key columns and
-    # the symbols they are read at, the arg-witness symbol, the output index
+    # the symbols they are read at, the output index
     # signature, a dependent range's parent indices). `metaparameter_name_conflict`
     # refuses a metaparameter spelled like a loop symbol, so a metaparameter
     # reaches these fields only as an `on` data-column name; they are names
     # wherever they appear, so they are skipped rather than left to that check.
     "on" => :opaque,
     "syms" => :opaque,
-    "arg" => :opaque,
     "output_idx" => :opaque,
     "of" => :opaque,
-    # A `table_lookup` output name.
-    "output" => :opaque,
     "handler_id" => :opaque,
     # References to files, components, data sources, data columns and the
     # import-edge rename vocabulary.
@@ -354,7 +349,7 @@ const _META_SUBST_SKIP_KEYS = Set{String}(
 const _NAME_KEYED_MAP_KEYS = Set{String}(
     [
         "variables", "species", "parameters", "guesses", "subsystems",
-        "expression_templates", "ranges", "axes", "bindings", "config", "coords",
+        "expression_templates", "ranges", "bindings", "config", "coords",
         "initial_conditions", "parameter_overrides", "pinned_coords", "map",
         "rename", "rebind", "index_set_rename", "url_substitutions", "where",
     ]
@@ -1078,7 +1073,7 @@ end
 # Bound index symbols (loop symbols) of a subtree: the `output_idx` entries and
 # `ranges` keys of every Expression node, at any nesting depth — the binder
 # definition of the `reserved_index_symbol` rule (esm-spec §4.9.1.1), which is
-# not limited to `faq` (`argmin` / `argmax` bind the same way). Rebinding one
+# not limited to `faq`. Rebinding one
 # would desynchronize the ranges KEYS (object keys, unreachable by value
 # substitution) from their `expr` occurrences, so it is rejected outright; a
 # metaparameter spelled like one is `metaparameter_name_conflict`.
@@ -2957,8 +2952,8 @@ function _mount_rename_walk!(x, m::AbstractDict{String, String})
     else
         # `ModelVariable`/`Parameter` `shape` and a `where` constraint's `shape`
         # are ordered index-set names; an ExpressionNode `shape` (`reshape`'s
-        # target extents) and a `FunctionTable` `shape` are integers, so the
-        # `is_node` guard plus the string test cover both.
+        # target extents) are integers, so the `is_node` guard plus the string
+        # test cover both.
         shape = get(x, "shape", nothing)
         if _is_array(shape)
             x["shape"] = Any[e isa AbstractString ? get(m, String(e), e) : e for e in shape]

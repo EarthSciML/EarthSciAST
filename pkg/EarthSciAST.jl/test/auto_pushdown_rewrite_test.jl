@@ -26,11 +26,6 @@ module AutoPushdownRewriteTests
 using Test
 using EarthSciAST
 import JSON3
-# The STRtree broad-phase fast path (Phase 2a/3a) via GeometryOps/GeoInterface;
-# the dependency-free brute-force core is byte-identical, so this is a fast-path
-# exercise, not a hard dependency.
-import GeometryOps
-import GeoInterface
 
 const EA = EarthSciAST
 
@@ -251,7 +246,7 @@ end
         )
 
         return Dict(
-            "esm" => "1.1.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "isrm_clean_L1"),
             "index_sets" => Dict(
                 "src_cells" => Dict("kind" => "interval", "size" => GRID),
@@ -313,7 +308,8 @@ end
     prhs = prod_eqs[1]["rhs"]
     @test prhs["distinct"] === true
     @test prhs["semiring"] == "bool_and_or"
-    @test prhs["key"]["op"] == "skolem"
+    # the key is the bare cell range symbol (a single integer component)
+    @test prhs["key"] isa AbstractString && haskey(prhs["ranges"], prhs["key"])
     @test haskey(prhs, "filter")
     @test any(j -> haskey(j, "overlap"), prhs["join"])
     ov = first(j["overlap"] for j in prhs["join"] if haskey(j, "overlap"))

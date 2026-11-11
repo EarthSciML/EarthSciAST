@@ -16,16 +16,12 @@ package esm
 //   - scalar tier: arithmetic, powers, comparisons, boolean logic, elementary
 //     functions, derivatives (`D(x)/Dt` and `D(x, t)`), open/user function calls;
 //   - array & call-shaped tier: array literals `[…]` (`const`), indexing
-//     `a[i, j]` (`index`), dotted closed-function calls `datetime.year(t)` (`fn`),
-//     the `true` and `false` literals, and `integral` / `reshape` / `transpose` / `concat`;
+//     `a[i, j]` (`index`), the `true` and `false` literals, and `integral` /
+//     `reshape` / `transpose` / `concat`;
 //   - reduction & array-query tier: `faq` reductions
 //     `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
-//     key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax`
-//     arg-witnesses `argmin[g] (expr) where {…}`, template application
-//     `name<binding = value, …>` (`apply_expression_template`),
-//     `polygon_intersection_area(a, b, manifold=…)` /
-//     `intersect_polygon(a, b, manifold=…[, id=…])`, the `table_lookup` bracket
-//     surface `visc[T=temp]` / `k_rate[T=temp, p=pres]:1`, and the
+//     key=k [semiring=…]` (all clause shapes), template application
+//     `name<binding = value, …>` (`apply_expression_template`), and the
 //     piecewise-region array `makearray([lo:hi, …] = value, …)`.
 //
 // Aggregate `args` is a derived operand cache the printer doesn't emit; it is
@@ -35,8 +31,8 @@ package esm
 // identical there) is not recovered; both reprint identically.
 //
 // Still deferred (need dedicated surface syntax — a later pass): `broadcast` and
-// `enum`. Those are refused with an *ExpressionParseError, as is the call
-// spelling `table_lookup(…)` (its real surface is `visc[T=temp]`).
+// `enum`. Those are refused with an *ExpressionParseError, as is a call to an op
+// removed at esm 2.0.0 (exprRemovedCallees) and a dotted callee.
 //
 // Design rules: multiplication is ALWAYS explicit (`k * A`) — no implicit
 // juxtaposition, because identifiers are multi-letter (`NO2`, `O3`, `k_photo`).
@@ -46,8 +42,7 @@ package esm
 // `-a + b`) — the parser matches the printer's loose convention. Because the
 // printer is not injective, ParseExpression(ToASCII(ast)) is a faithful
 // SEMANTIC round-trip but may normalize structure (flat vs. nested `+`; a scalar
-// `const`/`fn` with a non-dotted name reprints identically to a plain
-// number/op). Editors should treat text as a derived view and re-parse only
+// `const` reprints identically to a plain number). Editors should treat text as a derived view and re-parse only
 // dirtied expressions.
 
 import (
@@ -107,15 +102,23 @@ var (
 
 // exprStructuralRefusals are the structural ops whose defining data lives
 // OUTSIDE `args` AND which have no text surface yet — refused, pending a
-// dedicated syntax pass. (`integral`, `reshape`, `transpose`, `concat`, `fn`,
-// `const`, `index`, `true`, `false`, `faq`, `apply_expression_template`,
-// `polygon_intersection_area`, `intersect_polygon` and `makearray` DO have a
-// surface and are reconstructed below; they are intentionally absent here.
-// `table_lookup` IS listed: its surface is the bracket form `visc[T=temp]`,
-// parsed in parseTableLookup without going through makeParsedCall, so the CALL
-// spelling `table_lookup(a)` — which the printer never emits — stays refused.)
+// dedicated syntax pass. (`integral`, `reshape`, `transpose`, `concat`,
+// `const`, `index`, `true`, `false`, `faq`, `apply_expression_template` and
+// `makearray` DO have a surface and are reconstructed below; they are
+// intentionally absent here.)
 var exprStructuralRefusals = map[string]bool{
-	"table_lookup": true, "broadcast": true, "enum": true,
+	"broadcast": true, "enum": true,
+}
+
+// exprRemovedCallees are the ops removed at esm 2.0.0 (esm-spec §4.2): a call
+// spelled with one of these names is refused rather than read as an open
+// rewrite-target op the loader would then reject as `removed_op`. The
+// `argmin`/`argmax` templates of the standard library are applied with the
+// template surface `argmin<…>`, which never reaches this table.
+var exprRemovedCallees = map[string]bool{
+	"fn": true, "table_lookup": true, "skolem": true, "rank": true,
+	"intersect_polygon": true, "polygon_intersection_area": true,
+	"argmin": true, "argmax": true,
 }
 
 // exprAggregateSyms are the aggregate reduction symbols ToASCII emits
@@ -125,10 +128,6 @@ var exprStructuralRefusals = map[string]bool{
 var exprAggregateSyms = map[string]bool{
 	"sum": true, "prod": true, "max": true, "min": true, "any": true,
 }
-
-// exprArgWitnessSyms are the arg-witness reductions (formatArgWitness):
-// `argmin[g] (expr) where {…}`.
-var exprArgWitnessSyms = map[string]bool{"argmin": true, "argmax": true}
 
 // exprReduceBySym maps an aggregate symbol to its default `reduce` operator;
 // an absent entry means the node carries no `reduce` field.
@@ -183,9 +182,8 @@ var exprNumRe = regexp.MustCompile(`^(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?`)
 
 // exprNameRe accepts Unicode letters (Greek variables like `ΔF_net`, `Φ`),
 // Unicode numbers (subscript/superscript digits in names like `k₀`, `M₁`), and
-// dots (qualified refs like `Emissions.NO`, and dotted closed-function names
-// like `datetime.year`, which makeParsedCall turns into `fn` nodes). A leading
-// digit still can't start an identifier (numbers lex first).
+// dots (qualified refs like `Emissions.NO`). A leading digit still can't start
+// an identifier (numbers lex first).
 //
 // `∂` (U+2202) and `∇` (U+2207) are also name-constituents: source variables are
 // sometimes named with them (`∂u_∂z`, a discretized ∂u/∂z shear field), and
@@ -452,14 +450,6 @@ func (p *exprTextParser) parsePostfix() Expression {
 		if nx := p.peekAt(1); nx.k == tkName && nx.s == "semiring" {
 			break
 		}
-		// `name[axis=expr, …]` is a `table_lookup` (formatStructuralOp), not an
-		// index: `=` is never an expression operator, so a `name` `=` pair
-		// inside the brackets discriminates the two unambiguously. Only a bare
-		// variable can name a table.
-		if table, ok := node.(string); ok && p.peekAt(1).k == tkName && p.peekAt(2).k == tkEq {
-			node = p.parseTableLookup(table)
-			continue
-		}
 		p.next() // '['
 		args := []any{node, p.parseExpr(0)}
 		for p.peek().k == tkComma {
@@ -527,10 +517,6 @@ func (p *exprTextParser) parseNameAtom(t exprTok) Expression {
 	// ordinary index into a variable that happens to be named `sum`/`max`/….
 	if exprAggregateSyms[t.s] && p.peek().k == tkLBracket && p.aggregateAhead() {
 		return p.parseAggregate(t.s)
-	}
-	// Arg-witness reduction `argmin[g] (expr) where {…}` (same `[…] (` shape).
-	if exprArgWitnessSyms[t.s] && p.peek().k == tkLBracket && p.aggregateAhead() {
-		return p.parseArgWitness(t.s)
 	}
 	return t.s // bare variable / species / qualified reference
 }
@@ -723,62 +709,8 @@ func (p *exprTextParser) parseAggregate(sym string) Expression {
 	return node
 }
 
-// parseArgWitness parses an `argmin` / `argmax` arg-witness (esm-spec §4.2) —
-// the inverse of formatArgWitness:
-// `op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')? ('join' '(' … ')')?
-// ('if' filter)? ('id' '=' name)?`. Like aggregate, its
-// `args` operand cache isn't printed and is derived.
-func (p *exprTextParser) parseArgWitness(op string) Expression {
-	p.next() // '['
-	at := p.next()
-	if at.k != tkName {
-		p.failAt("Expected the arg-witness index name", at)
-	}
-	p.expect(tkRBracket, "']' after the arg-witness index")
-	p.expect(tkLParen, "'(' before the arg-witness body")
-	expr := p.parseExpr(0)
-	p.expect(tkRParen, "')' after the arg-witness body")
-	ranges := map[string]any{}
-	if p.atWord("where") {
-		p.next()
-		ranges = p.parseRanges()
-	}
-	// The candidate-pruning `join(…)` and `if` filter, exactly as on `faq`.
-	var join []any
-	if p.atWord("join") {
-		p.next()
-		join = p.parseJoin()
-	}
-	var filter Expression
-	if p.atWord("if") {
-		p.next()
-		filter = p.parseExpr(0)
-	}
-	// `id=<name>` (RFC §6.1 node identity), emitted by formatArgWitness after
-	// the filter. Mirrors the aggregate tail.
-	id := p.parseIDClause()
-	arg := at.s
-	node := ExprNode{
-		Op:     op,
-		Args:   deriveAggregateArgs(expr, join, filter, nil),
-		Arg:    &arg,
-		Ranges: ranges,
-		Expr:   expr,
-	}
-	if len(join) > 0 {
-		node.Join = join
-	}
-	if filter != nil {
-		node.Filter = filter
-	}
-	if id != nil {
-		node.ID = id
-	}
-	return node
-}
-
 // parseIDClause consumes the optional bare-name `id=<name>` clause that
-// formatAggregate / formatArgWitness emit for the RFC §6.1 node identity, and
+// formatAggregate emits for the RFC §6.1 node identity, and
 // returns nil when it is absent.
 func (p *exprTextParser) parseIDClause() *string {
 	if !p.atWord("id") || p.peekAt(1).k != tkEq {
@@ -792,41 +724,6 @@ func (p *exprTextParser) parseIDClause() *string {
 	}
 	s := nm.s
 	return &s
-}
-
-// parseTableLookup parses a `table_lookup` from the surface formatStructuralOp
-// emits: `table '[' axis '=' expr (',' axis '=' expr)* ']' (':' <integer>)?`,
-// e.g. `visc[T=temp]` and `k_rate[T=temp, p=pres]:1`. The printer sorts the axis
-// names, so the reconstructed `axes` map reprints identically.
-func (p *exprTextParser) parseTableLookup(table string) Expression {
-	p.expect(tkLBracket, "'['")
-	axes := map[string]Expression{}
-	for {
-		nm := p.next()
-		if nm.k != tkName {
-			p.failAt("Expected an axis name in table[axis=…]", nm)
-		}
-		p.expect(tkEq, "'=' in table[axis=…]")
-		axes[nm.s] = p.parseExpr(0)
-		if p.peek().k == tkComma {
-			p.next()
-			continue
-		}
-		break
-	}
-	p.expect(tkRBracket, "']' after table[axis=…]")
-	tbl := table
-	node := ExprNode{Op: "table_lookup", Args: []any{}, Table: &tbl, TableAxes: axes}
-	// The optional `:N` output selector picks one column of a multi-output table.
-	if p.peek().k == tkColon {
-		p.next()
-		out := p.next()
-		if out.k != tkNum || out.n != float64(int64(out.n)) {
-			p.failAt("Expected an integer output index after table[…]:", out)
-		}
-		node.Output = out.n
-	}
-	return node
 }
 
 // parseRanges parses a `{ k in <rhs>, … }` where-body into a ranges object.
@@ -1137,11 +1034,15 @@ func (p *exprTextParser) makeParsedCall(name string, args []any, named []exprNam
 		return nil, false
 	}
 
-	// A dotted callee is a closed function — an `fn` node carrying the name.
-	if strings.Contains(name, ".") {
-		p.noNamed(named, name, pos)
-		nm := name
-		return ExprNode{Op: "fn", Name: &nm, Args: args}
+	// A dotted callee named a closed function (`datetime.year(t)`), and an op
+	// removed at esm 2.0.0 has no node to reconstruct: both point at the
+	// standard-library templates that replace them.
+	if strings.Contains(name, ".") || exprRemovedCallees[name] {
+		panic(exprParseFailure{&ExpressionParseError{
+			Message: fmt.Sprintf("removed_op: '%s(...)' was removed at esm 2.0.0; use the "+
+				"esm:std expression template that replaces it (MIGRATION.md)", name),
+			Pos: pos,
+		}})
 	}
 	// Call-shaped structural ops: reconstruct their non-`args` fields from the
 	// positional / named arguments ToASCII renders.
@@ -1168,56 +1069,6 @@ func (p *exprTextParser) makeParsedCall(name string, args []any, named []exprNam
 			panic(exprParseFailure{&ExpressionParseError{Message: "concat(...) requires axis=<n>", Pos: pos}})
 		}
 		return ExprNode{Op: "concat", Args: args, Axis: axis}
-	}
-	// Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
-	// `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
-	// node identity) is optional and only emitted by the printer when present.
-	if name == "polygon_intersection_area" || name == "intersect_polygon" {
-		manifold, _ := lookup("manifold")
-		m, ok := manifold.(string)
-		if !ok {
-			panic(exprParseFailure{&ExpressionParseError{
-				Message: name + "(...) requires manifold=<name>", Pos: pos,
-			}})
-		}
-		for _, n := range named {
-			if n.key != "manifold" && n.key != "id" {
-				panic(exprParseFailure{&ExpressionParseError{
-					Message: fmt.Sprintf("unexpected %s=… in %s(...)", n.key, name),
-					Pos:     pos,
-				}})
-			}
-		}
-		node := ExprNode{Op: name, Args: args, Manifold: &m}
-		if idVal, ok := lookup("id"); ok {
-			idStr, isStr := idVal.(string)
-			if !isStr {
-				panic(exprParseFailure{&ExpressionParseError{
-					Message: name + "(...) id=… must be a name", Pos: pos,
-				}})
-			}
-			node.ID = &idStr
-		}
-		return node
-	}
-	// `skolem(a, b, label=<name>)` — the documentary relation tag.
-	if name == "skolem" {
-		if labelVal, ok := lookup("label"); ok {
-			for _, n := range named {
-				if n.key != "label" {
-					panic(exprParseFailure{&ExpressionParseError{
-						Message: fmt.Sprintf("unexpected %s=… in skolem(...)", n.key), Pos: pos,
-					}})
-				}
-			}
-			label, isStr := labelVal.(string)
-			if !isStr {
-				panic(exprParseFailure{&ExpressionParseError{
-					Message: "skolem(...) label=… must be a name", Pos: pos,
-				}})
-			}
-			return ExprNode{Op: "skolem", Args: args, Label: &label}
-		}
 	}
 	p.noNamed(named, name, pos)
 	if exprStructuralRefusals[name] {
@@ -1348,7 +1199,7 @@ func exprNodeChildValues(n ExprNode) []any {
 	children := make([]any, 0, len(n.Args)+8)
 	children = append(children, n.Args...)
 	children = append(children,
-		n.Value, n.Expr, n.Filter, n.Key, n.Lower, n.Upper, n.Output, n.Axis)
+		n.Value, n.Expr, n.Filter, n.Key, n.Lower, n.Upper, n.Axis)
 	children = append(children, n.Values...)
 	children = append(children, n.Regions)
 	children = append(children, n.Shape...)
@@ -1362,9 +1213,6 @@ func exprNodeChildValues(n ExprNode) []any {
 	}
 	if n.Attrs != nil {
 		children = append(children, n.Attrs)
-	}
-	if n.TableAxes != nil {
-		children = append(children, n.TableAxes)
 	}
 	return children
 }

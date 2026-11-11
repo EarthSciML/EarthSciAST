@@ -2,21 +2,12 @@
   "source": "esm-spec.md",
   "clauses": [
     {
-      "id": "spec.1.1.ast-first-review-policy",
+      "id": "spec.1.1.ast-first-closed-op-set",
       "section": "1.1",
-      "quote": "Authors and reviewers MUST prefer the built-in expression AST (Section 4) over the closed function registry (Section 9). A `{\"op\": \"fn\", ...}` node is justified **only** when the desired primitive cannot be written as a finite closed-form composition of the AST ops in §4.2 — typically because it requires non-AST ingredients (calendar arithmetic, polygon clipping). Anything expressible in finite closed form (powers, polynomials, transcendentals, conditionals, piecewise, clip/clamp) belongs in the AST. Reviewers MUST reject `fn` nodes whose body can be written using existing AST ops",
+      "quote": "The closed AST op set in §4 is the only authoring surface. New mathematics MUST be expressible as a finite tree of existing ops.",
       "class": "out_of_scope",
       "area": "other",
-      "note": "Authoring and review policy for adding registry functions; not a property of document semantics."
-    },
-    {
-      "id": "spec.1.1.closed-registry-reject-unknown-fn",
-      "section": "1.1",
-      "quote": "bindings MUST reject any `fn` node whose `name` is not in the spec-defined set for the file's declared `esm` version",
-      "class": "semantic",
-      "phase": 1,
-      "area": "closed_functions",
-      "note": "A document is rejected at load iff some fn node names a function absent from the registry for its declared esm version."
+      "note": "Authoring policy for spec revisions: a new primitive is a template over core ops, not a new op; not a property of document semantics."
     },
     {
       "id": "spec.2.2.empty-block-normalizes-away",
@@ -264,23 +255,6 @@
       "note": "min/max (and the max/min faq reduction) return NaN when any argument is NaN, in every argument position (ruling 2026-10-26)."
     },
     {
-      "id": "spec.4.2.review-reject-disguised-minmax-fn",
-      "section": "4.2",
-      "quote": "reviewers MUST reject `fn` nodes that only re-implement these in disguise",
-      "class": "out_of_scope",
-      "area": "other",
-      "note": "Review policy for registry additions; not a property of document semantics."
-    },
-    {
-      "id": "spec.4.2.table-lookup-empty-args",
-      "section": "4.2",
-      "quote": "`output` selects which output (integer index or named entry) to return. `args` MUST be empty.",
-      "class": "semantic",
-      "phase": 1,
-      "area": "closed_functions",
-      "note": "A table_lookup node with non-empty args is rejected at load."
-    },
-    {
       "id": "spec.4.2.const-empty-args",
       "section": "4.2",
       "quote": "`value` is any JSON value (number, integer, or nested array of numbers/integers); `args` MUST be empty `[]`.",
@@ -299,23 +273,40 @@
       "note": "A broadcast node whose fn is not a pointwise scalar op, or is applied at an inadmissible arity, is rejected with invalid_broadcast_fn."
     },
     {
-      "id": "spec.4.2.aggregate-alias-normalized",
-      "section": "4.2",
-      "quote": "A loader MUST accept it, MUST normalize the node to `faq` at the wire boundary — ahead of the version gates and schema validation, so that nothing downstream of the loader, `emit` included, ever sees the alias — and MUST report the warning diagnostic `deprecated_op_alias` once per document per alias.",
-      "class": "semantic",
-      "phase": 3,
-      "area": "arrays",
-      "note": "load rewrites every `aggregate` node to `faq` (raising the declared esm to ≥ 1.1.0) and emits one deprecated_op_alias warning; emit never writes `aggregate`.",
-      "concern": "It says normalization runs 'ahead of the version gates', but the next paragraph says the faq_version_too_old gate 'reads the authored form, before normalization' — the order is stated both ways; and 'once per document' is ambiguous when one load touches several documents (root, ref-loaded children, libraries), each of which is normalized."
-    },
-    {
       "id": "spec.4.2.value-invention-constant-factors",
       "section": "4.2",
-      "quote": "every column a `skolem` key, `distinct` producer or arg-witness body reads MUST be build-time data. A **constant factor** is any of: an array supplied to the build (a loader- or caller-provided factor), a shaped parameter carrying inline data (§6.3), or an **unknown whose defining equation's right-hand side is an array `const` node** (`x ~ const([…])`). The last is build-time data exactly as the first two are, so a binding MUST accept it as a key column.",
+      "quote": "every column a `distinct` producer's `key` or `join.on` clause reads MUST be build-time data. A **constant factor** is any of: an array supplied to the build (a loader- or caller-provided factor), a shaped parameter carrying inline data (§6.3), or an **unknown whose defining equation's right-hand side is an array `const` node** (`x ~ const([…])`). The last is build-time data exactly as the first two are, so a binding MUST accept it as a key column.",
       "class": "semantic",
       "phase": 3,
       "area": "arrays",
       "note": "A value-invention key column is admitted iff it is a constant factor (including x ~ const([…])); otherwise derived_index_set_unmaterialized or relational_node_in_continuous."
+    },
+    {
+      "id": "spec.4.2.removed-op-by-name",
+      "section": "4.2",
+      "quote": "they were removed from the format, and a loader MUST reject a document carrying one **BY NAME**, with the hard error `removed_op`",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "A document carrying a removed op spelling (arrayop; at 2.0.0 aggregate, fn, table_lookup, skolem, rank, argmin, argmax, intersect_polygon, polygon_intersection_area) is rejected at load with removed_op, before the version gates and schema validation, never admitted as an open-tier op."
+    },
+    {
+      "id": "spec.4.2.v1-document-loads",
+      "section": "4.2",
+      "quote": "A binding implementing 2.0.0 MUST load a document declaring `esm` 1.0.0 through 1.3.0 that uses no removed op or field",
+      "class": "semantic",
+      "phase": 5,
+      "area": "schema",
+      "note": "A 1.x document with no removed op or field loads at 2.0.0, standalone or as a mounted or imported document of a 2.0.0 root; the 1.x version gates still apply."
+    },
+    {
+      "id": "spec.4.2.no-major-1-refusal",
+      "section": "4.2",
+      "quote": "MUST NOT refuse a document because its major version is 1",
+      "class": "semantic",
+      "phase": 5,
+      "area": "schema",
+      "note": "No loader refuses a document for declaring major version 1."
     },
     {
       "id": "spec.4.3.loop-symbol-shadows-declaration",
@@ -505,22 +496,13 @@
       "note": "A variable with an absent shape defined elementwise down to an ifelse under a scalar condition, one branch an array over index sets and the other a scalar, has the array branch's shape whichever branch is taken; the scalar branch fills every element."
     },
     {
-      "id": "spec.4.4.fn-name-in-registry",
-      "section": "4.4",
-      "quote": "bindings MUST reject `fn` nodes whose `name` is not in the registry for the file's declared `esm` version. There is no per-file declaration",
+      "id": "spec.4.3.4.mixed-ifelse-shape-at-build",
+      "section": "4.3.4",
+      "quote": "Every array on the value path MUST have the one shape, and that shape is the variable's.",
       "class": "semantic",
-      "phase": 1,
-      "area": "closed_functions",
-      "note": "A fn node naming a function outside the registry for the declared esm version is rejected."
-    },
-    {
-      "id": "spec.4.4.unknown-closed-function-code",
-      "section": "4.4",
-      "quote": "Bindings MUST emit an `unknown_closed_function` error when this invariant is violated; loading MUST fail.",
-      "class": "semantic",
-      "phase": 1,
-      "area": "closed_functions",
-      "note": "The rejection of an unregistered fn name carries code unknown_closed_function and fails load."
+      "phase": 3,
+      "area": "arrays",
+      "note": "The array branch shape of an unshaped mixed ifelse is fixed at build from operand shapes: declared shapes, the shapes bare definitions give, an index with all-scalar subscripts or a faq with no output indices counted as scalar (table lookups), and an unshaped data-fed parameter's data shape. Every array on the value path must share one shape; any other whole-operand op or two different shapes and the rule does not apply."
     },
     {
       "id": "spec.4.5.enum-args-match-declared",

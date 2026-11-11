@@ -29,25 +29,22 @@ const ESM = EarthSciAST
 
 include("testutils.jl")  # _n/_i/_v/_op/_D/_idx + zero-alloc harness
 
-_tc_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name = String(name))
-_tc_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
 
 _tc_call(f!, u, p, t, ::Type{T} = Float64) where {T} =
     (d = zeros(T, length(u)); f!(d, u, p, t); d)
 
 # ---------------------------------------------------------------------------
-# The FastJX-shaped fixture: K photolysis bands, each an `interp.linear` over a
-# shared solar-angle chain in `t`, plus a met gather from a live buffer, feeding
+# The FastJX-shaped fixture: K photolysis bands, each a rate over a shared
+# solar-angle chain in `t`, plus a met gather from a live buffer, feeding
 # a small chemistry. Every observed is state-blind — the B3 shape.
 #
 #   sza     = 0.5 + 0.4*sin(w*t)                            (t + p)
 #   met     = F[1] * scale                                  (forcing + p)
-#   band_i  = interp.linear(tbl_i, axis, sza)               (t + p, via a slot ref)
+#   band_i  = exp(c_i * sza)                                (t + p, via a slot ref)
 #   D(x_j)  = Σ_i c_ji * band_i * met − loss_j * met * x_j  (state enters HERE
 #             only; the loss is met-scaled so the forcing probe shows in ∂f/∂u too)
 # ---------------------------------------------------------------------------
-_tc_axis() = Float64[0.0, 0.25, 0.5, 0.75, 1.0]
-_tc_table(i) = Float64[0.1i, 0.22i, 0.35i, 0.51i, 0.8i]
+_tc_coef(i) = 0.3i
 
 function _tc_fastjx_model(K::Int, M::Int)
     vars = Dict{String, ModelVariable}(
@@ -73,10 +70,7 @@ function _tc_fastjx_model(K::Int, M::Int)
         push!(
             eqs, ESM.Equation(
                 _v("band$i"),
-                _tc_fn(
-                    "interp.linear", _tc_const(_tc_table(i)), _tc_const(_tc_axis()),
-                    _v("sza")
-                )
+                _op("exp", _op("*", _n(_tc_coef(i)), _v("sza")))
             )
         )
     end
@@ -108,11 +102,7 @@ function _tc_ref_du(K, j, t, F1; w = 0.7, scale = 1.5, xj = 1.0 + 0.25j)
     met = F1 * scale
     acc = 0.0
     for i in 1:K
-        bi = Float64(
-            ESM.evaluate_closed_function(
-                "interp.linear", Any[_tc_table(i), _tc_axis(), sza]
-            )
-        )
+        bi = exp(_tc_coef(i) * sza)
         term = (0.1 + 0.05i + 0.02j) * (bi * met)
         acc = i == 1 ? term : acc + term
     end
@@ -259,7 +249,7 @@ end
             f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(
                 _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
             )
-            t = 0.4     # keeps sza well inside one interp cell (knot at 0.625)
+            t = 0.4
             sumdu(tt) = sum(_tc_call(f!, u0, p, tt, typeof(tt)))
             if float_first
                 _ = sumdu(t)                       # stamp the Float64 memo at t

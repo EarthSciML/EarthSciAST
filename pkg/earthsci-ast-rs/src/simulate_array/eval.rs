@@ -1,6 +1,6 @@
 //! The per-cell oracle interpreter: recursive [`Value`] evaluation of every
 //! expression node (arithmetic, transcendentals, array ops, `faq`
-//! contractions with ragged/derived bounds, geometry leaf ops) plus the
+//! contractions with ragged/derived bounds) plus the
 //! standalone [`eval_expression`] entry point. This path is the correctness
 //! reference the vectorized overlay is verified against.
 
@@ -15,41 +15,21 @@ use crate::types::{ExpressionNode, JoinClause};
 /// evaluation ([`ArrayOpSpec`]), so it does not reach the allocator.
 pub(super) type RangeVec = SmallVec<[(i64, i64); 4]>;
 
-/// The extent of the derived index set produced by the FAQ node `from_faq`.
+/// The extent of the derived index set produced by the FAQ node `from_faq`:
+/// the cardinality the build-time value-invention engine (RFC §6.1 / §5.5)
+/// recorded under the producing aggregate's `id`. It runs once at setup, off
+/// the per-step hot path, so the extent is constant for the whole run; this is
+/// what sizes an ISRM emission axis (`emis_src_cells`, invented by the
+/// point-in-cell overlap producer).
 ///
-/// Two producers can size a `kind:"derived"` set, and they are consulted in the
-/// order the Python reference (`numpy_interpreter._resolve_range_spec`) fixes:
-///
-/// 1. **Value invention** (RFC §6.1 / §5.5) — the build-time relational engine
-///    enumerated a distinct member set and recorded its cardinality under the
-///    producing aggregate's `id`. It runs once at setup, off the per-step hot
-///    path, so the extent is constant for the whole run; this is what sizes an
-///    ISRM emission axis (`emis_src_cells`, invented by the point-in-cell
-///    overlap producer).
-/// 2. **Geometry** (RFC §8.1) — the producing `intersect_polygon` clip stores
-///    the **closed** ring (`n+1` rows, first vertex repeated so the
-///    `polygon_area` shoelace can read the wrap edge as an ordinary
-///    `index(ring, v+1, …)`), so the number of distinct vertices is `rows − 1`.
-///
-/// A geometry producer materialized by neither — an unevaluated clip, or an
-/// empty (disjoint) one — yields `0`: an empty contraction reducing to the
-/// additive identity 0̄, matching the evaluator's ghost-read convention. A
-/// non-geometry producer with no extent never reaches here: the build and the
-/// standalone entry both refuse it as `derived_index_set_unmaterialized`, since
-/// its empty range would read as a plausible 0 (esm-spec §9.6.6). The leniency
-/// is specific to a *contraction* bound, where an empty range is a well-defined
-/// answer. A derived range that has to size an OUTPUT axis never reaches here:
-/// it is resolved far earlier, and much more strictly, by
-/// `crate::faq::resolve_index_set_ref`, which errors rather than invent a
-/// zero-length axis.
+/// A producer with no extent never reaches here: the build and the standalone
+/// entry both refuse it as `derived_index_set_unmaterialized`, since its empty
+/// range would read as a plausible 0 (esm-spec §9.6.6). A derived range that
+/// has to size an OUTPUT axis never reaches here either: it is resolved far
+/// earlier, and much more strictly, by `crate::faq::resolve_index_set_ref`,
+/// which errors rather than invent a zero-length axis.
 pub(super) fn derived_extent(from_faq: &str, ctx: &EvalCtx) -> i64 {
-    if let Some(&n) = ctx.derived_extents.get(from_faq) {
-        return n;
-    }
-    match ctx.derived_rings.borrow().get(from_faq) {
-        Some(ring) if ring.ndim() >= 1 => (ring.shape()[0] as i64 - 1).max(0),
-        _ => 0,
-    }
+    ctx.derived_extents.get(from_faq).copied().unwrap_or(0)
 }
 
 pub(super) fn eval(expr: &Expr, ctx: &mut EvalCtx) -> Value {
@@ -236,10 +216,10 @@ pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
 /// evaluator produce a number for it". The gap between them is real and is
 /// exactly what [`check_evaluable`] rejects:
 ///
-/// * build-time query ops (`skolem`, `rank`, `distinct`, `argmin`, `argmax`) —
-///   resolved by [`crate::value_invention`] before evaluation;
-/// * form / lowering ops (`ic`, `enum`, `table_lookup`,
-///   `apply_expression_template`) — consumed by their lowering passes;
+/// * the build-time query op `distinct` — resolved by
+///   [`crate::value_invention`] before evaluation;
+/// * form / lowering ops (`ic`, `enum`, `apply_expression_template`) —
+///   consumed by their lowering passes;
 /// * the open rewrite-target tier (`grad`, `div`, `laplacian`, a typo'd
 ///   `"expp"`, a user op) — must be lowered to a stencil first.
 #[must_use]
@@ -263,11 +243,9 @@ pub fn is_evaluable_op(op: &str) -> bool {
         // to have no answer for while `value_invention::vi_eval`, Python's
         // `numpy_interpreter` and Julia's `_geo_compile` all evaluated it.
         | "D" | "Pre" | "const" | "true" | "false"
-        // Array / geometry ops.
+        // Array ops.
         | "index" | "faq" | "makearray" | "reshape" | "transpose" | "concat"
-        | "broadcast" | "intersect_polygon" | "polygon_intersection_area"
-        // Closed function registry.
-        | "fn"
+        | "broadcast"
         // The engine-internal precision-boundary marker
         // (`crate::precision_infer::MARKER_OP`): a transparent wrapper that
         // evaluates its one operand at a stated element type. Never authored.
@@ -294,18 +272,11 @@ pub fn is_evaluable_op(op: &str) -> bool {
 /// # Errors
 ///
 /// [`CompileError::UnloweredOperatorError`], [`CompileError::InvalidOperatorArity`],
-/// [`CompileError::MakearrayRegionInvalid`] (from the registry gate),
-/// [`CompileError::UnevaluableOperatorError`], or — only when the active
-/// precision is `Float32` — [`CompileError::Float32Unsupported`].
+/// [`CompileError::MakearrayRegionInvalid`] (from the registry gate), or
+/// [`CompileError::UnevaluableOperatorError`].
 pub fn check_evaluable(expr: &Expr) -> Result<(), CompileError> {
     check_no_spatial_ops(expr)?;
-    check_evaluable_ops(expr)?;
-    // Layer 3: the constructs that have an evaluation rule here but only a
-    // binary64 one (`intersect_polygon`, `polygon_intersection_area`, the
-    // interpolating closed functions). Under `element_type: "Float32"` those
-    // would quietly compute part of the answer in the wrong precision, so they
-    // are rejected NAMING themselves (esm-spec §11.3). A no-op under Float64.
-    crate::precision::check_f32_supported(expr)
+    check_evaluable_ops(expr)
 }
 
 /// The [`is_evaluable_op`] half of [`check_evaluable`], applied over the whole
@@ -367,20 +338,14 @@ pub(crate) fn eval_scalar_expression(
 /// from scalar bindings ([`eval_scalar_expression`]).
 ///
 /// On top of the runtime gate it refuses, naming the operator, what has no
-/// scalar value over scalar operands: the array / tensor ops, the geometry
-/// ops, an array-valued `const` (except as a `fn` argument, where it is the
-/// `interp.*` table or axis), and a structural `D`, which [`eval_op_named`]
-/// answers with the `NaN` sentinel because a right-hand-side `D` never
-/// legitimately reaches evaluation (esm-spec §4.2).
-///
-/// The layers run in [`check_evaluable`]'s order with this one before the
-/// Float32 layer, so an op that trips both (`intersect_polygon`) is reported as
-/// `unevaluable_operator`: declaring `Float64` would not make it evaluable here.
+/// scalar value over scalar operands: the array / tensor ops, an array-valued
+/// `const`, and a structural `D`, which [`eval_op_named`] answers with the
+/// `NaN` sentinel because a right-hand-side `D` never legitimately reaches
+/// evaluation (esm-spec §4.2).
 pub(crate) fn check_scalar_evaluable(expr: &Expr) -> Result<(), CompileError> {
     check_no_spatial_ops(expr)?;
     check_evaluable_ops(expr)?;
-    check_scalar_ops(expr)?;
-    crate::precision::check_f32_supported(expr)
+    check_scalar_ops(expr)
 }
 
 /// The [`check_scalar_evaluable`] layer that refuses the ops with no scalar
@@ -390,16 +355,9 @@ fn check_scalar_ops(expr: &Expr) -> Result<(), CompileError> {
         return Ok(());
     };
     let no_scalar_value = match node.op.as_str() {
-        "D"
-        | "index"
-        | "faq"
-        | "makearray"
-        | "reshape"
-        | "transpose"
-        | "concat"
-        | "broadcast"
-        | "intersect_polygon"
-        | "polygon_intersection_area" => true,
+        "D" | "index" | "faq" | "makearray" | "reshape" | "transpose" | "concat" | "broadcast" => {
+            true
+        }
         "const" => !node
             .value
             .as_ref()
@@ -411,21 +369,7 @@ fn check_scalar_ops(expr: &Expr) -> Result<(), CompileError> {
             op: node.op.clone(),
         });
     }
-    let is_fn = node.op == "fn";
-    let mut first_err: Option<CompileError> = None;
-    node.for_each_child(&mut |child| {
-        let table_arg = is_fn && matches!(child, Expr::Operator(c) if c.op == "const");
-        if first_err.is_none()
-            && !table_arg
-            && let Err(e) = check_scalar_ops(child)
-        {
-            first_err = Some(e);
-        }
-    });
-    match first_err {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
+    node.try_for_each_child(&mut check_scalar_ops)
 }
 
 pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
@@ -545,21 +489,12 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
 
         // Inline literal (esm-spec §4): a number → scalar; a nested numeric
-        // array → a row-major array (e.g. a polygon's `[verts, 2]` lon/lat ring
-        // held as a constant observed input feeding an `intersect_polygon` clip).
+        // array → a row-major array.
         "const" => eval_const_memo(node, ctx.const_lits),
 
         // Array ops.
         "index" => eval_index(node, ctx),
         "faq" => eval_faq(node, ctx),
-        // Conservative-regridding geometry kernel (RFC §8.1): clip two lon/lat
-        // polygon rings on the node's `manifold`, producing the overlap ring as
-        // an `[N, 2]` array. `polygon_area` over it is an ordinary `faq`.
-        "intersect_polygon" => eval_intersect_polygon(node, ctx),
-        // Fused geometry leaf (esm-spec §4.2 / §8.6.1): the SCALAR overlap area of
-        // the two polygon operands under the node's `manifold`, defined to equal
-        // `polygon_area(intersect_polygon(a, b))` but with NO clip ring exposed.
-        "polygon_intersection_area" => eval_polygon_intersection_area(node, ctx),
         "makearray" => eval_makearray(node, ctx),
         "reshape" => eval_reshape(node, ctx),
         "transpose" => eval_transpose(node, ctx),
@@ -570,14 +505,6 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // see [`eval_op_named`]. Because the scalar-operator set excludes
         // `broadcast` itself, this recursion is one level deep.
         "broadcast" => eval_broadcast(node, ctx),
-
-        // Closed-registry function call (esm-spec §9.2): `datetime.*` calendar
-        // accessors and `interp.linear` / `interp.bilinear` tensor
-        // interpolation. Routes to the shared `registered_functions` kernel —
-        // the same one the Julia/Python bindings use — so a coupled model whose
-        // observeds compute fuel/table lookups via `fn` evaluates identically
-        // here (the fire stack's `FuelModelLookup` is the motivating case).
-        "fn" => eval_fn(node, ctx),
 
         // The nullary boolean literal (esm-spec §4.2). This evaluator's boolean
         // convention is already 1.0 / 0.0 — every comparison and `and`/`or`/
@@ -595,8 +522,8 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Unreachable by construction: EVERY path into this evaluator is gated.
         // The compiled-model path gates in `from_model` (`check_no_spatial_ops`),
         // and the public `eval_expression` gates with `check_evaluable`, which
-        // additionally rejects evaluable-core ops with no arm here (`skolem`,
-        // `rank`, `ic`, `table_lookup`, …).
+        // additionally rejects evaluable-core ops with no arm here (`ic`,
+        // `enum`, `distinct`, …).
         //
         // This used to be `_ => Value::Scalar(f64::NAN)`. A NaN sentinel is
         // indistinguishable from a legitimate numerical result, so a typo'd op
@@ -608,174 +535,6 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             "operator '{other}' reached eval_op without an evaluation rule; \
              every entry point must gate with check_evaluable() first"
         ),
-    }
-}
-
-/// Evaluate a `fn` op: a call into the closed function registry
-/// (esm-spec §9.2 / [`crate::registered_functions`]). Each argument is
-/// evaluated to a runtime [`Value`] and coerced to a [`ClosedArg`] — a scalar
-/// (or 0-D array) to `Scalar`, a 1-D array to `Array`, a 2-D array to
-/// `Array2D`. The result is lifted back to `f64`. A missing `name`, an
-/// unsupported argument rank (≥ 3), or a registry error (unknown function,
-/// arity/shape mismatch, non-monotonic axis) surfaces as the NaN sentinel —
-/// the same runtime-error convention every other op in this interpreter uses
-/// (the solver detects NaN as a step failure).
-pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    use crate::registered_functions::{ClosedArg, evaluate_closed_function};
-
-    let Some(name) = node.name.as_deref() else {
-        return Value::Scalar(f64::NAN);
-    };
-    let vals: ValVec = node.args.iter().map(|a| eval(a, ctx)).collect();
-    // A lookup into an `out_of_bounds: "error"` table (esm-spec §9.5.1)
-    // checks every query against its axis BEFORE the interpolation core.
-    let strict = crate::lower_table_lookup::strict_table(node);
-
-    // Broadcast an `interp.*` entry over an ARRAY query: the table and axes
-    // stay fixed as the lookup table, only the query points vary, one call
-    // per element. A scalar component's lookup mounted on a gridded field
-    // (a `param_to_var` coupling, or a declared observed read wholesale) is
-    // such a call: `interp.linear(y, x, code)` over an [x,y] fuel grid, or
-    // `interp.bilinear(Z, P_axis, csa_axis, P, cos_sza)` per grid cell. The
-    // array queries must share one shape; a scalar query is the same at
-    // every element.
-    if let Some(out) = eval_interp_elementwise(name, &vals, strict) {
-        return out;
-    }
-
-    let mut args: Vec<ClosedArg> = Vec::with_capacity(vals.len());
-    for v in &vals {
-        let Some(arg) = closed_arg_of(v) else {
-            return Value::Scalar(f64::NAN);
-        };
-        args.push(arg);
-    }
-    if let Some(id) = strict
-        && let Some(fault) = strict_query_fault(id, name, &args)
-    {
-        latch_gather_fault(fault);
-        return Value::Scalar(f64::NAN);
-    }
-    match evaluate_closed_function(name, &args) {
-        Ok(v) => Value::Scalar(v.as_f64()),
-        Err(_) => Value::Scalar(f64::NAN),
-    }
-}
-
-/// One evaluated `fn` argument as the registry takes it: a scalar (or 0-D
-/// array) as `Scalar`, a 1-D array as `Array`, a 2-D array as `Array2D`;
-/// `None` for rank 3 and up.
-fn closed_arg_of(v: &Value) -> Option<crate::registered_functions::ClosedArg> {
-    use crate::registered_functions::ClosedArg;
-    Some(match v {
-        Value::Scalar(s) => ClosedArg::Scalar(*s),
-        Value::Array(arr) => match arr.ndim() {
-            0 => ClosedArg::Scalar(arr[IxDyn(&[])]),
-            1 => ClosedArg::Array(arr.iter().copied().collect()),
-            2 => {
-                let (rows, cols) = (arr.shape()[0], arr.shape()[1]);
-                ClosedArg::Array2D(
-                    (0..rows)
-                        .map(|i| (0..cols).map(|j| arr[IxDyn(&[i, j])]).collect())
-                        .collect(),
-                )
-            }
-            _ => return None,
-        },
-    })
-}
-
-/// [`eval_fn`] for an `interp.*` call whose query is an ARRAY: the registry
-/// call once per element, in row-major order, with every query argument
-/// replaced by its element (a scalar query by itself). A strict table's
-/// out-of-range element latches its fault and reads `NaN`, as a scalar call
-/// does. `None` when the call is not of that form — a scalar-query call, or
-/// some other function — and is the general path's to answer. Array queries
-/// of different shapes are the registry's array-argument error, `NaN`.
-///
-/// `interp.linear` broadcasts a 0-D array query too (into a 0-D result),
-/// and reads its table and axis as the row-major flattening of whatever
-/// rank they have (a scalar as one entry); the other two entries read a 0-D
-/// query as the scalar it holds, and their fixed arguments as the general
-/// path does.
-fn eval_interp_elementwise(name: &str, vals: &[Value], strict: Option<&str>) -> Option<Value> {
-    use crate::registered_functions::{ClosedArg, evaluate_closed_function};
-    // §9.2 puts the query LAST for the two tensor entries and FIRST for
-    // the search entry.
-    let queries: &[usize] = match (name, vals.len()) {
-        ("interp.linear", 3) => &[2],
-        ("interp.bilinear", 5) => &[3, 4],
-        ("interp.searchsorted", 2) => &[0],
-        _ => return None,
-    };
-    let min_rank = usize::from(name != "interp.linear");
-    let mut shape: Option<&[usize]> = None;
-    for &q in queries {
-        if let Value::Array(a) = &vals[q]
-            && a.ndim() >= min_rank
-        {
-            match shape {
-                None => shape = Some(a.shape()),
-                Some(s) if s != a.shape() => return Some(Value::Scalar(f64::NAN)),
-                Some(_) => {}
-            }
-        }
-    }
-    let shape = shape?;
-    let mut call: Vec<ClosedArg> = Vec::with_capacity(vals.len());
-    for (k, v) in vals.iter().enumerate() {
-        if queries.contains(&k) {
-            call.push(ClosedArg::Scalar(f64::NAN));
-        } else if name == "interp.linear" {
-            call.push(ClosedArg::Array(value_flat(v)));
-        } else {
-            call.push(closed_arg_of(v)?);
-        }
-    }
-    let out = ArrayD::<f64>::from_shape_fn(IxDyn(shape), |ix| {
-        for &q in queries {
-            call[q] = ClosedArg::Scalar(match &vals[q] {
-                Value::Scalar(s) => *s,
-                Value::Array(a) if a.ndim() == 0 => a[IxDyn(&[])],
-                Value::Array(a) => a[&ix],
-            });
-        }
-        if let Some(id) = strict
-            && let Some(fault) = strict_query_fault(id, name, &call)
-        {
-            latch_gather_fault(fault);
-            return f64::NAN;
-        }
-        evaluate_closed_function(name, &call)
-            .map(|v| v.as_f64())
-            .unwrap_or(f64::NAN)
-    });
-    Some(Value::Array(Box::new(out)))
-}
-
-/// The first out-of-range query of a strict-table `interp.*` call, in the
-/// order the tape checks them (the first axis, then the second), or `None`.
-/// §9.2 puts the query last for the two tensor entries and first for
-/// `interp.searchsorted`; an argument of the wrong kind is left to the
-/// registry, which rejects the call on its own terms.
-fn strict_query_fault(
-    table_id: &str,
-    name: &str,
-    args: &[crate::registered_functions::ClosedArg],
-) -> Option<String> {
-    use crate::lower_table_lookup::out_of_bounds_fault;
-    use crate::registered_functions::ClosedArg;
-    let scalar_on = |q: usize, a: usize, which: usize| match (args.get(q), args.get(a)) {
-        (Some(ClosedArg::Scalar(x)), Some(ClosedArg::Array(axis))) => {
-            out_of_bounds_fault(table_id, which, axis, *x)
-        }
-        _ => None,
-    };
-    match name {
-        "interp.linear" => scalar_on(2, 1, 1),
-        "interp.bilinear" => scalar_on(3, 1, 1).or_else(|| scalar_on(4, 2, 2)),
-        "interp.searchsorted" => scalar_on(0, 1, 1),
-        _ => None,
     }
 }
 
@@ -877,11 +636,11 @@ pub(super) fn negate(v: Value) -> Value {
 /// `ifelse(cond, a, b)`. A scalar `cond` picks a branch and returns it verbatim
 /// (scalar OR array). An ARRAY `cond` SELECTS elementwise — `a`/`b` (scalar or
 /// array) are broadcast to the common shape and chosen per cell — so a per-cell
-/// fuel-model lookup `ifelse(and(code>=1, code<=13), interp.linear(...), default)`
+/// fuel-model lookup `ifelse(and(code>=1, code<=13), lookup, default)`
 /// materializes at `code`'s [x,y] shape instead of collapsing to a scalar. A
 /// true select (not a `cond*a + (1-cond)*b` blend) keeps a `NaN` in the
-/// *unchosen* branch — e.g. an out-of-table `interp.linear` — from contaminating
-/// the result.
+/// *unchosen* branch — e.g. an out-of-table lookup — from contaminating the
+/// result.
 pub(super) fn eval_ifelse(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     if node.args.len() != 3 {
         return Value::Scalar(f64::NAN);
@@ -915,15 +674,6 @@ pub(super) fn eval_ifelse(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         .and(&b_b)
         .for_each(|o, &c, &av, &bv| *o = if c != 0.0 { av } else { bv });
     Value::Array(Box::new(out))
-}
-
-/// Row-major flatten of a [`Value`] to a `Vec<f64>` (a scalar → one element) —
-/// used to snapshot a fixed interpolation table/axis.
-fn value_flat(v: &Value) -> Vec<f64> {
-    match v {
-        Value::Scalar(s) => vec![*s],
-        Value::Array(a) => a.iter().copied().collect(),
-    }
 }
 
 /// Broadcast a [`Value`] to `target` shape: a scalar fills; an array is
@@ -2300,8 +2050,8 @@ pub(super) fn index_into(
     // Partial indexing (fewer indices than the array rank) selects a sub-array:
     // fix the leading `indices.len()` axes and keep the trailing axes free. This
     // is how a per-cell polygon ring is drawn from a `[cells, verts, coord]`
-    // geometry table — `index(poly, a)` yields the `a`-th `[verts, coord]` ring
-    // that `polygon_intersection_area` / `intersect_polygon` clip. A full index
+    // geometry table — `index(poly, a)` yields the `a`-th `[verts, coord]`
+    // ring. A full index
     // set (`indices.len() == ndim`) yields the scalar element, as before.
     if indices.len() < arr.ndim() {
         let mut view = arr.view();
@@ -2558,193 +2308,11 @@ pub(super) fn collect_json_array(
     }
 }
 
-/// Evaluate the `intersect_polygon` leaf op (RFC `semiring-faq-unified-ir` §8.1):
-/// clip the two polygon operands on the node's declared `manifold` and return
-/// the overlap ring as an `[N, 2]` array of `(lon, lat)` rows. `N` is
-/// data-dependent; a disjoint / edge-touching clip yields a `[0, 2]` array.
-/// Spherical/geodesic clips dispatch to `s2geometry` via [`crate::geometry`];
-/// planar clips use a pure-Rust Sutherland–Hodgman intersection.
-/// Validate and evaluate the shared operand contract of the two polygon-clip
-/// leaf ops (§5.8.4): exactly two array operands that read as `[V, 2]`
-/// lon/lat rings, plus a required in-enum `manifold` flag. `None` means "not
-/// evaluable" — the caller returns the NaN sentinel.
-pub(super) fn eval_clip_operands(
-    node: &ExpressionNode,
-    ctx: &mut EvalCtx,
-) -> Option<(crate::geometry::Manifold, Vec<(f64, f64)>, Vec<(f64, f64)>)> {
-    // Strict binary clip (schema-enforced; defense-in-depth here).
-    if node.args.len() != 2 {
-        return None;
-    }
-    // The `manifold` flag is required and part of the op's contract (§5.8.4);
-    // a missing or out-of-enum value is not evaluable.
-    let manifold = node
-        .manifold
-        .as_deref()
-        .and_then(crate::geometry::Manifold::from_flag)?;
-    // Both geometry leaves are binary (§4.3). Destructure rather than index, so
-    // an under-applied node from the public `eval_expression` bypass is
-    // un-evaluable (`None`) rather than a panic.
-    let ([a_expr, b_expr] | [a_expr, b_expr, ..]) = node.args.as_slice() else {
-        return None;
-    };
-    let poly_a = match eval(a_expr, ctx) {
-        Value::Array(a) => a,
-        _ => return None,
-    };
-    let poly_b = match eval(b_expr, ctx) {
-        Value::Array(a) => a,
-        _ => return None,
-    };
-    let va = arrayd_to_lonlat(&poly_a)?;
-    let vb = arrayd_to_lonlat(&poly_b)?;
-    Some((manifold, va, vb))
-}
-
-pub(super) fn eval_intersect_polygon(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    let Some((manifold, va, vb)) = eval_clip_operands(node, ctx) else {
-        return Value::Scalar(f64::NAN);
-    };
-    match crate::geometry::intersect_polygon(&va, &vb, manifold) {
-        Ok(ring) => {
-            // Return the ring **closed** (first vertex repeated) so the
-            // `polygon_area` shoelace FAQ reads the wrap edge n→1 as an ordinary
-            // `index(ring, v+1, …)` with no modular arithmetic in the AST —
-            // matching the Python reference (`numpy_interpreter._eval_intersect_polygon`
-            // → `geometry.close_ring`). The pure kernel `crate::geometry::intersect_polygon`
-            // still returns the n distinct vertices; closure is the op's contract.
-            let closed = close_ring(&ring);
-            let arr = lonlat_to_arrayd(&closed);
-            // Self-register the closed ring under the node `id` (RFC §8.1) so a
-            // downstream `faq` over a `kind:"derived"` index set
-            // (`from_faq: <id>`) sizes its contraction from this ring's
-            // distinct-vertex count (`rows − 1`); see [`derived_extent`].
-            if let Some(id) = &node.id {
-                ctx.derived_rings
-                    .borrow_mut()
-                    .insert(id.clone(), arr.clone());
-            }
-            Value::Array(Box::new(arr))
-        }
-        // A degenerate operand ring is an invalid value (esm-spec §8.6.1) and
-        // latches a fault; any other clip failure surfaces as NaN, the same
-        // not-a-value sentinel the evaluator uses for unevaluable nodes.
-        Err(e) => {
-            latch_degenerate_operand(&e);
-            Value::Scalar(f64::NAN)
-        }
-    }
-}
-
-/// Latch a degenerate polygon operand (esm-spec §8.6.1: a ring with fewer than 3
-/// distinct vertices is rejected) as a fail-closed fault, so the evaluation
-/// that met it fails, on the interpreter and on the tape alike, instead of
-/// carrying a NaN area onward. The code is the one Julia raises for the same
-/// ring. Any other clip failure is left to its NaN sentinel.
-pub(crate) fn latch_degenerate_operand(e: &crate::geometry::GeometryError) {
-    if e.is_degenerate_operand() {
-        latch_gather_fault(format!(
-            "{GEOMETRY_CLIP_CODE}: {} (esm-spec §8.6.1: a polygon operand needs at least 3 \
-             distinct vertices)",
-            e.message()
-        ));
-    }
-}
-
-/// The code a degenerate polygon operand is refused with.
-pub(crate) const GEOMETRY_CLIP_CODE: &str = "E_TREEWALK_GEOMETRY_CLIP";
-
-/// Evaluate the fused `polygon_intersection_area` leaf op (esm-spec §4.2 /
-/// §8.6.1): the **scalar** overlap area of the two polygon operands under the
-/// node's declared `manifold`. It is defined to equal
-/// `polygon_area(intersect_polygon(a, b))` at the same `manifold` — the FUSED
-/// form of the existing clip + shoelace — but exposes **no** clip ring
-/// (unlike [`eval_intersect_polygon`], which surfaces the ring as an `[N, 2]`
-/// array and self-registers a derived index set). This reuses the same kernels:
-/// [`crate::geometry::intersect_polygon`] to clip, then
-/// [`crate::geometry::polygon_area`] (planar shoelace / spherical-geodesic S2)
-/// to measure, so its value matches the composed form exactly. A disjoint /
-/// edge-touching clip yields a `< 3`-vertex ring, whose area is `0.0`.
-pub(super) fn eval_polygon_intersection_area(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    let Some((manifold, va, vb)) = eval_clip_operands(node, ctx) else {
-        return Value::Scalar(f64::NAN);
-    };
-    Value::Scalar(clip_area_value(&va, &vb, manifold))
-}
-
-/// The value of one `polygon_intersection_area` of two `(lon, lat)` rings: the
-/// ONE definition the interpreter above and the tape's geometry instruction
-/// both call, so a compiled area is the interpreter's by shared code.
-///
-/// Clip, then measure — the fused composition. The clip kernel returns the `n`
-/// distinct overlap vertices; `polygon_area`'s shoelace / spherical body reads
-/// the wrap edge `n→1` itself, so no explicit ring closure is needed here (and
-/// no derived ring is registered — the fused leaf exposes none).
-pub(crate) fn clip_area_value(
-    va: &[(f64, f64)],
-    vb: &[(f64, f64)],
-    manifold: crate::geometry::Manifold,
-) -> f64 {
-    // A degenerate operand ring latches a fault (see
-    // [`latch_degenerate_operand`]); any other failure surfaces as NaN, the
-    // same not-a-value sentinel the evaluator uses for unevaluable nodes.
-    crate::geometry::intersect_polygon(va, vb, manifold)
-        .and_then(|ring| crate::geometry::polygon_area(&ring, manifold))
-        .unwrap_or_else(|e| {
-            latch_degenerate_operand(&e);
-            f64::NAN
-        })
-}
-
-/// Close a ring by repeating its first vertex (RFC §8.1; mirrors Python
-/// `geometry.close_ring`) so a `polygon_area` shoelace FAQ reads the wrap edge
-/// `n→1` as an ordinary `index(ring, v+1, …)`. An empty (disjoint-clip) ring
-/// stays empty, so its derived index set has extent 0 and the FAQ reduces to 0̄.
-pub(super) fn close_ring(ring: &[(f64, f64)]) -> Vec<(f64, f64)> {
-    if ring.is_empty() {
-        return Vec::new();
-    }
-    let mut out = Vec::with_capacity(ring.len() + 1);
-    out.extend_from_slice(ring);
-    out.push(ring[0]);
-    out
-}
-
-/// Read a `[V, 2]` lon/lat coordinate array into a `Vec<(lon, lat)>`. Returns
-/// `None` unless the array is 2-D with a trailing coordinate axis of length 2.
-pub(super) fn arrayd_to_lonlat(arr: &ArrayD<f64>) -> Option<Vec<(f64, f64)>> {
-    if arr.ndim() != 2 || arr.shape()[1] != 2 {
-        return None;
-    }
-    let nv = arr.shape()[0];
-    let mut out = Vec::with_capacity(nv);
-    for v in 0..nv {
-        out.push((arr[IxDyn(&[v, 0])], arr[IxDyn(&[v, 1])]));
-    }
-    Some(out)
-}
-
-/// Build a row-major `[N, 2]` lon/lat array from a ring of `(lon, lat)` pairs.
-/// An empty ring yields a `[0, 2]` array so downstream `index(clip, v, c)` reads
-/// return the 0 ghost value and a `sum_product` FAQ over the empty `clip_ring`
-/// range reduces to the additive identity `0̄`.
-pub(super) fn lonlat_to_arrayd(ring: &[(f64, f64)]) -> ArrayD<f64> {
-    let n = ring.len();
-    let mut flat = Vec::with_capacity(n * 2);
-    for &(lon, lat) in ring {
-        flat.push(lon);
-        flat.push(lat);
-    }
-    ArrayD::from_shape_vec(IxDyn(&[n, 2]), flat).expect("ring [N,2] shape is consistent")
-}
-
 /// Evaluate a standalone expression against a set of named array inputs, reusing
 /// the array evaluator — in particular the M1 `faq` machinery in
-/// [`eval_faq`]. This is the entry point for computing a `polygon_area`
-/// `sum_product` FAQ over an `intersect_polygon` ring (RFC §8.1): supply the
-/// clipped ring (and any companion arrays the integrand references) in `inputs`
-/// with the aggregate's `clip_ring` range already resolved to a concrete
-/// `[1, N]` interval, and the body is reduced exactly as any other `faq`.
+/// [`eval_faq`]: supply the arrays the expression reads in `inputs`, with
+/// every aggregate range already resolved to a concrete interval, and the body
+/// is reduced exactly as any other `faq`.
 ///
 /// Returns [`Value::Scalar`] for a scalar FAQ output (`output_idx: []`),
 /// [`Value::Array`] otherwise.
@@ -2754,8 +2322,8 @@ pub(super) fn lonlat_to_arrayd(ring: &[(f64, f64)]) -> ArrayD<f64> {
 /// This is the crate's one UNGATED evaluation entry point — it takes a raw
 /// [`Expr`] that never passed through `from_model`'s compile-time gate — so it
 /// applies [`check_evaluable`] itself. An operator the interpreter cannot
-/// evaluate (a typo, an unlowered `grad`, or a `skolem`/`ic`/`table_lookup` that
-/// an earlier pipeline stage should have eliminated) is reported here rather
+/// evaluate (a typo, an unlowered `grad`, or an `ic`/`enum` that an earlier
+/// pipeline stage should have eliminated) is reported here rather
 /// than silently evaluating to `NaN`.
 pub fn eval_expression(
     expr: &Expr,
@@ -2801,9 +2369,8 @@ pub fn eval_expression(
 /// eval_expression_with_extents(&expr, &inputs, &[], &[], 0.0, &vi.extents)?;
 /// ```
 ///
-/// Pass an empty map (or call [`eval_expression`]) for the geometry-only case:
-/// a derived range then resolves from the runtime clip-ring registry exactly as
-/// before.
+/// Pass an empty map (or call [`eval_expression`]) when nothing ranges over a
+/// derived set: a derived range with no extent is refused.
 ///
 /// # Errors
 ///
@@ -2933,14 +2500,12 @@ pub(crate) fn eval_observed_recurrence(
         Err(e) => return Some(Err(e)),
     };
     let empty: ArrMap = ArrMap::default();
-    let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     let env = EvalEnv {
         state_arrays: &empty,
         params,
         param_names,
         t,
-        derived_rings: &derived_rings,
         derived_extents,
         forcing: &forcing,
         cse: None,
@@ -2982,9 +2547,13 @@ pub(crate) fn eval_observed_recurrence(
 /// `param_names`. A causal self-reference (esm-spec §4.3.1.1) lowers as the
 /// model's own recurrence rule does, to one ordered sweep; one the lowering
 /// does not recognize is left to the caller's own diagnostic. `None` when
-/// `recurrence_only` and the observed is not such a recurrence. A scalar value
+/// `recurrence_only` and the observed is not such a recurrence. `fill_shape`
+/// is the shape the build decided the variable has (its declared one, or
+/// esm-spec §4.3.4's for an unshaped mixed-rank `ifelse`): a scalar value
+/// fills it, as the reference evaluator's does. With none, a scalar value
 /// comes back as a 0-d array.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn eval_observed_taped(
     name: &str,
     expr: &Expr,
@@ -2992,6 +2561,7 @@ pub(crate) fn eval_observed_taped(
     params: &[f64],
     param_names: &[String],
     const_arrays: &ConstArrayScope,
+    fill_shape: Option<&[usize]>,
     recurrence_only: bool,
 ) -> Option<Result<ArrayD<f64>, super::tape::StandaloneError>> {
     use super::tape::StandaloneError;
@@ -3024,7 +2594,8 @@ pub(crate) fn eval_observed_taped(
         AlgebraicRule::Scalar {
             var: name.to_string(),
             body: std::sync::Arc::new(expr.clone()),
-            declared_shape: None,
+            declared_shape: fill_shape.map(<[usize]>::to_vec),
+            data_shaped: None,
         }
     };
     let mut mentioned = HashSet::new();
@@ -3083,13 +2654,10 @@ pub(crate) fn eval_expression_with_extents_and_consts_shared(
     const_arrays: &ConstArrayScope,
 ) -> Result<Value, CompileError> {
     check_evaluable(expr)?;
-    // A fresh evaluation can only register the geometry rings `expr` itself
-    // produces, so a derived range over any other unsized producer is refused
-    // rather than contracted as empty.
-    let mut geometry_ids = std::collections::HashSet::new();
-    super::compile::collect_geometry_producer_ids(expr, &mut geometry_ids);
+    // A derived range over an unsized producer is refused rather than
+    // contracted as empty.
     if let Some(from_faq) =
-        super::compile::first_unmaterialized_derived_range(expr, derived_extents, &geometry_ids)
+        super::compile::first_unmaterialized_derived_range(expr, derived_extents)
     {
         return Err(super::compile::unmaterialized_derived_error(
             &from_faq,
@@ -3098,16 +2666,14 @@ pub(crate) fn eval_expression_with_extents_and_consts_shared(
         ));
     }
     let empty: ArrMap = ArrMap::default();
-    let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-    // Standalone expression evaluation (FAQ rings, area integrands) carries no
-    // loader forcing — an empty buffer keeps the channel byte-identical here.
+    // Standalone expression evaluation carries no loader forcing — an empty
+    // buffer keeps the channel byte-identical here.
     let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     let env = EvalEnv {
         state_arrays: &empty,
         params,
         param_names,
         t,
-        derived_rings: &derived_rings,
         derived_extents,
         forcing: &forcing,
         // Standalone one-shot evaluation: no CSE memo (nothing to amortize the
@@ -4361,11 +3927,11 @@ pub(super) fn data_key_column(a: &ArrayD<f64>) -> Option<(Vec<i64>, Vec<crate::r
 }
 
 /// One side's per-position key: the single column's key for a simple `on`, or
-/// the canonical composite [`crate::relational::skolem`] tuple over every listed
-/// pair's column for a multi-pair (COMPOSITE-KEY) clause. A composite key
-/// matches iff EVERY pair agrees, which is exactly tuple equality; `skolem`
-/// gives the directed (order-preserving) canonical tuple, so the left and right
-/// sides build comparable keys as long as the pairs are listed in one order —
+/// the tuple ([`crate::relational::Key::Tuple`]) of every listed pair's column
+/// value, in pair order, for a multi-pair (COMPOSITE-KEY) clause. A composite
+/// key matches iff EVERY pair agrees, which is exactly tuple equality; the
+/// left and right sides build comparable keys as long as the pairs are listed
+/// in one order —
 /// which the build-time grouping guarantees by construction.
 fn side_keys(
     cols: &[crate::join::KeyColumn],
@@ -4395,7 +3961,7 @@ pub(super) fn composite_side_keys(
         return None;
     }
     let keys = (0..positions.len())
-        .map(|t| crate::relational::skolem(parts.iter().map(|p| p.1[t].clone()).collect(), false))
+        .map(|t| crate::relational::Key::Tuple(parts.iter().map(|p| p.1[t].clone()).collect()))
         .collect();
     Some((positions, keys))
 }
@@ -5913,15 +5479,7 @@ mod evaluability_gate_tests {
     /// to eliminate them. They used to fall through to `_ => NaN`.
     #[test]
     fn registry_legal_but_unevaluable_ops_are_rejected_not_nan() {
-        for op in [
-            "skolem",
-            "rank",
-            "distinct",
-            "argmin",
-            "argmax",
-            "ic",
-            "table_lookup",
-        ] {
+        for op in ["distinct", "ic", "enum"] {
             assert!(
                 crate::op_registry::is_core_op(op),
                 "{op} should be registry-legal, else this test proves nothing"
@@ -5944,7 +5502,7 @@ mod evaluability_gate_tests {
     fn unevaluable_op_nested_in_expression_is_rejected() {
         let expr = node(
             "+",
-            vec![Expr::Number(1.0), node("skolem", vec![Expr::Number(2.0)])],
+            vec![Expr::Number(1.0), node("distinct", vec![Expr::Number(2.0)])],
         );
         assert!(
             eval_it(&expr).is_err(),
@@ -5987,15 +5545,9 @@ mod evaluability_gate_tests {
             "reshape",
             "transpose",
             "concat",
-            "fn",
-            "skolem",
-            "rank",
             "distinct",
-            "argmin",
-            "argmax",
             "ic",
             "enum",
-            "table_lookup",
             "apply_expression_template",
             "true",
         ] {
@@ -6030,14 +5582,14 @@ mod evaluability_gate_tests {
     }
 
     /// The §4.2 core set minus this evaluator's rules, pinned member by member.
-    /// Nine ops, each eliminated by an earlier stage — and NOTHING else, which
+    /// Four ops, each eliminated by an earlier stage — and NOTHING else, which
     /// is what makes the build-time gate in `compile.rs` a complete answer to
     /// the `unreachable!` backstop rather than a patch for the op that was
-    /// reported. A tenth entry appearing here means a new op reached the
+    /// reported. A fifth entry appearing here means a new op reached the
     /// registry without an evaluation rule and can panic; it must be given a
     /// rule or added to this list deliberately.
     #[test]
-    fn the_core_minus_evaluable_gap_is_exactly_nine_ops() {
+    fn the_core_minus_evaluable_gap_is_exactly_four_ops() {
         const CORE: &[&str] = &[
             "+",
             "-",
@@ -6083,9 +5635,7 @@ mod evaluability_gate_tests {
             "Pre",
             "const",
             "true",
-            "fn",
             "enum",
-            "table_lookup",
             "apply_expression_template",
             "faq",
             "makearray",
@@ -6094,13 +5644,7 @@ mod evaluability_gate_tests {
             "reshape",
             "transpose",
             "concat",
-            "skolem",
-            "rank",
             "distinct",
-            "argmin",
-            "argmax",
-            "intersect_polygon",
-            "polygon_intersection_area",
         ];
         for op in CORE {
             assert!(
@@ -6116,17 +5660,7 @@ mod evaluability_gate_tests {
         gap.sort_unstable();
         assert_eq!(
             gap,
-            vec![
-                "apply_expression_template",
-                "argmax",
-                "argmin",
-                "distinct",
-                "enum",
-                "ic",
-                "rank",
-                "skolem",
-                "table_lookup",
-            ]
+            vec!["apply_expression_template", "distinct", "enum", "ic"]
         );
     }
 
@@ -6140,269 +5674,6 @@ mod evaluability_gate_tests {
                 Ok(v) => panic!("op '{op}' must not evaluate, got {v:?}"),
                 Err(e) => e,
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod geometry_eval_tests {
-    //! End-to-end evaluation of the M4 geometry kernel through the *real* array
-    //! evaluator (bead ess-my4.4.11; RFC `semiring-faq-unified-ir` §8.1): the
-    //! `intersect_polygon` leaf is dispatched by [`eval_op`] (spherical →
-    //! s2geometry via the `s2bindings` crate, planar → Sutherland–Hodgman), and
-    //! `polygon_area` is computed as an ordinary `sum_product` aggregate over the
-    //! clipped ring, reduced by the M1 machinery in [`eval_faq`]. This is the
-    //! Rust binding actually clipping and integrating, not just schema-validating.
-    use super::*;
-    use serde_json::json;
-
-    /// Build an `[N, 2]` lon/lat array from a ring of `(lon, lat)` pairs.
-    fn ring_array(ring: &[(f64, f64)]) -> ArrayD<f64> {
-        let mut flat = Vec::with_capacity(ring.len() * 2);
-        for &(lon, lat) in ring {
-            flat.push(lon);
-            flat.push(lat);
-        }
-        ArrayD::from_shape_vec(IxDyn(&[ring.len(), 2]), flat).unwrap()
-    }
-
-    /// Drop a trailing vertex equal to the first — the closed-ring form the
-    /// `intersect_polygon` AST op now returns — so an oracle that expects the `n`
-    /// distinct vertices (e.g. s2 `spherical_area`, which rejects a degenerate
-    /// duplicate-vertex edge) sees the open ring.
-    fn distinct_vertices(ring: &[(f64, f64)]) -> Vec<(f64, f64)> {
-        match ring.last() {
-            Some(last) if ring.len() >= 2 && *last == ring[0] => ring[..ring.len() - 1].to_vec(),
-            _ => ring.to_vec(),
-        }
-    }
-
-    /// Clip two polygons through the public evaluator path — `eval_expression`
-    /// → [`eval_op`] → `intersect_polygon` arm — exactly as a model's observed
-    /// `clip` variable would be evaluated. Returns the overlap ring vertices.
-    fn clip_via_evaluator(
-        src: &[(f64, f64)],
-        tgt: &[(f64, f64)],
-        manifold: &str,
-    ) -> Vec<(f64, f64)> {
-        let mut inputs = HashMap::new();
-        inputs.insert("src_poly".to_string(), ring_array(src));
-        inputs.insert("tgt_poly".to_string(), ring_array(tgt));
-        let node: Expr = serde_json::from_value(json!({
-            "op": "intersect_polygon",
-            "id": "overlap_clip",
-            "manifold": manifold,
-            "args": ["src_poly", "tgt_poly"],
-        }))
-        .unwrap();
-        match eval_expression(&node, &inputs, &[], &[], 0.0)
-            .expect("test node is built from evaluable ops")
-        {
-            Value::Array(a) => arrayd_to_lonlat(&a).expect("[N,2] ring"),
-            Value::Scalar(s) => panic!("intersect_polygon evaluated to scalar {s}"),
-        }
-    }
-
-    /// `polygon_area` as an ordinary `sum_product` FAQ over a ring (planar
-    /// shoelace), evaluated by the M1 aggregate machinery. The integrand is the
-    /// signed cross term `½·(xᵥ·yᵥ₊₁ − xᵥ₊₁·yᵥ)` summed over ring edges; the ring
-    /// and its one-vertex rotation are supplied as arrays so the contracted `v`
-    /// loop needs no wrap-around indexing. Returns the unsigned area.
-    fn shoelace_area_faq(ring: &[(f64, f64)]) -> f64 {
-        let n = ring.len();
-        if n < 3 {
-            return 0.0;
-        }
-        let next: Vec<(f64, f64)> = (0..n).map(|i| ring[(i + 1) % n]).collect();
-        let mut inputs = HashMap::new();
-        inputs.insert("clip".to_string(), ring_array(ring));
-        inputs.insert("clip_next".to_string(), ring_array(&next));
-        let agg: Expr = serde_json::from_value(json!({
-            "op": "faq",
-            "args": [],
-            "semiring": "sum_product",
-            "output_idx": [],
-            "ranges": { "v": [1, n] },
-            "expr": {
-                "op": "*",
-                "args": [
-                    0.5,
-                    { "op": "-", "args": [
-                        { "op": "*", "args": [
-                            { "op": "index", "args": ["clip", "v", 1] },
-                            { "op": "index", "args": ["clip_next", "v", 2] }
-                        ]},
-                        { "op": "*", "args": [
-                            { "op": "index", "args": ["clip_next", "v", 1] },
-                            { "op": "index", "args": ["clip", "v", 2] }
-                        ]}
-                    ]}
-                ]
-            }
-        }))
-        .unwrap();
-        match eval_expression(&agg, &inputs, &[], &[], 0.0)
-            .expect("test node is built from evaluable ops")
-        {
-            Value::Scalar(s) => s.abs(),
-            Value::Array(_) => panic!("scalar polygon_area FAQ expected"),
-        }
-    }
-
-    #[test]
-    fn planar_clip_then_polygon_area_faq_is_exact() {
-        // [0,2]² ∩ [1,3]² = [1,2]², area 1. Clip through the evaluator, then take
-        // `polygon_area` as a sum_product FAQ over the clipped ring.
-        let src = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)];
-        let tgt = [(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)];
-        let ring = clip_via_evaluator(&src, &tgt, "planar");
-        assert!(ring.len() >= 3, "expected a non-degenerate overlap ring");
-        let area = shoelace_area_faq(&ring);
-        assert!(
-            (area - 1.0).abs() < 1e-9,
-            "polygon_area FAQ = {area}, expected 1"
-        );
-        // The FAQ agrees with the closed-form shoelace oracle.
-        assert!((area - crate::geometry::shoelace_area(&ring)).abs() < 1e-12);
-    }
-
-    #[test]
-    fn planar_clip_of_offset_triangles_area_faq() {
-        // A non-rectangular case so the FAQ is exercised on a general ring.
-        let src = [(0.0, 0.0), (4.0, 0.0), (0.0, 4.0)];
-        let tgt = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0)];
-        let ring = clip_via_evaluator(&src, &tgt, "planar");
-        let area = shoelace_area_faq(&ring);
-        // Overlap is the triangle (0,0),(4,0),(2,2): area = ½·base·height = 4.
-        assert!(
-            (area - 4.0).abs() < 1e-9,
-            "polygon_area FAQ = {area}, expected 4"
-        );
-    }
-
-    #[test]
-    fn spherical_clip_via_s2_is_nonempty_with_analytic_area() {
-        // Two quarter-hemisphere sectors; the s2 clip overlap is π/4 steradians.
-        let src = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
-        let tgt = [(45.0, 0.0), (135.0, 0.0), (45.0, 90.0)];
-        let ring = clip_via_evaluator(&src, &tgt, "spherical");
-        assert!(ring.len() >= 3, "the s2 spherical clip should be non-empty");
-        // The AST op returns the ring CLOSED (first vertex repeated) for the
-        // shoelace FAQ's `v+1` wrap; the `spherical_area` oracle wants the `n`
-        // distinct vertices (s2 rejects a duplicate-vertex edge), so drop the
-        // closing copy before the analytic comparison.
-        let area =
-            crate::geometry::spherical_area(&distinct_vertices(&ring)).expect("spherical area");
-        assert!(
-            (area - std::f64::consts::FRAC_PI_4).abs() < 1e-9,
-            "spherical overlap area = {area}, expected π/4"
-        );
-    }
-
-    #[test]
-    fn disjoint_clip_is_empty_ring_with_zero_area_faq() {
-        let src = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
-        let tgt = [(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 6.0)];
-        let ring = clip_via_evaluator(&src, &tgt, "planar");
-        assert!(ring.is_empty(), "disjoint cells clip to an empty ring");
-        // A sum_product FAQ over the empty clip_ring reduces to the additive 0̄.
-        assert_eq!(shoelace_area_faq(&ring), 0.0);
-    }
-
-    /// Evaluate the fused `polygon_intersection_area` leaf through the public
-    /// evaluator path (`eval_expression` → [`eval_op`] → `polygon_intersection_area`
-    /// arm), returning the scalar overlap area directly (no clip ring exposed).
-    fn fused_area_via_evaluator(src: &[(f64, f64)], tgt: &[(f64, f64)], manifold: &str) -> Value {
-        let mut inputs = HashMap::new();
-        inputs.insert("src_poly".to_string(), ring_array(src));
-        inputs.insert("tgt_poly".to_string(), ring_array(tgt));
-        let node: Expr = serde_json::from_value(json!({
-            "op": "polygon_intersection_area",
-            "manifold": manifold,
-            "args": ["src_poly", "tgt_poly"],
-        }))
-        .unwrap();
-        eval_expression(&node, &inputs, &[], &[], 0.0)
-            .expect("test node is built from evaluable ops")
-    }
-
-    #[test]
-    fn polygon_intersection_area_planar_is_fused_clip_area() {
-        // [0,2]² ∩ [1,3]² = [1,2]², area 1. The fused leaf returns the SCALAR
-        // area directly and equals `polygon_area(intersect_polygon(a, b))`.
-        let src = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)];
-        let tgt = [(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)];
-        let area = match fused_area_via_evaluator(&src, &tgt, "planar") {
-            Value::Scalar(s) => s,
-            Value::Array(_) => panic!("fused leaf must return a scalar, not a ring"),
-        };
-        assert!(
-            (area - 1.0).abs() < 1e-9,
-            "polygon_intersection_area = {area}, expected 1"
-        );
-        // Fused value matches the composed clip + shoelace-FAQ form exactly.
-        let ring = clip_via_evaluator(&src, &tgt, "planar");
-        assert!((area - shoelace_area_faq(&ring)).abs() < 1e-12);
-    }
-
-    #[test]
-    fn polygon_intersection_area_disjoint_is_zero() {
-        // Disjoint cells clip to a < 3-vertex ring, whose area is 0.
-        let src = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
-        let tgt = [(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 6.0)];
-        match fused_area_via_evaluator(&src, &tgt, "planar") {
-            Value::Scalar(s) => assert_eq!(s, 0.0, "disjoint overlap area should be 0, got {s}"),
-            Value::Array(_) => panic!("fused leaf must return a scalar"),
-        }
-    }
-
-    #[test]
-    fn polygon_intersection_area_without_manifold_is_unevaluable() {
-        // `manifold` is required on the fused leaf too; absent, it is NaN.
-        let mut inputs = HashMap::new();
-        inputs.insert(
-            "src_poly".to_string(),
-            ring_array(&[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)]),
-        );
-        inputs.insert(
-            "tgt_poly".to_string(),
-            ring_array(&[(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)]),
-        );
-        let node: Expr = serde_json::from_value(json!({
-            "op": "polygon_intersection_area",
-            "args": ["src_poly", "tgt_poly"],
-        }))
-        .unwrap();
-        match eval_expression(&node, &inputs, &[], &[], 0.0)
-            .expect("test node is built from evaluable ops")
-        {
-            Value::Scalar(s) => assert!(s.is_nan(), "missing manifold should be NaN, got {s}"),
-            Value::Array(_) => panic!("missing manifold must not produce a scalar area"),
-        }
-    }
-
-    #[test]
-    fn intersect_polygon_without_manifold_is_unevaluable() {
-        // `manifold` is required; absent, the node is not evaluable (NaN sentinel).
-        let mut inputs = HashMap::new();
-        inputs.insert(
-            "src_poly".to_string(),
-            ring_array(&[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)]),
-        );
-        inputs.insert(
-            "tgt_poly".to_string(),
-            ring_array(&[(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)]),
-        );
-        let node: Expr = serde_json::from_value(json!({
-            "op": "intersect_polygon",
-            "args": ["src_poly", "tgt_poly"],
-        }))
-        .unwrap();
-        match eval_expression(&node, &inputs, &[], &[], 0.0)
-            .expect("test node is built from evaluable ops")
-        {
-            Value::Scalar(s) => assert!(s.is_nan(), "missing manifold should be NaN, got {s}"),
-            Value::Array(_) => panic!("missing manifold must not produce a ring"),
         }
     }
 }
@@ -6508,15 +5779,13 @@ mod unbound_name_fault_tests {
     /// DECLARED set is `declared`, and return the latched fault.
     fn fault_for(name: &str, declared: &[&str]) -> String {
         let empty_arrays = ArrMap::default();
-        let rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-        let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
         let declared: HashSet<String> = declared.iter().map(|s| (*s).to_string()).collect();
+        let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
         let env = EvalEnv {
             state_arrays: &empty_arrays,
             params: &[],
             param_names: &[],
             t: 0.0,
-            derived_rings: &rings,
             derived_extents: empty_derived_extents(),
             forcing: &forcing,
             cse: None,
@@ -6899,7 +6168,7 @@ mod gate_plan_tests {
             }
 
             json!({
-                "esm": "1.1.0",
+                "esm": "2.0.0",
                 "metadata": {"name": "join_gate_plan"},
                 "index_sets": {
                     "brows": {"kind": "interval", "size": BINS},
@@ -7077,76 +6346,6 @@ mod gate_plan_tests {
             })
             .collect();
         assert_eq!(got, want);
-    }
-}
-
-#[cfg(test)]
-mod interp_elementwise_tests {
-    use super::*;
-    use crate::registered_functions::{ClosedArg, evaluate_closed_function};
-
-    fn arr(shape: &[usize], v: &[f64]) -> Value {
-        Value::Array(Box::new(
-            ArrayD::from_shape_vec(IxDyn(shape), v.to_vec()).unwrap(),
-        ))
-    }
-
-    /// `interp.linear` over an array query reads its table and axis as their
-    /// row-major flattening whatever their rank — a scalar, a 0-D, a 2-D or a
-    /// rank-3 array — each element giving the scalar call's bits.
-    #[test]
-    fn interp_linear_array_query_flattens_table_and_axis() {
-        let table = [10.0, 20.0, 30.0, 40.0];
-        let axis = [0.0, 1.0, 2.0, 3.0];
-        let queries = [0.5, 2.5, 3.0, -0.0];
-        let q = arr(&[2, 2], &queries);
-        let want = |t: &[f64], a: &[f64]| -> Vec<u64> {
-            queries
-                .iter()
-                .map(|&x| {
-                    let call = [
-                        ClosedArg::Array(t.to_vec()),
-                        ClosedArg::Array(a.to_vec()),
-                        ClosedArg::Scalar(x),
-                    ];
-                    evaluate_closed_function("interp.linear", &call)
-                        .map(|v| v.as_f64())
-                        .unwrap_or(f64::NAN)
-                        .to_bits()
-                })
-                .collect()
-        };
-        let got = |t: Value, a: Value| -> Vec<u64> {
-            let Some(Value::Array(out)) =
-                eval_interp_elementwise("interp.linear", &[t, a, q.clone()], None)
-            else {
-                panic!("an array query is broadcast");
-            };
-            assert_eq!(out.shape(), &[2, 2]);
-            out.iter().map(|x| x.to_bits()).collect()
-        };
-        let flat = want(&table, &axis);
-        assert!(flat.iter().all(|b| !f64::from_bits(*b).is_nan()));
-        assert_eq!(
-            got(arr(&[2, 2, 1], &table), arr(&[4], &axis)),
-            flat,
-            "rank-3 table"
-        );
-        assert_eq!(
-            got(arr(&[4], &table), arr(&[1, 2, 2], &axis)),
-            flat,
-            "rank-3 axis"
-        );
-        assert_eq!(
-            got(arr(&[2, 2], &table), arr(&[4], &axis)),
-            flat,
-            "2-D table"
-        );
-        assert_eq!(
-            got(Value::Scalar(7.0), arr(&[], &[1.0])),
-            want(&[7.0], &[1.0]),
-            "scalar table, 0-D axis"
-        );
     }
 }
 

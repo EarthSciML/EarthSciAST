@@ -195,10 +195,9 @@ pub enum CompileError {
     /// evaluation rule for reached the evaluator.
     ///
     /// These ops are legal in an AST but are *eliminated before* the per-cell
-    /// evaluator ever runs: the build-time query ops (`skolem`, `rank`,
-    /// `distinct`, `argmin`, `argmax`) are resolved by
-    /// [`crate::value_invention`], and the form/lowering ops (`ic`, `true`,
-    /// `enum`, `table_lookup`, `apply_expression_template`) are consumed by
+    /// evaluator ever runs: the build-time query op `distinct` is resolved by
+    /// [`crate::value_invention`], and the form/lowering ops (`ic`, `enum`,
+    /// `apply_expression_template`) are consumed by
     /// their respective lowering passes. One arriving at the evaluator means the
     /// pipeline is broken.
     ///
@@ -209,7 +208,7 @@ pub enum CompileError {
     ///
     /// Raised by the array runtime's build gate and by the single-expression
     /// [`crate::expression::evaluate`], whose scalar bindings additionally give
-    /// the array / tensor and geometry ops no value. The invariant is the same
+    /// the array / tensor ops no value. The invariant is the same
     /// either way: an unevaluable op is a diagnostic, never a number.
     #[error(
         "unevaluable_operator: operator '{op}' is an evaluable-core op with no evaluation rule \
@@ -218,7 +217,7 @@ pub enum CompileError {
          runtime that evaluates it, before evaluation (esm-spec §4.2)"
     )]
     UnevaluableOperatorError {
-        /// The offending operator name (e.g. `"skolem"`).
+        /// The offending operator name (e.g. `"distinct"`).
         op: String,
     },
 
@@ -233,23 +232,6 @@ pub enum CompileError {
         /// when a `distinct` key or `join` column is NaN.
         code: &'static str,
         /// The index set, its producer, and why the producer could not run.
-        reason: String,
-    },
-
-    /// A `table_lookup` node that cannot be lowered to its esm-spec §9.5.3
-    /// `interp.linear` / `interp.bilinear` / `index` form — an unknown table,
-    /// an axis-key set that does not match the table's declared axes, an
-    /// out-of-range `output`, or a table whose `interpolation` and axis count
-    /// disagree.
-    ///
-    /// Raised by [`crate::lower_table_lookup`] during the build rather than by
-    /// the evaluator: `unevaluable_operator` would name `table_lookup` without
-    /// saying which of the §9.5.5 conditions the document actually trips.
-    #[error("{code}: {reason}")]
-    TableLookupLowering {
-        /// The esm-spec §9.5.5 diagnostic code.
-        code: &'static str,
-        /// What is wrong with this `table_lookup` (or the table it names).
         reason: String,
     },
 
@@ -280,7 +262,7 @@ pub enum CompileError {
          document in Float64 (esm-spec §11.3)"
     )]
     Float32Unsupported {
-        /// The offending construct, named (e.g. ``operator `intersect_polygon` ``).
+        /// The offending construct, named (e.g. ``index set `cells` of size N``).
         construct: String,
         /// Why binary32 cannot carry it.
         reason: String,

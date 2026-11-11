@@ -4,7 +4,7 @@
  * Transforms a multi-system ESM file into a single unified flattened system:
  * every variable dot-namespaced by its owning component, every coupling rule
  * resolved INTO the equation set, and the registries a consumer needs
- * (`index_sets`, `function_tables`, the merged `template_registry`) carried
+ * (`index_sets`, the merged `template_registry`) carried
  * along so the flattened form is self-describing.
  *
  * ## The canonical field set (esm-libraries-spec §4.7.5 step 4, `esm: 1.0.0`)
@@ -503,8 +503,6 @@ export interface FlattenedSystem {
    * Includes any `_liftdim<d>_<extent>` interval the pointwise lift adds.
    */
   indexSets: Record<string, unknown>
-  /** Merged function-table registry; resolves `table_lookup`. */
-  functionTables: Record<string, unknown>
   /**
    * The MERGED expression-template registry (esm-spec §9.6.4 rule 7, §10.7):
    * the union of the component registries with their bodies component-scoped
@@ -535,8 +533,8 @@ export interface FlattenedSystem {
 // ---------------------------------------------------------------------------
 
 /**
- * The canonical array-op set (Python `esm_types.ARRAY_OPS` — the `array` and
- * `geometry` op categories). Used only to recognize an equation that may
+ * The canonical array-op set (Python `esm_types.ARRAY_OPS`, the `array` op
+ * category). Used only to recognize an equation that may
  * legitimately define different index subsets of one state variable.
  */
 const ARRAY_OPS: ReadonlySet<string> = new Set([
@@ -544,9 +542,7 @@ const ARRAY_OPS: ReadonlySet<string> = new Set([
   'broadcast',
   'concat',
   'index',
-  'intersect_polygon',
   'makearray',
-  'polygon_intersection_area',
   'reshape',
   'transpose',
 ])
@@ -2467,9 +2463,7 @@ const TEMPLATE_BODY_NON_OPERAND_KEYS: ReadonlySet<string> = new Set([
   'wrt',
   'dim',
   'fn',
-  'table',
   'id',
-  'manifold',
   'name',
   'semiring',
   'reduce',
@@ -2634,7 +2628,6 @@ function assembleSystem(
     domain: null,
     metadata,
     indexSets: { ...((file.index_sets ?? {}) as Record<string, unknown>) },
-    functionTables: { ...((file.function_tables ?? {}) as Record<string, unknown>) },
     templateRegistry: {},
     fieldIcs: [],
     loaderFields: [...combined.loaderFields],
@@ -3125,7 +3118,7 @@ interface LiftGrid {
  *
  * Where the variable sits decides what happens when it shares NO index set with
  * the grid. Under an elementwise operator it must be read per cell, so that is
- * an error. As an argument of any other op (a closed `fn`, say, whose lookup
+ * an error. As an argument of any other op (an open-tier op, say, whose lookup
  * table is a shaped parameter) it is consumed whole under that op's contract and
  * stays bare. The whole-array shape ops (`reshape`, `transpose`, `concat`) have
  * no per-cell reading at all, so any array operand beneath one is an error.

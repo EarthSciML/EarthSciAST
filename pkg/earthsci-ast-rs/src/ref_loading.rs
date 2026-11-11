@@ -760,8 +760,8 @@ fn hoist_subsystem_data_sources(obj: &mut Map<String, Value>) -> Result<(), Diag
 /// The nested walk shares this walk's path-scoped cycle set, so a self- or
 /// mutually-importing document is still `circular …` rather than unbounded
 /// recursion, and the merge composes transitively. On top of the
-/// shared pipeline this form additionally merges the leaf's `function_tables` /
-/// `data_sources` up (parent wins on a key clash) and drops the leaf's
+/// shared pipeline this form additionally merges the leaf's `data_sources` up
+/// (parent wins on a key clash) and drops the leaf's
 /// inline `tests` (§6.6: they do not cross a mount edge).
 ///
 /// `parent_meta` is the MOUNTING document's closed metaparameter environment
@@ -1137,23 +1137,6 @@ fn inline_toplevel_refs(
                     "sources": src,
                 }),
             );
-        }
-        for blk in ["function_tables"] {
-            let Some(src) = comp.get(blk).and_then(|v| v.as_object()) else {
-                continue;
-            };
-            if src.is_empty() {
-                continue;
-            }
-            let src = src.clone();
-            let dst = obj
-                .entry(blk.to_string())
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Some(dst) = dst.as_object_mut() {
-                for (k, v) in src {
-                    dst.entry(k).or_insert(v);
-                }
-            }
         }
     }
     Ok(())
@@ -1973,7 +1956,7 @@ mod tests {
     #[test]
     fn test_resolve_no_refs() {
         let mut value = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "test" },
             "models": {
                 "Main": { "variables": {}, "equations": [] }
@@ -1987,7 +1970,7 @@ mod tests {
     fn test_resolve_local_subsystem_ref() {
         let dir = TempDir::new().unwrap();
         let inner = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "inner" },
             "models": {
                 "Inner": {
@@ -2003,7 +1986,7 @@ mod tests {
         .unwrap();
 
         let mut value = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Outer": {
@@ -2051,7 +2034,7 @@ mod tests {
         };
         std::fs::write(dir.path().join("old_leaf.esm"), leaf("1.0.0").to_string()).unwrap();
         let root = json!({
-            "esm": "1.2.0",
+            "esm": "2.0.0",
             "metadata": { "name": "root" },
             "models": { "Outer": {
                 "variables": {},
@@ -2083,7 +2066,7 @@ mod tests {
         };
         let root = |file: &str| {
             json!({
-                "esm": "1.1.0",
+                "esm": "2.0.0",
                 "metadata": { "name": "root" },
                 "models": { "Outer": {
                     "variables": {},
@@ -2119,7 +2102,7 @@ mod tests {
         // a 0.x test relabelled `esm: 1.0.0` without its premise re-examined.
         let dir = TempDir::new().unwrap();
         let source_only = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "source-only" },
             "data_sources": {
                 "MetData": {
@@ -2137,7 +2120,7 @@ mod tests {
         .unwrap();
 
         let mut value = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Outer": {
@@ -2163,7 +2146,7 @@ mod tests {
         // component; with sources uncounted this mounts like any other model.
         let dir = TempDir::new().unwrap();
         let leaf = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "leaf" },
             "data_sources": {
                 "MetData": {
@@ -2196,7 +2179,7 @@ mod tests {
         .unwrap();
 
         let mut value = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Outer": {
@@ -2221,7 +2204,7 @@ mod tests {
     #[test]
     fn test_reject_remote_ref() {
         let mut value = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Outer": {
@@ -2248,7 +2231,7 @@ mod tests {
     fn test_circular_ref_detection() {
         let dir = TempDir::new().unwrap();
         let a = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "a" },
             "models": {
                 "A": {
@@ -2259,7 +2242,7 @@ mod tests {
             }
         });
         let b = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "b" },
             "models": {
                 "B": {
@@ -2281,7 +2264,7 @@ mod tests {
         .unwrap();
 
         let mut value = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Root": {
@@ -2301,7 +2284,7 @@ mod tests {
     fn test_nonexistent_ref() {
         let dir = TempDir::new().unwrap();
         let mut value = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Outer": {
@@ -2328,7 +2311,7 @@ mod tests {
     fn test_resolves_inside_reaction_systems() {
         let dir = TempDir::new().unwrap();
         let sub = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "sub" },
             "reaction_systems": {
                 "Sub": {
@@ -2345,7 +2328,7 @@ mod tests {
         .unwrap();
 
         let mut value = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "main" },
             "reaction_systems": {
                 "Main": {
@@ -2372,7 +2355,7 @@ mod tests {
     fn typed_resolve_subsystem_refs_matches_the_raw_pass() {
         let dir = TempDir::new().unwrap();
         let inner = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "inner" },
             "models": { "Inner": { "variables": {}, "equations": [] } }
         });
@@ -2383,7 +2366,7 @@ mod tests {
         .unwrap();
 
         let doc = json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Outer": {

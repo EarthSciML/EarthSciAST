@@ -252,23 +252,21 @@ func TestCanonicalizePreservesStructuralFields(t *testing.T) {
 	}
 }
 
-// A node carrying a non-emissible field (table_lookup's `table`) has no
-// faithful canonical JSON in the pinned 7-field encoding, so CanonicalJSON is
-// FAIL-CLOSED and returns E_CANONICAL_UNSUPPORTED_FIELD (matching Julia) rather
-// than emitting lossy bytes.
-func TestCanonicalTableLookupUnsupported(t *testing.T) {
-	tA := "tableA"
-	node := ExprNode{Op: "table_lookup", Args: []any{}, Table: &tA}
+// A node carrying a non-emissible field (concat's `axis`) has no faithful
+// canonical JSON in the pinned encoding, so CanonicalJSON is FAIL-CLOSED and
+// returns E_CANONICAL_UNSUPPORTED_FIELD (matching Julia) rather than emitting
+// lossy bytes.
+func TestCanonicalConcatAxisUnsupported(t *testing.T) {
+	node := ExprNode{Op: "concat", Args: []any{"a", "b"}, Axis: 0.0}
 	if _, err := CanonicalJSON(node); !errors.Is(err, ErrCanonicalUnsupportedField) {
-		t.Errorf("CanonicalJSON(table_lookup): err=%v; want ErrCanonicalUnsupportedField", err)
+		t.Errorf("CanonicalJSON(concat): err=%v; want ErrCanonicalUnsupportedField", err)
 	}
 }
 
 // A non-emissible field set on a CHILD node (nested in `args`) is also rejected:
 // the emissibility gate recurses through args, matching the Julia emitter.
 func TestCanonicalUnsupportedFieldNestedInArgs(t *testing.T) {
-	tA := "tbl"
-	child := ExprNode{Op: "table_lookup", Args: []any{}, Table: &tA}
+	child := ExprNode{Op: "concat", Args: []any{"a", "b"}, Axis: 0.0}
 	node := ExprNode{Op: "+", Args: []any{"x", child}}
 	if _, err := CanonicalJSON(node); !errors.Is(err, ErrCanonicalUnsupportedField) {
 		t.Errorf("CanonicalJSON(nested non-emissible): err=%v; want ErrCanonicalUnsupportedField", err)
@@ -278,7 +276,7 @@ func TestCanonicalUnsupportedFieldNestedInArgs(t *testing.T) {
 // The emissible field set {op,args,wrt,dim,fn,name,value} still emits: a node
 // using only these fields has faithful, sorted-key canonical JSON.
 func TestCanonicalEmissibleFields(t *testing.T) {
-	wrt, dim, fn, name := "x", "y", "dirichlet", "datetime.julian_day"
+	wrt, dim, fn, name := "x", "y", "dirichlet", "edge_flux"
 	node := ExprNode{
 		Op:   "bc",
 		Args: []any{"u"},
@@ -291,7 +289,7 @@ func TestCanonicalEmissibleFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"args":["u"],"dim":"y","fn":"dirichlet","name":"datetime.julian_day","op":"bc","wrt":"x"}`
+	want := `{"args":["u"],"dim":"y","fn":"dirichlet","name":"edge_flux","op":"bc","wrt":"x"}`
 	if string(got) != want {
 		t.Errorf("emissible fields:\n got %s\nwant %s", got, want)
 	}
@@ -311,21 +309,19 @@ func TestCanonicalConstValueEmissible(t *testing.T) {
 	}
 }
 
-// `arg` and `bindings` are TOLERATED: present, ignored, never emitted, and NOT
-// an error — matching the Julia _CANONICAL_IGNORED_FIELDS tolerance.
+// `bindings` is TOLERATED: present, ignored, never emitted, and NOT an error —
+// matching the Julia _CANONICAL_IGNORED_FIELDS tolerance.
 func TestCanonicalToleratedFields(t *testing.T) {
-	argName := "i"
 	node := ExprNode{
-		Op:       "argmin",
+		Op:       "godunov_hamiltonian",
 		Args:     []any{"cost"},
-		Arg:      &argName,
 		Bindings: map[string]any{"p": 1.0},
 	}
 	got, err := CanonicalJSON(node)
 	if err != nil {
 		t.Fatalf("tolerated fields must not error: %v", err)
 	}
-	want := `{"args":["cost"],"op":"argmin"}`
+	want := `{"args":["cost"],"op":"godunov_hamiltonian"}`
 	if string(got) != want {
 		t.Errorf("tolerated fields:\n got %s\nwant %s", got, want)
 	}

@@ -45,7 +45,7 @@ fn build(
     };
     format!(
         r#"{{
-          "esm": "1.1.0",
+          "esm": "2.0.0",
           "metadata": {{ "name": "aggregate_eval_test" }},
           {index_sets_field}
           "models": {{ "M": {{
@@ -197,30 +197,6 @@ fn min_sum_semiring_reduces_with_min() {
     );
     assert_close(sim_value(&m, "y[1]").unwrap(), 2.0, "min_sum y[1]");
     assert_close(sim_value(&m, "y[2]").unwrap(), 3.0, "min_sum y[2]");
-}
-
-/// The deprecated `op: "aggregate"` alias reaches the simulator as `faq` and
-/// evaluates identically — the alias is normalized at the wire boundary, so by
-/// the time a document is simulated there is only one tag left
-/// (docs/content/rfcs/faq-node-rename.md §5.2).
-///
-/// This test used to `build("faq", …)` on both sides after the rename sweep
-/// rewrote its subject as well as its target, making it a byte-identical
-/// duplicate of `sum_product_semiring_matches_default` that pinned nothing. It
-/// now authors the ALIAS and asserts the canonical numbers come back.
-#[test]
-fn aggregate_alias_simulates_as_faq() {
-    let m = build(
-        "aggregate",
-        "y",
-        r#""semiring": "sum_product","#,
-        PROD_BODY,
-        I_2,
-        IJ_2X3,
-        "",
-    );
-    assert_close(sim_value(&m, "y[1]").unwrap(), 6.0, "alias y[1]");
-    assert_close(sim_value(&m, "y[2]").unwrap(), 12.0, "alias y[2]");
 }
 
 /// §5.2: `ranges` index-set references resolve against the model `index_sets`
@@ -376,7 +352,7 @@ fn shared_invalid_undeclared_from_fixture_is_rejected() {
 fn ragged_index_set_drives_dynamic_reduction_bound() {
     let model = r#"
         {
-          "esm": "1.1.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "ragged_dynamic_bound"
           },

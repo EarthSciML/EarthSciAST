@@ -574,7 +574,6 @@ def test_an_ordinary_equation_is_not_touched_by_the_recurrence_path() -> None:
 
 
 _REORDERING_PATHS = (
-    "_eval_faq_batched_leaf",
     "_eval_faq_prefix_scan",
     "_eval_faq_operator_cached",
     "_eval_faq_reduce_vectorized",

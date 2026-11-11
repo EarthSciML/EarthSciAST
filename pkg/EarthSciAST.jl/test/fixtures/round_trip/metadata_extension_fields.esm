@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "MetadataExtensionFields",
     "description": "The four Metadata properties no corpus fixture exercised: the three discretize() diagnostics and the reserved x_esd extension point. esm-schema.json's description of x_esd is normative about this: core tooling MUST NOT assign meaning to its contents and MUST preserve them across parse -> emit like any other metadata field.",

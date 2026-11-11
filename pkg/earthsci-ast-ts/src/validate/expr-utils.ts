@@ -31,22 +31,17 @@ export function isInlineModel(v: Model | SubsystemRef): v is Model {
 // AND a common DESCENT: every one now recurses through `forEachChild` (the
 // shared full-child walker in expression.ts), so each visits the COMPLETE set of
 // expression-bearing fields (`args`, the aggregate/integral scalar bodies
-// `expr`/`filter`/`key`/`lower`/`upper`, `makearray` `values`, `table_lookup`
-// `axes`, and template `bindings`) instead of the historical `args`-only subset.
+// `expr`/`filter`/`key`/`lower`/`upper`, `makearray` `values`, and template
+// `bindings`) instead of the historical `args`-only subset.
 //
 // Descending the aggregate bodies is only sound because the bound-symbol
 // collector (collectIndexSymbols) now models EVERY binder those bodies can
-// introduce — not just aggregate `output_idx`/`ranges` and `index` element
-// positions, but also the `argmin`/`argmax` `arg` witness and its own `ranges`,
-// and `apply_expression_template` `bindings` parameter names. Every such name is
-// a scoped iteration/invention symbol, NOT a declared variable, so
+// introduce — aggregate `output_idx`/`ranges`, `index` element positions, and
+// `apply_expression_template` `bindings` parameter names. Every such name is a
+// scoped iteration/invention symbol, NOT a declared variable, so
 // validateReferenceIntegrity treats it as bound and does not flag it — keeping
 // emitted diagnostics byte-identical to the old `args`-only walkers on valid
-// fixtures while gaining the deeper descent. A `skolem` node's `args` are NOT
-// binders: they are PURE key components — ordinary references that
-// validateReferenceIntegrity checks like any other. Its optional documentary
-// relation tag lives in the dedicated `label` field, not in `args`, so a typo in
-// a component can no longer silently masquerade as a tag. (`join` is deliberately
+// fixtures while gaining the deeper descent. (`join` is deliberately
 // NOT an expression-child field, so `forEachChild` never descends into it and
 // its `on` operands are never surfaced as references.)
 // ---------------------------------------------------------------------------
@@ -86,13 +81,8 @@ export function extractVariableReferences(expr: Expression): string[] {
  *
  * Binders modelled:
  *   - `faq` `output_idx` entries and `ranges` keys (loop variables);
- *   - `argmin` / `argmax` `arg` witness and their own `ranges` keys;
  *   - `index(array, i, j, …)` element positions after the array head;
  *   - `apply_expression_template` `bindings` parameter names.
- *
- * A `skolem` node's `args` are deliberately NOT collected here: they are pure key
- * components — ordinary references validated normally. Its documentary relation
- * tag lives in the `label` field, so no `args` entry is ever treated as a binder.
  */
 export function collectIndexSymbols(expr: Expression): Set<string> {
   const symbols = new Set<string>()
@@ -107,15 +97,9 @@ export function collectIndexSymbols(expr: Expression): Set<string> {
       }
     }
 
-    // `ranges` keys are bound loop variables on aggregate AND on the
-    // argmin/argmax reducers, which carry their own inner contraction range.
+    // `ranges` keys are bound loop variables.
     if (node.ranges && typeof node.ranges === 'object') {
       for (const key of Object.keys(node.ranges)) symbols.add(key)
-    }
-
-    // argmin/argmax bind an arg-witness symbol naming the winning index.
-    if ((node.op === 'argmin' || node.op === 'argmax') && typeof node.arg === 'string') {
-      symbols.add(node.arg)
     }
 
     // `integral` binds its INTEGRATION VARIABLE: schema `var` is "the name of the
@@ -171,7 +155,7 @@ function derivativeTargetVariable(arg: Expression): string | undefined {
  * The variable an equation LHS assigns to, peeling derivative, element-index,
  * and aggregate-output wrappers down to the underlying name. Used to credit a
  * relational / algebraic equation (e.g. the aggregate-IR `index(v, i) =
- * aggregate(...)` produced by skolem / distinct / rank) that defines a state
+ * aggregate(...)` produced by distinct) that defines a state
  * variable without a time derivative.
  */
 export function lhsAssignmentTarget(lhs: Expression): string | undefined {

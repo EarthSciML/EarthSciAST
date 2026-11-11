@@ -46,8 +46,6 @@ from .esm_types import (
     Reference,
     Metadata,
     EsmFile,
-    FunctionTable,
-    FunctionTableAxis,
     Solver,
     SolverTimeSpan,
 )
@@ -158,7 +156,7 @@ from .validation import (
 
 # Enum lowering (esm-spec §9.3). `lower_enums` is PURE and `lower_enums_mut` is
 # the in-place twin, per API_SPEC.md §8 item 15.
-from .registered_functions import EnumLoweringError, lower_enums, lower_enums_mut
+from .enums import EnumLoweringError, lower_enums, lower_enums_mut
 
 # Expression engine (Core tier requirement)
 from .expression import (
@@ -207,39 +205,12 @@ from .reference_resolution import (
 # semiring-faq-unified-ir §5.5; CONFORMANCE_SPEC.md §5.5)
 from .relational import (
     FloatKeyError,
-    skolem,
-    skolem_edge,
     distinct,
-    rank,
-    Ranking,
     equijoin,
     group_aggregate,
     canonical_index_set_json,
     serialize_canonical,
 )
-
-# Conservative-regridding geometry kernel — the intersect_polygon clip leaf +
-# the polygon_area reference (RFC semiring-faq-unified-ir §8.1 / Appendix B;
-# CONFORMANCE_SPEC.md §5.8). polygon_area itself is an ordinary sum_product FAQ;
-# the helper here is the reference the FAQ is cross-checked against.
-from .geometry import (
-    GeometryError,
-    GeometryBackendUnavailable,
-    intersect_polygon,
-    polygon_area,
-    densify_parallel_edges,
-    area_tolerance_ok,
-    MANIFOLDS,
-)
-
-# polygon_area as a sum_product FAQ over the clipped ring — the executable form of
-# the area FAQ, evaluated through the same interpreter the array simulator uses
-# (RFC semiring-faq-unified-ir §8.1; bead ess-d4g.1). The imperative polygon_area
-# above is its cross-check oracle. The end-to-end conservative-regridding pipeline
-# now lives as a single evaluable document
-# (tests/valid/geometry/conservative_regrid_overlap_join.esm) driven through the
-# evaluator, not an imperative Python assembly (bead ess-3lj.3).
-from .area_faq import polygon_area_via_faq
 
 # The esm 1.0.0 classification API (esm-spec §6.3.1) — the ONE sanctioned way
 # to recover the finer categories a solver needs from the two declared variable
@@ -272,8 +243,8 @@ from .cadence import (
     partition,
 )
 
-# Build-time value-invention front-door — derived index-sets (skolem/distinct/
-# rank) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
+# Build-time value-invention front-door — derived index-sets (`distinct`)
+# resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
 from .value_invention import (
     ValueInventionError,
     ValueInventionResult,
@@ -543,8 +514,6 @@ __all__ = [
     "Reference",
     "Metadata",
     "EsmFile",
-    "FunctionTable",
-    "FunctionTableAxis",
     # Core parsing and serialization
     "load_path",
     "load_string",
@@ -643,25 +612,11 @@ __all__ = [
     "EdgeKind",
     # Build-time relational engine (value-invention primitives)
     "FloatKeyError",
-    "skolem",
-    "skolem_edge",
     "distinct",
-    "rank",
-    "Ranking",
     "equijoin",
     "group_aggregate",
     "canonical_index_set_json",
     "serialize_canonical",
-    # Conservative-regridding geometry kernel (intersect_polygon + polygon_area)
-    "GeometryError",
-    "GeometryBackendUnavailable",
-    "intersect_polygon",
-    "polygon_area",
-    "densify_parallel_edges",
-    "area_tolerance_ok",
-    "MANIFOLDS",
-    # polygon_area as a sum_product FAQ over the clipped ring (ess-d4g.1)
-    "polygon_area_via_faq",
     # Build-time cadence-partition pass (structural_simplify analogue)
     "CadenceError",
     "Partition",

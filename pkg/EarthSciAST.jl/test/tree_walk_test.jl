@@ -86,24 +86,7 @@ end
         @test _eval1(_op("Pre", _v("x")); u_vals = Dict("x" => 2.0)) == 2.0
     end
 
-    @testset "Closed function registry (fn op)" begin
-        # esm-spec §9.2: `fn` op invokes a name from the closed registry.
-        # `datetime.year` returns the proleptic-Gregorian year (Int32, lifted
-        # to Float64 by tree_walk).
-        # 2026-01-01T00:00:00Z = 1767225600 seconds since epoch.
-        expr_year = _op("fn", _n(1767225600.0); name = "datetime.year")
-        @test _eval1(expr_year) == 2026.0
-
-        # `interp.searchsorted` with const-array second arg.
-        const_xs = OpExpr("const", ESM.ASTExpr[]; value = [1.0, 2.0, 3.0, 4.0, 5.0])
-        expr_ss = _op("fn", _n(2.5), const_xs; name = "interp.searchsorted")
-        @test _eval1(expr_ss) == 3.0  # smallest 1-based i with xs[i] >= 2.5
-
-        # Unknown closed-function name → TreeWalkError.
-        bad = _op("fn", _n(1.0); name = "datetime.century")
-        @test_throws ESM.TreeWalkError _eval1(bad)
-
-        # Removed `call` op fails compile.
+    @testset "removed `call` op fails compile" begin
         @test_throws ESM.TreeWalkError _eval1(_op("call", _n(1.0); handler_id = "x"))
     end
 
@@ -160,7 +143,7 @@ end
         # code — NOT `unevaluable_operator` (esm-spec §4.2 / §9.6.6 uniform
         # rule; mirrors the other bindings). Decided by the `_op_in_T` tier
         # predicate, so grad/div/laplacian carry no bespoke registry flag.
-        # (`integral`/`table_lookup` are also in T but carry their OWN earlier
+        # (`integral` is also in T but carries its OWN earlier
         # structural handling in resolve.jl, so they never reach this gate.)
         for opname in ("godunov_hamiltonian", "my_custom_flux")
             err = try
@@ -344,7 +327,7 @@ end
     # ========================================================
     @testset "Dict entry point (simple_ode style)" begin
         esm = Dict(
-            "esm" => "1.0.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "DecayDict"),
             "models" => Dict(
                 "Decay" => Dict(

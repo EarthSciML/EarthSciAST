@@ -137,15 +137,18 @@ end
 # esm-libraries-spec §8.1: a library MUST reject a document whose major version
 # it does not implement. Python and Rust refuse it at load; here it is refused at
 # the build, before a document of another major is run as if it were this one.
+# Major 1 is implemented too: a 1.x document that uses none of the constructs
+# 2.0.0 removed means the same thing under 2.0.0 (a removed one is refused by
+# name at load, `removed_op`), so the major version alone never refuses it.
 function _refuse_unsupported_major_version(version)
     m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(version))
     m === nothing && return nothing
     supported = parse(Int, match(r"^(\d+)\.", SCHEMA_VERSION).captures[1])
     major = parse(Int, m.captures[1])
-    major == supported || throw(
+    (major == supported || major == 1) || throw(
         ParseError(
-            "Unsupported major version $major. This library supports major version " *
-                "$supported only."
+            "Unsupported major version $major. This library supports major versions " *
+                "1, $supported."
         )
     )
     return nothing
@@ -313,14 +316,6 @@ function _prepare_run_doc(
         _refuse_flat_events(input)
         _refuse_flat_wiener_noise(input)
         _refuse_flat_symbolic_updates(input)
-        # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
-        # the one point every input kind (path, native Dict, EsmFile,
-        # already-flattened system) has funnelled into, and the first point
-        # inside a BUILD. Not at load: §9.5.4 requires the authored form to
-        # round-trip, and `save` re-serializes the very image `load` produced.
-        # First in the block, so the shape transforms below see the closed-
-        # function tree rather than an op they would have to know about.
-        input = lower_table_lookups(input)
         renames_out === nothing ||
             merge!(renames_out, input.metadata.merged_variable_renames)
         # The last point the per-term provenance (`equation_contributions`) is
@@ -1283,6 +1278,9 @@ function _recipe_seed(
         end
         const_arrays === nothing && r.pushdown &&
             _inject_pushdown_aliases!(merged_const, run_doc, r.pd_coupling)
+        # The shapes `esm_problem` adopted from the same data (a no-op on the
+        # record it already adopted them on).
+        flat[] = first(_prepared_with_data_shapes(flat[], run_doc, merged_const, param_buffers))
         r.memo[] = (;
             flat[]..., compiler = r.compiler, model_name = r.model_name,
             overrides = r.overrides, const_arrays = merged_const,
@@ -1351,16 +1349,19 @@ end
 
 # The declared shape of each provider-fed parameter in `keys`, resolved
 # against the flattened system's index sets: what `esm_problem` checks each
-# whole-bound provider sample against (`forcing_from_sample`). A parameter
-# declared without a shape takes one value. A key no parameter declares (a
+# whole-bound provider sample against (`forcing_from_sample`). `shape: []`
+# takes one value. A parameter declared WITHOUT a shape is not checked: it
+# takes its data's shape (`_adopt_data_shapes`). A key no parameter declares (a
 # loader field a coupling routes), and a shape naming a set the registry does
-# not size before the build (a derived set), are not checked.
+# not size before the build (a derived set), are not checked either.
 function _provider_declared_shapes(flat::FlattenedSystem, keys)
     out = Dict{String, Vector{Int}}()
     for k in keys
         v = get(flat.parameters, k, nothing)
         v === nothing && continue
-        if !_is_array_shape(v.shape)
+        if v.shape === nothing
+            continue
+        elseif isempty(v.shape)
             out[k] = Int[]
         else
             exts = _declared_shape_extents(v.shape, flat.index_sets, _EMPTY_DERIVED_EXTENTS)
@@ -1368,6 +1369,62 @@ function _provider_declared_shapes(flat::FlattenedSystem, keys)
         end
     end
     return out
+end
+
+# esm-spec §4.3.4: a parameter declared WITHOUT a `shape` whose data (a
+# caller's `const_arrays` / `param_arrays` entry, or a provider's sample bound
+# into them) holds more than one value takes the data's shape, decided here
+# once, before the build, so every consumer — shape promotion of the observeds
+# that read it, the build, the observed and program reads — sees one shape. Each
+# axis is an anonymous interval index set `<name>__data<k>` of the data's extent
+# on that axis. Data of one value leaves the parameter a scalar, and
+# `shape: []` declares a scalar whatever its data (the build refuses array data
+# for it, `_refuse_array_data_for_scalar`). A registry key names a parameter by
+# its exact flattened name or by a dotted suffix only that parameter carries
+# (esm-spec §6.6.2). Returns `flat` itself when nothing adopts a shape.
+function _adopt_data_shapes(flat::FlattenedSystem, registries...)
+    cands = Set{String}(k for (k, v) in flat.parameters if v.shape === nothing)
+    isempty(cands) && return flat
+    suffix_group = Dict{String, Vector{String}}()
+    for n in cands, s in _dotted_suffixes(n)
+        push!(get!(suffix_group, s, String[]), n)
+    end
+    adopted = Dict{String, Vector{Int}}()
+    for reg in registries, (rawk, a) in reg
+        a isa AbstractArray && length(a) != 1 || continue
+        k = String(rawk)
+        group = get(suffix_group, k, String[])
+        name = k in cands ? k : length(group) == 1 ? group[1] : nothing
+        name === nothing && continue
+        # An exact key outranks a suffix spelling of the same parameter.
+        haskey(adopted, name) && k != name && continue
+        adopted[name] = collect(Int, size(a))
+    end
+    isempty(adopted) && return flat
+    index_sets = OrderedDict{String, IndexSet}(flat.index_sets)
+    data_axes(name) = [string(name, "__data", d) for d in eachindex(adopted[name])]
+    reshape_part(part) = OrderedDict{String, ModelVariable}(
+        k => (haskey(adopted, k) ? reconstruct(v; shape = data_axes(k)) : v) for (k, v) in part
+    )
+    for (name, dims) in adopted, (d, n) in enumerate(dims)
+        index_sets[string(name, "__data", d)] = IndexSet("interval"; size = n)
+    end
+    return FlattenedSystem(
+        flat; parameters = reshape_part(flat.parameters),
+        discrete_parameters = reshape_part(flat.discrete_parameters),
+        index_sets = index_sets
+    )
+end
+
+# `prepared` (a `flat_out` record from `_prepare_run_doc`) with its flattened
+# system's unshaped data-fed parameters given their data's shape
+# (`_adopt_data_shapes`), and the run document rebuilt from it; `(prepared, doc)`
+# unchanged when no parameter adopts one.
+function _prepared_with_data_shapes(prepared, doc, registries...)
+    flat = _adopt_data_shapes(prepared.flat, registries...)
+    flat === prepared.flat && return prepared, doc
+    return merge(prepared, (; flat = flat)),
+        _flat_run_doc(flat, prepared.coordinates, prepared.solver, prepared.init)
 end
 
 """
@@ -1835,6 +1892,10 @@ function esm_problem(
             discrete_providers, filter(((k, n),) -> k != n, provider_targets)
         )
     end
+    # Every whole-bound array is in hand: an unshaped parameter fed array data
+    # takes the data's shape now, before anything reads the run document.
+    prepared, doc = _prepared_with_data_shapes(run_flat[], doc, merged_const, merged_param)
+    run_flat[] = prepared
 
     # Phase 1: pushdown-path name aliasing. The build-front-door consumers that
     # run BEFORE the impl parse (`_derive_binning_coords`, value-invention,
@@ -2349,8 +2410,8 @@ function _observed_field_impl(
         end
     end
     if fld === nothing
-        # MATERIALIZED observeds. A body carrying a geometry leaf
-        # (`polygon_intersection_area`, `intersect_polygon`) is materialized at
+        # MATERIALIZED observeds. A build-once body (an overlap-area weight, a
+        # gated reduction) is materialized at
         # SETUP into `insp.setup_arrays` rather than left as a build-time
         # observed — and so, transitively, is everything downstream of it, since
         # a setup array is a build constant and its readers fold against it.

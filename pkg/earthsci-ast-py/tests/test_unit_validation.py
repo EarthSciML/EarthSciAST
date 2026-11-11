@@ -1241,7 +1241,7 @@ class TestOperatorDimensionRules:
         mismatches once the compatibility predicate actually discriminates.
         """
         validator = _validator_with(w="m")
-        dim = validator._get_expression_dimension(ExprNode(op="table_lookup", args=["w"]))
+        dim = validator._get_expression_dimension(ExprNode(op="makearray", args=["w"]))
         assert dim is None
 
 

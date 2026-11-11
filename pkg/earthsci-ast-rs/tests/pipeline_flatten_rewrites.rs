@@ -18,7 +18,7 @@ fn doc(lat_default: Option<Value>) -> Value {
         lat["default"] = d;
     }
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "DegreeArguments"},
         "index_sets": {"cells": {"kind": "interval", "size": 3}},
         "models": {"Deg": {
@@ -113,7 +113,7 @@ fn the_build_pipeline_takes_a_degree_argument_in_radians() {
 
 fn scalar_doc(equations: Value) -> Value {
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Rewrites"},
         "models": {"M": {
             "variables": {
@@ -166,22 +166,17 @@ fn the_build_pipeline_refuses_an_unresolved_right_hand_side_derivative() {
 }
 
 /// A `deg` argument of a circular function inside a `makearray` region value
-/// and inside a `table_lookup` axis input: `ma = [sin 30°, cos 30°, cos 30°]`
-/// and `tl = T(sin 30°)` with `T(x) = 10 x`, so 5.
+/// and inside a template binding: `ma = [sin 30°, cos 30°, cos 30°]` and
+/// `tl = linear([0, 10], [0, 1], sin 30°)`, so 5.
 fn nested_doc() -> Value {
     let sin30 = json!({"op": "sin", "args": ["latitude"]});
     let cos30 = json!({"op": "cos", "args": ["latitude"]});
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "DegreeArgumentsNested"},
         "index_sets": {"cells": {"kind": "interval", "size": 3}},
-        "function_tables": {"T": {
-            "axes": [{"name": "x", "values": [0.0, 1.0]}],
-            "interpolation": "linear",
-            "out_of_bounds": "clamp",
-            "data": [0.0, 10.0]
-        }},
         "models": {"Deg": {
+            "expression_template_imports": [{"ref": "esm:std/interp.esm", "only": ["linear"]}],
             "variables": {
                 "latitude": {"type": "parameter", "units": "deg", "default": 30.0},
                 "ma": {"type": "unknown", "units": "1", "shape": ["cells"]},
@@ -193,14 +188,17 @@ fn nested_doc() -> Value {
                          "regions": [[[1, 1]], [[2, 3]]],
                          "values": [sin30, cos30]}},
                 {"lhs": "tl",
-                 "rhs": {"op": "table_lookup", "table": "T", "axes": {"x": sin30}, "args": []}}
+                 "rhs": {"op": "apply_expression_template", "args": [], "name": "linear",
+                         "bindings": {"table": {"op": "const", "args": [], "value": [0.0, 10.0]},
+                                      "axis": {"op": "const", "args": [], "value": [0.0, 1.0]},
+                                      "x": sin30, "n": 2}}}
             ]
         }}
     })
 }
 
 #[test]
-fn a_degree_argument_inside_makearray_and_table_lookup_takes_radians() {
+fn a_degree_argument_inside_makearray_and_a_template_binding_takes_radians() {
     let d = nested_doc();
     let (s, c) = (30f64.to_radians().sin(), 30f64.to_radians().cos());
     for pipeline in [false, true] {

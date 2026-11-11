@@ -62,7 +62,7 @@
 //! * the derived set's `member_factor` parameter is filled with the
 //!   materialised member ids (pushdown hook 1), so the generated
 //!   `pd_cell__*[c] = index(F, index(member_factor, c))` gathers resolve;
-//! * VI skolem/overlap factor observeds that are themselves join-free
+//! * VI key/overlap factor observeds that are themselves join-free
 //!   observed expressions (the in-model LCC projections `X`/`Y` over raw
 //!   `emis_lon`/`emis_lat`) are evaluated through the FULL expression
 //!   evaluator ahead of value-invention — the Rust analogue of Julia's
@@ -590,38 +590,59 @@ const PER_CELL_RECURRENCE: &str = "a causal self-reference (esm-spec §4.3.1.1),
 
 /// The factor names an expression declares it reads (`aggregate.args` plus
 /// every gather / bare reference), gathered recursively. The dependency edges
-/// come from the MODEL, not from a re-derivation here.
+/// come from the MODEL, not from a re-derivation here. A subtree shared by
+/// several parents (an expanded template's body) is walked once.
 fn declared_args(expr: &Expr, out: &mut HashSet<String>) {
-    match expr {
-        Expr::Variable(name) => {
-            out.insert(name.clone());
-        }
-        Expr::Operator(node) => {
-            for a in &node.args {
-                declared_args(a, out);
+    fn walk(
+        expr: &Expr,
+        out: &mut HashSet<String>,
+        seen: &mut HashSet<*const crate::types::ExpressionNode>,
+    ) {
+        match expr {
+            Expr::Variable(name) if !out.contains(name) => {
+                out.insert(name.clone());
             }
-            node.for_each_child(&mut |c| declared_args(c, out));
+            Expr::Operator(node) => {
+                if !seen.insert(std::sync::Arc::as_ptr(node)) {
+                    return;
+                }
+                for a in &node.args {
+                    walk(a, out, seen);
+                }
+                node.for_each_child(&mut |c| walk(c, out, seen));
+            }
+            _ => {}
         }
-        _ => {}
     }
+    walk(expr, out, &mut HashSet::new());
 }
 
 /// The key columns and envelope factors every `join` in `expr` names. They
 /// are strings on the clause rather than expressions, so [`declared_args`]
 /// does not see them.
 fn join_names(expr: &Expr, out: &mut HashSet<String>) {
-    if let Expr::Operator(node) = expr {
-        for clause in node.join.iter().flatten() {
-            out.extend(clause.on.iter().flatten().cloned());
-            if let Some(ov) = &clause.overlap {
-                out.extend(ov.src_env.iter().chain(ov.tgt_env.iter()).cloned());
+    fn walk(
+        expr: &Expr,
+        out: &mut HashSet<String>,
+        seen: &mut HashSet<*const crate::types::ExpressionNode>,
+    ) {
+        if let Expr::Operator(node) = expr {
+            if !seen.insert(std::sync::Arc::as_ptr(node)) {
+                return;
             }
+            for clause in node.join.iter().flatten() {
+                out.extend(clause.on.iter().flatten().cloned());
+                if let Some(ov) = &clause.overlap {
+                    out.extend(ov.src_env.iter().chain(ov.tgt_env.iter()).cloned());
+                }
+            }
+            for a in &node.args {
+                walk(a, out, seen);
+            }
+            node.for_each_child(&mut |c| walk(c, out, seen));
         }
-        for a in &node.args {
-            join_names(a, out);
-        }
-        node.for_each_child(&mut |c| join_names(c, out));
     }
+    walk(expr, out, &mut HashSet::new());
 }
 
 /// The observeds whose definitions read a state, directly or through another
@@ -1050,6 +1071,7 @@ fn compile_on_tape(
     param_vals: &[f64],
     param_names: &[String],
     const_arrays: &ConstArrayScope,
+    fill_shape: Option<&[usize]>,
     recurrence_only: bool,
 ) -> Option<Result<Result<ArrayD<f64>, String>, String>> {
     use crate::simulate_array::StandaloneError;
@@ -1060,6 +1082,7 @@ fn compile_on_tape(
         param_vals,
         param_names,
         const_arrays,
+        fill_shape,
         recurrence_only,
     ) {
         None => None,
@@ -1097,6 +1120,7 @@ fn eval_observed(
     index_sets: &HashMap<String, IndexSet>,
     extents: &HashMap<String, i64>,
     const_arrays: &ConstArrayScope,
+    fill_shape: Option<&[usize]>,
     scalar_shape: &[usize],
     refuse_per_cell: bool,
 ) -> Result<Evaluated, PrepareError> {
@@ -1137,6 +1161,7 @@ fn eval_observed(
             param_vals,
             param_names,
             const_arrays,
+            fill_shape,
             true,
         )
     {
@@ -1194,6 +1219,7 @@ fn eval_observed(
             param_vals,
             param_names,
             const_arrays,
+            fill_shape,
             false,
         )
         .expect("a non-recurrence always reaches the tape");
@@ -1830,8 +1856,6 @@ struct BuildState<'o> {
     fields: HashMap<String, ArrayD<f64>>,
     /// Value-invention products.
     members: HashMap<String, Vec<i64>>,
-    /// Producers whose members are tuples, so carry no member ids.
-    tuple_keyed: HashSet<String>,
     extents: HashMap<String, i64>,
     /// The gated providers' keys, sorted — [`PreparedBuild::gated_provider_keys`].
     gated_keys: Vec<String>,
@@ -1846,21 +1870,37 @@ struct BuildState<'o> {
     obs_total: usize,
     /// [`PreparedBuild::observed_cone_applied`].
     cone_applied: bool,
+    /// The unshaped observeds whose shape the data of their unshaped
+    /// data-fed parameters decides (esm-spec §4.3.4,
+    /// [`crate::flatten::ConditionalShapes::data_shaped`]).
+    data_shaped: HashMap<String, Vec<String>>,
 }
 
 impl<'o> BuildState<'o> {
-    /// The shape `name`'s value takes when its body evaluates to a single
-    /// number: every element of its declared shape (esm-spec §4.3.4: a
-    /// binding MUST NOT let the value's rank replace the declared shape), as
-    /// the compiled route fills it, or the [`DeclaredRank`] shape when the
-    /// declaration has none the registry can size.
-    fn scalar_shape(&self, name: &str) -> Vec<usize> {
+    /// The shape `name`'s value fills when its body evaluates to a single
+    /// number, decided before it is evaluated (esm-spec §4.3.4: a binding
+    /// MUST NOT let the value's rank replace the declared shape): its declared
+    /// shape — the build's, for an unshaped mixed-rank `ifelse` — or, for one
+    /// whose shape the data of its data-fed parameters decides, the shape that
+    /// data has here. `None` when neither gives one the registry can size.
+    fn fill_shape(&self, name: &str) -> Option<Vec<usize>> {
         self.model
             .variables
             .get(name)
             .and_then(|v| v.shape.as_deref())
             .filter(|s| !s.is_empty())
             .and_then(|s| crate::simulate_array::resolve_declared_shape(s, &self.index_sets))
+            .or_else(|| {
+                let fed = self.data_shaped.get(name)?;
+                crate::flatten::data_fill_shape(fed, |n| {
+                    self.arrays.get(n).map(|a| a.shape().to_vec())
+                })
+            })
+    }
+
+    /// [`Self::fill_shape`], else the [`DeclaredRank`] shape.
+    fn scalar_shape(&self, name: &str) -> Vec<usize> {
+        self.fill_shape(name)
             .unwrap_or_else(|| DeclaredRank::of(&self.model, name).scalar_shape().to_vec())
     }
 
@@ -1910,13 +1950,8 @@ impl<'o> BuildState<'o> {
             base_path: opts.base_path.clone(),
             metaparameters,
         };
-        let mut file = crate::parse::load_string_with_options(&text, &load_opts)
+        let file = crate::parse::load_string_with_options(&text, &load_opts)
             .map_err(|e| err(format!("load rewritten document: {e}")))?;
-        // esm-spec §9.5.3: a `table_lookup` is lowered before anything
-        // evaluates it, on this route as on the compile path — the reference
-        // evaluator has no rule for the node itself.
-        crate::lower_table_lookup::lower_table_lookups(&mut file)
-            .map_err(|e| err(format!("lower table lookups: {e}")))?;
         let mut index_sets: HashMap<String, IndexSet> = file
             .index_sets
             .clone()
@@ -1934,8 +1969,11 @@ impl<'o> BuildState<'o> {
             }
             None => Spelling::Qualified,
         };
-        let (model, flattened) = match &spelling {
-            Spelling::ModelLocal(n) => (Self::authored_model(models, n, &mut index_sets)?, None),
+        let (model, flattened, data_shaped) = match &spelling {
+            Spelling::ModelLocal(n) => {
+                let (model, data_shaped) = Self::authored_model(models, n, &mut index_sets)?;
+                (model, None, data_shaped)
+            }
             Spelling::Qualified => {
                 let flat = Self::whole_document(&file, &mut index_sets)?;
                 let mut model = crate::simulate_array::model_from_flattened(&flat);
@@ -1944,10 +1982,12 @@ impl<'o> BuildState<'o> {
                 // `apply_flatten_rewrites`.
                 // The elementwise lift runs inside it (esm-spec §9.6.11), so
                 // the bare-operand check reads the lifted equations.
-                crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
-                    .and_then(|_| crate::simulate_array::refuse_faq_bare_array_operands(&model))
+                let shapes =
+                    crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
+                        .map_err(|e| err(e.to_string()))?;
+                crate::simulate_array::refuse_faq_bare_array_operands(&model)
                     .map_err(|e| err(e.to_string()))?;
-                (model, unbound_load.then_some(flat))
+                (model, unbound_load.then_some(flat), shapes.data_shaped)
             }
         };
 
@@ -1968,7 +2008,6 @@ impl<'o> BuildState<'o> {
             order: Vec::new(),
             fields: HashMap::new(),
             members: HashMap::new(),
-            tuple_keyed: HashSet::new(),
             extents: HashMap::new(),
             gated_keys: Vec::new(),
             rules: Vec::new(),
@@ -1977,6 +2016,7 @@ impl<'o> BuildState<'o> {
             obs_done: 0,
             obs_total: 0,
             cone_applied: false,
+            data_shaped,
         })
     }
 
@@ -1998,7 +2038,7 @@ impl<'o> BuildState<'o> {
         models: &IndexMap<String, Model>,
         name: &str,
         index_sets: &mut HashMap<String, IndexSet>,
-    ) -> Result<Model, PrepareError> {
+    ) -> Result<(Model, HashMap<String, Vec<String>>), PrepareError> {
         let mut model = models
             .get(name)
             .ok_or_else(|| err(format!("model '{name}' not found in the document")))?
@@ -2006,9 +2046,9 @@ impl<'o> BuildState<'o> {
         crate::simulate_array::mount_subsystems(&mut model, index_sets)
             .map_err(|e| err(format!("model '{name}': {e}")))?;
         crate::simulate_array::resolve_model_self_references(&mut model, name);
-        crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)
+        let shapes = crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)
             .map_err(|e| err(format!("model '{name}': {e}")))?;
-        Ok(model)
+        Ok((model, shapes.data_shaped))
     }
 
     /// A document of several models, with none selected, built WHOLE — the
@@ -2130,7 +2170,8 @@ impl<'o> BuildState<'o> {
     /// ([`crate::provider::declared_shape_mismatch`]). `name` is looked up as
     /// it is spelled, then, when dotted, by the part after its first `.` (a
     /// mounted subsystem's parameter under its model-local spelling). A
-    /// parameter declared without `shape` takes one value. Nothing is checked
+    /// parameter declared without `shape` takes one value, unless it is
+    /// data-fed: its data then decides its shape. Nothing is checked
     /// when `name` spells no parameter or its shape names an index set the
     /// registry cannot size here.
     fn check_provider_shape(
@@ -2148,6 +2189,9 @@ impl<'o> BuildState<'o> {
             return Ok(());
         };
         let declared = match var.shape.as_deref() {
+            // A data-fed parameter declared without a shape takes its data's
+            // (esm-spec §4.3.4); any other unshaped parameter is one value.
+            None if crate::simulate_array::is_data_fed_unshaped(var) => None,
             None => Some(Vec::new()),
             Some(decl) => crate::simulate_array::resolve_declared_shape(decl, &self.index_sets),
         };
@@ -2451,6 +2495,7 @@ impl<'o> BuildState<'o> {
                 &self.index_sets,
                 &no_extents,
                 &self.const_scope,
+                self.fill_shape(&name).as_deref(),
                 &self.scalar_shape(&name),
                 self.opts.refuse_per_cell,
             ) {
@@ -2502,34 +2547,23 @@ impl<'o> BuildState<'o> {
             &self.opts.parameters,
         )
         .map_err(|e| err(format!("value invention: {e}")))?;
-        // A member id is only needed where a set feeds one back (a
-        // `member_factor`, a gated fetch), and only a scalar key is an id. A
-        // tuple-keyed producer (an undirected edge `skolem(a, b)`, a composite
-        // key) is sized by its extent alone; a consumer that needs its ids
-        // refuses where it looks them up.
-        let mut members: HashMap<String, Vec<i64>> = HashMap::new();
-        let mut tuple_keyed: HashSet<String> = HashSet::new();
-        for (faq, mem) in &vi.members {
-            let ids: Option<Vec<i64>> = mem
-                .iter()
-                .map(|k| match k {
-                    crate::relational::Key::Int(i) => Some(*i),
-                    _ => None,
-                })
-                .collect();
-            match ids {
-                Some(ids) => {
-                    members.insert(faq.clone(), ids);
-                }
-                None => {
-                    tuple_keyed.insert(faq.clone());
-                }
-            }
-        }
-        // Recorded, not refused: the array runtime's own build runs the same
-        // relational pass for every compiler, so refusing it here alone would
-        // make the pipeline stricter than the route it feeds.
-        let mut producers: Vec<&String> = members.keys().chain(tuple_keyed.iter()).collect();
+        // A member id is needed where a set feeds one back (a `member_factor`,
+        // a gated fetch). Every key is a scalar integer.
+        let members: HashMap<String, Vec<i64>> = vi
+            .members
+            .iter()
+            .map(|(faq, mem)| {
+                let ids = mem
+                    .iter()
+                    .map(|k| match k {
+                        crate::relational::Key::Int(i) => *i,
+                        other => unreachable!("value-invention keys are scalar: {other:?}"),
+                    })
+                    .collect();
+                (faq.clone(), ids)
+            })
+            .collect();
+        let mut producers: Vec<&String> = members.keys().collect();
         producers.sort();
         for faq in producers {
             self.rules.push(PipelineRule {
@@ -2539,24 +2573,7 @@ impl<'o> BuildState<'o> {
             });
         }
         self.members = members;
-        self.tuple_keyed = tuple_keyed;
         self.extents = vi.extents.clone();
-        // An arg-witness assignment and the grouped / derived buffers keyed on
-        // it are build-time products: later observeds read them (`den[g]` sums
-        // over `assign`), and they are fields in their own right, so the
-        // observed graph does not evaluate their defining relational bodies.
-        let buffers = vi
-            .assignments
-            .iter()
-            .map(|(n, b)| (n, b.iter().map(|&i| i as f64).collect::<Vec<f64>>()))
-            .chain(vi.groups.iter().map(|(n, b)| (n, b.clone())));
-        for (name, values) in buffers {
-            let n = values.len();
-            let a = ArrayD::from_shape_vec(ndarray::IxDyn(&[n]), values)
-                .map_err(|e| err(format!("value-invention buffer '{name}': {e}")))?;
-            self.arrays.insert(name.clone(), a.clone());
-            self.fields.insert(name.clone(), a);
-        }
         Ok(())
     }
 
@@ -2566,24 +2583,6 @@ impl<'o> BuildState<'o> {
     /// verbose narration are deterministic; `index_sets` is a `HashMap` and
     /// iterating it directly made the order vary run to run.
     fn feed_member_factors(&mut self) -> Result<(), PrepareError> {
-        let mut tuple_fed: Vec<&String> = self
-            .index_sets
-            .iter()
-            .filter(|(_, is)| is.kind == "derived" && is.member_factor.is_some())
-            .filter(|(_, is)| {
-                is.from_faq
-                    .as_ref()
-                    .is_some_and(|f| self.tuple_keyed.contains(f))
-            })
-            .map(|(sname, _)| sname)
-            .collect();
-        tuple_fed.sort();
-        if let Some(sname) = tuple_fed.first() {
-            return Err(err(format!(
-                "derived index set '{sname}' names a member_factor, but its producer's members \
-                 are tuples, not scalar member ids"
-            )));
-        }
         let mut mf_sets: Vec<(&String, &String, &Vec<i64>)> = self
             .index_sets
             .iter()
@@ -2874,6 +2873,7 @@ impl<'o> BuildState<'o> {
                 &self.index_sets,
                 &self.extents,
                 &self.const_scope,
+                self.fill_shape(name).as_deref(),
                 &self.scalar_shape(name),
                 self.opts.refuse_per_cell,
             )? {
@@ -3034,7 +3034,7 @@ mod first_cell_stop_tests {
 
     fn doc(n: usize, variables: Value, equations: Value) -> Value {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "FirstCellStop"},
             "index_sets": {"rows": {"kind": "interval", "size": n}},
             "models": {"Rel": {"variables": variables, "equations": equations}},
@@ -3155,7 +3155,7 @@ mod first_cell_stop_tests {
         std::collections::HashMap<String, ndarray::ArrayD<f64>>,
     ) {
         let d = json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "FirstCellStopCoordinates"},
             "index_sets": {
                 "records": {"kind": "interval", "size": n},
@@ -3188,7 +3188,7 @@ mod first_cell_stop_tests {
                              "join": [{"overlap": {"src_env": ["X", "Y"],
                                                    "tgt_env": ["W", "S", "E", "N"],
                                                    "eps": 0.0}}],
-                             "key": {"op": "skolem", "label": "cell", "args": ["c"]},
+                             "key": "c",
                              "expr": {"op": "true", "args": []}}}
                 ]
             }}
@@ -3345,7 +3345,7 @@ mod mounted_subsystem_tests {
     /// `theta = 40 deg` and the state-dependent observed `v = 2*u`.
     fn doc(name: &str, units: &str, rhs: Value) -> Value {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "Mounted"},
             "models": {"P": {
                 "variables": {
@@ -3538,7 +3538,7 @@ mod whole_document_tests {
     }
 
     fn doc(models: Value) -> Value {
-        json!({"esm": "1.2.0", "metadata": {"name": "w"}, "models": models})
+        json!({"esm": "2.0.0", "metadata": {"name": "w"}, "models": models})
     }
 
     #[test]

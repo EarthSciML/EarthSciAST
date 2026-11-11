@@ -68,12 +68,8 @@ def test_shared_fixture_control_still_evaluates() -> None:
 @pytest.mark.parametrize(
     "op, args",
     [
-        ("rank", ["x"]),
         ("distinct", ["x"]),
-        ("argmin", ["x"]),
-        ("argmax", ["x"]),
         ("apply_expression_template", []),
-        ("table_lookup", ["x"]),
         ("ic", ["x"]),
         ("enum", ["colors", "red"]),
     ],

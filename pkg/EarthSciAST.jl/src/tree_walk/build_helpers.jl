@@ -525,10 +525,9 @@ end
 #
 # Every downstream owner-bucket collector in this build, though, tests the
 # SYNTACTIC `eq.lhs isa VarExpr` — the WS4 elementwise fold, the promoted-faq
-# inline set (`_collect_array_inline_vars`), the bare-alias array registration,
-# the clip-ring discovery. An ARRAY-shaped observed written with the indexed
-# spelling therefore landed in no bucket at all and fell through to
-# `_partition_variables`' geometry-ring gate as
+# inline set (`_collect_array_inline_vars`), the bare-alias array registration.
+# An ARRAY-shaped observed written with the indexed spelling therefore landed in
+# no bucket at all and fell through to `_partition_variables` as
 # `E_TREEWALK_UNSUPPORTED_SHAPE: <name>` — a loud refusal of a document Rust and
 # Python both run (issue #232). The scalar case never showed it, because a scalar
 # observed has no `index` shell to write.
@@ -821,9 +820,8 @@ end
 # Elementwise scalar ops whose ARRAY-shaped observed the WS4 fold may inline: the
 # arithmetic / transcendental functions that broadcast per cell. An array observed
 # whose top-level op is anything else — a producer (`makearray`/`faq`/
-# `faq`), a `const` field, a geometry kernel (`intersect_polygon`, …), a
-# gather/reshape (`index`, `reshape`, `transpose`, `concat`, `broadcast`), a
-# value-invention op (`skolem`/`distinct`/`rank`), or a bare alias — is left to
+# `faq`), a `const` field, a gather/reshape (`index`, `reshape`, `transpose`,
+# `concat`, `broadcast`), a value-invention op (`distinct`), or a bare alias — is left to
 # its own dedicated handler (const_arrays, `_array_inline_vars`, geometry setup,
 # the bare-alias path). Restricting the fold to this allowlist keeps it provably
 # regression-free: an elementwise array observed was previously REJECTED
@@ -851,7 +849,7 @@ const _WS4_FOLDABLE_ELEMENTWISE_OPS = _ops_with(:ws4_foldable)
 # through args / expr_body / values / filter / ranges — the fields its
 # per-cell faq callers need — while the fold below rewrites arbitrary
 # READER equations, which may reference a folded name inside an integral
-# bound, a table-lookup axis, a value-invention `key`, or a `bindings` value.
+# bound, a value-invention `key`, or a `bindings` value.
 # Routing through the `map_children` generated full field walk covers every
 # expression-bearing field exactly as `substitute` does (and inherits its
 # identity-preserving no-change fast path). Fresh memo per top-level call:
@@ -952,8 +950,8 @@ end
 # (a level-set's `grad_safe = grad_mag + ε`, `U_n = (u·∇ψ)/grad_safe`,
 # `S_n = R_0·(1+φ_W+φ_S)`) instead of one monolithic inlined `D(ψ,t)` RHS — the
 # evaluator otherwise rejects such an observed as `E_TREEWALK_UNSUPPORTED_SHAPE`
-# (only a producer-defined array observed inlines, via `_array_inline_vars`, and
-# only a clip ring materializes). Array observeds defined by a bare array PRODUCER
+# (only a producer-defined array observed inlines, via `_array_inline_vars`).
+# Array observeds defined by a bare array PRODUCER
 # (the discretized `psi_x = D(ψ,x)`, `grad_mag = sqrt(D(ψ,x)²+D(ψ,y)²)`, both
 # lowered to `makearray` by the mounted scheme) are LEFT UNTOUCHED — they define
 # their own per-cell indexing and are inlined by the `_array_inline_vars` index

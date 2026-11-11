@@ -113,7 +113,6 @@ type flattenCase struct {
 	Domain               *flattenDomainRecord  `json:"domain"`
 	Metadata             flattenMetadataRecord `json:"metadata"`
 	IndexSets            []string              `json:"index_sets"`
-	FunctionTables       []string              `json:"function_tables"`
 	TemplateRegistry     []string              `json:"template_registry"`
 	FieldICs             []flattenICRecord     `json:"field_ics"`
 	LoaderFields         []flattenLoaderRecord `json:"loader_fields"`
@@ -231,10 +230,6 @@ func goFlattenCase(flat *FlattenedSystem) flattenCase {
 	for _, s := range flat.IndexSets {
 		indexSets = append(indexSets, s.Name)
 	}
-	tables := []string{}
-	for _, s := range flat.FunctionTables {
-		tables = append(tables, s.Name)
-	}
 	templates := []string{}
 	for _, s := range flat.TemplateRegistry {
 		templates = append(templates, s.Name)
@@ -275,7 +270,6 @@ func goFlattenCase(flat *FlattenedSystem) flattenCase {
 			Callbacks:       flat.Metadata.Callbacks,
 		},
 		IndexSets:        indexSets,
-		FunctionTables:   tables,
 		TemplateRegistry: templates,
 		FieldICs:         ics,
 		LoaderFields:     loaders,
@@ -455,7 +449,6 @@ func TestFlattenConformance(t *testing.T) {
 			diffStrSeq(t, "metadata.callbacks", got.Metadata.Callbacks, want.Metadata.Callbacks)
 
 			diffStrSeq(t, "index_sets", got.IndexSets, want.IndexSets)
-			diffStrSeq(t, "function_tables", got.FunctionTables, want.FunctionTables)
 			diffStrSeq(t, "template_registry", got.TemplateRegistry, want.TemplateRegistry)
 
 			if len(got.FieldICs) != len(want.FieldICs) {

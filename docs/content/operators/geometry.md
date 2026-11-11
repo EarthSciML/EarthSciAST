@@ -1,78 +1,61 @@
 ---
 title: "Geometry"
-description: "polygon_intersection_area and intersect_polygon: the kernels behind conservative regridding."
+description: "Polygon overlap areas for conservative regridding, written with the standard-library geometry templates."
 ---
 
-Two geometry kernels accompany [`faq`](../aggregation/) in the relational
-surface. Both take two polygons and clip one against the other; they differ in
-what they hand back. Both run at **build/setup time**, not per timestep — their
-results are frozen into the compiled system, which is what makes a conservative
-regrid a build cost rather than a per-step one.
+The format has no geometry operator. The overlap area of two cells — the
+quantity a conservative regrid is built from — is an expression template in
+`esm:std/geometry.esm`, written entirely in core operators and imported like
+any other [template](../../templates/). Its results are computed at
+**build/setup time** when its inputs are constant, so a conservative regrid is
+a build cost rather than a per-step one.
 
-| Field | Meaning |
-|---|---|
-| `args` | Exactly two operands: the two polygons to clip. Each is a closed vertex ring — commonly one slice of an array shaped `[cells, verts, coord]`. |
-| `manifold` | **Required.** `"planar"`, `"spherical"`, or `"geodesic"`. The op carries no default; the manifold must be declared, never inferred. |
-| `id` | Optional node identity, so another node can refer to this one. |
+| Template | Parameters | Value |
+|---|---|---|
+| `overlap_area_planar` | `ring_a`, `cell_a`, `nv_a`, `ring_b`, `cell_b`, `nv_b` | overlap area of cell `cell_a` of the `[cells, nv_a, 2]` ring stack `ring_a` and cell `cell_b` of `ring_b`, with straight edges, in squared coordinate units |
+| `overlap_area_spherical` | the same, over `[cells, nv, 3]` stacks of unit vectors | the same with great-circle edges on the unit sphere, in steradians |
+| `lonlat_to_unit` | `ring`, `cell`, `vert`, `comp` | component `comp` (1, 2, 3) of the unit vector of vertex `vert` of a `[cells, verts, 2]` lon-lat stack in degrees |
 
-## `polygon_intersection_area`
+Each polygon operand is one cell of a ring stack: the stack, the cell index
+(usually a loop symbol of the enclosing `faq`) and the number of vertex slots,
+an integer used as a `faq` `ranges` bound. Cells are convex; a ring may run
+either way round and may carry repeated vertices (a closing duplicate, or the
+padding of a mixed-valence mesh), which contribute exactly zero. The method and
+its tolerances are in the [standard library](../../standard_library/) page.
 
-Returns the **scalar** area shared by the two polygons — the fused composition
-of a clip and a shoelace area. It exposes no clip ring, which is what makes it
-densely evaluable: a per-pair overlap factor is an ordinary `faq` with no
-ragged intermediate.
+Disjoint cells give exactly zero, so in a weight matrix built with a `+`
+reduction a non-overlapping pair drops out on its own.
 
-**Text**
-```text
-polygon_intersection_area(src_poly[i], tgt_poly[j], manifold=planar)
-```
-**JSON**
-```json
-{
-  "op": "polygon_intersection_area",
-  "args": [
-    { "op": "index", "args": ["src_poly", "i"] },
-    { "op": "index", "args": ["tgt_poly", "j"] }
-  ],
-  "manifold": "planar"
-}
-```
-
-Disjoint polygons give exactly `+0.0`, never `-0.0`. That matters because a
-weight matrix is built with a `+` reduction seeded at zero: a non-overlapping
-pair contributes the fold identity and drops out on its own.
-
-### The conservative-regridding weight matrix
+## The conservative-regridding weight matrix
 
 The idiomatic use is a whole weight matrix assembled by a `faq` over the
 source × target product. `A_ij` is the shared area of each surviving pair:
 
-**Text**
-```text
-sum[i, j] (polygon_intersection_area(src_poly[i], tgt_poly[j], manifold=planar)) where {i in src_cells, j in tgt_cells} join(src_bin=tgt_bin)
-```
 **JSON**
 ```json
 {
-  "op": "faq",
-  "output_idx": ["i", "j"],
-  "semiring": "sum_product",
-  "ranges": { "i": { "from": "src_cells" }, "j": { "from": "tgt_cells" } },
-  "join": [{ "on": [["src_bin", "tgt_bin"]] }],
-  "expr": {
-    "op": "polygon_intersection_area",
-    "args": [
-      { "op": "index", "args": ["src_poly", "i"] },
-      { "op": "index", "args": ["tgt_poly", "j"] }
-    ],
-    "manifold": "planar"
-  },
-  "args": ["src_poly", "tgt_poly", "src_bin", "tgt_bin"]
+  "expression_template_imports": [{ "ref": "esm:std/geometry.esm" }],
+  "equations": [
+    {
+      "lhs": "A_ij",
+      "rhs": {
+        "op": "faq", "args": [], "output_idx": ["i", "j"],
+        "semiring": "sum_product",
+        "ranges": { "i": { "from": "src_cells" }, "j": { "from": "tgt_cells" } },
+        "join": [{ "on": [["src_bin", "tgt_bin"]] }],
+        "expr": {
+          "op": "apply_expression_template", "args": [], "name": "overlap_area_planar",
+          "bindings": { "ring_a": "src_poly", "cell_a": "i", "nv_a": 4,
+                        "ring_b": "tgt_poly", "cell_b": "j", "nv_b": 4 }
+        }
+      }
+    }
+  ]
 }
 ```
 
 The row-sum normalizer drops slivers with a `filter`, which is where the
-tolerance lives — in the document, not in the kernel:
+tolerance lives — in the document, not in the template:
 
 **Text**
 ```text
@@ -96,16 +79,16 @@ sum[j] (A_ij[i, j]) where {i in src_cells, j in tgt_cells} join(src_bin=tgt_bin)
 more contraction. Nothing about the weights is supplied opaquely: they are
 computed from the cell geometry the document already carries.
 
-### Pruning the pair set
+## Pruning the pair set
 
 Both `faq` nodes above carry `join(src_bin=tgt_bin)`. Without it the `faq`
-visits the full source × target product; with it, the cost is proportional to the
-number of candidate pairs. The bin keys are themselves computed — quantize each
-cell's representative coordinate and mint a key from the two integers:
+visits the full source × target product; with it, the cost is proportional to
+the number of candidate pairs. The bin keys are themselves computed — quantize
+each cell's representative coordinate:
 
 **Text**
 ```text
-sum[i] (skolem(floor(src_lon[i] / dx), floor(src_lat[i] / dy))) where {i in src_cells}
+sum[i] (floor(src_lon[i] / dx)) where {i in src_cells}
 ```
 **JSON**
 ```json
@@ -113,70 +96,32 @@ sum[i] (skolem(floor(src_lon[i] / dx), floor(src_lat[i] / dy))) where {i in src_
   "op": "faq",
   "output_idx": ["i"],
   "ranges": { "i": { "from": "src_cells" } },
-  "expr": {
-    "op": "skolem",
-    "args": [
-      { "op": "floor", "args": [{ "op": "/", "args": [{ "op": "index", "args": ["src_lon", "i"] }, "dx"] }] },
-      { "op": "floor", "args": [{ "op": "/", "args": [{ "op": "index", "args": ["src_lat", "i"] }, "dy"] }] }
-    ]
-  },
-  "args": ["src_lon", "src_lat"]
+  "expr": { "op": "floor", "args": [{ "op": "/", "args": [{ "op": "index", "args": ["src_lon", "i"] }, "dx"] }] },
+  "args": ["src_lon"]
 }
 ```
 
-Note that the float coordinate enters only the `floor`. The join key itself is
-an integer [`skolem`](../aggregation/) term — join keys must compare by exact
-equality, and floating-point keys are forbidden.
+The float coordinate enters only the `floor`: join keys compare by exact
+equality, so they are integers, and floating-point keys are forbidden. A
+two-axis bin is either one integer column per axis, joined with one `on` pair
+per column, or a single column built with `pair_key` from
+`esm:std/relational.esm` (see [aggregation](../aggregation/)).
 
 An [`overlap` join](../aggregation/) is the alternative broad phase: it gates on
-envelope intersection rather than bin equality, which handles cells that straddle
-a bin boundary without a halo.
+envelope intersection rather than bin equality, which handles cells that
+straddle a bin boundary without a halo.
 
-## `intersect_polygon`
+## On the sphere
 
-Returns the clipped **region** rather than its area — the intersection polygon
-itself, a ring of data-dependent length. Reach for it when the downstream
-computation needs the geometry (a centroid, a further clip); prefer
-`polygon_intersection_area` when all you need is the measure, because the ragged
-ring it avoids is what forces a non-dense evaluation path.
+For a global lon-lat mesh use `overlap_area_spherical`. Build each unit-vector
+stack once per cell, `src_xyz[c, v, d] = lonlat_to_unit(src_poly, c, v, d)` as a
+`faq` over the cells, the vertex slots and a 3-element component axis, and pass
+`src_xyz` and `tgt_xyz` to the template. Doing the trigonometry once per vertex
+rather than once per use inside the pair body also keeps the expanded body
+small.
 
-**Text**
-```text
-intersect_polygon(src_poly[i], tgt_poly[j], manifold=spherical, id=overlap_clip)
-```
-**JSON**
-```json
-{
-  "op": "intersect_polygon",
-  "args": [
-    { "op": "index", "args": ["src_poly", "i"] },
-    { "op": "index", "args": ["tgt_poly", "j"] }
-  ],
-  "manifold": "spherical",
-  "id": "overlap_clip"
-}
-```
-
-## Manifolds
-
-| `manifold` | Edges | When |
-|---|---|---|
-| `planar` | straight lines in the coordinate plane | a small projected patch. Wrong at the poles and across the antimeridian. |
-| `spherical` | great circles on the unit sphere | global lon-lat meshes — the correct default for earth grids. |
-| `geodesic` | ellipsoidal geodesics | when the ellipsoid matters. |
-
-Two bindings' results may be compared only under the **same** declared manifold,
-and the flag is matched exactly: it is a discrete label, not a tolerance-based
-quantity.
-
-**The great-circle assumption has a cost at the poles.** Under `spherical` and
-`geodesic`, *every* edge is modelled as a geodesic — including a lon-lat edge
-running along a parallel, which is a small circle, not a great circle. A coarse
-polar cell therefore carries a real area error, growing with the square of the
-cell's longitude width. The kernels offer an opt-in densification of parallel
-edges into short segments to reduce it; it is **off by default**, so default clip
-behaviour is unchanged.
-
-Spherical and geodesic clipping need the geometry extension loaded — `spherely`
-in Python, the GeometryOps extension in Julia. Without it, a document requesting
-one raises rather than silently computing a planar answer.
+Every edge is a great-circle arc — including a lon-lat edge running along a
+parallel, which is a small circle. A coarse polar cell therefore carries a real
+area error, growing with the square of the cell's longitude width; densify such
+edges in the ring data if it matters. Each spherical cell must lie within a
+hemisphere.

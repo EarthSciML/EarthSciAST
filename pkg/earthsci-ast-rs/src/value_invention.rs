@@ -11,25 +11,25 @@
 //! §7.3 (edge enumeration); `CONFORMANCE_SPEC.md` §5.5 / §5.7.
 //!
 //! A `kind:"derived"` index set whose `from_faq` names a value-invention
-//! aggregate (a `faq` with `distinct:true`, or whose body / `key` is
-//! `skolem` / `rank`) is materialised here, ONCE at setup, off the per-step hot
-//! path — the §6.1 CONST/DISCRETE materialisation point. The aggregate's keys
-//! are evaluated over the build-time const-array factors and run through the
-//! [`crate::relational`] engine (skolem / distinct, §5.5 determinism); the
+//! aggregate (a `faq` with `distinct:true`) is materialised here, ONCE at
+//! setup, off the per-step hot path — the §6.1 CONST/DISCRETE materialisation
+//! point. The aggregate's scalar integer keys (a `lib/relational.esm` key
+//! template, a bare `index`, `floor(...)`) are evaluated over the build-time
+//! const-array factors and run through the [`crate::relational`] engine
+//! (`distinct`, §5.5 determinism); the
 //! distinct set's cardinality is handed to the index-set resolver as the dense
 //! extent `[1, n]`. Concretely, [`apply_value_invention`] rewrites the typed
 //! model's `kind:"derived"` set into `kind:"interval"` with `size = n`, so
 //! [`crate::faq::resolve_aggregate_ranges`] resolves it via the existing
-//! interval arm (a derived **output** index — e.g. the `rank` dense-id buffer —
-//! is otherwise rejected, since a data-dependent extent cannot size an output
+//! interval arm (a derived **output** index is otherwise rejected, since a data-dependent extent cannot size an output
 //! array). The value-invention outputs are dropped from the ODE.
 //!
 //! The pass runs on the **raw `serde_json::Value`** model document, not the
 //! typed `Model`: the typed `ExpressionNode` drops the aggregate `key` /
 //! `distinct` fields (mirroring [`crate::cadence`], which walks raw JSON for the
 //! same reason). The materialised members are **byte-identical** across the
-//! Julia / Rust / Python bindings (the M3 determinism goldens) because every
-//! emitted key is the canonical Skolem tuple in §5.5.1 sorted total order.
+//! Julia / Rust / Python bindings (the M3 determinism goldens) because the
+//! members are emitted in §5.5.1 sorted total order.
 
 use std::collections::{HashMap, HashSet};
 
@@ -38,8 +38,7 @@ use serde_json::{Map, Value};
 
 use crate::broad_phase::OverlapIndex;
 use crate::cadence::{self, Cadence};
-use crate::faq::{ReduceKind, effective_reduce_kind};
-use crate::relational::{self, Key, Num, SemiringOp, group_aggregate};
+use crate::relational::{self, Key};
 use crate::types::{Expr, IndexSet, Model};
 
 /// A value-invention build-time materialisation error (the Rust analog of
@@ -86,30 +85,6 @@ fn err<T>(msg: impl Into<String>) -> Result<T, ValueInventionError> {
     Err(ValueInventionError::new(msg))
 }
 
-/// The relational body ops that mark a value-invention output (excluded from the
-/// ODE): mirrors Julia `_VI_BODY_OPS`.
-const VI_BODY_OPS: [&str; 3] = ["skolem", "rank", "distinct"];
-
-/// Arg-witness reducer ops (RFC §5.7 rule 6): a build-time reduction over a
-/// contracted candidate range that emits the ARG — the witnessing index — rather
-/// than the reduced value (the nearest-generator INDEX). NET-NEW: the closed
-/// semiring registry returns values and value-invention (distinct/skolem/rank)
-/// returns sets; neither returns the arg. Materialised as an integer per-element
-/// buffer at CONST cadence, like the `:map` skolem bin buffers. Mirrors Julia
-/// `_VI_ARGWITNESS_OPS`.
-const VI_ARGWITNESS_OPS: [&str; 2] = ["argmin", "argmax"];
-
-/// True iff a value-invention `:map` node's body is an arg-witness reducer
-/// (`argmin` / `argmax`) — i.e. it emits the witnessing INDEX rather than a
-/// value. Checks the raw `expr.op` against [`VI_ARGWITNESS_OPS`].
-fn is_argwitness(node: &Value) -> bool {
-    node.get("expr")
-        .and_then(|b| b.get("op"))
-        .and_then(|v| v.as_str())
-        .map(|o| VI_ARGWITNESS_OPS.contains(&o))
-        .unwrap_or(false)
-}
-
 /// Per-dimension boundary policy for an out-of-range const-array stencil gather
 /// Mirrors the Julia `_CONST_BOUNDARY_KINDS` (`:periodic` /
 /// `:clamp` / `:error`): a gather at a 1-based index outside `1..=n` resolves
@@ -136,43 +111,26 @@ pub enum BoundaryKind {
 ///   dense extent `[1, n]` the resolver consumes).
 /// - `members` — `from_faq` producer id → the distinct member keys in §5.5.1
 ///   sorted order (for byte-identity assertions).
-/// - `assignments` — arg-witness map var → the integer nearest-generator INDEX
-///   buffer, dense in output-index order (the SCVT assignment; §5.7 rule 6,
-///   byte-identical across bindings).
-/// - `groups` — the downstream GROUPED / DERIVED buffers keyed on an arg-witness
-///   assignment, dense in output-index order: a grouped semiring reduction
-///   (`num[g] = Σ_{p:assign=g} rho_p·x_p`, run through [`group_aggregate`], §5.5
-///   rule 5) and an elementwise derived buffer (`centroid[g] = num[g]/den[g]`) —
-///   the SCVT centroid-update step.
 /// - `vi_var_names` — value-invention LHS vars to drop from the ODE.
-/// - `map_codes` — each skolem MAP buffer (a broad-phase bin key per cell, the
-///   column a `join.on` gate compares), dense in output-index order, as one
-///   integer code per key: the key's 1-based position in the sorted set of
-///   every map's keys. Codes are equal exactly where keys are, across all maps
-///   of one build, so a gate on two buffers compares codes as it would keys.
 #[derive(Debug, Clone, Default)]
 pub struct ValueInventionResult {
     pub extents: HashMap<String, i64>,
     pub members: HashMap<String, Vec<Key>>,
-    pub assignments: HashMap<String, Vec<i64>>,
-    pub groups: HashMap<String, Vec<f64>>,
     pub vi_var_names: HashSet<String>,
-    pub map_codes: HashMap<String, Vec<f64>>,
 }
 
 // --------------------------------------------------------------------------- //
 // Intermediate build-time value
 // --------------------------------------------------------------------------- //
 
-/// A build-time value produced by [`vi_eval`]: an int / float / bool / relation
-/// tag / canonical Skolem key, depending on the op.
+/// A build-time value produced by [`vi_eval`]: an int / float / bool / name,
+/// depending on the op.
 #[derive(Debug, Clone, PartialEq)]
 enum Val {
     Bool(bool),
     Int(i64),
     Float(f64),
     Str(String),
-    Key(Key),
 }
 
 impl Val {
@@ -232,7 +190,6 @@ fn node_args(node: &Value) -> &[Value] {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum NodeKind {
     Producer,
-    Map,
     Exclude,
     None,
 }
@@ -240,9 +197,9 @@ enum NodeKind {
 /// Is this assignment a VALUE-INVENTION output rather than an ordinary
 /// observed definition?
 ///
-/// True for every node [`vi_node_kind`] recognises — a `distinct` producer, a
-/// `skolem` / arg-witness map, and a relational body — because all three leave
-/// the ODE and are materialized by this engine, never by the array evaluator.
+/// True for every node [`vi_node_kind`] recognises — a `distinct` producer and
+/// a `distinct` body — because both leave the ODE and are materialized by this
+/// engine, never by the array evaluator.
 ///
 /// Public because esm 1.0.0 made the question reachable from outside. Before
 /// it, a producer lived in `equations` while an ordinary observed definition
@@ -265,25 +222,13 @@ fn vi_node_kind(node: &Value) -> NodeKind {
     if map.get("distinct").and_then(|v| v.as_bool()) == Some(true) {
         return NodeKind::Producer;
     }
-    if let Some(bop) = map
+    if map
         .get("expr")
         .and_then(|b| b.get("op"))
         .and_then(|v| v.as_str())
+        == Some("distinct")
     {
-        if bop == "skolem" || VI_ARGWITNESS_OPS.contains(&bop) {
-            return NodeKind::Map;
-        }
-        if VI_BODY_OPS.contains(&bop) {
-            return NodeKind::Exclude;
-        }
-    }
-    if map
-        .get("key")
-        .and_then(|k| k.get("op"))
-        .and_then(|v| v.as_str())
-        == Some("skolem")
-    {
-        return NodeKind::Map;
+        return NodeKind::Exclude;
     }
     NodeKind::None
 }
@@ -313,151 +258,29 @@ fn lhs_base_typed(expr: &Expr) -> Option<String> {
     }
 }
 
-/// A downstream build-time buffer keyed on / derived from an arg-witness
-/// assignment — the SCVT centroid step (mirror of Julia's `chain` kinds).
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ChainKind {
-    /// A grouped semiring reduction keyed on a VI buffer (`num[g]`/`den[g]`).
-    Grouped,
-    /// An elementwise buffer over upstream VI buffers (`centroid[g]`).
-    Derived,
-}
-
 struct Detection {
     has_vi: bool,
     vi_var_names: HashSet<String>,
-    maps: Vec<(String, Value)>,
     producers: Vec<(String, Value)>,
-    /// Plain numeric aggregates — grouped/derived candidates resolved by fixpoint.
+    /// Plain numeric aggregates — `join` column candidates.
     candidates: Vec<(String, Value)>,
-    /// The grouped/derived chain in materialisation (fixpoint discovery) order.
-    chain: Vec<(String, Value, ChainKind)>,
     /// Plain per-element columns a value-invention `join` reads (an integer bin
     /// column such as `src_bx[i] = floor(lon[i] / dx)`): materialised for the
     /// join, but NOT value-invention outputs — they stay ordinary observeds.
     columns: Vec<(String, Value)>,
 }
 
-/// Every `index` target name (the array a value reads from) reachable in a
-/// subtree: `{op:"index", args:[NAME, …]}` → NAME.
-fn vi_index_targets(node: &Value, out: &mut HashSet<String>) {
-    match node {
-        Value::Object(map) => {
-            if node_op(node) == Some("index")
-                && let Some(name) = node_args(node).first().and_then(|v| v.as_str())
-            {
-                out.insert(name.to_string());
-            }
-            for v in map.values() {
-                vi_index_targets(v, out);
-            }
-        }
-        Value::Array(items) => {
-            for v in items {
-                vi_index_targets(v, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Scan a `join` array's `on` pairs for the pair that binds `gsym` to a partner
-/// name accepted by `is_known`, returning that partner (the non-`gsym` element of
-/// the pair). Shared by [`vi_grouped_key`] (partner ∈ VI var names) and
-/// [`vi_materialize_grouped`] (partner ∈ materialised buffers). Returns the FIRST
-/// such partner in join / pair order.
-fn vi_join_partner(
-    join: &[Value],
-    gsym: &str,
-    mut is_known: impl FnMut(&str) -> bool,
-) -> Option<String> {
-    for clause in join {
-        let Some(pairs) = clause.get("on").and_then(|v| v.as_array()) else {
-            continue;
-        };
-        for pair in pairs {
-            let Some(p) = pair.as_array() else { continue };
-            if p.len() != 2 {
-                continue;
-            }
-            let (Some(a), Some(b)) = (p[0].as_str(), p[1].as_str()) else {
-                continue;
-            };
-            if a == gsym && is_known(b) {
-                return Some(b.to_string());
-            }
-            if b == gsym && is_known(a) {
-                return Some(a.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// The group KEY of a GROUPED reduction, or `None`. The SCVT group-by signature
-/// is precise (mirror of Julia `_vi_grouped_key`): a single-output-index
-/// `faq` whose `join.on` pairs the OUTPUT index symbol with a known VI
-/// buffer. Deliberately narrower than "any join touching a VI buffer" so a
-/// bin-to-bin gather (the conservative regridder's `A_j`) is left on the
-/// simulate path.
-fn vi_grouped_key(node: &Value, vi_var_names: &HashSet<String>) -> Option<String> {
-    if node_op(node) != Some("faq") {
-        return None;
-    }
-    let oi = node.get("output_idx").and_then(|v| v.as_array())?;
-    if oi.len() != 1 {
-        return None;
-    }
-    let gsym = oi[0].as_str()?;
-    let join = node.get("join").and_then(|v| v.as_array())?;
-    vi_join_partner(join, gsym, |n| vi_var_names.contains(n))
-}
-
-/// True iff `node` is an elementwise DERIVED buffer over known VI buffers
-/// (mirror of Julia `_vi_is_derived`): a single-output-index `faq` with NO
-/// join and NO contraction whose body reads an upstream VI buffer.
-fn vi_is_derived(node: &Value, vi_var_names: &HashSet<String>) -> bool {
-    if node_op(node) != Some("faq") {
-        return false;
-    }
-    let Some(oi) = node.get("output_idx").and_then(|v| v.as_array()) else {
-        return false;
-    };
-    if oi.len() != 1 {
-        return false;
-    }
-    let Some(gsym) = oi[0].as_str() else {
-        return false;
-    };
-    if node.get("join").map(|v| !v.is_null()).unwrap_or(false) {
-        return false;
-    }
-    if let Some(ranges) = node.get("ranges").and_then(|v| v.as_object())
-        && !ranges.keys().all(|k| k == gsym)
-    {
-        return false;
-    }
-    let mut refs = HashSet::new();
-    if let Some(expr) = node.get("expr") {
-        vi_index_targets(expr, &mut refs);
-    }
-    refs.iter().any(|r| vi_var_names.contains(r))
-}
-
 /// Scan a raw model for value-invention assignments: the equation list (LHS base
 /// resolved from the node) plus the `expression` of each observed variable (the
 /// base is the variable name). `vi_var_names` is the set of LHS variables
-/// produced by skolem/distinct/rank/argmin (and the downstream grouped chain),
-/// all excluded from the ODE as the geometry clip-ring vars are; `maps` /
-/// `producers` are `(base, node)` pairs; `chain` is the grouped/derived buffers.
+/// produced by `distinct`, all excluded from the ODE; `producers` are
+/// `(base, node)` pairs.
 fn vi_detect(model_json: &Value) -> Detection {
     let mut det = Detection {
         has_vi: false,
         vi_var_names: HashSet::new(),
-        maps: Vec::new(),
         producers: Vec::new(),
         candidates: Vec::new(),
-        chain: Vec::new(),
         columns: Vec::new(),
     };
     if let Some(eqs) = model_json.get("equations").and_then(|v| v.as_array()) {
@@ -477,40 +300,12 @@ fn vi_detect(model_json: &Value) -> Detection {
             }
         }
     }
-    // Fixpoint over the data-dependency DAG: a candidate that depends on a known
-    // VI buffer in the SCVT centroid shape is itself a build-time buffer. The
-    // signatures are narrow (see the helpers) so ordinary model aggregates —
-    // including the regridder's bin-to-bin gather — are left on the simulate path.
-    let mut candidates = std::mem::take(&mut det.candidates);
-    let mut changed = true;
-    while changed {
-        changed = false;
-        let mut rest = Vec::new();
-        for (base, node) in candidates.drain(..) {
-            if vi_grouped_key(&node, &det.vi_var_names).is_some() {
-                det.vi_var_names.insert(base.clone());
-                det.chain.push((base, node, ChainKind::Grouped));
-                changed = true;
-            } else if vi_is_derived(&node, &det.vi_var_names) {
-                det.vi_var_names.insert(base.clone());
-                det.chain.push((base, node, ChainKind::Derived));
-                changed = true;
-            } else {
-                rest.push((base, node));
-            }
-        }
-        candidates = rest;
-    }
-    // The `join.on` key columns a producer or an arg-witness reads that no skolem
-    // map defines: plain per-element aggregates over constant factors.
+    let candidates = std::mem::take(&mut det.candidates);
+    // The `join.on` key columns a producer reads: plain per-element aggregates
+    // over constant factors.
     let mut join_names: HashSet<String> = HashSet::new();
     for (_, node) in &det.producers {
         vi_join_on_names(node.get("join"), &mut join_names);
-    }
-    for (_, node) in &det.maps {
-        if let Some(body) = node.get("expr") {
-            vi_join_on_names(body.get("join"), &mut join_names);
-        }
     }
     det.columns = candidates
         .into_iter()
@@ -522,7 +317,7 @@ fn vi_detect(model_json: &Value) -> Detection {
                     .is_some_and(|oi| oi.len() == 1)
         })
         .collect();
-    det.has_vi = !det.maps.is_empty() || !det.producers.is_empty() || !det.chain.is_empty();
+    det.has_vi = !det.producers.is_empty();
     det
 }
 
@@ -550,17 +345,15 @@ fn vi_join_on_names(join: Option<&Value>, out: &mut HashSet<String>) {
 fn classify_assignment(base: &str, rhs: &Value, det: &mut Detection) {
     let kind = vi_node_kind(rhs);
     if kind == NodeKind::None {
-        // A plain numeric aggregate is a grouped/derived candidate (resolved later).
+        // A plain numeric aggregate may be a `join` column (resolved later).
         if node_op(rhs) == Some("faq") {
             det.candidates.push((base.to_string(), rhs.clone()));
         }
         return;
     }
     det.vi_var_names.insert(base.to_string()); // every value-invention output leaves the ODE
-    match kind {
-        NodeKind::Producer => det.producers.push((base.to_string(), rhs.clone())),
-        NodeKind::Map => det.maps.push((base.to_string(), rhs.clone())),
-        _ => {}
+    if kind == NodeKind::Producer {
+        det.producers.push((base.to_string(), rhs.clone()));
     }
 }
 
@@ -676,7 +469,7 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
     match op {
         // The precision-boundary marker inserted by
         // `crate::precision_infer`: evaluate the one operand at the element
-        // type it names. `Val::Int` and `Val::Key` are exact and unaffected;
+        // type it names. `Val::Int` is exact and unaffected;
         // what the guard changes is the float arms below and the ingress
         // rounding of literals, parameters and gathered array cells.
         crate::precision_infer::MARKER_OP => {
@@ -690,7 +483,6 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
             }
         }
         "index" => vi_index(node, ctx, bindings),
-        "skolem" => Ok(Val::Key(vi_skolem(node, ctx, bindings)?)),
         "true" => Ok(Val::Bool(true)),
         "false" => Ok(Val::Bool(false)),
         "floor" => Ok(rounded_int(
@@ -906,34 +698,8 @@ fn resolve_const_index(
     ))
 }
 
-/// `skolem(c1, c2, …)` → the canonical key tuple. EVERY arg is a pure key
-/// component: an exact integer ID (§5.5.1 rule 4). The relation tag (the
-/// "sort"/relation name, e.g. `"edge"`/`"bin"`/`"pair"`) lives in the node's
-/// dedicated `label` field — documentary only, never part of the emitted key —
-/// which keeps the materialised set byte-identical to the M3 determinism golden
-/// (edges `[[1,2],…]`, candidate pairs `(i,j)`, which carry no tag) while
-/// ensuring a mistyped key component can no longer silently masquerade as a tag
-/// (it now fails closed via `key_int`). A single component degrades to a scalar
-/// key.
-fn vi_skolem(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Key, ValueInventionError> {
-    let args = node_args(node);
-    let mut key_comps: Vec<Key> = Vec::with_capacity(args.len());
-    for a in args {
-        // Every arg is a key component; a non-key value fails closed via `key_int`
-        // (as it already did for non-leading positions). The `label` field, if
-        // present, is a documentary relation tag and is intentionally ignored.
-        key_comps.push(Key::Int(vi_eval(a, ctx, bindings)?.key_int()?));
-    }
-    if key_comps.len() == 1 {
-        Ok(key_comps.into_iter().next().unwrap())
-    } else {
-        Ok(Key::Tuple(key_comps))
-    }
-}
-
-/// A `distinct` key or `join` column value: a `skolem` node's canonical tuple,
-/// or any other expression's exact integer (a lib/relational.esm key template,
-/// a bare `index`, `floor(...)`). A NaN value — a key template's out-of-range,
+/// A `distinct` key or `join` column value: an expression's exact integer (a
+/// lib/relational.esm key template, a bare `index`, `floor(...)`). A NaN value — a key template's out-of-range,
 /// non-integral or NaN component — is `value_invention_key_out_of_range`
 /// naming `column` and the loop indices (esm-spec §9.6.6).
 fn vi_key(
@@ -942,16 +708,12 @@ fn vi_key(
     bindings: &Bindings,
     column: &str,
 ) -> Result<Key, ValueInventionError> {
-    if node_op(node) == Some("skolem") {
-        return vi_skolem(node, ctx, bindings);
-    }
     key_of(vi_eval(node, ctx, bindings)?, bindings, column)
 }
 
 /// [`vi_key`]'s reading of a key expression's value.
 fn key_of(v: Val, bindings: &Bindings, column: &str) -> Result<Key, ValueInventionError> {
     match v {
-        Val::Key(k) => Ok(k),
         Val::Float(f) if f.is_nan() => {
             let mut at: Vec<(&String, &i64)> = bindings.iter().collect();
             at.sort();
@@ -1451,169 +1213,6 @@ where
     Ok(())
 }
 
-/// Arg-witness reducer (RFC §5.7 rule 6). Over the inner contracted `ranges`
-/// (which EXTEND the outer map binding so `expr` may read both the point and the
-/// candidate), evaluate the scalar `expr` body at each candidate and return the
-/// `arg` index symbol's value at the optimum — `argmin` keeps the least value,
-/// `argmax` the greatest. The NORMATIVE tie-break is the SMALLEST arg (the
-/// smallest generator id): equal values resolve to the lower candidate index, so
-/// the emitted integer buffer is byte-identical across bindings irrespective of
-/// enumeration order. Optional `join` (a bin-Skolem prune, §5.3) / `filter`
-/// restrict the candidate set; an empty candidate set is an error.
-fn vi_argreduce(
-    node: &Value,
-    ctx: &ViCtx,
-    outer_bindings: &Bindings,
-    outer_ranges: &Map<String, Value>,
-) -> Result<i64, ValueInventionError> {
-    let op = node_op(node).unwrap_or("");
-    let empty = Map::new();
-    let inner_ranges = node
-        .get("ranges")
-        .and_then(|v| v.as_object())
-        .unwrap_or(&empty);
-    let arg_sym = node.get("arg").and_then(|v| v.as_str()).ok_or_else(|| {
-        ValueInventionError::new(format!(
-            "arg-witness op {op:?} requires an `arg` naming the witnessing index symbol"
-        ))
-    })?;
-    let value_expr = node.get("expr").ok_or_else(|| {
-        ValueInventionError::new(format!(
-            "arg-witness op {op:?} requires an `expr` body (the scalar to optimise)"
-        ))
-    })?;
-    if !inner_ranges.contains_key(arg_sym) {
-        return err(format!(
-            "arg-witness `arg`={arg_sym:?} must name one of the contracted `ranges` symbols"
-        ));
-    }
-    if outer_bindings.contains_key(arg_sym) {
-        return err(format!(
-            "arg-witness `arg`={arg_sym:?} shadows an outer index symbol"
-        ));
-    }
-    let filt = node.get("filter");
-    let join: Vec<Value> = node
-        .get("join")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    // Combined ranges so a `join` column over an OUTER-indexed map buffer (the
-    // point's bin) resolves alongside the inner candidate's bin (§5.3 equi-join).
-    let mut combined: Map<String, Value> = outer_ranges.clone();
-    for (k, v) in inner_ranges {
-        combined.insert(k.clone(), v.clone());
-    }
-    // Resolve the join gates ONCE (broad-phase candidate set / buffer bindings are
-    // shared across every candidate tuple), not per `rec` leaf.
-    let gates = if join.is_empty() {
-        Vec::new()
-    } else {
-        vi_resolve_join(&join, &combined, ctx)?
-    };
-    let syms = vi_order_syms(inner_ranges)?;
-    let mut bindings = outer_bindings.clone();
-    let mut best: Option<(f64, i64)> = None;
-    vi_enumerate_rec(&syms, 0, inner_ranges, ctx, &mut bindings, &mut |b| {
-        if let Some(f) = filt {
-            let pass = match vi_eval(f, ctx, b)? {
-                Val::Bool(x) => x,
-                Val::Int(i) => i > 0,
-                Val::Float(x) => x > 0.0,
-                _ => false,
-            };
-            if !pass {
-                return Ok(());
-            }
-        }
-        if !gates.is_empty() && !vi_join_ok(&gates, ctx, b)? {
-            return Ok(());
-        }
-        let v = vi_eval(value_expr, ctx, b)?.as_f64()?;
-        let a = b[arg_sym];
-        best = match best {
-            None => Some((v, a)),
-            Some((bv, ba)) => {
-                let better = if op == "argmax" { v > bv } else { v < bv };
-                // Strict improvement OR an exact tie resolved to the smaller arg.
-                if better || (v == bv && a < ba) {
-                    Some((v, a))
-                } else {
-                    Some((bv, ba))
-                }
-            }
-        };
-        Ok(())
-    })?;
-    match best {
-        Some((_, a)) => Ok(a),
-        None => err(format!(
-            "arg-witness op {op:?} has an empty candidate set; no index witnesses the \
-             optimum (a point with no candidate generator is undefined)"
-        )),
-    }
-}
-
-/// Materialise a per-element value-invention map var → {output-index → value}.
-fn vi_materialize_map(
-    ctx: &mut ViCtx,
-    vname: &str,
-    node: &Value,
-) -> Result<(), ValueInventionError> {
-    let output_idx: Vec<String> = node
-        .get("output_idx")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    if output_idx.len() != 1 {
-        return err(format!(
-            "value-invention map {vname:?} must have a single output index; got {output_idx:?}"
-        ));
-    }
-    let body = node.get("expr").ok_or_else(|| {
-        ValueInventionError::new(format!("value-invention map {vname:?} has no `expr` body"))
-    })?;
-    let empty = Map::new();
-    let ranges = node
-        .get("ranges")
-        .and_then(|v| v.as_object())
-        .unwrap_or(&empty);
-    let sym = output_idx[0].clone();
-    let is_arg = is_argwitness(node);
-    let mut out = ViBuf::default();
-    // Borrow the body / ranges via a const reference inside the closure; collect
-    // into `out`, then store it on the context after enumeration completes.
-    {
-        let ctx_ref = &*ctx;
-        let fast = if is_arg {
-            None
-        } else {
-            FastExpr::compile(body, ctx_ref, ranges)
-        };
-        vi_enumerate(ranges, ctx_ref, |bindings| {
-            // An arg-witness body runs the inner reduction (with the outer point
-            // bound) and emits the witnessing INDEX; an ordinary body (skolem)
-            // emits its value. A compiled body that fails is evaluated again
-            // by `vi_eval`, which reports the failure as it always has.
-            let value = if is_arg {
-                Val::Int(vi_argreduce(body, ctx_ref, bindings, ranges)?)
-            } else if let Some(Ok(v)) = fast.as_ref().map(|f| f.eval(ctx_ref, bindings)) {
-                v
-            } else {
-                vi_eval(body, ctx_ref, bindings)?
-            };
-            out.insert(bindings[&sym], value);
-            Ok(())
-        })?;
-    }
-    ctx.maps.insert(vname.to_string(), out);
-    Ok(())
-}
-
 /// Materialise a plain per-element `join` column (see [`Detection::columns`]):
 /// each value an exact integer, a NaN value `value_invention_key_out_of_range`.
 fn vi_materialize_column(
@@ -1641,10 +1240,10 @@ fn vi_materialize_column(
     {
         let ctx_ref = &*ctx;
         vi_enumerate(ranges, ctx_ref, |bindings| {
-            let v = match vi_key(body, ctx_ref, bindings, &column)? {
-                Key::Int(i) => Val::Int(i),
-                k => Val::Key(k),
+            let Key::Int(i) = vi_key(body, ctx_ref, bindings, &column)? else {
+                unreachable!("a join column value is a scalar key");
             };
+            let v = Val::Int(i);
             let at = *bindings.get(&sym).ok_or_else(|| {
                 ValueInventionError::new(format!("join column {vname:?} output index is unbound"))
             })?;
@@ -1656,7 +1255,7 @@ fn vi_materialize_column(
     Ok(())
 }
 
-/// A map body, or a producer's `filter` or non-`skolem` `key`, compiled once
+/// A join column's body, or a producer's `filter` or `key`, compiled once
 /// before its enumeration: the part of [`vi_eval`] whose names resolve before
 /// any point is bound — the node's own range symbols, scalar parameters and
 /// const-array factors — evaluated per point without walking the JSON or
@@ -1678,7 +1277,6 @@ enum Fast<'a> {
         arr: &'a ArrayD<f64>,
         subs: Vec<Fast<'a>>,
     },
-    Skolem(Vec<Fast<'a>>),
     Floor(Box<Fast<'a>>),
     Ceil(Box<Fast<'a>>),
     Div(Box<Fast<'a>>, Box<Fast<'a>>),
@@ -1884,7 +1482,6 @@ impl<'a> Fast<'a> {
                             subs: all(&args[1..], cse)?,
                         }
                     }
-                    "skolem" => Fast::Skolem(all(args, cse)?),
                     "true" => Fast::Bool(true),
                     "false" => Fast::Bool(false),
                     "floor" => Fast::Floor(sub(a(0)?, cse)?),
@@ -1933,17 +1530,6 @@ impl<'a> Fast<'a> {
             Fast::Bool(b) => Val::Bool(*b),
             Fast::Int(i) => Val::Int(*i),
             Fast::Bound(s) => Val::Int(Self::bound(s, bindings)?),
-            Fast::Skolem(args) => {
-                let mut comps: Vec<Key> = Vec::with_capacity(args.len());
-                for e in args {
-                    comps.push(Key::Int(e.key_int(env, ctx, bindings)?));
-                }
-                Val::Key(if comps.len() == 1 {
-                    comps.pop().expect("one component")
-                } else {
-                    Key::Tuple(comps)
-                })
-            }
             Fast::Floor(e) => rounded_int(e.num(env, ctx, bindings)?.floor()),
             Fast::Ceil(e) => rounded_int(e.num(env, ctx, bindings)?.ceil()),
             Fast::Ifelse(cte) => {
@@ -2069,7 +1655,7 @@ impl<'a> Fast<'a> {
             Fast::AndOr(..) | Fast::Not(_) | Fast::Cmp(..) => {
                 f64::from(u8::from(self.truth(env, ctx, bindings)?))
             }
-            Fast::Skolem(_) | Fast::Floor(_) | Fast::Ceil(_) | Fast::Shared(_) => {
+            Fast::Floor(_) | Fast::Ceil(_) | Fast::Shared(_) => {
                 self.eval(env, ctx, bindings)?.as_f64()?
             }
         })
@@ -2150,13 +1736,11 @@ fn vi_materialize_producer(ctx: &ViCtx, node: &Value) -> Result<Vec<Key>, ValueI
         "the `key` of producer '{}'",
         node.get("id").and_then(|v| v.as_str()).unwrap_or("")
     );
-    // The filter and key compiled once (a `skolem` key keeps `vi_skolem`). A
+    // The filter and key compiled once. A
     // point whose compiled evaluation fails is evaluated again by `vi_eval` /
     // `vi_key`, which report the failure as they always have.
     let fast_filt = filt.and_then(|f| FastExpr::compile(f, ctx, ranges));
-    let fast_key = (node_op(key) != Some("skolem"))
-        .then(|| FastExpr::compile(key, ctx, ranges))
-        .flatten();
+    let fast_key = FastExpr::compile(key, ctx, ranges);
     let mut members: Vec<Key> = Vec::new();
     vi_enumerate_join(ranges, &gates, ctx, |bindings| {
         if let Some(f) = filt {
@@ -2191,264 +1775,6 @@ fn vi_materialize_producer(ctx: &ViCtx, node: &Value) -> Result<Vec<Key>, ValueI
 // Grouped / derived build-time buffers (the SCVT centroid step)
 // --------------------------------------------------------------------------- //
 
-/// The (⊕ combiner, 0̄ identity) for a grouped semiring aggregate. `bool_and_or`
-/// (Or/And) is index-set-producing, not a numeric grouped reduction, so only the
-/// four numeric ⊕s are accepted (mirrors the array path's §5.5 reject).
-fn vi_oplus(node: &Value) -> Result<(SemiringOp, f64), ValueInventionError> {
-    let semiring = node.get("semiring").and_then(|v| v.as_str());
-    let reduce = node.get("reduce").and_then(|v| v.as_str());
-    // Value invention runs before the array runtime's `validate_oplus_spellings`
-    // gate and has its own error channel, so an out-of-enum ⊕ spelling is
-    // reported here directly, naming the offending field and value.
-    let rk = match effective_reduce_kind(semiring, reduce) {
-        Ok(rk) => rk,
-        Err(bad) => return err(format!("grouped value-invention reduction: {bad}")),
-    };
-    let op = match rk {
-        ReduceKind::Sum => SemiringOp::Sum,
-        ReduceKind::Product => SemiringOp::Prod,
-        ReduceKind::Max => SemiringOp::Max,
-        ReduceKind::Min => SemiringOp::Min,
-        ReduceKind::Or | ReduceKind::And => {
-            return err(
-                "grouped value-invention reduction ⊕ is index-set-producing (bool_and_or); \
-                 expected a numeric semiring (+, *, max, min)",
-            );
-        }
-    };
-    Ok((op, rk.identity()))
-}
-
-/// §5.7 guard 2 for grouped / derived buffers: a build-time reduction may read
-/// only build-time data — const-array factors and already-materialised VI
-/// buffers. Reading a live ODE `state` variable would make it a per-step
-/// quantity, out of scope for v1 (the Lloyd/SCVT outer loop re-invokes the build).
-fn vi_assert_buildtime(
-    ctx: &ViCtx,
-    vname: &str,
-    node: &Value,
-    vi_var_names: &HashSet<String>,
-) -> Result<(), ValueInventionError> {
-    let mut refs = HashSet::new();
-    vi_index_targets(node, &mut refs);
-    for r in &refs {
-        if vi_var_names.contains(r) || ctx.const_arrays.contains_key(r) {
-            continue;
-        }
-        let is_state = ctx
-            .variables
-            .get(r)
-            .and_then(|v| v.get("type"))
-            .and_then(|v| v.as_str())
-            == Some("state");
-        if is_state {
-            return err(format!(
-                "grouped/derived value-invention buffer {vname:?} reads live state {r:?} — a \
-                 build-time reduction's inputs must be CONST/DISCRETE factors or materialised \
-                 buffers (RFC §5.7 guard 2)"
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Materialise a GROUPED semiring aggregate keyed on a value-invention buffer →
-/// `{output-index → value}`. For each output `g`, fold (with the semiring ⊕) the
-/// body over the contracted points whose group KEY (`assign[p]`) equals `g`. The
-/// reduction runs through the determinism-correct [`group_aggregate`] (§5.5
-/// rule 5) — the first time the front-door calls it (a library helper only).
-/// Empty groups fold to 0̄.
-fn vi_materialize_grouped(
-    ctx: &mut ViCtx,
-    vname: &str,
-    node: &Value,
-) -> Result<(), ValueInventionError> {
-    let oi = node
-        .get("output_idx")
-        .and_then(|v| v.as_array())
-        .filter(|a| a.len() == 1)
-        .ok_or_else(|| {
-            ValueInventionError::new(format!(
-                "grouped value-invention aggregate {vname:?} must have a single output index"
-            ))
-        })?;
-    let gsym = oi[0]
-        .as_str()
-        .ok_or_else(|| ValueInventionError::new("grouped output index must be a string"))?
-        .to_string();
-    let empty = Map::new();
-    let ranges = node
-        .get("ranges")
-        .and_then(|v| v.as_object())
-        .unwrap_or(&empty);
-    if !ranges.contains_key(&gsym) {
-        return err(format!(
-            "grouped aggregate {vname:?} output index {gsym:?} is not among its ranges"
-        ));
-    }
-    let body = node.get("expr").ok_or_else(|| {
-        ValueInventionError::new(format!("grouped aggregate {vname:?} has no expr body"))
-    })?;
-    let join = node.get("join").and_then(|v| v.as_array()).ok_or_else(|| {
-        ValueInventionError::new(format!(
-            "grouped aggregate {vname:?} needs a join pairing its group-key buffer with {gsym:?}"
-        ))
-    })?;
-    // The group KEY buffer: the join column paired with the output index that
-    // names a materialised VI buffer (`assign`).
-    let keyvar = vi_join_partner(join, &gsym, |n| ctx.maps.contains_key(n)).ok_or_else(|| {
-        ValueInventionError::new(format!(
-            "grouped aggregate {vname:?} join.on must pair a materialised value-invention buffer \
-             with the output index {gsym:?}"
-        ))
-    })?;
-    let keysym = vi_join_index_sym(&keyvar, ranges, ctx)?;
-    let (op, zerobar) = vi_oplus(node)?;
-    // Contraction ranges: every range symbol except the output index.
-    let mut contract = Map::new();
-    for (s, spec) in ranges {
-        if s != &gsym {
-            contract.insert(s.clone(), spec.clone());
-        }
-    }
-    let gspec = ranges[&gsym].clone();
-    let (rows, out_vals) = {
-        let ctx_imm: &ViCtx = ctx;
-        let mut rows: Vec<(Key, Num)> = Vec::new();
-        vi_enumerate(&contract, ctx_imm, |bindings| {
-            let p = *bindings.get(&keysym).ok_or_else(|| {
-                ValueInventionError::new(format!("grouped key index symbol {keysym:?} is unbound"))
-            })?;
-            let kval = ctx_imm
-                .maps
-                .get(&keyvar)
-                .and_then(|m| m.get(&p))
-                .ok_or_else(|| {
-                    ValueInventionError::new(format!(
-                        "grouped key buffer {keyvar:?} has no entry at index {p}"
-                    ))
-                })?;
-            let key = Key::Int(kval.key_int()?);
-            let v = vi_eval(body, ctx_imm, bindings)?.as_f64()?;
-            rows.push((key, Num::Float(v)));
-            Ok(())
-        })?;
-        let out_vals = vi_range_values(&gspec, ctx_imm, &Bindings::default())?;
-        (rows, out_vals)
-    };
-    let agg = group_aggregate(&rows, op);
-    let mut agg_map: HashMap<i64, f64> = HashMap::new();
-    for (k, n) in agg {
-        if let Key::Int(i) = k {
-            agg_map.insert(
-                i,
-                match n {
-                    Num::Float(f) => f,
-                    Num::Int(x) => x as f64,
-                },
-            );
-        }
-    }
-    // Densify over the output index set; a generator with no assigned point is 0̄.
-    let mut out = ViBuf::default();
-    for g in out_vals {
-        out.insert(g, Val::Float(*agg_map.get(&g).unwrap_or(&zerobar)));
-    }
-    ctx.maps.insert(vname.to_string(), out);
-    Ok(())
-}
-
-/// Materialise a DERIVED elementwise buffer (`centroid[g] = num[g]/den[g]`) →
-/// `{output-index → value}`. A per-output map whose body reads upstream
-/// materialised buffers (resolved by [`vi_index`] from `ctx.maps`).
-fn vi_materialize_derived(
-    ctx: &mut ViCtx,
-    vname: &str,
-    node: &Value,
-) -> Result<(), ValueInventionError> {
-    let oi = node
-        .get("output_idx")
-        .and_then(|v| v.as_array())
-        .filter(|a| a.len() == 1)
-        .ok_or_else(|| {
-            ValueInventionError::new(format!(
-                "derived value-invention aggregate {vname:?} must have a single output index"
-            ))
-        })?;
-    let gsym = oi[0]
-        .as_str()
-        .ok_or_else(|| ValueInventionError::new("derived output index must be a string"))?
-        .to_string();
-    let empty = Map::new();
-    let ranges = node
-        .get("ranges")
-        .and_then(|v| v.as_object())
-        .unwrap_or(&empty);
-    let body = node.get("expr").ok_or_else(|| {
-        ValueInventionError::new(format!(
-            "derived value-invention aggregate {vname:?} has no expr body"
-        ))
-    })?;
-    let out = {
-        let ctx_imm: &ViCtx = ctx;
-        let mut out = ViBuf::default();
-        vi_enumerate(ranges, ctx_imm, |bindings| {
-            let g = *bindings.get(&gsym).ok_or_else(|| {
-                ValueInventionError::new(format!("derived output index {gsym:?} is unbound"))
-            })?;
-            out.insert(g, Val::Float(vi_eval(body, ctx_imm, bindings)?.as_f64()?));
-            Ok(())
-        })?;
-        out
-    };
-    ctx.maps.insert(vname.to_string(), out);
-    Ok(())
-}
-
-/// A model copy whose value-invention MAP vars are re-typed to their body's
-/// cadence class (`const`→parameter, `discrete`→discrete), so a producer joining
-/// on a map buffer classifies by the buffer's true (input-derived) cadence rather
-/// than the seed of its declared `state` kind (§6.1). A `continuous` body is left
-/// unchanged so the §5.7 guard still rejects state-dependent topology.
-fn vi_classification_model(
-    model_json: &Value,
-    maps: &[(String, Value)],
-) -> Result<Value, ValueInventionError> {
-    if maps.is_empty() {
-        return Ok(model_json.clone());
-    }
-    let mut out = model_json.clone();
-    let variables = out.get_mut("variables").and_then(|v| v.as_object_mut());
-    let Some(variables) = variables else {
-        return Ok(out);
-    };
-    // Compute new types first (immutable classify against the original model),
-    // then apply, to avoid borrowing `out` mutably and immutably at once.
-    let mut retypes: Vec<(String, String)> = Vec::new();
-    for (vname, node) in maps {
-        if !variables.contains_key(vname) {
-            continue;
-        }
-        let Some(body) = node.get("expr") else {
-            continue;
-        };
-        let bcls = cadence::classify(body, model_json)
-            .map_err(|e| ValueInventionError::new(format!("cadence classify failed: {e}")))?;
-        let newtype = match bcls {
-            Cadence::Const => "parameter",
-            Cadence::Discrete => "discrete",
-            Cadence::Continuous => continue,
-        };
-        retypes.push((vname.clone(), newtype.to_string()));
-    }
-    for (vname, newtype) in retypes {
-        if let Some(v) = variables.get_mut(&vname).and_then(|v| v.as_object_mut()) {
-            v.insert("type".to_string(), Value::String(newtype));
-        }
-    }
-    Ok(out)
-}
-
 // --------------------------------------------------------------------------- //
 // Public entrypoint
 // --------------------------------------------------------------------------- //
@@ -2472,10 +1798,8 @@ fn vi_variable_precision(vname: &str) -> Option<crate::precision::PrecisionGuard
 /// Value invention mints new entities from data, once at setup: unique edge
 /// IDs from a mesh, dense ranks from a categorical column, bin keys from
 /// coordinates. This evaluates every value-invention aggregate in
-/// `model_json` (a `faq` with `distinct: true`, or whose body or `key` is
-/// `skolem` / `rank`, plus the arg-witness and grouped buffers that depend on
-/// them) and returns what it materialized as a [`ValueInventionResult`]. Pass
-/// that result to [`apply_value_invention`] to rewrite the model so the array
+/// `model_json` (a `faq` with `distinct: true`) and returns what it
+/// materialized as a [`ValueInventionResult`]. Pass that result to [`apply_value_invention`] to rewrite the model so the array
 /// runtime can compile it.
 ///
 /// - `model_json` is the raw model document, not the typed [`Model`]: the
@@ -2490,8 +1814,7 @@ fn vi_variable_precision(vname: &str) -> Option<crate::precision::PrecisionGuard
 ///   dimension beyond its listed kinds, errors on an out-of-range index; pass
 ///   an empty map for that everywhere.
 ///
-/// A model with no `skolem`, `distinct` or `rank` node returns an empty
-/// result.
+/// A model with no `distinct` producer returns an empty result.
 ///
 /// # Errors
 ///
@@ -2532,136 +1855,17 @@ pub fn materialize_value_invention(
         maps: HashMap::new(),
     };
 
-    // Cadence classification model (built before materialisation — it depends only
-    // on model structure, not materialized values): re-type each map var to its
-    // body's class so the §5.7 guard 2 classifies a producer / arg-witness that
-    // joins on it correctly (a CONST-derived bin map passes; a genuinely
-    // state-dependent one still classifies CONTINUOUS → reject).
-    let cls_model = vi_classification_model(model_json, &det.maps)?;
-
-    // §5.7 guard 2 for arg-witness assignments: a state-dependent nearest-generator
-    // buffer (continuous cadence) may not be materialised at build time — its
-    // topology would change every step (out of scope for v1, like a continuous
-    // `distinct`).
-    for (vname, node) in &det.maps {
-        let is_arg = is_argwitness(node);
-        if !is_arg {
-            continue;
-        }
-        let cls = cadence::classify(node, &cls_model)
-            .map_err(|e| ValueInventionError::new(format!("cadence classify failed: {e}")))?;
-        if cls == Cadence::Continuous {
-            return err(format!(
-                "arg-witness map {vname:?} classifies CONTINUOUS — a build-time assignment \
-                 buffer's inputs must be CONST/DISCRETE (RFC §5.7 guard 2)"
-            ));
-        }
-    }
-
-    // Join columns, then maps (a producer's join / key — or an arg-witness
-    // `join` — may reference either).
+    // Join columns (a producer's join may reference them). Each is
+    // materialized at the element type of the variable it fills (esm-spec
+    // §11.3.1). `None` unless the document declares a per-variable
+    // `element_type`.
     for (vname, node) in &det.columns {
         let _prec = vi_variable_precision(vname);
         vi_materialize_column(&mut ctx, vname, node)?;
     }
-    for (vname, node) in &det.maps {
-        // Each buffer is materialized at the element type of the variable it
-        // fills (esm-spec §11.3.1): a build-time relational output is an
-        // equation's value, and an equation is evaluated at its left-hand
-        // side's precision like any other. `None` unless the document declares
-        // a per-variable `element_type`.
-        let _prec = vi_variable_precision(vname);
-        vi_materialize_map(&mut ctx, vname, node)?;
-    }
-
-    // Surface the skolem map buffers as codes (see `map_codes`). A map whose
-    // values are not all keys or integers is not surfaced.
-    {
-        let mut per_map: Vec<(&String, Vec<Key>)> = Vec::new();
-        for (vname, node) in &det.maps {
-            if is_argwitness(node) {
-                continue;
-            }
-            let m = &ctx.maps[vname];
-            let mut idx: Vec<i64> = m.keys().copied().collect();
-            idx.sort_unstable();
-            let keys: Option<Vec<Key>> = idx
-                .iter()
-                .map(|k| match m.get(k) {
-                    Some(Val::Key(key)) => Some(key.clone()),
-                    Some(Val::Int(i)) => Some(Key::Int(*i)),
-                    _ => None,
-                })
-                .collect();
-            if let Some(keys) = keys {
-                per_map.push((vname, keys));
-            }
-        }
-        let mut all: Vec<&Key> = per_map.iter().flat_map(|(_, ks)| ks.iter()).collect();
-        all.sort();
-        all.dedup();
-        let code: rustc_hash::FxHashMap<&Key, f64> = all
-            .into_iter()
-            .enumerate()
-            .map(|(i, k)| (k, (i + 1) as f64))
-            .collect();
-        for (vname, keys) in &per_map {
-            let buf = keys.iter().map(|k| code[k]).collect();
-            result.map_codes.insert((*vname).clone(), buf);
-        }
-    }
-
-    // Surface the arg-witness buffers (the integer nearest-generator INDEX
-    // assignment), dense in output-index order, for byte-identity assertions and
-    // the downstream grouped reduction the SCVT step consumes.
-    for (vname, node) in &det.maps {
-        let is_arg = is_argwitness(node);
-        if !is_arg {
-            continue;
-        }
-        let m = &ctx.maps[vname];
-        let mut keys: Vec<i64> = m.keys().copied().collect();
-        keys.sort_unstable();
-        let buf: Vec<i64> = keys
-            .iter()
-            .map(|k| match m.get(k) {
-                Some(Val::Int(i)) => *i,
-                _ => 0,
-            })
-            .collect();
-        result.assignments.insert(vname.clone(), buf);
-    }
-
-    // The downstream GROUPED / DERIVED chain — the SCVT centroid step. Each buffer
-    // is materialised in dependency (fixpoint discovery) order: a grouped semiring
-    // reduction keyed on a now-materialised arg-witness buffer (`num[g]`/`den[g]`,
-    // through `group_aggregate` — the front-door's first call of that previously
-    // library-only helper) and an elementwise derived buffer reading upstream
-    // buffers (`centroid[g] = num[g]/den[g]`). Each reads only build-time data
-    // (guard 2). All are surfaced dense in output-index order.
-    for (vname, node, kind) in &det.chain {
-        vi_assert_buildtime(&ctx, vname, node, &det.vi_var_names)?;
-        let _prec = vi_variable_precision(vname);
-        match kind {
-            ChainKind::Grouped => vi_materialize_grouped(&mut ctx, vname, node)?,
-            ChainKind::Derived => vi_materialize_derived(&mut ctx, vname, node)?,
-        }
-        let m = &ctx.maps[vname];
-        let mut keys: Vec<i64> = m.keys().copied().collect();
-        keys.sort_unstable();
-        let buf: Vec<f64> = keys
-            .iter()
-            .map(|k| match m.get(k) {
-                Some(Val::Float(f)) => *f,
-                Some(Val::Int(i)) => *i as f64,
-                _ => 0.0,
-            })
-            .collect();
-        result.groups.insert(vname.clone(), buf);
-    }
 
     // `from_faq` id → derived index-set name (so we only materialise producers a
-    // derived set actually names; geometry producers are handled elsewhere).
+    // derived set actually names).
     let mut faq_to_set: HashMap<String, String> = HashMap::new();
     for (sname, iset) in index_sets {
         if iset.get("kind").and_then(|v| v.as_str()) != Some("derived") {
@@ -2682,7 +1886,7 @@ pub fn materialize_value_invention(
             continue; // no derived set names this producer
         }
         // §5.7 guard 2: a relational node may not run on the hot path.
-        let cls = cadence::classify(node, &cls_model)
+        let cls = cadence::classify(node, model_json)
             .map_err(|e| ValueInventionError::new(format!("cadence classify failed: {e}")))?;
         if cls == Cadence::Continuous {
             return err(format!(
@@ -2726,7 +1930,7 @@ pub fn rewrite_derived_index_sets(
 }
 
 /// Drop the value-invention equations (and their LHS variables) from the typed
-/// model: the skolem/distinct/rank outputs are materialised at setup, not
+/// model: the `distinct` outputs are materialised at setup, not
 /// integrated, so their defining equations must not reach the numeric pipeline
 /// (RFC §6.1). A no-op for an empty `vi_var_names`.
 pub fn drop_value_invention_equations(model: &mut Model, vi_var_names: &HashSet<String>) {
@@ -2772,42 +1976,14 @@ pub fn apply_value_invention(
 // `test_value_invention_frontdoor.py`. RFC `semiring-faq-unified-ir` §6.1 / §5.5
 // / §7.3; `CONFORMANCE_SPEC.md` §5.5 / §5.7.
 //
-// Two proof cases, both BYTE-IDENTICAL to the landed M3 goldens — the SAME
-// canonical index-set JSON the Julia and Python bindings assert, which is what
-// makes the value-invention .esm run end-to-end byte-identical across all three:
-//   (1) the §7.3 edge-enumeration .esm — `edges` -> [[1,2],[1,3],[2,3],[2,4],[3,4]];
-//   (2) the conservative-regridder overlap-join .esm — `candidate_pairs` ->
-//       [[1,1],[2,2],[3,3]] via the bin-Skolem equi-join.
+// The template-form fixtures (`tests/conformance/relational_templates/`) run
+// end to end through the integration tests; the cases here pin the engine on
+// inline models.
 // =========================================================================== //
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::relational::canonical_index_set_json;
-
-    // The shared M3 goldens — the byte-for-byte canonical index-set JSON every
-    // binding (Julia / Rust / Python) must reproduce (§5.5.3).
-    const EDGE_GOLDEN: &str = "[[1,2],[1,3],[2,3],[2,4],[3,4]]";
-    const CANDIDATE_GOLDEN: &str = "[[1,1],[2,2],[3,3]]";
-
-    const EDGE_FIXTURE: &str =
-        include_str!("../../../tests/valid/faq/edge_enumeration_area_eff.esm");
-    const REGRID_FIXTURE: &str =
-        include_str!("../../../tests/valid/geometry/conservative_regrid_overlap_join.esm");
-
-    fn model_json(fixture: &str, model_name: &str) -> Value {
-        let doc: Value = serde_json::from_str(fixture).expect("fixture parses");
-        let mut model = doc["models"][model_name].clone();
-        // v0.8.0: `index_sets` is document-scoped (a sibling of `models`). The
-        // JSON value-invention path expects the model view to carry the sets it
-        // references, so merge the document registry down (mirrors
-        // `cadence::model_with_loaders`).
-        if let (Value::Object(m), Some(is)) = (&mut model, doc.get("index_sets")) {
-            m.entry("index_sets".to_string())
-                .or_insert_with(|| is.clone());
-        }
-        model
-    }
 
     fn arr(shape: &[usize], data: Vec<f64>) -> ArrayD<f64> {
         ArrayD::from_shape_vec(IxDyn(shape), data).expect("shape matches data")
@@ -2817,10 +1993,6 @@ mod tests {
         pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
     }
 
-    fn params(pairs: &[(&str, f64)]) -> HashMap<String, f64> {
-        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
-    }
-
     /// The default empty per-const-array boundary map (throw-on-OOB everywhere).
     fn no_bounds() -> HashMap<String, Vec<BoundaryKind>> {
         HashMap::new()
@@ -2828,66 +2000,6 @@ mod tests {
 
     fn bounds(pairs: Vec<(&str, Vec<BoundaryKind>)>) -> HashMap<String, Vec<BoundaryKind>> {
         pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
-    }
-
-    fn sorted(set: &HashSet<String>) -> Vec<String> {
-        let mut v: Vec<String> = set.iter().cloned().collect();
-        v.sort();
-        v
-    }
-
-    fn k(i: i64, j: i64) -> Key {
-        Key::Tuple(vec![Key::Int(i), Key::Int(j)])
-    }
-
-    /// A `skolem` node's leading arg used to be overloaded: a leading STRING was
-    /// stripped as a relation tag, so a mistyped key component could silently
-    /// vanish. The tag now lives in the dedicated `label` field (documentary
-    /// only), and EVERY arg is a pure key component — a non-integer arg fails
-    /// closed instead of masquerading as a tag.
-    #[test]
-    fn skolem_label_is_documentary_and_typo_fails_closed() {
-        let const_arrays: HashMap<String, ArrayD<f64>> = HashMap::new();
-        let params: HashMap<String, f64> = HashMap::new();
-        let empty = Map::new();
-        let no_bnds = no_bounds();
-        let ctx = ViCtx {
-            const_arrays: &const_arrays,
-            params: &params,
-            index_sets: &empty,
-            variables: &empty,
-            const_array_boundaries: &no_bnds,
-            maps: HashMap::new(),
-        };
-        // `a`, `b` are bound range symbols (integer IDs).
-        let bindings: Bindings = [("a".to_string(), 1), ("b".to_string(), 2)]
-            .into_iter()
-            .collect();
-
-        // A documentary `label:"edge"` is ignored for key construction: the key
-        // is exactly the `(a, b)` tuple — byte-identical to the pre-`label`
-        // behaviour where the tag was a stripped leading string arg.
-        let tagged = serde_json::json!({
-            "op": "skolem",
-            "label": "edge",
-            "args": ["a", "b"],
-        });
-        assert_eq!(vi_skolem(&tagged, &ctx, &bindings).unwrap(), k(1, 2));
-
-        // A `skolem` with no label produces the same key from the same args.
-        let untagged = serde_json::json!({"op": "skolem", "args": ["a", "b"]});
-        assert_eq!(vi_skolem(&untagged, &ctx, &bindings).unwrap(), k(1, 2));
-
-        // A mistyped leading arg (`"aa"` instead of the bound `"a"`) is NOT a
-        // valid key component. It once masqueraded as a stripped tag; now it
-        // fails closed via `key_int`.
-        let typo = serde_json::json!({"op": "skolem", "args": ["aa", "b"]});
-        let e = vi_skolem(&typo, &ctx, &bindings).unwrap_err();
-        assert!(
-            e.message.contains("non-numeric key component"),
-            "unexpected error message: {}",
-            e.message
-        );
     }
 
     #[test]
@@ -2925,147 +2037,6 @@ mod tests {
     }
 
     #[test]
-    fn edge_enumeration_materializes_to_m3_golden() {
-        let mj = model_json(EDGE_FIXTURE, "EdgeEnumerationAreaEff");
-        // Canonical 2-triangle mesh connectivity (the ragged face_vertices factors).
-        let const_arrays = ca(vec![
-            ("n_verts_on_face", arr(&[2], vec![3.0, 3.0])),
-            (
-                "verts_on_face",
-                arr(&[2, 3], vec![1.0, 2.0, 3.0, 2.0, 3.0, 4.0]),
-            ),
-            ("n_edges_on_cell", arr(&[2], vec![3.0, 3.0])),
-            (
-                "edges_on_cell",
-                arr(&[2, 3], vec![1.0, 2.0, 3.0, 3.0, 4.0, 5.0]),
-            ),
-            ("dc", arr(&[5], vec![2.0, 3.0, 5.0, 7.0, 11.0])),
-            ("dv", arr(&[5], vec![13.0, 17.0, 19.0, 23.0, 29.0])),
-        ]);
-        let vi =
-            materialize_value_invention(&mj, &const_arrays, &HashMap::new(), &no_bounds()).unwrap();
-
-        // The derived `edges` set materializes via the relational engine,
-        // BYTE-IDENTICAL to the M3 determinism golden.
-        assert_eq!(vi.extents["edge_set"], 5);
-        let edges = &vi.members["edge_set"];
-        assert_eq!(*edges, vec![k(1, 2), k(1, 3), k(2, 3), k(2, 4), k(3, 4)]);
-        assert_eq!(canonical_index_set_json(edges), EDGE_GOLDEN);
-        // the skolem/rank LHS vars are dropped from the ODE (materialized at setup).
-        assert_eq!(
-            sorted(&vi.vi_var_names),
-            vec!["edge_dense_id", "edge_exists"]
-        );
-    }
-
-    #[test]
-    fn edge_enumeration_adversarial_inputs_collapse_to_golden() {
-        // §5.5.4: reversed winding yields the identical canonically-sorted edge set.
-        let mj = model_json(EDGE_FIXTURE, "EdgeEnumerationAreaEff");
-        let base = ca(vec![
-            ("n_verts_on_face", arr(&[2], vec![3.0, 3.0])),
-            (
-                "verts_on_face",
-                arr(&[2, 3], vec![1.0, 2.0, 3.0, 2.0, 3.0, 4.0]),
-            ),
-        ]);
-        let rev = ca(vec![
-            ("n_verts_on_face", arr(&[2], vec![3.0, 3.0])),
-            (
-                "verts_on_face",
-                arr(&[2, 3], vec![3.0, 2.0, 1.0, 4.0, 3.0, 2.0]),
-            ),
-        ]);
-        for const_arrays in [base, rev] {
-            let vi = materialize_value_invention(&mj, &const_arrays, &HashMap::new(), &no_bounds())
-                .unwrap();
-            assert_eq!(
-                canonical_index_set_json(&vi.members["edge_set"]),
-                EDGE_GOLDEN
-            );
-        }
-    }
-
-    #[test]
-    fn regridder_candidate_set_bin_skolem_equijoin() {
-        let mj = model_json(REGRID_FIXTURE, "ConservativeRegridOverlapJoin");
-        let p = params(&[("dx", 1.0), ("dy", 1.0), ("atol", 1e-12)]);
-
-        // Aligned grids: src/tgt cell i share bin (i-1, 0) ⇒ diagonal candidate set.
-        let aligned = ca(vec![
-            ("src_lon", arr(&[3], vec![0.2, 1.2, 2.2])),
-            ("src_lat", arr(&[3], vec![0.0, 0.0, 0.0])),
-            ("tgt_lon", arr(&[3], vec![0.2, 1.2, 2.2])),
-            ("tgt_lat", arr(&[3], vec![0.0, 0.0, 0.0])),
-        ]);
-        let vi = materialize_value_invention(&mj, &aligned, &p, &no_bounds()).unwrap();
-        assert_eq!(vi.members["candidate_set"], vec![k(1, 1), k(2, 2), k(3, 3)]);
-        assert_eq!(vi.extents["candidate_set"], 3);
-        assert_eq!(
-            canonical_index_set_json(&vi.members["candidate_set"]),
-            CANDIDATE_GOLDEN
-        );
-        assert_eq!(
-            sorted(&vi.vi_var_names),
-            vec!["pair_exists", "src_bin", "tgt_bin"]
-        );
-
-        // Shifted target grid: only the overlapping bins join (broad phase is
-        // load-bearing — NOT the full cross product).
-        let shifted = ca(vec![
-            ("src_lon", arr(&[3], vec![0.2, 1.2, 2.2])),
-            ("src_lat", arr(&[3], vec![0.0, 0.0, 0.0])),
-            ("tgt_lon", arr(&[3], vec![1.2, 2.2, 9.9])),
-            ("tgt_lat", arr(&[3], vec![0.0, 0.0, 0.0])),
-        ]);
-        let vi2 = materialize_value_invention(&mj, &shifted, &p, &no_bounds()).unwrap();
-        assert_eq!(vi2.members["candidate_set"], vec![k(2, 1), k(3, 2)]);
-    }
-
-    #[test]
-    fn resolver_resolves_derived_set_after_rewrite() {
-        // The evaluator integration: WITHOUT the front-door, the resolver rejects
-        // the `rank` eq's derived OUTPUT index `e` over `edges`; WITH the rewrite
-        // (edges -> interval[1,5]) it resolves cleanly.
-        let mj = model_json(EDGE_FIXTURE, "EdgeEnumerationAreaEff");
-        let const_arrays = ca(vec![
-            ("n_verts_on_face", arr(&[2], vec![3.0, 3.0])),
-            (
-                "verts_on_face",
-                arr(&[2, 3], vec![1.0, 2.0, 3.0, 2.0, 3.0, 4.0]),
-            ),
-        ]);
-        let vi =
-            materialize_value_invention(&mj, &const_arrays, &HashMap::new(), &no_bounds()).unwrap();
-
-        let file = crate::parse::load_string(EDGE_FIXTURE).expect("fixture loads");
-        // v0.8.0: the `index_sets` registry is document-scoped, so it is threaded
-        // in and rewritten in place rather than living on the model.
-        let mut registry: HashMap<String, IndexSet> = file
-            .index_sets
-            .clone()
-            .expect("fixture declares index_sets")
-            .into_iter()
-            .collect();
-        let model = file
-            .models
-            .as_ref()
-            .unwrap()
-            .get("EdgeEnumerationAreaEff")
-            .unwrap();
-
-        // Without the rewrite: the derived output index is rejected.
-        assert!(crate::faq::resolve_aggregate_ranges(&mut model.clone(), &registry).is_err());
-
-        // With the rewrite: the derived `edges` set resolves to the dense [1, 5].
-        rewrite_derived_index_sets(&mut registry, &vi.extents);
-        let edges = registry.get("edges").unwrap();
-        assert_eq!(edges.kind, "interval");
-        assert_eq!(edges.size, Some(5));
-        assert!(crate::faq::resolve_aggregate_ranges(&mut model.clone(), &registry).is_ok());
-    }
-
-    #[test]
     fn continuous_relational_node_is_rejected() {
         // §5.7 guard 2: a distinct producer whose key reads a genuine state
         // variable classifies CONTINUOUS and must be refused.
@@ -3084,7 +2055,7 @@ mod tests {
                     "op": "faq", "id": "tag_set", "semiring": "bool_and_or",
                     "distinct": true, "output_idx": ["p"],
                     "ranges": {"i": {"from": "items"}},
-                    "key": {"op": "skolem", "args": ["t", {"op": "index", "args": ["u", "i"]}]},
+                    "key": {"op": "index", "args": ["u", "i"]},
                     "expr": {"op": "true", "args": []}
                 }
             }]
@@ -3107,161 +2078,70 @@ mod tests {
                 .unwrap();
         assert!(vi.extents.is_empty());
         assert!(vi.vi_var_names.is_empty());
-        assert!(vi.assignments.is_empty());
     }
 
-    // ── Arg-witness reducer (bead ess-os1, §5.7 rule 6) ──────────────────────
-    // The integer nearest-generator INDEX buffer, byte-identical to the Julia /
-    // Python port-parity tests: the SAME coordinate factors → the SAME buffer.
-
-    const ARGMIN_FIXTURE: &str =
-        include_str!("../../../tests/valid/faq/nearest_generator_argmin.esm");
-
+    /// The §7.3 edge enumeration with a scalar composite key (the
+    /// `lib/relational.esm` `edge_key` arithmetic, written out): two triangles
+    /// sharing edge (2,3) give five distinct undirected edges, in ascending key
+    /// order, whatever the winding.
     #[test]
-    fn argmin_nearest_generator_smallest_id_tiebreak() {
-        let mj = model_json(ARGMIN_FIXTURE, "NearestGeneratorArgmin");
-        // Generators on the x-axis at 0,1,2; point 3 (1.5,0) is EXACTLY 0.25 from
-        // generators 2 (1.0) and 3 (2.0) — the deliberate equidistant tie.
-        let const_arrays = ca(vec![
-            ("gx", arr(&[3], vec![0.0, 1.0, 2.0])),
-            ("gy", arr(&[3], vec![0.0, 0.0, 0.0])),
-            ("px", arr(&[4], vec![0.0, 1.0, 1.5, 2.0])),
-            ("py", arr(&[4], vec![0.0, 0.5, 0.0, 0.0])),
-        ]);
-        let vi =
-            materialize_value_invention(&mj, &const_arrays, &HashMap::new(), &no_bounds()).unwrap();
-        // 1-based nearest-generator ids; the tie at point 3 → the SMALLER id (2).
-        assert_eq!(vi.assignments["assign"], vec![1, 2, 2, 3]);
-        assert_eq!(sorted(&vi.vi_var_names), vec!["assign"]);
-        assert!(vi.extents.is_empty());
-    }
-
-    #[test]
-    fn argmin_binned_same_bin_candidate_join() {
-        let mj = model_json(ARGMIN_FIXTURE, "NearestGeneratorBinned");
-        let p = params(&[("binw", 1.0)]);
-        // binw=1 ⇒ each point's join keeps only its same-bin generator → [1,2,3,2].
-        let const_arrays = ca(vec![
-            ("gx", arr(&[3], vec![0.0, 1.0, 2.0])),
-            ("gy", arr(&[3], vec![0.0, 0.0, 0.0])),
-            ("px", arr(&[4], vec![0.1, 1.1, 2.1, 1.9])),
-            ("py", arr(&[4], vec![0.0, 0.0, 0.0, 0.0])),
-        ]);
-        let vi = materialize_value_invention(&mj, &const_arrays, &p, &no_bounds()).unwrap();
-        assert_eq!(vi.assignments["assign_binned"], vec![1, 2, 3, 2]);
-        assert_eq!(
-            sorted(&vi.vi_var_names),
-            vec!["assign_binned", "gen_bin", "point_bin"]
-        );
-    }
-
-    #[test]
-    fn argmax_farthest_generator_smallest_id_tiebreak() {
-        // Mirror op: argmax keeps the GREATEST distance. Point 2 (1.0) is dist 1
-        // from both generator 1 (0.0) and generator 3 (2.0) → tie to the SMALLER id.
+    fn edge_enumeration_with_a_scalar_key() {
+        let side = |name: &str| serde_json::json!({"op": "index", "args": [name, "f", "le"]});
+        let key = serde_json::json!({"op": "+", "args": [
+            {"op": "*", "args": [{"op": "-", "args": [{"op": "min", "args": [side("lo"), side("hi")]}, 1]}, 4]},
+            {"op": "-", "args": [{"op": "max", "args": [side("lo"), side("hi")]}, 1]}
+        ]});
         let model: Value = serde_json::json!({
             "index_sets": {
-                "points": {"kind": "interval", "size": 2},
-                "generators": {"kind": "interval", "size": 3}
+                "faces": {"kind": "interval", "size": 2},
+                "local_edges": {"kind": "interval", "size": 3},
+                "edges": {"kind": "derived", "from_faq": "edge_set"}
             },
-            "variables": {
-                "gx": {"type": "parameter", "shape": ["generators"]},
-                "px": {"type": "parameter", "shape": ["points"]},
-                "far": {"type": "unknown", "shape": ["points"]}
-            },
+            "variables": {"edge_exists": {"type": "unknown", "shape": ["edges"]}},
             "equations": [{
-                "lhs": {"op": "index", "args": ["far", "i"]},
-                "rhs": {"op": "faq", "output_idx": ["i"],
-                    "ranges": {"i": {"from": "points"}},
-                    "expr": {"op": "argmax", "arg": "g",
-                        "ranges": {"g": {"from": "generators"}},
-                        "expr": {"op": "*", "args": [
-                            {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]},
-                            {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]}
-                        ]}
-                    }
+                "lhs": {"op": "index", "args": ["edge_exists", "e"]},
+                "rhs": {
+                    "op": "faq", "id": "edge_set", "semiring": "bool_and_or",
+                    "distinct": true, "output_idx": ["e"],
+                    "ranges": {"f": {"from": "faces"}, "le": {"from": "local_edges"}},
+                    "key": key,
+                    "expr": {"op": "true", "args": []}
                 }
             }]
         });
-        let const_arrays = ca(vec![
-            ("gx", arr(&[3], vec![0.0, 1.0, 2.0])),
-            ("px", arr(&[2], vec![0.0, 1.0])),
-        ]);
-        let vi = materialize_value_invention(&model, &const_arrays, &HashMap::new(), &no_bounds())
-            .unwrap();
-        assert_eq!(vi.assignments["far"], vec![3, 1]);
-    }
-
-    #[test]
-    fn argmin_empty_candidate_set_is_error() {
-        // A filter that excludes every candidate leaves the argmin undefined.
-        let model: Value = serde_json::json!({
-            "index_sets": {
-                "points": {"kind": "interval", "size": 1},
-                "generators": {"kind": "interval", "size": 2}
-            },
-            "variables": {
-                "gx": {"type": "parameter", "shape": ["generators"]},
-                "px": {"type": "parameter", "shape": ["points"]},
-                "assign": {"type": "unknown", "shape": ["points"]}
-            },
-            "equations": [{
-                "lhs": {"op": "index", "args": ["assign", "i"]},
-                "rhs": {"op": "faq", "output_idx": ["i"],
-                    "ranges": {"i": {"from": "points"}},
-                    "expr": {"op": "argmin", "arg": "g",
-                        "ranges": {"g": {"from": "generators"}},
-                        "filter": {"op": "false", "args": []},
-                        "expr": {"op": "*", "args": [
-                            {"op": "index", "args": ["gx", "g"]}, {"op": "index", "args": ["gx", "g"]}]}
-                    }
-                }
-            }]
-        });
-        let const_arrays = ca(vec![
-            ("gx", arr(&[2], vec![0.0, 1.0])),
-            ("px", arr(&[1], vec![0.5])),
-        ]);
-        assert!(
-            materialize_value_invention(&model, &const_arrays, &HashMap::new(), &no_bounds())
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn argmin_continuous_assignment_is_rejected() {
-        // §5.7 guard 2: an argmin whose distance reads a genuine `state` coordinate
-        // classifies CONTINUOUS — a per-step assignment is out of scope for v1.
-        let model: Value = serde_json::json!({
-            "index_sets": {
-                "points": {"kind": "interval", "size": 1},
-                "generators": {"kind": "interval", "size": 2}
-            },
-            "variables": {
-                "gx": {"type": "unknown", "shape": ["generators"]},
-                "px": {"type": "parameter", "shape": ["points"]},
-                "assign": {"type": "unknown", "shape": ["points"]}
-            },
-            "equations": [{
-                "lhs": {"op": "index", "args": ["assign", "i"]},
-                "rhs": {"op": "faq", "output_idx": ["i"],
-                    "ranges": {"i": {"from": "points"}},
-                    "expr": {"op": "argmin", "arg": "g",
-                        "ranges": {"g": {"from": "generators"}},
-                        "expr": {"op": "*", "args": [
-                            {"op": "index", "args": ["gx", "g"]}, {"op": "index", "args": ["gx", "g"]}]}
-                    }
-                }
-            }]
-        });
-        let const_arrays = ca(vec![
-            ("gx", arr(&[2], vec![0.0, 1.0])),
-            ("px", arr(&[1], vec![0.5])),
-        ]);
-        assert!(
-            materialize_value_invention(&model, &const_arrays, &HashMap::new(), &no_bounds())
-                .is_err()
-        );
+        let want: Vec<Key> = [1, 2, 6, 7, 11].into_iter().map(Key::Int).collect();
+        for (lo, hi) in [
+            (
+                [1.0, 2.0, 3.0, 2.0, 3.0, 4.0],
+                [2.0, 3.0, 1.0, 3.0, 4.0, 2.0],
+            ),
+            (
+                [2.0, 3.0, 1.0, 3.0, 4.0, 2.0],
+                [1.0, 2.0, 3.0, 2.0, 3.0, 4.0],
+            ),
+        ] {
+            let const_arrays = ca(vec![
+                ("lo", arr(&[2, 3], lo.to_vec())),
+                ("hi", arr(&[2, 3], hi.to_vec())),
+            ]);
+            let vi =
+                materialize_value_invention(&model, &const_arrays, &HashMap::new(), &no_bounds())
+                    .unwrap();
+            assert_eq!(vi.members["edge_set"], want);
+            assert_eq!(vi.extents["edge_set"], 5);
+            assert!(vi.vi_var_names.contains("edge_exists"));
+            let mut sets: HashMap<String, IndexSet> = HashMap::new();
+            sets.insert(
+                "edges".to_string(),
+                serde_json::from_value(
+                    serde_json::json!({"kind": "derived", "from_faq": "edge_set"}),
+                )
+                .unwrap(),
+            );
+            rewrite_derived_index_sets(&mut sets, &vi.extents);
+            assert_eq!(sets["edges"].kind, "interval");
+            assert_eq!(sets["edges"].size, Some(5));
+        }
     }
 
     // ----------------------------------------------------------------------- //
@@ -3405,128 +2285,6 @@ mod tests {
         assert_eq!(gather(2, 0).unwrap(), 6.0); // mod1(0,3) = 3 -> (2,3)
         // both dims out of range, each resolved by its own policy.
         assert_eq!(gather(9, 4).unwrap(), 4.0); // clamp dim0 -> 2, mod1(4,3) -> 1 => (2,1)
-    }
-
-    // ── Grouped-aggregate centroid front-door (bead ess-2u5, mpas-scvt) ──────
-    // The SCVT centroid-update STEP: grouped `sum_product` reductions whose group
-    // KEY is the data-dependent argmin assignment buffer (E1, ess-os1), run
-    // through `group_aggregate` (a library helper only — never the front-door —
-    // until now). The fixture factors here are IDENTICAL to the Julia / Python
-    // port-parity tests; agreement on num / den / centroid IS the conformance proof.
-    const CENTROID_FIXTURE: &str =
-        include_str!("../../../tests/valid/faq/nearest_generator_centroid.esm");
-
-    #[test]
-    fn centroid_group_aggregate_over_argmin_key() {
-        let mj = model_json(CENTROID_FIXTURE, "NearestGeneratorCentroid");
-        // Generators at 0,1,2; points at 0,0.75,1.25,2.0 (exact dyadics, no ties)
-        // ⇒ assign = [1,2,2,3]; density rho = [1,1,3,4]. Generator 2 owns points
-        // 2,3 ⇒ centroid 4.5/4 = 1.125 (moved from its seed at 1.0).
-        let const_arrays = ca(vec![
-            ("gx", arr(&[3], vec![0.0, 1.0, 2.0])),
-            ("px", arr(&[4], vec![0.0, 0.75, 1.25, 2.0])),
-            ("rho", arr(&[4], vec![1.0, 1.0, 3.0, 4.0])),
-        ]);
-        let vi =
-            materialize_value_invention(&mj, &const_arrays, &HashMap::new(), &no_bounds()).unwrap();
-        // The argmin group key (E1) — byte-identical integer buffer.
-        assert_eq!(vi.assignments["assign"], vec![1, 2, 2, 3]);
-        // The grouped sum_product buffers — bit-exact (exact-dyadic inputs).
-        assert_eq!(vi.groups["num"], vec![0.0, 4.5, 8.0]);
-        assert_eq!(vi.groups["den"], vec![1.0, 4.0, 4.0]);
-        // The derived centroid buffer — the next Lloyd / SCVT generator positions.
-        assert_eq!(vi.groups["centroid"], vec![0.0, 1.125, 2.0]);
-        // assign + the three grouped/derived buffers all leave the ODE.
-        assert_eq!(
-            sorted(&vi.vi_var_names),
-            vec!["assign", "centroid", "den", "num"]
-        );
-    }
-
-    #[test]
-    fn centroid_empty_group_folds_to_zerobar() {
-        // Every point next to generator 1 ⇒ assign = [1,1,1,1]; generators 2,3 own
-        // no point, so num/den there are the empty-⊕ identity 0 and centroid is NaN.
-        let mj = model_json(CENTROID_FIXTURE, "NearestGeneratorCentroid");
-        let const_arrays = ca(vec![
-            ("gx", arr(&[3], vec![0.0, 1.0, 2.0])),
-            ("px", arr(&[4], vec![0.0, 0.1, 0.2, 0.3])),
-            ("rho", arr(&[4], vec![2.0, 1.0, 1.0, 1.0])),
-        ]);
-        let vi =
-            materialize_value_invention(&mj, &const_arrays, &HashMap::new(), &no_bounds()).unwrap();
-        assert_eq!(vi.assignments["assign"], vec![1, 1, 1, 1]);
-        assert_eq!(vi.groups["den"], vec![5.0, 0.0, 0.0]);
-        assert_eq!(vi.groups["num"][1], 0.0);
-        assert_eq!(vi.groups["num"][2], 0.0);
-        assert!(vi.groups["centroid"][1].is_nan());
-        assert!(vi.groups["centroid"][2].is_nan());
-    }
-
-    #[test]
-    fn regridder_aggregates_are_not_grouped_value_invention() {
-        // Regression guard (ess-2u5): the conservative regridder's `A_j` joins two
-        // bin buffers to EACH OTHER (neither to its output index `j`) and `mass_tgt`
-        // is a scalar reduction — neither is the SCVT grouped/derived centroid shape,
-        // so the chain must stay empty and they remain on the simulate path.
-        let mj = model_json(REGRID_FIXTURE, "ConservativeRegridOverlapJoin");
-        let p = params(&[("dx", 1.0), ("dy", 1.0), ("atol", 1e-12)]);
-        let aligned = ca(vec![
-            ("src_lon", arr(&[3], vec![0.2, 1.2, 2.2])),
-            ("src_lat", arr(&[3], vec![0.0, 0.0, 0.0])),
-            ("tgt_lon", arr(&[3], vec![0.2, 1.2, 2.2])),
-            ("tgt_lat", arr(&[3], vec![0.0, 0.0, 0.0])),
-        ]);
-        let vi = materialize_value_invention(&mj, &aligned, &p, &no_bounds()).unwrap();
-        assert!(
-            vi.groups.is_empty(),
-            "regridder must mint no grouped buffers"
-        );
-        assert!(!vi.vi_var_names.contains("A_j"));
-        assert!(!vi.vi_var_names.contains("mass_tgt"));
-    }
-
-    #[test]
-    fn centroid_grouped_reduction_reading_state_is_rejected() {
-        // §5.7 guard 2: `rho` retyped to `state` ⇒ the grouped numerator reads a
-        // hot-path quantity; a build-time reduction's inputs must be CONST/DISCRETE.
-        let model: Value = serde_json::json!({
-            "index_sets": {
-                "points": {"kind": "interval", "size": 2},
-                "generators": {"kind": "interval", "size": 1}
-            },
-            "variables": {
-                "gx": {"type": "parameter", "shape": ["generators"]},
-                "px": {"type": "parameter", "shape": ["points"]},
-                "rho": {"type": "unknown", "shape": ["points"]},
-                "assign": {"type": "unknown", "shape": ["points"]},
-                "num": {"type": "unknown", "shape": ["generators"]}
-            },
-            "equations": [
-                {"lhs": {"op": "index", "args": ["assign", "i"]},
-                 "rhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "points"}},
-                    "args": ["px", "gx"],
-                    "expr": {"op": "argmin", "args": ["px", "gx"], "arg": "g",
-                        "ranges": {"g": {"from": "generators"}},
-                        "expr": {"op": "*", "args": [
-                            {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]},
-                            {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]}]}}}},
-                {"lhs": {"op": "index", "args": ["num", "g"]},
-                 "rhs": {"op": "faq", "output_idx": ["g"],
-                    "ranges": {"g": {"from": "generators"}, "p": {"from": "points"}},
-                    "semiring": "sum_product", "join": [{"on": [["assign", "g"]]}],
-                    "args": ["assign", "rho"],
-                    "expr": {"op": "index", "args": ["rho", "p"]}}}
-            ]
-        });
-        let const_arrays = ca(vec![
-            ("gx", arr(&[1], vec![0.0])),
-            ("px", arr(&[2], vec![0.0, 1.0])),
-        ]);
-        assert!(
-            materialize_value_invention(&model, &const_arrays, &HashMap::new(), &no_bounds())
-                .is_err()
-        );
     }
 
     /// Two operator sub-trees share a structural id exactly when their JSON

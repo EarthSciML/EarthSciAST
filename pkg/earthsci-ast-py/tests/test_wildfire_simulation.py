@@ -7,16 +7,15 @@ Python counterpart of the Julia reference. What this exercises:
   * A REAL INLINE CONSERVATIVE REGRID (esm-spec §8.6.1): the atmosphere-grid
     sensible-flux field ``flux_field=[50,150,250,350]`` is remapped onto the
     3-cell ocean grid by overlap weights ``W[a,o] = A[a,o]/A_o`` computed inline
-    from cell geometry — a bin-skolem BROAD PHASE (``rg_src_bin``/``rg_tgt_bin``
-    materialized via ``skolem``+``floor``, joined on ``[[rg_src_bin,rg_tgt_bin]]``)
-    plus a fused ``polygon_intersection_area`` NARROW PHASE. The weights are
+    from cell geometry — an integer-bin BROAD PHASE (joined on the cells' bin
+    columns) plus an overlap-area NARROW PHASE. The weights are
     computed, not supplied, giving ``surface_heat_flux=[100, 283.333, 350]``.
   * WHOLE-ARRAY ``D(SST) = surface_heat_flux/4.18e6`` integrated per cell over the
     declared ``shape:["ocean_cells"]`` (resolved to 3 cells), with ``u_ocean``
     (ic-only array) and ``phi``/``wind`` (ic-only scalars) held at their ic — a
     no-``D`` state has a zero derivative.
-  * VALUE-INVENTION state vars (the bins + the ``distinct`` candidate-set
-    membership ``rg_pairs``) dropped from the ODE, materialized at setup.
+  * VALUE-INVENTION state vars (the ``distinct`` candidate-set membership
+    ``rg_pairs``) dropped from the ODE, materialized at setup.
 
 The fixture's OceanDynamics inline ``tests`` block is the source of truth: this
 runner executes every assertion in it (SST at t=0 and t=3600), and additionally

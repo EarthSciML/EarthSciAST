@@ -1,0 +1,569 @@
+{
+  "properties": [
+    {
+      "id": "P-calendar-ref-ranges",
+      "clauses": [
+        "spec.9.8.2.calendar-fields"
+      ],
+      "statement": "Every integer calendar output is in its §9.8 range: month 1..12, day 1..(days in that month) ⊆ 1..31, hour 0..23, minute 0..59, second 0..59, day_of_year 1..(days in that year) ⊆ 1..366, is_leap_year 0 or 1.",
+      "lean_statement": "∀ t : ℝ, (1 ≤ (Esm.Closed.Datetime.IntFn.month.exact t) ∧ (Esm.Closed.Datetime.IntFn.month.exact t) ≤ 12) ∧ (1 ≤ (Esm.Closed.Datetime.IntFn.day.exact t) ∧ (Esm.Closed.Datetime.IntFn.day.exact t) ≤ Esm.Closed.Datetime.monthLength (Esm.Closed.Datetime.isLeapYear (Esm.Closed.Datetime.IntFn.year.exact t)) (Esm.Closed.Datetime.IntFn.month.exact t) ∧ (Esm.Closed.Datetime.IntFn.day.exact t) ≤ 31) ∧ (0 ≤ (Esm.Closed.Datetime.IntFn.hour.exact t) ∧ (Esm.Closed.Datetime.IntFn.hour.exact t) ≤ 23) ∧ (0 ≤ (Esm.Closed.Datetime.IntFn.minute.exact t) ∧ (Esm.Closed.Datetime.IntFn.minute.exact t) ≤ 59) ∧ (0 ≤ (Esm.Closed.Datetime.IntFn.second.exact t) ∧ (Esm.Closed.Datetime.IntFn.second.exact t) ≤ 59) ∧ (1 ≤ (Esm.Closed.Datetime.IntFn.dayOfYear.exact t) ∧ (Esm.Closed.Datetime.IntFn.dayOfYear.exact t) ≤ Esm.Closed.Datetime.yearLength (Esm.Closed.Datetime.IntFn.year.exact t) ∧ (Esm.Closed.Datetime.IntFn.dayOfYear.exact t) ≤ 366) ∧ ((Esm.Closed.Datetime.IntFn.isLeapYear.exact t) = 0 ∨ (Esm.Closed.Datetime.IntFn.isLeapYear.exact t) = 1)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.ranges"
+    },
+    {
+      "id": "P-calendar-ref-divmod",
+      "clauses": [
+        "spec.9.8.2.calendar-fields"
+      ],
+      "statement": "The floor-divmod by 86400: t = 86400·⌊t/86400⌋ + tod with 0 ≤ tod < 86400 (Python-style floored modulo).",
+      "lean_statement": "∀ t : ℝ, t = 86400 * (Esm.Closed.Datetime.dayNumber t : ℝ) + Esm.Closed.Datetime.timeOfDay t ∧ 0 ≤ Esm.Closed.Datetime.timeOfDay t ∧ Esm.Closed.Datetime.timeOfDay t < 86400",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.divmod"
+    },
+    {
+      "id": "P-calendar-ref-roundtrip",
+      "clauses": [
+        "spec.9.8.2.calendar-fields"
+      ],
+      "statement": "The decomposition round-trips to the real instant floor: 86400·days(year, month, day) + 3600·hour + 60·minute + second = ⌊t⌋ (hour/minute/second from ⌊time-of-day⌋, ruling Q-3).",
+      "lean_statement": "∀ t : ℝ, 86400 * Esm.Closed.Datetime.daysFromCivil ⟨(Esm.Closed.Datetime.IntFn.year.exact t), (Esm.Closed.Datetime.IntFn.month.exact t), (Esm.Closed.Datetime.IntFn.day.exact t)⟩ + 3600 * (Esm.Closed.Datetime.IntFn.hour.exact t) + 60 * (Esm.Closed.Datetime.IntFn.minute.exact t) + (Esm.Closed.Datetime.IntFn.second.exact t) = ⌊t⌋",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.roundtrip"
+    },
+    {
+      "id": "P-calendar-ref-civil-inverse",
+      "clauses": [
+        "spec.9.8.2.calendar-fields"
+      ],
+      "statement": "civil-from-days and days-from-civil are inverse: every day number maps to a valid date and back, and every valid date maps to a day number and back.",
+      "lean_statement": "(∀ n : ℤ, Esm.Closed.Datetime.daysFromCivil (Esm.Closed.Datetime.civilFromDays n) = n ∧ (Esm.Closed.Datetime.civilFromDays n).Valid) ∧ ∀ c : Esm.Closed.Datetime.Date, c.Valid → Esm.Closed.Datetime.civilFromDays (Esm.Closed.Datetime.daysFromCivil c) = c",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.civil_days_inverse"
+    },
+    {
+      "id": "P-calendar-ref-calendar-steps",
+      "clauses": [
+        "spec.9.8.2.calendar-fields"
+      ],
+      "statement": "The day count is the proleptic-Gregorian calendar: day 0 is 1970-01-01; consecutive days, months of the standard lengths (February 28/29), and years of 365 days, or 366 when divisible by 4 and not by 100 unless by 400, follow one another with no gaps.",
+      "lean_statement": "Esm.Closed.Datetime.daysFromCivil ⟨1970, 1, 1⟩ = 0 ∧ (∀ y m d : ℤ, Esm.Closed.Datetime.daysFromCivil ⟨y, m, d + 1⟩ = Esm.Closed.Datetime.daysFromCivil ⟨y, m, d⟩ + 1) ∧ (∀ y m : ℤ, 1 ≤ m → m ≤ 11 → Esm.Closed.Datetime.daysFromCivil ⟨y, m + 1, 1⟩ = Esm.Closed.Datetime.daysFromCivil ⟨y, m, Esm.Closed.Datetime.monthLength (Esm.Closed.Datetime.isLeapYear y) m⟩ + 1) ∧ (∀ y : ℤ, Esm.Closed.Datetime.daysFromCivil ⟨y + 1, 1, 1⟩ = Esm.Closed.Datetime.daysFromCivil ⟨y, 12, 31⟩ + 1) ∧ (∀ (l : Bool) (m : ℤ), Esm.Closed.Datetime.monthLength l m = if m = 2 then (if l then 29 else 28) else if m = 4 ∨ m = 6 ∨ m = 9 ∨ m = 11 then 30 else 31) ∧ (∀ y : ℤ, Esm.Closed.Datetime.yearLength y = if (4 ∣ y ∧ ¬ 100 ∣ y) ∨ 400 ∣ y then 366 else 365)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.calendar_steps"
+    },
+    {
+      "id": "P-calendar-ref-leap-rule",
+      "clauses": [
+        "spec.9.8.2.calendar-fields"
+      ],
+      "statement": "is_leap_year(t) = 1 exactly when the year of t has 366 days, exactly when it has a February 29, and exactly when the year is divisible by 4 and not by 100, or by 400.",
+      "lean_statement": "∀ t : ℝ, ((Esm.Closed.Datetime.IntFn.isLeapYear.exact t) = 1 ↔ Esm.Closed.Datetime.daysFromCivil ⟨(Esm.Closed.Datetime.IntFn.year.exact t) + 1, 1, 1⟩ - Esm.Closed.Datetime.daysFromCivil ⟨(Esm.Closed.Datetime.IntFn.year.exact t), 1, 1⟩ = 366) ∧ ((Esm.Closed.Datetime.IntFn.isLeapYear.exact t) = 1 ↔ (Esm.Closed.Datetime.Date.Valid ⟨(Esm.Closed.Datetime.IntFn.year.exact t), 2, 29⟩)) ∧ ((Esm.Closed.Datetime.IntFn.isLeapYear.exact t) = 1 ↔ (4 ∣ (Esm.Closed.Datetime.IntFn.year.exact t) ∧ ¬ 100 ∣ (Esm.Closed.Datetime.IntFn.year.exact t)) ∨ 400 ∣ (Esm.Closed.Datetime.IntFn.year.exact t))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.isLeapYear_agrees"
+    },
+    {
+      "id": "P-calendar-ref-day-of-year",
+      "clauses": [
+        "spec.9.8.2.calendar-fields"
+      ],
+      "statement": "day_of_year agrees with month and day (days before the month plus the day) and counts from January 1 of the same year (1 = Jan 1).",
+      "lean_statement": "∀ t : ℝ, (Esm.Closed.Datetime.IntFn.dayOfYear.exact t) = Esm.Closed.Datetime.daysBeforeMonth (Esm.Closed.Datetime.isLeapYear (Esm.Closed.Datetime.IntFn.year.exact t)) (Esm.Closed.Datetime.IntFn.month.exact t) + (Esm.Closed.Datetime.IntFn.day.exact t) ∧ (Esm.Closed.Datetime.IntFn.dayOfYear.exact t) = Esm.Closed.Datetime.dayNumber t - Esm.Closed.Datetime.daysFromCivil ⟨(Esm.Closed.Datetime.IntFn.year.exact t), 1, 1⟩ + 1",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.dayOfYear_agrees"
+    },
+    {
+      "id": "P-calendar-ref-monotone",
+      "clauses": [
+        "spec.9.8.2.calendar-fields"
+      ],
+      "statement": "The integer outputs are monotone in t: t ≤ t' implies (year, month, day, hour, minute, second) at t is lexicographically ≤ the same at t'.",
+      "lean_statement": "∀ t t' : ℝ, t ≤ t' → Esm.Closed.Datetime.fieldsKey t ≤ Esm.Closed.Datetime.fieldsKey t'",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fields_mono"
+    },
+    {
+      "id": "P-calendar-ref-julian-standard-everywhere",
+      "clauses": [
+        "spec.9.8.2.julian-day-formula"
+      ],
+      "statement": "For every t, the spec's reference julian_day equals the standard Julian Date t/86400 + 2440587.5 (JD 0 = noon UTC on 4713 BC Jan 1, proleptic Julian).",
+      "lean_statement": "∀ t : ℝ, Esm.Closed.Datetime.julianDay t = t / 86400 + 2440587.5",
+      "status": "proven",
+      "note": "Ruling Q-99 (2026-10-26): julian_day is the standard Julian Date for every t; Esm.Closed.Datetime.julianDay is now the exact value of the expression §9.2 pins, (d + 2440588) + (tod − 43200)/86400. The Fliegel–van Flandern computation is §9.2's informative note (Esm.Closed.Datetime.fvfJulianDay), which is NOT the Julian Date before -4800-03-01 (Esm.Closed.Datetime.fvfJulianDay_ne_standard). Fixtures: tests/closed_functions/datetime/julian_day/expected.json scenarios jd_* and frac_*minus_4800*.",
+      "theorem": "Esm.Closed.Datetime.julianDay_eq_standard"
+    },
+    {
+      "id": "P-calendar-lib-int32",
+      "clauses": [
+        "spec.9.8.2.calendar-domain",
+        "spec.9.8.2.calendar-fields"
+      ],
+      "statement": "On the lib/calendar.esm template domain |t| < 2^52 the year of t is a signed 32-bit integer, so every integer calendar function returns its exact value there.",
+      "lean_statement": "∀ (f : Esm.Closed.Datetime.IntFn) (t : ℝ), |t| < (2 : ℝ) ^ (52 : ℕ) → f.eval t = Esm.Closed.Datetime.IntResult.ok (f.exact t)",
+      "status": "proven",
+      "theorem": "Esm.Closed.CalendarAst.int_template_eq_eval"
+    },
+    {
+      "id": "P-calendar-hinnant",
+      "clauses": [
+        "spec.9.8.2.calendar-fields"
+      ],
+      "statement": "Howard Hinnant's civil_from_days (eras of 146097 days, March-based years, floor divisions), as lib/calendar.esm computes it, is the model's proleptic-Gregorian civilFromDays for every day number.",
+      "lean_statement": "∀ (n : ℤ), Esm.Closed.Datetime.hinnant n = Esm.Closed.Datetime.civilFromDays n",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.hinnant_eq"
+    },
+    {
+      "id": "P-interp-searchsorted-least",
+      "clauses": [
+        "spec.9.8.1.searchsorted-least-index"
+      ],
+      "statement": "searchsorted returns the least 1-based k with xs[k] ≥ x, or N+1; so its result is in [1, N+1] (and fits Int32 for N < 2^31 − 1).",
+      "lean_statement": "∀ (xs : List ℝ) (x : ℝ), have k := Esm.Closed.searchsorted (Esm.Closed.Num.fin x) (List.map Esm.Closed.Num.fin xs); (1 : ℕ) ≤ k ∧ k ≤ xs.length + (1 : ℕ) ∧ (∀ (j : ℕ), j + (1 : ℕ) < k → xs.getD j (0 : ℝ) < x) ∧ (k ≤ xs.length → x ≤ xs.getD (k - (1 : ℕ)) (0 : ℝ))",
+      "status": "proven",
+      "theorem": "Esm.Closed.searchsorted_least"
+    },
+    {
+      "id": "P-interp-searchsorted-nan",
+      "clauses": [
+        "spec.9.8.1.searchsorted-least-index"
+      ],
+      "statement": "A NaN query returns N+1, whatever xs holds.",
+      "lean_statement": "∀ (xs : List Esm.Closed.Num), Esm.Closed.searchsorted Esm.Closed.Num.nan xs = xs.length + (1 : ℕ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.searchsorted_nan"
+    },
+    {
+      "id": "P-interp-searchsorted-mono",
+      "clauses": [
+        "spec.9.8.1.searchsorted-least-index"
+      ],
+      "statement": "searchsorted is monotone in x, with NaN above every real.",
+      "lean_statement": "∀ (xs : List ℝ) (x y : ℝ), x ≤ y → Esm.Closed.searchsorted (Esm.Closed.Num.fin x) (List.map Esm.Closed.Num.fin xs) ≤ Esm.Closed.searchsorted (Esm.Closed.Num.fin y) (List.map Esm.Closed.Num.fin xs) ∧ Esm.Closed.searchsorted (Esm.Closed.Num.fin y) (List.map Esm.Closed.Num.fin xs) ≤ Esm.Closed.searchsorted Esm.Closed.Num.nan (List.map Esm.Closed.Num.fin xs)",
+      "status": "proven",
+      "theorem": "Esm.Closed.searchsorted_mono"
+    },
+    {
+      "id": "P-interp-searchsorted-out-of-range",
+      "clauses": [
+        "spec.9.8.1.searchsorted-least-index"
+      ],
+      "statement": "x ≤ xs[1] gives 1; on a non-decreasing xs, x > xs[N] gives N+1.",
+      "lean_statement": "∀ (xs : List ℝ) (x : ℝ), xs ≠ [] → (x ≤ xs.getD (0 : ℕ) (0 : ℝ) → Esm.Closed.searchsorted (Esm.Closed.Num.fin x) (List.map Esm.Closed.Num.fin xs) = (1 : ℕ)) ∧ (List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) xs → xs.getD (xs.length - (1 : ℕ)) (0 : ℝ) < x → Esm.Closed.searchsorted (Esm.Closed.Num.fin x) (List.map Esm.Closed.Num.fin xs) = xs.length + (1 : ℕ))",
+      "status": "proven",
+      "theorem": "Esm.Closed.searchsorted_out_of_range"
+    },
+    {
+      "id": "P-interp-linear-in-cell",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "Inside a cell a_i ≤ x < a_{i+1} (x > a_1), the reference linear is the pinned blend t_i + w·(t_{i+1} − t_i) with w = (x − a_i)/(a_{i+1} − a_i).",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → ∀ (i : ℕ) (x : ℝ), i + (1 : ℕ) < a.length → a.getD i (0 : ℝ) ≤ x → x < a.getD (i + (1 : ℕ)) (0 : ℝ) → a.getD (0 : ℕ) (0 : ℝ) < x → Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin x) = Esm.Closed.blend (t.getD i Esm.Closed.Num.nan) (t.getD (i + (1 : ℕ)) Esm.Closed.Num.nan) (Esm.Closed.Num.fin ((x - a.getD i (0 : ℝ)) / (a.getD (i + (1 : ℕ)) (0 : ℝ) - a.getD i (0 : ℝ))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_in_cell"
+    },
+    {
+      "id": "P-interp-linear-clamp-below",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "x ≤ a_1 returns t_1.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), (2 : ℕ) ≤ a.length → ∀ x ≤ a.getD (0 : ℕ) (0 : ℝ), Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin x) = t.getD (0 : ℕ) Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_clamp_below"
+    },
+    {
+      "id": "P-interp-linear-clamp-above",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "x ≥ a_N returns t_N.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → (2 : ℕ) ≤ a.length → ∀ (x : ℝ), a.getD (a.length - (1 : ℕ)) (0 : ℝ) ≤ x → Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin x) = t.getD (a.length - (1 : ℕ)) Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_clamp_above"
+    },
+    {
+      "id": "P-interp-linear-nan-query",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "A NaN query returns NaN.",
+      "lean_statement": "∀ (t ax : List Esm.Closed.Num), Esm.Closed.linear t ax Esm.Closed.Num.nan = Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_nan"
+    },
+    {
+      "id": "P-interp-linear-knot-exact",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "Over ℝ, a query on knot k returns t_k exactly, provided (for an interior knot) t_{k+1} is not NaN.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → (2 : ℕ) ≤ a.length → ∀ k < a.length, ((0 : ℕ) < k → k + (1 : ℕ) < a.length → (t.getD (k + (1 : ℕ)) Esm.Closed.Num.nan).isNaN = Bool.false) → Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin (a.getD k (0 : ℝ))) = t.getD k Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_knot"
+    },
+    {
+      "id": "P-interp-linear-knot-nan-neighbour",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "An interior knot whose right neighbour is NaN returns NaN (the knot belongs to the cell with the NaN corner); the spec's unconditional 'w = 0 ⇒ result = t_i' needs that proviso.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → ∀ (k : ℕ), (0 : ℕ) < k → k + (1 : ℕ) < a.length → (t.getD (k + (1 : ℕ)) Esm.Closed.Num.nan).isNaN = Bool.true → Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin (a.getD k (0 : ℝ))) = Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_knot_nan_neighbour"
+    },
+    {
+      "id": "P-interp-linear-between",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "An in-range result lies between the two bracketing table values.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → (2 : ℕ) ≤ a.length → ∀ (i : ℕ) (x p q : ℝ), i + (1 : ℕ) < a.length → a.getD i (0 : ℝ) ≤ x → x < a.getD (i + (1 : ℕ)) (0 : ℝ) → t.getD i Esm.Closed.Num.nan = Esm.Closed.Num.fin p → t.getD (i + (1 : ℕ)) Esm.Closed.Num.nan = Esm.Closed.Num.fin q → ∃ (r : ℝ), Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin x) = Esm.Closed.Num.fin r ∧ Min.min p q ≤ r ∧ r ≤ Max.max p q",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_between"
+    },
+    {
+      "id": "P-interp-linear-nan-corner",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "A query in a cell with a NaN corner returns NaN.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → ∀ (i : ℕ) (x : ℝ), i + (1 : ℕ) < a.length → a.getD i (0 : ℝ) ≤ x → x < a.getD (i + (1 : ℕ)) (0 : ℝ) → a.getD (0 : ℕ) (0 : ℝ) < x → (t.getD i Esm.Closed.Num.nan).isNaN = Bool.true ∨ (t.getD (i + (1 : ℕ)) Esm.Closed.Num.nan).isNaN = Bool.true → Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin x) = Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_nan_corner"
+    },
+    {
+      "id": "P-interp-bilinear-clamp",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "Outside the table, bilinear equals bilinear at the query clamped per axis (extrapolate-flat).",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → (2 : ℕ) ≤ ax.length → (2 : ℕ) ≤ ay.length → ∀ (x y : ℝ), Esm.Closed.bilinear T (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin x) (Esm.Closed.Num.fin y) = Esm.Closed.bilinear T (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin (Max.max (ax.getD (0 : ℕ) (0 : ℝ)) (Min.min x (ax.getD (ax.length - (1 : ℕ)) (0 : ℝ))))) (Esm.Closed.Num.fin (Max.max (ay.getD (0 : ℕ) (0 : ℝ)) (Min.min y (ay.getD (ay.length - (1 : ℕ)) (0 : ℝ)))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_clamp"
+    },
+    {
+      "id": "P-interp-bilinear-nan-query",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "NaN x or NaN y gives NaN.",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List Esm.Closed.Num) (v : Esm.Closed.Num), Esm.Closed.bilinear T ax ay Esm.Closed.Num.nan v = Esm.Closed.Num.nan ∧ Esm.Closed.bilinear T ax ay v Esm.Closed.Num.nan = Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_nan"
+    },
+    {
+      "id": "P-interp-bilinear-in-cell",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "A query in cell (i, j) is the pinned two-x-blends-then-y-blend in that cell.",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → ∀ (i j : ℕ) (x y : ℝ), Esm.Closed.InCell ax i x → Esm.Closed.InCell ay j y → Esm.Closed.bilinear T (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin x) (Esm.Closed.Num.fin y) = Esm.Closed.bilinearCell T (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) i j (Esm.Closed.Num.fin x) (Esm.Closed.Num.fin y)",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_in_cell"
+    },
+    {
+      "id": "P-interp-bilinear-knot-exact",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "Over ℝ on a finite table, a query on knot (k, l) returns table[k][l].",
+      "lean_statement": "∀ (U : List (List ℝ)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → (2 : ℕ) ≤ ax.length → (2 : ℕ) ≤ ay.length → Esm.Closed.TableShape U ax.length ay.length → ∀ (k l : ℕ), k < ax.length → l < ay.length → Esm.Closed.bilinear (Esm.Closed.finTable U) (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin (ax.getD k (0 : ℝ))) (Esm.Closed.Num.fin (ay.getD l (0 : ℝ))) = Esm.Closed.Num.fin (Esm.Closed.rentry U k l)",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_knot"
+    },
+    {
+      "id": "P-interp-bilinear-between",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "Over ℝ on a finite table, the result lies between the min and max of its cell's four corners.",
+      "lean_statement": "∀ (U : List (List ℝ)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → Esm.Closed.TableShape U ax.length ay.length → ∀ (i j : ℕ) (x y : ℝ), Esm.Closed.InCell ax i x → Esm.Closed.InCell ay j y → ∃ (r : ℝ), Esm.Closed.bilinear (Esm.Closed.finTable U) (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin x) (Esm.Closed.Num.fin y) = Esm.Closed.Num.fin r ∧ Min.min (Min.min (Esm.Closed.rentry U i j) (Esm.Closed.rentry U (i + (1 : ℕ)) j)) (Min.min (Esm.Closed.rentry U i (j + (1 : ℕ))) (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ)))) ≤ r ∧ r ≤ Max.max (Max.max (Esm.Closed.rentry U i j) (Esm.Closed.rentry U (i + (1 : ℕ)) j)) (Max.max (Esm.Closed.rentry U i (j + (1 : ℕ))) (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_between"
+    },
+    {
+      "id": "P-interp-bilinear-alt-cell",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "Over ℝ, at an interior x-knot the alternative cell i = k−1 (w = 1) gives the same value as the pinned i = k (w = 0).",
+      "lean_statement": "∀ (U : List (List ℝ)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → ∀ (k j : ℕ), (0 : ℕ) < k → k + (1 : ℕ) < ax.length → ∀ (y : ℝ), Esm.Closed.realCell U ax ay (k - (1 : ℕ)) j (ax.getD k (0 : ℝ)) y = Esm.Closed.realCell U ax ay k j (ax.getD k (0 : ℝ)) y",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_alt_cell"
+    },
+    {
+      "id": "P-interp-bilinear-nan-corner",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "A query in a cell with a NaN corner gives NaN.",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → ∀ (i j : ℕ) (x y : ℝ), Esm.Closed.InCell ax i x → Esm.Closed.InCell ay j y → (Esm.Closed.entry T i j).isNaN = Bool.true ∨ (Esm.Closed.entry T (i + (1 : ℕ)) j).isNaN = Bool.true ∨ (Esm.Closed.entry T i (j + (1 : ℕ))).isNaN = Bool.true ∨ (Esm.Closed.entry T (i + (1 : ℕ)) (j + (1 : ℕ))).isNaN = Bool.true → Esm.Closed.bilinear T (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin x) (Esm.Closed.Num.fin y) = Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_nan_corner"
+    },
+    {
+      "id": "P-interp-fma-blend-two-ulp",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "Q-6: for doubles t, u and any w ∈ [0, 1], the pinned blend t ⊕ (w ⊗ (u ⊖ t)) and the FMA blend fma(w, u ⊖ t, t) differ by at most 2·ulp(max(|t|, |u|)).",
+      "lean_statement": "∀ (t u w : ℝ), Esm.F64.Repr t → Esm.F64.Repr u → (0 : ℝ) ≤ w → w ≤ (1 : ℝ) → |Esm.Closed.Rounding.blend64 t u w - Esm.Closed.Rounding.blendFMA t u w| ≤ (2 : ℝ) * Esm.F64.ulp (Max.max |t| |u|)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.blend_fma_le_two_ulp"
+    },
+    {
+      "id": "P-interp-fma-linear-two-ulp",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "Q-6 for the reference linear (and each blend of the reference bilinear): with the pinned binary64 weight of a query in its cell, FMA and non-FMA results differ by at most 2·ulp(max(|t_i|, |t_{i+1}|)).",
+      "lean_statement": "∀ (t u x lo hi : ℝ), Esm.F64.Repr t → Esm.F64.Repr u → lo ≤ x → x ≤ hi → |Esm.Closed.Rounding.blend64 t u (Esm.Closed.Rounding.weight64 x lo hi) - Esm.Closed.Rounding.blendFMA t u (Esm.Closed.Rounding.weight64 x lo hi)| ≤ (2 : ℝ) * Esm.F64.ulp (Max.max |t| |u|)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.linear_fma_le_two_ulp"
+    },
+    {
+      "id": "P-interp-fma-two-ulp-attained",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "The constant 2 is attained (the reference linear([−(2^53−1)·2^−55, (2^53−3)·2^−54], [0, 1], 0.75)), so 2 is the least integer constant.",
+      "lean_statement": "∃ (t : ℝ) (u : ℝ) (x : ℝ) (lo : ℝ) (hi : ℝ), Esm.F64.Repr t ∧ Esm.F64.Repr u ∧ Esm.F64.Repr x ∧ Esm.F64.Repr lo ∧ Esm.F64.Repr hi ∧ lo ≤ x ∧ x ≤ hi ∧ |Esm.Closed.Rounding.blend64 t u (Esm.Closed.Rounding.weight64 x lo hi) - Esm.Closed.Rounding.blendFMA t u (Esm.Closed.Rounding.weight64 x lo hi)| = (2 : ℝ) * Esm.F64.ulp (Max.max |t| |u|)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.blend_fma_two_ulp_attained"
+    },
+    {
+      "id": "P-interp-endpoint-w0-binary64",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "§9.8 'w = 0 ⇒ result = t_i exactly' holds in binary64 (signed zero not modelled).",
+      "lean_statement": "∀ (t u : ℝ), Esm.F64.Repr t → Esm.Closed.Rounding.blend64 t u (0 : ℝ) = t",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.blend64_w_zero"
+    },
+    {
+      "id": "P-interp-weight-at-left-knot",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "A query on its cell's left knot has pinned binary64 weight exactly 0.",
+      "lean_statement": "∀ (lo hi : ℝ), Esm.Closed.Rounding.weight64 lo lo hi = (0 : ℝ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.weight64_at_lo"
+    },
+    {
+      "id": "P-interp-endpoint-w1-sterbenz",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "At w = 1 the pinned blend returns t_{i+1} exactly when t_i/2 ≤ t_{i+1} ≤ 2·t_i (exact subtraction).",
+      "lean_statement": "∀ (t u : ℝ), Esm.F64.Repr t → Esm.F64.Repr u → t / (2 : ℝ) ≤ u → u ≤ (2 : ℝ) * t → Esm.Closed.Rounding.blend64 t u (1 : ℝ) = u",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.blend64_w_one_sterbenz"
+    },
+    {
+      "id": "P-interp-endpoint-w1-bound",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "At w = 1 the pinned blend is within 3/2·ulp(max(|t_i|, |t_{i+1}|)) of t_{i+1}.",
+      "lean_statement": "∀ (t u : ℝ), Esm.F64.Repr t → Esm.F64.Repr u → |Esm.Closed.Rounding.blend64 t u (1 : ℝ) - u| ≤ (3 / 2 : ℝ) * Esm.F64.ulp (Max.max |t| |u|)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.blend64_w_one_le"
+    },
+    {
+      "id": "P-interp-bilinear-errs",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "For double corners and weights in [0, 1], the pinned binary64 bilinear result is within 11/2·ulp(max |corner|) of the exact bilinear value, and the all-FMA result within 3·ulp.",
+      "lean_statement": "∀ (t00 t10 t01 t11 wx wy : ℝ), Esm.F64.Repr t00 → Esm.F64.Repr t10 → Esm.F64.Repr t01 → Esm.F64.Repr t11 → (0 : ℝ) ≤ wx → wx ≤ (1 : ℝ) → (0 : ℝ) ≤ wy → wy ≤ (1 : ℝ) → have M := Max.max (Max.max |t00| |t10|) (Max.max |t01| |t11|); |Esm.Closed.Rounding.bilinear64 t00 t10 t01 t11 wx wy - Esm.Closed.Rounding.bilinearR t00 t10 t01 t11 wx wy| ≤ (11 / 2 : ℝ) * Esm.F64.ulp M ∧ |Esm.Closed.Rounding.bilinearFMA t00 t10 t01 t11 wx wy - Esm.Closed.Rounding.bilinearR t00 t10 t01 t11 wx wy| ≤ (3 : ℝ) * Esm.F64.ulp M",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.bilinear_errs"
+    },
+    {
+      "id": "P-interp-bilinear-fma-bound",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "Q-6 for the reference bilinear: the all-FMA and the pinned evaluations differ by at most 17/2·ulp(max |corner|).",
+      "lean_statement": "∀ (t00 t10 t01 t11 wx wy : ℝ), Esm.F64.Repr t00 → Esm.F64.Repr t10 → Esm.F64.Repr t01 → Esm.F64.Repr t11 → (0 : ℝ) ≤ wx → wx ≤ (1 : ℝ) → (0 : ℝ) ≤ wy → wy ≤ (1 : ℝ) → |Esm.Closed.Rounding.bilinear64 t00 t10 t01 t11 wx wy - Esm.Closed.Rounding.bilinearFMA t00 t10 t01 t11 wx wy| ≤ (17 / 2 : ℝ) * Esm.F64.ulp (Max.max (Max.max |t00| |t10|) (Max.max |t01| |t11|))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.bilinear_fma_le"
+    },
+    {
+      "id": "P-interp-template-searchsorted-eq",
+      "clauses": [
+        "spec.9.8.1.searchsorted-least-index"
+      ],
+      "statement": "The lib/interp.esm searchsorted template 1 + count(not(xs[k] >= x)) over k in [1, n], n = |xs|, equals the reference searchsorted for every query (NaN included) on a non-decreasing xs, at every scalar type with real values and one NaN (exact Num, binary64 Bin64).",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → ∀ (x : α), Esm.Closed.Template.searchsorted x (List.map Esm.Closed.Template.RealNaN.fin a) a.length = Esm.Closed.searchsorted x (List.map Esm.Closed.Template.RealNaN.fin a)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Template.searchsorted_eq"
+    },
+    {
+      "id": "P-interp-template-cell-index",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "Key lemma for the templates: on a non-decreasing real axis of n ≥ 2 knots, min(max(count(axis[k] <= q), 1), n - 1) is one more (1-based) than the reference's 0-based cell, for every real query.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → (2 : ℕ) ≤ a.length → ∀ (q : ℝ), Esm.Closed.Template.cellIdx (List.map Esm.Closed.Template.RealNaN.fin a) (Esm.Closed.Template.RealNaN.fin q : α) a.length = Esm.Closed.cell (Esm.Closed.Template.RealNaN.fin q : α) (List.map Esm.Closed.Template.RealNaN.fin a) + (1 : ℕ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Template.cellIdx_eq_cell"
+    },
+    {
+      "id": "P-interp-template-cell-spec",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "The template's cell index is §9.8's: on a strictly increasing axis and a query in [a_1, a_n], the 1-based i lies in [1, n−1] with a_i ≤ q < a_{i+1}, or q is the last knot and i = n − 1.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → (2 : ℕ) ≤ a.length → ∀ {q : ℝ}, a.getD (0 : ℕ) (0 : ℝ) ≤ q → q ≤ a.getD (a.length - (1 : ℕ)) (0 : ℝ) → have i := Esm.Closed.Template.cellIdx (List.map (Esm.Closed.Template.RealNaN.fin : ℝ → α) a) (Esm.Closed.Template.RealNaN.fin q : α) a.length; (1 : ℕ) ≤ i ∧ i ≤ a.length - (1 : ℕ) ∧ a.getD (i - (1 : ℕ)) (0 : ℝ) ≤ q ∧ (q < a.getD i (0 : ℝ) ∨ i = a.length - (1 : ℕ) ∧ q = a.getD i (0 : ℝ))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Template.cellIdx_spec"
+    },
+    {
+      "id": "P-interp-template-interior-knot",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "Interior-knot convention of the templates: a query exactly on 0-based knot k with a knot after it gets the 1-based cell index k + 1 (weight 0).",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → ∀ (k : ℕ), k + (1 : ℕ) < a.length → Esm.Closed.Template.cellIdx (List.map Esm.Closed.Template.RealNaN.fin a) (Esm.Closed.Template.RealNaN.fin (a.getD k (0 : ℝ)) : α) a.length = k + (1 : ℕ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Template.cellIdx_knot"
+    },
+    {
+      "id": "P-interp-template-linear-eq",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "The lib/interp.esm linear template equals the reference linear for every table and every query (NaN included) on a non-decreasing axis of n ≥ 2 knots (so on every strictly increasing one), at every scalar type with real values and one NaN; at Bin64 this is bit-for-bit binary64 equality.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] (t : List α) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → (2 : ℕ) ≤ a.length → ∀ (x : α), Esm.Closed.Template.linear t (List.map Esm.Closed.Template.RealNaN.fin a) x a.length = Esm.Closed.linear t (List.map Esm.Closed.Template.RealNaN.fin a) x",
+      "status": "proven",
+      "theorem": "Esm.Closed.Template.linear_eq"
+    },
+    {
+      "id": "P-interp-template-bilinear-eq",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "The lib/interp.esm bilinear template equals the reference bilinear for every table and every query (NaN in either coordinate included) on non-decreasing axes of at least two knots each, at every scalar type with real values and one NaN; at Bin64 this is bit-for-bit binary64 equality.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] (T : List (List α)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) ay → (2 : ℕ) ≤ ax.length → (2 : ℕ) ≤ ay.length → ∀ (x y : α), Esm.Closed.Template.bilinear T (List.map Esm.Closed.Template.RealNaN.fin ax) (List.map Esm.Closed.Template.RealNaN.fin ay) x y ax.length ay.length = Esm.Closed.bilinear T (List.map Esm.Closed.Template.RealNaN.fin ax) (List.map Esm.Closed.Template.RealNaN.fin ay) x y",
+      "status": "proven",
+      "theorem": "Esm.Closed.Template.bilinear_eq"
+    },
+    {
+      "id": "P-interp-template-linear-fma-two-ulp",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "Q-6 for the linear template: evaluated in binary64 on a strictly increasing axis with a query inside cell i (above the first knot), the template is exactly the pinned blend64 with the pinned weight64, which lies within 2·ulp(max(|t_i|, |t_{i+1}|)) of the FMA blend.",
+      "lean_statement": "∀ (u a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → u.length = a.length → ∀ (i : ℕ) (x : ℝ), i + (1 : ℕ) < a.length → a.getD (0 : ℕ) (0 : ℝ) < x → a.getD i (0 : ℝ) ≤ x → x < a.getD (i + (1 : ℕ)) (0 : ℝ) → Esm.F64.Repr (u.getD i (0 : ℝ)) → Esm.F64.Repr (u.getD (i + (1 : ℕ)) (0 : ℝ)) → Esm.Closed.Template.linear (List.map Esm.Closed.Template.Bin64.fin u) (List.map Esm.Closed.Template.Bin64.fin a) (Esm.Closed.Template.Bin64.fin x) a.length = Esm.Closed.Template.Bin64.fin (Esm.Closed.Rounding.blend64 (u.getD i (0 : ℝ)) (u.getD (i + (1 : ℕ)) (0 : ℝ)) (Esm.Closed.Rounding.weight64 x (a.getD i (0 : ℝ)) (a.getD (i + (1 : ℕ)) (0 : ℝ)))) ∧ |Esm.Closed.Rounding.blend64 (u.getD i (0 : ℝ)) (u.getD (i + (1 : ℕ)) (0 : ℝ)) (Esm.Closed.Rounding.weight64 x (a.getD i (0 : ℝ)) (a.getD (i + (1 : ℕ)) (0 : ℝ))) - Esm.Closed.Rounding.blendFMA (u.getD i (0 : ℝ)) (u.getD (i + (1 : ℕ)) (0 : ℝ)) (Esm.Closed.Rounding.weight64 x (a.getD i (0 : ℝ)) (a.getD (i + (1 : ℕ)) (0 : ℝ)))| ≤ (2 : ℝ) * Esm.F64.ulp (Max.max |u.getD i (0 : ℝ)| |u.getD (i + (1 : ℕ)) (0 : ℝ)|)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Template.linear64_fma_le_two_ulp"
+    },
+    {
+      "id": "P-interp-template-bilinear-fma-bound",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "Q-6 for the bilinear template: evaluated in binary64 on strictly increasing axes, a table of the validated shape and a query in cell (i, j), the template is exactly the pinned bilinear64 with the pinned weights, which lies within 17/2·ulp(max |corner|) of the all-FMA evaluation.",
+      "lean_statement": "∀ (U : List (List ℝ)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → Esm.Closed.TableShape U ax.length ay.length → ∀ (i j : ℕ) (x y : ℝ), Esm.Closed.InCell ax i x → Esm.Closed.InCell ay j y → Esm.F64.Repr (Esm.Closed.rentry U i j) → Esm.F64.Repr (Esm.Closed.rentry U (i + (1 : ℕ)) j) → Esm.F64.Repr (Esm.Closed.rentry U i (j + (1 : ℕ))) → Esm.F64.Repr (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))) → have wx := Esm.Closed.Rounding.weight64 x (ax.getD i (0 : ℝ)) (ax.getD (i + (1 : ℕ)) (0 : ℝ)); have wy := Esm.Closed.Rounding.weight64 y (ay.getD j (0 : ℝ)) (ay.getD (j + (1 : ℕ)) (0 : ℝ)); have c := Esm.Closed.Rounding.bilinear64 (Esm.Closed.rentry U i j) (Esm.Closed.rentry U (i + (1 : ℕ)) j) (Esm.Closed.rentry U i (j + (1 : ℕ))) (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))) wx wy; Esm.Closed.Template.bilinear (List.map (List.map Esm.Closed.Template.Bin64.fin) U) (List.map Esm.Closed.Template.Bin64.fin ax) (List.map Esm.Closed.Template.Bin64.fin ay) (Esm.Closed.Template.Bin64.fin x) (Esm.Closed.Template.Bin64.fin y) ax.length ay.length = Esm.Closed.Template.Bin64.fin c ∧ |c - Esm.Closed.Rounding.bilinearFMA (Esm.Closed.rentry U i j) (Esm.Closed.rentry U (i + (1 : ℕ)) j) (Esm.Closed.rentry U i (j + (1 : ℕ))) (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))) wx wy| ≤ (17 / 2 : ℝ) * Esm.F64.ulp (Max.max (Max.max |Esm.Closed.rentry U i j| |Esm.Closed.rentry U (i + (1 : ℕ)) j|) (Max.max |Esm.Closed.rentry U i (j + (1 : ℕ))| |Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))|))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Template.bilinear64_fma_le"
+    },
+    {
+      "id": "P-interp-template-count-binary64",
+      "clauses": [
+        "spec.9.8.1.searchsorted-least-index"
+      ],
+      "statement": "The templates' faq count evaluated in binary64 (0/1 terms folded in index order from the seed 0.0, every addition rounded) is exactly the natural-number count, for up to 2^53 terms; so a binary64 evaluation indexes the same knot as the model.",
+      "lean_statement": "∀ (n : ℕ) (f : ℕ → ℕ), (∀ (k : ℕ), f k ≤ (1 : ℕ)) → n ≤ (2 : ℕ) ^ (53 : ℕ) → List.foldl (fun (acc : ℝ) (k : ℕ) => Esm.F64.fadd acc ((f (k + (1 : ℕ)) : ℕ) : ℝ)) (0 : ℝ) (List.range n) = ((Esm.Closed.Template.faqSum n f : ℕ) : ℝ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Template.faqSum_binary64"
+    },
+    {
+      "id": "P-interp-template-clamp-binary64",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "The clamp min(max(c, 1), n - 1) around the count, evaluated in binary64 (n - 1 rounded), is the natural-number clamp of the model, for 1 ≤ n ≤ 2^53.",
+      "lean_statement": "∀ (c n : ℕ), (1 : ℕ) ≤ n → n ≤ (2 : ℕ) ^ (53 : ℕ) → Min.min (Max.max (c : ℝ) (1 : ℝ)) (Esm.F64.fsub (n : ℝ) (1 : ℝ)) = ((Min.min (Max.max c (1 : ℕ)) (n - (1 : ℕ)) : ℕ) : ℝ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Template.clamp_binary64"
+    },
+    {
+      "id": "P-interp-lib-linear-fma-two-ulp",
+      "clauses": [
+        "spec.9.8.1.linear-contract"
+      ],
+      "statement": "Q-6 for the lib/interp.esm linear template: applied and evaluated in binary64 on a strictly increasing axis with a query inside cell i above the first knot, it is exactly the pinned blend64 with the pinned weight64, within 2·ulp(max(|t_i|, |t_{i+1}|)) of the FMA blend.",
+      "lean_statement": "∀ (u a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → u.length = a.length → a.length ≤ (2 : ℕ) ^ (53 : ℕ) → ∀ (i : ℕ) (x : ℝ), i + (1 : ℕ) < a.length → a.getD (0 : ℕ) (0 : ℝ) < x → a.getD i (0 : ℝ) ≤ x → x < a.getD (i + (1 : ℕ)) (0 : ℝ) → Esm.F64.Repr (u.getD i (0 : ℝ)) → Esm.F64.Repr (u.getD (i + (1 : ℕ)) (0 : ℝ)) → Esm.Expr.evalApply Esm.Lib.Interp.linear [(\"table\", Esm.Expr.Ast.var \"T\"), (\"axis\", Esm.Expr.Ast.var \"A\"), (\"x\", Esm.Expr.Ast.var \"X\"), (\"n\", Esm.Expr.Ast.num (a.length : ℤ) (0 : ℕ))] [(\"T\", Esm.Expr.Val.arr1 (List.map Esm.Closed.Template.Bin64.fin u)), (\"A\", Esm.Expr.Val.arr1 (List.map Esm.Closed.Template.Bin64.fin a)), (\"X\", Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin x))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin (Esm.Closed.Rounding.blend64 (u.getD i (0 : ℝ)) (u.getD (i + (1 : ℕ)) (0 : ℝ)) (Esm.Closed.Rounding.weight64 x (a.getD i (0 : ℝ)) (a.getD (i + (1 : ℕ)) (0 : ℝ)))))) ∧ |Esm.Closed.Rounding.blend64 (u.getD i (0 : ℝ)) (u.getD (i + (1 : ℕ)) (0 : ℝ)) (Esm.Closed.Rounding.weight64 x (a.getD i (0 : ℝ)) (a.getD (i + (1 : ℕ)) (0 : ℝ))) - Esm.Closed.Rounding.blendFMA (u.getD i (0 : ℝ)) (u.getD (i + (1 : ℕ)) (0 : ℝ)) (Esm.Closed.Rounding.weight64 x (a.getD i (0 : ℝ)) (a.getD (i + (1 : ℕ)) (0 : ℝ)))| ≤ (2 : ℝ) * Esm.F64.ulp (Max.max |u.getD i (0 : ℝ)| |u.getD (i + (1 : ℕ)) (0 : ℝ)|)",
+      "status": "proven",
+      "theorem": "Esm.Closed.TemplateAst.linear_template_fma_le_two_ulp"
+    },
+    {
+      "id": "P-interp-lib-bilinear-fma-bound",
+      "clauses": [
+        "spec.9.8.1.bilinear-contract"
+      ],
+      "statement": "Q-6 for the lib/interp.esm bilinear template: applied and evaluated in binary64 on strictly increasing axes, a table of the validated shape and a query in cell (i, j), it is exactly the pinned bilinear64 with the pinned weights, within 17/2·ulp(max |corner|) of the all-FMA evaluation.",
+      "lean_statement": "∀ (U : List (List ℝ)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → Esm.Closed.TableShape U ax.length ay.length → ax.length ≤ (2 : ℕ) ^ (53 : ℕ) → ay.length ≤ (2 : ℕ) ^ (53 : ℕ) → ∀ (i j : ℕ) (x y : ℝ), Esm.Closed.InCell ax i x → Esm.Closed.InCell ay j y → Esm.F64.Repr (Esm.Closed.rentry U i j) → Esm.F64.Repr (Esm.Closed.rentry U (i + (1 : ℕ)) j) → Esm.F64.Repr (Esm.Closed.rentry U i (j + (1 : ℕ))) → Esm.F64.Repr (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))) → have wx := Esm.Closed.Rounding.weight64 x (ax.getD i (0 : ℝ)) (ax.getD (i + (1 : ℕ)) (0 : ℝ)); have wy := Esm.Closed.Rounding.weight64 y (ay.getD j (0 : ℝ)) (ay.getD (j + (1 : ℕ)) (0 : ℝ)); have c := Esm.Closed.Rounding.bilinear64 (Esm.Closed.rentry U i j) (Esm.Closed.rentry U (i + (1 : ℕ)) j) (Esm.Closed.rentry U i (j + (1 : ℕ))) (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))) wx wy; Esm.Expr.evalApply Esm.Lib.Interp.bilinear [(\"table\", Esm.Expr.Ast.var \"T\"), (\"axis_x\", Esm.Expr.Ast.var \"AX\"), (\"axis_y\", Esm.Expr.Ast.var \"AY\"), (\"x\", Esm.Expr.Ast.var \"X\"), (\"y\", Esm.Expr.Ast.var \"Y\"), (\"nx\", Esm.Expr.Ast.num (ax.length : ℤ) (0 : ℕ)), (\"ny\", Esm.Expr.Ast.num (ay.length : ℤ) (0 : ℕ))] [(\"T\", Esm.Expr.Val.arr2 (List.map (List.map Esm.Closed.Template.Bin64.fin) U)), (\"AX\", Esm.Expr.Val.arr1 (List.map Esm.Closed.Template.Bin64.fin ax)), (\"AY\", Esm.Expr.Val.arr1 (List.map Esm.Closed.Template.Bin64.fin ay)), (\"X\", Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin x)), (\"Y\", Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin y))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin c)) ∧ |c - Esm.Closed.Rounding.bilinearFMA (Esm.Closed.rentry U i j) (Esm.Closed.rentry U (i + (1 : ℕ)) j) (Esm.Closed.rentry U i (j + (1 : ℕ))) (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))) wx wy| ≤ (17 / 2 : ℝ) * Esm.F64.ulp (Max.max (Max.max |Esm.Closed.rentry U i j| |Esm.Closed.rentry U (i + (1 : ℕ)) j|) (Max.max |Esm.Closed.rentry U i (j + (1 : ℕ))| |Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))|))",
+      "status": "proven",
+      "theorem": "Esm.Closed.TemplateAst.bilinear_template_fma_le"
+    },
+    {
+      "id": "P-geometry-pad-consecutive-duplicate",
+      "clauses": [
+        "spec.9.8.4.overlap-padding"
+      ],
+      "statement": "A ring with vertex j (1 <= j <= n) repeated right after itself is the ring with a zero-length edge inserted at edge position j (PadAt).",
+      "lean_statement": "∀ {M M' : List (List (List Esm.Closed.Template.Bin64))} {c n j : ℕ}, 1 ≤ j → j ≤ n → (∀ i, 1 ≤ i → i ≤ n + 1 → Esm.Closed.GeometryAst.vat M' c i = Esm.Closed.GeometryAst.vat M c (if i ≤ j then i else i - 1)) → Esm.Closed.GeometryAst.PadAt M M' c n j",
+      "status": "proven",
+      "theorem": "Esm.Closed.GeometryAst.pad_dup_edges"
+    },
+    {
+      "id": "P-geometry-pad-closing-duplicate",
+      "clauses": [
+        "spec.9.8.4.overlap-padding"
+      ],
+      "statement": "A ring with its first vertex appended after the last (an explicit closing duplicate) is the ring with a zero-length edge inserted at edge position n + 1 (PadAt).",
+      "lean_statement": "∀ {M M' : List (List (List Esm.Closed.Template.Bin64))} {c n : ℕ}, 1 ≤ n → (∀ i, 1 ≤ i → i ≤ n + 1 → Esm.Closed.GeometryAst.vat M' c i = Esm.Closed.GeometryAst.vat M c (if i ≤ n then i else 1)) → Esm.Closed.GeometryAst.PadAt M M' c n (n + 1)",
+      "status": "proven",
+      "theorem": "Esm.Closed.GeometryAst.pad_close_edges"
+    },
+    {
+      "id": "P-relational-rank-count",
+      "clauses": [
+        "spec.9.8.3.rank-of-contract",
+        "spec.9.8.1.searchsorted-least-index"
+      ],
+      "statement": "On ascending real members, the reference searchsorted(x, members) is 1 plus the number of members below x.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → ∀ (x : ℝ), Esm.Closed.searchsorted (Esm.Closed.Template.RealNaN.fin x : α) (List.map Esm.Closed.Template.RealNaN.fin a) = (1 : ℕ) + (List.filter (fun (b : ℝ) => Decidable.decide (b < x)) a).length",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.searchsorted_sorted_count"
+    },
+    {
+      "id": "P-count-bisection",
+      "clauses": [
+        "spec.9.8.3.rank-of-contract",
+        "spec.9.8.1.searchsorted-least-index"
+      ],
+      "statement": "When a predicate holds on a prefix of a list and fails on the rest, the bisection partitionPoint returns the number of elements satisfying it.",
+      "lean_statement": "∀ {β : Type} (p : β → Bool) (S : List β), Esm.Closed.CountAst.PrefixClosed p S → Esm.Closed.CountAst.partitionPoint p S = List.countP p S",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.partitionPoint_eq_countP"
+    },
+    {
+      "id": "P-count-search-list",
+      "clauses": [
+        "spec.9.8.3.rank-of-contract",
+        "spec.9.8.1.searchsorted-least-index"
+      ],
+      "statement": "For the comparisons <=, <, >=, >, every key list A (any order, NaN keys allowed) and every query q (NaN included): with S the non-NaN keys sorted ascending, the number of keys with a REL q is the bisection count searchCount rel S q, and the number without it is |A| minus that.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [Esm.Closed.CountAst.LtNaN α] [inst_3 : Esm.Expr.Lits α] [Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] [Esm.Closed.RelationalAst.NaNIs α], ∀ rel ∈ Esm.Closed.CountAst.ordOps, ∀ (A S : List α) (q : α), S.Perm (List.filter (fun (a : α) => !Esm.Closed.Scalar.isNaN a) A) → List.Pairwise (fun (a b : α) => Esm.Closed.Scalar.le a b = Bool.true) S → List.countP (fun (a : α) => Esm.Closed.CountAst.relB rel a q) A = Esm.Closed.CountAst.searchCount rel S q ∧ List.countP (fun (a : α) => !Esm.Closed.CountAst.relB rel a q) A = A.length - Esm.Closed.CountAst.searchCount rel S q",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.countP_eq_search"
+    }
+  ]
+}

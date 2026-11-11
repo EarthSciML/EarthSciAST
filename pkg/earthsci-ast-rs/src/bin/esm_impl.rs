@@ -1548,7 +1548,7 @@ fn detect_coupling_antipatterns(
 /// can never scaffold a project its own `validate` rejects. `{name}` is
 /// replaced with the project name.
 const TEMPLATE_MINIMAL: &str = r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "{name}",
     "description": "A minimal ESM model",
@@ -1563,7 +1563,7 @@ const TEMPLATE_MINIMAL: &str = r#"{
 }"#;
 
 const TEMPLATE_ATMOSPHERIC: &str = r#"{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "{name}",
     "description": "An atmospheric chemistry model",
@@ -1593,7 +1593,7 @@ const TEMPLATE_ATMOSPHERIC: &str = r#"{
 
 const TEMPLATE_ECOSYSTEM: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {
         "name": "{name}",
         "description": "An ecosystem model",
@@ -1640,7 +1640,7 @@ const TEMPLATE_ECOSYSTEM: &str = r#"
 
 const TEMPLATE_COUPLING: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {
         "name": "{name}",
         "description": "A coupled system model",
@@ -2151,7 +2151,6 @@ fn run_extract(
         // extracted component so its `{ "from": <set> }` ranges resolve.
         index_sets: esm_file.index_sets.clone(),
         domain: esm_file.domain.clone(),
-        function_tables: esm_file.function_tables.clone(),
         ..Default::default()
     };
 
@@ -5165,7 +5164,7 @@ mod tests {
     fn a_failed_toplevel_model_mount_is_a_structural_finding() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let leaf = serde_json::json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "leaf"},
             "models": {
                 "A": {"variables": {}, "equations": []},
@@ -5184,7 +5183,7 @@ mod tests {
         ];
         for (block, entry) in cases {
             let doc = serde_json::json!({
-                "esm": "1.0.0",
+                "esm": "2.0.0",
                 "metadata": {"name": "mounter"},
                 block: {"K": entry},
             });

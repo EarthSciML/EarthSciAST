@@ -540,7 +540,7 @@ using Unitful
         # equation containing a structural op.
         # (An `faq` with no `expr` is undeterminable too; `index` is typed, see
         # "Array operators carry a unit".)
-        for op in ("faq", "fn", "table_lookup")
+        for op in ("faq",)
             @test EarthSciAST.get_expression_dimensions(
                 OpExpr(op, E[VarExpr("x")]), var_units
             ) === nothing
@@ -1189,7 +1189,7 @@ using Unitful
             @test D(n, vu) === nothing
         end
         let n = faq(V("x"))
-            n.key = OpExpr("skolem", E[V("i")])
+            n.key = OpExpr("floor", E[V("i")])
             @test D(n, vu) === nothing
         end
         # No `expr`; unknown spellings.

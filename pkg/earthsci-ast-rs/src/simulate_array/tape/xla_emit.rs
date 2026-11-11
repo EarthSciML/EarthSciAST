@@ -130,15 +130,6 @@ impl fmt::Display for XlaEmitError {
 
 impl std::error::Error for XlaEmitError {}
 
-/// Which way round [`Emitter::interp_count`] compares a knot with the query.
-#[derive(Clone, Copy)]
-enum CountCmp {
-    /// `axis[k] <= q` — the cell search of `interp.linear` / `interp.bilinear`.
-    AxisLeQuery,
-    /// `xs[k] < q` — the prefix `interp.searchsorted` counts.
-    AxisLtQuery,
-}
-
 /// Row-major strides (elements) of `shape` — the layout every slot value has.
 fn rm_strides(shape: &[usize]) -> Vec<i64> {
     let mut st = vec![0i64; shape.len()];
@@ -414,7 +405,6 @@ fn constant_slots(prog: &TapeProgram) -> Vec<bool> {
                     k[*s as usize] && mask.is_none_or(|m| k[m as usize])
                 }
                 Instr::Region { base, src: s, .. } => k[*base as usize] && op(s),
-                Instr::PolyArea { a, b, .. } => src(a) && src(b),
                 _ => false,
             }
         };
@@ -435,9 +425,8 @@ struct Hoisted {
 /// Evaluate the program's compile-time constants once, ahead of it.
 ///
 /// The emitted program recomputes its whole CONST section on every call (the
-/// module docs' cadence note). When that section holds real work — an
-/// overlap area per source x target pair over literal rings, a table read at
-/// literal subscripts — it is emitted on its own, run once with the same
+/// module docs' cadence note). When that section holds real work — a table
+/// read at literal subscripts — it is emitted on its own, run once with the same
 /// emitter arms, and its results enter the program as literals: the same
 /// numbers, computed once. A computed-subscript gather that can fault, which
 /// the program could not report, is resolved here too: its subscripts are
@@ -647,9 +636,6 @@ struct Emitter<'a> {
     /// program, so the instruction defining it is not emitted (the slots the
     /// rest of the program reads arrive as literals).
     hoisted: Vec<bool>,
-    /// Per slot an [`Instr::ConstArray`] defines: its `const_data` index,
-    /// built once so a lookup is not a scan of the program.
-    const_of: HashMap<SlotId, u32>,
 }
 
 impl<'a> Emitter<'a> {
@@ -742,14 +728,7 @@ impl<'a> Emitter<'a> {
             forcing_layout,
             forcing_len,
             hoisted: vec![false; prog.slots.len()],
-            const_of: HashMap::new(),
         };
-        // The first definition, as a scan from the top finds it.
-        for ins in prog.instrs.iter().rev() {
-            if let Instr::ConstArray { data, out } = ins {
-                em.const_of.insert(*out, *data);
-            }
-        }
         em.state = em.build_state_views()?;
         Ok(em)
     }
@@ -1517,39 +1496,6 @@ impl<'a> Emitter<'a> {
                 let v = self.wrap(v.reshape(&d), "segmented reduce: output box")?;
                 self.define(*out, v);
             }
-            Instr::Calendar { func, .. } => {
-                return Err(self.err(format!(
-                    "`{}` in a Float32 document has no XLA lowering (the calendar is \
-                     evaluated by the closed-function registry in binary64)",
-                    CALENDAR_FNS[*func as usize]
-                )));
-            }
-            Instr::Interp { table, x, y, out } => {
-                let tbl = &self.prog.interp_tables[*table as usize];
-                if let Some(id) = &tbl.strict {
-                    // Like `Instr::Fault`: a computation has no channel to
-                    // raise the out-of-range error through, and returning the
-                    // clamp or a bare `NaN` without it is the wrong answer
-                    // §9.5.3a forbids. Refused by name instead.
-                    return Err(self.err(format!(
-                        "a lookup into table `{id}`, which declares `out_of_bounds: \"error\"` \
-                         (esm-spec §9.5.1): a compiled program cannot raise \
-                         `table_lookup_out_of_bounds` at run time"
-                    )));
-                }
-                let dims = self.out_dims(*out);
-                let xv = self.operand(x)?;
-                let xv = self.to_shape(&xv, &dims)?;
-                let yv = match y {
-                    Some(y) => {
-                        let v = self.operand(y)?;
-                        Some(self.to_shape(&v, &dims)?)
-                    }
-                    None => None,
-                };
-                let v = self.emit_interp(tbl, &dims, &xv, yv.as_ref())?;
-                self.define(*out, v);
-            }
             // The count is a sum of 0/1 integers, exact in any order, so XLA's
             // unpinned reduction gives the interpreter's value bit for bit.
             Instr::Count {
@@ -1603,10 +1549,6 @@ impl<'a> Emitter<'a> {
                 let ones = self.wrap(pred.convert(PrimitiveType::S32), "count: pred -> s32")?;
                 let c = self.wrap(ones.reduce_sum(&[dims.len() as i64], false), "count: sum")?;
                 let v = self.wrap(c.convert(PrimitiveType::F64), "count: s32 -> f64")?;
-                self.define(*out, v);
-            }
-            Instr::PolyArea { a, b, geom, out } => {
-                let v = self.emit_poly_area(a, b, *geom, *out)?;
                 self.define(*out, v);
             }
             Instr::IndexGather {
@@ -1712,207 +1654,6 @@ impl<'a> Emitter<'a> {
         self.slots[slot as usize] = Some(v);
     }
 
-    // -- interp.* (esm-spec §9.2) ------------------------------------------
-
-    /// Lower one [`Instr::Interp`]: the §9.2 blend over a compile-time table.
-    ///
-    /// The table and axes go in as `r1` constants and the cell index comes out
-    /// of a COMPARE-AND-REDUCE — `count(axis[k] <= q)` over the lower-corner
-    /// candidates — which is the branch-free form of the registry's scan and
-    /// the shape XLA vectorizes. The corners are then read with `take`
-    /// (a `gather` along the table's one axis), and the blend is written in
-    /// §9.2's pinned `a + w * (b - a)` order.
-    ///
-    /// NUMERICAL STANDING, like every other arm here: equal to the
-    /// interpreter within the tier's tolerance classes, not bit for bit. The
-    /// index arithmetic and the clamps are exact, and the blend is the same
-    /// three operations in the same order — but nothing stops XLA contracting
-    /// `t_lo + w * (t_hi - t_lo)` into an FMA, which §9.2 explicitly allows a
-    /// binding to do and pins a relaxed tolerance for.
-    ///
-    /// COST: the index reduce materializes one predicate per output element
-    /// per axis knot. That is the same work the registry's scan does, laid out
-    /// wide instead of sequentially; a binary search over the constant axis
-    /// would be `log N` selects instead, and is the optimization to reach for
-    /// if a wide box over a long axis ever shows up.
-    fn emit_interp(
-        &self,
-        tbl: &InterpTable,
-        dims: &[usize],
-        x: &XlaOp,
-        y: Option<&XlaOp>,
-    ) -> R<XlaOp> {
-        match tbl.kind {
-            InterpKind::Linear => {
-                let blend = self.interp_blend(&tbl.table, &tbl.axis_x, dims, x)?;
-                // The two extrapolate-flat clamps, in the registry's order
-                // (below first). They cannot both hold: a validated axis is
-                // strictly increasing.
-                let n = tbl.axis_x.len();
-                let lo_knot = self.splat(tbl.axis_x[0], dims)?;
-                let hi_knot = self.splat(tbl.axis_x[n - 1], dims)?;
-                let lo_val = self.splat(tbl.table[0], dims)?;
-                let hi_val = self.splat(tbl.table[n - 1], dims)?;
-                let above = self.wrap(x.ge(&hi_knot), "interp.linear: x >= axis[N]")?;
-                let inner =
-                    self.wrap(above.select(&hi_val, &blend), "interp.linear: high clamp")?;
-                let below = self.wrap(x.le(&lo_knot), "interp.linear: x <= axis[1]")?;
-                self.wrap(below.select(&lo_val, &inner), "interp.linear: low clamp")
-            }
-            InterpKind::Bilinear => {
-                let y = y.ok_or_else(|| self.err("interp.bilinear without a `y` operand"))?;
-                let ny = tbl.axis_y.len();
-                // Per-axis clamp of the QUERY (not of the result), which is
-                // what makes the cell search below well defined.
-                let xq = self.interp_clamp_query(&tbl.axis_x, dims, x)?;
-                let yq = self.interp_clamp_query(&tbl.axis_y, dims, y)?;
-                let i = self.interp_cell(&tbl.axis_x, dims, &xq)?;
-                let j = self.interp_cell(&tbl.axis_y, dims, &yq)?;
-                let ax_lo = self.interp_take_at(&tbl.axis_x, &i)?;
-                let ax_hi = self.interp_take_next(&tbl.axis_x, &i)?;
-                let ay_lo = self.interp_take_at(&tbl.axis_y, &j)?;
-                let ay_hi = self.interp_take_next(&tbl.axis_y, &j)?;
-                let wx = self.interp_weight(&xq, &ax_lo, &ax_hi)?;
-                let wy = self.interp_weight(&yq, &ay_lo, &ay_hi)?;
-                // The flat row-major address of each of the four corners,
-                // `i * ny + j`, so all four are one `take` from the same r1
-                // constant the tape already holds flat.
-                let nyc = self.ci32(ny as i32, dims)?;
-                let one = self.ci32(1, dims)?;
-                let irow = self.wrap(i.mul_(&nyc), "interp.bilinear: i * ny")?;
-                let irow_n = self.wrap(irow.add_(&nyc), "interp.bilinear: (i+1) * ny")?;
-                let jp1 = self.wrap(j.add_(&one), "interp.bilinear: j + 1")?;
-                let c00 = self.interp_take_at(&tbl.table, &self.wrap(irow.add_(&j), "c00")?)?;
-                let c10 = self.interp_take_at(&tbl.table, &self.wrap(irow_n.add_(&j), "c10")?)?;
-                let c01 = self.interp_take_at(&tbl.table, &self.wrap(irow.add_(&jp1), "c01")?)?;
-                let c11 = self.interp_take_at(&tbl.table, &self.wrap(irow_n.add_(&jp1), "c11")?)?;
-                let row_j = self.interp_lerp(&c00, &c10, &wx)?;
-                let row_jp1 = self.interp_lerp(&c01, &c11, &wx)?;
-                self.interp_lerp(&row_j, &row_jp1, &wy)
-            }
-            InterpKind::SearchSorted => {
-                // The 1-based index of the first entry >= x. With `xs`
-                // non-decreasing the entries BELOW x are a prefix, so that
-                // index is `count(xs[k] < x) + 1` — and `count` is 0 for a NaN
-                // query, where the registry answers N+1 instead.
-                let xs = &tbl.axis_x;
-                let n = xs.len();
-                let below = self.interp_count(xs, dims, x, CountCmp::AxisLtQuery)?;
-                let one = self.ci32(1, dims)?;
-                let idx = self.wrap(below.add_(&one), "searchsorted: count + 1")?;
-                let idx = self.wrap(
-                    idx.convert(PrimitiveType::F64),
-                    "searchsorted: index -> f64",
-                )?;
-                if n == 0 {
-                    // Degenerate table: the registry returns 1 for every
-                    // query, NaN included.
-                    return Ok(idx);
-                }
-                let past_end = self.splat((n as i64 + 1) as f64, dims)?;
-                let is_nan = self.wrap(x.ne(x), "searchsorted: x is NaN")?;
-                self.wrap(is_nan.select(&past_end, &idx), "searchsorted: NaN query")
-            }
-        }
-    }
-
-    /// The in-cell part of `interp.linear` (no clamps): locate the cell, read
-    /// its two corners, blend.
-    fn interp_blend(&self, table: &[f64], axis: &[f64], dims: &[usize], q: &XlaOp) -> R<XlaOp> {
-        let i = self.interp_cell(axis, dims, q)?;
-        let a_lo = self.interp_take_at(axis, &i)?;
-        let a_hi = self.interp_take_next(axis, &i)?;
-        let t_lo = self.interp_take_at(table, &i)?;
-        let t_hi = self.interp_take_next(table, &i)?;
-        let w = self.interp_weight(q, &a_lo, &a_hi)?;
-        self.interp_lerp(&t_lo, &t_hi, &w)
-    }
-
-    /// `axis[0] <= q <= axis[N-1]`, extrapolate-flat (`interp.bilinear`
-    /// step 1). A NaN query falls through both comparisons and stays NaN,
-    /// exactly as the registry's `if / else if` chain leaves it.
-    fn interp_clamp_query(&self, axis: &[f64], dims: &[usize], q: &XlaOp) -> R<XlaOp> {
-        let n = axis.len();
-        let lo = self.splat(axis[0], dims)?;
-        let hi = self.splat(axis[n - 1], dims)?;
-        let above = self.wrap(q.ge(&hi), "interp: q >= axis[N]")?;
-        let inner = self.wrap(above.select(&hi, q), "interp: clamp high")?;
-        let below = self.wrap(q.le(&lo), "interp: q <= axis[1]")?;
-        self.wrap(below.select(&lo, &inner), "interp: clamp low")
-    }
-
-    /// The 0-based lower-corner index: `count(axis[k] <= q)` over
-    /// `k in [0, N-2]`, minus one, clamped into `[0, N-2]`.
-    ///
-    /// The clamp is what reproduces the registry's NaN behaviour: every
-    /// comparison is false for NaN, so the count is zero and the index would
-    /// be -1, where both the 1-D scan and `locate_cell` leave `i = 0` and let
-    /// the NaN weight carry the result.
-    fn interp_cell(&self, axis: &[f64], dims: &[usize], q: &XlaOp) -> R<XlaOp> {
-        let n = axis.len();
-        let count = self.interp_count(&axis[..n - 1], dims, q, CountCmp::AxisLeQuery)?;
-        let one = self.ci32(1, dims)?;
-        let cand = self.wrap(count.sub_(&one), "interp: count - 1")?;
-        let lo = self.ci32(0, dims)?;
-        let hi = self.ci32(n as i32 - 2, dims)?;
-        self.wrap(cand.clamp(&lo, &hi), "interp: clamp cell index")
-    }
-
-    /// `count(cmp(knots[k], q))` per output element, as an `s32` of `dims`.
-    fn interp_count(&self, knots: &[f64], dims: &[usize], q: &XlaOp, cmp: CountCmp) -> R<XlaOp> {
-        if knots.is_empty() {
-            return self.ci32(0, dims);
-        }
-        // `q` broadcast over a trailing knot axis, against the knot vector
-        // broadcast over the output box.
-        let mut wide: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
-        wide.push(knots.len() as i64);
-        let keep: Vec<i64> = (0..dims.len() as i64).collect();
-        let qb = self.wrap(q.broadcast_in_dim(&wide, &keep), "interp: broadcast query")?;
-        let kv = self.wrap(self.b.constant_r1(knots), "interp: knot vector")?;
-        let kb = self.wrap(
-            kv.broadcast_in_dim(&wide, &[dims.len() as i64]),
-            "interp: broadcast knots",
-        )?;
-        let pred = match cmp {
-            CountCmp::AxisLeQuery => self.wrap(kb.le(&qb), "interp: axis <= q")?,
-            CountCmp::AxisLtQuery => self.wrap(kb.lt(&qb), "interp: axis < q")?,
-        };
-        let ones = self.wrap(pred.convert(PrimitiveType::S32), "interp: pred -> s32")?;
-        self.wrap(
-            ones.reduce_sum(&[dims.len() as i64], false),
-            "interp: count knots",
-        )
-    }
-
-    /// `values[idx]`, with `idx` an `s32` tensor over the output box.
-    fn interp_take_at(&self, values: &[f64], idx: &XlaOp) -> R<XlaOp> {
-        let v = self.wrap(self.b.constant_r1(values), "interp: table constant")?;
-        self.wrap(v.take(idx, 0), "interp: table gather")
-    }
-
-    /// `values[idx + 1]` — the upper corner of the located cell.
-    fn interp_take_next(&self, values: &[f64], idx: &XlaOp) -> R<XlaOp> {
-        let dims = self.dims(idx)?;
-        let one = self.ci32(1, &dims)?;
-        let next = self.wrap(idx.add_(&one), "interp: idx + 1")?;
-        self.interp_take_at(values, &next)
-    }
-
-    /// `w = (q - lo) / (hi - lo)`.
-    fn interp_weight(&self, q: &XlaOp, lo: &XlaOp, hi: &XlaOp) -> R<XlaOp> {
-        let num = self.wrap(q.sub_(lo), "interp: q - axis[i]")?;
-        let den = self.wrap(hi.sub_(lo), "interp: axis[i+1] - axis[i]")?;
-        self.wrap(num.div_(&den), "interp: weight")
-    }
-
-    /// §9.2's pinned blend `a + w * (b - a)`.
-    fn interp_lerp(&self, a: &XlaOp, b: &XlaOp, w: &XlaOp) -> R<XlaOp> {
-        let d = self.wrap(b.sub_(a), "interp: b - a")?;
-        let s = self.wrap(w.mul_(&d), "interp: w * (b - a)")?;
-        self.wrap(a.add_(&s), "interp: a + w * (b - a)")
-    }
-
     /// An `f64` constant with the output box's shape.
     fn splat(&self, v: f64, dims: &[usize]) -> R<XlaOp> {
         let c = self.c(v)?;
@@ -1931,47 +1672,6 @@ impl<'a> Emitter<'a> {
         }
         let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
         self.wrap(c.broadcast(&d), "interp: broadcast s32 constant")
-    }
-
-    // -- geometry ----------------------------------------------------------
-
-    /// Lower one [`Instr::PolyArea`] by evaluating it HERE, at emit time,
-    /// into a constant.
-    ///
-    /// A polygon clip has no expression in XLA's operation set, so the
-    /// emitter can take the instruction only when both ring tables are
-    /// compile-time constants: slots an [`Instr::ConstArray`] defines. It then
-    /// runs the slab executor's own [`super::geom::run_poly_area`] over those
-    /// literals (broad phase included) and emits the areas as a literal, so
-    /// the compiled program reads the same `f64`s the slab executor computes.
-    /// A table that depends on a parameter, the state or an observed is a
-    /// named refusal.
-    fn emit_poly_area(&self, a: &SrcRef, b: &SrcRef, geom: u32, out: SlotId) -> R<XlaOp> {
-        let spec = &self.prog.geoms[geom as usize];
-        let ta = self.const_table(a)?;
-        let tb = self.const_table(b)?;
-        let (sa, sb) = (rm_strides(&ta.shape), rm_strides(&tb.shape));
-        let dims = self.out_dims(out);
-        let mut areas = vec![0.0f64; dims.iter().product::<usize>().max(1)];
-        unsafe {
-            super::geom::run_poly_area(
-                spec,
-                &super::geom::RingTable {
-                    ptr: ta.values.as_ptr(),
-                    shape: &ta.shape,
-                    strides: &sa,
-                },
-                &super::geom::RingTable {
-                    ptr: tb.values.as_ptr(),
-                    shape: &tb.shape,
-                    strides: &sb,
-                },
-                areas.as_mut_ptr(),
-            );
-        }
-        let flat = self.wrap(self.b.constant_r1(&areas[..]), "polygon area: literal")?;
-        let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
-        self.wrap(flat.reshape(&d), "polygon area: reshape")
     }
 
     /// [`Instr::Count`] over a window of `m` keys the lowering proved
@@ -2033,25 +1733,6 @@ impl<'a> Emitter<'a> {
             self.wrap(top.sub_(&c), "count: suffix length")?
         };
         self.wrap(c.convert(PrimitiveType::F64), "count: s32 -> f64")
-    }
-
-    /// The literal an [`Instr::ConstArray`] stores into ring-table slot `s`,
-    /// or the refusal saying the table is not a compile-time constant.
-    fn const_table(&self, s: &SrcRef) -> R<&ConstArrayData> {
-        let not_const = || {
-            self.err(
-                "polygon_intersection_area: a ring table that is not a compile-time \
-                 constant (it depends on a parameter, the state or an observed) has no \
-                 lowering: XLA has no polygon clip",
-            )
-        };
-        let SrcRef::Slot(id) = s else {
-            return Err(not_const());
-        };
-        self.const_of
-            .get(id)
-            .map(|&data| &self.prog.const_data[data as usize])
-            .ok_or_else(not_const)
     }
 
     /// Lower one [`Instr::IndexGather`]: the subscript is rounded and

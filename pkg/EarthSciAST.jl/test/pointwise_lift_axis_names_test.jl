@@ -268,13 +268,6 @@ end
         end
     end
 
-    @testset "a whole-array fn argument stays bare" begin
-        call = _op("fn", _v("p"), _v("table"); name = "interp.searchsorted")
-        body = _lift_2d(_over(call), ["p" => ["x"], "table" => ["z"]])
-        @test _as_gather(body.args[2].args[1]) == _gather("p", "i")
-        @test body.args[2].args[2] isa ESM.VarExpr && body.args[2].args[2].name == "table"
-    end
-
     @testset "an operand of a whole-array op is refused" begin
         reshaped = _op("reshape", _v("m"); shape = [6])
         msg = _lift_error(_over(reshaped), ["m" => ["x", "y"]])

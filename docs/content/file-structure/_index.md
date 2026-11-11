@@ -17,7 +17,7 @@ valid document is a single empty component:
 
 ```json
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { "name": "Minimal" },
   "models": {
     "Empty": { "variables": {}, "equations": [] }
@@ -43,7 +43,6 @@ to simulate, but it is a legal file.
 | [`index_sets`](data-and-shape/) | Named index sets that array dimensions range over |
 | [`coordinates`](data-and-shape/) | Coordinate variables, for output |
 | [`metaparameters`](data-and-shape/) | Values bound at load |
-| [`function_tables`](data-and-shape/) | Sampled function tables with named axes |
 | [`enums`](data-and-shape/) | Symbol-to-integer maps for categorical lookups |
 | [`domain`](data-and-shape/) | The document's single temporal domain |
 
@@ -61,11 +60,14 @@ Which of the five required-alternative keys a document carries determines its
 ## What is *not* here
 
 Earlier drafts had `operators`, `registered_functions`, `grids`,
-`staggering_rules`, and `discretizations` blocks. All five are **removed**.
+`staggering_rules`, and `discretizations` blocks, and esm 1.x had
+`function_tables`. All six are **removed**.
 
 - Grid geometry is ordinary data — coordinates, extents, spacing, connectivity
   and metric arrays are loaded through `data_sources` or declared as variables,
   and topology is constructed with [`faq`](../operators/aggregation/).
 - Discretization is a [template rewrite](../templates/), not a declaration.
-- The function registry is closed and lives in the spec, not in your file. See
-  [closed functions](../operators/closed-functions/).
+- There is no function registry. Calendar fields, table interpolation and
+  polygon overlap areas are standard-library expression templates; a sampled
+  table is data passed to the `linear` / `bilinear` templates. See
+  [removed operators](../operators/closed-functions/).

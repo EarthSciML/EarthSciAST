@@ -277,9 +277,8 @@ pub struct Coordinate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 
-    /// Inline literal 1-D coordinate vector for the simple rectilinear case,
-    /// mirroring [`FunctionTableAxis::values`]. Mutually exclusive with
-    /// `source`.
+    /// Inline literal 1-D coordinate vector for the simple rectilinear case.
+    /// Mutually exclusive with `source`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<f64>>,
 
@@ -288,7 +287,7 @@ pub struct Coordinate {
     pub standard_name: Option<String>,
 
     /// CF/UDUNITS units string (e.g. `"degrees_north"`). Advisory at load
-    /// time, matching [`FunctionTableAxis::units`].
+    /// time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub units: Option<String>,
 

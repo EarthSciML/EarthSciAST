@@ -86,10 +86,10 @@ include("flatten.jl")
 include("array_shape_inference.jl")
 include("shape_promotion.jl")
 include("elementwise_lift.jl")
-# Load-time lowering passes (closed registry, templates, imports) and their
-# shared raw-JSON traversal helpers
+# Load-time lowering passes (enums, templates, imports) and their shared
+# raw-JSON traversal helpers
 include("json_walk.jl")
-include("registered_functions.jl")
+include("enum_lowering.jl")
 include("lower_expression_templates.jl")
 include("template_imports.jl")
 # Document-scoped solver hints (esm-spec §2.2): the version gate and the §2.2.2
@@ -114,16 +114,8 @@ include("resolve.jl")
 include("coupling_imports.jl")
 # Expression operations, rendering, and tooling
 include("expression.jl")
-# esm-spec §9.5.3 `table_lookup` → `interp.*` lowering. A BUILD-time pass (see
-# the file header for why it deliberately is not a load-time one like the §9.3
-# enum lowering), so it sits with the expression rewrites and is called from the
-# build front doors in simulate.jl / the two inline-test runners.
-include("lower_table_lookup.jl")
-# esm-spec §9.2 / §9.5.5 (rulings Q-106..Q-113): the closed-function argument
-# checks, the function-table checks and the `table_lookup` checks, run at LOAD
-# on every table, every `interp.*` call and every lookup, and reported by
-# `validate()`.
-include("load_time_checks.jl")
+# Walkers over every expression-bearing field of a model / reaction system.
+include("expression_fields.jl")
 # Structural interning (hash-consing) of the expression AST — perf plan A1.
 include("intern.jl")
 include("display.jl")
@@ -136,14 +128,10 @@ include("units.jl")
 include("edit.jl")
 include("codegen.jl")
 include("canonicalize.jl")
-# Build-time kernels, MTK-export glue, geometry
+# Build-time kernels, MTK-export glue
 include("relational.jl")
 include("mtk_export.jl")
-include("geometry.jl")
-include("area_faq.jl")
-# Planar spatial-index broad phase (projection-pushdown Phase 3a): a
-# dependency-free brute-force reference + the generic seam whose fast STRtree
-# method lives in EarthSciASTGeometryOpsExt.
+# Planar spatial-index broad phase (projection-pushdown Phase 3a)
 include("broad_phase.jl")
 # MTK-free runtime (tree-walk evaluator, refresh, the run Problem, cadence)
 include("tree_walk.jl")
@@ -255,7 +243,6 @@ export
     OperatorComposeAmbiguousBareNameError,
     # System types
     Domain, Reference, Metadata, EsmFile,
-    FunctionTable, FunctionTableAxis,
     # JSON functionality. `load` took a `String` that meant a FILE PATH here
     # and in Go but JSON TEXT in TypeScript and Rust — one name, one argument
     # type, opposite meanings — and `save` WROTE here while returning the
@@ -338,12 +325,8 @@ export
     canonicalize, canonical_json, format_canonical_float, CanonicalizeError,
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,
-    # Planar spatial-index broad phase (projection-pushdown Phase 3a). The fast
-    # STRtree `broad_phase_candidates(query_envs, index)` method + the
-    # `build_spatial_index` producer live in EarthSciASTGeometryOpsExt; the core
-    # `broad_phase_candidates(query_envs, cell_envs)` brute-force method is the
-    # dependency-free fallback + conformance oracle.
-    broad_phase_candidates, build_spatial_index,
+    # Planar spatial-index broad phase (projection-pushdown Phase 3a)
+    broad_phase_candidates,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
     evaluate_expr, TreeWalkError, BuildInspection,
     # DEPRECATED (API_SPEC §8 item 23, src/deprecated.jl), exported until it is
@@ -444,9 +427,6 @@ export
     # exported above — both runners have always shared the one type.
     run_inline_tests, InlineTestOptions,
     evaluate_cellwise, field_reduce,
-    # Closed function registry (esm-tzp / esm-4aw; esm-spec §9.2)
-    evaluate_closed_function, evaluate_closed_function_ad,
-    closed_function_names, ClosedFunctionError,
     # `lower_enums` is the PURE form at the canonical name (API_SPEC.md §8
     # item 15); `lower_enums!` is the in-place twin under Julia's `!`
     # convention (§2.2). Both raise `EnumLoweringError`, as every other

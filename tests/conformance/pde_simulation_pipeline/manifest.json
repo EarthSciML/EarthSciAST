@@ -374,7 +374,7 @@
         "coupling",
         "conservative-regrid",
         "polygon-intersection-area",
-        "bin-skolem-broad-phase",
+        "bin-key-broad-phase",
         "lifting",
         "operator-compose",
         "pointwise-lift",

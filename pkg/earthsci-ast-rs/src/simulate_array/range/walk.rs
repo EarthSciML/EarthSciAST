@@ -346,7 +346,7 @@ impl<'a> Walker<'a> {
                 let sets = vec![None; nd];
                 self.makearray(node, &bb, &sets, sc)
             }
-            "faq" | "aggregate" => {
+            "faq" => {
                 let out_idx: Vec<String> = node.output_idx.clone().unwrap_or_default();
                 let Some(ranges) = faq_ranges(node, &out_idx) else {
                     return self.refuse("holds a faq whose output ranges do not resolve");
@@ -473,7 +473,7 @@ impl<'a> Walker<'a> {
                 Ok(rebuilt(m, new_subs))
             }
             Expr::Operator(inner)
-                if (inner.op == "faq" || inner.op == "aggregate")
+                if (inner.op == "faq")
                     && inner.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
             {
                 let (bx, sets) = self.image_box(subs, sc, "an array-valued faq")?;
@@ -599,7 +599,7 @@ impl<'a> Walker<'a> {
     ) -> WResult<Expr> {
         match v {
             Expr::Operator(node)
-                if (node.op == "faq" || node.op == "aggregate")
+                if (node.op == "faq")
                     && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
             {
                 let out_idx = node.output_idx.clone().unwrap_or_default();
@@ -631,10 +631,7 @@ impl<'a> Walker<'a> {
                 self.faq(node, &ranges, &fsets, sc)
             }
             Expr::Operator(node)
-                if node.op != "index"
-                    && node.op != "faq"
-                    && node.op != "aggregate"
-                    && node.op != "makearray" =>
+                if node.op != "index" && node.op != "faq" && node.op != "makearray" =>
             {
                 let mut err = None;
                 let out =

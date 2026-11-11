@@ -57,7 +57,7 @@ the values are small integers up to the solver's rounding.
 The same rule with TWO output indices and no contraction, so each output cell is
 still one combination. `a_val = [1, 2]`, `c_val = [10, 20]`, and
 `two_outputs[i, g] = a_val[i] c_val[g] where a_val[i] > 1.5`, so row `i = 1` is
-0 in both columns. `two_outputs_swapped` is the same aggregate with
+0 in both columns. `two_outputs_swapped` is the same faq with
 `output_idx: ["g", "i"]`.
 
 The filter reads `a_val` through `index(a_val, i)`. Written bare, `a_val > 1.5`,
@@ -66,7 +66,7 @@ it is now rejected (`faq_bare_array_operand`,
 aligned the array-valued filter to the output box by position, found rank 1
 against two output indices and kept every term, so the filter was silently
 ignored, and Python's whole-box tier aligned it with the box's last axis. The two
-index sets here have the SAME extent and the swapped aggregate puts `i` last, so
+index sets here have the SAME extent and the swapped faq puts `i` last, so
 an evaluator that aligned the filter by position or by broadcasting rather than
 by the symbol would gate the wrong axis and fail assertions here. The values are
 exact products of small integers, asserted at `1e-12` relative.

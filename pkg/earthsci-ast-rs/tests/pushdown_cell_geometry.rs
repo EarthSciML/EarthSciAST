@@ -10,8 +10,8 @@
 //! with it — not only the four envelope bounds of the containment predicate.
 //!
 //! Polygon allocation is the shape that makes the difference visible. Its weight
-//! is `polygon_intersection_area(cell_ring[c], rec_ring[r]) / cell_area[c]`, so
-//! the body reads a rank-3 `[cells, vertex, xy]` ring stack and a rank-1 area,
+//! is `overlap_area_planar(cell_ring, c, rec_ring, r) / cell_area[c]` (the
+//! `lib/geometry.esm` template), so the body reads a rank-3 `[cells, vertex, xy]` ring stack and a rank-1 area,
 //! and neither is an envelope factor. Gathering only the envelopes leaves both
 //! pointing at the full grid while the axis is compact: full-grid values read at
 //! support positions, wrong numbers, no diagnostic anywhere.
@@ -49,11 +49,12 @@ fn doc() -> Value {
     let weight = json!({"op": "*", "args": [
         ix("emis_annual", &[json!("r")]),
         {"op": "/", "args": [
-            {"op": "polygon_intersection_area", "manifold": "planar",
-             "args": [ix("cell_ring", &[json!("c")]), ix("rec_ring", &[json!("r")])]},
+            {"op": "apply_expression_template", "args": [], "name": "overlap_area_planar",
+             "bindings": {"ring_a": "cell_ring", "cell_a": "c", "nv_a": 5,
+                          "ring_b": "rec_ring", "cell_b": "r", "nv_b": 5}},
             ix("cell_area", &[json!("c")])]}]});
     json!({
-    "esm": "1.1.0",
+    "esm": "2.0.0",
     "metadata": {"name": "pushdown_cell_geometry"},
     "data_sources": {"MockSR": {"kind": "static", "source": {"url_template": "mock://sr"}}},
     "index_sets": {
@@ -64,6 +65,8 @@ fn doc() -> Value {
         "xy": {"kind": "interval", "size": 2},
     },
     "models": {"Binned": {
+        "expression_template_imports":
+            [{"ref": "esm:std/geometry.esm", "only": ["overlap_area_planar"]}],
         "variables": {
             "src_W": param(&["src_cells"]),
             "src_S": param(&["src_cells"]),
@@ -103,6 +106,21 @@ fn doc() -> Value {
         ]}}})
 }
 
+/// [`doc`] with its template references resolved and expanded in place: the
+/// form the build pipeline hands the rewrite.
+fn expanded_doc() -> Value {
+    let raw = doc();
+    let mut d = earthsci_ast::resolve_template_machinery(
+        &raw,
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        &std::collections::BTreeMap::new(),
+    )
+    .expect("the geometry import resolves")
+    .unwrap_or(raw);
+    earthsci_ast::extension::lower_expression_templates::expand(&mut d).expect("expands");
+    d
+}
+
 fn defs(out: &Value) -> Vec<(String, Value)> {
     out["models"]["Binned"]["equations"]
         .as_array()
@@ -139,24 +157,9 @@ fn bases(node: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
-fn find_pia(node: &Value, out: &mut Vec<Value>) {
-    match node {
-        Value::Object(o) => {
-            if o.get("op").and_then(Value::as_str) == Some("polygon_intersection_area") {
-                out.push(node.clone());
-            }
-            for v in o.values() {
-                find_pia(v, out);
-            }
-        }
-        Value::Array(xs) => xs.iter().for_each(|x| find_pia(x, out)),
-        _ => {}
-    }
-}
-
 #[test]
 fn every_cell_axis_array_is_gathered_rank_preserving() {
-    let d = doc();
+    let d = expanded_doc();
     let out = desugar_pushdown(&d, Some("Binned")).expect("rewrite");
     let vars = out["models"]["Binned"]["variables"].as_object().unwrap();
     let gathers: BTreeSet<&str> = vars
@@ -205,7 +208,7 @@ fn every_cell_axis_array_is_gathered_rank_preserving() {
 
 #[test]
 fn body_reads_are_repointed_onto_the_gathers() {
-    let d = doc();
+    let d = expanded_doc();
     let out = desugar_pushdown(&d, Some("Binned")).expect("rewrite");
     let body = def_of(&out, "E_PM25");
     assert_eq!(body["ranges"]["c"]["from"], json!("pd_support__src_cells"));
@@ -219,16 +222,34 @@ fn body_reads_are_repointed_onto_the_gathers() {
     assert!(b.contains("pd_cell__src_cells__cell_ring"));
     assert!(b.contains("pd_cell__src_cells__cell_area"));
 
-    // The polygon operand keeps its SLICED spelling: the base name changed and
-    // nothing else did, which is what rank preservation buys.
-    let mut pia = Vec::new();
-    find_pia(&body, &mut pia);
-    assert_eq!(pia.len(), 1);
-    assert_eq!(
-        pia[0]["args"][0],
-        ix("pd_cell__src_cells__cell_ring", &[json!("c")])
-    );
-    assert_eq!(pia[0]["args"][1], ix("rec_ring", &[json!("r")]));
+    // The ring stack keeps its SLICED spelling: every read of it in the
+    // expanded overlap area is `index(pd_cell__src_cells__cell_ring, c, …)`,
+    // the base name changed and nothing else did, which is what rank
+    // preservation buys.
+    let mut ring_reads = Vec::new();
+    reads_of(&body, "pd_cell__src_cells__cell_ring", &mut ring_reads);
+    assert!(!ring_reads.is_empty());
+    for r in &ring_reads {
+        assert_eq!(r["args"][1], json!("c"), "{r}");
+    }
+}
+
+/// Every `index(base, …)` node reachable from `node`.
+fn reads_of(node: &Value, base: &str, out: &mut Vec<Value>) {
+    match node {
+        Value::Object(o) => {
+            if o.get("op").and_then(Value::as_str) == Some("index")
+                && o.get("args").and_then(|a| a.get(0)).and_then(Value::as_str) == Some(base)
+            {
+                out.push(node.clone());
+            }
+            for v in o.values() {
+                reads_of(v, base, out);
+            }
+        }
+        Value::Array(xs) => xs.iter().for_each(|x| reads_of(x, base, out)),
+        _ => {}
+    }
 }
 
 #[test]

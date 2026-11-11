@@ -38,20 +38,17 @@ func TestScalarOperatorsAllHaveArity(t *testing.T) {
 // TestNonPointwiseOpsAreNotScalarOperators is the load-bearing half of the set:
 // esm-spec §4.3.4 lists exactly which ops a `broadcast` fn may NOT name. Each
 // exclusion has a reason — the array ops RESHAPE, `broadcast` itself would
-// recurse forever, the form ops are consumed by lowering, and the relational /
-// geometry kernels return results of an unrelated shape.
+// recurse forever, the form ops are consumed by lowering, and the relational
+// op returns results of an unrelated shape.
 func TestNonPointwiseOpsAreNotScalarOperators(t *testing.T) {
 	for _, op := range []string{
 		// Array / tensor.
 		"faq", "makearray", "index", "broadcast", "reshape", "transpose", "concat",
-		// Closed-registry invocation.
-		"fn",
 		// Form / lowering.
-		"D", "ic", "Pre", "const", "true", "false", "enum", "table_lookup",
+		"D", "ic", "Pre", "const", "true", "false", "enum",
 		"apply_expression_template",
-		// Relational / value-invention and geometry.
-		"skolem", "rank", "distinct", "argmin", "argmax",
-		"intersect_polygon", "polygon_intersection_area",
+		// Relational / value-invention.
+		"distinct",
 		// The format has no operator aliases.
 		"**", "pow", "power", "=",
 		// Not an operator at all.
@@ -97,8 +94,7 @@ func TestCheckBroadcastFn(t *testing.T) {
 		{"reshape", bcast(strPtr("reshape"), 1), "does not name a scalar operator"},
 		{"transpose", bcast(strPtr("transpose"), 1), "does not name a scalar operator"},
 		{"concat", bcast(strPtr("concat"), 2), "does not name a scalar operator"},
-		{"geometry kernel", bcast(strPtr("intersect_polygon"), 2), "does not name a scalar operator"},
-		{"closed-fn invocation", bcast(strPtr("fn"), 1), "does not name a scalar operator"},
+		{"relational", bcast(strPtr("distinct"), 1), "does not name a scalar operator"},
 		{"derivative", bcast(strPtr("D"), 1), "does not name a scalar operator"},
 		{"alias is not an operator", bcast(strPtr("**"), 2), "does not name a scalar operator"},
 
@@ -154,8 +150,7 @@ func TestIsElementwiseNode(t *testing.T) {
 		{ExprNode{Op: "transpose", Args: []any{"a"}}, false},
 		{ExprNode{Op: "concat", Args: []any{"a", "b"}}, false},
 		{ExprNode{Op: "makearray"}, false},
-		{ExprNode{Op: "intersect_polygon", Args: []any{"a", "b"}}, false},
-		{ExprNode{Op: "fn", Args: []any{"a"}}, false},
+		{ExprNode{Op: "distinct", Args: []any{"a"}}, false},
 		{ExprNode{Op: "D", Args: []any{"a"}}, false},
 	} {
 		name := tc.node.Op
@@ -237,20 +232,52 @@ func mustRel(base, path string) string {
 
 // forEachBroadcastNode visits every `{"op": "broadcast", …}` object in a decoded
 // JSON document, normalized to an ExprNode.
+//
+// Inside an expression template's `body` a `broadcast` node's `fn` may be a
+// template PARAMETER NAME (a scalar-field substitution site, esm-spec §9.6.1),
+// bound to an operator literal only at the call site; admissibility of the bound
+// literal is checked on the expanded form (§9.6.9). Such a node is not an
+// operator reference, so it is not visited.
 func forEachBroadcastNode(doc any, visit func(ExprNode)) {
+	walkBroadcastNodes(doc, nil, visit)
+}
+
+func walkBroadcastNodes(doc any, templateParams map[string]bool, visit func(ExprNode)) {
 	switch v := doc.(type) {
 	case map[string]any:
 		if op, _ := v["op"].(string); op == opBroadcast {
-			if node, ok := asExprNode(v); ok {
+			fn, _ := v["fn"].(string)
+			if node, ok := asExprNode(v); ok && !templateParams[fn] {
 				visit(node)
 			}
 		}
-		for _, child := range v {
-			forEachBroadcastNode(child, visit)
+		for key, child := range v {
+			if key == "expression_templates" {
+				if templates, ok := child.(map[string]any); ok {
+					for _, tmpl := range templates {
+						walkBroadcastNodes(tmpl, templateParamSet(tmpl), visit)
+					}
+					continue
+				}
+			}
+			walkBroadcastNodes(child, templateParams, visit)
 		}
 	case []any:
 		for _, child := range v {
-			forEachBroadcastNode(child, visit)
+			walkBroadcastNodes(child, templateParams, visit)
 		}
 	}
+}
+
+// templateParamSet returns the declared `params` of one expression template.
+func templateParamSet(tmpl any) map[string]bool {
+	m, _ := tmpl.(map[string]any)
+	params, _ := m["params"].([]any)
+	set := make(map[string]bool, len(params))
+	for _, p := range params {
+		if name, ok := p.(string); ok {
+			set[name] = true
+		}
+	}
+	return set
 }

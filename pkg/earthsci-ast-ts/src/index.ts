@@ -347,21 +347,6 @@ export {
   E_CANONICAL_DIVBY_ZERO,
 } from './canonicalize.js'
 
-// Closed function registry (esm-spec §9.2 / RFC closed-function-registry).
-export {
-  closedFunctionNames,
-  /** @deprecated Use `closedFunctionNames()`. */
-  CLOSED_FUNCTION_NAMES,
-  ClosedFunctionError,
-  dispatchClosedFunction,
-  searchsortedFirst,
-  validateSearchsortedTable,
-  interpLinear,
-  interpBilinear,
-  validateInterpAxis,
-} from './closed-functions.js'
-export type { ClosedFunctionErrorCode } from './closed-functions.js'
-
 // Load-time enum lowering (esm-spec §9.3).
 export { lowerEnums, EnumLoweringError } from './lower-enums.js'
 

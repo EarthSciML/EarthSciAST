@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The interpolation-bracket A/B documents (issue #588), parametric in N.
 
-One ODE, three spellings of its table lookups. A column of N levels holds three
+One ODE, two spellings of its table lookups. A column of N levels holds three
 states u, v and th; each relaxes toward a table interpolated at its level's query
 height, which a persistent forcing moves so the solver never coasts:
 
@@ -13,8 +13,6 @@ composed spelling computes one bracket per level and hands it to all three.
 
 Spellings (one document each, per N):
 
-* ``interp_bracket_const_fn_N<n>.esm`` - the hand-written fast form:
-  ``interp.linear`` calls on inline ``const`` tables and axis (esm-spec 9.2).
 * ``interp_bracket_const_compose_N<n>.esm`` - the native composition as an
   author writes it, the ``bracket_index`` / ``interp_linear_bracketed`` templates
   of EqWeFiC's ``lib/table_interp.esm`` over the same tables, here observeds
@@ -22,13 +20,12 @@ Spellings (one document each, per N):
   is a rank-0 ``faq`` counting the knots at or below the query.
 * ``interp_bracket_runtime_compose_N<n>.esm`` - the same composition over an
   axis and tables the document computes from formulas of the knot index and a
-  parameter (the knot spacing dz0), so the axis is a run-time array and no
-  ``interp.linear`` spelling of it is legal (9.2's const rule); its fast
+  parameter (the knot spacing dz0), so the axis is a run-time array; its fast
   reference is a hand-written count (the Rust bench's hand loop).
 
 The fused spelling is the composition document under a compiler that recognises
 the bracket (the Rust tape's count instruction); the unfused one is the same
-document with that recognition off. All three spellings give bit-identical
+document with that recognition off. Both spellings give bit-identical
 trajectories: the knots, tables and queries are exact in binary64 or rounded
 the same way in every spelling (the const arrays are the formulas evaluated in
 the order the runtime document writes them).
@@ -53,8 +50,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COMMITTED_N = [59, 200]
-ESM_VERSION = "1.2.0"  # a unit-bearing `const` (esm-spec 4.8.5)
-SPELLINGS = ["const_fn", "const_compose", "runtime_compose"]
+ESM_VERSION = "2.0.0"
+SPELLINGS = ["const_compose", "runtime_compose"]
 
 
 def op(o, *args):
@@ -142,7 +139,7 @@ def xq_ast(l):
 
 
 # ---------------------------------------------------------------------------
-# The templates: EqWeFiC lib/table_interp.esm's linear subset, verbatim.
+# The templates: EqWeFiC lib/table_interp.esm's linear subset.
 # ---------------------------------------------------------------------------
 
 
@@ -184,7 +181,7 @@ def templates():
         },
         "interp_linear_bracketed": {
             "params": ["table", "axis", "x", "i_lo", "n"],
-            "description": "interp.linear(table, axis, x) for a run-time table and axis of n entries, given i_lo = bracket_index(axis, x, n).",
+            "description": "Linear interpolation of table over axis at x, for a run-time table and axis of n entries, given i_lo = bracket_index(axis, x, n).",
             "body": op(
                 "ifelse",
                 op("<=", "x", ix("axis", 1)),
@@ -246,41 +243,33 @@ def document(spelling, n):
     variables["xq"] = variable("unknown", "query height of each level, moved by the forcing", ["lev"])
     equations.append({"lhs": "xq", "rhs": lev_faq(xq_ast("l"))})
     top = {}
-    if spelling == "const_fn":
-        zc = const([z_py(k) for k in knots])
-        for s, tab, _ in STATES:
-            py = dict((t, p) for t, _, p in TABLES)[tab]
-            lookup = {"op": "fn", "name": "interp.linear", "args": [const([py(k) for k in knots]), zc, ix("xq", "l")]}
-            equations.append({"lhs": d_lhs(s), "rhs": relax(s, lookup)})
+    top["expression_templates"] = templates()
+    variables["z"] = variable("unknown", "the knot heights, the one axis every lookup shares", ["knot"])
+    if spelling == "const_compose":
+        equations.append({"lhs": "z", "rhs": const([z_py(k) for k in knots])})
     else:
-        top["expression_templates"] = templates()
-        variables["z"] = variable("unknown", "the knot heights, the one axis every lookup shares", ["knot"])
+        variables["dz0"] = variable("parameter", "base knot spacing", default=100.0)
+        equations.append({"lhs": "z", "rhs": faq(z_ast("k"), ["k"], {"k": {"from": "knot"}})})
+    for tab, ast, py in TABLES:
+        variables[tab] = variable("unknown", f"table {tab} at the knots", ["knot"])
         if spelling == "const_compose":
-            equations.append({"lhs": "z", "rhs": const([z_py(k) for k in knots])})
+            rhs = const([py(k) for k in knots])
         else:
-            variables["dz0"] = variable("parameter", "base knot spacing", default=100.0)
-            equations.append({"lhs": "z", "rhs": faq(z_ast("k"), ["k"], {"k": {"from": "knot"}})})
-        for tab, ast, py in TABLES:
-            variables[tab] = variable("unknown", f"table {tab} at the knots", ["knot"])
-            if spelling == "const_compose":
-                rhs = const([py(k) for k in knots])
-            else:
-                rhs = faq(ast("k"), ["k"], {"k": {"from": "knot"}})
-            equations.append({"lhs": tab, "rhs": rhs})
-        variables["ilo"] = variable("unknown", "each level's bracket on z, shared by its three lookups", ["lev"])
-        equations.append(
-            {"lhs": "ilo", "rhs": lev_faq(apply("bracket_index", axis="z", x=ix("xq", "l"), n=n))}
+            rhs = faq(ast("k"), ["k"], {"k": {"from": "knot"}})
+        equations.append({"lhs": tab, "rhs": rhs})
+    variables["ilo"] = variable("unknown", "each level's bracket on z, shared by its three lookups", ["lev"])
+    equations.append(
+        {"lhs": "ilo", "rhs": lev_faq(apply("bracket_index", axis="z", x=ix("xq", "l"), n=n))}
+    )
+    for s, tab, _ in STATES:
+        lookup = apply(
+            "interp_linear_bracketed", table=tab, axis="z", x=ix("xq", "l"), i_lo=ix("ilo", "l"), n=n
         )
-        for s, tab, _ in STATES:
-            lookup = apply(
-                "interp_linear_bracketed", table=tab, axis="z", x=ix("xq", "l"), i_lo=ix("ilo", "l"), n=n
-            )
-            equations.append({"lhs": d_lhs(s), "rhs": relax(s, lookup)})
+        equations.append({"lhs": d_lhs(s), "rhs": relax(s, lookup)})
     model = dict(top)
     model["variables"] = variables
     model["equations"] = equations
     what = {
-        "const_fn": "interp.linear on inline const tables (the hand-written fast form)",
         "const_compose": "the bracket_index / interp_linear_bracketed composition over const tables",
         "runtime_compose": "the bracket_index / interp_linear_bracketed composition over computed tables",
     }[spelling]

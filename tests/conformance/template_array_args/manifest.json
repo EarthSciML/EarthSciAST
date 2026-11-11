@@ -2,7 +2,7 @@
  "category": "template_array_args",
  "runner": "inline_tests",
  "version": "1.0",
- "description": "An expression template of lib/interp.esm applied with an array bound to a scalar-role parameter (esm-spec \u00a79.6.11): the application is evaluated elementwise over the array's index sets, and every element equals the `interp.*` closed function at that element's argument, bit for bit (tolerance 0). Covers a 1-D query defining a shaped and an unshaped observed, the application inside larger arithmetic and on an expression argument, a 3-D query, a level column replicated over a 3-D field, `bilinear` with one and with both coordinates arrays (1-D and 2-D), and `searchsorted`.",
+ "description": "An expression template of lib/interp.esm applied with an array bound to a scalar-role parameter (esm-spec \u00a79.6.11): the application is evaluated elementwise over the array's index sets, and every element equals the template applied to that element's argument as a scalar, bit for bit (tolerance 0). Covers a 1-D query defining a shaped and an unshaped observed, the application inside larger arithmetic and on an expression argument, a 3-D query, a level column replicated over a 3-D field, `bilinear` with one and with both coordinates arrays (1-D and 2-D), and `searchsorted`.",
  "reference_binding": "julia",
  "reference_compiler": "interpreter",
  "bindings_required": [
@@ -34,7 +34,7 @@
  "tolerances": {
   "golden_rtol": 0,
   "golden_atol": 0,
-  "detail": "Every asserted value is the `interp.*` closed function's binary64 result at that element, matched bit for bit."
+  "detail": "Every asserted value is the scalar template's binary64 result at that element, matched bit for bit."
  },
  "fixtures": [
   {

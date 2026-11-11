@@ -1,5 +1,5 @@
 {
- "esm": "1.0.0",
+ "esm": "2.0.0",
  "metadata": {
   "name": "GapBPlainRead",
   "description": "Variant: the sibling model READS a species directly (conc_A = Rs.A) with no D. Isolates whether the missing variable-dictionary entry is specific to the D(species, t) form.",

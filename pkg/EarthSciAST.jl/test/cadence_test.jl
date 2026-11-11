@@ -215,10 +215,7 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         rhs = Dict{String, Any}(
             "op" => "faq", "distinct" => true, "semiring" => "bool_and_or",
             "output_idx" => Any["e"], "ranges" => Dict{String, Any}("f" => Dict{String, Any}("from" => "faces")),
-            "key" => Dict{String, Any}(
-                "op" => "skolem", "label" => "edge",
-                "args" => Any[Dict{String, Any}("op" => "index", "args" => Any["u", "f"])]
-            ),
+            "key" => Dict{String, Any}("op" => "index", "args" => Any["u", "f"]),
             "expr" => Dict{String, Any}("op" => "true", "args" => Any[])
         )
         @test _Cadence.classify(rhs, model) == "continuous"
@@ -233,11 +230,6 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         # guard lives in run_guards (not partition_model).
         fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "faq", "continuous_relational_node.esm")
         model = _Cadence.load_model_json(fixture, "ContinuousRelationalNode")
-        @test_throws _Cadence.CadenceError _CadPass.run_guards(model)
-        # Its template-rewrite twin keys on the bare integer `u[f]` instead of a
-        # one-component skolem, and is refused the same way.
-        twin = joinpath(dirname(fixture), "continuous_relational_node_template.esm")
-        model = _Cadence.load_model_json(twin, "ContinuousRelationalNode")
         @test_throws _Cadence.CadenceError _CadPass.run_guards(model)
     end
 

@@ -104,7 +104,7 @@ fn shadowing_doc(sub_units: Option<&str>) -> serde_json::Value {
         sub_x["units"] = serde_json::json!(u);
     }
     serde_json::json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": { "name": "Shadow", "authors": ["test"] },
         "models": {
             "A": {
@@ -170,7 +170,7 @@ fn reaction_doc(rate: &str, other_units: &str, sub_units: Option<&str>) -> serde
         });
     }
     serde_json::json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": { "name": "Rates", "authors": ["test"] },
         "models": {
             "Other": {

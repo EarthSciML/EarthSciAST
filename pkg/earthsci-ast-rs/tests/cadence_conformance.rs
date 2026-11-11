@@ -117,19 +117,15 @@ fn rust_partition_matches_golden() {
 /// marks it `resolver_only`). Bead ess-my4.3.11.
 #[test]
 fn rust_rejects_continuous_relational_fixture() {
-    // The template twin writes the skolem key as the bare integer `u[f]`.
-    for rel in [
-        "tests/invalid/faq/continuous_relational_node.esm",
-        "tests/invalid/faq/continuous_relational_node_template.esm",
-    ] {
-        let doc = load_json(rel);
-        let model = &doc["models"]["ContinuousRelationalNode"];
-        let err = partition_model(model)
-            .expect_err("a CONTINUOUS-classified relational node must be rejected (guard 2)");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("CONTINUOUS"),
-            "{rel}: rejection should name the CONTINUOUS class, got: {msg}"
-        );
-    }
+    // The key is the bare integer `u[f]`.
+    let rel = "tests/invalid/faq/continuous_relational_node.esm";
+    let doc = load_json(rel);
+    let model = &doc["models"]["ContinuousRelationalNode"];
+    let err = partition_model(model)
+        .expect_err("a CONTINUOUS-classified relational node must be rejected (guard 2)");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("CONTINUOUS"),
+        "{rel}: rejection should name the CONTINUOUS class, got: {msg}"
+    );
 }

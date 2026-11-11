@@ -1076,8 +1076,8 @@ fn collect_graph_variables(expr: &crate::Expr, out: &mut std::collections::HashS
 ///
 /// Walks the full canonical child set
 /// ([`crate::types::ExpressionNode::for_each_child`]) so variables inside
-/// aggregate bodies, `filter` predicates, integral bounds, makearray `values`,
-/// and `table_lookup` axes all contribute graph edges.
+/// aggregate bodies, `filter` predicates, integral bounds and makearray
+/// `values` all contribute graph edges.
 ///
 /// Deliberately NOT [`crate::expression::collect_variables`]. That collector
 /// reports every bare name it reaches, so a `faq`'s own range binders
@@ -1726,7 +1726,7 @@ mod tests {
     #[test]
     fn test_data_sources_contribute_no_nodes() {
         let json = r#"{
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": { "name": "ds" },
             "data_sources": {
                 "GEOSFP": {

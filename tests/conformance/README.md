@@ -63,7 +63,7 @@ tests/conformance/
 │   ├── manifest.json
 │   ├── fixtures/<id>.esm
 │   └── golden/<id>.json            #   the right-hand side at the initial state, bit for bit
-├── datetime_templates/            # lib/calendar.esm templates bit-for-bit against the datetime.* scenarios (CONFORMANCE_SPEC §5.45.4)
+├── datetime_templates/            # lib/calendar.esm templates bit-for-bit against the tests/closed_functions/datetime scenarios (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract
 │   ├── manifest.json               #   `"runner": "inline_tests"`; its nine documents are REFERENCED from tests/closed_functions/datetime/<fn>/template.esm
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
@@ -82,7 +82,7 @@ tests/conformance/
 │   ├── manifest.json               #   `"runner": "inline_tests"`
 │   ├── fixtures/<id>.esm
 │   ├── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
-│   └── coupled/{fn,template}.esm   #   the coupled case, compared bit for bit by each binding's own test
+│   └── coupled/template.esm        #   the coupled case, compared bit for bit by each binding's own test
 ├── relational_templates/          # lib/relational.esm argmin/argmax templates: ties, NaN, the nearest-generator document (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract
 │   ├── generate.py                 #   writes scenarios.json and the two fixtures
@@ -95,9 +95,9 @@ tests/conformance/
 │   ├── manifest.json               #   `"runner": "inline_tests"`
 │   ├── fixtures/<id>.esm           #   one document: three scalar reductions, one filtered
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
-├── deprecated_op_alias/            # the `aggregate` -> `faq` alias contract (esm 1.1.0)
-│   ├── aliased.esm                 #   input, authored with the deprecated spelling
-│   ├── canonical.esm               #   expected output, and a no-warning input
+├── removed_spellings/              # `aggregate` and `arrayop` rejected with `removed_op`, root and `{ref}` child
+│   ├── canonical.esm               #   the `faq` spelling: loads, no diagnostic, emit fixed point
+│   ├── ref_parent_*.esm, ref_child_*.esm  #   a removed spelling in a referenced child
 │   └── manifest.json
 ├── dimensionless_literal/          # the bare-literal-is-dimensionless WARNING stage (esm-spec §4.8.6)
 │   ├── fixtures/dimensionless_literal.esm  #   one equation per pattern class, plus controls; valid
@@ -157,7 +157,7 @@ Classification of every stage in `scripts/test-conformance.sh`:
 | `inline-test self-test` | reference-comparing — every committed golden must reproduce the DOCUMENT's own `expected` at each assertion's resolved §6.6.4 band, so a golden minted from a broken build cannot sit there agreeing with itself; the negative controls assert the harness rejects a value off its band, a missing assertion, an assertion the binding itself failed, a `passed` on a value outside the document's band, an error, an unnamed refusal, a refusal whose code drifted, a per-fixture `compiler_unavailable` and a malformed golden, and that `--write-golden` refuses a failed or non-finite reference assertion |
 | `inline-test <compiler> producer (<binding>)` | **reference-comparing** twice over: each binding's `actual` against the document's authored `expected` (an oracle outside every binding), by the runner's own §6.6.3 predicate with the binding's `passed` required to agree, and its `actual` against the Julia-`interpreter` golden. For Rust and Python the golden leg is additionally **cross-binding-agreeing**; the authored expectation is what keeps a shared wrong answer visible. A refusal is a **named exclusion** in the report, never a silent skip (CONFORMANCE_SPEC §5.45.3) |
 | `recurrence` (`recurrence/`, an inline-test tier driven by `scripts/run-inline-tests-conformance.py`) | **reference-comparing** — every assertion is a value pinned at zero tolerance, several against an INDEPENDENT oracle (`07`'s ascending fold in Python) rather than against another binding. Bit-identity is available here (CONFORMANCE_SPEC §5.19.1), so cross-binding agreement is a consequence of each binding matching the reference, not the test |
-| `deprecated_op_alias` (`deprecated_op_alias/manifest.json`, driven by each binding's own suite) | **reference-comparing** — `canonical.esm` is a committed golden outside the bindings, and the alias input must emit byte-identically to it. The warning-count assertion is a per-binding classification (CONFORMANCE_SPEC §7), not a wire format. |
+| `removed_spellings` (`removed_spellings/manifest.json`, driven by each binding's own suite) | **reference-comparing** — `canonical.esm` must load and emit byte-identically to itself; every other case is a rejection with `removed_op` (CONFORMANCE_SPEC §7). |
 | `dimensionless_literal` (`dimensionless_literal/manifest.json`, driven by each binding's own suite) | **reference-comparing** — the authored fixture's warning pointers follow from its construction (one equation per pattern class, each with a known verdict), and the ten `tests/valid` pins match the 2026-10-27 impact study, which ran a separately patched checker. All five bindings compare against the same golden, so a binding cannot pass by agreeing with itself. |
 | **round-trip** (`round_trip/manifest.json`, below) | **reference-comparing** since the original fixture `F` became the oracle (was self-comparing) |
 

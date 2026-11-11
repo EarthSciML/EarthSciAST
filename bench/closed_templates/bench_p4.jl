@@ -1,13 +1,13 @@
 # Closed-AST phase-4 benchmarks, Julia native side.
 #
-# Times the documents generate_p4.py writes (and generate.py's `nearest_*` pair):
-# one right-hand-side call of each spelling under `:native`, its build, and,
+# Times the template documents generate_p4.py writes (and generate.py's
+# `nearest_tpl_*`): one right-hand-side call under `:native`, its build, and,
 # where the workload has one, a hand-written loop and an external library
-# (Base `searchsortedfirst`, Interpolations.jl, Dates, GeometryOps) computing
-# the same derivative from the sidecar data. Every spelling's derivative is
-# checked against the closed form's bits (the geometry leaf and the external
-# libraries by their largest difference), and the template's against the
-# interpreter's when INTERP_CHECK=1.
+# (Base `searchsortedfirst`, Interpolations.jl, Dates, GeometryOps for the
+# planar overlap) computing the same derivative from the sidecar data. The
+# hand-written loops are checked against the template's bits, the external
+# libraries by their largest difference, and the template against the
+# interpreter when INTERP_CHECK=1.
 #
 # Usage (an environment with EarthSciAST, JSON3, GeometryOps, GeoInterface and
 # Interpolations):
@@ -36,7 +36,7 @@ const DIR = let given = length(ARGS) > 1 && ARGS[2] != "-" ? ARGS[2] : nothing
     if FAMILY == "nearest"
         bench_docs(
             "generate.py", given, ["--only", "nearest"]; env = "CLOSED_TEMPLATES_DIR",
-            name = "closed_templates", prefix = "nearest_"
+            name = "closed_templates", prefix = "nearest_tpl_"
         )
     else
         prefix = FAMILY == "search" ? "search_" : FAMILY * "_"
@@ -169,32 +169,32 @@ function bisect_below(axis, x)
 end
 
 function run_search()
-    for sz in sizes("search_fn_")
+    for sz in sizes("search_tpl_")
         p(sp) = joinpath(DIR, "search_$(sp)_$(sz).esm")
         d = data("search_$sz")
         axis, c = f64(d.axis), f64(d.c)
-        f, tb, tl, tf = build(p("fn")), build(p("tpl")), build(p("lin")), build(p("tpl"); compiler = NOFOLD)
-        ref = dy(f, TB)
-        idx = slotidx.(f.names)
-        u = f.u0
+        tb, tl, tf = build(p("tpl")), build(p("lin")), build(p("tpl"); compiler = NOFOLD)
+        ref = dy(tb, TB)
+        idx = slotidx.(tb.names)
+        u = tb.u0
         du = similar(u)
         hand(t, how) = for (s, q) in enumerate(idx)
             x = (c[q] + u[s]) + 0.001 * t
             below = how == 0 ? count_below(axis, x) : how == 1 ? bisect_below(axis, x) : searchsortedfirst(axis, x) - 1
             du[s] = Float64(1 + below) - u[s]
         end
-        ok = same(dy(tb, TB), ref) && same(dy(tl, TB), ref) && same(dy(tf, TB), ref)
+        ok = same(dy(tl, TB), ref) && same(dy(tf, TB), ref)
         for how in 0:2
             hand(TB, how)
             ok &= same(du, ref)
         end
         orc = oracle(p("lin"), tl)
-        ts = map(time_model, (f, tb, tl, tf))
+        ts = map(time_model, (tb, tl, tf))
         hs = map(how -> per_call_ns(k -> hand(tof(k), how)), (0, 1, 2))
         row(
-            sz, "fn", ts[1], "tpl_binary", ts[2], "tpl_linear", ts[3], "tpl_fold", ts[4],
+            sz, "tpl_binary", ts[1], "tpl_linear", ts[2], "tpl_fold", ts[3],
             "hand_linear", hs[1], "hand_binary", hs[2], "searchsortedfirst", hs[3],
-            "bits", ok, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tb)
+            "bits", ok, "oracle", orc, "setup_tpl", setup_s(tb)
         )
     end
     return
@@ -250,27 +250,27 @@ function bilinear_loops(d, idx, u, du, c)
 end
 
 function run_interp(family)
-    for sz in sizes("$(family)_fn_")
+    for sz in sizes("$(family)_tpl_")
         p(sp) = joinpath(DIR, "$(family)_$(sp)_$(sz).esm")
         d = data("$(family)_$sz")
-        f, tp = build(p("fn")), build(p("tpl"))
-        ref = dy(f, TB)
-        idx = slotidx.(f.names)
-        u = f.u0
+        tp = build(p("tpl"))
+        ref = dy(tp, TB)
+        idx = slotidx.(tp.names)
+        u = tp.u0
         du = similar(u)
         c = f64(d.c)
         hand, ext = family == "linear" ? linear_loops(d, idx, u, du, c) : bilinear_loops(d, idx, u, du, c)
         hand(TB)
-        ok = same(dy(tp, TB), ref) && same(du, ref)
+        ok = same(du, ref)
         ext(TB)
         acc = maxdiff(du, ref)
         orc = oracle(p("tpl"), tp)
-        a, b = time_model(f), time_model(tp)
+        b = time_model(tp)
         h = per_call_ns(k -> hand(tof(k)))
         x = per_call_ns(k -> ext(tof(k)))
         row(
-            sz, "fn", a, "tpl", b, "hand", h, "Interpolations", x, "maxdiff_Interpolations", acc,
-            "bits", ok, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tp)
+            sz, "tpl", b, "hand", h, "Interpolations", x, "maxdiff_Interpolations", acc,
+            "bits", ok, "oracle", orc, "setup_tpl", setup_s(tp)
         )
     end
     return
@@ -304,71 +304,61 @@ function dates_calendar(t)
 end
 
 function run_calendar()
-    for sz in sizes("calendar_fn_")
+    for sz in sizes("calendar_tpl_")
         p(sp) = joinpath(DIR, "calendar_$(sp)_$(sz).esm")
         t0 = Float64(data("calendar_$sz").T0)
-        f, tp = build(p("fn")), build(p("tpl"))
-        ref = dy(f, TB)
-        idx = slotidx.(f.names)
-        u = f.u0
+        tp = build(p("tpl"))
+        ref = dy(tp, TB)
+        idx = slotidx.(tp.names)
+        u = tp.u0
         du = similar(u)
         run(t, g) = for (s, h) in enumerate(idx)
             du[s] = g((t0 + 3600.0 * (h - 1)) + (t + u[s])) - u[s]
         end
-        okt = same(dy(tp, TB), ref)
         run(TB, hand_calendar)
         okh = same(du, ref)
         run(TB, dates_calendar)
         accd = maxdiff(du, ref)
         orc = oracle(p("tpl"), tp)
-        a, b = time_model(f), time_model(tp)
+        b = time_model(tp)
         h = per_call_ns(k -> run(tof(k), hand_calendar))
         x = per_call_ns(k -> run(tof(k), dates_calendar))
         row(
-            sz, "fn", a, "tpl", b, "hand", h, "Dates", x, "bits_tpl", okt, "bits_hand", okh,
-            "maxdiff_Dates", accd, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tp)
+            sz, "tpl", b, "hand", h, "Dates", x, "bits_hand", okh,
+            "maxdiff_Dates", accd, "oracle", orc, "setup_tpl", setup_s(tp)
         )
     end
     return
 end
 
-function go_area(a, b, manifold)
-    if manifold == "planar"
-        pa = GI.Polygon([GI.LinearRing([(v[1], v[2]) for v in vcat(a, a[1:1])])])
-        pb = GI.Polygon([GI.LinearRing([(v[1], v[2]) for v in vcat(b, b[1:1])])])
-        res = GO.intersection(GO.ConvexConvexSutherlandHodgman(GO.Planar()), pa, pb; target = GI.PolygonTrait())
-        poly = res isa AbstractVector ? (isempty(res) ? nothing : first(res)) : res
-        return poly === nothing ? 0.0 : GO.area(poly)
-    else
-        ext = Base.get_extension(E, :EarthSciASTGeometryOpsExt)
-        ma = permutedims(reduce(hcat, [collect(v) for v in a]))
-        mb = permutedims(reduce(hcat, [collect(v) for v in b]))
-        ring = ext._spherical_clip_geometryops(ma, mb, "spherical")
-        return size(ring, 1) < 3 ? 0.0 : E.polygon_area(ring, "spherical")
-    end
+# The planar overlap area by GeometryOps' convex clip.
+function go_area(a, b)
+    pa = GI.Polygon([GI.LinearRing([(v[1], v[2]) for v in vcat(a, a[1:1])])])
+    pb = GI.Polygon([GI.LinearRing([(v[1], v[2]) for v in vcat(b, b[1:1])])])
+    res = GO.intersection(GO.ConvexConvexSutherlandHodgman(GO.Planar()), pa, pb; target = GI.PolygonTrait())
+    poly = res isa AbstractVector ? (isempty(res) ? nothing : first(res)) : res
+    return poly === nothing ? 0.0 : GO.area(poly)
 end
 
 function run_overlap()
-    for sz in sizes("overlap_planar_leaf_")
+    for sz in sizes("overlap_planar_tpl_")
         d = data("overlap_$sz")
         ra = [[f64(v) for v in r] for r in d.ring_a]
         rb = [[f64(v) for v in r] for r in d.ring_b]
         for mf in ("planar", "spherical")
-            p(sp) = joinpath(DIR, "overlap_$(mf)_$(sp)_$(sz).esm")
-            leaf, tp = build(p("leaf")), build(p("tpl"))
-            al, at = dy(leaf, TB), dy(tp, TB)
-            idx = slotidx.(leaf.names)
-            areas = [go_area(ra[q], rb[q], mf) for q in idx]
-            orc = length(ra) <= 200 ? oracle(p("tpl"), tp) : "skipped"
-            cl, ct = time_model(leaf), time_model(tp)
+            tp = build(joinpath(DIR, "overlap_$(mf)_tpl_$(sz).esm"))
+            at = dy(tp, TB)
+            orc = length(ra) <= 200 ? oracle(joinpath(DIR, "overlap_$(mf)_tpl_$(sz).esm"), tp) : "skipped"
+            ct = time_model(tp)
             n = length(ra)
-            g = per_call_ns(k -> go_area(ra[k % n + 1], rb[k % n + 1], mf))
-            row(
-                mf, sz, "pairs", n, "setup_leaf", setup_s(leaf), "setup_tpl", setup_s(tp),
-                "call_leaf", cl, "call_tpl", ct, "GeometryOps_per_pair", g,
-                "maxdiff_tpl_leaf", maxdiff(at, al), "maxdiff_GO_leaf", maxdiff(areas, al),
-                "maxdiff_GO_tpl", maxdiff(areas, at), "oracle", orc
-            )
+            fields = Any[mf, sz, "pairs", n, "setup_tpl", setup_s(tp), "call_tpl", ct, "oracle", orc]
+            if mf == "planar"
+                idx = slotidx.(tp.names)
+                areas = [go_area(ra[q], rb[q]) for q in idx]
+                g = per_call_ns(k -> go_area(ra[k % n + 1], rb[k % n + 1]))
+                append!(fields, ("GeometryOps_per_pair", g, "maxdiff_GO_tpl", maxdiff(areas, at)))
+            end
+            row(fields...)
         end
     end
     return
@@ -381,31 +371,31 @@ function const_eq(doc, var)
 end
 
 function run_nearest()
-    for sz in sizes("nearest_op_")
+    for sz in sizes("nearest_tpl_")
         p(sp) = joinpath(DIR, "nearest_$(sp)_$(sz).esm")
-        doc = JSON3.read(read(p("op"), String))
+        doc = JSON3.read(read(p("tpl"), String))
         px, py, gx, gy = (const_eq(doc, v) for v in ("px", "py", "gx", "gy"))
-        o, tp = build(p("op")), build(p("tpl"))
-        ref = dy(o, TB)
-        idx = slotidx.(o.names)
-        w = o.u0
+        tp = build(p("tpl"))
+        ref = dy(tp, TB)
+        idx = slotidx.(tp.names)
+        w = tp.u0
         du = similar(w)
-        # The assignment depends only on const data, so both compilers compute
-        # it once at build; the hand-written version does the same: an argmin
-        # per point at setup, a gather per call.
+        # The assignment depends only on const data, so the compiler computes
+        # it once at build; the hand-written version does the same: a nearest
+        # search per point at setup, a gather per call.
         assign = nearest_assign(px, py, gx, gy)
         setup = per_call_ns(_ -> nearest_assign(px, py, gx, gy))
         hand = () -> @inbounds for (s, i) in enumerate(idx)
             du[s] = gx[assign[i]] - w[s]
         end
         hand()
-        ok = same(dy(tp, TB), ref) && same(du, ref)
+        ok = same(du, ref)
         orc = oracle(p("tpl"), tp)
-        a, b = time_model(o), time_model(tp)
+        b = time_model(tp)
         h = per_call_ns(_ -> hand())
         row(
-            sz, "op", a, "tpl", b, "hand", h, "hand_setup_s", setup / 1.0e9, "bits", ok, "oracle", orc,
-            "setup_op", setup_s(o), "setup_tpl", setup_s(tp)
+            sz, "tpl", b, "hand", h, "hand_setup_s", setup / 1.0e9, "bits", ok, "oracle", orc,
+            "setup_tpl", setup_s(tp)
         )
     end
     return
@@ -428,33 +418,22 @@ function nearest_assign(px, py, gx, gy)
 end
 
 function run_fastjx()
-    for sz in sizes("fastjx_fn_")
-        p(sp) = joinpath(DIR, "fastjx_$(sp)_$(sz).esm")
-        f, tp = build(p("fn")), build(p("tpl"))
-        ok = same(dy(tp, TB), dy(f, TB))
-        orc = oracle(p("tpl"), tp)
-        a, b = time_model(f), time_model(tp)
+    for sz in sizes("fastjx_tpl_")
+        tp = build(joinpath(DIR, "fastjx_tpl_$(sz).esm"))
+        orc = oracle(joinpath(DIR, "fastjx_tpl_$(sz).esm"), tp)
         row(
-            sz, "lookups", data("fastjx_$sz").lookups, "fn", a, "tpl", b, "bits", ok, "oracle", orc,
-            "setup_fn", setup_s(f), "setup_tpl", setup_s(tp)
+            sz, "lookups", data("fastjx_$sz").lookups, "tpl", time_model(tp), "oracle", orc,
+            "setup_tpl", setup_s(tp)
         )
     end
     return
 end
 
 function run_size()
-    for (fam, closed) in (
-            ("searchsorted", "fn"), ("linear", "fn"), ("bilinear", "fn"), ("calendar", "fn"),
-            ("argmin", "op"), ("overlap_planar", "leaf"), ("mixed", "fn"),
-        )
-        for sz in sizes("size_$(fam)_$(closed)_")
-            p(sp) = joinpath(DIR, "size_$(fam)_$(sp)_$(sz).esm")
-            c, tp = build(p(closed)), build(p("tpl"))
-            d = maxdiff(dy(tp, TB), dy(c, TB))
-            row(
-                fam, sz, "setup_closed", setup_s(c), "setup_tpl", setup_s(tp), "call_closed", time_model(c),
-                "call_tpl", time_model(tp), "maxdiff", d
-            )
+    for fam in ("searchsorted", "linear", "bilinear", "calendar", "argmin", "overlap_planar", "mixed")
+        for sz in sizes("size_$(fam)_tpl_")
+            tp = build(joinpath(DIR, "size_$(fam)_tpl_$(sz).esm"))
+            row(fam, sz, "setup_tpl", setup_s(tp), "call_tpl", time_model(tp))
         end
     end
     return

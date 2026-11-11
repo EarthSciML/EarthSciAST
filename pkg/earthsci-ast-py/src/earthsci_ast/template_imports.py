@@ -292,9 +292,7 @@ _REGISTRY_KEYS = frozenset(
     {
         "reduce",
         "semiring",
-        "manifold",
         "fn",
-        "table",
         "side",
         "attrs",
         "members",
@@ -316,11 +314,8 @@ _OPAQUE_KEYS = frozenset(
         # skipped rather than left to that check.
         "on",
         "syms",
-        "arg",
         "output_idx",
         "of",
-        # A `table_lookup` output name.
-        "output",
         "handler_id",
         # References to files, components, data sources, data columns and the
         # import-edge rename vocabulary.
@@ -391,7 +386,6 @@ _NAME_KEYED_MAP_KEYS = frozenset(
         "subsystems",
         "expression_templates",
         "ranges",
-        "axes",
         "bindings",
         "config",
         "coords",
@@ -1740,7 +1734,7 @@ def _lower_library_template_body(library: Any, name: str, decl: Any, body: Any, 
     open_names = (
         frozenset(p for p in params if isinstance(p, str)) if _is_array(params) else frozenset()
     )
-    from .registered_functions import EnumLoweringError, lower_enum_ops_for_file
+    from .enums import EnumLoweringError, lower_enum_ops_for_file
 
     try:
         return lower_enum_ops_for_file(library, body, open_names)

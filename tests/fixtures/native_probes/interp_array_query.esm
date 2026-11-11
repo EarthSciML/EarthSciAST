@@ -1,8 +1,8 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "native_probe_interp_array_query",
-    "description": "A scalar lookup component mounted on a grid, the shape of FastJX's actinic-flux lookups in reseact (issue #660): Photo's scalar parameters x and y are coupled (param_to_var) to the gridded states Grid.a and Grid.b, so its unshaped observeds F = interp.bilinear(table, axis_x, axis_y, x, y), G = interp.linear(row, axis_y, y) and S = interp.searchsorted(y, axis_y) take an array-valued query and are evaluated elementwise, one lookup per cell. Their sum feeds back into Grid.z. Over t in [0, 1] the queries sweep below, inside and above both axes.",
+    "description": "A scalar lookup component mounted on a grid, the shape of FastJX's actinic-flux lookups in reseact (issue #660): Photo's scalar parameters x and y are coupled (param_to_var) to the gridded states Grid.a and Grid.b, so its unshaped observeds F, G and S (the `bilinear`, `linear` and `searchsorted` templates of esm:std/interp.esm over `table`, `row`, `axis_x` and `axis_y`) take an array-valued query and are evaluated elementwise, one lookup per cell. Their sum feeds back into Grid.z. Over t in [0, 1] the queries sweep below, inside and above both axes.",
     "authors": [
       "EarthSciML"
     ],
@@ -233,6 +233,16 @@
       ]
     },
     "Photo": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/interp.esm",
+          "only": [
+            "bilinear",
+            "linear",
+            "searchsorted"
+          ]
+        }
+      ],
       "variables": {
         "x": {
           "type": "parameter",
@@ -265,10 +275,11 @@
         {
           "lhs": "F",
           "rhs": {
-            "op": "fn",
-            "name": "interp.bilinear",
-            "args": [
-              {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
                 "op": "const",
                 "args": [],
                 "value": [
@@ -292,7 +303,7 @@
                   ]
                 ]
               },
-              {
+              "axis_x": {
                 "op": "const",
                 "args": [],
                 "value": [
@@ -301,7 +312,7 @@
                   2.0
                 ]
               },
-              {
+              "axis_y": {
                 "op": "const",
                 "args": [],
                 "value": [
@@ -311,18 +322,21 @@
                   30.0
                 ]
               },
-              "x",
-              "y"
-            ]
+              "x": "x",
+              "y": "y",
+              "nx": 3,
+              "ny": 4
+            }
           }
         },
         {
           "lhs": "G",
           "rhs": {
-            "op": "fn",
-            "name": "interp.linear",
-            "args": [
-              {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
                 "op": "const",
                 "args": [],
                 "value": [
@@ -332,7 +346,7 @@
                   13.0
                 ]
               },
-              {
+              "axis": {
                 "op": "const",
                 "args": [],
                 "value": [
@@ -342,18 +356,20 @@
                   30.0
                 ]
               },
-              "y"
-            ]
+              "x": "y",
+              "n": 4
+            }
           }
         },
         {
           "lhs": "S",
           "rhs": {
-            "op": "fn",
-            "name": "interp.searchsorted",
-            "args": [
-              "y",
-              {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "y",
+              "xs": {
                 "op": "const",
                 "args": [],
                 "value": [
@@ -362,8 +378,9 @@
                   25.0,
                   30.0
                 ]
-              }
-            ]
+              },
+              "n": 4
+            }
           }
         },
         {

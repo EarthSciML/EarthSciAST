@@ -5,7 +5,6 @@
 //! why the boundary sits here: the kernels it drives know pointers and
 //! strides and nothing about the program.
 
-use super::super::geom::{RingTable, run_poly_area};
 use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
 #[cfg(not(target_arch = "wasm32"))]
 use super::kernels::scan_leading_cols;
@@ -14,19 +13,10 @@ use super::kernels::{
     ew1, ew2, exec_gather, fill_strided, index_gather, reduce_axis, reduce_rows, scan_axis,
     seg_reduce, table_gather,
 };
-use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides, src_base};
+use super::resolve::{Rv, resolve_rv, resolve_scalar, resolve_src, rm_strides, src_base};
 use super::*;
 use crate::simulate_array::eval::{latch_gather_fault, latch_ordered_fault};
 use rustc_hash::{FxHashMap, FxHashSet};
-
-/// A resolved source viewed as a ring table.
-fn ring_table(v: &SrcView) -> RingTable<'_> {
-    RingTable {
-        ptr: v.ptr,
-        shape: &v.shape,
-        strides: &v.strides,
-    }
-}
 
 /// Write a recurrence sweep's current (0-based) cell into its coordinate
 /// slots, 1-based, as the interpreter binds the frame symbols.
@@ -1486,29 +1476,6 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 }
             }
         }
-        Instr::Interp { table, x, y, out } => {
-            let tbl = &prog.interp_tables[*table as usize];
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
-            if desc.scalar {
-                let xv = resolve_scalar(x, env, slab_ptr, slot_off);
-                let yv = y.map_or(f64::NAN, |y| resolve_scalar(&y, env, slab_ptr, slot_off));
-                unsafe { *slab_ptr.add(off) = tbl.at(xv, yv) };
-            } else {
-                let xv = resolve_rv(x, &desc.shape, env, slab_ptr, slot_off);
-                let dst = unsafe { slab_ptr.add(off) };
-                let sh = &desc.shape;
-                match y {
-                    // `y` is read only by `interp.bilinear`; the other two
-                    // entries never look at it.
-                    None => unsafe { ew1(dst, sh, &xv, |a| tbl.at(a, f64::NAN)) },
-                    Some(y) => {
-                        let yv = resolve_rv(y, &desc.shape, env, slab_ptr, slot_off);
-                        unsafe { ew2(dst, sh, &xv, &yv, |a, b| tbl.at(a, b)) }
-                    }
-                }
-            }
-        }
         Instr::Count {
             rel,
             axis,
@@ -1543,18 +1510,6 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 let xv = resolve_rv(x, &desc.shape, env, slab_ptr, slot_off);
                 let dst = unsafe { slab_ptr.add(off) };
                 unsafe { count_many(dst, &desc.shape, &xv, *rel, win, *sorted) };
-            }
-        }
-        Instr::Calendar { func, a, out } => {
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
-            if desc.scalar {
-                let av = resolve_scalar(a, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = calendar_at(*func, av) };
-            } else {
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
-                let dst = unsafe { slab_ptr.add(off) };
-                unsafe { ew1(dst, &desc.shape, &av, |x| calendar_at(*func, x)) };
             }
         }
         Instr::ConstArray { data, out } => {
@@ -1685,14 +1640,6 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 };
             }
             dispatch_bin_kernel!(op, scan);
-        }
-        Instr::PolyArea { a, b, geom, out } => {
-            let spec = &prog.geoms[*geom as usize];
-            let av = resolve_src(a, env, slab_ptr, slot_off);
-            let bv = resolve_src(b, env, slab_ptr, slot_off);
-            let (ta, tb) = (ring_table(&av), ring_table(&bv));
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
-            unsafe { run_poly_area(spec, &ta, &tb, dst) };
         }
         Instr::IndexGather {
             src,

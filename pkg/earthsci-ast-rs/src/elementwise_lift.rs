@@ -15,9 +15,8 @@
 //! ([`ExpressionNode::template_origin`]). The rule applies to those marked
 //! applications only: an observed equation whose right-hand side holds, in
 //! elementwise position, an application whose expansion reads a shaped
-//! variable in a value position (an operand of an elementwise operator, a
-//! scalar argument of a closed function, the body or filter of a reduction, an
-//! `index` subscript) is rewritten into a `faq` over the result's index sets.
+//! variable in a value position (an operand of an elementwise operator, the
+//! body or filter of a reduction, an `index` subscript) is rewritten into a `faq` over the result's index sets.
 //! Its body is the right-hand side with each such read, and each bare shaped
 //! read outside the applications in elementwise position, gathered at that
 //! cell, aligned by index-set name (§4.3.4). Every elementwise operator
@@ -203,17 +202,6 @@ fn intern_tree(expr: &Expr) -> Expr {
     go(expr, &mut HashMap::new())
 }
 
-/// The argument positions of a closed function that take a whole array (the
-/// table and axes of an interpolation), which a per-cell reading leaves whole.
-fn whole_array_fn_args(name: Option<&str>) -> &'static [usize] {
-    match name {
-        Some("interp.linear") => &[0, 1],
-        Some("interp.bilinear") => &[0, 1, 2],
-        Some("interp.searchsorted") => &[1],
-        _ => &[],
-    }
-}
-
 /// What [`walk`] reports.
 enum Seen<'a> {
     /// A shaped variable read by bare name in a value position; `inside` when
@@ -225,16 +213,14 @@ enum Seen<'a> {
 }
 
 /// Visit every value position of `expr` (esm-spec §9.6.11). Outside a
-/// template application those are the operands of elementwise operators and
-/// the scalar arguments of closed functions, the positions the per-cell
-/// reading commutes with. Inside one (a node carrying a
+/// template application those are the operands of elementwise operators, the
+/// positions the per-cell reading commutes with. Inside one (a node carrying a
 /// [`ExpressionNode::template_origin`], and everything below it) they are also
 /// the body and filter of a reduction `faq` and the subscripts of an `index`,
 /// where the template reads its scalar-role parameters. A name a reduction
 /// binds as a loop symbol is not a read. An `index` base and every operand an
-/// op consumes whole (an array-producing `faq`, `makearray`, the shape,
-/// geometry and relational ops, a closed function's table and axes) are array
-/// positions, not visited.
+/// op consumes whole (an array-producing `faq`, `makearray`, the shape and
+/// relational ops) are array positions, not visited.
 fn walk<'a>(
     expr: &'a Expr,
     shapes: &HashMap<String, Vec<String>>,
@@ -264,14 +250,6 @@ fn walk<'a>(
                     }
                     if let Some(b) = &node.filter {
                         walk(b, shapes, &inner, true, f);
-                    }
-                }
-                "fn" => {
-                    let whole = whole_array_fn_args(node.name.as_deref());
-                    for (i, a) in node.args.iter().enumerate() {
-                        if !whole.contains(&i) {
-                            walk(a, shapes, bound, inside, f);
-                        }
                     }
                 }
                 "const" if inside && node.value.as_ref().is_some_and(|v| v.is_array()) => {
@@ -382,10 +360,7 @@ fn names_in(expr: &Expr, out: &mut HashSet<String>) {
         }
         Expr::Number(_) | Expr::Integer(_) => {}
         Expr::Operator(node) => {
-            for name in [&node.int_var, &node.wrt, &node.dim, &node.arg]
-                .into_iter()
-                .flatten()
-            {
+            for name in [&node.int_var, &node.wrt, &node.dim].into_iter().flatten() {
                 out.insert(name.clone());
             }
             if let Some(r) = &node.ranges {
@@ -398,9 +373,6 @@ fn names_in(expr: &Expr, out: &mut HashSet<String>) {
             }
             if let Some(o) = &node.output_idx {
                 out.extend(o.iter().cloned());
-            }
-            if let Some(a) = &node.axes {
-                out.extend(a.keys().cloned());
             }
             node.for_each_child(&mut |c| names_in(c, out));
         }
@@ -441,14 +413,6 @@ impl Lift<'_> {
                         }
                         if let Some(b) = &node.filter {
                             out.filter = Some(Box::new(self.wrap(b, &inner, true)?));
-                        }
-                    }
-                    "fn" => {
-                        let whole = whole_array_fn_args(node.name.as_deref());
-                        for (i, a) in out.args.iter_mut().enumerate() {
-                            if !whole.contains(&i) {
-                                *a = self.wrap(a, bound, inside)?;
-                            }
                         }
                     }
                     _ if crate::op_registry::is_elementwise_node(node) => {
@@ -578,31 +542,12 @@ mod tests {
             m.extend(extra.clone());
         }
         serde_json::json!({
-            "esm": "1.2.0", "metadata": {"name": "taa_probe"},
+            "esm": "2.0.0", "metadata": {"name": "taa_probe"},
             "index_sets": {"c": {"kind": "interval", "size": 3},
                            "verts": {"kind": "interval", "size": 4},
                            "coord": {"kind": "interval", "size": 2}},
             "models": {"M": m}
         })
-    }
-
-    #[test]
-    fn a_template_over_geometry_operands_is_not_lifted() {
-        // Both rings are array-role: a geometry operator takes them whole.
-        let doc = probe_doc(
-            serde_json::json!({
-                "pa": {"type": "parameter", "shape": ["verts", "coord"]},
-                "pb": {"type": "parameter", "shape": ["verts", "coord"]},
-                "y": {"type": "unknown"}, "s": {"type": "unknown", "default": 0.0}}),
-            serde_json::json!({"op": "apply_expression_template", "args": [], "name": "overlap",
-                "bindings": {"a": "pa", "b": "pb"}}),
-            serde_json::json!({"expression_templates": {"overlap": {"params": ["a", "b"],
-                "body": {"op": "polygon_intersection_area", "manifold": "planar",
-                         "args": ["a", "b"]}}}}),
-        );
-        let (lifted, before, after) = lift_doc(&doc, "M.y");
-        assert!(lifted.is_empty());
-        assert_eq!(before, after);
     }
 
     #[test]

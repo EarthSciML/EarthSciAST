@@ -378,13 +378,6 @@ type FlattenedIndexSet struct {
 	Set  IndexSet
 }
 
-// FlattenedFunctionTable is one entry of the flattened system's merged
-// function-table registry (esm-spec §9.5), in document order.
-type FlattenedFunctionTable struct {
-	Name  string
-	Table FunctionTable
-}
-
 // FlattenedTemplate is one entry of the MERGED expression-template registry
 // (esm-spec §9.6.4 rule 7, §10.7). Declaration is the raw template declaration
 // (`params` + `body`, and any sidecar the document carried).
@@ -538,12 +531,6 @@ type FlattenedSystem struct {
 	// arrayed equations, plus any `_liftdim<d>_<extent>` interval the pointwise
 	// lift adds.
 	IndexSets []FlattenedIndexSet
-	// FunctionTables is the merged function-table registry; it resolves a
-	// surviving `table_lookup`. Flattening deliberately does NOT lower those
-	// nodes (esm-spec §9.5.3 / §9.5.4 — see lower_table_lookup.go), so this
-	// registry is what makes them evaluable: (*FlattenedSystem).Evaluate lowers
-	// against it.
-	FunctionTables []FlattenedFunctionTable
 	// TemplateRegistry is the merged expression-template registry (esm-spec
 	// §9.6.4 rule 7, §10.7).
 	TemplateRegistry []FlattenedTemplate
@@ -742,8 +729,7 @@ func selectOrdered(names map[string]bool, tables ...[]FlattenedVariable) []Flatt
 // ranges, join, regions — exactly as authored.
 //
 // A namespacing or substitution walk must not descend into those: `attrs` holds
-// a scheme NAME, `output` a table's declared output name, `ranges`/`regions`
-// load-time index bounds, and a `join` clause is an untyped map whose plain
+// a scheme NAME, `ranges`/`regions` load-time index bounds, and a `join` clause is an untyped map whose plain
 // strings are handled by the dedicated, declared-local-gated namespaceJoinNames.
 // Prefixing any of them rewrites a name that resolves in a different namespace.
 func mapExprRefChildren(node ExprNode, f func(Expression) (Expression, error)) (ExprNode, error) {
@@ -752,7 +738,6 @@ func mapExprRefChildren(node ExprNode, f func(Expression) (Expression, error)) (
 		return out, err
 	}
 	out.Attrs = node.Attrs
-	out.Output = node.Output
 	out.Ranges = node.Ranges
 	out.Join = node.Join
 	out.Regions = node.Regions
@@ -1017,15 +1002,14 @@ func exprHasArrayOp(expr Expression) bool {
 	return found
 }
 
-// arrayOps is the canonical array-op set: the `array` and `geometry` categories
-// of the esm-spec §4.2 op registry, the same membership the other bindings spell
+// arrayOps is the canonical array-op set: the `array` category of the esm-spec
+// §4.2 op registry, the same membership the other bindings spell
 // as ARRAY_OPS. An equation carrying one of these may legitimately define a
 // different index subset of a state variable another equation also defines, so
 // assembleSystem exempts it from the scalar duplicate-LHS check.
 var arrayOps = map[string]struct{}{
 	"faq": {}, "broadcast": {}, "concat": {}, "index": {}, "makearray": {},
 	"reshape": {}, "transpose": {},
-	"intersect_polygon": {}, "polygon_intersection_area": {},
 }
 
 // addExprs sums two expressions, normalizing the trivial zero cases.
@@ -3246,10 +3230,6 @@ func assembleSystem(file *ESMFile, components map[string]*componentSystem, order
 	}
 	for _, name := range orderedKeys(file.IndexSets, file.declarationOrder("/index_sets")) {
 		flat.IndexSets = append(flat.IndexSets, FlattenedIndexSet{Name: name, Set: file.IndexSets[name]})
-	}
-	for _, name := range orderedKeys(file.FunctionTables, file.declarationOrder("/function_tables")) {
-		flat.FunctionTables = append(flat.FunctionTables,
-			FlattenedFunctionTable{Name: name, Table: file.FunctionTables[name]})
 	}
 
 	combined := newComponentSystem("")

@@ -62,8 +62,7 @@ _uo_compile(e::_UO.ASTExpr) =
 
     @testset "a core op with no rule is refused when compiled" begin
         for op in (
-                "rank", "distinct", "argmin", "argmax", "skolem",
-                "reshape", "transpose", "concat",
+                "distinct", "reshape", "transpose", "concat",
             )
             err = _uo_refusal(() -> _uo_compile(OpExpr(op, _UO.ASTExpr[NumExpr(1.0)])))
             @test err isa _UO.TreeWalkError && err.code == "unevaluable_operator"
@@ -72,13 +71,10 @@ _uo_compile(e::_UO.ASTExpr) =
     end
 
     @testset "a repeated op with no rule is not hoisted past the gate" begin
-        # A subexpression that occurs twice is a CSE candidate. `skolem` and
+        # A subexpression that occurs twice is a CSE candidate. `distinct` and
         # `apply_expression_template` are not rewrite targets, so hoisting used to
         # route them into a generic CSE node that failed only at the first RHS call.
-        for node in (
-                OpExpr("skolem", _UO.ASTExpr[VarExpr("u")]),
-                OpExpr("rank", _UO.ASTExpr[VarExpr("u")]),
-            )
+        for node in (OpExpr("distinct", _UO.ASTExpr[VarExpr("u")]),)
             rhs = OpExpr("+", _UO.ASTExpr[node, node])
             err = _uo_refusal(() -> _uo_build(rhs))
             @test err isa _UO.TreeWalkError && err.code == "unevaluable_operator"
@@ -94,7 +90,7 @@ _uo_compile(e::_UO.ASTExpr) =
             )
         )
         @test !_UO._cse_hoistable(tmpl)
-        @test !_UO._cse_hoistable(OpExpr("skolem", _UO.ASTExpr[VarExpr("u")]))
+        @test !_UO._cse_hoistable(OpExpr("distinct", _UO.ASTExpr[VarExpr("u")]))
     end
 
     @testset "ops with a rule still compile; `true` evaluates" begin

@@ -554,7 +554,7 @@ describe('Unit parsing and dimensional analysis', () => {
         // defining expression is a bare-LHS equation — and the declared-vs-
         // computed comparison is still made, and reported, at the VARIABLE.
         const file: EsmFile = {
-          esm: '1.0.0',
+          esm: '2.0.0',
           metadata: { name: 'solar' },
           models: {
             Solar: {
@@ -726,7 +726,7 @@ describe('Unit parsing and dimensional analysis', () => {
       it("compares an equation's two sides and an observed definition the same way", () => {
         const doc = (rhs: string): EsmFile =>
           ({
-            esm: '1.0.0',
+            esm: '2.0.0',
             metadata: { name: 'angle', authors: ['t'] },
             models: {
               M: {
@@ -757,9 +757,7 @@ describe('Unit parsing and dimensional analysis', () => {
       // see the A1-A6 block below — so only their degenerate forms stay here.)
       const structural: Expression[] = [
         { op: 'index', args: [] },
-        { op: 'fn', args: ['t'], name: 'datetime.year' } as unknown as Expression,
         { op: 'faq', args: ['A'], expr: { op: '*', args: ['A', 'w'] }, reduce: '*' } as Expression,
-        { op: 'table_lookup', args: [], table: 'kT', axes: { temp: 'T_air' } } as Expression,
         { op: 'makearray', args: [1, 2] } as unknown as Expression,
       ]
 
@@ -785,7 +783,7 @@ describe('Unit parsing and dimensional analysis', () => {
   describe('validateUnits', () => {
     it('should validate simple ESM file with no errors', () => {
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: {
           name: 'test',
           description: 'test model',
@@ -814,7 +812,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should detect dimensional inconsistencies', () => {
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: {
           name: 'test',
           description: 'test model',
@@ -843,7 +841,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should validate observed variables', () => {
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: {
           name: 'test',
           description: 'test model',
@@ -872,7 +870,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should handle reaction systems', () => {
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: {
           name: 'test',
           description: 'test reaction',
@@ -912,7 +910,7 @@ describe('Unit parsing and dimensional analysis', () => {
       // surface as a WARNING with the variable's dimension left UNKNOWN
       // (unbound), which suppresses the mismatch and keeps validation valid.
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: {
           name: 'test',
           description: 'unparseable unit',
@@ -963,7 +961,7 @@ describe('Unit parsing and dimensional analysis', () => {
       // fictional — so the declared side is left UNKNOWN and the comparison is
       // skipped.
       const esmFile: EsmFile = {
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: {
           name: 'test',
           description: 'unparseable observed unit',
@@ -1157,7 +1155,7 @@ describe('scoped references, faq filters and constant exponents', () => {
   describe("R1: a scoped reference carries its target's declared units", () => {
     const doc = (rhs: string, declared: string): EsmFile =>
       ({
-        esm: '1.2.0',
+        esm: '2.0.0',
         metadata: { name: 'scoped' },
         models: {
           Leaf: {
@@ -1225,7 +1223,7 @@ describe('scoped references, faq filters and constant exponents', () => {
     // the top-level one.
     const doc = (subUnits: string | undefined, withSub = true): EsmFile =>
       ({
-        esm: '1.2.0',
+        esm: '2.0.0',
         metadata: { name: 'shadow' },
         models: {
           A: {
@@ -1280,7 +1278,7 @@ describe('scoped references, faq filters and constant exponents', () => {
     it('applies to the reaction-rate check too', () => {
       const rs = (subUnits: string | undefined): EsmFile =>
         ({
-          esm: '1.2.0',
+          esm: '2.0.0',
           metadata: { name: 'shadow-rs' },
           reaction_systems: {
             Chem: {
@@ -1319,7 +1317,7 @@ describe('scoped references, faq filters and constant exponents', () => {
 
   describe('withScopedReferenceUnits never overwrites an existing binding', () => {
     const file = {
-      esm: '1.2.0',
+      esm: '2.0.0',
       metadata: { name: 'keep' },
       models: {
         Top: {

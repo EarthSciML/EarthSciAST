@@ -34,7 +34,7 @@ catches every one of them too.
 
 Members span the whole pipeline: load/parse (`ParseError`,
 `SchemaValidationError`, `ExpressionParseError`, `SubsystemRefError`), the
-load-time lowering passes (`ExpressionTemplateError`, `ClosedFunctionError`),
+load-time lowering passes (`ExpressionTemplateError`, `EnumLoweringError`),
 flattening (the eight `flatten_errors.jl` types), units
 (`UnitConversionError`), evaluation and simulation (`TreeWalkError`,
 `SimulateError`, `RefreshError`, `OutputError`), editing (`EditError`), and

@@ -69,7 +69,7 @@ geometric FAQ that consumes the materialized edge set as a *primitive* index set
 `tests/valid/faq/area_eff_edge_faq.esm` and is evaluated numerically by all
 three bindings via the faq-conformance suites (its inline `tests` golden is
 the cross-binding numeric check). The full §7.3 chain in one document (enumerate →
-skolem/distinct → rank → ragged `edges_of_cell` inversion → `area_eff`) is the
+integer key/distinct → dense IDs → ragged `edges_of_cell` inversion → `area_eff`) is the
 structural fixture `tests/valid/faq/edge_enumeration_area_eff.esm`.
 
 ## Two phases
@@ -138,7 +138,7 @@ and grid-conformance runners' `--self-test`:
    algebra, a sub-tag only.
 5. **Guards (checked)** — (1) the `≤DISCRETE` subgraph is acyclic (a cycle is an
    implicit solve, out of scope — reject naming the cycle); (2) no
-   `distinct`/`join`/`skolem`/`rank` node may classify `CONTINUOUS`; (3) an
+   `distinct`/`join` node (value invention) may classify `CONTINUOUS`; (3) an
    `expect_cadence` assertion that disagrees with the derived class is an error.
 
 ## Adapter contract (per binding)
@@ -207,6 +207,6 @@ into the binding or this document.
 - `docs/content/rfcs/semiring-faq-unified-ir.md` §6.1 — the contract's home
   (cadence classes, propagation, frontier cut, three execution outputs, guards).
 - `tests/conformance/determinism/README.md` — the sibling determinism harness
-  this one mirrors; the §5.5 total order fixes `distinct`/`skolem`/`rank` output,
+  this one mirrors; the §5.5 total order fixes the keys, `distinct` output and dense IDs,
   which `pure_topology` reuses (its edge set is the determinism `edge_enumeration`
   golden).

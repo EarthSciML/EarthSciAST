@@ -1,5 +1,5 @@
 {
- "esm": "1.0.0",
+ "esm": "2.0.0",
  "metadata": {
   "name": "GapBSystemAlone",
   "description": "Control: the reaction system alone, with its own inline test on a species trajectory. No sibling model. Establishes that the mechanism itself builds and integrates in every binding.",

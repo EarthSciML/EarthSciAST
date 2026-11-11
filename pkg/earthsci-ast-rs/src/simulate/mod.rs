@@ -27,7 +27,7 @@
 //! ```no_run
 //! use earthsci_ast::{ProblemOptions, SolveOptions, esm_problem, load_string, solve};
 //!
-//! let file = load_string(r#"{"esm":"1.0.0","metadata":{},"models":{}}"#).unwrap();
+//! let file = load_string(r#"{"esm": "2.0.0","metadata":{},"models":{}}"#).unwrap();
 //! let prob = esm_problem(&file, (0.0, 1.0), ProblemOptions::default()).unwrap();
 //! let _ = solve(&prob, &SolveOptions::default());
 //! ```
@@ -123,7 +123,7 @@ mod tests {
         // dx/dt = a is a non-cyclic ODE that anchors the system.
         let json = r#"
             {
-              "esm": "1.0.0",
+              "esm": "2.0.0",
               "metadata": {
                 "name": "TestFixture"
               },
@@ -189,198 +189,6 @@ mod tests {
         );
     }
 
-    /// A `fn`-op observed (`interp.linear` fuel-table lookup) of a 0-D model
-    /// must evaluate through the closed-function registry — not NaN out.
-    /// Regression for the coupled-fire blocker, where the callee `name` and the
-    /// inline array arguments were dropped on the way to evaluation, so
-    /// `interp.linear` poisoned every downstream state.
-    #[test]
-    fn fn_op_interp_linear_in_a_scalar_model() {
-        // looked_up = interp.linear([10,20,40,80,160], [0,1,2,3,4], code);
-        // dx/dt = looked_up, x(0) = 0. At code = 2.0 the lookup is the exact
-        // knot 40.0, so x(1) = 40.0.
-        let json = r#"
-            {
-              "esm": "1.0.0",
-              "metadata": {
-                "name": "FnFixture"
-              },
-              "models": {
-                "M": {
-                  "variables": {
-                    "x": {
-                      "type": "unknown",
-                      "default": 0.0
-                    },
-                    "code": {
-                      "type": "parameter",
-                      "default": 2.0
-                    },
-                    "looked_up": {
-                      "type": "unknown"
-                    }
-                  },
-                  "equations": [
-                    {
-                      "lhs": {
-                        "op": "D",
-                        "args": [
-                          "x"
-                        ],
-                        "wrt": "t"
-                      },
-                      "rhs": "looked_up"
-                    },
-                    {
-                      "lhs": "looked_up",
-                      "rhs": {
-                        "op": "fn",
-                        "name": "interp.linear",
-                        "args": [
-                          {
-                            "op": "const",
-                            "value": [
-                              10.0,
-                              20.0,
-                              40.0,
-                              80.0,
-                              160.0
-                            ],
-                            "args": []
-                          },
-                          {
-                            "op": "const",
-                            "value": [
-                              0.0,
-                              1.0,
-                              2.0,
-                              3.0,
-                              4.0
-                            ],
-                            "args": []
-                          },
-                          "code"
-                        ]
-                      }
-                    }
-                  ]
-                }
-              }
-            }
-            "#;
-        let prob = problem_of(json, HashMap::new()).expect("build succeeds");
-        // Explicit tolerances, not the defaults. The assertion below pins
-        // D(1) to exp(-1) within 1e-6, which is a statement about the RHS
-        // seeing the right G — not about how tightly the production default
-        // integrates. `DEFAULT_RELTOL`/`DEFAULT_ABSTOL` are Julia's `1e-4`/
-        // `1e-6` and leave ~4.6e-6 of truncation error over this interval,
-        // which is larger than the thing being measured.
-        let opts = SolveOptions {
-            abstol: Some(1e-12),
-            reltol: Some(1e-10),
-            saveat: Some(vec![0.0, 1.0]),
-            ..Default::default()
-        };
-        let sol = solve(&prob, &opts).expect("simulate succeeds");
-        let x_idx = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n.ends_with("x"))
-            .expect("x in solution");
-        assert!(
-            (sol.state[x_idx][1] - 40.0).abs() < 1e-6,
-            "x(1) should be 40.0 (dx/dt = interp.linear(...,2.0) = 40), got {}",
-            sol.state[x_idx][1]
-        );
-
-        // A different query point exercises the blend, not just a knot: at
-        // code = 0.5 the lookup is 0.5*(10+20)... = 15.0.
-        let mut params = HashMap::new();
-        params.insert("M.code".to_string(), 0.5);
-        let prob2 = problem_of(json, params).expect("build succeeds");
-        let sol2 = solve(&prob2, &opts).expect("simulate succeeds");
-        assert!(
-            (sol2.state[x_idx][1] - 15.0).abs() < 1e-6,
-            "x(1) should be 15.0 at code=0.5, got {}",
-            sol2.state[x_idx][1]
-        );
-    }
-
-    /// A `fn`-op with a *scalar* argument (`datetime.year`) exercises the
-    /// `name`-threading fix independent of the array-arg materialization path.
-    #[test]
-    fn fn_op_datetime_scalar_arg() {
-        // yr = datetime.year(946684800) = 2000 (2000-01-01T00:00:00Z).
-        // dx/dt = yr, x(0) = 0, so x(1) = 2000.
-        let json = r#"
-            {
-              "esm": "1.0.0",
-              "metadata": {
-                "name": "DatetimeFixture"
-              },
-              "models": {
-                "M": {
-                  "variables": {
-                    "x": {
-                      "type": "unknown",
-                      "default": 0.0
-                    },
-                    "yr": {
-                      "type": "unknown"
-                    }
-                  },
-                  "equations": [
-                    {
-                      "lhs": {
-                        "op": "D",
-                        "args": [
-                          "x"
-                        ],
-                        "wrt": "t"
-                      },
-                      "rhs": "yr"
-                    },
-                    {
-                      "lhs": "yr",
-                      "rhs": {
-                        "op": "fn",
-                        "name": "datetime.year",
-                        "args": [
-                          946684800.0
-                        ]
-                      }
-                    }
-                  ]
-                }
-              }
-            }
-            "#;
-        let prob = problem_of(json, HashMap::new()).expect("build succeeds");
-        // Explicit tolerances, not the defaults. The assertion below pins
-        // D(1) to exp(-1) within 1e-6, which is a statement about the RHS
-        // seeing the right G — not about how tightly the production default
-        // integrates. `DEFAULT_RELTOL`/`DEFAULT_ABSTOL` are Julia's `1e-4`/
-        // `1e-6` and leave ~4.6e-6 of truncation error over this interval,
-        // which is larger than the thing being measured.
-        let opts = SolveOptions {
-            abstol: Some(1e-12),
-            reltol: Some(1e-10),
-            saveat: Some(vec![0.0, 1.0]),
-            ..Default::default()
-        };
-        let sol = solve(&prob, &opts).expect("simulate succeeds");
-        let x_idx = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n.ends_with("x"))
-            .expect("x in solution");
-        assert!(
-            (sol.state[x_idx][1] - 2000.0).abs() < 1e-9,
-            "x(1) should be 2000.0 (dx/dt = datetime.year = 2000), got {}",
-            sol.state[x_idx][1]
-        );
-    }
-
     /// Algebraic states whose `default` does not satisfy the constraint at
     /// t=0 must be reconciled before integration starts (esm-0kt).
     /// Flatten a fixture and report its algebraic states, sorted for comparison.
@@ -397,7 +205,7 @@ mod tests {
         let names = algebraic_names_of(
             r#"
                 {
-                  "esm": "1.0.0",
+                  "esm": "2.0.0",
                   "metadata": {
                     "name": "TestFixture"
                   },
@@ -468,7 +276,7 @@ mod tests {
         let file = crate::parse::load_string(
             r#"
                 {
-                  "esm": "1.0.0",
+                  "esm": "2.0.0",
                   "metadata": {
                     "name": "TestFixture"
                   },
@@ -561,7 +369,7 @@ mod tests {
         let names = algebraic_names_of(
             r#"
                 {
-                  "esm": "1.0.0",
+                  "esm": "2.0.0",
                   "metadata": {
                     "name": "TestFixture"
                   },
@@ -613,7 +421,7 @@ mod tests {
         // demand for G's initial condition would say otherwise.
         let json = r#"
             {
-              "esm": "1.0.0",
+              "esm": "2.0.0",
               "metadata": {
                 "name": "TestFixture"
               },
@@ -701,7 +509,7 @@ mod tests {
     fn a_defaultless_differential_state_is_still_refused() {
         let json = r#"
             {
-              "esm": "1.0.0",
+              "esm": "2.0.0",
               "metadata": {
                 "name": "TestFixture"
               },
@@ -767,7 +575,7 @@ mod tests {
         // it before the first step.
         let json = r#"
             {
-              "esm": "1.0.0",
+              "esm": "2.0.0",
               "metadata": {
                 "name": "TestFixture"
               },

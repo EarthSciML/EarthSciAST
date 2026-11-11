@@ -139,6 +139,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("flattened_to_esm_test.jl")
     include("shape_promotion_test.jl")
     include("shape_promotion_consumer_refs_test.jl")  # promoted-var consumers gathered in-loop
+    include("ifelse_mixed_arm_shape_test.jl")  # §4.3.4 one array arm + one scalar arm; data-fed shape adoption
     include("subsystem_ref_test.jl")
     include("mount_index_set_rename_test.jl")  # §4.7 mount-edge index_set_rename
     include("toplevel_mount_edge_pipeline_test.jl")  # §4.7 edge pipeline, top-level {ref}
@@ -200,7 +201,6 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("stencil_affine_lowering_test.jl")       # ess-affine _lower_to_access
     include("stencil_affine_diff_test.jl")           # ess-affine ≡ per-cell (differential)
     include("stencil_affine_ad_test.jl")             # ess-affine AD Jacobian + out-of-place
-    include("stencil_affine_fn_test.jl")             # ess-affine interp :fn ≡ per-cell
     include("stencil_affine_pgather_test.jl")        # ess-affine live-forcing ≡ per-cell
     include("stencil_affine_pgather_tbl_test.jl")    # A2 non-affine forcing table ≡ per-cell (interpreter oracle)
     include("stencil_affine_contract_test.jl")       # ess-affine const-bound contraction ≡ per-cell
@@ -219,11 +219,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # property on the tier that was violating it.
     include("stencil_affine_cross_shape_test.jl")
     include("grid_invariance_test.jl")               # compiled IR size is O(1) in the grid
-    include("fn_content_cse_test.jl")                # fn specs keyed by CONTENT in per-kernel CSE
     include("array_obs_materialize_test.jl")         # factored array observeds ≡ the interpreter's inlining build
     include("cadence_refresh_test.jl")               # every refresh kind reaches the const/time memoized tiers
     include("codegen_kernel_test.jl")                # B1 codegen tier ≡ pre-codegen (differential)
-    include("codegen_lanespec_test.jl")              # B1 tier accepts per-lane interp specs (class merge)
     include("dual_fast_path_test.jl")                # ess-dualfp Dual overflow tier ≡ interpreter
     include("f64_overflow_codegen_test.jl")          # ess-f64ofl overflow RGF serves budget-declined Float64 kernels (interpreter oracle)
     include("cg_foreign_scratch_test.jl")            # ess-cgfsc codegen emits xcse shared-prelude reads (interpreter oracle)
@@ -232,12 +230,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("codegen_body_split_test.jl")            # ess-iip-body-split oversized kernel body split across @noinline helpers ≡ un-split (node-cap oracle)
     include("codegen_subcall_fn_test.jl")            # ess-cg-subcall-fn template sub-kernels emitted ONCE as @noinline fns ≡ per-site inline (opt-in tier)
     include("stencil_indexed_contraction_test.jl")   # reduced-rank + contracted makearray region values fire affine ≡ per-cell (interpreter oracle)
-    include("lane_table_intern_test.jl")             # content-equal lane tables `===` at build (interpreter oracle)
-    include("direct_class_emission_test.jl")         # per-cell scalarizer emits class kernels directly (interpreter oracle)
     include("cross_eq_class_emission_test.jl")       # cross-equation + affine-box classes emitted directly; repair pass zero-merge (corpus sweep)
     include("scalar_ops_test.jl")                    # the shared op ladder + gather-subscript resolver
     include("scalar_batch_test.jl")                  # lane-batched grouping of the per-cell scalar surface (ess-oop-batch)
-    include("interp_lanes_test.jl")                  # branch-free `interp.*` lane evaluators ≡ the scalar cores
     include("oop_merge_test.jl")                     # kernel-CLASS merge ≡ unmerged (both build forms)
     include("tree_walk_iip_generic_test.jl")
     include("parameter_gradient_test.jl")            # ∂(RHS)/∂p, both emitters (traced arm opt-in)
@@ -249,7 +244,6 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # keep running (and passing) without it. See the header of
     # test/reactant_direct_emit_test.jl.
     if get(ENV, "ESM_TEST_REACTANT", "0") == "1"
-        include("reactant_lane_dedup_test.jl")       # merged lane tables ≢ grid size
         include("reactant_locate_test.jl")           # count-locate ≢ a reduction, and bit-exact
         include("reactant_direct_emit_test.jl")      # the COMPILED backend: StableHLO built directly from the _Node IR
         include("reactant_direct_closed_test.jl")    # the closed-AST library shapes: the count, computed-subscript table reads
@@ -330,9 +324,11 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
     include("count_fold_test.jl")                   # #588: the indicator sum emitted as a count
     include("closed_interp_native_test.jl")         # #660: the interp templates under native; repeated sub-trees shared
-    include("relational_templates_test.jl")         # the lib/relational.esm argmin/argmax templates against the ops
+    include("template_nested_observed_test.jl")     # a template read at an inlined makearray observed chain
+    include("relational_templates_test.jl")         # the lib/relational.esm argmin/argmax templates
     include("closed_templates_native_test.jl")      # the phase-3 library templates under strict native
-    include("relational_rewrites_test.jl")          # the skolem / rank / gated-argmin fixtures against their lib/relational.esm rewrites
+    include("template_scenarios_test.jl")           # tests/closed_functions scenarios through the stdlib templates (§9.8)
+    include("relational_rewrites_test.jl")          # the lib/relational.esm template forms of the relational fixtures
     include("rank_count_setup_test.jl")             # rank_of_set lookups as a setup table; the count over sorted constant keys
     include("makearray_nested_reduction_test.jl")   # #547: a nested scalar reduction in a makearray region
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
@@ -362,19 +358,15 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
 
     # ---- Cross-binding conformance harness adapters (tests/conformance/*) ----
     include("faq_conformance_test.jl")
-    include("deprecated_op_alias_test.jl")
+    include("removed_op_test.jl")
     include("expression_ic_conformance_test.jl")
     include("inverse_trig_conformance_test.jl")
-    include("geometry_conformance_test.jl")
-    include("geometry_polygon_intersection_area_test.jl")
-    include("geometry_assembly_conformance_test.jl")
-    include("geometry_overlap_join_conformance_test.jl")
-    include("geometry_ranged_clip_test.jl")
-    include("geometry_templates_test.jl")  # lib/geometry.esm overlap templates vs the polygon leaf
+    include("geometry_templates_test.jl")  # lib/geometry.esm overlap templates vs reference areas
     include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
     include("setup_fill_test.jl")  # construction-time fills through the cascade: bitwise, one compile across N
     include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
     include("geom_overlap_drive_test.jl")     # setup overlap broad phase: candidate-DRIVEN, and what it changes
+    include("overlap_gated_template_test.jl")  # the ISRM binning shape: overlap-gated overlap_area_planar, native == interpreter
     include("geom_on_drive_test.jl")          # setup bin-equality broad phase: key matches DRIVE the sweep
     include("broad_phase_conformance_test.jl")   # projection-pushdown Phase 3a
     include("overlap_gate_conformance_test.jl")   # projection-pushdown Phase 2a
@@ -399,6 +391,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("pde_inline_scalar_slot_collision_test.jl")
     include("pde_inline_dead_observed_test.jl")  # #176: an observed no live equation consumes
     include("mounted_component_tests_test.jl")   # #198: a mount does not carry the leaf's tests
+    include("enum_lowering_test.jl")             # esm-spec §9.3 lowering, error codes, zero/negative members
     include("mount_enums_test.jl")               # #260: a mounted file's enum ops resolve in its own block
     include("mount_element_type_test.jl")        # §4.7: a mounted leaf's element_type crosses the mount
     include("toplevel_reaction_system_ref_test.jl")  # §4.7: a top-level reaction_systems.<k> {ref} mounts
@@ -426,18 +419,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
     include("rhs_time_derivative_resolution_test.jl")   # §4.2 right-hand-side D: Julia resolves; its exclusion
     include("unlowered_operator_walk_test.jl")          # §9.6.3 c.6: unlowered op in a tree the build discards
-    include("closed_functions_test.jl")
     include("template_array_args_test.jl")  # §9.6.11 a template applied elementwise over an array
-    include("closed_functions_autodiff_test.jl")
-    include("datetime_arithmetic_test.jl")
-    include("datetime_typed_core_test.jl")     # registry-declared typed cores (ess-dtcore)
-    include("function_tables_test.jl")
-    include("function_tables_lowering_test.jl")
-    include("function_tables_load_errors_test.jl")  # §9.5.5 the pinned order of the table checks
-    # …and the same lowering on the path that EVALUATES a document (#188):
-    # the harness above does the lowering itself, so it cannot see whether the
-    # build front doors do.
-    include("function_tables_lowering_path_test.jl")
 
     # ---- Expression templates & scoped imports
     #      (src/lower_expression_templates.jl, template_imports.jl) ----
@@ -499,19 +481,14 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                         # in tests/invalid/template_imports/ and never reached
                         # here. tests/invalid/data_source_url_env_var.esm is
                         # the first top-level fixture that raises it.
-                        # The three code-carrying load rejections the
-                        # `resolver_only` fixtures pin: `enum_duplicate_value`
-                        # (§9.3), and the §9.2 closed-function argument and
-                        # §9.5.5 function-table checks load runs on every
-                        # `interp.*` call and every table.
+                        # The code-carrying load rejection the `resolver_only`
+                        # fixtures pin: `enum_duplicate_value` (§9.3).
                         (
                             e isa EarthSciAST.ParseError ||
                                 e isa EarthSciAST.SchemaValidationError ||
                                 e isa EarthSciAST.SubsystemRefError ||
                                 e isa EarthSciAST.ExpressionTemplateError ||
-                                e isa EarthSciAST.EnumLoweringError ||
-                                e isa EarthSciAST.ClosedFunctionError ||
-                                e isa EarthSciAST.TableLookupError
+                                e isa EarthSciAST.EnumLoweringError
                         ) || rethrow()
                         true
                     end

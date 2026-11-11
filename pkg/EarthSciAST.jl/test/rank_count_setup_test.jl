@@ -1,21 +1,21 @@
 # The rank lookup of lib/relational.esm under strict `native` (closed-AST
-# phase 4): `rank_of_set(edge_key(...), members, S)` over a derived edge set,
-# the template form of the `skolem` / `rank` edge enumeration.
+# phase 4): `rank_of_set(edge_key(...), members, S)` over a derived edge set.
 #
 #   * A state-free array observed holding the indicator sum is a build-once
 #     table: the setup sweep fills it (`_is_setup_const_reduction`), the count
 #     as a binary search over a sorted copy of the entries (`:count_fold_setup`,
 #     `_geo_count_node`). It gives the interpreter's bits (the interpreter
-#     keeps it an observed and folds every term) and the op form's, on the
-#     right-hand side and through a gather by the looked-up rank.
+#     keeps it an observed and folds every term) and those of the ranks given
+#     as a constant, on the right-hand side and through a gather by the
+#     looked-up rank.
 #   * The count at setup over constant keys of any content: unsorted, NaN
 #     entries, ±0.0, repeated entries, NaN / ±0.0 / ±Inf queries, all four
 #     relations with the entry on either side, the swapped branches.
 #   * Near misses keep the fold (the table is still filled at setup when the
 #     observed holds another count shape, never with the rewrite).
 #   * Any reduction over build constants in such an observed fills at setup
-#     too: the argmin / argmax templates at a scalar site against the ops
-#     and the interpreter; a candidate reading a state or a scalar parameter,
+#     too: the argmin / argmax templates at a scalar site against the index
+#     itself and the interpreter; a candidate reading a state or a scalar parameter,
 #     or a count over a range the setup sweep cannot loop over, stays an
 #     observed.
 #   * A producer's key and filter over interval ranges are compiled once
@@ -100,16 +100,16 @@ function _rc_mesh(n)
     return lo, hi, edges
 end
 
-# The mesh_rank document: `spelling` :op (skolem key, rank, the looked-up ranks
-# as a constant) or :tpl (edge_key, the loop index, rank_of_set).
+# The mesh_rank document: `spelling` :const (the looked-up ranks as a
+# constant) or :tpl (rank_of_set); both key the edges by `edge_key` and number
+# them by the loop index.
 function _rc_mesh_doc(n, spelling)
     lo, hi, edges = _rc_mesh(n)
     F, Ne, nv = length(lo), length(edges), n * n
     rank = Dict(e => r for (r, e) in enumerate(edges))
     FL = Dict("f" => Dict("from" => "faces"), "le" => Dict("from" => "local_edges"))
     lof, hif = _rc_ix("edge_lo", "f", "le"), _rc_ix("edge_hi", "f", "le")
-    key = spelling === :op ? _rc_op("skolem", lof, hif; label = "edge") :
-        _rc_apply("edge_key"; u = lof, v = hif, lo = 1, n = nv)
+    key = _rc_apply("edge_key"; u = lof, v = hif, lo = 1, n = nv)
     vars = Dict{String, Any}(
         "edge_lo" => Dict("type" => "unknown", "shape" => Any["faces", "local_edges"]),
         "edge_hi" => Dict("type" => "unknown", "shape" => Any["faces", "local_edges"]),
@@ -134,7 +134,7 @@ function _rc_mesh_doc(n, spelling)
         ),
         Dict(
             "lhs" => _rc_ix("edge_dense_id", "e"),
-            "rhs" => _rc_faq(spelling === :op ? _rc_op("rank", "edges") : "e", ["e"], Dict("e" => Dict("from" => "edges")); semiring = "sum_product")
+            "rhs" => _rc_faq("e", ["e"], Dict("e" => Dict("from" => "edges")); semiring = "sum_product")
         ),
         Dict("lhs" => _rc_dlhs("q", ["e"], E_), "rhs" => _rc_faq(_rc_op("-", _rc_ix("q", "e")), ["e"], E_)),
         Dict(
@@ -148,8 +148,9 @@ function _rc_mesh_doc(n, spelling)
     ]
     edges_set = Dict{String, Any}("kind" => "derived", "from_faq" => "edge_set")
     model = Dict{String, Any}("variables" => vars, "equations" => eqs)
-    if spelling === :op
+    if spelling === :const
         push!(eqs, Dict("lhs" => "face_edge_rank", "rhs" => _rc_const([[rank[(lo[f][k], hi[f][k])] for k in 1:3] for f in 1:F])))
+        model["expression_templates"] = _rc_templates("edge_key")
     else
         vars["edge_members"] = Dict("type" => "parameter", "shape" => Any["edges"], "default" => 0.0)
         edges_set["member_factor"] = "edge_members"
@@ -165,7 +166,7 @@ function _rc_mesh_doc(n, spelling)
         model["expression_templates"] = _rc_templates("edge_key", "rank_of_set")
     end
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "mesh_rank_$(spelling)"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "mesh_rank_$(spelling)"),
         "index_sets" => Dict(
             "faces" => Dict("kind" => "interval", "size" => F),
             "local_edges" => Dict("kind" => "interval", "size" => 3),
@@ -200,7 +201,7 @@ function _rc_count_doc(keys, queries, body; krange = Dict("from" => "keys"), kw.
         Dict("lhs" => _rc_dlhs("s", ["i"], I), "rhs" => _rc_faq(_rc_ix("r", "i"), ["i"], I)),
     ]
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "rank_count"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "rank_count"),
         "index_sets" => Dict("keys" => Dict("kind" => "interval", "size" => n), "cells" => Dict("kind" => "interval", "size" => m)),
         "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs))
     )
@@ -211,7 +212,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
 @testset "rank lookup under strict native (closed-AST phase 4)" begin
     @testset "mesh rank lookup, n = $n" for n in (4, 7)
         tp = _rc_mesh_doc(n, :tpl)
-        op = _rc_mesh_doc(n, :op)
+        op = _rc_mesh_doc(n, :const)
         dn, tn = _rc_du_doc(tp, :native)
         di, ti = _rc_du_doc(tp, :interpreter)
         dop, _ = _rc_du_doc(op, :native)
@@ -301,7 +302,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
             Dict("lhs" => _rc_dlhs("s", ["i"], I), "rhs" => _rc_faq(_rc_ix("r", "i"), ["i"], I)),
         ]
         doc = Dict{String, Any}(
-            "esm" => "1.2.0", "metadata" => Dict("name" => "rank_of_param"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "rank_of_param"),
             "metaparameters" => Dict("nm" => Dict("type" => "integer", "default" => 37)),
             "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 6), "mem" => Dict("kind" => "interval", "size" => 40)),
             "models" => Dict(
@@ -339,26 +340,21 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
     # The argmin / argmax templates over constant candidates, written at a
     # scalar site as the benchmark documents write them (`index(r, j) = …`
     # over a one-element set): a reduction over build constants, filled at
-    # setup (its index search and the min before it run once), the op form's
-    # bits and the interpreter's. Near misses stay observeds: a candidate
+    # setup (its index search and the min before it run once), the 1-based
+    # index of the first extreme candidate and the interpreter's bits. Near misses stay observeds: a candidate
     # value that reads a state or a scalar parameter, and ranges not starting
     # at 1.
     _rc_gens = [
         0.8125, 0.09375, 0.921875, 0.71875, 0.25, 0.421875, 0.03125, 0.140625,
         0.640625, 0.765625, 0.1875, 0.6875, 0.375, 0.53125, 0.828125, 0.03125,
     ]
-    function _rc_arg_doc(spelling, which; shift = 0.013, extra = nothing, lo = 1)
-        k = spelling === :op ? "k" : "k_$(which)_1"
+    function _rc_arg_doc(which; shift = 0.013, extra = nothing, lo = 1)
+        k = "k_$(which)_1"
         d = _rc_op("-", _rc_ix("g", k), shift)
         f = _rc_op("*", d, d)
         extra === nothing || (f = _rc_op("+", f, extra))
         J = Dict("j" => Dict("from" => "one"))
-        body = spelling === :op ?
-            Dict{String, Any}(
-                "op" => which, "args" => Any["g"], "arg" => "k",
-                "ranges" => Dict("k" => Dict("from" => "gens")), "expr" => f
-            ) :
-            _rc_apply(which; f = f, n = 16)
+        body = _rc_apply(which; f = f, n = 16)
         vars = Dict{String, Any}(
             "u" => Dict("type" => "unknown", "default" => 0.5),
             "acc" => Dict("type" => "unknown"),
@@ -373,7 +369,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
             Dict("lhs" => _rc_op("D", "u"; wrt = "t"), "rhs" => _rc_op("-", "acc", "u")),
         ]
         model = Dict{String, Any}("variables" => vars, "equations" => eqs)
-        spelling === :op || (model["expression_templates"] = _rc_templates(which))
+        model["expression_templates"] = _rc_templates(which)
         if lo != 1
             # The template's own [1, n] ranges rewritten to [lo, n].
             walk(x) = x isa AbstractDict ?
@@ -385,18 +381,19 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
             walk(model["expression_templates"][which])
         end
         return Dict{String, Any}(
-            "esm" => "1.2.0", "metadata" => Dict("name" => "arg_$(which)_$(spelling)"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "arg_$(which)"),
             "index_sets" => Dict("gens" => Dict("kind" => "interval", "size" => 16), "one" => Dict("kind" => "interval", "size" => 1)),
             "models" => Dict("M" => model)
         )
     end
     @testset "$which template over constants is a setup table" for which in ("argmin", "argmax")
-        tp = _rc_arg_doc(:tpl, which)
+        tp = _rc_arg_doc(which)
         dn, tn = _rc_du_doc(tp, :native)
         di, ti = _rc_du_doc(tp, :interpreter)
-        dop, _ = _rc_du_doc(_rc_arg_doc(:op, which), :native)
         @test _rc_same(dn, di)
-        @test _rc_same(dn, dop)
+        # D(u) = acc - u at u = 0.5, acc the first extreme candidate's index.
+        vals = [(x - 0.013) * (x - 0.013) for x in _rc_gens]
+        @test dn["u"] === Float64(which == "argmin" ? argmin(vals) : argmax(vals)) - 0.5
         @test get(tn, :geo_kernel, 0) >= 1
         @test get(ti, :geo_kernel, 0) == 0
         dw, tw = _rc_du_doc(tp, _RC_NOCOMPILE)
@@ -408,7 +405,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
             ("reads a scalar parameter", (; extra = "w")),
             ("range from 2", (; lo = 2)),
         )
-        tp = _rc_arg_doc(:tpl, "argmin"; kw...)
+        tp = _rc_arg_doc("argmin"; kw...)
         dn, tn = _rc_du_doc(tp, :native)
         di, _ = _rc_du_doc(tp, :interpreter)
         @test _rc_same(dn, di)
