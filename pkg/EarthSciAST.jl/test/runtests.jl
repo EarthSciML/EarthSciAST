@@ -323,6 +323,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("closed_interp_native_test.jl")         # #660: the interp templates under native; repeated sub-trees shared
     include("relational_templates_test.jl")         # the lib/relational.esm argmin/argmax templates
     include("closed_templates_native_test.jl")      # the phase-3 library templates under strict native
+    include("template_scenarios_test.jl")           # tests/closed_functions scenarios through the stdlib templates (§9.8)
     include("relational_rewrites_test.jl")          # the lib/relational.esm template forms of the relational fixtures
     include("rank_count_setup_test.jl")             # rank_of_set lookups as a setup table; the count over sorted constant keys
     include("makearray_nested_reduction_test.jl")   # #547: a nested scalar reduction in a makearray region
