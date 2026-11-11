@@ -3539,6 +3539,8 @@ def deprecated_records_per_sample_sites(file: EsmFile) -> list[str]:
     sorted by plain string order:
     ``/data_sources/<S>/temporal/records_per_sample`` and
     ``/models/<M>[/subsystems/<S>...]/variables/<v>/update[/<i>]/from/records_per_sample``
+    and
+    ``/reaction_systems/<R>[/subsystems/<S>...]/parameters/<p>/update[/<i>]/from/records_per_sample``
     (``/<i>`` only for an array-form ``update``). Mounted components are walked
     at the place they are mounted. The top-level loaders warn once, naming
     these, when the list is non-empty."""
@@ -3549,7 +3551,13 @@ def deprecated_records_per_sample_sites(file: EsmFile) -> list[str]:
             sites.append(f"/data_sources/{_pointer_token(sname)}/temporal/records_per_sample")
 
     def walk(model: Any, pointer: str) -> None:
-        for vname, var in (getattr(model, "variables", None) or {}).items():
+        if isinstance(model, ReactionSystem):
+            decls = [(p.name, p) for p in model.parameters]
+            section = "parameters"
+        else:
+            decls = list((getattr(model, "variables", None) or {}).items())
+            section = "variables"
+        for vname, var in decls:
             update = getattr(var, "update", None)
             if update is None:
                 continue
@@ -3562,7 +3570,7 @@ def deprecated_records_per_sample_sites(file: EsmFile) -> list[str]:
                 binding = getattr(rule, "from_source", None)
                 if binding is not None and getattr(binding, "records_per_sample", None) is not None:
                     sites.append(
-                        f"{pointer}/variables/{_pointer_token(vname)}/update{suffix}"
+                        f"{pointer}/{section}/{_pointer_token(vname)}/update{suffix}"
                         "/from/records_per_sample"
                     )
         for sub_name, sub in (getattr(model, "subsystems", None) or {}).items():
@@ -3570,6 +3578,8 @@ def deprecated_records_per_sample_sites(file: EsmFile) -> list[str]:
 
     for mname, model in (file.models or {}).items():
         walk(model, f"/models/{_pointer_token(mname)}")
+    for rname, rs in (file.reaction_systems or {}).items():
+        walk(rs, f"/reaction_systems/{_pointer_token(rname)}")
     return sorted(sites)
 
 

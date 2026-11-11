@@ -430,7 +430,9 @@ export function recordShapeFindings(
  * The sorted JSON pointers at which the deprecated `records_per_sample` is
  * written in `esmFile` (esm-spec §8.3, §8.5.1):
  * `/data_sources/<S>/temporal/records_per_sample` and
- * `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`.
+ * `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`
+ * and
+ * `/reaction_systems/<R>[/subsystems/<S>…]/parameters/<p>/update[/<i>]/from/records_per_sample`.
  * Components behind an unmounted `{ref}` are not visited.
  */
 export function deprecatedRecordsPerSampleSites(esmFile: EsmFile): string[] {
@@ -441,7 +443,7 @@ export function deprecatedRecordsPerSampleSites(esmFile: EsmFile): string[] {
       sites.push(`/data_sources/${name}/temporal/records_per_sample`)
     }
   }
-  for (const { rule, path } of forEachParameterUpdate(esmFile)) {
+  for (const { rule, path } of forEachParameterUpdate(esmFile, { reactionSystems: true })) {
     const from = (rule as { from?: { records_per_sample?: number } }).from
     if (from?.records_per_sample !== undefined) sites.push(`${path}/from/records_per_sample`)
   }
