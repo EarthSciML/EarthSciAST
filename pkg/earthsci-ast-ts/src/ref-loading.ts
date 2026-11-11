@@ -24,6 +24,7 @@ import {
   EsmMachineryError,
   deepEqual,
   expandDocument,
+  indexSetDeclEqual,
   lowerExpressionTemplates,
 } from './lower-expression-templates.js'
 import {
@@ -477,6 +478,7 @@ function showIndexSet(decl: unknown): string {
   for (const k of ['kind', 'size', 'members', 'of', 'from_faq']) {
     if (d[k] !== undefined && d[k] !== null) parts.push(`${k}=${JSON.stringify(d[k])}`)
   }
+  if (d.records === true) parts.push('records=true')
   return parts.length > 0 ? parts.join(', ') : JSON.stringify(decl)
 }
 
@@ -498,7 +500,7 @@ function mergeSubsystemIndexSets(
     // contribution the leaf could not size is published still symbolic.
     const decl = foldMountContribution(raw, rootEnv)
     if (Object.prototype.hasOwnProperty.call(registry, n)) {
-      if (!deepEqual(registry[n], decl)) {
+      if (!indexSetDeclEqual(registry[n], decl)) {
         throw new EsmMachineryError(
           ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
           `index set '${n}' from subsystem ref '${ref}' (${showIndexSet(decl)}) collides with a non-deep-equal declaration already in the importing document's registry (${showIndexSet(registry[n])}) — contributed by the document's own \`index_sets\` or by an earlier mount. A referenced subsystem file's top-level index_sets merge into the importing document's registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7). If the two are genuinely different axes that happen to share a name, rename one at its mount edge with \`index_set_rename\` (esm-spec §4.7 "Mount-edge index-set renaming"), e.g. {"ref": "${ref}", "index_set_rename": {"${n}": "${n}_2"}}.`,
@@ -910,7 +912,7 @@ function foldNestedIndexSets(
   for (const n of names) {
     const decl = foldMountContribution(leafRegistry[n], leafEnv)
     if (Object.prototype.hasOwnProperty.call(isets, n)) {
-      if (!deepEqual(isets[n], decl)) {
+      if (!indexSetDeclEqual(isets[n], decl)) {
         throw new EsmMachineryError(
           ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
           `index set '${n}' contributed by a mount nested inside ref '${ref}' (${showIndexSet(decl)}) collides with a non-deep-equal declaration of the same name in that document itself (${showIndexSet(isets[n])}) — deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7)`,

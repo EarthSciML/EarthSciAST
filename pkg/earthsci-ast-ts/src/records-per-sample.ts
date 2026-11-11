@@ -20,7 +20,7 @@
  */
 
 import { ERROR_CODES } from './errors.js'
-import type { EsmFile, Model, ModelVariable, ParameterUpdate } from './types.js'
+import type { EsmFile, Model, ModelVariable, ParameterUpdate, ReactionSystem } from './types.js'
 
 /**
  * One `update` rule of a parameter: its name, scoped name (`Model[.Sub…].var`),
@@ -37,17 +37,24 @@ export interface ParameterUpdateSite {
 
 /**
  * Every `update` rule in the document, in top-level models and in their inline
- * subsystems at any depth. A `{ref}` component not yet mounted is skipped.
+ * subsystems at any depth; with `reactionSystems`, also every reaction-system
+ * parameter's (`/reaction_systems/<R>[/subsystems/<S>…]/parameters/<p>/update`).
+ * A `{ref}` component not yet mounted is skipped.
  */
-export function* forEachParameterUpdate(esmFile: EsmFile): Generator<ParameterUpdateSite> {
-  function* walkModel(
-    model: Model,
-    modelPath: string,
+export function* forEachParameterUpdate(
+  esmFile: EsmFile,
+  options: { reactionSystems?: boolean } = {},
+): Generator<ParameterUpdateSite> {
+  function* walkDeclarations(
+    declarations: Record<string, ModelVariable | null | undefined>,
+    basePath: string,
     scope: string,
   ): Generator<ParameterUpdateSite> {
-    for (const [variableName, variable] of Object.entries(model.variables ?? {})) {
-      if (variable?.update === undefined) continue
-      const base = `${modelPath}/variables/${variableName}/update`
+    for (const [variableName, variable] of Object.entries(declarations)) {
+      if (variable === null || typeof variable !== 'object' || variable.update === undefined) {
+        continue
+      }
+      const base = `${basePath}/${variableName}/update`
       const scopedName = `${scope}.${variableName}`
       if (Array.isArray(variable.update)) {
         for (const [i, rule] of variable.update.entries()) {
@@ -57,6 +64,14 @@ export function* forEachParameterUpdate(esmFile: EsmFile): Generator<ParameterUp
         yield { variableName, scopedName, variable, rule: variable.update, path: base }
       }
     }
+  }
+
+  function* walkModel(
+    model: Model,
+    modelPath: string,
+    scope: string,
+  ): Generator<ParameterUpdateSite> {
+    yield* walkDeclarations(model.variables ?? {}, `${modelPath}/variables`, scope)
     for (const [childName, child] of Object.entries(model.subsystems ?? {})) {
       if (child === null || typeof child !== 'object' || 'ref' in child) continue
       yield* walkModel(
@@ -67,9 +82,40 @@ export function* forEachParameterUpdate(esmFile: EsmFile): Generator<ParameterUp
     }
   }
 
+  // A reaction-system parameter carries `shape` and `update` exactly as a model
+  // parameter does, which is all a site reads of its declaration.
+  function* walkReactionSystem(
+    system: ReactionSystem,
+    systemPath: string,
+    scope: string,
+  ): Generator<ParameterUpdateSite> {
+    yield* walkDeclarations(
+      (system.parameters ?? {}) as unknown as Record<string, ModelVariable>,
+      `${systemPath}/parameters`,
+      scope,
+    )
+    for (const [childName, child] of Object.entries(system.subsystems ?? {})) {
+      if (child === null || typeof child !== 'object' || 'ref' in child) continue
+      yield* walkReactionSystem(
+        child as ReactionSystem,
+        `${systemPath}/subsystems/${childName}`,
+        `${scope}.${childName}`,
+      )
+    }
+  }
+
   for (const [modelName, model] of Object.entries(esmFile.models ?? {})) {
     if (model === null || typeof model !== 'object' || 'ref' in model) continue
     yield* walkModel(model as Model, `/models/${modelName}`, modelName)
+  }
+  if (options.reactionSystems !== true) return
+  for (const [systemName, system] of Object.entries(esmFile.reaction_systems ?? {})) {
+    if (system === null || typeof system !== 'object' || 'ref' in system) continue
+    yield* walkReactionSystem(
+      system as ReactionSystem,
+      `/reaction_systems/${systemName}`,
+      systemName,
+    )
   }
 }
 
@@ -94,24 +140,32 @@ export function paramToVarTargets(entries: readonly unknown[]): Map<string, stri
 }
 
 /**
- * The declared `shape` of the variable a scoped name names (`[]` when it
- * declares none), or `undefined` when the declaration cannot be reached: a
- * missing model, subsystem or variable, or one behind an unmounted `{ref}`.
+ * The declared `shape` of the variable (or reaction-system parameter) a scoped
+ * name names (`[]` when it declares none), or `undefined` when the declaration
+ * cannot be reached: a missing component, subsystem or variable, or one behind
+ * an unmounted `{ref}`.
  */
 function declaredShape(esmFile: EsmFile, scoped: string): string[] | undefined {
   const parts = scoped.split('.')
   if (parts.length < 2) return undefined
   const [head, ...tail] = parts
-  const model = esmFile.models?.[head]
-  if (model === null || typeof model !== 'object' || 'ref' in model) return undefined
-  let current: Model = model as Model
+  const inModels = esmFile.models !== undefined && head in esmFile.models
+  const root: unknown = inModels ? esmFile.models?.[head] : esmFile.reaction_systems?.[head]
+  if (root === null || typeof root !== 'object' || 'ref' in root) return undefined
+  type Node = {
+    subsystems?: Record<string, unknown>
+    variables?: Record<string, { shape?: string[] } | null>
+    parameters?: Record<string, { shape?: string[] } | null>
+  }
+  let current = root as Node
   for (const segment of tail.slice(0, -1)) {
     const sub = current.subsystems?.[segment]
     if (sub === null || typeof sub !== 'object' || 'ref' in sub || 'kind' in sub) return undefined
-    current = sub as Model
+    current = sub as Node
   }
-  const variable = current.variables?.[tail[tail.length - 1]]
-  if (variable === null || typeof variable !== 'object') return undefined
+  const declarations = inModels ? current.variables : current.parameters
+  const variable = declarations?.[tail[tail.length - 1]]
+  if (variable === null || variable === undefined || typeof variable !== 'object') return undefined
   return variable.shape ?? []
 }
 
@@ -225,15 +279,33 @@ function countOf(
  * The number of records data-fed parameter `site` receives, for its
  * `LoaderField` (esm-libraries-spec "Loader fields"): 2 when its record shape,
  * judged against the `param_to_var` edges in `targets`, begins with a record
- * axis, else 1.
+ * axis, else 1. `unmountedRefs` is {@link hasUnmountedRefs} of `esmFile`; a
+ * caller judging many sites computes it once and passes it.
  */
 export function recordCount(
   esmFile: EsmFile,
   site: ParameterUpdateSite,
   targets: ReadonlyMap<string, readonly string[]>,
+  unmountedRefs: boolean = hasUnmountedRefs(esmFile),
 ): 1 | 2 {
-  const unmountedRefs = hasUnmountedRefs(esmFile)
   return countOf(esmFile, recordShapes(esmFile, site, targets), unmountedRefs)?.count ?? 1
+}
+
+/**
+ * The number of records the data-fed parameter `parameter` (a scoped name,
+ * `Model[.Sub…].var` or `System[.Sub…].param`) receives per query time
+ * (esm-spec §8.5.1): 2 when its record shape begins with a record axis (an
+ * `interval` index set with `"records": true`), else 1. The record shape is
+ * judged against the document's inline `coupling`; `undefined` when
+ * `parameter` has no `data` rule.
+ */
+export function parameterRecordCount(esmFile: EsmFile, parameter: string): 1 | 2 | undefined {
+  for (const site of forEachParameterUpdate(esmFile, { reactionSystems: true })) {
+    if (site.scopedName !== parameter || site.rule.kind !== 'data') continue
+    const targets = paramToVarTargets((esmFile.coupling ?? []) as readonly unknown[])
+    return recordCount(esmFile, site, targets)
+  }
+  return undefined
 }
 
 /** A finding on one `update` rule: its code, message and details. */
@@ -380,7 +452,7 @@ export function deprecatedRecordsPerSampleSites(esmFile: EsmFile): string[] {
 export function deprecatedRecordsPerSampleWarning(sites: readonly string[]): string {
   return (
     'deprecated_records_per_sample: `records_per_sample` is deprecated and is removed at ' +
-    'esm 1.4.0; the number of records a data-fed parameter receives is said by its record ' +
+    'esm 3.0.0; the number of records a data-fed parameter receives is said by its record ' +
     'shape, two when its first axis is an interval index set with "records": true ' +
     `(esm-spec §8.5.1). Written at: ${sites.join(', ')}.`
   )

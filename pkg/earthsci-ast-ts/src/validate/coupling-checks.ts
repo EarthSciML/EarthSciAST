@@ -551,9 +551,9 @@ export function validateDataSourceReferences(esmFile: EsmFile): StructuralError[
 /**
  * Record axes (esm-spec §8.5.1). `record_axis_invalid` at `/index_sets/<name>`
  * for a record axis whose folded `size` is not 2 (a still-symbolic size is
- * skipped). Then, on every `update` rule at any depth: the deprecated
- * `from.records_per_sample` on a rule that is not `data`
- * (`records_per_sample_invalid`), and for a data-fed rule the record-shape
+ * skipped). Then, on every `update` rule at any depth, of models and of
+ * reaction systems: the deprecated `from.records_per_sample` on a rule that is
+ * not `data` (`records_per_sample_invalid`), and for a data-fed rule the record-shape
  * rules `record_axis_misplaced`, `record_axis_time_invariant_source` and the
  * written value's agreement (`records_per_sample_invalid`), judged by
  * {@link recordShapeFindings} against the inline `coupling`. A target this
@@ -576,7 +576,7 @@ export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
   const targets = paramToVarTargets(coupling)
   const hasImport = coupling.some((entry) => entry?.type === 'coupling_import')
   const unmountedRefs = hasUnmountedRefs(esmFile)
-  for (const site of forEachParameterUpdate(esmFile)) {
+  for (const site of forEachParameterUpdate(esmFile, { reactionSystems: true })) {
     const { variableName, rule, path } = site
     if (rule.kind !== 'data') {
       const binding = (rule as { from?: { records_per_sample?: number } }).from

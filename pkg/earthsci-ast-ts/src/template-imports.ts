@@ -39,6 +39,7 @@ import {
   composeTemplateBodies,
   deepEqual,
   expandReferencesWhere,
+  indexSetDeclEqual,
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
   templateOpBearing,
@@ -799,7 +800,9 @@ function mergeNamed(
   if (Object.prototype.hasOwnProperty.call(dst, name)) {
     // Deep-equal redeclaration (a diamond import) dedups at first occurrence;
     // a non-equal collision is a conflict (esm-spec §9.7.4/§9.7.5).
-    if (deepEqual(dst[name], decl)) return
+    if (what === 'index set' ? indexSetDeclEqual(dst[name], decl) : deepEqual(dst[name], decl)) {
+      return
+    }
     throw new EsmMachineryError(
       code,
       `${origin}: ${what} '${name}' collides with a non-deep-equal existing definition (esm-spec §9.7.4/§9.7.5)`,
@@ -3025,7 +3028,10 @@ export function applyMountIndexSetRename(
     // — one a mount nested inside the referenced document contributed. Deep
     // equality is idempotent; a disagreement is the §4.7 merge rule's own
     // `subsystem_index_set_conflict`.
-    if (Object.prototype.hasOwnProperty.call(renamed, final) && !deepEqual(renamed[final], decl)) {
+    if (
+      Object.prototype.hasOwnProperty.call(renamed, final) &&
+      !indexSetDeclEqual(renamed[final], decl)
+    ) {
       throw new EsmMachineryError(
         ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
         `${where}: \`index_set_rename\` maps index set '${name}' onto '${final}', which a mount nested inside the referenced document already contributes with a non-deep-equal declaration (esm-spec §4.7)`,

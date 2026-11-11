@@ -3487,7 +3487,7 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
 function checkRecordShapes(file: EsmFile, couplingEntries: readonly unknown[]): void {
   const targets = paramToVarTargets(couplingEntries)
   const unmountedRefs = hasUnmountedRefs(file)
-  for (const site of forEachParameterUpdate(file)) {
+  for (const site of forEachParameterUpdate(file, { reactionSystems: true })) {
     const [finding] = recordShapeFindings(file, site, targets, {
       targetsMayArriveLater: false,
       unmountedRefs,
@@ -3512,10 +3512,11 @@ function setLoaderRecordCounts(
 ): void {
   if (loaderFields.length === 0) return
   const targets = paramToVarTargets(couplingEntries)
+  const unmountedRefs = hasUnmountedRefs(file)
   const counts = new Map<string, 1 | 2>()
-  for (const site of forEachParameterUpdate(file)) {
+  for (const site of forEachParameterUpdate(file, { reactionSystems: true })) {
     if (site.rule.kind !== 'data' || counts.has(site.scopedName)) continue
-    counts.set(site.scopedName, recordCount(file, site, targets))
+    counts.set(site.scopedName, recordCount(file, site, targets, unmountedRefs))
   }
   for (const field of loaderFields) field.recordsPerSample = counts.get(field.name) ?? 1
 }
