@@ -75,6 +75,18 @@ pub(super) enum Parent {
     Contracted(usize),
 }
 
+impl TupleFrame {
+    /// The list's id (its box's [`LBox::tuple`]).
+    pub(super) fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// The list's loop symbols: output names, then contracted names.
+    pub(super) fn names(&self) -> &[String] {
+        &self.names
+    }
+}
+
 impl DimBound {
     /// Does this bound read a contracted dim, so it is only known once that
     /// dim is bound?
@@ -487,6 +499,141 @@ impl TapeBuilder<'_> {
             sec,
         );
         Ok(if rank0 { LV::Scalar(out) } else { LV::Arr(out) })
+    }
+
+    /// A rank-0 `faq` nested in the tuple-list box `bx` whose body reads the
+    /// list's loop symbols: the per-cell oracle reduces it at every tuple of
+    /// the list, `acc = identity`, then `acc = acc ⊕ term` per contraction
+    /// tuple, the last contracted name fastest, skipping a tuple the filter
+    /// excludes.
+    ///
+    /// That is a tuple-list contraction in its own right, whose "output
+    /// cells" are the enclosing list's tuples: the nested list is the
+    /// enclosing one with each tuple repeated once per contraction tuple, in
+    /// the oracle's order, every enclosing loop symbol a column over it and
+    /// each contracted name a column too. [`Self::lower_tuple_list`] lowers
+    /// the body over it and folds each enclosing tuple's run, so the result
+    /// is an array over the enclosing list, folded in the oracle's order.
+    pub(super) fn lower_nested_scalar_in_tuples(
+        &mut self,
+        spec: &ArrayOpSpec<'_>,
+        bx: &LBox,
+    ) -> LResult<LV> {
+        let Some(fi) = self.tuple_frames.iter().rposition(|f| f.id == bx.tuple) else {
+            bail_tape!("aggregate: a rank-0 output nested in a tuple list with no open frame");
+        };
+        let m = self.tuple_frames[fi].len;
+        // The enclosing loop symbols the nested contraction does not shadow
+        // (the oracle rebinds a shadowed name around the nested body).
+        let outer: Vec<usize> = (0..self.tuple_frames[fi].names.len())
+            .filter(|&ci| {
+                let n = &self.tuple_frames[fi].names[ci];
+                !spec.contract_names.iter().any(|c| c == n)
+            })
+            .collect();
+        let mut dims: Vec<(i64, i64)> = Vec::with_capacity(spec.contract_dims.len());
+        for d in &spec.contract_dims {
+            match d {
+                ContractDim::Static(l, h) => dims.push((*l, *h)),
+                other => bail_tape!(
+                    "aggregate: a rank-0 output nested in a tuple list, over a non-static \
+                     contraction dim ({other:?})"
+                ),
+            }
+        }
+        let per: usize = dims
+            .iter()
+            .try_fold(1usize, |acc, (l, h)| {
+                acc.checked_mul((h - l + 1).max(0) as usize)
+            })
+            .ok_or_else(|| Bail {
+                reason: "aggregate: a nested contraction window too large".into(),
+            })?;
+        let total = m.checked_mul(per).filter(|&n| n <= MAX_PROMOTED_ELEMS);
+        let Some(total) = total else {
+            bail_tape!("contracted: nested tuple list too long (over {MAX_PROMOTED_ELEMS} tuples)");
+        };
+        // The enclosing columns' values, wherever they live by now.
+        let mut outer_vals: Vec<Arc<Vec<f64>>> = Vec::with_capacity(outer.len());
+        for &ci in &outer {
+            let frame = &self.tuple_frames[fi];
+            let vals = match frame.slots[ci] {
+                Some(slot) => self.known_values(slot),
+                None => Some(Arc::new(frame.cols[ci].clone())),
+            };
+            match vals.filter(|v| v.len() == m) {
+                Some(v) => outer_vals.push(v),
+                None => bail_tape!("aggregate: a tuple-list column the build does not know"),
+            }
+        }
+        let mut names: Vec<String> = outer
+            .iter()
+            .map(|&ci| self.tuple_frames[fi].names[ci].clone())
+            .collect();
+        names.extend(spec.contract_names.iter().cloned());
+        let mut cols: Vec<Vec<f64>> = vec![Vec::with_capacity(total); names.len()];
+        let mut rows: Vec<u32> = Vec::with_capacity(m + 1);
+        rows.push(0);
+        let mut cur: Vec<i64> = dims.iter().map(|(l, _)| *l).collect();
+        for t in 0..m {
+            if per > 0 {
+                cur.iter_mut().zip(&dims).for_each(|(c, (l, _))| *c = *l);
+                loop {
+                    for (k, v) in outer_vals.iter().enumerate() {
+                        cols[k].push(v[t]);
+                    }
+                    for (k, c) in cur.iter().enumerate() {
+                        cols[outer.len() + k].push(*c as f64);
+                    }
+                    // Odometer: the last contracted name fastest.
+                    let mut a = dims.len();
+                    let mut done = true;
+                    while a > 0 {
+                        a -= 1;
+                        if cur[a] < dims[a].1 {
+                            cur[a] += 1;
+                            done = false;
+                            break;
+                        }
+                        cur[a] = dims[a].0;
+                    }
+                    if done {
+                        break;
+                    }
+                }
+            }
+            rows.push(u32::try_from((t + 1) * per).map_err(|_| Bail {
+                reason: "contracted: nested tuple list too long".into(),
+            })?);
+        }
+        self.tuples_held = self.tuples_held.saturating_add(total as u64);
+        let idx_names: Vec<String> = names[..outer.len()].to_vec();
+        let ranges = [(1, m as i64)];
+        let tspec = TupleSpec {
+            idx_names: &idx_names,
+            ranges: &ranges,
+            body: spec.body,
+            contract_names: &spec.contract_names,
+            bounds: &[],
+            gates: &[],
+            reduce: spec.reduce,
+            filter: spec.filter,
+            init: spec.reduce.identity(),
+        };
+        let notes = self.fault_notes;
+        let v = self.lower_tuple_list(
+            &tspec,
+            TupleList { rows, cols },
+            &DimI::from_elem(1, 1),
+            &DimU::from_elem(m, 1),
+            scalar_combine_op(spec.reduce),
+        )?;
+        // A fault here would sort by the nested list's tuples, which do not
+        // place it among the enclosing list's own faults: refused instead.
+        if self.fault_notes != notes {
+            bail_tape!("fault: a fail-closed fault inside a rank-0 output nested in a tuple list");
+        }
+        Ok(v)
     }
 
     /// Walk `spec`'s admitted tuples ONCE ([`visit_tuples`]), listing them
@@ -1229,7 +1376,7 @@ impl TapeBuilder<'_> {
 
     /// The per-tuple values of a subscript over the list, when the build
     /// knows them: a literal, a loop symbol, a gather of known data, or
-    /// arithmetic (`+ - * /`) of those, folded with the interpreter's own
+    /// arithmetic (`+ - * /`), comparisons or `ifelse` of those, folded with the interpreter's own
     /// kernel ([`apply_binary`], left to right as `eval` folds an n-ary node)
     /// so the positions are the ones `eval_index_args` computes. Arithmetic
     /// emits nothing: only the positions it yields are used.
@@ -1265,6 +1412,41 @@ impl TapeBuilder<'_> {
                 }
             }
             return Ok(Some(Arc::new(acc)));
+        }
+        // A comparison, and an `ifelse` choosing between known values (a
+        // wrapped vertex slot `ifelse(v < n, v + 1, 1)`): the scalar `eval`
+        // rule per tuple, a condition being true when it is not `0`.
+        if let Expr::Operator(n) = e
+            && n.expr.is_none()
+        {
+            let cmp = matches!(n.op.as_str(), "==" | "!=" | "<" | "<=" | ">" | ">=");
+            if (cmp && n.args.len() == 2) || (n.op == "ifelse" && n.args.len() == 3) {
+                let mut parts = Vec::with_capacity(n.args.len());
+                for a in &n.args {
+                    match self.tuple_known_values(a, bx)? {
+                        Some(v) => parts.push(v),
+                        None => return Ok(None),
+                    }
+                }
+                let out: Vec<f64> = if cmp {
+                    parts[0]
+                        .iter()
+                        .zip(parts[1].iter())
+                        .map(|(&x, &y)| apply_binary(&n.op, x, y))
+                        .collect()
+                } else {
+                    (0..m)
+                        .map(|k| {
+                            if parts[0][k] != 0.0 {
+                                parts[1][k]
+                            } else {
+                                parts[2][k]
+                            }
+                        })
+                        .collect()
+                };
+                return Ok(Some(Arc::new(out)));
+            }
         }
         Ok(match self.lower_expr(e, bx)? {
             LV::Lit(x) => Some(Arc::new(vec![x; m])),

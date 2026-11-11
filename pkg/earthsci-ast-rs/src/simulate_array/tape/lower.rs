@@ -4834,7 +4834,23 @@ impl<'m> TapeBuilder<'m> {
         bx: &LBox,
     ) -> LResult<LV> {
         if bx.tuple != 0 {
-            bail_tape!("aggregate: rank-0 output nested inside a tuple-list contraction body");
+            let frame_names: Vec<String> = self
+                .tuple_frames
+                .iter()
+                .rev()
+                .find(|f| f.id() == bx.tuple)
+                .map(|f| f.names().to_vec())
+                .unwrap_or_default();
+            if nested_aggregate_capture(spec, frame_names.iter()).is_none() {
+                let level = self.enter_fault_level(Some(bx));
+                let v = self.lower_wholesale_aggregate_in_level(node);
+                self.leave_fault_level(level);
+                return v;
+            }
+            if spec.has_drivable_overlap() || node.key.is_some() || node.distinct == Some(true) {
+                bail_tape!("aggregate: a gated or keyed rank-0 output that reads its tuple list");
+            }
+            return self.lower_nested_scalar_in_tuples(spec, bx);
         }
         if nested_aggregate_capture(spec, bx.syms.iter().chain(bx.cnames.iter())).is_none() {
             let level = self.enter_fault_level(Some(bx));
