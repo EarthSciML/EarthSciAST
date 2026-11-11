@@ -590,38 +590,59 @@ const PER_CELL_RECURRENCE: &str = "a causal self-reference (esm-spec §4.3.1.1),
 
 /// The factor names an expression declares it reads (`aggregate.args` plus
 /// every gather / bare reference), gathered recursively. The dependency edges
-/// come from the MODEL, not from a re-derivation here.
+/// come from the MODEL, not from a re-derivation here. A subtree shared by
+/// several parents (an expanded template's body) is walked once.
 fn declared_args(expr: &Expr, out: &mut HashSet<String>) {
-    match expr {
-        Expr::Variable(name) => {
-            out.insert(name.clone());
-        }
-        Expr::Operator(node) => {
-            for a in &node.args {
-                declared_args(a, out);
+    fn walk(
+        expr: &Expr,
+        out: &mut HashSet<String>,
+        seen: &mut HashSet<*const crate::types::ExpressionNode>,
+    ) {
+        match expr {
+            Expr::Variable(name) if !out.contains(name) => {
+                out.insert(name.clone());
             }
-            node.for_each_child(&mut |c| declared_args(c, out));
+            Expr::Operator(node) => {
+                if !seen.insert(std::sync::Arc::as_ptr(node)) {
+                    return;
+                }
+                for a in &node.args {
+                    walk(a, out, seen);
+                }
+                node.for_each_child(&mut |c| walk(c, out, seen));
+            }
+            _ => {}
         }
-        _ => {}
     }
+    walk(expr, out, &mut HashSet::new());
 }
 
 /// The key columns and envelope factors every `join` in `expr` names. They
 /// are strings on the clause rather than expressions, so [`declared_args`]
 /// does not see them.
 fn join_names(expr: &Expr, out: &mut HashSet<String>) {
-    if let Expr::Operator(node) = expr {
-        for clause in node.join.iter().flatten() {
-            out.extend(clause.on.iter().flatten().cloned());
-            if let Some(ov) = &clause.overlap {
-                out.extend(ov.src_env.iter().chain(ov.tgt_env.iter()).cloned());
+    fn walk(
+        expr: &Expr,
+        out: &mut HashSet<String>,
+        seen: &mut HashSet<*const crate::types::ExpressionNode>,
+    ) {
+        if let Expr::Operator(node) = expr {
+            if !seen.insert(std::sync::Arc::as_ptr(node)) {
+                return;
             }
+            for clause in node.join.iter().flatten() {
+                out.extend(clause.on.iter().flatten().cloned());
+                if let Some(ov) = &clause.overlap {
+                    out.extend(ov.src_env.iter().chain(ov.tgt_env.iter()).cloned());
+                }
+            }
+            for a in &node.args {
+                walk(a, out, seen);
+            }
+            node.for_each_child(&mut |c| walk(c, out, seen));
         }
-        for a in &node.args {
-            join_names(a, out);
-        }
-        node.for_each_child(&mut |c| join_names(c, out));
     }
+    walk(expr, out, &mut HashSet::new());
 }
 
 /// The observeds whose definitions read a state, directly or through another
