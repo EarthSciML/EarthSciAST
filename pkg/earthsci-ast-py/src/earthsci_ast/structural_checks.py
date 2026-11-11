@@ -2423,12 +2423,13 @@ def judge_record_shapes(
     (esm-spec §8.5.1).
 
     ``misplaced`` is rule 2: some record shape names a record axis at a
-    position other than the first, or the shapes disagree about beginning with
-    one. ``count`` is the number of records the parameter receives, 2 when
-    every record shape begins with a record axis and 1 when none does; None
-    when it is not decidable (no shape given, misplaced, or a first entry
-    naming an index set ``index_sets`` does not declare while
-    ``undeclared_is_plain`` is False, as during validation ahead of a mount).
+    position other than the first, or the decidable shapes disagree about
+    beginning with one. ``count`` is the number of records the parameter
+    receives, 2 when every decidable record shape begins with a record axis and
+    1 when none does; None when no shape is decidable or one is misplaced. A
+    shape whose first entry names an index set ``index_sets`` does not declare
+    is not decidable while ``undeclared_is_plain`` is False (validation ahead of
+    a mount, which may declare it); it is skipped and the others are judged.
     Shared by structural validation, ``flatten`` and ``providers_from_document``.
     """
     firsts: list[bool | None] = []
@@ -2445,7 +2446,7 @@ def judge_record_shapes(
     decided = {f for f in firsts if f is not None}
     if len(decided) == 2:
         return True, None
-    if not firsts or None in firsts:
+    if not decided:
         return False, None
     return False, 2 if True in decided else 1
 
@@ -2524,26 +2525,31 @@ def record_shape_findings(
 
 
 def _declared_variable(data: dict[str, Any], scoped: Any) -> dict[str, Any] | None:
-    """The raw declaration of a scoped variable ``Model[.Sub…].var``, or None
-    when the loaded document cannot reach it: not declared, or behind a
-    ``{"ref"}`` mount that structural validation runs ahead of."""
+    """The raw declaration of a scoped variable ``Model[.Sub…].var`` (or a
+    reaction-system parameter ``System[.Sub…].param``), or None when the loaded
+    document cannot reach it: not declared, or behind a ``{"ref"}`` mount that
+    structural validation runs ahead of."""
     if not isinstance(scoped, str) or "." not in scoped:
         return None
     *path, vname = scoped.split(".")
-    node: Any = (data.get("models") or {}).get(path[0])
+    models = data.get("models") or {}
+    in_models = isinstance(models, dict) and path[0] in models
+    node: Any = (
+        models.get(path[0]) if in_models else (data.get("reaction_systems") or {}).get(path[0])
+    )
     for seg in path[1:]:
         if not isinstance(node, dict):
             return None
         node = (node.get("subsystems") or {}).get(seg)
     if not isinstance(node, dict):
         return None
-    var = (node.get("variables") or {}).get(vname)
+    var = (node.get("variables" if in_models else "parameters") or {}).get(vname)
     return var if isinstance(var, dict) else None
 
 
 def _has_unmounted_refs(data: dict[str, Any]) -> bool:
-    """True when a model or a subsystem at any depth is still a ``{"ref"}``
-    mount edge, as it is when structural validation runs ahead of mounting."""
+    """True when a model, a reaction system, or a subsystem of either at any
+    depth is still a ``{"ref"}`` mount edge, as it is when structural validation runs ahead of mounting."""
 
     def pending(comp: Any) -> bool:
         if not isinstance(comp, dict):
@@ -2552,7 +2558,9 @@ def _has_unmounted_refs(data: dict[str, Any]) -> bool:
             return True
         return any(pending(sub) for sub in (comp.get("subsystems") or {}).values())
 
-    return any(pending(m) for m in (data.get("models") or {}).values())
+    return any(pending(m) for m in (data.get("models") or {}).values()) or any(
+        pending(rs) for rs in (data.get("reaction_systems") or {}).values()
+    )
 
 
 def inline_param_to_var_targets(data: dict[str, Any]) -> tuple[dict[str, list[Any]], bool]:
@@ -2588,7 +2596,8 @@ def raw_record_shapes(
     inline ``param_to_var`` target that resolves; with no such entry, the empty
     record shape, unless a ``coupling_import`` may supply one. ``complete`` is
     False when some record shape could not be seen (an unresolvable target, or
-    a pending ``coupling_import``): the count is then not decidable here."""
+    a pending ``coupling_import``); the shapes that could be seen are still
+    judged (esm-spec §8.5.1: an unreachable target is skipped)."""
     shape = vdef.get("shape")
     if shape is not None:
         return [list(shape) if isinstance(shape, list) else []], True
@@ -2639,14 +2648,16 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
     on a rule that is not ``data``, or a written value (own, else the
     source's) that disagrees with the count the record shape gives.
 
-    Checked against every record shape validation can see
+    Covers the data-fed parameters of models and of reaction systems, at every
+    subsystem depth. Checked against every record shape validation can see
     (:func:`raw_record_shapes`). A target this validation cannot reach (behind
     a ref not yet mounted, or not declared) is skipped, never read as empty,
-    and leaves the count undecided; so does a missing inline ``param_to_var``
-    entry while the coupling holds a ``coupling_import``. While a ref is
-    unmounted, a first entry naming an index set the document does not
-    declare is not decidable either. ``flatten`` re-checks the rest after
-    expansion (:func:`earthsci_ast.flatten._check_record_shapes`)."""
+    and the reachable targets are judged; a missing inline ``param_to_var``
+    entry while the coupling holds a ``coupling_import`` leaves the count
+    undecided. While a ref is unmounted, a record shape whose first entry names
+    an index set the document does not declare is skipped too. ``flatten``
+    re-checks the rest after expansion
+    (:func:`earthsci_ast.flatten._check_record_shapes`)."""
     sources = data.get("data_sources") or {}
     if not isinstance(sources, dict):
         sources = {}
@@ -2659,8 +2670,8 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
     # naming a set the root does not declare is not decidable.
     refs_pending = _has_unmounted_refs(data)
 
-    def walk(comp: dict[str, Any], scope: str, pointer: str) -> None:
-        for vname, vdef in (comp.get("variables") or {}).items():
+    def walk(comp: dict[str, Any], scope: str, pointer: str, decls: str) -> None:
+        for vname, vdef in (comp.get(decls) or {}).items():
             if not isinstance(vdef, dict):
                 continue
             for suffix, rule in _update_rules_with_paths(vdef.get("update")):
@@ -2669,9 +2680,7 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
                 binding = rule.get("from")
                 if not isinstance(binding, dict):
                     continue
-                at = (
-                    f"{pointer}/variables/{vname}/update{suffix.replace('[', '/').replace(']', '')}"
-                )
+                at = f"{pointer}/{decls}/{vname}/update{suffix.replace('[', '/').replace(']', '')}"
                 if rule.get("kind") != "data":
                     if "records_per_sample" in binding:
                         errors.append(
@@ -2687,14 +2696,12 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
                 source = sources.get(rule.get("source"))
                 if not isinstance(source, dict):
                     continue  # data_source_undefined reports it
-                shapes, complete = raw_record_shapes(
+                shapes, _complete = raw_record_shapes(
                     data, vdef, f"{scope}.{vname}", p2v_targets, has_coupling_import
                 )
                 misplaced, count = judge_record_shapes(
                     index_sets, shapes, undeclared_is_plain=not refs_pending
                 )
-                if not complete:
-                    count = None
                 written, _where = written_records_per_sample(binding, source)
                 for code, message, details in record_shape_findings(
                     vname, rule.get("source"), source, shapes, misplaced, count, written
@@ -2702,11 +2709,14 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
                     errors.append((code, at, message, details))
         for sname, sub in (comp.get("subsystems") or {}).items():
             if isinstance(sub, dict):
-                walk(sub, f"{scope}.{sname}", f"{pointer}/subsystems/{sname}")
+                walk(sub, f"{scope}.{sname}", f"{pointer}/subsystems/{sname}", decls)
 
     for mname, m in (data.get("models") or {}).items():
         if isinstance(m, dict):
-            walk(m, mname, f"/models/{mname}")
+            walk(m, mname, f"/models/{mname}", "variables")
+    for rname, rs in (data.get("reaction_systems") or {}).items():
+        if isinstance(rs, dict):
+            walk(rs, rname, f"/reaction_systems/{rname}", "parameters")
 
 
 def _check_system_kind(data: dict[str, Any], errors: list[str]) -> None:

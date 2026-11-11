@@ -3570,54 +3570,75 @@ def _check_record_shapes(esm_file: EsmFile, coupling_entries: list[Any]) -> dict
         *path, vname = scoped.split(".")
         if not path:
             return None
-        node: Any = esm_file.models.get(path[0])
+        if path[0] in esm_file.models:
+            node: Any = esm_file.models.get(path[0])
+            for seg in path[1:]:
+                node = node.subsystems.get(seg) if isinstance(node, Model) else None
+            if not isinstance(node, Model) or vname not in node.variables:
+                return None
+            return list(node.variables[vname].shape or [])
+        rs: Any = esm_file.reaction_systems.get(path[0])
         for seg in path[1:]:
-            node = node.subsystems.get(seg) if isinstance(node, Model) else None
-        if not isinstance(node, Model) or vname not in node.variables:
+            rs = rs.subsystems.get(seg) if isinstance(rs, ReactionSystem) else None
+        if not isinstance(rs, ReactionSystem):
             return None
-        return list(node.variables[vname].shape or [])
+        param = next((p for p in rs.parameters if p.name == vname), None)
+        return None if param is None else list(param.shape or [])
+
+    def check(vname: str, var: Any, scope: str, pointer: str) -> None:
+        if var.update is None:
+            return
+        rules = (
+            [(f"/{i}", r) for i, r in enumerate(var.update)]
+            if isinstance(var.update, list)
+            else [("", var.update)]
+        )
+        for suffix, rule in rules:
+            if rule.kind != "data" or rule.from_source is None:
+                continue
+            source = sources.get(rule.source)
+            if source is None:
+                continue  # validation reports data_source_undefined
+            scoped = f"{scope}.{vname}"
+            if var.shape is not None:
+                shapes = [list(var.shape)]
+            else:
+                tos = targets.get(scoped, [])
+                resolved = [declared_shape(to) for to in tos]
+                shapes = [shape for shape in resolved if shape is not None] if tos else [[]]
+            misplaced, count = judge_record_shapes(index_sets, shapes, undeclared_is_plain=True)
+            written, _where = written_records_per_sample(rule.from_source, source)
+            findings = record_shape_findings(
+                vname, rule.source, source, shapes, misplaced, count, written
+            )
+            if findings:
+                code, message, _details = findings[0]
+                at = f"{pointer}/{vname}/update{suffix}"
+                if code == "records_per_sample_invalid":
+                    raise RecordsPerSampleInvalidError(at, message)
+                raise RecordAxisError(at, message, code)
+            counts[scoped] = count if count is not None else 1
 
     def walk(model: Model, scope: str, pointer: str) -> None:
         for vname, var in model.variables.items():
-            if var.update is None:
-                continue
-            rules = (
-                [(f"/{i}", r) for i, r in enumerate(var.update)]
-                if isinstance(var.update, list)
-                else [("", var.update)]
-            )
-            for suffix, rule in rules:
-                if rule.kind != "data" or rule.from_source is None:
-                    continue
-                source = sources.get(rule.source)
-                if source is None:
-                    continue  # validation reports data_source_undefined
-                scoped = f"{scope}.{vname}"
-                if var.shape is not None:
-                    shapes = [list(var.shape)]
-                else:
-                    tos = targets.get(scoped, [])
-                    resolved = [declared_shape(to) for to in tos]
-                    shapes = [shape for shape in resolved if shape is not None] if tos else [[]]
-                misplaced, count = judge_record_shapes(index_sets, shapes, undeclared_is_plain=True)
-                written, _where = written_records_per_sample(rule.from_source, source)
-                findings = record_shape_findings(
-                    vname, rule.source, source, shapes, misplaced, count, written
-                )
-                if findings:
-                    code, message, _details = findings[0]
-                    at = f"{pointer}/variables/{vname}/update{suffix}"
-                    if code == "records_per_sample_invalid":
-                        raise RecordsPerSampleInvalidError(at, message)
-                    raise RecordAxisError(at, message, code)
-                counts[scoped] = count if count is not None else 1
+            check(vname, var, scope, f"{pointer}/variables")
         for sname, sub in model.subsystems.items():
             if isinstance(sub, Model):
                 walk(sub, f"{scope}.{sname}", f"{pointer}/subsystems/{sname}")
 
+    def walk_rs(rs: ReactionSystem, scope: str, pointer: str) -> None:
+        for param in rs.parameters:
+            check(param.name, param, scope, f"{pointer}/parameters")
+        for sname, sub in rs.subsystems.items():
+            if isinstance(sub, ReactionSystem):
+                walk_rs(sub, f"{scope}.{sname}", f"{pointer}/subsystems/{sname}")
+
     for mname, model in esm_file.models.items():
         if isinstance(model, Model):
             walk(model, mname, f"/models/{mname}")
+    for rname, rs in esm_file.reaction_systems.items():
+        if isinstance(rs, ReactionSystem):
+            walk_rs(rs, rname, f"/reaction_systems/{rname}")
     return counts
 
 

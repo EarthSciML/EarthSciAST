@@ -392,7 +392,7 @@ class DataSourceBinding:
     unit_conversion: Expr | None = None
     codes: dict[str, Any] | None = None
     select: dict[str, Any] | None = None
-    # DEPRECATED (esm-spec §8.3, §8.5.1; removed at esm 1.4.0): 1 or 2, kept
+    # DEPRECATED (esm-spec §8.3, §8.5.1; removed at esm 3.0.0): 1 or 2, kept
     # and emitted as written. The record shape says how many records the
     # parameter receives; a written value may only restate it. None when the
     # document does not set it on this binding.
@@ -975,7 +975,7 @@ class DataSourceTemporal:
     records_per_file: int | str | None = None
     time_variable: str | None = None
     # DEPRECATED source-wide default of each consuming parameter's
-    # ``from.records_per_sample`` (esm-spec §8.3, §8.5.1; removed at esm 1.4.0).
+    # ``from.records_per_sample`` (esm-spec §8.3, §8.5.1; removed at esm 3.0.0).
     records_per_sample: int | None = None
 
 

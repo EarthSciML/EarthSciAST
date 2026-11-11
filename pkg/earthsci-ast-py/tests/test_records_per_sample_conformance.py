@@ -278,3 +278,245 @@ def test_a_nested_load_does_not_warn_twice(tmp_path):
     path = _write_index_sets_from_mount(tmp_path, ["rec", "x"], written=2)
     _doc, n = _load_counting_warnings(lambda: load_path(path))
     assert n == 1
+
+
+# --- review fixes for PR #697 -------------------------------------------------
+
+
+def _grid_leaf(gf_t: dict) -> dict:
+    return {
+        "esm": "1.3.0",
+        "metadata": {"name": "Leaf"},
+        "index_sets": {"gf_t": gf_t},
+        "models": {
+            "Leaf": {
+                "variables": {"g": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["g"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["g"]},
+                    }
+                ],
+            }
+        },
+    }
+
+
+def _root_mounting_leaf(tmp_path, root_gf_t: dict, leaf_gf_t: dict) -> str:
+    (tmp_path / "leaf.esm").write_text(json.dumps(_grid_leaf(leaf_gf_t)))
+    root = {
+        "esm": "1.3.0",
+        "metadata": {"name": "Root"},
+        "index_sets": {"gf_t": root_gf_t},
+        "models": {"Leaf": {"ref": "./leaf.esm"}},
+    }
+    path = tmp_path / "root.esm"
+    path.write_text(json.dumps(root))
+    return str(path)
+
+
+def test_mount_merge_refuses_a_records_flag_the_root_does_not_declare(tmp_path):
+    """Index-set merge equality includes ``records``: a mounted record axis
+    colliding with the root's plain interval of the same size is a conflict,
+    not a silent drop of the flag."""
+    path = _root_mounting_leaf(
+        tmp_path,
+        {"kind": "interval", "size": 2},
+        {"kind": "interval", "size": 2, "records": True},
+    )
+    with pytest.raises(Exception) as excinfo:
+        load_path(path)
+    assert "subsystem_index_set_conflict" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("root_extra", "leaf_extra"),
+    [({}, {"records": False}), ({"records": False}, {}), ({"records": True}, {"records": True})],
+)
+def test_mount_merge_reads_records_false_as_absent(tmp_path, root_extra, leaf_extra):
+    path = _root_mounting_leaf(
+        tmp_path,
+        {"kind": "interval", "size": 2, **root_extra},
+        {"kind": "interval", "size": 2, **leaf_extra},
+    )
+    doc = load_path(path)
+    assert (doc.index_sets["gf_t"].get("records") is True) == (root_extra.get("records") is True)
+
+
+def test_template_import_merge_reads_records_false_as_absent():
+    from earthsci_ast.lower_expression_templates import ExpressionTemplateError
+    from earthsci_ast.template_imports import _merge_named
+
+    dst = {"gf_t": {"kind": "interval", "size": 2}}
+    _merge_named(
+        dst,
+        "gf_t",
+        {"kind": "interval", "size": 2, "records": False},
+        "template_import_index_set_conflict",
+        "index set",
+        "lib",
+    )
+    with pytest.raises(ExpressionTemplateError):
+        _merge_named(
+            dst,
+            "gf_t",
+            {"kind": "interval", "size": 2, "records": True},
+            "template_import_index_set_conflict",
+            "index set",
+            "lib",
+        )
+
+
+def _static_source() -> dict:
+    """A time-invariant source: no ``temporal`` block, so no successor record."""
+    return {"kind": "grid", "source": {"url_template": "file:///data/static.nc"}}
+
+
+def _box(f_shape: list[str]) -> dict:
+    return {
+        "variables": {
+            "c": {"type": "unknown", "units": "1", "default": 1.0},
+            "F": {"type": "parameter", "units": "1/s", "shape": f_shape, "default": 0.1},
+        },
+        "equations": [
+            {
+                "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                "rhs": {"op": "-", "args": ["c"]},
+            }
+        ],
+    }
+
+
+def test_validation_judges_reachable_targets_when_one_is_behind_a_ref():
+    """A shapeless data-fed parameter with one inline ``param_to_var`` target
+    shaped ``[rec, cells]`` and one behind an unmounted ref: the reachable
+    target decides two records, so a time-invariant source is refused at
+    validation rather than left undecided."""
+    from earthsci_ast.structural_checks import _validate_structural
+
+    raw = {
+        "esm": "1.3.0",
+        "metadata": {"name": "ReachableTargets"},
+        "index_sets": {
+            "rec": {"kind": "interval", "size": 2, "records": True},
+            "cells": {"kind": "interval", "size": 4},
+        },
+        "data_sources": {"static": _static_source()},
+        "models": {
+            "Met": {
+                "variables": {
+                    "K": {
+                        "type": "parameter",
+                        "units": "1/s",
+                        "default": 0.1,
+                        "update": {
+                            "kind": "data",
+                            "source": "static",
+                            "from": {"file_variable": "K"},
+                        },
+                    }
+                },
+                "equations": [],
+            },
+            "Box": _box(["rec", "cells"]),
+            "Far": {"ref": "./far.esm"},
+        },
+        "coupling": [
+            {"type": "variable_map", "from": "Met.K", "to": "Box.F", "transform": "param_to_var"},
+            {"type": "variable_map", "from": "Met.K", "to": "Far.F", "transform": "param_to_var"},
+        ],
+    }
+    with pytest.raises(StructuralValidationError) as err:
+        _validate_structural(raw)
+    assert _record_findings(err.value.records) == [
+        ("record_axis_time_invariant_source", "/models/Met/variables/K/update")
+    ]
+
+
+def _reaction_system_doc(t_shape, written=None, temporal=True) -> dict:
+    source = {
+        "kind": "grid",
+        "source": {"url_template": "file:///data/met_{date:%Y%m%d}.nc"},
+    }
+    if temporal:
+        source["temporal"] = {
+            "start": "2024-05-01T00:00:00Z",
+            "frequency": "PT1H",
+            "file_period": "P1D",
+            "records_per_file": 24,
+        }
+        if written is not None:
+            source["temporal"]["records_per_sample"] = written
+    return {
+        "esm": "1.3.0",
+        "metadata": {"name": "ReactionSystemRecords"},
+        "index_sets": {
+            "rec": {"kind": "interval", "size": 2, "records": True},
+            "cells": {"kind": "interval", "size": 4},
+        },
+        "data_sources": {"met": source},
+        "reaction_systems": {
+            "Chem": {
+                "species": {"A": {"units": "mol/mol", "default": 1.0}},
+                "parameters": {
+                    "T": {
+                        "units": "K",
+                        "default": 298.0,
+                        "shape": t_shape,
+                        "update": {
+                            "kind": "data",
+                            "source": "met",
+                            "from": {"file_variable": "t2m"},
+                        },
+                    }
+                },
+                "reactions": [
+                    {
+                        "id": "R1",
+                        "substrates": [{"species": "A", "stoichiometry": 1}],
+                        "products": None,
+                        "rate": 0.1,
+                    }
+                ],
+            }
+        },
+    }
+
+
+def test_reaction_system_written_records_per_sample_must_agree_with_the_shape():
+    from earthsci_ast.structural_checks import _validate_structural
+
+    with pytest.raises(StructuralValidationError) as err:
+        _validate_structural(_reaction_system_doc(["cells"], written=2))
+    assert _record_findings(err.value.records) == [
+        ("records_per_sample_invalid", "/reaction_systems/Chem/parameters/T/update")
+    ]
+
+
+def test_reaction_system_record_axis_needs_a_time_varying_source():
+    from earthsci_ast.structural_checks import _validate_structural
+
+    with pytest.raises(StructuralValidationError) as err:
+        _validate_structural(_reaction_system_doc(["rec", "cells"], temporal=False))
+    assert _record_findings(err.value.records) == [
+        ("record_axis_time_invariant_source", "/reaction_systems/Chem/parameters/T/update")
+    ]
+
+
+def test_reaction_system_record_axis_agreeing_with_a_written_2_is_valid():
+    from earthsci_ast.structural_checks import _validate_structural
+
+    _validate_structural(_reaction_system_doc(["rec", "cells"], written=2))
+
+
+def test_flatten_rechecks_reaction_system_record_shapes():
+    """The flatten re-check covers reaction-system parameters too: one whose
+    record shape names the record axis second is refused there."""
+    from earthsci_ast.flatten import _check_record_shapes
+
+    doc = load_string(json.dumps(_reaction_system_doc(["cells"])))
+    doc.reaction_systems["Chem"].parameters[0].shape = ["cells", "rec"]
+    with pytest.raises(RecordAxisError) as err:
+        _check_record_shapes(doc, list(doc.coupling or []))
+    assert err.value.code == "record_axis_misplaced"
+    assert err.value.pointer == "/reaction_systems/Chem/parameters/T/update"

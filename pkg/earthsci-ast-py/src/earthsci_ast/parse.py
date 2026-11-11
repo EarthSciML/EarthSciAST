@@ -2073,10 +2073,13 @@ _ISET_SEMANTIC_KEYS = (
 def _index_set_deep_equal(a: Any, b: Any) -> bool:
     """Structural equality of two index-set declarations (esm-spec §4.7 /
     §9.7.5): equal ``kind`` / ``size`` / ``members`` / ``of`` / ``offsets`` /
-    ``values`` / ``from_faq``. Non-semantic fields (``description``) do not
-    affect the judgment, matching the Julia reference."""
+    ``values`` / ``from_faq`` / ``records``. ``"records": false`` and an absent
+    ``records`` are the same declaration (esm-spec §8.5.1). Non-semantic fields
+    (``description``) do not affect the judgment, matching the Julia reference."""
     if not (isinstance(a, dict) and isinstance(b, dict)):
         return a == b
+    if (a.get("records") is True) != (b.get("records") is True):
+        return False
     return all(a.get(k) == b.get(k) for k in _ISET_SEMANTIC_KEYS)
 
 
@@ -2087,6 +2090,8 @@ def _index_set_show(s: Any) -> str:
     for k in ("kind", "size", "members", "of", "from_faq"):
         if s.get(k) is not None:
             parts.append(f"{k}={s[k]}")
+    if s.get("records") is True:
+        parts.append("records=True")
     return ", ".join(parts)
 
 
@@ -3530,7 +3535,7 @@ def _pointer_token(name: object) -> str:
 
 def deprecated_records_per_sample_sites(file: EsmFile) -> list[str]:
     """The JSON pointers at which a loaded document writes the deprecated
-    ``records_per_sample`` (esm-spec §8.3, §8.5.1; removed at esm 1.4.0),
+    ``records_per_sample`` (esm-spec §8.3, §8.5.1; removed at esm 3.0.0),
     sorted by plain string order:
     ``/data_sources/<S>/temporal/records_per_sample`` and
     ``/models/<M>[/subsystems/<S>...]/variables/<v>/update[/<i>]/from/records_per_sample``
@@ -3577,7 +3582,7 @@ def _warn_deprecated_records_per_sample(file: EsmFile) -> None:
         return
     warnings.warn(
         "deprecated_records_per_sample: `records_per_sample` is deprecated and is "
-        "removed at esm 1.4.0; the number of records a data-fed parameter receives is "
+        "removed at esm 3.0.0; the number of records a data-fed parameter receives is "
         "said by its record shape, two when its first axis is an interval index set "
         'with "records": true (esm-spec §8.5.1). Written at: ' + ", ".join(sites) + ".",
         EsmDeprecationWarning,

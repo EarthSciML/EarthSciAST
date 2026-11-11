@@ -841,6 +841,12 @@ class _TemplateScope:
         self.metaparams: dict[str, Any] = {}
 
 
+def _drop_false_records(decl: Any) -> Any:
+    if _is_object(decl) and decl.get("records") is False:
+        return {k: v for k, v in decl.items() if k != "records"}
+    return decl
+
+
 def _merge_named(
     dst: dict[str, Any], name: str, decl: Any, code: str, what: str, origin: str
 ) -> None:
@@ -848,6 +854,10 @@ def _merge_named(
         # Deep-equal redeclaration (a diamond import) dedups at first
         # occurrence; a non-equal collision is a conflict (§9.7.4/§9.7.5).
         if dst[name] == decl:
+            return
+        # `"records": false` and an absent `records` are one index-set
+        # declaration (esm-spec §8.5.1).
+        if what == "index set" and _drop_false_records(dst[name]) == _drop_false_records(decl):
             return
         raise ExpressionTemplateError(
             code,
