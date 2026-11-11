@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import warnings
 from typing import Any
 
@@ -505,9 +506,35 @@ def _pd_templates(model: dict) -> dict | None:
     ``component_templates`` from exactly these blocks) — a top-level authored
     registry is a DECLARATION that load materialises into the components, so on
     the ``esm_problem`` input form the per-component block is the registry.
+
+    A raw document may still carry the component's
+    ``expression_template_imports`` (an ``esm:std/...`` library, say): those are
+    resolved here into the effective sequence load would fold into the block
+    (imports first, then the component's own declarations), which is what the
+    Julia reference's ``coerce_esm_file`` hands its registry. An import that
+    cannot be resolved leaves only the component's own block, so the call sites
+    that needed it stay unexpanded and the pass declines rather than raises.
     """
     tpl = model.get("expression_templates")
-    return tpl if isinstance(tpl, dict) and tpl else None
+    own = tpl if isinstance(tpl, dict) and tpl else None
+    imports = model.get("expression_template_imports")
+    if not isinstance(imports, list) or not imports:
+        return own
+    from .template_imports import (  # local: avoid a cycle
+        _merge_scope,
+        _resolve_import_entry,
+        _TemplateScope,
+    )
+
+    scope = _TemplateScope()
+    try:
+        for entry in imports:
+            sub = _resolve_import_entry(entry, os.getcwd(), [], "pushdown_rewrite")
+            _merge_scope(scope, sub, "pushdown_rewrite")
+    except Exception:  # unresolvable import, conflicting names, …
+        return own
+    merged = {**scope.templates, **(own or {})}
+    return merged or None
 
 
 def _pd_has_apply(node: Any) -> bool:
