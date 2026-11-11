@@ -126,7 +126,7 @@ var nodeHeaderKeys = []string{"op", "id", "expect_cadence"}
 // the kind is kept distinct because the two answer different questions about a
 // node (what it IS vs how its op is parameterized).
 var registryKeys = []string{
-	"reduce", "semiring", "manifold", "fn", "table", "side", "attrs",
+	"reduce", "semiring", "fn", "side", "attrs",
 	"members", "from_faq",
 }
 
@@ -141,9 +141,7 @@ var opaqueKeys = []string{
 	// symbol, so a metaparameter reaches these fields only as an `on` data-column
 	// name; they are names wherever they appear, so they are skipped rather than
 	// left to that check.
-	"on", "syms", "arg", "output_idx", "of",
-	// A `table_lookup` output name.
-	"output",
+	"on", "syms", "output_idx", "of",
 	"handler_id",
 	// References to files, components, data sources, data columns and the
 	// import-edge rename vocabulary.
@@ -165,7 +163,7 @@ var opaqueKeys = []string{
 // substituted. A key in both sets (`where`, `rename`, …) is skipped whole.
 var nameKeyedMapKeys = keySet([]string{
 	"variables", "species", "parameters", "guesses", "subsystems",
-	"expression_templates", "ranges", "axes", "bindings", "config", "coords",
+	"expression_templates", "ranges", "bindings", "config", "coords",
 	"initial_conditions", "parameter_overrides", "pinned_coords", "map",
 	"rename", "rebind", "index_set_rename", "url_substitutions", "where",
 })
