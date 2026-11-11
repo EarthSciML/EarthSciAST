@@ -138,6 +138,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("flattened_to_esm_test.jl")
     include("shape_promotion_test.jl")
     include("shape_promotion_consumer_refs_test.jl")  # promoted-var consumers gathered in-loop
+    include("ifelse_mixed_arm_shape_test.jl")  # §4.3.4 one array arm + one scalar arm; data-fed shape adoption
     include("subsystem_ref_test.jl")
     include("mount_index_set_rename_test.jl")  # §4.7 mount-edge index_set_rename
     include("toplevel_mount_edge_pipeline_test.jl")  # §4.7 edge pipeline, top-level {ref}
