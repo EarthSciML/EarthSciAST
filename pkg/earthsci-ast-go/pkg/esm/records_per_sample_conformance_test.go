@@ -85,9 +85,13 @@ func loadCapturingStderr(t *testing.T, path string) (*ESMFile, string) {
 	}()
 	file, loadErr := LoadPath(path)
 	os.Stderr = saved
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 	out := <-done
-	r.Close()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if loadErr != nil {
 		t.Fatalf("load: %v", loadErr)
 	}
