@@ -724,6 +724,19 @@ mutable struct _GeoCG
     srcs::Vector{Any}
     src_ix::IdDict{Any, Int}
     nvar::Int
+    # What the emitter knows about each memo local where the next emitted code
+    # runs (it emits in evaluation order). A local in `def` is certainly set:
+    # its use reads it. A local of the innermost loop's level (`cur`) that no
+    # code since that loop's iteration start may have set (`maybe`) is
+    # certainly unset, as the iteration start resets it: its use computes it
+    # unguarded. Any other use carries the guarded computation. So a shared
+    # sub-tree's code is emitted about once per loop iteration that can reach
+    # it, not once per use, and a heavily shared body (a library template) does
+    # not grow with its use count.
+    mlevel::Dict{Symbol, Int}          # memo local => the level that resets it
+    def::Set{Symbol}
+    maybe::Set{Symbol}
+    cur::Int
 end
 
 _geo_cg_var!(g::_GeoCG, p::String) = Symbol("_gk_", p, g.nvar += 1)
@@ -772,16 +785,44 @@ function _geo_cg(g::_GeoCG, n::_Node)
             g.memo[n] = m
             push!(get!(() -> Symbol[], g.resets, g.level[n]), m)
         end
+        m in g.def && return m
+        lv = g.mlevel[m] = g.level[n]
         f = Symbol(m, :_set)
+        if lv == g.cur && !(m in g.maybe)
+            raw = _geo_cg_raw(g, n)
+            push!(g.def, m)
+            push!(g.maybe, m)
+            return :(
+                begin
+                    $m = $raw::Float64
+                    $f = true
+                    $m
+                end
+            )
+        end
+        # The computation runs only when the guard is unset, so the locals it
+        # sets are not certain afterwards; only `m` is.
+        before = copy(g.def)
+        raw = _geo_cg_raw(g, n)
+        g.def = push!(before, m)
+        push!(g.maybe, m)
         return :(
             $f ? $m : begin
-                    $m = $(_geo_cg_raw(g, n))::Float64
+                    $m = $raw::Float64
                     $f = true
                     $m
                 end
         )
     end
     return _geo_cg_raw(g, n)
+end
+
+# Emit `x` in a branch that may not run: the locals it sets stay uncertain.
+function _geo_cg_branch(g::_GeoCG, x::_Node)
+    before = copy(g.def)
+    e = _geo_cg(g, x)
+    g.def = before
+    return e
 end
 
 function _geo_cg_raw(g::_GeoCG, n::_Node)
@@ -810,9 +851,17 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         length(c) == 2 || throw(_GeoCGDecline())
         return :($(Expr(:call, _GEO_CG_CMP[op], em(c[1]), em(c[2]))) ? 1.0 : 0.0)
     elseif op === :and || op === :or
+        # Operands emit in evaluation order: the first always runs, each later
+        # one only after every earlier one ran (short circuit).
+        es = Any[em(c[1])]
+        before = copy(g.def)
+        for i in 2:length(c)
+            push!(es, em(c[i]))
+        end
+        g.def = before
         acc = op === :and ? 1.0 : 0.0
         for i in length(c):-1:1
-            acc = op === :and ? :($(em(c[i])) == 0 ? 0.0 : $acc) : :($(em(c[i])) != 0 ? 1.0 : $acc)
+            acc = op === :and ? :($(es[i]) == 0 ? 0.0 : $acc) : :($(es[i]) != 0 ? 1.0 : $acc)
         end
         return acc
     elseif op === :not
@@ -820,7 +869,8 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         return :($(em(c[1])) == 0 ? 1.0 : 0.0)
     elseif op === :ifelse
         length(c) == 3 || throw(_GeoCGDecline())
-        return :($(em(c[1])) != 0 ? $(em(c[2])) : $(em(c[3])))
+        cond = em(c[1])
+        return :($cond != 0 ? $(_geo_cg_branch(g, c[2])) : $(_geo_cg_branch(g, c[3])))
     elseif haskey(_GEO_CG_UNARY, op)
         length(c) == 1 || throw(_GeoCGDecline())
         return Expr(:call, _GEO_CG_UNARY[op], em(c[1]))
@@ -858,8 +908,16 @@ function _geo_cg_agg(g::_GeoCG, n::_Node)
     acc = _geo_cg_var!(g, "acc")
     ks = [_geo_cg_var!(g, "k") for _ in sp.slots]
     lv = maximum(g.slot_level[s] for s in sp.slots)
-    body = em_body = _geo_cg(g, sp.body)
+    # The loop body may run zero times, and every iteration resets the memo
+    # locals of this level and deeper: inside it only the shallower locals
+    # certain before the loop are certain, and after it nothing new is.
+    before, outer_maybe, outer_cur = copy(g.def), g.maybe, g.cur
+    filter!(m -> get(g.mlevel, m, 0) < lv, g.def)
+    g.maybe, g.cur = Set{Symbol}(), lv
     filt = sp.filter === nothing ? nothing : _geo_cg(g, sp.filter)
+    body = _geo_cg(g, sp.body)
+    g.def, g.cur = before, outer_cur
+    g.maybe = union!(outer_maybe, g.maybe)
     resets = Any[]
     for m in get(g.resets, lv, Symbol[])
         push!(resets, :($(Symbol(m, :_set)) = false))
@@ -957,7 +1015,8 @@ function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothi
     g = _GeoCG(
         _NodeMap{Int}(), _NodeMap{Int}(), _NodeMap{UInt64}(), Dict{Int, Int}(),
         _NodeMap{Symbol}(),
-        Dict{Int, Vector{Symbol}}(), Any[], IdDict{Any, Int}(), 0
+        Dict{Int, Vector{Symbol}}(), Any[], IdDict{Any, Int}(), 0,
+        Dict{Symbol, Int}(), Set{Symbol}(), Set{Symbol}(), 0
     )
     try
         _geo_cg_scan!(g, body, 0)
