@@ -24,7 +24,8 @@
     }
   },
   "index_sets": {
-    "cells": { "kind": "interval", "size": 4 }
+    "cells": { "kind": "interval", "size": 4 },
+    "rec": { "kind": "interval", "size": 2, "records": true }
   },
   "reaction_systems": {
     "UncertainDecay": {
@@ -41,7 +42,7 @@
         "T": {
           "units": "K",
           "default": 298.0,
-          "shape": ["cells"],
+          "shape": ["rec", "cells"],
           "update": {
             "kind": "data",
             "source": "Reanalysis",

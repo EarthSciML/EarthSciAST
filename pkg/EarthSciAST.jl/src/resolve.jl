@@ -895,7 +895,7 @@ function _merge_native_index_sets!(
     registry isa AbstractDict || return native
     for (n, decl) in loaded
         if haskey(registry, n)
-            registry[n] == decl || throw(
+            _index_set_raw_equal(registry[n], decl) || throw(
                 ExpressionTemplateError(
                     ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
                     "index set '$(n)' from subsystem ref '$(ref)' " *

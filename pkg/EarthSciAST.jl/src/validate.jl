@@ -771,14 +771,7 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     # `record_axis_invalid`, `record_axis_misplaced`,
     # `record_axis_time_invariant_source`, `records_per_sample_invalid`).
     _check_record_axes!(errors, file)
-    if file.models !== nothing
-        for model_name in sort!(collect(keys(file.models)))
-            _check_record_shapes!(
-                errors, file, file.models[model_name], model_name,
-                "/models/$model_name"
-            )
-        end
-    end
+    _check_record_shapes!(errors, file)
 
     # 3d. A present `system_kind` field must agree with the derivation
     # (esm-spec §6.3.1, `system_kind_mismatch`).
@@ -1404,22 +1397,35 @@ function _check_update_sources!(
 end
 
 """
-    _declared_variable(file, scoped) -> Union{ModelVariable, Nothing}
+    _declared_variable(file, scoped) -> Union{ModelVariable, Parameter, Nothing}
 
-The declaration a scoped name `Model[.Sub…].var` names, or `nothing`.
+The declaration a scoped name names: a model variable `Model[.Sub…].var`, or a
+reaction-system parameter `System[.Sub…].param`; `nothing` when there is none
+(or it sits behind a `ref` not yet mounted).
 """
 function _declared_variable(file::EsmFile, scoped)
     scoped isa AbstractString || return nothing
     parts = split(scoped, '.')
     length(parts) < 2 && return nothing
-    file.models === nothing && return nothing
-    node = get(file.models, String(parts[1]), nothing)
-    for seg in parts[2:(end - 1)]
+    head = String(parts[1])
+    if file.models !== nothing && haskey(file.models, head)
+        node = file.models[head]
+        for seg in parts[2:(end - 1)]
+            node isa Model || return nothing
+            node = get(node.subsystems, String(seg), nothing)
+        end
         node isa Model || return nothing
-        node = get(node.subsystems, String(seg), nothing)
+        return get(node.variables, String(parts[end]), nothing)
     end
-    node isa Model || return nothing
-    return get(node.variables, String(parts[end]), nothing)
+    file.reaction_systems === nothing && return nothing
+    rs = get(file.reaction_systems, head, nothing)
+    for seg in parts[2:(end - 1)]
+        rs isa ReactionSystem || return nothing
+        rs = get(rs.subsystems, String(seg), nothing)
+    end
+    rs isa ReactionSystem || return nothing
+    i = findfirst(p -> p.name == parts[end], rs.parameters)
+    return i === nothing ? nothing : rs.parameters[i]
 end
 
 """
@@ -1446,62 +1452,80 @@ function _declared_shape_of(file::EsmFile, scoped)
     return v.shape === nothing ? String[] : collect(String, v.shape)
 end
 
-# The `to` of every `param_to_var` `variable_map` entry of `coupling` whose
-# `from` is `scoped` (esm-spec §8.5.1, esm-libraries-spec §4.7.3).
-_param_to_var_targets(coupling, scoped::AbstractString) = (
-    e.to for e in coupling
-        if e isa CouplingVariableMap && e.from == scoped && e.transform == "param_to_var"
-)
-
 """
-    _typed_record_shapes(file, coupling, scoped, var; defer_empty) -> Union{Vector{Vector{String}}, Nothing}
+    _param_to_var_target_map(coupling) -> Dict{String, Vector{String}}
 
-The record shapes of the data-fed parameter `var` (scoped name `scoped`) that
-this pass can see, over `coupling` (see [`_record_shapes`](@ref)), or `nothing`
-when none is decidable yet: every `param_to_var` target is unreachable, or the
-parameter is shapeless, the `from` of no target, and `defer_empty` says one may
-still arrive (the document holds a `coupling_import`, which expands at
-`flatten`). A shapeless parameter that no target can reach has the empty record
-shape.
+The `to` of every `param_to_var` `variable_map` entry of `coupling`, keyed by
+its `from`, in coupling order (esm-spec §8.5.1, esm-libraries-spec §4.7.3).
+Built once per pass and shared by every data-fed parameter it judges.
 """
-function _typed_record_shapes(
-        file::EsmFile, coupling, scoped::AbstractString, var::ModelVariable;
-        defer_empty::Bool
-    )
-    shapes, mapped = _record_shapes(
-        var.shape, _param_to_var_targets(coupling, scoped), t -> _declared_shape_of(file, t)
-    )
-    mapped || return defer_empty ? nothing : Vector{String}[String[]]
-    return isempty(shapes) ? nothing : shapes
+function _param_to_var_target_map(coupling)
+    targets = Dict{String, Vector{String}}()
+    for e in coupling
+        (e isa CouplingVariableMap && e.transform == "param_to_var") || continue
+        push!(get!(() -> String[], targets, e.from), e.to)
+    end
+    return targets
 end
 
 """
-    _records_received(file, scoped, var) -> Int
+    _has_unmounted_refs(file) -> Bool
 
-How many records the data-fed parameter `var` receives per query time (esm-spec
-§8.5.1): 2 when its record shape begins with a record axis, else 1. Read on the
-document `flatten` sees (refs mounted, `coupling` expanded); what a `LoaderField`
-reports.
+Whether some model subsystem at any depth is still an unresolved
+[`SubsystemRef`](@ref) (a document loaded from a string without a base path).
+Mounting one may declare index sets, so until then a record shape whose first
+entry names an index set the document does not declare is not decidable
+(esm-spec §8.5.1).
 """
-function _records_received(file::EsmFile, scoped::AbstractString, var::ModelVariable)::Int
-    shapes = _typed_record_shapes(file, file.coupling, scoped, var; defer_empty = false)
-    shapes === nothing && return 1
-    return _record_axis_verdict(shapes, n -> _is_record_axis(file, n))[2]
+function _has_unmounted_refs(file::EsmFile)
+    file.models === nothing && return false
+    pending(m::Model) = any(
+        sub isa SubsystemRef || (sub isa Model && pending(sub)) for sub in values(m.subsystems)
+    )
+    return any(pending, values(file.models))
+end
+
+"""
+    _typed_record_shapes(file, targets, scoped, var; defer_empty) -> Union{Vector{Vector{String}}, Nothing}
+
+The record shapes of the data-fed parameter `var` (a model variable or a
+reaction-system parameter; scoped name `scoped`) that this pass can see, over
+the `param_to_var` edges `targets` ([`_param_to_var_target_map`](@ref); see
+[`_record_shapes`](@ref)), or `nothing` when none is decidable yet: every
+`param_to_var` target is unreachable, or the parameter is shapeless, the `from`
+of no target, and `defer_empty` says one may still arrive (the document holds a
+`coupling_import`, which expands at `flatten`). A shapeless parameter that no
+target can reach has the empty record shape.
+"""
+function _typed_record_shapes(
+        file::EsmFile, targets::AbstractDict, scoped::AbstractString,
+        var::Union{ModelVariable, Parameter}; defer_empty::Bool
+    )
+    shapes, mapped = _record_shapes(
+        var.shape, get(targets, scoped, String[]), t -> _declared_shape_of(file, t)
+    )
+    mapped || return defer_empty ? nothing : Vector{String}[String[]]
+    return isempty(shapes) ? nothing : shapes
 end
 
 # A record shape as the document spells it, for a diagnostic: `["rec", "x"]`.
 _shape_show(shape) = "[" * join(("\"$x\"" for x in shape), ", ") * "]"
 
 """
-    _record_shape_findings(file, coupling, scope, name, var, rule, src, at; defer_empty)
-        -> Vector{Tuple{String, String, Dict{String, Any}}}
+    _record_shape_findings(file, targets, scope, name, var, rule, src, at; defer_empty, refs_pending = false)
+        -> (findings::Vector{Tuple{String, String, Dict{String, Any}}}, records::Union{Int, Nothing})
 
 esm-spec §8.5.1 rules 2, 3 and the deprecated field's agreement, for one `data`
 rule of the parameter `name` (in component `scope`) drawing from the
 `DataSource` `src`, at the rule pointer `at`: each finding as `(code, message,
 details)`. Checked against the record shapes this pass can see
-([`_typed_record_shapes`](@ref)); none decidable, no finding. Shared by
-validation (which pushes them) and `flatten` (which throws the first).
+([`_typed_record_shapes`](@ref), over the `param_to_var` edges `targets`); none
+decidable, no finding. While `refs_pending` ([`_has_unmounted_refs`](@ref)), a
+record shape whose first entry names an index set the document does not
+declare is skipped: a mount may declare it. Also returns the number of records
+the parameter receives (`nothing` when not decided, or misplaced), which
+`flatten` gives its `LoaderField`. Shared by validation (which pushes the
+findings) and `flatten` (which throws the first).
 
 - `record_axis_misplaced`: a record axis anywhere but first, or record shapes
   that disagree about beginning with one. Nothing else is checked then: the
@@ -1512,12 +1536,17 @@ validation (which pushes them) and `flatten` (which throws the first).
   else the source's) that is not the number the record shape gives.
 """
 function _record_shape_findings(
-        file::EsmFile, coupling, scope::AbstractString, name::AbstractString,
-        var::ModelVariable, rule, src, at::AbstractString; defer_empty::Bool
+        file::EsmFile, targets::AbstractDict, scope::AbstractString, name::AbstractString,
+        var::Union{ModelVariable, Parameter}, rule, src, at::AbstractString;
+        defer_empty::Bool, refs_pending::Bool = false
     )
     out = Tuple{String, String, Dict{String, Any}}[]
-    shapes = _typed_record_shapes(file, coupling, "$scope.$name", var; defer_empty = defer_empty)
-    shapes === nothing && return out
+    shapes = _typed_record_shapes(file, targets, "$scope.$name", var; defer_empty = defer_empty)
+    shapes === nothing && return out, nothing
+    if refs_pending
+        filter!(s -> isempty(s) || haskey(file.index_sets, first(s)), shapes)
+        isempty(shapes) && return out, nothing
+    end
     misplaced, records = _record_axis_verdict(shapes, n -> _is_record_axis(file, n))
     if misplaced
         push!(
@@ -1530,7 +1559,7 @@ function _record_shape_findings(
                 Dict{String, Any}("variable" => name, "record_shapes" => shapes),
             )
         )
-        return out
+        return out, nothing
     end
     if records == 2 && (
             src.temporal === nothing || src.temporal.start === nothing ||
@@ -1564,7 +1593,7 @@ function _record_shape_findings(
             )
         )
     end
-    return out
+    return out, records
 end
 
 """
@@ -1594,29 +1623,28 @@ function _check_record_axes!(errors::Vector{StructuralError}, file::EsmFile)
 end
 
 """
-    _check_record_shapes!(errors, file, model, scope, path)
+    _check_record_shapes!(errors, file)
 
-esm-spec §8.5.1 at every depth of `model`: the deprecated `from.records_per_sample`
-on a rule that is not `data` (`records_per_sample_invalid`), and, for every
-`data` rule, the findings of [`_record_shape_findings`](@ref). A shapeless
-parameter that is the `from` of no `param_to_var` entry is checked here only
-when the document's `coupling` holds no `coupling_import`; a target this pass
-cannot reach is skipped. `flatten` checks what arrives after expansion. The
-pointer is the rule's: `…/update` for the object form, `…/update/<i>` for the
-array form.
+esm-spec §8.5.1 at every depth of every model and reaction system: the
+deprecated `from.records_per_sample` on a rule that is not `data`
+(`records_per_sample_invalid`), and, for every `data` rule of a parameter, the
+findings of [`_record_shape_findings`](@ref). A shapeless parameter that is the
+`from` of no `param_to_var` entry is checked here only when the document's
+`coupling` holds no `coupling_import`; a target this pass cannot reach is
+skipped, and the reachable ones are judged. `flatten` checks what arrives after
+expansion. The pointer is the rule's: `…/update` for the object form,
+`…/update/<i>` for the array form.
 """
-function _check_record_shapes!(
-        errors::Vector{StructuralError}, file::EsmFile, model::Model,
-        scope::String, path::String
-    )
+function _check_record_shapes!(errors::Vector{StructuralError}, file::EsmFile)
+    targets = _param_to_var_target_map(file.coupling)
     defer_empty = any(e -> e isa CouplingImport, file.coupling)
-    for name in sort!(collect(keys(model.variables)))
-        var = model.variables[name]
+    refs_pending = _has_unmounted_refs(file)
+    function check(scope, name, var, declpath)
         rules = var.update
-        rules === nothing && continue
+        rules === nothing && return
         for (ri, rule) in enumerate(rules)
             rule.from === nothing && continue
-            at = _update_rule_path("$path/variables/$name", rules, ri)
+            at = _update_rule_path("$declpath/$name", rules, ri)
             if rule.kind != "data"
                 rule.from.records_per_sample === nothing && continue
                 push!(
@@ -1634,27 +1662,67 @@ function _check_record_shapes!(
             src = (rule.source === nothing || file.data_sources === nothing) ? nothing :
                 get(file.data_sources, rule.source, nothing)
             src === nothing && continue  # data_source_undefined reports it
-            for (code, msg, details) in _record_shape_findings(
-                    file, file.coupling, scope, name, var, rule, src, at;
-                    defer_empty = defer_empty
-                )
+            findings, _ = _record_shape_findings(
+                file, targets, scope, name, var, rule, src, at;
+                defer_empty = defer_empty, refs_pending = refs_pending
+            )
+            for (code, msg, details) in findings
                 push!(errors, StructuralError(at, msg, code, details))
             end
         end
+        return
     end
-    for (subsys_name, subsys) in model_subsystems(model)
-        _check_record_shapes!(
-            errors, file, subsys, "$scope.$subsys_name", "$path/subsystems/$subsys_name"
-        )
-    end
+    _for_each_data_param(check, file)
     return errors
+end
+
+"""
+    _for_each_data_param(f, file)
+
+Call `f(scope, name, decl, declpath)` for every declared parameter-bearing
+entry a `data` rule can sit on, in sorted order: each model variable at every
+subsystem depth (`declpath` = `/models/<M>[/subsystems/<S>…]/variables`) and
+each reaction-system parameter at every depth
+(`/reaction_systems/<R>[/subsystems/<S>…]/parameters`). `scope` is the
+component's scoped name.
+"""
+function _for_each_data_param(f, file::EsmFile)
+    function walk(model::Model, scope, path)
+        for name in sort!(collect(keys(model.variables)))
+            f(scope, name, model.variables[name], "$path/variables")
+        end
+        for (sub_name, sub) in model_subsystems(model)
+            walk(sub, "$scope.$sub_name", "$path/subsystems/$sub_name")
+        end
+        return
+    end
+    function walk(rs::ReactionSystem, scope, path)
+        for p in sort(rs.parameters; by = p -> p.name)
+            f(scope, p.name, p, "$path/parameters")
+        end
+        for sub_name in sort!(collect(keys(rs.subsystems)))
+            walk(rs.subsystems[sub_name], "$scope.$sub_name", "$path/subsystems/$sub_name")
+        end
+        return
+    end
+    if file.models !== nothing
+        for name in sort!(collect(keys(file.models)))
+            walk(file.models[name], name, "/models/$name")
+        end
+    end
+    if file.reaction_systems !== nothing
+        for name in sort!(collect(keys(file.reaction_systems)))
+            walk(file.reaction_systems[name], name, "/reaction_systems/$name")
+        end
+    end
+    return nothing
 end
 
 """
     deprecated_records_per_sample_sites(file::EsmFile) -> Vector{String}
 
 The JSON pointers at which the deprecated `records_per_sample` (esm-spec §8.3,
-§8.5.1; removed at esm 1.4.0) is written in a loaded document, sorted
+§8.5.1; removed at esm 3.0.0) is written in a loaded document, sorted
 (byte-order): `/data_sources/<S>/temporal/records_per_sample` and
 `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`
 (`/<i>` only for an array-form `update`). Empty when the document never writes
@@ -1710,7 +1778,7 @@ function _warn_deprecated_records_per_sample(file::EsmFile)
     isempty(sites) && return nothing
     @warn string(
         "deprecated_records_per_sample: `records_per_sample` is deprecated and is ",
-        "removed at esm 1.4.0; the number of records a data-fed parameter receives ",
+        "removed at esm 3.0.0; the number of records a data-fed parameter receives ",
         "is said by its record shape, two when its first axis is an interval index ",
         "set with \"records\": true (esm-spec §8.5.1). Written at: ",
         join(sites, ", "), "."

@@ -143,4 +143,138 @@ _rps_froms(file) = [
         @test flat.index_sets["rec"].records === true
         @test flat.index_sets["pair2"].records === nothing
     end
+
+    # Reaction-system data-fed parameters are judged exactly as model ones are,
+    # at validation and at the flatten re-check.
+    function rs_doc(t_shape; written = nothing, temporal = true)
+        source = Dict{String, Any}(
+            "kind" => "grid",
+            "source" => Dict("url_template" => "file:///data/met_{date:%Y%m%d}.nc"),
+        )
+        if temporal
+            t = Dict{String, Any}(
+                "start" => "2024-05-01T00:00:00Z", "frequency" => "PT1H",
+                "file_period" => "P1D", "records_per_file" => 24,
+            )
+            written === nothing || (t["records_per_sample"] = written)
+            source["temporal"] = t
+        end
+        return Dict{String, Any}(
+            "esm" => "1.3.0",
+            "metadata" => Dict("name" => "ReactionSystemRecords"),
+            "index_sets" => Dict(
+                "rec" => Dict("kind" => "interval", "size" => 2, "records" => true),
+                "cells" => Dict("kind" => "interval", "size" => 4),
+            ),
+            "data_sources" => Dict("met" => source),
+            "reaction_systems" => Dict(
+                "Chem" => Dict(
+                    "species" => Dict("A" => Dict("units" => "mol/mol", "default" => 1.0)),
+                    "parameters" => Dict(
+                        "T" => Dict(
+                            "units" => "K", "default" => 298.0, "shape" => t_shape,
+                            "update" => Dict(
+                                "kind" => "data", "source" => "met",
+                                "from" => Dict("file_variable" => "t2m"),
+                            ),
+                        ),
+                    ),
+                    "reactions" => [
+                        Dict(
+                            "id" => "R1",
+                            "substrates" => [Dict("species" => "A", "stoichiometry" => 1)],
+                            "products" => nothing, "rate" => 0.1,
+                        ),
+                    ],
+                ),
+            ),
+        )
+    end
+    rs_load(d) = with_logger(() -> EarthSciAST.load_string(JSON3.write(d)), NullLogger())
+    rs_found(file) = [
+        (e.error_type, e.path) for e in EarthSciAST.validate(file).structural_errors
+            if e.error_type in _RPS_CODES
+    ]
+    rs_at = "/reaction_systems/Chem/parameters/T/update"
+
+    @testset "reaction-system data-fed parameters" begin
+        @test rs_found(rs_load(rs_doc(["cells"]; written = 2))) ==
+            [("records_per_sample_invalid", rs_at)]
+        @test rs_found(rs_load(rs_doc(["rec", "cells"]; temporal = false))) ==
+            [("record_axis_time_invariant_source", rs_at)]
+        @test isempty(rs_found(rs_load(rs_doc(["rec", "cells"]; written = 2))))
+
+        # The flatten re-check sees reaction systems too.
+        file = rs_load(rs_doc(["cells"]))
+        t = only(file.reaction_systems["Chem"].parameters)
+        empty!(t.shape)
+        append!(t.shape, ["cells", "rec"])
+        _rps_test_flatten_refuses(
+            file, (code = "record_axis_misplaced", pointer = rs_at)
+        )
+    end
+
+    # Raw index-set merges (template import, mount rename, native mount) read
+    # `"records": false` as an absent `records`; `true` against either differs.
+    @testset "raw index-set merge equality reads records" begin
+        plain = Dict{String, Any}("kind" => "interval", "size" => 2)
+        off = Dict{String, Any}("kind" => "interval", "size" => 2, "records" => false)
+        on = Dict{String, Any}("kind" => "interval", "size" => 2, "records" => true)
+        @test EarthSciAST._index_set_raw_equal(plain, off)
+        @test EarthSciAST._index_set_raw_equal(JSON3.read(JSON3.write(off)), plain)
+        @test !EarthSciAST._index_set_raw_equal(plain, on)
+        @test !EarthSciAST._index_set_raw_equal(off, on)
+        dst = EarthSciAST.OrderedDict{String, Any}("gf_t" => plain)
+        EarthSciAST._merge_named!(
+            dst, "gf_t", off, "template_import_index_set_conflict", "index set", "lib"
+        )
+        @test_throws EarthSciAST.ExpressionTemplateError EarthSciAST._merge_named!(
+            dst, "gf_t", on, "template_import_index_set_conflict", "index set", "lib"
+        )
+    end
+
+    # A model subsystem still held as an unresolved ref may declare index sets,
+    # so a first axis the document does not declare is not decidable yet: it is
+    # skipped, not read as a plain axis.
+    @testset "an undeclared first axis is skipped while a ref is unmounted" begin
+        d = Dict{String, Any}(
+            "esm" => "1.3.0",
+            "metadata" => Dict("name" => "PendingRef"),
+            "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 4)),
+            "data_sources" => Dict(
+                "met" => Dict(
+                    "kind" => "grid",
+                    "source" => Dict("url_template" => "file:///data/met_{date:%Y%m%d}.nc"),
+                    "temporal" => Dict(
+                        "start" => "2024-05-01T00:00:00Z", "frequency" => "PT1H",
+                        "file_period" => "P1D", "records_per_file" => 24,
+                    ),
+                ),
+            ),
+            "models" => Dict(
+                "Met" => Dict(
+                    "variables" => Dict(
+                        "K" => Dict(
+                            "type" => "parameter", "units" => "1/s", "default" => 0.1,
+                            "shape" => ["rec_from_mount", "cells"],
+                            "update" => Dict(
+                                "kind" => "data", "source" => "met",
+                                "from" => Dict(
+                                    "file_variable" => "K", "records_per_sample" => 2,
+                                ),
+                            ),
+                        ),
+                    ),
+                    "equations" => [],
+                ),
+            ),
+        )
+        file = rs_load(d)
+        # A mount `load_string` would resolve; held unresolved here.
+        file.models["Met"].subsystems["Grid"] = EarthSciAST.SubsystemRef("./grid.esm")
+        @test isempty(rs_found(file))
+        # With nothing left to mount, the same first axis is a plain one.
+        delete!(file.models["Met"].subsystems, "Grid")
+        @test rs_found(file) == [("records_per_sample_invalid", "/models/Met/variables/K/update")]
+    end
 end

@@ -1075,7 +1075,7 @@ function _extract_field_ics!(
 end
 
 """
-    _collect_loader_fields!(out, file, model, prefix)
+    _collect_loader_fields!(out, file, model, prefix, records)
 
 Append one [`LoaderField`](@ref) per data-fed parameter of `model` (and, by
 recursion, of its subsystems), in the order the component declares them.
@@ -1085,11 +1085,13 @@ a `from` binding (esm-spec §8.5). Its cadence follows the SOURCE, not its own
 declaration (CONFORMANCE_SPEC §5.7.2): a source WITH a `temporal` block refreshes
 per record (`"discrete"`), one without is read once (`"const"`). A parameter
 naming a source the document does not declare is skipped — `data_source_undefined`
-is the validator's finding, not flatten's. Its record count comes from its record
-shape on `file` (refs mounted, `coupling` expanded; see [`_records_received`](@ref)).
+is the validator's finding, not flatten's. Its record count is `records[scoped]`,
+which [`_check_flattened_record_shapes`](@ref) judged from its record shape on
+`file` (refs mounted, `coupling` expanded); 1 when absent.
 """
 function _collect_loader_fields!(
-        out::Vector{LoaderField}, file::EsmFile, model::Model, prefix::String
+        out::Vector{LoaderField}, file::EsmFile, model::Model, prefix::String,
+        records::AbstractDict{String, Int}
     )
     data_sources = file.data_sources
     for (var_name, var) in model.variables
@@ -1105,14 +1107,14 @@ function _collect_loader_fields!(
                     rule.from.file_variable,
                     src.temporal === nothing ? "const" : "discrete";
                     unit_conversion = rule.from.unit_conversion,
-                    records_per_sample = _records_received(file, "$(prefix).$(var_name)", var)
+                    records_per_sample = get(records, "$(prefix).$(var_name)", 1)
                 )
             )
         end
     end
     for (sub_name, sub) in model.subsystems
         sub isa Model || continue
-        _collect_loader_fields!(out, file, sub, "$(prefix).$(sub_name)")
+        _collect_loader_fields!(out, file, sub, "$(prefix).$(sub_name)", records)
     end
     return out
 end
@@ -1174,54 +1176,43 @@ _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
 )
 
 """
-    _check_flattened_record_shapes(file::EsmFile)
+    _check_flattened_record_shapes(file::EsmFile) -> Dict{String, Int}
 
 esm-spec §8.5.1 "When rules 2 and 3 are checked", at `flatten`, on the document
 with refs mounted and `file.coupling` already the expanded coupling sequence:
-every `data` rule of a parameter, at any depth, is checked against the record
-shapes of that sequence ([`_record_shape_findings`](@ref)), a shapeless one with
-no `param_to_var` target now read as the empty record shape. Throws
-`ExpressionTemplateError` with the first finding's code
-(`record_axis_misplaced`, `record_axis_time_invariant_source` or
-`records_per_sample_invalid`), the message naming the rule's pointer.
+every `data` rule of a parameter, of a model or a reaction system at any depth,
+is checked against the record shapes of that sequence
+([`_record_shape_findings`](@ref)), a shapeless one with no `param_to_var`
+target now read as the empty record shape. Throws `ExpressionTemplateError` with
+the first finding's code (`record_axis_misplaced`,
+`record_axis_time_invariant_source` or `records_per_sample_invalid`), the
+message naming the rule's pointer. Returns the number of records each data-fed
+parameter receives, by scoped name, for its `LoaderField`.
 """
 function _check_flattened_record_shapes(file::EsmFile)
-    file.models === nothing && return nothing
-    file.data_sources === nothing && return nothing
-    for model_name in sort!(collect(keys(file.models)))
-        _check_flattened_record_shapes(
-            file, file.models[model_name], model_name, "/models/$model_name"
-        )
-    end
-    return nothing
-end
-
-function _check_flattened_record_shapes(
-        file::EsmFile, model::Model, scope::String, path::String
-    )
-    for name in sort!(collect(keys(model.variables)))
-        var = model.variables[name]
+    records = Dict{String, Int}()
+    file.data_sources === nothing && return records
+    targets = _param_to_var_target_map(file.coupling)
+    _for_each_data_param(file) do scope, name, var, declpath
         rules = var.update
-        rules === nothing && continue
+        rules === nothing && return
         for (ri, rule) in enumerate(rules)
             (rule.kind == "data" && rule.from !== nothing && rule.source !== nothing) || continue
             src = get(file.data_sources, rule.source, nothing)
             src === nothing && continue
-            at = _update_rule_path("$path/variables/$name", rules, ri)
-            findings = _record_shape_findings(
-                file, file.coupling, scope, name, var, rule, src, at; defer_empty = false
+            at = _update_rule_path("$declpath/$name", rules, ri)
+            findings, n = _record_shape_findings(
+                file, targets, scope, name, var, rule, src, at; defer_empty = false
             )
-            isempty(findings) && continue
-            code, msg, _ = first(findings)
-            throw(ExpressionTemplateError(code, msg))
+            if !isempty(findings)
+                code, msg, _ = first(findings)
+                throw(ExpressionTemplateError(code, msg))
+            end
+            n === nothing || (records["$scope.$name"] = n)
         end
+        return
     end
-    for (subsys_name, subsys) in model_subsystems(model)
-        _check_flattened_record_shapes(
-            file, subsys, "$scope.$subsys_name", "$path/subsystems/$subsys_name"
-        )
-    end
-    return nothing
+    return records
 end
 
 """
@@ -1263,7 +1254,7 @@ function flatten(
     # esm-spec §8.5.1 "When rules 2 and 3 are checked": a record shape
     # validation could not decide arrives with the expanded coupling sequence,
     # so the record shapes are re-checked here against its `param_to_var` edges.
-    _check_flattened_record_shapes(file)
+    records_received = _check_flattened_record_shapes(file)
 
     # Step 0-: there must be something to flatten. A document whose only payload
     # is an `expression_templates` registry is a template LIBRARY, not a system:
@@ -1344,7 +1335,7 @@ function flatten(
                 tpl_rename = get(template_rename, name, nothing)
             )
             _attribute_equations!(eq_owners, equations, name)
-            _collect_loader_fields!(loader_fields, file, model, name)
+            _collect_loader_fields!(loader_fields, file, model, name, records_received)
         end
     end
 

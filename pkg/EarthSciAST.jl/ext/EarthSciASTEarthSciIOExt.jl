@@ -868,13 +868,18 @@ function _has_temporal_start(ld)
     return st !== nothing && st != ""
 end
 
-# The declared `shape` of the variable a scoped name `Model[.Sub…].var` names in
-# the raw document (`[]` when it declares none), or `nothing` when it cannot be
-# reached (not found, or behind a `ref` not yet mounted).
+# The declared `shape` of the variable a scoped name `Model[.Sub…].var` (or the
+# reaction-system parameter `System[.Sub…].param`) names in the raw document
+# (`[]` when it declares none), or `nothing` when it cannot be reached (not
+# found, or behind a `ref` not yet mounted).
 function _raw_declared_shape(raw, scoped::AbstractString)
     parts = split(scoped, '.')
     length(parts) < 2 && return nothing
-    node = get(get(raw, "models", Dict{String, Any}()), String(parts[1]), nothing)
+    models = get(raw, "models", nothing)
+    in_models = models isa AbstractDict && haskey(models, String(parts[1]))
+    section = in_models ? models : get(raw, "reaction_systems", nothing)
+    section isa AbstractDict || return nothing
+    node = get(section, String(parts[1]), nothing)
     for seg in parts[2:(end - 1)]
         node isa AbstractDict || return nothing
         subs = get(node, "subsystems", nothing)
@@ -882,7 +887,7 @@ function _raw_declared_shape(raw, scoped::AbstractString)
         node = get(subs, String(seg), nothing)
     end
     node isa AbstractDict || return nothing
-    vars = get(node, "variables", nothing)
+    vars = get(node, in_models ? "variables" : "parameters", nothing)
     vars isa AbstractDict || return nothing
     vd = get(vars, String(parts[end]), nothing)
     vd isa AbstractDict || return nothing
