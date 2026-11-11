@@ -7901,16 +7901,17 @@ impl<'m> TapeBuilder<'m> {
                 );
                 Ok(ObsVal::Taped(LV::Arr(out)))
             }
-            AlgebraicRule::Scalar {
-                var,
-                body,
-                declared_shape,
-            } => {
+            AlgebraicRule::Scalar { var, body, .. } => {
                 // The whole-body `eval` mirror: covers scalar algebra, whole-
                 // array elementwise algebra, top-level aggregates (incl. the
                 // prefix-scan sweep) and makearrays. Readers see materialized
                 // arrays at origin 1s. A scalar on a shaped variable fills its
-                // declared box, as the interpreter does.
+                // declared box, as the interpreter does; so does one whose
+                // shape the data bound to its data-fed parameters decides
+                // (esm-spec §4.3.4), read from the forcing boxes this build
+                // compiles against, as the oracle reads it from the buffer.
+                let fill = rule.fill_shape(|n| self.forcing_shapes.get(n).map(|s| s.to_vec()));
+                let declared_shape = fill.as_ref();
                 let v = match (self.inline_param_literal(var, body), declared_shape) {
                     (Some(a), _) => self.emit_const_array(&a)?,
                     (None, Some(shape)) => {

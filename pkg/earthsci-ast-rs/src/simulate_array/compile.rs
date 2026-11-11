@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
-use crate::flatten::{BuiltShapes, FlattenedSystem};
+use crate::flatten::{BuiltShapes, ConditionalShapes, FlattenedSystem};
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{
@@ -414,7 +414,7 @@ pub(super) fn apply_ragged_factor_scope(
 pub(crate) fn apply_flatten_rewrites(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
-) -> Result<BuiltShapes, CompileError> {
+) -> Result<ConditionalShapes, CompileError> {
     let time_invariant: std::collections::HashSet<String> = model
         .variables
         .iter()
@@ -484,10 +484,15 @@ pub(crate) fn refuse_faq_bare_array_operands(model: &Model) -> Result<(), Compil
 /// (esm-spec §9.6.11) is lifted to a per-cell `faq`
 /// ([`crate::elementwise_lift`]); a variable declared without a `shape` that
 /// the lift defines takes the lift's index sets, and is returned with the rest.
+///
+/// A variable whose shape only data can decide (its only arrays are unshaped
+/// data-fed parameters) is returned in [`ConditionalShapes::data_shaped`] and
+/// left undeclared here; the build records it on the variable's rule
+/// ([`AlgebraicRule::Scalar`]'s `data_shaped`).
 pub(crate) fn promote_conditional_shapes(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
-) -> Result<BuiltShapes, CompileError> {
+) -> Result<ConditionalShapes, CompileError> {
     let lifted = crate::elementwise_lift::lift_elementwise_applications(model)
         .map_err(CompileError::build_err)?;
     let mut promoted = crate::flatten::conditional_shape_promotions(
@@ -495,8 +500,8 @@ pub(crate) fn promote_conditional_shapes(
         model.equations.iter(),
         index_sets,
     );
-    set_declared_shapes(model, &promoted);
-    promoted.extend(lifted);
+    set_declared_shapes(model, &promoted.built);
+    promoted.built.extend(lifted);
     Ok(promoted)
 }
 
@@ -865,7 +870,10 @@ impl ArrayCompiled {
         // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
         // (see `from_file_owned`). Runs after mounting so a subsystem's
         // equations and declarations are in scope under their mounted names.
-        let conditional_shapes = apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
+        let ConditionalShapes {
+            built: conditional_shapes,
+            data_shaped,
+        } = apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
         // Lower every SHAPED parameter whose value the document supplies —
         // inline array data, or one scalar broadcast over the grid (esm-spec
         // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
@@ -1093,7 +1101,17 @@ impl ArrayCompiled {
             // The shapes as declared, before inference sizes the unsized
             // ones from how the equations index them: what a provider's
             // sample is checked against.
-            let declared_forcing_shapes = forcing_decls.clone();
+            // A data-fed parameter declared without a shape takes the shape
+            // of its data (esm-spec §4.3.4), so a provider's sample of it is
+            // not checked against the one-value box its read defaults to.
+            let mut declared_forcing_shapes = forcing_decls.clone();
+            for (name, var) in &observed_vars {
+                if is_data_fed_unshaped(var)
+                    && let Some(decl) = declared_forcing_shapes.get_mut(*name)
+                {
+                    *decl = None;
+                }
+            }
             infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
             let forcing_defaults = forcing_default_values(&observed_vars, &forcing_decls)?;
             (
@@ -1124,8 +1142,13 @@ impl ArrayCompiled {
 
         // (6)+(6b) Build the dependency-ordered observed algebraic rules,
         // MOVING each declared observed's body expression out of the model.
-        let observed_rules =
-            build_observed_rules(&mut model_owned, &observed_names, &eliminated, index_sets)?;
+        let observed_rules = build_observed_rules(
+            &mut model_owned,
+            &observed_names,
+            &eliminated,
+            index_sets,
+            &data_shaped,
+        )?;
 
         let model = &model_owned;
 
@@ -3029,6 +3052,7 @@ fn build_observed_rules(
     observed_names: &[String],
     eliminated: &HashSet<String>,
     index_sets: &HashMap<String, IndexSet>,
+    data_shaped: &HashMap<String, Vec<String>>,
 ) -> Result<Vec<AlgebraicRule>, CompileError> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
     let array_axes = declared_axis_names(model);
@@ -3061,6 +3085,13 @@ fn build_observed_rules(
     // * a bare-variable LHS lowers WHOLESALE through [`lower_algebraic_body`]:
     //   `eval` materializes the body's arrays and broadcasts the elementwise ops
     //   over them, so a readable intermediate decomposition runs as authored.
+    // The variables whose shape their data-fed parameters' data decides:
+    // see [`AlgebraicRule::Scalar`]'s `data_shaped`.
+    let data_shaped_of = |name: &str| {
+        data_shaped
+            .get(name)
+            .map(|fed| std::sync::Arc::from(fed.as_slice()))
+    };
     let mut def_eq: HashMap<&str, &crate::types::Equation> = HashMap::new();
     for eq in &model.equations {
         if let crate::classification::LhsFormRef::Bare(name) =
@@ -3113,6 +3144,7 @@ fn build_observed_rules(
                 eq.rhs.clone(),
                 &array_axes,
                 index_sets,
+                data_shaped_of(name),
             )?);
         }
     }
@@ -3159,6 +3191,7 @@ fn build_observed_rules(
                 eq.rhs.clone(),
                 &array_axes,
                 index_sets,
+                data_shaped_of(name),
             )?);
         }
     }
@@ -3278,6 +3311,7 @@ fn lower_algebraic_body(
     body: Expr,
     array_axes: &HashMap<String, Vec<String>>,
     index_sets: &HashMap<String, IndexSet>,
+    data_shaped: Option<std::sync::Arc<[String]>>,
 ) -> Result<AlgebraicRule, CompileError> {
     let declared_shape = array_axes
         .get(name)
@@ -3286,6 +3320,7 @@ fn lower_algebraic_body(
         var: name.to_string(),
         body: std::sync::Arc::new(body),
         declared_shape: declared_shape.clone(),
+        data_shaped: data_shaped.clone(),
     };
     let Some(target_axes) = array_axes.get(name) else {
         return Ok(scalar_rule(body));
@@ -4190,6 +4225,14 @@ fn forcing_default_values(
 /// `kind: "data"` carrying a `from` binding (esm-spec §5.4). Lives here rather
 /// than in `data_fed` because that module is not built for wasm32, while the
 /// classifier is.
+/// A parameter declared with NO `shape` (`shape: []` declares a scalar) that a
+/// data source feeds: its shape is its data's (esm-spec §4.3.4).
+pub(crate) fn is_data_fed_unshaped(var: &crate::types::ModelVariable) -> bool {
+    var.var_type == VariableType::Parameter
+        && var.shape.is_none()
+        && var.update.as_ref().and_then(data_feed_source).is_some()
+}
+
 pub(crate) fn data_feed_source(spec: &crate::types::ParameterUpdateSpec) -> Option<&str> {
     spec.rules().iter().find_map(|r| {
         r.data_source()

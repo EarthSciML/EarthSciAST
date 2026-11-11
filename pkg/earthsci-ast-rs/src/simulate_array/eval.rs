@@ -2547,9 +2547,13 @@ pub(crate) fn eval_observed_recurrence(
 /// `param_names`. A causal self-reference (esm-spec §4.3.1.1) lowers as the
 /// model's own recurrence rule does, to one ordered sweep; one the lowering
 /// does not recognize is left to the caller's own diagnostic. `None` when
-/// `recurrence_only` and the observed is not such a recurrence. A scalar value
+/// `recurrence_only` and the observed is not such a recurrence. `fill_shape`
+/// is the shape the build decided the variable has (its declared one, or
+/// esm-spec §4.3.4's for an unshaped mixed-rank `ifelse`): a scalar value
+/// fills it, as the reference evaluator's does. With none, a scalar value
 /// comes back as a 0-d array.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn eval_observed_taped(
     name: &str,
     expr: &Expr,
@@ -2557,6 +2561,7 @@ pub(crate) fn eval_observed_taped(
     params: &[f64],
     param_names: &[String],
     const_arrays: &ConstArrayScope,
+    fill_shape: Option<&[usize]>,
     recurrence_only: bool,
 ) -> Option<Result<ArrayD<f64>, super::tape::StandaloneError>> {
     use super::tape::StandaloneError;
@@ -2589,7 +2594,8 @@ pub(crate) fn eval_observed_taped(
         AlgebraicRule::Scalar {
             var: name.to_string(),
             body: std::sync::Arc::new(expr.clone()),
-            declared_shape: None,
+            declared_shape: fill_shape.map(<[usize]>::to_vec),
+            data_shaped: None,
         }
     };
     let mut mentioned = HashSet::new();

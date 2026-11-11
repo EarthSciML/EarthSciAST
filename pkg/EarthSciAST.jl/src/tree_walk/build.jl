@@ -986,6 +986,7 @@ function _partition_variables(
                 haskey(const_arrays, name) || haskey(param_arrays, name) ||
                     throw(_missing_data_error(name, v))
             else
+                _refuse_array_data_for_scalar(name, v, const_arrays, param_arrays)
                 a = _scalar_supplied_data(name, const_arrays, param_arrays)
                 if a === nothing
                     push!(param_names, name)
@@ -1021,6 +1022,32 @@ function _scalar_supplied_data(name, const_arrays::AbstractDict, param_arrays::A
     for reg in (param_arrays, const_arrays)
         a = get(reg, name, nothing)
         a isa AbstractArray && length(a) == 1 && return a
+    end
+    return nothing
+end
+
+# A SCALAR parameter whose data, under its exact name, holds more than one
+# value. `shape: []` declares a scalar (esm-spec §4.3.4), so its data must be
+# one value; a parameter declared without a shape takes its data's shape, which
+# `esm_problem` decides before the build (`_adopt_data_shapes`), so one reaching
+# here unshaped came through a build entry that bypassed that. Either way the
+# build would read neither the data nor a value it could name, so it is refused.
+function _refuse_array_data_for_scalar(
+        name, v::ModelVariable, const_arrays::AbstractDict, param_arrays::AbstractDict
+    )
+    for reg in (param_arrays, const_arrays)
+        a = get(reg, name, nothing)
+        (a isa AbstractArray && length(a) != 1) || continue
+        why = v.shape === nothing ?
+            "it declares no `shape`, and only `esm_problem` adopts a shape from data; " *
+            "declare the shape, or build through `esm_problem`" :
+            "it declares `shape: []`, a scalar, which takes one value"
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_SHAPE",
+                "parameter '$(name)': its data has size $(size(a)), but $(why) (esm-spec §4.3.4)"
+            )
+        )
     end
     return nothing
 end

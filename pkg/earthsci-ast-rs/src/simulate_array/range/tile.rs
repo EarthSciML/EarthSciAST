@@ -331,6 +331,7 @@ pub(super) fn as_loop(rule: &AlgebraicRule) -> Option<AlgebraicRule> {
         var,
         body,
         declared_shape: Some(shape),
+        ..
     } = rule
     else {
         return None;

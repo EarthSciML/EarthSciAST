@@ -548,11 +548,7 @@ pub(super) fn materialize_observeds_pass(
         // `precision_infer::MARKER_OP` and re-arms.
         let _rule_precision = precision_of_rule(rule);
         match rule {
-            AlgebraicRule::Scalar {
-                var,
-                body,
-                declared_shape,
-            } => {
+            AlgebraicRule::Scalar { var, body, .. } => {
                 // `derived_extents` is EMPTY on every compiled-RHS context in
                 // this file, and deliberately so: `ArrayCompiled::from_model`
                 // densifies each value-invented derived set to an `interval`
@@ -562,10 +558,17 @@ pub(super) fn materialize_observeds_pass(
                 // its keep on the standalone `eval_expression_with_extents`
                 // entry point instead. See `EvalCtx::derived_extents`.
                 let mut ctx = env.ctx(&*dst);
-                let arr = match (eval(body, &mut ctx), declared_shape) {
-                    (Value::Array(a), _) => *a,
-                    (Value::Scalar(s), Some(shape)) => ArrayD::from_elem(IxDyn(shape), s),
-                    (Value::Scalar(s), None) => ArrayD::from_elem(IxDyn(&[]), s),
+                let arr = match eval(body, &mut ctx) {
+                    Value::Array(a) => *a,
+                    // A scalar fills the rule's shape (esm-spec §4.3.4): its
+                    // declared one, or the one the data bound to its data-fed
+                    // parameters has — the same buffer the tape's build reads.
+                    Value::Scalar(s) => {
+                        let shape = rule
+                            .fill_shape(|n| ctx.forcing.borrow().get(n).map(|a| a.shape().to_vec()))
+                            .unwrap_or_default();
+                        ArrayD::from_elem(IxDyn(&shape), s)
+                    }
                 };
                 dst.insert(var.clone(), arr);
             }
