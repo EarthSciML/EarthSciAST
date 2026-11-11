@@ -30,7 +30,7 @@ from .compiler import (
     use_policy,
 )
 from .error_handling import INDEXED_DEFINITION_UNSUPPORTED_FORM
-from .errors import MissingDataError, MissingInitialValueError
+from .errors import IcReadsStateError, MissingDataError, MissingInitialValueError
 from .esm_types import EsmFile, Expr, ExprNode, is_aggregate_op
 from .expr_walk import iter_children, map_children
 from .expression import UnsupportedConstructError
@@ -1301,71 +1301,71 @@ class _NumpyRhsBuild:
 def _resolve_field_ic(
     target: str,
     rhs: Expr,
-    cell: tuple[int, ...],
+    shape: tuple[int, ...],
     loader_arrays: dict[str, np.ndarray],
     index_sets: dict[str, Any] | None = None,
     param_values: dict[str, float] | None = None,
-) -> float:
-    """Resolve one grid cell's initial value for a scoped-reference / array ``ic``
-    equation (esm-spec §11.4.1). ``cell`` is the 1-based integer index tuple.
-    Model PARAMETERS (load-time constants) bind via ``param_values``; STATE is
-    not in scope.
+    t0: float = 0.0,
+    observed_values: dict[str, float] | None = None,
+) -> np.ndarray:
+    """Resolve a scoped-reference / array ``ic`` equation's whole initial field
+    (esm-spec §11.4.1), shaped ``shape``. The right-hand side is evaluated ONCE,
+    as a whole field, in the start-of-run scope of esm-spec §11.4.2: parameters
+    bind via ``param_values``, data and the materialized observeds via
+    ``loader_arrays`` (0-D observeds via ``observed_values``), and ``t`` is the
+    run's start ``t0``. STATE is not in scope.
 
     Supported RHS forms, in order:
 
     1. A LOADED FIELD — a bare reference to a ``loader_arrays`` entry supplying
-       the initial field over the lifted grid. The cell is read directly when the
-       field's rank matches the target grid; a single-element field is broadcast.
-       The registry also carries the build-time array scope of esm-spec §6.6.5:
-       a shaped parameter's inline column and every STATE-FREE array observed the
-       ic reads (:func:`_buildtime_observed_arrays`), so ``ic(u) ~ theta0`` over a
-       ``const`` gather resolves here.
+       the initial field over the lifted grid, read directly when its rank
+       matches the target grid; a single-element field is broadcast. The
+       registry also carries the start-of-run array scope: a shaped parameter's
+       inline column, data-fed fields at ``t0``, and every state-free array
+       observed the ic reads (:func:`_buildtime_observed_arrays`), so
+       ``ic(u) ~ theta0`` over a ``const`` gather resolves here.
     2. A BROADCAST CONSTANT — a numeric RHS applied to every cell.
-    3. A COORDINATE EXPRESSION — an elementwise expression over array-producing
-       ``faq``/``makearray`` nodes (e.g. ``cos(pi * x_coord)`` where
-       ``x_coord`` is a grid-geometry aggregate expanded from a §9.7 template
-       import). The expression is evaluated through the official NumPy
-       interpreter (:func:`earthsci_ast.numpy_interpreter.eval_expr`) in a
-       state-free context and indexed at this cell; a scalar result (an RHS
-       that const-folds) is broadcast.
+    3. AN EXPRESSION — an elementwise expression over array-producing
+       ``faq``/``makearray`` nodes, coordinates, parameters, data and observeds
+       (e.g. ``cos(pi * x_coord)`` where ``x_coord`` is a grid-geometry
+       aggregate expanded from a §9.7 template import), evaluated through the
+       official NumPy interpreter; a scalar result is broadcast.
 
     Anything else is a hard error, so a scoped-reference ic that cannot be
     resolved is never silently dropped. Mirrors tree_walk.jl ``_resolve_field_ic``.
     """
     if isinstance(rhs, str) and rhs in loader_arrays:
-        arr = np.asarray(loader_arrays[rhs], dtype=float)
-        if arr.ndim == len(cell):
-            return float(arr[tuple(c - 1 for c in cell)])
-        if arr.size == 1:
-            return float(arr.flat[0])
-        raise SimulationError(
-            f"ic({target}): loaded field {rhs!r} has ndim={arr.ndim} which does "
-            f"not match the {len(cell)}-D lifted target grid"
-        )
+        return _fit_ic_field(target, np.asarray(loader_arrays[rhs], dtype=float), shape, rhs)
     if isinstance(rhs, (int, float)) and not isinstance(rhs, bool):
-        return float(rhs)
-    if isinstance(rhs, ExprNode):
+        return np.full(shape, float(rhs), dtype=float)
+    if isinstance(rhs, str) and observed_values and rhs in observed_values:
+        return np.full(shape, float(observed_values[rhs]), dtype=float)
+    # Any other bare name — the independent variable (bound to ``t0``), a
+    # scalar parameter — is an expression of one leaf, evaluated as one.
+    if isinstance(rhs, (ExprNode, str)):
         try:
             value = _eval_buildtime_field(
                 rhs,
                 index_sets=index_sets,
                 param_values=param_values,
                 input_arrays=loader_arrays,
+                t=t0,
+                observed_values=observed_values,
             )
         except (NumpyInterpreterError, SimulationError, ValueError):
-            # A coordinate expression the build-time interpreter cannot resolve
-            # (unresolved symbol / bad shape) falls through to the hard error
-            # below; other exception types are genuine bugs and must surface.
+            # An expression the build-time interpreter cannot resolve (unresolved
+            # symbol / bad shape) falls through to the hard error below; other
+            # exception types are genuine bugs and must surface.
             value = None
         if value is not None:
-            if np.ndim(value) == 0:
-                return float(value)  # const-folded scalar, broadcast
             arr = np.asarray(value, dtype=float)
-            if arr.ndim == len(cell):
-                return float(arr[tuple(c - 1 for c in cell)])
+            if arr.ndim == 0:
+                return np.full(shape, float(arr), dtype=float)  # scalar, broadcast
+            if arr.ndim == len(shape):
+                return _fit_ic_field(target, arr, shape, None)
             raise SimulationError(
                 f"ic({target}): coordinate expression evaluates to ndim="
-                f"{arr.ndim}, which does not match the {len(cell)}-D lifted "
+                f"{arr.ndim}, which does not match the {len(shape)}-D lifted "
                 f"target grid"
             )
     detail = f" (no loader_arrays entry named {rhs!r})" if isinstance(rhs, str) else ""
@@ -1376,11 +1376,30 @@ def _resolve_field_ic(
     )
 
 
+def _fit_ic_field(
+    target: str, arr: np.ndarray, shape: tuple[int, ...], name: str | None
+) -> np.ndarray:
+    """``arr`` laid over the target grid ``shape``: read cell for cell when the
+    ranks match (a field at least as large as the grid, as the per-cell read
+    always allowed), broadcast when it holds a single element."""
+    if arr.ndim == len(shape) and all(a >= n for a, n in zip(arr.shape, shape)):
+        return arr[tuple(slice(0, n) for n in shape)]
+    if arr.size == 1:
+        return np.full(shape, float(arr.reshape(-1)[0]), dtype=float)
+    what = f"loaded field {name!r}" if name is not None else "its right-hand side"
+    raise SimulationError(
+        f"ic({target}): {what} has shape {arr.shape}, which does not cover the "
+        f"{len(shape)}-D lifted target grid {tuple(shape)}"
+    )
+
+
 def _eval_buildtime_field(
     expr: Expr,
     index_sets: dict[str, Any] | None = None,
     param_values: dict[str, float] | None = None,
     input_arrays: dict[str, np.ndarray] | None = None,
+    t: float = 0.0,
+    observed_values: dict[str, float] | None = None,
 ) -> float | np.ndarray:
     """Evaluate a state-free build-time expression (grid geometry, §6.6.5
     analytic references) through the official NumPy interpreter. Array-
@@ -1393,7 +1412,13 @@ def _eval_buildtime_field(
     coordinate expression / reference then resolves (esm-spec §6.6.5).
     ``input_arrays`` binds the build-time ARRAY scope — a shaped parameter's
     inline column, a provider-seeded field, and the STATE-FREE array observeds
-    :func:`_buildtime_observed_arrays` materialized — under their own names."""
+    :func:`_buildtime_observed_arrays` materialized — under their own names.
+
+    ``t`` binds the independent variable and ``observed_values`` the 0-D
+    observeds already evaluated. Both matter only to an ``ic`` right-hand side,
+    whose start-of-run scope binds ``t`` to the run's start ``t0`` and admits
+    observeds over it (esm-spec §11.4.2); every other build-time caller leaves
+    them at their defaults."""
     from .numpy_interpreter import EvalContext as _EvalCtx
     from .numpy_interpreter import eval_expr as _eval_expr
 
@@ -1401,9 +1426,9 @@ def _eval_buildtime_field(
         state_layout={},
         state_shapes={},
         param_values=dict(param_values or {}),
-        observed_values={},
+        observed_values=dict(observed_values or {}),
         y=np.empty((0,), dtype=float),
-        t=0.0,
+        t=float(t),
         index_sets=dict(index_sets or {}),
         input_arrays=dict(input_arrays or {}),
         axis_valued_input_names=frozenset(input_arrays or {}),
@@ -1411,92 +1436,231 @@ def _eval_buildtime_field(
     return _eval_expr(expr, ctx)
 
 
+def _ic_state_read(
+    rhs: Expr,
+    definitions: dict[str, list[Expr]],
+    states: set[str],
+    bound: Callable[[str], bool] = lambda _name: False,
+) -> tuple[list[str], str] | None:
+    """The first state an ``ic`` right-hand side reads, and the chain of
+    observeds that reaches it: ``(chain, state)``, or ``None`` when it reads none
+    (esm-spec §11.4.2).
+
+    ``definitions`` maps each observed to its defining right-hand side(s);
+    ``states`` is every unknown that is not an observed. A name ``bound`` says is
+    supplied as data (a provider, a caller array) is a value, not a definition to
+    follow: loaded data beats a document-side definition of the same name.
+    Names are visited in sorted order so the diagnostic is deterministic.
+    """
+    clean: set[str] = set()
+
+    def walk(exprs: list[Expr], path: list[str]) -> tuple[list[str], str] | None:
+        refs: set[str] = set()
+        for e in exprs:
+            refs |= {e} if isinstance(e, str) else _expr_referenced_names(e)
+        for ref in sorted(refs):
+            if ref in states and not bound(ref):
+                return path, ref
+        for ref in sorted(refs):
+            if ref in clean or ref in path or ref not in definitions or bound(ref):
+                continue
+            hit = walk(definitions[ref], [*path, ref])
+            if hit is not None:
+                return hit
+            clean.add(ref)
+        return None
+
+    return walk([rhs], [])
+
+
+def _refuse_ic_state_reads(
+    ic_eqs: Iterable[tuple[str, Expr]],
+    definitions: dict[str, list[Expr]],
+    states: set[str],
+    bound: Callable[[str], bool] = lambda _name: False,
+) -> None:
+    """Raise :class:`IcReadsStateError` for the first ``ic`` whose right-hand
+    side reads a state (esm-spec §11.4.2)."""
+    for target, rhs in ic_eqs:
+        hit = _ic_state_read(rhs, definitions, states, bound)
+        if hit is not None:
+            chain, state = hit
+            raise IcReadsStateError(target, state, chain)
+
+
+def _ic_observed_definitions(
+    flat: FlattenedSystem,
+) -> tuple[dict[str, list[Expr]], set[str]]:
+    """The observeds' definitions and the states of ``flat``, as the start-of-run
+    scope of an ``ic`` sees them (esm-spec §11.4.2): ``(definitions, states)``.
+
+    An observed is a declared one or an unknown defined by a bare-LHS equation
+    (esm-spec §6.3.1), as the array build classifies them; a state is every
+    other unknown the solver advances. Value-invention producers are neither:
+    they are materialized at setup."""
+    vi_var_names = _detect_value_invention_states(flat)
+    alg = _algebraically_defined_states(flat, vi_var_names)
+    observed_names = set(flat.observed_variables) | alg
+    definitions: dict[str, list[Expr]] = {}
+    for eq in flat.equations:
+        base = _vi_lhs_base(eq.lhs)
+        if base is not None and base in vi_var_names:
+            continue
+        if isinstance(eq.lhs, str) and eq.lhs in observed_names:
+            definitions.setdefault(eq.lhs, []).append(eq.rhs)
+        elif isinstance(eq.lhs, ExprNode) and eq.lhs.op == "index" and base in observed_names:
+            definitions.setdefault(base, []).append(eq.rhs)
+    states = {n for n in _integrated_state_names(flat) if n not in vi_var_names and n not in alg}
+    return definitions, states
+
+
+def refuse_ic_reads_state(
+    flat: FlattenedSystem, bound: Callable[[str], bool] = lambda _name: False
+) -> None:
+    """Refuse, at construction, an ``ic`` right-hand side that reads a state
+    directly or through observeds (esm-spec §11.4.2, ``ic_reads_state``).
+
+    Run on the flattened system, ahead of any build, so the refusal is the same
+    whichever engine then builds the Problem. ``bound`` says which names data
+    supplies (see :func:`_ic_state_read`).
+    """
+    if not flat.field_ics:
+        return
+    definitions, states = _ic_observed_definitions(flat)
+    _refuse_ic_state_reads(flat.field_ics, definitions, states, bound)
+
+
+def ic_start_reads(flat: FlattenedSystem) -> set[str]:
+    """Every name an ``ic`` right-hand side of ``flat`` reads, directly or
+    through the observeds it reads (esm-spec §11.4.2): the cone whose data an
+    evaluation at the start of the run needs. Index symbols and other
+    non-variable strings ride along; a caller intersects with the names it
+    holds."""
+    if not flat.field_ics:
+        return set()
+    definitions, _states = _ic_observed_definitions(flat)
+    seen: set[str] = set()
+    stack: list[Expr] = [rhs for _target, rhs in flat.field_ics]
+    while stack:
+        e = stack.pop()
+        if isinstance(e, str):
+            refs = {e}
+        elif isinstance(e, ExprNode):
+            refs = _expr_referenced_names(e)
+        else:
+            continue
+        for ref in refs - seen:
+            seen.add(ref)
+            stack.extend(definitions.get(ref, ()))
+    return seen
+
+
+def start_of_run_scalar_ics(
+    flat: FlattenedSystem,
+    ic_eqs: list[tuple[str, Expr]],
+    param_values: dict[str, float],
+    t0: float,
+) -> dict[str, float]:
+    """Each 0-D ``ic`` of ``ic_eqs`` evaluated in the start-of-run scope
+    (esm-spec §11.4.2): parameters, ``t`` bound to ``t0``, and the observeds
+    over them, each evaluated once. For the scalar (SymPy) pathway, which binds
+    no data and has no observed machinery of its own; an ``ic`` that reads a
+    state is refused with :class:`IcReadsStateError`."""
+    if not ic_eqs:
+        return {}
+    definitions, states = _ic_observed_definitions(flat)
+    observed_eqs = [(n, rhs) for n, rhss in definitions.items() if len(rhss) == 1 for rhs in rhss]
+    ordered = _order_observed_equations(observed_eqs, set(definitions))
+    arrays, scalars = _buildtime_observed_arrays(
+        ic_eqs, ordered, states, param_values, {}, index_sets=flat.index_sets, t0=t0
+    )
+    return {
+        target: resolve_scalar_ic(
+            target,
+            rhs,
+            param_values=param_values,
+            index_sets=flat.index_sets,
+            t0=t0,
+            input_arrays=arrays,
+            observed_values=scalars,
+        )
+        for target, rhs in ic_eqs
+    }
+
+
 def _buildtime_observed_arrays(
-    field_ic_eqs: list[tuple[str, Expr]],
+    ic_eqs: list[tuple[str, Expr]],
     ordered_observed: list[tuple[str, Expr]],
     state_names: Iterable[str],
     param_values: dict[str, float],
     loader_arrays: dict[str, np.ndarray],
     index_sets: dict[str, Any] | None = None,
-) -> dict[str, np.ndarray]:
-    """Materialize the STATE-FREE observeds an ``ic`` right-hand side reads, so
-    §11.4.1 can seed a field from one (esm-spec §6.6.5 "Build-time evaluation
-    scope").
+    t0: float = 0.0,
+) -> tuple[dict[str, np.ndarray], dict[str, float]]:
+    """Materialize the observeds an ``ic`` right-hand side reads, in the
+    start-of-run scope (esm-spec §11.4.2; §6.6.5 "Build-time evaluation scope").
 
-    A state-free observed — one whose whole reference cone closes over
-    parameters, inline ``const`` data and other state-free observeds, with no
-    state and no ``t`` — is resolvable before the simulation runs; the build
-    already materializes exactly this class of field as a setup array for
-    :class:`BuildInspection`. Admitting it as an ``ic`` RHS is the same
-    evaluator reached from one more place, which is what lets a column test
-    seed ``u`` from a ``const`` gather instead of minting a per-regime library.
+    Returns ``(arrays, scalars)``: the array-valued observeds and the 0-D ones,
+    each evaluated ONCE, as a whole, at the run's start. An observed is in the
+    scope when it reads only parameters (scalar or shaped), inline ``const``
+    data, data (``loader_arrays``, which the caller holds at their ``t0``
+    values), coordinates, ``t`` (bound to ``t0``) and other such observeds. An
+    ``ic`` that reads a state, directly or through observeds, is refused with
+    :class:`IcReadsStateError` before anything is evaluated: it is never
+    evaluated with the state at a placeholder value.
 
-    Only the observeds an ``ic`` actually reads (transitively) are evaluated,
-    in the caller's dependency order, and an observed that does not evaluate is
-    SKIPPED rather than raised on: it simply is not in the ic scope, and the
-    resolver's own diagnostic then reports the unusable RHS.
+    Only the observeds an ``ic`` actually reads (transitively) are evaluated, in
+    the caller's dependency order. One that does not evaluate is SKIPPED rather
+    than raised on: it is then not in scope, and the resolver's own diagnostic
+    reports the unusable RHS.
     """
-    if not field_ic_eqs:
-        return {}
+    if not ic_eqs:
+        return {}, {}
     defs: dict[str, Expr] = dict(ordered_observed)
-    if not defs:
-        return {}
     states = set(state_names)
-
-    # Transitive cone of a name, restricted to observeds; `None` if it reaches a
-    # state (or `t`), which puts the observed OUT of the build-time scope.
-    cone_cache: dict[str, set[str] | None] = {}
-
-    def cone(name: str, seen: frozenset[str]) -> set[str] | None:
-        if name in seen:  # a causal self-read is an ordering, not a dependency
-            return set()
-        if name in cone_cache:
-            return cone_cache[name]
-        body = defs.get(name)
-        if body is None:
-            return None
-        out: set[str] = {name}
-        for ref in _expr_referenced_names(body):
-            if ref in states or ref == "t":
-                cone_cache[name] = None
-                return None
-            if ref in defs and ref != name:
-                sub = cone(ref, seen | {name})
-                if sub is None:
-                    cone_cache[name] = None
-                    return None
-                out |= sub
-        cone_cache[name] = out
-        return out
+    _refuse_ic_state_reads(
+        ic_eqs, {n: [r] for n, r in defs.items()}, states, lambda n: n in loader_arrays
+    )
+    if not defs:
+        return {}, {}
 
     wanted: set[str] = set()
-    for _target, rhs in field_ic_eqs:
-        refs = {rhs} if isinstance(rhs, str) else _expr_referenced_names(rhs)
-        for ref in refs:
-            if ref in defs and ref not in loader_arrays:
-                sub = cone(ref, frozenset())
-                if sub is not None:
-                    wanted |= sub
+    stack: list[Expr] = [rhs for _target, rhs in ic_eqs]
+    while stack:
+        e = stack.pop()
+        for ref in {e} if isinstance(e, str) else _expr_referenced_names(e):
+            if ref in defs and ref not in loader_arrays and ref not in wanted:
+                wanted.add(ref)
+                stack.append(defs[ref])
     if not wanted:
-        return {}
+        return {}, {}
 
-    out: dict[str, np.ndarray] = {}
+    arrays: dict[str, np.ndarray] = {}
+    scalars: dict[str, float] = {}
     scope: dict[str, np.ndarray] = dict(loader_arrays)
     for name, body in ordered_observed:
         if name not in wanted:
             continue
         try:
             value = _eval_buildtime_field(
-                body, index_sets=index_sets, param_values=param_values, input_arrays=scope
+                body,
+                index_sets=index_sets,
+                param_values=param_values,
+                input_arrays=scope,
+                t=t0,
+                observed_values=scalars,
             )
         except (NumpyInterpreterError, SimulationError, ValueError, TypeError, KeyError):
             continue
-        if value is None or np.ndim(value) == 0:
+        if value is None:
+            continue
+        if np.ndim(value) == 0:
+            scalars[name] = float(value)
             continue
         arr = np.asarray(value, dtype=float)
-        out[name] = arr
+        arrays[name] = arr
         scope[name] = arr
-    return out
+    return arrays, scalars
 
 
 def _fold_field_ics(
@@ -1507,10 +1671,13 @@ def _fold_field_ics(
     loader_arrays: dict[str, np.ndarray],
     index_sets: dict[str, Any] | None = None,
     param_values: dict[str, float] | None = None,
+    t0: float = 0.0,
+    observed_values: dict[str, float] | None = None,
 ) -> None:
-    """Fold every scoped-reference / array ``ic`` equation into ``y0`` cell-by-cell
-    (esm-spec §11.4.1). Each target must name a lifted/array state of the
-    flattened system; an unresolved target or RHS is a hard error. Model
+    """Fold every scoped-reference / array ``ic`` equation into ``y0``
+    (esm-spec §11.4.1), evaluating each right-hand side once as a whole field in
+    the start-of-run scope (§11.4.2). Each target must name a lifted/array state
+    of the flattened system; an unresolved target or RHS is a hard error. Model
     PARAMETERS (load-time constants) bind via ``param_values``; STATE is not in
     scope."""
     for target, rhs in field_ic_eqs:
@@ -1519,23 +1686,25 @@ def _fold_field_ics(
                 f"ic({target}): scoped-reference target is not a state variable "
                 f"of the flattened system"
             )
-        shape = shapes.get(target, ())
+        shape = tuple(shapes.get(target, ()))
         if not shape:
             raise SimulationError(
                 f"ic({target}): scoped-reference target resolves to no array cells; "
                 f"the target must name a lifted/array state variable"
             )
-        start = state_layout[target].start
-        for multi in np.ndindex(*shape):
-            cell = tuple(int(i) + 1 for i in multi)
-            y0[start + _linear_pos(shape, list(cell))] = _resolve_field_ic(
-                target,
-                rhs,
-                cell,
-                loader_arrays,
-                index_sets=index_sets,
-                param_values=param_values,
-            )
+        field_value = _resolve_field_ic(
+            target,
+            rhs,
+            shape,
+            loader_arrays,
+            index_sets=index_sets,
+            param_values=param_values,
+            t0=t0,
+            observed_values=observed_values,
+        )
+        # The state vector is laid out row-major (`_linear_pos`: last index
+        # fastest), which is NumPy's C order.
+        y0[state_layout[target]] = np.ascontiguousarray(field_value, dtype=float).reshape(-1)
 
 
 def resolve_scalar_ic(
@@ -1543,15 +1712,18 @@ def resolve_scalar_ic(
     rhs: Expr,
     param_values: dict[str, float] | None = None,
     index_sets: dict[str, Any] | None = None,
+    t0: float = 0.0,
+    input_arrays: dict[str, np.ndarray] | None = None,
+    observed_values: dict[str, float] | None = None,
 ) -> float:
-    """Const-fold one 0-D ``ic`` equation's RHS to its scalar initial value.
+    """Evaluate one 0-D ``ic`` equation's RHS to its scalar initial value.
 
-    esm-spec §11.4: "A 0-D component's `ic` RHS is a scalar". The RHS may be a
-    plain literal, a literal arithmetic expression, or an expression over the
-    model's PARAMETERS — parameters are load-time constants, so §6.6.5's
-    build-time evaluation scope binds them here to their
-    ``parameter_overrides``-or-default values. Model STATE is not in scope
-    (there is no trajectory value at build time).
+    esm-spec §11.4: "A 0-D component's `ic` RHS is a scalar". It is evaluated
+    once, at the run's start, in the start-of-run scope of §11.4.2: literals,
+    every parameter (``param_values``, ``parameter_overrides``-or-default), data
+    at its ``t0`` value and the array observeds over it (``input_arrays``), the
+    0-D observeds (``observed_values``), and ``t`` bound to ``t0``. Model STATE
+    is not in scope (there is no trajectory value at build time).
 
     An RHS that does not fold to a scalar is a hard error, so a declared
     initial condition is never silently dropped — the failure mode this
@@ -1561,17 +1733,25 @@ def resolve_scalar_ic(
     if isinstance(rhs, (int, float)) and not isinstance(rhs, bool):
         return float(rhs)
     try:
-        value = _eval_buildtime_field(rhs, index_sets=index_sets, param_values=param_values)
+        value = _eval_buildtime_field(
+            rhs,
+            index_sets=index_sets,
+            param_values=param_values,
+            input_arrays=input_arrays,
+            t=t0,
+            observed_values=observed_values,
+        )
     except (NumpyInterpreterError, SimulationError, ValueError) as err:
         raise SimulationError(
-            f"ic({target}): RHS must const-fold to a scalar for a 0-D state "
-            f"(esm-spec §11.4); model parameters are in scope, state is not ({err})"
+            f"ic({target}): RHS must evaluate to a scalar for a 0-D state "
+            f"(esm-spec §11.4); parameters, data, observeds over them and `t` are in "
+            f"scope, state is not ({err})"
         ) from err
-    if value is None or np.ndim(value) != 0:
+    if value is None or np.size(value) != 1:
         raise SimulationError(
             f"ic({target}): RHS of a 0-D state must fold to a SCALAR (esm-spec §11.4), not a field"
         )
-    return float(value)
+    return float(np.asarray(value, dtype=float).reshape(-1)[0])
 
 
 def _fold_scalar_ics(
@@ -1580,8 +1760,12 @@ def _fold_scalar_ics(
     state_layout: dict[str, slice],
     index_sets: dict[str, Any] | None = None,
     param_values: dict[str, float] | None = None,
+    t0: float = 0.0,
+    input_arrays: dict[str, np.ndarray] | None = None,
+    observed_values: dict[str, float] | None = None,
 ) -> None:
-    """Fold every 0-D ``ic`` equation into its ``y0`` slot (esm-spec §11.4).
+    """Fold every 0-D ``ic`` equation into its ``y0`` slot (esm-spec §11.4),
+    evaluated in the start-of-run scope (§11.4.2).
 
     A target that is not a state of this system is SKIPPED rather than rejected:
     ``ic`` is also written against a discrete parameter that events mutate
@@ -1593,7 +1777,13 @@ def _fold_scalar_ics(
         if target not in state_layout:
             continue
         y0[state_layout[target]] = resolve_scalar_ic(
-            target, rhs, param_values=param_values, index_sets=index_sets
+            target,
+            rhs,
+            param_values=param_values,
+            index_sets=index_sets,
+            t0=t0,
+            input_arrays=input_arrays,
+            observed_values=observed_values,
         )
 
 
@@ -2609,6 +2799,8 @@ def _build_numpy_rhs(
     gated_providers: dict[str, Any] | None = None,
     sample_time: float = 0.0,
     build_only: bool = False,
+    start_time: float | None = None,
+    ic_loader_arrays: dict[str, np.ndarray] | None = None,
 ) -> _NumpyRhsBuild:
     """Assemble the NumPy-interpreter RHS closure + state layout for a flattened
     array/PDE system. Shared by :func:`_simulate_with_numpy` (which integrates
@@ -2625,7 +2817,14 @@ def _build_numpy_rhs(
     picked up; only the loader-VOLATILE observeds (the regrid APPLY ``W·field``)
     actually change between segments, so this reuses the const geometry instead of
     re-clipping it every hour. ``None`` (every non-segmented caller) recomputes
-    everything, exactly as before — the split is otherwise value-transparent."""
+    everything, exactly as before — the split is otherwise value-transparent.
+
+    ``start_time`` is the run's start ``t0`` (``tspan[0]``), the instant every
+    ``ic`` right-hand side is evaluated at (esm-spec §11.4.2): ``t`` is bound to
+    it and data is read at it. ``None`` takes ``sample_time``. A caller whose
+    ``loader_arrays`` hold data sampled at some other instant (construction's
+    ``sample_time``) passes the ``t0`` samples as ``ic_loader_arrays``, which
+    overlay ``loader_arrays`` for the ``ic`` evaluation only."""
     shapes = infer_variable_shapes(flat)
     # Prefer the concrete grid shapes assigned by the pointwise lift (esm-spec
     # §10.5). A lifted species' own operator makearray reads offset cells
@@ -3020,17 +3219,25 @@ def _build_numpy_rhs(
     # the run, so materialize the cone the ic equations read and overlay it on
     # the loaded-field registry. A provider-seeded field of the same name still
     # wins — loaded data beats a document-side definition.
-    ic_scope_arrays = dict(
-        _buildtime_observed_arrays(
-            field_ic_eqs,
-            ordered_observed,
-            state_names,
-            param_values,
-            loader_arrays,
-            index_sets=flat.index_sets,
-        )
+    # esm-spec §11.4.2 widens that scope for an `ic` to the START-OF-RUN scope:
+    # `t` bound to the run's start t0, data at its t0 value, and every observed
+    # over those, scalar or array, each evaluated once as a whole. An `ic` that
+    # reads a state is refused there (`ic_reads_state`).
+    ic_t0 = float(sample_time if start_time is None else start_time)
+    ic_data = dict(loader_arrays)
+    if ic_loader_arrays:
+        ic_data.update(ic_loader_arrays)
+    ic_observed_arrays, ic_observed_scalars = _buildtime_observed_arrays(
+        [*field_ic_eqs, *scalar_ic_eqs],
+        ordered_observed,
+        state_names,
+        param_values,
+        ic_data,
+        index_sets=flat.index_sets,
+        t0=ic_t0,
     )
-    ic_scope_arrays.update(loader_arrays)
+    ic_scope_arrays = dict(ic_observed_arrays)
+    ic_scope_arrays.update(ic_data)
     _fold_field_ics(
         y0,
         field_ic_eqs,
@@ -3039,6 +3246,8 @@ def _build_numpy_rhs(
         ic_scope_arrays,
         index_sets=flat.index_sets,
         param_values=param_values,
+        t0=ic_t0,
+        observed_values=ic_observed_scalars,
     )
     # 0-D ``ic`` fold (esm-spec §11.4): a scalar state living in this array
     # model gets its initial value from its own ``ic`` equation, const-folded in
@@ -3050,6 +3259,9 @@ def _build_numpy_rhs(
         state_layout,
         index_sets=flat.index_sets,
         param_values=param_values,
+        t0=ic_t0,
+        input_arrays=ic_scope_arrays,
+        observed_values=ic_observed_scalars,
     )
     overridden = _apply_initial_conditions(
         y0, state_layout, shapes, state_names, initial_conditions
@@ -3582,7 +3794,11 @@ def _simulate_with_numpy(
             build = prebuilt
         else:
             build = _build_numpy_rhs(
-                flat, parameters, initial_conditions, loader_arrays=loader_arrays
+                flat,
+                parameters,
+                initial_conditions,
+                loader_arrays=loader_arrays,
+                start_time=float(tspan[0]),
             )
             if inspect is not None:
                 _fill_build_inspection(

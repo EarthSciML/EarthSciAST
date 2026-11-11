@@ -1,0 +1,189 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ic_reads_t",
+  "description": "esm-spec 11.4.2: an `ic` right-hand side reads the independent variable `t`, bound to the start of the run t0 (tspan[0]), not to 0. The 0-D state `a` is seeded by `k*t + 1` and the array state `u` by the array observed `rate[i] = i + h*t`, which reads `t`. Both have a zero tendency, so the state at t0 is the `ic` value.",
+  "authors": [
+   "EarthSciAST conformance"
+  ],
+  "created": "2026-11-11T00:00:00Z",
+  "tags": [
+   "conformance",
+   "esm-spec-11.4.2",
+   "ic",
+   "independent-variable",
+   "array-observed"
+  ]
+ },
+ "index_sets": {
+  "x": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "T": {
+   "variables": {
+    "k": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 2.0,
+     "description": "slope of a's initial value in t"
+    },
+    "h": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 0.5,
+     "description": "slope of rate in t"
+    },
+    "a": {
+     "type": "unknown",
+     "units": "1",
+     "default": -1.0,
+     "description": "0-D state, ic(a) = k*t + 1; its default differs so a dropped ic shows"
+    },
+    "rate": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "x"
+     ],
+     "description": "array observed reading t: rate[i] = i + h*t"
+    },
+    "u": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "x"
+     ],
+     "description": "array state, ic(u) = rate, an array observed reading t; held still"
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "a"
+      ]
+     },
+     "rhs": {
+      "op": "+",
+      "args": [
+       {
+        "op": "*",
+        "args": [
+         "k",
+         "t"
+        ]
+       },
+       1.0
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "a"
+      ],
+      "wrt": "t"
+     },
+     "rhs": 0.0
+    },
+    {
+     "lhs": "rate",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        "i",
+        {
+         "op": "*",
+         "args": [
+          "h",
+          "t"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "u"
+      ]
+     },
+     "rhs": "rate"
+    },
+    {
+     "lhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       }
+      },
+      "expr": {
+       "op": "D",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "u",
+          "i"
+         ]
+        }
+       ],
+       "wrt": "t"
+      }
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [
+       "rate"
+      ],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        0.0,
+        "h",
+        {
+         "op": "index",
+         "args": [
+          "rate",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ }
+}

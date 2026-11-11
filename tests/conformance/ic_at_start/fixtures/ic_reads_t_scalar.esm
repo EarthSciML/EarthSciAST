@@ -1,0 +1,116 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ic_reads_t_scalar",
+  "description": "esm-spec 11.4.2 on a document with no array state, so each binding's scalar runtime builds it: `ic(a) = k*t + 1` reads t, and `ic(b) = g` reads the 0-D observed g = 3*k*t, which reads t. Both are evaluated at t0 = tspan[0].",
+  "authors": [
+   "EarthSciAST conformance"
+  ],
+  "created": "2026-11-11T00:00:00Z",
+  "tags": [
+   "conformance",
+   "esm-spec-11.4.2",
+   "ic",
+   "independent-variable",
+   "scalar"
+  ]
+ },
+ "models": {
+  "S": {
+   "variables": {
+    "k": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 2.0,
+     "description": "slope in t"
+    },
+    "a": {
+     "type": "unknown",
+     "units": "1",
+     "default": -1.0,
+     "description": "ic(a) = k*t + 1"
+    },
+    "g": {
+     "type": "unknown",
+     "units": "1",
+     "description": "0-D observed reading t: g = 3*k*t"
+    },
+    "b": {
+     "type": "unknown",
+     "units": "1",
+     "default": -1.0,
+     "description": "ic(b) = g; D(b) = g - g so b is held"
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "a"
+      ]
+     },
+     "rhs": {
+      "op": "+",
+      "args": [
+       {
+        "op": "*",
+        "args": [
+         "k",
+         "t"
+        ]
+       },
+       1.0
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "a"
+      ],
+      "wrt": "t"
+     },
+     "rhs": 0.0
+    },
+    {
+     "lhs": "g",
+     "rhs": {
+      "op": "*",
+      "args": [
+       3.0,
+       "k",
+       "t"
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "b"
+      ]
+     },
+     "rhs": "g"
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "b"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "*",
+      "args": [
+       0.0,
+       "g"
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

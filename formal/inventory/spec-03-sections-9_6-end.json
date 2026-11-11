@@ -1116,6 +1116,32 @@
       "phase": 5,
       "area": "reactions",
       "note": "An ic equation anywhere other than a model's equations is rejected with ic_in_reaction_system."
+    },
+    {
+      "id": "spec.11.4.2.ic-reads-state-refused",
+      "section": "11.4.2",
+      "quote": "A build MUST refuse it at construction with the diagnostic code **`ic_reads_state`**",
+      "class": "semantic",
+      "phase": 6,
+      "area": "diagnostics",
+      "note": "An ic right-hand side that reads an ODE state or algebraic unknown, directly or through a chain of observeds, is refused at construction with ic_reads_state naming the target, the state and the chain."
+    },
+    {
+      "id": "spec.11.4.2.ic-no-placeholder-state",
+      "section": "11.4.2",
+      "quote": "A build MUST NOT evaluate such a right-hand side with the state at a placeholder value",
+      "class": "semantic",
+      "phase": 6,
+      "area": "diagnostics",
+      "note": "Such an ic is never evaluated with the state at 0, its default or any other stand-in value."
+    },
+    {
+      "id": "spec.11.4.2.reference-free-t-unchanged",
+      "section": "11.4.2",
+      "quote": "an inline-test `reference` still MUST NOT mention `t` free",
+      "class": "out_of_scope",
+      "area": "diagnostics",
+      "note": "Restates spec.6.6.5.reference-free-t: the start-of-run additions do not extend to an inline-test reference."
     }
   ]
 }

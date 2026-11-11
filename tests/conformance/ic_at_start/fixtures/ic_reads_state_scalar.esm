@@ -1,0 +1,103 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ic_reads_state_scalar",
+  "description": "esm-spec 11.4.2 on the scalar runtime: ic(b) = a + t reads the 0-D state a and is refused at construction with ic_reads_state, though it also reads t, which is allowed.",
+  "authors": [
+   "EarthSciAST conformance"
+  ],
+  "created": "2026-11-11T00:00:00Z",
+  "tags": [
+   "conformance",
+   "esm-spec-11.4.2",
+   "ic",
+   "refusal",
+   "ic_reads_state",
+   "scalar"
+  ]
+ },
+ "models": {
+  "Q": {
+   "variables": {
+    "a": {
+     "type": "unknown",
+     "units": "1",
+     "default": 1.0,
+     "description": "0-D state"
+    },
+    "b": {
+     "type": "unknown",
+     "units": "1",
+     "default": 0.0,
+     "description": "0-D state whose ic reads a"
+    },
+    "r": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 1.0,
+     "description": "rate"
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "a"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "*",
+      "args": [
+       {
+        "op": "-",
+        "args": [
+         "r"
+        ]
+       },
+       "a"
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "b"
+      ]
+     },
+     "rhs": {
+      "op": "+",
+      "args": [
+       "a",
+       {
+        "op": "*",
+        "args": [
+         "r",
+         "t"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "b"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "*",
+      "args": [
+       "r",
+       "a"
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

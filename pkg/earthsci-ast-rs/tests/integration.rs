@@ -145,6 +145,8 @@ mod geometry_templates;
 mod graph_conformance;
 #[path = "graph_structure.rs"]
 mod graph_structure;
+#[path = "ic_at_start_conformance.rs"]
+mod ic_at_start_conformance;
 #[path = "ifelse_shape_at_build.rs"]
 mod ifelse_shape_at_build;
 #[path = "index_set_member_factor.rs"]

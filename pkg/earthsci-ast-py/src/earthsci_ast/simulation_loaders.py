@@ -347,6 +347,9 @@ def _seed_first_segment(
         # observed graph is built rather than refused for having nothing to
         # integrate — the same reading `esm_problem` gives a one-shot build.
         build_only=True,
+        # Segment 0's initial state is the run's: its `ic` right-hand sides read
+        # `t` and the data refreshed above at t0 (esm-spec §11.4.2).
+        start_time=t0,
     )
     exercise_every_evaluation(flat, build, t0, loader_arrays=loader_arrays)
     return SegmentedSeed(
@@ -437,6 +440,10 @@ def _run_cadence_segmented_solve(
                 initial_conditions,
                 loader_arrays=loader_arrays,
                 static_cache=static_cache,
+                # Only segment 0's initial state is used, and it is the run's
+                # start: there the data was just refreshed at t0, and `t` is t0
+                # (esm-spec §11.4.2). A later segment continues from the state.
+                start_time=t_current,
             )
         if seg_idx == 0:
             y_current = build.y0

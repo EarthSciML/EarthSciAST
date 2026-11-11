@@ -136,6 +136,11 @@ mutable struct BuildInspection
     # first `rhs_program` call builds the flattened system with its per-term
     # provenance. `nothing` for a build `esm_problem` did not make.
     program_seed::Any
+    # `(t0, data) -> u0`: the build's initial state at another start of the
+    # run, the `ic` right-hand sides evaluated at `t0` with the data-fed
+    # parameters' values `data` there (esm-spec §11.4.2). `nothing` when the
+    # initial state does not depend on the start.
+    ic_reseed::Any
 end
 BuildInspection() = BuildInspection(
     Dict{String, Array{Float64}}(),
@@ -149,7 +154,7 @@ BuildInspection() = BuildInspection(
     Dict{Tuple{Base.RefValue{Any}, String}, _ObservedMemo}(),
     ReentrantLock(), Ref{Any}(nothing),
     nothing, WeakKeyDict{Base.RefValue{Any}, Any}(),
-    Int[], nothing
+    Int[], nothing, nothing
 )
 
 """
@@ -1720,8 +1725,9 @@ end
 # structural, by construction.
 #
 # The recording is a dynamically scoped sink installed around each build-time
-# consumer (`_fold_ic_equations`, `_fold_field_ics!`, `_materialize_geometry_setup`,
-# `_derive_binning_coords`, `materialize_value_invention`) and read by the three
+# consumer (`_ic_start_scope`, `_fold_scalar_ics`, `_fold_field_ics!`,
+# `_materialize_geometry_setup`, `_derive_binning_coords`,
+# `materialize_value_invention`) and read by the three
 # places a NAME is actually resolved to a build-time VALUE:
 #
 #   * `_compile(::VarExpr, …)` (compile.jl) — the general build-time cell
@@ -1855,30 +1861,21 @@ function _refuse_parameter_definitions(equations, variables::AbstractDict)
     return nothing
 end
 
-# ---- Stage: fold `ic(var) = <initial value>` equations (esm-spec v0.8.0) ----
-# An `ic`-LHS equation declares an initial condition. The tree-walk path seeds
-# u0 from the `initial_conditions` kwarg / variable defaults, so pull each ic
-# equation out here: const-fold its RHS to a scalar and record it (unless the
-# caller already overrode that state), then drop the equation before the ODE
-# partition / observed-substitution passes (its LHS is not a `D`, so it would
-# otherwise be rejected as an unsupported equation form). No-op for files
-# without an ic equation in `equations`.
-#
-# Scoped-reference / array `ic` targets (spec §11.4.1) are deferred (returned
-# in `field_ics`) and folded per grid cell once array cells are known — see
-# `_fold_field_ics!`. Each entry is `(target_state_name, rhs_field_expr)`; the
-# target may be a dot-namespaced reference to another component's species that
-# coupling has lifted onto the grid (`ic(Chemistry.O3) ~
-# InitialConditions.O3_init`), and the RHS is a per-cell FIELD (a loaded
-# const-array field, a broadcast constant, or a coordinate expression) rather
-# than a single scalar. Returns `(kept_equations, eq_ics, field_ics)`.
-function _fold_ic_equations(
-        equations::Vector{Equation}, model::Model,
-        param_scope::AbstractDict,
-        registered_functions::AbstractDict
-    )
-    eq_ics = Dict{String, Float64}()
-    field_ics = Tuple{String, EarthSciAST.ASTExpr}[]
+# ---- Stage: split out `ic(var) = <initial value>` equations (esm-spec §11.4) ----
+# An `ic`-LHS equation declares an initial condition, not a right-hand side, so
+# it is pulled out of the equation stream before the ODE partition and the
+# observed-substitution passes (its LHS is not a `D`, so it would otherwise be
+# rejected as an unsupported equation form). A target that is an array-shaped
+# state is a FIELD `ic` (`field_ics`), folded per cell once its cells are known
+# (`_fold_field_ics!`): the target may be a dot-namespaced reference to another
+# component's species that coupling has lifted onto the grid
+# (`ic(Chemistry.O3) ~ InitialConditions.O3_init`). Any other target is a
+# scalar `ic` (`scalar_ics`), folded by `_fold_scalar_ics`. Both are evaluated
+# in the start-of-run scope (`_ic_start_scope`). Returns
+# `(kept_equations, scalar_ics, field_ics)`; no-op for a model without one.
+function _split_ic_equations(equations::Vector{Equation}, model::Model)
+    scalar_ics = Tuple{String, ASTExpr}[]
+    field_ics = Tuple{String, ASTExpr}[]
     kept = Equation[]
     for eq in equations
         if eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic"
@@ -1892,57 +1889,316 @@ function _fold_ic_equations(
                 )
             )
             vn = (lop.args[1]::VarExpr).name
-            # An `ic` whose target is an array-shaped state variable is a
-            # scoped-reference / field IC: defer it (its RHS is a field, not
-            # a scalar). A scalar target keeps the const-fold fast path.
             tvar = get(model.variables, vn, nothing)
             if tvar !== nothing && _is_array_shape(tvar.shape)
                 push!(field_ics, (vn, eq.rhs))
             else
-                # Scalar model PARAMETERS are in scope as load-time constants
-                # (esm-spec §6.6.5 build-time evaluation scope), matching the
-                # array/field-ic path (`_resolve_field_ic`); STATE stays out
-                # of scope.
-                eq_ics[vn] = try
-                    Float64(
-                        evaluate_expr(
-                            eq.rhs, param_scope;
-                            registered_functions = registered_functions
-                        )
-                    )
-                catch err
-                    # Running out of memory or stack is not a statement about
-                    # this RHS, and a `TreeWalkError` saying it is would be
-                    # swallowed as an ordinary decline further up
-                    # (`_is_resource_error`).
-                    _is_resource_error(err) && rethrow()
-                    rv = err isa UnboundVariableError ?
-                        get(model.variables, err.variable_name, nothing) : nothing
-                    rv !== nothing && rv.type == UnknownVariable &&
-                        throw(
-                        TreeWalkError(
-                            "E_TREEWALK_UNSUPPORTED_EQUATION",
-                            "ic($(vn)): the right-hand side reads the unknown " *
-                                "'$(err.variable_name)'. An initial condition is evaluated " *
-                                "before the run, when no unknown has a value, so a build-time " *
-                                "reference to one is an error (esm-spec §6.6.5 build-time " *
-                                "evaluation scope)"
-                        )
-                    )
-                    throw(
-                        TreeWalkError(
-                            "E_TREEWALK_UNSUPPORTED_EQUATION",
-                            "ic($(vn)) RHS must const-fold to a scalar for the " *
-                                "tree-walk path ($(sprint(showerror, err)))"
-                        )
-                    )
-                end
+                push!(scalar_ics, (vn, eq.rhs))
             end
         else
             push!(kept, eq)
         end
     end
-    return kept, eq_ics, field_ics
+    return kept, scalar_ics, field_ics
+end
+
+# ---- The start-of-run scope of an `ic` right-hand side (esm-spec §11.4.2) ----
+# Every `ic` right-hand side is evaluated ONCE, at `t0 = tspan[1]`, the start of
+# the run. It may read every parameter (scalar or shaped), the independent
+# variable `t` bound to `t0`, each data-fed parameter at the value its provider
+# gives at `t0`, the caller's const arrays, and every observed over those,
+# evaluated at `t0`. It may not read a state — an ODE state or an algebraic
+# unknown — directly or through any chain of observeds: there is no value for
+# one before the initial state exists, so that is refused with
+# `ic_reads_state` rather than evaluated with a placeholder.
+#
+# `scalars` holds the scalar names, `arrays` the array ones (each a dense array
+# a reference reads the way it reads a loaded field). An observed an `ic`
+# reads is evaluated once, as a whole field, by the build-time field evaluator
+# (`evaluate_cellwise`, which takes the compiler's per-cell license like every
+# other construction-time field), and added to the scope; a reader then reads
+# its value, never a copy of its body per cell.
+#
+# `t` reaches every build-time evaluator the same way: each right-hand side in
+# the scope is read with `t` renamed to `_IC_T0_NAME`, a scalar bound to `t0`
+# (`_ic_bind_start_time`). The construction-time evaluators bind the time slot
+# to `0.0`, so leaving `t` as the time read there would evaluate the `ic` at
+# `t = 0` whatever the run's start.
+#
+# `reads_start` is true when the initial state depends on `t0` (a right-hand
+# side in the cone reads `t` or a data-fed parameter): `remake` with a new
+# `tspan` then has to evaluate the `ic` right-hand sides again.
+const _IC_T0_NAME = "__esm_ic_t0"
+
+struct _IcStart
+    t0::Float64
+    scalars::Dict{String, Float64}
+    arrays::Dict{String, Any}
+    reads_start::Bool
+end
+
+_ic_bind_start_time(e::ASTExpr) =
+    _sub_preserving(e, Dict{String, ASTExpr}("t" => VarExpr(_IC_T0_NAME)))
+
+# The array scope a field `ic` reads: the build's own (`const_arrays`, which
+# wins, as it does for every build-time array read) with the start-of-run
+# additions (the data-fed parameters at `t0` and the observeds an `ic` reads).
+_ic_field_arrays(const_arrays::AbstractDict, s::_IcStart) =
+    _ic_field_arrays(const_arrays, s.arrays)
+function _ic_field_arrays(const_arrays::AbstractDict, additions::AbstractDict)
+    isempty(additions) && return const_arrays
+    out = Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
+    for (k, v) in additions
+        haskey(out, k) || (out[k] = v)
+    end
+    return out
+end
+
+function _ic_reads_state_error(target, chain::Vector{String}, state::String)
+    reads = isempty(chain) ? "reads '$(state)', a state" :
+        "reads '" * join(chain, "', which reads '") * "', which reads '$(state)', a state"
+    return TreeWalkError(
+        ERROR_CODES.IC_READS_STATE,
+        "ic($(target)) $(reads). An `ic` right-hand side is evaluated at the start of " *
+            "the run, before any state has a value, so it may read parameters, `t`, " *
+            "data-fed parameters and observeds over those, but not a state " *
+            "(esm-spec §11.4.2)"
+    )
+end
+
+# What evaluating the `ic` right-hand sides at a start of the run needs, and
+# nothing more of the build: worked out once, at construction, from the model
+# and the build's scopes, and kept by a Problem whose initial state moves with
+# its start (`_IcReseed`), so it holds the cone the `ic`s read rather than the
+# build environment it was taken from.
+struct _IcPlan
+    # The `ic` right-hand sides: scalar targets, and array ones with `t` bound
+    # to the start (`_ic_bind_start_time`).
+    scalar_ics::Vector{Tuple{String, ASTExpr}}
+    field_ics::Vector{Tuple{String, ASTExpr}}
+    # The scalar parameters, at their values for this build.
+    params::Dict{String, Float64}
+    # The build's arrays the cone reads, and the data-fed parameters it reads
+    # at their construction-time value (the ones `ic_data` does not replace).
+    arrays::Dict{String, Any}
+    live::Dict{String, Any}
+    scalar_live::Set{String}
+    # The observeds the cone reads, in dependency order: name, body with `t`
+    # bound, and its extents (`nothing` for a scalar one).
+    order::Vector{Tuple{String, ASTExpr, Union{Nothing, Vector{Int}}}}
+    # The unknowns a scalar `ic` right-hand side reads, for its diagnostic.
+    unknowns::Set{String}
+    registered_functions::AbstractDict
+    reads_start::Bool
+end
+
+function _ic_plan(
+        model::Model, scalar_ics, field_ics;
+        param_scope::AbstractDict, base_arrays::AbstractDict,
+        param_arrays::AbstractDict, index_sets::AbstractDict,
+        derived_extents::AbstractDict, factor_scope::AbstractDict,
+        registered_functions::AbstractDict, vi_vars
+    )
+    params = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in param_scope)
+    bound_fields = Tuple{String, ASTExpr}[(n, _ic_bind_start_time(r)) for (n, r) in field_ics]
+    empty_plan() = _IcPlan(
+        collect(Tuple{String, ASTExpr}, scalar_ics), bound_fields, params,
+        Dict{String, Any}(), Dict{String, Any}(), Set{String}(),
+        Tuple{String, ASTExpr, Union{Nothing, Vector{Int}}}[], Set{String}(),
+        registered_functions, false
+    )
+    (isempty(scalar_ics) && isempty(field_ics)) && return empty_plan()
+    scalar_param(n) = (
+        v = get(model.variables, n, nothing);
+        v !== nothing && v.type == ParameterVariable && !_is_array_shape(v.shape)
+    )
+    # Data-fed parameters: the live buffer holds the `sample_time` record; the
+    # value at `t0`, where it differs, is the evaluation's `data`.
+    live = Set{String}(String(k) for k in keys(param_arrays))
+
+    # The observeds the `ic` right-hand sides read, transitively, checked for a
+    # state read, in dependency order.
+    states = Set{String}(solver_unknowns(model))
+    setdiff!(states, vi_vars)
+    rhss = Tuple{String, ASTExpr}[(n, r) for (n, r) in scalar_ics]
+    append!(rhss, field_ics)
+    observed = Set{String}(observed_unknowns(model))
+    obs_defs = nothing    # built on first need
+    function defs()
+        obs_defs === nothing || return obs_defs
+        eqs = Equation[
+            eq for eq in _normalize_indexed_observed_lhs(model.equations, model; vi_vars = vi_vars)
+                if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in observed
+        ]
+        eqs = _resolve_index_set_ranges(eqs, index_sets, derived_extents, factor_scope)
+        d = Dict{String, ASTExpr}()
+        for eq in eqs
+            n = (eq.lhs::VarExpr).name
+            haskey(d, n) || (d[n] = eq.rhs)
+        end
+        obs_defs = d
+        return d
+    end
+    order = String[]
+    done = Set{String}()
+    onpath = Set{String}()
+    reads_start = false
+    known(n) = n == _IC_T0_NAME || haskey(base_arrays, n) || n in live || haskey(params, n)
+    function visit(target, n::String, chain::Vector{String})
+        (n in done || n in onpath) && return nothing
+        push!(onpath, n)
+        for m in sort!(collect(_referenced_var_names(defs()[n])))
+            m == n && continue
+            m == "t" && (reads_start = true)
+            m in live && (reads_start = true)
+            m in states && throw(_ic_reads_state_error(target, chain, m))
+            (!known(m) && haskey(defs(), m)) && visit(target, m, String[chain; m])
+        end
+        delete!(onpath, n)
+        push!(done, n)
+        push!(order, n)
+        return nothing
+    end
+    for (target, rhs) in rhss
+        for m in sort!(collect(_referenced_var_names(rhs)))
+            m == "t" && (reads_start = true)
+            m in live && (reads_start = true)
+            m in states && throw(_ic_reads_state_error(target, String[], m))
+            # A name the scope already holds (a const array, a parameter) is
+            # read as it is; only an observed is evaluated.
+            known(m) && continue
+            m in observed || continue
+            haskey(defs(), m) && visit(target, m, String[m])
+        end
+    end
+
+    steps = Tuple{String, ASTExpr, Union{Nothing, Vector{Int}}}[]
+    reads = Set{String}()
+    for (_, r) in rhss
+        union!(reads, _referenced_var_names(r))
+    end
+    for n in order
+        def = defs()[n]
+        union!(reads, _referenced_var_names(def))
+        v = model.variables[n]
+        exts = nothing
+        if _is_array_shape(v.shape)
+            exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
+            exts === nothing && throw(
+                TreeWalkError(
+                    "E_TREEWALK_UNSUPPORTED_EQUATION",
+                    "observed '$(n)', read by an `ic` right-hand side: its declared shape " *
+                        "$(v.shape) does not resolve to extents"
+                )
+            )
+        end
+        push!(steps, (n, _ic_bind_start_time(def), exts))
+    end
+    arrays = Dict{String, Any}(k => base_arrays[k] for k in reads if haskey(base_arrays, k))
+    fed = Dict{String, Any}()
+    for (rawk, a) in param_arrays
+        k = String(rawk)
+        k in reads && (fed[k] = a)
+    end
+    unknowns = Set{String}()
+    for (_, r) in scalar_ics, m in _referenced_var_names(r)
+        v = get(model.variables, m, nothing)
+        v !== nothing && v.type == UnknownVariable && push!(unknowns, m)
+    end
+    return _IcPlan(
+        collect(Tuple{String, ASTExpr}, scalar_ics), bound_fields, params, arrays, fed,
+        Set{String}(k for k in keys(fed) if scalar_param(k)), steps, unknowns,
+        registered_functions, reads_start
+    )
+end
+
+# The `ic` right-hand sides of `plan` evaluated at the start `t0`, with the
+# data-fed values `data` there: `(scope, scalar ic values, field ics)`.
+function _ic_evaluate(plan::_IcPlan, t0::Float64, data::AbstractDict)
+    scalars = copy(plan.params)
+    scalars[_IC_T0_NAME] = t0
+    arrays = Dict{String, Any}()
+    for (k, a) in plan.live
+        at0 = get(data, k, a)
+        if k in plan.scalar_live
+            at0 isa AbstractArray && length(at0) == 1 && (scalars[k] = Float64(first(at0)))
+        else
+            haskey(plan.arrays, k) || (arrays[k] = at0)
+        end
+    end
+    rf = plan.registered_functions
+    for (n, def, exts) in plan.order
+        in_scope = _ic_field_arrays(plan.arrays, arrays)
+        if exts !== nothing
+            # Column-major, so the values reshape onto the field's own array.
+            cells = vec(Vector{Int}[collect(Int, Tuple(I)) for I in CartesianIndices(Tuple(exts))])
+            vals = evaluate_cellwise(
+                def, cells; const_arrays = in_scope,
+                registered_functions = rf, params = scalars, t = t0
+            )
+            arrays[n] = reshape(vals, exts...)
+        else
+            scalars[n] = _ic_eval_scalar(def, scalars, in_scope, rf, t0)
+        end
+    end
+    s = _IcStart(t0, scalars, arrays, plan.reads_start)
+    e = _fold_scalar_ics(plan.scalar_ics, plan.unknowns, s, plan.arrays, rf)
+    return s, e, plan.field_ics
+end
+
+# One scalar value in the start-of-run scope: the scalar evaluator when the
+# expression reads no array of the scope, else the build-time field evaluator
+# over the single cell of a rank-0 field.
+function _ic_eval_scalar(e::ASTExpr, scalars, arrays, registered_functions, t0)
+    reads_array = any(n -> !haskey(scalars, n) && haskey(arrays, n), _referenced_var_names(e))
+    reads_array || return Float64(
+        evaluate_expr(e, scalars; registered_functions = registered_functions)
+    )
+    return only(
+        evaluate_cellwise(
+            e, [Int[]]; const_arrays = arrays,
+            registered_functions = registered_functions, params = scalars, t = t0
+        )
+    )
+end
+
+# ---- Stage: fold the scalar `ic` equations ----
+# Each scalar `ic` right-hand side evaluated in the start-of-run scope (see
+# `_ic_start_scope`, which has already refused a state read).
+function _fold_scalar_ics(
+        scalar_ics, unknowns::AbstractSet{String}, s::_IcStart, base_arrays::AbstractDict,
+        registered_functions::AbstractDict
+    )
+    eq_ics = Dict{String, Float64}()
+    isempty(scalar_ics) && return eq_ics
+    arrays = _ic_field_arrays(base_arrays, s)
+    for (vn, rhs) in scalar_ics
+        eq_ics[vn] = try
+            _ic_eval_scalar(_ic_bind_start_time(rhs), s.scalars, arrays, registered_functions, s.t0)
+        catch err
+            # Running out of memory or stack is not a statement about this RHS,
+            # and a `TreeWalkError` saying it is would be swallowed as an
+            # ordinary decline further up (`_is_resource_error`).
+            _is_resource_error(err) && rethrow()
+            err isa UnboundVariableError && err.variable_name in unknowns &&
+                throw(
+                TreeWalkError(
+                    "E_TREEWALK_UNSUPPORTED_EQUATION",
+                    "ic($(vn)): the right-hand side reads the unknown " *
+                        "'$(err.variable_name)', which has no value at the start of the " *
+                        "run (esm-spec §11.4.2)"
+                )
+            )
+            throw(
+                TreeWalkError(
+                    "E_TREEWALK_UNSUPPORTED_EQUATION",
+                    "ic($(vn)) RHS must const-fold to a scalar for the " *
+                        "tree-walk path ($(sprint(showerror, err)))"
+                )
+            )
+        end
+    end
+    return eq_ics
 end
 
 # ---- Stage: enumerate declared-shape cells for equation-less array states ----
@@ -4114,9 +4370,13 @@ function _build_partition_and_materialize(
         registered_functions::AbstractDict, vi_vars, vi_extents::AbstractDict,
         vi_maps, has_value_invention::Bool,
         # Build-time parameter-read sink (see `_PARAM_READS`): the two consumers
-        # below (`_materialize_geometry_setup`, `_fold_ic_equations`) record the
+        # below (`_materialize_geometry_setup`, the `ic` evaluation) record the
         # names they resolve, which is what makes a parameter STRUCTURAL.
-        param_reads::Union{Nothing, Set{String}} = nothing
+        param_reads::Union{Nothing, Set{String}} = nothing,
+        # The start of the run and the data-fed parameters' values there,
+        # which the `ic` right-hand sides read (esm-spec §11.4.2).
+        ic_t0::Float64 = 0.0,
+        ic_data::AbstractDict = Dict{String, Any}()
     )
     # ---- Partition variables ----
     param_names, observed_names, state_var_names, supplied_scalars = _partition_variables(
@@ -4291,18 +4551,91 @@ function _build_partition_and_materialize(
         equations = kept
     end
 
-    # ---- Fold `ic(var) = <initial value>` equations into u0 (esm-spec v0.8.0) ----
-    # (see `_fold_ic_equations`; scoped-reference / array targets are deferred in
-    # `field_ics` and folded per cell by `_fold_field_ics!` once cells are known)
-    equations, eq_ics, field_ics = _with_param_reads(param_reads) do
-        _fold_ic_equations(equations, model, param_scope, registered_functions)
+    # ---- Fold `ic(var) = <initial value>` equations into u0 (esm-spec §11.4) ----
+    # (see `_split_ic_equations`; scoped-reference / array targets are deferred
+    # in `field_ics` and folded per cell by `_fold_field_ics!` once cells are known)
+    # Every `ic` right-hand side is evaluated in the START-OF-RUN SCOPE
+    # (esm-spec §11.4.2, `_ic_start_scope`): the parameters, `t` bound to the
+    # start of the run, each data-fed parameter's value there, and the
+    # observeds over those, each evaluated once as a whole field.
+    # `ic_plan` is what that evaluation needs (`_IcPlan`); `_ic_evaluate` runs
+    # it at a start `t0` with the data-fed values there, and a `remake` that
+    # moves the start runs it again.
+    equations, scalar_ics, raw_field_ics = _split_ic_equations(equations, model)
+    ic_plan, ic_start, eq_ics, field_ics = _with_param_reads(param_reads) do
+        plan = _ic_plan(
+            model, scalar_ics, raw_field_ics;
+            param_scope = param_scope, base_arrays = join_key_arrays,
+            param_arrays = param_arrays, index_sets = index_sets,
+            derived_extents = derived_extents, factor_scope = factor_scope,
+            registered_functions = registered_functions, vi_vars = vi_vars
+        )
+        (plan, _ic_evaluate(plan, ic_t0, ic_data)...)
     end
 
     return (;
         param_names, observed_names, state_var_names, param_scope,
         geom_setup_arrays, derived_extents,
-        equations, init_equations, discrete_defs, eq_ics, field_ics,
+        equations, init_equations, discrete_defs, eq_ics, field_ics, ic_start,
+        ic_plan,
     )
+end
+
+# The build's initial state at another start of the run (`remake` with a new
+# `tspan`, esm-spec §11.4.2): the `ic` right-hand sides evaluated there
+# (`_IcPlan`), written over the state construction seeded, with the caller's
+# initial conditions on top again, as `_build_u0` orders them. Holds what that
+# needs and no more of the build.
+struct _IcReseed{L, I}
+    plan::_IcPlan
+    # The seeded state at construction; a slot no `ic` sets keeps its value.
+    u0::Vector{Float64}
+    layout::L
+    # Each scalar `ic` target the caller's initial conditions leave to it,
+    # with its slot.
+    scalar_slots::Vector{Tuple{String, Int}}
+    initial_conditions::I
+    # The cells, and the build's arrays, the array `ic` right-hand sides read.
+    cells::Dict{String, Any}
+    const_arrays::Dict{String, Any}
+end
+
+function _IcReseed(plan::_IcPlan, u0, layout, initial_conditions, array_cells, const_arrays)
+    scalar_slots = Tuple{String, Int}[]
+    for (i, name) in enumerate(_layout_scalar_names(layout))
+        haskey(initial_conditions, name) && continue
+        any(t -> first(t) == name, plan.scalar_ics) && push!(scalar_slots, (name, i))
+    end
+    cells = Dict{String, Any}()
+    reads = Set{String}()
+    for (target, rhs) in plan.field_ics
+        haskey(array_cells, target) && (cells[target] = array_cells[target])
+        union!(reads, _referenced_var_names(rhs))
+    end
+    arrays = Dict{String, Any}(
+        String(k) => v for (k, v) in const_arrays if String(k) in reads
+    )
+    return _IcReseed(
+        plan, copy(u0), layout, scalar_slots, initial_conditions, cells, arrays
+    )
+end
+
+function (r::_IcReseed)(t0::Float64, data::AbstractDict)
+    s, eqi, fics = _ic_evaluate(r.plan, t0, data)
+    u0 = copy(r.u0)
+    for (name, slot) in r.scalar_slots
+        u0[slot] = eqi[name]
+    end
+    _fold_field_ics!(
+        (slot, v) -> (slot == 0 || (u0[slot] = v); nothing), fics, r.cells, r.layout,
+        s.scalars, r.plan.registered_functions, _ic_field_arrays(r.const_arrays, s)
+    )
+    n_scalar = length(_layout_scalar_names(r.layout))
+    _apply_ics_by_slot!(
+        (slot, v) -> (slot > n_scalar && (u0[slot] = Float64(v)); nothing),
+        r.layout, r.initial_conditions
+    )
+    return u0
 end
 
 # ---- Phase 3: array-cell discovery + flat state layout + u0 / parameter tuple ----
@@ -4381,10 +4714,17 @@ function _build_state_layout(
         set -> _with_param_reads(param_reads) do
             _fold_field_ics!(
                 set, parts.field_ics, array_cells, var_map,
-                parts.param_scope, registered_functions, const_arrays
+                parts.ic_start.scalars, registered_functions,
+                _ic_field_arrays(const_arrays, parts.ic_start)
             )
         end; unvalued = unvalued
     )
+    # The same initial state at another start of the run (`remake` with a new
+    # `tspan`, esm-spec §11.4.2), for a document whose `ic` right-hand sides
+    # read the start: `t`, or a data-fed parameter. `nothing` otherwise, since
+    # the initial state then does not depend on it.
+    ic_reseed = !parts.ic_start.reads_start ? nothing :
+        _IcReseed(parts.ic_plan, u0, var_map, initial_conditions, array_cells, const_arrays)
 
     # ---- Parameter NamedTuple ----
     p_vals = Float64[]
@@ -4475,7 +4815,7 @@ function _build_state_layout(
         n_states = length(var_map), var_map, u0, p,
         param_sym_set = param_index, param_map, array_var_info,
         var_map_ext, array_var_info_ext, mat_dims,
-        n_total = length(var_map_ext),
+        n_total = length(var_map_ext), ic_reseed,
     )
 end
 
@@ -5301,6 +5641,17 @@ function _build_evaluator_impl_inner(
         # externally fed shaped parameter is registered the same way,
         # whatever data the Problem bound to it.
         _live_fed_parameters::Bool = false,
+        # Internal: the start of the run, `t0 = tspan[1]`, at which every
+        # `ic` right-hand side is evaluated (esm-spec §11.4.2). `nothing`
+        # takes the start of `tspan` (`_pick_tspan`). `esm_problem` passes
+        # its own `tspan[1]`, which `sample_time` does not change.
+        _ic_t0::Union{Nothing, Real} = nothing,
+        # Internal: each data-fed parameter's value AT `_ic_t0`, keyed as
+        # `param_arrays` is, for the ones whose live buffer holds another
+        # instant (`sample_time` ≠ `t0`). An `ic` right-hand side reads
+        # these; the forcing buffers are not touched (esm-libraries-spec
+        # §2.5.2).
+        _ic_data::AbstractDict = Dict{String, Any}(),
         # What to return in the RHS slot (tree_walk/oop.jl):
         # `:inplace` → the zero-alloc, eltype-generic evaluator
         # `f!(du, u, p, t)`; `:oop` → the compiled IR a compiled
@@ -5526,7 +5877,9 @@ function _build_evaluator_impl_inner(
         param_arrays = param_arrays, parameter_overrides = parameter_overrides,
         registered_functions = registered_functions, vi_vars = _vi_vars,
         vi_extents = _vi_extents, vi_maps = _vi_maps,
-        has_value_invention = _has_value_invention, param_reads = param_reads
+        has_value_invention = _has_value_invention, param_reads = param_reads,
+        ic_t0 = _ic_t0 === nothing ? _pick_tspan(tspan, model)[1] : Float64(_ic_t0),
+        ic_data = _ic_data
     )
     # A range-restricted program (src/range_restricted.jl) clips the equation
     # stream to the cells its owned box needs, before any cell is laid out.
@@ -5561,6 +5914,24 @@ function _build_evaluator_impl_inner(
         vi_vars = _vi_vars, param_reads = param_reads,
         unvalued = inspect === nothing ? nothing : empty!(inspect.unvalued_slots)
     )
+
+    # `remake` with a new start re-evaluates the `ic` right-hand sides through
+    # this. An initialization equation (esm-spec §6.2) reads the seeded state
+    # in a later phase, which a re-seed would not replay, so such a build
+    # refuses the move instead of returning a state the equations did not see.
+    if inspect !== nothing
+        inspect.ic_reseed = layout.ic_reseed === nothing ? nothing :
+            isempty(parts.init_equations) ? layout.ic_reseed :
+            (_, _) -> throw(
+                TreeWalkError(
+                    "E_TREEWALK_UNSUPPORTED_EQUATION",
+                    "the initial state reads the start of the run (an `ic` right-hand " *
+                    "side reads `t` or a data-fed parameter) and the model has " *
+                    "initialization equations, which a re-seed at a new start would not " *
+                    "re-solve; build the problem again with esm_problem at the new tspan"
+                )
+            )
+    end
 
     # ---- The parameter partition (differentiability plan §3 Phase 5) ----
     # Every build-time consumer has now run, so the read set is complete.
