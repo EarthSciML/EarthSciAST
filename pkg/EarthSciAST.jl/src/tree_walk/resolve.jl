@@ -1020,10 +1020,10 @@ function _resolve_index_of_makearray_symbolic(
         end
         acc = isempty(conds) ? branch :
             OpExpr(
-            "ifelse", ASTExpr[
-                length(conds) == 1 ? conds[1] : OpExpr("and", conds), branch, acc,
-            ]
-        )
+                "ifelse", ASTExpr[
+                    length(conds) == 1 ? conds[1] : OpExpr("and", conds), branch, acc,
+                ]
+            )
     end
     return _resolve_indices(
         acc, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
