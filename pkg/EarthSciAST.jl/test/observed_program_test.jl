@@ -215,7 +215,9 @@ _OP.sink_observed_names(s::_OPSink) = s.names
         observed_field(pn, "k"; u = pn.u0, t = 1.0)
         @test ctx.programs["M.k"] === prog           # built once, reused
         @test _op_rows(pn, "h") == [:output_compiled]
-        @test _op_rows(pi_, "h") == [:output_percell]
+        # The interpreter's cellwise reader compiles a makearray observed once
+        # too (its region is chosen per cell at run time).
+        @test _op_rows(pi_, "h") == [:output_compiled_once]
     end
 
     @testset "the program's generated code is shared across N" begin

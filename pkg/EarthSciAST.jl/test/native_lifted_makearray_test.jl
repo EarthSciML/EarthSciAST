@@ -107,15 +107,6 @@ function _nlm_agree(doc)
     return (; same, jsame, tally, tiers, nonzero = any(!iszero, di))
 end
 
-function _nlm_refusal(doc)
-    try
-        _nlm_build(doc, :native)
-    catch err
-        return err
-    end
-    return nothing
-end
-
 const _NLM_U = "M.u"
 
 # ── documents ────────────────────────────────────────────────────────────────
@@ -320,13 +311,16 @@ const _NLM_COMPILE_ONCE = (:affine, :scan, :array_contraction_codegen)
         @test get(r.tiers, :array_contraction_codegen, 0) >= 1
     end
 
-    @testset "a region chosen by two loop indices is refused by name" begin
-        err = _nlm_refusal(_nlm_diagonal())
-        @test err isa _NLM.TreeWalkError
-        @test err.code == _NLM.ERROR_CODES.COMPILER_REFUSED_RULE
-        @test occursin("several loop indices", err.detail)
-        # The interpreter runs it.
-        p, _ = _nlm_build(_nlm_diagonal(), :interpreter)
-        @test length(p.u0) == 400
+    # A region chosen by two loop indices (the subscript `i + j`) has no box
+    # cut, so the affine tier declines it; the whole-array nest selects the
+    # region per cell at run time and gives the interpreter's bits.
+    @testset "a region chosen by two loop indices takes the nest" begin
+        r = _nlm_agree(_nlm_diagonal())
+        @test r.nonzero
+        @test r.same
+        @test r.jsame
+        @test get(r.tiers, :array_contraction_codegen, 0) >= 1
+        @test isempty(setdiff(keys(r.tiers), _NLM_COMPILE_ONCE))
+        @test get(r.tally, :percell_acc, 0) == 0
     end
 end
