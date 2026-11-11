@@ -194,7 +194,7 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // `ifelse_mixed_whole_dynamic` case (tier `unshaped_mixed_ifelse`) — an
     // observed declared without a shape and defined by an `ifelse` over an
     // array keeps no shape (esm-libraries-spec §4.7.5).
-    expect(corpus.cases.length).toBe(58)
+    expect(corpus.cases.length).toBe(56)
     // 9 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere,

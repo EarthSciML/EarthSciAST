@@ -289,7 +289,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect(r.join).toEqual([{ on: [['row_id', 'row_id']], syms: ['p', 'b'] }])
     expect(r.expr.args).toEqual([22, 5])
     const k = definingRhs(m, 'k')
-    expect(k.arg).toBe('p')
+    expect(k.reduce).toBe('max')
     expect(k.ranges.p).toEqual([1, 11])
     expect(k.expr.args).toEqual(['c', 7])
 

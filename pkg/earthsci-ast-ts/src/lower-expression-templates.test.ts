@@ -909,8 +909,9 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
 
 describe('scalar_field_param conformance fixture', () => {
   // Drives tests/conformance/expression_templates/scalar_field_param — the
-  // scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
-  // (planar / spherical) — against its pinned Julia-generated expanded.esm.
+  // scalar-field substitution site rule (esm-spec §9.6.1): one template whose
+  // `broadcast` `fn` field carries a parameter name, instantiated twice (`+` /
+  // `*`) — against its pinned Julia-generated expanded.esm.
   const caseDir = fixturesDir('conformance/expression_templates/scalar_field_param')
 
   it('matches the canonical expanded form', () => {
@@ -919,9 +920,9 @@ describe('scalar_field_param conformance fixture', () => {
     // Option B: Expand reproduces the pinned Option-A expanded form (RFC bridge).
     const out = expandDocument(lowerExpressionTemplates(fixture)) as any
     expect(out.models).toEqual(expanded.models)
-    const overlap = out.models.Overlap
-    expect(definingRhs(overlap, 'area_planar').manifold).toBe('planar')
-    expect(definingRhs(overlap, 'area_spherical').manifold).toBe('spherical')
+    const combine = out.models.Combine
+    expect(definingRhs(combine, 'sum_ab').fn).toBe('+')
+    expect(definingRhs(combine, 'prod_ab').fn).toBe('*')
   })
 })
 
