@@ -635,44 +635,175 @@ pub fn format_canonical_float(f: f64) -> String {
             "0.0".into()
         };
     }
-    let abs = f.abs();
-    let use_exp = !(1e-6..1e21).contains(&abs);
-    if use_exp {
-        // Use Rust's shortest round-trip; format!("{:e}", f) emits e.g. "1e25", "3e-7"
-        // (no leading + on exponent).
-        let s = format!("{f:e}");
-        // Strip leading + (Rust doesn't emit it but be safe) and leading exponent zeros.
-        normalize_exponent(&s)
+    let d = shortest_digits(f);
+    let mut out = String::with_capacity(32);
+    if f < 0.0 {
+        out.push('-');
+    }
+    if (1e-6..1e21).contains(&f.abs()) {
+        // plain decimal, with a `.0` on an integral value
+        push_positional(&mut out, d.as_str(), d.exp, true);
     } else {
-        // Plain decimal — Rust's `Display` gives the shortest round-trip and, in
-        // the `[1e-6, 1e21)` range, always emits plain decimal (never exponent
-        // form). It may print an integer-valued float as e.g. `1` (no `.`), so add
-        // a trailing `.0` when no decimal point is present.
-        let s = format!("{f}");
-        if !s.contains('.') {
-            format!("{s}.0")
+        // `d[.ddd]e<exp>`, no `+` on the exponent ("1e25", "3e-7")
+        push_scientific(&mut out, d.as_str(), d.exp, false);
+    }
+    out
+}
+
+/// `v` as Julia's `print(::Float64)` writes it: shortest round-tripping digits
+/// (a decimal tie takes the even last digit), positional when the decimal
+/// exponent of the first digit is in `-4..=5` (`0.0001`, `100000.0`) and
+/// `d.ddd…e<exp>` outside it (`9.99e-5`, `1.0e6`, `1.0e16`), always with a
+/// digit after the point; `0.0`, `-0.0`, `NaN`, `Inf`, `-Inf`.
+pub fn format_julia_float(v: f64) -> String {
+    if v.is_nan() {
+        return "NaN".into();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "Inf" } else { "-Inf" }.into();
+    }
+    if v == 0.0 {
+        return if v.is_sign_negative() { "-0.0" } else { "0.0" }.into();
+    }
+    let d = shortest_digits(v);
+    let mut out = String::with_capacity(32);
+    if v < 0.0 {
+        out.push('-');
+    }
+    if (-4..=5).contains(&d.exp) {
+        push_positional(&mut out, d.as_str(), d.exp, true);
+    } else {
+        push_scientific(&mut out, d.as_str(), d.exp, true);
+    }
+    out
+}
+
+/// `v` laid out as std's `Display` lays it out — always positional, an
+/// integral value with no point (`100`, `0.001`, `1e300` as 301 digits) — but
+/// with the digits from [`shortest_digits`], so a decimal tie takes the even
+/// last digit as every other binding writes it. Non-finite values and zero
+/// are std's (`NaN`, `inf`, `-0`).
+pub fn format_plain_float(v: f64) -> String {
+    if !v.is_finite() || v == 0.0 {
+        return format!("{v}");
+    }
+    let d = shortest_digits(v);
+    let mut out = String::with_capacity(32);
+    if v < 0.0 {
+        out.push('-');
+    }
+    push_positional(&mut out, d.as_str(), d.exp, false);
+    out
+}
+
+/// The shortest decimal digits that read back as a float, without leading or
+/// trailing zeros, and the decimal exponent of the first one:
+/// `705129328097.90625` is `"7051293280979062"` with `exp` 11. Kept on the
+/// stack; [`Self::as_str`] borrows the digits.
+pub(crate) struct ShortestDigits {
+    buf: [u8; 24],
+    len: usize,
+    /// Decimal exponent of the first digit: the value is `d.ddd… × 10^exp`.
+    pub(crate) exp: i32,
+}
+
+impl ShortestDigits {
+    pub(crate) fn as_str(&self) -> &str {
+        // only ASCII digits are ever stored
+        std::str::from_utf8(&self.buf[..self.len]).expect("ASCII digits")
+    }
+}
+
+/// The shortest decimal digits that read back as `|f|` (finite, non-zero).
+/// Every float writer that must match the other bindings byte for byte takes
+/// its digits from here.
+///
+/// When the exact binary value lies halfway between two shortest candidates
+/// that both read back (705129328097.90625, between …9062 and …9063), the one
+/// with the even last digit is taken, as Julia's Ryu, Python's `repr`,
+/// JavaScript's `Number::toString` and Go's `strconv` take it; when that one
+/// does not read back — at a power of two, where the rounding interval below
+/// is half as wide as the one above (2^-24 = 5.9604644775390625e-8 reads back
+/// from …063 but not from …062) — the other is. The `ryu` crate does both.
+/// Rust's own `{:e}` / `Display` do not: they find the right digit count but
+/// take the upper candidate on a tie, so no writer here may take its digits
+/// from them.
+pub(crate) fn shortest_digits(f: f64) -> ShortestDigits {
+    debug_assert!(f.is_finite() && f != 0.0);
+    let mut ryu_buf = ryu::Buffer::new();
+    // ryu writes `ddd.ddd`, `0.000ddd` or `d[.ddd]e<exp>`
+    let s = ryu_buf.format_finite(f.abs());
+    let (mant, e) = match s.split_once('e') {
+        Some((m, e)) => (m, e.parse::<i32>().expect("ryu exponent is an integer")),
+        None => (s, 0),
+    };
+    let int_len = mant.find('.').unwrap_or(mant.len());
+    let mut out = ShortestDigits {
+        buf: [0; 24],
+        len: 0,
+        exp: 0,
+    };
+    let mut leading_zeros = 0;
+    for b in mant.bytes().filter(|&b| b != b'.') {
+        if out.len == 0 && b == b'0' {
+            leading_zeros += 1;
         } else {
-            s
+            out.buf[out.len] = b;
+            out.len += 1;
+        }
+    }
+    while out.len > 1 && out.buf[out.len - 1] == b'0' {
+        out.len -= 1;
+    }
+    out.exp = int_len as i32 - 1 - leading_zeros + e;
+    out
+}
+
+/// Append `digits` × 10^(`exp` − digits + 1) in positional notation
+/// (`("25", 0)` → `2.5`, `("5", -3)` → `0.005`). An integral value gets a
+/// `.0` when `force_frac` is set (`("1", 2)` → `100.0`) and no point
+/// otherwise (`100`).
+pub(crate) fn push_positional(out: &mut String, digits: &str, exp: i32, force_frac: bool) {
+    if exp < 0 {
+        out.push_str("0.");
+        out.extend(std::iter::repeat_n('0', (-exp - 1) as usize));
+        out.push_str(digits);
+        return;
+    }
+    let k = exp as usize + 1;
+    if k >= digits.len() {
+        out.push_str(digits);
+        out.extend(std::iter::repeat_n('0', k - digits.len()));
+        if force_frac {
+            out.push_str(".0");
+        }
+    } else {
+        out.push_str(&digits[..k]);
+        out.push('.');
+        out.push_str(&digits[k..]);
+    }
+}
+
+/// Append the scientific mantissa `d[.ddd]` of `digits`; a single digit gets
+/// a `.0` when `force_frac` is set (`"1"` → `1.0`) and stays bare otherwise.
+pub(crate) fn push_mantissa(out: &mut String, digits: &str, force_frac: bool) {
+    out.push_str(&digits[..1]);
+    match &digits[1..] {
+        "" if force_frac => out.push_str(".0"),
+        "" => {}
+        frac => {
+            out.push('.');
+            out.push_str(frac);
         }
     }
 }
 
-fn normalize_exponent(s: &str) -> String {
-    if let Some(idx) = s.find('e') {
-        let (mant, exp) = s.split_at(idx);
-        let exp = &exp[1..]; // strip 'e'
-        let exp = exp.strip_prefix('+').unwrap_or(exp);
-        let (sign, digits) = if let Some(rest) = exp.strip_prefix('-') {
-            ("-", rest)
-        } else {
-            ("", exp)
-        };
-        let digits = digits.trim_start_matches('0');
-        let digits = if digits.is_empty() { "0" } else { digits };
-        format!("{mant}e{sign}{digits}")
-    } else {
-        s.into()
-    }
+/// Append `d[.ddd]e<exp>`: [`push_mantissa`], then the exponent with no `+`
+/// and no leading zeros (`1e25`, `3.5e-7`, or `1.0e25` with `force_frac`).
+pub(crate) fn push_scientific(out: &mut String, digits: &str, exp: i32, force_frac: bool) {
+    use std::fmt::Write as _;
+    push_mantissa(out, digits, force_frac);
+    write!(out, "e{exp}").expect("writing to a String cannot fail");
 }
 
 #[cfg(test)]
@@ -704,6 +835,149 @@ mod tests {
         }
         let mixed = 0.1_f64 + 0.2_f64;
         assert_eq!(format_canonical_float(mixed), "0.30000000000000004");
+    }
+
+    #[test]
+    fn decimal_ties_take_the_even_digit() {
+        // An exact value halfway between two shortest candidates that both
+        // read back is written with the even last digit, as every other
+        // binding writes it (tests/conformance/canonical/float_ties.json).
+        // Each literal is that shortest form; the exact values are
+        // 705129328097.90625, -227821227903782.625, 2^-25 and
+        // -5.9604644775390625e-7.
+        let x = |bits: u64| f64::from_bits(bits);
+        let cases = [
+            (705129328097.9062, "705129328097.9062"),
+            (-227821227903782.62, "-227821227903782.62"),
+            (2.0_f64.powi(-25), "2.9802322387695312e-8"),
+            (-5.960464477539062e-7, "-5.960464477539062e-7"),
+            // 2^-24: the even candidate (…062) does not read back, since the
+            // rounding interval below a power of two is half as wide
+            (2.0_f64.powi(-24), "5.960464477539063e-8"),
+            // RFC 8785 Appendix B (an integral value keeps its `.0`, and an
+            // exponent has no `+`)
+            (x(0x43143ff3c1cb0959), "1424953923781206.2"),
+            (x(0x41b3de4355555553), "333333333.3333332"),
+            (x(0x41b3de4355555554), "333333333.33333325"),
+            (x(0x41b3de4355555555), "333333333.3333333"),
+            (x(0x41b3de4355555556), "333333333.3333334"),
+            (x(0x41b3de4355555557), "333333333.33333343"),
+            (x(0x44b52d02c7e14af5), "9.999999999999997e22"),
+            (x(0x44b52d02c7e14af6), "1e23"),
+            (x(0x44b52d02c7e14af7), "1.0000000000000001e23"),
+            (x(0x444b1ae4d6e2ef4e), "999999999999999700000.0"),
+            (x(0x444b1ae4d6e2ef4f), "999999999999999900000.0"),
+            (x(0x444b1ae4d6e2ef50), "1e21"),
+            (x(0x4430000000000000), "295147905179352830000.0"),
+            (x(0x3eb0c6f7a0b5ed8c), "9.999999999999997e-7"),
+            (x(0x3eb0c6f7a0b5ed8d), "0.000001"),
+            (x(0xbecbf647612f3696), "-0.0000033333333333333333"),
+            (x(0x7fefffffffffffff), "1.7976931348623157e308"),
+            (x(0x000fffffffffffff), "2.225073858507201e-308"),
+        ];
+        for (v, want) in cases {
+            assert_eq!(format_canonical_float(v), want, "for {:016x}", v.to_bits());
+        }
+    }
+
+    /// The tie-to-even shortest digits by exact decimal conversion: std's
+    /// `{:e}` gives the shortest digit count, re-printing at that precision
+    /// rounds the exact value half to even, and that candidate is kept only
+    /// if it reads back. The oracle `shortest_digits` must agree with.
+    fn exact_shortest(f: f64) -> (String, i32) {
+        let a = f.abs();
+        let sci = format!("{a:e}");
+        let prec = sci.find('e').map_or(0, |i| i.saturating_sub(2));
+        let even = format!("{a:.prec$e}");
+        let pick = if even.parse::<f64>() == Ok(a) {
+            even
+        } else {
+            sci
+        };
+        let (mant, exp) = pick.split_once('e').unwrap();
+        (mant.replace('.', ""), exp.parse().unwrap())
+    }
+
+    #[test]
+    fn shortest_digits_agree_with_exact_tie_to_even() {
+        let check = |v: f64| {
+            if !v.is_finite() || v == 0.0 {
+                return;
+            }
+            let d = shortest_digits(v);
+            let (want, exp) = exact_shortest(v);
+            assert_eq!(
+                (d.as_str(), d.exp),
+                (want.as_str(), exp),
+                "for {:016x}",
+                v.to_bits()
+            );
+        };
+        // xorshift, fixed seed: random bit patterns across the whole range
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for _ in 0..200_000 {
+            check(f64::from_bits(next()));
+        }
+        // dyadic values n·2^-j with a 48-53 bit n: short exact decimal
+        // expansions, so many are exact ties between two shortest candidates
+        for _ in 0..200_000 {
+            let r = next();
+            let n = ((r >> 11) | (1 << 47)) >> (r % 6);
+            let j = (r >> 3) % 40;
+            check(n as f64 / 2f64.powi(j as i32));
+            check(n as f64 * 2f64.powi(-(j as i32) - 20));
+        }
+        // every power of two: the asymmetric rounding interval
+        for k in -1074..=1023 {
+            check(2f64.powi(k));
+            check(f64::from_bits(2f64.powi(k).to_bits() + 1));
+            check(f64::from_bits(2f64.powi(k).to_bits().saturating_sub(1)));
+        }
+    }
+
+    #[test]
+    fn julia_and_plain_layouts() {
+        // `julia -e 'print(x)'` for each x
+        for (v, want) in [
+            (1e15, "1.0e15"),
+            (1e16, "1.0e16"),
+            (123456789012345.0, "1.23456789012345e14"),
+            (100000.0, "100000.0"),
+            (999999.9, "999999.9"),
+            (-1234567.5, "-1.2345675e6"),
+            (1e6, "1.0e6"),
+            (0.0001, "0.0001"),
+            (0.00012, "0.00012"),
+            (9.99e-5, "9.99e-5"),
+            (100.0, "100.0"),
+            (705129328097.9062, "7.051293280979062e11"),
+            (2.0_f64.powi(-24), "5.960464477539063e-8"),
+            (1e300, "1.0e300"),
+            (5e-324, "5.0e-324"),
+            (-0.0, "-0.0"),
+            (f64::NAN, "NaN"),
+            (f64::NEG_INFINITY, "-Inf"),
+        ] {
+            assert_eq!(format_julia_float(v), want);
+        }
+        // std's `Display` layout, tie-to-even digits
+        for (v, want) in [
+            (100.0, "100"),
+            (0.25, "0.25"),
+            (-0.001, "-0.001"),
+            (1e21, "1000000000000000000000"),
+            (705129328097.9062, "705129328097.9062"),
+            (-0.0, "-0"),
+            (f64::INFINITY, "inf"),
+        ] {
+            assert_eq!(format_plain_float(v), want);
+        }
     }
 
     #[test]

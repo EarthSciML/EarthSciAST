@@ -1,0 +1,93 @@
+{
+ "esm": "1.3.0",
+ "metadata": {
+  "name": "declared_scalar_application",
+  "authors": [
+   "EarthSciAST test suite"
+  ],
+  "description": "y declares shape [] (a scalar, esm-spec 4.3.1) and is defined by an elementwise application over rho, an array over [cell]. A scalar is never lifted: flatten leaves the equation as written, and the build refuses it."
+ },
+ "index_sets": {
+  "cell": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "M": {
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/interp.esm",
+     "only": [
+      "linear"
+     ]
+    }
+   ],
+   "variables": {
+    "rho": {
+     "type": "parameter",
+     "shape": [
+      "cell"
+     ],
+     "default": [
+      1.5,
+      2.5,
+      3.5
+     ]
+    },
+    "y": {
+     "type": "unknown",
+     "shape": []
+    },
+    "s": {
+     "type": "unknown",
+     "default": 0.0
+    }
+   },
+   "equations": [
+    {
+     "lhs": "y",
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "linear",
+      "bindings": {
+       "table": {
+        "op": "const",
+        "args": [],
+        "value": [
+         10.0,
+         20.0,
+         30.0,
+         40.0
+        ]
+       },
+       "axis": {
+        "op": "const",
+        "args": [],
+        "value": [
+         1.0,
+         2.0,
+         3.0,
+         4.0
+        ]
+       },
+       "x": "rho",
+       "n": 4
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "s"
+      ],
+      "wrt": "t"
+     },
+     "rhs": "y"
+    }
+   ]
+  }
+ }
+}

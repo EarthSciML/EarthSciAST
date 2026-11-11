@@ -476,6 +476,8 @@ function _check_authored_document(raw_data; mounted_leaf::Bool = false)
     end
     # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
     reject_const_units_pre_v12(raw_data)
+    # The template-origin mark is load provenance; no file spells it.
+    _reject_authored_template_origins(raw_data)
     return nothing
 end
 
@@ -517,8 +519,10 @@ function _load_parsed(
     # caller already ran them on the AUTHORED form (`authored_checked`).
     authored_checked || _check_authored_document(raw_data; mounted_leaf = mounted_leaf)
 
-    # Validate schema
-    schema_errors = validate_schema(raw_data)
+    # Validate schema, on the document without the template-origin marks a
+    # mount's expansion carries (load provenance, esm-spec §9.6.11). An authored
+    # file that spells the key was refused by `_check_authored_document`.
+    schema_errors = validate_schema(_strip_template_origins(raw_data))
     if !isempty(schema_errors)
         throw(SchemaValidationError(_format_schema_errors(schema_errors), schema_errors))
     end
@@ -1150,6 +1154,7 @@ function _resolve_mount_edge_core(
     # be spliced into a document that may declare an older one.
     reject_solver_pre_v11(comp)
     reject_const_units_pre_v12(comp)
+    _reject_authored_template_origins(comp)
     _reject_library_ref(comp, ref, refpath)
     compdir = dirname(refpath)
 
@@ -1285,7 +1290,11 @@ function _resolve_mount_edge_core(
         mount_declared = leaf_mount_declared,
         mounted_leaf = true
     )
-    comp = expand_document(lower_expression_templates(resolved === nothing ? comp : resolved))
+    # Marked: the elementwise lift applies to the leaf's applications (esm-spec
+    # §9.6.11), as at a subsystem mount below.
+    comp = task_local_storage(_MARK_TEMPLATE_ORIGINS_KEY, true) do
+        expand_document(lower_expression_templates(resolved === nothing ? comp : resolved))
+    end
 
     # esm-spec §9.3: the leaf's `enum` ops resolve against ITS OWN `enums` block,
     # here, while that block is still at hand. The mounting document's block is a

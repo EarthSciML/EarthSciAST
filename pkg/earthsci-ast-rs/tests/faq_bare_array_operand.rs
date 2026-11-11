@@ -298,3 +298,87 @@ fn derivative_state_delivered_bare_by_a_template_is_refused_at_build() {
         );
     }
 }
+
+/// A 0-D mechanism lifted pointwise onto a grid, whose loss coefficient a
+/// `variable_map` feeds from `Grid.kk = 0.1 * rho`: `kk` declares no shape,
+/// and is an array because `rho` is (esm-spec §4.3.4). The authored equations
+/// read it elementwise and outside any `faq`; the pointwise lift (§10.5) is
+/// what puts it inside one, so the lift reads it at the cell, as it reads a
+/// declared array, and the build does not refuse what the lift wrote. The
+/// flattened system, written out and read back, builds too.
+#[test]
+fn the_pointwise_lift_reads_an_inferred_array_at_the_cell() {
+    use earthsci_ast::{initial_state, rhs_program};
+    let d = json!({
+        "esm": "1.3.0",
+        "metadata": {"name": "lift_inferred_operand", "authors": ["test"]},
+        "index_sets": {"cell": {"kind": "interval", "size": 4}},
+        "models": {
+            "Chem": {
+                "variables": {
+                    "c": {"type": "unknown", "units": "1", "default": 1.0},
+                    "k": {"type": "parameter", "units": "1/s", "default": 0.5}
+                },
+                "equations": [{
+                    "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                    "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "c"]}
+                }]
+            },
+            "Grid": {
+                "variables": {
+                    "rho": {"type": "parameter", "units": "1/s", "shape": ["cell"],
+                            "default": [1.0, 2.0, 3.0, 4.0]},
+                    "kk": {"type": "unknown", "units": "1/s"}
+                },
+                "equations": [{"lhs": "kk", "rhs": {"op": "*", "args": [0.1, "rho"]}}]
+            },
+            "Dep": {
+                "variables": {"kd": {"type": "parameter", "units": "1/s", "default": 0.0}},
+                "equations": [{
+                    "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
+                    "rhs": {"op": "makearray", "args": [], "regions": [[[1, 4]]],
+                        "values": [{"op": "faq", "args": [], "output_idx": ["i"],
+                            "ranges": {"i": [1, 4]},
+                            "expr": {"op": "*", "args": [
+                                {"op": "-", "args": ["kd"]}, idx("_var", "i")]}}]}
+                }]
+            }
+        },
+        "coupling": [
+            {"type": "operator_compose", "systems": ["Chem", "Dep"], "lifting": "pointwise"},
+            {"type": "variable_map", "from": "Grid.kk", "to": "Chem.k", "transform": "param_to_var"}
+        ]
+    });
+    let file = load_string(&d.to_string()).expect("loads");
+    let flat = flatten(&file).expect("flattens");
+    let rhs = serde_json::to_string(&flat.equations).unwrap();
+    assert!(
+        rhs.contains(r#"{"op":"index","args":["Grid.kk","i"]}"#),
+        "the lift reads Grid.kk at the cell: {rhs}"
+    );
+    // The flattened system as a document: one model per component, every
+    // reference fully qualified.
+    let written = crate::flatten_wire_conformance::flattened_document(&flat);
+    let read_back = load_string(&written.to_string()).expect("the written-out system loads");
+    for input in [&file, &read_back] {
+        for c in COMPILERS {
+            let opts = ProblemOptions {
+                compiler: Some(c),
+                ..Default::default()
+            };
+            let prob = esm_problem(input, (0.0, 1.0), opts)
+                .unwrap_or_else(|e| panic!("{}: {e}", c.as_str()));
+            let prog = rhs_program(&prob).expect("rhs_program");
+            let u = initial_state(&prob).expect("initial_state");
+            let p = prog
+                .parameter_vector(&std::collections::HashMap::new())
+                .expect("parameters");
+            let mut ws = prog.new_workspace();
+            let mut du = vec![0.0; prog.n_states()];
+            prog.eval_into(&u, &[], &p, 0.0, &prog.default_forcing(), &mut du, &mut ws)
+                .expect("eval");
+            let want: Vec<f64> = [1.0, 2.0, 3.0, 4.0].iter().map(|r| -(0.1 * r)).collect();
+            assert_eq!(du, want, "{}", c.as_str());
+        }
+    }
+}

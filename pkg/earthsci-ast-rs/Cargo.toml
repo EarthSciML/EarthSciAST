@@ -161,6 +161,12 @@ web-sys = { version = "0.3", optional = true }
 rayon = { version = "1.8", optional = true }
 simd-json = { version = "0.19", optional = true }
 smallvec = { version = "1.11", features = ["serde"] }
+# ryu: the shortest round-tripping digits of a float, with a decimal tie
+# broken to the even last digit as Julia's Ryu, Python's `repr`, Go's
+# `strconv` and JavaScript write it (std's `{:e}` / `Display` take the upper
+# candidate). Already in the tree through serde_json; named directly because
+# `canonicalize::shortest_digits` reads its output.
+ryu = "1.0.23"
 # Fast, *fixed-seed* (hence deterministic — unlike std's randomized RandomState)
 # hasher for the hot per-cell interpreter maps (`simulate_array`). Keys are
 # trusted internal variable/index names, so the SipHash DoS resistance is unused

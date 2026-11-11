@@ -1584,7 +1584,10 @@ TypeScript `camelCase`, others verbatim).
   variable (units, `default`, `shape`, `update`, `distribution`), not a bare name list. A
   consumer must be able to build a solver problem from the flattened form alone. The one
   field flatten changes is a pointwise-lifted state's `shape`, which becomes the lift's index
-  sets (below): after the lift the state is an array on those index sets.
+  sets (below): after the lift the state is an array on those index sets. (Flatten also
+  writes each elementwise template application, in an equation or a `field_ics` entry, as
+  its per-cell `faq`, esm-spec §9.6.11, so the flattened form keeps its meaning when
+  serialized; that rewrites a right-hand side and changes no declaration.)
 
 **Loader fields (normative).** `loader_fields` holds one entry per data-fed
 parameter, a parameter with a `data` rule whose `source` names a declared
@@ -1648,6 +1651,17 @@ variables for one whose shape has the same extents, which finds nothing for a gr
 variable declares and cannot choose between two index sets of one size. The cross-binding
 gate is the `pointwise_lift` tier of `tests/conformance/flatten/cases.json`, one fixture per
 rule (`tests/conformance/pointwise_lift/README.md`).
+
+**Pointwise lift: operands read per cell (normative).** The lifted system is evaluated
+independently at each grid point (esm-spec §10.5), so inside the lifted `faq` every operand
+that is an array on the flattened system is read at the cell, each axis at the loop over its
+index set (esm-spec §4.3.4): the lifted species, every variable that declares a non-empty
+`shape`, and every variable declared without one whose defining equation is elementwise over
+arrays, such as a 0-D component's coefficient `k = v · ρ / Δp` whose inputs a `variable_map`
+feeds from grid fields. The author wrote such a read elementwise and outside any `faq`; the lift
+is what puts it inside one, so a read the lift left bare would be refused at build as
+`faq_bare_array_operand` (esm-spec §4.3.1). Only a declared shape names an index set for the
+grid (rule 1 above). Fixture: `tests/conformance/flatten_wire/fixtures/lift_inferred_operand.esm`.
 
 **Per-term provenance (normative; issue #539).** Flatten sums `operator_compose` and `couple`
 contributions into one right-hand side. `equation_contributions` records where each summand came

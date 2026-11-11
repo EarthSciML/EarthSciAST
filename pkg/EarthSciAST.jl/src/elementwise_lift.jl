@@ -198,7 +198,7 @@ function _lift_elementwise_application(
                 "$(shape), which names one index set twice (esm-spec §9.6.11)"
         )
     )
-    loops = String["_p$(i - 1)" for i in eachindex(shape)]
+    loops = _ew_fresh_loops(rhs, length(shape), ctx)
     ranges = Dict{String, Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape))
     body = try
         _ew_at_cell(rhs, shapes, ctx, loops, _AxisAlign(shape, shapes))
@@ -210,4 +210,210 @@ function _lift_elementwise_application(
         "faq", ASTExpr[];
         output_idx = Any[l for l in loops], ranges = ranges, expr_body = body
     )
+end
+
+# Every name `e` reads or binds, its template references expanded: the names
+# a lift's loop symbols must not shadow. Every expression-bearing field
+# (`foreach_child`) and every name-bearing one: the symbols a node binds
+# (`_bound_symbols`: `int_var`, range keys, `output_idx`), a range's `of`
+# parents, `wrt`, `dim`, an argmin/argmax `arg`, and a `table_lookup`'s axis
+# names. An application contributes its expansion's names, through the same
+# memoized `_ew_expansion` the lift's `_ew_at_cell` reads, so each one is
+# expanded once. The Rust binding's `names_in`.
+function _ew_names!(out::Set{String}, e, ctx, seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}())
+    if e isa VarExpr
+        push!(out, e.name)
+        return out
+    end
+    e isa OpExpr || return out
+    haskey(seen, e) && return out
+    seen[e] = nothing
+    if e.op == "apply_expression_template"
+        ex = _ew_expansion(e, ctx)
+        ex === nothing || return _ew_names!(out, ex, ctx, seen)
+    end
+    union!(out, _bound_symbols(e))
+    if e.ranges !== nothing
+        for r in values(e.ranges)
+            r isa IndexSetRef && union!(out, r.of)
+        end
+    end
+    for f in (e.wrt, e.dim, e.arg)
+        f === nothing || push!(out, f)
+    end
+    e.table_axes === nothing || union!(out, (String(k) for k in keys(e.table_axes)))
+    foreach_child(c -> _ew_names!(out, c, ctx, seen), e)
+    return out
+end
+
+# The lift's loop symbols `_p0, _p1, …`, each prefixed with one more `_` until
+# none is a name `rhs` (expanded) reads or binds. The same choice as the Rust
+# binding's, so the two write the same lifted equation.
+function _ew_fresh_loops(rhs::ASTExpr, n::Integer, ctx)
+    used = _ew_names!(Set{String}(), rhs, ctx)
+    prefix = "_p"
+    loops = String["$(prefix)$(d)" for d in 0:(n - 1)]
+    while any(in(used), loops)
+        prefix = "_" * prefix
+        loops = String["$(prefix)$(d)" for d in 0:(n - 1)]
+    end
+    return loops
+end
+
+# Every array's index sets as the build sees them (esm-spec §4.3.1): a
+# variable's declared non-empty `shape`, or, for a variable declared without
+# one, the shape its defining equation evaluates to (§4.3.4, §9.6.11), to a
+# fixed point. An explicit `shape: []` declares a scalar and is never given
+# one. The Rust binding's `promoted_var_shapes`.
+#
+# Returns the shapes and the variables whose definition was refused
+# (`array_shape_mismatch`): an operand-shape conflict is the build's to report,
+# so here it only means no shape. `seed` holds shapes inferred by an earlier
+# call on this system (the pointwise lift's); each is kept unless its
+# definition reads, directly or through another seeded variable, a name in
+# `stale` (a state whose declared shape has changed since).
+function _flat_array_shapes(
+        states, params, observeds, equations, ctx;
+        seed::Union{Nothing, AbstractDict} = nothing, stale = ()
+    )
+    shapes = Dict{String, Vector{String}}()
+    declared_scalar = Set{String}()
+    for d in (params, observeds, states), (k, v) in d
+        v.shape === nothing && continue
+        if isempty(v.shape)
+            push!(declared_scalar, k)
+        else
+            haskey(shapes, k) || (shapes[k] = String[string(x) for x in v.shape])
+        end
+    end
+    open = Tuple{String, ASTExpr}[]
+    for eq in equations
+        eq.lhs isa VarExpr || continue
+        n = (eq.lhs::VarExpr).name
+        (haskey(shapes, n) || n in declared_scalar) && continue
+        push!(open, (n, eq.rhs))
+    end
+    if seed !== nothing
+        kept = Dict{String, ASTExpr}(n => rhs for (n, rhs) in open if haskey(seed, n))
+        dropped = Set{String}(stale)
+        grew = true
+        while grew
+            grew = false
+            for (n, rhs) in kept
+                isempty(intersect(free_variables(rhs), dropped)) && continue
+                push!(dropped, n)
+                delete!(kept, n)
+                grew = true
+            end
+        end
+        for n in keys(kept)
+            shapes[n] = seed[n]
+        end
+    end
+    refused = Set{String}()
+    changed = true
+    while changed
+        changed = false
+        for (n, rhs) in open
+            haskey(shapes, n) && continue
+            sh = try
+                _infer_expr_shape(rhs, shapes, ctx)
+            catch e
+                e isa DimensionPromotionError || rethrow()
+                push!(refused, n)
+                String[]
+            end
+            isempty(sh) && continue
+            delete!(refused, n)
+            shapes[n] = sh
+            changed = true
+        end
+    end
+    return shapes, refused
+end
+
+# Whether `e` holds a template application: a reference this binding kept, or
+# the root of an expansion made at load.
+function _holds_application(e, seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}())
+    e isa OpExpr || return false
+    (e.op == "apply_expression_template" || e.template_origin !== nothing) && return true
+    haskey(seen, e) && return false
+    seen[e] = nothing
+    found = false
+    foreach_child(c -> (found = found || _holds_application(c, seen)), e)
+    return found
+end
+
+"""
+    _lift_elementwise_applications_flat!(equations, contribs, field_ics, states, params, observeds, registry; seed, stale)
+
+Flatten's last step (esm-spec §9.6.11, "A flattened system keeps its
+applications' meaning on the wire"): every equation `x = rhs`, and every field
+initial condition `ic(x) = rhs`, that applies a template elementwise becomes
+the per-cell `faq` the build would lift it to, its template references
+expanded. A flattened system written out as a document and read back — the
+EarthSciIntegrator planner's derived documents, after `expand_flattened_refs` —
+then denotes the same system: left as an application whose expansion reads an
+array by bare name inside the template's bracket count, it would be refused as
+`faq_bare_array_operand` (§4.3.1). An initial condition is lifted over its
+state's shape.
+
+No declaration changes (esm-libraries-spec §4.7.5). A lifted equation's
+contributions collapse into the one `faq`, their origins united. When any
+right-hand side is refused (`array_shape_mismatch`), every equation and initial
+condition is left as it was, for the build to refuse. `seed`/`stale` reuse the
+pointwise lift's shapes (`_flat_array_shapes`). Returns the field initial
+conditions, lifted. The Rust binding's flatten writes the same equations.
+"""
+function _lift_elementwise_applications_flat!(
+        equations::Vector{Equation}, contribs::Vector{Vector{Contribution}},
+        field_ics::Vector{Pair{String, ASTExpr}},
+        states, params, observeds, registry; seed = nothing, stale = ()
+    )
+    # An expansion is elementwise only because it came from an application.
+    (
+        any(eq -> _holds_application(eq.rhs), equations) ||
+            any(p -> _holds_application(last(p)), field_ics)
+    ) || return field_ics
+    ctx = _ElementwiseContext(registry === nothing || isempty(registry) ? nothing : registry)
+    shapes, refused = _flat_array_shapes(
+        states, params, observeds, equations, ctx; seed = seed, stale = stale
+    )
+    lifted = Dict{Int, OpExpr}()
+    lifted_ics = Dict{Int, OpExpr}()
+    try
+        for eq in equations
+            _refuse_anonymous_arrays(eq.rhs, eq.lhs, ctx)
+        end
+        for (target, rhs) in field_ics
+            _refuse_anonymous_arrays(rhs, VarExpr(target), ctx)
+        end
+        for (n, eq) in enumerate(equations)
+            eq.lhs isa VarExpr || continue
+            name = (eq.lhs::VarExpr).name
+            _has_elementwise_application(eq.rhs, shapes, ctx) || continue
+            # A refused definition refuses the lift (the Rust binding's
+            # `union_axes` error).
+            name in refused && return field_ics
+            sh = get(shapes, name, String[])
+            isempty(sh) && continue
+            lifted[n] = _lift_elementwise_application(eq.rhs, sh, shapes, ctx, name)
+        end
+        for (n, (target, rhs)) in enumerate(field_ics)
+            sh = get(shapes, target, String[])
+            (isempty(sh) || !_has_elementwise_application(rhs, shapes, ctx)) && continue
+            lifted_ics[n] = _lift_elementwise_application(rhs, sh, shapes, ctx, target)
+        end
+    catch e
+        e isa DimensionPromotionError || rethrow()
+        return field_ics
+    end
+    for (n, rhs) in lifted
+        contribs[n] = Contribution[Contribution(rhs, _union_origins(contribs[n]))]
+        equations[n] = _equation_from(equations[n], contribs[n])
+    end
+    isempty(lifted_ics) && return field_ics
+    return Pair{String, ASTExpr}[
+        haskey(lifted_ics, n) ? (first(p) => lifted_ics[n]) : p for (n, p) in enumerate(field_ics)
+    ]
 end

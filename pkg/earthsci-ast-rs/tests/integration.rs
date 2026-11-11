@@ -131,6 +131,8 @@ mod field_ic_unlowered_operator;
 mod flatten;
 #[path = "flatten_conformance.rs"]
 mod flatten_conformance;
+#[path = "flatten_wire_conformance.rs"]
+mod flatten_wire_conformance;
 #[path = "forcing_from_sample.rs"]
 mod forcing_from_sample;
 #[path = "forcing_native_agreement.rs"]

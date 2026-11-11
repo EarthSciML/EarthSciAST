@@ -97,6 +97,13 @@ pub mod cadence {
 
 /// Classification queries with no cross-binding counterpart. The esm-spec
 /// section 6.3.1 family itself is the stable tier, at the crate root.
+/// Float writers that share [`crate::format_canonical_float`]'s tie-to-even
+/// shortest digits in other layouts: Julia's `print`, and std's `Display`.
+/// Used by the `esm` binary's CSV writer and test-runner summaries.
+pub mod canonicalize {
+    pub use crate::canonicalize::{format_julia_float, format_plain_float};
+}
+
 pub mod classification {
     pub use crate::classification::inlined_unknowns;
 }

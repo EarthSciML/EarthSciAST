@@ -285,6 +285,10 @@ with a spatial operator (its merged RHS carries an operator `makearray`) from a
 0-D scalar to the operator's grid shape, and rewrites the equation into a
 `faq` over the grid. No-op when no coupling requests pointwise lifting, or
 no merged equation carries a spatial-operator makearray.
+
+Returns `nothing` when it lifts nothing; otherwise the array shapes it read
+operands by (`_flat_array_shapes`) and the species it gave the grid shape, for
+flatten's elementwise step to reuse.
 """
 function _apply_pointwise_lift!(
         equations::Vector{Equation},
@@ -310,6 +314,23 @@ function _apply_pointwise_lift!(
     declared = OrderedDict{String, IndexSet}(index_sets)
     size_to_names = _index_sets_by_size(declared)
     var_shapes = _declared_shapes(states, params, observeds)
+    # The operands read per cell are every ARRAY on the flattened system, not
+    # only those that declare a shape: a variable declared without one whose
+    # definition is elementwise over arrays is an array too (esm-spec §4.3.4),
+    # as the build sees it. A 0-D component's coefficient `k = v * rho / dp`,
+    # fed grid fields by `variable_map`, is one. Left bare inside the lifted
+    # `faq`, the build refuses it (`faq_bare_array_operand`, esm-spec §4.3.1):
+    # the lift, not the author, put it there (esm-libraries-spec §4.7.5,
+    # "Pointwise lift: operands read per cell"). Only a declared shape names an
+    # index set for the grid (`var_shapes` above).
+    read_shapes, _ = _flat_array_shapes(
+        states, params, observeds, equations,
+        _ElementwiseContext(template_registry === nothing || isempty(template_registry) ? nothing : template_registry)
+    )
+    arrayvars = union!(Set{String}(arrayvars), keys(read_shapes))
+    # The species given the grid shape below: what `read_shapes` inferred from
+    # them as scalars is stale for a later reader (flatten's step 9).
+    promoted = Set{String}()
 
     for (n, eq) in enumerate(equations)
         species = differential_lhs_variable(eq.lhs)
@@ -341,10 +362,11 @@ function _apply_pointwise_lift!(
             (lifted_shapes[species] = _makearray_extents(mas[1]))
         equations[n], contribs[n] = _pointwise_lift_equation(
             eq, contribs[n], arrayvars,
-            _LiftGrid(loops, gaxes, var_shapes, species), ranges
+            _LiftGrid(loops, gaxes, read_shapes, species), ranges
         )
+        push!(promoted, species)
     end
-    return
+    return (shapes = read_shapes, stale = promoted)
 end
 
 # A species is lifted iff its state ODE's merged RHS carries a spatial-operator

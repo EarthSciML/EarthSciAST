@@ -328,65 +328,33 @@ fn format_display_float(n: f64) -> FloatParts {
         return FloatParts::Plain("0".to_string());
     }
 
-    let abs_n = n.abs();
-    if !(SCI_NOTATION_MIN..SCI_NOTATION_MAX).contains(&abs_n) {
-        // The shortest round-tripping mantissa with no precision loss (e.g.
-        // 0.009999 -> "9.999e-3") and an exponent with no leading `+`, matching
-        // the normative number-formatting contract. See `shortest_sci` for why
-        // it is not plain `{:e}`.
-        let sci = shortest_sci(n);
-        if let Some(e_pos) = sci.find('e') {
-            let mut mantissa = sci[..e_pos].to_string();
-            // Ensure at least one decimal place: "1" -> "1.0", "8.64" stays.
-            if !mantissa.contains('.') {
-                mantissa.push_str(".0");
-            }
-            return FloatParts::Scientific {
-                mantissa,
-                exponent: sci[e_pos + 1..].to_string(),
-            };
-        }
-        return FloatParts::Plain(sci);
-    }
-
-    // Integers in normal range display without a decimal point.
-    if n.fract() == 0.0 {
+    if (SCI_NOTATION_MIN..SCI_NOTATION_MAX).contains(&n.abs()) && n.fract() == 0.0 {
+        // Integers in normal range display without a decimal point.
         return FloatParts::Plain(format!("{}", n as i64));
     }
 
-    // In-range fractional value: shortest round-tripping decimal, no rounding,
-    // printed at that many fraction digits so a tie breaks to even (see
-    // `shortest_sci`).
-    let (digits, exp) = shortest_digit_count(n);
-    let frac = usize::try_from(digits as i64 - 1 - exp).unwrap_or(0);
-    FloatParts::Plain(format!("{n:.frac$}"))
-}
+    let d = crate::canonicalize::shortest_digits(n);
+    let mut out = String::with_capacity(24);
+    if n < 0.0 {
+        out.push('-');
+    }
+    if !(SCI_NOTATION_MIN..SCI_NOTATION_MAX).contains(&n.abs()) {
+        // The shortest round-tripping mantissa with no precision loss (e.g.
+        // 0.009999 -> "9.999e-3"), always with a fraction digit ("1" ->
+        // "1.0"), and an exponent with no leading `+`, matching the normative
+        // number-formatting contract. A decimal tie takes the even digit, as
+        // every other binding does (see `shortest_digits`).
+        crate::canonicalize::push_mantissa(&mut out, d.as_str(), true);
+        return FloatParts::Scientific {
+            mantissa: out,
+            exponent: d.exp.to_string(),
+        };
+    }
 
-/// The significant-digit count and decimal exponent of the shortest decimal
-/// that round-trips `n` (finite, non-zero), read off Rust's `{:e}`.
-fn shortest_digit_count(n: f64) -> (usize, i64) {
-    let s = format!("{n:e}");
-    let e_pos = s.find('e').expect("`{:e}` always has an exponent");
-    let digits = s[..e_pos].trim_start_matches('-').replace('.', "").len();
-    let exp = s[e_pos + 1..]
-        .parse()
-        .expect("`{:e}` exponent is an integer");
-    (digits, exp)
-}
-
-/// `n` in scientific notation with the shortest round-tripping mantissa.
-///
-/// `{:e}` finds the right digit COUNT, but when the float lies exactly halfway
-/// between two candidates of that length (844280270821319.2 is stored as
-/// …319.25) it rounds the last digit up, while every other binding — and
-/// JavaScript's and Python's own float printing — breaks the tie to even
-/// (`8.442802708213192e14`). Re-printing at that precision uses exact decimal
-/// conversion, which rounds half to even, so all five bindings agree digit for
-/// digit.
-fn shortest_sci(n: f64) -> String {
-    let (digits, _) = shortest_digit_count(n);
-    let prec = digits - 1;
-    format!("{n:.prec$e}")
+    // In-range fractional value: the same shortest round-tripping digits,
+    // positionally.
+    crate::canonicalize::push_positional(&mut out, d.as_str(), d.exp, true);
+    FloatParts::Plain(out)
 }
 
 /// Replace a leading ASCII hyphen with the Unicode U+2212 MINUS SIGN (used by
@@ -2176,6 +2144,35 @@ mod tests {
         // Other integers display without a decimal point; Unicode uses U+2212.
         assert_eq!(format_number_unicode(1.0), "1");
         assert_eq!(format_number_unicode(-1.0), "−1");
+    }
+
+    #[test]
+    fn decimal_ties_take_the_even_digit() {
+        // shortest digits as every binding writes them: a tie takes the even
+        // last digit, unless that one does not read back (2^-24)
+        assert_eq!(
+            format_number_ascii(705129328097.9062),
+            "7.051293280979062e11"
+        );
+        assert_eq!(
+            format_number_ascii(-3.0713577270507812),
+            "-3.0713577270507812"
+        );
+        assert_eq!(format_number_ascii(1234.0625), "1234.0625");
+        assert_eq!(
+            format_number_ascii(2.0_f64.powi(-24)),
+            "5.960464477539063e-8"
+        );
+        assert_eq!(
+            format_number_ascii(2.0_f64.powi(-25)),
+            "2.9802322387695312e-8"
+        );
+        assert_eq!(
+            format_number_unicode(-844280270821319.2),
+            "−8.442802708213192×10¹⁴"
+        );
+        assert_eq!(format_number_ascii(0.0099), "9.9e-3");
+        assert_eq!(format_number_ascii(1e300), "1.0e300");
     }
 
     #[test]

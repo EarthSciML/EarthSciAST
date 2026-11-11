@@ -962,6 +962,7 @@ dependencies = [
  "rayon",
  "rstar",
  "rustc-hash",
+ "ryu",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
