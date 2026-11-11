@@ -833,7 +833,7 @@ type DataSourceLocation struct {
 
 // DataSourceTemporal describes the temporal coverage and record layout
 // (esm-spec 8.3). RecordsPerFile may be an int or the string "auto".
-// RecordsPerSample is DEPRECATED (removed at esm 1.4.0, esm-spec 8.5.1): a
+// RecordsPerSample is DEPRECATED (removed at esm 3.0.0, esm-spec 8.5.1): a
 // record count for every parameter of the source, which must agree with each
 // one's record shape; nil when not written.
 type DataSourceTemporal struct {
@@ -870,7 +870,7 @@ type DataSourceBinding struct {
 	UnitConversion any    `json:"unit_conversion,omitempty"`
 	Codes          any    `json:"codes,omitempty"`
 	Select         any    `json:"select,omitempty"`
-	// RecordsPerSample is the DEPRECATED (removed at esm 1.4.0) number of
+	// RecordsPerSample is the DEPRECATED (removed at esm 3.0.0) number of
 	// records the parameter receives per query time, 1 or 2, overriding the
 	// source's `temporal.records_per_sample` (esm-spec 8.5.1). It must agree
 	// with the record shape, which is what says the count. Nil when not
