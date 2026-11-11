@@ -6855,6 +6855,10 @@ binding that got better is the one way a ratchet can run backwards.
 | `geometry_templates` | the pure-AST convex overlap-area templates of `lib/geometry.esm` (esm-spec §8.6.1, §9.7.1): `overlap_area_planar` applied inside a `faq` over cell pairs, and behind the overlap join gate, gives the exact planar areas of identical, adjacent, corner-touching, nested, partially overlapping, clockwise and repeated-vertex-padded cells at tolerance 0; `overlap_area_spherical` over unit-vector stacks built with `lonlat_to_unit` gives Girard's-theorem areas of a meridian fan within the §5.8.2 band, under every compiler |
 
 Each tier's `README.md` is its contract and records what did NOT move into it.
+The `interp_templates` and `datetime_templates` documents hold only the
+scenarios a JSON literal can write; the full scenario sets, NaN queries and
+out-of-domain instants included, are evaluated against esm-spec §9.8 by the
+Python, Julia and Rust harnesses that `tests/closed_functions/README.md` names.
 A tier is added by writing that README, a manifest with `"runner":
 "inline_tests"`, its fixtures, its goldens, and one stage per binding per
 compiler in `scripts/test-conformance.sh`.

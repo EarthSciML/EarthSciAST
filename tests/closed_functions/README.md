@@ -53,11 +53,17 @@ templates' domain `|t| < 2^52` s; the `datetime_templates` tier
 two int32-year success scenarios, the `closed_function_overflow` scenarios) the
 templates return NaN.
 
-The Go test suite checks the expansion of every scenario. The Julia, Python and
-Rust harnesses that ran the full scenario sets, NaN queries and out-of-domain
-instants included, compared the expanded template with the `fn` form and were
-deleted with it at esm 2.0.0, so those scenarios are not evaluated by any
-binding today.
+The full scenario sets, NaN queries and out-of-domain instants included, are
+evaluated against the template contract of esm-spec §9.8 by three harnesses:
+Python `pkg/earthsci-ast-py/tests/test_template_scenarios.py` (scalar
+interpreter), Julia `pkg/EarthSciAST.jl/test/template_scenarios_test.jl` and
+Rust `pkg/earthsci-ast-rs/tests/template_scenarios.rs` (interpreter and
+native). Every interp success scenario must match bit for bit. Every datetime
+instant, `error_scenarios` included, must give the scenario's `expected` inside
+`|t| < 2^52` s and NaN outside it, and the domain edges `±(2^52 − 1)` and
+`±(2^52 − 0.5)` are checked against an exact integer calendar computation in
+the test, `±2^52` against NaN. Go and TypeScript cannot evaluate a `faq`, so
+the Go suite checks the expansion of every scenario instead.
 
 ## `expected.json` schema
 
@@ -92,9 +98,11 @@ For each `expected.json`, run every success scenario through the expanded
 template and assert the result agrees with `expected` within the declared
 `tolerance` (the `interp_templates` and `datetime_templates` tiers run the
 `template.esm` documents, which hold the scenarios JSON can write).
-The `error_scenarios` record the load-time checks the removed `fn` op made on
-its arguments; the templates do not repeat them, and a binding no longer runs
-them.
+The `error_scenarios` record the checks the removed `fn` op made on its
+arguments; the templates do not repeat them. The datetime ones are instants
+outside the templates' domain and must give NaN; the interp ones are invalid
+tables (non-monotonic axis, NaN in an axis, length mismatch), for which the
+templates have no contract, so a binding does not run them.
 
 ## Boundary-case coverage
 
