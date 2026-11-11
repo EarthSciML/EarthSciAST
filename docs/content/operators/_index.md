@@ -95,17 +95,16 @@ throughout; the text notation covers expressions and equations, not files.
 | `reshape` `transpose` | 1 | [arrays](arrays/) |
 | `concat` | 1+ | [arrays](arrays/) |
 | `faq` | structural | [aggregation](aggregation/) |
-| `argmin` `argmax` | structural | [aggregation](aggregation/) |
-| `skolem` | n-ary | [aggregation](aggregation/) |
-| `rank` | 1 | [aggregation](aggregation/) |
-| `intersect_polygon` | 2 | [geometry](geometry/) |
-| `polygon_intersection_area` | 2 | [geometry](geometry/) |
-| `fn` | n-ary (`name` field) | [closed functions](closed-functions/) |
-| `table_lookup` | 0 (`table`/`axes`) | [closed functions](closed-functions/) |
 | `apply_expression_template` | structural (`bindings`) | [expression templates](../templates/) |
 
 Arity `structural` means the operator's operands live in dedicated fields rather
 than in `args`, and are described on its own page.
+
+The operators esm 2.0.0 removed (`fn`, `table_lookup`, `skolem`, `rank`, the
+`argmin`/`argmax` operator forms, the two polygon operators, and `aggregate`, the
+old spelling of `faq`) are rejected at load with `removed_op`; [removed operators](closed-functions/) lists the
+standard-library template that replaces each, and [geometry](geometry/) covers
+polygon overlap areas.
 
 Rewrite-target sugar — `grad`, `div`, `laplacian`, `integral`, and a spatial
 `D` — is covered on the [calculus](calculus/) page. It is *not* part of the set

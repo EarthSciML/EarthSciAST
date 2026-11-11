@@ -14,13 +14,12 @@
 //!
 //! | op | why it has no rule | what must happen |
 //! |---|---|---|
-//! | `skolem`, `rank`, `distinct`, `argmin`, `argmax` | build-time relational, materialized by `value_invention` | build error |
+//! | `distinct` | build-time relational, materialized by `value_invention` | build error |
 //! | `enum`, `apply_expression_template` | lowered at LOAD; surviving one is a lowering bug | build error |
-//! | `table_lookup` | lowered on the way into the BUILD (§9.5.3, `lower_table_lookup`) — at load it would break the §9.5.4 round trip; surviving one is a lowering bug | build error |
 //! | `ic` | structural: initial-condition assembly reads the equation, the evaluator never sees the node | build error in a BODY, legal as an equation LHS |
 //! | `true` | **nothing consumes it** — it is a boolean literal | EVALUATE it |
 //!
-//! `true` was the odd one out and is now evaluable (1.0); the other nine are
+//! `true` was the odd one out and is now evaluable (1.0); the other four are
 //! gated at build, in `compile.rs`'s stage (0), so each raises
 //! `unevaluable_operator` naming itself instead of reaching the backstop.
 //!
@@ -36,7 +35,7 @@
 //!
 //! A purely scalar document — no `shape`, no array op — is built by the same
 //! array runtime, so it reaches the same gate; issue #220 was that a separate
-//! scalar evaluator answered the same nine ops with a `NaN` NUMBER. The second
+//! scalar evaluator answered the same ops with a `NaN` NUMBER. The second
 //! half of this file keeps that property pinned from the author's side: **no
 //! document both VALIDATES and silently returns NaN**, over the same op list,
 //! for the scalar shape too. The public [`evaluate`] of a single expression is
@@ -90,88 +89,31 @@ fn a_true_body_counts_instead_of_panicking() {
     assert_eq!(results[1].actual, Some(3.0), "the range carries three rows");
 }
 
-/// The nine core ops with NO rule, each as a `faq` BODY — the position
+/// The core ops with NO rule, each as a `faq` BODY — the position
 /// the reported document put `true` in. Every one must end in a DIAGNOSTIC.
 /// A panic fails this test by aborting it, which is the detection: before the
-/// gate, six of these nine reached `eval_op`'s `unreachable!` exactly as `true`
+/// gate, these reached `eval_op`'s `unreachable!` exactly as `true`
 /// did, so the panic was a class and not one op.
 ///
 /// Built as a typed document rather than loaded, deliberately: `enum` and
 /// `apply_expression_template` are lowered at LOAD, so a loader-borne test
 /// could never place one in front of the build gate, which is the gate under
-/// test. `table_lookup` lowers on the way into the build instead (§9.5.3), and
-/// reaches the gate here for the reason a real document would — the document
-/// declares no `function_tables`, so there is nothing to lower it against.
+/// test.
 #[test]
 fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
-    /// What refuses this op, audited case by case rather than asserted
-    /// generically — a change of refuser is a change worth re-reading.
-    enum RefusedBy {
-        /// The array runtime's stage-(0) evaluability gate, naming the op.
-        EvaluabilityGate,
-        /// An EARLIER stage already handles it: the value-invention engine
-        /// strips or materializes the producer, and refuses it in its own
-        /// vocabulary. Also acceptable — it is a diagnostic, not a panic.
-        ValueInvention,
-    }
-    use RefusedBy::*;
-
-    let cases: [(&str, RefusedBy, serde_json::Value); 9] = [
-        // Stripped as a value-invention producer: the observed never reaches
-        // the evaluator, and the runner reports the missing observed.
-        (
-            "skolem",
-            ValueInvention,
-            json!({ "op": "skolem", "args": ["row"] }),
-        ),
-        (
-            "rank",
-            EvaluabilityGate,
-            json!({ "op": "rank", "args": ["row"] }),
-        ),
-        (
-            "distinct",
-            EvaluabilityGate,
-            json!({ "op": "distinct", "args": ["row"] }),
-        ),
-        // Refused by the VI materializer (an arg-witness needs one output index).
-        (
-            "argmin",
-            ValueInvention,
-            json!({ "op": "argmin", "args": [], "arg": "i",
-                    "ranges": { "i": [1, 3] }, "expr": "row" }),
-        ),
-        (
-            "argmax",
-            ValueInvention,
-            json!({ "op": "argmax", "args": [], "arg": "i",
-                    "ranges": { "i": [1, 3] }, "expr": "row" }),
-        ),
-        (
-            "ic",
-            EvaluabilityGate,
-            json!({ "op": "ic", "args": ["row"] }),
-        ),
-        (
-            "enum",
-            EvaluabilityGate,
-            json!({ "op": "enum", "args": ["colors", "red"] }),
-        ),
-        (
-            "table_lookup",
-            EvaluabilityGate,
-            json!({ "op": "table_lookup", "args": [] }),
-        ),
+    let cases: [(&str, serde_json::Value); 4] = [
+        ("distinct", json!({ "op": "distinct", "args": ["row"] })),
+        ("ic", json!({ "op": "ic", "args": ["row"] })),
+        ("enum", json!({ "op": "enum", "args": ["colors", "red"] })),
         (
             "apply_expression_template",
-            EvaluabilityGate,
             json!({ "op": "apply_expression_template", "args": [], "name": "tmpl" }),
         ),
     ];
 
-    for (op, refused_by, body) in cases {
+    for (op, body) in cases {
         let file: EsmFile = serde_json::from_value(json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": { "name": "UnevaluableProbe" },
             "index_sets": { "rows": { "kind": "interval", "size": 2 } },
             "models": { "M": {
@@ -204,18 +146,11 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
             !r.message.is_empty(),
             "`{op}` must fail with a message an author can act on"
         );
-        match refused_by {
-            EvaluabilityGate => assert!(
-                r.message.contains("unevaluable_operator") && r.message.contains(op),
-                "`{op}` must be refused BY NAME by the evaluability gate, got: {}",
-                r.message
-            ),
-            ValueInvention => assert!(
-                r.message.contains("value-invention") || r.message.contains("not found"),
-                "`{op}` is expected to be refused by the value-invention stage, got: {}",
-                r.message
-            ),
-        }
+        assert!(
+            r.message.contains("unevaluable_operator") && r.message.contains(op),
+            "`{op}` must be refused BY NAME by the evaluability gate, got: {}",
+            r.message
+        );
     }
 }
 
@@ -227,7 +162,7 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
 #[test]
 fn an_ic_equation_lhs_still_builds() {
     let file: EsmFile = serde_json::from_value(json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "IcLhsProbe" },
         "models": { "M": {
             "variables": { "u": { "type": "unknown", "units": "1", "default": 0.0 } },
@@ -257,7 +192,7 @@ fn an_ic_equation_lhs_still_builds() {
 /// answer.
 fn scalar_probe(body: serde_json::Value) -> EsmFile {
     serde_json::from_value(json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": { "name": "ScalarUnevaluableProbe" },
         "models": { "M": {
             "variables": {
@@ -281,7 +216,7 @@ fn scalar_probe(body: serde_json::Value) -> EsmFile {
 }
 
 /// No document both VALIDATES and silently returns NaN — this file's
-/// invariant for the scalar document shape, over the same nine ops (issue
+/// invariant for the scalar document shape, over the same ops (issue
 /// #220, whose reported symptom was `actual=NaN expected=25`).
 ///
 /// The two assertions that matter are the NaN one and the naming one. `passed`
@@ -290,51 +225,28 @@ fn scalar_probe(body: serde_json::Value) -> EsmFile {
 #[test]
 fn no_scalar_document_both_validates_and_returns_nan() {
     /// Does the probe carrying this op pass structural validation? Recorded per
-    /// op rather than asserted uniformly, because one of the nine genuinely
+    /// op rather than asserted uniformly, because one of them genuinely
     /// cannot: `enum`'s operands are an enum NAME and a SYMBOL (esm-spec §9.3),
     /// and the structural reference checker reads every bare string operand as
     /// a variable reference, so `enum(colors, red)` is reported as two
     /// undefined variables. That op therefore reaches an evaluator only from a
-    /// TYPED document — which is how the array half of this file builds all
-    /// nine — and the gate must still refuse it, so it stays in the list with
-    /// the validation half skipped rather than being dropped. The same holds
-    /// for `table_lookup`, whose probe names no table: load and `validate()`
-    /// refuse that with `table_lookup_unknown_table` (esm-spec §9.5.5, ruling
-    /// Q-112), so it too reaches an evaluator only from a typed document.
+    /// TYPED document — which is how the array half of this file builds them
+    /// all — and the gate must still refuse it, so it stays in the list with
+    /// the validation half skipped rather than being dropped.
     #[derive(PartialEq)]
     enum Validates {
         Yes,
         NoBecauseSymbolOperands,
-        NoBecauseNoTable,
     }
     use Validates::*;
 
-    let cases: [(&str, Validates, serde_json::Value); 9] = [
-        ("skolem", Yes, json!({ "op": "skolem", "args": ["p"] })),
-        ("rank", Yes, json!({ "op": "rank", "args": ["p"] })),
+    let cases: [(&str, Validates, serde_json::Value); 4] = [
         ("distinct", Yes, json!({ "op": "distinct", "args": ["p"] })),
-        (
-            "argmin",
-            Yes,
-            json!({ "op": "argmin", "args": [], "arg": "i",
-                    "ranges": { "i": [1, 3] }, "expr": "p" }),
-        ),
-        (
-            "argmax",
-            Yes,
-            json!({ "op": "argmax", "args": [], "arg": "i",
-                    "ranges": { "i": [1, 3] }, "expr": "p" }),
-        ),
         ("ic", Yes, json!({ "op": "ic", "args": ["p"] })),
         (
             "enum",
             NoBecauseSymbolOperands,
             json!({ "op": "enum", "args": ["colors", "red"] }),
-        ),
-        (
-            "table_lookup",
-            NoBecauseNoTable,
-            json!({ "op": "table_lookup", "args": [] }),
         ),
         (
             "apply_expression_template",
@@ -398,7 +310,7 @@ fn a_nested_unevaluable_op_is_refused_in_a_scalar_document() {
         "op": "+",
         "args": [
             { "op": "*", "args": ["p", 2.0] },
-            { "op": "rank", "args": ["p"] }
+            { "op": "distinct", "args": ["p"] }
         ]
     }));
     let results = run_inline_tests(&file, Some("M"), &SolveOptions::default());
@@ -406,11 +318,11 @@ fn a_nested_unevaluable_op_is_refused_in_a_scalar_document() {
     let r = &results[0];
     assert!(
         !matches!(r.actual, Some(v) if v.is_nan()),
-        "a nested `rank` must not NaN the whole expression; got {:?}",
+        "a nested `distinct` must not NaN the whole expression; got {:?}",
         r.actual
     );
     assert!(
-        r.message.contains("unevaluable_operator") && r.message.contains("rank"),
+        r.message.contains("unevaluable_operator") && r.message.contains("distinct"),
         "the nested op must be named, got: {}",
         r.message
     );

@@ -11,17 +11,12 @@ Coverage:
  - scalar tier: arithmetic, powers, comparisons, boolean logic, elementary
    functions, derivatives (``D(x)/Dt`` and ``D(x, t)``), open/user function calls;
  - array & call-shaped tier: array literals ``[…]`` (``const``), indexing
-   ``a[i, j]`` (``index``), dotted closed-function calls ``datetime.year(t)``
-   (``fn``), the ``true`` and ``false`` literals, and ``integral`` / ``reshape`` / ``transpose`` /
-   ``concat``;
+   ``a[i, j]`` (``index``), the ``true`` and ``false`` literals, and
+   ``integral`` / ``reshape`` / ``transpose`` / ``concat``;
  - reduction & array-query tier: ``faq`` reductions
    ``sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
-   key=k [semiring=…]`` (all clause shapes), the ``argmin``/``argmax``
-   arg-witnesses ``argmin[g] (expr) where {…}``, template application
-   ``name<binding = value, …>`` (``apply_expression_template``),
-   ``polygon_intersection_area(a, b, manifold=…)`` /
-   ``intersect_polygon(a, b, manifold=…[, id=…])``, the ``table_lookup`` bracket
-   surface ``visc[T=temp]`` / ``k_rate[T=temp, p=pres]:1``, and the
+   key=k [semiring=…]`` (all clause shapes), template application
+   ``name<binding = value, …>`` (``apply_expression_template``), and the
    piecewise-region array ``makearray([lo:hi, …] = value, …)``.
 
 Aggregate ``args`` is a derived operand cache the printer doesn't emit; it's
@@ -32,8 +27,9 @@ annotation (semantically identical there) is not recovered; both reprint
 identically.
 
 Still deferred (need dedicated surface syntax — a later pass): ``broadcast`` and
-``enum``. Those are refused with an :class:`ExpressionParseError`, as is the call
-spelling ``table_lookup(…)`` (its real surface is ``visc[T=temp]``).
+``enum``. Those are refused with an :class:`ExpressionParseError`, as is a call
+spelling an op the format has removed (``op_registry.REMOVED_OPS``) and a dotted
+callee.
 
 Design rules: multiplication is ALWAYS explicit (``k * A``) — no implicit
 juxtaposition, because identifiers are multi-letter (``NO2``, ``O3``,
@@ -42,19 +38,18 @@ float serialization, and unary-minus operands being under-parenthesized
 (``-(a+b)`` and ``(-a)+b`` both print ``-a + b``) — the parser matches the
 printer's loose convention. Because the printer is not injective,
 ``parse_expression(to_ascii(ast))`` is a faithful SEMANTIC round-trip but may
-normalize structure (flat vs. nested ``+``; a scalar ``const``/``fn`` with a
-non-dotted name reprints identically to a plain number/op). Editors should treat
+normalize structure (flat vs. nested ``+``; a scalar ``const`` reprints
+identically to a plain number). Editors should treat
 text as a derived view and re-parse only dirtied expressions.
 
 **Node form.** Operator nodes come back as JSON-shaped ``dict``s
 (``{"op": …, "args": [...]}``) rather than :class:`~earthsci_ast.esm_types.ExprNode`
 instances — the raw-JSON surface of an expression that ``to_ascii``,
 :mod:`earthsci_ast.json_walk`, :mod:`earthsci_ast.value_invention` and the
-document writers all accept. Two ops in the text surface carry fields the typed
-``ExprNode`` has no slot for (``argmin``/``argmax``'s ``arg`` and
-``apply_expression_template``'s ``bindings``; see
-``canonicalize._CANONICAL_IGNORED_FIELDS``), so the dict form is the only
-representation that can carry the whole grammar losslessly.
+document writers all accept. ``apply_expression_template``'s ``bindings`` has no
+slot on the typed ``ExprNode`` (see ``canonicalize._CANONICAL_IGNORED_FIELDS``),
+so the dict form is the only representation that can carry the whole grammar
+losslessly.
 
 NOTE: this is the TEXT parser. The private JSON decoder
 ``earthsci_ast.parse._parse_expression`` (raw ESM JSON -> typed ``ExprNode``) is
@@ -71,6 +66,7 @@ from typing import Any, NoReturn, Union
 from .display import _get_operator_precedence as _op_precedence
 from .errors import EarthSciAstError
 from .esm_types import Equation, Expr  # noqa: F401  (Expr documents the return type)
+from .op_registry import REMOVED_OPS
 from .serialize import _canonical_number
 
 __all__ = ["ExpressionParseError", "ParsedExpr", "parse_equation", "parse_expression"]
@@ -125,21 +121,15 @@ _TEMPLATE_ARG_MIN = _op_precedence("+")
 
 # Structural ops whose defining data lives OUTSIDE `args` AND which have no text
 # surface yet — refused, pending a dedicated syntax pass. (`integral`, `reshape`,
-# `transpose`, `concat`, `fn`, `const`, `index`, `true`, `false`, `aggregate`,
-# `apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
-# `makearray` DO have a surface and are reconstructed below; they are
-# intentionally absent here. `table_lookup` IS listed: its surface is the bracket
-# form `visc[T=temp]`, parsed in `_parse_table_lookup` without going through
-# `_make_call`, so the CALL spelling `table_lookup(a)` — which the printer never
-# emits — stays refused.)
-_STRUCTURAL_OPS: frozenset[str] = frozenset({"table_lookup", "broadcast", "enum"})
+# `transpose`, `concat`, `const`, `index`, `true`, `false`, `aggregate`,
+# `apply_expression_template`, `makearray` DO have a surface and are
+# reconstructed below; they are intentionally absent here.)
+_STRUCTURAL_OPS: frozenset[str] = frozenset({"broadcast", "enum"})
 
 # The aggregate reduction symbols `to_ascii` emits. Each maps to a default
 # `reduce` when no explicit `[semiring=…]` supersedes it; `sum` and `any` carry
 # no `reduce` field (plain `+` / semiring-only).
 _AGG_SYMS: frozenset[str] = frozenset({"sum", "prod", "max", "min", "any"})
-# Arg-witness reductions: `argmin[g] (expr) where {…}`.
-_ARGWITNESS_SYMS: frozenset[str] = frozenset({"argmin", "argmax"})
 _REDUCE_BY_SYM: dict[str, str | None] = {
     "sum": None,
     "prod": "*",
@@ -177,8 +167,7 @@ _WORD_OPS = frozenset({"and", "or", "not"})
 
 # Identifiers allow Unicode letters (Greek variables like `ΔF_net`, `Φ`),
 # Unicode numbers (subscript/superscript digits in names like `k₀`, `M₁`), and
-# dots (qualified refs like `Emissions.NO`, and dotted closed-function names like
-# `datetime.year`, which _make_call turns into `fn` nodes). A leading digit still
+# dots (qualified refs like `Emissions.NO`). A leading digit still
 # can't start an identifier (numbers lex first).
 #
 # `∂` (U+2202) and `∇` (U+2207) are also name-constituents: source variables are
@@ -360,13 +349,6 @@ class _Parser:
             nxt = self._peek(1)
             if nxt.k == "name" and nxt.v == "semiring":
                 break
-            # `name[axis=expr, …]` is a `table_lookup` (the printer's structural
-            # rendering), not an index: `=` is never an expression operator, so a
-            # `name` `=` pair inside the brackets discriminates the two
-            # unambiguously. Only a bare variable can name a table.
-            if isinstance(node, str) and nxt.k == "name" and self._peek(2).k == "eq":
-                node = self._parse_table_lookup(node)
-                continue
             self._next()  # '['
             idx = [self._parse_expr(0)]
             while self._peek().k == ",":
@@ -425,9 +407,6 @@ class _Parser:
             # `sum`/`max`/….
             if t.v in _AGG_SYMS and self._peek().k == "[" and self._aggregate_ahead():
                 return self._parse_aggregate(t.v)
-            # Arg-witness reduction `argmin[g] (expr) where {…}` (same `[…] (` shape).
-            if t.v in _ARGWITNESS_SYMS and self._peek().k == "[" and self._aggregate_ahead():
-                return self._parse_arg_witness(t.v)
             return t.v  # bare variable / species / qualified reference
         return self._fail("Expected a number, name, '(', or '['", t)
 
@@ -582,52 +561,6 @@ class _Parser:
         )
         return node
 
-    def _parse_arg_witness(self, op: str) -> Any:
-        """Parse an ``argmin`` / ``argmax`` arg-witness (esm-spec §4.2):
-        ``op '[' arg ']' '(' expr ')' ('where' '{' ranges '}')?
-        ('join' '(' … ')')? ('if' filter)? ('id' '=' name)?``. Like aggregate,
-        its ``args`` operand cache isn't printed and is derived."""
-        self._next()  # '['
-        at = self._next()
-        if at.k != "name":
-            self._fail("Expected the arg-witness index name", at)
-        self._expect("]", "']' after the arg-witness index")
-        self._expect("(", "'(' before the arg-witness body")
-        expr = self._parse_expr(0)
-        self._expect(")", "')' after the arg-witness body")
-        ranges: dict[str, Any] = {}
-        if self._at_word("where"):
-            self._next()
-            ranges = self._parse_ranges()
-        # The candidate-pruning `join(…)` and `if` filter, exactly as on `faq`.
-        join: list[dict[str, Any]] = []
-        if self._at_word("join"):
-            self._next()
-            join.extend(self._parse_join())
-        filter_: Any = _MISSING
-        if self._at_word("if"):
-            self._next()
-            filter_ = self._parse_expr(0)
-        # `id=<name>` (RFC §6.1 node identity), emitted after the where-clause.
-        # Mirrors the aggregate tail.
-        node_id = self._parse_id_clause()
-        node: dict[str, Any] = {
-            "op": op,
-            "args": _derive_aggregate_args(
-                expr, join, None if filter_ is _MISSING else filter_, None
-            ),
-            "arg": at.v,
-            "ranges": ranges,
-            "expr": expr,
-        }
-        if join:
-            node["join"] = join
-        if filter_ is not _MISSING:
-            node["filter"] = filter_
-        if node_id is not None:
-            node["id"] = node_id
-        return node
-
     def _parse_id_clause(self) -> str | None:
         """Consume an optional ``id=<name>`` clause (RFC §6.1 node identity)."""
         if not (self._at_word("id") and self._peek(1).k == "eq"):
@@ -638,35 +571,6 @@ class _Parser:
         if nm.k != "name":
             self._fail("Expected a name after id=", nm)
         return nm.v
-
-    def _parse_table_lookup(self, table: str) -> Any:
-        """Parse a ``table_lookup`` from the surface the printer emits:
-        ``table '[' axis '=' expr (',' axis '=' expr)* ']' (':' <integer>)?``,
-        e.g. ``visc[T=temp]`` and ``k_rate[T=temp, p=pres]:1``. The printer sorts
-        the axis names, so the reconstructed ``axes`` map is rebuilt in the
-        emitted order and reprints identically."""
-        self._expect("[", "'['")
-        axes: dict[str, Any] = {}
-        while True:
-            nm = self._next()
-            if nm.k != "name":
-                self._fail("Expected an axis name in table[axis=…]", nm)
-            self._expect("eq", "'=' in table[axis=…]")
-            axes[nm.v] = self._parse_expr(0)
-            if self._peek().k == ",":
-                self._next()
-                continue
-            break
-        self._expect("]", "']' after table[axis=…]")
-        node: dict[str, Any] = {"op": "table_lookup", "args": [], "table": table, "axes": axes}
-        # The optional `:N` output selector picks one column of a multi-output table.
-        if self._peek().k == ":":
-            self._next()
-            out = self._next()
-            if out.k != "num" or not isinstance(out.v, int):
-                self._fail("Expected an integer output index after table[…]:", out)
-            node["output"] = out.v
-        return node
 
     def _parse_ranges(self) -> dict[str, Any]:
         """Parse a ``{ k in <rhs>, … }`` where-body into a ranges object."""
@@ -900,10 +804,23 @@ def _no_named(named: dict[str, Any], name: str, pos: int) -> None:
 
 
 def _make_call(name: str, args: list[Any], named: dict[str, Any], pos: int) -> Any:
-    # A dotted callee is a closed function — an `fn` node carrying the name.
+    # An op the format removed has no text spelling; the codemod rewrites a
+    # document that uses one to an `esm:std/...` template application.
+    removed_at = REMOVED_OPS.get(name)
+    if removed_at is not None:
+        raise ExpressionParseError(
+            f"removed_op: '{name}' was removed at esm {removed_at}; write the "
+            "esm:std/... template application instead (python -m earthsci_ast.migrate)",
+            pos,
+        )
+    # A dotted callee named a closed function (`fn`), removed at esm 2.0.0.
     if "." in name:
-        _no_named(named, name, pos)
-        return {"op": "fn", "name": name, "args": args}
+        raise ExpressionParseError(
+            f"removed_op: the dotted call '{name}(…)' spelled a closed function "
+            "(`fn`), removed at esm 2.0.0; write the esm:std/... template "
+            "application instead (python -m earthsci_ast.migrate)",
+            pos,
+        )
     # Call-shaped structural ops: reconstruct their non-`args` fields from the
     # positional / named arguments `to_ascii` renders.
     if name == "integral" and len(args) == 4 and isinstance(args[1], str):
@@ -927,30 +844,6 @@ def _make_call(name: str, args: list[Any], named: dict[str, Any], pos: int) -> A
         if "axis" not in named:
             raise ExpressionParseError("concat(...) requires axis=<n>", pos)
         return {"op": "concat", "args": args, "axis": named["axis"]}
-    # Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
-    # `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
-    # node identity) is optional and only emitted by the printer when present.
-    if name in ("polygon_intersection_area", "intersect_polygon"):
-        manifold = named.get("manifold")
-        if not isinstance(manifold, str):
-            raise ExpressionParseError(f"{name}(...) requires manifold=<name>", pos)
-        for k in named:
-            if k not in ("manifold", "id"):
-                raise ExpressionParseError(f"unexpected {k}=… in {name}(...)", pos)
-        node: dict[str, Any] = {"op": name, "args": args, "manifold": manifold}
-        if "id" in named:
-            if not isinstance(named["id"], str):
-                raise ExpressionParseError(f"{name}(...) id=… must be a name", pos)
-            node["id"] = named["id"]
-        return node
-    # `skolem(a, b, label=<name>)` — the documentary relation tag.
-    if name == "skolem" and "label" in named:
-        for k in named:
-            if k != "label":
-                raise ExpressionParseError(f"unexpected {k}=… in skolem(...)", pos)
-        if not isinstance(named["label"], str):
-            raise ExpressionParseError("skolem(...) label=… must be a name", pos)
-        return {"op": "skolem", "args": args, "label": named["label"]}
     _no_named(named, name, pos)
     if name in _STRUCTURAL_OPS:
         raise ExpressionParseError(f"'{name}' is not yet expressible in the text form", pos)
@@ -1042,7 +935,7 @@ def _flatten(e: Any) -> Any:
                 out.append(a)
         args = out
     node = dict(e)
-    # The reduction-body fields of `faq` / `argmin` / `argmax` are expressions
+    # The reduction-body fields of `faq` are expressions
     # in their own right and are normalized the same way.
     for k in _FLATTENED_FIELDS:
         if k in node:
@@ -1069,8 +962,8 @@ def parse_expression(src: str) -> Expr:
     ``str``.
 
     :raises ExpressionParseError: on malformed input, or on an operator that has
-        no text surface yet (``table_lookup`` / ``broadcast`` / ``enum`` /
-        ``intersect_polygon``).
+        no text surface yet (``broadcast`` / ``enum``) or that the format has
+        removed.
     """
     return _Parser(_tokenize(src)).parse_entry()
 

@@ -55,11 +55,11 @@ include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar 
 include("tree_walk/geometry_compile.jl") # §2c  geometry body compiler (needs `_Node`)
 include("tree_walk/access_kernel.jl")    # §4b  unified array-kernel IR (`_AccKernel`)
 include("tree_walk/scalar_ops.jl")       #      op ladder, subscript resolver, forcing args
-include("tree_walk/interp_lanes.jl")     #      branch-free `interp.*` over whole lanes
+include("tree_walk/knot_count.jl")       #      the comparison count over a whole lane
 include("tree_walk/oop.jl")              # §4d  the out-of-place build product
 include("tree_walk/acc_merge.jl")        # §4e  per-cell merge + `_make_rhs`
 include("tree_walk/oop_merge.jl")        #      kernel-CLASS merge, for both forms
-include("tree_walk/xcse.jl")             #      cross-kernel / kernel↔prelude fn-CSE
+include("tree_walk/xcse.jl")             #      cross-kernel / kernel↔prelude CSE
 include("tree_walk/codegen_kernel.jl")   # §4f  Julia-codegen tier for access kernels
 include("tree_walk/thread_dispatch.jl")  #      allocation-free chunk dispatch (Polyester's pool)
 include("tree_walk/scan_fused.jl")       #      a prefix scan's term and fold in one pass

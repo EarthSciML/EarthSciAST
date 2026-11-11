@@ -360,7 +360,7 @@ fn metaparam_structural_field_collision_matches_golden() {
     );
     assert_eq!(r["expr"]["args"], json!([22, 5]));
     let k = obs_def(model, "k");
-    assert_eq!(k["arg"], "p");
+    assert_eq!(k["reduce"], "max");
     assert_eq!(k["ranges"]["p"], json!([1, 11]));
     assert_eq!(k["expr"]["args"], json!(["c", 7]));
 
@@ -632,7 +632,7 @@ fn json_float_literals_round_trip_bit_exact() {
     // coordinates survives parse→emit verbatim (AST byte identity).
     let doc = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "ulp"
           },
@@ -966,7 +966,7 @@ fn invalid_fixtures_fail_with_exact_codes() {
 fn model_json(extra_model_fields: &str, top_fields: &str) -> String {
     format!(
         r#"{{
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {{"name": "t"}},{top_fields}
   "models": {{
     "M": {{{extra_model_fields}
@@ -1023,7 +1023,7 @@ fn only_filters_visibility_not_internal_wiring() {
     std::fs::write(
         dir.path().join("lib.esm"),
         serde_json::to_string(&json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "lib"},
             "expression_templates": {
                 "t_inner": {"params": [], "body": 7},
@@ -1082,7 +1082,7 @@ fn diamond_with_conflicting_edge_bindings_is_rejected() {
     std::fs::write(
         dir.path().join("grid.esm"),
         serde_json::to_string(&json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "grid"},
             "metaparameters": {"NC": {"type": "integer"}},
             "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
@@ -1132,7 +1132,7 @@ fn edge_bindings_unknown_names_and_non_integer_values() {
     std::fs::write(
         dir.path().join("lib.esm"),
         serde_json::to_string(&json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "lib"},
             "metaparameters": {"N": {"type": "integer", "default": 8}},
             "expression_templates": {"n": {"params": [], "body": "N"}}
@@ -1172,7 +1172,7 @@ fn metaparameter_fold_ranges_regions_size_exact() {
         dir.path(),
         r#"
             {
-              "esm": "1.1.0",
+              "esm": "2.0.0",
               "metadata": {
                 "name": "fold"
               },
@@ -1333,7 +1333,7 @@ fn expression_position_substitution_never_folds() {
         dir.path(),
         r#"
             {
-              "esm": "1.0.0",
+              "esm": "2.0.0",
               "metadata": {
                 "name": "subst"
               },
@@ -1412,7 +1412,7 @@ fn chain_doc(n: usize) -> Value {
         tpl.insert(name, decl);
     }
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "chain"},
         "models": {"M": {
             "expression_templates": Value::Object(tpl),
@@ -1427,7 +1427,7 @@ fn chain_doc(n: usize) -> Value {
 fn body_composition_inlines_and_depth_bound_is_exact() {
     // A 3-deep local chain inlines through the §9.6.3 fixpoint untouched.
     let mut doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "chain3"},
         "models": {"M": {
             "expression_templates": {
@@ -1518,7 +1518,7 @@ fn version_gate_flags_every_9_7_construct() {
     }
     // 0.8.0 files pass the gate.
     let ok: Value = serde_json::from_str(
-        r#"{"esm": "1.0.0", "metadata": {"name": "new"},
+        r#"{"esm": "2.0.0", "metadata": {"name": "new"},
             "metaparameters": {"N": {"type": "integer", "default": 1}},
             "expression_templates": {"t": {"params": [], "body": 1}}}"#,
     )
@@ -1532,7 +1532,7 @@ fn version_gate_flags_every_9_7_construct() {
 /// block would be visible to nothing; loading refuses it instead.
 #[test]
 fn root_templates_beside_component_payload_rejected() {
-    let head = r#"{"esm": "1.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, "#;
+    let head = r#"{"esm": "2.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, "#;
     for (key, snippet) in [
         (
             "models",

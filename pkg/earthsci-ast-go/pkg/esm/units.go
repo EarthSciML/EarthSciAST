@@ -1585,7 +1585,7 @@ func ratFromDecimalLiteral(lit string) (Rat, error) {
 //     real unit ("not_a_unit"). The file is wrong. → HARD ERROR.
 //   - UnitFindingAnalysis — the checker cannot DETERMINE a dimension: a
 //     symbolic (non-literal) exponent, an operator with no dimensional rule
-//     (fn/table_lookup), a malformed arity. That is a statement
+//     (an open rewrite-target op), a malformed arity. That is a statement
 //     about the checker, not a defect in the file. → WARNING.
 //   - UnitFindingDimensionlessLiteral — the esm-spec §4.8.6 warning stage: a
 //     site that fails only when nonzero bare literals are dimensionless. Never
@@ -1601,7 +1601,7 @@ const (
 	// UnitFindingDimensionlessLiteral — a check site the CURRENT neutral-literal
 	// rule passes or skips fails once a nonzero bare numeric literal is read as
 	// dimensionless at scale 1 (esm-spec §4.8.6). → WARNING at this stage; it
-	// becomes an error at the next major esm version.
+	// becomes an error in a future version of EarthSciAST.
 	UnitFindingDimensionlessLiteral = "units_dimensionless_literal_mismatch"
 )
 

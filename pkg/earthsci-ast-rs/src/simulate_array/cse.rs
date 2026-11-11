@@ -40,15 +40,15 @@
 //!   `eval_vec_makearray`. Two occurrences under different boxes never share.
 //!
 //! Every binder in the IR (a `faq` `output_idx` or `ranges`
-//! key, an `integral` `var`, a skolem `arg`, a template `bindings` key) either
+//! key, an `integral` `var`, a template `bindings` key) either
 //! opens a new box on the vectorized path — and therefore a new scope here — or
 //! is not evaluated by the overlay at all, in which case [`ClassTable`] refuses
 //! to classify the node and no sharing is possible through it. That is why a
 //! plain name-based structural key is sound: **inside one scope no symbol is
 //! rebound**, so two syntactically identical subtrees denote the same value.
 //! The classifier is closed over an explicit allowlist of box-transparent
-//! operators; anything else (including any node carrying a `join`, `axes`,
-//! `bindings`, `manifold`, … attribute) is left unclassified AND opens a fresh
+//! operators; anything else (including any node carrying a `join`,
+//! `bindings`, `key`, … attribute) is left unclassified AND opens a fresh
 //! scope for its children, so an unknown construct can only cost the
 //! optimization, never correctness.
 //!
@@ -739,13 +739,8 @@ enum Rendered {
 fn attrs_key(node: &ExpressionNode) -> Option<Rendered> {
     // Fields whose presence means "not a construct this module keys".
     if node.join.is_some()
-        || node.axes.is_some()
         || node.bindings.is_some()
         || node.key.is_some()
-        || node.table.is_some()
-        || node.output.is_some()
-        || node.manifold.is_some()
-        || node.arg.is_some()
         || node.int_var.is_some()
     {
         return None;
@@ -764,7 +759,6 @@ fn attrs_key(node: &ExpressionNode) -> Option<Rendered> {
         && node.axis.is_none()
         && node.broadcast_fn.is_none()
         && node.name.is_none()
-        && node.label.is_none()
         && node.value.is_none()
         && node.id.is_none();
     if bare {
@@ -775,7 +769,7 @@ fn attrs_key(node: &ExpressionNode) -> Option<Rendered> {
     use std::fmt::Write as _;
     let _ = write!(
         s,
-        "|w={:?}|d={:?}|oi={:?}|rd={:?}|sr={:?}|rg={:?}|sh={:?}|pm={:?}|ax={:?}|bf={:?}|nm={:?}|lb={:?}|id={:?}",
+        "|w={:?}|d={:?}|oi={:?}|rd={:?}|sr={:?}|rg={:?}|sh={:?}|pm={:?}|ax={:?}|bf={:?}|nm={:?}|id={:?}",
         node.wrt,
         node.dim,
         node.output_idx,
@@ -787,7 +781,6 @@ fn attrs_key(node: &ExpressionNode) -> Option<Rendered> {
         node.axis,
         node.broadcast_fn,
         node.name,
-        node.label,
         node.id,
     );
     // `ranges` is a `HashMap`, so it must be rendered in a deterministic order.

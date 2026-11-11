@@ -365,8 +365,8 @@ func renameDecl(decl any, varmap, isetmap, tplmap map[string]string) any {
 // collectBoundSyms accumulates the bound index symbols (loop symbols) of a
 // subtree: the `output_idx` entries and `ranges` keys of every Expression node,
 // at any nesting depth — the binder definition of the `reserved_index_symbol`
-// rule (esm-spec §4.9.1.1), which is not limited to `faq` (`argmin` / `argmax`
-// bind the same way). Rebinding one would desynchronize the ranges KEYS (object
+// rule (esm-spec §4.9.1.1), which is not limited to a top-level `faq`.
+// Rebinding one would desynchronize the ranges KEYS (object
 // keys, unreachable by value substitution) from their `expr` occurrences, so it
 // is rejected outright; a metaparameter spelled like one is
 // `metaparameter_name_conflict`.
@@ -774,8 +774,8 @@ func mountRenameWalk(x any, m map[string]string) {
 		} else if shape, ok := v["shape"].([]any); ok {
 			// ModelVariable/Parameter `shape` and a `where` constraint's `shape`
 			// are ordered index-set names; an ExpressionNode `shape` (reshape's
-			// target extents) and a FunctionTable `shape` are integers, so the
-			// isNode guard plus the string test cover both.
+			// target extents) is integers, so the isNode guard plus the string
+			// test cover both.
 			for i, e := range shape {
 				if s, ok := e.(string); ok {
 					if n, hit := m[s]; hit {

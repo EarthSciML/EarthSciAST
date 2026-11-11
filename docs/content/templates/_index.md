@@ -84,16 +84,16 @@ scope the template expands into.
 
 A parameter name appearing anywhere in `body` as a bare string is a substitution
 site — in an `args` position, and also **in a scalar-field position** such as
-`dim`, `side`, `wrt`, or `manifold`.
+`dim`, `side` or `wrt`.
 
 **Params shadow literals.** Every string equal to a declared parameter name is a
 substitution site, so do not name a parameter after a field literal the body
-means literally — a parameter called `planar` over a body pinning
-`"manifold": "planar"` will substitute where you meant a constant. Bindings may
+means literally — a parameter called `x` over a body pinning `"dim": "x"`
+will substitute where you meant a constant. Bindings may
 warn, but they must still substitute.
 
 Substitution is pure syntax and checks nothing. An inadmissible substituted
-value — `"manifold": "bogus"` — is caught by that field's own validation on the
+value — `"dim": 3` — is caught by that field's own validation on the
 expanded form, and reported at the offending call site.
 
 ## Auto-applied rules

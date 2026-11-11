@@ -1,9 +1,9 @@
 # The value-invention join driven by a bin-EQUALITY gate's key matches
 # (`_vi_equality_candidates` / `_vi_enumerate_driven`, value_invention.jl).
 #
-# A `join.on [[src_bin, tgt_bin]]` producer — the regridder's candidate set —
-# and a bin-pruned nearest-generator `argmin` used to test the gate on every
-# tuple of the full product. The driven walk visits the ranges in the product's
+# A `join.on [[src_bx, tgt_bx]]` producer — the regridder's candidate set over
+# integer bin columns — used to test the gate on every tuple of the full
+# product. The driven walk visits the ranges in the product's
 # order and restricts the second gated symbol to the first one's partners, so
 # the admitted tuples are the same ones in the same order. Every case compares
 # against `compiler=:interpreter` (plan field `join_on_gate` off: the full
@@ -18,15 +18,71 @@ using EarthSciAST
 import JSON3
 const EA = EarthSciAST
 
-include("testutils.jl")  # TESTUTILS_REPO_ROOT
+_ix(a...) = Dict{String, Any}("op" => "index", "args" => Any[a...])
+_op(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 
-function _typed(rel, name; sizes...)
-    raw = JSON3.read(read(joinpath(TESTUTILS_REPO_ROOT, rel), String), Dict{String, Any})
-    for (k, v) in sizes
-        raw["index_sets"][String(k)]["size"] = v
-    end
+# The regridder's candidate set over `n` source and `n` target cells: a bin
+# column `floor(lon / dx)` per grid, and a `distinct` producer over (i, j)
+# joined on it, keyed (i - 1)·n + (j - 1).
+function _regrid(n)
+    col(name, coord, step, sym, cells) = Dict{String, Any}(
+        "lhs" => _ix(name, sym),
+        "rhs" => Dict{String, Any}(
+            "op" => "faq", "semiring" => "sum_product", "output_idx" => Any[sym],
+            "ranges" => Dict{String, Any}(sym => Dict{String, Any}("from" => cells)),
+            "args" => Any[coord, step], "expr" => _op("floor", _op("/", _ix(coord, sym), step))
+        )
+    )
+    par(shape) = Dict{String, Any}("type" => "parameter", "shape" => Any[shape...])
+    unk(shape) = Dict{String, Any}("type" => "unknown", "shape" => Any[shape...])
+    vars = Dict{String, Any}(
+        "src_lon" => par(["src_cells"]), "tgt_lon" => par(["tgt_cells"]), "dx" => par([]),
+        "src_bx" => unk(["src_cells"]), "tgt_bx" => unk(["tgt_cells"]),
+        "pair_exists" => unk(["candidate_pairs"])
+    )
+    eqs = Any[
+        col("src_bx", "src_lon", "dx", "i", "src_cells"),
+        col("tgt_bx", "tgt_lon", "dx", "j", "tgt_cells"),
+        Dict{String, Any}(
+            "lhs" => _ix("pair_exists", "p"),
+            "rhs" => Dict{String, Any}(
+                "op" => "faq", "id" => "candidate_set", "semiring" => "bool_and_or",
+                "distinct" => true, "output_idx" => Any["p"],
+                "ranges" => Dict{String, Any}(
+                    "i" => Dict{String, Any}("from" => "src_cells"),
+                    "j" => Dict{String, Any}("from" => "tgt_cells")
+                ),
+                "join" => Any[Dict{String, Any}("on" => Any[Any["src_bx", "tgt_bx"]])],
+                "args" => Any["src_bx", "tgt_bx"],
+                "key" => _op("+", _op("*", _op("-", "i", 1), n), _op("-", "j", 1)),
+                "expr" => _op("true")
+            )
+        ),
+    ]
+    raw = Dict{String, Any}(
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "vi_on_drive"),
+        "index_sets" => Dict{String, Any}(
+            "src_cells" => Dict{String, Any}("kind" => "interval", "size" => n),
+            "tgt_cells" => Dict{String, Any}("kind" => "interval", "size" => n),
+            "candidate_pairs" => Dict{String, Any}("kind" => "derived", "from_faq" => "candidate_set")
+        ),
+        "models" => Dict{String, Any}("Regrid" => Dict{String, Any}("variables" => vars, "equations" => eqs))
+    )
     file = EA.coerce_esm_file(raw)
-    return EA._select_model(file, name), file.index_sets
+    return EA._select_model(file, "Regrid"), file.index_sets
+end
+
+# A value-invention context with the bin columns materialised.
+function _ctx(m, isets, ca, params)
+    ctx = EA._ViCtx(
+        Dict{String, Any}(ca), Dict{String, Float64}(params),
+        Dict{String, EA.IndexSet}(isets), m.variables,
+        Dict{String, Dict{Any, Any}}(), EA._vi_seed_map(m)
+    )
+    for (v, node) in EA._vi_detect(m).columns
+        EA._vi_materialize_column!(ctx, v, node)
+    end
+    return ctx
 end
 
 _interp(f) = EA._with_compiler_plan(f, EA._compiler_plan(:interpreter))
@@ -41,20 +97,17 @@ _lcg(n, seed, scale) = let s = UInt64(seed)
     ]
 end
 
-const REGRID = "tests/valid/geometry/conservative_regrid_overlap_join.esm"
-const ARGMIN = "tests/valid/faq/nearest_generator_argmin.esm"
 
 @testset "value-invention bin-equality drive" begin
 
     @testset "regrid candidate-set producer" begin
         n = 60
-        m, isets = _typed(REGRID, "ConservativeRegridOverlapJoin"; src_cells = n, tgt_cells = n)
+        m, isets = _regrid(n)
         # Unit bins over [0, 6): about ten cells of each grid per bin.
         ca = Dict{String, Any}(
-            "src_lon" => _lcg(n, 1, 6.0), "src_lat" => zeros(n),
-            "tgt_lon" => _lcg(n, 2, 6.0), "tgt_lat" => zeros(n)
+            "src_lon" => _lcg(n, 1, 6.0), "tgt_lon" => _lcg(n, 2, 6.0)
         )
-        params = Dict("dx" => 1.0, "dy" => 1.0, "atol" => 1.0e-12)
+        params = Dict("dx" => 1.0)
         EA._VI_ENUM_VISITS[] = 0
         vi = EA.materialize_value_invention(m, isets, ca, params)
         driven = EA._VI_ENUM_VISITS[]
@@ -67,16 +120,8 @@ const ARGMIN = "tests/valid/faq/nearest_generator_argmin.esm"
         @test driven == length(vi.members["candidate_set"])
 
         # The admitted tuples, in visit order, are the product's.
-        ctx = EA._ViCtx(
-            Dict{String, Any}(ca), Dict{String, Float64}(params),
-            Dict{String, EA.IndexSet}(isets), m.variables,
-            Dict{String, Dict{Any, Any}}(), EA._vi_seed_map(m)
-        )
-        det = EA._vi_detect(m)
-        for (v, node) in det.maps
-            EA._vi_materialize_map!(ctx, v, node)
-        end
-        node = only(det.producers)[2]
+        ctx = _ctx(m, isets, ca, params)
+        node = only(EA._vi_detect(m).producers)[2]
         ranges = EA._vi_ranges(node)
         function admitted()
             local gs = EA._vi_resolve_join(node.join, ranges, ctx)
@@ -94,68 +139,18 @@ const ARGMIN = "tests/valid/faq/nearest_generator_argmin.esm"
         @test rgates[1].candidates === nothing
     end
 
-    @testset "bin-pruned nearest-generator argmin" begin
-        np, ng = 300, 40
-        # Coordinates on a coarse lattice so equal distances (ties) occur.
-        ca = Dict{String, Any}(
-            "px" => round.(_lcg(np, 3, 3.9); digits = 1),
-            "py" => round.(_lcg(np, 4, 3.9); digits = 1),
-            "gx" => round.(_lcg(ng, 5, 4.0); digits = 1),
-            "gy" => round.(_lcg(ng, 6, 4.0); digits = 1)
-        )
-        params = Dict("binw" => 1.0)
-        # Every point bin needs a generator (an empty candidate set is an
-        # error by spec): add one generator at each bin's corner.
-        gx = Float64[]; gy = Float64[]
-        for a in 0:3, b in 0:3
-            push!(gx, a + 0.5); push!(gy, b + 0.5)
-        end
-        ca["gx"] = vcat(ca["gx"], gx); ca["gy"] = vcat(ca["gy"], gy)
-        m, isets = _typed(ARGMIN, "NearestGeneratorBinned"; points = np, generators = ng + 16)
-        EA._VI_ENUM_VISITS[] = 0
-        vi = EA.materialize_value_invention(m, isets, ca, params)
-        driven = EA._VI_ENUM_VISITS[]
-        EA._VI_ENUM_VISITS[] = 0
-        ref = _interp(() -> EA.materialize_value_invention(m, isets, ca, params))
-        full = EA._VI_ENUM_VISITS[]
-        @test vi.assignments["assign_binned"] == ref.assignments["assign_binned"]
-        @test length(unique(vi.assignments["assign_binned"])) > 10
-        # The driven walk visits exactly the same-bin (point, generator) pairs;
-        # the product visits every pair.
-        _bin(x, y) = (floor(x / params["binw"]), floor(y / params["binw"]))
-        same_bin = count(
-            _bin(ca["px"][i], ca["py"][i]) == _bin(ca["gx"][g], ca["gy"][g])
-                for i in 1:np, g in 1:(ng + 16)
-        )
-        @test full == np * (ng + 16)
-        @test driven == same_bin
-        @test driven < full ÷ 4
-    end
-
     # The driven walk allocates O(N_first + |candidates|), not a list of the
     # second gated range per binding of the first (O(N_first × N_second)).
     @testset "driven walk allocation is linear" begin
         function regrid_walk(n)
-            m, isets = _typed(
-                REGRID, "ConservativeRegridOverlapJoin";
-                src_cells = n, tgt_cells = n
-            )
+            m, isets = _regrid(n)
             # About ten cells of each grid per unit bin.
             ca = Dict{String, Any}(
-                "src_lon" => _lcg(n, 1, n / 10), "src_lat" => zeros(n),
-                "tgt_lon" => _lcg(n, 2, n / 10), "tgt_lat" => zeros(n)
+                "src_lon" => _lcg(n, 1, n / 10), "tgt_lon" => _lcg(n, 2, n / 10)
             )
-            params = Dict("dx" => 1.0, "dy" => 1.0, "atol" => 1.0e-12)
-            ctx = EA._ViCtx(
-                Dict{String, Any}(ca), Dict{String, Float64}(params),
-                Dict{String, EA.IndexSet}(isets), m.variables,
-                Dict{String, Dict{Any, Any}}(), EA._vi_seed_map(m)
-            )
-            det = EA._vi_detect(m)
-            for (v, node) in det.maps
-                EA._vi_materialize_map!(ctx, v, node)
-            end
-            node = only(det.producers)[2]
+            params = Dict("dx" => 1.0)
+            ctx = _ctx(m, isets, ca, params)
+            node = only(EA._vi_detect(m).producers)[2]
             ranges = EA._vi_ranges(node)
             gs = EA._vi_resolve_join(node.join, ranges, ctx)
             cb = _ -> nothing
@@ -171,52 +166,6 @@ const ARGMIN = "tests/valid/faq/nearest_generator_argmin.esm"
         # each first binding lists the whole second range (8 n² bytes).
         @test big < 8 * small
         @test big < 2 * 2000^2
-
-        # The arg-witness reducer's inner generator range, one point at a time
-        # with its gates resolved: each point has one same-bin generator.
-        function argmin_points(np, ng)
-            w = 200                                     # generator bins per row
-            gx = Float64[(g - 1) % w + 0.5 for g in 1:ng]
-            gy = Float64[(g - 1) ÷ w + 0.5 for g in 1:ng]
-            ca = Dict{String, Any}(
-                "px" => gx[1:np] .+ 0.25, "py" => gy[1:np] .+ 0.25,
-                "gx" => gx, "gy" => gy
-            )
-            params = Dict("binw" => 1.0)
-            m, isets = _typed(ARGMIN, "NearestGeneratorBinned"; points = np, generators = ng)
-            ctx = EA._ViCtx(
-                Dict{String, Any}(ca), Dict{String, Float64}(params),
-                Dict{String, EA.IndexSet}(isets), m.variables,
-                Dict{String, Dict{Any, Any}}(), EA._vi_seed_map(m)
-            )
-            det = EA._vi_detect(m)
-            maps = Dict(det.maps)
-            for v in ("point_bin", "gen_bin")
-                EA._vi_materialize_map!(ctx, v, maps[v])
-            end
-            node = maps["assign_binned"]
-            body = node.expr_body
-            outer = EA._vi_ranges(node)
-            gates = Ref{Any}(missing)
-            b = Dict{String, Any}("i" => 1)
-            EA._vi_argreduce(body, ctx, b, outer, gates)        # resolve the gates
-            walk = function ()
-                for i in 1:np
-                    b["i"] = i
-                    EA._vi_argreduce(body, ctx, b, outer, gates) == i ||
-                        error("point $i: wrong generator")
-                end
-            end
-            walk()
-            EA._VI_ENUM_VISITS[] = 0
-            bytes = @allocated walk()
-            return bytes, EA._VI_ENUM_VISITS[]
-        end
-        np, ng = 40, 40_000
-        bytes, visits = argmin_points(np, ng)
-        @test visits == np
-        # A list of the generator range per point is 8 · ng bytes each.
-        @test bytes < np * ng
     end
 end
 

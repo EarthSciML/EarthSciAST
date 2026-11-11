@@ -67,7 +67,7 @@ exercises `log10`.
 | `mount_rename_atm_column` | `valid/mount_rename_atm_column.esm` | `AtmColumn` | `algebraic` | 59 | 4 | 4 | a 59-layer column — the tier's widest state, and its shape-generality probe |
 | `mount_rename_soil_column` | `valid/mount_rename_soil_column.esm` | `SoilColumn` | `algebraic` | 4 | 4 | 4 | the 4-layer twin of the same column family |
 | `units_registry_grammar` | `valid/units_registry_grammar.esm` | `UnitsRegistryGrammar` | `algebraic` | 1 | 4 | 4 | one first-order decay under a model whose observed set is a units-parsing discriminator |
-| `datetime_log10` | `conformance/compiled_rhs/fixtures/datetime_log10.esm` | `DatetimeLog10` | `transcendental` | 11 | 8 | 8 | the nine `datetime.*` closed calendar functions, one equation each, plus `hour(t + tz_offset) + longitude/15` and `k_log * log10(lg)` — the tier's only fixture authored for it, and the only one with hand-chosen probe times |
+| `datetime_log10` | `conformance/compiled_rhs/fixtures/datetime_log10.esm` | `DatetimeLog10` | `transcendental` | 11 | 8 | 8 | the nine calendar templates of `esm:std/calendar.esm`, one equation each, plus `hour(t + tz_offset) + longitude/15` and `k_log * log10(lg)` — the tier's only fixture authored for it, and the only one with hand-chosen probe times |
 
 All 20 fixtures carry an `analytic_rhs` anchor on **every** probe, so the
 self-test gates the whole tier against references computed outside every binding.
@@ -92,7 +92,7 @@ the epoch:
 | `day_boundary_below` | `86399.75` | `t` just below a day boundary |
 | `day_boundary` | `86400.0` | `t` exactly on one |
 
-`datetime.julian_day` is the one continuous member of the family (`d/dt =
+`julian_day` is the one continuous member of the family (`d/dt =
 1/86400` almost everywhere) and is the only element of this fixture that cannot
 be exact in every binding; the eight integer fields are, and `transcendental`'s
 1e-12 is slack on them. The class is carried for `julian_day` — one rounded

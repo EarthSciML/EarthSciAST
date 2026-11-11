@@ -1524,7 +1524,7 @@ func wrapIfOpValue(v any, format string) string {
 }
 
 // plainScalar returns the bare textual form of a raw scalar (index name, axis,
-// output selector, manifold, …) — mirrors JS String(): identifiers and enum
+// concat axis, …) — mirrors JS String(): identifiers and enum
 // labels render verbatim, with no variable/greek formatting.
 func plainScalar(v any) string {
 	switch x := v.(type) {
@@ -1672,8 +1672,8 @@ func formatRange(v any, format string) string {
 	}
 }
 
-// formatRangesClause renders the ` where {…}` clause shared by aggregate and
-// argmin/argmax (keys sorted).
+// formatRangesClause renders the ` where {…}` clause of a `faq` node (keys
+// sorted).
 func formatRangesClause(ranges map[string]any, format string) string {
 	inSym := "∈"
 	switch format {
@@ -1697,8 +1697,8 @@ func formatRangesClause(ranges map[string]any, format string) string {
 	return " where {" + strings.Join(parts, ", ") + "}"
 }
 
-// formatJoinClause renders the ` join(…)` clause shared by `faq` and
-// `argmin`/`argmax`, or "" when there is none. Clauses are joined `; `. An
+// formatJoinClause renders the ` join(…)` clause of a `faq` node, or "" when
+// there is none. Clauses are joined `; `. An
 // equality clause lists its key-column pairs `l=r` and then, when present, the
 // self-join side assignment `syms=[left, right]`; an overlap clause is the
 // keyword call `overlap(src=[…], tgt=[…])` with `, eps=E` whenever `eps` is
@@ -1788,42 +1788,12 @@ func formatAggregate(node ExprNode, format string) string {
 	if node.Key != nil {
 		out += " key=" + formatExpression(node.Key, format)
 	}
-	// `id` is a bare-name clause rather than part of the `[…]` suffix so it adds
-	// no new bracket ambiguity with `table_lookup`'s `name[axis=…]` surface.
+	// `id` is a bare-name clause rather than part of the `[…]` suffix.
 	if node.ID != nil {
 		out += " id=" + *node.ID
 	}
 	if semiring != "" && semiring != "sum_product" {
 		out += " [semiring=" + semiring + "]"
-	}
-	return out
-}
-
-// formatArgWitness renders an `argmin` / `argmax` node per the rendering contract.
-func formatArgWitness(node ExprNode, format string) string {
-	arg := ""
-	if node.Arg != nil {
-		arg = *node.Arg
-	}
-	exprStr := ""
-	if node.Expr != nil {
-		exprStr = formatExpression(node.Expr, format)
-	}
-	var out string
-	if format == FmtLatex {
-		out = "\\mathrm{" + node.Op + "}_{" + arg + "} (" + exprStr + ")"
-	} else {
-		out = node.Op + "[" + arg + "] (" + exprStr + ")"
-	}
-	if len(node.Ranges) > 0 {
-		out += formatRangesClause(node.Ranges, format)
-	}
-	out += formatJoinClause(node.Join, format)
-	if node.Filter != nil {
-		out += " if " + formatExpression(node.Filter, format)
-	}
-	if node.ID != nil {
-		out += " id=" + *node.ID
 	}
 	return out
 }
@@ -1842,14 +1812,6 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 
 	case "true", "false":
 		return op, true
-
-	case "fn":
-		name := ""
-		if node.Name != nil {
-			name = *node.Name
-		}
-		inner := joinArgList(args, format)
-		return opDisplayName(name, format) + "(" + inner + ")", true
 
 	case "enum":
 		if len(args) < 2 {
@@ -1899,30 +1861,6 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		default:
 			return "integral(" + f + ", " + v + ", " + lo + ", " + hi + ")", true
 		}
-
-	case "table_lookup":
-		table := ""
-		if node.Table != nil {
-			table = *node.Table
-		}
-		eq := "="
-		if format == FmtLatex {
-			eq = " = "
-		}
-		keys := make([]string, 0, len(node.TableAxes))
-		for k := range node.TableAxes {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		parts := make([]string, len(keys))
-		for i, k := range keys {
-			parts[i] = k + eq + formatExpression(node.TableAxes[k], format)
-		}
-		outStr := ""
-		if node.Output != nil {
-			outStr = ":" + plainScalar(node.Output)
-		}
-		return opDisplayName(table, format) + "[" + strings.Join(parts, ", ") + "]" + outStr, true
 
 	case "apply_expression_template":
 		name := ""
@@ -2012,35 +1950,8 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		}
 		return opDisplayName("concat", format) + "(" + inner + ", axis=" + axis + ")", true
 
-	case "intersect_polygon", "polygon_intersection_area":
-		inner := joinArgList(args, format)
-		manifold := ""
-		if node.Manifold != nil {
-			manifold = *node.Manifold
-		}
-		// `id` (RFC §6.1 node identity) is emitted as a trailing named argument
-		// when present, so a node addressable as a derived index set's
-		// `from_faq` referent survives the text round-trip. Absent `id` prints
-		// exactly as before, so every existing rendering is unchanged.
-		idPart := ""
-		if node.ID != nil {
-			idPart = ", id=" + *node.ID
-		}
-		return opDisplayName(op, format) + "(" + inner + ", manifold=" + manifold + idPart + ")", true
-
-	case "skolem":
-		// The documentary `label` is a trailing named argument, like
-		// intersect_polygon's `manifold=`; an unlabeled skolem is a plain call.
-		if node.Label == nil {
-			return "", false
-		}
-		return opDisplayName("skolem", format) + "(" + joinArgList(args, format) + ", label=" + *node.Label + ")", true
-
 	case "faq":
 		return formatAggregate(node, format), true
-
-	case "argmin", "argmax":
-		return formatArgWitness(node, format), true
 	}
 
 	return "", false

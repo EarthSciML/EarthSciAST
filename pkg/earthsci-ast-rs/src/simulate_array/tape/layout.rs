@@ -97,10 +97,8 @@ fn reversible(prog: &TapeProgram) -> bool {
         | Instr::Un { .. }
         | Instr::Neg { .. }
         | Instr::Copy { .. }
-        | Instr::Calendar { .. }
         | Instr::Fill { .. }
         | Instr::Select { .. }
-        | Instr::Interp { .. }
         | Instr::Region { .. }
         | Instr::Assemble { .. }
         | Instr::Gather { .. }
@@ -130,7 +128,7 @@ fn reversible(prog: &TapeProgram) -> bool {
             }
             None => true,
         },
-        Instr::PolyArea { .. } | Instr::Sweep { .. } => false,
+        Instr::Sweep { .. } => false,
         // The pass runs ahead of fusion and rerolling.
         Instr::Fused { .. } | Instr::Lanes { .. } => false,
     })

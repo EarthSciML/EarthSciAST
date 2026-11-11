@@ -12,6 +12,12 @@
 
 # _is_scalar_D_lhs is defined in the array helpers section (5b).
 
+# Strip an AD dual number down to its underlying real primal; identity on
+# everything else. Specialized for `ForwardDiff.Dual` in
+# `ext/EarthSciASTForwardDiffExt.jl`; a `Dual` cannot exist in a session that has
+# not loaded ForwardDiff, so the identity method is complete without it.
+@inline _value(x) = x
+
 function _equation_tag(eq::Equation)
     if eq._comment !== nothing
         return eq._comment
@@ -611,7 +617,7 @@ end
 #   * `index` gather args — the target is resolved and the subscripts are folded
 #     by `_eval_const_int`, which knows only loop indices and const arrays;
 #   * aggregate range BOUNDS (`_expand_int_range_dyn` folds expression bounds);
-#   * `lower`/`upper` integral bounds, value-invention `key`s, table-lookup axes.
+#   * `lower`/`upper` integral bounds and value-invention `key`s.
 # `expr_body` / `filter` / `values` / plain args are EXPRESSION positions — an
 # observed reference there survives to the compiled tree and reads its slot —
 # so the scan recurses rather than flags. Visits are (node, mode)-memoized via
@@ -644,11 +650,6 @@ function _obs_structural_refs!(
     e.lower === nothing || _obs_mark_refs!(e.lower::ASTExpr, names, hits, seen)
     e.upper === nothing || _obs_mark_refs!(e.upper::ASTExpr, names, hits, seen)
     e.key === nothing || _obs_mark_refs!(e.key::ASTExpr, names, hits, seen)
-    if e.table_axes !== nothing
-        for (_, ax) in e.table_axes
-            _obs_mark_refs!(ax, names, hits, seen)
-        end
-    end
     for a in e.args
         _obs_structural_refs!(a, names, hits, seen)
     end
@@ -1024,20 +1025,26 @@ function _eval_cellwise(
         t::Float64 = 0.0
     )::Float64
     cellwise = _index_at_cell(expr, cell)
+    # One build memo for the resolve and the compile, and the shared nodes of
+    # the compiled tree evaluated once (`_cell_memoize!`): an inlined observed
+    # chain reaches the same sub-tree from many parents (a template parameter
+    # written at each of its uses, an observed read by several others), and
+    # walking it once per parent grows with the product of those fan-outs.
+    # Both memos return the value the unshared walk computes.
+    bmemo = _BuildMemo()
+    vmap = Dict{String, Int}()
     resolved = _resolve_indices(
         cellwise,
         Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
-        Dict{String, Int}(), const_arrays
+        vmap, const_arrays, _EMPTY_PGATHER, bmemo
     )
     reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
-    if isempty(params)
-        node = _compile(resolved, Dict{String, Int}(), Set{Symbol}(), reg)
-        return _eval_node(node, Float64[], NamedTuple(), t)
-    end
     psyms = Symbol[Symbol(k) for k in keys(params)]
     pvals = Float64[Float64(params[k]) for k in keys(params)]
-    node = _compile(resolved, Dict{String, Int}(), Set{Symbol}(psyms), reg)
     p_nt = NamedTuple{Tuple(psyms)}(Tuple(pvals))
+    node = _cell_memoize!(
+        _compile(resolved, vmap, Set{Symbol}(psyms), reg, bmemo), typeof(p_nt)
+    )
     return _eval_node(node, Float64[], p_nt, t)
 end
 
@@ -1053,7 +1060,7 @@ function _ic_body_is_closed_form(e)::Bool
     _is_array_producer(e) && return false
     (
         e.lower !== nothing || e.upper !== nothing || e.filter !== nothing ||
-            e.key !== nothing || e.table_axes !== nothing || e.ranges !== nothing
+            e.key !== nothing || e.ranges !== nothing
     ) && return false
     for a in e.args
         _ic_body_is_closed_form(a) || return false
@@ -1346,7 +1353,7 @@ function _cellwise_compile_once_impl(
         cellwise = _index_at_cell_sym(expr, syms_str)
         # One build memo for the resolve and the compile: a sub-tree shared by
         # reference (an inner reduction that does not read the enclosing
-        # unrolled loop's symbol, such as argmin's minimum) resolves and
+        # unrolled loop's symbol, such as the `argmin` template's minimum) resolves and
         # compiles to one node, which `_cell_memoize!` then evaluates once per
         # cell.
         bmemo = _BuildMemo()

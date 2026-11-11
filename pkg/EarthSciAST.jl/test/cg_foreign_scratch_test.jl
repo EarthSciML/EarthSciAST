@@ -44,19 +44,11 @@ _cfs_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 _cfs_probe(n, k) =
     Float64[1.2 + 0.8 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.05i for i in 1:n]
 
-_cfs_fn(name, args...) = ESM.OpExpr("fn", ESM.ASTExpr[args...]; name = String(name))
-
-const _CFS_AX = Any[0.0, 0.5, 1.0]
-const _CFS_TBL = Any[1.0, 2.0, 4.0]
-
-# The shared lane-invariant chain: interp.linear(tbl, ax, cos(0.1·t)) — one
-# expensive def whose value number is identical in both kernels' invariant
-# tiers, so xcse mints ONE shared scalar prelude slot and rewrites both
-# kernels' inv defs to bare `_CSECache` reads (the foreign shape under test).
-_cfs_J() = _cfs_fn(
-    "interp.linear", _const(_CFS_TBL), _const(_CFS_AX),
-    _op("cos", _op("*", _n(0.1), _v("t")))
-)
+# The shared lane-invariant chain: exp(0.75·cos(0.1·t)) — one expensive def
+# whose value number is identical in both kernels' invariant tiers, so xcse
+# mints a shared scalar prelude slot and rewrites both kernels' inv defs to
+# bare `_CSECache` reads (the foreign shape under test).
+_cfs_J() = _op("exp", _op("*", _n(0.75), _op("cos", _op("*", _n(0.1), _v("t")))))
 
 # Two STRUCTURALLY DISTINCT array equations (so the kernel-class merge cannot
 # collapse them into one kernel, which would leave nothing cross-kernel to

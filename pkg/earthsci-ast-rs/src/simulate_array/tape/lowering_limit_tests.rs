@@ -60,7 +60,7 @@ fn wrap(inner: Value, lo: i64, hi: i64) -> Value {
 
 fn doc(name: &str, variables: Value, equations: Vec<Value>, domain: Option<Value>) -> Value {
     let mut d = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": name},
         "models": {"M": {"variables": variables, "equations": equations}}
     });
@@ -375,89 +375,6 @@ fn array_observed_over_a_range_that_starts_past_one() {
         )
     };
     flat_in_n(make, 6, 40);
-}
-
-/// `datetime.*` where the kernels are binary32 — a Float32 document, and a
-/// Float32 variable in a Float64 one — is one registry call per element
-/// ([`Instr::Calendar`]); a Float64 document keeps the arithmetic expansion.
-#[test]
-fn datetime_at_single_precision() {
-    const FNS: [&str; 8] = [
-        "datetime.year",
-        "datetime.month",
-        "datetime.day",
-        "datetime.hour",
-        "datetime.minute",
-        "datetime.second",
-        "datetime.day_of_year",
-        "datetime.is_leap_year",
-    ];
-    // `per_variable`: Float32 variables in a Float64 document; otherwise a
-    // Float32 (or, with `f32 = false`, Float64) document.
-    let make = |n: i64, f32: bool, per_variable: bool| {
-        let mut vars = json!({
-            "epoch": {"type": "parameter", "default": 946684800.0},
-            "step": {"type": "parameter", "default": 8406720.0},
-            "u": {"type": "unknown", "shape": ["x"], "default": 0.5}
-        });
-        let r = || json!({"i": [1, n]});
-        let mut eqs = Vec::new();
-        let mut total = Vec::new();
-        for (k, f) in FNS.iter().enumerate() {
-            let c = format!("c{k}");
-            vars[&c] = json!({"type": "unknown", "shape": ["x"]});
-            let inst = op(
-                "+",
-                vec![
-                    json!("epoch"),
-                    op("*", vec![json!("step"), json!("i")]),
-                    op("*", vec![json!(3671.0), json!("i")]),
-                    op("*", vec![json!(86400.0), json!("t")]),
-                ],
-            );
-            eqs.push(json!({
-                "lhs": faq(&["i"], r(), ix(&c, vec![json!("i")])),
-                "rhs": faq(&["i"], r(), json!({"op": "fn", "name": f, "args": [inst]}))
-            }));
-            total.push(ix(&c, vec![json!("i")]));
-        }
-        // A scalar call on the solver time as well.
-        vars["h"] = json!({"type": "unknown"});
-        eqs.push(
-            json!({"lhs": "h", "rhs": {"op": "fn", "name": "datetime.hour",
-            "args": [op("+", vec![json!("epoch"), op("*", vec![json!(3600.0), json!("t")])])]}}),
-        );
-        total.push(json!("h"));
-        eqs.push(d_eq(
-            "u",
-            &["i"],
-            r(),
-            op(
-                "-",
-                vec![
-                    op("*", vec![json!(1e-4), op("+", total)]),
-                    op("*", vec![json!(0.1), ix("u", vec![json!("i")])]),
-                ],
-            ),
-        ));
-        if per_variable {
-            for (_, v) in vars.as_object_mut().expect("variables").iter_mut() {
-                v["element_type"] = json!("Float32");
-            }
-        }
-        let domain = (f32 && !per_variable).then(|| json!({"element_type": "Float32"}));
-        doc("datetime_precision", vars, eqs, domain)
-    };
-    let f32_doc = flat_in_n(|n| make(n, true, false), 4, 40);
-    assert_eq!(count(&f32_doc, "Calendar"), FNS.len() + 1);
-    let per_var = flat_in_n(|n| make(n, true, true), 4, 40);
-    assert_eq!(count(&per_var, "Calendar"), FNS.len() + 1);
-    let f64_doc = flat_in_n(|n| make(n, false, false), 4, 40);
-    assert_eq!(
-        count(&f64_doc, "Calendar"),
-        0,
-        "Float64 keeps the expansion"
-    );
 }
 
 /// A scalar `bool_and_or` reduction runs on the tape (CONFORMANCE_SPEC
@@ -957,7 +874,7 @@ fn mesh_rank_template_doc(n: usize) -> Value {
                      "v": ix("edge_hi", vec![json!("f"), json!("le")]), "lo": 1, "n": nv}});
     let unknown = |shape: Value| json!({"type": "unknown", "shape": shape});
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "mesh_rank_tpl"},
         "index_sets": {
             "faces": {"kind": "interval", "size": nf},
@@ -1026,8 +943,8 @@ fn counted_bracket_rank_of_set_over_a_derived_set() {
 }
 
 /// The A/B documents (`bench/interp_bracket`): the composition is taped with
-/// one count per level box, agrees with the oracle bit for bit, and gives
-/// exactly the `interp.linear` spelling's derivative.
+/// one count per level box, agrees with the oracle bit for bit, and the const
+/// and run-time spellings give the same derivative.
 #[test]
 fn counted_bracket_benchmark_documents() {
     let read = |name: &str| -> Value {
@@ -1039,7 +956,6 @@ fn counted_bracket_benchmark_documents() {
     };
     let const_compose = read("interp_bracket_const_compose_N59.esm");
     let runtime = read("interp_bracket_runtime_compose_N59.esm");
-    let fn_doc = read("interp_bracket_const_fn_N59.esm");
     let (prog, _) = oracle_ab(const_compose.clone());
     assert_eq!(counts(&prog), vec![(CountRel::Le, true)]);
     assert_eq!(
@@ -1049,7 +965,7 @@ fn counted_bracket_benchmark_documents() {
     );
     let (prog, _) = oracle_ab(runtime.clone());
     assert_eq!(counts(&prog), vec![(CountRel::Le, false)]);
-    // The three spellings integrate the same ODE: the same derivative, bit for bit.
+    // The two spellings integrate the same ODE: the same derivative, bit for bit.
     let dy = |d: &Value| {
         let file = crate::parse::load_string(&d.to_string()).expect("loads");
         let compiled = ArrayCompiled::from_file(&file).expect("compiles");
@@ -1072,9 +988,11 @@ fn counted_bracket_benchmark_documents() {
             out.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
         )
     };
-    let a = dy(&fn_doc);
-    assert_eq!(a, dy(&const_compose), "interp.linear vs the composition");
-    assert_eq!(a, dy(&runtime), "interp.linear vs the run-time composition");
+    assert_eq!(
+        dy(&const_compose),
+        dy(&runtime),
+        "the const vs the run-time composition"
+    );
 }
 
 /// The count itself, against the plain fold of the indicator, on windows
@@ -1372,7 +1290,7 @@ fn pointwise_gated_faq_numbers_its_box() {
     let sin_u = op("sin", vec![ix("u", vec![json!("i"), json!("j")])]);
     let make = |bg: Value| {
         json!({
-            "esm": "1.1.0",
+            "esm": "2.0.0",
             "metadata": {"name": "pointwise_gated_sharing"},
             "index_sets": {"s": {"kind": "interval", "size": 3},
                            "g": {"kind": "interval", "size": 4}},

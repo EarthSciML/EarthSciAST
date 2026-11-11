@@ -1,8 +1,8 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "per_instantiation_validation",
-    "description": "esm-spec §9.6.9 (RFC out-of-line-expression-templates §8, §9.2): a `manifold`-param template referenced at TWO call sites. `geometry_manifold_invalid` is discharged per-instantiation on the reference-preserving form: the first call site (manifold=spherical) is admissible, the second (manifold=bogus) is not. The offending call site is named in the diagnostic. INVALID fixture — load MUST reject.",
+    "description": "esm-spec §9.6.9 (RFC out-of-line-expression-templates §8, §9.2): an `fn`-param template (the scalar `fn` field of a `broadcast` node) referenced at TWO call sites. `invalid_broadcast_fn` is discharged per-instantiation on the reference-preserving form: the first call site (fn = max) is admissible, the second (fn = bogus) is not. The offending call site is named in the diagnostic. INVALID fixture — load MUST reject. Until esm 2.0.0 the site was the `manifold` field of the removed geometry leaf.",
     "authors": [
       "out-of-line-expression-templates conformance"
     ]
@@ -10,15 +10,15 @@
   "models": {
     "m": {
       "expression_templates": {
-        "overlap": {
+        "combine": {
           "params": [
             "a",
             "b",
-            "man"
+            "f"
           ],
           "body": {
-            "op": "polygon_intersection_area",
-            "manifold": "man",
+            "op": "broadcast",
+            "fn": "f",
             "args": [
               "a",
               "b"
@@ -35,41 +35,41 @@
         "pb": {
           "type": "parameter",
           "units": "1",
-          "default": 1.0
+          "default": 2.0
         },
-        "area_ok": {
+        "r_ok": {
           "type": "unknown",
           "units": "1"
         },
-        "area_bad": {
+        "r_bad": {
           "type": "unknown",
           "units": "1"
         }
       },
       "equations": [
         {
-          "lhs": "area_ok",
+          "lhs": "r_ok",
           "rhs": {
             "op": "apply_expression_template",
             "args": [],
-            "name": "overlap",
+            "name": "combine",
             "bindings": {
               "a": "pa",
               "b": "pb",
-              "man": "spherical"
+              "f": "max"
             }
           }
         },
         {
-          "lhs": "area_bad",
+          "lhs": "r_bad",
           "rhs": {
             "op": "apply_expression_template",
             "args": [],
-            "name": "overlap",
+            "name": "combine",
             "bindings": {
               "a": "pa",
               "b": "pb",
-              "man": "bogus"
+              "f": "bogus"
             }
           }
         }

@@ -1256,7 +1256,8 @@ def test_metaparam_structural_field_collision():
     assert r["join"] == [{"on": [["row_id", "row_id"]], "syms": ["p", "b"]}]
     assert r["expr"]["args"] == [22, 5]
     k = _defining(d, "M", "k")
-    assert k["arg"] == "p"
+    assert k["reduce"] == "max"
+    assert k["output_idx"] == []
     assert k["ranges"]["p"] == [1, 11]
     assert k["expr"]["args"] == ["c", 7]
 

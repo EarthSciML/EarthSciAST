@@ -48,7 +48,7 @@ class UnsupportedFieldError(CanonicalizeError):
     ``name``/``value``), so no faithful canonical JSON exists.
 
     Emitting only the pinned fields would make structurally-different nodes
-    (aggregates, table lookups, geometry leaves, …) byte-identical — the defect
+    (aggregates, makearrays, …) byte-identical — the defect
     class behind the ``fn`` bc-node bug — and emitting more fields would diverge
     unilaterally from the other bindings. Every binding (Julia is reference)
     fail-closes here instead. See :func:`canonical_json`.
@@ -98,8 +98,8 @@ def canonical_json(expr: Expr) -> str:
     no node carries a non-emissible field. Emissible fields are exactly
     ``op``/``args``/``wrt``/``dim``/``fn``/``name``/``value`` — the set the
     cross-language canonical fixtures pin. A node carrying any OTHER set field
-    (aggregate ``expr``/``ranges``/``semiring``, ``table``/``table_axes``,
-    geometry ``id``/``manifold``, …) has NO faithful canonical JSON here, so it
+    (aggregate ``expr``/``ranges``/``semiring``, a node ``id``, …) has NO
+    faithful canonical JSON here, so it
     raises :class:`UnsupportedFieldError` rather than emit ambiguous bytes.
     """
     c = canonicalize(expr)
@@ -327,12 +327,10 @@ _EMISSIBLE_FIELDS: tuple[str, ...] = (
 
 # ExprNode fields TOLERATED-AND-IGNORED by the canonical emitter: a node
 # carrying them still canonicalizes, emitting the pinned fields only. Kept for
-# parity with the Julia reference's ``_CANONICAL_IGNORED_FIELDS`` (`arg` — an
-# argmin/argmax pretty-printer witness; `bindings` — a template parameter map).
-# ``ExprNode`` declares ``arg`` (so an argmin/argmax node still canonicalizes,
-# with the witness dropped from the canonical bytes exactly as in Julia) but not
-# ``bindings``, whose entry stays a forward-compat placeholder; listing both here
-# keeps the derived non-emissible set below matching Julia's contract exactly.
+# parity with the Julia reference's ``_CANONICAL_IGNORED_FIELDS`` (`bindings` —
+# a template parameter map; ``template_origin`` — load provenance).
+# ``ExprNode`` does not declare ``bindings``, whose entry stays a forward-compat
+# placeholder.
 #
 # ``expect_cadence`` and ``attrs`` are deliberately NOT here. Both are author
 # annotations with no canonical wire slot, and
@@ -343,7 +341,7 @@ _EMISSIBLE_FIELDS: tuple[str, ...] = (
 # the emitter never saw one. They fall through to the derived
 # ``_NON_EMISSIBLE_FIELDS`` below, so no edit is needed here; this note records
 # that the omission is a decision, not an oversight.
-_CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("arg", "bindings", "template_origin")
+_CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("bindings", "template_origin")
 
 # ExprNode fields WITHOUT a pinned slot in the cross-binding canonical JSON node
 # encoding. If any is set, the node cannot be emitted faithfully and
@@ -383,7 +381,7 @@ def _emit_node_json(n: ExprNode) -> str:
     # the set every binding serializes and the cross-language canonical fixtures
     # pin. Nodes carrying any other set field have already been rejected by
     # `_assert_emissible` (via `canonical_json`); `fn` also carries the
-    # boundary-condition kind on synthetic `bc` nodes (esm-spec §9.2), so
+    # boundary-condition kind on synthetic `bc` nodes, so
     # emitting it keeps bc(u,dirichlet,xmin) distinct from bc(u,neumann,xmin).
     # Keys are sorted at the end, so append order does not affect determinism.
     entries: list[tuple[str, str]] = []

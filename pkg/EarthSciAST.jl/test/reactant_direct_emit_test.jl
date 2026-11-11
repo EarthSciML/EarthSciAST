@@ -17,18 +17,10 @@
 #   deterministic perturbations of `u` and `t`, to `rtol = 1e-12`. NOT `==`: the
 #   tolerance classes of tests/conformance/compiled_rhs/README.md are the
 #   contract, XLA is free to reassociate, and `stablehlo.power` is not Julia's
-#   `^`. Six shapes are covered — the conformance fixture, a reaction–diffusion
+#   `^`. Five shapes are covered — the conformance fixture, a reaction–diffusion
 #   model (state, parameters, literal-exponent `^`, ghost-boundary kernels), a
 #   LIVE FORCING model through the buffers argument, a template SUB-KERNEL model,
-#   a closed `interp.linear` function, and the `datetime.*` calendar beside
-#   `log10`.
-#
-#   THE CALENDAR IS PINNED EXACTLY, not to `rtol`. Eight of the nine
-#   `datetime.*` fields are integers and the emitted program must return the
-#   interpreter's integer, bit for bit, at every probe time — including negative
-#   times, both signs of a leap day, a year boundary, a sub-second remainder and
-#   `t` on and just below a day boundary. `julian_day`, the one continuous
-#   member, is pinned to 1 ulp.
+#   and `log10`.
 #
 #   THE HARD-ERROR PATH. A model the emitter cannot lower raises
 #   `DirectEmitError`, and the message names the construct AND the rule it came
@@ -58,7 +50,6 @@ _de_Dt(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
 _de_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
 _de_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 _de_cst(v) = Dict{String, Any}("op" => "const", "value" => v)
-_de_fnop(nm, a...) = Dict{String, Any}("op" => "fn", "name" => nm, "args" => Any[a...])
 _de_ao(e) = Dict{String, Any}(
     "op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
@@ -66,7 +57,7 @@ _de_ao(e) = Dict{String, Any}(
 )
 _de_doc(name, vars, eqs; index_sets = nothing) = begin
     d = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => name),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => name),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
                 "variables" => vars, "equations" => eqs
@@ -139,27 +130,6 @@ function _de_forced(N)
     )
 end
 
-# A closed `interp.linear` over a frozen table, the query being the state.
-function _de_interpdoc()
-    table = Any[0.0, 1.0, 4.0, 9.0, 16.0]
-    axis = Any[0.0, 1.0, 2.0, 3.0, 4.0]
-    return _de_doc(
-        "IT", Dict{String, Any}(
-            "y" => _de_state(default = 1.5),
-            "k" => _de_param(2.0)
-        ),
-        Any[
-            Dict{String, Any}(
-                "lhs" => _de_Dt("y"),
-                "rhs" => _de_o(
-                    "*", "k",
-                    _de_fnop("interp.linear", _de_cst(table), _de_cst(axis), "y")
-                )
-            ),
-        ]
-    )
-end
-
 # The hard-error fixture. It used to be `log10`, which the ladder now lowers as
 # `log(x)/ln(10)` — and with that there is no REGISTRY OPERATOR left for this
 # fixture to use: the ladder covers the whole closed evaluable-core scalar set
@@ -182,70 +152,19 @@ function _de_unsupported_op()
     )
 end
 
-# The nine `datetime.*` closed functions, one equation each, plus the two shapes
-# the family actually wears in a model: an argument that is an EXPRESSION rather
-# than the bare time, whose integer result then flows into ordinary Float64
-# arithmetic (`hour(t + tz) + lon/15` — a local solar hour), and `log10` beside
-# them so the two gaps this file grew for are exercised in one program.
-const _DE_DT_FNS = (
-    "year", "month", "day", "hour", "minute", "second",
-    "day_of_year", "julian_day", "is_leap_year",
-)
-
-function _de_dtdoc()
+# `log10`, which the ladder lowers as `log(x)/ln(10)`.
+function _de_log10doc()
     vars = Dict{String, Any}(
-        "tz" => _de_param(3600.0), "lon" => _de_param(-88.2),
         "k_log" => _de_param(2.0),
-        "local_hour" => _de_state(default = 0.0),
         "lg" => _de_state(default = 5.0)
     )
-    eqs = Any[]
-    for f in _DE_DT_FNS
-        vars["c_$f"] = _de_state(default = 0.0)
-        push!(
-            eqs, Dict{String, Any}(
-                "lhs" => _de_Dt("c_$f"),
-                "rhs" => _de_fnop("datetime.$f", "t")
-            )
-        )
-    end
-    push!(
-        eqs, Dict{String, Any}(
-            "lhs" => _de_Dt("local_hour"),
-            "rhs" => _de_o(
-                "+", _de_fnop("datetime.hour", _de_o("+", "t", "tz")),
-                _de_o("/", "lon", 15.0)
-            )
-        )
-    )
-    push!(
-        eqs, Dict{String, Any}(
+    eqs = Any[
+        Dict{String, Any}(
             "lhs" => _de_Dt("lg"),
             "rhs" => _de_o("*", "k_log", _de_o("log10", "lg"))
-        )
-    )
-    return _de_doc("DT", vars, eqs)
-end
-
-# The times a calendar gets wrong, which is the only reason to test one:
-# the epoch (a day AND a year boundary), negative times whole and fractional
-# (FLOORED division, not truncated), a leap day on each side of the epoch, a
-# year boundary half a second short (the family truncates to whole
-# milliseconds), and `t` just below and exactly on a day boundary. The same
-# eight times the `datetime_log10` conformance fixture probes.
-const _DE_DT_TIMES = [
-    0.0, -1.0, -0.5, -58039200.0, 1582979696.0,
-    1704067199.5, 86399.75, 86400.0,
-]
-
-# The flat slot of an element, whether or not the evaluator's map spells it with
-# the model namespace.
-function _de_slot(vmap, name::AbstractString)
-    haskey(vmap, name) && return vmap[name]
-    for (k, v) in vmap
-        endswith(String(k), "." * name) && return v
-    end
-    error("no flat slot named $name in $(collect(keys(vmap)))")
+        ),
+    ]
+    return _de_doc("LG", vars, eqs)
 end
 
 # ---- harness -----------------------------------------------------------------
@@ -501,7 +420,7 @@ function _de_halo(; NI = 6, NJ = 6, M = 7)
         "expr" => _de_Dt(_de_ix("out", "i", "j"))
     )
     doc = Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict{String, Any}("name" => "de_halo"),
         "models" => Dict{String, Any}(
             "R" => Dict{String, Any}(
@@ -1187,90 +1106,13 @@ end
         @test get(d.stats, :slice, 0) < get(dn.stats, :slice, 0)
     end
 
-    @testset "a closed `interp.linear` function" begin
-        fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_interpdoc(); form = :oop)
-        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_interpdoc())
-        # In range, on a knot, and both clamps.
-        samples = [
-            ([1.5], 0.0), ([2.0], 0.0), ([-1.0], 0.0), ([9.0], 0.0),
-            ([3.25], 1.0),
-        ]
-        # `_de_fn` routes a scalar-spine `interp.*` through the BRANCH-FREE lane
-        # evaluators, so every query position the scalar `_interp_linear_core`
-        # would branch on — in range, on a knot, and both clamps — lowers as the
-        # same straight-line program.
-        d, cd_ = _de_compare("interp_linear", fo, fi!, p, samples)
-        @test get(d.stats, :interp_linear, 0) == 1
-        @test get(cd_, "gather", 0) >= 1     # knot addressing, not a select ladder
-    end
-
-    @testset "the `datetime.*` calendar and `log10`" begin
-        fo, u0, p, _, vmap = EarthSciAST._build_evaluator(_de_dtdoc(); form = :oop)
-        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_dtdoc())
-        samples = [(copy(u0), t) for t in _DE_DT_TIMES]
-        d, cd_ = _de_compare("datetime_log10", fo, fi!, p, samples)
-        # Ten `:fn` calls lowered — the nine fields plus the offset `hour`.
-        @test get(d.stats, :closed_scalar, 0) >= 10
+    @testset "`log10`" begin
+        fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_log10doc(); form = :oop)
+        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_log10doc())
+        samples = [(copy(u0), t) for t in (0.0, 1.0)]
+        d, cd_ = _de_compare("log10", fo, fi!, p, samples)
         # `log10` is a `log` and a `divide`, never a `log10` op (there is none).
         @test get(cd_, "log", 0) >= 1
-
-        # THE EXACTNESS CLAIM, which `_de_compare`'s rtol cannot make: eight of
-        # the nine fields are integers and must come back BIT-IDENTICAL to the
-        # interpreter's at every one of the eight times. An hour that is one out
-        # is a difference of 1.0, so rtol would catch that too — what the `===`
-        # adds is that nothing in the decomposition is allowed to be
-        # approximately right.
-        #
-        # THE THREE THAT MAY MOVE, and exactly why each does:
-        #   * `julian_day`   — one rounded divide onto a ~2.4e6 day number; ≤ 1 ulp.
-        #   * `lg`           — `log10` synthesized as `log(x)/ln(10)`.
-        #   * `local_hour`   — an exact integer hour PLUS `lon/15`, and a divide
-        #     by a constant is not a divide by the time XLA is done with it (it
-        #     rewrites `x/c` to `x * fl(1/c)`; see `_cdiv`'s note in
-        #     src/registered_functions.jl, which is the same rewrite biting the
-        #     calendar itself). The two agree bit-for-bit at THIS `lon`, but
-        #     pinning that would pin an accident of one constant rather than
-        #     anything about the calendar, so the hour's correctness is pinned by
-        #     `c_hour` above — same times, same kernel — and this one carries the
-        #     tolerance.
-        dd = EXT_DE.direct_rhs(fo; var_map = vmap)
-        pr = _de_dev(p)
-        ur = RX_DE.ConcreteRArray(copy(u0))
-        xla = RX_DE.@compile sync = true dd(ur, pr, RX_DE.ConcreteRNumber(0.0))
-        exact = String["c_$f" for f in _DE_DT_FNS if f != "julian_day"]
-        for t in _DE_DT_TIMES
-            du_i = _de_ip(fi!, u0, p, t)
-            du_d = Array(
-                xla(
-                    RX_DE.ConcreteRArray(copy(u0)), pr,
-                    RX_DE.ConcreteRNumber(t)
-                )
-            )
-            for nm in exact
-                sl = _de_slot(vmap, nm)
-                @test du_d[sl] === du_i[sl]
-            end
-            sj = _de_slot(vmap, "c_julian_day")
-            @test abs(du_d[sj] - du_i[sj]) <= eps(du_i[sj])
-            for nm in ("lg", "local_hour")
-                sl = _de_slot(vmap, nm)
-                @test isapprox(du_d[sl], du_i[sl]; rtol = 1.0e-12, atol = 0.0)
-            end
-        end
-
-        # And the decomposition really did run: the eight times are not all the
-        # same date, so a program that ignored `t` would pass everything above.
-        yrs = Float64[]
-        for t in _DE_DT_TIMES
-            du_d = Array(
-                xla(
-                    RX_DE.ConcreteRArray(copy(u0)), pr,
-                    RX_DE.ConcreteRNumber(t)
-                )
-            )
-            push!(yrs, du_d[_de_slot(vmap, "c_year")])
-        end
-        @test sort!(unique(yrs)) == [1968.0, 1969.0, 1970.0, 2020.0, 2023.0]
     end
 
     # ---- prefix scans over slots the term build does not cover ---------------

@@ -2,7 +2,7 @@
  "category": "geometry_templates",
  "runner": "inline_tests",
  "version": "1.0",
- "description": "The pure-AST convex overlap-area templates of lib/geometry.esm (`overlap_area_planar`, `overlap_area_spherical`, `lonlat_to_unit`), standing in for the `polygon_intersection_area` leaf (esm-spec \u00a78.6.1), applied inside a `faq` over every cell pair (and behind the overlap join gate) and asserted against exact planar areas and Girard's-theorem spherical areas: identical, adjacent and corner-touching cells, nested and partial overlaps, a clockwise ring, a pentagon, and rings padded by repeated vertices. The vertex-slot counts are integer template arguments used as `faq` `ranges` bounds (esm-spec \u00a79.6.1).",
+ "description": "The pure-AST convex overlap-area templates of lib/geometry.esm (`overlap_area_planar`, `overlap_area_spherical`, `lonlat_to_unit`), applied inside a `faq` over every cell pair (and behind the overlap join gate) and asserted against exact planar areas and Girard's-theorem spherical areas: identical, adjacent and corner-touching cells, nested and partial overlaps, a clockwise ring, a pentagon, and rings padded by repeated vertices. The vertex-slot counts are integer template arguments used as `faq` `ranges` bounds (esm-spec \u00a79.6.1).",
  "reference_binding": "julia",
  "reference_compiler": "interpreter",
  "bindings_required": [
@@ -46,7 +46,6 @@
     "expression_templates",
     "faq",
     "geometry",
-    "polygon_intersection_area",
     "planar",
     "padded-ring",
     "join-gate"
@@ -77,7 +76,6 @@
     "expression_templates",
     "faq",
     "geometry",
-    "polygon_intersection_area",
     "spherical",
     "padded-ring"
    ],

@@ -81,6 +81,9 @@ def layer_dz(idx):
 
 #: A document whose expressions carry a unit-bearing `const` (esm-spec §4.8.5).
 CONST_UNITS_ESM_VERSION = "1.2.0"
+# A document that imports a standard-library template declares the format the
+# standard library is written in.
+TEMPLATE_ESM_VERSION = "2.0.0"
 
 
 def doc(name, description, index_sets, models, **top):
@@ -526,8 +529,9 @@ def regrid(n):
     """Conservative regrid of a decaying source field onto a shifted target strip grid.
 
     The assembly of tests/valid/geometry/conservative_regrid_assembly.esm
-    (bin-skolem broad phase, inline polygon_intersection_area narrow phase,
-    row-sum normalisation), with the source field made a state so the apply
+    (bin-key broad phase as one integer join column per bin coordinate, the
+    `overlap_area_planar` template of esm:std/geometry.esm as the narrow
+    phase, row-sum normalisation), with the source field made a state so the apply
     step runs on every right-hand-side call:
         D(F_src[i]) = -kd * F_src[i]
         F_rg[j] = sum_i W[i,j] * F_src[i]
@@ -536,7 +540,7 @@ def regrid(n):
     splits each pair of source cells [2m, 2m+2] at 2m+1.5, as the corpus
     fixture does, so each target cell overlaps one or two source cells
     fractionally and never straddles a broad-phase bin (dx = 2): the
-    bin-skolem candidate set keeps every overlapping pair, and the regrid
+    bin-key candidate set keeps every overlapping pair, and the regrid
     conserves mass. An odd last source cell is its own target cell.
     """
     src = [[[float(i), 0.0], [i + 1.0, 0.0], [i + 1.0, 1.0], [float(i), 1.0]] for i in range(n)]
@@ -548,7 +552,7 @@ def regrid(n):
     tgt = [[[bnd[j], 0.0], [bnd[j + 1], 0.0], [bnd[j + 1], 1.0], [bnd[j], 1.0]] for j in range(n)]
     S = {"from": "src_cells"}
     T = {"from": "tgt_cells"}
-    join = [{"on": [["src_bin", "tgt_bin"]]}]
+    join = [{"on": [["src_bin_c1", "tgt_bin_c1"], ["src_bin_c2", "tgt_bin_c2"]]}]
     alive = op(">", ix("A_ij", "i", "j"), "atol")
 
     def bbox_min(var, cells, sym, coord):
@@ -564,18 +568,11 @@ def regrid(n):
             },
         }
 
-    def binkey(var, lon, lat, sym, cells):
+    def binkey(var, coord, step, sym, cells):
         return {
             "lhs": ix(var, sym),
             "rhs": faq(
-                {
-                    "op": "skolem",
-                    "label": "bin",
-                    "args": [
-                        op("floor", op("/", ix(lon, sym), "dx")),
-                        op("floor", op("/", ix(lat, sym), "dy")),
-                    ],
-                },
+                op("floor", op("/", ix(coord, sym), step)),
                 [sym],
                 {sym: {"from": cells}},
                 semiring="sum_product",
@@ -597,8 +594,10 @@ def regrid(n):
         "src_lat": {"type": "unknown", "units": "1", "shape": ["src_cells"]},
         "tgt_lon": {"type": "unknown", "units": "1", "shape": ["tgt_cells"]},
         "tgt_lat": {"type": "unknown", "units": "1", "shape": ["tgt_cells"]},
-        "src_bin": {"type": "unknown", "units": "1", "shape": ["src_cells"]},
-        "tgt_bin": {"type": "unknown", "units": "1", "shape": ["tgt_cells"]},
+        "src_bin_c1": {"type": "unknown", "units": "1", "shape": ["src_cells"]},
+        "src_bin_c2": {"type": "unknown", "units": "1", "shape": ["src_cells"]},
+        "tgt_bin_c1": {"type": "unknown", "units": "1", "shape": ["tgt_cells"]},
+        "tgt_bin_c2": {"type": "unknown", "units": "1", "shape": ["tgt_cells"]},
         "A_ij": {"type": "unknown", "units": "1", "shape": ["src_cells", "tgt_cells"]},
         "A_j": {"type": "unknown", "units": "1", "shape": ["tgt_cells"]},
         "W_ij": {"type": "unknown", "units": "1", "shape": ["src_cells", "tgt_cells"]},
@@ -617,15 +616,25 @@ def regrid(n):
         bbox_min("src_lat", "src_cells", "i", 2),
         bbox_min("tgt_lon", "tgt_cells", "j", 1),
         bbox_min("tgt_lat", "tgt_cells", "j", 2),
-        binkey("src_bin", "src_lon", "src_lat", "i", "src_cells"),
-        binkey("tgt_bin", "tgt_lon", "tgt_lat", "j", "tgt_cells"),
+        binkey("src_bin_c1", "src_lon", "dx", "i", "src_cells"),
+        binkey("src_bin_c2", "src_lat", "dy", "i", "src_cells"),
+        binkey("tgt_bin_c1", "tgt_lon", "dx", "j", "tgt_cells"),
+        binkey("tgt_bin_c2", "tgt_lat", "dy", "j", "tgt_cells"),
         {
             "lhs": "A_ij",
             "rhs": faq(
                 {
-                    "op": "polygon_intersection_area",
-                    "manifold": "planar",
-                    "args": [ix("src_poly", "i"), ix("tgt_poly", "j")],
+                    "op": "apply_expression_template",
+                    "args": [],
+                    "name": "overlap_area_planar",
+                    "bindings": {
+                        "ring_a": "src_poly",
+                        "cell_a": "i",
+                        "nv_a": 4,
+                        "ring_b": "tgt_poly",
+                        "cell_b": "j",
+                        "nv_b": 4,
+                    },
                 },
                 ["i", "j"],
                 {"i": S, "j": T},
@@ -678,7 +687,11 @@ def regrid(n):
     assert len(bnd) == n + 1
     desc = f"conservative regrid of {n} unit source strips onto {n} shifted target strips, applied every call"
     isets = {"coord": 2, "cell_verts": 4, "src_cells": n, "tgt_cells": n}
-    return doc("regrid", desc, isets, {"Regrid": {"variables": v, "equations": eqs}}), {
+    imports = [{"ref": "esm:std/geometry.esm", "only": ["overlap_area_planar"]}]
+    model = {"expression_template_imports": imports, "variables": v, "equations": eqs}
+    d = doc("regrid", desc, isets, {"Regrid": model})
+    d["esm"] = TEMPLATE_ESM_VERSION
+    return d, {
         "cells": n,
         "states": 2 * n,
     }

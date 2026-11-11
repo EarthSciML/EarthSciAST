@@ -131,7 +131,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -241,7 +240,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -337,7 +335,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -472,7 +469,6 @@
       "index_sets": [
         "wind_noise"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -621,7 +617,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -825,7 +820,6 @@
       "index_sets": [
         "cells"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [
@@ -1071,7 +1065,6 @@
         ]
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [
         {
@@ -1375,7 +1368,6 @@
         ]
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [
@@ -1736,7 +1728,6 @@
         ]
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [
         {
@@ -2456,7 +2447,6 @@
         ]
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [
         {
@@ -2748,7 +2738,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -2953,7 +2942,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [
@@ -3163,7 +3151,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [
@@ -3424,7 +3411,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [
         {
@@ -3699,7 +3685,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -3860,11 +3845,11 @@
       "equations": [
         {
           "lhs": "EdgeEnumerationAreaEff.edge_exists[EdgeEnumerationAreaEff.edge]",
-          "rhs": "any[edge] (true) where {a in face_vertices(f), b in face_vertices(f), f in faces} if a < b distinct key=skolem(a, b, label=edge) id=edge_set [semiring=bool_and_or]",
+          "rhs": "any[edge] (true) where {a in face_vertices(f), b in face_vertices(f), f in faces} if a < b distinct key=ifelse(a >= 1 and a < 1 + 4 and b >= 1 and b < 1 + 4 and a == floor(a) and b == floor(b), (a - 1) * 4 + (b - 1), 0 / 0) id=edge_set [semiring=bool_and_or]",
           "source_system": "EdgeEnumerationAreaEff",
           "contributions": [
             {
-              "rhs": "any[edge] (true) where {a in face_vertices(f), b in face_vertices(f), f in faces} if a < b distinct key=skolem(a, b, label=edge) id=edge_set [semiring=bool_and_or]",
+              "rhs": "any[edge] (true) where {a in face_vertices(f), b in face_vertices(f), f in faces} if a < b distinct key=ifelse(a >= 1 and a < 1 + 4 and b >= 1 and b < 1 + 4 and a == floor(a) and b == floor(b), (a - 1) * 4 + (b - 1), 0 / 0) id=edge_set [semiring=bool_and_or]",
               "origins": [
                 {
                   "component": "EdgeEnumerationAreaEff"
@@ -3875,11 +3860,11 @@
         },
         {
           "lhs": "EdgeEnumerationAreaEff.edge_dense_id[EdgeEnumerationAreaEff.e]",
-          "rhs": "sum[e] (rank(EdgeEnumerationAreaEff.edges)) where {e in edges}",
+          "rhs": "sum[e] (e - 1) where {e in edges}",
           "source_system": "EdgeEnumerationAreaEff",
           "contributions": [
             {
-              "rhs": "sum[e] (rank(EdgeEnumerationAreaEff.edges)) where {e in edges}",
+              "rhs": "sum[e] (e - 1) where {e in edges}",
               "origins": [
                 {
                   "component": "EdgeEnumerationAreaEff"
@@ -3922,8 +3907,9 @@
         "edges",
         "edges_of_cell"
       ],
-      "function_tables": [],
-      "template_registry": [],
+      "template_registry": [
+        "pair_key"
+      ],
       "field_ics": [],
       "loader_fields": [],
       "lifted_shapes": {}
@@ -4033,7 +4019,6 @@
       "index_sets": [
         "cell"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -4105,7 +4090,7 @@
           "source_system": "Edges"
         },
         {
-          "name": "Edges.g",
+          "name": "Edges.k_argmin_1",
           "role": "parameter",
           "units": null,
           "default": 2.0,
@@ -4148,11 +4133,11 @@
         },
         {
           "lhs": "D(Edges.b)/Dt",
-          "rhs": "Edges.g * argmin[g] (Edges.w[g]) where {g in 1:3}",
+          "rhs": "Edges.k_argmin_1 * min[] (ifelse((Edges.w[k_argmin_1] == min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} or Edges.w[k_argmin_1] != Edges.w[k_argmin_1] and min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} != min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3}), k_argmin_1, 3 + 1)) where {k_argmin_1 in 1:3}",
           "source_system": "Edges",
           "contributions": [
             {
-              "rhs": "Edges.g * argmin[g] (Edges.w[g]) where {g in 1:3}",
+              "rhs": "Edges.k_argmin_1 * min[] (ifelse((Edges.w[k_argmin_1] == min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} or Edges.w[k_argmin_1] != Edges.w[k_argmin_1] and min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} != min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3}), k_argmin_1, 3 + 1)) where {k_argmin_1 in 1:3}",
               "origins": [
                 {
                   "component": "Edges"
@@ -4192,191 +4177,9 @@
       "index_sets": [
         "cell"
       ],
-      "function_tables": [],
-      "template_registry": [],
-      "field_ics": [],
-      "loader_fields": [],
-      "lifted_shapes": {}
-    },
-    {
-      "id": "function_tables_linear",
-      "tier": "function_tables",
-      "fixture": "conformance/function_tables/linear/fixture.esm",
-      "system_kind": "ode",
-      "independent_variables": [
-        "t"
+      "template_registry": [
+        "argmin"
       ],
-      "state_variables": [
-        {
-          "name": "M.k_O3",
-          "role": "state",
-          "units": null,
-          "default": 0.0,
-          "shape": null,
-          "update_kinds": [],
-          "distribution_kind": null,
-          "source_system": "M"
-        }
-      ],
-      "parameters": [
-        {
-          "name": "M.lambda",
-          "role": "parameter",
-          "units": null,
-          "default": 4.5,
-          "shape": null,
-          "update_kinds": [],
-          "distribution_kind": null,
-          "source_system": "M"
-        }
-      ],
-      "observed_variables": [],
-      "algebraic_variables": [],
-      "brownian_parameters": [],
-      "discrete_parameters": [],
-      "equation_count": 1,
-      "equations": [
-        {
-          "lhs": "D(M.k_O3)/Dt",
-          "rhs": "sigma_O3_298[lambda_idx=M.lambda]",
-          "source_system": "M",
-          "contributions": [
-            {
-              "rhs": "sigma_O3_298[lambda_idx=M.lambda]",
-              "origins": [
-                {
-                  "component": "M"
-                }
-              ]
-            }
-          ]
-        }
-      ],
-      "continuous_events": [],
-      "discrete_events": [],
-      "domain": null,
-      "metadata": {
-        "source_systems": [
-          "M"
-        ],
-        "coupling_rules": [],
-        "operator_applies": [],
-        "callbacks": []
-      },
-      "index_sets": [],
-      "function_tables": [
-        "sigma_O3_298"
-      ],
-      "template_registry": [],
-      "field_ics": [],
-      "loader_fields": [],
-      "lifted_shapes": {}
-    },
-    {
-      "id": "function_tables_bilinear",
-      "tier": "function_tables",
-      "fixture": "conformance/function_tables/bilinear/fixture.esm",
-      "system_kind": "ode",
-      "independent_variables": [
-        "t"
-      ],
-      "state_variables": [
-        {
-          "name": "M.j_NO2",
-          "role": "state",
-          "units": null,
-          "default": 0.0,
-          "shape": null,
-          "update_kinds": [],
-          "distribution_kind": null,
-          "source_system": "M"
-        },
-        {
-          "name": "M.j_O3",
-          "role": "state",
-          "units": null,
-          "default": 0.0,
-          "shape": null,
-          "update_kinds": [],
-          "distribution_kind": null,
-          "source_system": "M"
-        }
-      ],
-      "parameters": [
-        {
-          "name": "M.P_atm",
-          "role": "parameter",
-          "units": null,
-          "default": 100.0,
-          "shape": null,
-          "update_kinds": [],
-          "distribution_kind": null,
-          "source_system": "M"
-        },
-        {
-          "name": "M.cos_sza",
-          "role": "parameter",
-          "units": null,
-          "default": 0.5,
-          "shape": null,
-          "update_kinds": [],
-          "distribution_kind": null,
-          "source_system": "M"
-        }
-      ],
-      "observed_variables": [],
-      "algebraic_variables": [],
-      "brownian_parameters": [],
-      "discrete_parameters": [],
-      "equation_count": 2,
-      "equations": [
-        {
-          "lhs": "D(M.j_NO2)/Dt",
-          "rhs": "F_actinic[P=M.P_atm, cos_sza=M.cos_sza]:NO2",
-          "source_system": "M",
-          "contributions": [
-            {
-              "rhs": "F_actinic[P=M.P_atm, cos_sza=M.cos_sza]:NO2",
-              "origins": [
-                {
-                  "component": "M"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "lhs": "D(M.j_O3)/Dt",
-          "rhs": "F_actinic[P=M.P_atm, cos_sza=M.cos_sza]:1",
-          "source_system": "M",
-          "contributions": [
-            {
-              "rhs": "F_actinic[P=M.P_atm, cos_sza=M.cos_sza]:1",
-              "origins": [
-                {
-                  "component": "M"
-                }
-              ]
-            }
-          ]
-        }
-      ],
-      "continuous_events": [],
-      "discrete_events": [],
-      "domain": null,
-      "metadata": {
-        "source_systems": [
-          "M"
-        ],
-        "coupling_rules": [],
-        "operator_applies": [],
-        "callbacks": []
-      },
-      "index_sets": [],
-      "function_tables": [
-        "F_actinic"
-      ],
-      "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
       "lifted_shapes": {}
@@ -4532,7 +4335,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [
         "arrhenius"
       ],
@@ -4724,7 +4526,6 @@
       "index_sets": [
         "x"
       ],
-      "function_tables": [],
       "template_registry": [
         "sten",
         "A.s",
@@ -4842,7 +4643,6 @@
       "index_sets": [
         "x"
       ],
-      "function_tables": [],
       "template_registry": [
         "A.interior_stencil",
         "B.interior_stencil",
@@ -4961,7 +4761,6 @@
       "index_sets": [
         "x"
       ],
-      "function_tables": [],
       "template_registry": [
         "A.interior_stencil",
         "B.interior_stencil",
@@ -5150,7 +4949,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -5293,7 +5091,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -5469,7 +5266,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -5673,7 +5469,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -5809,7 +5604,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -6067,7 +5861,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -6224,7 +6017,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -6335,7 +6127,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [
         {
@@ -6422,7 +6213,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -6502,7 +6292,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -6794,7 +6583,6 @@
         "lon",
         "lat"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [
         {
@@ -6968,7 +6756,6 @@
         "cell",
         "lev"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -7084,7 +6871,6 @@
         "y",
         "x"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -7190,7 +6976,6 @@
         "_liftdim1_3",
         "_liftdim2_5"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -7338,7 +7123,6 @@
         "cell",
         "lev"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [
         {
@@ -7487,7 +7271,6 @@
         "cell",
         "lev"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -7578,7 +7361,6 @@
         "rec",
         "x"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [
@@ -7673,7 +7455,6 @@
         "rec",
         "x"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [
@@ -7788,7 +7569,6 @@
         "rec",
         "x"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -7875,7 +7655,6 @@
         "rec",
         "x"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [
@@ -7976,7 +7755,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -8069,7 +7847,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -8205,7 +7982,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -8362,7 +8138,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -8465,7 +8240,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -8578,7 +8352,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -8700,7 +8473,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -8827,7 +8599,6 @@
       "index_sets": [
         "x"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -8934,7 +8705,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [
         "decay"
       ],
@@ -9031,7 +8801,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -9137,7 +8906,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -9278,7 +9046,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -9408,7 +9175,6 @@
         "callbacks": []
       },
       "index_sets": [],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],
@@ -9796,7 +9562,6 @@
       "index_sets": [
         "cell"
       ],
-      "function_tables": [],
       "template_registry": [],
       "field_ics": [],
       "loader_fields": [],

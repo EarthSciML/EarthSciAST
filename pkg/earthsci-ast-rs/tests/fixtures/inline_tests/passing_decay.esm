@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "PassingDecayFixture",
     "description": "Inline-test fixture for the `esm test` CLI happy path. Single first-order decay with the closed form x(t) = x0 * exp(-k*t); the three assertions sample x at t=0, 50 and 100 and must all pass. Mirrors pkg/EarthSciAST.jl/test/fixtures/inline_tests/passing_decay.esm so the Julia and Rust runners are exercised on the same numbers.",

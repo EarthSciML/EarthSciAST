@@ -77,7 +77,7 @@ _tic_const(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v
 
 function _tic_doc(model; index_sets = Dict{String, Any}())
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "tic", "description" => "template instantiation cache test"),
         "index_sets" => index_sets,
         "models" => Dict("M" => model),
@@ -169,12 +169,12 @@ end
     end
 
     @testset "parameters in a scalar field fall back to the direct route" begin
-        # `m` lands in `manifold` and `nm` in a `fn` name: neither is an
-        # expression, a range bound or an output index, so the template is
-        # ineligible and every site is expanded directly.
+        # `nm` lands in a `broadcast`'s `fn`: not an expression, a range
+        # bound or an output index, so the template is ineligible and every
+        # site is expanded directly.
         tpl = Dict{String, Any}(
             "scaled" => Dict("params" => ["a", "k"], "body" => _tic_op("*", "a", _tic_op("+", "k", 1))),
-            "named" => Dict("params" => ["a", "nm"], "body" => _tic_op("fn", "a"; name = "nm")),
+            "named" => Dict("params" => ["a", "nm"], "body" => _tic_op("broadcast", "a"; fn = "nm")),
             "summed" => Dict(
                 "params" => ["v", "n", "i"],
                 "body" => Dict(
@@ -204,7 +204,7 @@ end
         cache = ESM._ExpandCache()
         @test ESM._tpl_skeleton("scaled", reg, cache) isa ESM._TplSkel
         @test ESM._tpl_skeleton("summed", reg, cache) isa ESM._TplSkel   # `n` is a range bound
-        @test ESM._tpl_skeleton("named", reg, cache) === nothing         # `nm` is a fn name
+        @test ESM._tpl_skeleton("named", reg, cache) === nothing         # `nm` is a broadcast `fn`
         @test _tic_agree(file) == 1
         # A site whose bindings name something other than the params goes direct.
         site = ESM.OpExpr(

@@ -68,7 +68,7 @@ fn aggregate_fixture_index_sets_is_document_scoped_and_round_trips() {
 /// document-scoped registry, not any per-model one).
 #[test]
 fn regrid_fixture_index_sets_is_document_scoped_and_round_trips() {
-    let json = fixture("valid/geometry/conservative_regrid_overlap_join.esm");
+    let json = fixture("valid/geometry/conservative_regrid_assembly.esm");
     let file = load_string(&json).unwrap_or_else(|e| panic!("load: {e}"));
 
     let sets = file
@@ -94,7 +94,7 @@ fn regrid_fixture_index_sets_is_document_scoped_and_round_trips() {
 
     // The `{from}` range references resolve against the DOCUMENT registry
     // (interval sets → dense intervals; derived sets → dynamic bounds). NOTE:
-    // this structural fixture's bin-Skolem `join.on` is a value-equality join
+    // this structural fixture's bin-key `join.on` is a value-equality join
     // over a data-derived column, which the dense evaluator deliberately does
     // not drive (an UnsupportedFeatureError, RFC §5.3) — orthogonal to the
     // index-set scope, so only the range resolution is exercised here.

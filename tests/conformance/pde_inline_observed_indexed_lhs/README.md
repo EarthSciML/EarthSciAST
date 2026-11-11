@@ -70,13 +70,13 @@ The three symptoms were:
    1–6 and 8 catch this. Assertion 7 passed even then, because `ws(0)` is
    genuinely zero — see the note on assertion 7 below.)
 2. **An indexed LHS with a PER-CELL right-hand side is silently dropped.**
-   `aggregate{k}(w[k]) ~ 2*u[k]`, with no `aggregate` on the right, raised
+   `faq{k}(w[k]) ~ 2*u[k]`, with no `faq` on the right, raised
    `RuntimeWarning: unrecognized algebraic equation … was not applied to the ODE
    RHS; any state it constrains stays frozen at its initial value` — and the
    state did stay frozen at its initial value.
 3. **An indexed-LHS observed feeding a WHOLE-ARRAY derivative is dropped the
    same way.** `D(u) ~ wf` left `u` at its initial value; spelling the
-   derivative `aggregate{k}(D(u[k])) ~ aggregate{k}(wf[k])` — which is what this
+   derivative `faq{k}(D(u[k])) ~ faq{k}(wf[k])` — which is what this
    fixture does — makes it integrate.
 
 All three are closed on `main` by **PR #276** (commit `bac8a6197`,
@@ -88,7 +88,7 @@ this PR adds. Complete reproducer documents for all three are in the body of
 ### One acceptance difference remains between the two halves
 
 The two normalizers agree on every document in the corpus and on this fixture,
-but not on one edge: an LHS aggregate shell spelling `"distinct": false`. The
+but not on one edge: an LHS faq shell spelling `"distinct": false`. The
 schema says an absent `distinct` **means** `false` ("Absent ⇒ false (ordinary
 array-producing reduction), exactly as today"), so the two spellings must
 behave alike. Julia declines to normalize only when `distinct` is **true**;

@@ -7,14 +7,13 @@ Shared fixture + analytic golden live under
 (``build_once_spatial_field_conformance_test.jl``) reproduces the same golden.
 
 Model ``Field`` declares three const polygon cells (``poly``), derives a per-cell
-``area[c] = polygon_intersection_area(poly[c], poly[c], planar) = [10, 30, 60]``
-(a geometry leaf), takes a build-once centered first difference authored as the
+``area[c] = [10, 30, 60]``, the overlap area of each cell with itself, takes a build-once centered first difference authored as the
 periodic ``makearray`` stencil a discretization rule lowers ``D`` to
 (``darea = [-15, 25, -10]``), and integrates the per-cell ODE
 ``D(u[c]) = darea[c] - u[c]``, u(0)=0. The forcing is CONST, so
 ``u_c(t) = darea_c (1 - e^-t)`` is analytic and network-free.
 
-Python evaluates ``polygon_intersection_area`` + ``makearray`` + the array ODE
+Python evaluates the area + ``makearray`` + the array ODE
 end-to-end (it resolves the build-once field at the RHS rather than at a separate
 setup pass, so the numeric result matches the Julia setup-materialized path)."""
 

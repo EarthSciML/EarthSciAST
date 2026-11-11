@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 /// document free of any unary-minus encoding.
 const DECAY: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": {
         "name": "progress_decay"
       },
@@ -61,7 +61,7 @@ const DECAY: &str = r#"
 /// `D(y[i])/dt = Σ_{j∈1..3} i*j` over `i ∈ 1..2` — a constant-RHS contraction.
 const ARRAY: &str = r#"
     {
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {
         "name": "progress_array"
       },

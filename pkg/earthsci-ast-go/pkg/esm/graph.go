@@ -209,8 +209,6 @@ func ComponentGraphFromFile(file *ESMFile) *ComponentGraph {
 	// draw (esm-spec §8, CONFORMANCE_SPEC §3.4). External data reaches a model
 	// through a PARAMETER of that model, which is already a node's variable.
 
-	// `operators` block removed in v0.3.0 (closed-function-registry RFC).
-
 	// Add edges for coupling entries
 	for _, coupling := range file.Coupling {
 		edges := createCouplingEdges(coupling, nodeMap)
@@ -760,8 +758,7 @@ func graphBoundIndexSymbols(node ExprNode) []string {
 //
 // It used to hand-roll its own recursion over `args` ONLY — and had no
 // `*ExprNode` case at all — so a dependency reachable through a sidecar field
-// (an aggregate's `expr`/`filter`, an integral's bounds, a `table_lookup`'s
-// `axes`, …) contributed NO edge to the dependency graph, silently (audit G11).
+// (an aggregate's `expr`/`filter`, an integral's bounds, …) contributed NO edge to the dependency graph, silently (audit G11).
 // It now shares the one field-preserving walk that backs FreeVariables.
 //
 // It does NOT share FreeVariables' answer, though. That function reports every

@@ -6,7 +6,7 @@ Every fixture under ``tests/valid/faq/`` is schema-valid AND must pass the
 full structural ``validate()`` verdict — not merely schema validation. These
 fixtures exercise the aggregate IR: LHS-aggregate ODEs (``op:aggregate`` whose
 contracted body is ``D(index(v, i))``), relational element assignments
-(``index(v, i) = aggregate(...)`` from skolem / distinct / rank), and contracted
+(``index(v, i) = aggregate(...)`` from ``distinct``), and contracted
 index symbols (``i``, ``j``, ``e``).
 
 The Python structural pass counts one equation entry per declared equation and

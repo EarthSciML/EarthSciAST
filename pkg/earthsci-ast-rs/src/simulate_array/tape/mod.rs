@@ -56,17 +56,6 @@
 //! A rule that reads an observed whose own rule declined declines too, at
 //! the read: there is no operand for a value that is not on the tape, so the
 //! decline list names the producer and every rule that reads it.
-//!
-//! ## Closed functions
-//!
-//! A fourth piece is likewise not an instruction. The esm-spec §9.2
-//! `datetime.*` family — `year`, `month`, `day`, `hour`, `minute`, `second`,
-//! `day_of_year`, `julian_day`, `is_leap_year` — is expanded at LOWERING time
-//! into the arithmetic above (one floored divmod by 86400, then floors,
-//! remainders, comparisons and selects on integer-valued `f64`s), so all
-//! three executors gained it at once and none of them can drift from
-//! another. The `interp.*` entries of the same registry are not lowered: they
-//! read a table, and a rule that calls one declines, naming the function.
 
 #[cfg(test)]
 mod array_tests;
@@ -79,7 +68,6 @@ mod exec;
 #[cfg(test)]
 mod forcing_tests;
 mod fuse;
-mod geom;
 #[cfg(test)]
 mod interp_template_tests;
 mod ir;

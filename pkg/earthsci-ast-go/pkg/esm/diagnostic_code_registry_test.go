@@ -10,7 +10,7 @@ package esm
 //
 //  1. A raise site never spells its code as a string literal. A raise site is
 //     the first argument of a package constructor whose first parameter is
-//     `code string` (newETErr, newClosedFunctionError, ...), a `Code:` /
+//     `code string` (newETErr, newEnumLoweringError, ...), a `Code:` /
 //     `code:` field in a composite literal, or an assignment to a `.Code` /
 //     `.code` field.
 //  2. A constant named at a raise site is a registry constant: a package-level

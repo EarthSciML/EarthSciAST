@@ -225,24 +225,14 @@ CASES: list[tuple[str, str, str]] = [
         "index_symbol_shadows_variable",
         "scoping/index_symbol_shadows_variable.esm",
     ),
-    # The same rule's edges: an `integral`'s `var` and a non-faq (`argmin`)
-    # `ranges` key shadow parameters of the same name, and a dotted `j.x`
+    # The same rule's edges: an `integral`'s `var` shadows a parameter of the
+    # same name, an `argmin` template call leaves the parameter `g` beside it
+    # alone, and a dotted `j.x`
     # reaching a subsystem `j` inside a node that binds `j` is still prefixed.
     (
         "arrayed",
         "loop_binder_shadowing_edges",
         "scoping/loop_binder_shadowing_edges.esm",
-    ),
-    # --- function_tables / table_lookup --------------------------------------
-    (
-        "function_tables",
-        "function_tables_linear",
-        "conformance/function_tables/linear/fixture.esm",
-    ),
-    (
-        "function_tables",
-        "function_tables_bilinear",
-        "conformance/function_tables/bilinear/fixture.esm",
     ),
     # --- expression templates: the merged template_registry ------------------
     # A reaction-system registry (carried unscoped by policy — a rate-law
@@ -722,7 +712,6 @@ def _record(flat) -> dict:
             "callbacks": list(flat.metadata.callbacks),
         },
         "index_sets": list(flat.index_sets),
-        "function_tables": list(flat.function_tables),
         "template_registry": list(flat.template_registry),
         "field_ics": [{"state": s, "expr": to_ascii(e)} for s, e in flat.field_ics],
         "loader_fields": [

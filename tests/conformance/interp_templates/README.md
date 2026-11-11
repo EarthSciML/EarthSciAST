@@ -1,14 +1,15 @@
 # Interpolation templates (`interp_templates`)
 
 `lib/interp.esm` is a template-library file (esm-spec §9.7.1) carrying the
-pure-AST definitions of the three `interp.*` closed functions as match-less
+pure-AST interpolation (what the three 1.x `interp.*` closed functions
+computed) as match-less
 expression templates: `searchsorted(x, xs, n)`, `linear(table, axis, x, n)` and
 `bilinear(table, axis_x, axis_y, x, y, nx, ny)`. Each finds its cell by a `faq`
 comparison count over `k` in `[1, n]`, the axis length being an integer template
 parameter used as a `ranges` bound (esm-spec §9.6.1), and evaluates in the order
-esm-spec §9.2 pins for the matching function. This tier checks, in every binding
+esm-spec 1.x §9.2 pinned for the matching function. This tier checks, in every binding
 with an inline-test runner and under every compiler, that the expanded template
-reproduces the `binary64` result the closed function is pinned to.
+reproduces the pinned `binary64` reference values of `tests/closed_functions`.
 
 ## The fixtures
 
@@ -30,12 +31,12 @@ is the Julia interpreter's.
 
 ## What is not here
 
-- The NaN-query scenarios: JSON cannot write a NaN default. Each binding's
-  harness runs every success scenario of `expected.json`, NaN queries included,
-  through both the `fn` form and the expanded template and compares the bits
-  (Julia: `test/closed_functions_test.jl`).
-- The `error_scenarios`: the templates do not repeat the load-time axis checks of
-  the `fn` form, so a malformed axis has no template counterpart.
+- The NaN-query scenarios: JSON cannot write a NaN default. The per-binding
+  harnesses that ran them through the expanded template compared it with the
+  `fn` form and were deleted with it at esm 2.0.0; Go still checks the
+  expansion of every scenario.
+- The `error_scenarios`: the templates do not repeat the load-time axis checks
+  the removed `fn` form made, so a malformed axis has no template counterpart.
 - That a template parameter in a `ranges` tuple is substituted at all:
   `tests/conformance/expression_templates/ranges_param/` pins that expansion
   structurally in all five bindings, Go and TypeScript included.

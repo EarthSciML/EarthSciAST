@@ -2,14 +2,13 @@
   "esm": "1.2.0",
   "metadata": {
     "name": "datetime_second_template",
-    "description": "The `second` template of lib/calendar.esm applied to scenarios of this directory's expected.json, which pins the same values for the `datetime.second` closed function (esm-spec §9.2). Each scenario is one algebraic unknown defined by an `apply_expression_template` call on a parameter (in seconds) holding the scenario's instant; the inline test asserts the expected value exactly (tolerance 0). The scenarios outside the template's domain |t| < 2^52 s, where it returns NaN, stay in the binding harnesses, since JSON cannot write NaN. Run by the `datetime_templates` inline-test conformance tier.",
+    "description": "The `second` template of lib/calendar.esm applied to scenarios of this directory's expected.json, which pins the binary64 reference values (those of the 1.x `datetime.second` closed function). Each scenario is one algebraic unknown defined by an `apply_expression_template` call on a parameter (in seconds) holding the scenario's instant; the inline test asserts the expected value exactly (tolerance 0). The scenarios outside the template's domain |t| < 2^52 s, where it returns NaN, stay in the binding harnesses, since JSON cannot write NaN. Run by the `datetime_templates` inline-test conformance tier.",
     "authors": [
       "EarthSciML"
     ],
     "tags": [
-      "closed-function-registry",
       "datetime",
-      "datetime.second",
+      "second",
       "expression-templates",
       "standard-library"
     ]

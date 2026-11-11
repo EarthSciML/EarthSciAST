@@ -698,9 +698,10 @@ func TestCrossModelFromFAQCorpusFixture(t *testing.T) {
 //
 //   - #2: `rg_candidate_pairs.from_faq` names `rg_candidate_set`, which lives in
 //     OceanDynamics while the registry entry is document-scoped.
-//   - #3: that producing node's `join.on == [["rg_src_bin","rg_tgt_bin"]]` names
+//   - #3: that producing node's `join.on` (per-coordinate bin columns
+//     `rg_src_bin_c1`/`_c2` against `rg_tgt_bin_c1`/`_c2`) names
 //     declared model VARIABLES — per-cell value-invention bin buffers written by
-//     equations 0 and 1 — rather than node-local binders. Both columns now
+//     equations 0 and 1 — rather than node-local binders. All four columns now
 //     resolve through the variable class of `joinBinderClass`.
 func TestWildfireFixtureResolvesFully(t *testing.T) {
 	doc := readRawDocument(t, filepath.Join(
@@ -713,16 +714,20 @@ func TestWildfireFixtureResolvesFully(t *testing.T) {
 	if !ok {
 		t.Fatalf("no OceanDynamics graph; got %v", graphs)
 	}
-	// The join column that used to fail now carries its edge.
-	var found bool
-	for _, e := range g.EdgesOfKind(EdgeKindJoinFactor) {
-		if e.Target == factorKeyOf("rg_src_bin") {
-			found = true
+	// The join columns that used to fail now carry their edges. Since esm
+	// 2.0.0 the two-coordinate bin key is one column pair per coordinate; only
+	// the LEFT column of each pair is edged (the right one is diagnosed only).
+	for _, col := range []string{"rg_src_bin_c1", "rg_src_bin_c2"} {
+		var found bool
+		for _, e := range g.EdgesOfKind(EdgeKindJoinFactor) {
+			if e.Target == factorKeyOf(col) {
+				found = true
+			}
 		}
-	}
-	if !found {
-		t.Fatalf("no join_factor edge to factor:rg_src_bin in %v",
-			edgeStrings(g.EdgesOfKind(EdgeKindJoinFactor)))
+		if !found {
+			t.Fatalf("no join_factor edge to factor:%s in %v", col,
+				edgeStrings(g.EdgesOfKind(EdgeKindJoinFactor)))
+		}
 	}
 }
 

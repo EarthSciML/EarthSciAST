@@ -60,7 +60,7 @@ fn enums_block_round_trips_through_save_reload() {
 fn unknown_enum_rejected_at_load() {
     let bad = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "BadEnum"
           },
@@ -104,7 +104,7 @@ fn unknown_enum_rejected_at_load() {
 fn unknown_enum_symbol_rejected_at_load() {
     let bad = r#"
         {
-          "esm": "1.0.0",
+          "esm": "2.0.0",
           "metadata": {
             "name": "BadEnumSym"
           },

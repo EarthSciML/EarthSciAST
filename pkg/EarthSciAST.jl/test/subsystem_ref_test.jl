@@ -368,7 +368,7 @@ using JSON3
         end
     end
 
-    @testset "top-level model ref merges component function_tables" begin
+    @testset "a mounted component's `function_tables` is refused (removed at 2.0.0)" begin
         tmp_dir = mktempdir()
         try
             write(
@@ -396,10 +396,14 @@ using JSON3
                     "models": {"Comp": {"ref": "./child.esm"}}
                 }"""
             )
-            loaded = EarthSciAST.load_path(main_path)
-            # The table_lookup the spliced model references resolves at the parent.
-            @test loaded.function_tables !== nothing
-            @test haskey(loaded.function_tables, "sig")
+            err = try
+                EarthSciAST.load_path(main_path)
+                nothing
+            catch e
+                e
+            end
+            @test err !== nothing
+            @test occursin("removed_op", sprint(showerror, err))
         finally
             rm(tmp_dir, recursive = true, force = true)
         end

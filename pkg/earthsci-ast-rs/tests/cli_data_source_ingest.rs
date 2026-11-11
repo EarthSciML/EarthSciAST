@@ -144,7 +144,7 @@ fn document(url: &str, extra_reader_options: Option<(&str, Value)>, sizing: Sizi
         reader_options[k] = v;
     }
     json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {
             "name": "DataSourceIngestCli",
             "description": "One data source, one bound parameter, one inline test on its column mean."
@@ -595,7 +595,7 @@ fn an_ingested_parameter_of_a_mounted_subsystem_is_assertable() {
     let mut leaf_model = base["models"]["Ingest"].clone();
     leaf_model.as_object_mut().expect("model").remove("tests");
     let leaf = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Leaf", "description": "A model with one data-fed column."},
         "metaparameters": base["metaparameters"].clone(),
         "index_sets": base["index_sets"].clone(),
@@ -603,7 +603,7 @@ fn an_ingested_parameter_of_a_mounted_subsystem_is_assertable() {
     });
     write_doc(tmp.path(), "leaf.esm", &leaf);
     let host = json!({
-        "esm": "1.1.0",
+        "esm": "2.0.0",
         "metadata": {"name": "Host", "description": "Mounts the leaf and asserts on its input."},
         "data_sources": base["data_sources"].clone(),
         "models": {"Host": {

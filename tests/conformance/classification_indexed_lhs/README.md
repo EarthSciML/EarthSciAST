@@ -15,7 +15,7 @@ and states the criterion semantically rather than syntactically:
 
 This category exists because **four of the five bindings got that wrong
 independently**, and no shared fixture could have caught any of them: the
-`classification` category next door contains no `index` or `aggregate` LHS at
+`classification` category next door contains no `index` or `faq` LHS at
 all, so the indexed spelling was unpinned everywhere.
 
 - Julia — issue #232, PR #250 (the tree-walk build's owner buckets)
@@ -30,17 +30,17 @@ cannot pass by widening indiscriminately:
 
 | Variable | LHS spelling | Must classify as |
 |---|---|---|
-| `wf` | `aggregate{k}(index(wf, k))`, **state-free** RHS | observed |
-| `ws` | `aggregate{k}(index(ws, k))`, **state-dependent** RHS | observed |
+| `wf` | `faq{k}(index(wf, k))`, **state-free** RHS | observed |
+| `ws` | `faq{k}(index(ws, k))`, **state-dependent** RHS | observed |
 | `wb` | `index(wb, i)` — §6.3.1's own worked-example spelling | observed |
 | `sc` | bare `sc` — the rank-0 control | observed |
-| `u`, `v` | `aggregate{k}(D(u[k]))` — the **same shell**, over a `D` | ODE state |
+| `u`, `v` | `faq{k}(D(u[k]))` — the **same shell**, over a `D` | ODE state |
 | `im` | `im*im ~ c0` — a genuine expression LHS | algebraic |
 
 `u` and `v` are the point of the design. Their derivative LHSs wear exactly the
-`aggregate` shell that `wf` and `ws` wear, so a reader that unwraps it
+`faq` shell that `wf` and `ws` wear, so a reader that unwraps it
 indiscriminately steals them out of `ode_states` and calls them observed. The
-correct rule is narrow: unwrap an `aggregate` whose `expr` is an `index`, never
+correct rule is narrow: unwrap a `faq` whose `expr` is an `index`, never
 one whose `expr` is a `D`. Every binding's *derivative* reader already peeled
 this shell; four of five *observed* readers did not, and that asymmetry is the
 whole content of the category.
@@ -59,9 +59,9 @@ This category was authored while the Python half was still open, and kept python
 in `bindings_required` rather than moving it to `scope_excluded` — defining the
 contract down to what already passes is the weaker use of the mechanism (PR
 #250's precedent). Python answered `observed_unknowns = ['sc', 'wb']` and
-`algebraic_unknowns = ['im', 'wf', 'ws']` — missing both aggregate-indexed
+`algebraic_unknowns = ['im', 'wf', 'ws']` — missing both faq-indexed
 observeds — until PR #276 (issue #232's Python half) landed
-`classification._base_name`'s aggregate unwrap. Julia and Rust were already
+`classification._base_name`'s faq unwrap. Julia and Rust were already
 correct; Go and TypeScript are corrected in PR #268.
 
 ## The flatten buckets — **issue #270**

@@ -56,7 +56,7 @@ function _join_doc(
     )
     merge!(sets, extra_sets)
     return Dict(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "join_on_gate"),
         "index_sets" => sets,
         "models" => Dict(
@@ -422,7 +422,7 @@ end
 # the full product, and visited 0 gate-driven leaves.
 @testset "an index-set member key column drives too (BEHAV-10-B-004)" begin
     doc = Dict(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "join_on_member_columns"),
         "index_sets" => Dict(
             "src_cat" => Dict(
@@ -486,7 +486,7 @@ end
 # to change it — under both compilers (CONFORMANCE_SPEC §5.5.8).
 @testset "a key column computed from a parameter is baked into the gate" begin
     doc(off) = Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "param_key"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "param_key"),
         "index_sets" => Dict(
             "rows" => Dict("kind" => "interval", "size" => 4),
             "keys" => Dict("kind" => "interval", "size" => 2)
@@ -579,7 +579,7 @@ end
         ]
     )
     doc = Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "gated_key"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "gated_key"),
         "index_sets" => Dict(
             "rows" => Dict("kind" => "interval", "size" => 4),
             "keys" => Dict("kind" => "interval", "size" => 3)

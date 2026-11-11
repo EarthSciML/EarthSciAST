@@ -1,10 +1,10 @@
 {
   "category": "determinism_conformance",
   "version": "1.0",
-  "description": "Static golden example for the cross-binding determinism contract (CONFORMANCE_SPEC.md §5.5, RFC semiring-faq-unified-ir §5.7). Each fixture pins a byte-identical serialized index set and the canonical dense-ID array a conforming producer MUST emit for the value-invention primitives (skolem / distinct / rank) and group-by faq joins. Adversarial input variants (permuted, duplicated, reversed orientation) MUST collapse to the identical golden output, proving order-, duplicate-, and orientation-independence. The M2 joins and M3 relational engine have landed: each binding (Julia / Rust / Python) ships a thin adapter (scripts/run-determinism-conformance.py + EARTHSCI_DETERMINISM_ADAPTER_<BINDING>) and the runner asserts every adapter's serialized index set + base-normalized dense IDs are byte-identical to this golden — for the canonical input AND every adversarial variant. `bindings_required` lists all three, so a missing or mismatching producer fails the gate. The embedded reference implementation remains the --self-test green check.",
+  "description": "Static golden example for the cross-binding determinism contract (CONFORMANCE_SPEC.md §5.5, RFC semiring-faq-unified-ir §5.7). Each fixture pins a byte-identical serialized index set and the canonical dense-ID array a conforming producer MUST emit for value invention (an integer key, `distinct`, dense IDs) and group-by faq joins. Adversarial input variants (permuted, duplicated, reversed orientation) MUST collapse to the identical golden output, proving order-, duplicate-, and orientation-independence. The M2 joins and M3 relational engine have landed: each binding (Julia / Rust / Python) ships a thin adapter (scripts/run-determinism-conformance.py + EARTHSCI_DETERMINISM_ADAPTER_<BINDING>) and the runner asserts every adapter's serialized index set + base-normalized dense IDs are byte-identical to this golden — for the canonical input AND every adversarial variant. `bindings_required` lists all three, so a missing or mismatching producer fails the gate. The embedded reference implementation remains the --self-test green check.",
   "canonical_rank_base": 0,
   "rank_base_pin": {
-    "_doc": "rank assigns dense IDs by position in the sorted distinct sequence. Conformance asserts on the CANONICAL numbering (0-based, language-neutral position). Each binding emits in its native base and the adapter declares it; the harness normalizes reported IDs to canonical via (reported - emission_base) before comparison. Go/TS receive the additive schema only (no evaluator/producer) and are N/A here.",
+    "_doc": "Dense IDs are positions in the sorted distinct sequence. Conformance asserts on the CANONICAL numbering (0-based, language-neutral position). Each binding emits in its native base and the adapter declares it; the harness normalizes reported IDs to canonical via (reported - emission_base) before comparison. Go/TS receive the additive schema only (no evaluator/producer) and are N/A here.",
     "julia": 1,
     "rust": 0,
     "python": 0
@@ -16,7 +16,7 @@
       "id": "edge_enumeration",
       "primitive": "skolem_distinct_rank",
       "skolem": "undirected",
-      "doc": "Enumerate the unique undirected edges of a 2-triangle mesh (two faces sharing edge {2,3}). Directed edges are derived by traversing consecutive vertices of each face (with wraparound); skolem canonicalizes each to (min,max); distinct sorts by total order and drops adjacent duplicates; rank assigns dense IDs by position. The shared edge appears in both faces with OPPOSITE orientation and MUST collapse to a single canonical key.",
+      "doc": "Enumerate the unique undirected edges of a 2-triangle mesh (two faces sharing edge {2,3}). Directed edges are derived by traversing consecutive vertices of each face (with wraparound); the key canonicalizes each to (min,max) (the fixture's `skolem` mode `undirected`); distinct sorts by total order and drops adjacent duplicates; dense IDs are positions in that order. The shared edge appears in both faces with OPPOSITE orientation and MUST collapse to a single canonical key.",
       "inputs": {
         "canonical": { "faces": [[1, 2, 3], [3, 2, 4]] },
         "variants": {
@@ -35,7 +35,7 @@
       "id": "directed_arcs",
       "primitive": "skolem_distinct_rank",
       "skolem": "directed",
-      "doc": "Distinct over a directed relation: orientation is significant, so (1,2) and (2,1) are DISTINCT keys (contrast edge_enumeration). skolem preserves tuple order; exact-duplicate arcs are dropped by distinct; output is sorted by total order.",
+      "doc": "Distinct over a directed relation: orientation is significant, so (1,2) and (2,1) are DISTINCT keys (contrast edge_enumeration). the key preserves tuple order (`skolem` mode `directed`); exact-duplicate arcs are dropped by distinct; output is sorted by total order.",
       "inputs": {
         "canonical": { "tuples": [[1, 2], [2, 1], [2, 3], [1, 2]] },
         "variants": {

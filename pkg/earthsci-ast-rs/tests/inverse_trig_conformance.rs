@@ -15,7 +15,7 @@
 //! other bindings. The fixture uses `atan2(1, -1) = 3*pi/4` (second quadrant)
 //! so the assertion exercises the 2-arg quadrant resolution, not a bare ratio.
 //! These leaves back the spherical-geometry FAQs (great-circle arc `R*acos`,
-//! lat/lon `asin`/`atan2`) consumed by M4 `polygon_area` (ess-my4.4.3) and the
+//! lat/lon `asin`/`atan2`) of the `lib/geometry.esm` overlap areas and the
 //! ESD-DUO geometry beads.
 
 #![cfg(not(target_arch = "wasm32"))]

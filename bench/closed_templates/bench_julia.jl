@@ -1,21 +1,19 @@
-# Template versus closed form, Julia native side (closed-AST phase 3).
+# Closed-AST templates, Julia native side.
 #
-# For each workload pair written by generate.py (in DIR, or, with no DIR or
+# For each template workload written by generate.py (in DIR, or, with no DIR or
 # `-`, generated at the default sizes into $CLOSED_TEMPLATES_DIR, else
 # closed_templates under $TMPDIR):
 #
-#   solar_year_{fn,tpl}_H<h>        datetime.* fn calls vs lib/calendar.esm
-#   regrid_<m>_{leaf,tpl}_N<n>      polygon_intersection_area vs lib/geometry.esm
-#   nearest_{op,tpl}_P<p>_G<g>      argmin vs lib/relational.esm
+#   solar_year_tpl_H<h>        the lib/calendar.esm templates
+#   regrid_<m>_tpl_N<n>        the lib/geometry.esm overlap-area templates
+#   nearest_tpl_P<p>_G<g>      the lib/relational.esm argmin template
 #
 # it reports the build time (first build, which includes Julia compilation, and
 # a second build of the same document), the first right-hand-side call, and the
-# median steady call (the time moved every call), and checks the template's
-# derivative against the interpreter's bit for bit (and, for the calendar and
-# argmin, against the closed form's; the geometry leaf is GeometryOps, so its
-# areas are compared only by their largest difference).
+# median steady call (the time moved every call), and checks the native
+# derivative against the interpreter's bit for bit.
 #
-# Usage (an environment with EarthSciAST, JSON3 and GeometryOps):
+# Usage (an environment with EarthSciAST and JSON3):
 #
 #     julia --project=<env> bench/closed_templates/bench_julia.jl [DIR|-] [name-filter…]
 #
@@ -24,7 +22,6 @@
 # at P500 x G100 it needs tens of GB: check it at a smaller size).
 
 using EarthSciAST, JSON3, Statistics, Printf
-import GeometryOps
 
 const E = EarthSciAST
 include(joinpath(@__DIR__, "docs.jl"))
@@ -44,8 +41,8 @@ function build(path, compiler)
     t0 = time_ns()
     prob = E.esm_problem(path, (0.0, 1.0); compiler = compiler)
     dt = (time_ns() - t0) / 1.0e9
-    # A state that differs from cell to cell, the same per name in every
-    # spelling, so a regrid's derivative depends on every weight.
+    # A state that differs from cell to cell, so a regrid's derivative depends
+    # on every weight.
     u = copy(prob.u0)
     for (r, k) in enumerate(sort!(collect(keys(prob.var_map))))
         u[prob.var_map[k]] += r / 64
@@ -87,58 +84,32 @@ function dus(f!, u0, p, vm)
 end
 
 same(a, b) = keys(a) == keys(b) && all(all(a[k] .=== b[k]) for k in keys(a))
-maxdiff(a, b) = maximum(maximum(abs.(a[k] .- b[k])) for k in keys(a))
 
-pairs = [
-    (r"^solar_year_fn_(H\d+)\.esm$", "fn", "tpl", "solar_year_tpl_"),
-    (r"^regrid_(\w+?)_leaf_(N\d+)\.esm$", "leaf", "tpl", ""),
-    (r"^nearest_op_(P\d+_G\d+)\.esm$", "op", "tpl", "nearest_tpl_"),
-]
+const TEMPLATE_DOCS = (r"^solar_year_tpl_H\d+\.esm$", r"^regrid_\w+?_tpl_N\d+\.esm$", r"^nearest_tpl_P\d+_G\d+\.esm$")
 
 for f in sort(readdir(DIR))
-    for (re, cf, _, _) in pairs
-        m = match(re, f)
-        m === nothing && continue
-        isempty(FILTERS) || any(occursin(x, f) for x in FILTERS) || continue
-        tf = replace(f, "_$(cf)_" => "_tpl_")
-        isfile(joinpath(DIR, tf)) || continue
-        rows = Dict{String, Any}()
-        ok = true
-        for (lab, file) in ((cf, f), ("tpl", tf))
-            path = joinpath(DIR, file)
-            b1 = try
-                build(path, :native)
-            catch err
-                @printf("%-34s %-4s FAILED to build: %s\n", file, lab, first(sprint(showerror, err), 400))
-                ok = false
-                break
-            end
-            b2 = build(path, :native)
-            f!, u0, p, vm, tb, tally = b2
-            fc = first_call(f!, u0, p)
-            st = steady(f!, u0, p)
-            rows[lab] = (b1[5], tb, fc, st, dus(f!, u0, p, vm), tally, length(u0))
-            @printf(
-                "%-34s %-4s states %7d  build %8.3fs (first %8.3fs)  first call %10.6fs  call %12.3f us\n",
-                file, lab, length(u0), tb, b1[5], fc, st * 1.0e6
-            )
-            if lab == "tpl"
-                @printf("    tally: %s\n", join(("$k=$v" for (k, v) in sort(collect(tally); by = first)), " "))
-            end
-        end
-        ok || continue
-        dt, dc = rows["tpl"][5], rows[cf][5]
-        if cf == "leaf"
-            @printf("    template vs leaf derivative: max |diff| %.3e\n", maxdiff(dt, dc))
-        else
-            @printf("    template vs %s derivative bit-identical: %s\n", cf, same(dt, dc))
-        end
-        if INTERP_CHECK
-            fi, ui, pi_, vmi, _, _ = build(joinpath(DIR, tf), :interpreter)
-            di = dus(fi, ui, pi_, vmi)
-            @printf("    template native vs interpreter bit-identical: %s\n", same(dt, di))
-        end
-        @printf("    ratio template/%s: build %.2f  call %.2f\n", cf, rows["tpl"][2] / rows[cf][2], rows["tpl"][4] / rows[cf][4])
-        flush(stdout)
+    any(re -> match(re, f) !== nothing, TEMPLATE_DOCS) || continue
+    isempty(FILTERS) || any(occursin(x, f) for x in FILTERS) || continue
+    path = joinpath(DIR, f)
+    b1 = try
+        build(path, :native)
+    catch err
+        @printf("%-34s FAILED to build: %s\n", f, first(sprint(showerror, err), 400))
+        continue
     end
+    f!, u0, p, vm, tb, tally = build(path, :native)
+    fc = first_call(f!, u0, p)
+    st = steady(f!, u0, p)
+    @printf(
+        "%-34s states %7d  build %8.3fs (first %8.3fs)  first call %10.6fs  call %12.3f us\n",
+        f, length(u0), tb, b1[5], fc, st * 1.0e6
+    )
+    @printf("    tally: %s\n", join(("$k=$v" for (k, v) in sort(collect(tally); by = first)), " "))
+    if INTERP_CHECK
+        dt = dus(f!, u0, p, vm)
+        fi, ui, pi_, vmi, _, _ = build(path, :interpreter)
+        di = dus(fi, ui, pi_, vmi)
+        @printf("    native vs interpreter bit-identical: %s\n", same(dt, di))
+    end
+    flush(stdout)
 end

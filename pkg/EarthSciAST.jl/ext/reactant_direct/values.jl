@@ -235,8 +235,8 @@ _de_site!(ctx::_DECtx, pre::Symbol, why::Symbol) =
 _de_res(op) = _MLIR.IR.result(op)
 
 # `_DEVal` ↔ Reactant's traced array, for the two places that reuse Reactant's
-# own op builders rather than building the op here: the `interp.*` knot seams
-# (interp.jl) and the long-fold `stablehlo.reduce` (`_de_fold_terms`). Both are
+# own op builders rather than building the op here: the comparison count
+# (closed.jl) and the long-fold `stablehlo.reduce` (`_de_fold_terms`). Both are
 # O(1) in the grid, so the program stays IR-shaped either way.
 _de_traced(a::_DEVal) = TracedRArray{Float64, 1}((), a.v, (a.len,))
 _de_untraced(x::TracedRArray{Float64, 1}) = _DEVal(x.mlir_data, length(x))

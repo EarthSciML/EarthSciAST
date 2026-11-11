@@ -1,10 +1,9 @@
 # ========================================================================
 # tree_walk/geometry_setup.jl — part of the tree-walk evaluator (gt-e8yw).
 # Included by src/tree_walk.jl; see that file for the full layout and
-# include order. Section 2 (build-time geometry): the M4 intersect_polygon clip kernel,
-# the fused polygon_intersection_area leaf, ranged clips, the setup-time
-# geometry materializers (_GeoCtx; the body COMPILER lives in
-# tree_walk/geometry_compile.jl), and binning-coordinate derivation.
+# include order. Section 2 (build-time setup arrays): the setup-time
+# materializers of build-once array observeds (_GeoCtx; the body COMPILER lives
+# in tree_walk/geometry_compile.jl), and binning-coordinate derivation.
 # ========================================================================
 
 # ============================================================
@@ -14,180 +13,11 @@
 # docstring) lives after `_build_evaluator_impl` below; this section starts
 # with the build-time geometry helpers it depends on.
 
-# ============================================================
-# M4 geometry kernel — build-time intersect_polygon clip (RFC §8.1 / Appendix B)
-# ============================================================
-#
-# The `intersect_polygon` leaf runs at SETUP time (RFC Appendix B.1): its polygon
-# operands are build-time-known parameters supplied via `const_arrays`, so the clip
-# is evaluated ONCE here into a closed vertex ring. The ring is registered as a 2D
-# const_array (read by the `polygon_area` FAQ as `index(clip, v, c)`) and its
-# distinct-vertex count feeds the `kind:"derived"` index set the FAQ ranges over —
-# so `polygon_area` rides the existing M1 aggregate machinery unchanged.
-#
-# All of this is guarded behind "an equation uses intersect_polygon", so every
-# non-geometry file compiles byte-identically.
-
-# True iff any node in the subtree is an intersect_polygon op.
-# INTENTIONAL field subset (behavior-pinned — do NOT widen to `child_exprs`
-# coverage without a spec decision): walks args / expr_body only, NOT lower /
-# upper / filter / key / values / table_axes / ranges bounds. A clip nested in
-# e.g. a makearray region value would not seed the geometry-setup pass —
-# flagged for Wave 3.
-# Identity-deduped existence predicate (ESS-0hh): path-multiplicity-
-# insensitive, so the visited set is exactly equivalent — and O(nodes) on the
-# structurally-shared trees the fold/template passes produce.
-_expr_has_intersect_polygon(e::OpExpr) =
-    _expr_has_intersect_polygon(e, IdDict{OpExpr, Nothing}())
-function _expr_has_intersect_polygon(e::OpExpr, seen::IdDict{OpExpr, Nothing})
-    e.op == "intersect_polygon" && return true
-    haskey(seen, e) && return false
-    seen[e] = nothing
-    for a in e.args
-        a isa OpExpr && _expr_has_intersect_polygon(a, seen) && return true
-    end
-    return e.expr_body isa OpExpr &&
-        _expr_has_intersect_polygon(e.expr_body::OpExpr, seen)
-end
-_expr_has_intersect_polygon(::ASTExpr) = false
-_equations_have_intersect_polygon(eqs) =
-    any(eq -> _expr_has_intersect_polygon(eq.lhs) || _expr_has_intersect_polygon(eq.rhs), eqs)
-
-# From esm 1.0.0 an intersect_polygon lives in an equation LHS/RHS and nowhere
-# else: an observed unknown's defining body IS its equation, so the shared
-# geometry fixtures' clip rings are reached by the same walk as everything else.
-_model_has_intersect_polygon(model::Model) =
-    _equations_have_intersect_polygon(model.equations)
-
-# Resolve an intersect_polygon polygon operand to its const-array matrix. The clip
-# runs at setup, so each operand must be a constant factor (esm-spec §4.2): a
-# variable supplied in `const_arrays`, or an unknown whose defining equation is an
-# array `const` node (materialized into `const_obs`).
-function _geometry_operand(
-        arg::ASTExpr, const_arrays_kw::AbstractDict, who::AbstractString,
-        const_obs::AbstractDict = _EMPTY_CONST_OBS
-    )
-    arg isa VarExpr || throw(
-        TreeWalkError(
-            "E_TREEWALK_GEOMETRY_OPERAND",
-            "intersect_polygon operand for '$who' must be a polygon variable name"
-        )
-    )
-    name = (arg::VarExpr).name
-    haskey(const_arrays_kw, name) && return const_arrays_kw[name]
-    haskey(const_obs, name) && return const_obs[name]
-    throw(
-        TreeWalkError(
-            "E_TREEWALK_GEOMETRY_OPERAND",
-            "intersect_polygon operand '$name' for '$who' must be a constant factor: supplied " *
-                "in `const_arrays`, or an unknown defined by an array `const` node (the clip runs " *
-                "at setup time; RFC Appendix B.1)"
-        )
-    )
-end
-const _EMPTY_CONST_OBS = Dict{String, Array{Float64}}()
-
-# Run one setup-time polygon clip, translating the geometry kernel's
-# `GeometryError` into the build-time diagnostic (`E_TREEWALK_GEOMETRY_CLIP`).
-# Shared by the single-ring materializer and the fused
-# `polygon_intersection_area` leaf. The RANGED clip
-# (`_materialize_ranged_clip`) deliberately does NOT use this wrapper: there a
-# failed / degenerate per-pair clip is a normal zero-area cell (RFC §5.8), not
-# an error.
-function _clip_or_treewalk_error(poly_a, poly_b, manifold::AbstractString)
-    try
-        return intersect_polygon(poly_a, poly_b, manifold)
-    catch err
-        err isa GeometryError &&
-            throw(TreeWalkError("E_TREEWALK_GEOMETRY_CLIP", err.msg))
-        rethrow()
-    end
-end
-
-# Evaluate every intersect_polygon clip ring at setup. Returns
-# `(rings, extents)`: observed-var-name → CLOSED ring matrix `[n+1, 2]`, and
-# `from_faq` key (the clip node `id` AND the observed var name) → distinct vertex
-# count `n`. `geom_ring_vars` are the observed vars whose RHS is intersect_polygon.
-function _materialize_geometry_rings(
-        equations, const_arrays_kw::AbstractDict,
-        geom_ring_vars::Set{String},
-        const_obs::AbstractDict = _EMPTY_CONST_OBS
-    )
-    rings = Dict{String, Matrix{Float64}}()
-    extents = Dict{String, Int}()
-    for eq in equations
-        eq.lhs isa VarExpr || continue
-        vname = (eq.lhs::VarExpr).name
-        vname in geom_ring_vars || continue
-        rhs = eq.rhs
-        (rhs isa OpExpr && (rhs::OpExpr).op == "intersect_polygon") || continue
-        op = rhs::OpExpr
-        manifold = op.manifold
-        manifold === nothing && throw(
-            TreeWalkError(
-                "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-                "intersect_polygon observed '$vname' requires a `manifold` (planar / spherical / geodesic)"
-            )
-        )
-        length(op.args) == 2 || throw(
-            TreeWalkError(
-                "E_TREEWALK_GEOMETRY_ARITY",
-                "intersect_polygon is strictly binary; '$vname' has $(length(op.args)) operand(s)"
-            )
-        )
-        poly_a = _geometry_operand(op.args[1], const_arrays_kw, vname, const_obs)
-        poly_b = _geometry_operand(op.args[2], const_arrays_kw, vname, const_obs)
-        ring = _clip_or_treewalk_error(poly_a, poly_b, manifold)
-        closed = close_ring(ring)
-        rings[vname] = closed
-        n = max(size(closed, 1) - 1, 0)   # closed ring has n+1 rows
-        extents[vname] = n                # derived set may name the var…
-        op.id === nothing || (extents[op.id] = n)   # …or the clip node id (from_faq)
-    end
-    return rings, extents
-end
-
-# ============================================================
-# polygon_intersection_area — FUSED clip+area scalar leaf (esm-spec §4.2 / §8.6.1)
-# ============================================================
-#
-# `polygon_intersection_area` returns the SCALAR overlap area of two polygon vertex
-# rings under a declared `manifold`. It is DEFINED to equal
-# `polygon_area(intersect_polygon(a, b))` at the same manifold — the FUSED form of
-# the existing Sutherland–Hodgman clip and the shoelace / spherical-excess area FAQ.
-# Unlike `intersect_polygon` (which surfaces a data-dependent clip ring as a
-# `kind:"derived"` index set the `polygon_area` FAQ ranges over, RFC §8.1), the
-# fused leaf exposes NO ring: it evaluates to an ordinary Float64 scalar, so it
-# drops into any expression — an ODE RHS or a `faq` body — with no ragged
-# intermediate. Both constituent kernels are reused verbatim: `intersect_polygon`
-# (the clip, planar or S2) and `_polygon_area_via_faq` (the shoelace / Van
-# Oosterom–Strackee area over the CLOSED ring, run through the generic aggregate
-# machinery). This is the densely-evaluable narrow phase of a conservative regrid.
-
-# True iff any node in the subtree is a polygon_intersection_area op.
-# INTENTIONAL field subset — args / expr_body only, the exact mirror of
-# `_expr_has_intersect_polygon` above (see the Wave-3 note there), including
-# its identity-deduped visited set (ESS-0hh).
-_expr_has_polygon_intersection_area(e::OpExpr) =
-    _expr_has_polygon_intersection_area(e, IdDict{OpExpr, Nothing}())
-function _expr_has_polygon_intersection_area(e::OpExpr, seen::IdDict{OpExpr, Nothing})
-    e.op == "polygon_intersection_area" && return true
-    haskey(seen, e) && return false
-    seen[e] = nothing
-    for a in e.args
-        a isa OpExpr && _expr_has_polygon_intersection_area(a, seen) && return true
-    end
-    return e.expr_body isa OpExpr &&
-        _expr_has_polygon_intersection_area(e.expr_body::OpExpr, seen)
-end
-_expr_has_polygon_intersection_area(::ASTExpr) = false
-
 # A join-gated array `faq` whose body is itself a reduction over a nested
 # `faq` (`A_ij[i,j] = overlap_area_planar(src, i, 4, tgt, j, 4)` expanded from
 # lib/geometry.esm: per candidate pair, a sum over edges of min/max folds over
-# the other ring's half-planes) is the pure-AST form of the fused overlap-area
-# leaf. Over const inputs it is the same build-once setup array, and it takes
-# the same compiled setup sweep (`_materialize_geom_array`): its readers gather
+# the other ring's half-planes) is, over const inputs, a build-once setup
+# array: it takes the compiled setup sweep (`_materialize_geom_array`) and its readers gather
 # a const array per cell instead of an `index(faq, …)` of a gated reduction the
 # right-hand-side tiers cannot fold. The body must speak only the setup
 # language (`_GEO_EVAL_OPS`). Without a join the same holds for a body whose
@@ -228,8 +58,7 @@ _model_has_setup_join_reduction(equations) =
 # constants (a `rank_of_set` lookup's count, an `argmin` template's min and
 # index search, any reduction the observed's cells cannot change) is, over
 # inputs that read no state, no time and no scalar parameter, a build-once
-# table like the relational op's ranks and arg-witness buffers: the setup
-# sweep fills it once and its readers gather it (an indicator sum in it is a
+# table: the setup sweep fills it once and its readers gather it (an indicator sum in it is a
 # binary search, `_geo_count_node`). Every range of it and of its nested
 # reductions must be one the sweep loops over: a dense `[1, n]` range or an
 # interval or derived index set (`_setup_range_ok`; without the registry, any
@@ -295,52 +124,14 @@ function _dynamic_names(defs, state_var_names)
     return dynamic
 end
 
-# An intersection-area leaf lives in an equation LHS/RHS — from esm 1.0.0 an
-# observed unknown's defining body is its equation, so there is nowhere else to
-# look.
-function _model_has_polygon_intersection_area(model::Model, equations)
-    for eq in equations
-        (
-            _expr_has_polygon_intersection_area(eq.lhs) ||
-                _expr_has_polygon_intersection_area(eq.rhs)
-        ) && return true
-    end
-    return false
-end
-
-# Collect the variable names appearing as direct operands of any
-# polygon_intersection_area node in `e` (the const polygon vertex rings).
-function _collect_pia_operands!(e::OpExpr, acc::Set{String})
-    if e.op == "polygon_intersection_area"
-        for a in e.args
-            a isa VarExpr && push!(acc, (a::VarExpr).name)
-        end
-    end
-    for a in e.args
-        _collect_pia_operands!(a, acc)
-    end
-    e.expr_body !== nothing && _collect_pia_operands!(e.expr_body, acc)
-    return acc
-end
-_collect_pia_operands!(::ASTExpr, acc::Set{String}) = acc
-
-# A `const`-op node's stored (nested-vector) value → a dense `[nrows, ncols]`
-# Float64 vertex-ring matrix. The rank-2 wrapper over the general ND
-# materializer `_const_op_to_array` (below); the empty-ring guard keeps the
-# historical 0×2 shape for a vertex-free operand.
-function _pia_const_matrix(val)::Matrix{Float64}
-    isempty(val) && return Matrix{Float64}(undef, 0, 2)
-    return Matrix{Float64}(_const_op_to_array(val))
-end
-
-# True iff `e` is a `const`-op node (build-time literal data — a polygon vertex
-# ring array, a source field). Its value lives in `e.value`, not `e.args`.
+# True iff `e` is a `const`-op node (build-time literal data — a vertex ring
+# array, a source field). Its value lives in `e.value`, not `e.args`.
 _is_const_op(e) = e isa OpExpr && (e::OpExpr).op == "const"
 
 # A `const`-op node's stored (nested-vector) value → a dense Float64 array whose
 # rank is the nesting depth (`[[[...]]]` → 3-D): an in-file
 # `src_poly[cell, vert, coord]` ring stack or a 1-D `F_src[cell]` field.
-# `_pia_const_matrix` above is its rank-2 wrapper. Column-major fill matches
+# Column-major fill matches
 # Julia's native layout, so `index(src_poly, i)` slices out cell `i`'s ring
 # matrix.
 function _const_op_to_array(val)::Array{Float64}
@@ -419,53 +210,6 @@ function _fill_const_array!(A, node, idx::Tuple)
     return
 end
 
-"""
-    _polygon_intersection_area(poly_a, poly_b, manifold) -> Float64
-
-The fused `polygon_intersection_area` leaf: clip the two operand rings under
-`manifold` (`intersect_polygon`), then area the CLOSED overlap ring through the
-generic `polygon_area` FAQ (`_polygon_area_via_faq`). Equals
-`polygon_area(intersect_polygon(a, b))` at the same manifold. A degenerate /
-non-overlapping clip (`< 3` distinct vertices) has zero overlap area.
-"""
-function _polygon_intersection_area(poly_a, poly_b, manifold::AbstractString)::Float64
-    if manifold == "planar" && poly_a isa AbstractMatrix && poly_b isa AbstractMatrix
-        r = _planar_pia_noalloc(poly_a, poly_b)
-        r === nothing || return r
-    end
-    ring = _clip_or_treewalk_error(poly_a, poly_b, manifold)
-    size(ring, 1) < 3 && return 0.0
-    return _polygon_area_via_faq(close_ring(ring), manifold)
-end
-
-# Resolve a polygon_intersection_area operand to its const polygon-ring matrix. The
-# fused leaf is build-time-evaluable, so each operand must be a const-array variable
-# name (supplied via `const_arrays` or a materialized `const`-op observed).
-function _pia_operand_ring(arg::ASTExpr, const_arrays::AbstractDict)
-    arg isa VarExpr && haskey(const_arrays, (arg::VarExpr).name) &&
-        return const_arrays[(arg::VarExpr).name]
-    throw(
-        TreeWalkError(
-            "E_TREEWALK_GEOMETRY_OPERAND",
-            "polygon_intersection_area operand must be a build-time-known polygon ring " *
-                "(a const-array variable name)"
-        )
-    )
-end
-
-# ============================================================
-# M4+ : intersect_polygon RANGED over a candidate-pair set (declarative A_ij).
-# ============================================================
-# The single-clip M4 kernel above materializes ONE intersect_polygon ring from
-# whole-array const operands. A conservative-regrid `A_ij` instead needs the clip
-# RANGED over a candidate-pair set: `clip[p,w,c] = intersect_polygon(src[p],
-# tgt[p])[w,c]`, then `area[p] = polygon_area(clip[p])` (an aggregate), then the
-# matrix scatter. These geometry-derived ARRAY observeds are pure functions of the
-# const polygon inputs (no state, no time), so — exactly like the single clip
-# (RFC §8.1) and the value-invention skolems (§6.1) — they are evaluated ONCE at
-# setup into const_arrays and dropped from the ODE. `_geometry_setup_vars` finds
-# them; `_materialize_geometry_setup` evaluates them.
-
 # Extent of an IndexSetRef range against the model's index sets + derived extents.
 #
 # A `kind:"derived"` set resolves through its `from_faq`, exactly as
@@ -473,7 +217,7 @@ end
 # `derived_extents` is keyed by the PRODUCER id, not by the set name. Setup-time
 # geometry can range over one because the projection pushdown re-points a binning
 # aggregate onto `pd_support__<C>` — and when that aggregate's weight is an
-# intersection area, its body IS setup-time geometry.
+# overlap-area template, its body IS setup-time geometry.
 function _geo_index_extent(ref, index_sets, derived_extents)
     # A dense `[1, n]` tuple (a template's loop over a vertex-slot count,
     # esm-spec §9.6.1) is the same loop as an index set of size n. Another
@@ -538,14 +282,6 @@ struct _GeoCtx
     var_shapes::AbstractDict
 end
 
-# The skolem hash cap: keys are folded into Float64s, and 2^52 is a safe window
-# of exactly-representable integers within the Float64 mantissa (53 bits), so
-# two distinct capped hashes never collapse to one float. `hash` is
-# SESSION-LOCAL (Julia's hash is not stable across versions or processes) —
-# safe here because skolem keys are only ever COMPARED against each other
-# within a single build, never persisted or matched cross-binding.
-const _SKOLEM_HASH_CAP = 1 << 52
-
 # A node's `join` resolves ONCE per sweep through `_resolve_geo_join_gates` below
 # and then compiles to slot-addressed `_GeoSlotGate`s; the `filter` predicate
 # compiles to a `_Node` evaluated per cell. Key-equality broad phase per RFC §5.3 /
@@ -599,101 +335,8 @@ end
 # The geometry chain COMPILES ONCE per materialization sweep into the shared
 # `_Node` IR and evaluates per cell through `_eval_node`: see
 # tree_walk/geometry_compile.jl for the compiler (`_geo_compile` / `_geo_source`),
-# the compiled gate (`_geo_gate_ok`), and the
-# `:geo_gather`/`:geo_pia`/`:geo_skolem`/`:geo_agg` evaluator arms.
-
-# A clip ranged over an outer index set: an array-producing aggregate whose body
-# is `index(intersect_polygon(src[outer], tgt[outer]), ring, coord)`. The
-# array-producing form is the on-disk `faq` op with a non-empty `output_idx`
-# (schema v0.8.0; the op enum dropped `faq`), OR the internal `faq` alias
-# `shape_promotion.jl` still emits — `_is_faq_op` accepts both, and the
-# non-empty `output_idx` guard keeps a SCALAR reduction (empty `output_idx`) out.
-_is_ranged_clip(rhs) =
-    rhs isa OpExpr && _is_faq_op(rhs.op) &&
-    rhs.output_idx !== nothing && !isempty(rhs.output_idx) &&
-    rhs.expr_body isa OpExpr &&
-    (rhs.expr_body::OpExpr).op == "index" &&
-    length((rhs.expr_body::OpExpr).args) >= 1 &&
-    (rhs.expr_body::OpExpr).args[1] isa OpExpr &&
-    ((rhs.expr_body::OpExpr).args[1]::OpExpr).op == "intersect_polygon"
-
-# Materialize a per-outer-cell family of clip rings, padded to the max distinct-
-# vertex count (the pad repeats the closing vertex so the shoelace pad-edges add
-# zero area), into one dense const array `[outer…, maxn+1, coord]`; record the
-# clip_ring extent so the polygon_area FAQ ranges `[1, maxn]` over it.
-function _materialize_ranged_clip(
-        faq, env, index_sets, derived_extents,
-        var_shapes = Dict{String, Vector{String}}()
-    )
-    body = faq.expr_body::OpExpr          # index(intersect_polygon(...), w, c)
-    ipoly = body.args[1]::OpExpr
-    ringvar = (body.args[2]::VarExpr).name
-    coordvar = (body.args[3]::VarExpr).name
-    outer = String[v for v in faq.output_idx if v != ringvar && v != coordvar]
-    outer_ext = Int[
-        _geo_index_extent(faq.ranges[v], index_sets, derived_extents)
-            for v in outer
-    ]
-    coord_ext = _geo_index_extent(faq.ranges[coordvar], index_sets, derived_extents)
-    manifold = ipoly.manifold
-    manifold === nothing && throw(
-        TreeWalkError(
-            "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-            "ranged intersect_polygon requires a manifold"
-        )
-    )
-    ctx = _GeoCtx(env, index_sets, derived_extents, var_shapes)
-    # Compile the two polygon operands ONCE (ring sources over the outer loop
-    # slots); each pair then resolves them against the frame — a `view`, no
-    # copy, exactly as before (see tree_walk/geometry_compile.jl).
-    nslots = Ref(0)
-    scope = Dict{String, Int}()
-    for lv in outer
-        nslots[] += 1
-        scope[lv] = nslots[]
-    end
-    g = _GeoCompileCtx(ctx, scope, Dict{String, String}(), nslots)
-    srcA = _geo_source(ipoly.args[1], g)
-    srcB = _geo_source(ipoly.args[2], g)
-    u = zeros(Float64, nslots[])
-    rings = Dict{Tuple, Matrix{Float64}}()
-    maxn = 0
-    for tup in Iterators.product((1:e for e in outer_ext)...)
-        @inbounds for k in eachindex(outer)
-            u[k] = Float64(tup[k])
-        end
-        A = _geo_ring_value(srcA, u, nothing, 0.0, Float64)
-        B = _geo_ring_value(srcB, u, nothing, 0.0, Float64)
-        # A non-overlapping pair yields a degenerate (< 3 vertex) clip → a zero-area
-        # cell; the matrix is sparse over non-candidate pairs and that is normal,
-        # not an error (RFC §5.8: unmatched rows add the additive identity).
-        ring = try
-            r = intersect_polygon(A, B, manifold)
-            size(r, 1) >= 3 ? close_ring(r) : zeros(Float64, 0, coord_ext)
-        catch err
-            err isa GeometryError ? zeros(Float64, 0, coord_ext) : rethrow()
-        end
-        rings[Tuple(tup)] = ring
-        maxn = max(maxn, size(ring, 1) - 1)
-    end
-    maxn = max(maxn, 0)
-    clip = zeros(Float64, (outer_ext..., maxn + 1, coord_ext)...)
-    for (tup, ring) in rings
-        nrows = size(ring, 1)
-        nrows == 0 && continue          # empty overlap → cell stays zero (area 0)
-        for w in 1:(maxn + 1)
-            sr = w <= nrows ? w : 1     # pad rows repeat the closing vertex (row 1)
-            for c in 1:coord_ext
-                clip[tup..., w, c] = ring[sr, c]
-            end
-        end
-    end
-    ringset = faq.ranges[ringvar] isa IndexSetRef ?
-        (faq.ranges[ringvar]::IndexSetRef).from : ringvar
-    derived_extents[ringset] = maxn
-    ipoly.id === nothing || (derived_extents[ipoly.id] = maxn)
-    return clip
-end
+# the compiled gate (`_geo_gate_ok`), and the `:geo_gather`/`:geo_agg`
+# evaluator arms.
 
 # The (init, ⊕) fold for a setup-time array reduction, keyed by the aggregate's
 # `reduce` / `semiring`. Defaults to SUM (the `sum_product` FAQ additive identity),
@@ -774,9 +417,9 @@ end
 # written — are elided.
 #
 # That is half the fix. The other half is the `Any`-typed source payload each
-# `:geo_gather` / `:geo_pia` node carries, which costs a dynamic dispatch per array
-# read per cell; it lives in the evaluator arms (`_geo_gather_value`,
-# `_geo_ring_value`, the `:geo_pia` arm — tree_walk/geometry_compile.jl) and is
+# `:geo_gather` node carries, which costs a dynamic dispatch per array read per
+# cell; it lives in the evaluator arms (`_geo_gather_value`, `_geo_ring_value` —
+# tree_walk/geometry_compile.jl) and is
 # pure dispatch narrowing: the SAME method with the SAME arguments, reached through
 # a concrete `isa` instead of a generic call. It has no kill switch because there
 # is no alternative code path to switch to; the value oracle below covers the loop
@@ -904,32 +547,31 @@ end
 # that policy, already used by the value-invention producer (`_vi_enumerate_join`)
 # and the dense aggregate expansion (`_foreach_aggregate_term`). This is its third
 # consumer, and the candidate set comes from the same Phase-3a primitive the other
-# two use (`_overlap_candidate_set` → STRtree when the GeometryOps extension is
-# loaded, else the brute-force reference).
+# two use (`_overlap_candidate_set` → `broad_phase_candidates`).
 #
 # WHAT THIS CHANGES. Applying a gate that was previously ignored is a SEMANTIC
 # change, not a pure optimization: a tuple outside the candidate set no longer
 # contributes its body, it contributes the fold identity 0̄ (§5.3). That is the
 # specified meaning of the clause and what every other resolver already does. For
 # the conservative-regrid shapes it is also value-NEUTRAL: disjoint envelopes ⇒
-# disjoint polygons ⇒ `_polygon_intersection_area` returns exactly `+0.0`, which is
+# disjoint polygons ⇒ the overlap-area template returns exactly `+0.0`, which is
 # what the `zeros` init already holds, and the applies' `A_ij > atol` filter drops
-# those terms anyway. Materializing the same array under both compilers checks
-# that on a real model rather than arguing it. A document where a pruned tuple WOULD have contributed (a
-# `min`/`prod` fold with no sliver filter) is a genuine behavior change — see
-# `geom_overlap_drive_test.jl`, which pins exactly that case so the change is
-# visible rather than silent. Under `reduce: min` the ungated sweep folds in the
-# exact `0.0` a DISJOINT pair computes and drives the reduction to zero, while 0̄
-# for `min` is `+Inf` — so the gated answer is the §5.3 one.
+# those terms anyway. Where a pruned tuple WOULD contribute (a `min`/`prod` fold
+# with no sliver filter, a body that is not zero off the overlap) the clause
+# changes the answer, and both compilers give the gated one (CONFORMANCE_SPEC
+# §5.5.6, join admission and identity fill): the interpreter tests membership
+# per tuple, `native` drives. `geom_overlap_drive_test.jl` pins that case.
 #
 # SCOPE: the TOP-LEVEL materialization sweep only. A nested `:geo_agg` in the body
 # keeps its ungated behaviour (`_geo_compile_agg` still routes through
 # `_resolve_geo_join_gates`); no shipped template puts an overlap clause on a
 # nested aggregate, and gating one would need its own drive plan.
 
-# Off, resolution is skipped entirely and the sweep is the ungated dense one.
-# That is the differential oracle for this change.
-_geom_overlap_gate_disabled() = !_compiler_plan_now().geom_overlap_gate
+# The clause is part of the document's meaning, so every compiler applies it.
+# Off (`compiler=:interpreter`), the gate is applied as a per-tuple membership
+# test over the dense product and never drives the enumeration: that is the
+# differential oracle for the driven sweeps.
+_geom_overlap_drive_disabled() = !_compiler_plan_now().geom_overlap_gate
 
 # ENGAGEMENT DIAGNOSTICS. DRIVE counts sweeps whose enumeration was driven from
 # the candidate set (the O(#candidates) path); GATE_ONLY those where a gate
@@ -985,10 +627,9 @@ end
 
 # Resolve this aggregate's FIRST usable `overlap` clause against the sweep's
 # lexical scope. Declines (⇒ `nothing`, i.e. the historic ungated sweep) when
-# the kill switch is set, when either env-factor list does not map to a loop var
-# in scope, or when a named envelope factor is not a materialized array in
-# `env`. Every decline is a decline to a path that still produces the OLD
-# values, never a silent wrong answer.
+# either env-factor list does not map to a loop var in scope, or when a named
+# envelope factor is not a materialized array in `env`; every compiler declines
+# alike, so the compilers agree there.
 #
 # The env-factor → loop-var rule is the setup path's own `_geo_loopvar_for`
 # (the same one the bin-equality `on` keys use): the FIRST factor's FIRST shape
@@ -1000,7 +641,6 @@ end
 # still gives the old values; the right-hand side throws `E_TREEWALK_JOIN_OVERLAP`.
 function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)
     faq.join === nothing && return nothing
-    _geom_overlap_gate_disabled() && return nothing
     for clause in faq.join
         clause isa _OverlapJoinSpec || continue
         isempty(clause.src_env) && continue
@@ -1265,7 +905,7 @@ end
 # materialized) geometry in `env`.
 #
 # Two shapes are handled uniformly. A pure MAP (`output_idx == ranges` keys, e.g.
-# `A_ij[i,j] = polygon_intersection_area(src[i], tgt[j])`) evaluates the body once
+# `A_ij[i,j] = overlap_area_planar(src, i, nv, tgt, j, nv)`) evaluates the body once
 # per output cell. A CONTRACTING aggregate — the on-disk einsum form where some
 # `ranges` keys are NOT in `output_idx` (e.g. `A_j[j] = Σ_i A_ij[i,j]`, the
 # row-sum) — sums the body over the contracted indices for each output cell. Both
@@ -1343,7 +983,7 @@ function _materialize_geom_array(
     # else keeps the dense sweep with the membership test applied per tuple
     # (`ov`), which is the same admitted set at the full product's cost.
     ov = _geo_overlap_gate(faq, ctx, setof, scope, ov_cache)
-    drive = ov === nothing ? nothing :
+    drive = ov === nothing || _geom_overlap_drive_disabled() ? nothing :
         _geo_overlap_drive(
             ov, out, contract, exts, index_sets, derived_extents,
             faq
@@ -1437,8 +1077,8 @@ end
 # the behavior stack that consumed the formerly-scalar params (FuelModelLookup /
 # EquilibriumMoistureContent / OneHourFuelMoisture / MidflameWind /
 # RothermelFireSpread) is promoted to a build-once MAP over the fire `[x,y]` grid.
-# Its body is PURE PHYSICS — `and`/`or`/`ifelse`, comparisons, `fn:interp.linear`,
-# `const`, `exp`/`log` — ops the limited setup-time geometry LANGUAGE does
+# Its body is PURE PHYSICS — `and`/`or`/`ifelse`, comparisons, `const`,
+# `exp`/`log` — ops the limited setup-time geometry LANGUAGE does
 # NOT speak. Such a MAP must materialize through the GENERAL build-time cell
 # evaluator (`_eval_cellwise`), the same one `_materialize_setup_wholearray` uses.
 
@@ -1449,8 +1089,8 @@ end
 # no help — the geometry materializer already handles it (a loader-field
 # reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]`, a constructed cell ring
 # `tgt_poly[j,v,k] = ifelse(k==1, …, …)`, a geometry weight over a derived set).
-# A body that reaches for an op OUTSIDE this set — `and`/`or`/`not`, `fn`
-# (`interp.linear`), `const`, `exp`/`log`/`tan`/… — is a PROMOTED PHYSICS lookup that
+# A body that reaches for an op OUTSIDE this set — `and`/`or`/`not`,
+# `const`, `exp`/`log`/`tan`/… — is a PROMOTED PHYSICS lookup that
 # only the general evaluator speaks; those, and only those, route to `_eval_cellwise`.
 # Membership is declared per-op in src/op_registry.jl (flag `:geo_eval`) and
 # pinned by op_registry_test.jl.
@@ -1476,9 +1116,9 @@ end
 # carries no join/filter gate, and whose body reaches an op OUTSIDE the geometry
 # vocabulary `_GEO_EVAL_OPS` (`and`/`fn`/`const`/`exp`/`log`/…) — i.e. a promoted
 # per-cell physics lookup.
-# Every genuine geometry aggregate — a `polygon_intersection_area` weight, a
+# Every genuine geometry aggregate — an overlap-area weight, a
 # `A_j[j] = Σ_i A_ij[i,j]` row-sum, a constructed cell ring, a binning coordinate, a
-# skolem-bin producer, a loader-field reindex — uses ONLY `_GEO_EVAL_OPS` and so
+# loader-field reindex — uses ONLY `_GEO_EVAL_OPS` and so
 # stays on the compiled geometry path (`_materialize_geom_array`), byte-identical.
 function _is_setup_general_map(rhs)
     (rhs isa OpExpr && _is_faq_op(rhs.op)) || return false
@@ -1789,13 +1429,10 @@ function _setup_env_split(env::AbstractDict)
         elseif v isa Real
             params[ks] = Float64(v)
         end
-        # A non-numeric array in `env` — e.g. the tuple-valued skolem bin-key
-        # buffers that a broad-phase equi-join reads directly from `env` (a
-        # value-invention `distinct`/`skolem` map materializes integer key tuples,
-        # kept byte-identical across bindings) — is neither a gatherable Float64
-        # const array nor a scalar param for the physics cell pipeline, so skip it.
-        # (Previously this forced `Array{Float64}(v)` and crashed on the tuples the
-        # moment a gated regrid and a promoted-physics MAP coexisted in one model.)
+        # A non-numeric array in `env` — e.g. an untyped key-column buffer a
+        # broad-phase equi-join reads directly from `env` — is neither a
+        # gatherable Float64 const array nor a scalar param for the physics cell
+        # pipeline, so skip it.
     end
     return ca, params
 end
@@ -1896,17 +1533,12 @@ function _setup_source_array(
     )
 end
 
-# Geometry-derived ARRAY observeds to materialize at setup: those whose defining
-# RHS contains an intersect_polygon (ranged clips), plus the closure of array
-# observeds that depend on them WITHOUT touching a state variable. Single direct
-# clips (in `geom_ring_vars`) keep the existing 2-D ring path. Returns the set and
-# the name → RHS map.
 # Every VarExpr name appearing anywhere in `expr` — the NON-BINDING twin of
 # `free_variables`: it enumerates children through the ONE shared
 # `child_exprs`/`foreach_subexpr` traversal (so it sees EVERY expression-bearing
 # `OpExpr` field: args, faq `expr_body`, integral `lower`/`upper`,
 # makearray `values`, aggregate `filter` predicates, value-invention `key`s,
-# table-lookup `table_axes`, and expression-valued dense `ranges` bounds), plus
+# and expression-valued dense `ranges` bounds), plus
 # the `wrt` differentiation target, exactly as `free_variables` does. Unlike
 # `free_variables` it does NOT subtract a faq's bound loop
 # symbols — we need the vars an expression READS, and every caller intersects
@@ -1954,8 +1586,13 @@ function _saturate!(sweep::Function)
     return nothing
 end
 
+# Build-once ARRAY observeds to materialize at setup: the gated / nested
+# reductions (`_is_setup_join_reduction`, `_is_setup_const_reduction`) over
+# inputs that read no state, plus the closure of array observeds that depend on
+# them WITHOUT touching a state variable. Returns the set, the name → RHS map and
+# the live-tainted names.
 function _geometry_setup_vars(
-        model, equations, geom_ring_vars, state_var_names,
+        model, equations, state_var_names,
         live_params; index_sets = nothing
     )
     scalar_params = Set{String}(
@@ -1996,16 +1633,7 @@ function _geometry_setup_vars(
     dynamic = _dynamic_names(defs, state_var_names)
     setup = Set{String}()
     for (n, _) in defs
-        (is_arr_obs(n) && !(n in geom_ring_vars) && !(n in tainted) && haskey(defs, n)) || continue
-        # Seed on EITHER geometry leaf. `intersect_polygon` surfaces a ragged clip
-        # ring (§8.1); the FUSED `polygon_intersection_area` returns the scalar
-        # overlap area with no exposed ring (§8.6.1) — so an `A_ij[i,j] =
-        # polygon_intersection_area(src[i], tgt[j])` aggregate is a build-once setup
-        # const exactly like a ranged clip, just dense (no derived clip_ring set).
-        (
-            _expr_has_intersect_polygon(defs[n]) ||
-                _expr_has_polygon_intersection_area(defs[n])
-        ) && push!(setup, n)
+        (is_arr_obs(n) && !(n in tainted) && haskey(defs, n)) || continue
         # The pure-AST overlap area, or a rank table, over inputs that read no state.
         _is_setup_join_reduction(defs[n]) &&
             !_anyof(f -> f in state_var_names, refs_of(n)) &&
@@ -2057,11 +1685,11 @@ function _geometry_setup_vars(
         changed = false
         for (n, rhs) in defs
             (
-                is_arr_obs(n) && !(n in setup) && !(n in geom_ring_vars) &&
+                is_arr_obs(n) && !(n in setup) &&
                     !(n in tainted) && !(n in blocked)
             ) || continue
             refs = intersect(refs_of(n), mvars)
-            if any(f -> (f in setup) || (f in geom_ring_vars), refs) &&
+            if any(f -> f in setup, refs) &&
                     !any(f -> f in state_var_names, refs)
                 push!(setup, n); changed = true
             end
@@ -2071,8 +1699,8 @@ function _geometry_setup_vars(
     # Backward pass: also materialize state-free array observeds REFERENCED BY a
     # setup var — the bin buffers a broad-phase `join` gates on (src_bin/tgt_bin),
     # which a setup aggregate reads but which are not themselves geometry-derived.
-    # A `const`-op operand (an in-file `src_poly` / `tgt_poly` ring stack the fused
-    # leaf gathers per cell) is NOT pulled in here: it is build-time literal data
+    # A `const`-op operand (an in-file `src_poly` / `tgt_poly` ring stack an
+    # overlap-area template gathers per cell) is NOT pulled in here: it is build-time literal data
     # seeded into the setup env directly (and registered as a const_array for the
     # ODE), so it needs no `_materialize_geom_array` pass. A BARE-ALIAS observed
     # (`src_poly := mesh.src_poly`, a `VarExpr` def — the MPAS keyed-factor
@@ -2087,7 +1715,7 @@ function _geometry_setup_vars(
         for n in collect(setup)
             for r in intersect(refs_of(n), mvars)
                 (
-                    is_arr_obs(r) && !(r in setup) && !(r in geom_ring_vars) &&
+                    is_arr_obs(r) && !(r in setup) &&
                         !(r in tainted) && !(r in blocked) && haskey(defs, r) &&
                         !_is_const_op(defs[r]) && !(defs[r] isa VarExpr)
                 ) || continue
@@ -2101,7 +1729,7 @@ function _geometry_setup_vars(
     return setup, defs, tainted
 end
 
-# Dependency order over the setup vars (clip before area before A_ij).
+# Dependency order over the setup vars (A_ij before its row sums).
 function _geom_setup_order(setup, defs)
     order = String[]; done = Set{String}()
     deps = Dict{String, Set{String}}(n => intersect(_referenced_var_names(defs[n]), setup) for n in setup)
@@ -2123,16 +1751,15 @@ function _geom_setup_order(setup, defs)
     return order
 end
 
-# A materialized value-invention map buffer (`Dict(position => bin key)`, the
-# `src_bin`/`tgt_bin` broad-phase bins) as a dense vector the setup-time join gate
-# indexes by loop position. Keys are 1-based positions over the buffer's 1-D index
-# set (`_vi_materialize_map!`); the values are the bin keys (a tuple/int from
-# `_vi_skolem`), compared only for equality by the gate.
+# A materialized value-invention join column (`Dict(position => integer key)`,
+# the `src_bx`/`tgt_bx` broad-phase bins) as a dense vector the setup-time join
+# gate indexes by loop position. Keys are 1-based positions over the column's
+# 1-D index set (`_vi_materialize_column!`); the values are the integer keys,
+# compared only for equality by the gate.
 function _vi_buf_vector(buf)
     isempty(buf) && return Any[]
-    # Bin keys of one concrete type (a skolem's integer tuples) at the
-    # positions 1:n are stored as that type, so the gate's per-pair comparison
-    # is not a dynamic dispatch.
+    # Keys of one concrete type at the positions 1:n are stored as that type,
+    # so the gate's per-pair comparison is not a dynamic dispatch.
     typed = _vi_buf_typed(buf, typeof(first(values(buf))))
     typed === nothing || return typed
     n = maximum(Int(k) for k in keys(buf))
@@ -2172,8 +1799,8 @@ end
 #
 # Source notes (hoisted from the two call sites):
 #  * `const`-op array observeds (in-file polygon ring stacks / fields) are
-#    build-time literal data, seeded so a fused `polygon_intersection_area`
-#    aggregate can gather a per-cell ring via `index(src_poly, i)` at setup.
+#    build-time literal data, seeded so an overlap-area aggregate can gather a
+#    per-cell ring via `index(src_poly, i)` at setup.
 #  * `const_obs_arrays` — resolved BARE-ALIAS const arrays
 #    (`src_poly := mesh.src_poly`) and other already-materialized const-op
 #    array observeds: a setup var reads the alias's VALUE from `env` (the alias
@@ -2181,7 +1808,7 @@ end
 #  * scalar parameter OVERRIDES win over declared defaults: a setup-time node
 #    may reference `atol`/`dx`/`dy` (sliver floor / bin quantization) — known
 #    build-time constants that often have no `default`.
-#  * `vi_maps` — materialized value-invention bin buffers (`src_bin`/`tgt_bin`)
+#  * `vi_maps` — materialized value-invention join columns (`src_bx`/`tgt_bx`)
 #    a setup-time broad-phase `join` gates on; without the gate the denominator
 #    row-sum contracts DENSELY and picks up spurious sub-grid slivers, breaking
 #    the partition of unity (RFC §5.3 / §5.8).
@@ -2258,7 +1885,7 @@ function _materialize_geometry_setup(
     # One broad-phase candidate index per distinct `overlap` clause, shared
     # across this pass (`_geo_overlap_index`). A conservative regrid resolves the
     # same `(src_poly, tgt_poly, eps)` clause once for the weight matrix and once
-    # per applied species; building the STRtree six times, and its adjacency
+    # per applied species; building the candidate set six times, and its adjacency
     # views six times, is pure waste. Scoped to this call, where a name→array
     # binding in `env` is written once and never replaced.
     ov_cache = Dict{Tuple{Vector{String}, Vector{String}, Float64}, _OverlapIndex}()
@@ -2272,9 +1899,7 @@ function _materialize_geometry_setup(
     for n in _geom_setup_order(setup, defs)
         rhs = defs[n]
         _open_rule!(n, :setup_array)
-        arr = if _is_ranged_clip(rhs)
-            _materialize_ranged_clip(rhs, env, index_sets, derived_extents, var_shapes)
-        elseif _is_setup_wholearray_op(rhs)
+        arr = if _is_setup_wholearray_op(rhs)
             # A `makearray` stencil (a `D(field)` lowering) or `reshape` — no
             # `output_idx`/`ranges` to range over. Evaluate per output cell via the
             # general build-time array pipeline against the materialized `env`.
@@ -2285,7 +1910,7 @@ function _materialize_geometry_setup(
         elseif _is_setup_general_map(rhs)
             # A promoted PER-CELL PHYSICS lookup (fuel/moisture/wind over the fire
             # grid): a pure MAP aggregate whose body reaches an op OUTSIDE the
-            # geometry-FAQ vocabulary (`and`/`ifelse`/`interp.linear`/`const`/`exp`/
+            # geometry-FAQ vocabulary (`and`/`ifelse`/`const`/`exp`/
             # `log`). Materialize it through the general build-time cell evaluator (as
             # the makearray path does), byte-identical to the ODE RHS resolver. Every
             # geometry aggregate (a geometry weight, a contraction, a constructed ring,
@@ -2315,8 +1940,8 @@ end
 # supplied as a `const` vector. Such an observed reads only build-time data (scalar
 # parameters and other build-time-constant arrays; never a state variable or a live
 # loader field), so its value is a build-time constant: it is evaluated ONCE here
-# and fed into the value-invention `const_arrays` so `skolem("bin",
-# floor(index(src_lon,i)/dx), …)` resolves at setup, and to the typed build as a
+# and fed into the value-invention `const_arrays` so a bin column
+# `floor(index(src_lon,i)/dx)` resolves at setup, and to the typed build as a
 # derived const array (excluded from the ODE like any `const`-op array observed).
 # This keeps the fixture PURE — the coordinate is derived from geometry, not
 # hand-supplied — and admits a TEMPLATE-CONSTRUCTED coordinate whose inputs (the
@@ -2365,10 +1990,10 @@ end
 # Evaluate the inline binning-COORDINATE observeds into dense `Vector{Float64}`s,
 # reusing the reduce-aware setup-time array materializer (`_materialize_geom_array`).
 # The COORDINATE SEEDS are the 1-D array observeds that are a `reduce`-projection
-# (the original const-geometry derivation) OR a value-invention skolem INDEX TARGET
+# (the original const-geometry derivation) OR a value-invention key INDEX TARGET
 # (`vi_index_targets` — this admits a TEMPLATE-CONSTRUCTED, aggregate-valued
 # coordinate like the cartesian cell-centre map, or a reduce over constructed rings,
-# as a skolem-bin index target). ONLY the seeds and their build-time-constant array
+# as a bin-key index target). ONLY the seeds and their build-time-constant array
 # dependencies are materialised — a model without a broad-phase coordinate is
 # untouched (byte-identical), and no unrelated array observed is force-evaluated.
 # Determinism is preserved: a coordinate whose closure reaches a live STATE variable

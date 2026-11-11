@@ -146,7 +146,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             )
         pin(f, at) = Dict("op" => "index", "args" => [f, at])
         doc = Dict(
-            "esm" => "1.1.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "nested_1d"),
             "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 8)),
             "models" => Dict(

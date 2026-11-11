@@ -1075,20 +1075,15 @@ interface StructuralView {
   fn?: unknown
   name?: unknown
   var?: unknown
-  table?: unknown
-  output?: unknown
-  manifold?: unknown
   /** RFC §6.1 stable node identity — the referent of a derived index set. */
   id?: unknown
   axis?: unknown
-  arg?: unknown
   output_idx?: unknown[]
   lower?: Expr
   upper?: Expr
   expr?: Expr
   filter?: Expr
   key?: Expr
-  axes?: Record<string, Expr>
   bindings?: Record<string, Expr>
   regions?: unknown[][][]
   values?: Expr[]
@@ -1099,10 +1094,9 @@ interface StructuralView {
   distinct?: boolean
   ranges?: Record<string, unknown>
   join?: JoinClauseView[]
-  label?: string
 }
 
-/** One `faq` / `argmin` join clause: a key-column equality gate or an overlap gate. */
+/** One `faq` join clause: a key-column equality gate or an overlap gate. */
 interface JoinClauseView {
   on?: string[][]
   syms?: string[]
@@ -1711,7 +1705,7 @@ function aggregateSymbol(semiring: string | undefined, reduce: string, format: T
   return format === 'unicode' ? u : format === 'latex' ? l : a
 }
 
-/** Render the ` where {…}` range clause shared by aggregate and argmin/argmax. */
+/** Render the ` where {…}` range clause of a `faq`. */
 function formatRangesClause(ranges: Record<string, unknown>, format: TextFormat): string {
   const inSym = format === 'latex' ? ' \\in ' : format === 'unicode' ? '∈' : ' in '
   const parts = Object.keys(ranges)
@@ -1735,7 +1729,7 @@ function formatRangesClause(ranges: Record<string, unknown>, format: TextFormat)
 }
 
 /**
- * Render the ` join(…)` clause shared by `faq` and `argmin`/`argmax`, or `''`
+ * Render the ` join(…)` clause of a `faq`, or `''`
  * when there is none. Clauses are joined `; `. An equality clause lists its
  * key-column pairs `l=r` and then, when present, the self-join side assignment
  * `syms=[left, right]`; an overlap clause is the keyword call
@@ -1773,27 +1767,9 @@ function formatAggregate(node: ExprNode, format: TextFormat): string {
   if (n.filter !== undefined) out += ` if ${r(n.filter)}`
   if (n.distinct === true) out += ` distinct`
   if (n.key !== undefined) out += ` key=${r(n.key)}`
-  // `id` is a bare-name clause rather than part of the `[…]` suffix so it adds
-  // no new bracket ambiguity with `table_lookup`'s `name[axis=…]` surface.
+  // `id` is a bare-name clause rather than part of the `[…]` suffix.
   if (n.id !== undefined && n.id !== null) out += ` id=${String(n.id)}`
   if (semiring && semiring !== 'sum_product') out += ` [semiring=${semiring}]`
-  return out
-}
-
-/** Render an `argmin` / `argmax` arg-witness node per the rendering contract. */
-function formatArgWitness(node: ExprNode, format: TextFormat): string {
-  const n = structuralView(node)
-  const r = (e: Expr) => renderExpr(e, format)
-  const arg = String(n.arg ?? '')
-  const exprStr = n.expr !== undefined ? r(n.expr) : ''
-  const idxPart = format === 'latex' ? `_{${arg}}` : `[${arg}]`
-  const name = format === 'latex' ? `\\mathrm{${node.op}}` : node.op
-  let out = `${name}${idxPart} (${exprStr})`
-  const ranges = n.ranges
-  if (ranges && Object.keys(ranges).length > 0) out += formatRangesClause(ranges, format)
-  out += formatJoinClause(n.join, format)
-  if (n.filter !== undefined) out += ` if ${r(n.filter)}`
-  if (n.id !== undefined && n.id !== null) out += ` id=${String(n.id)}`
   return out
 }
 
@@ -1818,12 +1794,6 @@ function formatStructuralOp(node: ExprNode, format: TextFormat): string | undefi
     case 'true':
     case 'false':
       return op
-
-    case 'fn': {
-      const name = String(n.name ?? '')
-      const inner = args.map(r).join(', ')
-      return format === 'latex' ? `\\mathrm{${latexName(name)}}(${inner})` : `${name}(${inner})`
-    }
 
     case 'enum': {
       const label = `${String(args[0])}.${String(args[1])}`
@@ -1851,20 +1821,6 @@ function formatStructuralOp(node: ExprNode, format: TextFormat): string | undefi
       if (format === 'latex') return `\\int_{${lo}}^{${hi}} ${f} \\, d${v}`
       if (format === 'unicode') return `∫[${lo}, ${hi}] ${f} d${v}`
       return `integral(${f}, ${v}, ${lo}, ${hi})`
-    }
-
-    case 'table_lookup': {
-      const table = String(n.table ?? '')
-      const axes = n.axes ?? {}
-      const eq = format === 'latex' ? ' = ' : '='
-      const bindings = Object.keys(axes)
-        .sort()
-        .map((k) => `${k}${eq}${r(axes[k])}`)
-        .join(', ')
-      const out = n.output
-      const outStr = out !== undefined && out !== null ? `:${String(out)}` : ''
-      const name = format === 'latex' ? `\\mathrm{${latexName(table)}}` : table
-      return `${name}[${bindings}]${outStr}`
     }
 
     case 'apply_expression_template': {
@@ -1920,33 +1876,8 @@ function formatStructuralOp(node: ExprNode, format: TextFormat): string | undefi
       return `${name}(${inner}, axis=${n.axis ?? 0})`
     }
 
-    case 'intersect_polygon':
-    case 'polygon_intersection_area': {
-      const inner = args.map(r).join(', ')
-      const name = format === 'latex' ? `\\mathrm{${latexName(op)}}` : op
-      // `id` (RFC §6.1 node identity) is emitted as a trailing named argument
-      // when present, so a node addressable as a derived index set's `from_faq`
-      // referent survives the text round-trip. Absent `id` prints exactly as
-      // before, so every existing rendering is unchanged.
-      const idPart = n.id !== undefined && n.id !== null ? `, id=${String(n.id)}` : ''
-      return `${name}(${inner}, manifold=${String(n.manifold ?? '')}${idPart})`
-    }
-
-    case 'skolem': {
-      // The documentary `label` is a trailing named argument, like
-      // intersect_polygon's `manifold=`; an unlabeled skolem is a plain call.
-      if (n.label === undefined) return undefined
-      const inner = args.map(r).join(', ')
-      const name = format === 'latex' ? '\\mathrm{skolem}' : 'skolem'
-      return `${name}(${inner}, label=${String(n.label)})`
-    }
-
     case 'faq':
       return formatAggregate(node, format)
-
-    case 'argmin':
-    case 'argmax':
-      return formatArgWitness(node, format)
 
     default:
       return undefined

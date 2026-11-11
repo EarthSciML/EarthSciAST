@@ -9,7 +9,7 @@ This set pins the two paths the terrain-regrid coupling
 (`wildlandfire.esm` → `TerrainRegrid`) surfaced in the Julia runner:
 
 ```
-area[c]  = polygon_intersection_area(poly[c], poly[c], planar)   # build-once geometry leaf  -> [10,30,60]
+area[c]  = overlap_area_planar(poly, c, …, poly, c, …)           # build-once geometry template -> [10,30,60]
 darea    = D_c(area)                                              # build-once makearray STENCIL (Gap 1)
 D(u[c])  = darea[c] - u[c],  u(0)=0                               # ODE gathers darea per cell (Gap 2)
 ```
@@ -73,11 +73,11 @@ Per-binding runners:
 
 `bindings_required` is `["julia", "python", "rust"]`. Julia was the binding the
 two gaps were fixed in (setup-materializer + const-array crossing); Python and
-Rust already evaluate `polygon_intersection_area` + `makearray` + array-ODE
+Rust already evaluate the overlap area + `makearray` + array-ODE
 end-to-end, resolving the build-once field at the RHS rather than at a separate
 setup pass (so the numeric result is identical to Julia's setup-materialized
 path). Rust drives the composed path through its `simulate_array` runtime — the
-geometry-leaf faq, the `makearray` boundary-region stencil, and the array
+geometry faq, the `makearray` boundary-region stencil, and the array
 ODE's per-cell `index(darea, c)` gather — with no source changes required to
 enable it.
 

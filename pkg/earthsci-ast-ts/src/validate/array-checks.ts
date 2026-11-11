@@ -304,7 +304,7 @@ export function validateFaqBareArrayOperands(
     // is not a bare read here (its expansion is checked at build).
     if (!isExprNode(node) || node.op === 'apply_expression_template') return
     let inner = bound
-    if (node.op === 'faq' || node.op === 'aggregate') {
+    if (node.op === 'faq') {
       const faq = node as ExpressionNode & {
         output_idx?: unknown[]
         ranges?: Record<string, unknown>

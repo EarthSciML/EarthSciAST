@@ -54,14 +54,6 @@ const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an E
 # `Enzyme.API.strictAliasing!(false)` for reverse-mode AD on the CPU — see
 # scripts/enzyme_aliasing/ for the measurement and what a payload-free lowering
 # would and would not buy:
-#   * `_NK_OP` with `op === :fn` — `(fname, spec)::Tuple{String,Any}`: the
-#     closed-function name plus either `nothing` (all args scalar — the boxed
-#     `datetime.*` path) or a build-time-validated typed `_Interp*Spec`
-#     (`_InterpLinearSpec` / `_InterpBilinearSpec` / `_InterpSearchsortedSpec`,
-#     registered_functions.jl) carrying the const table/axis as concrete
-#     `Vector{Float64}` for the `interp.*` functions (the `_FN_CONST_ARG_SPECS`
-#     protocol). The `:fn` eval arm dispatches on the spec's concrete type and
-#     calls `_interp_*_core` directly; every other `_NK_OP` carries `nothing`.
 #   * `_NK_PARAM_GATHER` — the aliased flat `Vector{Float64}` of a live
 #     forcing buffer (`_PGatherArray.flat`, ess-14f.3); `idx` holds the
 #     pre-linearized column-major offset.
@@ -479,137 +471,6 @@ end
     return _resolve_const_index_oob(@inbounds(cg.boundary[d]), cg.name, d, sub, n)
 end
 
-# ---- interp.* const-arg protocol (one table, both ends) ------------------------
-# Which spec arg positions of each `interp.*` closed function are CONST-ARRAY
-# args. `_compile_op` pre-extracts those args, validates + coerces them into a
-# typed `_Interp*Spec` (registered_functions.jl) ONCE at build time, and stores
-# `(fname, spec)` in the node's `payload` slot; only the remaining scalar args
-# are compiled as children (in spec order). The `:fn` arm of `_eval_node_op`
-# then dispatches on the concrete spec type and calls the validation-free
-# `_interp_*_core` kernel directly with the typed `Float64` query — no per-call
-# box, no per-call axis re-validation, no `_fn_const_arg_spec` scan. The
-# access-kernel merge (`_acc_merge_nodes`, acc_merge.jl) consumes the SAME `(fname, spec)`
-# payload — it reuses the already-built spec rather than rebuilding it — so the
-# two ends of the protocol cannot drift. Moving validation to build time makes a
-# bad axis (non-monotonic / NaN / too-short / length-mismatch) fail fast at build
-# with its pinned `ClosedFunctionError` code, matching the vectorized path
-# (ess-wrh) which already validated at build time. `const_errs` are the pinned
-# per-position `(code, message)` diagnostics for a non-const argument.
-const _FN_CONST_ARG_SPECS = (
-    # Spec arg order: (x, xs) — xs const, x scalar.
-    (
-        fname = "interp.searchsorted", arity = 2, const_positions = (2,),
-        const_errs = (
-            (
-                ERROR_CODES.INTERP_AXIS_NOT_CONST,
-                "interp.searchsorted: `xs` (2nd arg) must be a `const`-op array",
-            ),
-        ),
-    ),
-    # Spec arg order: (table, axis, x) — table & axis const, x scalar.
-    (
-        fname = "interp.linear", arity = 3, const_positions = (1, 2),
-        const_errs = (
-            (
-                ERROR_CODES.INTERP_TABLE_NOT_CONST,
-                "interp.linear: `table` argument must be a `const`-op array node",
-            ),
-            (
-                ERROR_CODES.INTERP_AXIS_NOT_CONST,
-                "interp.linear: `axis` argument must be a `const`-op array node",
-            ),
-        ),
-    ),
-    # Spec arg order: (table, axis_x, axis_y, x, y) — first three const.
-    (
-        fname = "interp.bilinear", arity = 5, const_positions = (1, 2, 3),
-        const_errs = (
-            (
-                ERROR_CODES.INTERP_TABLE_NOT_CONST,
-                "interp.bilinear: `table` argument must be a `const`-op array node",
-            ),
-            (
-                ERROR_CODES.INTERP_AXIS_NOT_CONST,
-                "interp.bilinear: `axis_x` argument must be a `const`-op array node",
-            ),
-            (
-                ERROR_CODES.INTERP_AXIS_NOT_CONST,
-                "interp.bilinear: `axis_y` argument must be a `const`-op array node",
-            ),
-        ),
-    ),
-)
-
-# The `_FN_CONST_ARG_SPECS` entry for `fname`, or `nothing` for a closed
-# function whose args are all scalar. A linear scan over the length-3 const
-# tuple — string compares only, no runtime Dict lookup (the eval side also
-# calls this, staying in the same cost class as the ladder it replaced).
-@inline function _fn_const_arg_spec(fname::AbstractString)
-    for spec in _FN_CONST_ARG_SPECS
-        spec.fname == fname && return spec
-    end
-    return nothing
-end
-
-# A `const`-op argument's payload, or throw the pinned per-position esm-spec §9.2
-# diagnostic (`interp_table_not_const` / `interp_axis_not_const`) from
-# `_FN_CONST_ARG_SPECS` for an argument that is not a `const` array (a variable
-# reference, a non-`const` expression, a scalar `const`). A NESTED `const` where a
-# rank-1 one belongs is the spec builder's to refuse
-# (`_validate_searchsorted_table` raises the same `interp_axis_not_const`).
-@inline function _const_array_arg(arg, err::Tuple{String, String})
-    arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector &&
-        return arg.value
-    throw(
-        ClosedFunctionError(
-            err[1], err[2] * " (esm-spec §9.2); got " *
-                (
-                arg isa OpExpr ? (
-                        arg.op == "const" ? "a scalar `const`" :
-                        "a `$(arg.op)` expression"
-                    ) :
-                    arg isa VarExpr ? "the variable reference `$(arg.name)`" : "a $(typeof(arg))"
-            )
-        )
-    )
-end
-
-# Build the validated, typed `_Interp*Spec` (registered_functions.jl) for a
-# const-arg closed function from its pre-extracted const arrays (`const_args`,
-# in `_FN_CONST_ARG_SPECS` `const_positions` order). Runs the SAME validation +
-# `Float64` coercion the runtime kernels require, ONCE at build time — a bad
-# axis throws its pinned `ClosedFunctionError` here (fail-fast). Shared by the
-# scalar `_compile_op` and the array-kernel merge (`_acc_merge_nodes`), so both
-# ends build the same spec object from the one table. `fname` MUST be a
-# `_fn_const_arg_spec` name (the caller gates on that); the `else` is an
-# internal-consistency guard.
-#
-# The freshly built spec is routed through the build-scoped lane-table intern
-# pool (`_lane_intern`, acc_merge.jl): within one build, content-equal specs —
-# same table/axis bits minted from DIFFERENT const spellings or distinct-but-
-# equal vectors — come out as the SAME object, so downstream `===` fast paths
-# (the merge guard, `_check_fn_group_specs`) hit and a merged kernel's per-lane
-# spec table shares one object per distinct content. Identity when the pool is
-# off (outside a build, or with lane interning off).
-function _build_interp_spec(
-        fname::AbstractString, const_args::Vector{Any};
-        strict::String = ""
-    )
-    if fname == "interp.linear"
-        return _lane_intern(_build_interp_linear_spec(fname, const_args...; strict))
-    elseif fname == "interp.bilinear"
-        return _lane_intern(_build_interp_bilinear_spec(fname, const_args...; strict))
-    elseif fname == "interp.searchsorted"
-        return _lane_intern(_build_interp_searchsorted_spec(fname, const_args...; strict))
-    end
-    throw(
-        TreeWalkError(
-            "E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
-            "fn '$(fname)' carries const args but has no interp.* spec builder"
-        )
-    )
-end
-
 # `param_syms` tells a parameter from an unbound-variable error without another
 # pass. It comes in two shapes, and the difference is exactly whether the
 # parameter ORDER is known:
@@ -675,93 +536,6 @@ function _compile(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo
     return r
 end
 
-# Lower one `fn` (closed-function) OpExpr to its `_NK_OP` node (esm-spec §9.2 /
-# esm-tzp). The function name is captured in the node's `payload` slot as a tuple
-# of (name::String, spec_or_nothing). For the `interp.*` functions the const-array
-# args are pre-extracted per `_FN_CONST_ARG_SPECS` AND validated + coerced into a
-# typed `_Interp*Spec` here at build time, so the runtime hot path neither walks
-# the AST nor re-validates the axis. All-scalar closed functions (`datetime.*`)
-# store `nothing` and keep the boxed `evaluate_closed_function` path.
-#
-# TOTALITY CONTRACT: a closed function must be TOTAL over real inputs — never
-# throw; return `NaN` off its domain (see registered_functions.jl). The
-# whole-array `_oop` evaluator calls `fn` EAGERLY for every
-# cell, including guard-excluded ones, then blends by select — so a `fn` that
-# throws off-domain diverges from the short-circuiting scalar reference, which
-# is an author contract violation, not an evaluator bug.
-#
-# `compile_child` lowers ONE scalar argument expression to a `_Node`. It is a
-# parameter — not a hardcoded `_compile` call — so the CSE pass can reuse this
-# exact lowering while compiling the scalar args through `_compile_cse` (ess-r7h
-# follow-up, ess-obs): a closed function is a pure, deterministic node, so both
-# the `fn` node itself and every scalar subexpression BELOW it are legitimate CSE
-# hoist candidates. Routing both callers through one function is what keeps the
-# const-arg protocol (`_FN_CONST_ARG_SPECS`) single-sourced — a CSE-local copy of
-# this branch could drift from the eval arm's payload contract.
-function _compile_fn_node(expr::OpExpr, compile_child)
-    fname = expr.name
-    fname === nothing &&
-        throw(TreeWalkError("E_TREEWALK_FN_MISSING_NAME", expr.op))
-    if !(fname in _CLOSED_FUNCTION_NAMES)
-        throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION", fname))
-    end
-    cspec = _fn_const_arg_spec(fname)
-    if cspec === nothing
-        children = _Node[compile_child(a) for a in expr.args]
-        # All-scalar closed function. If the registry DECLARES a typed scalar
-        # core (`_FN_TYPED_SCALAR_CORES`, registered_functions.jl — the nine
-        # `datetime.*` entries), mint the CONCRETE `(fname, _FnTypedCoreSpec)`
-        # payload: every tier's `:fn` arm `isa`-matches it and takes the
-        # unboxed `_fn_typed_core_call` route at `T === Float64`. The typed
-        # payload is minted ONLY when the declared arity is 1 (all the tier
-        # executors implement) AND matches the call: a wrong-arity call keeps
-        # the boxed payload so the registry's eval-time `closed_function_arity`
-        # diagnostic is unchanged, and an undeclared function keeps the boxed
-        # `(fname, nothing)` route on every tier exactly as before.
-        tc = _fn_typed_core_spec(fname)
-        payload = (
-                tc !== nothing && tc.arity == 1 &&
-                length(children) == tc.arity
-            ) ? (fname, tc) :
-            (fname, nothing)
-    else
-        length(expr.args) == cspec.arity ||
-            throw(
-            TreeWalkError(
-                "E_TREEWALK_FN_ARITY",
-                "$(fname) expects $(cspec.arity) args, got $(length(expr.args))"
-            )
-        )
-        # Validate + extract every const position first (matching the
-        # pre-table ladders, which never compiled a scalar arg before a
-        # failed const check), then compile the scalar args — in spec
-        # order — as the node's children. The const arrays are validated +
-        # coerced into a typed spec ONCE here (fail-fast on a bad axis). The
-        # payload is the CONCRETE `Tuple{String,_Interp*Spec}`; the eval arm
-        # `isa`-matches that concrete tuple type so the spec is read without
-        # a per-call re-box (a `Tuple{String,Any}` read would box the inline
-        # immutable struct every call).
-        const_args = Any[
-            _const_array_arg(expr.args[pos], cspec.const_errs[k])
-                for (k, pos) in enumerate(cspec.const_positions)
-        ]
-        children = _Node[
-            compile_child(expr.args[pos])
-                for pos in 1:cspec.arity if !(pos in cspec.const_positions)
-        ]
-        # A lookup lowered from an `out_of_bounds: "error"` table carries the
-        # table id on this node (lower_table_lookup.jl); the spec checks its
-        # query against the axis before the core runs.
-        payload = (
-            fname, _build_interp_spec(
-                fname, const_args;
-                strict = something(expr.table, "")
-            ),
-        )
-    end
-    return _mknode(kind = _NK_OP, op = :fn, children = children, payload = payload)
-end
-
 # The `unevaluable_operator` diagnostic (esm-spec §9.6.6): `op` IS in the §4.2
 # evaluable core, but this evaluator has no rule for it where it stands. `why`
 # names the stage that should have eliminated it.
@@ -773,13 +547,6 @@ _unevaluable_operator(op, why::AbstractString) = TreeWalkError(
 
 function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo)
     op_sym = Symbol(expr.op)
-    payload = nothing
-    if op_sym === :fn
-        return _compile_fn_node(
-            expr,
-            a -> _compile(a, var_map, param_syms, reg_funcs, memo)
-        )
-    end
     # Runtime contraction loop marker (ess-runtime-contraction): the loop body is
     # the single child arg, compiled ONCE here; the loop metadata rides on `.value`.
     # Compiles iff the (unrolled) body would compile — the only leaf difference is a
@@ -866,8 +633,8 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         throw(
             TreeWalkError(
                 "E_TREEWALK_UNSUPPORTED_OP",
-                "`call` op was removed in v0.3.0 — migrate to `fn` ops " *
-                    "or AST equations (esm-spec §9 closure, RFC closed-function-registry)"
+                "`call` op was removed in v0.3.0 — write the computation as AST " *
+                    "equations or an expression template (esm-spec §9.6)"
             )
         )
     elseif op_sym === :D
@@ -986,7 +753,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     #    `unlowered_operator` rule) ──
     # Any op that is NOT evaluable-core, reaching compilation, is an unlowered
     # rewrite target: the spatial-calculus sugar `grad`/`div`/`laplacian`, a
-    # named rewrite-target like `integral`/`table_lookup`, OR any unregistered
+    # named rewrite-target like `integral`, OR any unregistered
     # open-namespace custom op (`godunov_hamiltonian`, …). The decision is the
     # registry-sourced tier predicate `_op_in_T` (a member of `_REWRITE_TARGET_OPS`
     # or an op with no registry row) — NOT a hardcoded op-name list — so a user's
@@ -1008,8 +775,8 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         )
     end
     # ── Evaluable-core op with no rule (esm-spec §9.6.6) ──
-    # A core op `_eval_node_op` has no arm for (`skolem`, `rank`, `distinct`,
-    # `argmin`, `argmax`, `apply_expression_template`, …) is refused HERE, while
+    # A core op `_eval_node_op` has no arm for (`distinct`,
+    # `apply_expression_template`, …) is refused HERE, while
     # the evaluator is built, rather than at the first RHS call.
     _has_tree_walk_rule(expr.op) || throw(
         _unevaluable_operator(
@@ -1018,7 +785,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
                 "must eliminate it"
         )
     )
-    return _mknode(kind = _NK_OP, op = op_sym, children = children, payload = payload)
+    return _mknode(kind = _NK_OP, op = op_sym, children = children)
 end
 
 # ============================================================
@@ -1113,25 +880,12 @@ end
 # value depends only on `(u, p, t)`, so naming it once and reading the name back
 # is value-preserving.
 #
-# `fn` (the closed-function call) is deliberately NOT opaque (ess-obs). It IS
-# handled specially by `_compile` — const-array args, a typed payload — but it is
-# nonetheless a pure scalar function of its scalar args, and the `interp.*` /
-# `datetime.*` registry (esm-spec §9.2) is closed and deterministic. Treating it
-# as opaque made every closed-function call a CSE BARRIER: `_cse_count!` stopped
-# at the `fn` node, so neither the call nor anything beneath it could be shared.
-# The historical motivating case was an INLINED observed chain reaching a
-# time/solar-geometry subtree through an `interp.*` table lookup (FastJX's 18
-# actinic-flux bands over one `Solar.cos_zenith` subtree — ~250 re-walks per
-# RHS call). NAMED observeds now carry that sharing as prelude slots
-# (ess-obs-slots), but `fn` transparency still matters twice over: an
-# ANONYMOUS repeated call is still shared here, and a slot DEF body reaching
-# through a closed function still hoists its shareable interior.
 # Membership is declared per-op in src/op_registry.jl (flag `:cse_opaque`)
 # and pinned by op_registry_test.jl.
 const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
 
 # A node is a CSE hoist/recurse candidate iff it is an OpExpr whose op is
-# evaluable-core (`+`, `sin`, `fn`, …). Two disjoint reasons disqualify a node:
+# evaluable-core (`+`, `sin`, …). Two disjoint reasons disqualify a node:
 #   (1) it is a CSE-opaque core form (`_CSE_OPAQUE_OPS` — `const`/`index`/`D`/…,
 #       structural ops `_compile` lowers or rejects specially); or
 #   (2) it is an open-tier rewrite-target op (`_op_in_T`: a named
@@ -1159,7 +913,7 @@ const _TREE_WALK_RULE_OPS = Set{Symbol}(
         Symbol[row.sym for row in _COMPARISON_ELEMENTWISE_OPS],
         Symbol[row.sym for row in _BINARY_ELEMENTWISE_OPS],
         Symbol[row.sym for row in _NARY_MINMAX_OPS],
-        Symbol[:+, :*, :-, :neg, :and, :or, :not, :ifelse, :atan, :pi, :π, :e, :Pre, :fn],
+        Symbol[:+, :*, :-, :neg, :and, :or, :not, :ifelse, :atan, :pi, :π, :e, :Pre],
     )
 )
 _has_tree_walk_rule(op::AbstractString) = Symbol(op) in _TREE_WALK_RULE_OPS
@@ -1982,18 +1736,9 @@ end
 
 # Rebuild the `_Node` that plain `_compile` would emit for a hoistable `expr`,
 # but with each operand lowered through `_compile_cse` so a shared operand
-# becomes a `_NK_CACHED` ref. The `fn` arm delegates to `_compile_fn_node` — the
-# SAME lowering `_compile_op` uses — so the closed-function payload contract
-# (const-arg extraction, typed `_Interp*Spec`, spec-order scalar children) is
-# single-sourced; only the scalar children route through CSE. Every other
-# hoistable op is a plain `_NK_OP` whose operands are all scalar.
+# becomes a `_NK_CACHED` ref. Every hoistable op is a plain `_NK_OP` whose
+# operands are all scalar.
 function _cse_rebuild(expr::OpExpr, var_map, param_syms, reg_funcs, ctx::_CSEContext)
-    if expr.op == "fn"
-        return _compile_fn_node(
-            expr,
-            a -> _compile_cse(a, var_map, param_syms, reg_funcs, ctx)
-        )
-    end
     children = _Node[
         _compile_cse(a, var_map, param_syms, reg_funcs, ctx)
             for a in expr.args
@@ -2656,86 +2401,8 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         _expect_arity_n(op, c, 1)
         return _eval_node(c[1], u, p, t, T)
 
-    elseif op === :fn
-        # `n.payload` is `(fname::String, spec_or_nothing)`. For `interp.*` the
-        # second slot is a build-time-validated typed `_Interp*Spec`; the payload
-        # is the CONCRETE `Tuple{String,_Interp*Spec}`. We `isa`-match that whole
-        # concrete tuple type (NOT `Tuple{String,Any}`) so extracting the spec
-        # stays concrete — reading the second slot as `Any` would re-box the
-        # inline immutable struct on EVERY call (~16 B / interp leaf). Each arm
-        # then calls the validation-free `_interp_*_core` kernel directly with the
-        # evaluated scalar child query — no per-call box, no per-call axis
-        # re-validation, no `_fn_const_arg_spec` scan (all paid ONCE at build
-        # time). Bit-identical to the access-kernel `:fn` arm's interp path:
-        # SAME core, SAME const arrays. Scalar query children are compiled in spec
-        # order excluding the const positions (`_compile_op`): linear → c[1]=x;
-        # bilinear → c[1]=x, c[2]=y; searchsorted → c[1]=x.
-        pl = n.payload
-        if pl isa Tuple{String, _InterpLinearSpec}
-            spec = pl[2]
-            x = _eval_node(c[1], u, p, t, T)
-            return _interp_linear_core(spec, x)
-        elseif pl isa Tuple{String, _InterpBilinearSpec}
-            spec = pl[2]
-            x = _eval_node(c[1], u, p, t, T)
-            y = _eval_node(c[2], u, p, t, T)
-            return _interp_bilinear_core(spec, x, y)
-        elseif pl isa Tuple{String, _InterpSearchsortedSpec}
-            spec = pl[2]
-            x = _eval_node(c[1], u, p, t, T)
-            # `convert(T, …)`, not `Float64(…)`: the index is discrete (no
-            # derivative), but the ARM must still land in the evaluator's value
-            # type or the `:fn` arm infers as a `Union` under ForwardDiff.
-            return convert(T, _interp_searchsorted_core(spec, x))
-        elseif pl isa Tuple{String, _FnTypedCoreSpec}
-            # Registry-declared typed scalar core (registered_functions.jl,
-            # ess-dtcore). `T === Float64` folds at compile time (the same
-            # fold `_eval_closed_fn` runs on): the Float64 walk calls the
-            # unary core directly — no `Any[]` arg box, and bit-identical to
-            # the boxed registry by construction (each core IS the pinned
-            # registry arm's composition). EVERY OTHER `T` (ForwardDiff duals,
-            # traced values) drops to the boxed route below — verbatim the
-            # pre-typed-core behavior, `evaluate_closed_function_ad` widening
-            # included.
-            if T === Float64
-                return _fn_typed_core_call(pl[2].id, _eval_node(c[1], u, p, t, T))
-            end
-            args_evaluated = Any[_eval_node(ci, u, p, t, T) for ci in c]
-            return convert(T, _eval_closed_fn(pl[1], args_evaluated, T))
-        elseif pl isa Tuple{String, Nothing}
-            # All-scalar closed functions WITHOUT a typed-core declaration:
-            # boxed path (no such function exists in the v0.3.0 set — every
-            # `datetime.*` entry declares a core — but the arm stays as the
-            # registry's fallback contract for undeclared functions). The
-            # children are the full spec-order arg list; a cold case off the
-            # numeric RHS hot path, so the residual `Vector{Any}` is tolerated.
-            #
-            # This is the site the ForwardDiff Jacobian used to die on. Because
-            # `_eval_node` is type-stable in `T`, the children arrive as `Dual`s
-            # even when the model differentiates only w.r.t. `u` — and the old
-            # `Float64(…)` coercion (here, and inside the registry) rejected them.
-            #
-            # `_eval_closed_fn` picks the registry on `T` at COMPILE time: at
-            # `T === Float64` it folds to the `Float64`-pinned
-            # `evaluate_closed_function`, keeping this arm's inferred type at the
-            # concrete `Union{Float64,Int32}` that `_eval_node_op` — and with it
-            # the zero-allocation RHS — depends on. See `evaluate_closed_function_ad`.
-            fname = pl[1]
-            args_evaluated = Any[_eval_node(ci, u, p, t, T) for ci in c]
-            return convert(T, _eval_closed_fn(fname, args_evaluated, T))
-        end
-        # Unreachable if `_compile_op` and this arm agree (via
-        # `_FN_CONST_ARG_SPECS`) on which closed functions carry a typed spec —
-        # throw explicitly rather than falling through to an implicit `nothing`.
-        throw(
-            TreeWalkError(
-                "E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
-                "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"
-            )
-        )
-
-    elseif op === :geo_gather || op === :geo_pia || op === :geo_skolem ||
-            op === :geo_agg || op === :cellmemo || op === :geomemo
+    elseif op === :geo_gather || op === :geo_agg || op === :cellmemo ||
+            op === :geomemo
         # Compiled setup-time GEOMETRY nodes (tree_walk/geometry_compile.jl).
         # These exist only in build-time compiled geometry bodies — `u` is a
         # small loop-index frame there, never the ODE state — so this arm is

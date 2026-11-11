@@ -1,5 +1,4 @@
 import Esm.Basic
-import Esm.Closed.Datetime
 import Esm.Float64
 import Esm.Float64.Examples
 import Esm.Closed.Interp
@@ -20,10 +19,7 @@ import Esm.Closed.Geometry.TemplateAst
 import Esm.Closed.Geometry.Padding
 import Esm.Closed.Relational.Keys
 import Esm.Closed.Relational.Count
-import Esm.Closed.Tables
-import Esm.Closed.Tables.Enums
-import Esm.Closed.Tables.Nearest64
-import Esm.Closed.Tables.Load
+import Esm.Closed.Enums
 import Esm.Units.Identities
 import Esm.Units.GrammarLaws
 import Esm.Units.Exec

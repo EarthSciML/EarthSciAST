@@ -36,7 +36,6 @@ export function isExprNode(e: unknown): e is ExpressionNode {
  * expression-bearing field is seen, not just `args`. Walking `args` alone made
  * whole sidecar subtrees invisible:
  *
- *   - `table_lookup{axes:{temp:'T_air'}}`      → `[]`      (missed `T_air`)
  *   - `aggregate{args:['A'], expr:{*:['A','w']}}` → `['A']`  (missed `w`)
  *   - `integral{lower:'a', upper:{+:['b',1]}}` → missed `a`, `b`
  *
@@ -296,8 +295,8 @@ export function simplify(expr: Expr): Expr {
 // of re-deriving the number/string/NumericLiteral/node leaf discrimination —
 // hand-rolled walkers historically each covered a different subset and
 // silently skipped children hidden in aggregate bodies (`expr`/`filter`/
-// `key`), integral bounds (`lower`/`upper`), `makearray` `values`,
-// `table_lookup` `axes`, and template `bindings`. Mirrors the Rust
+// `key`), integral bounds (`lower`/`upper`), `makearray` `values`, and
+// template `bindings`. Mirrors the Rust
 // `ExpressionNode::map_children` / `for_each_child` (types.rs) and the Python
 // `expr_walk` field set for cross-language parity.
 // ---------------------------------------------------------------------------
@@ -307,9 +306,9 @@ const ARRAY_CHILD_KEYS = ['args', 'values'] as const
 
 /**
  * `ExpressionNode` fields holding a string-keyed MAP of child expressions
- * (`table_lookup.axes`, `apply_expression_template.bindings`).
+ * (`apply_expression_template.bindings`).
  */
-const MAP_CHILD_KEYS = ['axes', 'bindings'] as const
+const MAP_CHILD_KEYS = ['bindings'] as const
 
 /** `ExpressionNode` fields holding a single child expression. */
 const SCALAR_CHILD_KEYS = ['lower', 'upper', 'expr', 'filter', 'key'] as const
@@ -317,14 +316,14 @@ const SCALAR_CHILD_KEYS = ['lower', 'upper', 'expr', 'filter', 'key'] as const
 /**
  * The COMPLETE, canonical set of `ExpressionNode` fields that carry child
  * expressions, in deterministic visit order (`args`, the integral/aggregate
- * scalar slots, `values`, `axes`, `key`, `bindings`). This is the single
+ * scalar slots, `values`, `key`, `bindings`). This is the single
  * source of truth every traversal in the package trusts.
  *
  * Any field NOT listed here is structural metadata preserved verbatim by
  * `mapChildren`: `op`, `id`, `expect_cadence`, `wrt`, `dim`, `var`, `attrs`,
- * `output_idx`, `reduce`, `semiring`, `ranges`, `join`, `distinct`, `arg`,
- * `manifold`, `regions`, `shape`, `perm`, `axis`, `fn`, `name`, `value`,
- * `table`, `output`, and any field added later. In particular the `const`
+ * `output_idx`, `reduce`, `semiring`, `ranges`, `join`, `distinct`,
+ * `regions`, `shape`, `perm`, `axis`, `fn`, `name`, `value`, and any field
+ * added later. In particular the `const`
  * node's `value` literal and `NumericLiteral` leaves are NOT expression
  * children — the walker never descends into them.
  *
@@ -338,7 +337,6 @@ export const EXPRESSION_CHILD_KEYS = [
   'expr',
   'filter',
   'values',
-  'axes',
   'key',
   'bindings',
 ] as const
@@ -365,9 +363,9 @@ type ChildVisitor = (child: Expr, key: string, index?: number) => void
  *   - array fields (`args`, `values`): `fn(element, fieldName, arrayIndex)`;
  *   - scalar fields (`lower`, `upper`, `expr`, `filter`, `key`):
  *     `fn(child, fieldName)` with `index` omitted;
- *   - map fields (`axes`, `bindings`): entries are visited in sorted-key
- *     order as `fn(value, entryKey, enumerationIndex)` — `key` is the map's
- *     own axis/param name.
+ *   - map fields (`bindings`): entries are visited in sorted-key order as
+ *     `fn(value, entryKey, enumerationIndex)` — `key` is the map's own param
+ *     name.
  *
  * `NumericLiteral` leaves are passed to `fn` as ordinary children but are
  * never destructured. Returns a NEW node; `node` is not mutated.
@@ -391,8 +389,6 @@ export function mapChildren(node: ExpressionNode, fn: ChildMapper): ExpressionNo
   if (node.values !== undefined) {
     out.values = node.values.map((child, i) => fn(child, 'values', i))
   }
-
-  if (node.axes !== undefined) out.axes = mapRecordChildren(node.axes, fn)
 
   if (node.key !== undefined) out.key = fn(node.key, 'key')
 
@@ -430,8 +426,6 @@ export function forEachChild(node: ExpressionNode, fn: ChildVisitor): void {
   if (node.filter !== undefined) fn(node.filter, 'filter')
 
   if (node.values !== undefined) node.values.forEach((child, i) => fn(child, 'values', i))
-
-  if (node.axes !== undefined) forEachRecordChild(node.axes, fn)
 
   if (node.key !== undefined) fn(node.key, 'key')
 

@@ -1750,8 +1750,6 @@ reading that as a gap.
 | `affect_equation` | type | `AffectEquation` | – | `AffectEquation` | `AffectEquation` | `AffectEquation` |
 | `canonical_json` | function | `canonical_json` | `canonicalJson` | – | `canonical_json` | `CanonicalJSON` |
 | `canonicalize` | function | `canonicalize` | `canonicalize` | – | `canonicalize` | `Canonicalize` |
-| `closed_function_error` | error | `ClosedFunctionError` | `ClosedFunctionError` | – | `ClosedFunctionError` | `ClosedFunctionError` |
-| `closed_function_names` | function | `closed_function_names` | `closedFunctionNames` | – | `closed_function_names` | `ClosedFunctionNames` |
 | `component_graph` | function | `component_graph` | `componentGraph` | `component_graph` | `component_graph` | – |
 | `compose` | function | `compose` | `compose` | – | `compose` | `Compose` |
 | `conflicting_derivative_error` | error | `ConflictingDerivativeError` | `ConflictingDerivativeError` | `ConflictingDerivativeError` | – | `ConflictingDerivativeError` |
@@ -1824,14 +1822,11 @@ reading that as a gap.
 | `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
 | `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
-| `evaluate_closed_function` | function | `evaluate_closed_function` | – | – | `evaluate_closed_function` | `EvaluateClosedFunction` |
 | `flatten_error` | error | – | `FlattenError` | `FlattenError` | `FlattenError` | – |
 | `flattened_equation` | type | – | `FlattenedEquation` | `FlattenedEquation` | – | `FlattenedEquation` |
 | `flattened_variable` | type | – | `FlattenedVariable` | `FlattenedVariable` | – | `FlattenedVariable` |
 | `format_canonical_float` | function | `format_canonical_float` | `formatCanonicalFloat` | – | `format_canonical_float` | – |
 | `free_parameters` | function | – | `freeParameters` | `free_parameters` | `free_parameters` | – |
-| `function_table` | type | `FunctionTable` | – | `FunctionTable` | – | `FunctionTable` |
-| `function_table_axis` | type | `FunctionTableAxis` | – | `FunctionTableAxis` | – | `FunctionTableAxis` |
 | `is_coupling_library_doc` | function | – | `isCouplingLibraryDoc` | `is_coupling_library_doc` | `is_coupling_library_doc` | – |
 | `lower_enums_mut` | function | – | – | `lower_enums_mut` | `lower_enums_mut` | `LowerEnumsMut` |
 | `map_variable` | function | `map_variable` | `mapVariable` | – | – | `MapVariable` |
@@ -1861,7 +1856,6 @@ reading that as a gap.
 | `apply_dae_contract` | function | – | – | – | `apply_dae_contract` | `ApplyDAEContract` |
 | `apply_scope_injections` | function | – | `applyScopeInjections` | – | `apply_scope_injections` | – |
 | `apply_unit_conversion` | function | `apply_unit_conversion` / `apply_unit_conversion!` | – | `apply_unit_conversion` | – | – |
-| `area_tolerance_ok` | function | – | – | `area_tolerance_ok` | `area_tolerance_ok` | – |
 | `assertion_result` | type | `AssertionResult` | – | – | `AssertionResult` | – |
 | `build_unit_env` | function | – | – | – | `build_unit_env` | `BuildUnitEnv` |
 | `cadence` | type | – | – | – | `Cadence` | `Cadence` |
@@ -1909,7 +1903,6 @@ reading that as a gap.
 | `forcing_set` | function | `forcing_set` | – | `forcing_set` | – | – |
 | `forcing_set` | type | `ForcingSet` | – | – | `ForcingSet` | – |
 | `forcing_slot` | type | `ForcingSlot` | – | – | `ForcingSlot` | – |
-| `geometry_error` | error | – | – | `GeometryError` | `GeometryError` | – |
 | `get_component_type` | function | – | `getComponentType` | – | `get_component_type` | – |
 | `graph_edge` | type | – | – | `GraphEdge` | – | `GraphEdge` |
 | `grid_plan` | type | `GridPlan` | – | – | `GridPlan` | – |
@@ -1919,7 +1912,6 @@ reading that as a gap.
 | `init` | function | – | – | `init` | `init` | – |
 | `inline_test_options` | type | `InlineTestOptions` | – | – | `InlineTestOptions` | – |
 | `integrator` | type | – | – | `Integrator` | `Integrator` | – |
-| `intersect_polygon` | function | – | – | `intersect_polygon` | `intersect_polygon` | – |
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
 | `lanes` | function | `lanes` | – | `lanes` | – | – |
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |
@@ -1941,10 +1933,7 @@ reading that as a gap.
 | `plot_axis` | type | – | – | – | `PlotAxis` | `PlotAxis` |
 | `plot_series` | type | – | – | – | `PlotSeries` | `PlotSeries` |
 | `plot_value` | type | – | – | – | `PlotValue` | `PlotValue` |
-| `polygon_area` | function | – | – | `polygon_area` | `polygon_area` | – |
 | `product_matrix` | function | – | `productMatrix` | `product_matrix` | – | – |
-| `rank` | function | – | – | `rank` | `rank` | – |
-| `ranking` | type | – | – | `Ranking` | `Ranking` | – |
 | `remake` | function | – | – | `remake` | `remake` | – |
 | `restrict` | function | `restrict` | – | `restrict` | – | – |
 | `return_code` | type | – | – | `ReturnCode` | `ReturnCode` | – |
@@ -1953,8 +1942,6 @@ reading that as a gap.
 | `schema_error` | type | `SchemaError` | `SchemaError` | – | – | – |
 | `select` | function | `select` | – | `select` | – | – |
 | `simulate_error` | error | `SimulateError` | – | – | `SimulateError` | – |
-| `skolem` | function | – | – | `skolem` | `skolem` | – |
-| `skolem_edge` | function | – | – | `skolem_edge` | `skolem_edge` | – |
 | `slice_out_of_domain_error` | error | `SliceOutOfDomainError` | – | `SliceOutOfDomainError` | – | – |
 | `solution` | type | – | – | `Solution` | `Solution` | – |
 | `solve` | function | – | – | `solve` | `solve` | – |
@@ -2028,7 +2015,7 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 2 | `save` | Pure serialization in TypeScript and Rust, a disk write in Julia, both in Python. Go alone distinguished them by name, using nobody else's names. | **DONE.** `to_json(file, opts) -> string` pure everywhere; `write_path(file, path)` writes and returns nothing; `to_json_compact` in all five. See §5.1. | all five |
 | 2b | `VERSION` | Meant the SCHEMA version in TypeScript and the PACKAGE version in Rust. Julia exported only `ESM_FORMAT_VERSION`; Python kept the format version private as a tuple; Go exposed neither. | **DONE.** `SCHEMA_VERSION` and `LIBRARY_VERSION`, both public strings, in all five; `VERSION` deleted. See §5.1. | all five |
 | 3 | `abstol` / `reltol` / `saveat` / `alg` | Python uses scipy's `rtol`/`atol`/`method`; Rust's `SimulateOptions` uses `solver`/`output_times`. Rust's default tolerances are 4 orders looser than the other two. | Subsumed by the phase-4 simulation reshape: the option names come along with `simulate` being deleted and `Problem`/`solve` replacing it. SciML spelling everywhere (§4). The default VALUES are a separate, still-open decision — the premise that Julia and Python already agreed on `1e-10`/`1e-14` was a misreading; all three differ. See the correction of record in §5.8. **CLOSED (phase 6).** The default VALUES were ruled by the user during phase 4: Julia's `reltol = 1e-4` / `abstol = 1e-6` are canonical in every binding, and §5.8 carries the table. Nothing is open on this row. | Python, Rust |
-| 4 | `closed_function_names` | A function in Julia, Rust and Go; a **constant array** `CLOSED_FUNCTION_NAMES` in TypeScript. | **DONE (phase 6).** TypeScript exports `closedFunctionNames()`; `CLOSED_FUNCTION_NAMES` is a deprecated alias for one minor, returned by identity so the two are the same array. The two spellings are different KINDS, so the manifest carries them as two entries (`function` 4/5 `stable`, `constant` TypeScript-only `extension`) rather than one alias pair. | TypeScript |
+| 4 | `closed_function_names` | A function in Julia, Rust and Go; a **constant array** `CLOSED_FUNCTION_NAMES` in TypeScript. | **DONE (phase 6).** TypeScript exports `closedFunctionNames()`; `CLOSED_FUNCTION_NAMES` is a deprecated alias for one minor, returned by identity so the two are the same array. The two spellings are different KINDS, so the manifest carries them as two entries (`function` 4/5 `stable`, `constant` TypeScript-only `extension`) rather than one alias pair. Both spellings, and `closed_function_names` in every binding, are removed at esm 2.0.0 with the closed function registry. | TypeScript |
 | 5 | `derive_odes` | TypeScript spells it `deriveODEs`, violating §2 — and is internally inconsistent, since it already spells the siblings `odeStates` and `isOdeState`. | **DONE (phase 6).** Renamed to `deriveOdes`; `deriveODEs` stays a deprecated alias for one minor (§10) and is the same function object. | TypeScript |
 | 6 | `unknowns` / `parameters` | TypeScript and Python export `unknowns`/`parameters`; Julia exports `unknown_names`/`parameter_names` for the same query. | Canonical is `unknowns`/`parameters`. Julia keeps its `*_names` spellings as aliases — the bare names collide badly in Julia's flat namespace. **DONE (phase 6).** Julia gained `unknowns` / `parameters`; `unknown_names` / `parameter_names` stay as aliases. The collision was MEASURED, not assumed — with `using EarthSciAST, ModelingToolkit, Catalyst`, a bare `unknowns(m)` raises an ambiguity error, which is why both spellings stay. | Julia |
 | 7 | edit operations | Python suffixes every edit with its container: `add_variable_to_model`, `remove_coupling_from_file`, `extract_component_from_file`, `merge_esm_files`. Julia, TypeScript and Rust use the bare verb. | Python gains the bare names; the suffixed ones become aliases. **DONE (phase 6).** Python gained all 16 bare names (the sample in the Problem column was not the whole set); every suffixed name survives as a deprecated alias emitting `DeprecationWarning`. None of the 16 bare names collided. | Python |
@@ -2142,7 +2129,6 @@ The §8 SciML renames are therefore major-or-aliased, not silent.
 | `to_json(::Graph)` methods | Julia | §8 item 8 | `to_json_graph` | the next major |
 | `deriveODEs` | TypeScript | §8 item 5 | `deriveOdes` | the next major |
 | `getSupportedMigrationTargets` | TypeScript | §8 item G-2 | `supportedMigrationTargets` | the next major |
-| `CLOSED_FUNCTION_NAMES` | TypeScript | §8 item 4 | `closedFunctionNames()` | the next minor |
 | the container-suffixed edit operations (`add_variable_to_model`, `remove_coupling_from_file`, `merge_esm_files`, …) | Python | §8 item 7 | the bare verbs (`add_variable`, `remove_coupling`, `merge`, …) | the next major |
 | `validate_complete` | Rust | §8 item 13 | `validate_text` | the next major |
 | `get_supported_migration_targets` | Rust | §8 item G-2 | `supported_migration_targets` | the next major |

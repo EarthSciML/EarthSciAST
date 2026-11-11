@@ -15,7 +15,6 @@ import os
 import pytest
 
 from earthsci_ast import (
-    ExpressionTemplateError,
     emit_document,
     emit_esm_string,
     expand_document,
@@ -224,25 +223,6 @@ def test_opacity_priority_shadowing():
         _emit("opacity_priority_shadowing")
         == open(_conf("opacity_priority_shadowing", "emitted.esm"), encoding="utf-8").read()
     )
-
-
-# ---------------------------------------------------------------------------
-# per_instantiation_validation (§9.6.9): manifold param, two call sites, one
-# inadmissible → geometry_manifold_invalid naming the call site.
-# ---------------------------------------------------------------------------
-def test_per_instantiation_validation():
-    with pytest.raises(ExpressionTemplateError) as ei:
-        _load("per_instantiation_validation")
-    assert ei.value.code == "geometry_manifold_invalid"
-    msg = str(ei.value)
-    # The offending call site is identified by its PATH. esm 1.0.0 moved an
-    # observed unknown's defining expression onto an equation, so the bad site
-    # is the SECOND equation's rhs (the one defining `area_bad`) rather than a
-    # `variables.area_bad.expression` path — and the admissible sibling
-    # (`area_ok`, equation 0) is NOT the one reported.
-    assert "models.m.equations/1/rhs" in msg
-    assert "equations/0" not in msg
-    assert "overlap" in msg  # template name named
 
 
 # ---------------------------------------------------------------------------

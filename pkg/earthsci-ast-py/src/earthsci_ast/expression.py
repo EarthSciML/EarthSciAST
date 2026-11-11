@@ -5,7 +5,6 @@ Expression manipulation and analysis functions.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Callable
 
 import sympy as sp
 
@@ -20,12 +19,6 @@ from .numpy_interpreter import (
     UnreachableSpatialOperatorError,
     fold_constant_expr,
 )
-from .registered_functions import (
-    INTERP_CONST_ARG_POSITIONS,
-    closed_function_names,
-    evaluate_closed_function,
-    extract_const_arg,
-)
 
 
 def free_variables(expr: Expr) -> set[str]:
@@ -34,7 +27,7 @@ def free_variables(expr: Expr) -> set[str]:
 
     Traverses the full canonical child set (:mod:`.expr_walk`), so variables
     hidden in aggregate bodies, ``filter`` predicates, integral bounds,
-    ``makearray`` values, or ``table_lookup`` axes are all found. ``wrt`` and
+    or ``makearray`` values are all found. ``wrt`` and
     ``dim`` are not children (they bind/label, they do not reference values)
     and are not collected.
 
@@ -331,43 +324,6 @@ class _ess_numeric_abs(sp.Function):
         return None
 
 
-def _make_fn_callable(
-    name: str,
-    total_arity: int,
-    const_args_by_position: dict[int, list],
-) -> Callable:
-    """Build a Python callable for a single ``fn``-op call site.
-
-    SymPy's :func:`lambdify` cannot route Python list/array literals through
-    its symbolic argument list, so the table / axis arguments to closed
-    functions like ``interp.bilinear`` cannot become :class:`sympy.Expr` nodes.
-    Instead, each ``fn``-op call site emits a unique synthetic
-    :class:`sympy.Function` placeholder over only its dynamic (state-/
-    parameter-/time-dependent) arguments; the const arrays are baked into a
-    Python closure that is registered in ``modules`` for that specific
-    placeholder. At runtime the lambdified RHS calls into this closure, which
-    reconstructs the original argument vector and dispatches through
-    :func:`registered_functions.evaluate_closed_function`.
-
-    Always returns ``float`` so the result composes with NumPy arithmetic
-    inside ``solve_ivp`` regardless of whether the registry returned an int
-    (``datetime.year``) or a float (``interp.bilinear``).
-    """
-
-    def _fn_call(*dynamic_args):
-        all_args: list = [None] * total_arity
-        for i, v in const_args_by_position.items():
-            all_args[i] = v
-        di = 0
-        for i in range(total_arity):
-            if all_args[i] is None:
-                all_args[i] = float(dynamic_args[di])
-                di += 1
-        return float(evaluate_closed_function(name, all_args))
-
-    return _fn_call
-
-
 # Pure unary math/logical ops: each takes exactly 1 ESM argument and maps to a
 # single SymPy callable applied to it. The second tuple element is the display
 # name used in the arity error so the message text is preserved verbatim (e.g.
@@ -446,7 +402,6 @@ _EVALUABLE_CORE_OPS: frozenset[str] = op_registry.by_tier("core")
 def _expr_to_sympy(
     expr: Expr,
     symbol_map: dict[str, sp.Symbol],
-    fn_callable_map: dict[str, Callable] | None = None,
     structural_ops: bool = False,
 ) -> sp.Expr:
     """
@@ -463,21 +418,9 @@ def _expr_to_sympy(
     :class:`sympy.Function` has no ``.eval``, so the decomposition cannot
     fire and the lambdified RHS stays in pure-real form.
 
-    The ``'fn'`` op (closed-function registry, esm-spec §9.2) and its
-    companion ``'const'`` op are handled by extracting the inline-const
-    array arguments (table / axis data) at conversion time and emitting a
-    unique :class:`sympy.Function` placeholder over only the dynamic
-    arguments. The const arrays are baked into a Python closure registered
-    in ``fn_callable_map`` keyed by the placeholder name; the caller threads
-    that map into ``sympy_bridge._LAMBDIFY_MODULES`` at lambdify time so the
-    RHS can call into the registry at runtime. (esm-6ka)
-
     Args:
         expr: Expression to convert
         symbol_map: Mapping from variable names to SymPy symbols
-        fn_callable_map: Mutable map populated with ``synthetic_name → callable``
-            for every ``fn``-op call site encountered. Required when ``expr``
-            contains ``fn`` ops; ``None`` raises with a clear diagnostic.
         structural_ops: When False (the simulation-lowering default), a genuine
             ``D`` and every non-evaluable-core op — the open-tier sugar
             ``grad``/``div``/``laplacian``/``curl``/``integral`` and any custom
@@ -516,7 +459,7 @@ def _expr_to_sympy(
             if not structural_ops:
                 raise UnreachableSpatialOperatorError(expr.op)
             sympy_args = [
-                _expr_to_sympy(a, symbol_map, fn_callable_map, structural_ops) for a in expr.args
+                _expr_to_sympy(a, symbol_map, structural_ops=structural_ops) for a in expr.args
             ]
             if len(sympy_args) != 1:
                 raise SimulationError(f"D requires exactly 1 argument, got {len(sympy_args)}")
@@ -525,7 +468,7 @@ def _expr_to_sympy(
             # does; refusing it here made a legal node unrepresentable
             # (EarthSciAST#407).
             wrt = expr.wrt or op_registry.STRUCTURAL_DERIVATIVE_WRT
-            wrt_symbol = _expr_to_sympy(wrt, symbol_map, fn_callable_map, structural_ops)
+            wrt_symbol = _expr_to_sympy(wrt, symbol_map, structural_ops=structural_ops)
             return sp.Derivative(sympy_args[0], wrt_symbol)
 
         # Every OTHER non-evaluable-core op is an ordinary open-tier
@@ -542,16 +485,13 @@ def _expr_to_sympy(
             if not structural_ops:
                 raise UnreachableSpatialOperatorError(expr.op)
             sympy_args = [
-                _expr_to_sympy(a, symbol_map, fn_callable_map, structural_ops) for a in expr.args
+                _expr_to_sympy(a, symbol_map, structural_ops=structural_ops) for a in expr.args
             ]
             return sp.Function(expr.op)(*sympy_args)
 
-        # Closed-function registry (esm-spec §9.2 / §9.3) and inline const
-        # values must be handled before the generic argument recursion below,
-        # because ``fn`` calls take materialized const arrays in some argument
-        # positions (table / axis data) that have no sensible SymPy
-        # representation, and the bare ``const`` op carries the value in
-        # ``expr.value`` rather than ``expr.args``. (esm-6ka)
+        # Inline const values must be handled before the generic argument
+        # recursion below: the bare ``const`` op carries the value in
+        # ``expr.value`` rather than ``expr.args``.
         # The nullary boolean literals (esm-spec §4.2), in the numeric 1.0 / 0.0
         # encoding every comparison here already produces.
         if expr.op == "true":
@@ -567,54 +507,13 @@ def _expr_to_sympy(
                 return sp.Float(float(v))
             if isinstance(v, (int, float)):
                 return sp.Float(v)
-            # Inline arrays only have meaning as positional arguments to a
-            # ``fn`` op (the closed-function registry consumes them as raw
-            # Python lists). A standalone array-valued ``const`` reaching this
-            # path would mean someone tried to lambdify an array literal as
-            # an ODE RHS subterm, which is not supported.
+            # An array-valued ``const`` reaching this path would mean someone
+            # tried to lambdify an array literal as an ODE RHS subterm, which
+            # the scalar SymPy simulator does not support.
             raise SimulationError(
                 f"`const` op with non-scalar value (type "
-                f"{type(v).__name__}) cannot appear outside of a closed-"
-                f"function `fn` argument slot in the SymPy simulator path"
+                f"{type(v).__name__}) is not supported in the SymPy simulator path"
             )
-        if expr.op == "fn":
-            if expr.name is None:
-                raise SimulationError("`fn` op requires a `name` field")
-            if expr.name not in closed_function_names():
-                raise SimulationError(
-                    f"`fn` name `{expr.name}` is not in the closed function "
-                    f"registry (esm-spec §9.2)"
-                )
-            if fn_callable_map is None:
-                raise SimulationError(
-                    "`fn` op (closed-function call, esm-spec §9.2) is not "
-                    "supported by the symbolic `to_sympy` conversion: a closed "
-                    "function needs a runtime callable map that only the "
-                    "simulation-lowering path constructs. Lower/simulate the "
-                    "expression through the simulation entry point instead of "
-                    "converting it to SymPy directly."
-                )
-            const_positions = INTERP_CONST_ARG_POSITIONS.get(expr.name, ())
-            const_args_by_position: dict[int, list] = {}
-            dynamic_sympy_args: list[sp.Expr] = []
-            for i, a in enumerate(expr.args):
-                if i in const_positions:
-                    # Raises the slot's esm-spec §9.2 code
-                    # (`interp_table_not_const` / `interp_axis_not_const`) for a
-                    # variable or computed expression in a table / axis slot.
-                    const_args_by_position[i] = extract_const_arg(expr.name, i, a)
-                else:
-                    dynamic_sympy_args.append(
-                        _expr_to_sympy(a, symbol_map, fn_callable_map, structural_ops)
-                    )
-            synthetic_name = f"_ess_fn_{len(fn_callable_map)}"
-            fn_callable_map[synthetic_name] = _make_fn_callable(
-                expr.name,
-                len(expr.args),
-                const_args_by_position,
-            )
-            placeholder = sp.Function(synthetic_name)
-            return placeholder(*dynamic_sympy_args)
         if expr.op == "enum":
             raise SimulationError(
                 "`enum` op encountered in SymPy bridge — `lower_enums(file)` "
@@ -623,7 +522,7 @@ def _expr_to_sympy(
 
         # Convert arguments recursively
         sympy_args = [
-            _expr_to_sympy(arg, symbol_map, fn_callable_map, structural_ops) for arg in expr.args
+            _expr_to_sympy(arg, symbol_map, structural_ops=structural_ops) for arg in expr.args
         ]
 
         # Handle different operations

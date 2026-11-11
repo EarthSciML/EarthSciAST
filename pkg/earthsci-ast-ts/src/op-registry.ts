@@ -53,11 +53,10 @@ export interface OpInfo {
    * Every exclusion is load-bearing. Not scalar: the array/tensor ops
    * (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and
    * `broadcast` ITSELF — a self-referential `fn: 'broadcast'` would recurse
-   * forever); the closed-registry invocation `fn`; the form/lowering ops (`D`,
-   * `ic`, `Pre`, `const`, `true`, `false`, `enum`, `table_lookup`,
-   * `apply_expression_template`); the word spelling `pow` of `^`, which
-   * evaluates but is not a `broadcast` `fn` in any binding; and the
-   * relational/geometry kernels. `=` is likewise NOT scalar: `=` is not a
+   * forever); the form/lowering ops (`D`, `ic`, `Pre`, `const`, `true`,
+   * `false`, `enum`, `apply_expression_template`); the word spelling `pow` of
+   * `^`, which evaluates but is not a `broadcast` `fn` in any binding; and the
+   * relational op `distinct`. `=` is likewise NOT scalar: `=` is not a
    * spelling of `==` (nor `**` of `^`) — it carries no evaluator and is not an
    * operator this format applies element-wise.
    *
@@ -532,10 +531,9 @@ export interface BroadcastFnViolation {
  *  1. **A missing `fn`.** There is no default in the spec, and inventing `+`
  *     turns a truncated node into a silent sum.
  *  2. **An `fn` naming no scalar operator** — a typo (`'not_a_real_op'`) or a
- *     non-pointwise op (`'faq'`, `'index'`, `'broadcast'` itself). This
- *     is the exact analogue of the §4.4 `unknown_closed_function` rule for
- *     `fn`-NODE names: a name no binding can resolve must never reach an
- *     evaluator, because the failure is otherwise silent.
+ *     non-pointwise op (`'faq'`, `'index'`, `'broadcast'` itself). A name
+ *     no binding can resolve must never reach an evaluator, because the
+ *     failure is otherwise silent.
  *  3. **An `fn`/`args` arity mismatch.** `broadcast(fn:'sin', [a, b])` and
  *     `broadcast(fn:'min', [x])` are wrong for precisely the reason the bare
  *     `sin(a, b)` and `min(x)` nodes are wrong.

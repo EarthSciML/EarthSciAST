@@ -54,7 +54,6 @@
  *   - apply_expression_template_invalid_declaration
  *   - rewrite_rule_nonterminating
  *   - template_constraint_unknown_index_set   (§9.6.1 `where` registration)
- *   - geometry_manifold_invalid               (§9.6.4 expanded-form validator)
  *   - makearray_region_inverted               (§9.6.4 expanded-form validator)
  *
  * plus the esm-spec §9.7 template-library / metaparameter codes (§9.6.6,
@@ -79,19 +78,6 @@ import { deepClone, isObject } from './object-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 const APPLY_OP = 'apply_expression_template'
-
-/**
- * Geometry-kernel ops whose `manifold` scalar field is restricted to the
- * closed manifold registry (CONFORMANCE_SPEC §5.8.4). The document schema
- * admits any string in the `manifold` position so a template `body` can carry
- * a parameter name there (esm-spec §9.6.1 scalar-field substitution site); the
- * closed set is enforced by `validateGeometryManifolds` on the EXPANDED form
- * per esm-spec §9.6.4.
- */
-const GEOMETRY_MANIFOLD_OPS = new Set(['intersect_polygon', 'polygon_intersection_area'])
-const GEOMETRY_MANIFOLD_VALUES = new Set(['planar', 'spherical', 'geodesic'])
-/** The closed manifold set rendered for diagnostics, e.g. `{planar, spherical, geodesic}`. */
-const GEOMETRY_MANIFOLD_SET_DISPLAY = `{${[...GEOMETRY_MANIFOLD_VALUES].join(', ')}}`
 
 /**
  * Maximum number of productive rewrite passes before a file is rejected as
@@ -734,15 +720,7 @@ function expandApply(node: Record<string, unknown>, templates: Templates, scope:
  * ({@link EVALUABLE_CORE_OPS}) is ALSO in T (an open-namespace custom op no
  * evaluator implements); `apply_expression_template` itself is excluded.
  */
-const REWRITE_TARGET_OPS = new Set<string>([
-  'D',
-  'grad',
-  'div',
-  'laplacian',
-  'integral',
-  'table_lookup',
-  'enum',
-])
+const REWRITE_TARGET_OPS = new Set<string>(['D', 'grad', 'div', 'laplacian', 'integral', 'enum'])
 
 /**
  * The evaluable-core op registry — every op name the format defines an
@@ -800,7 +778,6 @@ const EVALUABLE_CORE_OPS = new Set<string>([
   'e',
   'true',
   'false',
-  'fn',
   'call',
   'const',
   'enum',
@@ -816,13 +793,6 @@ const EVALUABLE_CORE_OPS = new Set<string>([
   'transpose',
   'concat',
   'faq',
-  'faq',
-  'intersect_polygon',
-  'polygon_intersection_area',
-  'skolem',
-  'rank',
-  'argmin',
-  'argmax',
 ])
 
 /**
@@ -1541,56 +1511,6 @@ function hasExpressionTemplatesBlock(root: Record<string, unknown>): boolean {
 }
 
 /**
- * Post-expansion validator (esm-spec §9.6.4): every `intersect_polygon` /
- * `polygon_intersection_area` node OUTSIDE an `expression_templates` block
- * must carry a `manifold` drawn from the closed set {planar, spherical,
- * geodesic}. Template bodies are skipped — a parameter name in the `manifold`
- * position of a `body` is a legal scalar-field substitution site (esm-spec
- * §9.6.1); by the time this validator runs on a loaded document every such
- * site has been substituted, so an out-of-set value here is a real defect
- * (e.g. a template invocation binding the manifold parameter to a non-member
- * literal). Throws `EsmMachineryError` with code
- * `geometry_manifold_invalid`.
- *
- * The expanded form is a shared DAG (see `substitute`), so the walk visits
- * each unique node once (`seen`, keyed on object identity). The first —
- * pre-order-earliest — offending node still throws with the same path as an
- * unshared walk would, because memoization never changes when a node is FIRST
- * visited.
- */
-export function validateGeometryManifolds(tree: unknown, path = ''): void {
-  const seen = new Set<object>()
-  const visit = (tree: unknown, path: string): void => {
-    if (Array.isArray(tree)) {
-      if (seen.has(tree)) return
-      seen.add(tree)
-      for (let i = 0; i < tree.length; i++) visit(tree[i], `${path}/${i}`)
-      return
-    }
-    if (!isObject(tree)) return
-    if (seen.has(tree)) return
-    seen.add(tree)
-    const node = tree as Record<string, unknown>
-    if (typeof node.op === 'string' && GEOMETRY_MANIFOLD_OPS.has(node.op) && 'manifold' in node) {
-      const m = node.manifold
-      if (!(typeof m === 'string' && GEOMETRY_MANIFOLD_VALUES.has(m))) {
-        throw new EsmMachineryError(
-          ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
-          `${path}: \`${node.op}\` carries manifold ${JSON.stringify(m)}, not a member of the closed set ${GEOMETRY_MANIFOLD_SET_DISPLAY}. The manifold enum is enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter substituted into this scalar field must be bound to one of the closed-set literals.`,
-        )
-      }
-    }
-    for (const k of Object.keys(node)) {
-      // Pre-substitution template trees; params may legally occupy the manifold
-      // position there (esm-spec §9.6.1).
-      if (k === 'expression_templates') continue
-      visit(node[k], `${path}/${k}`)
-    }
-  }
-  visit(tree, path)
-}
-
-/**
  * Post-expansion validator (esm-spec §4.3.2 / §9.6.4): every `makearray`
  * region bound pair `[start, stop]` on the expanded, metaparameter-folded tree
  * must satisfy `stop >= start - 1`. `stop == start - 1` is the canonical EMPTY
@@ -1605,9 +1525,10 @@ export function validateGeometryManifolds(tree: unknown, path = ''): void {
  * carries nothing else in bound position). Throws `EsmMachineryError`
  * with code `makearray_region_inverted`.
  *
- * Visits each unique node once (`seen` — the expanded form is a shared DAG;
- * see `validateGeometryManifolds` for why the first-thrown diagnostic is
- * unchanged).
+ * Visits each unique node once (`seen`, keyed on object identity — the
+ * expanded form is a shared DAG; see `substitute`). The first, pre-order-earliest
+ * offending node still throws with the same path as an unshared walk would,
+ * because memoization never changes when a node is FIRST visited.
  */
 export function validateMakearrayRegions(tree: unknown, path = ''): void {
   const seen = new Set<object>()
@@ -1694,137 +1615,6 @@ function validateMakearrayRegionsInRegistries(
 }
 
 /**
- * Which templates can produce a geometry-kernel node (`GEOMETRY_MANIFOLD_OPS`)
- * — directly in the body or transitively through a referenced template. Only
- * references to these templates need per-instantiation manifold validation
- * (§9.6.9). Mirrors the Julia reference `_template_manifold_bearing`.
- */
-function templateManifoldBearing(templates: Templates): Record<string, boolean> {
-  const direct = (node: Json, seen: Set<object> = new Set()): boolean => {
-    if (Array.isArray(node)) {
-      if (seen.has(node)) return false
-      seen.add(node)
-      for (const c of node) if (direct(c, seen)) return true
-      return false
-    }
-    if (isObject(node)) {
-      if (seen.has(node)) return false
-      seen.add(node)
-      if (typeof node.op === 'string' && GEOMETRY_MANIFOLD_OPS.has(node.op)) return true
-      for (const k of Object.keys(node)) if (direct(node[k], seen)) return true
-      return false
-    }
-    return false
-  }
-  const mb: Record<string, boolean> = {}
-  const inProgress = new Set<string>()
-  const visit = (name: string): boolean => {
-    if (Object.prototype.hasOwnProperty.call(mb, name)) return mb[name]!
-    if (inProgress.has(name)) return false
-    const decl = templates[name]
-    if (!isObject(decl)) {
-      mb[name] = false
-      return false
-    }
-    inProgress.add(name)
-    const body = decl.body
-    let res = body !== undefined && direct(body)
-    if (!res) {
-      for (const r of collectApplyNames(body, [])) {
-        if (Object.prototype.hasOwnProperty.call(templates, r) && visit(r)) {
-          res = true
-          break
-        }
-      }
-    }
-    inProgress.delete(name)
-    mb[name] = res
-    return res
-  }
-  for (const name of Object.keys(templates)) visit(name)
-  return mb
-}
-
-/**
- * esm-spec §9.6.9: `geometry_manifold_invalid` is discharged per-instantiation
- * (a `manifold` may be a template param), memoized. Direct geometry nodes in
- * the reference-preserving tree are checked as before; every surviving
- * `apply_expression_template` reference whose template can produce a geometry
- * kernel is additionally expanded ONCE (memoized) and its expansion validated.
- * The diagnostic reports (call-site path, template name, intra-body path).
- * Mirrors the Julia reference `_validate_geometry_manifolds_refaware`.
- */
-function validateGeometryManifoldsRefAware(
-  root: Record<string, unknown>,
-  contextsByKind: Record<'models' | 'reaction_systems', Map<string, RewriteContext>>,
-): void {
-  // Direct nodes on the reference-preserving tree (skips template blocks; does
-  // not see manifold params hidden behind references).
-  validateGeometryManifolds(root)
-  for (const kind of ['models', 'reaction_systems'] as const) {
-    const comps = root[kind]
-    if (!isObject(comps)) continue
-    for (const [cname, ctx] of contextsByKind[kind]) {
-      const comp = comps[cname]
-      if (!isObject(comp)) continue
-      const manifoldBearing = templateManifoldBearing(ctx.templates)
-      if (!Object.values(manifoldBearing).some(Boolean)) continue // no geometry
-      const memo = new Set<object>()
-      for (const [k, v] of Object.entries(comp)) {
-        if (k === 'expression_templates') continue
-        validateManifoldsInRefs(v, ctx.templates, manifoldBearing, `${kind}.${cname}.${k}`, memo)
-      }
-    }
-  }
-}
-
-function validateManifoldsInRefs(
-  node: Json,
-  templates: Templates,
-  manifoldBearing: Record<string, boolean>,
-  path: string,
-  memo: Set<object>,
-): void {
-  if (Array.isArray(node)) {
-    if (memo.has(node)) return
-    memo.add(node)
-    for (let i = 0; i < node.length; i++)
-      validateManifoldsInRefs(node[i], templates, manifoldBearing, `${path}/${i}`, memo)
-    return
-  }
-  if (!isObject(node)) return
-  if (memo.has(node)) return
-  memo.add(node)
-  const name = node.op === APPLY_OP ? String(node.name ?? '') : ''
-  // Per-instantiation manifold check (§9.6.9): expand ONLY references whose
-  // template can produce a geometry-kernel node; everything else is cheap.
-  if (name !== '' && manifoldBearing[name]) {
-    let expansion: Json
-    try {
-      expansion = expandAllNode(node, templates, path)
-    } catch {
-      expansion = undefined
-    }
-    if (expansion !== undefined) {
-      try {
-        validateGeometryManifolds(expansion)
-      } catch (e) {
-        if (e instanceof EsmMachineryError && e.code === ERROR_CODES.GEOMETRY_MANIFOLD_INVALID) {
-          throw new EsmMachineryError(
-            ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
-            `${path}: instantiation of template '${name}' — ${e.message} (esm-spec §9.6.9; per-instantiation manifold check)`,
-          )
-        }
-        throw e
-      }
-    }
-  }
-  for (const k of Object.keys(node)) {
-    validateManifoldsInRefs(node[k], templates, manifoldBearing, `${path}/${k}`, memo)
-  }
-}
-
-/**
  * Load the file under Option B (reference preservation, esm-spec §9.6.4): fire
  * auto-applied `match` rules and eagerly expand target-bearing references to a
  * fixpoint per component (outermost-first, priority-ordered, bounded — §9.6.3),
@@ -1832,8 +1622,7 @@ function validateManifoldsInRefs(
  * denote their expansion, §9.6.4 rule 2). The per-component
  * `expression_templates` registries are RETAINED — they are what {@link
  * expandDocument} consumes (rule 2) and emit materializes (rule 5). Call-site
- * checks (§9.6.9), the reference-aware geometry-manifold check, and the
- * registration-time makearray-region check run on the reference-preserving form.
+ * checks (§9.6.9) and the registration-time makearray-region check run on the reference-preserving form.
  *
  * Returns a new file object; the input is not mutated.
  *
@@ -1850,10 +1639,9 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   // are no eager apply ops).
   const strayApplyPaths = findStrayApplyOps(file)
   if (strayApplyPaths.length === 0 && !hasExpressionTemplatesBlock(root)) {
-    // No template machinery at all; the §9.6.4 expanded-form validators still
-    // run — the raw tree IS the expanded form. Return a fresh tree (the "returns
-    // a fresh clone" contract callers rely on).
-    validateGeometryManifolds(root)
+    // No template machinery at all; the §9.6.4 expanded-form validator still
+    // runs — the raw tree IS the expanded form. Return a fresh tree (the
+    // "returns a fresh clone" contract callers rely on).
     validateMakearrayRegions(root)
     return deepClone(root) as T
   }
@@ -1941,14 +1729,10 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   // references are errors — already checked per component / per transform by
   // `checkSurvivingRefs`. No global "no apply ops remain" gate.
 
-  // Validation discharge (esm-spec §9.6.9): geometry-manifold and
-  // makearray-region checks on the reference-preserving form. The manifold
-  // check is per-instantiation (a `manifold` may be a template param), so it
-  // descends through surviving references' single-instantiation expansions,
-  // memoized. Region bounds cannot carry template params, so the makearray
-  // check runs on the reference-preserving tree AND the retained folded
-  // template bodies directly.
-  validateGeometryManifoldsRefAware(out, contextsByKind)
+  // Validation discharge (esm-spec §9.6.9): the makearray-region check on the
+  // reference-preserving form. Region bounds cannot carry template params, so
+  // it runs on the reference-preserving tree AND the retained folded template
+  // bodies directly.
   validateMakearrayRegions(out)
   validateMakearrayRegionsInRegistries(contextsByKind)
 

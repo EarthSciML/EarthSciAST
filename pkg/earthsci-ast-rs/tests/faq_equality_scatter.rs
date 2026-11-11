@@ -95,7 +95,7 @@ fn doc(n: i64, m: i64, eqs: Vec<Value>, extra_vars: Value) -> Value {
         sets["x2"] = json!({"kind": "interval", "size": m});
     }
     json!({
-        "esm": "1.3.0",
+        "esm": "2.0.0",
         "metadata": {"name": "faq_equality_scatter", "authors": ["test"]},
         "index_sets": sets,
         "models": {"M": {"variables": vars, "equations": eqs}}
@@ -642,7 +642,7 @@ fn ragged_parent_doc(m: usize) -> (Value, Vec<Vec<usize>>, Vec<f64>) {
         "filter": eq(json!("j"), e),
         "expr": op("*", vec![ix("W", vec![mem()]), ix("s", vec![mem()])])});
     let d = json!({
-        "esm": "1.3.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ragged_parent_scatter", "authors": ["test"]},
         "index_sets": {
             "ns": {"kind": "interval", "size": m},
@@ -862,7 +862,7 @@ fn a_free_index_read_by_a_conjunct_or_a_ragged_bound() {
         "filter": eq(json!("b"), json!("k")),
         "expr": op("*", vec![ix("s", vec![mem()]), plus(json!("k"), json!(0.5))])});
     let d = json!({
-        "esm": "1.3.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ragged_free_scatter", "authors": ["test"]},
         "index_sets": {
             "rows": {"kind": "interval", "size": rows.len()},

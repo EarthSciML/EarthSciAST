@@ -1,4 +1,4 @@
-{"esm":"1.3.0","metadata":{"name":"live_forcing_observed"},
+{"esm":"2.0.0","metadata":{"name":"live_forcing_observed"},
  "data_sources":{"SRC":{"kind":"grid","source":{"url_template":"{esm_integrator_forcing}"}}},
  "index_sets":{"x":{"kind":"interval","size":3},"two":{"kind":"interval","size":2}},
  "models":{

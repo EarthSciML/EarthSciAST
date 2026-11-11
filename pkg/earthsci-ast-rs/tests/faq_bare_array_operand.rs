@@ -52,7 +52,7 @@ fn doc(filter: Value, a_shape: Option<Value>, templates: Option<Value>) -> Value
         model["expression_templates"] = t;
     }
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "issue441", "authors": ["test"]},
         "index_sets": {
             "a_rows": {"kind": "interval", "size": 3},

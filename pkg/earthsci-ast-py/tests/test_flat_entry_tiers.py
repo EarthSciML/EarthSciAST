@@ -399,9 +399,10 @@ def test_the_overlap_tier_drives_from_the_candidates() -> None:
     assert visits < 400 * GX * GY // 10
 
 
-def test_overlap_gated_polygon_leaf_runs_through_the_batched_clip() -> None:
-    """The regrid narrow phase ``A[i,j] = polygon_intersection_area(src_i,
-    tgt_j)`` behind an overlap gate on the ring factors themselves."""
+def test_overlap_gated_box_overlap_runs_through_the_driven_tier() -> None:
+    """The regrid narrow phase ``A[i,j]`` (here the overlap of two axis-aligned
+    box rings, read off their corners) behind an overlap gate on the ring
+    factors themselves."""
 
     def rings(nx, ny, dx, dy):
         out = []
@@ -429,12 +430,14 @@ def test_overlap_gated_polygon_leaf_runs_through_the_batched_clip() -> None:
             output_idx=["i", "j"],
             ranges={"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
             join=[{"overlap": {"src_env": ["src_poly"], "tgt_env": ["tgt_poly"], "eps": 1e-9}}],
-            expr=ExprNode(
-                op="polygon_intersection_area",
-                manifold="planar",
-                args=[_ix("src_poly", "i"), _ix("tgt_poly", "j")],
-            ),
+            expr=ExprNode(op="*", args=[side(1), side(2)]),
         )
+
+    def side(axis: int) -> ExprNode:
+        # Vertex 1 holds (x0, y0), vertex 3 holds (x1, y1).
+        lo = ExprNode(op="max", args=[_ix("src_poly", "i", 1, axis), _ix("tgt_poly", "j", 1, axis)])
+        hi = ExprNode(op="min", args=[_ix("src_poly", "i", 3, axis), _ix("tgt_poly", "j", 3, axis)])
+        return ExprNode(op="max", args=[0.0, ExprNode(op="-", args=[hi, lo])])
 
     got, tiers = _native(node(), ctx)
     assert tiers.get("overlap-driven")

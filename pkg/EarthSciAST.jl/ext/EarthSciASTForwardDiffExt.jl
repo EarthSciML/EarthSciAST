@@ -14,11 +14,8 @@ ForwardDiff for its Jacobian is enough). So the identity is never wrong and this
 method is never missing. Mirrors the `SimulateExt` / `DataRefreshExt` /
 `MTKExt` pattern: the base package stays solver- and AD-agnostic.
 
-`_value` exists because the `datetime.*` closed functions decompose a UTC scalar
-through the Gregorian calendar — a DISCRETE, piecewise-constant operation that
-carries no derivative and that `Dates.unix2datetime` can only perform on a real
-`Float64`. See `src/registered_functions.jl` for the full rationale and for the
-`interp.*` functions, which stay eltype-generic and do NOT strip.
+`_value` is how a build-time gate or a scatter key reads a dual number's primal
+(`src/tree_walk/helpers.jl`).
 """
 module EarthSciASTForwardDiffExt
 

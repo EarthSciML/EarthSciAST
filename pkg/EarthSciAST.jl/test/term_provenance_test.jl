@@ -284,27 +284,6 @@ end
         @test !occursin("<", to_ascii(after[1].expr))
     end
 
-    @testset "table-lookup lowering keeps the contributions" begin
-        flat = _tp_flatten(
-            joinpath(
-                _TP_TESTS, "conformance", "function_tables", "linear",
-                "fixture.esm"
-            )
-        )
-        lowered = EarthSciAST.lower_table_lookups(flat)
-        @test lowered !== flat
-        changed = 0
-        for (i, (eq, cs)) in enumerate(zip(lowered.equations, equation_contributions(lowered)))
-            @test [_tp_origins(c) for c in cs] ==
-                [_tp_origins(c) for c in equation_contributions(flat)[i]]
-            @test all(!isempty(c.origins) for c in cs)
-            changed += to_ascii(eq.rhs) != to_ascii(flat.equations[i].rhs)
-            ok, _ = _tp_check_invariant(lowered, eq, cs; label = "lowered")
-            @test ok
-        end
-        @test changed > 0
-    end
-
     @testset "a multiplicative couple scales the tendency, not a later bare definition" begin
         # `D(x) ~ f` then `x ~ g`: the factor goes to the LAST `D(x)` equation,
         # never to the bare one even though it comes later.
@@ -336,42 +315,47 @@ end
 
     # ── a caller's edits between flatten and a public pass ───────────────────
 
-    _tp_table_flat() = _tp_flatten(
-        joinpath(
-            _TP_TESTS, "conformance", "function_tables",
-            "linear", "fixture.esm"
-        )
+    _tp_template_flat() = _tp_flatten(joinpath(_TP_DIR, "template_reference.esm"))
+    _tp_index(flat, lhs) = only(
+        i for (i, eq) in enumerate(flat.equations) if to_ascii(eq.lhs) == lhs
     )
 
     @testset "an edited right-hand side survives a pass that rebuilds from the list" begin
-        flat = _tp_table_flat()
-        eq = flat.equations[1]
-        flat.equations[1] = Equation(eq.lhs, OpExpr("+", ASTExpr[eq.rhs, NumExpr(2.5)]))
-        lowered = EarthSciAST.lower_table_lookups(flat)
-        rhs = to_ascii(lowered.equations[1].rhs)
+        flat = _tp_template_flat()
+        i = _tp_index(flat, "D(Chem.O3)/Dt")
+        authors = _tp_origins(
+            Contribution(
+                flat.equations[i].rhs,
+                EarthSciAST._union_origins(flat.equation_contributions[i])
+            )
+        )
+        eq = flat.equations[i]
+        flat.equations[i] = Equation(eq.lhs, OpExpr("+", ASTExpr[eq.rhs, NumExpr(2.5)]))
+        expanded = expand_flattened_refs(flat)
+        rhs = to_ascii(expanded.equations[i].rhs)
         @test occursin("2.5", rhs)
-        @test !occursin("table_lookup", rhs)
-        cs = equation_contributions(lowered)[1]
+        @test !occursin("<", rhs)
+        cs = equation_contributions(expanded)[i]
         # The stale list collapses to the current body, keeping its authors.
         @test length(cs) == 1
-        @test _tp_origins(cs[1]) == [(:component, "M")]
+        @test _tp_origins(cs[1]) == authors
         @test to_ascii(cs[1].expr) == rhs
     end
 
     @testset "an emptied list is one contribution with no author" begin
-        flat = _tp_table_flat()
-        empty!(flat.equation_contributions[1])
-        lowered = EarthSciAST.lower_table_lookups(flat)
-        cs = equation_contributions(lowered)[1]
+        flat = _tp_template_flat()
+        i = _tp_index(flat, "D(Chem.O3)/Dt")
+        empty!(flat.equation_contributions[i])
+        expanded = expand_flattened_refs(flat)
+        cs = equation_contributions(expanded)[i]
         @test length(cs) == 1
         @test isempty(cs[1].origins)
-        @test cs[1].expr === lowered.equations[1].rhs
+        @test cs[1].expr === expanded.equations[i].rhs
     end
 
     @testset "equations and lists out of step are an error, not a truncation" begin
-        flat = _tp_table_flat()
+        flat = _tp_template_flat()
         push!(flat.equations, Equation(VarExpr("M.extra"), NumExpr(1.0)))
-        @test_throws ArgumentError EarthSciAST.lower_table_lookups(flat)
         @test_throws ArgumentError EarthSciAST._flat_contributions(flat)
         tflat = _tp_flatten(joinpath(_TP_DIR, "template_reference.esm"))
         pop!(tflat.equation_contributions)

@@ -2525,7 +2525,7 @@ function _dimensionless_literal_findings(units)::Vector{Tuple{String, String}}
                 pointer,
                 "$pointer: with bare numeric literals read as dimensionless " *
                     "(esm-spec §4.8.6), $(first(found)); bare literal(s): $named. This " *
-                    "becomes an error at the next major esm version; a literal that " *
+                    "becomes an error in a future version of EarthSciAST; a literal that " *
                     "carries a unit is written const(value, units \"...\") (esm-spec §4.8.5)",
             )
         )

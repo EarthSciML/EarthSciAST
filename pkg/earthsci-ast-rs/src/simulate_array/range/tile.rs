@@ -339,10 +339,7 @@ pub(super) fn as_loop(rule: &AlgebraicRule) -> Option<AlgebraicRule> {
     let Expr::Operator(node) = &**body else {
         return None;
     };
-    if !matches!(node.op.as_str(), "faq" | "aggregate")
-        || node.filter.is_some()
-        || node.join.is_some()
-    {
+    if !matches!(node.op.as_str(), "faq") || node.filter.is_some() || node.join.is_some() {
         return None;
     }
     let out = node.output_idx.as_ref().filter(|o| !o.is_empty())?;

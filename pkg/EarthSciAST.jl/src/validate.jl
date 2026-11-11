@@ -900,12 +900,6 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     # rather than being collapsed into a cycle error.
     append!(errors, validate_observed_cycles(file))
 
-    # 5c-iv. The esm-spec §9.2 closed-function argument checks on every
-    # `interp.*` call and the §9.5.5 checks on every function table — the same
-    # checks load runs (`check_closed_functions_and_tables`), reported here for
-    # a document built or edited in memory.
-    append!(errors, validate_closed_functions_and_tables(file))
-
     # 5d. `variable_map` identity-coupling declared-unit mismatch (esm-spec §4.7.6).
     # The flatten path already rejects this via `_check_variable_map_units`
     # (`DomainUnitMismatchError`); mirror it as a `domain_unit_mismatch` structural
@@ -1114,12 +1108,9 @@ otherwise leave `structural_errors` empty even though the document is invalid
 
 - a `SubsystemRefError` — an unresolvable / ambiguous `{ref}` mount — carries its
   code and mount site (`/models/<parent>/subsystems/<sub>`);
-- a structured `ParseError` (`code` non-empty) — currently the §11.4.1
-  `ic_in_reaction_system` rejection — carries its own code, pointer and details;
-- a `ClosedFunctionError` / `TableLookupError` from the load-time esm-spec §9.2
-  argument checks and §9.5.5 table checks (`check_closed_functions_and_tables`)
-  carries its code, reported at the document root (the error holds no
-  pointer; `validate()` on a typed document reports the field's pointer).
+- a structured `ParseError` (`code` non-empty) — the §11.4.1
+  `ic_in_reaction_system` rejection, and the `removed_op` rejection of a
+  construct esm 2.0.0 removed — carries its own code, pointer and details.
 
 Both the file entry point [`validate_path`](@ref) and the
 conformance producer route load failures through here so the finding is reported
@@ -1140,8 +1131,6 @@ function load_failure_structural_error(e)::Union{StructuralError, Nothing}
         )
     elseif e isa ParseError && !isempty(e.code)
         return StructuralError(e.path, e.message, e.code, e.details)
-    elseif e isa ClosedFunctionError || e isa TableLookupError
-        return StructuralError("", e.message, e.code)
     end
     return nothing
 end
@@ -2067,11 +2056,10 @@ function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String}, visited,
     scopes = get!(() -> Set{String}[], visited, e)
     any(==(bound), scopes) && return found
     push!(scopes, bound)
-    if e.op == "faq" || e.op == "aggregate"
+    if e.op == "faq"
         bound = copy(bound)
         e.output_idx === nothing || foreach(s -> push!(bound, string(s)), e.output_idx)
         e.ranges === nothing || foreach(s -> push!(bound, string(s)), keys(e.ranges))
-        e.arg === nothing || push!(bound, e.arg)
         for (field, part) in (("expr", e.expr_body), ("filter", e.filter))
             part === nothing && continue
             seen = Set{String}()
@@ -2133,15 +2121,13 @@ function _check_faq_bare_array_operands!(
     return errors
 end
 
-# Body ops that make a `faq` a value-invention node. Over such a node a ragged
-# range binds the MEMBER `values[parent, k]` itself (esm-spec §4.3.1 "Ragged
-# ranges"), so its `values` gather is implicit rather than authored.
-const _VALUE_INVENTION_BODY_OPS = ("skolem", "rank", "distinct", "argmin", "argmax")
-
+# A value-invention `faq` (a `distinct` producer, or a `distinct` body). Over
+# such a node a ragged range binds the MEMBER `values[parent, k]` itself
+# (esm-spec §4.3.1 "Ragged ranges"), so its `values` gather is implicit rather
+# than authored.
 function _is_value_invention_faq(agg::OpExpr)
     agg.distinct === true && return true
-    agg.key isa OpExpr && agg.key.op == "skolem" && return true
-    return agg.expr_body isa OpExpr && agg.expr_body.op in _VALUE_INVENTION_BODY_OPS
+    return agg.expr_body isa OpExpr && agg.expr_body.op == "distinct"
 end
 
 # Whether `expr` holds a surviving `apply_expression_template` reference
@@ -2524,9 +2510,8 @@ end
 # operators ([`_is_scalar_op`](@ref)) — and report every array-variable leaf
 # declared over an index set absent from the result `axes`. Anything that is not
 # a scalar operator ends the walk: an `index` gather and the array producers
-# carry their own indexing, and a geometry kernel leaf (`intersect_polygon`), an
-# unlowered rewrite target (`div`/`grad`/a user op) or a closed-function call
-# consumes WHOLE arrays under its own contract — none of them is a broadcast, so
+# carry their own indexing, and an unlowered rewrite target (`div`/`grad`/a
+# user op) consumes WHOLE arrays under its own contract — none of them is a broadcast, so
 # an operand of a different rank there is not a defect. This mirrors exactly
 # where `_wrap_bare_array_refs` (shape_promotion.jl) applies its `_AxisAlign`.
 # Skipped entirely when `axes` repeats a name, and per-leaf when the operand's
@@ -2935,8 +2920,8 @@ end
 # would otherwise gain a manufactured edge into it from every aggregate in the
 # document. The binder set is `_bound_index_symbols`, the SAME one the
 # `undefined_variable` walk credits into scope (aggregate `output_idx` and
-# `ranges` keys, an integral's `int_var`, the argmin/argmax `arg` witness,
-# `index` subscript positions, the `skolem` binder, template `bindings` keys) —
+# `ranges` keys, an integral's `int_var`, `index` subscript positions,
+# template `bindings` keys) —
 # two checks disagreeing about what a binder is, is how a name ends up both
 # "undeclared" here and "bound" there.
 #
@@ -3595,9 +3580,8 @@ predicate, a grouping key, integral bounds) so a bound loop index such as the
 Mirrors Rust `bound_index_symbols` (structural.rs) and Go `boundIndexSymbols`
 (validate.go). Binder sources: `output_idx` (aggregate surviving indices),
 `ranges` keys (contraction loop variables), `int_var` (integral integration
-variable, wire `var`), `arg` (argmin/argmax witness), the positional element
-indices of an `index(array, i, j, …)` node, the invented-key name of a
-`skolem(name, …)` node, and `bindings` keys (`apply_expression_template`
+variable, wire `var`), the positional element indices of an
+`index(array, i, j, …)` node, and `bindings` keys (`apply_expression_template`
 formal parameters).
 """
 # Every bare name inside a SUBSCRIPT expression. `index(u, i+1)` is index space,
@@ -3616,9 +3600,8 @@ end
 # Index symbols the reference checker credits into scope for THIS node's
 # children. DELIBERATELY WIDER than expression.jl's `_bound_symbols` (the
 # `free_variables` binder-subtraction set): validation answers "could this
-# name legally appear here?", so it additionally credits the argmin/argmax
-# `arg` witness, subscript-position index names (`index(u, i+1)`), the
-# `skolem` first-arg binder, and `bindings` KEYS (template formal parameters —
+# name legally appear here?", so it additionally credits subscript-position
+# index names (`index(u, i+1)`) and `bindings` KEYS (template formal parameters —
 # the `binds_scope` flag in OPEXPR_FIELD_TABLE). `_bound_symbols` answers the
 # narrower "does this node bind this symbol?" for dependency analysis, where
 # widening would hide real free variables. Both must stay.
@@ -3635,7 +3618,6 @@ function _bound_index_symbols(op::OpExpr)::Vector{String}
         end
     end
     op.int_var !== nothing && push!(syms, op.int_var)
-    op.arg !== nothing && push!(syms, op.arg)
 
     # NOTE: an `integral`'s `lower`/`upper` are NOT exempted. It is tempting to
     # call them coordinate-space bounds and wave them through — that would make
@@ -3662,11 +3644,6 @@ function _bound_index_symbols(op::OpExpr)::Vector{String}
         for i in 2:length(op.args)
             _collect_index_names!(syms, op.args[i])
         end
-    elseif op.op == "skolem"
-        # skolem(name, …): the first positional arg is the invented-key binder.
-        if !isempty(op.args) && op.args[1] isa VarExpr
-            push!(syms, op.args[1].name)
-        end
     end
     if op.bindings !== nothing
         for k in keys(op.bindings)
@@ -3684,8 +3661,7 @@ Validate references in an expression tree.
 
 Two independent checks run over the FULL expression child set — `args` plus the
 sidecar fields (integral `lower`/`upper` bounds, a faq body
-`expr`, a `filter` predicate, `makearray` `values`, `table_lookup` `axes`, an
-aggregate grouping `key`, and `apply_expression_template` `bindings` values),
+`expr`, a `filter` predicate, `makearray` `values`, an aggregate grouping `key`, and `apply_expression_template` `bindings` values),
 matching Rust `for_each_child` / Go `validateExprNodeChildren`:
 
 1. `operator_apply` operator names are always flagged (the top-level

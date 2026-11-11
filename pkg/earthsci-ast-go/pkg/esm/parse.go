@@ -221,8 +221,8 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 }
 
 // prepareRoot is the root document's wire boundary and version gates, the ONE
-// place both LoadPath and LoadString run them: prepareDocumentOps (which raises
-// a pre-1.1.0 `aggregate` document to the 1.1.0 floor), then fileVersionGates
+// place both LoadPath and LoadString run them: prepareDocumentOps, then
+// fileVersionGates
 // on the decoded result. It returns the prepared text and its decoded view, or
 // a nil view when the text does not decode (schema validation reports that).
 //
@@ -543,15 +543,6 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 		return nil, err
 	}
 
-	// esm-spec §9.2 / §9.5.5 (ruling Q-106): the closed-function argument
-	// checks on every interp.* `fn` node and the ten table checks on every
-	// `function_tables` entry run HERE, on the document as loaded — templates
-	// applied, enums lowered — whether or not anything evaluates the node or
-	// references the table. A document that fails one does not load.
-	if err := checkFunctionsAtLoad(&esmFile); err != nil {
-		return nil, err
-	}
-
 	// According to spec Section 2.1a: load() should succeed for valid JSON that
 	// passes schema validation but fails structural validation. Structural issues
 	// should only be reported by the separate validate() function.
@@ -741,7 +732,7 @@ func rejectDeprecatedV02Blocks(jsonStr string) error {
 	}
 	if _, ok := top["registered_functions"]; ok {
 		return fmt.Errorf("deprecated_v02_block: top-level `registered_functions` was removed in v0.3.0 " +
-			"(closed-function-registry RFC §6); rewrite call ops as AST or use the closed registry (esm-spec §9.2)")
+			"(closed-function-registry RFC §6); rewrite call ops as AST")
 	}
 	return nil
 }
@@ -1021,24 +1012,18 @@ func authoredDeclarationBlocks(jsonStr string) (templates, metaparams json.RawMe
 	return top["expression_templates"], top["metaparameters"]
 }
 
-// scanOpAliases rewrites `"op": "aggregate"` to `"op": "faq"` directly in the
-// JSON TEXT, and reports whether a `"op": "arrayop"` is present.
+// scanOps reads the JSON TEXT for `"op": "<name>"` pairs and reports the first
+// removed op (removedOps) the text spells, or "" when there is none, and
+// whether any node spells `faq`.
 //
-// Textual rather than decode-and-re-marshal on purpose: Go's encoder writes map
-// keys SORTED, so round-tripping the document through map[string]any destroys
-// the authored key order that `extractTemplateOrders` reads a few lines later
-// and that esm-libraries-spec §4.7.5 step 4 makes normative for every map a
-// FlattenedSystem carries. This walk preserves every other byte exactly.
-//
-// The scanner tracks string boundaries (including escapes) so an `"op"`
-// appearing INSIDE some other string value is never mistaken for a key.
-func scanOpAliases(src string) (out string, aliases int, hasRemoved bool, hasFaq bool) {
-	var b strings.Builder
-	b.Grow(len(src))
-	i := 0
-	// readString returns the raw literal (with quotes), its decoded-enough
-	// content for comparison, and the index just past it.
-	readString := func(at int) (raw string, content string, next int) {
+// Textual rather than a decode: the wire boundary runs on every document and
+// only needs to know whether there is anything to locate. The scanner tracks
+// string boundaries (including escapes) so an `"op"` appearing INSIDE some
+// other string value is never mistaken for a key.
+func scanOps(src string) (removed string, hasFaq bool) {
+	// readString returns the content of the string literal at `at` and the
+	// index just past it.
+	readString := func(at int) (content string, next int) {
 		j := at + 1
 		for j < len(src) {
 			if src[j] == '\\' {
@@ -1046,64 +1031,48 @@ func scanOpAliases(src string) (out string, aliases int, hasRemoved bool, hasFaq
 				continue
 			}
 			if src[j] == '"' {
-				return src[at : j+1], src[at+1 : j], j + 1
+				return src[at+1 : j], j + 1
 			}
 			j++
 		}
-		return src[at:], src[at+1:], len(src)
+		return src[at+1:], len(src)
 	}
+	isSpace := func(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+	i := 0
 	for i < len(src) {
-		c := src[i]
-		if c != '"' {
-			b.WriteByte(c)
+		if src[i] != '"' {
 			i++
 			continue
 		}
-		raw, content, next := readString(i)
+		content, next := readString(i)
+		i = next
 		if content != "op" {
-			b.WriteString(raw)
-			i = next
 			continue
 		}
 		// Possible key position: look for `: "<value>"`.
 		j := next
-		for j < len(src) && (src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '\r') {
+		for j < len(src) && isSpace(src[j]) {
 			j++
 		}
 		if j >= len(src) || src[j] != ':' {
-			b.WriteString(raw)
-			i = next
 			continue
 		}
-		colonEnd := j + 1
-		k := colonEnd
-		for k < len(src) && (src[k] == ' ' || src[k] == '\t' || src[k] == '\n' || src[k] == '\r') {
+		k := j + 1
+		for k < len(src) && isSpace(src[k]) {
 			k++
 		}
 		if k >= len(src) || src[k] != '"' {
-			b.WriteString(raw)
-			i = next
 			continue
 		}
-		vRaw, vContent, vNext := readString(k)
-		b.WriteString(raw)
-		b.WriteString(src[next:k])
-		switch vContent {
-		case "aggregate":
-			b.WriteString(`"faq"`)
-			aliases++
-		case "arrayop":
-			b.WriteString(vRaw)
-			hasRemoved = true
-		case "faq":
-			b.WriteString(vRaw)
-			hasFaq = true
-		default:
-			b.WriteString(vRaw)
-		}
+		value, vNext := readString(k)
 		i = vNext
+		if value == "faq" {
+			hasFaq = true
+		} else if _, gone := removedOps[value]; gone && removed == "" {
+			removed = value
+		}
 	}
-	return b.String(), aliases, hasRemoved, hasFaq
+	return removed, hasFaq
 }
 
 // declaredEsmBelowV11 reports whether the document's `esm` field is below 1.1.0.
@@ -1130,53 +1099,29 @@ func declaredEsmBelowV11(jsonStr string) (declared string, below bool) {
 // applied to EVERY document — root, {ref}-loaded child, template library,
 // coupling library.
 //
-// Three steps, in this order:
+// Two steps, in this order:
 //
-//  1. `arrayop` (removed at esm 0.8.0) is rejected BY NAME. It is a well-formed
-//     identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
-//     rewrite-target op: the document would load silently and fail much later
-//     as `unlowered_operator`, or never.
-//  2. The `faq` version gate, on the AUTHORED form — `faq` arrives at esm 1.1.0
-//     (esm-spec §2.2.4). Deliberately BEFORE normalization: `aggregate` is the
-//     pre-1.1.0 spelling, so a 1.0.0 document carrying the alias is legal.
-//  3. `aggregate` is normalized to `faq` and the declared version is raised to
-//     the 1.1.0 floor with it, so the upgraded document is self-consistent.
+//  1. A removed op (removedOps, `aggregate` among them) or a `function_tables`
+//     block is rejected BY NAME as `removed_op` (checkRemovedConstructs). A
+//     removed op's name is a well-formed identifier, so esm-spec §4.2 would
+//     otherwise admit it as an OPEN rewrite-target op: the document would load
+//     silently and fail much later as `unlowered_operator`, or never. This runs
+//     before schema validation, which would otherwise report the removed fields
+//     first.
+//  2. The `faq` version gate: `faq` arrives at esm 1.1.0 (esm-spec §2.2.4).
 //
-// See docs/content/rfcs/faq-node-rename.md.
+// It returns the text unchanged.
 func prepareDocumentOps(jsonStr string) (string, error) {
-	rewritten, aliases, hasRemoved, hasFaq := scanOpAliases(jsonStr)
-	if hasRemoved {
-		return "", fmt.Errorf(
-			"removed_op: `\"op\": \"arrayop\"` was removed at esm 0.8.0 and is not a " +
-				"deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query " +
-				"node). See docs/content/rfcs/faq-node-rename.md")
+	removed, hasFaq := scanOps(jsonStr)
+	if err := checkRemovedConstructs(jsonStr, removed); err != nil {
+		return "", err
 	}
-	declared, below := declaredEsmBelowV11(jsonStr)
-	// The gate reads the AUTHORED form: `hasFaq` counts only nodes that spelled
-	// `faq` themselves, never ones this pass just normalized, so a 1.0.0
-	// document carrying the legal `aggregate` alias is not caught here.
-	if below && hasFaq {
+	if declared, below := declaredEsmBelowV11(jsonStr); below && hasFaq {
 		return "", fmt.Errorf(
 			"faq_version_too_old: the `faq` op arrives at esm 1.1.0; file declares %s. "+
-				"Use `\"op\": \"aggregate\"` (the deprecated pre-1.1.0 spelling) or raise "+
-				"the declared version. See docs/content/rfcs/faq-node-rename.md", declared)
+				"Raise the declared version. See docs/content/rfcs/faq-node-rename.md", declared)
 	}
-	if aliases == 0 {
-		return jsonStr, nil
-	}
-	plural := "nodes were"
-	if aliases == 1 {
-		plural = "node was"
-	}
-	fmt.Fprintf(os.Stderr,
-		"warning: deprecated_op_alias: `\"op\": \"aggregate\"` is the pre-1.1.0 spelling "+
-			"of `\"op\": \"faq\"` (Functional Aggregate Query); %d %s normalized on load. "+
-			"The alias is REMOVED at esm 2.0.0 — re-emit this document to migrate it "+
-			"(docs/content/rfcs/faq-node-rename.md).\n", aliases, plural)
-	if below {
-		rewritten = raiseEsmFloorToV11(rewritten, declared)
-	}
-	return rewritten, nil
+	return jsonStr, nil
 }
 
 // raiseEsmFloorToV11 rewrites the document's declared `esm` string to 1.1.0,

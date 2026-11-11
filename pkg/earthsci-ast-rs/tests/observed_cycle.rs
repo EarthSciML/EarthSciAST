@@ -96,7 +96,7 @@ fn the_shared_fixture_is_rejected_and_names_the_cycle() {
 #[test]
 fn a_scalar_two_variable_cycle_is_rejected() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ScalarCycle"},
         "models": {"M": {
             "variables": {
@@ -122,7 +122,7 @@ fn a_scalar_two_variable_cycle_is_rejected() {
 #[test]
 fn a_scalar_self_reference_is_a_cycle_of_length_one() {
     let doc = json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "SelfScalar"},
         "models": {"M": {
             "variables": {"x": {"type": "unknown", "units": "1"}},

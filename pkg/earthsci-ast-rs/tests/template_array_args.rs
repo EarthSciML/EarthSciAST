@@ -2,10 +2,9 @@
 //! scalar-role parameter is evaluated elementwise. The nine single-model cases
 //! run as the `template_array_args` inline-test conformance tier; this pins the
 //! coupled case — parameters the component declares scalar, fed grid arrays by
-//! `variable_map` — bit for bit against the `interp.*` form, under both
-//! compilers, the refusals (arrays over unrelated index sets, an anonymous
-//! array argument), and what is not lifted: a template whose operands its body
-//! takes whole, and a shaped read written by hand.
+//! `variable_map` — native bit for bit against the interpreter, the refusals
+//! (arrays over unrelated index sets, an anonymous array argument), and what is
+//! not lifted: a shaped read written by hand.
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
@@ -50,20 +49,15 @@ fn rhs_of(file: &earthsci_ast::EsmFile, compiler: Compiler) -> Vec<(String, f64)
 }
 
 #[test]
-fn coupled_scalar_parameters_fed_grid_arrays_match_the_fn_form() {
-    for compiler in [Compiler::Interpreter, Compiler::Native] {
-        let reference = rhs_at_u0(&fixture("fn.esm"), compiler);
-        let template = rhs_at_u0(&fixture("template.esm"), compiler);
-        assert_eq!(reference.len(), 48);
-        assert_eq!(reference.len(), template.len());
-        for ((rn, rv), (tn, tv)) in reference.iter().zip(&template) {
-            assert_eq!(rn, tn);
-            assert_eq!(
-                rv.to_bits(),
-                tv.to_bits(),
-                "{rn} under {compiler:?}: {rv} vs {tv}"
-            );
-        }
+fn coupled_scalar_parameters_fed_grid_arrays_agree_across_compilers() {
+    let reference = rhs_at_u0(&fixture("template.esm"), Compiler::Interpreter);
+    let native = rhs_at_u0(&fixture("template.esm"), Compiler::Native);
+    assert_eq!(reference.len(), 48);
+    assert_eq!(reference.len(), native.len());
+    for ((rn, rv), (tn, tv)) in reference.iter().zip(&native) {
+        assert_eq!(rn, tn);
+        assert!(rv.is_finite(), "{rn}: {rv}");
+        assert_eq!(rv.to_bits(), tv.to_bits(), "{rn}: {rv} vs {tv}");
     }
 }
 
@@ -76,7 +70,7 @@ fn coupled_scalar_parameters_fed_grid_arrays_match_the_fn_form() {
 /// document is refused with `faq_bare_array_operand`. Flatten writes the lift,
 /// so the read-back document builds, bit for bit the `fn` form.
 #[test]
-fn the_flattened_coupled_case_written_out_and_read_back_matches_the_fn_form() {
+fn the_flattened_coupled_case_written_out_and_read_back_matches_the_template_form() {
     let file = load_path(fixture("template.esm")).expect("load");
     let flat = earthsci_ast::flatten(&file).expect("flatten");
     let text = crate::flatten_wire_conformance::flattened_document(&flat).to_string();
@@ -86,7 +80,7 @@ fn the_flattened_coupled_case_written_out_and_read_back_matches_the_fn_form() {
     );
     let read_back = load_string(&text).expect("load the written-out flattened system");
     for compiler in [Compiler::Interpreter, Compiler::Native] {
-        let reference = rhs_at_u0(&fixture("fn.esm"), compiler);
+        let reference = rhs_at_u0(&fixture("template.esm"), compiler);
         let written = rhs_of(&read_back, compiler);
         assert_eq!(reference.len(), 48);
         assert_eq!(reference.len(), written.len());
@@ -103,7 +97,7 @@ fn the_flattened_coupled_case_written_out_and_read_back_matches_the_fn_form() {
 
 #[test]
 fn arrays_over_unrelated_index_sets_are_refused() {
-    let doc = r#"{"esm": "1.2.0", "metadata": {"name": "taa_mismatch"},
+    let doc = r#"{"esm": "2.0.0", "metadata": {"name": "taa_mismatch"},
       "index_sets": {"a": {"kind": "interval", "size": 2}, "b": {"kind": "interval", "size": 3}},
       "models": {"M": {
         "expression_template_imports": [{"ref": "esm:std/interp.esm", "only": ["bilinear"]}],
@@ -134,7 +128,7 @@ fn arrays_over_unrelated_index_sets_are_refused() {
 /// is spliced into the model object.
 fn model_doc(variables: &str, equations: &str, extra: &str) -> String {
     format!(
-        r#"{{"esm": "1.2.0", "metadata": {{"name": "taa_probe"}},
+        r#"{{"esm": "2.0.0", "metadata": {{"name": "taa_probe"}},
           "index_sets": {{"c": {{"kind": "interval", "size": 3}},
                          "verts": {{"kind": "interval", "size": 4}},
                          "coord": {{"kind": "interval", "size": 2}}}},
@@ -166,36 +160,5 @@ fn an_anonymous_array_argument_is_refused() {
         let err = problem(&doc, compiler).expect_err("refused");
         assert!(err.contains("array_shape_mismatch: '"), "{err}");
         assert!(err.contains("anonymous array"), "{err}");
-    }
-}
-
-#[test]
-fn a_template_over_geometry_operands_is_not_lifted() {
-    // Both rings are array-role (a geometry operator takes them whole), so
-    // binding arrays to them is not an elementwise application: it builds and
-    // gives the overlap area (`elementwise_lift`'s unit tests pin that the
-    // equation is left as written).
-    let doc = model_doc(
-        r#"{"pa": {"type": "parameter", "shape": ["verts", "coord"],
-                   "default": [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]},
-            "pb": {"type": "parameter", "shape": ["verts", "coord"],
-                   "default": [[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]},
-            "area": {"type": "unknown"}, "s": {"type": "unknown", "default": 0.0}}"#,
-        r#"[{"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [],
-              "name": "overlap", "bindings": {"a": "pa", "b": "pb"}}},
-            {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "area"}]"#,
-        r#", "expression_templates": {"overlap": {"params": ["a", "b"],
-              "body": {"op": "polygon_intersection_area", "manifold": "planar", "args": ["a", "b"]}}}"#,
-    );
-    for compiler in [Compiler::Interpreter, Compiler::Native] {
-        let prob = problem(&doc, compiler).expect("builds");
-        let prog = rhs_program(&prob).expect("rhs_program");
-        let u = initial_state(&prob).expect("initial_state");
-        let p = prog.parameter_vector(&HashMap::new()).expect("parameters");
-        let mut ws = prog.new_workspace();
-        let mut du = vec![0.0; prog.n_states()];
-        prog.eval_into(&u, &[], &p, 0.0, &prog.default_forcing(), &mut du, &mut ws)
-            .expect("eval");
-        assert_eq!(du, vec![1.0], "{compiler:?}");
     }
 }

@@ -140,34 +140,15 @@ const ESM = EarthSciAST
         ),
         (
             field = :name,
-            json = """{"op":"fn","args":[1.5],"name":"interp.linear"}""",
-            expected = "interp.linear",
-            cop = "fn", cargs = E(NumExpr(1.5)), kw = (name = "interp.linear",),
+            json = """{"op":"apply_expression_template","args":[],"name":"linear","bindings":{"x":1.5}}""",
+            expected = "linear",
+            cop = "apply_expression_template", cargs = E(), kw = (name = "linear",),
         ),
         (
             field = :value,
             json = """{"op":"const","args":[],"value":[1,2]}""",
             expected = Any[1, 2],
             cop = "const", cargs = E(), kw = (value = Any[1, 2],),
-        ),
-        (
-            field = :table,
-            json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5}}""",
-            expected = "T",
-            cop = "table_lookup", cargs = E(), kw = (table = "T",),
-        ),
-        (
-            field = :table_axes,
-            json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5}}""",
-            expected = Dict{String, ESM.ASTExpr}("x" => NumExpr(2.5)),
-            cop = "table_lookup", cargs = E(),
-            kw = (table_axes = Dict{String, ESM.ASTExpr}("x" => NumExpr(2.5)),),
-        ),
-        (
-            field = :output,
-            json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5},"output":"a"}""",
-            expected = "a",
-            cop = "table_lookup", cargs = E(), kw = (output = "a",),
         ),
         (
             field = :join,
@@ -189,12 +170,6 @@ const ESM = EarthSciAST
             cop = "faq", cargs = E(), kw = (id = "n1",),
         ),
         (
-            field = :manifold,
-            json = """{"op":"intersect_polygon","args":[],"manifold":"planar"}""",
-            expected = "planar",
-            cop = "intersect_polygon", cargs = E(), kw = (manifold = "planar",),
-        ),
-        (
             field = :units,
             json = """{"op":"faq","args":[],"units":"m"}""",
             expected = "m",
@@ -208,16 +183,10 @@ const ESM = EarthSciAST
         ),
         (
             field = :key,
-            json = """{"op":"faq","args":[],"key":{"op":"skolem","args":["i"]}}""",
-            expected = OpExpr("skolem", E(VarExpr("i"))),
+            json = """{"op":"faq","args":[],"key":{"op":"+","args":["i",1]}}""",
+            expected = OpExpr("+", E(VarExpr("i"), IntExpr(1))),
             cop = "faq", cargs = E(),
-            kw = (key = OpExpr("skolem", E(VarExpr("i"))),),
-        ),
-        (
-            field = :arg,
-            json = """{"op":"argmin","args":[],"arg":"g"}""",
-            expected = "g",
-            cop = "argmin", cargs = E(), kw = (arg = "g",),
+            kw = (key = OpExpr("+", E(VarExpr("i"), IntExpr(1))),),
         ),
         (
             field = :bindings,
@@ -225,12 +194,6 @@ const ESM = EarthSciAST
             expected = Dict{String, ESM.ASTExpr}("f" => VarExpr("u")),
             cop = "faq", cargs = E(),
             kw = (bindings = Dict{String, ESM.ASTExpr}("f" => VarExpr("u")),),
-        ),
-        (
-            field = :label,
-            json = """{"op":"skolem","args":["a","b"],"label":"edge"}""",
-            expected = "edge",
-            cop = "skolem", cargs = E(VarExpr("a"), VarExpr("b")), kw = (label = "edge",),
         ),
         # Author cadence assertion (CONFORMANCE_SPEC.md §5.7.6 rule 3) — a
         # diagnostic hook that changes no semantics, but IS authored content, so
@@ -310,7 +273,7 @@ end
     # affect UNKNOWNS only per §6.3.1, are exercised in the next testset.)
     doc = """
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": { "name": "handler_round_trip" },
       "models": {
         "M": {
@@ -458,7 +421,7 @@ end
     # descriptor is gone from events entirely.
     doc = """
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": { "name": "affect_round_trip" },
       "models": {
         "M": {

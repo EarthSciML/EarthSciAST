@@ -14,7 +14,7 @@
 #
 #   (b) REGRID EQUIVALENCE — a MAIN-GRAPH assembly (`_join_admits`): the
 #       conservative-regrid A_j / F_tgt aggregates, but gated by `join.overlap`
-#       (envelopes from the cell rectangles) INSTEAD of the bin-Skolem
+#       (envelopes from the cell rectangles) INSTEAD of the bin-key
 #       `join.on [[src_bin,tgt_bin]]`. After the SAME narrow phase (`filter
 #       A_ij > atol`) the A_j / W_ij weights are tol-identical to the bin-gate
 #       golden — overlap gate + narrow phase == bin gate + narrow phase.
@@ -29,10 +29,6 @@ module OverlapGateConformanceTests
 using Test
 using EarthSciAST
 import JSON3
-# GeometryOps + GeoInterface trigger EarthSciASTGeometryOpsExt (the STRtree fast
-# path for the broad phase, and the spherical clip the regrid narrow phase uses).
-import GeometryOps
-import GeoInterface
 
 const ESS = EarthSciAST
 
@@ -85,7 +81,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     )
 
     _pir_doc = Dict(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "overlap_gate_point_in_rect"),
         "index_sets" => Dict(
             "points" => Dict("kind" => "interval", "size" => 5),
@@ -127,7 +123,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                             ],
                             "filter" => _pir_filter,
                             "args" => ["X", "Y", "W", "S", "E", "N"],
-                            "key" => Dict("op" => "skolem", "label" => "cell", "args" => ["j"]),
+                            "key" => "j",
                             "expr" => Dict("op" => "true", "args" => [])
                         )
                     ),
@@ -143,7 +139,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         # conservative superset of the true strict containments
         true_containments = Set([(1, 1), (2, 2)])
         @test true_containments ⊆ cs
-        # STRtree fast path == brute-force core (Phase-3a byte-identity)
+        # the gate's candidate set is the public broad-phase primitive's
         srcv = ESS._envelope_vectors(["X", "Y"], _pir_const)
         tgtv = ESS._envelope_vectors(["W", "S", "E", "N"], _pir_const)
         @test Set(ESS.broad_phase_candidates(srcv, tgtv; eps = 0.0)) == cs
@@ -156,8 +152,8 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
             model, file.index_sets, _pir_const,
             Dict{String, Any}()
         )
-        # skolem("cell", j) → single-component key = the integer cell index; the
-        # distinct set is the exact hand-computed {1,2}.
+        # the key is the integer cell index; the distinct set is the exact
+        # hand-computed {1,2}.
         @test sort(collect(vi.members["cells_with_points"])) == [1, 2]
         @test vi.extents["cells_with_points"] == 2
     end
@@ -181,18 +177,14 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     _SRC_E = [1.0, 2.0, 3.0]; _SRC_N = [1.0, 1.0, 1.0]
     _TGT_W = [0.0, 1.5, 2.0]; _TGT_S = [0.0, 0.0, 0.0]
     _TGT_E = [1.5, 2.0, 3.0]; _TGT_N = [1.0, 1.0, 1.0]
-    # the bin-Skolem CANDIDATE pairs the original fixture's join.on produces
+    # the bin-key CANDIDATE pairs the original fixture's join.on produces
     # (floor(repr_lon/2)): cells {1,2} share lon-bin 0, cell 3 is lon-bin 1.
     _BIN_PAIRS = Set([(1, 1), (1, 2), (2, 1), (2, 2), (3, 3)])
 
-    # build-once A_ij = spherical overlap area (the same VOS clip the sibling test
-    # uses); dst_areas = column sums (= A_j golden).
-    _Aij = zeros(Float64, 3, 3)
-    for i in 1:3, j in 1:3
-        ring = ESS.intersect_polygon(_SRC[i], _TGT[j], "spherical")
-        size(ring, 1) < 3 && continue
-        _Aij[i, j] = ESS.polygon_area(ring, "spherical")
-    end
+    # build-once A_ij = planar overlap area of the two rectangles (SW corner in
+    # row 1, NE corner in row 3); dst_areas = column sums (= A_j golden).
+    _ov1(a, b, k) = max(0.0, min(a[3, k], b[3, k]) - max(a[1, k], b[1, k]))
+    _Aij = Float64[_ov1(_SRC[i], _TGT[j], 1) * _ov1(_SRC[i], _TGT[j], 2) for i in 1:3, j in 1:3]
     _dst_areas = vec(sum(_Aij; dims = 1))
     _survive = Set((i, j) for i in 1:3, j in 1:3 if _Aij[i, j] > 1.0e-15)
 
@@ -210,7 +202,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     _filt = _op(">", _ix("A_ij", "i", "j"), "atol")
 
     _regrid_doc(eps) = Dict(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "overlap_gate_regrid"),
         "index_sets" => Dict(
             "src_cells" => Dict("kind" => "interval", "size" => 3),

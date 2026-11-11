@@ -42,7 +42,7 @@ fn faq(out: &[&str], set: &[&str], expr: Value) -> Value {
 /// with `assertions`.
 fn doc(variables: Value, equations: Value, assertions: Value) -> String {
     json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "native_lazy_shapes", "authors": ["test"]},
         "index_sets": {
             "rows": {"kind": "interval", "size": 4},
@@ -350,7 +350,7 @@ fn an_initial_condition_gathered_from_an_inline_const() {
                     "ranges": {"i": {"from": "rows"}, "j": {"from": "rows2"}},
                     "expr": {"op": "index", "args": [table, "i", "j"]}});
     let text = json!({
-        "esm": "1.2.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ic_gather", "authors": ["test"]},
         "index_sets": {"rows": {"kind": "interval", "size": 2},
                        "rows2": {"kind": "interval", "size": 2}},

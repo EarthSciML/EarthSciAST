@@ -34,8 +34,8 @@ rests on, over the expression evaluator `Esm.Expr.eval`:
 `ev_fromSet`: `Esm.Expr.eval` evaluates a `{"from": S}` range over the set's
 positions `1..|S|`, so such a reduction is exactly the one over the dense range
 `[1, |S|]`. With it, `rank_of_set_eq_rank_of`: `rank_of_set(x, members, S)`
-evaluates to what `rank_of(x, members, |S|)` does, which is §9.2's
-`interp.searchsorted(x, members)` on ascending members.
+evaluates to what `rank_of(x, members, |S|)` does, which is the reference
+`searchsorted(x, members)` on ascending members.
 
 The model has one zero (no `-0.0`), so the statement that `-0.0` and `+0.0`
 compare equal is not exercised here; the search lemmas use only that `le` is
@@ -557,9 +557,9 @@ theorem rank_of_set_eq_rank_of (A : List α) (x : α) (h53 : A.length < 2 ^ 53) 
   dsimp only
   rw [ev_rank_set A x h53, ev_rank A x h53]
 
-/-- **`rank_of_set` is `interp.searchsorted`.** On ascending real members, the
+/-- **`rank_of_set` is `searchsorted`.** On ascending real members, the
 expanded `rank_of_set(x, members, S)` with `S` an index set of the members'
-size is §9.2's `interp.searchsorted(x, members)` for every key, NaN included. -/
+size is the reference `searchsorted(x, members)` for every key, NaN included. -/
 theorem rank_of_set_template_eq (a : List ℝ) (ha : a.Pairwise (· ≤ ·)) (h53 : a.length < 2 ^ 53)
     (x : α) :
     evalApply Esm.Lib.Relational.rank_of_set

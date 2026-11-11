@@ -26,11 +26,6 @@ module PushdownEdgeTests
 using Test
 using EarthSciAST
 import JSON3
-# GeometryOps/GeoInterface activate the STRtree broad-phase fast path used by the
-# overlap join-gate (Phase 2a/3a); the brute-force core also works, so this is a
-# fast-path exercise, not a hard dependency.
-import GeometryOps
-import GeoInterface
 
 const EA = EarthSciAST
 
@@ -301,12 +296,12 @@ end
                 ),
             ],
             filter = _prod_filter,
-            key = Dict("op" => "skolem", "label" => "cell", "args" => ["c"])
+            key = "c"
         )
     )
 
     doc = Dict(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "isrm_pushdown_L1"),
         "index_sets" => Dict(
             "src_cells" => Dict("kind" => "interval", "size" => GRID),

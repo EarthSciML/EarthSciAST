@@ -43,7 +43,7 @@ fn opts() -> SolveOptions {
 /// integration window by `time_span`.
 fn doc(tests: Value) -> Value {
     json!({
-        "esm": "1.0.0",
+        "esm": "2.0.0",
         "metadata": {"name": "build_memo"},
         "models": {"M": {
             "variables": {
@@ -214,7 +214,7 @@ fn rebuilds_when_expression_template_imports_differ() {
         std::fs::write(
             dir.path().join(format!("{name}.esm")),
             json!({
-                "esm": "1.0.0",
+                "esm": "2.0.0",
                 "metadata": {"name": name},
                 "expression_templates": {name: {
                     "params": ["f"],
@@ -228,7 +228,7 @@ fn rebuilds_when_expression_template_imports_differ() {
     }
     let leaf_doc = |tests: Value| {
         json!({
-            "esm": "1.0.0",
+            "esm": "2.0.0",
             "metadata": {"name": "import_memo"},
             "models": {"M": {
                 "variables": {

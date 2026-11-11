@@ -10,7 +10,7 @@
 # trivially. Fixtures deliberately span the descriptor/op surface: affine
 # stencils (1-D/2-D, ghosts), makearray regions, const-array coefficients,
 # lazy guards over singular ops, scalar parameters, constant-bound
-# contractions (unrolled einsum), interp.* closed functions, and the
+# contractions (unrolled einsum), and the
 # compile-once template sub-kernel fixture (transport_3axis_7cubed_fullrank).
 using Test
 using JSON3
@@ -192,61 +192,6 @@ function _cgk_reduce_model(statevars, ybody, ni, klo, khi; reduce = "+", filt = 
     return ESM.Model(vars, [ESM.Equation(_ao1(_Didx(statevars[1], _v("i")), "i", 1, ni), rhs)])
 end
 
-const _CGK_LT = [10.0, 20.0, 40.0, 80.0, 160.0]
-const _CGK_LA = [0.0, 1.0, 2.0, 3.0, 4.0]
-
-function _cgk_interp_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    itp = _op(
-        "fn", _const(_CGK_LT), _const(_CGK_LA),
-        _idx("u", _op("+", _v("i"), _i(1))); name = "interp.linear"
-    )
-    lap = _op(
-        "+", _idx("u", _op("-", _v("i"), _i(1))),
-        _op("*", _n(-2.0), _idx("u", _v("i"))),
-        _idx("u", _op("+", _v("i"), _i(1)))
-    )
-    return ESM.Model(
-        vars, [
-            ESM.Equation(
-                _ao1(_Didx("u", _v("i")), "i", 1, N),
-                _ao1(_op("+", itp, lap), "i", 1, N)
-            ),
-        ]
-    )
-end
-
-function _cgk_searchsorted_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    body = _op("fn", _idx("u", _v("i")), _const(_CGK_LA); name = "interp.searchsorted")
-    return ESM.Model(
-        vars, [
-            ESM.Equation(
-                _ao1(_Didx("u", _v("i")), "i", 1, N),
-                _ao1(body, "i", 1, N)
-            ),
-        ]
-    )
-end
-
-const _CGK_BT = Any[Any[1.0, 1.5, 2.0], Any[1.1, 1.6, 2.1], Any[1.2, 1.7, 2.2]]
-function _cgk_bilinear_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    body = _op(
-        "fn", _const(_CGK_BT), _const([0.0, 1.0, 2.0]), _const([0.0, 1.0, 2.0]),
-        _idx("u", _v("i")), _idx("u", _op("+", _v("i"), _i(1)));
-        name = "interp.bilinear"
-    )
-    return ESM.Model(
-        vars, [
-            ESM.Equation(
-                _ao1(_Didx("u", _v("i")), "i", 1, N),
-                _ao1(body, "i", 1, N)
-            ),
-        ]
-    )
-end
-
 @testset "codegen tier ≡ pre-codegen runners (differential, B1)" begin
 
     @testset "1D second-difference stencil (N=$N)" for N in (8, 33)
@@ -310,14 +255,6 @@ end
             end
             _cgk_differential(m, ics)
         end
-    end
-
-    @testset "interp.linear / searchsorted / bilinear fn leaves" begin
-        N = 16
-        ics = Dict("u[$k]" => 2.0 + sin(0.3k) for k in 1:N)
-        _cgk_differential(_cgk_interp_model(N), ics)
-        _cgk_differential(_cgk_searchsorted_model(N), ics; jacobian = false)
-        _cgk_differential(_cgk_bilinear_model(N), ics)
     end
 
     @testset "template sub-kernels (_NK_SUBCALL): 7³ transport fixture" begin

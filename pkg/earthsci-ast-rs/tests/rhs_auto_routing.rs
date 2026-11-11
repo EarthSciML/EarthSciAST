@@ -80,7 +80,7 @@ fn an_faq_derivative_routes_dynamic_under_auto() {
 #[test]
 fn an_indexed_derivative_is_not_called_static() {
     const DOC: &str = r#"{
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": { "name": "indexed_derivative_lhs" },
       "index_sets": { "i": { "kind": "interval", "size": 3 } },
       "models": {
@@ -115,7 +115,7 @@ fn an_indexed_derivative_is_not_called_static() {
 #[test]
 fn an_algebraic_faq_stays_static() {
     const DOC: &str = r#"{
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": { "name": "algebraic_faq_lhs" },
       "index_sets": { "i": { "kind": "interval", "size": 3 } },
       "models": {

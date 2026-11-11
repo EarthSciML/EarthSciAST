@@ -20,7 +20,7 @@ fn fixture(rel: &str) -> Value {
 /// `D(u[j]) = Σ_{i : filter} body` over `j, i ∈ [1, n]`.
 fn scatter_doc(n: i64, filter: Value, body: Value) -> Value {
     json!({
-        "esm": "1.3.0",
+        "esm": "2.0.0",
         "metadata": {"name": "scatter_tape", "authors": ["tape tests"]},
         "index_sets": {"x": {"kind": "interval", "size": n}},
         "models": {"M": {
@@ -143,7 +143,7 @@ fn a_scatter_over_the_budget_without_a_promotable_box_keeps_its_list() {
 #[test]
 fn a_ragged_range_under_a_free_index_scatters_per_free_cell() {
     let doc = json!({
-        "esm": "1.3.0",
+        "esm": "2.0.0",
         "metadata": {"name": "ragged_free_scatter", "authors": ["tape tests"]},
         "index_sets": {
             "rows": {"kind": "interval", "size": 4},

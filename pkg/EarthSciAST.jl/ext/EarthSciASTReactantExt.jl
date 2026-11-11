@@ -13,11 +13,10 @@ ext/reactant_direct/api.jl for the contract (hard errors, never a fallback).
 Device choice and multi-device sharding live in ext/reactant_direct/device.jl and
 are documented in docs/src/compiled-backend-devices.md.
 
-It also specializes the `interp.*` knot-addressing seams
-(src/tree_walk/interp_lanes.jl) on Reactant's traced index types, so that the
-lane evaluators the emitter reaches through `Reactant.call_with_reactant` lower a
-table read as one constant-time `stablehlo.gather` rather than an O(table) select
-ladder. That is ext/reactant_interp.jl.
+It also specializes the comparison count `_knot_count`
+(src/tree_walk/knot_count.jl) on Reactant's traced query types, so the count the
+closed-AST templates lower to is an elementwise locate rather than an O(table)
+select ladder. That is ext/reactant_knot_count.jl.
 
 LIVE FORCING BUFFERS ARE PROGRAM INPUTS, NOT CAPTURES. A live forcing buffer
 (`param_arrays`, and a `DiscreteMaterializer` cache by construction) is bound BY
@@ -54,11 +53,10 @@ module EarthSciASTReactantExt
 
 using Reactant: Reactant, TracedRArray, TracedRNumber, @allowscalar
 
-# The `interp.*` knot-addressing seams this extension specializes; see
-# reactant_interp.jl.
-import EarthSciAST: _knot_count, _knot_pair, _knot_pair2, _bilinear_corners
+# The comparison count this extension specializes; see reactant_knot_count.jl.
+import EarthSciAST: _knot_count
 
-include("reactant_interp.jl")
+include("reactant_knot_count.jl")
 
 # ---- the COMPILED backend: StableHLO built directly from the compiled IR ----
 #

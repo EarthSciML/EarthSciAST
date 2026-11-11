@@ -3,8 +3,8 @@ scalar-role parameter is evaluated elementwise.
 
 The nine single-model cases run as the ``template_array_args`` inline-test
 conformance tier. This pins the coupled case (parameters the component declares
-scalar, fed grid arrays by ``variable_map``) bit for bit against the
-``interp.*`` form under both compilers, the refusals (arrays over unrelated
+scalar, fed grid arrays by ``variable_map``) bit for bit between the two
+compilers, the refusals (arrays over unrelated
 index sets, an anonymous array argument), and what is not lifted: a template
 whose operands its body takes whole, and a shaped read written by hand.
 """
@@ -33,10 +33,9 @@ def _rhs(path: Path | dict, compiler: str) -> dict[str, float]:
     return dict(zip(names, du.tolist()))
 
 
-@pytest.mark.parametrize("compiler", ["interpreter", "native"])
-def test_coupled_scalar_parameters_fed_grid_arrays_match_the_fn_form(compiler):
-    ref = _rhs(COUPLED / "fn.esm", compiler)
-    got = _rhs(COUPLED / "template.esm", compiler)
+def test_coupled_scalar_parameters_fed_grid_arrays_agree_across_compilers():
+    ref = _rhs(COUPLED / "template.esm", "interpreter")
+    got = _rhs(COUPLED / "template.esm", "native")
     assert len(ref) == 48
     assert got.keys() == ref.keys()
     for k, v in ref.items():
@@ -85,6 +84,10 @@ def test_arrays_over_unrelated_index_sets_are_refused():
     }
     with pytest.raises(ElementwiseLiftError, match="array_shape_mismatch"):
         esm_problem(json.loads(json.dumps(doc)), (0.0, 1.0), compiler="interpreter")
+
+
+def _ix(name, *idx):
+    return {"op": "index", "args": [name, *idx]}
 
 
 def _const(v):
@@ -141,7 +144,7 @@ _SQUARE_B = [[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]
 
 @pytest.mark.parametrize("compiler", ["interpreter", "native"])
 def test_a_template_over_geometry_operands_is_not_lifted(compiler):
-    # Both rings are array-role (a geometry operator takes them whole), so
+    # Both rings are array-role (the body reads them only as `index` bases), so
     # binding arrays to them is not an elementwise application.
     doc = _model_doc(
         {
@@ -165,10 +168,20 @@ def test_a_template_over_geometry_operands_is_not_lifted(compiler):
         templates={
             "overlap": {
                 "params": ["a", "b"],
+                # The overlap of two axis-aligned box rings, read off their
+                # corners: vertex 1 holds (x0, y0), vertex 3 holds (x1, y1).
                 "body": {
-                    "op": "polygon_intersection_area",
-                    "manifold": "planar",
-                    "args": ["a", "b"],
+                    "op": "*",
+                    "args": [
+                        {
+                            "op": "-",
+                            "args": [
+                                {"op": "min", "args": [_ix("a", 3, d), _ix("b", 3, d)]},
+                                {"op": "max", "args": [_ix("a", 1, d), _ix("b", 1, d)]},
+                            ],
+                        }
+                        for d in (1, 2)
+                    ],
                 },
             }
         },

@@ -47,7 +47,7 @@ For every change:
 1. Locate the affected section (e.g. §6.7.4 for `analyses.plots`, §11 for domains).
 2. Edit the field tables, prose, and any RFC reference to describe the new shape.
 3. Add or update worked examples in the spec body if the change affects authoring patterns users will need to learn.
-4. If the change is large enough to warrant an RFC, add a file under `docs/content/rfcs/` and link it from the schema's `description` field (the schema already does this for the closed-function registry and AST templates — follow that style).
+4. If the change is large enough to warrant an RFC, add a file under `docs/content/rfcs/` and link it from the schema's `description` field (the schema already does this for the `faq` node and AST templates — follow that style).
 
 The spec is normative for the format. If something is in the spec and not the schema, the spec wins; if it is in the schema and not the spec, the schema is presumed under-documented and gets a follow-up.
 

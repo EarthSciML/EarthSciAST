@@ -279,7 +279,7 @@ These four propagate their argument's dimension (and for `sign`, the result is
 conventionally treated as dimensionless).
 
 `floor` is also how a continuous coordinate is quantized into an integer bin key
-— see [geometry](../geometry/), where it feeds a `skolem` term. Join keys must
+— see [geometry](../geometry/), where it builds a bin column. Join keys must
 compare by exact equality, so the float must be reduced to an integer first.
 
 ## Extrema
@@ -313,7 +313,7 @@ max(a, b)
 With `a=3, b=1` → `3.0`.
 
 `min` of a `max` is the AST-level spelling of clamp / clip / limiter. Write it
-this way rather than reaching for a [`fn`](../closed-functions/) that
+this way rather than as a template or new operator that
 re-implements it:
 
 **Text**

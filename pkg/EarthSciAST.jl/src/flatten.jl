@@ -159,12 +159,6 @@ Fields:
   invention geometry of sibling components — e.g. five conservative regridders
   each declaring `src_cells` / `candidate_pairs` / `clip_ring` — does not
   collide after flattening. Empty when no source model declares any.
-- `function_tables::Dict{String, FunctionTable}`: the file-scoped sampled
-  function tables (esm-spec §9.5) referenced by `table_lookup` AST nodes. These
-  are keyed by globally-unique table id, so they are merged without namespacing.
-  Empty when the file declares none. Carrying both here is what lets a flattened
-  system round-trip back into a runnable single-model `EsmFile` (`flattened_to_esm`)
-  without dropping the geometry registry or the table data.
 - `template_registry::OrderedDict{String, Any}`: the merged expression-template
   registry (esm-spec §9.6.4 rule 7 / §10.7).
 - `algebraic_variables::OrderedDict{String, ModelVariable}`: unknowns constrained
@@ -198,7 +192,7 @@ variables in the order their component declares them, coupling-merged entries
 keeping the position of their first occurrence. Ordering is observable, because a
 parameter vector is positional; lexicographic sorting or a host map's iteration
 order is non-conforming. The order therefore has to be preserved at the SOURCE:
-`EsmFile.models` / `.reaction_systems` / `.index_sets` / `.function_tables` and
+`EsmFile.models` / `.reaction_systems` / `.index_sets` and
 `Model.variables` / `.subsystems` are `OrderedDict`s populated by the parser in
 document order, so the accumulators here inherit it.
 """
@@ -213,7 +207,6 @@ struct FlattenedSystem
     domain::Union{Domain, Nothing}
     metadata::FlattenMetadata
     index_sets::OrderedDict{String, IndexSet}
-    function_tables::OrderedDict{String, FunctionTable}
     # esm-spec §9.6.4 rule 7 / §10.7 / esm-libraries-spec §4.7.5 step 4 (Option B):
     # the MERGED template registry — the union of the component registries
     # (deep-equal dedup, deterministic `<ComponentPath>.<name>` collision rename).
@@ -264,7 +257,7 @@ struct FlattenedSystem
     # types, which is what would let hash order back into a positional parameter
     # vector.
     function FlattenedSystem(
-            ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+            ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, treg,
             alg, brw, disc, ics, lfs, lshapes, contribs
         )
         length(contribs) == length(eqs) || throw(
@@ -281,8 +274,7 @@ struct FlattenedSystem
         return new(
             Symbol[iv for iv in ivs], _flat_od(ModelVariable, sv), _flat_od(ModelVariable, p),
             _flat_od(ModelVariable, obs), eqs, cev, dev, dom, meta,
-            _flat_od(IndexSet, isets), _flat_od(FunctionTable, ftabs),
-            _flat_od(Any, treg), _flat_od(ModelVariable, alg),
+            _flat_od(IndexSet, isets), _flat_od(Any, treg), _flat_od(ModelVariable, alg),
             _flat_od(ModelVariable, brw), _flat_od(ModelVariable, disc),
             Pair{String, ASTExpr}[Pair{String, ASTExpr}(String(k), v) for (k, v) in ics],
             LoaderField[lf for lf in lfs], _flat_od(Vector{Int}, lshapes),
@@ -300,7 +292,7 @@ _flat_od(::Type{V}, d::AbstractDict) where {V} =
     OrderedDict{String, V}(String(k) => v for (k, v) in d)
 
 # Backward-compatible constructors: callers that predate the index-set /
-# function-table / template registries (e.g. hand-built MTK PDESystem fixtures)
+# template registries (e.g. hand-built MTK PDESystem fixtures)
 # get empty registries, and callers that predate the esm-1.0.0 canonical field
 # set (the §6.3.1 subset maps, `field_ics`, `loader_fields`, `lifted_shapes`)
 # get empty ones. Adding a field must NOT silently drop a positional caller, so
@@ -312,17 +304,16 @@ FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta) =
     FlattenedSystem(
     ivs, sv, p, obs, eqs, cev, dev, dom, meta,
     OrderedDict{String, IndexSet}(),
-    OrderedDict{String, FunctionTable}(),
     OrderedDict{String, Any}()
 )
-FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs) =
+FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets) =
     FlattenedSystem(
-    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs,
+    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets,
     OrderedDict{String, Any}()
 )
-FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg) =
+FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, treg) =
     FlattenedSystem(
-    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, treg,
     _flat_empty_vars(), _flat_empty_vars(), _flat_empty_vars(),
     Pair{String, ASTExpr}[], LoaderField[],
     OrderedDict{String, Vector{Int}}()
@@ -330,11 +321,11 @@ FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg) =
 # A caller that predates per-term provenance gets one unattributed contribution
 # per equation (empty `origins`, "author unknown").
 FlattenedSystem(
-    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, treg,
     alg, brw, disc, ics, lfs, lshapes
 ) =
     FlattenedSystem(
-    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, treg,
     alg, brw, disc, ics, lfs, lshapes,
     _unattributed_contributions(eqs, lshapes)
 )
@@ -365,7 +356,6 @@ function FlattenedSystem(
         domain = flat.domain,
         metadata = flat.metadata,
         index_sets = flat.index_sets,
-        function_tables = flat.function_tables,
         template_registry = flat.template_registry,
         algebraic_variables = flat.algebraic_variables,
         brownian_parameters = flat.brownian_parameters,
@@ -384,7 +374,7 @@ function FlattenedSystem(
         independent_variables, state_variables, parameters,
         observed_variables, equations, continuous_events,
         discrete_events, domain, metadata, index_sets,
-        function_tables, template_registry,
+        template_registry,
         algebraic_variables, brownian_parameters, discrete_parameters,
         field_ics, loader_fields, lifted_shapes, equation_contributions
     )
@@ -1164,7 +1154,6 @@ _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
     coupling = coupling,
     domain = file.domain,
     enums = file.enums,
-    function_tables = file.function_tables,
     index_sets = file.index_sets,
     solver = file.solver,
     document_base = file.document_base
@@ -1343,7 +1332,11 @@ function flatten(
                 states, params, observeds, equations, contribs,
                 continuous_events, discrete_events,
                 model, name;
-                tpl_rename = get(template_rename, name, nothing)
+                tpl_rename = get(template_rename, name, nothing),
+                tpl_captures = template_captures(
+                    file.component_templates === nothing ? nothing :
+                        get(file.component_templates, "models.$(name)", nothing)
+                )
             )
             _attribute_equations!(eq_owners, equations, name)
             _collect_loader_fields!(loader_fields, model, name, file.data_sources)
@@ -1558,13 +1551,6 @@ function flatten(
         merged_variable_renames = merged_renames,
     )
 
-    # File-scoped function tables (esm-spec §9.5) are keyed by globally-unique id
-    # and referenced by `table_lookup` nodes — carry them through unchanged so the
-    # flattened system can round-trip into a runnable EsmFile (`flattened_to_esm`).
-    function_tables = file.function_tables === nothing ?
-        OrderedDict{String, FunctionTable}() :
-        OrderedDict{String, FunctionTable}(file.function_tables)
-
     # Step 6: the §6.3.1 SUBSET maps, every membership decision delegated to the
     # classification accessors (esm-spec §6.3.1 calls them "the ONLY sanctioned
     # way to ask these questions"), run over the FLATTENED form and re-ordered
@@ -1603,7 +1589,7 @@ function flatten(
     return FlattenedSystem(
         ivs, states, params, observeds,
         equations, continuous_events, discrete_events,
-        target_domain, metadata, index_sets, function_tables, template_registry,
+        target_domain, metadata, index_sets, template_registry,
         algebraic_variables, brownian, discrete_params,
         field_ics, loader_fields, lifted_shapes, contribs,
     )
@@ -1752,7 +1738,7 @@ array system, or `discretize(doc)` first when it carries a spatial PDE.
 A native dict — not a typed `EsmFile` — is the target on purpose: the value-
 invention front-door (RFC §6.1, geometry / derived index sets) and the
 `discretize` entry both dispatch on `AbstractDict`, and only the raw document
-carries the index-set / `table_lookup` vocabulary the typed IR doesn't surface.
+carries the index-set vocabulary the typed IR doesn't surface.
 
 The single model collects:
 - all three variable partitions (states, parameters, observeds) — observeds keep
@@ -1762,11 +1748,10 @@ The single model collects:
   observed already defined by an equation — no double definition);
 - the document-scoped `index_sets` registry (esm-spec v0.8.0), emitted at the
   top level so the regridders' `ranges.from` / `from_faq` / producer `id`
-  references resolve;
-- the file-scoped `function_tables` (the fuel `table_lookup` data).
+  references resolve.
 
 This is the monolithic path the staged camp-fire run previously could not take,
-because a lossy `flatten` dropped the geometry `manifold` / `table` data and the
+because a lossy `flatten` dropped the geometry `manifold` data and the
 index-set registry. With those preserved (canonical `reconstruct` + the registry
 fields on `FlattenedSystem`), the whole flattened document lowers in one shot.
 
@@ -1953,15 +1938,45 @@ function flattened_to_esm(
             k => serialize_index_set(v) for (k, v) in flat.index_sets
         )
     end
-    if !isempty(flat.function_tables)
-        doc["function_tables"] = Dict{String, Any}(
-            k => serialize_function_table(v) for (k, v) in flat.function_tables
-        )
-    end
     if flat.domain !== nothing
         # v0.8.0: single top-level `domain` object shared by the document; a
         # model is spatial via its variable shapes, not a `domain` reference.
         doc["domain"] = serialize_domain(flat.domain)
     end
     return doc
+end
+
+# One variable's §5.4 update rules, rewritten through `f`. Returns `var` itself
+# when it declares no update or nothing changed.
+function _lower_variable_update(var::ModelVariable, f)::ModelVariable
+    var.update === nothing && return var
+    rules = ParameterUpdate[]
+    changed = false
+    for r in var.update
+        nw = r.when === nothing ? nothing : f(r.when)
+        ne = r.expression === nothing ? nothing : f(r.expression)
+        (nw !== r.when || ne !== r.expression) && (changed = true)
+        push!(
+            rules, ParameterUpdate(
+                r.kind; times = r.times, interval = r.interval,
+                initial_offset = r.initial_offset, when = nw, direction = r.direction,
+                source = r.source, hook = r.hook, expression = ne, from = r.from,
+                handler = r.handler
+            )
+        )
+    end
+    return changed ? reconstruct(var; update = rules) : var
+end
+
+# The map form: a NEW map only when some variable's update actually changed, so
+# an unaffected `FlattenedSystem` keeps sharing its variable maps.
+function _lower_variable_updates(vars::OrderedDict{String, ModelVariable}, f)
+    lowered = nothing
+    for (name, var) in vars
+        nv = _lower_variable_update(var, f)
+        nv === var && continue
+        lowered === nothing && (lowered = OrderedDict{String, ModelVariable}(vars))
+        lowered[name] = nv
+    end
+    return lowered === nothing ? vars : lowered
 end

@@ -1,8 +1,7 @@
 # ========================================================================
 # tree_walk/oop_merge.jl — part of the tree-walk evaluator (array-IR B).
 # Included by src/tree_walk.jl AFTER oop.jl (`_OopAccPlan`,
-# `_build_oop_acc_plan`) and acc_merge.jl (`_fn_spec_hash`,
-# `_check_fn_group_specs`). Owns the KERNEL-CLASS merge: a build-time pass
+# `_build_oop_acc_plan`) and acc_merge.jl. Owns the KERNEL-CLASS merge: a build-time pass
 # (`_merge_acc_kernel_classes`, called from `_build_evaluator_impl` phase 4
 # BEFORE the xcse gate and the emitter branch, so BOTH the `:inplace` and the
 # `:oop` RHS run over merged kernels) that collapses per-cell-fragmented
@@ -10,8 +9,7 @@
 #
 # WHY. `_acc_from_cell_entries` merges the per-cell entries OF ONE ARRAY
 # EQUATION; what it cannot see is that a stencil model instantiates the same
-# equation once per cell/column with different ghost patterns and interp
-# specs, yielding thousands of structurally identical mostly-1-lane kernels
+# equation once per cell/column with different ghost patterns, yielding thousands of structurally identical mostly-1-lane kernels
 # over only a few hundred distinct classes. The interpreted walkers tolerate
 # that; an XLA tracer
 # (Reactant) does not — it retraces every kernel body, so IR volume is the
@@ -22,14 +20,6 @@
 #   varying state slot   -> _AccStateTblBox(tbl,1,0,0,1)   (0 entry = ghost 0.0)
 #   varying const/literal-> _AccConstBox(tbl,1,0,0,1)      (frozen per-lane)
 #   varying forcing index-> _AccArrTblBox(buf,tbl,1,0,0,1) (LIVE re-gather)
-#   varying interp spec  -> (_Interp*LaneSpec)(specs,1,0,0,1) (per-lane tables)
-#
-# The last line is what collapses the per-cell/per-column interp-table split:
-# the class signature keys an interp spec's SHAPE (knot count), not its
-# CONTENT, so kernels identical except for their interp const tables share a
-# class and the clone transposes the specs into per-lane tables (see
-# `_oop_merge_fn_payload` and registered_functions.jl `_Interp*LaneSpec`),
-# collapsing the class count by another order of magnitude.
 #
 # with `_outs_cells` lane addressing (m1 = lane ordinal, so s1=1/off=1).
 # Per-lane index/const data comes from each member's already-built
@@ -37,26 +27,23 @@
 # same way (their plans are parent-lane-aligned), with the sub inv-CSE tier
 # folded into the cell tier (same values, lane-vectorized). The PARENT
 # kernel's inv tier is PRESERVED when every member's inv recipes are
-# VALUE-identical (no access/subcall leaves, equal literals, content-equal fn
-# specs — `_oop_inv_nodes_identical`): the merged kernel then keeps a real
-# invariant tier evaluated once per call, so a FastJX-style interp chain
-# shared by a class of species balances is NOT demoted to a per-lane
-# recompute, the B4 xcse pass still sees it, and the `n_acc_inv_slots` build
+# VALUE-identical (no access/subcall leaves, equal literals —
+# `_oop_inv_nodes_identical`): the merged kernel then keeps a real
+# invariant tier evaluated once per call, so a chain shared by a class of
+# species balances is NOT demoted to a per-lane recompute, the B4 xcse pass still sees it, and the `n_acc_inv_slots` build
 # diagnostic stays truthful. When any inv recipe varies across members
 # (all-or-nothing, per class) the whole tier folds into the cell tier as
 # before — same values, lane-vectorized. Evaluation is the codegen / scalar
 # runners (`:inplace`) or whatever a compiled backend emits from
 # `_build_oop_acc_plan`'s plan (`:oop`) — per-lane semantics (fold order, ghost
-# select, interp) stay EarthSciAST's.
+# select) stay EarthSciAST's.
 #
 # BIT-IDENTITY BY CONSTRUCTION. A leaf equal across the group stays scalar;
 # a varying one is transposed into a table indexed by lane ordinal; the op
 # sequence applied per lane is byte-identical to the unmerged kernel's.
 # A kernel's write is ASSIGNMENT, and the pass merges only when every kernel
 # out-slot is globally unique, so concatenating groups cannot reorder any
-# read-after-write. Closed-function payloads ride from the class
-# representative and are guarded by `_check_fn_group_specs` (content-equal
-# or loud build error — never silent wrong numbers).
+# read-after-write. Op payloads ride from the class representative.
 #
 # SAFETY POSTURE. This is a default-on optimization of a correct baseline,
 # so every "can't" is a fallback, not an error: overlapping out-slots, a
@@ -84,54 +71,6 @@ _oop_mergeable_acc_kind(k) =
 # forcing), not exact kind: the clone tables every member of a family
 # identically, so an interior AFFINE cell and a boundary TBL_BOX cell of the
 # same equation share a class.
-# The `:fn` payload's class-signature token. Interp specs key their SHAPE
-# (knot count) only: same-shape specs with different content are MERGEABLE —
-# the clone tables them per lane. `Nothing` (boxed `datetime.*`) has no
-# content at all. Any OTHER spec type cannot be lane-tabled, so it keys by
-# `_fn_spec_hash` (content, or identity for unknown types) exactly as before —
-# the merged node would carry the rep's payload for all lanes.
-_oop_merge_fn_sig_token(::Nothing) = "n"
-_oop_merge_fn_sig_token(s::_InterpLinearSpec) = string("L", length(s.axis))
-_oop_merge_fn_sig_token(s::_InterpBilinearSpec) =
-    string("B", length(s.axis_x), "x", length(s.axis_y))
-_oop_merge_fn_sig_token(s::_InterpSearchsortedSpec) = string("S", length(s.xs))
-# A per-lane spec (a ROUND-1 merge product, seen by the round-2 signature)
-# keys the same shape as its scalar kin, so already-tabled and not-yet-tabled
-# members of one shape share a class and re-table by concatenation.
-_oop_merge_fn_sig_token(h::_InterpLinearLaneSpec) = string("L", length(h.axis_cols))
-_oop_merge_fn_sig_token(h::_InterpBilinearLaneSpec) =
-    string("B", length(h.axis_x_cols), "x", length(h.axis_y_cols))
-_oop_merge_fn_sig_token(h::_InterpSearchsortedLaneSpec) = string("S", length(h.xs_cols))
-_oop_merge_fn_sig_token(s) = string("h", _fn_spec_hash(s))
-
-# (interp-kind, knot shape...) of a scalar OR per-lane spec; `nothing` for
-# anything that cannot be lane-tabled.
-_oop_fn_shape(::Any) = nothing
-_oop_fn_shape(s::_InterpLinearSpec) = (:linear, length(s.axis))
-_oop_fn_shape(h::_InterpLinearLaneSpec) = (:linear, length(h.axis_cols))
-_oop_fn_shape(s::_InterpBilinearSpec) = (:bilinear, length(s.axis_x), length(s.axis_y))
-_oop_fn_shape(h::_InterpBilinearLaneSpec) =
-    (:bilinear, length(h.axis_x_cols), length(h.axis_y_cols))
-_oop_fn_shape(s::_InterpSearchsortedSpec) = (:searchsorted, length(s.xs))
-_oop_fn_shape(h::_InterpSearchsortedLaneSpec) = (:searchsorted, length(h.xs_cols))
-
-# Append one member's per-lane specs (a scalar spec broadcast over its lanes,
-# or an existing lane spec's per-lane list verified against the member's lane
-# count) to the merged per-lane list.
-function _oop_fn_append_lanes!(out::Vector{S}, spec, lanes::Int) where {S}
-    if spec isa S
-        for _ in 1:lanes
-            push!(out, spec)
-        end
-    else
-        specs = spec.specs::Vector{S}
-        length(specs) == lanes ||
-            error("lane-spec lane count $(length(specs)) != member lanes $(lanes)")
-        append!(out, specs)
-    end
-    return out
-end
-
 function _oop_merge_sig!(
         io::IOBuffer, n::_Node, K::_AccKernel, parentsubs,
         why::Base.RefValue{Symbol}
@@ -169,21 +108,6 @@ function _oop_merge_sig!(
         why[] = :reduce; print(io, "X")
     elseif k === _NK_OP
         print(io, "O", n.op)
-        pl = n.payload
-        if pl isa Tuple && length(pl) >= 1
-            print(io, "@", pl[1])
-            # SHAPE key, not content (contrast acc_merge.jl `_struct_sig!`,
-            # whose per-cell merge rides ONE spec and therefore must key
-            # content): the CLASS merge tables per-lane-varying interp specs
-            # (`_oop_merge_fn_payload` → `_Interp*LaneSpec`), so kernels
-            # calling `interp.*` against DIFFERENT same-shape tables belong
-            # in ONE class — the knot COUNT is what the lockstep select/blend
-            # evaluation needs pinned. An unknown (non-interp) spec type still
-            # keys by content/identity hash, and the clone re-verifies
-            # name/type/shape loudly (`_check_fn_group_specs` path — never
-            # silent wrong numbers).
-            length(pl) >= 2 && print(io, "#", _oop_merge_fn_sig_token(pl[2]))
-        end
         print(io, "(")
         for c in n.children
             _oop_merge_sig!(io, c, K, parentsubs, why)
@@ -243,18 +167,6 @@ function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
         # by the signature); a cell-tier read here would not be lane-invariant.
         return _allof(i -> nodes[i].payload === Kof(i).cse.inv_scratch, 1:m)
     elseif k === _NK_OP || k === _NK_CONTRACTION
-        if k === _NK_OP && r.op === :fn && r.payload isa Tuple
-            fn1, spec1 = (r.payload)::Tuple{String, Any}
-            for i in 2:m
-                fni, speci = (nodes[i].payload)::Tuple{String, Any}
-                (
-                    fni == fn1 && (
-                        speci === spec1 ||
-                            _fn_spec_content_equal(speci, spec1)
-                    )
-                ) || return false
-            end
-        end
         for ci in eachindex(r.children)
             _oop_inv_nodes_identical(
                 _Node[n.children[ci] for n in nodes],
@@ -265,93 +177,6 @@ function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
     else # _NK_ACCESS / _NK_SUBCALL / anything else: decline, fold to cell
         return false
     end
-end
-
-# Merged payload for one aligned `:fn` node group (`nodes[i]` is member i's
-# node; member i owns `Ls[i]` of the `L` merged lanes, in member order).
-#   * Specs CONTENT-EQUAL across members (the common case — one source `fn`
-#     node instantiated per cell over one shared table): the representative's
-#     payload rides, exactly as before this pass learned to table specs.
-#   * Specs VARYING: the signature grouped these kernels because the specs
-#     share fn name, type and SHAPE (knot count — `_oop_merge_fn_sig_token`),
-#     so transpose them into a per-lane spec table (`_Interp*LaneSpec`) with
-#     `_outs_cells` box addressing (1,0,0,1) — the interp analog of the
-#     `_AccConstBox` a varying literal becomes.
-#   * Anything else reaching here (name/type/shape mismatch — a signature
-#     invariant break, the analog of a `_fn_spec_hash` collision) fails LOUDLY
-#     through `_check_fn_group_specs`, whose throw degrades to the per-group
-#     unmerged fallback in `_merge_oop_acc_kernels` — never silent wrong
-#     numbers.
-# Kept-inv safety: a lane spec is only minted when specs VARY across members,
-# and `_oop_inv_nodes_identical` declines exactly those groups, so a PRESERVED
-# invariant tier can never carry a per-lane spec (the payload analog of the
-# `nacc0` lane-table pin in the kept-inv clone).
-function _oop_merge_fn_payload(nodes::Vector{_Node}, Ls::Vector{Int}, L::Int)
-    m = length(nodes)
-    fname1, spec1 = (nodes[1].payload)::Tuple{String, Any}
-    # A per-lane spec is ALWAYS re-tabled when merging further (round 2 over
-    # round-1 products): the rep's lane list covers only ITS OWN lanes, so
-    # riding it would misalign — concatenation below is the correct merge.
-    varying = m > 1 && (
-        spec1 isa _InterpLinearLaneSpec ||
-            spec1 isa _InterpBilinearLaneSpec ||
-            spec1 isa _InterpSearchsortedLaneSpec
-    )
-    if !varying
-        for i in 2:m
-            fnamei, speci = (nodes[i].payload)::Tuple{String, Any}
-            if !(
-                    fnamei == fname1 &&
-                        (speci === spec1 || _fn_spec_content_equal(speci, spec1))
-                )
-                varying = true
-                break
-            end
-        end
-    end
-    varying || return nodes[1].payload
-    sh = _oop_fn_shape(spec1)
-    if sh !== nothing &&
-            all(
-            i -> begin
-                fni, spi = (nodes[i].payload)::Tuple{String, Any}
-                fni == fname1 && _oop_fn_shape(spi) == sh
-            end, 2:m
-        )
-        if sh[1] === :linear
-            specs = _InterpLinearSpec[]
-            sizehint!(specs, L)
-            for i in 1:m
-                _oop_fn_append_lanes!(
-                    specs,
-                    ((nodes[i].payload)::Tuple{String, Any})[2], Ls[i]
-                )
-            end
-            return (fname1, _InterpLinearLaneSpec(specs, 1, 0, 0, 1))
-        elseif sh[1] === :bilinear
-            specs = _InterpBilinearSpec[]
-            sizehint!(specs, L)
-            for i in 1:m
-                _oop_fn_append_lanes!(
-                    specs,
-                    ((nodes[i].payload)::Tuple{String, Any})[2], Ls[i]
-                )
-            end
-            return (fname1, _InterpBilinearLaneSpec(specs, 1, 0, 0, 1))
-        else # :searchsorted
-            specs = _InterpSearchsortedSpec[]
-            sizehint!(specs, L)
-            for i in 1:m
-                _oop_fn_append_lanes!(
-                    specs,
-                    ((nodes[i].payload)::Tuple{String, Any})[2], Ls[i]
-                )
-            end
-            return (fname1, _InterpSearchsortedLaneSpec(specs, 1, 0, 0, 1))
-        end
-    end
-    _check_fn_group_specs(nodes)   # loud: grouping-invariant break
-    return nodes[1].payload        # unreachable — the guard throws on mismatch
 end
 
 # Merge one class of lockstep-identical kernels (indices `js` into
@@ -482,13 +307,8 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                     push!(accvec, _AccArrTblBox(arr, tbl, 1, 0, 0, 1))
                 end
                 return _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
-            else # _NK_OP / _NK_CONTRACTION: payload rides from the rep, except
-                # a `:fn` whose specs vary across members — that becomes a
-                # per-lane spec table (or a loud `_check_fn_group_specs`
-                # error on any signature-invariant break; see
-                # `_oop_merge_fn_payload`).
-                pay = (k === _NK_OP && r.op === :fn && r.payload isa Tuple) ?
-                    _oop_merge_fn_payload(nodes, Ls, L) : r.payload
+            else # _NK_OP / _NK_CONTRACTION: payload rides from the rep
+                pay = r.payload
                 ch = Vector{_Node}(undef, length(r.children))
                 for ci in eachindex(r.children)
                     ch[ci] = clone(_Node[n.children[ci] for n in nodes])
@@ -722,8 +542,8 @@ end
 # renumbers every later slot) land in different classes even though their
 # fully-expanded arithmetic is lockstep-identical. On a real transport equation
 # the great majority of round-1 classes share ONE spine and differ only in recipe
-# slicing/slot numbering plus literal-vs-frozen-const leaf flips — not in interp
-# specs, not in forcing-buffer identity. Expansion-normalizing the signature
+# slicing/slot numbering plus literal-vs-frozen-const leaf flips — not in
+# forcing-buffer identity. Expansion-normalizing the signature
 # (inline every own-scratch `_NK_CACHED` read through its recipe, treat a LITERAL
 # and a frozen const-family access as one "value leaf") more than halves them.
 #
@@ -732,9 +552,7 @@ end
 #     `_NK_CACHED` reads of the kernel's own tiers are resolved through the
 #     recipe they name, so recipe slicing and slot numbering vanish. Leaf
 #     tokens: state family (AS) / per-buffer forcing family / one VALUE token
-#     for literal + frozen const family / param sym / fn payload by SHAPE
-#     (`_oop_merge_fn_sig_token`, so same-shape interp tables merge and are
-#     lane-tabled).
+#     for literal + frozen const family / param sym.
 #   * CLONE: the round-1 clone generalized to walk members in lockstep WITH
 #     on-the-fly expansion (each member's CACHED reads resolved through its
 #     own recipes) and a member-identity-tuple memo, so sharing common to all
@@ -752,8 +570,8 @@ end
 #     (the round-1 fold-to-cell semantics — value-identical, lane-vectorized).
 #
 # BIT-IDENTITY. Per lane, the op sequence is the member's own expanded op
-# sequence with its own leaf values (state slots / consts / forcing indices /
-# interp knots ride per-lane tables); expansion and re-CSE only move pure
+# sequence with its own leaf values (state slots / consts / forcing indices
+# ride per-lane tables); expansion and re-CSE only move pure
 # deterministic subcomputations between "cached once" and "recomputed", which
 # cannot change any bit. The stencil-vs-unmerged differential tests and the
 # ReSEACT maxabs==0.0 gate are the oracles.
@@ -831,9 +649,7 @@ function _oop_x_sig(
         r = hash(:X, UInt(0x66ff))
     elseif k === _NK_OP || k === _NK_CONTRACTION
         pl = n.payload
-        paytok = if n.op === :fn && pl isa Tuple && length(pl) >= 2
-            (pl[1], _oop_merge_fn_sig_token(pl[2]))     # SHAPE key (lane-tabled)
-        elseif pl === nothing
+        paytok = if pl === nothing
             0x00
         else
             objectid(pl)                                # identity: never wrongly merged
@@ -1064,13 +880,9 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                     ), 1:m
                 ) ||
                     error("round-2: op/contraction mismatch in a class")
-                pay = if k === _NK_OP && r.op === :fn && r.payload isa Tuple
-                    _oop_merge_fn_payload(nodes, Ls, L)
-                else
-                    all(i -> nodes[i].payload === r.payload, 1:m) ||
-                        error("round-2: op payload mismatch in a class")
-                    r.payload
-                end
+                all(i -> nodes[i].payload === r.payload, 1:m) ||
+                    error("round-2: op payload mismatch in a class")
+                pay = r.payload
                 ch = Vector{_Node}(undef, nch)
                 for ci in 1:nch
                     ch[ci] = clone(_Node[n.children[ci] for n in nodes])
@@ -1183,16 +995,13 @@ end
 # left alone; what the merge buys there is fewer kernels, which matters only
 # when the count is large. So `keep_affine` (the in-place build, with the
 # emitter on) holds back every box kernel of rank 2 or more that reads only
-# through affine, fixed or box-addressed descriptors, calls no function, and
-# spans more than one cell along at least one axis, up to `_affine_keep_max()`
+# through affine, fixed or box-addressed descriptors and spans more than one cell along at least one axis, up to `_affine_keep_max()`
 # kernels (by the number of such axes, then build order, both independent of
 # the grid size); the merge runs on the rest. Corner boxes (one cell along
 # every axis) are merged as before: they are a handful of cells whatever the
 # grid size. One-axis boxes are merged as before too: there the box processor
 # also cuts an irregular gather into affine runs, whose number moves with the
-# grid size, and only the merge keeps that program the same at every size. A
-# box calling a function (an interpolation with per-region tables) keeps the
-# merge's one lane-table kernel; the call dominates its cost. The out-of-place product
+# grid size, and only the merge keeps that program the same at every size. The out-of-place product
 # (the compiled backends' input) and the interpreter runner keep the full
 # merge. Keeping a kernel out of a merge never changes a value: each cell
 # evaluates the same op sequence either way.
@@ -1211,38 +1020,9 @@ _affine_keep_kind(k) =
 # count as the parent's.
 _affine_keep_reads(K::_AccKernel) =
     _allof(a -> _affine_keep_kind(a.kind), K.acc) && _allof(_affine_keep_reads, K.subs)
-function _affine_keep_has_fn(n::_Node, seen::_NodeIdMap{Nothing})
-    haskey(seen, n) && return false
-    seen[n] = nothing
-    (n.kind === _NK_OP && n.op === :fn) && return true
-    return _anyof(c -> _affine_keep_has_fn(c, seen), n.children)
-end
-function _affine_keep_has_fn(K::_AccKernel, seen = _NodeIdMap{Nothing}())
-    _affine_keep_has_fn(K.spine, seen) && return true
-    _anyof(r -> _affine_keep_has_fn(r, seen), K.cse.recipes) && return true
-    _anyof(r -> _affine_keep_has_fn(r, seen), K.cse.inv_recipes) && return true
-    return _anyof(S -> _affine_keep_has_fn(S, seen), K.subs)
-end
-# `_affine_keep_has_fn(K)`, remembered per kernel triple (spine, CSE,
-# sub-kernels). The memo is keyed by the `subs` vector, the one mutable object
-# of the triple: boxes that lowered to one cached spine (`spine_cache`) share
-# that vector along with the spine and CSE. A hit counts only when the spine
-# and CSE are the stored ones too, so a builder that hands one `subs` vector to
-# kernels with other spines gets a fresh answer, never a stale one.
-const _AffineFnMemo = IdDict{Vector{_AccKernel}, Tuple{_Node, _AccCSE, Bool}}
-function _affine_keep_has_fn_memo(K::_AccKernel, fnmemo::_AffineFnMemo)
-    hit = get(fnmemo, K.subs, nothing)
-    hit !== nothing && hit[1] === K.spine && hit[2] === K.cse && return hit[3]
-    r = _affine_keep_has_fn(K)
-    hit === nothing && (fnmemo[K.subs] = (K.spine, K.cse, r))
-    return r
-end
-function _affine_box_rank(K::_AccKernel, fnmemo::_AffineFnMemo = _AffineFnMemo())
+function _affine_box_rank(K::_AccKernel)
     cs = K.cells
-    (
-        _is_outs(cs) || length(cs.strides) < 2 || !_affine_keep_reads(K) ||
-            _affine_keep_has_fn_memo(K, fnmemo)
-    ) && return 0
+    (_is_outs(cs) || length(cs.strides) < 2 || !_affine_keep_reads(K)) && return 0
     return count(d -> !_cellset_slab(cs, d), eachindex(cs.strides))
 end
 
@@ -1251,11 +1031,7 @@ function _affine_boxes_to_keep(kernels::AbstractVector{_AccKernel})
     (_codegen_disabled() || _codegen_node_budget() <= 0) && return Int[]
     cap = _affine_keep_max()
     cap <= 0 && return Int[]
-    # Boxes that lowered to one cached spine (`spine_cache`) share their spine,
-    # CSE recipes and sub-kernels, so whether they hold a `:fn` is asked once
-    # per shared triple, not once per box.
-    fnmemo = _AffineFnMemo()
-    rk = [_affine_box_rank(K, fnmemo) for K in kernels]
+    rk = [_affine_box_rank(K) for K in kernels]
     cand = [j for j in eachindex(kernels) if rk[j] > 0]
     sort!(cand; by = j -> (-rk[j], j))
     length(cand) > cap && resize!(cand, cap)
@@ -1351,7 +1127,7 @@ function _merge_acc_kernel_classes(
     merged, mplans, rdiag = _merge_oop_acc_kernels(kernels, plans)
     # Round 2 (expansion-normalized; see the section header above): collapse
     # classes that differ only in per-kernel CSE slicing / slot numbering /
-    # literal-vs-frozen-const leaves / same-shape interp tables. Same
+    # literal-vs-frozen-const leaves. Same
     # per-class fallback posture; with round 2 off the round-1 output stands
     # byte for byte.
     rxdiag = nothing

@@ -2,7 +2,7 @@
 # `_cross_eq_class_emit_enabled`; build.jl `pooled_cells`; oop_merge.jl
 # `_merge_acc_kernel_classes` direct stage).
 #
-# Direct class emission (test/direct_class_emission_test.jl) made PER-EQUATION
+# Direct class emission made PER-EQUATION
 # per-cell classes grid-independent by construction, but two class families
 # still reached lane-batched form only through the post-hoc repair pass:
 #
@@ -36,8 +36,7 @@
 #       NO merge anywhere — every class the corpus contains was emitted
 #       directly.
 #
-# The per-cell fixtures force the per-cell path exactly as
-# direct_class_emission_test does: an aggregate whose contracted bound is
+# The per-cell fixtures force the per-cell path: an aggregate whose contracted bound is
 # expression-valued but constant (`k in 1:(i+2-i)` == `1:2`), which declines
 # the affine build (`:percell_acc` pinned). The whole-array nest takes that
 # bound as a per-cell table when codegen runs; the `codegen=false` builds put
@@ -52,9 +51,6 @@ const ESM = EarthSciAST
 
 # ---- fixtures ---------------------------------------------------------------
 
-const _XQ_AX = [0.0, 1.0, 2.0, 3.0]
-const _XQ_TA = [0.0, 10.0, 20.0, 30.0]
-const _XQ_TB = [0.0, -100.0, -200.0, -300.0]
 
 # Contracted bound `i+2-i`: evaluates to 2 for every cell but is syntactically
 # expression-valued, so the equation takes the per-cell path (`:percell_acc`).
@@ -73,34 +69,8 @@ function _xq_percell_eq(x::String, body, N::Int)
     return ESM.Equation(lhs, rhs)
 end
 
-# Twin per-cell INTERP equations: same shape (4-knot interp.linear), each
-# equation against its OWN table — the cross-equation class-fragmentation
-# source. Within one equation the spec is content-uniform, so the
-# per-equation emitter alone mints NO lane table; only pooling across the
-# equations (or the repair pass) can produce the class kernel.
-function _xq_twin_interp_model(N)
-    vars = Dict{String, ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "v" => ESM.ModelVariable(ESM.UnknownVariable)
-    )
-    body(x, tbl) = _op(
-        "*",
-        _op(
-            "fn", _const(tbl), _const(_XQ_AX), _idx(x, _v("i"));
-            name = "interp.linear"
-        ),
-        _v("k")
-    )
-    return ESM.Model(
-        vars, [
-            _xq_percell_eq("u", body("u", _XQ_TA), N),
-            _xq_percell_eq("v", body("v", _XQ_TB), N),
-        ]
-    )
-end
-
-# Twin per-cell PLAIN equations (no interp): the cross-equation class is pure
-# state-slot variation — the merged kernel carries state tables, no lane spec.
+# Twin per-cell PLAIN equations: the cross-equation class is pure state-slot
+# variation — the merged kernel carries state tables.
 function _xq_twin_plain_model(N)
     vars = Dict{String, ESM.ModelVariable}(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
@@ -182,24 +152,6 @@ _xq_repair(t) = get(t, :classmerge_round1_merge, 0) +
 _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
     get(t, :direct_classmerge_round2_merge, 0)
 
-# Does any `:fn` node reachable from K carry a per-lane spec?
-function _xq_has_lanespec(K)
-    seen = IdDict{Any, Nothing}()
-    visit(nd) = begin
-        haskey(seen, nd) && return false
-        seen[nd] = nothing
-        if nd.kind === ESM._NK_OP && nd.op === :fn
-            pl = nd.payload
-            pl isa Tuple && length(pl) >= 2 && ESM._direct_is_lanespec(pl[2]) &&
-                return true
-        end
-        any(visit, nd.children)
-    end
-    visit(K.spine) && return true
-    any(visit, K.cse.recipes) && return true
-    any(visit, K.cse.inv_recipes) && return true
-    return any(_xq_has_lanespec, K.subs)
-end
 _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
 
 # ---- tests ------------------------------------------------------------------
@@ -217,13 +169,9 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         end
     end
 
-    @testset "(a) cross-equation classes: one kernel, zero repair — $name" for
-        (name, mkmodel, want_lanespec) in (
-            ("interp twins", _xq_twin_interp_model, true),
-            ("plain twins", _xq_twin_plain_model, false),
-        )
+    @testset "(a) cross-equation classes: one kernel, zero repair" begin
         N = 6
-        model = mkmodel(N)
+        model = _xq_twin_plain_model(N)
         ics = _xq_ics(N)
         ron = _xq_build(model, ics; codegen = false)                 # everything on
         rref = _xq_build(model, ics; compiler = :interpreter)         # the reference
@@ -245,14 +193,10 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         @test ron.diag.n_classmerge_in == ron.diag.n_acc_kernels
         @test _xq_repair(ron.tally) == 0
         @test _xq_directmerge(ron.tally) == 0
-        @test get(ron.tally, :direct_class_kernel, 0) == (want_lanespec ? 1 : 0)
-        @test count(_xq_has_lanespec, _xq_kernels(ron.f)) == (want_lanespec ? 1 : 0)
 
-        # INTERPRETER: no class kernel of any provenance, and no merge.
-        @test get(rref.tally, :direct_class_kernel, 0) == 0
+        # INTERPRETER: no merge.
         @test _xq_repair(rref.tally) == 0
         @test _xq_directmerge(rref.tally) == 0
-        @test count(_xq_has_lanespec, _xq_kernels(rref.f)) == 0
     end
 
     @testset "(b) affine-box classes: direct stage emits, repair finds nothing" begin
@@ -279,7 +223,6 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
     end
 
     @testset "(d) bit-identity vs the scalar reference — $name" for (name, mk) in (
-            ("interp twins", N -> (_xq_twin_interp_model(N), Dict{String, Any}())),
             ("plain twins", N -> (_xq_twin_plain_model(N), Dict{String, Any}())),
             ("affine-box twins", N -> (_xq_afbox_model(N), Dict{String, Any}("W" => _xq_W(N)))),
         )
@@ -312,8 +255,8 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
 
     @testset "(c) grid independence of the pooled emitter" begin
         N1, N2 = 8, 24
-        A = _xq_build(_xq_twin_interp_model(N1), _xq_ics(N1); codegen = false)
-        B = _xq_build(_xq_twin_interp_model(N2), _xq_ics(N2); codegen = false)
+        A = _xq_build(_xq_twin_plain_model(N1), _xq_ics(N1); codegen = false)
+        B = _xq_build(_xq_twin_plain_model(N2), _xq_ics(N2); codegen = false)
 
         # Structural counters identical at 3x the grid (mirror
         # grid_invariance_test: drop the one documented O(cells) field).
@@ -328,35 +271,15 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
 
         # Cascade tally identical — in particular zero repair AND zero
         # direct-stage merges at both sizes (the pooled scalarizer emitted the
-        # class outright), with the lane-spec kernel counted once.
+        # class outright).
         @test A.tally == B.tally
         @test _xq_repair(A.tally) == 0
         @test _xq_directmerge(A.tally) == 0
-        @test get(A.tally, :direct_class_kernel, 0) == 1
 
-        # Per-lane data — out slots + descriptor tables + lane-spec lane
-        # counts — grows EXACTLY linearly (3x cells ⇒ 3x data).
-        function lanes(K)
-            n = Ref(0)
-            seen = IdDict{Any, Nothing}()
-            visit(nd) = begin
-                haskey(seen, nd) && return
-                seen[nd] = nothing
-                if nd.kind === ESM._NK_OP && nd.op === :fn
-                    pl = nd.payload
-                    pl isa Tuple && length(pl) >= 2 &&
-                        ESM._direct_is_lanespec(pl[2]) &&
-                        (n[] += length(pl[2].specs))
-                end
-                foreach(visit, nd.children)
-            end
-            visit(K.spine)
-            foreach(visit, K.cse.recipes)
-            foreach(visit, K.cse.inv_recipes)
-            return n[]
-        end
+        # Per-lane data — out slots + descriptor tables — grows EXACTLY
+        # linearly (3x cells ⇒ 3x data).
         data(ks) = sum(
-            length(K.cells.outs) + lanes(K) +
+            length(K.cells.outs) +
                 sum(length(d.arr) + length(d.conn) for d in K.acc; init = 0)
                 for K in ks; init = 0
         )

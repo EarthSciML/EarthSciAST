@@ -50,12 +50,9 @@
 //! [`AlgebraicRule`], [`ContractDim`]), the compiled model [`ArrayCompiled`],
 //! the kernel buffer [`Pool`], and the evaluation context [`EvalCtx`].
 
-// This runtime is compiled for wasm too (EarthSciAST-akz): it reaches
-// s2geometry only through the already-wasm-safe `crate::geometry` API (planar
-// clips work; spherical/geodesic returns a runtime `GeometryError` stub on
-// wasm), and its solver is the diffsol/Faer path, which is pure Rust — so no
-// native-only dependency remains, and planar / geometry-free PDEs run in the
-// browser.
+// This runtime is compiled for wasm too (EarthSciAST-akz): its solver is the
+// diffsol/Faer path, which is pure Rust — so no native-only dependency remains,
+// and PDEs run in the browser.
 #![allow(
     clippy::type_complexity,
     clippy::collapsible_if,
@@ -101,6 +98,8 @@ pub(crate) use compile::{
     apply_flatten_rewrites, model_from_flattened, mount_subsystems, promote_conditional_shapes,
     refuse_faq_bare_array_operands, resolve_model_self_references,
 };
+#[cfg(test)]
+pub(crate) use eval::check_scalar_evaluable;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use eval::eval_observed_taped;
 #[cfg(test)]
@@ -109,18 +108,14 @@ pub(crate) use eval::{
     ONE_CELL_NOTE, StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression,
     per_cell_walk_refused, per_cell_walks,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use tape::StandaloneError;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use vectorized::take_overlay_decline;
-// Read only by `crate::expression`'s tests.
-pub(crate) use eval::GEOMETRY_CLIP_CODE;
-#[cfg(test)]
-pub(crate) use eval::check_scalar_evaluable;
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
     take_const_array_oob,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use tape::StandaloneError;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use vectorized::take_overlay_decline;
 // The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
 // the vectorized overlay); re-exported crate-wide so a caller outside the
 // runtime that needs one operator's numeric meaning (the expression
@@ -256,8 +251,7 @@ enum ContractDim {
     /// Derived `[1, n]` — `from_faq` names the FAQ producer node whose
     /// materialized output sizes this contraction, resolved at eval time by
     /// [`derived_extent`]: the value-invention engine's distinct-set cardinality
-    /// (RFC §6.1 / §5.5) if it materialized this producer, else the
-    /// `intersect_polygon` clip ring's distinct-vertex count (RFC §8.1).
+    /// (RFC §6.1 / §5.5).
     Derived { from_faq: String },
 }
 
@@ -501,9 +495,8 @@ impl AlgebraicRule {
 /// The partially materialized array of an [`AlgebraicRule::Recurrence`], in
 /// scope for the body's causal self-reads while the sweep is in progress.
 ///
-/// Interior-mutable for the same reason [`EvalCtx::derived_rings`] is: the
-/// driver publishes cell `i` while the evaluation context that reads it at cell
-/// `i + c` holds a shared borrow of the scope.
+/// Interior-mutable because the driver publishes cell `i` while the evaluation
+/// context that reads it at cell `i + c` holds a shared borrow of the scope.
 ///
 /// `written` is not redundant with the axis bounds. A read is admitted only when
 /// the cell it names has ALREADY been published, which the bounds alone cannot
@@ -764,10 +757,8 @@ pub struct ArrayCompiled {
     /// shape-less — fine for scalar forcings (which keep going through
     /// `p`/`set_params`), awkward for fields; `state_arrays` is the integrator
     /// state `y` (refilled from the solver, not a free input); `observed_arrays`
-    /// is a pure function of state, cleared and recomputed each call;
-    /// `derived_rings` is interior-mutable but built *fresh per RHS call*
-    /// (intra-evaluation FAQ-geometry scratch, wrong lifetime and overwritten by
-    /// `intersect_polygon` producers). The gap is real, so the channel is added
+    /// is a pure function of state, cleared and recomputed each call. The gap
+    /// is real, so the channel is added
     /// — as a runtime *binding*, not a new engine primitive (no faq, no
     /// scalarizer arm, no `Discrete` `VariableType`). The optional typed
     /// `ModelVariable.refresh` field (plan PR-2) is deferred: forcing resolves
@@ -1009,8 +1000,6 @@ struct EvalEnv<'a> {
     params: &'a [f64],
     param_names: &'a [String],
     t: f64,
-    /// See [`EvalCtx::derived_rings`].
-    derived_rings: &'a RefCell<HashMap<String, ArrayD<f64>>>,
     /// See [`EvalCtx::derived_extents`]. The compiled-RHS paths pass
     /// [`empty_derived_extents`] (their derived sets were densified to
     /// intervals at build time); the standalone expression entry point
@@ -1039,7 +1028,6 @@ impl<'a> EvalEnv<'a> {
             param_names: self.param_names,
             loop_binds: IdxMap::default(),
             t: self.t,
-            derived_rings: self.derived_rings,
             derived_extents: self.derived_extents,
             forcing: self.forcing,
             cse: self.cse,
@@ -1067,29 +1055,16 @@ struct EvalCtx<'a> {
     param_names: &'a [String],
     loop_binds: IdxMap,
     t: f64,
-    /// Runtime registry of FAQ-materialized derived rings (RFC §8.1): an
-    /// `intersect_polygon` clip self-registers its closed overlap ring here
-    /// under its node `id`, so a downstream `faq` over a `kind:"derived"`
-    /// index set (`from_faq: <id>`) resolves its extent (the distinct-vertex
-    /// count) via [`derived_extent`]. Interior-mutable so the producer can
-    /// register while the same borrow chain reads it; empty for models with no
-    /// derived sets (byte-identical to the pre-geometry path).
-    derived_rings: &'a RefCell<HashMap<String, ArrayD<f64>>>,
     /// Build-time value-invention derived-index-set extents (RFC §6.1 / §5.5),
     /// keyed by the PRODUCING aggregate's `id` — the same key a
     /// `kind:"derived"` index set names in its `from_faq`, and the same keying
     /// the Python `EvalContext.derived_extents` and the Julia
     /// `_declared_shape_extents` use.
     ///
-    /// This is the relational counterpart of `derived_rings`. A clip ring is
-    /// materialized *during* evaluation (the producer node runs, then the
-    /// consumer reads its ring); the value-invention engine instead runs ONCE at
-    /// setup, off the per-step hot path, and hands its distinct-set cardinality
-    /// here. A derived range consults this first ([`derived_extent`]) and falls
-    /// back to the ring, so the two producers coexist in one model.
-    ///
-    /// NOT interior-mutable, unlike `derived_rings`: nothing produces into it
-    /// during evaluation. Empty on the compiled-RHS path, where
+    /// The value-invention engine runs ONCE at setup, off the per-step hot
+    /// path, and hands its distinct-set cardinality here; a derived range reads
+    /// it through [`derived_extent`]. Nothing produces into it during
+    /// evaluation. Empty on the compiled-RHS path, where
     /// [`crate::value_invention::rewrite_derived_index_sets`] has already
     /// densified every materialized derived set to an `interval` *before* ranges
     /// were resolved — those axes therefore arrive as plain static bounds and
@@ -1097,9 +1072,8 @@ struct EvalCtx<'a> {
     /// [`eval_expression_with_extents`] entry point, where a runner evaluates an
     /// expression that still holds a [`RangeSpec::DerivedDyn`] bound.
     derived_extents: &'a HashMap<String, i64>,
-    /// External refreshable forcing-array channel (PR-1, ess-14f.7). Unlike
-    /// `derived_rings` (rebuilt fresh every RHS call), this borrows the
-    /// model-lifetime [`ArrayCompiled::forcing`] buffer a driver refreshes
+    /// External refreshable forcing-array channel (PR-1, ess-14f.7). This
+    /// borrows the model-lifetime [`ArrayCompiled::forcing`] buffer a driver refreshes
     /// between cadence segments; a forcing-fed variable name resolves to its
     /// entry here (see [`lookup_variable`]). Empty for models with no loader
     /// forcing, so the scalar-`p` path reads identically.

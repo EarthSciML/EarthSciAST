@@ -90,7 +90,7 @@ end
 @testset "An algebraic document is evaluated at every asserted time (#406)" begin
     probe(time, expected) = """
     {
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {"name": "TimeProbe", "description": "algebraic-only", "license": "MIT"},
       "models": {"TimeProbe": {
         "variables": {
@@ -154,7 +154,7 @@ end
 @testset "A static assertion outside the declared span is refused (#406)" begin
     doc = """
     {
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {"name": "TimeProbe", "description": "algebraic-only", "license": "MIT"},
       "models": {"TimeProbe": {
         "variables": {
@@ -215,7 +215,7 @@ end
 @testset "A §6.6.5 `reference` that mentions `t` is refused (#406)" begin
     doc = """
     {
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {"name": "RefT", "description": "a reference that mentions t", "license": "MIT"},
       "index_sets": {"x": {"kind": "interval", "size": 2}},
       "models": {"RefT": {

@@ -121,9 +121,6 @@ function _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal
         buf = _de_buffer(ctx, cg.flat)
         return _de_slice(ctx, buf, off, off; why = :pgather)
     elseif k === _E._NK_OP
-        if nd.op === :fn
-            return _de_fn(ctx, nd, ch -> _de_scalar(ctx, ch, cache))
-        end
         if nd.op === :+
             cnt = _de_count_unrolled(nd, x -> _de_scalar_keyval(ctx, x), _de_same_node)
             cnt === nothing ||
@@ -336,9 +333,6 @@ function _de_acck(
         ]
         return _de_fold_terms(ctx, nd.op, nd.literal, terms)
     elseif k === _E._NK_OP
-        if nd.op === :fn
-            return _de_fn(ctx, nd, ch -> _de_acck(ctx, ch, K, plan, invvals, cellvals, sub))
-        end
         if nd.op === :+
             cnt = _de_count_unrolled(
                 nd, x -> _de_acck_keyval(x, K, plan), (a, b) -> _de_acck_same(a, b, K, plan),

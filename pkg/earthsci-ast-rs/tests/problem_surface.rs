@@ -29,7 +29,7 @@ use earthsci_ast::{
 /// `D(y)/Dt = k*y`, `k = -1`, `y(0) = 1` — so `y(t) = exp(-t)`.
 const DECAY: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": { "name": "problem_surface_decay" },
       "models": {
         "M": {
@@ -52,7 +52,7 @@ const DECAY: &str = r#"
 /// integration over many periods needs many steps however large they grow.
 const OSCILLATOR: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": { "name": "problem_surface_oscillator" },
       "models": {
         "M": {
@@ -75,7 +75,7 @@ const OSCILLATOR: &str = r#"
 /// A document with no differential equations at all: nothing to integrate.
 const STATIC_DOC: &str = r#"
     {
-      "esm": "1.0.0",
+      "esm": "2.0.0",
       "metadata": { "name": "problem_surface_static" },
       "models": {
         "M": {

@@ -5,14 +5,13 @@ fields carry child expressions. Every AST traversal in this package must go
 through :func:`iter_children` / :func:`map_children` / :func:`any_child` /
 :func:`walk` rather than enumerating fields by hand — hand-rolled walkers
 have historically each covered a different subset and missed variables
-hidden in aggregate bodies, ``filter`` predicates, integral bounds, or
-``table_lookup`` axes (bead esm-6ka documents one such bug).
+hidden in aggregate bodies, ``filter`` predicates, or integral bounds.
 
 Mirrors the Rust binding's ``ExpressionNode::for_each_child`` /
 ``map_children`` (types.rs), which visits ``args``, ``lower``, ``upper``,
-``expr``, ``filter``, ``values``, then ``axes`` sorted by axis name. Python
-additionally visits ``key`` (the RFC §5.5 Skolem-term expression, parsed as
-a nested Expression) between ``filter`` and ``values``.
+``expr``, ``filter``, then ``values``. Python additionally visits ``key``
+(the RFC §5.5 ``distinct`` key expression, parsed as a nested Expression)
+between ``filter`` and ``values``.
 
 Note: this enumerates *children* only. ``output_idx``, ``ranges``, and
 ``wrt`` bind index symbols for the node's body; callers that resolve
@@ -33,7 +32,7 @@ __all__ = ["iter_children", "any_child", "map_children", "walk"]
 # order — read from the SINGLE ExprNode field declaration (``EXPR_CHILD_SPEC`` in
 # esm_types), so a new expression-bearing field is walked automatically. Order:
 # ``args``, then the single-expr slots (``lower``/``upper``/``expr``/``filter``/
-# ``key``), then ``values``, then ``table_axes``.
+# ``key``), then ``values``.
 _CHILD_SPEC = EXPR_CHILD_SPEC
 
 # Single-child expression slots, in canonical visit order (kind == "expr").
@@ -45,7 +44,7 @@ _SINGLE_CHILD_FIELDS = tuple(name for name, kind in _CHILD_SPEC if kind == "expr
 def iter_children(node: ExprNode) -> Iterator[Expr]:
     """Yield every expression-bearing child of ``node`` in deterministic
     order: ``args``, then ``lower``/``upper``/``expr``/``filter``/``key``,
-    then ``values``, then ``table_axes`` entries sorted by axis name."""
+    then ``values``."""
     for name, kind in _CHILD_SPEC:
         child = getattr(node, name)
         if child is None:
@@ -54,9 +53,6 @@ def iter_children(node: ExprNode) -> Iterator[Expr]:
             yield child
         elif kind == "expr_list":
             yield from child
-        elif kind == "expr_dict":
-            for k in sorted(child):
-                yield child[k]
 
 
 def any_child(node: ExprNode, predicate: Callable[[Expr], bool]) -> bool:
@@ -70,8 +66,8 @@ def map_children(node: ExprNode, fn: Callable[[Expr], Expr]) -> ExprNode:
     Uses :func:`dataclasses.replace`, so every non-child sidecar field
     (``op``, ``wrt``, ``dim``, ``ranges``, ``regions``, ``reduce``,
     ``semiring``, ``join``, ``distinct``, ``shape``, ``perm``, ``axis``,
-    ``fn``, ``id``, ``manifold``, ``handler_id``, ``name``, ``value``,
-    ``table``, ``output`` — and any field added later) is preserved
+    ``fn``, ``id``, ``handler_id``, ``name``, ``value`` — and any field added
+    later) is preserved
     automatically. Never rebuild an ExprNode by listing fields by hand.
     """
     updates: dict = {}
@@ -83,8 +79,6 @@ def map_children(node: ExprNode, fn: Callable[[Expr], Expr]) -> ExprNode:
             updates[name] = fn(child)
         elif kind == "expr_list":
             updates[name] = [fn(v) for v in child]
-        elif kind == "expr_dict":
-            updates[name] = {k: fn(v) for k, v in child.items()}
     return replace(node, **updates)
 
 

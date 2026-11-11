@@ -1,5 +1,11 @@
 # Review — RFC: First-class sampled function tables (esm-jcj)
 
+> **Superseded at esm 2.0.0.** The `function_tables` block and the
+> `table_lookup` op are removed; a document using either is rejected with
+> `removed_op`. A table is data passed to the `linear` / `bilinear` templates
+> of `lib/interp.esm` (docs/content/standard_library.md); the 2.0.0 codemod
+> rewrites old documents (MIGRATION.md).
+
 **Reviewer:** polecat `guzzle` (no prior authorship of this proposal)
 **Bead:** esm-jcj
 **Companion RFC under separate review:** esm-ylm (in-file AST templates)

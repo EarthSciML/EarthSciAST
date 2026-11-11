@@ -37,9 +37,8 @@ import "fmt"
 
 // CodeInvalidBroadcastFn: a `broadcast` node's `fn` is absent, does not name a
 // scalar operator, or is applied to an argument count that operator's §4.2
-// arity does not admit (esm-spec §4.3.4, §9.6.6). The value analogue of
-// `unknown_closed_function`: `broadcast` is the one op whose OPERATOR is
-// carried as data, so no `op`-keyed check reaches it, and an unchecked `fn` was
+// arity does not admit (esm-spec §4.3.4, §9.6.6). `broadcast` is the one op
+// whose OPERATOR is carried as data, so no `op`-keyed check reaches it, and an unchecked `fn` was
 // discarded silently rather than failing.
 const CodeInvalidBroadcastFn = "invalid_broadcast_fn"
 
@@ -58,14 +57,10 @@ const opBroadcast = "broadcast"
 //     `transpose`, `concat`, and `broadcast` ITSELF) — they RESHAPE, so "apply
 //     element-wise" is not defined for them, and a self-referential
 //     `fn: "broadcast"` would recurse forever;
-//   - the closed-registry invocation `fn` — its callee lives in `name`, not in a
-//     `broadcast` node's `fn` field, so it can never legitimately be spelled
-//     here;
 //   - the form / lowering ops (`D`, `ic`, `Pre`, `const`, `true`, `false`,
-//     `enum`, `table_lookup`, `apply_expression_template`) — consumed by system
-//     assembly or a lowering pass, never evaluated element-wise;
-//   - the build-time relational and geometry ops (`skolem`, `rank`, `distinct`,
-//     `argmin`, `argmax`, `intersect_polygon`, `polygon_intersection_area`).
+//     `enum`, `apply_expression_template`) — consumed by system assembly or a
+//     lowering pass, never evaluated element-wise;
+//   - the build-time relational op `distinct`.
 //
 // `**` is likewise absent. arithOpTable carries it as an EVALUATOR leniency, but
 // the format has no operator aliases (Rust's registry pins that explicitly), so

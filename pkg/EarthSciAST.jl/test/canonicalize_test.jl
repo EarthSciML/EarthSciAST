@@ -106,16 +106,15 @@ const ESM_Expr = EarthSciAST.ASTExpr
             expr_body = OpExpr("*", ESM_Expr[VarExpr("A"), VarExpr("F")]),
             join = Any[[("a", "b")]],
             filter = OpExpr(">", ESM_Expr[VarExpr("A"), NumExpr(0.0)]),
-            id = "prod", manifold = "planar", distinct = true, key = VarExpr("k"),
-            table = "tbl", table_axes = Dict{String, ESM_Expr}("code" => VarExpr("fm")),
-            output = 2
+            id = "prod", distinct = true, key = VarExpr("k"),
+            int_var = "s", lower = NumExpr(0.0), upper = VarExpr("H")
         )
         c = canonicalize(agg)
         # Previously ~11 of these were silently dropped by a hand-listed rebuild.
         @test c.semiring == "sum_product"
-        @test c.table == "tbl" && haskey(c.table_axes, "code") && c.output == 2
+        @test c.int_var == "s" && c.lower == NumExpr(0.0) && c.upper == VarExpr("H")
         @test c.join == agg.join && c.filter !== nothing
-        @test c.id == "prod" && c.manifold == "planar"
+        @test c.id == "prod"
         @test c.distinct === true && c.key == VarExpr("k")
         @test c.expr_body !== nothing && c.ranges !== nothing
     end
@@ -235,7 +234,7 @@ const ESM_Expr = EarthSciAST.ASTExpr
             if haskey(fixture, :expect_error)
                 # Fail-closed fixture: the input carries a NON-emissible field
                 # (aggregate `expr`/`ranges`/`semiring`, `table`/`axes`,
-                # `filter`/`join`, geometry `id`/`manifold`, …) that has no
+                # `filter`/`join`, a node `id`, …) that has no
                 # faithful slot in the canonical JSON node encoding, so
                 # `canonical_json` must throw the pinned coded error rather than
                 # emit ambiguous bytes. Build the node via the authoritative

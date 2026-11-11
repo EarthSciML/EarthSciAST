@@ -78,7 +78,7 @@ function _cx_forced(N)
         _cx_ix("wind", "i")
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict{String, Any}("name" => "Forced"),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "Forced"),
         "index_sets" => Dict{String, Any}(
             "n" => Dict{String, Any}("kind" => "interval", "size" => N)
         ),
@@ -109,7 +109,7 @@ end
 # it, so it is the emitter's own refusal that `:xla` has to name.
 function _cx_unsupported()
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict{String, Any}("name" => "U"),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "U"),
         "models" => Dict{String, Any}(
             "U" => Dict{String, Any}(
                 "variables" => Dict{String, Any}(
@@ -426,7 +426,7 @@ _cx_du(prob, u, t) = (
     # observed graph is evaluated at construction as under every compiler.
     @testset "a state-free document builds, and its f! has nothing to write" begin
         doc = Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict{String, Any}("name" => "NoState"),
+            "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "NoState"),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
                     "variables" => Dict{String, Any}(

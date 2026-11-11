@@ -77,7 +77,7 @@ _mnr_contracting(N; term = :prod, reduce = "+", ilo = 1, ihi = N) =
 
 function _mnr_doc(N, rhs)
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "MakearrayNested"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "MakearrayNested"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => N)),
         "models" => Dict(
             "M" => Dict{String, Any}(

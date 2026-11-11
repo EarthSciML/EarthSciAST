@@ -5,7 +5,7 @@
     "authors": [
       "EarthSciML Authors and Contributors"
     ],
-    "description": "The value_invention_geometry document nearest_generator_ode.esm with its `argmin` arg-witness replaced by the `argmin` template of lib/relational.esm: the same squared distance, written over the template's loop symbol `k_argmin_1` in place of the op's `g`, with n = 3 generators. Point 3 is exactly 0.25 (squared) from generators 2 and 3 and the template takes the smaller index, so assign = [1, 2, 2, 3] as with the op, and w = [0, 1, 1, 2] at t = 1. Written by generate.py."
+    "description": "The value_invention_geometry document nearest_generator_ode.esm with its arg-witness written as the `argmin` template of lib/relational.esm: the squared distance over the template's loop symbol `k_argmin_1`, with n = 3 generators. Point 3 is exactly 0.25 (squared) from generators 2 and 3 and the template takes the smaller index, so assign = [1, 2, 2, 3], and w = [0, 1, 1, 2] at t = 1. Written by generate.py."
   },
   "index_sets": {
     "points": {

@@ -150,7 +150,7 @@ fn accessor_then_solve_agree() {
 #[test]
 fn a_static_problem_has_none() {
     let file = load_string(
-        r#"{"esm": "1.1.0", "metadata": {"name": "Static"},
+        r#"{"esm": "2.0.0", "metadata": {"name": "Static"},
             "models": {"S": {
                 "variables": {
                     "k": {"type": "parameter", "default": 2.0},
@@ -176,7 +176,7 @@ fn a_static_problem_has_none() {
 #[test]
 fn a_float32_problem_that_integrates_has_none() {
     let file = load_string(
-        r#"{"esm": "1.1.0", "metadata": {"name": "Narrow"},
+        r#"{"esm": "2.0.0", "metadata": {"name": "Narrow"},
             "domain": {"element_type": "Float32"},
             "models": {"M": {
                 "variables": {"u": {"type": "unknown", "units": "1", "default": 1.0}},

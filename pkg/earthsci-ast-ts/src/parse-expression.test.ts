@@ -16,14 +16,24 @@ import { parseExpression, parseEquation, ExpressionParseError } from './parse-ex
 const reprint = (ast: unknown) => toAscii(ast as never)
 
 // Structural ops with no text surface yet — an expression containing one is
-// still refused. (const/true/fn/index/integral/reshape/transpose/concat and the
-// whole reduction & array-query tier — aggregate/argmin/argmax/
-// apply_expression_template/polygon_intersection_area/makearray — DO have a
-// surface now and are handled below, as do `table_lookup` (the bracket form
-// `visc[T=temp]`; only the never-emitted CALL spelling stays refused) and
-// `intersect_polygon`, whose RFC §6.1 `id` the printer now emits so it
-// round-trips.)
-const STRUCTURAL = new Set(['enum', 'broadcast'])
+// still refused. (const/true/index/integral/reshape/transpose/concat and the
+// whole reduction & array-query tier — aggregate/apply_expression_template/
+// makearray — DO have a surface now and are handled below.)
+// The ops removed at esm 2.0.0 are refused too: the printer still renders one
+// (as a generic call), but no document can carry it.
+const STRUCTURAL = new Set([
+  'enum',
+  'broadcast',
+  'fn',
+  'table_lookup',
+  'skolem',
+  'rank',
+  'intersect_polygon',
+  'polygon_intersection_area',
+  'argmin',
+  'argmax',
+  'aggregate',
+])
 function hasStructuralOp(n: unknown): boolean {
   if (!n || typeof n !== 'object') return false
   if (Array.isArray(n)) return n.some(hasStructuralOp)
@@ -173,13 +183,6 @@ describe('array & call-shaped tier: reconstructs exact node shapes', () => {
   it('subscripts → index', () => {
     expect(parseExpression('u[i, j]')).toEqual({ op: 'index', args: ['u', 'i', 'j'] })
   })
-  it('dotted calls → fn (closed function)', () => {
-    expect(parseExpression('datetime.year(t)')).toEqual({
-      op: 'fn',
-      name: 'datetime.year',
-      args: ['t'],
-    })
-  })
   it('true and false literals', () => {
     expect(parseExpression('true')).toEqual({ op: 'true', args: [] })
     expect(parseExpression('false')).toEqual({ op: 'false', args: [] })
@@ -280,31 +283,12 @@ describe('reduction & array-query tier: reconstructs exact node shapes', () => {
       args: ['A', 'src_bin', 'tgt_bin'],
     })
   })
-  it('argmin arg-witness', () => {
-    expect(parseExpression('argmin[g] (a[g]) where {g in gens}')).toEqual({
-      op: 'argmin',
-      args: ['a'],
-      arg: 'g',
-      ranges: { g: { from: 'gens' } },
-      expr: { op: 'index', args: ['a', 'g'] },
-    })
-  })
   it('template application → apply_expression_template', () => {
     expect(parseExpression('arrhenius<A_pre=1.8e-12, Ea=1500>')).toEqual({
       op: 'apply_expression_template',
       args: [],
       name: 'arrhenius',
       bindings: { A_pre: 1.8e-12, Ea: 1500 },
-    })
-  })
-  it('polygon_intersection_area with manifold=', () => {
-    expect(parseExpression('polygon_intersection_area(a[i], b[j], manifold=planar)')).toEqual({
-      op: 'polygon_intersection_area',
-      args: [
-        { op: 'index', args: ['a', 'i'] },
-        { op: 'index', args: ['b', 'j'] },
-      ],
-      manifold: 'planar',
     })
   })
   it('distinct + key + [semiring=bool_and_or], and a nested aggregate body', () => {
@@ -362,11 +346,47 @@ describe('unicode names: ∂/∇ are name characters, big-operators are refused'
 })
 
 describe('still-deferred structural ops are refused', () => {
-  for (const s of ['table_lookup(a)', 'broadcast(y)', 'enum(a, b)']) {
+  for (const s of ['broadcast(y)', 'enum(a, b)']) {
     it(`refuses ${s}`, () => {
       expect(() => parseExpression(s)).toThrow(ExpressionParseError)
     })
   }
+})
+
+describe('ops removed at esm 2.0.0 are refused', () => {
+  for (const s of [
+    'datetime.year(t)',
+    'fn(t)',
+    'table_lookup(a)',
+    'skolem(a, b)',
+    'rank(a)',
+    'intersect_polygon(a, b)',
+    'polygon_intersection_area(a, b)',
+    'argmin(a)',
+    'argmax(a)',
+    'aggregate(a)',
+  ]) {
+    it(`refuses ${s} with removed_op`, () => {
+      let err: unknown
+      try {
+        parseExpression(s)
+      } catch (e) {
+        err = e
+      }
+      expect(err).toBeInstanceOf(ExpressionParseError)
+      expect((err as ExpressionParseError).code).toBe('removed_op')
+      expect((err as ExpressionParseError).message).toMatch(/^removed_op: .*removed at esm 2\.0\.0/)
+    })
+  }
+
+  it('still parses the esm:std template of the same name', () => {
+    expect(parseExpression('argmin<f = d, n = 3>')).toEqual({
+      op: 'apply_expression_template',
+      args: [],
+      name: 'argmin',
+      bindings: { f: 'd', n: 3 },
+    })
+  })
 })
 
 describe('malformed input reports a position', () => {

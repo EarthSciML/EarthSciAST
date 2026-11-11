@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "LoopSymbolNamedKControl",
     "description": "The CONTROL for the two `reserved_index_symbol` fixtures beside it: the identical aggregate with its first range symbol spelled `k` instead of `t`. It loads, and the `sum_product` reduction is 2 — the answer the `t` spelling silently turned into 0 before the collision was rejected at load. Only the name differs, which is what makes the rejection specific to the independent-variable collision and not to the join.",

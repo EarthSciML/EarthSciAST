@@ -587,11 +587,6 @@ fn benchmark_interp_bracket(c: &mut Criterion) {
     for n in [59usize, 200] {
         let docs = [
             (
-                "fn_const",
-                format!("interp_bracket_const_fn_N{n}.esm"),
-                true,
-            ),
-            (
                 "compose_const_fused",
                 format!("interp_bracket_const_compose_N{n}.esm"),
                 true,
@@ -622,7 +617,10 @@ fn benchmark_interp_bracket(c: &mut Criterion) {
             let bits: Vec<u64> = dy.iter().map(|x| x.to_bits()).collect();
             match &reference {
                 None => reference = Some(bits),
-                Some(r) => assert_eq!(r, &bits, "N={n} {label}: not the interp.linear derivative"),
+                Some(r) => assert_eq!(
+                    r, &bits,
+                    "N={n} {label}: not the first spelling's derivative"
+                ),
             }
             built.push((label, rhs));
         }
@@ -759,13 +757,12 @@ impl TemplateRhs {
     }
 }
 
-/// Each template document of `CLOSED_TEMPLATES_DIR` beside the closed-form
-/// document it mirrors, by file name: `*_fn_*` / `*_leaf_*` / `*_op_*` against
-/// `*_tpl_*`. `CLOSED_TEMPLATES_FILTER` keeps the names containing it. The
-/// documents are not committed: with `CLOSED_TEMPLATES_DIR` unset,
+/// Each template document of `CLOSED_TEMPLATES_DIR` (`*_tpl_*`).
+/// `CLOSED_TEMPLATES_FILTER` keeps the names containing it. The documents are
+/// not committed: with `CLOSED_TEMPLATES_DIR` unset,
 /// `bench/closed_templates/generate.py` writes its default set into
 /// `closed_templates` under the temporary directory first.
-fn closed_template_pairs() -> Vec<(String, std::path::PathBuf, std::path::PathBuf)> {
+fn closed_template_documents() -> Vec<std::path::PathBuf> {
     let dir = std::env::var("CLOSED_TEMPLATES_DIR").map_or_else(
         |_| {
             let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -794,22 +791,11 @@ fn closed_template_pairs() -> Vec<(String, std::path::PathBuf, std::path::PathBu
         })
         .unwrap_or_default();
     names.sort();
-    let mut pairs = Vec::new();
-    for name in names {
-        for form in ["_fn_", "_leaf_", "_op_"] {
-            if name.ends_with(".esm") && name.contains(form) && name.contains(&filter) {
-                let tpl = name.replacen(form, "_tpl_", 1);
-                if dir.join(&tpl).exists() {
-                    pairs.push((
-                        form.trim_matches('_').to_string(),
-                        dir.join(&name),
-                        dir.join(tpl),
-                    ));
-                }
-            }
-        }
-    }
-    pairs
+    names
+        .into_iter()
+        .filter(|n| n.ends_with(".esm") && n.contains("_tpl_") && n.contains(&filter))
+        .map(|n| dir.join(n))
+        .collect()
 }
 
 fn benchmark_closed_templates(c: &mut Criterion) {
@@ -821,15 +807,14 @@ fn benchmark_closed_templates(c: &mut Criterion) {
                 x == y || (f64::from_bits(*x).is_nan() && f64::from_bits(*y).is_nan())
             })
     };
-    for (form, closed_path, tpl_path) in closed_template_pairs() {
+    for tpl_path in closed_template_documents() {
         let stem = tpl_path
             .file_stem()
             .unwrap()
             .to_string_lossy()
             .replace("_tpl", "");
-        let mut closed = TemplateRhs::new(&closed_path, false);
         let mut tpl = TemplateRhs::new(&tpl_path, false);
-        let (cb, tb) = (closed.bits(), tpl.bits());
+        let tb = tpl.bits();
         // The per-cell oracle is slow on the large workloads:
         // `CLOSED_TEMPLATES_ORACLE=0` skips it.
         if std::env::var("CLOSED_TEMPLATES_ORACLE").map_or(true, |v| v != "0") {
@@ -839,51 +824,37 @@ fn benchmark_closed_templates(c: &mut Criterion) {
                 "{stem}: the template's native derivative is not the oracle's"
             );
         }
-        let versus = if form == "leaf" {
-            let d = cb
-                .iter()
-                .zip(&tb)
-                .map(|(a, b)| (f64::from_bits(*a) - f64::from_bits(*b)).abs())
-                .fold(0.0f64, f64::max);
-            format!("max |template - leaf| {d:.3e}")
-        } else {
-            format!("bit-identical to {form}: {}", nan_eq(&cb, &tb))
-        };
         eprintln!(
-            "{stem}: states {}  build {form} {:.4}s tpl {:.4}s  first call {form} {:.6}s tpl {:.6}s  {versus}",
-            closed.state.len(),
-            closed.build_s,
+            "{stem}: states {}  build {:.4}s  first call {:.6}s",
+            tpl.state.len(),
             tpl.build_s,
-            closed.first_call_s,
             tpl.first_call_s
         );
-        for (label, rhs) in [(form.as_str(), &mut closed), ("tpl", &mut tpl)] {
-            let mut dy = vec![0.0; rhs.state.len()];
-            let mut k = 0u64;
-            group.bench_function(BenchmarkId::new(label, &stem), |b| {
-                b.iter(|| {
-                    k += 1;
-                    rhs.call(TEMPLATE_T + 1.0e-3 * (k % 1000) as f64, &mut dy);
-                    black_box(&dy);
-                })
-            });
-        }
+        let mut dy = vec![0.0; tpl.state.len()];
+        let mut k = 0u64;
+        group.bench_function(BenchmarkId::new("tpl", &stem), |b| {
+            b.iter(|| {
+                k += 1;
+                tpl.call(TEMPLATE_T + 1.0e-3 * (k % 1000) as f64, &mut dy);
+                black_box(&dy);
+            })
+        });
     }
     group.finish();
 }
 
 // ---------------------------------------------------------------------------
 // Templates applied elementwise over array arguments (esm-spec §9.6.11,
-// bench/template_array_args): the `fn` form, the template form the build
-// lifts per cell, and the per-cell `faq` written by hand.
+// bench/template_array_args): the template form the build lifts per cell, and
+// the per-cell `faq` written by hand.
 // ---------------------------------------------------------------------------
 
-/// Each `*_fn_*` document of `TEMPLATE_ARRAY_ARGS_DIR` with its `*_tpl_*` and
-/// `*_faq_*` spellings. `TEMPLATE_ARRAY_ARGS_FILTER` keeps the names containing
+/// Each `*_tpl_*` document of `TEMPLATE_ARRAY_ARGS_DIR` with its `*_faq_*`
+/// spelling. `TEMPLATE_ARRAY_ARGS_FILTER` keeps the names containing
 /// it. The documents are not committed: with `TEMPLATE_ARRAY_ARGS_DIR` unset,
 /// `bench/template_array_args/generate.py` writes its default set into
 /// `template_array_args` under the temporary directory first.
-fn template_array_args_triples() -> Vec<(String, [std::path::PathBuf; 3])> {
+fn template_array_args_pairs() -> Vec<(String, [std::path::PathBuf; 2])> {
     let dir = std::env::var("TEMPLATE_ARRAY_ARGS_DIR").map_or_else(
         |_| {
             let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -914,14 +885,13 @@ fn template_array_args_triples() -> Vec<(String, [std::path::PathBuf; 3])> {
     names.sort();
     let mut out = Vec::new();
     for name in names {
-        if !(name.ends_with(".esm") && name.contains("_fn_") && name.contains(&filter)) {
+        if !(name.ends_with(".esm") && name.contains("_tpl_") && name.contains(&filter)) {
             continue;
         }
-        let tpl = dir.join(name.replacen("_fn_", "_tpl_", 1));
-        let faq = dir.join(name.replacen("_fn_", "_faq_", 1));
-        if tpl.exists() && faq.exists() {
-            let stem = name.trim_end_matches(".esm").replacen("_fn", "", 1);
-            out.push((stem, [dir.join(&name), tpl, faq]));
+        let faq = dir.join(name.replacen("_tpl_", "_faq_", 1));
+        if faq.exists() {
+            let stem = name.trim_end_matches(".esm").replacen("_tpl", "", 1);
+            out.push((stem, [dir.join(&name), faq]));
         }
     }
     out
@@ -930,26 +900,23 @@ fn template_array_args_triples() -> Vec<(String, [std::path::PathBuf; 3])> {
 fn benchmark_template_array_args(c: &mut Criterion) {
     let mut group = c.benchmark_group("template_array_args");
     group.sample_size(20);
-    for (stem, paths) in template_array_args_triples() {
+    for (stem, paths) in template_array_args_pairs() {
         let mut rhs: Vec<TemplateRhs> = paths.iter().map(|p| TemplateRhs::new(p, false)).collect();
         let bits: Vec<Vec<u64>> = rhs.iter_mut().map(|r| r.bits()).collect();
         // The lift is the hand-written per-cell faq: the same bits, always.
         assert_eq!(
-            bits[1], bits[2],
+            bits[0], bits[1],
             "{stem}: the lifted template is not the per-cell faq"
         );
         eprintln!(
-            "{stem}: states {}  build fn {:.4}s tpl {:.4}s faq {:.4}s  first call fn {:.6}s tpl {:.6}s faq {:.6}s  template bit-identical to fn: {}",
+            "{stem}: states {}  build tpl {:.4}s faq {:.4}s  first call tpl {:.6}s faq {:.6}s",
             rhs[0].state.len(),
             rhs[0].build_s,
             rhs[1].build_s,
-            rhs[2].build_s,
             rhs[0].first_call_s,
             rhs[1].first_call_s,
-            rhs[2].first_call_s,
-            bits[0] == bits[1]
         );
-        for (label, r) in ["fn", "tpl", "faq"].into_iter().zip(rhs.iter_mut()) {
+        for (label, r) in ["tpl", "faq"].into_iter().zip(rhs.iter_mut()) {
             let mut dy = vec![0.0; r.state.len()];
             let mut k = 0u64;
             group.bench_function(BenchmarkId::new(label, &stem), |b| {

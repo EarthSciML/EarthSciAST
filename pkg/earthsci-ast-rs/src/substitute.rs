@@ -64,8 +64,8 @@ fn map_exprs_in_affect(
     }
 }
 
-/// `pub(crate)`, like [`map_exprs_in_continuous_event`], because the §9.5.3
-/// `table_lookup` lowering rewrites a flattened system's events too.
+/// `pub(crate)`, like [`map_exprs_in_continuous_event`], for the passes that
+/// rewrite a flattened system's events.
 pub(crate) fn map_exprs_in_discrete_event(
     event: &DiscreteEvent,
     m: &mut dyn FnMut(&Expr) -> Expr,
@@ -109,10 +109,9 @@ pub(crate) fn map_exprs_in_continuous_event(
 }
 
 /// Apply `m` to every expression position of `model` (equations plus
-/// discrete/continuous events), cloning everything else. `pub(crate)` because
-/// the §9.5.3 `table_lookup` lowering rewrites the same positions and must not
-/// re-enumerate them (a hand-rolled second list is how a pass ends up missing
-/// event conditions).
+/// discrete/continuous events), cloning everything else. `pub(crate)` so a pass
+/// that rewrites the same positions need not re-enumerate them (a hand-rolled
+/// second list is how a pass ends up missing event conditions).
 pub(crate) fn map_exprs_in_model(model: &Model, m: &mut dyn FnMut(&Expr) -> Expr) -> Model {
     Model {
         equations: model
@@ -171,8 +170,8 @@ pub(crate) fn map_exprs_in_reaction_system(
 /// Substitute variables in an expression, returning a new expression.
 ///
 /// Traverses the full expression tree — including aggregate/faq bodies,
-/// `filter` predicates, integral bounds, makearray `values`, and
-/// `table_lookup` axes — and preserves all operator-node metadata.
+/// `filter` predicates, integral bounds and makearray `values` — and preserves
+/// all operator-node metadata.
 pub fn substitute(expr: &Expr, substitutions: &HashMap<String, Expr>) -> Expr {
     substitute_expr(expr, &mut |name| substitutions.get(name).cloned())
 }

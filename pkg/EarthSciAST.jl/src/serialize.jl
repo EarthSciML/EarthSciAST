@@ -39,17 +39,15 @@ end
 #
 # - `:expr` (`lower`/`upper`/`expr_body`/`filter`/`key`): nested expression
 #   trees (`expr_body` lives under the JSON key "expr"; `key` is the
-#   value-invention producer's emitted skolem/tuple expression, RFC §5.5/§6.1).
+#   value-invention producer's emitted scalar key expression, RFC §5.5/§6.1).
 # - `:expr_vec` (`values`): one nested expression per `regions` entry.
-# - `:expr_map` (`table_axes`, `bindings`): expression-valued maps — the
-#   table_lookup per-axis inputs (JSON key "axes", esm-spec §9.5) and the
-#   expression-template parameter → argument map.
+# - `:expr_map` (`bindings`): the expression-template parameter → argument
+#   map.
 # - `:ranges`: dense integer/expression tuples or index-set reference objects
 #   (`_serialize_range_value`, RFC §5.2).
 # - `:join` (M2, RFC §5.3 / §7.2): round-trips back to the wire clause form
 #   `[{ "on": [[left, right], …] }, …]`.
-# - `:scalar`: identity-encoded JSON scalars/arrays (`output` is preserved
-#   verbatim, Int or String).
+# - `:scalar`: identity-encoded JSON scalars/arrays.
 # One join clause → its wire form. A bin-equality clause is a list of key-column
 # pairs → `{ "on": [[l,r], …] }`; an overlap clause (Phase 2a) → `{ "overlap":
 # { "src_env": […], "tgt_env": […], "eps": … } }`.
@@ -72,8 +70,9 @@ end
 # A `const` node's `value` in canonical-number form (CONFORMANCE_SPEC §5.5.3.1
 # rule 1): every integral, Int64-representable float, at any depth, is written
 # as an integer. A parsed value is already narrowed (JSON3 reads `100.0` as
-# `100`); a lowered `table_lookup` holds `Float64`s and would otherwise write
-# `100.0`, unlike a reload of the same document and unlike every other binding.
+# `100`); a `const` built in memory can hold `Float64`s and would otherwise
+# write `100.0`, unlike a reload of the same document and unlike every other
+# binding.
 _canonical_value_numbers(x::AbstractFloat) =
     (isfinite(x) && isinteger(x) && _int64_exactly_representable(Float64(x))) ? Int64(x) : x
 _canonical_value_numbers(x::AbstractVector) = Any[_canonical_value_numbers(e) for e in x]
@@ -464,14 +463,6 @@ function serialize_esm_file(file::EsmFile)::Dict{String, Any}
             k => Dict{String, Int}(s => i for (s, i) in v) for (k, v) in file.enums
         )
     end
-    if file.function_tables !== nothing
-        # esm-spec §9.5 — sampled function tables (v0.4.0). Tables are
-        # first-class authored constructs; round-trip MUST preserve the
-        # authored form (no auto-promotion of inline-const lookups).
-        result["function_tables"] = Dict{String, Any}(
-            k => serialize_function_table(v) for (k, v) in file.function_tables
-        )
-    end
     if !isempty(file.coupling)
         result["coupling"] = [serialize_coupling_entry(c) for c in file.coupling]
     end
@@ -535,50 +526,6 @@ function serialize_esm_file(file::EsmFile)::Dict{String, Any}
         end
     end
 
-    return result
-end
-
-"""
-    serialize_function_table(ft::FunctionTable) -> Dict{String,Any}
-
-Serialize a [`FunctionTable`](@ref) (esm-spec §9.5) back to a JSON-compatible
-dict. Tables are first-class authored constructs; no auto-promotion or
-demotion of inline-const lookups happens at serialize time.
-"""
-function serialize_function_table(ft::FunctionTable)::Dict{String, Any}
-    result = Dict{String, Any}(
-        "axes" => [serialize_function_table_axis(ax) for ax in ft.axes],
-        "data" => ft.data,
-    )
-    if ft.description !== nothing
-        result["description"] = ft.description
-    end
-    if ft.interpolation !== nothing
-        result["interpolation"] = ft.interpolation
-    end
-    if ft.out_of_bounds !== nothing
-        result["out_of_bounds"] = ft.out_of_bounds
-    end
-    if ft.outputs !== nothing
-        result["outputs"] = ft.outputs
-    end
-    if ft.shape !== nothing
-        result["shape"] = ft.shape
-    end
-    if ft.schema_version !== nothing
-        result["schema_version"] = ft.schema_version
-    end
-    return result
-end
-
-function serialize_function_table_axis(ax::FunctionTableAxis)::Dict{String, Any}
-    result = Dict{String, Any}(
-        "name" => ax.name,
-        "values" => ax.values,
-    )
-    if ax.units !== nothing
-        result["units"] = ax.units
-    end
     return result
 end
 
