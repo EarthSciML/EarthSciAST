@@ -330,7 +330,7 @@ pub struct DataSourceTemporal {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_variable: Option<String>,
 
-    /// DEPRECATED (removed at esm 1.4.0): the source-wide default of each
+    /// DEPRECATED (removed at esm 3.0.0): the source-wide default of each
     /// consuming parameter's `from.records_per_sample` (esm-spec §8.3). Kept
     /// as written; it must agree with each consumer's record shape
     /// (esm-spec §8.5.1).

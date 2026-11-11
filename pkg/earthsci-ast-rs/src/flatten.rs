@@ -997,7 +997,8 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // esm-spec §8.5.1: a record shape structural validation could not decide
     // (a `param_to_var` target behind a `coupling_import`) is checked here,
     // against the expanded coupling sequence.
-    crate::structural::check_record_axes_at_flatten(file)
+    // The same pass counts each data-fed parameter's records for `loader_fields`.
+    let record_counts = crate::structural::check_record_axes_at_flatten(file)
         .map_err(FlattenError::RecordsPerSample)?;
 
     // Phase 1: collect per-system lowered equations and namespaced variables.
@@ -1090,7 +1091,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     let discrete_parameters = in_document_order(&class.discrete_parameters, &[&parts.parameters]);
 
     // Phase 5d: the provider-served loaded fields (esm-spec §8.5).
-    let loader_fields = collect_loader_fields(file, &parts.parameters);
+    let loader_fields = collect_loader_fields(file, &parts.parameters, &record_counts);
 
     // Phase 5e: the §4.7.6 independent-variable derivation, over the FINISHED
     // equation set (post-coupling, post-lift) plus the `ic` equations that were
@@ -2048,6 +2049,7 @@ fn first_rhs_time_derivative(expr: &Expr) -> Option<String> {
 fn collect_loader_fields(
     file: &EsmFile,
     parameters: &IndexMap<String, ModelVariable>,
+    record_counts: &std::collections::HashMap<String, u8>,
 ) -> Vec<LoaderField> {
     let mut out = Vec::new();
     for (name, var) in parameters {
@@ -2065,18 +2067,18 @@ fn collect_loader_fields(
             };
             let declared = file.data_sources.as_ref().and_then(|ds| ds.get(source));
             let has_temporal = declared.is_some_and(|ds| ds.temporal.is_some());
-            // The record shape is read from the document (the parameter's own
-            // declaration, else its `param_to_var` targets' in the expanded
-            // coupling); a parameter the document does not declare in a model
-            // falls back to its flattened `shape`.
-            let own_shape = crate::structural::declared_variable_shape(file, name)
-                .unwrap_or_else(|| var.shape.clone());
-            let records = crate::structural::records_received(
-                file,
-                file.coupling.as_deref().unwrap_or_default(),
-                name,
-                own_shape.as_deref(),
-            );
+            // The count the flatten-time record check took from the
+            // document (esm-spec §8.5.1); a parameter that check did not
+            // reach in the document counts from its flattened `shape`.
+            let records = record_counts.get(name).copied().unwrap_or_else(|| {
+                let shapes: Vec<Vec<String>> = var.shape.iter().cloned().collect();
+                crate::structural::records_from_shapes(&shapes, |d| {
+                    crate::structural::record_axis_state(file, d, false)
+                })
+                .ok()
+                .flatten()
+                .unwrap_or(1)
+            });
             out.push(LoaderField {
                 name: name.clone(),
                 owner: name
