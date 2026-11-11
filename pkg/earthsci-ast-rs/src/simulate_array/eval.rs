@@ -83,6 +83,32 @@ pub(super) fn eval(expr: &Expr, ctx: &mut EvalCtx) -> Value {
 ///   evaluator (already binary32, every operation having rounded) or supplied
 ///   by the host, in which case it is rounded ONCE where it enters the problem
 ///   rather than on every one of the O(N) reads of it.
+/// The shape of the value [`lookup_variable`] would return for `name`, `[]`
+/// for a scalar, without reading (or copying) it; `None` where the lookup
+/// would fault. For [`conditional_fill_shape`].
+pub(super) fn lookup_variable_shape(name: &str, ctx: &EvalCtx) -> Option<Vec<usize>> {
+    if name == "t" {
+        return Some(Vec::new());
+    }
+    if ctx.recur.is_some_and(|scope| scope.name == name) {
+        return None;
+    }
+    if ctx.loop_binds.get(name).is_some() {
+        return Some(Vec::new());
+    }
+    if let Some(a) = ctx
+        .state_arrays
+        .get(name)
+        .or_else(|| ctx.observed_arrays.get(name))
+    {
+        return Some(a.shape().to_vec());
+    }
+    if ctx.param_names.iter().any(|p| p == name) {
+        return Some(Vec::new());
+    }
+    ctx.forcing.borrow().get(name).map(|a| a.shape().to_vec())
+}
+
 pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
     let prec = crate::precision::active();
     if name == "t" {
@@ -3025,6 +3051,7 @@ pub(crate) fn eval_observed_taped(
             var: name.to_string(),
             body: std::sync::Arc::new(expr.clone()),
             declared_shape: None,
+            unshaped: false,
         }
     };
     let mut mentioned = HashSet::new();

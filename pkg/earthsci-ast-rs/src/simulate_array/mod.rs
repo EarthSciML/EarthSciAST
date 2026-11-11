@@ -404,10 +404,18 @@ enum AlgebraicRule {
     /// declares a shape that resolves to static sizes. A body that evaluates
     /// to a scalar is broadcast over it (esm-spec §4.3.4), so the variable
     /// keeps its declared rank however the value came out.
+    ///
+    /// `unshaped` says the variable declares no `shape` at all (the field
+    /// absent; `shape: []` declares a scalar). With no `declared_shape`, such
+    /// a variable whose body is elementwise down to a scalar-condition
+    /// `ifelse` with an array arm takes that arm's shape when the rule is
+    /// evaluated, which is when an array whose shape only data supplies (an
+    /// unshaped data-fed parameter) has one ([`conditional_fill_shape`]).
     Scalar {
         var: String,
         body: std::sync::Arc<Expr>,
         declared_shape: Option<Vec<usize>>,
+        unshaped: bool,
     },
     /// `var[i...] := body` — array algebraic defined via a faq over
     /// the full shape of `var`.

@@ -552,6 +552,7 @@ pub(super) fn materialize_observeds_pass(
                 var,
                 body,
                 declared_shape,
+                unshaped,
             } => {
                 // `derived_extents` is EMPTY on every compiled-RHS context in
                 // this file, and deliberately so: `ArrayCompiled::from_model`
@@ -565,7 +566,19 @@ pub(super) fn materialize_observeds_pass(
                 let arr = match (eval(body, &mut ctx), declared_shape) {
                     (Value::Array(a), _) => *a,
                     (Value::Scalar(s), Some(shape)) => ArrayD::from_elem(IxDyn(shape), s),
-                    (Value::Scalar(s), None) => ArrayD::from_elem(IxDyn(&[]), s),
+                    // An unshaped variable whose scalar arm was taken still
+                    // has its array arm's shape (esm-spec §4.3.4).
+                    (Value::Scalar(s), None) => {
+                        let shape = (*unshaped)
+                            .then(|| {
+                                conditional_fill_shape(body, &mut |n| {
+                                    lookup_variable_shape(n, &ctx)
+                                })
+                            })
+                            .flatten()
+                            .unwrap_or_default();
+                        ArrayD::from_elem(IxDyn(&shape), s)
+                    }
                 };
                 dst.insert(var.clone(), arr);
             }

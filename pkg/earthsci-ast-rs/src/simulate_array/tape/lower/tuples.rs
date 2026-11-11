@@ -657,6 +657,7 @@ impl TapeBuilder<'_> {
                     var: name.to_string(),
                     body: std::sync::Arc::new(Expr::Number(0.0)),
                     declared_shape: (!shape.is_empty()).then(|| shape.to_vec()),
+                    unshaped: false,
                 };
                 let prog = b.finish_standalone(&rule);
                 #[cfg(test)]

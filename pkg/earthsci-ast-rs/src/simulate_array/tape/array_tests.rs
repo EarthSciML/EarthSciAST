@@ -885,6 +885,186 @@ fn chained_ifelse_with_a_scalar_arm_takes_the_inferred_box() {
     ab(&compiled, &maps);
 }
 
+/// [`undeclared_mixed_doc`] with `F` declared WITHOUT a shape and fed from a
+/// data source, its three-cell array written into the forcing buffer. No
+/// declaration fixes `F`'s rank, so no box is inferred before the build;
+/// both evaluators read it off the data when they evaluate `X`.
+fn data_fed_mixed(
+    body: serde_json::Value,
+    extra_vars: serde_json::Value,
+    readers: Vec<serde_json::Value>,
+) -> ArrayCompiled {
+    let mut vars = json!({"F": {"type": "parameter", "default": 1.5,
+        "update": {"kind": "data", "source": "src", "from": {"file_variable": "F"}}}});
+    for (k, v) in extra_vars.as_object().expect("an object") {
+        vars[k] = v.clone();
+    }
+    let mut doc = undeclared_mixed_doc(body, vars, readers);
+    doc["data_sources"] = json!({"src": {"kind": "static",
+        "source": {"url_template": "file:///nonexistent/f.nc"}}});
+    let compiled = compile(doc);
+    compiled.forcing_handle().borrow_mut().insert(
+        "F".to_string(),
+        ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[3]), vec![1.5, -2.0, 0.75])
+            .expect("shape"),
+    );
+    compiled
+}
+
+/// Readers of `X`: a per-cell gather, a sum over the cells and a fixed
+/// element. Each faults or reads a different number if `X` is a scalar on one
+/// arm. (A bare read by a shaped state, `D(r) = X`, is left out: the oracle
+/// reads an array observed that declares no shape as `NaN` there whether or
+/// not an `ifelse` defines it, which is a separate gap.)
+fn mixed_readers() -> (serde_json::Value, Vec<serde_json::Value>) {
+    let readers = vec![
+        d_eq("q", 3, idx(json!("X"), &[json!("i")])),
+        json!({"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": {"op": "+", "args": [
+            {"op": "faq", "args": [], "output_idx": [], "ranges": {"j": [1, 3]},
+             "expr": idx(json!("X"), &[json!("j")])},
+            idx(json!("X"), &[json!(2)])]}}),
+    ];
+    let vars = json!({
+        "q": {"type": "unknown", "shape": ["cell"], "default": 0.0},
+        "s": {"type": "unknown", "default": 0.0}
+    });
+    (vars, readers)
+}
+
+/// A constant arm and a data arm under a runtime scalar condition, on an
+/// observed with no declared shape: native builds it (it refused it as
+/// "branch value boxes differ") and agrees with the interpreter on both arms
+/// — the array arm first or second, nested in arithmetic or in another
+/// `ifelse`, read or unread.
+#[test]
+fn data_fed_ifelse_with_a_constant_arm() {
+    let f2 = || json!({"op": "*", "args": ["F", 2.0]});
+    let bodies = [
+        // The NEI2016 form: the data arm first.
+        mixed_ifelse(f2(), json!(0.25)),
+        // Reversed: the constant arm first.
+        json!({"op": "ifelse", "args": [{"op": ">=", "args": ["lev", 2.0]}, 0.25, f2()]}),
+        // Inside elementwise arithmetic.
+        json!({"op": "+", "args": [1.0, {"op": "*", "args": [3.0,
+            {"op": "ifelse", "args": [{"op": ">=", "args": ["lev", 2.0]}, -0.5, "F"]}]}]}),
+        // Nested: the data arm inside the inner `ifelse`, constants elsewhere.
+        json!({"op": "ifelse", "args": [{"op": ">", "args": ["lev", 2.75]}, 7.0,
+            mixed_ifelse(f2(), json!(-1.0))]}),
+        // Nested the other way: the inner `ifelse` is all constants.
+        json!({"op": "ifelse", "args": [{"op": "<", "args": ["lev", 2.0]}, f2(),
+            {"op": "ifelse", "args": [{"op": ">", "args": ["lev", 2.75]}, 4.0, -4.0]}]}),
+    ];
+    let maps: Vec<HashMap<String, f64>> = [1.0, 2.5, 3.0]
+        .iter()
+        .map(|&lev| HashMap::from([("lev".to_string(), lev)]))
+        .collect();
+    for body in bodies {
+        let (vars, readers) = mixed_readers();
+        ab(&data_fed_mixed(body.clone(), vars, readers), &maps);
+        // Unread, as `NEI2016Emis.CO` is in reseact.
+        let unread = data_fed_mixed(
+            body,
+            json!({"q": {"type": "unknown", "shape": ["cell"], "default": 0.0}}),
+            vec![d_eq(
+                "q",
+                3,
+                json!({"op": "*", "args": [-1.0, idx(json!("q"), &[json!("i")])]}),
+            )],
+        );
+        ab(&unread, &maps);
+    }
+}
+
+/// The observed both evaluators materialize has the data's shape whichever
+/// arm the condition takes: the constant arm fills every cell.
+#[test]
+fn data_fed_ifelse_observed_takes_the_datas_shape() {
+    let compiled = data_fed_mixed(
+        mixed_ifelse(json!({"op": "*", "args": ["F", 2.0]}), json!(0.25)),
+        json!({}),
+        vec![],
+    );
+    assert!(!refuses_mixed_arms(&compiled));
+    for (lev, want) in [(1.0, vec![3.0, -4.0, 1.5]), (3.0, vec![0.25; 3])] {
+        let params = HashMap::from([("lev".to_string(), lev)]);
+        let pv = compiled.debug_resolve_params(&params);
+        let mut oracle = compiled.debug_new_scratch();
+        let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(cfg()))).0;
+        let mut tape = scratch_with(&compiled, prog);
+        tape.set_exports_active(true);
+        for scratch in [&mut oracle, &mut tape] {
+            compiled.debug_eval_rhs_into(&[], 0.0, &pv, &mut [], scratch, &mut RhsStats::default());
+        }
+        let tape_x = tape.taped_observeds().expect("a tape")["X"].clone();
+        for (who, x) in [
+            ("oracle", &oracle.observed_arrays()["X"]),
+            ("tape", &tape_x),
+        ] {
+            assert_eq!(x.shape(), &[3], "{who}, lev = {lev}");
+            assert_eq!(
+                x.iter().copied().collect::<Vec<_>>(),
+                want,
+                "{who}, lev = {lev}"
+            );
+        }
+    }
+}
+
+/// A declared array arm that also reads a scalar observed defined by a
+/// gather: the NEI2016 emission observeds as reseact builds them,
+/// `CO = ifelse(lev < 2, flux_CO / days_in_month …, 0.0)` with `flux_CO`
+/// shaped and `days_in_month` a table lookup. The
+/// declarations cannot decide that observed's rank, so no box is inferred
+/// before the build, but its value is a scalar when the rule is evaluated, and
+/// the observed takes the array arm's box there.
+#[test]
+fn ifelse_reading_a_gathered_scalar_takes_the_array_arms_box() {
+    let table = json!({"op": "const", "args": [], "value": [31.0, 28.0, 31.0]});
+    let d = json!({"lhs": "D", "rhs": idx(table, &[json!(2)])});
+    let fd = || json!({"op": "/", "args": ["F", "D"]});
+    let bodies = [
+        mixed_ifelse(fd(), json!(0.0)),
+        json!({"op": "ifelse", "args": [{"op": ">=", "args": ["lev", 2.0]}, 0.0, fd()]}),
+    ];
+    for x in bodies {
+        let (mut vars, mut readers) = mixed_readers();
+        vars["D"] = json!({"type": "unknown"});
+        readers.push(d.clone());
+        let compiled = compile(undeclared_mixed_doc(x.clone(), vars, readers));
+        assert_eq!(declared_box(&compiled, "X"), Some(None));
+        ab(&compiled, &both_arms());
+        // Unread, as `NEI2016Emis.CO` is in reseact.
+        let unread = compile(undeclared_mixed_doc(
+            x,
+            json!({"D": {"type": "unknown"}}),
+            vec![d.clone()],
+        ));
+        assert!(!refuses_mixed_arms(&unread));
+    }
+}
+
+/// Where the data arm is consumed whole, or meets an array of another shape,
+/// the oracle's answer still follows the taken arm, so native still refuses;
+/// and `shape: []` still declares a scalar.
+#[test]
+fn data_fed_ifelse_consumed_whole_or_declared_scalar_is_still_refused() {
+    let gathered = idx(
+        mixed_ifelse(json!({"op": "*", "args": ["F", 2.0]}), json!(0.0)),
+        &[json!(2)],
+    );
+    let two_sets = mixed_ifelse(json!({"op": "+", "args": ["F", "G"]}), json!(0.0));
+    let g = json!({"G": {"type": "parameter", "shape": ["other"], "default": 1.0}});
+    for body in [gathered, two_sets] {
+        assert!(refuses_mixed_arms(&data_fed_mixed(body, g.clone(), vec![])));
+    }
+    let scalar = data_fed_mixed(
+        mixed_ifelse(json!({"op": "*", "args": ["F", 2.0]}), json!(0.0)),
+        json!({"X": {"type": "unknown", "shape": []}}),
+        vec![],
+    );
+    assert!(refuses_mixed_arms(&scalar));
+}
+
 /// An operand with no declared shape whose value is an array (a `faq` over
 /// `[cell, other]`) is not counted as a scalar: its rank is not read off a
 /// declaration, so no box is inferred for the `ifelse` that reads it.

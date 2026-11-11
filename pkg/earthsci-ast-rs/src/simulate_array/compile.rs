@@ -502,6 +502,65 @@ pub(crate) fn promote_conditional_shapes(
     Ok(promoted)
 }
 
+/// The shape an observed declared with no `shape` takes, decided when its
+/// rule is evaluated: esm-spec §4.3.4's mixed-arm `ifelse` rule with each
+/// variable's shape read from the value in scope (`shape_of`, `[]` for a
+/// scalar, `None` for a name nothing binds) rather than from its declaration.
+///
+/// [`crate::flatten::conditional_shape_promotions`] decides the same thing
+/// from declarations, before anything is built, and gives up on a name whose
+/// rank no declaration fixes: an observed defined by a table lookup, or a
+/// data-fed parameter declared without a shape, whose data supplies an array.
+/// The NEI2016 emission observeds in reseact are the first kind:
+/// `CO = ifelse(lev < 2, flux_CO / days_in_month / (g0_100 * delp_dry_surface)
+/// * …, 0.0)` with `flux_CO` a `[nei_lay, nei_row, nei_col]` field, and
+/// `days_in_month` and `delp_dry_surface` gathers from `const` tables, which
+/// are scalars only once evaluated. `CO` is then an array of zeros when the
+/// condition fails, not a scalar `0.0`. Both evaluators ask this when they
+/// evaluate the rule, from the same values, so they agree on the shape
+/// whichever arm the condition takes.
+///
+/// `Some(shape)`, never empty, when `body` is elementwise down to an `ifelse`
+/// and every array on that value path has the one `shape`; `None` otherwise —
+/// any op that consumes an operand whole (a gather, a reduction, a shape op),
+/// arrays of different shapes, or no array or no `ifelse` at all — and the
+/// variable's rank then follows its value, as before.
+pub(crate) fn conditional_fill_shape(
+    body: &Expr,
+    shape_of: &mut dyn FnMut(&str) -> Option<Vec<usize>>,
+) -> Option<Vec<usize>> {
+    fn walk(
+        e: &Expr,
+        shape_of: &mut dyn FnMut(&str) -> Option<Vec<usize>>,
+    ) -> Option<(Vec<usize>, bool)> {
+        match e {
+            Expr::Number(_) | Expr::Integer(_) => Some((Vec::new(), false)),
+            Expr::Variable(v) => shape_of(v).map(|s| (s, false)),
+            Expr::Operator(node) => {
+                let op = crate::op_registry::elementwise_op(node)?;
+                let mut saw_ifelse = op == "ifelse";
+                let mut out: Vec<usize> = Vec::new();
+                for a in &node.args {
+                    let (s, ifelse) = walk(a, shape_of)?;
+                    saw_ifelse |= ifelse;
+                    if s.is_empty() || s == out {
+                        continue;
+                    }
+                    if !out.is_empty() {
+                        return None;
+                    }
+                    out = s;
+                }
+                Some((out, saw_ifelse))
+            }
+        }
+    }
+    match walk(body, shape_of)? {
+        (shape, true) if !shape.is_empty() => Some(shape),
+        _ => None,
+    }
+}
+
 /// Write `shapes` into `model`'s declarations, by name.
 fn set_declared_shapes(model: &mut Model, shapes: &BuiltShapes) {
     for (name, axes) in shapes {
@@ -3104,6 +3163,10 @@ fn build_observed_rules(
     // * a bare-variable LHS lowers WHOLESALE through [`lower_algebraic_body`]:
     //   `eval` materializes the body's arrays and broadcasts the elementwise ops
     //   over them, so a readable intermediate decomposition runs as authored.
+    // A variable declared with no `shape` at all (`shape: []` declares a
+    // scalar): see [`AlgebraicRule::Scalar`]'s `unshaped`.
+    let declares_no_shape =
+        |name: &str| model.variables.get(name).is_some_and(|v| v.shape.is_none());
     let mut def_eq: HashMap<&str, &crate::types::Equation> = HashMap::new();
     for eq in &model.equations {
         if let crate::classification::LhsFormRef::Bare(name) =
@@ -3156,6 +3219,7 @@ fn build_observed_rules(
                 eq.rhs.clone(),
                 &array_axes,
                 index_sets,
+                declares_no_shape(name),
             )?);
         }
     }
@@ -3202,6 +3266,7 @@ fn build_observed_rules(
                 eq.rhs.clone(),
                 &array_axes,
                 index_sets,
+                declares_no_shape(name),
             )?);
         }
     }
@@ -3321,6 +3386,7 @@ fn lower_algebraic_body(
     body: Expr,
     array_axes: &HashMap<String, Vec<String>>,
     index_sets: &HashMap<String, IndexSet>,
+    unshaped: bool,
 ) -> Result<AlgebraicRule, CompileError> {
     let declared_shape = array_axes
         .get(name)
@@ -3329,6 +3395,7 @@ fn lower_algebraic_body(
         var: name.to_string(),
         body: std::sync::Arc::new(body),
         declared_shape: declared_shape.clone(),
+        unshaped,
     };
     let Some(target_axes) = array_axes.get(name) else {
         return Ok(scalar_rule(body));

@@ -6793,6 +6793,36 @@ impl<'m> TapeBuilder<'m> {
         bail_tape!("wholesale: unresolved symbol (forcing/NaN sentinel?) `{name}`")
     }
 
+    /// [`super::super::compile::conditional_fill_shape`] over the boxes
+    /// [`Self::resolve_wholesale_var`] resolves each name to, without lowering
+    /// a read: the shape the oracle reads from the same values
+    /// (`lookup_variable_shape`).
+    fn conditional_fill_shape(&self, body: &Expr) -> Option<Vec<usize>> {
+        let box_shape = |lv: LV| {
+            self.lv_box(&lv)
+                .map(|(shape, _)| shape.to_vec())
+                .unwrap_or_default()
+        };
+        super::super::compile::conditional_fill_shape(body, &mut |name| {
+            if name == "t" {
+                return Some(Vec::new());
+            }
+            if let Some(&ix) = self.state_ix.get(name) {
+                return Some(box_shape(LV::State(u32::try_from(ix).ok()?)));
+            }
+            if let Some(ov) = self.obs_defined.get(name) {
+                return match ov {
+                    ObsVal::Taped(lv) => Some(box_shape(lv.clone())),
+                    ObsVal::Declined => None,
+                };
+            }
+            if self.param_ix.contains_key(name) {
+                return Some(Vec::new());
+            }
+            self.forcing_shapes.get(name).map(|s| s.to_vec())
+        })
+    }
+
     fn lower_wholesale_op(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
         self.lower_wholesale_op_named(node.op.as_str(), node)
     }
@@ -8943,12 +8973,25 @@ impl<'m> TapeBuilder<'m> {
                 var,
                 body,
                 declared_shape,
+                unshaped,
             } => {
                 // The whole-body `eval` mirror: covers scalar algebra, whole-
                 // array elementwise algebra, top-level aggregates (incl. the
                 // prefix-scan sweep) and makearrays. Readers see materialized
                 // arrays at origin 1s. A scalar on a shaped variable fills its
                 // declared box, as the interpreter does.
+                //
+                // A variable declared with no shape at all takes the shape of
+                // its `ifelse`'s array arm, read from the boxes in scope (a
+                // data-fed parameter's is its forcing box), exactly as the
+                // oracle reads it from the values in scope
+                // ([`conditional_fill_shape`]); it is then lowered as if it
+                // declared that shape, each arm filled into it.
+                let conditional = match declared_shape {
+                    None if *unshaped => self.conditional_fill_shape(body),
+                    _ => None,
+                };
+                let declared_shape = declared_shape.as_ref().or(conditional.as_ref());
                 let v = match (self.inline_param_literal(var, body), declared_shape) {
                     (Some(a), _) => self.emit_const_array(&a)?,
                     (None, Some(shape)) => {
