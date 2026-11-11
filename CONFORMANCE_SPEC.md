@@ -4252,7 +4252,7 @@ member to something else is still non-conforming. A binding MUST show, on
 |---|---|---|---|
 | Rust | yes | `0`, `-1`, arithmetic `9` | `tests/lower_enums_integration.rs`; `esm test` on the fixture, 3/3 assertions |
 | Python | yes | `0`, `-1`, arithmetic `9` | `tests/test_enums.py::test_zero_and_negative_enum_members_load_and_resolve_to_themselves` |
-| Julia | yes | `0`, `-1`, arithmetic `9` | no test since `test/closed_functions_test.jl` was deleted at 2.0.0 (its "zero and negative enum members" testset went with it) |
+| Julia | yes | `0`, `-1`, arithmetic `9` | `test/enum_lowering_test.jl`, testset "zero and negative enum members (esm-spec §9.3)" |
 | TypeScript | yes | `0`, `-1`, arithmetic `9` | `src/enums-zero-negative.test.ts` |
 | Go | yes | `0`, `-1`, arithmetic `9` | `pkg/esm/lower_enums_test.go::TestZeroAndNegativeEnumMembers` |
 
