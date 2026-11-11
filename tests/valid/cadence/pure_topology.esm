@@ -76,7 +76,7 @@
       },
       "equations": [
         {
-          "_comment": "edge_set: the index-set-producing node referenced by index_sets.edges.from_faq. distinct:true under bool_and_or dedups the unique undirected edges; `key` mints the integer key `pair_key` over the endpoint vertices; the `true` body marks existence. All inputs (face_lo/face_hi) are CONST -> the node is CONST and folds at compile (inline provenance). Output order is the §5.5 sorted order, never insertion order.",
+          "_comment": "edge_set: the index-set-producing node referenced by index_sets.edges.from_faq. distinct:true under bool_and_or dedups the face-local edges; `key` mints the DIRECTED integer key `pair_key` over the (lo, hi) endpoint vertices, as the 1.x `skolem` key it replaces did, so the shared edge {2,3} appears in both orientations (6 members); the `true` body marks existence. All inputs (face_lo/face_hi) are CONST -> the node is CONST and folds at compile (inline provenance). Output order is the §5.5 sorted order, never insertion order.",
           "lhs": {
             "op": "index",
             "args": [
