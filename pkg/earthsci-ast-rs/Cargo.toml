@@ -114,7 +114,7 @@ serde = { version = "1.0", features = ["derive"] }
 # fast path is 1 ulp off on some such literals (e.g. -104.52369275835723,
 # 42.059133583516356), which broke AST byte identity on parse→emit round-trips.
 serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
-jsonschema = { version = "0.60", default-features = false }
+jsonschema = { version = "0.61", default-features = false }
 thiserror = "2.0"
 indexmap = { version = "2", features = ["serde"] }
 ndarray = "0.17"
@@ -142,7 +142,7 @@ rstar = "0.13"
 # vectors when you do — the former `s2-cpp` C++ differential oracle was removed
 # when the crate was published to crates.io (git dependencies are not allowed
 # there), so there is no longer an in-tree cross-check against C++ S2.
-s2rst = "=0.5.1"
+s2rst = "=0.5.2"
 # diffsol (gt-5ws) — the ODE simulation backend, on BOTH native and wasm32: its
 # Faer backend is pure Rust and cross-compiles (spike S1), so the in-browser
 # `simulate` export (src/wasm.rs) can run pure-ODE / 0-D box models client-side.
