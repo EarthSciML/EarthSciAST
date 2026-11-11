@@ -73,6 +73,7 @@
         "adapter_support",
         "compiled_rhs_adapter",
         "compiler_agreement_adapter",
+        "determinism_adapter",
         "esio_provider",
         "extension",
         "inline_tests_adapter",
@@ -95,17 +96,17 @@
     }
   },
   "counts": {
-    "symbols": 955,
+    "symbols": 950,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 338,
       "typescript": 235,
       "python": 260,
-      "rust": 374,
+      "rust": 369,
       "go": 442
     },
     "by_tier": {
-      "extension": 662,
+      "extension": 657,
       "stable": 293
     }
   },
@@ -5989,30 +5990,6 @@
       }
     },
     {
-      "name": "rank",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "rank"
-      }
-    },
-    {
-      "name": "rank_with_base",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "rank_with_base"
-      }
-    },
-    {
-      "name": "ranking",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "Ranking"
-      }
-    },
-    {
       "name": "rat",
       "kind": "type",
       "tier": "extension",
@@ -7024,22 +7001,6 @@
       "tier": "extension",
       "bindings": {
         "julia": "SKIP"
-      }
-    },
-    {
-      "name": "skolem",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "skolem"
-      }
-    },
-    {
-      "name": "skolem_edge",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "skolem_edge"
       }
     },
     {
