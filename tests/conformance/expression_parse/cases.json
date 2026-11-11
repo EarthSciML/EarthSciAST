@@ -4385,7 +4385,7 @@
     {
       "text": "table_lookup(a)",
       "tier": "refusal",
-      "reason": "the CALL spelling is never emitted; the surface is the bracket form visc[T=temp]"
+      "reason": "removed at esm 2.0.0 (removed_op)"
     },
     {
       "text": "broadcast(y)",
@@ -4473,14 +4473,14 @@
       "reason": "overlap mixed with key pairs in one clause"
     },
     {
-      "text": "skolem(a, label=1)",
+      "text": "skolem(a, b)",
       "tier": "refusal",
-      "reason": "a skolem label is a name"
+      "reason": "removed at esm 2.0.0 (removed_op)"
     },
     {
-      "text": "skolem(a, tag=edge)",
+      "text": "argmin(a)",
       "tier": "refusal",
-      "reason": "skolem takes no other named argument"
+      "reason": "removed at esm 2.0.0 (removed_op)"
     }
   ],
   "equations": [

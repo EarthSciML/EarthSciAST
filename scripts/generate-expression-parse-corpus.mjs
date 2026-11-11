@@ -101,8 +101,7 @@ const ARRAY_TIER = [
   'concat(a, b, axis=0)',
 ]
 
-// `id=` on an aggregate (the table_lookup and geometry spellings of this pass
-// left with those ops at esm 2.0.0).
+// `id=` on an aggregate.
 const ID_AND_TABLE_TIER = [
   'any[p] (u[a]) where {a in atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]',
   'sum[i] (u[i]) where {i in cells} id=cell_total',
@@ -123,8 +122,8 @@ const REDUCTION_TIER = [
 ]
 
 // The faq fields that used to be dropped by the printer (2026-10-06): a join
-// clause's `syms` and an `overlap` join gate (the argmin/argmax and skolem
-// spellings left with those ops at esm 2.0.0). Plus the parenthesization cases the same sweep found: a
+// clause's `syms` and an `overlap` join gate. Plus the parenthesization cases
+// the same sweep found: a
 // same-level right operand, comparisons under arithmetic, and n-ary `and`.
 const FAQ_FIELD_TIER = [
   'sum[] (payload[b]) where {a in rows, b in rows} join(row_prior=row_id, syms=[b, a])',
@@ -149,10 +148,7 @@ const FAQ_FIELD_TIER = [
 // Structural ops with no text surface yet, plus malformed input. Both MUST be
 // refused with the binding's expression-parse error.
 const REFUSALS = [
-  {
-    text: 'table_lookup(a)',
-    reason: 'the CALL spelling is never emitted; the surface is the bracket form visc[T=temp]',
-  },
+  { text: 'table_lookup(a)', reason: 'removed at esm 2.0.0 (removed_op)' },
   { text: 'broadcast(y)', reason: 'structural op with no text surface' },
   { text: 'enum(a, b)', reason: 'structural op with no text surface' },
   { text: 'k * ', reason: 'truncated binary expression' },
@@ -170,8 +166,8 @@ const REFUSALS = [
   { text: 'sum[] (1) where {i in s} join(overlap(src=[x], tgt=[W], dx=1))', reason: 'unknown overlap field' },
   { text: 'sum[] (1) where {i in s} join(overlap(src=[], tgt=[W]))', reason: 'overlap env lists must be non-empty' },
   { text: 'sum[] (1) where {i in s} join(overlap(src=[x], tgt=[W]), a=b)', reason: 'overlap mixed with key pairs in one clause' },
-  { text: 'skolem(a, label=1)', reason: 'a skolem label is a name' },
-  { text: 'skolem(a, tag=edge)', reason: 'skolem takes no other named argument' },
+  { text: 'skolem(a, b)', reason: 'removed at esm 2.0.0 (removed_op)' },
+  { text: 'argmin(a)', reason: 'removed at esm 2.0.0 (removed_op)' },
 ]
 
 const EQUATIONS = [
