@@ -73,7 +73,6 @@
         "adapter_support",
         "compiled_rhs_adapter",
         "compiler_agreement_adapter",
-        "determinism_adapter",
         "esio_provider",
         "extension",
         "inline_tests_adapter",
