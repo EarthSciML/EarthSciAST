@@ -58,6 +58,17 @@ function _cadence_doc(dir)
 end
 
 u(y, m, d = 1, h = 0) = datetime2unix(DateTime(y, m, d, h))
+
+# Declare the record axis `rec` (an interval of size 2 with `"records": true`,
+# esm-spec §8.5.1) and put it first in `models.<m>.variables.<v>.shape`, so the
+# parameter receives two records per sample. Returns `doc`.
+function _shape_over_record_axis!(doc, m, v)
+    isets = get!(() -> Dict{String, Any}(), doc, "index_sets")
+    isets["rec"] = Dict{String, Any}("kind" => "interval", "size" => 2, "records" => true)
+    decl = doc["models"][m]["variables"][v]
+    decl["shape"] = vcat(Any["rec"], get(decl, "shape", Any[]))
+    return doc
+end
 const _SECTOR = Dict("NEI" => Dict("sector" => "agr"))
 
 @testset "providers_from_document — a monthly source with a bound sector" begin
@@ -93,8 +104,9 @@ const _SECTOR = Dict("NEI" => Dict("sector" => "agr"))
             @test err isa EarthSciIO.EsmSourceError
             @test occursin("esm_template_unbound", sprint(showerror, err))
 
-            # two records: set in the document, restated (not overridden) at run time
-            doc["models"]["Emis"]["variables"]["nox"]["update"]["from"]["records_per_sample"] = 2
+            # two records: said by the record shape in the document (its first
+            # axis a record axis), restated (not overridden) at run time
+            _shape_over_record_axis!(doc, "Emis", "nox")
             two = providers_from_document(
                 doc; cache_root = joinpath(dir, "cache3"),
                 substitutions = _SECTOR, window = window,
@@ -379,10 +391,10 @@ end
             @test !EarthSciAST.provider_supports_selection(p)
             @test EarthSciAST.provider_sample(p, feb) == [221.0, 222.0, 223.0]
 
-            # records_per_sample = 2: a leading record axis the select takes whole
-            # (set in the document: the run-time option may only restate it)
+            # two records: a leading record axis the select takes whole (said by
+            # the record shape: the run-time option may only restate it)
             two = providers_from_document(
-                _grid_doc(dir; from_extra = merge(fixed, Dict{String, Any}("records_per_sample" => 2)));
+                _shape_over_record_axis!(_grid_doc(dir; from_extra = fixed), "M", "f");
                 cache_root = joinpath(dir, "c2"), window = window,
                 records_per_sample = Dict("M.f" => 2)
             )["M.f"]
@@ -405,99 +417,13 @@ end
                 )
             )
             g = providers_from_document(
-                _grid_doc(dir; from_extra = merge(gated, Dict{String, Any}("records_per_sample" => 2)));
+                _shape_over_record_axis!(_grid_doc(dir; from_extra = gated), "M", "f");
                 cache_root = joinpath(dir, "c3"), window = window
             )["M.f"]
             @test EarthSciAST.provider_gate_spec(g)["axes"] ==
                 Any["all", Dict{String, Any}("gated_by" => "Rows"), "all"]
             @test !EarthSciAST.provider_supports_selection(g)
             @test size(EarthSciAST.provider_sample(g, feb)) == (2, 3, 2)
-        end
-    end
-end
-
-# `_cadence_doc` with three parameters reading NEI: `pair` sets
-# `from.records_per_sample = 2` and declares the record axis `rec` (an interval
-# of size 2) first, `single` sets 1, and `inherited` sets nothing, so it takes
-# the source's `temporal.records_per_sample`.
-function _two_record_doc(dir; source_rps = nothing)
-    doc = _cadence_doc(dir)
-    doc["index_sets"] = Dict{String, Any}(
-        "rec" => Dict{String, Any}("kind" => "interval", "size" => 2),
-        "row" => Dict{String, Any}("kind" => "interval", "size" => 2),
-    )
-    source_rps === nothing ||
-        (doc["data_sources"]["NEI"]["temporal"]["records_per_sample"] = source_rps)
-    function param(shape, rps)
-        from = Dict{String, Any}("file_variable" => "NOX")
-        rps === nothing || (from["records_per_sample"] = rps)
-        return Dict{String, Any}(
-            "type" => "parameter", "units" => "mol/s", "shape" => shape,
-            "update" => Dict{String, Any}("kind" => "data", "source" => "NEI", "from" => from),
-        )
-    end
-    doc["models"]["Emis"]["variables"] = Dict{String, Any}(
-        "pair" => param(["rec", "row"], 2),
-        "single" => param(["row"], 1),
-        "inherited" => param(source_rps == 2 ? ["rec", "row"] : ["row"], nothing),
-    )
-    return doc
-end
-
-@testset "providers_from_document — from.records_per_sample reaches the provider" begin
-    if !_ESIO_HAS_ESM
-        @info "skipped: this EarthSciIO predates provider_from_esm"
-    else
-        mktempdir() do dir
-            window = (u(2016, 1), u(2016, 4))
-            subs = _SECTOR
-            # No domain origin: model time 0 is the window start.
-            t0 = u(2016, 1)
-            provs = providers_from_document(
-                _two_record_doc(dir); cache_root = joinpath(dir, "c1"),
-                substitutions = subs, window = window
-            )
-            # February's record (at or before t) and March's, stacked along the
-            # first declared dimension.
-            @test EarthSciAST.provider_sample(provs["Emis.pair"], u(2016, 2, 15) - t0) ==
-                [20.0 21.0; 30.0 31.0]
-            @test vec(EarthSciAST.provider_sample(provs["Emis.single"], u(2016, 2, 15) - t0)) ==
-                [20.0, 21.0]
-            @test vec(EarthSciAST.provider_sample(provs["Emis.inherited"], u(2016, 2, 15) - t0)) ==
-                [20.0, 21.0]
-
-            # The source's temporal.records_per_sample is the default; a
-            # parameter's own value overrides it.
-            inh = providers_from_document(
-                _two_record_doc(dir; source_rps = 2); cache_root = joinpath(dir, "c2"),
-                substitutions = subs, window = window
-            )
-            @test EarthSciAST.provider_sample(inh["Emis.inherited"], u(2016, 1) - t0) ==
-                [10.0 11.0; 20.0 21.0]
-            @test vec(EarthSciAST.provider_sample(inh["Emis.single"], u(2016, 1) - t0)) ==
-                [10.0, 11.0]
-
-            # The run-time option may restate the document, never contradict it.
-            err = try
-                providers_from_document(
-                    _two_record_doc(dir); cache_root = joinpath(dir, "c3"),
-                    substitutions = subs, window = window,
-                    records_per_sample = Dict("Emis.pair" => 1)
-                )
-                nothing
-            catch e
-                e
-            end
-            @test err isa EarthSciAST.RefreshError
-            @test occursin("Emis.pair", sprint(showerror, err))
-            @test occursin("update.from.records_per_sample", sprint(showerror, err))
-            same = providers_from_document(
-                _two_record_doc(dir); cache_root = joinpath(dir, "c4"),
-                substitutions = subs, window = window,
-                records_per_sample = Dict("Emis.pair" => 2, "Emis.single" => 1.0)
-            )
-            @test EarthSciAST.provider_sample(same["Emis.pair"], u(2016, 2, 15) - t0) ==
-                [20.0 21.0; 30.0 31.0]
         end
     end
 end
@@ -517,7 +443,156 @@ function _refusal(doc, dir; kw...)
     end
 end
 
-@testset "providers_from_document — records_per_sample values and the sources that take 2" begin
+# `_cadence_doc` with three parameters reading NEI. `pair` is shaped
+# `[rec, row]`, `rec` a record axis (an interval of size 2 with
+# `"records": true`), so it receives two records; `single` is shaped `[row]` and
+# receives one; `inherited` is shaped like `single`, or like `pair` when
+# `source_rps == 2`. With `deprecated = true` the document also writes the
+# deprecated `records_per_sample`, agreeing with each shape: `pair` 2, `single`
+# 1, `inherited` nothing (it inherits the source's `temporal.records_per_sample`
+# when `source_rps` is given).
+function _two_record_doc(dir; deprecated = false, source_rps = nothing)
+    doc = _cadence_doc(dir)
+    doc["index_sets"] = Dict{String, Any}(
+        "rec" => Dict{String, Any}("kind" => "interval", "size" => 2, "records" => true),
+        "row" => Dict{String, Any}("kind" => "interval", "size" => 2),
+    )
+    source_rps === nothing ||
+        (doc["data_sources"]["NEI"]["temporal"]["records_per_sample"] = source_rps)
+    function param(shape, rps)
+        from = Dict{String, Any}("file_variable" => "NOX")
+        (deprecated && rps !== nothing) && (from["records_per_sample"] = rps)
+        return Dict{String, Any}(
+            "type" => "parameter", "units" => "mol/s", "shape" => shape,
+            "update" => Dict{String, Any}("kind" => "data", "source" => "NEI", "from" => from),
+        )
+    end
+    doc["models"]["Emis"]["variables"] = Dict{String, Any}(
+        "pair" => param(["rec", "row"], 2),
+        "single" => param(["row"], 1),
+        "inherited" => param(source_rps == 2 ? ["rec", "row"] : ["row"], nothing),
+    )
+    return doc
+end
+
+@testset "providers_from_document — the record shape says how many records reach the provider" begin
+    if !_ESIO_HAS_ESM
+        @info "skipped: this EarthSciIO predates provider_from_esm"
+    else
+        mktempdir() do dir
+            window = (u(2016, 1), u(2016, 4))
+            subs = _SECTOR
+            # No domain origin: model time 0 is the window start.
+            t0 = u(2016, 1)
+            provs = providers_from_document(
+                _two_record_doc(dir); cache_root = joinpath(dir, "c1"),
+                substitutions = subs, window = window
+            )
+            # February's record (at or before t) and March's, stacked along the
+            # record axis, the first declared dimension.
+            @test EarthSciAST.provider_sample(provs["Emis.pair"], u(2016, 2, 15) - t0) ==
+                [20.0 21.0; 30.0 31.0]
+            @test vec(EarthSciAST.provider_sample(provs["Emis.single"], u(2016, 2, 15) - t0)) ==
+                [20.0, 21.0]
+            @test vec(EarthSciAST.provider_sample(provs["Emis.inherited"], u(2016, 2, 15) - t0)) ==
+                [20.0, 21.0]
+
+            # A shapeless parameter takes the record shape of its param_to_var
+            # target in the document's coupling.
+            doc = _two_record_doc(dir)
+            doc["models"]["Emis"]["variables"]["k"] = Dict{String, Any}(
+                "type" => "parameter", "units" => "mol/s",
+                "update" => Dict{String, Any}(
+                    "kind" => "data", "source" => "NEI",
+                    "from" => Dict{String, Any}("file_variable" => "NOX"),
+                ),
+            )
+            doc["models"]["Box"] = Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "F" => Dict{String, Any}(
+                        "type" => "parameter", "units" => "mol/s", "shape" => ["rec", "row"]
+                    )
+                )
+            )
+            doc["coupling"] = Any[
+                Dict{String, Any}(
+                    "type" => "variable_map", "from" => "Emis.k", "to" => "Box.F",
+                    "transform" => "param_to_var",
+                ),
+            ]
+            mapped = providers_from_document(
+                doc; cache_root = joinpath(dir, "c5"), substitutions = subs, window = window
+            )
+            @test EarthSciAST.provider_sample(mapped["Emis.k"], u(2016, 2, 15) - t0) ==
+                [20.0 21.0; 30.0 31.0]
+            # A record axis anywhere but first in a data-fed record shape is refused.
+            doc["models"]["Box"]["variables"]["F"]["shape"] = ["row", "rec"]
+            msg = _refusal(doc, dir; window = window)
+            @test msg !== nothing && occursin("Emis.k", msg) &&
+                occursin("record_axis_misplaced", msg)
+            # A target the document does not show yet (it would arrive through a
+            # coupling_import) leaves the count unknown: refused, never guessed.
+            doc["models"]["Box"]["variables"]["F"]["shape"] = ["rec", "row"]
+            doc["coupling"] = Any[
+                Dict{String, Any}(
+                    "type" => "coupling_import", "ref" => "./lib.esm",
+                    "bind" => Dict{String, Any}("Data" => "Emis", "Consumer" => "Box"),
+                ),
+            ]
+            msg = _refusal(doc, dir; window = window)
+            @test msg !== nothing && occursin("Emis.k", msg) &&
+                occursin("coupling_import", msg)
+
+            # The deprecated form: the source's temporal.records_per_sample is
+            # the default of a parameter's own value, and both must agree with
+            # the record shape.
+            inh = providers_from_document(
+                _two_record_doc(dir; deprecated = true, source_rps = 2);
+                cache_root = joinpath(dir, "c2"), substitutions = subs, window = window
+            )
+            @test EarthSciAST.provider_sample(inh["Emis.inherited"], u(2016, 1) - t0) ==
+                [10.0 11.0; 20.0 21.0]
+            @test vec(EarthSciAST.provider_sample(inh["Emis.single"], u(2016, 1) - t0)) ==
+                [10.0, 11.0]
+            # A written value that disagrees with the record shape is refused.
+            doc = _two_record_doc(dir; deprecated = true)
+            doc["models"]["Emis"]["variables"]["pair"]["update"]["from"]["records_per_sample"] = 1
+            msg = _refusal(doc, dir; window = window)
+            @test msg !== nothing && occursin("Emis.pair", msg) &&
+                occursin("records_per_sample_invalid", msg)
+            # ... including 2 over a plain size-2 first axis without the flag.
+            doc = _two_record_doc(dir; deprecated = true)
+            delete!(doc["index_sets"]["rec"], "records")
+            msg = _refusal(doc, dir; window = window)
+            @test msg !== nothing && occursin("Emis.pair", msg) &&
+                occursin("records_per_sample_invalid", msg)
+
+            # The run-time option may restate the document, never contradict it.
+            err = try
+                providers_from_document(
+                    _two_record_doc(dir); cache_root = joinpath(dir, "c3"),
+                    substitutions = subs, window = window,
+                    records_per_sample = Dict("Emis.pair" => 1)
+                )
+                nothing
+            catch e
+                e
+            end
+            @test err isa EarthSciAST.RefreshError
+            @test occursin("Emis.pair", sprint(showerror, err))
+            @test occursin("record shape", sprint(showerror, err))
+            same = providers_from_document(
+                _two_record_doc(dir); cache_root = joinpath(dir, "c4"),
+                substitutions = subs, window = window,
+                records_per_sample = Dict("Emis.pair" => 2, "Emis.single" => 1.0)
+            )
+            @test EarthSciAST.provider_sample(same["Emis.pair"], u(2016, 2, 15) - t0) ==
+                [20.0 21.0; 30.0 31.0]
+        end
+    end
+end
+
+@testset "providers_from_document — records_per_sample values and the sources that give 2" begin
     if !_ESIO_HAS_ESM
         @info "skipped: this EarthSciIO predates provider_from_esm"
     else
@@ -528,8 +603,9 @@ end
             t0 = u(2016, 1)
             pair_from(doc) = doc["models"]["Emis"]["variables"]["pair"]["update"]["from"]
 
-            # One value rule: the number 1 or 2, `2.0` included.
-            doc = _two_record_doc(dir)
+            # One value rule for the deprecated field: the number 1 or 2, `2.0`
+            # included.
+            doc = _two_record_doc(dir; deprecated = true)
             pair_from(doc)["records_per_sample"] = 2.0
             provs = providers_from_document(
                 doc; cache_root = joinpath(dir, "v1"), substitutions = subs, window = window
@@ -537,13 +613,13 @@ end
             @test EarthSciAST.provider_sample(provs["Emis.pair"], u(2016, 2, 15) - t0) ==
                 [20.0 21.0; 30.0 31.0]
             for bad in (1.5, "2", true, 3, -2, 2^40)
-                doc = _two_record_doc(dir)
+                doc = _two_record_doc(dir; deprecated = true)
                 pair_from(doc)["records_per_sample"] = bad
                 msg = _refusal(doc, dir; window = window)
                 @test msg !== nothing && occursin("Emis.pair", msg) &&
                     occursin("update.from", msg) && occursin(repr(bad), msg)
             end
-            doc = _two_record_doc(dir)
+            doc = _two_record_doc(dir; deprecated = true)
             doc["data_sources"]["NEI"]["temporal"]["records_per_sample"] = 1.5
             msg = _refusal(doc, dir; window = window)
             @test msg !== nothing && occursin("data_sources.NEI.temporal", msg)
@@ -567,8 +643,8 @@ end
             msg = _refusal(doc, dir; window = window)
             @test msg !== nothing && occursin("Emis.pair", msg) &&
                 occursin("data_sources.NEI", msg) && occursin("time-invariant", msg)
-            # Validation refuses it too (`records_per_sample_invalid`): the shared
-            # conformance case `pair_from_startless_source` pins that.
+            # Validation refuses it too (`record_axis_time_invariant_source`): the
+            # shared conformance case `record_axis_from_startless_source` pins that.
         end
     end
 end

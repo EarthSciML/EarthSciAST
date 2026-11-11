@@ -310,7 +310,9 @@ include("testutils.jl")
         # ... and the two DataSource properties no shared fixture exercised:
         # source-level `select`, and `temporal.records_per_sample` (how many
         # records the source returns per QUERY TIME, as against
-        # `records_per_file`, which counts records IN one file).
+        # `records_per_file`, which counts records IN one file). The latter is
+        # deprecated (esm-spec §8.5.1, removed at esm 1.4.0) but still parses
+        # and round-trips as written until then, which is what this pins.
         rean = emit_of(
             "pkg/EarthSciAST.jl/test/fixtures/round_trip/parameter_value_model.esm"
         )["data_sources"]["Reanalysis"]

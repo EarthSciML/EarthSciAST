@@ -93,11 +93,13 @@ Fields:
   before integration) — the source-seeded refinement of CONFORMANCE_SPEC §5.7.2.
 - `unit_conversion`: the binding's declared `unit_conversion` (§8.5), `nothing`
   when the document declares none.
-- `records_per_sample`: the EFFECTIVE number of records the parameter receives
-  per query time (esm-spec §8.5.1), 1 or 2: the binding's
-  `from.records_per_sample`, else the source's `temporal.records_per_sample`,
-  else 1. With 2 the field holds the record at or before the query time and its
-  successor, stacked along the parameter's first dimension.
+- `records_per_sample`: the number of records the parameter receives per query
+  time (esm-spec §8.5.1), 1 or 2: 2 when its record shape (its declared
+  `shape`, else its `param_to_var` targets' declared shapes) begins with a
+  record axis (an `interval` index set with `"records": true`), else 1. With 2
+  the field holds the record at or before the query time and its successor,
+  stacked along that first axis. The (deprecated) written
+  `records_per_sample` must agree with it and is never read here.
 """
 struct LoaderField
     name::String
@@ -1073,7 +1075,7 @@ function _extract_field_ics!(
 end
 
 """
-    _collect_loader_fields!(out, model, prefix, data_sources)
+    _collect_loader_fields!(out, file, model, prefix)
 
 Append one [`LoaderField`](@ref) per data-fed parameter of `model` (and, by
 recursion, of its subsystems), in the order the component declares them.
@@ -1083,12 +1085,13 @@ a `from` binding (esm-spec §8.5). Its cadence follows the SOURCE, not its own
 declaration (CONFORMANCE_SPEC §5.7.2): a source WITH a `temporal` block refreshes
 per record (`"discrete"`), one without is read once (`"const"`). A parameter
 naming a source the document does not declare is skipped — `data_source_undefined`
-is the validator's finding, not flatten's.
+is the validator's finding, not flatten's. Its record count comes from its record
+shape on `file` (refs mounted, `coupling` expanded; see [`_records_received`](@ref)).
 """
 function _collect_loader_fields!(
-        out::Vector{LoaderField}, model::Model,
-        prefix::String, data_sources
+        out::Vector{LoaderField}, file::EsmFile, model::Model, prefix::String
     )
+    data_sources = file.data_sources
     for (var_name, var) in model.variables
         var.type == ParameterVariable || continue
         var.update === nothing && continue
@@ -1102,14 +1105,14 @@ function _collect_loader_fields!(
                     rule.from.file_variable,
                     src.temporal === nothing ? "const" : "discrete";
                     unit_conversion = rule.from.unit_conversion,
-                    records_per_sample = _effective_records_per_sample(rule.from, src)
+                    records_per_sample = _records_received(file, "$(prefix).$(var_name)", var)
                 )
             )
         end
     end
     for (sub_name, sub) in model.subsystems
         sub isa Model || continue
-        _collect_loader_fields!(out, sub, "$(prefix).$(sub_name)", data_sources)
+        _collect_loader_fields!(out, file, sub, "$(prefix).$(sub_name)")
     end
     return out
 end
@@ -1171,29 +1174,29 @@ _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
 )
 
 """
-    _check_flattened_records_per_sample(file::EsmFile)
+    _check_flattened_record_shapes(file::EsmFile)
 
-esm-spec §8.5.1 rule 3 at `flatten`, on the document with refs mounted and
-`file.coupling` already the expanded coupling sequence: each data-fed
-parameter, at any depth, whose effective `records_per_sample` is 2 and which
-declares no `shape` takes its record shapes from the `param_to_var` edges of
-that sequence, and one still empty after expansion is refused. A declared
-`shape`, `[]` included, is the record shape. Throws
-`ExpressionTemplateError` with `records_per_sample_invalid`, naming the rule's
-pointer.
+esm-spec §8.5.1 "When rules 2 and 3 are checked", at `flatten`, on the document
+with refs mounted and `file.coupling` already the expanded coupling sequence:
+every `data` rule of a parameter, at any depth, is checked against the record
+shapes of that sequence ([`_record_shape_findings`](@ref)), a shapeless one with
+no `param_to_var` target now read as the empty record shape. Throws
+`ExpressionTemplateError` with the first finding's code
+(`record_axis_misplaced`, `record_axis_time_invariant_source` or
+`records_per_sample_invalid`), the message naming the rule's pointer.
 """
-function _check_flattened_records_per_sample(file::EsmFile)
+function _check_flattened_record_shapes(file::EsmFile)
     file.models === nothing && return nothing
     file.data_sources === nothing && return nothing
     for model_name in sort!(collect(keys(file.models)))
-        _check_flattened_records_per_sample(
+        _check_flattened_record_shapes(
             file, file.models[model_name], model_name, "/models/$model_name"
         )
     end
     return nothing
 end
 
-function _check_flattened_records_per_sample(
+function _check_flattened_record_shapes(
         file::EsmFile, model::Model, scope::String, path::String
     )
     for name in sort!(collect(keys(model.variables)))
@@ -1204,22 +1207,17 @@ function _check_flattened_records_per_sample(
             (rule.kind == "data" && rule.from !== nothing && rule.source !== nothing) || continue
             src = get(file.data_sources, rule.source, nothing)
             src === nothing && continue
-            _effective_records_per_sample(rule.from, src) == 2 || continue
-            shape = _record_shape_failure(
-                file, file.coupling, "$scope.$name", var.shape; defer_empty = false
-            )
-            shape === nothing && continue
             at = _update_rule_path("$path/variables/$name", rules, ri)
-            throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
-                    _records_per_sample_shape_error(at, name, shape)
-                )
+            findings = _record_shape_findings(
+                file, file.coupling, scope, name, var, rule, src, at; defer_empty = false
             )
+            isempty(findings) && continue
+            code, msg, _ = first(findings)
+            throw(ExpressionTemplateError(code, msg))
         end
     end
     for (subsys_name, subsys) in model_subsystems(model)
-        _check_flattened_records_per_sample(
+        _check_flattened_record_shapes(
             file, subsys, "$scope.$subsys_name", "$path/subsystems/$subsys_name"
         )
     end
@@ -1262,10 +1260,10 @@ function flatten(
     if expanded !== file.coupling
         file = _with_coupling(file, expanded)
     end
-    # esm-spec §8.5.1 "When rule 3 is checked": a record shape validation could
-    # not decide arrives with the expanded coupling sequence, so rule 3 is
-    # re-checked here against its `param_to_var` edges.
-    _check_flattened_records_per_sample(file)
+    # esm-spec §8.5.1 "When rules 2 and 3 are checked": a record shape
+    # validation could not decide arrives with the expanded coupling sequence,
+    # so the record shapes are re-checked here against its `param_to_var` edges.
+    _check_flattened_record_shapes(file)
 
     # Step 0-: there must be something to flatten. A document whose only payload
     # is an `expression_templates` registry is a template LIBRARY, not a system:
@@ -1346,7 +1344,7 @@ function flatten(
                 tpl_rename = get(template_rename, name, nothing)
             )
             _attribute_equations!(eq_owners, equations, name)
-            _collect_loader_fields!(loader_fields, model, name, file.data_sources)
+            _collect_loader_fields!(loader_fields, file, model, name)
         end
     end
 
