@@ -1025,20 +1025,26 @@ function _eval_cellwise(
         t::Float64 = 0.0
     )::Float64
     cellwise = _index_at_cell(expr, cell)
+    # One build memo for the resolve and the compile, and the shared nodes of
+    # the compiled tree evaluated once (`_cell_memoize!`): an inlined observed
+    # chain reaches the same sub-tree from many parents (a template parameter
+    # written at each of its uses, an observed read by several others), and
+    # walking it once per parent grows with the product of those fan-outs.
+    # Both memos return the value the unshared walk computes.
+    bmemo = _BuildMemo()
+    vmap = Dict{String, Int}()
     resolved = _resolve_indices(
         cellwise,
         Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
-        Dict{String, Int}(), const_arrays
+        vmap, const_arrays, _EMPTY_PGATHER, bmemo
     )
     reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
-    if isempty(params)
-        node = _compile(resolved, Dict{String, Int}(), Set{Symbol}(), reg)
-        return _eval_node(node, Float64[], NamedTuple(), t)
-    end
     psyms = Symbol[Symbol(k) for k in keys(params)]
     pvals = Float64[Float64(params[k]) for k in keys(params)]
-    node = _compile(resolved, Dict{String, Int}(), Set{Symbol}(psyms), reg)
     p_nt = NamedTuple{Tuple(psyms)}(Tuple(pvals))
+    node = _cell_memoize!(
+        _compile(resolved, vmap, Set{Symbol}(psyms), reg, bmemo), typeof(p_nt)
+    )
     return _eval_node(node, Float64[], p_nt, t)
 end
 

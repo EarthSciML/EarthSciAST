@@ -677,7 +677,7 @@ end
     # `y[i] = s·i` reads the parameter `s`, which the right-hand side reads
     # too. `T[i] = h[1]·i` names the makearray observed `h`: under `native` the
     # compiled program materializes `h` as a level of its own, and under
-    # `interpreter` the build-time route materializes it per cell.
+    # `interpreter` the build-time route materializes it.
     obs_doc() = Dict{String, Any}(
         "esm" => "2.0.0",
         "metadata" => Dict("name" => "pr_observed_memo"),
@@ -783,18 +783,35 @@ end
         pn = esm_problem(obs_doc(), (0.0, 1.0))
         @test observed_field(pn, "T") == [5.0, 10.0, 15.0]
         @test [r.tier for r in obs_rows(pn, "T")] == [:output_compiled]
-        # Under `interpreter` `h` IS materialized per cell and served the value.
+        # Under `interpreter` the build-time route materializes `h` (its
+        # region chosen per cell at run time, compiled once) and serves it.
         pi_ = esm_problem(obs_doc(), (0.0, 1.0); compiler = :interpreter)
         @test observed_field(pi_, "T") == [5.0, 10.0, 15.0]
-        @test [r.tier for r in obs_rows(pi_, "T")] == [:output_percell]
+        @test [r.tier for r in obs_rows(pi_, "T")] == [:output_compiled_once]
     end
 
     @testset "the per-cell signal counts this task's evaluations only" begin
+        # A makearray read at `floor(i / 1)`: the compile-once form takes no
+        # region choice at a subscript outside exact integer arithmetic, so
+        # this evaluates per cell.
         h = _PR.expression_from_json(
             Dict{String, Any}(
-                "op" => "makearray",
-                "args" => Any[], "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
-                "values" => Any[5.0, 7.0]
+                "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                "ranges" => Dict("i" => Any[1, 3]),
+                "expr" => Dict(
+                    "op" => "index", "args" => Any[
+                        Dict(
+                            "op" => "makearray", "args" => Any[],
+                            "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
+                            "values" => Any[5.0, 7.0]
+                        ),
+                        Dict(
+                            "op" => "floor", "args" => Any[
+                                Dict("op" => "/", "args" => Any["i", 1]),
+                            ]
+                        ),
+                    ]
+                )
             )
         )
         cells = [[1], [2], [3]]

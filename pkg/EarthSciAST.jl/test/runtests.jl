@@ -321,6 +321,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
     include("count_fold_test.jl")                   # #588: the indicator sum emitted as a count
     include("closed_interp_native_test.jl")         # #660: the interp templates under native; repeated sub-trees shared
+    include("template_nested_observed_test.jl")     # a template read at an inlined makearray observed chain
     include("relational_templates_test.jl")         # the lib/relational.esm argmin/argmax templates
     include("closed_templates_native_test.jl")      # the phase-3 library templates under strict native
     include("template_scenarios_test.jl")           # tests/closed_functions scenarios through the stdlib templates (§9.8)

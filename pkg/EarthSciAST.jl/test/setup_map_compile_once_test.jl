@@ -242,10 +242,11 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         end
     end
 
-    @testset "an unsupported map still falls back, not throws" begin
-        # A join/filter aggregate is refused on the symbolic path
-        # (`_resolve_index_of_faq` throws E_TREEWALK_COMPILE_ONCE_UNSUPPORTED);
-        # the caller must swallow that and produce the reference values.
+    @testset "a filtered map gives the reference values" begin
+        # A filter is a run-time guard on the symbolic path, the same
+        # `ifelse(pred, term, 0̄)` per term the per-cell expansion builds (a join
+        # gate is still refused there, and the caller swallows that refusal);
+        # either way the values are the reference's.
         body = _op("exp", _ix(_v("A"), _v("x"), _v("k")))
         j = _map(["x"], ["x" => "X", "k" => Any[1, 4]], body)
         j["reduce"] = "+"
