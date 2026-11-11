@@ -17,6 +17,9 @@ using Test
 using EarthSciAST
 import JSON3
 import OrdinaryDiffEqTsit5
+# `_pick_solver` finds Rosenbrock23 through `Base.loaded_modules`; the stiff
+# pick below needs it loaded even when this file runs on its own.
+import OrdinaryDiffEqRosenbrock
 const _PIT_ESS = EarthSciAST
 
 const _PIT_N = 8
