@@ -505,13 +505,13 @@
       "note": "A variable with an absent shape defined elementwise down to an ifelse under a scalar condition, one branch an array over index sets and the other a scalar, has the array branch's shape whichever branch is taken; the scalar branch fills every element."
     },
     {
-      "id": "spec.4.3.4.mixed-ifelse-shape-from-evaluated-operands",
+      "id": "spec.4.3.4.mixed-ifelse-shape-at-build",
       "section": "4.3.4",
-      "quote": "Every evaluator decides that shape from the same values, before it knows which branch the condition takes",
+      "quote": "A binding decides that shape at build, before it evaluates anything, from the shapes of the operands on the expression's value path",
       "class": "semantic",
       "phase": 3,
       "area": "arrays",
-      "note": "The array branch shape of an unshaped mixed ifelse is read from the operands' values when the variable is evaluated, so it covers an operand defined by a table lookup and an unshaped data-fed parameter whose data is an array; a gather, reduction or shape op on the value path, or arrays of different shapes, leave the rank following the value."
+      "note": "The array branch shape of an unshaped mixed ifelse is fixed at build from operand shapes: declared shapes, the shapes bare definitions give, an index with all-scalar subscripts or a faq with no output indices counted as scalar (table lookups), and an unshaped data-fed parameter's data shape. Every array on the value path must share one shape; any other whole-operand op or two different shapes and the rule does not apply."
     },
     {
       "id": "spec.4.4.fn-name-in-registry",
