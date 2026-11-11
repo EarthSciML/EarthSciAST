@@ -1,0 +1,206 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ic_reads_state",
+  "description": "esm-spec 11.4.2: an `ic` right-hand side may not read a state. ic(v) = g, where the array observed g[i] = 2*u[i] reads the array state u, is refused at construction with ic_reads_state.",
+  "authors": [
+   "EarthSciAST conformance"
+  ],
+  "created": "2026-11-11T00:00:00Z",
+  "tags": [
+   "conformance",
+   "esm-spec-11.4.2",
+   "ic",
+   "refusal",
+   "ic_reads_state"
+  ]
+ },
+ "index_sets": {
+  "x": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "R": {
+   "variables": {
+    "u": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "x"
+     ],
+     "description": "array state"
+    },
+    "g": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "x"
+     ],
+     "description": "array observed reading the state u"
+    },
+    "v": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "x"
+     ],
+     "description": "array state whose ic reads g, and so the state u"
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "u"
+      ]
+     },
+     "rhs": 1.0
+    },
+    {
+     "lhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       }
+      },
+      "expr": {
+       "op": "D",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "u",
+          "i"
+         ]
+        }
+       ],
+       "wrt": "t"
+      }
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [
+       "u"
+      ],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        -1.0,
+        {
+         "op": "index",
+         "args": [
+          "u",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "g",
+     "rhs": {
+      "op": "faq",
+      "args": [
+       "u"
+      ],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        2.0,
+        {
+         "op": "index",
+         "args": [
+          "u",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "v"
+      ]
+     },
+     "rhs": "g"
+    },
+    {
+     "lhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       }
+      },
+      "expr": {
+       "op": "D",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "v",
+          "i"
+         ]
+        }
+       ],
+       "wrt": "t"
+      }
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [
+       "g"
+      ],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "g",
+        "i"
+       ]
+      }
+     }
+    }
+   ]
+  }
+ }
+}

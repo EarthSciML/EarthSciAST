@@ -585,6 +585,7 @@ impl ArrayCompiled {
         // are mounted.
         let mut compiled = Self::compile_pipeline(
             model.clone(),
+            &[],
             &index_sets,
             None,
             Some(model_name),
@@ -619,7 +620,7 @@ impl ArrayCompiled {
             file.index_sets.unwrap_or_default().into_iter().collect();
         let (model_name, model) = models.into_iter().next().unwrap();
         let mut compiled =
-            Self::compile_pipeline(model, &index_sets, None, Some(&model_name), false)?;
+            Self::compile_pipeline(model, &[], &index_sets, None, Some(&model_name), false)?;
         compiled.qualify_data_fed(&model_name);
         compiled.namespace = Some(model_name);
         Ok(compiled)
@@ -737,8 +738,14 @@ impl ArrayCompiled {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let mut compiled =
-            Self::compile_pipeline(model, &index_sets, None, None, runtime_array_parameters)?;
+        let mut compiled = Self::compile_pipeline(
+            model,
+            &flat.field_ics,
+            &index_sets,
+            None,
+            None,
+            runtime_array_parameters,
+        )?;
         // The pipeline recorded only what it inferred; the inherited shapes
         // were already declared when it ran.
         if let Some(shapes) = inherited {
@@ -821,7 +828,7 @@ impl ArrayCompiled {
         index_sets: &HashMap<String, IndexSet>,
         vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
     ) -> Result<Self, CompileError> {
-        Self::compile_pipeline(model_owned, index_sets, vi_arrays, None, false)
+        Self::compile_pipeline(model_owned, &[], index_sets, vi_arrays, None, false)
     }
 
     /// The compile pipeline itself; every public entry point above delegates
@@ -832,6 +839,10 @@ impl ArrayCompiled {
     /// as one in the parent's own equations.
     fn compile_pipeline(
         mut model_owned: Model,
+        // The flattened system's `ic` right-hand sides (`field_ics`), which
+        // flatten moved out of the model's equations; empty on the
+        // single-model route, whose `ic` equations are still in the model.
+        flat_ics: &[(String, Expr)],
         index_sets: &HashMap<String, IndexSet>,
         vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
         model_name: Option<&str>,
@@ -1152,6 +1163,7 @@ impl ArrayCompiled {
         // §6.6.5) — captured before stage (6) moves the bodies out.
         let ic_scope = capture_ic_scope(
             &model_owned,
+            flat_ics,
             &observed_names,
             &forcing_decls,
             &slots.var_shapes,
@@ -1696,6 +1708,10 @@ pub(super) struct IcScope {
     /// The observeds in that cone left out of the scope at compile time, with
     /// the reason, for the diagnostic of an `ic` that reads one.
     pub(super) excluded: Vec<(String, String)>,
+    /// Each `ic` target whose right-hand side reads a state, directly or
+    /// through observeds, with the chain of reads (esm-spec §11.4.2): refused
+    /// at construction with `ic_reads_state`.
+    pub(super) state_reads: Vec<(String, String)>,
 }
 
 /// The names `expr` reads FREE: every bare variable reference not bound by an
@@ -1726,8 +1742,8 @@ pub(super) fn free_names(expr: &Expr) -> HashSet<String> {
 }
 
 /// Memoized walk over the observed definitions marking each one that reads
-/// state or `t`, directly or through another observed — linear in the
-/// definitions' reads.
+/// state, directly or through another observed — linear in the definitions'
+/// reads.
 struct StateTaint<'a> {
     defs: &'a BTreeMap<String, (Expr, HashSet<String>)>,
     is_state: &'a dyn Fn(&str) -> bool,
@@ -1751,7 +1767,7 @@ impl<'a> StateTaint<'a> {
             .iter()
             .filter(|n| (self.is_state)(n))
             .min()
-            .map(|n| format!("reads '{n}'"));
+            .map(|n| format!("reads '{n}', a state"));
         if cause.is_none() {
             let mut deps: Vec<&'a String> = reads
                 .iter()
@@ -1771,16 +1787,15 @@ impl<'a> StateTaint<'a> {
 }
 
 /// The STATE-FREE observed definitions the `ic` right-hand sides read
-/// (esm-spec §6.6.5 "Build-time evaluation scope").
+/// (esm-spec §11.4.2, the start-of-run scope).
 ///
 /// A state-free observed — one whose defining expression closes over
-/// parameters, inline `const` data, provider-served fields and other
-/// state-free observeds, with no state and no `t` — is resolvable BEFORE the
-/// simulation runs; the build already materializes exactly this class of field
-/// as a setup array for `BuildInspection`. Admitting it as an `ic` RHS
-/// (esm-spec §11.4.1) is the same evaluator reached from one more place, and it
-/// is what lets a column test seed `u` from a `const` gather instead of minting
-/// a per-regime rewrite-rule library.
+/// parameters, inline `const` data, provider-served fields, the independent
+/// variable and other state-free observeds, with no state — has a value at
+/// the start of the run `t0`, where every `ic` right-hand side is evaluated
+/// with `t` bound to `t0` and each data-fed field at its record there. It is
+/// what lets a column test seed `u` from a `const` gather, and an air mass
+/// start at a layer thickness computed from time-blended surface pressure.
 ///
 /// State-freedom is TRANSITIVE: an observed that reads another observed
 /// reading state (`Mz_conv` ← `div_h` ← `conv_x` ← `u`) is not state-free
@@ -1796,17 +1811,26 @@ impl<'a> StateTaint<'a> {
 /// document actually has a field `ic` to fold.
 fn capture_ic_scope(
     model: &Model,
+    flat_ics: &[(String, Expr)],
     observed_names: &[String],
     forcing_names: &IndexMap<String, Option<Vec<usize>>>,
     state_names: &IndexMap<String, VarShape>,
     eliminated: &HashSet<String>,
 ) -> IcScope {
-    let ic_reads: HashSet<String> = model
+    // The `ic` right-hand sides: the model's own `ic` equations (single-model
+    // build) and the flattened system's `field_ics` (coupled build), keyed by
+    // their target.
+    let ics: Vec<(String, HashSet<String>)> = model
         .equations
         .iter()
         .filter(|eq| is_ic_lhs(&eq.lhs))
-        .flat_map(|eq| free_names(&eq.rhs))
+        .map(|eq| {
+            let target = crate::flatten::extract_ic_target(&eq.lhs).unwrap_or_default();
+            (target, free_names(&eq.rhs))
+        })
+        .chain(flat_ics.iter().map(|(t, rhs)| (t.clone(), free_names(rhs))))
         .collect();
+    let ic_reads: HashSet<String> = ics.iter().flat_map(|(_, r)| r.iter().cloned()).collect();
     if ic_reads.is_empty() {
         return IcScope::default();
     }
@@ -1819,12 +1843,35 @@ fn capture_ic_scope(
             (name, (body, reads))
         })
         .collect();
-    let is_state = |n: &str| n == "t" || state_names.contains_key(n) || eliminated.contains(n);
+    let is_state = |n: &str| state_names.contains_key(n) || eliminated.contains(n);
     let mut taint = StateTaint {
         defs: &defs,
         is_state: &is_state,
         marks: HashMap::new(),
     };
+
+    // An `ic` that reads a state, directly or through observeds, has no value
+    // at the start of the run (esm-spec §11.4.2).
+    let mut state_reads: Vec<(String, String)> = Vec::new();
+    for (target, reads) in &ics {
+        let mut sorted: Vec<&String> = reads.iter().collect();
+        sorted.sort();
+        let direct = sorted
+            .iter()
+            .find(|n| is_state(n) && !defs.contains_key(n.as_str()));
+        let why = match direct {
+            Some(n) => Some(format!("reads '{n}', a state")),
+            None => sorted.iter().find_map(|n| {
+                defs.contains_key(n.as_str())
+                    .then(|| taint.cause(n))
+                    .flatten()
+                    .map(|inner| format!("reads '{n}', which {inner}"))
+            }),
+        };
+        if let Some(why) = why {
+            state_reads.push((target.clone(), why));
+        }
+    }
 
     // The state-free cone of the `ic` reads.
     let mut excluded: Vec<(String, String)> = Vec::new();
@@ -1924,6 +1971,7 @@ fn capture_ic_scope(
         defs,
         roots,
         excluded,
+        state_reads,
     }
 }
 
@@ -3790,7 +3838,11 @@ pub(crate) fn eval_buildtime_field_in_scope(
     crate::faq::resolve_expr_ranges(&mut resolved, index_sets)?;
     let param_names: Vec<String> = params.keys().cloned().collect();
     let param_vec: Vec<f64> = param_names.iter().map(|n| params[n]).collect();
-    eval_expression(&resolved, scope, &param_vec, &param_names, 0.0)
+    // The independent variable, where the scope binds it: the start of the
+    // run for an `ic` right-hand side (esm-spec §11.4.2). Nothing else binds
+    // it, and the evaluator reads `t` as its time argument, not as a name.
+    let t = params.get("t").copied().unwrap_or(0.0);
+    eval_expression(&resolved, scope, &param_vec, &param_names, t)
 }
 
 /// Resolve one grid cell's initial value for a scoped-reference / array `ic`

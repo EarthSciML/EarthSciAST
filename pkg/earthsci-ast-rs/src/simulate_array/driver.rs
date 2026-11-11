@@ -292,7 +292,25 @@ pub(crate) struct FieldIcRecord {
 pub(crate) struct FieldIcMemo {
     params: Vec<u64>,
     forcing_generation: u64,
+    /// The start of the run the `ic` right-hand sides were evaluated at
+    /// (esm-spec §11.4.2), as bits.
+    t0: u64,
     slots: HashMap<usize, f64>,
+}
+
+/// Where an `ic` right-hand side reads the start of the run (esm-spec
+/// §11.4.2): the start `t0` itself, which `t` is bound to, and the data-fed
+/// fields' values there.
+#[cfg(feature = "solve")]
+pub(crate) struct IcStart<'a> {
+    /// The start of the run, `tspan.0`.
+    pub(crate) t0: f64,
+    /// Fields read in place of the forcing buffer's: each data-fed field's
+    /// value at `t0`, where the buffer holds another record or none.
+    pub(crate) at_t0: Option<&'a HashMap<String, ArrayD<f64>>>,
+    /// Buffer fields not to read: a discrete-cadence field whose value at
+    /// `t0` is not known here (the buffer may hold any record of it).
+    pub(crate) exclude: &'a HashSet<String>,
 }
 
 #[cfg(all(test, feature = "solve"))]
@@ -900,12 +918,20 @@ impl ArrayCompiled {
         &self,
         params: &HashMap<String, f64>,
         mut records: Option<&mut Vec<FieldIcRecord>>,
-        discrete_forcing: &HashSet<String>,
+        start: &IcStart<'_>,
     ) -> Result<HashMap<usize, f64>, SimulateError> {
         let mut out: HashMap<usize, f64> = HashMap::new();
         if self.field_ics.is_empty() {
             return Ok(out);
         }
+        self.refuse_ic_state_reads()?;
+        // The independent variable is the start of the run (esm-spec §11.4.2).
+        let mut with_t: HashMap<String, f64>;
+        let params: &HashMap<String, f64> = {
+            with_t = params.clone();
+            with_t.insert("t".to_string(), start.t0);
+            &with_t
+        };
         #[cfg(test)]
         FIELD_IC_RESOLUTIONS.with(|c| c.set(c.get() + 1));
         let walks = crate::simulate_array::per_cell_walks;
@@ -925,20 +951,23 @@ impl ArrayCompiled {
         // document before this), the resolver reads the forcing buffer straight
         // through and no provider field is copied.
         //
-        // A discrete-cadence field is read without: the solve's refresh writes
-        // it into this buffer from `tspan.0` on, after the initial state is
-        // built, so construction resolves without it, and a later resolution
-        // must not read the record the last solve left there.
+        // A data-fed field is read at the start of the run (esm-spec §11.4.2):
+        // from `start.at_t0` where the caller sampled it there, and never as
+        // a discrete-cadence record the buffer holds for another time.
         let buffer = self.forcing.borrow();
-        let without_discrete: Option<HashMap<String, ArrayD<f64>>> = discrete_forcing
-            .iter()
-            .any(|name| buffer.contains_key(name))
+        let without_discrete: Option<HashMap<String, ArrayD<f64>>> =
+            (start.exclude.iter().any(|name| buffer.contains_key(name))
+                || start.at_t0.is_some_and(|m| !m.is_empty()))
             .then(|| {
-                buffer
+                let mut m: HashMap<String, ArrayD<f64>> = buffer
                     .iter()
-                    .filter(|(name, _)| !discrete_forcing.contains(*name))
+                    .filter(|(name, _)| !start.exclude.contains(*name))
                     .map(|(name, arr)| (name.clone(), arr.clone()))
-                    .collect()
+                    .collect();
+                if let Some(at) = start.at_t0 {
+                    m.extend(at.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
+                m
             });
         let borrowed: &HashMap<String, ArrayD<f64>> = without_discrete.as_ref().unwrap_or(&buffer);
         let mut scope: Option<HashMap<String, ArrayD<f64>>> = None;
@@ -1272,11 +1301,19 @@ impl ArrayCompiled {
     /// first cell (see `StopAtFirstCell`), because its record is a refusal and
     /// the rest of the walk would buy nothing. A resolution that walked no cell
     /// is kept for the first solve ([`FieldIcMemo`]).
+    ///
+    /// `t0` is the start of the run, where the `ic` right-hand sides are
+    /// evaluated (esm-spec §11.4.2). The DISCRETE-cadence fields
+    /// (`discrete_forcing`) are not sampled yet: each is read here at its
+    /// declared default, which exercises the route an evaluation takes but
+    /// not its value, so a resolution that read one is not kept.
     #[cfg(feature = "solve")]
     pub(crate) fn field_ic_records(
         &self,
         params: &HashMap<String, f64>,
         strict: bool,
+        t0: f64,
+        discrete_forcing: &HashSet<String>,
     ) -> Vec<FieldIcRecord> {
         if self.field_ics.is_empty() && self.init_faqs.is_empty() {
             return Vec::new();
@@ -1293,8 +1330,18 @@ impl ArrayCompiled {
         let _precision_guard = self.precision.enter();
         let mut records = Vec::new();
         let stop = strict.then(crate::simulate_array::StopAtFirstCell::arm);
-        // No discrete-cadence field is in the buffer before the first refresh.
-        let result = self.resolve_field_ics(&resolved, Some(&mut records), &HashSet::new());
+        // No discrete-cadence field is in the buffer before the first refresh:
+        // each stands in at its declared default.
+        let stand_ins: HashMap<String, ArrayD<f64>> = discrete_forcing
+            .iter()
+            .filter_map(|n| Some((n.clone(), self.forcing_default(n)??)))
+            .collect();
+        let start = IcStart {
+            t0,
+            at_t0: Some(&stand_ins),
+            exclude: discrete_forcing,
+        };
+        let result = self.resolve_field_ics(&resolved, Some(&mut records), &start);
         let stopped = stop.as_ref().is_some_and(|s| s.stopped());
         if let Ok(slots) = &result
             && !stopped
@@ -1313,14 +1360,29 @@ impl ArrayCompiled {
         }
         if let Ok(slots) = result
             && !stopped
+            && discrete_forcing.is_empty()
         {
             *self.field_ic_memo.borrow_mut() = Some(FieldIcMemo {
                 params: param_bits(&param_vec),
                 forcing_generation: self.forcing_generation.get(),
+                t0: t0.to_bits(),
                 slots,
             });
         }
         records
+    }
+
+    /// Refuse an `ic` right-hand side that reads a state, directly or through
+    /// observeds (esm-spec §11.4.2, `ic_reads_state`): it has no value at the
+    /// start of the run.
+    pub(crate) fn refuse_ic_state_reads(&self) -> Result<(), SimulateError> {
+        match self.ic_scope.state_reads.first() {
+            Some((name, details)) => Err(SimulateError::IcReadsState {
+                name: name.clone(),
+                details: details.clone(),
+            }),
+            None => Ok(()),
+        }
     }
 
     /// The component / subsystem names a rule-2 override key may spell in its
@@ -1476,9 +1538,9 @@ impl ArrayCompiled {
         &self,
         initial_conditions: &HashMap<String, f64>,
         param_vec: &[f64],
-        discrete_forcing: &HashSet<String>,
+        start: &IcStart<'_>,
     ) -> Result<Vec<f64>, SimulateError> {
-        self.build_initial_state_with(initial_conditions, param_vec, discrete_forcing, true)
+        self.build_initial_state_with(initial_conditions, param_vec, start, true)
     }
 
     /// The initial state vector `u0` a solve under `params` and
@@ -1496,11 +1558,11 @@ impl ArrayCompiled {
         &self,
         params: &HashMap<String, f64>,
         initial_conditions: &HashMap<String, f64>,
-        discrete_forcing: &HashSet<String>,
+        start: &IcStart<'_>,
     ) -> Result<Vec<f64>, SimulateError> {
         crate::simulate_array::take_const_array_oob();
         let u0 = self.build_param_vec(params).and_then(|param_vec| {
-            self.build_initial_state_with(initial_conditions, &param_vec, discrete_forcing, false)
+            self.build_initial_state_with(initial_conditions, &param_vec, start, false)
         });
         // Drained at every exit, so no later call reads this one's gather. An
         // error building the state is the answer over a gather it latched.
@@ -1520,7 +1582,7 @@ impl ArrayCompiled {
         &self,
         initial_conditions: &HashMap<String, f64>,
         param_vec: &[f64],
-        discrete_forcing: &HashSet<String>,
+        start: &IcStart<'_>,
         consume_memo: bool,
     ) -> Result<Vec<f64>, SimulateError> {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
@@ -1535,7 +1597,9 @@ impl ArrayCompiled {
         // parameters ([`FieldIcMemo`]).
         let bits = param_bits(param_vec);
         let fresh = |m: &FieldIcMemo| {
-            m.params == bits && m.forcing_generation == self.forcing_generation.get()
+            m.params == bits
+                && m.forcing_generation == self.forcing_generation.get()
+                && m.t0 == start.t0.to_bits()
         };
         let taken = consume_memo
             .then(|| self.field_ic_memo.borrow_mut().take())
@@ -1559,11 +1623,9 @@ impl ArrayCompiled {
         let field_ic_map: std::borrow::Cow<'_, HashMap<usize, f64>> = match (taken, kept) {
             (Some(m), _) => std::borrow::Cow::Owned(m.slots),
             (None, Some(m)) => std::borrow::Cow::Borrowed(&m.slots),
-            (None, None) => std::borrow::Cow::Owned(self.resolve_field_ics(
-                &resolved_params,
-                None,
-                discrete_forcing,
-            )?),
+            (None, None) => {
+                std::borrow::Cow::Owned(self.resolve_field_ics(&resolved_params, None, start)?)
+            }
         };
         // Per slot, the first of: an explicit override, an initialization
         // equation, a field `ic`, the variable's default. Written lowest
@@ -1706,12 +1768,23 @@ impl ArrayCompiled {
         // carrying the `NaN` the gather substituted.
         crate::simulate_array::take_const_array_oob();
         let param_vec = self.build_param_vec(params_owned)?;
-        let ic_vec = self.build_initial_state(ics_owned, &param_vec, discrete_forcing)?;
 
         // Seed the forcing buffer at t0 BEFORE the static hoist reads it — a
         // no-op for the CONST/single-segment path; for DISCRETE it primes the
-        // first record so the static regrid geometry sees a populated buffer.
+        // first record so the static regrid geometry sees a populated buffer —
+        // and before the initial state, whose `ic` right-hand sides read the
+        // data-fed fields at t0 (esm-spec §11.4.2).
         refresh_fn(t0)?;
+        let no_exclusions = HashSet::new();
+        let ic_vec = self.build_initial_state(
+            ics_owned,
+            &param_vec,
+            &IcStart {
+                t0,
+                at_t0: None,
+                exclude: &no_exclusions,
+            },
+        )?;
 
         // The tape is built BEFORE the static hoist, not after it. Under
         // either strict compiler the hoist is served FROM the tape (see

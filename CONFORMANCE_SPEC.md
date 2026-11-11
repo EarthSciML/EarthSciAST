@@ -7614,6 +7614,44 @@ the time each is sampled at (`tspan[0]`, or an explicit `sample_time`).
 and Rust `pkg/earthsci-ast-rs/tests/provider_forcing_conformance.rs`. Python's
 `rhs_program` raises `compiler_unavailable`; Go and TypeScript do not simulate.
 
+### 5.56 An `ic` Right-Hand Side Is Evaluated at the Start of the Run (normative)
+
+**Decision pinned.** An `ic` right-hand side is evaluated once, at `t0 =
+tspan[0]` (esm-spec §11.4.2), in the start-of-run scope: the independent
+variable `t` bound to `t0`, every parameter (scalar or shaped), every data-fed
+parameter at the value its provider gives at `t0` (not at `sample_time`; the
+declared default where no record is in effect), and every observed over those,
+scalar or array-valued. An `ic` right-hand side that reads a state, directly or
+through observeds, is refused at construction with `ic_reads_state`.
+
+**Reason.** A model whose initial field is a function of time-varying data —
+an air mass that starts at the hydrostatic layer thickness `dA[k] + dB[k]·PS`,
+with `PS` blended between two surface-pressure records by a weight computed
+from `t` — had to copy its coefficient tables inline and hard-code the blend
+weight of one start time. Binding `t` to the literal `0`, or reading the
+provider at `sample_time` or at whatever record an earlier solve left in the
+forcing buffer, gives a plausible initial state for the wrong instant.
+
+**Shape.** `tests/conformance/ic_at_start/manifest.json` lists cases over five
+fixtures: `ic_reads_t.esm` (a 0-D `ic` reading `t` and an array `ic` reading an
+array observed of `t`, at `t0 = 10` and `t0 = 0`); `ic_reads_t_scalar.esm` (the
+same on a document with no array state, so the scalar runtimes build it, and
+under a parameter override); `ic_data_fed.esm` (the air-mass pattern: shaped
+parameters with inline defaults, a two-record data-fed parameter blended by an
+observed weight of `t`, and a 0-D data-fed parameter, under discrete providers
+at `t0 = 5` and `t0 = 0`, with `sample_time = 0` differing from `t0 = 5`, under
+const providers, under bare provider keys, and with no providers);
+`ic_reads_state.esm` and `ic_reads_state_scalar.esm` (refusals: an array state
+read through an observed, and a 0-D state read directly). Provider values are
+dyadic rationals and the formulas are exact in binary64.
+
+**Adapters.** Julia `pkg/EarthSciAST.jl/test/conformance_ic_at_start_test.jl`,
+Python `pkg/earthsci-ast-py/tests/test_ic_at_start_conformance.py`, Rust
+`pkg/earthsci-ast-rs/tests/ic_at_start_conformance.rs` (which also checks the
+`initial_state` accessor against the solve bit for bit, before and after a
+solve, and that `remake` to a new `tspan` re-evaluates at the new start). Go
+and TypeScript do not simulate.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

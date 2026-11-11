@@ -129,6 +129,9 @@ class ErrorCode(Enum):
     INVALID_STOICHIOMETRY = "invalid_stoichiometry"
     NEGATIVE_STOICHIOMETRY = "negative_stoichiometry"
     IC_IN_REACTION_SYSTEM = "ic_in_reaction_system"
+    # esm-spec §11.4.2: an `ic` right-hand side reads a state, directly or
+    # through observeds; refused at construction, not by `validate`.
+    IC_READS_STATE = "ic_reads_state"
     UNDECLARED_PARAMETER = "undeclared_parameter"
     UNDECLARED_RATE_VARIABLE = "undeclared_rate_variable"
     INVALID_RATE_EXPRESSION = "invalid_rate_expression"

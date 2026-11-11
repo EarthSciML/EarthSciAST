@@ -469,13 +469,9 @@ end
                 )
             )
         )
-        for rhs in (
-                    1.5, Dict(
-                        "op" => "sin", "args" => Any[
-                            Dict("op" => "index", "args" => Any["f", 1]),
-                        ]
-                    ),
-                ),
+        # The second right-hand side is no constant (it reads the coordinate
+        # `y`), so only the per-cell seed could serve it.
+        for rhs in (1.5, Dict("op" => "sin", "args" => Any["y"])),
                 c in (:native, :interpreter)
             e = try
                 esm_problem(doc(rhs), (0.0, 1.0); compiler = c); nothing
@@ -484,6 +480,20 @@ end
             end
             @test e isa _PR.TreeWalkError && e.code == "E_TREEWALK_UNSUPPORTED_EQUATION"
             @test occursin("resolves to no array cells", sprint(showerror, e))
+        end
+        # One that reads a state is refused before any cell is looked at: it has
+        # no value at the start of the run (esm-spec §11.4.2).
+        reads_state = Dict(
+            "op" => "sin", "args" => Any[Dict("op" => "index", "args" => Any["f", 1])]
+        )
+        for c in (:native, :interpreter)
+            e = try
+                esm_problem(doc(reads_state), (0.0, 1.0); compiler = c); nothing
+            catch err
+                err
+            end
+            @test e isa _PR.TreeWalkError && e.code == "ic_reads_state"
+            @test occursin("ic(N.f) reads 'N.f', a state", sprint(showerror, e))
         end
     end
 

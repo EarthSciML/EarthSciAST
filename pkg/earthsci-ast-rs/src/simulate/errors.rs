@@ -240,6 +240,17 @@ pub enum SimulateError {
         details: String,
     },
 
+    /// An `ic` right-hand side reads a state, directly or through observeds
+    /// (esm-spec §11.4.2): it has no value at the start of the run, so
+    /// construction refuses it.
+    #[error("ic_reads_state: ic({name}) {details}")]
+    IcReadsState {
+        /// The `ic(...)` target state name.
+        name: String,
+        /// The chain of reads that reaches the state.
+        details: String,
+    },
+
     /// A data provider bound in [`crate::problem::ProblemOptions`] failed to
     /// materialize its loader field, or produced the wrong number of fields for
     /// its target forcing variable.

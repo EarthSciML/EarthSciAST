@@ -1054,7 +1054,17 @@ struct EsmProblem
     # — is naming a quantity that MOVED, not one that never existed. Empty for a
     # document with no renaming merge, which is the overwhelming majority.
     merged_renames::OrderedDict{String, String}
+    # `(; seed, overrides)`, `seed(t0, overrides) -> u0`: this problem's
+    # initial state at another start of the run, for a document whose `ic`
+    # right-hand sides read the start (`t`, a data-fed parameter; esm-spec
+    # §11.4.2). `remake` with a new `tspan` calls it. `nothing` when the
+    # initial state does not depend on the start.
+    ic_restart::Any
 end
+
+# Every construction site that predates `ic_restart` builds a problem whose
+# initial state does not move with its start.
+EsmProblem(args::Vararg{Any, 23}) = EsmProblem(args..., nothing)
 
 function Base.show(io::IO, prob::EsmProblem)
     # A compiler that built its own program carries its own parameter object
@@ -1216,6 +1226,11 @@ struct _ProgramSeedRecipe
     # The whole-model program when `esm_problem(…; program_build = true)` built
     # it as the Problem's own right-hand side; `nothing` otherwise.
     program::Base.RefValue{Any}
+    # The start of the run and the data-fed values there, which the `ic`
+    # right-hand sides read (esm-spec §11.4.2; `_build_evaluator`'s `_ic_t0`,
+    # `_ic_data`).
+    ic_t0::Float64
+    ic_data::Dict{String, Any}
 end
 
 # The seed of `prob`'s programs, built once from its recipe; `nothing` for a
@@ -1289,6 +1304,7 @@ function _recipe_seed(
             param_arrays = Dict{String, Any}(param_buffers),
             gated_providers = r.gated_providers, sample_time = r.sample_time,
             runtime_array_parameters = r.runtime_array_parameters,
+            ic_t0 = r.ic_t0, ic_data = r.ic_data,
         )
     end
 end
@@ -1428,7 +1444,10 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   directory).
 * `sample_time::Real = tspan[1]` — the `t` at which providers are sampled for
   the build. A CONST provider is time-invariant by contract; DISCRETE buffers
-  seeded here are re-seeded at each run's `t0` anyway.
+  seeded here are re-seeded at each run's `t0` anyway. An `ic` right-hand side
+  reads every data-fed parameter at `tspan[1]`, whatever `sample_time` is
+  (esm-libraries-spec §2.5.2): a discrete provider is sampled there too when
+  the two differ, for the initial state only.
 * `compiler::Symbol` — which strategy builds the right-hand side, over the
   closed vocabulary `:interpreter`, `:native`, `:xla`, `:mtk`, `:sympy`
   (esm-libraries-spec §2.5.10). Unnamed, it is `:native`. Read back with
@@ -1774,6 +1793,7 @@ function esm_problem(
     merged_const = Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
     merged_param = Dict{String, Any}(String(k) => v for (k, v) in param_arrays)
     discrete_providers = Dict{String, Any}()
+    ic_data = Dict{String, Any}()
     # Phase 2b Hook 2: GATED providers are DEFERRED — not pulled whole here, but
     # stashed and fetched pre-sliced after value-invention (the const-tier
     # dependency edge). A provider is gated when it reports a `provider_gate_spec`
@@ -1829,6 +1849,15 @@ function esm_problem(
                     provider_sample(prov, t_sample), k; shape = get(provider_shapes, tk, nothing)
                 )
                 discrete_providers[tk] = prov
+                # An `ic` right-hand side reads the record at the run's start,
+                # whatever `sample_time` the forcing holds (esm-libraries-spec
+                # §2.5.2); sampled again only when the two differ.
+                t_sample == span[1] || (
+                    ic_data[tk] = forcing_from_sample(
+                        provider_sample(prov, span[1]), k;
+                        shape = get(provider_shapes, tk, nothing)
+                    )
+                )
             end
         end
         _rekey_discrete_providers!(
@@ -1881,7 +1910,8 @@ function esm_problem(
         Set{String}(keys(discovered)), provider_shapes, Set{String}(keys(pd_gates)),
         pd_coupling,
         gated_providers, t_sample, runtime_array_parameters,
-        Ref{Any}(nothing), ReentrantLock(), Ref{Any}(nothing)
+        Ref{Any}(nothing), ReentrantLock(), Ref{Any}(nothing),
+        span[1], ic_data
     )
     # `:xla` is built OUT OF PLACE — the compiled tree-walk intermediate
     # representation is what the direct StableHLO emitter lowers — and the
@@ -1919,7 +1949,8 @@ function esm_problem(
                 # Phase 2b Hook 2: deferred gated providers + the build-time sample tick.
                 # The front door fetches these pre-sliced right after value-invention.
                 _gated_providers = gated_providers,
-                _sample_time = t_sample
+                _sample_time = t_sample,
+                _ic_t0 = span[1], _ic_data = ic_data
             )
         end
     end
@@ -1941,6 +1972,13 @@ function esm_problem(
         _seed_u0(u0_built, var_map, u0, seed_ic!)
     end
     _refuse_missing_initial_values(insp.unvalued_slots, u0_built, var_map, u0, seed_ic!)
+    # The same seeding at another start of the run, when the document's `ic`
+    # right-hand sides read it: the build's re-seed with each discrete
+    # provider sampled at the new start, then the caller's `u0` and hook.
+    ic_restart = _ic_restart(
+        insp.ic_reseed, discrete_providers, provider_shapes, var_map, u0, seed_ic!,
+        compiler
+    )
 
     # ---- the problem's callback set (§2.5.4) --------------------------------
     # Composed HERE, at construction, because a callback that refreshes provider
@@ -2009,10 +2047,34 @@ function esm_problem(
         run_file, param_classes, insp,
         _compose_callbacks(cbs), tstops, save_everystep,
         sink_vec, _distinct_sinks(sink_vec, ck_vec), Ref{Any}(nothing),
-        merged_renames
+        merged_renames, ic_restart
     )
     prob_ref[] = prob
     return prob
+end
+
+# `esm_problem`'s initial-state seeding as a function of the start of the run
+# (`EsmProblem.ic_restart`): `seed(t0, overrides)`, where `overrides` are the
+# `u0` overrides `remake` has applied since, each on top of the last. `nothing`
+# when the build's initial state does not depend on the start.
+function _ic_restart(reseed, discrete_providers, provider_shapes, var_map, u0, seed_ic!, compiler)
+    reseed === nothing && return nothing
+    providers = copy(discrete_providers)
+    seed = function (t0::Float64, overrides = ())
+        data = Dict{String, Any}(
+            k => forcing_from_sample(
+                provider_sample(prov, t0), k; shape = get(provider_shapes, k, nothing)
+            ) for (k, prov) in providers
+        )
+        return _with_compiler_plan(_plan_for(compiler)) do
+            out = _seed_u0(reseed(t0, data), var_map, u0, seed_ic!)
+            for o in overrides
+                out = _seed_u0(out, var_map, o, nothing)
+            end
+            out
+        end
+    end
+    return (; seed, overrides = ())
 end
 
 # A Problem built as its program reads every externally fed parameter from a
@@ -2639,7 +2701,10 @@ right-hand side.
 * `u0` — an `AbstractDict` of per-element / broadcast overrides applied on top of
   this problem's seeded state, or an `AbstractVector` replacing it outright.
   Always applied to a COPY, so `prob`'s own `u0` is untouched.
-* `tspan` — a new `(t0, t1)`.
+* `tspan` — a new `(t0, t1)`. A new start `t0` evaluates the document's `ic`
+  right-hand sides again at it, where they read the start (`t`, a data-fed
+  parameter, an observed over those; esm-spec §11.4.2), with the caller's `u0`
+  overrides applied on top as before.
 * `callback` — replace the problem's callback set (§2.5.4). Omit to keep it.
 
 Refusal behaviour is preserved from `remake_parameters`: a substitution the
@@ -2658,9 +2723,21 @@ function remake(
     )
     p_new = p === nothing ? prob.p :
         p isa AbstractDict ? remake_parameters(prob, p) : p
-    u0_new = u0 === nothing ? copy(prob.u0) :
-        _seed_u0(prob.u0, prob.var_map, u0, nothing)
     span = tspan === nothing ? prob.tspan : (Float64(tspan[1]), Float64(tspan[2]))
+    # A new start re-evaluates the `ic` right-hand sides that read it (esm-spec
+    # §11.4.2), with every `u0` override a remake has applied since on top.
+    restart = prob.ic_restart
+    if restart !== nothing
+        overrides = u0 === nothing ? restart.overrides : (restart.overrides..., u0)
+        restart = (; seed = restart.seed, overrides)
+    end
+    u0_new = if restart !== nothing && span[1] != prob.tspan[1]
+        restart.seed(span[1], restart.overrides)
+    elseif u0 === nothing
+        copy(prob.u0)
+    else
+        _seed_u0(prob.u0, prob.var_map, u0, nothing)
+    end
     cb = callback === _KEEP_CALLBACKS ? prob.callback : callback
     # The symbol cache is a function of `var_map` and the `p` NAMES, neither of
     # which a Dict-driven swap can change — so it is shared. A verbatim carrier
@@ -2673,6 +2750,6 @@ function remake(
         prob.output_meta, prob.run_doc, prob.run_file,
         prob.param_classes, prob.inspection, cb, prob.tstops,
         prob.save_everystep, prob.sinks, prob.lifecycle_sinks, sc,
-        prob.merged_renames
+        prob.merged_renames, restart
     )
 end

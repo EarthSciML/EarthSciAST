@@ -2447,6 +2447,7 @@ pub fn esm_problem<'a>(
         #[cfg(target_arch = "wasm32")]
         &std::collections::HashSet::new(),
         &opts.p,
+        tspan.0,
     )?;
     compiler_report.rules.splice(0..0, route_rows);
 
@@ -3003,6 +3004,7 @@ fn build_compiler_report(
     compiler: Compiler,
     discrete_forcing: &std::collections::HashSet<String>,
     #[cfg_attr(not(feature = "solve"), allow(unused_variables))] p: &HashMap<String, f64>,
+    #[cfg_attr(not(feature = "solve"), allow(unused_variables))] t0: f64,
 ) -> Result<CompilerReport, SimulateError> {
     let compiled = match backend {
         // No compiled model. A state-free document's observed graph was
@@ -3021,7 +3023,10 @@ fn build_compiler_report(
     {
         let model = model_name.unwrap_or("");
         let mut ic_rows = Vec::new();
-        for r in compiled.field_ic_records(p, compiler.is_strict()) {
+        // An `ic` that reads a state has no value at the start of the run
+        // (esm-spec §11.4.2): refused before anything evaluates one.
+        compiled.refuse_ic_state_reads()?;
+        for r in compiled.field_ic_records(p, compiler.is_strict(), t0, discrete_forcing) {
             let reason = r.per_cell.then(|| {
                 "evaluated by the reference evaluator at setup, and a `faq` in it is not one \
                  the whole-array overlay takes, so it was walked once per cell"
@@ -4664,6 +4669,49 @@ fn sample_discrete_providers(
     seed_vacant_discrete(compiled, &vacant, given, "sample_time", sample_time)
 }
 
+/// The DISCRETE-fed fields at `t0`, the start of the run, in a buffer of
+/// their own: each provider's record in effect at `t0`, else the declared
+/// default (as a solve's start gives it), without touching the Problem's
+/// forcing. What an `ic` right-hand side reads (esm-spec §11.4.2).
+#[cfg(all(feature = "solve", not(target_arch = "wasm32")))]
+fn discrete_at_start(
+    compiled: &ArrayCompiled,
+    exec: &SharedRefresh,
+    discrete: &std::collections::HashSet<String>,
+    t0: f64,
+    given: &HashMap<String, String>,
+) -> Result<HashMap<String, ndarray::ArrayD<f64>>, SimulateError> {
+    let scratch: crate::provider::ForcingBuffer = Rc::new(std::cell::RefCell::new(HashMap::new()));
+    let vacant = exec
+        .borrow_mut()
+        .sample_in_effect(t0, &scratch, &mut Vec::new())
+        .map_err(|e| loader_error(given, e))?;
+    let mut out = std::mem::take(&mut *scratch.borrow_mut());
+    for name in discrete.iter().filter(|n| vacant.contains(n)) {
+        if !compiled.serves_forcing(name) {
+            continue;
+        }
+        match declared_default_forcing(compiled, name) {
+            Some(Some(value)) => {
+                out.insert(name.clone(), value);
+            }
+            Some(None) => {}
+            None => {
+                let key = given.get(name).map_or(name.as_str(), String::as_str);
+                return Err(SimulateError::ProviderError {
+                    name: key.to_string(),
+                    details: format!(
+                        "the provider has no record in effect at the start of the run {t0} \
+                         (it delivered nothing there, nor at a refresh time before it), and \
+                         the parameter `{name}` it feeds declares no default"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Give each DISCRETE-fed name in `vacant` (no record in effect at `t`) its
 /// declared default (esm-spec §6.3). Only a parameter the model reads from
 /// the forcing buffer is required to have a value: one that declares no
@@ -4857,21 +4905,40 @@ pub fn initial_state(prob: &EsmProblem) -> Result<Vec<f64>, SimulateError> {
     let _precision_guard = prob.precision.enter();
     reject_f32_integration(prob)?;
     // The discrete-cadence fields the solve's own refresh would write: none
-    // when the Problem holds no executor, as in `solve`.
+    // when the Problem holds no executor, as in `solve`. An `ic` right-hand
+    // side reads each at its value at the start of the run (esm-spec
+    // §11.4.2), which is not necessarily the record the forcing buffer holds
+    // (construction sampled `sample_time`; a solve leaves a later record), so
+    // the providers are sampled at `tspan.0` into a buffer of their own.
     let none = std::collections::HashSet::new();
+    let t0 = prob.tspan.0;
     #[cfg(not(target_arch = "wasm32"))]
-    let discrete_forcing = if prob.refresh.is_some() {
-        &prob.discrete_forcing
-    } else {
-        &none
+    let (discrete_forcing, at_t0) = match (&prob.refresh, &*prob.backend) {
+        (Some(exec), Backend::Array(compiled)) if !prob.discrete_forcing.is_empty() => (
+            &prob.discrete_forcing,
+            Some(discrete_at_start(
+                compiled,
+                exec,
+                &prob.discrete_forcing,
+                t0,
+                &prob.provider_keys,
+            )?),
+        ),
+        _ => (&none, None),
     };
     #[cfg(target_arch = "wasm32")]
-    let discrete_forcing = &none;
+    let (discrete_forcing, at_t0): (_, Option<HashMap<String, ndarray::ArrayD<f64>>>) =
+        (&none, None);
+    let start = crate::simulate_array::IcStart {
+        t0,
+        at_t0: at_t0.as_ref(),
+        exclude: discrete_forcing,
+    };
     match &*prob.backend {
         Backend::Static(reason) => Err(SimulateError::NotDynamic {
             details: reason.clone(),
         }),
-        Backend::Array(compiled) => compiled.initial_state(&prob.p, &prob.u0, discrete_forcing),
+        Backend::Array(compiled) => compiled.initial_state(&prob.p, &prob.u0, &start),
     }
 }
 

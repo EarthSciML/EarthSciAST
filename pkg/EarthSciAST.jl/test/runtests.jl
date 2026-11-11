@@ -172,6 +172,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("program_build_test.jl")                      # esm_problem(…; program_build = true)
     include("conformance_public_rhs_program_test.jl")     # CONFORMANCE_SPEC §5.51
     include("conformance_provider_forcing_test.jl")      # providers and the default forcing (API_SPEC §5.8)
+    include("conformance_ic_at_start_test.jl")           # an `ic` is evaluated at the run's start (esm-spec §11.4.2)
     # Every per-cell route under a strict `native`: refused by name, or compiled
     # once and reported under a tier that says so.
     include("percell_route_refusal_test.jl")

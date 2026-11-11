@@ -1914,7 +1914,7 @@ function flattened_to_esm(
     # DOCUMENT spells an initial condition as exactly an `ic(state) ~ rhs`
     # equation (esm-spec §11.4.1), so they are re-emitted here. Dropping them
     # would make the reconstituted document lose its `u0`: the tree-walk build's
-    # `_fold_ic_equations` reads `ic` out of the document's `equations`, and
+    # `_split_ic_equations` reads `ic` out of the document's `equations`, and
     # without this every field-IC'd state silently seeds to its bare `default`.
     equations = Any[serialize_equation(eq) for eq in flat.equations]
     for (state, rhs) in flat.field_ics

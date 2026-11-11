@@ -355,6 +355,20 @@ construction, and a literal zero default silently samples the wrong instant for
 any run that does not start at `t = 0`. A binding MUST default it to the start of
 the integration interval and MUST let a caller override it.
 
+**An `ic` reads its data at the run's start, not at `sample_time`.** An `ic`
+right-hand side is evaluated once, at `tspan[0]` (esm-spec §11.4.2), and a
+data-fed parameter it reads, directly or through an observed, has the value its
+provider gives at `tspan[0]`, the value a solve's first refresh writes there.
+When `sample_time` differs from `tspan[0]`, construction's forcing holds the
+`sample_time` record and the initial state still reads the `tspan[0]` one; a
+binding samples its providers at `tspan[0]` for that purpose without changing
+the Problem's forcing. The independent variable in an `ic` right-hand side is
+`tspan[0]` too. The initial state is therefore the same whether it is read
+before any solve (`initial_state`, API_SPEC §5.8), at the start of a solve, or
+after an earlier solve left a later record in the forcing buffer. An `ic`
+right-hand side that reads a state is refused at construction with
+`ic_reads_state`.
+
 **Construction takes the `compiler`** (§2.5.10), which names WHICH build
 strategy produces the right-hand side. It is a document-fixing binding like the
 others in this section, not a per-run knob, which is why it belongs here and not
@@ -479,6 +493,9 @@ substitutions applied and everything else shared. It MUST NOT mutate the
 original, and it MUST NOT redo the parts of construction the substitution cannot
 have invalidated — a changed parameter value does not re-fetch provider data or
 recompile the right-hand side.
+
+A `remake` that changes `tspan` changes the start of the run, so the `ic`
+right-hand sides are evaluated at the new `tspan[0]` (esm-spec §11.4.2).
 
 `remake` generalizes Julia's `remake_parameters`, which took parameters only.
 Refusal behavior is preserved: a substitution that a Problem cannot honor
