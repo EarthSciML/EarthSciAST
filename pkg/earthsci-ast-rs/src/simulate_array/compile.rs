@@ -512,8 +512,8 @@ pub(crate) fn promote_conditional_shapes(
 /// rank no declaration fixes: an observed defined by a table lookup, or a
 /// data-fed parameter declared without a shape, whose data supplies an array.
 /// The NEI2016 emission observeds in reseact are the first kind:
-/// `CO = ifelse(lev < 2, flux_CO / days_in_month / (g0_100 * delp_dry_surface)
-/// * …, 0.0)` with `flux_CO` a `[nei_lay, nei_row, nei_col]` field, and
+/// `CO = ifelse(lev < 2, flux_CO / days_in_month / delp_dry_surface …, 0.0)`
+/// with `flux_CO` a `[nei_lay, nei_row, nei_col]` field, and
 /// `days_in_month` and `delp_dry_surface` gathers from `const` tables, which
 /// are scalars only once evaluated. `CO` is then an array of zeros when the
 /// condition fails, not a scalar `0.0`. Both evaluators ask this when they
