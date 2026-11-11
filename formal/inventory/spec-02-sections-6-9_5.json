@@ -460,6 +460,32 @@
       "note": "A data update whose source is not a key of data_sources is rejected with data_source_undefined."
     },
     {
+      "id": "spec.8.5.1.record-axis-size-two",
+      "section": "8.5.1",
+      "quote": "Its `size` MUST be 2 (after metaparameter folding, §9.7.6).",
+      "class": "semantic",
+      "phase": 5,
+      "area": "data_sources",
+      "note": "An index set carrying \"records\": true whose folded size is not 2 is rejected with record_axis_invalid at /index_sets/<name>."
+    },
+    {
+      "id": "spec.8.5.1.written-records-agree",
+      "section": "8.5.1",
+      "quote": "`temporal.records_per_sample`) MUST equal the number of records its record shape gives it.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "data_sources",
+      "note": "A deprecated records_per_sample (the rule's own, else its source's) that differs from the count the record shape gives (2 when it begins with a record axis, else 1) is rejected with records_per_sample_invalid."
+    },
+    {
+      "id": "spec.8.5.1.provider-refuses-unseen-record-shape",
+      "section": "8.5.1",
+      "quote": "and with none written the provider MUST refuse the parameter, naming it, rather than assume one record.",
+      "class": "out_of_scope",
+      "area": "data_sources",
+      "note": "providers_from_document refuses a data-fed parameter whose record shape depends on a param_to_var target the given document does not show, when no deprecated value is written; a runtime provider concern, not a property of the document."
+    },
+    {
       "id": "spec.8.6.1.ring-padding-accepted",
       "section": "8.6.1",
       "quote": "from the plain distinct-vertex ring MUST be accepted by every binding:",
