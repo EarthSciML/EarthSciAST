@@ -2,9 +2,10 @@
 # builds, all native, run while the package precompiles,
 # so the native build pipeline's own methods (the join-gate builder, a
 # construction-time fill, the affine kernel tier and its code generation, a
-# const-array gather) are compiled into the package image instead of on a
-# session's first build. Every document is built in memory; nothing
-# reads the network or a file. The builds are single-threaded (precompilation
+# const-array gather, a standard-library template under an overlap join) are
+# compiled into the package image instead of on a session's first build. Every
+# document is built in memory; nothing reads the network, and the only file
+# read is the bundled standard library. The builds are single-threaded (precompilation
 # runs one thread), so neither the threaded dispatch nor any extension is
 # exercised.
 
@@ -147,7 +148,65 @@ const _WORKLOAD_DOCS = (
             ),
         ]
     )
+    # The ISRM binning shape: records summed onto the grid cells their
+    # envelopes overlap, each pair's area by the library's planar overlap
+    # template, materialized at construction (an observed of const rings).
+    _pw_ring(x0, y0, x1, y1) = [x0 y0; x1 y0; x1 y1; x0 y1]
+    _pw_stack(rs) = permutedims(cat(rs...; dims = 3), (3, 1, 2))
+    cells = [_pw_ring(i, 0.0, i + 1.0, 1.0) for i in 0.0:1.0]
+    recs = [_pw_ring(0.25, 0.25, 0.75, 0.5), _pw_ring(0.5, 0.5, 1.5, 0.75)]
+    _pw_env(rs, k) = Float64[r[k <= 2 ? 1 : 3, 2 - k % 2] for r in rs]
+    binning_arrays = Dict{String, Any}("cring" => _pw_stack(cells), "pring" => _pw_stack(recs))
+    for (k, n) in enumerate(("x0", "y0", "x1", "y1"))
+        binning_arrays["c" * n] = _pw_env(cells, k)
+        binning_arrays["p" * n] = _pw_env(recs, k)
+    end
+    binning = _pw_doc(
+        "pw_binning", ("cells" => 2, "recs" => 2, "vert" => 4, "xy" => 2),
+        merge(
+            Dict{String, Any}(
+                "cring" => _pw_var("parameter", "default" => 0.0, "shape" => ["cells", "vert", "xy"]),
+                "pring" => _pw_var("parameter", "default" => 0.0, "shape" => ["recs", "vert", "xy"]),
+                "out" => _pw_var("unknown", "shape" => ["cells"])
+            ),
+            Dict{String, Any}(
+                s * n => _pw_var("parameter", "default" => 0.0, "shape" => [s == "c" ? "cells" : "recs"])
+                    for s in ("c", "p") for n in ("x0", "y0", "x1", "y1")
+            )
+        ),
+        Any[
+            Dict{String, Any}(
+                "lhs" => "out", "rhs" => _pw_faq(
+                    ["c"], Dict{String, Any}("c" => _pw_from("cells"), "r" => _pw_from("recs")),
+                    Dict{String, Any}(
+                        "op" => "apply_expression_template", "args" => Any[],
+                        "name" => "overlap_area_planar",
+                        "bindings" => Dict{String, Any}(
+                            "ring_a" => "pring", "cell_a" => "r", "nv_a" => 4,
+                            "ring_b" => "cring", "cell_b" => "c", "nv_b" => 4
+                        )
+                    ),
+                    "reduce" => "+",
+                    "join" => Any[
+                        Dict{String, Any}(
+                            "overlap" => Dict{String, Any}(
+                                "src_env" => ["px0", "py0", "px1", "py1"],
+                                "tgt_env" => ["cx0", "cy0", "cx1", "cy1"], "eps" => 0.0
+                            )
+                        ),
+                    ]
+                )
+            ),
+        ]
+    )
+    binning["models"]["M"]["expression_template_imports"] = Any[
+        Dict{String, Any}("ref" => "esm:std/geometry.esm", "only" => ["overlap_area_planar"]),
+    ]
     @compile_workload begin
+        observed_field(
+            esm_problem(binning, (0.0, 0.0); compiler = :native, const_arrays = binning_arrays),
+            "M.out"
+        )
         for json in _WORKLOAD_DOCS
             prob = esm_problem(load_string(json), (0.0, 1.0); compiler = :native)
             prob.f!(similar(prob.u0), prob.u0, prob.p, 0.0)
@@ -167,4 +226,11 @@ const _WORKLOAD_DOCS = (
     _CELLWISE_FASTPATH_HITS[] = 0
     _CELLWISE_FASTPATH_MISS[] = 0
     _VI_ENUM_VISITS[] = 0
+    _SETUP_MAP_FASTPATH_HITS[] = 0
+    for r in (
+            _GEOM_SWEEP_FAST, _GEOM_SWEEP_REF, _GEOM_OVERLAP_DRIVE,
+            _GEOM_OVERLAP_GATE_ONLY, _GEOM_OVERLAP_NONE, _GEOM_EQ_DRIVE,
+        )
+        r[] = 0
+    end
 end

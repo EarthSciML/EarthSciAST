@@ -98,14 +98,38 @@ end
 # numbering `_vn!` of access_kernel.jl), an object by identity, a payload by its
 # contents, and each node's number under each environment of loop binders it
 # was keyed in.
+# Content numbers of constant-array buffers: equal contents, equal numbers.
+# Every gather site's `_ConstGatherArray` holds its own `vec` of the source
+# array, aliasing one buffer (`_const_gather_node`), so a buffer is looked up by
+# its address and length first and its contents hashed once, not once per site.
+# The table holds each buffer it has seen, so no address is reused under it.
+struct _FlatContentIds
+    bufs::Dict{Tuple{UInt, Int}, Tuple{Vector{Float64}, Int}}
+    ids::Dict{_VNKey, Int}
+end
+_FlatContentIds() = _FlatContentIds(
+    Dict{Tuple{UInt, Int}, Tuple{Vector{Float64}, Int}}(), Dict{_VNKey, Int}()
+)
+
+function _flat_content_id!(t::_FlatContentIds, flat::Vector{Float64})
+    at = (UInt(pointer(flat)), length(flat))
+    got = get(t.bufs, at, nothing)
+    got === nothing || return got[2]
+    id = _vn!(t.ids, reinterpret(UInt64, flat))
+    t.bufs[at] = (flat, id)
+    return id
+end
+
 struct _CGShareKeys
     ids::Dict{_VNKey, Int}
     objs::IdDict{Any, Int}
     pays::IdDict{Any, Int}
     memo::Dict{Tuple, _NodeMap{Int}}
+    flats::_FlatContentIds
 end
 _CGShareKeys() = _CGShareKeys(
-    Dict{_VNKey, Int}(), IdDict{Any, Int}(), IdDict{Any, Int}(), Dict{Tuple, _NodeMap{Int}}()
+    Dict{_VNKey, Int}(), IdDict{Any, Int}(), IdDict{Any, Int}(), Dict{Tuple, _NodeMap{Int}}(),
+    _FlatContentIds()
 )
 
 # Emission context for a scalar spine. `loops` maps a loop counter `Ref` — the
@@ -399,7 +423,7 @@ function _cg_share_pay!(K::_CGShareKeys, pl)
     got = get(K.pays, pl, 0)
     got == 0 || return got
     key = if pl isa _ConstGatherArray
-        (:cga, reinterpret(UInt64, pl.flat), pl.strides, pl.dims, pl.boundary, pl.name)
+        (:cga, _flat_content_id!(K.flats, pl.flat), pl.strides, pl.dims, pl.boundary, pl.name)
     elseif pl isa _StateGather
         (:sg, pl.slot_flat, pl.strides, pl.lo, pl.hi, pl.len)
     else

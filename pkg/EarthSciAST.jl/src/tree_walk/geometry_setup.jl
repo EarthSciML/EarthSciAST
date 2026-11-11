@@ -556,22 +556,22 @@ end
 # the conservative-regrid shapes it is also value-NEUTRAL: disjoint envelopes ⇒
 # disjoint polygons ⇒ the overlap-area template returns exactly `+0.0`, which is
 # what the `zeros` init already holds, and the applies' `A_ij > atol` filter drops
-# those terms anyway. Materializing the same array under both compilers checks
-# that on a real model rather than arguing it. A document where a pruned tuple WOULD have contributed (a
-# `min`/`prod` fold with no sliver filter) is a genuine behavior change — see
-# `geom_overlap_drive_test.jl`, which pins exactly that case so the change is
-# visible rather than silent. Under `reduce: min` the ungated sweep folds in the
-# exact `0.0` a DISJOINT pair computes and drives the reduction to zero, while 0̄
-# for `min` is `+Inf` — so the gated answer is the §5.3 one.
+# those terms anyway. Where a pruned tuple WOULD contribute (a `min`/`prod` fold
+# with no sliver filter, a body that is not zero off the overlap) the clause
+# changes the answer, and both compilers give the gated one (CONFORMANCE_SPEC
+# §5.5.6, join admission and identity fill): the interpreter tests membership
+# per tuple, `native` drives. `geom_overlap_drive_test.jl` pins that case.
 #
 # SCOPE: the TOP-LEVEL materialization sweep only. A nested `:geo_agg` in the body
 # keeps its ungated behaviour (`_geo_compile_agg` still routes through
 # `_resolve_geo_join_gates`); no shipped template puts an overlap clause on a
 # nested aggregate, and gating one would need its own drive plan.
 
-# Off, resolution is skipped entirely and the sweep is the ungated dense one.
-# That is the differential oracle for this change.
-_geom_overlap_gate_disabled() = !_compiler_plan_now().geom_overlap_gate
+# The clause is part of the document's meaning, so every compiler applies it.
+# Off (`compiler=:interpreter`), the gate is applied as a per-tuple membership
+# test over the dense product and never drives the enumeration: that is the
+# differential oracle for the driven sweeps.
+_geom_overlap_drive_disabled() = !_compiler_plan_now().geom_overlap_gate
 
 # ENGAGEMENT DIAGNOSTICS. DRIVE counts sweeps whose enumeration was driven from
 # the candidate set (the O(#candidates) path); GATE_ONLY those where a gate
@@ -627,10 +627,9 @@ end
 
 # Resolve this aggregate's FIRST usable `overlap` clause against the sweep's
 # lexical scope. Declines (⇒ `nothing`, i.e. the historic ungated sweep) when
-# the kill switch is set, when either env-factor list does not map to a loop var
-# in scope, or when a named envelope factor is not a materialized array in
-# `env`. Every decline is a decline to a path that still produces the OLD
-# values, never a silent wrong answer.
+# either env-factor list does not map to a loop var in scope, or when a named
+# envelope factor is not a materialized array in `env`; every compiler declines
+# alike, so the compilers agree there.
 #
 # The env-factor → loop-var rule is the setup path's own `_geo_loopvar_for`
 # (the same one the bin-equality `on` keys use): the FIRST factor's FIRST shape
@@ -642,7 +641,6 @@ end
 # still gives the old values; the right-hand side throws `E_TREEWALK_JOIN_OVERLAP`.
 function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)
     faq.join === nothing && return nothing
-    _geom_overlap_gate_disabled() && return nothing
     for clause in faq.join
         clause isa _OverlapJoinSpec || continue
         isempty(clause.src_env) && continue
@@ -985,7 +983,7 @@ function _materialize_geom_array(
     # else keeps the dense sweep with the membership test applied per tuple
     # (`ov`), which is the same admitted set at the full product's cost.
     ov = _geo_overlap_gate(faq, ctx, setof, scope, ov_cache)
-    drive = ov === nothing ? nothing :
+    drive = ov === nothing || _geom_overlap_drive_disabled() ? nothing :
         _geo_overlap_drive(
             ov, out, contract, exts, index_sets, derived_extents,
             faq
