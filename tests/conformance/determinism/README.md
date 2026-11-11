@@ -8,7 +8,7 @@ The adversarial harness for the **cross-binding determinism contract** —
 
 `EarthSciAST` is **parallel native implementations** (Julia, Rust,
 Python, …) verified by a conformance suite — not one core behind FFI. The
-value-invention primitives (`skolem`, `distinct`, `rank`) and value-equality /
+value-invention primitives (an integer key, `distinct`, dense IDs) and value-equality /
 group-by joins produce **index sets and dense IDs that other nodes consume**.
 Two bindings that disagree on the *order* or *numbering* of those outputs
 produce **different models**, not merely different formatting. So the existing
@@ -37,7 +37,7 @@ golden in `manifest.json` is hand-derived and checked against it.
 
 The harness runs in two layers — a reference self-test plus the now-live
 per-binding producers (the M2 value-equality joins and the M3 relational engine
-— `distinct` / `skolem` / `rank` — have landed):
+— `distinct` over integer keys, dense IDs — have landed):
 
 1. **Now (skeleton, gated by `--self-test`).** The runner asserts the contract
    against its embedded reference implementation and the golden example. It
@@ -75,14 +75,18 @@ order or a language-native hash value.
    existing `canonicalize` if a float is truly unavoidable).
 2. **`distinct`** — sort by the total order, drop *adjacent* duplicates. Output
    order **is** the sorted order, never first-seen / insertion order.
-3. **`rank`** — dense IDs by position in the sorted `distinct` sequence.
+3. **Dense IDs** — by position in the sorted `distinct` sequence (the loop
+   index over a derived set, or `rank_of` / `rank_of_set` from
+   `esm:std/relational.esm`; the `rank` operator before esm 2.0.0).
    Conformance asserts the **canonical 0-based numbering**; each binding emits
    in its native base and converts at the boundary. Bases pinned in
    `manifest.json#rank_base_pin`: **Julia 1-based, Rust 0-based, Python
    0-based** (Go / TS: additive schema only, no producer).
-4. **`skolem`** — a canonical **tuple**, not a hash. Symmetric relations sort
-   their components (undirected edge → `(min, max)`); directed relations
-   preserve order. Dense IDs then come from `rank`.
+4. **Keys** — a canonical **tuple** encoding, not a hash (`edge_key` /
+   `pair_key` from `esm:std/relational.esm`; the `skolem` operator before esm
+   2.0.0, whose mode name the manifest's `skolem` field keeps). Symmetric
+   relations sort their components (undirected edge → `(min, max)`); directed
+   relations preserve order. Dense IDs then come from the sorted order.
 5. **`join` / group-by faq** — hash only to *bucket*; emit **sorted by
    the canonical key**. The semiring `⊕` is associative + commutative (every
    registry `⊕` is), so input/parallel order cannot change a result; for a

@@ -12,9 +12,10 @@ OWN inline-test runner under a NAMED compiler. It is driven by
 
 ## Why it exists
 
-esm-spec §4.2 runs value invention (`skolem`, `distinct`, `rank`, the
-`argmin` / `argmax` arg-witnesses) and the `intersect_polygon` clip once, at
-build time, and requires every column they read to be a **constant factor**:
+esm-spec §4.2 runs value invention (`distinct` over integer keys, dense IDs,
+the `argmin` / `argmax` arg-witnesses, all written with `esm:std/relational.esm`
+templates) and setup-time geometry (`esm:std/geometry.esm`) once, at build
+time, and requires every column they read to be a **constant factor**:
 a caller-supplied array, a shaped parameter with inline data, or an unknown
 whose defining equation is an array `const` node. The existing fixtures
 (`tests/valid/faq/*`, `tests/valid/geometry/*`) read their inputs from shaped
@@ -29,9 +30,9 @@ and the gaps below went unseen:
   (`gx[assign[i]]`) failed; Python's flattener also qualified the arg-witness's
   own loop symbol. Rust's native compiler refused the gather, because a const
   array read at a data subscript had no tape form.
-* Julia refused an `intersect_polygon` whose rings are const-defined unknowns,
-  and its front door's shape promotion treated two rings of different vertex
-  counts as a broadcast conflict.
+* Julia refused a polygon clip (then the `intersect_polygon` operator) whose
+  rings are const-defined unknowns, and its front door's shape promotion
+  treated two rings of different vertex counts as a broadcast conflict.
 
 ## Shape
 
@@ -48,13 +49,14 @@ Authored here (every producer input a `const`-defined unknown):
 | Fixture | What the right-hand side reads |
 |---|---|
 | `edge_enumeration_ode` | the size of the derived edge set a `distinct` producer invents over a ragged face-vertex set (5), and a contraction over each cell's ragged edge list |
-| `nearest_generator_ode` | an `argmin` arg-witness buffer, through a gather `gx[assign[i]]`, including the smallest-id tie-break |
-| `bin_skolem_count_ode` | the size of a bin-skolem candidate-pair set (5) |
-| `overlap_gated_regrid_ode` | a construction-time conservative regrid whose `faq` nodes carry an `overlap` join gate on the ring envelopes (A_ij by `polygon_intersection_area`, the sliver-filtered A_j and F_tgt), four of six pairs pruned (#535; EarthSciDiscretizations `conservative_overlap_gated_*`) |
+| `nearest_generator_ode` | an `argmin` template arg-witness buffer, through a gather `gx[assign[i]]`, including the smallest-id tie-break |
+| `bin_skolem_count_ode` | the size of a bin-key candidate-pair set (5) |
+| `overlap_gated_regrid_ode` | a construction-time conservative regrid whose `faq` nodes carry an `overlap` join gate on the ring envelopes (A_ij by `overlap_area_planar`, the sliver-filtered A_j and F_tgt), four of six pairs pruned (#535; EarthSciDiscretizations `conservative_overlap_gated_*`) |
 
-Referenced from `tests/valid/geometry/`: `intersect_polygon_planar_ode`
-(a clip of two const rings, area 1, `tracer = exp(-t)`),
-`polygon_intersection_area_padded_ring` and `polygon_intersection_area_planar`.
+Referenced from `tests/valid/geometry/`: `polygon_intersection_area_padded_ring`
+and `polygon_intersection_area_planar` (both `overlap_area_planar` documents,
+named for the leaf they were written with). The `intersect_polygon_planar_ode`
+clip document was removed with `intersect_polygon` at esm 2.0.0.
 
 ## Ledger
 

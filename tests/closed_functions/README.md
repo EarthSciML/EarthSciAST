@@ -14,25 +14,25 @@ are converted with `python -m earthsci_ast.migrate`.
 ```
 tests/closed_functions/
 ├── datetime/
-│   ├── year/                 (datetime.year — proleptic-Gregorian year)
+│   ├── year/                 (year — proleptic-Gregorian year)
 │   │   ├── expected.json     (input vectors + expected outputs + tolerance)
 │   │   └── template.esm      (the lib/calendar.esm template on a subset of the scenarios)
-│   ├── month/                (datetime.month; each datetime/<fn>/ has the same two files)
-│   ├── day/                  (datetime.day)
-│   ├── hour/                 (datetime.hour)
-│   ├── minute/               (datetime.minute)
-│   ├── second/               (datetime.second)
-│   ├── day_of_year/          (datetime.day_of_year)
-│   ├── julian_day/           (datetime.julian_day)
-│   └── is_leap_year/         (datetime.is_leap_year)
+│   ├── month/                (month; each datetime/<fn>/ has the same two files)
+│   ├── day/                  (day)
+│   ├── hour/                 (hour)
+│   ├── minute/               (minute)
+│   ├── second/               (second)
+│   ├── day_of_year/          (day_of_year)
+│   ├── julian_day/           (julian_day)
+│   └── is_leap_year/         (is_leap_year)
 └── interp/
-    ├── searchsorted/         (interp.searchsorted)
+    ├── searchsorted/         (searchsorted)
     │   ├── expected.json
     │   └── template.esm      (the lib/interp.esm template on a subset of the scenarios)
-    ├── linear/               (interp.linear — 1-D tensor interpolation)
+    ├── linear/               (linear — 1-D tensor interpolation)
     │   ├── expected.json
     │   └── template.esm
-    └── bilinear/             (interp.bilinear — 2-D tensor interpolation)
+    └── bilinear/             (bilinear — 2-D tensor interpolation)
         ├── expected.json
         └── template.esm
 ```
@@ -42,20 +42,22 @@ templates `searchsorted`, `linear`, `bilinear`) and applies the template to
 scenarios of the sibling `expected.json`, asserting each value exactly in an
 inline test. The `interp_templates` conformance tier
 (`tests/conformance/interp_templates/`) runs those documents in every binding
-with an inline-test runner. Each binding's harness additionally runs every
-success scenario, NaN queries included, through the expanded template and
-asserts the same bits as the `fn` form.
+with an inline-test runner.
 
 Each `datetime/<fn>/template.esm` likewise imports `lib/calendar.esm` (the nine
 pure-AST templates `year`, `month`, `day`, `hour`, `minute`, `second`,
 `day_of_year`, `julian_day`, `is_leap_year`, each of one parameter `t`) and
 applies the template to scenarios of the sibling `expected.json` inside the
 templates' domain `|t| < 2^52` s; the `datetime_templates` tier
-(`tests/conformance/datetime_templates/`) runs them. Each binding's harness runs
-every scenario, the error scenarios included, through the expanded template:
-inside the domain it must give the `fn` form's bits, outside it (the two
-int32-year success scenarios, the `closed_function_overflow` scenarios) NaN.
-Julia, Python and Rust check the value; TypeScript and Go check the expansion.
+(`tests/conformance/datetime_templates/`) runs them. Outside that domain (the
+two int32-year success scenarios, the `closed_function_overflow` scenarios) the
+templates return NaN.
+
+The Go test suite checks the expansion of every scenario. The Julia, Python and
+Rust harnesses that ran the full scenario sets, NaN queries and out-of-domain
+instants included, compared the expanded template with the `fn` form and were
+deleted with it at esm 2.0.0, so those scenarios are not evaluated by any
+binding today.
 
 ## `expected.json` schema
 
@@ -89,14 +91,15 @@ written as the string `"NaN"`, `"Inf"` or `"-Inf"`.
 For each `expected.json`, run every success scenario through the expanded
 template and assert the result agrees with `expected` within the declared
 `tolerance` (the `interp_templates` and `datetime_templates` tiers run the
-`template.esm` documents; each binding's harness runs the full scenario sets).
+`template.esm` documents, which hold the scenarios JSON can write).
 The `error_scenarios` record the load-time checks the removed `fn` op made on
 its arguments; the templates do not repeat them, and a binding no longer runs
 them.
 
 ## Boundary-case coverage
 
-The scenario sets cover the boundary semantics pinned in esm-spec §9.2:
+The scenario sets cover the boundary semantics esm-spec 1.x §9.2 pinned for
+the functions:
 
 - **Leap-year edges**: 2000 (div by 400), 2100 (div by 100, not 400),
   2400 (div by 400) — the trio that catches naïve `year % 4` implementations.
@@ -104,19 +107,20 @@ The scenario sets cover the boundary semantics pinned in esm-spec §9.2:
   rollover (especially day 366 in leap years).
 - **Pre-epoch (negative `t_utc`)**: 1969-12-31, 1900-01-01 — extends the
   proleptic-Gregorian calendar backwards without modification.
-- **Sub-second / fractional days**: julian_day is the only registry entry
+- **Sub-second / fractional days**: julian_day is the only calendar field
   with fractional output; its scenarios pin the noon-UTC offset.
 - **julian_day before -4800-03-01**: the standard Julian Date, where the
   informative Fliegel–van Flandern formula is off by +1, -1 or -2 days, and
   around Julian Date 0.
-- **Overflow**: every `datetime.*` function raises `closed_function_overflow`
-  one instant past each end of the Int32 year range and for NaN / ±Inf.
+- **Overflow**: the 1.x `datetime.*` functions raised `closed_function_overflow`
+  one instant past each end of the Int32 year range and for NaN / ±Inf; the
+  templates return NaN there.
   The `datetime.*` fixtures are generated by `scripts/gen-datetime-fixtures.py`
   (exact rational arithmetic; `--check` in CI).
 - **searchsorted**: empty array (`xs = []` returns 1, ruling Q-108), single element, duplicates, exact-on-
   boundary, x ≤ xs[1], x > xs[N], NaN x, NaN-in-xs (error), non-monotonic
   xs (error).
-- **interp.linear / interp.bilinear**: exact-at-knot (every position),
+- **linear / bilinear**: exact-at-knot (every position),
   midpoint and quarter-point blends, below/above each axis (extrapolate-
   flat), NaN x or y (NaN out), minimal-size grid (N=2 / 2x2), non-uniform
   axis spacing. Load-time error scenarios cover non-monotonic axis,

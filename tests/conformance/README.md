@@ -63,7 +63,7 @@ tests/conformance/
 │   ├── manifest.json
 │   ├── fixtures/<id>.esm
 │   └── golden/<id>.json            #   the right-hand side at the initial state, bit for bit
-├── datetime_templates/            # lib/calendar.esm templates bit-for-bit against the datetime.* scenarios (CONFORMANCE_SPEC §5.45.4)
+├── datetime_templates/            # lib/calendar.esm templates bit-for-bit against the tests/closed_functions/datetime scenarios (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract
 │   ├── manifest.json               #   `"runner": "inline_tests"`; its nine documents are REFERENCED from tests/closed_functions/datetime/<fn>/template.esm
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
@@ -82,7 +82,7 @@ tests/conformance/
 │   ├── manifest.json               #   `"runner": "inline_tests"`
 │   ├── fixtures/<id>.esm
 │   ├── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
-│   └── coupled/{fn,template}.esm   #   the coupled case, compared bit for bit by each binding's own test
+│   └── coupled/template.esm        #   the coupled case, compared bit for bit by each binding's own test
 ├── relational_templates/          # lib/relational.esm argmin/argmax templates: ties, NaN, the nearest-generator document (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract
 │   ├── generate.py                 #   writes scenarios.json and the two fixtures

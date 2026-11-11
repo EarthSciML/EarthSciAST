@@ -19,24 +19,22 @@ return those indices.
 | Fixture | What it pins |
 |---|---|
 | `argmin_template` | every scenario of `scenarios.json` (32: distinct extremes at the first, middle and last candidate, ties of two and of all, one candidate, signed-zero ties, a subnormal tie, the nearest-generator tie, ±Inf candidates and ties, NaN first, middle and last, NaN against ±Inf, all NaN; for both templates). Candidate `k` is `num[k] / den[k]` over two `const` arrays, so 0/0, 1/0 and -1/0 write the non-finite candidates. Each index is asserted at t = 0 with tolerance 0. |
-| `nearest_generator_template_ode` | `value_invention_geometry/fixtures/nearest_generator_ode.esm` with the `argmin` op replaced by the template (the op's `g` renamed to `k_argmin_1`, n = 3). Its golden is bit-identical to that document's. |
+| `nearest_generator_template_ode` | the nearest-generator document of `value_invention_geometry` (`fixtures/nearest_generator_ode.esm`) with its arg-witness written as the `argmin` template (loop symbol `k_argmin_1`, n = 3). Its golden is bit-identical to that document's. |
 
 `generate.py` writes `scenarios.json` and both fixtures. The goldens are the
 Julia interpreter's (`scripts/run-inline-tests-conformance.py --write-golden`).
 
-## Comparison with the op
+## Binding harnesses
 
-The op is the oracle, but it is not in this tier: its documents run through
-build-time value invention, and a NaN candidate cannot be a caller array in a
-JSON document. Each binding's harness runs every scenario through both the
-template and the op (Julia `test/relational_templates_test.jl`, Python
-`tests/test_relational_templates.py`, Rust `tests/relational_templates.rs`)
-and rewrites the nearest-generator fixtures of `tests/valid/faq/` as the
-template, comparing the assignment buffers. The op and the template agree on
-every scenario except the ones with a NaN after the first candidate, which the
-op skips (it compares with `<` / `>` from the first candidate on) and the
-template picks. `scenarios.json` records the op's answer there as
-`op_expected`.
+Each binding's harness runs every scenario of `scenarios.json` through the
+expanded template and checks the `expected` index (Julia
+`test/relational_templates_test.jl`, Python `tests/test_relational_templates.py`,
+Rust `tests/relational_templates.rs`); a NaN candidate cannot be a caller array
+in a JSON document, so those scenarios are covered there rather than only by
+the fixture. `op_expected`, where a scenario has it, records what the
+`argmin` / `argmax` operator form removed at esm 2.0.0 returned: it compared
+with `<` / `>` from the first candidate on, so it skipped a NaN after the
+first candidate, which the template picks.
 
 ## Template rewrites of the former skolem / rank fixtures (`rewrites/`)
 
@@ -62,11 +60,12 @@ tier's goldens.
 
 - A gated arg-witness inside this tier: `NearestGeneratorBinned` is rewritten
   with `argmin_where` in `rewrites/` and compared there.
-- An empty candidate set: the op refuses it; the template returns +Inf (the
-  identity of the `min` reduction) for n = 0.
+- An empty candidate set: the template returns +Inf (the identity of the
+  `min` reduction) for n = 0.
 - `tests/scoping/loop_binder_shadowing_edges.esm` and the
   `metaparam_structural_field_collision` template fixture carry an `argmin` /
-  `argmax` only as structure; they compute no assignment.
+  `argmax` only for their structure (scoping, a metaparameter collision); no
+  assignment is checked there.
 
 ## Named exclusions
 

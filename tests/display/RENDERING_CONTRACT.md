@@ -41,16 +41,13 @@ emitted in **sorted key order** for determinism.
 ### Leaves and already-correct ops (unchanged)
 Numbers, variable strings, `+ - * / ^`, comparisons, `and/or/not`, `ifelse`,
 all elementary/trig/hyperbolic functions, `D` (uses `wrt`), `Pre`, `ic`,
-`min/max`, `skolem`, `rank`. `skolem`/`rank`/`ic` use the generic fallback
-(args-only ⇒ already non-lossy), except as follows.
+`min/max`. `ic` uses the generic fallback (args-only ⇒ already non-lossy).
 
-### skolem  `{op:"skolem", args:[…], label?:L}`
-Without `label`: the generic fallback, `skolem(u, v)`. With the documentary
-`label` (the relation-kind tag, e.g. `"edge"`/`"bin"`/`"pair"`), it is a trailing
-named argument in all three formats, exactly like `intersect_polygon`'s
-`manifold=`: `skolem(u, v, label=edge)`, latex `\mathrm{skolem}(u, v, label=edge)`.
-The label does not affect the key, but the text form is lossless, so it is
-shown. (Changed 2026-10-06; it was previously not rendered.)
+The operators removed at esm 2.0.0 (`fn`, `table_lookup`, `skolem`, `rank`,
+the `argmin` / `argmax` operator forms, `intersect_polygon`,
+`polygon_intersection_area`) have no rendering: a document that carries one is
+refused at load with `removed_op`. Their replacements are
+`apply_expression_template` calls into `esm:std/*.esm`, rendered below.
 
 ### const  `{op:"const", value:V, args:[]}`
 Render the literal value `V` itself — indistinguishable from a bare literal.
@@ -59,10 +56,6 @@ Scalar → number formatting; array → `[e0, e1, …]`. All three formats.
 
 ### true, false  `{op:"true", args:[]}`, `{op:"false", args:[]}`
 Bare `true` / `false` (all formats). Not `true()` / `false()`.
-
-### fn  `{op:"fn", name:N, args:[…]}`
-`N(a0, …)`; latex `\mathrm{ESC(N)}(a0, …)`.
-`{fn datetime.year (t)}` → `datetime.year(t)`; latex `\mathrm{datetime.year}(t)`.
 
 ### enum  `{op:"enum", args:[Type, Member]}`
 `Type.Member`; latex `\mathrm{ESC(Type.Member)}`.
@@ -84,13 +77,6 @@ application). `{broadcast fn:"+" (A,B)}` → `A + B`.
 
 `{integral (f) var:x lower:0 upper:1}` → unicode `∫[0, 1] f dx`,
 latex `\int_{0}^{1} f \, dx`, ascii `integral(f, x, 0, 1)`.
-
-### table_lookup  `{op:"table_lookup", table:T, axes:{…}, output?:O}`
-Base `T[k0=v0, k1=v1, …]` (axis keys sorted; values recursive). If `output`
-present, append `:O`. latex wraps the table name: `\mathrm{ESC(T)}[k0 = v0]`
-(note ` = ` spacing in latex only).
-`{table_lookup table:visc axes:{T:temp}}` → `visc[T=temp]`;
-latex `\mathrm{visc}[T = temp]`.
 
 ### apply_expression_template  `{op:"apply_expression_template", name:N, bindings:{…}}`
 Template instantiation with angle brackets (bindings keys sorted):
@@ -114,9 +100,6 @@ if operator node). With `perm`: `transpose(A, [p0, p1, …])` (latex `\mathrm{�
 
 ### concat  `{op:"concat", axis:X, args:[…]}`
 `concat(a0, a1, …, axis=X)`; latex `\mathrm{concat}(a0, a1, axis=X)`.
-
-### intersect_polygon / polygon_intersection_area  `{…, manifold:M, args:[P,Q]}`
-`name(P, Q, manifold=M)`; latex `\mathrm{ESC(name)}(P, Q, manifold=M)`.
 
 ### faq  `{op:"faq", output_idx:[…], expr:E, reduce:R, semiring?, ranges?, join?, filter?, distinct?, key?}`
 Big-operator symbol `⊕` chosen from `semiring` if present else `reduce`:
@@ -160,13 +143,6 @@ Then append, in this exact order, each clause only when the field is present:
 4. distinct (true) → ` distinct`.
 5. key → ` key=K` (K recursive).
 6. semiring present and ≠ `sum_product` → ` [semiring=NAME]`.
-
-### argmin / argmax  `{op:"argmin"|"argmax", arg:G, expr:E, ranges?:{…}, join?, filter?, id?}`
-- unicode `argmin[G] (E)`, latex `\mathrm{argmin}_{G} (E)`, ascii `argmin[G] (E)`.
-- Then append, in this order, each clause only when present, spelled exactly as
-  on `faq`: ranges ` where {…}`, join ` join(…)`, filter ` if F`, ` id=ID`.
-  e.g. `argmin[g] (d[g]) where {g in gens} join(point_bin=gen_bin) if d[g] > 0`.
-  (Changed 2026-10-06: `join` and `filter` were previously dropped.)
 
 ## Associativity and parenthesization (NORMATIVE — added 2026-07-15)
 
