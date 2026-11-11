@@ -161,6 +161,8 @@ mod geometry_templates;
 mod graph_conformance;
 #[path = "graph_structure.rs"]
 mod graph_structure;
+#[path = "ifelse_shape_at_build.rs"]
+mod ifelse_shape_at_build;
 #[path = "index_set_member_factor.rs"]
 mod index_set_member_factor;
 #[path = "index_sets_document_scope.rs"]

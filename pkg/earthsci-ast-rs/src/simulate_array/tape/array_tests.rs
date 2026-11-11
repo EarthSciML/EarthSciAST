@@ -1013,25 +1013,34 @@ fn data_fed_ifelse_observed_takes_the_datas_shape() {
 /// A declared array arm that also reads a scalar observed defined by a
 /// gather: the NEI2016 emission observeds as reseact builds them,
 /// `CO = ifelse(lev < 2, flux_CO / days_in_month …, 0.0)` with `flux_CO`
-/// shaped and `days_in_month` a table lookup. The
-/// declarations cannot decide that observed's rank, so no box is inferred
-/// before the build, but its value is a scalar when the rule is evaluated, and
-/// the observed takes the array arm's box there.
+/// shaped and `days_in_month` a table lookup. A gather with scalar
+/// subscripts is a scalar, so the build gives `X` the array arm's box before
+/// anything is evaluated (esm-spec §4.3.4), with the gather written directly
+/// and at `interp.linear`'s cell index (a rank-0 `faq` count).
 #[test]
 fn ifelse_reading_a_gathered_scalar_takes_the_array_arms_box() {
     let table = json!({"op": "const", "args": [], "value": [31.0, 28.0, 31.0]});
-    let d = json!({"lhs": "D", "rhs": idx(table, &[json!(2)])});
+    let count = json!({"op": "faq", "args": [], "output_idx": [], "reduce": "+",
+        "ranges": {"j": [1, 3]}, "expr": {"op": "ifelse", "args": [{"op": "<=", "args": [
+            idx(json!({"op": "const", "args": [], "value": [0.0, 10.0, 20.0]}), &[json!("j")]),
+            15.0]}, 1, 0]}});
+    let gathers = [idx(table.clone(), &[json!(2)]), idx(table, &[count])];
     let fd = || json!({"op": "/", "args": ["F", "D"]});
     let bodies = [
         mixed_ifelse(fd(), json!(0.0)),
         json!({"op": "ifelse", "args": [{"op": ">=", "args": ["lev", 2.0]}, 0.0, fd()]}),
     ];
-    for x in bodies {
+    for (x, gather) in bodies
+        .into_iter()
+        .flat_map(|x| gathers.clone().map(|g| (x.clone(), g)))
+    {
+        let d = json!({"lhs": "D", "rhs": gather});
         let (mut vars, mut readers) = mixed_readers();
         vars["D"] = json!({"type": "unknown"});
         readers.push(d.clone());
         let compiled = compile(undeclared_mixed_doc(x.clone(), vars, readers));
-        assert_eq!(declared_box(&compiled, "X"), Some(None));
+        assert_eq!(compiled.conditional_shapes["X"], ["cell"]);
+        assert_eq!(declared_box(&compiled, "X"), Some(Some(vec![3])));
         ab(&compiled, &both_arms());
         // Unread, as `NEI2016Emis.CO` is in reseact.
         let unread = compile(undeclared_mixed_doc(

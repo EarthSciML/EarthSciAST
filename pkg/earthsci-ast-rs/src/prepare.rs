@@ -1050,6 +1050,7 @@ fn compile_on_tape(
     param_vals: &[f64],
     param_names: &[String],
     const_arrays: &ConstArrayScope,
+    fill_shape: Option<&[usize]>,
     recurrence_only: bool,
 ) -> Option<Result<Result<ArrayD<f64>, String>, String>> {
     use crate::simulate_array::StandaloneError;
@@ -1060,6 +1061,7 @@ fn compile_on_tape(
         param_vals,
         param_names,
         const_arrays,
+        fill_shape,
         recurrence_only,
     ) {
         None => None,
@@ -1097,6 +1099,7 @@ fn eval_observed(
     index_sets: &HashMap<String, IndexSet>,
     extents: &HashMap<String, i64>,
     const_arrays: &ConstArrayScope,
+    fill_shape: Option<&[usize]>,
     scalar_shape: &[usize],
     refuse_per_cell: bool,
 ) -> Result<Evaluated, PrepareError> {
@@ -1137,6 +1140,7 @@ fn eval_observed(
             param_vals,
             param_names,
             const_arrays,
+            fill_shape,
             true,
         )
     {
@@ -1194,6 +1198,7 @@ fn eval_observed(
             param_vals,
             param_names,
             const_arrays,
+            fill_shape,
             false,
         )
         .expect("a non-recurrence always reaches the tape");
@@ -1846,21 +1851,37 @@ struct BuildState<'o> {
     obs_total: usize,
     /// [`PreparedBuild::observed_cone_applied`].
     cone_applied: bool,
+    /// The unshaped observeds whose shape the data of their unshaped
+    /// data-fed parameters decides (esm-spec §4.3.4,
+    /// [`crate::flatten::ConditionalShapes::data_shaped`]).
+    data_shaped: HashMap<String, Vec<String>>,
 }
 
 impl<'o> BuildState<'o> {
-    /// The shape `name`'s value takes when its body evaluates to a single
-    /// number: every element of its declared shape (esm-spec §4.3.4: a
-    /// binding MUST NOT let the value's rank replace the declared shape), as
-    /// the compiled route fills it, or the [`DeclaredRank`] shape when the
-    /// declaration has none the registry can size.
-    fn scalar_shape(&self, name: &str) -> Vec<usize> {
+    /// The shape `name`'s value fills when its body evaluates to a single
+    /// number, decided before it is evaluated (esm-spec §4.3.4: a binding
+    /// MUST NOT let the value's rank replace the declared shape): its declared
+    /// shape — the build's, for an unshaped mixed-rank `ifelse` — or, for one
+    /// whose shape the data of its data-fed parameters decides, the shape that
+    /// data has here. `None` when neither gives one the registry can size.
+    fn fill_shape(&self, name: &str) -> Option<Vec<usize>> {
         self.model
             .variables
             .get(name)
             .and_then(|v| v.shape.as_deref())
             .filter(|s| !s.is_empty())
             .and_then(|s| crate::simulate_array::resolve_declared_shape(s, &self.index_sets))
+            .or_else(|| {
+                let fed = self.data_shaped.get(name)?;
+                crate::flatten::data_fill_shape(fed, |n| {
+                    self.arrays.get(n).map(|a| a.shape().to_vec())
+                })
+            })
+    }
+
+    /// [`Self::fill_shape`], else the [`DeclaredRank`] shape.
+    fn scalar_shape(&self, name: &str) -> Vec<usize> {
+        self.fill_shape(name)
             .unwrap_or_else(|| DeclaredRank::of(&self.model, name).scalar_shape().to_vec())
     }
 
@@ -1934,8 +1955,11 @@ impl<'o> BuildState<'o> {
             }
             None => Spelling::Qualified,
         };
-        let (model, flattened) = match &spelling {
-            Spelling::ModelLocal(n) => (Self::authored_model(models, n, &mut index_sets)?, None),
+        let (model, flattened, data_shaped) = match &spelling {
+            Spelling::ModelLocal(n) => {
+                let (model, data_shaped) = Self::authored_model(models, n, &mut index_sets)?;
+                (model, None, data_shaped)
+            }
             Spelling::Qualified => {
                 let flat = Self::whole_document(&file, &mut index_sets)?;
                 let mut model = crate::simulate_array::model_from_flattened(&flat);
@@ -1944,10 +1968,12 @@ impl<'o> BuildState<'o> {
                 // `apply_flatten_rewrites`.
                 // The elementwise lift runs inside it (esm-spec §9.6.11), so
                 // the bare-operand check reads the lifted equations.
-                crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
-                    .and_then(|_| crate::simulate_array::refuse_faq_bare_array_operands(&model))
+                let shapes =
+                    crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
+                        .map_err(|e| err(e.to_string()))?;
+                crate::simulate_array::refuse_faq_bare_array_operands(&model)
                     .map_err(|e| err(e.to_string()))?;
-                (model, unbound_load.then_some(flat))
+                (model, unbound_load.then_some(flat), shapes.data_shaped)
             }
         };
 
@@ -1977,6 +2003,7 @@ impl<'o> BuildState<'o> {
             obs_done: 0,
             obs_total: 0,
             cone_applied: false,
+            data_shaped,
         })
     }
 
@@ -1998,7 +2025,7 @@ impl<'o> BuildState<'o> {
         models: &IndexMap<String, Model>,
         name: &str,
         index_sets: &mut HashMap<String, IndexSet>,
-    ) -> Result<Model, PrepareError> {
+    ) -> Result<(Model, HashMap<String, Vec<String>>), PrepareError> {
         let mut model = models
             .get(name)
             .ok_or_else(|| err(format!("model '{name}' not found in the document")))?
@@ -2006,9 +2033,9 @@ impl<'o> BuildState<'o> {
         crate::simulate_array::mount_subsystems(&mut model, index_sets)
             .map_err(|e| err(format!("model '{name}': {e}")))?;
         crate::simulate_array::resolve_model_self_references(&mut model, name);
-        crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)
+        let shapes = crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)
             .map_err(|e| err(format!("model '{name}': {e}")))?;
-        Ok(model)
+        Ok((model, shapes.data_shaped))
     }
 
     /// A document of several models, with none selected, built WHOLE — the
@@ -2130,7 +2157,8 @@ impl<'o> BuildState<'o> {
     /// ([`crate::provider::declared_shape_mismatch`]). `name` is looked up as
     /// it is spelled, then, when dotted, by the part after its first `.` (a
     /// mounted subsystem's parameter under its model-local spelling). A
-    /// parameter declared without `shape` takes one value. Nothing is checked
+    /// parameter declared without `shape` takes one value, unless it is
+    /// data-fed: its data then decides its shape. Nothing is checked
     /// when `name` spells no parameter or its shape names an index set the
     /// registry cannot size here.
     fn check_provider_shape(
@@ -2148,6 +2176,9 @@ impl<'o> BuildState<'o> {
             return Ok(());
         };
         let declared = match var.shape.as_deref() {
+            // A data-fed parameter declared without a shape takes its data's
+            // (esm-spec §4.3.4); any other unshaped parameter is one value.
+            None if crate::simulate_array::is_data_fed_unshaped(var) => None,
             None => Some(Vec::new()),
             Some(decl) => crate::simulate_array::resolve_declared_shape(decl, &self.index_sets),
         };
@@ -2451,6 +2482,7 @@ impl<'o> BuildState<'o> {
                 &self.index_sets,
                 &no_extents,
                 &self.const_scope,
+                self.fill_shape(&name).as_deref(),
                 &self.scalar_shape(&name),
                 self.opts.refuse_per_cell,
             ) {
@@ -2874,6 +2906,7 @@ impl<'o> BuildState<'o> {
                 &self.index_sets,
                 &self.extents,
                 &self.const_scope,
+                self.fill_shape(name).as_deref(),
                 &self.scalar_shape(name),
                 self.opts.refuse_per_cell,
             )? {

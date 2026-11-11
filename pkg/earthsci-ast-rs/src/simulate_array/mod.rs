@@ -89,10 +89,10 @@ pub use compile::{
 // two routes cannot disagree about which names a document declares.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
-pub(crate) use compile::data_feed_source;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::inline_parameter_arrays;
 pub(crate) use compile::resolve_declared_shape;
+pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 // The build pipeline reads the authored model, as the single-model route does,
 // so it applies the same stand-ins for `flatten`'s rewrites.
@@ -405,17 +405,17 @@ enum AlgebraicRule {
     /// to a scalar is broadcast over it (esm-spec §4.3.4), so the variable
     /// keeps its declared rank however the value came out.
     ///
-    /// `unshaped` says the variable declares no `shape` at all (the field
-    /// absent; `shape: []` declares a scalar). With no `declared_shape`, such
-    /// a variable whose body is elementwise down to a scalar-condition
-    /// `ifelse` with an array arm takes that arm's shape when the rule is
-    /// evaluated, which is when an array whose shape only data supplies (an
-    /// unshaped data-fed parameter) has one ([`conditional_fill_shape`]).
+    /// `data_shaped` names, for a variable declared with no `shape` whose
+    /// body is elementwise down to a scalar-condition `ifelse` whose only
+    /// arrays are unshaped data-fed parameters, those parameters (esm-spec
+    /// §4.3.4, [`crate::flatten::ConditionalShapes::data_shaped`]). With no
+    /// `declared_shape` it takes the shape their data has, read where the
+    /// data is bound ([`AlgebraicRule::fill_shape`]), so both arms have it.
     Scalar {
         var: String,
         body: std::sync::Arc<Expr>,
         declared_shape: Option<Vec<usize>>,
-        unshaped: bool,
+        data_shaped: Option<std::sync::Arc<[String]>>,
     },
     /// `var[i...] := body` — array algebraic defined via a faq over
     /// the full shape of `var`.
@@ -454,6 +454,48 @@ enum AlgebraicRule {
         /// See [`RecurrenceInfo::lag_proven`].
         lag_proven: bool,
     },
+}
+
+impl ArrayCompiled {
+    /// Write into each `data_shaped` observed rule's `declared_shape` the
+    /// shape [`AlgebraicRule::fill_shape`] reads from the forcing boxes, for a
+    /// build that knows its data's shapes before anything reads the rules
+    /// (`RhsProgram`, whose forcing boxes are the data's).
+    pub(crate) fn settle_data_shapes(&mut self) {
+        let decls = &self.forcing_decls;
+        for rule in &mut self.observed_rules {
+            let fill = rule.fill_shape(|n| decls.get(n).cloned().flatten());
+            if let AlgebraicRule::Scalar { declared_shape, .. } = rule {
+                *declared_shape = fill;
+            }
+        }
+    }
+}
+
+impl AlgebraicRule {
+    /// The shape a [`AlgebraicRule::Scalar`] rule's value fills when it
+    /// evaluates to a scalar: its `declared_shape`, else, for a
+    /// `data_shaped` rule, the one shape `data_shape_of` gives the data bound
+    /// to its data-fed parameters ([`crate::flatten::data_fill_shape`]).
+    /// `None` for a scalar, and for every other rule kind.
+    fn fill_shape(
+        &self,
+        data_shape_of: impl FnMut(&str) -> Option<Vec<usize>>,
+    ) -> Option<Vec<usize>> {
+        let AlgebraicRule::Scalar {
+            declared_shape,
+            data_shaped,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        declared_shape.clone().or_else(|| {
+            data_shaped
+                .as_deref()
+                .and_then(|fed| crate::flatten::data_fill_shape(fed, data_shape_of))
+        })
+    }
 }
 
 /// The partially materialized array of an [`AlgebraicRule::Recurrence`], in

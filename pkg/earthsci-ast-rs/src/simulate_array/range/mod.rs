@@ -697,6 +697,10 @@ impl RhsProgram {
                 *decl = Some(shape);
             }
         }
+        // With the data's shapes known, a rule whose shape that data decides
+        // (esm-spec §4.3.4) is built at it: the range analysis and the tile
+        // layout read it from the rule's declared shape.
+        compiled.settle_data_shapes();
         let tape = match compiler {
             Compiler::Native => {
                 let discrete: HashSet<String> = compiled.forcing_decls.keys().cloned().collect();

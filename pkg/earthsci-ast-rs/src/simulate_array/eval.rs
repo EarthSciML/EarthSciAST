@@ -142,32 +142,6 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
     Value::Scalar(f64::NAN)
 }
 
-/// The shape of the value [`lookup_variable`] would return for `name`, `[]`
-/// for a scalar, without reading (or copying) it; `None` where the lookup
-/// would fault. For [`conditional_fill_shape`].
-pub(super) fn lookup_variable_shape(name: &str, ctx: &EvalCtx) -> Option<Vec<usize>> {
-    if name == "t" {
-        return Some(Vec::new());
-    }
-    if ctx.recur.is_some_and(|scope| scope.name == name) {
-        return None;
-    }
-    if ctx.loop_binds.contains_key(name) {
-        return Some(Vec::new());
-    }
-    if let Some(a) = ctx
-        .state_arrays
-        .get(name)
-        .or_else(|| ctx.observed_arrays.get(name))
-    {
-        return Some(a.shape().to_vec());
-    }
-    if ctx.param_names.iter().any(|p| p == name) {
-        return Some(Vec::new());
-    }
-    ctx.forcing.borrow().get(name).map(|a| a.shape().to_vec())
-}
-
 /// Latch the fault for a read that NOTHING in scope produced a value for:
 /// [`lookup_variable`]'s last resort, shared with the tape's forcing load
 /// (`Instr::LoadForcing`), which reads the same forcing channel and has to fail
@@ -3008,9 +2982,13 @@ pub(crate) fn eval_observed_recurrence(
 /// `param_names`. A causal self-reference (esm-spec §4.3.1.1) lowers as the
 /// model's own recurrence rule does, to one ordered sweep; one the lowering
 /// does not recognize is left to the caller's own diagnostic. `None` when
-/// `recurrence_only` and the observed is not such a recurrence. A scalar value
+/// `recurrence_only` and the observed is not such a recurrence. `fill_shape`
+/// is the shape the build decided the variable has (its declared one, or
+/// esm-spec §4.3.4's for an unshaped mixed-rank `ifelse`): a scalar value
+/// fills it, as the reference evaluator's does. With none, a scalar value
 /// comes back as a 0-d array.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn eval_observed_taped(
     name: &str,
     expr: &Expr,
@@ -3018,6 +2996,7 @@ pub(crate) fn eval_observed_taped(
     params: &[f64],
     param_names: &[String],
     const_arrays: &ConstArrayScope,
+    fill_shape: Option<&[usize]>,
     recurrence_only: bool,
 ) -> Option<Result<ArrayD<f64>, super::tape::StandaloneError>> {
     use super::tape::StandaloneError;
@@ -3050,8 +3029,8 @@ pub(crate) fn eval_observed_taped(
         AlgebraicRule::Scalar {
             var: name.to_string(),
             body: std::sync::Arc::new(expr.clone()),
-            declared_shape: None,
-            unshaped: false,
+            declared_shape: fill_shape.map(<[usize]>::to_vec),
+            data_shaped: None,
         }
     };
     let mut mentioned = HashSet::new();

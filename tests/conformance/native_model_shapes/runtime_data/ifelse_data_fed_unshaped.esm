@@ -1,0 +1,278 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ifelse_data_fed_unshaped",
+  "description": "A data-fed parameter `F` declared with NO `shape`, whose data is the 3-element array [1.5, -2.0, 0.75], read by unshaped observeds `X = ifelse(lev < 2, F * 2, 0.25)` (both arm orders). F takes its data's shape, so X is a 3-element array whichever arm is taken (esm-spec §4.3.4). The data has to be supplied by the runtime: a provider sample, or the binding's forcing / const-array channel.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ]
+ },
+ "index_sets": {
+  "cell": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "data_sources": {
+  "src": {
+   "kind": "static",
+   "source": {
+    "url_template": "file:///nonexistent/f.nc"
+   }
+  }
+ },
+ "models": {
+  "IfelseDataFed": {
+   "variables": {
+    "F": {
+     "type": "parameter",
+     "units": "1",
+     "default": 1.0,
+     "update": {
+      "kind": "data",
+      "source": "src",
+      "from": {
+       "file_variable": "F"
+      }
+     }
+    },
+    "lev_on": {
+     "type": "parameter",
+     "units": "1",
+     "default": 1.0
+    },
+    "lev_off": {
+     "type": "parameter",
+     "units": "1",
+     "default": 3.0
+    },
+    "X_on": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_off": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_rev_on": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_rev_off": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "R_on": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_off": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_rev_on": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_rev_off": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "X_on",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       {
+        "op": "*",
+        "args": [
+         "F",
+         2.0
+        ]
+       },
+       0.25
+      ]
+     }
+    },
+    {
+     "lhs": "X_off",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_off",
+         2.0
+        ]
+       },
+       {
+        "op": "*",
+        "args": [
+         "F",
+         2.0
+        ]
+       },
+       0.25
+      ]
+     }
+    },
+    {
+     "lhs": "X_rev_on",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": ">=",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       0.25,
+       {
+        "op": "*",
+        "args": [
+         "F",
+         2.0
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "X_rev_off",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": ">=",
+        "args": [
+         "lev_off",
+         2.0
+        ]
+       },
+       0.25,
+       {
+        "op": "*",
+        "args": [
+         "F",
+         2.0
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "R_on",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_on",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_off",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_off",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_rev_on",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_rev_on",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_rev_off",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_rev_off",
+        "i"
+       ]
+      }
+     }
+    }
+   ]
+  }
+ }
+}
