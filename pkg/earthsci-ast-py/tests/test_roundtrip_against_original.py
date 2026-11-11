@@ -53,6 +53,11 @@ _EAGER_TEMPLATE_EXPANSION = (
     "rule 5 requires"
 )
 _METAPARAMETER_FOLDING = "metaparameter folding on emit (esm-spec §9.7.6)"
+_STDLIB_TEMPLATE_IMPORT = (
+    "`expression_template_imports` of an `esm:std/...` library is consumed at "
+    "load and the imported bodies are expanded into their call sites, the same "
+    "transform as template_import_minimal.esm (esm-spec §9.7.6)"
+)
 _SUBSYSTEM_REF_RESOLUTION = (
     "subsystem `ref` resolution: the {ref} mount is replaced in place by the "
     "instantiated component (esm-spec §4.7)"
@@ -90,6 +95,16 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         "`expression_template_imports` is consumed at load and the imported "
         "bodies are expanded into their call sites (esm-spec §9.7.6)"
     ),
+    "cadence/pure_topology.esm": _STDLIB_TEMPLATE_IMPORT,
+    "faq/edge_enumeration_area_eff.esm": _STDLIB_TEMPLATE_IMPORT,
+    "faq/nearest_generator_argmin.esm": _STDLIB_TEMPLATE_IMPORT,
+    "faq/nearest_generator_centroid.esm": _STDLIB_TEMPLATE_IMPORT,
+    "faq/skolem_distinct_rank.esm": _STDLIB_TEMPLATE_IMPORT,
+    "geometry/bin_skolem_spatial_join.esm": _STDLIB_TEMPLATE_IMPORT,
+    "geometry/conservative_regrid_assembly.esm": _STDLIB_TEMPLATE_IMPORT,
+    "geometry/polygon_intersection_area_padded_ring.esm": _STDLIB_TEMPLATE_IMPORT,
+    "geometry/polygon_intersection_area_planar.esm": _STDLIB_TEMPLATE_IMPORT,
+    "wildfire_atmosphere_ocean.esm": _STDLIB_TEMPLATE_IMPORT,
     "template_import_faq_axis.esm": (
         "`expression_template_imports` is consumed at load and the imported "
         "`lev` axis merges into the document's `index_sets` (esm-spec §9.7.5)"

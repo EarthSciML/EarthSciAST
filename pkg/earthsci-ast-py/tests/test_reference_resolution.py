@@ -358,10 +358,11 @@ def test_wildfire_fixture_resolves_fully():
     * #2 — ``rg_candidate_pairs.from_faq`` names ``rg_candidate_set``, which
       lives in ``OceanDynamics`` while the registry entry is document-scoped.
     * #3 — that producing node carries
-      ``join.on == [["rg_src_bin", "rg_tgt_bin"]]``, naming declared model
-      VARIABLES (per-cell value-invention bin buffers written by equations 0 and
-      1) rather than node-local binders. Both columns now resolve through the
-      variable class of ``join_binder_class``.
+      ``join.on`` pairs over the per-coordinate bin columns
+      (``rg_src_bin_c1``/``rg_tgt_bin_c1`` and ``_c2``), naming declared model
+      VARIABLES (per-cell bin buffers written by equations) rather than
+      node-local binders. Every column resolves through the variable class of
+      ``join_binder_class``.
     """
     from conftest import load_fixture
 
@@ -369,7 +370,8 @@ def test_wildfire_fixture_resolves_fully():
     graphs = resolve_references(doc)
     ocean = graphs["OceanDynamics"]
     targets = {e.target for e in ocean.edges_of_kind(EdgeKind.JOIN_FACTOR)}
-    assert f"{VertexKind.FACTOR}:rg_src_bin" in targets
+    for column in ("rg_src_bin_c1", "rg_src_bin_c2"):
+        assert f"{VertexKind.FACTOR}:{column}" in targets
 
 
 def test_conservative_regrid_assembly_resolves():
