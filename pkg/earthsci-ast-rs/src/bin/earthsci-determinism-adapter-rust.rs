@@ -2,12 +2,12 @@
 //! determinism conformance harness (`scripts/run-determinism-conformance.py`,
 //! CONFORMANCE_SPEC.md §5.5.4).
 //!
-//! Everything of substance lives in [`earthsci_ast::determinism_adapter`].
+//! Everything of substance lives in the library, behind
+//! [`earthsci_ast::adapter_support::run_determinism_adapter`].
 //!
 //! Invoked as `earthsci-determinism-adapter-rust --manifest <m.json> --output <r.json>`.
 
-use earthsci_ast::adapter_support::parse_manifest_output_args;
-use earthsci_ast::determinism_adapter::run;
+use earthsci_ast::adapter_support::{parse_manifest_output_args, run_determinism_adapter as run};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {

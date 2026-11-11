@@ -339,33 +339,45 @@ impl TapeBuilder<'_> {
 }
 
 /// Every variable name `expr` mentions (a superset of what it reads: loop
-/// symbols are included, and are filtered out by the caller's lookup).
+/// symbols are included, and are filtered out by the caller's lookup). A
+/// subtree shared by several parents (an expanded template's body) is walked
+/// once.
 pub(in crate::simulate_array) fn collect_variable_names(expr: &Expr, out: &mut HashSet<String>) {
-    match expr {
-        Expr::Variable(v) => {
-            out.insert(v.clone());
-        }
-        Expr::Operator(node) => {
-            for a in &node.args {
-                collect_variable_names(a, out);
+    fn walk(
+        expr: &Expr,
+        out: &mut HashSet<String>,
+        seen: &mut HashSet<*const crate::types::ExpressionNode>,
+    ) {
+        match expr {
+            Expr::Variable(v) if !out.contains(v) => {
+                out.insert(v.clone());
             }
-            node.for_each_child(&mut |c| collect_variable_names(c, out));
-            // A ragged range reads its offsets factor by name, not through
-            // an expression.
-            for spec in node.ranges.iter().flat_map(|r| r.values()) {
-                if let Some((offsets, _)) = spec.ragged() {
-                    out.insert(offsets.to_string());
+            Expr::Operator(node) => {
+                if !seen.insert(std::sync::Arc::as_ptr(node)) {
+                    return;
+                }
+                for a in &node.args {
+                    walk(a, out, seen);
+                }
+                node.for_each_child(&mut |c| walk(c, out, seen));
+                // A ragged range reads its offsets factor by name, not through
+                // an expression.
+                for spec in node.ranges.iter().flat_map(|r| r.values()) {
+                    if let Some((offsets, _)) = spec.ragged() {
+                        out.insert(offsets.to_string());
+                    }
+                }
+                // A join names its key columns and envelope factors as strings,
+                // not as expressions.
+                for clause in node.join.iter().flatten() {
+                    out.extend(clause.on.iter().flatten().cloned());
+                    if let Some(ov) = &clause.overlap {
+                        out.extend(ov.src_env.iter().chain(ov.tgt_env.iter()).cloned());
+                    }
                 }
             }
-            // A join names its key columns and envelope factors as strings,
-            // not as expressions.
-            for clause in node.join.iter().flatten() {
-                out.extend(clause.on.iter().flatten().cloned());
-                if let Some(ov) = &clause.overlap {
-                    out.extend(ov.src_env.iter().chain(ov.tgt_env.iter()).cloned());
-                }
-            }
+            _ => {}
         }
-        _ => {}
     }
+    walk(expr, out, &mut HashSet::new());
 }
