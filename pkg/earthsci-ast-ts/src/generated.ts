@@ -638,7 +638,7 @@ export type IndexSet = IndexSet1 & {
    */
   kind: "interval" | "categorical" | "derived" | "ragged";
   /**
-   * interval: marks this axis as a RECORD AXIS (esm-spec §8.5.1). A data-fed parameter whose record shape (its declared `shape`, or for a shapeless parameter the declared `shape` of each `param_to_var` target) begins with a record axis receives two records per query time — the record at or before t and its successor, stacked along this axis — and otherwise one. `size` MUST be 2 (`record_axis_invalid`). A record axis must be the FIRST entry of any data-fed record shape it appears in (`record_axis_misplaced`), and a parameter whose record shape begins with one must draw from a source with a `temporal.start` (`record_axis_time_invariant_source`). Otherwise a record axis is an ordinary interval of size 2. Legal only when kind is "interval"; false is the same as absent.
+   * interval: marks this axis as a RECORD AXIS (esm-spec §8.5.1). A data-fed parameter whose record shape (its declared `shape`, or for a shapeless parameter the declared `shape` of each `param_to_var` target) begins with a record axis receives two records per query time — the record at or before t and its successor, stacked along this axis — and otherwise one. `size` MUST be 2 (`record_axis_invalid`). A record axis must be the FIRST entry of any data-fed record shape it appears in (`record_axis_misplaced`), and a parameter whose record shape begins with one must draw from a source with a `temporal.start` (`record_axis_time_invariant_source`). Otherwise a record axis is an ordinary interval of size 2. Legal only when kind is "interval". false is the same declaration as absent everywhere (they merge at a mount, esm-spec §4.7); true against either is subsystem_index_set_conflict.
    */
   records?: boolean;
   /**
@@ -1480,7 +1480,7 @@ export interface DataSourceTemporal {
   time_variable?: string;
   /**
    * @deprecated
-   * DEPRECATED (esm-spec §8.3, §8.5.1); REMOVED at esm 1.4.0. The source-wide default of each consuming parameter's (also deprecated) `from.records_per_sample`. The number of records a parameter receives is said by its record shape: two when its first axis is a record axis (an interval index set with `"records": true`), one otherwise. Until removal this field is accepted with the load-time warning `deprecated_records_per_sample` and is CHECKED, not obeyed: every parameter of the source that does not write its own value must have a record shape giving this many records, else `records_per_sample_invalid`. Contrast records_per_file (records IN one file).
+   * DEPRECATED (esm-spec §8.3, §8.5.1); REMOVED at esm 3.0.0. The source-wide default of each consuming parameter's (also deprecated) `from.records_per_sample`. The number of records a parameter receives is said by its record shape alone: two when its first axis is a record axis (an interval index set with `"records": true`), one otherwise. This field is no longer obeyed (a breaking change made with the esm 2.0.0 break): it is parsed with the load-time warning `deprecated_records_per_sample` and CHECKED. Every parameter of the source, in a model or a reaction system, that does not write its own value MUST have a record shape giving exactly this many records, else `records_per_sample_invalid`. Contrast records_per_file (records IN one file).
    */
   records_per_sample?: 1 | 2;
 }
