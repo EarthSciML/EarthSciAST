@@ -1,0 +1,403 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ic_data_fed",
+  "description": "esm-spec 11.4.2, the hydrostatic air-mass pattern: the array state `m` is seeded by `ic(m) = dp`, where dp[i,k] = dA[k] + dB[k]*P[i] is an array observed over the shaped parameters dA and dB (inline defaults) and the array observed P[i] = (1 - w)*F[1,i] + w*F[2,i], which blends two records of the data-fed parameter F with the weight w = t/dt - floor(t/dt), an observed reading t. The 0-D state s is seeded by `ic(s) = q*t` with q a 0-D data-fed parameter. Every value is evaluated at t0 = tspan[0], with F and q at the values their providers give at t0.",
+  "authors": [
+   "EarthSciAST conformance"
+  ],
+  "created": "2026-11-11T00:00:00Z",
+  "tags": [
+   "conformance",
+   "esm-spec-11.4.2",
+   "ic",
+   "data-fed",
+   "array-observed",
+   "shaped-parameter",
+   "independent-variable"
+  ]
+ },
+ "index_sets": {
+  "rec": {
+   "kind": "interval",
+   "size": 2
+  },
+  "x": {
+   "kind": "interval",
+   "size": 3
+  },
+  "lev": {
+   "kind": "interval",
+   "size": 2
+  }
+ },
+ "data_sources": {
+  "met": {
+   "kind": "grid",
+   "source": {
+    "url_template": "file:///data/met/fields.nc"
+   }
+  }
+ },
+ "models": {
+  "H": {
+   "variables": {
+    "F": {
+     "type": "parameter",
+     "units": "Pa",
+     "shape": [
+      "rec",
+      "x"
+     ],
+     "default": 1000.0,
+     "description": "two records of a surface pressure, data-fed",
+     "update": {
+      "kind": "data",
+      "source": "met",
+      "from": {
+       "file_variable": "PS"
+      }
+     }
+    },
+    "q": {
+     "type": "parameter",
+     "units": "1/s",
+     "shape": [],
+     "default": 3.0,
+     "description": "0-D data-fed rate",
+     "update": {
+      "kind": "data",
+      "source": "met",
+      "from": {
+       "file_variable": "q"
+      }
+     }
+    },
+    "dt": {
+     "type": "parameter",
+     "units": "s",
+     "default": 4.0,
+     "description": "record spacing"
+    },
+    "c": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 0.5,
+     "description": "relaxation rate of m toward dp"
+    },
+    "dA": {
+     "type": "parameter",
+     "units": "Pa",
+     "shape": [
+      "lev"
+     ],
+     "default": [
+      10.0,
+      5.0
+     ],
+     "description": "hybrid coefficient differences A (inline data)"
+    },
+    "dB": {
+     "type": "parameter",
+     "units": "1",
+     "shape": [
+      "lev"
+     ],
+     "default": [
+      0.5,
+      0.25
+     ],
+     "description": "hybrid coefficient differences B (inline data)"
+    },
+    "w": {
+     "type": "unknown",
+     "units": "1",
+     "description": "record weight, reads t: w = t/dt - floor(t/dt)"
+    },
+    "P": {
+     "type": "unknown",
+     "units": "Pa",
+     "shape": [
+      "x"
+     ],
+     "description": "blended surface pressure P[i] = (1 - w)*F[1,i] + w*F[2,i]"
+    },
+    "dp": {
+     "type": "unknown",
+     "units": "Pa",
+     "shape": [
+      "x",
+      "lev"
+     ],
+     "description": "layer thickness dp[i,k] = dA[k] + dB[k]*P[i]"
+    },
+    "m": {
+     "type": "unknown",
+     "units": "Pa",
+     "shape": [
+      "x",
+      "lev"
+     ],
+     "description": "air mass, ic(m) = dp, relaxed toward dp"
+    },
+    "s": {
+     "type": "unknown",
+     "units": "1",
+     "default": -1.0,
+     "description": "0-D state, ic(s) = q*t"
+    }
+   },
+   "equations": [
+    {
+     "lhs": "w",
+     "rhs": {
+      "op": "-",
+      "args": [
+       {
+        "op": "/",
+        "args": [
+         "t",
+         "dt"
+        ]
+       },
+       {
+        "op": "floor",
+        "args": [
+         {
+          "op": "/",
+          "args": [
+           "t",
+           "dt"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "P",
+     "rhs": {
+      "op": "faq",
+      "args": [
+       "F"
+      ],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          {
+           "op": "-",
+           "args": [
+            1.0,
+            "w"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "F",
+            1,
+            "i"
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          "w",
+          {
+           "op": "index",
+           "args": [
+            "F",
+            2,
+            "i"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "dp",
+     "rhs": {
+      "op": "faq",
+      "args": [
+       "P",
+       "dA",
+       "dB"
+      ],
+      "output_idx": [
+       "i",
+       "k"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "k": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "dA",
+          "k"
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "dB",
+            "k"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "P",
+            "i"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "m"
+      ]
+     },
+     "rhs": "dp"
+    },
+    {
+     "lhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i",
+       "k"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "k": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "D",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "m",
+          "i",
+          "k"
+         ]
+        }
+       ],
+       "wrt": "t"
+      }
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [
+       "dp",
+       "m"
+      ],
+      "output_idx": [
+       "i",
+       "k"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "k": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        "c",
+        {
+         "op": "-",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "dp",
+            "i",
+            "k"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "m",
+            "i",
+            "k"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "ic",
+      "args": [
+       "s"
+      ]
+     },
+     "rhs": {
+      "op": "*",
+      "args": [
+       "q",
+       "t"
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "s"
+      ],
+      "wrt": "t"
+     },
+     "rhs": 0.0
+    }
+   ]
+  }
+ }
+}

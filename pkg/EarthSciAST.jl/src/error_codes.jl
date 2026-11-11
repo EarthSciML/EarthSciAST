@@ -91,6 +91,9 @@ const ERROR_CODES = (
     # subscripts with an index symbol no faq binds.
     EQUATION_DEFINES_PARAMETER = "equation_defines_parameter",
     UNBOUND_INDEX_SYMBOL = "unbound_index_symbol",
+    # esm-spec §11.4.2: an `ic` right-hand side reads a state, directly or
+    # through observeds. A construction error, not a `validate` finding.
+    IC_READS_STATE = "ic_reads_state",
     EVENT_VAR_UNDECLARED = "event_var_undeclared",
     INVALID_BROADCAST_FN = "invalid_broadcast_fn",
     INVALID_REFERENCE_SYNTAX = "invalid_reference_syntax",

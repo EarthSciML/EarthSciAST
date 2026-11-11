@@ -102,7 +102,9 @@ from .simulation_array import (
     _resolve_index_set_shape,
     _simulate_with_numpy,
     classify_second_whole_definition,
+    ic_start_reads,
     probe_output_time_observeds,
+    refuse_ic_reads_state,
     rule_label,
 )
 from .simulation_common import (
@@ -826,6 +828,35 @@ def _esm_problem_under(
         {*flat.state_variables, *flat.parameters, *flat.observed_variables},
         flat_namespace_scope(flat),
     )
+    # A DISCRETE provider's key is spelled the same way (esm-spec §6.6.2): the
+    # bare `F` designates the data-fed `H.F`. The segmented engine binds each
+    # provider's samples under its key, so a key left bare bound nothing the
+    # equations read, and the run took the parameter's default instead.
+    discrete_keys_as_passed = set(discrete_providers)
+    discrete_providers = _canonicalize_provider_keys(flat, discrete_providers)
+    if providers:
+        # The Problem keeps the canonical keys too: `solve` re-samples the
+        # discrete providers from it on every run after the first.
+        providers = {
+            **{str(k): v for k, v in providers.items() if str(k) not in discrete_keys_as_passed},
+            **discrete_providers,
+        }
+
+    # esm-spec §11.4.2 / esm-libraries-spec §2.5.2: an `ic` reads its data at the
+    # run's start, not at `sample_time`. When the two differ, the one-shot build
+    # gets the materialize-once providers the `ic`s read sampled again at
+    # tspan[0] for its `ic` evaluation only; the Problem's forcing keeps the
+    # `sample_time` samples.
+    ic_arrays = _ic_start_samples(
+        flat, providers, merged, {*discrete_providers, *gated}, tspan[0], t0
+    )
+
+    # esm-spec §11.4.2: an `ic` right-hand side that reads a state, directly or
+    # through observeds, is refused here, at construction and ahead of every
+    # engine, so the refusal does not depend on which machinery builds the
+    # Problem. A name bound by data is a value, not a definition to follow.
+    _data_keys = [*merged, *discrete_providers, *gated]
+    refuse_ic_reads_state(flat, bound=lambda name: _binds(name, _data_keys))
 
     # ---- data-fed parameters: refuse one with nothing bound (§9.6.6) -------
     # Before the engine is chosen and before anything is compiled, so the answer
@@ -887,6 +918,8 @@ def _esm_problem_under(
             gated_providers=gated,
             sample_time=t0,
             build_only=True,
+            start_time=tspan[0],
+            ic_loader_arrays=ic_arrays,
         )
         if inspect is not None:
             _fill_build_inspection(inspect, flat, build, t0, loader_arrays=merged)
@@ -903,6 +936,8 @@ def _esm_problem_under(
             gated_providers=gated,
             sample_time=t0,
             build_only=True,
+            start_time=tspan[0],
+            ic_loader_arrays=ic_arrays,
         )
         if inspect is not None:
             _fill_build_inspection(inspect, flat, build, t0, loader_arrays=merged)
@@ -922,7 +957,7 @@ def _esm_problem_under(
         # the calls that really do need the SymPy tier — `solve`, `init` —
         # surface it with this cause attached instead of meeting it again blind.
         try:
-            scalar_build = _build_scalar_rhs(flat, p, u0, cse=cse)
+            scalar_build = _build_scalar_rhs(flat, p, u0, cse=cse, t0=tspan[0])
         except Exception as exc:  # noqa: BLE001 — recorded below, raised by solve()
             if getattr(exc, "code", None) is not None:
                 # A DIAGNOSTIC this binding chose to emit — an unbalanced system,
@@ -933,7 +968,7 @@ def _esm_problem_under(
             scalar_build = None
             scalar_build_error = exc
     elif engine == "scalar":
-        scalar_build = _build_scalar_rhs(flat, p, u0, cse=cse)
+        scalar_build = _build_scalar_rhs(flat, p, u0, cse=cse, t0=tspan[0])
     # The loader- and discrete-provider engines rebuild the right-hand side at
     # every cadence boundary — a refreshed forcing changes the const-hoisted
     # geometry the build folds in — so their compile belongs to the segment, not
@@ -1058,6 +1093,11 @@ def _seed_segmented_engine(
             static_cache=static_cache,
             seed_only=True,
         )
+        if isinstance(seed, Solution):
+            # The discrete driver reports a failure as a failed Solution rather
+            # than raising; that is no seed, and handing it to `solve` as one
+            # failed there on a missing attribute instead of on the cause.
+            return None, seed.message
         return seed, None
     except CompilerRefusedRuleError:
         raise
@@ -1068,6 +1108,54 @@ def _seed_segmented_engine(
         raise
     except Exception as exc:  # noqa: BLE001 — a non-refusal failure stays a run failure
         return None, f"{type(exc).__name__}: {exc}"
+
+
+def _ic_start_samples(
+    flat: FlattenedSystem,
+    providers: dict[str, Any] | None,
+    const_arrays: dict[str, Any],
+    skip: set[str],
+    start: float,
+    sample_time: float,
+) -> dict[str, np.ndarray] | None:
+    """The materialize-once providers an ``ic`` right-hand side reads, directly
+    or through observeds, sampled at the run's ``start`` (esm-spec §11.4.2,
+    esm-libraries-spec §2.5.2), keyed as ``const_arrays`` holds their
+    ``sample_time`` samples; ``None`` when ``start`` is ``sample_time``, where
+    those samples already are the start's. A provider no ``ic`` reads is not
+    sampled again, and neither is one in ``skip`` (the discrete and gated ones,
+    which the construction sample does not hold)."""
+    if not flat.field_ics or start == sample_time or not providers:
+        return None
+    once = {str(k): v for k, v in providers.items() if str(k) not in skip}
+    read = ic_start_reads(flat)
+    return {
+        k: np.asarray(_provider_sample_field(prov, start), dtype=float)
+        for k, prov in _canonicalize_provider_keys(flat, once).items()
+        if k in const_arrays and k in read
+    }
+
+
+def _canonicalize_provider_keys(flat: FlattenedSystem, providers: dict[str, Any]) -> dict[str, Any]:
+    """``providers`` re-keyed so each key that designates a shaped or data-fed
+    parameter by a bare or partly qualified spelling (esm-spec §6.6.2) names its
+    flattened parameter instead. A key that designates none stays as it is, as
+    in :func:`canonicalize_const_array_keys`, whose resolution this reuses."""
+    if not providers:
+        return providers
+    names = {n for n, v in flat.parameters.items() if v.shape}
+    names.update(n for n, _src in _data_fed_parameters(flat))
+    resolved = canonicalize_const_array_keys(
+        {k: k for k in providers},
+        sorted(names),
+        {*flat.state_variables, *flat.parameters, *flat.observed_variables},
+        flat_namespace_scope(flat),
+    )
+    renamed = {key: orig for key, orig in resolved.items() if key != orig}
+    claimed = set(renamed.values())
+    out = {k: v for k, v in providers.items() if k not in claimed}
+    out.update({key: providers[orig] for key, orig in renamed.items()})
+    return out
 
 
 def _data_fed_parameters(flat: FlattenedSystem) -> list[tuple[str, str]]:
@@ -2373,7 +2461,10 @@ def remake(
                 f"not re-fetch provider data. Build a new EsmProblem with esm_problem()."
             )
 
-    rebind = p is not None or u0 is not None
+    # A new start re-evaluates every `ic` right-hand side there (esm-spec
+    # §11.4.2), so it rebuilds the initial state as a new `p` or `u0` does.
+    new_start = new_tspan[0] != prob.tspan[0]
+    rebind = p is not None or u0 is not None or new_start
     build = prob.build
     scalar_build = prob.scalar_build
     # The rebuild is the SAME compiler's: a remake that quietly changed strategy
@@ -2388,12 +2479,30 @@ def remake(
                 static_cache=prob.static_cache,
                 sample_time=prob.sample_time,
                 build_only=True,
+                start_time=new_tspan[0],
+                ic_loader_arrays=_ic_start_samples(
+                    prob.flat,
+                    prob.providers,
+                    prob.const_arrays,
+                    {
+                        *prob.gated_provider_keys,
+                        *(
+                            str(k)
+                            for k, v in (prob.providers or {}).items()
+                            if _provider_is_discrete(v)
+                        ),
+                    },
+                    new_tspan[0],
+                    prob.sample_time,
+                ),
             )
             exercise_every_evaluation(
                 prob.flat, build, prob.sample_time, loader_arrays=prob.const_arrays
             )
         elif rebind and prob.engine == "scalar":
-            scalar_build = _build_scalar_rhs(prob.flat, new_p, new_u0, cse=prob.cse)
+            scalar_build = _build_scalar_rhs(
+                prob.flat, new_p, new_u0, cse=prob.cse, t0=new_tspan[0]
+            )
 
     return EsmProblem(
         flat=prob.flat,

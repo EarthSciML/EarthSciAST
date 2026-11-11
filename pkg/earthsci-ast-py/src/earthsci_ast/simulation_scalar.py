@@ -38,8 +38,8 @@ from .flatten import (
 from .simulation_array import (
     _densify_solution,
     _saveat_times,
-    resolve_scalar_ic,
     scalar_ic_equations,
+    start_of_run_scalar_ics,
 )
 from .simulation_common import (
     ReturnCode,
@@ -236,6 +236,7 @@ def _build_scalar_rhs(
     parameters: dict[str, float],
     initial_conditions: dict[str, float],
     cse: bool = True,
+    t0: float = 0.0,
 ) -> _ScalarRhsBuild:
     """Lower a scalar flattened system to a lambdified NumPy right-hand side.
 
@@ -270,15 +271,15 @@ def _build_scalar_rhs(
     # A silent wrong answer, and — since §6.6.5 puts model PARAMETERS in the
     # build-time scope of an `ic` RHS — one a `parameter_overrides` could
     # not move either.
-    eq_ics = {
-        target: resolve_scalar_ic(
-            target,
-            rhs,
-            param_values=dict(zip(compiled.parameter_names, param_values)),
-            index_sets=flat.index_sets,
-        )
-        for target, rhs in scalar_ic_equations(flat)
-    }
+    # Each is evaluated once, at the run's start ``t0``, in the start-of-run
+    # scope of esm-spec §11.4.2: ``t`` is ``t0``, and an observed it reads is
+    # evaluated there too. One that reads a state is refused (`ic_reads_state`).
+    eq_ics = start_of_run_scalar_ics(
+        flat,
+        scalar_ic_equations(flat),
+        dict(zip(compiled.parameter_names, param_values)),
+        float(t0),
+    )
     y0_list: list[float] = []
     known_states = set(flat.state_variables)
     state_namespaces = flat_namespace_scope(flat)
@@ -396,7 +397,9 @@ def _simulate_scalar(
         build = (
             prebuilt
             if prebuilt is not None
-            else _build_scalar_rhs(flat, parameters, initial_conditions, cse=cse)
+            else _build_scalar_rhs(
+                flat, parameters, initial_conditions, cse=cse, t0=float(tspan[0])
+            )
         )
         compiled = build.compiled
         state_names = build.state_names

@@ -185,3 +185,31 @@ class MissingInitialValueError(SimulationError):
             f"is built (esm-spec §11.4). To supply it, pass `u0={{'{first}': value}}` to "
             "`esm_problem`, or declare a `default` on the unknown."
         )
+
+
+class IcReadsStateError(SimulationError):
+    """``ic_reads_state``: an ``ic`` right-hand side reads a state, directly or
+    through a chain of observeds (esm-spec §11.4.2). An ``ic`` is evaluated once
+    at the run's start, before any state has a value, so the build refuses it at
+    construction rather than evaluating it with a placeholder. Julia and Rust
+    raise the same code.
+
+    ``target`` is the ``ic`` target, ``state`` the state read, and ``chain`` the
+    observeds the right-hand side reads on the way to it, in order (empty when
+    it reads the state directly).
+    """
+
+    code = "ic_reads_state"
+
+    def __init__(self, target: str, state: str, chain: list[str] | tuple[str, ...] = ()) -> None:
+        self.target = target
+        self.state = state
+        self.chain = list(chain)
+        path = "".join(f"'{n}', which reads " for n in self.chain)
+        super().__init__(
+            f"{self.code}: ic({target}) reads {path}'{state}', a state. An `ic` right-hand "
+            "side is evaluated once, at the start of the run, before any state has a value, "
+            "so it may read parameters, data, coordinates, `t` and observeds over those, "
+            "but not a state (esm-spec §11.4.2). Seed it from a parameter or an observed "
+            "that reads no state, or pass its value as `u0`."
+        )

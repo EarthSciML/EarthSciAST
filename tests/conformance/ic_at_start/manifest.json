@@ -1,0 +1,403 @@
+{
+ "category": "ic_at_start",
+ "version": "1.0",
+ "description": "An `ic` right-hand side is evaluated once, at t0 = tspan[0], the start of the run, in the start-of-run scope (esm-spec 11.4.2): it may read the independent variable t (bound to t0), every parameter (scalar or shaped), every data-fed parameter at the value its provider gives at t0, and every observed over those, scalar or array-valued; it may not read a state, and a build refuses one that does at construction with ic_reads_state. Each case builds its fixture with the case's tspan, p, providers and sample_time and checks the state a solve starts from at tspan[0], element by element, keyed by flattened name; a refusal case checks that construction raises the error code. Every provider value is a dyadic rational and every formula exact in binary64, so the expected values are exact.",
+ "spec": [
+  "esm-spec.md 11.4.2",
+  "esm-spec.md 6.6.5 (build-time evaluation scope)",
+  "esm-libraries-spec.md 2.5.2"
+ ],
+ "compiler": "native",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "typescript": "No simulator (API_SPEC 3, capability profiles).",
+  "go": "No simulator (API_SPEC 3, capability profiles)."
+ },
+ "provider": "As tests/conformance/provider_forcing: a provider entry is passed under `key` in the construction option `providers`. It delivers one field whose value at time t is base + slope * t elementwise; `base` is nested row-major (outer list = first index) over `shape`, and a 0-d field is one number. `refresh_times` empty makes it a const provider (slope 0); otherwise it is discrete with those refresh times.",
+ "checks": {
+  "expected": "the state a solve of the Problem starts from at tspan[0] equals `expected` for every state element (rtol, atol below); Rust also checks initial_state(prob) against it bit for bit",
+  "error_code": "building the Problem (or, at the latest, building its initial state) raises an error carrying `error_code`"
+ },
+ "tolerances": {
+  "rtol": 1e-14,
+  "atol": 1e-14
+ },
+ "cases": [
+  {
+   "id": "t_at_nonzero_start",
+   "fixture": "fixtures/ic_reads_t.esm",
+   "tspan": [
+    10.0,
+    11.0
+   ],
+   "providers": [],
+   "expected": {
+    "T.a": 21.0,
+    "T.u[1]": 6.0,
+    "T.u[2]": 7.0,
+    "T.u[3]": 8.0
+   },
+   "note": "t is bound to t0 = 10: a = 2*10 + 1, u[i] = rate[i] = i + 0.5*10. A binding that binds t to 0 gives a = 1, u = [1, 2, 3].",
+   "p": {}
+  },
+  {
+   "id": "t_at_zero_start",
+   "fixture": "fixtures/ic_reads_t.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "providers": [],
+   "expected": {
+    "T.a": 1.0,
+    "T.u[1]": 1.0,
+    "T.u[2]": 2.0,
+    "T.u[3]": 3.0
+   },
+   "note": "the control at t0 = 0",
+   "p": {}
+  },
+  {
+   "id": "t_scalar_runtime",
+   "fixture": "fixtures/ic_reads_t_scalar.esm",
+   "tspan": [
+    10.0,
+    11.0
+   ],
+   "providers": [],
+   "expected": {
+    "S.a": 21.0,
+    "S.b": 60.0
+   },
+   "note": "the same on a document with no array state: a = 2*10 + 1, b = g = 3*2*10",
+   "p": {}
+  },
+  {
+   "id": "t_scalar_runtime_parameter",
+   "fixture": "fixtures/ic_reads_t_scalar.esm",
+   "tspan": [
+    10.0,
+    11.0
+   ],
+   "providers": [],
+   "p": {
+    "k": 0.5
+   },
+   "expected": {
+    "S.a": 6.0,
+    "S.b": 15.0
+   },
+   "note": "a parameter override reaches an ic that reads t, directly and through an observed: a = 0.5*10 + 1, b = 3*0.5*10"
+  },
+  {
+   "id": "data_fed_discrete_at_start",
+   "fixture": "fixtures/ic_data_fed.esm",
+   "tspan": [
+    5.0,
+    9.0
+   ],
+   "providers": [
+    {
+     "key": "H.F",
+     "refresh_times": [
+      8.0
+     ],
+     "shape": [
+      2,
+      3
+     ],
+     "base": [
+      [
+       100.0,
+       200.0,
+       300.0
+      ],
+      [
+       500.0,
+       600.0,
+       700.0
+      ]
+     ],
+     "slope": 4.0
+    },
+    {
+     "key": "H.q",
+     "refresh_times": [
+      8.0
+     ],
+     "shape": [],
+     "base": 3.0,
+     "slope": 0.5
+    }
+   ],
+   "expected": {
+    "H.m[1,1]": 120.0,
+    "H.m[1,2]": 60.0,
+    "H.m[2,1]": 170.0,
+    "H.m[2,2]": 85.0,
+    "H.m[3,1]": 220.0,
+    "H.m[3,2]": 110.0,
+    "H.s": 27.5
+   },
+   "note": "t0 = 5: F = base + 4*5, w = 5/4 - 1 = 0.25, P = 0.75*F[1,:] + 0.25*F[2,:] = [220, 320, 420], m = dp = dA[k] + dB[k]*P; q = 3 + 0.5*5, s = 5.5*5",
+   "p": {}
+  },
+  {
+   "id": "data_fed_discrete_sample_time_differs",
+   "fixture": "fixtures/ic_data_fed.esm",
+   "tspan": [
+    5.0,
+    9.0
+   ],
+   "sample_time": 0.0,
+   "providers": [
+    {
+     "key": "H.F",
+     "refresh_times": [
+      8.0
+     ],
+     "shape": [
+      2,
+      3
+     ],
+     "base": [
+      [
+       100.0,
+       200.0,
+       300.0
+      ],
+      [
+       500.0,
+       600.0,
+       700.0
+      ]
+     ],
+     "slope": 4.0
+    },
+    {
+     "key": "H.q",
+     "refresh_times": [
+      8.0
+     ],
+     "shape": [],
+     "base": 3.0,
+     "slope": 0.5
+    }
+   ],
+   "expected": {
+    "H.m[1,1]": 120.0,
+    "H.m[1,2]": 60.0,
+    "H.m[2,1]": 170.0,
+    "H.m[2,2]": 85.0,
+    "H.m[3,1]": 220.0,
+    "H.m[3,2]": 110.0,
+    "H.s": 27.5
+   },
+   "note": "construction samples the providers at sample_time = 0, but the ic reads them at t0 = 5: the same initial state as data_fed_discrete_at_start",
+   "p": {}
+  },
+  {
+   "id": "data_fed_discrete_zero_start",
+   "fixture": "fixtures/ic_data_fed.esm",
+   "tspan": [
+    0.0,
+    4.0
+   ],
+   "providers": [
+    {
+     "key": "H.F",
+     "refresh_times": [
+      2.0
+     ],
+     "shape": [
+      2,
+      3
+     ],
+     "base": [
+      [
+       100.0,
+       200.0,
+       300.0
+      ],
+      [
+       500.0,
+       600.0,
+       700.0
+      ]
+     ],
+     "slope": 4.0
+    },
+    {
+     "key": "H.q",
+     "refresh_times": [
+      2.0
+     ],
+     "shape": [],
+     "base": 3.0,
+     "slope": 0.5
+    }
+   ],
+   "expected": {
+    "H.m[1,1]": 60.0,
+    "H.m[1,2]": 30.0,
+    "H.m[2,1]": 110.0,
+    "H.m[2,2]": 55.0,
+    "H.m[3,1]": 160.0,
+    "H.m[3,2]": 80.0,
+    "H.s": 0.0
+   },
+   "note": "t0 = 0: F = base, w = 0, P = F[1,:] = [100, 200, 300]; s = 3*0",
+   "p": {}
+  },
+  {
+   "id": "data_fed_const_providers",
+   "fixture": "fixtures/ic_data_fed.esm",
+   "tspan": [
+    5.0,
+    9.0
+   ],
+   "providers": [
+    {
+     "key": "H.F",
+     "refresh_times": [],
+     "shape": [
+      2,
+      3
+     ],
+     "base": [
+      [
+       100.0,
+       200.0,
+       300.0
+      ],
+      [
+       500.0,
+       600.0,
+       700.0
+      ]
+     ],
+     "slope": 0.0
+    },
+    {
+     "key": "H.q",
+     "refresh_times": [],
+     "shape": [],
+     "base": 2.5,
+     "slope": 0.0
+    }
+   ],
+   "expected": {
+    "H.m[1,1]": 110.0,
+    "H.m[1,2]": 55.0,
+    "H.m[2,1]": 160.0,
+    "H.m[2,2]": 80.0,
+    "H.m[3,1]": 210.0,
+    "H.m[3,2]": 105.0,
+    "H.s": 12.5
+   },
+   "note": "const providers: F = base, P = 0.75*F[1,:] + 0.25*F[2,:] = [200, 300, 400]; s = 2.5*5",
+   "p": {}
+  },
+  {
+   "id": "data_fed_bare_keys",
+   "fixture": "fixtures/ic_data_fed.esm",
+   "tspan": [
+    5.0,
+    9.0
+   ],
+   "providers": [
+    {
+     "key": "F",
+     "refresh_times": [
+      8.0
+     ],
+     "shape": [
+      2,
+      3
+     ],
+     "base": [
+      [
+       100.0,
+       200.0,
+       300.0
+      ],
+      [
+       500.0,
+       600.0,
+       700.0
+      ]
+     ],
+     "slope": 4.0
+    },
+    {
+     "key": "q",
+     "refresh_times": [
+      8.0
+     ],
+     "shape": [],
+     "base": 3.0,
+     "slope": 0.5
+    }
+   ],
+   "expected": {
+    "H.m[1,1]": 120.0,
+    "H.m[1,2]": 60.0,
+    "H.m[2,1]": 170.0,
+    "H.m[2,2]": 85.0,
+    "H.m[3,1]": 220.0,
+    "H.m[3,2]": 110.0,
+    "H.s": 27.5
+   },
+   "note": "the discrete providers keyed by the bare parameter names (esm-spec 6.6.2)",
+   "p": {}
+  },
+  {
+   "id": "data_fed_no_providers",
+   "fixture": "fixtures/ic_data_fed.esm",
+   "tspan": [
+    5.0,
+    9.0
+   ],
+   "providers": [],
+   "expected": {
+    "H.m[1,1]": 510.0,
+    "H.m[1,2]": 255.0,
+    "H.m[2,1]": 510.0,
+    "H.m[2,2]": 255.0,
+    "H.m[3,1]": 510.0,
+    "H.m[3,2]": 255.0,
+    "H.s": 15.0
+   },
+   "note": "no data supplied: each data-fed parameter is its declared default, F = 1000, q = 3",
+   "p": {}
+  },
+  {
+   "id": "refuse_array_state_through_observed",
+   "fixture": "fixtures/ic_reads_state.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "providers": [],
+   "error_code": "ic_reads_state",
+   "note": "ic(v) = g reads the observed g, which reads the state u",
+   "p": {}
+  },
+  {
+   "id": "refuse_scalar_state",
+   "fixture": "fixtures/ic_reads_state_scalar.esm",
+   "tspan": [
+    0.0,
+    1.0
+   ],
+   "providers": [],
+   "error_code": "ic_reads_state",
+   "note": "ic(b) = a + r*t reads the state a",
+   "p": {}
+  }
+ ]
+}

@@ -718,3 +718,56 @@ end
         @test_throws SimulateError observed_field(prob, "M.nope")
     end
 end
+
+# esm-spec §11.4.2 under `:mtk`: what an `ic` right-hand side may read here.
+@testset "compiler = :mtk: an ic's start-of-run reads" begin
+    ics_dir = _mtkc_fixture("conformance", "ic_at_start", "fixtures")
+    edited(name, f!) = begin
+        doc = JSON3.read(read(joinpath(ics_dir, name), String), Dict{String, Any})
+        f!(doc)
+        path = joinpath(mktempdir(), name)
+        write(path, JSON3.write(doc))
+        path
+    end
+    lhs_is(eq, l) = JSON3.write(eq["lhs"]) == JSON3.write(l)
+
+    # A state-free ARRAY observed defined cell by cell is filed among the state
+    # variables of the flattened system (it materializes into a buffer), but it
+    # is no state: an `ic` reading it is not refused as reading one.
+    no_t = edited(
+        "ic_reads_t.esm", doc -> begin
+            for eq in doc["models"]["T"]["equations"]
+                eq["lhs"] == "rate" || continue
+                # Defined cell by cell, so it materializes into a buffer.
+                eq["lhs"] = Dict(
+                    "op" => "faq", "args" => [], "output_idx" => ["i"],
+                    "ranges" => Dict("i" => Dict("from" => "x")),
+                    "expr" => Dict("op" => "index", "args" => ["rate", "i"])
+                )
+                eq["rhs"]["expr"] = Dict("op" => "+", "args" => ["i", "h"])
+                lhs_is(eq, Dict("op" => "ic", "args" => ["a"])) && (eq["rhs"] = 1.0)
+            end
+        end
+    )
+    flat = _MTKC.flatten(_MTKC.load_path(no_t))
+    @test haskey(flat.state_variables, "T.rate") && haskey(flat.observed_variables, "T.rate")
+    err = _mtkc_raise(esm_problem, no_t, (0.0, 1.0); compiler = :mtk)
+    @test !(err isa TreeWalkError && err.code == "ic_reads_state")
+
+    # A data-fed parameter, read directly: refused by name, as `t` is, since
+    # this compiler would read it at its construction-time value rather than
+    # at the start of the run.
+    fed = edited(
+        "ic_data_fed.esm", doc -> begin
+            for eq in doc["models"]["H"]["equations"]
+                lhs_is(eq, Dict("op" => "ic", "args" => ["m"])) && (eq["rhs"] = 0.0)
+                lhs_is(eq, Dict("op" => "ic", "args" => ["s"])) && (eq["rhs"] = "q")
+            end
+        end
+    )
+    err = _mtkc_raise(esm_problem, fed, (5.0, 9.0); compiler = :mtk)
+    @test err isa TreeWalkError
+    @test err !== nothing && err.code == _MTKC.ERROR_CODES.COMPILER_REFUSED_RULE
+    @test err !== nothing && occursin("ic(H.s)", err.detail)
+    @test err !== nothing && occursin("data-fed parameter 'H.q'", err.detail)
+end

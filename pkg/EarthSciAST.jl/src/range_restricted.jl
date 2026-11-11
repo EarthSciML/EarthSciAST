@@ -455,6 +455,8 @@ function _program_build(
                 _gated_providers = seed.gated_providers, _sample_time = seed.sample_time,
                 _runtime_array_parameters = get(seed, :runtime_array_parameters, false),
                 _live_fed_parameters = true,
+                _ic_t0 = get(seed, :ic_t0, seed.sample_time),
+                _ic_data = get(seed, :ic_data, Dict{String, Any}()),
                 inspect = inspect, _param_classes = param_classes
             )
         end

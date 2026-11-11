@@ -536,8 +536,9 @@ fn an_ic_scope_observed_reads_a_scalar_one() {
     }
 }
 
-/// An `ic` reading an observed that is not state-free says so, naming the
-/// chain to the state.
+/// An `ic` reading an observed that is not state-free is refused at
+/// construction with `ic_reads_state` (esm-spec §11.4.2), naming the chain to
+/// the state.
 #[test]
 fn an_ic_reading_a_state_dependent_observed_says_why() {
     let doc = with_ic_scope(
@@ -554,14 +555,18 @@ fn an_ic_reading_a_state_dependent_observed_says_why() {
         ],
     );
     let file = load_string(&doc.to_string()).expect("loads");
-    let prob = esm_problem(&file, (0.0, 1.0), opts(Compiler::Interpreter)).expect("builds");
-    let err = solve(&prob, &SolveOptions::default()).expect_err("ic reads state");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("'b' is not in the build-time scope")
-            && msg.contains("reads 'a', which reads 'u'"),
-        "{msg}"
-    );
+    for compiler in [Compiler::Native, Compiler::Interpreter] {
+        let err = match esm_problem(&file, (0.0, 1.0), opts(compiler)) {
+            Ok(_) => panic!("[{compiler}] an ic reading state must not build"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.starts_with("ic_reads_state:")
+                && msg.contains("reads 'b', which reads 'a', which reads 'u', a state"),
+            "[{compiler}] {msg}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

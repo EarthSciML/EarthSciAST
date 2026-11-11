@@ -1007,10 +1007,12 @@ end
 # `t` is the SIMULATION TIME the expression is evaluated at. `_compile` maps the
 # name `t` to the evaluator's dedicated time slot rather than to a parameter
 # read, so a time-dependent body reads this argument and nothing else: passing
-# the time as an entry of `params` does not reach it. It defaults to `0.0` —
-# every build-time caller (grid geometry, a field `ic`, a setup buffer) is by
-# definition at the start of the span — and only an assertion, which carries a
-# `time` of its own (esm-spec §6.6.3), passes anything else. Before this
+# the time as an entry of `params` does not reach it. It defaults to `0.0`,
+# which grid geometry and a setup buffer never read; an `ic` right-hand side,
+# which reads `t` at the start of the run (esm-spec §11.4.2), reaches it with
+# `t` renamed to a scalar bound to that start (`_ic_bind_start_time`), and an
+# assertion, which carries a `time` of its own (esm-spec §6.6.3), passes its
+# time here. Before this
 # argument existed the slot was the literal `0.0` at every call site, so a
 # `t`-dependent observed asserted at any other time read ZERO and reported a
 # plausible-looking wrong number (issue #406).

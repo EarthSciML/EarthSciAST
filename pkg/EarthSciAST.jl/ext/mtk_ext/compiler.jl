@@ -232,6 +232,76 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
             )
         end
     end
+    _mtk_refuse_ic_outside_start_scope(flat)
+    return nothing
+end
+
+# esm-spec §11.4.2 under this compiler. An `ic` right-hand side is evaluated
+# once, at the start of the run, and may not read a state, directly or through
+# observeds: refused with `ic_reads_state`, as the native build refuses it,
+# rather than handed to ModelingToolkit, which would evaluate it with the
+# state's own starting value. One that reads the independent variable `t` or a
+# data-fed parameter, directly or through observeds, is refused by name: this
+# compiler hands the initial value to ModelingToolkit as a symbolic default,
+# and nothing here pins the time that default is evaluated at to the run's
+# start (a data-fed parameter holds its `sample_time` value there, not its
+# value at the start, esm-libraries-spec §2.5.2), nor evaluates it again when
+# a `remake` moves the start.
+function _mtk_refuse_ic_outside_start_scope(flat::FlattenedSystem)
+    ics = Tuple{String, Any}[(String(first(p)), last(p)) for p in flat.field_ics]
+    for eq in flat.equations
+        lhs = eq.lhs
+        (
+            lhs isa OpExpr && lhs.op == "ic" && length(lhs.args) == 1 &&
+                lhs.args[1] isa VarExpr
+        ) || continue
+        push!(ics, ((lhs.args[1]::VarExpr).name, eq.rhs))
+    end
+    isempty(ics) && return nothing
+    # `state_variables` also holds every arrayed observed that materializes
+    # into a buffer (esm-libraries-spec §4.7.5 step 4); an observed is not a
+    # state, and an `ic` may read a state-free one.
+    states = Set{String}(
+        n for n in keys(flat.state_variables) if !haskey(flat.observed_variables, n)
+    )
+    data_fed = Set{String}(f.name for f in flat.loader_fields)
+    for (n, v) in flat.parameters
+        EarthSciAST._is_data_fed(v) && push!(data_fed, n)
+    end
+    defs = Dict{String, Any}()
+    for eq in flat.equations
+        eq.lhs isa VarExpr || continue
+        n = (eq.lhs::VarExpr).name
+        haskey(flat.observed_variables, n) && !haskey(defs, n) && (defs[n] = eq.rhs)
+    end
+    for (target, rhs) in ics
+        seen = Set{String}()
+        walk(e, chain) = for m in sort!(collect(EarthSciAST._referenced_var_names(e)))
+            m in states && throw(EarthSciAST._ic_reads_state_error(target, chain, m))
+            m == "t" && _mtk_refuse(
+                "ic($(target))",
+                "its right-hand side reads the independent variable `t`" *
+                    (isempty(chain) ? "" : " through the observed '$(first(chain))'") *
+                    ", which an initial value reads at the start of the run (esm-spec " *
+                    "§11.4.2); this compiler hands the initial value to ModelingToolkit " *
+                    "as a symbolic default and does not pin that time. $_MTK_TRY_INSTEAD"
+            )
+            m in data_fed && _mtk_refuse(
+                "ic($(target))",
+                "its right-hand side reads the data-fed parameter '$m'" *
+                    (isempty(chain) ? "" : " through the observed '$(first(chain))'") *
+                    ", which an initial value reads at its value at the start of the " *
+                    "run (esm-spec §11.4.2); this compiler hands the initial value to " *
+                    "ModelingToolkit as a symbolic default over the parameter's " *
+                    "construction-time value. $_MTK_TRY_INSTEAD"
+            )
+            if haskey(defs, m) && !(m in seen)
+                push!(seen, m)
+                walk(defs[m], String[chain; m])
+            end
+        end
+        walk(rhs, String[])
+    end
     return nothing
 end
 
