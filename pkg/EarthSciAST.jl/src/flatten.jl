@@ -1332,7 +1332,11 @@ function flatten(
                 states, params, observeds, equations, contribs,
                 continuous_events, discrete_events,
                 model, name;
-                tpl_rename = get(template_rename, name, nothing)
+                tpl_rename = get(template_rename, name, nothing),
+                tpl_captures = template_captures(
+                    file.component_templates === nothing ? nothing :
+                        get(file.component_templates, "models.$(name)", nothing)
+                )
             )
             _attribute_equations!(eq_owners, equations, name)
             _collect_loader_fields!(loader_fields, model, name, file.data_sources)

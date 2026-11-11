@@ -2,7 +2,7 @@
   "esm": "2.0.0",
   "metadata": {
     "name": "LoopBinderShadowingEdges",
-    "description": "The edges of the loop-symbol shadowing rule (esm-spec §4.3, \"Shadowing\") that index_symbol_shadows_variable.esm does not reach. Model Edges declares parameters `z` and `g`. Its first equation holds an `integral` whose `var` is `z`, so the `z` inside the integrand is the integration variable while the outer factor `z` is the parameter. Its second equation multiplies the parameter `g` by an `argmin` template call (esm:std/relational.esm) whose candidate expression ranges over the template's own loop symbol `k_argmin_1`, so `g` stays the parameter everywhere. Model Outer mounts a subsystem named `j` and holds a faq that binds `j`: the bare `j` in the body is the loop index, but the dotted `j.x` is never a loop index and must become Outer.j.x.",
+    "description": "The edges of the loop-symbol shadowing rule (esm-spec §4.3, \"Shadowing\") that index_symbol_shadows_variable.esm does not reach. Model Edges declares parameters `z` and `g`. Its first equation holds an `integral` whose `var` is `z`, so the `z` inside the integrand is the integration variable while the outer factor `z` is the parameter. Its second equation multiplies the parameter `k_argmin_1` by an `argmin` template call (esm:std/relational.esm) whose loop symbol is also `k_argmin_1`: inside the call's candidate binding `w[k_argmin_1]` the name is the template's loop index, outside it is the parameter. Model Outer mounts a subsystem named `j` and holds a faq that binds `j`: the bare `j` in the body is the loop index, but the dotted `j.x` is never a loop index and must become Outer.j.x.",
     "authors": [
       "ESM Test Suite"
     ],
@@ -54,10 +54,10 @@
           "default": 0.5,
           "description": "Parameter spelled like the integration variable"
         },
-        "g": {
+        "k_argmin_1": {
           "type": "parameter",
           "default": 2.0,
-          "description": "Parameter read beside the `argmin` template call"
+          "description": "Parameter spelled like the argmin template's loop symbol k_argmin_1"
         }
       },
       "equations": [
@@ -102,7 +102,7 @@
           "rhs": {
             "op": "*",
             "args": [
-              "g",
+              "k_argmin_1",
               {
                 "op": "apply_expression_template",
                 "args": [],

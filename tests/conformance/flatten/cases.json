@@ -4090,7 +4090,7 @@
           "source_system": "Edges"
         },
         {
-          "name": "Edges.g",
+          "name": "Edges.k_argmin_1",
           "role": "parameter",
           "units": null,
           "default": 2.0,
@@ -4133,11 +4133,11 @@
         },
         {
           "lhs": "D(Edges.b)/Dt",
-          "rhs": "Edges.g * min[] (ifelse((Edges.w[k_argmin_1] == min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} or Edges.w[k_argmin_1] != Edges.w[k_argmin_1] and min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} != min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3}), k_argmin_1, 3 + 1)) where {k_argmin_1 in 1:3}",
+          "rhs": "Edges.k_argmin_1 * min[] (ifelse((Edges.w[k_argmin_1] == min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} or Edges.w[k_argmin_1] != Edges.w[k_argmin_1] and min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} != min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3}), k_argmin_1, 3 + 1)) where {k_argmin_1 in 1:3}",
           "source_system": "Edges",
           "contributions": [
             {
-              "rhs": "Edges.g * min[] (ifelse((Edges.w[k_argmin_1] == min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} or Edges.w[k_argmin_1] != Edges.w[k_argmin_1] and min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} != min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3}), k_argmin_1, 3 + 1)) where {k_argmin_1 in 1:3}",
+              "rhs": "Edges.k_argmin_1 * min[] (ifelse((Edges.w[k_argmin_1] == min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} or Edges.w[k_argmin_1] != Edges.w[k_argmin_1] and min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3} != min[] (Edges.w[k_argmin_1]) where {k_argmin_1 in 1:3}), k_argmin_1, 3 + 1)) where {k_argmin_1 in 1:3}",
               "origins": [
                 {
                   "component": "Edges"

@@ -844,7 +844,7 @@ end
         @test to_ascii(_find_eq(flat, "Edges.a").rhs) ==
             "Edges.z * integral(z * Edges.a, z, 0, 1)"
         @test to_ascii(_find_eq(flat, "Edges.b").rhs) ==
-            "Edges.g * argmin<f=Edges.w[k_argmin_1], n=3>"
+            "Edges.k_argmin_1 * argmin<f=Edges.w[k_argmin_1], n=3>"
         @test to_ascii(_find_eq(flat, "Outer.u").rhs) ==
             "sum[j] (Outer.u[j] * Outer.j.x) where {j in 1:3}"
     end
