@@ -833,6 +833,9 @@ type DataSourceLocation struct {
 
 // DataSourceTemporal describes the temporal coverage and record layout
 // (esm-spec 8.3). RecordsPerFile may be an int or the string "auto".
+// RecordsPerSample is DEPRECATED (removed at esm 1.4.0, esm-spec 8.5.1): a
+// record count for every parameter of the source, which must agree with each
+// one's record shape; nil when not written.
 type DataSourceTemporal struct {
 	Start            *string `json:"start,omitempty"`
 	End              *string `json:"end,omitempty"`
@@ -867,25 +870,28 @@ type DataSourceBinding struct {
 	UnitConversion any    `json:"unit_conversion,omitempty"`
 	Codes          any    `json:"codes,omitempty"`
 	Select         any    `json:"select,omitempty"`
-	// RecordsPerSample is how many records the parameter receives per query
-	// time, 1 or 2, overriding the source's `temporal.records_per_sample`
-	// (esm-spec 8.5.1). Nil when not written.
+	// RecordsPerSample is the DEPRECATED (removed at esm 1.4.0) number of
+	// records the parameter receives per query time, 1 or 2, overriding the
+	// source's `temporal.records_per_sample` (esm-spec 8.5.1). It must agree
+	// with the record shape, which is what says the count. Nil when not
+	// written.
 	RecordsPerSample *int       `json:"records_per_sample,omitempty"`
 	Description      *string    `json:"description,omitempty"`
 	Reference        *Reference `json:"reference,omitempty"`
 }
 
-// effectiveRecordsPerSample is the EFFECTIVE `records_per_sample` of a `data`
-// rule (esm-spec 8.5.1): the binding's own value, else the source's
-// `temporal.records_per_sample`, else 1. source may be nil.
-func effectiveRecordsPerSample(binding *DataSourceBinding, source *DataSource) int {
+// writtenRecordsPerSample is the DEPRECATED `records_per_sample` a `data`
+// rule is written with (esm-spec 8.5.1): the binding's own value, else the
+// source's `temporal.records_per_sample`; nil when neither is written. It is
+// checked against the record shape, never obeyed. source may be nil.
+func writtenRecordsPerSample(binding *DataSourceBinding, source *DataSource) *int {
 	if binding != nil && binding.RecordsPerSample != nil {
-		return *binding.RecordsPerSample
+		return binding.RecordsPerSample
 	}
 	if source != nil && source.Temporal != nil && source.Temporal.RecordsPerSample != nil {
-		return *source.Temporal.RecordsPerSample
+		return source.Temporal.RecordsPerSample
 	}
-	return 1
+	return nil
 }
 
 // The top-level `operators` and `registered_functions` blocks (and the `call`
@@ -1164,6 +1170,12 @@ type IndexSet struct {
 	Of      []string `json:"of,omitempty"`
 	Offsets *string  `json:"offsets,omitempty"`
 	Values  *string  `json:"values,omitempty"`
+	// Records marks an `interval` as a RECORD AXIS (esm-spec §8.5.1): a
+	// data-fed parameter whose record shape begins with one receives two
+	// records per query time. Its size must be 2. Nil when not written;
+	// `false` is the same as absent but round-trips as written. Nothing but
+	// the record count switches on it: otherwise it is an ordinary interval.
+	Records *bool `json:"records,omitempty"`
 	// SizeExpr carries an interval `size` that is still a metaparameter
 	// EXPRESSION — a bare name like `"N_REC"` or a `{op, args}` tree — rather
 	// than an integer. Exactly one of Size / SizeExpr is ever set.

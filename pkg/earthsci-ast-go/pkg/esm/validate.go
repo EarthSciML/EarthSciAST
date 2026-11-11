@@ -3,6 +3,7 @@ package esm
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 )
@@ -534,6 +535,8 @@ func collectStructuralErrors(file *ESMFile) []StructuralError {
 	s.validateSubsystemRefs()
 	s.validateCircularReferences()
 	s.validateDataSourceReferences()
+	// esm-spec §8.5.1 rule 1: a record axis has size 2.
+	s.validateRecordAxes()
 	s.validateInlineTests()
 	s.validateFunctionChecks()
 
@@ -884,7 +887,7 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// source is not a coupling endpoint any more — so it is the whole of
 	// `data_source_undefined`.
 	s.validateUpdateSources(modelName, model, basePath)
-	// esm-spec §8.5.1: `from.records_per_sample`.
+	// esm-spec §8.5.1: record shapes and the deprecated `records_per_sample`.
 	s.validateRecordsPerSample(modelName, model, basePath)
 
 	// `initialization_equations` hold at t=0 but are ordinary equations, and
@@ -1721,20 +1724,33 @@ func (s *structuralScan) validateUpdateSources(modelName string, model *Model, b
 	}
 }
 
-// indexSetHasTwoMembers: an `interval` of size 2 or a `categorical` of two
-// members (esm-spec §8.5.1 rule 3).
-func indexSetHasTwoMembers(file *ESMFile, name string) bool {
+// isRecordAxis reports whether name is a RECORD AXIS: an `interval` index set
+// carrying `"records": true` (esm-spec §8.5.1). Its size is rule 1's business
+// (validateRecordAxes), not this test's.
+func isRecordAxis(file *ESMFile, name string) bool {
 	set, ok := file.IndexSets[name]
-	if !ok {
-		return false
+	return ok && set.Kind == "interval" && set.Records != nil && *set.Records
+}
+
+// validateRecordAxes reports `record_axis_invalid` (esm-spec §8.5.1 rule 1)
+// for every index set that carries `"records": true` with a size other than 2.
+// A size still held as a metaparameter expression is not decidable here and is
+// skipped; the schema refuses the flag on any kind but `interval`.
+func (s *structuralScan) validateRecordAxes() {
+	for _, name := range sortedKeys(s.file.IndexSets) {
+		set := s.file.IndexSets[name]
+		if set.Records == nil || !*set.Records || set.Size == nil || *set.Size == 2 {
+			continue
+		}
+		s.addErr(StructuralError{
+			Path: "/index_sets/" + name,
+			Code: ErrorRecordAxisInvalid,
+			Message: fmt.Sprintf(
+				"Index set '%s' is a record axis (\"records\": true), so its size must be 2 (the record at or before the query time and its successor); it is %d",
+				name, *set.Size),
+			Details: map[string]any{"index_set": name, "size": *set.Size},
+		})
 	}
-	switch set.Kind {
-	case "interval":
-		return set.Size != nil && *set.Size == 2
-	case "categorical":
-		return len(set.Members) == 2
-	}
-	return false
 }
 
 // declaredShapeOf is the declared shape of the model variable a scoped name
@@ -1778,13 +1794,6 @@ func declaredShapeOf(file *ESMFile, scoped string) (shape []string, found bool) 
 // and has no successor record.
 func sourceIsTimeVarying(source *DataSource) bool {
 	return source.Temporal != nil && source.Temporal.Start != nil && *source.Temporal.Start != ""
-}
-
-// isRecordShape reports whether shape can carry two records per sample: its
-// first entry names an index set of exactly two members (esm-spec §8.5.1
-// rule 3). An empty shape cannot.
-func isRecordShape(file *ESMFile, shape []string) bool {
-	return len(shape) > 0 && indexSetHasTwoMembers(file, shape[0])
 }
 
 // paramToVarTargets lists, in coupling order, the `to` of every `variable_map`
@@ -1879,35 +1888,155 @@ func walkRecordsPerSampleSites(model *Model, scope, basePath string, visit func(
 	}
 }
 
-// pairRecordShapeMessage is the `records_per_sample_invalid` message for a
-// record shape that cannot hold two records. target is the `param_to_var`
-// target the shape was read from, or "" for the parameter's own shape.
-func pairRecordShapeMessage(varName string, shape []string, target string) string {
-	from := "its record shape"
-	if target != "" {
-		from = fmt.Sprintf("its record shape, from param_to_var target '%s',", target)
-	}
-	return fmt.Sprintf(
-		"Parameter '%s' asks for two records per sample, so its first dimension must be an index set of exactly two members; %s is %v",
-		varName, from, shape)
+// recordShape is one record shape of a data-fed parameter (esm-spec §8.5.1):
+// its own declared `shape` (target ""), or the declared `shape` of the
+// `param_to_var` target it was read from.
+type recordShape struct {
+	shape  []string
+	target string
 }
 
-// validateRecordsPerSample reports `records_per_sample_invalid` (esm-spec
-// §8.5.1) for every `update` rule of model and of its inline subsystems at any
-// depth: `from.records_per_sample` on a rule that is not `data`; or an
-// EFFECTIVE value of 2 on a parameter whose source is time-invariant (it
-// declares no `temporal` block, or its `temporal` declares no `start`), or
-// whose record shape's first dimension is not an index set of exactly two
-// members.
+// siteRecordShapes is every record shape of the parameter at site that can be
+// decided against coupling (esm-spec §8.5.1 "The record shape"): its declared
+// `shape` when it declares one, `[]` included; otherwise the declared `shape`
+// of each `param_to_var` target it is the `from` of in coupling, and the empty
+// shape when there is none. A target whose declaration cannot be reached is
+// not decidable and is skipped, never read as empty.
 //
-// The record shape is the declared `shape` whenever one is declared, `[]`
-// included. When `shape` is absent it is the declared `shape` of every inline
-// `param_to_var` target of the parameter; a
-// target whose declaration cannot be reached is not decidable here and is left
-// to flatten (checkRecordsPerSampleAfterImports), and only the first failing
-// target is reported. A parameter with no inline target is refused for its
-// empty shape only when the document has no `coupling_import`, whose expanded
-// edges could still supply one.
+// decided is false when no record shape could be decided: every target was
+// unreachable, or — at structural validation (atFlatten false) — the
+// parameter has no inline target while the document's `coupling` holds a
+// `coupling_import`, whose expanded edges could still bring one. Flatten
+// passes the expanded sequence and atFlatten true, so there the empty shape is
+// final.
+func siteRecordShapes(file *ESMFile, coupling []CouplingEntry, site recordsPerSampleSite, atFlatten bool) (shapes []recordShape, decided bool) {
+	if site.shapeDeclared {
+		return []recordShape{{shape: site.shape}}, true
+	}
+	targets := paramToVarTargets(coupling, site.scoped)
+	if len(targets) == 0 {
+		if !atFlatten && hasCouplingImport(file.Coupling) {
+			return nil, false
+		}
+		return []recordShape{{}}, true
+	}
+	for _, to := range targets {
+		if shape, found := declaredShapeOf(file, to); found {
+			shapes = append(shapes, recordShape{shape: shape, target: to})
+		}
+	}
+	return shapes, len(shapes) > 0
+}
+
+// recordCount is the number of records a parameter with these record shapes
+// receives per query time: 2 when its (first) record shape begins with a
+// record axis, else 1 (esm-spec §8.5.1).
+func recordCount(file *ESMFile, shapes []recordShape) int {
+	if len(shapes) > 0 && len(shapes[0].shape) > 0 && isRecordAxis(file, shapes[0].shape[0]) {
+		return 2
+	}
+	return 1
+}
+
+// describeRecordShape names a record shape in a diagnostic message.
+func describeRecordShape(sh recordShape) string {
+	if sh.target == "" {
+		return fmt.Sprintf("its record shape %v", sh.shape)
+	}
+	return fmt.Sprintf("its record shape %v (from param_to_var target '%s')", sh.shape, sh.target)
+}
+
+// recordFinding is one esm-spec §8.5.1 finding at a `data` rule.
+type recordFinding struct {
+	code    string
+	message string
+	details map[string]any
+}
+
+// recordShapeFindings checks one `data` rule of a data-fed parameter against
+// the record shapes that can be decided (siteRecordShapes) — esm-spec §8.5.1
+// rules 2 and 3 and `records_per_sample_invalid` case 2:
+//
+//   - `record_axis_misplaced` when a record shape names a record axis at a
+//     position other than first, or the parameter's several record shapes
+//     disagree about beginning with one. Nothing else is checked then: the
+//     record count is not well defined.
+//   - `record_axis_time_invariant_source` when the parameter receives two
+//     records from a source with no `temporal` block or no `temporal.start`.
+//   - `records_per_sample_invalid` when the deprecated written value (the
+//     rule's own, else the source's) disagrees with the count.
+//
+// Validation and flatten both call this: validation against the inline
+// coupling, flatten against the sequence after `coupling_import` expansion.
+func recordShapeFindings(file *ESMFile, coupling []CouplingEntry, site recordsPerSampleSite, source *DataSource, atFlatten bool) []recordFinding {
+	shapes, decided := siteRecordShapes(file, coupling, site, atFlatten)
+	if !decided {
+		return nil
+	}
+	for _, sh := range shapes {
+		for i, dim := range sh.shape {
+			if i > 0 && isRecordAxis(file, dim) {
+				details := map[string]any{"variable": site.varName, "shape": sh.shape, "index_set": dim}
+				if sh.target != "" {
+					details["target"] = sh.target
+				}
+				return []recordFinding{{
+					code: ErrorRecordAxisMisplaced,
+					message: fmt.Sprintf(
+						"Data-fed parameter '%s' names record axis '%s' at position %d of %s; a record axis may only be the first entry of a record shape",
+						site.varName, dim, i+1, describeRecordShape(sh)),
+					details: details,
+				}}
+			}
+		}
+	}
+	var withAxis, without []string
+	for _, sh := range shapes {
+		if len(sh.shape) > 0 && isRecordAxis(file, sh.shape[0]) {
+			withAxis = append(withAxis, sh.target)
+		} else {
+			without = append(without, sh.target)
+		}
+	}
+	if len(withAxis) > 0 && len(without) > 0 {
+		return []recordFinding{{
+			code: ErrorRecordAxisMisplaced,
+			message: fmt.Sprintf(
+				"Data-fed parameter '%s' has several record shapes that disagree about beginning with a record axis: param_to_var targets %v begin with one, %v do not",
+				site.varName, withAxis, without),
+			details: map[string]any{"variable": site.varName, "targets_with_record_axis": withAxis, "targets_without_record_axis": without},
+		}}
+	}
+	count := recordCount(file, shapes)
+	var out []recordFinding
+	if count == 2 && !sourceIsTimeVarying(source) {
+		out = append(out, recordFinding{
+			code: ErrorRecordAxisTimeInvariantSource,
+			message: fmt.Sprintf(
+				"Data-fed parameter '%s' receives two records (%s begins with a record axis) from data source '%s', which is time-invariant (it declares no temporal start) and so has no successor record",
+				site.varName, describeRecordShape(shapes[0]), site.rule.Source),
+			details: map[string]any{"variable": site.varName, "source": site.rule.Source},
+		})
+	}
+	if written := writtenRecordsPerSample(site.rule.From, source); written != nil && *written != count {
+		out = append(out, recordFinding{
+			code: ErrorRecordsPerSampleInvalid,
+			message: fmt.Sprintf(
+				"Data-fed parameter '%s' is written with records_per_sample %d, but %s gives it %d record(s): two exactly when the first entry is a record axis (an interval index set with \"records\": true)",
+				site.varName, *written, describeRecordShape(shapes[0]), count),
+			details: map[string]any{"variable": site.varName, "written": *written, "records": count},
+		})
+	}
+	return out
+}
+
+// validateRecordsPerSample checks, for every `update` rule of model and of its
+// inline subsystems at any depth, esm-spec §8.5.1: `records_per_sample_invalid`
+// for `from.records_per_sample` on a rule that is not `data`, and, on a `data`
+// rule, rules 2 and 3 and the agreement of a deprecated written count
+// (recordShapeFindings), against every record shape the loaded document lets
+// validation decide. What it cannot decide — a target arriving through a
+// `coupling_import` — is left to flatten (checkRecordShapesAfterImports).
 func (s *structuralScan) validateRecordsPerSample(modelName string, model *Model, basePath string) {
 	walkRecordsPerSampleSites(model, modelName, basePath, func(site recordsPerSampleSite) {
 		rule := site.rule
@@ -1928,65 +2057,22 @@ func (s *structuralScan) validateRecordsPerSample(modelName string, model *Model
 		if !ok {
 			return // data_source_undefined reports it
 		}
-		if effectiveRecordsPerSample(rule.From, &source) != 2 {
-			return
-		}
-		if !sourceIsTimeVarying(&source) {
-			s.addErr(StructuralError{
-				Path: site.path,
-				Code: ErrorRecordsPerSampleInvalid,
-				Message: fmt.Sprintf(
-					"Parameter '%s' asks for two records per sample from data source '%s', which is time-invariant (it declares no temporal start) and so has no successor record",
-					site.varName, rule.Source),
-				Details: map[string]any{"variable": site.varName, "source": rule.Source},
-			})
-			return
-		}
-		badShape := func(shape []string, target string) {
-			details := map[string]any{"variable": site.varName, "shape": shape}
-			if target != "" {
-				details["target"] = target
-			}
-			s.addErr(StructuralError{
-				Path:    site.path,
-				Code:    ErrorRecordsPerSampleInvalid,
-				Message: pairRecordShapeMessage(site.varName, shape, target),
-				Details: details,
-			})
-		}
-		if site.shapeDeclared {
-			if !isRecordShape(s.file, site.shape) {
-				badShape(site.shape, "")
-			}
-			return
-		}
-		targets := paramToVarTargets(s.file.Coupling, site.scoped)
-		if len(targets) == 0 {
-			if !hasCouplingImport(s.file.Coupling) {
-				badShape(site.shape, "")
-			}
-			return
-		}
-		for _, to := range targets {
-			shape, found := declaredShapeOf(s.file, to)
-			if found && !isRecordShape(s.file, shape) {
-				badShape(shape, to)
-				return
-			}
+		for _, f := range recordShapeFindings(s.file, s.file.Coupling, site, &source, false) {
+			s.addErr(StructuralError{Path: site.path, Code: f.code, Message: f.message, Details: f.details})
 		}
 	})
 }
 
-// checkRecordsPerSampleAfterImports re-checks esm-spec §8.5.1 rule 3 at
-// flatten, against coupling, the sequence after `coupling_import` expansion:
-// every data-fed parameter, at any depth, whose EFFECTIVE `records_per_sample`
-// is 2 is refused when its record shape's first dimension is not an index set
-// of exactly two members. The record shape is the declared `shape` whenever
-// one is declared, `[]` included; a parameter that declares none takes it from
-// each `param_to_var` target there, and is refused when it has none.
-// Structural validation could not see an imported edge, so this is where such a
-// record shape is first decidable.
-func checkRecordsPerSampleAfterImports(file *ESMFile, coupling []CouplingEntry) error {
+// checkRecordShapesAfterImports re-checks esm-spec §8.5.1 rules 2 and 3 and
+// the agreement of a deprecated written count at flatten, against coupling,
+// the sequence after `coupling_import` expansion, for every data-fed parameter
+// at any depth. Structural validation could not see an imported edge, so this
+// is where such a record shape is first decidable. It returns the first
+// refusal, naming the rule pointer, and otherwise the number of records each
+// data-fed parameter receives, keyed by its scoped name (the loader_fields
+// count).
+func checkRecordShapesAfterImports(file *ESMFile, coupling []CouplingEntry) (map[string]int, error) {
+	counts := map[string]int{}
 	var refusal error
 	for _, modelName := range sortedKeys(file.Models) {
 		model := file.Models[modelName]
@@ -1995,40 +2081,69 @@ func checkRecordsPerSampleAfterImports(file *ESMFile, coupling []CouplingEntry) 
 				return
 			}
 			source, ok := file.DataSources[site.rule.Source]
-			if !ok || !sourceIsTimeVarying(&source) || effectiveRecordsPerSample(site.rule.From, &source) != 2 {
+			if !ok {
 				return
 			}
-			refuse := func(shape []string, target string) {
+			if findings := recordShapeFindings(file, coupling, site, &source, true); len(findings) > 0 {
 				refusal = &ExpressionTemplateError{
-					Code:    ErrorRecordsPerSampleInvalid,
-					Message: fmt.Sprintf("%s: %s", site.path, pairRecordShapeMessage(site.varName, shape, target)),
+					Code:    findings[0].code,
+					Message: fmt.Sprintf("%s: %s", site.path, findings[0].message),
 					Path:    site.path,
 				}
-			}
-			if site.shapeDeclared {
-				if !isRecordShape(file, site.shape) {
-					refuse(site.shape, "")
-				}
 				return
 			}
-			targets := paramToVarTargets(coupling, site.scoped)
-			if len(targets) == 0 {
-				refuse(site.shape, "")
-				return
-			}
-			for _, to := range targets {
-				shape, found := declaredShapeOf(file, to)
-				if found && !isRecordShape(file, shape) {
-					refuse(shape, to)
-					return
-				}
-			}
+			shapes, _ := siteRecordShapes(file, coupling, site, true)
+			counts[site.scoped] = recordCount(file, shapes)
 		})
 		if refusal != nil {
-			return refusal
+			return nil, refusal
 		}
 	}
-	return nil
+	return counts, nil
+}
+
+// DeprecatedRecordsPerSampleSites lists, sorted, the JSON pointers at which a
+// loaded document writes the deprecated `records_per_sample` (esm-spec §8.3,
+// §8.5.1; removed at esm 1.4.0): `/data_sources/<S>/temporal/records_per_sample`
+// and `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`
+// (`/<i>` only for an array-form update). These are the places the load-time
+// `deprecated_records_per_sample` warning names.
+func DeprecatedRecordsPerSampleSites(file *ESMFile) []string {
+	if file == nil {
+		return nil
+	}
+	var out []string
+	for name, source := range file.DataSources {
+		if source.Temporal != nil && source.Temporal.RecordsPerSample != nil {
+			out = append(out, "/data_sources/"+name+"/temporal/records_per_sample")
+		}
+	}
+	for modelName, model := range file.Models {
+		model := model
+		walkRecordsPerSampleSites(&model, modelName, "/models/"+modelName, func(site recordsPerSampleSite) {
+			if site.rule.From.RecordsPerSample != nil {
+				out = append(out, site.path+"/from/records_per_sample")
+			}
+		})
+	}
+	sort.Strings(out)
+	return out
+}
+
+// warnDeprecatedRecordsPerSample emits the one `deprecated_records_per_sample`
+// load warning (CONFORMANCE_SPEC `deprecated_records_per_sample`) when file
+// writes the deprecated field anywhere. Called once, by each top-level load
+// entry point, after refs are mounted.
+func warnDeprecatedRecordsPerSample(file *ESMFile) {
+	sites := DeprecatedRecordsPerSampleSites(file)
+	if len(sites) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"warning: %s: `records_per_sample` is deprecated and is removed at esm 1.4.0; "+
+			"the number of records a data-fed parameter receives is said by its record shape, "+
+			"two when its first axis is an interval index set with \"records\": true (esm-spec §8.5.1). "+
+			"Written at: %s.\n", codeDeprecatedRecordsPerSample, strings.Join(sites, ", "))
 }
 
 // reservedDeclarationNames maps every name a declaration map may NOT spell to

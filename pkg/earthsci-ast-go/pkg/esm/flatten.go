@@ -352,12 +352,13 @@ type LoaderField struct {
 	DataSource DataSource
 	// UnitConversion is the binding's declared `unit_conversion` (§8.5), or nil.
 	UnitConversion Expression
-	// RecordsPerSample is the EFFECTIVE number of records the parameter
-	// receives per query time, 1 or 2 (esm-spec §8.5.1): the binding's
-	// `from.records_per_sample`, else the source's
-	// `temporal.records_per_sample`, else 1. With 2 the field holds the record
-	// at or before the query time and its successor, stacked along the
-	// parameter's first dimension.
+	// RecordsPerSample is the number of records the parameter receives per
+	// query time, 1 or 2 (esm-spec §8.5.1), said by its record shape: 2 when
+	// it begins with a record axis (an interval index set with
+	// `"records": true`), else 1. With 2 the field holds the record at or
+	// before the query time and its successor, stacked along the parameter's
+	// first dimension. The deprecated written `records_per_sample` must agree
+	// and is not read here.
 	RecordsPerSample int
 }
 
@@ -1252,7 +1253,7 @@ func dataSourceFields(model *Model, fullPrefix string, varOrder []string, source
 				Cadence:          cadence.String(),
 				DataSource:       source,
 				UnitConversion:   rule.From.UnitConversion,
-				RecordsPerSample: effectiveRecordsPerSample(rule.From, &source),
+				RecordsPerSample: 1, // the record shape's count lands in FlattenWithOptions
 			})
 		}
 	}
@@ -2916,8 +2917,10 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 		return nil, fmt.Errorf("flatten: %w", err)
 	}
 	// esm-spec §8.5.1: a record shape that arrives through an imported
-	// `param_to_var` edge is first decidable here.
-	if err := checkRecordsPerSampleAfterImports(file, coupling); err != nil {
+	// `param_to_var` edge is first decidable here, and so is the number of
+	// records each data-fed parameter receives.
+	recordCounts, err := checkRecordShapesAfterImports(file, coupling)
+	if err != nil {
 		return nil, err
 	}
 
@@ -2938,6 +2941,11 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 	flat, err := assembleSystem(file, components, order, metadata)
 	if err != nil {
 		return nil, err
+	}
+	for i := range flat.LoaderFields {
+		if n, ok := recordCounts[flat.LoaderFields[i].Name]; ok {
+			flat.LoaderFields[i].RecordsPerSample = n
+		}
 	}
 	namespaceEvents(file, flat)
 	if err := applyPointwiseLift(flat, coupling); err != nil {

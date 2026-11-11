@@ -454,6 +454,9 @@ func showIndexSet(s IndexSet) string {
 	if s.FromFAQ != nil {
 		parts = append(parts, fmt.Sprintf("from_faq=%s", *s.FromFAQ))
 	}
+	if s.Records != nil {
+		parts = append(parts, fmt.Sprintf("records=%t", *s.Records))
+	}
 	return strings.Join(parts, ", ")
 }
 
