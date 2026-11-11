@@ -360,10 +360,7 @@ fn names_in(expr: &Expr, out: &mut HashSet<String>) {
         }
         Expr::Number(_) | Expr::Integer(_) => {}
         Expr::Operator(node) => {
-            for name in [&node.int_var, &node.wrt, &node.dim, &node.arg]
-                .into_iter()
-                .flatten()
-            {
+            for name in [&node.int_var, &node.wrt, &node.dim].into_iter().flatten() {
                 out.insert(name.clone());
             }
             if let Some(r) = &node.ranges {
@@ -376,9 +373,6 @@ fn names_in(expr: &Expr, out: &mut HashSet<String>) {
             }
             if let Some(o) = &node.output_idx {
                 out.extend(o.iter().cloned());
-            }
-            if let Some(a) = &node.axes {
-                out.extend(a.keys().cloned());
             }
             node.for_each_child(&mut |c| names_in(c, out));
         }

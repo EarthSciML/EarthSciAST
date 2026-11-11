@@ -238,10 +238,9 @@ function _ew_names!(out::Set{String}, e, ctx, seen::IdDict{OpExpr, Nothing} = Id
             r isa IndexSetRef && union!(out, r.of)
         end
     end
-    for f in (e.wrt, e.dim, e.arg)
+    for f in (e.wrt, e.dim)
         f === nothing || push!(out, f)
     end
-    e.table_axes === nothing || union!(out, (String(k) for k in keys(e.table_axes)))
     foreach_child(c -> _ew_names!(out, c, ctx, seen), e)
     return out
 end

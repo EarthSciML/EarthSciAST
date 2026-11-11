@@ -70,7 +70,7 @@ fn coupled_scalar_parameters_fed_grid_arrays_agree_across_compilers() {
 /// document is refused with `faq_bare_array_operand`. Flatten writes the lift,
 /// so the read-back document builds, bit for bit the `fn` form.
 #[test]
-fn the_flattened_coupled_case_written_out_and_read_back_matches_the_fn_form() {
+fn the_flattened_coupled_case_written_out_and_read_back_matches_the_template_form() {
     let file = load_path(fixture("template.esm")).expect("load");
     let flat = earthsci_ast::flatten(&file).expect("flatten");
     let text = crate::flatten_wire_conformance::flattened_document(&flat).to_string();
@@ -80,7 +80,7 @@ fn the_flattened_coupled_case_written_out_and_read_back_matches_the_fn_form() {
     );
     let read_back = load_string(&text).expect("load the written-out flattened system");
     for compiler in [Compiler::Interpreter, Compiler::Native] {
-        let reference = rhs_at_u0(&fixture("fn.esm"), compiler);
+        let reference = rhs_at_u0(&fixture("template.esm"), compiler);
         let written = rhs_of(&read_back, compiler);
         assert_eq!(reference.len(), 48);
         assert_eq!(reference.len(), written.len());
