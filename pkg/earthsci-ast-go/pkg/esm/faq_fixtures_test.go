@@ -279,8 +279,11 @@ func TestIndexSetsDocumentScopeRoundTrip(t *testing.T) {
 			wantKeys: map[string]string{"cells": "interval", "county": "categorical"},
 		},
 		{
-			rel:      filepath.Join("tests", "valid", "geometry", "conservative_regrid_overlap_join.esm"),
-			wantKeys: map[string]string{"src_cells": "interval", "candidate_pairs": "derived", "clip_ring": "derived"},
+			// conservative_regrid_overlap_join.esm (which also declared a derived
+			// `clip_ring`) was retired with intersect_polygon at esm 2.0.0; its
+			// overlap-join registry lives on in the assembly fixture.
+			rel:      filepath.Join("tests", "valid", "geometry", "conservative_regrid_assembly.esm"),
+			wantKeys: map[string]string{"src_cells": "interval", "tgt_cells": "interval", "candidate_pairs": "derived"},
 		},
 	}
 

@@ -232,20 +232,52 @@ func mustRel(base, path string) string {
 
 // forEachBroadcastNode visits every `{"op": "broadcast", …}` object in a decoded
 // JSON document, normalized to an ExprNode.
+//
+// Inside an expression template's `body` a `broadcast` node's `fn` may be a
+// template PARAMETER NAME (a scalar-field substitution site, esm-spec §9.6.1),
+// bound to an operator literal only at the call site; admissibility of the bound
+// literal is checked on the expanded form (§9.6.9). Such a node is not an
+// operator reference, so it is not visited.
 func forEachBroadcastNode(doc any, visit func(ExprNode)) {
+	walkBroadcastNodes(doc, nil, visit)
+}
+
+func walkBroadcastNodes(doc any, templateParams map[string]bool, visit func(ExprNode)) {
 	switch v := doc.(type) {
 	case map[string]any:
 		if op, _ := v["op"].(string); op == opBroadcast {
-			if node, ok := asExprNode(v); ok {
+			fn, _ := v["fn"].(string)
+			if node, ok := asExprNode(v); ok && !templateParams[fn] {
 				visit(node)
 			}
 		}
-		for _, child := range v {
-			forEachBroadcastNode(child, visit)
+		for key, child := range v {
+			if key == "expression_templates" {
+				if templates, ok := child.(map[string]any); ok {
+					for _, tmpl := range templates {
+						walkBroadcastNodes(tmpl, templateParamSet(tmpl), visit)
+					}
+					continue
+				}
+			}
+			walkBroadcastNodes(child, templateParams, visit)
 		}
 	case []any:
 		for _, child := range v {
-			forEachBroadcastNode(child, visit)
+			walkBroadcastNodes(child, templateParams, visit)
 		}
 	}
+}
+
+// templateParamSet returns the declared `params` of one expression template.
+func templateParamSet(tmpl any) map[string]bool {
+	m, _ := tmpl.(map[string]any)
+	params, _ := m["params"].([]any)
+	set := make(map[string]bool, len(params))
+	for _, p := range params {
+		if name, ok := p.(string); ok {
+			set[name] = true
+		}
+	}
+	return set
 }
