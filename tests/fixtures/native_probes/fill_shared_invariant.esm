@@ -2,7 +2,7 @@
   "esm": "2.0.0",
   "metadata": {
     "name": "native_probe_fill_shared_invariant",
-    "description": "A materialized array observed w whose fill kernel carries a lane-invariant closed-function subtree (interp.linear over t) that the state kernels also carry. Native shares the state kernels' copy through the scalar prelude and keeps the fill level's in its own invariant tier; the interpreter inlines everything. The two must agree bit for bit.",
+    "description": "A materialized array observed w whose fill kernel carries a lane-invariant subtree (pure arithmetic in t, (t*t + 0.5) / (t + 2)) that the state kernels also carry. Native shares the state kernels' copy through the scalar prelude and keeps the fill level's in its own invariant tier; the interpreter inlines everything. The two must agree bit for bit.",
     "authors": [
       "EarthSciML"
     ],
@@ -13,14 +13,6 @@
   },
   "models": {
     "Fill": {
-      "expression_template_imports": [
-        {
-          "ref": "esm:std/interp.esm",
-          "only": [
-            "linear"
-          ]
-        }
-      ],
       "variables": {
         "u": {
           "type": "unknown",
@@ -62,33 +54,29 @@
                   ]
                 },
                 {
-                  "op": "apply_expression_template",
-                  "args": [],
-                  "name": "linear",
-                  "bindings": {
-                    "table": {
-                      "op": "const",
-                      "args": [],
-                      "value": [
-                        1.0,
-                        1.5,
-                        0.75,
-                        2.0
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "t",
+                            "t"
+                          ]
+                        },
+                        0.5
                       ]
                     },
-                    "axis": {
-                      "op": "const",
-                      "args": [],
-                      "value": [
-                        0.0,
-                        0.5,
-                        1.0,
+                    {
+                      "op": "+",
+                      "args": [
+                        "t",
                         2.0
                       ]
-                    },
-                    "x": "t",
-                    "n": 4
-                  }
+                    }
+                  ]
                 }
               ]
             }
@@ -181,33 +169,29 @@
                       "op": "*",
                       "args": [
                         {
-                          "op": "apply_expression_template",
-                          "args": [],
-                          "name": "linear",
-                          "bindings": {
-                            "table": {
-                              "op": "const",
-                              "args": [],
-                              "value": [
-                                1.0,
-                                1.5,
-                                0.75,
-                                2.0
+                          "op": "/",
+                          "args": [
+                            {
+                              "op": "+",
+                              "args": [
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    "t",
+                                    "t"
+                                  ]
+                                },
+                                0.5
                               ]
                             },
-                            "axis": {
-                              "op": "const",
-                              "args": [],
-                              "value": [
-                                0.0,
-                                0.5,
-                                1.0,
+                            {
+                              "op": "+",
+                              "args": [
+                                "t",
                                 2.0
                               ]
-                            },
-                            "x": "t",
-                            "n": 4
-                          }
+                            }
+                          ]
                         },
                         {
                           "op": "index",
