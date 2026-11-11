@@ -869,7 +869,7 @@ text.
 | `record_axis_invalid` | An index set carries `"records": true` and its `size` is not 2 (esm-spec §8.5.1) |
 | `record_axis_misplaced` | A data-fed parameter's record shape names a record axis anywhere but first, or its several record shapes disagree about beginning with one (esm-spec §8.5.1) |
 | `record_axis_time_invariant_source` | A data-fed parameter's record shape begins with a record axis while its source declares no `temporal` block or no `temporal.start` (esm-spec §8.5.1) |
-| `records_per_sample_invalid` | A non-`data` rule carries the deprecated `from.records_per_sample`, or a data-fed parameter's written `records_per_sample` (its own, else its source's `temporal.records_per_sample`) disagrees with the number of records its record shape gives it (esm-spec §8.5.1) |
+| `records_per_sample_invalid` | A non-`data` rule carries the deprecated `from.records_per_sample` (validation only; `flatten` never reports it), or a data-fed parameter's written `records_per_sample` (its own, else its source's `temporal.records_per_sample`) disagrees with the number of records its record shape gives it, for a model variable or a reaction-system parameter (esm-spec §8.5.1) |
 | `event_var_undeclared` | Variable in event affects/conditions is not declared |
 | `unresolved_subsystem_ref` | Subsystem reference points to a local file that does not exist (canonical; RETIRES `ref_not_found` — CONFORMANCE_SPEC §7.1.3f) |
 | `ref_unreachable` | Subsystem reference URL is unreachable or returned a non-200 status |
