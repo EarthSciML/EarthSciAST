@@ -307,6 +307,10 @@ export type {
   LoaderField,
 } from './flatten.js'
 
+// Where the deprecated `records_per_sample` is written (esm-spec §8.5.1): the
+// sorted JSON pointers the load-time `deprecated_records_per_sample` warning names.
+export { deprecatedRecordsPerSampleSites } from './records-per-sample.js'
+
 // Coupling-library files and coupling_import role binding (esm-spec §10.9–§10.11)
 export { expandCouplingImports, isCouplingLibraryDoc } from './coupling-imports.js'
 export type { CouplingImportOptions } from './coupling-imports.js'

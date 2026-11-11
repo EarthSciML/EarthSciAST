@@ -1,19 +1,26 @@
 /**
- * The record-shape half of `records_per_sample_invalid` (esm-spec §8.5.1 rule
- * 3), shared by structural validation and `flatten`.
+ * Record axes (esm-spec §8.5.1), shared by structural validation and `flatten`.
  *
- * A parameter whose effective `records_per_sample` is 2 needs a record shape
- * whose first entry is an index set of exactly two members. The record shape is
- * the parameter's own `shape` whenever it declares one (`[]` included), or else,
- * when `shape` is absent, the declared `shape` of every
- * `param_to_var` target it is the `from` of. Validation sees only the inline
- * `coupling` and the document as loaded (this binding's `load*` does not mount
- * `{ref}` components); `flatten` sees the `coupling_import`-expanded sequence.
- * Both judge a site with {@link recordShapeFailure}.
+ * A data-fed parameter receives two records per query time when its record
+ * shape begins with a RECORD AXIS (an `interval` index set carrying
+ * `"records": true`), and one otherwise. The record shape is the parameter's
+ * own `shape` whenever it declares one (`[]` included), or else, when `shape`
+ * is absent, the declared `shape` of every `param_to_var` target it is the
+ * `from` of (none: an empty record shape).
+ *
+ * Validation sees only the inline `coupling` and the document as loaded (this
+ * binding's `load*` does not mount `{ref}` components); `flatten` sees the
+ * `coupling_import`-expanded sequence. Both judge a site with
+ * {@link recordShapeFindings}, and `flatten` reads each `LoaderField`'s count
+ * from {@link recordCount}.
+ *
+ * The deprecated `from.records_per_sample` / `temporal.records_per_sample` is
+ * checked against the shape, never obeyed; {@link deprecatedRecordsPerSampleSites}
+ * lists where it is written, for the load-time warning.
  */
 
+import { ERROR_CODES } from './errors.js'
 import type { EsmFile, Model, ModelVariable, ParameterUpdate } from './types.js'
-import { effectiveRecordsPerSample } from './types.js'
 
 /**
  * One `update` rule of a parameter: its name, scoped name (`Model[.Sub…].var`),
@@ -86,16 +93,6 @@ export function paramToVarTargets(entries: readonly unknown[]): Map<string, stri
   return targets
 }
 
-/** Is index set `name` an `interval` of size 2 or a `categorical` of two members? */
-function indexSetHasTwoMembers(esmFile: EsmFile, name: string): boolean {
-  const set = (esmFile.index_sets ?? {})[name] as
-    { kind?: string; size?: unknown; members?: unknown[] } | undefined
-  if (set === undefined) return false
-  if (set.kind === 'interval') return set.size === 2
-  if (set.kind === 'categorical') return Array.isArray(set.members) && set.members.length === 2
-  return false
-}
-
 /**
  * The declared `shape` of the variable a scoped name names (`[]` when it
  * declares none), or `undefined` when the declaration cannot be reached: a
@@ -137,79 +134,254 @@ export function hasUnmountedRefs(esmFile: EsmFile): boolean {
 }
 
 /**
- * Does `shape` start with an index set of exactly two members? `undefined`
- * when that cannot be decided yet: the first entry names an index set the
- * document does not declare while `{ref}` mounts that may declare it remain.
+ * Is index set `name` a record axis (an `interval` carrying `"records": true`)?
+ * `undefined` when that cannot be decided yet: the document does not declare
+ * it while `{ref}` mounts that may declare it remain.
  */
-function hasPairAxis(
-  esmFile: EsmFile,
-  shape: readonly string[],
-  unmountedRefs: boolean,
-): boolean | undefined {
-  if (shape.length === 0) return false
-  if (unmountedRefs && (esmFile.index_sets ?? {})[shape[0]] === undefined) return undefined
-  return indexSetHasTwoMembers(esmFile, shape[0])
+function isRecordAxis(esmFile: EsmFile, name: string, unmountedRefs: boolean): boolean | undefined {
+  const set = (esmFile.index_sets ?? {})[name] as { kind?: string; records?: unknown } | undefined
+  if (set === undefined) return unmountedRefs ? undefined : false
+  return set.kind === 'interval' && set.records === true
 }
 
-/** A record shape that fails rule 3, and the `param_to_var` target it came from. */
-export interface RecordShapeFailure {
-  shape: string[]
-  target?: string
+type SourceMap = Record<
+  string,
+  { temporal?: { start?: string; records_per_sample?: number } } | undefined
+>
+
+/** The deprecated value a `data` rule is written with: its own, else its source's. */
+function writtenRecordsPerSample(
+  rule: ParameterUpdate,
+  source: NonNullable<SourceMap[string]>,
+): number | undefined {
+  const own = (rule as { from?: { records_per_sample?: number } }).from?.records_per_sample
+  return own ?? source.temporal?.records_per_sample
 }
 
 /**
- * Judge one `update` rule's record shape (esm-spec §8.5.1 rule 3). Returns the
- * first failing record shape, or `undefined` when there is none to report: the
- * rule is not a `data` rule with an effective 2 from a time-varying source (one
- * whose `temporal` declares a `start`; rules 1 and 2 are the validator's), every record shape it can see
- * passes, or what remains cannot be decided here.
- *
- * A target whose declaration cannot be reached is not decidable and is
- * skipped, and so is a record shape whose first index set is undeclared while
- * `unmountedRefs` (a mount may still declare it). A declared `shape: []` is
- * always a failure; no `shape` and no target at all is a failure unless
- * `targetsMayArriveLater`, which validation sets when the document has a
- * `coupling_import` entry that `flatten` will expand.
+ * The record shapes of a data-fed parameter, as far as they can be seen:
+ * `shapes` holds the reachable ones (with the `param_to_var` target each came
+ * from); a target whose declaration cannot be reached is left out, never read
+ * as empty. `emptyByAbsence` marks the empty record shape of a shapeless
+ * parameter that is the `from` of no target.
  */
-export function recordShapeFailure(
+interface RecordShapes {
+  shapes: Array<{ shape: string[]; target?: string }>
+  emptyByAbsence: boolean
+}
+
+function recordShapes(
   esmFile: EsmFile,
   site: ParameterUpdateSite,
   targets: ReadonlyMap<string, readonly string[]>,
-  options: { targetsMayArriveLater: boolean; unmountedRefs: boolean },
-): RecordShapeFailure | undefined {
-  const { rule, variable, scopedName } = site
-  if (rule.kind !== 'data') return undefined
-  const binding = (rule as { from?: { records_per_sample?: number } }).from
-  if (binding === undefined) return undefined
-  const sources = (esmFile.data_sources ?? {}) as Record<
-    string,
-    { temporal?: { start?: string; records_per_sample?: number } }
-  >
-  const source = sources[(rule as { source: string }).source]
-  if (!source?.temporal?.start) return undefined
-  if (effectiveRecordsPerSample(binding, source) !== 2) return undefined
-
-  // The declared `shape` is the record shape whenever one is declared, `[]`
-  // (a scalar buffer) included; only an ABSENT `shape` takes its targets'.
-  const own = variable.shape
+): RecordShapes {
+  const own = site.variable.shape
   if (own !== undefined && own !== null) {
-    return hasPairAxis(esmFile, own, options.unmountedRefs) === false
-      ? { shape: [...own] }
-      : undefined
+    return { shapes: [{ shape: [...own] }], emptyByAbsence: false }
   }
-
-  const mapped = targets.get(scopedName) ?? []
-  if (mapped.length === 0) return options.targetsMayArriveLater ? undefined : { shape: [] }
+  const mapped = targets.get(site.scopedName) ?? []
+  if (mapped.length === 0) return { shapes: [{ shape: [] }], emptyByAbsence: true }
+  const shapes: RecordShapes['shapes'] = []
   for (const target of mapped) {
     const shape = declaredShape(esmFile, target)
-    if (shape === undefined) continue
-    if (hasPairAxis(esmFile, shape, options.unmountedRefs) === false) return { shape, target }
+    if (shape !== undefined) shapes.push({ shape, target })
+  }
+  return { shapes, emptyByAbsence: false }
+}
+
+/** The source of a data-fed rule (a `data` rule with `from` naming a declared source). */
+function dataFedSource(
+  esmFile: EsmFile,
+  site: ParameterUpdateSite,
+): { name: string; source: NonNullable<SourceMap[string]> } | undefined {
+  const { rule } = site
+  if (rule.kind !== 'data') return undefined
+  if ((rule as { from?: unknown }).from === undefined) return undefined
+  const name = (rule as { source: string }).source
+  const source = ((esmFile.data_sources ?? {}) as SourceMap)[name]
+  return source === undefined || source === null ? undefined : { name, source }
+}
+
+/**
+ * The number of records the first decidable record shape gives (1 or 2), or
+ * `undefined` when none can be decided. Record shapes that disagree are
+ * refused by {@link recordShapeFindings}; this reads the first.
+ */
+function countOf(
+  esmFile: EsmFile,
+  shapes: RecordShapes,
+  unmountedRefs: boolean,
+): { count: 1 | 2; shape: string[]; target?: string } | undefined {
+  for (const { shape, target } of shapes.shapes) {
+    if (shape.length === 0) return { count: 1, shape, target }
+    const first = isRecordAxis(esmFile, shape[0], unmountedRefs)
+    if (first === undefined) continue
+    return { count: first ? 2 : 1, shape, target }
   }
   return undefined
 }
 
-/** The rule-3 diagnostic message for `failure` on parameter `variableName`. */
-export function recordShapeMessage(variableName: string, failure: RecordShapeFailure): string {
-  const from = failure.target === undefined ? '' : ` (from param_to_var target '${failure.target}')`
-  return `Parameter '${variableName}' asks for two records per sample, so its first dimension must be an index set of exactly two members; its record shape${from} is ${JSON.stringify(failure.shape)}`
+/**
+ * The number of records data-fed parameter `site` receives, for its
+ * `LoaderField` (esm-libraries-spec "Loader fields"): 2 when its record shape,
+ * judged against the `param_to_var` edges in `targets`, begins with a record
+ * axis, else 1.
+ */
+export function recordCount(
+  esmFile: EsmFile,
+  site: ParameterUpdateSite,
+  targets: ReadonlyMap<string, readonly string[]>,
+): 1 | 2 {
+  const unmountedRefs = hasUnmountedRefs(esmFile)
+  return countOf(esmFile, recordShapes(esmFile, site, targets), unmountedRefs)?.count ?? 1
+}
+
+/** A finding on one `update` rule: its code, message and details. */
+export interface RecordShapeFinding {
+  code: string
+  message: string
+  details: Record<string, unknown>
+}
+
+/**
+ * Judge one `update` rule against esm-spec §8.5.1: rule 2
+ * (`record_axis_misplaced`), then, for a record shape beginning with a record
+ * axis, rule 3 (`record_axis_time_invariant_source`), then the deprecated
+ * written value's agreement with the shape (`records_per_sample_invalid`).
+ * Returns at most one finding.
+ *
+ * A non-data rule, or one whose source is undeclared, is not judged here (the
+ * validator reports those). A `param_to_var` target whose declaration cannot
+ * be reached is skipped, and so is a record shape whose first entry names an
+ * index set undeclared while `unmountedRefs`. An empty record shape by
+ * absence of any target is deferred while `targetsMayArriveLater` (validation
+ * sets it when the document has a `coupling_import` entry `flatten` expands).
+ */
+export function recordShapeFindings(
+  esmFile: EsmFile,
+  site: ParameterUpdateSite,
+  targets: ReadonlyMap<string, readonly string[]>,
+  options: { targetsMayArriveLater: boolean; unmountedRefs: boolean },
+): RecordShapeFinding[] {
+  const fed = dataFedSource(esmFile, site)
+  if (fed === undefined) return []
+  const { variableName } = site
+  const shapes = recordShapes(esmFile, site, targets)
+  if (shapes.emptyByAbsence && options.targetsMayArriveLater) return []
+  const from = (target?: string): string =>
+    target === undefined ? '' : ` (from param_to_var target '${target}')`
+  const targetDetail = (target?: string): Record<string, string> =>
+    target === undefined ? {} : { target }
+
+  // Rule 2: a record axis anywhere but first, or record shapes that disagree
+  // about beginning with one.
+  const firsts: Array<{ first: boolean; shape: string[]; target?: string }> = []
+  for (const { shape, target } of shapes.shapes) {
+    for (const [i, name] of shape.entries()) {
+      if (i === 0 || isRecordAxis(esmFile, name, options.unmountedRefs) !== true) continue
+      return [
+        {
+          code: ERROR_CODES.RECORD_AXIS_MISPLACED,
+          message:
+            `Parameter '${variableName}' is data-fed, and its record shape${from(target)} ` +
+            `${JSON.stringify(shape)} names record axis '${name}' at position ${i + 1}; a record ` +
+            `axis must be the first entry of a record shape (esm-spec §8.5.1)`,
+          details: { variable: variableName, shape, axis: name, ...targetDetail(target) },
+        },
+      ]
+    }
+    const first =
+      shape.length === 0 ? false : isRecordAxis(esmFile, shape[0], options.unmountedRefs)
+    if (first !== undefined) firsts.push({ first, shape, target })
+  }
+  const withAxis = firsts.find((f) => f.first)
+  const withoutAxis = firsts.find((f) => !f.first)
+  if (withAxis !== undefined && withoutAxis !== undefined) {
+    return [
+      {
+        code: ERROR_CODES.RECORD_AXIS_MISPLACED,
+        message:
+          `Parameter '${variableName}' is data-fed, and its record shapes disagree: ` +
+          `${JSON.stringify(withAxis.shape)}${from(withAxis.target)} begins with a record axis ` +
+          `while ${JSON.stringify(withoutAxis.shape)}${from(withoutAxis.target)} does not ` +
+          `(esm-spec §8.5.1)`,
+        details: {
+          variable: variableName,
+          shapes: firsts.map((f) => ({ shape: f.shape, ...targetDetail(f.target) })),
+        },
+      },
+    ]
+  }
+
+  const decided = countOf(esmFile, shapes, options.unmountedRefs)
+  if (decided === undefined) return []
+  // A misplaced axis stops here; the two checks below are independent, so a
+  // rule may carry both.
+  const findings: RecordShapeFinding[] = []
+
+  // Rule 3: a pair needs a successor record, so a time-varying source.
+  if (decided.count === 2 && !fed.source.temporal?.start) {
+    findings.push({
+      code: ERROR_CODES.RECORD_AXIS_TIME_INVARIANT_SOURCE,
+      message:
+        `Parameter '${variableName}' receives two records (its record shape` +
+        `${from(decided.target)} ${JSON.stringify(decided.shape)} begins with a record axis) ` +
+        `from data source '${fed.name}', which is time-invariant (it declares no temporal ` +
+        `start) and so has no successor record (esm-spec §8.5.1)`,
+      details: { variable: variableName, source: fed.name, shape: decided.shape },
+    })
+  }
+
+  // The deprecated written value must agree with the shape.
+  const written = writtenRecordsPerSample(site.rule, fed.source)
+  if (written !== undefined && written !== decided.count) {
+    findings.push({
+      code: ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+      message:
+        `Parameter '${variableName}' is written with records_per_sample ${written}, but its ` +
+        `record shape${from(decided.target)} ${JSON.stringify(decided.shape)} gives it ` +
+        `${decided.count === 1 ? 'one record' : 'two records'}: two exactly when its first ` +
+        `entry is an interval index set with "records": true (esm-spec §8.5.1)`,
+      details: {
+        variable: variableName,
+        records_per_sample: written,
+        records: decided.count,
+        shape: decided.shape,
+        ...targetDetail(decided.target),
+      },
+    })
+  }
+  return findings
+}
+
+/**
+ * The sorted JSON pointers at which the deprecated `records_per_sample` is
+ * written in `esmFile` (esm-spec §8.3, §8.5.1):
+ * `/data_sources/<S>/temporal/records_per_sample` and
+ * `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`.
+ * Components behind an unmounted `{ref}` are not visited.
+ */
+export function deprecatedRecordsPerSampleSites(esmFile: EsmFile): string[] {
+  const sites: string[] = []
+  const sources = (esmFile.data_sources ?? {}) as SourceMap
+  for (const [name, source] of Object.entries(sources)) {
+    if (source?.temporal?.records_per_sample !== undefined) {
+      sites.push(`/data_sources/${name}/temporal/records_per_sample`)
+    }
+  }
+  for (const { rule, path } of forEachParameterUpdate(esmFile)) {
+    const from = (rule as { from?: { records_per_sample?: number } }).from
+    if (from?.records_per_sample !== undefined) sites.push(`${path}/from/records_per_sample`)
+  }
+  return sites.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+}
+
+/** The load-time `deprecated_records_per_sample` warning naming `sites`. */
+export function deprecatedRecordsPerSampleWarning(sites: readonly string[]): string {
+  return (
+    'deprecated_records_per_sample: `records_per_sample` is deprecated and is removed at ' +
+    'esm 1.4.0; the number of records a data-fed parameter receives is said by its record ' +
+    'shape, two when its first axis is an interval index set with "records": true ' +
+    `(esm-spec §8.5.1). Written at: ${sites.join(', ')}.`
+  )
 }
