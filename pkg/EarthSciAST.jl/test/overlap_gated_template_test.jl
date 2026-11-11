@@ -8,8 +8,10 @@
 # per-call `faq`. Each must equal the interpreter bit for bit, and so must a body
 # built to exercise the kernel's memo handling: shared sub-trees reached first in
 # an `ifelse` arm, in a later `and`/`or` operand and under a nested reduction.
-# The interpreter sweeps the full product, so every body here is exactly +0.0
-# on a pair the gate prunes.
+# That body is not zero on the pairs the join prunes, so it also checks that both
+# compilers honour the authored join (CONFORMANCE_SPEC §5.5.6: only candidate
+# pairs contribute, and a cell with none holds 0̄ = 0): the values differ from
+# the same document without the join.
 
 module OverlapGatedTemplateTests
 
@@ -159,11 +161,24 @@ _bits(v) = reinterpret(UInt64, Float64.(v))
     end
 
     @testset "kernel memo handling: native == interpreter, bit for bit" begin
-        doc, arrays = _binning_doc(4, 12; expr = _op("*", _area(4), _memo_body()))
+        doc, arrays = _binning_doc(4, 12; expr = _memo_body())
         k0 = get(EA._CASCADE_TALLY, :geo_kernel, 0)
         native = _values(doc, arrays, :native)
         @test get(EA._CASCADE_TALLY, :geo_kernel, 0) > k0
         @test _bits(native) == _bits(_values(doc, arrays, :interpreter))
+        @test any(iszero, native) && !all(iszero, native)  # cells with no candidate hold 0̄
+        bare = deepcopy(doc)
+        delete!(bare["models"]["M"]["equations"][1]["rhs"], "join")
+        @test _bits(_values(bare, arrays, :native)) != _bits(native)
+    end
+
+    @testset "a body not zero off the overlap, as a right-hand side" begin
+        doc, arrays = _binning_doc(3, 6; expr = _memo_body(), rhs = true)
+        native = _values(doc, arrays, :native; rhs = true)
+        @test _bits(native) == _bits(_values(doc, arrays, :interpreter; rhs = true))
+        bare = deepcopy(doc)
+        delete!(bare["models"]["M"]["equations"][1]["rhs"], "join")
+        @test _bits(_values(bare, arrays, :native; rhs = true)) != _bits(native)
     end
 end
 
