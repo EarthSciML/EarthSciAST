@@ -122,9 +122,7 @@ _TIME = "t"
 # in canonical visit order. Derived from the ONE wire-codec declaration in
 # esm_types so a newly added expression-bearing field is walked automatically.
 _CHILD_SPEC: tuple[tuple[str, str, str], ...] = tuple(
-    (name, wire, kind)
-    for name, wire, kind, _req in EXPR_WIRE_SPEC
-    if kind in ("expr", "expr_list")
+    (name, wire, kind) for name, wire, kind, _req in EXPR_WIRE_SPEC if kind in ("expr", "expr_list")
 )
 
 

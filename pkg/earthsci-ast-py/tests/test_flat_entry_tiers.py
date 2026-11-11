@@ -435,12 +435,8 @@ def test_overlap_gated_box_overlap_runs_through_the_driven_tier() -> None:
 
     def side(axis: int) -> ExprNode:
         # Vertex 1 holds (x0, y0), vertex 3 holds (x1, y1).
-        lo = ExprNode(
-            op="max", args=[_ix("src_poly", "i", 1, axis), _ix("tgt_poly", "j", 1, axis)]
-        )
-        hi = ExprNode(
-            op="min", args=[_ix("src_poly", "i", 3, axis), _ix("tgt_poly", "j", 3, axis)]
-        )
+        lo = ExprNode(op="max", args=[_ix("src_poly", "i", 1, axis), _ix("tgt_poly", "j", 1, axis)])
+        hi = ExprNode(op="min", args=[_ix("src_poly", "i", 3, axis), _ix("tgt_poly", "j", 3, axis)])
         return ExprNode(op="max", args=[0.0, ExprNode(op="-", args=[hi, lo])])
 
     got, tiers = _native(node(), ctx)

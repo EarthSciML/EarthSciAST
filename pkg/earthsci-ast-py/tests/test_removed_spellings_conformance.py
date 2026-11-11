@@ -48,9 +48,7 @@ def test_a_removed_spelling_is_removed_op(case):
     with pytest.raises(ParseError, match="removed_op") as excinfo:
         load_path(str(TIER / case["input"]))
     assert excinfo.value.code == "removed_op"
-    assert "python -m earthsci_ast.migrate" in str(excinfo.value) or "0.8.0" in str(
-        excinfo.value
-    )
+    assert "python -m earthsci_ast.migrate" in str(excinfo.value) or "0.8.0" in str(excinfo.value)
 
 
 def test_faq_below_v11_is_faq_version_too_old(tmp_path):
