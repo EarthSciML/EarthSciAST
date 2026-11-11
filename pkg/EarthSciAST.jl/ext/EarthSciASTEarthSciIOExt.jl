@@ -911,8 +911,8 @@ function _raw_records_received(raw, key::AbstractString, decl)
     targets = (
         String(e["to"]) for e in coupling
             if e isa AbstractDict && get(e, "type", nothing) == "variable_map" &&
-                get(e, "from", nothing) == key && get(e, "transform", nothing) == "param_to_var" &&
-                get(e, "to", nothing) isa AbstractString
+            get(e, "from", nothing) == key && get(e, "transform", nothing) == "param_to_var" &&
+            get(e, "to", nothing) isa AbstractString
     )
     own = decl isa AbstractDict ? get(decl, "shape", nothing) : nothing
     shapes, mapped = _record_shapes(

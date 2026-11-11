@@ -49,7 +49,7 @@ function _rps_load_logged(path)
     deprecations = [
         r for r in logger.logs
             if r.level == Logging.Warn &&
-                startswith(string(r.message), "deprecated_records_per_sample:")
+            startswith(string(r.message), "deprecated_records_per_sample:")
     ]
     return file, deprecations
 end
