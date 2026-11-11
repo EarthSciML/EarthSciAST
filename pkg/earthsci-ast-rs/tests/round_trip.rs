@@ -131,6 +131,72 @@ fn assert_lossless_round_trip(name: &str, fixture: &str) -> EsmFile {
     reparsed
 }
 
+/// [`assert_lossless_round_trip`] for a fixture that imports standard-library
+/// templates. `expression_template_imports` is consumed at load and every
+/// call site expands into the imported body (esm-spec §9.7.6), in all five
+/// bindings, so the saved document differs from the original exactly there:
+/// the imports block is gone and each `apply_expression_template` node is its
+/// expansion. Everything else must round-trip exactly.
+fn assert_round_trip_consuming_imports(name: &str, fixture: &str) {
+    fn call_sites(v: &Value, path: &str, out: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                if m.get("op").and_then(Value::as_str) == Some("apply_expression_template") {
+                    out.push(path.to_string());
+                    return;
+                }
+                for (k, x) in m {
+                    let k = k.replace('~', "~0").replace('/', "~1");
+                    call_sites(x, &format!("{path}/{k}"), out);
+                }
+            }
+            Value::Array(xs) => {
+                for (i, x) in xs.iter().enumerate() {
+                    call_sites(x, &format!("{path}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let parsed: EsmFile =
+        load_string(fixture).unwrap_or_else(|e| panic!("{name}: failed to parse: {e}"));
+    let serialized =
+        to_json(&parsed).unwrap_or_else(|e| panic!("{name}: failed to serialize: {e}"));
+    load_string(&serialized).unwrap_or_else(|e| panic!("{name}: failed to reparse: {e}"));
+    let original: Value = serde_json::from_str(fixture)
+        .unwrap_or_else(|e| panic!("{name}: fixture is not JSON: {e}"));
+    let round_tripped: Value = serde_json::from_str(&serialized)
+        .unwrap_or_else(|e| panic!("{name}: serialized output is not JSON: {e}"));
+
+    let mut sites = Vec::new();
+    call_sites(&original, "", &mut sites);
+    assert!(!sites.is_empty(), "{name}: no template call site");
+    let mut expected = original.clone();
+    for site in &sites {
+        let expansion = round_tripped
+            .pointer(site)
+            .unwrap_or_else(|| panic!("{name}: call site {site} missing after save"));
+        let mut inner = Vec::new();
+        call_sites(expansion, "", &mut inner);
+        assert!(inner.is_empty(), "{name}: {site} saved an unexpanded call");
+        *expected.pointer_mut(site).unwrap() = expansion.clone();
+    }
+    let models = expected["models"].as_object_mut().expect("models");
+    for m in models.values_mut() {
+        if let Some(m) = m.as_object_mut() {
+            m.remove("expression_template_imports");
+        }
+    }
+
+    let mut diffs = Vec::new();
+    value_diff("", &expected, &round_tripped, &mut diffs);
+    assert!(
+        diffs.is_empty(),
+        "{name}: load -> save lost or altered information outside the template call sites:\n  {}",
+        diffs.join("\n  ")
+    );
+}
+
 /// Test round-trip serialization for minimal chemistry fixture
 #[test]
 fn test_minimal_chemistry_round_trip() {
@@ -722,10 +788,6 @@ fn test_expect_cadence_round_trip() {
             include_str!("../../../tests/valid/cadence/mixed_stencil.esm"),
         ),
         (
-            "cadence/pure_topology",
-            include_str!("../../../tests/valid/cadence/pure_topology.esm"),
-        ),
-        (
             "cadence/pure_pointwise",
             include_str!("../../../tests/valid/cadence/pure_pointwise.esm"),
         ),
@@ -750,6 +812,11 @@ fn test_expect_cadence_round_trip() {
     for (name, fixture) in fixtures {
         assert_lossless_round_trip(name, fixture);
     }
+    // Its edge key is the `pair_key` template from `esm:std/relational.esm`.
+    assert_round_trip_consuming_imports(
+        "cadence/pure_topology",
+        include_str!("../../../tests/valid/cadence/pure_topology.esm"),
+    );
 }
 
 /// `coupling[].lifting` survives on a `variable_map` entry, not only on the
@@ -762,7 +829,7 @@ fn test_expect_cadence_round_trip() {
 /// flattener) — on the other two variants it is carried for round-trip alone.
 #[test]
 fn test_coupling_lifting_round_trip() {
-    assert_lossless_round_trip(
+    assert_round_trip_consuming_imports(
         "wildfire_atmosphere_ocean",
         include_str!("../../../tests/valid/wildfire_atmosphere_ocean.esm"),
     );

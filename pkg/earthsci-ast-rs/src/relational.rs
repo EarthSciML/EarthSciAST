@@ -1,4 +1,4 @@
-//! Build-time relational engine — the five primitives the unified-IR
+//! Build-time relational engine — the primitives the unified-IR
 //! value-invention pass (RFC `semiring-faq-unified-ir` §5.5, §6.1) runs **once at
 //! setup**, off the per-timestep hot path, to materialise the data-derived index
 //! sets and dense IDs that the numeric stencil then consumes:
@@ -6,16 +6,14 @@
 //! 1. [`distinct`]        — deduplicate tuples (unique mesh edges from face→vertex lists)
 //! 2. [`equijoin`]        — value-equality equi-join (connectivity inversion, *edges of cell i*;
 //!    also the `join.on` equality gate's candidate set, §5.5.8)
-//! 3. [`skolem`] / [`skolem_edge`] — deterministic content-addressed key from a tuple
-//! 4. [`rank`]            — dense integer renumbering of a distinct set
-//! 5. [`group_aggregate`] — group-by + associative/commutative semiring `⊕` (sum/min/max/…)
+//! 3. [`group_aggregate`] — group-by + associative/commutative semiring `⊕` (sum/min/max/…)
 //!
 //! # Determinism (the reason this module exists)
 //!
 //! `earthsci-ast` is **parallel native implementations** (Julia, Rust, Python)
 //! verified by a conformance suite, not one core behind FFI. So the hard problem is
-//! **bit-for-bit determinism across the bindings**: identical deduped sets,
-//! identical dense IDs, identical skolem keys. The governing principle
+//! **bit-for-bit determinism across the bindings**: identical deduped sets
+//! and identical keys. The governing principle
 //! (`CONFORMANCE_SPEC.md` §5.5 = RFC §5.7) is that *every emitted set, key, and
 //! dense ID is a pure function of a defined total order over tuples* — **no
 //! observable output may depend on hash-table iteration order or a language-native
@@ -38,13 +36,8 @@
 //!   [`Num`].)
 //! - **`distinct`** — sort by the total order, drop *adjacent* duplicates; output
 //!   order *is* sorted order, never first-seen / insertion order (rule 2).
-//! - **`rank`** — dense IDs by position in the sorted distinct sequence. Rust emits
-//!   **0-based** (`CONFORMANCE_SPEC.md` §5.5.1 rule 3 pins Rust = base 0 = the
-//!   canonical numbering); [`rank_with_base`] supports an arbitrary base for the
-//!   conformance base-pin round-trip (`canonical = reported − base`).
-//! - **`skolem`** — a canonical *tuple*, never a hash (rule 4): sort components for
-//!   a symmetric relation (undirected edge `(min,max)`), preserve order for a
-//!   directed one.
+//! - **Composite keys** — a canonical *tuple* ([`Key::Tuple`]), never a hash
+//!   (rule 4).
 //! - **`join` / group-by** — hashing may bucket only (we use [`indexmap::IndexMap`],
 //!   whose iteration order is insertion order, independent of the hasher); the
 //!   result is emitted **sorted by the canonical key** (rule 5). The semiring `⊕`
@@ -56,9 +49,8 @@
 //!
 //! Built on `indexmap` (already a dep) `IndexMap` for bucketing + `sort_unstable`
 //! on the full tuple. The float-normalisation helper [`format_canonical_float`] is
-//! reused from [`crate::canonicalize`] for the skolem/distinct float-value
-//! serialisation base, and the sort-then-enumerate `rank` pattern mirrors
-//! `src/performance.rs`. `polars`/`datafusion`/`arrow` are rejected (heavy, out of
+//! reused from [`crate::canonicalize`] for the distinct float-value
+//! serialisation base. `polars`/`datafusion`/`arrow` are rejected (heavy, out of
 //! proportion — RFC A.3/A.4); a non-portable fast hasher (`ahash`,
 //! `rustc-hash`/FxHash) MUST NEVER drive emitted order or keys (the join
 //! buckets below hash with it; their output order comes from a sort).
@@ -264,33 +256,6 @@ impl SemiringOp {
     }
 }
 
-// ── Primitive 3: skolem (canonical-tuple content-addressed key) ─────────────
-
-/// Canonical key for an **undirected** pair (a symmetric relation):
-/// `(min(a,b), max(a,b))`. The deterministic, content-addressed identity of a
-/// mesh edge (RFC §5.5 generalises ESI `pack`). It is **not** a hash (rule 4) —
-/// the tuple itself is the key, so the dense ID later assigned by [`rank`] is
-/// reproducible across bindings. Equal components are preserved (`(7,7)`).
-pub fn skolem_edge(a: Key, b: Key) -> Key {
-    if a <= b {
-        Key::Tuple(vec![a, b])
-    } else {
-        Key::Tuple(vec![b, a])
-    }
-}
-
-/// Canonical-tuple Skolem key (rule 4). For a `symmetric` relation the
-/// components are sorted (generalising [`skolem_edge`] to arity > 2); for a
-/// directed relation the order is preserved, so `(1, 2)` and `(2, 1)` stay
-/// distinct. Never a native hash — the tuple *is* the content-addressed key; the
-/// dense ID then comes from [`rank`].
-pub fn skolem(mut components: Vec<Key>, symmetric: bool) -> Key {
-    if symmetric {
-        components.sort_unstable();
-    }
-    Key::Tuple(components)
-}
-
 // ── Primitive 1: distinct (sort + drop adjacent duplicates) ─────────────────
 
 /// Set semantics over `rows`: sort by the §5.5.1 total order, then drop
@@ -326,7 +291,7 @@ pub fn distinct(rows: &[Key]) -> Vec<Key> {
 ///   right yields all `m·n` pairs — categorical disaggregation, not an error.
 /// - **Exact equality only.** [`Key`] has no float variant, so rule 1 ("floats
 ///   are forbidden in keys") holds by construction; composite (multi-column)
-///   keys are [`Key::Tuple`]s built with [`skolem`].
+///   keys are [`Key::Tuple`]s of the column values, in column order.
 ///
 /// **Determinism (rule 5).** Hashing buckets ONLY: the emitted pair list is
 /// ordered by the **canonical key** first (§5.5.1 total order over the matched
@@ -402,60 +367,6 @@ pub(crate) fn equijoin_match_count(left: &[Key], right: &[Key]) -> usize {
     left.iter()
         .filter_map(|k| buckets.get(k))
         .fold(0usize, |acc, n| acc.saturating_add(*n))
-}
-
-// ── Primitive 4: rank (dense integer renumbering) ───────────────────────────
-
-/// Result of [`rank`].
-///
-/// - `order` — the distinct tuples in §5.5.1 total order.
-/// - `id` — `id[t]` is the dense integer assigned to tuple `t` (insertion order
-///   equals sorted order, since it is filled in `order` sequence).
-/// - `base` — the emission base. Rust emits **0-based** (`CONFORMANCE_SPEC.md`
-///   §5.5.1 rule 3, the canonical numbering); the conformance adapter recovers
-///   the canonical 0-based ID via `canonical = reported − base`.
-#[derive(Debug, Clone)]
-pub struct Ranking {
-    /// The distinct tuples in total order.
-    pub order: Vec<Key>,
-    /// Map from tuple to its dense integer ID.
-    pub id: IndexMap<Key, i64>,
-    /// The emission base (Rust native = 0).
-    pub base: i64,
-}
-
-impl Ranking {
-    /// The emitted dense IDs in `order` sequence: `[base, base+1, …]`.
-    pub fn dense_ids(&self) -> Vec<i64> {
-        (0..self.order.len() as i64)
-            .map(|i| i + self.base)
-            .collect()
-    }
-
-    /// The canonical 0-based dense IDs (`reported − base`): always `[0, 1, …]`.
-    /// This is what the cross-binding conformance suite asserts on.
-    pub fn canonical_dense_ids(&self) -> Vec<i64> {
-        (0..self.order.len() as i64).collect()
-    }
-}
-
-/// Dense integer renumbering (rule 3) at Rust's native **0-based** emission:
-/// assign IDs by position in the sorted [`distinct`] sequence. Equivalent to SQL
-/// `dense_rank() OVER (ORDER BY …)` over the deduplicated rows.
-pub fn rank(rows: &[Key]) -> Ranking {
-    rank_with_base(rows, 0)
-}
-
-/// [`rank`] with an explicit emission `base`. `base = 0` is the canonical
-/// numbering the conformance suite asserts on; `base = 1` mirrors Julia's native
-/// 1-based emission for the base-pin round-trip test.
-pub fn rank_with_base(rows: &[Key], base: i64) -> Ranking {
-    let order = distinct(rows);
-    let mut id = IndexMap::with_capacity(order.len());
-    for (i, t) in order.iter().enumerate() {
-        id.insert(t.clone(), i as i64 + base);
-    }
-    Ranking { order, id, base }
 }
 
 // ── Primitive 5: group-by + semiring aggregate ──────────────────────────────
@@ -554,19 +465,21 @@ mod tests {
     fn t2(a: i64, b: i64) -> Key {
         Key::Tuple(vec![ki(a), ki(b)])
     }
-    fn tup(items: Vec<Key>) -> Key {
-        Key::Tuple(items)
+    /// The 0-based dense id of each distinct key, in sorted order: its
+    /// position in [`distinct`].
+    fn dense_ids(rows: &[Key]) -> Vec<i64> {
+        (0..distinct(rows).len() as i64).collect()
     }
     /// Directed edges of each face (consecutive vertices, with wraparound),
-    /// canonicalised to undirected `(min,max)` skolem keys — the mesh-edge
-    /// enumeration producer (matches the harness `directed_edges_from_faces` +
-    /// undirected `skolem`).
+    /// canonicalised to undirected `(min,max)` keys — the mesh-edge
+    /// enumeration producer (matches the harness `directed_edges_from_faces`).
     fn undirected_edges(faces: &[Vec<i64>]) -> Vec<Key> {
         let mut edges = Vec::new();
         for face in faces {
             let n = face.len();
             for i in 0..n {
-                edges.push(skolem_edge(ki(face[i]), ki(face[(i + 1) % n])));
+                let (a, b) = (face[i], face[(i + 1) % n]);
+                edges.push(t2(a.min(b), a.max(b)));
             }
         }
         edges
@@ -635,51 +548,6 @@ mod tests {
                  left={left:?} right={right:?}"
             );
         }
-    }
-
-    // ── Primitive 3: skolem ─────────────────────────────────────────────────
-    #[test]
-    fn skolem_edge_canonicalises_undirected() {
-        assert_eq!(skolem_edge(ki(2), ki(5)), t2(2, 5));
-        assert_eq!(skolem_edge(ki(5), ki(2)), t2(2, 5)); // reversed → same
-        assert_eq!(skolem_edge(ki(7), ki(7)), t2(7, 7)); // equal preserved
-    }
-
-    #[test]
-    fn skolem_directed_preserves_symmetric_sorts() {
-        // directed: order preserved, (1,2) ≠ (2,1)
-        assert_eq!(skolem(vec![ki(1), ki(2)], false), t2(1, 2));
-        assert_eq!(skolem(vec![ki(2), ki(1)], false), t2(2, 1));
-        // symmetric: components sorted (generalises skolem_edge to arity > 2)
-        assert_eq!(
-            skolem(vec![ki(3), ki(1), ki(2)], true),
-            tup(vec![ki(1), ki(2), ki(3)])
-        );
-    }
-
-    // ── Primitive 4: rank ───────────────────────────────────────────────────
-    #[test]
-    fn rank_dense_ids_zero_based_and_base_pin_roundtrip() {
-        let rows = [ki(30), ki(10), ki(20), ki(10)];
-        let rk = rank(&rows); // Rust native base 0
-        assert_eq!(rk.order, vec![ki(10), ki(20), ki(30)]);
-        assert_eq!(rk.base, 0);
-        assert_eq!(rk.id[&ki(10)], 0);
-        assert_eq!(rk.id[&ki(20)], 1);
-        assert_eq!(rk.id[&ki(30)], 2);
-        assert_eq!(rk.dense_ids(), vec![0, 1, 2]);
-        assert_eq!(rk.canonical_dense_ids(), vec![0, 1, 2]);
-
-        // base-pin round-trip: Julia emits 1-based; `reported − base` recovers
-        // the canonical 0-based numbering (CONFORMANCE_SPEC.md §5.5.1 rule 3).
-        let rk1 = rank_with_base(&rows, 1);
-        assert_eq!(rk1.id[&ki(10)], 1);
-        assert_eq!(rk1.id[&ki(20)], 2);
-        assert_eq!(rk1.id[&ki(30)], 3);
-        for t in &rk.order {
-            assert_eq!(rk.id[t] - rk.base, rk1.id[t] - rk1.base);
-        }
-        assert_eq!(rk1.canonical_dense_ids(), vec![0, 1, 2]);
     }
 
     // ── Primitive 5: group_aggregate ────────────────────────────────────────
@@ -822,7 +690,7 @@ mod tests {
             let edges = undirected_edges(faces);
             assert_eq!(distinct(&edges), golden_set);
             assert_eq!(canonical_index_set_json(&edges), golden_json);
-            assert_eq!(rank(&edges).canonical_dense_ids(), golden_ids);
+            assert_eq!(dense_ids(&edges), golden_ids);
         }
     }
 
@@ -838,19 +706,10 @@ mod tests {
             vec![t2(1, 2), t2(2, 1), t2(2, 3), t2(1, 2), t2(2, 3)], // duplicate_arc
         ];
         for arcs in std::iter::once(&canonical).chain(variants.iter()) {
-            // skolem directed preserves order; distinct sorts + dedups.
-            let keyed: Vec<Key> = arcs.iter().map(|k| skolem(field_pair(k), false)).collect();
-            assert_eq!(distinct(&keyed), golden_set);
-            assert_eq!(canonical_index_set_json(&keyed), golden_json);
-            assert_eq!(rank(&keyed).canonical_dense_ids(), golden_ids);
-        }
-    }
-
-    /// Split a 2-tuple key back into its components (for re-skolemising arcs).
-    fn field_pair(k: &Key) -> Vec<Key> {
-        match k {
-            Key::Tuple(v) => v.clone(),
-            _ => panic!("expected a tuple arc"),
+            // A directed arc keeps its order; distinct sorts + dedups.
+            assert_eq!(distinct(arcs), golden_set);
+            assert_eq!(canonical_index_set_json(arcs), golden_json);
+            assert_eq!(dense_ids(arcs), golden_ids);
         }
     }
 
@@ -882,9 +741,8 @@ mod tests {
             let agg = group_aggregate(rows, SemiringOp::Sum);
             assert_eq!(agg, golden);
             assert_eq!(serialize_pairs(&agg), golden_json);
-            // dense IDs rank the emitted (sorted) distinct keys.
             let keys: Vec<Key> = agg.iter().map(|(k, _)| k.clone()).collect();
-            assert_eq!(rank(&keys).canonical_dense_ids(), golden_ids);
+            assert_eq!(dense_ids(&keys), golden_ids);
         }
     }
 
