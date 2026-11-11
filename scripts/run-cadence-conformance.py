@@ -87,7 +87,7 @@ RANK_CLASS = {v: k for k, v in CLASS_RANK.items()}
 
 # The relational / value-invention ops that may not run on the hot path (§5.7
 # guard 2): one classifying CONTINUOUS is a hard error.
-RELATIONAL_OPS = {"distinct", "join", "skolem", "rank"}
+RELATIONAL_OPS = {"distinct", "join"}
 
 
 # === The reference classifier + folder ====================================
@@ -246,14 +246,18 @@ def seed_leaf(leaf: Any, model: dict, _resolving: tuple = ()) -> str:
 
 
 def _child_exprs(node: dict):
-    """Yield every sub-Expression of a node: the operand list `args` plus the
-    aggregate/integral sub-fields. `output_idx`, `ranges`, `wrt`, `dim`, `var`
+    """Yield every sub-Expression of a node: the operand list `args`, the
+    aggregate/integral sub-fields, and an `apply_expression_template` call's
+    `bindings` values (a template body reads only its bindings, so the call's
+    class is the join of theirs). `output_idx`, `ranges`, `wrt`, `dim`, `var`
     are index/metadata declarations (const), not value inputs."""
     for a in node.get("args", []) or []:
         yield a
     for field in ("expr", "key", "filter", "lower", "upper"):
         if field in node:
             yield node[field]
+    if node.get("op") == "apply_expression_template":
+        yield from (node.get("bindings") or {}).values()
 
 
 def classify(node: Any, model: dict, _resolving: tuple = ()) -> str:
@@ -325,7 +329,7 @@ def has_continuous(node: Any, model: dict) -> bool:
 
 
 def assert_no_continuous_relational(node: Any, model: dict) -> None:
-    """§5.7 guard 2: a distinct/join/skolem/rank node (or a distinct aggregate)
+    """§5.7 guard 2: a distinct/join node (or a distinct aggregate)
     that classifies CONTINUOUS is rejected — state-dependent topology may not run
     per step in v1."""
     if not isinstance(node, dict):
@@ -336,7 +340,7 @@ def assert_no_continuous_relational(node: Any, model: dict) -> None:
         raise CadenceError(
             f"relational/value-invention node op={op!r} classifies CONTINUOUS — "
             "it may not run on the hot path (§5.7 guard 2). A state-dependent "
-            "distinct/join/skolem/rank is out of scope for v1."
+            "distinct/join is out of scope for v1."
         )
     for c in _child_exprs(node):
         assert_no_continuous_relational(c, model)
@@ -721,7 +725,7 @@ def _negative_controls(models: dict) -> int:
                     "output_idx": ["e"],
                     "ranges": {"f": {"from": "faces"}},
                     # the key reads state u → the distinct node classifies CONTINUOUS
-                    "key": {"op": "skolem", "args": ["edge", {"op": "index", "args": ["u", "f"]}]},
+                    "key": {"op": "index", "args": ["u", "f"]},
                     "expr": {"op": "true", "args": []},
                 },
             }

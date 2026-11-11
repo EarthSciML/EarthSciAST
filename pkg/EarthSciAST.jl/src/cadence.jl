@@ -329,8 +329,9 @@ end
 """
     child_exprs(node) -> Vector
 
-Every sub-Expression of a RAW operator node: the operand list `args` plus the
-aggregate/integral sub-fields `expr`, `key`, `filter`, `lower`, `upper`.
+Every sub-Expression of a RAW operator node: the operand list `args`, the
+aggregate/integral sub-fields `expr`, `key`, `filter`, `lower`, `upper`, and an
+`apply_expression_template` call's `bindings` values.
 `output_idx`, `ranges`, `wrt`, `dim`, `var` are index/metadata declarations
 (`const`), not value inputs, and are excluded. (The typed-IR analogue is the
 generated `child_exprs` walker in expression.jl; this raw twin exists only
@@ -346,6 +347,12 @@ function child_exprs(node::AbstractDict)
     end
     for field in ("expr", "key", "filter", "lower", "upper")
         haskey(node, field) && push!(out, node[field])
+    end
+    # A template body reads only its bindings, so a call's class is the join
+    # of its bindings' classes.
+    if get(node, "op", nothing) == "apply_expression_template"
+        b = get(node, "bindings", nothing)
+        b isa AbstractDict && append!(out, values(b))
     end
     return out
 end

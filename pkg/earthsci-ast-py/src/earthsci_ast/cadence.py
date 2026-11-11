@@ -314,7 +314,8 @@ def seed_leaf(leaf: Any, model: Mapping[str, Any], _resolving: tuple = ()) -> st
 
 def child_exprs(node: Mapping[str, Any]) -> Iterator[Any]:
     """Yield every sub-Expression of a node: the operand list ``args``, the
-    aggregate/integral value sub-fields, and the ``makearray`` ``values`` list.
+    aggregate/integral value sub-fields, the ``makearray`` ``values`` list and an
+    ``apply_expression_template`` call's ``bindings`` values.
     This is the dict-form mirror of the canonical :mod:`.expr_walk` child set — a
     state ref inside a makearray value must NOT be misclassified
     ``const`` and folded off the hot path. ``output_idx``, ``ranges``, ``wrt``,
@@ -328,10 +329,12 @@ def child_exprs(node: Mapping[str, Any]) -> Iterator[Any]:
     values = node.get("values")
     if isinstance(values, list):
         yield from values
-    axes = node.get("axes")
-    if isinstance(axes, dict):
-        for axis_name in sorted(axes):
-            yield axes[axis_name]
+    # A template body reads only its bindings, so a call's class is the join of
+    # its bindings' classes.
+    if node.get("op") == "apply_expression_template":
+        bindings = node.get("bindings")
+        if isinstance(bindings, Mapping):
+            yield from bindings.values()
 
 
 def classify(

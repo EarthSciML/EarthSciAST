@@ -170,7 +170,7 @@
       "model": "PureTopologyEdges",
       "doc": "The minimal 2-triangle mesh (faces sharing edge {2,3}). The unique undirected edges are enumerated from the CONST face→vertex connectivity and ranked to dense ids. Every node is CONST, so the entire partition folds into the artifact at compile time: the per-step CONTINUOUS tree is EMPTY and the per-event DISCRETE handler is EMPTY. Reuses the determinism edge_enumeration golden (tests/conformance/determinism/manifest.json) — the dedup order and numbering are fixed by the §5.5 determinism rules.",
       "class_summary": {
-        "const": 6,
+        "const": 4,
         "discrete": 0,
         "continuous": 0
       },
@@ -183,14 +183,14 @@
           "threshold": "const->artifact",
           "provenance": "compile",
           "produces": "edges",
-          "doc": "The CONST distinct/skolem faq that materializes the derived `edges` index set — folds into the artifact at compile time (the deduplicated, canonically-sorted edge set)."
+          "doc": "The CONST distinct faq (keyed by the pair_key template) that materializes the derived `edges` index set — folds into the artifact at compile time (the deduplicated, canonically-sorted edge set)."
         },
         {
           "label": "edge_dense_id",
           "kind": "output_buffer",
           "threshold": "const->artifact",
           "provenance": "compile",
-          "doc": "The CONST rank that assigns dense ids over `edges` — folds into the artifact (the array-backend index buffer)."
+          "doc": "The CONST faq that assigns dense ids over `edges` (each member's loop index) — folds into the artifact (the array-backend index buffer)."
         }
       ],
       "const_fold": {
