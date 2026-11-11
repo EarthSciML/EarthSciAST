@@ -681,6 +681,40 @@ def _gather(key: str, arr: np.ndarray, selection: list[Any]) -> np.ndarray:
     return out
 
 
+def _record_count(doc: dict, key: str) -> int | None:
+    """How many records consuming parameter ``key`` receives, from its record
+    shape in the raw document (esm-spec §8.5.1): its own ``shape``, else the
+    declared shapes of the inline ``param_to_var`` targets it is the ``from``
+    of, the first entry looked up in the raw ``index_sets`` for
+    ``"records": true``. A record shape naming a record axis anywhere but
+    first, or targets disagreeing about one, is refused. ``None`` when the
+    document as given cannot show the record shape: every target is
+    unreachable (behind an unmounted ref), or the parameter is shapeless, mapped
+    by no inline entry, and a ``coupling_import`` (expanded only by ``flatten``)
+    could still bring one."""
+    from ..structural_checks import (
+        _declared_variable,
+        inline_param_to_var_targets,
+        judge_record_shapes,
+        raw_record_shapes,
+    )
+
+    vdef = _declared_variable(doc, key) or {}
+    p2v, has_import = inline_param_to_var_targets(doc)
+    shapes, _complete = raw_record_shapes(doc, vdef, key, p2v, has_import)
+    if not shapes:
+        return None
+    index_sets = doc.get("index_sets") if isinstance(doc.get("index_sets"), dict) else {}
+    misplaced, count = judge_record_shapes(index_sets, shapes, undeclared_is_plain=True)
+    if misplaced:
+        raise ValueError(
+            f"providers_from_document: parameter {key!r} has record shape(s) {shapes} "
+            f"naming a record axis somewhere but first, or disagreeing about beginning "
+            f"with one (record_axis_misplaced, esm-spec §8.5.1)"
+        )
+    return count if count is not None else 1
+
+
 def _strict_records_per_sample(key: str, where: str, value: Any) -> int:
     """A ``records_per_sample`` value read by :func:`providers_from_document`,
     checked strictly: a JSON number with an integral value of 1 or 2 (so ``2``
@@ -753,7 +787,8 @@ class EsioDocumentProvider:
         #: The source's time dimension when it is time-varying (a ``temporal``
         #: block with a ``start``); ``None`` for a time-invariant source.
         self._time_dim = time_dim
-        #: The parameter's effective ``records_per_sample`` (esm-spec §8.5.1).
+        #: The number of records the parameter receives, from its record shape
+        #: (esm-spec §8.5.1).
         #: With 2 the delivered array's FIRST axis is the record axis.
         self.records_per_sample = int(records_per_sample)
         #: The variable's declared ``unit_conversion`` (esm-spec §8.5), parsed.
@@ -1144,31 +1179,35 @@ def providers_from_document(
     one is skipped), else the start of ``window`` when one was given, else the
     POSIX epoch. ``sample(t)`` on a time-varying source reads ``time_origin + t``.
 
-    How many records each parameter receives at a query time is the
-    parameter's EFFECTIVE ``records_per_sample`` (esm-spec §8.5.1): its own
+    How many records each parameter receives at a query time is said by its
+    record shape (esm-spec §8.5.1): its own ``shape``, else the declared shape
+    of each ``param_to_var`` target it is the ``from`` of in the document's
+    ``coupling``. Two when that shape begins with a record axis (an
+    ``interval`` index set with ``"records": true``), else one. With 2 the
+    provider returns the record at or before ``t`` and the next one, stacked
+    along a leading record axis of length 2, which a declared ``select``
+    (naming the per-record axes) leaves whole. Each consuming parameter has its
+    own provider, so two parameters may read one source with different counts.
+    A deprecated written ``records_per_sample`` (the parameter's own
     ``update.from.records_per_sample``, else the source's
-    ``temporal.records_per_sample``, else 1. With 2 the provider returns the
-    record at or before ``t`` and the next one, stacked along a leading record
-    axis of length 2, which a declared ``select`` (naming the per-record axes)
-    leaves whole. Each consuming parameter has its own provider, so two
-    parameters may read one source with different values. Every value read is
-    checked: it must be the number 1 or 2. A 2 is refused on a time-invariant
-    source (no ``temporal.start``) and on a source served as a record table
-    (``record_filter`` or ``codes``).
+    ``temporal.records_per_sample``) is read strictly, the number 1 or 2, and
+    refused when it disagrees with the record shape. Two records are refused on
+    a time-invariant source (no ``temporal.start``) and on a source served as a
+    record table (``record_filter`` or ``codes``).
 
     The ``records_per_sample`` argument (consuming parameter key -> 1 or 2) may
     only restate the document: an entry that differs from the parameter's
-    effective value is refused, because the value fixes the rank of the
-    delivered array, and validation approved the declared shape for the
-    document's value. Set ``update.from.records_per_sample`` in the document
-    instead. Entries for keys that are not consuming parameters are ignored.
+    count is refused, because the count fixes the rank of the delivered array,
+    and validation approved the declared shape for it. Shape the parameter over
+    a record axis in the document instead. Entries for keys that are not
+    consuming parameters are ignored.
     """
     import json
     import os as _os
 
     import earthsciio as esio
 
-    from ..structural_checks import _records_per_sample_origin
+    from ..structural_checks import written_records_per_sample
 
     if isinstance(doc, (str, bytes)):
         with open(doc) as fh:
@@ -1303,13 +1342,41 @@ def providers_from_document(
         # whatever EarthSciIO says about the source on an earlier one.
         rps_of: dict[str, int] = {}
         for key, _vname, binding in consumers:
-            raw, rps_from = _records_per_sample_origin(binding, ld)
-            where = {
-                "from": "update.from",
-                "temporal": f"data_sources.{lname}.temporal",
-                None: "the default",
-            }[rps_from]
-            rps = _strict_records_per_sample(key, where, raw)
+            shaped = _record_count(doc, key)
+            raw, rps_from = written_records_per_sample(binding, ld)
+            if shaped is None and rps_from is None:
+                raise ValueError(
+                    f"providers_from_document: parameter {key!r}: its record shape "
+                    f"(esm-spec §8.5.1) comes from a param_to_var target this document "
+                    f"does not show yet (it arrives through a coupling_import, or sits "
+                    f"in a model behind an unmounted ref), so providers_from_document "
+                    f"cannot tell whether it receives one record or two. Pass a "
+                    f"document whose coupling_import entries are expanded and refs "
+                    f"mounted, or declare the parameter's shape."
+                )
+            # Where the shape cannot be seen, a written (deprecated) value stands
+            # in: flatten checks it against the shape.
+            rps = (
+                shaped
+                if shaped is not None
+                else _strict_records_per_sample(
+                    key,
+                    "update.from" if rps_from == "from" else f"data_sources.{lname}.temporal",
+                    raw,
+                )
+            )
+            if rps_from is not None:
+                where = {
+                    "from": "update.from",
+                    "temporal": f"data_sources.{lname}.temporal",
+                }[rps_from]
+                written = _strict_records_per_sample(key, where, raw)
+                if written != rps:
+                    raise ValueError(
+                        f"providers_from_document: parameter {key!r} has the deprecated "
+                        f"records_per_sample {written} written at {where}, but its record "
+                        f"shape gives {rps} (records_per_sample_invalid, esm-spec §8.5.1)"
+                    )
             runtime_rps = records_per_sample or {}
             if key in runtime_rps:
                 given = _strict_records_per_sample(
@@ -1318,10 +1385,10 @@ def providers_from_document(
                 if given != rps:
                     raise ValueError(
                         f"providers_from_document: the run-time records_per_sample "
-                        f"option gives parameter {key!r} {given}, but the document's "
-                        f"effective value is {rps} (from {where}); the value fixes the "
-                        f"rank of the delivered array, so set "
-                        f"update.from.records_per_sample in the document instead"
+                        f"option gives parameter {key!r} {given}, but its record shape "
+                        f"gives {rps}; the count fixes the rank of the delivered array, "
+                        f"so shape the parameter over a record axis (an interval index "
+                        f'set with "records": true) in the document instead'
                     )
             if rps == 2 and table is not None:
                 raise ValueError(

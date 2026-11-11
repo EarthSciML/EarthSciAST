@@ -77,6 +77,7 @@ from .solver import (
 # now pure and `write_path` writes.
 from .parse import (
     SCHEMA_VERSION,
+    deprecated_records_per_sample_sites,
     load_document,
     load_path,
     load_string,
@@ -548,6 +549,7 @@ __all__ = [
     "load_path",
     "load_string",
     "load_document",
+    "deprecated_records_per_sample_sites",
     "to_json",
     "to_json_compact",
     "write_path",
