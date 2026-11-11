@@ -253,11 +253,13 @@ end
 # once, at the start of the run, and may not read a state, directly or through
 # observeds: refused with `ic_reads_state`, as the native build refuses it,
 # rather than handed to ModelingToolkit, which would evaluate it with the
-# state's own starting value. One that reads the independent variable `t`,
-# directly or through observeds, is refused by name: this compiler hands the
-# initial value to ModelingToolkit as a symbolic default, and nothing here pins
-# the time that default is evaluated at to the run's start, nor evaluates it
-# again when a `remake` moves the start.
+# state's own starting value. One that reads the independent variable `t` or a
+# data-fed parameter, directly or through observeds, is refused by name: this
+# compiler hands the initial value to ModelingToolkit as a symbolic default,
+# and nothing here pins the time that default is evaluated at to the run's
+# start (a data-fed parameter holds its `sample_time` value there, not its
+# value at the start, esm-libraries-spec §2.5.2), nor evaluates it again when
+# a `remake` moves the start.
 function _mtk_refuse_ic_outside_start_scope(flat::FlattenedSystem)
     ics = Tuple{String, Any}[(String(first(p)), last(p)) for p in flat.field_ics]
     for eq in flat.equations
@@ -269,7 +271,16 @@ function _mtk_refuse_ic_outside_start_scope(flat::FlattenedSystem)
         push!(ics, ((lhs.args[1]::VarExpr).name, eq.rhs))
     end
     isempty(ics) && return nothing
-    states = Set{String}(keys(flat.state_variables))
+    # `state_variables` also holds every arrayed observed that materializes
+    # into a buffer (esm-libraries-spec §4.7.5 step 4); an observed is not a
+    # state, and an `ic` may read a state-free one.
+    states = Set{String}(
+        n for n in keys(flat.state_variables) if !haskey(flat.observed_variables, n)
+    )
+    data_fed = Set{String}(f.name for f in flat.loader_fields)
+    for (n, v) in flat.parameters
+        EarthSciAST._is_data_fed(v) && push!(data_fed, n)
+    end
     defs = Dict{String, Any}()
     for eq in flat.equations
         eq.lhs isa VarExpr || continue
@@ -287,6 +298,15 @@ function _mtk_refuse_ic_outside_start_scope(flat::FlattenedSystem)
                     ", which an initial value reads at the start of the run (esm-spec " *
                     "§11.4.2); this compiler hands the initial value to ModelingToolkit " *
                     "as a symbolic default and does not pin that time. $_MTK_TRY_INSTEAD"
+            )
+            m in data_fed && _mtk_refuse(
+                "ic($(target))",
+                "its right-hand side reads the data-fed parameter '$m'" *
+                    (isempty(chain) ? "" : " through the observed '$(first(chain))'") *
+                    ", which an initial value reads at its value at the start of the " *
+                    "run (esm-spec §11.4.2); this compiler hands the initial value to " *
+                    "ModelingToolkit as a symbolic default over the parameter's " *
+                    "construction-time value. $_MTK_TRY_INSTEAD"
             )
             if haskey(defs, m) && !(m in seen)
                 push!(seen, m)
