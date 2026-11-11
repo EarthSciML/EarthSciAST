@@ -3055,6 +3055,37 @@ fn resolve_top_level_scope(
     Ok(top_scope.templates)
 }
 
+/// The effective template registry of ONE component as load would fold it
+/// (esm-spec §9.7.4): its `expression_template_imports` resolved in order
+/// (relative refs against `base_path`), then its own `expression_templates`.
+/// `None` when the component imports nothing; `Some(Err)` when an import
+/// cannot be resolved or two imports collide.
+pub(crate) fn component_effective_templates(
+    comp: &Value,
+    base_path: &Path,
+    origin: &str,
+) -> Option<Result<Map<String, Value>, ExpressionTemplateError>> {
+    let entries = comp
+        .get("expression_template_imports")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())?;
+    let resolve = || {
+        let mut scope = TemplateScope::default();
+        let mut stack = Vec::new();
+        for entry in entries {
+            let sub = resolve_import_entry(entry, base_path, &mut stack, origin)?;
+            merge_scope(&mut scope, sub, origin)?;
+        }
+        if let Some(own) = comp.get("expression_templates").and_then(Value::as_object) {
+            for (n, d) in own {
+                scope.templates.insert(n.clone(), d.clone());
+            }
+        }
+        Ok(scope.templates)
+    };
+    Some(resolve())
+}
+
 /// Phase 2 of [`resolve_template_machinery`]: per-component imports (models /
 /// reaction systems, esm-spec §9.7.2). Each component's effective sequence
 /// (imports depth-first post-order, then local declarations) replaces its
