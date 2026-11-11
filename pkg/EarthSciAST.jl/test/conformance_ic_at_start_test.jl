@@ -142,3 +142,46 @@ end
     prob2 = ICS.remake(prob; tspan = (Float64(c.tspan[1]), 20.0))
     @test prob2.u0 == prob.u0
 end
+
+# Whether `x` reaches a value of type `T` through its fields, a container's
+# elements, or a closure's captures.
+function _ics_reaches(x, ::Type{T}, seen = IdDict{Any, Nothing}()) where {T}
+    x isa T && return true
+    (
+        x isa Module || x isa Type || x isa AbstractString || x isa Symbol ||
+            isbits(x)
+    ) && return false
+    haskey(seen, x) && return false
+    seen[x] = nothing
+    if x isa AbstractArray
+        isbitstype(eltype(x)) && return false
+        return any(i -> isassigned(x, i) && _ics_reaches(x[i], T, seen), eachindex(x))
+    elseif x isa AbstractDict
+        return any(kv -> _ics_reaches(kv[1], T, seen) || _ics_reaches(kv[2], T, seen), x)
+    end
+    for f in fieldnames(typeof(x))
+        isdefined(x, f) && _ics_reaches(getfield(x, f), T, seen) && return true
+    end
+    return false
+end
+
+# A Problem whose initial state moves with its start keeps what re-seeding it
+# needs, not the build environment it was taken from: the model is not
+# reachable from it, and of the build's arrays it holds only the ones an `ic`
+# reads.
+@testset "ic_at_start: the re-seed keeps only what it reads" begin
+    M = JSON3.read(read(joinpath(_ICS_DIR, "manifest.json"), String))
+    byid = Dict(String(c.id) => c for c in M.cases)
+    for id in ("t_at_nonzero_start", "data_fed_discrete_at_start")
+        prob = _ics_problem(byid[id])
+        @test prob.ic_restart !== nothing
+        @test !_ics_reaches(prob.ic_restart, ICS.Model)
+        reseed = getfield(prob.ic_restart.seed, :reseed)
+        @test reseed isa ICS._IcReseed
+        reads = Set{String}()
+        for (_, r) in reseed.plan.field_ics
+            union!(reads, ICS._referenced_var_names(r))
+        end
+        @test issubset(keys(reseed.const_arrays), reads)
+    end
+end
