@@ -1725,6 +1725,7 @@ The JSON pointers at which the deprecated `records_per_sample` (esm-spec §8.3,
 §8.5.1; removed at esm 3.0.0) is written in a loaded document, sorted
 (byte-order): `/data_sources/<S>/temporal/records_per_sample` and
 `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`
+and `/reaction_systems/<R>[/subsystems/<S>…]/parameters/<p>/update[/<i>]/from/records_per_sample`
 (`/<i>` only for an array-form `update`). Empty when the document never writes
 it. The load entry points warn `deprecated_records_per_sample` once, naming
 these, when it is not empty.
@@ -1738,30 +1739,19 @@ function deprecated_records_per_sample_sites(file::EsmFile)::Vector{String}
             push!(sites, "/data_sources/$sname/temporal/records_per_sample")
         end
     end
-    if file.models !== nothing
-        for (mname, model) in file.models
-            _deprecated_records_per_sample_sites!(sites, model, "/models/$mname")
-        end
-    end
-    return sort!(sites)
-end
-
-function _deprecated_records_per_sample_sites!(sites::Vector{String}, model::Model, path::String)
-    for (name, var) in model.variables
+    _for_each_data_param(file) do _scope, name, var, declpath
         rules = var.update
-        rules === nothing && continue
+        rules === nothing && return
         for (ri, rule) in enumerate(rules)
             (rule.from !== nothing && rule.from.records_per_sample !== nothing) || continue
             push!(
-                sites, _update_rule_path("$path/variables/$name", rules, ri) *
+                sites, _update_rule_path("$declpath/$name", rules, ri) *
                     "/from/records_per_sample"
             )
         end
+        return
     end
-    for (subsys_name, subsys) in model_subsystems(model)
-        _deprecated_records_per_sample_sites!(sites, subsys, "$path/subsystems/$subsys_name")
-    end
-    return sites
+    return sort!(sites)
 end
 
 """

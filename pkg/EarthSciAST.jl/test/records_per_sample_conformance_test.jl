@@ -55,10 +55,17 @@ function _rps_load_logged(path)
 end
 
 # Every top-level model variable's `update.from`, as `(model, variable, from)`.
-_rps_froms(file) = [
-    (mname, vname, _rps_from(v)) for (mname, model) in file.models
+_rps_froms(file) = file.models === nothing ? [] : [
+        (mname, vname, _rps_from(v)) for (mname, model) in file.models
         for (vname, v) in model.variables if _rps_from(v) !== nothing
-]
+    ]
+
+# Every top-level reaction-system parameter's `update.from`, as
+# `(system, parameter, from)`.
+_rps_rs_froms(file) = file.reaction_systems === nothing ? [] : [
+        (rname, p.name, _rps_from(p)) for (rname, rs) in file.reaction_systems
+        for p in rs.parameters if _rps_from(p) !== nothing
+    ]
 
 @testset "conformance: record axes / records_per_sample (esm-spec §8.5.1)" begin
     for code in _RPS_CODES
@@ -108,6 +115,10 @@ _rps_froms(file) = [
                 for (mname, vname, from) in _rps_froms(file)
                     @test _rps_from(again.models[mname].variables[vname]).records_per_sample ==
                         from.records_per_sample
+                end
+                for (rname, pname, from) in _rps_rs_froms(file)
+                    p = only(filter(q -> q.name == pname, again.reaction_systems[rname].parameters))
+                    @test _rps_from(p).records_per_sample == from.records_per_sample
                 end
                 @test Set(keys(again.index_sets)) == Set(keys(file.index_sets))
                 for (name, iset) in file.index_sets
