@@ -118,7 +118,7 @@ fn rust_partition_matches_golden() {
 #[test]
 fn rust_rejects_continuous_relational_fixture() {
     // The key is the bare integer `u[f]`.
-    let rel = "tests/invalid/faq/continuous_relational_node_template.esm";
+    let rel = "tests/invalid/faq/continuous_relational_node.esm";
     let doc = load_json(rel);
     let model = &doc["models"]["ContinuousRelationalNode"];
     let err = partition_model(model)

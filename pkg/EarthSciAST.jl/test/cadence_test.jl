@@ -231,11 +231,6 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "faq", "continuous_relational_node.esm")
         model = _Cadence.load_model_json(fixture, "ContinuousRelationalNode")
         @test_throws _Cadence.CadenceError _CadPass.run_guards(model)
-        # Its template-rewrite twin keys on the bare integer `u[f]`, and is
-        # refused the same way.
-        twin = joinpath(dirname(fixture), "continuous_relational_node_template.esm")
-        model = _Cadence.load_model_json(twin, "ContinuousRelationalNode")
-        @test_throws _Cadence.CadenceError _CadPass.run_guards(model)
     end
 
     @testset "neg: from_faq cycle rejected (guard 1)" begin

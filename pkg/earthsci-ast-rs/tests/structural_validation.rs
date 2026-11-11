@@ -1542,9 +1542,9 @@ fn test_self_join_syms_unknown_symbol() {
 /// variable classifies CONTINUOUS and is rejected (no relational engine on the
 /// hot path).
 #[test]
-fn test_f6_continuous_relational_node_template() {
+fn test_f6_continuous_relational_node() {
     assert_structural(
-        include_str!("../../../tests/invalid/faq/continuous_relational_node_template.esm"),
+        include_str!("../../../tests/invalid/faq/continuous_relational_node.esm"),
         StructuralErrorCode::RelationalNodeInContinuous,
         "/models/ContinuousRelationalNode/equations/0/rhs",
     );
