@@ -3,9 +3,9 @@
 Cross-binding determinism conformance runner (ess-my4.5).
 
 Backs the normative determinism contract in CONFORMANCE_SPEC.md §5.5 (RFC
-semiring-faq-unified-ir §5.7) with an executable, adversarial harness. The
-value-invention primitives (`skolem`, `distinct`, `rank`) and group-by
-aggregate joins produce index sets and dense IDs that OTHER nodes consume, so
+semiring-faq-unified-ir §5.7) with an executable, adversarial harness. Value
+invention (an integer `edge_key` / `pair_key` key, `distinct`, dense IDs) and
+group-by faq joins produce index sets and dense IDs that OTHER nodes consume, so
 two bindings that disagree on order or numbering produce *different models*.
 This runner asserts they do not.
 
@@ -109,7 +109,7 @@ def _reject_float_keys(tup: tuple) -> None:
 def directed_edges_from_faces(faces: list[list]) -> list[tuple]:
     """Traverse consecutive vertices of each face (with wraparound) into
     directed edges. This is the realistic producer step a mesh FAQ performs
-    before skolem canonicalization."""
+    before key canonicalization."""
     edges: list[tuple] = []
     for face in faces:
         n = len(face)
@@ -120,8 +120,10 @@ def directed_edges_from_faces(faces: list[list]) -> list[tuple]:
 
 def skolem(tuples: list[tuple], mode: str) -> list[tuple]:
     """Rule 4: a canonical TUPLE, never a hash. Symmetric relations sort their
-    components (undirected edge -> (min, max)); directed relations preserve
-    order."""
+    components (undirected edge -> (min, max), as `edge_key` does); directed
+    relations preserve order (as `pair_key` does). The name and the `skolem`
+    mode key are the fixtures' spelling from before esm 2.0.0 removed the
+    `skolem` operator."""
     out: list[tuple] = []
     for t in tuples:
         t = tuple(t)

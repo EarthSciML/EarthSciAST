@@ -225,8 +225,9 @@ CASES: list[tuple[str, str, str]] = [
         "index_symbol_shadows_variable",
         "scoping/index_symbol_shadows_variable.esm",
     ),
-    # The same rule's edges: an `integral`'s `var` and a non-faq (`argmin`)
-    # `ranges` key shadow parameters of the same name, and a dotted `j.x`
+    # The same rule's edges: an `integral`'s `var` shadows a parameter of the
+    # same name, an `argmin` template call leaves the parameter `g` beside it
+    # alone, and a dotted `j.x`
     # reaching a subsystem `j` inside a node that binds `j` is still prefixed.
     (
         "arrayed",

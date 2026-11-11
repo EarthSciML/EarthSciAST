@@ -423,8 +423,8 @@ def fold_identity(arr: list) -> list:
 
 
 def fold_edge_enumeration(face_lo: list, face_hi: list, mode: str) -> list:
-    """Enumerate the unique edges from the (lo, hi) endpoint tables: skolem
-    canonicalizes each pair (undirected → sorted), distinct sorts by the total
+    """Enumerate the unique edges from the (lo, hi) endpoint tables: the key
+    canonicalizes each pair (undirected → sorted, as `edge_key` does), distinct sorts by the total
     order and drops adjacent duplicates (§5.5 rules 2 & 4). Identical to the
     determinism edge_enumeration reference."""
     pairs = []
