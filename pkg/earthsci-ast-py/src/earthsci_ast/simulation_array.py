@@ -1350,7 +1350,9 @@ def _resolve_field_ic(
         return np.full(shape, float(rhs), dtype=float)
     if isinstance(rhs, str) and observed_values and rhs in observed_values:
         return np.full(shape, float(observed_values[rhs]), dtype=float)
-    if isinstance(rhs, ExprNode):
+    # Any other bare name — the independent variable (bound to ``t0``), a
+    # scalar parameter — is an expression of one leaf, evaluated as one.
+    if isinstance(rhs, (ExprNode, str)):
         try:
             value = _eval_buildtime_field(
                 rhs,
@@ -1536,6 +1538,31 @@ def refuse_ic_reads_state(
         return
     definitions, states = _ic_observed_definitions(flat)
     _refuse_ic_state_reads(flat.field_ics, definitions, states, bound)
+
+
+def ic_start_reads(flat: FlattenedSystem) -> set[str]:
+    """Every name an ``ic`` right-hand side of ``flat`` reads, directly or
+    through the observeds it reads (esm-spec §11.4.2): the cone whose data an
+    evaluation at the start of the run needs. Index symbols and other
+    non-variable strings ride along; a caller intersects with the names it
+    holds."""
+    if not flat.field_ics:
+        return set()
+    definitions, _states = _ic_observed_definitions(flat)
+    seen: set[str] = set()
+    stack: list[Expr] = [rhs for _target, rhs in flat.field_ics]
+    while stack:
+        e = stack.pop()
+        if isinstance(e, str):
+            refs = {e}
+        elif isinstance(e, ExprNode):
+            refs = _expr_referenced_names(e)
+        else:
+            continue
+        for ref in refs - seen:
+            seen.add(ref)
+            stack.extend(definitions.get(ref, ()))
+    return seen
 
 
 def start_of_run_scalar_ics(

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -185,3 +186,83 @@ def test_materialize_once_provider_is_read_at_run_start_for_the_ic() -> None:
     case = next(c for c in _CASES if c["id"] == "data_fed_discrete_at_start")
     for name, want in case["expected"].items():
         assert start[name] == want
+
+
+def _reads_t_doc(tmp_path: Path, rhs: object) -> str:
+    """``ic_reads_t.esm`` with ``ic(u)``'s right-hand side replaced by ``rhs``,
+    written under ``tmp_path``."""
+    doc = json.loads((_ROOT / "fixtures" / "ic_reads_t.esm").read_text())
+    for eq in doc["models"]["T"]["equations"]:
+        if eq["lhs"] == {"op": "ic", "args": ["u"]}:
+            eq["rhs"] = rhs
+    path = tmp_path / "ic_bare_name.esm"
+    path.write_text(json.dumps(doc))
+    return str(path)
+
+
+@pytest.mark.parametrize(("rhs", "want"), [("t", 10.0), ("h", 0.5)])
+def test_array_ic_of_a_bare_scalar_name_is_broadcast(tmp_path: Path, rhs: str, want: float) -> None:
+    """esm-spec §11.4.2: an array ``ic`` whose right-hand side is the bare
+    independent variable, or a bare scalar parameter, is that scalar at the
+    start of the run, over every cell."""
+    prob = esm_problem(_reads_t_doc(tmp_path, rhs), (10.0, 11.0))
+    sol = solve(prob, saveat=[10.0])
+    start = {name: float(sol.y[k][0]) for k, name in enumerate(sol.vars)}
+    assert [start[f"T.u[{i}]"] for i in (1, 2, 3)] == [want] * 3
+
+
+class _CountingCallable:
+    """A materialize-once provider (a plain callable) that records the times
+    it is sampled at."""
+
+    def __init__(self, value: Callable[[float], np.ndarray]) -> None:
+        self._value = value
+        self.times: list[float] = []
+
+    def __call__(self, t: float) -> np.ndarray:
+        self.times.append(float(t))
+        return self._value(t)
+
+
+def test_remake_to_a_new_start_reads_materialize_once_data_there() -> None:
+    """esm-libraries-spec §2.5.5: a ``remake`` to a new start reads an ``ic``'s
+    data at the new start, as ``esm_problem`` with that ``tspan`` does."""
+    base = np.array([[100.0, 200.0, 300.0], [500.0, 600.0, 700.0]])
+
+    def providers() -> dict:
+        return {
+            "H.F": lambda t: base + 4.0 * t,
+            "H.q": lambda t: np.asarray(3.0 + 0.5 * t),
+        }
+
+    fixture = str(_ROOT / "fixtures" / "ic_data_fed.esm")
+    prob = esm_problem(fixture, (0.0, 4.0), providers=providers(), sample_time=0.0)
+    moved = remake(prob, tspan=(5.0, 9.0))
+    direct = esm_problem(fixture, (5.0, 9.0), providers=providers(), sample_time=0.0)
+
+    def start(pr) -> dict:
+        sol = solve(pr, saveat=[pr.tspan[0]])
+        return {name: float(sol.y[k][0]) for k, name in enumerate(sol.vars)}
+
+    case = next(c for c in _CASES if c["id"] == "data_fed_discrete_at_start")
+    got = start(moved)
+    assert got == start(direct)
+    for name, want in case["expected"].items():
+        assert got[name] == want
+
+
+def test_only_the_providers_an_ic_reads_are_sampled_at_the_start() -> None:
+    """esm-libraries-spec §2.5.2: with ``sample_time`` off the start, only the
+    materialize-once providers in an ``ic``'s read cone are sampled again at
+    ``tspan[0]``."""
+    base = np.array([[100.0, 200.0, 300.0], [500.0, 600.0, 700.0]])
+    f = _CountingCallable(lambda t: base + 4.0 * t)
+    q = _CountingCallable(lambda t: np.asarray(3.0 + 0.5 * t))
+    doc = json.loads((_ROOT / "fixtures" / "ic_data_fed.esm").read_text())
+    # `s` starts at a constant: nothing an `ic` reads reaches `q` any more.
+    for eq in doc["models"]["H"]["equations"]:
+        if eq["lhs"] == {"op": "ic", "args": ["s"]}:
+            eq["rhs"] = 1.0
+    esm_problem(doc, (5.0, 9.0), providers={"H.F": f, "H.q": q}, sample_time=0.0)
+    assert 5.0 in f.times
+    assert q.times == [0.0]

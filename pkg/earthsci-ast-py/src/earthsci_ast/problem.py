@@ -103,6 +103,7 @@ from .simulation_array import (
     _resolve_index_set_shape,
     _simulate_with_numpy,
     classify_second_whole_definition,
+    ic_start_reads,
     probe_output_time_observeds,
     refuse_ic_reads_state,
     rule_label,
@@ -858,21 +859,12 @@ def _esm_problem_under(
 
     # esm-spec §11.4.2 / esm-libraries-spec §2.5.2: an `ic` reads its data at the
     # run's start, not at `sample_time`. When the two differ, the one-shot build
-    # gets the materialize-once providers sampled again at tspan[0] for its `ic`
-    # evaluation only; the Problem's forcing keeps the `sample_time` samples.
-    ic_arrays: dict[str, Any] | None = None
-    if flat.field_ics and t0 != tspan[0]:
-        ic_arrays = {}
-        for rawk, prov in (providers or {}).items():
-            k = str(rawk)
-            if k in merged and k not in discrete_providers and k not in gated:
-                ic_arrays[k] = np.asarray(_provider_sample_field(prov, tspan[0]), dtype=float)
-        ic_arrays = canonicalize_const_array_keys(
-            ic_arrays,
-            [n for n, v in flat.parameters.items() if v.shape],
-            {*flat.state_variables, *flat.parameters, *flat.observed_variables},
-            flat_namespace_scope(flat),
-        )
+    # gets the materialize-once providers the `ic`s read sampled again at
+    # tspan[0] for its `ic` evaluation only; the Problem's forcing keeps the
+    # `sample_time` samples.
+    ic_arrays = _ic_start_samples(
+        flat, providers, merged, {*discrete_providers, *gated}, tspan[0], t0
+    )
 
     # esm-spec §11.4.2: an `ic` right-hand side that reads a state, directly or
     # through observeds, is refused here, at construction and ahead of every
@@ -1131,6 +1123,32 @@ def _seed_segmented_engine(
         raise
     except Exception as exc:  # noqa: BLE001 — a non-refusal failure stays a run failure
         return None, f"{type(exc).__name__}: {exc}"
+
+
+def _ic_start_samples(
+    flat: FlattenedSystem,
+    providers: dict[str, Any] | None,
+    const_arrays: dict[str, Any],
+    skip: set[str],
+    start: float,
+    sample_time: float,
+) -> dict[str, np.ndarray] | None:
+    """The materialize-once providers an ``ic`` right-hand side reads, directly
+    or through observeds, sampled at the run's ``start`` (esm-spec §11.4.2,
+    esm-libraries-spec §2.5.2), keyed as ``const_arrays`` holds their
+    ``sample_time`` samples; ``None`` when ``start`` is ``sample_time``, where
+    those samples already are the start's. A provider no ``ic`` reads is not
+    sampled again, and neither is one in ``skip`` (the discrete and gated ones,
+    which the construction sample does not hold)."""
+    if not flat.field_ics or start == sample_time or not providers:
+        return None
+    once = {str(k): v for k, v in providers.items() if str(k) not in skip}
+    read = ic_start_reads(flat)
+    return {
+        k: np.asarray(_provider_sample_field(prov, start), dtype=float)
+        for k, prov in _canonicalize_provider_keys(flat, once).items()
+        if k in const_arrays and k in read
+    }
 
 
 def _canonicalize_provider_keys(flat: FlattenedSystem, providers: dict[str, Any]) -> dict[str, Any]:
@@ -2477,6 +2495,21 @@ def remake(
                 sample_time=prob.sample_time,
                 build_only=True,
                 start_time=new_tspan[0],
+                ic_loader_arrays=_ic_start_samples(
+                    prob.flat,
+                    prob.providers,
+                    prob.const_arrays,
+                    {
+                        *prob.gated_provider_keys,
+                        *(
+                            str(k)
+                            for k, v in (prob.providers or {}).items()
+                            if _provider_is_discrete(v)
+                        ),
+                    },
+                    new_tspan[0],
+                    prob.sample_time,
+                ),
             )
             exercise_every_evaluation(
                 prob.flat, build, prob.sample_time, loader_arrays=prob.const_arrays
