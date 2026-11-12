@@ -1414,9 +1414,29 @@ runtime-guarded; **no evaluation rule depends on either**, so neither is authore
 3. The cell's value is **published before the sweep advances**, so a later cell's
    self-read observes it.
 4. A recurrence definition MUST NOT be evaluated through any whole-array,
-   vectorized, fused, tiled, kernel-merged or otherwise reordered path. The cells
+   vectorized, fused, tiled, kernel-merged or otherwise reordered path (the
+   *Slices* paragraph below is the one batching that reorders nothing). The cells
    are not independent, so there is no equivalence to appeal to: a reordering is a
    different computation, and a reassociation of the body is a different number.
+
+   **Slices.** The cells of `V` that share one coordinate on the recurrence axis
+   form a *slice*. The admitted-lag rule gives every self-read a lag of exactly 0
+   on every other axis, so no cell reads another cell of its own slice. A binding
+   MAY evaluate a slice's cells together (vectorized, kernel-merged, or as one
+   tensor operation) provided that:
+   (a) slices are completed in ascending order, each before any cell of the next
+   is evaluated;
+   (b) each cell's value is computed by the same sequence of operations the
+   sequential sweep performs, with no reassociation, no fused multiply-add the
+   sequential sweep does not perform, and §4.3.1's ascending in-body accumulation
+   order; and
+   (c) a self-read of the cell's own slice, or of a later one, faults as in
+   point 6.
+
+   Everything else in this point stands: within those conditions a batched slice
+   computes exactly the values the sequential sweep computes, and outside them it
+   is a reordered path (`tests/fixtures/recurrence/10_recurrence_slice_batch.esm`
+   pins the fused multiply-add case).
 5. A binding MUST evaluate a recurrence identically on **every route it has**
    for materializing an observed — a per-step route and a build-time route are
    both routes — and MUST do so with one shared implementation of the sweep

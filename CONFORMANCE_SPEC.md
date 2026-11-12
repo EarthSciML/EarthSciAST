@@ -3259,13 +3259,30 @@ the answer to a loose tolerance — see §5.19.3.
 A binding MUST NOT evaluate a recurrence definition through any path that
 reorders or batches its cells: whole-array / vectorized overlays, fused or tiled
 kernels, per-cell kernel class merging, parallel-prefix or blocked accumulation,
-or any tape whose scheduler is free to reorder. These are not "different but
+or any tape whose scheduler is free to reorder — except for the slice batching
+below, which reorders nothing. These are not "different but
 equivalent" — the cells are not independent, so a reordering computes something
 else. A binding whose default array path does any of the above MUST detect a
 recurrence definition and decline that path for it specifically, and SHOULD make
 the decline observable (a bail log, a cascade tally, a build-inspection entry) so
 a silent promotion back onto a reordering path is detectable in test rather than
 in a wrong number.
+
+**Slices are the one batching that is not a reordering.** The cells of `V` that
+share one coordinate on the recurrence axis form a *slice*, and no cell reads
+another cell of its own slice (every self-read has lag 0 off the recurrence
+axis). esm-spec §4.3.1.1 point 4 therefore lets a binding evaluate a slice's
+cells together — vectorized, kernel-merged, or as one tensor operation — on three
+conditions: (a) slices complete in ascending order, each before any cell of the
+next is evaluated; (b) each cell's value is computed by the same sequence of
+operations the sequential sweep performs, with no reassociation, no fused
+multiply-add the sequential sweep does not perform, and §4.3.1's ascending
+in-body accumulation order; and (c) a self-read of the cell's own slice or a
+later one faults as in §5.19.4. Under those conditions the values are the
+sequential sweep's to the bit, so §5.19.1 is unaffected; everything else in this
+section stands. Fixture `10_recurrence_slice_batch` pins (b): its body
+`a[j]*V[j,k-1] + b[j]` differs in the last bit at 128 of its 384 cells when the
+multiply and add are fused.
 
 `O(N)` running accumulation, which §4.3.1 licenses for a forward prefix scan, is
 **not** available here as a rewrite: a recurrence's per-lag weights differ, so no
