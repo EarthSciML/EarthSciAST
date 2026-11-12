@@ -254,6 +254,17 @@ func readFileBytes(t *testing.T, relPath string) ([]byte, error) {
 	return readFileFromTestDir(relPath)
 }
 
+// byValue re-decodes v with plain float64 numbers, so `1` and `1.0` compare
+// equal.
+func byValue(t *testing.T, v any) any {
+	t.Helper()
+	var out any
+	if err := json.Unmarshal([]byte(mustJSON(t, v)), &out); err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	return out
+}
+
 func mustJSON(t *testing.T, v any) string {
 	t.Helper()
 	out, err := json.Marshal(v)
@@ -417,8 +428,11 @@ func TestExpressionTemplates_ScalarFieldParamConformanceFixture(t *testing.T) {
 		t.Fatalf("expansion failed: %v", err)
 	}
 	expanded := decodeFixture(t, string(expandedBytes))
-	got := mustJSON(t, v["models"])
-	want := mustJSON(t, expanded["models"])
+	// Compare numbers by value: the Julia generator writes an integer-valued
+	// float without a decimal point, while expansion carries the authored
+	// `1.0` through. Number spelling is not what this fixture tests.
+	got := mustJSON(t, byValue(t, v["models"]))
+	want := mustJSON(t, byValue(t, expanded["models"]))
 	if got != want {
 		t.Errorf("models diverge from expanded.esm:\n got=%s\nwant=%s", got, want)
 	}
