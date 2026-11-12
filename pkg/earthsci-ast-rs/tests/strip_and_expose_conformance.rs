@@ -129,9 +129,10 @@ fn a_stripped_problem_is_not_solvable() {
                 let e = earthsci_ast::solve(&prob, &SolveOptions::default())
                     .expect_err("solve must refuse");
                 assert!(e.to_string().starts_with(code), "{id}: solve: {e}");
-                let e = earthsci_ast::init(&prob, &SolveOptions::default())
-                    .err()
-                    .expect("init must refuse");
+                let e = match earthsci_ast::init(&prob, &SolveOptions::default()) {
+                    Ok(_) => panic!("{id}: init must refuse"),
+                    Err(e) => e,
+                };
                 assert!(e.to_string().starts_with(code), "{id}: init: {e}");
             }
         }

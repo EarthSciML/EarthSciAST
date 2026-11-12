@@ -224,6 +224,7 @@ _need_alg(alg) = alg === nothing && throw(
 # and must call `sink_open!` / `sink_close!` around their loop.
 # --------------------------------------------------------------------------- #
 function SciMLBase.__init(prob::EsmProblem, alg = nothing, args...; kwargs...)
+    EarthSciAST._refuse_stripped(prob, "init")
     _need_alg(alg)
     EarthSciAST._prepare_run!(prob, prob.tspan[1])
     return SciMLBase.init(
@@ -233,6 +234,7 @@ function SciMLBase.__init(prob::EsmProblem, alg = nothing, args...; kwargs...)
 end
 
 function SciMLBase.__solve(prob::EsmProblem, alg = nothing, args...; kwargs...)
+    EarthSciAST._refuse_stripped(prob, "solve")
     _need_alg(alg)
     # Sink lifecycle: open each sink (declares its store dims/coords/chunk-shard
     # grid ONCE) BEFORE the run — the output callback's own `initialize` may

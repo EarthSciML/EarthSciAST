@@ -382,6 +382,14 @@ const ERROR_CODES = (
     # set, a face set declared against an axis that is not cut, a period that
     # is not the axis's extent, or lane sets that do not match the kind.
     RANGE_BOX_INVALID = "range_box_invalid",
+    # ── Strip and expose (API_SPEC §5.8; esm-spec §9.6.6) ────────────────────
+    # `solve` / `init` on a Problem `strip` removed constructs from.
+    STRIPPED_PROBLEM_NOT_SOLVABLE = "stripped_problem_not_solvable",
+    # A kernel spec's output, `dt_params` entry or map target does not resolve.
+    KERNEL_OUTPUT_UNRESOLVED = "kernel_output_unresolved",
+    # An event affect compiled as a kernel reads, bare, a variable its event
+    # also assigns.
+    AFFECT_READS_POST_VALUE = "affect_reads_post_value",
 )
 
 """

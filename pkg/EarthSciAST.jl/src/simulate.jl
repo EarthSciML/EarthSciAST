@@ -306,6 +306,9 @@ function _prepare_run_doc(
         # esm-spec §9.6.4 Option B: `flatten` ALWAYS carries surviving
         # `apply_expression_template` references into the FlattenedSystem; they
         # ride to the tree-walk build boundary below.
+        # A coupling-level event is lowered by no compiler here: refused unless
+        # the caller stripped its class (`esm_problem(…; strip)`).
+        _refuse_coupling_events(input, get(task_local_storage(), :_esm_strip_taken, String[]))
         input = flatten(input)
     end
     if input isa FlattenedSystem
@@ -1055,11 +1058,21 @@ struct EsmProblem
     # §11.4.2). `remake` with a new `tspan` calls it. `nothing` when the
     # initial state does not depend on the start.
     ic_restart::Any
+    # What `strip` removed (a `StrippedConstructs`), or `nothing` when the
+    # Problem was built without `strip` (API_SPEC §5.8, "Strip and expose").
+    stripped::Any
 end
 
 # Every construction site that predates `ic_restart` builds a problem whose
-# initial state does not move with its start.
-EsmProblem(args::Vararg{Any, 23}) = EsmProblem(args..., nothing)
+# initial state does not move with its start, and every one that predates
+# `stripped` a problem nothing was stripped from.
+EsmProblem(args::Vararg{Any, 23}) = EsmProblem(args..., nothing, nothing)
+EsmProblem(args::Vararg{Any, 24}) = EsmProblem(args..., nothing)
+
+# `prob` with its stripped constructs set.
+_with_stripped(prob::EsmProblem, s) = EsmProblem(
+    (getfield(prob, f) for f in fieldnames(EsmProblem)[1:(end - 1)])..., s
+)
 
 function Base.show(io::IO, prob::EsmProblem)
     # A compiler that built its own program carries its own parameter object
@@ -1676,6 +1689,7 @@ function esm_problem(
         compiler::Symbol = :native,
         sample_time::Union{Nothing, Real} = nothing,
         runtime_array_parameters::Bool = false,
+        strip = (),
         # ---- Julia extension seam (§2.5.2) ----
         const_arrays::AbstractDict = Dict{String, Any}(),
         param_arrays::AbstractDict = Dict{String, Any}(),
@@ -1697,6 +1711,47 @@ function esm_problem(
     # diagnostic for no gain. The plan comes back out of `_compiler_plan`; the
     # build below re-derives it from the same keyword.
     _plan_for(compiler)
+    classes = _strip_classes(strip)
+    if !isempty(classes)
+        compiler in (:native, :interpreter) || throw(
+            SimulateError(
+                "esm_problem: `strip` serves the :native and :interpreter compilers (API_SPEC " *
+                    "§5.8, \"Strip and expose\"); this call names :$compiler",
+                ERROR_CODES.COMPILER_UNAVAILABLE
+            )
+        )
+        file = input isa EsmFile ? input :
+            input isa AbstractDict ?
+            load_document(input; base_path = base_path, metaparameters = metaparameters) :
+            load_path(String(input); metaparameters = metaparameters)
+        sdoc, sobj = _strip_document(file, classes)
+        bp = input isa AbstractString ? dirname(abspath(String(input))) : base_path
+        prob = task_local_storage(:_esm_strip_taken, classes) do
+            esm_problem(
+                sdoc, tspan; p = p, u0 = u0, providers = providers, model_name = model_name,
+                base_path = bp, compiler = compiler,
+                sample_time = sample_time, runtime_array_parameters = runtime_array_parameters,
+                const_arrays = const_arrays, param_arrays = param_arrays, inspect = inspect,
+                materialize_out = materialize_out, pushdown_rewrite = pushdown_rewrite,
+                program_build = program_build, seed_ic! = seed_ic!, sinks = sinks,
+                snapshot = snapshot, pre_write = pre_write,
+                checkpoint_predicates = checkpoint_predicates,
+                checkpoint_sinks = checkpoint_sinks,
+                terminate_on_checkpoint = terminate_on_checkpoint
+            )
+        end
+        if !isempty(sobj.z_layout)
+            sflat = flatten(load_document(sdoc; base_path = bp))
+            params = Dict{String, Float64}(
+                k => Float64(v.default) for (k, v) in sflat.parameters if v.default isa Real
+            )
+            for (k, v) in p
+                haskey(params, String(k)) && (params[String(k)] = Float64(v))
+            end
+            append!(sobj.z0, _z_starting_values(sflat, sobj.z_layout, params, Float64(tspan[1])))
+        end
+        return _with_stripped(prob, sobj)
+    end
     if program_build
         (compiler === :native || compiler === :interpreter) || throw(
             SimulateError(
@@ -2811,6 +2866,6 @@ function remake(
         prob.output_meta, prob.run_doc, prob.run_file,
         prob.param_classes, prob.inspection, cb, prob.tstops,
         prob.save_everystep, prob.sinks, prob.lifecycle_sinks, sc,
-        prob.merged_renames, restart
+        prob.merged_renames, restart, prob.stripped
     )
 end

@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 950,
+    "symbols": 973,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 338,
+      "julia": 350,
       "typescript": 235,
-      "python": 260,
-      "rust": 369,
-      "go": 442
+      "python": 264,
+      "rust": 384,
+      "go": 445
     },
     "by_tier": {
-      "extension": 657,
-      "stable": 293
+      "extension": 672,
+      "stable": 301
     }
   },
   "planned": [
@@ -959,6 +959,14 @@
       }
     },
     {
+      "name": "code_affect_reads_post_value",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeAffectReadsPostValue"
+      }
+    },
+    {
       "name": "code_ambiguous_output_name",
       "kind": "constant",
       "tier": "extension",
@@ -1303,6 +1311,14 @@
       }
     },
     {
+      "name": "code_kernel_output_unresolved",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeKernelOutputUnresolved"
+      }
+    },
+    {
       "name": "code_makearray_region_inverted",
       "kind": "constant",
       "tier": "extension",
@@ -1524,6 +1540,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeSolverVersionTooOld"
+      }
+    },
+    {
+      "name": "code_stripped_problem_not_solvable",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeStrippedProblemNotSolvable"
       }
     },
     {
@@ -1884,6 +1908,16 @@
       "tier": "extension",
       "bindings": {
         "typescript": "compileExpression"
+      }
+    },
+    {
+      "name": "compile_kernels",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "compile_kernels",
+        "python": "compile_kernels",
+        "rust": "compile_kernels"
       }
     },
     {
@@ -3519,6 +3553,14 @@
       }
     },
     {
+      "name": "event_kind",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "EventKind"
+      }
+    },
+    {
       "name": "event_type",
       "kind": "type",
       "tier": "extension",
@@ -4555,6 +4597,15 @@
       }
     },
     {
+      "name": "is_stripped",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "is_stripped",
+        "python": "is_stripped"
+      }
+    },
+    {
       "name": "is_template_library_doc",
       "kind": "function",
       "tier": "stable",
@@ -4593,6 +4644,82 @@
       "tier": "extension",
       "bindings": {
         "typescript": "joinCadence"
+      }
+    },
+    {
+      "name": "kernel",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "kernel!"
+      }
+    },
+    {
+      "name": "kernel",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "Kernel",
+        "rust": "Kernel"
+      }
+    },
+    {
+      "name": "kernel_block",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "KernelBlock",
+        "rust": "KernelBlock"
+      }
+    },
+    {
+      "name": "kernel_layout",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "kernel_layout"
+      }
+    },
+    {
+      "name": "kernel_output",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "KernelOutput"
+      }
+    },
+    {
+      "name": "kernel_set",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "KernelSet",
+        "rust": "KernelSet"
+      }
+    },
+    {
+      "name": "kernel_spec",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "KernelSpec"
+      }
+    },
+    {
+      "name": "kernel_workspace",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "kernel_workspace"
+      }
+    },
+    {
+      "name": "kernel_workspace",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "KernelWorkspace",
+        "rust": "KernelWorkspace"
       }
     },
     {
@@ -7249,6 +7376,58 @@
       }
     },
     {
+      "name": "strip_set",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StripSet"
+      }
+    },
+    {
+      "name": "stripped",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "stripped",
+        "python": "stripped",
+        "rust": "stripped"
+      }
+    },
+    {
+      "name": "stripped_constructs",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "StrippedConstructs",
+        "python": "StrippedConstructs",
+        "rust": "StrippedConstructs"
+      }
+    },
+    {
+      "name": "stripped_event",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StrippedEvent"
+      }
+    },
+    {
+      "name": "stripped_residual",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StrippedResidual"
+      }
+    },
+    {
+      "name": "stripped_update",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StrippedUpdate"
+      }
+    },
+    {
       "name": "structural_error",
       "kind": "error",
       "tier": "stable",
@@ -8561,6 +8740,22 @@
       "tier": "extension",
       "bindings": {
         "go": "WritePathCompact"
+      }
+    },
+    {
+      "name": "z_block",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ZBlock"
+      }
+    },
+    {
+      "name": "z_layout",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "z_layout"
       }
     },
     {

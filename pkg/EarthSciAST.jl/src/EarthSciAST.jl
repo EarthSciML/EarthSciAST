@@ -144,6 +144,7 @@ include("compiler_xla.jl")
 include("simulate.jl")
 include("rhs_program.jl")
 include("range_restricted.jl")
+include("strip_expose.jl")
 # Names that have left the public surface, kept for one minor version.
 include("deprecated.jl")
 include("reference_graph.jl")
@@ -233,6 +234,9 @@ export
     ForcingSet, ForcingSlot, ParamSlot, StateBlock, forcing_slots, forcing_set,
     default_forcing_set, replace_forcing, forcing_epoch, parameter_vector, n_states,
     state_layout, forcing_from_sample,
+    # Strip and expose (API_SPEC §5.8, issue #543)
+    StrippedConstructs, stripped, is_stripped, compile_kernels, Kernel, KernelSet,
+    KernelBlock, KernelWorkspace, kernel!, kernel_layout, kernel_workspace, z_layout,
     # Flatten error taxonomy (spec §4.7.6.10, 8 types for cross-language parity)
     ConflictingDerivativeError, DimensionPromotionError, UnmappedDomainError,
     UnsupportedMappingError, DomainUnitMismatchError,
