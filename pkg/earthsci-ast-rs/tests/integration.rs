@@ -357,6 +357,8 @@ mod static_evaluation_assertions_conformance;
 mod stdlib_refs_conformance;
 #[path = "stoichiometric_matrix.rs"]
 mod stoichiometric_matrix;
+#[path = "strip_and_expose_conformance.rs"]
+mod strip_and_expose_conformance;
 #[path = "structural_validation.rs"]
 mod structural_validation;
 #[path = "structural_validation_programmatic.rs"]

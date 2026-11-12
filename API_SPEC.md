@@ -1638,9 +1638,11 @@ byte for byte. It has exactly these keys:
 - **`strip`** — the requested classes, ascending.
 - **`events`** — one object per removed event, of the requested event
   classes: `{"id", "origin", "kind", …}` and then the authored event's own
-  members verbatim — `name`, `conditions`, `trigger`, `affects`, `affect_neg`,
-  `root_find`, `reinitialize`, `description`, each present exactly when the
-  authored event has it — with every variable reference in them, including an
+  members — `name`, `conditions`, `trigger`, `affects`, `affect_neg`,
+  `root_find`, `reinitialize`, `description`, each present when the authored
+  event has it, except that a default is omitted (`root_find: "left"`,
+  `reinitialize: false`, a trigger's `initial_offset: 0`) and `affects` is
+  always present — with every variable reference in them, including an
   affect's `lhs`, flattened and fully qualified (esm-spec §10.7) exactly as
   `flatten` qualifies an equation of the same component. `kind` is
   `"continuous"` or `"discrete"`. A coupling-level event drops `type` and
@@ -1671,11 +1673,11 @@ byte for byte. It has exactly these keys:
   flattened order. An `algebraic` that was not requested, or removed nothing,
   is `{"residuals":[],"unknowns":[],"z0":[],"z_layout":{}}`.
 
-**Order is deterministic.** Events and parameter updates are listed by origin —
-components in flatten order (each top-level component, then its inline
-subsystems in declaration order, depth first; then the coupling entries in
-order) — and within an origin continuous before discrete, each in declaration
-order. Residuals are in flattened equation order.
+**Order is deterministic.** Events are listed by origin — the models in
+document order, each followed by its inline subsystems in declaration order,
+depth first; then the reaction systems likewise; then the coupling entries in
+order — and within an origin continuous before discrete, each in declaration
+order. Parameter updates and residuals are in flattened order.
 
 **Layouts.** `u` is the Problem's state layout with the `z` unknowns removed,
 and `z` is the layout of the `z` unknowns, both by the rule `state_layout`

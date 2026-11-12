@@ -206,6 +206,8 @@ pub(crate) mod prepare;
 // one verb. Construction does NOT require the solver — only `solve` / `init` /
 // `solve_to_completion` do, and those are behind the `solve` feature.
 pub(crate) mod problem;
+// Strip and expose (API_SPEC §5.8, RFC U6).
+pub(crate) mod strip;
 
 // OPT-IN EarthSciIO bridge: a `CadenceProvider` backed by a real EarthSciIO
 // `Provider`. Behind the `esio` feature so the default build does not link
@@ -397,6 +399,15 @@ pub use simulate_array::range::{
     AxisCut, Decomposition, ForcingSet, ForcingSlot, HaloReport, LaneBlock, LaneInputs, LaneKind,
     LaneLayout, LaneProgram, ParamSlot, RhsError, RhsProgram, RhsSelection, RhsWorkspace, SlotKind,
     StateBlock, TileBlock, TileBox, TileLayout, TileProgram, forcing_from_sample, rhs_program,
+};
+// Strip and expose (API_SPEC §5.8): stripped constructs and standalone kernels.
+pub use problem::stripped;
+pub use simulate_array::range::{
+    Kernel, KernelBlock, KernelOutput, KernelSet, KernelSpec, KernelWorkspace, compile_kernels,
+};
+pub use strip::{
+    EventKind, StripSet, StrippedConstructs, StrippedEvent, StrippedResidual, StrippedUpdate,
+    ZBlock,
 };
 pub use units::{
     Dimension, EquationDimensionVerdict, ExactScale, Rational, ScaleFactor, UNIT_FINDING_ANALYSIS,

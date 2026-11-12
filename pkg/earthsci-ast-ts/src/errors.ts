@@ -232,6 +232,13 @@ export const ERROR_CODES = {
   RANGE_GLOBAL_LOCALITY: 'range_global_locality',
   RANGE_SELECTION_WRITES_INCOMPLETE: 'range_selection_writes_incomplete',
   RANGE_BOX_INVALID: 'range_box_invalid',
+  // `stripped_problem_not_solvable` / `kernel_output_unresolved` /
+  //   `affect_reads_post_value` — strip and expose (API_SPEC §5.8). This
+  //   binding does not simulate, so it never raises them; the entries keep the
+  //   §9.6.6 vocabulary uniform across the five registries.
+  STRIPPED_PROBLEM_NOT_SOLVABLE: 'stripped_problem_not_solvable',
+  KERNEL_OUTPUT_UNRESOLVED: 'kernel_output_unresolved',
+  AFFECT_READS_POST_VALUE: 'affect_reads_post_value',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   // `event_affects_parameter` — an event `affects` LHS names a PARAMETER
   //   (esm-spec §5.4). From 1.0.0 events affect UNKNOWNS ONLY: a parameter that

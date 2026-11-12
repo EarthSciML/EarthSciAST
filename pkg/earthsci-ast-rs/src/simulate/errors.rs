@@ -71,6 +71,18 @@ pub enum SimulateError {
         message: String,
     },
 
+    /// Strip and expose (API_SPEC §5.8) refused a call. `code` is
+    /// `stripped_problem_not_solvable` (`solve` or `init` on a stripped
+    /// Problem), `kernel_output_unresolved` or `affect_reads_post_value`
+    /// (`compile_kernels`), and `message` names what was refused.
+    #[error("{code}: {message}")]
+    Strip {
+        /// The diagnostic code.
+        code: &'static str,
+        /// What was refused.
+        message: String,
+    },
+
     /// A DATA-FED parameter — one whose `update` is `kind: "data"` (esm-spec
     /// §5.4, §8.5) — reached a build with NOTHING bound to it: no provider,
     /// no loaded array, and no caller-supplied `p` value (esm-spec §9.6.6

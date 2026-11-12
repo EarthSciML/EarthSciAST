@@ -729,6 +729,14 @@ pub struct ProblemOptions {
     /// value, so `solve` integrates the same numbers either way. Off by
     /// default.
     pub runtime_array_parameters: bool,
+
+    /// The construct classes construction removes and hands back instead of
+    /// refusing (API_SPEC §5.8, "Strip and expose"). Empty, the default,
+    /// changes nothing. A Problem anything was removed from is refused by
+    /// [`solve`] and [`init`]; read what was removed with [`stripped`] and
+    /// compile what the caller needs with [`crate::compile_kernels`].
+    /// `native` and `interpreter` only.
+    pub strip: crate::strip::StripSet,
 }
 
 impl std::fmt::Debug for ProblemOptions {
@@ -747,7 +755,8 @@ impl std::fmt::Debug for ProblemOptions {
             .field("retain_data_fields", &self.retain_data_fields)
             .field("observed_cone", &self.observed_cone)
             .field("sample_time", &self.sample_time)
-            .field("runtime_array_parameters", &self.runtime_array_parameters);
+            .field("runtime_array_parameters", &self.runtime_array_parameters)
+            .field("strip", &self.strip);
         #[cfg(not(target_arch = "wasm32"))]
         d.field("pushdown_rewrite", &self.pushdown_rewrite)
             .field("providers", &self.providers.keys().collect::<Vec<_>>())
@@ -932,6 +941,11 @@ pub struct EsmProblem {
     pub(crate) program_source: Option<Rc<ProgramSource>>,
     /// [`ProblemOptions::runtime_array_parameters`], for `rhs_program`.
     pub(crate) runtime_array_parameters: bool,
+    /// What [`ProblemOptions::strip`] removed (empty when nothing was).
+    pub(crate) stripped: Rc<crate::strip::StrippedConstructs>,
+    /// The stripped document the Problem was built from, for
+    /// [`crate::compile_kernels`] (`None` when `strip` was empty).
+    pub(crate) strip_source: Option<Rc<EsmFile>>,
 }
 
 /// What [`EsmProblem::program_source`] holds: the prepared typed document, or
@@ -1046,6 +1060,12 @@ impl EsmProblem {
         !matches!(&*self.backend, Backend::Static(_))
     }
 
+    /// Whether `strip` removed anything from this Problem (API_SPEC §5.8):
+    /// [`solve`] and [`init`] refuse it when it did.
+    pub fn is_stripped(&self) -> bool {
+        !self.stripped.is_empty()
+    }
+
     /// The state-variable names of the compiled right-hand side, in the
     /// flattened state-vector order. Empty for a static EsmProblem.
     pub fn state_variable_names(&self) -> Vec<String> {
@@ -1147,6 +1167,29 @@ impl EsmProblem {
         names.dedup();
         names
     }
+}
+
+/// What [`ProblemOptions::strip`] removed from `prob`, flattened and
+/// namespaced (API_SPEC §5.8, "The stripped object"). Empty when nothing was.
+pub fn stripped(prob: &EsmProblem) -> &crate::strip::StrippedConstructs {
+    &prob.stripped
+}
+
+/// `stripped_problem_not_solvable` when `strip` removed anything from `prob`.
+#[cfg_attr(not(feature = "solve"), allow(dead_code))]
+fn refuse_stripped(prob: &EsmProblem, call: &str) -> Result<(), SimulateError> {
+    if prob.is_stripped() {
+        return Err(crate::strip::strip_error(
+            crate::diagnostic::codes::STRIPPED_PROBLEM_NOT_SOLVABLE,
+            format!(
+                "`{call}` cannot run a Problem `strip` removed constructs from ({}): running it \
+                 without them would report a number the document does not describe. Evaluate \
+                 its right-hand side and the removed constructs with `compile_kernels`",
+                prob.stripped.removed_classes().join(", ")
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// The callbacks declared on `prob` (§2.5.4).
@@ -1759,6 +1802,8 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
         provider_keys: prob.provider_keys.clone(),
         program_source: prob.program_source.clone(),
         runtime_array_parameters: prob.runtime_array_parameters,
+        stripped: Rc::clone(&prob.stripped),
+        strip_source: prob.strip_source.clone(),
     })
 }
 
@@ -1851,9 +1896,117 @@ pub fn solve_ensemble(
 pub fn esm_problem<'a>(
     input: impl Into<ProblemInput<'a>>,
     tspan: (f64, f64),
-    opts: ProblemOptions,
+    mut opts: ProblemOptions,
 ) -> Result<EsmProblem, SimulateError> {
     let input = input.into();
+    let set = std::mem::take(&mut opts.strip);
+    if set.is_empty() {
+        return build_problem(input, tspan, opts, set);
+    }
+    strip_and_build(input, tspan, opts, set)
+}
+
+/// [`esm_problem`] with `strip` non-empty (API_SPEC §5.8): load the document,
+/// remove `set`'s constructs, build what remains, and keep what was removed.
+fn strip_and_build(
+    input: ProblemInput<'_>,
+    tspan: (f64, f64),
+    mut opts: ProblemOptions,
+    set: crate::strip::StripSet,
+) -> Result<EsmProblem, SimulateError> {
+    let compiler = opts.compiler.unwrap_or_default();
+    if !matches!(compiler, Compiler::Native | Compiler::Interpreter) {
+        return Err(SimulateError::CompilerUnavailable {
+            compiler: compiler.as_str(),
+            details: "`strip` serves the `native` and `interpreter` compilers (API_SPEC §5.8, \
+                      \"Strip and expose\")"
+                .to_string(),
+        });
+    }
+    let load = |raw: &JsonValue, base: Option<PathBuf>, opts: &ProblemOptions| {
+        crate::parse::load_document_with_options(
+            raw,
+            &crate::parse::LoadOptions {
+                base_path: base,
+                metaparameters: opts.metaparameters.clone(),
+            },
+        )
+        .map_err(|e| {
+            SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+                "loading the document: {e}"
+            )))
+        })
+    };
+    let file = match input {
+        ProblemInput::Path(path) => {
+            let text = std::fs::read_to_string(path).map_err(|e| {
+                SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+                    "reading {}: {e}",
+                    path.display()
+                )))
+            })?;
+            let raw: JsonValue = serde_json::from_str(&text).map_err(|e| {
+                SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+                    "parsing {}: {e}",
+                    path.display()
+                )))
+            })?;
+            if opts.base_path.is_none() {
+                opts.base_path = Some(match path.parent() {
+                    Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+                    _ => PathBuf::from("."),
+                });
+            }
+            load(&raw, opts.base_path.clone(), &opts)?
+        }
+        ProblemInput::Json(raw) => load(raw, opts.base_path.clone(), &opts)?,
+        ProblemInput::File(f) => f.clone(),
+        ProblemInput::Flattened(_) => {
+            return Err(SimulateError::Compile(
+                crate::compile_error::CompileError::build_err(
+                    "`strip` needs a document; a flattened system has none to strip",
+                ),
+            ));
+        }
+    };
+    let stripped = crate::strip::strip_file(&file, set)?;
+    // The loader closed the metaparameters already.
+    opts.metaparameters.clear();
+    let p = opts.p.clone();
+    let mut prob = build_problem(ProblemInput::File(&stripped.file), tspan, opts, set)?;
+    let mut constructs = stripped.constructs;
+    if !constructs.z_layout.is_empty() {
+        let flat = crate::flatten::flatten(&stripped.file)
+            .map_err(|e| SimulateError::Compile(e.into()))?;
+        let mut params: HashMap<String, f64> = flat
+            .parameters
+            .iter()
+            .filter_map(|(k, v)| match &v.default {
+                Some(crate::types::InlineValue::Scalar(x)) => Some((k.clone(), *x)),
+                _ => None,
+            })
+            .collect();
+        for (k, v) in &p {
+            if params.contains_key(k) {
+                params.insert(k.clone(), *v);
+            }
+        }
+        params.insert("t".to_string(), tspan.0);
+        constructs.z0 = crate::strip::z_starting_values(&flat, &constructs.z_layout, &params);
+    }
+    prob.stripped = Rc::new(constructs);
+    prob.strip_source = Some(Rc::new(stripped.file));
+    Ok(prob)
+}
+
+/// [`esm_problem`] without `strip`. `taken` is the set the caller stripped
+/// with, for the coupling-level event gate.
+fn build_problem(
+    input: ProblemInput<'_>,
+    tspan: (f64, f64),
+    opts: ProblemOptions,
+    taken: crate::strip::StripSet,
+) -> Result<EsmProblem, SimulateError> {
     #[allow(unused_mut)]
     let mut opts = opts;
 
@@ -2196,6 +2349,12 @@ pub fn esm_problem<'a>(
         }
     }
 
+    // A coupling-level event is lowered by no compiler: refuse it unless the
+    // caller stripped its class (esm-spec §9.6.6 `unsupported_construct`).
+    if let Some(f) = owned_file.as_ref() {
+        crate::strip::refuse_coupling_events(f, taken)?;
+    }
+
     // ---- (3b) Static precision inference, for a RAW-JSON input. -----------
     // Stage (1c) already ran when the caller handed in a typed document. A raw
     // JSON input has no typed form until stage (3) — this is its first chance,
@@ -2477,6 +2636,8 @@ pub fn esm_problem<'a>(
         provider_keys,
         program_source,
         runtime_array_parameters: opts.runtime_array_parameters,
+        stripped: Rc::default(),
+        strip_source: None,
     };
     Ok(prob)
 }
@@ -4734,6 +4895,7 @@ fn declared_default_forcing(c: &ArrayCompiled, name: &str) -> Option<Option<Arra
 /// to write that field alongside the state (RFC decision 8).
 #[cfg(feature = "solve")]
 pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, SimulateError> {
+    refuse_stripped(prob, "solve")?;
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
     let _precision_guard = prob.precision.enter();
@@ -5126,6 +5288,7 @@ pub fn init<'a>(
     prob: &'a EsmProblem,
     opts: &SolveOptions,
 ) -> Result<Integrator<'a>, SimulateError> {
+    refuse_stripped(prob, "init")?;
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
     let _precision_guard = prob.precision.enter();

@@ -56,11 +56,13 @@ from typing import Any, Callable
 import numpy as np
 
 from . import op_registry
+from . import strip as _strip
 from .classification import is_implicit_lhs
 from .compiler import (
     CompilerPolicy,
     CompilerRefusedRuleError,
     CompilerReport,
+    CompilerUnavailableError,
     phase_scope,
     resolve_compiler,
     use_policy,
@@ -417,6 +419,10 @@ class EsmProblem:
     #: per-segment seed") and handed to :func:`solve` so the providers are
     #: sampled once. ``None`` for every one-shot engine. Internal.
     segment_seed: Any = None
+    #: What ``strip`` removed (:class:`earthsci_ast.strip.StrippedConstructs`),
+    #: or ``None`` when the Problem was built without ``strip`` (API_SPEC §5.8,
+    #: "Strip and expose").
+    stripped: Any = None
 
     def __repr__(self) -> str:  # pragma: no cover - display only
         return (
@@ -460,6 +466,7 @@ def esm_problem(
     inspect: BuildInspection | None = None,
     pushdown_rewrite: bool = False,
     compiler: str | None = None,
+    strip: Iterable[str] = (),
 ) -> EsmProblem:
     """Build a document into a runnable :class:`EsmProblem` (esm-libraries-spec §2.5.2).
 
@@ -569,6 +576,14 @@ def esm_problem(
         forcing refreshes still rebuilds per segment, with that compiler's
         tiers. What the compiler names is how a rule is evaluated, not how
         often.
+    strip:
+        The construct classes construction removes and hands back instead of
+        refusing (API_SPEC §5.8, "Strip and expose"): ``"continuous_events"``,
+        ``"discrete_events"``, ``"parameter_updates"``, ``"algebraic"``. Empty,
+        the default, changes nothing. Read what was removed with
+        :func:`~earthsci_ast.strip.stripped`; :func:`solve` and :func:`init`
+        refuse a Problem anything was removed from. ``"native"`` and
+        ``"interpreter"`` only; the input must be a path or a ``dict``.
 
     Raises
     ------
@@ -589,6 +604,29 @@ def esm_problem(
         registry code on ``.code``.
     """
     chosen_compiler = resolve_compiler(compiler)
+    classes = _strip.strip_classes(strip)
+    if classes:
+        return _strip_and_build(
+            classes,
+            chosen_compiler,
+            input,
+            tspan,
+            p=p,
+            u0=u0,
+            providers=providers,
+            model_name=model_name,
+            metaparameters=metaparameters,
+            base_path=base_path,
+            sample_time=sample_time,
+            const_arrays=const_arrays,
+            cse=cse,
+            callback=callback,
+            loader_provider=loader_provider,
+            provider_factory=provider_factory,
+            inspect=inspect,
+            pushdown_rewrite=pushdown_rewrite,
+            compiler=compiler,
+        )
     policy = CompilerPolicy(
         compiler=chosen_compiler,
         strict=chosen_compiler == "native",
@@ -614,6 +652,43 @@ def esm_problem(
             inspect=inspect,
             pushdown_rewrite=pushdown_rewrite,
         )
+
+
+def _strip_and_build(classes: list[str], chosen: str, input: Any, tspan, **kw) -> EsmProblem:
+    """:func:`esm_problem` with ``strip`` non-empty (API_SPEC §5.8): remove the
+    classes' constructs from the document, build what remains, and keep what
+    was removed."""
+    if chosen not in ("native", "interpreter"):
+        raise CompilerUnavailableError(
+            chosen, "`strip` serves the native and interpreter compilers (API_SPEC §5.8)"
+        )
+    if isinstance(input, (str, os.PathLike)):
+        path = os.fspath(input)
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        if kw.get("base_path") is None:
+            kw["base_path"] = os.path.dirname(os.path.abspath(path))
+    elif isinstance(input, dict):
+        raw = input
+    else:
+        raise TypeError("`strip` needs the document as a path or a dict")
+    doc, sobj = _strip.strip_document(raw, classes)
+    token = _strip.STRIP_TAKEN.set(tuple(classes))
+    try:
+        prob = esm_problem(doc, tspan, **kw)
+        if "algebraic" in classes:
+            original = load_document(raw, base_path=kw.get("base_path"))
+            flat = flatten(original, base_path=kw.get("base_path") or ".")
+            params = {
+                k: float(v.default)
+                for k, v in flat.parameters.items()
+                if isinstance(getattr(v, "default", None), (int, float))
+            }
+            _strip.collect_algebraic(flat, sobj, float(tspan[0]), params)
+    finally:
+        _strip.STRIP_TAKEN.reset(token)
+    prob.stripped = sobj
+    return prob
 
 
 def _esm_problem_under(
@@ -1945,6 +2020,17 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
     )
     if found is None and file is not None:
         found = _first_subsystem_event(file)
+    if found is None and file is not None:
+        # A coupling-level event is lowered by no pathway: refused unless the
+        # caller stripped its class (``esm_problem(..., strip=...)``).
+        taken = _strip.STRIP_TAKEN.get()
+        for entry in getattr(file, "coupling", None) or []:
+            if getattr(entry, "coupling_type", None) != CouplingType.EVENT:
+                continue
+            kind = "continuous" if entry.event_type == "continuous" else "discrete"
+            if f"{kind}_events" not in taken:
+                found = (f"{kind} event", entry)
+                break
     if found is not None:
         construct, event = found
         name = getattr(event, "name", None)
@@ -2167,6 +2253,9 @@ def solve(
 ) -> Solution | list[Solution]:
     """Run ``prob`` to completion and return its :class:`Solution`.
 
+    A Problem ``strip`` removed constructs from is refused with
+    ``stripped_problem_not_solvable`` (API_SPEC §5.8).
+
     The vocabulary is SciML's, not SciPy's (API_SPEC §4): ``alg`` (not
     ``method``), ``abstol`` (not ``atol``), ``reltol`` (not ``rtol``), ``saveat``
     (not ``t_eval``). The defaults — ``reltol=1e-4``, ``abstol=1e-6`` — are the
@@ -2214,6 +2303,8 @@ def solve(
         exception, so interactive workflows can branch on it; a dimensionality
         violation still raises.
     """
+    if isinstance(prob, EsmProblem):
+        _strip.refuse_stripped(prob, "solve")
     if isinstance(prob, EnsembleProblem):
         # `abstol` / `reltol` are forwarded UNRESOLVED — still `None` when the
         # caller named nothing. Resolving here would turn "caller said nothing"
@@ -2790,6 +2881,7 @@ def init(
     explicit argument here wins outright. The chain runs wherever a document is
     integrated, so stepping honours the document as solving does.
     """
+    _strip.refuse_stripped(prob, "init")
     return Integrator(
         prob, alg=alg, abstol=abstol, reltol=reltol, callback=callback, maxiters=maxiters
     )
