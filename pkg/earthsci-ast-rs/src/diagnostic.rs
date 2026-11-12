@@ -703,6 +703,7 @@ mod error_code_tests {
             "record_axis_misplaced",
             "record_axis_time_invariant_source",
             "records_per_sample_invalid",
+            "recurrence_group_axis_mismatch",
             "recurrence_not_wellfounded",
             "recurrence_unsupported_form",
             "relational_node_in_continuous",

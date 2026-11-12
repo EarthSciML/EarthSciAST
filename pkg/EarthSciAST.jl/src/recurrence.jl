@@ -76,8 +76,10 @@ function validate_recurrence_semantics(file::EsmFile)::Vector{StructuralError}
             _, first_var, first_frame = members[ref]
             mismatch = false
             for (i, var, frame) in members
-                (frame[1] == first_frame[1] && frame[2] == first_frame[2] &&
-                    (frame[3] === nothing || frame[3] == first_frame[3])) && continue
+                (
+                    frame[1] == first_frame[1] && frame[2] == first_frame[2] &&
+                        (frame[3] === nothing || frame[3] == first_frame[3])
+                ) && continue
                 mismatch = true
                 push!(
                     errors, StructuralError(
@@ -126,10 +128,12 @@ _recurrence_is_array_shape(shape) = shape !== nothing && !isempty(shape)
 # `interval`-kind index set's `1..size`; anything else — a ragged/dependent
 # `of`, a categorical or derived set, an expression-valued bound — is UNKNOWN,
 # and an unknown symbol makes a lag unprovable rather than illegal.
-function _recurrence_symbol_bounds(spec, file::EsmFile)
+_recurrence_symbol_bounds(spec, file::EsmFile) = _recurrence_symbol_bounds(spec, file.index_sets)
+
+function _recurrence_symbol_bounds(spec, index_sets::AbstractDict)
     if spec isa IndexSetRef
         isempty(spec.of) || return nothing
-        iset = get(file.index_sets, spec.from, nothing)
+        iset = get(index_sets, spec.from, nothing)
         iset === nothing && return nothing
         # `interval` by declared size, `categorical` by member count. Both are
         # 1-origin dense ranges at evaluation and the evaluator resolves BOTH
@@ -578,11 +582,14 @@ function _check_recurrence_equation!(
     end
     # The frame, for the §4.3.1.2 comparison across a group's members: output
     # indices, each axis's range as the validator resolves it (bounds when
-    # provable, the authored spec otherwise), and the recurrence axis.
+    # provable, the authored spec otherwise), and the recurrence axis. The ranges
+    # are the frame-declaring `faq`'s: the indexed-`faq` LHS's own when the LHS
+    # is that form, else the RHS aggregate's.
+    frame_agg = lhs_idx !== nothing ? (eq.lhs::OpExpr) : rhs_agg
     ranges_sig = Any[]
     for n in idx_names
-        spec = (rhs_agg === nothing || rhs_agg.ranges === nothing) ? nothing :
-            get(rhs_agg.ranges, n, nothing)
+        spec = (frame_agg === nothing || frame_agg.ranges === nothing) ? nothing :
+            get(frame_agg.ranges, n, nothing)
         b = spec === nothing ? nothing : _recurrence_symbol_bounds(spec, file)
         push!(ranges_sig, b === nothing ? repr(spec) : b)
     end
@@ -631,7 +638,7 @@ the equation is a recurrence CANDIDATE), `:bare` (named whole and never through
 function recurrence_self_reference_kind(name::AbstractString, body::ASTExpr)::Symbol
     indexed = Ref(false)
     bare = Ref(false)
-    _walk_self_reference!(body, name, indexed, bare)
+    _walk_self_reference!(body, name, indexed, bare, Base.IdSet{OpExpr}())
     indexed[] && return :indexed
     bare[] && return :bare
     return :none
@@ -639,13 +646,17 @@ end
 
 function _walk_self_reference!(
         e::ASTExpr, name::AbstractString,
-        indexed::Ref{Bool}, bare::Ref{Bool}
+        indexed::Ref{Bool}, bare::Ref{Bool}, seen::Base.IdSet{OpExpr}
     )
     if e isa VarExpr
         e.name == name && (bare[] = true)
         return nothing
     end
     e isa OpExpr || return nothing
+    # A shared sub-DAG answers the same both times: walk each node once, or a
+    # structurally shared body costs one walk per path.
+    e in seen && return nothing
+    push!(seen, e)
     # POSITIONAL, not identity-based: hash-consing shares leaf nodes, so the
     # `VarExpr` at `args[1]` may be the very same object as a bare read
     # elsewhere in the tree, and skipping "that object" would skip both.
@@ -654,19 +665,19 @@ function _walk_self_reference!(
     self_head && (indexed[] = true)
     for j in eachindex(e.args)
         (self_head && j == 1) && continue
-        _walk_self_reference!(e.args[j], name, indexed, bare)
+        _walk_self_reference!(e.args[j], name, indexed, bare, seen)
     end
     for side in (e.expr_body, e.filter, e.key, e.lower, e.upper)
-        side === nothing || _walk_self_reference!(side, name, indexed, bare)
+        side === nothing || _walk_self_reference!(side, name, indexed, bare, seen)
     end
     if e.values !== nothing
         for v in e.values
-            _walk_self_reference!(v, name, indexed, bare)
+            _walk_self_reference!(v, name, indexed, bare, seen)
         end
     end
     if e.bindings !== nothing
         for k in sort!(collect(keys(e.bindings)))
-            _walk_self_reference!(e.bindings[k], name, indexed, bare)
+            _walk_self_reference!(e.bindings[k], name, indexed, bare, seen)
         end
     end
     if e.ranges !== nothing
@@ -674,7 +685,7 @@ function _walk_self_reference!(
             v = e.ranges[k]
             v isa AbstractVector || continue
             for x in v
-                x isa ASTExpr && _walk_self_reference!(x, name, indexed, bare)
+                x isa ASTExpr && _walk_self_reference!(x, name, indexed, bare, seen)
             end
         end
     end

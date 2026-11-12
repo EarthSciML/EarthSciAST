@@ -883,8 +883,10 @@ def _check_recurrence_wellfoundedness(data: dict[str, Any], errors: list) -> Non
             _, first_var, first, _ = ref
             mismatch = False
             for i, var, frame, _ in members:
-                same = frame[0] == first[0] and frame[1] == first[1] and (
-                    frame[2] is None or frame[2] == first[2]
+                same = (
+                    frame[0] == first[0]
+                    and frame[1] == first[1]
+                    and (frame[2] is None or frame[2] == first[2])
                 )
                 if not same:
                     mismatch = True

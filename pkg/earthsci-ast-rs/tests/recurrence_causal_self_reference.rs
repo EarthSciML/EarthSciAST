@@ -276,6 +276,23 @@ fn a_recurrence_group_orders_its_members_within_the_cell() {
     assert_fixture_passes("15_recurrence_group_same_cell_order.esm");
 }
 
+/// **A member that contracts**: `a[k]` sums over `j ∈ 1..3`. That reduction
+/// lives in the member's cell body, so the stacked recurrence and the slices
+/// sweep the frame axes alone; carrying `j` onto either sums every member three
+/// more times.
+#[test]
+fn a_recurrence_group_member_contracts_exactly_once() {
+    assert_fixture_passes("16_recurrence_group_contracting_member.esm");
+}
+
+/// **One frame, two spellings**: `{from: lev}` and `[1, 4]` over a 4-element
+/// `lev` are one frame at build exactly as at validation, and the second
+/// member is written in the indexed-`faq` LHS form.
+#[test]
+fn a_recurrence_group_compares_resolved_frames() {
+    assert_fixture_passes("17_recurrence_group_frame_spellings.esm");
+}
+
 // ---------------------------------------------------------------------------
 // 2. Fail-closed reads
 // ---------------------------------------------------------------------------
@@ -928,6 +945,14 @@ pipeline_test!(
 pipeline_test!(
     pipeline_recurrence_group_same_cell_order,
     "15_recurrence_group_same_cell_order.esm"
+);
+pipeline_test!(
+    pipeline_recurrence_group_contracting_member,
+    "16_recurrence_group_contracting_member.esm"
+);
+pipeline_test!(
+    pipeline_recurrence_group_frame_spellings,
+    "17_recurrence_group_frame_spellings.esm"
 );
 
 /// The regression itself, stated as a value that must NOT come back.

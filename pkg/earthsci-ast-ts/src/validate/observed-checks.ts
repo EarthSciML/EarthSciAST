@@ -101,10 +101,7 @@ function observedDependencyGraph(
   const graph = new Map<string, string[]>()
   for (const [name, refs] of reads) {
     const group = groups.find((g) => g.has(name))
-    graph.set(
-      name,
-      [...refs].filter((ref) => reads.has(ref) && !(group?.has(ref) ?? false)).sort(),
-    )
+    graph.set(name, [...refs].filter((ref) => reads.has(ref) && !(group?.has(ref) ?? false)).sort())
   }
   return graph
 }

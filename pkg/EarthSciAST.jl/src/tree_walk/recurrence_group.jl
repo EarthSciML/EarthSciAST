@@ -6,7 +6,7 @@
 # shared cell frame, that read one another — and themselves — only at strictly
 # earlier positions along one shared axis. §4.3.1.2 defines its value by a
 # reduction: the group is the single §4.3.1.1 recurrence of the members STACKED on
-# a trailing member axis `m ∈ 1…M` (members in equation order), whose cell body at
+# a trailing member axis `m ∈ 1…M` (members in within-cell order), whose cell body at
 # `m = p` is member `p`'s cell body with every `index(V_q, i…)` read of a member
 # rewritten to `index(S, i…, q)`; then `V_p[k…] = S[k…, p]`.
 #
@@ -18,9 +18,11 @@
 # group exists, except that `_recurrence_axis` admits a constant index on the
 # member axis (`RECURRENCE_MEMBER_SYM`) and nowhere else.
 #
-# A member's own `faq` must not contract: the sweep's fold belongs to the stacked
-# `faq`, and this build has no per-member fold to give a body nested inside it. A
-# member that contracts is refused by name rather than evaluated some other way.
+# A member's cell body is its `faq` restricted to one cell (§4.3.1.1 point 2):
+# the body itself, or — when the member contracts, filters or joins — a scalar
+# `faq` over what is left, which the sweep's term resolves like any nested scalar
+# reduction. The stacked `faq` and the slices therefore range over the frame axes
+# alone; a member's contracted ranges stay inside its own body.
 
 # The stacked model, or `nothing` when `model` has no recurrence group (every
 # document that does not use the construct pays one classification pass).
@@ -52,37 +54,55 @@ function _stack_one_group!(
         isets::Dict{String, IndexSet},
         group::Set{String}
     )
-    # Members in EQUATION order: the order §4.3.1.2 fixes for the member axis.
+    # Members in equation order first; the within-cell order below then puts
+    # them in the order §4.3.1.2 fixes for the member axis. A member is defined
+    # either bare, `V ~ faq{output_idx: k…, …}`, or in the indexed-`faq` LHS form
+    # `faq{expr: index(V, k…)} ~ body`.
     members = String[]
     eq_idx = Int[]
     for (i, eq) in enumerate(equations)
-        eq.lhs isa VarExpr || continue
-        name = (eq.lhs::VarExpr).name
+        t = _recurrence_lhs_target(eq.lhs)
+        t === nothing && continue
+        name = t[1]
         (name in group && !(name in members)) || continue
         push!(members, name)
         push!(eq_idx, i)
     end
     length(members) == length(group) || _group_refuse(
-        "the recurrence group $(sort!(collect(group))) has a member that is not defined by " *
-            "a bare-LHS `faq` equation (esm-spec §4.3.1.2)"
+        "the recurrence group $(sort!(collect(group))) has a member with no defining " *
+            "`faq` equation (esm-spec §4.3.1.2)"
     )
-    frames = map(eq_idx) do i
-        rhs = equations[i].rhs
-        (rhs isa OpExpr && rhs.op == "faq" && rhs.output_idx !== nothing &&
-            !isempty(rhs.output_idx)) || _group_refuse(
-            "'$(members[findfirst(==(i), eq_idx)])' is a member of a recurrence group but " *
-                "its definition is not one `faq` over its cell frame (esm-spec §4.3.1.2)"
+    frames = map(zip(members, eq_idx)) do (m, i)
+        eq = equations[i]
+        unsupported() = _group_refuse(
+            "'$m' is a member of a recurrence group but its definition is not one `faq` " *
+                "over its cell frame (esm-spec §4.3.1.2)"
         )
-        idx = String[string(s) for s in rhs.output_idx]
-        ranges = rhs.ranges === nothing ? Dict{String, Any}() : rhs.ranges
-        contracts = any(k -> !(k in idx), keys(ranges)) || rhs.filter !== nothing ||
-            rhs.join !== nothing || rhs.key !== nothing || rhs.distinct === true
-        contracts && _group_refuse(
-            "'$(members[findfirst(==(i), eq_idx)])' is a member of a recurrence group whose " *
-                "`faq` contracts or filters; this binding sweeps a group through ONE fold, so " *
-                "a member's cell body cannot carry a reduction of its own"
-        )
-        (idx, ranges, rhs.expr_body::ASTExpr)
+        if eq.lhs isa VarExpr
+            rhs = eq.rhs
+            (
+                rhs isa OpExpr && rhs.op == "faq" && rhs.output_idx !== nothing &&
+                    !isempty(rhs.output_idx) && rhs.expr_body !== nothing
+            ) || unsupported()
+            idx = String[string(s) for s in rhs.output_idx]
+            ranges = rhs.ranges === nothing ? Dict{String, Any}() : rhs.ranges
+            (idx, ranges, _cell_restricted_body(rhs, idx))
+        else
+            lhs = eq.lhs::OpExpr
+            (lhs.output_idx !== nothing && !isempty(lhs.output_idx)) || unsupported()
+            idx = String[string(s) for s in lhs.output_idx]
+            ranges = lhs.ranges === nothing ? Dict{String, Any}() : lhs.ranges
+            # The RHS is the body itself, or — as the indexed-LHS form is usually
+            # written — a `faq` over the same frame, restricted to the cell.
+            rhs = eq.rhs
+            body = if rhs isa OpExpr && rhs.op == "faq" && rhs.output_idx !== nothing &&
+                    String[string(s) for s in rhs.output_idx] == idx && rhs.expr_body !== nothing
+                _cell_restricted_body(rhs, idx)
+            else
+                rhs
+            end
+            (idx, ranges, body)
+        end
     end
     # The order §4.3.1.2 fixes for the member axis: a member another reads at
     # the cell being written comes before it (rule 1), ties in equation order.
@@ -91,8 +111,10 @@ function _stack_one_group!(
     n = length(members)
     order = Int[]
     while length(order) < n
-        nxt = findfirst(i -> !(i in order) &&
-            all(j -> j == i || !same_cell(i, j) || j in order, 1:n), 1:n)
+        nxt = findfirst(
+            i -> !(i in order) &&
+                all(j -> j == i || !same_cell(i, j) || j in order, 1:n), 1:n
+        )
         nxt === nothing && throw(
             TreeWalkError(
                 ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
@@ -107,8 +129,13 @@ function _stack_one_group!(
     eq_idx = eq_idx[order]
     frames = frames[order]
     idx_names, ranges, _ = frames[1]
+    # Each frame axis's range as the validator resolves it (recurrence.jl,
+    # `_recurrence_symbol_bounds`), so `{from: lev}` and `[1, 4]` over a 4-element
+    # `lev` are one frame here exactly as at validation.
+    frame_sig(idx, rng) = Any[_group_frame_range(get(rng, s, nothing), isets) for s in idx]
+    sig1 = frame_sig(idx_names, ranges)
     for (m, (idx, rng, _)) in zip(members[2:end], frames[2:end])
-        (idx == idx_names && all(s -> repr(get(rng, s, nothing)) == repr(get(ranges, s, nothing)), idx)) ||
+        (idx == idx_names && frame_sig(idx, rng) == sig1) ||
             throw(
             TreeWalkError(
                 ERROR_CODES.RECURRENCE_GROUP_AXIS_MISMATCH,
@@ -175,7 +202,8 @@ function _stack_one_group!(
             ]
         )
     end
-    stacked_ranges = Dict{String, Any}(ranges)
+    frame_ranges = Dict{String, Any}(s => ranges[s] for s in idx_names if haskey(ranges, s))
+    stacked_ranges = Dict{String, Any}(frame_ranges)
     stacked_ranges[RECURRENCE_MEMBER_SYM] = Any[1, M]
     stacked_rhs = OpExpr(
         "faq", ASTExpr[];
@@ -186,7 +214,7 @@ function _stack_one_group!(
         slice = OpExpr(
             "faq", ASTExpr[];
             output_idx = Any[idx_names...],
-            ranges = Dict{String, Any}(ranges),
+            ranges = Dict{String, Any}(frame_ranges),
             expr_body = OpExpr(
                 "index",
                 ASTExpr[VarExpr(stacked), (VarExpr(n) for n in idx_names)..., IntExpr(p)]
@@ -206,6 +234,27 @@ function _stack_one_group!(
     return nothing
 end
 
+# The `faq` `rhs` restricted to one cell of its frame `idx` (esm-spec §4.3.1.1
+# point 2): its body, or — when ranges other than the frame's are left to
+# contract, or a filter or join gates the terms — a scalar `faq` over those, with
+# its reduction, filter and join intact.
+function _cell_restricted_body(rhs::OpExpr, idx::Vector{String})
+    ranges = rhs.ranges === nothing ? Dict{String, Any}() : rhs.ranges
+    remaining = Dict{String, Any}(k => v for (k, v) in ranges if !(String(k) in idx))
+    gated = rhs.filter !== nothing || rhs.join !== nothing || rhs.key !== nothing ||
+        rhs.distinct === true
+    (isempty(remaining) && !gated) && return rhs.expr_body::ASTExpr
+    return reconstruct(rhs; output_idx = Any[], ranges = remaining)
+end
+
+# One frame axis's range for the group frame comparison: its bounds when an
+# interval or a dense index set proves them, the authored spec otherwise.
+function _group_frame_range(spec, isets::AbstractDict)
+    spec === nothing && return nothing
+    b = _recurrence_symbol_bounds(spec, isets)
+    return b === nothing ? repr(spec) : b
+end
+
 # Does `e` read member `peer` at the cell being written — `index(peer, k…)` with
 # every index the bare frame symbol of its axis?
 function _reads_same_cell(e::ASTExpr, peer::String, idx_names::Vector{String})::Bool
@@ -214,8 +263,10 @@ function _reads_same_cell(e::ASTExpr, peer::String, idx_names::Vector{String})::
         found[] && return nothing
         if x isa OpExpr && x.op == "index" && length(x.args) == length(idx_names) + 1 &&
                 x.args[1] isa VarExpr && (x.args[1]::VarExpr).name == peer &&
-                all(d -> x.args[d + 1] isa VarExpr && (x.args[d + 1]::VarExpr).name == idx_names[d],
-                    1:length(idx_names))
+                all(
+                d -> x.args[d + 1] isa VarExpr && (x.args[d + 1]::VarExpr).name == idx_names[d],
+                1:length(idx_names)
+            )
             found[] = true
         end
         return nothing

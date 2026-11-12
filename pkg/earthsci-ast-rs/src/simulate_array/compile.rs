@@ -3058,7 +3058,10 @@ pub(super) fn lower_recurrence(
             // (esm-spec §4.3.1.2 rule 1): the frame cell, another member. The
             // sweep publishes members in within-cell order, so the fail-closed
             // read admits it exactly when that member precedes this one.
-            if idx_names.iter().any(|n| n == super::recurrence_group::MEMBER_SYM) {
+            if idx_names
+                .iter()
+                .any(|n| n == super::recurrence_group::MEMBER_SYM)
+            {
                 continue;
             }
             return Err(recur_err(

@@ -2649,7 +2649,7 @@ fn validate_aggregate_constraints(
             }
         }
     }
-    check_recurrence_group_frames(&groups, &frames, &model_path, errors);
+    check_recurrence_group_frames(&groups, &frames, model_path, errors);
     // Each inline subsystem is a model whose equations take the same checks,
     // against its own declarations. An unresolved `{ref}` mount carries none.
     let mut subsystems: Vec<(&String, &serde_json::Value)> =
@@ -3265,16 +3265,24 @@ fn check_recurrence_equation(
     }
     // Each axis's range as the validator can resolve it — bounds when an
     // interval or an index set proves them, the authored spec otherwise — so
-    // `{from: steps}` and `[1, 4]` over a 4-element `steps` are one frame.
-    let ranges = match &equation.rhs {
+    // `{from: steps}` and `[1, 4]` over a 4-element `steps` are one frame. The
+    // ranges are the frame-declaring `faq`'s: the indexed-`faq` LHS's own when
+    // the LHS is that form, else the RHS aggregate's.
+    let frame_node = if lhs_idx.is_some() {
+        &equation.lhs
+    } else {
+        &equation.rhs
+    };
+    let ranges = match frame_node {
         crate::Expr::Operator(node) if node.op == "faq" => node.ranges.as_ref().map(|m| {
             idx_names
                 .iter()
                 .map(|n| {
-                    m.get(n).map(|spec| match validator_symbol_bounds(spec, esm_file) {
-                        Some((lo, hi)) => format!("{lo}..{hi}"),
-                        None => serde_json::to_string(spec).unwrap_or_default(),
-                    })
+                    m.get(n)
+                        .map(|spec| match validator_symbol_bounds(spec, esm_file) {
+                            Some((lo, hi)) => format!("{lo}..{hi}"),
+                            None => serde_json::to_string(spec).unwrap_or_default(),
+                        })
                 })
                 .collect::<Vec<_>>()
         }),
@@ -3289,8 +3297,9 @@ fn check_recurrence_equation(
 }
 
 /// Every member of a recurrence group must sweep the same frame along the same
-/// axis (esm-spec §4.3.1.2). Compared against the group's FIRST member in
-/// equation order, and reported at the first member that disagrees. A member
+/// axis (esm-spec §4.3.1.2). Compared against the group's first member, in
+/// equation order, that has a recurrence axis, and reported at the first member
+/// that disagrees. A member
 /// whose own check already failed has no frame and is skipped: one diagnosis
 /// per defect.
 fn check_recurrence_group_frames(
@@ -3344,10 +3353,11 @@ fn check_recurrence_group_frames(
             continue;
         }
         // Rule 1: the same-cell reads between members must admit an order.
-        let edges: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> = in_group
-            .iter()
-            .map(|(_, v, f)| (v.to_string(), f.same_cell.iter().cloned().collect()))
-            .collect();
+        let edges: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+            in_group
+                .iter()
+                .map(|(_, v, f)| (v.to_string(), f.same_cell.iter().cloned().collect()))
+                .collect();
         if let Some(cycle) = crate::classification::first_observed_cycle(&edges) {
             let (eq_idx, var) = in_group
                 .iter()
@@ -3369,8 +3379,6 @@ fn check_recurrence_group_frames(
         }
     }
 }
-
-
 
 /// What a recurrence definition sweeps over: its output indices, their
 /// authored ranges (when the RHS is the `faq` that declares them), and the
@@ -3583,8 +3591,7 @@ pub(crate) fn recurrence_groups_of_parts(
                     .observed_definitions
                     .get(u)
                     .is_some_and(|rhs| scc.iter().any(|v| has_offset_index_read(rhs, v)))
-            })
-            && scc.iter().all(|m| array_shaped(m))
+            }) && scc.iter().all(|m| array_shaped(m))
                 && scc.iter().all(|u| {
                     let Some(rhs) = class.observed_definitions.get(u) else {
                         return false;

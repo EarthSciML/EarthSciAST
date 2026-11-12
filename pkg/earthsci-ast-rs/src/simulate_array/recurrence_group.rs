@@ -81,10 +81,23 @@ fn decompose(var: &str, eq_idx: usize, eq: &Equation) -> Result<Member, CompileE
             if idx_names.is_empty() {
                 return Err(unsupported());
             }
+            // The RHS is the body itself, or — as the indexed-LHS form is
+            // usually written — a `faq` over the same frame, restricted to the
+            // cell.
+            let body = match rhs {
+                Expr::Operator(r)
+                    if crate::faq::is_faq_op(&r.op)
+                        && r.output_idx.as_ref() == Some(&idx_names)
+                        && r.expr.is_some() =>
+                {
+                    super::compile::cell_restrict_aggregate(r, &idx_names)
+                }
+                other => other.clone(),
+            };
             Ok(Member {
                 var: var.to_string(),
                 eq_idx,
-                body: rhs.clone(),
+                body,
                 ranges: l.ranges.clone().unwrap_or_default(),
                 idx_names,
             })
@@ -165,7 +178,8 @@ fn order_within_cell(members: Vec<Member>) -> Result<Vec<Member>, CompileError> 
         .map(|i| {
             (0..n)
                 .filter(|&j| {
-                    j != i && reads_same_cell(&members[i].body, &members[j].var, &members[i].idx_names)
+                    j != i
+                        && reads_same_cell(&members[i].body, &members[j].var, &members[i].idx_names)
                 })
                 .collect()
         })
@@ -187,7 +201,53 @@ fn order_within_cell(members: Vec<Member>) -> Result<Vec<Member>, CompileError> 
         order.push(next);
     }
     let mut slots: Vec<Option<Member>> = members.into_iter().map(Some).collect();
-    Ok(order.into_iter().map(|i| slots[i].take().expect("each member placed once")).collect())
+    Ok(order
+        .into_iter()
+        .map(|i| slots[i].take().expect("each member placed once"))
+        .collect())
+}
+
+/// One frame axis's range as the validator resolves it (`structural.rs`,
+/// `validator_symbol_bounds`): its bounds when an interval or a dense index set
+/// proves them, the authored spec otherwise — so `{from: lev}` and `[1, 4]` over
+/// a 4-element `lev` are one frame here exactly as they are at validation.
+#[derive(PartialEq)]
+enum FrameRange {
+    Bounds(i64, i64),
+    Authored(Option<String>),
+}
+
+fn frame_range(spec: Option<&RangeSpec>, index_sets: &HashMap<String, IndexSet>) -> FrameRange {
+    let bounds = match spec {
+        Some(RangeSpec::Interval([lo, hi])) => Some((*lo, *hi)),
+        Some(RangeSpec::Strided([lo, _, hi])) => Some((*lo, *hi)),
+        Some(RangeSpec::IndexSetRef { from, of: None }) => {
+            index_sets
+                .get(from)
+                .and_then(|set| match set.kind.as_str() {
+                    "interval" => set.size.map(|n| (1, n)),
+                    "categorical" => set.members.as_ref().map(|m| (1, m.len() as i64)),
+                    _ => None,
+                })
+        }
+        _ => None,
+    };
+    match bounds {
+        Some((lo, hi)) => FrameRange::Bounds(lo, hi),
+        None => FrameRange::Authored(spec.map(|s| serde_json::to_string(s).unwrap_or_default())),
+    }
+}
+
+/// The ranges of `m`'s frame axes alone. A member's other ranges are the
+/// indices its own `faq` contracts over; that reduction already sits inside
+/// its cell body (`cell_restrict_aggregate`), so carrying those ranges onto
+/// the stacked `faq` or a slice would run it a second time.
+fn frame_ranges(m: &Member) -> HashMap<String, RangeSpec> {
+    m.ranges
+        .iter()
+        .filter(|(k, _)| m.idx_names.contains(k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 /// `a == b` as an expression node.
@@ -251,12 +311,15 @@ fn lower_one_group(
     }
     let members = order_within_cell(members)?;
     let first = &members[0];
+    let frame_of = |m: &Member| -> Vec<FrameRange> {
+        m.idx_names
+            .iter()
+            .map(|n| frame_range(m.ranges.get(n), index_sets))
+            .collect()
+    };
+    let first_frame = frame_of(first);
     for m in &members[1..] {
-        if m.idx_names != first.idx_names
-            || m.idx_names
-                .iter()
-                .any(|n| m.ranges.get(n) != first.ranges.get(n))
-        {
+        if m.idx_names != first.idx_names || frame_of(m) != first_frame {
             return Err(group_err(
                 "recurrence_group_axis_mismatch",
                 format!(
@@ -274,7 +337,11 @@ fn lower_one_group(
         .unwrap_or_default();
     let element_type = decl(&first.var).and_then(|d| d.element_type.clone());
     for m in &members[1..] {
-        if decl(&m.var).and_then(|d| d.shape.clone()).unwrap_or_default() != shape {
+        if decl(&m.var)
+            .and_then(|d| d.shape.clone())
+            .unwrap_or_default()
+            != shape
+        {
             return Err(group_err(
                 "recurrence_group_axis_mismatch",
                 format!(
@@ -304,8 +371,7 @@ fn lower_one_group(
 
     let names: Vec<&str> = members.iter().map(|m| m.var.as_str()).collect();
     let mut w = format!("__esm_recurrence_group__{}", names.join("__"));
-    while model.variables.contains_key(&w) || index_sets.contains_key(&format!("{w}__members"))
-    {
+    while model.variables.contains_key(&w) || index_sets.contains_key(&format!("{w}__members")) {
         w.push('_');
     }
     let member_set = format!("{w}__members");
@@ -322,7 +388,10 @@ fn lower_one_group(
             Some(rest) => Expr::operator(ExpressionNode {
                 op: "ifelse".into(),
                 args: vec![
-                    eq_node(Expr::Variable(MEMBER_SYM.into()), Expr::Integer(p as i64 + 1)),
+                    eq_node(
+                        Expr::Variable(MEMBER_SYM.into()),
+                        Expr::Integer(p as i64 + 1),
+                    ),
                     body,
                     rest,
                 ],
@@ -334,7 +403,7 @@ fn lower_one_group(
 
     let mut out_idx = first.idx_names.clone();
     out_idx.push(MEMBER_SYM.into());
-    let mut ranges = first.ranges.clone();
+    let mut ranges = frame_ranges(first);
     ranges.insert(MEMBER_SYM.into(), RangeSpec::Interval([1, m_count]));
     let w_rhs = Expr::operator(ExpressionNode {
         op: "faq".into(),
@@ -354,7 +423,7 @@ fn lower_one_group(
             op: "faq".into(),
             args: vec![],
             output_idx: Some(m.idx_names.clone()),
-            ranges: Some(m.ranges.clone()),
+            ranges: Some(frame_ranges(m)),
             expr: Some(Box::new(Expr::operator(ExpressionNode {
                 op: "index".into(),
                 args: gather,
@@ -385,7 +454,11 @@ fn lower_one_group(
         "the stacked recurrence group {names:?} (esm-spec §4.3.1.2), introduced by the build"
     ));
     model.variables.insert(w.clone(), w_decl);
-    let insert_at = members.iter().map(|m| m.eq_idx).min().expect("a group has members");
+    let insert_at = members
+        .iter()
+        .map(|m| m.eq_idx)
+        .min()
+        .expect("a group has members");
     model.equations.insert(
         insert_at,
         Equation {

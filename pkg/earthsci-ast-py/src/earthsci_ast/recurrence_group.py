@@ -169,14 +169,57 @@ def _order_within_cell(members: list[str], rhs_of: dict[str, Expr]) -> list[str]
     return order
 
 
+def _frame_bounds(spec: Any, index_sets: dict[str, Any]) -> Any:
+    """One frame axis's range as the validator resolves it
+    (:func:`earthsci_ast.structural_checks._recurrence_symbol_bounds`): its
+    bounds when an interval or a dense index set proves them, the authored spec
+    otherwise — so ``{from: lev}`` and ``[1, 4]`` over a 4-element ``lev`` are
+    one frame here exactly as they are at validation."""
+    from .structural_checks import _recurrence_symbol_bounds
+
+    b = _recurrence_symbol_bounds(spec, index_sets)
+    return tuple(b) if b is not None else repr(spec)
+
+
+def stacked_element_types(
+    ordered_observed: list[tuple[str, Expr]], element_types: dict[str, str]
+) -> dict[str, str]:
+    """The declared ``element_type`` of every stacked group array in
+    ``ordered_observed`` that has none in ``element_types`` yet: its members'
+    (which the stacking requires to agree), read off the slices that gather it.
+    The sweep stores each carried cell at that precision (CONFORMANCE_SPEC
+    §5.19.3a), so a stacked array must carry it exactly as a one-variable
+    recurrence does."""
+    out: dict[str, str] = {}
+    for name, rhs in ordered_observed:
+        body = rhs.expr if isinstance(rhs, ExprNode) and rhs.op == "faq" else None
+        if not (isinstance(body, ExprNode) and body.op == "index" and body.args):
+            continue
+        stacked = body.args[0]
+        if (
+            isinstance(stacked, str)
+            and stacked.startswith(STACK_PREFIX)
+            and stacked not in element_types
+            and name in element_types
+        ):
+            out[stacked] = element_types[name]
+    return out
+
+
 def stack_recurrence_groups(
     observed_eqs: list[tuple[str, Expr]],
     element_types: Callable[[str], str | None] | None = None,
+    index_sets: dict[str, Any] | None = None,
+    shapes: Callable[[str], Any] | None = None,
 ) -> list[tuple[str, Expr]]:
     """``observed_eqs`` with every recurrence group replaced by its stacked
     recurrence followed by one slice per member (module docs). A list with no
     group — every document that does not use the construct — is returned as is
-    after one dependency pass."""
+    after one dependency pass.
+
+    ``index_sets`` resolves the members' frame ranges to bounds before they are
+    compared, and ``shapes`` gives each member's declared shape, which must
+    agree across the group."""
     names = [n for n, _ in observed_eqs]
     rhs_of = dict(observed_eqs)
     if len(rhs_of) < 2:
@@ -199,9 +242,7 @@ def stack_recurrence_groups(
             continue
         if not all(_frame(rhs_of[m]) is not None for m in comp):
             continue
-        if not all(
-            _reads_through_index(rhs_of[u], v) for u in comp for v in deps[u] if v in comp
-        ):
+        if not all(_reads_through_index(rhs_of[u], v) for u in comp for v in deps[u] if v in comp):
             continue
         if not any(_reads_offset(rhs_of[u], v) for u in comp for v in comp):
             continue
@@ -210,16 +251,32 @@ def stack_recurrence_groups(
         return observed_eqs
 
     out = list(observed_eqs)
+    isets = index_sets or {}
     for members in groups:
         frames = [_frame(rhs_of[m]) for m in members]
         idx_names, ranges = frames[0]
+        first_frame = [_frame_bounds(ranges.get(s), isets) for s in idx_names]
         for m, (idx, rng) in zip(members[1:], frames[1:]):
-            if idx != idx_names or any(rng.get(s) != ranges.get(s) for s in idx):
+            if idx != idx_names or [_frame_bounds(rng.get(s), isets) for s in idx] != first_frame:
                 raise RecurrenceError(
                     "recurrence_group_axis_mismatch",
                     f"'{m}' and '{members[0]}' form a recurrence group but do not sweep the "
                     f"same cell frame (esm-spec §4.3.1.2).",
                 )
+        if shapes is not None:
+            shape0 = shapes(members[0])
+            for m in members[1:]:
+                if shapes(m) != shape0:
+                    raise RecurrenceError(
+                        "recurrence_group_axis_mismatch",
+                        f"'{m}' and '{members[0]}' form a recurrence group but are declared "
+                        f"over different shapes (esm-spec §4.3.1.2).",
+                    )
+        # The frame axes' ranges alone. A member's other ranges are the indices
+        # its own `faq` contracts over; that reduction already sits inside its
+        # cell body (`cell_restricted_body`), so carrying those ranges onto the
+        # stacked `faq` or a slice would run it a second time.
+        frame_ranges = {s: ranges[s] for s in idx_names if s in ranges}
         if element_types is not None and len({element_types(m) for m in members}) > 1:
             raise RecurrenceError(
                 "recurrence_unsupported_form",
@@ -251,7 +308,7 @@ def stack_recurrence_groups(
             op="faq",
             args=[],
             output_idx=[*idx_names, MEMBER_SYM],
-            ranges={**ranges, MEMBER_SYM: [1, len(members)]},
+            ranges={**frame_ranges, MEMBER_SYM: [1, len(members)]},
             expr=body,
         )
         slices = {
@@ -259,7 +316,7 @@ def stack_recurrence_groups(
                 op="faq",
                 args=[],
                 output_idx=list(idx_names),
-                ranges=dict(ranges),
+                ranges=dict(frame_ranges),
                 expr=ExprNode(op="index", args=[stacked, *idx_names, p]),
             )
             for p, m in enumerate(members, start=1)

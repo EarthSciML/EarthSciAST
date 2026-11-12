@@ -3191,8 +3191,12 @@ function recurrence_groups(model::Model)::Vector{Set{String}}
         # gather whose every index is a bare name. A cycle closed by same-cell
         # gathers alone has no axis to fold along and stays an observed_cycle.
         any(u -> any(v -> _reads_offset(defs[u], v), comp), comp) || continue
-        all(m -> (v = get(model.variables, m, nothing); v !== nothing &&
-            _recurrence_is_array_shape(v.shape)), comp) || continue
+        all(
+            m -> (
+                v = get(model.variables, m, nothing); v !== nothing &&
+                    _recurrence_is_array_shape(v.shape)
+            ), comp
+        ) || continue
         ok = all(comp) do u
             all(v -> v == u || !(v in comp) || _reads_through_index(defs[u], v), adj[u])
         end

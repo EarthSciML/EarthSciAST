@@ -576,6 +576,57 @@
       }
     },
     {
+      "id": "16_recurrence_group_contracting_member",
+      "path": "fixtures/recurrence/16_recurrence_group_contracting_member.esm",
+      "model": "RecurrenceGroupContractingMember",
+      "golden": "golden/16_recurrence_group_contracting_member.json",
+      "tags": [
+        "recurrence",
+        "recurrence-group",
+        "contraction"
+      ],
+      "note": "A group member whose own faq contracts (a[k] sums over j in 1..3). Its cell body carries that reduction; the stacked recurrence and the member slices sweep the frame axes only. A binding that copies the contracted range onto either multiplies every member by 3. Python's native compiler sweeps a recurrence only when the cell body has no reduction of its own, as for 04.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "17_recurrence_group_frame_spellings",
+      "path": "fixtures/recurrence/17_recurrence_group_frame_spellings.esm",
+      "model": "RecurrenceGroupFrameSpellings",
+      "golden": "golden/17_recurrence_group_frame_spellings.json",
+      "tags": [
+        "recurrence",
+        "recurrence-group",
+        "indexed-lhs"
+      ],
+      "note": "One frame spelled {from: lev} and [1, 4] over a 4-element lev, the second member in the indexed-faq LHS form. Every build compares RESOLVED bounds, as the validators do, and accepts the indexed form as a member.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
       "id": "valid_recurrence_causal_self_reference",
       "path": "valid/recurrence_causal_self_reference.esm",
       "model": "RecurrenceCausalSelfReference",

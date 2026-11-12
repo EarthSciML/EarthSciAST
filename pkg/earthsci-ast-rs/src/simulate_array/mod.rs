@@ -64,8 +64,8 @@ mod cse;
 mod driver;
 #[cfg(feature = "solve")]
 pub(crate) use driver::IcStart;
-pub(crate) use recurrence_group::lower_recurrence_groups;
 pub(crate) use driver::ParameterKeyResolver;
+pub(crate) use recurrence_group::lower_recurrence_groups;
 mod eval;
 mod gate_walk;
 mod layout;

@@ -1634,6 +1634,9 @@ function _geometry_setup_vars(
     setup = Set{String}()
     for (n, _) in defs
         (is_arr_obs(n) && !(n in tainted) && haskey(defs, n)) || continue
+        # A recurrence (esm-spec §4.3.1.1) reads its own earlier cells, so it is
+        # materialized by its ordered sweep, never by a setup-time evaluation.
+        n in refs_of(n) && continue
         # The pure-AST overlap area, or a rank table, over inputs that read no state.
         _is_setup_join_reduction(defs[n]) &&
             !_anyof(f -> f in state_var_names, refs_of(n)) &&
@@ -1686,7 +1689,7 @@ function _geometry_setup_vars(
         for (n, rhs) in defs
             (
                 is_arr_obs(n) && !(n in setup) &&
-                    !(n in tainted) && !(n in blocked)
+                    !(n in tainted) && !(n in blocked) && !(n in refs_of(n))
             ) || continue
             refs = intersect(refs_of(n), mvars)
             if any(f -> f in setup, refs) &&
@@ -1717,6 +1720,7 @@ function _geometry_setup_vars(
                 (
                     is_arr_obs(r) && !(r in setup) &&
                         !(r in tainted) && !(r in blocked) && haskey(defs, r) &&
+                        !(r in refs_of(r)) &&
                         !_is_const_op(defs[r]) && !(defs[r] isa VarExpr)
                 ) || continue
                 rrefs = intersect(refs_of(r), mvars)

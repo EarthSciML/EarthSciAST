@@ -57,7 +57,7 @@ from .numpy_interpreter import (
     sweep_recurrence,
 )
 from .recurrence import RecurrenceError
-from .recurrence_group import stack_recurrence_groups
+from .recurrence_group import stack_recurrence_groups, stacked_element_types
 from .serialize import _serialize_expression
 from .simulation_common import (
     DENSE_OUTPUT_MIN_POINTS,
@@ -961,6 +961,7 @@ def _order_observed_equations(
     observed_eqs: list[tuple[str, Expr]],
     observed_names: set[str],
     element_types: dict[str, str] | None = None,
+    flat: FlattenedSystem | None = None,
 ) -> list[tuple[str, Expr]]:
     """Dependency-order observed assignments so each follows the observeds it reads.
 
@@ -977,7 +978,10 @@ def _order_observed_equations(
     # through the one recurrence implementation (`recurrence_group`). A list
     # with no group is returned unchanged.
     observed_eqs = stack_recurrence_groups(
-        observed_eqs, (element_types or {}).get if element_types is not None else None
+        observed_eqs,
+        (element_types or {}).get if element_types is not None else None,
+        index_sets=flat.index_sets if flat is not None else None,
+        shapes=_declared_shape_lookup(flat) if flat is not None else None,
     )
     rhs_by_name: dict[str, Expr] = dict(observed_eqs)
     # Only observeds PRODUCED by an equation here impose an ordering constraint.
@@ -1146,6 +1150,11 @@ def _materialize_observeds(
     # why it is a log level a caller raises rather than a switch (§2.5.10 puts
     # strategy selection under `compiler`, and this is not strategy).
     _progress = _log.isEnabledFor(_logging.DEBUG)
+    # A stacked recurrence group (esm-spec §4.3.1.2) sweeps at its members'
+    # declared precision, exactly as a one-variable recurrence does.
+    stacked_types = stacked_element_types(ordered_observed, ctx.element_types)
+    if stacked_types:
+        ctx.element_types = {**ctx.element_types, **stacked_types}
     for name, rhs in ordered_observed:
         _t0 = _time.perf_counter() if _progress else 0.0
         if skip_unresolved:
@@ -1579,7 +1588,9 @@ def start_of_run_scalar_ics(
         return {}
     definitions, states = _ic_observed_definitions(flat)
     observed_eqs = [(n, rhs) for n, rhss in definitions.items() if len(rhss) == 1 for rhs in rhss]
-    ordered = _order_observed_equations(observed_eqs, set(definitions), _element_types(flat))
+    ordered = _order_observed_equations(
+        observed_eqs, set(definitions), _element_types(flat), flat=flat
+    )
     arrays, scalars = _buildtime_observed_arrays(
         ic_eqs, ordered, states, param_values, {}, index_sets=flat.index_sets, t0=t0
     )
@@ -2663,6 +2674,21 @@ def _var_index_sets(flat: FlattenedSystem) -> dict[str, str]:
     return out
 
 
+def _declared_shape_lookup(flat: FlattenedSystem) -> Callable[[str], Any]:
+    """``flattened variable name`` -> its declared ``shape`` (``None`` when it
+    declares none), for the recurrence-group shape check."""
+
+    def shape_of(name: str) -> Any:
+        for table in (flat.state_variables, flat.observed_variables, flat.parameters):
+            var = table.get(name)
+            if var is not None:
+                shape = getattr(var, "shape", None)
+                return list(shape) if shape else None
+        return None
+
+    return shape_of
+
+
 def _element_types(flat: FlattenedSystem) -> dict[str, str]:
     """``flattened variable name`` -> its declared ``element_type``.
 
@@ -2972,7 +2998,9 @@ def _build_numpy_rhs(
             observed_eqs.append((_base, _bare_index_definition_rhs(_base, eq.lhs, eq.rhs, flat)))
         else:
             driver_equations.append(eq)
-    ordered_observed = _order_observed_equations(observed_eqs, observed_names, _element_types(flat))
+    ordered_observed = _order_observed_equations(
+        observed_eqs, observed_names, _element_types(flat), flat=flat
+    )
 
     # Index-set NAME alignment (esm-spec §4.3; issue #100). Runs BEFORE the
     # algebraic elimination and the compile below so the substituted/compiled

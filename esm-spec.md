@@ -1592,9 +1592,13 @@ of any member. Two rules are added:
    `dh[k−1]`) instead of one expression inlining the whole step.
 2. **One frame and one axis.** Every member's defining `faq` has the same
    `output_idx` (the same symbols, in the same order), the same ranges for them, and
-   the same recurrence axis. A member that differs is `recurrence_group_axis_mismatch`,
-   reported at the first member, in equation order, whose frame differs from the
-   group's first member's.
+   the same recurrence axis. Ranges are compared as the bounds they resolve to, so
+   `{"from": "lev"}` and `[1, 4]` over a 4-element `lev` are one frame; a member in
+   the indexed-`faq` LHS form declares its frame on that LHS. The frame of reference
+   is the group's first member, in equation order, that **has** a recurrence axis —
+   a member whose every causal read is a same-cell peer read has none to compare. A
+   member that differs from it is `recurrence_group_axis_mismatch`, reported at the
+   first such member in equation order.
 
 **Evaluation.** A group is the §4.3.1.1 recurrence of the members **stacked** along a
 trailing member axis: with members `V₁ … V_M` in **within-cell order** — a member that

@@ -347,14 +347,16 @@ function collectSelfReads(
  * solver's state, not a self-reference, and must not be dragged through the
  * well-foundedness table.
  */
-function recurrenceLhsTarget(lhs: Expr): { varName: string; frame?: (string | 1)[] } | undefined {
+function recurrenceLhsTarget(
+  lhs: Expr,
+): { varName: string; frame?: (string | 1)[]; frameRanges?: unknown } | undefined {
   if (typeof lhs === 'string') return { varName: lhs }
   if (!isExprNode(lhs) || lhs.op !== 'faq') return undefined
   const inner = lhs.expr
   if (!isExprNode(inner) || inner.op !== 'index') return undefined
   const target = (inner.args ?? [])[0]
   if (typeof target !== 'string') return undefined
-  return { varName: target, frame: lhs.output_idx }
+  return { varName: target, frame: lhs.output_idx, frameRanges: lhs.ranges }
 }
 
 /**
@@ -441,7 +443,9 @@ export function validateRecurrenceEquations(
       continue
     }
     // Rule 1: the same-cell reads between members must admit an order.
-    const cycle = firstCycle(new Map(members.map((m) => [m.varName, [...new Set(m.sameCell)].sort()])))
+    const cycle = firstCycle(
+      new Map(members.map((m) => [m.varName, [...new Set(m.sameCell)].sort()])),
+    )
     if (cycle !== undefined) {
       const at = members.find((m) => cycle.includes(m.varName))!
       errors.push({
@@ -577,7 +581,9 @@ function stronglyConnected(graph: ReadonlyMap<string, ReadonlySet<string>>): Arr
   for (const root of [...graph.keys()].sort()) {
     if (visited.has(root)) continue
     visited.add(root)
-    const stack: Array<[string, string[], number]> = [[root, [...(graph.get(root) ?? [])].sort(), 0]]
+    const stack: Array<[string, string[], number]> = [
+      [root, [...(graph.get(root) ?? [])].sort(), 0],
+    ]
     while (stack.length > 0) {
       const top = stack[stack.length - 1]
       if (top[2] >= top[1].length) {
@@ -734,7 +740,7 @@ function collectReadsOf(
  */
 function checkRecurrenceEquation(
   rhs: Expr,
-  target: { varName: string; frame?: (string | 1)[] },
+  target: { varName: string; frame?: (string | 1)[]; frameRanges?: unknown },
   path: string,
   esmFile: EsmFile | undefined,
   group?: ReadonlySet<string>,
@@ -942,7 +948,14 @@ function checkRecurrenceEquation(
   if (result !== undefined) {
     // The frame, for the §4.3.1.2 comparison across a group's members: output
     // indices, each axis's range as the validator resolves it, and the axis.
-    const ranges = isExprNode(rhs) && rhs.op === 'faq' ? (rhs.ranges ?? {}) : {}
+    // The ranges are the frame-declaring `faq`'s: the indexed-`faq` LHS's own
+    // when the LHS is that form, else the RHS aggregate's.
+    const ranges =
+      target.frame !== undefined
+        ? (target.frameRanges ?? {})
+        : isExprNode(rhs) && rhs.op === 'faq'
+          ? (rhs.ranges ?? {})
+          : {}
     result.frame = JSON.stringify([
       frameNames,
       frameNames.map((n) => {

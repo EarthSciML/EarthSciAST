@@ -453,8 +453,14 @@ func analyzeRecurrenceEquationIn(eq Equation, file *ESMFile, arrayShaped map[str
 	// The frame signature: each axis's range as the validator resolves it —
 	// bounds when provable, the authored spec otherwise, so `{from: steps}` and
 	// `[1, 4]` over a 4-element `steps` are one frame.
+	// The ranges are the frame-declaring `faq`'s: the indexed-`faq` LHS's own
+	// when the LHS is that form, else the RHS aggregate's.
+	frameNode := eq.RHS
+	if lhsIdxPresent {
+		frameNode = eq.LHS
+	}
 	var ranges map[string]any
-	if node, isNode := asExprNode(eq.RHS); isNode && node.Op == opAggregate {
+	if node, isNode := asExprNode(frameNode); isNode && node.Op == opAggregate {
 		ranges = node.Ranges
 	}
 	parts := make([]string, 0, len(frameSyms))
@@ -470,25 +476,13 @@ func analyzeRecurrenceEquationIn(eq Equation, file *ESMFile, arrayShaped map[str
 	return true, nil, fmt.Sprintf("%v|%v|%d|%s", frameSyms, parts, axis, strings.Join(sameCell, ","))
 }
 
-// checkRecurrenceReads is the lag analysis: every self-read must be affine in
-// its frame symbol with coefficient 1 on every axis, strictly earlier on exactly
-// ONE axis, and every read must agree on WHICH axis that is.
-func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[string]symBounds, reads []recurrenceSelfRead) *recurrenceFinding {
-	_, finding := checkRecurrenceReadsAxis(varName, frameSyms, frameEnv, reads)
-	return finding
-}
-
-// checkRecurrenceReadsAxis is checkRecurrenceReads that also returns the
-// recurrence axis it settled on (-1 with a finding).
-func checkRecurrenceReadsAxis(varName string, frameSyms []string, frameEnv map[string]symBounds, reads []recurrenceSelfRead) (int, *recurrenceFinding) {
-	axis, _, finding := checkRecurrenceReadsGroup(varName, frameSyms, frameEnv, reads)
-	return axis, finding
-}
-
-// checkRecurrenceReadsGroup is the lag analysis for a member of a recurrence
-// group: it also returns the peers read at the cell being written (esm-spec
-// §4.3.1.2 rule 1), which are admitted here and checked for a cycle by the
-// group check. The axis is -1 when every causal read is such a peer read.
+// checkRecurrenceReadsGroup is the lag analysis: every causal read must be
+// affine in its frame symbol with coefficient 1 on every axis, strictly earlier
+// on exactly ONE axis, and every read must agree on WHICH axis that is. For a
+// member of a recurrence group it also returns the peers read at the cell being
+// written (esm-spec §4.3.1.2 rule 1), which are admitted here and checked for a
+// cycle by the group check. The axis is -1 when every causal read is such a
+// peer read.
 func checkRecurrenceReadsGroup(varName string, frameSyms []string, frameEnv map[string]symBounds, reads []recurrenceSelfRead) (int, []string, *recurrenceFinding) {
 	var sameCell []string
 	axis := -1
@@ -985,10 +979,12 @@ func opBlocksCellRestriction(op string) bool {
 	return false
 }
 
-// collectRecurrenceSelfReads walks expr and accumulates every `index(varName, …)`
-// read into out, together with the index-symbol environment in scope at the read
-// and whether the read sits under a construct that cannot be restricted to one
-// cell. It also sets bare when varName occurs as a NAKED reference, which names
+// collectRecurrenceSelfReadsOf walks expr and accumulates every `index(name, …)`
+// read of one of names — a recurrence's own variable, or every member of a
+// recurrence group (esm-spec §4.3.1.2) — into out, recording which name it
+// reads, together with the index-symbol environment in scope at the read and
+// whether the read sits under a construct that cannot be restricted to one
+// cell. It also sets bare when a name occurs as a NAKED reference, which names
 // the whole array — an object that does not exist while the recurrence sweeps it.
 //
 // env is a stack: a `faq` pushes its resolvable `ranges` on entry and
@@ -1002,13 +998,6 @@ func opBlocksCellRestriction(op string) bool {
 // not runtime operands (see exprRefNonRefSlots in expr_walk.go): a name there is
 // not a read of the array, so collecting one would manufacture a self-read out
 // of a bound.
-func collectRecurrenceSelfReads(expr Expression, varName string, file *ESMFile, env *[]symBinding, blocked bool, out *[]recurrenceSelfRead, bare *bool) {
-	collectRecurrenceSelfReadsOf(expr, map[string]bool{varName: true}, file, env, blocked, out, bare)
-}
-
-// collectRecurrenceSelfReadsOf is collectRecurrenceSelfReads over several names
-// at once — a recurrence group's members (esm-spec §4.3.1.2) — recording which
-// one each read names.
 func collectRecurrenceSelfReadsOf(expr Expression, names map[string]bool, file *ESMFile, env *[]symBinding, blocked bool, out *[]recurrenceSelfRead, bare *bool) {
 	node, ok := asExprNode(expr)
 	if !ok {
