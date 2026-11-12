@@ -492,6 +492,151 @@
       }
     },
     {
+      "id": "13_recurrence_group_two_variables",
+      "path": "fixtures/recurrence/13_recurrence_group_two_variables.esm",
+      "model": "RecurrenceGroupTwoVariables",
+      "golden": "golden/13_recurrence_group_two_variables.json",
+      "tags": [
+        "faq",
+        "causal-self-reference",
+        "recurrence",
+        "recurrence-group"
+      ],
+      "note": "The minimal recurrence GROUP (esm-spec 4.3.1.2, issue #701): a[k] = a[k-1] + b[k-1], b[k] = a[k-1] * b[k-1]. Neither array is a recurrence on its own, and the reads between them close what would otherwise be an observed_cycle; the group is well founded because every read between members is strictly earlier. Pins the VALUE, and that each peer read resolves to the right member at the right lag; 11 pins the order.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "14_recurrence_group_order_pin",
+      "path": "fixtures/recurrence/14_recurrence_group_order_pin.esm",
+      "model": "RecurrenceGroupOrderPin",
+      "golden": "golden/14_recurrence_group_order_pin.json",
+      "tags": [
+        "order",
+        "catastrophic-cancellation",
+        "bit-identical",
+        "recurrence",
+        "recurrence-group",
+        "two-axes",
+        "multi-lag"
+      ],
+      "note": "THE ORDER PIN for a group. A 2-D frame (recurrence axis k, independent axis j), a cancellation inside one member's body that the left fold loses and a reassociation keeps (a = 0.25 j vs 0.5 j + 0.25 j (k - 1)), and a PEER read at lag 2 behind a k <= 2 guard. The j axis checks that the member axis of the stacked reduction (4.3.1.2) is not confused with a frame axis.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "15_recurrence_group_same_cell_order",
+      "path": "fixtures/recurrence/15_recurrence_group_same_cell_order.esm",
+      "model": "RecurrenceGroupSameCellOrder",
+      "golden": "golden/15_recurrence_group_same_cell_order.json",
+      "tags": [
+        "recurrence",
+        "recurrence-group",
+        "same-cell",
+        "order"
+      ],
+      "note": "A same-cell read between members (esm-spec 4.3.1.2 rule 1): u[k] reads a[k], a[k] reads u[k-1]. u is declared first, so the member order must come from the same-cell reads, not from equation order -- a binding that got it wrong faults on an unpublished cell.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "16_recurrence_group_contracting_member",
+      "path": "fixtures/recurrence/16_recurrence_group_contracting_member.esm",
+      "model": "RecurrenceGroupContractingMember",
+      "golden": "golden/16_recurrence_group_contracting_member.json",
+      "tags": [
+        "recurrence",
+        "recurrence-group",
+        "contraction"
+      ],
+      "note": "A group member whose own faq contracts (a[k] sums over j in 1..3). Its cell body carries that reduction; the stacked recurrence and the member slices sweep the frame axes only. A binding that copies the contracted range onto either multiplies every member by 3.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": [
+        {
+          "binding": "python",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
+        }
+      ]
+    },
+    {
+      "id": "17_recurrence_group_frame_spellings",
+      "path": "fixtures/recurrence/17_recurrence_group_frame_spellings.esm",
+      "model": "RecurrenceGroupFrameSpellings",
+      "golden": "golden/17_recurrence_group_frame_spellings.json",
+      "tags": [
+        "recurrence",
+        "recurrence-group",
+        "indexed-lhs"
+      ],
+      "note": "One frame spelled {from: lev} and [1, 4] over a 4-element lev, the second member in the indexed-faq LHS form. Every build compares RESOLVED bounds, as the validators do, and accepts the indexed form as a member.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
       "id": "valid_recurrence_causal_self_reference",
       "path": "valid/recurrence_causal_self_reference.esm",
       "model": "RecurrenceCausalSelfReference",

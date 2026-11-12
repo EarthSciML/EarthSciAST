@@ -38,7 +38,7 @@
 import type { EsmFile, Expression, Model } from './types.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { forEachChild, isExprNode } from './expression.js'
-import { isRecurrenceCandidate } from './recurrence.js'
+import { isRecurrenceCandidate, recurrenceGroups } from './recurrence.js'
 import {
   odeStates,
   observedUnknowns,
@@ -97,6 +97,20 @@ export class CadenceSeeder {
    * whole well-foundedness analysis would re-run per lag.
    */
   private readonly recurrenceMemo = new Map<string, boolean>()
+  /**
+   * The model's §4.3.1.2 recurrence groups, computed on first use. Inside a
+   * group the edges between members are orderings along the shared axis, not a
+   * cycle, so a member is seeded with the JOIN of every member's external inputs
+   * — the group is swept as one unit, so every member has the cadence of the
+   * whole.
+   */
+  private groups: Array<Set<string>> | undefined
+  private readonly groupActive = new Set<string>()
+
+  private groupOf(name: string): Set<string> | undefined {
+    if (this.groups === undefined) this.groups = recurrenceGroups(this.model, this.esmFile)
+    return this.groups.find((g) => g.has(name))
+  }
 
   constructor(
     private readonly model: Model,
@@ -204,6 +218,32 @@ export class CadenceSeeder {
     // which owns the verdict either way.
     if (this.inProgress[this.inProgress.length - 1] === name && this.isRecurrence(name)) {
       return 'const'
+    }
+    // A member of a recurrence group being seeded right now: its reads of the
+    // other members are orderings (esm-spec §4.3.1.2), contributing `const`,
+    // the join identity — the group's seed is the join of every member's
+    // external inputs, taken below.
+    if (this.groupActive.has(name)) return 'const'
+    const group = this.groupOf(name)
+    if (group !== undefined && !this.inProgress.includes(name)) {
+      for (const m of group) this.groupActive.add(m)
+      let seed: CadenceClass = 'const'
+      try {
+        for (const m of [...group].sort()) {
+          const def = this.observedDefs.get(m)
+          if (def === undefined) continue
+          this.inProgress.push(m)
+          try {
+            seed = joinCadence(seed, this.expression(def))
+          } finally {
+            this.inProgress.pop()
+          }
+        }
+      } finally {
+        for (const m of group) this.groupActive.delete(m)
+      }
+      for (const m of group) this.memo.set(m, seed)
+      return seed
     }
     if (this.inProgress.includes(name)) {
       throw new CadenceCycleError([...this.inProgress.slice(this.inProgress.indexOf(name)), name])

@@ -5,6 +5,8 @@ title: "Causal self-reference along an index axis"
 # Causal self-reference along an index axis
 
 **Status.** Accepted; implemented in `esm-spec.md` §4.3.1.1, `CONFORMANCE_SPEC.md` §5.19.
+Extended to several variables (recurrence **groups**, esm-spec §4.3.1.2) by §7 below
+(issue #701).
 
 **Summary.** An equation that defines an array-shaped unknown may read *that same
 array* through `index`, at a strictly earlier position along exactly one of the
@@ -169,11 +171,12 @@ A recurrence definition of `V` over cell frame `(k₁ … k_r)` with ranges
    stencil read of an ODE state at `i−1` is a gather on the *solver's* state
    vector, not a self-reference, and is unaffected by this RFC.)
 
-Cross-variable cycles are unchanged and still rejected: the self-edge is dropped
-from the observed dependency graph — every binding already drops it — but an edge
-between two *distinct* variables still closes a cycle and still raises the
-existing cycle diagnostic. Well-foundedness here is only ever about `V` and
-itself.
+Cross-variable cycles were unchanged by this RFC and still rejected: the
+self-edge is dropped from the observed dependency graph — every binding already
+drops it — but an edge between two *distinct* variables still closes a cycle and
+still raises the existing cycle diagnostic. Well-foundedness here is only ever
+about `V` and itself. §7 later admitted one family of cross-variable cycles, the
+recurrence group, by the same argument and with the same gating.
 
 ### 3.1 What the validator must reject
 
@@ -363,3 +366,70 @@ is model-to-model coupling; the observed-cycle detector lives on the
 `build_evaluator` path), so Julia has Rust's and Go's shape rather than
 TypeScript's and either gate reads the same there. It is gated on candidacy
 anyway, so the code says candidacy where §6.0 says candidacy.
+
+## 7. Recurrence groups (issue #701)
+
+**The gap.** §2–§4 admit a recurrence on one variable. A sweep that carries a
+**state vector** — two or more arrays, each cell of each a function of the earlier
+cells of all of them — is as well founded as the scalar one when every read between
+the arrays is strictly earlier, but it had no spelling: the reads between the
+variables close an `observed_cycle` whatever their lag. The motivating case is a
+cumulus updraught (WRF New Tiedtke's `cutypen` / `cuascn`): the parcel's dry static
+energy and humidity at level `k` are each entrained from both at `k − 1` and then
+projected onto saturation by a two-step Newton adjustment, so neither is a function
+of its own history alone. The ways around it each fail there. Unrolling to a prefix
+reduction needs terms that are the original data, and the projection makes them the
+running answer. A lowering rule can factor out the linear entrainment step but not a
+nonlinear map sitting between steps. Partitioning a conserved sum into
+single-variable recurrences needs a conserved sum, and the adjustment conserves
+`c_p T + L q` only at constant `L`, which the freezing term breaks. What remained
+was an interleaved single axis of length `2·N` with parity-selected reads (in-spec,
+unreadable), or forcing each level from a trajectory supplied from outside (which
+pins the step but cannot run the model).
+
+**The spelling.** No new op and nothing declared, exactly as for one variable: each
+member is written as its own recurrence definition and reads its peers through
+`index` at earlier positions. The group is recognized as a strongly connected
+component of the observed dependency graph, after the §4.3.1.1 self-edges are
+dropped, whose members are all array-shaped and whose internal edges are each carried
+by an `index` read. Recognition is gated on that **candidacy**, and the
+well-foundedness verdict is separate, for the reason §6.0 records.
+
+**Two rules beyond §3.** (1) A read of a **peer** is either provably strictly earlier
+(`lo(lag) ≥ 1`) or exactly the cell being written, and the same-cell reads between
+members are acyclic; the members are then evaluated within each cell in that
+dependency order. A self-read may straddle zero because the cell it would name is
+never published, whatever the sweep's order; a peer read at an unproven position
+names a cell whose publication depends on the member order, so it is rejected.
+(2) Every member shares one frame — the same `output_idx` and ranges — and one
+recurrence axis (`recurrence_group_axis_mismatch`).
+
+*Why same-cell reads are admitted.* The first draft rejected every same-position
+peer read, which keeps the member order unobservable. Trying the motivating case
+against it showed the cost: the parcel step (entrain, project onto saturation, add
+the latent heat of freezing) cannot then have its intermediates as observeds of their
+own — each would be a peer read at lag 0 — so every member must inline the whole
+chain, three times over. The result was unreadable and nested deeply enough to exceed
+a JSON parser's recursion limit. Admitting acyclic same-cell reads costs one
+topological sort per group and keeps each step one equation per quantity.
+
+**The semantics are a reduction, not a second sweep.** A group of `M` members is the
+§4.3.1.1 recurrence of the members stacked on a trailing member axis, `S[k…, m]`,
+`m ∈ 1 … M` in within-cell order (a member read at the cell being written precedes
+its reader, ties in equation order), with member `p`'s body at `m = p` and every
+`index(V_q, i…)` rewritten to `index(S, i…, q)`. That reduction is normative
+(esm-spec §4.3.1.2) because it settles every question the group could raise — order,
+publication, fault, precision, the one-implementation requirement — by pointing at
+answers §4 already gives. It is also how the executing bindings implement it: each
+rewrites a group into the stacked recurrence before building anything, so every
+route sweeps it through the one recurrence implementation it already has
+(CONFORMANCE_SPEC §5.19.3b). The member axis is the only place a constant index is
+admitted on a non-recurrence axis, and it is never authored.
+
+**Alternatives considered.** An explicit tuple-valued `faq` (`output: ["s", "q"]`) is
+a schema change and puts several unrelated equations into one node. A `group` field
+naming the members is a second source of truth, rejected for the reason §2.1 rejects
+a declared lag. Rejecting every same-position peer read keeps the member order
+unobservable and needs no within-cell sort, and was the first draft; it was dropped
+for the reason given under rule 1 above.
+

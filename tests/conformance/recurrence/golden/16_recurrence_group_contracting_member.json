@@ -1,0 +1,55 @@
+{
+  "fixture": "16_recurrence_group_contracting_member",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "contracting_member_evaluates",
+      "assertion_idx": 1,
+      "variable": "a",
+      "actual": 3.0
+    },
+    {
+      "test_id": "contracting_member_evaluates",
+      "assertion_idx": 2,
+      "variable": "a",
+      "actual": 15.0
+    },
+    {
+      "test_id": "contracting_member_evaluates",
+      "assertion_idx": 3,
+      "variable": "a",
+      "actual": 57.0
+    },
+    {
+      "test_id": "contracting_member_evaluates",
+      "assertion_idx": 4,
+      "variable": "a",
+      "actual": 249.0
+    },
+    {
+      "test_id": "contracting_member_evaluates",
+      "assertion_idx": 5,
+      "variable": "b",
+      "actual": 1.0
+    },
+    {
+      "test_id": "contracting_member_evaluates",
+      "assertion_idx": 6,
+      "variable": "b",
+      "actual": 2.0
+    },
+    {
+      "test_id": "contracting_member_evaluates",
+      "assertion_idx": 7,
+      "variable": "b",
+      "actual": 13.0
+    },
+    {
+      "test_id": "contracting_member_evaluates",
+      "assertion_idx": 8,
+      "variable": "b",
+      "actual": 44.0
+    }
+  ]
+}

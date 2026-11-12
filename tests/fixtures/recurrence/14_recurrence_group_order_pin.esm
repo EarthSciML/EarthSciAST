@@ -1,0 +1,386 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "RecurrenceGroupOrderPin",
+    "description": "THE ORDER PIN for a recurrence GROUP (esm-spec 4.3.1.2; CONFORMANCE_SPEC 5.19.3). Two members over a 2-D frame (recurrence axis k over 4 steps, independent axis j over 2 columns): a[k,j] = ((a[k-1,j] + b[k-1,j]) - b[k-1,j]) + 0.25 j and b[k,j] = b[k-1,j] + 4 a[k-2,j], with a[1,j] = 0.5 j and b[k,j] = 1e16 for k <= 2. a adds a small number to a large one and takes the large one back off, so the left fold LOSES the small part: a = 0.25 j from k = 2 on. Reassociating the body as a + (b - b) keeps it and gives a = 0.5 j + 0.25 j (k - 1) instead -- a different, nameable value at zero tolerance. b reads a PEER at lag 2, and its base case is a guard at k <= 2; the j axis checks that the member axis of the stacked reduction is not confused with a frame axis.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "recurrence-group",
+      "order",
+      "catastrophic-cancellation",
+      "bit-identical"
+    ]
+  },
+  "index_sets": {
+    "steps": {
+      "kind": "interval",
+      "size": 4
+    },
+    "cols": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "RecurrenceGroupOrderPin": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "a": {
+          "type": "unknown",
+          "shape": [
+            "steps",
+            "cols"
+          ],
+          "units": "1",
+          "description": "The small member: what survives of itself after a large peer is added and removed."
+        },
+        "b": {
+          "type": "unknown",
+          "shape": [
+            "steps",
+            "cols"
+          ],
+          "units": "1",
+          "description": "The large member: 1e16 plus four times the small member two steps back."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "a",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k",
+              "j"
+            ],
+            "ranges": {
+              "k": {
+                "from": "steps"
+              },
+              "j": {
+                "from": "cols"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.5,
+                    "j"
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "a",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "k",
+                                    1
+                                  ]
+                                },
+                                "j"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "b",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "k",
+                                    1
+                                  ]
+                                },
+                                "j"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "b",
+                            {
+                              "op": "-",
+                              "args": [
+                                "k",
+                                1
+                              ]
+                            },
+                            "j"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        0.25,
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "b",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k",
+              "j"
+            ],
+            "ranges": {
+              "k": {
+                "from": "steps"
+              },
+              "j": {
+                "from": "cols"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    2
+                  ]
+                },
+                1e+16,
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "b",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        },
+                        "j"
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "a",
+                            {
+                              "op": "-",
+                              "args": [
+                                "k",
+                                2
+                              ]
+                            },
+                            "j"
+                          ]
+                        },
+                        4.0
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "group_is_the_left_fold",
+          "description": "a = 0.25 j from k = 2 on (the small part is lost to the left fold); b = 1e16 + 4 a two steps back. A binding that reassociates the body reaches a = 0.5 j + 0.25 j (k - 1).",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.5,
+              "coords": {
+                "steps": 1,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "steps": 1,
+                "cols": 2
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.25,
+              "coords": {
+                "steps": 2,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.5,
+              "coords": {
+                "steps": 2,
+                "cols": 2
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.25,
+              "coords": {
+                "steps": 3,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.5,
+              "coords": {
+                "steps": 3,
+                "cols": 2
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.25,
+              "coords": {
+                "steps": 4,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.5,
+              "coords": {
+                "steps": 4,
+                "cols": 2
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 1e+16,
+              "coords": {
+                "steps": 1,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 1e+16,
+              "coords": {
+                "steps": 1,
+                "cols": 2
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 1e+16,
+              "coords": {
+                "steps": 2,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 1e+16,
+              "coords": {
+                "steps": 2,
+                "cols": 2
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 1.0000000000000002e+16,
+              "coords": {
+                "steps": 3,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 1.0000000000000004e+16,
+              "coords": {
+                "steps": 3,
+                "cols": 2
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 1.0000000000000004e+16,
+              "coords": {
+                "steps": 4,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 1.0000000000000006e+16,
+              "coords": {
+                "steps": 4,
+                "cols": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

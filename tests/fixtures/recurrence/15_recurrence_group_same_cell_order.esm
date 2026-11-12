@@ -1,0 +1,235 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "RecurrenceGroupSameCellOrder",
+    "description": "A recurrence GROUP whose members read each other at the SAME cell in one direction (esm-spec 4.3.1.2 rule 1): u[k] = a[k]/3 + 0.1 reads a at the cell being written, and a[k] = a[k-1] * u[k-1] reads u one step back. This is how a scheme's per-level step is written readably -- intermediate quantities as their own members -- and it is well founded because the same-cell reads are acyclic: within each cell a is evaluated first. u is declared FIRST, so a binding that evaluated members in equation order would read an unpublished cell and fault rather than reach these numbers.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "recurrence-group",
+      "same-cell",
+      "order"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
+  "models": {
+    "RecurrenceGroupSameCellOrder": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ],
+          "units": "1",
+          "description": "a third of a at the same cell, plus 0.1."
+        },
+        "a": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ],
+          "units": "1",
+          "description": "1 at the first cell, then the product of a and u one cell back."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "u",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "a",
+                        "k"
+                      ]
+                    },
+                    3.0
+                  ]
+                },
+                0.1
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "a",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                1.0,
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "a",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "same_cell_read_follows_its_target",
+          "description": "Within each cell a is evaluated before u, which reads it.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "lev": 1
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.43333333333333335,
+              "coords": {
+                "lev": 2
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.10592592592592594,
+              "coords": {
+                "lev": 3
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.014332693187014177,
+              "coords": {
+                "lev": 4
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 0.0015017446833657786,
+              "coords": {
+                "lev": 5
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.43333333333333335,
+              "coords": {
+                "lev": 1
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.24444444444444446,
+              "coords": {
+                "lev": 2
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.13530864197530865,
+              "coords": {
+                "lev": 3
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.1047775643956714,
+              "coords": {
+                "lev": 4
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.10050058156112193,
+              "coords": {
+                "lev": 5
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

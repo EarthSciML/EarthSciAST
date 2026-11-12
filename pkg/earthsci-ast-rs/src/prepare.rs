@@ -2008,6 +2008,12 @@ impl<'o> BuildState<'o> {
                 )
             }
         };
+        // esm-spec §4.3.1.2: a recurrence group is swept as its stacked single
+        // recurrence on this route too, through the same rewrite the compiled
+        // route applies (CONFORMANCE_SPEC §5.19.3b).
+        let mut model = model;
+        crate::simulate_array::lower_recurrence_groups(&mut model, &mut index_sets)
+            .map_err(|e| err(e.to_string()))?;
 
         let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.parameters)?;
 

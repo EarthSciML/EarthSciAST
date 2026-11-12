@@ -61,11 +61,11 @@ describe('shared recurrence-rejection corpus (CONFORMANCE_SPEC §5.19.5)', () =>
     expect(corpus.pinned.message).toBe(false)
   })
 
-  it('carries all eight rejection cases', () => {
+  it('carries all fourteen rejection cases', () => {
     // A dropped case would otherwise be silent coverage loss: `it.each` over a
     // shortened list still reports all green.
-    expect(corpus.cases).toHaveLength(8)
-    expect(new Set(corpus.cases.map((c) => c.id)).size).toBe(8)
+    expect(corpus.cases).toHaveLength(14)
+    expect(new Set(corpus.cases.map((c) => c.id)).size).toBe(14)
   })
 
   it.each(corpus.cases.map((c) => [c.id, c] as const))(

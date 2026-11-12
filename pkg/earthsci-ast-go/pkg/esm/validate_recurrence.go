@@ -3,7 +3,9 @@ package esm
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
+	"strings"
 )
 
 // validate_recurrence.go implements the STATIC half of esm-spec §4.3.1.1
@@ -73,6 +75,9 @@ const (
 	// exported constant absent from it fails the build. Promoting these two is a
 	// manifest edit, not a code edit.
 	codeRecurrenceUnsupportedForm = "recurrence_unsupported_form"
+	// codeRecurrenceGroupAxisMismatch: the members of a recurrence group
+	// (esm-spec §4.3.1.2) do not share one cell frame and one recurrence axis.
+	codeRecurrenceGroupAxisMismatch = "recurrence_group_axis_mismatch"
 )
 
 // opIndex is the gather op a causal self-read is spelled with.
@@ -104,6 +109,9 @@ type recurrenceSelfRead struct {
 	// unsequenceable records that the read was reached ONLY through a construct
 	// that consumes its operand whole, so no cell-by-cell sweep can supply it.
 	unsequenceable bool
+	// target is the variable read: the one being defined, or (esm-spec §4.3.1.2)
+	// a peer in its recurrence group.
+	target string
 }
 
 // recurrenceFinding is one rejection of a recurrence definition: the code, the
@@ -126,9 +134,118 @@ func (s *structuralScan) validateRecurrences(model *Model, basePath string) {
 	if len(arrayShaped) == 0 {
 		return
 	}
+	// esm-spec §4.3.1.2: a recurrence group's members count their peers'
+	// `index` reads as causal reads, and their frames are compared once every
+	// member has one.
+	groups := recurrenceGroups(model, s.file)
+	type memberFrame struct {
+		eq    int
+		name  string
+		frame string
+	}
+	var frames []memberFrame
+	defer func() {
+		for _, g := range groups {
+			var members []memberFrame
+			for _, f := range frames {
+				if g[f.name] {
+					members = append(members, f)
+				}
+			}
+			if len(members) == 0 {
+				continue
+			}
+			// The frame signature is "syms|ranges|axis|sameCell"; compare the
+			// first two always and the axis where both members fold along one.
+			sig := func(f memberFrame) (string, string, []string) {
+				p := strings.SplitN(f.frame, "|", 4)
+				var sc []string
+				if p[3] != "" {
+					sc = strings.Split(p[3], ",")
+				}
+				return p[0] + "|" + p[1], p[2], sc
+			}
+			first := members[0]
+			for _, m := range members {
+				if _, ax, _ := sig(m); ax != "-1" {
+					first = m
+					break
+				}
+			}
+			fBase, fAxis, _ := sig(first)
+			mismatch := false
+			for _, m := range members {
+				mBase, mAxis, _ := sig(m)
+				if mBase == fBase && (mAxis == "-1" || fAxis == "-1" || mAxis == fAxis) {
+					continue
+				}
+				mismatch = true
+				s.addErr(StructuralError{
+					Path: fmt.Sprintf("%s/equations/%d/rhs", basePath, m.eq),
+					Code: codeRecurrenceGroupAxisMismatch,
+					Message: fmt.Sprintf("'%s' and '%s' read each other as a recurrence group, but "+
+						"'%s' does not sweep the same frame: every member shares one cell frame — "+
+						"the same `output_idx`, the same ranges — and one recurrence axis "+
+						"(esm-spec §4.3.1.2).", m.name, first.name, m.name),
+					Details: map[string]any{"variable": m.name, "group": sortedKeysOfSet(g)},
+				})
+				break
+			}
+			if mismatch {
+				continue
+			}
+			// Rule 1: the same-cell reads between members must admit an order.
+			graph := map[string][]string{}
+			for _, m := range members {
+				_, _, sc := sig(m)
+				graph[m.name] = sortedKeysOfSet(func() map[string]bool {
+					out := map[string]bool{}
+					for _, x := range sc {
+						out[x] = true
+					}
+					return out
+				}())
+			}
+			if cycle := firstObservedCycle(graph); len(cycle) > 0 {
+				at := members[0]
+				for _, m := range members {
+					found := false
+					for _, c := range cycle {
+						if c == m.name {
+							found = true
+						}
+					}
+					if found {
+						at = m
+						break
+					}
+				}
+				s.addErr(StructuralError{
+					Path: fmt.Sprintf("%s/equations/%d/rhs", basePath, at.eq),
+					Code: codeRecurrenceNotWellfounded,
+					Message: fmt.Sprintf("the members of a recurrence group read one another at the "+
+						"cell being written in a cycle (%s), so no order within the cell satisfies "+
+						"them. Reads between members at the same position must be acyclic "+
+						"(esm-spec §4.3.1.2 rule 1).", strings.Join(cycle, " -> ")),
+					Details: map[string]any{"variable": at.name, "cycle": cycle},
+				})
+			}
+		}
+	}()
 	for i, eq := range model.Equations {
-		_, finding := analyzeRecurrenceEquation(eq, s.file, arrayShaped)
+		var group map[string]bool
+		if name, _, _, ok := recurrenceLHSTarget(eq.LHS); ok {
+			for _, g := range groups {
+				if g[name] {
+					group = g
+				}
+			}
+		}
+		_, finding, frame := analyzeRecurrenceEquationIn(eq, s.file, arrayShaped, group)
 		if finding == nil {
+			if group != nil && frame != "" {
+				frames = append(frames, memberFrame{i, recurrenceFindingVariable(eq), frame})
+			}
 			continue
 		}
 		var axis any // JSON null when the defect names no single axis
@@ -245,20 +362,36 @@ func recurrenceCandidateVars(model *Model, file *ESMFile) map[string]bool {
 // the construct — including one whose RHS mentions its LHS without a single
 // `index(V, …)` read, which is an ordinary self-cycle rather than a recurrence.
 func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[string]bool) (bool, *recurrenceFinding) {
+	candidate, finding, _ := analyzeRecurrenceEquationIn(eq, file, arrayShaped, nil)
+	return candidate, finding
+}
+
+// analyzeRecurrenceEquationIn is analyzeRecurrenceEquation for a member of a
+// recurrence GROUP (esm-spec §4.3.1.2): the `index` reads of every name in group
+// count as causal reads, and a read of a PEER must be provably strictly earlier.
+// The third return is the member's frame signature — output indices, each axis's
+// range as the validator resolves it, and the recurrence axis — which every
+// member of a group must share; empty when the equation is no well-founded
+// recurrence.
+func analyzeRecurrenceEquationIn(eq Equation, file *ESMFile, arrayShaped map[string]bool, group map[string]bool) (bool, *recurrenceFinding, string) {
 	varName, lhsIdx, lhsIdxPresent, ok := recurrenceLHSTarget(eq.LHS)
 	if !ok || !arrayShaped[varName] {
-		return false, nil
+		return false, nil, ""
 	}
 
+	names := map[string]bool{varName: true}
+	for g := range group {
+		names[g] = true
+	}
 	var env []symBinding
 	var reads []recurrenceSelfRead
 	bare := false
-	collectRecurrenceSelfReads(eq.RHS, varName, file, &env, false, &reads, &bare)
+	collectRecurrenceSelfReadsOf(eq.RHS, names, file, &env, false, &reads, &bare)
 	if len(reads) == 0 {
 		// No `index(V, …)` read: not a recurrence definition. A BARE self-mention
 		// alone is left to the ordinary cycle / DAE diagnostics, which is where it
 		// was reported before this construct existed.
-		return false, nil
+		return false, nil, ""
 	}
 
 	if bare {
@@ -267,7 +400,7 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 			message: fmt.Sprintf("'%s' is read bare inside its own defining equation as well as "+
 				"through `index`. A bare read names the whole array, which does not exist while "+
 				"the recurrence sweeps it (esm-spec §4.3.1.1).", varName),
-		}
+		}, ""
 	}
 
 	for _, read := range reads {
@@ -282,7 +415,7 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 				"supply it. A `makearray`'s region order fixes which write WINS, not the order "+
 				"cells are EVALUATED in (esm-spec §4.3.1.1, §4.3.2); write the recurrence as one "+
 				"`faq` with the base case as an `ifelse` guard in the body.", varName),
-		}
+		}, ""
 	}
 
 	// The cell frame: the indexed-`faq` LHS's own indices when the LHS names
@@ -299,7 +432,7 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 				"equation declares no cell frame to sweep: its RHS is not a `faq` over the "+
 				"variable's axes and its LHS is not the indexed-`faq` form "+
 				"`faq{expr: index(%s, k…)}` (esm-spec §4.3.1.1).", varName, varName, varName),
-		}
+		}, ""
 	}
 
 	frameSyms, symbolic := frameIndexSymbols(idxNames)
@@ -309,21 +442,53 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 			message: fmt.Sprintf("the recurrence definition of '%s' has no symbolic output index "+
 				"to fold along (%v); a literal singleton dimension cannot be a recurrence axis "+
 				"(esm-spec §4.3.1.1).", varName, idxNames),
-		}
+		}, ""
 	}
 
 	frameEnv := aggregateRangeBounds(eq.RHS, file)
-	return true, checkRecurrenceReads(varName, frameSyms, frameEnv, reads)
+	axis, sameCell, finding := checkRecurrenceReadsGroup(varName, frameSyms, frameEnv, reads)
+	if finding != nil {
+		return true, finding, ""
+	}
+	// The frame signature: each axis's range as the validator resolves it —
+	// bounds when provable, the authored spec otherwise, so `{from: steps}` and
+	// `[1, 4]` over a 4-element `steps` are one frame.
+	// The ranges are the frame-declaring `faq`'s: the indexed-`faq` LHS's own
+	// when the LHS is that form, else the RHS aggregate's.
+	frameNode := eq.RHS
+	if lhsIdxPresent {
+		frameNode = eq.LHS
+	}
+	var ranges map[string]any
+	if node, isNode := asExprNode(frameNode); isNode && node.Op == opAggregate {
+		ranges = node.Ranges
+	}
+	parts := make([]string, 0, len(frameSyms))
+	for _, sym := range frameSyms {
+		spec, present := ranges[sym]
+		if b, resolved := validatorSymbolBounds(spec, file); present && resolved {
+			parts = append(parts, fmt.Sprintf("%d..%d", b.lo, b.hi))
+		} else {
+			parts = append(parts, fmt.Sprintf("%v", spec))
+		}
+	}
+	sort.Strings(sameCell)
+	return true, nil, fmt.Sprintf("%v|%v|%d|%s", frameSyms, parts, axis, strings.Join(sameCell, ","))
 }
 
-// checkRecurrenceReads is the lag analysis: every self-read must be affine in
-// its frame symbol with coefficient 1 on every axis, strictly earlier on exactly
-// ONE axis, and every read must agree on WHICH axis that is.
-func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[string]symBounds, reads []recurrenceSelfRead) *recurrenceFinding {
+// checkRecurrenceReadsGroup is the lag analysis: every causal read must be
+// affine in its frame symbol with coefficient 1 on every axis, strictly earlier
+// on exactly ONE axis, and every read must agree on WHICH axis that is. For a
+// member of a recurrence group it also returns the peers read at the cell being
+// written (esm-spec §4.3.1.2 rule 1), which are admitted here and checked for a
+// cycle by the group check. The axis is -1 when every causal read is such a
+// peer read.
+func checkRecurrenceReadsGroup(varName string, frameSyms []string, frameEnv map[string]symBounds, reads []recurrenceSelfRead) (int, []string, *recurrenceFinding) {
+	var sameCell []string
 	axis := -1
 	for _, read := range reads {
 		if len(read.args) != len(frameSyms) {
-			return &recurrenceFinding{
+			return -1, nil, &recurrenceFinding{
 				code: codeRecurrenceNotWellfounded,
 				message: fmt.Sprintf("a causal self-read of '%s' supplies %d indices but its frame "+
 					"has %d axes; every self-read indexes every axis (esm-spec §4.3.1.1).",
@@ -342,11 +507,14 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 		}
 
 		lagged := -1
+		// Whether every value of the recurrence-axis lag was shown `>= 1`. A
+		// self-read need not be; a PEER read must be (esm-spec §4.3.1.2).
+		proven := true
 		for d, arg := range read.args {
 			sym := frameSyms[d]
 			affine, ok := structuralAffineInSym(arg, sym, env)
 			if !ok {
-				return &recurrenceFinding{
+				return -1, nil, &recurrenceFinding{
 					code: codeRecurrenceNotWellfounded,
 					message: fmt.Sprintf("index %d of a causal self-read of '%s' is not affine in "+
 						"its frame symbol '%s'. A self-read names a position RELATIVE to the cell "+
@@ -364,7 +532,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 			// the read names no position relative to the cell being written, so
 			// neither the axis nor the direction of the fold is decidable.
 			if affine.coef != 1 {
-				return &recurrenceFinding{
+				return -1, nil, &recurrenceFinding{
 					code: codeRecurrenceNotWellfounded,
 					message: fmt.Sprintf("index %d of a causal self-read of '%s' carries its frame "+
 						"symbol '%s' with coefficient %d, not 1, so it does not name a position "+
@@ -380,7 +548,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 			// document the evaluator accepts (esm-spec §4.3.1.1 "Admitted lag").
 			if !affine.konstOK {
 				if lagged >= 0 {
-					return &recurrenceFinding{
+					return -1, nil, &recurrenceFinding{
 						code: codeRecurrenceNotWellfounded,
 						axis: sym,
 						message: fmt.Sprintf("a causal self-read of '%s' is offset on more than "+
@@ -389,6 +557,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 					}
 				}
 				lagged = d
+				proven = false
 				continue
 			}
 			// lag = sym - arg, so the argument's bounds invert.
@@ -399,7 +568,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 				continue
 			}
 			if lagHi <= 0 {
-				return &recurrenceFinding{
+				return -1, nil, &recurrenceFinding{
 					code: codeRecurrenceNotWellfounded,
 					axis: sym,
 					message: fmt.Sprintf("index %d of a causal self-read of '%s' names the cell "+
@@ -409,7 +578,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 				}
 			}
 			if lagged >= 0 {
-				return &recurrenceFinding{
+				return -1, nil, &recurrenceFinding{
 					code: codeRecurrenceNotWellfounded,
 					axis: sym,
 					message: fmt.Sprintf("a causal self-read of '%s' is offset on more than one "+
@@ -418,14 +587,34 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 				}
 			}
 			lagged = d
+			proven = proven && lagLo >= 1
 		}
 
+		if lagged < 0 && readTarget(read, varName) != varName {
+			// A read of a PEER at the cell being written: an ordering WITHIN the
+			// cell, rejected by the group check only if such reads form a cycle.
+			sameCell = append(sameCell, read.target)
+			continue
+		}
 		if lagged < 0 {
-			return &recurrenceFinding{
+			return -1, nil, &recurrenceFinding{
 				code: codeRecurrenceNotWellfounded,
-				message: fmt.Sprintf("a causal self-read of '%s' is at the same cell on every "+
-					"axis, so it defines '%s' in terms of itself rather than of an earlier "+
-					"position (esm-spec §4.3.1.1).", varName, varName),
+				message: fmt.Sprintf("a causal read of '%s' in the definition of '%s' is at the "+
+					"same cell on every axis, so it defines '%s' in terms of a value at the cell "+
+					"being written rather than of an earlier position (esm-spec §4.3.1.1, "+
+					"§4.3.1.2).", readTarget(read, varName), varName, varName),
+			}
+		}
+		if readTarget(read, varName) != varName && !proven {
+			return -1, nil, &recurrenceFinding{
+				code: codeRecurrenceNotWellfounded,
+				axis: frameSyms[lagged],
+				message: fmt.Sprintf("the read of '%s' in the definition of '%s' — a peer in its "+
+					"recurrence group — is not provably strictly earlier on axis '%s'. A read of a "+
+					"PEER must be strictly earlier for every value of its lag (esm-spec §4.3.1.2): "+
+					"unlike a self-read, whose same-cell values simply have not been published, a "+
+					"same-position read of another variable would make the result depend on which "+
+					"member is evaluated first.", read.target, varName, frameSyms[lagged]),
 			}
 		}
 		switch {
@@ -434,7 +623,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 		case axis == lagged:
 			// Same axis as every earlier read: nothing to report.
 		default:
-			return &recurrenceFinding{
+			return -1, nil, &recurrenceFinding{
 				code: codeRecurrenceNotWellfounded,
 				axis: frameSyms[lagged],
 				message: fmt.Sprintf("the causal self-reads of '%s' disagree on the recurrence "+
@@ -443,7 +632,16 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 			}
 		}
 	}
-	return nil
+	return axis, sameCell, nil
+}
+
+// readTarget is the variable a causal read names: its recorded target, or —
+// for a read collected by the single-variable walk — the variable defined.
+func readTarget(read recurrenceSelfRead, varName string) string {
+	if read.target == "" {
+		return varName
+	}
+	return read.target
 }
 
 // recurrenceLHSTarget returns the variable an equation DEFINES, when its LHS
@@ -781,10 +979,12 @@ func opBlocksCellRestriction(op string) bool {
 	return false
 }
 
-// collectRecurrenceSelfReads walks expr and accumulates every `index(varName, …)`
-// read into out, together with the index-symbol environment in scope at the read
-// and whether the read sits under a construct that cannot be restricted to one
-// cell. It also sets bare when varName occurs as a NAKED reference, which names
+// collectRecurrenceSelfReadsOf walks expr and accumulates every `index(name, …)`
+// read of one of names — a recurrence's own variable, or every member of a
+// recurrence group (esm-spec §4.3.1.2) — into out, recording which name it
+// reads, together with the index-symbol environment in scope at the read and
+// whether the read sits under a construct that cannot be restricted to one
+// cell. It also sets bare when a name occurs as a NAKED reference, which names
 // the whole array — an object that does not exist while the recurrence sweeps it.
 //
 // env is a stack: a `faq` pushes its resolvable `ranges` on entry and
@@ -798,10 +998,10 @@ func opBlocksCellRestriction(op string) bool {
 // not runtime operands (see exprRefNonRefSlots in expr_walk.go): a name there is
 // not a read of the array, so collecting one would manufacture a self-read out
 // of a bound.
-func collectRecurrenceSelfReads(expr Expression, varName string, file *ESMFile, env *[]symBinding, blocked bool, out *[]recurrenceSelfRead, bare *bool) {
+func collectRecurrenceSelfReadsOf(expr Expression, names map[string]bool, file *ESMFile, env *[]symBinding, blocked bool, out *[]recurrenceSelfRead, bare *bool) {
 	node, ok := asExprNode(expr)
 	if !ok {
-		if name, isName := expr.(string); isName && name == varName {
+		if name, isName := expr.(string); isName && names[name] {
 			*bare = true
 		}
 		// A bare `[]any` is deliberately NOT descended into: `args` elements are
@@ -823,9 +1023,11 @@ func collectRecurrenceSelfReads(expr Expression, varName string, file *ESMFile, 
 	defer func() { *env = (*env)[:len(*env)-pushed] }()
 
 	isSelfIndex := node.Op == opIndex && len(node.Args) > 0
+	target := ""
 	if isSelfIndex {
 		name, isName := node.Args[0].(string)
-		isSelfIndex = isName && name == varName
+		isSelfIndex = isName && names[name]
+		target = name
 	}
 	if isSelfIndex {
 		snapshot := make(map[string]symBounds, len(*env))
@@ -837,6 +1039,7 @@ func collectRecurrenceSelfReads(expr Expression, varName string, file *ESMFile, 
 			args:           node.Args[1:],
 			env:            snapshot,
 			unsequenceable: blocked,
+			target:         target,
 		})
 	}
 
@@ -848,19 +1051,287 @@ func collectRecurrenceSelfReads(expr Expression, varName string, file *ESMFile, 
 		skip = 1
 	}
 	for _, arg := range node.Args[skip:] {
-		collectRecurrenceSelfReads(arg, varName, file, env, blockedChildren, out, bare)
+		collectRecurrenceSelfReadsOf(arg, names, file, env, blockedChildren, out, bare)
 	}
 	for _, side := range []any{node.Expr, node.Filter, node.Key, node.Lower, node.Upper} {
 		if side == nil {
 			continue
 		}
-		collectRecurrenceSelfReads(side, varName, file, env, blockedChildren, out, bare)
+		collectRecurrenceSelfReadsOf(side, names, file, env, blockedChildren, out, bare)
 	}
 	// A `makearray` REGION VALUE is evaluated once for the whole region, so a
 	// self-read inside one can never be sequenced — unconditionally blocked, not
 	// merely inheriting the parent's state. §4.3.2's "later entries overwrite
 	// earlier ones" fixes which write WINS, not the order cells are EVALUATED in.
 	for _, value := range node.Values {
-		collectRecurrenceSelfReads(value, varName, file, env, true, out, bare)
+		collectRecurrenceSelfReadsOf(value, names, file, env, true, out, bare)
 	}
+}
+
+// recurrenceGroups returns the recurrence GROUP candidates of model (esm-spec
+// §4.3.1.2): each strongly connected component of two or more observeds — in the
+// §4.9.6 dependency graph with every recurrence candidate's self-edge already
+// dropped — whose members are all array-shaped and whose every internal edge is
+// carried by at least one `index` read.
+//
+// This is the predicate the cycle exemptions (`observed_cycle`, the
+// `circular_dependency` graph, the cadence seeder) are gated on, never the
+// well-foundedness verdict (CONFORMANCE_SPEC §5.19.5): a group with an
+// ill-founded read is still a candidate, so it reaches the named `recurrence_*`
+// diagnosis rather than collapsing to a cycle. A component with a scalar member,
+// or one held together by a bare read, is no candidate and stays a cycle.
+// Components come back sorted by their smallest name.
+func recurrenceGroups(model *Model, file *ESMFile) []map[string]bool {
+	if model == nil {
+		return nil
+	}
+	defs := observedDefinitions(model)
+	if len(defs) < 2 {
+		return nil
+	}
+	states := odeStateSet(model)
+	candidates := recurrenceCandidateVars(model, file)
+	arrayShaped := arrayShapedUnknowns(model)
+	graph := map[string]map[string]bool{}
+	for name, rhs := range defs {
+		if states[name] {
+			continue
+		}
+		bound := expressionBoundSymbols(rhs)
+		succ := map[string]bool{}
+		for ref := range FreeVariables(rhs) {
+			if bound[ref] || states[ref] {
+				continue
+			}
+			if _, isDef := defs[ref]; !isDef {
+				continue
+			}
+			if ref == name && candidates[name] {
+				continue
+			}
+			succ[ref] = true
+		}
+		graph[name] = succ
+	}
+	var out []map[string]bool
+	for _, comp := range stronglyConnectedObserved(graph) {
+		if len(comp) < 2 {
+			continue
+		}
+		// At least one read inside the component must be OFFSET — not a plain
+		// gather whose every index is a bare name. A cycle closed by same-cell
+		// gathers alone has no axis to fold along and stays an observed_cycle.
+		offset := false
+		for u := range comp {
+			for v := range comp {
+				if readsOffset(defs[u], v) {
+					offset = true
+				}
+			}
+		}
+		if !offset {
+			continue
+		}
+		ok := true
+		for u := range comp {
+			if !arrayShaped[u] {
+				ok = false
+				break
+			}
+			for v := range graph[u] {
+				if v != u && comp[v] && !readsThroughIndex(defs[u], v) {
+					ok = false
+				}
+			}
+		}
+		if ok {
+			out = append(out, comp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return sortedKeysOfSet(out[i])[0] < sortedKeysOfSet(out[j])[0]
+	})
+	return out
+}
+
+// readsThroughIndex reports whether e gathers name through at least one `index`
+// node, at any depth of any expression-bearing field.
+func readsThroughIndex(e any, name string) bool {
+	switch v := e.(type) {
+	case []any:
+		for _, x := range v {
+			if readsThroughIndex(x, name) {
+				return true
+			}
+		}
+		return false
+	case map[string]any:
+		if v["op"] == opIndex {
+			if args, isList := v["args"].([]any); isList && len(args) > 0 && args[0] == name {
+				return true
+			}
+		}
+		for _, x := range v {
+			if readsThroughIndex(x, name) {
+				return true
+			}
+		}
+		return false
+	}
+	if node, isNode := asExprNode(e); isNode {
+		if node.Op == opIndex && len(node.Args) > 0 {
+			if head, isName := node.Args[0].(string); isName && head == name {
+				return true
+			}
+		}
+		for _, a := range node.Args {
+			if readsThroughIndex(a, name) {
+				return true
+			}
+		}
+		for _, side := range []any{node.Expr, node.Filter, node.Key, node.Lower, node.Upper} {
+			if side != nil && readsThroughIndex(side, name) {
+				return true
+			}
+		}
+		for _, value := range node.Values {
+			if readsThroughIndex(value, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// stronglyConnectedObserved returns the strongly connected components of graph
+// (Kosaraju, both passes iterative), visiting roots and successors in sorted
+// order so the result is a function of the document alone.
+func stronglyConnectedObserved(graph map[string]map[string]bool) []map[string]bool {
+	visited := map[string]bool{}
+	var finish []string
+	type frame struct {
+		node string
+		succ []string
+		i    int
+	}
+	for _, root := range sortedKeysOfSet(keysAsSet(graph)) {
+		if visited[root] {
+			continue
+		}
+		visited[root] = true
+		stack := []*frame{{root, sortedKeysOfSet(graph[root]), 0}}
+		for len(stack) > 0 {
+			top := stack[len(stack)-1]
+			if top.i >= len(top.succ) {
+				finish = append(finish, top.node)
+				stack = stack[:len(stack)-1]
+				continue
+			}
+			next := top.succ[top.i]
+			top.i++
+			if _, inGraph := graph[next]; !inGraph || visited[next] {
+				continue
+			}
+			visited[next] = true
+			stack = append(stack, &frame{next, sortedKeysOfSet(graph[next]), 0})
+		}
+	}
+	reverse := map[string][]string{}
+	for u, vs := range graph {
+		for v := range vs {
+			if _, inGraph := graph[v]; inGraph {
+				reverse[v] = append(reverse[v], u)
+			}
+		}
+	}
+	assigned := map[string]bool{}
+	var out []map[string]bool
+	for i := len(finish) - 1; i >= 0; i-- {
+		root := finish[i]
+		if assigned[root] {
+			continue
+		}
+		assigned[root] = true
+		comp := map[string]bool{}
+		st := []string{root}
+		for len(st) > 0 {
+			n := st[len(st)-1]
+			st = st[:len(st)-1]
+			comp[n] = true
+			for _, p := range reverse[n] {
+				if !assigned[p] {
+					assigned[p] = true
+					st = append(st, p)
+				}
+			}
+		}
+		out = append(out, comp)
+	}
+	return out
+}
+
+// keysAsSet is the key set of m, for sortedKeysOfSet.
+func keysAsSet(m map[string]map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for k := range m {
+		out[k] = true
+	}
+	return out
+}
+
+// readsOffset reports whether e gathers name through an `index` with at least one
+// argument that is not a bare name — a read that could be offset along an axis.
+func readsOffset(e any, name string) bool {
+	switch v := e.(type) {
+	case []any:
+		for _, x := range v {
+			if readsOffset(x, name) {
+				return true
+			}
+		}
+		return false
+	case map[string]any:
+		if v["op"] == opIndex {
+			if args, isList := v["args"].([]any); isList && len(args) > 0 && args[0] == name {
+				for _, a := range args[1:] {
+					if _, isName := a.(string); !isName {
+						return true
+					}
+				}
+			}
+		}
+		for _, x := range v {
+			if readsOffset(x, name) {
+				return true
+			}
+		}
+		return false
+	}
+	if node, isNode := asExprNode(e); isNode {
+		if node.Op == opIndex && len(node.Args) > 0 {
+			if head, isName := node.Args[0].(string); isName && head == name {
+				for _, a := range node.Args[1:] {
+					if _, isStr := a.(string); !isStr {
+						return true
+					}
+				}
+			}
+		}
+		for _, a := range node.Args {
+			if readsOffset(a, name) {
+				return true
+			}
+		}
+		for _, side := range []any{node.Expr, node.Filter, node.Key, node.Lower, node.Upper} {
+			if side != nil && readsOffset(side, name) {
+				return true
+			}
+		}
+		for _, value := range node.Values {
+			if readsOffset(value, name) {
+				return true
+			}
+		}
+	}
+	return false
 }

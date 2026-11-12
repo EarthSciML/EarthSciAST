@@ -131,7 +131,8 @@ symbol is *reachable and documented*, and a warning that it is not portable.
 Counted in `api-surface.json` (`counts.by_tier`). Known members, called out by
 name:
 
-- **Julia's build/inspection seam** — `BuildInspection`, `evaluate_expr`,
+- **Julia's build/inspection seam** — `BuildInspection` (and the
+  `RecurrenceInfo` records its `recurrences` field holds), `evaluate_expr`,
   `expanded_model`, `expand_flattened_refs`, `param_map`, `parameter_classes`,
   `remake_parameters`, and the deprecated `build_evaluator` until its removal
   (§8 item 23).

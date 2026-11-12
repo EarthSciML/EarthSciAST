@@ -66,6 +66,7 @@ include("tree_walk/scan_fused.jl")       #      a prefix scan's term and fold in
 include("tree_walk/array_contraction.jl") # §4f  …and for the whole-array contraction nest
 include("tree_walk/scatter.jl")          #      one-pass scatter for an equality filter
 include("tree_walk/recurrence_sweep.jl") #      the ordered sweep of a causal self-reference
+include("tree_walk/recurrence_group.jl") #      a recurrence group as its stacked single recurrence
 include("tree_walk/scalar_codegen.jl")   #      …and for the scalar equations and the prelude
 include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar prelude
 include("tree_walk/stencil.jl")          # §4c  symbolic stencilizer (spines + recipes)

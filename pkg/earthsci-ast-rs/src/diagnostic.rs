@@ -484,6 +484,9 @@ diagnostic_code_registry! {
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded";
     /// A causal self-read the runtime cannot restrict to one cell.
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form";
+    /// The members of a recurrence group (esm-spec §4.3.1.2) do not share one
+    /// cell frame and recurrence axis.
+    RECURRENCE_GROUP_AXIS_MISMATCH = "recurrence_group_axis_mismatch";
     /// A continuous or discrete event, or an implicit equation, reached an
     /// evaluator that cannot run it (esm-spec §9.6.6).
     UNSUPPORTED_CONSTRUCT = "unsupported_construct";
@@ -700,6 +703,7 @@ mod error_code_tests {
             "record_axis_misplaced",
             "record_axis_time_invariant_source",
             "records_per_sample_invalid",
+            "recurrence_group_axis_mismatch",
             "recurrence_not_wellfounded",
             "recurrence_unsupported_form",
             "relational_node_in_continuous",
