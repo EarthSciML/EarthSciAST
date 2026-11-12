@@ -121,7 +121,9 @@ first implementation's behaviour: the code failed the whole analysis on an
 unresolvable symbol while its own comment claimed the opposite, and a sibling
 binding's author caught the discrepancy by reading both.
 
-`max_lag` is the maximum `hi(lag)` over every self-read. It is reported — Rust's
+`max_lag` is the maximum `hi(lag)` over every self-read whose lag has a static
+bound; a read whose lag has none adds nothing, so `max_lag` bounds every read only
+when `lag_proven` is true. It is reported — Rust's
 `BuildInspection::recurrences` carries `(var, axis, max_lag, lag_proven)` — because
 an implementation may legitimately want it (a windowed implementation need retain
 only `max_lag` slices instead of the whole axis) but **no evaluation rule depends
@@ -335,8 +337,27 @@ emits the sweep as one generated function through the scalar-spine emitter, bit
 for bit with the walk and independent of the number of cells. The per-call fill
 levels of the right-hand side and the observed program behind `observed_field`,
 the inline-test runner and the output sinks share the one sweep (§5.19.3b). The
-out-of-place product `compiler = xla` lowers is refused by name, and so is a
-`Float32` recurrence: Julia evaluates in binary64 only (§5.19.3a).
+out-of-place product `compiler = xla` lowers is refused by name, as is a
+`ModelingToolkit` system under `compiler = mtk` (it has no ordered sweep and would
+solve the definition as an algebraic system), and so is a `Float32` recurrence:
+Julia evaluates in binary64 only (§5.19.3a). `BuildInspection.recurrences`
+reports each recurrence's axis, derived maximum lag and whether the lag was
+proved, the same entries Rust's build inspection reports; the recurrence
+conformance manifest pins them for both. In a range-restricted program (a tile of
+a horizontal decomposition) the sweep runs over the cells the tile holds, which is
+sound because every self-read stays on its own position off the recurrence axis;
+a recurrence along a decomposed axis needs every earlier position on it and is
+refused with `range_global_locality`, as a scan along a cut axis is. A lane
+program refuses a recurrence by name (`E_TREEWALK_UNSUPPORTED_RECURRENCE`).
+
+esm-spec §4.3.1.1 point 4 now names the one batching that reorders nothing: the
+cells sharing a position on the recurrence axis (a *slice*) read none of one
+another, so a binding may evaluate a slice together provided slices complete in
+ascending order and each cell keeps the sequential sweep's own operations. Julia's
+native sweep does not batch — it is one generated loop over the cells in sweep
+order, whose build is already independent of the number of cells — so the
+clarification licenses future vectorized and StableHLO lowerings rather than
+describing Julia's current one.
 
 Julia does implement the static half, and its own vacuity probe settled a
 question the other bindings could not answer from outside: Julia's cycle

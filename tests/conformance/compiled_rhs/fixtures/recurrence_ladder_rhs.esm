@@ -1,0 +1,168 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "recurrence_ladder_rhs",
+    "description": "Fixture 02's cancellation ladder (tests/fixtures/recurrence) carried into a right-hand side: s[k] = (s[k-1] + u[k]) + x[k] over u = [1e16, 1, -1e16, 1], with the state x added at every cell, and D(x[k]) = s[k]. The value is the ascending left fold, rounded at every cell; a reordered or reassociated evaluation lands on a different number. No multiply and no in-body reduction, so the tolerance class is `exact` (zero): every engine that evaluates the sweep in its normative order reaches the same bits.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "compiled_rhs",
+      "recurrence",
+      "order",
+      "exact"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "RecurrenceLadderRhs": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ],
+          "units": "1",
+          "default": 0.25,
+          "description": "State added to the ladder at every cell."
+        },
+        "s": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ],
+          "units": "1",
+          "description": "The running sum, a causal recurrence along lev."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        {
+                          "op": "<=",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        },
+                        0.0,
+                        {
+                          "op": "index",
+                          "args": [
+                            "s",
+                            {
+                              "op": "-",
+                              "args": [
+                                "k",
+                                1
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        {
+                          "op": "const",
+                          "args": [],
+                          "value": [
+                            1e+16,
+                            1.0,
+                            -1e+16,
+                            1.0
+                          ]
+                        },
+                        "k"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "x",
+                    "k"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "x",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "s",
+                "i"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

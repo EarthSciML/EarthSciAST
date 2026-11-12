@@ -1,0 +1,171 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "GeometryStepMap",
+    "description": "An algebraic one-step map, the shape of PISM's geometry source term: `H_out_source = H + dt (smb - bmb)` is an observed of the step parameter `dt`. A kernel applies it as the step map `H <- H_out_source` with `dt` passed at the call (`dt_params`). CONFORMANCE_SPEC \u00a75.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "strip_and_expose",
+      "kernels",
+      "step_map"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Geometry": {
+      "variables": {
+        "H": {
+          "type": "unknown",
+          "shape": [
+            "x"
+          ],
+          "units": "1",
+          "description": "Thickness."
+        },
+        "H_out_source": {
+          "type": "unknown",
+          "shape": [
+            "x"
+          ],
+          "units": "1",
+          "description": "Thickness after one step of the source terms."
+        },
+        "dt": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "Step length; read from the kernel's dt."
+        },
+        "smb": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "Surface mass balance rate."
+        },
+        "bmb": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.25,
+          "description": "Basal mass balance rate."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "H"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": 100.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "H",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                "smb",
+                "bmb"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "H_out_source",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "H",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "dt",
+                    {
+                      "op": "-",
+                      "args": [
+                        "smb",
+                        "bmb"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -360,13 +360,13 @@ function _collect_events!(
         component_discrete::Vector{DiscreteEvent},
         prefix::String, ns
     )
+    # A dotted target is qualified by `ns` exactly as a read of the same name
+    # is: prefixed when its head is one of this component's subsystem keys,
+    # left alone when it is already qualified.
+    ns_target(lhs) = is_placeholder(lhs) ? lhs :
+        occursin('.', lhs) ? (ns(VarExpr(lhs))::VarExpr).name : "$(prefix).$(lhs)"
     ns_affects(affects) = AffectEquation[
-        AffectEquation(
-            is_placeholder(a.lhs) || occursin('.', a.lhs) ? a.lhs :
-                "$(prefix).$(a.lhs)",
-            ns(a.rhs)
-        )
-            for a in affects
+        AffectEquation(ns_target(a.lhs), ns(a.rhs)) for a in affects
     ]
     for ev in component_continuous
         push!(

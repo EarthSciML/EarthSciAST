@@ -1,0 +1,92 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "Swap",
+    "description": "A discrete event whose `condition` trigger is `a > b` and whose two affects exchange `a` and `b` through `Pre`. Applied as a kernel, the affects are simultaneous: both read the input state, so the result is the exchange whatever their order. CONFORMANCE_SPEC \u00a75.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "strip_and_expose",
+      "events",
+      "kernels"
+    ]
+  },
+  "models": {
+    "Swap": {
+      "variables": {
+        "a": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Climbs at rate 1."
+        },
+        "b": {
+          "type": "unknown",
+          "units": "1",
+          "default": 2.0,
+          "description": "Falls at rate 1."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "a"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "b"
+            ],
+            "wrt": "t"
+          },
+          "rhs": -1.0
+        }
+      ],
+      "discrete_events": [
+        {
+          "name": "swap",
+          "trigger": {
+            "type": "condition",
+            "expression": {
+              "op": ">",
+              "args": [
+                "a",
+                "b"
+              ]
+            }
+          },
+          "affects": [
+            {
+              "lhs": "a",
+              "rhs": {
+                "op": "Pre",
+                "args": [
+                  "b"
+                ]
+              }
+            },
+            {
+              "lhs": "b",
+              "rhs": {
+                "op": "Pre",
+                "args": [
+                  "a"
+                ]
+              }
+            }
+          ],
+          "description": "Exchange a and b at the end of a step where a > b."
+        }
+      ]
+    }
+  }
+}

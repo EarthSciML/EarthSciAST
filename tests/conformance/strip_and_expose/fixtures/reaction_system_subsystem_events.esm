@@ -1,0 +1,156 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ReactionSystemSubsystemEvents",
+    "description": "A reaction system Chem whose events read and write Pool.P, Pool being Chem's nested reaction system, which has a periodic event of its own. A reaction system's species, parameters and subsystem keys are its local names, so Pool.P is Chem.Pool.P, an affect's target included, and Pool's event is collected from the nested reaction system with origin Chem.Pool. Chem.bad reads Pool.P bare while assigning it, which a kernel refuses as affect_reads_post_value. CONFORMANCE_SPEC §5.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "strip_and_expose",
+      "events",
+      "reaction_systems",
+      "subsystems"
+    ]
+  },
+  "reaction_systems": {
+    "Chem": {
+      "species": {
+        "A": {
+          "units": "1",
+          "default": 1.0,
+          "description": "Decays at rate k."
+        }
+      },
+      "parameters": {
+        "k": {
+          "units": "1/s",
+          "default": 0.5,
+          "description": "Decay rate of A."
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": null,
+          "rate": "k"
+        }
+      ],
+      "subsystems": {
+        "Pool": {
+          "species": {
+            "P": {
+              "units": "1",
+              "default": 0.75,
+              "description": "Decays at rate k2."
+            }
+          },
+          "parameters": {
+            "k2": {
+              "units": "1/s",
+              "default": 0.25,
+              "description": "Decay rate of P."
+            }
+          },
+          "reactions": [
+            {
+              "id": "R1",
+              "substrates": [
+                {
+                  "species": "P",
+                  "stoichiometry": 1
+                }
+              ],
+              "products": null,
+              "rate": "k2"
+            }
+          ],
+          "discrete_events": [
+            {
+              "trigger": {
+                "type": "periodic",
+                "interval": 0.5
+              },
+              "affects": [
+                {
+                  "lhs": "P",
+                  "rhs": {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "Pre",
+                        "args": [
+                          "P"
+                        ]
+                      },
+                      0.5
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "continuous_events": [
+        {
+          "name": "drain",
+          "conditions": [
+            {
+              "op": "-",
+              "args": [
+                "Pool.P",
+                0.25
+              ]
+            }
+          ],
+          "affects": [
+            {
+              "lhs": "Pool.P",
+              "rhs": {
+                "op": "Pre",
+                "args": [
+                  "A"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "discrete_events": [
+        {
+          "name": "bad",
+          "trigger": {
+            "type": "condition",
+            "expression": {
+              "op": "<",
+              "args": [
+                "Pool.P",
+                0.125
+              ]
+            }
+          },
+          "affects": [
+            {
+              "lhs": "Pool.P",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  "Pool.P",
+                  1.0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

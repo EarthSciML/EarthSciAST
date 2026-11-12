@@ -1,5 +1,5 @@
 {
-  "fixture": "11_recurrence_group_order_pin",
+  "fixture": "14_recurrence_group_order_pin",
   "reference_binding": "julia",
   "reference_compiler": "interpreter",
   "assertions": [

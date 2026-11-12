@@ -571,7 +571,8 @@ what each value MEANS, which is the part a binding must not reinterpret.
   and a gridded one are built by the same machinery, so that what ran is a
   property of the name and not of the input. `native` covers the whole
   evaluable core: it MAY refuse (below) only the constructs outside its scope —
-  events, implicit equations and SDE noise (§9.6.6's `unsupported_construct`),
+  events, implicit equations and SDE noise (§9.6.6's `unsupported_construct`;
+  a caller that runs the first two itself strips them, §2.5.13),
   and a spatial operator with no discretization rule (`unlowered_operator`,
   which every compiler refuses) — and a refusal of anything else is a defect
   in the binding, not coverage still to come. The conformance tiers hold Julia
@@ -707,6 +708,37 @@ semantics are normative in `API_SPEC.md` §5.8, "The public right-hand side";
 `CONFORMANCE_SPEC.md` §5.51 is the gate. Python exports `rhs_program`,
 `forcing_set` and `default_forcing_set`, and raises `compiler_unavailable` from
 each.
+
+#### 2.5.13 Strip and expose
+
+Every fast compiler refuses a continuous event, a discrete event, a symbolic
+parameter update and an implicit equation (§9.6.6 `unsupported_construct`),
+because running the model without the construct reports a number the document
+does not describe. An external integrator that runs those constructs ITSELF
+needs them handed over instead. `esm_problem` therefore takes `strip`, a set of
+construct classes drawn from `continuous_events`, `discrete_events`,
+`parameter_updates` and `algebraic`; empty is the default and changes nothing.
+For each class the caller names, the build removes the class's constructs from
+what it lowers, compiles the rest, and returns them as one structured object,
+`stripped(prob)`, flattened and fully namespaced. Algebraic unknowns leave the
+state vector `u` and become a separate input `z`. A construct of a class the
+caller did not name is still refused, Wiener noise is never strippable, and
+`solve` and `init` refuse a Problem from which anything was removed
+(`stripped_problem_not_solvable`).
+
+`compile_kernels(prob, specs)` then compiles named observeds and expressions —
+residuals `g(u, z)`, event conditions, affects, parameter updates, step limits
+and step maps `u ← M(u, p, t, dt)` — as standalone kernels sharing one ABI with
+the stripped right-hand side, `k(out, u, z, p, t, dt)`, with the right-hand
+side's parameter vector and forcing set and a workspace per concurrent caller
+(§2.5.12). The compiler exposes; the caller runs: no binding solves the residual,
+finds the root or applies the map. The classes, the stripped object's canonical
+JSON, the kernel spec, the ABI and the three diagnostics
+(`stripped_problem_not_solvable`, `kernel_output_unresolved`,
+`affect_reads_post_value`) are normative in `API_SPEC.md` §5.8, "Strip and
+expose"; `CONFORMANCE_SPEC.md` §5.57 is the gate. Julia and Rust implement all of
+it under `compiler = native` and `interpreter`. Python implements `strip` and
+`stripped` in full and raises `compiler_unavailable` from `compile_kernels`.
 
 ---
 

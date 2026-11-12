@@ -19,6 +19,7 @@
 
 mod analysis;
 mod forcing;
+mod kernels;
 mod lanes;
 mod model;
 mod select;
@@ -28,6 +29,9 @@ mod walk;
 use forcing::column_major;
 pub use forcing::{
     ForcingSet, ForcingSlot, ParamSlot, RhsError, SlotKind, StateBlock, forcing_from_sample,
+};
+pub use kernels::{
+    Kernel, KernelBlock, KernelOutput, KernelSet, KernelSpec, KernelWorkspace, compile_kernels,
 };
 pub use lanes::{LaneInputs, LaneProgram};
 use model::ProgramModel;

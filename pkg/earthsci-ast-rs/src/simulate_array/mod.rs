@@ -127,6 +127,37 @@ pub(crate) use vectorized::take_overlay_decline;
 pub(crate) use eval::{apply_binary, eval_expression_with_extents_and_consts_shared};
 pub use rhs::RhsScratch;
 
+/// The names `expr` reads that no enclosing `faq` binds (strip and expose,
+/// API_SPEC §5.8).
+pub(crate) fn free_variable_names(expr: &crate::types::Expr) -> HashSet<String> {
+    compile::free_names(expr)
+}
+
+/// A state-free build-time expression (an `ic` right-hand side) evaluated to
+/// its values, column-major (strip and expose's `z` starting values).
+pub(crate) fn eval_buildtime_values(
+    expr: &crate::types::Expr,
+    index_sets: &HashMap<String, crate::types::IndexSet>,
+    params: &HashMap<String, f64>,
+) -> Result<Vec<f64>, crate::compile_error::CompileError> {
+    match compile::eval_buildtime_field(expr, index_sets, params)? {
+        Value::Scalar(x) => Ok(vec![x]),
+        Value::Array(a) => Ok(a.view().reversed_axes().iter().copied().collect()),
+        #[allow(unreachable_patterns)]
+        _ => Err(crate::compile_error::CompileError::build_err(
+            "an initial value that is not numeric",
+        )),
+    }
+}
+
+/// Row-major `values` over `shape`, reordered column-major.
+pub(crate) fn row_major_to_column_major(shape: &[usize], values: &[f64]) -> Vec<f64> {
+    match ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(shape), values.to_vec()) {
+        Ok(a) => a.view().reversed_axes().iter().copied().collect(),
+        Err(_) => values.to_vec(),
+    }
+}
+
 use compile::*;
 use cse::*;
 use eval::*;
@@ -634,7 +665,11 @@ pub struct RecurrenceInfo {
     pub var: String,
     /// The output index symbol the sweep folds along, ascending.
     pub axis: String,
-    /// Largest lag any self-read takes along `axis`, DERIVED from the reads.
+    /// Largest lag along `axis` over the self-reads whose lag has a static
+    /// upper bound, DERIVED from the reads. A read whose lag has none (a
+    /// parameter-valued offset, say) adds nothing, so this bounds EVERY read
+    /// only when `lag_proven` is `true`; otherwise it is a bound over the
+    /// bounded reads alone (0 if there are none).
     pub max_lag: i64,
     /// Whether every self-read was proved strictly earlier statically. When
     /// `false` at least one read's lag depends on a symbol whose range admits

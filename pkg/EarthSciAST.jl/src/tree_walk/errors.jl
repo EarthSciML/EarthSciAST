@@ -25,11 +25,17 @@ evaluate. `code` is one of two families:
   local convention.
 
 `detail` carries op name or variable name for diagnostics.
+
+`rule` names the rule a `compiler_refused_rule` refusal is about (API_SPEC
+§5.8), exactly as the refusal's message quotes it, so a caller reads it as a
+field rather than out of the text; it is `""` for every other error.
 """
 struct TreeWalkError <: EarthSciASTError
     code::String
     detail::String
+    rule::String
 end
+TreeWalkError(code, detail) = TreeWalkError(code, detail, "")
 
 Base.showerror(io::IO, e::TreeWalkError) =
     print(io, "$(e.code): $(e.detail)")

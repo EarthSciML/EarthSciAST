@@ -1,5 +1,5 @@
 {
-  "fixture": "12_recurrence_group_same_cell_order",
+  "fixture": "15_recurrence_group_same_cell_order",
   "reference_binding": "julia",
   "reference_compiler": "interpreter",
   "assertions": [

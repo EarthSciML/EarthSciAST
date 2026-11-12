@@ -1,5 +1,5 @@
 {
-  "fixture": "10_recurrence_group_two_variables",
+  "fixture": "13_recurrence_group_two_variables",
   "reference_binding": "julia",
   "reference_compiler": "interpreter",
   "assertions": [

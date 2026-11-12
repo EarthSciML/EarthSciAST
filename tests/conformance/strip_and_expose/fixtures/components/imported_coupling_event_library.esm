@@ -1,0 +1,72 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ImportedCouplingEventLibrary",
+    "description": "The coupling library imported_coupling_event.esm imports: two discrete event edges over the roles Lo and Hi. CONFORMANCE_SPEC §5.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "coupling_roles": {
+    "Lo": {
+      "description": "the climbing component; read by the clamp and written by it"
+    },
+    "Hi": {
+      "description": "the falling component; read by the clamp and written by the periodic nudge"
+    }
+  },
+  "coupling": [
+    {
+      "type": "event",
+      "event_type": "discrete",
+      "name": "clamp",
+      "trigger": {
+        "type": "condition",
+        "expression": {
+          "op": ">",
+          "args": [
+            "Lo.x",
+            "Hi.y"
+          ]
+        }
+      },
+      "affects": [
+        {
+          "lhs": "Lo.x",
+          "rhs": {
+            "op": "Pre",
+            "args": [
+              "Hi.y"
+            ]
+          }
+        }
+      ],
+      "description": "Hold Lo.x at or below Hi.y."
+    },
+    {
+      "type": "event",
+      "event_type": "discrete",
+      "trigger": {
+        "type": "periodic",
+        "interval": 0.5
+      },
+      "affects": [
+        {
+          "lhs": "Hi.y",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "Pre",
+                "args": [
+                  "Hi.y"
+                ]
+              },
+              0.25
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

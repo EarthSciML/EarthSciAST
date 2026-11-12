@@ -256,7 +256,7 @@ fn a_self_read_through_a_template_binding_is_still_recognized() {
 /// as the stacked single recurrence §4.3.1.2 reduces it to.
 #[test]
 fn a_two_member_recurrence_group_evaluates() {
-    assert_fixture_passes("10_recurrence_group_two_variables.esm");
+    assert_fixture_passes("13_recurrence_group_two_variables.esm");
 }
 
 /// **The group order pin**: a cancellation the left fold loses and a
@@ -265,7 +265,7 @@ fn a_two_member_recurrence_group_evaluates() {
 /// confused with a frame axis.
 #[test]
 fn a_recurrence_group_is_the_left_fold_on_a_two_axis_frame() {
-    assert_fixture_passes("11_recurrence_group_order_pin.esm");
+    assert_fixture_passes("14_recurrence_group_order_pin.esm");
 }
 
 /// **A same-cell read between members** (esm-spec §4.3.1.2 rule 1): `u[k]`
@@ -273,7 +273,7 @@ fn a_recurrence_group_is_the_left_fold_on_a_two_axis_frame() {
 /// member order must come from the same-cell reads rather than equation order.
 #[test]
 fn a_recurrence_group_orders_its_members_within_the_cell() {
-    assert_fixture_passes("12_recurrence_group_same_cell_order.esm");
+    assert_fixture_passes("15_recurrence_group_same_cell_order.esm");
 }
 
 // ---------------------------------------------------------------------------
@@ -919,15 +919,15 @@ pipeline_test!(
 );
 pipeline_test!(
     pipeline_recurrence_group,
-    "10_recurrence_group_two_variables.esm"
+    "13_recurrence_group_two_variables.esm"
 );
 pipeline_test!(
     pipeline_recurrence_group_order_pin,
-    "11_recurrence_group_order_pin.esm"
+    "14_recurrence_group_order_pin.esm"
 );
 pipeline_test!(
     pipeline_recurrence_group_same_cell_order,
-    "12_recurrence_group_same_cell_order.esm"
+    "15_recurrence_group_same_cell_order.esm"
 );
 
 /// The regression itself, stated as a value that must NOT come back.

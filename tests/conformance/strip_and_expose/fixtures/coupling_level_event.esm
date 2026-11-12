@@ -1,0 +1,91 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "CouplingLevelEvent",
+    "description": "A discrete event declared on the COUPLING (`type: event`) rather than on a component: it reads both models and writes one. Stripping `discrete_events` collects it with origin `{coupling: 0}`; without that class it is refused like any other event. CONFORMANCE_SPEC \u00a75.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "strip_and_expose",
+      "events",
+      "coupling"
+    ]
+  },
+  "models": {
+    "A": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Climbs at rate 1."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 1.0
+        }
+      ]
+    },
+    "B": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 2.0,
+          "description": "Falls at rate 1."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": -1.0
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "event",
+      "event_type": "discrete",
+      "name": "sync",
+      "trigger": {
+        "type": "condition",
+        "expression": {
+          "op": ">",
+          "args": [
+            "A.x",
+            "B.y"
+          ]
+        }
+      },
+      "affects": [
+        {
+          "lhs": "A.x",
+          "rhs": {
+            "op": "Pre",
+            "args": [
+              "B.y"
+            ]
+          }
+        }
+      ],
+      "description": "Hold A.x at or below B.y."
+    }
+  ]
+}

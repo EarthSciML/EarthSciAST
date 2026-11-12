@@ -391,7 +391,7 @@
     {
       "id": "spec.4.3.1.1.recurrence-no-reordered-path",
       "section": "4.3.1.1",
-      "quote": "A recurrence definition MUST NOT be evaluated through any whole-array, vectorized, fused, tiled, kernel-merged or otherwise reordered path.",
+      "quote": "A recurrence definition MUST NOT be evaluated through any whole-array, vectorized, fused, tiled, kernel-merged or otherwise reordered path",
       "class": "semantic",
       "phase": 3,
       "area": "arrays",

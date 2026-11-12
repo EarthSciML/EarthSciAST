@@ -363,6 +363,16 @@ end
             8.0 rtol = 1.0e-10
     end
 
+    @testset "a causal self-reference is refused by name" begin
+        # esm-spec §4.3.1.1: a recurrence's value is an ordered sweep, which a
+        # ModelingToolkit system has no form of. Refused, not solved as an
+        # algebraic system to a tolerance.
+        f = _mtkc_fixture("fixtures", "recurrence", "01_recurrence_doubling.esm")
+        err = _mtkc_raise(esm_problem, f, (0.0, 1.0); compiler = :mtk)
+        @test err isa TreeWalkError && err.code == "compiler_refused_rule"
+        @test occursin("causal self-reference", err.detail)
+    end
+
     # ── The WHOLE §5.39 category, driven from its own manifest ─────────────
     #
     # The three testsets above assert the VALUES on three documents. This one

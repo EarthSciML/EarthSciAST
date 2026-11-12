@@ -129,7 +129,8 @@ _xla_refuse(rule::AbstractString, reason::AbstractString) =
     throw(
     TreeWalkError(
         ERROR_CODES.COMPILER_REFUSED_RULE,
-        "compiler=:xla refuses '$rule': $reason"
+        "compiler=:xla refuses '$rule': $reason",
+        String(rule)
     )
 )
 

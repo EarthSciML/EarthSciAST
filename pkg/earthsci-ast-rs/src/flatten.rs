@@ -3698,7 +3698,7 @@ fn namespace_continuous_event(
         .affects
         .into_iter()
         .map(|mut a| {
-            a.lhs = namespace_plain(&a.lhs, system_name);
+            a.lhs = namespace_affect_target(&a.lhs, system_name, subsys);
             a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
             a
         })
@@ -3707,7 +3707,7 @@ fn namespace_continuous_event(
         event.affect_neg = Some(
             neg.into_iter()
                 .map(|mut a| {
-                    a.lhs = namespace_plain(&a.lhs, system_name);
+                    a.lhs = namespace_affect_target(&a.lhs, system_name, subsys);
                     a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
                     a
                 })
@@ -3735,7 +3735,7 @@ fn namespace_discrete_event(
             affects
                 .into_iter()
                 .map(|mut a| {
-                    a.lhs = namespace_plain(&a.lhs, system_name);
+                    a.lhs = namespace_affect_target(&a.lhs, system_name, subsys);
                     a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
                     a
                 })
@@ -3743,6 +3743,116 @@ fn namespace_discrete_event(
         );
     }
     event
+}
+
+/// An event a component declares, namespaced by [`namespaced_component_events`].
+pub(crate) enum ComponentEvent {
+    Continuous(ContinuousEvent),
+    Discrete(DiscreteEvent),
+}
+
+/// Every event `model` declares, and every event of its inline subsystems at
+/// any depth, each with the dotted path of the component that declared it and
+/// namespaced exactly as [`build_model_block`] namespaces that component's
+/// equations: the model's own (continuous, then discrete, each in declaration
+/// order), then each subsystem's in declaration order, depth first.
+///
+/// `flatten` lifts only top-level components' events; strip-and-expose
+/// (API_SPEC §5.8) must see the subsystems' too, or it would hand back a
+/// document's events minus the nested ones.
+pub(crate) fn namespaced_model_events(
+    path: &str,
+    model: &Model,
+    out: &mut Vec<(String, ComponentEvent)>,
+) {
+    let sub_keys: HashSet<String> = model
+        .subsystems
+        .as_ref()
+        .map(|subs| subs.keys().cloned().collect())
+        .unwrap_or_default();
+    let locals: HashSet<String> = model
+        .variables
+        .keys()
+        .cloned()
+        .chain(sub_keys.iter().cloned())
+        .collect();
+    for e in model.continuous_events.iter().flatten() {
+        out.push((
+            path.to_string(),
+            ComponentEvent::Continuous(namespace_continuous_event(
+                e.clone(),
+                path,
+                &sub_keys,
+                &locals,
+            )),
+        ));
+    }
+    for e in model.discrete_events.iter().flatten() {
+        out.push((
+            path.to_string(),
+            ComponentEvent::Discrete(namespace_discrete_event(
+                e.clone(),
+                path,
+                &sub_keys,
+                &locals,
+            )),
+        ));
+    }
+    for (key, value) in model.subsystems.iter().flatten() {
+        if let Ok(sub) = serde_json::from_value::<Model>(value.clone()) {
+            namespaced_model_events(&format!("{path}.{key}"), &sub, out);
+        }
+    }
+}
+
+/// [`namespaced_model_events`] for a reaction system: its species, its
+/// parameters and its subsystem keys are its local names (esm-spec §10.7, as
+/// Julia's and Python's flatten scope a reaction system), and its subsystems
+/// are reaction systems.
+pub(crate) fn namespaced_reaction_events(
+    path: &str,
+    rs: &ReactionSystem,
+    out: &mut Vec<(String, ComponentEvent)>,
+) {
+    let sub_keys: HashSet<String> = rs
+        .subsystems
+        .as_ref()
+        .map(|subs| subs.keys().cloned().collect())
+        .unwrap_or_default();
+    let locals: HashSet<String> = rs
+        .species
+        .keys()
+        .chain(rs.parameters.keys())
+        .cloned()
+        .chain(sub_keys.iter().cloned())
+        .collect();
+    for e in rs.continuous_events.iter().flatten() {
+        out.push((
+            path.to_string(),
+            ComponentEvent::Continuous(namespace_continuous_event(
+                e.clone(),
+                path,
+                &sub_keys,
+                &locals,
+            )),
+        ));
+    }
+    for e in rs.discrete_events.iter().flatten() {
+        out.push((
+            path.to_string(),
+            ComponentEvent::Discrete(namespace_discrete_event(
+                e.clone(),
+                path,
+                &sub_keys,
+                &locals,
+            )),
+        ));
+    }
+    for (key, value) in rs.subsystems.iter().flatten() {
+        if let Ok(sub) = serde_json::from_value::<ReactionSystem>(value.clone()) {
+            namespaced_reaction_events(&format!("{path}.{key}"), &sub, out);
+        }
+    }
 }
 
 /// The operator-model placeholder (esm-spec §6.4). A GLOBAL sentinel, not a
@@ -3756,11 +3866,18 @@ fn namespace_discrete_event(
 /// scoping rule here and the rejection there are two halves of one contract.
 pub(crate) const VAR_PLACEHOLDER: &str = "_var";
 
-fn namespace_plain(name: &str, system_name: &str) -> String {
-    if name.contains('.') || name == VAR_PLACEHOLDER {
-        name.to_string()
-    } else {
-        format!("{system_name}.{name}")
+/// An affect's target, namespaced: a bare name is the component's own, a
+/// dotted name whose head is one of its subsystem keys is a subsystem-local
+/// reference (prefixed, exactly as [`namespace_expr`] prefixes the same name
+/// when an expression reads it), any other dotted name is already qualified,
+/// and the `_var` placeholder is global (esm-spec §6.4).
+fn namespace_affect_target(name: &str, system_name: &str, subsys: &HashSet<String>) -> String {
+    if name == VAR_PLACEHOLDER {
+        return name.to_string();
+    }
+    match name.split_once('.') {
+        Some((head, _)) if !subsys.contains(head) => name.to_string(),
+        _ => format!("{system_name}.{name}"),
     }
 }
 

@@ -491,8 +491,11 @@ class Recurrence:
     #: §4.3 indexed-`faq` LHS). ``None`` when the frame came from an LHS the
     #: caller supplied without one.
     frame_node: Any
-    #: Largest lag any self-read takes along ``axis``, DERIVED from the reads and
-    #: never declared. Reported for observability; no evaluation rule uses it.
+    #: Largest lag along ``axis`` over the self-reads whose lag has a static
+    #: upper bound, DERIVED from the reads and never declared. A read whose lag
+    #: has none adds nothing, so this bounds EVERY read only when ``lag_proven``
+    #: is true; otherwise it is a bound over the bounded reads alone (0 if there
+    #: are none). Reported for observability; no evaluation rule uses it.
     max_lag: int
     #: Whether every self-read was PROVED strictly earlier statically. False
     #: means at least one lag straddles zero and the runtime's fail-closed read

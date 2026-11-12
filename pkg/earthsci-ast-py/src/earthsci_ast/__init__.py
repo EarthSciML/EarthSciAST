@@ -367,6 +367,12 @@ try:
         rhs_program,
         select,
     )
+    from .strip import (  # noqa: F401 — re-exported via __all__ below
+        StrippedConstructs,
+        compile_kernels,
+        is_stripped,
+        stripped,
+    )
 
     _has_problem = True
 except ImportError:
@@ -754,6 +760,12 @@ if _has_problem:
             # The public and range-restricted right-hand sides (API_SPEC §5.8):
             # each raises compiler_unavailable in this binding.
             "rhs_program",
+            # Strip and expose (API_SPEC §5.8): strip and stripped in full;
+            # compile_kernels raises compiler_unavailable in this binding.
+            "StrippedConstructs",
+            "stripped",
+            "is_stripped",
+            "compile_kernels",
             "forcing_set",
             "default_forcing_set",
             "select",

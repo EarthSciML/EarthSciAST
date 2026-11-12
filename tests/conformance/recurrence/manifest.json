@@ -2,7 +2,7 @@
   "category": "recurrence",
   "runner": "inline_tests",
   "version": "2.0",
-  "description": "Cross-port fixtures for the CAUSAL SELF-REFERENCE along one index axis (esm-spec 4.3.1.1, CONFORMANCE_SPEC 5.19): an equation defining an array-shaped unknown V whose defining `faq` body reads index(V, ...) at a strictly earlier position along one of that faq's output axes, materialized cell by cell with that axis outermost and ascending, each cell published before the axis advances.\n\nEXECUTING ports run each fixture through their OWN inline-test runner under each compiler its `required` map names (CONFORMANCE_SPEC 5.45) and must match every inline assertion at ZERO tolerance (5.19.1: the sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is -- there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact).\n\nNON-EXECUTING ports must still VALIDATE all twelve, and must reject the eight malformed shapes in rejections.json (5.19.5 rejection parity). Rejection parity cuts both ways: a binding whose cycle detector or trivial-DAE factoring treats a self-read as a cycle rejects a LEGAL document, which is the same defect as admitting an illegal one. A skip is a documented gap, not a pass.",
+  "description": "Cross-port fixtures for the CAUSAL SELF-REFERENCE along one index axis (esm-spec 4.3.1.1, CONFORMANCE_SPEC 5.19): an equation defining an array-shaped unknown V whose defining `faq` body reads index(V, ...) at a strictly earlier position along one of that faq's output axes, materialized cell by cell with that axis outermost and ascending, each cell published before the axis advances.\n\nEXECUTING ports run each fixture through their OWN inline-test runner under each compiler its `required` map names (CONFORMANCE_SPEC 5.45) and must match every inline assertion at ZERO tolerance (5.19.1: the sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is -- there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact).\n\nNON-EXECUTING ports must still VALIDATE every fixture, and must reject the eight malformed shapes in rejections.json (5.19.5 rejection parity). Rejection parity cuts both ways: a binding whose cycle detector or trivial-DAE factoring treats a self-read as a cycle rejects a LEGAL document, which is the same defect as admitting an illegal one. A skip is a documented gap, not a pass.",
   "reference_binding": "julia",
   "reference_compiler": "interpreter",
   "bindings_required": [
@@ -39,9 +39,11 @@
   "pins": {
     "tolerance": "zero (rel 0.0, abs 0.0) on every assertion of every fixture",
     "order": "REQUIRED, not optional: 5.19.3 obliges this category to pin the arithmetic ORDER rather than an answer within a tolerance. The construct's textbook example is [1, 2, 4, 8], every value of which is exactly representable and several WRONG orders also reach, so a fixture set that stopped there would pass a binding that batched the cells, reassociated the body, or carried binary64 partials through a Float32 fold.",
-    "forbidden_strategies": "5.19.2 -- no whole-array, vectorized, fused, tiled, kernel-merged, parallel-prefix or otherwise reordered path may evaluate a recurrence. The cells are not independent, so a reordering computes something else. The O(N) running accumulation that 4.3.1 licenses for a forward prefix scan is NOT available here either: the per-lag weights differ, so no single carried value summarises the history.",
-    "every_evaluation_route": "CONFORMANCE_SPEC 5.19.3b -- a binding must evaluate a recurrence identically on EVERY route it has for materializing an observed (a per-step route and a build-time/pipeline route are both routes), must do it with ONE shared sweep implementation, and must re-check each fixture PER ROUTE against the same pinned value. Rust shipped the construct on its per-step route only: correct under `esm test`, silently dead under `esm simulate` and for any ingesting document. These nine fixtures were all green throughout, because all nine drove one route -- which is why this pin exists."
+    "forbidden_strategies": "5.19.2 -- no whole-array, vectorized, fused, tiled, kernel-merged, parallel-prefix or otherwise reordered path may evaluate a recurrence. The cells are not independent, so a reordering computes something else. The one batching allowed is a SLICE (the cells sharing one recurrence-axis position, which read none of one another), evaluated together only with slices in ascending order and each cell's own operations unchanged -- no reassociation, no fused multiply-add; fixture 10 pins it. The O(N) running accumulation that 4.3.1 licenses for a forward prefix scan is NOT available here either: the per-lag weights differ, so no single carried value summarises the history.",
+    "every_evaluation_route": "CONFORMANCE_SPEC 5.19.3b -- a binding must evaluate a recurrence identically on EVERY route it has for materializing an observed (a per-step route and a build-time/pipeline route are both routes), must do it with ONE shared sweep implementation, and must re-check each fixture PER ROUTE against the same pinned value. Rust shipped the construct on its per-step route only: correct under `esm test`, silently dead under `esm simulate` and for any ingesting document. These nine fixtures were all green throughout, because all nine drove one route -- which is why this pin exists.",
+    "fault": "5.19.4 -- fixtures 11 and 12 carry `expected_fault` instead of a golden: every compiler their `required` map names must decline them with E_TREEWALK_RECUR_UNAVAILABLE. Their authored `expected` values are the LAUNDERED answer a zero-ghost read gives, so answering the assertions at all is red."
   },
+  "inspection_pin": "Each fixture's `inspection` is what a binding's build inspection MUST report for the document (esm-spec 4.3.1.1, 'The derived maximum lag is reported by a binding's build inspection'): one entry per recurrence, with the variable's bare name, the axis symbol the sweep folds along, the largest lag along it over the self-reads whose lag has a static upper bound (a read with none adds nothing, so the value bounds every read only when lag_proven is true), and whether every read was proved strictly earlier. Julia's BuildInspection.recurrences and Rust's BuildInspection::recurrences are both checked against it (pkg/EarthSciAST.jl/test/recurrence_sweep_test.jl, pkg/earthsci-ast-rs/tests/recurrence_native_agreement.rs).",
   "rejections": {
     "path": "rejections.json",
     "pinned": "(code, path) only -- never the diagnostic prose; see that file's `pinned` block",
@@ -65,6 +67,14 @@
         "recurrence"
       ],
       "note": "The minimal construct. Pins the VALUE only — every number is exactly representable — so it is the fixtures beside it that pin the order. Base case is an `ifelse` guard INSIDE the body, which is the required spelling: a self-read of an unpublished cell is a fault, not a zero, so nothing else keeps the first cell from reading position 0.",
+      "inspection": [
+        {
+          "var": "s",
+          "axis": "k",
+          "max_lag": 1,
+          "lag_proven": true
+        }
+      ],
       "required": {
         "julia": [
           "interpreter",
@@ -92,6 +102,14 @@
         "recurrence"
       ],
       "note": "THE ORDER PIN. The ascending sweep is the left fold, [1e16, 1e16, 0, 1]; any reassociation or reordering reaches [1e16, 1e16, 1, 2]. A binding that batches or reorders these cells fails here rather than agreeing to a tolerance.",
+      "inspection": [
+        {
+          "var": "s",
+          "axis": "k",
+          "max_lag": 1,
+          "lag_proven": true
+        }
+      ],
       "required": {
         "julia": [
           "interpreter",
@@ -118,6 +136,14 @@
         "recurrence"
       ],
       "note": "Two LITERAL lags in one body. A single-step `acc[i] = f(acc[i-1], body[i])` accumulator cannot express this at all, so a binding implementing only that shape fails rather than passing on the subset it covers.",
+      "inspection": [
+        {
+          "var": "s",
+          "axis": "k",
+          "max_lag": 2,
+          "lag_proven": true
+        }
+      ],
       "required": {
         "julia": [
           "interpreter",
@@ -148,6 +174,14 @@
         "recurrence"
       ],
       "note": "A SYMBOL-valued lag under a banded filter, with a clamp inside the fold, and the IN-BODY reduction order pinned to the bit: r[3] is -1.0 folded ascending in `a` and -1.0000000000000002 folded from the high end. Catches a pairwise or reverse contraction.",
+      "inspection": [
+        {
+          "var": "r",
+          "axis": "y",
+          "max_lag": 3,
+          "lag_proven": false
+        }
+      ],
       "required": {
         "julia": [
           "interpreter",
@@ -184,6 +218,14 @@
         "recurrence"
       ],
       "note": "Rank-2, folding along ONE axis and free in the other, so the carried state is a whole column — array-valued accumulator state with no extra machinery. Also pins the sweep order: recurrence axis outermost, free axis inside it.",
+      "inspection": [
+        {
+          "var": "m",
+          "axis": "j",
+          "max_lag": 1,
+          "lag_proven": true
+        }
+      ],
       "required": {
         "julia": [
           "interpreter",
@@ -249,6 +291,14 @@
         "recurrence"
       ],
       "note": "The real lag scale: 38 distinct lags with 38 distinct weights in ONE node, clamp firing at 19 of 40 cells and altering 38 of the 40 values. Defeats three cheaper designs at once — a literal-lag-only primitive (would need 38 authored terms), any single carried accumulator (the weights all differ), any linear closed form (the clamp). Expected values from an INDEPENDENT ascending fold in Python, not from running the document.",
+      "inspection": [
+        {
+          "var": "r",
+          "axis": "y",
+          "max_lag": 38,
+          "lag_proven": false
+        }
+      ],
       "required": {
         "julia": [
           "interpreter",
@@ -285,6 +335,14 @@
         "recurrence"
       ],
       "note": "A lag NOTHING static can bound (`s[k] = 3*s[k-n]`, n a parameter) must be ADMITTED. Catches a validator that treats 'unproven' as 'illegal' — it would reject a document its own evaluator accepts, which is the one validator/evaluator disagreement that is never defensible.",
+      "inspection": [
+        {
+          "var": "s",
+          "axis": "k",
+          "max_lag": 0,
+          "lag_proven": false
+        }
+      ],
       "required": {
         "julia": [
           "interpreter",
@@ -311,6 +369,14 @@
         "recurrence"
       ],
       "note": "A self-read reached through an `apply_expression_template` BINDING. Closes a hole rather than showing a feature: `apply_expression_template` is off the cell-restriction blocking list and no binding's self-read walk visits `bindings`, which sounds like a self-read could hide there and be evaluated as a gather on a name nothing binds. Measured: it cannot, because a template application is expanded AT LOAD (esm-spec 9.6.4). If a binding ever defers expansion past recognition, this is what fails.",
+      "inspection": [
+        {
+          "var": "s",
+          "axis": "k",
+          "max_lag": 1,
+          "lag_proven": true
+        }
+      ],
       "required": {
         "julia": [
           "interpreter",
@@ -327,10 +393,109 @@
       }
     },
     {
-      "id": "10_recurrence_group_two_variables",
-      "path": "fixtures/recurrence/10_recurrence_group_two_variables.esm",
+      "id": "10_recurrence_slice_batch",
+      "path": "fixtures/recurrence/10_recurrence_slice_batch.esm",
+      "model": "RecurrenceSliceBatch",
+      "golden": "golden/10_recurrence_slice_batch.json",
+      "tags": [
+        "slice",
+        "batching",
+        "fma",
+        "bit-identical",
+        "recurrence"
+      ],
+      "note": "THE SLICE PIN (esm-spec 4.3.1.1 point 4, CONFORMANCE_SPEC 5.19.2). 64 independent cells by 6 positions along the recurrence axis, V[j,k] = a[j]*V[j,k-1] + b[j]. A binding MAY evaluate one slice's cells together; a fused multiply-add changes the last bit at 128 of the 384 cells, so a batched path that contracts the multiply-add, or that starts a slice before the previous one is complete, fails here.",
+      "inspection": [
+        {
+          "var": "V",
+          "axis": "k",
+          "max_lag": 1,
+          "lag_proven": true
+        }
+      ],
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "11_recurrence_fault_under_clamp",
+      "path": "fixtures/recurrence/11_recurrence_fault_under_clamp.esm",
+      "model": "RecurrenceFaultUnderClamp",
+      "golden": null,
+      "expected_fault": {
+        "code": "E_TREEWALK_RECUR_UNAVAILABLE",
+        "reason": "The first cell reads s[0], outside the recurrence axis, with no guard. CONFORMANCE_SPEC 5.19.4: the read faults and never resolves to a number. The clamp max(x, 0) would launder a zero ghost or a NaN sentinel into the plausible [1, 2, 3, 4] the document's assertions pin."
+      },
+      "tags": [
+        "fault",
+        "fail-closed",
+        "clamp",
+        "recurrence"
+      ],
+      "note": "The fail-closed pin. Every required compiler of every executing binding must decline the document with E_TREEWALK_RECUR_UNAVAILABLE; answering its assertions, even exactly as authored, is the laundered read it exists to catch.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "12_recurrence_fault_parameter_guard",
+      "path": "fixtures/recurrence/12_recurrence_fault_parameter_guard.esm",
+      "model": "RecurrenceFaultParameterGuard",
+      "golden": null,
+      "expected_fault": {
+        "code": "E_TREEWALK_RECUR_UNAVAILABLE",
+        "reason": "The base-case guard's bound is a parameter (n_base = 0), so no build can fold it and the first cell's out-of-axis read is reached at evaluation. CONFORMANCE_SPEC 5.19.4."
+      },
+      "tags": [
+        "fault",
+        "fail-closed",
+        "lazy-guard",
+        "parameter",
+        "recurrence"
+      ],
+      "note": "The fail-closed pin with a run-time guard: the fault is decided at evaluation, through the lazy ifelse, rather than at build.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "13_recurrence_group_two_variables",
+      "path": "fixtures/recurrence/13_recurrence_group_two_variables.esm",
       "model": "RecurrenceGroupTwoVariables",
-      "golden": "golden/10_recurrence_group_two_variables.json",
+      "golden": "golden/13_recurrence_group_two_variables.json",
       "tags": [
         "faq",
         "causal-self-reference",
@@ -354,10 +519,10 @@
       }
     },
     {
-      "id": "11_recurrence_group_order_pin",
-      "path": "fixtures/recurrence/11_recurrence_group_order_pin.esm",
+      "id": "14_recurrence_group_order_pin",
+      "path": "fixtures/recurrence/14_recurrence_group_order_pin.esm",
       "model": "RecurrenceGroupOrderPin",
-      "golden": "golden/11_recurrence_group_order_pin.json",
+      "golden": "golden/14_recurrence_group_order_pin.json",
       "tags": [
         "order",
         "catastrophic-cancellation",
@@ -384,10 +549,10 @@
       }
     },
     {
-      "id": "12_recurrence_group_same_cell_order",
-      "path": "fixtures/recurrence/12_recurrence_group_same_cell_order.esm",
+      "id": "15_recurrence_group_same_cell_order",
+      "path": "fixtures/recurrence/15_recurrence_group_same_cell_order.esm",
       "model": "RecurrenceGroupSameCellOrder",
-      "golden": "golden/12_recurrence_group_same_cell_order.json",
+      "golden": "golden/15_recurrence_group_same_cell_order.json",
       "tags": [
         "recurrence",
         "recurrence-group",
@@ -425,6 +590,14 @@
         "recurrence"
       ],
       "note": "The tests/valid document of the construct, owned by the validation corpus and re-checked here: the same banded lag fold as 04, reached as a document every validator also accepts.",
+      "inspection": [
+        {
+          "var": "r",
+          "axis": "y",
+          "max_lag": 3,
+          "lag_proven": false
+        }
+      ],
       "required": {
         "julia": [
           "interpreter",

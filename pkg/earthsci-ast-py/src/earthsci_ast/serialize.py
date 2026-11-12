@@ -1055,6 +1055,8 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
         result["type"] = "event"
         if coupling.event_type:
             result["event_type"] = coupling.event_type
+        if coupling.name is not None:
+            result["name"] = coupling.name
         if coupling.conditions:
             result["conditions"] = [_serialize_expression(cond) for cond in coupling.conditions]
         if coupling.trigger:

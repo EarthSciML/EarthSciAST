@@ -145,7 +145,11 @@ pub(super) fn run_range(
     // The next segmented-reduction chain that may split (see `chain`).
     #[cfg(not(target_arch = "wasm32"))]
     let mut next_chain = seg_chains.partition_point(|c| c.start < range.start);
-    while pc < range.end {
+    // An open sweep keeps the loop going at `range.end`: a range may end
+    // exactly at a recurrence body's end (a call plan hands the loop a sweep
+    // as its own step), and the body's end is where the cell is published and
+    // the next cell starts.
+    while pc < range.end || sweep.is_some() {
         while let Some(&(pos, skip)) = pending.last() {
             if pc == pos as usize {
                 pending.pop();
