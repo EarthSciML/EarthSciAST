@@ -441,6 +441,87 @@ end
         @test n >= 10
     end
 
+    @testset "build inspection never changes which error a build raises" begin
+        # A forward self-read is not well founded. Built as the out-of-place
+        # product, the sweep's own refusal (the rule, by name) comes first;
+        # asking for the inspection must not swap in the axis analysis's code.
+        file = load_string(
+            JSON3.write(
+                _rs_static(
+                    _rs_faq(
+                        "k", "steps", _rs_o(
+                            "ifelse", _rs_o(">=", "k", 4), 0.1,
+                            _rs_o("+", _rs_idx("s", _rs_o("+", "k", 1)), 0.1)
+                        )
+                    )
+                )
+            )
+        )
+        codes = map((nothing, _RS.BuildInspection())) do insp
+            err = try
+                _RS._build_evaluator(file; form = :oop, inspect = insp)
+                nothing
+            catch e
+                e
+            end
+            @test err isa _RS.TreeWalkError
+            err.code
+        end
+        @test codes[1] == codes[2] == _RS.ERROR_CODES.COMPILER_REFUSED_RULE
+    end
+
+    @testset "build inspection reports the sweep's own extents" begin
+        # Rank 1 over `{"from": "cells"}` ranges, two recurrences.
+        insp = _RS.BuildInspection()
+        esm_problem(_rs_dynamic(7), (0.0, 1.0); inspect = insp)
+        @test [(last(split(r.var, '.')), r.slices, r.cells) for r in insp.recurrences] ==
+            [("Q", 7, 7), ("R", 7, 7)]
+        # Rank 2, folding along its second axis: 6 positions of 64 cells each.
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "fixtures", "recurrence",
+            "10_recurrence_slice_batch.esm"
+        )
+        insp = _RS.BuildInspection()
+        esm_problem(path, (0.0, 1.0); inspect = insp)
+        r = only(insp.recurrences)
+        @test (r.axis, r.slices, r.cells) == ("k", 6, 384)
+    end
+
+    @testset "max_lag bounds the bounded reads; lag_proven says whether that is all" begin
+        # `k - 1` has a static lag; `k - m` (a parameter) has none.
+        doc = _rs_static(
+            _rs_faq(
+                "k", "steps", _rs_o(
+                    "ifelse", _rs_o("<=", "k", 1), 0.1,
+                    _rs_o(
+                        "+", _rs_idx("s", _rs_o("-", "k", 1)),
+                        _rs_o("*", 0.5, _rs_idx("s", _rs_o("-", "k", "m")))
+                    )
+                )
+            )
+        )
+        doc["models"]["M"]["variables"]["m"] =
+            Dict{String, Any}("type" => "parameter", "units" => "1", "default" => 1.0)
+        insp = _RS.BuildInspection()
+        esm_problem(_rs_with_state(doc, "s", 1), (0.0, 1.0); inspect = insp)
+        r = only(insp.recurrences)
+        @test (r.max_lag, r.lag_proven) == (1, false)
+    end
+
+    @testset "a lane program refuses a recurrence along a lane set once, as a lane read" begin
+        prog = rhs_program(esm_problem(_rs_dynamic(6), (0.0, 1.0)))
+        err = try
+            lanes(prog, :cells, ["cells"])
+            nothing
+        catch e
+            e
+        end
+        @test err isa _RS.TreeWalkError
+        @test err.code == _RS.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test occursin("leaves the cell", err.detail)
+        @test !occursin("decomposed", err.detail)
+    end
+
     @testset "the slice fixture agrees on every route, to its pinned bits" begin
         # Fixture 10 is rank 2 and folds along its SECOND axis, over 64 cells
         # per slice; a fused multiply-add would change the last bit at 128 of
@@ -636,5 +717,7 @@ end
         @test err.code == _RS.ERROR_CODES.COMPILER_REFUSED_RULE
         @test occursin("refuses 's'", err.detail)
         @test occursin("out-of-place", err.detail)
+        # The rule is a field, not something a caller parses out of the text.
+        @test err.rule == "s"
     end
 end

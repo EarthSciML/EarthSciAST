@@ -119,7 +119,9 @@ first implementation's behaviour: the code failed the whole analysis on an
 unresolvable symbol while its own comment claimed the opposite, and a sibling
 binding's author caught the discrepancy by reading both.
 
-`max_lag` is the maximum `hi(lag)` over every self-read. It is reported — Rust's
+`max_lag` is the maximum `hi(lag)` over every self-read whose lag has a static
+bound; a read whose lag has none adds nothing, so `max_lag` bounds every read only
+when `lag_proven` is true. It is reported — Rust's
 `BuildInspection::recurrences` carries `(var, axis, max_lag, lag_proven)` — because
 an implementation may legitimately want it (a windowed implementation need retain
 only `max_lag` slices instead of the whole axis) but **no evaluation rule depends

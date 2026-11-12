@@ -120,10 +120,12 @@ end
 # self-read that is not well founded: it is refused here with the validator's
 # code.
 #
-# Returns `(axis, max_lag, lag_proven)`: the largest lag any self-read can take
-# along the axis (0 for a read whose lag has no static bound), and whether every
-# read was proved strictly earlier. Both are reported, never used to evaluate:
-# an unproven read is ruled out at run time by the fail-closed self-read.
+# Returns `(axis, max_lag, lag_proven)`: the largest upper bound on the lag along
+# the axis over the reads whose lag HAS a static bound (a read with none adds
+# nothing, so the value bounds every read only when `lag_proven`), and whether
+# every read was proved strictly earlier. Both are reported, never used to
+# evaluate: an unproven read is ruled out at run time by the fail-closed
+# self-read.
 function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
     env = Dict{String, Tuple{Int, Int}}()
     ranges = _ranges_dict(def)
@@ -199,20 +201,17 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
     return axis, max_lag, lag_proven
 end
 
-# What `BuildInspection.recurrences` reports for the recurrence `name` defined by
-# `def`: the axis, the derived lag bound, and the sweep's size. `nothing` for a
-# definition that is not a `faq` (the build refuses it with its own code).
-function _recurrence_info(name::String, def)
-    (def isa OpExpr && _is_faq_op(def.op) && def.expr_body !== nothing) || return nothing
-    idx = _output_idx_strings(def)
-    axis, max_lag, lag_proven = _recurrence_axis(name, def, idx)
-    ranges = _ranges_dict(def)
-    extent(n) = begin
-        spec = get(ranges, n, nothing)
-        spec !== nothing && _is_const_int_range(spec) ? length(_expand_int_range(spec)) : 0
-    end
-    lens = Int[extent(n) for n in idx]
-    return RecurrenceInfo(name, idx[axis], max_lag, lag_proven, lens[axis], prod(lens))
+# What `BuildInspection.recurrences` reports for the recurrence `name`, read off
+# its compiled sweep `sw` and its definition `def`. Called only once the sweep
+# has compiled, so `_recurrence_axis` has already accepted `def` and cannot
+# throw here: filling the inspection never decides which error a build raises.
+# The extents are the sweep's own box, the cells it publishes.
+function _recurrence_info(name::String, def::OpExpr, sw::_RecurrenceSweep)
+    axis, max_lag, lag_proven = _recurrence_axis(name, def, _output_idx_strings(def))
+    return RecurrenceInfo(
+        name, _output_idx_strings(def)[axis], max_lag, lag_proven,
+        sw.dims[axis], sw.ncells
+    )
 end
 
 # §5.19.3a: the carried value is stored at the variable's `element_type` at every
@@ -266,11 +265,17 @@ end
 # that carries the buffer block.
 #
 # The block is the whole frame except in a range-restricted program
-# (range_restricted.jl), where it covers only the cells the program needs along
-# a decomposed axis. The sweep then runs over the block: every self-read has lag
-# 0 off the recurrence axis, so a cell of the block reads only cells of the
-# block. A block that does not cover the recurrence axis whole cannot be swept
-# — the sweep needs every earlier position on that axis — and is refused.
+# (range_restricted.jl), where it may cover only the cells the program needs.
+# The sweep runs over the block: every self-read has lag 0 off the recurrence
+# axis, so off that axis a cell of the block reads only cells of the block, and
+# a block starting at position 1 of the recurrence axis (the whole axis, or a
+# prefix of it) holds every earlier cell a self-read can name. A restriction
+# that would drop earlier positions of the recurrence axis is refused by the
+# restriction's own analysis, once (`_refuse_cut_recurrences` for a decomposed
+# axis; a lane program refuses the self-read that leaves its lane). Should a
+# block ever start later anyway, nothing reads a value it does not hold: the
+# first position's self-read lands outside the box and faults
+# (`E_TREEWALK_RECUR_UNAVAILABLE`, `_eval_recur_gather`).
 function _compile_recurrence_sweep(
         name::String, def::ASTExpr, dims::Vector{Int},
         var, resolved_obs::Dict{String, ASTExpr}, array_var_info,
@@ -308,16 +313,6 @@ function _compile_recurrence_sweep(
         TreeWalkError(
             "E_TREEWALK_UNSUPPORTED_RECURRENCE",
             "'$name' has no buffer block in this build's layout"
-        )
-    )
-    (blk.lo[axis] == 1 && blk.hi[axis] == dims[axis]) || throw(
-        _range_error(
-            ERROR_CODES.RANGE_GLOBAL_LOCALITY,
-            "'$name' is a recurrence (esm-spec §4.3.1.1) along '$(idx_names[axis])', and " *
-                "this program holds only its cells $(blk.lo[axis]):$(blk.hi[axis]) of " *
-                "1:$(dims[axis]) along that axis. Its sweep reads every earlier position " *
-                "on the recurrence axis, so it has global locality along a decomposed " *
-                "axis; decompose another axis, or build the whole domain"
         )
     )
     lo = copy(blk.lo)

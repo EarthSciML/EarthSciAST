@@ -25,8 +25,11 @@ A recognized causal self-reference (esm-spec §4.3.1.1), as reported in
 
 * `var` — the (flattened) variable the recurrence defines;
 * `axis` — the output index symbol the sweep folds along, ascending;
-* `max_lag` — the largest lag any self-read takes along `axis`, derived from the
-  reads (0 for a read whose lag has no static bound);
+* `max_lag` — the largest lag along `axis` over the self-reads whose lag has a
+  static upper bound, derived from the reads. A read whose lag has none (a
+  parameter-valued offset, say) adds nothing, so `max_lag` bounds EVERY read
+  only when `lag_proven` is `true`; when it is `false` the value is a bound over
+  the bounded reads alone (0 if there are none), not the recurrence's lag;
 * `lag_proven` — whether every self-read was proved strictly earlier at build.
   When `false`, some read's lag can be 0 or less for some value of a symbol, and
   the fail-closed self-read (`E_TREEWALK_RECUR_UNAVAILABLE`) rules those cells
@@ -4945,11 +4948,9 @@ function _build_compile_evaluator(
                 published[k] = mat_defs[k]
             end
         end
+        # Filled as each sweep compiles (below), so the sweep's own checks
+        # run first and decide any error the build raises.
         empty!(inspect.recurrences)
-        for k in sort!(collect(recur_pub))
-            info = _recurrence_info(String(k), mat_defs[k])
-            info === nothing || push!(inspect.recurrences, info)
-        end
         for (k, e) in published
             _is_hoisted_name(String(k)) || (inspect.observed_exprs[String(k)] = e)
         end
@@ -5176,6 +5177,8 @@ function _build_compile_evaluator(
                         pgather, param_sym_set, reg_funcs
                     )
                     _record_rule!(name, :observed, _recurrence_tier(sw))
+                    inspect === nothing ||
+                        push!(inspect.recurrences, _recurrence_info(name, mat_defs[name], sw))
                     push!(lvl_recurs, sw)
                     continue
                 end
@@ -5230,6 +5233,7 @@ function _build_compile_evaluator(
             end
         end
     end
+    inspect === nothing || sort!(inspect.recurrences; by = r -> r.var)
 
     # ---- Build per-derivative compiled-IR list ----
     # (see `_compile_derivative_equations` / `_compile_faq_equation!`)
