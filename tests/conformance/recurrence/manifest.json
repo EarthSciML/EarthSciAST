@@ -585,7 +585,7 @@
         "recurrence-group",
         "contraction"
       ],
-      "note": "A group member whose own faq contracts (a[k] sums over j in 1..3). Its cell body carries that reduction; the stacked recurrence and the member slices sweep the frame axes only. A binding that copies the contracted range onto either multiplies every member by 3. Python's native compiler sweeps a recurrence only when the cell body has no reduction of its own, as for 04.",
+      "note": "A group member whose own faq contracts (a[k] sums over j in 1..3). Its cell body carries that reduction; the stacked recurrence and the member slices sweep the frame axes only. A binding that copies the contracted range onto either multiplies every member by 3.",
       "required": {
         "julia": [
           "interpreter",
@@ -598,7 +598,17 @@
           "interpreter",
           "native"
         ]
-      }
+      },
+      "named_exclusions": [
+        {
+          "binding": "python",
+          "compilers": [
+            "native"
+          ],
+          "code": "compiler_refused_rule",
+          "reason": "Python's native compiler refuses a recurrence whose cell body is a reduction: it has no ordered-sweep form of the fold, and its vectorized tiers reorder or batch, which CONFORMANCE_SPEC 5.19.2 forbids. The interpreter runs it."
+        }
+      ]
     },
     {
       "id": "17_recurrence_group_frame_spellings",
