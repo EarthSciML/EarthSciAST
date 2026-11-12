@@ -12,7 +12,9 @@
 #     number (§5.19.4);
 #   * `native`'s sweep is ONE generated function whatever the number of cells;
 #   * what this binding cannot honour is refused by name (a binary32 recurrence,
-#     the out-of-place product `:xla` lowers).
+#     the out-of-place product `:xla` lowers);
+#   * build inspection reports each recurrence as the shared manifest pins it,
+#     and a Thomas solve through chained recurrences differentiates.
 
 using Test
 using EarthSciAST
@@ -33,6 +35,39 @@ const _RS_FIXTURES = vcat(
 )
 
 _rs_bits(x) = reinterpret(UInt64, collect(Float64, x))
+
+# The fixtures whose conforming outcome is the fault (CONFORMANCE_SPEC §5.19.4):
+# the recurrence manifest's `expected_fault` entries.
+const _RS_MANIFEST = JSON3.read(
+    read(joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "recurrence", "manifest.json"), String)
+)
+const _RS_FAULT_FIXTURES = Set(
+    basename(String(fx.path)) for fx in _RS_MANIFEST.fixtures
+        if haskey(fx, :expected_fault)
+)
+_rs_is_fault(path) = basename(path) in _RS_FAULT_FIXTURES
+
+# `doc` (a parsed fixture) with a scalar state `u` added that reads one cell of
+# the recurrence `var`, so a right-hand side is built and its per-call fill level
+# runs the sweep. The fixture's own assertions are about the state-free
+# document, so they are dropped.
+function _rs_with_state(doc::AbstractDict, var::String, rank::Int)
+    doc = deepcopy(doc)
+    name = only(keys(doc["models"]))
+    m = doc["models"][name]
+    m["variables"]["u"] = Dict{String, Any}("type" => "unknown", "units" => "1", "default" => 1.0)
+    push!(
+        m["equations"], Dict{String, Any}(
+            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["u"], "wrt" => "t"),
+            "rhs" => _rs_o(
+                "+", _rs_o("*", -0.5, "u"),
+                _rs_o("*", 1.0e-3, _rs_idx(var, fill(1, rank)...))
+            )
+        )
+    )
+    delete!(m, "tests")
+    return doc
+end
 
 _rs_faq(sym, set, body; kw...) =
     Dict{String, Any}(
@@ -149,6 +184,11 @@ end
         results = _require_fixture(path) ? run_inline_tests(path; compiler = c) : nothing
         results === nothing || @test !isempty(results)
         if results === nothing
+        elseif _rs_is_fault(path)
+            # §5.19.4: the read before the axis is a fault on every assertion,
+            # never the laundered value the document pins.
+            @test all(r -> !r.passed && r.actual === nothing, results)
+            @test all(r -> occursin("E_TREEWALK_RECUR_UNAVAILABLE", r.message), results)
         elseif occursin("float32", basename(path))
             # §5.19.3a: a binary32 fold is refused, never carried in binary64.
             # The build refuses the binary32 variable itself (§5.18.2) before the
@@ -167,7 +207,7 @@ end
 
     @testset "native and interpreter agree bit for bit on every fixture field" begin
         for path in _RS_FIXTURES
-            occursin("float32", basename(path)) && continue
+            (occursin("float32", basename(path)) || _rs_is_fault(path)) && continue
             file = load_path(path)
             name, model = only(file.models)
             shaped = [
@@ -369,6 +409,117 @@ end
             @test err.code == _RS.ERROR_CODES.FLOAT32_UNSUPPORTED
             @test occursin("Float32", err.detail)
         end
+    end
+
+    @testset "build inspection reports what the shared manifest pins" begin
+        # The same four facts Rust's build inspection reports, pinned once in
+        # tests/conformance/recurrence/manifest.json for both bindings.
+        n = 0
+        for fx in _RS_MANIFEST.fixtures
+            haskey(fx, :inspection) || continue
+            path = joinpath(TESTUTILS_REPO_ROOT, "tests", String(fx.path))
+            for c in (:native, :interpreter)
+                insp = _RS.BuildInspection()
+                esm_problem(path, (0.0, 1.0); compiler = c, inspect = insp)
+                got = sort!(
+                    [
+                        (last(split(r.var, '.')), r.axis, r.max_lag, r.lag_proven)
+                            for r in insp.recurrences
+                    ]
+                )
+                want = sort!(
+                    [
+                        (String(w.var), String(w.axis), Int(w.max_lag), Bool(w.lag_proven))
+                            for w in fx.inspection
+                    ]
+                )
+                @test got == want
+                @test all(r -> 1 <= r.slices <= r.cells, insp.recurrences)
+            end
+            n += 1
+        end
+        @test n >= 10
+    end
+
+    @testset "the slice fixture agrees on every route, to its pinned bits" begin
+        # Fixture 10 is rank 2 and folds along its SECOND axis, over 64 cells
+        # per slice; a fused multiply-add would change the last bit at 128 of
+        # its 384 cells. Each route is checked against the document's own
+        # pinned values, not merely against the other routes.
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "fixtures", "recurrence",
+            "10_recurrence_slice_batch.esm"
+        )
+        raw = JSON3.read(read(path, String), Dict{String, Any})
+        tests = raw["models"]["RecurrenceSliceBatch"]["tests"]
+        pinned = [
+            (Int(a["coords"]["cells"]), Int(a["coords"]["steps"]), Float64(a["expected"]))
+                for t in tests for a in t["assertions"]
+        ]
+        dyn = _rs_with_state(raw, "V", 2)
+        _rs_cells(x) = permutedims(reshape(x, 6, 64))
+        fields = Dict{Symbol, Vector{Float64}}()
+        for c in (:native, :interpreter)
+            # The build-time route: the state-free document.
+            # `observed_field` lists a rank-2 field's cells row-major.
+            V0 = _rs_cells(observed_field(esm_problem(path, (0.0, 1.0); compiler = c), "V"))
+            # The per-call route: a right-hand side that reads the recurrence.
+            prob = esm_problem(dyn, (0.0, 1.0); compiler = c)
+            @test _rs_tier(prob, "RecurrenceSliceBatch.V") ===
+                (c === :native ? :recurrence_sweep : :interpreter)
+            du = similar(prob.u0)
+            prob.f!(du, prob.u0, prob.p, 0.0)
+            V1 = _rs_cells(observed_field(prob, "V"; u = prob.u0, t = 0.0))
+            for (j, k, v) in pinned
+                @test _rs_bits([V0[j, k]]) == _rs_bits([v])
+                @test _rs_bits([V1[j, k]]) == _rs_bits([v])
+            end
+            @test _rs_bits(du) == _rs_bits([-0.5 * prob.u0[1] + 1.0e-3 * V1[1, 1]])
+            fields[c] = vec(V1)
+        end
+        @test _rs_bits(fields[:native]) == _rs_bits(fields[:interpreter])
+    end
+
+    @testset "a Thomas solve through three chained recurrences differentiates" begin
+        # tests/conformance/compiled_rhs/fixtures/recurrence_thomas_rhs.esm:
+        # D(x) = -A⁻¹x by forward elimination and a back substitution written
+        # as an ascending recurrence on the reversed axis. Linear, so the
+        # Jacobian is -A⁻¹ exactly.
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance", "compiled_rhs", "fixtures",
+            "recurrence_thomas_rhs.esm"
+        )
+        n = 6
+        A = zeros(n, n)
+        for k in 1:n
+            A[k, k] = 4.0 + 0.5 * k
+            k > 1 && (A[k, k - 1] = -1.0)
+            k < n && (A[k, k + 1] = -1.5)
+        end
+        x = [0.3 + 0.2 * sin(1.7 * i) for i in 1:n]
+        Js = Dict{Symbol, Matrix{Float64}}()
+        for c in (:native, :interpreter)
+            prob = esm_problem(path, (0.0, 1.0); compiler = c)
+            f(y, u) = prob.f!(y, u, prob.p, 0.0)
+            du = zeros(n)
+            f(du, x)
+            @test du ≈ -(A \ x) rtol = 1.0e-13
+            J = ForwardDiff.jacobian(f, zeros(n), copy(x))
+            # Central differences, column by column.
+            h = 1.0e-6
+            Jfd = zeros(n, n)
+            for i in 1:n
+                xp = copy(x); xp[i] += h
+                xm = copy(x); xm[i] -= h
+                yp = zeros(n); ym = zeros(n)
+                f(yp, xp); f(ym, xm)
+                Jfd[:, i] = (yp .- ym) ./ (2h)
+            end
+            @test isapprox(J, Jfd; rtol = 1.0e-8)
+            @test isapprox(J, -inv(A); rtol = 1.0e-12)
+            Js[c] = J
+        end
+        @test _rs_bits(vec(Js[:native])) == _rs_bits(vec(Js[:interpreter]))
     end
 
     @testset "the out-of-place product refuses a recurrence by name" begin

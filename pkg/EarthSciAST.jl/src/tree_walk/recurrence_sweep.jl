@@ -118,6 +118,11 @@ end
 # document that skipped `validate()` still cannot reach the sweep with a
 # self-read that is not well founded: it is refused here with the validator's
 # code.
+#
+# Returns `(axis, max_lag, lag_proven)`: the largest lag any self-read can take
+# along the axis (0 for a read whose lag has no static bound), and whether every
+# read was proved strictly earlier. Both are reported, never used to evaluate:
+# an unproven read is ruled out at run time by the fail-closed self-read.
 function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
     env = Dict{String, Tuple{Int, Int}}()
     ranges = _ranges_dict(def)
@@ -144,6 +149,8 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
         )
     )
     axis = 0
+    max_lag = 0
+    lag_proven = true
     for args in reads
         length(args) == length(idx_names) ||
             bad(
@@ -172,6 +179,10 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
                     "a causal self-read names the cell being written, or a later " *
                         "one, on axis '$(idx_names[d])'"
                 )
+                lag_proven &= lag_lo >= 1
+                max_lag = max(max_lag, lag_hi)
+            else
+                lag_proven = false
             end
             lagged == 0 || bad("a causal self-read is offset on more than one axis")
             lagged = d
@@ -184,7 +195,23 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
                 "('$(idx_names[axis])' and '$(idx_names[lagged])')"
         )
     end
-    return axis
+    return axis, max_lag, lag_proven
+end
+
+# What `BuildInspection.recurrences` reports for the recurrence `name` defined by
+# `def`: the axis, the derived lag bound, and the sweep's size. `nothing` for a
+# definition that is not a `faq` (the build refuses it with its own code).
+function _recurrence_info(name::String, def)
+    (def isa OpExpr && _is_faq_op(def.op) && def.expr_body !== nothing) || return nothing
+    idx = _output_idx_strings(def)
+    axis, max_lag, lag_proven = _recurrence_axis(name, def, idx)
+    ranges = _ranges_dict(def)
+    extent(n) = begin
+        spec = get(ranges, n, nothing)
+        spec !== nothing && _is_const_int_range(spec) ? length(_expand_int_range(spec)) : 0
+    end
+    lens = Int[extent(n) for n in idx]
+    return RecurrenceInfo(name, idx[axis], max_lag, lag_proven, lens[axis], prod(lens))
 end
 
 # §5.19.3a: the carried value is stored at the variable's `element_type` at every
@@ -266,7 +293,7 @@ function _compile_recurrence_sweep(
                 "has $(length(dims)) axes"
         )
     )
-    axis = _recurrence_axis(name, dop, idx_names)
+    axis, _, _ = _recurrence_axis(name, dop, idx_names)
     order = _recurrence_order(axis, rank)
     blk = _layout_block(var_map, name)
     blk === nothing && throw(

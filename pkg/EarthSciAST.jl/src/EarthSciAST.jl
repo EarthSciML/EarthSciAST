@@ -326,7 +326,7 @@ export
     # Planar spatial-index broad phase (projection-pushdown Phase 3a)
     broad_phase_candidates,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
-    evaluate_expr, TreeWalkError, BuildInspection,
+    evaluate_expr, TreeWalkError, BuildInspection, RecurrenceInfo,
     # DEPRECATED (API_SPEC §8 item 23, src/deprecated.jl), exported until it is
     # removed: a downstream that calls the bare name after `using EarthSciAST`
     # (EarthSciASTDiff does, throughout its tests) must hear the deprecation

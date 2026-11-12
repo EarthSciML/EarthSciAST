@@ -18,6 +18,35 @@ struct _ObservedMemo
 end
 
 """
+    RecurrenceInfo
+
+A recognized causal self-reference (esm-spec §4.3.1.1), as reported in
+[`BuildInspection`](@ref)`.recurrences`:
+
+* `var` — the (flattened) variable the recurrence defines;
+* `axis` — the output index symbol the sweep folds along, ascending;
+* `max_lag` — the largest lag any self-read takes along `axis`, derived from the
+  reads (0 for a read whose lag has no static bound);
+* `lag_proven` — whether every self-read was proved strictly earlier at build.
+  When `false`, some read's lag can be 0 or less for some value of a symbol, and
+  the fail-closed self-read (`E_TREEWALK_RECUR_UNAVAILABLE`) rules those cells
+  out at run time — typically a guard means they are never evaluated;
+* `slices` — the number of positions along `axis`, each a slice the sweep
+  completes before the next;
+* `cells` — the number of cells the sweep publishes.
+
+No evaluation rule depends on any of these.
+"""
+struct RecurrenceInfo
+    var::String
+    axis::String
+    max_lag::Int
+    lag_proven::Bool
+    slices::Int
+    cells::Int
+end
+
+"""
     BuildInspection()
 
 Observability record for a build: pass one via [`esm_problem`](@ref)'s
@@ -54,6 +83,9 @@ are otherwise internal to the evaluator closure:
   Derived from what the build actually read, not from what the document
   declares — see [`parameter_classes`](@ref). This is the build-level face of the same
   partition `parameter_classes(prob)` exposes on an `EsmProblem`.
+* `recurrences::Vector{RecurrenceInfo}` — one [`RecurrenceInfo`](@ref) per
+  causal self-reference the build recognized (esm-spec §4.3.1.1): its axis,
+  derived maximum lag, whether the lag was proved, and the sweep's size.
 
 Filling the record never changes the build: the returned
 `(f!, u0, p, tspan, var_map)` is identical with or without `inspect`.
@@ -141,6 +173,11 @@ mutable struct BuildInspection
     # parameters' values `data` there (esm-spec §11.4.2). `nothing` when the
     # initial state does not depend on the start.
     ic_reseed::Any
+    # One entry per causal self-reference this build recognized (esm-spec
+    # §4.3.1.1), in name order: the interpretation its self-reads were given,
+    # reported rather than authored. The same four facts Rust's build
+    # inspection reports, plus the sweep's size.
+    recurrences::Vector{RecurrenceInfo}
 end
 BuildInspection() = BuildInspection(
     Dict{String, Array{Float64}}(),
@@ -154,7 +191,7 @@ BuildInspection() = BuildInspection(
     Dict{Tuple{Base.RefValue{Any}, String}, _ObservedMemo}(),
     ReentrantLock(), Ref{Any}(nothing),
     nothing, WeakKeyDict{Base.RefValue{Any}, Any}(),
-    Int[], nothing, nothing
+    Int[], nothing, nothing, RecurrenceInfo[]
 )
 
 """
@@ -4907,6 +4944,11 @@ function _build_compile_evaluator(
             for k in recur_pub
                 published[k] = mat_defs[k]
             end
+        end
+        empty!(inspect.recurrences)
+        for k in sort!(collect(recur_pub))
+            info = _recurrence_info(String(k), mat_defs[k])
+            info === nothing || push!(inspect.recurrences, info)
         end
         for (k, e) in published
             _is_hoisted_name(String(k)) || (inspect.observed_exprs[String(k)] = e)
