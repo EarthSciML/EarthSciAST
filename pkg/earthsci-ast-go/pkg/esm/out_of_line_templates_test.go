@@ -45,22 +45,6 @@ func oolLoad(t *testing.T, dir string, fixture ...string) map[string]any {
 	return view
 }
 
-// oolLoadErr loads a fixture under Option B, returning the error (for the
-// invalid fixtures).
-func oolLoadErr(dir string, fixture ...string) error {
-	fx := "fixture.esm"
-	if len(fixture) > 0 {
-		fx = fixture[0]
-	}
-	fp := oolConf(dir, fx)
-	data, err := os.ReadFile(fp)
-	if err != nil {
-		return err
-	}
-	_, err = loadOptionB(string(data), filepath.Dir(fp), nil)
-	return err
-}
-
 // oolEmit emits a fixture's reference-preserving canonical form.
 func oolEmit(t *testing.T, dir string, fixture ...string) string {
 	t.Helper()

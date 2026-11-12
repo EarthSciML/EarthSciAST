@@ -1,13 +1,14 @@
 {
   "esm": "1.3.0",
   "metadata": {
-    "name": "PairParamToVarSecondTargetWithoutRecordAxis",
-    "description": "Met.K (no shape, records_per_sample 2) is mapped by param_to_var onto Box.F_k [rec, x], which is fine, and onto Col.F_k [x, rec], whose first dimension has 4 members. Every target is a record shape and each must satisfy rule 3 (esm-spec 8.5.1)."
+    "name": "RecordAxisTargetsDisagree",
+    "description": "Met.K (no shape) is mapped by param_to_var onto Box.F_k [rec, x], whose first axis is a record axis, and onto Col.F_k [x], whose is not: one parameter cannot receive two records for one consumer and one for the other (esm-spec 8.5.1 rule 2, record_axis_misplaced)."
   },
   "index_sets": {
     "rec": {
       "kind": "interval",
-      "size": 2
+      "size": 2,
+      "records": true
     },
     "x": {
       "kind": "interval",
@@ -43,8 +44,7 @@
             "kind": "data",
             "source": "met_source",
             "from": {
-              "file_variable": "K",
-              "records_per_sample": 2
+              "file_variable": "K"
             }
           }
         }
@@ -111,8 +111,7 @@
           "type": "parameter",
           "units": "1/s",
           "shape": [
-            "x",
-            "rec"
+            "x"
           ],
           "default": 0.1,
           "description": "Replaced by Met.K."
@@ -137,7 +136,6 @@
                     "op": "index",
                     "args": [
                       "F_k",
-                      1,
                       1
                     ]
                   }

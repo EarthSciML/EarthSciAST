@@ -353,11 +353,22 @@ diagnostic_code_registry! {
     CIRCULAR_DEPENDENCY = "circular_dependency";
     /// A parameter `update` naming no declared data source.
     DATA_SOURCE_UNDEFINED = "data_source_undefined";
-    /// `from.records_per_sample` on a rule that is not `data`, or an
-    /// effective value of 2 on a source without `temporal` or on a parameter
-    /// whose record shape's first dimension is not an index set of exactly
-    /// two members (esm-spec §8.5.1).
+    /// The deprecated `from.records_per_sample` on a rule that is not
+    /// `data`, or a data-fed parameter's written `records_per_sample` (its
+    /// own, else its source's `temporal.records_per_sample`) that disagrees
+    /// with the number of records its record shape gives it (esm-spec §8.5.1).
     RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid";
+    /// An index set carrying `"records": true` whose `size` is not 2
+    /// (esm-spec §8.5.1).
+    RECORD_AXIS_INVALID = "record_axis_invalid";
+    /// A data-fed parameter's record shape names a record axis anywhere but
+    /// first, or its several record shapes disagree about beginning with one
+    /// (esm-spec §8.5.1).
+    RECORD_AXIS_MISPLACED = "record_axis_misplaced";
+    /// A data-fed parameter's record shape begins with a record axis while its
+    /// source declares no `temporal` block or no `temporal.start` (esm-spec
+    /// §8.5.1).
+    RECORD_AXIS_TIME_INVARIANT_SOURCE = "record_axis_time_invariant_source";
     /// A data-fed parameter (`update` of `kind: "data"`, esm-spec §5.4/§8.5)
     /// reached a build with NOTHING bound to it — no provider, no loaded
     /// array, no caller-supplied `p` value. Raised at CONSTRUCTION, before any
@@ -673,6 +684,9 @@ mod error_code_tests {
             "range_global_locality",
             "range_halo_insufficient",
             "range_selection_writes_incomplete",
+            "record_axis_invalid",
+            "record_axis_misplaced",
+            "record_axis_time_invariant_source",
             "records_per_sample_invalid",
             "recurrence_not_wellfounded",
             "recurrence_unsupported_form",

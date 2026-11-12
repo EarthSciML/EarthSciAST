@@ -94,10 +94,19 @@ class ErrorCode(Enum):
     # esm 1.0.0. A data source is not a component, so `update.source` is the only
     # way a document can name one -- and it MUST resolve.
     DATA_SOURCE_UNDEFINED = "data_source_undefined"
-    # esm-spec §8.5.1: `from.records_per_sample` on a non-`data` rule, or an
-    # effective 2 on a time-invariant source (no temporal start) or without a
-    # first dimension of two members.
+    # esm-spec §8.5.1: the deprecated `from.records_per_sample` on a non-`data`
+    # rule, or a written `records_per_sample` (the rule's own, else the
+    # source's) that disagrees with the count the record shape gives.
     RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid"
+    # esm-spec §8.5.1 rule 1: an index set with `"records": true` whose size is
+    # not 2.
+    RECORD_AXIS_INVALID = "record_axis_invalid"
+    # esm-spec §8.5.1 rule 2: a data-fed record shape naming a record axis
+    # anywhere but first, or record shapes that disagree about beginning with one.
+    RECORD_AXIS_MISPLACED = "record_axis_misplaced"
+    # esm-spec §8.5.1 rule 3: a record shape beginning with a record axis on a
+    # source with no temporal start (time-invariant, so no successor record).
+    RECORD_AXIS_TIME_INVARIANT_SOURCE = "record_axis_time_invariant_source"
     # A declared `system_kind` that contradicts the §6.3.1 derivation. The field
     # is optional and the derivation authoritative, so disagreement is always an
     # author error, never an override.
@@ -229,6 +238,11 @@ CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old"
 # dimension or scale mismatch the current neutral-literal rule does not. A
 # WARNING at this stage, emitted on ``unit_warnings`` by ``validation.py``.
 UNITS_DIMENSIONLESS_LITERAL_MISMATCH = "units_dimensionless_literal_mismatch"
+
+# The deprecated `from.records_per_sample` / `temporal.records_per_sample`
+# (esm-spec §8.3, §8.5.1) loaded: a WARNING, issued once per load as an
+# ``EsmDeprecationWarning`` by ``parse.py``, naming every site.
+DEPRECATED_RECORDS_PER_SAMPLE = "deprecated_records_per_sample"
 
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as

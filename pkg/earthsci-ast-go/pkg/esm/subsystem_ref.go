@@ -423,8 +423,15 @@ func inlineNestedTopLevelRefs(view map[string]any, basePath string, visited map[
 // IndexSet declarations are deep-equal iff they marshal to identical canonical
 // JSON (Go sorts object keys, and integer tokens — json.Number / int / float —
 // all render identically), so a redeclaration with the same kind/size/members/…
-// dedups while any field disagreement is a conflict.
+// dedups while any field disagreement is a conflict. `"records": false` and an
+// absent `records` are one declaration (esm-spec §8.5.1), so both are compared
+// as absent; `"records": true` against either is a conflict.
 func indexSetDeepEqual(a, b IndexSet) bool {
+	for _, s := range []*IndexSet{&a, &b} {
+		if s.Records != nil && !*s.Records {
+			s.Records = nil
+		}
+	}
 	ab, err1 := json.Marshal(a)
 	bb, err2 := json.Marshal(b)
 	return err1 == nil && err2 == nil && bytes.Equal(ab, bb)
@@ -453,6 +460,9 @@ func showIndexSet(s IndexSet) string {
 	}
 	if s.FromFAQ != nil {
 		parts = append(parts, fmt.Sprintf("from_faq=%s", *s.FromFAQ))
+	}
+	if s.Records != nil {
+		parts = append(parts, fmt.Sprintf("records=%t", *s.Records))
 	}
 	return strings.Join(parts, ", ")
 }

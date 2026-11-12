@@ -191,6 +191,21 @@ export function deepEqual(a: Json, b: Json): boolean {
 }
 
 /**
+ * Deep equality of two `index_sets` declarations for the §4.7 mount merge and
+ * the §9.7.5 template-import merge: {@link deepEqual}, with `"records": false`
+ * read as an absent `records` (esm-spec §8.5.1), so the two spellings are one
+ * declaration while `"records": true` against either is a conflict.
+ */
+export function indexSetDeclEqual(a: Json, b: Json): boolean {
+  const plain = (d: Json): Json => {
+    if (!isObject(d) || d.records !== false) return d
+    const { records: _records, ...rest } = d
+    return rest
+  }
+  return deepEqual(plain(a), plain(b))
+}
+
+/**
  * Attempt to structurally match `pattern` against `node`, treating any
  * bare string in `params` as a wildcard metavariable. On success the
  * `bindings` map is populated (param → bound sub-AST for operand/`args`

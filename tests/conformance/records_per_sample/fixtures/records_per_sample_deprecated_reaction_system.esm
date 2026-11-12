@@ -1,0 +1,91 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "RecordsPerSampleDeprecatedReactionSystem",
+    "description": "A reaction-system parameter shaped over a record axis first, with the deprecated records_per_sample 2 written on its rule and inherited from its source, both agreeing with the shape. The rule's site is a /reaction_systems/... pointer in the deprecated-site list (esm-spec 8.5.1)."
+  },
+  "index_sets": {
+    "rec": {
+      "kind": "interval",
+      "size": 2,
+      "records": true
+    },
+    "cells": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "data_sources": {
+    "Reanalysis": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/reanalysis_{date:%Y%m%d}.nc"
+      },
+      "temporal": {
+        "start": "2016-01-01T00:00:00Z",
+        "end": "2016-01-02T00:00:00Z",
+        "file_period": "P1D",
+        "frequency": "PT1H",
+        "records_per_file": 24,
+        "records_per_sample": 2
+      },
+      "metadata": {
+        "esio_format": "netcdf"
+      }
+    }
+  },
+  "reaction_systems": {
+    "Chem": {
+      "species": {
+        "A": {
+          "units": "mol/L",
+          "default": 1.0
+        },
+        "B": {
+          "units": "mol/L",
+          "default": 0.0
+        }
+      },
+      "parameters": {
+        "k": {
+          "units": "1/s",
+          "default": 0.1
+        },
+        "T": {
+          "units": "K",
+          "default": 298.0,
+          "shape": [
+            "rec",
+            "cells"
+          ],
+          "update": {
+            "kind": "data",
+            "source": "Reanalysis",
+            "from": {
+              "file_variable": "t2m",
+              "records_per_sample": 2
+            }
+          }
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "k"
+        }
+      ]
+    }
+  }
+}

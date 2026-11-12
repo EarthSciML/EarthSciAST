@@ -1349,7 +1349,7 @@ pub(crate) fn apply_mount_index_set_rename(
             // same two verdicts because the nested contribution arrives after
             // their rename and meets it in `merge_subsystem_index_sets`.
             if let Some(existing) = renamed.get(&final_name)
-                && existing != &decl
+                && !crate::ref_loading::index_set_decls_equal(existing, &decl)
             {
                 return Err(err(
                     codes::SUBSYSTEM_INDEX_SET_CONFLICT,
@@ -1862,8 +1862,14 @@ fn merge_named(
     if let Some(existing) = dst.get(name) {
         // Deep-equal redeclaration (a diamond import) dedups at first
         // occurrence; a non-equal collision is a conflict (esm-spec
-        // §9.7.4/§9.7.5).
-        if *existing == decl {
+        // §9.7.4/§9.7.5). An index set's `"records": false` is its absent
+        // `records` (esm-spec §8.5.1).
+        let same = if code == codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT {
+            crate::ref_loading::index_set_decls_equal(existing, &decl)
+        } else {
+            *existing == decl
+        };
+        if same {
             return Ok(());
         }
         return Err(err(

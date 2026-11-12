@@ -1681,6 +1681,7 @@ reading that as a gap.
 | `contribution` | type | `Contribution` | `Contribution` | `Contribution` | `Contribution` | `Contribution` |
 | `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` |
 | `dependency_edge` | type | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` |
+| `deprecated_records_per_sample_sites` | function | `deprecated_records_per_sample_sites` | `deprecatedRecordsPerSampleSites` | `deprecated_records_per_sample_sites` | `deprecated_records_per_sample_sites` | `DeprecatedRecordsPerSampleSites` |
 | `derive_odes` | function | `derive_odes` | `deriveODEs` / `deriveOdes` | `derive_odes` | `derive_odes` | `DeriveODEs` |
 | `discrete_parameters` | function | `discrete_parameters` | `discreteParameters` | `discrete_parameters` | `discrete_parameters` | `DiscreteParameters` |
 | `enum_lowering_error` | error | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` |

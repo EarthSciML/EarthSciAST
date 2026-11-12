@@ -1,13 +1,14 @@
 {
   "esm": "1.3.0",
   "metadata": {
-    "name": "RecordsPerSampleCouplingImport",
-    "description": "As records_per_sample_param_to_var, but the param_to_var edge arrives through a coupling_import, so validation cannot see the target and must not refuse Met.K's empty shape; flatten checks the expanded edge (esm-spec 8.5.1 'When rule 3 is checked')."
+    "name": "RecordAxisMisplacedParamToVar",
+    "description": "Met.K declares no shape and is mapped by param_to_var onto Box.F_k [x, rec], rec a record axis: its record shape names the record axis second (esm-spec 8.5.1 rule 2)."
   },
   "index_sets": {
     "rec": {
       "kind": "interval",
-      "size": 2
+      "size": 2,
+      "records": true
     },
     "x": {
       "kind": "interval",
@@ -43,8 +44,7 @@
             "kind": "data",
             "source": "met_source",
             "from": {
-              "file_variable": "K",
-              "records_per_sample": 2
+              "file_variable": "K"
             }
           }
         }
@@ -62,8 +62,8 @@
           "type": "parameter",
           "units": "1/s",
           "shape": [
-            "rec",
-            "x"
+            "x",
+            "rec"
           ],
           "default": 0.1,
           "description": "Replaced by Met.K."
@@ -103,12 +103,10 @@
   },
   "coupling": [
     {
-      "type": "coupling_import",
-      "ref": "./components/records_per_sample_library.esm",
-      "bind": {
-        "Data": "Met",
-        "Consumer": "Box"
-      }
+      "type": "variable_map",
+      "from": "Met.K",
+      "to": "Box.F_k",
+      "transform": "param_to_var"
     }
   ]
 }

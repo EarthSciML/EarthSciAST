@@ -69,8 +69,8 @@ from .error_handling import (
     FAQ_BARE_ARRAY_OPERAND,
     OBSERVED_CYCLE,
     RAGGED_VALUES_NOT_GATHERED,
+    ErrorCode,
 )
-from .esm_types import effective_records_per_sample
 from .index_alignment import (
     faq_bare_array_operand_message,
     faq_bare_array_operands,
@@ -2387,92 +2387,151 @@ def _check_data_source_references(data: dict[str, Any], errors: list[str]) -> No
                 )
 
 
-def record_shape_holds_a_pair(index_sets: dict[str, Any], shape: Any) -> bool:
-    """True iff ``shape`` can carry two records (esm-spec §8.5.1 rule 3): it is
-    not empty and its first entry names an ``interval`` of size 2 or a
-    ``categorical`` of two members. Shared by structural validation and by the
-    ``flatten`` re-check after ``coupling_import`` expansion."""
-    if not shape:
-        return False
-    return _index_set_has_two_members(index_sets, shape[0])
+def is_record_axis(index_sets: Any, name: Any) -> bool | None:
+    """Whether index set ``name`` is a record axis (esm-spec §8.5.1): an
+    ``interval`` carrying ``"records": true``. None when ``index_sets`` does
+    not declare ``name``. Apart from saying how many records a data-fed
+    parameter receives, a record axis is an ordinary interval of size 2."""
+    if not isinstance(index_sets, dict) or not isinstance(name, str) or name not in index_sets:
+        return None
+    iset = index_sets[name]
+    return _field(iset, "kind") == "interval" and _field(iset, "records") is True
 
 
-def records_per_sample_shape_message(vname: str, shape: Any) -> str:
-    """The ``records_per_sample_invalid`` message for a record shape that cannot
-    carry two records (esm-spec §8.5.1 rule 3)."""
-    return (
-        f"Parameter '{vname}' asks for two records per sample, so its first dimension "
-        f"must be an index set of exactly two members; its record shape is {list(shape)}"
-    )
+def judge_record_shapes(
+    index_sets: Any, shapes: list[list[Any]], *, undeclared_is_plain: bool
+) -> tuple[bool, int | None]:
+    """``(misplaced, count)`` for a data-fed parameter's record shapes
+    (esm-spec §8.5.1).
+
+    ``misplaced`` is rule 2: some record shape names a record axis at a
+    position other than the first, or the decidable shapes disagree about
+    beginning with one. ``count`` is the number of records the parameter
+    receives, 2 when every decidable record shape begins with a record axis and
+    1 when none does; None when no shape is decidable or one is misplaced. A
+    shape whose first entry names an index set ``index_sets`` does not declare
+    is not decidable while ``undeclared_is_plain`` is False (validation ahead of
+    a mount, which may declare it); it is skipped and the others are judged.
+    Shared by structural validation, ``flatten`` and ``providers_from_document``.
+    """
+    firsts: list[bool | None] = []
+    for shape in shapes:
+        if any(is_record_axis(index_sets, name) for name in shape[1:]):
+            return True, None
+        if not shape:
+            firsts.append(False)
+            continue
+        first = is_record_axis(index_sets, shape[0])
+        if first is None and undeclared_is_plain:
+            first = False
+        firsts.append(first)
+    decided = {f for f in firsts if f is not None}
+    if len(decided) == 2:
+        return True, None
+    if not decided:
+        return False, None
+    return False, 2 if True in decided else 1
 
 
-def _records_per_sample_origin(binding: Any, source: Any) -> tuple[Any, str | None]:
-    """Where a data rule's EFFECTIVE ``records_per_sample`` comes from (esm-spec
-    §8.5.1): ``(value, "from")`` for the rule's ``from.records_per_sample``,
-    else ``(value, "temporal")`` for the source's
-    ``temporal.records_per_sample``, else ``(1, None)``. The value is returned
-    as written, unchecked: ``providers_from_document`` checks it strictly, while
-    validation and ``flatten`` read it through
-    :func:`~earthsci_ast.esm_types.effective_records_per_sample`.
+def written_records_per_sample(binding: Any, source: Any) -> tuple[Any, str | None]:
+    """The deprecated ``records_per_sample`` written for a data rule (esm-spec
+    §8.3, §8.5.1): ``(value, "from")`` for the rule's own
+    ``from.records_per_sample``, else ``(value, "temporal")`` for the source's
+    ``temporal.records_per_sample``, else ``(None, None)``. The value is
+    returned as written, unchecked; it no longer decides anything, it may only
+    restate the count the record shape gives.
 
-    ``binding`` and ``source`` are either raw JSON dicts or the typed
+    ``binding`` and ``source`` are raw JSON dicts or the typed
     :class:`~earthsci_ast.esm_types.DataSourceBinding` /
     :class:`~earthsci_ast.esm_types.DataSource`; ``source`` may be None.
     """
-
-    def get(obj: Any, key: str) -> Any:
-        if obj is None:
-            return None
-        if isinstance(obj, dict):
-            return obj.get(key)
-        return getattr(obj, key, None)
-
-    own = get(binding, "records_per_sample")
+    own = _field(binding, "records_per_sample")
     if own is not None:
         return own, "from"
-    inherited = get(get(source, "temporal"), "records_per_sample")
+    inherited = _field(_field(source, "temporal"), "records_per_sample")
     if inherited is not None:
         return inherited, "temporal"
-    return 1, None
+    return None, None
 
 
-def _index_set_has_two_members(index_sets: dict[str, Any], name: Any) -> bool:
-    """True iff index set ``name`` is an ``interval`` of size 2 or a
-    ``categorical`` of two members (esm-spec §8.5.1 rule 3)."""
-    iset = index_sets.get(name) if isinstance(name, str) else None
-    if not isinstance(iset, dict):
-        return False
-    kind = iset.get("kind")
-    if kind == "interval":
-        size = iset.get("size")
-        return isinstance(size, int) and not isinstance(size, bool) and size == 2
-    if kind == "categorical":
-        members = iset.get("members")
-        return isinstance(members, list) and len(members) == 2
-    return False
+def record_shape_findings(
+    vname: str,
+    source_name: Any,
+    source: Any,
+    shapes: list[list[Any]],
+    misplaced: bool,
+    count: int | None,
+    written: Any,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    """The ``(code, message, details)`` findings of esm-spec §8.5.1 rules 2, 3
+    and the ``records_per_sample`` agreement rule for one data rule, given the
+    :func:`judge_record_shapes` verdict on its record shapes and the deprecated
+    value :func:`written_records_per_sample` found (None: not written). Shared
+    by structural validation and the ``flatten`` re-check, so both speak with
+    one voice."""
+    if misplaced:
+        return [
+            (
+                ErrorCode.RECORD_AXIS_MISPLACED.value,
+                f"Parameter '{vname}' has record shape(s) {shapes} that name a record "
+                f'axis (an interval index set with "records": true) somewhere but '
+                f"first, or disagree about beginning with one",
+                {"variable": vname, "shapes": shapes},
+            )
+        ]
+    out: list[tuple[str, str, dict[str, Any]]] = []
+    if count == 2:
+        temporal = _field(source, "temporal")
+        if temporal is None or not _field(temporal, "start"):
+            out.append(
+                (
+                    ErrorCode.RECORD_AXIS_TIME_INVARIANT_SOURCE.value,
+                    f"Parameter '{vname}' receives two records (its record shape begins "
+                    f"with a record axis) from data source '{source_name}', which is "
+                    f"time-invariant (it declares no temporal start) and so has no "
+                    f"successor record",
+                    {"variable": vname, "source": source_name},
+                )
+            )
+    if written is not None and count is not None and written != count:
+        out.append(
+            (
+                ErrorCode.RECORDS_PER_SAMPLE_INVALID.value,
+                f"Parameter '{vname}' has records_per_sample {written} written, but its "
+                f"record shape(s) {shapes} give {count} record(s) per sample: two exactly "
+                f'when the first axis is an interval index set with "records": true',
+                {"variable": vname, "written": written, "records": count, "shapes": shapes},
+            )
+        )
+    return out
 
 
 def _declared_variable(data: dict[str, Any], scoped: Any) -> dict[str, Any] | None:
-    """The raw declaration of a scoped variable ``Model[.Sub…].var``, or None
-    when the loaded document cannot reach it: not declared, or behind a
-    ``{"ref"}`` mount that structural validation runs ahead of."""
+    """The raw declaration of a scoped variable ``Model[.Sub…].var`` (or a
+    reaction-system parameter ``System[.Sub…].param``), or None when the loaded
+    document cannot reach it: not declared, or behind a ``{"ref"}`` mount that
+    structural validation runs ahead of."""
     if not isinstance(scoped, str) or "." not in scoped:
         return None
     *path, vname = scoped.split(".")
-    node: Any = (data.get("models") or {}).get(path[0])
+    models = data.get("models") or {}
+    in_models = isinstance(models, dict) and path[0] in models
+    node: Any = (
+        models.get(path[0]) if in_models else (data.get("reaction_systems") or {}).get(path[0])
+    )
     for seg in path[1:]:
         if not isinstance(node, dict):
             return None
         node = (node.get("subsystems") or {}).get(seg)
     if not isinstance(node, dict):
         return None
-    var = (node.get("variables") or {}).get(vname)
+    var = (node.get("variables" if in_models else "parameters") or {}).get(vname)
     return var if isinstance(var, dict) else None
 
 
 def _has_unmounted_refs(data: dict[str, Any]) -> bool:
-    """True when a model or a subsystem at any depth is still a ``{"ref"}``
-    mount edge, as it is when structural validation runs ahead of mounting."""
+    """True when a model, a reaction system, or a subsystem of either at any
+    depth is still a ``{"ref"}`` mount edge, as it is when structural validation runs ahead of mounting."""
 
     def pending(comp: Any) -> bool:
         if not isinstance(comp, dict):
@@ -2481,34 +2540,16 @@ def _has_unmounted_refs(data: dict[str, Any]) -> bool:
             return True
         return any(pending(sub) for sub in (comp.get("subsystems") or {}).values())
 
-    return any(pending(m) for m in (data.get("models") or {}).values())
+    return any(pending(m) for m in (data.get("models") or {}).values()) or any(
+        pending(rs) for rs in (data.get("reaction_systems") or {}).values()
+    )
 
 
-def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
-    """``records_per_sample_invalid`` (esm-spec §8.5.1): ``from.records_per_sample``
-    on a rule that is not ``data``; or an effective value of 2 on a parameter
-    whose source declares no ``temporal`` block or a ``temporal`` with no
-    ``start`` (a time-invariant source), or whose record shape's first
-    dimension is not an index set of exactly two members.
-
-    The record shape is the declared ``shape`` when there is one (``[]``
-    included); when ``shape`` is absent, the
-    declared ``shape`` of EVERY inline ``param_to_var`` target of the parameter,
-    one finding per rule at the first that fails. A target this validation
-    cannot reach (behind a ref not yet mounted, or not declared) is not
-    decidable and is skipped, never read as empty. An empty record shape is
-    refused here only when nothing can supply one later: no inline
-    ``param_to_var`` entry names the parameter and the coupling holds no
-    ``coupling_import``. While a ref is unmounted, a record shape whose first
-    dimension names an index set the document does not declare is not
-    decidable either. ``flatten`` re-checks the rest after expansion."""
-    sources = data.get("data_sources") or {}
-    if not isinstance(sources, dict):
-        sources = {}
-    index_sets = data.get("index_sets") or {}
-    if not isinstance(index_sets, dict):
-        index_sets = {}
-    p2v_targets: dict[str, list[Any]] = {}
+def inline_param_to_var_targets(data: dict[str, Any]) -> tuple[dict[str, list[Any]], bool]:
+    """``({from: [to, ...]}, has_coupling_import)`` over the document's inline
+    ``coupling``: the ``param_to_var`` targets each parameter is the ``from``
+    of, and whether a ``coupling_import`` may bring more at ``flatten``."""
+    targets: dict[str, list[Any]] = {}
     has_coupling_import = False
     for entry in data.get("coupling") or []:
         if not isinstance(entry, dict):
@@ -2520,41 +2561,99 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
             and entry.get("transform") == "param_to_var"
             and isinstance(entry.get("from"), str)
         ):
-            p2v_targets.setdefault(entry["from"], []).append(entry.get("to"))
+            targets.setdefault(entry["from"], []).append(entry.get("to"))
+    return targets, has_coupling_import
 
+
+def raw_record_shapes(
+    data: dict[str, Any],
+    vdef: dict[str, Any],
+    scoped: str,
+    p2v_targets: dict[str, list[Any]],
+    has_coupling_import: bool,
+) -> tuple[list[list[Any]], bool]:
+    """``(shapes, complete)``: the record shapes of a data-fed parameter that a
+    raw document shows (esm-spec §8.5.1). Its declared ``shape`` when it has
+    one (``[]`` included: a scalar buffer); else the declared ``shape`` of each
+    inline ``param_to_var`` target that resolves; with no such entry, the empty
+    record shape, unless a ``coupling_import`` may supply one. ``complete`` is
+    False when some record shape could not be seen (an unresolvable target, or
+    a pending ``coupling_import``); the shapes that could be seen are still
+    judged (esm-spec §8.5.1: an unreachable target is skipped)."""
+    shape = vdef.get("shape")
+    if shape is not None:
+        return [list(shape) if isinstance(shape, list) else []], True
+    targets = p2v_targets.get(scoped, [])
+    if not targets:
+        return ([], False) if has_coupling_import else ([[]], True)
+    shapes: list[list[Any]] = []
+    complete = True
+    for to in targets:
+        target = _declared_variable(data, to)
+        if target is None:
+            complete = False
+            continue
+        tshape = target.get("shape")
+        shapes.append(list(tshape) if isinstance(tshape, list) else [])
+    return shapes, complete
+
+
+def _check_record_axis_index_sets(data: dict[str, Any], errors: list) -> None:
+    """``record_axis_invalid`` (esm-spec §8.5.1 rule 1): an index set carrying
+    ``"records": true`` whose size, after metaparameter folding, is not 2. A
+    still-symbolic size is skipped. (The schema refuses the flag on anything
+    but an ``interval``.)"""
+    index_sets = data.get("index_sets") or {}
+    if not isinstance(index_sets, dict):
+        return
+    for name, iset in index_sets.items():
+        if not isinstance(iset, dict) or iset.get("records") is not True:
+            continue
+        size = iset.get("size")
+        if not isinstance(size, int) or isinstance(size, bool) or size == 2:
+            continue
+        errors.append(
+            (
+                f"/index_sets/{name}",
+                f"Index set '{name}' is a record axis (\"records\": true), so its size "
+                f"must be 2; it is {size}",
+                {"index_set": name, "size": size},
+            )
+        )
+
+
+def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
+    """The per-rule record-axis findings of esm-spec §8.5.1, each under its own
+    code at the rule's pointer: ``record_axis_misplaced`` (rule 2),
+    ``record_axis_time_invariant_source`` (rule 3), and
+    ``records_per_sample_invalid`` for the deprecated ``from.records_per_sample``
+    on a rule that is not ``data``, or a written value (own, else the
+    source's) that disagrees with the count the record shape gives.
+
+    Covers the data-fed parameters of models and of reaction systems, at every
+    subsystem depth. Checked against every record shape validation can see
+    (:func:`raw_record_shapes`). A target this validation cannot reach (behind
+    a ref not yet mounted, or not declared) is skipped, never read as empty,
+    and the reachable targets are judged; a missing inline ``param_to_var``
+    entry while the coupling holds a ``coupling_import`` leaves the count
+    undecided. While a ref is unmounted, a record shape whose first entry names
+    an index set the document does not declare is skipped too. ``flatten``
+    re-checks the rest after expansion
+    (:func:`earthsci_ast.flatten._check_record_shapes`)."""
+    sources = data.get("data_sources") or {}
+    if not isinstance(sources, dict):
+        sources = {}
+    index_sets = data.get("index_sets") or {}
+    if not isinstance(index_sets, dict):
+        index_sets = {}
+    p2v_targets, has_coupling_import = inline_param_to_var_targets(data)
     # A mounted file may declare index sets of its own, which reach the
     # document only when the mount resolves. Until then a first dimension
     # naming a set the root does not declare is not decidable.
     refs_pending = _has_unmounted_refs(data)
 
-    def fails(shape: list[Any]) -> bool:
-        if refs_pending and shape and shape[0] not in index_sets:
-            return False
-        return not record_shape_holds_a_pair(index_sets, shape)
-
-    def failing_record_shape(vdef: dict[str, Any], scoped: str) -> list[Any] | None:
-        """The first record shape that cannot carry two records, or None when
-        every shape validation can decide holds a pair."""
-        shape = vdef.get("shape")
-        if shape is not None:
-            # A declared shape is the record shape, `[]` included: it declares
-            # a scalar buffer. Only an ABSENT shape takes its targets'.
-            shape = list(shape) if isinstance(shape, list) else []
-            return shape if fails(shape) else None
-        targets = p2v_targets.get(scoped, [])
-        if not targets:
-            return None if has_coupling_import else []
-        for to in targets:
-            target = _declared_variable(data, to)
-            if target is None:
-                continue
-            tshape = target.get("shape") or []
-            if fails(tshape):
-                return list(tshape)
-        return None
-
-    def walk(comp: dict[str, Any], scope: str, pointer: str) -> None:
-        for vname, vdef in (comp.get("variables") or {}).items():
+    def walk(comp: dict[str, Any], scope: str, pointer: str, decls: str) -> None:
+        for vname, vdef in (comp.get(decls) or {}).items():
             if not isinstance(vdef, dict):
                 continue
             for suffix, rule in _update_rules_with_paths(vdef.get("update")):
@@ -2563,9 +2662,7 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
                 binding = rule.get("from")
                 if not isinstance(binding, dict):
                     continue
-                at = (
-                    f"{pointer}/variables/{vname}/update{suffix.replace('[', '/').replace(']', '')}"
-                )
+                at = f"{pointer}/{decls}/{vname}/update{suffix.replace('[', '/').replace(']', '')}"
                 if rule.get("kind") != "data":
                     if "records_per_sample" in binding:
                         errors.append(
@@ -2581,36 +2678,27 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
                 source = sources.get(rule.get("source"))
                 if not isinstance(source, dict):
                     continue  # data_source_undefined reports it
-                if effective_records_per_sample(binding, source) != 2:
-                    continue
-                temporal = source.get("temporal")
-                if not isinstance(temporal, dict) or not temporal.get("start"):
-                    errors.append(
-                        (
-                            at,
-                            f"Parameter '{vname}' asks for two records per sample from "
-                            f"data source '{rule.get('source')}', which is time-invariant "
-                            f"(it declares no temporal start) and so has no successor record",
-                            {"variable": vname, "source": rule.get("source")},
-                        )
-                    )
-                    continue
-                shape = failing_record_shape(vdef, f"{scope}.{vname}")
-                if shape is not None:
-                    errors.append(
-                        (
-                            at,
-                            records_per_sample_shape_message(vname, shape),
-                            {"variable": vname, "shape": shape},
-                        )
-                    )
+                shapes, _complete = raw_record_shapes(
+                    data, vdef, f"{scope}.{vname}", p2v_targets, has_coupling_import
+                )
+                misplaced, count = judge_record_shapes(
+                    index_sets, shapes, undeclared_is_plain=not refs_pending
+                )
+                written, _where = written_records_per_sample(binding, source)
+                for code, message, details in record_shape_findings(
+                    vname, rule.get("source"), source, shapes, misplaced, count, written
+                ):
+                    errors.append((code, at, message, details))
         for sname, sub in (comp.get("subsystems") or {}).items():
             if isinstance(sub, dict):
-                walk(sub, f"{scope}.{sname}", f"{pointer}/subsystems/{sname}")
+                walk(sub, f"{scope}.{sname}", f"{pointer}/subsystems/{sname}", decls)
 
     for mname, m in (data.get("models") or {}).items():
         if isinstance(m, dict):
-            walk(m, mname, f"/models/{mname}")
+            walk(m, mname, f"/models/{mname}", "variables")
+    for rname, rs in (data.get("reaction_systems") or {}).items():
+        if isinstance(rs, dict):
+            walk(rs, rname, f"/reaction_systems/{rname}", "parameters")
 
 
 def _check_system_kind(data: dict[str, Any], errors: list[str]) -> None:
@@ -3349,6 +3437,10 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect("undefined_system", lambda sub: _check_coupling_systems(data, tables, sub))
     collect(CIRCULAR_DEPENDENCY, lambda sub: _check_circular_references(data, sub))
     collect("data_source_undefined", lambda sub: _check_data_source_references(data, sub))
+    # esm-spec §8.5.1 record axes. The per-rule pass names each finding's own
+    # code (record_axis_misplaced, record_axis_time_invariant_source, or
+    # records_per_sample_invalid).
+    collect("record_axis_invalid", lambda sub: _check_record_axis_index_sets(data, sub))
     collect("records_per_sample_invalid", lambda sub: _check_records_per_sample(data, sub))
     collect("event_affects_parameter", lambda sub: _check_event_affects_parameter(data, sub))
     # esm-spec §6.3.1: an equation never defines a parameter, and an index symbol

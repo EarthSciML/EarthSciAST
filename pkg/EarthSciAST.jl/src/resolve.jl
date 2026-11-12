@@ -280,6 +280,11 @@ function _load_document(
     # document with no location of its own leaves `flatten`'s `base_path` in
     # charge, as it does in the other four bindings.
     record_import_base && _record_coupling_import_base!(file, base_path)
+    # esm-spec §8.5.1: the deprecated `records_per_sample`, ONE warning per load.
+    # Here, on the mounted document, because only the public entry points reach
+    # `_load_document`; a ref-mounted child loads through `_load_parsed` and so
+    # never warns a second time.
+    _warn_deprecated_records_per_sample(file)
     return file
 end
 
@@ -907,7 +912,7 @@ function _merge_native_index_sets!(
     registry isa AbstractDict || return native
     for (n, decl) in loaded
         if haskey(registry, n)
-            registry[n] == decl || throw(
+            _index_set_raw_equal(registry[n], decl) || throw(
                 ExpressionTemplateError(
                     ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
                     "index set '$(n)' from subsystem ref '$(ref)' " *
@@ -2142,7 +2147,8 @@ _index_set_deep_equal(a::IndexSet, b::IndexSet) =
     a.kind == b.kind && a.size == b.size && a.members == b.members &&
     a.of == b.of && a.offsets == b.offsets && a.values == b.values &&
     a.from_faq == b.from_faq && a.members_raw == b.members_raw &&
-    a.member_factor == b.member_factor
+    a.member_factor == b.member_factor &&
+    something(a.records, false) == something(b.records, false)
 
 # One-line display of an IndexSet for the conflict diagnostic.
 # The `subsystem_index_set_conflict` message for a mounted document's axis `n`,
@@ -2170,7 +2176,8 @@ _index_set_show(s::IndexSet) =
     "kind=$(s.kind)" * (s.size === nothing ? "" : ", size=$(s.size)") *
     (s.members === nothing ? "" : ", members=$(s.members)") *
     (s.of === nothing ? "" : ", of=$(s.of)") *
-    (s.from_faq === nothing ? "" : ", from_faq=$(s.from_faq)")
+    (s.from_faq === nothing ? "" : ", from_faq=$(s.from_faq)") *
+    (something(s.records, false) ? ", records=true" : "")
 
 """
     _merge_subsystem_index_sets!(registry, loaded, ref)

@@ -1,13 +1,14 @@
 {
   "esm": "1.3.0",
   "metadata": {
-    "name": "RecordsPerSample",
-    "description": "Every way a data-fed parameter's records_per_sample is set (esm-spec 8.5.1): on `from`, inherited from the source's `temporal.records_per_sample`, overridden back to 1, absent everywhere (1), and on a static source at 1. The record axis is the first declared dimension, an interval of size 2 or a categorical of two members."
+    "name": "RecordsPerSampleDeprecated",
+    "description": "The deprecated records_per_sample fields (esm-spec 8.5.1), written so that each agrees with the parameter's record shape: from 2 on a parameter shaped over the record axis rec first, the source default 2 inherited by one, overridden back to 1 on a parameter with no record axis, 1 on a parameter whose first axis is a categorical of two members (not a record axis), and 1 on a static source. The document loads with one deprecated_records_per_sample warning naming every place the field is written, and each loader_fields entry reports the count the shape gives."
   },
   "index_sets": {
     "rec": {
       "kind": "interval",
-      "size": 2
+      "size": 2,
+      "records": true
     },
     "x": {
       "kind": "interval",
@@ -94,7 +95,7 @@
               "records_per_sample": 2
             }
           },
-          "description": "from.records_per_sample 2: the records at or before t and after it, along rec."
+          "description": "from.records_per_sample 2 on a parameter shaped [rec, x], rec a record axis: agrees."
         },
         "F_one": {
           "type": "parameter",
@@ -125,10 +126,10 @@
             "source": "Met",
             "from": {
               "file_variable": "U10M",
-              "records_per_sample": 2
+              "records_per_sample": 1
             }
           },
-          "description": "2 with a categorical record axis of two members."
+          "description": "1 on a categorical first axis of two members, which is not a record axis."
         },
         "F_inherit": {
           "type": "parameter",
@@ -145,7 +146,7 @@
               "file_variable": "V10M"
             }
           },
-          "description": "Inherits 2 from the source's temporal.records_per_sample."
+          "description": "Inherits the source's temporal.records_per_sample 2; shaped [rec, x]: agrees."
         },
         "F_override": {
           "type": "parameter",
@@ -162,7 +163,7 @@
               "records_per_sample": 1
             }
           },
-          "description": "Overrides the source's 2 with 1."
+          "description": "Overrides the source's 2 with 1; shaped [x]: agrees."
         },
         "K_static": {
           "type": "parameter",

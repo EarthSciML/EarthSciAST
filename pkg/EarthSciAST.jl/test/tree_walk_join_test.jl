@@ -379,7 +379,12 @@ const ESMJ = EarthSciAST
 
     @testset "canonical join_filter.esm fixture (ESI MOVES contraction) evaluates" begin
         path = joinpath(@__DIR__, "..", "..", "..", "tests", "valid", "faq", "join_filter.esm")
-        doc = JSON3.read(read(path, String))
+        doc = JSON3.read(read(path, String), Dict{String, Any})
+        # The fixture's parameters declare no shape; only `esm_problem` adopts
+        # one from data (esm-spec §4.3.4), so declare it for this direct build.
+        for name in ("activity", "base_rate")
+            doc["models"]["EmissionsAggregate"]["variables"][name]["shape"] = ["sourceType"]
+        end
         f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
             doc; model_name = "EmissionsAggregate",
             const_arrays = Dict("activity" => [10.0, 20.0], "base_rate" => [3.0, 5.0])

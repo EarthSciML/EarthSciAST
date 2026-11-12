@@ -805,6 +805,7 @@ mod tests {
         IndexSet {
             kind: "interval".into(),
             size: Some(size),
+            records: None,
             members: None,
             from_faq: None,
             member_factor: None,
@@ -818,6 +819,7 @@ mod tests {
         IndexSet {
             kind: "ragged".into(),
             size: None,
+            records: None,
             members: None,
             from_faq: None,
             member_factor: None,
@@ -1137,6 +1139,7 @@ mod tests {
             IndexSet {
                 kind: "categorical".into(),
                 size: None,
+                records: None,
                 members: Some(vec![
                     serde_json::json!("Champaign"),
                     serde_json::json!("Cook"),
@@ -1236,6 +1239,7 @@ mod tests {
             IndexSet {
                 kind: "derived".into(),
                 size: None,
+                records: None,
                 members: None,
                 from_faq: Some("producer".into()),
                 member_factor: None,
@@ -1270,6 +1274,7 @@ mod tests {
             IndexSet {
                 kind: "derived".into(),
                 size: None,
+                records: None,
                 members: None,
                 from_faq: Some("emis_src_cells_faq".into()),
                 member_factor: None,
@@ -1313,6 +1318,7 @@ mod tests {
             IndexSet {
                 kind: "derived".into(),
                 size: None,
+                records: None,
                 members: None,
                 from_faq: None,
                 member_factor: None,

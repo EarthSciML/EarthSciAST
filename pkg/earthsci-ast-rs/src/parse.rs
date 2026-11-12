@@ -421,6 +421,14 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // absolute now, so a later change of working directory cannot move it.
     esm_file.document_base = crate::solver::absolute_directory(&base);
 
+    // esm-spec §8.5.1: the deprecated `records_per_sample` still loads, with
+    // ONE warning per load naming every place it is written. Here, after refs
+    // are mounted, so a mounted component's sites are named by this load and
+    // no nested load warns again.
+    if let Some(warning) = crate::structural::deprecated_records_per_sample_warning(&esm_file) {
+        eprintln!("warning: {warning}");
+    }
+
     Ok(esm_file)
 }
 

@@ -38,7 +38,11 @@ func mergeNamed(dst *orderedMap, name string, decl any, code, what, origin strin
 	if dst.has(name) {
 		// Deep-equal redeclaration (a diamond import) dedups at first
 		// occurrence; a non-equal collision is a conflict (§9.7.4/§9.7.5).
-		if jsonEqual(dst.get(name), decl) {
+		same := jsonEqual(dst.get(name), decl)
+		if code == CodeTemplateImportIndexSetConflict {
+			same = rawIndexSetEqual(dst.get(name), decl)
+		}
+		if same {
 			return nil
 		}
 		return newETErr(code,
@@ -46,6 +50,29 @@ func mergeNamed(dst *orderedMap, name string, decl any, code, what, origin strin
 	}
 	dst.set(name, decl)
 	return nil
+}
+
+// rawIndexSetEqual is mergeNamed's deep equality for two raw index-set
+// declarations: jsonEqual, except that `"records": false` and an absent
+// `records` are one declaration (esm-spec §8.5.1).
+func rawIndexSetEqual(a, b any) bool {
+	strip := func(v any) any {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return v
+		}
+		if r, ok := m["records"].(bool); !ok || r {
+			return v
+		}
+		out := make(map[string]any, len(m))
+		for k, x := range m {
+			if k != "records" {
+				out[k] = x
+			}
+		}
+		return out
+	}
+	return jsonEqual(strip(a), strip(b))
 }
 
 func mergeScope(dst, src *templateScope, origin string) error {
@@ -57,7 +84,7 @@ func mergeScope(dst, src *templateScope, origin string) error {
 	}
 	for _, n := range src.indexSets.keys {
 		if err := mergeNamed(dst.indexSets, n, src.indexSets.get(n),
-			"template_import_index_set_conflict", "index set", origin); err != nil {
+			CodeTemplateImportIndexSetConflict, "index set", origin); err != nil {
 			return err
 		}
 	}
@@ -122,7 +149,7 @@ func mergeOwnTemplates(scope *templateScope, tpl map[string]any, order []string,
 func mergeScopeExports(docIsets, docMeta *orderedMap, scope *templateScope, origin string) error {
 	for _, n := range scope.indexSets.keys {
 		if err := mergeNamed(docIsets, n, scope.indexSets.get(n),
-			"template_import_index_set_conflict", "index set", origin); err != nil {
+			CodeTemplateImportIndexSetConflict, "index set", origin); err != nil {
 			return err
 		}
 	}
@@ -426,7 +453,7 @@ func processLibrary(view map[string]any, fileOrders map[string][]string,
 	if isets, ok := view["index_sets"].(map[string]any); ok {
 		for _, n := range orderedKeysOf(isets, fileOrders["/index_sets"]) {
 			if err := mergeNamed(scope.indexSets, n, isets[n],
-				"template_import_index_set_conflict", "index set", origin); err != nil {
+				CodeTemplateImportIndexSetConflict, "index set", origin); err != nil {
 				return nil, err
 			}
 		}

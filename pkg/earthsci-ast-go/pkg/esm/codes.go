@@ -355,11 +355,23 @@ const (
 	// ErrorDataSourceUndefined is raised when a parameter's `update.source` names
 	// no declared `data_sources` entry (esm-spec §8.5).
 	ErrorDataSourceUndefined = "data_source_undefined"
-	// ErrorRecordsPerSampleInvalid is raised for `from.records_per_sample` on a
-	// rule that is not `data`, or an effective value of 2 on a source with no
-	// `temporal` block or on a parameter whose record shape's first dimension
-	// is not an index set of exactly two members (esm-spec 8.5.1).
+	// ErrorRecordsPerSampleInvalid is raised for the deprecated
+	// `from.records_per_sample` on a rule that is not `data`, or for a written
+	// `records_per_sample` (the rule's own, else the source's
+	// `temporal.records_per_sample`) that disagrees with the number of records
+	// the parameter's record shape gives it (esm-spec 8.5.1).
 	ErrorRecordsPerSampleInvalid = "records_per_sample_invalid"
+	// ErrorRecordAxisInvalid is raised for an index set carrying
+	// `"records": true` whose size is not 2 (esm-spec 8.5.1 rule 1).
+	ErrorRecordAxisInvalid = "record_axis_invalid"
+	// ErrorRecordAxisMisplaced is raised when a data-fed parameter's record
+	// shape names a record axis anywhere but first, or its several record
+	// shapes disagree about beginning with one (esm-spec 8.5.1 rule 2).
+	ErrorRecordAxisMisplaced = "record_axis_misplaced"
+	// ErrorRecordAxisTimeInvariantSource is raised when a data-fed parameter's
+	// record shape begins with a record axis while its source declares no
+	// `temporal` block or no `temporal.start` (esm-spec 8.5.1 rule 3).
+	ErrorRecordAxisTimeInvariantSource = "record_axis_time_invariant_source"
 	// ErrorSystemKindMismatch is raised when a model's declared `system_kind`
 	// contradicts the esm-spec §6.3.1 derivation.
 	ErrorSystemKindMismatch = "system_kind_mismatch"
@@ -450,6 +462,13 @@ const (
 	// mounted document's data sources"). Unexported for the same reason as the
 	// two codes above.
 	codeDataSourceMergeConflict = "data_source_merge_conflict"
+
+	// codeDeprecatedRecordsPerSample is the load-time WARNING (not an error)
+	// for a document that writes the deprecated `from.records_per_sample` or
+	// `temporal.records_per_sample` (esm-spec §8.3, §8.5.1; removed at esm
+	// 3.0.0). Unexported for the same reason as the codes above: it only ever
+	// appears in the text of the stderr warning.
+	codeDeprecatedRecordsPerSample = "deprecated_records_per_sample"
 )
 
 // --- Diagnostic codes: §9.3 enum lowering (raised via newEnumLoweringError
