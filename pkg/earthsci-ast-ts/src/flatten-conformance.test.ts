@@ -208,10 +208,10 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // (esm-libraries-spec §4.7.1 step 4, §4.7.5 step 4 "Ordering"), plus the
     // `ifelse_mixed_whole_dynamic` case (tier `unshaped_mixed_ifelse`) — an
     // observed declared without a shape and defined by an `ifelse` over an
-    // array keeps no shape (esm-libraries-spec §4.7.5), plus the two
+    // array keeps no shape (esm-libraries-spec §4.7.5), plus the three
     // `variable_bounds` cases — bounds carried and rewritten by the equations'
     // renaming (esm-libraries-spec §4.7.5, "Bounds follow the renaming").
-    expect(corpus.cases.length).toBe(58)
+    expect(corpus.cases.length).toBe(59)
     // 9 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere,

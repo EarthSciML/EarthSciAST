@@ -88,7 +88,14 @@ export function rejectVariableBoundsPreV21(view: unknown): void {
  * the gate would refuse a document nobody mis-authored.
  */
 export function raiseVariableBoundsVersionFloor(doc: unknown): void {
-  if (!isObject(doc) || !declaredBelowV21(doc)) return
-  if (firstBound(doc) === null) return
-  doc.esm = '2.1.0'
+  if (needsVariableBoundsVersionFloor(doc)) (doc as Record<string, unknown>).esm = '2.1.0'
+}
+
+/**
+ * Whether `doc` carries a variable bound under a declared `esm` below 2.1.0, so
+ * an emitter must raise the version to 2.1.0 for the document to read back.
+ * Reads the declared version before walking the models.
+ */
+export function needsVariableBoundsVersionFloor(doc: unknown): boolean {
+  return isObject(doc) && declaredBelowV21(doc) && firstBound(doc) !== null
 }

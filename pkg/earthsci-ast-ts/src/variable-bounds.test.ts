@@ -12,7 +12,7 @@ import { loadString } from './parse.js'
 import { resolveSubsystemRefsSync } from './ref-loading.js'
 import { toJson } from './serialize.js'
 import { errCode, readFixture } from './test-helpers.js'
-import type { EsmFile } from './types.js'
+import type { EsmFile, Model } from './types.js'
 import { validate, validateText } from './validate.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 
@@ -22,6 +22,7 @@ interface PinnedError {
   path: string
   code: string
   details: Record<string, unknown>
+  message: string
 }
 const expectedErrors = JSON.parse(readFixture('invalid', 'expected_errors.json')) as Record<
   string,
@@ -86,18 +87,25 @@ describe('the shared invalid fixtures', () => {
     'variable_bound_unresolved.esm',
     'variable_bound_shape_mismatch.esm',
     'variable_bound_shape_mismatch_axes.esm',
+    'variable_bound_shape_mismatch_nested_reaction.esm',
     'variable_bound_circular_self.esm',
     'variable_bound_circular_observed.esm',
     'variable_bounds_inverted.esm',
   ])('%s reports exactly the pinned finding', (file) => {
     const result = validateText(readFixture('invalid', file))
     expect(result.schema_errors).toEqual([])
-    const got = result.structural_errors.map(({ path, code, details }) => ({ path, code, details }))
+    const got = result.structural_errors.map(({ path, code, details, message }) => ({
+      path,
+      code,
+      details,
+      message,
+    }))
     expect(got).toEqual(
-      expectedErrors[file].structural_errors.map(({ path, code, details }) => ({
+      expectedErrors[file].structural_errors.map(({ path, code, details, message }) => ({
         path,
         code,
         details,
+        message,
       })),
     )
   })
@@ -297,6 +305,23 @@ describe('version gate (esm 2.1.0)', () => {
     expect(() => loadString(text('2.0.0'))).toThrow(/\/models\/M\/subsystems\/S\/variables\/y\/ub/)
     expect(() => loadString(text('1.3.0'))).toThrow(/variables\/y\/ub/)
     expect(() => loadString(text('2.1.0'))).not.toThrow()
+  })
+
+  it('emits a 2.0.0 document given a bound in memory at 2.1.0', () => {
+    const raw = {
+      variables: { k: { type: 'parameter', units: '1/s', default: 0.1 } },
+      equations: [],
+    }
+    const file = loadString(JSON.stringify(doc(raw, '2.0.0')))
+    const k = (file.models!.M as Model).variables!.k as { lb?: number }
+    k.lb = 0
+    const text = toJson(file)
+    expect(JSON.parse(text).esm).toBe('2.1.0')
+    expect(file.esm).toBe('2.0.0')
+    expect(() => loadString(text)).not.toThrow()
+    // A document with no bound keeps its declared version.
+    delete k.lb
+    expect(JSON.parse(toJson(file)).esm).toBe('2.0.0')
   })
 
   it('holds each file to its own declared version across a mount', () => {

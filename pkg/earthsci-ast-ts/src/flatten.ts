@@ -2204,6 +2204,10 @@ function applyVariableMapExpression(
   if (removed?.units !== undefined) observed.units = removed.units
   if (removed?.description !== undefined) observed.description = removed.description
   if (removed?.shape !== undefined) observed.shape = [...removed.shape]
+  // The target stays in the flattened system under its own name, so its
+  // bounds stay with it (esm-spec §6.3.2).
+  if (removed?.lb !== undefined) observed.lb = removed.lb
+  if (removed?.ub !== undefined) observed.ub = removed.ub
   targetComp.observed[e.to] = observed
   // The coupling entry authored this definition (§4.7.5 provenance table).
   targetComp.equations.push({

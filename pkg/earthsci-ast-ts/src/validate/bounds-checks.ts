@@ -35,7 +35,7 @@ function sameShape(a: string[], b: string[]): boolean {
 }
 
 function showShape(shape: string[]): string {
-  return shape.length === 0 ? 'scalar' : `[${shape.join(', ')}]`
+  return shape.length === 0 ? '(scalar)' : `[${shape.join(', ')}]`
 }
 
 /**
@@ -154,7 +154,7 @@ export function validateVariableBounds(esmFile: EsmFile): StructuralError[] {
             code: ERROR_CODES.VARIABLE_BOUND_SHAPE_MISMATCH,
             message:
               `The ${side} of '${name}' references '${reference}', shaped ${showShape(targetShape)}; ` +
-              `a bound must be scalar or the bounded variable's shape (${showShape(ownShape)})`,
+              `a bound must be scalar or the bounded variable's shape ${showShape(ownShape)}`,
             details: { variable: name, bound: side, reference },
           })
         }
