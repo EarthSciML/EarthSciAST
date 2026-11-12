@@ -68,8 +68,10 @@ exercises `log10`.
 | `mount_rename_soil_column` | `valid/mount_rename_soil_column.esm` | `SoilColumn` | `algebraic` | 4 | 4 | 4 | the 4-layer twin of the same column family |
 | `units_registry_grammar` | `valid/units_registry_grammar.esm` | `UnitsRegistryGrammar` | `algebraic` | 1 | 4 | 4 | one first-order decay under a model whose observed set is a units-parsing discriminator |
 | `datetime_log10` | `conformance/compiled_rhs/fixtures/datetime_log10.esm` | `DatetimeLog10` | `transcendental` | 11 | 8 | 8 | the nine calendar templates of `esm:std/calendar.esm`, one equation each, plus `hour(t + tz_offset) + longitude/15` and `k_log * log10(lg)` — the tier's only fixture authored for it, and the only one with hand-chosen probe times |
+| `recurrence_ladder_rhs` | `conformance/compiled_rhs/fixtures/recurrence_ladder_rhs.esm` | `RecurrenceLadderRhs` | `exact` | 4 | 4 | 4 | the cancellation ladder of `fixtures/recurrence/02` as a causal recurrence with the state added at every cell, `D(x[k]) = s[k]`. No multiply and no in-body reduction, so the sweep's order fixes every bit |
+| `recurrence_thomas_rhs` | `conformance/compiled_rhs/fixtures/recurrence_thomas_rhs.esm` | `RecurrenceThomasRhs` | `algebraic` | 6 | 4 | 4 | a 6-level tridiagonal (Thomas) solve as three chained recurrences — forward elimination, then back substitution as an ascending recurrence on the reversed axis — with `D(x) = -A⁻¹x`; anchored by an exact rational solve |
 
-All 20 fixtures carry an `analytic_rhs` anchor on **every** probe, so the
+All 22 fixtures carry an `analytic_rhs` anchor on **every** probe, so the
 self-test gates the whole tier against references computed outside every binding.
 
 ### `datetime_log10`, and why its probe times are not the generator's
@@ -302,7 +304,8 @@ EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_r
     "algebraic":      { "rtol": 1e-13, "atol": 1e-300 },
     "transcendental": { "rtol": 1e-12, "atol": 1e-300 },
     "reduction":      { "rtol": 1e-11, "atol_scaled": 1e-14 },
-    "float32":        { "rtol": 1e-5,  "atol": 1e-30 }
+    "float32":        { "rtol": 1e-5,  "atol": 1e-30 },
+    "exact":          { "rtol": 0.0,   "atol": 0.0 }
   },
   "excluded": [
     { "path": "valid/<file>.esm", "reason": "<why, and what must change to include it>" }
@@ -312,7 +315,7 @@ EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_r
       "id": "<unique id>",
       "path": "<path relative to the repository's tests/ directory>",
       "model": "<model name to evaluate>",
-      "tolerance_class": "algebraic | transcendental | reduction | float32",
+      "tolerance_class": "algebraic | transcendental | reduction | float32 | exact",
       "compiled_required": [],
       "state_order": ["u[1]", "u[2]", "s"],
       "parameters": {},
@@ -496,6 +499,9 @@ reason.
 
 ## Tolerance policy
 
-Normative text lives in `CONFORMANCE_SPEC.md` (§5.38). The four classes above
-are the ruling of 2026-09-13; a fixture may carry a tighter or looser bound in
+Normative text lives in `CONFORMANCE_SPEC.md` (§5.38). The first four classes
+above are the ruling of 2026-09-13. `exact` (zero) is for a fixture whose
+evaluation order fixes every bit — a causal recurrence with no multiply, which an
+XLA-class backend may contract into a fused multiply-add, and no in-body
+reduction, which it may reassociate (CONFORMANCE_SPEC §5.19.1). a fixture may carry a tighter or looser bound in
 the manifest only with a written reason in its entry.

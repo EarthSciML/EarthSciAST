@@ -1,0 +1,525 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "recurrence_thomas_rhs",
+    "description": "A 6-level tridiagonal (Thomas) solve as three causal recurrences feeding a right-hand side: forward elimination cp and dp ascending along lev, then back substitution as yrev, an ascending recurrence on the REVERSED axis (yrev[m] = y[7-m]), so the solve is y = A^{-1} x with A tridiagonal (sub-diagonal -1, diagonal 4 + k/2, super-diagonal -1.5), and D(x[i]) = -y[i]. Chains between recurrences (dp reads cp, yrev reads both) are ordinary edges. The anchor is an exact rational solve, so the class is `algebraic`.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "compiled_rhs",
+      "recurrence",
+      "thomas",
+      "tridiagonal",
+      "reversed-axis",
+      "chained"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 6
+    }
+  },
+  "models": {
+    "RecurrenceThomasRhs": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ],
+          "units": "1",
+          "default": 1.0,
+          "description": "The right-hand side of the tridiagonal system, and the state."
+        },
+        "cp": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ],
+          "units": "1",
+          "description": "Forward-elimination super-diagonal."
+        },
+        "dp": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ],
+          "units": "1",
+          "description": "Forward-elimination right-hand side."
+        },
+        "yrev": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ],
+          "units": "1",
+          "description": "The solution, back-substituted, in reversed order."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "cp",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        {
+                          "op": "const",
+                          "args": [],
+                          "value": [
+                            -1.5,
+                            -1.5,
+                            -1.5,
+                            -1.5,
+                            -1.5,
+                            -1.5
+                          ]
+                        },
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        {
+                          "op": "const",
+                          "args": [],
+                          "value": [
+                            4.5,
+                            5.0,
+                            5.5,
+                            6.0,
+                            6.5,
+                            7.0
+                          ]
+                        },
+                        "k"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        {
+                          "op": "const",
+                          "args": [],
+                          "value": [
+                            -1.5,
+                            -1.5,
+                            -1.5,
+                            -1.5,
+                            -1.5,
+                            -1.5
+                          ]
+                        },
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            {
+                              "op": "const",
+                              "args": [],
+                              "value": [
+                                4.5,
+                                5.0,
+                                5.5,
+                                6.0,
+                                6.5,
+                                7.0
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                {
+                                  "op": "const",
+                                  "args": [],
+                                  "value": [
+                                    -1.0,
+                                    -1.0,
+                                    -1.0,
+                                    -1.0,
+                                    -1.0,
+                                    -1.0
+                                  ]
+                                },
+                                "k"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "cp",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "k",
+                                    1
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "dp",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "x",
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        {
+                          "op": "const",
+                          "args": [],
+                          "value": [
+                            4.5,
+                            5.0,
+                            5.5,
+                            6.0,
+                            6.5,
+                            7.0
+                          ]
+                        },
+                        "k"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "x",
+                            "k"
+                          ]
+                        },
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                {
+                                  "op": "const",
+                                  "args": [],
+                                  "value": [
+                                    -1.0,
+                                    -1.0,
+                                    -1.0,
+                                    -1.0,
+                                    -1.0,
+                                    -1.0
+                                  ]
+                                },
+                                "k"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "dp",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "k",
+                                    1
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            {
+                              "op": "const",
+                              "args": [],
+                              "value": [
+                                4.5,
+                                5.0,
+                                5.5,
+                                6.0,
+                                6.5,
+                                7.0
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                {
+                                  "op": "const",
+                                  "args": [],
+                                  "value": [
+                                    -1.0,
+                                    -1.0,
+                                    -1.0,
+                                    -1.0,
+                                    -1.0,
+                                    -1.0
+                                  ]
+                                },
+                                "k"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "cp",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "k",
+                                    1
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "yrev",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "m"
+            ],
+            "ranges": {
+              "m": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "m",
+                    1
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "dp",
+                    6
+                  ]
+                },
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "dp",
+                        {
+                          "op": "-",
+                          "args": [
+                            7,
+                            "m"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "cp",
+                            {
+                              "op": "-",
+                              "args": [
+                                7,
+                                "m"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "yrev",
+                            {
+                              "op": "-",
+                              "args": [
+                                "m",
+                                1
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "x",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "yrev",
+                    {
+                      "op": "-",
+                      "args": [
+                        7,
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

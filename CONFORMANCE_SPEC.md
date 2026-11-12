@@ -5827,7 +5827,7 @@ Each engine's output is gated against **two** references:
 > on either MUST NOT be asserted. What is asserted is that the numbers land
 > inside the band.
 
-#### 5.38.2 The four tolerance classes
+#### 5.38.2 The tolerance classes
 
 Every fixture declares exactly one `tolerance_class`. A value passes when
 
@@ -5841,6 +5841,7 @@ Every fixture declares exactly one `tolerance_class`. A value passes when
 | `transcendental` | 1e-12 | 1e-300 | `cos`, `sin`, `exp`, `log`, `sqrt`, `atan2`, `^` — a decade of slack for libm differences between a host libm and an XLA lowering |
 | `reduction` | 1e-11 | `atol_scaled · maxᵢ|wantᵢ|` | sums and other folds, whose error grows with the summation order the emitter chooses |
 | `float32` | 1e-5 | 1e-30 | reserved for precision-changing fixtures; unused while §5.38.4 excludes them |
+| `exact` | 0 | 0 | a fixture whose evaluation ORDER fixes every bit: a causal recurrence (§5.19.1) with no multiply, which an XLA-class backend may contract into a fused multiply-add, and no in-body reduction, which it may reassociate |
 
 The `reduction` class's absolute floor is **scaled**, not fixed: `atol =
 atol_scaled · maxᵢ|wantᵢ|` over the **whole probe vector**, with the scale taken
@@ -6495,7 +6496,7 @@ which:
    trajectory-versus-golden bounds. They are written per fixture here even
    though `pde_simulation` carries them tier-wide, so that a later change to
    either tier cannot silently move the other's gate.
-2. **Derived**, for every other fixture, from §5.38.2's four classes with the
+2. **Derived**, for every other fixture, from §5.38.2's first four classes with the
    integration tolerance added, scaled by the **integration safety factor** `F`:
 
    ```
