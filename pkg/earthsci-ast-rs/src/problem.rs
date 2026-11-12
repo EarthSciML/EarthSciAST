@@ -834,6 +834,10 @@ pub(crate) struct BuildProducts {
     /// `E_TREEWALK_CONSTARRAY_OOB` — so [`observed_field`] can name the cause
     /// instead of only the name it cannot answer.
     pub static_eval_error: Option<String>,
+    /// The build pipeline's [`crate::prepare::PreparedBuild::built_variables`],
+    /// read by [`EsmProblem::built_variables`] when there is no compiled model
+    /// to answer instead. Empty when the pipeline did not run.
+    pub built_variables: crate::simulate_array::BuiltVariables,
 }
 
 /// The raw document a Problem carries. A document read from a file and built
@@ -1121,6 +1125,35 @@ impl EsmProblem {
     /// has never been read.
     pub(crate) fn reset_inspection(&self) {
         *self.inspection.borrow_mut() = BuildInspection::default();
+    }
+
+    /// What this Problem's build knows of its variables by name
+    /// ([`crate::simulate_array::BuiltVariables`]): the compiled model's, else,
+    /// for a Problem with no compiled model, the build pipeline's. Keyed by the
+    /// name the build gives a variable — model-local for a single-model build,
+    /// `Model.var` for a whole-document one.
+    #[cfg(feature = "solve")]
+    pub(crate) fn built_variables(&self) -> &crate::simulate_array::BuiltVariables {
+        match &*self.backend {
+            Backend::Array(c) => c.built_variables(),
+            Backend::Static(_) => &self.build.built_variables,
+        }
+    }
+
+    /// The observeds a solve of this Problem materializes ONCE at setup, and
+    /// so records in [`BuildInspection::setup_arrays`] when inspecting, keyed
+    /// like [`Self::built_variables`]. `None` for a Problem with no compiled
+    /// model, which never solves.
+    #[cfg(feature = "solve")]
+    pub(crate) fn static_observeds(&self) -> Option<std::collections::HashSet<String>> {
+        let Backend::Array(c) = &*self.backend else {
+            return None;
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let discrete = &self.discrete_forcing;
+        #[cfg(target_arch = "wasm32")]
+        let discrete = &std::collections::HashSet::new();
+        Some(c.classify_static_observeds(discrete))
     }
 
     /// Every build-time field this EsmProblem's construction materialized, keyed
@@ -2268,6 +2301,7 @@ fn build_problem(
             build.members = prepared.members;
             build.extents = prepared.extents;
             build.gated_provider_keys = prepared.gated_provider_keys;
+            build.built_variables = prepared.built_variables;
             build.baked_parameters = opts.p.keys().cloned().collect();
             build.baked_parameters.sort();
         }

@@ -487,6 +487,17 @@ pub struct FlattenMetadata {
     /// Julia's local `map_rewritten_names`.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub coupling_rewritten_names: BTreeSet<String>,
+    /// Every input a NAMED-transform `variable_map` (`param_to_var`, say)
+    /// substituted away, mapped to the variable bound in its place and the
+    /// entry's `factor`: `to → (from, factor)`, both names as the flattened
+    /// system spells them, so the input's value is `factor · from`.
+    ///
+    /// The flattened equations no longer name a `to`, so a consumer that
+    /// addresses one by name — an inline-test assertion on a lifted input,
+    /// say — reads it through this map. Not serialized: it is a property of
+    /// this crate's build, not part of the flattened-system interchange form.
+    #[serde(skip)]
+    pub bound_inputs: IndexMap<String, (String, Option<f64>)>,
 }
 
 /// Who authored one [`Contribution`] to a flattened equation
@@ -972,6 +983,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         rules_applied: coupling_rules_applied,
         merged_variable_renames,
         coupling_rewritten_names,
+        bound_inputs,
     } = apply_coupling_entries(file, &mut per_system)?;
 
     // Phase 4: conflict detection after coupling.
@@ -1098,6 +1110,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             implicit_interface_inferred: false,
             merged_variable_renames,
             coupling_rewritten_names,
+            bound_inputs,
         },
     })
 }
@@ -2169,6 +2182,8 @@ struct CouplingOutcome {
     /// registry guard alone. Not a consumer map: it says a name is GONE, not
     /// where it went.
     coupling_rewritten_names: BTreeSet<String>,
+    /// See [`FlattenMetadata::bound_inputs`].
+    bound_inputs: IndexMap<String, (String, Option<f64>)>,
 }
 
 fn apply_coupling_entries(
@@ -2186,11 +2201,13 @@ fn apply_coupling_entries(
     // of every entry that has not run yet, so an entry naming a merged-away
     // spelling resolves to the survivor instead of dangling.
     let mut merged_renames: IndexMap<String, String> = IndexMap::new();
+    let mut bound_inputs: IndexMap<String, (String, Option<f64>)> = IndexMap::new();
     let Some(entries) = &file.coupling else {
         return Ok(CouplingOutcome {
             rules_applied: coupling_rules_applied,
             merged_variable_renames: merged_renames,
             coupling_rewritten_names,
+            bound_inputs,
         });
     };
 
@@ -2225,6 +2242,7 @@ fn apply_coupling_entries(
                 &mut one,
                 &mut merged_renames,
                 &mut coupling_rewritten_names,
+                &mut bound_inputs,
             )?;
             descriptions[i] = one.into_iter().next();
         }
@@ -2239,6 +2257,7 @@ fn apply_coupling_entries(
         rules_applied: coupling_rules_applied,
         merged_variable_renames: merged_renames,
         coupling_rewritten_names,
+        bound_inputs,
     })
 }
 
@@ -3960,6 +3979,7 @@ fn apply_coupling_entry(
     coupling_rules_applied: &mut Vec<String>,
     merged_renames: &mut IndexMap<String, String>,
     coupling_rewritten_names: &mut BTreeSet<String>,
+    bound_inputs: &mut IndexMap<String, (String, Option<f64>)>,
 ) -> Result<(), FlattenError> {
     match entry {
         CouplingEntry::OperatorCompose {
@@ -4025,12 +4045,9 @@ fn apply_coupling_entry(
                 // the AUTHORED node, which still spells the authored `from`.
                 VariableMapTransform::Named(_) => {
                     let resolved_to = resolve_renamed(to, merged_renames).to_string();
-                    apply_variable_map(
-                        resolve_renamed(from, merged_renames),
-                        &resolved_to,
-                        *factor,
-                        per_system,
-                    );
+                    let resolved_from = resolve_renamed(from, merged_renames);
+                    apply_variable_map(resolved_from, &resolved_to, *factor, per_system);
+                    bound_inputs.insert(resolved_to.clone(), (resolved_from.to_string(), *factor));
                     // A NAMED transform substitutes `to` away entirely; the
                     // Expression arm below leaves it standing as the observed
                     // the transform defines. Only the first DELETES a name, so

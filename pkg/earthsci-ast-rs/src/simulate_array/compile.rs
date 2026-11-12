@@ -410,11 +410,12 @@ pub(super) fn apply_ragged_factor_scope(
 ///   this shape in its output (esm-libraries-spec §4.7.5), so every build,
 ///   from a flattened system or an authored model, gets it here. Returns the
 ///   shapes it gave. `index_sets` is the registry the promoted shape must be
-///   sized by.
+///   sized by, and the index-set axes of every variable as built
+///   ([`refuse_faq_bare_array_operands`]).
 pub(crate) fn apply_flatten_rewrites(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
-) -> Result<ConditionalShapes, CompileError> {
+) -> Result<(ConditionalShapes, VariableAxes), CompileError> {
     let time_invariant: std::collections::HashSet<String> = model
         .variables
         .iter()
@@ -434,8 +435,54 @@ pub(crate) fn apply_flatten_rewrites(
     // After the elementwise lift (inside `promote_conditional_shapes`,
     // esm-spec §9.6.11): the check reads the lifted equations.
     let promoted = promote_conditional_shapes(model, index_sets)?;
-    refuse_faq_bare_array_operands(model)?;
-    Ok(promoted)
+    let axes = refuse_faq_bare_array_operands(model)?;
+    Ok((promoted, axes))
+}
+
+/// Every variable's index-set axes in the model a build compiles, keyed by
+/// the name the build gives it ([`crate::structural::promoted_var_shapes`]):
+/// the declared `shape`, else the shape its defining equation infers. A
+/// variable a pointwise lift evaluates over a grid (esm-spec §10.5) is here
+/// with the grid's index sets although its declaration has no `shape`
+/// (esm-libraries-spec §4.7.5). A scalar is absent or has no axes.
+pub(crate) type VariableAxes = HashMap<String, Vec<String>>;
+
+/// What a build knows of its variables by NAME, for a reader that addresses
+/// one after the build (the inline-test runner's §6.6 assertions): their axes,
+/// and the inputs a coupling substituted away.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BuiltVariables {
+    /// [`VariableAxes`] of the model the build compiled, plus each of
+    /// [`Self::bound_inputs`] under the axes of the variable bound in its
+    /// place, so a reader that names an input (`Box.T` bound to `Col.T`) finds
+    /// the field it reads.
+    pub(crate) axes: VariableAxes,
+    /// [`crate::flatten::FlattenMetadata::bound_inputs`]: `to → (from,
+    /// factor)`. Empty for a build that applied no coupling.
+    pub(crate) bound_inputs: indexmap::IndexMap<String, (String, Option<f64>)>,
+}
+
+impl BuiltVariables {
+    /// `axes` and `bound_inputs`, each bound input given the axes of the
+    /// variable at the end of its chain of bindings.
+    pub(crate) fn new(
+        mut axes: VariableAxes,
+        bound_inputs: indexmap::IndexMap<String, (String, Option<f64>)>,
+    ) -> Self {
+        for to in bound_inputs.keys() {
+            let mut name = to.as_str();
+            for _ in 0..=bound_inputs.len() {
+                match bound_inputs.get(name) {
+                    Some((from, _)) => name = from,
+                    None => break,
+                }
+            }
+            if let Some(found) = axes.get(name).filter(|a| !a.is_empty()).cloned() {
+                axes.entry(to.clone()).or_insert(found);
+            }
+        }
+        BuiltVariables { axes, bound_inputs }
+    }
 }
 
 /// Refuse a `faq` whose `expr` or `filter` reads a shaped variable by bare name
@@ -446,10 +493,13 @@ pub(crate) fn apply_flatten_rewrites(
 /// the authored document, where a template application is opaque; this is the
 /// check on what the application expanded into, on every input a build takes —
 /// a typed document, a flattened system, a subsystem, a cross-model read.
-pub(crate) fn refuse_faq_bare_array_operands(model: &Model) -> Result<(), CompileError> {
+///
+/// Returns the shapes it checked against, which are the build's
+/// [`VariableAxes`].
+pub(crate) fn refuse_faq_bare_array_operands(model: &Model) -> Result<VariableAxes, CompileError> {
     let shapes = crate::structural::promoted_var_shapes(model);
     if shapes.values().all(Vec::is_empty) {
-        return Ok(());
+        return Ok(shapes);
     }
     for (k, eq) in model.equations.iter().enumerate() {
         let mut errors = Vec::new();
@@ -468,7 +518,7 @@ pub(crate) fn refuse_faq_bare_array_operands(model: &Model) -> Result<(), Compil
             )));
         }
     }
-    Ok(())
+    Ok(shapes)
 }
 
 /// Give each unshaped mixed-rank-`ifelse` variable of `model` the shape it is
@@ -778,6 +828,10 @@ impl ArrayCompiled {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        compiled.built_variables = BuiltVariables::new(
+            std::mem::take(&mut compiled.built_variables.axes),
+            flat.metadata.bound_inputs.clone(),
+        );
         Ok(compiled)
     }
 
@@ -881,10 +935,13 @@ impl ArrayCompiled {
         // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
         // (see `from_file_owned`). Runs after mounting so a subsystem's
         // equations and declarations are in scope under their mounted names.
-        let ConditionalShapes {
-            built: conditional_shapes,
-            data_shaped,
-        } = apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
+        let (
+            ConditionalShapes {
+                built: conditional_shapes,
+                data_shaped,
+            },
+            variable_axes,
+        ) = apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
         // esm-spec §4.3.1.2: each recurrence group becomes the single stacked
         // recurrence every route below already sweeps (`recurrence_group`).
         super::recurrence_group::lower_recurrence_groups(&mut model_owned, &mut index_sets_owned)?;
@@ -1211,6 +1268,10 @@ impl ArrayCompiled {
             n_states,
             declared_names,
             conditional_shapes,
+            built_variables: BuiltVariables {
+                axes: variable_axes,
+                bound_inputs: Default::default(),
+            },
             forcing: Rc::new(RefCell::new(HashMap::new())),
             data_fed,
             forcing_generation: std::cell::Cell::new(0),

@@ -85,8 +85,8 @@ use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
 };
 use crate::simulate_array::{
-    ArrMap, ConstArrayScope, Value as EvalValue, eval_expression_with_extents_and_consts_shared,
-    run_value_invention_with_params,
+    ArrMap, BuiltVariables, ConstArrayScope, Value as EvalValue,
+    eval_expression_with_extents_and_consts_shared, run_value_invention_with_params,
 };
 use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};
@@ -527,6 +527,10 @@ pub struct PreparedBuild {
     /// it is empty (the request named only a data-fed parameter), so nothing
     /// re-evaluates the document to fill it.
     pub(crate) observed_cone_applied: bool,
+    /// What this build knows of the variables of the model it evaluated, by
+    /// name, spelled like [`Self::fields`]
+    /// ([`BuiltVariables`]).
+    pub(crate) built_variables: BuiltVariables,
 }
 
 /// One evaluation the build pipeline performed, and HOW: through the
@@ -1825,6 +1829,12 @@ fn check_discovered_gate_conflict(
     Ok(())
 }
 
+/// [`BuildState::authored_model`]'s result: the model with `flatten`'s
+/// rewrites applied, the variables whose shape their data decides
+/// ([`crate::flatten::ConditionalShapes::data_shaped`]), and what the build
+/// knows of its variables by name.
+type AuthoredModel = (Model, HashMap<String, Vec<String>>, BuiltVariables);
+
 /// The build pipeline's accumulator state: the evaluation namespace plus the
 /// artifacts each phase deposits for the phases after it. One method per
 /// phase; [`run_prepare`] is the phase list.
@@ -1874,6 +1884,8 @@ struct BuildState<'o> {
     /// data-fed parameters decides (esm-spec §4.3.4,
     /// [`crate::flatten::ConditionalShapes::data_shaped`]).
     data_shaped: HashMap<String, Vec<String>>,
+    /// [`PreparedBuild::built_variables`].
+    built_variables: BuiltVariables,
 }
 
 impl<'o> BuildState<'o> {
@@ -1969,10 +1981,10 @@ impl<'o> BuildState<'o> {
             }
             None => Spelling::Qualified,
         };
-        let (model, flattened, data_shaped) = match &spelling {
+        let (model, flattened, data_shaped, built_variables) = match &spelling {
             Spelling::ModelLocal(n) => {
-                let (model, data_shaped) = Self::authored_model(models, n, &mut index_sets)?;
-                (model, None, data_shaped)
+                let (model, data_shaped, built) = Self::authored_model(models, n, &mut index_sets)?;
+                (model, None, data_shaped, built)
             }
             Spelling::Qualified => {
                 let flat = Self::whole_document(&file, &mut index_sets)?;
@@ -1985,9 +1997,15 @@ impl<'o> BuildState<'o> {
                 let shapes =
                     crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
                         .map_err(|e| err(e.to_string()))?;
-                crate::simulate_array::refuse_faq_bare_array_operands(&model)
+                let axes = crate::simulate_array::refuse_faq_bare_array_operands(&model)
                     .map_err(|e| err(e.to_string()))?;
-                (model, unbound_load.then_some(flat), shapes.data_shaped)
+                let built = BuiltVariables::new(axes, flat.metadata.bound_inputs.clone());
+                (
+                    model,
+                    unbound_load.then_some(flat),
+                    shapes.data_shaped,
+                    built,
+                )
             }
         };
         // esm-spec §4.3.1.2: a recurrence group is swept as its stacked single
@@ -2023,6 +2041,7 @@ impl<'o> BuildState<'o> {
             obs_total: 0,
             cone_applied: false,
             data_shaped,
+            built_variables,
         })
     }
 
@@ -2044,7 +2063,7 @@ impl<'o> BuildState<'o> {
         models: &IndexMap<String, Model>,
         name: &str,
         index_sets: &mut HashMap<String, IndexSet>,
-    ) -> Result<(Model, HashMap<String, Vec<String>>), PrepareError> {
+    ) -> Result<AuthoredModel, PrepareError> {
         let mut model = models
             .get(name)
             .ok_or_else(|| err(format!("model '{name}' not found in the document")))?
@@ -2052,9 +2071,13 @@ impl<'o> BuildState<'o> {
         crate::simulate_array::mount_subsystems(&mut model, index_sets)
             .map_err(|e| err(format!("model '{name}': {e}")))?;
         crate::simulate_array::resolve_model_self_references(&mut model, name);
-        let shapes = crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)
+        let (shapes, axes) = crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)
             .map_err(|e| err(format!("model '{name}': {e}")))?;
-        Ok((model, shapes.data_shaped))
+        Ok((
+            model,
+            shapes.data_shaped,
+            BuiltVariables::new(axes, Default::default()),
+        ))
     }
 
     /// A document of several models, with none selected, built WHOLE — the
@@ -2951,6 +2974,7 @@ impl<'o> BuildState<'o> {
             rules: self.rules,
             refused: self.refused,
             observed_cone_applied: self.cone_applied,
+            built_variables: self.built_variables,
         }
     }
 }

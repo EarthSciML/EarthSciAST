@@ -553,6 +553,17 @@ impl ArrayCompiled {
         self.namespace.as_deref()
     }
 
+    /// What this build knows of its variables by name
+    /// ([`super::BuiltVariables`]), keyed by the name the build gives each
+    /// (unqualified under a single-model [`Self::namespace`]). A variable
+    /// declared without a `shape` that the build evaluates over a grid — a
+    /// pointwise lift (esm-spec §10.5), a lifted reaction-system species, an
+    /// input a `variable_map` binds to a shaped host variable — has the grid's
+    /// index sets there.
+    pub(crate) fn built_variables(&self) -> &super::BuiltVariables {
+        &self.built_variables
+    }
+
     /// The OBSERVED variables this model declares, in dependency order.
     ///
     /// What [`crate::problem::observed_trajectories`] resolves a caller's name
@@ -3335,7 +3346,7 @@ impl ArrayCompiled {
     /// The regridded terrain (`elev_xy`) and its slopes — forcing-derived but
     /// state-free — thus hoist and land in `setup_arrays`, matching the Julia /
     /// Python `BuildInspection`.
-    pub(super) fn classify_static_observeds(
+    pub(crate) fn classify_static_observeds(
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> HashSet<String> {

@@ -831,29 +831,30 @@ pub(crate) fn array_scope_names<'a>(
 /// before ever reaching here. So a `None` from this function means "not a field
 /// the BUILD carries", not "unassertable".
 ///
-/// Cells are enumerated from the declared shape's interval index sets, in sorted
-/// (lexicographic) order. Returns `(field, cells)` or `None` when the variable
-/// is not such an observed.
+/// Cells are enumerated from the interval index sets of the variable's axes
+/// ([`BuildView::effective`]), in sorted (lexicographic) order. Returns
+/// `(field, cells)` or `None` when the variable is not such an observed.
+/// `through_binding` admits any variable whose field the build materialized:
+/// it is read in place of an input a coupling bound to it.
 fn observed_field(
-    file: &EsmFile,
     model_name: &str,
     variable: &str,
     insp: &BuildInspection,
     index_sets: &HashMap<String, IndexSet>,
+    view: &BuildView<'_>,
+    through_binding: bool,
 ) -> Option<(Vec<f64>, Vec<Vec<i64>>)> {
-    let model = model_at(file, model_name)?;
-    let v = model.variables.get(variable)?;
+    let file = view.file;
     // OBSERVED is derived from the equations (esm-spec §6.3.1), not declared;
     // a data-fed parameter's field is its ingested values.
-    if !is_build_field_variable(&model, variable) {
+    if !through_binding && !is_build_field(file, model_name, variable) {
         return None;
     }
-    let shape = v.shape.as_ref()?;
-    if shape.is_empty() {
-        return None;
-    }
+    // The declared shape, or, for a variable declared without one that the
+    // build evaluates over a grid, the axes the build gave it ([`BuildView`]).
+    let shape = view.effective(model_name, variable)?;
     let mut exts: Vec<usize> = Vec::with_capacity(shape.len());
-    for s in shape {
+    for s in &shape {
         let iset = index_sets.get(s)?;
         if iset.kind != "interval" {
             return None;
@@ -1007,13 +1008,15 @@ fn scalar_observed(
     model_name: &str,
     variable: &str,
     insp: &BuildInspection,
+    through_binding: bool,
 ) -> Option<f64> {
-    let model = model_at(file, model_name)?;
-    let v = model.variables.get(variable)?;
-    if v.shape.as_ref().is_some_and(|s| !s.is_empty()) {
+    if declared_shape(file, model_name, variable)
+        .flatten()
+        .is_some_and(|s| !s.is_empty())
+    {
         return None;
     }
-    if !is_build_field_variable(&model, variable) {
+    if !through_binding && !is_build_field(file, model_name, variable) {
         return None;
     }
     let arr = build_field(insp, file, model_name, variable)?;
@@ -1025,23 +1028,199 @@ fn scalar_observed(
     arr.iter().next().copied()
 }
 
-/// The asserted variable's declared spatial shape (ordered index-set names).
-/// `Err` when the variable is missing or scalar — a `coords` assertion is
-/// ill-formed on a 0-D variable per esm-spec §6.6.5 (identical to the Julia
-/// reference's `_variable_shape`).
-fn variable_shape(file: &EsmFile, model_name: &str, variable: &str) -> Result<Vec<String>, String> {
-    let model =
-        model_at(file, model_name).ok_or_else(|| format!("model '{model_name}' not found"))?;
-    let v = model
-        .variables
-        .get(variable)
-        .ok_or_else(|| format!("variable '{variable}' is not declared in model '{model_name}'"))?;
-    match &v.shape {
-        Some(shape) if !shape.is_empty() => Ok(shape.clone()),
-        _ => Err(format!(
-            "`coords` requires a spatially-shaped variable; '{variable}' is scalar"
-        )),
+/// How the component at `owner` declares `variable`: `None` when it declares
+/// no such variable (or `owner` names no component), `Some(None)` when it
+/// declares it WITHOUT a `shape`, and `Some(Some(shape))` with the declared
+/// shape (`[]` for a declared scalar). A reaction-system species has no
+/// `shape` member, so it is always declared without one; a reaction-system
+/// parameter carries its own.
+fn declared_shape(file: &EsmFile, owner: &str, variable: &str) -> Option<Option<Vec<String>>> {
+    match component_at(file, owner)? {
+        ComponentAt::Model(m) => m.variables.get(variable).map(|v| v.shape.clone()),
+        ComponentAt::ReactionSystem(r) => {
+            if r.species.contains_key(variable) {
+                Some(None)
+            } else {
+                r.parameters.get(variable).map(|p| p.shape.clone())
+            }
+        }
     }
+}
+
+/// [`is_build_field_variable`] for the component at `owner`, a reaction system
+/// included: a reaction system has no observeds, so only a data-fed parameter
+/// of one is a field the build carries.
+fn is_build_field(file: &EsmFile, owner: &str, variable: &str) -> bool {
+    match component_at(file, owner) {
+        Some(ComponentAt::Model(m)) => is_build_field_variable(&m, variable),
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(ComponentAt::ReactionSystem(r)) => r
+            .parameters
+            .get(variable)
+            .is_some_and(|p| p.update.as_ref().is_some_and(crate::data_fed::is_data_fed)),
+        _ => false,
+    }
+}
+
+/// What the BUILD knows of the variables an assertion names, read from the
+/// built problem ([`crate::simulate_array::BuiltVariables`]) rather than
+/// inferred again from the document.
+///
+/// The one case a declaration cannot answer is a variable declared WITHOUT a
+/// `shape` that the build nevertheless evaluates over a grid. That is what a
+/// pointwise lift does (esm-spec §10.5): a 0-D component whose inputs a
+/// `variable_map` binds to a host's `[lev]` arrays computes every observed
+/// downstream of those inputs once per `lev` cell, and a 0-D reaction system an
+/// `operator_compose` lifts has `[lev]`-shaped species. The authored
+/// declaration stays unshaped (esm-libraries-spec §4.7.5: "No declared `shape`
+/// changes"), so a runner reading only the declaration would treat the lifted
+/// field as a scalar: never request its rows, find no scalar under its name,
+/// and have no index-set names to bind a `reference` or a `coords` map against.
+///
+/// `prob` is `None` only when the build failed, and then no assertion is
+/// evaluated: every one reports the build failure.
+struct BuildView<'a> {
+    file: &'a EsmFile,
+    prob: Option<&'a EsmProblem>,
+    /// [`EsmProblem::static_observeds`], computed on first demand.
+    static_observeds: OnceCell<Option<HashSet<String>>>,
+}
+
+impl<'a> BuildView<'a> {
+    fn new(file: &'a EsmFile, prob: Option<&'a EsmProblem>) -> Self {
+        BuildView {
+            file,
+            prob,
+            static_observeds: OnceCell::new(),
+        }
+    }
+
+    /// The first entry of `map` under a spelling the build may key `variable`
+    /// of the component at `owner` by ([`owner_spellings`]); the bare name too
+    /// for an unscoped component, which a single-model build keeps bare.
+    fn lookup<'m, T>(
+        &self,
+        map: impl Fn(&str) -> Option<&'m T>,
+        owner: &str,
+        variable: &str,
+    ) -> Option<&'m T> {
+        owner_spellings(self.file, owner)
+            .iter()
+            .find_map(|m| map(&format!("{m}.{variable}")))
+            .or_else(|| (!owner.contains('.')).then(|| map(variable)).flatten())
+    }
+
+    /// The non-empty axes the build gave `variable` of the component at
+    /// `owner`; `None` when the build made it a scalar or never built it.
+    fn built(&self, owner: &str, variable: &str) -> Option<Vec<String>> {
+        let axes = &self.prob?.built_variables().axes;
+        self.lookup(|k| axes.get(k), owner, variable)
+            .filter(|a| !a.is_empty())
+            .cloned()
+    }
+
+    /// The axes the build gave `variable` when it is declared WITHOUT a
+    /// `shape` — a field only because the build lifted it; `None` for any
+    /// other declaration, and for a name the component does not declare.
+    fn lifted(&self, owner: &str, variable: &str) -> Option<Vec<String>> {
+        match declared_shape(self.file, owner, variable)? {
+            Some(_) => None,
+            None => self.built(owner, variable),
+        }
+    }
+
+    /// `variable`'s axes for an assertion that reads it as a field: its
+    /// declared `shape` when it declares a non-empty one, else, for a variable
+    /// declared with NO `shape` (never one declared `shape: []`, which is a
+    /// scalar by declaration), the axes the build gave it.
+    fn effective(&self, owner: &str, variable: &str) -> Option<Vec<String>> {
+        match declared_shape(self.file, owner, variable)? {
+            Some(shape) if !shape.is_empty() => Some(shape),
+            Some(_) => None,
+            None => self.built(owner, variable),
+        }
+    }
+
+    /// [`Self::effective`] for a `coords` map or a `reference`'s dimension
+    /// names, with the reason when there are no axes. `Err` when the variable
+    /// is missing or scalar — a `coords` assertion is ill-formed on a 0-D
+    /// variable per esm-spec §6.6.5 (identical to the Julia reference's
+    /// `_variable_shape`).
+    fn field_shape(&self, owner: &str, variable: &str) -> Result<Vec<String>, String> {
+        if component_at(self.file, owner).is_none() {
+            return Err(format!("model '{owner}' not found"));
+        }
+        if declared_shape(self.file, owner, variable).is_none() {
+            return Err(format!(
+                "variable '{variable}' is not declared in model '{owner}'"
+            ));
+        }
+        self.effective(owner, variable).ok_or_else(|| {
+            format!("`coords` requires a spatially-shaped variable; '{variable}' is scalar")
+        })
+    }
+
+    /// The variable a coupling bound in place of `variable` of the component
+    /// at `owner` — an input a named-transform `variable_map` substituted away
+    /// ([`crate::flatten::FlattenMetadata::bound_inputs`]) — as `(owner,
+    /// local name, factor)`, following a chain of bindings to its end; the
+    /// input's value is `factor ×` that variable's. `None` for anything else.
+    fn bound_source(&self, owner: &str, variable: &str) -> Option<(String, String, f64)> {
+        let bound = &self.prob?.built_variables().bound_inputs;
+        let (first, factor) = self.lookup(|k| bound.get(k), owner, variable)?;
+        let mut source: &str = first;
+        let mut scale = factor.unwrap_or(1.0);
+        for _ in 0..bound.len() {
+            match bound.get(source) {
+                Some((next, f)) => {
+                    source = next;
+                    scale *= f.unwrap_or(1.0);
+                }
+                None => break,
+            }
+        }
+        let (head, local) = source.rsplit_once('.')?;
+        component_at(self.file, head)?;
+        Some((head.to_string(), local.to_string(), scale))
+    }
+
+    /// Whether any of `spellings` names an observed a solve materializes once
+    /// at setup — one the build inspection records, so an element of it is read
+    /// from [`BuildInspection::setup_arrays`] and need not be requested as
+    /// output ([`EsmProblem::static_observeds`]).
+    fn is_static_observed(&self, spellings: &[String]) -> bool {
+        self.static_observeds
+            .get_or_init(|| self.prob.and_then(EsmProblem::static_observeds))
+            .as_ref()
+            .is_some_and(|set| spellings.iter().any(|s| set.contains(s)))
+    }
+}
+
+/// One cell (1-based `cell`) of the field the build materialized for the
+/// OBSERVED (or data-fed parameter) `stem` of the component at `model_name`;
+/// `None` when there is no such field or the cell is outside it.
+/// `through_binding` admits any variable whose field the build materialized:
+/// it is read in place of an input a coupling bound to it.
+fn element_of_build_field(
+    file: &EsmFile,
+    model_name: &str,
+    stem: &str,
+    cell: &[i64],
+    insp: &BuildInspection,
+    through_binding: bool,
+) -> Option<f64> {
+    if !through_binding && !is_build_field(file, model_name, stem) {
+        return None;
+    }
+    let arr = build_field(insp, file, model_name, stem)?;
+    if arr.ndim() != cell.len() {
+        return None;
+    }
+    let idx: Vec<usize> = cell
+        .iter()
+        .map(|&c| usize::try_from(c - 1).ok())
+        .collect::<Option<_>>()?;
+    arr.get(ndarray::IxDyn(&idx)).copied()
 }
 
 /// Resolve a §6.6.5 `coords` map to a concrete 1-based cell tuple over
@@ -1285,20 +1464,39 @@ fn resolve_asserted_name<'v>(
 }
 
 /// Evaluate one assertion against a solved trajectory; `Err` carries the
-/// reason text (recorded verbatim into the result's `message`).
+/// reason text (recorded verbatim into the result's `message`). The document
+/// is `view.file`.
 fn eval_assertion(
     sol: &Solution,
     assertion: &crate::types::ModelTestAssertion,
     model_name: &str,
     index_sets: &HashMap<String, IndexSet>,
-    file: &EsmFile,
     insp: &BuildInspection,
     base_dir: Option<&Path>,
+    view: &BuildView<'_>,
 ) -> Result<f64, String> {
+    let file = view.file;
     let ti = time_index(&sol.time, assertion.time)?;
     // A scoped `variable` reads the component it names (schema
     // `Assertion.variable`); every lookup below runs against that owner.
-    let (owner, variable) = resolve_asserted_name(file, model_name, &assertion.variable);
+    let (owner, asserted) = resolve_asserted_name(file, model_name, &assertion.variable);
+    // An input a coupling substituted away (`Box.T`, which a `param_to_var`
+    // binds to `Col.T`) is no variable of the build: it reads the variable
+    // bound in its place, scaled by the entry's factor. An element name
+    // (`Box.T[2]`) reads the same element of it.
+    let (stem, cell_suffix) = match parse_cell_name(asserted) {
+        Some((stem, _)) => (stem, &asserted[stem.len()..]),
+        None => (asserted, ""),
+    };
+    let (owner, variable, scale) = match view.bound_source(&owner, stem) {
+        Some((source_owner, source, factor)) => {
+            (source_owner, format!("{source}{cell_suffix}"), Some(factor))
+        }
+        None => (owner, asserted.to_string(), None),
+    };
+    let through_binding = scale.is_some();
+    let scale = scale.unwrap_or(1.0);
+    let variable = variable.as_str();
     // A scoped name is read ONLY under a spelling the component it names can
     // own; the bare-name fallbacks that serve an unscoped assertion would reach
     // a same-named row of another component (`tests/conformance/
@@ -1326,7 +1524,7 @@ fn eval_assertion(
             )
         };
         if let Some(slot) = slot {
-            return Ok(sol.state[slot][ti]);
+            return Ok(scale * sol.state[slot][ti]);
         }
         // No trajectory row: a STATE-FREE SCALAR OBSERVED, read from the
         // fields the build materialized — the 0-D twin of the array branch
@@ -1334,20 +1532,45 @@ fn eval_assertion(
         // all (an ingesting one, whose whole content IS its build-time
         // observed graph: `solve` legitimately refuses it and the trajectory
         // carries no rows).
-        return scalar_observed(file, model_name, variable, insp).ok_or_else(|| {
-            format!(
-                "scalar state or state-free scalar observed '{}' not found \
-                 (the build materialized neither)",
+        if let Some(value) = scalar_observed(file, model_name, variable, insp, through_binding) {
+            return Ok(scale * value);
+        }
+        // An ELEMENT name (`u[2]`) of a STATE-FREE array observed: one cell of
+        // the field the build materialized. (A state-dependent one is answered
+        // above, from the rows `assertion_observed_requests` asked for.)
+        if let Some(value) = parse_cell_name(variable).and_then(|(stem, cell)| {
+            element_of_build_field(file, model_name, stem, &cell, insp, through_binding)
+        }) {
+            return Ok(scale * value);
+        }
+        // A variable declared without a `shape` that the build evaluates over
+        // a grid (a pointwise lift, esm-spec §10.5) has no scalar value: say
+        // so, rather than that it does not exist (§6.6.3: a pointwise
+        // assertion on a field names one element or selects with
+        // `coords`/`reduce`). Only a variable DECLARED unshaped is blamed on
+        // the lift: a declared array is a field by its own declaration.
+        if let Some(lifted) = view.lifted(model_name, variable) {
+            return Err(format!(
+                "'{}' is evaluated over [{}] by a pointwise lift (esm-spec §10.5), so a \
+                 pointwise assertion must name one element of it ('{}[1]') or select a \
+                 scalar with `coords` or `reduce` (§6.6.3, §6.6.5)",
+                assertion.variable,
+                lifted.join(", "),
                 assertion.variable
-            )
-        });
+            ));
+        }
+        return Err(format!(
+            "scalar state or state-free scalar observed '{}' not found \
+             (the build materialized neither)",
+            assertion.variable
+        ));
     }
     // `coords` validation runs BEFORE field materialization so a coords
     // assertion on a scalar variable fails with the §6.6.5 coords-specific
     // message (identical to the Julia reference).
     let coords_target = match &assertion.coords {
         Some(coords) => {
-            let shape = variable_shape(file, model_name, variable)?;
+            let shape = view.field_shape(model_name, variable)?;
             Some(coords_cell(coords, &shape, index_sets)?)
         }
         None => None,
@@ -1357,7 +1580,7 @@ fn eval_assertion(
     } else {
         state_cells(&sol.state_variable_names, variable, model_name)
     };
-    let (field, cell_tuples): (Vec<f64>, Vec<Vec<i64>>) = if !cells.is_empty() {
+    let (mut field, cell_tuples): (Vec<f64>, Vec<Vec<i64>>) = if !cells.is_empty() {
         (
             cells.iter().map(|(_, row)| sol.state[*row][ti]).collect(),
             cells.iter().map(|(c, _)| c.clone()).collect(),
@@ -1365,13 +1588,24 @@ fn eval_assertion(
     } else {
         // No ODE slots: try a state-free ARRAY OBSERVED (a rule output
         // asserted directly, §6.6.5).
-        observed_field(file, model_name, variable, insp, index_sets).ok_or_else(|| {
+        observed_field(
+            model_name,
+            variable,
+            insp,
+            index_sets,
+            view,
+            through_binding,
+        )
+        .ok_or_else(|| {
             format!(
                 "array state '{}' has no cells in var_map",
                 assertion.variable
             )
         })?
     };
+    if through_binding {
+        field.iter_mut().for_each(|x| *x *= scale);
+    }
     if let Some(target) = coords_target {
         let pos = cell_tuples
             .iter()
@@ -1414,7 +1648,7 @@ fn eval_assertion(
             // build arrays by name, so an array named after a shape index set
             // is a clash there and must be one here too (issue #226).
             let arrays = array_scope_names(insp.setup_arrays.keys().map(String::as_str));
-            let dims = variable_shape(file, model_name, variable).unwrap_or_default();
+            let dims = view.field_shape(model_name, variable).unwrap_or_default();
             let bound = bind_dimension_names(expr, &dims, &scope, &arrays)?;
             Some(evaluate_cellwise(&bound, &cell_tuples, index_sets, &scope)?)
         }
@@ -1508,64 +1742,84 @@ pub fn ephemeral_injected_file(
 /// free: a requested array observed joins the output-node dependency cone. So a
 /// declared variable that is NOT an observed — a state, whose row the
 /// trajectory already carries, or a parameter — is left out, and so is one
-/// whose declared rank does not match the assertion form. A name this component
-/// does not declare at all is kept as a best effort: its class is not knowable
-/// here, and a name resolving to no observed is dropped downstream. A scoped
-/// reference is classified against the component it names
-/// (`resolve_asserted_name`).
+/// whose rank does not match the assertion form. A variable declared WITHOUT a
+/// `shape` has the rank the build gave it ([`BuildView`]), so a field a
+/// pointwise lift evaluates over a grid is requested for a field-reading form.
+///
+/// An ELEMENT name (`u[2]`, §6.6.3) reads one cell of the field `u`. The
+/// runtime is asked for whole observeds only, so it is requested by its stem,
+/// whose rows come back named like the element — but only when the stem is
+/// STATE-DEPENDENT: the cells of one a solve materializes once at setup are
+/// read from the build inspection ([`element_of_build_field`]), and requesting
+/// it would store every cell at every saved time to read one.
+///
+/// A name this component does not declare at all is kept as a best effort
+/// (by its stem, for an element name): its class is not knowable here, and a
+/// name resolving to no observed is dropped downstream. A scoped reference is
+/// classified against the component it names (`resolve_asserted_name`), and an
+/// input a coupling substituted away against the variable bound in its place
+/// ([`BuildView::bound_source`]).
 fn assertion_observed_requests(
-    file: &EsmFile,
     model_name: &str,
     t: &crate::types::ModelTest,
+    view: &BuildView<'_>,
 ) -> Vec<String> {
-    let own = model_at(file, model_name);
-    let own_class = own
-        .as_deref()
-        .map(crate::classification::Classification::of);
+    let file = view.file;
+    let mut classes: HashMap<String, Option<crate::classification::Classification>> =
+        HashMap::new();
     let mut out: Vec<String> = Vec::new();
     for a in &t.assertions {
-        let (owner, local) = resolve_asserted_name(file, model_name, &a.variable);
-        let scoped = if owner == model_name {
-            None
-        } else {
-            model_at(file, &owner)
-        };
-        let scoped_class = scoped
-            .as_deref()
-            .map(crate::classification::Classification::of);
-        let (model, class) = if owner == model_name {
-            (own.as_deref(), own_class.as_ref())
-        } else {
-            (scoped.as_deref(), scoped_class.as_ref())
-        };
+        let (owner, asserted) = resolve_asserted_name(file, model_name, &a.variable);
         // A `coords` / `reduce` assertion reads a FIELD, a pointwise one a
-        // scalar; the declared rank must match the form that reads it.
+        // scalar, and a pointwise one on an element name one cell of a field.
         let wants_array = a.coords.is_some() || a.reduce.is_some();
-        if let Some(v) = model.and_then(|m| m.variables.get(local)) {
-            let is_array = v.shape.as_ref().is_some_and(|s| !s.is_empty());
-            if is_array != wants_array {
-                continue;
+        let (local, element) = match parse_cell_name(asserted) {
+            Some((stem, _)) if !wants_array => (stem, true),
+            _ => (asserted, false),
+        };
+        let (owner, local) = match view.bound_source(&owner, local) {
+            Some((source_owner, source, _)) => (source_owner, source),
+            None => (owner, local.to_string()),
+        };
+        let wants_field = wants_array || element;
+        match declared_shape(file, &owner, &local) {
+            Some(shape) => {
+                let is_array = match shape {
+                    Some(s) => !s.is_empty(),
+                    None => view.built(&owner, &local).is_some(),
+                };
+                if is_array != wants_field {
+                    continue;
+                }
+                let class = classes.entry(owner.clone()).or_insert_with(|| {
+                    model_at(file, &owner)
+                        .as_deref()
+                        .map(crate::classification::Classification::of)
+                });
+                if !class.as_ref().is_some_and(|c| c.is_observed(&local)) {
+                    continue;
+                }
             }
-            if !class.is_some_and(|c| c.is_observed(local)) {
-                continue;
-            }
-        } else if wants_array {
             // An undeclared name can only be resolved downstream, and the
             // array form has a cheaper answer available: a scoped reference is
-            // read through `state_cells` / `observed_field` as before.
-            continue;
+            // read through `state_cells` / `observed_field`.
+            None if wants_array => continue,
+            None => {}
         }
         // A SCOPED name is requested only under a spelling its owner can hold
         // ([`owner_spellings`]); the raw `a.variable` is relative to the
         // asserting component and names nothing the build knows.
         let spellings: Vec<String> = if owner == model_name {
-            vec![a.variable.clone(), format!("{model_name}.{}", a.variable)]
+            vec![local.clone(), format!("{model_name}.{local}")]
         } else {
             owner_spellings(file, &owner)
                 .into_iter()
                 .map(|m| format!("{m}.{local}"))
                 .collect()
         };
+        if element && view.is_static_observed(&spellings) {
+            continue;
+        }
         for spelling in spellings {
             if !out.contains(&spelling) {
                 out.push(spelling);
@@ -2451,10 +2705,17 @@ fn build_pipeline_fields(
     (!fields.is_empty()).then_some(fields)
 }
 
+/// The variable whose field an assertion's `variable` reads: the stem of an
+/// ELEMENT name (`p` for `p[2]`, §6.6.3), else the name itself.
+fn asserted_field_name(variable: &str) -> &str {
+    parse_cell_name(variable).map_or(variable, |(stem, _)| stem)
+}
+
 /// The entries of `data_fields` (a build's ingested data-fed parameters, keyed
 /// model-locally — `p`, or `Sub.p` for a mounted subsystem's) that some
-/// assertion of `t` may name: those whose key is the asserted name or ends in
-/// `.`+ it, or that the asserted name ends in. A superset is harmless — the
+/// assertion of `t` may name: those whose key is the asserted name (the stem
+/// of an element name, [`asserted_field_name`]) or ends in `.`+ it, or that the
+/// asserted name ends in. A superset is harmless — the
 /// assertion reader still resolves the name under its owner's spellings
 /// ([`build_field`]) — while copying an unnamed table would cost a clone of it
 /// per test.
@@ -2472,7 +2733,11 @@ fn asserted_data_fields(
     };
     data_fields
         .iter()
-        .filter(|(k, _)| t.assertions.iter().any(|a| names_it(k, &a.variable)))
+        .filter(|(k, _)| {
+            t.assertions
+                .iter()
+                .any(|a| names_it(k, asserted_field_name(&a.variable)))
+        })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
@@ -2551,13 +2816,18 @@ fn run_component_tests(
             // Drop the previous build BEFORE the next one is constructed, so
             // the slot never holds two documents' worth of materialized fields.
             drop(memo.take());
-            // Every name an assertion of a test that may share this build
-            // reads: the data-fed parameters among them are the ingested
-            // columns the build keeps (`ProblemOptions::retain_data_fields`).
+            // Every field an assertion of a test that may share this build
+            // reads (an element name reads its stem's): the data-fed
+            // parameters among them are the ingested columns the build keeps
+            // (`ProblemOptions::retain_data_fields`).
             let mut retain: Vec<String> = tests
                 .iter()
                 .filter(|u| BuildKey::of(u) == key)
-                .flat_map(|u| u.assertions.iter().map(|a| a.variable.clone()))
+                .flat_map(|u| {
+                    u.assertions
+                        .iter()
+                        .map(|a| asserted_field_name(&a.variable).to_string())
+                })
                 .collect();
             retain.sort();
             retain.dedup();
@@ -2594,7 +2864,17 @@ fn run_component_tests(
         // form reads them, and nothing else. Without this a STATE-DEPENDENT
         // array observed would be unassertable (the build inspection hoists
         // only the state-free ones).
-        for name in assertion_observed_requests(run_file, model_name, t) {
+        // What the build knows of the variables the assertions name: the
+        // axes it gave each, the inputs a coupling bound away. `None` only for
+        // a failed build, whose assertions all report that failure.
+        let view = BuildView::new(
+            run_file,
+            match &cached.built {
+                Built::Problem(prob) => Some(&**prob),
+                Built::TestError(_) | Built::BuildFailed(_) => None,
+            },
+        );
+        for name in assertion_observed_requests(model_name, t, &view) {
             // Additive: a caller's own request stands.
             if !run_opts.output_observed.contains(&name) {
                 run_opts.output_observed.push(name);
@@ -2760,16 +3040,10 @@ fn run_component_tests(
                 resolve_tolerance(tolerance, t.tolerance.as_ref(), a.tolerance.as_ref());
             let outcome = match &sim {
                 Err(msg) => Err(msg.clone()),
-                Ok(sol) => eval_assertion(
-                    sol,
-                    a,
-                    model_name,
-                    run_index_sets,
-                    run_file,
-                    &insp,
-                    base_dir,
-                )
-                .map_err(|msg| format!("assertion evaluation failed: {msg}")),
+                Ok(sol) => {
+                    eval_assertion(sol, a, model_name, run_index_sets, &insp, base_dir, &view)
+                        .map_err(|msg| format!("assertion evaluation failed: {msg}"))
+                }
             };
             let (actual, passed, message) = match outcome {
                 Err(msg) => (None, false, msg),
@@ -5286,5 +5560,388 @@ mod tests {
         };
         assert!(!bits(&native).is_empty(), "{native:?}");
         assert_eq!(bits(&native), bits(&interp));
+    }
+
+    // -----------------------------------------------------------------
+    // Assertions on a field a pointwise lift (esm-spec §10.5) evaluates
+    // over a grid, on a variable declared WITHOUT a `shape`.
+    // -----------------------------------------------------------------
+
+    /// A 0-D component `Box` whose inputs `T` and `A` two `variable_map`
+    /// couplings bind to `Col`'s `[lev]` parameters, so `k = 1e-3·T/300` and
+    /// `dA_dt = −k·A` are evaluated once per `lev` cell although `Box`
+    /// declares both without a `shape`. With `state` set, `A` is fed by
+    /// `Col.c`, a `[lev]` STATE initialized from `Col.A0` and held constant,
+    /// so `dA_dt` is a state-dependent observed whose rows must be requested;
+    /// without it, `A` is fed by a parameter and the field is state-free.
+    /// Cell values at `T = [300, 600, 150]`, `A = [1, 2, 4]`:
+    /// `dA_dt = [−0.001, −0.004, −0.002]`.
+    fn lifted_box_doc(state: bool, assertions: serde_json::Value) -> serde_json::Value {
+        let mut col_vars = json!({
+            "T": {"type": "parameter", "units": "K", "shape": ["lev"], "default": 300.0},
+            "A0": {"type": "parameter", "units": "1", "shape": ["lev"], "default": 1.0},
+        });
+        let mut col_eqs = json!([]);
+        let a_source = if state {
+            col_vars["c"] = json!({"type": "unknown", "units": "1", "shape": ["lev"]});
+            let idx = json!({"op": "index", "args": ["c", "i"]});
+            col_eqs = json!([
+                {"lhs": {"op": "ic", "args": ["c"]}, "rhs": "A0"},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                         "ranges": {"i": {"from": "lev"}},
+                         "expr": {"op": "D", "args": [idx], "wrt": "t"}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                         "ranges": {"i": {"from": "lev"}}, "expr": 0.0}},
+            ]);
+            "Col.c"
+        } else {
+            "Col.A0"
+        };
+        json!({
+            "esm": "1.2.0",
+            "metadata": {"name": "lifted_assertions"},
+            "index_sets": {"lev": {"kind": "interval", "size": 3}},
+            "models": {
+                "Box": {
+                    "variables": {
+                        "T": {"type": "parameter", "units": "K", "default": 300.0},
+                        "A": {"type": "parameter", "units": "1", "default": 1.0},
+                        "k": {"type": "unknown", "units": "1/s"},
+                        "dA_dt": {"type": "unknown", "units": "1/s"},
+                    },
+                    "equations": [
+                        {"lhs": "k", "rhs": {"op": "*", "args": [0.001, {"op": "/", "args": ["T", 300.0]}]}},
+                        {"lhs": "dA_dt", "rhs": {"op": "*", "args": [-1, "k", "A"]}},
+                    ],
+                },
+                "Col": {
+                    "variables": col_vars,
+                    "equations": col_eqs,
+                    "tests": [{
+                        "id": "lift",
+                        "parameter_overrides": {"Col.T": [300.0, 600.0, 150.0], "Col.A0": [1.0, 2.0, 4.0]},
+                        "time_span": {"start": 0.0, "end": 0.0},
+                        "assertions": assertions,
+                    }],
+                },
+            },
+            "coupling": [
+                {"type": "variable_map", "from": "Col.T", "to": "Box.T",
+                 "transform": "param_to_var", "lifting": "pointwise"},
+                {"type": "variable_map", "from": a_source, "to": "Box.A",
+                 "transform": "param_to_var", "lifting": "pointwise"},
+            ],
+        })
+    }
+
+    /// The assertion forms §6.6.3/§6.6.5 admit on a field, each on the lifted
+    /// `Box.dA_dt`: a `reduce` against a `reference` written over the field's
+    /// index set, a `coords` sample, and element names asserted ALONE (they
+    /// used to evaluate only when a bare-name assertion on the same field sat
+    /// in the same test). The last element is deliberately wrong, so it must
+    /// FAIL with a value, not error.
+    fn lifted_field_assertions() -> serde_json::Value {
+        let tol = json!({"abs": 1e-15, "rel": 0.0});
+        json!([
+            {"variable": "Box.dA_dt", "time": 0.0, "reduce": "Linf_error", "expected": 0.0,
+             "tolerance": tol,
+             "reference": {"op": "index", "args": [
+                 {"op": "const", "args": [], "value": [-0.001, -0.004, -0.002]}, "lev"]}},
+            {"variable": "Box.dA_dt", "time": 0.0, "coords": {"lev": 2.0},
+             "expected": -0.004, "tolerance": tol},
+            {"variable": "Box.k", "time": 0.0, "reduce": "max", "expected": 0.002,
+             "tolerance": tol},
+            {"variable": "Box.dA_dt[1]", "time": 0.0, "expected": -0.001, "tolerance": tol},
+            {"variable": "Box.dA_dt[3]", "time": 0.0, "expected": -0.002, "tolerance": tol},
+            {"variable": "Box.dA_dt[3]", "time": 0.0, "expected": -0.0021, "tolerance": tol},
+        ])
+    }
+
+    fn check_lifted_field_results(results: &[AssertionResult]) {
+        let summary: Vec<_> = results
+            .iter()
+            .map(|r| (r.assertion_idx, r.actual, r.passed, r.message.clone()))
+            .collect();
+        assert_eq!(results.len(), 6, "{summary:?}");
+        for r in &results[..5] {
+            assert!(
+                r.passed,
+                "assertion {} should pass: {summary:?}",
+                r.assertion_idx
+            );
+        }
+        let wrong = &results[5];
+        assert!(!wrong.passed, "{summary:?}");
+        assert_eq!(wrong.actual, Some(-0.002), "{summary:?}");
+    }
+
+    #[test]
+    fn a_state_free_lifted_field_is_assertable() {
+        let doc = lifted_box_doc(false, lifted_field_assertions());
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        check_lifted_field_results(&run_inline_tests(&file, Some("Col"), &tight_opts()));
+    }
+
+    #[test]
+    fn a_state_dependent_lifted_field_is_assertable() {
+        let doc = lifted_box_doc(true, lifted_field_assertions());
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        check_lifted_field_results(&run_inline_tests(&file, Some("Col"), &tight_opts()));
+    }
+
+    /// A pointwise assertion on the WHOLE lifted field has no scalar value to
+    /// read. It errors, naming the lift and the forms that do select a scalar,
+    /// rather than reporting that the variable does not exist.
+    #[test]
+    fn a_bare_pointwise_assertion_on_a_lifted_field_names_the_lift() {
+        for state in [false, true] {
+            let doc = lifted_box_doc(
+                state,
+                json!([{"variable": "Box.dA_dt", "time": 0.0, "expected": -0.001}]),
+            );
+            let file = load_string(&doc.to_string()).expect("doc loads");
+            let results = run_inline_tests(&file, Some("Col"), &tight_opts());
+            assert_eq!(results.len(), 1);
+            let r = &results[0];
+            assert!(!r.passed && r.actual.is_none(), "{r:?}");
+            assert!(
+                r.message.contains("pointwise lift") && r.message.contains("[lev]"),
+                "state={state}: {}",
+                r.message
+            );
+        }
+    }
+
+    fn summarize(results: &[AssertionResult]) -> Vec<(usize, Option<f64>, bool, String)> {
+        results
+            .iter()
+            .map(|r| (r.assertion_idx, r.actual, r.passed, r.message.clone()))
+            .collect()
+    }
+
+    /// A 0-D reaction system `Chem` (`X → ∅` at `k = 0.1`) composed with `Col`,
+    /// whose operator reads the `[lev]` parameter `w = [0, 1, 2]` per cell, so
+    /// the pointwise lift puts `Chem.X` on `[lev]` although no species can
+    /// declare a `shape`: `X_i(t) = exp(−(0.1 + w_i)·t)`.
+    fn lifted_reaction_system_doc(assertions: serde_json::Value) -> serde_json::Value {
+        let cell = |name: &str| json!({"op": "index", "args": [name, "i"]});
+        json!({
+            "esm": "1.3.0",
+            "metadata": {"name": "lifted_reaction_system"},
+            "index_sets": {"lev": {"kind": "interval", "size": 3}},
+            "reaction_systems": {
+                "Chem": {
+                    "species": {"X": {"units": "mol/mol", "default": 1.0}},
+                    "parameters": {"k": {"units": "1/s", "default": 0.1}},
+                    "reactions": [{"id": "R1", "substrates": [{"species": "X", "stoichiometry": 1}],
+                                   "products": null, "rate": "k"}],
+                },
+            },
+            "models": {
+                "Col": {
+                    "variables": {
+                        "w": {"type": "parameter", "units": "1/s", "shape": ["lev"], "default": 0.0},
+                    },
+                    "equations": [{
+                        "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
+                        "rhs": {"op": "makearray", "args": [], "regions": [[[1, 3]]],
+                                "values": [{"op": "faq", "args": [], "output_idx": ["i"],
+                                            "ranges": {"i": [1, 3]},
+                                            "expr": {"op": "*", "args": [
+                                                {"op": "-", "args": [cell("w")]}, cell("_var")]}}]},
+                    }],
+                    "tests": [{
+                        "id": "lift",
+                        "parameter_overrides": {"Col.w": [0.0, 1.0, 2.0]},
+                        "time_span": {"start": 0.0, "end": 1.0},
+                        "assertions": assertions,
+                    }],
+                },
+            },
+            "coupling": [{"type": "operator_compose", "systems": ["Chem", "Col"],
+                          "lifting": "pointwise"}],
+        })
+    }
+
+    /// A species of a lifted reaction system is a field. `coords`
+    /// selects one cell of it, and a `reference` written over `lev` binds `lev`.
+    #[test]
+    fn a_lifted_reaction_system_species_is_assertable() {
+        let tol = json!({"rel": 1e-8});
+        let x = |w: f64| (-(0.1 + w)).exp();
+        let doc = lifted_reaction_system_doc(json!([
+            {"variable": "Chem.X", "time": 1.0, "coords": {"lev": 2.0},
+             "expected": x(1.0), "tolerance": tol},
+            {"variable": "Chem.X", "time": 1.0, "reduce": "Linf_error", "expected": 0.0,
+             "tolerance": {"abs": 1e-8},
+             "reference": {"op": "exp", "args": [{"op": "-", "args": [
+                 {"op": "+", "args": [0.1, {"op": "-", "args": ["lev", 1]}]}]}]}},
+            {"variable": "Chem.X[3]", "time": 1.0, "expected": x(2.0), "tolerance": tol},
+        ]));
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let results = run_inline_tests(&file, Some("Col"), &tight_opts());
+        let summary = summarize(&results);
+        assert_eq!(results.len(), 3, "{summary:?}");
+        assert!(results.iter().all(|r| r.passed), "{summary:?}");
+    }
+
+    struct ConstColumn(Vec<f64>);
+
+    impl crate::prepare::PrepareProvider for ConstColumn {
+        fn sample(&mut self) -> Result<ndarray::ArrayD<f64>, crate::prepare::PrepareError> {
+            Ok(
+                ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[self.0.len()]), self.0.clone())
+                    .unwrap(),
+            )
+        }
+    }
+
+    /// An ELEMENT of a data-fed `[lev]` parameter is answered from the
+    /// ingested column, which the build keeps only when retained by its stem.
+    #[test]
+    fn an_element_of_a_data_fed_field_is_assertable() {
+        let doc = json!({
+            "esm": "2.0.0",
+            "metadata": {"name": "data_fed_element"},
+            "index_sets": {"lev": {"kind": "interval", "size": 3}},
+            "data_sources": {"src": {"kind": "static",
+                                     "source": {"url_template": "never-read.parquet"}}},
+            "models": {"M": {
+                "variables": {
+                    "p": {"type": "parameter", "units": "1", "default": 0.0, "shape": ["lev"],
+                          "update": {"kind": "data", "source": "src",
+                                     "from": {"file_variable": "p"}}},
+                    "total": {"type": "unknown", "units": "1"},
+                },
+                "equations": [{"lhs": "total", "rhs": {"op": "faq", "args": [], "output_idx": [],
+                    "ranges": {"r": {"from": "lev"}}, "expr": {"op": "index", "args": ["p", "r"]}}}],
+                "tests": [{
+                    "id": "element",
+                    "time_span": {"start": 0.0, "end": 0.0},
+                    "assertions": [{"variable": "p[2]", "time": 0.0, "expected": 5.0}],
+                }],
+            }},
+        });
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let make: Box<BuildProviderFactory<'_>> = Box::new(|| {
+            Ok(vec![(
+                "p".to_string(),
+                Box::new(ConstColumn(vec![3.0, 5.0, 7.0]))
+                    as Box<dyn crate::prepare::PrepareProvider>,
+            )])
+        });
+        let results =
+            run_inline_tests_with_providers(&file, Some("M"), &tight_opts(), None, Some(&*make));
+        let summary = summarize(&results);
+        assert_eq!(results.len(), 1, "{summary:?}");
+        assert!(results[0].passed, "{summary:?}");
+    }
+
+    /// A bare pointwise assertion on an observed DECLARED with a
+    /// `shape` is not blamed on a pointwise lift.
+    #[test]
+    fn a_bare_pointwise_assertion_on_a_shaped_observed_does_not_name_a_lift() {
+        let doc = json!({
+            "esm": "1.3.0",
+            "metadata": {"name": "shaped_observed"},
+            "index_sets": {"lev": {"kind": "interval", "size": 3}},
+            "models": {"Col": {
+                "variables": {
+                    "a": {"type": "parameter", "units": "1", "shape": ["lev"], "default": 1.0},
+                    "y": {"type": "unknown", "units": "1", "shape": ["lev"]},
+                },
+                "equations": [{"lhs": "y", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "ranges": {"i": {"from": "lev"}},
+                    "expr": {"op": "*", "args": [2.0, {"op": "index", "args": ["a", "i"]}]}}}],
+                "tests": [{
+                    "id": "bare",
+                    "time_span": {"start": 0.0, "end": 0.0},
+                    "assertions": [{"variable": "y", "time": 0.0, "expected": 2.0}],
+                }],
+            }},
+        });
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let results = run_inline_tests(&file, Some("Col"), &tight_opts());
+        assert_eq!(results.len(), 1);
+        let r = &results[0];
+        assert!(!r.passed && r.actual.is_none(), "{r:?}");
+        assert!(!r.message.contains("pointwise lift"), "{}", r.message);
+    }
+
+    /// `coords` and `reduce` on a lifted INPUT — `Box.T` and `Box.A`,
+    /// which `param_to_var` binds to `Col`'s `[lev]` arrays — read the field the
+    /// input is bound to.
+    #[test]
+    fn a_lifted_input_bound_by_param_to_var_is_assertable() {
+        for state in [false, true] {
+            let tol = json!({"abs": 1e-12, "rel": 0.0});
+            let doc = lifted_box_doc(
+                state,
+                json!([
+                    {"variable": "Box.T", "time": 0.0, "coords": {"lev": 2.0},
+                     "expected": 600.0, "tolerance": tol},
+                    {"variable": "Box.A", "time": 0.0, "reduce": "Linf_error", "expected": 0.0,
+                     "tolerance": tol,
+                     "reference": {"op": "index", "args": [
+                         {"op": "const", "args": [], "value": [1.0, 2.0, 4.0]}, "lev"]}},
+                ]),
+            );
+            let file = load_string(&doc.to_string()).expect("doc loads");
+            let results = run_inline_tests(&file, Some("Col"), &tight_opts());
+            let summary = summarize(&results);
+            assert_eq!(results.len(), 2, "state={state}: {summary:?}");
+            assert!(
+                results.iter().all(|r| r.passed),
+                "state={state}: {summary:?}"
+            );
+        }
+    }
+
+    fn first_test(file: &EsmFile, model: &str) -> crate::types::ModelTest {
+        file.models.as_ref().unwrap()[model].tests.as_ref().unwrap()[0].clone()
+    }
+
+    /// The output requests the runner makes for `Col`'s first test of the
+    /// lifted-box document, against its build.
+    fn lifted_box_requests(state: bool, assertions: serde_json::Value) -> Vec<String> {
+        let doc = lifted_box_doc(state, assertions);
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let prob = esm_problem(
+            &file,
+            (0.0, 0.0),
+            ProblemOptions {
+                rhs: crate::problem::Rhs::Always,
+                ..Default::default()
+            },
+        )
+        .expect("the document builds");
+        let view = BuildView::new(&file, Some(&prob));
+        assertion_observed_requests("Col", &first_test(&file, "Col"), &view)
+    }
+
+    /// An element name whose stem the component does not declare is
+    /// still requested as a best effort, by its stem.
+    #[test]
+    fn an_element_of_an_undeclared_stem_is_requested_as_a_best_effort() {
+        let requests = lifted_box_requests(
+            false,
+            json!([{"variable": "u[2]", "time": 0.0, "expected": 0.0}]),
+        );
+        assert!(requests.contains(&"u".to_string()), "{requests:?}");
+    }
+
+    /// An element of a STATE-FREE array observed is read from the
+    /// field the build materialized, so its stem is not requested as output;
+    /// an element of a STATE-DEPENDENT one is requested by its stem.
+    #[test]
+    fn only_an_element_of_a_state_dependent_field_requests_the_field() {
+        let element = json!([{"variable": "Box.dA_dt[2]", "time": 0.0, "expected": -0.004}]);
+        let free = lifted_box_requests(false, element.clone());
+        assert!(free.is_empty(), "{free:?}");
+        let dependent = lifted_box_requests(true, element);
+        assert!(
+            dependent.contains(&"Box.dA_dt".to_string()),
+            "{dependent:?}"
+        );
     }
 }
