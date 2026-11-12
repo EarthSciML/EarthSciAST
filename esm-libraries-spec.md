@@ -1652,11 +1652,14 @@ TypeScript `camelCase`, others verbatim).
   replacement leaves a reference (`"Met.cap_src"`); a scaled replacement leaves the
   replacement expression, so a flattened bound is a number or an Expression (a namespaced
   name in every case but the scaled one). A `variable_map` target leaves the flattened
-  system with its bounds, and a merged variable's bounds come from the declaration its
-  `units` and `default` come from. Flattening never checks or imposes a bound. The
+  system with its bounds (the target of an expression transform stays, as an observed of
+  the same name, and keeps them), and a merged variable's bounds come from the declaration
+  its `units` and `default` come from. Flattening never checks or imposes a bound. The
   cross-binding pin is `tests/conformance/flatten/cases.json`, whose variable records carry
   `lb` and `ub` (`null` when absent, the number, or the flattened bound rendered with
-  `to_ascii`); `variable_bounds_coupled` exercises each rename.
+  `to_ascii`); `variable_bounds_coupled` (namespacing, a `param_to_var` replacement) and
+  `variable_bounds_renames` (an `operator_compose` merged-away retarget, a scaled replacement,
+  an expression-transform target) together exercise each rename.
 
 **Loader fields (normative).** `loader_fields` holds one entry per data-fed
 parameter, a parameter with a `data` rule whose `source` names a declared

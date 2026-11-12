@@ -3291,10 +3291,12 @@ it at the pointer of the offending field, when:
 4. both bounds are numbers and `lb > ub` — `variable_bounds_inverted`, at
    `…/variables/<v>`. `lb == ub` is legal.
 
-`details` carries `variable` (the bounded variable's name in its own model) and
-`bound` (`"lb"` or `"ub"`), plus `reference` for rules 2 and 3; rule 1's
-`details.variable` is the unresolved reference, as for every
-`undefined_variable`. A bound is checked only when it is schema-valid.
+For rules 2 and 3, `details` carries `variable` (the bounded variable's name in
+its own model), `bound` (`"lb"` or `"ub"`) and `reference` (the reference as
+written). Rule 1's `details` carries `variable`, the unresolved reference, as
+for every `undefined_variable`, and `bound`. Rule 4's `details` carries
+`variable` and the two numbers `lb` and `ub`. A bound is checked only when it
+is schema-valid.
 
 **Round-trip.** `lb` and `ub` survive `parse → emit` as authored: a number
 stays the number written and a reference stays the string written. A binding
@@ -3308,9 +3310,10 @@ replacement of a parameter — so it names the same quantity in the flattened
 system (`"E_NaCl_max"` in model `MESA` becomes `"MESA.E_NaCl_max"`). Where a
 `variable_map` replaces a referenced parameter with a scaled source, the
 flattened bound is that replacement expression. A variable that flattening
-removes (a `variable_map` target) takes its bounds with it, and a merged
-variable's bounds come from the same declaration its `units` and `default`
-come from.
+removes (a `variable_map` target) takes its bounds with it; the target of an
+expression-transform `variable_map` is not removed but kept as an observed of
+the same name (§10.4), and keeps its own bounds. A merged variable's bounds come
+from the same declaration its `units` and `default` come from.
 
 **Version gate.** A document declaring `esm` below `2.1.0` that carries `lb` or
 `ub` on any variable is rejected with `variable_bounds_version_too_old`, before
