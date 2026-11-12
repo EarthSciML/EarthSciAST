@@ -44,6 +44,10 @@ type flattenVarRecord struct {
 	UpdateKinds      []string `json:"update_kinds"`
 	DistributionKind *string  `json:"distribution_kind"`
 	SourceSystem     *string  `json:"source_system"`
+	// LB and UB are the flattened bounds (esm-libraries-spec §4.7.5): null
+	// when absent, the number, or the flattened bound rendered with ToASCII.
+	LB any `json:"lb"`
+	UB any `json:"ub"`
 }
 
 type flattenEqRecord struct {
@@ -162,7 +166,31 @@ func goVarRecord(v FlattenedVariable) flattenVarRecord {
 	return flattenVarRecord{
 		Name: v.Name, Role: v.Role, Units: v.Units, Default: v.Default,
 		Shape: v.Shape, UpdateKinds: kinds, DistributionKind: dist, SourceSystem: source,
+		LB: goBoundRecord(v.LB), UB: goBoundRecord(v.UB),
 	}
+}
+
+// goBoundRecord projects a flattened bound into the corpus form: nil, the
+// number, or the ToASCII rendering of the (renamed) reference.
+func goBoundRecord(b Expression) any {
+	if b == nil {
+		return nil
+	}
+	if n, ok := exprNumber(b); ok {
+		return n
+	}
+	return ToASCII(b)
+}
+
+// sameBound compares two projected bounds: numbers numerically (the corpus
+// writes an integral bound as a JSON integer), everything else exactly.
+func sameBound(a, b any) bool {
+	an, aok := exprNumber(a)
+	bn, bok := exprNumber(b)
+	if aok || bok {
+		return aok && bok && an == bn
+	}
+	return a == b
 }
 
 func goVarRecords(vs []FlattenedVariable) []flattenVarRecord {
@@ -343,6 +371,12 @@ func diffVarRecords(t *testing.T, field string, got, want []flattenVarRecord) {
 		if !sameStrPtr(g.SourceSystem, w.SourceSystem) {
 			t.Errorf("%s[%d] %s: source system %v, want %v",
 				field, i, w.Name, showStr(g.SourceSystem), showStr(w.SourceSystem))
+		}
+		if !sameBound(g.LB, w.LB) {
+			t.Errorf("%s[%d] %s: lb %#v, want %#v", field, i, w.Name, g.LB, w.LB)
+		}
+		if !sameBound(g.UB, w.UB) {
+			t.Errorf("%s[%d] %s: ub %#v, want %#v", field, i, w.Name, g.UB, w.UB)
 		}
 	}
 }

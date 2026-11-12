@@ -211,6 +211,23 @@ const (
 	CodeConstUnitsVersionTooOld = "const_units_version_too_old"
 )
 
+// --- Diagnostic codes: §6.3.2 variable bounds `lb` / `ub` (the version gate
+// raised via newETErr, the rest by the structural scan; variable_bounds.go). An
+// unresolved bound reference is the shared `undefined_variable`. ---
+const (
+	// CodeVariableBoundsVersionTooOld: a document declaring esm < 2.1.0 carries
+	// `lb` or `ub` on a model variable.
+	CodeVariableBoundsVersionTooOld = "variable_bounds_version_too_old"
+	// CodeVariableBoundShapeMismatch: a referenced bound's declared shape is
+	// neither scalar nor the bounded variable's.
+	CodeVariableBoundShapeMismatch = "variable_bound_shape_mismatch"
+	// CodeVariableBoundCircular: a bound refers to the variable it bounds, or
+	// to an observed whose definition depends on it.
+	CodeVariableBoundCircular = "variable_bound_circular"
+	// CodeVariableBoundsInverted: both bounds are numbers and `lb > ub`.
+	CodeVariableBoundsInverted = "variable_bounds_inverted"
+)
+
 // --- Diagnostic codes: §10.3 / esm-libraries-spec §4.7.2 `couple` connector
 // semantics (raised from flatten.go's applyCouple). ---
 const (

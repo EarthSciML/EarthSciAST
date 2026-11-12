@@ -534,6 +534,8 @@ func collectStructuralErrors(file *ESMFile) []StructuralError {
 	s.validateImportedCouplingEdges()
 	s.validateSubsystemRefs()
 	s.validateCircularReferences()
+	// esm-spec §6.3.2: bounds on every model and inline-subsystem variable.
+	s.validateVariableBounds()
 	s.validateDataSourceReferences()
 	// esm-spec §8.5.1 rule 1: a record axis has size 2.
 	s.validateRecordAxes()
@@ -3134,9 +3136,14 @@ func (s *structuralScan) validateCircularReferences() {
 	})
 }
 
-// crossScopeObservedGraph builds the §4.9.7 graph: scoped observed name → its
-// sorted successors.
-func crossScopeObservedGraph(file *ESMFile, ix *scopedNameIndex) map[string][]string {
+// documentObservedReads maps every observed of every model and inline
+// subsystem, by full scoped name, to the full scoped names its defining RHS
+// reads (observedDefinitionReads, per scope). An unknown that some equation
+// differentiates through a dotted name is an ODE state of its component, not
+// an observed, and has no entry. It also returns each scope's §4.3.1.2
+// recurrence groups, by full scoped name. It is the edge set of the §4.9.7
+// graph and of the §6.3.2 bound-circularity walk.
+func documentObservedReads(file *ESMFile, ix *scopedNameIndex) (map[string]map[string]bool, [][]string) {
 	type scope struct {
 		prefix string
 		reads  map[string]map[string]bool
@@ -3184,29 +3191,30 @@ func crossScopeObservedGraph(file *ESMFile, ix *scopedNameIndex) map[string][]st
 		walk(name, &m)
 	}
 
-	nodes := map[string]bool{}
+	reads := map[string]map[string]bool{}
 	for _, sc := range scopes {
-		for v := range sc.reads {
+		for v, refs := range sc.reads {
 			if full := sc.prefix + "." + v; !externalStates[full] {
-				nodes[full] = true
+				reads[full] = refs
 			}
 		}
 	}
-	graph := make(map[string][]string, len(nodes))
-	for _, sc := range scopes {
-		for v, refs := range sc.reads {
-			from := sc.prefix + "." + v
-			if !nodes[from] {
-				continue
+	return reads, scopedGroups
+}
+
+// crossScopeObservedGraph builds the §4.9.7 graph: scoped observed name → its
+// sorted successors.
+func crossScopeObservedGraph(file *ESMFile, ix *scopedNameIndex) map[string][]string {
+	reads, scopedGroups := documentObservedReads(file, ix)
+	graph := make(map[string][]string, len(reads))
+	for from, refs := range reads {
+		successors := map[string]bool{}
+		for to := range refs {
+			if _, isObserved := reads[to]; isObserved {
+				successors[to] = true
 			}
-			successors := map[string]bool{}
-			for to := range refs {
-				if nodes[to] {
-					successors[to] = true
-				}
-			}
-			graph[from] = sortedKeysOfSet(successors)
 		}
+		graph[from] = sortedKeysOfSet(successors)
 	}
 	// esm-spec §4.3.1.2: a recurrence group is swept as ONE unit, so here it is
 	// one node — its first member — carrying every member's external reads.

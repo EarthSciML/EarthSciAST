@@ -108,7 +108,7 @@ func ToJSON(file *ESMFile) (string, error) {
 	if err != nil {
 		return out, err
 	}
-	return raiseFaqEsmFloor(out), nil
+	return raiseEsmFloors(out), nil
 }
 
 // raiseFaqEsmFloor raises an emitted document's declared `esm` to 1.1.0 when it
@@ -130,6 +130,12 @@ func raiseFaqEsmFloor(jsonStr string) string {
 	return raiseEsmFloorToV11(jsonStr, declared)
 }
 
+// raiseEsmFloors applies every emit-time version floor: `faq` (1.1.0), then
+// variable bounds (2.1.0). Each only ever raises.
+func raiseEsmFloors(jsonStr string) string {
+	return raiseVariableBoundsEsmFloor(raiseFaqEsmFloor(jsonStr))
+}
+
 // ToJSONCompact validates an ESM file and returns it as a compact canonical
 // JSON string (no indentation). A separate function rather than a ToJSON
 // option because Go has no default arguments.
@@ -138,7 +144,7 @@ func ToJSONCompact(file *ESMFile) (string, error) {
 	if err != nil {
 		return out, err
 	}
-	return raiseFaqEsmFloor(out), nil
+	return raiseEsmFloors(out), nil
 }
 
 // WritePath writes an ESM file to path as indented canonical JSON. It returns

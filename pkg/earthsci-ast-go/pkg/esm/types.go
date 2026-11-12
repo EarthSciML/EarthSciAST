@@ -184,6 +184,12 @@ type ModelVariable struct {
 	// floats inside. Read it through UpdateRules() rather than type-switching at
 	// each site.
 	Update any `json:"update,omitempty"`
+	// LB and UB are the optional lower and upper bounds on the variable's
+	// value (esm-spec §6.3.2, esm 2.1.0): each a number in the variable's
+	// `units` or a reference to another variable. Nil means unbounded on that
+	// side, and an absent bound is not written.
+	LB *VariableBound `json:"lb,omitempty"`
+	UB *VariableBound `json:"ub,omitempty"`
 }
 
 // Dims returns the variable's declared index-set axes, treating an absent
