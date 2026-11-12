@@ -46,6 +46,7 @@ Run:  python3 scripts/gen_compiled_rhs_manifest.py
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as _dt
 import json
 import math
@@ -57,6 +58,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gen_pde_sim_fixtures as pde  # noqa: E402 — needs the sys.path bootstrap above
+from conformance_lib import TOLERANCE_CLASSES  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 TESTS = REPO / "tests"
@@ -311,6 +313,55 @@ def _pde_entry(fid, bc, n, kind, model):
     }
 
 
+def _recurrence_ladder(state, t):
+    """`recurrence_ladder_rhs`: `s[k] = (s[k-1] + u[k]) + x[k]` (s[0] = 0) over
+    `u = [1e16, 1, -1e16, 1]`, folded ascending with every cell rounded, and
+    `D(x[k]) = s[k]`. Plain IEEE-754 binary64 additions in the document's order,
+    which is what the `exact` class pins."""
+    u = [1e16, 1.0, -1e16, 1.0]
+    s = 0.0
+    du = {}
+    for k in range(4):
+        s = ((0.0 if k == 0 else s) + u[k]) + state[f"x[{k + 1}]"]
+        du[f"x[{k + 1}]"] = s
+    return du
+
+
+def _recurrence_thomas(state, t):
+    """`recurrence_thomas_rhs`: `D(x) = -A^{-1} x` for the 6x6 tridiagonal `A`
+    with sub-diagonal -1, diagonal `4 + k/2` and super-diagonal -1.5, solved
+    EXACTLY in rationals (Gaussian elimination over `Fraction`) and rounded once.
+    Independent of the Thomas sweep the document runs."""
+    from fractions import Fraction
+
+    n = 6
+    a = [[Fraction(0)] * n for _ in range(n)]
+    for k in range(n):
+        a[k][k] = Fraction(4) + Fraction(k + 1, 2)
+        if k > 0:
+            a[k][k - 1] = Fraction(-1)
+        if k < n - 1:
+            a[k][k + 1] = Fraction(-3, 2)
+    rhs = [Fraction(state[f"x[{k + 1}]"]) for k in range(n)]
+    for c in range(n):
+        for r in range(c + 1, n):
+            f = a[r][c] / a[c][c]
+            for j in range(c, n):
+                a[r][j] -= f * a[c][j]
+            rhs[r] -= f * rhs[c]
+    y = [Fraction(0)] * n
+    for r in range(n - 1, -1, -1):
+        acc = rhs[r] - sum(a[r][j] * y[j] for j in range(r + 1, n))
+        y[r] = acc / a[r][r]
+    return {f"x[{k + 1}]": float(-y[k]) for k in range(n)}
+
+
+# Why the recurrence fixtures name no compiled engine as required: neither
+# compiled emitter lowers a causal recurrence yet (esm-spec §4.3.1.1). Both
+# refuse it by name, which this tier records as a named exclusion.
+RECURRENCE_COMPILED = []
+
+
 FIXTURE_TABLE = [
     {
         "id": "elementwise_gather",
@@ -436,6 +487,26 @@ FIXTURE_TABLE = [
             ("day_boundary_below", 86399.75),  # just below a day boundary
             ("day_boundary", 86400.0),  # exactly on one
         ],
+    },
+    {
+        "id": "recurrence_ladder_rhs",
+        "path": "conformance/compiled_rhs/fixtures/recurrence_ladder_rhs.esm",
+        "model": "RecurrenceLadderRhs",
+        # No multiply and no in-body reduction: the sweep's order fixes every
+        # bit (CONFORMANCE_SPEC §5.19.1).
+        "tolerance_class": "exact",
+        "anchor": _recurrence_ladder,
+        "domain": "any",
+        "compiled_required": RECURRENCE_COMPILED,
+    },
+    {
+        "id": "recurrence_thomas_rhs",
+        "path": "conformance/compiled_rhs/fixtures/recurrence_thomas_rhs.esm",
+        "model": "RecurrenceThomasRhs",
+        "tolerance_class": "algebraic",
+        "anchor": _recurrence_thomas,
+        "domain": "any",
+        "compiled_required": RECURRENCE_COMPILED,
     },
 ]
 
@@ -672,7 +743,7 @@ def build_manifest() -> dict:
                 "path": entry["path"],
                 "model": entry["model"],
                 "tolerance_class": entry["tolerance_class"],
-                "compiled_required": ["julia", "rust"],
+                "compiled_required": entry.get("compiled_required", ["julia", "rust"]),
                 "state_order": order,
                 "parameters": {},
                 "rhs_probes": build_probes(entry, layout, rng, pde_probes),
@@ -695,12 +766,11 @@ def build_manifest() -> dict:
             "go": "rewrite-only port; no faq/makearray evaluator, no RHS hook",
             "typescript": "rewrite-only port; no faq/makearray evaluator, no RHS hook",
         },
-        "tolerance_classes": {
-            "algebraic": {"rtol": 1e-13, "atol": 1e-300},
-            "transcendental": {"rtol": 1e-12, "atol": 1e-300},
-            "reduction": {"rtol": 1e-11, "atol_scaled": 1e-14},
-            "float32": {"rtol": 1e-5, "atol": 1e-30},
-        },
+        # CONFORMANCE_SPEC §5.38.2, from the one shared definition. `exact` is
+        # bit identity, for a fixture whose order fixes every bit: no multiply
+        # (which an XLA-class backend may contract into an FMA) and no in-body
+        # reduction (which it may reassociate).
+        "tolerance_classes": copy.deepcopy(TOLERANCE_CLASSES),
         "excluded": EXCLUDED,
         "fixtures": fixtures,
     }

@@ -85,6 +85,12 @@ const DOCS: &[(&str, &str, &str, usize)] = &[
         1,
     ),
     (
+        "fixtures/recurrence/10_recurrence_slice_batch.esm",
+        "RecurrenceSliceBatch",
+        "V",
+        2,
+    ),
+    (
         "valid/recurrence_causal_self_reference.esm",
         "RecurrenceCausalSelfReference",
         "r",
@@ -455,4 +461,108 @@ fn an_unguarded_self_read_faults_under_native_as_under_the_interpreter() {
         messages[1].contains("at cell [0]"),
         "native names the cell the interpreter names: {messages:?}"
     );
+}
+
+/// The two fault fixtures (CONFORMANCE_SPEC §5.19.4): an unguarded read before
+/// the axis under a clamp, and the same read behind a guard whose bound is a
+/// parameter, so it is reached only at evaluation. Every assertion of each
+/// fails on the fault under both compilers, and none produces a value.
+#[test]
+fn the_fault_fixtures_fault_under_both_compilers() {
+    for rel in [
+        "fixtures/recurrence/11_recurrence_fault_under_clamp.esm",
+        "fixtures/recurrence/12_recurrence_fault_parameter_guard.esm",
+    ] {
+        let file = load_path(tests_dir().join(rel)).expect("the fixture parses");
+        for compiler in [Compiler::Interpreter, Compiler::Native] {
+            let options = InlineTestOptions {
+                compiler: Some(compiler),
+                base_dir: Some(tests_dir().join(rel).parent().unwrap().to_path_buf()),
+                ..Default::default()
+            };
+            let results = run_inline_tests_with_options(&file, &options, None);
+            assert!(!results.is_empty(), "{rel}: asserts nothing");
+            for r in results {
+                assert!(
+                    !r.passed && r.actual.is_none(),
+                    "{rel} under {}: {}[{}] produced {:?}; the read must fault",
+                    compiler.as_str(),
+                    r.test_id,
+                    r.assertion_idx,
+                    r.actual
+                );
+                assert!(
+                    r.message.contains("E_TREEWALK_RECUR_UNAVAILABLE"),
+                    "{rel} under {}: {}",
+                    compiler.as_str(),
+                    r.message
+                );
+            }
+        }
+    }
+}
+
+/// Build inspection reports each recurrence exactly as the shared manifest
+/// pins it (`inspection` on each fixture of tests/conformance/recurrence), the
+/// same entries Julia's `BuildInspection.recurrences` must report.
+#[test]
+fn build_inspection_reports_what_the_manifest_pins() {
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(tests_dir().join("conformance/recurrence/manifest.json"))
+            .expect("the manifest reads"),
+    )
+    .expect("the manifest parses");
+    let mut checked = 0;
+    for fx in manifest["fixtures"].as_array().expect("fixtures") {
+        let Some(want) = fx.get("inspection").and_then(Value::as_array) else {
+            continue;
+        };
+        let rel = fx["path"].as_str().expect("path");
+        let Some(&(_, _, var, rank)) = DOCS.iter().find(|d| d.0 == rel) else {
+            panic!("{rel}: pinned in the manifest but not in DOCS");
+        };
+        let doc = with_a_state(&read_doc(rel), var, rank);
+        let prob = esm_problem(
+            &doc,
+            (0.0, 0.5),
+            ProblemOptions {
+                compiler: Some(Compiler::Interpreter),
+                rhs: Rhs::Always,
+                inspect: true,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{rel}: {e}"));
+        let o = SolveOptions {
+            alg: Alg::Erk,
+            saveat: Some(vec![0.0, 0.5]),
+            ..Default::default()
+        };
+        solve(&prob, &o).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        let mut got: Vec<(String, String, i64, bool)> = prob
+            .take_inspection()
+            .recurrences
+            .into_iter()
+            .map(|r| {
+                let bare = r.var.rsplit('.').next().unwrap_or(&r.var).to_string();
+                (bare, r.axis, r.max_lag, r.lag_proven)
+            })
+            .collect();
+        got.sort();
+        let mut pinned: Vec<(String, String, i64, bool)> = want
+            .iter()
+            .map(|w| {
+                (
+                    w["var"].as_str().expect("var").to_string(),
+                    w["axis"].as_str().expect("axis").to_string(),
+                    w["max_lag"].as_i64().expect("max_lag"),
+                    w["lag_proven"].as_bool().expect("lag_proven"),
+                )
+            })
+            .collect();
+        pinned.sort();
+        assert_eq!(got, pinned, "{rel}");
+        checked += 1;
+    }
+    assert!(checked > 0, "the manifest pins no inspection entry");
 }

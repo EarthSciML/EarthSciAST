@@ -18,6 +18,38 @@ struct _ObservedMemo
 end
 
 """
+    RecurrenceInfo
+
+A recognized causal self-reference (esm-spec §4.3.1.1), as reported in
+[`BuildInspection`](@ref)`.recurrences`:
+
+* `var` — the (flattened) variable the recurrence defines;
+* `axis` — the output index symbol the sweep folds along, ascending;
+* `max_lag` — the largest lag along `axis` over the self-reads whose lag has a
+  static upper bound, derived from the reads. A read whose lag has none (a
+  parameter-valued offset, say) adds nothing, so `max_lag` bounds EVERY read
+  only when `lag_proven` is `true`; when it is `false` the value is a bound over
+  the bounded reads alone (0 if there are none), not the recurrence's lag;
+* `lag_proven` — whether every self-read was proved strictly earlier at build.
+  When `false`, some read's lag can be 0 or less for some value of a symbol, and
+  the fail-closed self-read (`E_TREEWALK_RECUR_UNAVAILABLE`) rules those cells
+  out at run time — typically a guard means they are never evaluated;
+* `slices` — the number of positions along `axis`, each a slice the sweep
+  completes before the next;
+* `cells` — the number of cells the sweep publishes.
+
+No evaluation rule depends on any of these.
+"""
+struct RecurrenceInfo
+    var::String
+    axis::String
+    max_lag::Int
+    lag_proven::Bool
+    slices::Int
+    cells::Int
+end
+
+"""
     BuildInspection()
 
 Observability record for a build: pass one via [`esm_problem`](@ref)'s
@@ -54,6 +86,9 @@ are otherwise internal to the evaluator closure:
   Derived from what the build actually read, not from what the document
   declares — see [`parameter_classes`](@ref). This is the build-level face of the same
   partition `parameter_classes(prob)` exposes on an `EsmProblem`.
+* `recurrences::Vector{RecurrenceInfo}` — one [`RecurrenceInfo`](@ref) per
+  causal self-reference the build recognized (esm-spec §4.3.1.1): its axis,
+  derived maximum lag, whether the lag was proved, and the sweep's size.
 
 Filling the record never changes the build: the returned
 `(f!, u0, p, tspan, var_map)` is identical with or without `inspect`.
@@ -141,6 +176,11 @@ mutable struct BuildInspection
     # parameters' values `data` there (esm-spec §11.4.2). `nothing` when the
     # initial state does not depend on the start.
     ic_reseed::Any
+    # One entry per causal self-reference this build recognized (esm-spec
+    # §4.3.1.1), in name order: the interpretation its self-reads were given,
+    # reported rather than authored. The same four facts Rust's build
+    # inspection reports, plus the sweep's size.
+    recurrences::Vector{RecurrenceInfo}
 end
 BuildInspection() = BuildInspection(
     Dict{String, Array{Float64}}(),
@@ -154,7 +194,7 @@ BuildInspection() = BuildInspection(
     Dict{Tuple{Base.RefValue{Any}, String}, _ObservedMemo}(),
     ReentrantLock(), Ref{Any}(nothing),
     nothing, WeakKeyDict{Base.RefValue{Any}, Any}(),
-    Int[], nothing, nothing
+    Int[], nothing, nothing, RecurrenceInfo[]
 )
 
 """
@@ -4908,6 +4948,9 @@ function _build_compile_evaluator(
                 published[k] = mat_defs[k]
             end
         end
+        # Filled as each sweep compiles (below), so the sweep's own checks
+        # run first and decide any error the build raises.
+        empty!(inspect.recurrences)
         for (k, e) in published
             _is_hoisted_name(String(k)) || (inspect.observed_exprs[String(k)] = e)
         end
@@ -5134,6 +5177,8 @@ function _build_compile_evaluator(
                         pgather, param_sym_set, reg_funcs
                     )
                     _record_rule!(name, :observed, _recurrence_tier(sw))
+                    inspect === nothing ||
+                        push!(inspect.recurrences, _recurrence_info(name, mat_defs[name], sw))
                     push!(lvl_recurs, sw)
                     continue
                 end
@@ -5188,6 +5233,7 @@ function _build_compile_evaluator(
             end
         end
     end
+    inspect === nothing || sort!(inspect.recurrences; by = r -> r.var)
 
     # ---- Build per-derivative compiled-IR list ----
     # (see `_compile_derivative_equations` / `_compile_faq_equation!`)

@@ -231,6 +231,23 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
                     "compiler does run) or introduce the sum as its own unknown"
             )
         end
+        # A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1): an equation defining an
+        # array whose RHS reads `index(V, …)` of itself. Its value is the
+        # ordered sweep, cell by cell along one axis; a ModelingToolkit system
+        # has no ordered sweep, and handing it `V ~ f(V)` would make it an
+        # algebraic system solved to a tolerance, which the construct is not.
+        target = EarthSciAST._recurrence_lhs_target(lhs)
+        if target !== nothing &&
+                EarthSciAST.recurrence_self_reference_kind(first(target), eq.rhs) === :indexed
+            _mtk_refuse(
+                first(target),
+                "it is a causal self-reference (esm-spec §4.3.1.1): its definition " *
+                    "reads earlier cells of itself, so its value is an ordered sweep " *
+                    "along one axis. A ModelingToolkit system has no ordered sweep; it " *
+                    "would treat the definition as an algebraic system solved to a " *
+                    "tolerance, which is a different computation. $_MTK_TRY_INSTEAD"
+            )
+        end
     end
     _mtk_refuse_ic_outside_start_scope(flat)
     return nothing

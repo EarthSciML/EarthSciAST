@@ -296,8 +296,10 @@ end
 
 # ── A recurrence's causal self-read (esm-spec §4.3.1.1; recurrence_sweep.jl) ──
 # The payload of an `_NK_RECUR_GATHER` node. The subscripts are the node's
-# `children`; each is checked against its axis of the recurrence's own dense
-# `1…dims[d]` frame, and the cell it names is then read only if the sweep has
+# `children`; each is checked against its axis of the box the sweep fills
+# (`lo[d]…lo[d]+dims[d]-1`: the recurrence's whole frame, or in a
+# range-restricted program the cells it needs, recurrence_sweep.jl), and the
+# cell it names is then read only if the sweep has
 # already PUBLISHED it — its position in the sweep order (`sweep_w`, the weight of
 # each axis in that order) is before `cur[]`, the position of the cell being
 # evaluated. Anything else is `E_TREEWALK_RECUR_UNAVAILABLE`: never the zero
@@ -305,6 +307,7 @@ end
 # `strides` address the observed's buffer block in the extended value vector.
 struct _RecurGather
     name::String
+    lo::Vector{Int}
     dims::Vector{Int}
     sweep_w::Vector{Int}
     base::Int
@@ -2001,9 +2004,10 @@ function _eval_recur_gather(n::_Node, u, p, t, ::Type{T}) where {T}
     slot = rg.base
     @inbounds for d in eachindex(children)
         sub = round(Int, _eval_node(children[d], u, p, t, T))
-        (1 <= sub <= rg.dims[d]) || _recur_unavailable(rg, children, d, u, p, t, T)
-        ord += (sub - 1) * rg.sweep_w[d]
-        slot += (sub - 1) * rg.strides[d]
+        lo = rg.lo[d]
+        (lo <= sub < lo + rg.dims[d]) || _recur_unavailable(rg, children, d, u, p, t, T)
+        ord += (sub - lo) * rg.sweep_w[d]
+        slot += (sub - lo) * rg.strides[d]
     end
     ord < rg.cur[] || _recur_unavailable(rg, children, length(children), u, p, t, T)
     @inbounds return u[slot]
@@ -2028,10 +2032,10 @@ end
     cell = zeros(Int, length(rg.dims))
     for d in sortperm(rg.sweep_w; rev = true)
         q, r = divrem(r, rg.sweep_w[d])
-        cell[d] = q + 1
+        cell[d] = rg.lo[d] + q
     end
     inframe = length(subs) == length(rg.dims) &&
-        all(d -> 1 <= subs[d] <= rg.dims[d], eachindex(subs))
+        all(d -> rg.lo[d] <= subs[d] < rg.lo[d] + rg.dims[d], eachindex(subs))
     throw(
         TreeWalkError(
             "E_TREEWALK_RECUR_UNAVAILABLE",
@@ -2041,7 +2045,7 @@ end
                 (
                 inframe ? "that cell has not been published yet" :
                     "that position is outside the recurrence's frame " *
-                    "[$(join(("1:$e" for e in rg.dims), ", "))]"
+                    "[$(join(("$(rg.lo[d]):$(rg.lo[d] + rg.dims[d] - 1)" for d in eachindex(rg.dims)), ", "))]"
             ) *
                 " (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.4). A self-read is never " *
                 "resolved to a value it cannot have; write the base case as an `ifelse` " *

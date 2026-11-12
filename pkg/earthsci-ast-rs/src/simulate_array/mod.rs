@@ -632,7 +632,11 @@ pub struct RecurrenceInfo {
     pub var: String,
     /// The output index symbol the sweep folds along, ascending.
     pub axis: String,
-    /// Largest lag any self-read takes along `axis`, DERIVED from the reads.
+    /// Largest lag along `axis` over the self-reads whose lag has a static
+    /// upper bound, DERIVED from the reads. A read whose lag has none (a
+    /// parameter-valued offset, say) adds nothing, so this bounds EVERY read
+    /// only when `lag_proven` is `true`; otherwise it is a bound over the
+    /// bounded reads alone (0 if there are none).
     pub max_lag: i64,
     /// Whether every self-read was proved strictly earlier statically. When
     /// `false` at least one read's lag depends on a symbol whose range admits

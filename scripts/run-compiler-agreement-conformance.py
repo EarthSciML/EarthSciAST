@@ -84,10 +84,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap above
     KNOWN_BINDINGS,
     REPO_ROOT,
+    TRAJECTORY_TOLERANCE_CLASSES,
     AdapterHarness,
     ManifestError,
     _eprint,
     build_parser,
+    values_agree,
     write_report,
 )
 from conformance_lib import load_manifest as _load_manifest  # noqa: E402
@@ -126,15 +128,10 @@ def always_required(binding: str, compiler: str) -> bool:
 # what a block that omits it gets. See `integration_factor` for why it exists.
 DEFAULT_INTEGRATION_FACTOR = 100.0
 
-# Fallback tolerance classes, used only when a manifest omits the block. The
-# manifest is the authority; these are §5.38.2's four classes written out so a
-# hand-trimmed manifest cannot silently loosen the gate.
-DEFAULT_TOLERANCE_CLASSES = {
-    "algebraic": {"rtol": 1e-13, "atol": 1e-300},
-    "transcendental": {"rtol": 1e-12, "atol": 1e-300},
-    "reduction": {"rtol": 1e-11, "atol_scaled": 1e-14},
-    "float32": {"rtol": 1e-5, "atol": 1e-30},
-}
+# Fallback tolerance classes, used only when a manifest omits the block: the
+# §5.38.2 classes a trajectory band is derived from (§5.44.2), from the one
+# shared definition.
+DEFAULT_TOLERANCE_CLASSES = TRAJECTORY_TOLERANCE_CLASSES
 
 # The in-repo adapter each binding is planned to ship (§5.44.5). Discovery tries
 # the env override first and PATH second, exactly as §5.38's does; this third step
@@ -768,16 +765,6 @@ def _match_row(t: Any, state: dict | None) -> dict | None:
     return best
 
 
-def _close(got: float, want: float, rtol: float, atol: float) -> bool:
-    """``|got - want| <= atol + rtol*|want|``, with both-non-finite treated as equal
-    so an intentional non-finite identity in a fixture does not spuriously fail."""
-    if math.isnan(got) or math.isnan(want):
-        return math.isnan(got) and math.isnan(want)
-    if math.isinf(got) or math.isinf(want):
-        return got == want
-    return abs(got - want) <= atol + rtol * abs(want)
-
-
 def integration_factor(fixture: dict) -> float:
     """The §5.44.2 INTEGRATION SAFETY FACTOR this fixture's derived band carries.
 
@@ -855,12 +842,13 @@ def compare_row(
             problems.append(f"{label}: missing element {name!r}")
             continue
         gv = got_n[name]
+        ok = values_agree(gv, wv, rtol, atol)
         budget = atol + rtol * abs(wv)
         if budget > 0 and math.isfinite(gv) and math.isfinite(wv):
             worst = max(worst, abs(gv - wv) / budget)
-        elif gv != wv and not (math.isnan(gv) and math.isnan(wv)):
+        elif not ok:
             worst = float("inf")
-        if not _close(gv, wv, rtol, atol):
+        if not ok:
             problems.append(f"{label}: {name} = {gv!r} != {wv!r} (atol={atol:g} rtol={rtol:g})")
     return worst, problems
 
@@ -1022,7 +1010,7 @@ def compare_anchor(points: list[dict], got_state: dict, kind: str) -> tuple[floa
         budget = pt["atol"] + pt["rtol"] * abs(pt["expected"])
         if budget > 0 and math.isfinite(got) and math.isfinite(pt["expected"]):
             worst = max(worst, abs(got - pt["expected"]) / budget)
-        if not _close(got, pt["expected"], pt["rtol"], pt["atol"]):
+        if not values_agree(got, pt["expected"], pt["rtol"], pt["atol"]):
             problems.append(
                 f"{kind}[t={pt['time']}]: {pt['element']} = {got!r} != {pt['expected']!r} "
                 f"(atol={pt['atol']:g} rtol={pt['rtol']:g})"
