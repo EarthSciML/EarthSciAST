@@ -1386,6 +1386,7 @@ mod tests {
         IndexSet {
             kind: "interval".into(),
             size: Some(size),
+            records: None,
             members: None,
             from_faq: None,
             member_factor: None,
@@ -1399,6 +1400,7 @@ mod tests {
         IndexSet {
             kind: "categorical".into(),
             size: None,
+            records: None,
             members: Some(members.iter().map(|m| Value::from(*m)).collect()),
             from_faq: None,
             member_factor: None,

@@ -1,0 +1,235 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "RecordAxis",
+    "description": "How many records a data-fed parameter receives is said by its record shape (esm-spec 8.5.1): two when its first axis is a record axis (an interval of size 2 with records: true), one otherwise. F_pair and F_inherit are shaped [rec, x] and receive two; F_one [x], F_plain [pair2, x] (an interval of size 2 WITHOUT the flag), F_cat [pair, x] (a categorical of two members), F_override [x] and the scalar K_static receive one. W is a non-data parameter shaped [x, rec]: a record axis is an ordinary interval anywhere outside a data-fed record shape. No records_per_sample is written anywhere, so no deprecation warning."
+  },
+  "index_sets": {
+    "rec": {
+      "kind": "interval",
+      "size": 2,
+      "records": true
+    },
+    "pair2": {
+      "kind": "interval",
+      "size": 2
+    },
+    "x": {
+      "kind": "interval",
+      "size": 3
+    },
+    "pair": {
+      "kind": "categorical",
+      "members": [
+        "before",
+        "after"
+      ]
+    }
+  },
+  "data_sources": {
+    "Met": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/met/{date:%Y%m%d}.nc"
+      },
+      "temporal": {
+        "start": "2024-05-01T00:00:00Z",
+        "end": "2024-05-31T21:00:00Z",
+        "file_period": "P1D",
+        "frequency": "PT3H",
+        "records_per_file": 8
+      },
+      "metadata": {
+        "esio_format": "netcdf"
+      }
+    },
+    "MetPair": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/met/{date:%Y%m%d}.nc"
+      },
+      "temporal": {
+        "start": "2024-05-01T00:00:00Z",
+        "end": "2024-05-31T21:00:00Z",
+        "file_period": "P1D",
+        "frequency": "PT3H",
+        "records_per_file": 8
+      },
+      "metadata": {
+        "esio_format": "netcdf"
+      }
+    },
+    "Static": {
+      "kind": "static",
+      "source": {
+        "url_template": "file:///data/met/{date:%Y%m%d}.nc"
+      },
+      "metadata": {
+        "esio_format": "netcdf"
+      }
+    }
+  },
+  "models": {
+    "Box": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "F_pair": {
+          "type": "parameter",
+          "units": "m",
+          "shape": [
+            "rec",
+            "x"
+          ],
+          "default": 500.0,
+          "update": {
+            "kind": "data",
+            "source": "Met",
+            "from": {
+              "file_variable": "PBLH"
+            }
+          },
+          "description": "Shaped [rec, x], rec a record axis: the records at or before t and after it, along rec."
+        },
+        "F_one": {
+          "type": "parameter",
+          "units": "K",
+          "shape": [
+            "x"
+          ],
+          "default": 290.0,
+          "update": {
+            "kind": "data",
+            "source": "Met",
+            "from": {
+              "file_variable": "T2M"
+            }
+          },
+          "description": "Shaped [x]: one record."
+        },
+        "F_plain": {
+          "type": "parameter",
+          "units": "K",
+          "shape": [
+            "pair2",
+            "x"
+          ],
+          "default": 290.0,
+          "update": {
+            "kind": "data",
+            "source": "Met",
+            "from": {
+              "file_variable": "TS"
+            }
+          },
+          "description": "Shaped [pair2, x], pair2 an interval of size 2 without records: true: one record, and its first axis is an ordinary axis."
+        },
+        "W": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "x",
+            "rec"
+          ],
+          "default": 0.5,
+          "description": "Not data-fed: a record axis may appear anywhere in its shape."
+        },
+        "F_cat": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": [
+            "pair",
+            "x"
+          ],
+          "default": 1.0,
+          "update": {
+            "kind": "data",
+            "source": "Met",
+            "from": {
+              "file_variable": "U10M"
+            }
+          },
+          "description": "Shaped [pair, x], pair a categorical of two members, which is not a record axis: one record."
+        },
+        "F_inherit": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": [
+            "rec",
+            "x"
+          ],
+          "default": 1.0,
+          "update": {
+            "kind": "data",
+            "source": "MetPair",
+            "from": {
+              "file_variable": "V10M"
+            }
+          },
+          "description": "Shaped [rec, x] on a second source: two records."
+        },
+        "F_override": {
+          "type": "parameter",
+          "units": "kg/kg",
+          "shape": [
+            "x"
+          ],
+          "default": 0.01,
+          "update": {
+            "kind": "data",
+            "source": "MetPair",
+            "from": {
+              "file_variable": "QV2M"
+            }
+          },
+          "description": "Shaped [x] on the second source: one record; the source does not decide."
+        },
+        "K_static": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [],
+          "default": 0.5,
+          "update": {
+            "kind": "data",
+            "source": "Static",
+            "from": {
+              "file_variable": "FRLAND"
+            }
+          },
+          "description": "A scalar on a static source: one record."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "c"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

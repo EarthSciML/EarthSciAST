@@ -374,7 +374,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
 
   // Every parameter `update.source` names a declared data source.
   errors.push(...validateDataSourceReferences(esmFile))
-  // `from.records_per_sample` (esm-spec §8.5.1, `records_per_sample_invalid`).
+  // Record axes and the deprecated `records_per_sample` (esm-spec §8.5.1).
   errors.push(...validateRecordsPerSample(esmFile))
 
   // (h) sites 9-11: the expression positions outside any component — a
@@ -578,6 +578,8 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
         // from the load pipeline instead of re-running validateUnits.
         const esmFile = loadDocument(parsedData, {
           assumeValid: true,
+          // Not a load: the caller's own load gave any deprecation warnings.
+          warn: false,
           basePath: options.basePath,
           onUnitWarning: (warning) => unit_warnings.push(warning),
         })

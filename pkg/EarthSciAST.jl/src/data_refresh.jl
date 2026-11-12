@@ -186,8 +186,8 @@ supplies one; with neither, a time-varying provider is bounded only by its own
 
 A source declaring a `record_filter` or `codes` is a record table decoded once
 per record anchor and shared by its parameters. A declared `select` names the
-source's native per-record axes; with `records_per_sample = 2` the delivered
-array carries an extra leading record axis of length 2, which the select takes
+source's native per-record axes; for a parameter receiving two records the
+delivered array carries an extra leading record axis of length 2, which the select takes
 whole. A time-varying source never pushes its select to the reader (the file's
 record axis is not one the select names): it reports
 `provider_supports_selection == false`, and the select is applied after the
@@ -219,13 +219,17 @@ Keywords:
     time-varying provider's `provider_refresh_times`. Anything else is an
     `ArgumentError`.
   * `records_per_sample` — consuming parameter key ⇒ 1 or 2, a run-time
-    restatement of the document, not an override. A parameter receives its
-    EFFECTIVE `records_per_sample` from the document (esm-spec §8.5.1): its own
-    `update.from.records_per_sample`, else the source's
-    `temporal.records_per_sample`, else 1. An entry equal to that value is
-    accepted; a different one is refused, because it would change the rank of
-    the delivered array away from the declared shape validation approved — set
-    `update.from.records_per_sample` in the document instead. Every value, in
+    restatement of the document, not an override. How many records a parameter
+    receives is said by its record shape (esm-spec §8.5.1): two when its
+    declared `shape` (else the declared shape of its `param_to_var` targets in
+    the document's `coupling`) begins with an `interval` index set carrying
+    `"records": true`, else one. An entry equal to that count is accepted; a
+    different one is refused, because it would change the rank of the delivered
+    array away from the declared shape validation approved — change the shape
+    in the document instead. The deprecated `update.from.records_per_sample` /
+    `temporal.records_per_sample`, when written, must agree with the shape too
+    (and stand in for it only where the raw document cannot show the record
+    shape, e.g. a target that only a `coupling_import` brings). Every value, in
     the document or here, must be the number 1 or 2 (`2.0` is 2; `1.5`, `"2"`
     and `true` are refused). With 2 the provider returns the record at or
     before `t` and the next one, stacked along the first dimension (the

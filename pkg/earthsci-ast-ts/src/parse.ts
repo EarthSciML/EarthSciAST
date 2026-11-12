@@ -40,6 +40,10 @@ import { readFileSyncNode, dirnameOf } from './path-utils.js'
 import { deepClone } from './object-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { resolveDataSourceUrls } from './data-source-urls.js'
+import {
+  deprecatedRecordsPerSampleSites,
+  deprecatedRecordsPerSampleWarning,
+} from './records-per-sample.js'
 
 /**
  * The single root-path token used when a validation diagnostic has no more
@@ -383,6 +387,14 @@ export interface LoadOptions {
    * both load-time warnings into a structured channel.
    */
   onVersionWarning?: ((message: string) => void) | undefined
+
+  /**
+   * `false` silences the load-time `deprecated_records_per_sample` warning,
+   * emitted with `console.warn` at most once per load. Used by `validate()`,
+   * whose internal re-load of a document must not repeat the warning its own
+   * load gave.
+   */
+  warn?: boolean | undefined
 }
 
 /**
@@ -731,6 +743,14 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
       const location = warning.location ? ` [${warning.location}]` : ''
       console.warn(`ESM unit validation${location}: ${warning.message}`)
     }
+  }
+
+  // esm-spec §8.5.1: the deprecated `records_per_sample` loads with ONE
+  // warning per load naming every place it is written. Mounted `{ref}`
+  // children never pass through here, so they add no second warning.
+  if (options?.warn !== false) {
+    const sites = deprecatedRecordsPerSampleSites(loweredData)
+    if (sites.length > 0) console.warn(deprecatedRecordsPerSampleWarning(sites))
   }
 
   return loweredData

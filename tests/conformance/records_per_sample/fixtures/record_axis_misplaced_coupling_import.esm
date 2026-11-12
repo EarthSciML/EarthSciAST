@@ -1,13 +1,14 @@
 {
   "esm": "1.3.0",
   "metadata": {
-    "name": "PairCouplingImportWithoutRecordAxis",
-    "description": "As records_per_sample_coupling_import, but the imported edge's target is shaped [x, rec]: validation passes and flatten refuses it after expansion (esm-spec 8.5.1 'When rule 3 is checked')."
+    "name": "RecordAxisMisplacedCouplingImport",
+    "description": "As record_axis_coupling_import, but the imported edge's target is shaped [x, rec]: validation passes and flatten refuses it after expansion with record_axis_misplaced (esm-spec 8.5.1 'When rules 2 and 3 are checked')."
   },
   "index_sets": {
     "rec": {
       "kind": "interval",
-      "size": 2
+      "size": 2,
+      "records": true
     },
     "x": {
       "kind": "interval",
@@ -43,8 +44,7 @@
             "kind": "data",
             "source": "met_source",
             "from": {
-              "file_variable": "K",
-              "records_per_sample": 2
+              "file_variable": "K"
             }
           }
         }

@@ -30,13 +30,11 @@ import { isExpressionLike } from '../traverse.js'
 import { collectRoleSegments, expandCouplingImports } from '../coupling-imports.js'
 import { derivativeTarget } from '../classification.js'
 import { observedDefinitionReads } from './observed-checks.js'
-import { effectiveRecordsPerSample } from '../types.js'
 import {
   forEachParameterUpdate,
   hasUnmountedRefs,
   paramToVarTargets,
-  recordShapeFailure,
-  recordShapeMessage,
+  recordShapeFindings,
 } from '../records-per-sample.js'
 
 /**
@@ -551,33 +549,38 @@ export function validateDataSourceReferences(esmFile: EsmFile): StructuralError[
 }
 
 /**
- * `records_per_sample_invalid` (esm-spec §8.5.1), checked on every `update`
- * rule at any depth: `from.records_per_sample` on a rule that is not `data`; or
- * an EFFECTIVE value of 2 on a parameter whose source is time-invariant (it
- * declares no `temporal` block, or its `temporal` declares no `start`), or whose
- * record shape's first dimension is not an index set of exactly two members.
- * The record shape is the declared `shape`, or, for a parameter declaring an
- * empty one, the declared `shape` of EVERY inline `param_to_var`
- * target it is the `from` of. A target this document cannot reach is left to
- * `flatten`, and so is an empty record shape when a `coupling_import` may
- * supply the edge (see {@link recordShapeFailure}).
+ * Record axes (esm-spec §8.5.1). `record_axis_invalid` at `/index_sets/<name>`
+ * for a record axis whose folded `size` is not 2 (a still-symbolic size is
+ * skipped). Then, on every `update` rule at any depth, of models and of
+ * reaction systems: the deprecated `from.records_per_sample` on a rule that is
+ * not `data` (`records_per_sample_invalid`), and for a data-fed rule the record-shape
+ * rules `record_axis_misplaced`, `record_axis_time_invariant_source` and the
+ * written value's agreement (`records_per_sample_invalid`), judged by
+ * {@link recordShapeFindings} against the inline `coupling`. A target this
+ * document cannot reach is left to `flatten`, and so is an empty record shape
+ * when a `coupling_import` may supply the edge.
  */
 export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
-  const sources = (esmFile.data_sources ?? {}) as Record<
-    string,
-    { temporal?: { start?: string; records_per_sample?: number } }
-  >
+  for (const [name, set] of Object.entries(esmFile.index_sets ?? {})) {
+    const { records, size } = set as { records?: unknown; size?: unknown }
+    if (records !== true || typeof size !== 'number' || size === 2) continue
+    errors.push({
+      path: `/index_sets/${name}`,
+      code: ERROR_CODES.RECORD_AXIS_INVALID,
+      message: `Index set '${name}' is a record axis ("records": true), so its size must be 2; it is ${size}`,
+      details: { index_set: name, size },
+    })
+  }
   const coupling = (esmFile.coupling ?? []) as Array<Record<string, unknown>>
   const targets = paramToVarTargets(coupling)
   const hasImport = coupling.some((entry) => entry?.type === 'coupling_import')
   const unmountedRefs = hasUnmountedRefs(esmFile)
-  for (const site of forEachParameterUpdate(esmFile)) {
+  for (const site of forEachParameterUpdate(esmFile, { reactionSystems: true })) {
     const { variableName, rule, path } = site
-    const binding = (rule as { from?: { records_per_sample?: number } }).from
-    if (binding === undefined) continue
     if (rule.kind !== 'data') {
-      if (binding.records_per_sample !== undefined) {
+      const binding = (rule as { from?: { records_per_sample?: number } }).from
+      if (binding?.records_per_sample !== undefined) {
         errors.push({
           path,
           code: ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
@@ -587,34 +590,12 @@ export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
       }
       continue
     }
-    const sourceName = (rule as { source: string }).source
-    const source = sources[sourceName]
-    if (source === undefined) continue // data_source_undefined reports it
-    if (effectiveRecordsPerSample(binding, source) !== 2) continue
-    if (!source.temporal?.start) {
-      errors.push({
-        path,
-        code: ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
-        message: `Parameter '${variableName}' asks for two records per sample from data source '${sourceName}', which is time-invariant (it declares no temporal start) and so has no successor record`,
-        details: { variable: variableName, source: sourceName },
-      })
-      continue
-    }
-    const failure = recordShapeFailure(esmFile, site, targets, {
+    for (const finding of recordShapeFindings(esmFile, site, targets, {
       targetsMayArriveLater: hasImport,
       unmountedRefs,
-    })
-    if (failure === undefined) continue
-    errors.push({
-      path,
-      code: ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
-      message: recordShapeMessage(variableName, failure),
-      details: {
-        variable: variableName,
-        shape: failure.shape,
-        ...(failure.target === undefined ? {} : { target: failure.target }),
-      },
-    })
+    })) {
+      errors.push({ path, ...finding })
+    }
   }
   return errors
 }

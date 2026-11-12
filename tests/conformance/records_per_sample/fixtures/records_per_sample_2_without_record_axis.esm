@@ -1,8 +1,8 @@
 {
   "esm": "1.3.0",
   "metadata": {
-    "name": "pair_from_startless_source",
-    "description": "records_per_sample 2 on a source whose temporal block declares no start: the source is time-invariant and has no successor record (esm-spec 8.5.1 rule 2)."
+    "name": "RecordsPerSample2WithoutRecordAxis",
+    "description": "F writes the deprecated from.records_per_sample 2 but is shaped [x]: its record shape gives one record, so the field disagrees (esm-spec 8.5.1, records_per_sample_invalid)."
   },
   "index_sets": {
     "rec": {
@@ -28,6 +28,8 @@
         "url_template": "file:///data/met/{date:%Y%m%d}.nc"
       },
       "temporal": {
+        "start": "2024-05-01T00:00:00Z",
+        "end": "2024-05-31T21:00:00Z",
         "file_period": "P1D",
         "frequency": "PT3H",
         "records_per_file": 8
@@ -54,7 +56,6 @@
           "type": "parameter",
           "units": "1",
           "shape": [
-            "rec",
             "x"
           ],
           "default": 1.0,

@@ -133,6 +133,14 @@ pub struct IndexSet {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<i64>,
 
+    /// `kind: "interval"` only: marks this axis as a RECORD AXIS (esm-spec
+    /// §8.5.1). A data-fed parameter whose record shape begins with one
+    /// receives two records per query time, otherwise one; `size` must be 2.
+    /// Apart from that a record axis is an ordinary interval. `None` when not
+    /// written (`Some(false)` means the same and is kept as written).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub records: Option<bool>,
+
     /// Enumerated members for `kind: "categorical"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub members: Option<Vec<serde_json::Value>>,
@@ -990,9 +998,11 @@ pub struct DataSourceBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<serde_json::Value>,
 
-    /// How many records of the source the parameter receives per query time,
-    /// 1 or 2 (esm-spec §8.5.1); overrides the source's
-    /// `temporal.records_per_sample`. `None` when not written.
+    /// DEPRECATED (removed at esm 3.0.0): how many records of the source the
+    /// parameter receives per query time, 1 or 2. The record shape says it
+    /// now (esm-spec §8.5.1); a written value is kept as written and must
+    /// agree with the shape (`records_per_sample_invalid`). `None` when not
+    /// written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub records_per_sample: Option<u8>,
 
@@ -1006,14 +1016,13 @@ pub struct DataSourceBinding {
 }
 
 impl DataSourceBinding {
-    /// The EFFECTIVE `records_per_sample` of this binding (esm-spec §8.5.1):
-    /// its own value, else `source`'s `temporal.records_per_sample`, else 1
-    /// ([`crate::flatten::records_per_sample_rule`]).
-    pub(crate) fn effective_records_per_sample(&self, source: Option<&DataSource>) -> u8 {
-        crate::flatten::records_per_sample_rule(
-            self.records_per_sample,
-            source.and_then(|s| s.temporal.as_ref()?.records_per_sample),
-        )
+    /// The deprecated `records_per_sample` WRITTEN for this binding
+    /// (esm-spec §8.5.1): its own `from.records_per_sample`, else `source`'s
+    /// `temporal.records_per_sample`; `None` when neither is written. It is
+    /// checked against the record shape, never obeyed.
+    pub(crate) fn written_records_per_sample(&self, source: Option<&DataSource>) -> Option<u8> {
+        self.records_per_sample
+            .or_else(|| source.and_then(|s| s.temporal.as_ref()?.records_per_sample))
     }
 }
 

@@ -1,112 +1,112 @@
 {
- "esm": "2.0.0",
- "index_sets": {
-  "k": {
-   "kind": "interval",
-   "size": 3
-  }
- },
- "metadata": {
-  "authors": [
-   "esm conformance"
-  ],
-  "description": "Scalar-field template-parameter substitution (esm-spec \u00a79.6.1 / \u00a79.6.3 constraint 5): one `combine` template whose `body` carries a parameter name (`K_fn`) as the string VALUE of the scalar `fn` field of a `broadcast` node \u2014 a substitution site, the exact mirror of the match-side scalar-field binding rule \u2014 instantiated twice with different operator literals (`+`, `*`). All five bindings MUST expand both observeds to the same post-substitution nodes (expanded.esm); the bound value must be a literal admissible for the field, enforced on the EXPANDED form (\u00a79.6.9, `invalid_broadcast_fn`; tests/conformance/expression_templates/per_instantiation_validation). Until esm 2.0.0 the site was the `manifold` field of the removed geometry leaf.",
-  "name": "expression_templates_scalar_field_param",
-  "tags": [
-   "expression_templates",
-   "scalar-field-substitution",
-   "broadcast",
-   "conformance"
-  ]
- },
- "models": {
-  "Combine": {
-   "equations": [
-    {
-     "lhs": {
-      "args": [
-       "u"
-      ],
-      "op": "D",
-      "wrt": "t"
-     },
-     "rhs": {
-      "args": [
-       "u"
-      ],
-      "op": "-"
-     }
-    },
-    {
-     "lhs": "sum_ab",
-     "rhs": {
-      "args": [
-       "a",
-       "b"
-      ],
-      "fn": "+",
-      "op": "broadcast"
-     }
-    },
-    {
-     "lhs": "prod_ab",
-     "rhs": {
-      "args": [
-       "a",
-       "b"
-      ],
-      "fn": "*",
-      "op": "broadcast"
-     }
+  "esm": "2.0.0",
+  "index_sets": {
+    "k": {
+      "kind": "interval",
+      "size": 3
     }
-   ],
-   "variables": {
-    "a": {
-     "default": [
-      1.0,
-      3.0,
-      2.0
-     ],
-     "shape": [
-      "k"
-     ],
-     "type": "parameter",
-     "units": "1"
-    },
-    "b": {
-     "default": [
-      0.5,
-      0.25,
-      4.0
-     ],
-     "shape": [
-      "k"
-     ],
-     "type": "parameter",
-     "units": "1"
-    },
-    "prod_ab": {
-     "description": "Second instantiation: the SAME template bound to '*'.",
-     "shape": [
-      "k"
-     ],
-     "type": "unknown",
-     "units": "1"
-    },
-    "sum_ab": {
-     "description": "First instantiation: the fn parameter bound to the literal '+'.",
-     "shape": [
-      "k"
-     ],
-     "type": "unknown",
-     "units": "1"
-    },
-    "u": {
-     "default": 0.5,
-     "type": "unknown",
-     "units": "1"
+  },
+  "metadata": {
+    "authors": [
+      "esm conformance"
+    ],
+    "description": "Scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6.3 constraint 5): one `combine` template whose `body` carries a parameter name (`K_fn`) as the string VALUE of the scalar `fn` field of a `broadcast` node — a substitution site, the exact mirror of the match-side scalar-field binding rule — instantiated twice with different operator literals (`+`, `*`). All five bindings MUST expand both observeds to the same post-substitution nodes (expanded.esm); the bound value must be a literal admissible for the field, enforced on the EXPANDED form (§9.6.9, `invalid_broadcast_fn`; tests/conformance/expression_templates/per_instantiation_validation). Until esm 2.0.0 the site was the `manifold` field of the removed geometry leaf.",
+    "name": "expression_templates_scalar_field_param",
+    "tags": [
+      "expression_templates",
+      "scalar-field-substitution",
+      "broadcast",
+      "conformance"
+    ]
+  },
+  "models": {
+    "Combine": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "u"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "u"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "sum_ab",
+          "rhs": {
+            "args": [
+              "a",
+              "b"
+            ],
+            "fn": "+",
+            "op": "broadcast"
+          }
+        },
+        {
+          "lhs": "prod_ab",
+          "rhs": {
+            "args": [
+              "a",
+              "b"
+            ],
+            "fn": "*",
+            "op": "broadcast"
+          }
+        }
+      ],
+      "variables": {
+        "a": {
+          "default": [
+            1,
+            3,
+            2
+          ],
+          "shape": [
+            "k"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "b": {
+          "default": [
+            0.5,
+            0.25,
+            4.0
+          ],
+          "shape": [
+            "k"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "prod_ab": {
+          "description": "Second instantiation: the SAME template bound to '*'.",
+          "shape": [
+            "k"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "sum_ab": {
+          "description": "First instantiation: the fn parameter bound to the literal '+'.",
+          "shape": [
+            "k"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "u": {
+          "default": 0.5,
+          "type": "unknown",
+          "units": "1"
+        }
+      }
     }
-   }
   }
- }
 }

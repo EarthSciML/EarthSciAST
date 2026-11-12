@@ -942,75 +942,152 @@ pub(crate) fn validate_data_source_references(
     }
 }
 
-/// Is index set `name` an `interval` of size 2 or a `categorical` of two
-/// members (esm-spec §8.5.1 rule 3)? A `derived` or `ragged` set has no size
-/// known at load.
-fn index_set_has_two_members(esm_file: &EsmFile, name: &str) -> bool {
-    let Some(set) = esm_file.index_sets.as_ref().and_then(|s| s.get(name)) else {
-        return false;
-    };
-    match set.kind.as_str() {
-        "interval" => set.size == Some(2),
-        "categorical" => set.members.as_ref().is_some_and(|m| m.len() == 2),
-        _ => false,
+/// Does the document still hold a `{ref}` mount: a subsystem, at any depth of
+/// a model or reaction system, that is still a `{"ref": …}` edge? Mounting one
+/// merges its file's `index_sets` into the document's (esm-spec §4.7), so an
+/// index set the document does not declare may still arrive.
+pub(crate) fn has_unmounted_refs(esm_file: &EsmFile) -> bool {
+    fn walk(node: &serde_json::Value) -> bool {
+        node.get("ref").is_some()
+            || node
+                .get("subsystems")
+                .and_then(|s| s.as_object())
+                .is_some_and(|subs| subs.values().any(walk))
+    }
+    let in_models = esm_file
+        .models
+        .iter()
+        .flatten()
+        .any(|(_, m)| m.subsystems.iter().flatten().any(|(_, s)| walk(s)));
+    let in_reaction_systems = esm_file
+        .reaction_systems
+        .iter()
+        .flatten()
+        .any(|(_, r)| r.subsystems.iter().flatten().any(|(_, s)| walk(s)));
+    in_models || in_reaction_systems
+}
+
+/// Is index set `name` a RECORD AXIS: an `interval` carrying `"records": true`
+/// (esm-spec §8.5.1)? `None` when that is not decidable yet: the document does
+/// not declare `name` while `unmounted_refs` (a `{ref}` still to be mounted
+/// could declare it). An index set nothing can declare any more is not one.
+pub(crate) fn record_axis_state(
+    esm_file: &EsmFile,
+    name: &str,
+    unmounted_refs: bool,
+) -> Option<bool> {
+    match esm_file.index_sets.as_ref().and_then(|s| s.get(name)) {
+        Some(set) => Some(set.kind == "interval" && set.records == Some(true)),
+        None if unmounted_refs => None,
+        None => Some(false),
     }
 }
 
-/// The declared `shape` of the variable a scoped name `Model[.Sub…].var`
-/// names (an absent `shape` is the scalar `[]`), or `None` when the document
-/// does not reach that declaration: no such model, subsystem or variable, or
-/// one still behind an unmounted `ref`. Walks the document by reference.
-fn declared_shape(esm_file: &EsmFile, scoped: &str) -> Option<Vec<String>> {
+/// The declared `shape` of the variable a scoped name `Model[.Sub…].var` (or
+/// `ReactionSystem[.Sub…].parameter`, or `…species`) names: `Some(None)` when
+/// it declares none, `None` when the document does not reach that declaration
+/// (no such component or variable, or one still behind an unmounted `ref`).
+/// Walks the document by reference.
+pub(crate) fn declared_variable_shape(
+    esm_file: &EsmFile,
+    scoped: &str,
+) -> Option<Option<Vec<String>>> {
     let mut parts: Vec<&str> = scoped.split('.').collect();
     let var = parts.pop()?;
     let (first, rest) = parts.split_first()?;
-    let model = esm_file.models.as_ref()?.get(*first)?;
-    let Some((sub, deeper)) = rest.split_first() else {
-        return Some(model.variables.get(var)?.shape.clone().unwrap_or_default());
-    };
-    let mut node = model.subsystems.as_ref()?.get(*sub)?;
+    let (subsystems, tables): (_, &[&str]) =
+        if let Some(model) = esm_file.models.as_ref().and_then(|m| m.get(*first)) {
+            if rest.is_empty() {
+                return Some(model.variables.get(var)?.shape.clone());
+            }
+            (model.subsystems.as_ref(), &["variables"])
+        } else {
+            let rs = esm_file.reaction_systems.as_ref()?.get(*first)?;
+            if rest.is_empty() {
+                if let Some(p) = rs.parameters.get(var) {
+                    return Some(p.shape.clone());
+                }
+                rs.species.get(var)?;
+                return Some(None);
+            }
+            (rs.subsystems.as_ref(), &["parameters", "species"])
+        };
+    let (sub, deeper) = rest.split_first()?;
+    let mut node = subsystems?.get(*sub)?;
     for seg in deeper {
         node = node.get("subsystems")?.get(*seg)?;
     }
-    match node.get("variables")?.get(var)?.get("shape") {
-        None | Some(serde_json::Value::Null) => Some(Vec::new()),
+    let decl = tables
+        .iter()
+        .find_map(|t| node.get(*t).and_then(|vars| vars.get(var)))?;
+    match decl.get("shape") {
+        None | Some(serde_json::Value::Null) => Some(None),
         Some(shape) => shape
             .as_array()?
             .iter()
             .map(|d| d.as_str().map(str::to_string))
-            .collect(),
+            .collect::<Option<Vec<_>>>()
+            .map(Some),
     }
 }
 
-/// Calls `f(scope, pointer, name, variable)` for every variable carrying an
-/// `update`, in every top-level model and every subsystem at any depth, in
-/// sorted name order within each model. `scope` is the dotted `Model[.Sub…]`
-/// path and `pointer` the JSON pointer of that model or subsystem. Subsystems
-/// are read in place; a subsystem variable that does not deserialize is the
-/// schema's finding and is skipped.
-fn for_each_updated_variable(
-    esm_file: &EsmFile,
-    f: &mut impl FnMut(&str, &str, &str, &crate::ModelVariable),
-) {
+/// One parameter carrying an `update`, as [`for_each_updated_variable`] hands
+/// it out.
+struct UpdatedVariable<'a> {
+    /// The dotted `Component[.Sub…].name`.
+    scoped: &'a str,
+    /// The JSON pointer of the variable's (or reaction-system parameter's)
+    /// declaration.
+    pointer: &'a str,
+    name: &'a str,
+    /// Its declared `shape`, `None` when it declares none.
+    shape: Option<&'a [String]>,
+    update: &'a crate::ParameterUpdateSpec,
+}
+
+/// Calls `f` for every variable carrying an `update`: each model's
+/// `variables` and each reaction system's `parameters`, in every top-level
+/// component and every subsystem at any depth, in sorted name order within
+/// each component. Subsystems are read in place: only a declaration that
+/// carries an `update` is decoded, and only its `shape` and `update`; one that
+/// does not decode is the schema's finding and is skipped.
+fn for_each_updated_variable(esm_file: &EsmFile, f: &mut impl FnMut(UpdatedVariable<'_>)) {
+    fn sorted_updated<'v, V>(
+        vars: impl Iterator<Item = (&'v String, &'v V)>,
+        has_update: impl Fn(&V) -> bool,
+    ) -> Vec<(&'v String, &'v V)> {
+        let mut out: Vec<_> = vars.filter(|(_, v)| has_update(v)).collect();
+        out.sort_by(|a, b| a.0.cmp(b.0));
+        out
+    }
     fn subsystem(
         sub: &serde_json::Value,
+        table: &str,
         scope: &str,
         path: &str,
-        f: &mut impl FnMut(&str, &str, &str, &crate::ModelVariable),
+        f: &mut impl FnMut(UpdatedVariable<'_>),
     ) {
-        if let Some(vars) = sub.get("variables").and_then(|v| v.as_object()) {
-            let mut names: Vec<&String> = vars
-                .iter()
-                .filter(|(_, v)| v.get("update").is_some())
-                .map(|(n, _)| n)
-                .collect();
-            names.sort();
-            for name in names {
-                if let Ok(var) =
-                    <crate::ModelVariable as serde::Deserialize>::deserialize(&vars[name])
-                {
-                    f(scope, path, name, &var);
-                }
+        if let Some(vars) = sub.get(table).and_then(|v| v.as_object()) {
+            for (name, decl) in sorted_updated(vars.iter(), |v| v.get("update").is_some()) {
+                let Ok(update) = <crate::ParameterUpdateSpec as serde::Deserialize>::deserialize(
+                    &decl["update"],
+                ) else {
+                    continue;
+                };
+                let shape: Option<Vec<String>> = match decl.get("shape") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(s) => match <Vec<String> as serde::Deserialize>::deserialize(s) {
+                        Ok(s) => Some(s),
+                        Err(_) => continue,
+                    },
+                };
+                f(UpdatedVariable {
+                    scoped: &format!("{scope}.{name}"),
+                    pointer: &format!("{path}/{table}/{name}"),
+                    name,
+                    shape: shape.as_deref(),
+                    update: &update,
+                });
             }
         }
         for (name, inner) in sub
@@ -1021,6 +1098,7 @@ fn for_each_updated_variable(
         {
             subsystem(
                 inner,
+                table,
                 &format!("{scope}.{name}"),
                 &format!("{path}/subsystems/{name}"),
                 f,
@@ -1029,20 +1107,47 @@ fn for_each_updated_variable(
     }
     for (model_name, model) in esm_file.models.iter().flatten() {
         let path = format!("/models/{model_name}");
-        let mut names: Vec<&String> = model
-            .variables
-            .iter()
-            .filter(|(_, v)| v.update.is_some())
-            .map(|(n, _)| n)
-            .collect();
-        names.sort();
-        for name in names {
-            f(model_name, &path, name, &model.variables[name]);
+        for (name, var) in sorted_updated(model.variables.iter(), |v| v.update.is_some()) {
+            let Some(update) = var.update.as_ref() else {
+                continue;
+            };
+            f(UpdatedVariable {
+                scoped: &format!("{model_name}.{name}"),
+                pointer: &format!("{path}/variables/{name}"),
+                name,
+                shape: var.shape.as_deref(),
+                update,
+            });
         }
         for (name, sub) in model.subsystems.iter().flatten() {
             subsystem(
                 sub,
+                "variables",
                 &format!("{model_name}.{name}"),
+                &format!("{path}/subsystems/{name}"),
+                f,
+            );
+        }
+    }
+    for (rs_name, rs) in esm_file.reaction_systems.iter().flatten() {
+        let path = format!("/reaction_systems/{rs_name}");
+        for (name, param) in sorted_updated(rs.parameters.iter(), |p| p.update.is_some()) {
+            let Some(update) = param.update.as_ref() else {
+                continue;
+            };
+            f(UpdatedVariable {
+                scoped: &format!("{rs_name}.{name}"),
+                pointer: &format!("{path}/parameters/{name}"),
+                name,
+                shape: param.shape.as_deref(),
+                update,
+            });
+        }
+        for (name, sub) in rs.subsystems.iter().flatten() {
+            subsystem(
+                sub,
+                "parameters",
+                &format!("{rs_name}.{name}"),
                 &format!("{path}/subsystems/{name}"),
                 f,
             );
@@ -1050,125 +1155,309 @@ fn for_each_updated_variable(
     }
 }
 
-/// The JSON pointer of rule `i` of `var_name`'s `update` under the model or
-/// subsystem at `path`: `/update` for the single-rule form, `/update/<i>` for
-/// the array form (esm-spec §8.5.1).
-fn update_rule_pointer(
-    path: &str,
-    var_name: &str,
-    spec: &crate::ParameterUpdateSpec,
-    i: usize,
-) -> String {
-    match spec {
-        crate::ParameterUpdateSpec::Single(_) => format!("{path}/variables/{var_name}/update"),
-        crate::ParameterUpdateSpec::Several(_) => {
-            format!("{path}/variables/{var_name}/update/{i}")
+/// The JSON pointer of rule `i` of the `update` of the variable declared at
+/// `var_pointer`: `/update` for the single-rule form, `/update/<i>` for the
+/// array form (esm-spec §8.5.1).
+fn update_rule_pointer(var_pointer: &str, is_array: bool, i: usize) -> String {
+    if is_array {
+        format!("{var_pointer}/update/{i}")
+    } else {
+        format!("{var_pointer}/update")
+    }
+}
+
+/// The `to` of every `variable_map` entry with transform `param_to_var` in a
+/// coupling sequence, keyed by its `from`, in coupling order. Built once per
+/// pass, so a parameter's record shapes cost one lookup, not a coupling scan.
+pub(crate) fn param_to_var_targets(coupling: &[crate::CouplingEntry]) -> HashMap<&str, Vec<&str>> {
+    let mut out: HashMap<&str, Vec<&str>> = HashMap::new();
+    for entry in coupling {
+        if let crate::CouplingEntry::VariableMap {
+            from,
+            to,
+            transform: crate::VariableMapTransform::Named(t),
+            ..
+        } = entry
+            && t == "param_to_var"
+        {
+            out.entry(from.as_str()).or_default().push(to.as_str());
         }
     }
+    out
 }
 
-/// Does `shape` satisfy rule 3 of esm-spec §8.5.1: a first entry naming an
-/// index set of exactly two members?
-fn is_record_pair_shape(esm_file: &EsmFile, shape: &[String]) -> bool {
-    shape
-        .first()
-        .is_some_and(|d| index_set_has_two_members(esm_file, d))
+/// The record shapes of a data-fed parameter (esm-spec §8.5.1) that a
+/// document shows, gathered by [`record_shapes`].
+pub(crate) struct RecordShapes {
+    /// Every record shape that could be decided: the declared `shape` when
+    /// the parameter declares one (`[]` included), else the declared `shape`
+    /// of each `param_to_var` target whose declaration resolves.
+    pub(crate) shapes: Vec<Vec<String>>,
+    /// The parameter declares no `shape` and is the `from` of no
+    /// `param_to_var` entry of the coupling: its record shape is empty.
+    pub(crate) unmapped: bool,
 }
 
-/// The first record shape of the parameter scoped `me` that fails rule 3 of
-/// esm-spec §8.5.1, or `None` when every record shape that can be decided
-/// passes. The record shape is `own_shape` whenever the parameter declares
-/// one (`[]`, a scalar buffer, included — and refused); only an ABSENT shape
-/// takes the declared shape of EVERY `param_to_var` target of `me` in `coupling`. A
-/// target whose declaration the document does not reach is not decidable and
-/// is skipped. With no `param_to_var` entry at all the record shape is empty,
-/// which fails unless `defer_empty` (an edge may still arrive by
-/// `coupling_import`).
-fn failing_record_shape(
+/// The record shapes of the parameter scoped `me`, declaring `own_shape`,
+/// against the `param_to_var` edges `targets` (esm-spec §8.5.1 "The record
+/// shape"). The one statement of which shapes are a parameter's record
+/// shapes; validation passes the loaded coupling's edges, `flatten` those of
+/// the coupling expanded past every `coupling_import`. A target whose
+/// declaration does not resolve is left out, never read as empty.
+pub(crate) fn record_shapes(
     esm_file: &EsmFile,
-    coupling: &[crate::CouplingEntry],
+    targets: &HashMap<&str, Vec<&str>>,
     me: &str,
     own_shape: Option<&[String]>,
-    defer_empty: bool,
-) -> Option<Vec<String>> {
+) -> RecordShapes {
     if let Some(own_shape) = own_shape {
-        return (!is_record_pair_shape(esm_file, own_shape)).then(|| own_shape.to_vec());
+        return RecordShapes {
+            shapes: vec![own_shape.to_vec()],
+            unmapped: false,
+        };
     }
-    let mut targets = coupling
-        .iter()
-        .filter_map(|entry| match entry {
-            crate::CouplingEntry::VariableMap {
-                from,
-                to,
-                transform: crate::VariableMapTransform::Named(t),
-                ..
-            } if from == me && t == "param_to_var" => Some(to.as_str()),
-            _ => None,
-        })
-        .peekable();
-    if targets.peek().is_none() {
-        return (!defer_empty).then(Vec::new);
+    let Some(mapped) = targets.get(me) else {
+        return RecordShapes {
+            shapes: Vec::new(),
+            unmapped: true,
+        };
+    };
+    RecordShapes {
+        shapes: mapped
+            .iter()
+            .filter_map(|to| declared_variable_shape(esm_file, to))
+            .map(Option::unwrap_or_default)
+            .collect(),
+        unmapped: false,
     }
-    targets
-        .filter_map(|to| declared_shape(esm_file, to))
-        .find(|shape| !is_record_pair_shape(esm_file, shape))
 }
 
-fn record_shape_message(var_name: &str, shape: &[String]) -> String {
-    format!(
-        "Parameter '{var_name}' asks for two records per sample, so its first dimension must be \
-         an index set of exactly two members; its record shape is {shape:?}"
-    )
+/// esm-spec §8.5.1 over a parameter's record shapes, given what a record axis
+/// is (`None`: not decidable yet, an index set an unmounted `{ref}` could
+/// still declare). `Err(shape)` names a shape that breaks rule 2
+/// (`record_axis_misplaced`): a known record axis anywhere but first, or
+/// decidable shapes that disagree about beginning with one. Otherwise
+/// `Ok(Some(2))` when the decidable shapes begin with a record axis,
+/// `Ok(Some(1))` when they do not (or there are no shapes at all: an empty
+/// record shape), and `Ok(None)` when no shape's first entry is decidable.
+/// Shared by validation, `flatten` (`loader_fields`) and the raw-document
+/// EarthSciIO caller.
+pub(crate) fn records_from_shapes(
+    shapes: &[Vec<String>],
+    is_record_axis: impl Fn(&str) -> Option<bool>,
+) -> Result<Option<u8>, Vec<String>> {
+    if let Some(bad) = shapes
+        .iter()
+        .find(|s| s.iter().skip(1).any(|d| is_record_axis(d) == Some(true)))
+    {
+        return Err(bad.clone());
+    }
+    if shapes.is_empty() {
+        return Ok(Some(1));
+    }
+    let begins = |s: &Vec<String>| match s.first() {
+        None => Some(false),
+        Some(d) => is_record_axis(d),
+    };
+    let mut decided = shapes.iter().filter_map(|s| begins(s).map(|b| (s, b)));
+    let Some((_, first)) = decided.next() else {
+        return Ok(None);
+    };
+    if let Some((bad, _)) = decided.find(|(_, b)| *b != first) {
+        return Err(bad.clone());
+    }
+    Ok(Some(if first { 2 } else { 1 }))
 }
 
 /// Is a source with this `temporal` block time-varying: does the block anchor
-/// at a non-empty `start` (esm-spec §8.5.1 rule 2)? Without one the source is
+/// at a non-empty `start` (esm-spec §8.5.1 rule 3)? Without one the source is
 /// time-invariant and has no successor record.
 fn source_has_temporal_start(temporal: &crate::types::DataSourceTemporal) -> bool {
     temporal.start.as_deref().is_some_and(|s| !s.is_empty())
 }
 
-/// `records_per_sample_invalid` (esm-spec §8.5.1), at structural validation:
-/// `from.records_per_sample` on a rule that is not `data`; or an EFFECTIVE
-/// value of 2 on a parameter whose source is time-invariant (it declares no
-/// `temporal` block, or its `temporal` declares no `start`), or whose record
-/// shape's first dimension is not an index set of exactly two members. The
-/// record shape is the declared `shape` whenever one is declared
-/// (`[]` included); only an absent one takes its `param_to_var` targets'.
-/// Checks every record shape the loaded document shows; an absent shape with
-/// no target is refused only when the parameter has no inline `param_to_var`
-/// entry and the coupling holds no `coupling_import`, and otherwise is left to
-/// [`check_records_per_sample_at_flatten`].
-pub(crate) fn validate_records_per_sample(esm_file: &EsmFile, errors: &mut Vec<StructuralError>) {
-    let coupling = esm_file.coupling.as_deref().unwrap_or_default();
-    let defer_empty = coupling
-        .iter()
-        .any(|e| matches!(e, crate::CouplingEntry::CouplingImport { .. }));
-    for_each_updated_variable(esm_file, &mut |scope, path, var_name, var| {
-        let Some(spec) = var.update.as_ref() else {
-            return;
+/// One esm-spec §8.5.1 finding on a parameter's `update` rule.
+struct RecordFinding {
+    code: &'static str,
+    message: String,
+    details: serde_json::Value,
+}
+
+impl RecordFinding {
+    fn structural_code(&self) -> StructuralErrorCode {
+        match self.code {
+            crate::diagnostic::codes::RECORD_AXIS_MISPLACED => {
+                StructuralErrorCode::RecordAxisMisplaced
+            }
+            crate::diagnostic::codes::RECORD_AXIS_TIME_INVARIANT_SOURCE => {
+                StructuralErrorCode::RecordAxisTimeInvariantSource
+            }
+            _ => StructuralErrorCode::RecordsPerSampleInvalid,
+        }
+    }
+}
+
+/// What one pass over a document's record shapes knows: the `param_to_var`
+/// edges (built once), whether an empty record shape may still be filled by
+/// a `coupling_import` (`defer_empty`), and whether an undeclared index set
+/// may still be declared by an unmounted `{ref}`.
+struct RecordPass<'a> {
+    esm_file: &'a EsmFile,
+    targets: HashMap<&'a str, Vec<&'a str>>,
+    defer_empty: bool,
+    unmounted_refs: bool,
+}
+
+impl<'a> RecordPass<'a> {
+    fn new(esm_file: &'a EsmFile, defer_empty: bool) -> Self {
+        Self {
+            esm_file,
+            targets: param_to_var_targets(esm_file.coupling.as_deref().unwrap_or_default()),
+            defer_empty,
+            unmounted_refs: has_unmounted_refs(esm_file),
+        }
+    }
+
+    /// The record count of the parameter scoped `me`, declaring `own_shape`:
+    /// `Err(shape)` on a rule-2 break, `Ok(None)` when not decidable here.
+    fn count(
+        &self,
+        me: &str,
+        own_shape: Option<&[String]>,
+    ) -> (RecordShapes, Result<Option<u8>, Vec<String>>) {
+        let found = record_shapes(self.esm_file, &self.targets, me, own_shape);
+        let n = records_from_shapes(&found.shapes, |d| {
+            record_axis_state(self.esm_file, d, self.unmounted_refs)
+        });
+        (found, n)
+    }
+}
+
+/// Rules 2 and 3 of esm-spec §8.5.1 and the agreement of a written
+/// (deprecated) `records_per_sample` with the record shape, for ONE `data`
+/// rule of the parameter `var_name` reading `source`, given its record shapes
+/// and their count from [`RecordPass::count`]. A record shape that cannot be
+/// decided is skipped; an empty record shape is judged against a written
+/// value only when nothing could still bring a target (`defer_empty` off, or
+/// the parameter not unmapped). Rule 2 first; rule 3 only when the shape
+/// gives two records; the agreement independently.
+fn check_data_rule(
+    pass: &RecordPass<'_>,
+    found: &RecordShapes,
+    counted: &Result<Option<u8>, Vec<String>>,
+    var_name: &str,
+    source_name: &str,
+    source: &crate::DataSource,
+    binding: &crate::types::DataSourceBinding,
+) -> Vec<RecordFinding> {
+    use crate::diagnostic::codes;
+    let records = match counted {
+        Ok(Some(n)) => *n,
+        Ok(None) => return Vec::new(),
+        Err(shape) => {
+            return vec![RecordFinding {
+                code: codes::RECORD_AXIS_MISPLACED,
+                message: format!(
+                    "Parameter '{var_name}' is fed by data source '{source_name}' and its \
+                     record shape {shape:?} names a record axis anywhere but first, or its \
+                     record shapes disagree about beginning with one (esm-spec §8.5.1)"
+                ),
+                details: serde_json::json!({"variable": var_name, "shape": shape}),
+            }];
+        }
+    };
+    let mut out = Vec::new();
+    if records == 2
+        && !source
+            .temporal
+            .as_ref()
+            .is_some_and(source_has_temporal_start)
+    {
+        let why = if source.temporal.is_none() {
+            "declares no temporal block"
+        } else {
+            "declares no temporal start"
         };
-        for (i, rule) in spec.rules().iter().enumerate() {
-            let Some(binding) = rule.value().and_then(|v| v.from.as_ref()) else {
+        out.push(RecordFinding {
+            code: codes::RECORD_AXIS_TIME_INVARIANT_SOURCE,
+            message: format!(
+                "Parameter '{var_name}' has a record shape beginning with a record axis, so it \
+                 receives two records per sample from data source '{source_name}', which \
+                 {why}, so it is time-invariant and has no successor record"
+            ),
+            details: serde_json::json!({"variable": var_name, "source": source_name}),
+        });
+    }
+    let decided = !found.shapes.is_empty() || (found.unmapped && !pass.defer_empty);
+    if let Some(written) = binding.written_records_per_sample(Some(source))
+        && written != records
+        && decided
+    {
+        out.push(RecordFinding {
+            code: codes::RECORDS_PER_SAMPLE_INVALID,
+            message: format!(
+                "Parameter '{var_name}' writes the deprecated records_per_sample {written}, \
+                 but its record shape {:?} gives it {records} record(s) per sample: two \
+                 exactly when the record shape begins with an interval index set carrying \
+                 \"records\": true (esm-spec §8.5.1)",
+                found.shapes.first().cloned().unwrap_or_default()
+            ),
+            details: serde_json::json!({
+                "variable": var_name,
+                "written": written,
+                "records": records,
+            }),
+        });
+    }
+    out
+}
+
+/// Walks every rule of a parameter `update`, at any depth, of a model or a
+/// reaction system: calls `f(pointer, finding)` for each esm-spec §8.5.1
+/// finding, and returns the number of records each data-fed parameter whose
+/// rules raised none receives, keyed by its scoped name. The findings are
+/// [`check_data_rule`] on each `data` rule whose source is declared (an
+/// undeclared one is `data_source_undefined`'s) and, with `report_non_data`,
+/// the deprecated `from.records_per_sample` on a non-`data` rule, which only
+/// validation reports (esm-spec §8.5.1; `flatten` never does).
+fn for_each_record_finding(
+    pass: &RecordPass<'_>,
+    report_non_data: bool,
+    f: &mut impl FnMut(String, RecordFinding),
+) -> HashMap<String, u8> {
+    let esm_file = pass.esm_file;
+    let mut counts = HashMap::new();
+    for_each_updated_variable(esm_file, &mut |v| {
+        let is_array = matches!(v.update, crate::ParameterUpdateSpec::Several(_));
+        let mut counted = None;
+        let mut clean = true;
+        for (i, rule) in v.update.rules().iter().enumerate() {
+            let Some(binding) = rule.value().and_then(|u| u.from.as_ref()) else {
                 continue;
             };
-            let at = update_rule_pointer(path, var_name, spec, i);
+            let at = update_rule_pointer(v.pointer, is_array, i);
             let Some(source_name) = rule.data_source() else {
-                if binding.records_per_sample.is_some() {
-                    errors.push(StructuralError {
-                        path: at,
-                        code: StructuralErrorCode::RecordsPerSampleInvalid,
-                        message: format!(
-                            "Parameter '{var_name}' sets from.records_per_sample on a '{}' \
-                             rule; only a 'data' rule names a source to read records from",
-                            rule.kind()
-                        ),
-                        details: serde_json::json!({"variable": var_name, "kind": rule.kind()}),
-                    });
+                if report_non_data && binding.records_per_sample.is_some() {
+                    f(
+                        at,
+                        RecordFinding {
+                            code: crate::diagnostic::codes::RECORDS_PER_SAMPLE_INVALID,
+                            message: format!(
+                                "Parameter '{}' sets from.records_per_sample on a \
+                                 '{}' rule; only a 'data' rule names a source to read \
+                                 records from",
+                                v.name,
+                                rule.kind()
+                            ),
+                            details: serde_json::json!({
+                                "variable": v.name,
+                                "kind": rule.kind(),
+                            }),
+                        },
+                    );
                 }
                 continue;
             };
-            // An undeclared source is `data_source_undefined`'s finding.
             let Some(source) = esm_file
                 .data_sources
                 .as_ref()
@@ -1176,95 +1465,224 @@ pub(crate) fn validate_records_per_sample(esm_file: &EsmFile, errors: &mut Vec<S
             else {
                 continue;
             };
-            if binding.effective_records_per_sample(Some(source)) != 2 {
-                continue;
-            }
-            let why = match &source.temporal {
-                None => Some("declares no temporal block"),
-                Some(t) if !source_has_temporal_start(t) => Some("declares no temporal start"),
-                Some(_) => None,
-            };
-            if let Some(why) = why {
-                errors.push(StructuralError {
-                    path: at,
-                    code: StructuralErrorCode::RecordsPerSampleInvalid,
-                    message: format!(
-                        "Parameter '{var_name}' asks for two records per sample from data \
-                         source '{source_name}', which {why}, so it is time-invariant and has \
-                         no successor record"
-                    ),
-                    details: serde_json::json!({"variable": var_name, "source": source_name}),
-                });
-                continue;
-            }
-            let own_shape = var.shape.as_deref();
-            let me = format!("{scope}.{var_name}");
-            if let Some(shape) =
-                failing_record_shape(esm_file, coupling, &me, own_shape, defer_empty)
-            {
-                errors.push(StructuralError {
-                    path: at,
-                    code: StructuralErrorCode::RecordsPerSampleInvalid,
-                    message: record_shape_message(var_name, &shape),
-                    details: serde_json::json!({"variable": var_name, "shape": shape}),
-                });
+            let (found, n) = counted.get_or_insert_with(|| pass.count(v.scoped, v.shape));
+            for finding in check_data_rule(pass, found, n, v.name, source_name, source, binding) {
+                clean = false;
+                f(at.clone(), finding);
             }
         }
+        if clean && let Some((_, Ok(n))) = counted {
+            counts.insert(v.scoped.to_string(), n.unwrap_or(1));
+        }
+    });
+    counts
+}
+
+/// Record axes (esm-spec §8.5.1), at structural validation:
+/// `record_axis_invalid` on an index set carrying `"records": true` whose
+/// (folded) `size` is not 2; and, for every parameter `update` rule of a model
+/// or reaction system, `record_axis_misplaced`,
+/// `record_axis_time_invariant_source` and `records_per_sample_invalid`
+/// against the record shapes the loaded document shows. A `param_to_var`
+/// target that does not resolve is skipped, and so is a record shape whose
+/// first entry is an index set an unmounted `{ref}` could still declare; an
+/// empty record shape is judged only when the parameter is the `from` of no
+/// inline `param_to_var` entry and the coupling holds no `coupling_import`.
+/// What this cannot decide [`check_record_axes_at_flatten`] checks.
+pub(crate) fn validate_record_axes(esm_file: &EsmFile, errors: &mut Vec<StructuralError>) {
+    for (name, set) in esm_file.index_sets.iter().flatten() {
+        if set.kind != "interval" || set.records != Some(true) {
+            continue;
+        }
+        // A size still symbolic (or absent) is not judged here.
+        if let Some(size) = set.size
+            && size != 2
+        {
+            errors.push(StructuralError {
+                path: format!("/index_sets/{name}"),
+                code: StructuralErrorCode::RecordAxisInvalid,
+                message: format!(
+                    "Index set '{name}' is a record axis (\"records\": true), so its size \
+                     must be 2, the record at or before the query time and the next; it is \
+                     {size}"
+                ),
+                details: serde_json::json!({"index_set": name, "size": size}),
+            });
+        }
+    }
+    let defer_empty = esm_file
+        .coupling
+        .iter()
+        .flatten()
+        .any(|e| matches!(e, crate::CouplingEntry::CouplingImport { .. }));
+    let pass = RecordPass::new(esm_file, defer_empty);
+    for_each_record_finding(&pass, true, &mut |path, finding| {
+        errors.push(StructuralError {
+            path,
+            code: finding.structural_code(),
+            message: finding.message,
+            details: finding.details,
+        });
     });
 }
 
-/// `records_per_sample_invalid` (esm-spec §8.5.1), at flatten: for each
-/// data-fed parameter whose effective `records_per_sample` is 2, checks rule
-/// 3 against its declared `shape` when it declares one (`[]` included), and
-/// otherwise against the `param_to_var` edges of `esm_file`'s coupling, which
-/// flatten has already expanded past every `coupling_import` and whose refs
-/// are mounted. A record shape still empty here is refused. Rules 1 and 2 are
-/// structural validation's, which sees them in full.
-pub(crate) fn check_records_per_sample_at_flatten(
+/// Rules 2 and 3 of esm-spec §8.5.1 and the agreement of a written
+/// `records_per_sample`, at flatten, against the `param_to_var` edges of
+/// `esm_file`'s coupling, which flatten has already expanded past every
+/// `coupling_import` and whose refs are mounted. An empty record shape is
+/// judged here. Returns the first finding, its code carried and its message
+/// led by the rule's JSON pointer; otherwise the number of records each
+/// data-fed parameter receives, keyed by its scoped name, which `flatten`
+/// reports in `loader_fields`. `record_axis_invalid` and the deprecated field
+/// on a non-`data` rule are validation's, which sees them in full.
+pub(crate) fn check_record_axes_at_flatten(
     esm_file: &EsmFile,
-) -> Result<(), crate::diagnostic::DiagnosticError> {
-    let coupling = esm_file.coupling.as_deref().unwrap_or_default();
+) -> Result<HashMap<String, u8>, crate::diagnostic::DiagnosticError> {
     let mut first_error = None;
-    for_each_updated_variable(esm_file, &mut |scope, path, var_name, var| {
-        if first_error.is_some() {
-            return;
-        }
-        let Some(spec) = var.update.as_ref() else {
-            return;
-        };
-        for (i, rule) in spec.rules().iter().enumerate() {
-            let Some(binding) = rule.value().and_then(|v| v.from.as_ref()) else {
-                continue;
-            };
-            let Some(source) = rule
-                .data_source()
-                .and_then(|name| esm_file.data_sources.as_ref()?.get(name))
-            else {
-                continue;
-            };
-            // A time-invariant source is rule 2's, reported by validation.
-            if !source
-                .temporal
-                .as_ref()
-                .is_some_and(source_has_temporal_start)
-                || binding.effective_records_per_sample(Some(source)) != 2
-            {
-                continue;
-            }
-            let me = format!("{scope}.{var_name}");
-            if let Some(shape) =
-                failing_record_shape(esm_file, coupling, &me, var.shape.as_deref(), false)
-            {
-                let at = update_rule_pointer(path, var_name, spec, i);
-                first_error = Some(crate::diagnostic::err(
-                    crate::diagnostic::codes::RECORDS_PER_SAMPLE_INVALID,
-                    format!("{at}: {}", record_shape_message(var_name, &shape)),
-                ));
-                return;
-            }
+    let pass = RecordPass::new(esm_file, false);
+    let counts = for_each_record_finding(&pass, false, &mut |at, finding| {
+        if first_error.is_none() {
+            first_error = Some(crate::diagnostic::err(
+                finding.code,
+                format!("{at}: {}", finding.message),
+            ));
         }
     });
-    first_error.map_or(Ok(()), Err)
+    first_error.map_or(Ok(counts), Err)
+}
+
+/// The JSON pointers at which the deprecated `records_per_sample` is written
+/// in `file` (esm-spec §8.5.1), sorted by plain byte order:
+/// `/data_sources/<S>/temporal/records_per_sample`,
+/// `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`
+/// and
+/// `/reaction_systems/<R>[/subsystems/<S>…]/parameters/<p>/update[/<i>]/from/records_per_sample`
+/// (`/<i>` only for an array-form `update`). Loading a document for which
+/// this is non-empty warns once, `deprecated_records_per_sample`. Runs on
+/// every load, so a subsystem is scanned as raw JSON for the key, never
+/// decoded.
+pub fn deprecated_records_per_sample_sites(file: &EsmFile) -> Vec<String> {
+    /// The written sites among the rules of one raw `update` value.
+    fn raw_update(update: &serde_json::Value, var_pointer: &str, out: &mut Vec<String>) {
+        let written = |rule: &serde_json::Value| {
+            rule.get("from")
+                .and_then(|f| f.get("records_per_sample"))
+                .is_some()
+        };
+        match update {
+            serde_json::Value::Array(rules) => {
+                for (i, rule) in rules.iter().enumerate() {
+                    if written(rule) {
+                        out.push(format!(
+                            "{}/from/records_per_sample",
+                            update_rule_pointer(var_pointer, true, i)
+                        ));
+                    }
+                }
+            }
+            rule if written(rule) => out.push(format!(
+                "{}/from/records_per_sample",
+                update_rule_pointer(var_pointer, false, 0)
+            )),
+            _ => {}
+        }
+    }
+    fn raw_subsystem(sub: &serde_json::Value, table: &str, path: &str, out: &mut Vec<String>) {
+        for (name, decl) in sub
+            .get(table)
+            .and_then(|v| v.as_object())
+            .into_iter()
+            .flatten()
+        {
+            if let Some(update) = decl.get("update") {
+                raw_update(update, &format!("{path}/{table}/{name}"), out);
+            }
+        }
+        for (name, inner) in sub
+            .get("subsystems")
+            .and_then(|s| s.as_object())
+            .into_iter()
+            .flatten()
+        {
+            raw_subsystem(inner, table, &format!("{path}/subsystems/{name}"), out);
+        }
+    }
+    /// The written sites among the rules of one typed `update`.
+    fn typed_update(spec: &crate::ParameterUpdateSpec, var_pointer: &str, out: &mut Vec<String>) {
+        let is_array = matches!(spec, crate::ParameterUpdateSpec::Several(_));
+        for (i, rule) in spec.rules().iter().enumerate() {
+            if rule
+                .value()
+                .and_then(|v| v.from.as_ref())
+                .is_some_and(|b| b.records_per_sample.is_some())
+            {
+                out.push(format!(
+                    "{}/from/records_per_sample",
+                    update_rule_pointer(var_pointer, is_array, i)
+                ));
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for (name, source) in file.data_sources.iter().flatten() {
+        if source
+            .temporal
+            .as_ref()
+            .is_some_and(|t| t.records_per_sample.is_some())
+        {
+            out.push(format!("/data_sources/{name}/temporal/records_per_sample"));
+        }
+    }
+    for (model_name, model) in file.models.iter().flatten() {
+        let path = format!("/models/{model_name}");
+        for (name, var) in &model.variables {
+            if let Some(spec) = &var.update {
+                typed_update(spec, &format!("{path}/variables/{name}"), &mut out);
+            }
+        }
+        for (name, sub) in model.subsystems.iter().flatten() {
+            raw_subsystem(
+                sub,
+                "variables",
+                &format!("{path}/subsystems/{name}"),
+                &mut out,
+            );
+        }
+    }
+    for (rs_name, rs) in file.reaction_systems.iter().flatten() {
+        let path = format!("/reaction_systems/{rs_name}");
+        for (name, param) in &rs.parameters {
+            if let Some(spec) = &param.update {
+                typed_update(spec, &format!("{path}/parameters/{name}"), &mut out);
+            }
+        }
+        for (name, sub) in rs.subsystems.iter().flatten() {
+            raw_subsystem(
+                sub,
+                "parameters",
+                &format!("{path}/subsystems/{name}"),
+                &mut out,
+            );
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The `deprecated_records_per_sample` load warning for `file`, or `None`
+/// when it writes the deprecated field nowhere.
+pub(crate) fn deprecated_records_per_sample_warning(file: &EsmFile) -> Option<String> {
+    let sites = deprecated_records_per_sample_sites(file);
+    (!sites.is_empty()).then(|| {
+        format!(
+            "deprecated_records_per_sample: `records_per_sample` is deprecated and is removed \
+             at esm 3.0.0; the number of records a data-fed parameter receives is said by its \
+             record shape, two when its first axis is an interval index set with \
+             \"records\": true (esm-spec §8.5.1). Written at: {}.",
+            sites.join(", ")
+        )
+    })
 }
 
 /// Every name DECLARED anywhere in the document: each model's `variables` and

@@ -97,7 +97,10 @@ def _leaf_form(call, derived):
             return src
         return {"op": "index", "args": [ring, cell]}
 
-    return TEMPLATES[call["name"]], [operand(b["ring_a"], b["cell_a"]), operand(b["ring_b"], b["cell_b"])]
+    return TEMPLATES[call["name"]], [
+        operand(b["ring_a"], b["cell_a"]),
+        operand(b["ring_b"], b["cell_b"]),
+    ]
 
 
 def _array_values(model):

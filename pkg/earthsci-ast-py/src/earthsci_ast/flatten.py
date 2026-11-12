@@ -43,7 +43,6 @@ from .esm_types import (
     OperatorComposeCoupling,
     ReactionSystem,
     VariableMapCoupling,
-    effective_records_per_sample,
     is_aggregate_op,
 )
 from .expr_walk import any_child, iter_children, map_children, walk
@@ -57,7 +56,11 @@ from .index_alignment import ELEMENTWISE_OPS
 from .index_ranges import expand_range as _expand_range
 from .json_walk import ExpressionTemplateError
 from .reactions import derive_odes
-from .structural_checks import record_shape_holds_a_pair, records_per_sample_shape_message
+from .structural_checks import (
+    judge_record_shapes,
+    record_shape_findings,
+    written_records_per_sample,
+)
 from .substitute import has_var_placeholder, substitute
 
 #: The operator-model placeholder (esm-spec §6.4). A GLOBAL sentinel: it is
@@ -200,10 +203,12 @@ class VariableMapShapeConflictError(FlattenError):
     """
 
 
-class RecordsPerSampleInvalidError(FlattenError):
-    """A data-fed parameter asks for two records per sample and a record shape
-    that structural validation could not see cannot carry them (esm-spec §8.5.1
-    "When rule 3 is checked").
+class RecordAxisError(FlattenError):
+    """A data-fed parameter's record shape, which structural validation could
+    not see, breaks an esm-spec §8.5.1 rule ("When rules 2 and 3 are
+    checked"): ``code`` is ``record_axis_misplaced``,
+    ``record_axis_time_invariant_source`` or (as the
+    :class:`RecordsPerSampleInvalidError` subclass) ``records_per_sample_invalid``.
 
     A parameter that declares no ``shape`` takes its record shape from
     its ``param_to_var`` targets. An edge imported from a coupling library
@@ -214,11 +219,18 @@ class RecordsPerSampleInvalidError(FlattenError):
     ``pointer`` is the rule's: ``.../update`` or ``.../update/<i>``.
     """
 
-    code = "records_per_sample_invalid"
+    def __init__(self, pointer: str, message: str, code: str) -> None:
+        super().__init__(f"[{code}] {pointer}: {message}")
+        self.code = code
+        self.pointer = pointer
+
+
+class RecordsPerSampleInvalidError(RecordAxisError):
+    """A written (deprecated) ``records_per_sample`` disagrees with the count
+    the record shape gives, found by ``flatten`` (see :class:`RecordAxisError`)."""
 
     def __init__(self, pointer: str, message: str) -> None:
-        super().__init__(f"[{self.code}] {pointer}: {message}")
-        self.pointer = pointer
+        super().__init__(pointer, message, "records_per_sample_invalid")
 
 
 class DimensionPromotionError(FlattenError):
@@ -356,11 +368,12 @@ class LoaderField:
     # path when producing values in the parameter's declared units. None when the
     # document declares none, which must cost nothing.
     unit_conversion: Expr | None = None
-    # The EFFECTIVE records per sample (esm-spec §8.5.1): the binding's
-    # ``from.records_per_sample``, else the source's
-    # ``temporal.records_per_sample``, else 1. With 2 the field holds the
-    # record at or before the query time and its successor, stacked along the
-    # parameter's first dimension.
+    # The number of records the parameter receives (esm-spec §8.5.1), said by
+    # its record shape: 2 when it begins with a record axis (an interval index
+    # set with ``"records": true``), else 1. With 2 the field holds the record
+    # at or before the query time and its successor, stacked along the
+    # parameter's first dimension. ``flatten`` sets it once every
+    # ``param_to_var`` edge is known.
     records_per_sample: int = 1
 
 
@@ -1341,7 +1354,6 @@ def _data_source_fields(
                     data_source=source,
                     cadence="discrete" if source.temporal is not None else "const",
                     unit_conversion=rule.from_source.unit_conversion,
-                    records_per_sample=effective_records_per_sample(rule.from_source, source),
                 )
             )
     return fields
@@ -3447,10 +3459,11 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
 
     coupling_entries = expand_coupling_imports(esm_file, base_path=base_path, load_ref=load_ref)
 
-    # Step 0a: a data-fed parameter with no `shape` and two records per
-    # sample takes its record shape from its `param_to_var` targets, and only
-    # the expanded coupling list holds them all (esm-spec §8.5.1).
-    _check_records_per_sample_shapes(esm_file, coupling_entries)
+    # Step 0a: a data-fed parameter with no `shape` takes its record shape
+    # from its `param_to_var` targets, and only the expanded coupling list
+    # holds them all (esm-spec §8.5.1). Re-check the record-axis rules and
+    # learn how many records each data-fed parameter receives.
+    record_counts = _check_record_shapes(esm_file, coupling_entries)
 
     # Step 0b: coupling preflight — reject an `identity` variable_map that bridges
     # two variables with declared, non-empty, different units (spec §4.7.6). Runs
@@ -3467,6 +3480,8 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
 
     # Step 3: assemble the final FlattenedSystem from the per-component pieces.
     flat = _assemble_system(esm_file, components, metadata)
+    for lf in flat.loader_fields:
+        lf.records_per_sample = record_counts.get(lf.name, 1)
 
     # Step 4: collect and namespace events.
     _namespace_events(esm_file, flat)
@@ -3511,17 +3526,20 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
     return flat
 
 
-def _check_records_per_sample_shapes(esm_file: EsmFile, coupling_entries: list[Any]) -> None:
-    """Refuse a data-fed parameter whose effective ``records_per_sample`` is 2
-    and one of whose record shapes cannot carry two records (esm-spec §8.5.1
-    rule 3), with every ``coupling_import`` expanded and every ref mounted, so
-    with the index sets of mounted files in view.
+def _check_record_shapes(esm_file: EsmFile, coupling_entries: list[Any]) -> dict[str, int]:
+    """Re-check esm-spec §8.5.1 rules 2 and 3 and the ``records_per_sample``
+    agreement rule with every ``coupling_import`` expanded and every ref
+    mounted, so with the index sets of mounted files in view, raising
+    :class:`RecordAxisError` (or :class:`RecordsPerSampleInvalidError`) under
+    the code and rule pointer validation would use. Returns the number of
+    records each data-fed parameter receives, keyed by its flattened name.
 
     The record shape is the parameter's own ``shape`` when it declares one
-    (``[]`` included: a scalar buffer); else the declared shapes of the ``param_to_var`` targets of the EXPANDED coupling
-    sequence; with none, the record shape is empty and refused. A target that
-    names no declaration is the coupling walk's to report
-    (:class:`VariableMapUnresolvedEndpointError`), not this check's.
+    (``[]`` included: a scalar buffer); else the declared shapes of the
+    ``param_to_var`` targets of the EXPANDED coupling sequence; with none, the
+    record shape is empty. A target that names no declaration is the coupling
+    walk's to report (:class:`VariableMapUnresolvedEndpointError`), not this
+    check's.
     """
     targets: dict[str, list[str]] = {}
     for entry in coupling_entries:
@@ -3535,55 +3553,82 @@ def _check_records_per_sample_shapes(esm_file: EsmFile, coupling_entries: list[A
 
     sources = esm_file.data_sources or {}
     index_sets = esm_file.index_sets or {}
+    counts: dict[str, int] = {}
 
     def declared_shape(scoped: str) -> list[Any] | None:
         *path, vname = scoped.split(".")
         if not path:
             return None
-        node: Any = esm_file.models.get(path[0])
+        if path[0] in esm_file.models:
+            node: Any = esm_file.models.get(path[0])
+            for seg in path[1:]:
+                node = node.subsystems.get(seg) if isinstance(node, Model) else None
+            if not isinstance(node, Model) or vname not in node.variables:
+                return None
+            return list(node.variables[vname].shape or [])
+        rs: Any = esm_file.reaction_systems.get(path[0])
         for seg in path[1:]:
-            node = node.subsystems.get(seg) if isinstance(node, Model) else None
-        if not isinstance(node, Model) or vname not in node.variables:
+            rs = rs.subsystems.get(seg) if isinstance(rs, ReactionSystem) else None
+        if not isinstance(rs, ReactionSystem):
             return None
-        return list(node.variables[vname].shape or [])
+        param = next((p for p in rs.parameters if p.name == vname), None)
+        return None if param is None else list(param.shape or [])
+
+    def check(vname: str, var: Any, scope: str, pointer: str) -> None:
+        if var.update is None:
+            return
+        rules = (
+            [(f"/{i}", r) for i, r in enumerate(var.update)]
+            if isinstance(var.update, list)
+            else [("", var.update)]
+        )
+        for suffix, rule in rules:
+            if rule.kind != "data" or rule.from_source is None:
+                continue
+            source = sources.get(rule.source)
+            if source is None:
+                continue  # validation reports data_source_undefined
+            scoped = f"{scope}.{vname}"
+            if var.shape is not None:
+                shapes = [list(var.shape)]
+            else:
+                tos = targets.get(scoped, [])
+                resolved = [declared_shape(to) for to in tos]
+                shapes = [shape for shape in resolved if shape is not None] if tos else [[]]
+            misplaced, count = judge_record_shapes(index_sets, shapes, undeclared_is_plain=True)
+            written, _where = written_records_per_sample(rule.from_source, source)
+            findings = record_shape_findings(
+                vname, rule.source, source, shapes, misplaced, count, written
+            )
+            if findings:
+                code, message, _details = findings[0]
+                at = f"{pointer}/{vname}/update{suffix}"
+                if code == "records_per_sample_invalid":
+                    raise RecordsPerSampleInvalidError(at, message)
+                raise RecordAxisError(at, message, code)
+            counts[scoped] = count if count is not None else 1
 
     def walk(model: Model, scope: str, pointer: str) -> None:
         for vname, var in model.variables.items():
-            if var.update is None:
-                continue
-            rules = (
-                [(f"/{i}", r) for i, r in enumerate(var.update)]
-                if isinstance(var.update, list)
-                else [("", var.update)]
-            )
-            for suffix, rule in rules:
-                if rule.kind != "data" or rule.from_source is None:
-                    continue
-                source = sources.get(rule.source)
-                if source is None or source.temporal is None or not source.temporal.start:
-                    continue  # validation reports each (a startless temporal is time-invariant)
-                if effective_records_per_sample(rule.from_source, source) != 2:
-                    continue
-                if var.shape is not None:
-                    decided = [list(var.shape)]
-                else:
-                    shapes = [declared_shape(to) for to in targets.get(f"{scope}.{vname}", [])]
-                    decided = [shape for shape in shapes if shape is not None]
-                    if not shapes:
-                        decided = [[]]
-                for shape in decided:
-                    if not record_shape_holds_a_pair(index_sets, shape):
-                        raise RecordsPerSampleInvalidError(
-                            f"{pointer}/variables/{vname}/update{suffix}",
-                            records_per_sample_shape_message(vname, shape),
-                        )
+            check(vname, var, scope, f"{pointer}/variables")
         for sname, sub in model.subsystems.items():
             if isinstance(sub, Model):
                 walk(sub, f"{scope}.{sname}", f"{pointer}/subsystems/{sname}")
 
+    def walk_rs(rs: ReactionSystem, scope: str, pointer: str) -> None:
+        for param in rs.parameters:
+            check(param.name, param, scope, f"{pointer}/parameters")
+        for sname, sub in rs.subsystems.items():
+            if isinstance(sub, ReactionSystem):
+                walk_rs(sub, f"{scope}.{sname}", f"{pointer}/subsystems/{sname}")
+
     for mname, model in esm_file.models.items():
         if isinstance(model, Model):
             walk(model, mname, f"/models/{mname}")
+    for rname, rs in esm_file.reaction_systems.items():
+        if isinstance(rs, ReactionSystem):
+            walk_rs(rs, rname, f"/reaction_systems/{rname}")
+    return counts
 
 
 def _normalize_angle_arguments(flat: FlattenedSystem) -> None:

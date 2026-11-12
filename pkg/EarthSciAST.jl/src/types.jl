@@ -902,10 +902,11 @@ Binds a parameter to one file variable of a `data_sources` entry (esm-spec
 §8.5) — the `from` value form of a `data` update. It carries no `units`: the
 units are the parameter's own, declared once on the consumer.
 
-`records_per_sample` (1 or 2, `nothing` when not written) is how many records
-of the source the parameter receives per query time, overriding the source's
-`temporal.records_per_sample` (esm-spec §8.5.1). A `LoaderField` reports the
-effective value.
+`records_per_sample` (1 or 2, `nothing` when not written) is DEPRECATED (esm-spec
+§8.5.1, removed at esm 3.0.0): the parameter's record shape says how many
+records it receives, and a written value must agree with it. It parses and
+round-trips as written; validation and `flatten` refuse a value that disagrees
+with the record shape (`records_per_sample_invalid`).
 """
 struct DataSourceBinding
     file_variable::String
@@ -928,12 +929,15 @@ struct DataSourceBinding
 end
 
 """
-    _effective_records_per_sample(binding::DataSourceBinding, source) -> Int
-    _effective_records_per_sample(coerce, from::AbstractDict, source) -> Int
+    _written_records_per_sample(binding::DataSourceBinding, source) -> Union{Int, Nothing}
+    _written_records_per_sample(coerce, from::AbstractDict, source) -> Union{Int, Nothing}
 
-The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
-binding's own `from.records_per_sample`, else the source's
-`temporal.records_per_sample`, else 1.
+The deprecated `records_per_sample` WRITTEN for a `data` rule (esm-spec
+§8.5.1): the binding's own `from.records_per_sample`, else the source's
+`temporal.records_per_sample`, else `nothing`. It no longer decides how many
+records the parameter receives — its record shape does (see
+[`_record_axis_verdict`](@ref)) — and a written value that disagrees with the
+shape is `records_per_sample_invalid`.
 
 The typed form takes the rule's `DataSourceBinding` and the `DataSource` it
 names (or `nothing`). The raw form takes the rule's `from` object and the
@@ -942,25 +946,68 @@ value present through `coerce(value, origin)` before the rule picks one;
 `origin` is `:from` or `:temporal`. `coerce` returns the value as an `Int` or
 throws, so the caller decides how strictly a raw value is read.
 """
-function _effective_records_per_sample(binding::DataSourceBinding, source)::Int
+function _written_records_per_sample(binding::DataSourceBinding, source)
     t = source === nothing ? nothing : source.temporal
-    return _records_per_sample_rule(
-        binding.records_per_sample, t === nothing ? nothing : t.records_per_sample
-    )
+    own = binding.records_per_sample
+    return own !== nothing ? own : t === nothing ? nothing : t.records_per_sample
 end
 
-function _effective_records_per_sample(coerce, from::AbstractDict, source)::Int
+function _written_records_per_sample(coerce, from::AbstractDict, source)
     own = get(from, "records_per_sample", nothing)
     t = source isa AbstractDict ? get(source, "temporal", nothing) : nothing
     inherited = t isa AbstractDict ? get(t, "records_per_sample", nothing) : nothing
     own === nothing || (own = coerce(own, :from)::Int)
     inherited === nothing || (inherited = coerce(inherited, :temporal)::Int)
-    return _records_per_sample_rule(own, inherited)
+    return own !== nothing ? own : inherited
 end
 
-# The precedence itself: the parameter's own value, else the source's, else 1.
-_records_per_sample_rule(own, inherited)::Int =
-    own !== nothing ? own : inherited !== nothing ? inherited : 1
+"""
+    _record_shapes(own_shape, targets, target_shape) -> (shapes, mapped)
+
+The record shapes of a data-fed parameter (esm-spec §8.5.1), whatever carries
+the document. `own_shape` is the parameter's declared `shape` (`nothing` when it
+declares none); a declared shape, `[]` included, is THE record shape. Otherwise
+each `t` in `targets` (the `to` of every `param_to_var` `variable_map` entry
+whose `from` is the parameter) contributes `target_shape(t)`: its declared
+shape (`[]` when it declares none), or `nothing` when the declaration cannot be
+reached (not found, or behind a `ref` not yet mounted), which is skipped, never
+read as empty. `mapped` is whether there was a declared shape or any target at
+all; a shapeless parameter that is the `from` of no such entry has an empty
+record shape, which the caller supplies when no target may still arrive.
+
+Shared by validation, `flatten`, `loader_fields` and the EarthSciIO provider
+extension, so the precedence is stated once.
+"""
+function _record_shapes(own_shape, targets, target_shape)
+    own_shape === nothing || return (Vector{String}[collect(String, own_shape)], true)
+    shapes = Vector{String}[]
+    mapped = false
+    for t in targets
+        mapped = true
+        s = target_shape(t)
+        s === nothing || push!(shapes, collect(String, s))
+    end
+    return shapes, mapped
+end
+
+"""
+    _record_axis_verdict(shapes, is_record_axis) -> (misplaced::Bool, records::Int)
+
+esm-spec §8.5.1 over a data-fed parameter's record shapes: `records` is 2 when
+a record shape begins with a record axis (`is_record_axis(name)`), else 1;
+`misplaced` (`record_axis_misplaced`) is whether some shape names a record axis
+anywhere but first, or some shapes begin with one while others do not.
+"""
+function _record_axis_verdict(shapes, is_record_axis)
+    misplaced = false
+    leading = 0
+    for s in shapes
+        any(is_record_axis, Iterators.drop(s, 1)) && (misplaced = true)
+        (!isempty(s) && is_record_axis(first(s))) && (leading += 1)
+    end
+    0 < leading < length(shapes) && (misplaced = true)
+    return misplaced, leading > 0 ? 2 : 1
+end
 
 """
     PARAMETER_UPDATE_KINDS
@@ -1561,13 +1608,14 @@ struct InlineTest
 end
 
 """
-    IndexSet(kind; size, members, of, offsets, values, from_faq)
+    IndexSet(kind; size, members, of, offsets, values, from_faq, records)
 
 A declared index set in the document-scoped `index_sets` registry
 (RFC semiring-faq-unified-ir §5.2). Unifies ESM grid dims and ESI categorical
 dims under one shape. `kind` is one of:
 
-- `"interval"`   — dense integer axis; `size` gives its length.
+- `"interval"`   — dense integer axis; `size` gives its length. `records =
+  true` makes it a record axis (esm-spec §8.5.1; its `size` must be 2).
 - `"categorical"`— enumerated members; `members` is the ordered member list.
 - `"ragged"`     — data-dependent inner set (e.g. the edges of a cell); `of`
   names the parent index set(s), `offsets` the length/CSR-offset backing factor,
@@ -1599,15 +1647,20 @@ struct IndexSet
     # feedback IS the mechanism. `nothing` for every non-feedback set (byte-
     # identical round-trip).
     member_factor::Union{String, Nothing}
+    # esm-spec §8.5.1: `true` makes an `interval` of size 2 a RECORD AXIS — a
+    # data-fed parameter whose record shape begins with it receives two records
+    # per query time. Otherwise an ordinary interval everywhere. `nothing` when
+    # not written (`false` is the same, and round-trips as written).
+    records::Union{Bool, Nothing}
 
     IndexSet(
         kind::AbstractString; size = nothing, members = nothing, of = nothing,
         offsets = nothing, values = nothing, from_faq = nothing, members_raw = nothing,
-        member_factor = nothing
+        member_factor = nothing, records = nothing
     ) =
         _new_typed(
         IndexSet, String(kind), size, members, of, offsets, values, from_faq,
-        members_raw, member_factor
+        members_raw, member_factor, records
     )
 end
 _def_new_typed(IndexSet)
@@ -2038,11 +2091,10 @@ struct DataSourceTemporal
     frequency::Union{String, Nothing}
     records_per_file::Union{Int, String, Nothing}  # integer or "auto"
     time_variable::Union{String, Nothing}
-    # How many time records the source returns PER QUERY TIME — 1 (or absent):
-    # the single at-or-before record, time axis dropped; 2: the bracketing pair
-    # with the time axis kept at length 2 so a model can interpolate. Distinct
-    # from `records_per_file`, which counts records IN one file, and the only
-    # `DataSourceTemporal` property this struct did not carry.
+    # DEPRECATED (esm-spec §8.3/§8.5.1, removed at esm 3.0.0): the source-wide
+    # default of each consumer's deprecated `from.records_per_sample`. Only
+    # checked against each consumer's record shape, never obeyed. Distinct
+    # from `records_per_file`, which counts records IN one file.
     records_per_sample::Union{Int, Nothing}
 
     DataSourceTemporal(;
@@ -3168,6 +3220,7 @@ const RECORD_FIELD_TABLES = (
             (f = :values, wire = "values", kind = :string, mode = :opt, emit = :nonnothing),
             (f = :from_faq, wire = "from_faq", kind = :string, mode = :opt, emit = :nonnothing),
             (f = :member_factor, wire = "member_factor", kind = :string, mode = :opt, emit = :nonnothing),
+            (f = :records, wire = "records", kind = :bool, mode = :opt, emit = :nonnothing),
         ),
     ),
     (

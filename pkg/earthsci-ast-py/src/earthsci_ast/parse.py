@@ -11,6 +11,7 @@ import copy
 import json
 import os
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -2021,10 +2022,13 @@ _ISET_SEMANTIC_KEYS = (
 def _index_set_deep_equal(a: Any, b: Any) -> bool:
     """Structural equality of two index-set declarations (esm-spec §4.7 /
     §9.7.5): equal ``kind`` / ``size`` / ``members`` / ``of`` / ``offsets`` /
-    ``values`` / ``from_faq``. Non-semantic fields (``description``) do not
-    affect the judgment, matching the Julia reference."""
+    ``values`` / ``from_faq`` / ``records``. ``"records": false`` and an absent
+    ``records`` are the same declaration (esm-spec §8.5.1). Non-semantic fields
+    (``description``) do not affect the judgment, matching the Julia reference."""
     if not (isinstance(a, dict) and isinstance(b, dict)):
         return a == b
+    if (a.get("records") is True) != (b.get("records") is True):
+        return False
     return all(a.get(k) == b.get(k) for k in _ISET_SEMANTIC_KEYS)
 
 
@@ -2035,6 +2039,8 @@ def _index_set_show(s: Any) -> str:
     for k in ("kind", "size", "members", "of", "from_faq"):
         if s.get(k) is not None:
             parts.append(f"{k}={s[k]}")
+    if s.get("records") is True:
+        parts.append("records=True")
     return ", ".join(parts)
 
 
@@ -2994,6 +3000,7 @@ def load_path(
     with open(file_path) as f:
         data = json.load(f)
     esm_file = _load_data(data, resolved_base, metaparameters, file_path)
+    _warn_deprecated_records_per_sample(esm_file)
     # esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against this
     # file's directory, which `flatten` would otherwise never learn.
     esm_file.coupling_import_base = resolved_base
@@ -3021,6 +3028,7 @@ def load_string(
     esm_file = _load_data(
         data, base_path if base_path is not None else os.getcwd(), metaparameters, None
     )
+    _warn_deprecated_records_per_sample(esm_file)
     # esm-spec §10.10 / §4.7: an explicit base anchors relative `coupling_import`
     # refs; without one `flatten`'s own base applies.
     esm_file.coupling_import_base = base_path
@@ -3054,6 +3062,7 @@ def load_document(
         metaparameters,
         None,
     )
+    _warn_deprecated_records_per_sample(esm_file)
     # esm-spec §10.10 / §4.7: an explicit base anchors relative `coupling_import`
     # refs; without one `flatten`'s own base applies.
     esm_file.coupling_import_base = base_path
@@ -3429,6 +3438,88 @@ def _version_below_v11(data: object) -> bool:
     except (IndexError, ValueError):
         return False
     return (major, minor) < (1, 1)
+
+
+class EsmDeprecationWarning(UserWarning):
+    """A deprecated ESM construct was accepted.
+
+    Subclasses :class:`UserWarning`, not :class:`DeprecationWarning`, on
+    purpose: Python filters ``DeprecationWarning`` outside ``__main__``, so a
+    library-issued one is invisible to exactly the users who need it — the four
+    other bindings all print unconditionally.
+    """
+
+
+def _pointer_token(name: object) -> str:
+    """One JSON-Pointer reference token (RFC 6901 escaping)."""
+    return str(name).replace("~", "~0").replace("/", "~1")
+
+
+def deprecated_records_per_sample_sites(file: EsmFile) -> list[str]:
+    """The JSON pointers at which a loaded document writes the deprecated
+    ``records_per_sample`` (esm-spec §8.3, §8.5.1; removed at esm 3.0.0),
+    sorted by plain string order:
+    ``/data_sources/<S>/temporal/records_per_sample`` and
+    ``/models/<M>[/subsystems/<S>...]/variables/<v>/update[/<i>]/from/records_per_sample``
+    and
+    ``/reaction_systems/<R>[/subsystems/<S>...]/parameters/<p>/update[/<i>]/from/records_per_sample``
+    (``/<i>`` only for an array-form ``update``). Mounted components are walked
+    at the place they are mounted. The top-level loaders warn once, naming
+    these, when the list is non-empty."""
+    sites: list[str] = []
+    for sname, source in (file.data_sources or {}).items():
+        temporal = getattr(source, "temporal", None)
+        if temporal is not None and getattr(temporal, "records_per_sample", None) is not None:
+            sites.append(f"/data_sources/{_pointer_token(sname)}/temporal/records_per_sample")
+
+    def walk(model: Any, pointer: str) -> None:
+        if isinstance(model, ReactionSystem):
+            decls = [(p.name, p) for p in model.parameters]
+            section = "parameters"
+        else:
+            decls = list((getattr(model, "variables", None) or {}).items())
+            section = "variables"
+        for vname, var in decls:
+            update = getattr(var, "update", None)
+            if update is None:
+                continue
+            rules = (
+                [(f"/{i}", r) for i, r in enumerate(update)]
+                if isinstance(update, list)
+                else [("", update)]
+            )
+            for suffix, rule in rules:
+                binding = getattr(rule, "from_source", None)
+                if binding is not None and getattr(binding, "records_per_sample", None) is not None:
+                    sites.append(
+                        f"{pointer}/{section}/{_pointer_token(vname)}/update{suffix}"
+                        "/from/records_per_sample"
+                    )
+        for sub_name, sub in (getattr(model, "subsystems", None) or {}).items():
+            walk(sub, f"{pointer}/subsystems/{_pointer_token(sub_name)}")
+
+    for mname, model in (file.models or {}).items():
+        walk(model, f"/models/{_pointer_token(mname)}")
+    for rname, rs in (file.reaction_systems or {}).items():
+        walk(rs, f"/reaction_systems/{_pointer_token(rname)}")
+    return sorted(sites)
+
+
+def _warn_deprecated_records_per_sample(file: EsmFile) -> None:
+    """One ``deprecated_records_per_sample`` warning per top-level load (refs
+    mounted) when the document writes the deprecated field anywhere. Called
+    only by the public loaders, never by a nested (ref-mounted) load."""
+    sites = deprecated_records_per_sample_sites(file)
+    if not sites:
+        return
+    warnings.warn(
+        "deprecated_records_per_sample: `records_per_sample` is deprecated and is "
+        "removed at esm 3.0.0; the number of records a data-fed parameter receives is "
+        "said by its record shape, two when its first axis is an interval index set "
+        'with "records": true (esm-spec §8.5.1). Written at: ' + ", ".join(sites) + ".",
+        EsmDeprecationWarning,
+        stacklevel=3,
+    )
 
 
 #: Ops removed at esm 2.0.0, rejected BY NAME with ``removed_op``. Each is a
