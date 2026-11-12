@@ -25,6 +25,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         location: None,
         distribution: None,
         update: None,
+        lb: None,
+        ub: None,
     };
     let model = add_variable(model, "M", product)?;
     let model = add_equation(&model, parse_equation("D(M)/Dt = lambda * N")?)?;
