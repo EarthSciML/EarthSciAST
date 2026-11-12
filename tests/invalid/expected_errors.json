@@ -4291,6 +4291,23 @@
     "is_valid": false,
     "notes": "esm-spec \u00a76.3.2 rule 2: shapes are compared by index-set name, so equal extents do not make `[ion]` the shape `[salt]`."
   },
+  "variable_bound_shape_mismatch_nested_reaction.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/M/variables/x/ub",
+        "code": "variable_bound_shape_mismatch",
+        "message": "The ub of 'x' references 'Chem.Pool.cap', shaped [salt]; a bound must be scalar or the bounded variable's shape (scalar)",
+        "details": {
+          "variable": "x",
+          "bound": "ub",
+          "reference": "Chem.Pool.cap"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3.2 rule 2: a referenced parameter's shape is read wherever its reaction system sits, here a reaction system nested in another."
+  },
   "variable_bound_circular_self.esm": {
     "schema_errors": [],
     "structural_errors": [

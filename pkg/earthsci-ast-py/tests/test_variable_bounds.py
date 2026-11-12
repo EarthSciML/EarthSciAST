@@ -70,6 +70,7 @@ _INVALID = [
     "variable_bound_unresolved.esm",
     "variable_bound_shape_mismatch.esm",
     "variable_bound_shape_mismatch_axes.esm",
+    "variable_bound_shape_mismatch_nested_reaction.esm",
     "variable_bound_circular_self.esm",
     "variable_bound_circular_observed.esm",
     "variable_bounds_inverted.esm",
