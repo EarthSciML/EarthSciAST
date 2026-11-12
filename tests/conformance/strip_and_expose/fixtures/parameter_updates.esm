@@ -1,0 +1,99 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ParameterUpdates",
+    "description": "Two parameters that recompute themselves symbolically (esm-spec \u00a75.4): `scale` doubles on a schedule, and `gate` switches on when `s` crosses 0.5. Stripping `parameter_updates` hands both rule sets back and leaves both as ordinary parameters; because `gate`'s rule is a `crossing`, it is stripped only when `continuous_events` is requested too, and with `parameter_updates` alone the document is still refused. CONFORMANCE_SPEC \u00a75.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "strip_and_expose",
+      "parameter_updates"
+    ]
+  },
+  "models": {
+    "Sfc": {
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "Decays at rate scale * (1 + gate)."
+        },
+        "scale": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "shape": [],
+          "description": "Doubles once per unit of time.",
+          "update": {
+            "kind": "schedule",
+            "interval": 1.0,
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "scale"
+                  ]
+                },
+                2.0
+              ]
+            }
+          }
+        },
+        "gate": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "shape": [],
+          "description": "Switches on when s crosses 0.5.",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "s",
+                0.5
+              ]
+            },
+            "direction": "down",
+            "expression": 1.0
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "scale"
+                ]
+              },
+              "s",
+              {
+                "op": "+",
+                "args": [
+                  1.0,
+                  "gate"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

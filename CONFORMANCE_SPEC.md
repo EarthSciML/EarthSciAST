@@ -6009,6 +6009,8 @@ exactly as before, and a document carrying an event or an implicit equation is
 run by naming `:mtk`, not by a fallback. Running any of those on an ARRAY evaluator
 is still future work in every binding; `:mtk` reaches the array fixtures through
 its own symbolic lowering rather than through an array evaluator.
+A caller that runs these constructs itself strips them instead (§5.57); the
+refusals here are what an empty `strip` keeps.
 
 ### 5.40 An Out-of-Range Const-Array Gather Fails, on Every Axis and in Both Spellings (normative)
 
@@ -7634,6 +7636,73 @@ Python `pkg/earthsci-ast-py/tests/test_ic_at_start_conformance.py`, Rust
 `initial_state` accessor against the solve bit for bit, before and after a
 solve, and that `remake` to a new `tspan` re-evaluates at the new start). Go
 and TypeScript do not simulate.
+
+### 5.57 Strip and Expose (normative)
+
+**Decision pinned.** §5.39's refusals stay the default. A caller that runs
+events, symbolic parameter updates or implicit equations itself names, per
+construct class, what the build removes (`esm_problem`'s `strip`); the build
+compiles the rest and hands the removed constructs back as one object
+(`stripped`), and `compile_kernels` compiles named observeds and expressions —
+residuals, conditions, affects, updates, step limits and step maps — as kernels
+sharing the stripped right-hand side's ABI, with algebraic unknowns as the
+separate input `z`. `solve` and `init` refuse a stripped Problem. The surface
+and its semantics are `API_SPEC.md` §5.8, "Strip and expose".
+
+**Shape.** `tests/conformance/strip_and_expose/manifest.json`, with the §5.39
+fixtures reused in place and eleven of its own (plus the coupling library and
+the mounted component two of them reference, under `fixtures/components/`). Its
+sections:
+
+1. **Default unchanged** — every §5.39 refusal case still refuses with
+   `unsupported_construct` when `strip` is empty (reported, not re-gated: §5.39
+   runs it).
+2. **Per-class strip** — each §5.39 event and implicit-equation document
+   builds with its own class stripped and still refuses with each other class
+   alone; the Wiener-noise documents refuse under all four; `D(a + b) ~ 3`
+   refuses under `algebraic`; a `crossing` parameter update refuses under
+   `parameter_updates` alone and builds with `continuous_events` added; event
+   edges that arrive through a `coupling_import` refuse unless their class is
+   stripped; events and updates two subsystem levels deep and inside a
+   `{ref}`-mounted subsystem are all removed by their classes.
+3. **Byte-identical `stripped()`** — the canonical JSON matches a committed
+   golden (`goldens/<id>.json`, the bytes with no trailing newline) in Julia,
+   Rust and Python. The documents cover subsystem, reaction-system (a nested
+   reaction system's included), coupled-document, coupling-level and imported
+   coupling-level events, events and parameter updates two subsystem levels deep
+   and across a `{ref}` mount, subsystem-local dotted references (an affect's
+   target included), parameter updates, and scalar and array implicit
+   equations. An entry may carry a `tspan` and a `p`: `z0` is the `ic`
+   expression evaluated at the start of the run with the Problem's parameter
+   values, the caller's `p` included.
+4. **Not solvable** — `solve` and `init` on a stripped Problem raise
+   `stripped_problem_not_solvable`; the control, `strip` on a document with
+   nothing to strip, is not stripped and still solves.
+5. **Remaining right-hand side** — for each event document, the `rhs` kernel
+   with empty `z` equals, bitwise, the right-hand side of the same document with
+   its events deleted (the transform is applied at run time; no derived
+   document is committed), at the probes the manifest lists.
+6. **Kernel probes** — fixed `(u, z, p, t, dt)` and an analytic anchor per
+   output, gated with the §5.38.2 tolerance classes: a 1-D shallow-shelf-shaped
+   residual with the velocity algebraic, at the exact discrete profile (where it
+   vanishes) and away from it; a geometry-source step map at two `dt` values of
+   one kernel; an ignition-time map reading `t` and `dt`; a per-cell CFL limit
+   and its scalar minimum; a discrete condition and its simultaneous affect
+   with `Pre`; and the stripped right-hand side reading `z`. Each binding also
+   compiles every kernel under `interpreter` and gates it against `native`
+   with the same tolerances.
+7. **Refusals** — `affect_reads_post_value` (an affect reading, bare, a
+   variable its event assigns, spelled locally or through a subsystem) and
+   `kernel_output_unresolved` (an unknown observed, residual, event, target and
+   `dt_params` entry, and a condition `index` of 0).
+8. **`dt` is live** — the step-map kernel of item 6 answers both `dt` values
+   from one build.
+
+**Adapters.** Julia `pkg/EarthSciAST.jl/test/strip_and_expose_conformance_test.jl`,
+Rust `pkg/earthsci-ast-rs/tests/strip_and_expose_conformance.rs`, Python
+`pkg/earthsci-ast-py/tests/test_strip_and_expose_conformance.py` (sections 1–4
+and 7's refusal of `compile_kernels` with `compiler_unavailable`). Go and
+TypeScript do not simulate and register the three codes only.
 
 ## 6. CI Integration
 

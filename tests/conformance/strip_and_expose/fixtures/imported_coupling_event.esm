@@ -1,0 +1,94 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ImportedCouplingEvent",
+    "description": "Coupling-level events that arrive through a coupling_import (esm-spec §10.10.3): the import expands to two discrete event edges at coupling[0] and coupling[1], so the inline continuous event written second is coupling[2]. The imported events are refused unless discrete_events is stripped, and stripping collects them with their indices after expansion. CONFORMANCE_SPEC §5.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "strip_and_expose",
+      "events",
+      "coupling",
+      "coupling_import"
+    ]
+  },
+  "models": {
+    "A": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Climbs at rate 1."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 1.0
+        }
+      ]
+    },
+    "B": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 2.0,
+          "description": "Falls at rate 1."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": -1.0
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "coupling_import",
+      "ref": "./components/imported_coupling_event_library.esm",
+      "bind": {
+        "Lo": "A",
+        "Hi": "B"
+      }
+    },
+    {
+      "type": "event",
+      "event_type": "continuous",
+      "name": "sync",
+      "conditions": [
+        {
+          "op": "-",
+          "args": [
+            "A.x",
+            1.5
+          ]
+        }
+      ],
+      "affects": [
+        {
+          "lhs": "A.x",
+          "rhs": 0.0
+        }
+      ],
+      "description": "Reset A.x when it reaches 1.5."
+    }
+  ]
+}

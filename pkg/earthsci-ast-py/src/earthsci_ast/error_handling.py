@@ -484,6 +484,18 @@ RANGE_SELECTION_WRITES_INCOMPLETE = "range_selection_writes_incomplete"
 #: A malformed decomposition, tile box or lane-set list. Names the index set.
 RANGE_BOX_INVALID = "range_box_invalid"
 
+#: ``solve`` or ``init`` on a Problem ``strip`` removed constructs from
+#: (API_SPEC §5.8, "Strip and expose"). Names the removed classes.
+STRIPPED_PROBLEM_NOT_SOLVABLE = "stripped_problem_not_solvable"
+
+#: A kernel spec's output, ``dt_params`` entry or map target does not resolve.
+#: Python does not compile kernels; registered for the uniform vocabulary.
+KERNEL_OUTPUT_UNRESOLVED = "kernel_output_unresolved"
+
+#: An event affect compiled as a kernel reads, bare, a variable its event also
+#: assigns. Registered for the uniform vocabulary.
+AFFECT_READS_POST_VALUE = "affect_reads_post_value"
+
 
 # ===========================================================================
 # Running an arrayed definition written with a bare-index LHS (esm-spec §6.3.1,

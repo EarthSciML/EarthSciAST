@@ -1,0 +1,95 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "MountedSubsystem",
+    "description": "The component nested_and_mounted.esm mounts by {ref}: a discrete event and a symbolic parameter update, both of which a strip of the mounting document removes. CONFORMANCE_SPEC §5.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "models": {
+    "Leaf": {
+      "variables": {
+        "m": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "Decays at rate gain."
+        },
+        "gain": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "shape": [],
+          "description": "Halves when m falls below 0.5.",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": "<",
+              "args": [
+                "m",
+                0.5
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "gain"
+                  ]
+                },
+                0.5
+              ]
+            }
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "m"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "gain"
+                ]
+              },
+              "m"
+            ]
+          }
+        }
+      ],
+      "discrete_events": [
+        {
+          "name": "refill",
+          "trigger": {
+            "type": "condition",
+            "expression": {
+              "op": "<",
+              "args": [
+                "m",
+                0.25
+              ]
+            }
+          },
+          "affects": [
+            {
+              "lhs": "m",
+              "rhs": 1.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

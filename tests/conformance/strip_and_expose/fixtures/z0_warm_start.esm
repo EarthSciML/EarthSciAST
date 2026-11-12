@@ -1,0 +1,174 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "Z0WarmStart",
+    "description": "Algebraic unknowns whose ic is an expression of a parameter and t: y (scalar) and v (over c, sized by the metaparameter NC). z0 is that expression evaluated at the start of the run with the Problem's parameter values, a caller's p included: with k = 1 and t0 = 0.5 it is y = 2.5 and v = 1.5 per cell; with p W.k = 3 it is 6.5 and 3.5. CONFORMANCE_SPEC §5.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "strip_and_expose",
+      "algebraic"
+    ]
+  },
+  "metaparameters": {
+    "NC": {
+      "type": "integer",
+      "default": 3,
+      "description": "cell count of c"
+    }
+  },
+  "index_sets": {
+    "c": {
+      "kind": "interval",
+      "size": "NC"
+    }
+  },
+  "models": {
+    "W": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "Decays at rate 1 (an ODE state)."
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Constrained by x + y = 3 (algebraic)."
+        },
+        "v": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "c"
+          ],
+          "description": "Constrained by 2 v = x per cell (algebraic)."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "Scales the warm start."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "y"
+            ]
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  2.0,
+                  "k"
+                ]
+              },
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "v"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "c"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                "k",
+                "t"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "+",
+            "args": [
+              "x",
+              "y"
+            ]
+          },
+          "rhs": 3.0
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "c"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "i"
+                  ]
+                },
+                2.0
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "c"
+              }
+            },
+            "expr": "x"
+          }
+        }
+      ]
+    }
+  }
+}

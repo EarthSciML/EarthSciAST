@@ -469,6 +469,16 @@ diagnostic_code_registry! {
     RANGE_HALO_INSUFFICIENT = "range_halo_insufficient";
     /// `select`'s `writes` omits a variable its kept terms write.
     RANGE_SELECTION_WRITES_INCOMPLETE = "range_selection_writes_incomplete";
+    /// `solve` or `init` on a Problem `strip` removed constructs from
+    /// (API_SPEC §5.8, "Strip and expose"). Names the removed classes.
+    STRIPPED_PROBLEM_NOT_SOLVABLE = "stripped_problem_not_solvable";
+    /// A kernel spec's output, `dt_params` entry or map target does not
+    /// resolve against the stripped flattened system. Names the kernel and
+    /// the output.
+    KERNEL_OUTPUT_UNRESOLVED = "kernel_output_unresolved";
+    /// An event affect compiled as a kernel reads, bare, a variable its event
+    /// also assigns. Names the event and the variable.
+    AFFECT_READS_POST_VALUE = "affect_reads_post_value";
     /// A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier
     /// along exactly one axis.
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded";
@@ -621,6 +631,7 @@ mod error_code_tests {
     #[test]
     fn the_diagnostic_vocabulary_is_pinned() {
         let expected: Vec<&str> = vec![
+            "affect_reads_post_value",
             "ambiguous_output_name",
             "ambiguous_subsystem_ref",
             "analysis",
@@ -671,6 +682,7 @@ mod error_code_tests {
             "join_key_invalid_type",
             "join_side_ambiguous",
             "join_syms_unknown_symbol",
+            "kernel_output_unresolved",
             "makearray_region_inverted",
             "metaparameter_name_conflict",
             "metaparameter_type_error",
@@ -700,6 +712,7 @@ mod error_code_tests {
             "solver_time_span_invalid",
             "solver_time_span_version_too_old",
             "solver_version_too_old",
+            "stripped_problem_not_solvable",
             "subsystem_index_set_conflict",
             "subsystem_index_set_rename_unknown_name",
             "subsystem_index_set_rename_unsupported_mount_form",

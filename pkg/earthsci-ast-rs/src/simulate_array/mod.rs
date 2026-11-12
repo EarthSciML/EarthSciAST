@@ -125,6 +125,37 @@ pub(crate) use vectorized::take_overlay_decline;
 pub(crate) use eval::{apply_binary, eval_expression_with_extents_and_consts_shared};
 pub use rhs::RhsScratch;
 
+/// The names `expr` reads that no enclosing `faq` binds (strip and expose,
+/// API_SPEC §5.8).
+pub(crate) fn free_variable_names(expr: &crate::types::Expr) -> HashSet<String> {
+    compile::free_names(expr)
+}
+
+/// A state-free build-time expression (an `ic` right-hand side) evaluated to
+/// its values, column-major (strip and expose's `z` starting values).
+pub(crate) fn eval_buildtime_values(
+    expr: &crate::types::Expr,
+    index_sets: &HashMap<String, crate::types::IndexSet>,
+    params: &HashMap<String, f64>,
+) -> Result<Vec<f64>, crate::compile_error::CompileError> {
+    match compile::eval_buildtime_field(expr, index_sets, params)? {
+        Value::Scalar(x) => Ok(vec![x]),
+        Value::Array(a) => Ok(a.view().reversed_axes().iter().copied().collect()),
+        #[allow(unreachable_patterns)]
+        _ => Err(crate::compile_error::CompileError::build_err(
+            "an initial value that is not numeric",
+        )),
+    }
+}
+
+/// Row-major `values` over `shape`, reordered column-major.
+pub(crate) fn row_major_to_column_major(shape: &[usize], values: &[f64]) -> Vec<f64> {
+    match ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(shape), values.to_vec()) {
+        Ok(a) => a.view().reversed_axes().iter().copied().collect(),
+        Err(_) => values.to_vec(),
+    }
+}
+
 use compile::*;
 use cse::*;
 use eval::*;

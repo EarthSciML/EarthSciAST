@@ -559,6 +559,15 @@ const (
 	CodeRangeSelectionWritesIncomplete = "range_selection_writes_incomplete"
 	// CodeRangeBoxInvalid: a malformed decomposition, tile box or lane-set list.
 	CodeRangeBoxInvalid = "range_box_invalid"
+	// CodeStrippedProblemNotSolvable: `solve` or `init` on a Problem `strip`
+	// removed constructs from (API_SPEC §5.8, "Strip and expose").
+	CodeStrippedProblemNotSolvable = "stripped_problem_not_solvable"
+	// CodeKernelOutputUnresolved: a kernel spec's output, `dt_params` entry or
+	// map target does not resolve against the stripped flattened system.
+	CodeKernelOutputUnresolved = "kernel_output_unresolved"
+	// CodeAffectReadsPostValue: an event affect compiled as a kernel reads,
+	// bare, a variable its event also assigns.
+	CodeAffectReadsPostValue = "affect_reads_post_value"
 )
 
 // The compiler and range codes above are registered, never raised here: Go does

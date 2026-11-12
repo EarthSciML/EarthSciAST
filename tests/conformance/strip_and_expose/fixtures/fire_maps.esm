@@ -1,0 +1,374 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "FireMaps",
+    "description": "Two shapes EqWeFiC needs as kernels: an ignition-time step map reading the step start `t` and the step `dt` (`tig_next = ifelse(psi <= 0, min(tig, t + dt), tig)`), and a per-cell CFL step limit `dt_cfl = dx / |w|`, which stays per cell (its minimum is a separate scalar output). CONFORMANCE_SPEC \u00a75.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "strip_and_expose",
+      "kernels",
+      "step_map",
+      "step_limit"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "Fire": {
+      "variables": {
+        "psi": {
+          "type": "unknown",
+          "shape": [
+            "x"
+          ],
+          "units": "1",
+          "description": "Level set; burning where <= 0."
+        },
+        "tig": {
+          "type": "unknown",
+          "shape": [
+            "x"
+          ],
+          "units": "s",
+          "description": "Ignition time."
+        },
+        "w": {
+          "type": "unknown",
+          "shape": [
+            "x"
+          ],
+          "units": "1/s",
+          "description": "Front speed."
+        },
+        "tig_next": {
+          "type": "unknown",
+          "shape": [
+            "x"
+          ],
+          "units": "s",
+          "description": "Ignition time after one step."
+        },
+        "dt_cfl": {
+          "type": "unknown",
+          "shape": [
+            "x"
+          ],
+          "units": "s",
+          "description": "Per-cell CFL step limit."
+        },
+        "dt": {
+          "type": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "description": "Step length; read from the kernel's dt."
+        },
+        "dx": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "Grid spacing."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "psi"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": 1.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "tig"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": 1000000.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "w"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": 1.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "psi",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "abs",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "w",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "tig",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": 0.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "w",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": 0.0
+          }
+        },
+        {
+          "lhs": "tig_next",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "psi",
+                        "i"
+                      ]
+                    },
+                    0.0
+                  ]
+                },
+                {
+                  "op": "min",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "tig",
+                        "i"
+                      ]
+                    },
+                    {
+                      "op": "+",
+                      "args": [
+                        "t",
+                        "dt"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "tig",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "dt_cfl",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "/",
+              "args": [
+                "dx",
+                {
+                  "op": "abs",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "w",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

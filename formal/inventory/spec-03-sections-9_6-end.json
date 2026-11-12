@@ -362,6 +362,30 @@
       "note": "Compiler-specific refusal reporting; depends on which compiler a binding offers, not on document semantics."
     },
     {
+      "id": "spec.9.6.6.stripped-problem-not-solvable",
+      "section": "9.6.6",
+      "quote": "Fires at the call, before any integration, and MUST name the removed constructs' classes.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Host-API refusal on solve/init of a stripped Problem (API_SPEC §5.8); it governs a binding's call surface, not document semantics."
+    },
+    {
+      "id": "spec.9.6.6.kernel-output-unresolved",
+      "section": "9.6.6",
+      "quote": "Fires at `compile_kernels`, and MUST name the kernel and the output.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Validation of a compile_kernels spec (API_SPEC §5.8); the kernel spec is a host-API argument, not part of the document."
+    },
+    {
+      "id": "spec.9.6.6.affect-reads-post-value",
+      "section": "9.6.6",
+      "quote": "Fires at `compile_kernels`, and MUST name the event and the variable.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Refusal raised only when an affect is compiled as a standalone kernel (API_SPEC §5.8); event semantics themselves are covered by the event clauses."
+    },
+    {
       "id": "spec.9.6.6.range-halo-insufficient",
       "section": "9.6.6",
       "quote": "Fires when the tile is built, and MUST name the rule, the variable, the axis and the missing cells.",
