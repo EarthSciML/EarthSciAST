@@ -218,9 +218,21 @@ end
             for c in (:native, :interpreter)
                 prob = esm_problem(path, (0.0, 1.0); compiler = c)
                 fields[c] = [observed_field(prob, k) for k in shaped]
+                want = c === :native ? :recurrence_sweep : :interpreter
+                # A recurrence group (esm-spec §4.3.1.2) is swept as ONE stacked
+                # recurrence; its members are slices of it.
+                grouped = reduce(union, _RS.recurrence_groups(model); init = Set{String}())
                 for k in shaped
-                    @test _rs_tier(prob, "$name.$k") ===
-                        (c === :native ? :recurrence_sweep : :interpreter)
+                    k in grouped && continue
+                    @test _rs_tier(prob, "$name.$k") === want
+                end
+                if !isempty(grouped)
+                    stacked = [
+                        r.tier for r in _RS.compiler_report(prob).rules
+                            if startswith(r.rule, "__esm_recurrence_group__") &&
+                            r.kind === :observed && !(r.tier in _RS._OUTPUT_TIERS)
+                    ]
+                    @test !isempty(stacked) && all(==(want), stacked)
                 end
             end
             @test map(_rs_bits, fields[:native]) == map(_rs_bits, fields[:interpreter])

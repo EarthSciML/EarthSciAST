@@ -482,6 +482,73 @@ pub(crate) fn first_observed_cycle(
     None
 }
 
+/// The strongly connected components of an observed dependency graph that hold
+/// at least two names — the candidates for a §4.3.1.2 recurrence GROUP, before
+/// the caller checks that each one's internal edges are `index` reads.
+///
+/// Kosaraju's two passes, both ITERATIVE for the reason [`first_observed_cycle`]
+/// gives (the depth is the length of the longest observed chain, a property of
+/// the document). Deterministic: the components come back sorted, each as a
+/// sorted set, because every caller turns them into a diagnostic or a rewrite
+/// whose order must not depend on hashing.
+pub(crate) fn observed_sccs(deps: &BTreeMap<String, BTreeSet<String>>) -> Vec<BTreeSet<String>> {
+    // Pass 1: finishing order of a DFS over the graph.
+    let mut visited: BTreeSet<&str> = BTreeSet::new();
+    let mut finish: Vec<&str> = Vec::new();
+    for root in deps.keys() {
+        if !visited.insert(root.as_str()) {
+            continue;
+        }
+        let mut stack: Vec<(&str, std::collections::btree_set::Iter<'_, String>)> =
+            vec![(root.as_str(), empty_successors(deps, root.as_str()))];
+        while let Some((name, it)) = stack.last_mut() {
+            match it.next() {
+                Some(s) if deps.contains_key(s) => {
+                    if visited.insert(s.as_str()) {
+                        stack.push((s.as_str(), empty_successors(deps, s.as_str())));
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    finish.push(name);
+                    stack.pop();
+                }
+            }
+        }
+    }
+    // Pass 2: DFS over the transposed graph in reverse finishing order.
+    let mut rev: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (u, succ) in deps {
+        for v in succ {
+            if deps.contains_key(v) {
+                rev.entry(v.as_str()).or_default().push(u.as_str());
+            }
+        }
+    }
+    let mut assigned: BTreeSet<&str> = BTreeSet::new();
+    let mut out: Vec<BTreeSet<String>> = Vec::new();
+    for &root in finish.iter().rev() {
+        if !assigned.insert(root) {
+            continue;
+        }
+        let mut comp: BTreeSet<String> = BTreeSet::new();
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            comp.insert(n.to_string());
+            for &p in rev.get(n).map(Vec::as_slice).unwrap_or(&[]) {
+                if assigned.insert(p) {
+                    stack.push(p);
+                }
+            }
+        }
+        if comp.len() >= 2 {
+            out.push(comp);
+        }
+    }
+    out.sort();
+    out
+}
+
 /// `name`'s successor iterator, or an empty one when the graph has no entry for
 /// it (a dependency on an observed with no defining equation is a leaf).
 fn empty_successors<'a>(

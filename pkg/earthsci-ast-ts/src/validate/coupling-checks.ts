@@ -30,6 +30,7 @@ import { isExpressionLike } from '../traverse.js'
 import { collectRoleSegments, expandCouplingImports } from '../coupling-imports.js'
 import { derivativeTarget } from '../classification.js'
 import { observedDefinitionReads } from './observed-checks.js'
+import { recurrenceGroups } from '../recurrence.js'
 import {
   forEachParameterUpdate,
   hasUnmountedRefs,
@@ -394,6 +395,7 @@ function validateImportedCouplingEdges(esmFile: EsmFile): StructuralError[] {
  */
 function crossScopeObservedGraph(esmFile: EsmFile): Map<string, string[]> {
   const reads = new Map<string, { scope: string; model: Model; refs: Set<string> }>()
+  const groupsByScope: string[][] = []
   const derivativeStates = new Set<string>()
 
   // The full scoped name a reference written in `model` (scoped name `scope`)
@@ -416,6 +418,9 @@ function crossScopeObservedGraph(esmFile: EsmFile): Map<string, string[]> {
     for (const [name, refs] of observedDefinitionReads(model, esmFile)) {
       reads.set(`${scope}.${name}`, { scope, model, refs })
     }
+    for (const g of recurrenceGroups(model, esmFile)) {
+      groupsByScope.push([...g].map((n) => `${scope}.${n}`))
+    }
     for (const [subName, sub] of Object.entries(model.subsystems ?? {})) {
       if (isInlineModel(sub)) walk(`${scope}.${subName}`, sub)
     }
@@ -426,15 +431,40 @@ function crossScopeObservedGraph(esmFile: EsmFile): Map<string, string[]> {
 
   for (const state of derivativeStates) reads.delete(state)
 
-  const graph = new Map<string, string[]>()
+  const sets = new Map<string, Set<string>>()
   for (const [node, { scope, model, refs }] of reads) {
     const successors = new Set<string>()
     for (const ref of refs) {
       const target = resolve(ref, scope, model)
       if (target !== undefined && reads.has(target)) successors.add(target)
     }
-    graph.set(node, [...successors].sort())
+    sets.set(node, successors)
   }
+  // esm-spec §4.3.1.2: a recurrence group is swept as ONE unit, so here it is
+  // one node — its first member — carrying every member's external reads.
+  // CONTRACTED rather than stripped of its internal edges: a cycle that leaves
+  // the group through another scope and comes back (`a ->(group) b -> X.c -> a`)
+  // is a real cycle, and dropping `a -> b` would hide it.
+  for (const g of groupsByScope) {
+    const members = g.filter((n) => sets.has(n)).sort()
+    if (members.length === 0) continue
+    const rep = members[0]
+    const merged = new Set<string>()
+    for (const m of members) {
+      for (const s of sets.get(m) ?? []) merged.add(s)
+      sets.delete(m)
+    }
+    for (const m of members) merged.delete(m)
+    sets.set(rep, merged)
+    for (const [n, succ] of sets) {
+      if (![...succ].some((x) => members.includes(x))) continue
+      const kept = new Set([...succ].filter((x) => !members.includes(x)))
+      if (n !== rep) kept.add(rep)
+      sets.set(n, kept)
+    }
+  }
+  const graph = new Map<string, string[]>()
+  for (const [node, succ] of sets) graph.set(node, [...succ].sort())
   return graph
 }
 

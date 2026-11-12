@@ -250,6 +250,49 @@ fn a_self_read_through_a_template_binding_is_still_recognized() {
     assert_fixture_passes("09_recurrence_through_expression_template.esm");
 }
 
+/// **A recurrence GROUP** (esm-spec §4.3.1.2, issue #701): two arrays, each
+/// cell of each a function of the previous cell of both. The reads between
+/// them close what would otherwise be an `observed_cycle`; the group is swept
+/// as the stacked single recurrence §4.3.1.2 reduces it to.
+#[test]
+fn a_two_member_recurrence_group_evaluates() {
+    assert_fixture_passes("13_recurrence_group_two_variables.esm");
+}
+
+/// **The group order pin**: a cancellation the left fold loses and a
+/// reassociation keeps, a peer read at lag 2, and an independent axis beside
+/// the recurrence axis, so the member axis of the stacked reduction cannot be
+/// confused with a frame axis.
+#[test]
+fn a_recurrence_group_is_the_left_fold_on_a_two_axis_frame() {
+    assert_fixture_passes("14_recurrence_group_order_pin.esm");
+}
+
+/// **A same-cell read between members** (esm-spec §4.3.1.2 rule 1): `u[k]`
+/// reads `a[k]`, `a[k]` reads `u[k-1]`, and `u` is declared first, so the
+/// member order must come from the same-cell reads rather than equation order.
+#[test]
+fn a_recurrence_group_orders_its_members_within_the_cell() {
+    assert_fixture_passes("15_recurrence_group_same_cell_order.esm");
+}
+
+/// **A member that contracts**: `a[k]` sums over `j ∈ 1..3`. That reduction
+/// lives in the member's cell body, so the stacked recurrence and the slices
+/// sweep the frame axes alone; carrying `j` onto either sums every member three
+/// more times.
+#[test]
+fn a_recurrence_group_member_contracts_exactly_once() {
+    assert_fixture_passes("16_recurrence_group_contracting_member.esm");
+}
+
+/// **One frame, two spellings**: `{from: lev}` and `[1, 4]` over a 4-element
+/// `lev` are one frame at build exactly as at validation, and the second
+/// member is written in the indexed-`faq` LHS form.
+#[test]
+fn a_recurrence_group_compares_resolved_frames() {
+    assert_fixture_passes("17_recurrence_group_frame_spellings.esm");
+}
+
 // ---------------------------------------------------------------------------
 // 2. Fail-closed reads
 // ---------------------------------------------------------------------------
@@ -554,7 +597,7 @@ fn the_shared_rejection_corpus_agrees_on_code_and_path() {
     );
 
     let cases = corpus["cases"].as_array().expect("cases is an array");
-    assert_eq!(cases.len(), 8, "the corpus size is itself a pin");
+    assert_eq!(cases.len(), 14, "the corpus size is itself a pin");
     for case in cases {
         let id = case["id"].as_str().expect("id");
         let want_code = case["expected_code"].as_str().expect("expected_code");
@@ -890,6 +933,26 @@ pipeline_test!(
 pipeline_test!(
     pipeline_through_expression_template,
     "09_recurrence_through_expression_template.esm"
+);
+pipeline_test!(
+    pipeline_recurrence_group,
+    "13_recurrence_group_two_variables.esm"
+);
+pipeline_test!(
+    pipeline_recurrence_group_order_pin,
+    "14_recurrence_group_order_pin.esm"
+);
+pipeline_test!(
+    pipeline_recurrence_group_same_cell_order,
+    "15_recurrence_group_same_cell_order.esm"
+);
+pipeline_test!(
+    pipeline_recurrence_group_contracting_member,
+    "16_recurrence_group_contracting_member.esm"
+);
+pipeline_test!(
+    pipeline_recurrence_group_frame_spellings,
+    "17_recurrence_group_frame_spellings.esm"
 );
 
 /// The regression itself, stated as a value that must NOT come back.

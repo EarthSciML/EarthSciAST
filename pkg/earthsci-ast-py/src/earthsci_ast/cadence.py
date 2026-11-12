@@ -193,6 +193,7 @@ def _classification(model: Mapping[str, Any]) -> dict[str, Any]:
         "discrete": frozenset(discrete_parameters(model)),
         "const": frozenset(sampled_parameters(model)) | frozenset(constant_parameters(model)),
         "observed_defs": observed_definitions(model),
+        "groups": _recurrence_group_of(model),
     }
     # ``model`` is a plain dict built by :func:`model_from_doc` for this pass, so
     # memoising on it is safe and keeps the classification from being recomputed
@@ -200,6 +201,13 @@ def _classification(model: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(model, dict):
         model["_classification"] = derived
     return derived
+
+
+def _recurrence_group_of(model: Mapping[str, Any]) -> dict[str, frozenset[str]]:
+    """Each member of a §4.3.1.2 recurrence group candidate -> its group."""
+    from .structural_checks import recurrence_groups
+
+    return {m: g for g in recurrence_groups(model) for m in g}
 
 
 def seed_leaf(leaf: Any, model: Mapping[str, Any], _resolving: tuple = ()) -> str:
@@ -251,6 +259,25 @@ def seed_leaf(leaf: Any, model: Mapping[str, Any], _resolving: tuple = ()) -> st
         if kind == "unknown":
             definitions = derived["observed_defs"]
             if leaf in definitions:
+                group = derived["groups"].get(leaf)
+                if group is not None:
+                    # A member of a recurrence GROUP (esm-spec §4.3.1.2). Its
+                    # reads of the members — itself included — are orderings
+                    # along the shared axis, not a cycle: dropped exactly as the
+                    # self-edge below is, contributing the join identity. The
+                    # group is swept as one unit, so a member entered from
+                    # outside the group takes the join of EVERY member's
+                    # external inputs, as the TS and Go seeders do.
+                    if any(r in group for r in _resolving):
+                        return "const"
+                    return cadence_join(
+                        "const",
+                        *(
+                            classify(definitions[m], model, _resolving=(*_resolving, m))
+                            for m in sorted(group)
+                            if m in definitions
+                        ),
+                    )
                 if (
                     _resolving
                     and _resolving[-1] == leaf

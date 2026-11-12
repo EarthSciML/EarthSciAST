@@ -134,6 +134,13 @@ type CadenceClassifier struct {
 	// two, so it is dropped from the observed dependency graph rather than
 	// reported as a cycle — see seedLeaf.
 	recurrenceSelfEdges map[string]bool
+	// groupOf maps each member of a §4.3.1.2 recurrence group to its group. The
+	// edges between members are orderings along the shared axis, not a cycle,
+	// and the group is swept as one unit, so every member is seeded with the
+	// join of every member's external inputs — see seedLeaf.
+	groupOf map[string]map[string]bool
+	// groupActive holds the members of the group being seeded right now.
+	groupActive map[string]bool
 }
 
 // NewCadenceClassifier builds the classifier for one model of a document. Pass
@@ -171,6 +178,13 @@ func NewCadenceClassifier(file *ESMFile, model *Model) *CadenceClassifier {
 	// Gated on CANDIDACY, not on the well-foundedness verdict — see
 	// isRecurrenceCandidate for why the intuitive gate destroys the diagnosis.
 	c.recurrenceSelfEdges = recurrenceCandidateVars(model, file)
+	c.groupOf = map[string]map[string]bool{}
+	c.groupActive = map[string]bool{}
+	for _, g := range recurrenceGroups(model, file) {
+		for m := range g {
+			c.groupOf[m] = g
+		}
+	}
 	return c
 }
 
@@ -256,6 +270,43 @@ func (c *CadenceClassifier) seedLeaf(leaf Expression, resolving []string) (Caden
 			// through `index`.
 			if len(resolving) > 0 && resolving[len(resolving)-1] == name && c.recurrenceSelfEdges[name] {
 				return CadenceConst, nil
+			}
+			// A member of the recurrence group being seeded right now: its reads
+			// of the other members are orderings (esm-spec §4.3.1.2), contributing
+			// CONST, the join identity.
+			if c.groupActive[name] {
+				return CadenceConst, nil
+			}
+			if group := c.groupOf[name]; group != nil {
+				for m := range group {
+					c.groupActive[m] = true
+				}
+				class := CadenceConst
+				var err error
+				for _, m := range sortedKeysOfSet(group) {
+					def, ok := c.observedDefs[m]
+					if !ok {
+						continue
+					}
+					var mc Cadence
+					mc, err = c.classify(def, append(append([]string{}, resolving...), m))
+					if err != nil {
+						break
+					}
+					class = joinCadence(class, mc)
+				}
+				for m := range group {
+					delete(c.groupActive, m)
+				}
+				if err != nil {
+					return CadenceConst, err
+				}
+				if len(resolving) == 0 {
+					for m := range group {
+						c.leafSeeds[m] = class
+					}
+				}
+				return class, nil
 			}
 			for _, r := range resolving {
 				if r == name {

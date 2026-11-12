@@ -1,0 +1,131 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "R",
+    "description": "recurrence group case",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "R": {
+      "variables": {
+        "a": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ]
+        },
+        "b": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "a",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                1.0,
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "a",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "b",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "b",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                2.0,
+                {
+                  "op": "sum",
+                  "args": [
+                    "a"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

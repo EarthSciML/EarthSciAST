@@ -131,6 +131,9 @@ const ERROR_CODES = (
     # to run it would leave the defect undiagnosed.
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded",
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form",
+    # esm-spec §4.3.1.2: the members of a recurrence group do not share one cell
+    # frame (the same `output_idx` and ranges) and one recurrence axis.
+    RECURRENCE_GROUP_AXIS_MISMATCH = "recurrence_group_axis_mismatch",
     # A bare-index observed definition (`index(V, k…) ~ rhs`, esm-spec §6.3.1)
     # outside the one runnable form, refused when the model is built for
     # simulation (CONFORMANCE_SPEC §5.36.2).

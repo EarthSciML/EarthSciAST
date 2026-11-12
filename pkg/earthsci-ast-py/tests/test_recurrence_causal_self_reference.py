@@ -109,6 +109,13 @@ _FIXTURE_VALUES: dict[str, tuple[str, list[float]]] = {
 _INLINE_ONLY_FIXTURES = (
     "07_recurrence_thirty_eight_lags",
     "09_recurrence_through_expression_template",
+    # Recurrence GROUPS (esm-spec §4.3.1.2): two variables swept together, so
+    # there is no single recurrence variable for the direct sweep to read.
+    "13_recurrence_group_two_variables",
+    "14_recurrence_group_order_pin",
+    "15_recurrence_group_same_cell_order",
+    "16_recurrence_group_contracting_member",
+    "17_recurrence_group_frame_spellings",
 )
 
 
@@ -806,3 +813,74 @@ def test_the_self_edge_exemption_is_gated_on_candidacy_not_on_the_verdict() -> N
     for name, m in (("a scalar", scalar), ("a bare array", bare_array)):
         with pytest.raises(CadenceError, match="observed definition cycle"):
             cadence.classify(m["equations"][0]["rhs"], m)
+
+
+# ---------------------------------------------------------------------------
+# Recurrence groups (esm-spec §4.3.1.2): precision, cadence, and the build's
+# frame and shape checks
+# ---------------------------------------------------------------------------
+
+
+def _group_doc() -> dict:
+    return json.loads((_RECURRENCE_DIR / "13_recurrence_group_two_variables.esm").read_text())
+
+
+def test_a_float32_recurrence_group_carries_binary32_state_at_every_cell(tmp_path) -> None:
+    """The stacked array sweeps at its members' declared precision
+    (CONFORMANCE_SPEC §5.19.3a). Starting from 0.1 and 0.2 the binary32 fold and
+    the binary64 one differ at every later cell, so a stacked array that lost
+    the members' ``element_type`` is caught by value."""
+    doc = _group_doc()
+    m = doc["models"]["RecurrenceGroupTwoVariables"]
+    for v in ("a", "b"):
+        m["variables"][v]["element_type"] = "Float32"
+    m["equations"][0]["rhs"]["expr"]["args"][1] = 0.1
+    m["equations"][1]["rhs"]["expr"]["args"][1] = 0.2
+    a, b = [np.float32(0.1)], [np.float32(0.2)]
+    for _ in range(3):
+        a, b = a + [np.float32(a[-1] + b[-1])], b + [np.float32(a[-1] * b[-1])]
+    a64, b64 = [0.1], [0.2]
+    for _ in range(3):
+        a64, b64 = a64 + [a64[-1] + b64[-1]], b64 + [a64[-1] * b64[-1]]
+    assert [float(x) for x in a] != a64
+    m["tests"][0]["assertions"] = [
+        {"variable": v, "time": 0.0, "expected": float(x), "coords": {"lev": i + 1}}
+        for v, xs in (("a", a), ("b", b))
+        for i, x in enumerate(xs)
+    ]
+    path = tmp_path / "float32_group.esm"
+    path.write_text(json.dumps(doc))
+    results = run_inline_tests(str(path), compiler="interpreter")
+    assert len(results) == 8
+    for r in results:
+        assert r.actual == r.expected, f"{r.variable}[{r.assertion_idx}]: {r.actual!r}"
+
+
+def test_the_cadence_classifier_does_not_call_a_recurrence_group_a_cycle() -> None:
+    """The reads between group members are orderings along the shared axis, not
+    a cycle: dropped where the self-edge is (CONFORMANCE_SPEC §5.19.5), as the
+    TS and Go seeders do."""
+    import earthsci_ast.cadence as cadence
+
+    m = cadence.model_from_doc(_group_doc(), "RecurrenceGroupTwoVariables")
+    for eq in m["equations"]:
+        assert cadence.classify(eq["rhs"], m) == "const"
+    cadence.partition(m)
+
+
+def test_a_group_whose_members_declare_different_shapes_is_refused() -> None:
+    """``[lev]`` against ``[lev2]`` of the same size: one frame, two shapes. The
+    stacked array has one declared shape, so the build refuses, as Julia's and
+    Rust's do."""
+    from earthsci_ast.recurrence import RecurrenceError
+    from earthsci_ast.recurrence_group import stack_recurrence_groups
+
+    file = load_path(str(_RECURRENCE_DIR / "13_recurrence_group_two_variables.esm"))
+    model = next(iter(file.models.values()))
+    eqs = [(eq.lhs, eq.rhs) for eq in model.equations]
+    shapes = {"a": ["lev"], "b": ["lev2"]}
+    with pytest.raises(RecurrenceError) as exc:
+        stack_recurrence_groups(eqs, index_sets=file.index_sets, shapes=shapes.get)
+    assert exc.value.code == "recurrence_group_axis_mismatch"
+    # The same two members declared over one shape stack.
+    assert len(stack_recurrence_groups(eqs, index_sets=file.index_sets, shapes={}.get)) == 3

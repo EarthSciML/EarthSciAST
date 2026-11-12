@@ -1513,8 +1513,119 @@ rule that cycles are rejected. The self-edge `V → V` is dropped from the obser
 dependency graph — every binding already drops it — precisely because a well-founded
 causal self-read is an *ordering* within one variable rather than a dependency
 between two. An edge between two **distinct** variables still closes a cycle and is
-still rejected, and a self-read that fails the table above is rejected too, so the
+still rejected — except inside a recurrence **group** (§4.3.1.2), where the same
+argument applies to reads that are strictly earlier along one axis the members
+share — and a self-read that fails the table above is rejected too, so the
 `tests/conformance/simulate_cycles` fail-fast contract is untouched.
+
+##### 4.3.1.2 Recurrence groups: several variables along one axis — normative
+
+§4.3.1.1 admits a recurrence on **one** variable. A sweep that carries a **state
+vector** along an axis — two or more arrays, each cell of each a function of the
+previous cells of all of them — is just as well founded when every read between
+them is strictly earlier, and it has no spelling there: the reads between the
+variables close a cycle of `observed_cycle`, whatever their lag. The canonical case
+is a convective updraught, whose parcel energy and humidity at level `k` each come
+from both at `k − 1` through a nonlinear saturation adjustment; the same structure
+appears in every mass-flux scheme and in a radiative-transfer pass carrying a flux
+pair. The three ways out that sometimes exist — unrolling a sweep whose terms are
+the original data into a prefix reduction, recognising a linear sweep as a lowering
+rule, and partitioning a conserved sum into single-variable recurrences — fail as
+soon as a nonlinear map sits between the steps.
+
+So several equations may define a **recurrence group**. There is no new operator and
+nothing is declared, exactly as for one variable: each member is written as its own
+recurrence definition, and reads its peers through `index` at earlier positions:
+
+```json
+{ "lhs": "a", "rhs": { "op": "faq", "args": [], "output_idx": ["k"],
+    "ranges": { "k": { "from": "lev" } },
+    "expr": { "op": "ifelse", "args": [ { "op": "<=", "args": ["k", 1] }, 1.0,
+      { "op": "+", "args": [ { "op": "index", "args": ["a", { "op": "-", "args": ["k", 1] }] },
+                             { "op": "index", "args": ["b", { "op": "-", "args": ["k", 1] }] } ] } ] } } },
+{ "lhs": "b", "rhs": { "op": "faq", "args": [], "output_idx": ["k"],
+    "ranges": { "k": { "from": "lev" } },
+    "expr": { "op": "ifelse", "args": [ { "op": "<=", "args": ["k", 1] }, 2.0,
+      { "op": "*", "args": [ { "op": "index", "args": ["a", { "op": "-", "args": ["k", 1] }] },
+                             { "op": "index", "args": ["b", { "op": "-", "args": ["k", 1] }] } ] } ] } } }
+```
+
+which is `a = [1, 3, 5, 11]`, `b = [2, 2, 6, 30]` over a 4-element `lev`.
+
+**Recognition.** Take the observed dependency graph of §4.9.6 with every §4.3.1.1
+candidate's self-edge already dropped. A **strongly connected component** of two or
+more observeds is a **recurrence group candidate** when every member is an
+array-shaped unknown, every edge between two members is carried by at least one
+`index` read of the member it points to, and at least one of those reads has an
+index argument that is not a bare name — a read that can be offset along an axis.
+A cycle closed by same-cell gathers alone (`index(x, i)` everywhere) has no axis to
+fold along, exactly as a bare `s ~ s + 1` has none, and is still an `observed_cycle`
+(`tests/invalid/observed_cycle_array_elementwise.esm`). Every edge between two members of a
+candidate is dropped from the graph before `observed_cycle` is decided — the same
+exemption the self-edge gets, and gated the same way, on **candidacy** and never on
+the well-foundedness verdict (CONFORMANCE_SPEC §5.19.5), so that an ill-founded group
+reaches the named `recurrence_*` diagnosis below instead of collapsing to a cycle.
+A component with a scalar member, one whose members depend on each other only
+through bare reads, or one held together only by plain same-cell gathers, is no
+candidate and is still an `observed_cycle`.
+
+**Well-foundedness.** Each member `V` is checked exactly as a §4.3.1.1 recurrence
+definition, with the reads of **every** member of its group — `V` itself and each
+peer `W` — counted as its causal reads: the same cell frame, the same affinity and
+coefficient rules, one recurrence axis, identity on every other axis, no bare read
+of any member. Two rules are added:
+
+1. **A peer read is strictly earlier, or exactly the cell being written, acyclically.**
+   A read of `W ≠ V` is either provably strictly earlier on the recurrence axis
+   (`lo(lag) ≥ 1` for every value), or reads `W` at **exactly** the cell being
+   written — every index the bare frame symbol of its axis. The second kind is an
+   ordering *within* the cell, and the same-cell reads between members must be
+   **acyclic**; a cycle of them (`a` reads `b[k]`, `b` reads `a[k]`) is
+   `recurrence_not_wellfounded`, reported at the first member on the cycle in
+   equation order. The straddling and unprovable rows of §4.3.1.1's lag table, which a
+   self-read may use, are `recurrence_not_wellfounded` for a peer: the cell a
+   non-causal self-read names is never published, so it faults whatever order the
+   sweep takes, but a peer's cell at an *unproven* position may or may not have been
+   published depending on the member order, and the answer would depend on it.
+   Same-cell reads are what let a scheme's per-level step be written with its
+   intermediates as members of their own (`T_mix[k]` from `dh_mix[k]` from
+   `dh[k−1]`) instead of one expression inlining the whole step.
+2. **One frame and one axis.** Every member's defining `faq` has the same
+   `output_idx` (the same symbols, in the same order), the same ranges for them, and
+   the same recurrence axis. Ranges are compared as the bounds they resolve to, so
+   `{"from": "lev"}` and `[1, 4]` over a 4-element `lev` are one frame; a member in
+   the indexed-`faq` LHS form declares its frame on that LHS. The frame of reference
+   is the group's first member, in equation order, that **has** a recurrence axis —
+   a member whose every causal read is a same-cell peer read has none to compare. A
+   member that differs from it is `recurrence_group_axis_mismatch`, reported at the
+   first such member in equation order.
+
+**Evaluation.** A group is the §4.3.1.1 recurrence of the members **stacked** along a
+trailing member axis: with members `V₁ … V_M` in **within-cell order** — a member that
+another reads at the cell being written comes before it, ties in equation order — it
+is evaluated as the
+single recurrence `S[k…, m]` over the shared frame extended by `m ∈ 1 … M`, whose cell
+body at `m = p` is `V_p`'s cell body with every read `index(V_q, i…)` of a member
+rewritten to `index(S, i…, q)`; then `V_p[k…] = S[k…, p]`. Everything §4.3.1.1 says
+about the order, publication, fail-closed reads, working precision and the
+single-implementation requirement applies to `S` unchanged; the member axis is the
+**one** axis on which a constant index is admitted, and it exists only in this
+reduction — it is never authored. Concretely: the recurrence axis is outermost and
+ascending, the other frame axes inside it in `output_idx` order, the members fastest;
+each cell is published before the next. A same-cell peer read therefore reads a
+member already published at that cell, every other peer read is provably earlier,
+and a self-read of the cell being written is unpublished — so the value is a fully
+determined function of the document, and the bit-identical cross-binding requirement
+holds as it does for one variable.
+
+**Rejections**, in addition to §4.3.1.1's (whose every row applies to every member):
+
+| Situation | Code |
+|---|---|
+| A read of a peer whose lag is neither provably `≥ 1` nor exactly the cell being written (straddling, unprovable, forward) | `recurrence_not_wellfounded` |
+| Same-cell reads between members that form a cycle | `recurrence_not_wellfounded` |
+| A bare read of any member inside a member's RHS | `recurrence_not_wellfounded` |
+| Members whose `output_idx`, ranges, or recurrence axis differ | `recurrence_group_axis_mismatch` |
 
 #### 4.3.2 `makearray`
 
@@ -2297,6 +2408,8 @@ This is a **structural** check, not a build-time one: the graph is a function of
 **The recurrence self-edge is not one of these edges.** A §4.3.1.1 recurrence **candidate** — an array-shaped unknown with at least one `index` self-read in its own defining RHS — has its self-edge `V → V` dropped from this graph, because a causal self-read is an *ordering within* one variable rather than a dependency between two. The exemption is gated on **candidacy**, never on the well-foundedness verdict (CONFORMANCE_SPEC §5.19.5): gating on the verdict makes an ill-founded self-read non-exempt, so this check fires first and the `recurrence_not_wellfounded` / `recurrence_unsupported_form` diagnosis is never reached. Equally, it is gated on candidacy rather than on "is this a self-edge at all": a scalar `x ~ x + 1`, or a bare `s ~ s + 1` over an array, has no axis to fold along, can never be a recurrence, and IS a cycle of length one — `observed_cycle` names it.
 
 **The two walks must see the same tree.** The edge set is built from the free symbols of the defining RHS, which §4.9.5 requires to descend *every* Expression-valued child field — `bindings` and `axes` included. A binding whose *candidacy* walk descends a smaller set than its *edge* walk has a self-read that is visible as an edge and invisible as a candidate, and it will reject a legal recurrence as a cycle of length one. This is reachable rather than theoretical: `apply_expression_template` carries its call-site arguments in `bindings`, and from `esm: 0.9.0` a reference survives to validation uninlined (§9.6.4 rule 2), so a self-read bound to a template parameter (`twice(v = s[k−1])`) arrives still wrapped. The fix is to widen the *walk*, never the *rule* — the exemption stays "an array-shaped unknown with at least one `index` self-read in its own defining RHS", which is still narrower than "reads its own name". Narrowing the edge walk instead is wrong: a template binding naming a *different* observed is a real dependency once the application expands.
+
+**Recurrence groups are exempt the same way.** Every edge between two members of a §4.3.1.2 recurrence group **candidate** — a strongly connected component of two or more array-shaped observeds whose internal edges are all carried by `index` reads — is dropped from this graph, gated on candidacy for the same reason. A component with a scalar member, or one held together by bare reads, is no candidate and is reported here.
 
 **Reporting.** The pinned pair is `(observed_cycle, /models/<M>)` — a cycle belongs to no single equation, so it pins at the model, exactly as `equation_count_mismatch` does. The `details` object carries `cycle`, the path in traversal order with the entry node repeated to close it (`["wscale", "gamfac", "hpbl", "wscale"]`); this is a **path**, not one of the §7.1.0 name lists, so it is ordered semantically rather than lexicographically. A binding reports **one** cycle per model. The traversal MUST be deterministic — sorted roots, sorted successors — so a binding names the same cycle on every run; the prose, as everywhere else, is not pinned across bindings (CONFORMANCE_SPEC §5.19.5).
 

@@ -95,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 977,
+    "symbols": 978,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 351,
+      "julia": 352,
       "typescript": 236,
       "python": 265,
       "rust": 385,
       "go": 449
     },
     "by_tier": {
-      "extension": 675,
+      "extension": 676,
       "stable": 302
     }
   },
@@ -6195,6 +6195,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "RecordsPerFile"
+      }
+    },
+    {
+      "name": "recurrence_info",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "RecurrenceInfo"
       }
     },
     {

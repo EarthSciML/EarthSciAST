@@ -165,31 +165,63 @@ def goldens():
     # parameter values: k = 1 by default (y = 2 k + t = 2.5, v = k + t = 1.5 at
     # t0 = 0.5), and the caller's p wins (k = 3: y = 6.5, v = 3.5).
     for i, p in [("z0_warm_start", {}), ("z0_warm_start_with_p", {"W.k": 3.0})]:
-        out.append({
-            "id": i, "path": FX + "z0_warm_start.esm", "strip": [AL], "tspan": [0.5, 1.0], "p": p,
-            "golden": "goldens/" + i + ".json",
-        })
+        out.append(
+            {
+                "id": i,
+                "path": FX + "z0_warm_start.esm",
+                "strip": [AL],
+                "tspan": [0.5, 1.0],
+                "p": p,
+                "golden": "goldens/" + i + ".json",
+            }
+        )
     return out
 
 
 def not_solvable():
     return [
-        {"id": "stripped_discrete_event", "path": UC + "discrete_event_on_the_array_path.esm",
-         "strip": [DE], "tspan": [0.0, 1.0], "expect": "stripped_problem_not_solvable"},
-        {"id": "stripped_implicit_equation", "path": FX + "ssa_residual_1d.esm",
-         "strip": [AL], "tspan": [0.0, 1.0], "expect": "stripped_problem_not_solvable"},
-        {"id": "control_nothing_to_strip", "path": UC + "control_array_path_without_the_construct.esm",
-         "strip": CLASSES, "tspan": [0.0, 3.5], "expect": "solves",
-         "note": "strip names every class, the document has none of them: the Problem is not stripped and solves."},
+        {
+            "id": "stripped_discrete_event",
+            "path": UC + "discrete_event_on_the_array_path.esm",
+            "strip": [DE],
+            "tspan": [0.0, 1.0],
+            "expect": "stripped_problem_not_solvable",
+        },
+        {
+            "id": "stripped_implicit_equation",
+            "path": FX + "ssa_residual_1d.esm",
+            "strip": [AL],
+            "tspan": [0.0, 1.0],
+            "expect": "stripped_problem_not_solvable",
+        },
+        {
+            "id": "control_nothing_to_strip",
+            "path": UC + "control_array_path_without_the_construct.esm",
+            "strip": CLASSES,
+            "tspan": [0.0, 3.5],
+            "expect": "solves",
+            "note": "strip names every class, the document has none of them: the Problem is not stripped and solves.",
+        },
     ]
 
 
 def remaining_rhs():
     def case(d, base, cls, probes):
-        return {"id": d, "path": base + d + ".esm", "strip": [cls], "probes": probes,
-                "control": "the same document with every continuous_events and discrete_events key deleted (models, subsystems at any depth, reaction systems) and every coupling entry of type event removed"}
+        return {
+            "id": d,
+            "path": base + d + ".esm",
+            "strip": [cls],
+            "probes": probes,
+            "control": "the same document with every continuous_events and discrete_events key deleted (models, subsystems at any depth, reaction systems) and every coupling entry of type event removed",
+        }
+
     return [
-        case("discrete_event_on_the_array_path", UC, DE, [{"u": {"DiscreteEventOnTheArrayPath.s": 1.5}, "t": 0.25}]),
+        case(
+            "discrete_event_on_the_array_path",
+            UC,
+            DE,
+            [{"u": {"DiscreteEventOnTheArrayPath.s": 1.5}, "t": 0.25}],
+        ),
         case("continuous_event_on_the_scalar_path", UC, CE, [{"u": None, "t": 0.5}]),
         case("continuous_event_on_a_coupled_array_document", UC, CE, [{"u": None, "t": 0.5}]),
         case("discrete_event_on_a_reaction_system", UC, DE, [{"u": None, "t": 0.5}]),
@@ -217,130 +249,299 @@ def kernels():
         return r
 
     vel0 = [0.0] * 6
-    out.append({
-        "id": "ssa_residual",
-        "path": FX + "ssa_residual_1d.esm",
-        "strip": [AL],
-        "tolerance_class": "algebraic",
-        "specs": [
-            {"name": "ssa_residual", "outputs": [{"residual": "SSA.residual[1]"}]},
-            {"name": "rhs"},
-        ],
-        "z_layout": {"SSA.vel": {"base": 1, "shape": [6]}},
-        "probes": [
-            {"kernel": "ssa_residual", "u": {"SSA.H": H}, "z": {"SSA.vel": vel_exact}, "t": 0.0, "dt": 0.0,
-             "expected": {"SSA.residual[1]": jac(vel_exact)},
-             "note": "the exact discrete parabola: the residual vanishes"},
-            {"kernel": "ssa_residual", "u": {"SSA.H": H}, "z": {"SSA.vel": vel0}, "t": 0.0, "dt": 0.0,
-             "expected": {"SSA.residual[1]": jac(vel0)}},
-            {"kernel": "rhs", "u": {"SSA.H": H}, "z": {"SSA.vel": vel_exact}, "t": 0.0, "dt": 0.0,
-             "expected": {"du": [-0.5 * v for v in vel_exact]},
-             "note": "the stripped right-hand side reads z"},
-        ],
-    })
+    out.append(
+        {
+            "id": "ssa_residual",
+            "path": FX + "ssa_residual_1d.esm",
+            "strip": [AL],
+            "tolerance_class": "algebraic",
+            "specs": [
+                {"name": "ssa_residual", "outputs": [{"residual": "SSA.residual[1]"}]},
+                {"name": "rhs"},
+            ],
+            "z_layout": {"SSA.vel": {"base": 1, "shape": [6]}},
+            "probes": [
+                {
+                    "kernel": "ssa_residual",
+                    "u": {"SSA.H": H},
+                    "z": {"SSA.vel": vel_exact},
+                    "t": 0.0,
+                    "dt": 0.0,
+                    "expected": {"SSA.residual[1]": jac(vel_exact)},
+                    "note": "the exact discrete parabola: the residual vanishes",
+                },
+                {
+                    "kernel": "ssa_residual",
+                    "u": {"SSA.H": H},
+                    "z": {"SSA.vel": vel0},
+                    "t": 0.0,
+                    "dt": 0.0,
+                    "expected": {"SSA.residual[1]": jac(vel0)},
+                },
+                {
+                    "kernel": "rhs",
+                    "u": {"SSA.H": H},
+                    "z": {"SSA.vel": vel_exact},
+                    "t": 0.0,
+                    "dt": 0.0,
+                    "expected": {"du": [-0.5 * v for v in vel_exact]},
+                    "note": "the stripped right-hand side reads z",
+                },
+            ],
+        }
+    )
     # 2. Geometry source step map at two dt values, one build.
     Hg = [100.0, 200.0, 300.0]
     probes = []
     for dt in (0.5, 2.0):
-        probes.append({"kernel": "geometry_source", "u": {"Geometry.H": Hg}, "z": {}, "t": 0.0, "dt": dt,
-                       "expected": {"u": [x + dt * (0.5 - 0.25) for x in Hg]}})
-        probes.append({"kernel": "geometry_source_value", "u": {"Geometry.H": Hg}, "z": {}, "t": 0.0, "dt": dt,
-                       "expected": {"Geometry.H_out_source": [x + dt * (0.5 - 0.25) for x in Hg]}})
-    out.append({
-        "id": "geometry_step_map",
-        "path": FX + "geometry_step_map.esm",
-        "strip": [],
-        "tolerance_class": "algebraic",
-        "specs": [
-            {"name": "geometry_source", "dt_params": ["Geometry.dt"],
-             "outputs": [{"assign": "Geometry.H", "from": "Geometry.H_out_source"}]},
-            {"name": "geometry_source_value", "dt_params": ["Geometry.dt"],
-             "outputs": [{"observed": "Geometry.H_out_source"}]},
-        ],
-        "probes": probes,
-        "note": "dt is live: both dt values are answered by one compile_kernels call.",
-    })
+        probes.append(
+            {
+                "kernel": "geometry_source",
+                "u": {"Geometry.H": Hg},
+                "z": {},
+                "t": 0.0,
+                "dt": dt,
+                "expected": {"u": [x + dt * (0.5 - 0.25) for x in Hg]},
+            }
+        )
+        probes.append(
+            {
+                "kernel": "geometry_source_value",
+                "u": {"Geometry.H": Hg},
+                "z": {},
+                "t": 0.0,
+                "dt": dt,
+                "expected": {"Geometry.H_out_source": [x + dt * (0.5 - 0.25) for x in Hg]},
+            }
+        )
+    out.append(
+        {
+            "id": "geometry_step_map",
+            "path": FX + "geometry_step_map.esm",
+            "strip": [],
+            "tolerance_class": "algebraic",
+            "specs": [
+                {
+                    "name": "geometry_source",
+                    "dt_params": ["Geometry.dt"],
+                    "outputs": [{"assign": "Geometry.H", "from": "Geometry.H_out_source"}],
+                },
+                {
+                    "name": "geometry_source_value",
+                    "dt_params": ["Geometry.dt"],
+                    "outputs": [{"observed": "Geometry.H_out_source"}],
+                },
+            ],
+            "probes": probes,
+            "note": "dt is live: both dt values are answered by one compile_kernels call.",
+        }
+    )
     # 3. Ignition-time map and CFL limit.
     psi = [-1.0, 0.5, 0.0, 2.0]
     tig = [3.0, 1000000.0, 1000000.0, 1000000.0]
     w = [2.0, -4.0, 0.5, 8.0]
     t, dt = 10.0, 0.5
     tig_next = [min(g, t + dt) if p <= 0 else g for p, g in zip(psi, tig)]
-    out.append({
-        "id": "fire_maps",
-        "path": FX + "fire_maps.esm",
-        "strip": [],
-        "tolerance_class": "algebraic",
-        "specs": [
-            {"name": "ignition", "dt_params": ["Fire.dt"],
-             "outputs": [{"assign": "Fire.tig", "from": "Fire.tig_next"}]},
-            {"name": "cfl", "outputs": [
-                {"observed": "Fire.dt_cfl"},
-                {"expr": {"op": "faq", "args": [], "output_idx": [], "ranges": {"i": {"from": "x"}},
-                          "expr": {"op": "/", "args": ["Fire.dx", {"op": "abs", "args": [{"op": "index", "args": ["Fire.w", "i"]}]}]},
-                          "reduce": "min"},
-                 "label": "dt_cfl_min"}]},
-        ],
-        "probes": [
-            {"kernel": "ignition", "u": {"Fire.psi": psi, "Fire.tig": tig, "Fire.w": w}, "z": {}, "t": t, "dt": dt,
-             "expected": {"u": psi + tig_next + w}},
-            {"kernel": "cfl", "u": {"Fire.psi": psi, "Fire.tig": tig, "Fire.w": w}, "z": {}, "t": t, "dt": dt,
-             "expected": {"Fire.dt_cfl": [1.0 / abs(x) for x in w], "dt_cfl_min": min(1.0 / abs(x) for x in w)}},
-        ],
-    })
+    out.append(
+        {
+            "id": "fire_maps",
+            "path": FX + "fire_maps.esm",
+            "strip": [],
+            "tolerance_class": "algebraic",
+            "specs": [
+                {
+                    "name": "ignition",
+                    "dt_params": ["Fire.dt"],
+                    "outputs": [{"assign": "Fire.tig", "from": "Fire.tig_next"}],
+                },
+                {
+                    "name": "cfl",
+                    "outputs": [
+                        {"observed": "Fire.dt_cfl"},
+                        {
+                            "expr": {
+                                "op": "faq",
+                                "args": [],
+                                "output_idx": [],
+                                "ranges": {"i": {"from": "x"}},
+                                "expr": {
+                                    "op": "/",
+                                    "args": [
+                                        "Fire.dx",
+                                        {
+                                            "op": "abs",
+                                            "args": [{"op": "index", "args": ["Fire.w", "i"]}],
+                                        },
+                                    ],
+                                },
+                                "reduce": "min",
+                            },
+                            "label": "dt_cfl_min",
+                        },
+                    ],
+                },
+            ],
+            "probes": [
+                {
+                    "kernel": "ignition",
+                    "u": {"Fire.psi": psi, "Fire.tig": tig, "Fire.w": w},
+                    "z": {},
+                    "t": t,
+                    "dt": dt,
+                    "expected": {"u": psi + tig_next + w},
+                },
+                {
+                    "kernel": "cfl",
+                    "u": {"Fire.psi": psi, "Fire.tig": tig, "Fire.w": w},
+                    "z": {},
+                    "t": t,
+                    "dt": dt,
+                    "expected": {
+                        "Fire.dt_cfl": [1.0 / abs(x) for x in w],
+                        "dt_cfl_min": min(1.0 / abs(x) for x in w),
+                    },
+                },
+            ],
+        }
+    )
     # 4. Discrete condition and its simultaneous affect.
-    out.append({
-        "id": "condition_event_swap",
-        "path": FX + "condition_event_swap.esm",
-        "strip": [DE],
-        "tolerance_class": "algebraic",
-        "specs": [
-            {"name": "swap_condition", "outputs": [{"condition": "Swap.swap"}]},
-            {"name": "swap_affect", "outputs": [{"affect": "Swap.swap"}]},
-        ],
-        "probes": [
-            {"kernel": "swap_condition", "u": {"Swap.a": 3.0, "Swap.b": 1.0}, "z": {}, "t": 0.0, "dt": 0.0,
-             "expected": {"Swap.swap.condition[1]": 1.0}},
-            {"kernel": "swap_condition", "u": {"Swap.a": 0.0, "Swap.b": 2.0}, "z": {}, "t": 0.0, "dt": 0.0,
-             "expected": {"Swap.swap.condition[1]": 0.0}},
-            {"kernel": "swap_affect", "u": {"Swap.a": 3.0, "Swap.b": 1.0}, "z": {}, "t": 0.0, "dt": 0.0,
-             "expected": {"u": [1.0, 3.0]}},
-        ],
-    })
+    out.append(
+        {
+            "id": "condition_event_swap",
+            "path": FX + "condition_event_swap.esm",
+            "strip": [DE],
+            "tolerance_class": "algebraic",
+            "specs": [
+                {"name": "swap_condition", "outputs": [{"condition": "Swap.swap"}]},
+                {"name": "swap_affect", "outputs": [{"affect": "Swap.swap"}]},
+            ],
+            "probes": [
+                {
+                    "kernel": "swap_condition",
+                    "u": {"Swap.a": 3.0, "Swap.b": 1.0},
+                    "z": {},
+                    "t": 0.0,
+                    "dt": 0.0,
+                    "expected": {"Swap.swap.condition[1]": 1.0},
+                },
+                {
+                    "kernel": "swap_condition",
+                    "u": {"Swap.a": 0.0, "Swap.b": 2.0},
+                    "z": {},
+                    "t": 0.0,
+                    "dt": 0.0,
+                    "expected": {"Swap.swap.condition[1]": 0.0},
+                },
+                {
+                    "kernel": "swap_affect",
+                    "u": {"Swap.a": 3.0, "Swap.b": 1.0},
+                    "z": {},
+                    "t": 0.0,
+                    "dt": 0.0,
+                    "expected": {"u": [1.0, 3.0]},
+                },
+            ],
+        }
+    )
     return out
 
 
 def refusals():
     return [
-        {"id": "affect_reads_post_value", "path": FX + "affect_reads_post_value.esm", "strip": [DE],
-         "specs": [{"name": "swap_affect", "outputs": [{"affect": "PostValue.swap"}]}],
-         "expect_error": {"code": "affect_reads_post_value", "mentions": ["PostValue.swap", "PostValue.b"]}},
-        {"id": "unknown_observed", "path": FX + "geometry_step_map.esm", "strip": [],
-         "specs": [{"name": "bad", "outputs": [{"observed": "Geometry.nonexistent"}]}],
-         "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad", "Geometry.nonexistent"]}},
-        {"id": "unknown_residual", "path": FX + "ssa_residual_1d.esm", "strip": [AL],
-         "specs": [{"name": "bad", "outputs": [{"residual": "SSA.residual[2]"}]}],
-         "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad", "SSA.residual[2]"]}},
-        {"id": "affect_reads_a_dotted_post_value", "path": FX + "reaction_system_subsystem_events.esm",
-         "strip": [CE, DE],
-         "specs": [{"name": "bad_affect", "outputs": [{"affect": "Chem.bad"}]}],
-         "expect_error": {"code": "affect_reads_post_value", "mentions": ["Chem.bad", "Chem.Pool.P"]}},
-        {"id": "condition_index_zero", "path": FX + "condition_event_swap.esm", "strip": [DE],
-         "specs": [{"name": "bad", "outputs": [{"condition": "Swap.swap", "index": 0}]}],
-         "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad"]}},
-        {"id": "unknown_event", "path": FX + "condition_event_swap.esm", "strip": [DE],
-         "specs": [{"name": "bad", "outputs": [{"condition": "Swap.nope"}]}],
-         "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad", "Swap.nope"]}},
-        {"id": "assign_to_a_parameter", "path": FX + "geometry_step_map.esm", "strip": [],
-         "specs": [{"name": "bad", "outputs": [{"assign": "Geometry.smb", "from": "Geometry.bmb"}]}],
-         "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad", "Geometry.smb"]}},
-        {"id": "dt_param_not_a_parameter", "path": FX + "geometry_step_map.esm", "strip": [],
-         "specs": [{"name": "bad", "dt_params": ["Geometry.H"], "outputs": [{"observed": "Geometry.H_out_source"}]}],
-         "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad", "Geometry.H"]}},
-        {"id": "map_mixed_with_value", "path": FX + "geometry_step_map.esm", "strip": [],
-         "specs": [{"name": "bad", "outputs": [{"assign": "Geometry.H", "from": "Geometry.H_out_source"},
-                                                {"observed": "Geometry.H_out_source"}]}],
-         "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad"]}},
+        {
+            "id": "affect_reads_post_value",
+            "path": FX + "affect_reads_post_value.esm",
+            "strip": [DE],
+            "specs": [{"name": "swap_affect", "outputs": [{"affect": "PostValue.swap"}]}],
+            "expect_error": {
+                "code": "affect_reads_post_value",
+                "mentions": ["PostValue.swap", "PostValue.b"],
+            },
+        },
+        {
+            "id": "unknown_observed",
+            "path": FX + "geometry_step_map.esm",
+            "strip": [],
+            "specs": [{"name": "bad", "outputs": [{"observed": "Geometry.nonexistent"}]}],
+            "expect_error": {
+                "code": "kernel_output_unresolved",
+                "mentions": ["bad", "Geometry.nonexistent"],
+            },
+        },
+        {
+            "id": "unknown_residual",
+            "path": FX + "ssa_residual_1d.esm",
+            "strip": [AL],
+            "specs": [{"name": "bad", "outputs": [{"residual": "SSA.residual[2]"}]}],
+            "expect_error": {
+                "code": "kernel_output_unresolved",
+                "mentions": ["bad", "SSA.residual[2]"],
+            },
+        },
+        {
+            "id": "affect_reads_a_dotted_post_value",
+            "path": FX + "reaction_system_subsystem_events.esm",
+            "strip": [CE, DE],
+            "specs": [{"name": "bad_affect", "outputs": [{"affect": "Chem.bad"}]}],
+            "expect_error": {
+                "code": "affect_reads_post_value",
+                "mentions": ["Chem.bad", "Chem.Pool.P"],
+            },
+        },
+        {
+            "id": "condition_index_zero",
+            "path": FX + "condition_event_swap.esm",
+            "strip": [DE],
+            "specs": [{"name": "bad", "outputs": [{"condition": "Swap.swap", "index": 0}]}],
+            "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad"]},
+        },
+        {
+            "id": "unknown_event",
+            "path": FX + "condition_event_swap.esm",
+            "strip": [DE],
+            "specs": [{"name": "bad", "outputs": [{"condition": "Swap.nope"}]}],
+            "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad", "Swap.nope"]},
+        },
+        {
+            "id": "assign_to_a_parameter",
+            "path": FX + "geometry_step_map.esm",
+            "strip": [],
+            "specs": [
+                {"name": "bad", "outputs": [{"assign": "Geometry.smb", "from": "Geometry.bmb"}]}
+            ],
+            "expect_error": {
+                "code": "kernel_output_unresolved",
+                "mentions": ["bad", "Geometry.smb"],
+            },
+        },
+        {
+            "id": "dt_param_not_a_parameter",
+            "path": FX + "geometry_step_map.esm",
+            "strip": [],
+            "specs": [
+                {
+                    "name": "bad",
+                    "dt_params": ["Geometry.H"],
+                    "outputs": [{"observed": "Geometry.H_out_source"}],
+                }
+            ],
+            "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad", "Geometry.H"]},
+        },
+        {
+            "id": "map_mixed_with_value",
+            "path": FX + "geometry_step_map.esm",
+            "strip": [],
+            "specs": [
+                {
+                    "name": "bad",
+                    "outputs": [
+                        {"assign": "Geometry.H", "from": "Geometry.H_out_source"},
+                        {"observed": "Geometry.H_out_source"},
+                    ],
+                }
+            ],
+            "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad"]},
+        },
     ]
 
 
@@ -355,7 +556,11 @@ def main():
             "right-hand side's ABI, k(out, u, z, p, t, dt). Generated by "
             "scripts/gen-strip-and-expose-manifest.py; every kernel anchor is analytic."
         ),
-        "spec": ["API_SPEC.md §5.8 (Strip and expose)", "CONFORMANCE_SPEC.md §5.57", "esm-libraries-spec.md §2.5.13"],
+        "spec": [
+            "API_SPEC.md §5.8 (Strip and expose)",
+            "CONFORMANCE_SPEC.md §5.57",
+            "esm-libraries-spec.md §2.5.13",
+        ],
         "bindings": {
             "julia": "every section",
             "rust": "every section",
