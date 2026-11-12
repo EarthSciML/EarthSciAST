@@ -320,6 +320,15 @@ export interface FlattenedVariable {
   update?: ParameterUpdateSpec
   /** The declared sampling law, carried verbatim (parameters only). */
   distribution?: Distribution
+  /**
+   * The declared lower bound (esm-spec §6.3.2). A number is carried unchanged.
+   * A reference is rewritten by the renaming the component's equations get
+   * (esm-libraries-spec §4.7.5 "Bounds follow the renaming"), so it is a
+   * namespaced name, or the replacement expression of a scaled `variable_map`.
+   */
+  lb?: Expression
+  /** The declared upper bound, carried like {@link FlattenedVariable.lb}. */
+  ub?: Expression
 }
 
 /**
@@ -1254,6 +1263,20 @@ function flattenedVariableOf(
           )
   }
   if (variable.distribution !== undefined) out.distribution = variable.distribution
+  // A reference bound is a variable reference held as a string, so it is
+  // namespaced exactly like an equation side (esm-libraries-spec §4.7.5,
+  // "Bounds follow the renaming"); a number passes through untouched.
+  for (const side of ['lb', 'ub'] as const) {
+    const bound = variable[side]
+    if (bound === undefined) continue
+    out[side] = namespaceExpr(
+      bound,
+      sourceSystem,
+      LEAVE_ALONE,
+      updateScope?.subsystemKeys,
+      updateScope?.locals,
+    )
+  }
   return out
 }
 
@@ -1978,13 +2001,15 @@ function retargetMergedNames(
     comp.equations = comp.equations.map((eq) =>
       mapContributions(eq, (e) => renameNames(e, renames), renameNames(eq.lhs, renames)),
     )
-    // A variable's `update` rules are NOT equations — they are carried on the
-    // VARIABLE — so no equation walk reaches them. A parameter that refreshes
-    // from `B.x` would otherwise read a state the flattened system no longer
-    // declares (CONFORMANCE_SPEC §5.35).
+    // A variable's `update` rules and its `lb` / `ub` are NOT equations — they
+    // are carried on the VARIABLE — so no equation walk reaches them. A
+    // parameter that refreshes from `B.x`, or a bound naming it, would otherwise
+    // read a state the flattened system no longer declares (CONFORMANCE_SPEC
+    // §5.35, esm-libraries-spec §4.7.5).
+    const rename = (expr: Expression): Expression => renameNames(expr, renames)
     for (const table of [comp.stateVars, comp.parameters, comp.observed]) {
       for (const [name, variable] of Object.entries(table)) {
-        const next = renameVariableUpdates(variable, renames)
+        const next = mapVariableBounds(renameVariableUpdates(variable, renames), rename)
         if (next !== variable) table[name] = next
       }
     }
@@ -1999,6 +2024,27 @@ function renameVariableUpdates(
   if (variable.update === undefined) return variable
   const update = mapUpdateExpressions(variable.update, (expr) => renameNames(expr, renames))
   return update === variable.update ? variable : { ...variable, update }
+}
+
+/**
+ * A variable with its `lb` / `ub` passed through `rewrite`, the same rewrite a
+ * coupling step applies to equation sides (esm-libraries-spec §4.7.5, "Bounds
+ * follow the renaming"). Returns `variable` itself when neither bound changes.
+ */
+function mapVariableBounds(
+  variable: FlattenedVariable,
+  rewrite: (expr: Expression) => Expression,
+): FlattenedVariable {
+  let out = variable
+  for (const side of ['lb', 'ub'] as const) {
+    const bound = variable[side]
+    if (bound === undefined) continue
+    const next = rewrite(bound)
+    if (next === bound) continue
+    if (out === variable) out = { ...variable }
+    out[side] = next
+  }
+  return out
 }
 
 /**
@@ -2216,6 +2262,15 @@ function applyVariableMap(
     comp.equations = comp.equations.map((eq) =>
       mapContributions(eq, rewrite, substitute(eq.lhs, bindings) as Expression),
     )
+    // A bound naming the target follows the same replacement: `from` for
+    // `param_to_var`, the scaled expression for a factor (esm-libraries-spec
+    // §4.7.5, "Bounds follow the renaming").
+    for (const table of [comp.stateVars, comp.parameters, comp.observed]) {
+      for (const [name, variable] of Object.entries(table)) {
+        const next = mapVariableBounds(variable, rewrite)
+        if (next !== variable) table[name] = next
+      }
+    }
   }
 
   const transform = typeof e.transform === 'string' ? e.transform.toLowerCase() : ''

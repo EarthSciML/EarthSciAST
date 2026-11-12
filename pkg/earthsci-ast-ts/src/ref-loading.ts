@@ -55,6 +55,7 @@ import { loadString, validateSchema, ROOT_PATH } from './parse.js'
 import { toJson } from './serialize.js'
 import { prepareDocumentOps, raiseFaqVersionFloor, rejectVersionGatedConstructs } from './parse.js'
 import { raiseConstUnitsVersionFloor } from './solver.js'
+import { raiseVariableBoundsVersionFloor } from './variable-bounds.js'
 
 /**
  * Error thrown when a circular reference is detected during subsystem resolution.
@@ -328,6 +329,8 @@ export function resolveSubsystemRefsSync(
   raiseFaqVersionFloor(file)
   // Likewise a mounted esm 1.2.0 leaf's unit-bearing `const` (esm-spec §4.8.5).
   raiseConstUnitsVersionFloor(file)
+  // Likewise a mounted esm 2.1.0 leaf's variable bounds (esm-spec §6.3.2).
+  raiseVariableBoundsVersionFloor(file)
 }
 
 /**

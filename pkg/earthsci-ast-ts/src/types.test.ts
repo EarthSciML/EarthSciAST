@@ -9,10 +9,11 @@ describe('ESM Format Types', () => {
     // `units` on a `const` node (§4.8.5) to 1.2.0, and `solver.external`
     // (§2.2.6) and `solver.time_span` (§2.2.7) to 1.3.0, and the removal of
     // `fn`, `function_tables` / `table_lookup`, `skolem`, `rank`, `argmin`,
-    // `argmax` and the geometry ops to 2.0.0. The embedded schema `$id` (and
+    // `argmax` and the geometry ops to 2.0.0, and `lb` / `ub` bounds on a
+    // model variable (§6.3.2) to 2.1.0. The embedded schema `$id` (and
     // therefore SCHEMA_VERSION) tracks it. The npm package version is a
     // different number and lives in LIBRARY_VERSION.
-    expect(SCHEMA_VERSION).toBe('2.0.0')
+    expect(SCHEMA_VERSION).toBe('2.1.0')
   })
 
   it('should handle Expr type correctly', () => {

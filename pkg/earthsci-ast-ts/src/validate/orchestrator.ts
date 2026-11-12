@@ -79,6 +79,7 @@ import {
   validateCouplingDomainUnits,
   validateTemporalResolution,
 } from './coupling-checks.js'
+import { validateVariableBounds } from './bounds-checks.js'
 
 /**
  * Promote the DEFECT-BEARING unit findings to structural errors.
@@ -371,6 +372,10 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
 
   // Check for circular cross-model references
   errors.push(...validateCircularReferences(esmFile))
+
+  // A variable's `lb` / `ub` (esm-spec §6.3.2), in every model and inline
+  // subsystem at any depth.
+  errors.push(...validateVariableBounds(esmFile))
 
   // Every parameter `update.source` names a declared data source.
   errors.push(...validateDataSourceReferences(esmFile))

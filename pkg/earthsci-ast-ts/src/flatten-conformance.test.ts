@@ -49,6 +49,8 @@ interface VariableCase {
   update_kinds: string[]
   distribution_kind: string | null
   source_system: string | null
+  lb: number | string | null
+  ub: number | string | null
 }
 interface ContributionCase {
   rhs: string
@@ -135,7 +137,20 @@ function variableRecord(v: FlattenedVariable): VariableCase {
     update_kinds: updateRules(v.update).map((r) => r.kind),
     distribution_kind: (v.distribution as { kind?: string } | undefined)?.kind ?? null,
     source_system: v.sourceSystem ?? null,
+    lb: boundRecord(v.lb),
+    ub: boundRecord(v.ub),
   }
+}
+
+/**
+ * A flattened bound as the corpus records it (esm-libraries-spec §4.7.5):
+ * `null` when absent, the number itself, otherwise the flattened bound rendered
+ * with `toAscii`, so a reference is its namespaced name.
+ */
+function boundRecord(bound: Expression | undefined): number | string | null {
+  if (bound === undefined) return null
+  if (typeof bound === 'number') return bound
+  return toAscii(bound)
 }
 
 function variableRecords(map: FlattenedVariableMap): VariableCase[] {
@@ -193,8 +208,10 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // (esm-libraries-spec §4.7.1 step 4, §4.7.5 step 4 "Ordering"), plus the
     // `ifelse_mixed_whole_dynamic` case (tier `unshaped_mixed_ifelse`) — an
     // observed declared without a shape and defined by an `ifelse` over an
-    // array keeps no shape (esm-libraries-spec §4.7.5).
-    expect(corpus.cases.length).toBe(56)
+    // array keeps no shape (esm-libraries-spec §4.7.5), plus the two
+    // `variable_bounds` cases — bounds carried and rewritten by the equations'
+    // renaming (esm-libraries-spec §4.7.5, "Bounds follow the renaming").
+    expect(corpus.cases.length).toBe(58)
     // 9 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere,

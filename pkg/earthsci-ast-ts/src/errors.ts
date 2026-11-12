@@ -326,6 +326,17 @@ export const ERROR_CODES = {
   //   (esm-spec §6.3). Inline array data is a SHAPED variable's value, so with
   //   no shape there is nothing for the array to fill.
   ARRAY_DEFAULT_WITHOUT_SHAPE: 'array_default_without_shape',
+  // `variable_bound_shape_mismatch` — a variable's `lb` / `ub` names a variable
+  //   whose declared shape is neither scalar nor the bounded variable's (esm-spec
+  //   §6.3.2 rule 2). Shapes compare by index-set name, in order.
+  VARIABLE_BOUND_SHAPE_MISMATCH: 'variable_bound_shape_mismatch',
+  // `variable_bound_circular` — a bound names the variable it bounds, or an
+  //   observed whose definition reads it, directly or through other observeds
+  //   (esm-spec §6.3.2 rule 3).
+  VARIABLE_BOUND_CIRCULAR: 'variable_bound_circular',
+  // `variable_bounds_inverted` — both bounds are numbers and `lb > ub` (esm-spec
+  //   §6.3.2 rule 4). Pinned at the variable: the fault is in the pair.
+  VARIABLE_BOUNDS_INVERTED: 'variable_bounds_inverted',
   UNDEFINED_PARAMETER: 'undefined_parameter',
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
@@ -388,6 +399,9 @@ export const ERROR_CODES = {
   // `solver_time_span_version_too_old` — `solver.time_span` in a document
   //   declaring esm < 1.3.0 (esm-spec §2.2.4).
   SOLVER_TIME_SPAN_VERSION_TOO_OLD: 'solver_time_span_version_too_old',
+  // `variable_bounds_version_too_old` — a model variable carries `lb` or `ub`
+  //   in a file declaring esm < 2.1.0 (esm-spec §6.3.2, version gate).
+  VARIABLE_BOUNDS_VERSION_TOO_OLD: 'variable_bounds_version_too_old',
   // `solver_time_span_invalid` — `solver.time_span` is no interval: `end` not
   //   after `start`, a timestamp naming no calendar day, or an unreadable time
   //   origin (esm-spec §2.2.7).
