@@ -71,11 +71,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap above
     KNOWN_BINDINGS,
     REPO_ROOT,
+    TOLERANCE_CLASSES,
     AdapterHarness,
     ManifestError,
     _eprint,
     build_parser,
     cli_main,
+    values_agree,
     write_report,
 )
 from conformance_lib import load_manifest as _load_manifest  # noqa: E402
@@ -84,15 +86,9 @@ DEFAULT_MANIFEST = REPO_ROOT / "tests" / "conformance" / "compiled_rhs" / "manif
 
 ENGINES = ("interpreter", "compiled")
 
-# Fallback tolerance classes, used only when a manifest omits the block. The
-# manifest is the authority; these are the 2026-09-13 ruling written out so a
-# hand-trimmed manifest cannot silently loosen the gate.
-DEFAULT_TOLERANCE_CLASSES = {
-    "algebraic": {"rtol": 1e-13, "atol": 1e-300},
-    "transcendental": {"rtol": 1e-12, "atol": 1e-300},
-    "reduction": {"rtol": 1e-11, "atol_scaled": 1e-14},
-    "float32": {"rtol": 1e-5, "atol": 1e-30},
-}
+# Fallback tolerance classes, used only when a manifest omits the block: the
+# §5.38.2 classes, from the one shared definition.
+DEFAULT_TOLERANCE_CLASSES = TOLERANCE_CLASSES
 
 
 # === Adapter dispatch =====================================================
@@ -377,17 +373,6 @@ def probe_atol(want: dict[str, float], cls: dict) -> float:
     return float(cls.get("atol", 0.0))
 
 
-def _close(got: float, want: float, rtol: float, atol: float) -> bool:
-    """``|got - want| <= atol + rtol*|want|``, with both-non-finite treated as
-    equal so an intentional non-finite identity in a fixture does not spuriously
-    fail."""
-    if math.isnan(got) or math.isnan(want):
-        return math.isnan(got) and math.isnan(want)
-    if math.isinf(got) or math.isinf(want):
-        return got == want
-    return abs(got - want) <= atol + rtol * abs(want)
-
-
 def compare_probe(want: dict, got: dict, cls: dict, label: str) -> tuple[float, list[str]]:
     """Compare one probe's ``{element: value}`` map against the reference. Returns
     (max tolerance-budget fraction, problems). Every reference element must be
@@ -403,12 +388,13 @@ def compare_probe(want: dict, got: dict, cls: dict, label: str) -> tuple[float, 
             problems.append(f"{label}: missing element {name!r}")
             continue
         gv = got_n[name]
+        ok = values_agree(gv, wv, rtol, atol)
         budget = atol + rtol * abs(wv)
         if budget > 0 and math.isfinite(gv) and math.isfinite(wv):
             worst = max(worst, abs(gv - wv) / budget)
-        elif gv != wv and not (math.isnan(gv) and math.isnan(wv)):
+        elif not ok:
             worst = float("inf")
-        if not _close(gv, wv, rtol, atol):
+        if not ok:
             problems.append(f"{label}: {name} = {gv!r} != {wv!r} (atol={atol:g} rtol={rtol:g})")
     return worst, problems
 
@@ -748,6 +734,37 @@ def self_test(manifest_path: Path) -> int:
                     f"self-test OK   [tolerance/{cname}]: fixed floor atol={expect:g}, "
                     f"rtol={float(cls.get('rtol', 0.0)):g}"
                 )
+
+    # The manifest must carry every §5.38.2 class, and `exact` must be bit
+    # identity: equal encodings pass, and a signed zero or a NaN pair fails.
+    missing = sorted(set(TOLERANCE_CLASSES) - set(classes))
+    if missing:
+        rc = 1
+        _eprint(f"self-test FAIL [tolerance/classes]: the manifest lacks {missing}")
+    exact = classes.get("exact")
+    if exact is not None:
+        want = {"a": 0.0, "b": 1.5, "c": -2.0}
+        same = not compare_probe(want, dict(want), exact, "t")[1]
+        cases = (
+            ("signed-zero", {**want, "a": -0.0}),
+            ("nan-pair", {**want, "b": math.nan}),
+            ("one-ulp", {**want, "c": math.nextafter(-2.0, 0.0)}),
+        )
+        leaks = [lbl for lbl, got in cases if not compare_probe(want, got, exact, "t")[1]]
+        nan_want = {"a": math.nan}
+        if not compare_probe(nan_want, {"a": math.nan}, exact, "t")[1]:
+            leaks.append("nan-pair")
+        if not same or leaks:
+            rc = 1
+            _eprint(
+                f"self-test FAIL [tolerance/exact]: not bit identity (identical "
+                f"accepted: {same}; admitted: {leaks})"
+            )
+        else:
+            print(
+                "self-test OK   [tolerance/exact]: bit identity — -0.0 vs 0.0, a NaN "
+                "pair and one ulp are all rejected"
+            )
 
     print("\nself-test:", "OK" if rc == 0 else "FAILED")
     return rc

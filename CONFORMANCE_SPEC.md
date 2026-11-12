@@ -5843,6 +5843,12 @@ Every fixture declares exactly one `tolerance_class`. A value passes when
 | `float32` | 1e-5 | 1e-30 | reserved for precision-changing fixtures; unused while §5.38.4 excludes them |
 | `exact` | 0 | 0 | a fixture whose evaluation ORDER fixes every bit: a causal recurrence (§5.19.1) with no multiply, which an XLA-class backend may contract into a fused multiply-add, and no in-body reduction, which it may reassociate |
 
+A zero band (`rtol = atol = 0`, the `exact` class) is **bit identity** rather
+than the inequality above: the two values' binary64 encodings must be equal, so
+`-0.0` does not match `+0.0`, and a NaN matches nothing — the wire spells a NaN
+without its sign or payload, so no NaN can be shown to carry the reference's
+bits. Every other class admits two NaNs, or the same infinity, as agreeing.
+
 The `reduction` class's absolute floor is **scaled**, not fixed: `atol =
 atol_scaled · maxᵢ|wantᵢ|` over the **whole probe vector**, with the scale taken
 from the reference so it is the same number for every binding. A reduction

@@ -46,6 +46,7 @@ Run:  python3 scripts/gen_compiled_rhs_manifest.py
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as _dt
 import json
 import math
@@ -57,6 +58,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gen_pde_sim_fixtures as pde  # noqa: E402 — needs the sys.path bootstrap above
+from conformance_lib import TOLERANCE_CLASSES  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 TESTS = REPO / "tests"
@@ -764,16 +766,11 @@ def build_manifest() -> dict:
             "go": "rewrite-only port; no faq/makearray evaluator, no RHS hook",
             "typescript": "rewrite-only port; no faq/makearray evaluator, no RHS hook",
         },
-        "tolerance_classes": {
-            "algebraic": {"rtol": 1e-13, "atol": 1e-300},
-            "transcendental": {"rtol": 1e-12, "atol": 1e-300},
-            "reduction": {"rtol": 1e-11, "atol_scaled": 1e-14},
-            "float32": {"rtol": 1e-5, "atol": 1e-30},
-            # Bit-identity, for a fixture whose order fixes every bit: no
-            # multiply (which an XLA-class backend may contract into an FMA) and
-            # no in-body reduction (which it may reassociate).
-            "exact": {"rtol": 0.0, "atol": 0.0},
-        },
+        # CONFORMANCE_SPEC §5.38.2, from the one shared definition. `exact` is
+        # bit identity, for a fixture whose order fixes every bit: no multiply
+        # (which an XLA-class backend may contract into an FMA) and no in-body
+        # reduction (which it may reassociate).
+        "tolerance_classes": copy.deepcopy(TOLERANCE_CLASSES),
         "excluded": EXCLUDED,
         "fixtures": fixtures,
     }

@@ -42,9 +42,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -74,6 +76,43 @@ ALL_BINDINGS = KNOWN_BINDINGS + OPTIONAL_BINDINGS
 
 # The adapter_status of an optional participant whose adapter is not configured.
 NOT_CONFIGURED = "not_configured"
+
+# CONFORMANCE_SPEC §5.38.2's tolerance classes, the one copy every runner and
+# manifest generator reads. A manifest's own `tolerance_classes` block is the
+# authority for its tier; this is the fallback a hand-trimmed manifest gets, so
+# it cannot silently loosen the gate.
+TOLERANCE_CLASSES = {
+    "algebraic": {"rtol": 1e-13, "atol": 1e-300},
+    "transcendental": {"rtol": 1e-12, "atol": 1e-300},
+    "reduction": {"rtol": 1e-11, "atol_scaled": 1e-14},
+    "float32": {"rtol": 1e-5, "atol": 1e-30},
+    # Bit identity, for a fixture whose evaluation order fixes every bit.
+    "exact": {"rtol": 0.0, "atol": 0.0},
+}
+
+# The classes a trajectory band is derived from (§5.44.2): every class but
+# `exact`. A derived band adds the integrator's tolerance to the class, so a
+# bit-identity class would stop being one there.
+TRAJECTORY_TOLERANCE_CLASSES = {k: v for k, v in TOLERANCE_CLASSES.items() if k != "exact"}
+
+
+def values_agree(got: float, want: float, rtol: float, atol: float) -> bool:
+    """The §5.38.2 pass predicate for one value: ``|got - want| <= atol +
+    rtol*|want|``, with two NaNs, or the same infinity, agreeing.
+
+    A ZERO band (``rtol == atol == 0``, the `exact` class) is bit identity
+    instead: the two binary64 encodings must be equal, so ``-0.0`` does not
+    match ``0.0``, and a NaN matches nothing — the wire spells a NaN without its
+    sign or payload, so no NaN can be shown to carry the reference's bits."""
+    if rtol == 0 and atol == 0:
+        if math.isnan(got) or math.isnan(want):
+            return False
+        return struct.pack("<d", got) == struct.pack("<d", want)
+    if math.isnan(got) or math.isnan(want):
+        return math.isnan(got) and math.isnan(want)
+    if math.isinf(got) or math.isinf(want):
+        return got == want
+    return abs(got - want) <= atol + rtol * abs(want)
 
 
 def with_optional_bindings(bindings: list[str]) -> list[str]:
