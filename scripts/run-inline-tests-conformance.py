@@ -233,7 +233,11 @@ def _validate_golden_field(path: Path, fid: str, fx: dict) -> None:
     if fault is not None:
         # A fault fixture's conforming outcome is the fault itself, so there is
         # no reference number to mint, and nothing to excuse.
-        if not isinstance(fault, dict) or not isinstance(fault.get("code"), str) or not fault["code"]:
+        if (
+            not isinstance(fault, dict)
+            or not isinstance(fault.get("code"), str)
+            or not fault["code"]
+        ):
             raise ManifestError(
                 f"{path}: fixtures[{fid}].expected_fault must be an object with a non-empty `code`"
             )
