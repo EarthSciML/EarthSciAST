@@ -2236,6 +2236,7 @@ reading that as a gap.
 | `value_invention_result` | type | – | – | `ValueInventionResult` | `ValueInventionResult` | – |
 | `var_gridding` | type | `VarGridding` | – | – | `VarGridding` | – |
 | `var_plan` | type | `VarPlan` | – | – | `VarPlan` | – |
+| `variable_bound` | type | – | – | – | `VariableBound` | `VariableBound` |
 | `variable_in_use_error` | error | – | `VariableInUseError` | – | – | `VariableInUseError` |
 | `variable_kind` | type | – | `VariableKind` | – | `VariableKind` | – |
 
