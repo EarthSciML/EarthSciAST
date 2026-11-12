@@ -543,6 +543,20 @@ def compare_fixture(
             what = f"errored ({produced['error']})"
         else:
             what = "answered its assertions"
+        if compiler not in ((fx.get("required") or {}).get(binding) or []):
+            # Only the compilers the fixture's `required` ledger names are held
+            # to the fault; a fault fixture carries no named exclusions to
+            # excuse anyone else. What an unrequired participant did is
+            # reported, and gates nothing.
+            return {
+                "status": "ok",
+                "outcome": "fault_not_required",
+                "code": code,
+                "note": (
+                    f"{binding}/{compiler} {what} instead of the fault {fault!r}; it is "
+                    f"not in this fixture's `required` ledger, so it is not held to it"
+                ),
+            }
         return {
             "status": "fail",
             "problems": [
@@ -1430,6 +1444,16 @@ def _authored_verdict_controls(
             # exactly as authored, is the laundered read it exists to catch.
             faulted = {"status": "refused", "code": fault, "reason": "fault"}
             other = {"status": "refused", "code": "compiler_refused_rule", "reason": "no"}
+            nreq = nfx.get("required") or {}
+            r_bind = next((b for b in sorted(nreq) if "native" in (nreq[b] or [])), None)
+            if r_bind is None:
+                check(
+                    False,
+                    f"control/{nfx['id']}/expected-fault-is-required",
+                    "no binding is required to run it natively",
+                )
+                continue
+            n_args = (None, n_authored, rtol, atol, r_bind, "native")
             check(
                 compare_fixture(nfx, faulted, *n_args)["status"] == "ok"
                 and compare_fixture(nfx, honest, *n_args)["status"] == "fail"
@@ -1437,6 +1461,19 @@ def _authored_verdict_controls(
                 and compare_fixture(nfx, {"error": "boom"}, *n_args)["status"] == "fail",
                 f"control/{nfx['id']}/expected-fault-is-required",
                 "a fault fixture admitted a finite answer, another code or an error",
+            )
+            # ... and ONLY of the compilers `required` names: a participant the
+            # ledger leaves out is reported, never failed, whatever it answers.
+            u_bind = next(b for b in ALL_BINDINGS if "native" not in (nreq.get(b) or []))
+            u_args = (None, n_authored, rtol, atol, u_bind, "native")
+            check(
+                all(
+                    compare_fixture(nfx, out, *u_args)["status"] == "ok"
+                    for out in (faulted, honest, other, {"error": "boom"})
+                )
+                and compare_fixture(nfx, other, *u_args)["outcome"] == "fault_not_required",
+                f"control/{nfx['id']}/expected-fault-binds-only-required",
+                "a compiler outside the fixture's `required` ledger was held to the fault",
             )
             continue
         dishonest = copy.deepcopy(honest)
