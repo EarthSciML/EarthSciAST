@@ -64,8 +64,9 @@ struct _RecurrenceSweep{F, TB}
     out_refs::Vector{Base.RefValue{Int}}  # output-index counters, `output_idx` order
     cur::Base.RefValue{Int}             # sweep position of the cell being evaluated
     order::Vector{Int}                  # output axes, outermost first
-    dims::Vector{Int}                   # the frame's extents (each axis is 1…dims[d])
-    base::Int                           # slot of cell (1, …, 1) in the extended vector
+    lo::Vector{Int}                     # the box's first cell (each axis is lo[d]…lo[d]+dims[d]-1)
+    dims::Vector{Int}                   # the box's extents
+    base::Int                           # slot of cell lo in the extended vector
     strides::Vector{Int}                # column-major strides of the buffer block
     ncells::Int
 end
@@ -260,9 +261,16 @@ end
 # ---- Build: one recurrence → its sweep ---------------------------------------
 #
 # `name` is the materialized observed, `def` its definition, `dims` its frame
-# (already checked to be the dense `1…dims[d]` box its buffer block holds), and
-# the rest the resolve/compile context the fill route compiles against, with
-# `var_map`/`array_var_info` the EXTENDED layout that carries the buffer block.
+# (each axis `1…dims[d]`), and the rest the resolve/compile context the fill
+# route compiles against, with `var_map`/`array_var_info` the EXTENDED layout
+# that carries the buffer block.
+#
+# The block is the whole frame except in a range-restricted program
+# (range_restricted.jl), where it covers only the cells the program needs along
+# a decomposed axis. The sweep then runs over the block: every self-read has lag
+# 0 off the recurrence axis, so a cell of the block reads only cells of the
+# block. A block that does not cover the recurrence axis whole cannot be swept
+# — the sweep needs every earlier position on that axis — and is refused.
 function _compile_recurrence_sweep(
         name::String, def::ASTExpr, dims::Vector{Int},
         var, resolved_obs::Dict{String, ASTExpr}, array_var_info,
@@ -302,8 +310,20 @@ function _compile_recurrence_sweep(
             "'$name' has no buffer block in this build's layout"
         )
     )
+    (blk.lo[axis] == 1 && blk.hi[axis] == dims[axis]) || throw(
+        _range_error(
+            ERROR_CODES.RANGE_GLOBAL_LOCALITY,
+            "'$name' is a recurrence (esm-spec §4.3.1.1) along '$(idx_names[axis])', and " *
+                "this program holds only its cells $(blk.lo[axis]):$(blk.hi[axis]) of " *
+                "1:$(dims[axis]) along that axis. Its sweep reads every earlier position " *
+                "on the recurrence axis, so it has global locality along a decomposed " *
+                "axis; decompose another axis, or build the whole domain"
+        )
+    )
+    lo = copy(blk.lo)
+    ext = Int[blk.hi[d] - blk.lo[d] + 1 for d in eachindex(lo)]
     rg = _RecurGather(
-        name, copy(dims), _recurrence_sweep_weights(order, dims),
+        name, lo, ext, _recurrence_sweep_weights(order, ext),
         blk.base, copy(blk.strides), Ref(0)
     )
 
@@ -341,11 +361,12 @@ function _compile_recurrence_sweep(
         rev = _reverse_window(dop.filter, contract_names, idx_names)
         fold = if dop.join_gates !== nothing || rev || any(c -> c === nothing, contract_const)
             # Per-cell admitted tuples, indexed by the cell's position in
-            # `Iterators.product` order over the output ranges — dimension 1
-            # fastest, which for a dense `1…dims` frame is the buffer offset.
+            # `Iterators.product` order over the block's output ranges —
+            # dimension 1 fastest, which for the dense block is the buffer
+            # offset.
             _array_contraction_table(
                 contract_refs, idx_names,
-                [collect(1:dims[d]) for d in 1:rank], contract_names,
+                [collect(lo[d]:blk.hi[d]) for d in 1:rank], contract_names,
                 contract_ranges, contract_const, dop.join_gates, oplus, zerobar,
                 const_registry; reverse = rev
             )
@@ -362,10 +383,10 @@ function _compile_recurrence_sweep(
             )
         end
     end
-    ncells = prod(dims)
+    ncells = prod(ext)
     draft = _RecurrenceSweep(
         name, nothing, (), body, fold, out_refs, rg.cur,
-        order, copy(dims), blk.base, copy(blk.strides), ncells
+        order, lo, ext, blk.base, copy(blk.strides), ncells
     )
     if _codegen_disabled()
         return _walked_recurrence(
@@ -396,7 +417,7 @@ function _walked_recurrence(d::_RecurrenceSweep{Nothing}, lic::_PerCellLicense)
     _note_recurrence!(:recurrence_walk)
     return _RecurrenceSweep(
         d.name, lic, (), d.body, d.fold, d.out_refs, d.cur,
-        d.order, d.dims, d.base, d.strides, d.ncells
+        d.order, d.lo, d.dims, d.base, d.strides, d.ncells
     )
 end
 
@@ -445,19 +466,20 @@ function _walk_recurrence!(
     ) where {T}
     refs = sw.out_refs
     order = sw.order
+    lo = sw.lo
     dims = sw.dims
     strides = sw.strides
     @inbounds for c in 0:(sw.ncells - 1)
         r = c
         for j in length(order):-1:1
             ax = order[j]
-            refs[ax][] = 1 + r % dims[ax]
+            refs[ax][] = lo[ax] + r % dims[ax]
             r = div(r, dims[ax])
         end
         sw.cur[] = c
         off = 0
         for d in eachindex(refs)
-            off += (refs[d][] - 1) * strides[d]
+            off += (refs[d][] - lo[d]) * strides[d]
         end
         fold = sw.fold
         v = fold === nothing ? _eval_node(sw.body, ue, p, t, T) :
@@ -530,14 +552,16 @@ function _try_codegen_recurrence(sw::_RecurrenceSweep)
     for j in rank:-1:1
         ax = sw.order[j]
         len = _cg_geo!(ctx, sw.dims[ax], (sw.dims, ax))
-        push!(seek, :(local $(isyms[ax]) = 1 + $rv % $len))
+        lo = _cg_geo!(ctx, sw.lo[ax], (sw.lo, ax))
+        push!(seek, :(local $(isyms[ax]) = $lo + $rv % $len))
         push!(seek, :($rv = div($rv, $len)))
     end
     offv = _cg_name(ctx, "off")
     off = Any[0]
     for d in 1:rank
         st = _cg_geo!(ctx, sw.strides[d], (sw.strides, d), true)
-        push!(off, :(($(isyms[d]) - 1) * $st))
+        lo = _cg_geo!(ctx, sw.lo[d], (sw.lo, d))
+        push!(off, :(($(isyms[d]) - $lo) * $st))
     end
     push!(seek, :(local $offv = $(_cg_foldl(:+, off))))
     kvs = Symbol[]
@@ -585,7 +609,7 @@ function _try_codegen_recurrence(sw::_RecurrenceSweep)
     tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
     return _RecurrenceSweep(
         sw.name, f, tabpack, sw.body, sw.fold, sw.out_refs, sw.cur,
-        sw.order, sw.dims, sw.base, sw.strides, sw.ncells
+        sw.order, sw.lo, sw.dims, sw.base, sw.strides, sw.ncells
     )
 end
 
@@ -616,21 +640,22 @@ function _cg_recur_gather_dim(
         )
     end
     sd = _cg_name(ctx, "rgs")
-    dim = _cg_geo!(ctx, rg.dims[d], (rg.dims, d))
+    lo = _cg_geo!(ctx, rg.lo[d], (rg.lo, d))
+    hi = _cg_geo!(ctx, rg.lo[d] + rg.dims[d] - 1, (rg, :hi, d))
     w = _cg_geo!(ctx, rg.sweep_w[d], (rg.sweep_w, d), true)
     st = _cg_geo!(ctx, rg.strides[d], (rg.strides, d), true)
     nsubs = vcat(subs, sd)
     nxt = _cg_recur_gather_dim(
         ctx, kc, nd, rg, rgv, cv, d + 1,
-        push!(copy(ord), :(($sd - 1) * $w)),
-        push!(copy(slot), :(($sd - 1) * $st)), nsubs
+        push!(copy(ord), :(($sd - $lo) * $w)),
+        push!(copy(slot), :(($sd - $lo) * $st)), nsubs
     )
     return Expr(
         :let,
         Expr(:block, :($sd = round(Int, $(_cg_emit(ctx, kc, children[d]))))),
         Expr(
             :block, :(
-                (1 <= $sd <= $dim) ? $nxt :
+                ($lo <= $sd <= $hi) ? $nxt :
                     _recur_unavailable_at($rgv, $cv, Int[$(nsubs...)])
             )
         )

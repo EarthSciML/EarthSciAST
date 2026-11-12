@@ -66,8 +66,11 @@ or exclude the interpreter too, as `06`'s does. Python is exempt, and its
 | Binding | `interpreter` | `native` |
 |---|---|---|
 | Julia | all but `06` | all but `06` — an emitted ordered sweep, bit for bit with the interpreter's walk |
-| Python | all ten | all but `04`, `07` and the `tests/valid` document, whose cell body is a reduction. each a named exclusion (Python is exempt from the native rule) |
-| Rust | all ten | all ten — an ordered `Sweep` on the tape whose cell body runs one cell at a time, bit for bit with the interpreter's walk (`06` included, rounded to binary32 at every cell) |
+| Python | all thirteen | all but `04`, `07` and the `tests/valid` document, whose cell body is a reduction. each a named exclusion (Python is exempt from the native rule) |
+| Rust | all thirteen | all thirteen — an ordered `Sweep` on the tape whose cell body runs one cell at a time, bit for bit with the interpreter's walk (`06` included, rounded to binary32 at every cell) |
+
+"Runs" `11` and `12` means declining them with `E_TREEWALK_RECUR_UNAVAILABLE`, in
+every binding and under both compilers.
 
 `06` (binary32) is refused by Julia under both compilers: Julia evaluates in
 binary64 only, and §5.19.3a forbids folding a `Float32` recurrence in binary64.

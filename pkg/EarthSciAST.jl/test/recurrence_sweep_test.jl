@@ -522,6 +522,105 @@ end
         @test _rs_bits(vec(Js[:native])) == _rs_bits(vec(Js[:interpreter]))
     end
 
+    @testset "a range-restricted program sweeps the block it holds" begin
+        # A column recurrence R[i,k] along the uncut axis z, over 8 columns cut
+        # along x: each tile sweeps only the columns it needs, and its owned
+        # rows equal the whole-domain program's to the bit. Along the cut axis
+        # the sweep would need every earlier position, so it is refused.
+        nx, nz = 8, 5
+        function coldoc(along_x::Bool)
+            rr = Dict("i" => Dict("from" => "x"), "k" => Dict("from" => "z"))
+            body = along_x ?
+                _rs_o(
+                    "ifelse", _rs_o("<=", "i", 1), _rs_idx("u", 1, "k"),
+                    _rs_o(
+                        "+", _rs_o("*", 0.5, _rs_idx("R", _rs_o("-", "i", 1), "k")),
+                        _rs_idx("u", "i", "k")
+                    )
+                ) :
+                _rs_o(
+                    "ifelse", _rs_o("<=", "k", 1), _rs_idx("u", "i", 1),
+                    _rs_o(
+                        "+", _rs_o("*", 0.5, _rs_idx("R", "i", _rs_o("-", "k", 1))),
+                        _rs_idx("u", "i", "k")
+                    )
+                )
+            faq2(e) = Dict{String, Any}(
+                "op" => "faq", "args" => Any[], "output_idx" => ["i", "k"],
+                "ranges" => rr, "expr" => e
+            )
+            return Dict{String, Any}(
+                "esm" => "2.0.0", "metadata" => Dict("name" => "RecurTile"),
+                "index_sets" => Dict(
+                    "x" => Dict("kind" => "interval", "size" => nx),
+                    "z" => Dict("kind" => "interval", "size" => nz)
+                ),
+                "models" => Dict(
+                    "M" => Dict(
+                        "variables" => Dict(
+                            "u" => Dict(
+                                "type" => "unknown", "shape" => ["x", "z"],
+                                "units" => "1", "default" => 1.0
+                            ),
+                            "R" => Dict("type" => "unknown", "shape" => ["x", "z"], "units" => "1")
+                        ),
+                        "equations" => Any[
+                            Dict("lhs" => "R", "rhs" => faq2(body)),
+                            Dict(
+                                "lhs" => faq2(
+                                    Dict{String, Any}(
+                                        "op" => "D", "args" => Any[_rs_idx("u", "i", "k")],
+                                        "wrt" => "t"
+                                    )
+                                ),
+                                "rhs" => faq2(_rs_o("-", _rs_idx("R", "i", "k")))
+                            ),
+                        ]
+                    )
+                )
+            )
+        end
+        dec = Decomposition(axes = ["x" => (period = nothing,)])
+        u = [0.5 + 0.37 * sin(j) for j in 1:(nx * nz)]
+        prob = esm_problem(coldoc(false), (0.0, 1.0))
+        prog = rhs_program(prob)
+        G = fill(NaN, nx * nz)
+        rhs!(G, prog, rhs_workspace(prog), u, Float64[], prob.p, 0.0, default_forcing_set(prog))
+        du = similar(u)
+        prob.f!(du, u, prob.p, 0.0)
+        @test _rs_bits(G) == _rs_bits(du)
+        for (ow, st) in ((3:5, 2:6), (1:4, 1:5), (6:8, 5:8))
+            t = restrict(prog, dec; owned = ("x" => ow,), storage = ("x" => st,))
+            b = only(tile_layout(t).u)
+            uS = fill(NaN, tile_layout(t).n_u)
+            for c in CartesianIndices(Tuple(b.storage))
+                uS[_RS._tile_slot(b, Tuple(c))] = u[(c[2] - 1) * nx + c[1]]
+            end
+            duS = fill(NaN, length(uS))
+            rhs!(duS, t, rhs_workspace(t), uS, Float64[], prob.p, 0.0, default_forcing_set(t))
+            @test all(
+                c -> _rs_bits([duS[_RS._tile_slot(b, Tuple(c))]]) ==
+                    _rs_bits([G[(c[2] - 1) * nx + c[1]]]),
+                CartesianIndices(Tuple(b.owned))
+            )
+        end
+        xprog = rhs_program(esm_problem(coldoc(true), (0.0, 1.0)))
+        for f in (
+                () -> halo(xprog, dec),
+                () -> restrict(xprog, dec; owned = ("x" => 3:5,), storage = ("x" => 2:6,)),
+            )
+            err = try
+                f()
+                nothing
+            catch e
+                e
+            end
+            @test err isa _RS.SimulateError
+            @test err.code == _RS.ERROR_CODES.RANGE_GLOBAL_LOCALITY
+            @test occursin("causal recurrence", err.msg)
+        end
+    end
+
     @testset "the out-of-place product refuses a recurrence by name" begin
         path = joinpath(
             TESTUTILS_REPO_ROOT, "tests", "fixtures", "recurrence",

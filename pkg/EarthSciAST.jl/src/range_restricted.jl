@@ -2010,6 +2010,37 @@ struct _HaloDone <: EarthSciASTError
     ctx::_NeedCtx
 end
 
+# A causal recurrence (esm-spec §4.3.1.1) along a decomposed axis reads every
+# earlier position on that axis, so a tile cannot evaluate it: refused, as a
+# scan along a cut axis is. Along any other axis its self-reads stay on the
+# cell's own position across the cut, and the sweep runs over the cells the
+# tile needs (recurrence_sweep.jl). A definition whose axis cannot be decided
+# here is left to the build, which refuses it with its own code.
+function _refuse_cut_recurrences(spec::_TileSpec, obs_defs, shapes)
+    for n in sort!(collect(keys(obs_defs)))
+        def = obs_defs[n]
+        (def isa OpExpr && _is_faq_op(def.op) && def.expr_body !== nothing) || continue
+        recurrence_self_reference_kind(n, def) === :indexed || continue
+        idx = _output_idx_strings(def)
+        sh = get(shapes, n, nothing)
+        (sh === nothing || length(sh) != length(idx)) && continue
+        axis = try
+            first(_recurrence_axis(n, def, idx))
+        catch err
+            err isa TreeWalkError || rethrow()
+            continue
+        end
+        haskey(spec.axes.cut, sh[axis]) && throw(
+            _global_locality(
+                n, sh[axis],
+                "it is a causal recurrence (esm-spec §4.3.1.1) along it, whose every " *
+                    "cell reads the cells before it on that axis"
+            )
+        )
+    end
+    return nothing
+end
+
 # The whole-domain build's resolved observed definitions, shapes and extents.
 function _need_context(
         spec::_TileSpec, model, cls, parts, index_sets, const_arrays,
@@ -2035,6 +2066,7 @@ function _need_context(
             scalar_defs[n] = eq.rhs
         end
     end
+    _refuse_cut_recurrences(spec, obs_defs, shapes)
     params = Dict{String, Int}()
     for (k, v) in parts.param_scope
         (v isa Real && isfinite(v) && isinteger(v)) && (params[String(k)] = Int(v))
