@@ -1,0 +1,285 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "SSAResidual1D",
+    "description": "A shallow-shelf-shaped 1-D momentum balance: the velocity `vel` is an ALGEBRAIC unknown, defined only by the implicit equation `vel - J(vel, H) = 0`, a Jacobi form of the discrete balance `(vel[i+1] - 2 vel[i] + vel[i-1]) / dx^2 + H[i] = 0` with `vel = 0` at both ends. At uniform `H = h` the exact discrete solution is the parabola `vel_i = h x_i (L - x_i) / 2`, `x_i = (i - 1) dx`, `L = 5 dx`, at which the residual vanishes exactly. The thickness `H` is an ODE state that reads the velocity, so the stripped right-hand side reads `z`. CONFORMANCE_SPEC \u00a75.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "strip_and_expose",
+      "algebraic",
+      "kernels"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 6
+    }
+  },
+  "models": {
+    "SSA": {
+      "variables": {
+        "H": {
+          "type": "unknown",
+          "shape": [
+            "x"
+          ],
+          "units": "1",
+          "description": "Ice thickness (an ODE state)."
+        },
+        "vel": {
+          "type": "unknown",
+          "shape": [
+            "x"
+          ],
+          "units": "1",
+          "description": "Velocity, constrained only by the momentum balance (algebraic)."
+        },
+        "dx": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.25,
+          "description": "Grid spacing."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "Thinning rate per unit velocity."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "H"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": 2.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "vel"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": 0.5
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "H",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    "k"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "vel",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "-",
+            "args": [
+              "vel",
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": {
+                    "from": "x"
+                  }
+                },
+                "expr": {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "or",
+                      "args": [
+                        {
+                          "op": "==",
+                          "args": [
+                            "i",
+                            1
+                          ]
+                        },
+                        {
+                          "op": "==",
+                          "args": [
+                            "i",
+                            6
+                          ]
+                        }
+                      ]
+                    },
+                    0.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "vel",
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    {
+                                      "op": "<",
+                                      "args": [
+                                        "i",
+                                        6
+                                      ]
+                                    },
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "i",
+                                        1
+                                      ]
+                                    },
+                                    "i"
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "vel",
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    {
+                                      "op": ">",
+                                      "args": [
+                                        "i",
+                                        1
+                                      ]
+                                    },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "i",
+                                        1
+                                      ]
+                                    },
+                                    "i"
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "^",
+                                  "args": [
+                                    "dx",
+                                    2
+                                  ]
+                                },
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "H",
+                                    "i"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        0.5
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  }
+}

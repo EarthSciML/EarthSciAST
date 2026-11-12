@@ -529,6 +529,8 @@ select(prog, writes, terms) -> program
 halo(op, dec) -> (variable, index set) => (lo, hi)
 restrict(op, dec, owned, storage) -> tile        # Rust: RhsProgram::tile
 lanes(op, kind, ...) -> lane program
+esm_problem(..., strip) / stripped(prob)         # Julia, Rust, Python; see below
+compile_kernels(prob, specs) -> kernel set       # Julia, Rust
 ```
 
 A `Solution` carries `retcode` (SciML `ReturnCode`) and is read **by flattened
@@ -1260,8 +1262,8 @@ surviving a call); under any other compiler `rhs_program` raises
 program (one workspace held by the solver), so there is one code path and the
 solve's numbers do not change.
 
-**Not here.** Observed outputs are not readable from a workspace (#543, RFC
-U6). Precision semantics of a `Float32` document (#542, RFC U5). XLA programs are
+**Not here.** Observed outputs are not readable from a workspace; they are
+compiled as kernels instead ("Strip and expose" below). Precision semantics of a `Float32` document (#542, RFC U5). XLA programs are
 not `Send + Sync` by this section (#544, RFC U13). Internal parallelism of one
 evaluation.
 
@@ -1537,6 +1539,252 @@ fixed at build; there is no run-time box argument. Restricted observeds are not
 exported. `global` operators (SSA, connected components, horizontal sums) stay
 whole-domain. XLA tile and lane programs are U13's. A `makearray` origin for a
 whole-domain program (the RFC's open question 5) is not settled here.
+
+#### Strip and expose: stripped constructs and standalone kernels
+
+**Status.** Julia and Rust, under `compiler = native` and `interpreter` (issue
+#543, RFC U6). Python implements `strip` and `stripped` in full and raises
+`compiler_unavailable` from `compile_kernels`. TypeScript and Go do not simulate
+and register the three diagnostic codes only. No schema or format change: no
+document gains a field. `CONFORMANCE_SPEC.md` §5.57 is the gate; its fixtures
+are `tests/conformance/strip_and_expose/`.
+
+A fast compiler refuses a continuous event, a discrete event, a symbolic
+parameter update and an implicit equation (esm-spec §9.6.6
+`unsupported_construct`; `CONFORMANCE_SPEC.md` §5.39). An external integrator
+that runs those constructs itself — a nested solve, an index-1 DAE, a step-end
+event, a step map — asks the build to remove them and hand them back
+(**strip**), and compiles the expressions it needs as kernels sharing the
+right-hand side's ABI (**expose**). The compiler exposes; the caller runs.
+
+##### The surface
+
+| Canonical | Julia | Rust | Python |
+|---|---|---|---|
+| strip | `esm_problem(…; strip = ())`, a collection of `Symbol`s or strings | `ProblemOptions::strip: StripSet` (default empty) | `esm_problem(…, strip=())`, an iterable of strings |
+| the classes | `:continuous_events`, `:discrete_events`, `:parameter_updates`, `:algebraic` | `StripSet::CONTINUOUS_EVENTS`, `DISCRETE_EVENTS`, `PARAMETER_UPDATES`, `ALGEBRAIC` (`\|`-combinable; `StripSet::parse(&str)`) | `"continuous_events"`, `"discrete_events"`, `"parameter_updates"`, `"algebraic"` |
+| stripped object | `stripped(prob) -> StrippedConstructs` | `stripped(&prob) -> &StrippedConstructs` | `stripped(prob) -> StrippedConstructs` |
+| canonical JSON | `canonical_json(s::StrippedConstructs) -> String` | `StrippedConstructs::canonical_json(&self) -> String` | `StrippedConstructs.canonical_json() -> str` |
+| anything removed? | `is_stripped(prob) -> Bool` | `EsmProblem::is_stripped(&self) -> bool` | `is_stripped(prob) -> bool` |
+| compile | `compile_kernels(prob, specs) -> KernelSet` | `compile_kernels(&prob, &[KernelSpec]) -> Result<KernelSet, SimulateError>` | raises `compiler_unavailable` |
+| a spec | a `Dict` or a JSON string per spec; `specs` a vector of them, or one JSON array string | `KernelSpec::from_json(&serde_json::Value) -> Result<KernelSpec, SimulateError>` | — |
+| a kernel | `ks["name"] -> Kernel` | `KernelSet::get(&self, &str) -> Option<&Kernel>` | — |
+| shared layouts | `state_layout(ks)`, `z_layout(ks)` `-> Vector{StateBlock}` | `KernelSet::state_layout(&self)`, `z_layout(&self) -> &[StateBlock]` | — |
+| shared inputs | `parameters(ks)`, `parameter_vector(ks, overrides)`, `forcing_slots(ks)`, `default_forcing_set(ks)` | `KernelSet::parameters`, `parameter_vector`, `forcing_slots`, `default_forcing` | — |
+| workspace | `kernel_workspace(k)` | `Kernel::new_workspace(&self) -> KernelWorkspace` | — |
+| evaluate | `kernel!(out, k, ws, u, z, p, t, dt, fs) -> out` | `Kernel::eval_into(&self, u, z, p, t, dt, forcing: &ForcingSet, out, ws) -> Result<(), RhsError>` | — |
+| output layout | `kernel_layout(k) -> Vector{KernelBlock}`, `length(k)` | `Kernel::layout(&self) -> &[KernelBlock]`, `Kernel::len(&self)` | — |
+
+`KernelBlock` is `(label, offset, shape)`: the output's label (below), the
+offset of its first element (0-based in Rust, 1-based in Julia) and its shape
+(empty for a scalar). `KernelSet`, `Kernel`, `KernelSpec`, `KernelBlock`,
+`StripSet` and `StrippedConstructs` are exported (Rust: re-exported at the crate
+root). `KernelSet`, `Kernel` and `KernelSpec` are `Send + Sync + Clone` in Rust;
+`KernelWorkspace` is `Send` and not `Sync`, as `RhsWorkspace` is.
+
+##### The four classes (normative)
+
+`strip` is a set drawn from four classes. Empty is the default and changes
+nothing; an unknown class name, and `wiener`, are an argument error. The build
+removes, for each requested class, every construct of that class from what it
+lowers. It removes them from the same flattened system the right-hand side is
+built from, after template expansion and discretization, so every construct a
+build would otherwise refuse is either removed or still refused.
+
+- **`continuous_events`** — every `continuous_events` entry: on a top-level
+  model, on an inline subsystem at any depth, on a reaction system, and every
+  `coupling` entry of `type: "event"` with `event_type: "continuous"`.
+- **`discrete_events`** — the same four places, for `discrete_events` and
+  `event_type: "discrete"`.
+- **`parameter_updates`** — every parameter whose `update` holds a rule of kind
+  `schedule`, `condition` or `crossing` whose value form is `expression`. The
+  parameter loses its `update` and becomes an ordinary parameter, read from `p`
+  at every call and never folded; its declared `default` is its value. A
+  parameter any of whose stripped rules is `crossing` is stripped only when
+  `continuous_events` is also requested (a crossing is a continuous event); with
+  `parameter_updates` alone it is refused as before. `from` and `handler` rules
+  stay on the forcing seam and are never stripped.
+- **`algebraic`** — every implicit equation: an equation whose left-hand side is
+  an expression rather than an unknown (bare, indexed, or under `D`), or a
+  number. `D(a + b) ~ 3`, a time derivative of an expression, is a misspelled
+  equation rather than a residual and stays refused; so does an `ic` of an
+  expression. The unknowns those equations constrain that are neither ODE
+  states nor observed (`algebraic_unknowns`, esm-spec §6.3.1, restricted to
+  the unknowns a stripped equation reads) leave the state layout `u` and form
+  the layout `z`. An observed that reads a `z` unknown stays an observed and
+  reads it as an input.
+
+Classification is unchanged: `ode_states`, `observed_unknowns` and
+`algebraic_unknowns` are properties of the model, not of the build. Wiener noise
+is never strippable and always refused. A Problem from which at least one
+construct was removed is **stripped**: `solve` and `init` on it raise
+`stripped_problem_not_solvable`, naming the classes. A Problem built with
+`strip` from which nothing was removed is not stripped and solves as it would
+without `strip`.
+
+##### The stripped object (normative)
+
+`stripped(prob)` returns the removed constructs as one object, whose canonical
+JSON (`canonical_json`) is **compact** (`,` and `:` separators, no spaces),
+UTF-8, with **every object's keys in ascending byte order** and numbers in the
+§5.5.3.1 canonical format of `CONFORMANCE_SPEC.md`. Three bindings produce it
+byte for byte. It has exactly these keys:
+
+```json
+{"algebraic":{"residuals":[…],"unknowns":[…],"z0":[…],"z_layout":{…}},
+ "events":[…],"parameter_updates":[…],"strip":[…]}
+```
+
+- **`strip`** — the requested classes, ascending.
+- **`events`** — one object per removed event, of the requested event
+  classes: `{"id", "origin", "kind", …}` and then the authored event's own
+  members verbatim — `name`, `conditions`, `trigger`, `affects`, `affect_neg`,
+  `root_find`, `reinitialize`, `description`, each present exactly when the
+  authored event has it — with every variable reference in them, including an
+  affect's `lhs`, flattened and fully qualified (esm-spec §10.7) exactly as
+  `flatten` qualifies an equation of the same component. `kind` is
+  `"continuous"` or `"discrete"`. A coupling-level event drops `type` and
+  `event_type` and keeps the rest.
+- **`origin`** — the provenance form of `esm-libraries-spec.md` §4.7.5:
+  `{"component": "<dotted path>"}` (the model, subsystem or reaction system
+  that declared it) or `{"coupling": k}` (`k` the 0-based index of the coupling
+  entry after `coupling_import` expansion).
+- **`id`** — the name a kernel spec refers to the event by:
+  `<prefix>.<name>` for a named event and `<prefix>.<kind>_event[j]` for an
+  unnamed one, `j` its 1-based position among that origin's events of that
+  kind; `<prefix>` is the component path, or `coupling[k]`.
+- **`parameter_updates`** — `{"parameter", "origin", "rules"}` per stripped
+  parameter: its flattened name, the component that declared it, and its
+  update rules as a list (a single-rule `update` is a one-element list), each
+  rule verbatim with its expressions flattened and qualified.
+- **`algebraic`** — `unknowns`: the `z` unknowns in `z` layout order;
+  `z_layout`: name → `{"base", "shape"}`, `base` the 1-based offset of the
+  block's first element in `z` and `shape` its extents (`[]` for a scalar);
+  `z0`: the Problem's starting value of every `z` element, in `z` order (the
+  `ic` equation's value, else the declared default — the warm start for
+  consistent initialization); `residuals`: one
+  `{"id", "origin", "shape", "expr"}` per stripped implicit equation, `expr`
+  the residual `{"op": "-", "args": [lhs, rhs]}` of the flattened equation
+  exactly (`g = lhs − rhs`, never simplified), `shape` its extents, `origin`
+  the origin of the equation's first contribution (§4.7.5), and `id`
+  `<prefix>.residual[j]`, `j` 1-based over that origin's implicit equations in
+  flattened order. An `algebraic` that was not requested, or removed nothing,
+  is `{"residuals":[],"unknowns":[],"z0":[],"z_layout":{}}`.
+
+**Order is deterministic.** Events and parameter updates are listed by origin —
+components in flatten order (each top-level component, then its inline
+subsystems in declaration order, depth first; then the coupling entries in
+order) — and within an origin continuous before discrete, each in declaration
+order. Residuals are in flattened equation order.
+
+**Layouts.** `u` is the Problem's state layout with the `z` unknowns removed,
+and `z` is the layout of the `z` unknowns, both by the rule `state_layout`
+follows ("The public right-hand side"): 0-d variables by sorted name, then
+arrays by sorted name, each block column-major.
+
+##### Kernel specs (normative)
+
+A spec is JSON, so a caller can store it and golden it:
+
+```json
+{"name": "geometry_source", "dt_params": ["Geometry.dt"],
+ "outputs": [{"assign": "Geometry.H", "from": "Geometry.H_out_source"}]}
+```
+
+`name` is the kernel's name, unique within the call. `dt_params` (optional,
+default empty) lists scalar parameters that read the kernel's `dt` argument.
+`outputs` is a list, each entry exactly one of:
+
+| Output | Value | Shape | Label |
+|---|---|---|---|
+| `{"observed": name}` | the observed's (or any unknown's or parameter's) value | its shape | `name` |
+| `{"expr": <AST>}` | an expression over flattened names | below | `out[k]` |
+| `{"residual": id}` | a stripped residual `g(u, z)` | the residual's | `id` |
+| `{"condition": id, "index": k}` | a continuous event's `conditions[k]` (1-based; default 1), or a discrete event's `condition` trigger as 1 (true) or 0 (false) | its shape | `<id>.condition[k]` |
+| `{"update": parameter, "index": k}` | the parameter's new value under its `k`-th stripped rule (1-based; may be omitted when it has one) | the parameter's | `parameter` |
+| `{"affect": id, "negative": false}` | the event's post-event state; `negative: true` takes a continuous event's `affect_neg` | full `u` length | — |
+| `{"assign": unknown, "from": name or AST}` | a step map | full `u` length | — |
+
+Any output may carry `"label"` to override the default label; `k` in `out[k]`
+is the output's 1-based position in the spec. An `expr` output's shape is the
+output shape of a top-level `faq` (each output range `{"from": <index set>}`),
+the declared shape of a bare variable name, and otherwise scalar.
+
+- **Concatenation.** `out` holds the outputs in spec order, each column-major.
+  `kernel_layout(k)` lists one block per output.
+- **Map outputs.** `assign` and `affect` produce a whole `u`: unassigned
+  elements copy the input `u`, assigned blocks take the new value. Every source
+  is evaluated on the input `(u, z, p, t, dt)` before anything is written, so
+  several `assign` entries in one spec, and the affects of one event, are
+  simultaneous and independent of their order. A target is an unknown of the
+  `u` layout, and the source has its shape. A map spec has map outputs only;
+  its layout is `state_layout(ks)`.
+- **`Pre`.** In an affect, an update or an expression, `Pre(x)` reads the
+  input `x`. A bare read, in an affect's right-hand side, of a variable that the
+  same event also assigns is refused with `affect_reads_post_value`: it names
+  the post-event value, which makes the affect an implicit system. A parameter
+  update's bare read of its own parameter is its input value.
+- **Step limits** are ordinary `observed` or `expr` outputs. A per-cell limit
+  stays per cell; the caller reduces it.
+- **`rhs`** is a reserved name: a spec `{"name": "rhs"}` with no outputs is
+  the stripped right-hand side, `out = du` over `u` (each state with no `D`
+  equation `0`). A spec named `rhs` with outputs is `kernel_output_unresolved`.
+
+##### The kernel ABI (normative)
+
+```
+kernel!(out, k, ws, u, z, p, t, dt, fs)          # Julia
+k.eval_into(u, z, p, t, dt, &fs, out, &mut ws)   // Rust
+```
+
+- `u` — the `u` layout above, length `n_states(ks)`; `z` — the `z` layout,
+  empty when nothing algebraic was stripped.
+- `p` — the dense parameter vector of `parameters(ks)`: the stripped
+  right-hand side's scalar parameters by flattened name in ascending byte order
+  (a stripped parameter update's parameter is an ordinary entry).
+  `parameter_vector(ks, overrides)` builds it, strictly, as `parameter_vector`
+  does for a program. One `p` serves every kernel of a set; a kernel ignores
+  the entry of each of its own `dt_params` and reads `dt` there instead.
+- `fs` — a forcing set for `forcing_slots(ks)`, which are the stripped
+  right-hand side's ("Forcing sets" above); `default_forcing_set(ks)` holds the
+  Problem's forcing.
+- `t`, `dt` — `f64`. A parameter named in a spec's `dt_params` reads `dt`;
+  nothing else does. `dt` is live: the same kernel answers a new `dt` without
+  a rebuild.
+- `out` — length `length(k)`. Written in full.
+
+Every kernel is a program in the sense of "The public right-hand side", and
+that section's semantics apply unchanged: built once and immutable, a
+workspace per concurrent caller, pure, bitwise reproducible across threads and
+workspaces, allocation-free after warm-up, no internal threads, faults returned
+as values (`RhsError` in Rust, `TreeWalkError` in Julia), and length errors
+naming the argument (`"u"`, `"z"`, `"p"`, `"out"`). The kernel names are
+flattened names on every route.
+
+##### Refusals (normative)
+
+| Code | Raised by | Meaning |
+|---|---|---|
+| `stripped_problem_not_solvable` | `solve`, `init` | The Problem is stripped. Names the removed classes. |
+| `kernel_output_unresolved` | `compile_kernels` | An output, `dt_params` entry or target does not resolve (see esm-spec §9.6.6). Names the kernel and the output. |
+| `affect_reads_post_value` | `compile_kernels` | An affect reads, bare, a variable its event assigns. Names the event and the variable. |
+| `compiler_unavailable` | `esm_problem`, `compile_kernels` | `strip` under `mtk`, `sympy` or `xla`; `compile_kernels` in Python. |
+| `compiler_refused_rule` | `compile_kernels` | Under `native`, a kernel rule the compiled tiers cannot express, as for any rule (§2.5.10 of esm-libraries-spec); never a fallback. |
+
+##### Compilers
+
+`strip` and `compile_kernels` serve `native` and `interpreter`. Kernels obey the
+Problem's compiler: under `native` they are lowered to the same tape (Rust) or
+generated code (Julia) as the right-hand side, and refuse what it refuses.
+`mtk` runs events and implicit equations itself and refuses `strip` with
+`compiler_unavailable`, as do `sympy` and `xla`.
+
+**Not here.** Root-finding, Newton iterations, index analysis and event
+scheduling are the caller's; a binding never runs a stripped construct.
+Wiener noise. A structural matching of residuals to `z` blocks (the RFC's open
+question 2), affects exposed as small algebraic systems (open question 1) and a
+derived-document form of a kernel spec (open question 5) are not settled here.
+Range-restricted kernels (tiles and lanes) and XLA kernels are future work.
 
 ### 5.9 Reference resolution
 
