@@ -229,6 +229,26 @@ def _validate_golden_field(path: Path, fid: str, fx: dict) -> None:
     the reference can run the fixture, there is no excuse for not minting from
     it."""
     g = fx.get("golden")
+    fault = fx.get("expected_fault")
+    if fault is not None:
+        # A fault fixture's conforming outcome is the fault itself, so there is
+        # no reference number to mint, and nothing to excuse.
+        if not isinstance(fault, dict) or not isinstance(fault.get("code"), str) or not fault["code"]:
+            raise ManifestError(
+                f"{path}: fixtures[{fid}].expected_fault must be an object with a non-empty `code`"
+            )
+        if g is not None:
+            raise ManifestError(
+                f"{path}: fixtures[{fid}] declares expected_fault and a golden. A fixture whose "
+                f"conforming outcome is a fault has no reference number."
+            )
+        if fx.get("named_exclusions"):
+            raise ManifestError(
+                f"{path}: fixtures[{fid}] declares expected_fault and named exclusions. The fault "
+                f"is required of every compiler `required` names; a refusal on any other code "
+                f"is a failure, not an exclusion."
+            )
+        return
     if isinstance(g, str) and g:
         return
     if g is not None:
@@ -248,6 +268,17 @@ def _validate_golden_field(path: Path, fid: str, fx: dict) -> None:
 
 def has_golden(fx: dict) -> bool:
     return isinstance(fx.get("golden"), str) and bool(fx["golden"])
+
+
+def expected_fault_code(fx: dict) -> str | None:
+    """The run-time fault a fixture REQUIRES, or None.
+
+    A fault fixture (CONFORMANCE_SPEC §5.19.4) passes only when the binding
+    declines to answer with exactly this code: its authored `expected` values are
+    the LAUNDERED answer a non-conforming binding would give, so a binding that
+    answers its assertions, even correctly by its own predicate, is red."""
+    fault = fx.get("expected_fault")
+    return fault["code"] if isinstance(fault, dict) else None
 
 
 def _validate_ledgers(path: Path, fid: str, fx: dict, bindings_required: list) -> None:
@@ -497,6 +528,25 @@ def compare_fixture(
         return {"status": "invalid", "problems": ["adapter entry is not an object"]}
 
     status = produced.get("status")
+    fault = expected_fault_code(fx)
+    if fault is not None:
+        code = str(produced.get("code") or "")
+        if status == "refused" and code == fault:
+            return {"status": "ok", "outcome": "expected_fault", "code": code}
+        if status == "refused":
+            what = f"refused with {code!r}"
+        elif "error" in produced:
+            what = f"errored ({produced['error']})"
+        else:
+            what = "answered its assertions"
+        return {
+            "status": "fail",
+            "problems": [
+                f"{binding}/{compiler} {what}; this fixture requires the fault {fault!r} "
+                f"(CONFORMANCE_SPEC §5.19.4). A finite answer to it is a laundered read."
+            ],
+            "code": code,
+        }
     if status == "refused":
         ex = excluded_reason(fx, binding, compiler)
         code = str(produced.get("code") or "")
@@ -974,9 +1024,11 @@ def write_golden_mode(args: Any) -> int | None:
     for fx in manifest["fixtures"]:
         if not has_golden(fx):
             # The manifest already says the reference cannot produce this one,
-            # and the self-test checked that a named exclusion backs the claim.
+            # and the self-test checked that a named exclusion backs the claim
+            # (or that the fixture requires a fault, which has no number).
             # Minting is a no-op here, not a failure.
-            print(f"skipped {fx['id']}: {fx.get('golden_absent_reason')}")
+            why = fx.get("golden_absent_reason") or f"requires the fault {expected_fault_code(fx)}"
+            print(f"skipped {fx['id']}: {why}")
             continue
         golden, why = mint_golden(fx, payload.get("fixtures", {}).get(fx["id"]))
         if golden is None:
@@ -1106,6 +1158,12 @@ def self_test(manifest_path: Path) -> int:
                 authored_assertions(manifest_path, fx)
             except ManifestError as e:
                 check(False, f"{fid}/document-assertions", str(e))
+                continue
+            if expected_fault_code(fx) is not None:
+                print(
+                    f"self-test OK   [{fid}/expected-fault]: every required compiler must "
+                    f"decline it with {expected_fault_code(fx)}"
+                )
                 continue
             print(
                 f"self-test OK   [{fid}/no-golden]: the {REFERENCE_BINDING} "
@@ -1362,6 +1420,21 @@ def _authored_verdict_controls(
             ]
         }
         n_args = (None, n_authored, rtol, atol, "python", "native")
+        fault = expected_fault_code(nfx)
+        if fault is not None:
+            # A fault fixture inverts the gate: answering the assertions, even
+            # exactly as authored, is the laundered read it exists to catch.
+            faulted = {"status": "refused", "code": fault, "reason": "fault"}
+            other = {"status": "refused", "code": "compiler_refused_rule", "reason": "no"}
+            check(
+                compare_fixture(nfx, faulted, *n_args)["status"] == "ok"
+                and compare_fixture(nfx, honest, *n_args)["status"] == "fail"
+                and compare_fixture(nfx, other, *n_args)["status"] == "fail"
+                and compare_fixture(nfx, {"error": "boom"}, *n_args)["status"] == "fail",
+                f"control/{nfx['id']}/expected-fault-is-required",
+                "a fault fixture admitted a finite answer, another code or an error",
+            )
+            continue
         dishonest = copy.deepcopy(honest)
         dishonest["assertions"][0]["actual"] = (abs(n_authored[0]["expected"]) + 1.0) * 1e3 + 7.0
         check(

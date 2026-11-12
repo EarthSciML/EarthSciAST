@@ -32,6 +32,11 @@ covers a shape a cheaper implementation cannot express at all.
 | `07_recurrence_thirty_eight_lags` | the real lag scale: **38 distinct lags with 38 distinct weights in one node**, clamp firing at 19 of 40 cells and altering 38 of the 40 values. Expected values from an independent ascending fold, not from running the document | a literal-lag-only primitive (would need 38 authored terms); any single carried accumulator (the weights all differ); any linear closed form (the clamp) |
 | `08_recurrence_parameter_valued_lag` | a lag **nothing static can bound** (`s[k] = 3·s[k−n]`, `n` a parameter) is ADMITTED | a validator that treats "unproven" as "illegal" — it would reject a document its own evaluator accepts |
 | `09_recurrence_through_expression_template` | a self-read reached through an `apply_expression_template` **binding** is still recognized — template applications expand at load (§9.6.4), so the construct composes with templates rather than being evaded by them | a binding that defers template expansion past recognition, where the self-read would be evaluated as a gather on a name nothing binds |
+| `10_recurrence_slice_batch` | **the slice pin** (§5.19.2, esm-spec §4.3.1.1 point 4): 64 independent cells by 6 positions along the recurrence axis, `V[j,k] = a[j]·V[j,k−1] + b[j]`. A binding MAY evaluate one slice's cells together; `a`, `b`, `c` are chosen so a fused multiply-add changes the last bit at 128 of the 384 cells | a batched path that contracts the multiply-add into an FMA, or starts a slice before the previous one is complete |
+| `11_recurrence_fault_under_clamp` | **the fail-closed pin** (§5.19.4): `s[k] = max(s[k−1], 0) + 1` with no guard, so the first cell reads outside the axis. Every required compiler must decline with `E_TREEWALK_RECUR_UNAVAILABLE` (`expected_fault`) | a binding that resolves the read to the zero ghost or a NaN the clamp launders: it returns the plausible `[1, 2, 3, 4]` the assertions pin, and is red for answering at all |
+| `12_recurrence_fault_parameter_guard` | the same fault behind an `ifelse` guard whose bound is a **parameter**, so no build can fold it and the fault is decided at evaluation, through the lazy guard | a binding that resolves the read to a value, or that faults only on reads it can see statically |
+
+`11` and `12` carry `expected_fault` instead of a golden: their conforming outcome is the fault, so the runner passes them only when the binding declines with that code, and an answer to their assertions — even the authored one — is red. The authored `expected` values are the laundered answer, so a binding that produced it would otherwise vouch for itself.
 
 Every assertion in every fixture is at **zero tolerance** (`rel: 0.0, abs: 0.0`).
 That is not strictness for its own sake: §5.19.1 argues the value is a fully
@@ -113,7 +118,11 @@ routes produced something plausible" is the state that persisted here.
 §5.19.2 forbids evaluating a recurrence through any whole-array, vectorized,
 fused, tiled, kernel-merged, parallel-prefix or otherwise reordered path, and
 there is no equivalence to appeal to: the cells are not independent, so a
-reordering computes something else. `O(N)` running accumulation — which §4.3.1
+reordering computes something else. The one batching it allows is a *slice*:
+the cells that share a position on the recurrence axis read none of one another,
+so they may be evaluated together, slices in ascending order, each cell by the
+sequential sweep's own operations (no reassociation, no fused multiply-add) —
+`10` pins it. `O(N)` running accumulation — which §4.3.1
 *does* license for a forward prefix scan — is **not** available here as a rewrite
 either, because a recurrence's per-lag weights differ and no single carried value
 summarizes the history. The sequential sweep is the implementation.

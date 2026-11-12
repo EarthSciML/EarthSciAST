@@ -1,0 +1,125 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "RecurrenceFaultUnderClamp",
+    "description": "FAIL-CLOSED PIN (CONFORMANCE_SPEC 5.19.4). s[k] = max(s[k-1], 0) + 1 with NO base-case guard, so the first cell reads s[0], a position outside the recurrence axis. That read MUST raise E_TREEWALK_RECUR_UNAVAILABLE on every route of every executing binding. The clamp is the point: a binding that resolved the read to the zero ghost, or to a NaN sentinel that max(x, 0) launders to 0, would return the finite, plausible [1, 2, 3, 4]. The assertions pin exactly that laundered answer, so a binding that produces it passes its own assertions and is still red: the tier requires the fault, and any finite answer fails.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "fault",
+      "fail-closed"
+    ]
+  },
+  "index_sets": {
+    "steps": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "RecurrenceFaultUnderClamp": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "shape": [
+            "steps"
+          ],
+          "units": "1",
+          "description": "A recurrence whose first cell reads a position before the axis."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "steps"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "max",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "s",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    0.0
+                  ]
+                },
+                1.0
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "the_unavailable_read_faults",
+          "description": "The expected values are the LAUNDERED answer a zero-ghost read would give; the conforming outcome is the fault, never these numbers.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "steps": 1
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 2.0,
+              "coords": {
+                "steps": 2
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 3.0,
+              "coords": {
+                "steps": 3
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 4.0,
+              "coords": {
+                "steps": 4
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

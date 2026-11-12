@@ -1,0 +1,73 @@
+{
+  "fixture": "10_recurrence_slice_batch",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 1,
+      "variable": "V",
+      "actual": -0.9505497049239502
+    },
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 2,
+      "variable": "V",
+      "actual": 0.6466776702084835
+    },
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 3,
+      "variable": "V",
+      "actual": -1.5149669004432096
+    },
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 4,
+      "variable": "V",
+      "actual": -2.69615290308142
+    },
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 5,
+      "variable": "V",
+      "actual": -5.41611495616843
+    },
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 6,
+      "variable": "V",
+      "actual": 0.1308237664394296
+    },
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 7,
+      "variable": "V",
+      "actual": 2.3953420963679015
+    },
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 8,
+      "variable": "V",
+      "actual": 0.5131826084816676
+    },
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 9,
+      "variable": "V",
+      "actual": 3.8239896637601154
+    },
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 10,
+      "variable": "V",
+      "actual": 4.379187606961526
+    },
+    {
+      "test_id": "slices_match_the_sequential_sweep",
+      "assertion_idx": 11,
+      "variable": "V",
+      "actual": 2.781601735036043
+    }
+  ]
+}

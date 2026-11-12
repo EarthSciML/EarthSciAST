@@ -1,0 +1,144 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "RecurrenceFaultParameterGuard",
+    "description": "FAIL-CLOSED PIN, run-time guard (CONFORMANCE_SPEC 5.19.4). s[k] = 1 where k <= n_base, else max(s[k-1], 0) + 1. The guard's bound is a PARAMETER, so no build can fold it: with n_base = 0 the guard does not cover the first cell, whose read of s[0] is outside the axis and MUST raise E_TREEWALK_RECUR_UNAVAILABLE at evaluation. An evaluator that evaluated both branches of the ifelse and selected afterwards would fault even when the guard covered the cell; one that resolved the read to a ghost zero returns the laundered [1, 2, 3, 4] the assertions pin.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "fault",
+      "fail-closed"
+    ]
+  },
+  "index_sets": {
+    "steps": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "RecurrenceFaultParameterGuard": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "shape": [
+            "steps"
+          ],
+          "units": "1",
+          "description": "A recurrence whose first cell reads a position before the axis."
+        },
+        "n_base": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0,
+          "description": "How many leading cells the base case covers. 0 leaves the first cell unguarded."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "steps"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    "n_base"
+                  ]
+                },
+                1.0,
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "max",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "s",
+                            {
+                              "op": "-",
+                              "args": [
+                                "k",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        0.0
+                      ]
+                    },
+                    1.0
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "the_unavailable_read_faults",
+          "description": "The expected values are the LAUNDERED answer; the conforming outcome is the fault.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "steps": 1
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 2.0,
+              "coords": {
+                "steps": 2
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 3.0,
+              "coords": {
+                "steps": 3
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 4.0,
+              "coords": {
+                "steps": 4
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
