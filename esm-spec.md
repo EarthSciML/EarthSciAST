@@ -3292,7 +3292,7 @@ it at the pointer of the offending field, when:
    `…/variables/<v>`. `lb == ub` is legal.
 
 `details` carries `variable` (the bounded variable's name in its own model) and
-`bound` (`"lb"` or `"ub"`), plus `reference` for rules 1–3; rule 1's
+`bound` (`"lb"` or `"ub"`), plus `reference` for rules 2 and 3; rule 1's
 `details.variable` is the unresolved reference, as for every
 `undefined_variable`. A bound is checked only when it is schema-valid.
 
