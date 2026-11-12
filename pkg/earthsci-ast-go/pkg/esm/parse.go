@@ -1089,6 +1089,12 @@ func scanOps(src string) (removed string, hasFaq bool) {
 
 // declaredEsmBelowV11 reports whether the document's `esm` field is below 1.1.0.
 func declaredEsmBelowV11(jsonStr string) (declared string, below bool) {
+	return declaredEsmBelow(jsonStr, 1, 1)
+}
+
+// declaredEsmBelow reports whether the document's `esm` field is below
+// major.minor.0. It decodes the one field and builds no tree of the rest.
+func declaredEsmBelow(jsonStr string, wantMajor, wantMinor int) (declared string, below bool) {
 	var probe struct {
 		Esm string `json:"esm"`
 	}
@@ -1104,7 +1110,7 @@ func declaredEsmBelowV11(jsonStr string) (declared string, below bool) {
 	if err1 != nil || err2 != nil {
 		return probe.Esm, false
 	}
-	return probe.Esm, major < 1 || (major == 1 && minor < 1)
+	return probe.Esm, major < wantMajor || (major == wantMajor && minor < wantMinor)
 }
 
 // prepareDocumentOps is the wire boundary for expression-node `op` spellings,

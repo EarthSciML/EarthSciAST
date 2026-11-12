@@ -2716,6 +2716,10 @@ func applyVariableMapExpression(components map[string]*componentSystem, order []
 		if len(observed.Shape) == 0 {
 			observed.Shape = nil
 		}
+		// The target stays in the flattened system under its own name, so
+		// its bounds stay with it (esm-spec §6.3.2).
+		observed.LB = removed.LB
+		observed.UB = removed.UB
 	}
 	targetComp.observed.set(observed)
 	// The coupling entry authored this definition (§4.7.5 provenance table).

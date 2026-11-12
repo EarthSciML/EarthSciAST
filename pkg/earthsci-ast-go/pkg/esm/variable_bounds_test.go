@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,7 +43,7 @@ func TestVariableBoundsRoundTrip(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	e := file.Models["Salts"].Variables["E"]
-	if e.LB == nil || e.LB.Number == nil || *e.LB.Number != 0 || e.LB.Ref != nil {
+	if e.LB == nil || e.LB.Number != int64(0) || e.LB.Ref != nil {
 		t.Fatalf("E.lb = %+v, want the number 0", e.LB)
 	}
 	if e.UB == nil || e.UB.Ref == nil || *e.UB.Ref != "E_max" || e.UB.Number != nil {
@@ -91,7 +92,10 @@ func TestVariableBoundsRoundTrip(t *testing.T) {
 
 func TestVariableBoundJSONForms(t *testing.T) {
 	for _, tc := range []struct{ in, out string }{
-		{`0`, `0`}, {`0.0`, `0`}, {`-1.5`, `-1.5`}, {`"Sub.y"`, `"Sub.y"`},
+		// A bound stays the number written (esm-spec §6.3.2): a float keeps
+		// its float spelling and an integer beyond 2^53 keeps every digit.
+		{`0`, `0`}, {`0.0`, `0.0`}, {`1.0`, `1.0`}, {`-1.5`, `-1.5`},
+		{`9007199254740993`, `9007199254740993`}, {`"Sub.y"`, `"Sub.y"`},
 	} {
 		var b VariableBound
 		if err := json.Unmarshal([]byte(tc.in), &b); err != nil {
@@ -169,6 +173,8 @@ func TestVariableBoundsInvalidFixtures(t *testing.T) {
 			map[string]any{"variable": "x", "bound": "ub", "reference": "cap"}},
 		{"variable_bound_shape_mismatch_axes.esm", CodeVariableBoundShapeMismatch, "/models/M/variables/Q/lb",
 			map[string]any{"variable": "Q", "bound": "lb", "reference": "Q_min"}},
+		{"variable_bound_shape_mismatch_nested_reaction.esm", CodeVariableBoundShapeMismatch, "/models/M/variables/x/ub",
+			map[string]any{"variable": "x", "bound": "ub", "reference": "Chem.Pool.cap"}},
 		{"variable_bound_circular_self.esm", CodeVariableBoundCircular, "/models/M/variables/x/lb",
 			map[string]any{"variable": "x", "bound": "lb", "reference": "x"}},
 		{"variable_bound_circular_observed.esm", CodeVariableBoundCircular, "/models/M/variables/x/ub",
@@ -182,6 +188,10 @@ func TestVariableBoundsInvalidFixtures(t *testing.T) {
 				t.Fatalf("load: %v", err)
 			}
 			expectOneFinding(t, file, tc.code, tc.path, tc.details)
+			want := expectedBoundMessage(t, tc.fixture)
+			if got := boundFindings(ValidateStructuralWithCodes(file))[0].Message; got != want {
+				t.Errorf("message = %q, want the pinned %q", got, want)
+			}
 		})
 	}
 
@@ -191,6 +201,29 @@ func TestVariableBoundsInvalidFixtures(t *testing.T) {
 			t.Errorf("the circular finding must name the chain a -> b -> x: %s", e.Message)
 		}
 	}
+}
+
+// expectedBoundMessage is the message tests/invalid/expected_errors.json pins
+// for the one structural finding of the named fixture.
+func expectedBoundMessage(t *testing.T, fixture string) string {
+	t.Helper()
+	raw, err := os.ReadFile(boundsFixture(t, "invalid", "expected_errors.json"))
+	if err != nil {
+		t.Fatalf("read expected_errors.json: %v", err)
+	}
+	var pins map[string]struct {
+		StructuralErrors []struct {
+			Message string `json:"message"`
+		} `json:"structural_errors"`
+	}
+	if err := json.Unmarshal(raw, &pins); err != nil {
+		t.Fatalf("decode expected_errors.json: %v", err)
+	}
+	entry := pins[fixture]
+	if len(entry.StructuralErrors) != 1 {
+		t.Fatalf("%s must pin exactly one structural error", fixture)
+	}
+	return entry.StructuralErrors[0].Message
 }
 
 // boundsDoc is a 2.1.0 document whose model M has the variables and equations

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -16,26 +17,53 @@ import (
 // VariableBound is one bound of a model variable (esm-spec §6.3.2): a number
 // in the variable's declared `units`, or a reference to another variable,
 // written and resolved as a variable reference in the model's expressions.
-// Exactly one of Number and Ref is set. A number is emitted in the document's
-// canonical number form and a reference as the string written.
+// Exactly one of Number and Ref is set.
+//
+// Number holds an int64 or a float64, decoded by the int/float rule every
+// numeric literal follows (normalizeJSONNumber): a token with '.', 'e' or 'E'
+// is a float64, any other an int64 (a float64 only beyond the int64 range).
+// So a bound stays the number written (esm-spec §6.3.2, "Round-trip"): an
+// integer keeps every digit, and a float is emitted as a float — `1.0` stays
+// `1.0` rather than collapsing to `1` as the document form does elsewhere. A
+// reference is emitted as the string written.
 type VariableBound struct {
-	Number *float64
+	Number any
 	Ref    *string
 }
 
 // MarshalJSON writes the bound as a JSON number or a JSON string.
 func (b VariableBound) MarshalJSON() ([]byte, error) {
-	switch {
-	case b.Ref != nil:
+	if b.Ref != nil {
 		return json.Marshal(*b.Ref)
-	case b.Number != nil:
-		s, err := canonicalFloat64String(*b.Number)
+	}
+	switch n := b.Number.(type) {
+	case int64:
+		return []byte(strconv.FormatInt(n, 10)), nil
+	case float64:
+		s, err := formatCanonicalFloatShared(n)
 		if err != nil {
 			return nil, err
 		}
 		return []byte(s), nil
+	case nil:
+		return nil, fmt.Errorf("variable bound holds neither a number nor a reference")
 	}
-	return nil, fmt.Errorf("variable bound holds neither a number nor a reference")
+	return nil, fmt.Errorf("variable bound number must be an int64 or a float64, got %T", b.Number)
+}
+
+// numberValue is a number bound's value as a float64, for ordering; ok is
+// false for a reference or an absent bound.
+func (b *VariableBound) numberValue() (v float64, ok bool) {
+	if b == nil {
+		return 0, false
+	}
+	switch n := b.Number.(type) {
+	case int64:
+		return float64(n), true
+	case float64:
+		return n, true
+	}
+	return 0, false
 }
 
 // UnmarshalJSON reads a bound that is a JSON number or a JSON string. Whether
@@ -50,11 +78,11 @@ func (b *VariableBound) UnmarshalJSON(data []byte) error {
 		*b = VariableBound{Ref: &s}
 		return nil
 	}
-	var v float64
-	if err := json.Unmarshal(data, &v); err != nil {
+	var num json.Number
+	if err := json.Unmarshal(data, &num); err != nil {
 		return fmt.Errorf("a variable bound must be a number or a variable reference: %w", err)
 	}
-	*b = VariableBound{Number: &v}
+	*b = VariableBound{Number: normalizeJSONNumber(num)}
 	return nil
 }
 
@@ -68,7 +96,7 @@ func boundExpression(b *VariableBound) Expression {
 	case b.Ref != nil:
 		return *b.Ref
 	case b.Number != nil:
-		return *b.Number
+		return b.Number
 	}
 	return nil
 }
@@ -138,15 +166,21 @@ func firstRawBoundField(raw any, path string) string {
 // gate, but the assembled document, emitted at the root's version, would be
 // refused by rejectVariableBoundsPreV21 when read back. Like the `faq` floor
 // it only ever raises.
+//
+// The declared version is read first, without decoding the rest: a document
+// at 2.1.0 or later — every one written by a current author — needs no scan.
 func raiseVariableBoundsEsmFloor(jsonStr string) string {
+	declared, below := declaredEsmBelow(jsonStr, 2, 1)
+	if !below {
+		return jsonStr
+	}
 	view, err := decodeJSONView([]byte(jsonStr))
-	if err != nil || !esmVersionBelow(view, 2, 1) {
+	if err != nil {
 		return jsonStr
 	}
 	models, _ := view["models"].(map[string]any)
 	for _, name := range sortedKeys(models) {
 		if firstRawBoundField(models[name], "/models/"+name) != "" {
-			declared, _ := view["esm"].(string)
 			return raiseEsmFloorTo(jsonStr, declared, "2.1.0")
 		}
 	}
@@ -192,7 +226,7 @@ func (s *structuralScan) validateVariableBounds() {
 					s.addErr(StructuralError{
 						Path: fieldPath,
 						Code: CodeVariableBoundShapeMismatch,
-						Message: fmt.Sprintf("The %s of '%s' references '%s', shaped %s; a bound must be scalar or the bounded variable's shape (%s)",
+						Message: fmt.Sprintf("The %s of '%s' references '%s', shaped %s; a bound must be scalar or the bounded variable's shape %s",
 							which, varName, ref, boundShapeString(shape), boundShapeString(v.Dims())),
 						Details: details,
 					})
@@ -219,12 +253,14 @@ func (s *structuralScan) validateVariableBounds() {
 					})
 				}
 			}
-			if v.LB != nil && v.UB != nil && v.LB.Number != nil && v.UB.Number != nil && *v.LB.Number > *v.UB.Number {
+			lo, okLo := v.LB.numberValue()
+			hi, okHi := v.UB.numberValue()
+			if okLo && okHi && lo > hi {
 				s.addErr(StructuralError{
 					Path:    varPath,
 					Code:    CodeVariableBoundsInverted,
-					Message: fmt.Sprintf("'%s' has lb %v greater than ub %v", varName, *v.LB.Number, *v.UB.Number),
-					Details: map[string]any{"variable": varName, "lb": *v.LB.Number, "ub": *v.UB.Number},
+					Message: fmt.Sprintf("'%s' has lb %v greater than ub %v", varName, v.LB.Number, v.UB.Number),
+					Details: map[string]any{"variable": varName, "lb": v.LB.Number, "ub": v.UB.Number},
 				})
 			}
 		}
@@ -296,10 +332,10 @@ func observedDependencyChain(reads map[string]map[string]bool, from, target stri
 }
 
 // boundShapeString renders a declared shape for a bound diagnostic:
-// `[salt]`, or `scalar` for none.
+// `[salt]`, or `(scalar)` for none.
 func boundShapeString(shape []string) string {
 	if len(shape) == 0 {
-		return "scalar"
+		return "(scalar)"
 	}
 	return "[" + strings.Join(shape, ", ") + "]"
 }
