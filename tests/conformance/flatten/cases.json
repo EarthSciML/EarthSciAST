@@ -10718,6 +10718,226 @@
       "field_ics": [],
       "loader_fields": [],
       "lifted_shapes": {}
+    },
+    {
+      "id": "variable_bounds_renames",
+      "tier": "variable_bounds",
+      "fixture": "valid/variable_bounds_renames.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Source.y",
+          "role": "state",
+          "units": "mol/m^3",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": 0,
+          "ub": "Source.y_cap",
+          "source_system": "Source"
+        },
+        {
+          "name": "Sink.w",
+          "role": "state",
+          "units": "mol/m^3",
+          "default": 0.2,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": 0,
+          "ub": "Source.y",
+          "source_system": "Sink"
+        },
+        {
+          "name": "Reactor.c",
+          "role": "state",
+          "units": "mol/m^3",
+          "default": 0.3,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": 0,
+          "ub": "2 * Met.src",
+          "source_system": "Reactor"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Source.y_cap",
+          "role": "parameter",
+          "units": "mol/m^3",
+          "default": 10.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Source"
+        },
+        {
+          "name": "Source.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Source"
+        },
+        {
+          "name": "Sink.r",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.01,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Sink"
+        },
+        {
+          "name": "Met.src",
+          "role": "parameter",
+          "units": "mol/m^3",
+          "default": 2.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Met"
+        },
+        {
+          "name": "Met.rate",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.02,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Met"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "Reactor.g",
+          "role": "observed",
+          "units": "1/s",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": 0,
+          "ub": 1,
+          "source_system": "Reactor"
+        }
+      ],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 4,
+      "equations": [
+        {
+          "lhs": "D(Source.y)/Dt",
+          "rhs": "(-Source.k) * Source.y + (-Sink.r) * Source.y",
+          "source_system": "Source",
+          "contributions": [
+            {
+              "rhs": "(-Source.k) * Source.y",
+              "origins": [
+                {
+                  "component": "Source"
+                }
+              ]
+            },
+            {
+              "rhs": "(-Sink.r) * Source.y",
+              "origins": [
+                {
+                  "component": "Sink"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "D(Sink.w)/Dt",
+          "rhs": "Sink.r * (Source.y - Sink.w)",
+          "source_system": "Sink",
+          "contributions": [
+            {
+              "rhs": "Sink.r * (Source.y - Sink.w)",
+              "origins": [
+                {
+                  "component": "Sink"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "D(Reactor.c)/Dt",
+          "rhs": "(-Reactor.g) * (Reactor.c - 2 * Met.src)",
+          "source_system": "Reactor",
+          "contributions": [
+            {
+              "rhs": "(-Reactor.g) * (Reactor.c - 2 * Met.src)",
+              "origins": [
+                {
+                  "component": "Reactor"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "Reactor.g",
+          "rhs": "3 * Met.rate",
+          "source_system": "Reactor",
+          "contributions": [
+            {
+              "rhs": "3 * Met.rate",
+              "origins": [
+                {
+                  "coupling": 2
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Source",
+          "Sink",
+          "Reactor",
+          "Met"
+        ],
+        "coupling_rules": [
+          "operator_compose(Source + Sink) [translate: Source.y->Sink.x]",
+          "variable_map(Met.src -> Reactor.c_cap, transform=conversion_factor) [factor=2.0]",
+          "variable_map(Met.rate -> Reactor.g, transform=expression)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
     }
   ],
   "refusals": [

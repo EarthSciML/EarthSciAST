@@ -1,0 +1,230 @@
+{
+  "esm": "2.1.0",
+  "metadata": {
+    "name": "VariableBoundsRenames",
+    "description": "Bounds through the coupling renames of flattening (esm-spec §6.3.2, esm-libraries-spec §4.7.5): a reference to a variable an `operator_compose` translation merges away is retargeted to the surviving name (`Sink.w` ub `Sink.x` becomes `Source.y`), and the merged variable keeps the bounds of the declaration its units come from (`Source.y`); a reference to a parameter a scaled `conversion_factor` variable_map replaces becomes the replacement expression (`Reactor.c` ub `Reactor.c_cap` becomes `2 * Met.src`); and the target of an expression-transform variable_map, which flattening keeps as an observed of the same name, keeps its own bounds (`Reactor.g`).",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "variable_bounds",
+      "valid",
+      "coupling",
+      "flatten"
+    ]
+  },
+  "models": {
+    "Source": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 1.0,
+          "lb": 0,
+          "ub": "y_cap"
+        },
+        "y_cap": {
+          "type": "parameter",
+          "units": "mol/m^3",
+          "default": 10.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.5,
+          "ub": 100
+        },
+        "w": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.2,
+          "lb": 0,
+          "ub": "x"
+        },
+        "r": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.01
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "r"
+                ]
+              },
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "w"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "r",
+              {
+                "op": "-",
+                "args": [
+                  "x",
+                  "w"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "Reactor": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.3,
+          "lb": 0,
+          "ub": "c_cap"
+        },
+        "c_cap": {
+          "type": "parameter",
+          "units": "mol/m^3",
+          "default": 4.0,
+          "lb": 0
+        },
+        "g": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.05,
+          "lb": 0,
+          "ub": 1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "g"
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  "c",
+                  "c_cap"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "Met": {
+      "variables": {
+        "src": {
+          "type": "parameter",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "rate": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.02
+        }
+      },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Source",
+        "Sink"
+      ],
+      "require_match": false,
+      "translate": {
+        "Source.y": "Sink.x"
+      }
+    },
+    {
+      "type": "variable_map",
+      "from": "Met.src",
+      "to": "Reactor.c_cap",
+      "transform": "conversion_factor",
+      "factor": 2.0
+    },
+    {
+      "type": "variable_map",
+      "from": "Met.rate",
+      "to": "Reactor.g",
+      "transform": {
+        "op": "*",
+        "args": [
+          3,
+          "Met.rate"
+        ]
+      }
+    }
+  ]
+}

@@ -2818,7 +2818,9 @@ def _apply_variable_map_expression(
         return
 
     # Carry the removed parameter's units/shape/description metadata onto the
-    # observed; its value is computed, so no default is carried.
+    # observed; its value is computed, so no default is carried. The variable
+    # stays in the flattened system under its own name, so its bounds stay
+    # with it (esm-spec §6.3.2).
     target_comp.observed[entry.to_var] = FlattenedVariable(
         name=entry.to_var,
         type="observed",
@@ -2826,6 +2828,8 @@ def _apply_variable_map_expression(
         description=removed.description if removed else None,
         source_system=removed.source_system if removed else target_comp.name,
         shape=list(removed.shape) if removed and removed.shape else None,
+        lb=removed.lb if removed else None,
+        ub=removed.ub if removed else None,
     )
     target_comp.equations.append(
         FlattenedEquation(

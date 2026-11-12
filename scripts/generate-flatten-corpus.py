@@ -467,9 +467,16 @@ CASES: list[tuple[str, str, str]] = [
     # reference into a subsystem (`Chem.z` ub `Chem.Sub.y`), a reference inside
     # a subsystem (`Chem.Sub.y` ub `Chem.Sub.y_cap`), and a reference to a
     # parameter a `param_to_var` variable_map replaces (`Chem.x` ub
-    # `Met.cap_src`).
+    # `Met.cap_src`). The third pins the coupling renames: a reference to a
+    # variable an `operator_compose` translation merges away is retargeted to
+    # the survivor (`Sink.w` ub `Sink.x` becomes `Source.y`), a reference to a
+    # parameter a scaled `conversion_factor` variable_map replaces becomes the
+    # replacement expression (`Reactor.c` ub `2 * Met.src`), and the target of
+    # an expression-transform variable_map, kept as an observed of the same
+    # name, keeps its own bounds (`Reactor.g`).
     ("variable_bounds", "variable_bounds", "valid/variable_bounds.esm"),
     ("variable_bounds", "variable_bounds_coupled", "valid/variable_bounds_coupled.esm"),
+    ("variable_bounds", "variable_bounds_renames", "valid/variable_bounds_renames.esm"),
 ]
 
 # --- explicit refusals -------------------------------------------------------
