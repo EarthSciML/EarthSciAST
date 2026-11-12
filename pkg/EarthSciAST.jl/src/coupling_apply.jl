@@ -1517,7 +1517,11 @@ function _apply_expression_transform!(
             units = to_var === nothing ? nothing : to_var.units,
             description = to_var === nothing ? nothing : to_var.description,
             shape = to_var === nothing ? nothing : to_var.shape,
-            element_type = to_var === nothing ? nothing : to_var.element_type
+            element_type = to_var === nothing ? nothing : to_var.element_type,
+            # The target stays in the flattened system under its own name, so
+            # its bounds stay with it (esm-spec §6.3.2).
+            lb = to_var === nothing ? nothing : to_var.lb,
+            ub = to_var === nothing ? nothing : to_var.ub
         )
     end
     # The defining equation (`to ~ transform`) is what MAKES `to` an observed

@@ -77,7 +77,8 @@ _vb_param(; kw...) = Dict{String, Any}("type" => "parameter", "units" => "1", "d
     pins = JSON3.read(read(joinpath(_VB_INVALID, "expected_errors.json"), String))
     @testset "shared invalid fixture: $f" for f in (
             "variable_bound_unresolved.esm", "variable_bound_shape_mismatch.esm",
-            "variable_bound_shape_mismatch_axes.esm", "variable_bound_circular_self.esm",
+            "variable_bound_shape_mismatch_axes.esm",
+            "variable_bound_shape_mismatch_nested_reaction.esm", "variable_bound_circular_self.esm",
             "variable_bound_circular_observed.esm", "variable_bounds_inverted.esm",
         )
         result = EarthSciAST.validate(EarthSciAST.load_path(joinpath(_VB_INVALID, f)))
