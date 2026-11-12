@@ -182,12 +182,18 @@ _vb_param(; kw...) = Dict{String, Any}("type" => "parameter", "units" => "1", "d
         # Models, variables and subsystems in sorted order; `u`'s top-level path
         # `M.x` and `x`'s scoped `S.cap` resolve, `S.q`'s bare `y` resolves in S.
         @test _vb_errors(doc) == [
-            ("variable_bounds_inverted", "/models/M/variables/v",
-                Dict{String, Any}("variable" => "v", "lb" => 1.5, "ub" => 1)),
-            ("undefined_variable", "/models/M/variables/x/ub",
-                Dict{String, Any}("variable" => "S.missing", "bound" => "ub")),
-            ("undefined_variable", "/models/M/subsystems/S/variables/y/ub",
-                Dict{String, Any}("variable" => "nope", "bound" => "ub")),
+            (
+                "variable_bounds_inverted", "/models/M/variables/v",
+                Dict{String, Any}("variable" => "v", "lb" => 1.5, "ub" => 1),
+            ),
+            (
+                "undefined_variable", "/models/M/variables/x/ub",
+                Dict{String, Any}("variable" => "S.missing", "bound" => "ub"),
+            ),
+            (
+                "undefined_variable", "/models/M/subsystems/S/variables/y/ub",
+                Dict{String, Any}("variable" => "nope", "bound" => "ub"),
+            ),
         ]
     end
 
@@ -213,8 +219,10 @@ _vb_param(; kw...) = Dict{String, Any}("type" => "parameter", "units" => "1", "d
             )
         )
         @test _vb_errors(circ) == [
-            ("variable_bound_circular", "/models/M/variables/x/ub",
-                Dict{String, Any}("variable" => "x", "bound" => "ub", "reference" => "S.a")),
+            (
+                "variable_bound_circular", "/models/M/variables/x/ub",
+                Dict{String, Any}("variable" => "x", "bound" => "ub", "reference" => "S.a"),
+            ),
         ]
         # A state ends the walk: `a` reads `z`, whose ODE reads `x` — not circular.
         state_stop = _vb_doc(
@@ -261,8 +269,10 @@ _vb_param(; kw...) = Dict{String, Any}("type" => "parameter", "units" => "1", "d
                 "B" => Dict("variables" => Dict("src" => _vb_param()), "equations" => []),
             ),
             "coupling" => [
-                Dict("type" => "variable_map", "from" => "B.src", "to" => "A.cap",
-                    "transform" => "conversion_factor", "factor" => 2.0),
+                Dict(
+                    "type" => "variable_map", "from" => "B.src", "to" => "A.cap",
+                    "transform" => "conversion_factor", "factor" => 2.0
+                ),
             ]
         )
         flat = EarthSciAST.flatten(_vb_load(doc))
