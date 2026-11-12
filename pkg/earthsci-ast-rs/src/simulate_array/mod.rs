@@ -91,8 +91,8 @@ pub(crate) use compile::check_free_variables;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::inline_parameter_arrays;
 pub(crate) use compile::resolve_declared_shape;
+pub(crate) use compile::{BuiltVariables, model_tree_any, parse_subsystem_model};
 pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
-pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 // The build pipeline reads the authored model, as the single-model route does,
 // so it applies the same stand-ins for `flatten`'s rewrites.
 #[cfg(not(target_arch = "wasm32"))]
@@ -883,6 +883,10 @@ pub struct ArrayCompiled {
     /// build takes the shape the build used instead of inferring it again; see
     /// [`compile::promote_conditional_shapes`].
     pub(crate) conditional_shapes: crate::flatten::BuiltShapes,
+    /// Every variable's index-set axes as this build compiled it, and the
+    /// inputs a coupling substituted away ([`compile::BuiltVariables`]). Read
+    /// by [`Self::built_variables`].
+    built_variables: compile::BuiltVariables,
     /// The field initial conditions construction resolved
     /// ([`Self::field_ic_records`]), held for the first solve to take instead
     /// of resolving them again. See [`driver::FieldIcMemo`].
