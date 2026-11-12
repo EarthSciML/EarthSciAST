@@ -451,6 +451,13 @@ class ModelVariable:
     # is invalid, so the representation of any update set is unique. Absent means
     # the parameter never changes after setup.
     update: ParameterUpdate | list[ParameterUpdate] | None = None
+    # Lower and upper bound on the value (esm-spec §6.3.2, esm 2.1.0): a number
+    # in ``units``, or the name of another variable, resolved as a variable
+    # reference in this model's expressions. Kept exactly as authored so a
+    # number stays a number and a reference a string on emit. None means
+    # unbounded on that side.
+    lb: float | int | str | None = None
+    ub: float | int | str | None = None
 
 
 @dataclass

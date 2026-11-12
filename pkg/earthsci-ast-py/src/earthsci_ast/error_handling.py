@@ -234,6 +234,15 @@ TIME_ORIGIN_INVALID = "time_origin_invalid"
 # (esm-spec §4.8.5), raised as ``ConstUnitsError`` from ``units.py``.
 CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old"
 
+# Variable bounds `lb` / `ub` (esm-spec §6.3.2). The version gate is raised at
+# load as ``VariableBoundsError`` from ``variable_bounds.py``; the other three
+# are structural findings at the bound's (or, for an inverted pair, the
+# variable's) pointer. An unresolved reference is ``undefined_variable``.
+VARIABLE_BOUNDS_VERSION_TOO_OLD = "variable_bounds_version_too_old"
+VARIABLE_BOUND_SHAPE_MISMATCH = "variable_bound_shape_mismatch"
+VARIABLE_BOUND_CIRCULAR = "variable_bound_circular"
+VARIABLE_BOUNDS_INVERTED = "variable_bounds_inverted"
+
 # A bare numeric literal read as DIMENSIONLESS (esm-spec §4.8.6) produces a
 # dimension or scale mismatch the current neutral-literal rule does not. A
 # WARNING at this stage, emitted on ``unit_warnings`` by ``validation.py``.

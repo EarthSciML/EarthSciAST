@@ -511,6 +511,8 @@ def _parse_model_variable(var_data: dict[str, Any]) -> ModelVariable:
         element_type=var_data.get("element_type"),
         distribution=_parse_distribution(distribution) if distribution is not None else None,
         update=_parse_parameter_update_spec(update) if update is not None else None,
+        lb=var_data.get("lb"),
+        ub=var_data.get("ub"),
     )
 
 
@@ -2920,6 +2922,7 @@ def _resolve_toplevel_mount(
 from .structural_checks import (  # noqa: E402
     _has_unmounted_refs,
     _refuse_circular_dependency,
+    _refuse_variable_bounds,
     _validate_structural,  # used by load(); re-exported for compatibility
 )
 
@@ -3094,6 +3097,7 @@ def _reject_file_version_gates(data: object) -> None:
     from .solver import reject_solver_pre_v11
     from .template_imports import reject_template_imports_pre_v08
     from .units import reject_const_units_pre_v12
+    from .variable_bounds import reject_variable_bounds_pre_v21
 
     # expression_templates / apply_expression_template arrive at esm 0.4.0
     # (RFC §5.4 spec-version gate).
@@ -3105,6 +3109,8 @@ def _reject_file_version_gates(data: object) -> None:
     reject_solver_pre_v11(data)
     # Declared `units` on a `const` node arrive at esm 1.2.0 (§4.8.5).
     reject_const_units_pre_v12(data)
+    # Variable bounds `lb` / `ub` arrive at esm 2.1.0 (§6.3.2).
+    reject_variable_bounds_pre_v21(data)
 
 
 def _load_data(
@@ -3386,6 +3392,7 @@ def _load_data(
     # cycle through a mounted model or subsystem is only visible now.
     if _has_unmounted_refs(data):
         _refuse_circular_dependency(esm_file)
+        _refuse_variable_bounds(esm_file)
 
     # Lower `enum` op nodes to `const` integers using the file's `enums` block
     # (esm-spec §9.3). Runs after subsystem resolution so every expression

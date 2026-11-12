@@ -28,7 +28,7 @@ WHAT EACH CASE RECORDS
 ----------------------
 Every field of the step-4 normative table, in a language-neutral JSON form:
 ordered name lists for each map, the per-variable metadata that matters (units,
-default, shape, update kinds, distribution kind), the equation count and the
+default, shape, update kinds, distribution kind, lb / ub), the equation count and the
 `to_ascii` rendering of every equation (the same renderer the shared display
 fixtures and the expression-parse corpus use) with its ordered `contributions`
 (each a rendered summand and its origins), and the derived `system_kind`.
@@ -459,6 +459,17 @@ CASES: list[tuple[str, str, str]] = [
         "ifelse_mixed_whole_dynamic",
         "conformance/native_model_shapes/fixtures/ifelse_mixed_whole_dynamic.esm",
     ),
+    # --- variable bounds (esm-spec §6.3.2, esm-libraries-spec §4.7.5) --------
+    # A number bound is carried unchanged and a reference bound is rewritten by
+    # the renaming the equations get. The first document carries every
+    # variable kind with a numeric or same-model bound; the second pins each
+    # rename: a bare reference namespaced (`Chem.x` lb `Chem.x_min`), a scoped
+    # reference into a subsystem (`Chem.z` ub `Chem.Sub.y`), a reference inside
+    # a subsystem (`Chem.Sub.y` ub `Chem.Sub.y_cap`), and a reference to a
+    # parameter a `param_to_var` variable_map replaces (`Chem.x` ub
+    # `Met.cap_src`).
+    ("variable_bounds", "variable_bounds", "valid/variable_bounds.esm"),
+    ("variable_bounds", "variable_bounds_coupled", "valid/variable_bounds_coupled.esm"),
 ]
 
 # --- explicit refusals -------------------------------------------------------
@@ -643,6 +654,15 @@ def _update_kinds(update) -> list[str]:
     ]
 
 
+def _bound(value):
+    """A flattened bound: null when absent, the number, or the flattened
+    reference (a namespaced name, or a scaled replacement) rendered with
+    `to_ascii`."""
+    if value is None or (isinstance(value, (int, float)) and not isinstance(value, bool)):
+        return value
+    return to_ascii(value)
+
+
 def _variable_record(var) -> dict:
     """One flattened variable, with the metadata step 4 requires it to carry."""
     dist = var.distribution
@@ -654,6 +674,8 @@ def _variable_record(var) -> dict:
         "shape": list(var.shape) if var.shape else None,
         "update_kinds": _update_kinds(var.update),
         "distribution_kind": getattr(dist, "kind", None) if dist is not None else None,
+        "lb": _bound(var.lb),
+        "ub": _bound(var.ub),
         "source_system": var.source_system,
     }
 
@@ -866,7 +888,10 @@ def main() -> int:
             "hand-edit. Each case pins the canonical FlattenedSystem field set of "
             "esm-libraries-spec §4.7.5 step 4 for one shared fixture: the ordered "
             "contents of every map, the per-variable metadata (units, default, "
-            "shape, update kinds, distribution kind), every equation rendered with "
+            "shape, update kinds, distribution kind, and the bounds `lb` / `ub`: "
+            "null when absent, the number, or the flattened reference rendered "
+            'with to_ascii - esm-libraries-spec §4.7.5, "Bounds follow the '
+            'renaming"), every equation rendered with '
             "to_ascii, and the derived system_kind. ORDER IS PART OF THE CONTRACT "
             "- a parameter vector is positional, so a binding that sorts or uses "
             "map-iteration order is non-conforming. The parameter subsets "

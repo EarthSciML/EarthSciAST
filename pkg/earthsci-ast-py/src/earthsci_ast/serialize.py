@@ -324,6 +324,8 @@ _MODEL_VARIABLE_SPEC = (
     ("element_type", "element_type", _OMIT_NONE, None),
     ("distribution", "distribution", _OMIT_NONE, _serialize_distribution),
     ("update", "update", _OMIT_NONE, _serialize_parameter_update_spec),
+    ("lb", "lb", _OMIT_NONE, None),
+    ("ub", "ub", _OMIT_NONE, None),
 )
 
 
@@ -1235,6 +1237,7 @@ def to_json(esm_file: EsmFile, *, indent: int | None = 2) -> str:
     """
     data = _serialize_esm_file(esm_file)
     _raise_faq_esm_floor(data)
+    _raise_variable_bounds_esm_floor(data)
     if indent:
         return json.dumps(data, indent=indent, ensure_ascii=False)
     # Compact: `json.dumps(indent=None)` still emits `", "` / `": "` separators,
@@ -1357,6 +1360,26 @@ def _contains_faq(node: object) -> bool:
     if isinstance(node, list):
         return any(_contains_faq(v) for v in node)
     return False
+
+
+def _raise_variable_bounds_esm_floor(data: object) -> None:
+    """Raise an emitted document's declared ``esm`` to 2.1.0 when a model
+    variable carries ``lb`` / ``ub`` but the document declares less.
+
+    A FLOOR like :func:`_raise_faq_esm_floor`, for the same reason: a 2.0.0
+    root that mounts a 2.1.0 leaf with bounds has the leaf inlined at load,
+    and emitting the result as 2.0.0 writes a document the
+    ``variable_bounds_version_too_old`` gate (esm-spec §6.3.2) refuses to read
+    back.
+    """
+    if not isinstance(data, dict):
+        return
+    from .solver import _declared_minor
+    from .variable_bounds import _first_bound_pointer
+
+    version = _declared_minor(data)
+    if version is not None and version < (2, 1) and _first_bound_pointer(data) is not None:
+        data["esm"] = "2.1.0"
 
 
 def _raise_faq_esm_floor(data: object) -> None:
