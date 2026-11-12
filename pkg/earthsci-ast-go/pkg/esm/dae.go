@@ -123,6 +123,9 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 		// a scalar cycle, a forward or same-cell index — is not dropped, and still
 		// counts exactly as it did before.
 		arrayShaped := arrayShapedUnknowns(&m)
+		// esm-spec §4.3.1.2: a member of a well-founded recurrence GROUP is an
+		// ordering along the group's axis, exactly as a single recurrence is.
+		groups := recurrenceGroups(&m, file)
 		residual := 0
 		for i, eq := range m.Equations {
 			if isDifferentialEquation(eq) {
@@ -130,6 +133,19 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 			}
 			if isWellFoundedRecurrence(eq, file, arrayShaped) {
 				continue
+			}
+			if name, _, _, ok := recurrenceLHSTarget(eq.LHS); ok {
+				member := false
+				for _, g := range groups {
+					if g[name] {
+						if isRec, finding, _ := analyzeRecurrenceEquationIn(eq, file, arrayShaped, g); isRec && finding == nil {
+							member = true
+						}
+					}
+				}
+				if member {
+					continue
+				}
 			}
 			residual++
 			residualPaths = append(residualPaths,

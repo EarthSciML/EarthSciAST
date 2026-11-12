@@ -1,0 +1,67 @@
+{
+  "fixture": "12_recurrence_group_same_cell_order",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "same_cell_read_follows_its_target",
+      "assertion_idx": 1,
+      "variable": "a",
+      "actual": 1.0
+    },
+    {
+      "test_id": "same_cell_read_follows_its_target",
+      "assertion_idx": 2,
+      "variable": "a",
+      "actual": 0.43333333333333335
+    },
+    {
+      "test_id": "same_cell_read_follows_its_target",
+      "assertion_idx": 3,
+      "variable": "a",
+      "actual": 0.10592592592592594
+    },
+    {
+      "test_id": "same_cell_read_follows_its_target",
+      "assertion_idx": 4,
+      "variable": "a",
+      "actual": 0.014332693187014177
+    },
+    {
+      "test_id": "same_cell_read_follows_its_target",
+      "assertion_idx": 5,
+      "variable": "a",
+      "actual": 0.0015017446833657786
+    },
+    {
+      "test_id": "same_cell_read_follows_its_target",
+      "assertion_idx": 6,
+      "variable": "u",
+      "actual": 0.43333333333333335
+    },
+    {
+      "test_id": "same_cell_read_follows_its_target",
+      "assertion_idx": 7,
+      "variable": "u",
+      "actual": 0.24444444444444446
+    },
+    {
+      "test_id": "same_cell_read_follows_its_target",
+      "assertion_idx": 8,
+      "variable": "u",
+      "actual": 0.13530864197530865
+    },
+    {
+      "test_id": "same_cell_read_follows_its_target",
+      "assertion_idx": 9,
+      "variable": "u",
+      "actual": 0.1047775643956714
+    },
+    {
+      "test_id": "same_cell_read_follows_its_target",
+      "assertion_idx": 10,
+      "variable": "u",
+      "actual": 0.10050058156112193
+    }
+  ]
+}

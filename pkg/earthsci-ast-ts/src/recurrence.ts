@@ -68,6 +68,8 @@ import { ERROR_CODES } from './errors.js'
 import type { Model, ExpressionNode, EsmFile, IndexSet } from './types.js'
 import type { Expr } from './expression.js'
 import type { StructuralError } from './validate/types.js'
+import { observedDefinitions } from './classification.js'
+import { extractVariableReferences, collectIndexSymbols } from './validate/expr-utils.js'
 
 /** Inclusive integer bounds `[lo, hi]` of an index symbol or an affine term. */
 type Bounds = [number, number]
@@ -252,6 +254,8 @@ interface SelfRead {
   args: Expr[]
   env: Map<string, Bounds>
   unsequenceable: boolean
+  /** The variable read: the defined one, or (esm-spec §4.3.1.2) a group peer. */
+  target: string
 }
 
 /**
@@ -283,7 +287,7 @@ interface SelfRead {
  */
 function collectSelfReads(
   e: Expr,
-  varName: string,
+  names: ReadonlySet<string>,
   esmFile: EsmFile | undefined,
   env: Array<[string, Bounds]>,
   blocked: boolean,
@@ -291,7 +295,7 @@ function collectSelfReads(
   state: { bare: boolean },
 ): void {
   if (!isExprNode(e)) {
-    if (e === varName) state.bare = true
+    if (typeof e === 'string' && names.has(e)) state.bare = true
     return
   }
 
@@ -301,19 +305,21 @@ function collectSelfReads(
   const pushed = e.op === 'faq' ? rangeBounds(e, esmFile) : []
   env.push(...pushed)
 
-  const isSelfIndex = e.op === 'index' && (e.args ?? [])[0] === varName
+  const head = (e.args ?? [])[0]
+  const isSelfIndex = e.op === 'index' && typeof head === 'string' && names.has(head)
   if (isSelfIndex) {
     out.push({
       args: (e.args ?? []).slice(1),
       env: new Map(env),
       unsequenceable: blocked,
+      target: head as string,
     })
   }
 
   const blockedChildren = blocked || OPS_BLOCKING_CELL_RESTRICTION.has(e.op)
   const recurse = (child: Expr | undefined, childBlocked: boolean): void => {
     if (child === undefined) return
-    collectSelfReads(child, varName, esmFile, env, childBlocked, out, state)
+    collectSelfReads(child, names, esmFile, env, childBlocked, out, state)
   }
 
   // `args[0]` of a self-read names the variable; every other arg is an operand.
@@ -379,19 +385,239 @@ export function validateRecurrenceEquations(
   )
   if (arrayShaped.size === 0) return errors
 
+  // esm-spec §4.3.1.2: a recurrence group's members count their peers' `index`
+  // reads as causal reads, and their frames are compared once every member has
+  // one.
+  const groups = recurrenceGroups(model, esmFile)
+  const frames: Array<{
+    eqIdx: number
+    varName: string
+    frame: string
+    axis?: number
+    sameCell: string[]
+  }> = []
   equations.forEach((equation, eqIdx) => {
     const target = recurrenceLhsTarget(equation.lhs as Expr)
     if (target === undefined || !arrayShaped.has(target.varName)) return
-    errors.push(
-      ...checkRecurrenceEquation(
-        equation.rhs as Expr,
-        target,
-        `${componentPath}/equations/${eqIdx}/rhs`,
-        esmFile,
-      ),
+    const group = groups.find((g) => g.has(target.varName))
+    const result: { frame?: string; axis?: number; sameCell?: string[] } = {}
+    const found = checkRecurrenceEquation(
+      equation.rhs as Expr,
+      target,
+      `${componentPath}/equations/${eqIdx}/rhs`,
+      esmFile,
+      group,
+      result,
     )
+    errors.push(...found)
+    if (found.length === 0 && group !== undefined && result.frame !== undefined) {
+      frames.push({
+        eqIdx,
+        varName: target.varName,
+        frame: result.frame,
+        axis: result.axis,
+        sameCell: result.sameCell ?? [],
+      })
+    }
   })
+  for (const g of groups) {
+    const members = frames.filter((f) => g.has(f.varName))
+    const first = members.find((m) => m.axis !== undefined)
+    if (first === undefined) continue
+    const differing = members.find(
+      (m) => m.frame !== first.frame || (m.axis !== undefined && m.axis !== first.axis),
+    )
+    if (differing !== undefined) {
+      errors.push({
+        path: `${componentPath}/equations/${differing.eqIdx}/rhs`,
+        code: ERROR_CODES.RECURRENCE_GROUP_AXIS_MISMATCH,
+        message:
+          `'${differing.varName}' and '${first.varName}' read each other as a recurrence group, ` +
+          `but '${differing.varName}' does not sweep the same frame: every member shares one ` +
+          'cell frame — the same `output_idx`, the same ranges — and one recurrence axis ' +
+          '(esm-spec §4.3.1.2).',
+        details: { variable: differing.varName, group: [...g].sort() },
+      })
+      continue
+    }
+    // Rule 1: the same-cell reads between members must admit an order.
+    const cycle = firstCycle(new Map(members.map((m) => [m.varName, [...new Set(m.sameCell)].sort()])))
+    if (cycle !== undefined) {
+      const at = members.find((m) => cycle.includes(m.varName))!
+      errors.push({
+        path: `${componentPath}/equations/${at.eqIdx}/rhs`,
+        code: ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
+        message:
+          'the members of a recurrence group read one another at the cell being written in a ' +
+          `cycle (${cycle.join(' -> ')}), so no order within the cell satisfies them. Reads ` +
+          'between members at the same position must be acyclic (esm-spec §4.3.1.2 rule 1).',
+        details: { variable: at.varName, cycle },
+      })
+    }
+  }
   return errors
+}
+
+/** The first cycle a sorted DFS closes over `graph`, closed at its entry node. */
+function firstCycle(graph: ReadonlyMap<string, string[]>): string[] | undefined {
+  const state = new Map<string, number>()
+  for (const root of [...graph.keys()].sort()) {
+    if (state.has(root)) continue
+    const chain = [root]
+    const cursor = [0]
+    state.set(root, 1)
+    while (chain.length > 0) {
+      const name = chain[chain.length - 1]
+      const succ = graph.get(name) ?? []
+      const i = cursor[cursor.length - 1]++
+      if (i >= succ.length) {
+        state.set(name, 2)
+        chain.pop()
+        cursor.pop()
+        continue
+      }
+      const next = succ[i]
+      if (state.get(next) === 1) return [...chain.slice(chain.indexOf(next)), next]
+      if (state.get(next) === 2 || !graph.has(next)) continue
+      state.set(next, 1)
+      chain.push(next)
+      cursor.push(0)
+    }
+  }
+  return undefined
+}
+
+/**
+ * The recurrence GROUP candidates of one model (esm-spec §4.3.1.2): each strongly
+ * connected component of two or more observeds — in the §4.9.6 dependency graph
+ * with every recurrence candidate's self-edge already dropped — whose members are
+ * all array-shaped and whose every internal edge is carried by at least one
+ * `index` read.
+ *
+ * This is the predicate the cycle exemptions (`observed_cycle`, the cadence
+ * seeder) are gated on, never the well-foundedness verdict (CONFORMANCE_SPEC
+ * §5.19.5): a group with an ill-founded read is still a candidate, so it reaches
+ * the named `recurrence_*` diagnosis rather than collapsing to a cycle. A
+ * component with a scalar member, or one held together by a bare read, is no
+ * candidate and stays a cycle.
+ */
+export function recurrenceGroups(model: Model, esmFile?: EsmFile): Array<Set<string>> {
+  const defs = observedDefinitions(model)
+  if (defs.size < 2) return []
+  const graph = new Map<string, Set<string>>()
+  for (const [name, rhs] of defs) {
+    const bound = collectIndexSymbols(rhs)
+    const refs = new Set(
+      extractVariableReferences(rhs).filter((ref) => !bound.has(ref) && defs.has(ref)),
+    )
+    if (refs.has(name) && isRecurrenceCandidate(model, name, esmFile)) refs.delete(name)
+    graph.set(name, refs)
+  }
+  const out: Array<Set<string>> = []
+  for (const comp of stronglyConnected(graph)) {
+    if (comp.size < 2) continue
+    if (![...comp].every((m) => isArrayShaped(model, m))) continue
+    // At least one read inside the component must be OFFSET — not a plain
+    // gather whose every index is a bare name. A cycle closed by same-cell
+    // gathers alone has no axis to fold along and stays an observed_cycle.
+    if (![...comp].some((u) => [...comp].some((v) => readsOffset(defs.get(u) as Expr, v)))) continue
+    const internalByIndex = [...comp].every((u) =>
+      [...(graph.get(u) ?? [])]
+        .filter((v) => v !== u && comp.has(v))
+        .every((v) => readsThroughIndex(defs.get(u) as Expr, v)),
+    )
+    if (internalByIndex) out.push(comp)
+  }
+  return out.sort((a, b) => ([...a].sort()[0] < [...b].sort()[0] ? -1 : 1))
+}
+
+/** Does `e` gather `name` through an `index` with an argument that is not a bare name? */
+function readsOffset(e: Expr, name: string): boolean {
+  const stack: unknown[] = [e]
+  while (stack.length > 0) {
+    const n = stack.pop()
+    if (Array.isArray(n)) {
+      stack.push(...n)
+    } else if (n !== null && typeof n === 'object') {
+      const node = n as { op?: unknown; args?: unknown[] }
+      if (
+        node.op === 'index' &&
+        Array.isArray(node.args) &&
+        node.args[0] === name &&
+        node.args.slice(1).some((a) => typeof a !== 'string')
+      ) {
+        return true
+      }
+      stack.push(...Object.values(n as Record<string, unknown>))
+    }
+  }
+  return false
+}
+
+/** Does `e` gather `name` through at least one `index` node? */
+function readsThroughIndex(e: Expr, name: string): boolean {
+  const stack: unknown[] = [e]
+  while (stack.length > 0) {
+    const n = stack.pop()
+    if (Array.isArray(n)) {
+      stack.push(...n)
+    } else if (n !== null && typeof n === 'object') {
+      const node = n as { op?: unknown; args?: unknown[] }
+      if (node.op === 'index' && Array.isArray(node.args) && node.args[0] === name) return true
+      stack.push(...Object.values(n as Record<string, unknown>))
+    }
+  }
+  return false
+}
+
+/** Strongly connected components (Kosaraju, both passes iterative). */
+function stronglyConnected(graph: ReadonlyMap<string, ReadonlySet<string>>): Array<Set<string>> {
+  const visited = new Set<string>()
+  const finish: string[] = []
+  for (const root of [...graph.keys()].sort()) {
+    if (visited.has(root)) continue
+    visited.add(root)
+    const stack: Array<[string, string[], number]> = [[root, [...(graph.get(root) ?? [])].sort(), 0]]
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1]
+      if (top[2] >= top[1].length) {
+        finish.push(top[0])
+        stack.pop()
+        continue
+      }
+      const next = top[1][top[2]++]
+      if (!graph.has(next) || visited.has(next)) continue
+      visited.add(next)
+      stack.push([next, [...(graph.get(next) ?? [])].sort(), 0])
+    }
+  }
+  const reverse = new Map<string, string[]>()
+  for (const [u, vs] of graph) {
+    for (const v of vs) {
+      if (!graph.has(v)) continue
+      if (!reverse.has(v)) reverse.set(v, [])
+      reverse.get(v)!.push(u)
+    }
+  }
+  const assigned = new Set<string>()
+  const out: Array<Set<string>> = []
+  for (const root of [...finish].reverse()) {
+    if (assigned.has(root)) continue
+    assigned.add(root)
+    const comp = new Set<string>()
+    const st = [root]
+    while (st.length > 0) {
+      const n = st.pop()!
+      comp.add(n)
+      for (const p of reverse.get(n) ?? []) {
+        if (assigned.has(p)) continue
+        assigned.add(p)
+        st.push(p)
+      }
+    }
+    out.push(comp)
+  }
+  return out
 }
 
 /** Whether `varName` is declared with a non-empty `shape` in this component. */
@@ -484,9 +710,18 @@ function collectReads(
   varName: string,
   esmFile: EsmFile | undefined,
 ): { reads: SelfRead[]; bare: boolean } {
+  return collectReadsOf(rhs, new Set([varName]), esmFile)
+}
+
+/** {@link collectReads} over several names at once — a recurrence group's members. */
+function collectReadsOf(
+  rhs: Expr,
+  names: ReadonlySet<string>,
+  esmFile: EsmFile | undefined,
+): { reads: SelfRead[]; bare: boolean } {
   const reads: SelfRead[] = []
   const state = { bare: false }
-  collectSelfReads(rhs, varName, esmFile, [], false, reads, state)
+  collectSelfReads(rhs, names, esmFile, [], false, reads, state)
   return { reads, bare: state.bare }
 }
 
@@ -502,9 +737,14 @@ function checkRecurrenceEquation(
   target: { varName: string; frame?: (string | 1)[] },
   path: string,
   esmFile: EsmFile | undefined,
+  group?: ReadonlySet<string>,
+  result?: { frame?: string; axis?: number; sameCell?: string[] },
 ): StructuralError[] {
   const varName = target.varName
-  const { reads, bare } = collectReads(rhs, varName, esmFile)
+  // The names whose `index` reads are causal reads here: `varName`, plus — for
+  // a member of a §4.3.1.2 recurrence group — every peer.
+  const names = new Set<string>([varName, ...(group ?? [])])
+  const { reads, bare } = collectReadsOf(rhs, names, esmFile)
   if (reads.length === 0) return []
 
   const finding = (code: string, message: string, axis?: string | null): StructuralError[] => [
@@ -564,6 +804,7 @@ function checkRecurrenceEquation(
   )
 
   let axis: number | undefined
+  const sameCell: string[] = []
   for (const read of reads) {
     if (read.args.length !== frameNames.length) {
       return finding(
@@ -577,6 +818,9 @@ function checkRecurrenceEquation(
     for (const [k, v] of read.env) env.set(k, v)
 
     let lagged: number | undefined
+    // Whether every value of the recurrence-axis lag was shown `>= 1`. A
+    // self-read need not be; a PEER read must be (esm-spec §4.3.1.2).
+    let proven = true
     for (let d = 0; d < read.args.length; d++) {
       const sym = frameNames[d]
       const affine = affineInSym(read.args[d], sym, env)
@@ -621,6 +865,7 @@ function checkRecurrenceEquation(
           )
         }
         lagged = d
+        proven = false
         continue
       }
       // lag = sym - arg, so the symbol-free part's bounds invert.
@@ -652,14 +897,34 @@ function checkRecurrenceEquation(
         )
       }
       lagged = d
+      proven = proven && lagLo >= 1
     }
 
+    if (lagged === undefined && read.target !== varName) {
+      // A read of a PEER at the cell being written is an ordering WITHIN the
+      // cell (esm-spec §4.3.1.2 rule 1); the group check rejects it only if
+      // such reads form a cycle.
+      sameCell.push(read.target)
+      continue
+    }
     if (lagged === undefined) {
       return finding(
         ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-        `a causal self-read of '${varName}' is at the same cell on every axis, so it defines ` +
-          `'${varName}' in terms of itself rather than of an earlier position ` +
-          '(esm-spec §4.3.1.1).',
+        `a causal read of '${read.target}' in the definition of '${varName}' is at the same cell ` +
+          `on every axis, so it defines '${varName}' in terms of a value at the cell being ` +
+          'written rather than of an earlier position (esm-spec §4.3.1.1, §4.3.1.2).',
+      )
+    }
+    if (read.target !== varName && !proven) {
+      return finding(
+        ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
+        `the read of '${read.target}' in the definition of '${varName}' — a peer in its ` +
+          `recurrence group — is not provably strictly earlier on axis '${frameNames[lagged]}'. ` +
+          'A read of a PEER must be strictly earlier for every value of its lag ' +
+          '(esm-spec §4.3.1.2): unlike a self-read, whose same-cell values simply have not been ' +
+          'published, a same-position read of another variable would make the result depend ' +
+          'on which member is evaluated first.',
+        frameNames[lagged],
       )
     }
     if (axis === undefined) {
@@ -673,6 +938,21 @@ function checkRecurrenceEquation(
         frameNames[lagged],
       )
     }
+  }
+  if (result !== undefined) {
+    // The frame, for the §4.3.1.2 comparison across a group's members: output
+    // indices, each axis's range as the validator resolves it, and the axis.
+    const ranges = isExprNode(rhs) && rhs.op === 'faq' ? (rhs.ranges ?? {}) : {}
+    result.frame = JSON.stringify([
+      frameNames,
+      frameNames.map((n) => {
+        const spec = (ranges as Record<string, unknown>)[n]
+        const b = spec === undefined ? undefined : symbolBounds(spec, esmFile)
+        return b ?? JSON.stringify(spec ?? null)
+      }),
+    ])
+    result.axis = axis
+    result.sameCell = sameCell
   }
   return []
 }

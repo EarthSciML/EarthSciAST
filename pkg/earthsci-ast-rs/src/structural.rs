@@ -2602,6 +2602,11 @@ fn validate_aggregate_constraints(
         .filter(|(_, v)| v.shape.as_ref().is_some_and(|s| !s.is_empty()))
         .map(|(n, _)| n.as_str())
         .collect();
+    // esm-spec §4.3.1.2: each member of a recurrence group is checked with its
+    // peers' `index` reads counted as causal reads, and the members' frames
+    // are compared once every member has one.
+    let groups = recurrence_groups_of_parts(&model.variables, &model.equations);
+    let mut frames: Vec<(usize, &str, RecurrenceFrame)> = Vec::new();
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         // An equation the reference check saw no `faq` node in has none to check.
         if faq_equations.is_none_or(|faq| faq.get(eq_idx).copied().unwrap_or(true)) {
@@ -2627,16 +2632,24 @@ fn validate_aggregate_constraints(
                 );
             }
         }
-        if recurrence_lhs_target(&equation.lhs).is_some_and(|(var, _)| array_shaped.contains(var)) {
-            check_recurrence_equation(
+        if let Some((var, _)) = recurrence_lhs_target(&equation.lhs)
+            && array_shaped.contains(var)
+        {
+            let group = groups.iter().find(|g| g.contains(var));
+            if let Some(frame) = check_recurrence_equation(
                 equation,
                 &format!("{model_path}/equations/{eq_idx}/rhs"),
                 esm_file,
                 &array_shaped,
+                group,
                 errors,
-            );
+            ) && group.is_some()
+            {
+                frames.push((eq_idx, var, frame));
+            }
         }
     }
+    check_recurrence_group_frames(&groups, &frames, &model_path, errors);
     // Each inline subsystem is a model whose equations take the same checks,
     // against its own declarations. An unresolved `{ref}` mount carries none.
     let mut subsystems: Vec<(&String, &serde_json::Value)> =
@@ -2815,6 +2828,9 @@ fn structural_affine_in_sym(
 /// bounds in scope where it was found, and whether it was reached only through
 /// a construct that cannot be restricted to one cell.
 struct StructuralSelfRead<'a> {
+    /// The variable read: the equation's own variable, or (esm-spec §4.3.1.2)
+    /// a peer in its recurrence group.
+    target: &'a str,
     args: &'a [crate::Expr],
     env: HashMap<String, (i64, i64)>,
     unsequenceable: bool,
@@ -2837,18 +2853,19 @@ fn op_blocks_cell_restriction(op: &str) -> bool {
 
 fn collect_structural_self_reads<'a>(
     e: &'a crate::Expr,
-    var: &str,
+    vars: &[&str],
     esm_file: &EsmFile,
     env: &mut Vec<(String, (i64, i64))>,
     blocked: bool,
     out: &mut Vec<StructuralSelfRead<'a>>,
-    bare: &mut bool,
+    bare: &mut Option<&'a str>,
 ) {
     let crate::Expr::Operator(node) = e else {
         if let crate::Expr::Variable(v) = e
-            && v == var
+            && vars.contains(&v.as_str())
+            && bare.is_none()
         {
-            *bare = true;
+            *bare = Some(v.as_str());
         }
         return;
     };
@@ -2870,14 +2887,20 @@ fn collect_structural_self_reads<'a>(
     } else {
         0
     };
-    let is_self_index = node.op == "index"
-        && matches!(node.args.first(), Some(crate::Expr::Variable(v)) if v == var);
-    if is_self_index {
+    let self_target = match node.args.first() {
+        Some(crate::Expr::Variable(v)) if node.op == "index" && vars.contains(&v.as_str()) => {
+            Some(v.as_str())
+        }
+        _ => None,
+    };
+    let is_self_index = self_target.is_some();
+    if let Some(target) = self_target {
         let mut snapshot: HashMap<String, (i64, i64)> = HashMap::new();
         for (k, v) in env.iter() {
             snapshot.insert(k.clone(), *v);
         }
         out.push(StructuralSelfRead {
+            target,
             args: &node.args[1..],
             env: snapshot,
             unsequenceable: blocked,
@@ -2889,7 +2912,7 @@ fn collect_structural_self_reads<'a>(
     let blocked_children = blocked || op_blocks_cell_restriction(&node.op);
     let skip = usize::from(is_self_index);
     for a in node.args.iter().skip(skip) {
-        collect_structural_self_reads(a, var, esm_file, env, blocked_children, out, bare);
+        collect_structural_self_reads(a, vars, esm_file, env, blocked_children, out, bare);
     }
     for side in [
         node.expr.as_deref(),
@@ -2901,11 +2924,11 @@ fn collect_structural_self_reads<'a>(
     .into_iter()
     .flatten()
     {
-        collect_structural_self_reads(side, var, esm_file, env, blocked_children, out, bare);
+        collect_structural_self_reads(side, vars, esm_file, env, blocked_children, out, bare);
     }
     if let Some(vs) = node.values.as_ref() {
         for v in vs {
-            collect_structural_self_reads(v, var, esm_file, env, true, out, bare);
+            collect_structural_self_reads(v, vars, esm_file, env, true, out, bare);
         }
     }
     env.truncate(env.len() - pushed);
@@ -2943,20 +2966,25 @@ fn check_recurrence_equation(
     field_path: &str,
     esm_file: &EsmFile,
     array_shaped: &HashSet<&str>,
+    group: Option<&std::collections::BTreeSet<String>>,
     errors: &mut Vec<StructuralError>,
-) {
-    let Some((var, lhs_idx)) = recurrence_lhs_target(&equation.lhs) else {
-        return;
-    };
+) -> Option<RecurrenceFrame> {
+    let (var, lhs_idx) = recurrence_lhs_target(&equation.lhs)?;
     if !array_shaped.contains(var) {
-        return;
+        return None;
+    }
+    // The names whose `index` reads are causal reads here: the variable
+    // itself, plus — for a member of a §4.3.1.2 recurrence group — every peer.
+    let mut vars: Vec<&str> = vec![var];
+    if let Some(g) = group {
+        vars.extend(g.iter().map(String::as_str).filter(|n| *n != var));
     }
     let mut env: Vec<(String, (i64, i64))> = Vec::new();
     let mut reads: Vec<StructuralSelfRead> = Vec::new();
-    let mut bare = false;
+    let mut bare: Option<&str> = None;
     collect_structural_self_reads(
         &equation.rhs,
-        var,
+        &vars,
         esm_file,
         &mut env,
         false,
@@ -2964,7 +2992,7 @@ fn check_recurrence_equation(
         &mut bare,
     );
     if reads.is_empty() {
-        return;
+        return None;
     }
     let push = |errors: &mut Vec<StructuralError>,
                 code: StructuralErrorCode,
@@ -2980,18 +3008,23 @@ fn check_recurrence_equation(
             }),
         });
     };
-    if bare {
+    if let Some(name) = bare {
+        let whose = if name == var {
+            "its own defining equation".to_string()
+        } else {
+            format!("the definition of '{var}', a member of its recurrence group")
+        };
         push(
             errors,
             StructuralErrorCode::RecurrenceNotWellfounded,
             format!(
-                "'{var}' is read bare inside its own defining equation as well as through \
-                 `index`. A bare read names the whole array, which does not exist while the \
-                 recurrence sweeps it (esm-spec §4.3.1.1)."
+                "'{name}' is read bare inside {whose} as well as through `index`. A bare read \
+                 names the whole array, which does not exist while the recurrence sweeps it \
+                 (esm-spec §4.3.1.1, §4.3.1.2)."
             ),
             None,
         );
-        return;
+        return None;
     }
     if let Some(read) = reads.iter().find(|r| r.unsequenceable) {
         let _ = read;
@@ -3008,7 +3041,7 @@ fn check_recurrence_equation(
             ),
             None,
         );
-        return;
+        return None;
     }
     // The cell frame: the indexed-`faq` LHS's own indices, else the RHS
     // aggregate's.
@@ -3028,7 +3061,7 @@ fn check_recurrence_equation(
             ),
             None,
         );
-        return;
+        return None;
     };
     if idx_names.is_empty() || idx_names.iter().any(|n| n.parse::<i64>().is_ok()) {
         push(
@@ -3041,7 +3074,7 @@ fn check_recurrence_equation(
             ),
             None,
         );
-        return;
+        return None;
     }
     let frame_env: HashMap<String, (i64, i64)> = match &equation.rhs {
         crate::Expr::Operator(node) if node.op == "faq" => node
@@ -3059,6 +3092,7 @@ fn check_recurrence_equation(
     };
 
     let mut axis: Option<usize> = None;
+    let mut same_cell: Vec<String> = Vec::new();
     for read in &reads {
         if read.args.len() != idx_names.len() {
             push(
@@ -3072,13 +3106,19 @@ fn check_recurrence_equation(
                 ),
                 None,
             );
-            return;
+            return None;
         }
         let mut env = frame_env.clone();
         for (k, v) in &read.env {
             env.insert(k.clone(), *v);
         }
         let mut lagged: Option<usize> = None;
+        // Whether every value of the lag on the recurrence axis was shown
+        // `>= 1` statically. A self-read need not be (esm-spec §4.3.1.1: the
+        // runtime's fail-closed read rules out the rest); a PEER read must be
+        // (§4.3.1.2), because an unpublished-cell fault is not order-free
+        // between two variables.
+        let mut proven = true;
         for (d, arg) in read.args.iter().enumerate() {
             let sym = &idx_names[d];
             let Some(StructuralAffine { coef, konst }) = structural_affine_in_sym(arg, sym, &env)
@@ -3096,7 +3136,7 @@ fn check_recurrence_equation(
                     ),
                     None,
                 );
-                return;
+                return None;
             };
             if coef != 1 {
                 push(
@@ -3109,7 +3149,7 @@ fn check_recurrence_equation(
                     ),
                     None,
                 );
-                return;
+                return None;
             }
             // lag = sym - arg. An unprovable constant part is a lag of
             // unknown sign: this axis IS the recurrence axis (it is not the
@@ -3127,9 +3167,10 @@ fn check_recurrence_equation(
                         ),
                         Some(sym),
                     );
-                    return;
+                    return None;
                 }
                 lagged = Some(d);
+                proven = false;
                 continue;
             };
             let (lag_lo, lag_hi) = (-chi, -clo);
@@ -3148,7 +3189,7 @@ fn check_recurrence_equation(
                     ),
                     Some(sym),
                 );
-                return;
+                return None;
             }
             if lagged.is_some() {
                 push(
@@ -3161,11 +3202,19 @@ fn check_recurrence_equation(
                     ),
                     Some(sym),
                 );
-                return;
+                return None;
             }
             lagged = Some(d);
+            proven &= lag_lo >= 1;
         }
         let Some(d) = lagged else {
+            // A read of a PEER at the cell being written is an ordering WITHIN
+            // the cell (esm-spec §4.3.1.2 rule 1): admitted here and recorded,
+            // and the group check rejects it only if such reads form a cycle.
+            if read.target != var {
+                same_cell.push(read.target.to_string());
+                continue;
+            }
             push(
                 errors,
                 StructuralErrorCode::RecurrenceNotWellfounded,
@@ -3176,8 +3225,25 @@ fn check_recurrence_equation(
                 ),
                 None,
             );
-            return;
+            return None;
         };
+        if read.target != var && !proven {
+            push(
+                errors,
+                StructuralErrorCode::RecurrenceNotWellfounded,
+                format!(
+                    "the read of '{}' in the definition of '{var}' — a peer in its recurrence \
+                     group — is not provably strictly earlier on axis '{}'. A read of a PEER \
+                     must be strictly earlier for every value of its lag (esm-spec §4.3.1.2): \
+                     unlike a self-read, whose same-cell values simply have not been published, \
+                     a same-position read of another variable would make the result depend on \
+                     which member the sweep evaluates first.",
+                    read.target, idx_names[d]
+                ),
+                Some(&idx_names[d]),
+            );
+            return None;
+        }
         match axis {
             None => axis = Some(d),
             Some(prev) if prev == d => {}
@@ -3193,9 +3259,144 @@ fn check_recurrence_equation(
                     ),
                     Some(&idx_names[d]),
                 );
-                return;
+                return None;
             }
         }
+    }
+    // Each axis's range as the validator can resolve it — bounds when an
+    // interval or an index set proves them, the authored spec otherwise — so
+    // `{from: steps}` and `[1, 4]` over a 4-element `steps` are one frame.
+    let ranges = match &equation.rhs {
+        crate::Expr::Operator(node) if node.op == "faq" => node.ranges.as_ref().map(|m| {
+            idx_names
+                .iter()
+                .map(|n| {
+                    m.get(n).map(|spec| match validator_symbol_bounds(spec, esm_file) {
+                        Some((lo, hi)) => format!("{lo}..{hi}"),
+                        None => serde_json::to_string(spec).unwrap_or_default(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        }),
+        _ => None,
+    };
+    Some(RecurrenceFrame {
+        idx_names: idx_names.clone(),
+        ranges,
+        axis,
+        same_cell,
+    })
+}
+
+/// Every member of a recurrence group must sweep the same frame along the same
+/// axis (esm-spec §4.3.1.2). Compared against the group's FIRST member in
+/// equation order, and reported at the first member that disagrees. A member
+/// whose own check already failed has no frame and is skipped: one diagnosis
+/// per defect.
+fn check_recurrence_group_frames(
+    groups: &[std::collections::BTreeSet<String>],
+    frames: &[(usize, &str, RecurrenceFrame)],
+    model_path: &str,
+    errors: &mut Vec<StructuralError>,
+) {
+    for g in groups {
+        let in_group: Vec<&(usize, &str, RecurrenceFrame)> =
+            frames.iter().filter(|(_, v, _)| g.contains(*v)).collect();
+        // The frame of reference: the first member, in equation order, that
+        // folds along an axis.
+        let Some(reference) = in_group.iter().find(|(_, _, f)| f.axis.is_some()) else {
+            continue;
+        };
+        let (first_var, first) = (reference.1, &reference.2);
+        if let Some((eq_idx, var, frame)) = in_group
+            .iter()
+            .map(|x| (x.0, x.1, &x.2))
+            .find(|(_, _, f)| !f.same_frame(first))
+        {
+            let what = if frame.idx_names != first.idx_names {
+                format!(
+                    "its output indices {:?} differ from {:?}",
+                    frame.idx_names, first.idx_names
+                )
+            } else if frame.ranges != first.ranges {
+                "its ranges differ".to_string()
+            } else {
+                format!(
+                    "it folds along '{}' where '{first_var}' folds along '{}'",
+                    frame.idx_names[frame.axis.unwrap_or(0)],
+                    first.idx_names[first.axis.unwrap_or(0)]
+                )
+            };
+            errors.push(StructuralError {
+                path: format!("{model_path}/equations/{eq_idx}/rhs"),
+                code: StructuralErrorCode::RecurrenceGroupAxisMismatch,
+                message: format!(
+                    "'{var}' and '{first_var}' read each other as a recurrence group, but \
+                     '{var}' does not sweep the same frame: {what}. Every member of a group \
+                     shares one cell frame — the same `output_idx`, the same ranges — and one \
+                     recurrence axis (esm-spec §4.3.1.2)."
+                ),
+                details: serde_json::json!({
+                    "variable": var,
+                    "group": g,
+                }),
+            });
+            continue;
+        }
+        // Rule 1: the same-cell reads between members must admit an order.
+        let edges: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> = in_group
+            .iter()
+            .map(|(_, v, f)| (v.to_string(), f.same_cell.iter().cloned().collect()))
+            .collect();
+        if let Some(cycle) = crate::classification::first_observed_cycle(&edges) {
+            let (eq_idx, var) = in_group
+                .iter()
+                .find(|(_, v, _)| cycle.iter().any(|c| c == v))
+                .map(|(i, v, _)| (*i, *v))
+                .expect("a cycle is among the group's members");
+            errors.push(StructuralError {
+                path: format!("{model_path}/equations/{eq_idx}/rhs"),
+                code: StructuralErrorCode::RecurrenceNotWellfounded,
+                message: format!(
+                    "the members of a recurrence group read one another at the cell being \
+                     written in a cycle ({}), so no order within the cell satisfies them. Reads \
+                     between members at the same position must be acyclic (esm-spec §4.3.1.2 \
+                     rule 1); break the cycle with a read at an earlier position.",
+                    cycle.join(" -> ")
+                ),
+                details: serde_json::json!({ "variable": var, "cycle": cycle }),
+            });
+        }
+    }
+}
+
+
+
+/// What a recurrence definition sweeps over: its output indices, their
+/// authored ranges (when the RHS is the `faq` that declares them), and the
+/// recurrence axis. Every member of a §4.3.1.2 recurrence group must agree on
+/// all three (`recurrence_group_axis_mismatch`).
+#[derive(Debug)]
+struct RecurrenceFrame {
+    idx_names: Vec<String>,
+    ranges: Option<Vec<Option<String>>>,
+    /// `None` for a member whose every causal read is a same-cell peer read.
+    axis: Option<usize>,
+    /// The peers this member reads at the cell being written (esm-spec
+    /// §4.3.1.2 rule 1): the within-cell order the group must be able to take.
+    same_cell: Vec<String>,
+}
+
+impl RecurrenceFrame {
+    /// Whether two members sweep one frame: the same indices, the same
+    /// ranges, and — where both fold along an axis — the same axis.
+    fn same_frame(&self, other: &RecurrenceFrame) -> bool {
+        self.idx_names == other.idx_names
+            && self.ranges == other.ranges
+            && match (self.axis, other.axis) {
+                (Some(a), Some(b)) => a == b,
+                _ => true,
+            }
     }
 }
 
@@ -3293,6 +3494,7 @@ fn has_index_self_read(expr: &crate::Expr, var: &str) -> bool {
 fn observed_dependency_graph(
     class: &crate::classification::Classification,
     candidates: &HashSet<String>,
+    groups: &[std::collections::BTreeSet<String>],
 ) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
     let observed: HashSet<&str> = class.observed_unknowns.iter().map(String::as_str).collect();
     class
@@ -3313,7 +3515,86 @@ fn observed_dependency_graph(
             if candidates.contains(name) {
                 deps.remove(name);
             }
+            // esm-spec §4.3.1.2: the edges INSIDE a recurrence group candidate
+            // are orderings along the group's shared axis, exactly as a
+            // candidate's self-edge is — dropped on CANDIDACY, with the
+            // well-foundedness verdict left to `check_recurrence_equation`.
+            if let Some(g) = groups.iter().find(|g| g.contains(name)) {
+                deps.retain(|d| !g.contains(d));
+            }
             (name.clone(), deps)
+        })
+        .collect()
+}
+
+/// Does `expr` gather `var` through an `index` with at least one argument that
+/// is not a bare name — a read that could be offset along an axis?
+fn has_offset_index_read(expr: &crate::Expr, var: &str) -> bool {
+    let crate::Expr::Operator(node) = expr else {
+        return false;
+    };
+    if node.op == "index"
+        && matches!(node.args.first(), Some(crate::Expr::Variable(v)) if v == var)
+        && node.args[1..]
+            .iter()
+            .any(|a| !matches!(a, crate::Expr::Variable(_)))
+    {
+        return true;
+    }
+    node.any_child(&mut |child| has_offset_index_read(child, var))
+}
+
+/// The recurrence GROUP candidates of one model node (esm-spec §4.3.1.2): each
+/// strongly connected component of two or more observeds, in the dependency
+/// graph with every recurrence candidate's self-edge already dropped, whose
+/// members are all array-shaped and whose every internal edge is carried by at
+/// least one `index` read.
+///
+/// Like a single recurrence's candidacy, this is the predicate the cycle
+/// exemption is gated on, never the well-foundedness verdict (CONFORMANCE_SPEC
+/// §5.19.5): a group with an ill-founded read is still a candidate, so it
+/// reaches the named `recurrence_*` diagnosis instead of collapsing to
+/// `observed_cycle`. A component with a scalar member, or an internal edge
+/// that is only a bare read, is no candidate and stays a cycle.
+pub(crate) fn recurrence_groups_of_parts(
+    variables: &indexmap::IndexMap<String, crate::ModelVariable>,
+    equations: &[crate::Equation],
+) -> Vec<std::collections::BTreeSet<String>> {
+    let class = crate::classification::Classification::from_parts(variables, equations);
+    if class.observed_definitions.len() < 2 {
+        return Vec::new();
+    }
+    let candidates = recurrence_candidate_vars_of_parts(variables, equations);
+    let deps = observed_dependency_graph(&class, &candidates, &[]);
+    let array_shaped = |n: &str| {
+        variables
+            .get(n)
+            .is_some_and(|v| v.shape.as_ref().is_some_and(|s| !s.is_empty()))
+    };
+    crate::classification::observed_sccs(&deps)
+        .into_iter()
+        .filter(|scc| {
+            // At least one read inside the component must be OFFSET — not a
+            // plain gather whose every index is a bare name. A cycle closed by
+            // same-cell gathers alone has no axis to fold along, exactly as a
+            // bare `s ~ s + 1` has none, and stays an `observed_cycle`.
+            scc.iter().any(|u| {
+                class
+                    .observed_definitions
+                    .get(u)
+                    .is_some_and(|rhs| scc.iter().any(|v| has_offset_index_read(rhs, v)))
+            })
+            && scc.iter().all(|m| array_shaped(m))
+                && scc.iter().all(|u| {
+                    let Some(rhs) = class.observed_definitions.get(u) else {
+                        return false;
+                    };
+                    deps.get(u).is_none_or(|succ| {
+                        succ.iter()
+                            .filter(|v| *v != u && scc.contains(*v))
+                            .all(|v| has_index_self_read(rhs, v))
+                    })
+                })
         })
         .collect()
 }
@@ -3344,7 +3625,8 @@ fn check_observed_dependency_cycle(
         return;
     }
     let candidates = recurrence_candidate_vars(model);
-    let deps = observed_dependency_graph(class, &candidates);
+    let groups = recurrence_groups_of_parts(&model.variables, &model.equations);
+    let deps = observed_dependency_graph(class, &candidates, &groups);
 
     if let Some(cycle) = crate::classification::first_observed_cycle(&deps) {
         errors.push(StructuralError {
@@ -5798,6 +6080,8 @@ struct ObservedScope {
     path: String,
     class: crate::classification::Classification,
     candidates: HashSet<String>,
+    /// Its §4.3.1.2 recurrence group candidates, by local name.
+    groups: Vec<std::collections::BTreeSet<String>>,
     /// Every variable the node declares, whatever its kind: a reference
     /// resolves by DECLARATION (a state found first shadows an observed found
     /// later), and only then asks whether its target is an observed.
@@ -5827,6 +6111,7 @@ impl ObservedScope {
             path,
             class: crate::classification::Classification::from_parts(variables, equations),
             candidates: recurrence_candidate_vars_of_parts(variables, equations),
+            groups: recurrence_groups_of_parts(variables, equations),
             declared: variables.keys().cloned().collect(),
             differentiated_refs,
         }
@@ -6000,6 +6285,45 @@ fn document_observed_graph(
                     successors,
                 },
             );
+        }
+    }
+    // esm-spec §4.3.1.2: a recurrence group is swept as ONE unit, so here it
+    // is one node — its first member — carrying every member's external reads.
+    // CONTRACTED, not merely stripped of its internal edges: a cycle that
+    // leaves the group through another scope and comes back
+    // (`a →(group) b → X.c → a`) is a real cycle, and dropping `a → b` would
+    // hide it. Within one scope the strongly connected component a group is
+    // drawn from is already maximal, so §4.9.6 can simply drop the edges.
+    for scope in scopes {
+        for g in &scope.groups {
+            let members: Vec<String> = g
+                .iter()
+                .map(|m| format!("{}.{m}", scope.path))
+                .filter(|n| nodes.contains_key(n))
+                .collect();
+            let Some(rep) = members.first().cloned() else {
+                continue;
+            };
+            let mut merged = std::collections::BTreeSet::new();
+            for m in &members {
+                if let Some(n) = nodes.get(m) {
+                    merged.extend(n.successors.iter().cloned());
+                }
+            }
+            for m in &members[1..] {
+                nodes.remove(m);
+            }
+            merged.retain(|s| !members.contains(s));
+            for n in nodes.values_mut() {
+                if n.successors.iter().any(|s| members.contains(s)) {
+                    n.successors.retain(|s| !members.contains(s));
+                    n.successors.insert(rep.clone());
+                }
+            }
+            if let Some(n) = nodes.get_mut(&rep) {
+                merged.remove(&rep);
+                n.successors = merged;
+            }
         }
     }
     nodes

@@ -885,6 +885,9 @@ impl ArrayCompiled {
             built: conditional_shapes,
             data_shaped,
         } = apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
+        // esm-spec §4.3.1.2: each recurrence group becomes the single stacked
+        // recurrence every route below already sweeps (`recurrence_group`).
+        super::recurrence_group::lower_recurrence_groups(&mut model_owned, &mut index_sets_owned)?;
         // Lower every SHAPED parameter whose value the document supplies —
         // inline array data, or one scalar broadcast over the grid (esm-spec
         // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
@@ -2837,7 +2840,7 @@ fn lhs_identity_gather(e: &Expr, var: &str, idx_names: &[String]) -> bool {
 /// When there is nothing left to contract or gate, the restriction IS the body,
 /// so the wrapper is dropped — the common shape (`s[k] = f(s[k-1])`) then walks
 /// one expression per cell rather than re-deriving an empty contraction.
-fn cell_restrict_aggregate(node: &ExpressionNode, idx_names: &[String]) -> Expr {
+pub(super) fn cell_restrict_aggregate(node: &ExpressionNode, idx_names: &[String]) -> Expr {
     let body = node
         .expr
         .as_deref()
@@ -2980,6 +2983,22 @@ pub(super) fn lower_recurrence(
         }
         let mut lagged: Option<(usize, i64)> = None;
         for (d, arg) in read.args.iter().enumerate() {
+            // The member axis of a stacked recurrence group (esm-spec §4.3.1.2,
+            // `recurrence_group`): a read SELECTS a member with a constant, and
+            // this is the one axis where a non-identity index is admitted.
+            if idx_names[d] == super::recurrence_group::MEMBER_SYM {
+                let (_, hi) = ranges[d];
+                if matches!(arg, Expr::Integer(q) if (1..=hi).contains(q)) {
+                    continue;
+                }
+                return Err(recur_err(
+                    "recurrence_not_wellfounded",
+                    format!(
+                        "a read of the stacked recurrence group '{var}' does not select a member \
+                         with a constant in 1..{hi} (esm-spec §4.3.1.2)."
+                    ),
+                ));
+            }
             match classify_self_index(arg, &idx_names[d], &env) {
                 SelfIdx::Identity => {}
                 SelfIdx::Forward => {
@@ -3035,6 +3054,13 @@ pub(super) fn lower_recurrence(
             }
         }
         let Some((d, hi)) = lagged else {
+            // A stacked group's same-cell read of an EARLIER member
+            // (esm-spec §4.3.1.2 rule 1): the frame cell, another member. The
+            // sweep publishes members in within-cell order, so the fail-closed
+            // read admits it exactly when that member precedes this one.
+            if idx_names.iter().any(|n| n == super::recurrence_group::MEMBER_SYM) {
+                continue;
+            }
             return Err(recur_err(
                 "recurrence_not_wellfounded",
                 format!(

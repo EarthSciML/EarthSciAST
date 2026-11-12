@@ -152,6 +152,13 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
         )
         lagged = 0
         for (d, arg) in enumerate(args)
+            # The member axis of a stacked recurrence group (esm-spec §4.3.1.2,
+            # recurrence_group.jl): a read SELECTS a member with a constant —
+            # the one non-identity index admitted off the recurrence axis.
+            if idx_names[d] == RECURRENCE_MEMBER_SYM
+                arg isa IntExpr && continue
+                bad("a read of the stacked recurrence group does not select a member with a constant")
+            end
             aff = _recurrence_affine_in_sym(arg, idx_names[d], env)
             aff === nothing &&
                 bad(
@@ -176,6 +183,10 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
             lagged == 0 || bad("a causal self-read is offset on more than one axis")
             lagged = d
         end
+        # A stacked group's same-cell read of an EARLIER member (esm-spec
+        # §4.3.1.2 rule 1): published in within-cell order, so the fail-closed
+        # read admits it exactly when that member precedes this one.
+        lagged == 0 && RECURRENCE_MEMBER_SYM in idx_names && continue
         lagged == 0 && bad("a causal self-read is at the same cell on every axis")
         axis == 0 && (axis = lagged)
         axis == lagged ||

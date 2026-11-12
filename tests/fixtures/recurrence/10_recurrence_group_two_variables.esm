@@ -1,0 +1,244 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "RecurrenceGroupTwoVariables",
+    "description": "The minimal recurrence GROUP (esm-spec 4.3.1.2, issue #701): two arrays over one axis, each cell of each a function of the previous cell of BOTH -- a[k] = a[k-1] + b[k-1], b[k] = a[k-1] * b[k-1], with a[1] = 1, b[1] = 2. Neither is a recurrence on its own; together they are well founded because every read between them is strictly earlier. Answer a = [1, 3, 5, 11], b = [2, 2, 6, 30]. Pins the VALUE -- every number is exactly representable -- and that the reads between members resolve to the right member at the right lag; 11 pins the order.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "recurrence-group",
+      "faq",
+      "causal-self-reference"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "RecurrenceGroupTwoVariables": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "a": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ],
+          "units": "1",
+          "description": "1 at the first level, then the sum of both members' previous cells."
+        },
+        "b": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ],
+          "units": "1",
+          "description": "2 at the first level, then the product of both members' previous cells."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "a",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                1.0,
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "a",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "b",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "b",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                2.0,
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "a",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "b",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "group_evaluates",
+          "description": "a = [1, 3, 5, 11], b = [2, 2, 6, 30].",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "lev": 1
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 3.0,
+              "coords": {
+                "lev": 2
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 5.0,
+              "coords": {
+                "lev": 3
+              }
+            },
+            {
+              "variable": "a",
+              "time": 0.0,
+              "expected": 11.0,
+              "coords": {
+                "lev": 4
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 2.0,
+              "coords": {
+                "lev": 1
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 2.0,
+              "coords": {
+                "lev": 2
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 6.0,
+              "coords": {
+                "lev": 3
+              }
+            },
+            {
+              "variable": "b",
+              "time": 0.0,
+              "expected": 30.0,
+              "coords": {
+                "lev": 4
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

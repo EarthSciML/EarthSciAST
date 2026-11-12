@@ -69,6 +69,7 @@ from .error_handling import (
     FAQ_BARE_ARRAY_OPERAND,
     OBSERVED_CYCLE,
     RAGGED_VALUES_NOT_GATHERED,
+    RECURRENCE_GROUP_AXIS_MISMATCH,
     ErrorCode,
 )
 from .index_alignment import (
@@ -840,6 +841,11 @@ def _check_recurrence_wellfoundedness(data: dict[str, Any], errors: list) -> Non
         if not isinstance(m, dict):
             continue
         variables = m.get("variables") or {}
+        # esm-spec §4.3.1.2: a member of a recurrence group counts its peers'
+        # `index` reads as causal reads, and the members' frames are compared
+        # once every member has one.
+        groups = recurrence_groups(m)
+        frames: list[tuple[int, str, tuple]] = []
         for i, eq in enumerate(m.get("equations") or []):
             if not isinstance(eq, dict):
                 continue
@@ -852,9 +858,10 @@ def _check_recurrence_wellfoundedness(data: dict[str, Any], errors: list) -> Non
             # definition at all.
             if not (isinstance(decl, dict) and decl.get("shape")):
                 continue
+            group = next((g for g in groups if var in g), frozenset())
             try:
-                recurrence.analyze_recurrence(
-                    var, eq.get("lhs"), eq.get("rhs"), symbol_bounds=bounds
+                rec = recurrence.analyze_recurrence(
+                    var, eq.get("lhs"), eq.get("rhs"), symbol_bounds=bounds, peers=group
                 )
             except recurrence.RecurrenceError as err:
                 errors.append(
@@ -865,6 +872,182 @@ def _check_recurrence_wellfoundedness(data: dict[str, Any], errors: list) -> Non
                         {"variable": var},
                     )
                 )
+                continue
+            if rec is not None and group:
+                frames.append((i, var, _recurrence_frame(rec, bounds), rec.same_cell))
+        for g in groups:
+            members = [f for f in frames if f[1] in g]
+            ref = next((f for f in members if f[2][2] is not None), None)
+            if ref is None:
+                continue
+            _, first_var, first, _ = ref
+            mismatch = False
+            for i, var, frame, _ in members:
+                same = frame[0] == first[0] and frame[1] == first[1] and (
+                    frame[2] is None or frame[2] == first[2]
+                )
+                if not same:
+                    mismatch = True
+                    errors.append(
+                        (
+                            RECURRENCE_GROUP_AXIS_MISMATCH,
+                            _pointer(f"models/{mname}/equations[{i}]/rhs"),
+                            f"'{var}' and '{first_var}' read each other as a recurrence group, "
+                            f"but '{var}' does not sweep the same frame: every member shares one "
+                            f"cell frame — the same `output_idx`, the same ranges — and one "
+                            f"recurrence axis (esm-spec §4.3.1.2).",
+                            {"variable": var, "group": sorted(g)},
+                        )
+                    )
+                    break
+            if mismatch:
+                continue
+            # Rule 1: the same-cell reads between members must admit an order.
+            succ = {f[1]: sorted(set(f[3])) for f in members}
+            cycle = _first_observed_cycle(succ)
+            if cycle is not None:
+                i, var = next((f[0], f[1]) for f in members if f[1] in cycle)
+                errors.append(
+                    (
+                        recurrence.RECURRENCE_NOT_WELLFOUNDED,
+                        _pointer(f"models/{mname}/equations[{i}]/rhs"),
+                        f"the members of a recurrence group read one another at the cell being "
+                        f"written in a cycle ({' -> '.join(cycle)}), so no order within the cell "
+                        f"satisfies them. Reads between members at the same position must be "
+                        f"acyclic (esm-spec §4.3.1.2 rule 1).",
+                        {"variable": var, "cycle": cycle},
+                    )
+                )
+
+
+def _recurrence_frame(rec: Any, bounds: Callable[[Any], Any]) -> tuple:
+    """What a recurrence definition sweeps over — its output indices, each
+    axis's range as the validator can resolve it (bounds when provable, the
+    authored spec otherwise, so ``{from: steps}`` and ``[1, 4]`` over a
+    4-element ``steps`` are one frame), and its axis. Every member of a §4.3.1.2
+    recurrence group must agree on all three."""
+    ranges = _field(rec.frame_node, "ranges") if rec.frame_node is not None else None
+    ranges = ranges if isinstance(ranges, dict) else {}
+    resolved = []
+    for name in rec.idx_names:
+        spec = ranges.get(name)
+        b = bounds(spec) if spec is not None else None
+        resolved.append(tuple(b) if b is not None else repr(_wire_expression(spec)))
+    return (tuple(rec.idx_names), tuple(resolved), rec.axis)
+
+
+def _strongly_connected(successors: Mapping[str, Any]) -> list[set[str]]:
+    """The strongly connected components of ``successors`` (Kosaraju, both
+    passes ITERATIVE for the reason :func:`_first_observed_cycle` gives)."""
+    visited: set[str] = set()
+    finish: list[str] = []
+    for root in sorted(successors):
+        if root in visited:
+            continue
+        visited.add(root)
+        stack = [(root, iter(sorted(successors.get(root, ()))))]
+        while stack:
+            node, it = stack[-1]
+            nxt = next(it, None)
+            if nxt is None:
+                finish.append(node)
+                stack.pop()
+            elif nxt in successors and nxt not in visited:
+                visited.add(nxt)
+                stack.append((nxt, iter(sorted(successors.get(nxt, ())))))
+    reverse: dict[str, list[str]] = {}
+    for u, vs in successors.items():
+        for v in vs:
+            if v in successors:
+                reverse.setdefault(v, []).append(u)
+    assigned: set[str] = set()
+    out: list[set[str]] = []
+    for root in reversed(finish):
+        if root in assigned:
+            continue
+        assigned.add(root)
+        comp = set()
+        stack2 = [root]
+        while stack2:
+            n = stack2.pop()
+            comp.add(n)
+            for p in reverse.get(n, ()):
+                if p not in assigned:
+                    assigned.add(p)
+                    stack2.append(p)
+        out.append(comp)
+    return out
+
+
+def _reads_through_index(rhs: Any, name: str) -> bool:
+    """Does ``rhs`` gather ``name`` through at least one ``index`` node? The full
+    canonical walk, for the reason :func:`_is_observed_cycle_self_edge_exempt`
+    gives: candidacy must see the same tree the edge walk does."""
+    return any(
+        isinstance(node, dict)
+        and node.get("op") == "index"
+        and (node.get("args") or [None])[0] == name
+        for node in walk_dict_exprs(rhs)
+    )
+
+
+def _reads_offset(rhs: Any, name: str) -> bool:
+    """Does ``rhs`` gather ``name`` through an ``index`` with at least one
+    argument that is not a bare name?"""
+    return any(
+        isinstance(node, dict)
+        and node.get("op") == "index"
+        and (node.get("args") or [None])[0] == name
+        and any(not isinstance(a, str) for a in (node.get("args") or [])[1:])
+        for node in walk_dict_exprs(rhs)
+    )
+
+
+def recurrence_groups(model: Any) -> list[frozenset[str]]:
+    """The recurrence GROUP candidates of one model node (esm-spec §4.3.1.2).
+
+    Each strongly connected component of two or more observeds — in the §4.9.6
+    dependency graph with every recurrence candidate's self-edge already
+    dropped — whose members are all array-shaped and whose every internal edge
+    is carried by at least one ``index`` read.
+
+    This is the predicate the cycle exemption is gated on, never the
+    well-foundedness verdict (CONFORMANCE_SPEC §5.19.5): a group with an
+    ill-founded read is still a candidate, so it reaches the named
+    ``recurrence_*`` diagnosis rather than collapsing to ``observed_cycle``. A
+    component with a scalar member, or one held together by a bare read, is no
+    candidate and stays a cycle. Shared with the evaluator, which sweeps each
+    group as its stacked single recurrence."""
+    if not isinstance(model, dict):
+        return []
+    variables = model.get("variables") or {}
+    definitions = observed_definitions(model)
+    if len(definitions) < 2:
+        return []
+    nodes = set(definitions)
+    successors = {
+        var: _observed_definition_reads(var, rhs, variables) & nodes
+        for var, rhs in definitions.items()
+    }
+    out: list[frozenset[str]] = []
+    for comp in _strongly_connected(successors):
+        if len(comp) < 2:
+            continue
+        if not all(_field(variables.get(m), "shape") for m in comp):
+            continue
+        # At least one read inside the component must be OFFSET — not a plain
+        # gather whose every index is a bare name. A cycle closed by same-cell
+        # gathers alone has no axis to fold along and stays an observed_cycle.
+        if not any(_reads_offset(definitions[u], v) for u in comp for v in comp):
+            continue
+        if all(
+            _reads_through_index(definitions[u], v)
+            for u in comp
+            for v in successors[u]
+            if v in comp and v != u
+        ):
+            out.append(frozenset(comp))
+    return sorted(out, key=sorted)
 
 
 def _is_observed_cycle_self_edge_exempt(var: str, rhs: Any, *, array_shaped: bool) -> bool:
@@ -1059,10 +1242,18 @@ def _check_observed_cycles(data: dict[str, Any], errors: list) -> None:
 
         # Sorted successors (and sorted roots in the traversal): the walk must be
         # deterministic so the binding names the SAME cycle on every run.
-        successors = {
-            var: sorted(_observed_definition_reads(var, rhs, variables) & nodes)
-            for var, rhs in definitions.items()
-        }
+        # esm-spec §4.3.1.2: the edges inside a recurrence group candidate are
+        # orderings along its shared axis, dropped on CANDIDACY like the
+        # self-edge. Within one model the component a group is drawn from is
+        # already maximal, so dropping cannot hide a cycle through it.
+        groups = recurrence_groups(m)
+        successors = {}
+        for var, rhs in definitions.items():
+            reads = _observed_definition_reads(var, rhs, variables) & nodes
+            group = next((g for g in groups if var in g), None)
+            if group is not None:
+                reads -= group
+            successors[var] = sorted(reads)
 
         found = _first_observed_cycle(successors)
         if found is not None:
@@ -2299,7 +2490,7 @@ def circular_dependency_cycle(document: Any) -> list[str] | None:
     if not nodes:
         return None
 
-    successors: dict[str, list[str]] = {}
+    succ_sets: dict[str, set[str]] = {}
     for scoped in nodes:
         var, rhs, variables = definitions[scoped]
         scope = scoped.rsplit(".", 1)[0]
@@ -2307,7 +2498,26 @@ def circular_dependency_cycle(document: Any) -> list[str] | None:
             _resolve_scoped_name(scope, name, declared)
             for name in _observed_definition_reads(var, rhs, variables)
         }
-        successors[scoped] = sorted(resolved & nodes)
+        succ_sets[scoped] = resolved & nodes
+    # esm-spec §4.3.1.2: a recurrence group is swept as ONE unit, so here it is
+    # one node — its first member — carrying every member's external reads.
+    # CONTRACTED rather than stripped of its internal edges: a cycle that leaves
+    # the group through another scope and comes back (`a ->(group) b -> X.c -> a`)
+    # is a real cycle, and dropping `a -> b` would hide it.
+    for path, model in model_nodes(document):
+        for g in recurrence_groups(model):
+            members = sorted(f"{path}.{v}" for v in g if f"{path}.{v}" in succ_sets)
+            if not members:
+                continue
+            rep_name = members[0]
+            merged: set[str] = set()
+            for mem in members:
+                merged |= succ_sets.pop(mem)
+            succ_sets[rep_name] = merged - set(members)
+            for n, ss in succ_sets.items():
+                if ss & set(members):
+                    succ_sets[n] = (ss - set(members)) | ({rep_name} if n != rep_name else set())
+    successors: dict[str, list[str]] = {n: sorted(ss) for n, ss in succ_sets.items()}
 
     def crosses_scopes(cycle: list[str]) -> bool:
         return len({name.rsplit(".", 1)[0] for name in cycle}) > 1

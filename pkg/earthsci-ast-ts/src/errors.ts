@@ -180,6 +180,9 @@ export const ERROR_CODES = {
   //   WINS, not the order cells are EVALUATED in, and a region's value
   //   expression is evaluated once for the whole region.
   RECURRENCE_UNSUPPORTED_FORM: 'recurrence_unsupported_form',
+  // `recurrence_group_axis_mismatch` — the members of a recurrence group
+  // (esm-spec §4.3.1.2) do not share one cell frame and one recurrence axis.
+  RECURRENCE_GROUP_AXIS_MISMATCH: 'recurrence_group_axis_mismatch',
   // `indexed_definition_unsupported_form` — a bare-index observed definition
   //   `index(V, k…) ~ rhs` outside the runnable form of esm-spec §6.3.1 (the RHS
   //   is not a `faq` whose `output_idx` names the subscripts in order). Raised

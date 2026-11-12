@@ -605,6 +605,894 @@
           }
         }
       }
+    },
+    {
+      "id": "group_same_cell_cycle",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R/equations/0/rhs",
+      "why": "a reads its peer b at the cell being written and b reads a there too: index(b, k) in a, index(a, k) in b. A same-position read of a peer is an ordering WITHIN the cell (esm-spec 4.3.1.2 rule 1), so the group is still a candidate (a also reads a[k-1]), but two of them in a cycle admit no order. Reported at the first member, in equation order, on the cycle.",
+      "document": {
+        "esm": "1.2.0",
+        "metadata": {
+          "name": "R",
+          "description": "recurrence group case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "lev": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "models": {
+          "R": {
+            "variables": {
+              "a": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev"
+                ]
+              },
+              "b": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev"
+                ]
+              }
+            },
+            "equations": [
+              {
+                "lhs": "a",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      },
+                      1.0,
+                      {
+                        "op": "+",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "a",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "b",
+                              "k"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "lhs": "b",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    }
+                  },
+                  "expr": {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "index",
+                        "args": [
+                          "a",
+                          "k"
+                        ]
+                      },
+                      2.0
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "group_peer_straddling_lag",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R/equations/1/rhs",
+      "why": "b reads its peer a at k - j over a contracted j in [0, 1]: earlier for j = 1, the same cell for j = 0. A self-read may straddle zero (the unpublished cell faults whatever the order); a PEER read may not (esm-spec 4.3.1.2 rule 1).",
+      "document": {
+        "esm": "1.2.0",
+        "metadata": {
+          "name": "R",
+          "description": "recurrence group case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "lev": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "models": {
+          "R": {
+            "variables": {
+              "a": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev"
+                ]
+              },
+              "b": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev"
+                ]
+              }
+            },
+            "equations": [
+              {
+                "lhs": "a",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      },
+                      1.0,
+                      {
+                        "op": "+",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "a",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "b",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "lhs": "b",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      },
+                      2.0,
+                      {
+                        "op": "faq",
+                        "args": [],
+                        "output_idx": [],
+                        "ranges": {
+                          "j": [
+                            0,
+                            1
+                          ]
+                        },
+                        "expr": {
+                          "op": "index",
+                          "args": [
+                            "a",
+                            {
+                              "op": "-",
+                              "args": [
+                                "k",
+                                "j"
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "group_peer_forward",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R/equations/0/rhs",
+      "why": "a reads its peer b at k + 1, a cell no sweep order has reached. The read of a peer is checked by every row of 4.3.1.1's table, exactly as a self-read is.",
+      "document": {
+        "esm": "1.2.0",
+        "metadata": {
+          "name": "R",
+          "description": "recurrence group case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "lev": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "models": {
+          "R": {
+            "variables": {
+              "a": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev"
+                ]
+              },
+              "b": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev"
+                ]
+              }
+            },
+            "equations": [
+              {
+                "lhs": "a",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      },
+                      1.0,
+                      {
+                        "op": "+",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "a",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "b",
+                              {
+                                "op": "+",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "lhs": "b",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      },
+                      2.0,
+                      {
+                        "op": "index",
+                        "args": [
+                          "a",
+                          {
+                            "op": "-",
+                            "args": [
+                              "k",
+                              1
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "group_peer_bare_read",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R/equations/1/rhs",
+      "why": "b reads a through index (making a and b a group candidate) and ALSO whole, through sum(a). A bare read of any member names an array that does not exist while the group sweeps it. Candidacy holds because an index read carries the edge, so the bare read gets the recurrence code rather than observed_cycle.",
+      "document": {
+        "esm": "1.2.0",
+        "metadata": {
+          "name": "R",
+          "description": "recurrence group case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "lev": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "models": {
+          "R": {
+            "variables": {
+              "a": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev"
+                ]
+              },
+              "b": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev"
+                ]
+              }
+            },
+            "equations": [
+              {
+                "lhs": "a",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      },
+                      1.0,
+                      {
+                        "op": "+",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "a",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "b",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "lhs": "b",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      },
+                      2.0,
+                      {
+                        "op": "+",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "a",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "sum",
+                            "args": [
+                              "a"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "group_frame_mismatch",
+      "expected_code": "recurrence_group_axis_mismatch",
+      "expected_path": "/models/R/equations/1/rhs",
+      "why": "a sweeps k over a 4-element set, b over a 5-element one. Members of a group share one cell frame -- the same output_idx and the same ranges (esm-spec 4.3.1.2 rule 2). Reported at the first member, in equation order, whose frame differs from the first member's.",
+      "document": {
+        "esm": "1.2.0",
+        "metadata": {
+          "name": "R",
+          "description": "recurrence group case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "lev": {
+            "kind": "interval",
+            "size": 4
+          },
+          "lev2": {
+            "kind": "interval",
+            "size": 5
+          }
+        },
+        "models": {
+          "R": {
+            "variables": {
+              "a": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev"
+                ]
+              },
+              "b": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev2"
+                ]
+              }
+            },
+            "equations": [
+              {
+                "lhs": "a",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      },
+                      1.0,
+                      {
+                        "op": "+",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "a",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "b",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "lhs": "b",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev2"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      },
+                      2.0,
+                      {
+                        "op": "index",
+                        "args": [
+                          "a",
+                          {
+                            "op": "-",
+                            "args": [
+                              "k",
+                              1
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "group_axis_mismatch",
+      "expected_code": "recurrence_group_axis_mismatch",
+      "expected_path": "/models/R/equations/1/rhs",
+      "why": "A 2-D group where a folds along k and b along j. Each member is well founded on its own axis; together they are not one sweep (esm-spec 4.3.1.2 rule 2).",
+      "document": {
+        "esm": "1.2.0",
+        "metadata": {
+          "name": "R",
+          "description": "recurrence group case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "lev": {
+            "kind": "interval",
+            "size": 4
+          },
+          "col": {
+            "kind": "interval",
+            "size": 3
+          }
+        },
+        "models": {
+          "R": {
+            "variables": {
+              "a": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev",
+                  "col"
+                ]
+              },
+              "b": {
+                "type": "unknown",
+                "units": "1",
+                "shape": [
+                  "lev",
+                  "col"
+                ]
+              }
+            },
+            "equations": [
+              {
+                "lhs": "a",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k",
+                    "j"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    },
+                    "j": {
+                      "from": "col"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      },
+                      1.0,
+                      {
+                        "op": "+",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "a",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              },
+                              "j"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "b",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k",
+                                  1
+                                ]
+                              },
+                              "j"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "lhs": "b",
+                "rhs": {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [
+                    "k",
+                    "j"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "lev"
+                    },
+                    "j": {
+                      "from": "col"
+                    }
+                  },
+                  "expr": {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<=",
+                        "args": [
+                          "j",
+                          1
+                        ]
+                      },
+                      2.0,
+                      {
+                        "op": "index",
+                        "args": [
+                          "a",
+                          "k",
+                          {
+                            "op": "-",
+                            "args": [
+                              "j",
+                              1
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
     }
   ]
 }

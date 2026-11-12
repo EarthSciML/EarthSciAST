@@ -1,0 +1,103 @@
+{
+  "fixture": "11_recurrence_group_order_pin",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 1,
+      "variable": "a",
+      "actual": 0.5
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 2,
+      "variable": "a",
+      "actual": 1.0
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 3,
+      "variable": "a",
+      "actual": 0.25
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 4,
+      "variable": "a",
+      "actual": 0.5
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 5,
+      "variable": "a",
+      "actual": 0.25
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 6,
+      "variable": "a",
+      "actual": 0.5
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 7,
+      "variable": "a",
+      "actual": 0.25
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 8,
+      "variable": "a",
+      "actual": 0.5
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 9,
+      "variable": "b",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 10,
+      "variable": "b",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 11,
+      "variable": "b",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 12,
+      "variable": "b",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 13,
+      "variable": "b",
+      "actual": 1.0000000000000002e+16
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 14,
+      "variable": "b",
+      "actual": 1.0000000000000004e+16
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 15,
+      "variable": "b",
+      "actual": 1.0000000000000004e+16
+    },
+    {
+      "test_id": "group_is_the_left_fold",
+      "assertion_idx": 16,
+      "variable": "b",
+      "actual": 1.0000000000000006e+16
+    }
+  ]
+}

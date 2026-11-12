@@ -118,12 +118,26 @@ func observedDependencyGraph(model *Model, file *ESMFile, prefix string, ix *sco
 	if len(reads) == 0 {
 		return nil
 	}
+	// esm-spec §4.3.1.2: the edges inside a recurrence group candidate are
+	// orderings along its shared axis, dropped on CANDIDACY like the self-edge.
+	// Within one model the component a group is drawn from is already maximal,
+	// so dropping them cannot hide a cycle through it.
+	groups := recurrenceGroups(model, file)
 	graph := make(map[string][]string, len(reads))
 	for name, refs := range reads {
+		var group map[string]bool
+		for _, g := range groups {
+			if g[name] {
+				group = g
+			}
+		}
 		successors := map[string]bool{}
 		for ref := range refs {
 			local, inScope := strings.CutPrefix(ref, prefix+".")
 			if !inScope {
+				continue
+			}
+			if group[local] {
 				continue
 			}
 			if _, isObserved := reads[local]; isObserved {

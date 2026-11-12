@@ -3150,9 +3150,18 @@ func crossScopeObservedGraph(file *ESMFile, ix *scopedNameIndex) map[string][]st
 	// (observedDefinitionReads).
 	externalStates := map[string]bool{}
 
+	// esm-spec §4.3.1.2: each scope's recurrence groups, by full scoped name.
+	var scopedGroups [][]string
 	var walk func(prefix string, m *Model)
 	walk = func(prefix string, m *Model) {
 		scopes = append(scopes, scope{prefix, observedDefinitionReads(m, file, prefix, ix)})
+		for _, g := range recurrenceGroups(m, file) {
+			var members []string
+			for _, n := range sortedKeysOfSet(g) {
+				members = append(members, prefix+"."+n)
+			}
+			scopedGroups = append(scopedGroups, members)
+		}
 		for _, eq := range m.Equations {
 			for name := range derivativeTargets(eq.LHS) {
 				if strings.Contains(name, ".") {
@@ -3197,6 +3206,53 @@ func crossScopeObservedGraph(file *ESMFile, ix *scopedNameIndex) map[string][]st
 				}
 			}
 			graph[from] = sortedKeysOfSet(successors)
+		}
+	}
+	// esm-spec §4.3.1.2: a recurrence group is swept as ONE unit, so here it is
+	// one node — its first member — carrying every member's external reads.
+	// CONTRACTED rather than stripped of its internal edges: a cycle that leaves
+	// the group through another scope and comes back (`a ->(group) b -> X.c -> a`)
+	// is a real cycle, and dropping `a -> b` would hide it.
+	for _, members := range scopedGroups {
+		inGroup := map[string]bool{}
+		var present []string
+		for _, m := range members {
+			if _, ok := graph[m]; ok {
+				present = append(present, m)
+				inGroup[m] = true
+			}
+		}
+		if len(present) == 0 {
+			continue
+		}
+		rep := present[0]
+		merged := map[string]bool{}
+		for _, m := range present {
+			for _, s := range graph[m] {
+				if !inGroup[s] {
+					merged[s] = true
+				}
+			}
+			delete(graph, m)
+		}
+		graph[rep] = sortedKeysOfSet(merged)
+		for n, succ := range graph {
+			hit := false
+			kept := map[string]bool{}
+			for _, s := range succ {
+				if inGroup[s] {
+					hit = true
+				} else {
+					kept[s] = true
+				}
+			}
+			if !hit {
+				continue
+			}
+			if n != rep {
+				kept[rep] = true
+			}
+			graph[n] = sortedKeysOfSet(kept)
 		}
 	}
 	return graph

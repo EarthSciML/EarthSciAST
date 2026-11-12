@@ -257,7 +257,7 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
             @test manifest.pinned.code === true
             @test manifest.pinned.path === true
             @test manifest.pinned.message === false
-            @test length(manifest.cases) == 8
+            @test length(manifest.cases) == 14
             for case in manifest.cases
                 @testset "$(case.id)" begin
                     res = validate_text(JSON3.write(case.document))

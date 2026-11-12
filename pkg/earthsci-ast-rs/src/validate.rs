@@ -225,6 +225,9 @@ pub enum StructuralErrorCode {
     /// not a `faq` over the variable's own axes. The READ is causal; the
     /// CARRIER cannot sequence it.
     RecurrenceUnsupportedForm,
+    /// The members of a recurrence group (esm-spec §4.3.1.2) do not share one
+    /// cell frame — the same `output_idx` and ranges — and one recurrence axis.
+    RecurrenceGroupAxisMismatch,
     /// A `faq` `ranges` entry `{ "from": NAME }` whose NAME is not a key
     /// of the document `index_sets` registry (RFC semiring-faq-unified-ir §5.2):
     /// no implicit interval is inferred for an undeclared name.
@@ -338,6 +341,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::FaqBareArrayOperand => codes::FAQ_BARE_ARRAY_OPERAND,
             Self::RecurrenceNotWellfounded => codes::RECURRENCE_NOT_WELLFOUNDED,
             Self::RecurrenceUnsupportedForm => codes::RECURRENCE_UNSUPPORTED_FORM,
+            Self::RecurrenceGroupAxisMismatch => codes::RECURRENCE_GROUP_AXIS_MISMATCH,
             Self::UndefinedIndexSet => codes::UNDEFINED_INDEX_SET,
             Self::InvalidBroadcastFn => codes::INVALID_BROADCAST_FN,
             Self::ArrayShapeMismatch => codes::ARRAY_SHAPE_MISMATCH,

@@ -26,7 +26,7 @@
 
 import { ERROR_CODES } from '../errors.js'
 import { observedDefinitions } from '../classification.js'
-import { isRecurrenceCandidate } from '../recurrence.js'
+import { isRecurrenceCandidate, recurrenceGroups } from '../recurrence.js'
 import type { EsmFile, Model } from '../types.js'
 import type { StructuralError } from './types.js'
 import { extractVariableReferences, collectIndexSymbols } from './expr-utils.js'
@@ -93,9 +93,18 @@ function observedDependencyGraph(
   esmFile: EsmFile | undefined,
 ): Map<string, string[]> {
   const reads = observedDefinitionReads(model, esmFile)
+  // esm-spec §4.3.1.2: the edges inside a recurrence group candidate are
+  // orderings along its shared axis, dropped on CANDIDACY like the self-edge.
+  // Within one model the component a group is drawn from is already maximal,
+  // so dropping them cannot hide a cycle through it.
+  const groups = recurrenceGroups(model, esmFile)
   const graph = new Map<string, string[]>()
   for (const [name, refs] of reads) {
-    graph.set(name, [...refs].filter((ref) => reads.has(ref)).sort())
+    const group = groups.find((g) => g.has(name))
+    graph.set(
+      name,
+      [...refs].filter((ref) => reads.has(ref) && !(group?.has(ref) ?? false)).sort(),
+    )
   }
   return graph
 }

@@ -379,6 +379,9 @@ RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded"
 #: through a `makearray` region value or a whole-operand op -- or an RHS that is
 #: not a `faq` over the variable's frame.
 RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
+#: The members of a recurrence group (esm-spec §4.3.1.2) do not share one cell
+#: frame — the same ``output_idx`` and ranges — and one recurrence axis.
+RECURRENCE_GROUP_AXIS_MISMATCH = "recurrence_group_axis_mismatch"
 
 
 # ===========================================================================

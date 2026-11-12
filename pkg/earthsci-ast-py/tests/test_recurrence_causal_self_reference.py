@@ -109,6 +109,11 @@ _FIXTURE_VALUES: dict[str, tuple[str, list[float]]] = {
 _INLINE_ONLY_FIXTURES = (
     "07_recurrence_thirty_eight_lags",
     "09_recurrence_through_expression_template",
+    # Recurrence GROUPS (esm-spec §4.3.1.2): two variables swept together, so
+    # there is no single recurrence variable for the direct sweep to read.
+    "10_recurrence_group_two_variables",
+    "11_recurrence_group_order_pin",
+    "12_recurrence_group_same_cell_order",
 )
 
 

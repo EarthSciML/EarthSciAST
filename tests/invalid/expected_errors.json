@@ -4218,5 +4218,27 @@
     "parse_error": true,
     "is_valid": false,
     "notes": "Rejected at LOAD with `removed_op`: `\"op\": \"aggregate\"`, the deprecated alias of `faq`, was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "recurrence_group_not_candidate_bare_only.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/R",
+        "code": "observed_cycle"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec 4.3.1.2 / 4.9.6. a reads b through index, but b reads a ONLY whole (sum(a)): the edge b -> a is carried by no index read, so {a, b} is no recurrence group candidate and the cycle is reported as observed_cycle. The group exemption is gated on candidacy, which is narrower than 'two array observeds that read each other'."
+  },
+  "recurrence_group_not_candidate_scalar_member.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/R",
+        "code": "observed_cycle"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec 4.3.1.2 / 4.9.6. An array a and a SCALAR c read each other; a component with a scalar member has no shared axis to fold along, so it is no recurrence group candidate and stays an observed_cycle."
   }
 }

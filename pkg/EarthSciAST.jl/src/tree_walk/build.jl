@@ -5529,6 +5529,17 @@ function _build_evaluator_impl(
         compiler isa Symbol ? compiler : compiler.name,
         get(kwargs, :form, :inplace)
     )
+    # esm-spec §4.3.1.2: each recurrence group becomes its stacked single
+    # recurrence plus one slice per member, before anything is laid out, so every
+    # fill route sweeps it through the one recurrence implementation
+    # (tree_walk/recurrence_group.jl). `nothing` — no group — changes nothing.
+    stacked = _stack_recurrence_groups(
+        model, get(kwargs, :index_sets, Dict{String, IndexSet}())
+    )
+    if stacked !== nothing
+        model = stacked[1]
+        kwargs = merge(values(kwargs), (; index_sets = stacked[2]))
+    end
     plan = _plan_for(compiler)
     record = _BuildRecord(plan)
     insp = get(kwargs, :inspect, nothing)

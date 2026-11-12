@@ -52,12 +52,64 @@ function validate_recurrence_semantics(file::EsmFile)::Vector{StructuralError}
             n for (n, v) in model.variables if _recurrence_is_array_shape(v.shape)
         )
         isempty(array_shaped) && continue
+        # esm-spec §4.3.1.2: a recurrence group's members count their peers'
+        # `index` reads as causal reads, and their frames are compared once
+        # every member has one.
+        groups = recurrence_groups(model)
+        frames = Tuple{Int, String, Any}[]
         for (i, eq) in enumerate(model.equations)
-            _check_recurrence_equation!(
+            t = _recurrence_lhs_target(eq.lhs)
+            g = t === nothing ? nothing :
+                something(findfirst(gr -> t[1] in gr, groups), 0)
+            group = (g === nothing || g == 0) ? nothing : groups[g]
+            frame = _check_recurrence_equation!(
                 errors, file, eq,
                 "/models/$model_name/equations/$(i - 1)/rhs",
-                array_shaped
+                array_shaped; group = group
             )
+            (frame !== nothing && group !== nothing) && push!(frames, (i, t[1], frame))
+        end
+        for g in groups
+            members = filter(f -> f[2] in g, frames)
+            ref = findfirst(f -> f[3][3] !== nothing, members)
+            ref === nothing && continue
+            _, first_var, first_frame = members[ref]
+            mismatch = false
+            for (i, var, frame) in members
+                (frame[1] == first_frame[1] && frame[2] == first_frame[2] &&
+                    (frame[3] === nothing || frame[3] == first_frame[3])) && continue
+                mismatch = true
+                push!(
+                    errors, StructuralError(
+                        "/models/$model_name/equations/$(i - 1)/rhs",
+                        "'$var' and '$first_var' read each other as a recurrence group, but " *
+                            "'$var' does not sweep the same frame: every member shares one " *
+                            "cell frame — the same `output_idx`, the same ranges — and one " *
+                            "recurrence axis (esm-spec §4.3.1.2).",
+                        ERROR_CODES.RECURRENCE_GROUP_AXIS_MISMATCH,
+                        Dict{String, Any}("variable" => var, "group" => sort!(collect(g)))
+                    )
+                )
+                break
+            end
+            mismatch && continue
+            # Rule 1: the same-cell reads between members must admit an order.
+            adj = Dict{String, Vector{String}}(f[2] => f[3][4] for f in members)
+            cycle = _first_observed_cycle(adj)
+            if cycle !== nothing
+                at = members[findfirst(f -> f[2] in cycle, members)]
+                push!(
+                    errors, StructuralError(
+                        "/models/$model_name/equations/$(at[1] - 1)/rhs",
+                        "the members of a recurrence group read one another at the cell being " *
+                            "written in a cycle (" * join(cycle, " -> ") * "), so no order " *
+                            "within the cell satisfies them. Reads between members at the same " *
+                            "position must be acyclic (esm-spec §4.3.1.2 rule 1).",
+                        ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
+                        Dict{String, Any}("variable" => at[2], "cycle" => cycle)
+                    )
+                )
+            end
         end
     end
     return errors
@@ -183,7 +235,17 @@ struct _RecurrenceSelfRead
     args::Vector{ASTExpr}
     env::Dict{String, Tuple{Int, Int}}
     unsequenceable::Bool
+    # The variable read: the defined variable itself, or (esm-spec §4.3.1.2) a
+    # peer in its recurrence group.
+    target::String
 end
+
+# The frame symbol of a stacked recurrence group's member axis (esm-spec
+# §4.3.1.2). Reserved: the build-time recurrence check admits a constant index on
+# an axis of this name, and only there. Never authored — it exists only in the
+# stacked reduction `_stack_recurrence_groups` (tree_walk/recurrence_group.jl)
+# builds.
+const RECURRENCE_MEMBER_SYM = "__esm_recurrence_member"
 
 # Ops whose operands are consumed WHOLE: a self-read underneath one of these
 # names a cell of an array that has to exist in full before the op can run, so
@@ -217,8 +279,20 @@ function _collect_recurrence_self_reads!(
         out::Vector{_RecurrenceSelfRead},
         bare::Ref{Bool}
     )
+    return _collect_recurrence_self_reads!(e, [String(var)], file, env, blocked, out, bare)
+end
+
+# The same walk over several names at once — a recurrence group's members
+# (esm-spec §4.3.1.2) — recording which one each read names.
+function _collect_recurrence_self_reads!(
+        e::ASTExpr, vars::Vector{String}, file::EsmFile,
+        env::Vector{Pair{String, Tuple{Int, Int}}},
+        blocked::Bool,
+        out::Vector{_RecurrenceSelfRead},
+        bare::Ref{Bool}
+    )
     if !(e isa OpExpr)
-        e isa VarExpr && e.name == var && (bare[] = true)
+        e isa VarExpr && e.name in vars && (bare[] = true)
         return out
     end
     pushed = 0
@@ -231,10 +305,14 @@ function _collect_recurrence_self_reads!(
         end
     end
     is_self_index = e.op == "index" && !isempty(e.args) &&
-        e.args[1] isa VarExpr && (e.args[1]::VarExpr).name == var
+        e.args[1] isa VarExpr && (e.args[1]::VarExpr).name in vars
     if is_self_index
         snapshot = Dict{String, Tuple{Int, Int}}(env)
-        push!(out, _RecurrenceSelfRead(e.args[2:end], snapshot, blocked))
+        push!(
+            out, _RecurrenceSelfRead(
+                e.args[2:end], snapshot, blocked, (e.args[1]::VarExpr).name
+            )
+        )
     end
     # A `makearray` REGION VALUE (`values`) is evaluated once for the whole
     # region, so a self-read inside one cannot be sequenced: §4.3.2's region
@@ -242,15 +320,15 @@ function _collect_recurrence_self_reads!(
     blocked_children = blocked || _recurrence_op_blocks_cell_restriction(e.op)
     for (j, a) in enumerate(e.args)
         (is_self_index && j == 1) && continue
-        _collect_recurrence_self_reads!(a, var, file, env, blocked_children, out, bare)
+        _collect_recurrence_self_reads!(a, vars, file, env, blocked_children, out, bare)
     end
     for side in (e.expr_body, e.filter, e.key, e.lower, e.upper)
         side === nothing && continue
-        _collect_recurrence_self_reads!(side, var, file, env, blocked_children, out, bare)
+        _collect_recurrence_self_reads!(side, vars, file, env, blocked_children, out, bare)
     end
     if e.values !== nothing
         for v in e.values
-            _collect_recurrence_self_reads!(v, var, file, env, true, out, bare)
+            _collect_recurrence_self_reads!(v, vars, file, env, true, out, bare)
         end
     end
     resize!(env, length(env) - pushed)
@@ -280,18 +358,23 @@ end
 function _check_recurrence_equation!(
         errors::Vector{StructuralError}, file::EsmFile,
         eq::Equation, field_path::String,
-        array_shaped::Set{String}
+        array_shaped::Set{String};
+        group::Union{Nothing, Set{String}} = nothing
     )
     target = _recurrence_lhs_target(eq.lhs)
-    target === nothing && return errors
+    target === nothing && return nothing
     var, lhs_idx = target
-    var in array_shaped || return errors
+    var in array_shaped || return nothing
 
+    # The names whose `index` reads are causal reads here: `var`, plus — for a
+    # member of a §4.3.1.2 recurrence group — every peer.
+    vars = String[var]
+    group === nothing || append!(vars, sort!([g for g in group if g != var]))
     env = Pair{String, Tuple{Int, Int}}[]
     reads = _RecurrenceSelfRead[]
     bare = Ref(false)
-    _collect_recurrence_self_reads!(eq.rhs, var, file, env, false, reads, bare)
-    isempty(reads) && return errors
+    _collect_recurrence_self_reads!(eq.rhs, vars, file, env, false, reads, bare)
+    isempty(reads) && return nothing
 
     push_err! = (code, message, axis) -> push!(
         errors, StructuralError(
@@ -307,7 +390,7 @@ function _check_recurrence_equation!(
                 "`index`. A bare read names the whole array, which does not exist while the " *
                 "recurrence sweeps it (esm-spec §4.3.1.1).", nothing
         )
-        return errors
+        return nothing
     end
     if any(r -> r.unsequenceable, reads)
         push_err!(
@@ -320,7 +403,7 @@ function _check_recurrence_equation!(
                 "as one `faq` with the base case as an `ifelse` guard in the body.",
             nothing
         )
-        return errors
+        return nothing
     end
 
     # The cell frame: the indexed-`faq` LHS's own indices, else the RHS
@@ -337,7 +420,7 @@ function _check_recurrence_equation!(
                 "variable's axes and its LHS is not the indexed-`faq` form " *
                 "`faq{expr: index($var, k…)}` (esm-spec §4.3.1.1).", nothing
         )
-        return errors
+        return nothing
     end
     idx_names = String[string(s) for s in raw_idx]
     if isempty(idx_names) || any(n -> tryparse(Int, n) !== nothing, idx_names)
@@ -347,7 +430,7 @@ function _check_recurrence_equation!(
                 "along ($(idx_names)); a literal singleton dimension cannot be a recurrence " *
                 "axis (esm-spec §4.3.1.1).", nothing
         )
-        return errors
+        return nothing
     end
 
     frame_env = Dict{String, Tuple{Int, Int}}()
@@ -359,6 +442,7 @@ function _check_recurrence_equation!(
     end
 
     axis = nothing   # the one frame position every self-read must agree on
+    same_cell = String[]   # §4.3.1.2 rule 1: peers read at the cell being written
     for read in reads
         if length(read.args) != length(idx_names)
             push_err!(
@@ -367,10 +451,13 @@ function _check_recurrence_equation!(
                     "its frame has $(length(idx_names)) axes; every self-read indexes every " *
                     "axis (esm-spec §4.3.1.1).", nothing
             )
-            return errors
+            return nothing
         end
         env = merge(frame_env, read.env)
         lagged = nothing
+        # Whether every value of the recurrence-axis lag was shown `>= 1`. A
+        # self-read need not be; a PEER read must be (esm-spec §4.3.1.2).
+        proven = true
         for (d, arg) in enumerate(read.args)
             sym = idx_names[d]
             aff = _recurrence_affine_in_sym(arg, sym, env)
@@ -389,7 +476,7 @@ function _check_recurrence_equation!(
                         "<term reading index($var, $sym - a)>, 0)`.",
                     nothing
                 )
-                return errors
+                return nothing
             end
             coef, konst = aff
             if coef != 1
@@ -399,7 +486,7 @@ function _check_recurrence_equation!(
                         "'$sym' with coefficient $coef, not 1, so it does not name a position " *
                         "relative to the cell being written (esm-spec §4.3.1.1).", nothing
                 )
-                return errors
+                return nothing
             end
             # An unprovable constant part is a lag of UNKNOWN SIGN. This axis
             # IS the recurrence axis — the read is not the identity — and the
@@ -414,9 +501,10 @@ function _check_recurrence_equation!(
                             "recurrence folds along exactly ONE axis; every other index must be " *
                             "the bare frame symbol (esm-spec §4.3.1.1).", sym
                     )
-                    return errors
+                    return nothing
                 end
                 lagged = d
+                proven = false
                 continue
             end
             clo, chi = konst
@@ -431,7 +519,7 @@ function _check_recurrence_equation!(
                         "strictly EARLIER positions; no sweep order can satisfy a same-cell or " *
                         "forward read (esm-spec §4.3.1.1).", sym
                 )
-                return errors
+                return nothing
             end
             if lagged !== nothing
                 push_err!(
@@ -440,18 +528,40 @@ function _check_recurrence_equation!(
                         "recurrence folds along exactly ONE axis; every other index must be the " *
                         "bare frame symbol (esm-spec §4.3.1.1).", sym
                 )
-                return errors
+                return nothing
             end
             lagged = d
+            proven &= lag_lo >= 1
+        end
+        if lagged === nothing && read.target != var
+            # A read of a PEER at the cell being written is an ordering WITHIN
+            # the cell; the group check rejects it only if such reads form a
+            # cycle (esm-spec §4.3.1.2 rule 1).
+            push!(same_cell, read.target)
+            continue
         end
         if lagged === nothing
             push_err!(
                 ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-                "a causal self-read of '$var' is at the same cell on every axis, so it " *
-                    "defines '$var' in terms of itself rather than of an earlier position " *
-                    "(esm-spec §4.3.1.1).", nothing
+                "a causal read of '$(read.target)' in the definition of '$var' is at the same " *
+                    "cell on every axis, so it defines '$var' in terms of a value at the cell " *
+                    "being written rather than of an earlier position (esm-spec §4.3.1.1, " *
+                    "§4.3.1.2).", nothing
             )
-            return errors
+            return nothing
+        end
+        if read.target != var && !proven
+            push_err!(
+                ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
+                "the read of '$(read.target)' in the definition of '$var' — a peer in its " *
+                    "recurrence group — is not provably strictly earlier on axis " *
+                    "'$(idx_names[lagged])'. A read of a PEER must be strictly earlier for every " *
+                    "value of its lag (esm-spec §4.3.1.2): unlike a self-read, whose same-cell " *
+                    "values simply have not been published, a same-position read of another " *
+                    "variable would make the result depend on which member is evaluated first.",
+                idx_names[lagged]
+            )
+            return nothing
         end
         if axis === nothing
             axis = lagged
@@ -463,10 +573,20 @@ function _check_recurrence_equation!(
                     "A definition folds along exactly one axis (esm-spec §4.3.1.1).",
                 idx_names[lagged]
             )
-            return errors
+            return nothing
         end
     end
-    return errors
+    # The frame, for the §4.3.1.2 comparison across a group's members: output
+    # indices, each axis's range as the validator resolves it (bounds when
+    # provable, the authored spec otherwise), and the recurrence axis.
+    ranges_sig = Any[]
+    for n in idx_names
+        spec = (rhs_agg === nothing || rhs_agg.ranges === nothing) ? nothing :
+            get(rhs_agg.ranges, n, nothing)
+        b = spec === nothing ? nothing : _recurrence_symbol_bounds(spec, file)
+        push!(ranges_sig, b === nothing ? repr(spec) : b)
+    end
+    return (idx_names, ranges_sig, axis, sort!(unique(same_cell)))
 end
 
 

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any, Callable
 
 # The two esm-spec §4.3.1.1 rejection codes. Imported from the code registry so
@@ -279,9 +280,18 @@ def _classify_self_index(
 _WHOLE_OPERAND_OPS = frozenset({"reshape", "transpose", "concat", "broadcast"})
 
 
+#: The frame symbol of a stacked recurrence group's member axis (esm-spec
+#: §4.3.1.2). Reserved: :func:`analyze_recurrence` admits a constant index on an
+#: axis of this name, and only there. It is never authored — it exists only in
+#: the stacked reduction :func:`earthsci_ast.recurrence_group.stack_recurrence_groups`
+#: builds.
+MEMBER_SYM = "__esm_recurrence_member"
+
+
 @dataclass
 class SelfRead:
-    """One ``index(V, …)`` read of ``V`` inside ``V``'s own defining RHS."""
+    """One ``index(V, …)`` read of ``V`` inside ``V``'s own defining RHS — or,
+    for a member of a recurrence group (esm-spec §4.3.1.2), of a peer."""
 
     #: The index arguments (everything after the array operand).
     args: list
@@ -291,6 +301,8 @@ class SelfRead:
     #: restricted to one cell — a ``makearray`` region value, or a whole-operand
     #: op above.
     unsequenceable: bool
+    #: The variable read: the defined variable itself, or a group peer.
+    target: str = ""
 
 
 def _aggregate_range_env(
@@ -366,21 +378,30 @@ def mentions(node: Any, var: str) -> bool:
 
 def find_self_reads(
     node: Any,
-    var: str,
+    var: str | Iterable[str],
     symbol_bounds: Callable[[Any], tuple[int, int] | None],
 ) -> tuple[list[SelfRead], bool]:
     """Every ``index(var, …)`` read in ``node``, plus whether ``var`` is read BARE.
 
+    ``var`` may be several names — a recurrence group's members (esm-spec
+    §4.3.1.2) — in which case a read of any of them counts, each
+    :class:`SelfRead` records which (``target``), and the flag is set by a bare
+    read of any of them.
+
     A bare read is never a causal read (esm-spec §4.3.1.1 rejection 4): it names
     the whole array, which does not exist at any point during the sweep.
     """
+    names = {var} if isinstance(var, str) else set(var)
     reads: list[SelfRead] = []
     bare = [False]
     env: list[tuple[str, tuple[int, int]]] = []
 
+    def hit(e: Any) -> str | None:
+        return next((n for n in names if _is_symbol(e, n)), None)
+
     def walk(e: Any, blocked: bool) -> None:
         if _op(e) is None:
-            if _is_symbol(e, var):
+            if hit(e) is not None:
                 bare[0] = True
             return
         op = _op(e)
@@ -388,9 +409,14 @@ def find_self_reads(
         env.extend(added)
         try:
             args = _args(e)
-            is_self_index = op == "index" and args and _is_symbol(args[0], var)
+            target = hit(args[0]) if op == "index" and args else None
+            is_self_index = target is not None
             if is_self_index:
-                reads.append(SelfRead(args=list(args[1:]), env=dict(env), unsequenceable=blocked))
+                reads.append(
+                    SelfRead(
+                        args=list(args[1:]), env=dict(env), unsequenceable=blocked, target=target
+                    )
+                )
             # `args[0]` of a self-read is the NAME, not a bare read of the array;
             # every other operand is walked normally, since an index expression
             # may itself contain a self-read.
@@ -472,6 +498,9 @@ class Recurrence:
     #: means at least one lag straddles zero and the runtime's fail-closed read
     #: is what rules the ill-founded cells out.
     lag_proven: bool
+    #: The group peers this definition reads at the cell being written
+    #: (esm-spec §4.3.1.2 rule 1) — the within-cell order the group must take.
+    same_cell: list[str] = dataclass_field(default_factory=list)
 
 
 def _frame_node(var: str, lhs: Any, rhs: Any) -> Any:
@@ -495,6 +524,7 @@ def analyze_recurrence(
     *,
     symbol_bounds: Callable[[Any], tuple[int, int] | None],
     require_static_axis: bool = False,
+    peers: Iterable[str] = (),
 ) -> Recurrence | None:
     """Recognize and check a recurrence definition of ``var``.
 
@@ -508,17 +538,22 @@ def analyze_recurrence(
     ``require_static_axis`` additionally demands that every frame axis be a
     static unit-step ascending interval — what an executor needs to sweep, and
     what a ragged / derived / strided axis cannot supply.
+
+    ``peers`` names the other members of ``var``'s recurrence group (esm-spec
+    §4.3.1.2): their ``index`` reads count as causal reads too, under one extra
+    rule — a peer read must be PROVABLY strictly earlier.
     """
-    reads, bare = find_self_reads(rhs, var, symbol_bounds)
+    peer_set = {p for p in peers if p != var}
+    reads, bare = find_self_reads(rhs, [var, *sorted(peer_set)], symbol_bounds)
     if not reads:
         return None
 
     if bare:
         raise _not_wellfounded(
-            f"'{var}' is read bare inside its own defining equation as well as through "
-            f"`index`. A bare read names the whole array, which does not exist while the "
-            f"recurrence sweeps it; read every self-reference through `index` at a strictly "
-            f"earlier position (esm-spec §4.3.1.1)."
+            f"a member of '{var}'s recurrence is read bare inside the definition of '{var}' "
+            f"as well as through `index`. A bare read names the whole array, which does not "
+            f"exist while the recurrence sweeps it; read every causal reference through "
+            f"`index` at a strictly earlier position (esm-spec §4.3.1.1, §4.3.1.2)."
         )
 
     if any(r.unsequenceable for r in reads):
@@ -567,6 +602,7 @@ def analyze_recurrence(
     axis: int | None = None
     max_lag = 0
     lag_proven = True
+    same_cell: list[str] = []
     for read in reads:
         if len(read.args) != len(idx_names):
             raise _not_wellfounded(
@@ -577,8 +613,19 @@ def analyze_recurrence(
         env = dict(frame_env)
         env.update(read.env)
         lagged: int | None = None
+        read_proven = True
         for d, arg in enumerate(read.args):
             sym = idx_names[d]
+            if sym == MEMBER_SYM:
+                # The member axis of a stacked group: a read SELECTS a member with
+                # a constant, the one non-identity index admitted off the
+                # recurrence axis (esm-spec §4.3.1.2).
+                if _int_literal(arg) is not None:
+                    continue
+                raise _not_wellfounded(
+                    f"a read of the stacked recurrence group '{var}' does not select a member "
+                    f"with a constant (esm-spec §4.3.1.2)."
+                )
             kind, proven, hi = _classify_self_index(arg, sym, env)
             if kind == _IDENTITY:
                 continue
@@ -611,14 +658,36 @@ def analyze_recurrence(
                     f"bare frame symbol (esm-spec §4.3.1.1)."
                 )
             lagged = d
+            read_proven = proven
             lag_proven = lag_proven and proven
             max_lag = max(max_lag, hi)
+        if lagged is None and MEMBER_SYM in idx_names:
+            # A stacked group's same-cell read of an EARLIER member (esm-spec
+            # §4.3.1.2 rule 1): the sweep publishes members in within-cell
+            # order, so the fail-closed read admits it exactly when that member
+            # precedes this one.
+            continue
+        if lagged is None and read.target in peer_set:
+            # A read of a PEER at the cell being written is an ordering WITHIN
+            # the cell (esm-spec §4.3.1.2 rule 1); the group check rejects it
+            # only if such reads form a cycle.
+            same_cell.append(read.target)
+            continue
         if lagged is None:
             raise _not_wellfounded(
-                f"a causal self-read of '{var}' is at the same cell on every axis, so it "
-                f"defines '{var}' in terms of itself rather than of an earlier position. A "
-                f"causal self-reference must be strictly earlier along one axis "
-                f"(esm-spec §4.3.1.1)."
+                f"a causal read of '{read.target or var}' in the definition of '{var}' is at the "
+                f"same cell on every axis, so it defines '{var}' in terms of a value at the cell "
+                f"being written rather than of an earlier position. A causal read must be "
+                f"strictly earlier along one axis (esm-spec §4.3.1.1, §4.3.1.2)."
+            )
+        if read.target in peer_set and not read_proven:
+            raise _not_wellfounded(
+                f"the read of '{read.target}' in the definition of '{var}' — a peer in its "
+                f"recurrence group — is not provably strictly earlier on axis "
+                f"'{idx_names[lagged]}'. A read of a PEER must be strictly earlier for every "
+                f"value of its lag (esm-spec §4.3.1.2): unlike a self-read, whose same-cell "
+                f"values simply have not been published, a same-position read of another "
+                f"variable would make the result depend on which member is evaluated first."
             )
         if axis is None:
             axis = lagged
@@ -629,14 +698,17 @@ def analyze_recurrence(
                 f"definition folds along exactly one axis (esm-spec §4.3.1.1)."
             )
 
-    assert axis is not None  # every read set the axis or raised
+    # Every read set the axis or raised, except a group member whose every
+    # causal read is a same-cell peer read, which folds along no axis itself.
+    assert axis is not None or (peer_set and same_cell)
     return Recurrence(
         var=var,
         idx_names=idx_names,
-        axis=axis,
+        axis=axis,  # type: ignore[arg-type]
         frame_node=frame,
         max_lag=max_lag,
         lag_proven=lag_proven,
+        same_cell=same_cell,
     )
 
 

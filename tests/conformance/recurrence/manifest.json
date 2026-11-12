@@ -2,7 +2,7 @@
   "category": "recurrence",
   "runner": "inline_tests",
   "version": "2.0",
-  "description": "Cross-port fixtures for the CAUSAL SELF-REFERENCE along one index axis (esm-spec 4.3.1.1, CONFORMANCE_SPEC 5.19): an equation defining an array-shaped unknown V whose defining `faq` body reads index(V, ...) at a strictly earlier position along one of that faq's output axes, materialized cell by cell with that axis outermost and ascending, each cell published before the axis advances.\n\nEXECUTING ports run each fixture through their OWN inline-test runner under each compiler its `required` map names (CONFORMANCE_SPEC 5.45) and must match every inline assertion at ZERO tolerance (5.19.1: the sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is -- there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact).\n\nNON-EXECUTING ports must still VALIDATE all nine, and must reject the eight malformed shapes in rejections.json (5.19.5 rejection parity). Rejection parity cuts both ways: a binding whose cycle detector or trivial-DAE factoring treats a self-read as a cycle rejects a LEGAL document, which is the same defect as admitting an illegal one. A skip is a documented gap, not a pass.",
+  "description": "Cross-port fixtures for the CAUSAL SELF-REFERENCE along one index axis (esm-spec 4.3.1.1, CONFORMANCE_SPEC 5.19): an equation defining an array-shaped unknown V whose defining `faq` body reads index(V, ...) at a strictly earlier position along one of that faq's output axes, materialized cell by cell with that axis outermost and ascending, each cell published before the axis advances.\n\nEXECUTING ports run each fixture through their OWN inline-test runner under each compiler its `required` map names (CONFORMANCE_SPEC 5.45) and must match every inline assertion at ZERO tolerance (5.19.1: the sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is -- there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact).\n\nNON-EXECUTING ports must still VALIDATE all twelve, and must reject the eight malformed shapes in rejections.json (5.19.5 rejection parity). Rejection parity cuts both ways: a binding whose cycle detector or trivial-DAE factoring treats a self-read as a cycle rejects a LEGAL document, which is the same defect as admitting an illegal one. A skip is a documented gap, not a pass.",
   "reference_binding": "julia",
   "reference_compiler": "interpreter",
   "bindings_required": [
@@ -311,6 +311,90 @@
         "recurrence"
       ],
       "note": "A self-read reached through an `apply_expression_template` BINDING. Closes a hole rather than showing a feature: `apply_expression_template` is off the cell-restriction blocking list and no binding's self-read walk visits `bindings`, which sounds like a self-read could hide there and be evaluated as a gather on a name nothing binds. Measured: it cannot, because a template application is expanded AT LOAD (esm-spec 9.6.4). If a binding ever defers expansion past recognition, this is what fails.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "10_recurrence_group_two_variables",
+      "path": "fixtures/recurrence/10_recurrence_group_two_variables.esm",
+      "model": "RecurrenceGroupTwoVariables",
+      "golden": "golden/10_recurrence_group_two_variables.json",
+      "tags": [
+        "faq",
+        "causal-self-reference",
+        "recurrence",
+        "recurrence-group"
+      ],
+      "note": "The minimal recurrence GROUP (esm-spec 4.3.1.2, issue #701): a[k] = a[k-1] + b[k-1], b[k] = a[k-1] * b[k-1]. Neither array is a recurrence on its own, and the reads between them close what would otherwise be an observed_cycle; the group is well founded because every read between members is strictly earlier. Pins the VALUE, and that each peer read resolves to the right member at the right lag; 11 pins the order.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "11_recurrence_group_order_pin",
+      "path": "fixtures/recurrence/11_recurrence_group_order_pin.esm",
+      "model": "RecurrenceGroupOrderPin",
+      "golden": "golden/11_recurrence_group_order_pin.json",
+      "tags": [
+        "order",
+        "catastrophic-cancellation",
+        "bit-identical",
+        "recurrence",
+        "recurrence-group",
+        "two-axes",
+        "multi-lag"
+      ],
+      "note": "THE ORDER PIN for a group. A 2-D frame (recurrence axis k, independent axis j), a cancellation inside one member's body that the left fold loses and a reassociation keeps (a = 0.25 j vs 0.5 j + 0.25 j (k - 1)), and a PEER read at lag 2 behind a k <= 2 guard. The j axis checks that the member axis of the stacked reduction (4.3.1.2) is not confused with a frame axis.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "12_recurrence_group_same_cell_order",
+      "path": "fixtures/recurrence/12_recurrence_group_same_cell_order.esm",
+      "model": "RecurrenceGroupSameCellOrder",
+      "golden": "golden/12_recurrence_group_same_cell_order.json",
+      "tags": [
+        "recurrence",
+        "recurrence-group",
+        "same-cell",
+        "order"
+      ],
+      "note": "A same-cell read between members (esm-spec 4.3.1.2 rule 1): u[k] reads a[k], a[k] reads u[k-1]. u is declared first, so the member order must come from the same-cell reads, not from equation order -- a binding that got it wrong faults on an unpublished cell.",
       "required": {
         "julia": [
           "interpreter",

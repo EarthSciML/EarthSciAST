@@ -53,7 +53,7 @@ type recurrenceRejectionCase struct {
 // recurrenceRejectionCaseCount pins the corpus SIZE. Without it a case dropped
 // upstream is a silent reduction in coverage: the sweep would still pass, over
 // fewer documents. Raise it when the corpus grows.
-const recurrenceRejectionCaseCount = 8
+const recurrenceRejectionCaseCount = 14
 
 // recurrencePreemptingCodes are the diagnoses that must NOT come back for any
 // corpus case. Each would mean the recurrence check never got to own the

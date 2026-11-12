@@ -2951,6 +2951,7 @@ function validate_coupling_cycles(file::EsmFile; toplevel = nothing)::Vector{Str
     defs = Dict{String, ASTExpr}()            # scoped name → defining RHS
     scope = Dict{String, String}()           # scoped name → its model path
     self_exempt = Set{String}()              # §4.3.1.1 recurrence candidates
+    scoped_groups = Vector{Vector{String}}()  # §4.3.1.2 recurrence groups, scoped
     states = Set{String}()                   # `D(·, t)` targets, scoped
     function walk(path::String, m::Model)
         local_defs = observed_definitions(m)
@@ -2960,6 +2961,9 @@ function validate_coupling_cycles(file::EsmFile; toplevel = nothing)::Vector{Str
             defs[scoped] = rhs
             scope[scoped] = path
             name in candidates && push!(self_exempt, scoped)
+        end
+        for g in recurrence_groups(m)
+            push!(scoped_groups, sort!([path * "." * n for n in g]))
         end
         for eq in m.equations
             role, name = _lhs_role(eq.lhs)
@@ -2988,6 +2992,29 @@ function validate_coupling_cycles(file::EsmFile; toplevel = nothing)::Vector{Str
         end
         v in self_exempt && delete!(deps, v)
         adj[v] = sort!(collect(deps))
+    end
+    # esm-spec §4.3.1.2: a recurrence group is swept as ONE unit, so here it is
+    # one node — its first member — carrying every member's external reads.
+    # CONTRACTED rather than stripped of its internal edges: a cycle that leaves
+    # the group through another scope and comes back (`a →(group) b → X.c → a`)
+    # is a real cycle, and dropping `a → b` would hide it.
+    for g in scoped_groups
+        members = filter(n -> haskey(adj, n), g)
+        isempty(members) && continue
+        rep = members[1]
+        merged = Set{String}()
+        for mem in members
+            union!(merged, adj[mem])
+            delete!(adj, mem)
+        end
+        setdiff!(merged, members)
+        adj[rep] = sort!(collect(merged))
+        for (n, succ) in adj
+            any(s -> s in members, succ) || continue
+            kept = Set{String}(s for s in succ if !(s in members))
+            n == rep || push!(kept, rep)
+            adj[n] = sort!(collect(kept))
+        end
     end
 
     # A cycle whose nodes all share one scope is `observed_cycle`, not this.
@@ -3053,6 +3080,7 @@ function _check_observed_cycles!(
     if !isempty(defs)
         observed = Set{String}(keys(defs))
         candidates = _recurrence_candidate_names(model, defs)
+        groups = recurrence_groups(model)
         adj = Dict{String, Vector{String}}()
         for (name, rhs) in defs
             deps = intersect(_observed_dependency_names(rhs), observed)
@@ -3060,6 +3088,12 @@ function _check_observed_cycles!(
             # an ORDERING WITHIN one variable, not a dependency between two, so
             # `V → V` is dropped — for a recurrence CANDIDATE, and only for one.
             name in candidates && delete!(deps, name)
+            # esm-spec §4.3.1.2: so is every edge inside a recurrence group
+            # CANDIDATE. Within one model the component a group is drawn from
+            # is already maximal, so dropping cannot hide a cycle through it.
+            for g in groups
+                name in g && setdiff!(deps, g)
+            end
             adj[name] = sort!(collect(deps))
         end
         cycle = _first_observed_cycle(adj)
@@ -3119,6 +3153,129 @@ function _recurrence_candidate_names(
         v = get(model.variables, name, nothing)
         (v !== nothing && _recurrence_is_array_shape(v.shape)) || continue
         recurrence_self_reference_kind(name, rhs) === :indexed && push!(out, name)
+    end
+    return out
+end
+
+"""
+    recurrence_groups(model::Model) -> Vector{Set{String}}
+
+The recurrence GROUP candidates of `model` (esm-spec §4.3.1.2): each strongly
+connected component of two or more observeds — in the §4.9.6 dependency graph with
+every recurrence candidate's self-edge already dropped — whose members are all
+array-shaped and whose every internal edge is carried by at least one `index`
+read.
+
+This is the predicate the cycle exemption is gated on, never the well-foundedness
+verdict (CONFORMANCE_SPEC §5.19.5): a group with an ill-founded read is still a
+candidate, so it reaches the named `recurrence_*` diagnosis rather than collapsing
+to `observed_cycle`. A component with a scalar member, or one held together by a
+bare read, is no candidate and stays a cycle. Shared with the evaluator, which
+sweeps each group as its stacked single recurrence (tree_walk/recurrence_group.jl).
+"""
+function recurrence_groups(model::Model)::Vector{Set{String}}
+    defs = observed_definitions(model)
+    length(defs) < 2 && return Set{String}[]
+    observed = Set{String}(keys(defs))
+    candidates = _recurrence_candidate_names(model, defs)
+    adj = Dict{String, Set{String}}()
+    for (name, rhs) in defs
+        deps = intersect(_observed_dependency_names(rhs), observed)
+        name in candidates && delete!(deps, name)
+        adj[String(name)] = deps
+    end
+    out = Set{String}[]
+    for comp in _strongly_connected(adj)
+        length(comp) < 2 && continue
+        # At least one read inside the component must be OFFSET — not a plain
+        # gather whose every index is a bare name. A cycle closed by same-cell
+        # gathers alone has no axis to fold along and stays an observed_cycle.
+        any(u -> any(v -> _reads_offset(defs[u], v), comp), comp) || continue
+        all(m -> (v = get(model.variables, m, nothing); v !== nothing &&
+            _recurrence_is_array_shape(v.shape)), comp) || continue
+        ok = all(comp) do u
+            all(v -> v == u || !(v in comp) || _reads_through_index(defs[u], v), adj[u])
+        end
+        ok && push!(out, comp)
+    end
+    sort!(out; by = c -> sort!(collect(c)))
+    return out
+end
+
+# Does `rhs` gather `name` through an `index` with an argument that is not a bare
+# name — a read that could be offset along an axis?
+function _reads_offset(rhs::ASTExpr, name::AbstractString)::Bool
+    found = Ref(false)
+    foreach_subexpr_once(rhs) do e
+        found[] && return nothing
+        if e isa OpExpr && e.op == "index" && !isempty(e.args) &&
+                e.args[1] isa VarExpr && (e.args[1]::VarExpr).name == name &&
+                any(a -> !(a isa VarExpr), e.args[2:end])
+            found[] = true
+        end
+        return nothing
+    end
+    return found[]
+end
+
+# Does `rhs` gather `name` through at least one `index` node?
+function _reads_through_index(rhs::ASTExpr, name::AbstractString)::Bool
+    found = Ref(false)
+    foreach_subexpr_once(rhs) do e
+        found[] && return nothing
+        if e isa OpExpr && e.op == "index" && !isempty(e.args) &&
+                e.args[1] isa VarExpr && (e.args[1]::VarExpr).name == name
+            found[] = true
+        end
+        return nothing
+    end
+    return found[]
+end
+
+# Strongly connected components of `adj` (Kosaraju, both passes ITERATIVE for the
+# reason `_first_observed_cycle` gives).
+function _strongly_connected(adj::Dict{String, Set{String}})::Vector{Set{String}}
+    visited = Set{String}()
+    finish = String[]
+    for root in sort!(collect(keys(adj)))
+        root in visited && continue
+        push!(visited, root)
+        stack = Tuple{String, Vector{String}, Int}[(root, sort!(collect(adj[root])), 1)]
+        while !isempty(stack)
+            node, succ, i = stack[end]
+            if i > length(succ)
+                push!(finish, node)
+                pop!(stack)
+                continue
+            end
+            stack[end] = (node, succ, i + 1)
+            nxt = succ[i]
+            (haskey(adj, nxt) && !(nxt in visited)) || continue
+            push!(visited, nxt)
+            push!(stack, (nxt, sort!(collect(adj[nxt])), 1))
+        end
+    end
+    rev = Dict{String, Vector{String}}()
+    for (u, vs) in adj, v in vs
+        haskey(adj, v) && push!(get!(rev, v, String[]), u)
+    end
+    assigned = Set{String}()
+    out = Set{String}[]
+    for root in Iterators.reverse(finish)
+        root in assigned && continue
+        push!(assigned, root)
+        comp = Set{String}()
+        st = String[root]
+        while !isempty(st)
+            n = pop!(st)
+            push!(comp, n)
+            for p in get(rev, n, String[])
+                p in assigned && continue
+                push!(assigned, p)
+                push!(st, p)
+            end
+        end
+        push!(out, comp)
     end
     return out
 end

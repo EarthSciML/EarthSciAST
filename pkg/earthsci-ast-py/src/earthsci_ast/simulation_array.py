@@ -57,6 +57,7 @@ from .numpy_interpreter import (
     sweep_recurrence,
 )
 from .recurrence import RecurrenceError
+from .recurrence_group import stack_recurrence_groups
 from .serialize import _serialize_expression
 from .simulation_common import (
     DENSE_OUTPUT_MIN_POINTS,
@@ -959,6 +960,7 @@ def _expr_referenced_names(expr: Expr) -> set[str]:
 def _order_observed_equations(
     observed_eqs: list[tuple[str, Expr]],
     observed_names: set[str],
+    element_types: dict[str, str] | None = None,
 ) -> list[tuple[str, Expr]]:
     """Dependency-order observed assignments so each follows the observeds it reads.
 
@@ -970,6 +972,13 @@ def _order_observed_equations(
     declaration order so the run still proceeds — the evaluator then surfaces a
     clear unresolved-symbol error rather than the driver hanging.
     """
+    # esm-spec §4.3.1.2: each recurrence group becomes its stacked single
+    # recurrence plus one slice per member, so every route below sweeps it
+    # through the one recurrence implementation (`recurrence_group`). A list
+    # with no group is returned unchanged.
+    observed_eqs = stack_recurrence_groups(
+        observed_eqs, (element_types or {}).get if element_types is not None else None
+    )
     rhs_by_name: dict[str, Expr] = dict(observed_eqs)
     # Only observeds PRODUCED by an equation here impose an ordering constraint.
     # A referenced name that is a known observed but has NO equation in this set
@@ -1570,7 +1579,7 @@ def start_of_run_scalar_ics(
         return {}
     definitions, states = _ic_observed_definitions(flat)
     observed_eqs = [(n, rhs) for n, rhss in definitions.items() if len(rhss) == 1 for rhs in rhss]
-    ordered = _order_observed_equations(observed_eqs, set(definitions))
+    ordered = _order_observed_equations(observed_eqs, set(definitions), _element_types(flat))
     arrays, scalars = _buildtime_observed_arrays(
         ic_eqs, ordered, states, param_values, {}, index_sets=flat.index_sets, t0=t0
     )
@@ -2963,7 +2972,7 @@ def _build_numpy_rhs(
             observed_eqs.append((_base, _bare_index_definition_rhs(_base, eq.lhs, eq.rhs, flat)))
         else:
             driver_equations.append(eq)
-    ordered_observed = _order_observed_equations(observed_eqs, observed_names)
+    ordered_observed = _order_observed_equations(observed_eqs, observed_names, _element_types(flat))
 
     # Index-set NAME alignment (esm-spec §4.3; issue #100). Runs BEFORE the
     # algebraic elimination and the compile below so the substituted/compiled
