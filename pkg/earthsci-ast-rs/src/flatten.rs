@@ -2574,9 +2574,11 @@ fn apply_variable_map_removals(
                 // the observed, exactly as if the author had declared it.
                 VariableMapTransform::Expression(node) => {
                     let removed = parts.parameters.shift_remove(to);
-                    let (units, shape, description) = removed
-                        .map(|p| (p.units, p.shape, p.description))
-                        .unwrap_or((None, None, None));
+                    // The target stays in the flattened system under its own
+                    // name, so its bounds stay with it (esm-spec §6.3.2).
+                    let (units, shape, description, lb, ub) = removed
+                        .map(|p| (p.units, p.shape, p.description, p.lb, p.ub))
+                        .unwrap_or_default();
                     parts.observed_variables.insert(
                         to.clone(),
                         ModelVariable {
@@ -2584,6 +2586,8 @@ fn apply_variable_map_removals(
                             units,
                             description,
                             shape,
+                            lb,
+                            ub,
                             ..Default::default()
                         },
                     );

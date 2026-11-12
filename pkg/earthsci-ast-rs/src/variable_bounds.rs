@@ -84,9 +84,48 @@ fn declared_shape(shape: Option<&Vec<String>>) -> Option<&[String]> {
 
 fn shape_label(shape: Option<&[String]>) -> String {
     match shape {
-        None => "scalar".to_string(),
+        None => "(scalar)".to_string(),
         Some(s) => format!("[{}]", s.join(", ")),
     }
+}
+
+/// The declared shape of the parameter `member` of the reaction system at the
+/// full scoped path `system`: a top-level reaction system or one nested as a
+/// subsystem of another, at any depth. `None` for a species, an unshaped
+/// parameter, or a path through a `{"ref"}` mount not yet inlined.
+fn reaction_parameter_shape(file: &EsmFile, system: &str, member: &str) -> Option<Vec<String>> {
+    let mut segments = system.split('.');
+    let head = segments.next()?;
+    let rest: Vec<&str> = segments.collect();
+    if rest.is_empty() {
+        return file
+            .reaction_systems
+            .as_ref()?
+            .get(head)?
+            .parameters
+            .get(member)?
+            .shape
+            .clone();
+    }
+    let subsystems = file
+        .reaction_systems
+        .as_ref()?
+        .get(head)?
+        .subsystems
+        .as_ref()?;
+    let mut node = subsystems.get(rest[0])?;
+    for segment in &rest[1..] {
+        node = node.get("subsystems")?.get(*segment)?;
+    }
+    let shape = node
+        .get("parameters")?
+        .get(member)?
+        .get("shape")?
+        .as_array()?;
+    shape
+        .iter()
+        .map(|axis| axis.as_str().map(str::to_string))
+        .collect()
 }
 
 /// What a bound reference resolved to.
@@ -97,9 +136,9 @@ enum Target {
         full: String,
         shape: Option<Vec<String>>,
     },
-    /// A reaction-system species or parameter. Species are scalar; `shape` is
-    /// the parameter's declared shape where it is known, `None` where it is
-    /// scalar or not read (a reaction system nested as a subsystem).
+    /// A reaction-system species or parameter, at any nesting depth. Species
+    /// are scalar; `shape` is the parameter's declared shape, `None` where it
+    /// is scalar.
     ReactionSystemMember { shape: Option<Vec<String>> },
 }
 
@@ -254,7 +293,7 @@ impl Ctx<'_> {
                 code: StructuralErrorCode::VariableBoundShapeMismatch,
                 message: format!(
                     "The {which} of '{name}' references '{reference}', shaped {}; a bound must \
-                     be scalar or the bounded variable's shape ({})",
+                     be scalar or the bounded variable's shape {}",
                     shape_label(target_shape),
                     shape_label(own_shape)
                 ),
@@ -319,13 +358,7 @@ impl Ctx<'_> {
             .into_iter()
             .find(|candidate| resolve_scoped_ref(candidate, self.system_refs).is_ok())?;
         let (system, member) = full.rsplit_once('.')?;
-        let shape = self
-            .esm_file
-            .reaction_systems
-            .as_ref()
-            .and_then(|rs| rs.get(system))
-            .and_then(|rs| rs.parameters.get(member))
-            .and_then(|p| p.shape.clone());
+        let shape = reaction_parameter_shape(self.esm_file, system, member);
         Some(Target::ReactionSystemMember { shape })
     }
 

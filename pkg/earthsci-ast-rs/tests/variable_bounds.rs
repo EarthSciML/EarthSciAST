@@ -97,6 +97,7 @@ fn shared_invalid_fixtures_match_expected_errors() {
         "variable_bound_unresolved.esm",
         "variable_bound_shape_mismatch.esm",
         "variable_bound_shape_mismatch_axes.esm",
+        "variable_bound_shape_mismatch_nested_reaction.esm",
         "variable_bound_circular_self.esm",
         "variable_bound_circular_observed.esm",
         "variable_bounds_inverted.esm",
@@ -111,6 +112,7 @@ fn shared_invalid_fixtures_match_expected_errors() {
             assert_eq!(g.code.to_string(), w["code"].as_str().unwrap(), "{name}");
             assert_eq!(g.path, w["path"].as_str().unwrap(), "{name}");
             assert_eq!(g.details, w["details"], "{name}");
+            assert_eq!(g.message, w["message"].as_str().unwrap(), "{name}");
         }
     }
 }
