@@ -549,6 +549,7 @@ reference-preserving byte form instead.
 function to_json(file::EsmFile)::String
     serialized = serialize_esm_file(file)
     _raise_faq_esm_floor!(serialized)
+    _raise_variable_bounds_esm_floor!(serialized)
     if file.component_templates !== nothing
         # esm-spec §9.6.4 rule 5 (Option B): a document carrying surviving
         # references / materialized registries emits in the canonical
@@ -612,6 +613,14 @@ function _record_emit_expr(row, v)
         :(
             let x = $v
                 x isa Number ? x : serialize_expression(x)
+            end
+        )
+    elseif kind === :variable_bound
+        # A number or a name is its own wire form; an expression bound (a
+        # flattened scaled replacement, esm-spec §6.3.2) is written as one.
+        :(
+            let x = $v
+                x isa ASTExpr ? serialize_expression(x) : x
             end
         )
     elseif kind === :float_map

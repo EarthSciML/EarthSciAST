@@ -61,6 +61,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # recurrence pass because the two share the CANDIDACY gate that decides
     # which of them owns a self-edge (CONFORMANCE_SPEC §5.19.5).
     include("observed_cycle_validation_test.jl")
+    # Variable bounds `lb` / `ub` (esm-spec §6.3.2): round-trip, the esm 2.1.0
+    # gate, the four validity rules and the flatten rewrite.
+    include("variable_bounds_test.jl")
     include("expression_test.jl")
     include("reactions_test.jl")
     include("reaction_species_order_test.jl")  # species ORDER = declaration order (API_SPEC §5.10)

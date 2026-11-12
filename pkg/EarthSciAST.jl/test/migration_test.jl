@@ -144,7 +144,7 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
         end
 
         @testset "throws MigrationError for an unsupported version pair" begin
-            @test_throws MigrationError migrate(_mig_file("1.0.0"), "2.1.0")
+            @test_throws MigrationError migrate(_mig_file("1.0.0"), "2.99.0")
             @test_throws MigrationError migrate(_mig_file("1.0.0"), "1.0.1")
             @test_throws MigrationError migrate(_mig_file("0.1.0"), _MIG_SCHEMA_VERSION)
             @test_throws MigrationError migrate(_mig_file("1.0.0"), "not-a-version")

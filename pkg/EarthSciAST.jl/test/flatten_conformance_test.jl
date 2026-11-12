@@ -317,8 +317,17 @@ function _fc_variable(name::AbstractString, v::ModelVariable, role::AbstractStri
         "update_kinds" => _fc_update_kinds(v),
         "distribution_kind" => v.distribution === nothing ? nothing : v.distribution.kind,
         "source_system" => length(parts) > 1 ? join(parts[1:(end - 1)], ".") : "",
+        "lb" => _fc_bound(v.lb),
+        "ub" => _fc_bound(v.ub),
     )
 end
+
+"""A flattened bound as the corpus records it: the number, or `to_ascii` of the
+reference (a namespaced name) or of a scaled replacement expression."""
+_fc_bound(::Nothing) = nothing
+_fc_bound(b::Real) = b
+_fc_bound(b::String) = b
+_fc_bound(b::ASTExpr) = to_ascii(b)
 
 """
 Every entry of one flattened map, in the corpus's record shape.
@@ -471,6 +480,11 @@ function _fc_check_variable(id, key, i, exp, act)
     # A lifted state's shape is the lift's index sets in every binding
     # (esm-libraries-spec §4.7.5, "Pointwise lift: index sets").
     @test (id, key, i, "shape", act["shape"]) == (id, key, i, "shape", exp["shape"])
+    # esm-spec §6.3.2 / esm-libraries-spec §4.7.5: bounds ride on the flattened
+    # variable, a reference rewritten by the renaming the equations take.
+    for f in ("lb", "ub")
+        @test (id, key, i, f, _fc_eq(act[f], exp[f])) == (id, key, i, f, true)
+    end
     return
 end
 

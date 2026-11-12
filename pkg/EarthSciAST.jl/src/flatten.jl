@@ -1442,9 +1442,9 @@ function flatten(
         _rn(e) = _rename_variables(e, merged_renames)
         _rename_event_names!(continuous_events, merged_renames)
         _rename_event_names!(discrete_events, merged_renames)
-        states = _lower_variable_updates(states, _rn)
-        params = _lower_variable_updates(params, _rn)
-        observeds = _lower_variable_updates(observeds, _rn)
+        states = _map_variable_bounds_all(_lower_variable_updates(states, _rn), _rn)
+        params = _map_variable_bounds_all(_lower_variable_updates(params, _rn), _rn)
+        observeds = _map_variable_bounds_all(_lower_variable_updates(observeds, _rn), _rn)
     end
 
     # A coupling entry's index — the `{"coupling": k}` origin of anything it
@@ -1468,7 +1468,14 @@ function flatten(
             equations, contribs, params, resolved;
             observeds = observeds, index = k - 1, shapeless = shapeless
         )
-        resolved.transform isa ASTExpr || push!(map_rewritten_names, resolved.to)
+        resolved.transform isa ASTExpr && continue
+        push!(map_rewritten_names, resolved.to)
+        # A bound naming the replaced parameter follows the replacement the
+        # equations just took (esm-libraries-spec §4.7.5).
+        rw = _variable_map_rewrite(resolved)
+        states = _map_variable_bounds_all(states, rw)
+        params = _map_variable_bounds_all(params, rw)
+        observeds = _map_variable_bounds_all(observeds, rw)
     end
 
     # An `operator_compose` merge DELETES a name the same way a `variable_map`

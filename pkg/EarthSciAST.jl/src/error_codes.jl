@@ -236,6 +236,15 @@ const ERROR_CODES = (
     # ── Declared units on a const node (esm-spec §4.8.5; units.jl). ──────
     CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old",
 
+    # ── Variable bounds `lb` / `ub` (esm-spec §6.3.2; variable_bounds.jl).
+    #    The version gate is a load rejection; the other three are
+    #    `StructuralError`s, beside `undefined_variable` for an unresolved
+    #    reference. ─────────────────────────────────────────────────────────
+    VARIABLE_BOUNDS_VERSION_TOO_OLD = "variable_bounds_version_too_old",
+    VARIABLE_BOUND_SHAPE_MISMATCH = "variable_bound_shape_mismatch",
+    VARIABLE_BOUND_CIRCULAR = "variable_bound_circular",
+    VARIABLE_BOUNDS_INVERTED = "variable_bounds_inverted",
+
     # ── Template-library imports + load-time metaparameters (esm-spec §9.7;
     #    template_imports.jl). ──────────────────────────────────────────────
     TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old",

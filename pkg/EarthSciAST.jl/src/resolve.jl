@@ -481,6 +481,8 @@ function _check_authored_document(raw_data; mounted_leaf::Bool = false)
     end
     # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
     reject_const_units_pre_v12(raw_data)
+    # Variable bounds `lb` / `ub` arrive at esm 2.1.0 (esm-spec §6.3.2).
+    reject_variable_bounds_pre_v21(raw_data)
     # The template-origin mark is load provenance; no file spells it.
     _reject_authored_template_origins(raw_data)
     return nothing
@@ -1159,6 +1161,7 @@ function _resolve_mount_edge_core(
     # be spliced into a document that may declare an older one.
     reject_solver_pre_v11(comp)
     reject_const_units_pre_v12(comp)
+    reject_variable_bounds_pre_v21(comp)
     _reject_authored_template_origins(comp)
     _reject_library_ref(comp, ref, refpath)
     compdir = dirname(refpath)
@@ -2825,6 +2828,8 @@ function _load_remote_ref(
     reject_solver_pre_v11(raw_data)
     # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
     reject_const_units_pre_v12(raw_data)
+    # Variable bounds `lb` / `ub` arrive at esm 2.1.0 (esm-spec §6.3.2).
+    reject_variable_bounds_pre_v21(raw_data)
 
     # A §4.7 subsystem ref MUST NOT target a template- or coupling-library
     # file (esm-spec §9.7.1, §10.9). No location suffix for a remote ref: the

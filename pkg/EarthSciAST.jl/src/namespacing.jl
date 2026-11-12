@@ -454,7 +454,9 @@ function _collect_model!(
     _inlineable_here = _inlineable_observed_unknowns(model)
     for (name, var) in model.variables
         namespaced = "$(prefix).$(name)"
-        v = _namespace_variable_update(var, _ns)
+        # A bound reference is namespaced exactly as an equation's reference is
+        # (esm-libraries-spec §4.7.5, "Bounds follow the renaming").
+        v = _map_variable_bounds(_namespace_variable_update(var, _ns), _ns)
         if v.type == ParameterVariable
             params[namespaced] = v
         elseif name in _observed_here
