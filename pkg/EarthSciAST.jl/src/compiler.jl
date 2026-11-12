@@ -496,7 +496,8 @@ function _refuse_rule(rule::AbstractString, reason::AbstractString)
     throw(
         TreeWalkError(
             ERROR_CODES.COMPILER_REFUSED_RULE,
-            "compiler=:$(plan.name) refuses '$rule': $reason"
+            "compiler=:$(plan.name) refuses '$rule': $reason",
+            String(rule)
         )
     )
 end

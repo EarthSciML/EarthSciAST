@@ -279,9 +279,9 @@ end
 # A `DirectEmitError` is the fixture's `refused` outcome, with `rule` and
 # `reason` taken straight off the error — that is the hard-error ruling made
 # visible; so is a `compiler_refused_rule` the out-of-place build raises before
-# any emission. Every other exception is the ordinary per-fixture `error` entry,
-# which is a FAILURE: unlike a refusal it says nothing about what the engine can
-# lower.
+# any emission, its `rule` read off the error's field. Every other exception is
+# the ordinary per-fixture `error` entry, which is a FAILURE: unlike a refusal it
+# says nothing about what the engine can lower.
 
 # The device choice, read once. Anything other than the two spellings is a hard
 # error rather than a silent default: a typo that quietly ran on the CPU would
@@ -485,14 +485,15 @@ function main()
                     "reason" => string(err.construct, ": ", err.detail)
                 )
             elseif err isa EarthSciAST.TreeWalkError &&
-                    err.code == EarthSciAST.ERROR_CODES.COMPILER_REFUSED_RULE
+                    err.code == EarthSciAST.ERROR_CODES.COMPILER_REFUSED_RULE &&
+                    !isempty(err.rule)
                 # The out-of-place product refused a rule by name before any
                 # emission (a causal recurrence, for one): the same hard-error
-                # ruling, reached one step earlier.
-                m = match(r"refuses '([^']*)'", err.detail)
+                # ruling, reached one step earlier. A refusal that names no
+                # rule falls through to the failure arm below.
                 fixtures[id] = Dict(
                     "status" => "refused",
-                    "rule" => m === nothing ? "" : String(m.captures[1]),
+                    "rule" => err.rule,
                     "reason" => err.detail
                 )
             else
