@@ -1,0 +1,62 @@
+{
+  "esm": "2.1.0",
+  "metadata": {
+    "name": "Version_2_1_0_VariableBounds",
+    "description": "Exact version match for a 2.1.0 library. Uses the construct 2.1.0 adds, `lb` / `ub` on a model variable (esm-spec §6.3.2), so a 2.0.0 library could not read it.",
+    "authors": [
+      "ESM Format Team"
+    ],
+    "created": "2026-11-12T00:00:00Z",
+    "tags": [
+      "test",
+      "compatibility"
+    ]
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "N": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 1.0,
+          "lb": 0,
+          "ub": "N0"
+        },
+        "N0": {
+          "type": "parameter",
+          "units": "mol",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "lb": 0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "N"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "N"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

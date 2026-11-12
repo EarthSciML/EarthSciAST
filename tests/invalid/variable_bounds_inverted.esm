@@ -1,0 +1,56 @@
+{
+  "esm": "2.1.0",
+  "metadata": {
+    "name": "VariableBoundsInverted",
+    "description": "`x`'s numeric lb exceeds its numeric ub (esm-spec §6.3.2 rule 4).",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "variable_bounds",
+      "invalid"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.5,
+          "lb": 2,
+          "ub": 1
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

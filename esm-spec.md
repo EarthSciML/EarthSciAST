@@ -1,6 +1,13 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 2.0.0**
+**EarthSciML Abstract Syntax Tree Format — Version 2.1.0**
+
+> **2.1.0 is additive.** A variable MAY declare a lower bound `lb` and an upper
+> bound `ub`, each a number or a reference to another variable of the model
+> (§6.3.2). Bounds state physical facts and prescribe no solver behaviour. A
+> document declaring an earlier version that carries either field is rejected
+> with `variable_bounds_version_too_old`; every 2.0.0 document is a valid 2.1.0
+> document.
 
 > **2.0.0 is a break.** Every external function leaves the expression AST, so
 > the format's core is the §4.2 operators alone. Removed: the `fn` op and the
@@ -71,7 +78,7 @@ The full authoring stance, normatively:
 
 ```json
 {
-  "esm": "2.0.0",
+  "esm": "2.1.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },
@@ -2355,6 +2362,7 @@ A checker MUST resolve the free symbols of **every** Expression in the document,
 | `models[M].equations[i].{lhs,rhs}` | …`/equations/i/rhs` | `undefined_variable` |
 | `models[M].variables[v].update.{when,expression}` | …`/variables/v/update/expression` | `undefined_variable` |
 | `models[M].guesses[v]` | …`/guesses/v` | `undefined_variable` |
+| `models[M].variables[v].{lb,ub}` (reference form, §6.3.2; a name, not an Expression) | …`/variables/v/lb` | `undefined_variable` |
 | `models[M].initialization_equations[i].{lhs,rhs}` | …`/initialization_equations/i/rhs` | `undefined_variable` |
 | `models[M].continuous_events[i].conditions[j]` | …`/continuous_events/i/conditions/j` | `undefined_variable` |
 | `models[M].continuous_events[i].{affects,affect_neg}[j].rhs` | …`/affects/j/rhs` | `undefined_variable` |
@@ -3034,6 +3042,12 @@ Precision:
 |---|---|
 | `element_type` | The floating-point precision of **this variable and of the arithmetic over it** — `"Float32"` or `"Float64"` — overriding the document's `domain.element_type`. Not to be confused with `type`, which is the variable's semantic role. It exists for the split one document-wide precision cannot express: a model whose floating-point *quantities* are binary32 still has join keys binary32 cannot represent (a ten-digit category code is ≈ 2.26 × 10⁹, 135× above binary32's exact-integer limit of 2²⁴), so the keys declare `"Float64"` while the quantities follow the document. Precision propagates from an expression's leaves and an operator mixing two declared element types is an error naming both. Omitted means the document's — the document that declares the variable, which for a mounted component is the mounted file: a §4.7 mount writes the leaf's `domain.element_type` here when the mounting document's precision differs (§4.7 "Working precision crosses a mount"). See §11.3.1. |
 
+Bounds:
+
+| Field | Description |
+|---|---|
+| `lb`, `ub` | Optional lower and upper bound on the variable's value: a number in the variable's `units`, or a reference to another variable. Physical facts, not solver instructions. Any variable may carry them. Arrive at esm 2.1.0 (§6.3.2). |
+
 #### 6.3.1 Classification: what the solver needs, derived
 
 Because the format declares two types, every binding MUST expose the same
@@ -3204,6 +3218,113 @@ Adding an arrayed unknown `w` shaped over `bins` and the equation
 puts `w` in `observed_unknowns`, not `algebraic_unknowns`: the LHS's base name
 is `w`, so the equation defines it. (The right-hand `faq` is what binds `i`;
 with `i` bound by nothing the document is `unbound_index_symbol`.)
+
+
+#### 6.3.2 Bounds (`lb`, `ub`)
+
+From **esm 2.1.0** a variable MAY declare a lower bound `lb` and an upper bound
+`ub`. Each is optional, and each is either a **number** or a **reference** to
+another variable of the model:
+
+```json
+"variables": {
+  "E_NaCl":     { "type": "unknown",   "units": "mol/m^3", "lb": 0, "ub": "E_NaCl_max",
+                  "description": "Solid NaCl; zero when the salt is undersaturated" },
+  "E_NaCl_max": { "type": "unknown",   "units": "mol/m^3",
+                  "description": "The most NaCl the available ions allow" },
+  "theta":      { "type": "parameter", "units": "1", "default": 0.5, "lb": 0, "ub": 1 }
+}
+```
+
+**A bound is a physical fact, not an instruction.** `lb` and `ub` state the
+range the variable's value lies in: `lb ≤ x ≤ ub`, elementwise for a shaped
+variable. They do not say how that is to be achieved. What a consumer does with
+a bound — impose it on a nonlinear solve, project onto it, check a result
+against it, report a violation, or ignore it — is the consumer's decision, and
+the format prescribes none of these. In particular a bound does not change the
+equations, the classification of §6.3.1, the equation balance of §4.9.4, or the
+flattened system's equations. A model whose equations only hold inside its
+bounds (an equilibrium condition `0 ~ S_s - 1` that holds only for a salt that
+is present, the undersaturated case being `E_s = 0`) states that fact here and
+leaves the method to the consumer.
+
+**Which variables.** Any variable of a model, at any subsystem depth, may carry
+bounds: an ODE state, an observed or an algebraic unknown, or a parameter. The
+fields live on the model's variable declaration (`ModelVariable`); a
+reaction system's species and parameters do not carry them in this version.
+
+**Number form.** A JSON number, in the variable's declared `units` (not its
+`default_units`). Omitting a bound means the variable is unbounded on that side;
+there is no spelling for an infinite bound. A number bound on a shaped variable
+applies to every element.
+
+**Reference form.** A string naming another variable, written exactly as a
+variable reference in one of the model's expressions is written and resolved
+exactly as one: a bare name is a variable of the same model (or subsystem); a
+dotted name is a scoped reference (§4.6), resolved with the precedence of
+§4.9.7 — the owning model or subsystem's own names, then a path relative to its
+own subsystems, then a top-level system path. It may name an unknown of any
+kind, a parameter, or a reaction-system species. The bound's value is the
+referenced variable's value, at the same time and (for a shaped bound) the same
+element. A per-element bound on an arrayed variable is therefore written as a
+reference to a shaped parameter whose `default` is inline array data (§6.3).
+A referenced bound SHOULD declare the same `units` as the variable it bounds;
+this version does not check it.
+
+**Validity.** A document is invalid, and every binding's `validate` MUST report
+it at the pointer of the offending field, when:
+
+1. a reference does not resolve — `undefined_variable`, at
+   `…/variables/<v>/lb` (or `/ub`), with `details.variable` the reference;
+2. the referenced variable's shape is neither scalar nor the bounded variable's
+   shape — `variable_bound_shape_mismatch`. Shapes are compared as declared: a
+   `shape` omitted, `null` or empty is scalar, and two shapes are equal when
+   they list the same index-set names in the same order;
+3. the bound refers to the bounded variable itself, or to an observed unknown
+   (§6.3.1) whose definition depends on it — `variable_bound_circular`. The
+   dependence is transitive through observed definitions: from the referenced
+   variable, follow every free symbol of an observed's defining right-hand side
+   (the walk of §4.9.5, references resolved as in §4.9.7) to the observeds and
+   variables it names, and so on; reaching the bounded variable is the error.
+   The walk stops at an ODE state, a parameter, an algebraic unknown and a
+   species, whose values a right-hand-side evaluation does not compute;
+4. both bounds are numbers and `lb > ub` — `variable_bounds_inverted`, at
+   `…/variables/<v>`. `lb == ub` is legal.
+
+`details` carries `variable` (the bounded variable's name in its own model) and
+`bound` (`"lb"` or `"ub"`), plus `reference` for rules 1–3; rule 1's
+`details.variable` is the unresolved reference, as for every
+`undefined_variable`. A bound is checked only when it is schema-valid.
+
+**Round-trip.** `lb` and `ub` survive `parse → emit` as authored: a number
+stays the number written and a reference stays the string written. A binding
+does not write an absent bound.
+
+**Flattening** (esm-libraries-spec §4.7.5). A flattened variable carries its
+bounds. A number is unchanged. A reference is rewritten by exactly the renaming
+flatten applies to a reference in the component's equations — dot-namespacing,
+the merged-away renames of `operator_compose`, and a `variable_map`'s
+replacement of a parameter — so it names the same quantity in the flattened
+system (`"E_NaCl_max"` in model `MESA` becomes `"MESA.E_NaCl_max"`). Where a
+`variable_map` replaces a referenced parameter with a scaled source, the
+flattened bound is that replacement expression. A variable that flattening
+removes (a `variable_map` target) takes its bounds with it, and a merged
+variable's bounds come from the same declaration its `units` and `default`
+come from.
+
+**Version gate.** A document declaring `esm` below `2.1.0` that carries `lb` or
+`ub` on any variable is rejected with `variable_bounds_version_too_old`, before
+schema validation, at the pointer of the first such field. The gate reads each
+file's own declared version (§4.7 "Each file is held to its own declared `esm`
+version").
+
+| Code | Meaning |
+|---|---|
+| `variable_bounds_version_too_old` | File declares `esm` < 2.1.0 but a variable carries `lb` or `ub` (§6.3.2). |
+| `variable_bound_shape_mismatch` | A referenced bound is neither scalar nor the bounded variable's shape (§6.3.2). |
+| `variable_bound_circular` | A bound refers to the variable it bounds, or to an observed whose definition depends on it (§6.3.2). |
+| `variable_bounds_inverted` | Both bounds are numbers and `lb > ub` (§6.3.2). |
+| `undefined_variable` | (Also) a bound reference names no variable (§6.3.2). |
 
 ### 6.4 Advection Model Example
 

@@ -1,0 +1,72 @@
+{
+  "esm": "2.1.0",
+  "metadata": {
+    "name": "VariableBoundShapeMismatch",
+    "description": "`x` is scalar and its ub is shaped over `salt`: neither scalar nor `x`'s shape (esm-spec §6.3.2 rule 2).",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "variable_bounds",
+      "invalid"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.5,
+          "ub": "cap"
+        },
+        "cap": {
+          "type": "parameter",
+          "units": "mol/m^3",
+          "shape": [
+            "salt"
+          ],
+          "default": [
+            1.0,
+            2.0
+          ]
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "index_sets": {
+    "salt": {
+      "kind": "interval",
+      "size": 2
+    }
+  }
+}

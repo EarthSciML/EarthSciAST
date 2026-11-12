@@ -1,0 +1,167 @@
+{
+  "esm": "2.1.0",
+  "metadata": {
+    "name": "VariableBoundsCoupled",
+    "description": "Bounds through flattening (esm-spec §6.3.2, esm-libraries-spec §4.7.5): a bare reference is dot-namespaced (`Chem.x` lb `Chem.x_min`), a scoped reference into a subsystem is namespaced with the full path (`Chem.z` ub `Chem.Sub.y`), a reference inside a subsystem is namespaced by the subsystem's path (`Chem.Sub.y` ub `Chem.Sub.y_cap`), and a reference to a parameter a `param_to_var` variable_map replaces follows the replacement (`Chem.x` ub `Met.cap_src`).",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "variable_bounds",
+      "valid",
+      "coupling",
+      "flatten"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.5,
+          "lb": "x_min",
+          "ub": "x_cap"
+        },
+        "x_min": {
+          "type": "parameter",
+          "units": "mol/m^3",
+          "default": 0.0
+        },
+        "x_cap": {
+          "type": "parameter",
+          "units": "mol/m^3",
+          "default": 1.0
+        },
+        "z": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.2,
+          "lb": 0,
+          "ub": "Sub.y"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  "x",
+                  "x_cap"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "z"
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Sub": {
+          "variables": {
+            "y": {
+              "type": "unknown",
+              "units": "mol/m^3",
+              "default": 0.3,
+              "lb": 0,
+              "ub": "y_cap"
+            },
+            "y_cap": {
+              "type": "parameter",
+              "units": "mol/m^3",
+              "default": 4.0
+            },
+            "r": {
+              "type": "parameter",
+              "units": "1/s",
+              "default": 0.01
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "y"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "r"
+                    ]
+                  },
+                  "y"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Met": {
+      "variables": {
+        "cap_src": {
+          "type": "parameter",
+          "units": "mol/m^3",
+          "default": 2.0,
+          "lb": 0
+        }
+      },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Met.cap_src",
+      "to": "Chem.x_cap",
+      "transform": "param_to_var"
+    }
+  ]
+}

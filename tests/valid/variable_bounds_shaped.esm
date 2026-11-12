@@ -1,0 +1,118 @@
+{
+  "esm": "2.1.0",
+  "metadata": {
+    "name": "VariableBoundsShaped",
+    "description": "Bounds on an arrayed variable (esm-spec §6.3.2): a number bound applies to every element, a reference to a parameter of the same shape gives a per-element bound (its inline array default), and a reference to a scalar applies to every element.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "variable_bounds",
+      "valid",
+      "arrays"
+    ]
+  },
+  "index_sets": {
+    "salt": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Salts": {
+      "variables": {
+        "Q": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "shape": [
+            "salt"
+          ],
+          "default": [
+            0.1,
+            0.2,
+            0.3
+          ],
+          "lb": 0,
+          "ub": "Q_max"
+        },
+        "P": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "shape": [
+            "salt"
+          ],
+          "default": 0.5,
+          "lb": "P_min",
+          "ub": 10
+        },
+        "Q_max": {
+          "type": "parameter",
+          "units": "mol/m^3",
+          "shape": [
+            "salt"
+          ],
+          "default": [
+            1.0,
+            2.0,
+            3.0
+          ]
+        },
+        "P_min": {
+          "type": "parameter",
+          "units": "mol/m^3",
+          "default": 0.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Q"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "Q"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "P"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "P"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

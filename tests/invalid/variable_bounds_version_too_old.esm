@@ -1,0 +1,55 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "VariableBoundsVersionTooOld",
+    "description": "`lb` arrives at esm 2.1.0 and this document declares 2.0.0 (esm-spec §6.3.2, version gate).",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "variable_bounds",
+      "invalid"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.5,
+          "lb": 0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
