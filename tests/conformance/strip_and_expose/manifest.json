@@ -392,6 +392,97 @@
         ]
       ],
       "refusal_code": "unsupported_construct"
+    },
+    {
+      "id": "imported_coupling_event",
+      "path": "fixtures/imported_coupling_event.esm",
+      "builds_with": [
+        "continuous_events",
+        "discrete_events"
+      ],
+      "refuses_with": [
+        [
+          "continuous_events"
+        ],
+        [
+          "discrete_events"
+        ],
+        [
+          "parameter_updates"
+        ],
+        [
+          "algebraic"
+        ]
+      ],
+      "refusal_code": "unsupported_construct",
+      "note": "The two discrete events arrive through a coupling_import: with continuous_events alone they are what is refused."
+    },
+    {
+      "id": "nested_and_mounted",
+      "path": "fixtures/nested_and_mounted.esm",
+      "builds_with": [
+        "discrete_events",
+        "parameter_updates"
+      ],
+      "refuses_with": [
+        [
+          "discrete_events"
+        ],
+        [
+          "parameter_updates"
+        ],
+        [
+          "continuous_events"
+        ],
+        [
+          "algebraic"
+        ]
+      ],
+      "refusal_code": null,
+      "note": "With discrete_events alone the updates two levels deep and across the {ref} mount are still refused; with parameter_updates alone, the events. The symbolic-update refusal has no common code yet (RFC U6 open question 4)."
+    },
+    {
+      "id": "reaction_system_subsystem_events",
+      "path": "fixtures/reaction_system_subsystem_events.esm",
+      "builds_with": [
+        "continuous_events",
+        "discrete_events"
+      ],
+      "refuses_with": [
+        [
+          "continuous_events"
+        ],
+        [
+          "discrete_events"
+        ],
+        [
+          "parameter_updates"
+        ],
+        [
+          "algebraic"
+        ]
+      ],
+      "refusal_code": null,
+      "note": "Only the refusal is gated: Python's build reports an event left in place that writes Pool.P as event_var_undeclared before it reaches the unsupported_construct gate."
+    },
+    {
+      "id": "z0_warm_start",
+      "path": "fixtures/z0_warm_start.esm",
+      "builds_with": [
+        "algebraic"
+      ],
+      "refuses_with": [
+        [
+          "continuous_events"
+        ],
+        [
+          "discrete_events"
+        ],
+        [
+          "parameter_updates"
+        ]
+      ],
+      "refusal_code": "unsupported_construct"
     }
   ],
   "stripped_goldens": [
@@ -484,6 +575,61 @@
         "discrete_events"
       ],
       "golden": "goldens/condition_event_swap.json"
+    },
+    {
+      "id": "imported_coupling_event",
+      "path": "fixtures/imported_coupling_event.esm",
+      "strip": [
+        "continuous_events",
+        "discrete_events"
+      ],
+      "golden": "goldens/imported_coupling_event.json"
+    },
+    {
+      "id": "nested_and_mounted",
+      "path": "fixtures/nested_and_mounted.esm",
+      "strip": [
+        "discrete_events",
+        "parameter_updates"
+      ],
+      "golden": "goldens/nested_and_mounted.json"
+    },
+    {
+      "id": "reaction_system_subsystem_events",
+      "path": "fixtures/reaction_system_subsystem_events.esm",
+      "strip": [
+        "continuous_events",
+        "discrete_events"
+      ],
+      "golden": "goldens/reaction_system_subsystem_events.json"
+    },
+    {
+      "id": "z0_warm_start",
+      "path": "fixtures/z0_warm_start.esm",
+      "strip": [
+        "algebraic"
+      ],
+      "tspan": [
+        0.5,
+        1.0
+      ],
+      "p": {},
+      "golden": "goldens/z0_warm_start.json"
+    },
+    {
+      "id": "z0_warm_start_with_p",
+      "path": "fixtures/z0_warm_start.esm",
+      "strip": [
+        "algebraic"
+      ],
+      "tspan": [
+        0.5,
+        1.0
+      ],
+      "p": {
+        "W.k": 3.0
+      },
+      "golden": "goldens/z0_warm_start_with_p.json"
     }
   ],
   "not_solvable": [
@@ -1153,6 +1299,55 @@
         "mentions": [
           "bad",
           "SSA.residual[2]"
+        ]
+      }
+    },
+    {
+      "id": "affect_reads_a_dotted_post_value",
+      "path": "fixtures/reaction_system_subsystem_events.esm",
+      "strip": [
+        "continuous_events",
+        "discrete_events"
+      ],
+      "specs": [
+        {
+          "name": "bad_affect",
+          "outputs": [
+            {
+              "affect": "Chem.bad"
+            }
+          ]
+        }
+      ],
+      "expect_error": {
+        "code": "affect_reads_post_value",
+        "mentions": [
+          "Chem.bad",
+          "Chem.Pool.P"
+        ]
+      }
+    },
+    {
+      "id": "condition_index_zero",
+      "path": "fixtures/condition_event_swap.esm",
+      "strip": [
+        "discrete_events"
+      ],
+      "specs": [
+        {
+          "name": "bad",
+          "outputs": [
+            {
+              "condition": "Swap.swap",
+              "index": 0
+            }
+          ]
+        }
+      ],
+      "expect_error": {
+        "code": "kernel_output_unresolved",
+        "mentions": [
+          "bad"
         ]
       }
     },

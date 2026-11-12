@@ -11,8 +11,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 const _SE_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "strip_and_expose")
 const _SE = JSON3.read(read(joinpath(_SE_DIR, "manifest.json"), String))
 
-_se_build(path, strip; compiler = :native, tspan = (0.0, 1.0)) =
-    esm_problem(joinpath(_SE_DIR, path), tspan; strip = String[String(c) for c in strip], compiler = compiler)
+_se_build(path, strip; compiler = :native, tspan = (0.0, 1.0), p = Dict{String, Float64}()) =
+    esm_problem(
+    joinpath(_SE_DIR, path), tspan; strip = String[String(c) for c in strip], compiler = compiler, p = p
+)
 
 _se_plain(x) = x isa JSON3.Object ? Dict{String, Any}(String(k) => _se_plain(v) for (k, v) in x) :
     x isa JSON3.Array ? Any[_se_plain(v) for v in x] : x
@@ -59,7 +61,9 @@ end
     end
 
     @testset "stripped object golden: $(c.id)" for c in _SE.stripped_goldens
-        prob = _se_build(c.path, c.strip)
+        tspan = haskey(c, :tspan) ? (Float64(c.tspan[1]), Float64(c.tspan[2])) : (0.0, 1.0)
+        p = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in get(c, :p, Dict()))
+        prob = _se_build(c.path, c.strip; tspan = tspan, p = p)
         @test canonical_json(stripped(prob)) == read(joinpath(_SE_DIR, c.golden), String)
     end
 

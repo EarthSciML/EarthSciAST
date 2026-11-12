@@ -1,0 +1,162 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "NestedAndMounted",
+    "description": "Events and symbolic parameter updates two subsystem levels deep (Outer.Mid.Deep) and inside a subsystem mounted by {ref} (Outer.Mounted). Stripping discrete_events and parameter_updates removes every one of them from the build, at any depth and across the mount, and hands them back namespaced; with either class alone the document is still refused. CONFORMANCE_SPEC §5.57.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "strip_and_expose",
+      "events",
+      "parameter_updates",
+      "subsystems"
+    ]
+  },
+  "models": {
+    "Outer": {
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "Decays at rate 1."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "s"
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Mid": {
+          "variables": {
+            "r": {
+              "type": "unknown",
+              "units": "1",
+              "default": 0.0,
+              "description": "Climbs at rate 1."
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "r"
+                ],
+                "wrt": "t"
+              },
+              "rhs": 1.0
+            }
+          ],
+          "subsystems": {
+            "Deep": {
+              "variables": {
+                "q": {
+                  "type": "unknown",
+                  "units": "1",
+                  "default": 1.0,
+                  "description": "Decays at rate rate."
+                },
+                "rate": {
+                  "type": "parameter",
+                  "units": "1",
+                  "default": 0.25,
+                  "shape": [],
+                  "description": "Doubles once per unit of time.",
+                  "update": {
+                    "kind": "schedule",
+                    "interval": 1.0,
+                    "expression": {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "Pre",
+                          "args": [
+                            "rate"
+                          ]
+                        },
+                        2.0
+                      ]
+                    }
+                  }
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "q"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "rate"
+                        ]
+                      },
+                      "q"
+                    ]
+                  }
+                }
+              ],
+              "discrete_events": [
+                {
+                  "trigger": {
+                    "type": "condition",
+                    "expression": {
+                      "op": "<",
+                      "args": [
+                        "q",
+                        0.5
+                      ]
+                    }
+                  },
+                  "affects": [
+                    {
+                      "lhs": "q",
+                      "rhs": {
+                        "op": "*",
+                        "args": [
+                          {
+                            "op": "Pre",
+                            "args": [
+                              "q"
+                            ]
+                          },
+                          2.0
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "Mounted": {
+          "ref": "./components/mounted_subsystem.esm"
+        }
+      }
+    }
+  }
+}

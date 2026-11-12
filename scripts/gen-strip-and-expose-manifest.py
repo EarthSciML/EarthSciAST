@@ -98,6 +98,45 @@ def per_class():
             "refusal_code": "unsupported_construct",
         }
     )
+    cases.append(
+        {
+            "id": "imported_coupling_event",
+            "path": FX + "imported_coupling_event.esm",
+            "builds_with": [CE, DE],
+            "refuses_with": [[CE], [DE], [PU], [AL]],
+            "refusal_code": "unsupported_construct",
+            "note": "The two discrete events arrive through a coupling_import: with continuous_events alone they are what is refused.",
+        }
+    )
+    cases.append(
+        {
+            "id": "nested_and_mounted",
+            "path": FX + "nested_and_mounted.esm",
+            "builds_with": [DE, PU],
+            "refuses_with": [[DE], [PU], [CE], [AL]],
+            "refusal_code": None,
+            "note": "With discrete_events alone the updates two levels deep and across the {ref} mount are still refused; with parameter_updates alone, the events. The symbolic-update refusal has no common code yet (RFC U6 open question 4).",
+        }
+    )
+    cases.append(
+        {
+            "id": "reaction_system_subsystem_events",
+            "path": FX + "reaction_system_subsystem_events.esm",
+            "builds_with": [CE, DE],
+            "refuses_with": [[CE], [DE], [PU], [AL]],
+            "refusal_code": None,
+            "note": "Only the refusal is gated: Python's build reports an event left in place that writes Pool.P as event_var_undeclared before it reaches the unsupported_construct gate.",
+        }
+    )
+    cases.append(
+        {
+            "id": "z0_warm_start",
+            "path": FX + "z0_warm_start.esm",
+            "builds_with": [AL],
+            "refuses_with": others([AL]),
+            "refusal_code": "unsupported_construct",
+        }
+    )
     return cases
 
 
@@ -114,11 +153,23 @@ def goldens():
         ("parameter_updates", FX, [CE, PU]),
         ("ssa_residual_1d", FX, [AL]),
         ("condition_event_swap", FX, [CE, DE]),
+        ("imported_coupling_event", FX, [CE, DE]),
+        ("nested_and_mounted", FX, [DE, PU]),
+        ("reaction_system_subsystem_events", FX, [CE, DE]),
     ]
-    return [
+    out = [
         {"id": i, "path": base + i + ".esm", "strip": s, "golden": "goldens/" + i + ".json"}
         for i, base, s in rows
     ]
+    # z0 is the ic evaluated at the start of the run with the Problem's
+    # parameter values: k = 1 by default (y = 2 k + t = 2.5, v = k + t = 1.5 at
+    # t0 = 0.5), and the caller's p wins (k = 3: y = 6.5, v = 3.5).
+    for i, p in [("z0_warm_start", {}), ("z0_warm_start_with_p", {"W.k": 3.0})]:
+        out.append({
+            "id": i, "path": FX + "z0_warm_start.esm", "strip": [AL], "tspan": [0.5, 1.0], "p": p,
+            "golden": "goldens/" + i + ".json",
+        })
+    return out
 
 
 def not_solvable():
@@ -270,6 +321,13 @@ def refusals():
         {"id": "unknown_residual", "path": FX + "ssa_residual_1d.esm", "strip": [AL],
          "specs": [{"name": "bad", "outputs": [{"residual": "SSA.residual[2]"}]}],
          "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad", "SSA.residual[2]"]}},
+        {"id": "affect_reads_a_dotted_post_value", "path": FX + "reaction_system_subsystem_events.esm",
+         "strip": [CE, DE],
+         "specs": [{"name": "bad_affect", "outputs": [{"affect": "Chem.bad"}]}],
+         "expect_error": {"code": "affect_reads_post_value", "mentions": ["Chem.bad", "Chem.Pool.P"]}},
+        {"id": "condition_index_zero", "path": FX + "condition_event_swap.esm", "strip": [DE],
+         "specs": [{"name": "bad", "outputs": [{"condition": "Swap.swap", "index": 0}]}],
+         "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad"]}},
         {"id": "unknown_event", "path": FX + "condition_event_swap.esm", "strip": [DE],
          "specs": [{"name": "bad", "outputs": [{"condition": "Swap.nope"}]}],
          "expect_error": {"code": "kernel_output_unresolved", "mentions": ["bad", "Swap.nope"]}},

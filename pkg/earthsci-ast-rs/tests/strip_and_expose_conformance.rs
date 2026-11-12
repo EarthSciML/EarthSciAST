@@ -81,10 +81,26 @@ fn stripped_object_matches_the_golden_byte_for_byte() {
     let write = std::env::var("ESM_WRITE_STRIP_GOLDENS").is_ok_and(|v| v == "1");
     for case in m["stripped_goldens"].as_array().unwrap() {
         let id = case["id"].as_str().unwrap();
-        let prob = build(
-            case["path"].as_str().unwrap(),
-            classes(&case["strip"]),
-            Compiler::Native,
+        let tspan = case["tspan"].as_array().map_or((0.0, 1.0), |s| {
+            (s[0].as_f64().unwrap(), s[1].as_f64().unwrap())
+        });
+        let p: HashMap<String, f64> = case["p"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k.clone(), v.as_f64().unwrap()))
+            .collect();
+        let prob = esm_problem(
+            category_dir()
+                .join(case["path"].as_str().unwrap())
+                .as_path(),
+            tspan,
+            ProblemOptions {
+                strip: classes(&case["strip"]),
+                compiler: Some(Compiler::Native),
+                p,
+                ..Default::default()
+            },
         )
         .unwrap_or_else(|e| panic!("{id}: {e}"));
         let got = stripped(&prob).canonical_json();

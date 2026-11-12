@@ -1649,8 +1649,10 @@ byte for byte. It has exactly these keys:
   `event_type` and keeps the rest.
 - **`origin`** — the provenance form of `esm-libraries-spec.md` §4.7.5:
   `{"component": "<dotted path>"}` (the model, subsystem or reaction system
-  that declared it) or `{"coupling": k}` (`k` the 0-based index of the coupling
-  entry after `coupling_import` expansion).
+  that declared it, a `{ref}`-mounted subsystem included) or
+  `{"coupling": k}` (`k` the 0-based index of the coupling entry after
+  `coupling_import` expansion; an event edge a coupling library brings in is a
+  coupling-level event like an inline one, refused and stripped alike).
 - **`id`** — the name a kernel spec refers to the event by:
   `<prefix>.<name>` for a named event and `<prefix>.<kind>_event[j]` for an
   unnamed one, `j` its 1-based position among that origin's events of that
@@ -1708,7 +1710,8 @@ default empty) lists scalar parameters that read the kernel's `dt` argument.
 | `{"assign": unknown, "from": name or AST}` | a step map | full `u` length | — |
 
 Any output may carry `"label"` to override the default label; `k` in `out[k]`
-is the output's 1-based position in the spec. An `expr` output's shape is the
+is the output's 1-based position in the spec. An `index` that is not an
+integer `>= 1` is `kernel_output_unresolved`. An `expr` output's shape is the
 output shape of a top-level `faq` (each output range `{"from": <index set>}`),
 the declared shape of a bare variable name, and otherwise scalar.
 

@@ -7626,7 +7626,9 @@ separate input `z`. `solve` and `init` refuse a stripped Problem. The surface
 and its semantics are `API_SPEC.md` §5.8, "Strip and expose".
 
 **Shape.** `tests/conformance/strip_and_expose/manifest.json`, with the §5.39
-fixtures reused in place and seven of its own. Its sections:
+fixtures reused in place and eleven of its own (plus the coupling library and
+the mounted component two of them reference, under `fixtures/components/`). Its
+sections:
 
 1. **Default unchanged** — every §5.39 refusal case still refuses with
    `unsupported_construct` when `strip` is empty (reported, not re-gated: §5.39
@@ -7635,12 +7637,20 @@ fixtures reused in place and seven of its own. Its sections:
    builds with its own class stripped and still refuses with each other class
    alone; the Wiener-noise documents refuse under all four; `D(a + b) ~ 3`
    refuses under `algebraic`; a `crossing` parameter update refuses under
-   `parameter_updates` alone and builds with `continuous_events` added.
+   `parameter_updates` alone and builds with `continuous_events` added; event
+   edges that arrive through a `coupling_import` refuse unless their class is
+   stripped; events and updates two subsystem levels deep and inside a
+   `{ref}`-mounted subsystem are all removed by their classes.
 3. **Byte-identical `stripped()`** — the canonical JSON matches a committed
    golden (`goldens/<id>.json`, the bytes with no trailing newline) in Julia,
-   Rust and Python. The documents cover subsystem, reaction-system,
-   coupled-document and coupling-level events, parameter updates, and scalar
-   and array implicit equations.
+   Rust and Python. The documents cover subsystem, reaction-system (a nested
+   reaction system's included), coupled-document, coupling-level and imported
+   coupling-level events, events and parameter updates two subsystem levels deep
+   and across a `{ref}` mount, subsystem-local dotted references (an affect's
+   target included), parameter updates, and scalar and array implicit
+   equations. An entry may carry a `tspan` and a `p`: `z0` is the `ic`
+   expression evaluated at the start of the run with the Problem's parameter
+   values, the caller's `p` included.
 4. **Not solvable** — `solve` and `init` on a stripped Problem raise
    `stripped_problem_not_solvable`; the control, `strip` on a document with
    nothing to strip, is not stripped and still solves.
@@ -7658,8 +7668,9 @@ fixtures reused in place and seven of its own. Its sections:
    compiles every kernel under `interpreter` and gates it against `native`
    with the same tolerances.
 7. **Refusals** — `affect_reads_post_value` (an affect reading, bare, a
-   variable its event assigns) and `kernel_output_unresolved` (an unknown
-   observed, residual, event, target and `dt_params` entry).
+   variable its event assigns, spelled locally or through a subsystem) and
+   `kernel_output_unresolved` (an unknown observed, residual, event, target and
+   `dt_params` entry, and a condition `index` of 0).
 8. **`dt` is live** — the step-map kernel of item 6 answers both `dt` values
    from one build.
 

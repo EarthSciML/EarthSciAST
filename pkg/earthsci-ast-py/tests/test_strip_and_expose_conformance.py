@@ -14,7 +14,7 @@ from conftest import CONFORMANCE_DIR
 
 from earthsci_ast import compile_kernels, is_stripped, stripped
 from earthsci_ast.compiler import CompilerUnavailableError
-from earthsci_ast.problem import esm_problem, init, solve
+from earthsci_ast.problem import EnsembleProblem, esm_problem, init, remake, solve
 from earthsci_ast.strip import StrippedProblemNotSolvableError, canonical_json_value
 
 CATEGORY_DIR = CONFORMANCE_DIR / "strip_and_expose"
@@ -41,7 +41,12 @@ def test_per_class_strip(case):
 
 @pytest.mark.parametrize("case", MANIFEST["stripped_goldens"], ids=lambda c: c["id"])
 def test_stripped_object_matches_the_golden(case):
-    prob = esm_problem(_path(case["path"]), (0.0, 1.0), strip=case["strip"])
+    prob = esm_problem(
+        _path(case["path"]),
+        tuple(case.get("tspan", (0.0, 1.0))),
+        p=case.get("p") or None,
+        strip=case["strip"],
+    )
     want = (CATEGORY_DIR / case["golden"]).read_text()
     assert stripped(prob).canonical_json() == want
 
@@ -58,6 +63,32 @@ def test_a_stripped_problem_is_not_solvable(case):
         with pytest.raises(StrippedProblemNotSolvableError) as info:
             call(prob)
         assert info.value.code == case["expect"]
+
+
+def test_a_remade_stripped_problem_is_still_not_solvable():
+    case = next(c for c in MANIFEST["not_solvable"] if c["id"] == "stripped_discrete_event")
+    prob = esm_problem(_path(case["path"]), tuple(case["tspan"]), strip=case["strip"])
+    remade = remake(prob, tspan=(0.0, 2.0))
+    assert is_stripped(remade)
+    assert stripped(remade).canonical_json() == stripped(prob).canonical_json()
+    for call in (solve, init):
+        with pytest.raises(StrippedProblemNotSolvableError):
+            call(remade)
+    ens = EnsembleProblem(prob, lambda p, i: remake(p, tspan=(0.0, 1.0 + i)))
+    with pytest.raises(StrippedProblemNotSolvableError):
+        solve(ens, trajectories=2)
+
+
+def test_z_layout_follows_the_callers_metaparameters():
+    prob = esm_problem(
+        _path("fixtures/z0_warm_start.esm"),
+        (0.5, 1.0),
+        metaparameters={"NC": 4},
+        strip=["algebraic"],
+    )
+    s = stripped(prob)
+    assert s.z_layout["W.v"] == {"base": 2, "shape": [4]}
+    assert s.z0 == [2.5] + [1.5] * 4
 
 
 def test_compile_kernels_is_unavailable():
