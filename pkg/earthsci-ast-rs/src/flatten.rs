@@ -3236,6 +3236,11 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         cloned.for_each_expression_mut(&mut |expr| {
             *expr = namespace_expr(expr, system_name, &sub_keys, &locals);
         });
+        // A reference `lb` / `ub` names a variable exactly as an equation does,
+        // so it is namespaced by the same map (esm-libraries-spec §4.7.5).
+        cloned.map_bound_references(&mut |expr| {
+            namespace_expr(expr, system_name, &sub_keys, &locals)
+        });
         match var.var_type {
             // The two maps are NOT a partition (esm-libraries-spec §4.7.5
             // step 4). `observed_variables` is the §6.3.1 CLASSIFICATION —
@@ -4844,6 +4849,7 @@ fn retarget_merged_names(per_system: &mut [SystemBlock], renames: &IndexMap<Stri
             .chain(block.observed_vars.values_mut())
         {
             var.for_each_expression_mut(&mut |expr| *expr = ren(expr));
+            var.map_bound_references(&mut |expr| ren(expr));
         }
         for event in block.continuous_events.iter_mut() {
             rename_continuous_event_names(event, &subs, renames);
@@ -5235,6 +5241,16 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
                 *expr =
                     rename_join_names(&crate::substitute::substitute(expr, &subs), &join_renames);
             });
+        }
+        // A bound can reference the removed parameter from ANY variable, a
+        // state included, so the bounds of all three maps are rewritten.
+        for var in block
+            .state_vars
+            .values_mut()
+            .chain(block.observed_vars.values_mut())
+            .chain(block.parameters.values_mut())
+        {
+            var.map_bound_references(&mut |expr| crate::substitute::substitute(expr, &subs));
         }
         // ...and event conditions / affect RHS (continuous + discrete), for the
         // same reason: an event whose condition or affect referenced the removed

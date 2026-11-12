@@ -6082,17 +6082,17 @@ fn validate_event_ref_expression<D: DeclaredLookup + ?Sized>(
 /// classification (the observeds and their defining right-hand sides), its
 /// §4.3.1.1 recurrence candidates, the names it declares, and the dotted names
 /// its equations put under `D(·, t)`.
-struct ObservedScope {
+pub(crate) struct ObservedScope {
     /// The node's full scoped name: `ModelA`, `ModelN.Sub`.
-    path: String,
-    class: crate::classification::Classification,
+    pub(crate) path: String,
+    pub(crate) class: crate::classification::Classification,
     candidates: HashSet<String>,
     /// Its §4.3.1.2 recurrence group candidates, by local name.
     groups: Vec<std::collections::BTreeSet<String>>,
     /// Every variable the node declares, whatever its kind: a reference
     /// resolves by DECLARATION (a state found first shadows an observed found
     /// later), and only then asks whether its target is an observed.
-    declared: HashSet<String>,
+    pub(crate) declared: HashSet<String>,
     /// The dotted names on a `D(·, t)` left-hand side, read the §6.3.1 way
     /// ([`crate::classification::lhs_form_ref`]: `D(a + b)` credits no
     /// variable). A bare one is this node's own state, which `class` counts.
@@ -6100,7 +6100,7 @@ struct ObservedScope {
 }
 
 impl ObservedScope {
-    fn new(
+    pub(crate) fn new(
         path: String,
         variables: &indexmap::IndexMap<String, crate::ModelVariable>,
         equations: &[crate::Equation],
@@ -6132,27 +6132,46 @@ struct ObservedNode<'a> {
     successors: std::collections::BTreeSet<String>,
 }
 
-/// Every model node of `models`, top-level and subsystems at every depth.
+/// Every model node of `models`, top-level and subsystems at every depth, in
+/// document order (a model, then its subsystems depth-first), handed to `f`
+/// as its full scoped name (`ModelA`, `ModelN.Sub`), its JSON pointer
+/// (`/models/ModelN/subsystems/Sub`), its variables and its equations.
 ///
 /// A top-level model is read from its typed form. A subsystem is held as raw
 /// JSON (`Model::subsystems` is untyped because an entry may be an unresolved
 /// `{"ref": …}` mount), so its `variables` and `equations` are deserialized
 /// THROUGH a borrow of that JSON — no clone of the subtree, and nothing else of
 /// it is read. The loader resolves every `{"ref": …}` mount before a document
-/// reaches this check, so a ref still standing here can only come from a
-/// caller that built the `EsmFile` by hand without resolving it; such a mount
-/// declares nothing, so it contributes no observeds. An equation that does not
-/// type is skipped, exactly as
+/// reaches a check, so a ref still standing here can only come from a caller
+/// that built the `EsmFile` by hand without resolving it; such a mount declares
+/// nothing. An equation that does not type is skipped, exactly as
 /// [`crate::classification::Classification::from_json`] skips it.
-fn observed_scopes(models: &indexmap::IndexMap<String, crate::Model>) -> Vec<ObservedScope> {
+#[allow(clippy::type_complexity)]
+pub(crate) fn for_each_model_node(
+    models: &indexmap::IndexMap<String, crate::Model>,
+    f: &mut dyn FnMut(
+        &str,
+        &str,
+        &indexmap::IndexMap<String, crate::ModelVariable>,
+        &[crate::Equation],
+    ),
+) {
+    #[allow(clippy::type_complexity)]
     fn subsystems(
         prefix: &str,
+        pointer: &str,
         entries: &mut dyn Iterator<Item = (&String, &serde_json::Value)>,
-        out: &mut Vec<ObservedScope>,
+        f: &mut dyn FnMut(
+            &str,
+            &str,
+            &indexmap::IndexMap<String, crate::ModelVariable>,
+            &[crate::Equation],
+        ),
     ) {
         use serde::Deserialize as _;
         for (name, value) in entries {
             let path = format!("{prefix}.{name}");
+            let sub_pointer = format!("{pointer}/subsystems/{name}");
             let variables = value
                 .get("variables")
                 .and_then(|v| {
@@ -6168,24 +6187,31 @@ fn observed_scopes(models: &indexmap::IndexMap<String, crate::Model>) -> Vec<Obs
                         .collect()
                 })
                 .unwrap_or_default();
-            out.push(ObservedScope::new(path.clone(), &variables, &equations));
+            f(&path, &sub_pointer, &variables, &equations);
             if let Some(nested) = value.get("subsystems").and_then(|s| s.as_object()) {
-                subsystems(&path, &mut nested.iter(), out);
+                subsystems(&path, &sub_pointer, &mut nested.iter(), f);
             }
         }
     }
 
-    let mut out = Vec::new();
     for (name, model) in models {
-        out.push(ObservedScope::new(
-            name.clone(),
-            &model.variables,
-            &model.equations,
-        ));
+        let pointer = format!("/models/{name}");
+        f(name, &pointer, &model.variables, &model.equations);
         if let Some(subs) = &model.subsystems {
-            subsystems(name, &mut subs.iter(), &mut out);
+            subsystems(name, &pointer, &mut subs.iter(), f);
         }
     }
+}
+
+/// Every model node of `models` as the `circular_dependency` graph reads it
+/// ([`for_each_model_node`]'s order).
+pub(crate) fn observed_scopes(
+    models: &indexmap::IndexMap<String, crate::Model>,
+) -> Vec<ObservedScope> {
+    let mut out = Vec::new();
+    for_each_model_node(models, &mut |path, _, variables, equations| {
+        out.push(ObservedScope::new(path.to_string(), variables, equations));
+    });
     out
 }
 
@@ -6196,7 +6222,7 @@ fn observed_scopes(models: &indexmap::IndexMap<String, crate::Model>) -> Vec<Obs
 /// top-level system path. `None` when no model node declares it (an
 /// unresolved reference, or one into a reaction system or a data loader,
 /// none of which declares an observed).
-fn resolve_observed_ref(
+pub(crate) fn resolve_observed_ref(
     scopes: &HashMap<&str, &ObservedScope>,
     from: &str,
     name: &str,
@@ -6220,7 +6246,7 @@ fn resolve_observed_ref(
 /// symbols ([`collect_free_symbols`], the §4.9.6 walk, minus the binders
 /// [`collect_bound_symbols`] finds) and every dotted reference, descending
 /// every Expression child.
-fn referenced_names(expr: &crate::Expr) -> HashSet<String> {
+pub(crate) fn referenced_names(expr: &crate::Expr) -> HashSet<String> {
     fn dotted(expr: &crate::Expr, out: &mut HashSet<String>) {
         match expr {
             crate::Expr::Variable(name) if name.contains('.') => {
@@ -6239,6 +6265,33 @@ fn referenced_names(expr: &crate::Expr) -> HashSet<String> {
     names
 }
 
+/// The full scoped names of every observed of the document (esm-spec §6.3.1,
+/// §4.9.7): each node's observeds, less any that another node differentiates
+/// through a scoped name, which that `D(·, t)` makes a state.
+pub(crate) fn document_observeds(
+    scopes: &[ObservedScope],
+    by_path: &HashMap<&str, &ObservedScope>,
+) -> HashSet<String> {
+    let states: HashSet<String> = scopes
+        .iter()
+        .flat_map(|s| {
+            s.differentiated_refs
+                .iter()
+                .filter_map(|r| resolve_observed_ref(by_path, &s.path, r))
+        })
+        .collect();
+    scopes
+        .iter()
+        .flat_map(|s| {
+            s.class
+                .observed_definitions
+                .keys()
+                .map(move |v| format!("{}.{v}", s.path))
+        })
+        .filter(|n| !states.contains(n))
+        .collect()
+}
+
 /// The document-wide observed dependency graph of esm-spec §4.9.7, keyed by
 /// full scoped name: §4.9.6's graph with its edges extended across scope
 /// boundaries. Every reference resolves by [`resolve_observed_ref`]; one that
@@ -6252,24 +6305,7 @@ fn document_observed_graph(
 ) -> std::collections::BTreeMap<String, ObservedNode<'_>> {
     let by_path: HashMap<&str, &ObservedScope> =
         scopes.iter().map(|s| (s.path.as_str(), s)).collect();
-    let states: HashSet<String> = scopes
-        .iter()
-        .flat_map(|s| {
-            s.differentiated_refs
-                .iter()
-                .filter_map(|r| resolve_observed_ref(&by_path, &s.path, r))
-        })
-        .collect();
-    let observed: HashSet<String> = scopes
-        .iter()
-        .flat_map(|s| {
-            s.class
-                .observed_definitions
-                .keys()
-                .map(move |v| format!("{}.{v}", s.path))
-        })
-        .filter(|n| !states.contains(n))
-        .collect();
+    let observed = document_observeds(scopes, &by_path);
     let mut nodes = std::collections::BTreeMap::new();
     for scope in scopes {
         for (name, rhs) in &scope.class.observed_definitions {

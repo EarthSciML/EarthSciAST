@@ -417,6 +417,8 @@ mod value_invention_arrays_and_extents;
 mod value_invention_caller_data;
 #[path = "value_invention_materialize_conformance.rs"]
 mod value_invention_materialize_conformance;
+#[path = "variable_bounds.rs"]
+mod variable_bounds;
 #[path = "variable_map_expression_transform.rs"]
 mod variable_map_expression_transform;
 #[path = "vec_coverage_frontier.rs"]

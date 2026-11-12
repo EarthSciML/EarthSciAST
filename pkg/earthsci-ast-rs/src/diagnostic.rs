@@ -219,6 +219,9 @@ diagnostic_code_registry! {
     /// Declared `units` on an expression node in a document declaring `esm` <
     /// 1.2.0 (esm-spec §4.8.5).
     CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old";
+    /// `lb` or `ub` on a model variable in a document declaring `esm` < 2.1.0
+    /// (esm-spec §6.3.2).
+    VARIABLE_BOUNDS_VERSION_TOO_OLD = "variable_bounds_version_too_old";
     /// An `inject` whose target names a data LOADER rather than a component.
     TEMPLATE_INJECT_TARGET_IS_LOADER = "template_inject_target_is_loader";
     /// An `inject` whose target resolves to something that is not a component.
@@ -349,6 +352,14 @@ diagnostic_code_registry! {
     /// `shape` (esm-spec §6.3). Inline array data is a shaped variable's value,
     /// so with no shape there is nothing for the array to fill.
     ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape";
+    /// A variable bound (`lb` / `ub`) referring to the variable it bounds, or
+    /// to an observed whose definition depends on it (esm-spec §6.3.2).
+    VARIABLE_BOUND_CIRCULAR = "variable_bound_circular";
+    /// A variable bound referring to a variable whose declared shape is
+    /// neither scalar nor the bounded variable's (esm-spec §6.3.2).
+    VARIABLE_BOUND_SHAPE_MISMATCH = "variable_bound_shape_mismatch";
+    /// Numeric bounds with `lb > ub` (esm-spec §6.3.2).
+    VARIABLE_BOUNDS_INVERTED = "variable_bounds_inverted";
     /// An equation graph that depends on itself.
     CIRCULAR_DEPENDENCY = "circular_dependency";
     /// A parameter `update` naming no declared data source.
@@ -766,6 +777,10 @@ mod error_code_tests {
             "unsupported_construct",
             "url_substitution_unknown_name",
             "value_invention_key_out_of_range",
+            "variable_bound_circular",
+            "variable_bound_shape_mismatch",
+            "variable_bounds_inverted",
+            "variable_bounds_version_too_old",
         ];
         assert_eq!(error_code_names(), expected);
     }

@@ -37,6 +37,7 @@ use std::path::Path;
 pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
     let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;
     raise_faq_esm_floor(&mut value);
+    raise_variable_bounds_esm_floor(&mut value);
     serde_json::to_string_pretty(&value).map_err(EsmError::JsonParse)
 }
 
@@ -77,6 +78,31 @@ fn raise_faq_esm_floor(value: &mut serde_json::Value) {
     }
 }
 
+/// Raise an emitted document's declared `esm` to 2.1.0 when a model variable
+/// carries `lb` or `ub` (esm-spec §6.3.2) but the document declares less.
+///
+/// A floor, for the reason [`raise_faq_esm_floor`] is one: a 2.0.0 document
+/// may mount a 2.1.0 file whose variables carry bounds (each file is held to
+/// its own declared version, §4.7), and the mount is inlined at load. Emitting
+/// the resolved document at 2.0.0 would write bytes the
+/// `variable_bounds_version_too_old` gate refuses to read back.
+fn raise_variable_bounds_esm_floor(value: &mut serde_json::Value) {
+    let below = value
+        .get("esm")
+        .and_then(|v| v.as_str())
+        .and_then(crate::diagnostic::parse_semver)
+        .is_some_and(|(major, minor, _)| (major, minor) < (2, 1));
+    if below
+        && crate::variable_bounds::first_bound_pointer(value).is_some()
+        && let Some(obj) = value.as_object_mut()
+    {
+        obj.insert(
+            "esm".to_string(),
+            serde_json::Value::String("2.1.0".to_string()),
+        );
+    }
+}
+
 /// Serialize an ESM file to compact JSON string (no pretty printing)
 ///
 /// This function is similar to [`to_json`] but produces compact JSON without
@@ -96,6 +122,7 @@ fn raise_faq_esm_floor(value: &mut serde_json::Value) {
 pub fn to_json_compact(esm_file: &EsmFile) -> Result<String, EsmError> {
     let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;
     raise_faq_esm_floor(&mut value);
+    raise_variable_bounds_esm_floor(&mut value);
     serde_json::to_string(&value).map_err(EsmError::JsonParse)
 }
 

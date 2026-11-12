@@ -278,9 +278,17 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // declared version, when it is loaded (esm-spec §4.7 "Each file is held to
     // its own declared `esm` version"), so a 1.0.0 document may mount a 1.2.0
     // leaf that carries unit-bearing `const` nodes.
-    crate::units::reject_const_units_pre_v12(&json_value, || authored.op_with_units).map_err(
-        |e: crate::diagnostic::DiagnosticError| EsmError::SchemaValidation(e.to_string()),
-    )?;
+    // Variable `lb` / `ub` arrive at esm 2.1.0 (esm-spec §6.3.2), judged the
+    // same way: this file's own variables, before a mount spliced any in.
+    crate::units::reject_const_units_pre_v12(&json_value, || authored.op_with_units)
+        .and_then(|()| {
+            crate::variable_bounds::reject_variable_bounds_pre_v21(&json_value, || {
+                authored.variable_bound
+            })
+        })
+        .map_err(|e: crate::diagnostic::DiagnosticError| {
+            EsmError::SchemaValidation(e.to_string())
+        })?;
 
     // Validate against schema
     if mounts_marked {
@@ -1906,6 +1914,9 @@ pub(crate) struct AuthoredFacts {
     /// The path of the first object, in pre-order, with both an `op` and a
     /// `units` key (what [`crate::units::reject_const_units_pre_v12`] looks for).
     pub(crate) op_with_units: Option<String>,
+    /// The pointer of the first model variable carrying `lb` or `ub` (what
+    /// [`crate::variable_bounds::reject_variable_bounds_pre_v21`] looks for).
+    pub(crate) variable_bound: Option<String>,
 }
 
 /// [`prepare_document_ops`], returning the [`AuthoredFacts`] its walk noted.
@@ -1937,6 +1948,7 @@ pub(crate) fn prepare_document_ops_scanned(
     }
     let facts = AuthoredFacts {
         op_with_units: scan.op_with_units.take(),
+        variable_bound: crate::variable_bounds::first_bound_pointer(value),
     };
     // 1. A removed op or block — rejected by name, before anything else.
     if let Some(removed) = scan.removed {
