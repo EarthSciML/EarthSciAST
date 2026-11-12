@@ -301,7 +301,7 @@ function _events_of_reaction_system!(out, rs::ReactionSystem, prefix::String)
     foreach(e -> push!(out, (prefix, "continuous", e)), cv)
     foreach(e -> push!(out, (prefix, "discrete", e)), dv)
     for (k, sub) in rs.subsystems
-        sub isa Model && _events_of_model!(out, sub, "$prefix.$k")
+        sub isa ReactionSystem && _events_of_reaction_system!(out, sub, "$prefix.$k")
     end
     return out
 end
@@ -356,7 +356,7 @@ function _strip_document(file::EsmFile, classes::Vector{String})
         j = counters[(prefix, kind)] = get(counters, (prefix, kind), 0) + 1
         push!(s.events, _stripped_event(prefix, TermOrigin(prefix, nothing), kind, j, ev))
     end
-    for (k, entry) in enumerate(file.coupling)
+    for (k, entry) in enumerate(expand_coupling_imports(file))
         entry isa CouplingEvent || continue
         kind = entry.event_type == "continuous" ? "continuous" : "discrete"
         _strips_kind(kind, classes) || continue
@@ -581,8 +581,10 @@ end
 
 # Refuse a coupling-level event `classes` does not strip: no compiler here
 # lowers one, so building without it would be a silent drop (esm-spec §9.6.6).
+# The coupling read is the one after `coupling_import` expansion, which is what
+# `flatten` applies: an event edge a library brings in is an event too.
 function _refuse_coupling_events(file::EsmFile, classes)
-    for entry in file.coupling
+    for entry in expand_coupling_imports(file)
         entry isa CouplingEvent || continue
         kind = entry.event_type == "continuous" ? "continuous" : "discrete"
         _strips_kind(kind, classes) && continue
@@ -879,6 +881,14 @@ function _value_or_map_kernel(kname, dtp, outs, seed, flat, rhs, s, ulay, zlay)
             throw(_kernel_error("kernel '$kname': the shape of $what cannot be decided: $(err.msg)"))
         end
     end
+    # A spec's `index` is a 1-based integer; anything else is the spec's error,
+    # not a bounds error out of the lookup it feeds.
+    function spec_index(o, k, default)
+        i = get(o, "index", default)
+        (i isa Integer && !(i isa Bool) && i >= 1) ||
+            throw(_kernel_error("kernel '$kname': output $k `index` is a 1-based integer"))
+        return Int(i)
+    end
     synth = Any[]   # (name, sets, expr, label, target)
     add!(sets, e, label, target) = push!(synth, ("__kernel_out_$(length(synth) + 1)", sets, e, label, target))
     function event(id)
@@ -906,7 +916,7 @@ function _value_or_map_kernel(kname, dtp, outs, seed, flat, rhs, s, ulay, zlay)
             add!(r.sets, r.expr, something(label, id), nothing)
         elseif kind == "condition"
             id = String(o["condition"])
-            idx = Int(get(o, "index", 1))
+            idx = spec_index(o, k, 1)
             ev = event(id)
             e = if ev.kind == "continuous"
                 idx <= length(ev.conditions) || throw(unresolved("condition $idx of event '$id'"))
@@ -924,7 +934,7 @@ function _value_or_map_kernel(kname, dtp, outs, seed, flat, rhs, s, ulay, zlay)
             i = findfirst(u -> u.parameter == pname, s.parameter_updates)
             i === nothing && throw(unresolved("parameter update '$pname'"))
             u = s.parameter_updates[i]
-            idx = haskey(o, "index") ? Int(o["index"]) :
+            idx = haskey(o, "index") ? spec_index(o, k, 1) :
                 (
                     length(u.values) == 1 ? 1 :
                     throw(_kernel_error("kernel '$kname': parameter '$pname' has $(length(u.values)) update rules; name one with `index`"))
