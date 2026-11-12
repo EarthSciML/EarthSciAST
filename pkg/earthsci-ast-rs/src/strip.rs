@@ -527,7 +527,7 @@ pub(crate) struct Stripped {
 /// as a description, so without this it would be dropped silently
 /// (esm-spec §9.6.6 `unsupported_construct`).
 pub(crate) fn refuse_coupling_events(file: &EsmFile, set: StripSet) -> Result<(), SimulateError> {
-    for entry in file.coupling.iter().flatten() {
+    for entry in &expanded_coupling(file)? {
         if let CouplingEntry::Event {
             event_type, name, ..
         } = entry
@@ -552,6 +552,16 @@ pub(crate) fn refuse_coupling_events(file: &EsmFile, set: StripSet) -> Result<()
         }
     }
     Ok(())
+}
+
+/// `file`'s coupling sequence after `coupling_import` expansion (esm-spec
+/// §10.10.3), the sequence `flatten` applies and the one a `{"coupling": k}`
+/// origin indexes. An event edge a library brings in is an event like any
+/// other, so the event gate and the strip both read this, never the raw list.
+fn expanded_coupling(file: &EsmFile) -> Result<Vec<CouplingEntry>, SimulateError> {
+    crate::coupling_imports::expand_coupling_imports(file, &Default::default())
+        .map(Option::unwrap_or_default)
+        .map_err(|e| SimulateError::Compile(crate::flatten::FlattenError::CouplingImport(e).into()))
 }
 
 /// Remove `set`'s constructs from `file`, and collect them from the flattened
@@ -597,7 +607,7 @@ pub(crate) fn strip_file(file: &EsmFile, set: StripSet) -> Result<Stripped, Simu
             ev,
         )?);
     }
-    for (k, entry) in file.coupling.iter().flatten().enumerate() {
+    for (k, entry) in expanded_coupling(file)?.iter().enumerate() {
         let CouplingEntry::Event { event_type, .. } = entry else {
             continue;
         };
@@ -846,28 +856,36 @@ fn strip_model_updates(
             out.push(format!("{path}.{vname}"));
         }
     }
-    if let Some(subs) = model.subsystems.as_mut() {
-        for (key, value) in subs.iter_mut() {
-            let Ok(mut sub) = serde_json::from_value::<Model>(value.clone()) else {
-                continue;
-            };
-            let before = out.len();
-            strip_model_updates(&format!("{path}.{key}"), &mut sub, set, out)?;
-            if out.len() > before
-                && let Some(vars) = value.get_mut("variables").and_then(|v| v.as_object_mut())
-            {
-                for name in &out[before..] {
-                    let local = name.rsplit_once('.').map_or(name.as_str(), |(_, l)| l);
-                    if let Some(Value::Object(v)) = vars.get_mut(local)
-                        && name == &format!("{path}.{key}.{local}")
-                    {
-                        v.remove("update");
-                    }
-                }
+    for (key, value) in model.subsystems.iter_mut().flatten() {
+        strip_json_updates(&format!("{path}.{key}"), value, set, out);
+    }
+    Ok(())
+}
+
+/// [`strip_model_updates`] for an inline subsystem, which the typed model
+/// holds as JSON: the `update` is removed in place, at any depth.
+fn strip_json_updates(path: &str, value: &mut Value, set: StripSet, out: &mut Vec<String>) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    if obj.contains_key("ref") {
+        return;
+    }
+    if let Some(Value::Object(vars)) = obj.get_mut("variables") {
+        for (vname, v) in vars.iter_mut() {
+            let strips = serde_json::from_value::<ModelVariable>(v.clone())
+                .is_ok_and(|var| strips_var(&var, set));
+            if strips && let Some(o) = v.as_object_mut() {
+                o.remove("update");
+                out.push(format!("{path}.{vname}"));
             }
         }
     }
-    Ok(())
+    if let Some(Value::Object(subs)) = obj.get_mut("subsystems") {
+        for (key, sub) in subs.iter_mut() {
+            strip_json_updates(&format!("{path}.{key}"), sub, set, out);
+        }
+    }
 }
 
 fn strips_var(var: &ModelVariable, set: StripSet) -> bool {
