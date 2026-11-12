@@ -101,7 +101,11 @@ def strip_classes(strip: Any) -> list[str]:
 
 
 def _julia_float(f: float) -> str:
-    """``f`` as Julia prints a Float64 (CONFORMANCE_SPEC §5.5.3.1)."""
+    """``f`` as Julia prints a Float64 (CONFORMANCE_SPEC §5.5.3.1): positional
+    for a first-digit exponent in ``-4..=5``, else ``d.ddde<exp>``. Not
+    :func:`~earthsci_ast.canonicalize.format_canonical_float`, whose layout
+    (the expression canonicalizer's, RFC §5.4.6) switches at ``1e-6`` and
+    ``1e21`` and so writes ``1.5e-5`` as ``0.000015``."""
     if not math.isfinite(f):
         raise ValueError("a non-finite number has no canonical JSON form")
     if f == 0.0:
@@ -181,13 +185,21 @@ def _ns_expr(e: Any, prefix: str, local: set[str], subs: set[str], bound: frozen
     return e
 
 
-def _ns_name(name: str, prefix: str) -> str:
-    return name if "." in name or name == "_var" else f"{prefix}.{name}"
+def _ns_name(name: str, prefix: str, subs: set[str]) -> str:
+    """An affect target, namespaced: bare is the component's own, a dotted name
+    whose head is one of its subsystem keys is subsystem-local (prefixed, as
+    :func:`_ns_expr` prefixes a read of it), any other dotted name is already
+    qualified."""
+    if name == "_var":
+        return name
+    if "." in name and name.split(".", 1)[0] not in subs:
+        return name
+    return f"{prefix}.{name}"
 
 
 def _affects(affects: list, prefix: str, local: set[str], subs: set[str]) -> list:
     return [
-        {"lhs": _ns_name(a["lhs"], prefix), "rhs": _ns_expr(a["rhs"], prefix, local, subs)}
+        {"lhs": _ns_name(a["lhs"], prefix, subs), "rhs": _ns_expr(a["rhs"], prefix, local, subs)}
         for a in affects
     ]
 
@@ -254,50 +266,65 @@ def _ns_rule(rule: dict, prefix: str, local: set[str], subs: set[str]) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _component_walk(comp: dict, prefix: str, kind: str, classes, s: StrippedConstructs, counters):
-    """Collect and remove ``comp``'s events and updates, recursing into inline
-    subsystems; ``kind`` is ``"model"`` or ``"reaction_system"``."""
-    subs_raw = comp.get("subsystems") or {}
+def _component_walk(comp: Any, prefix: str, classes, s: StrippedConstructs, counters, removed: set):
+    """Collect and remove ``comp``'s events and updates (a typed
+    :class:`~earthsci_ast.esm_types.Model` or
+    :class:`~earthsci_ast.esm_types.ReactionSystem`), recursing into its
+    subsystems; ``removed`` gathers the ids of the removed event objects."""
+    from .esm_types import Model, ReactionSystem
+    from .serialize import (
+        _serialize_continuous_event,
+        _serialize_discrete_event,
+        _serialize_expression,
+        _serialize_parameter_update_spec,
+    )
+
+    subs_raw = getattr(comp, "subsystems", None) or {}
     subs = set(subs_raw)
-    if kind == "model":
-        local = set(comp.get("variables") or {}) | subs
+    if isinstance(comp, ReactionSystem):
+        local = {sp.name for sp in comp.species} | {p.name for p in comp.parameters} | subs
+        params = [(p.name, p) for p in comp.parameters]
     else:
-        local = set(comp.get("species") or {}) | set(comp.get("parameters") or {}) | subs
-    for ev_key, evkind in (("continuous_events", "continuous"), ("discrete_events", "discrete")):
+        local = set(comp.variables) | subs
+        params = [(n, v) for n, v in comp.variables.items() if v.type == "parameter"]
+    for attr, evkind, ser in (
+        ("continuous_events", "continuous", _serialize_continuous_event),
+        ("discrete_events", "discrete", _serialize_discrete_event),
+    ):
         if f"{evkind}_events" not in classes:
             continue
-        for ev in comp.get(ev_key) or []:
+        for ev in getattr(comp, attr) or []:
+            raw = ser(ev)
             j = counters[(prefix, evkind)] = counters.get((prefix, evkind), 0) + 1
-            body = _event_body(ev, prefix, local, subs)
+            body = _event_body(raw, prefix, local, subs)
             body["id"] = (
-                f"{prefix}.{ev['name']}" if ev.get("name") else f"{prefix}.{evkind}_event[{j}]"
+                f"{prefix}.{raw['name']}" if raw.get("name") else f"{prefix}.{evkind}_event[{j}]"
             )
             body["origin"] = {"component": prefix}
             body["kind"] = evkind
             s.events.append(body)
-        comp.pop(ev_key, None)
-    for key in ("variables", "parameters"):
-        for name, var in (comp.get(key) or {}).items():
-            if not isinstance(var, dict):
-                continue
-            if key == "variables" and var.get("type") != "parameter":
-                continue
-            if _strips_update(var.get("update"), classes):
-                s.parameter_updates.append(
-                    {
-                        "parameter": f"{prefix}.{name}",
-                        "origin": {"component": prefix},
-                        "rules": [_ns_rule(r, prefix, local, subs) for r in _rules(var["update"])],
-                    }
-                )
-                del var["update"]
-    if "algebraic" in classes and isinstance(comp.get("equations"), list):
-        comp["equations"] = [
-            eq for eq in comp["equations"] if not _strippable_implicit(eq.get("lhs"))
+            removed.add(id(ev))
+        setattr(comp, attr, [])
+    for name, var in params:
+        if var.update is None:
+            continue
+        rules = _rules(_serialize_parameter_update_spec(var.update))
+        if _strips_update(rules, classes):
+            s.parameter_updates.append(
+                {
+                    "parameter": f"{prefix}.{name}",
+                    "origin": {"component": prefix},
+                    "rules": [_ns_rule(r, prefix, local, subs) for r in rules],
+                }
+            )
+            var.update = None
+    if "algebraic" in classes and isinstance(comp, Model):
+        comp.equations = [
+            eq for eq in comp.equations if not _strippable_implicit(_serialize_expression(eq.lhs))
         ]
     for key, sub in subs_raw.items():
-        if isinstance(sub, dict) and "ref" not in sub:
-            _component_walk(sub, f"{prefix}.{key}", "model", classes, s, counters)
+        if isinstance(sub, (Model, ReactionSystem)):
+            _component_walk(sub, f"{prefix}.{key}", classes, s, counters, removed)
 
 
 def _strippable_implicit(lhs: Any) -> bool:
@@ -310,38 +337,56 @@ def _strippable_implicit(lhs: Any) -> bool:
     return op not in ("ic", "D", "grad", "div", "laplacian")
 
 
-def strip_document(raw: dict, classes: list[str]) -> tuple[dict, StrippedConstructs]:
-    """The run document with ``classes``' constructs removed, and what was
-    removed (residuals and ``z`` are filled by :func:`collect_algebraic`).
-    Coupling-level events stay in the document, so the stripped document's
-    coupling indices are the original's; the build never lowers one."""
-    doc = copy.deepcopy(raw)
+def strip_document(file: Any, classes: list[str]) -> tuple[Any, StrippedConstructs, Any]:
+    """The loaded document ``file`` (an :class:`~earthsci_ast.esm_types.EsmFile`,
+    its ``{ref}`` mounts resolved) with ``classes``' constructs removed, what was
+    removed, and the flattened original. Residuals and ``z`` are filled by
+    :func:`collect_algebraic`.
+
+    Coupling-level events are read from the coupling sequence after
+    ``coupling_import`` expansion, the one a ``{"coupling": k}`` origin indexes,
+    and stay in the document, so the stripped document's coupling indices are
+    the original's; the build never lowers one."""
+    from .coupling_imports import expand_coupling_imports
+    from .esm_types import CouplingType
+    from .flatten import flatten
+    from .serialize import _serialize_coupling_entry
+
+    flat = flatten(file)
+    doc = copy.deepcopy(file)
     s = StrippedConstructs(strip=list(classes))
     counters: dict = {}
-    for name, comp in (doc.get("models") or {}).items():
-        if isinstance(comp, dict) and "ref" not in comp:
-            _component_walk(comp, name, "model", classes, s, counters)
-    for name, comp in (doc.get("reaction_systems") or {}).items():
-        if isinstance(comp, dict) and "ref" not in comp:
-            _component_walk(comp, name, "reaction_system", classes, s, counters)
-    for k, entry in enumerate(doc.get("coupling") or []):
-        if not isinstance(entry, dict) or entry.get("type") != "event":
+    removed: set[int] = set()
+    # Order: models (each followed by its subsystems), then reaction systems,
+    # then coupling.
+    for name, comp in (doc.models or {}).items():
+        if not isinstance(comp, dict):
+            _component_walk(comp, name, classes, s, counters, removed)
+    for name, comp in (doc.reaction_systems or {}).items():
+        if not isinstance(comp, dict):
+            _component_walk(comp, name, classes, s, counters, removed)
+    # The flat view of the components' events holds the same objects.
+    doc.events = [ev for ev in (doc.events or []) if id(ev) not in removed]
+    for k, entry in enumerate(expand_coupling_imports(file)):
+        if getattr(entry, "coupling_type", None) != CouplingType.EVENT:
             continue
-        evkind = "continuous" if entry.get("event_type") == "continuous" else "discrete"
+        evkind = "continuous" if entry.event_type == "continuous" else "discrete"
         if f"{evkind}_events" not in classes:
             continue
+        raw = _serialize_coupling_entry(entry)
         prefix = f"coupling[{k}]"
         j = counters[(prefix, evkind)] = counters.get((prefix, evkind), 0) + 1
-        body = _event_body(entry, None, set(), set())
+        body = _event_body(raw, None, set(), set())
         body["id"] = (
-            f"{prefix}.{entry['name']}" if entry.get("name") else f"{prefix}.{evkind}_event[{j}]"
+            f"{prefix}.{raw['name']}" if raw.get("name") else f"{prefix}.{evkind}_event[{j}]"
         )
         body["origin"] = {"coupling": k}
         body["kind"] = evkind
         s.events.append(body)
-    # Order: models (each followed by its subsystems), then reaction systems,
-    # then coupling — which is the walk order above.
-    return doc, s
+    # Parameter updates are listed in flattened order (API_SPEC §5.8).
+    order = {n: i for i, n in enumerate(flat.parameters)}
+    s.parameter_updates.sort(key=lambda u: order.get(u["parameter"], len(order)))
+    return doc, s, flat
 
 
 def collect_algebraic(flat: Any, s: StrippedConstructs, t0: float, params: dict) -> None:
@@ -440,39 +485,49 @@ def _expr_sets(e: Any, flat: Any) -> list[str]:
 
 
 def _z_start(flat: Any, name: str, length: int, params: dict, t0: float) -> list[float | None]:
-    """``name``'s starting values: its ``ic`` right-hand side when that is a
-    constant (a number, or a ``faq`` broadcasting one), else its declared
-    default; ``None`` where neither gives a number."""
+    """``name``'s starting values, column-major: its ``ic`` right-hand side
+    evaluated at ``t0`` with the build's parameter values, else its declared
+    default; ``None`` where neither gives a finite number. Julia and Rust read
+    the same values with their own build-time evaluators."""
+    import numpy as np
+
     from .serialize import _serialize_expression
+    from .simulation_array import _eval_buildtime_field
 
     rhs = None
     for eq in flat.equations:
         lhs = _serialize_expression(eq.lhs)
         if isinstance(lhs, dict) and lhs.get("op") == "ic" and lhs.get("args") == [name]:
-            rhs = _serialize_expression(eq.rhs)
+            rhs = eq.rhs
             break
     if rhs is None:
         for tgt, r in getattr(flat, "field_ics", None) or []:
             if tgt == name:
-                rhs = _serialize_expression(r)
+                rhs = r
                 break
-    value = _constant(rhs, params)
-    if value is None:
+    values = None
+    if rhs is not None:
+        try:
+            v = _eval_buildtime_field(rhs, index_sets=flat.index_sets, param_values=params, t=t0)
+            values = np.asarray(v, dtype=float).ravel(order="F").tolist()
+        except Exception:  # noqa: BLE001 — an unevaluable ic falls back to the default
+            values = None
+    if values is None:
         d = getattr(flat.state_variables.get(name), "default", None)
-        value = float(d) if isinstance(d, (int, float)) else None
-    return [value] * length
-
-
-def _constant(e: Any, params: dict) -> float | None:
-    if isinstance(e, bool):
-        return None
-    if isinstance(e, (int, float)):
-        return float(e)
-    if isinstance(e, str) and e in params:
-        return float(params[e])
-    if isinstance(e, dict) and e.get("op") == "faq" and not e.get("reduce"):
-        return _constant(e.get("expr"), params)
-    return None
+        if isinstance(d, bool):
+            d = None
+        if isinstance(d, (int, float)):
+            values = [float(d)]
+        elif isinstance(d, (list, tuple)):
+            try:
+                values = np.asarray(d, dtype=float).ravel(order="F").tolist()
+            except (TypeError, ValueError):
+                values = None
+    if values is None or len(values) not in (1, length):
+        return [None] * length
+    if len(values) == 1:
+        values = values * length
+    return [x if math.isfinite(x) else None for x in values]
 
 
 def refuse_stripped(prob: Any, call: str) -> None:

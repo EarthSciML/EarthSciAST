@@ -1257,6 +1257,7 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
         return EventCoupling(
             description=description,
             event_type=coupling_data.get("event_type"),
+            name=coupling_data.get("name"),
             conditions=conditions,
             trigger=trigger,
             affects=affects,

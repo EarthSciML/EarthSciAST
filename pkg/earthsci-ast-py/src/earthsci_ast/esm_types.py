@@ -1118,6 +1118,7 @@ class EventCoupling(BaseCouplingEntry):
 
     coupling_type: CouplingType = field(default=CouplingType.EVENT, init=False)
     event_type: str | None = None
+    name: str | None = None
     conditions: list[Expr] = field(default_factory=list)
     trigger: DiscreteEventTrigger | None = None
     affects: list[AffectEquation] = field(default_factory=list)

@@ -583,7 +583,7 @@ def esm_problem(
         the default, changes nothing. Read what was removed with
         :func:`~earthsci_ast.strip.stripped`; :func:`solve` and :func:`init`
         refuse a Problem anything was removed from. ``"native"`` and
-        ``"interpreter"`` only; the input must be a path or a ``dict``.
+        ``"interpreter"`` only; the input must be a path, a ``dict`` or an ``EsmFile``.
 
     Raises
     ------
@@ -655,38 +655,52 @@ def esm_problem(
 
 
 def _strip_and_build(classes: list[str], chosen: str, input: Any, tspan, **kw) -> EsmProblem:
-    """:func:`esm_problem` with ``strip`` non-empty (API_SPEC §5.8): remove the
-    classes' constructs from the document, build what remains, and keep what
-    was removed."""
+    """:func:`esm_problem` with ``strip`` non-empty (API_SPEC §5.8): load the
+    document (its ``{ref}`` mounts resolved, as Julia and Rust strip it), remove
+    the classes' constructs, build what remains, and keep what was removed."""
     if chosen not in ("native", "interpreter"):
         raise CompilerUnavailableError(
             chosen, "`strip` serves the native and interpreter compilers (API_SPEC §5.8)"
         )
-    if isinstance(input, (str, os.PathLike)):
-        path = os.fspath(input)
-        with open(path, encoding="utf-8") as fh:
-            raw = json.load(fh)
-        if kw.get("base_path") is None:
-            kw["base_path"] = os.path.dirname(os.path.abspath(path))
+    t0 = float(kw["sample_time"]) if kw.get("sample_time") is not None else float(tspan[0])
+    metaparameters, _ = _discover_loader_extents(
+        kw.get("providers"), {}, kw.get("metaparameters"), t0
+    )
+    base_path = kw.get("base_path")
+    if isinstance(input, EsmFile):
+        file = input
     elif isinstance(input, dict):
-        raw = input
+        file = load_document(input, metaparameters=metaparameters, base_path=base_path)
+    elif isinstance(input, (str, os.PathLike)):
+        path = os.fspath(input)
+        file = load_path(path, metaparameters=metaparameters, base_path=base_path)
+        if base_path is None:
+            kw["base_path"] = os.path.dirname(os.path.abspath(path))
     else:
-        raise TypeError("`strip` needs the document as a path or a dict")
-    doc, sobj = _strip.strip_document(raw, classes)
+        raise TypeError("`strip` needs a document: a path, a dict or an EsmFile")
+    doc, sobj, flat = _strip.strip_document(file, classes)
+    kw["metaparameters"] = metaparameters
+    if kw.get("pushdown_rewrite"):
+        # The pushdown rewrite reads the document as JSON.
+        from .serialize import _serialize_esm_file
+
+        doc = _serialize_esm_file(doc)
     token = _strip.STRIP_TAKEN.set(tuple(classes))
     try:
         prob = esm_problem(doc, tspan, **kw)
-        if "algebraic" in classes:
-            original = load_document(raw, base_path=kw.get("base_path"))
-            flat = flatten(original, base_path=kw.get("base_path") or ".")
-            params = {
-                k: float(v.default)
-                for k, v in flat.parameters.items()
-                if isinstance(getattr(v, "default", None), (int, float))
-            }
-            _strip.collect_algebraic(flat, sobj, float(tspan[0]), params)
     finally:
         _strip.STRIP_TAKEN.reset(token)
+    if "algebraic" in classes:
+        params = {
+            k: float(v.default)
+            for k, v in flat.parameters.items()
+            if isinstance(getattr(v, "default", None), (int, float))
+            and not isinstance(v.default, bool)
+        }
+        for k, v in (kw.get("p") or {}).items():
+            if k in params:
+                params[k] = float(v)
+        _strip.collect_algebraic(flat, sobj, float(tspan[0]), params)
     prob.stripped = sobj
     return prob
 
@@ -2022,9 +2036,13 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
         found = _first_subsystem_event(file)
     if found is None and file is not None:
         # A coupling-level event is lowered by no pathway: refused unless the
-        # caller stripped its class (``esm_problem(..., strip=...)``).
+        # caller stripped its class (``esm_problem(..., strip=...)``). The
+        # coupling read is the one after ``coupling_import`` expansion, which is
+        # what ``flatten`` applies: an event edge a library brings in counts.
+        from .coupling_imports import expand_coupling_imports
+
         taken = _strip.STRIP_TAKEN.get()
-        for entry in getattr(file, "coupling", None) or []:
+        for entry in expand_coupling_imports(file):
             if getattr(entry, "coupling_type", None) != CouplingType.EVENT:
                 continue
             kind = "continuous" if entry.event_type == "continuous" else "discrete"
@@ -2625,6 +2643,10 @@ def remake(
         inspect=prob.inspect,
         callbacks=prob.callbacks,
         static_cache=prob.static_cache,
+        # What `strip` removed is a property of the build, not of the values
+        # substituted here: a remade stripped Problem is still refused by
+        # `solve` and `init`.
+        stripped=prob.stripped,
     )
 
 
