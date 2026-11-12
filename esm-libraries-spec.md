@@ -911,7 +911,10 @@ text.
 | `event_affects_parameter` | An event `affects` LHS names a parameter; parameter mutation belongs in the parameter's own `update` (esm-spec §5.4) |
 | `null_reaction` | Reaction has both `substrates: null` and `products: null` |
 | `data_source_undefined` | A parameter's `update.source` names no declared `data_sources` entry |
-| `records_per_sample_invalid` | A non-`data` rule carries `from.records_per_sample`, or a data-fed parameter's effective `records_per_sample` is 2 while its source declares no `temporal` block or its record shape's first dimension is not an index set of exactly two members (esm-spec §8.5.1) |
+| `record_axis_invalid` | An index set carries `"records": true` and its `size` is not 2 (esm-spec §8.5.1) |
+| `record_axis_misplaced` | A data-fed parameter's record shape names a record axis anywhere but first, or its several record shapes disagree about beginning with one (esm-spec §8.5.1) |
+| `record_axis_time_invariant_source` | A data-fed parameter's record shape begins with a record axis while its source declares no `temporal` block or no `temporal.start` (esm-spec §8.5.1) |
+| `records_per_sample_invalid` | A non-`data` rule carries the deprecated `from.records_per_sample` (validation only; `flatten` never reports it), or a data-fed parameter's written `records_per_sample` (its own, else its source's `temporal.records_per_sample`) disagrees with the number of records its record shape gives it, for a model variable or a reaction-system parameter (esm-spec §8.5.1) |
 | `event_var_undeclared` | Variable in event affects/conditions is not declared |
 | `unresolved_subsystem_ref` | Subsystem reference points to a local file that does not exist (canonical; RETIRES `ref_not_found` — CONFORMANCE_SPEC §7.1.3f) |
 | `ref_unreachable` | Subsystem reference URL is unreachable or returned a non-200 status |
@@ -1645,15 +1648,17 @@ Each entry carries: the parameter's flattened name; its owning component's
 prefix; the `data_sources` key; the `file_variable`; the cadence, `discrete`
 when the source declares `temporal` and `const` otherwise (CONFORMANCE_SPEC
 §5.7.2); the binding's `unit_conversion`, when declared; and
-`records_per_sample`, the **effective** value of esm-spec §8.5.1 (the rule's
-`from.records_per_sample`, else the source's `temporal.records_per_sample`,
-else 1), always present, so a consumer does not re-read the source to learn
+`records_per_sample`, the number of records the parameter receives (esm-spec
+§8.5.1: 2 when its record shape begins with a record axis, 1 otherwise), always
+present, so a consumer does not re-read the source or the shapes to learn
 whether the field holds one record or the pair that brackets the query time.
+The entry keeps this name although the document fields of that name are
+deprecated: it is the interface EarthSciIO and the runners read.
 The field names are each binding's (Julia, Python and TypeScript spell the source key and
 file variable `subkey` and `var`, Rust and Go `source` and `file_variable`);
 the contents are pinned by `tests/conformance/records_per_sample/`. The
-flattened parameter's own `update` keeps `from.records_per_sample` as written,
-not resolved.
+flattened parameter's own `update` keeps the deprecated `from.records_per_sample`
+as written, not resolved.
 
 **Pointwise lift: index sets (normative).** The pointwise lift (esm-spec §10.5) promotes a
 scalar state onto the grid of the operator `makearray` its merged equation carries. A state that

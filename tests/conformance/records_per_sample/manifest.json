@@ -1,7 +1,14 @@
 {
   "category": "records_per_sample",
-  "version": "1.0",
-  "description": "Cross-binding conformance for a data-fed parameter's `from.records_per_sample` (esm-spec \u00a78.5.1) and the source default `temporal.records_per_sample` (\u00a78.3). The valid fixtures pin, for every data-fed parameter, (a) the EFFECTIVE value each binding's `loader_fields` entry reports (the parameter's own value, else the source's, else 1) and (b) that `flatten` carries `update.from.records_per_sample` exactly as written (`null` means absent). Each `invalid` fixture is schema-valid and must be refused by structural validation with exactly one `records_per_sample_invalid` at `pointer` (the rule's: `/update`, or `/update/<i>` for an array-form update). Each `flatten_invalid` fixture must pass structural validation with no `records_per_sample_invalid` and then be refused by `flatten` with that code, the message or details naming `pointer`. Each `refused` fixture must be refused with that code by validation or by flatten, whichever first sees the record shape (\u00a78.5.1 'When rule 3 is checked'). Files under `fixtures/components/` are mounted or imported by the cases and are not cases themselves. `metadata.esio_format` is carried on every source and changes nothing.",
+  "version": "2.0",
+  "description": "Cross-binding conformance for record axes (esm-spec \u00a78.5.1): a data-fed parameter receives two records per query time exactly when its record shape (its declared `shape`, or a shapeless parameter's `param_to_var` targets' declared shapes) begins with an `interval` index set carrying `\"records\": true`, and one otherwise; and for the deprecated `from.records_per_sample` / `temporal.records_per_sample` (\u00a78.3), which are still accepted with a load-time warning but must agree with the shape. Each `valid` case must load, validate with none of `record_codes`, and flatten; each listed `loader_fields` entry must report the number of records the parameter receives in `records_per_sample`; `flattened_from_records_per_sample` pins that the flattened parameter's `update.from` keeps the deprecated field exactly as written (`null` = absent); the index sets' `records` flag and the field survive emit then load; and the binding's deprecated-site function must return exactly `deprecated_fields` (JSON pointers, sorted), the places the load-time `deprecated_records_per_sample` warning names (the warning is emitted once per load when the list is non-empty, and not at all when it is empty). Each `invalid` case is schema-valid and must be refused by structural validation with exactly one diagnostic whose code is in `record_codes`: `code` at `pointer`. Each `flatten_invalid` case must validate with none of `record_codes` and then be refused by `flatten` with `code`, the message or details naming `pointer`. Each `refused` case must be refused with `code` by validation or by flatten, whichever first sees the record shape. Files under `fixtures/components/` are mounted or imported by the cases and are not cases themselves. `metadata.esio_format` is carried on every source and changes nothing.",
+  "record_codes": [
+    "record_axis_invalid",
+    "record_axis_misplaced",
+    "record_axis_time_invariant_source",
+    "records_per_sample_invalid"
+  ],
+  "deprecation_warning": "deprecated_records_per_sample",
   "bindings": [
     "julia",
     "python",
@@ -11,8 +18,122 @@
   ],
   "cases": [
     {
-      "id": "records_per_sample",
-      "path": "fixtures/records_per_sample.esm",
+      "id": "record_axis",
+      "path": "fixtures/record_axis.esm",
+      "expect": "valid",
+      "loader_fields": [
+        {
+          "name": "Box.F_pair",
+          "source": "Met",
+          "file_variable": "PBLH",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        },
+        {
+          "name": "Box.F_one",
+          "source": "Met",
+          "file_variable": "T2M",
+          "cadence": "discrete",
+          "records_per_sample": 1
+        },
+        {
+          "name": "Box.F_plain",
+          "source": "Met",
+          "file_variable": "TS",
+          "cadence": "discrete",
+          "records_per_sample": 1
+        },
+        {
+          "name": "Box.F_cat",
+          "source": "Met",
+          "file_variable": "U10M",
+          "cadence": "discrete",
+          "records_per_sample": 1
+        },
+        {
+          "name": "Box.F_inherit",
+          "source": "MetPair",
+          "file_variable": "V10M",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        },
+        {
+          "name": "Box.F_override",
+          "source": "MetPair",
+          "file_variable": "QV2M",
+          "cadence": "discrete",
+          "records_per_sample": 1
+        },
+        {
+          "name": "Box.K_static",
+          "source": "Static",
+          "file_variable": "FRLAND",
+          "cadence": "const",
+          "records_per_sample": 1
+        }
+      ],
+      "flattened_from_records_per_sample": {
+        "Box.F_pair": null,
+        "Box.F_one": null,
+        "Box.F_plain": null,
+        "Box.F_cat": null,
+        "Box.F_inherit": null,
+        "Box.F_override": null,
+        "Box.K_static": null
+      },
+      "deprecated_fields": []
+    },
+    {
+      "id": "record_axis_param_to_var",
+      "path": "fixtures/record_axis_param_to_var.esm",
+      "expect": "valid",
+      "loader_fields": [
+        {
+          "name": "Met.K",
+          "source": "met_source",
+          "file_variable": "K",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        }
+      ],
+      "deprecated_fields": [],
+      "note": "Checks validation and `loader_fields` only. Whether flatten keeps `Met.K`'s `update` through the `param_to_var` is the variable_map_data_fed tier's to pin, not this one's."
+    },
+    {
+      "id": "record_axis_coupling_import",
+      "path": "fixtures/record_axis_coupling_import.esm",
+      "expect": "valid",
+      "loader_fields": [
+        {
+          "name": "Met.K",
+          "source": "met_source",
+          "file_variable": "K",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        }
+      ],
+      "deprecated_fields": [],
+      "note": "The param_to_var edge arrives through a coupling_import, so only flatten sees the target [rec, x]; the loader_fields entry still reports 2."
+    },
+    {
+      "id": "record_axis_ref_target",
+      "path": "fixtures/record_axis_ref_target.esm",
+      "expect": "valid",
+      "loader_fields": [
+        {
+          "name": "Met.K",
+          "source": "met_source",
+          "file_variable": "K",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        }
+      ],
+      "deprecated_fields": [],
+      "note": "The param_to_var target, and the record axis it is shaped over, come from a model mounted by ref."
+    },
+    {
+      "id": "records_per_sample_deprecated",
+      "path": "fixtures/records_per_sample_deprecated.esm",
       "expect": "valid",
       "loader_fields": [
         {
@@ -34,7 +155,7 @@
           "source": "Met",
           "file_variable": "U10M",
           "cadence": "discrete",
-          "records_per_sample": 2
+          "records_per_sample": 1
         },
         {
           "name": "Box.F_inherit",
@@ -61,15 +182,22 @@
       "flattened_from_records_per_sample": {
         "Box.F_pair": 2,
         "Box.F_one": null,
-        "Box.F_cat": 2,
+        "Box.F_cat": 1,
         "Box.F_inherit": null,
         "Box.F_override": 1,
         "Box.K_static": 1
-      }
+      },
+      "deprecated_fields": [
+        "/data_sources/MetPair/temporal/records_per_sample",
+        "/models/Box/variables/F_cat/update/from/records_per_sample",
+        "/models/Box/variables/F_override/update/from/records_per_sample",
+        "/models/Box/variables/F_pair/update/from/records_per_sample",
+        "/models/Box/variables/K_static/update/from/records_per_sample"
+      ]
     },
     {
-      "id": "records_per_sample_param_to_var",
-      "path": "fixtures/records_per_sample_param_to_var.esm",
+      "id": "records_per_sample_deprecated_param_to_var",
+      "path": "fixtures/records_per_sample_deprecated_param_to_var.esm",
       "expect": "valid",
       "loader_fields": [
         {
@@ -80,82 +208,127 @@
           "records_per_sample": 2
         }
       ],
-      "note": "Checks validation and `loader_fields` only. Whether flatten keeps `Met.K`'s `update` through the `param_to_var` (and with it `from.records_per_sample`) is the variable_map_data_fed tier's to pin, not this one's."
+      "deprecated_fields": [
+        "/models/Met/variables/K/update/from/records_per_sample"
+      ]
     },
     {
-      "id": "records_per_sample_coupling_import",
-      "path": "fixtures/records_per_sample_coupling_import.esm",
+      "id": "records_per_sample_deprecated_reaction_system",
+      "path": "fixtures/records_per_sample_deprecated_reaction_system.esm",
       "expect": "valid",
-      "loader_fields": [
-        {
-          "name": "Met.K",
-          "source": "met_source",
-          "file_variable": "K",
-          "cadence": "discrete",
-          "records_per_sample": 2
-        }
+      "loader_fields": [],
+      "deprecated_fields": [
+        "/data_sources/Reanalysis/temporal/records_per_sample",
+        "/reaction_systems/Chem/parameters/T/update/from/records_per_sample"
       ],
-      "note": "The param_to_var edge arrives through a coupling_import, so validation must defer Met.K's empty shape to flatten, and flatten finds the target [rec, x]."
+      "note": "A reaction system's data-fed parameter: its deprecated site is named, and validation accepts the written value because the record shape agrees. loader_fields is empty because not every binding reports a loader field for a reaction-system parameter."
     },
     {
-      "id": "records_per_sample_ref_target",
-      "path": "fixtures/records_per_sample_ref_target.esm",
-      "expect": "valid",
-      "loader_fields": [
-        {
-          "name": "Met.K",
-          "source": "met_source",
-          "file_variable": "K",
-          "cadence": "discrete",
-          "records_per_sample": 2
-        }
-      ],
-      "note": "The param_to_var target sits in a model mounted by ref; validation must not treat an unreachable target as an empty record shape."
-    },
-    {
-      "id": "pair_from_static_source",
-      "path": "fixtures/pair_from_static_source.esm",
+      "id": "record_axis_size_not_two",
+      "path": "fixtures/record_axis_size_not_two.esm",
       "expect": "invalid",
-      "code": "records_per_sample_invalid",
+      "code": "record_axis_invalid",
+      "pointer": "/index_sets/rec",
+      "cause": "records: true on an interval of size 3"
+    },
+    {
+      "id": "record_axis_from_static_source",
+      "path": "fixtures/record_axis_from_static_source.esm",
+      "expect": "invalid",
+      "code": "record_axis_time_invariant_source",
       "pointer": "/models/Box/variables/F/update",
       "variable": "F",
-      "cause": "static source"
+      "cause": "record axis first, source has no temporal block"
     },
     {
-      "id": "pair_from_startless_source",
-      "path": "fixtures/pair_from_startless_source.esm",
+      "id": "record_axis_from_startless_source",
+      "path": "fixtures/record_axis_from_startless_source.esm",
       "expect": "invalid",
-      "code": "records_per_sample_invalid",
+      "code": "record_axis_time_invariant_source",
       "pointer": "/models/Box/variables/F/update",
       "variable": "F",
-      "cause": "temporal block without start"
+      "cause": "record axis first, temporal block without start"
     },
     {
-      "id": "pair_without_record_axis",
-      "path": "fixtures/pair_without_record_axis.esm",
+      "id": "records_per_sample_2_from_static_source",
+      "path": "fixtures/records_per_sample_2_from_static_source.esm",
       "expect": "invalid",
-      "code": "records_per_sample_invalid",
+      "code": "record_axis_time_invariant_source",
       "pointer": "/models/Box/variables/F/update",
       "variable": "F",
-      "cause": "first dimension of size 3"
+      "cause": "deprecated 2 agreeing with a record axis, source has no temporal block"
     },
     {
-      "id": "pair_scalar",
-      "path": "fixtures/pair_scalar.esm",
+      "id": "record_axis_misplaced",
+      "path": "fixtures/record_axis_misplaced.esm",
       "expect": "invalid",
-      "code": "records_per_sample_invalid",
+      "code": "record_axis_misplaced",
       "pointer": "/models/Box/variables/F/update",
       "variable": "F",
-      "cause": "scalar"
+      "cause": "record axis second in an own shape"
     },
     {
-      "id": "pair_inherited_without_record_axis",
-      "path": "fixtures/pair_inherited_without_record_axis.esm",
+      "id": "record_axis_misplaced_in_subsystem",
+      "path": "fixtures/record_axis_misplaced_in_subsystem.esm",
       "expect": "invalid",
-      "code": "records_per_sample_invalid",
-      "pointer": "/models/Box/variables/F/update",
-      "variable": "F",
-      "cause": "inherited 2, first dimension of size 3"
+      "code": "record_axis_misplaced",
+      "pointer": "/models/Outer/subsystems/Inner/variables/F_k/update",
+      "variable": "F_k",
+      "cause": "subsystem parameter, record axis second"
+    },
+    {
+      "id": "record_axis_misplaced_in_update_array",
+      "path": "fixtures/record_axis_misplaced_in_update_array.esm",
+      "expect": "invalid",
+      "code": "record_axis_misplaced",
+      "pointer": "/models/Box/variables/F_k/update/1",
+      "variable": "F_k",
+      "cause": "second rule of an array-form update, record axis second"
+    },
+    {
+      "id": "record_axis_misplaced_param_to_var",
+      "path": "fixtures/record_axis_misplaced_param_to_var.esm",
+      "expect": "invalid",
+      "code": "record_axis_misplaced",
+      "pointer": "/models/Met/variables/K/update",
+      "variable": "K",
+      "cause": "param_to_var target with the record axis second"
+    },
+    {
+      "id": "record_axis_misplaced_second_target",
+      "path": "fixtures/record_axis_misplaced_second_target.esm",
+      "expect": "invalid",
+      "code": "record_axis_misplaced",
+      "pointer": "/models/Met/variables/K/update",
+      "variable": "K",
+      "cause": "second param_to_var target with the record axis second"
+    },
+    {
+      "id": "record_axis_targets_disagree",
+      "path": "fixtures/record_axis_targets_disagree.esm",
+      "expect": "invalid",
+      "code": "record_axis_misplaced",
+      "pointer": "/models/Met/variables/K/update",
+      "variable": "K",
+      "cause": "one param_to_var target begins with a record axis, the other does not"
+    },
+    {
+      "id": "record_axis_misplaced_coupling_import",
+      "path": "fixtures/record_axis_misplaced_coupling_import.esm",
+      "expect": "flatten_invalid",
+      "code": "record_axis_misplaced",
+      "pointer": "/models/Met/variables/K/update",
+      "variable": "K",
+      "cause": "imported param_to_var target with the record axis second"
+    },
+    {
+      "id": "record_axis_misplaced_ref_target",
+      "path": "fixtures/record_axis_misplaced_ref_target.esm",
+      "expect": "refused",
+      "code": "record_axis_misplaced",
+      "pointer": "/models/Met/variables/K/update",
+      "variable": "K",
+      "cause": "ref-mounted param_to_var target with the record axis second"
     },
     {
       "id": "records_on_non_data_rule",
@@ -164,61 +337,88 @@
       "code": "records_per_sample_invalid",
       "pointer": "/models/Box/variables/G/update",
       "variable": "G",
-      "cause": "non-data rule"
+      "cause": "deprecated field on a non-data rule"
     },
     {
-      "id": "pair_param_to_var_without_record_axis",
-      "path": "fixtures/pair_param_to_var_without_record_axis.esm",
+      "id": "records_per_sample_2_without_record_axis",
+      "path": "fixtures/records_per_sample_2_without_record_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F/update",
+      "variable": "F",
+      "cause": "deprecated 2, shape [x]"
+    },
+    {
+      "id": "records_per_sample_2_on_plain_pair_axis",
+      "path": "fixtures/records_per_sample_2_on_plain_pair_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F/update",
+      "variable": "F",
+      "cause": "deprecated 2, first axis an interval of size 2 without records: true"
+    },
+    {
+      "id": "records_per_sample_1_with_record_axis",
+      "path": "fixtures/records_per_sample_1_with_record_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F/update",
+      "variable": "F",
+      "cause": "deprecated 1, record axis first"
+    },
+    {
+      "id": "records_per_sample_inherited_2_without_record_axis",
+      "path": "fixtures/records_per_sample_inherited_2_without_record_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F/update",
+      "variable": "F",
+      "cause": "deprecated source default 2 inherited, shape [x]"
+    },
+    {
+      "id": "records_per_sample_scalar",
+      "path": "fixtures/records_per_sample_scalar.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F/update",
+      "variable": "F",
+      "cause": "deprecated 2 on a scalar"
+    },
+    {
+      "id": "records_per_sample_2_shapeless_unmapped",
+      "path": "fixtures/records_per_sample_2_shapeless_unmapped.esm",
       "expect": "invalid",
       "code": "records_per_sample_invalid",
       "pointer": "/models/Met/variables/K/update",
       "variable": "K",
-      "cause": "param_to_var target whose first dimension has 4 members"
+      "cause": "deprecated 2, no shape and no param_to_var target, no coupling_import"
     },
     {
-      "id": "pair_in_subsystem_without_record_axis",
-      "path": "fixtures/pair_in_subsystem_without_record_axis.esm",
-      "expect": "invalid",
-      "code": "records_per_sample_invalid",
-      "pointer": "/models/Outer/subsystems/Inner/variables/F_k/update",
-      "variable": "F_k",
-      "cause": "subsystem parameter, first dimension of size 4"
-    },
-    {
-      "id": "pair_in_update_array_without_record_axis",
-      "path": "fixtures/pair_in_update_array_without_record_axis.esm",
-      "expect": "invalid",
-      "code": "records_per_sample_invalid",
-      "pointer": "/models/Box/variables/F_k/update/1",
-      "variable": "F_k",
-      "cause": "second rule of an array-form update, first dimension of size 4"
-    },
-    {
-      "id": "pair_param_to_var_second_target_without_record_axis",
-      "path": "fixtures/pair_param_to_var_second_target_without_record_axis.esm",
+      "id": "records_per_sample_2_param_to_var_plain_pair_axis",
+      "path": "fixtures/records_per_sample_2_param_to_var_plain_pair_axis.esm",
       "expect": "invalid",
       "code": "records_per_sample_invalid",
       "pointer": "/models/Met/variables/K/update",
       "variable": "K",
-      "cause": "second param_to_var target whose first dimension has 4 members"
+      "cause": "deprecated 2, param_to_var target first axis an interval of size 2 without records: true"
     },
     {
-      "id": "pair_coupling_import_without_record_axis",
-      "path": "fixtures/pair_coupling_import_without_record_axis.esm",
+      "id": "records_per_sample_2_reaction_system_plain_axis",
+      "path": "fixtures/records_per_sample_2_reaction_system_plain_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/reaction_systems/Chem/parameters/T/update",
+      "variable": "T",
+      "cause": "reaction-system parameter shaped over an ordinary axis inherits records_per_sample 2 from its source"
+    },
+    {
+      "id": "records_per_sample_2_coupling_import_plain_pair_axis",
+      "path": "fixtures/records_per_sample_2_coupling_import_plain_pair_axis.esm",
       "expect": "flatten_invalid",
       "code": "records_per_sample_invalid",
       "pointer": "/models/Met/variables/K/update",
       "variable": "K",
-      "cause": "imported param_to_var target whose first dimension has 4 members"
-    },
-    {
-      "id": "pair_ref_target_without_record_axis",
-      "path": "fixtures/pair_ref_target_without_record_axis.esm",
-      "expect": "refused",
-      "code": "records_per_sample_invalid",
-      "pointer": "/models/Met/variables/K/update",
-      "variable": "K",
-      "cause": "ref-mounted param_to_var target whose first dimension has 4 members"
+      "cause": "deprecated 2, imported param_to_var target without a record axis"
     }
   ]
 }

@@ -217,6 +217,9 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 		return nil, fmt.Errorf("failed to resolve subsystem references: %w", err)
 	}
 
+	// One `deprecated_records_per_sample` warning for this load, after the
+	// mounts, so a mounted component's sites are named with the root's.
+	warnDeprecatedRecordsPerSample(esmFile)
 	return esmFile, nil
 }
 
@@ -318,7 +321,14 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return loadPrepared(prepared, view, applyLoadOptions(opts))
+	file, err := loadPrepared(prepared, view, applyLoadOptions(opts))
+	if err != nil {
+		return nil, err
+	}
+	// One `deprecated_records_per_sample` warning for this load (LoadPath
+	// warns for its own; it does not come through here).
+	warnDeprecatedRecordsPerSample(file)
+	return file, nil
 }
 
 // loadPrepared is LoadString after prepareRoot: jsonStr has passed the wire

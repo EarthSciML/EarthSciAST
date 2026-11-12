@@ -18,7 +18,11 @@
 > uses none of them still loads, on its own and as a mounted or referenced
 > document of a 2.0.0 root, and the 1.x version gates still apply to it (§4.2,
 > "Removed ops"). The 2.0.0 codemod rewrites a 1.x document that does use one;
-> see `MIGRATION.md`.
+> see `MIGRATION.md`. Also made with the 2.0.0 break: `records_per_sample` is
+> deprecated and no longer obeyed, only checked; the number of records a
+> data-fed parameter receives is said by its record shape, whose first axis is
+> a record axis (`"records": true`) or not, so a document writing `2` over a
+> plain size-2 first axis is now refused (§8.3, §8.5.1).
 
 > **1.0.0 is a clean break.** The five declared variable types collapse to two:
 > `unknown` (the solver solves for it; its behavior is stated by **equations**)
@@ -1752,7 +1756,7 @@ The authored `ref` round-trips verbatim; the bundle location is loader state, ne
 
 **Mounting an assembly (normative).** A mounted document may itself be an *assembly* — one whose own `models.<k>` entries are `{ref}` mount edges. The top-level form lands its component as a top-level system of the assembling document, and a top-level system is exactly what that form mounts, so **the mount forms compose**: a referenced document's own mount edges MUST be resolved, in that document's directory and against that document's own registry, before its single top-level system is extracted and before its `index_sets` merge upward. This is required at BOTH attachment points, because which point mounted a file cannot change what that file *is*; a binding that resolves only one level deep extracts the leaf's unresolved `{ref}` edge and splices it in where a component belongs, which is a silently malformed document rather than an error. Chains of any depth compose. Cycle detection MUST be path-scoped — pushed when an edge is entered and popped when it is left — so the same component file may be mounted under several keys, and only a cycle along the current resolution path is an error; the diagnostic MUST name the cycle rather than recursing without bound. Current bindings: all five compose at both forms, over local refs. A remote (`http(s)://`) reference to an assembly is out of scope for **Julia**, whose top-level inliner reads its targets from the filesystem.
 
-**Index-set merge (mirrors §9.7.5).** A referenced subsystem file's top-level `index_sets` merge into the importing **document's** document-scoped registry at resolution time — **at either mount form**, a `subsystems.<k>` ref or a top-level `models.<k>` ref — after the referenced document's metaparameters are closed and folded (a subsystem edge's `bindings` bind first, then defaults — §9.7.6 site 3).
+**Index-set merge (mirrors §9.7.5).** A referenced subsystem file's top-level `index_sets` merge into the importing **document's** document-scoped registry at resolution time — **at either mount form**, a `subsystems.<k>` ref or a top-level `models.<k>` ref — after the referenced document's metaparameters are closed and folded (a subsystem edge's `bindings` bind first, then defaults — §9.7.6 site 3). Deep equality covers every field of the declaration, an interval's `records` flag (§8.5.1) included: `"records": true` against an absent or `false` `records` is `subsystem_index_set_conflict`, while `"records": false` and an absent `records` are one declaration and merge. The same holds at the §9.7.5 template-import merge (`template_import_index_set_conflict`).
 
 *When the merge happens, and what folds (normative).* The merge runs **after the MOUNTING document's own §9.7.6 close** — §9.7.6 site 3's "the mounting document closes its own metaparameters before its refs resolve", and "Ordering within load"'s "subsystem refs resolve post-close". A binding MUST NOT merge before that close. Two steps follow from it, and both are REQUIRED. First, the incoming contribution is **folded against the mounting document's already-closed metaparameter environment** before it is compared: a `size` the leaf could not close names something the mounting document declares, and §9.7.6 site 5 closes it there, so by the time it lands "the mounted form is fully concrete when it splices in". A `size` whose free names that environment does not supply either stays symbolic rather than being an error — an enclosing scope is not obliged to close a name the assembly never declared. Second, the deep-equal comparison happens **on the folded forms, not the authored ones**. Comparing an unfolded contribution against a registry the close has already folded rejects two declarations that say the same thing: an assembly and the leaf it mounts that both declare `NLEV: 40` and `lev: {size: "NLEV"}` would collide with themselves, and restating a leaf's axis with the concrete number it folds to would be an error while restating it verbatim was idempotent — the more concrete spelling refused. Folding first removes both.
 
@@ -4002,15 +4006,23 @@ temporal:
   frequency:   ISO8601 duration   # spacing between samples within a file
   records_per_file: integer | "auto"
   time_variable: string        # name of the time coord inside the file
-  records_per_sample: 1 | 2    # default for every parameter drawing from the source (§8.5.1)
+  records_per_sample: 1 | 2    # DEPRECATED, removed at esm 3.0.0 (§8.5.1)
 ```
 
 Both **static declaration** (`records_per_file` + `frequency`) and **runtime discovery** (`time_variable`) are allowed. If both are present, the static declaration wins and `time_variable` acts as a fallback. `records_per_file: "auto"` explicitly defers to runtime discovery.
 
-`records_per_sample` is how many records a parameter drawing from the source
-receives at each query time, the source-wide default of the parameter's own
-`from.records_per_sample` (§8.5.1). It is a different count from
-`records_per_file`, which counts the records stored in one file.
+`records_per_sample` is **deprecated** and is removed at esm 3.0.0. How many
+records a parameter drawing from the source receives at each query time is
+said by the parameter's record shape: two when its first axis is a record axis,
+one otherwise (§8.5.1). The field no longer decides anything. It is still
+parsed, with the warning `deprecated_records_per_sample`, as the source-wide
+default of the parameter's own (also deprecated) `from.records_per_sample`, and
+a value other than the count received by every parameter of the source that
+writes no value of its own is `records_per_sample_invalid` (§8.5.1). This is a
+breaking change, made with the esm 2.0.0 break: a source written with `2` whose
+parameters are shaped over a plain size-2 first axis is now invalid. It is a
+different count from `records_per_file`, which counts the records stored in one
+file.
 
 ### 8.4 (Reserved)
 
@@ -4035,7 +4047,7 @@ consumer, and the units are declared once — on the parameter — instead of tw
       unit_conversion: number | Expression   # optional
       codes: DataSourceCodes       # optional; text column -> numbers (§8.9.1)
       select: DataSourceSelect     # optional; overrides the source default (§8.9.2)
-      records_per_sample: 1 | 2    # optional; overrides the source default (§8.5.1)
+      records_per_sample: 1 | 2    # DEPRECATED, removed at esm 3.0.0; checked against the shape (§8.5.1)
       description: string
       reference: Reference
 ```
@@ -4052,76 +4064,73 @@ declared, rather than one of them being sliced by the caller after the fact.
 `update.source` MUST resolve to a `data_sources` key (`data_source_undefined`
 otherwise).
 
-#### 8.5.1 `records_per_sample` — one record, or the two that bracket the time
+#### 8.5.1 Record axes — one record, or the two that bracket the time
 
-A time-varying source holds records at discrete times. `records_per_sample`
-says which of them the parameter receives at a query time $t$:
+A time-varying source holds records at discrete times. A data-fed parameter
+receives, at a query time $t$, either one of them or two, and its **record
+shape** says which:
 
-| Value | The parameter receives |
+| The record shape's first entry | The parameter receives |
 |---|---|
-| `1` | the record at or before $t$: the latest record whose time is $\le t$. The parameter's declared shape is the file variable's shape without its record axis. |
-| `2` | the record at or before $t$ and the record after it, in that order, stacked along the parameter's **first** declared dimension, which holds exactly two members. The rest of the declared shape is the file variable's shape without its record axis. |
+| a **record axis** | the record at or before $t$ and the record after it, in that order, stacked along that first axis. The rest of the record shape is the file variable's shape without its record axis. |
+| anything else, or the record shape is empty | the record at or before $t$: the latest record whose time is $\le t$. The record shape is the file variable's shape without its record axis. |
+
+A **record axis** is an `interval` index set that carries `"records": true`.
+Its `size` MUST be 2 (after metaparameter folding, §9.7.6). The flag is legal
+only on an `interval` (the schema refuses it on any other kind), and
+`"records": false` is the same as leaving it out: the two are one declaration
+everywhere, so they compare equal at every index-set merge (§4.7, §9.7.5) and
+never conflict, and no rule reads them differently; `emit` keeps the spelling
+it was given. `"records": true` is a different declaration from either, so a
+mount that brings `rec` with the flag into a document that declares `rec`
+without it (or the reverse) is `subsystem_index_set_conflict`. The number of
+records is therefore said once, by the shape, and nowhere else.
 
 ```json
 {
-  "index_sets": { "rec": { "kind": "interval", "size": 2 }, "cells": { "kind": "interval", "size": 100 } },
+  "index_sets": { "rec": { "kind": "interval", "size": 2, "records": true },
+                  "cells": { "kind": "interval", "size": 100 } },
   "variables": {
     "F_PBLH": { "type": "parameter", "units": "m", "shape": ["rec", "cells"],
                 "update": { "kind": "data", "source": "GEOSFP_A1",
-                            "from": { "file_variable": "PBLH", "records_per_sample": 2 } } }
+                            "from": { "file_variable": "PBLH" } } }
   }
 }
 ```
 
 (`index_sets` is document-scoped and `variables` sits in a model; they are shown
 together for brevity.) `F_PBLH[1, c]` is the record at or before $t$ and
-`F_PBLH[2, c]` the next one.
+`F_PBLH[2, c]` the next one. An `interval` of size 2 without the flag is an
+ordinary axis, and a parameter shaped over it first receives one record.
 
-The source does not interpolate, at either value. With `2` the model blends the
-two records itself, in an ordinary expression, with a weight it computes from
-`t` and the record spacing (for example $w = \mathrm{frac}((t - t_0)/\Delta t)$ and
+The source does not interpolate. With two records the model blends them itself,
+in an ordinary expression, with a weight it computes from `t` and the record
+spacing (for example $w = \mathrm{frac}((t - t_0)/\Delta t)$ and
 $(1 - w)\,F[1, \ldots] + w\,F[2, \ldots]$). That keeps the blend in the model,
 where it is visible, differentiable and the same in every binding, and keeps the
-source pure I/O. The value of a parameter with `2` changes when the source
-advances a record, exactly as with `1`: the pair is refreshed together, so a
-model that blends reads a value continuous in $t$ while its inputs stay
-piecewise constant.
+source pure I/O. The value of a two-record parameter changes when the source
+advances a record, exactly as a one-record parameter's does: the pair is
+refreshed together, so a model that blends reads a value continuous in $t$ while
+its inputs stay piecewise constant.
 
-**Where the value comes from.** The parameter's `from.records_per_sample`
-when given; otherwise the source's `temporal.records_per_sample` (§8.3);
-otherwise `1`. This is the **effective** value. Records are the consumer's
-choice, so two parameters may read one source differently, which is why the
-field lives on `from` and the source's is only a default, as for `select`
-(§8.9.2).
+Apart from deciding how many records a data-fed parameter receives, a record
+axis is an ordinary `interval` of size 2: it is indexed, ranged over by `faq`,
+discretized, merged at a mount and carried by `flatten` exactly like any other,
+and it may appear in the shape of any variable. The flag survives
+`parse → emit` and `flatten`.
 
-**Validation.** A document is invalid, `records_per_sample_invalid`, when any
-`update` rule of a parameter at any depth (a top-level model's or a subsystem's)
-satisfies one of the conditions below. The pointer is the rule's: the
-parameter's `/update` when `update` is a single rule, and `/update/<i>` (the
-rule's 0-based position) when it is an array of rules.
-
-1. a rule whose `kind` is not `data` carries `from.records_per_sample` (only a
-   `data` rule names a source to read records from);
-2. a parameter's effective value is `2` and its source declares no `temporal`
-   block, or a `temporal` block with no `start` (a source without a temporal
-   start is time-invariant: it has a single record and no successor, so there
-   is no pair to deliver);
-3. a parameter's effective value is `2` and its **record shape** is empty, or
-   its first entry names an index set that does not have exactly two members:
-   an `interval` whose `size` is not 2, a `categorical` whose `members` are not
-   two, or any `derived` or `ragged` set (whose size is not known at load).
-
-The record shape is the parameter's declared `shape` when it declares one, an
-empty `shape` (a scalar buffer) included.
+**The record shape.** The record shape is the parameter's declared `shape`
+when it declares one, an empty `shape` (a scalar buffer) included.
 A parameter that declares no `shape` and is the `from` of a
 `variable_map` entry with `transform: "param_to_var"` takes, in the flattened
 system, the shape of the parameter it replaces (esm-libraries-spec §4.7.3), and
 its record shape is that target's declared `shape`. When it is the `from` of
 several such entries, **every** target's declared `shape` is a record shape of
-the parameter and each must satisfy rule 3 (flattening further requires them
-to be the same shape, esm-libraries-spec §4.7.3). This is how a data
-component declares a field once, with no shape, and a consumer gives it the
-record axis and the grid:
+the parameter (flattening further requires them to be the same shape,
+esm-libraries-spec §4.7.3). A parameter that declares no `shape` and is the
+`from` of no such entry has an empty record shape and receives one record. This
+is how a data component declares a field once, with no shape, and a consumer
+gives it the record axis and the grid:
 
 ```json
 "coupling": [
@@ -4131,33 +4140,114 @@ record axis and the grid:
 
 with `GEOSFP.PBLH` declared with no `shape` (an explicit `"shape": []` would
 declare a scalar, whose record shape is empty) and
-`"from": {"file_variable": "PBLH", "records_per_sample": 2}`, and
-`Transport3D.F_PBLH` declared `"shape": ["gf_t", "gf_lat", "gf_lon"]` with
-`gf_t` of size 2.
+`"from": {"file_variable": "PBLH"}`, and `Transport3D.F_PBLH` declared
+`"shape": ["gf_t", "gf_lat", "gf_lon"]` with
+`"gf_t": {"kind": "interval", "size": 2, "records": true}`. Every other
+parameter of the source keeps receiving one record; nothing about the source
+changes.
 
-**When rule 3 is checked.** Structural validation checks rule 3 against every
-record shape it can see in the loaded document: the parameter's own non-empty
+**Validation.** A document is invalid when:
+
+1. an index set carries `"records": true` and its `size` is not 2:
+   `record_axis_invalid`, at `/index_sets/<name>`;
+2. a record shape of a data-fed parameter names a record axis anywhere but in
+   its first entry, or the parameter has several record shapes and some begin
+   with a record axis while others do not: `record_axis_misplaced`;
+3. a record shape of a data-fed parameter begins with a record axis and the
+   parameter's source declares no `temporal` block, or a `temporal` block with
+   no `start` (a source without a temporal start is time-invariant: it has a
+   single record and no successor, so there is no pair to deliver):
+   `record_axis_time_invariant_source`.
+
+Rules 2 and 3 apply to every `data` rule of a data-fed parameter at any depth:
+a model variable (a top-level model's or a subsystem's, at
+`/models/<M>[/subsystems/<S>…]/variables/<v>`) and a reaction-system parameter
+alike (`/reaction_systems/<R>[/subsystems/<S>…]/parameters/<p>`), which is
+data-fed exactly as a model parameter is and receives the same checks. Their
+pointer is the rule's: the parameter's `/update` when `update` is a single
+rule, and `/update/<i>` (the rule's 0-based position) when it is an array of
+rules. A record axis in the
+shape of a variable that is not a data-fed parameter, at any position, is not
+an error.
+When rule 2 holds for a parameter, rule 3 and the `records_per_sample`
+agreement below are not checked for it (its count is not defined); otherwise
+rule 3 and that agreement are independent, and a rule that breaks both reports
+both.
+
+**When rules 2 and 3 are checked.** Structural validation checks them against
+every record shape it can see in the loaded document: the parameter's own
 `shape`, and the declared `shape` of each `param_to_var` target named by an
 inline `variable_map` whose declaration resolves in the loaded document (a
 target inside a subsystem mounted by `ref` resolves once the ref is mounted,
-§4.7; a binding that validates before mounting refs treats a target it cannot
-yet reach as not decidable, never as empty, and likewise a record shape whose
-first dimension names an index set that only a not-yet-mounted file can
-declare). It refuses an empty record shape
-only when none can arrive later, that is, when the parameter is the `from` of
-no inline `param_to_var` entry and the document's `coupling` holds no
-`coupling_import` entry. Otherwise a record shape validation could not decide
-is checked by `flatten`, after `coupling_import` expansion (§10.10), against
-the `param_to_var` edges of the expanded coupling sequence, and refused there
-with the same `records_per_sample_invalid` code and pointer. A record shape
-that is still empty after expansion is refused there too. This is the same
-split as for a mis-bound import (§10.10.3): a bad edge is caught by
-validating it where it first exists.
+§4.7). A binding that validates before mounting refs MUST treat what a
+not-yet-mounted `{ref}` could still change as not decidable, never as an error
+and never as empty: a `param_to_var` target it cannot yet reach, and a record
+shape whose first entry names an index set the document does not declare while
+any `{ref}` remains unmounted (the mounted file's `index_sets` merge into the
+document's, §4.7, and may declare it a record axis). It skips those and judges
+everything it can decide: when some of a parameter's targets are reachable and
+others are not, the reachable ones are judged (a misplaced record axis among
+them, a disagreement between them, and the count they give against a written
+value), and the rest are left to later. A record shape validation could not
+decide is checked by `flatten`, after `coupling_import` expansion (§10.10),
+against the `param_to_var` edges of the expanded coupling sequence, and refused
+there with the same code and pointer. This is the same split as for a
+mis-bound import (§10.10.3): a bad edge is caught by validating it where it
+first exists.
+
+**`records_per_sample` (deprecated; a breaking change).** Before the record
+axis, the count was written separately, as `from.records_per_sample` on the
+rule or `temporal.records_per_sample` on the source (§8.3), each `1` or `2`,
+and it was obeyed: a `2` over any first axis of exactly two members delivered
+the pair. Both fields are now **deprecated** and are **removed at esm 3.0.0**,
+and they are **no longer obeyed**. This is a breaking change, made together
+with the esm 2.0.0 break, and there is no compatibility reading of an older
+document: the record shape alone decides the count. Until removal a document
+that carries either field is still parsed, with one warning per document,
+`deprecated_records_per_sample`, naming every place it is written (each
+pointer above, `/data_sources/<S>/temporal/records_per_sample` for a source),
+and a written value is a CHECK: a parameter's written value (its own
+`from.records_per_sample`, else its source's `temporal.records_per_sample`)
+MUST equal the number of records its record shape gives it. `2` therefore
+requires a record shape that begins with a record axis, and `1` forbids one. A
+document is invalid, `records_per_sample_invalid`, at the rule's pointer, when:
+
+1. a rule whose `kind` is not `data` carries `from.records_per_sample` (only a
+   `data` rule names a source to read records from). This is a finding of
+   structural validation only: `flatten` never reports it, and flattens such a
+   document as it would without the field; or
+2. a data-fed parameter's written value disagrees with its record shape. This
+   is checked at the same two points as rules 2 and 3 above, and for every
+   data-fed parameter they cover, a reaction system's included; a parameter
+   whose written value is `2` and which declares no `shape` and is the `from`
+   of no `param_to_var` entry is refused by validation only when the
+   document's `coupling` holds no `coupling_import` entry (one could still
+   bring a target), and otherwise by `flatten`.
+
+So a document written before the record axis, with `records_per_sample: 2` and
+a plain size-2 first axis, which used to deliver the pair, is now refused with
+`records_per_sample_invalid`. It migrates by adding `"records": true` to that
+axis and deleting the `records_per_sample` fields (which, kept, are only
+checked, until their removal at esm 3.0.0). `temporal.records_per_sample: 2` applies
+to every parameter of the source that writes no value of its own, so it is
+only ever agreeable when every such parameter is shaped over a record axis
+first; that is why the flag sits on the consumer's shape instead.
 
 `flatten` carries `from.records_per_sample` as written on the flattened
 parameter's `update`, and every binding's `loader_fields` entry reports the
-parameter's effective value (esm-libraries-spec §4.7.5,
+number of records the parameter receives (esm-libraries-spec §4.7.5,
 `tests/conformance/records_per_sample/`).
+
+A binding's document-driven provider construction (`providers_from_document`,
+§8.1.1) reads the record shape from the document it is given, without
+expanding `coupling_import` entries or mounting refs it was not given mounted.
+When a parameter's record shape depends on a `param_to_var` target that
+document does not show (the parameter declares no `shape` and either no inline
+entry maps it while a `coupling_import` could, or every target it maps to is
+unreachable), the count is unknown there: a written deprecated
+`records_per_sample` then stands in (`flatten` checks it against the shape),
+and with none written the provider MUST refuse the parameter, naming it,
+rather than assume one record.
 
 ### 8.6 Regridding — a coupling expression
 
@@ -4465,8 +4555,9 @@ The selection is over the axis the source **delivers**, so it follows
 `record_filter`: `range 0..200` on a filtered table is the first 200 *surviving*
 records. On a time-varying source (a `temporal` block with a `start`) the
 entries cover the file variable's native dimensions other than its time
-dimension, in native order; with an effective `records_per_sample` of `2`
-(§8.5.1) the leading record axis the parameter receives is not selected.
+dimension, in native order; when the parameter receives two records (its
+record shape begins with a record axis, §8.5.1) the leading record axis it
+receives is not selected.
 Whether a binding pushes the selection down to the reader (fetching only
 what it keeps) or applies it after the read is an optimization — the two **MUST**
 agree exactly.

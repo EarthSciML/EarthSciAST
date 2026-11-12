@@ -67,13 +67,12 @@ import type { Distribution, ParameterUpdateSpec } from './types.js'
 import { numericValue } from './numeric-literal.js'
 import { expandCouplingImports, type CouplingImportOptions } from './coupling-imports.js'
 import { mapChildren } from './expression.js'
-import { effectiveRecordsPerSample } from './types.js'
 import {
   forEachParameterUpdate,
   hasUnmountedRefs,
   paramToVarTargets,
-  recordShapeFailure,
-  recordShapeMessage,
+  recordCount,
+  recordShapeFindings,
 } from './records-per-sample.js'
 import {
   angleNormalizationFactor,
@@ -359,10 +358,11 @@ export interface LoaderField {
   /** The binding's declared `unit_conversion` (§8.5), when the document has one. */
   unitConversion?: Expression
   /**
-   * The EFFECTIVE records per query time (esm-spec §8.5.1): the binding's
-   * `from.records_per_sample`, else the source's `temporal.records_per_sample`,
-   * else 1. With 2 the field holds the record at or before the query time and
-   * its successor, stacked along the parameter's first dimension.
+   * The records per query time (esm-spec §8.5.1): 2 when the parameter's
+   * record shape begins with a record axis (an `interval` index set carrying
+   * `"records": true`), else 1. With 2 the field holds the record at or before
+   * the query time and its successor, stacked along that first axis. The
+   * deprecated `records_per_sample` fields are checked against it, never read.
    */
   recordsPerSample: 1 | 2
 }
@@ -1147,7 +1147,7 @@ function dataSourceFields(
       if (rule.kind !== 'data') continue
       const binding = (
         rule as {
-          from?: { file_variable: string; unit_conversion?: Expression; records_per_sample?: 1 | 2 }
+          from?: { file_variable: string; unit_conversion?: Expression }
         }
       ).from
       if (binding === undefined) continue
@@ -1161,7 +1161,9 @@ function dataSourceFields(
         var: binding.file_variable,
         dataSource: source,
         cadence: (source as { temporal?: unknown }).temporal !== undefined ? 'discrete' : 'const',
-        recordsPerSample: effectiveRecordsPerSample(binding, source),
+        // Set from the record shape by `setLoaderRecordCounts`, once the
+        // coupling (and so every `param_to_var` target) is known.
+        recordsPerSample: 1,
       }
       if (binding.unit_conversion !== undefined) field.unitConversion = binding.unit_conversion
       fields.push(field)
@@ -3406,9 +3408,9 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
   // `coupling` array verbatim and needs no options.
   const couplingEntries = expandCouplingImports(file, options) ?? []
 
-  // esm-spec §8.5.1 "When rule 3 is checked": a record shape validation could
-  // not see (an imported `param_to_var` edge) is judged against the expanded
-  // sequence.
+  // esm-spec §8.5.1 "When rules 2 and 3 are checked": a record shape
+  // validation could not see (an imported `param_to_var` edge) is judged
+  // against the expanded sequence.
   checkRecordShapes(file, couplingEntries)
 
   // Preflight: reject an `identity` variable_map bridging different declared
@@ -3431,6 +3433,7 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
 
   // 3. Assemble one system from the per-component pieces.
   const flat = assembleSystem(file, components, metadata)
+  setLoaderRecordCounts(file, couplingEntries, flat.loaderFields)
 
   // 4. Collect and namespace events.
   namespaceEvents(file, flat)
@@ -3467,33 +3470,48 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
 }
 
 /**
- * `records_per_sample_invalid` at flatten (esm-spec §8.5.1): every data-fed
- * parameter with an effective 2 must have a record shape whose first dimension
- * is an index set of two members, judged against `couplingEntries`, the
- * `coupling_import`-expanded sequence. An empty record shape is refused here,
- * since no edge can arrive later. Throws a {@link FlattenError} carrying the
- * code and the rule's pointer.
+ * The record-shape rules at flatten (esm-spec §8.5.1): `record_axis_misplaced`,
+ * `record_axis_time_invariant_source` and the deprecated written value's
+ * agreement (`records_per_sample_invalid`), judged against `couplingEntries`,
+ * the `coupling_import`-expanded sequence. An empty record shape is judged
+ * here, since no edge can arrive later. Throws a {@link FlattenError} carrying
+ * the code and the rule's pointer.
  */
 function checkRecordShapes(file: EsmFile, couplingEntries: readonly unknown[]): void {
   const targets = paramToVarTargets(couplingEntries)
   const unmountedRefs = hasUnmountedRefs(file)
-  for (const site of forEachParameterUpdate(file)) {
-    const failure = recordShapeFailure(file, site, targets, {
+  for (const site of forEachParameterUpdate(file, { reactionSystems: true })) {
+    const [finding] = recordShapeFindings(file, site, targets, {
       targetsMayArriveLater: false,
       unmountedRefs,
     })
-    if (failure === undefined) continue
-    throw new FlattenError(
-      `${site.path}: ${recordShapeMessage(site.variableName, failure)}`,
-      ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
-      {
-        path: site.path,
-        variable: site.variableName,
-        shape: failure.shape,
-        ...(failure.target === undefined ? {} : { target: failure.target }),
-      },
-    )
+    if (finding === undefined) continue
+    throw new FlattenError(`${site.path}: ${finding.message}`, finding.code, {
+      path: site.path,
+      ...finding.details,
+    })
   }
+}
+
+/**
+ * Set each `LoaderField`'s `recordsPerSample` to the number of records its
+ * parameter's record shape gives it (esm-libraries-spec "Loader fields"),
+ * judged against `couplingEntries`, the `coupling_import`-expanded sequence.
+ */
+function setLoaderRecordCounts(
+  file: EsmFile,
+  couplingEntries: readonly unknown[],
+  loaderFields: LoaderField[],
+): void {
+  if (loaderFields.length === 0) return
+  const targets = paramToVarTargets(couplingEntries)
+  const unmountedRefs = hasUnmountedRefs(file)
+  const counts = new Map<string, 1 | 2>()
+  for (const site of forEachParameterUpdate(file, { reactionSystems: true })) {
+    if (site.rule.kind !== 'data' || counts.has(site.scopedName)) continue
+    counts.set(site.scopedName, recordCount(file, site, targets, unmountedRefs))
+  }
+  for (const field of loaderFields) field.recordsPerSample = counts.get(field.name) ?? 1
 }
 
 /**

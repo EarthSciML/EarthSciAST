@@ -130,8 +130,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # never bound from its `default` and integrated (esm-spec §9.6.6
     # `data_source_unbound`, CONFORMANCE_SPEC §5.46).
     include("data_source_unbound_conformance_test.jl")
-    # `from.records_per_sample`: validated, carried by flatten, and reported as
-    # the effective value by every loader field (esm-spec §8.5.1).
+    # Record axes: a data-fed parameter's record shape says how many records
+    # it receives, and every loader field reports that; the deprecated
+    # `records_per_sample` is checked against it and warned about (esm-spec §8.5.1).
     include("records_per_sample_conformance_test.jl")
     include("pointwise_lift_axis_names_test.jl")  # §10.5 lift axes by NAME, not by extent
     include("coupling_imports_test.jl")

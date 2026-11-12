@@ -124,12 +124,10 @@ def test_the_two_record_bracket_is_the_consumers_choice(tmp_path):
     window = (_dt.datetime(2016, 1, 1, tzinfo=UTC), _dt.datetime(2016, 4, 1, tzinfo=UTC))
     doc = _doc(tmp_path)
     doc["index_sets"] = {
-        "rec": {"kind": "interval", "size": 2},
+        "rec": {"kind": "interval", "size": 2, "records": True},
         "row": {"kind": "interval", "size": 2},
     }
-    nox = doc["models"]["Emis"]["variables"]["nox"]
-    nox["shape"] = ["rec", "row"]
-    nox["update"]["from"]["records_per_sample"] = 2
+    doc["models"]["Emis"]["variables"]["nox"]["shape"] = ["rec", "row"]
     provs = providers_from_document(
         doc,
         cache_root=str(tmp_path / "cache"),
@@ -289,7 +287,7 @@ def test_a_record_table_refuses_the_two_record_bracket(tmp_path):
         )
 
 
-# --- records_per_sample = 2 with a declared select -------------------------- #
+# --- a record axis with a declared select ----------------------------------- #
 
 
 def test_a_fixed_select_names_the_per_record_axes_under_the_bracket(tmp_path):
@@ -297,10 +295,8 @@ def test_a_fixed_select_names_the_per_record_axes_under_the_bracket(tmp_path):
     doc["models"]["Emis"]["variables"]["nox"]["update"]["from"]["select"] = {"axes": [{"fixed": 1}]}
     single = _build(doc, tmp_path, window=WINDOW)
     np.testing.assert_array_equal(single.sample(_since_jan(2016, 2, 15)), 42.0)
-    doc["index_sets"] = {"rec": {"kind": "interval", "size": 2}}
-    nox = doc["models"]["Emis"]["variables"]["nox"]
-    nox["shape"] = ["rec"]
-    nox["update"]["from"]["records_per_sample"] = 2
+    doc["index_sets"] = {"rec": {"kind": "interval", "size": 2, "records": True}}
+    doc["models"]["Emis"]["variables"]["nox"]["shape"] = ["rec"]
     pair = _build(doc, tmp_path, window=WINDOW)
     # the leading record axis is kept whole, the declared fixed ROW axis dropped
     np.testing.assert_array_equal(pair.sample(_since_jan(2016, 2, 15)), [42.0, 62.0])
@@ -348,7 +344,11 @@ def test_the_bracket_prefixes_the_gate_axes(tmp_path):
     doc["models"]["Emis"]["variables"]["nox"]["update"]["from"]["select"] = {
         "axes": [{"gated_by": "Rows"}]
     }
-    doc["models"]["Emis"]["variables"]["nox"]["update"]["from"]["records_per_sample"] = 2
+    doc["index_sets"] = {
+        "rec": {"kind": "interval", "size": 2, "records": True},
+        "row": {"kind": "interval", "size": 2},
+    }
+    doc["models"]["Emis"]["variables"]["nox"]["shape"] = ["rec", "row"]
     p = _build(doc, tmp_path, window=WINDOW)
     assert p.gate_spec["axes"] == ["all", {"gated_by": "Rows"}]
 
@@ -405,14 +405,18 @@ def test_a_bad_window_is_a_type_error(tmp_path, window, match):
         _build(_doc(tmp_path), tmp_path, window=window)
 
 
-def _two_record_doc(tmp_path, *, source_rps=None, file_variable="NOX", select=None):
-    """`_doc` with three parameters reading NEI, declared with the record axis
-    `rec` (an interval of size 2) first: `pair` sets
-    `from.records_per_sample: 2`, `single` sets 1, and `inherited` sets
-    nothing, so it takes the source's `temporal.records_per_sample`."""
+def _two_record_doc(
+    tmp_path, *, source_rps=None, pair_rps=None, single_rps=None, file_variable="NOX", select=None
+):
+    """`_doc` with three parameters reading NEI: `pair` is shaped over the
+    record axis `rec` (an interval of size 2 with `"records": true`) first, so
+    it receives two records; `single` is shaped `[row]` and receives one; and
+    `inherited` is shaped like `pair` when the source writes the deprecated
+    `temporal.records_per_sample: 2`, else like `single`. `pair_rps` /
+    `single_rps` write the deprecated `from.records_per_sample` on those two."""
     doc = _doc(tmp_path)
     doc["index_sets"] = {
-        "rec": {"kind": "interval", "size": 2},
+        "rec": {"kind": "interval", "size": 2, "records": True},
         "row": {"kind": "interval", "size": 2},
     }
     if source_rps is not None:
@@ -432,8 +436,8 @@ def _two_record_doc(tmp_path, *, source_rps=None, file_variable="NOX", select=No
         }
 
     doc["models"]["Emis"]["variables"] = {
-        "pair": param(["rec", "row"], 2),
-        "single": param(["row"], 1),
+        "pair": param(["rec", "row"], pair_rps),
+        "single": param(["row"], single_rps),
         "inherited": param(["rec", "row"] if source_rps == 2 else ["row"], None),
     }
     return doc
@@ -458,12 +462,12 @@ def _two_record_providers(tmp_path, **kw):
 
 def test_a_two_record_parameter_gets_the_records_before_and_after_t(tmp_path):
     provs = _two_record_providers(tmp_path)
-    # from.records_per_sample = 2: February's record (at or before t) and
-    # March's, stacked along the first declared dimension.
+    # A record axis first: February's record (at or before t) and March's,
+    # stacked along the first declared dimension.
     np.testing.assert_array_equal(
         provs["Emis.pair"].sample(_since_jan(2016, 2, 15)), [[20.0, 21.0], [30.0, 31.0]]
     )
-    # The same source read with 1 record, by an explicit 1 and by default.
+    # The same source read with 1 record by the parameters with no record axis.
     np.testing.assert_array_equal(
         provs["Emis.single"].sample(_since_jan(2016, 2, 15)), [20.0, 21.0]
     )
@@ -472,13 +476,70 @@ def test_a_two_record_parameter_gets_the_records_before_and_after_t(tmp_path):
     )
 
 
-def test_the_sources_records_per_sample_is_the_default(tmp_path):
-    provs = _two_record_providers(tmp_path, source_rps=2)
+def test_deprecated_values_agreeing_with_the_record_shape_are_accepted(tmp_path):
+    """The deprecated source default (2, inherited by `pair` and `inherited`)
+    and a parameter's own 1 (`single`, overriding it) each restate the count
+    the record shape gives."""
+    provs = _two_record_providers(tmp_path, source_rps=2, single_rps=1)
     np.testing.assert_array_equal(
         provs["Emis.inherited"].sample(_since_jan(2016, 1, 1)), [[10.0, 11.0], [20.0, 21.0]]
     )
-    # A parameter's own value overrides the source's.
+    np.testing.assert_array_equal(
+        provs["Emis.pair"].sample(_since_jan(2016, 1, 1)), [[10.0, 11.0], [20.0, 21.0]]
+    )
     np.testing.assert_array_equal(provs["Emis.single"].sample(_since_jan(2016, 1, 1)), [10.0, 11.0])
+
+
+@pytest.mark.parametrize(
+    ("kw", "key", "where"),
+    [
+        ({"pair_rps": 1}, "Emis.pair", "update.from"),
+        ({"single_rps": 2}, "Emis.single", "update.from"),
+        ({"source_rps": 2}, "Emis.single", "data_sources.NEI.temporal"),
+    ],
+)
+def test_a_deprecated_value_disagreeing_with_the_record_shape_is_refused(tmp_path, kw, key, where):
+    with pytest.raises(ValueError) as err:
+        _two_record_providers(tmp_path, **kw)
+    msg = str(err.value)
+    assert repr(key) in msg and where in msg and "records_per_sample_invalid" in msg
+
+
+def test_the_count_follows_a_param_to_var_targets_record_axis(tmp_path):
+    """A shapeless data-fed parameter takes its record shape from the
+    `param_to_var` target it is the `from` of."""
+    doc = _two_record_doc(tmp_path)
+    del doc["models"]["Emis"]["variables"]["pair"]["shape"]
+    doc["models"]["Box"] = {
+        "variables": {
+            "F": {"type": "parameter", "units": "mol/s", "shape": ["rec", "row"], "default": 0.0}
+        }
+    }
+    doc["coupling"] = [
+        {"type": "variable_map", "from": "Emis.pair", "to": "Box.F", "transform": "param_to_var"}
+    ]
+    provs = _providers(tmp_path, doc)
+    np.testing.assert_array_equal(
+        provs["Emis.pair"].sample(_since_jan(2016, 2, 15)), [[20.0, 21.0], [30.0, 31.0]]
+    )
+
+
+def test_a_record_shape_behind_a_coupling_import_is_refused_not_guessed(tmp_path):
+    """A shapeless parameter whose target would arrive through a
+    `coupling_import` has a record count the raw document cannot show: the
+    provider refuses rather than assume one record."""
+    doc = _two_record_doc(tmp_path)
+    del doc["models"]["Emis"]["variables"]["pair"]["shape"]
+    doc["coupling"] = [{"type": "coupling_import", "ref": "./lib.esm", "bind": {"Data": "Emis"}}]
+    with pytest.raises(ValueError, match="'Emis.pair'.*coupling_import"):
+        _providers(tmp_path, doc)
+
+
+def test_a_misplaced_record_axis_is_refused(tmp_path):
+    doc = _two_record_doc(tmp_path)
+    doc["models"]["Emis"]["variables"]["pair"]["shape"] = ["row", "rec"]
+    with pytest.raises(ValueError, match="'Emis.pair'.*record_axis_misplaced"):
+        _providers(tmp_path, doc)
 
 
 def test_a_run_time_option_that_contradicts_the_document_is_refused(tmp_path):
@@ -486,8 +547,8 @@ def test_a_run_time_option_that_contradicts_the_document_is_refused(tmp_path):
         _providers(tmp_path, _two_record_doc(tmp_path), records_per_sample={"Emis.pair": 1})
     msg = str(err.value)
     assert "'Emis.pair'" in msg
-    assert "gives parameter 'Emis.pair' 1" in msg and "effective value is 2" in msg
-    assert "update.from.records_per_sample" in msg
+    assert "gives parameter 'Emis.pair' 1" in msg and "record shape gives 2" in msg
+    assert '"records": true' in msg
 
 
 def test_a_run_time_option_equal_to_the_document_is_accepted(tmp_path):
@@ -505,8 +566,7 @@ def test_a_run_time_option_equal_to_the_document_is_accepted(tmp_path):
 
 
 def test_an_integral_float_records_per_sample_is_accepted(tmp_path):
-    doc = _two_record_doc(tmp_path)
-    doc["models"]["Emis"]["variables"]["pair"]["update"]["from"]["records_per_sample"] = 2.0
+    doc = _two_record_doc(tmp_path, pair_rps=2.0)
     provs = _providers(tmp_path, doc)
     np.testing.assert_array_equal(
         provs["Emis.pair"].sample(_since_jan(2016, 2, 15)), [[20.0, 21.0], [30.0, 31.0]]
@@ -515,8 +575,7 @@ def test_an_integral_float_records_per_sample_is_accepted(tmp_path):
 
 @pytest.mark.parametrize("bad", [1.5, "2", True, 3, 0, -2, 1e300])
 def test_a_records_per_sample_that_is_not_the_number_1_or_2_is_refused(tmp_path, bad):
-    doc = _two_record_doc(tmp_path)
-    doc["models"]["Emis"]["variables"]["pair"]["update"]["from"]["records_per_sample"] = bad
+    doc = _two_record_doc(tmp_path, pair_rps=bad)
     with pytest.raises(ValueError) as err:
         _providers(tmp_path, doc)
     msg = str(err.value)
@@ -564,7 +623,7 @@ def test_the_validator_refuses_two_records_from_a_source_with_no_temporal_start(
     path.write_text(json.dumps(doc))
     with pytest.raises(StructuralValidationError) as err:
         load_path(str(path))
-    records = [r for r in err.value.records if r["code"] == "records_per_sample_invalid"]
+    records = [r for r in err.value.records if r["code"] == "record_axis_time_invariant_source"]
     assert [r["path"] for r in records] == ["/models/Emis/variables/pair/update"]
 
 

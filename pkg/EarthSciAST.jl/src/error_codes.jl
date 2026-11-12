@@ -51,10 +51,20 @@ const ERROR_CODES = (
     CIRCULAR_DEPENDENCY = "circular_dependency",
     CONFLICTING_DERIVATIVE = "conflicting_derivative",
     DATA_SOURCE_UNDEFINED = "data_source_undefined",
-    # esm-spec §8.5.1: `from.records_per_sample` on a non-`data` rule, or an
-    # effective 2 on a source with no `temporal` block or on a parameter whose
-    # record shape's first dimension is not an index set of two members.
+    # esm-spec §8.5.1: the deprecated `from.records_per_sample` on a non-`data`
+    # rule, or a written `records_per_sample` (the rule's own, else its source's
+    # `temporal.records_per_sample`) that disagrees with the number of records
+    # the parameter's record shape gives it.
     RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid",
+    # esm-spec §8.5.1: an index set with `"records": true` whose size is not 2.
+    RECORD_AXIS_INVALID = "record_axis_invalid",
+    # esm-spec §8.5.1: a data-fed parameter's record shape names a record axis
+    # anywhere but first, or its several record shapes disagree about
+    # beginning with one.
+    RECORD_AXIS_MISPLACED = "record_axis_misplaced",
+    # esm-spec §8.5.1: a record shape beginning with a record axis on a source
+    # with no `temporal` block or no `temporal.start` (no successor record).
+    RECORD_AXIS_TIME_INVARIANT_SOURCE = "record_axis_time_invariant_source",
     # esm-spec §9.6.6 / CONFORMANCE_SPEC §5.46: a data-fed parameter (an `update`
     # of `kind: "data"`) reached a build with NOTHING bound to it -- no provider,
     # no loaded array, no caller-supplied `p` value. Raised at CONSTRUCTION,

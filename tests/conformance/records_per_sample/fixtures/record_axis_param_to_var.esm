@@ -1,13 +1,14 @@
 {
   "esm": "1.3.0",
   "metadata": {
-    "name": "PairParamToVarWithoutRecordAxis",
-    "description": "As records_per_sample_param_to_var, but the target is shaped [x, rec]: the record shape's first dimension has 4 members (esm-spec 8.5.1 rule 3)."
+    "name": "RecordAxisParamToVar",
+    "description": "A data-fed parameter declaring no shape, mapped by param_to_var onto a parameter shaped [rec, x], rec a record axis: its record shape is the target's, so it receives two records (esm-spec 8.5.1). This is reseact's GEOSFP.PBLH -> Transport3D.F_PBLH."
   },
   "index_sets": {
     "rec": {
       "kind": "interval",
-      "size": 2
+      "size": 2,
+      "records": true
     },
     "x": {
       "kind": "interval",
@@ -43,8 +44,7 @@
             "kind": "data",
             "source": "met_source",
             "from": {
-              "file_variable": "K",
-              "records_per_sample": 2
+              "file_variable": "K"
             }
           }
         }
@@ -62,8 +62,8 @@
           "type": "parameter",
           "units": "1/s",
           "shape": [
-            "x",
-            "rec"
+            "rec",
+            "x"
           ],
           "default": 0.1,
           "description": "Replaced by Met.K."

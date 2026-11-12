@@ -1931,6 +1931,7 @@ reading that as a gap.
 | `contribution` | type | `Contribution` | `Contribution` | `Contribution` | `Contribution` | `Contribution` |
 | `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` |
 | `dependency_edge` | type | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` |
+| `deprecated_records_per_sample_sites` | function | `deprecated_records_per_sample_sites` | `deprecatedRecordsPerSampleSites` | `deprecated_records_per_sample_sites` | `deprecated_records_per_sample_sites` | `DeprecatedRecordsPerSampleSites` |
 | `derive_odes` | function | `derive_odes` | `deriveODEs` / `deriveOdes` | `derive_odes` | `derive_odes` | `DeriveODEs` |
 | `discrete_parameters` | function | `discrete_parameters` | `discreteParameters` | `discrete_parameters` | `discrete_parameters` | `DiscreteParameters` |
 | `enum_lowering_error` | error | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` |
@@ -2060,6 +2061,7 @@ reading that as a gap.
 | `cadence_error` | error | – | – | `CadenceError` | `CadenceError` | `CadenceError` |
 | `callbacks` | function | `callbacks` | – | `callbacks` | `callbacks` | – |
 | `canonicalize_error` | error | `CanonicalizeError` | `CanonicalizeError` | – | `CanonicalizeError` | – |
+| `compile_kernels` | function | `compile_kernels` | – | `compile_kernels` | `compile_kernels` | – |
 | `compiler_report` | type | `CompilerReport` | – | `CompilerReport` | `CompilerReport` | – |
 | `component_exists` | function | – | `componentExists` | `component_exists` | `component_exists` | – |
 | `component_graph` | type | – | `ComponentGraph` | – | `ComponentGraph` | `ComponentGraph` |
@@ -2088,6 +2090,8 @@ reading that as a gap.
 | `reference` | type | `Reference` | – | `Reference` | – | `Reference` |
 | `rhs_program` | function | `rhs_program` | – | `rhs_program` | `rhs_program` | – |
 | `schema_validation_error` | error | `SchemaValidationError` | `SchemaValidationError` | `SchemaValidationError` | – | – |
+| `stripped` | function | `stripped` | – | `stripped` | `stripped` | – |
+| `stripped_constructs` | type | `StrippedConstructs` | – | `StrippedConstructs` | `StrippedConstructs` | – |
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
 | `time_origin` | function | `time_origin` | – | `time_origin` | `time_origin` | – |
 | `timestamp_to_seconds` | function | `timestamp_to_seconds` | – | `timestamp_to_seconds` | `timestamp_to_seconds` | – |
@@ -2162,7 +2166,12 @@ reading that as a gap.
 | `init` | function | – | – | `init` | `init` | – |
 | `inline_test_options` | type | `InlineTestOptions` | – | – | `InlineTestOptions` | – |
 | `integrator` | type | – | – | `Integrator` | `Integrator` | – |
+| `is_stripped` | function | `is_stripped` | – | `is_stripped` | – | – |
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
+| `kernel` | type | `Kernel` | – | – | `Kernel` | – |
+| `kernel_block` | type | `KernelBlock` | – | – | `KernelBlock` | – |
+| `kernel_set` | type | `KernelSet` | – | – | `KernelSet` | – |
+| `kernel_workspace` | type | `KernelWorkspace` | – | – | `KernelWorkspace` | – |
 | `lanes` | function | `lanes` | – | `lanes` | – | – |
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |
 | `lower_reactions_to_equations` | function | `lower_reactions_to_equations` | – | – | `lower_reactions_to_equations` | – |

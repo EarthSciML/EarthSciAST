@@ -1,13 +1,14 @@
 {
   "esm": "1.3.0",
   "metadata": {
-    "name": "PairInSubsystemWithoutRecordAxis",
-    "description": "records_per_sample 2 on a parameter of a SUBSYSTEM whose first dimension has 4 members (esm-spec 8.5.1 rule 3 applies at any depth)."
+    "name": "RecordAxisMisplacedInSubsystem",
+    "description": "A data-fed parameter of a SUBSYSTEM is shaped [x, rec], rec a record axis: record_axis_misplaced at any depth (esm-spec 8.5.1 rule 2)."
   },
   "index_sets": {
     "rec": {
       "kind": "interval",
-      "size": 2
+      "size": 2,
+      "records": true
     },
     "x": {
       "kind": "interval",
@@ -56,8 +57,7 @@
                 "kind": "data",
                 "source": "met_source",
                 "from": {
-                  "file_variable": "K",
-                  "records_per_sample": 2
+                  "file_variable": "K"
                 }
               }
             }

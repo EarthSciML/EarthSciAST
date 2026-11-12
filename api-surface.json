@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 973,
+    "symbols": 977,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 350,
-      "typescript": 235,
-      "python": 264,
-      "rust": 384,
-      "go": 445
+      "julia": 351,
+      "typescript": 236,
+      "python": 265,
+      "rust": 385,
+      "go": 449
     },
     "by_tier": {
-      "extension": 672,
-      "stable": 301
+      "extension": 675,
+      "stable": 302
     }
   },
   "planned": [
@@ -2626,6 +2626,18 @@
       }
     },
     {
+      "name": "deprecated_records_per_sample_sites",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "DeprecatedRecordsPerSampleSites",
+        "julia": "deprecated_records_per_sample_sites",
+        "python": "deprecated_records_per_sample_sites",
+        "rust": "deprecated_records_per_sample_sites",
+        "typescript": "deprecatedRecordsPerSampleSites"
+      }
+    },
+    {
       "name": "derivative_result",
       "kind": "type",
       "tier": "extension",
@@ -3284,6 +3296,30 @@
       "tier": "extension",
       "bindings": {
         "go": "ErrorNullReaction"
+      }
+    },
+    {
+      "name": "error_record_axis_invalid",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorRecordAxisInvalid"
+      }
+    },
+    {
+      "name": "error_record_axis_misplaced",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorRecordAxisMisplaced"
+      }
+    },
+    {
+      "name": "error_record_axis_time_invariant_source",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorRecordAxisTimeInvariantSource"
       }
     },
     {

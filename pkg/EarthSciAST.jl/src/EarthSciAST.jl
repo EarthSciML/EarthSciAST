@@ -166,6 +166,8 @@ export
     # cross-binding contract, mirroring TypeScript's `ERROR_CODES` object and
     # Python's `ErrorCode` enum.
     EarthSciASTError, ERROR_CODES, error_code_names,
+    # esm-spec §8.5.1: where the deprecated `records_per_sample` is written.
+    deprecated_records_per_sample_sites,
     # Reference resolution — semiring-FAQ node addressing (RFC §6.1).
     # The graph-query methods (dependencies/dependents/detect_cycle/
     # topological_order/edges_of_kind) are intentionally NOT exported: they are

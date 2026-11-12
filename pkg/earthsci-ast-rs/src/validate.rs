@@ -151,8 +151,17 @@ pub enum StructuralErrorCode {
     /// A parameter `update` of kind `data` names a `data_sources` entry the
     /// document does not declare (esm-spec §8.5).
     DataSourceUndefined,
-    /// `from.records_per_sample` used where it cannot hold (esm-spec §8.5.1).
+    /// The deprecated `records_per_sample` on a non-`data` rule, or written
+    /// in disagreement with the record shape (esm-spec §8.5.1).
     RecordsPerSampleInvalid,
+    /// A record axis whose `size` is not 2 (esm-spec §8.5.1).
+    RecordAxisInvalid,
+    /// A record axis anywhere but first in a data-fed record shape, or
+    /// record shapes that disagree about beginning with one (esm-spec §8.5.1).
+    RecordAxisMisplaced,
+    /// A record shape beginning with a record axis on a time-invariant source
+    /// (esm-spec §8.5.1).
+    RecordAxisTimeInvariantSource,
     /// System referenced but not declared
     UndefinedSystem,
 
@@ -307,6 +316,9 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::UndefinedOperator => codes::UNDEFINED_OPERATOR,
             Self::DataSourceUndefined => codes::DATA_SOURCE_UNDEFINED,
             Self::RecordsPerSampleInvalid => codes::RECORDS_PER_SAMPLE_INVALID,
+            Self::RecordAxisInvalid => codes::RECORD_AXIS_INVALID,
+            Self::RecordAxisMisplaced => codes::RECORD_AXIS_MISPLACED,
+            Self::RecordAxisTimeInvariantSource => codes::RECORD_AXIS_TIME_INVARIANT_SOURCE,
             Self::UndefinedSystem => codes::UNDEFINED_SYSTEM,
             Self::OperatorVariableMissing => codes::OPERATOR_VARIABLE_MISSING,
             Self::CircularDependency => codes::CIRCULAR_DEPENDENCY,
@@ -483,8 +495,10 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
     // source is not a component, so an `update.source` is the only place a
     // source name can appear — and the only place it can be wrong.
     crate::structural::validate_data_source_references(esm_file, &mut structural_errors);
-    // `from.records_per_sample` (esm-spec §8.5.1, `records_per_sample_invalid`).
-    crate::structural::validate_records_per_sample(esm_file, &mut structural_errors);
+    // Record axes and the deprecated `records_per_sample` (esm-spec §8.5.1:
+    // `record_axis_invalid`, `record_axis_misplaced`,
+    // `record_axis_time_invariant_source`, `records_per_sample_invalid`).
+    crate::structural::validate_record_axes(esm_file, &mut structural_errors);
 
     // Validate coupling
     if let Some(ref coupling) = esm_file.coupling {

@@ -285,11 +285,23 @@ export const ERROR_CODES = {
   //   error. Replaces `undefined_data_loader_variable`, whose coupling-to-a-
   //   loader-variable shape no longer exists.
   DATA_SOURCE_UNDEFINED: 'data_source_undefined',
-  // `records_per_sample_invalid` — `from.records_per_sample` on a rule that is
-  //   not `data`, or an effective 2 on a source with no `temporal` block or on
-  //   a parameter whose record shape's first dimension is not an index set of
-  //   exactly two members (esm-spec §8.5.1).
+  // `records_per_sample_invalid` — the deprecated `from.records_per_sample` on
+  //   a rule that is not `data`, or a written `records_per_sample` (the rule's
+  //   own, else its source's `temporal.records_per_sample`) that disagrees
+  //   with the number of records the parameter's record shape gives it
+  //   (esm-spec §8.5.1).
   RECORDS_PER_SAMPLE_INVALID: 'records_per_sample_invalid',
+  // `record_axis_invalid` — an index set carrying `"records": true` whose
+  //   `size` (after metaparameter folding) is not 2 (esm-spec §8.5.1).
+  RECORD_AXIS_INVALID: 'record_axis_invalid',
+  // `record_axis_misplaced` — a data-fed parameter's record shape names a
+  //   record axis anywhere but first, or its several record shapes disagree
+  //   about beginning with one (esm-spec §8.5.1).
+  RECORD_AXIS_MISPLACED: 'record_axis_misplaced',
+  // `record_axis_time_invariant_source` — a data-fed parameter's record shape
+  //   begins with a record axis and its source declares no `temporal.start`,
+  //   so there is no successor record to pair (esm-spec §8.5.1).
+  RECORD_AXIS_TIME_INVARIANT_SOURCE: 'record_axis_time_invariant_source',
   // `data_source_url_unresolved` — a `data_sources[*].source.url_template` (or
   //   a `mirrors` entry) cannot be resolved to a URL at load time (esm-spec
   //   §8.2.1). Raised for an unexpanded `${VAR}` — §8.2 does not expand

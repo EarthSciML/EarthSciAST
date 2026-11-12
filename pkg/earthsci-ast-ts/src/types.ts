@@ -56,6 +56,7 @@ export * from './generated.js'
  */
 import type { Expression as GeneratedExpression } from './generated.js'
 import type { NumericLiteral } from './numeric-literal.js'
+import { parameterRecordCount } from './records-per-sample.js'
 
 /**
  * An expression node whose OPERANDS are in-memory {@link Expr} values.
@@ -317,8 +318,11 @@ export interface DataSourceBinding {
   codes?: DataSourceCodes
   select?: DataSourceSelect
   /**
-   * How many records the parameter receives per query time (esm-spec §8.5.1):
-   * 1 or 2, overriding the source's `temporal.records_per_sample`.
+   * @deprecated Removed at esm 3.0.0 (esm-spec §8.3, §8.5.1). The number of
+   * records a parameter receives is said by its record shape: two when its
+   * first axis is a record axis (an `interval` index set with
+   * `"records": true`), else one. Until removal it loads with the
+   * `deprecated_records_per_sample` warning and must agree with the shape.
    */
   records_per_sample?: 1 | 2
   description?: string
@@ -326,14 +330,27 @@ export interface DataSourceBinding {
 }
 
 /**
- * The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
- * binding's `from.records_per_sample`, else the source's
- * `temporal.records_per_sample`, else 1.
+ * How many records a `data` rule's parameter receives per query time
+ * (esm-spec §8.5.1).
+ *
+ * @deprecated The count is said by the parameter's record shape, not by
+ * `records_per_sample`: read `recordsPerSample` off the parameter's
+ * `LoaderField` in `flatten(file).loaderFields`, or pass `context` (the
+ * document and the parameter's scoped name), with which this judges the record
+ * shape against the document's inline `coupling`. Without it, it can only read the deprecated written value (the binding's, else the
+ * source's) and falls back to 1 when none is written; validation guarantees a
+ * written value agrees with the record shape, but an unwritten one says
+ * nothing, so a parameter shaped over a record axis would read as 1.
  */
 export function effectiveRecordsPerSample(
   binding: { records_per_sample?: number } | undefined,
   source: { temporal?: { records_per_sample?: number } } | undefined,
+  context?: { esmFile: EsmFile; parameter: string },
 ): 1 | 2 {
+  if (context !== undefined) {
+    const count = parameterRecordCount(context.esmFile, context.parameter)
+    if (count !== undefined) return count
+  }
   const value = binding?.records_per_sample ?? source?.temporal?.records_per_sample ?? 1
   return value === 2 ? 2 : 1
 }

@@ -40,8 +40,9 @@ using EarthSciAST: load_path, serialize_esm_file
 using EarthSciAST: time_origin
 import EarthSciAST
 import Dates
-# The §8.5.1 effective-value rule, shared with flatten and validation.
-using EarthSciAST: _effective_records_per_sample
+# The §8.5.1 record-shape rule and the deprecated written value, shared with
+# flatten and validation.
+using EarthSciAST: _record_shapes, _record_axis_verdict, _written_records_per_sample
 
 # Explicit imports so we can add the extension methods to these generics.
 import EarthSciAST: provider_refresh_times, provider_sample, provider_supports_selection
@@ -592,7 +593,7 @@ struct DeclaredProvider
     table::Union{Nothing, RecordTable}
     column::String
     # The EFFECTIVE axes of the delivered array: the declared select, with a
-    # leading "all" for the record axis when `records_per_sample = 2`.
+    # leading "all" for the record axis when the parameter receives two records.
     select::Union{Nothing, Vector{Any}}
     push_to_reader::Bool                          # where `select` is honoured
     extent_mp::Union{Nothing, String}
@@ -604,7 +605,7 @@ struct DeclaredProvider
     # the two bracketing records along a leading record axis (§8.5.1).
     time_varying::Bool
     time_dim::String                              # `temporal.time_variable`
-    records::Int                                  # effective records_per_sample
+    records::Int                                  # records per sample (§8.5.1 record shape)
 end
 
 # A constant source's provider: no time dim, one record per sample.
@@ -867,6 +868,79 @@ function _has_temporal_start(ld)
     return st !== nothing && st != ""
 end
 
+# The declared `shape` of the variable a scoped name `Model[.Sub…].var` (or the
+# reaction-system parameter `System[.Sub…].param`) names in the raw document
+# (`[]` when it declares none), or `nothing` when it cannot be reached (not
+# found, or behind a `ref` not yet mounted).
+function _raw_declared_shape(raw, scoped::AbstractString)
+    parts = split(scoped, '.')
+    length(parts) < 2 && return nothing
+    models = get(raw, "models", nothing)
+    in_models = models isa AbstractDict && haskey(models, String(parts[1]))
+    section = in_models ? models : get(raw, "reaction_systems", nothing)
+    section isa AbstractDict || return nothing
+    node = get(section, String(parts[1]), nothing)
+    for seg in parts[2:(end - 1)]
+        node isa AbstractDict || return nothing
+        subs = get(node, "subsystems", nothing)
+        subs isa AbstractDict || return nothing
+        node = get(subs, String(seg), nothing)
+    end
+    node isa AbstractDict || return nothing
+    vars = get(node, in_models ? "variables" : "parameters", nothing)
+    vars isa AbstractDict || return nothing
+    vd = get(vars, String(parts[end]), nothing)
+    vd isa AbstractDict || return nothing
+    shape = get(vd, "shape", nothing)
+    return shape isa AbstractVector ? String[String(x) for x in shape] : String[]
+end
+
+# How many records the consuming parameter `key` (declaration `decl`) receives,
+# from its record shape on the raw document (esm-spec §8.5.1): its own `shape`,
+# else the declared shapes of its `param_to_var` targets in the raw `coupling`,
+# each first entry looked up in the raw `index_sets` for `"records": true`.
+# `nothing` when the raw document cannot show the record shape: every target is
+# unreachable, or the parameter is shapeless, mapped by no inline entry, and a
+# `coupling_import` (which only `flatten` expands) could still bring one. A
+# misplaced record axis is refused (`record_axis_misplaced`).
+function _raw_records_received(raw, key::AbstractString, decl)
+    isets = get(raw, "index_sets", nothing)
+    function is_record_axis(n)
+        isets isa AbstractDict || return false
+        d = get(isets, n, nothing)
+        return d isa AbstractDict && get(d, "kind", nothing) == "interval" &&
+            get(d, "records", false) === true
+    end
+    coupling = get(raw, "coupling", nothing)
+    coupling isa AbstractVector || (coupling = Any[])
+    targets = (
+        String(e["to"]) for e in coupling
+            if e isa AbstractDict && get(e, "type", nothing) == "variable_map" &&
+            get(e, "from", nothing) == key && get(e, "transform", nothing) == "param_to_var" &&
+            get(e, "to", nothing) isa AbstractString
+    )
+    own = decl isa AbstractDict ? get(decl, "shape", nothing) : nothing
+    shapes, mapped = _record_shapes(
+        own isa AbstractVector ? own : nothing, targets, t -> _raw_declared_shape(raw, t)
+    )
+    if !mapped
+        any(e -> e isa AbstractDict && get(e, "type", nothing) == "coupling_import", coupling) &&
+            return nothing
+        shapes = Vector{String}[String[]]
+    end
+    isempty(shapes) && return nothing
+    misplaced, records = _record_axis_verdict(shapes, is_record_axis)
+    misplaced && throw(
+        RefreshError(
+            "parameter '$key': record_axis_misplaced: a record axis may only be the " *
+                "first entry of a data-fed parameter's record shape, and every record " *
+                "shape must agree on whether it begins with one; its record shapes " *
+                "are $(shapes) (esm-spec §8.5.1)"
+        )
+    )
+    return records
+end
+
 function providers_from_document(
         doc;
         cache_root::AbstractString,
@@ -899,7 +973,7 @@ function providers_from_document(
             from isa AbstractDict || return
             push!(
                 get!(() -> NamedTuple[], consumers, String(sname)),
-                (key = key, local_name = local_name, from = from)
+                (key = key, local_name = local_name, from = from, decl = vd)
             )
         end
     )
@@ -1011,12 +1085,39 @@ function providers_from_document(
                         "two-record bracket of them is not defined"
                 )
             )
-            # The parameter's effective value from the document (§8.5.1).
-            rps = _effective_records_per_sample(b.from, ld) do v, origin
+            # The number of records the parameter receives, from its record
+            # shape (§8.5.1). The deprecated written value is read strictly and
+            # must agree. Where the document as given cannot show the record
+            # shape (a target behind a coupling_import, which only `flatten`
+            # expands, or behind an unmounted ref), a written value stands in,
+            # since `flatten` checks it against the shape; with none written
+            # the count is unknown and the parameter is refused rather than
+            # guessed.
+            written = _written_records_per_sample(b.from, ld) do v, origin
                 _strict_records_per_sample(
                     key, origin === :from ? "update.from" : "data_sources.$lname.temporal", v
                 )
             end
+            shaped = _raw_records_received(raw, key, b.decl)
+            shaped === nothing && written === nothing && throw(
+                RefreshError(
+                    "parameter '$key': its record shape (esm-spec §8.5.1) comes from a " *
+                        "param_to_var target this document does not show yet (it arrives " *
+                        "through a coupling_import, or sits in a model behind an unmounted " *
+                        "ref), so providers_from_document cannot tell whether it receives " *
+                        "one record or two. Pass a document whose coupling_import entries " *
+                        "are expanded and refs mounted, or declare the parameter's shape."
+                )
+            )
+            rps = shaped === nothing ? written : shaped
+            written === nothing || written == rps || throw(
+                RefreshError(
+                    "parameter '$key': records_per_sample_invalid: records_per_sample " *
+                        "$written is written for it, but its record shape gives it " *
+                        "$rps (two only when the first axis is an interval index set " *
+                        "with \"records\": true, esm-spec §8.5.1)"
+                )
+            )
             # A run-time entry may only restate it: any other value changes the
             # rank of the delivered array away from the shape validation approved.
             if haskey(records_per_sample, key)
@@ -1027,8 +1128,10 @@ function providers_from_document(
                 asked == rps || throw(
                     RefreshError(
                         "parameter '$key': the run-time records_per_sample option asks for " *
-                            "$asked but the document gives $rps; set " *
-                            "update.from.records_per_sample in the document instead"
+                            "$asked but the document gives $rps; the parameter's record " *
+                            "shape says how many records it receives (two when its first " *
+                            "axis is an interval index set with \"records\": true, " *
+                            "esm-spec §8.5.1), so change the shape in the document instead"
                     )
                 )
             end

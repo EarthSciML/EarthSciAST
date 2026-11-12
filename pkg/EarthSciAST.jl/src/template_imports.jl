@@ -1335,6 +1335,19 @@ _TemplateScope() = _TemplateScope(
     OrderedDict{String, Any}()
 )
 
+# An index-set declaration with `"records": false` dropped (JSON3 or Dict
+# carrier), so it compares equal to the same declaration without `records`.
+function _drop_false_records(d)
+    d isa AbstractDict || return d
+    any(((k, v),) -> String(k) == "records" && v === false, pairs(d)) || return d
+    return Dict{String, Any}(String(k) => v for (k, v) in pairs(d) if String(k) != "records")
+end
+
+# Raw index-set declarations equal as the §4.7 / §9.7.5 merges judge them:
+# deep-equal, with `"records": false` read as an absent `records`.
+_index_set_raw_equal(a, b) =
+    a == b || _json_equal(_drop_false_records(a), _drop_false_records(b))
+
 function _merge_named!(
         dst::OrderedDict{String, Any}, name::String, decl,
         code::String, what::String, origin::String
@@ -1344,6 +1357,9 @@ function _merge_named!(
         # occurrence; a non-equal collision is a conflict (esm-spec §9.7.4/§9.7.5).
         # `_json_equal` is carrier-agnostic, so no pre-normalization is needed.
         _json_equal(dst[name], decl) && return
+        # `"records": false` and an absent `records` are one index-set
+        # declaration (esm-spec §8.5.1).
+        what == "index set" && _index_set_raw_equal(dst[name], decl) && return
         throw(
             ExpressionTemplateError(
                 code,
@@ -3055,7 +3071,7 @@ function apply_mount_index_set_rename(
             # rename — one a mount nested inside the referenced document
             # contributed. Deep equality is idempotent; a disagreement is the
             # §4.7 merge rule's own `subsystem_index_set_conflict`.
-            if haskey(renamed, final) && renamed[final] != decl
+            if haskey(renamed, final) && !_index_set_raw_equal(renamed[final], decl)
                 throw(
                     ExpressionTemplateError(
                         ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,

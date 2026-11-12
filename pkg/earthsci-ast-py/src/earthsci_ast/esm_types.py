@@ -341,9 +341,10 @@ class DataSourceBinding:
     unit_conversion: Expr | None = None
     codes: dict[str, Any] | None = None
     select: dict[str, Any] | None = None
-    # How many records the parameter receives per query time (esm-spec §8.5.1):
-    # 1 or 2, overriding the source's ``temporal.records_per_sample``. None when
-    # the document does not set it on this binding.
+    # DEPRECATED (esm-spec §8.3, §8.5.1; removed at esm 3.0.0): 1 or 2, kept
+    # and emitted as written. The record shape says how many records the
+    # parameter receives; a written value may only restate it. None when the
+    # document does not set it on this binding.
     records_per_sample: int | None = None
     description: str | None = None
     reference: Reference | None = None
@@ -922,8 +923,8 @@ class DataSourceTemporal:
     frequency: str | None = None
     records_per_file: int | str | None = None
     time_variable: str | None = None
-    # Source-wide default of each consuming parameter's
-    # ``from.records_per_sample`` (esm-spec §8.3, §8.5.1).
+    # DEPRECATED source-wide default of each consuming parameter's
+    # ``from.records_per_sample`` (esm-spec §8.3, §8.5.1; removed at esm 3.0.0).
     records_per_sample: int | None = None
 
 
@@ -956,29 +957,6 @@ class DataSource:
     select: dict[str, Any] | None = None
     record_filter: dict[str, Any] | None = None
     extent: dict[str, Any] | None = None
-
-
-def effective_records_per_sample(binding: Any, source: Any) -> int:
-    """The EFFECTIVE ``records_per_sample`` of a data rule (esm-spec §8.5.1):
-    the rule's ``from.records_per_sample``, else the source's
-    ``temporal.records_per_sample``, else 1.
-
-    ``binding`` and ``source`` are either raw JSON dicts or the typed
-    :class:`DataSourceBinding` / :class:`DataSource`; ``source`` may be None.
-    """
-
-    def get(obj: Any, key: str) -> Any:
-        if obj is None:
-            return None
-        if isinstance(obj, dict):
-            return obj.get(key)
-        return getattr(obj, key, None)
-
-    own = get(binding, "records_per_sample")
-    if own is not None:
-        return int(own)
-    inherited = get(get(source, "temporal"), "records_per_sample")
-    return int(inherited) if inherited is not None else 1
 
 
 @dataclass

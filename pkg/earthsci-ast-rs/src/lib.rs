@@ -289,6 +289,10 @@ pub use relational::{
     serialize_keys, serialize_pairs,
 };
 pub use serialize::{to_json, to_json_compact, write_path};
+// Where a loaded document writes the deprecated `records_per_sample`
+// (esm-spec §8.5.1), the sites the `deprecated_records_per_sample` load
+// warning names.
+pub use structural::deprecated_records_per_sample_sites;
 pub use substitute::{
     ScopedContext, substitute, substitute_in_model, substitute_in_model_with_context,
     substitute_in_reaction_system, substitute_in_reaction_system_with_context,
