@@ -1488,6 +1488,23 @@ Carrying it under `esm` below 1.3.0 is rejected with
 loaders already use, so a timestamp in `time_span` and a loader's data agree on
 what `t = 0` is. `emit` writes the bounds you authored, never the seconds.
 
+## esm 2.1.0: variable bounds `lb` / `ub`
+
+| Kind | What |
+|---|---|
+| `format` | **New optional `lb` and `ub` on a model variable** (esm-spec §6.3.2): each a number in the variable's `units`, or a reference to another variable of the model, written as a variable reference in an expression is. With them the format version moves to **`esm: 2.1.0`**. |
+| `new` | The codes `variable_bounds_version_too_old`, `variable_bound_shape_mismatch`, `variable_bound_circular` and `variable_bounds_inverted`; an unresolved bound reference is `undefined_variable`. A flattened variable carries its bounds, with a reference renamed as the equations are. |
+
+**Nothing to migrate.** The fields are optional: a 2.0.0 document is a valid
+2.1.0 document and flattens and runs exactly as before. Carrying `lb` or `ub`
+under a declared `esm` below 2.1.0 is rejected with
+`variable_bounds_version_too_old`.
+
+**A bound is a physical fact, not a solver setting.** `lb ≤ x ≤ ub` says where
+the value lies. No binding's `solve()` or runner reads it, and the format does
+not say what a consumer should do with it. A per-element bound on an arrayed
+variable is a reference to a shaped parameter of the same shape.
+
 ---
 
 # Part V — What did NOT change
