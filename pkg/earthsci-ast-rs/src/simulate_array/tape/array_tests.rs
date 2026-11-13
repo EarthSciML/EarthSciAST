@@ -95,15 +95,29 @@ pub(super) fn ab(compiled: &ArrayCompiled, param_maps: &[HashMap<String, f64>]) 
 /// oracle and the overlay at one state, time and parameter map: `dy` bit for
 /// bit and the latched fault.
 fn compare_at(compiled: &ArrayCompiled, params: &HashMap<String, f64>, state: &[f64], t: f64) {
+    compare_tape_at(compiled, params, state, t, true);
+}
+
+/// [`compare_at`], checking the overlay against the oracle only when
+/// `overlay` is set: the tapes are always compared against the oracle.
+pub(super) fn compare_tape_at(
+    compiled: &ArrayCompiled,
+    params: &HashMap<String, f64>,
+    state: &[f64],
+    t: f64,
+    overlay: bool,
+) {
     let n = state.len();
     let pv = compiled.debug_resolve_params(params);
     take_const_array_oob();
     let (dy_oracle, _) = compiled.debug_eval_rhs(state, t, params, true);
     let f_oracle = take_const_array_oob();
-    let (dy_overlay, _) = compiled.debug_eval_rhs(state, t, params, false);
-    let f_overlay = take_const_array_oob();
-    assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
-    assert_eq!(f_overlay, f_oracle, "overlay fault");
+    if overlay {
+        let (dy_overlay, _) = compiled.debug_eval_rhs(state, t, params, false);
+        let f_overlay = take_const_array_oob();
+        assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
+        assert_eq!(f_overlay, f_oracle, "overlay fault");
+    }
     for fused in [true, false] {
         let label = if fused { "fused" } else { "unfused" };
         let p = taped(compiled.build_tape_opts(&HashSet::new(), fused.then(cfg))).0;

@@ -339,8 +339,9 @@ fn native_runs_per_variable_element_types_bit_for_bit() {
 /// does not reach: more than four contracted indices, a periodic wrap that is
 /// not a full roll, a derivative left-hand side that is not a constant shift,
 /// the calendar templates for Float32 variables, an array observed whose
-/// ranges start past 1, and the interpolation templates on an array-valued
-/// query (#660). Each builds under
+/// ranges start past 1, the interpolation templates on an array-valued
+/// query (#660), and a per-cell makearray read inside an faq over more
+/// indices than it has (#709). Each builds under
 /// `native` with every rule on the tape, with the routing decided
 /// (`Rhs::Auto`) and forced, and lands where the interpreter does.
 #[test]
@@ -352,6 +353,7 @@ fn native_runs_the_lowering_limit_probes_bit_for_bit() {
         "datetime_float32.esm",
         "offset_origin_observed.esm",
         "interp_array_query.esm",
+        "makearray_in_multi_index_faq.esm",
     ] {
         let rel = format!("tests/fixtures/native_probes/{f}");
         for rhs in [Rhs::Auto, Rhs::Always] {
