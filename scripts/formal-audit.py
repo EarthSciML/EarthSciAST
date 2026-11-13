@@ -423,9 +423,7 @@ def strip_comments_and_strings(text):
                     j += 1
             blank(text[i:j])
             i = j
-        elif (m := _RAW_STRING_OPEN.match(text, i)) and not (
-            i and _IDENT_CHAR.match(text[i - 1])
-        ):
+        elif (m := _RAW_STRING_OPEN.match(text, i)) and not (i and _IDENT_CHAR.match(text[i - 1])):
             # A raw string `r"…"` / `r#"…"#` has no escapes; it ends at the first
             # `"` followed by as many `#` as opened it.
             close = '"' + m.group(1)
@@ -484,7 +482,7 @@ def spec_core_ops(report):
     Functions list. The Removed-ops table is headed `Removed`, so it is skipped."""
     lines = (ROOT / "esm-spec.md").read_text(encoding="utf-8").split("\n")
     try:
-        start = next(i for i, l in enumerate(lines) if l.startswith("### 4.2 "))
+        start = next(i for i, line in enumerate(lines) if line.startswith("### 4.2 "))
     except StopIteration:
         report.error("esm-spec.md: no `### 4.2 ` heading")
         return set()
@@ -522,7 +520,9 @@ def check_notation(args):
     lean = set(re.findall(r'"([^"]*)"', m.group(1)))
     spec = spec_core_ops(report) | NOTATION_EXTRA_OPS
     for op in sorted(spec - lean):
-        report.error(f"spec §4.2 operator `{op}` is missing from coreOpNames (and needs a notation row)")
+        report.error(
+            f"spec §4.2 operator `{op}` is missing from coreOpNames (and needs a notation row)"
+        )
     for op in sorted(lean - spec):
         report.error(f"coreOpNames has `{op}`, which no spec §4.2 operator table lists")
     return report.done("notation")
