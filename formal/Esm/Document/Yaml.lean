@@ -23,7 +23,9 @@ and strings ALWAYS double-quoted with JSON-style escapes (`\uXXXX` for the chara
 of `Strings.needsHex`), which avoids YAML's implicit typing. A key is bare when it
 matches `[A-Za-z_][A-Za-z0-9_]*` and is not, in any letter case, one of YAML's
 special plain scalars (`true false null yes no on off y n`); otherwise it is quoted
-like a string.
+like a string. A key whose spelling is longer than 1024 characters (YAML's limit on
+an implicit key) is written in the explicit form instead: `? "key"` on its own line,
+then `:` and the value on the next line at the same indentation.
 
 Every line ends with a newline. The reader only accepts this layout (it is the
 canonical form; other YAML is out of scope). `decode_encode` is the round trip.
@@ -45,6 +47,15 @@ def bareKey (k : String) : Bool :=
 
 def printKey (k : String) : List Char := if bareKey k then k.toList else quote false k
 
+/-- A key whose spelling is longer than YAML's 1024-character limit on implicit keys. -/
+def longKey (k : String) : Bool := 1024 < (printKey k).length
+
+/-- The key of an entry at indentation `m`, up to its `:`. A long key uses the explicit
+form: `? "key"` on its own line, then the `:` on the next line at the same
+indentation. -/
+def keyPart (m : Nat) (k : String) : List Char :=
+  if longKey k then '?' :: ' ' :: quote false k ++ '\n' :: spaces m else printKey k
+
 /-- The one-line spelling of a scalar or an empty container. (A non-empty container
 is never printed inline; it gets `[]`/`{}` here only to keep the function total.) -/
 def inline : Json → List Char
@@ -65,7 +76,7 @@ def encItems (m : Nat) : List Json → List Char
 /-- What follows the `-` of an array element at indentation `m`. -/
 def itemBody (m : Nat) : Json → List Char
   | .arr (v :: vs) => '\n' :: encItems (m + 2) (v :: vs)
-  | .obj ((k, v) :: es) => ' ' :: printKey k ++ ':' :: valBody (m + 2) v ++ encEntries (m + 2) es
+  | .obj ((k, v) :: es) => ' ' :: keyPart (m + 2) k ++ ':' :: valBody (m + 2) v ++ encEntries (m + 2) es
   | .null => ' ' :: inline .null ++ ['\n']
   | .bool b => ' ' :: inline (.bool b) ++ ['\n']
   | .num n => ' ' :: inline (.num n) ++ ['\n']
@@ -76,7 +87,7 @@ def itemBody (m : Nat) : Json → List Char
 /-- The lines of a non-empty object at indentation `m`. -/
 def encEntries (m : Nat) : List (String × Json) → List Char
   | [] => []
-  | (k, v) :: es => spaces m ++ printKey k ++ ':' :: valBody m v ++ encEntries m es
+  | (k, v) :: es => spaces m ++ keyPart m k ++ ':' :: valBody m v ++ encEntries m es
 
 /-- What follows the `:` of an entry whose key is at indentation `m`. -/
 def valBody (m : Nat) : Json → List Char
@@ -113,6 +124,20 @@ def parseKey : List Char → Option (String × List Char)
       let p := readIdent (c :: r)
       some (String.ofList p.1, p.2)
     else none
+
+/-- The key of an entry at indentation `m`: an explicit `? "key"` line followed by
+the indentation of the `:` line, or a plain key. -/
+def parseKeyAt (m : Nat) : List Char → Option (String × List Char)
+  | [] => none
+  | c :: r =>
+    if c = '?' then
+      match r with
+      | ' ' :: r' =>
+        match parseQuoted false r' with
+        | some (k, '\n' :: r'') => (dropSp m r'').map fun r3 => (k, r3)
+        | _ => none
+      | _ => none
+    else parseKey (c :: r)
 
 /-- A scalar or an empty container. -/
 def pInline : List Char → Option (Json × List Char)
@@ -156,7 +181,7 @@ def isItemLine (m : Nat) (input : List Char) : Bool :=
 /-- A line at indentation `m` that starts an object entry. -/
 def isEntryLine (m : Nat) (input : List Char) : Bool :=
   match dropSp m input with
-  | some (c :: _) => c == '"' || isIdentStart c
+  | some (c :: _) => c == '"' || c == '?' || isIdentStart c
   | _ => false
 
 mutual
@@ -196,7 +221,7 @@ def pEntries : Nat → Nat → List Char → Option (List (String × Json) × Li
 def pEntry : Nat → Nat → List Char → Option ((String × Json) × List Char)
   | 0, _, _ => none
   | f + 1, m, input =>
-    match parseKey input with
+    match parseKeyAt m input with
     | some (k, ':' :: r) => (pValBody f m r).map fun p => ((k, p.1), p.2)
     | _ => none
 
@@ -233,11 +258,18 @@ def decode (s : List Char) : Option Json :=
 
 /-! ### Characters -/
 
+theorem dropSp_spaces (m : Nat) (r : List Char) : dropSp m (spaces m ++ r) = some r := by
+  induction m with
+  | zero => rfl
+  | succ m ih => simpa [spaces, List.replicate_succ, dropSp] using ih
+
+
 /-- What a number never starts with. -/
 theorem numHead_facts {c : Char} (h : Number.NumHead c) :
-    c ≠ 'n' ∧ c ≠ 't' ∧ c ≠ 'f' ∧ c ≠ '[' ∧ c ≠ '{' ∧ c ≠ '"' ∧ isIdentStart c = false :=
+    c ≠ 'n' ∧ c ≠ 't' ∧ c ≠ 'f' ∧ c ≠ '[' ∧ c ≠ '{' ∧ c ≠ '"' ∧ isIdentStart c = false ∧
+      c ≠ '?' :=
   Number.NumHead.of_fin (P := fun c => c ≠ 'n' ∧ c ≠ 't' ∧ c ≠ 'f' ∧ c ≠ '[' ∧ c ≠ '{' ∧
-    c ≠ '"' ∧ isIdentStart c = false) (by decide) (by decide) h
+    c ≠ '"' ∧ isIdentStart c = false ∧ c ≠ '?') (by decide) (by decide) h
 
 theorem printKey_head (k : String) :
     ∃ c t, printKey k = c :: t ∧ (c = '"' ∨ isIdentStart c = true) := by
@@ -254,10 +286,19 @@ theorem printKey_head (k : String) :
       exact ⟨c, t, rfl, Or.inr this.1⟩
   · exact ⟨_, _, rfl, Or.inl rfl⟩
 
+theorem keyPart_head (m : Nat) (k : String) :
+    ∃ c t, keyPart m k = c :: t ∧ (c = '"' ∨ c = '?' ∨ isIdentStart c = true) := by
+  unfold keyPart
+  split
+  · exact ⟨_, _, rfl, Or.inr (Or.inl rfl)⟩
+  · obtain ⟨c, t, h, hc⟩ := printKey_head k
+    exact ⟨c, t, h, hc.elim Or.inl (fun h => Or.inr (Or.inr h))⟩
+
 /-- A key never starts with a space or `-`. -/
-theorem keyHead_facts {c : Char} (h : c = '"' ∨ isIdentStart c = true) :
-    c ≠ ' ' ∧ c ≠ '-' ∧ (c == '"' || isIdentStart c) = true := by
-  rcases h with rfl | h
+theorem keyHead_facts {c : Char} (h : c = '"' ∨ c = '?' ∨ isIdentStart c = true) :
+    c ≠ ' ' ∧ c ≠ '-' ∧ (c == '"' || c == '?' || isIdentStart c) = true := by
+  rcases h with rfl | rfl | h
+  · decide
   · decide
   · refine ⟨?_, ?_, by simp [h]⟩
     · intro e; rw [e] at h; exact absurd h (by decide)
@@ -296,12 +337,34 @@ theorem parseKey_printKey (k : String) (rest : List Char)
         String.ofList_toList]
   · exact parseKey_quote k rest
 
-/-! ### Indentation -/
+theorem parseKeyAt_ne (m : Nat) {c : Char} (r : List Char) (h : c ≠ '?') :
+    parseKeyAt m (c :: r) = parseKey (c :: r) := by
+  simp [parseKeyAt, h]
 
-theorem dropSp_spaces (m : Nat) (r : List Char) : dropSp m (spaces m ++ r) = some r := by
-  induction m with
-  | zero => rfl
-  | succ m ih => simpa [spaces, List.replicate_succ, dropSp] using ih
+theorem printKey_ne (k : String) : ∃ c t, printKey k = c :: t ∧ c ≠ '?' := by
+  obtain ⟨c, t, h, hc⟩ := printKey_head k
+  refine ⟨c, t, h, ?_⟩
+  rcases hc with rfl | hc
+  · decide
+  · intro e; rw [e] at hc; exact absurd hc (by decide)
+
+/-- A printed key, plain or explicit, reads back, when what follows is not an
+identifier character. -/
+theorem parseKeyAt_keyPart (m : Nat) (k : String) (rest : List Char)
+    (hr : ∀ c ∈ rest.head?, isIdentChar c = false) :
+    parseKeyAt m (keyPart m k ++ rest) = some (k, rest) := by
+  unfold keyPart
+  split
+  · have h : quote false k ++ '\n' :: spaces m ++ rest = quote false k ++ ('\n' :: (spaces m ++ rest)) := by
+      simp
+    simp only [List.cons_append, h, parseKeyAt, ite_true, parseQuoted_quote, dropSp_spaces,
+      Option.map_some]
+  · obtain ⟨c, t, h, hc⟩ := printKey_ne k
+    have := parseKey_printKey k rest hr
+    rw [h, List.cons_append] at this ⊢
+    rw [parseKeyAt_ne m _ hc, this]
+
+/-! ### Indentation -/
 
 theorem drop_spaces (m : Nat) (r : List Char) : (spaces m ++ r).drop m = r := by
   simp [spaces]
@@ -350,14 +413,14 @@ theorem isItemLine_dash (m : Nat) (t : List Char) : isItemLine m (spaces m ++ '-
   simp [isItemLine, dropSp_spaces]
 
 theorem isItemLine_key (m : Nat) (k : String) (t : List Char) :
-    isItemLine m (spaces m ++ printKey k ++ t) = false := by
-  obtain ⟨c, u, h, hc⟩ := printKey_head k
+    isItemLine m (spaces m ++ keyPart m k ++ t) = false := by
+  obtain ⟨c, u, h, hc⟩ := keyPart_head m k
   have := (keyHead_facts hc).2.1
   simp [isItemLine, h, List.append_assoc, dropSp_spaces, this]
 
 theorem isEntryLine_key (m : Nat) (k : String) (t : List Char) :
-    isEntryLine m (spaces m ++ printKey k ++ t) = true := by
-  obtain ⟨c, u, h, hc⟩ := printKey_head k
+    isEntryLine m (spaces m ++ keyPart m k ++ t) = true := by
+  obtain ⟨c, u, h, hc⟩ := keyPart_head m k
   have := (keyHead_facts hc).2.2
   simp only [isEntryLine, h, List.append_assoc, List.cons_append, dropSp_spaces]
   exact this
@@ -406,14 +469,19 @@ theorem pEntry_inline (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WF) (
   | succ f =>
     match v with
     | .null | .bool true | .bool false | .arr [] | .obj [] =>
-      simp (config := { decide := true }) [pEntry, inline, parseKey, readIdent]
+      simp (config := { decide := true }) [pEntry, inline, parseKeyAt, parseKey, readIdent]
     | .str s =>
-      simp only [pEntry, inline, parseKey_quote]
+      have h : inline (.str s) ++ '\n' :: rest = '"' :: (escape false s.toList ++ ['"'] ++
+          '\n' :: rest) := by simp [inline, quote]
+      simp only [pEntry]
+      rw [h, parseKeyAt_ne m _ (by decide), ← h]
+      simp only [inline, parseKey_quote]
       rfl
     | .num n =>
       obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
       have f := numHead_facts hc
-      simp [pEntry, inline, h, parseKey, f.2.2.2.2.2.1, f.2.2.2.2.2.2]
+      simp [pEntry, inline, h, parseKeyAt, parseKey, f.2.2.2.2.2.1, f.2.2.2.2.2.2.1,
+        f.2.2.2.2.2.2.2]
 
 /-! ### Line structure -/
 
@@ -449,7 +517,7 @@ theorem entries_ends (m : Nat) (es : List (String × Json)) (rest : List Char) (
   | nil => simpa [encEntries] using h.mono
   | cons e es =>
     obtain ⟨k, w⟩ := e
-    obtain ⟨c, t, hct, hc⟩ := printKey_head k
+    obtain ⟨c, t, hct, hc⟩ := keyPart_head m k
     have : encEntries m ((k, w) :: es) ++ rest =
         spaces m ++ c :: (t ++ ':' :: (valBody m w ++ encEntries m es ++ rest)) := by
       simp [encEntries, hct]
@@ -458,8 +526,8 @@ theorem entries_ends (m : Nat) (es : List (String × Json)) (rest : List Char) (
 /-- An entry reads back once its value does. -/
 theorem pEntry_enc (f m : Nat) (k : String) (v : Json) (rest : List Char)
     (h : pValBody f m (valBody m v ++ rest) = some (v, rest)) :
-    pEntry (f + 1) m (printKey k ++ ':' :: (valBody m v ++ rest)) = some ((k, v), rest) := by
-  rw [pEntry, parseKey_printKey k (':' :: (valBody m v ++ rest)) (fun c hc => by cases hc; decide)]
+    pEntry (f + 1) m (keyPart m k ++ ':' :: (valBody m v ++ rest)) = some ((k, v), rest) := by
+  rw [pEntry, parseKeyAt_keyPart m k (':' :: (valBody m v ++ rest)) (fun c hc => by cases hc; decide)]
   simp only [h, Option.map_some]
 
 theorem size_pos (v : Json) : 1 ≤ v.size := by
@@ -578,7 +646,7 @@ theorem pEntries_enc : ∀ (l : List (String × Json)) (f m : Nat) (rest : List 
     have hent := pEntry_enc g m k v _ hvb
     have hen := pEntries_enc es (g + 1) m rest hw'.2 hr (by omega)
     have h : encEntries m ((k, v) :: es) ++ rest =
-        spaces m ++ printKey k ++ ':' :: (valBody m v ++ (encEntries m es ++ rest)) := by
+        spaces m ++ keyPart m k ++ ':' :: (valBody m v ++ (encEntries m es ++ rest)) := by
       simp [encEntries]
     rw [h, pEntries, ite_eq_left (isEntryLine_key _ _ _), List.append_assoc, drop_spaces, hent]
     simp only [hen, Option.map_some]
@@ -717,7 +785,7 @@ theorem decode_encode (v : Json) (hv : v.WF) : decode (encode v) = some v := by
       simpa [Json.size, Json.sizeObj] using hf
     have hes := sizeObj_pos es
     have h : encode (.obj ((k, w) :: es)) =
-        spaces 0 ++ printKey k ++ ':' :: (valBody 0 w ++ (encEntries 0 es ++ [])) := by
+        spaces 0 ++ keyPart 0 k ++ ':' :: (valBody 0 w ++ (encEntries 0 es ++ [])) := by
       simp [encode, encEntries]
     have hno : topIsArray (encode (.obj ((k, w) :: es))) = false := by
       rw [h]; unfold topIsArray; rw [isItemLine_key]; rfl
@@ -727,7 +795,7 @@ theorem decode_encode (v : Json) (hv : v.WF) : decode (encode v) = some v := by
     have hent := pEntry_enc g 0 k w _ hvb
     have hen := pEntries_enc es (g + 1) 0 [] hw.2 (Ends.nil 0) (by omega)
     rw [pTop_eq, hno, ite_eq_right (by decide)]
-    rw [h, show spaces 0 ++ printKey k = printKey k from rfl, hent]
+    rw [h, show spaces 0 ++ keyPart 0 k = keyPart 0 k from rfl, hent]
     simp only [hen, Option.map_some]
 
 end Esm.Document.Yaml

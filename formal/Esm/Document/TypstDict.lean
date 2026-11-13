@@ -6,7 +6,9 @@ import Esm.Document.Strings
 
 A `Json` value prints as a Typst code-mode value:
 
-* `none`, `true`, `false`; numbers in the canonical spelling (`Number.print`);
+* `none`, `true`, `false`; numbers in the canonical spelling (`Number.print`), except
+  `-2^63`, printed `(-9223372036854775807 - 1)` because Typst reads the literal
+  `-9223372036854775808` as a float;
 * strings `"…"` with Typst escapes (`\\`, `\"`, `\n`, `\r`, `\t`, `\u{XXXX}`);
 * arrays `(a, b)`, `()` empty; dictionaries `(key: v, "quoted key": v)`, `(:)` empty.
   A key is bare when it matches `[A-Za-z_][A-Za-z0-9_]*` and is not a Typst keyword,
@@ -36,6 +38,20 @@ def bareKey (k : String) : Bool := isIdent k.toList && !(keywords.contains k)
 
 def printKey (k : String) : List Char := if bareKey k then k.toList else quote true k
 
+/-- The `Int64` minimum, `-2^63`. -/
+def int64Min : Int := -9223372036854775808
+
+/-- After `(`: the rest of `(-9223372036854775807 - 1)`. Typst reads the literal
+`9223372036854775808` as a float (it overflows `Int64` before the minus applies), so
+`-2^63` is printed as this integer expression instead. -/
+def minTail : List Char :=
+  ['-', '9', '2', '2', '3', '3', '7', '2', '0', '3', '6', '8', '5', '4', '7', '7', '5', '8',
+    '0', '7', ' ', '-', ' ', '1', ')']
+
+/-- A number: the canonical spelling, except `-2^63` (see `minTail`). -/
+def printNum (n : JNum) : List Char :=
+  if n = .int int64Min then '(' :: minTail else Number.print n
+
 mutual
 /-- The canonical print of a value whose first line is indented by `m` spaces (the
 indentation itself is not printed). -/
@@ -43,7 +59,7 @@ def enc (m : Nat) : Json → List Char
   | .null => ['n', 'o', 'n', 'e']
   | .bool true => ['t', 'r', 'u', 'e']
   | .bool false => ['f', 'a', 'l', 's', 'e']
-  | .num n => Number.print n
+  | .num n => printNum n
   | .str s => quote true s
   | .arr [] => ['(', ')']
   | .arr (v :: vs) => '(' :: '\n' :: encItems (m + 2) (v :: vs) ++ spaces m ++ [')']
@@ -105,7 +121,9 @@ def pVal : Nat → List Char → Option (Json × List Char)
   | 0, _ => none
   | _, [] => none
   | f + 1, c :: r =>
-    if c = '(' then pParen f (skipWs r)
+    if c = '(' then
+      if minTail.isPrefixOf r then some (.num (.int int64Min), r.drop minTail.length)
+      else pParen f (skipWs r)
     else if c = '"' then (parseQuoted true (c :: r)).map fun p => (.str p.1, p.2)
     else if c = 'n' then
       match r with
@@ -205,9 +223,12 @@ theorem enc_head (m : Nat) (v : Json) (hv : v.WF) :
   | .obj [] => exact ⟨_, _, rfl, by decide, by decide, by decide⟩
   | .obj (_ :: _) => exact ⟨_, _, rfl, by decide, by decide, by decide⟩
   | .num n =>
+    by_cases hm : n = .int int64Min
+    · exact ⟨'(', minTail, by simp [enc, printNum, hm], by decide, by decide, by decide⟩
     obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
     have := numHead_facts hc
-    exact ⟨c, t, by simp [enc, h], this.2.2.2.2.2.2.2.1, this.2.1, this.2.2.2.2.2.2.1⟩
+    exact ⟨c, t, by simp [enc, printNum, hm, h], this.2.2.2.2.2.2.2.1, this.2.1,
+      this.2.2.2.2.2.2.1⟩
 
 theorem skipWs_enc (m : Nat) (v : Json) (r : List Char) (hv : v.WF) :
     skipWs (enc m v ++ r) = enc m v ++ r := by
@@ -298,7 +319,18 @@ theorem pNext_last (k : Nat) (rest : List Char) :
     skipWs_nonWs _ (by decide : isWs ')' = false)]
   rfl
 
-theorem pVal_paren (f : Nat) (r : List Char) : pVal (f + 1) ('(' :: r) = pParen f (skipWs r) := by
+theorem pVal_paren (f : Nat) (r : List Char) (hr : ∀ c ∈ r.head?, c ≠ '-') :
+    pVal (f + 1) ('(' :: r) = pParen f (skipWs r) := by
+  have : minTail.isPrefixOf r = false := by
+    cases r with
+    | nil => rfl
+    | cons c t =>
+      have := hr c rfl
+      simp [minTail, List.isPrefixOf, Ne.symm this]
+  simp [pVal, this]
+
+theorem pVal_min (f : Nat) (rest : List Char) :
+    pVal (f + 1) ('(' :: (minTail ++ rest)) = some (.num (.int int64Min), rest) := by
   simp [pVal]
 
 theorem pVal_quote (f : Nat) (r : List Char) :
@@ -335,9 +367,11 @@ theorem isEntry_enc (m : Nat) (v : Json) (r : List Char) (hv : v.WF) :
     rw [skipWs_nonWs _ (by decide : isWs ',' = false)]
     rfl
   | .num n =>
+    by_cases hm : n = .int int64Min
+    · simp (config := { decide := true }) [isEntry, enc, printNum, hm, parseKey]
     obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
     have := numHead_facts hc
-    simp [isEntry, enc, h, parseKey, this.2.2.1, this.2.2.2.2.2.2.2.2]
+    simp [isEntry, enc, printNum, hm, h, parseKey, this.2.2.1, this.2.2.2.2.2.2.2.2]
 
 theorem isEntry_printKey (k : String) (r : List Char) :
     isEntry (printKey k ++ ':' :: r) = true := by
@@ -379,19 +413,25 @@ theorem pVal_enc (m : Nat) : ∀ (v : Json) (f : Nat) (rest : List Char), v.WF �
     rw [h, pVal_quote, ← h]
     simp only [enc, parseQuoted_quote, Option.map_some]
   | .num n, f + 1, rest, hv, hr, _ => by
+    by_cases hm : n = .int int64Min
+    · subst hm
+      simp only [enc, printNum, ite_true, List.cons_append]
+      exact pVal_min f rest
     obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
     have hp := Number.parse_print n rest hv hr
-    simp only [enc, h, List.cons_append] at hp ⊢
+    simp only [enc, printNum, hm, ite_false, h, List.cons_append] at hp ⊢
     rw [pVal_num _ _ _ hc, hp]
     rfl
   | .arr [], f + 1, rest, _, _, _ => by
-    simp only [enc, List.cons_append, List.nil_append, pVal_paren]
+    simp only [enc, List.cons_append, List.nil_append]
+    rw [pVal_paren _ _ (by intro c hc; simp at hc; subst hc; decide)]
     rw [skipWs_nonWs _ (by decide : isWs ')' = false)]
     cases f with
     | zero => simp [Json.size, Json.sizeList] at *
     | succ f => simp [pParen]
   | .obj [], f + 1, rest, _, _, hf => by
-    simp only [enc, List.cons_append, List.nil_append, pVal_paren]
+    simp only [enc, List.cons_append, List.nil_append]
+    rw [pVal_paren _ _ (by intro c hc; simp at hc; subst hc; decide)]
     rw [skipWs_nonWs _ (by decide : isWs ':' = false)]
     cases f with
     | zero => simp [Json.size, Json.sizeObj] at hf
@@ -405,7 +445,8 @@ theorem pVal_enc (m : Nat) : ∀ (v : Json) (f : Nat) (rest : List Char), v.WF �
     have h : enc m (.arr (v :: vs)) ++ rest =
         '(' :: '\n' :: (spaces (m + 2) ++ (itemsTail (m + 2) (v :: vs) ++ (spaces m ++ ')' :: rest))) := by
       simp [enc, encItems, itemsTail]
-    rw [h, pVal_paren, skipWs_ws _ (by decide : isWs '\n' = true), skipWs_spaces]
+    rw [h, pVal_paren _ _ (by intro c hc; simp at hc; subst hc; decide),
+      skipWs_ws _ (by decide : isWs '\n' = true), skipWs_spaces]
     obtain ⟨c, t, hct, hc1, hc2, hc3⟩ := enc_head (m + 2) v hvv
     have hs : 3 * (Json.sizeList (v :: vs) + 1) ≤ f + 1 := by simpa [Json.size] using hf
     have hl1 := sizeList_pos (v :: vs)
@@ -425,7 +466,8 @@ theorem pVal_enc (m : Nat) : ∀ (v : Json) (f : Nat) (rest : List Char), v.WF �
         '(' :: '\n' :: (spaces (m + 2) ++
           (entriesTail (m + 2) ((k, v) :: es) ++ (spaces m ++ ')' :: rest))) := by
       simp [enc, encEntries, entriesTail]
-    rw [h, pVal_paren, skipWs_ws _ (by decide : isWs '\n' = true), skipWs_spaces]
+    rw [h, pVal_paren _ _ (by intro c hc; simp at hc; subst hc; decide),
+      skipWs_ws _ (by decide : isWs '\n' = true), skipWs_spaces]
     obtain ⟨c, t, hct, hc⟩ := printKey_head k
     have hs : 3 * (Json.sizeObj ((k, v) :: es) + 1) ≤ f + 1 := by simpa [Json.size] using hf
     have hl1 := sizeObj_pos ((k, v) :: es)
