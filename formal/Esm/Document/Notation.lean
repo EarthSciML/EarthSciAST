@@ -123,7 +123,7 @@ def coreOps : List OpRow := [
   { op := "enum", tier := call, latex := r"\operatorname{enum}(\mathit{Land}, \mathit{urban})",
     typst := r#"op("enum")(italic("Land"), italic("urban"))"# },
   { op := "const", shape := "scalar", tier := native,
-    latex := r"the number; with units 3\,\mathrm{m/s}", typst := r#"3 thin upright("m")\/upright("s")"# },
+    latex := r"the number; with units 3\,\mathrm{m/s}", typst := r#"3 thin upright("m") thin upright("s")^(-1)"# },
   { op := "const", shape := "array of at most 16 entries", tier := native,
     latex := r"bmatrix (a column for rank 1); with units, a thin space and the unit after it, as for a scalar: \begin{bmatrix}1\\2\end{bmatrix}\,\mathrm{m}",
     typst := r#"vec(…), mat(…); with units vec(1, 2) thin upright("m")"# },
@@ -277,7 +277,9 @@ finite value prints its shortest round-trip digits, positional for decimal expon
 power of ten prints with `\cdot`. A negative literal prints as `-3`; unary minus on a
 positive literal prints as `-(3)`. A `const` with units prints as the number, a thin
 space, then the canonical unit spelling upright: LaTeX `3\,\mathrm{m/s}`, Typst one
-`upright("sym")^(exp)` per unit factor. No unit package is used. -/
+`upright("sym")^(exp)` per unit factor, factors separated by `thin` (Typst sets adjacent
+`upright` texts with no space), positive exponents first. No unit package is used.
+The forms, their parsers and round-trip theorems are `Esm.Units.Typeset`. -/
 def scientificLatex : String := r"1.8 \times 10^{-12}"
 
 /-! ## Reactions

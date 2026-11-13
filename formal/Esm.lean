@@ -25,6 +25,10 @@ import Esm.Units.GrammarLaws
 import Esm.Units.Exec
 import Esm.Units.Examples
 import Esm.Units.Strings
+import Esm.Units.Factors
+import Esm.Units.Canonical
+import Esm.Units.Typeset
+import Esm.Units.CanonicalExamples
 import Esm.Document.Notation
 import Esm.Document.Json
 import Esm.Document.Number
