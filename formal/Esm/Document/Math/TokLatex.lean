@@ -53,7 +53,7 @@ theorem tokOK_num10 : tokOK (.num (.int 10)) := by
 
 /-- Close a goal `AllOK [fixed tokens and pieces]` from the pieces in the context. -/
 macro "aok" : tactic => `(tactic| (
-  simp only [allOK_append, allOK_cons, List.cons_append, List.nil_append, List.append_assoc,
+  try simp only [allOK_append, allOK_cons, List.cons_append, List.nil_append, List.append_assoc,
     and_true, true_and]
   repeat' constructor
   all_goals first | assumption | rfl | exact allOK_nil | exact tokOK_num0 | exact tokOK_num10))
@@ -226,5 +226,228 @@ theorem allOK_entries : ∀ kvs : List (String × Json), jwfObj kvs = true → A
     have ht : tokOK (.jstr k) := trivial
     aok
 end
+
+/-! ## Printer pieces -/
+
+theorem allOK_mulToks : ∀ (xs : List (List Tok)), (∀ x ∈ xs, AllOK x) → AllOK (mulToks xs)
+  | [], _ => allOK_nil
+  | x :: xs, h => by
+    simp only [mulToks]
+    refine allOK_append.2 ⟨h x (by simp), allOK_flatMap _ xs (fun y hy => ?_)⟩
+    have hy' := h y (by simp [hy])
+    split
+    · exact allOK_cons.2 ⟨(rfl : kwOK .cdot = true), hy'⟩
+    · exact hy'
+
+theorem allOK_callToks (head : List Tok) (hh : AllOK head) (args : List (List Tok))
+    (ha : ∀ x ∈ args, AllOK x) : AllOK (callToks .latex head args) := by
+  have hs := allOK_sepBy [.kw .comma] (allOK_cons.2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) args ha
+  simp only [callToks, lpC]; aok
+
+theorem allOK_unToks (o : String) (k : Kw) (hk : unKw.lookup o = some k) (t : List Tok)
+    (ht : AllOK t) : AllOK (unToks .latex k t) := by
+  have hm := lookup_mem hk
+  simp only [unKw, fnKw, List.cons_append, List.nil_append, List.mem_cons, Prod.mk.injEq,
+    List.not_mem_nil, or_false] at hm
+  rcases hm with ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ |
+    ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ <;>
+  (simp only [unToks, callToks, lpC, sepBy]; aok)
+
+theorem jwfObj_of : ∀ (kvs : List (String × Json)), (∀ kv ∈ kvs, jwf kv.2 = true) → jwfObj kvs = true
+  | [], _ => rfl
+  | (k, v) :: r, h => by
+    simp only [jwfObj, Bool.and_eq_true]
+    exact ⟨h (k, v) (by simp), jwfObj_of r (fun kv hkv => h kv (by simp [hkv]))⟩
+
+theorem allOK_lookup (bs : List (String × Json)) (F : Json → List Tok)
+    (h : ∀ kv ∈ bs, AllOK (F kv.2)) (p : String) :
+    AllOK (((bs.map fun kv => (kv.1, F kv.2)).lookup p).getD []) := by
+  rw [lookup_map_look F p bs]
+  cases hl : look p bs with
+  | none => exact allOK_nil
+  | some v => exact h (p, v) (look_mem hl)
+
+/-! ## The induction -/
+
+def POK (c : Ctx) (e : Json) : Prop := AllOK (pr c e).toks ∧ AllOK (pr c e).crow
+
+theorem POK_toks {c : Ctx} {e : Json} (h : POK c e) (L : Nat) : AllOK ((pr c e).at .latex L) :=
+  allOK_at rfl _ h.1 L
+
+theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e = true → POK c e
+  | 0, _, h, _ => absurd h (Nat.not_lt_zero _)
+  | n + 1, e, hs, he => by
+    have IH : ∀ x, sizeOf x < sizeOf e → isE x = true → POK c x :=
+      fun x hx hxe => POK_all c hc n x (by omega) hxe
+    have hsep : ∀ (k : Kw), kwOK k = true → ∀ (xs : List (List Tok)), (∀ x ∈ xs, AllOK x) →
+        AllOK (sepBy [.kw k] xs) :=
+      fun k hk xs hx => allOK_sepBy [Tok.kw k] (allOK_cons.2 ⟨(show tokOK (Tok.kw k) from hk), allOK_nil⟩) xs hx
+    unfold POK
+    cases view c e he with
+    | num k hk =>
+      rw [pr_num]; have : tokOK (.num k) := hk
+      simp only [mkOut]; constructor <;> aok
+    | name s _ =>
+      rw [pr_str]; have := allOK_nameToks c hc s
+      simp only [mkOut]; constructor <;> aok
+    | neg o a ho ha hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_node_lt (by simp)) ha) 5
+      have hG := allOK_grp (sf := .latex) rfl hA
+      rw [hpr]; simp only [mkOut]
+      split <;> constructor <;> aok
+    | minus o a b ho ha hb hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_node_lt (by simp)) ha) 4
+      have hB := POK_toks (IH b (sizeOf_node_lt (by simp)) hb) 5
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | div o a b ho ha hb hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_node_lt (by simp)) ha) 1
+      have hB := POK_toks (IH b (sizeOf_node_lt (by simp)) hb) 1
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | pow o a b ho ha hb hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_node_lt (by simp)) ha) 9
+      have hB := POK_toks (IH b (sizeOf_node_lt (by simp)) hb) 1
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | lnot o a ho ha hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_node_lt (by simp)) ha) 6
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | tru o ho hpr => rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | fls o ho hpr => rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | ite o cnd a b ho hcn ha hb hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_node_lt (by simp)) ha) 1
+      have hC := POK_toks (IH cnd (sizeOf_node_lt (by simp)) hcn) 1
+      have hB := (IH b (sizeOf_node_lt (by simp)) hb).2
+      rw [hpr]; simp only [casesToks, caseRow, ↓reduceIte]; constructor <;> aok
+    | un o k a ho ha hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_node_lt (by simp)) ha) 1
+      have hU := allOK_unToks o k (kindOf_un ho) _ hA
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | ic o m ho hm hpr =>
+      simp only [hc] at hpr
+      have hN := allOK_nameToks c hc m
+      rw [hpr]; simp only [mkOut, icTail]; constructor <;> aok
+    | idxSub o b is ho hne hsub hsp hi hpr =>
+      simp only [hc] at hpr
+      have hN := allOK_nameToks c hc b
+      have hS := allOK_sepBy [.kw .comma] (allOK_cons.2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
+        (allOK_map _ is (fun x hx => POK_toks (IH x (sizeOf_node_lt (List.mem_cons_of_mem _ hx)) (hi x hx)) 1))
+      rw [hpr]; simp only [mkOut, subList]; constructor <;> aok
+    | idxBr o base is ho hne hb hi hpr =>
+      simp only [hc] at hpr
+      have hB := POK_toks (IH base (sizeOf_node_lt (by simp)) hb) 10
+      have hS := allOK_sepBy [.kw .comma] (allOK_cons.2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
+        (allOK_map _ is (fun x hx => POK_toks (IH x (sizeOf_node_lt (List.mem_cons_of_mem _ hx)) (hi x hx)) 1))
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | cmp o k a b ho ha hb hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_node_lt (by simp)) ha) 4
+      have hB := POK_toks (IH b (sizeOf_node_lt (by simp)) hb) 4
+      have hco := kindOf_cmp ho
+      have hk : tokOK (.kw k) := by
+        show kwOK k = true
+        cases k <;> first | rfl | (simp [cmpOf] at hco)
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | plus o xs ho hl hx hpr =>
+      simp only [hc] at hpr
+      have hS := hsep .plus rfl _ (allOK_map _ xs (fun x hm => POK_toks (IH x (sizeOf_node_lt hm) (hx x hm)) 5))
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | times o xs ho hl hx hpr =>
+      simp only [hc] at hpr
+      have hS := allOK_mulToks _ (allOK_map _ xs (fun x hm => POK_toks (IH x (sizeOf_node_lt hm) (hx x hm)) 6))
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | land o xs ho hl hx hpr =>
+      simp only [hc] at hpr
+      have hS := hsep .land rfl _ (allOK_map _ xs (fun x hm => POK_toks (IH x (sizeOf_node_lt hm) (hx x hm)) 3))
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | lor o xs ho hl hx hpr =>
+      simp only [hc] at hpr
+      have hS := hsep .lor rfl _ (allOK_map _ xs (fun x hm => POK_toks (IH x (sizeOf_node_lt hm) (hx x hm)) 2))
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | mm o k xs ho hl hx hpr =>
+      simp only [hc] at hpr
+      have hk : tokOK (.kw k) := by
+        rcases kindOf_mm ho with ⟨-, rfl⟩ | ⟨-, rfl⟩ <;> rfl
+      have hS := allOK_callToks [.kw k] (allOK_cons.2 ⟨hk, allOK_nil⟩) _
+        (allOK_map _ xs (fun x hm => POK_toks (IH x (sizeOf_node_lt hm) (hx x hm)) 1))
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | call o xs ho hx hpr =>
+      simp only [hc] at hpr
+      have hS := allOK_callToks [.opn o] (allOK_cons.2 ⟨trivial, allOK_nil⟩) _
+        (allOK_map _ xs (fun x hm => POK_toks (IH x (sizeOf_node_lt hm) (hx x hm)) 4))
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | dTime a ha hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_dNode_lt a _) ha) 1
+      have hG := allOK_grp (sf := .latex) rfl hA
+      rw [hpr]; simp only [dTime]
+      split <;> (simp only [mkOut]; constructor <;> aok)
+    | dSpace w a hw hwn ha hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_dNode_lt a _) ha) 1
+      have hG := allOK_grp (sf := .latex) rfl hA
+      have hN := allOK_nameToks c hc w
+      rw [hpr]; simp only [dSpace]
+      split <;> (simp only [mkOut]; constructor <;> aok)
+    | dCall w xs hw hwn hl hx hpr =>
+      simp only [hc] at hpr
+      have hN := allOK_nameToks c hc w
+      have hS := allOK_callToks [] allOK_nil _
+        (allOK_map _ xs (fun x hm => POK_toks (IH x (sizeOf_dCallNode_lt hm) (hx x hm)) 4))
+      rw [hpr]; simp only [mkOut, dCall]; constructor <;> aok
+    | qty u k hk hu hpr =>
+      simp only [hc] at hpr
+      have hb : tokOK (.rm (String.ofList (Esm.Units.latexBody (factorsOf u)))) := by
+        show balOK (String.ofList (Esm.Units.latexBody (factorsOf u))).toList = true
+        rw [String.toList_ofList]
+        simp only [unitsOK, hc, Bool.and_eq_true] at hu
+        exact hu.2.2
+      have hn : tokOK (.num k) := hk
+      rw [hpr]; simp only [mkOut, qtyToks]; constructor <;> aok
+    | tpos m bs ps hm hsb hb hps hpr =>
+      simp only [hc] at hpr
+      have hS := allOK_callToks [.opn m] (allOK_cons.2 ⟨trivial, allOK_nil⟩) _
+        (allOK_map _ ps (fun p _ => allOK_lookup bs (fun v => (pr c v).at .latex 4)
+          (fun kv hkv => POK_toks (IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) 4) p))
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | tnamed m bs hm hb hps hne hk hkn hpr =>
+      simp only [hc] at hpr
+      have hS := allOK_callToks [.opn m] (allOK_cons.2 ⟨trivial, allOK_nil⟩) _
+        (allOK_map (fun kv => nameToks c kv.1 ++ .kw .eq :: (pr c kv.2).at .latex 4) bs (fun kv hkv => by
+          have hN := allOK_nameToks c hc kv.1
+          have hV := POK_toks (IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) 4
+          aok))
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | openop kvs o as hop hargs hsk hx hf hcore hopn htp hkey hsz hszf hpr =>
+      simp only [hc] at hpr
+      have hA := hsep .comma rfl _ (allOK_map _ as (fun x hm => POK_toks (IH x (hsz x hm) (hx x hm)) 4))
+      have hF := hsep .comma rfl _ (allOK_map (fun kv => keyToks .latex kv.1 ++ .kw .eq ::
+          (if isE kv.2 then (pr c kv.2).at .latex 4 else jsonVal .latex kv.2)) (fieldsOf kvs) (fun kv hkv => by
+          have hK : tokOK (.rm (String.ofList (escT kv.1.toList))) := by
+            show balOK (String.ofList (escT kv.1.toList)).toList = true
+            rw [String.toList_ofList]; exact balOK_escT _
+          have hV : AllOK (if isE kv.2 = true then (pr c kv.2).at .latex 4 else jsonVal .latex kv.2) := by
+            split
+            · rename_i hv; exact POK_toks (IH kv.2 (hszf kv hkv) hv) 4
+            · exact allOK_json kv.2 (hf kv hkv)
+          simp only [keyToks]; aok))
+      rw [hpr]; simp only [mkOut, openToks, lpC]
+      split <;> (constructor <;> aok)
+    | esc kvs o as hop hargs hsk hx hf hoOK hrem hdep hsz hpr =>
+      simp only [hc] at hpr
+      have hA := hsep .comma rfl _ (allOK_map _ as (fun x hm => POK_toks (IH x (hsz x hm) (hx x hm)) 1))
+      have hJ := allOK_entries (fieldsOf kvs) (jwfObj_of _ hf)
+      have hE : tokOK (.esc o) := trivial
+      rw [hpr]; simp only [mkOut, escToks, jsonToks]; constructor <;> aok
+
+/-- Every token the LaTeX printer writes for a well-formed expression is a LaTeX token. -/
+theorem print_tokOK (S : Sym) (e : Json) (he : isE e = true) : ∀ t ∈ print .latex S e, tokOK t := by
+  have h := POK_all ⟨.latex, S⟩ rfl _ e (Nat.lt_succ_self _) he
+  exact POK_toks h 1
 
 end Esm.Document.Math.Latex

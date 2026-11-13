@@ -64,6 +64,9 @@ import Esm.Document.Math.OpenOp
 import Esm.Document.Math.Templates
 import Esm.Document.Math.Derivs
 import Esm.Document.Math.Induct
+import Esm.Document.Math.LexLatex
+import Esm.Document.Math.TokLatex
+import Esm.Document.Math.RoundTripLatex
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/
