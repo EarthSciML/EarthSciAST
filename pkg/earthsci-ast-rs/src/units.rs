@@ -3147,12 +3147,6 @@ fn build_base_units() -> HashMap<String, Unit> {
         .multiply(&Unit::base(Dimension::Length, 1, 1.0))
         .divide(&Unit::base(Dimension::Time, 2, 1.0));
     units.insert("N".to_string(), newton.clone());
-    // The dyne, the CGS force: exactly 1e-5 N. Surface tensions are still
-    // tabulated in dyn/cm (numerically mN/m).
-    let mut dyne = newton.clone();
-    dyne.scale *= 1e-5;
-    dyne.exact = dyne.exact.multiply(&ExactScale::power_of_ten(-5));
-    units.insert("dyn".to_string(), dyne);
 
     // Pressure: kg/(m*s^2) (Pascal)
     let pascal = Unit::base(Dimension::Mass, 1, 1.0)
@@ -3394,10 +3388,15 @@ fn build_base_units() -> HashMap<String, Unit> {
     // (esm-spec §4.8.1): there is no SI-prefix mechanism, so `Tm`, `dam`, `dg`,
     // `PW`, `fs` and `kmolec` do not resolve, and a prefixed unit exists only
     // when it is listed here.
+    //
+    // Each float scale is the base's times one decimal literal, so the base must
+    // itself carry scale 1 or a power of ten whose product with the literal
+    // rounds to the nearest double: the masses derive from `kg`, not `g`,
+    // because 1e-3 * 1e-9 is 1.0000000000000002e-12, one ulp off `ng`.
     for (key, base, power) in [
-        ("mg", "g", -3),
-        ("ug", "g", -6),
-        ("ng", "g", -9),
+        ("mg", "kg", -6),
+        ("ug", "kg", -9),
+        ("ng", "kg", -12),
         ("dm", "m", -1),
         ("um", "m", -6),
         ("nm", "m", -9),
@@ -3410,6 +3409,10 @@ fn build_base_units() -> HashMap<String, Unit> {
         ("umol", "mol", -6),
         ("nmol", "mol", -9),
         ("mN", "N", -3),
+        // The dyne is the CGS force (exactly 1e-5 N, as `erg` is the CGS
+        // energy), not a prefixed newton; it sits here because it derives the
+        // same way. Surface tensions are still tabulated in dyn/cm (= mN/m).
+        ("dyn", "N", -5),
         ("kW", "W", 3),
         ("MJ", "J", 6),
         ("MW", "W", 6),
@@ -4162,6 +4165,22 @@ mod tests {
                 "{name}: exact scale {exact} disagrees with the float {}",
                 unit.scale()
             );
+        }
+    }
+
+    /// An entry whose exact scale is a power of ten carries the nearest double to
+    /// it as its float scale, the same number the other four bindings write as a
+    /// literal. The tolerance above cannot see a one-ulp drift from composing two
+    /// rounded factors (`ng` was once `g` times 1e-9 = 1.0000000000000002e-12).
+    #[test]
+    fn power_of_ten_registry_scales_are_correctly_rounded() {
+        for (name, unit) in build_base_units() {
+            for k in -24..=24 {
+                if unit.exact_scale() == &ExactScale::power_of_ten(k) {
+                    let nearest: f64 = format!("1e{k}").parse().unwrap();
+                    assert_eq!(unit.scale(), nearest, "{name}: float scale is not 1e{k}");
+                }
+            }
         }
     }
 
