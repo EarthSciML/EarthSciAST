@@ -316,10 +316,15 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             # product each) is under the work floor and runs serially.
             @test get(ESM._THREAD_TALLY, :cg_threaded, 0) == 1
             @test get(ESM._THREAD_TALLY, :cg_serial_small, 0) >= 1
-            du_int = rhs(:interpreter)
+            # No interpreter oracle at this size. The interpreter runs without
+            # the join and overlap gates, so its geometry setup tree-walks the
+            # `overlap_area_planar` template over every one of the 10^6
+            # (source, target) pairs, not just the ~2000 the join admits.
+            # Native ≡ interpreter on this fixture is pinned at N = 100 in
+            # array_contraction_table_test.jl; what this test adds is
+            # threaded ≡ serial at a size that actually threads.
             @test length(du_thr) == 2000
             @test all(du_thr[k] === du_ser[k] for k in keys(du_thr))
-            @test all(du_thr[k] === du_int[k] for k in keys(du_thr))
         end
 
         @testset "overflow RGF (budget 0): threaded ≡ serial oracle ≡ interpreter" begin
