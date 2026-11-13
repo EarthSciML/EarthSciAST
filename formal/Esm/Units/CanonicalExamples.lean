@@ -53,6 +53,9 @@ example : canon "m*m/m" = "m^2/m" := by decide +kernel
 example : canon "ppb^-1 s^-1" = "1/(ppb*s)" := by decide +kernel
 example : canon "m^2/m^-1" = "m^3" := by decide +kernel
 example : canon "m^0*s" = "s" := by decide +kernel
+/-- A dropped symbol must still name a unit: `bogus` does not, so the string is
+left as written (and keeps failing to resolve). -/
+example : canon "bogus^0*s" = "bogus^0*s" := by decide +kernel
 
 /-! ## The dimensionless spellings and unparseable strings -/
 

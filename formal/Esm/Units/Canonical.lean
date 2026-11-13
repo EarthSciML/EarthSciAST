@@ -30,12 +30,15 @@ Choices beyond the grammar:
   the identity there). So is a string that parses but contains a symbol run with
   a `.` in it (`1.5m`: the lexer reads `digits.run` with a non-digit in the second
   run as one symbol); no table key contains `.`, so such a string never resolves.
-* Because nothing cancels, every symbol of the parse survives into the spelling
-  (only a factor with exponent 0, such as `m^0`, is dropped). Canonicalization
-  never turns a resolving string into a non-resolving one (`resolve_canon`).
+* Because nothing cancels, a symbol of the parse is dropped from the spelling
+  only when its exponent is 0 (`m^0`). A dropped symbol must still name a table
+  unit (`keepsSyms`); otherwise the string is left unchanged, so it keeps failing
+  to resolve. Canonicalization never turns a resolving string into a
+  non-resolving one (`resolve_canon`), nor the reverse (`resolve_of_canon`).
 
 Theorems: `canon_idem` (idempotent), `parse_canon` (the spelling parses back to a
 tree with the same two-sided normal form), `resolve_canon` (and so the same unit),
+`resolve_of_canon` (a string whose spelling resolves resolves itself),
 `canon_eq_of_factors` (strings with the same two-sided normal form spell alike), and
 `parse_spell` (every two-sided normal list with admissible symbols is spelled so that
 it parses back to itself).
@@ -146,11 +149,21 @@ dimensionless unit `1` (§4.8.1: `""` is a spelling of it). -/
 def parseChars (cs : List Char) : Except Err UExpr :=
   if cs = [] then .ok .one else lex (normalize cs) >>= parse
 
+/-- Every symbol of the parse either survives into the two-sided normal form or
+names a table unit. (A symbol is dropped only when its exponent is 0, as in
+`m^0`; spelling a string without such a symbol would hide that it does not
+resolve.) -/
+def keepsSyms (e : UExpr) : Bool :=
+  e.factors.all fun f => (syms (norm2 e.factors)).contains f.1 || (lookup f.1).isSome
+
 /-- The canonical spelling of a unit string; the identity on a string that does
-not parse, or whose factors include a symbol the spelling cannot write. -/
+not parse, whose factors include a symbol the spelling cannot write, or that
+drops a symbol naming no unit (`keepsSyms`). -/
 def canon (s : String) : String :=
   match parseChars s.toList with
-  | .ok e => if (norm2 e.factors).all (fun f => symOK f.1) then spell (norm2 e.factors) else s
+  | .ok e =>
+    if (norm2 e.factors).all (fun f => symOK f.1) && keepsSyms e then spell (norm2 e.factors)
+    else s
   | .error _ => s
 
 /-! ## Lexing the spelling -/
@@ -740,21 +753,32 @@ theorem canonFactors_norm2 (e : UExpr) (h : (norm2 e.factors).all (fun f => symO
 the normalized factor list of the string's parse. -/
 theorem canon_cases (s : String) :
     canon s = s ∨ ∃ e, parseChars s.toList = .ok e ∧ CanonFactors (norm2 e.factors) ∧
-      canon s = spell (norm2 e.factors) := by
+      keepsSyms e = true ∧ canon s = spell (norm2 e.factors) := by
   unfold canon
   cases h : parseChars s.toList with
   | error _ => exact Or.inl rfl
   | ok e =>
     simp only
     split_ifs with hv
-    · exact Or.inr ⟨e, rfl, canonFactors_norm2 e hv, rfl⟩
+    · rw [Bool.and_eq_true] at hv
+      exact Or.inr ⟨e, rfl, canonFactors_norm2 e hv.1, hv.2, rfl⟩
     · exact Or.inl rfl
+
+/-- A tree whose factors are exactly its normal form keeps its symbols. -/
+theorem keepsSyms_of_normal (e : UExpr) (h : norm2 e.factors = e.factors) :
+    keepsSyms e = true := by
+  rw [keepsSyms, List.all_eq_true]
+  intro f hf
+  rw [h, Bool.or_eq_true]
+  left
+  simpa [syms] using ⟨f.2, hf⟩
 
 /-- The canonical spelling of a canonical factor list is a fixed point. -/
 theorem canon_spell (l : List Factor) (hl : CanonFactors l) : canon (spell l) = spell l := by
-  obtain ⟨e, he, -, hn⟩ := parse_spell l hl
+  obtain ⟨e, he, hf, hn⟩ := parse_spell l hl
   have hv : (norm2 e.factors).all (fun f => symOK f.1) = true := by
     rw [hn]; exact List.all_eq_true.mpr hl.2
+  have hk := keepsSyms_of_normal e (hn.trans hf.symm)
   unfold canon
   rw [he]
   simp only [hn, ite_self]
@@ -762,7 +786,7 @@ theorem canon_spell (l : List Factor) (hl : CanonFactors l) : canon (spell l) = 
 /-- **Idempotence.** Canonicalizing a canonical spelling returns it unchanged. -/
 theorem canon_idem : ∀ s : String, canon (canon s) = canon s := by
   intro s
-  rcases canon_cases s with h | ⟨e, -, hl, h⟩
+  rcases canon_cases s with h | ⟨e, -, hl, -, h⟩
   · rw [h]; exact h
   · rw [h]; exact canon_spell _ hl
 
@@ -772,23 +796,25 @@ theorem parse_canon :
     ∀ (s : String) (e : UExpr), parseChars s.toList = .ok e →
       ∃ e', parseChars (canon s).toList = .ok e' ∧ norm2 e'.factors = norm2 e.factors := by
   intro s e h
-  rcases canon_cases s with hc | ⟨e₀, he₀, hl, hc⟩
+  rcases canon_cases s with hc | ⟨e₀, he₀, hl, -, hc⟩
   · exact ⟨e, by rw [hc]; exact h, rfl⟩
   · rw [h] at he₀; cases he₀
     obtain ⟨e', he', -, hn⟩ := parse_spell _ hl
     exact ⟨e', by rw [hc]; exact he', hn⟩
 
 /-- Two strings whose parses have the same normalized factor list, all of whose
-symbols the spelling can write, have the same canonical spelling. -/
+symbols the spelling can write, and neither of which drops a symbol naming no unit,
+have the same canonical spelling. (Strings that resolve never drop such a symbol:
+`keepsSyms_of_eval`.) -/
 theorem canon_eq_of_factors :
     ∀ (s t : String) (e e' : UExpr), parseChars s.toList = .ok e → parseChars t.toList = .ok e' →
       norm2 e.factors = norm2 e'.factors → (norm2 e.factors).all (fun f => symOK f.1) = true →
-      canon s = canon t := by
-  intro s t e e' hs ht hn hv
+      keepsSyms e = true → keepsSyms e' = true → canon s = canon t := by
+  intro s t e e' hs ht hn hv hk hk'
   have hv' : (norm2 e'.factors).all (fun f => symOK f.1) = true := hn ▸ hv
   unfold canon
   rw [hs, ht]
-  simp only [hv', ite_true, hn]
+  simp only [hv', hk, hk', Bool.and_self, ite_true, hn]
 
 /-! ## The canonical spelling denotes the same unit -/
 
@@ -939,7 +965,7 @@ same dimension, same exact scale. -/
 theorem resolve_canon :
     ∀ (s : String) (u : U), resolve s = .ok u → ∃ u', resolve (canon s) = .ok u' ∧ u'.Agree u := by
   intro s u h
-  rcases canon_cases s with hc | ⟨e, he, hl, hc⟩
+  rcases canon_cases s with hc | ⟨e, he, hl, -, hc⟩
   · exact ⟨u, by rw [hc]; exact h, U.agree_refl u⟩
   obtain ⟨e', he', hfac, -⟩ := parse_spell _ hl
   -- what the original denotes
@@ -973,5 +999,44 @@ theorem resolve_canon :
         exact ⟨dim_ext fun a => by cases a <;> rfl, Scale.exp_ofRat_one⟩
       rw [U.Agree] at this
       simp [UExpr.factors, wsum, this, U.val_one]
+
+/-- A tree that evaluates drops no symbol naming no unit. -/
+theorem keepsSyms_of_eval (e : UExpr) (u : U) (h : e.eval = .ok u) : keepsSyms e = true := by
+  rw [keepsSyms, List.all_eq_true]
+  intro f hf
+  rw [Bool.or_eq_true]
+  right
+  exact (lookup_isSome_iff f.1).mpr ((eval_factors e u h).1 f hf)
+
+/-- **Canonicalization does not hide an unresolvable unit.** If the canonical
+spelling of a string resolves, the string itself resolves, to a unit that agrees
+with it. -/
+theorem resolve_of_canon :
+    ∀ (s : String) (u' : U), resolve (canon s) = .ok u' → ∃ u, resolve s = .ok u ∧ u'.Agree u := by
+  intro s u' h
+  suffices hs : ∃ u, resolve s = .ok u by
+    obtain ⟨u, hu⟩ := hs
+    obtain ⟨u'', h'', hag⟩ := resolve_canon s u hu
+    rw [h] at h''; cases h''
+    exact ⟨u, hu, hag⟩
+  rcases canon_cases s with hc | ⟨e, he, hl, hk, hc⟩
+  · exact ⟨u', hc ▸ h⟩
+  by_cases hs : s.toList = []
+  · exact ⟨_, by rw [resolve, resolveChars, ite_eq_left hs]⟩
+  obtain ⟨e', he', hfac, -⟩ := parse_spell _ hl
+  rw [hc, resolve_eq_parseChars _ (spell_ne_nil _ hl), he'] at h
+  have hk' := (eval_factors e' u' h).1
+  rw [hfac] at hk'
+  have hkeys : ∀ f ∈ e.factors, f.1 ∈ keys := by
+    intro f hf
+    have := List.all_eq_true.mp hk f hf
+    rw [Bool.or_eq_true] at this
+    rcases this with h1 | h1
+    · obtain ⟨g, hg, hgs⟩ : ∃ g ∈ norm2 e.factors, g.1 = f.1 := by
+        simpa [syms] using h1
+      exact hgs ▸ hk' g hg
+    · exact (lookup_isSome_iff f.1).mp h1
+  obtain ⟨u, hu, -⟩ := eval_of_keys e hkeys
+  exact ⟨u, by rw [resolve_eq_parseChars s hs, he]; exact hu⟩
 
 end Esm.Units
