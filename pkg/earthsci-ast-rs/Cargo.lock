@@ -990,9 +990,9 @@ dependencies = [
 
 [[package]]
 name = "earthsciio"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f45b8f3efde02219bf91a0192da7991ee086d166c2ffaffc2f31da0c9f026cf0"
+checksum = "6ea95cdf4074bd568d2757366c4851fd567f5f7e52066d289526bf46d8678625"
 dependencies = [
  "arrow-array",
  "arrow-schema",
