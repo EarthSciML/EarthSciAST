@@ -38,8 +38,11 @@ use std::collections::{HashMap, HashSet};
 /// is never lifted. A field initial condition `ic(x) = rhs` is lifted over
 /// `x`'s declared shape.
 ///
-/// Repeats until no equation changes, so a chain — a lifted observed read by
-/// another elementwise application — is lifted link by link.
+/// Decides every shape first, repeating until none changes, so a chain — a
+/// lifted observed read by another elementwise application — is lifted link
+/// by link, and then wraps each lifted right-hand side once against the final
+/// shapes, so what a body gathers does not depend on the order of the
+/// equations.
 ///
 /// # Errors
 ///
@@ -73,13 +76,23 @@ pub(crate) fn lift_elementwise_applications(
     for eq in &model.equations {
         refuse_anonymous_arrays(&eq.rhs, &eq.lhs)?;
     }
+    // Phase 1: decide every shape, to a fixpoint, before rewriting anything.
+    // Which reads a lifted body gathers depends on the shapes of the names it
+    // reads, and an unshaped definition's shape is only known once every
+    // equation it reads has been seen, so a body wrapped in the same pass that
+    // discovers shapes depends on the order of the equations: a reader that
+    // comes before the definition of one of its operands would be wrapped with
+    // that operand still bare, and the build refuses the result
+    // (`faq_bare_array_operand`).
+    let n_eqs = model.equations.len();
+    let mut plan: Vec<Option<Vec<String>>> = vec![None; n_eqs];
     let mut lifted: HashMap<String, Vec<String>> = HashMap::new();
     let mut changed = true;
     let mut passes = 0usize;
-    while changed && passes <= model.equations.len() + 1 {
+    while changed && passes <= n_eqs + 1 {
         changed = false;
         passes += 1;
-        for k in 0..model.equations.len() {
+        for k in 0..n_eqs {
             // A field initial condition `ic(x) = rhs` is lifted over `x`'s
             // declared shape; it defines no variable, so it shapes none.
             let (lhs, is_ic) = match &model.equations[k].lhs {
@@ -129,41 +142,56 @@ pub(crate) fn lift_elementwise_applications(
                      axis to align to (esm-spec §9.6.11)"
                 ));
             }
-            let loops = fresh_loops(rhs, axes.len());
-            let ctx = Lift {
-                axes: &axes,
-                loops: &loops,
-                shapes: &shapes,
-                lhs: &lhs,
-            };
-            let body = intern_tree(&ctx.wrap(rhs, &HashSet::new(), false)?);
-            let ranges: HashMap<String, RangeSpec> = loops
-                .iter()
-                .zip(&axes)
-                .map(|(l, a)| {
-                    (
-                        l.clone(),
-                        RangeSpec::IndexSetRef {
-                            from: a.clone(),
-                            of: None,
-                        },
-                    )
-                })
-                .collect();
-            model.equations[k].rhs = Expr::operator(ExpressionNode {
-                op: "faq".to_string(),
-                args: Vec::new(),
-                output_idx: Some(loops),
-                ranges: Some(ranges),
-                expr: Some(Box::new(body)),
-                ..Default::default()
-            });
             if declared.is_none() {
-                shapes.insert(lhs.clone(), axes.clone());
-                lifted.insert(lhs, axes);
+                if shapes.get(&lhs) != Some(&axes) {
+                    shapes.insert(lhs.clone(), axes.clone());
+                    changed = true;
+                }
+                lifted.insert(lhs, axes.clone());
             }
-            changed = true;
+            if plan[k].as_ref() != Some(&axes) {
+                plan[k] = Some(axes);
+                changed = true;
+            }
         }
+    }
+    // Phase 2: wrap each lifted right-hand side once, against the final shapes.
+    for (k, axes) in plan.into_iter().enumerate() {
+        let Some(axes) = axes else { continue };
+        let lhs = match &model.equations[k].lhs {
+            Expr::Variable(n) => n.clone(),
+            other => crate::flatten::extract_ic_target(other).unwrap_or_default(),
+        };
+        let rhs = &model.equations[k].rhs;
+        let loops = fresh_loops(rhs, axes.len());
+        let ctx = Lift {
+            axes: &axes,
+            loops: &loops,
+            shapes: &shapes,
+            lhs: &lhs,
+        };
+        let body = intern_tree(&ctx.wrap(rhs, &HashSet::new(), false)?);
+        let ranges: HashMap<String, RangeSpec> = loops
+            .iter()
+            .zip(&axes)
+            .map(|(l, a)| {
+                (
+                    l.clone(),
+                    RangeSpec::IndexSetRef {
+                        from: a.clone(),
+                        of: None,
+                    },
+                )
+            })
+            .collect();
+        model.equations[k].rhs = Expr::operator(ExpressionNode {
+            op: "faq".to_string(),
+            args: Vec::new(),
+            output_idx: Some(loops),
+            ranges: Some(ranges),
+            expr: Some(Box::new(body)),
+            ..Default::default()
+        });
     }
     for (name, axes) in &lifted {
         if let Some(var) = model.variables.get_mut(name) {
@@ -651,6 +679,44 @@ mod tests {
             panic!("{after:?}")
         };
         assert_eq!(n.op, "*", "flatten left the application as written");
+    }
+
+    #[test]
+    fn an_operand_defined_after_its_reader_is_gathered() {
+        // Issue #714: `y` applies a template and also reads `k`, an unshaped
+        // observed that is elementwise over `u` and is DEFINED AFTER `y`. The
+        // lifted body must gather `k` at the cell, whatever the equation order.
+        let doc = serde_json::json!({
+            "esm": "2.0.0", "metadata": {"name": "order_probe"},
+            "index_sets": {"c": {"kind": "interval", "size": 3}},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "parameter", "shape": ["c"], "default": [1.0, 2.0, 3.0]},
+                    "y": {"type": "unknown", "shape": ["c"]},
+                    "k": {"type": "unknown"},
+                    "s": {"type": "unknown", "default": 0.0}},
+                "equations": [
+                    {"lhs": "y", "rhs": {"op": "+", "args": [
+                        {"op": "apply_expression_template", "args": [], "name": "twice",
+                         "bindings": {"x": "u"}},
+                        "k"]}},
+                    {"lhs": "k", "rhs": {"op": "*", "args": [2, "u"]}},
+                    {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": 0.0}
+                ],
+                "expression_templates": {"twice": {"params": ["x"],
+                    "body": {"op": "*", "args": [2, "x"]}}}
+            }}
+        });
+        let (_, _, after) = lift_doc(&doc, "M.y");
+        let Expr::Operator(n) = &after else {
+            panic!("{after:?}")
+        };
+        assert_eq!(n.op, "faq");
+        let body = serde_json::to_string(n.expr.as_deref().expect("body")).unwrap();
+        assert!(
+            body.contains(r#"{"op":"index","args":["M.k","#),
+            "M.k is not gathered at the cell: {body}"
+        );
     }
 
     #[test]
