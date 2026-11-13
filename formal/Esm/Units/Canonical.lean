@@ -9,9 +9,13 @@ built from its parsed unit (esm-spec §4.8.2), so `m*h/(mi*s)`, `m h/(mi s)` and
 `m·h/(mi·s)` canonicalize alike. It is a syntactic normalization of the parsed
 tree, not a reduction to SI: symbols are kept (`ppm` stays `ppm`, `km` stays `km`).
 
-From the normalized factor list (`norm`, `Esm.Units.Factors`): the numerator is
-the positive-exponent factors in symbol order joined by `*`; the denominator is
-the negative-exponent factors, same order, with the exponent's absolute value.
+From the two-sided normal form (`norm2`, `Esm.Units.Factors`): the numerator is
+the factors whose net exponent is positive, each symbol once with its exponents
+summed, in symbol order, joined by `*`; the denominator is the factors whose net
+exponent is negative, normalized the same way, written with the exponent's
+absolute value. A symbol is NEVER cancelled across the fraction bar (ruling of
+2026-11-12): `mol/mol` stays `mol/mol`, `mol/mol/s` is `mol/(mol*s)`, and
+`m m^-1` is `m/m`.
 An exponent 1 is omitted, an integer exponent is `^n`, a non-integer rational is
 `^(p/q)` in lowest terms. The spelling is `num`, `num/den` when the denominator
 has one factor, or `num/(den1*den2*…)`; an empty numerator is `1`, so the
@@ -26,15 +30,15 @@ Choices beyond the grammar:
   the identity there). So is a string that parses but contains a symbol run with
   a `.` in it (`1.5m`: the lexer reads `digits.run` with a non-digit in the second
   run as one symbol); no table key contains `.`, so such a string never resolves.
-* A symbol whose exponents sum to zero is dropped even when it is not a table key
-  (`foo/foo` canonicalizes to `1`). Canonicalization never turns a resolving string
-  into a non-resolving one (`resolve_canon`); it can turn a non-resolving one into
-  a resolving one only by cancelling an unknown symbol in this way.
+* Because nothing cancels, every symbol of the parse survives into the spelling
+  (only a factor with exponent 0, such as `m^0`, is dropped). Canonicalization
+  never turns a resolving string into a non-resolving one (`resolve_canon`).
 
 Theorems: `canon_idem` (idempotent), `parse_canon` (the spelling parses back to a
-tree with the same normalized factor list), `resolve_canon` (and so the same unit),
-and `parse_spell` (every normal factor list with admissible symbols is spelled so
-that it parses back to itself).
+tree with the same two-sided normal form), `resolve_canon` (and so the same unit),
+`canon_eq_of_factors` (strings with the same two-sided normal form spell alike), and
+`parse_spell` (every two-sided normal list with admissible symbols is spelled so that
+it parses back to itself).
 -/
 
 namespace Esm.Units
@@ -50,8 +54,8 @@ characters that is not all digits (so the lexer reads it back as one symbol),
 and not `dimensionless` (a spelling of `1`). -/
 def symOK (s : String) : Bool := (s == "%" || symRunB s) && s != "dimensionless"
 
-/-- A canonical factor list: normal, every symbol admissible. -/
-def CanonFactors (l : List Factor) : Prop := Normal l ∧ ∀ f ∈ l, symOK f.1 = true
+/-- A canonical factor list: two-sided normal, every symbol admissible. -/
+def CanonFactors (l : List Factor) : Prop := Normal2 l ∧ ∀ f ∈ l, symOK f.1 = true
 
 def digitChar (d : ℕ) : Char := ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].getD d '0'
 
@@ -110,8 +114,6 @@ def joinToks : List Factor → List Tok
   | [] => []
   | f :: r => fToks f ++ r.flatMap (fun g => .star :: fToks g)
 
-def numFactors (l : List Factor) : List Factor := l.filter (fun f => decide (0 < f.2))
-def denFactors (l : List Factor) : List Factor := l.filter (fun f => !decide (0 < f.2))
 
 /-- The canonical spelling of a factor list, as tokens. -/
 def spellToks (l : List Factor) : List Tok :=
@@ -148,7 +150,7 @@ def parseChars (cs : List Char) : Except Err UExpr :=
 not parse, or whose factors include a symbol the spelling cannot write. -/
 def canon (s : String) : String :=
   match parseChars s.toList with
-  | .ok e => if (norm e.factors).all (fun f => symOK f.1) then spell (norm e.factors) else s
+  | .ok e => if (norm2 e.factors).all (fun f => symOK f.1) then spell (norm2 e.factors) else s
   | .error _ => s
 
 /-! ## Lexing the spelling -/
@@ -401,10 +403,6 @@ theorem lexP_join (f : Factor) (r : List Factor) (hs : ∀ g ∈ f :: r, symOK g
       List.cons_append]
     exact opHead_cons _ _ (by decide) (by decide)
 
-theorem mem_numFactors {l : List Factor} {f : Factor} (h : f ∈ numFactors l) : f ∈ l :=
-  List.mem_of_mem_filter h
-theorem mem_denFactors {l : List Factor} {f : Factor} (h : f ∈ denFactors l) : f ∈ l :=
-  List.mem_of_mem_filter h
 
 /-- The numerator tokens. -/
 def numToks (l : List Factor) : List Tok :=
@@ -712,18 +710,19 @@ theorem factors_spellTree (l : List Factor) (hl : CanonFactors l) :
       factors_term g (hd g (by simp))]
     simpa using hden
 
-theorem perm_spellTree (l : List Factor) (hl : CanonFactors l) : (spellTree l).factors.Perm l := by
-  rw [factors_spellTree l hl]
-  exact List.filter_append_perm _ l
+theorem factors_spellTree_eq (l : List Factor) (hl : CanonFactors l) : (spellTree l).factors = l := by
+  rw [factors_spellTree l hl, hl.1.1.1]
 
 /-- **The spelling parses back.** Every canonical factor list is spelled so that
 it parses (§4.8.2) to a tree whose factor list is a permutation of it, and whose
 normalized factor list is it exactly. -/
 theorem parse_spell :
     ∀ l : List Factor, CanonFactors l →
-      ∃ e, parseChars (spell l).toList = .ok e ∧ e.factors.Perm l ∧ norm e.factors = l := by
+      ∃ e, parseChars (spell l).toList = .ok e ∧ e.factors = l ∧ norm2 e.factors = l := by
   intro l hl
-  refine ⟨spellTree l, ?_, perm_spellTree l hl, norm_eq_of_perm hl.1 (perm_spellTree l hl)⟩
+  refine ⟨spellTree l, ?_, factors_spellTree_eq l hl, ?_⟩
+  swap
+  · rw [factors_spellTree_eq l hl]; exact norm2_eq_of_normal2 hl.1
   have hne : renderToks (spellToks l) ≠ [] := by
     intro h
     have := (lexP_spellToks l hl).1
@@ -733,28 +732,28 @@ theorem parse_spell :
   rw [String.toList_ofList, ite_eq_right hne, lex_spell l hl]
   exact parse_spellToks l hl.1.2
 
-theorem canonFactors_norm (e : UExpr) (h : (norm e.factors).all (fun f => symOK f.1) = true) :
-    CanonFactors (norm e.factors) :=
-  ⟨normal_norm _, fun f hf => List.all_eq_true.mp h f hf⟩
+theorem canonFactors_norm2 (e : UExpr) (h : (norm2 e.factors).all (fun f => symOK f.1) = true) :
+    CanonFactors (norm2 e.factors) :=
+  ⟨normal2_norm2 _, fun f hf => List.all_eq_true.mp h f hf⟩
 
 /-- `canon` either leaves a string alone or spells a canonical factor list —
 the normalized factor list of the string's parse. -/
 theorem canon_cases (s : String) :
-    canon s = s ∨ ∃ e, parseChars s.toList = .ok e ∧ CanonFactors (norm e.factors) ∧
-      canon s = spell (norm e.factors) := by
+    canon s = s ∨ ∃ e, parseChars s.toList = .ok e ∧ CanonFactors (norm2 e.factors) ∧
+      canon s = spell (norm2 e.factors) := by
   unfold canon
   cases h : parseChars s.toList with
   | error _ => exact Or.inl rfl
   | ok e =>
     simp only
     split_ifs with hv
-    · exact Or.inr ⟨e, rfl, canonFactors_norm e hv, rfl⟩
+    · exact Or.inr ⟨e, rfl, canonFactors_norm2 e hv, rfl⟩
     · exact Or.inl rfl
 
 /-- The canonical spelling of a canonical factor list is a fixed point. -/
 theorem canon_spell (l : List Factor) (hl : CanonFactors l) : canon (spell l) = spell l := by
   obtain ⟨e, he, -, hn⟩ := parse_spell l hl
-  have hv : (norm e.factors).all (fun f => symOK f.1) = true := by
+  have hv : (norm2 e.factors).all (fun f => symOK f.1) = true := by
     rw [hn]; exact List.all_eq_true.mpr hl.2
   unfold canon
   rw [he]
@@ -771,7 +770,7 @@ theorem canon_idem : ∀ s : String, canon (canon s) = canon s := by
 canonical spelling parses too, to a tree with the same normalized factor list. -/
 theorem parse_canon :
     ∀ (s : String) (e : UExpr), parseChars s.toList = .ok e →
-      ∃ e', parseChars (canon s).toList = .ok e' ∧ norm e'.factors = norm e.factors := by
+      ∃ e', parseChars (canon s).toList = .ok e' ∧ norm2 e'.factors = norm2 e.factors := by
   intro s e h
   rcases canon_cases s with hc | ⟨e₀, he₀, hl, hc⟩
   · exact ⟨e, by rw [hc]; exact h, rfl⟩
@@ -783,10 +782,10 @@ theorem parse_canon :
 symbols the spelling can write, have the same canonical spelling. -/
 theorem canon_eq_of_factors :
     ∀ (s t : String) (e e' : UExpr), parseChars s.toList = .ok e → parseChars t.toList = .ok e' →
-      norm e.factors = norm e'.factors → (norm e.factors).all (fun f => symOK f.1) = true →
+      norm2 e.factors = norm2 e'.factors → (norm2 e.factors).all (fun f => symOK f.1) = true →
       canon s = canon t := by
   intro s t e e' hs ht hn hv
-  have hv' : (norm e'.factors).all (fun f => symOK f.1) = true := hn ▸ hv
+  have hv' : (norm2 e'.factors).all (fun f => symOK f.1) = true := hn ▸ hv
   unfold canon
   rw [hs, ht]
   simp only [hv', ite_true, hn]
@@ -942,7 +941,7 @@ theorem resolve_canon :
   intro s u h
   rcases canon_cases s with hc | ⟨e, he, hl, hc⟩
   · exact ⟨u, by rw [hc]; exact h, U.agree_refl u⟩
-  obtain ⟨e', he', hperm, -⟩ := parse_spell _ hl
+  obtain ⟨e', he', hfac, -⟩ := parse_spell _ hl
   -- what the original denotes
   have hu : (∀ f ∈ e.factors, f.1 ∈ keys) ∧ u.val = wsum vsym e.factors ∨
       (s.toList = [] ∧ u = sym "") := by
@@ -954,8 +953,8 @@ theorem resolve_canon :
       exact eval_factors e u h
   have hk' : ∀ f ∈ e'.factors, f.1 ∈ keys := by
     intro f hf
-    have hfl := hperm.subset hf
-    have hfs := syms_norm_sub e.factors f hfl
+    have hfl : f ∈ norm2 e.factors := hfac ▸ hf
+    have hfs := syms_norm2_sub e.factors f hfl
     rcases hu with ⟨hk, -⟩ | ⟨hs, -⟩
     · obtain ⟨g, hg, hgs⟩ := List.mem_map.mp hfs
       exact hgs ▸ hk g hg
@@ -965,7 +964,7 @@ theorem resolve_canon :
   refine ⟨u', ?_, ?_⟩
   · rw [hc, resolve_eq_parseChars _ (spell_ne_nil _ hl), he']; exact hu'
   · show u'.val = u.val
-    rw [hv', wsum_congr vsym (expOf_perm hperm), wsum_congr vsym (expOf_norm e.factors)]
+    rw [hv', hfac, wsum_congr vsym (expOf_norm2 e.factors)]
     rcases hu with ⟨-, hv⟩ | ⟨hs, rfl⟩
     · exact hv.symm
     · simp only [parseChars, hs, ite_true] at he; cases he

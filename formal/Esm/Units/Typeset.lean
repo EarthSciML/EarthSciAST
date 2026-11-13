@@ -183,7 +183,7 @@ def pLDen (r : List Char) : Option (List Factor) :=
     | some ([g], []) => some [g]
     | _ => none
 
-/-- Read a LaTeX unit back to a normalized factor list. -/
+/-- Read a LaTeX unit back to its two-sided factor list. -/
 def parseLatex (s : String) : Option (List Factor) :=
   match dropPfx mathrmOpen s.toList with
   | none => none
@@ -194,9 +194,9 @@ def parseLatex (s : String) : Option (List Factor) :=
       | some (num, rest) =>
         let num' := if num = [("1", 1)] then [] else num
         match rest with
-        | [] => some (norm num')
+        | [] => some num'
         | c :: r =>
-          if c = '/' then (pLDen r).map fun den => norm (num' ++ den.map fun f => (f.1, -f.2))
+          if c = '/' then (pLDen r).map fun den => num' ++ den.map fun f => (f.1, -f.2)
           else none
       | none => none
     else none
@@ -346,7 +346,7 @@ theorem parseLatex_latex :
     conv_rhs => rw [← List.map_id D]
     refine List.map_congr_left fun f hf => ?_
     simp [absF, abs_of_neg (hDneg f hf)]
-  have hperm : (N ++ D).Perm l := List.filter_append_perm _ l
+  have hsplit : N ++ D = l := hl.1.1.1
   -- the numerator, as a list the LaTeX join prints
   set NN : List Factor := if N = [] then [("1", 1)] else N with hNN
   have hNNtext : (if N = [] then ['1'] else joinWith latexFactor latexSep N) =
@@ -395,10 +395,9 @@ theorem parseLatex_latex :
       joinWith latexFactor latexSep (f₀ :: r₀) ++ [] by simp,
       pSepBy_latex r₀ f₀ hNNP [] lStop_nil rfl _ (by simp at hlen ⊢; omega)]
     simp only [hnum']
-    have : N.Perm l := by simpa [hD] using hperm
-    rw [norm_eq_of_perm hl.1 this]
+    simpa [hD] using hsplit
   | cons g r =>
-    rw [hD] at hDabs hDP hDlen hperm
+    rw [hD] at hDabs hDP hDlen hsplit
     cases r with
     | nil =>
       dsimp only
@@ -428,7 +427,7 @@ theorem parseLatex_latex :
       simp only [List.map_cons, List.map_nil] at hDabs
       rw [show (absF g).1 = g.1 from rfl, show -(absF g).2 = g.2 by
         simpa using congrArg (fun x => (List.head! x).2) hDabs]
-      rw [norm_eq_of_perm hl.1 hperm]
+      rw [← hsplit]
     | cons h r =>
       dsimp only
       have hJ : joinWith latexFactor latexSep (g :: h :: r) =
@@ -446,7 +445,7 @@ theorem parseLatex_latex :
       rw [e]
       simp only [Option.map_some]
       rw [show absF g :: absF h :: List.map absF r = (g :: h :: r).map absF by simp, hDabs,
-        norm_eq_of_perm hl.1 hperm]
+        hsplit]
 
 /-! ## Typst -/
 
@@ -510,12 +509,12 @@ def pTFactor (cs : List Char) : Option (Factor × List Char) :=
       | some (q, r'') => some ((String.ofList p.1, q), r'')
       | none => none
 
-/-- Read a Typst unit back to a normalized factor list. -/
+/-- Read a Typst unit back to its two-sided factor list. -/
 def parseTypst (s : String) : Option (List Factor) :=
   if s = "1" then some []
   else
     match pSepBy pTFactor thinSep s.length s.toList with
-    | some (fs, []) => some (norm fs)
+    | some (fs, []) => some fs
     | _ => none
 
 /-! ### The Typst round trip -/
@@ -618,11 +617,10 @@ theorem parseTypst_typst :
   intro l hl
   by_cases hl0 : l = []
   · subst hl0; simp [typst, parseTypst]
-  have hperm : (numFactors l ++ denFactors l).Perm l := List.filter_append_perm _ l
-  have hne' : numFactors l ++ denFactors l ≠ [] := by
-    intro h; exact hl0 (List.eq_nil_of_length_eq_zero (by simpa [h] using hperm.length_eq.symm))
+  have hsplit : numFactors l ++ denFactors l = l := hl.1.1.1
+  have hne' : numFactors l ++ denFactors l ≠ [] := by rw [hsplit]; exact hl0
   obtain ⟨f, r, hfr⟩ := List.exists_cons_of_ne_nil hne'
-  have hmem : ∀ g ∈ f :: r, g ∈ l := fun g hg => hperm.subset (hfr ▸ hg)
+  have hmem : ∀ g ∈ f :: r, g ∈ l := fun g hg => by rw [← hsplit, hfr]; exact hg
   have hne : typst l ≠ "1" := by
     intro h
     have := congrArg String.toList h
@@ -642,7 +640,6 @@ theorem parseTypst_typst :
   have ht : (typst l).toList = joinWith typstFactor thinSep (f :: r) := by
     simp [typst, hl0, hfr]
   rw [ht, e]
-  simp only [Option.some.injEq]
-  exact norm_eq_of_perm hl.1 (hfr ▸ hperm)
+  rw [← hfr, hsplit]
 
 end Esm.Units

@@ -18,11 +18,16 @@ unit tree (`UExpr`, esm-spec §4.8.2) by flattening it to a list of factors
 * `norm` sums the exponents of each symbol, drops the symbols whose sum is
   zero, and sorts by symbol (`String`'s order: codepoint order, so uppercase
   before lowercase).
+* `norm2` splits the list into its numerator side (positive exponents) and its
+  denominator side (the rest) and applies `norm` to each side separately, so a
+  symbol on both sides stays on both: `mol/mol` is not cancelled (ruling of
+  2026-11-12). This is the canonical form; `norm` is its building block.
 
 This is purely syntactic: no symbol is looked up, so `km` stays `km` and `ppm`
 stays `ppm`. Two factor lists denote the same product iff they have the same
 exponent function `expOf`; `norm` picks the one sorted, zero-free list with a
-given exponent function (`eq_of_expOf_eq`).
+given exponent function (`eq_of_expOf_eq`), and `norm2` keeps that exponent
+function too (`expOf_norm2`).
 -/
 
 namespace Esm.Units
@@ -187,6 +192,116 @@ theorem norm_eq_of_perm {l l' : List Factor} (hl : Normal l) (h : l'.Perm l) : n
 
 theorem norm_idem (l : List Factor) : norm (norm l) = norm l :=
   norm_eq_of_normal (normal_norm l)
+
+/-! ## The two-sided normal form
+
+The canonical spelling never cancels a symbol across the fraction bar: `mol/mol`
+stays `mol/mol`. A factor is on the numerator side when its net exponent (after
+`/` and negative exponents) is positive, and on the denominator side otherwise;
+each side is normalized on its own (`norm2`). A zero exponent (`m^0`) is dropped. -/
+
+/-- The factors with a positive exponent. -/
+def numFactors (l : List Factor) : List Factor := l.filter (fun f => decide (0 < f.2))
+/-- The factors with a nonpositive exponent. -/
+def denFactors (l : List Factor) : List Factor := l.filter (fun f => !decide (0 < f.2))
+
+theorem mem_numFactors {l : List Factor} {f : Factor} (h : f ∈ numFactors l) : f ∈ l :=
+  List.mem_of_mem_filter h
+theorem mem_denFactors {l : List Factor} {f : Factor} (h : f ∈ denFactors l) : f ∈ l :=
+  List.mem_of_mem_filter h
+
+theorem pos_of_mem_numFactors {l : List Factor} {f : Factor} (h : f ∈ numFactors l) : 0 < f.2 := by
+  simpa [numFactors] using (List.mem_filter.mp h).2
+theorem nonpos_of_mem_denFactors {l : List Factor} {f : Factor} (h : f ∈ denFactors l) :
+    f.2 ≤ 0 := by
+  have := (List.mem_filter.mp h).2
+  simp at this; exact this
+
+/-- Each side normalized on its own: numerator side, then denominator side. -/
+def norm2 (l : List Factor) : List Factor := norm (numFactors l) ++ norm (denFactors l)
+
+/-- A two-sided normal list: its positive factors, then its negative ones, each
+side normal; no zero exponent. -/
+def Normal2 (l : List Factor) : Prop :=
+  (numFactors l ++ denFactors l = l ∧ Normal (numFactors l) ∧ Normal (denFactors l)) ∧
+    ∀ f ∈ l, f.2 ≠ 0
+
+theorem expOf_num_den (l : List Factor) (s : String) :
+    expOf l s = expOf (numFactors l) s + expOf (denFactors l) s := by
+  rw [← expOf_append]
+  exact (congrFun (expOf_perm (List.filter_append_perm _ l)) s).symm
+
+theorem expOf_norm2 (l : List Factor) : expOf (norm2 l) = expOf l := by
+  funext s
+  rw [norm2, expOf_append, expOf_norm, expOf_norm, expOf_num_den l s]
+
+theorem syms_norm2_sub (l : List Factor) : ∀ f ∈ norm2 l, f.1 ∈ syms l := by
+  intro f hf
+  rcases List.mem_append.mp hf with hf | hf
+  · obtain ⟨g, hg, he⟩ := List.mem_map.mp (syms_norm_sub _ f hf)
+    exact List.mem_map.mpr ⟨g, mem_numFactors hg, he⟩
+  · obtain ⟨g, hg, he⟩ := List.mem_map.mp (syms_norm_sub _ f hf)
+    exact List.mem_map.mpr ⟨g, mem_denFactors hg, he⟩
+
+theorem expOf_nonneg (l : List Factor) (h : ∀ f ∈ l, 0 ≤ f.2) (s : String) : 0 ≤ expOf l s := by
+  unfold expOf
+  refine List.sum_nonneg fun x hx => ?_
+  obtain ⟨f, hf, rfl⟩ := List.mem_map.mp hx
+  exact h f (List.mem_of_mem_filter hf)
+
+theorem expOf_nonpos (l : List Factor) (h : ∀ f ∈ l, f.2 ≤ 0) (s : String) : expOf l s ≤ 0 := by
+  induction l with
+  | nil => simp
+  | cons f l ih =>
+    have hf := h f (by simp)
+    have := ih (fun g hg => h g (by simp [hg]))
+    rw [expOf_cons]; split_ifs <;> linarith
+
+/-- In `norm l`, each member's exponent is the total exponent of its symbol in `l`. -/
+theorem exp_of_mem_norm (l : List Factor) {f : Factor} (hf : f ∈ norm l) : f.2 = expOf l f.1 := by
+  rw [← expOf_of_mem_normal (normal_norm l) hf, expOf_norm]
+
+theorem norm_pos (l : List Factor) (h : ∀ f ∈ l, 0 < f.2) : ∀ f ∈ norm l, 0 < f.2 := by
+  intro f hf
+  have h0 := (normal_norm l).2 f hf
+  have := expOf_nonneg l (fun g hg => (h g hg).le) f.1
+  rw [← exp_of_mem_norm l hf] at this
+  exact lt_of_le_of_ne this (Ne.symm h0)
+
+theorem norm_neg (l : List Factor) (h : ∀ f ∈ l, f.2 ≤ 0) : ∀ f ∈ norm l, f.2 < 0 := by
+  intro f hf
+  have h0 := (normal_norm l).2 f hf
+  have := expOf_nonpos l h f.1
+  rw [← exp_of_mem_norm l hf] at this
+  exact lt_of_le_of_ne this h0
+
+theorem numFactors_sides (A B : List Factor) (hA : ∀ f ∈ A, 0 < f.2) (hB : ∀ f ∈ B, f.2 < 0) :
+    numFactors (A ++ B) = A ∧ denFactors (A ++ B) = B := by
+  unfold numFactors denFactors
+  rw [List.filter_append, List.filter_append,
+    List.filter_eq_self.mpr (fun f hf => by simpa using hA f hf),
+    List.filter_eq_nil_iff.mpr (fun f hf => by simpa using (hB f hf).le),
+    List.filter_eq_nil_iff.mpr (fun f hf => by simpa using hA f hf),
+    List.filter_eq_self.mpr (fun f hf => by simpa using (hB f hf).le)]
+  simp
+
+theorem normal2_norm2 (l : List Factor) : Normal2 (norm2 l) := by
+  have hA := norm_pos (numFactors l) (fun f hf => pos_of_mem_numFactors hf)
+  have hB := norm_neg (denFactors l) (fun f hf => nonpos_of_mem_denFactors hf)
+  obtain ⟨hn, hd⟩ := numFactors_sides _ _ hA hB
+  unfold Normal2 norm2
+  rw [hn, hd]
+  refine ⟨⟨rfl, normal_norm _, normal_norm _⟩, fun f hf => ?_⟩
+  rcases List.mem_append.mp hf with hf | hf
+  · exact (hA f hf).ne'
+  · exact (hB f hf).ne
+
+theorem norm2_eq_of_normal2 {l : List Factor} (hl : Normal2 l) : norm2 l = l := by
+  unfold norm2
+  rw [norm_eq_of_normal hl.1.2.1, norm_eq_of_normal hl.1.2.2, hl.1.1]
+
+theorem norm2_idem (l : List Factor) : norm2 (norm2 l) = norm2 l :=
+  norm2_eq_of_normal2 (normal2_norm2 l)
 
 /-! ## Weighted sums depend only on the exponent function -/
 

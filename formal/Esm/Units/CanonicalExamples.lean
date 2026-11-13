@@ -11,10 +11,10 @@ namespace Esm.Units.CanonicalExamples
 
 open Esm.Units
 
-/-- The normalized factor list of a unit string (empty when it does not parse). -/
+/-- The two-sided normal form of a unit string (empty when it does not parse). -/
 def factorsOf (s : String) : List Factor :=
   match parseChars s.toList with
-  | .ok e => norm e.factors
+  | .ok e => norm2 e.factors
   | .error _ => []
 
 /-! ## Spellings that canonicalize alike -/
@@ -41,13 +41,25 @@ example : canon "ppm" = "ppm" := by decide +kernel
 example : canon "km/h" = "km/h" := by decide +kernel
 example : canon "µg/m³" = "ug/m^3" := by decide +kernel
 
-/-! ## The dimensionless spellings, cancellation, and unparseable strings -/
+/-! ## No cancellation across the fraction bar -/
+
+example : canon "mol/mol" = "mol/mol" := by decide +kernel
+example : canon "kg/kg" = "kg/kg" := by decide +kernel
+example : canon "m^2/m^2" = "m^2/m^2" := by decide +kernel
+example : canon "mol/mol/s" = "mol/(mol*s)" := by decide +kernel
+example : canon "foo/foo" = "foo/foo" := by decide +kernel
+example : canon "m m^-1" = "m/m" := by decide +kernel
+example : canon "m*m/m" = "m^2/m" := by decide +kernel
+example : canon "ppb^-1 s^-1" = "1/(ppb*s)" := by decide +kernel
+example : canon "m^2/m^-1" = "m^3" := by decide +kernel
+example : canon "m^0*s" = "s" := by decide +kernel
+
+/-! ## The dimensionless spellings and unparseable strings -/
 
 example : canon "" = "1" := by decide +kernel
 example : canon "1" = "1" := by decide +kernel
 example : canon "dimensionless" = "1" := by decide +kernel
 example : canon "dimensionless/s" = "1/s" := by decide +kernel
-example : canon "mol/mol" = "1" := by decide +kernel
 example : canon "g/hp-hr" = "g/hp-hr" := by decide +kernel
 example : canon "1000/s" = "1000/s" := by decide +kernel
 example : canon " " = " " := by decide +kernel
@@ -65,6 +77,11 @@ example : typst (factorsOf "cm^3 molec^-1 s^-1") =
 example : typst (factorsOf "molec/cm^3") = "upright(\"molec\") thin upright(\"cm\")^(-3)" := by
   decide +kernel
 example : typst (factorsOf "(m/s)^(-1/3)") = "upright(\"s\")^(1\\/3) thin upright(\"m\")^(-1\\/3)" := by
+  decide +kernel
+example : typst (factorsOf "mol/mol") = "upright(\"mol\") thin upright(\"mol\")^(-1)" := by
+  decide +kernel
+example : latex (factorsOf "mol/mol/s") = "\\mathrm{mol/(mol\\,s)}" := by decide +kernel
+example : parseTypst "upright(\"mol\") thin upright(\"mol\")^(-1)" = some (factorsOf "mol/mol") := by
   decide +kernel
 example : typst (factorsOf "ppm") = "upright(\"ppm\")" := by decide +kernel
 example : typst (factorsOf "") = "1" := by decide +kernel
