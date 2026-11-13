@@ -142,19 +142,26 @@ theorem sizeOf_snd_lt_obj {kv : String × Json} {kvs : List (String × Json)} (h
   obtain ⟨k, v⟩ := kv
   simp only [Prod.mk.sizeOf_spec] at *; omega
 
+mutual
 def jsonToks : Json → List Tok
   | .null => [.word "null"]
   | .bool true => [.word "true"]
   | .bool false => [.word "false"]
   | .num n => [.num n]
   | .str s => [.jstr s]
-  | .arr xs => .kw .lbk :: sepBy [.kw .comma] (xs.map jsonToks) ++ [.kw .rbk]
-  | .obj kvs => .kw .lb :: sepBy [.kw .comma] (kvs.map fun kv => .jstr kv.1 :: .kw .colon :: jsonToks kv.2) ++ [.kw .rb]
-termination_by j => sizeOf j
-decreasing_by
-  all_goals simp_wf
-  · have := List.sizeOf_lt_of_mem ‹_ ∈ xs›; omega
-  · rename_i h; exact sizeOf_snd_lt_obj h
+  | .arr xs => .kw .lbk :: jsonItems xs ++ [.kw .rbk]
+  | .obj kvs => .kw .lb :: jsonEntries kvs ++ [.kw .rb]
+
+def jsonItems : List Json → List Tok
+  | [] => []
+  | [v] => jsonToks v
+  | v :: vs => jsonToks v ++ .kw .comma :: jsonItems vs
+
+def jsonEntries : List (String × Json) → List Tok
+  | [] => []
+  | [(k, v)] => .jstr k :: .kw .colon :: jsonToks v
+  | (k, v) :: es => .jstr k :: .kw .colon :: jsonToks v ++ .kw .comma :: jsonEntries es
+end
 
 /-! ## Operator tables -/
 
