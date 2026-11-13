@@ -327,6 +327,8 @@ mod scalar_ic_conformance;
 mod scalar_operand_in_faq;
 #[path = "scalar_param_array_default.rs"]
 mod scalar_param_array_default;
+#[path = "scalar_state_array_tendency.rs"]
+mod scalar_state_array_tendency;
 #[path = "schema_validation.rs"]
 mod schema_validation;
 #[path = "scope_injection_conformance.rs"]

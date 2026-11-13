@@ -347,6 +347,37 @@ pub enum CompileError {
         result_axes: Vec<String>,
     },
 
+    /// A SCALAR state whose tendency reads an array in elementwise position
+    /// (esm-spec §4.3.4, §10.5; issue #715).
+    ///
+    /// `D(x) ~ rhs` with `x` declared without a `shape` and never lifted
+    /// defines one value per time, and its result declares no index sets, so
+    /// an array operand has no axis to align to. It arises when a coupling
+    /// carries a 0-D system's inputs onto a grid without carrying its states:
+    /// a pointwise `variable_map` lifts the rates a reaction system reads, an
+    /// `operator_compose` merges a shaped operator (`_var`) into its scalar
+    /// tendencies, or a `translate` names only some of its species. Evaluating
+    /// the scalar slot at one element of the array is a plausible wrong
+    /// number, so it is refused; the states are carried onto the grid by
+    /// translating every one onto a shaped state (or by the pointwise lift of
+    /// an operator `makearray`).
+    #[error(
+        "array_shape_mismatch: state '{state}' is scalar (declared without a `shape` and not \
+         lifted), but its tendency reads '{operand}', an array over {operand_axes:?}, in \
+         elementwise position. A scalar result has no axis to align it to (esm-spec §4.3.4). \
+         A coupling that carries a 0-D system's inputs onto a grid does not carry its states: \
+         give '{state}' the grid's `shape`, e.g. by an `operator_compose` whose `translate` \
+         maps every state of the 0-D system onto a shaped state (esm-spec §10.5)"
+    )]
+    ScalarStateArrayTendency {
+        /// The scalar state.
+        state: String,
+        /// The first array operand read in elementwise position.
+        operand: String,
+        /// That operand's index sets (declared or inferred).
+        operand_axes: Vec<String>,
+    },
+
     /// A dependency cycle among the model's OBSERVED unknowns (esm-spec
     /// §4.9.6): each observed on the cycle is defined by an equation whose RHS
     /// names the next, so no evaluation order satisfies every definition.

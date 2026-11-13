@@ -3567,6 +3567,10 @@ fn build_rhs_rules(
     // parameter / observed), used to lower a whole-array `D(state)` RHS into
     // per-cell gathers that align each operand BY NAME (esm-spec §4.3.4).
     let array_axes = declared_axis_names(model);
+    // Every array as the build sees it: declared, or inferred for a variable
+    // declared without a `shape` from its elementwise definition (esm-spec
+    // §4.3.4). Read only to refuse a scalar state whose tendency is an array.
+    let value_axes = crate::structural::promoted_var_shapes(model);
 
     for eq in &model.equations {
         if let Some(d) = extract_derivative_faq(&eq.lhs, &eq.rhs) {
@@ -3589,6 +3593,7 @@ fn build_rhs_rules(
                     &eq.rhs,
                     model,
                     &array_axes,
+                    &value_axes,
                     var_shapes,
                     &mut covered_slots,
                     &mut rhs_rules,
@@ -3682,11 +3687,13 @@ fn lower_indexed_derivative(
 /// Lower a bare-variable derivative `D(var, t) = rhs`: a plain scalar slot
 /// write when the state is 0-D, otherwise one of the two whole-array lifts
 /// ([`lower_wholearray_producer_lift`] / [`lower_wholearray_percell`]).
+#[allow(clippy::too_many_arguments)]
 fn lower_bare_derivative(
     var: String,
     rhs: &Expr,
     model: &Model,
     array_axes: &HashMap<String, Vec<String>>,
+    value_axes: &HashMap<String, Vec<String>>,
     var_shapes: &IndexMap<String, VarShape>,
     covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
@@ -3711,7 +3718,22 @@ fn lower_bare_derivative(
         .and_then(|v| v.shape.as_deref())
         .filter(|d| d.len() == shape.shape.len());
     if shape.shape.is_empty() {
-        // Plain scalar D(var, t) = rhs.
+        // Plain scalar D(var, t) = rhs. Its result declares no index sets, so
+        // an array operand in elementwise position has no axis to align to
+        // (esm-spec §4.3.4) and no single value to take: refuse it, rather than
+        // evaluate the scalar slot at one element of the array. This is how a
+        // 0-D system's state meets a grid without being lifted onto it (a
+        // coupling that lifts its rates but not its states, issue #715).
+        let mut leaves: Vec<String> = Vec::new();
+        collect_wrapped_array_leaves(rhs, value_axes, false, &mut leaves);
+        if let Some(operand) = leaves.into_iter().next() {
+            let operand_axes = value_axes.get(&operand).cloned().unwrap_or_default();
+            return Err(CompileError::ScalarStateArrayTendency {
+                state: var,
+                operand,
+                operand_axes,
+            });
+        }
         let slot = shape.flat_offset;
         covered_slots.insert(slot);
         rhs_rules.push(RhsRule::Scalar {
