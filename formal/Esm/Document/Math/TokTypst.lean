@@ -436,6 +436,122 @@ theorem good_arr (af : AForm) (h : AOK af) : Good (arrToks .typst af) ∧ Nice (
     · rw [List.getLast?_cons_cons, ← List.cons_append, List.getLast?_append_of_ne_nil _ (by simp)] at ht
       simp at ht; subst ht; rfl
 
+/-! ## Reductions -/
+
+theorem tokOK_num1 : tokOK (.num (.int 1)) := by
+  show JNum.InInt64 1; unfold JNum.InInt64; decide
+
+theorem faqOut_crow (c : Ctx) (P : Json → Out) (F : FaqForm) :
+    (faqOut c P F).crow = (faqOut c P F).toks ++ [.kw .amp, .txt "otherwise"] := by
+  unfold faqOut; split
+  · rfl
+  · split <;> rfl
+
+theorem good_faqOut (c : Ctx) (hc : c.sf = .typst) (F : FaqForm) (P : Json → Out)
+    (hQ : ∀ x ∈ faqSubs F, ∀ L, Good ((P x).at .typst L) ∧ Nice ((P x).at .typst L) ∧ (P x).at .typst L ≠ []) :
+    Good (faqOut c P F).toks := by
+  have hRow : ∀ kv ∈ F.ranges, Good (rowToks c P kv) ∧ Nice (rowToks c P kv) := by
+    intro kv hkv
+    obtain ⟨hN1, hN2, hN3⟩ := good_nameToks c hc kv.1
+    unfold rowToks
+    split
+    · rename_i a b he
+      obtain ⟨ha, hb⟩ := Latex.faqSubs_rng hkv he
+      obtain ⟨hA1, hA2, hA3⟩ := hQ a ha 4
+      obtain ⟨hB1, hB2, -⟩ := hQ b hb 4
+      rw [hc]; simp only [List.append_assoc, List.cons_append]
+      have hT := good_cons (t := .kw .le) rfl (good_append hN1 (good_cons (t := .kw .le) rfl hB1 hB2)
+        (nice_cons _ (by simp) rfl)) (nice_append _ hN2 hN3.1)
+      exact ⟨good_append hA1 hT (nice_cons _ (by simp) rfl), nice_append _ hA2 hA3⟩
+    · rename_i s _
+      obtain ⟨hS1, hS2, -⟩ := good_nameToks c hc s
+      exact ⟨good_append hN1 (good_cons rfl hS1 hS2) (nice_cons _ (by simp) rfl), nice_append _ hN2 hN3.1⟩
+    · rename_i s ps _
+      obtain ⟨hS1, hS2, hS3⟩ := good_nameToks c hc s
+      have hL := good_sepBy .comma rfl (by simp) (ps.map fun (p : Json) => match p with
+          | .str q => nameToks c q | _ => []) (fun y hy => by
+        obtain ⟨p, -, rfl⟩ := List.mem_map.1 hy
+        split
+        · exact ⟨(good_nameToks c hc _).1, (good_nameToks c hc _).2.1⟩
+        · exact ⟨good_nil, fun _ h => by cases h⟩)
+      have hR : Good (sepBy [.kw .comma] (ps.map fun (p : Json) => match p with
+          | .str q => nameToks c q | _ => []) ++ [.kw .rp]) ∧ Nice (sepBy [.kw .comma] (ps.map fun (p : Json) =>
+          match p with | .str q => nameToks c q | _ => []) ++ [.kw .rp]) := by
+        refine ⟨good_append hL.1 (good_single rfl) (nice_cons _ (by simp) rfl), ?_⟩
+        by_cases he : sepBy [.kw .comma] (ps.map fun (p : Json) => match p with
+          | .str q => nameToks c q | _ => []) = []
+        · rw [he]; exact nice_cons _ (by simp) rfl
+        · exact nice_append _ hL.2 he
+      have hT : Good (nameToks c s ++ .kw .lp :: (sepBy [.kw .comma] (ps.map fun (p : Json) => match p with
+          | .str q => nameToks c q | _ => []) ++ [.kw .rp])) := good_append_lp hS1 hS3 hR.1 hR.2
+      simp only [List.cons_append, List.append_assoc] at hT ⊢
+      refine ⟨good_append hN1 ?_ (nice_cons _ (by simp) rfl), nice_append _ hN2 hN3.1⟩
+      exact good_cons rfl hT (nice_append _ hS2 hS3.1)
+    · exact ⟨good_nil, fun _ h => by cases h⟩
+  have hk : tokOK (.kw F.red.kw) ∧ Tok.kw F.red.kw ≠ .kw .lp := by cases F.red <;> exact ⟨rfl, by simp [RedK.kw]⟩
+  have hH : Good (headToks .typst F) ∧ Nice (headToks .typst F) ∧ headToks .typst F ≠ [] := by
+    simp only [headToks]
+    split
+    · refine ⟨good_cons_lp rfl rfl (good_cons hk.1 (good_single rfl) (nice_cons _ (by simp) rfl))
+        (nice_cons _ hk.2 rfl), nice_cons _ (by simp) rfl, by simp⟩
+    · exact ⟨good_single hk.1, nice_cons _ hk.2 rfl, by simp⟩
+  have hRows : ∀ x ∈ subRows c P F, Good x ∧ Nice x := by
+    intro x hx
+    unfold subRows at hx
+    rcases List.mem_append.1 hx with hx | hx
+    · obtain ⟨kv, hkv, rfl⟩ := List.mem_map.1 hx
+      exact hRow kv (List.mem_filter.1 hkv).1
+    · split at hx
+      · rename_i y hy
+        simp only [List.mem_singleton] at hx; subst hx
+        rw [hc]; exact ⟨(hQ y (by simp [faqSubs, hy]) 1).1, (hQ y (by simp [faqSubs, hy]) 1).2.1⟩
+      · cases hx
+  have hSub : Good (subToks c P F) ∧ Nice (subToks c P F) := by
+    rw [subToks_eq, iteF (by rw [hc]; decide)]; unfold subToksT
+    split
+    · exact ⟨good_nil, fun _ h => by cases h⟩
+    · have hS := good_sepBy .nl rfl (by simp) _ hRows
+      have hR : Good (sepBy [.kw .nl] (subRows c P F) ++ [.kw .rp]) ∧
+          Nice (sepBy [.kw .nl] (subRows c P F) ++ [.kw .rp]) := by
+        refine ⟨good_append hS.1 (good_single rfl) (nice_cons _ (by simp) rfl), ?_⟩
+        by_cases he : sepBy [.kw .nl] (subRows c P F) = []
+        · rw [he]; exact nice_cons _ (by simp) rfl
+        · exact nice_append _ hS.2 he
+      simp only [List.cons_append, List.nil_append]
+      exact ⟨good_cons rfl (good_cons rfl hR.1 hR.2) (nice_cons _ (by simp) rfl), nice_cons _ (by simp) rfl⟩
+  obtain ⟨hB1, hB2, hB3⟩ := hQ F.expr (by simp [faqSubs]) 5
+  have hRed : Good (redToks c P F) ∧ Nice (redToks c P F) ∧ redToks c P F ≠ [] := by
+    unfold redToks; rw [hc]
+    refine ⟨good_append (good_append hH.1 hSub.1 hSub.2) hB1 hB2, nice_append _ (nice_append _ hH.2.1 hH.2.2)
+      (by simp [hH.2.2]), by simp [hH.2.2]⟩
+  have hEnt : ∀ x ∈ F.out.map (entryToks c P F), Good x ∧ Nice x := by
+    intro x hx
+    obtain ⟨j, -, rfl⟩ := List.mem_map.1 hx
+    unfold entryToks
+    split
+    · split
+      · rename_i v hv; exact hRow _ (look_mem hv)
+      · exact ⟨(good_nameToks c hc _).1, (good_nameToks c hc _).2.1⟩
+    · exact ⟨good_single tokOK_num1, nice_cons _ (by simp) rfl⟩
+  have hE := good_sepBy .comma rfl (by simp) _ hEnt
+  have hE' : Good (sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ [.kw .rp]) ∧
+      Nice (sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ [.kw .rp]) := by
+    refine ⟨good_append hE.1 (good_single rfl) (nice_cons _ (by simp) rfl), ?_⟩
+    by_cases he : sepBy [.kw .comma] (F.out.map (entryToks c P F)) = []
+    · rw [he]; exact nice_cons _ (by simp) rfl
+    · exact nice_append _ hE.2 he
+  unfold faqOut
+  rw [hc]
+  split
+  · exact hRed.1
+  · simp only [mkOut, List.cons_append, List.nil_append, List.append_assoc]
+    have hTail : Good (.kw .rbk :: .kw .rp :: .kw .us :: .kw .lpg ::
+        (sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ [.kw .rp])) :=
+      good_cons rfl (good_cons rfl (good_cons rfl (good_cons rfl hE'.1 hE'.2) (nice_cons _ (by simp) rfl))
+        (nice_cons _ (by simp) rfl)) (nice_cons _ (by simp) rfl)
+    exact good_cons_lp rfl rfl (good_cons rfl (good_append hRed.1 hTail (nice_cons _ (by simp) rfl))
+      (nice_append _ hRed.2.1 hRed.2.2)) (nice_cons _ (by simp) rfl)
+
 /-! ## The induction -/
 
 def TP (c : Ctx) (e : Json) : Prop :=
@@ -734,6 +850,13 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
         · simp at ht; subst ht; exact hlf
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok hT hselfN.1 hselfN.2
+    | faq kvs F hF hok P hP hpr =>
+      have hT := good_faqOut c hc F P (fun x hx L => by
+        rw [hP x hx]; exact CH x (faqSubs_lt hF hx) (faqSubs_isE hok x hx) L)
+      rw [hpr] at hselfN ⊢
+      have hm := mk_ok hT hselfN.1 hselfN.2
+      rw [faqOut_crow]
+      exact ⟨hT, hm.2.1, hm.2.2⟩
     | tpos m bs ps hm hsb hb hps hpr =>
       simp only [hc] at hpr
       have hS := good_callToks [.opn m] (good_single trivial) ⟨by simp, fun u hu => by simp at hu; subst hu; exact callEnd_opn m⟩

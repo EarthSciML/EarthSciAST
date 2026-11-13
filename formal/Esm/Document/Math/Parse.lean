@@ -62,7 +62,8 @@ def atomStart : Tok → Bool
     match k with
     | .lpg | .lp | .lbk | .lnot | .frac | .sqrt | .exp | .ln | .log | .sin | .cos | .tan
     | .asin | .acos | .atan | .sinh | .cosh | .tanh | .min | .max | .labs | .lfloor | .lceil
-    | .abs | .floor | .ceil | .dotacc | .bcases | .cases | .esmnode | .bmat | .vec | .mat => true
+    | .abs | .floor | .ceil | .dotacc | .bcases | .cases | .esmnode | .bmat | .vec | .mat
+    | .sum | .prod | .limits | .lbkg | .lr => true
     | _ => false
   | _ => false
 
@@ -317,6 +318,62 @@ def pItalicD (c : Ctx) (r : List Tok) : Option (Json × List Tok) :=
       | some (n, .kw .slash :: .kw .lpg :: r1) => (dName c.sf .rp r1).map fun p => (dNode (.str n) p.1, p.2)
       | _ => none
 
+/-- The token is the keyword `k`. -/
+def isKw (k : Kw) : Tok → Bool
+  | .kw k' => k' == k
+  | _ => false
+
+/-- A row of a reduction's subscript, or an output entry: a range, or an expression
+(the filter, or a bare output entry). -/
+inductive Row where
+  | rng (k : String) (v : Json)
+  | filt (x : Json)
+
+def redOf : Kw → Option RedK
+  | .sum => some .sum
+  | .prod => some .prod
+  | .max => some .max
+  | .min => some .min
+  | _ => none
+
+/-- The operator of a reduction and whether it is marked (`args` listed): LaTeX
+`\sum\limits`, Typst `limits(sum)`. -/
+def pRedHead (sf : Sf) : List Tok → Option (RedK × Bool × List Tok)
+  | .kw .limits :: .kw .lp :: .kw k :: .kw .rp :: r =>
+    if sf = .typst then (redOf k).map fun red => (red, true, r) else none
+  | .kw k :: .kw .limitsL :: r =>
+    if sf = .latex then (redOf k).map fun red => (red, true, r) else (redOf k).map fun red => (red, false, .kw .limitsL :: r)
+  | .kw k :: r => (redOf k).map fun red => (red, false, r)
+  | _ => none
+
+/-- Names separated by commas. -/
+def pNames (sf : Sf) : Nat → List Tok → Option (List String × List Tok)
+  | 0, _ => none
+  | f + 1, ts =>
+    match pName sf ts with
+    | some (n, .kw .comma :: r) => (pNames sf f r).map fun p => (n :: p.1, p.2)
+    | some (n, r) => some ([n], r)
+    | none => none
+
+/-- The ranges and the filter of a list of rows: ranges, then at most one filter, last. -/
+def rowParts : List Row → Option (List (String × Json) × Option Json)
+  | [] => some ([], none)
+  | [.filt x] => some ([], some x)
+  | .filt _ :: _ :: _ => none
+  | .rng k v :: r => (rowParts r).map fun p => ((k, v) :: p.1, p.2)
+
+/-- The output entries of a list of entry rows, with their ranges. -/
+def entryParts : List Row → Option (List Json × List (String × Json))
+  | [] => some ([], [])
+  | .rng k v :: r => (entryParts r).map fun p => (.str k :: p.1, (k, v) :: p.2)
+  | .filt (.str k) :: r => (entryParts r).map fun p => (.str k :: p.1, p.2)
+  | .filt (.num (.int 1)) :: r => (entryParts r).map fun p => (.num (.int 1) :: p.1, p.2)
+  | .filt _ :: _ => none
+
+/-- The node an output form reads: the reduction's parts with the output entries. -/
+def withOut (F : FaqForm) (outs : List Json) (ors : List (String × Json)) : FaqForm :=
+  { F with out := outs, ranges := sortKV (ors ++ F.ranges) }
+
 mutual
 /-- Level 1: an `or` chain. -/
 def pOr (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
@@ -350,7 +407,8 @@ def andLoop (c : Ctx) : Nat → List Json → List Tok → Option (Json × List 
     | none => none
   | _ + 1, acc, r => some (close "and" acc, r)
 
-/-- Level 3: comparisons, grouping to the left. -/
+/-- Level 3: one comparison (comparisons do not chain: `a \le k \le b` is a range row of a
+reduction, never an expression). -/
 def pCmp (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
   | 0, _ => none
   | f + 1, ts =>
@@ -364,7 +422,7 @@ def cmpLoop (c : Ctx) : Nat → Json → List Tok → Option (Json × List Tok)
     match cmpOf k with
     | some o =>
       match pAdd c f r with
-      | some (y, r') => cmpLoop c f (node o [x, y]) r'
+      | some (y, r') => some (node o [x, y], r')
       | none => none
     | none => some (x, .kw k :: r)
   | _ + 1, x, r => some (x, r)
@@ -718,17 +776,19 @@ def pPrim (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
       | some (x, .kw .rceil :: r') => some (node "ceil" [x], r')
       | _ => none
     | .kw .min :: t :: r =>
-      if isLp t then
+      if t matches .kw .lp then
         match pList c f 1 r with
         | some (xs, .kw .rp :: r') => if 2 ≤ xs.length then some (node "min" xs, r') else none
         | _ => none
-      else none
+      else pRed c f ts
     | .kw .max :: t :: r =>
-      if isLp t then
+      if t matches .kw .lp then
         match pList c f 1 r with
         | some (xs, .kw .rp :: r') => if 2 ≤ xs.length then some (node "max" xs, r') else none
         | _ => none
-      else none
+      else pRed c f ts
+    | .kw .sum :: _ | .kw .prod :: _ | .kw .limits :: _ | .kw .lbkg :: _ => pRed c f ts
+    | .kw .lr :: .kw .lp :: .kw .lbk :: _ => pRed c f ts
     | .opn n :: r => pOpn c f n r
     | .kw .bcases :: r => pCases c f r
     | .kw .cases :: t :: r => if isLp t then pCases c f r else none
@@ -782,6 +842,112 @@ def pEulerExp (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
     match pExpo c f r with
     | some (y, r') => some (node "exp" [y], r')
     | none => none
+
+/-- A range row: `k \in S`, `k \in S(i, j)`, `a \le k \le b`. -/
+def pRange (c : Ctx) : Nat → List Tok → Option (Row × List Tok)
+  | 0, _ => none
+  | f + 1, ts =>
+    match pAdd c f ts with
+    | some (.str k, .kw .inn :: r) =>
+      match pName c.sf r with
+      | some (s, .kw .lp :: r2) =>
+        match pNames c.sf (r2.length + 1) r2 with
+        | some (ps, .kw .rp :: r3) => some (.rng k (.obj [("from", .str s), ("of", .arr (ps.map .str))]), r3)
+        | _ => none
+      | some (s, r2) => some (.rng k (.obj [("from", .str s)]), r2)
+      | none => none
+    | some (a, .kw .le :: r) =>
+      match pAdd c f r with
+      | some (.str k, .kw .le :: r2) =>
+        match pAdd c f r2 with
+        | some (b, r3) => some (.rng k (.arr [a, b]), r3)
+        | none => none
+      | _ => none
+    | _ => none
+
+/-- A row ending at a token `isEnd` accepts: an expression read whole first (it never
+reads a range row whole: a range row has `\in` or a second `\le`), else a range. -/
+def pRow (c : Ctx) : Nat → (Tok → Bool) → List Tok → Option (Row × List Tok)
+  | 0, _, _ => none
+  | f + 1, isEnd, ts =>
+    match pOr c f ts with
+    | some (x, t :: r) => if isEnd t then some (.filt x, t :: r) else pRange c f ts
+    | _ => pRange c f ts
+
+/-- Rows separated by `sep`, up to `close` (consumed). -/
+def pRows (c : Ctx) : Nat → Kw → Kw → List Tok → Option (List Row × List Tok)
+  | 0, _, _, _ => none
+  | f + 1, sep, close, ts =>
+    match pRow c f (fun t => isKw sep t || isKw close t) ts with
+    | some (row, .kw k :: r) =>
+      if k = sep then (pRows c f sep close r).map fun p => (row :: p.1, p.2)
+      else if k = close then some ([row], r) else none
+    | _ => none
+
+/-- A reduction after its operator: the subscript rows (LaTeX: one row, a lone dense
+range `k=a` with `^{b}`, or `\substack`; Typst: rows in `_( … )`), then the body. -/
+def pRedBody (c : Ctx) : Nat → RedK → Bool → List Tok → Option (FaqForm × List Tok)
+  | 0, _, _, _ => none
+  | f + 1, red, marked, ts =>
+    let rows : Option (List Row × List Tok) :=
+      match c.sf with
+      | .latex =>
+        match ts with
+        | .kw .us :: .kw .lb :: .kw .substack :: .kw .lb :: r =>
+          match pRows c f .nl .rb r with
+          | some (rs, .kw .rb :: r') => some (rs, r')
+          | _ => none
+        | .kw .us :: .kw .lb :: r =>
+          match pRow c f (isKw .rb) r with
+          | some (.filt (.obj [("args", .arr [.str k, a]), ("op", .str "==")]), .kw .rb :: .kw .caret :: .kw .lb :: r2) =>
+            match pOr c f r2 with
+            | some (b, .kw .rb :: r3) => some ([.rng k (.arr [a, b])], r3)
+            | _ => none
+          | some (row, .kw .rb :: r2) => some ([row], r2)
+          | _ => none
+        | r => some ([], r)
+      | .typst =>
+        match ts with
+        | .kw .us :: .kw .lpg :: r => pRows c f .nl .rp r
+        | r => some ([], r)
+    match rows with
+    | some (rs, r) =>
+      match rowParts rs, pMul c f r with
+      | some (rg, fl), some (body, r') => some (⟨red, marked, [], rg, body, fl⟩, r')
+      | _, _ => none
+    | none => none
+
+/-- A rank-0 reduction, or a reduction wrapped with its output entries. -/
+def pRed (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
+  | 0, _ => none
+  | f + 1, ts =>
+    match ts with
+    | .kw .lbkg :: r =>
+      match pRedHead c.sf r with
+      | some (red, marked, r1) =>
+        match pRedBody c f red marked r1 with
+        | some (F, .kw .rbkg :: .kw .us :: .kw .lb :: r2) =>
+          match pRows c f .comma .rb r2 with
+          | some (es, r3) =>
+            (entryParts es).map fun p => (faqJson (withOut F p.1 p.2), r3)
+          | none => none
+        | _ => none
+      | none => none
+    | .kw .lr :: .kw .lp :: .kw .lbk :: r =>
+      match pRedHead c.sf r with
+      | some (red, marked, r1) =>
+        match pRedBody c f red marked r1 with
+        | some (F, .kw .rbk :: .kw .rp :: .kw .us :: .kw .lpg :: r2) =>
+          match pRows c f .comma .rp r2 with
+          | some (es, r3) =>
+            (entryParts es).map fun p => (faqJson (withOut F p.1 p.2), r3)
+          | none => none
+        | _ => none
+      | none => none
+    | _ =>
+      match pRedHead c.sf ts with
+      | some (red, marked, r1) => (pRedBody c f red marked r1).map fun p => (faqJson p.1, p.2)
+      | none => none
 
 /-- `f(x)` after the opening parenthesis. -/
 def pFn1 (c : Ctx) : Nat → String → List Tok → Option (Json × List Tok)

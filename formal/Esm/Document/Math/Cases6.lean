@@ -58,8 +58,8 @@ theorem M_mm (c : Ctx) (o : String) (k : Kw) (xs : List Json) (ho : kindOf o = .
         (by simp) (Or.inl rfl) xs hx rest (g + 1) (by simp at hf; unfold need at hf ⊢; omega)
       simp only [callToks, lpC, List.cons_append, List.nil_append, List.append_assoc]
       rcases hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-      · rw [pPrim.eq_def]; simp only [isLp, ↓reduceIte]; rw [hca]; simp [hl]
-      · rw [pPrim.eq_def]; simp only [isLp, ↓reduceIte]; rw [hca]; simp [hl]
+      · rw [pPrim.eq_def]; simp only [↓reduceIte]; rw [hca]; simp [hl]
+      · rw [pPrim.eq_def]; simp only [↓reduceIte]; rw [hca]; simp [hl]
     · rw [hpr]; simp [mkOut]
     · rw [hpr]; simp [mkOut]
   · rw [hpr]; rcases hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;>

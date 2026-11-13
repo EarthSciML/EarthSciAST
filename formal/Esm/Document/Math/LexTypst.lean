@@ -21,9 +21,9 @@ open Esm.Document Esm.Document.Math
 /-- Typst keywords: the ones with a Typst spelling, except `times` (the printer
 never writes it; it would run into the `times 10^…` of a scientific number). -/
 def kwOK : Kw → Bool
-  | .times | .rpg | .lb | .rb | .nl | .thin | .frac | .labs | .rabs | .lfloor | .rfloor
+  | .times | .rpg | .lb | .rb | .thin | .frac | .labs | .rabs | .lfloor | .rfloor
   | .lceil | .rceil | .dotacc | .bcases | .ecases | .bmat | .emat
-  | .sum | .prod | .inn | .substack | .limits | .lbkg | .rbkg | .lr => false
+  | .substack | .lbkg | .rbkg | .limitsL => false
   | _ => true
 
 /-- The Typst tokens: what the Typst printer writes. -/
@@ -274,7 +274,9 @@ theorem lexOne_kw (prev : Option Char) (k : Kw) (hk : kwOK k = true) (hlp : k �
   case amp =>
     exact lexOne_punct prev '&' .amp X rfl (by decide) (by decide) (by decide) (by intro h; cases h) (by intro h; cases h)
       (by decide) (by decide) (by decide) (by intro h; cases h)
-  case nl => exact absurd hk (by decide)
+  case nl =>
+    exact lexOne_punct prev '\\' .nl X rfl (by decide) (by decide) (by decide) (by intro h; cases h) (by intro h; cases h)
+      (by decide) (by decide) (by decide) (by intro h; cases h)
   case sdot =>
     simp only [kwChars, List.cons_append, List.nil_append]
     rw [lexOne.eq_3]
@@ -509,14 +511,55 @@ theorem lexOne_kw (prev : Option Char) (k : Kw) (hk : kwOK k = true) (hlp : k �
     rfl
   case bmat => exact absurd hk (by decide)
   case emat => exact absurd hk (by decide)
-  case sum => exact absurd hk (by decide)
-  case prod => exact absurd hk (by decide)
-  case inn => exact absurd hk (by decide)
   case substack => exact absurd hk (by decide)
-  case limits => exact absurd hk (by decide)
   case lbkg => exact absurd hk (by decide)
   case rbkg => exact absurd hk (by decide)
-  case lr => exact absurd hk (by decide)
+  case sum =>
+    have hc : kwChars .sum = "sum".toList := by decide
+    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
+    rw [hc, show "sum".toList ++ X = 's' :: ("um".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "sum".toList ++ X = 's' :: ("um".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX']
+    rfl
+  case prod =>
+    have hc : kwChars .prod = "product".toList := by decide
+    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
+    rw [hc, show "product".toList ++ X = 'p' :: ("roduct".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "product".toList ++ X = 'p' :: ("roduct".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX']
+    rfl
+  case inn =>
+    have hc : kwChars .inn = "in".toList := by decide
+    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
+    rw [hc, show "in".toList ++ X = 'i' :: ("n".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "in".toList ++ X = 'i' :: ("n".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX']
+    rfl
+  case limits =>
+    have hc : kwChars .limits = "limits".toList := by decide
+    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
+    rw [hc, show "limits".toList ++ X = 'l' :: ("imits".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "limits".toList ++ X = 'l' :: ("imits".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX']
+    rfl
+  case lr =>
+    have hc : kwChars .lr = "lr".toList := by decide
+    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
+    rw [hc, show "lr".toList ++ X = 'l' :: ("r".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "lr".toList ++ X = 'l' :: ("r".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX']
+    rfl
+  case limitsL => exact absurd hk (by decide)
 
 /-! ## Numbers -/
 

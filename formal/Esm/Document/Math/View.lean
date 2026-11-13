@@ -143,6 +143,9 @@ inductive V (c : Ctx) : Json → Prop where
         ((fieldsOf kvs).map fun kv =>
           keyToks c.sf kv.1 ++ .kw .eq :: (if isE kv.2 then (pr c kv.2).at c.sf 4 else jsonVal c.sf kv.2)))) :
       V c (.obj kvs)
+  | faq (kvs : List (String × Json)) (F : FaqForm) (hF : faqForm kvs = some F) (hok : faqOK F = true)
+      (P : Json → Out) (hP : ∀ x ∈ faqSubs F, P x = pr c x)
+      (hpr : pr c (.obj kvs) = faqOut c P F) : V c (.obj kvs)
   | esc (kvs : List (String × Json)) (o : String) (as : List Json)
       (hop : look "op" kvs = some (.str o)) (hargs : look "args" kvs = some (.arr as))
       (hs : keysSorted kvs = true) (hx : ∀ x ∈ as, isE x = true)
@@ -244,6 +247,23 @@ theorem sizeOf_fields_lt {kvs : List (String × Json)} :
   intro kv hkv
   have := fields_lt hkv
   simp only [Json.obj.sizeOf_spec]; omega
+
+theorem tableP_eq (l : List Json) (P : Json → Out) (x : Json) (hx : x ∈ l) :
+    tableP (l.map fun y => (y, P y)) x = P x := by
+  unfold tableP
+  induction l with
+  | nil => simp at hx
+  | cons y l ih =>
+    simp only [List.map_cons, List.find?_cons]
+    cases h : jbeq y x
+    · simp only
+      rcases List.mem_cons.1 hx with rfl | hx
+      · exfalso
+        have : ∀ z : Json, jbeq z z = true := by
+          intro z; exact jbeq_refl z
+        rw [this] at h; cases h
+      · exact ih hx
+    · simp only; rw [jbeq_sound y x h]
 
 theorem view (c : Ctx) : ∀ e, isE e = true → V c e
   | .num n, h => .num n ((numOK_iff n).1 (by rw [isE] at h; exact h))
@@ -430,7 +450,18 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
             rfl
           · exact fbEsc _ hpr rfl
       · exact fbEsc _ hpr rfl
-    · exact fbOpn _ hpr rfl
+    · split at hpr
+      · rename_i o ho
+        split at ho
+        · rename_i F hF
+          split at ho
+          · rename_i hok
+            cases ho
+            refine V.faq kvs F hF hok _ (fun x hx => tableP_eq (faqSubs F) (pr c) x hx) ?_
+            rw [hpr, attach_map_eq (faqSubs F) (fun x => (x, pr c x))]
+          · cases ho
+        · cases ho
+      · exact fbOpn _ hpr rfl
   | .null, h => by simp [isE] at h
   | .bool _, h => by simp [isE] at h
   | .arr _, h => by simp [isE] at h

@@ -59,9 +59,11 @@ def kwChars : Kw → List Char
   | .floor => "floor".toList | .ceil => "ceil".toList | .pdiff => "partial".toList
   | .dif => "dif".toList | .cases => "cases".toList | .esmnode => "esm.node".toList
   | .vec => "vec".toList | .mat => "mat".toList
-  | .rpg | .lb | .rb | .nl | .thin | .frac | .labs | .rabs | .lfloor | .rfloor
+  | .sum => "sum".toList | .prod => "product".toList | .inn => "in".toList
+  | .limits => "limits".toList | .lr => "lr".toList | .nl => ['\\']
+  | .rpg | .lb | .rb | .thin | .frac | .labs | .rabs | .lfloor | .rfloor
   | .lceil | .rceil | .dotacc | .bcases | .ecases | .bmat | .emat
-  | .sum | .prod | .inn | .substack | .limits | .lbkg | .rbkg | .lr => []
+  | .substack | .lbkg | .rbkg | .limitsL => []
 
 def pieceChars (p : String × String) : List Char :=
   "upright(".toList ++ Strings.quote true p.1 ++ [')'] ++
@@ -118,7 +120,7 @@ def needSpace (t1 t2 : Tok) : Bool :=
 
 def isBin : Tok → Bool
   | .kw k => match k with
-    | .plus | .eq | .ne | .lt | .gt | .le | .ge | .land | .lor | .cdot | .times | .amp => true
+    | .plus | .eq | .ne | .lt | .gt | .le | .ge | .land | .lor | .cdot | .times | .amp | .nl | .inn => true
     | _ => false
   | _ => false
 
@@ -174,7 +176,8 @@ def identKw : List (String × Kw) :=
     ("tan", .tan), ("arcsin", .asin), ("arccos", .acos), ("arctan", .atan), ("sinh", .sinh),
     ("cosh", .cosh), ("tanh", .tanh), ("min", .min), ("max", .max), ("abs", .abs),
     ("floor", .floor), ("ceil", .ceil), ("partial", .pdiff), ("dif", .dif), ("cases", .cases),
-    ("vec", .vec), ("mat", .mat)]
+    ("vec", .vec), ("mat", .mat), ("sum", .sum), ("product", .prod), ("in", .inn),
+    ("limits", .limits), ("lr", .lr)]
 
 /-- `("…")` after a function name. -/
 def quotedArg (r : List Char) : Option (String × List Char) :=
@@ -228,7 +231,7 @@ def punct : Char → Option Kw
   | '>' => some .gt | '/' => some .slash | '^' => some .caret | '_' => some .us
   | ')' => some .rp | '[' => some .lbk | ']' => some .rbk
   | ',' => some .comma | ';' => some .semi | ':' => some .colon | '&' => some .amp
-  | '.' => some .sdot
+  | '.' => some .sdot | '\\' => some .nl
   | _ => none
 
 /-- One identifier-started token. -/

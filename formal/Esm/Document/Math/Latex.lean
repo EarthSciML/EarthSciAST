@@ -88,8 +88,10 @@ def kwChars : Kw → List Char
   | .pdiff => "\\partial".toList | .dotacc => "\\dot".toList
   | .bcases => "\\begin{cases}".toList | .ecases => "\\end{cases}".toList
   | .bmat => "\\begin{bmatrix}".toList | .emat => "\\end{bmatrix}".toList
-  | .abs | .floor | .ceil | .dif | .cases | .esmnode | .vec | .mat
-  | .sum | .prod | .inn | .substack | .limits | .lbkg | .rbkg | .lr => []
+  | .sum => "\\sum".toList | .prod => "\\prod".toList | .inn => "\\in".toList
+  | .substack => "\\substack".toList | .limitsL => "\\limits".toList
+  | .lbkg => "\\left[".toList | .rbkg => "\\right]".toList
+  | .abs | .floor | .ceil | .dif | .cases | .esmnode | .vec | .mat | .lr | .limits => []
 
 def tokChars : Tok → List Char
   | .num n => numChars n
@@ -130,7 +132,7 @@ def needSpace (t1 t2 : Tok) : Bool :=
 /-- Binary operators, spaced on both sides. -/
 def isBin : Tok → Bool
   | .kw k => match k with
-    | .plus | .eq | .ne | .lt | .gt | .le | .ge | .land | .lor | .cdot | .times | .amp | .nl => true
+    | .plus | .eq | .ne | .lt | .gt | .le | .ge | .land | .lor | .cdot | .times | .amp | .nl | .inn => true
     | _ => false
   | _ => false
 
@@ -178,7 +180,8 @@ def ctrlKw : List (String × Kw) :=
     ("sin", .sin), ("cos", .cos), ("tan", .tan), ("arcsin", .asin), ("arccos", .acos),
     ("arctan", .atan), ("sinh", .sinh), ("cosh", .cosh), ("tanh", .tanh), ("min", .min),
     ("max", .max), ("lfloor", .lfloor), ("rfloor", .rfloor), ("lceil", .lceil),
-    ("rceil", .rceil), ("partial", .pdiff), ("dot", .dotacc)]
+    ("rceil", .rceil), ("partial", .pdiff), ("dot", .dotacc),
+    ("sum", .sum), ("prod", .prod), ("in", .inn), ("substack", .substack), ("limits", .limitsL)]
 
 /-- After a control word: its token. -/
 def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
@@ -194,13 +197,13 @@ def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
   else if w = "left" ∨ w = "bigl" ∨ w = "Bigl" then
     match r with
     | '(' :: r' => some (.kw .lpg, r')
-    | '[' :: r' => some (.kw .lbk, r')
+    | '[' :: r' => some (if w = "left" then .kw .lbkg else .kw .lbk, r')
     | '|' :: r' => if w = "left" then some (.kw .labs, r') else none
     | _ => none
   else if w = "right" ∨ w = "bigr" ∨ w = "Bigr" then
     match r with
     | ')' :: r' => some (.kw .rpg, r')
-    | ']' :: r' => some (.kw .rbk, r')
+    | ']' :: r' => some (if w = "right" then .kw .rbkg else .kw .rbk, r')
     | '|' :: r' => if w = "right" then some (.kw .rabs, r') else none
     | _ => none
   else if w = "begin" then

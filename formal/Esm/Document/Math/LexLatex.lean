@@ -313,7 +313,7 @@ theorem greek_facts (g : String) (hg : isGreek g.toList = true) :
 never writes (it would run into the `\times 10^{…}` of a scientific number). -/
 def kwOK : Kw → Bool
   | .abs | .floor | .ceil | .dif | .cases | .esmnode | .times | .vec | .mat
-  | .sum | .prod | .inn | .substack | .limits | .lbkg | .rbkg | .lr => false
+  | .limits | .lr => false
   | _ => true
 
 /-- The LaTeX tokens: what the LaTeX printer writes. -/
@@ -567,13 +567,42 @@ theorem lexOne_kw (k : Kw) (hk : kwOK k = true) (X : List Char)
     simp [ctrlTok]; rfl
   case vec => exact absurd hk (by decide)
   case mat => exact absurd hk (by decide)
-  case sum => exact absurd hk (by decide)
-  case prod => exact absurd hk (by decide)
-  case inn => exact absurd hk (by decide)
-  case substack => exact absurd hk (by decide)
+  case sum =>
+    have hc : kwChars .sum = '\\' :: "sum".toList := by decide
+    rw [hc, List.cons_append, lexOne_ctrl _ (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide))]
+    rfl
+  case prod =>
+    have hc : kwChars .prod = '\\' :: "prod".toList := by decide
+    rw [hc, List.cons_append, lexOne_ctrl _ (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide))]
+    rfl
+  case inn =>
+    have hc : kwChars .inn = '\\' :: "in".toList := by decide
+    rw [hc, List.cons_append, lexOne_ctrl _ (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide))]
+    rfl
+  case substack =>
+    have hc : kwChars .substack = '\\' :: "substack".toList := by decide
+    rw [hc, List.cons_append, lexOne_ctrl _ (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide))]
+    rfl
+  case limitsL =>
+    have hc : kwChars .limitsL = '\\' :: "limits".toList := by decide
+    rw [hc, List.cons_append, lexOne_ctrl _ (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide))]
+    rfl
+  case lbkg =>
+    have hc : kwChars .lbkg = '\\' :: ("left".toList ++ ['[']) := by decide
+    rw [hc, List.cons_append, List.append_assoc, List.singleton_append,
+      lexOne_ctrl _ (by decide) (by decide) _ (by simp; decide)]
+    simp [ctrlTok]
+  case rbkg =>
+    have hc : kwChars .rbkg = '\\' :: ("right".toList ++ [']']) := by decide
+    rw [hc, List.cons_append, List.append_assoc, List.singleton_append,
+      lexOne_ctrl _ (by decide) (by decide) _ (by simp; decide)]
+    simp [ctrlTok]
   case limits => exact absurd hk (by decide)
-  case lbkg => exact absurd hk (by decide)
-  case rbkg => exact absurd hk (by decide)
   case lr => exact absurd hk (by decide)
 
 
@@ -831,13 +860,40 @@ theorem skipWs_kw (k : Kw) (hk : kwOK k = true) (X : List Char)
     exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) _ (by simp; decide) n
   case vec => exact absurd hk (by decide)
   case mat => exact absurd hk (by decide)
-  case sum => exact absurd hk (by decide)
-  case prod => exact absurd hk (by decide)
-  case inn => exact absurd hk (by decide)
-  case substack => exact absurd hk (by decide)
+  case sum =>
+    have hc : kwChars .sum = '\\' :: "sum".toList := by decide
+    rw [hc, List.cons_append]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide)) n
+  case prod =>
+    have hc : kwChars .prod = '\\' :: "prod".toList := by decide
+    rw [hc, List.cons_append]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide)) n
+  case inn =>
+    have hc : kwChars .inn = '\\' :: "in".toList := by decide
+    rw [hc, List.cons_append]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide)) n
+  case substack =>
+    have hc : kwChars .substack = '\\' :: "substack".toList := by decide
+    rw [hc, List.cons_append]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide)) n
+  case limitsL =>
+    have hc : kwChars .limitsL = '\\' :: "limits".toList := by decide
+    rw [hc, List.cons_append]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide)) n
+  case lbkg =>
+    have hc : kwChars .lbkg = '\\' :: ("left".toList ++ ['[']) := by decide
+    rw [hc, List.cons_append, List.append_assoc, List.singleton_append]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) _ (by simp; decide) n
+  case rbkg =>
+    have hc : kwChars .rbkg = '\\' :: ("right".toList ++ [']']) := by decide
+    rw [hc, List.cons_append, List.append_assoc, List.singleton_append]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) _ (by simp; decide) n
   case limits => exact absurd hk (by decide)
-  case lbkg => exact absurd hk (by decide)
-  case rbkg => exact absurd hk (by decide)
   case lr => exact absurd hk (by decide)
 
 theorem dropP_kw (k : Kw) (hk : kwOK k = true) (Y : List Char) :

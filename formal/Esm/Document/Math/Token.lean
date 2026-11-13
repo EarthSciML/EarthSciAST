@@ -37,6 +37,8 @@ inductive Kw where
   | bmat | emat | vec | mat
   -- faq reductions: `\sum` `\prod` `\in` `\substack` `\limits` `\left[` `\right]`, Typst `lr`
   | sum | prod | inn | substack | limits | lbkg | rbkg | lr
+  -- the LaTeX marker `\limits` (Typst writes `limits(…)` around the operator)
+  | limitsL
   deriving DecidableEq, Repr
 
 inductive Tok where

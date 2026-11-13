@@ -284,6 +284,85 @@ theorem allOK_arr (af : AForm) (h : AOK af) : AllOK (arrToks .latex af) := by
         (allOK_numToks r (h.2.2 r hr))))
     simp only [arrToks]; aok
 
+/-! ## Reductions -/
+
+theorem tokOK_num1 : tokOK (.num (.int 1)) := by
+  show JNum.InInt64 1; unfold JNum.InInt64; decide
+
+theorem faqSubs_rng {F : FaqForm} {kv : String × Json} (hkv : kv ∈ F.ranges) {a b : Json}
+    (h : kv.2 = .arr [a, b]) : a ∈ faqSubs F ∧ b ∈ faqSubs F := by
+  constructor <;>
+  · simp only [faqSubs, List.mem_append, List.mem_flatMap]
+    right; exact ⟨kv, hkv, by rw [h]; simp⟩
+
+theorem allOK_faqOut (c : Ctx) (hc : c.sf = .latex) (F : FaqForm) (P : Json → Out)
+    (hQ : ∀ x ∈ faqSubs F, AllOK (P x).toks) :
+    AllOK (faqOut c P F).toks ∧ AllOK (faqOut c P F).crow := by
+  have hAt : ∀ x ∈ faqSubs F, ∀ L, AllOK ((P x).at .latex L) := fun x hx L => allOK_at rfl _ (hQ x hx) L
+  have hRow : ∀ kv ∈ F.ranges, AllOK (rowToks c P kv) := by
+    intro kv hkv
+    unfold rowToks
+    split
+    · rename_i a b he
+      obtain ⟨ha, hb⟩ := faqSubs_rng hkv he
+      have hA := hAt a ha 4; have hB := hAt b hb 4
+      have hN := allOK_nameToks c hc kv.1
+      rw [hc]; aok
+    · have hN := allOK_nameToks c hc kv.1
+      have hS := allOK_nameToks c hc ‹String›
+      aok
+    · rename_i s ps _
+      have hN := allOK_nameToks c hc kv.1
+      have hS := allOK_nameToks c hc s
+      have hL := allOK_sepBy [.kw .comma] (allOK_cons.2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
+        (allOK_map (fun (p : Json) => match p with | .str q => nameToks c q | _ => []) ps (fun p _ => by
+          split
+          · exact allOK_nameToks c hc _
+          · exact allOK_nil))
+      aok
+    · exact allOK_nil
+  have hHead : AllOK (headToks .latex F) := by
+    have hk : tokOK (.kw F.red.kw) := by cases F.red <;> rfl
+    simp only [headToks]; split <;> aok
+  have hSub : AllOK (subToks c P F) := by
+    rw [subToks_eq, iteT hc]; unfold subToksL
+    have hRows : ∀ x ∈ subRows c P F, AllOK x := by
+      intro x hx
+      unfold subRows at hx
+      rcases List.mem_append.1 hx with hx | hx
+      · obtain ⟨kv, hkv, rfl⟩ := List.mem_map.1 hx
+        exact hRow kv (List.mem_filter.1 hkv).1
+      · split at hx
+        · rename_i y hy
+          simp only [List.mem_singleton] at hx; subst hx
+          rw [hc]; exact hAt y (by simp [faqSubs, hy]) 1
+        · cases hx
+    split
+    · rename_i k a b hr _
+      have hm : (k, Json.arr [a, b]) ∈ F.ranges := redRanges_mem (by rw [hr]; simp)
+      obtain ⟨ha, hb⟩ := faqSubs_rng hm rfl
+      have hA := hAt a ha 4; have hB := hAt b hb 1
+      have hN := allOK_nameToks c hc k
+      rw [hc]; aok
+    · split
+      · exact allOK_nil
+      · rename_i r hr; have := hRows r (by rw [hr]; simp); aok
+      · have hS := allOK_sepBy [.kw .nl] (allOK_cons.2 ⟨(rfl : kwOK .nl = true), allOK_nil⟩) _ hRows
+        aok
+  have hBody := hAt F.expr (by simp [faqSubs]) 5
+  have hEnt : ∀ x ∈ F.out.map (entryToks c P F), AllOK x := by
+    refine allOK_map _ _ (fun j _ => ?_)
+    unfold entryToks
+    split
+    · split
+      · rename_i v hv; exact hRow _ (look_mem hv)
+      · exact allOK_nameToks c hc _
+    · exact allOK_cons.2 ⟨tokOK_num1, allOK_nil⟩
+  have hE := allOK_sepBy [.kw .comma] (allOK_cons.2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _ hEnt
+  unfold faqOut redToks
+  rw [hc]
+  split <;> (simp only [mkOut]; constructor <;> aok)
+
 /-! ## The induction -/
 
 def POK (c : Ctx) (e : Json) : Prop := AllOK (pr c e).toks ∧ AllOK (pr c e).crow
@@ -439,6 +518,10 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
         simp only [unitsOK, hc, Bool.and_eq_true] at hu
         exact hu.2.2
       rw [hpr]; simp only [mkOut, unitToks]; constructor <;> aok
+    | faq kvs F hF hok P hP hpr =>
+      rw [hpr]
+      exact allOK_faqOut c hc F P (fun x hx => by
+        rw [hP x hx]; exact (IH x (faqSubs_lt hF hx) (faqSubs_isE hok x hx)).1)
     | tpos m bs ps hm hsb hb hps hpr =>
       simp only [hc] at hpr
       have hS := allOK_callToks [.opn m] (allOK_cons.2 ⟨trivial, allOK_nil⟩) _

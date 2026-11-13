@@ -150,8 +150,6 @@ theorem M_cmp (c : Ctx) (o : String) (k : Kw) (a b : Json) (ho : kindOf o = .cmp
     rw [cmpLoop.eq_2, hk]
     simp only
     rw [h2]
-    simp only
-    rw [cmpLoop_stop c g _ rest hr]
   · rw [hpr]; exact headOK_append (headOK_at ha 4) _
   · rw [hpr]; simp [mkOut]
   · rw [hpr]; simp [mkOut]
