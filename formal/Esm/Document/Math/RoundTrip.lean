@@ -43,11 +43,15 @@ def P0 (c : Ctx) (e : Json) : Prop :=
   ∀ rest, Fol c.sf (pr c e).lvl rest → ∀ f, need (pr c e).lvl (pr c e).toks.length ≤ f →
     pLvl c f (pr c e).lvl ((pr c e).toks ++ rest) = some (e, rest)
 
+/-- A token a printed expression can start with: one that starts an operand, but not a
+call parenthesis or a bracket (those only follow something). -/
+def startA (t : Tok) : Bool := atomStart t && !(t matches .kw .lp) && !(t matches .kw .lbk)
+
 /-- What a printed expression starts with, as far as the variant readings care. -/
 def HeadOK (c : Ctx) : List Tok → Prop
   | t :: r => t ≠ .kw .dif ∧ t ≠ .kw .pdiff ∧ t ≠ .rm "d" ∧ (∀ w, t ≠ .word w) ∧
       (t = .letter 'd' → c.S.names.contains "d" = true ∨ (∃ r', r = .kw .us :: r') ∨
-        (∃ r', r = .kw .sdot :: r')) ∧ (atomStart t = true ∨ t = .kw .minus)
+        (∃ r', r = .kw .sdot :: r')) ∧ (startA t = true ∨ t = .kw .minus)
   | [] => False
 
 theorem pLvl_pos {c : Ctx} {f L : Nat} {ts : List Tok} {x : Json × List Tok}

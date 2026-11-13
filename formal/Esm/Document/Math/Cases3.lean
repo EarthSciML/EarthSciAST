@@ -217,10 +217,12 @@ theorem plus_PA (c : Ctx) (xs : List Json) (hl : 2 ≤ xs.length) (hx : ∀ x �
     | cons x ys => exact ⟨x, ys, rfl⟩
   have hys : ys ≠ [] := by rintro rfl; simp at hl
   rw [sepBy_blocks] at hf ⊢
-  have hlen := sumW_le (fun p => need 5 (p.2.length - 1)) (sepBlocks (.kw .plus) c 5 ys) (by
-    intro p hp
+  have hbl := block_len_le (sepBlocks (.kw .plus) c 5 ys) (fun p hp => by
     have := len_blocks (.kw .plus) c 5 ys (fun y hy => hx y (by simp [hy])) p hp
-    unfold need; omega)
+    omega)
+  have hn := length_le_flat (sepBlocks (Tok.kw .plus) c 5 ys) (fun p hp => by
+    have := len_blocks (.kw .plus) c 5 ys (fun y hy => hx y (by simp [hy])) p hp
+    omega)
   simp only [List.length_append] at hf
   obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by unfold need at hf; omega⟩
   have hfol : Fol c.sf 5 ((sepBlocks (.kw .plus) c 5 ys).flatMap Prod.snd ++ rest) := by
@@ -244,12 +246,10 @@ theorem plus_PA (c : Ctx) (xs : List Json) (hl : 2 ≤ xs.length) (hx : ∀ x �
       have := PL_at (hx p.1 (by simp [hpy])) 5 (by omega) (by omega) r hQ f hW
       rw [pLvl5] at this
       rw [this])
-    [x1] g (by unfold need at hf; omega)]
+    [x1] g (fun p hp => by have := hbl p hp; unfold need at hf ⊢; omega)
+    (by unfold need at hf; omega)]
   refine ⟨g - (sepBlocks (.kw .plus) c 5 ys).length, ?_, ?_⟩
-  · have := length_le_flat (sepBlocks (Tok.kw .plus) c 5 ys) (fun p hp => by
-      have := len_blocks (.kw .plus) c 5 ys (fun y hy => hx y (by simp [hy])) p hp
-      omega)
-    unfold need at hf; simp only [List.length_append]; omega
+  · unfold need at hf; simp only [List.length_append]; omega
   · simp only [sepBlocks, List.map_map, List.singleton_append, map_fst_pair]
 
 

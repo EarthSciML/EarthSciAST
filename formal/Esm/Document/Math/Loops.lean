@@ -84,23 +84,44 @@ theorem chain {α : Type} (loop : Nat → List Json → List Tok → Option α) 
     ∀ (bs : List (Json × List Tok)), (∀ p ∈ bs, ∀ r, Q (p.2 ++ r)) →
       (∀ p ∈ bs, ∀ f acc r, Q r → W p ≤ f →
         loop (f + 1) acc (p.2 ++ r) = loop f (acc ++ [p.1]) r) →
-      ∀ (acc : List Json) (f : Nat), (bs.map W).sum + bs.length ≤ f →
+      ∀ (acc : List Json) (f : Nat), (∀ p ∈ bs, W p + bs.length ≤ f) → bs.length ≤ f →
       loop f acc ((bs.flatMap Prod.snd) ++ rest) = loop (f - bs.length) (acc ++ bs.map Prod.fst) rest
-  | [], _, _, acc, f, _ => by simp
-  | p :: bs, hQb, step, acc, f, hf => by
-    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp at hf; omega⟩
-    simp only [List.flatMap_cons, List.append_assoc, List.map_cons, List.sum_cons,
-      List.length_cons] at hf ⊢
+  | [], _, _, acc, f, _, _ => by simp
+  | p :: bs, hQb, step, acc, f, hf, hf' => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp at hf'; omega⟩
+    have hp := hf p (by simp)
+    simp only [List.flatMap_cons, List.append_assoc, List.length_cons] at hp hf' ⊢
     have hQ : Q ((bs.flatMap Prod.snd) ++ rest) := by
       cases bs with
       | nil => simpa using hQr
       | cons q qs => simpa [List.append_assoc] using hQb q (by simp) ((qs.flatMap Prod.snd) ++ rest)
     rw [step p (by simp) g acc _ hQ (by omega)]
     rw [chain loop Q W rest hQr bs (fun q hq => hQb q (by simp [hq]))
-      (fun q hq => step q (by simp [hq])) (acc ++ [p.1]) g (by omega)]
-    simp only [List.append_assoc, List.singleton_append]
+      (fun q hq => step q (by simp [hq])) (acc ++ [p.1]) g
+      (fun q hq => by have := hf q (by simp [hq]); simp at this; omega) (by omega)]
+    simp only [List.append_assoc, List.singleton_append, List.map_cons]
     congr 1
     omega
+
+theorem block_len_le : ∀ (bs : List (Json × List Tok)), (∀ q ∈ bs, 1 ≤ q.2.length) →
+    ∀ p ∈ bs, p.2.length + bs.length ≤ (bs.flatMap Prod.snd).length + 1
+  | [], _, p, hp => by simp at hp
+  | q :: bs, h, p, hp => by
+    have hq := h q (by simp)
+    have hn : bs.length ≤ (bs.flatMap Prod.snd).length := by
+      clear hp
+      induction bs with
+      | nil => simp
+      | cons r rs ih =>
+        have := h r (by simp)
+        simp only [List.length_cons, List.flatMap_cons, List.length_append]
+        have := ih (fun z hz => h z (by simp at hz ⊢; tauto))
+        omega
+    simp only [List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · simp only [List.length_cons, List.flatMap_cons, List.length_append]; omega
+    · have := block_len_le bs (fun z hz => h z (by simp [hz])) p hp
+      simp only [List.length_cons, List.flatMap_cons, List.length_append]; omega
 
 theorem sumW_le (W : Json × List Tok → Nat) :
     ∀ (bs : List (Json × List Tok)), (∀ p ∈ bs, W p + 1 ≤ 30 * p.2.length) →

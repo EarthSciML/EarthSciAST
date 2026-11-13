@@ -54,7 +54,7 @@ theorem headOK_at {c : Ctx} {a : Json} (h : M c a) (L : Nat) : HeadOK c ((pr c a
   split
   · exact M_head h
   · simp only [grp, List.cons_append, HeadOK]
-    refine ⟨by simp, by simp, by simp, by simp, by simp, Or.inl (by simp [atomStart])⟩
+    refine ⟨by simp, by simp, by simp, by simp, by simp, Or.inl (by simp [startA, atomStart])⟩
 
 theorem head_ne {c : Ctx} {ts : List Tok} (h : HeadOK c ts) (k : Kw)
     (hk : k = .rp ∨ k = .rpg ∨ k = .rb ∨ k = .rbk ∨ k = .comma ∨ k = .semi) :
@@ -64,7 +64,7 @@ theorem head_ne {c : Ctx} {ts : List Tok} (h : HeadOK c ts) (k : Kw)
     refine ⟨t, r, rfl, ?_⟩
     rintro rfl
     obtain ⟨-, -, -, -, -, h6⟩ := h
-    rcases hk with rfl | rfl | rfl | rfl | rfl | rfl <;> simp [atomStart] at h6
+    rcases hk with rfl | rfl | rfl | rfl | rfl | rfl <;> simp [startA, atomStart] at h6
 
 theorem need_mono {L len len' : Nat} (h : len ≤ len') : need L len ≤ need L len' := by
   unfold need; omega

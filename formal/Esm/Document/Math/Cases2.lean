@@ -118,7 +118,7 @@ theorem pPrim_un (c : Ctx) (o : String) (k : Kw) (hk : (o, k) ∈ unKw) (a : Jso
 
 
 /-- A token that starts a keyword form. -/
-def kwStart (t : Tok) : Prop := ∃ k, t = .kw k ∧ atomStart t = true ∧ k ≠ .dif ∧ k ≠ .pdiff
+def kwStart (t : Tok) : Prop := ∃ k, t = .kw k ∧ startA t = true ∧ k ≠ .dif ∧ k ≠ .pdiff
 
 theorem headOK_kw (c : Ctx) (t : Tok) (r : List Tok) (h : kwStart t) : HeadOK c (t :: r) := by
   obtain ⟨k, rfl, h1, h2, h3⟩ := h
