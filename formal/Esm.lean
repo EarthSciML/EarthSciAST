@@ -70,6 +70,7 @@ import Esm.Document.Math.RoundTripLatex
 import Esm.Document.Math.LexTypst
 import Esm.Document.Math.TokTypst
 import Esm.Document.Math.RoundTripTypst
+import Esm.Document.Math.Variants
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/
