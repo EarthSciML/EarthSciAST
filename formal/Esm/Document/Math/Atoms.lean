@@ -127,8 +127,13 @@ theorem fol10_name {sf : Sf} {rest : List Tok} (hr : Fol sf 10 rest) : NameStop 
   · have := hr _ _ e; simp [conts] at this
   · unfold subPat
     split
-    · rename_i e; have := hr _ _ rfl; simp [conts] at this
-    · rename_i e; have := hr _ _ rfl; simp [conts] at this
+    · rename_i t1 t2 t3 t4 r
+      have := hr _ _ rfl
+      unfold subPat4
+      split
+      · simp [conts] at this
+      · simp [conts] at this
+      · rfl
     · rfl
 
 theorem pNamePrim_name (c : Ctx) (s : String) (hs : nameOK s = true) (rest : List Tok)

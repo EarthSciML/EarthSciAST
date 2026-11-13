@@ -84,7 +84,7 @@ theorem M_ic (c : Ctx) (o n : String) (ho : kindOf o = .ic) (hn : nameOK n = tru
       have hstop : NameStop c.sf (icTail c.sf ++ rest) := by
         refine ⟨fun r e => ?_, ?_⟩
         · cases hs : c.sf <;> simp [icTail, hs] at e
-        · cases c.sf <;> simp [icTail, subPat]
+        · cases c.sf <;> simp [icTail, subPat, subPat4]
       rw [pName_nameToks c n hn _ hstop]
       simp only
       have hic : icTailP c.sf (icTail c.sf ++ rest) = some rest := by

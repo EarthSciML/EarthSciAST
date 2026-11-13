@@ -76,12 +76,26 @@ theorem splitDots_noDot (l : List Char) : ∀ s ∈ splitDots l, '.' ∉ s := by
 
 /-! ## Segments -/
 
+theorem subPat4_head (sf : Sf) (t1 t2 t3 t4 : Tok) (h : t1 ≠ .kw .us) : subPat4 sf t1 t2 t3 t4 = false := by
+  unfold subPat4
+  split
+  · exact absurd rfl h
+  · exact absurd rfl h
+  · rfl
+
+theorem subPat_head (sf : Sf) (t : Tok) (X : List Tok) (h : t ≠ .kw .us) : subPat sf (t :: X) = false := by
+  match X with
+  | [] => rfl
+  | [_] => rfl
+  | [_, _] => rfl
+  | t2 :: t3 :: t4 :: r => exact subPat4_head sf t t2 t3 t4 h
+
 theorem subOrPlain_stop (sf : Sf) (b : List Char) (rest : List Tok) (h : subPat sf rest = false) :
     subOrPlain sf b rest = (b, rest) := by
   unfold subOrPlain
   split
-  · simp [subPat] at h
-  · simp [subPat] at h
+  · simp [subPat, subPat4] at h
+  · simp [subPat, subPat4] at h
   · rfl
 
 theorem subParts_spec {g b r : List Char} (h : subParts g = some (b, r)) :
@@ -227,7 +241,7 @@ theorem nameLoop_read (sf : Sf) : ∀ (gs : List (List Char)), (∀ g ∈ gs, se
       apply seg_read sf g (hg g (by simp))
       cases gs with
       | nil => simpa using hr.2
-      | cons h hs => simp [subPat]
+      | cons h hs => exact subPat_head _ _ _ (by simp)
     simp only [List.flatMap_cons, List.cons_append, List.append_assoc]
     rw [pNameLoop, hseg]
     simp only
@@ -260,7 +274,7 @@ theorem pName_nameToks (c : Ctx) (s : String) (hs : nameOK s = true) (rest : Lis
       apply seg_read c.sf g (hall g (by simp))
       cases gs with
       | nil => simpa using hr.2
-      | cons h hs => simp [subPat]
+      | cons h hs => exact subPat_head _ _ _ (by simp)
     rw [h1]
     simp only [List.singleton_append]
     rw [nameLoop_read c.sf gs (fun x hx => hall x (by simp [hx])) g rest _ hr

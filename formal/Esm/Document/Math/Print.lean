@@ -421,10 +421,15 @@ def subOK (S : Sym) (base : Json) (is : List Json) : Bool :=
      | _ => true)
   | _ => false
 
+/-- Four tokens of an upright name subscript. -/
+def subPat4 (sf : Sf) : Tok → Tok → Tok → Tok → Bool
+  | .kw .us, .kw .lb, .rm _, .kw .rb => sf == .latex
+  | .kw .us, .kw .lpg, .ups [(_, "")], .kw .rp => sf == .typst
+  | _, _, _, _ => false
+
 /-- An upright name subscript: a name before it would read it as part of the name. -/
 def subPat (sf : Sf) : List Tok → Bool
-  | .kw .us :: .kw .lb :: .rm _ :: .kw .rb :: _ => sf == .latex
-  | .kw .us :: .kw .lpg :: .ups [(_, "")] :: .kw .rp :: _ => sf == .typst
+  | t1 :: t2 :: t3 :: t4 :: _ => subPat4 sf t1 t2 t3 t4
   | _ => false
 
 /-- Derivative operand printed inline (`\frac{\mathrm{d} N}{\mathrm{d} t}`) when it is
