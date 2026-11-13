@@ -111,6 +111,15 @@ inductive V (c : Ctx) : Json → Prop where
       (hpr : pr c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)]) =
         mkOut c.sf 7 (qtyToks c.sf n (factorsOf u))) :
       V c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)])
+  | arr (xs : List Json) (af : AForm) (haf : arrForm (.arr xs) = some af)
+      (hpr : pr c (.obj [("args", .arr []), ("op", .str "const"), ("value", .arr xs)]) =
+        mkOut c.sf 10 (arrToks c.sf af)) :
+      V c (.obj [("args", .arr []), ("op", .str "const"), ("value", .arr xs)])
+  | arrU (u : String) (xs : List Json) (af : AForm) (haf : arrForm (.arr xs) = some af)
+      (hu : unitsOK c.sf u = true)
+      (hpr : pr c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)]) =
+        mkOut c.sf 7 (arrToks c.sf af ++ unitToks c.sf (factorsOf u))) :
+      V c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)])
   | tpos (n : String) (bs : List (String × Json)) (ps : List String) (hn : tnameOK n = true)
       (hs : keysSorted bs = true) (hb : ∀ kv ∈ bs, isE kv.2 = true) (hps : positional c.S n bs = some ps)
       (hpr : pr c (tNode n bs) = mkOut c.sf 10 (callToks c.sf [.opn n]
@@ -388,6 +397,17 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
           simpa [jwf, numOK_iff] using this
         exact V.qty u n hn hu hpr
       · exact fbEsc _ hpr rfl
+    · rename_i u xs
+      split at hpr
+      · rename_i af haf
+        split at hpr
+        · rename_i hu; exact V.arrU u xs af haf hu hpr
+        · exact fbEsc _ hpr rfl
+      · exact fbEsc _ hpr rfl
+    · rename_i xs
+      split at hpr
+      · rename_i af haf; exact V.arr xs af haf hpr
+      · exact fbOpn _ hpr rfl
     · rename_i bs n
       split at hpr
       · rename_i hcond

@@ -62,7 +62,7 @@ def atomStart : Tok → Bool
     match k with
     | .lpg | .lp | .lbk | .lnot | .frac | .sqrt | .exp | .ln | .log | .sin | .cos | .tan
     | .asin | .acos | .atan | .sinh | .cosh | .tanh | .min | .max | .labs | .lfloor | .lceil
-    | .abs | .floor | .ceil | .dotacc | .bcases | .cases | .esmnode => true
+    | .abs | .floor | .ceil | .dotacc | .bcases | .cases | .esmnode | .bmat | .vec | .mat => true
     | _ => false
   | _ => false
 
@@ -203,6 +203,39 @@ def dNode (x : Json) (w : String) : Json := .obj [("args", .arr [x]), ("op", .st
 /-- A template application node. -/
 def tNode (n : String) (bs : List (String × Json)) : Json :=
   .obj [("args", .arr []), ("bindings", .obj bs), ("name", .str n), ("op", .str "apply_expression_template")]
+
+/-- A constant node: the value, and the units when there are some. -/
+def constNode (v : Json) : Option String → Json
+  | none => .obj [("args", .arr []), ("op", .str "const"), ("value", v)]
+  | some u => .obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", v)]
+
+/-- Numbers separated by `sep`, up to the first other token. -/
+def pCells (sep : Kw) : List Tok → Option (List JNum × List Tok)
+  | .num n :: .kw k :: r => if k = sep then (pCells sep r).map fun p => (n :: p.1, p.2) else some ([n], .kw k :: r)
+  | .num n :: r => some ([n], r)
+  | _ => none
+
+/-- Rows of numbers: cells separated by `csep`, rows by `rsep`, closed by `close`. -/
+def pGrid (csep rsep close : Kw) : Nat → List Tok → Option (List (List JNum) × List Tok)
+  | 0, _ => none
+  | f + 1, ts =>
+    match pCells csep ts with
+    | some (row, .kw k :: r) =>
+      if k = rsep then (pGrid csep rsep close f r).map fun p => (row :: p.1, p.2)
+      else if k = close then some ([row], r) else none
+    | _ => none
+
+/-- A LaTeX `bmatrix`: one cell per row is a column (rank 1). -/
+def gridJson (rows : List (List JNum)) : Json :=
+  if rows.all (fun r => r.length == 1) then .arr (rows.map fun r => .num (r.headD (.int 0)))
+  else .arr (rows.map fun r => .arr (r.map .num))
+
+/-- The unit after an array, if any. -/
+def constTail (c : Ctx) (v : Json) (r : List Tok) : Option (Json × List Tok) :=
+  match c.sf, r with
+  | .latex, .kw .thin :: .rm raw :: r' => (unitsOfRaw raw).map fun l => (constNode v (some (Esm.Units.spell l)), r')
+  | .typst, .units l :: r' => some (constNode v (some (Esm.Units.spell l)), r')
+  | _, _ => some (constNode v none, r)
 
 /-- The `ic` tail `(t_{0})` / `(t_0)`. -/
 def icTailP (sf : Sf) : List Tok → Option (List Tok)
@@ -620,6 +653,22 @@ def pPrim (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
       | .latex, .kw .thin :: .rm raw :: r' => (unitsOfRaw raw).map (qty n ·, r')
       | .typst, .units l :: r' => some (qty n l, r')
       | _, _ => some (.num n, r)
+    | .kw .bmat :: r =>
+      match pGrid .amp .nl .emat (r.length + 1) r with
+      | some (rows, r') => constTail c (gridJson rows) r'
+      | none => none
+    | .kw .vec :: t :: r =>
+      if isLp t then
+        match pCells .comma r with
+        | some (ns, .kw .rp :: r') => constTail c (.arr (ns.map .num)) r'
+        | _ => none
+      else none
+    | .kw .mat :: t :: r =>
+      if isLp t then
+        match pGrid .comma .semi .rp (r.length + 1) r with
+        | some (rows, r') => constTail c (.arr (rows.map fun q => .arr (q.map .num))) r'
+        | none => none
+      else none
     | .txt "true" :: r => some (node "true" [], r)
     | .txt "false" :: r => some (node "false" [], r)
     | .kw .lpg :: r | .kw .lp :: r =>

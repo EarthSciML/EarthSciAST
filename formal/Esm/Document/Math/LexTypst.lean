@@ -22,7 +22,8 @@ open Esm.Document Esm.Document.Math
 never writes it; it would run into the `times 10^…` of a scientific number). -/
 def kwOK : Kw → Bool
   | .times | .rpg | .lb | .rb | .nl | .thin | .frac | .labs | .rabs | .lfloor | .rfloor
-  | .lceil | .rceil | .dotacc | .bcases | .ecases => false
+  | .lceil | .rceil | .dotacc | .bcases | .ecases | .bmat | .emat
+  | .sum | .prod | .inn | .substack | .limits | .lbkg | .rbkg | .lr => false
   | _ => true
 
 /-- The Typst tokens: what the Typst printer writes. -/
@@ -488,6 +489,34 @@ theorem lexOne_kw (prev : Option Char) (k : Kw) (hk : kwOK k = true) (hlp : k �
     rw [show 'e' :: ("sm".toList ++ (".node".toList ++ X)) = "esm".toList ++ (".node".toList ++ X) by simp,
       idRun_append _ _ (by decide) (by simp; decide)]
     simp; rfl
+  case vec =>
+    have hc : kwChars .vec = "vec".toList := by decide
+    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
+    rw [hc, show "vec".toList ++ X = 'v' :: ("ec".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "vec".toList ++ X = 'v' :: ("ec".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX']
+    rfl
+  case mat =>
+    have hc : kwChars .mat = "mat".toList := by decide
+    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
+    rw [hc, show "mat".toList ++ X = 'm' :: ("at".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "mat".toList ++ X = 'm' :: ("at".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX']
+    rfl
+  case bmat => exact absurd hk (by decide)
+  case emat => exact absurd hk (by decide)
+  case sum => exact absurd hk (by decide)
+  case prod => exact absurd hk (by decide)
+  case inn => exact absurd hk (by decide)
+  case substack => exact absurd hk (by decide)
+  case limits => exact absurd hk (by decide)
+  case lbkg => exact absurd hk (by decide)
+  case rbkg => exact absurd hk (by decide)
+  case lr => exact absurd hk (by decide)
 
 /-! ## Numbers -/
 

@@ -267,6 +267,23 @@ theorem allOK_lookup (bs : List (String × Json)) (F : Json → List Tok)
   | none => exact allOK_nil
   | some v => exact h (p, v) (look_mem hl)
 
+theorem allOK_numToks (ns : List JNum) (h : ∀ n ∈ ns, numOK n = true) : ∀ x ∈ numToks ns, AllOK x := by
+  intro x hx
+  obtain ⟨n, hn, rfl⟩ := List.mem_map.1 hx
+  exact allOK_cons.2 ⟨((numOK_iff n).1 (h n hn) : tokOK (.num n)), allOK_nil⟩
+
+theorem allOK_arr (af : AForm) (h : AOK af) : AllOK (arrToks .latex af) := by
+  cases af with
+  | col ns =>
+    have hS := allOK_sepBy [.kw .nl] (allOK_cons.2 ⟨(rfl : kwOK .nl = true), allOK_nil⟩) _
+      (allOK_numToks ns h.2)
+    simp only [arrToks]; aok
+  | mat rs =>
+    have hS := allOK_sepBy [.kw .nl] (allOK_cons.2 ⟨(rfl : kwOK .nl = true), allOK_nil⟩) _
+      (allOK_map _ rs (fun r hr => allOK_sepBy [.kw .amp] (allOK_cons.2 ⟨(rfl : kwOK .amp = true), allOK_nil⟩) _
+        (allOK_numToks r (h.2.2 r hr))))
+    simp only [arrToks]; aok
+
 /-! ## The induction -/
 
 def POK (c : Ctx) (e : Json) : Prop := AllOK (pr c e).toks ∧ AllOK (pr c e).crow
@@ -409,6 +426,19 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
         exact hu.2.2
       have hn : tokOK (.num k) := hk
       rw [hpr]; simp only [mkOut, qtyToks]; constructor <;> aok
+    | arr xs af haf hpr =>
+      simp only [hc] at hpr
+      have hA := allOK_arr af (arrForm_spec haf).2
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | arrU u xs af haf hu hpr =>
+      simp only [hc] at hpr
+      have hA := allOK_arr af (arrForm_spec haf).2
+      have hb : tokOK (.rm (String.ofList (Esm.Units.latexBody (factorsOf u)))) := by
+        show balOK (String.ofList (Esm.Units.latexBody (factorsOf u))).toList = true
+        rw [String.toList_ofList]
+        simp only [unitsOK, hc, Bool.and_eq_true] at hu
+        exact hu.2.2
+      rw [hpr]; simp only [mkOut, unitToks]; constructor <;> aok
     | tpos m bs ps hm hsb hb hps hpr =>
       simp only [hc] at hpr
       have hS := allOK_callToks [.opn m] (allOK_cons.2 ⟨trivial, allOK_nil⟩) _

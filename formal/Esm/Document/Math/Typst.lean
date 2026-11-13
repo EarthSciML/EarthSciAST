@@ -58,8 +58,10 @@ def kwChars : Kw → List Char
   | .min => "min".toList | .max => "max".toList | .abs => "abs".toList
   | .floor => "floor".toList | .ceil => "ceil".toList | .pdiff => "partial".toList
   | .dif => "dif".toList | .cases => "cases".toList | .esmnode => "esm.node".toList
+  | .vec => "vec".toList | .mat => "mat".toList
   | .rpg | .lb | .rb | .nl | .thin | .frac | .labs | .rabs | .lfloor | .rfloor
-  | .lceil | .rceil | .dotacc | .bcases | .ecases => []
+  | .lceil | .rceil | .dotacc | .bcases | .ecases | .bmat | .emat
+  | .sum | .prod | .inn | .substack | .limits | .lbkg | .rbkg | .lr => []
 
 def pieceChars (p : String × String) : List Char :=
   "upright(".toList ++ Strings.quote true p.1 ++ [')'] ++
@@ -133,7 +135,7 @@ def isHead : Tok → Bool
   | .opn _ => true
   | .kw k => match k with
     | .sqrt | .exp | .ln | .log | .sin | .cos | .tan | .asin | .acos | .atan | .sinh | .cosh
-    | .tanh | .min | .max | .abs | .floor | .ceil | .cases | .esmnode | .cdot => true
+    | .tanh | .min | .max | .abs | .floor | .ceil | .cases | .esmnode | .cdot | .vec | .mat => true
     | _ => false
   | _ => false
 
@@ -171,7 +173,8 @@ def identKw : List (String × Kw) :=
     ("sqrt", .sqrt), ("exp", .exp), ("ln", .ln), ("log", .log), ("sin", .sin), ("cos", .cos),
     ("tan", .tan), ("arcsin", .asin), ("arccos", .acos), ("arctan", .atan), ("sinh", .sinh),
     ("cosh", .cosh), ("tanh", .tanh), ("min", .min), ("max", .max), ("abs", .abs),
-    ("floor", .floor), ("ceil", .ceil), ("partial", .pdiff), ("dif", .dif), ("cases", .cases)]
+    ("floor", .floor), ("ceil", .ceil), ("partial", .pdiff), ("dif", .dif), ("cases", .cases),
+    ("vec", .vec), ("mat", .mat)]
 
 /-- `("…")` after a function name. -/
 def quotedArg (r : List Char) : Option (String × List Char) :=

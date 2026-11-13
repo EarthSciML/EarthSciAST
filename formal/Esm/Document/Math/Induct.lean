@@ -1,4 +1,4 @@
-import Esm.Document.Math.Derivs
+import Esm.Document.Math.Arrays
 
 /-!
 # The token-level round trip, by induction over the expression
@@ -76,6 +76,8 @@ theorem M_all (c : Ctx) : ∀ n e, sizeOf e < n → isE e = true → M c e
     | dCall w xs hw hwn hl hx hpr =>
       exact M_dCall c w xs hwn (fun x hm => IH x (sizeOf_dCallNode_lt hm) (hx x hm)) hpr
     | qty u k hk hu hpr => exact M_qty c u k hu hpr
+    | arr xs af haf hpr => exact M_arr c xs af haf hpr
+    | arrU u xs af haf hu hpr => exact M_arrU c u xs af haf hu hpr
     | tpos m bs ps hm hsb hb hps hpr =>
       exact M_tpos c m bs ps hm hsb (fun kv hkv => IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) hps hpr
     | tnamed m bs hm hb hps hne hk hkn hpr =>

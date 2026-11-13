@@ -87,7 +87,9 @@ def kwChars : Kw → List Char
   | .lceil => "\\lceil".toList | .rceil => "\\rceil".toList
   | .pdiff => "\\partial".toList | .dotacc => "\\dot".toList
   | .bcases => "\\begin{cases}".toList | .ecases => "\\end{cases}".toList
-  | .abs | .floor | .ceil | .dif | .cases | .esmnode => []
+  | .bmat => "\\begin{bmatrix}".toList | .emat => "\\end{bmatrix}".toList
+  | .abs | .floor | .ceil | .dif | .cases | .esmnode | .vec | .mat
+  | .sum | .prod | .inn | .substack | .limits | .lbkg | .rbkg | .lr => []
 
 def tokChars : Tok → List Char
   | .num n => numChars n
@@ -201,8 +203,14 @@ def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
     | ']' :: r' => some (.kw .rbk, r')
     | '|' :: r' => if w = "right" then some (.kw .rabs, r') else none
     | _ => none
-  else if w = "begin" then (dropP "{cases}".toList r).map (.kw .bcases, ·)
-  else if w = "end" then (dropP "{cases}".toList r).map (.kw .ecases, ·)
+  else if w = "begin" then
+    match dropP "{cases}".toList r with
+    | some r' => some (.kw .bcases, r')
+    | none => (dropP "{bmatrix}".toList r).map (.kw .bmat, ·)
+  else if w = "end" then
+    match dropP "{cases}".toList r with
+    | some r' => some (.kw .ecases, r')
+    | none => (dropP "{bmatrix}".toList r).map (.kw .emat, ·)
   else if isGreek w.toList then some (.greek w, r)
   else (ctrlKw.lookup w).map (.kw ·, r)
 

@@ -63,6 +63,7 @@ import Esm.Document.Math.Escape
 import Esm.Document.Math.OpenOp
 import Esm.Document.Math.Templates
 import Esm.Document.Math.Derivs
+import Esm.Document.Math.Arrays
 import Esm.Document.Math.Induct
 import Esm.Document.Math.LexLatex
 import Esm.Document.Math.TokLatex

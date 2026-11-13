@@ -513,6 +513,68 @@ def qtyToks (sf : Sf) (n : JNum) (l : List Esm.Units.Factor) : List Tok :=
   | .latex => [.num n, .kw .thin, .rm (String.ofList (Esm.Units.latexBody l))]
   | .typst => [.num n, .units l]
 
+/-! ## Constant arrays -/
+
+/-- The entries of a list that are all well-formed numbers. -/
+def numsOf : List Json → Option (List JNum)
+  | [] => some []
+  | .num n :: r => if numOK n then (numsOf r).map (n :: ·) else none
+  | _ :: _ => none
+
+/-- The rows of a list of number lists. -/
+def rowsOf : List Json → Option (List (List JNum))
+  | [] => some []
+  | .arr ys :: r =>
+    match numsOf ys, rowsOf r with
+    | some ns, some rs => some (ns :: rs)
+    | _, _ => none
+  | _ :: _ => none
+
+/-- The two array shapes with a native spelling. -/
+inductive AForm where
+  | col (ns : List JNum)
+  | mat (rs : List (List JNum))
+
+/-- A constant array printed natively: a column for rank 1, or a matrix of at least
+two columns (a single-column matrix would print like a column), at most 16 entries,
+every entry a well-formed number. -/
+def arrForm : Json → Option AForm
+  | .arr xs =>
+    match numsOf xs with
+    | some ns => if ns ≠ [] ∧ ns.length ≤ 16 then some (.col ns) else none
+    | none =>
+      match rowsOf xs with
+      | some (r :: rs) =>
+        if 2 ≤ r.length ∧ rs.all (fun q => q.length == r.length) ∧ (rs.length + 1) * r.length ≤ 16 then
+          some (.mat (r :: rs))
+        else none
+      | _ => none
+  | _ => none
+
+def AForm.json : AForm → Json
+  | .col ns => .arr (ns.map .num)
+  | .mat rs => .arr (rs.map fun r => .arr (r.map .num))
+
+def numToks (ns : List JNum) : List (List Tok) := ns.map fun n => [.num n]
+
+/-- The array: LaTeX `bmatrix`, Typst `vec(…)` / `mat(…)`. -/
+def arrToks (sf : Sf) : AForm → List Tok
+  | .col ns =>
+    match sf with
+    | .latex => .kw .bmat :: sepBy [.kw .nl] (numToks ns) ++ [.kw .emat]
+    | .typst => [.kw .vec, .kw .lp] ++ sepBy [.kw .comma] (numToks ns) ++ [.kw .rp]
+  | .mat rs =>
+    match sf with
+    | .latex => .kw .bmat :: sepBy [.kw .nl] (rs.map fun r => sepBy [.kw .amp] (numToks r)) ++ [.kw .emat]
+    | .typst => [.kw .mat, .kw .lp] ++ sepBy [.kw .semi] (rs.map fun r => sepBy [.kw .comma] (numToks r)) ++
+        [.kw .rp]
+
+/-- The unit after a number or an array. -/
+def unitToks (sf : Sf) (l : List Esm.Units.Factor) : List Tok :=
+  match sf with
+  | .latex => [.kw .thin, .rm (String.ofList (Esm.Units.latexBody l))]
+  | .typst => [.units l]
+
 /-- A template the call form can name: an identifier that is not a reserved operator
 name. -/
 def tnameOK (n : String) : Bool := opnOK n && !(reservedOpn.contains n)
@@ -609,6 +671,14 @@ def pr (c : Ctx) (e : Json) : Out :=
       | [] => esc ()
     | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)] =>
       if unitsOK sf u then mkOut sf 7 (qtyToks sf n (factorsOf u)) else esc ()
+    | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)] =>
+      match arrForm (.arr xs) with
+      | some af => if unitsOK sf u then mkOut sf 7 (arrToks sf af ++ unitToks sf (factorsOf u)) else esc ()
+      | none => esc ()
+    | [("args", .arr []), ("op", .str "const"), ("value", .arr xs)] =>
+      match arrForm (.arr xs) with
+      | some af => mkOut sf 10 (arrToks sf af)
+      | none => opn ()
     | [("args", .arr []), ("bindings", .obj bs), ("name", .str n), ("op", .str "apply_expression_template")] =>
       if tnameOK n && keysSorted bs && bs.all (fun kv => isE kv.2) then
         let vals := bs.attach.map fun ⟨kv, _⟩ => (kv.1, (pr c kv.2).at sf 4)

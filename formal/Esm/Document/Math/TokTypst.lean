@@ -400,6 +400,42 @@ theorem good_simple : ∀ (l : List Tok), (∀ t ∈ l, tokOK t ∧ t ≠ .kw .l
 /-- The fixed tokens of a printed template. -/
 macro "fixed" : tactic => `(tactic| (apply good_simple; simp (config := {decide := true}) [tokOK, kwOK, isUnits, isLetter]))
 
+theorem adj_snoc : ∀ (A : List Tok) (u : Tok), Adj A → u ≠ .kw .lp →
+    (∀ t ∈ A.getLast?, isUnits t = false) → Adj (A ++ [u])
+  | [], _, _, _, _ => trivial
+  | [t], u, _, hu, hl => ⟨fun e => absurd e hu, fun h => by simp [hl t rfl] at h, trivial⟩
+  | t :: t' :: r, u, hA, hu, hl => ⟨hA.1, hA.2.1, adj_snoc (t' :: r) u hA.2.2 hu
+      (fun x hx => hl x (by simpa using hx))⟩
+
+theorem good_numToks (ns : List JNum) (h : ∀ n ∈ ns, numOK n = true) :
+    ∀ x ∈ numToks ns, Good x ∧ Nice x := by
+  intro x hx
+  obtain ⟨n, hn, rfl⟩ := List.mem_map.1 hx
+  exact ⟨good_single ((numOK_iff n).1 (h n hn)), nice_cons _ (by simp) rfl⟩
+
+theorem good_arr (af : AForm) (h : AOK af) : Good (arrToks .typst af) ∧ Nice (arrToks .typst af) ∧
+    ∀ t ∈ (arrToks .typst af).getLast?, isUnits t = false := by
+  cases af with
+  | col ns =>
+    have hc := good_callToks [.kw .vec] (good_single rfl) ⟨by simp, fun u hu => by simp at hu; subst hu; rfl⟩
+      (nice_cons _ (by simp) rfl) (numToks ns) (good_numToks ns h.2)
+    simp only [callToks, lpC] at hc
+    simp only [arrToks]
+    refine ⟨hc.1, hc.2, fun t ht => ?_⟩
+    rw [List.getLast?_append_of_ne_nil _ (by simp)] at ht; simp at ht; subst ht; rfl
+  | mat rs =>
+    have hS := good_sepBy .semi rfl (by simp) (rs.map fun r => sepBy [.kw .comma] (numToks r)) (fun y hy => by
+      obtain ⟨r, hr, rfl⟩ := List.mem_map.1 hy
+      exact good_sepBy .comma rfl (by simp) _ (good_numToks r (h.2.2 r hr)))
+    simp only [arrToks, List.cons_append, List.nil_append]
+    refine ⟨good_cons_lp rfl rfl (good_append hS.1 (good_single rfl) (nice_cons _ (by simp) rfl)) ?_,
+      nice_cons _ (by simp) rfl, fun t ht => ?_⟩
+    · by_cases he : sepBy [.kw .semi] (rs.map fun r => sepBy [.kw .comma] (numToks r)) = []
+      · rw [he]; exact nice_cons _ (by simp) rfl
+      · exact nice_append _ hS.2 he
+    · rw [List.getLast?_cons_cons, ← List.cons_append, List.getLast?_append_of_ne_nil _ (by simp)] at ht
+      simp at ht; subst ht; rfl
+
 /-! ## The induction -/
 
 def TP (c : Ctx) (e : Json) : Prop :=
@@ -678,6 +714,25 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
       rw [hpr] at hselfN ⊢; simp only [mkOut, qtyToks] at hselfN ⊢
       have hT : Good [Tok.num k, .units (factorsOf u)] :=
         ⟨(by simp; exact ⟨hk, hl⟩), ⟨(fun e => by cases e), (fun h => by simp [isUnits] at h), trivial⟩⟩
+      exact mk_ok hT hselfN.1 hselfN.2
+    | arr xs af haf hpr =>
+      simp only [hc] at hpr
+      obtain ⟨hA, -, -⟩ := good_arr af (arrForm_spec haf).2
+      rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
+      exact mk_ok hA hselfN.1 hselfN.2
+    | arrU u xs af haf hu hpr =>
+      simp only [hc] at hpr hu
+      obtain ⟨hA, -, hl⟩ := good_arr af (arrForm_spec haf).2
+      have hlf : factorsOf u ≠ [] ∧ ∀ f ∈ factorsOf u, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0 := by
+        simp only [unitsOK, Bool.and_eq_true, bne_iff_ne, ne_eq, List.all_eq_true, bne_iff_ne] at hu
+        exact ⟨hu.1.1.1, fun f hf => hu.1.2 f hf⟩
+      have hT : Good (arrToks .typst af ++ unitToks .typst (factorsOf u)) := by
+        simp only [unitToks]
+        refine ⟨fun t ht => ?_, adj_snoc _ _ hA.2 (by simp) hl⟩
+        rcases List.mem_append.1 ht with ht | ht
+        · exact hA.1 t ht
+        · simp at ht; subst ht; exact hlf
+      rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok hT hselfN.1 hselfN.2
     | tpos m bs ps hm hsb hb hps hpr =>
       simp only [hc] at hpr

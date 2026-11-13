@@ -222,7 +222,9 @@ theorem pNameLoop_stop (sf : Sf) (f : Nat) (acc : List Char) (rest : List Tok)
   | .kw .min :: _ | .kw .max :: _ | .kw .labs :: _ | .kw .rabs :: _ | .kw .lfloor :: _
   | .kw .rfloor :: _ | .kw .lceil :: _ | .kw .rceil :: _ | .kw .abs :: _ | .kw .floor :: _
   | .kw .ceil :: _ | .kw .pdiff :: _ | .kw .dif :: _ | .kw .dotacc :: _ | .kw .bcases :: _
-  | .kw .ecases :: _ | .kw .cases :: _ | .kw .esmnode :: _
+  | .kw .ecases :: _ | .kw .cases :: _ | .kw .esmnode :: _ | .kw .bmat :: _ | .kw .emat :: _
+  | .kw .vec :: _ | .kw .mat :: _ | .kw .sum :: _ | .kw .prod :: _ | .kw .inn :: _
+  | .kw .substack :: _ | .kw .limits :: _ | .kw .lbkg :: _ | .kw .rbkg :: _ | .kw .lr :: _
   | .num _ :: _ | .letter _ :: _ | .greek _ :: _ | .word _ :: _ | .it _ :: _ | .rm _ :: _
   | .ups _ :: _ | .opn _ :: _ | .txt _ :: _ | .jstr _ :: _ | .esc _ :: _ | .code _ :: _
   | .units _ :: _ => rfl
