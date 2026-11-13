@@ -384,13 +384,28 @@ def icTail (sf : Sf) : List Tok :=
   | .typst => [.kw .lp, .letter 't', .kw .us, .num (.int 0), .kw .rp]
 
 /-- A subscript list: LaTeX `_{a, b}`; Typst `_a` for one simple token, else `_(a, b)`. -/
-def subList (sf : Sf) (args : List (List Tok)) : List Tok :=
+def subList (sf : Sf) (simp : Option Tok) (args : List (List Tok)) : List Tok :=
   match sf with
   | .latex => [.kw .us, .kw .lb] ++ sepBy [.kw .comma] args ++ [.kw .rb]
   | .typst =>
-    match args with
-    | [[t]] => if simpleTok t then [.kw .us, t] else [.kw .us, .kw .lpg] ++ [t] ++ [.kw .rp]
-    | _ => [.kw .us, .kw .lpg] ++ sepBy [.kw .comma] args ++ [.kw .rp]
+    match simp with
+    | some t => [.kw .us, t]
+    | none => [.kw .us, .kw .lpg] ++ sepBy [.kw .comma] args ++ [.kw .rp]
+
+/-- The one token a Typst exponent or subscript may be written as without
+parentheses: a nonnegative number in positional spelling, or a one-letter or Greek
+name. -/
+def simpleE (c : Ctx) : Json → Option Tok
+  | .num n => if simpleTok (.num n) then some (.num n) else none
+  | .str s =>
+    match nameToks c s with
+    | [t] => if simpleTok t then some t else none
+    | _ => none
+  | _ => none
+
+def simpleArg (c : Ctx) : List Json → Option Tok
+  | [x] => simpleE c x
+  | _ => none
 
 /-- The index prints with a subscript unless the base is not a plain name, or the
 subscript would collide with a name: one formula-shaped name (it would read as the
@@ -515,9 +530,9 @@ def pr (c : Ctx) (e : Json) : Out :=
         let ex := match sf with
           | .latex => [.kw .lb] ++ (pr c b).at sf 1 ++ [.kw .rb]
           | .typst =>
-            match (pr c b).toks with
-            | [t] => if simpleTok t then [t] else grp sf [t]
-            | t => grp sf t
+            match simpleE c b with
+            | some t => [t]
+            | none => grp sf (pr c b).toks
         mkOut sf 8 ((pr c a).at sf 9 ++ .kw .caret :: ex)
       | .lnot, [a] => mkOut sf 6 (.kw .lnot :: (pr c a).at sf 6)
       | .tru, [] => mkOut sf 10 [.txt "true"]
@@ -530,8 +545,9 @@ def pr (c : Ctx) (e : Json) : Out :=
         if nameOK n then mkOut sf 10 (nameToks c n ++ icTail sf) else esc ()
       | .index, base :: i :: is =>
         let subs := (i :: is).attach.map fun ⟨x, _⟩ => (pr c x).at sf 1
-        if subOK c.S base (i :: is) && !(subPat sf (subList sf subs)) then
-          mkOut sf 9 (nameToks c (match base with | .str s => s | _ => "") ++ subList sf subs)
+        if subOK c.S base (i :: is) && !(subPat sf (subList sf (simpleArg c (i :: is)) subs)) then
+          mkOut sf 9 (nameToks c (match base with | .str s => s | _ => "") ++
+            subList sf (simpleArg c (i :: is)) subs)
         else mkOut sf 9 ((pr c base).at sf 10 ++ [.kw .lbk] ++ sepBy [.kw .comma] subs ++ [.kw .rbk])
       | .cmp k, [a, b] => mkOut sf 3 ((pr c a).at sf 4 ++ .kw k :: (pr c b).at sf 4)
       | .plus, xs =>

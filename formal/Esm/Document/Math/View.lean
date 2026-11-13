@@ -39,9 +39,9 @@ inductive V (c : Ctx) : Json → Prop where
       (hpr : pr c (node o [a, b]) = mkOut c.sf 8 ((pr c a).at c.sf 9 ++ .kw .caret :: (match c.sf with
           | .latex => [.kw .lb] ++ (pr c b).at c.sf 1 ++ [.kw .rb]
           | .typst =>
-            match (pr c b).toks with
-            | [t] => if simpleTok t then [t] else grp c.sf [t]
-            | t => grp c.sf t))) :
+            match simpleE c b with
+            | some t => [t]
+            | none => grp c.sf (pr c b).toks))) :
       V c (node o [a, b])
   | lnot (o : String) (a : Json) (ho : kindOf o = .lnot) (ha : isE a = true)
       (hpr : pr c (node o [a]) = mkOut c.sf 6 (.kw .lnot :: (pr c a).at c.sf 6)) : V c (node o [a])
@@ -62,10 +62,10 @@ inductive V (c : Ctx) : Json → Prop where
       V c (node o [.str n])
   | idxSub (o : String) (b : String) (is : List Json) (ho : kindOf o = .index) (hne : is ≠ [])
       (hs : subOK c.S (.str b) is = true)
-      (hsp : subPat c.sf (subList c.sf (is.map fun x => (pr c x).at c.sf 1)) = false)
+      (hsp : subPat c.sf (subList c.sf (simpleArg c is) (is.map fun x => (pr c x).at c.sf 1)) = false)
       (hi : ∀ x ∈ is, isE x = true)
       (hpr : pr c (node o (.str b :: is)) =
-        mkOut c.sf 9 (nameToks c b ++ subList c.sf (is.map fun x => (pr c x).at c.sf 1))) :
+        mkOut c.sf 9 (nameToks c b ++ subList c.sf (simpleArg c is) (is.map fun x => (pr c x).at c.sf 1))) :
       V c (node o (.str b :: is))
   | idxBr (o : String) (base : Json) (is : List Json) (ho : kindOf o = .index) (hne : is ≠ [])
       (hb : isE base = true) (hi : ∀ x ∈ is, isE x = true)

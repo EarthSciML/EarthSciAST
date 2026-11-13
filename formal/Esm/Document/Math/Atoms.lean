@@ -138,15 +138,15 @@ theorem pNamePrim_name (c : Ctx) (s : String) (hs : nameOK s = true) (rest : Lis
   simp only
   rw [icTailP_none c.sf rest (fun r e => by have := hr _ _ e; simp [conts] at this)]
 
-theorem pPrim_name (c : Ctx) (s : String) (hs : nameOK s = true) (rest : List Tok)
-    (hr : Fol c.sf 10 rest) (f : Nat) : pPrim c (f + 1) (nameToks c s ++ rest) = some (.str s, rest) := by
-  have hpn := pNamePrim_name c s hs rest hr
+/-- A primary that starts with a name's tokens is read as a name (never as `e^x`). -/
+theorem pPrim_name_eq (c : Ctx) (s : String) (rest : List Tok) (f : Nat) :
+    pPrim c (f + 1) (nameToks c s ++ rest) = pNamePrim c (nameToks c s ++ rest) := by
   obtain ⟨t, tr, hn, hh⟩ := nameToks_head c s
-  rw [hn] at hpn ⊢
+  rw [hn]
   rw [pPrim.eq_def]
   simp only [List.cons_append]
   rcases hh with ⟨x, rfl⟩ | ⟨ch, rfl, h⟩ | ⟨g, rfl⟩ | ⟨raw, rfl, h1, h2⟩ | ⟨ps, rfl, h1⟩
-  · exact hpn
+  · rfl
   · have he : eulerHead c (Tok.letter ch :: (tr ++ rest)) = false := by
       unfold eulerHead
       split
@@ -168,8 +168,8 @@ theorem pPrim_name (c : Ctx) (s : String) (hs : nameOK s = true) (rest : List To
         · simp at htr
         · simp at htr
       · rfl
-    simp only [he]; exact hpn
-  · exact hpn
+    simp only [he]; rfl
+  · rfl
   · have he : eulerHead c (Tok.rm raw :: (tr ++ rest)) = false := by
       unfold eulerHead
       split
@@ -178,7 +178,7 @@ theorem pPrim_name (c : Ctx) (s : String) (hs : nameOK s = true) (rest : List To
       · rename_i heq; cases heq
       · rename_i heq; cases heq
       · rfl
-    simp only [he]; exact hpn
+    simp only [he]; rfl
   · have he : eulerHead c (Tok.ups ps :: (tr ++ rest)) = false := by
       unfold eulerHead
       split
@@ -187,6 +187,10 @@ theorem pPrim_name (c : Ctx) (s : String) (hs : nameOK s = true) (rest : List To
         obtain ⟨rfl, -⟩ := heq; simp [h1]
       · rename_i heq; cases heq
       · rfl
-    simp only [he]; exact hpn
+    simp only [he]; rfl
+
+theorem pPrim_name (c : Ctx) (s : String) (hs : nameOK s = true) (rest : List Tok)
+    (hr : Fol c.sf 10 rest) (f : Nat) : pPrim c (f + 1) (nameToks c s ++ rest) = some (.str s, rest) := by
+  rw [pPrim_name_eq]; exact pNamePrim_name c s hs rest hr
 
 end Esm.Document.Math
