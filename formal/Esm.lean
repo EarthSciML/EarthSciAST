@@ -51,6 +51,8 @@ import Esm.Document.Math.Atoms
 import Esm.Document.Math.Main
 import Esm.Document.Math.Cases1
 import Esm.Document.Math.Cases2
+import Esm.Document.Math.Loops
+import Esm.Document.Math.Cases3
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/

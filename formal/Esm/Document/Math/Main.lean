@@ -28,7 +28,7 @@ theorem close_addAcc (e : Json) : close "+" (addAcc e) = e := by
 /-- The level-4 parse of `e` stops in the `+` loop, with fuel to spare. -/
 def PA (c : Ctx) (e : Json) : Prop :=
   ∀ rest, Fol c.sf 5 rest → ∀ f, need 4 ((pr c e).at c.sf 4).length ≤ f →
-    ∃ g, f ≤ g + need 4 ((pr c e).at c.sf 4).length ∧
+    ∃ g, f ≤ g + 30 * ((pr c e).at c.sf 4).length + 4 ∧
       pAdd c f ((pr c e).at c.sf 4 ++ rest) = addLoop c g (addAcc e) rest
 
 def casesEnd (sf : Sf) : Tok := .kw (if sf = .latex then .ecases else .rp)

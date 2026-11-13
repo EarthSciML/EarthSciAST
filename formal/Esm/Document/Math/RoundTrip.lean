@@ -13,6 +13,12 @@ namespace Esm.Document.Math
 
 open Esm.Document
 
+theorem iteT {α : Sort _} {p : Prop} [Decidable p] (h : p) (a b : α) : (if p then a else b) = a := by
+  simp [h]
+
+theorem iteF {α : Sort _} {p : Prop} [Decidable p] (h : ¬p) (a b : α) : (if p then a else b) = b := by
+  simp [h]
+
 theorem pLvl1 (c : Ctx) (f : Nat) (ts : List Tok) : pLvl c f 1 ts = pOr c f ts := rfl
 theorem pLvl2 (c : Ctx) (f : Nat) (ts : List Tok) : pLvl c f 2 ts = pAnd c f ts := rfl
 theorem pLvl3 (c : Ctx) (f : Nat) (ts : List Tok) : pLvl c f 3 ts = pCmp c f ts := rfl

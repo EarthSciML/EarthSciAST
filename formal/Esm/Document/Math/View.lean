@@ -61,7 +61,9 @@ inductive V (c : Ctx) : Json → Prop where
       (hpr : pr c (node o [.str n]) = mkOut c.sf 10 (nameToks c n ++ icTail c.sf)) :
       V c (node o [.str n])
   | idxSub (o : String) (b : String) (is : List Json) (ho : kindOf o = .index) (hne : is ≠ [])
-      (hs : subOK c.S (.str b) is = true) (hi : ∀ x ∈ is, isE x = true)
+      (hs : subOK c.S (.str b) is = true)
+      (hsp : subPat c.sf (subList c.sf (is.map fun x => (pr c x).at c.sf 1)) = false)
+      (hi : ∀ x ∈ is, isE x = true)
       (hpr : pr c (node o (.str b :: is)) =
         mkOut c.sf 9 (nameToks c b ++ subList c.sf (is.map fun x => (pr c x).at c.sf 1))) :
       V c (node o (.str b :: is))
@@ -321,9 +323,11 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
         have his : ∀ x ∈ i :: is, isE x = true := fun x hx' => hx x (List.mem_cons_of_mem _ hx')
         split at hpr
         · rename_i hsub
+          simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hsub
+          rw [attach_map_eq (i :: is) (fun x => Out.at c.sf 1 (pr c x))] at hsub
           cases base with
           | str b =>
-            exact V.idxSub o b (i :: is) ho (by simp) hsub his
+            exact V.idxSub o b (i :: is) ho (by simp) hsub.1 hsub.2 his
               (by unfold node; rw [hpr, attach_map_eq (i :: is) (fun x => Out.at c.sf 1 (pr c x))])
           | _ => simp [subOK] at hsub
         · exact V.idxBr o base (i :: is) ho (by simp) hb his

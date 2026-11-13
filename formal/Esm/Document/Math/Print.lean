@@ -406,6 +406,12 @@ def subOK (S : Sym) (base : Json) (is : List Json) : Bool :=
      | _ => true)
   | _ => false
 
+/-- An upright name subscript: a name before it would read it as part of the name. -/
+def subPat (sf : Sf) : List Tok → Bool
+  | .kw .us :: .kw .lb :: .rm _ :: .kw .rb :: _ => sf == .latex
+  | .kw .us :: .kw .lpg :: .ups [(_, "")] :: .kw .rp :: _ => sf == .typst
+  | _ => false
+
 /-- Derivative operand printed inline (`\frac{\mathrm{d} N}{\mathrm{d} t}`) when it is
 postfix-level or tighter, and not a negative literal. -/
 def inlineD (o : Out) : Bool := decide (9 ≤ o.lvl)
@@ -524,7 +530,7 @@ def pr (c : Ctx) (e : Json) : Out :=
         if nameOK n then mkOut sf 10 (nameToks c n ++ icTail sf) else esc
       | .index, base :: i :: is =>
         let subs := (i :: is).attach.map fun ⟨x, _⟩ => (pr c x).at sf 1
-        if subOK c.S base (i :: is) then
+        if subOK c.S base (i :: is) && !(subPat sf (subList sf subs)) then
           mkOut sf 9 (nameToks c (match base with | .str s => s | _ => "") ++ subList sf subs)
         else mkOut sf 9 ((pr c base).at sf 10 ++ [.kw .lbk] ++ sepBy [.kw .comma] subs ++ [.kw .rbk])
       | .cmp k, [a, b] => mkOut sf 3 ((pr c a).at sf 4 ++ .kw k :: (pr c b).at sf 4)

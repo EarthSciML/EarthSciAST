@@ -162,7 +162,7 @@ theorem PA_generic (c : Ctx) (e : Json) (hPL : PL c e) (hlvl : (pr c e).lvl ≠ 
     · simp [h, show ¬ 4 ≤ (pr c e).lvl by omega]
   have hm := hPL 5 (by omega) (by omega) rest hr g (by rw [← h45]; unfold need at hf ⊢; omega)
   rw [pLvl5] at hm
-  refine ⟨g, by unfold need; omega, ?_⟩
+  refine ⟨g, by omega, ?_⟩
   rw [pAdd, h45, hm, hacc]
 
 theorem PCr_generic (c : Ctx) (e : Json) (hPL : PL c e)

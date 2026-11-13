@@ -76,12 +76,6 @@ theorem splitDots_noDot (l : List Char) : ∀ s ∈ splitDots l, '.' ∉ s := by
 
 /-! ## Segments -/
 
-/-- An upright name subscript: a name before it would read it as part of the name. -/
-def subPat (sf : Sf) : List Tok → Bool
-  | .kw .us :: .kw .lb :: .rm _ :: .kw .rb :: _ => sf == .latex
-  | .kw .us :: .kw .lpg :: .ups [(_, "")] :: .kw .rp :: _ => sf == .typst
-  | _ => false
-
 theorem subOrPlain_stop (sf : Sf) (b : List Char) (rest : List Tok) (h : subPat sf rest = false) :
     subOrPlain sf b rest = (b, rest) := by
   unfold subOrPlain
