@@ -142,6 +142,7 @@ pub(crate) mod types;
 pub(crate) mod unit_conversion;
 pub(crate) mod units;
 pub(crate) mod validate;
+pub(crate) mod variable_bounds;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -321,7 +322,7 @@ pub use types::{
     ParameterUpdateSpec, Plot, PlotAxis, PlotSeries, PlotValue, PlotY, Reaction, ReactionSystem,
     RecordsPerFile, RegionBound, Solver, SolverTimeSpan, Species, StoichiometricEntry,
     SweepDimension, SweepRange, TimePoint, TimeSpan, Tolerance, UnitConversion, UpdateValue,
-    VariableMapTransform, VariableType,
+    VariableBound, VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
@@ -436,7 +437,7 @@ pub const LIBRARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// version in `esm-schema.json`'s `$id` / esm-spec.md; the
 /// `schema_version_matches_bundled_schema` test enforces it, and
 /// `parse::library_version()` (major-compat gating) derives from it.
-pub const SCHEMA_VERSION: &str = "2.0.0";
+pub const SCHEMA_VERSION: &str = "2.1.0";
 
 #[cfg(test)]
 mod version_tests {

@@ -2593,9 +2593,11 @@ fn apply_variable_map_removals(
                 // the observed, exactly as if the author had declared it.
                 VariableMapTransform::Expression(node) => {
                     let removed = parts.parameters.shift_remove(to);
-                    let (units, shape, description) = removed
-                        .map(|p| (p.units, p.shape, p.description))
-                        .unwrap_or((None, None, None));
+                    // The target stays in the flattened system under its own
+                    // name, so its bounds stay with it (esm-spec §6.3.2).
+                    let (units, shape, description, lb, ub) = removed
+                        .map(|p| (p.units, p.shape, p.description, p.lb, p.ub))
+                        .unwrap_or_default();
                     parts.observed_variables.insert(
                         to.clone(),
                         ModelVariable {
@@ -2603,6 +2605,8 @@ fn apply_variable_map_removals(
                             units,
                             description,
                             shape,
+                            lb,
+                            ub,
                             ..Default::default()
                         },
                     );
@@ -3254,6 +3258,11 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         // exactly as the equations do.
         cloned.for_each_expression_mut(&mut |expr| {
             *expr = namespace_expr(expr, system_name, &sub_keys, &locals);
+        });
+        // A reference `lb` / `ub` names a variable exactly as an equation does,
+        // so it is namespaced by the same map (esm-libraries-spec §4.7.5).
+        cloned.map_bound_references(&mut |expr| {
+            namespace_expr(expr, system_name, &sub_keys, &locals)
         });
         match var.var_type {
             // The two maps are NOT a partition (esm-libraries-spec §4.7.5
@@ -4861,6 +4870,7 @@ fn retarget_merged_names(per_system: &mut [SystemBlock], renames: &IndexMap<Stri
             .chain(block.observed_vars.values_mut())
         {
             var.for_each_expression_mut(&mut |expr| *expr = ren(expr));
+            var.map_bound_references(&mut |expr| ren(expr));
         }
         for event in block.continuous_events.iter_mut() {
             rename_continuous_event_names(event, &subs, renames);
@@ -5252,6 +5262,16 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
                 *expr =
                     rename_join_names(&crate::substitute::substitute(expr, &subs), &join_renames);
             });
+        }
+        // A bound can reference the removed parameter from ANY variable, a
+        // state included, so the bounds of all three maps are rewritten.
+        for var in block
+            .state_vars
+            .values_mut()
+            .chain(block.observed_vars.values_mut())
+            .chain(block.parameters.values_mut())
+        {
+            var.map_bound_references(&mut |expr| crate::substitute::substitute(expr, &subs));
         }
         // ...and event conditions / affect RHS (continuous + discrete), for the
         // same reason: an event whose condition or affect referenced the removed

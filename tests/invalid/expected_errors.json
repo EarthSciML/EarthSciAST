@@ -4240,5 +4240,131 @@
     ],
     "is_valid": false,
     "notes": "esm-spec 4.3.1.2 / 4.9.6. An array a and a SCALAR c read each other; a component with a scalar member has no shared axis to fold along, so it is no recurrence group candidate and stays an observed_cycle."
+  },
+  "variable_bound_unresolved.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/M/variables/x/ub",
+        "code": "undefined_variable",
+        "message": "Variable \"x_cap\" referenced as the ub of 'x' but not declared",
+        "details": {
+          "variable": "x_cap",
+          "bound": "ub"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3.2 rule 1: a bound reference resolves like a variable reference in the model's expressions, and one that does not is `undefined_variable` at the bound's pointer (\u00a74.9.5 table)."
+  },
+  "variable_bound_shape_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/M/variables/x/ub",
+        "code": "variable_bound_shape_mismatch",
+        "message": "The ub of 'x' references 'cap', shaped [salt]; a bound must be scalar or the bounded variable's shape (scalar)",
+        "details": {
+          "variable": "x",
+          "bound": "ub",
+          "reference": "cap"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3.2 rule 2: a shaped bound on a scalar variable."
+  },
+  "variable_bound_shape_mismatch_axes.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/M/variables/Q/lb",
+        "code": "variable_bound_shape_mismatch",
+        "message": "The lb of 'Q' references 'Q_min', shaped [ion]; a bound must be scalar or the bounded variable's shape [salt]",
+        "details": {
+          "variable": "Q",
+          "bound": "lb",
+          "reference": "Q_min"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3.2 rule 2: shapes are compared by index-set name, so equal extents do not make `[ion]` the shape `[salt]`."
+  },
+  "variable_bound_shape_mismatch_nested_reaction.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/M/variables/x/ub",
+        "code": "variable_bound_shape_mismatch",
+        "message": "The ub of 'x' references 'Chem.Pool.cap', shaped [salt]; a bound must be scalar or the bounded variable's shape (scalar)",
+        "details": {
+          "variable": "x",
+          "bound": "ub",
+          "reference": "Chem.Pool.cap"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3.2 rule 2: a referenced parameter's shape is read wherever its reaction system sits, here a reaction system nested in another."
+  },
+  "variable_bound_circular_self.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/M/variables/x/lb",
+        "code": "variable_bound_circular",
+        "message": "The lb of 'x' refers to 'x' itself",
+        "details": {
+          "variable": "x",
+          "bound": "lb",
+          "reference": "x"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3.2 rule 3: a bound naming the variable it bounds."
+  },
+  "variable_bound_circular_observed.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/M/variables/x/ub",
+        "code": "variable_bound_circular",
+        "message": "The ub of 'x' refers to 'a', whose definition depends on 'x' (a -> b -> x)",
+        "details": {
+          "variable": "x",
+          "bound": "ub",
+          "reference": "a"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3.2 rule 3: the dependence is followed transitively through observed definitions. `a` reads `b`, and `b` reads `x`."
+  },
+  "variable_bounds_inverted.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/M/variables/x",
+        "code": "variable_bounds_inverted",
+        "message": "'x' has lb 2 greater than ub 1",
+        "details": {
+          "variable": "x",
+          "lb": 2,
+          "ub": 1
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a76.3.2 rule 4: both bounds are numbers and lb > ub. Pinned at the variable, since the fault is in the pair. lb == ub is legal (tests/valid/variable_bounds.esm, `k`)."
+  },
+  "variable_bounds_version_too_old.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "variable_bounds_version_too_old",
+    "notes": "Rejected at load with `variable_bounds_version_too_old` at `/models/M/variables/x/lb` (esm-spec \u00a76.3.2, version gate): bounds arrive at esm 2.1.0 and this document declares 2.0.0. Gated before schema validation, so the author sees the version hint rather than an unknown-property error."
   }
 }

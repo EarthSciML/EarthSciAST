@@ -1517,7 +1517,11 @@ function _apply_expression_transform!(
             units = to_var === nothing ? nothing : to_var.units,
             description = to_var === nothing ? nothing : to_var.description,
             shape = to_var === nothing ? nothing : to_var.shape,
-            element_type = to_var === nothing ? nothing : to_var.element_type
+            element_type = to_var === nothing ? nothing : to_var.element_type,
+            # The target stays in the flattened system under its own name, so
+            # its bounds stay with it (esm-spec §6.3.2).
+            lb = to_var === nothing ? nothing : to_var.lb,
+            ub = to_var === nothing ? nothing : to_var.ub
         )
     end
     # The defining equation (`to ~ transform`) is what MAKES `to` an observed
@@ -1538,6 +1542,21 @@ function _substitute_variable_map!(
         contribs::Vector{Vector{Contribution}},
         entry::CouplingVariableMap
     )
+    bindings = Dict{String, ASTExpr}(entry.to => _variable_map_replacement(entry))
+    rewrite = _variable_map_rewrite(entry)
+    for (i, eq) in enumerate(equations)
+        rewritten, contribs[i] = _rewrite_contributions(rewrite, eq, contribs[i], false)
+        equations[i] = Equation(
+            substitute(eq.lhs, bindings), rewritten.rhs;
+            _comment = eq._comment
+        )
+    end
+    return
+end
+
+# The expression replacing a reference to a named-transform `variable_map`'s
+# `to`: its `from`, scaled by `factor` when one is given.
+function _variable_map_replacement(entry::CouplingVariableMap)::ASTExpr
     # Build replacement ASTExpr. `factor` is a scaling coefficient (schema restricts
     # it to the scaling transforms — additive / multiplicative / conversion_factor;
     # a bare param_to_var / identity may not carry one). Apply it uniformly here
@@ -1551,18 +1570,16 @@ function _substitute_variable_map!(
             ASTExpr[NumExpr(entry.factor::Float64), VarExpr(entry.from)]
         )
     end
+    return replacement
+end
 
-    bindings = Dict{String, ASTExpr}(entry.to => replacement)
+# The rewrite a named-transform `variable_map` applies to a right-hand side in
+# the flattened system — and to a variable's bound reference, which follows the
+# same replacement (esm-libraries-spec §4.7.5).
+function _variable_map_rewrite(entry::CouplingVariableMap)
+    bindings = Dict{String, ASTExpr}(entry.to => _variable_map_replacement(entry))
     join_renames = Dict{String, String}(entry.to => entry.from)
-    rewrite(e) = _rename_join_names(substitute(e, bindings), join_renames)
-    for (i, eq) in enumerate(equations)
-        rewritten, contribs[i] = _rewrite_contributions(rewrite, eq, contribs[i], false)
-        equations[i] = Equation(
-            substitute(eq.lhs, bindings), rewritten.rhs;
-            _comment = eq._comment
-        )
-    end
-    return
+    return e -> _rename_join_names(substitute(e, bindings), join_renames)
 end
 
 # A relational `join` names its envelope factors / key columns as bare STRINGS,

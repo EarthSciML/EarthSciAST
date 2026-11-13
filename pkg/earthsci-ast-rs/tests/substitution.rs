@@ -94,6 +94,8 @@ fn test_model_substitution() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            lb: None,
+            ub: None,
             default_units: None,
             element_type: None,
             var_type: VariableType::Unknown,
@@ -109,6 +111,8 @@ fn test_model_substitution() {
     variables.insert(
         "k".to_string(),
         ModelVariable {
+            lb: None,
+            ub: None,
             default_units: None,
             element_type: None,
             var_type: VariableType::Parameter,
@@ -124,6 +128,8 @@ fn test_model_substitution() {
     variables.insert(
         "y".to_string(),
         ModelVariable {
+            lb: None,
+            ub: None,
             default_units: None,
             element_type: None,
             var_type: VariableType::Unknown,

@@ -35,7 +35,7 @@ use earthsci_ast::SystemKind;
 use earthsci_ast::load_path;
 use earthsci_ast::to_ascii;
 use earthsci_ast::{FlattenError, FlattenedSystem, flatten};
-use earthsci_ast::{ModelVariable, ParameterUpdateSpec};
+use earthsci_ast::{ModelVariable, ParameterUpdateSpec, VariableBound};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -131,7 +131,21 @@ fn variable_record(
         "update_kinds": update_kinds(var),
         "distribution_kind": var.distribution.as_ref().map(|d| d.kind()),
         "source_system": owner(name),
+        "lb": bound_record(var.lb.as_ref()),
+        "ub": bound_record(var.ub.as_ref()),
     })
+}
+
+/// A flattened `lb` / `ub` as the corpus records it (esm-libraries-spec
+/// §4.7.5): `null` when absent, the number as authored, otherwise the bound
+/// rendered with `to_ascii` (a reference renders as its namespaced name).
+fn bound_record(bound: Option<&VariableBound>) -> Value {
+    match bound {
+        None => Value::Null,
+        Some(VariableBound::Number(n)) => Value::Number(n.clone()),
+        Some(VariableBound::Reference(name)) => Value::String(name.clone()),
+        Some(VariableBound::Expression(expr)) => Value::String(to_ascii(expr)),
+    }
 }
 
 fn variable_map(

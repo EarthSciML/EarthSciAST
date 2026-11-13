@@ -849,6 +849,11 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     # systems means no evaluation order exists.
     append!(errors, validate_coupling_cycles(file; toplevel = scoped_toplevel))
 
+    # 5b'. Variable bounds (esm-spec §6.3.2): an unresolved reference, a
+    # referenced shape that is neither scalar nor the variable's, a bound that
+    # refers back to its variable, and numeric bounds out of order.
+    append!(errors, validate_variable_bounds(file; toplevel = scoped_toplevel))
+
     # 5c. Aggregate/relational semantic checks (F-6). Three defects that are
     # statically decidable from the SINGLE document yet slip past both the schema
     # and the reference-integrity pass, so `validate()` accepted them until now:
@@ -2898,6 +2903,83 @@ function validate_model_unit_consistency(
 end
 
 """
+    _scoped_resolver(members) -> resolve(path, ref)
+
+The document-wide reference resolver of esm-spec §4.9.7. `members` holds every
+declared member (variable, species, reaction-system parameter) of every
+component at every depth by full scoped name; `resolve(path, ref)` resolves
+`ref` as written in the model or subsystem at scoped `path`: its own names,
+then a path relative to its own subsystems, then a top-level system path. It
+returns the scoped name, or `nothing` when `ref` names no declared member.
+"""
+function _scoped_resolver(members)
+    return function resolve(path::String, ref::String)
+        inner = path * "." * ref   # own name, or relative to own subsystems
+        haskey(members, inner) && return inner
+        return occursin('.', ref) && haskey(members, ref) ? ref : nothing
+    end
+end
+
+"""
+    _scoped_observed_graph(file; toplevel=nothing) -> NamedTuple
+
+The scoped observed definitions of every model and subsystem of `file`, the
+inputs of [`validate_coupling_cycles`](@ref) and of the bound circularity check
+(esm-spec §6.3.2 rule 3):
+
+- `members`: the scoped member map (`toplevel` when the caller built it);
+- `resolve`: [`_scoped_resolver`](@ref) over `members`;
+- `defs`: scoped name → defining RHS of each observed unknown, with every
+  unknown some model puts under `D(·, t)` removed (it is a state);
+- `scope`: scoped name of each observed → the scoped path of its model;
+- `self_exempt`, `scoped_groups`: the §4.3.1.1 recurrence candidates and the
+  §4.3.1.2 recurrence groups, by scoped name.
+"""
+function _scoped_observed_graph(file::EsmFile; toplevel = nothing)
+    members = toplevel === nothing ? _toplevel_scoped_units(file) : toplevel
+    resolve = _scoped_resolver(members)
+    defs = Dict{String, ASTExpr}()            # scoped name → defining RHS
+    scope = Dict{String, String}()           # scoped name → its model path
+    self_exempt = Set{String}()              # §4.3.1.1 recurrence candidates
+    scoped_groups = Vector{Vector{String}}()  # §4.3.1.2 recurrence groups, scoped
+    states = Set{String}()                   # `D(·, t)` targets, scoped
+    function walk(path::String, m::Model)
+        local_defs = observed_definitions(m)
+        candidates = _recurrence_candidate_names(m, local_defs)
+        for (name, rhs) in local_defs
+            scoped = path * "." * name
+            defs[scoped] = rhs
+            scope[scoped] = path
+            name in candidates && push!(self_exempt, scoped)
+        end
+        for g in recurrence_groups(m)
+            push!(scoped_groups, sort!([path * "." * n for n in g]))
+        end
+        for eq in m.equations
+            role, name = _lhs_role(eq.lhs)
+            role === :derivative || continue
+            target = resolve(path, name)
+            target === nothing || push!(states, target)
+        end
+        for (sub, node) in model_subsystems(m)
+            walk(path * "." * sub, node)
+        end
+        return
+    end
+    if file.models !== nothing
+        for (name, model) in file.models
+            walk(String(name), model)
+        end
+    end
+    for st in states
+        delete!(defs, st)
+    end
+    return (;
+        members, resolve, defs, scope, self_exempt, scoped_groups,
+    )
+end
+
+"""
     validate_coupling_cycles(file::EsmFile; toplevel=nothing) -> Vector{StructuralError}
 
 Detect a dependency cycle among observeds that crosses a scope boundary
@@ -2940,48 +3022,9 @@ runs over that resolved tree.
 """
 function validate_coupling_cycles(file::EsmFile; toplevel = nothing)::Vector{StructuralError}
     file.models === nothing && return StructuralError[]
-    # Every declared member (variable, species, reaction-system parameter) of
-    # every component at every depth, by full scoped name.
-    members = toplevel === nothing ? _toplevel_scoped_units(file) : toplevel
-    function resolve(path::String, ref::String)
-        inner = path * "." * ref   # own name, or relative to own subsystems
-        haskey(members, inner) && return inner
-        return occursin('.', ref) && haskey(members, ref) ? ref : nothing
-    end
-    defs = Dict{String, ASTExpr}()            # scoped name → defining RHS
-    scope = Dict{String, String}()           # scoped name → its model path
-    self_exempt = Set{String}()              # §4.3.1.1 recurrence candidates
-    scoped_groups = Vector{Vector{String}}()  # §4.3.1.2 recurrence groups, scoped
-    states = Set{String}()                   # `D(·, t)` targets, scoped
-    function walk(path::String, m::Model)
-        local_defs = observed_definitions(m)
-        candidates = _recurrence_candidate_names(m, local_defs)
-        for (name, rhs) in local_defs
-            scoped = path * "." * name
-            defs[scoped] = rhs
-            scope[scoped] = path
-            name in candidates && push!(self_exempt, scoped)
-        end
-        for g in recurrence_groups(m)
-            push!(scoped_groups, sort!([path * "." * n for n in g]))
-        end
-        for eq in m.equations
-            role, name = _lhs_role(eq.lhs)
-            role === :derivative || continue
-            target = resolve(path, name)
-            target === nothing || push!(states, target)
-        end
-        for (sub, node) in model_subsystems(m)
-            walk(path * "." * sub, node)
-        end
-        return
-    end
-    for (name, model) in file.models
-        walk(String(name), model)
-    end
-    for s in states
-        delete!(defs, s)
-    end
+    g = _scoped_observed_graph(file; toplevel = toplevel)
+    resolve, defs, scope = g.resolve, g.defs, g.scope
+    self_exempt, scoped_groups = g.self_exempt, g.scoped_groups
 
     adj = Dict{String, Vector{String}}()
     for (v, rhs) in defs

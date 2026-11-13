@@ -255,6 +255,10 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         # reference is part of the graph.
         _validate_circular_dependency(esm_file, structural_errors)
 
+        # 1c. Variable bounds (esm-spec §6.3.2), on the parsed tree for the same
+        # reason: a reference into a mounted subsystem resolves only here.
+        _validate_variable_bounds(esm_file, structural_errors)
+
         # 2. Reaction Consistency validation
         _validate_reaction_consistency(esm_file, structural_errors)
 
@@ -308,6 +312,17 @@ def _validate_circular_dependency(
     cycle = circular_dependency_cycle(esm_file)
     if cycle is not None:
         code, path, message, details = circular_dependency_record(cycle)
+        structural_errors.append(
+            ValidationError(path=path, message=message, code=code, details=details)
+        )
+
+
+def _validate_variable_bounds(esm_file: EsmFile, structural_errors: list[ValidationError]) -> None:
+    """The esm-spec §6.3.2 bound findings. ``load`` refuses such a document
+    already; this catches one built or edited in memory."""
+    from .variable_bounds import variable_bound_findings
+
+    for code, path, message, details in variable_bound_findings(esm_file):
         structural_errors.append(
             ValidationError(path=path, message=message, code=code, details=details)
         )

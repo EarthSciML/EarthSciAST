@@ -2394,31 +2394,40 @@ def _wire_expression(expr: Any) -> Any:
     return _serialize_expression(expr)
 
 
-def _member_names(component: Any) -> list[str]:
-    """The names a component declares: a model's ``variables``, a reaction
-    system's ``species`` and ``parameters`` (a mapping, or a list of named
-    entries), in either the dict or the dataclass spelling."""
-    names = list(_variables(component))
+def _members(component: Any) -> list[tuple[str, Any]]:
+    """The ``(name, declaration)`` pairs a component declares: a model's
+    ``variables``, a reaction system's ``species`` and ``parameters`` (a
+    mapping, or a list of named entries), in either the dict or the dataclass
+    spelling."""
+    pairs = list(_variables(component).items())
     for attr in ("species", "parameters"):
         members = _field(component, attr)
         if isinstance(members, Mapping):
-            names.extend(members)
+            pairs.extend(members.items())
         elif isinstance(members, (list, tuple)):
-            names.extend(n for n in (_field(m, "name") for m in members) if isinstance(n, str))
-    return names
+            pairs.extend(
+                (n, m) for n, m in ((_field(m, "name"), m) for m in members) if isinstance(n, str)
+            )
+    return pairs
 
 
-def _declared_scoped_names(document: Any) -> set[str]:
-    """The full scoped name of every member of every top-level model and
-    reaction system and of their subsystems at every depth: what a dotted
-    reference can resolve to (esm-spec §4.6). A ``{"ref"}`` mount edge not yet
-    resolved contributes nothing."""
-    out: set[str] = set()
+def _member_names(component: Any) -> list[str]:
+    """The names a component declares (see :func:`_members`)."""
+    return [name for name, _ in _members(component)]
+
+
+def declared_scoped_members(document: Any) -> dict[str, Any]:
+    """Every member of every top-level model and reaction system and of their
+    subsystems at every depth, by full scoped name, mapped to its declaration:
+    what a dotted reference can resolve to (esm-spec §4.6). A ``{"ref"}`` mount
+    edge not yet resolved contributes nothing."""
+    out: dict[str, Any] = {}
 
     def walk(prefix: str, component: Any) -> None:
         if isinstance(component, Mapping) and "ref" in component:
             return
-        out.update(f"{prefix}.{name}" for name in _member_names(component))
+        for name, decl in _members(component):
+            out.setdefault(f"{prefix}.{name}", decl)
         subsystems = _field(component, "subsystems") or {}
         if isinstance(subsystems, Mapping):
             for name, sub in subsystems.items():
@@ -2432,6 +2441,11 @@ def _declared_scoped_names(document: Any) -> set[str]:
     return out
 
 
+def _declared_scoped_names(document: Any) -> set[str]:
+    """The keys of :func:`declared_scoped_members`."""
+    return set(declared_scoped_members(document))
+
+
 def _resolve_scoped_name(scope: str, name: str, declared: set[str]) -> str:
     """The full scoped name ``name`` resolves to when read in the model node
     at ``scope``, with the reference-integrity precedence (esm-spec §4.8.4, "A
@@ -2443,6 +2457,50 @@ def _resolve_scoped_name(scope: str, name: str, declared: set[str]) -> str:
         return f"{scope}.{name}"
     relative = f"{scope}.{name}"
     return relative if relative in declared else name
+
+
+def observed_graph_nodes(
+    document: Any,
+) -> tuple[dict[str, tuple[str, Any, dict[str, Any]]], set[str], set[str]]:
+    """The observed-definition graph of the whole document (esm-spec §4.9.7):
+    ``(definitions, declared, nodes)``. ``definitions`` maps each observed
+    unknown's full scoped name to ``(name, wire RHS, its model's variables)``;
+    ``declared`` is :func:`_declared_scoped_names`; ``nodes`` is the observeds
+    that remain after removing every unknown another model puts under
+    ``D(·, t)`` through its scoped name, which makes it an ODE state."""
+    definitions: dict[str, tuple[str, Any, dict[str, Any]]] = {}
+    scoped_derivatives: list[tuple[str, str]] = []
+    for path, model in model_nodes(document):
+        variables = _variables(model)
+        for var, rhs in observed_definitions(model).items():
+            definitions[f"{path}.{var}"] = (var, _wire_expression(rhs), variables)
+        for equation in _equations(model):
+            scoped_derivatives.extend(
+                (path, name) for name in _derivative_targets(_field(equation, "lhs")) if "." in name
+            )
+    if not definitions:
+        return definitions, set(), set()
+    declared = _declared_scoped_names(document)
+    nodes = set(definitions) - {
+        _resolve_scoped_name(scope, name, declared) for scope, name in scoped_derivatives
+    }
+    return definitions, declared, nodes
+
+
+def observed_reads(
+    scoped: str,
+    definitions: dict[str, tuple[str, Any, dict[str, Any]]],
+    declared: set[str],
+) -> set[str]:
+    """The full scoped names the definition of the observed ``scoped`` reads:
+    :func:`_observed_definition_reads`, each name resolved by
+    :func:`_resolve_scoped_name` from the observed's own model node."""
+    var, rhs, variables = definitions[scoped]
+    scope = scoped.rsplit(".", 1)[0]
+    return {
+        _resolve_scoped_name(scope, name, declared)
+        for name in _observed_definition_reads(var, rhs, variables)
+    }
 
 
 def circular_dependency_cycle(document: Any) -> list[str] | None:
@@ -2473,34 +2531,13 @@ def circular_dependency_cycle(document: Any) -> list[str] | None:
     and the first back edge whose cycle crosses a scope boundary is reported. A
     cycle whose nodes all share one model node is that node's
     ``observed_cycle``, so it is skipped and the search continues."""
-    definitions: dict[str, tuple[str, Any, dict[str, Any]]] = {}
-    scoped_derivatives: list[tuple[str, str]] = []
-    for path, model in model_nodes(document):
-        variables = _variables(model)
-        for var, rhs in observed_definitions(model).items():
-            definitions[f"{path}.{var}"] = (var, _wire_expression(rhs), variables)
-        for equation in _equations(model):
-            scoped_derivatives.extend(
-                (path, name) for name in _derivative_targets(_field(equation, "lhs")) if "." in name
-            )
-    if not definitions:
-        return None
-    declared = _declared_scoped_names(document)
-    nodes = set(definitions) - {
-        _resolve_scoped_name(scope, name, declared) for scope, name in scoped_derivatives
-    }
+    definitions, declared, nodes = observed_graph_nodes(document)
     if not nodes:
         return None
 
     succ_sets: dict[str, set[str]] = {}
     for scoped in nodes:
-        var, rhs, variables = definitions[scoped]
-        scope = scoped.rsplit(".", 1)[0]
-        resolved = {
-            _resolve_scoped_name(scope, name, declared)
-            for name in _observed_definition_reads(var, rhs, variables)
-        }
-        succ_sets[scoped] = resolved & nodes
+        succ_sets[scoped] = observed_reads(scoped, definitions, declared) & nodes
     # esm-spec §4.3.1.2: a recurrence group is swept as ONE unit, so here it is
     # one node — its first member — carrying every member's external reads.
     # CONTRACTED rather than stripped of its internal edges: a cycle that leaves
@@ -2535,6 +2572,29 @@ def circular_dependency_record(cycle: list[str]) -> tuple[str, str, str, dict[st
         "/models",
         f"Circular dependency among observeds: {' → '.join(cycle)}",
         {"cycle": cycle},
+    )
+
+
+def _variable_bound_findings(document: Any) -> list:
+    """:func:`earthsci_ast.variable_bounds.variable_bound_findings`, imported
+    lazily: that module imports this one at its top."""
+    from .variable_bounds import variable_bound_findings
+
+    return variable_bound_findings(document)
+
+
+def _refuse_variable_bounds(esm_file: Any) -> None:
+    """Raise :class:`StructuralValidationError` for the esm-spec §6.3.2
+    findings of the parsed, mounted ``esm_file``: ``load``'s refusal for a
+    bound whose reference runs through a ``{"ref"}`` mount the raw-dict pass
+    could not see into."""
+    findings = _variable_bound_findings(esm_file)
+    if not findings:
+        return
+    raise _structural_validation_error_cls()(
+        "Structural validation failed:\n" + "\n".join(f"  - {m}" for _c, _p, m, _d in findings),
+        findings=[(c, m) for c, _p, m, _d in findings],
+        records=[{"code": c, "path": p, "message": m, "details": d} for c, p, m, d in findings],
     )
 
 
@@ -3613,6 +3673,10 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # `undefined_variable` and Python was the only binding spelling it otherwise
     # — a cross-language conformance gap, not a cosmetic one.
     collect("undefined_variable", lambda sub: _check_variable_references(data, tables, sub))
+    # Variable bounds (esm-spec §6.3.2): an unresolved reference, a shape
+    # mismatch, a circular bound and an inverted numeric pair. Each finding
+    # names its own code, so the collect-level label is a fallback only.
+    collect("undefined_variable", lambda sub: sub.extend(_variable_bound_findings(data)))
     # An inline test's assertion target, override keys and assertion rank (esm-spec
     # §6.6.2, §6.6.3, §6.6.5). Each finding carries its own code via a 4-tuple.
     collect("inline_test_semantics", lambda sub: _check_inline_tests(data, sub))

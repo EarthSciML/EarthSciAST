@@ -23,7 +23,7 @@ import {
   extractVariableReferences,
   isInlineModel,
   resolveScopedReference,
-  resolveScopedTarget,
+  scopedNameFrom,
   splitScopedRef,
 } from './expr-utils.js'
 import { isExpressionLike } from '../traverse.js'
@@ -371,48 +371,40 @@ function validateImportedCouplingEdges(esmFile: EsmFile): StructuralError[] {
   return findings
 }
 
+/** One observed unknown's definition, as {@link documentObservedReads} records it. */
+export interface ObservedReads {
+  /** Scoped name of the model or subsystem that defines it (`ModelN.Sub`). */
+  scope: string
+  /** That model or subsystem, the enclosing scope its references resolve in. */
+  model: Model
+  /** The free references its defining RHS makes, as written. */
+  refs: Set<string>
+}
+
 /**
- * The document-wide observed dependency graph of esm-spec §4.9.7, as a SORTED
- * adjacency map keyed by full scoped name (`ModelA.a`, `ModelN.Sub.c`).
+ * The nodes of the esm-spec §4.9.7 graph with their unresolved reads, keyed by
+ * full scoped name, plus each component's recurrence groups in scoped names.
  *
- * Nodes are the OBSERVED unknowns (§6.3.1, `observedUnknowns`) of every
- * inline model and subsystem at every depth, minus any unknown some equation
- * of the document puts under `D(·, t)` through its scoped name (that makes it
- * a state of the coupled system). States, parameters, algebraic unknowns,
- * unknowns with no equation and unresolved names are not nodes, so a read of
- * one is not an edge.
- *
- * Edges come from {@link observedDefinitionReads}, the same walk the
- * per-model `observed_cycle` graph uses. A reference, in an observed's
- * definition or under a `D`, resolves with the reference-integrity precedence
- * (esm-spec §4.8.4, "A scoped reference carries its target's units"): the
- * reading component's own names, then a path relative to its own subsystems,
- * then a top-level system path (§4.6). That is {@link resolveScopedTarget}.
- *
- * A `{ref}` subsystem that reaches `validate` is unresolved (the synchronous
- * validator does no file I/O); it carries no equations, contributes no nodes,
- * and is reported on its own as `unresolved_subsystem_ref`.
+ * A node is an observed unknown (§6.3.1) of an inline model or subsystem at any
+ * depth, unless some equation of the document puts it under `D(·, t)` through
+ * its scoped name, which makes it a state of the coupled system. References
+ * resolve through {@link scopedNameFrom}. Shared by the `circular_dependency`
+ * graph and the variable-bound circularity rule (esm-spec §6.3.2 rule 3), so
+ * the two walk the same definitions.
  */
-function crossScopeObservedGraph(esmFile: EsmFile): Map<string, string[]> {
-  const reads = new Map<string, { scope: string; model: Model; refs: Set<string> }>()
+export function documentObservedReads(esmFile: EsmFile): {
+  reads: Map<string, ObservedReads>
+  groupsByScope: string[][]
+} {
+  const reads = new Map<string, ObservedReads>()
   const groupsByScope: string[][] = []
   const derivativeStates = new Set<string>()
-
-  // The full scoped name a reference written in `model` (scoped name `scope`)
-  // names, or `undefined` when it names nothing a model declares.
-  const resolve = (ref: string, scope: string, model: Model): string | undefined => {
-    if (!ref.includes('.')) return `${scope}.${ref}`
-    const target = resolveScopedTarget(ref, esmFile, model)
-    if (target?.base === 'enclosing') return `${scope}.${ref}`
-    if (target?.base === 'models') return ref
-    return undefined
-  }
 
   const walk = (scope: string, model: Model): void => {
     for (const eq of model.equations ?? []) {
       const target = derivativeTarget(eq.lhs)
       if (target === undefined || !target.includes('.')) continue
-      const state = resolve(target, scope, model)
+      const state = scopedNameFrom(target, scope, model, esmFile)
       if (state !== undefined) derivativeStates.add(state)
     }
     for (const [name, refs] of observedDefinitionReads(model, esmFile)) {
@@ -430,6 +422,35 @@ function crossScopeObservedGraph(esmFile: EsmFile): Map<string, string[]> {
   }
 
   for (const state of derivativeStates) reads.delete(state)
+  return { reads, groupsByScope }
+}
+
+/**
+ * The document-wide observed dependency graph of esm-spec §4.9.7, as a SORTED
+ * adjacency map keyed by full scoped name (`ModelA.a`, `ModelN.Sub.c`).
+ *
+ * Nodes are the OBSERVED unknowns (§6.3.1, `observedUnknowns`) of every
+ * inline model and subsystem at every depth, minus any unknown some equation
+ * of the document puts under `D(·, t)` through its scoped name (that makes it
+ * a state of the coupled system). States, parameters, algebraic unknowns,
+ * unknowns with no equation and unresolved names are not nodes, so a read of
+ * one is not an edge.
+ *
+ * Edges come from {@link observedDefinitionReads}, the same walk the
+ * per-model `observed_cycle` graph uses. A reference, in an observed's
+ * definition or under a `D`, resolves with the reference-integrity precedence
+ * (esm-spec §4.8.4, "A scoped reference carries its target's units"): the
+ * reading component's own names, then a path relative to its own subsystems,
+ * then a top-level system path (§4.6). That is {@link scopedNameFrom}.
+ *
+ * A `{ref}` subsystem that reaches `validate` is unresolved (the synchronous
+ * validator does no file I/O); it carries no equations, contributes no nodes,
+ * and is reported on its own as `unresolved_subsystem_ref`.
+ */
+function crossScopeObservedGraph(esmFile: EsmFile): Map<string, string[]> {
+  const { reads, groupsByScope } = documentObservedReads(esmFile)
+  const resolve = (ref: string, scope: string, model: Model): string | undefined =>
+    scopedNameFrom(ref, scope, model, esmFile)
 
   const sets = new Map<string, Set<string>>()
   for (const [node, { scope, model, refs }] of reads) {

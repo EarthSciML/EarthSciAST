@@ -336,6 +336,30 @@ class FlattenedVariable:
     # able to fold a `real*4` recurrence at the declared precision from the
     # FlattenedSystem alone, without re-reading the source document.
     element_type: str | None = None
+    # The declared bounds (esm-spec §6.3.2), carried per esm-libraries-spec
+    # §4.7.5 "Bounds follow the renaming": a number unchanged, a reference
+    # rewritten by the renaming the component's equations get, so it names a
+    # variable of the flattened system (or, under a scaled ``variable_map``,
+    # is the replacement Expression). None means unbounded on that side.
+    lb: Any = None
+    ub: Any = None
+
+
+def _map_bounds(var: FlattenedVariable, fn) -> FlattenedVariable:
+    """``var`` with ``fn`` applied to each reference-form bound.
+
+    A bound reference is a variable reference held on the declaration rather
+    than in an expression, so every rename flatten applies to the equations
+    (namespacing, a merged-away retarget, a ``variable_map`` substitution) has
+    to reach it through here as well, or the bound names a variable the
+    flattened system no longer declares. A numeric bound is left alone.
+    Returns ``var`` itself when nothing changed.
+    """
+    lb = var.lb if var.lb is None or _is_number(var.lb) else fn(var.lb)
+    ub = var.ub if var.ub is None or _is_number(var.ub) else fn(var.ub)
+    if lb == var.lb and ub == var.ub:
+        return var
+    return replace(var, lb=lb, ub=ub)
 
 
 @dataclass
@@ -1563,6 +1587,13 @@ def _collect_model(
             ),
             distribution=var.distribution,
             element_type=var.element_type,
+            lb=var.lb,
+            ub=var.ub,
+        )
+        # A reference bound is namespaced in the scope the equations below are.
+        flat_var = _map_bounds(
+            flat_var,
+            lambda ref: _namespace_expr(ref, full_prefix, leave_alone, sub_keys, locals_),
         )
         # esm-libraries-spec §4.7.5 step 4: the two maps are NOT a partition.
         # `observed_variables` is the CLASSIFICATION — every unknown an equation
@@ -2312,10 +2343,10 @@ def _retarget_merged_names(
     An observed variable's defining expression is one of those equations (it is
     not carried on :class:`FlattenedVariable`), so this covers it too.
 
-    A variable's ``update`` rules are NOT equations and are carried on the
-    variable itself, so they are rewritten here beside them: a parameter that
-    refreshes from ``B.x`` reads a state the flattened system no longer declares
-    (CONFORMANCE_SPEC §5.35).
+    A variable's ``update`` rules and reference bounds are NOT equations and
+    are carried on the variable itself, so they are rewritten here beside them:
+    a parameter that refreshes from ``B.x``, or a bound naming it, reads a state
+    the flattened system no longer declares (CONFORMANCE_SPEC §5.35).
     """
     for comp in components.values():
         for i, eq in enumerate(comp.equations):
@@ -2324,7 +2355,10 @@ def _retarget_merged_names(
             )
         for table in (comp.state_vars, comp.parameters, comp.observed):
             for name, var in table.items():
-                updated = _rename_variable_updates(var, renames)
+                updated = _map_bounds(
+                    _rename_variable_updates(var, renames),
+                    lambda ref: rename_names(ref, renames),
+                )
                 if updated is not var:
                     table[name] = updated
 
@@ -2591,6 +2625,11 @@ def _apply_variable_map(
             _map_contributions(eq, rewrite, lhs=substitute(eq.lhs, bindings))
             for eq in comp.equations
         ]
+        # A bound naming the target follows the replacement too (esm-libraries-
+        # spec §4.7.5): the source's name, or the scaled source Expression.
+        for table in (comp.state_vars, comp.parameters, comp.observed):
+            for name, var in table.items():
+                table[name] = _map_bounds(var, lambda ref: substitute(ref, bindings))
 
     # Guard the string comparison: an ExprNode transform never reaches here
     # (handled by _apply_variable_map_expression above), but keep the promotion
@@ -2779,7 +2818,9 @@ def _apply_variable_map_expression(
         return
 
     # Carry the removed parameter's units/shape/description metadata onto the
-    # observed; its value is computed, so no default is carried.
+    # observed; its value is computed, so no default is carried. The variable
+    # stays in the flattened system under its own name, so its bounds stay
+    # with it (esm-spec §6.3.2).
     target_comp.observed[entry.to_var] = FlattenedVariable(
         name=entry.to_var,
         type="observed",
@@ -2787,6 +2828,8 @@ def _apply_variable_map_expression(
         description=removed.description if removed else None,
         source_system=removed.source_system if removed else target_comp.name,
         shape=list(removed.shape) if removed and removed.shape else None,
+        lb=removed.lb if removed else None,
+        ub=removed.ub if removed else None,
     )
     target_comp.equations.append(
         FlattenedEquation(

@@ -1036,9 +1036,9 @@ end
         @test doc["esm"] == E.SCHEMA_VERSION
         # The literal is the point: it pins that the reconstituted document is
         # stamped with the format version this binding implements, and it is
-        # expected to be updated by hand on each format bump. 1.2.0 -> 1.3.0
-        # with `solver.external` (esm-spec §2.2.6).
-        @test E.SCHEMA_VERSION == "2.0.0"
+        # expected to be updated by hand on each format bump. 2.0.0 -> 2.1.0
+        # with `lb` / `ub` variable bounds (esm-spec §6.3.2).
+        @test E.SCHEMA_VERSION == "2.1.0"
     end
 
     # The one placement rule for an equation that joins a component after

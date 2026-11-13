@@ -341,6 +341,30 @@ export function resolveScopedTarget(
 }
 
 /**
+ * The full scoped name a reference written in `enclosing` (whose own scoped
+ * name is `scope`, e.g. `"Chem.Sub"`) names, with the precedence of
+ * {@link resolveScopedTarget}, or `undefined` when a dotted reference resolves
+ * to nothing. A bare name is `scope` plus the name; it is not checked against
+ * the declarations, so the caller decides whether it names anything.
+ *
+ * This is the one place a reference is turned into a document-wide name: the
+ * `circular_dependency` graph (esm-spec §4.9.7) and the variable-bound checks
+ * (esm-spec §6.3.2) both resolve through it, so they agree on what a
+ * reference names.
+ */
+export function scopedNameFrom(
+  reference: string,
+  scope: string,
+  enclosing: Model,
+  esmFile: EsmFile,
+): string | undefined {
+  if (!reference.includes('.')) return `${scope}.${reference}`
+  const target = resolveScopedTarget(reference, esmFile, enclosing)
+  if (target === undefined) return undefined
+  return target.base === 'enclosing' ? `${scope}.${reference}` : reference
+}
+
+/**
  * Split a scoped reference like `"System.var"` or `"System.Sub.var"` into its
  * head system segment and the ENTIRE remaining dotted path.
  *

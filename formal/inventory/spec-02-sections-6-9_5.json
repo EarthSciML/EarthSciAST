@@ -87,6 +87,15 @@
       "concern": "The preceding text says the definition runs 'when all three hold' but then lists four conditions (the fourth being the rank check), so the set of forms this clause refuses is stated inconsistently."
     },
     {
+      "id": "spec.6.3.2.bounds-validity",
+      "section": "6.3.2",
+      "quote": "**Validity.** A document is invalid, and every binding's `validate` MUST report",
+      "class": "later",
+      "phase": 5,
+      "area": "schema",
+      "note": "A variable bound (lb/ub) is invalid when its reference does not resolve (undefined_variable), its referenced shape is neither scalar nor the bounded variable's (variable_bound_shape_mismatch), it refers to the bounded variable or an observed depending on it transitively (variable_bound_circular), or both bounds are numbers with lb > ub (variable_bounds_inverted)."
+    },
+    {
       "id": "spec.6.4.var-implicitly-declared",
       "section": "6.4",
       "quote": "It is implicitly declared (§4.9.1): a checker MUST NOT report it as `undefined_variable` or `event_var_undeclared`.",

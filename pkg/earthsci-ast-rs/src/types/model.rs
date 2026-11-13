@@ -463,6 +463,76 @@ pub struct ModelVariable {
     /// event lists with their `functional_affect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<ParameterUpdateSpec>,
+
+    /// Lower bound on this variable's value (esm-spec §6.3.2, esm 2.1.0): a
+    /// number in the variable's `units`, or a reference to another variable.
+    /// A physical fact; no solver behaviour follows from it. `None` means
+    /// unbounded below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lb: Option<VariableBound>,
+
+    /// Upper bound on this variable's value (esm-spec §6.3.2, esm 2.1.0). See
+    /// [`ModelVariable::lb`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ub: Option<VariableBound>,
+}
+
+/// One bound of a model variable (esm-spec §6.3.2): the `lb` or `ub` field.
+///
+/// `#[serde(untagged)]`, so a number round-trips as the number written (held
+/// as a [`serde_json::Number`], so `0` stays `0` and `0.5` stays `0.5`) and a
+/// reference as the string written.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum VariableBound {
+    /// A number in the bounded variable's declared `units`.
+    Number(serde_json::Number),
+    /// A reference to another variable, written and resolved as a variable
+    /// reference in the model's expressions: a bare name, or a dotted scoped
+    /// reference (esm-spec §4.6, §4.9.7).
+    Reference(String),
+    /// A flattened bound that is no longer a single name: a `variable_map`
+    /// with a scaling factor replaces a referenced parameter with
+    /// `factor * source` (esm-libraries-spec §4.7.5, "Bounds follow the
+    /// renaming"). Only flattening produces it; the wire form admits a number
+    /// or a string, so it is never read from a document.
+    #[serde(skip_deserializing)]
+    Expression(Expr),
+}
+
+impl VariableBound {
+    /// The numeric value of a number bound, `None` for any other form.
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            VariableBound::Number(n) => n.as_f64(),
+            _ => None,
+        }
+    }
+
+    /// The referenced name of a reference bound, `None` for any other form.
+    pub fn as_reference(&self) -> Option<&str> {
+        match self {
+            VariableBound::Reference(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// This bound with every variable reference it carries mapped through
+    /// `f`, as flattening maps a reference in an equation. A reference is fed
+    /// to `f` as a one-leaf [`Expr::Variable`]; a result that is again a single
+    /// name stays a [`VariableBound::Reference`], anything else becomes a
+    /// [`VariableBound::Expression`]. A number is returned unchanged.
+    pub fn map_references(&self, f: impl FnOnce(&Expr) -> Expr) -> VariableBound {
+        let mapped = match self {
+            VariableBound::Number(_) => return self.clone(),
+            VariableBound::Reference(name) => f(&Expr::Variable(name.clone())),
+            VariableBound::Expression(expr) => f(expr),
+        };
+        match mapped {
+            Expr::Variable(name) => VariableBound::Reference(name),
+            other => VariableBound::Expression(other),
+        }
+    }
 }
 
 /// The bare variable: every optional field absent, `var_type` a `parameter`.
@@ -484,6 +554,8 @@ impl Default for ModelVariable {
             location: None,
             distribution: None,
             update: None,
+            lb: None,
+            ub: None,
         }
     }
 }
@@ -604,6 +676,17 @@ impl ModelVariable {
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
+        }
+    }
+
+    /// Rewrite the references this variable's `lb` / `ub` carry with `f`
+    /// (see [`VariableBound::map_references`]). The flattening passes call it
+    /// beside [`ModelVariable::for_each_expression_mut`] with the same rename,
+    /// so a bound names the same quantity in the flattened system as an
+    /// equation's reference does (esm-libraries-spec §4.7.5).
+    pub fn map_bound_references(&mut self, f: &mut impl FnMut(&Expr) -> Expr) {
+        for bound in [&mut self.lb, &mut self.ub].into_iter().flatten() {
+            *bound = bound.map_references(&mut *f);
         }
     }
 

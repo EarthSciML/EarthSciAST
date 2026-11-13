@@ -35,6 +35,7 @@ import {
   rejectSolverTimeSpanInvalid,
   rejectSolverTimeSpanPreV13,
 } from './solver.js'
+import { rejectVariableBoundsPreV21 } from './variable-bounds.js'
 import { schema } from './embedded-schema.js'
 import { readFileSyncNode, dirnameOf } from './path-utils.js'
 import { deepClone } from './object-utils.js'
@@ -1078,6 +1079,7 @@ function rejectRootLoadGates(validationView: unknown): void {
  *   `metaparameters` — esm 0.8.0 (esm-spec §9.6.5)
  * - the top-level `solver` block — esm 1.1.0 (esm-spec §2.2.4)
  * - declared `units` on a `const` node — esm 1.2.0 (esm-spec §4.8.5)
+ * - `lb` / `ub` on a model variable — esm 2.1.0 (esm-spec §6.3.2)
  *
  * Not here: the esm 1.3.0 gates on `solver.external` and `solver.time_span`
  * are checks on the root alone (esm-spec §2.2.6 and §2.2.7 "Mounting"), so
@@ -1088,6 +1090,7 @@ export function rejectVersionGatedConstructs(view: unknown): void {
   rejectTemplateImportsPreV08(view)
   rejectSolverPreV11(view)
   rejectConstUnitsPreV12(view)
+  rejectVariableBoundsPreV21(view)
 }
 
 /**

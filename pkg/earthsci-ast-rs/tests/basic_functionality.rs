@@ -325,6 +325,8 @@ fn test_editing() {
 
     // Test adding variables
     let new_var = ModelVariable {
+        lb: None,
+        ub: None,
         element_type: None,
         default_units: None,
         var_type: VariableType::Parameter,

@@ -115,14 +115,7 @@ function _scalar_slots_to_arrays(flat::FlattenedSystem)
     sub(e) = substitute(e, b)
     params = OrderedDict{String, ModelVariable}()
     for (n, v) in flat.parameters
-        params[n] = n in names ?
-            ModelVariable(
-                v.type; default = v.default, description = v.description,
-                units = v.units, default_units = v.default_units,
-                shape = [_SCALAR_SLOT_SET], location = v.location,
-                distribution = v.distribution, update = v.update,
-                element_type = v.element_type
-            ) : v
+        params[n] = n in names ? reconstruct(v; shape = [_SCALAR_SLOT_SET]) : v
     end
     sets = copy(flat.index_sets)
     sets[_SCALAR_SLOT_SET] = IndexSet("interval"; size = 1)

@@ -190,8 +190,9 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 			// spelled it, so its declared version is raised with it to stay
 			// self-consistent. The floor only ever raises, and it is the same
 			// stamp emit applies — one step earlier. Pinned by
-			// TestRaisedFloorAdmitsAnInlinedFaqDocument.
-			data = []byte(raiseFaqEsmFloor(string(inlined)))
+			// TestRaisedFloorAdmitsAnInlinedFaqDocument. A mounted leaf's
+			// variable bounds raise it to 2.1.0 the same way.
+			data = []byte(raiseEsmFloors(string(inlined)))
 			// The view no longer matches the text; loadPrepared decodes the text.
 			rootView = nil
 			staged = st
@@ -275,8 +276,8 @@ func fileVersionGates(view map[string]any) error {
 
 // mountedContentVersionGates is the part of fileVersionGates a MOUNTED leaf is
 // held to, against the leaf's own `esm`: apply_expression_template (0.4.0),
-// the §9.7 template constructs (0.8.0), the top-level `solver` block (1.1.0)
-// and unit-bearing expression nodes (1.2.0). The `solver.external` and
+// the §9.7 template constructs (0.8.0), the top-level `solver` block (1.1.0),
+// unit-bearing expression nodes (1.2.0) and variable bounds (2.1.0). The `solver.external` and
 // `solver.time_span` gates are the root's alone: those fields do not cross
 // the mount (esm-spec §2.2.6 "Mounting";
 // tests/conformance/solver_external/fixtures/mount_leaf_v120.esm).
@@ -286,6 +287,7 @@ func mountedContentVersionGates(view map[string]any) error {
 		RejectTemplateImportsPreV08,
 		RejectSolverPreV11,
 		rejectConstUnitsPreV12,
+		rejectVariableBoundsPreV21,
 	} {
 		if err := gate(view); err != nil {
 			return err
@@ -1087,6 +1089,12 @@ func scanOps(src string) (removed string, hasFaq bool) {
 
 // declaredEsmBelowV11 reports whether the document's `esm` field is below 1.1.0.
 func declaredEsmBelowV11(jsonStr string) (declared string, below bool) {
+	return declaredEsmBelow(jsonStr, 1, 1)
+}
+
+// declaredEsmBelow reports whether the document's `esm` field is below
+// major.minor.0. It decodes the one field and builds no tree of the rest.
+func declaredEsmBelow(jsonStr string, wantMajor, wantMinor int) (declared string, below bool) {
 	var probe struct {
 		Esm string `json:"esm"`
 	}
@@ -1102,7 +1110,7 @@ func declaredEsmBelowV11(jsonStr string) (declared string, below bool) {
 	if err1 != nil || err2 != nil {
 		return probe.Esm, false
 	}
-	return probe.Esm, major < 1 || (major == 1 && minor < 1)
+	return probe.Esm, major < wantMajor || (major == wantMajor && minor < wantMinor)
 }
 
 // prepareDocumentOps is the wire boundary for expression-node `op` spellings,
@@ -1137,6 +1145,12 @@ func prepareDocumentOps(jsonStr string) (string, error) {
 // raiseEsmFloorToV11 rewrites the document's declared `esm` string to 1.1.0,
 // textually, so the surrounding bytes and key order survive.
 func raiseEsmFloorToV11(jsonStr, declared string) string {
+	return raiseEsmFloorTo(jsonStr, declared, "1.1.0")
+}
+
+// raiseEsmFloorTo rewrites the document's declared `esm` string from declared
+// to target, textually, so the surrounding bytes and key order survive.
+func raiseEsmFloorTo(jsonStr, declared, target string) string {
 	old := `"esm"`
 	idx := strings.Index(jsonStr, old)
 	if idx < 0 {
@@ -1148,5 +1162,5 @@ func raiseEsmFloorToV11(jsonStr, declared string) string {
 		return jsonStr
 	}
 	at := idx + len(old) + q
-	return jsonStr[:at] + `"1.1.0"` + jsonStr[at+len(declared)+2:]
+	return jsonStr[:at] + `"` + target + `"` + jsonStr[at+len(declared)+2:]
 }

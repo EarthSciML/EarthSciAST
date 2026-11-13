@@ -278,9 +278,17 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // declared version, when it is loaded (esm-spec §4.7 "Each file is held to
     // its own declared `esm` version"), so a 1.0.0 document may mount a 1.2.0
     // leaf that carries unit-bearing `const` nodes.
-    crate::units::reject_const_units_pre_v12(&json_value, || authored.op_with_units).map_err(
-        |e: crate::diagnostic::DiagnosticError| EsmError::SchemaValidation(e.to_string()),
-    )?;
+    // Variable `lb` / `ub` arrive at esm 2.1.0 (esm-spec §6.3.2), judged the
+    // same way: this file's own variables, before a mount spliced any in.
+    crate::units::reject_const_units_pre_v12(&json_value, || authored.op_with_units)
+        .and_then(|()| {
+            crate::variable_bounds::reject_variable_bounds_pre_v21(&json_value, || {
+                authored.variable_bound
+            })
+        })
+        .map_err(|e: crate::diagnostic::DiagnosticError| {
+            EsmError::SchemaValidation(e.to_string())
+        })?;
 
     // Validate against schema
     if mounts_marked {
@@ -1906,6 +1914,11 @@ pub(crate) struct AuthoredFacts {
     /// The path of the first object, in pre-order, with both an `op` and a
     /// `units` key (what [`crate::units::reject_const_units_pre_v12`] looks for).
     pub(crate) op_with_units: Option<String>,
+    /// The pointer of the first model variable carrying `lb` or `ub` (what
+    /// [`crate::variable_bounds::reject_variable_bounds_pre_v21`] looks for).
+    /// Looked for only when the document declares esm below 2.1.0, the one
+    /// case the gate can fire; `None` otherwise.
+    pub(crate) variable_bound: Option<String>,
 }
 
 /// [`prepare_document_ops`], returning the [`AuthoredFacts`] its walk noted.
@@ -1935,8 +1948,23 @@ pub(crate) fn prepare_document_ops_scanned(
     {
         scan.removed = Some(Removed::FunctionTables { path });
     }
+    // The bounds gate fires only below esm 2.1.0, so the variables are walked
+    // for a bound only then. It is read here, on the authored tree, because
+    // the gate runs after ref resolution may have spliced a mounted file's
+    // variables in (esm-spec §4.7 "Each file is held to its own declared
+    // `esm` version").
+    let bounds_too_old = value
+        .get("esm")
+        .and_then(|v| v.as_str())
+        .and_then(crate::diagnostic::parse_semver)
+        .is_some_and(|(major, minor, _)| (major, minor) < (2, 1));
     let facts = AuthoredFacts {
         op_with_units: scan.op_with_units.take(),
+        variable_bound: if bounds_too_old {
+            crate::variable_bounds::first_bound_pointer(value)
+        } else {
+            None
+        },
     };
     // 1. A removed op or block — rejected by name, before anything else.
     if let Some(removed) = scan.removed {

@@ -310,6 +310,12 @@ type FlattenedVariable struct {
 	// UpdateRules.
 	Update       any
 	Distribution *Distribution
+	// LB and UB are the variable's bounds (esm-spec §6.3.2): nil when absent,
+	// a float64 for a number, and otherwise the reference as an Expression
+	// carried through the flatten renaming (esm-libraries-spec §4.7.5) — a
+	// namespaced name, or the replacement a scaled `variable_map` substitutes.
+	LB Expression
+	UB Expression
 }
 
 // UpdateRules returns the variable's update rules in declaration order,
@@ -1325,6 +1331,8 @@ func collectModel(file *ESMFile, model *Model, fullPrefix, docPath string, sourc
 			// namespaced form (CONFORMANCE_SPEC §5.35).
 			Update:       namespaceVariableUpdate(v.Update, fullPrefix, leaveAlone, subKeys, locals),
 			Distribution: v.Distribution,
+			LB:           namespaceBound(v.LB, fullPrefix, leaveAlone, subKeys, locals),
+			UB:           namespaceBound(v.UB, fullPrefix, leaveAlone, subKeys, locals),
 		}
 		if len(flatVar.Shape) == 0 {
 			flatVar.Shape = nil
@@ -2284,7 +2292,8 @@ func reattributeMergedEquations(components map[string]*componentSystem, aName st
 // A variable's `update` rules are NOT equations and ARE carried on the variable,
 // so they are rewritten here beside them: a parameter that refreshes from `B.x`
 // otherwise reads a state the flattened system no longer declares
-// (CONFORMANCE_SPEC §5.35).
+// (CONFORMANCE_SPEC §5.35). A variable's bounds are carried on it too, and a
+// reference among them is retargeted the same way (esm-libraries-spec §4.7.5).
 func retargetMergedNames(components map[string]*componentSystem, renames map[string]string) {
 	if len(renames) == 0 {
 		return
@@ -2305,6 +2314,7 @@ func retargetMergedNames(components map[string]*componentSystem, renames map[str
 			}
 		}
 	}
+	rewriteBounds(components, walk.apply)
 }
 
 // rewriteUpdateExprs applies `rewrite` to the expression-bearing slots of a
@@ -2539,6 +2549,9 @@ func applyVariableMap(components map[string]*componentSystem, order []string, en
 			comp.equations[i] = mapContributions(eq, rewrite, substituteExpr(eq.LHS, bindings))
 		}
 	}
+	// A bound naming the replaced parameter follows the replacement, as an
+	// equation's reference does (esm-libraries-spec §4.7.5).
+	rewriteBounds(components, func(e Expression) Expression { return substituteExpr(e, bindings) })
 
 	transform := strings.ToLower(entry.TransformKind())
 	if transform != "param_to_var" && transform != "conversion_factor" && transform != "" {
@@ -2703,6 +2716,10 @@ func applyVariableMapExpression(components map[string]*componentSystem, order []
 		if len(observed.Shape) == 0 {
 			observed.Shape = nil
 		}
+		// The target stays in the flattened system under its own name, so
+		// its bounds stay with it (esm-spec §6.3.2).
+		observed.LB = removed.LB
+		observed.UB = removed.UB
 	}
 	targetComp.observed.set(observed)
 	// The coupling entry authored this definition (§4.7.5 provenance table).

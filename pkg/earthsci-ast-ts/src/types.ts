@@ -455,6 +455,14 @@ export interface ModelVariable {
   distribution?: Distribution
   /** Parameter-only. Absent means the parameter never changes after setup. */
   update?: ParameterUpdateSpec
+  /**
+   * Lower bound (esm-spec §6.3.2, esm 2.1.0): a number in `units`, or a
+   * reference to another variable written as in the model's expressions. A
+   * physical fact; it prescribes no solver behaviour.
+   */
+  lb?: number | string
+  /** Upper bound, in the same two forms as {@link ModelVariable.lb}. */
+  ub?: number | string
 }
 
 /**

@@ -66,7 +66,7 @@ fn matrix_library_version_is_the_one_this_binding_implements() {
 }
 
 /// Every fixture version the matrix declares has an automated target IFF it
-/// is a released 1.x version, 1.0.0 to 1.3.0 (relabelled to 2.0.0 when it
+/// is a released 1.x version, 1.0.0 to 1.3.0 (relabelled to the current version when it
 /// uses no removed op), or sits
 /// on the 2.x additive line at or below this library. Every 0.x fixture, and
 /// one newer than this library, is out of reach of a marker bump.

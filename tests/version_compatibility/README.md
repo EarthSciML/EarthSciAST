@@ -46,6 +46,8 @@ clean and its assertion would pass for the wrong reason.
 | `version_1_2_0_const_units.esm` | 1.2.0 | Load | Earlier minor since the esm 1.3.0 bump; uses declared units on a `const` node (esm-spec §4.8.5) |
 | `version_1_3_0_solver_external.esm` | 1.3.0 | Load | Exact version match; uses `solver.external` (esm-spec §2.2.6) |
 | `version_1_3_0_solver_time_span.esm` | 1.3.0 | Load | Exact version match; uses `solver.time_span` (esm-spec §2.2.7) |
+| `version_2_0_0_baseline.esm` | 2.0.0 | Load | Earlier minor since the esm 2.1.0 bump — additive, no warning |
+| `version_2_1_0_variable_bounds.esm` | 2.1.0 | Load | Exact version match; uses `lb` / `ub` on a model variable (esm-spec §6.3.2) |
 | `version_1_10_0_double_digit.esm` | 1.10.0 | Load with warning | Double-digit minor; newer than 1.3.0 |
 | `version_1_2_0_with_unknown_fields.esm` | 1.2.0 | **Schema error** | Newer minor carrying two unmodelled top-level blocks — see the OPEN note |
 

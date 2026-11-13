@@ -63,9 +63,22 @@ class TestVersionCompatibility:
         (compatibility_matrix.json), so the exact-match role moves between
         files as the library advances rather than a file being restamped.
         It was version_1_0_0_baseline.esm until esm 1.1.0,
-        version_1_1_0_minor_upgrade.esm until esm 1.2.0, and
-        version_1_2_0_const_units.esm until esm 1.3.0.
+        version_1_1_0_minor_upgrade.esm until esm 1.2.0,
+        version_1_2_0_const_units.esm until esm 1.3.0, and
+        version_2_0_0_baseline.esm until esm 2.1.0.
         """
+        fixture = load_fixture("version_2_1_0_variable_bounds.esm")
+        assert fixture["esm"] == _EXPECTED_VERSION
+        with no_version_warning():
+            result = load_document(fixture)
+        assert result.esm == _EXPECTED_VERSION
+        assert result.models["Decay"].variables["N"].ub == "N0"
+
+        # The earlier minor of the current major loads as written, with no
+        # warning: 2.1.0 is additive.
+        with no_version_warning():
+            assert load_document(load_fixture("version_2_0_0_baseline.esm")).esm == "2.0.0"
+
         for name in ("version_1_3_0_solver_external.esm", "version_1_3_0_solver_time_span.esm"):
             fixture = load_fixture(name)
             # The newest 1.x documents load as written, with no warning ...

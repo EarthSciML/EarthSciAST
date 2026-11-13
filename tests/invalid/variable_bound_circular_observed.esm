@@ -1,0 +1,83 @@
+{
+  "esm": "2.1.0",
+  "metadata": {
+    "name": "VariableBoundCircularObserved",
+    "description": "`x`'s ub is the observed `a`, defined from the observed `b`, defined from `x`: the bound depends on the variable it bounds, through two observed definitions (esm-spec §6.3.2 rule 3, transitive).",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "variable_bounds",
+      "invalid"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.5,
+          "ub": "a"
+        },
+        "a": {
+          "type": "unknown",
+          "units": "mol/m^3"
+        },
+        "b": {
+          "type": "unknown",
+          "units": "mol/m^3"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "a",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2,
+              "b"
+            ]
+          }
+        },
+        {
+          "lhs": "b",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "x",
+              1
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

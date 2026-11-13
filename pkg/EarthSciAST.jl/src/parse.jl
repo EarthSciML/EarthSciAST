@@ -1357,6 +1357,8 @@ function _record_parse_expr(row, v)
                 x isa Number ? Float64(x) : expression_from_json(x)
             end
         )
+    elseif kind === :variable_bound
+        :(_coerce_variable_bound($v))
     elseif kind === :expr
         :(expression_from_json($v))
     elseif kind === :expr_vec

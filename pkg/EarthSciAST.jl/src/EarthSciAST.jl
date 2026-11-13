@@ -125,6 +125,7 @@ include("display.jl")
 include("parse_expression_text.jl")
 include("graph.jl")
 include("units.jl")
+include("variable_bounds.jl")  # esm-spec §6.3.2 lb / ub: gate, validity, flatten rewrite
 include("edit.jl")
 include("codegen.jl")
 include("canonicalize.jl")

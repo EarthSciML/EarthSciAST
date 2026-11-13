@@ -1633,13 +1633,33 @@ TypeScript `camelCase`, others verbatim).
   is positional — so lexicographic sorting, insertion-hash order, or any order that varies
   with the host language's map implementation is non-conforming.
 - **Full metadata, not names.** Each `name → variable` map carries the complete declared
-  variable (units, `default`, `shape`, `update`, `distribution`), not a bare name list. A
+  variable (units, `default`, `shape`, `update`, `distribution`, `lb`, `ub`), not a bare name list. A
   consumer must be able to build a solver problem from the flattened form alone. The one
   field flatten changes is a pointwise-lifted state's `shape`, which becomes the lift's index
   sets (below): after the lift the state is an array on those index sets. (Flatten also
   writes each elementwise template application, in an equation or a `field_ics` entry, as
   its per-cell `faq`, esm-spec §9.6.11, so the flattened form keeps its meaning when
   serialized; that rewrites a right-hand side and changes no declaration.)
+
+- **Bounds follow the renaming (normative, from `esm: 2.1.0`).** A variable's `lb` and
+  `ub` (esm-spec §6.3.2) are carried on its flattened entry. A number is unchanged. A
+  reference is a variable reference held as a string rather than as an expression child,
+  so — like a `join` string (step 2) — it is rewritten by the same map step 2 and step 3
+  apply to the component's equations: it is dot-namespaced by the owning component's full
+  path (`"cap"` in `Chem.Sub` becomes `"Chem.Sub.cap"`; a scoped `"Sub.y"` in `Chem`
+  becomes `"Chem.Sub.y"`), retargeted by an `operator_compose` merged-away rename, and
+  replaced by a `variable_map`'s replacement of the parameter it names. A `param_to_var`
+  replacement leaves a reference (`"Met.cap_src"`); a scaled replacement leaves the
+  replacement expression, so a flattened bound is a number or an Expression (a namespaced
+  name in every case but the scaled one). A `variable_map` target leaves the flattened
+  system with its bounds (the target of an expression transform stays, as an observed of
+  the same name, and keeps them), and a merged variable's bounds come from the declaration
+  its `units` and `default` come from. Flattening never checks or imposes a bound. The
+  cross-binding pin is `tests/conformance/flatten/cases.json`, whose variable records carry
+  `lb` and `ub` (`null` when absent, the number, or the flattened bound rendered with
+  `to_ascii`); `variable_bounds_coupled` (namespacing, a `param_to_var` replacement) and
+  `variable_bounds_renames` (an `operator_compose` merged-away retarget, a scaled replacement,
+  an expression-transform target) together exercise each rename.
 
 **Loader fields (normative).** `loader_fields` holds one entry per data-fed
 parameter, a parameter with a `data` rule whose `source` names a declared

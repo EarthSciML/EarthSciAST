@@ -55,7 +55,7 @@ Spelled `ESM_FORMAT_VERSION` until the bindings converged: TypeScript, Rust and
 Go all called this `SCHEMA_VERSION`, and Julia was the only one that did not.
 NOT the version of this PACKAGE — that is [`LIBRARY_VERSION`](@ref).
 """
-const SCHEMA_VERSION = "2.0.0"
+const SCHEMA_VERSION = "2.1.0"
 
 """
     LIBRARY_VERSION
@@ -1186,6 +1186,15 @@ const _MODEL_VARIABLE_TYPE_FROM_STRING = let d = Dict{String, ModelVariableType}
 end
 
 """
+    VariableBound
+
+The value of a variable's `lb` or `ub` (esm-spec §6.3.2): absent, a number as
+authored, a reference by name, or — on a flattened variable only — the
+expression a scaled `variable_map` substituted for the referenced parameter.
+"""
+const VariableBound = Union{Nothing, Int64, Float64, String, ASTExpr}
+
+"""
     ModelVariable
 
 A model variable: an `unknown` the solver solves for, or a `parameter` supplied
@@ -1204,6 +1213,15 @@ Parameter-only value fields:
   one rule and an array for two or more (a one-element array is invalid), so
   `length(update)` alone decides the emitted spelling and the round trip is
   stable.
+
+Bounds (any variable, esm-spec §6.3.2):
+- `lb` / `ub`: the range the variable's value lies in. A number (`Int64` or
+  `Float64`, kept as authored so emit writes back what was read) or a `String`
+  reference to another variable, resolved like a variable reference in the
+  model's expressions. `nothing` means unbounded on that side. A flattened
+  variable's reference is its namespaced name, or an [`ASTExpr`](@ref) where a
+  scaled `variable_map` replaced the referenced parameter. Bounds state a fact
+  and change no lowering.
 """
 struct ModelVariable
     type::ModelVariableType
@@ -1230,6 +1248,8 @@ struct ModelVariable
     # `domain.element_type` here ("Working precision crosses a mount"), so this is
     # also where a mounted document's precision survives load -> emit.
     element_type::Union{String, Nothing}
+    lb::VariableBound
+    ub::VariableBound
 
     # Constructor with optional parameters
     ModelVariable(
@@ -1242,14 +1262,30 @@ struct ModelVariable
         location = nothing,
         distribution = nothing,
         update = nothing,
-        element_type = nothing
+        element_type = nothing,
+        lb = nothing,
+        ub = nothing
     ) =
         new(
         type, _coerce_inline_value(default), description, units, default_units,
         shape, location, distribution, _coerce_update_vector(update),
-        element_type === nothing ? nothing : String(element_type)
+        element_type === nothing ? nothing : String(element_type),
+        _coerce_variable_bound(lb), _coerce_variable_bound(ub)
     )
 end
+
+# The wire value of a bound, as its own type. An integer stays an integer so a
+# bound written `0` is emitted `0`; a JSON `true` is not a number here.
+_coerce_variable_bound(::Nothing) = nothing
+_coerce_variable_bound(x::Bool) =
+    throw(ArgumentError("a variable bound is a number or a variable name, got $(x)"))
+_coerce_variable_bound(x::Integer) =
+    typemin(Int64) <= x <= typemax(Int64) ? Int64(x) : Float64(x)
+_coerce_variable_bound(x::Real) = Float64(x)
+_coerce_variable_bound(x::AbstractString) = String(x)
+_coerce_variable_bound(x::ASTExpr) = x
+_coerce_variable_bound(x) =
+    throw(ArgumentError("a variable bound is a number or a variable name, got $(repr(x))"))
 
 # ---- Inline value coercion (esm-spec §6.3 / §6.6.2) --------------------------
 # A `default`, a `parameter_overrides` entry and an `initial_conditions` entry
@@ -1409,14 +1445,16 @@ function reconstruct(
         location = v.location,
         distribution = v.distribution,
         update = v.update,
-        element_type = v.element_type
+        element_type = v.element_type,
+        lb = v.lb,
+        ub = v.ub
     )
     return ModelVariable(
         type;
         default = default, description = description,
         units = units, default_units = default_units, shape = shape,
         location = location, distribution = distribution, update = update,
-        element_type = element_type
+        element_type = element_type, lb = lb, ub = ub
     )
 end
 
@@ -2919,6 +2957,7 @@ source of truth from which BOTH wire directions are generated
     - `kind`: the value class, naming the coercion/encoding pair —
       `:string` (`string(v)`/identity), `:string_strict` (`String(v)`),
       `:float`, `:int`, `:bool`, `:number_or_string`, `:number_or_expr`,
+      `:variable_bound` (number kept as authored, or a name; esm-spec §6.3.2),
       `:expr`, `:expr_vec`, `:string_vec` (`string.()` each),
       `:string_vec_strict` (`Vector{String}(v)`), `:float_map`,
       `:value_map` (scalar-or-inline-array map, esm-spec §6.6.2),
@@ -3248,6 +3287,9 @@ const RECORD_FIELD_TABLES = (
                 emit = :custom, emit_fn = :_emit_parameter_update_spec,
             ),
             (f = :element_type, wire = "element_type", kind = :string, mode = :opt, emit = :nonnothing),
+            # esm-spec §6.3.2: a number or a variable name, emitted as authored.
+            (f = :lb, wire = "lb", kind = :variable_bound, mode = :opt, emit = :nonnothing),
+            (f = :ub, wire = "ub", kind = :variable_bound, mode = :opt, emit = :nonnothing),
         ),
     ),
     (

@@ -462,11 +462,17 @@ fn load_ref_document(
             .map_err(|e| err(noun.code, format!("{}: {e}", canonical.display())))?;
         // The const-units gate (esm-spec §4.8.5 item 6) judges this file's
         // own nodes against this file's own `esm` (§4.7 "Each file is held to
-        // its own declared `esm` version"), never the mounting document's.
+        // its own declared `esm` version"), never the mounting document's,
+        // and so does the variable-bounds gate (esm-spec §6.3.2).
         // The `solver` gate (§2.2.4) likewise reads this file's own `esm`: a
         // leaf's block does not cross the mount edge, but it must still be
         // legal in the file that carries it.
         crate::units::reject_const_units_pre_v12(&parsed, || authored.op_with_units)
+            .and_then(|()| {
+                crate::variable_bounds::reject_variable_bounds_pre_v21(&parsed, || {
+                    authored.variable_bound
+                })
+            })
             .and_then(|()| crate::solver::reject_solver_pre_v11(&parsed))
             .map_err(|e| err(e.code, format!("{}: {}", canonical.display(), e.message)))?;
         Ok(parsed)

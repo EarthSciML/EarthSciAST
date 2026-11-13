@@ -39,6 +39,7 @@ import {
   CanonicalNonfiniteError,
   stripNumericLiterals,
 } from './numeric-literal.js'
+import { needsVariableBoundsVersionFloor } from './variable-bounds.js'
 
 /** Optional behavior controls for {@link toJson} / {@link writePath}. */
 export interface ToJsonOptions {
@@ -75,7 +76,11 @@ export interface ToJsonOptions {
  */
 export function toJson(file: EsmFile, options?: ToJsonOptions): string {
   const indent = options?.indent ?? 2
-  const view = withoutNonSchemaFields(file)
+  let view = withoutNonSchemaFields(file)
+  // A 2.0.0 document given bounds in memory is emitted at 2.1.0, the version
+  // that admits them, so it reads back (esm-spec §6.3.2). The caller's object
+  // keeps its declared version.
+  if (needsVariableBoundsVersionFloor(view)) view = { ...view, esm: '2.1.0' }
   raiseFaqEsmFloor(view)
   if (options?.canonical === true) {
     return emitCanonical(view, indent)

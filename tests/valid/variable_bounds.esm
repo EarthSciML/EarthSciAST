@@ -1,0 +1,193 @@
+{
+  "esm": "2.1.0",
+  "metadata": {
+    "name": "VariableBounds",
+    "description": "Bounds on model variables (esm-spec §6.3.2): number bounds, an lb equal to its ub, a reference to an observed, a reference to a parameter, a scoped reference into a subsystem, and bounds on a state, an observed, a parameter and a subsystem variable. `E` is capped by the observed `E_max`, which depends on parameters only; `S` is bounded by `E_max`, which does not depend on `S`.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "variable_bounds",
+      "valid"
+    ]
+  },
+  "models": {
+    "Salts": {
+      "variables": {
+        "E": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.5,
+          "lb": 0,
+          "ub": "E_max",
+          "description": "Solid amount of a salt; zero when the salt is undersaturated"
+        },
+        "E_max": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "lb": 0,
+          "description": "The most solid the available ions allow"
+        },
+        "S": {
+          "type": "unknown",
+          "units": "1",
+          "lb": 0,
+          "ub": "f_max",
+          "description": "Saturation ratio"
+        },
+        "c_tot": {
+          "type": "parameter",
+          "units": "mol/m^3",
+          "default": 1.0,
+          "lb": 0
+        },
+        "f": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "lb": 0,
+          "ub": 1
+        },
+        "f_max": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "lb": 0.1,
+          "ub": 0.1,
+          "description": "lb equal to ub is legal"
+        },
+        "W": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.1,
+          "lb": -1.5,
+          "ub": "Ions.cap",
+          "description": "Bounded by a scoped reference into the subsystem"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "E"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  "E",
+                  "E_max"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "E_max",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "c_tot",
+              "f"
+            ]
+          }
+        },
+        {
+          "lhs": "S",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "E",
+              "E_max"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "W"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "W"
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Ions": {
+          "variables": {
+            "cap": {
+              "type": "parameter",
+              "units": "mol/m^3",
+              "default": 2.0,
+              "lb": 0
+            },
+            "n": {
+              "type": "unknown",
+              "units": "mol/m^3",
+              "default": 1.0,
+              "lb": 0,
+              "ub": "cap"
+            },
+            "r": {
+              "type": "parameter",
+              "units": "1/s",
+              "default": 0.01
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "n"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "r"
+                    ]
+                  },
+                  "n"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

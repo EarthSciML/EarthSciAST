@@ -305,6 +305,8 @@ func (mv *ModelVariable) UnmarshalJSON(data []byte) error {
 		Location     string          `json:"location,omitempty"`
 		Distribution *Distribution   `json:"distribution,omitempty"`
 		Update       json.RawMessage `json:"update,omitempty"`
+		LB           *VariableBound  `json:"lb,omitempty"`
+		UB           *VariableBound  `json:"ub,omitempty"`
 	}
 
 	var temp TempModelVariable
@@ -320,6 +322,8 @@ func (mv *ModelVariable) UnmarshalJSON(data []byte) error {
 	mv.Shape = temp.Shape
 	mv.Location = temp.Location
 	mv.Distribution = temp.Distribution
+	mv.LB = temp.LB
+	mv.UB = temp.UB
 
 	// Decode `default` through UnmarshalExpression so an integer-valued default
 	// (`"default": 1`) keeps its int wire shape instead of collapsing to

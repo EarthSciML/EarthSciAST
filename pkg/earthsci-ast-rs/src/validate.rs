@@ -299,6 +299,14 @@ pub enum StructuralErrorCode {
     /// document fails to load instead of reaching a runtime that would have to
     /// drop the variable from scope or fabricate a value for it.
     ArrayDefaultWithoutShape,
+    /// A variable bound referring to a variable whose declared shape is
+    /// neither scalar nor the bounded variable's (esm-spec §6.3.2).
+    VariableBoundShapeMismatch,
+    /// A variable bound referring to the variable it bounds, or to an observed
+    /// whose definition depends on it, transitively (esm-spec §6.3.2).
+    VariableBoundCircular,
+    /// Numeric bounds with `lb > ub` (esm-spec §6.3.2).
+    VariableBoundsInverted,
 }
 
 use crate::diagnostic::codes;
@@ -350,6 +358,9 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::UnknownOverrideKey => codes::UNKNOWN_OVERRIDE_KEY,
             Self::AssertionRankMismatch => codes::ASSERTION_RANK_MISMATCH,
             Self::ArrayDefaultWithoutShape => codes::ARRAY_DEFAULT_WITHOUT_SHAPE,
+            Self::VariableBoundShapeMismatch => codes::VARIABLE_BOUND_SHAPE_MISMATCH,
+            Self::VariableBoundCircular => codes::VARIABLE_BOUND_CIRCULAR,
+            Self::VariableBoundsInverted => codes::VARIABLE_BOUNDS_INVERTED,
         };
         write!(f, "{s}")
     }
@@ -454,6 +465,14 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
         if scope == ValidationScope::Full {
             crate::structural::check_circular_dependencies_in_models(
                 models,
+                &mut structural_errors,
+            );
+            // Variable bounds, models and subsystems at every depth (esm-spec
+            // §6.3.2). A bound prescribes no solver behaviour, so a build does
+            // not refuse on one: the check is `validate`'s only.
+            crate::variable_bounds::validate_variable_bounds(
+                esm_file,
+                &system_refs,
                 &mut structural_errors,
             );
         }
