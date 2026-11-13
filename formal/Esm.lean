@@ -67,6 +67,9 @@ import Esm.Document.Math.Induct
 import Esm.Document.Math.LexLatex
 import Esm.Document.Math.TokLatex
 import Esm.Document.Math.RoundTripLatex
+import Esm.Document.Math.LexTypst
+import Esm.Document.Math.TokTypst
+import Esm.Document.Math.RoundTripTypst
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/
