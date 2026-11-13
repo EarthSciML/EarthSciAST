@@ -36,6 +36,12 @@ import Esm.Document.Number
 import Esm.Document.Strings
 import Esm.Document.Yaml
 import Esm.Document.TypstDict
+import Esm.Document.Math.Expr
+import Esm.Document.Math.Token
+import Esm.Document.Math.Print
+import Esm.Document.Math.Parse
+import Esm.Document.Math.Latex
+import Esm.Document.Math.Typst
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/
