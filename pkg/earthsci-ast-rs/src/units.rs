@@ -3147,6 +3147,12 @@ fn build_base_units() -> HashMap<String, Unit> {
         .multiply(&Unit::base(Dimension::Length, 1, 1.0))
         .divide(&Unit::base(Dimension::Time, 2, 1.0));
     units.insert("N".to_string(), newton.clone());
+    // The dyne, the CGS force: exactly 1e-5 N. Surface tensions are still
+    // tabulated in dyn/cm (numerically mN/m).
+    let mut dyne = newton.clone();
+    dyne.scale *= 1e-5;
+    dyne.exact = dyne.exact.multiply(&ExactScale::power_of_ten(-5));
+    units.insert("dyn".to_string(), dyne);
 
     // Pressure: kg/(m*s^2) (Pascal)
     let pascal = Unit::base(Dimension::Mass, 1, 1.0)
@@ -3391,6 +3397,7 @@ fn build_base_units() -> HashMap<String, Unit> {
     for (key, base, power) in [
         ("mg", "g", -3),
         ("ug", "g", -6),
+        ("ng", "g", -9),
         ("dm", "m", -1),
         ("um", "m", -6),
         ("nm", "m", -9),
@@ -3402,6 +3409,7 @@ fn build_base_units() -> HashMap<String, Unit> {
         ("mmol", "mol", -3),
         ("umol", "mol", -6),
         ("nmol", "mol", -9),
+        ("mN", "N", -3),
         ("kW", "W", 3),
         ("MJ", "J", 6),
         ("MW", "W", 6),

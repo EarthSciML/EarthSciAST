@@ -1996,12 +1996,12 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Group | Symbols |
 |---|---|
 | SI base | `m` `kg` `s` `mol` `K` `A` `cd` `rad` |
-| Mass | `g` `mg` `ug` `lb` `short_ton` `tonne` |
+| Mass | `g` `mg` `ug` `ng` `lb` `short_ton` `tonne` |
 | Length | `dm` `cm` `mm` `um` `nm` `km` `ft` `mi` |
 | Time | `ms` `us` `ns` `min` `h` `hr` `day` `yr` `year` (`yr` = `year` = the **Julian** year, `31557600` s exactly = 365.25 × 86400 — pinned because one binding shipped a 365-day year, 0.0685% short, and a scale error is invisible to dimensional analysis) |
 | Volume | `L` `l` `mL` `gal` |
 | Amount | `kmol` `mmol` `umol` `nmol` `M` |
-| Derived | `Hz` `N` `Pa` `J` `kJ` `MJ` `cal` `kcal` `W` `kW` `MW` `hp` |
+| Derived | `Hz` `N` `mN` `dyn` `Pa` `J` `kJ` `MJ` `cal` `kcal` `W` `kW` `MW` `hp` |
 | Pressure | `atm` `uatm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `inHg` `psi` |
 | Energy | `erg` `BTU` `Wh` `kWh` |
 | Electromagnetic | `C` `V` `Ohm` `F` `T` |

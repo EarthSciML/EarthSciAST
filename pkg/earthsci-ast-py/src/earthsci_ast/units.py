@@ -80,6 +80,7 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "g = 1e-3 kg",
     "mg = 1e-6 kg",
     "ug = 1e-9 kg",
+    "ng = 1e-12 kg",
     # The international avoirdupois pound, exact by definition since 1959:
     # 1 lb is exactly 0.45359237 kg -- and exactly `short_ton` / 2000, so the
     # table used to hold the DERIVED unit and not the one it is defined in.
@@ -161,6 +162,8 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     # --- derived ------------------------------------------------------------
     "Hz = 1 / s",
     "N = kg * m / s ** 2",
+    "mN = 1e-3 N",
+    "dyn = 1e-5 N",
     "Pa = N / m ** 2",
     "J = N * m",
     "kJ = 1e3 J",
@@ -377,6 +380,7 @@ _EXACT_SCALES: dict[str, ExactScale] = {
     "g": _E.pow10(-3),
     "mg": _E.pow10(-6),
     "ug": _E.pow10(-9),
+    "ng": _E.pow10(-12),
     "lb": _POUND,
     "short_ton": _E.integer(2000) * _POUND,
     "tonne": _E.pow10(3),
@@ -406,6 +410,8 @@ _EXACT_SCALES: dict[str, ExactScale] = {
     "umol": _E.pow10(-6),
     "nmol": _E.pow10(-9),
     "M": _E.pow10(3),
+    "mN": _E.pow10(-3),
+    "dyn": _E.pow10(-5),
     "kJ": _E.pow10(3),
     "MJ": _E.pow10(6),
     "cal": _E.decimal("4.184"),

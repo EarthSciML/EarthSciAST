@@ -356,6 +356,7 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   g: { dims: { kg: 1 }, scale: 1e-3 },
   mg: { dims: { kg: 1 }, scale: 1e-6 },
   ug: { dims: { kg: 1 }, scale: 1e-9 },
+  ng: { dims: { kg: 1 }, scale: 1e-12 },
   // The international avoirdupois pound, exact by definition since 1959:
   // 1 lb = 0.45359237 kg -- and exactly short_ton/2000, so the table held the
   // DERIVED unit and not the one it is defined in. US emission rates are
@@ -434,6 +435,8 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   // ---- Derived ----
   Hz: { dims: { s: -1 }, scale: 1 },
   N: { dims: { kg: 1, m: 1, s: -2 }, scale: 1 },
+  mN: { dims: { kg: 1, m: 1, s: -2 }, scale: 1e-3 },
+  dyn: { dims: { kg: 1, m: 1, s: -2 }, scale: 1e-5 },
   Pa: { dims: { kg: 1, m: -1, s: -2 }, scale: 1 },
   J: { dims: { kg: 1, m: 2, s: -2 }, scale: 1 },
   kJ: { dims: { kg: 1, m: 2, s: -2 }, scale: 1e3 },
@@ -591,6 +594,7 @@ const EXACT_SCALES: Record<string, ExactScale> = {
   g: ExactScale.pow10(-3),
   mg: ExactScale.pow10(-6),
   ug: ExactScale.pow10(-9),
+  ng: ExactScale.pow10(-12),
   lb: POUND_EXACT,
   short_ton: ExactScale.integer(2000).multiply(POUND_EXACT),
   tonne: ExactScale.pow10(3),
@@ -623,6 +627,8 @@ const EXACT_SCALES: Record<string, ExactScale> = {
   umol: ExactScale.pow10(-6),
   nmol: ExactScale.pow10(-9),
   M: ExactScale.pow10(3),
+  mN: ExactScale.pow10(-3),
+  dyn: ExactScale.pow10(-5),
   kJ: ExactScale.pow10(3),
   MJ: ExactScale.pow10(6),
   cal: ExactScale.decimal('4.184'),

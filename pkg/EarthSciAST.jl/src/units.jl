@@ -135,7 +135,7 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
 
     # Mass. `short_ton` / `tonne` are spelled in full on purpose (see above);
     # `ton` and `t` are deliberately NOT registry symbols.
-    "g" => u"g", "mg" => u"mg", "ug" => u"μg", "lb" => _u_lb,
+    "g" => u"g", "mg" => u"mg", "ug" => u"μg", "ng" => u"ng", "lb" => _u_lb,
     "short_ton" => _u_short_ton, "tonne" => _u_tonne,
 
     # Length.
@@ -159,7 +159,7 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     "nmol" => u"nmol", "M" => u"M",
 
     # Derived.
-    "Hz" => u"Hz", "N" => u"N", "Pa" => u"Pa", "J" => u"J", "kJ" => u"kJ", "MJ" => u"MJ",
+    "Hz" => u"Hz", "N" => u"N", "mN" => u"mN", "dyn" => u"dyn", "Pa" => u"Pa", "J" => u"J", "kJ" => u"kJ", "MJ" => u"MJ",
     "cal" => u"cal", "kcal" => u"kcal", "W" => u"W", "kW" => u"kW", "MW" => u"MW",
     "hp" => _u_hp,
 

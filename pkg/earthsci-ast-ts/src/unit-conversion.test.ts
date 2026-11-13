@@ -281,12 +281,12 @@ describe('unit-conversion', () => {
       // has been found short of `ft`, `short_ton`, `tonne` and `inHg`, and
       // while a symbol is missing here a binding may drop it unnoticed.
       const contract = `m kg s mol K A cd rad
-        g mg ug lb short_ton tonne
+        g mg ug ng lb short_ton tonne
         dm cm mm um nm km ft mi
         ms us ns min h hr day yr year
         L l mL gal
         kmol mmol umol nmol M
-        Hz N Pa J kJ MJ cal kcal W kW MW hp
+        Hz N mN dyn Pa J kJ MJ cal kcal W kW MW hp
         atm uatm bar hPa kPa mbar Torr mmHg inHg psi
         erg BTU Wh kWh
         C V Ohm F T

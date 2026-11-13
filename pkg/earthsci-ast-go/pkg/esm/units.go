@@ -876,6 +876,7 @@ func buildUnitRegistry() map[string]Unit {
 	r["g"] = Unit{Dim: r["kg"].Dim, Scale: 1e-3, Exact: exactPow10(-3)}
 	r["mg"] = Unit{Dim: r["kg"].Dim, Scale: 1e-6, Exact: exactPow10(-6)}
 	r["ug"] = Unit{Dim: r["kg"].Dim, Scale: 1e-9, Exact: exactPow10(-9)}
+	r["ng"] = Unit{Dim: r["kg"].Dim, Scale: 1e-12, Exact: exactPow10(-12)}
 	// The international avoirdupois pound, exact by definition since 1959:
 	// 1 lb = 0.45359237 kg -- and exactly short_ton/2000, so the table held the
 	// DERIVED unit and not the one it is defined in. US emission rates are
@@ -962,6 +963,8 @@ func buildUnitRegistry() map[string]Unit {
 	// Derived coherent SI units (scale 1 except where noted).
 	r["Hz"] = Unit{Dim: r["s"].Dim.Power(-1), Scale: 1}
 	r["N"] = r["kg"].Multiply(r["m"]).Divide(r["s"].Power(2))
+	r["mN"] = Unit{Dim: r["N"].Dim, Scale: 1e-3, Exact: exactPow10(-3)}
+	r["dyn"] = Unit{Dim: r["N"].Dim, Scale: 1e-5, Exact: exactPow10(-5)}
 	r["Pa"] = r["N"].Divide(r["m"].Power(2))
 	r["J"] = r["N"].Multiply(r["m"])
 	r["kJ"] = Unit{Dim: r["J"].Dim, Scale: 1000, Exact: exactPow10(3)}
