@@ -98,9 +98,9 @@ theorem rawB_escT (s X : List Char) : rawB 0 (escT s ++ '}' :: X) = some (escT s
 
 /-! ## JSON strings -/
 
-theorem unquoteBody_escCharL (c : Char) (r : List Char) :
-    Strings.unquoteBody false (escCharL c ++ r) = (Strings.unquoteBody false r).map fun p => (c :: p.1, p.2) := by
-  unfold escCharL
+theorem unquoteBody_escCharB (c : Char) (r : List Char) :
+    Strings.unquoteBody false (escCharB c ++ r) = (Strings.unquoteBody false r).map fun p => (c :: p.1, p.2) := by
+  unfold escCharB
   by_cases hs : specials.contains c = true
   · simp only [hs, ↓reduceIte]
     simp only [specials, List.contains_cons, List.contains_nil, Bool.or_false, Bool.or_eq_true,
@@ -109,13 +109,72 @@ theorem unquoteBody_escCharL (c : Char) (r : List Char) :
   · simp only [hs, Bool.false_eq_true, ↓reduceIte]
     exact Strings.unquoteBody_escChar false c r
 
-theorem unquoteBody_quoteL (cs X : List Char) :
-    Strings.unquoteBody false (cs.flatMap escCharL ++ '"' :: X) = some (cs, X) := by
+theorem unquoteBody_quoteB (cs X : List Char) :
+    Strings.unquoteBody false (cs.flatMap escCharB ++ '"' :: X) = some (cs, X) := by
   induction cs with
   | nil => rfl
   | cons c cs ih =>
     simp only [List.flatMap_cons, List.append_assoc]
-    rw [unquoteBody_escCharL, ih]; rfl
+    rw [unquoteBody_escCharB, ih]; rfl
+
+theorem hexChar_plain (d : Nat) (h : d < 16) : Strings.hexChar d ≠ '\\' ∧ Strings.hexChar d ≠ '"' ∧
+    Strings.hexChar d ≠ '_' := by
+  have : ∀ e : Fin 16, Strings.hexChar e.val ≠ '\\' ∧ Strings.hexChar e.val ≠ '"' ∧
+      Strings.hexChar e.val ≠ '_' := by decide +kernel
+  exact this ⟨d, h⟩
+
+theorem fixUs_plain (c : Char) (r : List Char) (h1 : c ≠ '\\') (h2 : c ≠ '"') :
+    fixUs (c :: r) = c :: fixUs r := by
+  rw [fixUs.eq_def]; split <;> simp_all
+
+theorem fixUs_escCharL (c : Char) (R : List Char) : fixUs (escCharL c ++ R) = escCharB c ++ fixUs R := by
+  unfold escCharL
+  by_cases hu : c = '_'
+  · subst hu; simp only [↓reduceIte]; rfl
+  simp only [hu, ↓reduceIte]
+  unfold escCharB
+  by_cases hs : specials.contains c = true
+  · simp only [hs, ↓reduceIte]
+    simp only [specials, List.contains_cons, List.contains_nil, Bool.or_false, Bool.or_eq_true,
+      beq_iff_eq] at hs
+    rcases hs with rfl | rfl | rfl | rfl | rfl <;> rfl
+  simp only [hs, Bool.false_eq_true, ↓reduceIte]
+  unfold Strings.escChar
+  by_cases h1 : c = '"'
+  · subst h1; rfl
+  by_cases h2 : c = '\\'
+  · subst h2; rfl
+  by_cases h3 : c = '\n'
+  · subst h3; rfl
+  by_cases h4 : c = '\t'
+  · subst h4; rfl
+  by_cases h5 : c = '\r'
+  · subst h5; rfl
+  simp only [h1, h2, h3, h4, h5, ite_false]
+  by_cases h6 : Strings.needsHex c = true
+  · simp only [h6, ite_true, Bool.false_eq_true, Strings.hex4, List.cons_append, List.nil_append]
+    have p := fun d (h : d < 16) => hexChar_plain d h
+    rw [fixUs.eq_2]
+    simp only [List.cons.injEq, true_and, ite_false, List.cons_append, List.nil_append]
+    rw [fixUs_plain _ _ (p _ (Nat.mod_lt _ (by omega))).1 (p _ (Nat.mod_lt _ (by omega))).2.1,
+      fixUs_plain _ _ (p _ (Nat.mod_lt _ (by omega))).1 (p _ (Nat.mod_lt _ (by omega))).2.1,
+      fixUs_plain _ _ (p _ (Nat.mod_lt _ (by omega))).1 (p _ (Nat.mod_lt _ (by omega))).2.1,
+      fixUs_plain _ _ (p _ (Nat.mod_lt _ (by omega))).1 (p _ (Nat.mod_lt _ (by omega))).2.1]
+    exact fun e => absurd e (by decide)
+  · simp only [h6, Bool.false_eq_true, ite_false, List.cons_append, List.nil_append]
+    exact fixUs_plain _ _ h2 h1
+
+theorem fixUs_quoteL (cs X : List Char) :
+    fixUs (cs.flatMap escCharL ++ '"' :: X) = cs.flatMap escCharB ++ '"' :: X := by
+  induction cs with
+  | nil => rfl
+  | cons c cs ih =>
+    simp only [List.flatMap_cons, List.append_assoc]
+    rw [fixUs_escCharL, ih]
+
+theorem unquoteBody_quoteL (cs X : List Char) :
+    Strings.unquoteBody false (fixUs (cs.flatMap escCharL ++ '"' :: X)) = some (cs, X) := by
+  rw [fixUs_quoteL, unquoteBody_quoteB]
 
 /-! ## Numbers -/
 

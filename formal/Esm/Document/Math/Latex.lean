@@ -15,8 +15,8 @@ Spellings: numbers in the canonical spelling, scientific ones as
 `1.8 \times 10^{-12}` (read back as one literal); `\mathit{…}`, `\operatorname{…}` and
 `\esm{…}` hold their text with `\`, `{`, `}`, `_`, `^` escaped by a backslash;
 `\mathrm{…}` and `\text{…}` hold raw balanced text; a JSON string (inside an escape
-node's fields) is double-quoted with JSON escapes, and `%`, `$`, `#`, `{`, `}` written
-`\uXXXX` so the text is safe inside a LaTeX argument and a Markdown math span.
+node's fields) is double-quoted with JSON escapes, `_` written `\_`, and `%`, `$`, `#`, `{`, `}`
+written `\uXXXX` so the text is safe inside a LaTeX argument and a Markdown math span.
 
 Accepted on input and never written: `\leq`, `\geq`, `\neq`, `\times`, `\bigl(`,
 `\bigr)`, the spacing commands `\;`, `\:`, `\!`, `\ `, `\quad`, `\qquad` (skipped like
@@ -32,8 +32,23 @@ open Esm.Document Esm.Document.Math
 /-- Characters of a JSON string written as a hex escape in LaTeX. -/
 def specials : List Char := ['%', '$', '#', '{', '}']
 
-def escCharL (c : Char) : List Char :=
+/-- The JSON escape of one character, with the specials as hex escapes. -/
+def escCharB (c : Char) : List Char :=
   if specials.contains c then '\\' :: 'u' :: Strings.hex4 c.toNat else Strings.escChar false c
+
+/-- The LaTeX spelling of one character of a JSON string: `_` as `\_` (so a renderer
+that typesets the string does not read a subscript), otherwise `escCharB`. -/
+def escCharL (c : Char) : List Char :=
+  if c = '_' then ['\\', '_'] else escCharB c
+
+/-- Undo the `\_` of `escCharL` up to the closing quote, leaving the other escapes and
+everything after the quote alone. -/
+def fixUs : List Char → List Char
+  | '\\' :: '_' :: r => '_' :: fixUs r
+  | '\\' :: c :: r => '\\' :: c :: fixUs r
+  | '"' :: r => '"' :: r
+  | c :: r => c :: fixUs r
+  | [] => []
 
 def quoteL (s : String) : List Char := '"' :: s.toList.flatMap escCharL ++ ['"']
 
@@ -224,7 +239,7 @@ def lexOne (cs : List Char) : Option (Tok × List Char) :=
     else if c = ',' then some (.kw .thin, r)
     else if c = '\\' then some (.kw .nl, r)
     else none
-  | '"' :: r => (Strings.unquoteBody false r).map fun p => (.jstr (String.ofList p.1), p.2)
+  | '"' :: r => (Strings.unquoteBody false (fixUs r)).map fun p => (.jstr (String.ofList p.1), p.2)
   | c :: r =>
     if isDig c || (c == '-' && (r.head?.map isDig).getD false) then lexNum cs
     else if isLetter c then
