@@ -25,7 +25,17 @@ import Esm.Units.GrammarLaws
 import Esm.Units.Exec
 import Esm.Units.Examples
 import Esm.Units.Strings
+import Esm.Units.Factors
+import Esm.Digits
+import Esm.Units.Canonical
+import Esm.Units.Typeset
+import Esm.Units.CanonicalExamples
 import Esm.Document.Notation
+import Esm.Document.Json
+import Esm.Document.Number
+import Esm.Document.Strings
+import Esm.Document.Yaml
+import Esm.Document.TypstDict
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/
