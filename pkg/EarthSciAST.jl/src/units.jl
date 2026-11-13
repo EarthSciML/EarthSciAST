@@ -159,7 +159,8 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     "nmol" => u"nmol", "M" => u"M",
 
     # Derived.
-    "Hz" => u"Hz", "N" => u"N", "mN" => u"mN", "dyn" => u"dyn", "Pa" => u"Pa", "J" => u"J", "kJ" => u"kJ", "MJ" => u"MJ",
+    "Hz" => u"Hz", "N" => u"N", "mN" => u"mN", "dyn" => u"dyn", "Pa" => u"Pa",
+    "J" => u"J", "kJ" => u"kJ", "MJ" => u"MJ",
     "cal" => u"cal", "kcal" => u"kcal", "W" => u"W", "kW" => u"kW", "MW" => u"MW",
     "hp" => _u_hp,
 
@@ -1026,6 +1027,7 @@ const _EXACT_BY_UNIT_NAME = Dict{Symbol, ExactScale}(
     :Atmosphere => _exact_integer(101325), :Bar => _exact_pow10(5),
     :Torr => _exact_ratio(101325, 760),
     :PoundsPerSquareInch => _EXACT_POUND * _EXACT_GRAVITY / _exact_decimal("0.0254")^2,
+    :Dyne => _exact_pow10(-5),
     :Erg => _exact_pow10(-7), :InternationalTableBTU => _exact_decimal("1055.05585262"),
     :Rankine => _exact_ratio(5, 9),
     :Degree => _exact_pi() / _exact_integer(180),
