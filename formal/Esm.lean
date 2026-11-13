@@ -57,6 +57,7 @@ import Esm.Document.Math.Cases4
 import Esm.Document.Math.Cases5
 import Esm.Document.Math.Cases6
 import Esm.Document.Math.Cases7
+import Esm.Document.Math.Cases8
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/
