@@ -1,8 +1,8 @@
 {
-  "esm": "1.2.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "native_probe_makearray_in_multi_index_faq",
-    "description": "A rank-1 makearray, read through `index` inside an faq over TWO output indices, whose region values read the other index: m[k,i] = [a[k], 2*u[k,2], c][i] (regions [1,1], [2,3], then [3,3] overwriting). The makearray is a per-cell array, so it has no whole-array lowering in the (k, i) box; native assembles it over the output box instead (EarthSciAST #709). Also read at a shifted subscript (n[k,i] = makearray[i+1] for i in [1,2]) and at a constant one (p[k,i] = makearray[2]).",
+    "description": "A rank-1 makearray, read through `index` inside an faq over TWO output indices, whose region values read the other index: m[k,i] = [a[k], 2*u[k,2], c][i] (regions [1,1], [2,3], then [3,3] overwriting). The makearray is a per-cell array, so it has no whole-array lowering in the (k, i) box; native assembles it over the output box instead (EarthSciAST #709). Also read at a shifted subscript (n[k,i] = makearray[i+1] for i in [1,2]) and at a constant one (p[k,i] = makearray[2]). Further reads: q, with an empty region and a region no subscript reaches; r, a rank-2 makearray read inside a rank-1 faq; s and w, a same-rank makearray at permuted (s[k,i] = m2[i,k]) and shifted (w[k,i] = m2[k,i+1]) subscripts; x, makearrays under elementwise operations (2*m+1 and an ifelse choosing between two); y, all-literal values; z, a bounding box starting past 1, which the read indexes 1-based.",
     "authors": [
       "EarthSciML"
     ],
@@ -62,6 +62,54 @@
           ]
         },
         "p": {
+          "type": "unknown",
+          "shape": [
+            "lev",
+            "ion"
+          ]
+        },
+        "q": {
+          "type": "unknown",
+          "shape": [
+            "lev",
+            "ion"
+          ]
+        },
+        "r": {
+          "type": "unknown",
+          "shape": [
+            "lev"
+          ]
+        },
+        "s": {
+          "type": "unknown",
+          "shape": [
+            "lev",
+            "ion"
+          ]
+        },
+        "w": {
+          "type": "unknown",
+          "shape": [
+            "lev",
+            "ion"
+          ]
+        },
+        "x": {
+          "type": "unknown",
+          "shape": [
+            "lev",
+            "ion"
+          ]
+        },
+        "y": {
+          "type": "unknown",
+          "shape": [
+            "lev",
+            "ion"
+          ]
+        },
+        "z": {
           "type": "unknown",
           "shape": [
             "lev",
@@ -334,6 +382,670 @@
           }
         },
         {
+          "lhs": "q",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k",
+              "i"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              },
+              "i": {
+                "from": "ion"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        2,
+                        1
+                      ]
+                    ],
+                    [
+                      [
+                        1,
+                        3
+                      ]
+                    ],
+                    [
+                      [
+                        4,
+                        4
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "a",
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        3,
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "k",
+                            "i"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "k",
+                            1
+                          ]
+                        },
+                        "c"
+                      ]
+                    }
+                  ]
+                },
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        1,
+                        3
+                      ],
+                      [
+                        1,
+                        1
+                      ]
+                    ],
+                    [
+                      [
+                        1,
+                        3
+                      ],
+                      [
+                        2,
+                        2
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "k",
+                        1
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        2,
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "k",
+                            3
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "k",
+                2
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k",
+              "i"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              },
+              "i": {
+                "from": "ion"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        1,
+                        3
+                      ],
+                      [
+                        1,
+                        1
+                      ]
+                    ],
+                    [
+                      [
+                        1,
+                        3
+                      ],
+                      [
+                        2,
+                        3
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "k",
+                        1
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        2,
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "k",
+                            2
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "i",
+                "k"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k",
+              "i"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              },
+              "i": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "w",
+                "k",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k",
+              "i"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              },
+              "i": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        1,
+                        3
+                      ],
+                      [
+                        1,
+                        1
+                      ]
+                    ],
+                    [
+                      [
+                        1,
+                        3
+                      ],
+                      [
+                        2,
+                        3
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "k",
+                        1
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        2,
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "k",
+                            2
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "k",
+                {
+                  "op": "+",
+                  "args": [
+                    "i",
+                    1
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "x",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k",
+              "i"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              },
+              "i": {
+                "from": "ion"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            2,
+                            {
+                              "op": "makearray",
+                              "args": [],
+                              "regions": [
+                                [
+                                  [
+                                    1,
+                                    1
+                                  ]
+                                ],
+                                [
+                                  [
+                                    2,
+                                    3
+                                  ]
+                                ]
+                              ],
+                              "values": [
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "a",
+                                    "k"
+                                  ]
+                                },
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    2,
+                                    {
+                                      "op": "index",
+                                      "args": [
+                                        "u",
+                                        "k",
+                                        2
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        1
+                      ]
+                    },
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        {
+                          "op": ">",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "k",
+                                1
+                              ]
+                            },
+                            1
+                          ]
+                        },
+                        {
+                          "op": "makearray",
+                          "args": [],
+                          "regions": [
+                            [
+                              [
+                                1,
+                                1
+                              ]
+                            ],
+                            [
+                              [
+                                2,
+                                3
+                              ]
+                            ]
+                          ],
+                          "values": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "a",
+                                "k"
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                2,
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "u",
+                                    "k",
+                                    2
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "makearray",
+                          "args": [],
+                          "regions": [
+                            [
+                              [
+                                1,
+                                2
+                              ]
+                            ],
+                            [
+                              [
+                                3,
+                                3
+                              ]
+                            ]
+                          ],
+                          "values": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "k",
+                                3
+                              ]
+                            },
+                            "c"
+                          ]
+                        }
+                      ]
+                    },
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k",
+              "i"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              },
+              "i": {
+                "from": "ion"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    {
+                      "op": "makearray",
+                      "args": [],
+                      "regions": [
+                        [
+                          [
+                            1,
+                            1
+                          ]
+                        ],
+                        [
+                          [
+                            2,
+                            3
+                          ]
+                        ]
+                      ],
+                      "values": [
+                        1.5,
+                        2.5
+                      ]
+                    },
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "k",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k",
+              "i"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              },
+              "i": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "z",
+                "k",
+                "i"
+              ]
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k",
+              "i"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              },
+              "i": [
+                1,
+                2
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        2,
+                        2
+                      ]
+                    ],
+                    [
+                      [
+                        3,
+                        3
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "a",
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "k",
+                        1
+                      ]
+                    }
+                  ]
+                },
+                "i"
+              ]
+            }
+          }
+        },
+        {
           "lhs": {
             "op": "faq",
             "args": [],
@@ -434,6 +1146,103 @@
                         "p",
                         "k",
                         "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.002,
+                    {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        "k",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.003,
+                    {
+                      "op": "index",
+                      "args": [
+                        "s",
+                        "k",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.0004,
+                    {
+                      "op": "index",
+                      "args": [
+                        "w",
+                        "k",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.0005,
+                    {
+                      "op": "index",
+                      "args": [
+                        "x",
+                        "k",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.0006,
+                    {
+                      "op": "index",
+                      "args": [
+                        "y",
+                        "k",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.0007,
+                    {
+                      "op": "index",
+                      "args": [
+                        "z",
+                        "k",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.0008,
+                    {
+                      "op": "index",
+                      "args": [
+                        "r",
+                        "k"
                       ]
                     }
                   ]

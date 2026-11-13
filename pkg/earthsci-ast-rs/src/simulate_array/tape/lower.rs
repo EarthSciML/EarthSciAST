@@ -2897,6 +2897,15 @@ impl<'m> TapeBuilder<'m> {
         // is lowered here and nowhere else in a box, where an array value in
         // an elementwise position would mean something else per cell.
         let arg0 = match &node.args[0] {
+            // A makearray [`Self::lower_index_of_makearray`] left here is the
+            // same array at every cell.
+            Expr::Operator(ma)
+                if ma.op == "makearray"
+                    && self.per_cell_makearray_box(bx)
+                    && !makearray_reads_box(ma, bx) =>
+            {
+                self.lower_makearray_once(ma, bx)?
+            }
             Expr::Operator(lit) if lit.op == "const" => match eval_const(lit) {
                 Value::Array(a) => self.const_literal_array(lit, &a, Some(bx))?,
                 Value::Scalar(s) => LV::Lit(s),
@@ -3434,15 +3443,7 @@ impl<'m> TapeBuilder<'m> {
                 if let Some(a) = bx.syms.iter().position(|s| s == v) {
                     return Some(1 << a);
                 }
-                let scalar = v == "t"
-                    || bx.cbind(v).is_some()
-                    || self.param_ix.contains_key(v.as_str())
-                    || match self.obs_defined.get(v) {
-                        Some(ObsVal::Taped(lv)) => self.lv_box(lv).is_none(),
-                        Some(ObsVal::Declined) => false,
-                        None => self.var_shapes.get(v).is_some_and(|s| s.shape.is_empty()),
-                    };
-                scalar.then_some(0)
+                self.scalar_name(v, bx).then_some(0)
             }
             Expr::Operator(nd) => {
                 let key = Arc::as_ptr(nd) as usize;
@@ -4590,150 +4591,179 @@ impl<'m> TapeBuilder<'m> {
 
     // -- makearray ------------------------------------------------------------
 
-    /// `index(makearray(regions, values), s₁, …, sₙ)` in a box whose rank is
-    /// not the makearray's: the makearray is a per-cell array (its region
-    /// values read the enclosing box's symbols, e.g. `index(a, k)` in an
-    /// `faq` over `(k, i)` selecting over `i`), so it has no whole-array
-    /// lowering in that box. The oracle evaluates it afresh at every cell and
-    /// reads the subscripted element, which is: the value of the LAST region
-    /// containing the subscripts (§4.3.2's overlap rule), else the zero fill.
-    /// That is an assembly over the OUTPUT box: each region, mapped back
-    /// through the subscripts, is a sub-box of `bx`, and its value is lowered
-    /// there exactly as it reads at each of those cells.
+    /// `index(makearray(regions, values), s₁, …, sₙ)` in a box. The oracle
+    /// evaluates the makearray afresh at every cell of the box, cells
+    /// outermost in its visiting order: EVERY region's value, in region
+    /// order, whether or not the subscripts reach the region, then the
+    /// subscripted element of the array that assembles — 1-based over the
+    /// bounding box (the zero ghost outside it), the value of the LAST region
+    /// containing it (§4.3.2's overlap rule), else the zero fill. The
+    /// makearray's own rank, not the box's, decides how it lowers:
     ///
-    /// Taken only when every subscript is a unit-shift of a distinct box axis
-    /// or a constant, every subscript stays inside the makearray's bounding
-    /// box over the whole box (so no out-of-range policy is involved), and
-    /// every region value lowers to a scalar or to an array spanning its
-    /// sub-box. Anything else returns `None` and keeps the general route.
+    /// - region values that read none of the box's symbols make the same
+    ///   array at every cell. It is built once, at its own rank, and the
+    ///   general route gathers it at the subscripts: `None` is returned and
+    ///   the general route lowers the base with
+    ///   [`Self::lower_makearray_once`];
+    /// - otherwise each cell reads one number of its own array, which is an
+    ///   assembly over the box ([`Self::assemble_index_of_makearray`]), taken
+    ///   when every subscript is a unit shift of a box axis or a constant
+    ///   and every region value is one number per cell
+    ///   ([`Self::cell_scalar`]).
+    ///
+    /// A per-cell makearray this cannot assemble bails rather than taking
+    /// the general route, which lowers a makearray over the box positionally:
+    /// it reads the box's symbols at the makearray's coordinates, not at the
+    /// cell. The one exception is where the two coincide — the same rank,
+    /// subscript `d` the box axis `d`, a bounding box starting at 1 — and a
+    /// region value is a whole array, which only the positional route
+    /// places.
+    ///
+    /// A makearray under elementwise operations goes through
+    /// [`Self::lower_index_through_elementwise`].
     fn lower_index_of_makearray(
         &mut self,
         node: &Arc<ExpressionNode>,
         bx: &LBox,
     ) -> LResult<Option<LV>> {
-        let Some(Expr::Operator(ma)) = node.args.first() else {
+        let Some(Expr::Operator(base)) = node.args.first() else {
             return Ok(None);
         };
-        if ma.op != "makearray" || bx.tuple != 0 || bx.shape.is_empty() || self.sweep.is_some() {
+        if !self.per_cell_makearray_box(bx) {
             return Ok(None);
         }
-        let (Some(regions), Some(values)) = (ma.regions.as_ref(), ma.values.as_ref()) else {
+        if base.op != "makearray" {
+            return self.lower_index_through_elementwise(node, bx);
+        }
+        let (Some(regions), Some(values)) = (base.regions.as_ref(), base.values.as_ref()) else {
             return Ok(None);
         };
-        if regions.is_empty() || values.len() != regions.len() {
+        if values.len() != regions.len() || !makearray_reads_box(base, bx) {
             return Ok(None);
         }
-        let ndim = regions[0].len();
-        // The same-rank case keeps its existing whole-array route.
-        if ndim == bx.shape.len() || node.args.len() - 1 != ndim {
-            return Ok(None);
+        let bounds = match MakearrayBounds::of(regions) {
+            Ok(b) => b,
+            Err(why) => bail_tape!("makearray: {why}"),
+        };
+        let ndim = bounds.lo.len();
+        let n = node.args.len() - 1;
+        if n != ndim {
+            bail_tape!("index: arg count != source rank ({n} args vs rank {ndim})");
         }
-        let mut lo_bb = DimI::from_elem(i64::MAX, ndim);
-        let mut hi_bb = DimI::from_elem(i64::MIN, ndim);
-        for region in regions.iter() {
-            if region.len() != ndim {
-                return Ok(None);
+        let subs = self.makearray_subs(node, bx);
+        let cell_scalar = values.iter().all(|v| self.cell_scalar(v, bx));
+        match subs {
+            Some(subs) if cell_scalar => {
+                let txn = self.sub_txn();
+                let guard = self.sub_box_guard();
+                match self.assemble_index_of_makearray(&bounds, values, &subs, bx) {
+                    Ok(v) => Ok(Some(v)),
+                    Err(e) => {
+                        self.sub_box_undo(txn, guard);
+                        Err(e)
+                    }
+                }
             }
-            for (d, r) in region.iter().enumerate() {
-                let Some([r_lo, r_hi]) = crate::types::region_bounds(r) else {
-                    return Ok(None);
-                };
-                lo_bb[d] = lo_bb[d].min(r_lo);
-                hi_bb[d] = hi_bb[d].max(r_hi);
+            Some(subs)
+                if ndim == bx.shape.len()
+                    && bounds.lo.iter().all(|&l| l == 1)
+                    && subs
+                        .iter()
+                        .enumerate()
+                        .all(|(d, s)| matches!(*s, MaSub::Axis(a, 0) if a == d)) =>
+            {
+                Ok(None)
             }
+            Some(_) => bail_tape!(
+                "index: a makearray read per cell whose region value is not one number per cell"
+            ),
+            None => bail_tape!(
+                "index: a makearray read per cell at a subscript that is not a unit shift of a \
+                 box axis or a constant"
+            ),
         }
-        // How each makearray dim is subscripted: by output axis `a` shifted
-        // by `k`, or at a constant.
-        enum Sub {
-            Axis(usize, i64),
-            Fixed(i64),
-        }
+    }
+
+    /// Whether [`Self::lower_index_of_makearray`] applies in `bx`: a box of
+    /// cells, outside a tuple-list body and a recurrence sweep, in a
+    /// whole-domain build. A tile build keeps the positional route: its
+    /// rules were rewritten for it, with every makearray's regions clipped
+    /// to what the tile reads in the makearray's own coordinates.
+    fn per_cell_makearray_box(&self, bx: &LBox) -> bool {
+        bx.tuple == 0 && !bx.shape.is_empty() && self.sweep.is_none() && self.tile.is_none()
+    }
+
+    /// How each subscript of `index(base, s…)` reads the box: a unit shift
+    /// of a box axis, or a constant. `None` when one is neither.
+    fn makearray_subs(&self, node: &ExpressionNode, bx: &LBox) -> Option<SmallVec<[MaSub; 4]>> {
         let vb = bx.as_vecbox();
-        let mut subs: SmallVec<[Sub; 4]> = SmallVec::new();
-        let mut seen: SmallVec<[usize; 4]> = SmallVec::new();
-        for d in 0..ndim {
-            match classify_axis_role(&node.args[1 + d], &vb) {
-                Some(AxisRole::Map {
+        node.args[1..]
+            .iter()
+            .map(|e| match classify_axis_role(e, &vb)? {
+                AxisRole::Map {
                     out_axis,
                     ax: AxisIndex::Affine(k),
-                }) if !seen.contains(&out_axis) => {
-                    let first = bx.lo[out_axis] + k;
-                    let last = first + bx.shape[out_axis] as i64 - 1;
-                    if first < lo_bb[d] || last > hi_bb[d] {
-                        return Ok(None);
-                    }
-                    seen.push(out_axis);
-                    subs.push(Sub::Axis(out_axis, k));
-                }
-                Some(AxisRole::Const(c)) if (lo_bb[d]..=hi_bb[d]).contains(&c) => {
-                    subs.push(Sub::Fixed(c));
-                }
-                _ => return Ok(None),
-            }
-        }
-        let out_ndim = bx.shape.len();
-        let mut parts: Vec<(LV, u32)> = Vec::with_capacity(regions.len());
-        let txn = self.sub_txn();
-        for (region, value_expr) in regions.iter().zip(values.iter()) {
-            // The region, pulled back to the output box (absolute coordinates).
-            let mut s_lo: DimI = bx.lo.clone();
-            let mut s_shape: DimU = bx.shape.clone();
+                } => Some(MaSub::Axis(out_axis, k)),
+                AxisRole::Const(c) => Some(MaSub::Const(c)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The per-cell assembly of [`Self::lower_index_of_makearray`]. Each
+    /// region, pulled back through the subscripts, is a sub-box of `bx`: the
+    /// cells that read it. Its value is lowered over the WHOLE box, where the
+    /// oracle evaluates it, so every fault it raises keeps its cell and its
+    /// place among the other regions' at that cell; only a value that reads
+    /// no const array, and notes no fault over the sub-box, is lowered over
+    /// the sub-box alone. A region no cell reads is
+    /// still lowered for its faults, and dropped when it has none. Later
+    /// regions overwrite earlier ones; cells no region covers keep the zero
+    /// fill.
+    fn assemble_index_of_makearray(
+        &mut self,
+        bounds: &MakearrayBounds,
+        values: &[Expr],
+        subs: &[MaSub],
+        bx: &LBox,
+    ) -> LResult<LV> {
+        let n = bx.shape.len();
+        let mut parts: Vec<(LV, u32)> = Vec::with_capacity(values.len());
+        for (region, value) in bounds.regions.iter().zip(values.iter()) {
+            let mut s_lo = bx.lo.clone();
+            let mut s_hi: DimI = (0..n).map(|a| bx.lo[a] + bx.shape[a] as i64 - 1).collect();
             let mut empty = false;
-            for (d, r) in region.iter().enumerate() {
-                let [r_lo, r_hi] = crate::types::region_bounds(r).unwrap_or([0, -1]);
+            for (d, &[r_lo, r_hi]) in region.iter().enumerate() {
+                // The region's 1-based positions in the bounding box.
+                let (p_lo, p_hi) = (r_lo - bounds.lo[d] + 1, r_hi - bounds.lo[d] + 1);
                 match subs[d] {
-                    Sub::Fixed(c) => empty |= c < r_lo || c > r_hi,
-                    Sub::Axis(a, k) => {
-                        let lo = s_lo[a].max(r_lo - k);
-                        let hi = (s_lo[a] + s_shape[a] as i64 - 1).min(r_hi - k);
-                        if hi < lo {
-                            empty = true;
-                        } else {
-                            s_lo[a] = lo;
-                            s_shape[a] = (hi - lo + 1) as usize;
-                        }
+                    MaSub::Const(c) => empty |= c < p_lo || c > p_hi,
+                    MaSub::Axis(a, k) => {
+                        s_lo[a] = s_lo[a].max(p_lo - k);
+                        s_hi[a] = s_hi[a].min(p_hi - k);
                     }
                 }
             }
-            if empty {
+            if empty || (0..n).any(|a| s_hi[a] < s_lo[a]) {
+                let txn = self.sub_txn();
+                let guard = self.sub_box_guard();
+                self.lower_expr(value, bx)?;
+                if self.sub_box_clean(guard) {
+                    self.sub_box_undo(txn, guard);
+                }
                 continue;
             }
-            let sbx = LBox {
-                syms: bx.syms,
-                lo: s_lo.clone(),
-                shape: s_shape.clone(),
-                cnames: bx.cnames,
-                cvals: bx.cvals.clone(),
-                tuple: 0,
-                visit: SmallVec::new(),
-            };
-            self.push_scope();
-            let v = self.lower_expr(value_expr, &sbx);
-            self.pop_scope();
-            let v = match v {
-                Ok(v) => v,
-                Err(e) => {
-                    self.sub_rollback(txn);
-                    return Err(e);
-                }
-            };
-            // A region value is one number per cell: a scalar, or an array
-            // spanning exactly the sub-box. A whole-array value (a region of
-            // the makearray filled by an array) is not this form.
-            if let Some((shape, origin)) = self.lv_box(&v)
-                && (shape != s_shape || origin != s_lo)
-            {
-                self.sub_rollback(txn);
-                return Ok(None);
-            }
+            let s_shape: DimU = (0..n).map(|a| (s_hi[a] - s_lo[a] + 1) as usize).collect();
+            let v = self.lower_region_value_on(value, bx, &s_lo, &s_shape)?;
             let region_ix = tape_index(self.regions.len(), "makearray regions")?;
             self.regions.push(RegionSpec {
-                dest_lo: (0..out_ndim)
-                    .map(|a| (s_lo[a] - bx.lo[a]) as usize)
-                    .collect(),
+                dest_lo: (0..n).map(|a| (s_lo[a] - bx.lo[a]) as usize).collect(),
                 shape: s_shape,
             });
             parts.push((v, region_ix));
+        }
+        if parts.is_empty() {
+            return Ok(self.emit_zero_array(&bx.shape, &bx.lo));
         }
         let want = parts
             .iter()
@@ -4747,7 +4777,329 @@ impl<'m> TapeBuilder<'m> {
         });
         let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
         self.emit(Instr::Assemble { table, out }, sec);
-        Ok(Some(LV::Arr(out)))
+        Ok(LV::Arr(out))
+    }
+
+    /// A region value of [`Self::assemble_index_of_makearray`] at the cells
+    /// of the sub-box `s_lo`/`s_shape` of `bx`: a scalar, or an array over
+    /// the sub-box.
+    fn lower_region_value_on(
+        &mut self,
+        value: &Expr,
+        bx: &LBox,
+        s_lo: &DimI,
+        s_shape: &DimU,
+    ) -> LResult<LV> {
+        let full = *s_lo == bx.lo && *s_shape == bx.shape;
+        // Without a const-array read nothing in it faults at one cell and
+        // not at another, so a sub-box lowering that notes no fault stands
+        // for every cell.
+        if !full && self.const_free(value) {
+            let sbx = LBox {
+                syms: bx.syms,
+                lo: s_lo.clone(),
+                shape: s_shape.clone(),
+                cnames: bx.cnames,
+                cvals: bx.cvals.clone(),
+                tuple: 0,
+                visit: bx.visit.clone(),
+            };
+            // Its own value-numbering scope, as in `lower_index_on_sub_box`.
+            let txn = self.sub_txn();
+            let guard = self.sub_box_guard();
+            let fkey = self.enter_sub_frame(&sbx);
+            let v = self.lower_expr(value, &sbx);
+            self.leave_sub_frame(fkey);
+            match v {
+                Ok(v)
+                    if self.sub_box_clean(guard)
+                        && self
+                            .lv_box(&v)
+                            .is_none_or(|(s, o)| s == sbx.shape && o == sbx.lo) =>
+                {
+                    return Ok(v);
+                }
+                _ => self.sub_box_undo(txn, guard),
+            }
+        }
+        let v = self.lower_expr(value, bx)?;
+        match self.lv_box(&v) {
+            None => Ok(v),
+            Some((s, o)) if s == bx.shape && o == bx.lo => {
+                if full {
+                    return Ok(v);
+                }
+                let n = bx.shape.len();
+                let segs = (0..n)
+                    .map(|a| {
+                        let mut one = SmallVec::new();
+                        one.push((0usize, s_shape[a], (s_lo[a] - bx.lo[a]) as usize));
+                        one
+                    })
+                    .collect();
+                let mapped_src: SmallVec<[usize; 4]> = (0..n).collect();
+                Ok(self.emit_gather(
+                    &v,
+                    SmallVec::new(),
+                    &mapped_src,
+                    SmallVec::from_elem(true, n),
+                    segs,
+                    s_shape,
+                    s_lo,
+                ))
+            }
+            Some(_) => {
+                bail_tape!("index: a makearray region value read per cell is not over the box")
+            }
+        }
+    }
+
+    /// Whether nothing in `e`, at any depth, reads a const array: the one
+    /// read whose fault depends on the cell (out of its range at some cells
+    /// only).
+    fn const_free(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Number(_) | Expr::Integer(_) => true,
+            Expr::Variable(v) => !self.const_arrays.is_const(v),
+            Expr::Operator(n) => {
+                if n.op == "const" && !n.value.as_ref().is_some_and(|v| v.is_number()) {
+                    return false;
+                }
+                if n.op == "index"
+                    && n.args
+                        .first()
+                        .is_some_and(|b| self.const_arrays.is_const_base(b))
+                {
+                    return false;
+                }
+                n.args.iter().all(|a| self.const_free(a))
+                    && [&n.expr, &n.filter, &n.lower, &n.upper]
+                        .into_iter()
+                        .all(|x| x.as_deref().is_none_or(|x| self.const_free(x)))
+                    && n.values
+                        .as_ref()
+                        .is_none_or(|vs| vs.iter().all(|x| self.const_free(x)))
+            }
+        }
+    }
+
+    /// Whether `e` is one number at each cell of `bx` as the oracle
+    /// evaluates it: a leaf that is a scalar there, a full-rank `index`
+    /// read, a rank-0 `faq`, or an elementwise operation of those. A whole
+    /// array (a bare shaped name, an array literal, a builder) is not, and
+    /// neither is anything this does not look into.
+    fn cell_scalar(&self, e: &Expr, bx: &LBox) -> bool {
+        match e {
+            Expr::Number(_) | Expr::Integer(_) => true,
+            Expr::Variable(v) => bx.syms.iter().any(|s| s == v) || self.scalar_name(v, bx),
+            Expr::Operator(n) => match vec_op_code(&n.op) {
+                VecOp::Arith(_) | VecOp::Cmp(_) | VecOp::Unary(_) | VecOp::Neg | VecOp::Ifelse => {
+                    n.args.iter().all(|a| self.cell_scalar(a, bx))
+                }
+                VecOp::Precision => n.args.first().is_some_and(|a| self.cell_scalar(a, bx)),
+                VecOp::Const => matches!(eval_const(n), Value::Scalar(_)),
+                VecOp::BoolLit(_) => true,
+                // The oracle's gather is one element unless it has fewer
+                // subscripts than its base has axes.
+                VecOp::Index => {
+                    let Some((base, subs)) = n.args.split_first() else {
+                        return false;
+                    };
+                    subs.iter().all(|a| self.cell_scalar(a, bx))
+                        && self.rank_of(base).is_some_and(|r| subs.len() >= r)
+                }
+                VecOp::Aggregate => faq_spec(n).is_some_and(|s| s.ranges.is_empty()),
+                _ => false,
+            },
+        }
+    }
+
+    /// The rank of the array `e` names or spells, where that is known
+    /// without lowering it.
+    fn rank_of(&self, e: &Expr) -> Option<usize> {
+        match e {
+            Expr::Variable(v) => match self.obs_defined.get(v) {
+                Some(ObsVal::Taped(lv)) => Some(self.lv_box(lv).map_or(0, |(s, _)| s.len())),
+                Some(ObsVal::Declined) => None,
+                None if self.param_ix.contains_key(v.as_str()) => Some(0),
+                None => self.var_shapes.get(v).map(|s| s.shape.len()),
+            },
+            Expr::Operator(n) if n.op == "makearray" => n.regions.as_ref()?.first().map(Vec::len),
+            Expr::Operator(n) if n.op == "const" => match eval_const(n) {
+                Value::Scalar(_) => Some(0),
+                Value::Array(a) => Some(a.ndim()),
+            },
+            _ => None,
+        }
+    }
+
+    /// A name that reads as one number everywhere in `bx` (its own symbols
+    /// aside): the time, a bound contraction index, a parameter, or a 0-D
+    /// observed or state.
+    fn scalar_name(&self, v: &str, bx: &LBox) -> bool {
+        v == "t"
+            || bx.cbind(v).is_some()
+            || self.param_ix.contains_key(v)
+            || match self.obs_defined.get(v) {
+                Some(ObsVal::Taped(lv)) => self.lv_box(lv).is_none(),
+                Some(ObsVal::Declined) => false,
+                None => self.var_shapes.get(v).is_some_and(|s| s.shape.is_empty()),
+            }
+    }
+
+    /// `index(w, s…)` where `w` combines one or more makearrays elementwise
+    /// (`2 * makearray(…)`, an `ifelse` choosing between two): at each cell
+    /// the oracle combines the per-cell arrays, then reads one element,
+    /// which is the same combination of each array's element there —
+    /// evaluated in the same order, the scalar operands once per cell, and
+    /// under a scalar condition only the arm it takes. So the read is pushed
+    /// through to each makearray ([`Self::push_index`]) and the rewritten
+    /// expression lowered. The combined array is read 1-based over the
+    /// makearrays' common bounding box, and outside it is the zero ghost, not
+    /// the combination of the zero fills, so every subscript must stay
+    /// inside it. `None` when the base is not such a combination.
+    fn lower_index_through_elementwise(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+    ) -> LResult<Option<LV>> {
+        let base = &node.args[0];
+        if !reaches_makearray(base) {
+            return Ok(None);
+        }
+        let Pushed::Array(rewritten, shape) = self.push_index(base, &node.args[1..], node, bx)
+        else {
+            return Ok(None);
+        };
+        let Some(subs) = self.makearray_subs(node, bx) else {
+            return Ok(None);
+        };
+        let inside = subs.iter().enumerate().all(|(d, s)| {
+            let n = shape[d] as i64;
+            match *s {
+                MaSub::Const(c) => (1..=n).contains(&c),
+                MaSub::Axis(a, k) => {
+                    bx.lo[a] + k >= 1 && bx.lo[a] + k + bx.shape[a] as i64 - 1 <= n
+                }
+            }
+        });
+        if !inside {
+            return Ok(None);
+        }
+        self.held_exprs.push(rewritten.clone());
+        self.lower_expr(&rewritten, bx).map(Some)
+    }
+
+    /// `e` with the read `index(·, subs…)` pushed through its elementwise
+    /// operations to each makearray it combines (`proto` is the `index`
+    /// node whose shape the rewritten reads take). The arrays combined must
+    /// share one bounding-box shape — the oracle's broadcast of two that do
+    /// not is not an element-by-element read — and every other operand be
+    /// one number per cell.
+    fn push_index(
+        &self,
+        e: &Expr,
+        subs: &[Expr],
+        proto: &Arc<ExpressionNode>,
+        bx: &LBox,
+    ) -> Pushed {
+        let scalar_or_no = |s: &Self| {
+            if s.cell_scalar(e, bx) {
+                Pushed::Scalar
+            } else {
+                Pushed::No
+            }
+        };
+        let Expr::Operator(n) = e else {
+            return scalar_or_no(self);
+        };
+        let rebuild = |args: Vec<Expr>| {
+            let mut m = (**n).clone();
+            m.args = args;
+            Expr::Operator(Arc::new(m))
+        };
+        match vec_op_code(&n.op) {
+            VecOp::Makearray => {
+                let Some(Ok(bounds)) = n.regions.as_ref().map(|r| MakearrayBounds::of(r)) else {
+                    return Pushed::No;
+                };
+                let shape = bounds.shape();
+                if shape.contains(&0) || shape.len() != subs.len() {
+                    return Pushed::No;
+                }
+                let mut ix = (**proto).clone();
+                ix.args = std::iter::once(e.clone())
+                    .chain(subs.iter().cloned())
+                    .collect();
+                Pushed::Array(Expr::Operator(Arc::new(ix)), shape)
+            }
+            VecOp::Arith(_) | VecOp::Cmp(_) | VecOp::Unary(_) | VecOp::Neg => {
+                let mut args = Vec::with_capacity(n.args.len());
+                let mut shape: Option<DimU> = None;
+                for a in &n.args {
+                    match self.push_index(a, subs, proto, bx) {
+                        Pushed::Array(x, s) => {
+                            if shape.as_ref().is_some_and(|t| *t != s) {
+                                return Pushed::No;
+                            }
+                            shape = Some(s);
+                            args.push(x);
+                        }
+                        Pushed::Scalar => args.push(a.clone()),
+                        Pushed::No => return Pushed::No,
+                    }
+                }
+                match shape {
+                    None => Pushed::Scalar,
+                    Some(s) => Pushed::Array(rebuild(args), s),
+                }
+            }
+            VecOp::Ifelse if n.args.len() == 3 => {
+                if !self.cell_scalar(&n.args[0], bx) {
+                    return Pushed::No;
+                }
+                match (
+                    self.push_index(&n.args[1], subs, proto, bx),
+                    self.push_index(&n.args[2], subs, proto, bx),
+                ) {
+                    (Pushed::Scalar, Pushed::Scalar) => Pushed::Scalar,
+                    (Pushed::Array(a, s), Pushed::Array(b, t)) if s == t => {
+                        Pushed::Array(rebuild(vec![n.args[0].clone(), a, b]), s)
+                    }
+                    _ => Pushed::No,
+                }
+            }
+            _ => scalar_or_no(self),
+        }
+    }
+
+    /// A makearray whose region values read none of the box's symbols, as
+    /// the base of a gather in `bx`: the same array at every cell, built
+    /// once at its own rank, re-origined to 1 as the oracle reads it. Its
+    /// faults sort at the box's first cell, where the oracle meets them
+    /// first, in expression order.
+    fn lower_makearray_once(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
+        let Some(regions) = node.regions.as_ref() else {
+            bail_tape!("makearray: no `regions`");
+        };
+        let bounds = match MakearrayBounds::of(regions) {
+            Ok(b) => b,
+            Err(why) => bail_tape!("makearray: {why}"),
+        };
+        let shape = bounds.shape();
+        let mbx = LBox {
+            syms: &[],
+            lo: bounds.lo,
+            shape,
+            cnames: bx.cnames,
+            cvals: bx.cvals.clone(),
+            tuple: 0,
+            visit: SmallVec::new(),
+        };
+        let level = self.enter_fault_level(Some(bx));
+        let v = self.lower_makearray(node, &mbx);
+        self.leave_fault_level(level);
+        Ok(self.reorigin_to_one(v?))
     }
 
     fn lower_makearray(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
@@ -4760,30 +5112,18 @@ impl<'m> TapeBuilder<'m> {
         let Some(values) = node.values.as_ref() else {
             bail_tape!("makearray: no `values`");
         };
-        if regions.is_empty() || values.len() != regions.len() {
+        if values.len() != regions.len() {
             bail_tape!("makearray: empty or mismatched regions/values");
         }
-        let ndim = regions[0].len();
+        let bounds = match MakearrayBounds::of(regions) {
+            Ok(b) => b,
+            Err(why) => bail_tape!("makearray: {why}"),
+        };
+        let ndim = bounds.lo.len();
         if ndim != bx.shape.len() {
             bail_tape!("makearray: region rank != output box rank");
         }
-        let mut lo_bb = DimI::from_elem(i64::MAX, ndim);
-        let mut hi_bb = DimI::from_elem(i64::MIN, ndim);
-        for region in regions.iter() {
-            if region.len() != ndim {
-                bail_tape!("makearray: ragged region rank");
-            }
-            for (d, r) in region.iter().enumerate() {
-                let Some([r_lo, r_hi]) = crate::types::region_bounds(r) else {
-                    bail_tape!("makearray: unfolded (symbolic) region bound");
-                };
-                lo_bb[d] = lo_bb[d].min(r_lo);
-                hi_bb[d] = hi_bb[d].max(r_hi);
-            }
-        }
-        let bb_shape: DimU = (0..ndim)
-            .map(|d| (hi_bb[d] - lo_bb[d] + 1).max(0) as usize)
-            .collect();
+        let (lo_bb, bb_shape) = (&bounds.lo, bounds.shape());
         if bb_shape.contains(&0) {
             bail_tape!("makearray: empty bounding box");
         }
@@ -4792,21 +5132,9 @@ impl<'m> TapeBuilder<'m> {
         // makearray whose values are all literals is a constant array, built
         // here; any other is an `Instr::Assemble`.
         let mut parts: Vec<(LV, u32)> = Vec::with_capacity(regions.len());
-        for (region, value_expr) in regions.iter().zip(values.iter()) {
-            if region
-                .iter()
-                .any(|r| crate::types::region_bounds(r).is_none())
-            {
-                bail_tape!("makearray: unfolded (symbolic) region bound");
-            }
-            let r_lo: DimI = region.iter().map(|r| r[0].as_i64().unwrap_or(0)).collect();
-            let r_shape: DimU = region
-                .iter()
-                .map(|r| {
-                    let [lo, hi] = crate::types::region_bounds(r).unwrap_or([0, -1]);
-                    (hi - lo + 1) as usize
-                })
-                .collect();
+        for (region, value_expr) in bounds.regions.iter().zip(values.iter()) {
+            let r_lo: DimI = region.iter().map(|r| r[0]).collect();
+            let r_shape: DimU = region.iter().map(|r| (r[1] - r[0] + 1) as usize).collect();
             // A region is its own box (and CSE scope): a ramp / shifted gather
             // means something different inside it.
             let rbx = LBox {
@@ -4899,7 +5227,7 @@ impl<'m> TapeBuilder<'m> {
                 view.fill(*x);
             }
             let values = Arc::new(values.iter().copied().collect());
-            let out = self.emit_const_data(&bb_shape, &lo_bb, values, false)?;
+            let out = self.emit_const_data(&bb_shape, lo_bb, values, false)?;
             return Ok(LV::Arr(out));
         }
 
@@ -4914,7 +5242,7 @@ impl<'m> TapeBuilder<'m> {
             parts: parts.iter().map(|(v, r)| (self.op_of(v), *r)).collect(),
         };
         self.assemblies.push(spec);
-        let out = self.new_slot(&bb_shape, &lo_bb, false, sec);
+        let out = self.new_slot(&bb_shape, lo_bb, false, sec);
         self.emit(Instr::Assemble { table, out }, sec);
         Ok(LV::Arr(out))
     }
@@ -8719,6 +9047,121 @@ fn color_slab(prog: &mut TapeProgram) {
         segment_elems,
         recycled_elems,
     };
+}
+
+/// How a subscript of a makearray read in a box reads it
+/// ([`TapeBuilder::makearray_subs`]): box axis `.0` shifted by `.1`, or a
+/// constant position.
+#[derive(Clone, Copy)]
+enum MaSub {
+    Axis(usize, i64),
+    Const(i64),
+}
+
+/// [`TapeBuilder::push_index`]'s answer: the rewritten read and the shape
+/// of the array it reads; one number per cell, untouched; or neither.
+enum Pushed {
+    Array(Expr, DimU),
+    Scalar,
+    No,
+}
+
+/// Whether a makearray sits under `e`'s elementwise operations (or is `e`).
+fn reaches_makearray(e: &Expr) -> bool {
+    let Expr::Operator(n) = e else {
+        return false;
+    };
+    match vec_op_code(&n.op) {
+        VecOp::Makearray => true,
+        VecOp::Arith(_) | VecOp::Cmp(_) | VecOp::Unary(_) | VecOp::Neg | VecOp::Ifelse => {
+            n.args.iter().any(reaches_makearray)
+        }
+        _ => false,
+    }
+}
+
+/// Whether a region value of the makearray `ma` reads one of `bx`'s
+/// symbols: if none does, it is the same array at every cell of `bx`.
+fn makearray_reads_box(ma: &ExpressionNode, bx: &LBox) -> bool {
+    ma.values.as_ref().is_some_and(|vs| {
+        vs.iter()
+            .any(|v| bx.syms.iter().any(|s| mentions_unshadowed(v, s)))
+    })
+}
+
+/// [`expr_mentions`] that does not see a name an `faq` inside `e` rebinds
+/// as one of its own indices.
+fn mentions_unshadowed(e: &Expr, name: &str) -> bool {
+    match e {
+        Expr::Variable(v) => v == name,
+        Expr::Number(_) | Expr::Integer(_) => false,
+        Expr::Operator(n) => {
+            if n.args.iter().any(|a| mentions_unshadowed(a, name)) {
+                return true;
+            }
+            if let Some(spec) = faq_spec(n)
+                && (spec.idx_names.iter().any(|x| x == name)
+                    || spec.contract_names.iter().any(|x| x == name))
+            {
+                return false;
+            }
+            [&n.expr, &n.filter, &n.lower, &n.upper]
+                .into_iter()
+                .any(|x| x.as_deref().is_some_and(|x| mentions_unshadowed(x, name)))
+                || n.values
+                    .as_ref()
+                    .is_some_and(|vs| vs.iter().any(|x| mentions_unshadowed(x, name)))
+        }
+    }
+}
+
+/// A `makearray`'s regions as integers: each region's `[lo, hi]` per axis
+/// (the legal empty spelling `hi == lo - 1` included) and their bounding box.
+struct MakearrayBounds {
+    lo: DimI,
+    hi: DimI,
+    regions: Vec<SmallVec<[[i64; 2]; 4]>>,
+}
+
+impl MakearrayBounds {
+    /// `Err` names why the regions have no lowering: none at all, a ragged
+    /// rank, or a bound not folded to an integer.
+    fn of(regions: &[Vec<[crate::types::RegionBound; 2]>]) -> Result<Self, &'static str> {
+        let Some(first) = regions.first() else {
+            return Err("empty or mismatched regions/values");
+        };
+        let ndim = first.len();
+        let mut lo = DimI::from_elem(i64::MAX, ndim);
+        let mut hi = DimI::from_elem(i64::MIN, ndim);
+        let mut out = Vec::with_capacity(regions.len());
+        for region in regions {
+            if region.len() != ndim {
+                return Err("ragged region rank");
+            }
+            let mut b = SmallVec::new();
+            for (d, r) in region.iter().enumerate() {
+                let Some([r_lo, r_hi]) = crate::types::region_bounds(r) else {
+                    return Err("unfolded (symbolic) region bound");
+                };
+                lo[d] = lo[d].min(r_lo);
+                hi[d] = hi[d].max(r_hi);
+                b.push([r_lo, r_hi]);
+            }
+            out.push(b);
+        }
+        Ok(Self {
+            lo,
+            hi,
+            regions: out,
+        })
+    }
+
+    /// The bounding box's extent per axis (0 for an all-empty axis).
+    fn shape(&self) -> DimU {
+        (0..self.lo.len())
+            .map(|d| (self.hi[d] - self.lo[d] + 1).max(0) as usize)
+            .collect()
+    }
 }
 
 /// True iff `e` is a `reshape` / `transpose` / `concat`, or an operator one of
