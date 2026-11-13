@@ -1,5 +1,6 @@
 import Esm.Units.Factors
 import Esm.Units.Strings
+import Esm.Digits
 
 /-!
 # The canonical unit spelling
@@ -60,15 +61,10 @@ def symOK (s : String) : Bool := (s == "%" || symRunB s) && s != "dimensionless"
 /-- A canonical factor list: two-sided normal, every symbol admissible. -/
 def CanonFactors (l : List Factor) : Prop := Normal2 l ∧ ∀ f ∈ l, symOK f.1 = true
 
-def digitChar (d : ℕ) : Char := ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].getD d '0'
-
 /-- The decimal digits of `n` (empty for `0`; only positive numbers are written). -/
-def digs (n : ℕ) : List Char := (Nat.digits 10 n).reverse.map digitChar
+def digs (n : ℕ) : List Char := (decDigits n).map digitChar
 
-theorem digitChar_toNat (d : ℕ) (h : d < 10) : (digitChar d).toNat = '0'.toNat + d := by
-  interval_cases d <;> rfl
-
-theorem digitChar_isDigit (d : ℕ) (h : d < 10) : isDigitC (digitChar d) = true := by
+theorem digitChar_isDigitC (d : ℕ) (h : d < 10) : isDigitC (digitChar d) = true := by
   interval_cases d <;> rfl
 
 theorem digitsVal_snoc (xs : List Char) (c : Char) :
@@ -77,26 +73,25 @@ theorem digitsVal_snoc (xs : List Char) (c : Char) :
 
 theorem digitsVal_digs (n : ℕ) : digitsVal (digs n) = n := by
   have key : ∀ L : List ℕ, (∀ d ∈ L, d < 10) →
-      digitsVal (L.reverse.map digitChar) = Nat.ofDigits 10 L := by
+      digitsVal (L.map digitChar) = L.foldl (fun a d => 10 * a + d) 0 := by
     intro L hL
-    induction L with
+    induction L using List.reverseRecOn with
     | nil => rfl
-    | cons d L ih =>
+    | append_singleton L d ih =>
       have hd : d < 10 := hL d (by simp)
-      rw [List.reverse_cons, List.map_append, List.map_singleton, digitsVal_snoc,
-        ih (fun x hx => hL x (by simp [hx])), digitChar_toNat d hd, Nat.ofDigits_cons]
-      simp only [Nat.add_sub_cancel_left]
-      ring
-  rw [digs, key _ (fun d hd => Nat.digits_lt_base (by norm_num) hd), Nat.ofDigits_digits]
+      rw [List.map_append, List.map_singleton, digitsVal_snoc,
+        ih (fun x hx => hL x (by simp [hx])), digitChar_toNat hd, List.foldl_append]
+      simp
+  rw [digs, key _ (decDigits_lt n), foldl_decDigits]
 
 theorem digs_isDigit (n : ℕ) : ∀ c ∈ digs n, isDigitC c = true := by
   intro c hc
-  simp only [digs, List.mem_map, List.mem_reverse] at hc
+  simp only [digs, List.mem_map] at hc
   obtain ⟨d, hd, rfl⟩ := hc
-  exact digitChar_isDigit d (Nat.digits_lt_base (by norm_num) hd)
+  exact digitChar_isDigitC d (decDigits_lt n d hd)
 
 theorem digs_ne_nil (n : ℕ) (h : 0 < n) : digs n ≠ [] := by
-  simp [digs, Nat.digits_eq_nil_iff_eq_zero, h.ne']
+  simp [digs, decDigits_eq_nil_iff, h.ne']
 
 /-! ## The spelling, as tokens -/
 
@@ -566,7 +561,9 @@ def spellTree (l : List Factor) : UExpr :=
   | g :: r => .div (numTree l) (foldTerms (term g) r)
 
 theorem numTok_one : numTok 1 = .num "1" 1 true := by
-  simp [numTok, digs, digitChar, digitsVal]
+  have : decDigits 1 = [1] := by simp [decDigits]
+  simp only [numTok, digs, this]
+  rfl
 
 theorem pUnit_numToks (l : List Factor) (hl : ∀ f ∈ l, f.2 ≠ 0) (ts : List Tok)
     (hts : NoPowHead ts) (n k : ℕ) (h : 4 * (numFactors l).length + k + 4 ≤ n) :

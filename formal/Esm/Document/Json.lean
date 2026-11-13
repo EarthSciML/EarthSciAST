@@ -54,6 +54,25 @@ def WF : JNum → Prop
       ds ≠ [] ∧ (∀ d ∈ ds, d < 10) ∧ ds.head? ≠ some 0 ∧ ds.getLast? ≠ some 0 ∧
         ∀ z, decInt? neg ds e10 = some z → ¬ InInt64 z
 
+instance (z : Int) : Decidable (InInt64 z) := inferInstanceAs (Decidable (_ ∧ _))
+
+/-- `WF`, as a check. -/
+def wfb : JNum → Bool
+  | int z => decide (InInt64 z)
+  | dec neg ds e10 =>
+    !ds.isEmpty && ds.all (· < 10) && ds.head? != some 0 && ds.getLast? != some 0 &&
+      match decInt? neg ds e10 with
+      | some z => !decide (InInt64 z)
+      | none => true
+
+theorem wfb_iff (n : JNum) : n.wfb = true ↔ n.WF := by
+  cases n with
+  | int z => simp [wfb, WF]
+  | dec neg ds e10 =>
+    simp only [wfb, WF, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true,
+      List.isEmpty_eq_false_iff, List.all_eq_true, decide_eq_true_eq, bne_iff_ne, ne_eq]
+    cases h : decInt? neg ds e10 <;> simp [and_assoc]
+
 end JNum
 
 /-- A JSON value. Strings and keys are arbitrary Lean strings (any Unicode scalar
@@ -86,6 +105,47 @@ def WFList : List Json → Prop
 def WFObj : List (String × Json) → Prop
   | [] => True
   | (_, v) :: es => WF v ∧ WFObj es
+end
+
+mutual
+/-- `WF`, as a check. -/
+def wfb : Json → Bool
+  | .num n => n.wfb
+  | .arr xs => wfbList xs
+  | .obj kvs => decide (kvs.map Prod.fst).Nodup && wfbObj kvs
+  | _ => true
+
+def wfbList : List Json → Bool
+  | [] => true
+  | v :: vs => wfb v && wfbList vs
+
+def wfbObj : List (String × Json) → Bool
+  | [] => true
+  | (_, v) :: es => wfb v && wfbObj es
+end
+
+mutual
+theorem wfb_iff : ∀ v : Json, v.wfb = true ↔ v.WF
+  | .null => by simp [wfb, WF]
+  | .bool _ => by simp [wfb, WF]
+  | .str _ => by simp [wfb, WF]
+  | .num n => by simp only [wfb, WF]; exact n.wfb_iff
+  | .arr xs => by simp only [wfb, WF]; exact wfbList_iff xs
+  | .obj kvs => by
+    simp only [wfb, WF, Bool.and_eq_true, decide_eq_true_eq]
+    rw [wfbObj_iff kvs]
+
+theorem wfbList_iff : ∀ l : List Json, wfbList l = true ↔ WFList l
+  | [] => by simp [wfbList, WFList]
+  | v :: vs => by
+    simp only [wfbList, WFList, Bool.and_eq_true]
+    rw [wfb_iff v, wfbList_iff vs]
+
+theorem wfbObj_iff : ∀ l : List (String × Json), wfbObj l = true ↔ WFObj l
+  | [] => by simp [wfbObj, WFObj]
+  | (_, v) :: es => by
+    simp only [wfbObj, WFObj, Bool.and_eq_true]
+    rw [wfb_iff v, wfbObj_iff es]
 end
 
 mutual

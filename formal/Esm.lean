@@ -26,6 +26,7 @@ import Esm.Units.Exec
 import Esm.Units.Examples
 import Esm.Units.Strings
 import Esm.Units.Factors
+import Esm.Digits
 import Esm.Units.Canonical
 import Esm.Units.Typeset
 import Esm.Units.CanonicalExamples

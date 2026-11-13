@@ -1,4 +1,4 @@
-import Esm.Document.Json
+import Esm.Document.Number
 
 /-!
 # Lexical pieces shared by the YAML and Typst codecs
@@ -10,6 +10,11 @@ import Esm.Document.Json
 * Bare identifiers `[A-Za-z_][A-Za-z0-9_]*` (keys) and the reader of a maximal run
   of identifier characters.
 * Runs of spaces (indentation).
+* Object keys, bare or quoted, with the codec's reserved words (which a reader would
+  not take as a key string) always quoted, and never accepted bare.
+  `parseKey_printKey` is the round trip.
+* What a number or a key never starts with, which the codecs' readers use to tell
+  them apart from other tokens.
 -/
 
 namespace Esm.Document.Strings
@@ -209,5 +214,97 @@ theorem isIdent_all {cs : List Char} (h : isIdent cs = true) : cs.all isIdentCha
 
 /-- `n` spaces. -/
 def spaces (n : Nat) : List Char := List.replicate n ' '
+
+/-! ## Keys -/
+
+/-- A key prints bare when it is an identifier and not one of the codec's `reserved`
+words. -/
+def bareKey (reserved : String → Bool) (k : String) : Bool := isIdent k.toList && !reserved k
+
+/-- A key: bare when it can be, otherwise quoted (`braces` as in `quote`). -/
+def printKey (braces : Bool) (reserved : String → Bool) (k : String) : List Char :=
+  if bareKey reserved k then k.toList else quote braces k
+
+/-- A key: quoted, or an identifier that is not a reserved word. -/
+def parseKey (braces : Bool) (reserved : String → Bool) : List Char → Option (String × List Char)
+  | [] => none
+  | c :: r =>
+    if c = '"' then parseQuoted braces (c :: r)
+    else if isIdentStart c then
+      let p := readIdent (c :: r)
+      if reserved (String.ofList p.1) then none else some (String.ofList p.1, p.2)
+    else none
+
+theorem printKey_head (braces : Bool) (reserved : String → Bool) (k : String) :
+    ∃ c t, printKey braces reserved k = c :: t ∧ (c = '"' ∨ isIdentStart c = true) := by
+  unfold printKey
+  split
+  · rename_i h
+    simp only [bareKey, Bool.and_eq_true] at h
+    have := h.1
+    cases hk : k.toList with
+    | nil => rw [hk] at this; simp [isIdent] at this
+    | cons c t =>
+      rw [hk] at this
+      simp only [isIdent, Bool.and_eq_true] at this
+      exact ⟨c, t, rfl, Or.inr this.1⟩
+  · exact ⟨_, _, rfl, Or.inl rfl⟩
+
+theorem parseKey_quote (braces : Bool) (reserved : String → Bool) (k : String)
+    (rest : List Char) : parseKey braces reserved (quote braces k ++ rest) = some (k, rest) := by
+  have h : quote braces k ++ rest = '"' :: (escape braces k.toList ++ ['"'] ++ rest) := by
+    simp [quote]
+  rw [h]
+  simp only [parseKey, ite_true]
+  rw [← h, parseQuoted_quote]
+
+/-- A printed key reads back, when what follows is not an identifier character. -/
+theorem parseKey_printKey (braces : Bool) (reserved : String → Bool) (k : String)
+    (rest : List Char) (hr : ∀ c ∈ rest.head?, isIdentChar c = false) :
+    parseKey braces reserved (printKey braces reserved k ++ rest) = some (k, rest) := by
+  unfold printKey
+  split
+  · rename_i h
+    simp only [bareKey, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
+    have hid := h.1
+    have hall := isIdent_all hid
+    cases hk : k.toList with
+    | nil => rw [hk] at hid; simp [isIdent] at hid
+    | cons c t =>
+      rw [hk] at hid hall
+      simp only [isIdent, Bool.and_eq_true] at hid
+      have hc : c ≠ '"' := by intro e; rw [e] at hid; exact absurd hid.1 (by decide)
+      have hread : readIdent (c :: (t ++ rest)) = (c :: t, rest) := by
+        rw [← List.cons_append]; exact readIdent_append _ _ hall hr
+      have hkey : String.ofList (c :: t) = k := by rw [← hk, String.ofList_toList]
+      simp only [List.cons_append, parseKey, hc, ite_false, hid.1, ite_true, hread, hkey, h.2,
+        Bool.false_eq_true]
+  · exact parseKey_quote braces reserved k rest
+
+/-- Characters a printed key never starts with. -/
+def nonKeyHeads : List Char := [')', ':', '-', '?', ' ', '\n', '\t', '\r']
+
+/-- A key starts with `"` or an identifier start, so not with any of `nonKeyHeads`. -/
+theorem keyHead_ne {c : Char} (h : c = '"' ∨ isIdentStart c = true) (x : Char)
+    (hx : x ∈ nonKeyHeads := by decide) : c ≠ x := by
+  rcases h with rfl | h
+  · revert hx; revert x; decide
+  · rintro rfl
+    have : ∀ y ∈ nonKeyHeads, isIdentStart y = false := by decide
+    rw [this c hx] at h
+    exact Bool.noConfusion h
+
+/-! ## Number heads -/
+
+/-- Characters a printed number never starts with. -/
+def nonNumHeads : List Char :=
+  ['(', ')', '"', 'n', 't', 'f', ':', '[', '{', '?', ' ', '\n', '\t', '\r']
+
+theorem numHead_ne {c : Char} (h : Number.NumHead c) (x : Char)
+    (hx : x ∈ nonNumHeads := by decide) : c ≠ x :=
+  Number.NumHead.of_fin (P := fun c => ∀ x ∈ nonNumHeads, c ≠ x) (by decide) (by decide) h x hx
+
+theorem numHead_ident {c : Char} (h : Number.NumHead c) : isIdentStart c = false :=
+  Number.NumHead.of_fin (P := fun c => isIdentStart c = false) (by decide) (by decide) h
 
 end Esm.Document.Strings

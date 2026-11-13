@@ -1,4 +1,5 @@
 import Esm.Document.Json
+import Esm.Digits
 
 /-!
 # The canonical number spelling (CONFORMANCE §5.5.3.1)
@@ -12,6 +13,13 @@ import Esm.Document.Json
 `print` writes the spelling, `parse` reads a number token, and `parse_print` is the
 round trip: parsing the printed spelling, followed by anything that does not continue a
 number token, gives back the number and the rest.
+
+`parse` reads any decimal spelling of a number, not only the canonical one, and
+returns it in canonical form: `1.0` and `1.0e0` are the integer `1`, `0.0e10` is the
+integer `0`, `2.50` is `2.5` (§5.5.3.1 rules 1 and 3). It rejects what has no
+canonical form or is not a JSON number: an integer outside `Int64` (§5.5.3.1 rule 1),
+and a leading zero (`007`, `01.5`). `parse_wf`: whatever `parse` returns is well
+formed.
 -/
 
 namespace Esm.Document.Number
@@ -19,9 +27,6 @@ namespace Esm.Document.Number
 open JNum
 
 /-! ## Digits -/
-
-/-- The character of a decimal digit. -/
-def digitChar (d : Nat) : Char := Char.ofNat (48 + d)
 
 /-- The digit a digit character stands for. -/
 def charDigit (c : Char) : Nat := c.toNat - 48
@@ -37,40 +42,26 @@ theorem digitChar_spec {d : Nat} (h : d < 10) :
   digitChar_spec_fin ⟨d, h⟩
 
 /-- The big-endian decimal digits of `n` (`[0]` for zero). -/
-def natDigits (n : Nat) : List Nat := go n n
-where
-  /-- With fuel at least `n`. -/
-  go : Nat → Nat → List Nat
-    | 0, n => [n]
-    | f + 1, n => if n < 10 then [n] else go f (n / 10) ++ [n % 10]
-
-theorem digitsVal_append_one (l : List Nat) (d : Nat) :
-    digitsVal (l ++ [d]) = 10 * digitsVal l + d := by
-  simp [digitsVal, List.foldl_append]
-
-theorem natDigits_go_spec (f n : Nat) (hf : n ≤ f) :
-    natDigits.go f n ≠ [] ∧ (∀ d ∈ natDigits.go f n, d < 10) ∧
-      digitsVal (natDigits.go f n) = n := by
-  induction f generalizing n with
-  | zero =>
-    have : n = 0 := by omega
-    subst this; simp [natDigits.go, digitsVal]
-  | succ f ih =>
-    rw [natDigits.go]
-    split
-    · refine ⟨by simp, by simpa using ‹n < 10›, by simp [digitsVal]⟩
-    · obtain ⟨-, h2, h3⟩ := ih (n / 10) (by omega)
-      refine ⟨by simp, ?_, ?_⟩
-      · intro d hd
-        simp only [List.mem_append, List.mem_singleton] at hd
-        rcases hd with hd | hd
-        · exact h2 d hd
-        · omega
-      · rw [digitsVal_append_one, h3]; omega
+def natDigits (n : Nat) : List Nat := if n = 0 then [0] else decDigits n
 
 theorem natDigits_spec (n : Nat) :
-    natDigits n ≠ [] ∧ (∀ d ∈ natDigits n, d < 10) ∧ digitsVal (natDigits n) = n :=
-  natDigits_go_spec n n (Nat.le_refl n)
+    natDigits n ≠ [] ∧ (∀ d ∈ natDigits n, d < 10) ∧ digitsVal (natDigits n) = n := by
+  unfold natDigits
+  split
+  · subst n; simp [digitsVal]
+  · exact ⟨fun h => ‹¬n = 0› ((decDigits_eq_nil_iff n).mp h), decDigits_lt n,
+      foldl_decDigits n⟩
+
+/-- More than one digit, the first of them `0`: a leading zero, which JSON forbids. -/
+def leadZero (ip : List Nat) : Bool := 1 < ip.length && ip.head? == some 0
+
+theorem leadZero_one (d : Nat) : leadZero [d] = false := rfl
+
+theorem leadZero_natDigits (n : Nat) : leadZero (natDigits n) = false := by
+  unfold natDigits leadZero
+  split
+  · rfl
+  · simp [decDigits_head n ‹_›]
 
 /-- The spelling of a natural number. -/
 def printNat (n : Nat) : List Char := (natDigits n).map digitChar
@@ -199,14 +190,55 @@ def afterInt (neg : Bool) (ip : List Nat) (r : List Char) : Option (JNum × List
     if q.1 = [] then none else finishDec neg (ip ++ q.1) (ip.length - 1) q.2
   | _ => some (.int (if neg then -(digitsVal ip : Int) else digitsVal ip), r)
 
-/-- A number token: `-`?, digits, then either nothing (an integer) or `.`, digits, and
-an optional `e` exponent (a decimal). -/
-def parse (input : List Char) : Option (JNum × List Char) :=
+/-- A number token as written: `-`?, digits with no leading zero, then either nothing
+(an integer) or `.`, digits, and an optional `e` exponent (a decimal). Not yet in
+canonical form (see `parse`). -/
+def parseRaw (input : List Char) : Option (JNum × List Char) :=
   let s : Bool × List Char := match input with
     | '-' :: r => (true, r)
     | r => (false, r)
   let p := readDigits s.2
-  if p.1 = [] then none else afterInt s.1 p.1 p.2
+  if p.1 = [] then none else if leadZero p.1 then none else afterInt s.1 p.1 p.2
+
+/-- The canonical form of a number read as written: a decimal whose digits are all
+zero is the integer `0`, and an integral decimal in `Int64` is that integer
+(§5.5.3.1 rules 1 and 3). -/
+def canonize : JNum → JNum
+  | .dec _ [] _ => .int 0
+  | .dec neg (d :: ds) e10 =>
+    match decInt? neg (d :: ds) e10 with
+    | some z => if InInt64 z then .int z else .dec neg (d :: ds) e10
+    | none => .dec neg (d :: ds) e10
+  | n => n
+
+/-- A number token, in canonical form; `none` for one that has none (an integer
+outside `Int64`). -/
+def parse (input : List Char) : Option (JNum × List Char) :=
+  match parseRaw input with
+  | some (n, r) => if (canonize n).wfb then some (canonize n, r) else none
+  | none => none
+
+/-- **What `parse` reads is well formed.** -/
+theorem parse_wf {input rest : List Char} {n : JNum} (h : parse input = some (n, rest)) :
+    n.WF := by
+  unfold parse at h
+  split at h
+  · split at h
+    · cases h; exact (JNum.wfb_iff _).mp ‹_›
+    · cases h
+  · cases h
+
+/-- A well-formed number is already canonical. -/
+theorem canonize_wf (n : JNum) (hn : n.WF) : canonize n = n := by
+  match n with
+  | .int z => rfl
+  | .dec neg [] e10 => exact absurd rfl hn.1
+  | .dec neg (d :: ds) e10 =>
+    have hz := hn.2.2.2.2
+    simp only [canonize]
+    cases h : decInt? neg (d :: ds) e10 with
+    | none => rfl
+    | some z => simp [hz z h]
 
 theorem afterInt_noDot (neg : Bool) (ip : List Nat) (r : List Char)
     (h : ∀ c ∈ r.head?, c ≠ '.') :
@@ -271,8 +303,8 @@ theorem mkDec_pad (neg : Bool) (j k : Nat) (ds : List Nat) (e10 : Int) (hne : ds
 
 /-- Parsing `-`? digits, followed by `rest`. -/
 theorem parse_digits (neg : Bool) (ip : List Nat) (rest : List Char)
-    (hip : ip ≠ []) (hi : ∀ d ∈ ip, d < 10) (hr : NoDigit rest) :
-    parse ((if neg then ['-'] else []) ++ (ip.map digitChar ++ rest)) = afterInt neg ip rest := by
+    (hip : ip ≠ []) (hi : ∀ d ∈ ip, d < 10) (hl : leadZero ip = false) (hr : NoDigit rest) :
+    parseRaw ((if neg then ['-'] else []) ++ (ip.map digitChar ++ rest)) = afterInt neg ip rest := by
   have hs : (match (if neg then ['-'] else []) ++ (ip.map digitChar ++ rest) with
       | '-' :: r => (true, r)
       | r => (false, r) : Bool × List Char) = (neg, ip.map digitChar ++ rest) := by
@@ -287,24 +319,24 @@ theorem parse_digits (neg : Bool) (ip : List Nat) (rest : List Char)
         · rename_i h; simp at h; exact absurd h.1 this.2.2.1
         · rfl
     · rfl
-  simp only [parse, hs, readDigits_print _ _ hi hr, hip, ite_false]
+  simp only [parseRaw, hs, readDigits_print _ _ hi hr, hip, hl, ite_false, Bool.false_eq_true]
 
 /-- Parsing `-`? digits `.` digits, followed by `rest`. -/
 theorem parse_shape (neg : Bool) (ip fp : List Nat) (rest : List Char)
     (hip : ip ≠ []) (hfp : fp ≠ []) (hi : ∀ d ∈ ip, d < 10) (hf : ∀ d ∈ fp, d < 10)
-    (hr : NoDigit rest) :
-    parse ((if neg then ['-'] else []) ++ (ip.map digitChar ++ '.' :: (fp.map digitChar ++ rest))) =
+    (hl : leadZero ip = false) (hr : NoDigit rest) :
+    parseRaw ((if neg then ['-'] else []) ++ (ip.map digitChar ++ '.' :: (fp.map digitChar ++ rest))) =
       finishDec neg (ip ++ fp) (ip.length - 1) rest := by
-  rw [parse_digits neg ip _ hip hi (fun c hc => by cases hc; decide)]
+  rw [parse_digits neg ip _ hip hi hl (fun c hc => by cases hc; decide)]
   simp only [afterInt, readDigits_print fp rest hf hr, hfp, ite_false]
 
 /-- A decimal spelling whose digits normalize to `n`, followed by a number stop. -/
 theorem parse_dec (neg : Bool) (ip fp : List Nat) (rest : List Char) (n : JNum)
     (hip : ip ≠ []) (hfp : fp ≠ []) (hi : ∀ d ∈ ip, d < 10) (hf : ∀ d ∈ fp, d < 10)
-    (hr : NumStop rest) (hm : mkDec neg (ip ++ fp) (ip.length - 1) = n) :
-    parse ((if neg then ['-'] else []) ++ (ip.map digitChar ++ '.' :: (fp.map digitChar ++ rest))) =
+    (hl : leadZero ip = false) (hr : NumStop rest) (hm : mkDec neg (ip ++ fp) (ip.length - 1) = n) :
+    parseRaw ((if neg then ['-'] else []) ++ (ip.map digitChar ++ '.' :: (fp.map digitChar ++ rest))) =
       some (n, rest) := by
-  rw [parse_shape neg ip fp rest hip hfp hi hf hr.noDigit, finishDec_noE _ _ _ _
+  rw [parse_shape neg ip fp rest hip hfp hi hf hl hr.noDigit, finishDec_noE _ _ _ _
     (fun c hc => (hr c hc).2.2), hm]
 
 theorem fracDigits_ne (fp : List Nat) : fracDigits fp ≠ [] := by
@@ -315,14 +347,15 @@ theorem fracDigits_lt (fp : List Nat) (h : ∀ d ∈ fp, d < 10) : ∀ d ∈ fra
   · simp
   · exact h
 
-theorem parse_print (n : JNum) (rest : List Char) (hn : n.WF) (hr : NumStop rest) :
-    parse (print n ++ rest) = some (n, rest) := by
+theorem parseRaw_print (n : JNum) (rest : List Char) (hn : n.WF) (hr : NumStop rest) :
+    parseRaw (print n ++ rest) = some (n, rest) := by
   cases n with
   | int z =>
     -- An integer: digits not followed by `.`.
     obtain ⟨h1, h2, h3⟩ := natDigits_spec z.natAbs
     have hnd : ∀ c ∈ rest.head?, c ≠ '.' := fun c hc => (hr c hc).2.1
-    have key := fun neg => parse_digits neg (natDigits z.natAbs) rest h1 h2 hr.noDigit
+    have key := fun neg => parse_digits neg (natDigits z.natAbs) rest h1 h2
+      (leadZero_natDigits _) hr.noDigit
     simp only [print, printInt, printNat]
     split
     · have k := key true
@@ -347,7 +380,7 @@ theorem parse_print (n : JNum) (rest : List Char) (hn : n.WF) (hr : NumStop rest
         have hfp : ∀ x ∈ fp, x < 10 := fun x hx => hd x (by simp [hx])
         have key := parse_shape neg [d] (fracDigits fp) ('e' :: (printInt e10 ++ rest))
           (by simp) (fracDigits_ne fp) (by simpa using hd0) (fracDigits_lt fp hfp)
-          (fun c hc => by cases hc; decide)
+          (leadZero_one d) (fun c hc => by cases hc; decide)
         simp only [List.map_cons, List.map_nil, List.cons_append, List.nil_append,
           List.append_assoc] at key ⊢
         rw [key]
@@ -369,7 +402,7 @@ theorem parse_print (n : JNum) (rest : List Char) (hn : n.WF) (hr : NumStop rest
           · exact hd x hx
         have h0 : digitChar 0 = '0' := by decide +kernel
         have key := parse_dec neg [0] (List.replicate (-e10 - 1).toNat 0 ++ ds) rest (.dec neg ds e10)
-          (by simp) (by simp [hne]) (by simp) hall hr (by
+          (by simp) (by simp [hne]) (by simp) hall (leadZero_one 0) hr (by
             have : [0] ++ (List.replicate (-e10 - 1).toNat 0 ++ ds) =
                 List.replicate (-e10).toNat 0 ++ ds ++ List.replicate 0 0 := by
               rw [← List.append_assoc, List.singleton_append, ← List.replicate_succ]
@@ -384,6 +417,13 @@ theorem parse_print (n : JNum) (rest : List Char) (hn : n.WF) (hr : NumStop rest
           cases ds with
           | nil => exact absurd rfl hne
           | cons a l => simp
+        have hlz : leadZero (ds.take (e10.toNat + 1) ++
+            List.replicate (e10.toNat + 1 - ds.length) 0) = false := by
+          cases ds with
+          | nil => exact absurd rfl hne
+          | cons a l =>
+            have ha : a ≠ 0 := fun e => hh (by simp [e])
+            simp [leadZero, ha]
         have hlen : (ds.take (e10.toNat + 1) ++
             List.replicate (e10.toNat + 1 - ds.length) 0).length = e10.toNat + 1 := by
           simp; omega
@@ -394,7 +434,7 @@ theorem parse_print (n : JNum) (rest : List Char) (hn : n.WF) (hr : NumStop rest
               rcases hx with hx | hx
               · exact hd x (List.mem_of_mem_take hx)
               · omega)
-          (fracDigits_lt _ (fun x hx => hd x (List.mem_of_mem_drop hx))) hr (by
+          (fracDigits_lt _ (fun x hx => hd x (List.mem_of_mem_drop hx))) hlz hr (by
             rw [hlen]
             have : ds.take (e10.toNat + 1) ++ List.replicate (e10.toNat + 1 - ds.length) 0 ++
                 fracDigits (ds.drop (e10.toNat + 1)) = List.replicate 0 0 ++ ds ++
@@ -411,6 +451,27 @@ theorem parse_print (n : JNum) (rest : List Char) (hn : n.WF) (hr : NumStop rest
                 simp [this]
             rw [this, mkDec_pad _ _ _ _ _ hne hh hl]; congr 1; omega)
         simpa only [List.append_assoc, List.cons_append] using key
+
+/-- **The number round trip.** -/
+theorem parse_print (n : JNum) (rest : List Char) (hn : n.WF) (hr : NumStop rest) :
+    parse (print n ++ rest) = some (n, rest) := by
+  rw [parse, parseRaw_print n rest hn hr]
+  simp only [canonize_wf n hn, (JNum.wfb_iff n).mpr hn, ite_true]
+
+/-! ## Canonical form of what `parse` reads -/
+
+example : parse "1.0".toList = some (.int 1, []) := by decide +kernel
+example : parse "1.0e0".toList = some (.int 1, []) := by decide +kernel
+example : parse "0.0e10".toList = some (.int 0, []) := by decide +kernel
+example : parse "-0.0".toList = some (.int 0, []) := by decide +kernel
+example : parse "2.50".toList = some (.dec false [2, 5] 0, []) := by decide +kernel
+example : parse "1.0e20".toList = some (.dec false [1] 20, []) := by decide +kernel
+example : parse "9223372036854775807".toList = some (.int 9223372036854775807, []) := by
+  decide +kernel
+example : parse "9223372036854775808".toList = none := by decide +kernel
+example : parse "007".toList = none := by decide +kernel
+example : parse "01.5".toList = none := by decide +kernel
+example : parse "0.5".toList = some (.dec false [5] (-1), []) := by decide +kernel
 
 /-- The first character of a printed number: `-` or a digit. -/
 def NumHead (c : Char) : Prop := c = '-' ∨ ∃ d, d < 10 ∧ c = digitChar d
