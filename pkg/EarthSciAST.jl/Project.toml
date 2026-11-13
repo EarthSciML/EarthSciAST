@@ -101,7 +101,7 @@ julia = "1.10"
 Blosc = "0.7"
 # 0.3 is the first release with `provider_from_esm` (EarthSciML/EarthSciIO#30),
 # which `providers_from_document` builds every source with.
-EarthSciIO = "0.3"
+EarthSciIO = "0.4"
 JSON = "1"
 SnoopCompileCore = "3"
 ZipFile = "0.10"
