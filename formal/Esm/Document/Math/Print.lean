@@ -484,12 +484,12 @@ def pr (c : Ctx) (e : Json) : Out :=
   | .str s => mkOut c.sf 10 (nameToks c s)
   | .obj kvs =>
     let sf := c.sf
-    let esc : Out :=
+    let esc : Unit → Out := fun _ =>
       match look "op" kvs, _hk : look "args" kvs with
       | some (.str o), some (.arr as) =>
         mkOut sf 10 (escToks sf o (fieldsOf kvs) (as.attach.map fun ⟨a, _⟩ => (pr c a).at sf 1))
       | _, _ => mkOut sf 10 []
-    let opn : Out :=
+    let opn : Unit → Out := fun _ =>
       match look "op" kvs, _hk : look "args" kvs with
       | some (.str o), some (.arr as) =>
         if !(coreOps.contains o) && opnOK o && (tparams c.S o).isNone &&
@@ -497,8 +497,8 @@ def pr (c : Ctx) (e : Json) : Out :=
           mkOut sf 10 (openToks sf o (as.attach.map fun ⟨a, _⟩ => (pr c a).at sf 4)
             ((fieldsOf kvs).attach.map fun ⟨kv, _⟩ =>
               keyToks sf kv.1 ++ .kw .eq :: (if isE kv.2 then (pr c kv.2).at sf 4 else jsonVal sf kv.2)))
-        else esc
-      | _, _ => esc
+        else esc ()
+      | _, _ => esc ()
     match kvs with
     | [("args", .arr as), ("op", .str o)] =>
       match kindOf o, as with
@@ -527,7 +527,7 @@ def pr (c : Ctx) (e : Json) : Out :=
         ⟨10, casesToks sf rows, rows⟩
       | .un k, [a] => mkOut sf 10 (unToks sf k ((pr c a).at sf 1))
       | .ic, [.str n] =>
-        if nameOK n then mkOut sf 10 (nameToks c n ++ icTail sf) else esc
+        if nameOK n then mkOut sf 10 (nameToks c n ++ icTail sf) else esc ()
       | .index, base :: i :: is =>
         let subs := (i :: is).attach.map fun ⟨x, _⟩ => (pr c x).at sf 1
         if subOK c.S base (i :: is) && !(subPat sf (subList sf subs)) then
@@ -537,37 +537,37 @@ def pr (c : Ctx) (e : Json) : Out :=
       | .plus, xs =>
         if 2 ≤ xs.length then
           mkOut sf 4 (sepBy [.kw .plus] (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 5))
-        else opn
+        else opn ()
       | .times, xs =>
         if 2 ≤ xs.length then mkOut sf 5 (mulToks (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 6))
-        else opn
+        else opn ()
       | .land, xs =>
         if 2 ≤ xs.length then
           mkOut sf 2 (sepBy [.kw .land] (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 3))
-        else opn
+        else opn ()
       | .lor, xs =>
         if 2 ≤ xs.length then
           mkOut sf 1 (sepBy [.kw .lor] (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 2))
-        else opn
+        else opn ()
       | .mm k, xs =>
         if 2 ≤ xs.length then
           mkOut sf 10 (callToks sf [.kw k] (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 1))
-        else opn
+        else opn ()
       | .call, xs => mkOut sf 10 (callToks sf [.opn o] (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 4))
-      | _, _ => opn
+      | _, _ => opn ()
     | [("args", .arr as), ("op", .str "D"), ("wrt", .str w)] =>
       match as with
       | [a] =>
         if w = "t" then dTime sf (pr c a)
         else if nameOK w then dSpace sf (nameToks c w) (pr c a)
-        else esc
+        else esc ()
       | a :: b :: r =>
         if w ≠ "t" ∧ nameOK w then
           mkOut sf 10 (dCall sf (nameToks c w) ((a :: b :: r).attach.map fun ⟨x, _⟩ => (pr c x).at sf 4))
-        else esc
-      | [] => esc
+        else esc ()
+      | [] => esc ()
     | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)] =>
-      if unitsOK sf u then mkOut sf 7 (qtyToks sf n (factorsOf u)) else esc
+      if unitsOK sf u then mkOut sf 7 (qtyToks sf n (factorsOf u)) else esc ()
     | [("args", .arr []), ("bindings", .obj bs), ("name", .str n), ("op", .str "apply_expression_template")] =>
       if tnameOK n && keysSorted bs && bs.all (fun kv => isE kv.2) then
         let vals := bs.attach.map fun ⟨kv, _⟩ => (kv.1, (pr c kv.2).at sf 4)
@@ -576,9 +576,9 @@ def pr (c : Ctx) (e : Json) : Out :=
         | none =>
           if bs ≠ [] && bs.all (fun kv => nameOK kv.1) then
             mkOut sf 10 (callToks sf [.opn n] (vals.map fun kv => nameToks c kv.1 ++ .kw .eq :: kv.2))
-          else esc
-      else esc
-    | _ => opn
+          else esc ()
+      else esc ()
+    | _ => opn ()
   | _ => mkOut c.sf 10 []
 termination_by sizeOf e
 decreasing_by
