@@ -63,6 +63,7 @@ import Esm.Document.Math.Escape
 import Esm.Document.Math.OpenOp
 import Esm.Document.Math.Templates
 import Esm.Document.Math.Derivs
+import Esm.Document.Math.Induct
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/
