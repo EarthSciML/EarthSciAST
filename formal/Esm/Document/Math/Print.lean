@@ -247,6 +247,19 @@ def positional (S : Sym) (n : String) (bs : List (String × Json)) : Option (Lis
     else none
   | none => none
 
+/-- Balanced text up to the `}` that closes depth 0; `\x` is one unit. -/
+def rawB : Nat → List Char → Option (List Char × List Char)
+  | d, '\\' :: c :: r => (rawB d r).map fun p => ('\\' :: c :: p.1, p.2)
+  | 0, '}' :: r => some ([], r)
+  | d + 1, '}' :: r => (rawB d r).map fun p => ('}' :: p.1, p.2)
+  | d, '{' :: r => (rawB (d + 1) r).map fun p => ('{' :: p.1, p.2)
+  | d, c :: r => (rawB d r).map fun p => (c :: p.1, p.2)
+  | _, [] => none
+
+/-- Raw text that `rawB` reads back whole (the LaTeX lexer reads `\mathrm{…}` and
+`\text{…}` contents with `rawB`). -/
+def balOK (raw : List Char) : Bool := rawB 0 (raw ++ ['}']) == some (raw, [])
+
 /-- The two-sided factor list of a units string (`[]` when it does not parse). -/
 def factorsOf (u : String) : List Esm.Units.Factor :=
   match Esm.Units.parseChars u.toList with
@@ -261,7 +274,7 @@ def unitsOK (sf : Sf) (u : String) : Bool :=
   l != [] && Esm.Units.spell l == u &&
     l.all (fun f => Esm.Units.symOK f.1 && f.2 != 0) &&
     (match sf with
-     | .latex => Esm.Units.parseLatex (Esm.Units.latex l) == some l
+     | .latex => Esm.Units.parseLatex (Esm.Units.latex l) == some l && balOK (Esm.Units.latexBody l)
      | .typst => Esm.Units.numFactors l ++ Esm.Units.denFactors l == l)
 
 /-! ## The printer -/

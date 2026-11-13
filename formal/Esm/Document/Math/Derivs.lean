@@ -304,7 +304,7 @@ theorem M_qty (c : Ctx) (u : String) (n : JNum) (hu : unitsOK c.sf u = true)
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by unfold need at hf; omega⟩
     obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
     · have hl : Esm.Units.parseLatex (Esm.Units.latex (factorsOf u)) = some (factorsOf u) := by
-        simp only [unitsOK, Bool.and_eq_true, beq_iff_eq, hsf] at hu; exact hu.2
+        simp only [unitsOK, Bool.and_eq_true, beq_iff_eq, hsf] at hu; exact hu.2.1
       have ht : qtyToks c.sf n (factorsOf u) =
           [.num n, .kw .thin, .rm (String.ofList (Esm.Units.latexBody (factorsOf u)))] := by
         simp [qtyToks, hsf]

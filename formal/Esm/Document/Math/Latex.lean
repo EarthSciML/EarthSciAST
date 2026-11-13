@@ -147,18 +147,6 @@ def render (ts : List Tok) : List Char := renderAux none ts
 
 /-! ## Lexing -/
 
-/-- Balanced text up to the `}` that closes depth 0; `\x` is one unit. -/
-def rawB : Nat → List Char → Option (List Char × List Char)
-  | d, '\\' :: c :: r => (rawB d r).map fun p => ('\\' :: c :: p.1, p.2)
-  | 0, '}' :: r => some ([], r)
-  | d + 1, '}' :: r => (rawB d r).map fun p => ('}' :: p.1, p.2)
-  | d, '{' :: r => (rawB (d + 1) r).map fun p => ('{' :: p.1, p.2)
-  | d, c :: r => (rawB d r).map fun p => (c :: p.1, p.2)
-  | _, [] => none
-
-/-- Raw text that `rawB` reads back whole. -/
-def balOK (raw : List Char) : Bool := rawB 0 (raw ++ ['}']) == some (raw, [])
-
 /-- Strip a literal prefix. -/
 def dropP : List Char → List Char → Option (List Char)
   | [], cs => some cs
