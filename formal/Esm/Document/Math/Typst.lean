@@ -207,12 +207,11 @@ def lexNum (cs : List Char) : Option (Tok × List Char) :=
     match dropP timesTen r with
     | some r2 =>
       let ez : Option (Int × List Char) :=
-        match r2 with
-        | '(' :: r3 =>
-          match Number.parseInt r3 with
+        if r2.head? = some '(' then
+          match Number.parseInt (r2.drop 1) with
           | some (z, ')' :: r4) => some (z, r4)
           | _ => none
-        | _ => Number.parseInt r2
+        else Number.parseInt r2
       match ez with
       | some (z, r5) =>
         match Number.parse (cs.take (cs.length - r.length) ++ 'e' :: Number.printInt z) with
