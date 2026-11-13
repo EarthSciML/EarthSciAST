@@ -306,18 +306,21 @@ theorem snd_lt (kv : String × Json) : sizeOf kv.2 < sizeOf kv := by
 
 /-- How a plain node (`op` and `args` only) prints, by its operator. -/
 inductive OpK where
-  | minus | div | pow | lnot | tru | fls | ite | log10 | sqrt | abs | floor | ceil | ic | index
-  | cmp (k : Kw) | fn (k : Kw) | plus | times | land | lor | mm (k : Kw) | call | other
+  | minus | div | pow | lnot | tru | fls | ite | ic | index
+  | cmp (k : Kw) | un (k : Kw) | plus | times | land | lor | mm (k : Kw) | call | other
+
+/-- Unary functions with a native spelling: their keyword (`log10` is `\log_{10}`). -/
+def unKw : List (String × Kw) :=
+  fnKw ++ [("log10", .log), ("sqrt", .sqrt), ("abs", .abs), ("floor", .floor), ("ceil", .ceil)]
 
 def kindOf (o : String) : OpK :=
-  match cmpKw.lookup o, fnKw.lookup o with
+  match cmpKw.lookup o, unKw.lookup o with
   | some k, _ => .cmp k
-  | none, some k => .fn k
+  | none, some k => .un k
   | none, none =>
     if o = "-" then .minus else if o = "/" then .div else if o = "^" then .pow
     else if o = "not" then .lnot else if o = "true" then .tru else if o = "false" then .fls
-    else if o = "ifelse" then .ite else if o = "log10" then .log10 else if o = "sqrt" then .sqrt
-    else if o = "abs" then .abs else if o = "floor" then .floor else if o = "ceil" then .ceil
+    else if o = "ifelse" then .ite
     else if o = "ic" then .ic else if o = "index" then .index else if o = "+" then .plus
     else if o = "*" then .times else if o = "and" then .land else if o = "or" then .lor
     else if o = "min" then .mm .min else if o = "max" then .mm .max
@@ -354,6 +357,17 @@ def lpC (_sf : Sf) : Tok := .kw .lp
 /-- A call: `name(args)` with call parentheses. -/
 def callToks (sf : Sf) (head : List Tok) (args : List (List Tok)) : List Tok :=
   head ++ [lpC sf] ++ sepBy [.kw .comma] args ++ [.kw .rp]
+
+/-- A unary function applied to the printed operand `t`. -/
+def unToks (sf : Sf) (k : Kw) (t : List Tok) : List Tok :=
+  match sf, k with
+  | .latex, .sqrt => [.kw .sqrt, .kw .lb] ++ t ++ [.kw .rb]
+  | .latex, .abs => [.kw .labs] ++ t ++ [.kw .rabs]
+  | .latex, .floor => [.kw .lfloor] ++ t ++ [.kw .rfloor]
+  | .latex, .ceil => [.kw .lceil] ++ t ++ [.kw .rceil]
+  | .latex, .log => [.kw .log, .kw .us, .kw .lb, .num (.int 10), .kw .rb] ++ callToks sf [] [t]
+  | .typst, .log => [.kw .log, .kw .us, .num (.int 10)] ++ callToks sf [] [t]
+  | _, k => callToks sf [.kw k] [t]
 
 /-- One cases row, `value & \text{if } condition`, then the row break. -/
 def caseRow (sf : Sf) (v cnd : List Tok) : List Tok :=
@@ -506,26 +520,7 @@ def pr (c : Ctx) (e : Json) : Out :=
       | .ite, [cnd, a, b] =>
         let rows := caseRow sf ((pr c a).at sf 1) ((pr c cnd).at sf 1) ++ (pr c b).crow
         ⟨10, casesToks sf rows, rows⟩
-      | .log10, [a] =>
-        mkOut sf 10 (match sf with
-          | .latex => [.kw .log, .kw .us, .kw .lb, .num (.int 10), .kw .rb] ++ callToks sf [] [(pr c a).at sf 1]
-          | .typst => [.kw .log, .kw .us, .num (.int 10)] ++ callToks sf [] [(pr c a).at sf 1])
-      | .sqrt, [a] =>
-        mkOut sf 10 (match sf with
-          | .latex => [.kw .sqrt, .kw .lb] ++ (pr c a).at sf 1 ++ [.kw .rb]
-          | .typst => callToks sf [.kw .sqrt] [(pr c a).at sf 1])
-      | .abs, [a] =>
-        mkOut sf 10 (match sf with
-          | .latex => [.kw .labs] ++ (pr c a).at sf 1 ++ [.kw .rabs]
-          | .typst => callToks sf [.kw .abs] [(pr c a).at sf 1])
-      | .floor, [a] =>
-        mkOut sf 10 (match sf with
-          | .latex => [.kw .lfloor] ++ (pr c a).at sf 1 ++ [.kw .rfloor]
-          | .typst => callToks sf [.kw .floor] [(pr c a).at sf 1])
-      | .ceil, [a] =>
-        mkOut sf 10 (match sf with
-          | .latex => [.kw .lceil] ++ (pr c a).at sf 1 ++ [.kw .rceil]
-          | .typst => callToks sf [.kw .ceil] [(pr c a).at sf 1])
+      | .un k, [a] => mkOut sf 10 (unToks sf k ((pr c a).at sf 1))
       | .ic, [.str n] =>
         if nameOK n then mkOut sf 10 (nameToks c n ++ icTail sf) else esc
       | .index, base :: i :: is =>
@@ -534,7 +529,6 @@ def pr (c : Ctx) (e : Json) : Out :=
           mkOut sf 9 (nameToks c (match base with | .str s => s | _ => "") ++ subList sf subs)
         else mkOut sf 9 ((pr c base).at sf 10 ++ [.kw .lbk] ++ sepBy [.kw .comma] subs ++ [.kw .rbk])
       | .cmp k, [a, b] => mkOut sf 3 ((pr c a).at sf 4 ++ .kw k :: (pr c b).at sf 4)
-      | .fn k, [a] => mkOut sf 10 (callToks sf [.kw k] [(pr c a).at sf 1])
       | .plus, xs =>
         if 2 ≤ xs.length then
           mkOut sf 4 (sepBy [.kw .plus] (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 5))

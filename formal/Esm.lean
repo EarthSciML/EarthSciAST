@@ -42,6 +42,9 @@ import Esm.Document.Math.Print
 import Esm.Document.Math.Parse
 import Esm.Document.Math.Latex
 import Esm.Document.Math.Typst
+import Esm.Document.Math.View
+import Esm.Document.Math.Names
+import Esm.Document.Math.Levels
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/
