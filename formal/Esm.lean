@@ -45,6 +45,12 @@ import Esm.Document.Math.Typst
 import Esm.Document.Math.View
 import Esm.Document.Math.Names
 import Esm.Document.Math.Levels
+import Esm.Document.Math.RoundTrip
+import Esm.Document.Math.Kinds
+import Esm.Document.Math.Atoms
+import Esm.Document.Math.Main
+import Esm.Document.Math.Cases1
+import Esm.Document.Math.Cases2
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/

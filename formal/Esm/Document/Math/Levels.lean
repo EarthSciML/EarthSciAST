@@ -68,7 +68,7 @@ theorem pPrim_minus (c : Ctx) (f : Nat) (r : List Tok) : pPrim c f (.kw .minus :
   | succ f =>
     rw [pPrim.eq_def]
     cases r with
-    | nil => simp [pNamePrim, pName, pSeg, formulaOf]
+    | nil => simp [pNamePrim, pName, pSeg, formulaOf, eulerHead]
     | cons t r => simp [fnOf]
 
 theorem pPrim_lnot (c : Ctx) (f : Nat) (r : List Tok) : pPrim c f (.kw .lnot :: r) = none := by
@@ -77,7 +77,7 @@ theorem pPrim_lnot (c : Ctx) (f : Nat) (r : List Tok) : pPrim c f (.kw .lnot :: 
   | succ f =>
     rw [pPrim.eq_def]
     cases r with
-    | nil => simp [pNamePrim, pName, pSeg, formulaOf]
+    | nil => simp [pNamePrim, pName, pSeg, formulaOf, eulerHead]
     | cons t r => simp [fnOf]
 
 theorem pPost_none {c : Ctx} {ts : List Tok} (h : ∀ f, pPrim c f ts = none) (f : Nat) :

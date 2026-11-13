@@ -308,23 +308,24 @@ theorem snd_lt (kv : String × Json) : sizeOf kv.2 < sizeOf kv := by
 inductive OpK where
   | minus | div | pow | lnot | tru | fls | ite | ic | index
   | cmp (k : Kw) | un (k : Kw) | plus | times | land | lor | mm (k : Kw) | call | other
+  deriving DecidableEq
 
 /-- Unary functions with a native spelling: their keyword (`log10` is `\log_{10}`). -/
 def unKw : List (String × Kw) :=
   fnKw ++ [("log10", .log), ("sqrt", .sqrt), ("abs", .abs), ("floor", .floor), ("ceil", .ceil)]
 
+/-- The plain-node operators with their own notation. -/
+def kindTable : List (String × OpK) :=
+  [("-", .minus), ("/", .div), ("^", .pow), ("not", .lnot), ("true", .tru), ("false", .fls),
+    ("ifelse", .ite), ("ic", .ic), ("index", .index), ("+", .plus), ("*", .times),
+    ("and", .land), ("or", .lor), ("min", .mm .min), ("max", .mm .max)]
+
 def kindOf (o : String) : OpK :=
-  match cmpKw.lookup o, unKw.lookup o with
-  | some k, _ => .cmp k
-  | none, some k => .un k
-  | none, none =>
-    if o = "-" then .minus else if o = "/" then .div else if o = "^" then .pow
-    else if o = "not" then .lnot else if o = "true" then .tru else if o = "false" then .fls
-    else if o = "ifelse" then .ite
-    else if o = "ic" then .ic else if o = "index" then .index else if o = "+" then .plus
-    else if o = "*" then .times else if o = "and" then .land else if o = "or" then .lor
-    else if o = "min" then .mm .min else if o = "max" then .mm .max
-    else if callOps.contains o then .call else .other
+  match cmpKw.lookup o, unKw.lookup o, kindTable.lookup o with
+  | some k, _, _ => .cmp k
+  | none, some k, _ => .un k
+  | none, none, some k => k
+  | none, none, none => if callOps.contains o then .call else .other
 
 /-- The printed form of an expression and its level. `crow` is the form as the last
 rows of a `cases` block: an `ifelse` chain contributes its rows, anything else is the
@@ -334,10 +335,8 @@ structure Out where
   toks : List Tok
   crow : List Tok
 
-def mkOut (sf : Sf) (l : Nat) (t : List Tok) : Out :=
-  ⟨l, t, match sf with
-    | .latex => t ++ [.kw .amp, .txt "otherwise"]
-    | .typst => t ++ [.kw .amp, .txt "otherwise"]⟩
+def mkOut (_sf : Sf) (l : Nat) (t : List Tok) : Out :=
+  ⟨l, t, t ++ [.kw .amp, .txt "otherwise"]⟩
 
 def Out.at (sf : Sf) (L : Nat) (o : Out) : List Tok := wrap sf L (o.lvl, o.toks)
 

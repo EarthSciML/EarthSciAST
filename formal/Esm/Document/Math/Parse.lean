@@ -217,6 +217,14 @@ def icTailP (sf : Sf) : List Tok → Option (List Tok)
 def dCallNode (w : String) (xs : List Json) : Json :=
   .obj [("args", .arr xs), ("op", .str "D"), ("wrt", .str w)]
 
+/-- The input starts with Euler's number raised to a power: an upright `e`, or an
+italic `e` when no variable `e` is declared. -/
+def eulerHead (c : Ctx) : List Tok → Bool
+  | .rm raw :: .kw .caret :: _ => raw == "e"
+  | .ups ps :: .kw .caret :: _ => ps == [("e", "")]
+  | .letter ch :: .kw .caret :: _ => ch == 'e' && !(c.S.names.contains "e")
+  | _ => false
+
 /-- A name, or an initial condition `N(t_{0})`. -/
 def pNamePrim (c : Ctx) (ts : List Tok) : Option (Json × List Tok) :=
   match pName c.sf ts with
@@ -705,12 +713,7 @@ def pPrim (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
     | _ =>
       -- a name: `\mathrm{e}^{x}` / `upright("e")^x` and an undeclared italic `e^{x}`
       -- read as `exp`; `N(t_{0})` is an initial condition
-      match ts with
-      | .rm "e" :: .kw .caret :: r => pEulerExp c f r
-      | .ups [("e", "")] :: .kw .caret :: r => pEulerExp c f r
-      | .letter 'e' :: .kw .caret :: r =>
-        if c.S.names.contains "e" then pNamePrim c ts else pEulerExp c f r
-      | _ => pNamePrim c ts
+      if eulerHead c ts then pEulerExp c f (ts.drop 2) else pNamePrim c ts
 
 /-- `\exp` written as a power of e. -/
 def pEulerExp (c : Ctx) : Nat → List Tok → Option (Json × List Tok)

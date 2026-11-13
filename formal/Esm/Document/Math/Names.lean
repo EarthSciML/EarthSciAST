@@ -121,34 +121,40 @@ theorem baseTok_seg (sf : Sf) (b : List Char) (hb : isSingle b = true) (rest : L
     · rename_i c; exact absurd rfl (hne c)
     · simp [pSeg, String.toList_ofList, hb]
 
-theorem formula_seg (sf : Sf) (g : List Char) (hf : isFormula g = true) (rest : List Tok) :
-    pSeg sf (formTok sf g :: rest) = some (g, rest) := by
+theorem pieces_cat {g : List Char} (hf : isFormula g = true) :
+    (pieces g).flatMap (fun p => p.1 ++ p.2) = g := by
+  have := hf; simp only [isFormula, Bool.and_eq_true, beq_iff_eq] at this; exact this.2.1.1
+
+theorem decode_formulaRaw {g : List Char} (hf : isFormula g = true) :
+    decodeFormula (formulaRaw g) = g := by
   have hall : g.all (fun c => isLetter c || isDig c) = true := by
     have := hf; simp only [isFormula, Bool.and_eq_true] at this; exact this.1.1
-  have hcat : (pieces g).flatMap (fun p => p.1 ++ p.2) = g := by
-    have := hf; simp only [isFormula, Bool.and_eq_true, beq_iff_eq] at this; exact this.2.1.1
+  have hcat := pieces_cat hf
+  unfold decodeFormula formulaRaw
+  have hok : ∀ c ∈ g, (c != '_' && c != '{' && c != '}') = true := by
+    intro c hc
+    have := List.all_eq_true.mp hall c hc
+    simp only [Bool.or_eq_true, isLetter, isDig, Bool.and_eq_true, decide_eq_true_eq] at this
+    simp only [Bool.and_eq_true, bne_iff_ne, ne_eq]
+    refine ⟨⟨?_, ?_⟩, ?_⟩ <;> rintro rfl <;> simp at this
+  conv_rhs => rw [← hcat]
+  rw [List.filter_flatMap]
+  apply List.flatMap_congr
+  intro p hp
+  have hsub : ∀ c ∈ p.1 ++ p.2, c ∈ g := by
+    intro c hc; rw [← hcat]; exact List.mem_flatMap.mpr ⟨p, hp, hc⟩
+  have h1 : p.1.filter (fun c => c != '_' && c != '{' && c != '}') = p.1 :=
+    List.filter_eq_self.mpr fun c hc => hok c (hsub c (List.mem_append_left _ hc))
+  have h2 : p.2.filter (fun c => c != '_' && c != '{' && c != '}') = p.2 :=
+    List.filter_eq_self.mpr fun c hc => hok c (hsub c (List.mem_append_right _ hc))
+  split <;> simp [List.filter_append, *]
+
+theorem formula_seg (sf : Sf) (g : List Char) (hf : isFormula g = true) (rest : List Tok) :
+    pSeg sf (formTok sf g :: rest) = some (g, rest) := by
+  have hcat := pieces_cat hf
   cases sf with
   | latex =>
-    have hdec : decodeFormula (formulaRaw g) = g := by
-      unfold decodeFormula formulaRaw
-      have hok : ∀ c ∈ g, (c != '_' && c != '{' && c != '}') = true := by
-        intro c hc
-        have := List.all_eq_true.mp hall c hc
-        simp only [Bool.or_eq_true, isLetter, isDig, Bool.and_eq_true, decide_eq_true_eq] at this
-        simp only [Bool.and_eq_true, bne_iff_ne, ne_eq]
-        refine ⟨⟨?_, ?_⟩, ?_⟩ <;> rintro rfl <;> simp at this
-      conv_rhs => rw [← hcat]
-      rw [List.filter_flatMap]
-      apply List.flatMap_congr
-      intro p hp
-      have hsub : ∀ c ∈ p.1 ++ p.2, c ∈ g := by
-        intro c hc; rw [← hcat]; exact List.mem_flatMap.mpr ⟨p, hp, hc⟩
-      have h1 : p.1.filter (fun c => c != '_' && c != '{' && c != '}') = p.1 :=
-        List.filter_eq_self.mpr fun c hc => hok c (hsub c (List.mem_append_left _ hc))
-      have h2 : p.2.filter (fun c => c != '_' && c != '{' && c != '}') = p.2 :=
-        List.filter_eq_self.mpr fun c hc => hok c (hsub c (List.mem_append_right _ hc))
-      split <;> simp [List.filter_append, *]
-    simp [pSeg, formTok, formulaOf, String.toList_ofList, hdec, hf]
+    simp [pSeg, formTok, formulaOf, String.toList_ofList, decode_formulaRaw hf, hf]
   | typst =>
     have hcat' : ((pieces g).map (fun p => (String.ofList p.1, String.ofList p.2))).flatMap
         (fun p => p.1.toList ++ p.2.toList) = g := by
