@@ -67,6 +67,7 @@ def table : List (String × U) := [
   ("K", mk temp 1), ("A", mk current 1), ("cd", mk lum 1), ("rad", mk angle 1),
   -- Mass
   ("g", mk mass (1 / 1000)), ("mg", mk mass (1 / 10 ^ 6)), ("ug", mk mass (1 / 10 ^ 9)),
+  ("ng", mk mass (1 / 10 ^ 12)),
   ("lb", mk mass 0.45359237), ("short_ton", mk mass 907.18474), ("tonne", mk mass 1000),
   -- Length
   ("dm", mk len (1 / 10)), ("cm", mk len (1 / 100)), ("mm", mk len (1 / 1000)),
@@ -83,7 +84,8 @@ def table : List (String × U) := [
   ("kmol", mk amount 1000), ("mmol", mk amount (1 / 1000)), ("umol", mk amount (1 / 10 ^ 6)),
   ("nmol", mk amount (1 / 10 ^ 9)), ("M", mk conc 1000),
   -- Derived
-  ("Hz", mk freq 1), ("N", mk force 1), ("Pa", mk pressure 1), ("J", mk energy 1),
+  ("Hz", mk freq 1), ("N", mk force 1), ("mN", mk force (1 / 1000)),
+  ("dyn", mk force (1 / 10 ^ 5)), ("Pa", mk pressure 1), ("J", mk energy 1),
   ("kJ", mk energy 1000), ("MJ", mk energy (10 ^ 6)),
   ("cal", mk energy 4.184), ("kcal", mk energy 4184),
   ("W", mk power 1), ("kW", mk power 1000), ("MW", mk power (10 ^ 6)),
