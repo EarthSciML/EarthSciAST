@@ -71,9 +71,10 @@ jobs:
 
     # The inventory and token checks need no Lean, so they run first and
     # report even when the Lean build fails.
-    - name: Audit inventory and tokens
+    - name: Audit inventory, tokens and notation
       run: |
         python3 scripts/formal-audit.py tokens
+        python3 scripts/formal-audit.py notation
         python3 scripts/formal-audit.py inventory
 
     # The Lean ASTs of the standard-library templates are generated from

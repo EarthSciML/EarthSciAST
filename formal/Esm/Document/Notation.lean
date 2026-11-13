@@ -116,7 +116,7 @@ def coreOps : List OpRow := [
     typst := "(dif N)/(dif t)" },
   { op := "D", shape := "spatial wrt", tier := native,
     latex := r"\frac{\partial u}{\partial x}; with trailing operands \operatorname{D}_{x}(u, a, b)",
-    typst := "(partial u)/(partial x)" },
+    typst := r#"(partial u)/(partial x); with trailing operands op("D")_(x)(u, a, b)"# },
   { op := "ic", tier := native, latex := "N(t_{0}) = …, equation left-hand side only",
     typst := "N(t_0) = …" },
   { op := "Pre", tier := call, latex := r"\operatorname{Pre}(x)", typst := r#"op("Pre")(x)"# },
@@ -125,16 +125,19 @@ def coreOps : List OpRow := [
   { op := "const", shape := "scalar", tier := native,
     latex := r"the number; with units 3\,\mathrm{m/s}", typst := r#"3 thin upright("m")\/upright("s")"# },
   { op := "const", shape := "array of at most 16 entries", tier := native,
-    latex := "bmatrix (a column for rank 1)", typst := "vec(…), mat(…)" },
+    latex := r"bmatrix (a column for rank 1); with units, a thin space and the unit after it, as for a scalar: egin{bmatrix}1\2\end{bmatrix}\,\mathrm{m}",
+    typst := r#"vec(…), mat(…); with units vec(1, 2) thin upright("m")"# },
   { op := "const", shape := "array of more than 16 entries", tier := escape,
-    latex := "a named reference into a data block keyed by the JSON path", typst := "same" },
+    latex := "a named reference into a data block keyed by the JSON path; the block holds the values and the units",
+    typst := "same" },
   { op := "index", tier := native, latex := "A_{i, j}; A[i, j] on a subscript collision",
     typst := "A_(i, j)" },
-  { op := "faq", shape := "semiring sum, product, max or min; no join, distinct or key",
+  { op := "faq",
+    shape := r#"no semiring (or "sum_product"), reduce "+", "*", "max" or "min"; no join, distinct or key"#,
     tier := native,
-    latex := r"\sum \prod \max \min over the reduced indices; output indices as \left[ … \right]_{i \in S}",
-    typst := "sum_(…), product_(…), lr([…])_(…)" },
-  { op := "faq", shape := "join, distinct, key, or another semiring", tier := escape,
+    latex := r"one \sum, \prod, \max or \min over all reduced indices. A range prints as k \in S (from), k \in S(i) (from with of) or a \le k \le b (dense [a, b]); a lone dense range as \sum_{k=a}^{b}. Several ranges, then the filter, stack in \substack; a range row is never an expression, so the filter row is unambiguous. Output indices as \left[ … \right] with the same range forms in its subscript",
+    typst := r#"sum_(…), product_(…), max_(…), min_(…) with the same range forms (k in S, k in S(i), a <= k <= b), rows stacked with \ and the filter last; output indices as lr([…])_(…)"# },
+  { op := "faq", shape := r#"join, distinct, key, or a semiring other than "sum_product""#, tier := escape,
     latex := r"\esm", typst := "esm.node" },
   { op := "makearray", tier := escape, latex := r"\esm", typst := "esm.node" },
   { op := "broadcast", tier := escape, latex := r"\esm", typst := "esm.node" },
@@ -146,8 +149,10 @@ def coreOps : List OpRow := [
     typst := r#"op("name")(args)"# }
 ]
 
-/-- The evaluable-core operator names (spec §4.2). Adding an operator to the spec adds
-it here, and `coreOps_covers` fails until it has a row. -/
+/-- The evaluable-core operator names (spec §4.2). `scripts/formal-audit.py notation`
+checks this list against the operator tables of spec §4.2, so an operator added to the
+spec fails that audit until it is listed here, and then `coreOps_covers` fails until it
+has a row. -/
 def coreOpNames : List String := [
   "+", "-", "*", "/", "^", "pow", "neg",
   "<", "<=", ">", ">=", "==", "!=", "and", "or", "not", "true", "false", "ifelse",
@@ -215,7 +220,9 @@ theorem precedence_levels_strict :
 /-! ## Names -/
 
 /-- The shapes a declared name can take. The printer decides the shape from the name
-alone; a collision between two names that print alike switches both to `explicit`. -/
+alone. `single`, `subscripted`, `formula` and `word` partition the names and each keeps
+every character of the name, so two distinct names never print alike (a Phase 2 lemma);
+the printer never needs `explicit`. -/
 inductive NameShape where
   /-- One letter, or a Greek letter name: `T`, `lambda`. Prints italic. -/
   | single
@@ -228,7 +235,12 @@ inductive NameShape where
   /-- Any other multi-letter name: `half_life`, `RT`, `k1`. Prints italic as one word
   (ISO 80000-2). -/
   | word
-  /-- The collision fallback: the literal name in full, `\mathit{…}` / `italic("…")`. -/
+  /-- The literal name in full, `\mathit{…}` / `italic("…")`, accepted on input for ANY
+  name and read as that name. It is how an author resolves a juxtaposition the parser
+  rejects: with `R`, `T` and `RT` all declared, bare `RT` is refused, and the author
+  writes `\mathit{RT}` for the name or `R T` for the product. For a `word` name it is the
+  same text as the printed form; for the other shapes it differs (`T_air` prints
+  `T_{\mathrm{air}}`, and `\mathit{T\_air}` reads back as the same name). -/
   | explicit
   deriving DecidableEq, Repr
 
@@ -246,7 +258,7 @@ def nameRules : List NameRule := [
   { shape := .formula, example_ := "NO2", latex := r"\mathrm{NO_{2}}", typst := r#"upright("NO")_2"# },
   { shape := .word, example_ := "half_life", latex := r"\mathit{half\_life}",
     typst := r#"italic("half_life")"# },
-  { shape := .explicit, example_ := "RT", latex := r"\mathit{RT}", typst := r#"italic("RT")"# }
+  { shape := .explicit, example_ := "T_air", latex := r"\mathit{T\_air}", typst := r#"italic("T_air")"# }
 ]
 
 /-- A scoped reference (`Chem.O3`) prints each segment by its own rule, joined by `.`.
@@ -273,10 +285,14 @@ def scientificLatex : String := r"1.8 \times 10^{-12}"
 mhchem `\ce{…}` in Markdown, typsium `#ce[…]` in Typst, the rate over the arrow. The
 printer writes a restricted spelling both packages read correctly: every
 stoichiometric coefficient and every non-formula species name is quoted as math, and
-an empty side is the empty-set symbol. -/
+an empty side is the empty-set symbol. Names inside the quoted math follow the name rules
+(the rate `k_1` is `k_{\mathrm{1}}`, the word name `SO4_aer` is `\mathit{SO4\_aer}`); a
+formula-shaped species such as `NO2` is left to the package. -/
 
-def reactionLatex : String := r"\ce{$\varnothing$ ->[$k_{1}$] $0.5$ \text{SO4\_aer} + 2 NO2}"
-def reactionTypst : String := r#"#ce[$emptyset$ ->[$k_1$] $0.5$ $"SO4_aer"$ + 2 NO2]"#
+def reactionLatex : String :=
+  r"\ce{$\varnothing$ ->[$k_{\mathrm{1}}$] $0.5$ $\mathit{SO4\_aer}$ + $2$ NO2}"
+def reactionTypst : String :=
+  r#"#ce[$emptyset$ ->[$k_(upright("1"))$] $0.5$ $italic("SO4_aer")$ + $2$ NO2]"#
 
 /-- Pinned with the format version. -/
 def typstVersion : String := "0.15.1"
@@ -372,18 +388,29 @@ structure Variant where
   deriving Repr
 
 def variants : List Variant := [
-  { spelling := r"\frac{dN}{dt}, \frac{\partial N}{\partial t}, \dot{N}", surface := .latex,
+  { spelling := r"\frac{\partial N}{\partial t}, \dot{N}", surface := .latex,
     readsAs := "D(N, wrt t)" },
-  { spelling := "(d N)/(d t), dot(N)", surface := .typst, readsAs := "D(N, wrt t)" },
-  { spelling := r"e^{x}, \mathrm{e}^{x}", surface := .both, readsAs := "exp(x)" },
+  { spelling := "dot(N)", surface := .typst, readsAs := "D(N, wrt t)" },
+  { spelling := r"\frac{dN}{dt}, \frac{d N}{d t} with an italic d", surface := .latex,
+    readsAs := r"D(N, wrt t) only when no variable d is declared and the fraction is exactly d<name> over d<name>; with d declared, the quotient (d N)/(d t), which is what the printer means by that text" },
+  { spelling := "(d N)/(d t) with an italic d", surface := .typst,
+    readsAs := "D(N, wrt t) under the same condition as the LaTeX row; otherwise the quotient" },
+  { spelling := r#"\mathrm{e}^{x}, upright(e)^x"#, surface := .both, readsAs := "exp(x), always" },
+  { spelling := "e^{x}, e^x with an italic e", surface := .both,
+    readsAs := "exp(x) only when no variable e is declared (a bare undeclared e is otherwise an error, so this changes the reading of no valid document); with e declared, the variable e raised to x" },
   { spelling := r"\log", surface := .latex, readsAs := r"log, the same as \ln" },
-  { spelling := r"\left( \right), ( ), \bigl( \bigr), [ ] as grouping", surface := .both,
-    readsAs := "grouping" },
+  { spelling := r"\left( \right), ( ), \bigl( \bigr)", surface := .both, readsAs := "grouping" },
+  { spelling := "[ ] where no operand precedes it: at the start of an expression, after an operator, or after an opening delimiter",
+    surface := .both, readsAs := "grouping" },
   { spelling := r"\cdot, \times, juxtaposition", surface := .both,
     readsAs := "* (except the scientific-literal shape)" },
   { spelling := "a / b inline", surface := .latex, readsAs := "/" },
   { spelling := r"\leq \geq \neq", surface := .latex, readsAs := "comparisons" },
-  { spelling := "A[i, j] anywhere", surface := .both, readsAs := "index" },
+  { spelling := "[i, j] directly after an operand (a name, a closing ) or ]), in any position",
+    surface := .both,
+    readsAs := r"index, never a product: k [A + B] is index(k, A + B); the faq output form \left[ … \right]_{i \in S} is a whole term, so x \left[ … \right]_{i \in S} is a product" },
+  { spelling := r#"\mathit{name}, italic("name") for any declared name"#, surface := .both,
+    readsAs := "that name (the explicit name shape); bare juxtaposition that could be one name or a product of several is rejected" },
   { spelling := "named template arguments", surface := .both, readsAs := "apply_expression_template" },
   { spelling := "per-model declarations table", surface := .markdown, readsAs := "the declarations" },
   { spelling := "pow(x, n) and neg(x) in the call form", surface := .both,

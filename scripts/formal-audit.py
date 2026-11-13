@@ -20,6 +20,8 @@ Subcommands:
               axioms are listed.
   tokens      No escape-hatch token appears in any `.lean` file outside a
               registered verified checker.
+  notation    The operator list of the document notation table
+              (formal/Esm/Document/Notation.lean) is the operator set of spec §4.2.
   all         All three, with `--lean`.
 
 Exit status is 0 only if every requested check passes.
@@ -389,6 +391,7 @@ def run_lean_checks(checks, report):
 
 _IDENT_CHAR = re.compile(r"[\w'.!?»]")
 _CHAR_LITERAL = re.compile(r"'(\\[^']+|[^'\\])'")
+_RAW_STRING_OPEN = re.compile(r'r(#*)"')
 
 
 def strip_comments_and_strings(text):
@@ -418,6 +421,16 @@ def strip_comments_and_strings(text):
                     depth, j = depth - 1, j + 2
                 else:
                     j += 1
+            blank(text[i:j])
+            i = j
+        elif (m := _RAW_STRING_OPEN.match(text, i)) and not (
+            i and _IDENT_CHAR.match(text[i - 1])
+        ):
+            # A raw string `r"…"` / `r#"…"#` has no escapes; it ends at the first
+            # `"` followed by as many `#` as opened it.
+            close = '"' + m.group(1)
+            j = text.find(close, m.end())
+            j = n if j < 0 else j + len(close)
             blank(text[i:j])
             i = j
         elif text[i] == '"':
@@ -459,6 +472,62 @@ def check_tokens(args):
     return report.done("tokens")
 
 
+NOTATION = FORMAL / "Esm" / "Document" / "Notation.lean"
+# Operators the notation table covers that no §4.2 `Op` table lists: `neg` is named
+# only in §4.2's derivative-resolution table and §4.3.4's scalar-operator list, and
+# `apply_expression_template` is defined in §9.6.4.
+NOTATION_EXTRA_OPS = {"neg", "apply_expression_template"}
+
+
+def spec_core_ops(report):
+    """The operator names in the `Op` tables of spec §4.2, and its Elementary
+    Functions list. The Removed-ops table is headed `Removed`, so it is skipped."""
+    lines = (ROOT / "esm-spec.md").read_text(encoding="utf-8").split("\n")
+    try:
+        start = next(i for i, l in enumerate(lines) if l.startswith("### 4.2 "))
+    except StopIteration:
+        report.error("esm-spec.md: no `### 4.2 ` heading")
+        return set()
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("### ")), len(lines))
+    ops, in_op_table = set(), False
+    for i in range(start, end):
+        line = lines[i]
+        if line.startswith("|"):
+            first = line.strip().strip("|").split("|")[0].strip()
+            if first == "Op":
+                in_op_table = True
+            elif in_op_table and not set(first) <= set("-: "):
+                ops.update(re.findall(r"`([^`]+)`", first))
+        else:
+            in_op_table = False
+        if line.startswith("#### Elementary Functions"):
+            j = i + 1
+            while j < end and not lines[j].strip():
+                j += 1
+            ops.update(re.findall(r"`([^`]+)`", lines[j]))
+    if not ops:
+        report.error("esm-spec.md §4.2: no operator found; did the table layout change?")
+    return ops
+
+
+def check_notation(args):
+    """`coreOpNames` in Notation.lean is the §4.2 operator set, so the Lean theorem
+    `coreOps_covers` (every name has a notation row) covers the spec."""
+    report = Report()
+    text = NOTATION.read_text(encoding="utf-8")
+    m = re.search(r"def coreOpNames : List String := \[(.*?)\]", text, re.S)
+    if not m:
+        report.error(f"{NOTATION.relative_to(ROOT)}: no `def coreOpNames` list")
+        return report.done("notation")
+    lean = set(re.findall(r'"([^"]*)"', m.group(1)))
+    spec = spec_core_ops(report) | NOTATION_EXTRA_OPS
+    for op in sorted(spec - lean):
+        report.error(f"spec §4.2 operator `{op}` is missing from coreOpNames (and needs a notation row)")
+    for op in sorted(lean - spec):
+        report.error(f"coreOpNames has `{op}`, which no spec §4.2 operator table lists")
+    return report.done("notation")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -468,6 +537,7 @@ def main():
     reg = sub.add_parser("registry")
     reg.add_argument("--lean", action="store_true", help="elaborate theorems against statements")
     sub.add_parser("tokens")
+    sub.add_parser("notation")
     sub.add_parser("all")
     args = ap.parse_args()
     if args.cmd == "inventory":
@@ -476,10 +546,14 @@ def main():
         ok = check_registry(args)
     elif args.cmd == "tokens":
         ok = check_tokens(args)
+    elif args.cmd == "notation":
+        ok = check_notation(args)
     else:
         args.source = args.lines = None
         args.lean = True
-        ok = all([check_tokens(args), check_inventory(args), check_registry(args)])
+        ok = all(
+            [check_tokens(args), check_notation(args), check_inventory(args), check_registry(args)]
+        )
     sys.exit(0 if ok else 1)
 
 
