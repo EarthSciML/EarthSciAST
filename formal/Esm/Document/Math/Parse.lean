@@ -213,6 +213,18 @@ def icTailP (sf : Sf) : List Tok → Option (List Tok)
     | _, _ => none
   | _ => none
 
+/-- A LaTeX field value that is JSON starts with `{`, `[`, a string or a word. -/
+def jsonStart : List Tok → Bool
+  | [] => false
+  | t :: _ => (t matches .kw .lb) || (t matches .kw .lbk) || (t matches .jstr _) || (t matches .word _)
+
+/-- A field key: LaTeX `\mathrm{key} =`, Typst `upright("key") =`. -/
+def keyOf (c : Ctx) (ts : List Tok) : Option (String × List Tok) :=
+  match c.sf, ts with
+  | .latex, .rm raw :: .kw .eq :: r => some (String.ofList (unescT raw.toList), r)
+  | .typst, .ups [(k, "")] :: .kw .eq :: r => some (k, r)
+  | _, _ => none
+
 /-- A spatial derivative with trailing operands. -/
 def dCallNode (w : String) (xs : List Json) : Json :=
   .obj [("args", .arr xs), ("op", .str "D"), ("wrt", .str w)]
@@ -518,25 +530,24 @@ def pCallItems (c : Ctx) : Nat → List Tok → Option (List CallArg × List Tok
 def pFields (c : Ctx) : Nat → List Tok → Option (List (String × Json) × List Tok)
   | 0, _ => none
   | f + 1, ts =>
-    let key : Option (String × List Tok) :=
-      match c.sf, ts with
-      | .latex, .rm raw :: .kw .eq :: r => some (String.ofList (unescT raw.toList), r)
-      | .typst, .ups [(k, "")] :: .kw .eq :: r => some (k, r)
-      | _, _ => none
-    match key with
+    match keyOf c ts with
     | some (k, r) =>
-      let val : Option (Json × List Tok) :=
-        match c.sf, r with
-        | .typst, .code v :: r' => some (v, r')
-        | .latex, t :: _ =>
-          if t matches .kw .lb || t matches .kw .lbk || t matches .jstr _ || t matches .word _
-          then pJson f r else pAdd c f r
-        | _, _ => pAdd c f r
-      match val with
+      match pVal c f r with
       | some (v, .kw .comma :: r') => (pFields c f r').map fun p => ((k, v) :: p.1, p.2)
       | some (v, r') => some ([(k, v)], r')
       | none => none
     | none => none
+
+/-- A field value: JSON (LaTeX JSON tokens, Typst `#value`) or an expression. -/
+def pVal (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
+  | 0, _ => none
+  | f + 1, r =>
+    match c.sf with
+    | .typst =>
+      match r with
+      | .code v :: r' => some (v, r')
+      | _ => pAdd c f r
+    | .latex => if jsonStart r then pJson f r else pAdd c f r
 
 /-- `\operatorname{n}(…)`: a call-form core operator, a deprecated one (rewritten), a
 template (by the symbol table, positional or named), or an open operator. -/
