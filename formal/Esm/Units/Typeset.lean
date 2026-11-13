@@ -35,16 +35,13 @@ namespace Esm.Units
 
 /-! ## Shared parsing pieces -/
 
-/-- Strip a literal prefix. -/
-def dropPfx : List Char → List Char → Option (List Char)
-  | [], cs => some cs
-  | p :: ps, c :: cs => if p = c then dropPfx ps cs else none
-  | _ :: _, [] => none
+/-- Stripping a literal prefix (`List.dropPrefix?`) undoes prepending it.
 
-theorem dropPfx_append (p rest : List Char) : dropPfx p (p ++ rest) = some rest := by
-  induction p with
-  | nil => rfl
-  | cons c p ih => simp [dropPfx, ih]
+The literal prefixes below that are spelled as `String.toList` are `@[noinline]`: the
+compiler otherwise specializes `List.dropPrefix?` to the literal and tries to evaluate
+`String.toList` at compile time, which makes compiling these definitions very slow. -/
+theorem dropPrefix?_append (p rest : List Char) : (p ++ rest).dropPrefix? p = some rest :=
+  List.dropPrefix?_append_of_beq rest (beq_self_eq_true p)
 
 /-- A run of digits, read as a natural number. -/
 def pDigits (cs : List Char) : Option (ℕ × List Char) :=
@@ -79,7 +76,7 @@ def pSepBy (pf : List Char → Option (Factor × List Char)) (sep : List Char) :
     match pf cs with
     | none => none
     | some (f, r) =>
-      match dropPfx sep r with
+      match r.dropPrefix? sep with
       | none => some ([f], r)
       | some r' =>
         match pSepBy pf sep n r' with
@@ -94,7 +91,7 @@ theorem pSepBy_joinWith (pf : List Char → Option (Factor × List Char)) (pr : 
     (hpf : ∀ f, P f → ∀ rest, Stop rest → pf (pr f ++ rest) = some (f, rest))
     (hsep : ∀ x, Stop (sep ++ x)) :
     ∀ (fs : List Factor) (f : Factor) (rest : List Char), (∀ g ∈ f :: fs, P g) → Stop rest →
-      dropPfx sep rest = none → ∀ n, fs.length < n →
+      rest.dropPrefix? sep = none → ∀ n, fs.length < n →
       pSepBy pf sep n (joinWith pr sep (f :: fs) ++ rest) = some (f :: fs, rest) := by
   intro fs
   induction fs with
@@ -108,7 +105,7 @@ theorem pSepBy_joinWith (pf : List Char → Option (Factor × List Char)) (pr : 
     have hrest := ih g rest (fun x hx => hP x (by simp_all)) hS hD j (by simp at hn; omega)
     rw [joinWith_cons_cons, List.append_assoc, List.append_assoc, pSepBy,
       hpf f (hP f (by simp)) _ (hsep _)]
-    simp only [dropPfx_append, hrest]
+    simp only [dropPrefix?_append, hrest]
 
 /-! ## LaTeX -/
 
@@ -136,7 +133,7 @@ def latexBody (l : List Factor) : List Char :=
   | [g] => num ++ '/' :: latexFactor g
   | den => num ++ '/' :: '(' :: (joinWith latexFactor latexSep den ++ [')'])
 
-def mathrmOpen : List Char := "\\mathrm{".toList
+@[noinline] def mathrmOpen : List Char := "\\mathrm{".toList
 
 /-- The LaTeX form of a canonical factor list. -/
 def latex (l : List Factor) : String := String.ofList (mathrmOpen ++ latexBody l ++ ['}'])
@@ -185,7 +182,7 @@ def pLDen (r : List Char) : Option (List Factor) :=
 
 /-- Read a LaTeX unit back to its two-sided factor list. -/
 def parseLatex (s : String) : Option (List Factor) :=
-  match dropPfx mathrmOpen s.toList with
+  match s.toList.dropPrefix? mathrmOpen with
   | none => none
   | some body =>
     if body.getLast? = some '}' then
@@ -314,7 +311,7 @@ theorem lStop_nil : LStop [] := ⟨rfl, by simp⟩
 /-- A list of positive-exponent factors reads back from its LaTeX join. -/
 theorem pSepBy_latex (fs : List Factor) (f : Factor)
     (hP : ∀ g ∈ f :: fs, SymChars g.1.toList ∧ 0 < g.2) (rest : List Char) (hS : LStop rest)
-    (hD : dropPfx latexSep rest = none) (n : ℕ) (hn : fs.length < n) :
+    (hD : rest.dropPrefix? latexSep = none) (n : ℕ) (hn : fs.length < n) :
     pSepBy pLFactor latexSep n (joinWith latexFactor latexSep (f :: fs) ++ rest) =
       some (f :: fs, rest) :=
   pSepBy_joinWith pLFactor latexFactor latexSep (fun g => SymChars g.1.toList ∧ 0 < g.2) LStop
@@ -381,7 +378,7 @@ theorem parseLatex_latex :
   have hDlen := length_joinWith latexFactor latexSep (D.map absF)
     (fun f hf => latexFactor_ne_nil f (hDP f hf).1)
   unfold parseLatex latex
-  rw [String.toList_ofList, List.append_assoc, dropPfx_append]
+  rw [String.toList_ofList, List.append_assoc, dropPrefix?_append]
   simp only [List.getLast?_append, List.getLast?_singleton, Option.some_or, List.dropLast_concat,
     ite_true]
   unfold latexBody
@@ -402,7 +399,7 @@ theorem parseLatex_latex :
     | nil =>
       dsimp only
       have hg := hDP (absF g) (by simp)
-      rw [pSepBy_latex r₀ f₀ hNNP _ (lStop_cons '/' _ (by simp)) (by simp [dropPfx, latexSep]) _
+      rw [pSepBy_latex r₀ f₀ hNNP _ (lStop_cons '/' _ (by simp)) (by simp [List.dropPrefix?, latexSep]) _
         (by simp only [List.length_append, List.length_cons] at hlen ⊢; omega)]
       simp only [hnum', ite_true]
       have e := pSepBy_latex [] (absF g) (by simpa using hg) [] lStop_nil rfl
@@ -433,11 +430,11 @@ theorem parseLatex_latex :
       have hJ : joinWith latexFactor latexSep (g :: h :: r) =
           joinWith latexFactor latexSep ((g :: h :: r).map absF) := by
         rw [joinWith_map]; congr 1; funext f; exact (latexFactor_absF f).symm
-      rw [hJ, pSepBy_latex r₀ f₀ hNNP _ (lStop_cons '/' _ (by simp)) (by simp [dropPfx, latexSep]) _
+      rw [hJ, pSepBy_latex r₀ f₀ hNNP _ (lStop_cons '/' _ (by simp)) (by simp [List.dropPrefix?, latexSep]) _
         (by simp only [List.length_append, List.length_cons] at hlen ⊢; omega)]
       simp only [hnum', ite_true]
       have e := pSepBy_latex ((h :: r).map absF) (absF g) (by simpa using hDP) [')']
-        (lStop_cons ')' [] (by simp)) (by simp [dropPfx, latexSep])
+        (lStop_cons ')' [] (by simp)) (by simp [List.dropPrefix?, latexSep])
         (joinWith latexFactor latexSep ((g :: h :: r).map absF) ++ [')']).length
         (by simp only [List.length_append, List.length_cons, List.length_map] at hDlen ⊢; omega)
       simp only [pLDen, List.head?_cons, ite_true, List.tail_cons]
@@ -449,9 +446,9 @@ theorem parseLatex_latex :
 
 /-! ## Typst -/
 
-def uprightOpen : List Char := "upright(\"".toList
-def uprightClose : List Char := "\")".toList
-def thinSep : List Char := " thin ".toList
+@[noinline] def uprightOpen : List Char := "upright(\"".toList
+@[noinline] def uprightClose : List Char := "\")".toList
+@[noinline] def thinSep : List Char := " thin ".toList
 
 /-- A signed exponent: nothing for 1, `^n`, `^(-n)`, `^(p\/q)`, `^(-p\/q)`. -/
 def typstExp (q : ℚ) : List Char :=
@@ -498,11 +495,11 @@ def pTExp (cs : List Char) : Option (ℚ × List Char) :=
   | [] => some (1, [])
 
 def pTFactor (cs : List Char) : Option (Factor × List Char) :=
-  match dropPfx uprightOpen cs with
+  match cs.dropPrefix? uprightOpen with
   | none => none
   | some r =>
     let p := r.span (fun c => c != '"')
-    match dropPfx uprightClose p.2 with
+    match p.2.dropPrefix? uprightClose with
     | none => none
     | some r' =>
       match pTExp r' with
@@ -603,10 +600,10 @@ theorem pTFactor_typstFactor (f : Factor) (hs : symOK f.1 = true) (hq : f.2 ≠ 
       · subst h; decide
     · simp [uprightClose] at h; rw [← h.1]; decide
   unfold pTFactor typstFactor
-  rw [List.append_assoc, dropPfx_append]
+  rw [List.append_assoc, dropPrefix?_append]
   simp only [List.append_assoc] at hspan ⊢
   rw [hspan]
-  simp only [dropPfx_append, pTExp_typstExp _ hq _ hr, String.ofList_toList]
+  simp only [dropPrefix?_append, pTExp_typstExp _ hq _ hr, String.ofList_toList]
 
 theorem tStop_sep (x : List Char) : TStop (thinSep ++ x) :=
   ⟨fun r h => by simp [thinSep] at h, noDigitHead_cons _ _ (by decide)⟩
