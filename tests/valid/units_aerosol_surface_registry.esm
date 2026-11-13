@@ -1,0 +1,169 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "UnitsAerosolSurfaceRegistry",
+    "description": "Cross-binding pin for the esm-spec §4.8.1 registry entries `ng`, `mN` and `dyn` and the compounds they are used in: `ng/m^3` (aerosol mass concentration, as in WRF-Chem MOSAIC's salt equilibrium), `ng/(m^2*s)` (biogenic emission factors, as in the Gunther/MEGAN parameters), `mN/m` (surface tension, as in MOSAIC's aerosol phase state) and `dyn/cm` (the CGS spelling surface tensions are still tabulated in). Since esm 2.0.0 the table is flat, with no SI-prefix mechanism, so each of these resolves only because it is a table entry; before they were added, `ng/m^3` and `mN/m` validated under no binding. Every observed here is a DISCRIMINATOR: `mass_concentration_ratio` is only dimensionless if `ng` is a MASS, `surface_tension_ratio` only if `mN` is a FORCE, `capillary_force` is only a millinewton if `mN/m` times a length composes back to `mN`, `capillary_force_cgs` only a dyne if `dyn/cm` times `cm` composes to `dyn`, and `tension_unit_ratio` is declared `1` because `dyn/cm` and `mN/m` are the SAME unit, scale exactly 1, so a scale-aware checker that mis-scales either `dyn` or `mN` rejects it. The reference parameters carry the same physical quantity in SI, written at the scales §4.8.1 pins: 1 ng = 1e-12 kg, 1 mN = 1e-3 N, 1 dyn = 1e-5 N. As with tests/valid/units_moves_registry.esm, this document pins that each SYMBOL RESOLVES and that its DIMENSION is right; the float and exact scales are pinned by tests/conformance/unit_registry/golden/unit_verdicts.json. NOTE what is NOT here: `pg`, `kN` and `kdyn` do not resolve (`ng`, `mN` and `dyn` are table entries, not prefixed units), and tests/conformance/unit_registry pins each as a reject.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-11-12T00:00:00Z",
+    "tags": [
+      "units",
+      "registry",
+      "aerosol",
+      "emissions",
+      "surface_tension",
+      "conformance"
+    ]
+  },
+  "models": {
+    "UnitsAerosolSurfaceRegistry": {
+      "reference": {
+        "notes": "esm-spec §4.8.1. The downstream columns: MOSAIC aerosol mass concentrations (ng/m^3) and droplet surface tension (mN/m); Gunther/MEGAN biogenic emission factors (ng/(m^2*s)); the CGS surface-tension spelling dyn/cm."
+      },
+      "variables": {
+        "deposited_mass": {
+          "type": "unknown",
+          "units": "ng/m^2",
+          "default": 0.0,
+          "description": "The single integrated unknown: areal mass emitted so far. Its only role is to give the model one well-formed ODE whose rhs is the emission factor in the unit it is tabulated in."
+        },
+        "emission_factor": {
+          "type": "parameter",
+          "units": "ng/(m^2*s)",
+          "default": 600.0,
+          "description": "A biogenic emission factor, in the unit the Gunther/MEGAN tables use."
+        },
+        "aerosol_mass_concentration": {
+          "type": "parameter",
+          "units": "ng/m^3",
+          "default": 1500.0,
+          "description": "An aerosol mass concentration, in the unit MOSAIC tabulates it in."
+        },
+        "reference_mass_concentration": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 1.5e-09,
+          "description": "The same concentration in kg/m^3 (1 ng = 1e-12 kg exactly)."
+        },
+        "surface_tension": {
+          "type": "parameter",
+          "units": "mN/m",
+          "default": 72.8,
+          "description": "The surface tension of water near 20 °C, in the SI spelling MOSAIC uses."
+        },
+        "surface_tension_cgs": {
+          "type": "parameter",
+          "units": "dyn/cm",
+          "default": 72.8,
+          "description": "The same surface tension in the CGS spelling. 1 dyn/cm is exactly 1 mN/m, so the number does not change."
+        },
+        "reference_surface_tension": {
+          "type": "parameter",
+          "units": "N/m",
+          "default": 0.0728,
+          "description": "The same surface tension in N/m (1 mN = 1e-3 N exactly)."
+        },
+        "contact_line_length": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0e-06,
+          "description": "A contact-line length in metres, so `capillary_force` composes back to `mN`."
+        },
+        "contact_line_length_cgs": {
+          "type": "parameter",
+          "units": "cm",
+          "default": 1.0e-04,
+          "description": "The same length in centimetres, so `capillary_force_cgs` composes back to `dyn`."
+        },
+        "mass_concentration_ratio": {
+          "type": "unknown",
+          "units": "ng/kg",
+          "description": "`ng/m^3` ÷ `kg/m^3`, declared `ng/kg`: dimensionless, scale exactly 1e-12. `ng` has to resolve as a MASS in every binding for this document to load at all. A scale-aware checker rejects this ratio declared as `1` (esm-spec §4.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
+        },
+        "surface_tension_ratio": {
+          "type": "unknown",
+          "units": "mN/N",
+          "description": "`mN/m` ÷ `N/m`, declared `mN/N`: dimensionless, scale exactly 1e-3. `mN` has to resolve as a FORCE in every binding for this document to load at all."
+        },
+        "tension_unit_ratio": {
+          "type": "unknown",
+          "units": "1",
+          "description": "DISCRIMINATOR: `dyn/cm` ÷ `mN/m` is dimensionless at scale EXACTLY 1 (1e-5 / 1e-2 = 1e-3 / 1), so it may be declared `1`. A binding that mis-scales `dyn` or `mN` makes this a scale mismatch under a scale-aware checker (esm-spec §4.8.3)."
+        },
+        "capillary_force": {
+          "type": "unknown",
+          "units": "mN",
+          "description": "DISCRIMINATOR: (mN/m) × m is a force in millinewtons: the `m` of the tension must cancel the length."
+        },
+        "capillary_force_cgs": {
+          "type": "unknown",
+          "units": "dyn",
+          "description": "DISCRIMINATOR: (dyn/cm) × cm is a force in dynes: `dyn` must be a FORCE, and the `cm` must cancel."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "deposited_mass"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "emission_factor"
+        },
+        {
+          "lhs": "mass_concentration_ratio",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "aerosol_mass_concentration",
+              "reference_mass_concentration"
+            ]
+          }
+        },
+        {
+          "lhs": "surface_tension_ratio",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "surface_tension",
+              "reference_surface_tension"
+            ]
+          }
+        },
+        {
+          "lhs": "tension_unit_ratio",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "surface_tension_cgs",
+              "surface_tension"
+            ]
+          }
+        },
+        {
+          "lhs": "capillary_force",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "surface_tension",
+              "contact_line_length"
+            ]
+          }
+        },
+        {
+          "lhs": "capillary_force_cgs",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "surface_tension_cgs",
+              "contact_line_length_cgs"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -153,6 +153,7 @@
     "tests/valid/toplevel_ref_index_set_merge.esm": [],
     "tests/valid/toplevel_ref_metaparameter_axis.esm": [],
     "tests/valid/toplevel_ref_metaparameter_axis_lib.esm": [],
+    "tests/valid/units_aerosol_surface_registry.esm": [],
     "tests/valid/units_angle_meets_pure_number.esm": [],
     "tests/valid/units_array_mount_index_faq_consistent.esm": [],
     "tests/valid/units_array_mount_leaf.esm": [],

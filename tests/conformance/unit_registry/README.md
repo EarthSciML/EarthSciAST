@@ -43,6 +43,15 @@ good file, and not enough to catch three things that bit us in one week:
 
 `scale_exact` is that ratio as an exact number, written `p/q` in lowest terms (`/q` omitted when it is 1), times `*pi` or `*pi^k` when π is a factor. It is compared as a STRING, so there is no tolerance: it is what makes the five registries agree exactly (esm-spec §4.8.1 "Scales are EXACT"), and it is present for the affine units too, because the checker compares their scale even though a numeric conversion would need an offset.
 
+The 1e-12 tolerance on `scale_to_canonical` is wide enough for a composite
+conversion to round differently in different bindings, and therefore too wide to
+see a single symbol's float scale drift by one ulp (Rust once built `ng` as `g`
+times 1e-9, 1.0000000000000002e-12). That case is guarded per binding: Rust, the
+one registry that derives prefixed float scales by multiplying, asserts in
+`power_of_ten_registry_scales_are_correctly_rounded` that every entry whose
+exact scale is a power of ten carries that power's nearest double; the other
+four write those scales as literals or take them from their units library.
+
 `scale_to_canonical` is `null` exactly for the affine units. §4.8.1 deliberately
 does not model the offset, so their pure multiplicative factor is not a
 physically meaningful conversion and asserting one would be asserting on an
@@ -71,7 +80,11 @@ made, so the message is part of the contract.
 The document-level halves of the same contract are
 `tests/valid/units_inventory_registry.esm` (the FF10 units),
 `tests/valid/units_moves_registry.esm` (the MOVES units — `mi`, `mi/h`, `lb`,
-`hp`, `gal`, `inHg`, `MJ` and the compounds they build) and
+`hp`, `gal`, `inHg`, `MJ` and the compounds they build),
+`tests/valid/units_aerosol_surface_registry.esm` (the aerosol, emission-factor
+and surface-tension units — `ng`, `mN`, `dyn` and `ng/m^3`,
+`ng/(m^2*s)`, `mN/m`, `dyn/cm`; `pg`, `kN` and `kdyn` are the golden's
+matching rejects) and
 `tests/invalid/units_discriminator_scaling_factor.esm` (a scaling factor is a
 hard `unit_parse_error`) — those go through the ordinary
 `scripts/compare-conformance-outputs.py` agreement check, which is what pins
