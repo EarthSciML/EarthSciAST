@@ -31,7 +31,7 @@ open Esm.Document Esm.Document.Math
 def sciSplit : JNum → Option (List Char × Int)
   | .dec neg (d :: fp) e10 =>
     if e10 < -4 ∨ 5 < e10 then
-      some ((if neg then ['-'] else []) ++ Number.digitChar d :: '.' :: (Number.fracDigits fp).map Number.digitChar, e10)
+      some ((if neg then ['-'] else []) ++ Esm.digitChar d :: '.' :: (Number.fracDigits fp).map Esm.digitChar, e10)
     else none
   | _ => none
 
@@ -205,11 +205,12 @@ def pieces : Nat → List Char → List (String × String) × List Char
       | none => ([], cs)
     | none => ([], cs)
 
-/-- A number: the canonical spelling, or `mantissa times 10^exponent`. -/
+/-- A number: the canonical spelling, or `mantissa times 10^exponent`. The token ends where the number
+as written ends (`Number.parseRaw`); its value is the canonical form (`Number.parse`). -/
 def lexNum (cs : List Char) : Option (Tok × List Char) :=
-  match Number.parse cs with
+  match Number.parseRaw cs with
   | none => none
-  | some (n, r) =>
+  | some (_, r) =>
     match dropP timesTen r with
     | some r2 =>
       let ez : Option (Int × List Char) :=
@@ -224,7 +225,7 @@ def lexNum (cs : List Char) : Option (Tok × List Char) :=
         | some (m, []) => some (.num m, r5)
         | _ => none
       | none => none
-    | none => some (.num n, r)
+    | none => (Number.parse cs).map fun p => (.num p.1, p.2)
 
 def punct : Char → Option Kw
   | '+' => some .plus | '-' => some .minus | '=' => some .eq | '<' => some .lt

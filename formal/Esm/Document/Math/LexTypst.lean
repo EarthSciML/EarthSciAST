@@ -50,7 +50,7 @@ def isUnits : Tok → Bool
 /-- What may follow the spelling of `t`: nothing that extends it. -/
 def Sep (t : Tok) (X : List Char) : Prop :=
   (∀ c ∈ X.head?, merges t c = false) ∧ (isNum t = true → dropP timesTen X = none) ∧
-    (isUnits t = true → Esm.Units.dropPfx Esm.Units.thinSep X = none) ∧ (∀ c ∈ X.head?, c ≠ '.')
+    (isUnits t = true → X.dropPrefix? Esm.Units.thinSep = none) ∧ (∀ c ∈ X.head?, c ≠ '.')
 
 /-! ## Characters -/
 
@@ -586,29 +586,29 @@ theorem lexNum_num (n : JNum) (hn : n.WF) (X : List Char) (hX : NumSep X) :
         have hsp : ∀ (Z : List Char), ∀ c ∈ (timesTen ++ Z).head?, c = ' ' := by
           intro Z c hc; simp [timesTen] at hc; exact hc.symm
         have hp := Number.parse_shape neg [d] (Number.fracDigits fp) (timesTen ++ (Ez ++ X)) (by simp)
-          (Number.fracDigits_ne fp) (by simpa using hd) hfp (fun c hc => by rw [hsp _ c hc]; decide)
+          (Number.fracDigits_ne fp) (by simpa using hd) hfp (Number.leadZero_one d) (fun c hc => by rw [hsp _ c hc]; decide)
         rw [Number.finishDec_noE _ _ _ _ (fun c hc => by rw [hsp _ c hc]; decide)] at hp
         have hN := Number.parse_print (.dec neg (d :: fp) e10) [] hn (fun c hc => by simp at hc)
         simp only [Number.print, Number.decBody, hout, ↓reduceIte, List.append_nil] at hN
-        let M : List Char := (if neg then ['-'] else []) ++ Number.digitChar d :: '.' ::
-          (Number.fracDigits fp).map Number.digitChar
-        have e1 : (if neg then ['-'] else []) ++ Number.digitChar d :: '.' ::
-              (Number.fracDigits fp).map Number.digitChar ++ timesTen ++ Ez ++ X =
+        let M : List Char := (if neg then ['-'] else []) ++ Esm.digitChar d :: '.' ::
+          (Number.fracDigits fp).map Esm.digitChar
+        have e1 : (if neg then ['-'] else []) ++ Esm.digitChar d :: '.' ::
+              (Number.fracDigits fp).map Esm.digitChar ++ timesTen ++ Ez ++ X =
             M ++ (timesTen ++ (Ez ++ X)) := by simp [M]
-        have e1' : (if neg then ['-'] else []) ++ Number.digitChar d :: '.' ::
-              (Number.fracDigits fp).map Number.digitChar ++ timesTen ++
+        have e1' : (if neg then ['-'] else []) ++ Esm.digitChar d :: '.' ::
+              (Number.fracDigits fp).map Esm.digitChar ++ timesTen ++
               (if e10 < 0 then '(' :: Number.printInt e10 ++ [')'] else Number.printInt e10) ++ X =
             M ++ (timesTen ++ (Ez ++ X)) := e1
         rw [e1']
         unfold lexNum
-        rw [show Number.parse (M ++ (timesTen ++ (Ez ++ X))) =
+        rw [show Number.parseRaw (M ++ (timesTen ++ (Ez ++ X))) =
             some (Number.mkDec neg ([d] ++ Number.fracDigits fp) (↑[d].length - 1), timesTen ++ (Ez ++ X))
             by simpa [M] using hp]
         simp only
         rw [dropP_append]
         simp only
         have hfin : M ++ 'e' :: Number.printInt e10 = (if neg then ['-'] else []) ++
-            (Number.digitChar d :: '.' :: (Number.fracDigits fp).map Number.digitChar ++ 'e' :: Number.printInt e10) := by
+            (Esm.digitChar d :: '.' :: (Number.fracDigits fp).map Esm.digitChar ++ 'e' :: Number.printInt e10) := by
           simp [M]
         by_cases hneg : e10 < 0
         · have hE : Ez ++ X = '(' :: (Number.printInt e10 ++ ')' :: X) := by simp [Ez, hneg]
@@ -629,9 +629,12 @@ theorem lexNum_num (n : JNum) (hn : n.WF) (X : List Char) (hX : NumSep X) :
       · cases hs
     · cases hs
   · unfold lexNum
-    rw [Number.parse_print n X hn hX.1]
+    rw [Number.parseRaw_print n X hn hX.1]
     simp only
     rw [hX.2]
+    simp only
+    rw [Number.parse_print n X hn hX.1]
+    rfl
 
 theorem numChars_head (n : JNum) (hn : n.WF) : ∃ c r, numChars n = c :: r ∧
     (isDig c = true ∨ (c = '-' ∧ ∃ d r', r = d :: r' ∧ isDig d = true)) := by
@@ -996,7 +999,7 @@ theorem tok_head (t : Tok) (ht : tokOK t) :
 
 theorem noGlue (t : Tok) (ht : tokOK t) (hlt : t ≠ .letter 't') (Y : List Char) :
     dropP timesTen (' ' :: (tokChars t ++ Y)) = none ∧
-      (isUnits t = false → Esm.Units.dropPfx Esm.Units.thinSep (' ' :: (tokChars t ++ Y)) = none) := by
+      (isUnits t = false → (' ' :: (tokChars t ++ Y)).dropPrefix? Esm.Units.thinSep = none) := by
   cases t with
   | num n =>
     obtain ⟨c, r, he, hc⟩ := numChars_head n ht
@@ -1005,31 +1008,31 @@ theorem noGlue (t : Tok) (ht : tokOK t) (hlt : t ≠ .letter 't') (Y : List Char
       · intro e; subst e; exact absurd h (by decide)
       · decide
     simp only [tokChars, he, List.cons_append]
-    exact ⟨by simp [timesTen, dropP, Ne.symm hct], fun _ => by simp [Esm.Units.thinSep, Esm.Units.dropPfx, Ne.symm hct]⟩
+    exact ⟨by simp [timesTen, dropP, Ne.symm hct], fun _ => by simp [Esm.Units.thinSep, List.dropPrefix?, hct]⟩
   | letter c =>
     have hct : c ≠ 't' := fun e => hlt (by rw [e])
     simp only [tokChars, List.cons_append, List.nil_append]
-    exact ⟨by simp [timesTen, dropP, Ne.symm hct], fun _ => by simp [Esm.Units.thinSep, Esm.Units.dropPfx, Ne.symm hct]⟩
+    exact ⟨by simp [timesTen, dropP, Ne.symm hct], fun _ => by simp [Esm.Units.thinSep, List.dropPrefix?, hct]⟩
   | greek g =>
     have hm : g ∈ greek := by simpa [isGreek, String.ofList_toList] using (show isGreek g.toList = true from ht)
     simp only [greek, List.mem_cons, List.not_mem_nil, or_false] at hm
     rcases hm with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
-      exact ⟨by simp [tokChars, timesTen, dropP], fun _ => by simp [tokChars, Esm.Units.thinSep, Esm.Units.dropPfx]⟩
-  | it s => exact ⟨by simp [tokChars, timesTen, dropP], fun _ => by simp [tokChars, Esm.Units.thinSep, Esm.Units.dropPfx]⟩
-  | opn s => exact ⟨by simp [tokChars, timesTen, dropP], fun _ => by simp [tokChars, Esm.Units.thinSep, Esm.Units.dropPfx]⟩
+      exact ⟨by simp [tokChars, timesTen, dropP], fun _ => by simp [tokChars, Esm.Units.thinSep, List.dropPrefix?]⟩
+  | it s => exact ⟨by simp [tokChars, timesTen, dropP], fun _ => by simp [tokChars, Esm.Units.thinSep, List.dropPrefix?]⟩
+  | opn s => exact ⟨by simp [tokChars, timesTen, dropP], fun _ => by simp [tokChars, Esm.Units.thinSep, List.dropPrefix?]⟩
   | ups ps =>
     obtain ⟨hne, -⟩ := (show ps ≠ [] ∧ ∀ p ∈ ps, PieceOK p from ht)
     obtain ⟨p, ps', rfl⟩ := List.exists_cons_of_ne_nil hne
     exact ⟨by simp [tokChars, pieceChars_eq, timesTen, dropP],
-      fun _ => by simp [tokChars, pieceChars_eq, Esm.Units.thinSep, Esm.Units.dropPfx]⟩
+      fun _ => by simp [tokChars, pieceChars_eq, Esm.Units.thinSep, List.dropPrefix?]⟩
   | txt s => exact ⟨by simp [tokChars, Strings.quote, timesTen, dropP],
-      fun _ => by simp [tokChars, Strings.quote, Esm.Units.thinSep, Esm.Units.dropPfx]⟩
-  | code j => exact ⟨by simp [tokChars, timesTen, dropP], fun _ => by simp [tokChars, Esm.Units.thinSep, Esm.Units.dropPfx]⟩
+      fun _ => by simp [tokChars, Strings.quote, Esm.Units.thinSep, List.dropPrefix?]⟩
+  | code j => exact ⟨by simp [tokChars, timesTen, dropP], fun _ => by simp [tokChars, Esm.Units.thinSep, List.dropPrefix?]⟩
   | units l => exact ⟨by simp [tokChars, unitChars, timesTen, dropP], fun h => by simp [isUnits] at h⟩
   | kw k =>
     have hk : kwOK k = true := ht
     cases k <;> first | exact absurd hk (by decide) |
-      exact ⟨by simp [tokChars, kwChars, timesTen, dropP], fun _ => by simp [tokChars, kwChars, Esm.Units.thinSep, Esm.Units.dropPfx]⟩
+      exact ⟨by simp [tokChars, kwChars, timesTen, dropP], fun _ => by simp [tokChars, kwChars, Esm.Units.thinSep, List.dropPrefix?]⟩
   | word _ => exact absurd ht id
   | rm _ => exact absurd ht id
   | jstr _ => exact absurd ht id
@@ -1142,7 +1145,7 @@ theorem after_t (p : Option Tok) (r : List Tok) (hok : ∀ t ∈ r, tokOK t) :
       simp [merges, tokChars] at hm; exact hm (by decide)
 
 theorem not_i_h {Z : List Char} (hZ : ∀ c ∈ Z.head?, c = ' ' ∨ isIdC c = false) :
-    dropP timesTen (' ' :: 't' :: Z) = none ∧ Esm.Units.dropPfx Esm.Units.thinSep (' ' :: 't' :: Z) = none := by
+    dropP timesTen (' ' :: 't' :: Z) = none ∧ (' ' :: 't' :: Z).dropPrefix? Esm.Units.thinSep = none := by
   cases Z with
   | nil => exact ⟨rfl, rfl⟩
   | cons c Z' =>
@@ -1155,7 +1158,7 @@ theorem not_i_h {Z : List Char} (hZ : ∀ c ∈ Z.head?, c = ' ' ∨ isIdC c = f
       rcases hc with rfl | h
       · decide
       · intro e; subst e; exact absurd h (by decide)
-    exact ⟨by simp [timesTen, dropP, Ne.symm hi], by simp [Esm.Units.thinSep, Esm.Units.dropPfx, Ne.symm hh]⟩
+    exact ⟨by simp [timesTen, dropP, Ne.symm hi], by simp [Esm.Units.thinSep, List.dropPrefix?, hh]⟩
 
 theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t) → Adj ts → ∀ (p : Option Tok)
     (prev : Option Char) (S : List Char), (S = [] ∨ S = [' ']) → (∀ t r, ts = t :: r → HC t S prev) →
@@ -1192,7 +1195,7 @@ theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t) → Adj ts 
     -- the separation after `t1`
     have hglue : S' = [' '] → dropP timesTen (S' ++ renderAux (some t1) (t2 :: r)) = none ∧
         (isUnits t2 = false →
-          Esm.Units.dropPfx Esm.Units.thinSep (S' ++ renderAux (some t1) (t2 :: r)) = none) := by
+          (S' ++ renderAux (some t1) (t2 :: r)).dropPrefix? Esm.Units.thinSep = none) := by
       intro h; rw [h]
       by_cases ht : t2 = .letter 't'
       · subst ht
@@ -1212,7 +1215,7 @@ theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t) → Adj ts 
         refine ⟨fun c hc => ?_, fun _ => ?_, fun _ => ?_, fun c hc => ?_⟩
         · rw [hnosp h c hc]; exact needSpace_false hn c2 (by rw [he2]; rfl)
         · rw [h, List.nil_append, hY, he2]; simp [timesTen, dropP, Ne.symm hc2sp]
-        · rw [h, List.nil_append, hY, he2]; simp [Esm.Units.thinSep, Esm.Units.dropPfx, Ne.symm hc2sp]
+        · rw [h, List.nil_append, hY, he2]; simp [Esm.Units.thinSep, List.dropPrefix?, hc2sp]
         · rw [hnosp h c hc]; exact hc2.2
       · refine ⟨fun c hc => ?_, fun _ => (hglue h).1, fun hu => (hglue h).2 (hun hu), fun c hc => ?_⟩
         · rw [h] at hc; simp at hc; subst hc; exact merges_space t1

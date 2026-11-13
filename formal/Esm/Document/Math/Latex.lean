@@ -57,7 +57,7 @@ notation. -/
 def sciSplit : JNum → Option (List Char × Int)
   | .dec neg (d :: fp) e10 =>
     if e10 < -4 ∨ 5 < e10 then
-      some ((if neg then ['-'] else []) ++ Number.digitChar d :: '.' :: (Number.fracDigits fp).map Number.digitChar, e10)
+      some ((if neg then ['-'] else []) ++ Esm.digitChar d :: '.' :: (Number.fracDigits fp).map Esm.digitChar, e10)
     else none
   | _ => none
 
@@ -217,11 +217,12 @@ def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
   else if isGreek w.toList then some (.greek w, r)
   else (ctrlKw.lookup w).map (.kw ·, r)
 
-/-- A number: the canonical spelling, or `mantissa \times 10^{exponent}`. -/
+/-- A number: the canonical spelling, or `mantissa \times 10^{exponent}`. The token ends where the number
+as written ends (`Number.parseRaw`); its value is the canonical form (`Number.parse`). -/
 def lexNum (cs : List Char) : Option (Tok × List Char) :=
-  match Number.parse cs with
+  match Number.parseRaw cs with
   | none => none
-  | some (n, r) =>
+  | some (_, r) =>
     match dropP timesTen r with
     | some r2 =>
       match Number.parseInt r2 with
@@ -230,7 +231,7 @@ def lexNum (cs : List Char) : Option (Tok × List Char) :=
         | some (m, []) => some (.num m, r3)
         | _ => none
       | _ => none
-    | none => some (.num n, r)
+    | none => (Number.parse cs).map fun p => (.num p.1, p.2)
 
 def punct : Char → Option Kw
   | '+' => some .plus | '-' => some .minus | '=' => some .eq | '<' => some .lt

@@ -186,7 +186,7 @@ theorem timesTen_head : ∀ c ∈ (timesTen ++ ([] : List Char)).head?, c = ' ' 
   intro c hc; simp [timesTen] at hc; exact hc.symm
 
 theorem lexNum_sci (M : List Char) (n0 n : JNum) (z : Int) (X : List Char)
-    (hM : Number.parse (M ++ (timesTen ++ (Number.printInt z ++ '}' :: X))) =
+    (hM : Number.parseRaw (M ++ (timesTen ++ (Number.printInt z ++ '}' :: X))) =
       some (n0, timesTen ++ (Number.printInt z ++ '}' :: X)))
     (hN : Number.parse (M ++ 'e' :: Number.printInt z) = some (n, [])) :
     lexNum (M ++ (timesTen ++ (Number.printInt z ++ '}' :: X))) = some (.num n, X) := by
@@ -219,14 +219,14 @@ theorem lexNum_num (n : JNum) (hn : n.WF) (X : List Char) (hX : NumSep X) :
           intro Z c hc; simp [timesTen] at hc; exact hc.symm
         have hp := Number.parse_shape neg [d] (Number.fracDigits fp)
           (timesTen ++ (Number.printInt e10 ++ '}' :: X)) (by simp) (Number.fracDigits_ne fp)
-          (by simpa using hd) hfp (fun c hc => by rw [hsp _ c hc]; decide)
+          (by simpa using hd) hfp (Number.leadZero_one d) (fun c hc => by rw [hsp _ c hc]; decide)
         rw [Number.finishDec_noE _ _ _ _ (fun c hc => by rw [hsp _ c hc]; decide)] at hp
         have hN := Number.parse_print (.dec neg (d :: fp) e10) [] hn (fun c hc => by simp at hc)
         simp only [Number.print, Number.decBody, hout, ↓reduceIte, List.append_nil] at hN
-        have e1 : (if neg then ['-'] else []) ++ Number.digitChar d :: '.' ::
-              (Number.fracDigits fp).map Number.digitChar ++ timesTen ++ Number.printInt e10 ++ ['}'] ++ X =
-            ((if neg then ['-'] else []) ++ Number.digitChar d :: '.' ::
-              (Number.fracDigits fp).map Number.digitChar) ++
+        have e1 : (if neg then ['-'] else []) ++ Esm.digitChar d :: '.' ::
+              (Number.fracDigits fp).map Esm.digitChar ++ timesTen ++ Number.printInt e10 ++ ['}'] ++ X =
+            ((if neg then ['-'] else []) ++ Esm.digitChar d :: '.' ::
+              (Number.fracDigits fp).map Esm.digitChar) ++
               (timesTen ++ (Number.printInt e10 ++ '}' :: X)) := by simp
         rw [e1]
         refine lexNum_sci _ (Number.mkDec neg ([d] ++ Number.fracDigits fp) (↑[d].length - 1)) _ _ _ ?_ ?_
@@ -235,9 +235,12 @@ theorem lexNum_num (n : JNum) (hn : n.WF) (X : List Char) (hX : NumSep X) :
       · cases hs
     · cases hs
   · unfold lexNum
-    rw [Number.parse_print n X hn hX.1]
+    rw [Number.parseRaw_print n X hn hX.1]
     simp only
     rw [hX.2]
+    simp only
+    rw [Number.parse_print n X hn hX.1]
+    rfl
 
 /-! ## Character classes -/
 
