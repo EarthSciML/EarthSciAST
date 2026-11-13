@@ -61,6 +61,7 @@ import Esm.Document.Math.Cases8
 import Esm.Document.Math.Cases9
 import Esm.Document.Math.Escape
 import Esm.Document.Math.OpenOp
+import Esm.Document.Math.Templates
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/
