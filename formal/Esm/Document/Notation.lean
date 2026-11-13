@@ -125,7 +125,7 @@ def coreOps : List OpRow := [
   { op := "const", shape := "scalar", tier := native,
     latex := r"the number; with units 3\,\mathrm{m/s}", typst := r#"3 thin upright("m")\/upright("s")"# },
   { op := "const", shape := "array of at most 16 entries", tier := native,
-    latex := r"bmatrix (a column for rank 1); with units, a thin space and the unit after it, as for a scalar: egin{bmatrix}1\2\end{bmatrix}\,\mathrm{m}",
+    latex := r"bmatrix (a column for rank 1); with units, a thin space and the unit after it, as for a scalar: \begin{bmatrix}1\\2\end{bmatrix}\,\mathrm{m}",
     typst := r#"vec(…), mat(…); with units vec(1, 2) thin upright("m")"# },
   { op := "const", shape := "array of more than 16 entries", tier := escape,
     latex := "a named reference into a data block keyed by the JSON path; the block holds the values and the units",
