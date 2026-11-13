@@ -10,7 +10,8 @@ The printers, parsers and round-trip theorems of the later phases are stated aga
 these tables, so a notation change is a change here first.
 
 "Lossless" for documents means equality after the canonical form (key order, number
-spelling, unit spelling), with integer and float literals kept apart. The canonical
+spelling, unit spelling). Numbers follow CONFORMANCE §5.5.3.1: a literal's type is
+fixed by its value, so an integral `Int64`-representable `1.0` IS the integer `1`. The canonical
 form gains spelling rules for the redundant spellings listed in `spellingRules`; each
 gets a meaning-preservation proof when it lands.
 
@@ -256,8 +257,10 @@ def indexCollisionForm : String := "k[1]"
 
 /-! ## Literals and units -/
 
-/-- Integers print with no point; floats print as their shortest round-trip decimal,
-keeping `.0` on whole values. Scientific notation is exactly
+/-- Numbers print in the CONFORMANCE §5.5.3.1 canonical spelling: an integral
+`Int64`-representable value is an integer with no point (`1.0` prints as `1`); any other
+finite value prints its shortest round-trip digits, positional for decimal exponents
+-4 to 5 and scientific otherwise. In math, scientific notation is exactly
 `<decimal> \times 10^{<integer>}`, read back as one literal; a real product with a
 power of ten prints with `\cdot`. A negative literal prints as `-3`; unary minus on a
 positive literal prints as `-(3)`. A `const` with units prints as the number, a thin
