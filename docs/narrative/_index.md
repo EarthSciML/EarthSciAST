@@ -3,24 +3,51 @@ title: "Narrative models"
 description: "Pages that define a model in their own prose, then validate, test and plot it as they are built."
 ---
 
-A narrative page is ordinary Markdown with directives in it. `esm-narrative`
-reads the directives, assembles them into an `.esm` document, validates it, runs
-its inline tests, runs its analyses and draws its figures — then writes the page
-you are reading, with the mathematics, results and figures filled in. A model
-that does not validate, or a test that fails, stops the build.
+A narrative page is an `.esm` document written in the ESM Markdown format:
+ordinary Markdown in which the model's declarations and equations are written
+where the prose introduces them. The EarthSciAST core reads the page (prose is
+skipped), `esm-narrative` adds the tests and figures written with its own
+`esm-` directives, validates the document, runs its inline tests, runs its
+analyses and draws its figures — then writes the page you are reading, with the
+mathematics, results and figures filled in. A model that does not validate, or
+a test that fails, stops the build.
 
 Source pages live in `docs/narrative/`; the built pages land in
 `docs/content/generated/narrative/` and are not checked in.
 
-## The directives
+## The model
+
+The model is written in the ESM Markdown format, which the core reads:
 
 | Written | Means |
 | --- | --- |
-| `:var[N]{default=100 units="mol"}` | a state variable, shown as \(N\) |
-| `:param[lambda]{default=0.1 units="1/s"}` | a parameter, shown as \(\lambda\) |
-| `::model[Decay]{description="…"}` | starts a model; what follows belongs to it |
-| `::eq[D(N, t) = -lambda*N]{#eq-decay}` | a display equation, with an anchor |
-| `:::esm-test{#id span="0..10"}` … `:::` | an esm-spec §6.6 inline test |
+| front matter with `esm: "2.2.0"` and `name: "decay"` | the document; its other keys (`title`, `weight`, …) are the site's |
+| `::model[Decay]` | starts a model; what follows belongs to it |
+| `:var[$N$]{default=100 units="mol"}` | a variable, shown as \(N\) |
+| `:param[$\lambda$]{default=0.1 units="1/s"}` | a parameter, shown as \(\lambda\) |
+| `$$`, `\frac{\mathrm{d} N}{\mathrm{d} t} = -\lambda N`, `$$ {#eq-decay}` on three lines | a display equation, with an anchor |
+
+A declaration names its quantity in LaTeX math (`$\lambda$` for `lambda`,
+`$k_{\mathrm{ab}}$` for `k_ab`) and may sit anywhere in a sentence. An equation
+is a display: a line `$$`, the equation in LaTeX on the next line, and a line
+`$$`, optionally followed by a label such as `{#eq-decay}`, which gives the
+equation an anchor for links and changes nothing in the model. Everything else
+— headings, paragraphs, inline math such as `\(N_0\)` — is prose, which the core
+skips. A line may not start with `$$` except to open a model equation, so
+illustrative mathematics uses `\(…\)` or `\[…\]` instead. Front matter values
+are written as the format's YAML: every string double-quoted.
+
+The format has more constructs (reactions, initialization equations,
+expression templates, fenced `esm:<field>` blocks for any other field); a page
+may use any of them.
+
+## The directives
+
+Tests, figures and tables are narrative's own directives:
+
+| Written | Means |
+| --- | --- |
+| `:::esm-test{#id span="0..10"}` … `:::` | an esm-spec §6.6 inline test of the current model |
 | `:::esm-plot{#id span="0..50" y=N}` … `:::` | one figure, with its own run |
 | `:::esm-analysis{#id span="0..100"}` … `:::` | an esm-spec §6.7 analysis and its plots |
 | `::esm-example[a + b*c]` | one expression as text, mathematics and JSON |
@@ -30,15 +57,17 @@ Source pages live in `docs/narrative/`; the built pages land in
 One colon is inline, two own a line, and three open a block that a line of
 `:::` closes. A directive inside a code span or a fenced code block is left
 alone, which is how this table shows them. A directive whose name is neither
-one of the four model words nor in the `esm-` namespace is passed through
-untouched, so a page may use another tool's directives alongside these.
+part of the ESM Markdown format nor in the `esm-` namespace is passed through
+untouched, so a page may use another tool's directives alongside these. The
+core reads these directives as prose, so the page stays a valid ESM Markdown
+document; a test or analysis written in the format itself (an `esm:tests`
+block, a `::plot{…}` directive) is run and shown too.
 
 ## Attributes and bodies
 
 Attributes go in braces: `{#id key=value key="value with spaces" flag}`. A value
 that reads as JSON keeps its type, so `default=100` is a number and
-`y=["A","B"]` is a list. `#id` sets whichever field identifies the element — an
-equation's `label`, a test's or a plot's `id`.
+`y=["A","B"]` is a list. `#id` sets a test's, an analysis's or a plot's `id`.
 
 A block directive's body is YAML in the esm-spec shapes, so anything the format
 allows can be written even though the attributes cover only the common fields:
@@ -68,4 +97,6 @@ cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative 
 
 `--check` writes nothing and fails if the generated output is out of date.
 Diagnostics are printed as `file:line: error[code]: message`, and every one
-also appears on the page, next to the directive that caused it.
+also appears on the page, next to the declaration, equation or directive that
+caused it. A page the core cannot read at all is reported once, for the whole
+page.

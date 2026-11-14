@@ -1,14 +1,21 @@
-//! Finding directives in Markdown text.
+//! Finding the constructs of a page in Markdown text, for rendering it.
 //!
-//! The syntax is the generic-directives proposal, the one `remark-directive`
-//! implements, so a narrative page stays ordinary Markdown that other tools can
-//! still read:
+//! What a page *means* is read by the core (`earthsci_ast::parse_markdown`);
+//! this scanner only finds where each construct is, so the renderer can put
+//! its output there. It knows the directive syntax of the generic-directives
+//! proposal, the one `remark-directive` implements, which both the ESM
+//! Markdown format and narrative's own `esm-` directives use:
 //!
 //! | Form | Spelling | Used for |
 //! | --- | --- | --- |
-//! | inline | `:var[N]{units="mol"}` | a quantity named in a sentence |
-//! | leaf | `::eq[D(N, t) = -lambda*N]{#eq-decay}` | a display equation |
+//! | inline | `:var[$N$]{units="mol"}` | a quantity named in a sentence |
+//! | leaf | `::model[Decay]`, `::esm-variables{}` | a component, a table |
 //! | container | `:::esm-test{#half-life}` … `:::` | a test, analysis or figure |
+//!
+//! and two constructs of the ESM Markdown format that are not directives: a
+//! display equation (a line `$$`, its LaTeX, a line `$$`, optionally followed
+//! by a label `{#eq-x}`) or a reaction (`$$\ce{…}$$ {#R1}` on one line), and
+//! a fenced block whose info string is `esm:<key>`.
 //!
 //! A leaf directive owns its line and a container owns its lines, so both are
 //! block-level. Everything else is passed through untouched — including
@@ -55,7 +62,38 @@ pub struct Directive {
     pub source: SourceSpan,
 }
 
-/// A run of the source: either text to copy through, or a directive to render.
+/// A display of the ESM Markdown format: an equation, or a reaction.
+#[derive(Debug, Clone)]
+pub struct Display {
+    /// The LaTeX between the `$$` delimiters, without the line breaks that
+    /// frame it.
+    pub latex: String,
+    /// Whether it is a reaction line, `$$\ce{…}$$`.
+    pub reaction: bool,
+    /// The `{…}` after the closing `$$`: an equation's label (`#`), or a
+    /// reaction's id (`#`) and other fields.
+    pub attrs: Map<String, Value>,
+    /// Exactly what was written.
+    pub raw: String,
+    /// Where it came from.
+    pub source: SourceSpan,
+}
+
+/// A fenced block of the ESM Markdown format, ```` ```esm:<key> ````.
+#[derive(Debug, Clone)]
+pub struct Block {
+    /// The key in the info string, `description` or a field's name, as
+    /// written (a quoted key keeps its quotes).
+    pub key: String,
+    /// The lines between the fences.
+    pub body: String,
+    /// Exactly what was written.
+    pub raw: String,
+    /// Where it came from.
+    pub source: SourceSpan,
+}
+
+/// A run of the source: text to copy through, or a construct to render.
 // A page holds a handful of directives, so the larger variant costs nothing
 // worth boxing it for.
 #[allow(clippy::large_enum_variant)]
@@ -65,6 +103,10 @@ pub enum Piece {
     Text(String),
     /// A directive to replace with rendered output.
     Directive(Directive),
+    /// A display equation or a reaction.
+    Display(Display),
+    /// An ```` ```esm:<key> ```` block.
+    Block(Block),
 }
 
 /// What [`scan`] found.
@@ -113,9 +155,24 @@ pub fn scan(source: &str, file: &str) -> Scan {
             continue;
         }
         if let Some(open) = opening_fence(trimmed) {
+            if let Some((block, next)) = read_block(&lines, i, &open, file) {
+                flush(&mut text, &mut out.pieces);
+                out.pieces.push(Piece::Block(block));
+                i = next;
+                continue;
+            }
             fence = Some(open);
             text.push_str(line);
             i += 1;
+            continue;
+        }
+
+        if line.starts_with("$$")
+            && let Some((display, next)) = read_display(&lines, i, file)
+        {
+            flush(&mut text, &mut out.pieces);
+            out.pieces.push(Piece::Display(display));
+            i = next;
             continue;
         }
 
@@ -162,6 +219,84 @@ fn opening_fence(trimmed: &str) -> Option<String> {
             let run = trimmed.len() - trimmed.trim_start_matches(&mark[..1]).len();
             return Some(mark[..1].repeat(run));
         }
+    }
+    None
+}
+
+/// Read an ```` ```esm:<key> ```` block opened by the fence `open` on line
+/// `start`, returning it and the line after it. `None` for any other fence,
+/// and for one that is never closed (which is left in the page as text).
+fn read_block(lines: &[&str], start: usize, open: &str, file: &str) -> Option<(Block, usize)> {
+    let info = lines[start].trim_start()[open.len()..].trim_end();
+    let key = info.strip_prefix("esm:")?;
+    if !open.starts_with('`') || key.is_empty() {
+        return None;
+    }
+    let mut body = String::new();
+    for (offset, line_text) in lines.iter().enumerate().skip(start + 1) {
+        let t = line_text.trim();
+        if t.starts_with(open) && t.chars().all(|c| c == '`') {
+            let mut source = span(file, start as u32 + 1);
+            source.end_line = Some(offset as u32 + 1);
+            return Some((
+                Block {
+                    key: key.to_string(),
+                    body,
+                    raw: lines[start..=offset].concat(),
+                    source,
+                },
+                offset + 1,
+            ));
+        }
+        body.push_str(line_text);
+    }
+    None
+}
+
+/// Read a display that starts line `start` (which starts with `$$`): a
+/// reaction, `$$\ce{…}$$ {…}` on one line, or an equation, a line `$$`, its
+/// LaTeX, then a line starting `$$` with an optional `{…}` after it.
+/// Returns it and the line after it; `None` when the line is neither.
+fn read_display(lines: &[&str], start: usize, file: &str) -> Option<(Display, usize)> {
+    let first = lines[start].trim_end_matches(['\n', '\r']);
+    let source = span(file, start as u32 + 1);
+    if first.starts_with("$$\\ce{") {
+        let close = first[2..].rfind("$$")? + 2;
+        let (attrs, _) =
+            read_attrs(first[close + 2..].trim_start(), file, start as u32 + 1).ok()?;
+        return Some((
+            Display {
+                latex: first[2..close].to_string(),
+                reaction: true,
+                attrs,
+                raw: lines[start].to_string(),
+                source,
+            },
+            start + 1,
+        ));
+    }
+    if first.trim_end() != "$$" {
+        return None;
+    }
+    let mut latex = String::new();
+    for (offset, line_text) in lines.iter().enumerate().skip(start + 1) {
+        let t = line_text.trim_end_matches(['\n', '\r']);
+        if let Some(after) = t.strip_prefix("$$") {
+            let (attrs, _) = read_attrs(after.trim(), file, offset as u32 + 1).unwrap_or_default();
+            let mut source = source;
+            source.end_line = Some(offset as u32 + 1);
+            return Some((
+                Display {
+                    latex: latex.trim_end_matches(['\n', '\r']).to_string(),
+                    reaction: false,
+                    attrs,
+                    raw: lines[start..=offset].concat(),
+                    source,
+                },
+                offset + 1,
+            ));
+        }
+        latex.push_str(line_text);
     }
     None
 }
@@ -491,7 +626,7 @@ mod tests {
             .into_iter()
             .filter_map(|p| match p {
                 Piece::Directive(d) => Some(d),
-                Piece::Text(_) => None,
+                _ => None,
             })
             .collect()
     }
@@ -502,7 +637,7 @@ mod tests {
             .into_iter()
             .filter_map(|p| match p {
                 Piece::Text(t) => Some(t),
-                Piece::Directive(_) => None,
+                _ => None,
             })
             .collect()
     }
@@ -513,9 +648,9 @@ mod tests {
 ---
 title: Decay
 ---
-Nitrogen :var[N]{default=100 units=\"mol\"} decays.
+Nitrogen :var[$N$]{default=100 units=\"mol\"} decays.
 
-::eq[D(N, t) = -lambda*N]{#eq-decay}
+::model[Decay]
 
 :::esm-plot{#decay span=\"0..50\"}
 y: N
@@ -526,18 +661,17 @@ y: N
         assert!(scan.diagnostics.is_empty(), "{:?}", scan.diagnostics);
         let found = directives(source);
         let names: Vec<_> = found.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, ["var", "eq", "esm-plot"]);
+        assert_eq!(names, ["var", "model", "esm-plot"]);
 
         assert_eq!(found[0].form, Form::Inline);
-        assert_eq!(found[0].content, "N");
+        assert_eq!(found[0].content, "$N$");
         assert_eq!(found[0].attrs["default"], 100.0);
         assert_eq!(found[0].attrs["units"], "mol");
         assert_eq!(found[0].source.line, Some(4));
         assert_eq!(found[0].source.column, Some(10));
 
         assert_eq!(found[1].form, Form::Leaf);
-        assert_eq!(found[1].content, "D(N, t) = -lambda*N");
-        assert_eq!(found[1].attrs["#"], "eq-decay");
+        assert_eq!(found[1].content, "Decay");
 
         assert_eq!(found[2].form, Form::Container);
         assert_eq!(found[2].body, "y: N\n");
@@ -547,12 +681,65 @@ y: N
     }
 
     #[test]
+    fn reads_displays_reactions_and_blocks() {
+        let source = "\
+::model[M]
+
+$$
+\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c
+$$ {#eq-loss}
+
+$$\\ce{NO + O3 ->[{$k$}] NO2}$$ {#R1 name=\"titration\"}
+
+```esm:tests
+- id: \"t\"
+```
+
+```yaml
+not: ours
+```
+";
+        let pieces = scan(source, "page.md").pieces;
+        let displays: Vec<&Display> = pieces
+            .iter()
+            .filter_map(|p| match p {
+                Piece::Display(d) => Some(d),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(displays.len(), 2);
+        assert_eq!(
+            displays[0].latex,
+            "\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c"
+        );
+        assert!(!displays[0].reaction);
+        assert_eq!(displays[0].attrs["#"], "eq-loss");
+        assert_eq!(displays[0].source.line, Some(3));
+        assert_eq!(displays[0].source.end_line, Some(5));
+        assert_eq!(displays[1].latex, "\\ce{NO + O3 ->[{$k$}] NO2}");
+        assert!(displays[1].reaction);
+        assert_eq!(displays[1].attrs["#"], "R1");
+        assert_eq!(displays[1].attrs["name"], "titration");
+        let blocks: Vec<&Block> = pieces
+            .iter()
+            .filter_map(|p| match p {
+                Piece::Block(b) => Some(b),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].key, "tests");
+        assert_eq!(blocks[0].body, "- id: \"t\"\n");
+        assert!(text(source).contains("```yaml\nnot: ours\n```\n"));
+    }
+
+    #[test]
     fn code_hides_directives() {
         let source = "\
-Write `:var[N]{units=\"mol\"}` in a sentence.
+Write `:var[$N$]{units=\"mol\"}` in a sentence.
 
 ```md
-::eq[x = 1]
+::model[M]
 :::esm-plot{y=x}
 :::
 ```

@@ -1,10 +1,15 @@
-//! The element format: what a front end extracts from a narrative document.
+//! The element format: narrative's internal list of model constructs.
 //!
-//! A front end (the Typst package, the Markdown preprocessor) walks its
-//! document and emits one [`Element`] per model construct it finds — a model
-//! heading, a variable or parameter mentioned in prose, an equation, a test, an
-//! analysis, a figure — in document order, each with the [`SourceSpan`] it came
-//! from. The whole list is a [`Document`], serialized as JSON:
+//! This is not a document format. An `.esm` document written as prose is in
+//! the ESM Markdown or Typst source format, which the core reads
+//! (`earthsci_ast::parse_markdown`, `parse_typst`). The element format is how
+//! the Markdown front end hands the builder its own tests, analyses and
+//! figures (`test`, `analysis` and `plot` elements, added to the document the
+//! core read), and what the Typst plugin's `build` takes, where a whole model
+//! can still be given as elements.
+//!
+//! A list of [`Element`]s in document order, each with the [`SourceSpan`] it
+//! came from, is a [`Document`], serialized as JSON:
 //!
 //! ```json
 //! {
@@ -19,8 +24,7 @@
 //! }
 //! ```
 //!
-//! This is the contract with both front ends, so it is versioned
-//! ([`FORMAT_VERSION`]) and strict: an unknown field is an error on the element
+//! It is versioned ([`FORMAT_VERSION`]) and strict: an unknown field is an error on the element
 //! that carries it, not silently dropped. Tests and analyses use the
 //! esm-spec §6.6 / §6.7 shapes unchanged; only `plot`, which bundles a run
 //! configuration with one figure, has shapes of its own.

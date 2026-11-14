@@ -1,9 +1,11 @@
 //! `esm-narrative`: build narrative Markdown pages into a documentation site.
 //!
-//! Each page under the source directory becomes three things: a Markdown page
-//! with its mathematics, test results and figures filled in; the `.esm` file it
-//! defines, served as a download; and an exit code, so that an invalid model or
-//! a failing test stops a deploy.
+//! A page is an `.esm` document in the ESM Markdown format, which the core
+//! reads, with narrative's `esm-` directives for tests, figures and tables
+//! (see the `markdown` module). Each page under the source directory becomes
+//! three things: a Markdown page with its mathematics, test results and
+//! figures filled in; the `.esm` file it defines, served as a download; and an
+//! exit code, so that an invalid model or a failing test stops a deploy.
 //!
 //! A page `decay.md` is written as a Hugo leaf bundle, `decay/index.md`, with
 //! `decay.esm` beside it. Hugo publishes the file next to the page, so the
@@ -25,7 +27,7 @@ use std::process::ExitCode;
 use std::time::{Duration, SystemTime};
 
 use clap::{Args, Parser, Subcommand};
-use earthsci_narrative::build::{BuildOptions, build_value};
+use earthsci_narrative::build::BuildOptions;
 use earthsci_narrative::diagnostic::Severity;
 use earthsci_narrative::markdown::{self, RenderOptions};
 
@@ -177,10 +179,7 @@ fn build_page(build: &Build, source: &Path, report: &mut Report) -> Result<(), S
         render_svg: !build.no_run,
         ..BuildOptions::default()
     };
-    let mut out = build_value(page.document(), &opts);
-    // A directive that could not be read never reached the builder, so its
-    // problems are added here to be counted and shown with the rest.
-    out.diagnostics.extend(page.diagnostics.iter().cloned());
+    let out = markdown::build(&page, &opts);
 
     // `decay.md` becomes the bundle `decay/index.md`; `_index.md` stays.
     let page_path = if name == "_index" {
@@ -219,9 +218,13 @@ fn build_page(build: &Build, source: &Path, report: &mut Report) -> Result<(), S
     // happened, which is what a local preview is for. CI fails on the exit
     // code, so nothing broken is deployed.
     write(build, &page_path, &rendered, report)?;
-    // A page that declares nothing — a reference page of examples, say — has
-    // no model to download.
-    if !out.esm.is_null() && !page.elements.is_empty() {
+    // A page that writes nothing but its front matter — a reference page of
+    // examples, say — has no model to download.
+    let writes = out
+        .esm
+        .as_object()
+        .is_some_and(|doc| doc.keys().any(|k| k != "esm" && k != "metadata"));
+    if writes {
         let esm = serde_json::to_string_pretty(&out.esm).map_err(|e| e.to_string())?;
         write(build, &esm_path, &format!("{esm}\n"), report)?;
     }

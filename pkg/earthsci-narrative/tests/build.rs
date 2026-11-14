@@ -1,6 +1,9 @@
-//! End-to-end: element documents in, per-element output out.
+//! End-to-end: documents in, per-element and per-construct output out.
 
-use earthsci_narrative::build::{BuildOptions, BuildOutput, build_json};
+use earthsci_ast::DocumentFormat;
+use earthsci_narrative::build::{
+    BuildOptions, BuildOutput, build_document, build_json, build_onto, build_text,
+};
 use earthsci_narrative::plot_data::PlotData;
 use serde_json::{Value, json};
 
@@ -47,12 +50,20 @@ fn decay_builds_clean() {
         (n.typst.as_str(), n.latex.as_str(), n.unicode.as_str()),
         ("N", "N", "N")
     );
+    // The core's printers, the notation of the ESM Markdown and Typst formats.
     let eq = out.elements[3].math.as_ref().unwrap();
-    assert_eq!(eq.typst, "frac(partial N, partial t) = -lambda dot.op N");
+    assert!(eq.typst.starts_with("(dif N)/(dif t) = "), "{}", eq.typst);
+    assert!(eq.typst.contains("lambda"), "{}", eq.typst);
     assert!(
-        eq.latex.starts_with("\\frac{\\partial N}{\\partial t}"),
+        eq.latex
+            .starts_with("\\frac{\\mathrm{d} N}{\\mathrm{d} t} = "),
         "{}",
         eq.latex
+    );
+    let lambda = out.elements[2].math.as_ref().unwrap();
+    assert_eq!(
+        (lambda.typst.as_str(), lambda.latex.as_str()),
+        ("lambda", "\\lambda")
     );
 
     let test = out.elements[4].test.as_ref().unwrap();
@@ -212,4 +223,128 @@ fn unreadable_documents() {
         &BuildOptions::default(),
     );
     assert!(out.diagnostics[0].message.contains("version 9"));
+}
+
+/// The decay model as an ESM Markdown document, with a test of its own.
+const DECAY_MD: &str = r#"---
+esm: "2.2.0"
+name: "decay"
+---
+
+::model[Decay]
+
+:var[$N$]{default=100 units="mol"}
+
+:param[$\lambda$]{default=0.1 units="1/s"}
+
+$$
+\frac{\mathrm{d} N}{\mathrm{d} t} = -\lambda N
+$$
+
+```esm:tests
+- assertions:
+    - expected: 50
+      time: 6.931471805599453
+      tolerance:
+        rel: 0.001
+      variable: "N"
+  id: "half-life"
+  time_span:
+    end: 10
+    start: 0
+```
+"#;
+
+#[test]
+fn a_document_read_by_the_core_runs_its_own_tests() {
+    let out = build_text(DECAY_MD, DocumentFormat::Markdown, &BuildOptions::default());
+    assert!(out.ok, "{:#?}", out.diagnostics);
+    assert!(out.elements.is_empty());
+    assert_eq!(out.constructs.len(), 1, "{:#?}", out.constructs);
+    assert_eq!(out.constructs[0].path, "/models/Decay/tests/0");
+    assert!(out.constructs[0].test.as_ref().unwrap().passed);
+    let roles: Vec<_> = out
+        .quantities
+        .iter()
+        .map(|q| (q.name.as_str(), serde_json::to_value(q.role).unwrap()))
+        .collect();
+    assert!(roles.contains(&("N", json!("state"))), "{roles:?}");
+    assert!(roles.contains(&("lambda", json!("parameter"))), "{roles:?}");
+
+    // A failing test the document writes is reported at its path.
+    let failing = DECAY_MD.replace("expected: 50", "expected: 60");
+    let out = build_text(&failing, DocumentFormat::Markdown, &BuildOptions::default());
+    assert!(!out.ok);
+    let d = out
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "test_failed")
+        .unwrap();
+    assert_eq!(d.element, None);
+    assert_eq!(d.path.as_deref(), Some("/models/Decay/tests/0"));
+}
+
+#[test]
+fn text_the_core_refuses_is_one_diagnostic() {
+    let out = build_text(
+        "not a document",
+        DocumentFormat::Markdown,
+        &BuildOptions::default(),
+    );
+    assert!(!out.ok);
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "parse_error");
+}
+
+#[test]
+fn elements_add_tests_and_plots_to_a_document() {
+    let esm: Value = earthsci_ast::parse_markdown(DECAY_MD).unwrap();
+    let elements = json!({"version": 1, "elements": [
+        {"kind": "test", "id": "early", "model": "Decay", "time_span": {"start": 0, "end": 1},
+         "assertions": [{"variable": "N", "time": 0, "expected": 100}]},
+        {"kind": "plot", "id": "decay", "model": "Decay", "time_span": {"start": 0, "end": 50}, "y": "N",
+         "interactive": [{"parameter": "lambda", "min": 0.01, "max": 1}]},
+        // The document already has this one.
+        {"kind": "test", "id": "half-life", "model": "Decay", "time_span": {"start": 0, "end": 1},
+         "assertions": [{"variable": "N", "time": 0, "expected": 100}]},
+        // Declarations are the document's own.
+        {"kind": "var", "name": "M", "model": "Decay"},
+    ]});
+    let out = build_onto(esm, elements, &BuildOptions::default());
+    let found: Vec<(Option<usize>, &str)> = out
+        .diagnostics
+        .iter()
+        .map(|d| (d.element, d.code.as_str()))
+        .collect();
+    assert_eq!(
+        found,
+        [(Some(2), "duplicate_id"), (Some(3), "not_an_addition")],
+        "{:#?}",
+        out.diagnostics
+    );
+    // After the document's own test.
+    let tests = out.esm["models"]["Decay"]["tests"].as_array().unwrap();
+    assert_eq!(tests[0]["id"], "half-life");
+    assert_eq!(tests[1]["id"], "early");
+    assert_eq!(
+        out.elements[0].info.path.as_deref(),
+        Some("/models/Decay/tests/1")
+    );
+    assert!(out.elements[0].test.as_ref().unwrap().passed);
+    assert_eq!(out.elements[1].figures.len(), 1);
+    assert!(
+        out.esm["metadata"]["x_esd"]["narrative"]["interactive"]
+            ["/models/Decay/analyses/0/plots/0"]
+            .is_array()
+    );
+    // The document's own test ran too.
+    assert!(out.constructs[0].test.as_ref().unwrap().passed);
+}
+
+#[test]
+fn a_document_as_json_builds() {
+    let esm: Value = earthsci_ast::parse_markdown(DECAY_MD).unwrap();
+    let out = build_document(esm, &BuildOptions::default());
+    assert!(out.ok, "{:#?}", out.diagnostics);
+    assert_eq!(out.constructs.len(), 1);
 }
