@@ -587,6 +587,28 @@ class FlattenMetadata:
     # CONFORMANCE_SPEC §5.35). Not a consumer-facing map, unlike
     # `merged_variable_renames`: it says a name is GONE, not where it went.
     coupling_rewritten_names: set[str] = field(default_factory=set)
+    # Every `variable_map` whose `lifting` esm-spec §10.5 reserves (`mean`,
+    # `integral`), as `(from, to, lifting)` in coupling order after
+    # `coupling_import` expansion. Flatten leaves such an edge's source
+    # unreduced, so a build refuses the system (problem.py
+    # `_refuse_reserved_lifting`); carried here so a build from a flattened
+    # system refuses it too. Not part of the interchange form.
+    reserved_liftings: list[tuple[str, str, str]] = field(default_factory=list)
+
+
+#: The ``lifting`` kinds esm-spec §10.5 reserves: no binding evaluates their
+#: reduction yet, so a build refuses them.
+_RESERVED_LIFTINGS = ("mean", "integral")
+
+
+def _reserved_liftings(coupling: list[Any]) -> list[tuple[str, str, str]]:
+    """Every ``variable_map`` in ``coupling`` whose ``lifting`` esm-spec §10.5
+    reserves, as ``(from, to, lifting)`` in coupling order."""
+    return [
+        (c.from_var, c.to_var, c.lifting)
+        for c in coupling
+        if isinstance(c, VariableMapCoupling) and getattr(c, "lifting", None) in _RESERVED_LIFTINGS
+    ]
 
 
 @dataclass
@@ -3515,7 +3537,10 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
 
     # Step 1: collect every component system into a per-system bag of variables.
     components, source_systems = _collect_components(esm_file)
-    metadata = FlattenMetadata(source_systems=list(source_systems))
+    metadata = FlattenMetadata(
+        source_systems=list(source_systems),
+        reserved_liftings=_reserved_liftings(coupling_entries),
+    )
 
     # Step 2: resolve coupling entries into the per-component equation sets. The
     # expanded coupling list (post coupling_import) drives the coupling walk.

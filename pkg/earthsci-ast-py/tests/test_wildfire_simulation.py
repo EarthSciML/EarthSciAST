@@ -42,6 +42,7 @@ from conftest import VALID_DIR
 pytest.importorskip("scipy")
 
 from earthsci_ast.expression import UnsupportedConstructError
+from earthsci_ast.flatten import flatten
 from earthsci_ast.inline_tests import _check_assertion
 from earthsci_ast.parse import load_document, load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
@@ -70,6 +71,20 @@ def test_wildfire_reserved_lifting_is_refused() -> None:
     message = str(err.value)
     assert "'mean'" in message
     assert "'OceanDynamics.SST' -> 'AirSeaFluxCalculator.SST'" in message
+
+
+def test_wildfire_reserved_lifting_is_refused_from_a_flattened_system() -> None:
+    """The same refusal from a system flattened beforehand: flatten carries
+    the reserved edges in its metadata, so a build from the flattened system
+    refuses them as a build from the document does."""
+    flat = flatten(load_path(FIXTURE))
+    assert flat.metadata.reserved_liftings == [
+        ("OceanDynamics.SST", "AirSeaFluxCalculator.SST", "mean")
+    ]
+    with pytest.raises(UnsupportedConstructError) as err:
+        esm_problem(flat, (0.0, 1.0), compiler="interpreter")
+    assert "'OceanDynamics.SST' -> 'AirSeaFluxCalculator.SST'" in str(err.value)
+    assert not flatten(_without_reserved_lifting()).metadata.reserved_liftings
 
 
 def _resolve_tol(
