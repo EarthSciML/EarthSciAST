@@ -605,6 +605,8 @@ end
 # The document-level canonical step (esm-spec §4.8.2 "Canonical spelling").
 # ---------------------------------------------------------------------------
 
+using OrderedCollections: OrderedDict
+
 # Object properties whose value is a NAME-KEYED map (esm-schema.json): a map's
 # keys are names, never fields, so a variable NAMED `units` is not a units
 # string. The same list in every binding.
@@ -623,7 +625,7 @@ const _DOCUMENT_MAP_KEYS = Set{String}(
 const _DOCUMENT_FREE_KEYS = Set{String}(["attrs", "config", "metadata", "reader_options", "x_esd"])
 
 """
-    canonicalize_document(doc::AbstractDict) -> Dict{String, Any}
+    canonicalize_document(doc::AbstractDict) -> OrderedDict{String, Any}
 
 The document-level canonical step: every units string of a decoded document
 (the JSON object `to_json` writes and `load_document` reads, e.g. from
@@ -636,7 +638,7 @@ template bodies, tests, coupling entries. Free-form objects (`metadata`,
 `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither are
 the keys of name-keyed maps. A `const` node whose units spell `1` loses them: a
 scalar one becomes the bare literal, an array one a `const` without `units`.
-The input is not mutated and nothing else changes.
+The input is not mutated, key order is kept, and nothing else changes.
 """
 canonicalize_document(doc::AbstractDict) = _canonicalize_document_value(doc, false)
 
@@ -663,7 +665,7 @@ function _canonicalize_document_value(value, is_map::Bool)
             literal isa Real && !(literal isa Bool) && return literal
             drop_units = true
         end
-        out = Dict{String, Any}()
+        out = OrderedDict{String, Any}()
         for (k, v) in pairs(value)
             key = String(k)
             (drop_units && key == "units") && continue

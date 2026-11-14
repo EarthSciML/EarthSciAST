@@ -277,4 +277,10 @@ end
         got = canonicalize_document(fixture.input)
         @test plain(got) == plain(fixture.expected)
     end
+    # Key order is kept, as in the other bindings.
+    doc = JSON3.read("{\"z\": 1, \"units\": \"s*m\", \"a\": {\"y\": 2, \"b\": 3}}")
+    got = canonicalize_document(doc)
+    @test collect(keys(got)) == ["z", "units", "a"]
+    @test collect(keys(got["a"])) == ["y", "b"]
+    @test got["units"] == "m*s"
 end
