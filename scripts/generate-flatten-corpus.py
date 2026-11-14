@@ -396,6 +396,18 @@ CASES: list[tuple[str, str, str]] = [
             "lift_synthetic_index_sets",
             "lift_placeholder_ic",
             "lift_skips_shaped_state",
+            # The routes besides the operator makearray (esm-libraries-spec
+            # §4.7.5, "Pointwise lift: which states are lifted"): a rate fed
+            # a [lev] field by a variable_map, an operator written
+            # elementwise, a partial translate, the whole component lifted
+            # with its untouched states, the fixpoint across components, and
+            # a non-pointwise variable_map that triggers nothing.
+            "lift_variable_map_rate",
+            "lift_operator_elementwise",
+            "lift_partial_translate",
+            "lift_untouched_species",
+            "lift_fixpoint",
+            "lift_mean_not_triggered",
         )
     ],
     # --- a data-fed parameter mapped onto a shaped target (§4.7.3) ----------
@@ -530,6 +542,17 @@ REFUSALS: list[dict[str, str]] = [
             '"Pointwise lift: index sets": every name in a lifted state\'s shape is an '
             "index set of the dimension's extent, so flatten refuses rather than shadow the "
             "declared set."
+        ),
+    },
+    {
+        "fixture": "conformance/pointwise_lift/fixtures/lift_two_grids.esm",
+        "error": "DimensionPromotionError",
+        "reason": (
+            "`Box.x` reads the [lev] `Column.T` and `Box.y` reads the [lat] `Column.S`, so "
+            "the two lift candidates would put the one component `Box` on two different "
+            'grids. esm-spec §10.5 and esm-libraries-spec §4.7.5, "Pointwise lift: which '
+            'states are lifted": the unit of lifting is the whole component, so flatten '
+            "refuses rather than choose a grid."
         ),
     },
     {

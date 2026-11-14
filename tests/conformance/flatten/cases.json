@@ -7849,6 +7849,1034 @@
       }
     },
     {
+      "id": "lift_variable_map_rate",
+      "tier": "pointwise_lift",
+      "fixture": "conformance/pointwise_lift/fixtures/lift_variable_map_rate.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Mech.A",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        },
+        {
+          "name": "Mech.B",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Column.T",
+          "role": "parameter",
+          "units": "K",
+          "default": 300.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Column"
+        },
+        {
+          "name": "Mech.kb",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.002,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "Rates.k1",
+          "role": "observed",
+          "units": "1/s",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Rates"
+        },
+        {
+          "name": "Tend.dA_dt",
+          "role": "observed",
+          "units": "1/s",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Tend"
+        }
+      ],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 4,
+      "equations": [
+        {
+          "lhs": "Rates.k1",
+          "rhs": "1.0e-3 * (Column.T / 300)",
+          "source_system": "Rates",
+          "contributions": [
+            {
+              "rhs": "1.0e-3 * (Column.T / 300)",
+              "origins": [
+                {
+                  "component": "Rates"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "Tend.dA_dt",
+          "rhs": "sum[_p0] (-1 * Rates.k1[_p0] * Mech.A[_p0]) where {_p0 in lev}",
+          "source_system": "Tend",
+          "contributions": [
+            {
+              "rhs": "sum[_p0] (-1 * Rates.k1[_p0] * Mech.A[_p0]) where {_p0 in lev}",
+              "origins": [
+                {
+                  "component": "Tend"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Mech.A[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (-1 * Rates.k1[_p0] * Mech.A[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "-1 * Rates.k1[_p0] * Mech.A[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Mech.B[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (Rates.k1[_p0] * Mech.A[_p0] + -1 * Mech.kb * Mech.B[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "Rates.k1[_p0] * Mech.A[_p0] + -1 * Mech.kb * Mech.B[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Column",
+          "Rates",
+          "Tend",
+          "Mech"
+        ],
+        "coupling_rules": [
+          "variable_map(Column.T -> Rates.T, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "lev"
+      ],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {
+        "Mech.A": [
+          3
+        ],
+        "Mech.B": [
+          3
+        ]
+      }
+    },
+    {
+      "id": "lift_operator_elementwise",
+      "tier": "pointwise_lift",
+      "fixture": "conformance/pointwise_lift/fixtures/lift_operator_elementwise.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Mech.A",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        },
+        {
+          "name": "Mech.B",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Sink.km",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.01,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Sink"
+        },
+        {
+          "name": "Mech.kb",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.002,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "sum[_p0] (D(Mech.A[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (-1 * Mech.kb * Mech.A[_p0] + (-Sink.km[_p0]) * Mech.A[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "-1 * Mech.kb * Mech.A[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            },
+            {
+              "rhs": "(-Sink.km[_p0]) * Mech.A[_p0]",
+              "origins": [
+                {
+                  "component": "Sink"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Mech.B[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (Mech.kb * Mech.A[_p0] + (-Sink.km[_p0]) * Mech.B[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "Mech.kb * Mech.A[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            },
+            {
+              "rhs": "(-Sink.km[_p0]) * Mech.B[_p0]",
+              "origins": [
+                {
+                  "component": "Sink"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Sink",
+          "Mech"
+        ],
+        "coupling_rules": [
+          "operator_compose(Mech + Sink)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "lev"
+      ],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {
+        "Mech.A": [
+          3
+        ],
+        "Mech.B": [
+          3
+        ]
+      }
+    },
+    {
+      "id": "lift_partial_translate",
+      "tier": "pointwise_lift",
+      "fixture": "conformance/pointwise_lift/fixtures/lift_partial_translate.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Col.A",
+          "role": "state",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Col"
+        },
+        {
+          "name": "Mech.B",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Col.src",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Col"
+        },
+        {
+          "name": "Mech.kb",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.002,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "D(Col.A)/Dt",
+          "rhs": "Col.src + -1 * Mech.kb * Col.A",
+          "source_system": "Col",
+          "contributions": [
+            {
+              "rhs": "Col.src",
+              "origins": [
+                {
+                  "component": "Col"
+                }
+              ]
+            },
+            {
+              "rhs": "-1 * Mech.kb * Col.A",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Mech.B[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (Mech.kb * Col.A[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "Mech.kb * Col.A[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Col",
+          "Mech"
+        ],
+        "coupling_rules": [
+          "operator_compose(Col + Mech) [translate: Col.A->Mech.A]"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "lev"
+      ],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {
+        "Mech.B": [
+          3
+        ]
+      }
+    },
+    {
+      "id": "lift_untouched_species",
+      "tier": "pointwise_lift",
+      "fixture": "conformance/pointwise_lift/fixtures/lift_untouched_species.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Box.x",
+          "role": "state",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Box"
+        },
+        {
+          "name": "Box.y",
+          "role": "state",
+          "units": "1",
+          "default": 2.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Box"
+        },
+        {
+          "name": "Mech.A",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        },
+        {
+          "name": "Mech.B",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        },
+        {
+          "name": "Mech.C",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Column.T",
+          "role": "parameter",
+          "units": "K",
+          "default": 300.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Column"
+        },
+        {
+          "name": "Mech.kb",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.002,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "Rates.k1",
+          "role": "observed",
+          "units": "1/s",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Rates"
+        }
+      ],
+      "algebraic_variables": [
+        "Mech.C"
+      ],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 5,
+      "equations": [
+        {
+          "lhs": "Rates.k1",
+          "rhs": "1.0e-3 * (Column.T / 300)",
+          "source_system": "Rates",
+          "contributions": [
+            {
+              "rhs": "1.0e-3 * (Column.T / 300)",
+              "origins": [
+                {
+                  "component": "Rates"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Box.x[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (-1.0e-5 * Column.T[_p0] * Box.x[_p0]) where {_p0 in lev}",
+          "source_system": "Box",
+          "contributions": [
+            {
+              "rhs": "-1.0e-5 * Column.T[_p0] * Box.x[_p0]",
+              "origins": [
+                {
+                  "component": "Box"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Box.y[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (-0.1 * Box.y[_p0]) where {_p0 in lev}",
+          "source_system": "Box",
+          "contributions": [
+            {
+              "rhs": "-0.1 * Box.y[_p0]",
+              "origins": [
+                {
+                  "component": "Box"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Mech.A[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (-1 * Rates.k1[_p0] * Mech.A[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "-1 * Rates.k1[_p0] * Mech.A[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Mech.B[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (Rates.k1[_p0] * Mech.A[_p0] + -1 * Mech.kb * Mech.B[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "Rates.k1[_p0] * Mech.A[_p0] + -1 * Mech.kb * Mech.B[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Column",
+          "Rates",
+          "Box",
+          "Mech"
+        ],
+        "coupling_rules": [
+          "variable_map(Column.T -> Rates.T, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "lev"
+      ],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {
+        "Box.x": [
+          3
+        ],
+        "Box.y": [
+          3
+        ],
+        "Mech.A": [
+          3
+        ],
+        "Mech.B": [
+          3
+        ],
+        "Mech.C": [
+          3
+        ]
+      }
+    },
+    {
+      "id": "lift_fixpoint",
+      "tier": "pointwise_lift",
+      "fixture": "conformance/pointwise_lift/fixtures/lift_fixpoint.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Store.s",
+          "role": "state",
+          "units": "1",
+          "default": 0.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Store"
+        },
+        {
+          "name": "Uptake.u",
+          "role": "state",
+          "units": "1",
+          "default": 0.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Uptake"
+        },
+        {
+          "name": "Mech.A",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        },
+        {
+          "name": "Mech.B",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Column.T",
+          "role": "parameter",
+          "units": "K",
+          "default": 300.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Column"
+        },
+        {
+          "name": "Mech.kb",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.002,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "Rates.k1",
+          "role": "observed",
+          "units": "1/s",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Rates"
+        }
+      ],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 5,
+      "equations": [
+        {
+          "lhs": "sum[_p0] (D(Store.s[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (0.1 * Uptake.u[_p0]) where {_p0 in lev}",
+          "source_system": "Store",
+          "contributions": [
+            {
+              "rhs": "0.1 * Uptake.u[_p0]",
+              "origins": [
+                {
+                  "component": "Store"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Uptake.u[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (0.5 * Mech.A[_p0] + -0.1 * Uptake.u[_p0]) where {_p0 in lev}",
+          "source_system": "Uptake",
+          "contributions": [
+            {
+              "rhs": "0.5 * Mech.A[_p0] + -0.1 * Uptake.u[_p0]",
+              "origins": [
+                {
+                  "component": "Uptake"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "Rates.k1",
+          "rhs": "1.0e-3 * (Column.T / 300)",
+          "source_system": "Rates",
+          "contributions": [
+            {
+              "rhs": "1.0e-3 * (Column.T / 300)",
+              "origins": [
+                {
+                  "component": "Rates"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Mech.A[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (-1 * Rates.k1[_p0] * Mech.A[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "-1 * Rates.k1[_p0] * Mech.A[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Mech.B[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (Rates.k1[_p0] * Mech.A[_p0] + -1 * Mech.kb * Mech.B[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "Rates.k1[_p0] * Mech.A[_p0] + -1 * Mech.kb * Mech.B[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Store",
+          "Uptake",
+          "Column",
+          "Rates",
+          "Mech"
+        ],
+        "coupling_rules": [
+          "variable_map(Column.T -> Rates.T, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "lev"
+      ],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {
+        "Mech.A": [
+          3
+        ],
+        "Mech.B": [
+          3
+        ],
+        "Store.s": [
+          3
+        ],
+        "Uptake.u": [
+          3
+        ]
+      }
+    },
+    {
+      "id": "lift_mean_not_triggered",
+      "tier": "pointwise_lift",
+      "fixture": "conformance/pointwise_lift/fixtures/lift_mean_not_triggered.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Land.w",
+          "role": "state",
+          "units": "1",
+          "default": 0.3,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Land"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Column.q",
+          "role": "parameter",
+          "units": "1",
+          "default": 0.01,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Column"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 1,
+      "equations": [
+        {
+          "lhs": "D(Land.w)/Dt",
+          "rhs": "1.0e-3 * Column.q",
+          "source_system": "Land",
+          "contributions": [
+            {
+              "rhs": "1.0e-3 * Column.q",
+              "origins": [
+                {
+                  "component": "Land"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Column",
+          "Land"
+        ],
+        "coupling_rules": [
+          "variable_map(Column.q -> Land.p, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "lev"
+      ],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "variable_map_data_fed_data_fed_source_keeps_declaration",
       "tier": "variable_map_data_fed",
       "fixture": "conformance/variable_map_data_fed/fixtures/data_fed_source_keeps_declaration.esm",
@@ -10950,6 +11978,11 @@
       "fixture": "conformance/pointwise_lift/fixtures/lift_synthetic_name_clash.esm",
       "error": "DimensionPromotionError",
       "reason": "the pointwise lift needs the synthetic index set `_liftdim1_3` (two declared index sets have size 3 and no shaped operand chooses between them), but the document declares `_liftdim1_3` with size 4. esm-libraries-spec §4.7.5, \"Pointwise lift: index sets\": every name in a lifted state's shape is an index set of the dimension's extent, so flatten refuses rather than shadow the declared set."
+    },
+    {
+      "fixture": "conformance/pointwise_lift/fixtures/lift_two_grids.esm",
+      "error": "DimensionPromotionError",
+      "reason": "`Box.x` reads the [lev] `Column.T` and `Box.y` reads the [lat] `Column.S`, so the two lift candidates would put the one component `Box` on two different grids. esm-spec §10.5 and esm-libraries-spec §4.7.5, \"Pointwise lift: which states are lifted\": the unit of lifting is the whole component, so flatten refuses rather than choose a grid."
     },
     {
       "fixture": "valid/template_import_lib.esm",
