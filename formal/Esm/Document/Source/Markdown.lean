@@ -55,17 +55,23 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
   scalar or a single-quoted YAML flow collection (`shape='["x", "y"]'`).
 
 Everything else is prose, which the parser skips: `lex` reads a construct where one
-starts and otherwise drops one character. So the parse depends only on the sequence of
-constructs (`lex_render`): inserting or removing prose, and adding or removing equation
-labels, never changes it.
+starts and otherwise drops one character. A code span is skipped whole: a run of
+backticks (not a ```` ```esm: ```` fence at the start of a line) runs to the next
+occurrence of the same run, so `` `:var[x]` `` or a fenced code block holding an example
+is prose; a run with no such occurrence after it is literal. So the parse depends only on
+the sequence of constructs (`lex_render`): inserting or removing prose and code spans,
+and adding or removing equation labels, never changes it.
 
-Restrictions this places on prose (`Inert`): prose may not contain a declaration opener
-(`:var[`, `:param[`, `:species[`) anywhere, nor start a line with ```` ```esm: ````,
-`$$`, `::model[`, `::reaction-system[`, `| decl | name |`, `:::initialization` or
-`:::constraints`, nor start a line with a table row holding a `rate` cell (a reaction table,
-which the lexer refuses). In particular display math (`$$`) at the start
-of a line is always a model equation; illustrative math in prose uses inline `$…$` or
-another delimiter.
+Restrictions this places on prose outside code spans (`Inert`): prose may not contain a
+declaration opener (`:var[`, `:param[`, `:species[`) anywhere, nor start a line with
+```` ```esm: ````, `$$`, `::model[`, `::reaction-system[`, `| decl | name |`,
+`:::initialization` or `:::constraints`, nor start a line with a table row holding a `rate`
+cell (a reaction table, which the lexer refuses). In particular display math (`$$`) at the
+start of a line is always a model equation, so outside a model it rejects the file;
+illustrative math in prose uses inline `$…$` or another delimiter.
+
+The reader first drops a leading byte-order mark and, when the first line ends in CRLF,
+reads every CRLF as LF (`decodeText`).
 -/
 
 namespace Esm.Document.Source.Md
@@ -659,9 +665,26 @@ def tableAt (f : Nat) (s : List Char) : Option (List RItem × List Char) :=
       (pRows p.1 f (splitLine p.2).2).map (fun q => (q.1.map RItem.decl, q.2))
     else none)
 
+/-! ## Code spans
+
+A run of backticks in prose opens a code span (or, at the start of a line, a fenced code
+block), which runs to the next occurrence of the same run; nothing inside it is a
+construct. A run with no such occurrence after it is literal. -/
+
+/-- The text after the first occurrence of `n` backticks. -/
+def afterRun (n : Nat) : List Char → Option (List Char)
+  | [] => none
+  | c :: r => if pre (List.replicate n '`') (c :: r) then some ((c :: r).drop n) else afterRun n r
+
+/-- The text after the code span that starts here (at a backtick). -/
+def skipCode (s : List Char) : List Char :=
+  match afterRun (s.takeWhile (· == '`')).length (s.drop (s.takeWhile (· == '`')).length) with
+  | some t => t
+  | none => s.drop (s.takeWhile (· == '`')).length
+
 /-- **The Markdown lexer**: the constructs of a text, skipping prose one character at a
-time. `bol`: the text starts at the beginning of a line. A malformed construct is an
-error (`none`). -/
+time and code spans whole. `bol`: the text starts at the beginning of a line. A malformed
+construct is an error (`none`). -/
 def lex : Nat → Bool → List Char → Option (List RItem)
   | 0, _, _ => none
   | _ + 1, _, [] => some []
@@ -675,6 +698,7 @@ def lex : Nat → Bool → List Char → Option (List RItem)
     else if bol && contOpen (c :: r) then
       (contAt f (c :: r)).bind (fun p => (lex f true p.2).map (p.1 ++ ·))
     else if bol && rateTable (c :: r) then none
+    else if c == '`' then lex f false (skipCode (c :: r))
     else lex f (c == '\n') r
 
 /-! ## Reading back the pieces -/
@@ -1225,16 +1249,19 @@ def itemMd : RItem → List Char
 def eqnLabeled (raw : String) (label : List Char) : List Char :=
   dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ label ++ ['\n']
 
-/-- A piece of a Markdown document: a construct, a labelled equation, or prose. -/
+/-- A piece of a Markdown document: a construct, a labelled equation, prose, or a code
+span (`` `…` ``, whatever its content). -/
 inductive Seg where
   | item (it : RItem)
   | labeled (raw : String) (label : List Char)
   | prose (p : List Char)
+  | code (body : List Char)
 
 def segText : Seg → List Char
   | .item it => itemMd it
   | .labeled raw l => eqnLabeled raw l
   | .prose p => p
+  | .code body => '`' :: body ++ ['`']
 
 /-- The text of a document body. -/
 def render (segs : List Seg) : List Char := segs.flatMap segText
@@ -1245,6 +1272,7 @@ def segItems : List Seg → List RItem
   | .item it :: r => it :: segItems r
   | .labeled raw _ :: r => .eqn raw :: segItems r
   | .prose _ :: r => segItems r
+  | .code _ :: r => segItems r
 
 /-- A construct that must start a line (all but declarations). -/
 def isBlock : RItem → Bool
@@ -1266,13 +1294,14 @@ def itemOK : RItem → Bool
       t.attrs.all attrOK
 
 /-- **Prose that the lexer skips**: at no character does a construct start (a block
-construct only matters at the start of a line). `t` is the text after the prose. -/
+construct only matters at the start of a line), and it holds no backtick (code spans are
+their own pieces, `Seg.code`). `t` is the text after the prose. -/
 def Inert : Bool → List Char → List Char → Prop
   | _, [], _ => True
   | bol, c :: p, t =>
     (bol && blockOpen (c :: p ++ t)) = false ∧ declOpen (c :: p ++ t) = false ∧
       (bol && pre tableOpen (c :: p ++ t)) = false ∧ (bol && contOpen (c :: p ++ t)) = false ∧
-      (bol && rateTable (c :: p ++ t)) = false ∧ Inert (c == '\n') p t
+      (bol && rateTable (c :: p ++ t)) = false ∧ c ≠ '`' ∧ Inert (c == '\n') p t
 
 /-- A document body whose constructs read back: each construct's content is spellable,
 block constructs start a line, labels are labels, and prose is inert. -/
@@ -1282,18 +1311,19 @@ def Valid : Bool → List Seg → Prop
   | bol, .labeled raw l :: rest =>
     bol = true ∧ itemOK (.eqn raw) = true ∧ labelOK l = true ∧ '\n' ∉ l ∧ Valid true rest
   | bol, .prose p :: rest => Inert bol p (render rest) ∧ Valid (endBol bol p) rest
+  | _, .code body :: rest => body ≠ [] ∧ '`' ∉ body ∧ Valid false rest
 
 /-! ## Lexing, construct by construct -/
 
 theorem lex_prose : ∀ (p t : List Char) (bol : Bool), Inert bol p t →
     ∀ f, p.length + t.length < f → lex f bol (p ++ t) = lex (f - p.length) (endBol bol p) t
   | [], t, bol, _, f, _ => by simp [endBol]
-  | c :: p, t, bol, ⟨h1, h2, h4, h5, h6, h3⟩, f, hf => by
+  | c :: p, t, bol, ⟨h1, h2, h4, h5, h6, h7, h3⟩, f, hf => by
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp at hf; omega⟩
     simp only [List.cons_append, lex]
     simp only [List.cons_append] at h1 h2 h4 h5 h6
     rw [h1, h2, h4, h5, h6]
-    simp only [Bool.false_eq_true, ite_false]
+    simp only [Bool.false_eq_true, ite_false, beq_iff_eq, h7]
     rw [lex_prose p t _ h3 g (by simp at hf; omega), endBol_cons]
     congr 1
     simp
@@ -1473,6 +1503,41 @@ theorem attrs_len : ∀ as : List (String × Json), as.length ≤ (attrsMd as).l
       | nil => simp
       | cons b bs ih => simp [List.flatMap_cons] at ih ⊢; omega
     omega
+
+theorem afterRun_one : ∀ (body t : List Char), '`' ∉ body → afterRun 1 (body ++ '`' :: t) = some t
+  | [], t, _ => by simp [afterRun, pre]
+  | c :: body, t, h => by
+    simp only [List.mem_cons, not_or] at h
+    have hp : pre (List.replicate 1 '`') (c :: (body ++ '`' :: t)) = false := by
+      simp [pre]; exact h.1
+    simp only [List.cons_append, afterRun, hp, Bool.false_eq_true, ite_false]
+    exact afterRun_one body t h.2
+
+/-- **A code span is skipped whole**, whatever it holds. -/
+theorem lex_code (body t : List Char) (hb : body ≠ []) (hc : '`' ∉ body) (bol : Bool) (g : Nat) :
+    lex (g + 1) bol ('`' :: body ++ '`' :: t) = lex g false t := by
+  obtain ⟨b, bs, rfl⟩ : ∃ b bs, body = b :: bs := by
+    cases body with
+    | nil => exact absurd rfl hb
+    | cons b bs => exact ⟨b, bs, rfl⟩
+  have hb1 : b ≠ '`' := fun e => hc (by simp [e])
+  have hop : blockOpen ('`' :: (b :: bs ++ '`' :: t)) = false := by
+    simp [blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, dTmpl, dRuleC, pre, Ne.symm hb1]
+  have hdo : declOpen ('`' :: (b :: bs ++ '`' :: t)) = false := by simp [declOpen, pre]
+  have htb : pre tableOpen ('`' :: (b :: bs ++ '`' :: t)) = false := by simp [tableOpen, pre]
+  have hco : contOpen ('`' :: (b :: bs ++ '`' :: t)) = false := by
+    simp [contOpen, dInit_l, dCons_l, pre]
+  have hsk : skipCode ('`' :: (b :: bs ++ '`' :: t)) = t := by
+    have htw : ('`' :: (b :: bs ++ '`' :: t)).takeWhile (· == '`') = ['`'] := by
+      simp [hb1]
+    unfold skipCode
+    rw [htw]
+    simp only [List.length_singleton, List.drop_one, List.tail_cons]
+    rw [show b :: bs ++ '`' :: t = (b :: bs) ++ '`' :: t from rfl, afterRun_one _ _ hc]
+  have hrt : rateTable ('`' :: (b :: bs ++ '`' :: t)) = false := by simp [rateTable, pre]
+  simp only [List.cons_append] at hop hdo htb hco hrt hsk
+  simp only [List.cons_append, lex, hop, hdo, htb, hco, hrt, Bool.and_false, Bool.false_eq_true, ite_false,
+    beq_self_eq_true, ite_true, hsk]
 
 theorem itemMd_eqn (raw : String) : itemMd (.eqn raw) = eqnLabeled raw [] := by
   simp [itemMd, eqnLabeled]
@@ -1811,6 +1876,12 @@ theorem lex_render : ∀ (segs : List Seg) (bol : Bool), Valid bol segs →
     rw [show render (.prose p :: rest) = p ++ render rest from rfl] at hf ⊢
     rw [lex_prose p _ bol hi f (by simpa using hf)]
     exact lex_render rest _ hv _ (by simp [render] at hf ⊢; omega)
+  | .code body :: rest, bol, ⟨hb, hc, hv⟩, f, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [render] at hf; omega⟩
+    rw [show render (.code body :: rest) = '`' :: body ++ '`' :: render rest by
+      simp [render, segText]] at hf ⊢
+    rw [lex_code body _ hb hc bol g]
+    exact lex_render rest false hv g (by simp at hf; omega)
   | .labeled raw l :: rest, bol, ⟨hb, hr, hl, hln, hv⟩, f, hf => by
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [render] at hf; omega⟩
     rw [show render (.labeled raw l :: rest) = eqnLabeled raw l ++ render rest from rfl] at hf ⊢

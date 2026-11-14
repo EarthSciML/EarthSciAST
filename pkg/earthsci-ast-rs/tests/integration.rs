@@ -45,16 +45,10 @@ mod build_time_computed_gathers;
 mod build_time_tape_route;
 #[path = "cadence_conformance.rs"]
 mod cadence_conformance;
+#[path = "canonical_conformance.rs"]
+mod canonical_conformance;
 #[path = "classification_conformance.rs"]
 mod classification_conformance;
-#[path = "cli_data_source_ingest.rs"]
-mod cli_data_source_ingest;
-#[path = "cli_static_evaluation_output.rs"]
-mod cli_static_evaluation_output;
-#[path = "cli_test_command.rs"]
-mod cli_test_command;
-#[path = "cli_units_command.rs"]
-mod cli_units_command;
 #[path = "compiled_rhs_adapter.rs"]
 mod compiled_rhs_adapter;
 #[path = "compiler_gate_routes.rs"]
@@ -91,6 +85,8 @@ mod data_source_extent_scope;
 mod data_source_unbound_conformance;
 #[path = "data_source_url_conformance.rs"]
 mod data_source_url_conformance;
+#[path = "deprecated_ops.rs"]
+mod deprecated_ops;
 #[path = "discrete_materialize_conformance.rs"]
 mod discrete_materialize_conformance;
 #[path = "display_conformance.rs"]
@@ -99,6 +95,8 @@ mod display_conformance;
 mod doubly_defined_state_conformance;
 #[path = "earthscidata_loader_coverage.rs"]
 mod earthscidata_loader_coverage;
+#[path = "elementwise_lift_equation_order.rs"]
+mod elementwise_lift_equation_order;
 #[path = "elementwise_observed_gather_conformance.rs"]
 mod elementwise_observed_gather_conformance;
 #[path = "esio_document_cadence.rs"]
@@ -237,6 +235,8 @@ mod overlap_gate_conformance;
 mod overlap_gate_dense_scaling;
 #[path = "overlap_gate_live_forcing.rs"]
 mod overlap_gate_live_forcing;
+#[path = "overlap_gate_ring_stack.rs"]
+mod overlap_gate_ring_stack;
 #[path = "override_key_diagnostics_conformance.rs"]
 mod override_key_diagnostics_conformance;
 #[path = "pde_const_hoist.rs"]
@@ -259,6 +259,8 @@ mod pde_vectorized_eval;
 mod performance;
 #[path = "pipeline_flatten_rewrites.rs"]
 mod pipeline_flatten_rewrites;
+#[path = "pointwise_lift_values.rs"]
+mod pointwise_lift_values;
 #[path = "portable_native_interpreter.rs"]
 mod portable_native_interpreter;
 #[path = "ppm_template_chain.rs"]

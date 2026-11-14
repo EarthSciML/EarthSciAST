@@ -16,7 +16,7 @@
         "zero_div": { "type": "algebraic", "units": "1", "expression": { "op": "/", "args": [1, 0] } },
         "sqrt_negative": { "type": "algebraic", "units": "1", "expression": { "op": "sqrt", "args": [-1] } },
         "log_zero": { "type": "algebraic", "units": "1", "expression": { "op": "log", "args": [0] } },
-        "pow_overflow": { "type": "algebraic", "units": "1", "expression": { "op": "pow", "args": [10, 1000] } }
+        "pow_overflow": { "type": "algebraic", "units": "1", "expression": { "op": "^", "args": [10, 1000] } }
       },
       "equations": [
         {

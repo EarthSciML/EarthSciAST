@@ -1124,9 +1124,10 @@ func buildUnitRegistry() map[string]Unit {
 // in the registry — and it runs before the byte-level scanner, which only
 // recognizes ASCII bytes:
 //
-//   - SUPERSCRIPT DIGITS ⁰¹²³⁴⁵⁶⁷⁸⁹ and superscript minus ⁻ → "^n"
+//   - SUPERSCRIPT DIGITS ⁰¹²³⁴⁵⁶⁷⁸⁹ → "^n", and superscript minus ⁻ → "^-" only
+//     right before superscript digits
 //     ("W/m²" → "W/m^2", "cm³" → "cm^3", "m⁻³" → "m^-3"). A RUN of superscript
-//     characters is one exponent, so "m¹⁰" is m^10, not m^1*0.
+//     digits is one exponent, so "m¹⁰" is m^10, not m^1*0.
 //   - MIDDOT · (U+00B7) and DOT OPERATOR ⋅ (U+22C5) → "*" ("J/(kg·K)",
 //     "kg⋅m/s"). Both are multiplication in SI typography.
 //   - U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU → "u" ("μg" → "ug")
@@ -1147,10 +1148,20 @@ func normalizeUnitString(s string) string {
 	b.Grow(len(s) + 4)
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
-		if isSuperscriptRune(r) {
-			// A run of superscript characters is a single exponent.
+		// A run of superscript DIGITS is one exponent ("m¹²" is m^12), and a
+		// superscript minus is rewritten only together with the digits right
+		// after it ("m⁻³" is m^-3). A minus anywhere else stays an unexpected
+		// character, so "s⁻1" does not resolve, and "m²⁻¹" is the two
+		// exponents m^2^-1, not one exponent -21 (esm-spec §4.8.2, Lean
+		// `normalize`).
+		minus := r == '⁻' && i+1 < len(runes) && isSuperscriptDigit(runes[i+1])
+		if minus || isSuperscriptDigit(r) {
 			b.WriteByte('^')
-			for i < len(runes) && isSuperscriptRune(runes[i]) {
+			if minus {
+				b.WriteByte('-')
+				i++
+			}
+			for i < len(runes) && isSuperscriptDigit(runes[i]) {
 				b.WriteByte(superscriptASCII(runes[i]))
 				i++
 			}
@@ -1208,6 +1219,10 @@ func isSuperscriptRune(r rune) bool {
 }
 
 func superscriptASCII(r rune) byte { return superscriptTable[r] }
+
+// isSuperscriptDigit reports a superscript digit (a superscript rune other
+// than the minus).
+func isSuperscriptDigit(r rune) bool { return r != '⁻' && isSuperscriptRune(r) }
 
 // ParseUnit parses a unit string into a Unit. Grammar:
 //

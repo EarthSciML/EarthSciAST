@@ -1,0 +1,18 @@
+{
+  "id": "zero_minuend",
+  "description": "A binary `-` with a literal zero minuend (RFC §5.4.7). `0 - x` and `-x` differ when x is +0.0 (`0 - 0.0` is +0.0, `-(0.0)` is -0.0), so `-(0, x)` collapses ONLY when x is a numeric literal, and then folds to the exact difference `0 - x`. With a non-literal subtrahend the binary node is kept, minuend and all. A double unary negation still collapses, which is exact. `max` only carries the cases: it is structure-preserving. The float-zero literal cases (`-(0, 0.0)`, `-(0.0, -0.0)` and `-(0.0, 5)`, giving 0.0, 0.0 and -5.0) are pinned in each binding's own canonicalize tests instead: a wire reader may read an integral float token such as `0.0` as an integer (CONFORMANCE_SPEC §5.5.3 rule 3), so they cannot be written portably here.",
+  "input": {
+    "op": "max",
+    "args": [
+      {"op": "-", "args": [0, 0]},
+      {"op": "-", "args": [0, 5]},
+      {"op": "-", "args": [0, 2.5]},
+      {"op": "-", "args": [0, -2.5]},
+      {"op": "-", "args": [0, "y"]},
+      {"op": "-", "args": [0, {"op": "*", "args": ["a", "b"]}]},
+      {"op": "-", "args": [{"op": "-", "args": ["y"]}]}
+    ]
+  },
+  "expected": "{\"args\":[0,-5,-2.5,2.5,{\"args\":[0,\"y\"],\"op\":\"-\"},{\"args\":[0,{\"args\":[\"a\",\"b\"],\"op\":\"*\"}],\"op\":\"-\"},\"y\"],\"op\":\"max\"}",
+  "tags": ["negation", "signed_zero", "integer", "float", "nonleaf"]
+}

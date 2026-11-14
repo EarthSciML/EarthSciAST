@@ -1,10 +1,10 @@
 //! Pure structural/expression analysis helpers used by the `esm` CLI.
 //!
 //! These are the I/O-free analysis primitives that previously lived inline in
-//! `src/bin/esm.rs`: expression metrics (depth, node/operation counts),
-//! structural/numerical expression comparison, unit collection, and the graph
-//! algorithms (Tarjan strongly-connected-components and the longest dependency
-//! chain). Moving them into the library makes them unit-testable independently
+//! the `esm` CLI (the `earthsci-ast-cli` crate): expression metrics (depth,
+//! node/operation counts), structural/numerical expression comparison, unit
+//! collection, and the graph algorithms (Tarjan strongly-connected-components
+//! and the longest dependency chain). Moving them into the library makes them unit-testable independently
 //! of the command-line front end; the CLI's printing routines call into these.
 
 use crate::graph::ComponentGraph;

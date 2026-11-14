@@ -328,6 +328,7 @@ export
     to_unicode, to_latex,
     # Canonical AST form (RFC §5.4)
     canonicalize, canonical_json, format_canonical_float, CanonicalizeError,
+    canonicalize_document,
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,
     # Planar spatial-index broad phase (projection-pushdown Phase 3a)

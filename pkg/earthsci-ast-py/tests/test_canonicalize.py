@@ -90,7 +90,26 @@ def test_int_float_disambiguation():
 def test_neg_canonical():
     assert canonical_json(op("neg", [op("neg", ["x"])])) == '"x"'
     assert canonical_json(op("neg", [5])) == "-5"
-    assert canonical_json(op("-", [0, "x"])) == '{"args":["x"],"op":"neg"}'
+    # Canonical negation is unary `-`; the deprecated `neg` never survives.
+    # `-(0, x)` is not `-(x)` when x is +0.0, so it stays binary; a literal
+    # subtrahend folds to the exact difference (RFC §5.4.7).
+    assert canonical_json(op("-", [0, "x"])) == '{"args":[0,"x"],"op":"-"}'
+    assert canonical_json(op("-", [0.0, "x"])) == '{"args":[0.0,"x"],"op":"-"}'
+    assert canonical_json(op("-", [0, 5])) == "-5"
+    assert canonical_json(op("-", [0, 0])) == "0"
+    assert canonical_json(op("-", [0, 0.0])) == "0.0"
+    assert canonical_json(op("-", [0.0, 0.0])) == "0.0"
+    assert canonical_json(op("-", [0.0, -0.0])) == "0.0"
+    assert canonical_json(op("-", [0.0, 5])) == "-5.0"
+    assert canonical_json(op("neg", ["x"])) == '{"args":["x"],"op":"-"}'
+    assert canonical_json(op("-", ["x"])) == '{"args":["x"],"op":"-"}'
+    assert canonical_json(op("-", [op("neg", ["x"])])) == '"x"'
+    assert canonical_json(op("neg", [op("-", ["x"])])) == '"x"'
+    assert canonical_json(op("neg", [0])) == "0"
+
+
+def test_pow_canonicalizes_to_caret():
+    assert canonical_json(op("pow", ["x", 2.5])) == '{"args":["x",2.5],"op":"^"}'
 
 
 def test_div_zero_by_zero():

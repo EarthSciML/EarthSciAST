@@ -23,6 +23,44 @@ func structuralDerivativeTarget(expr Expression) string {
 	return s
 }
 
+// liftedTarget is the state a pointwise-lifted equation defines: `x` of its
+// left-hand side `faq(D(index(x, ℓ…)))`, or "".
+func liftedTarget(eq FlattenedEquation) string {
+	if !eq.Lifted {
+		return ""
+	}
+	lhs, ok := asExprNode(eq.LHS)
+	if !ok || lhs.Op != "faq" {
+		return ""
+	}
+	inner, ok := asExprNode(lhs.Expr)
+	if !ok || !isStructuralTimeDerivative(inner) {
+		return ""
+	}
+	arg, ok := asExprNode(inner.Args[0])
+	if !ok || arg.Op != "index" || len(arg.Args) == 0 {
+		return ""
+	}
+	s, _ := arg.Args[0].(string)
+	return s
+}
+
+// tendencyTarget is the state whose tendency eq defines: the operand of a
+// structural `D` left-hand side, or the state of a lifted equation.
+func tendencyTarget(eq FlattenedEquation) string {
+	if name := structuralDerivativeTarget(eq.LHS); name != "" {
+		return name
+	}
+	return liftedTarget(eq)
+}
+
+// isLiftedTendency reports whether a tendency is a lifted right-hand side: a
+// `faq` with output indices.
+func isLiftedTendency(expr Expression) bool {
+	node, ok := asExprNode(expr)
+	return ok && node.Op == "faq" && len(node.OutputIdx) > 0
+}
+
 // hasStructuralTimeDerivative reports whether expr carries a structural `D`
 // anywhere.
 func hasStructuralTimeDerivative(expr Expression) bool {
@@ -58,7 +96,9 @@ func resolveRHSTimeDerivatives(flat *FlattenedSystem) {
 		timeInvariant: map[string]bool{},
 	}
 	for _, eq := range flat.Equations {
-		if name := structuralDerivativeTarget(eq.LHS); name != "" {
+		if name := tendencyTarget(eq); name != "" {
+			// A lifted state's tendency is its lifted right-hand side, the `faq`
+			// over its index sets (esm-libraries-spec §4.7.5 step 3a).
 			r.tendency[name] = eq.RHS
 		} else if name, ok := eq.LHS.(string); ok {
 			// A bare-variable LHS is a DEFINING equation (esm-spec §6.3.1's
@@ -82,7 +122,7 @@ func resolveRHSTimeDerivatives(flat *FlattenedSystem) {
 		// `D(x)/dt ~ k*D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather
 		// than expand forever.
 		var active []string
-		if own := structuralDerivativeTarget(eq.LHS); own != "" {
+		if own := tendencyTarget(eq); own != "" {
 			active = append(active, own)
 		} else if own, ok := eq.LHS.(string); ok {
 			active = append(active, own)
@@ -161,6 +201,16 @@ func (r derivTables) deriv(expr Expression, active *[]string) (Expression, bool)
 		return nil, false
 	}
 	args := node.Args
+	if node.Op == "index" && len(args) > 0 {
+		if name, ok := args[0].(string); ok && isLiftedTendency(r.tendency[name]) {
+			// One cell of a lifted state: that cell of its lifted tendency.
+			whole, ok := r.deriv(name, active)
+			if !ok {
+				return nil, false
+			}
+			return ExprNode{Op: "index", Args: append([]any{whole}, args[1:]...)}, true
+		}
+	}
 	switch {
 	case node.Op == "+":
 		terms := make([]Expression, 0, len(args))

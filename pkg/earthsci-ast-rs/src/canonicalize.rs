@@ -252,12 +252,36 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if let Some(e) = err {
         return Err(e);
     }
+    // A `const` node's declared units take the canonical unit spelling
+    // (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+    if let Some(units) = work.units.as_mut() {
+        *units = crate::units::canonical_unit_spelling(units);
+    }
+    if work.op == "const" && work.units.as_deref() == Some("1") {
+        // A dimensionless const drops its units (user ruling 2026-11-14): a
+        // scalar becomes the bare literal, an array a unitless const.
+        match &work.value {
+            Some(serde_json::Value::Number(n)) if n.is_i64() => {
+                return Ok(Expr::Integer(n.as_i64().unwrap_or_default()));
+            }
+            Some(serde_json::Value::Number(n)) if n.as_f64().is_some() => {
+                return canonicalize(&Expr::Number(n.as_f64().unwrap_or_default()));
+            }
+            _ => work.units = None,
+        }
+    }
     match work.op.as_str() {
         "+" => canon_add(&mut work),
         "*" => canon_mul(&mut work),
         "-" => canon_sub(&mut work),
         "/" => canon_div(&mut work),
         "neg" => canon_neg(&mut work),
+        // The deprecated word spelling of `^` (esm-spec §4.2 "Deprecated
+        // ops"): the canonical form writes `^`.
+        "pow" if work.args.len() == 2 => {
+            work.op = "^".into();
+            Ok(Expr::operator(work))
+        }
         _ => Ok(Expr::operator(work)),
     }
 }
@@ -323,16 +347,26 @@ fn canon_mul(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
 
 fn canon_sub(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if node.args.len() == 1 {
-        // Tolerate unary -, prefer neg on the wire.
+        // Unary `-` is the canonical negation (RFC §5.4.7).
         let arg = node.args.pop().unwrap();
         return canon_neg_value(arg);
     }
     if node.args.len() == 2 {
         let b = node.args.pop().unwrap();
         let a = node.args.pop().unwrap();
-        // -(0, x) -> neg(x)
+        // `0 - x` is NOT `-x` when x is +0.0 (`0 - 0.0` is +0.0, `-(0.0)` is
+        // -0.0), so only a literal subtrahend folds, to the exact difference:
+        // an integer when both are integers, else the IEEE float difference.
+        // Any other `-(0, x)` stays binary (RFC §5.4.7).
         if is_zero_any(&a) {
-            return canon_neg_value(b);
+            match (&a, &b) {
+                (Expr::Integer(_), Expr::Integer(i)) => return Ok(Expr::Integer(-i)),
+                (Expr::Integer(_) | Expr::Number(_), Expr::Number(f)) => {
+                    return Ok(Expr::Number(0.0 - f));
+                }
+                (Expr::Number(_), Expr::Integer(i)) => return Ok(Expr::Number(0.0 - *i as f64)),
+                _ => {}
+            }
         }
         // -(x, 0) -> x (type-preserving: float-zero with int x promotes)
         if is_zero_any(&b) {
@@ -384,6 +418,8 @@ fn canon_div(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     }))
 }
 
+/// The deprecated `neg` (esm-spec §4.2 "Deprecated ops"): canonicalized
+/// exactly as unary `-`.
 fn canon_neg(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if node.args.len() != 1 {
         return Ok(Expr::operator(std::mem::take(node)));
@@ -392,13 +428,19 @@ fn canon_neg(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     canon_neg_value(arg)
 }
 
+/// Negate an already-canonical operand (RFC §5.4.7): a literal becomes the
+/// negative literal, a negation in either spelling (unary `-`, or the
+/// deprecated `neg`) collapses, and anything else is wrapped in unary `-` —
+/// never `neg`, which the canonical form does not contain.
 fn canon_neg_value(arg: Expr) -> Result<Expr, CanonicalizeError> {
     match arg {
         Expr::Integer(i) => Ok(Expr::Integer(-i)),
         Expr::Number(f) => Ok(Expr::Number(-f)),
-        Expr::Operator(n) if n.op == "neg" && n.args.len() == 1 => Ok(n.args[0].clone()),
+        Expr::Operator(n) if (n.op == "neg" || n.op == "-") && n.args.len() == 1 => {
+            Ok(n.args[0].clone())
+        }
         other => Ok(Expr::operator(ExpressionNode {
-            op: "neg".into(),
+            op: "-".into(),
             args: vec![other],
             ..ExpressionNode::default()
         })),
@@ -806,6 +848,108 @@ pub(crate) fn push_scientific(out: &mut String, digits: &str, exp: i32, force_fr
     write!(out, "e{exp}").expect("writing to a String cannot fail");
 }
 
+// ---------------------------------------------------------------------------
+// The document-level canonical step (esm-spec §4.8.2 "Canonical spelling").
+// ---------------------------------------------------------------------------
+
+/// Object properties whose value is a NAME-KEYED map (esm-schema.json): a map's
+/// keys are names, never fields, so a variable NAMED `units` is not a units
+/// string. The same list in every binding.
+const DOCUMENT_MAP_KEYS: &[&str] = &[
+    "bind",
+    "bindings",
+    "coordinates",
+    "coords",
+    "coupling_roles",
+    "data_sources",
+    "enums",
+    "expression_template_imports",
+    "expression_templates",
+    "guesses",
+    "index_set_rename",
+    "index_sets",
+    "initial_conditions",
+    "map",
+    "metaparameters",
+    "models",
+    "parameter_overrides",
+    "parameters",
+    "pinned_coords",
+    "ranges",
+    "reaction_systems",
+    "rebind",
+    "rename",
+    "species",
+    "subsystems",
+    "translate",
+    "url_substitutions",
+    "variables",
+    "where",
+];
+
+/// Free-form objects (schema `additionalProperties: true`), never descended.
+const DOCUMENT_FREE_KEYS: &[&str] = &["attrs", "config", "metadata", "reader_options", "x_esd"];
+
+/// The document-level canonical step: every units string of a decoded document
+/// (the JSON value `to_json` writes and `load_document` reads) takes the
+/// canonical unit spelling (esm-spec §4.8.2, Lean `Esm.Units.canon`).
+///
+/// That is every `units` and `default_units` string of a variable, species,
+/// parameter, coordinate or `const` node, wherever it sits: nested subsystems,
+/// template bodies, tests, coupling entries. Free-form objects (`metadata`,
+/// `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither
+/// are the keys of name-keyed maps. A `const` node whose units spell `1` loses
+/// them: a scalar one becomes the bare literal, an array one a `const` without
+/// `units`. Nothing else changes.
+#[must_use]
+pub fn canonicalize_document(doc: &serde_json::Value) -> serde_json::Value {
+    fn walk(value: &serde_json::Value, is_map: bool) -> serde_json::Value {
+        use serde_json::Value;
+        match value {
+            Value::Array(items) => Value::Array(items.iter().map(|v| walk(v, false)).collect()),
+            Value::Object(obj) if !is_map && is_dimensionless_const(obj) => {
+                // A dimensionless const drops its units: a scalar becomes the
+                // bare literal, an array a unitless const.
+                match obj.get("value") {
+                    Some(n @ Value::Number(_)) => n.clone(),
+                    _ => Value::Object(
+                        obj.iter()
+                            .filter(|(k, _)| k.as_str() != "units")
+                            .map(|(k, v)| {
+                                (k.clone(), walk(v, DOCUMENT_MAP_KEYS.contains(&k.as_str())))
+                            })
+                            .collect(),
+                    ),
+                }
+            }
+            Value::Object(obj) => Value::Object(
+                obj.iter()
+                    .map(|(k, v)| {
+                        let out = match v {
+                            _ if is_map => walk(v, false),
+                            Value::String(u) if k == "units" || k == "default_units" => {
+                                Value::String(crate::units::canonical_unit_spelling(u))
+                            }
+                            _ if DOCUMENT_FREE_KEYS.contains(&k.as_str()) => v.clone(),
+                            _ => walk(v, DOCUMENT_MAP_KEYS.contains(&k.as_str())),
+                        };
+                        (k.clone(), out)
+                    })
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+    fn is_dimensionless_const(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+        obj.get("op").and_then(|v| v.as_str()) == Some("const")
+            && obj
+                .get("units")
+                .and_then(|v| v.as_str())
+                .is_some_and(|u| crate::units::canonical_unit_spelling(u) == "1")
+    }
+    walk(doc, false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1066,17 +1210,60 @@ mod tests {
         assert!(ja.contains("1.0"), "float 1.0 not emitted as 1.0: {ja}");
     }
 
+    /// Every spelling of negation canonicalizes to unary `-` (RFC §5.4.7):
+    /// the deprecated `neg` (esm-spec §4.2 "Deprecated ops") is never emitted.
     #[test]
-    fn neg_canonical() {
-        let inner = op("neg", vec![Expr::Variable("x".into())]);
-        let outer = op("neg", vec![inner]);
-        assert_eq!(canonical_json(&outer).unwrap(), r#""x""#);
-        let lit = op("neg", vec![Expr::Integer(5)]);
-        assert_eq!(canonical_json(&lit).unwrap(), "-5");
-        let sub = op("-", vec![Expr::Integer(0), Expr::Variable("x".into())]);
+    fn negation_canonicalizes_to_unary_minus() {
+        let x = || Expr::Variable("x".into());
+        let unary = r#"{"args":["x"],"op":"-"}"#;
+        assert_eq!(canonical_json(&op("neg", vec![x()])).unwrap(), unary);
+        assert_eq!(canonical_json(&op("-", vec![x()])).unwrap(), unary);
+        // `-(0, x)` is not `-(x)` when x is +0.0, so it stays binary; a
+        // literal subtrahend folds to the exact difference.
+        let sub = op("-", vec![Expr::Integer(0), x()]);
         assert_eq!(
             canonical_json(&sub).unwrap(),
-            r#"{"args":["x"],"op":"neg"}"#
+            r#"{"args":[0,"x"],"op":"-"}"#
+        );
+        let zero_sub = |a: Expr, b: Expr| canonical_json(&op("-", vec![a, b])).unwrap();
+        assert_eq!(zero_sub(Expr::Integer(0), Expr::Integer(5)), "-5");
+        assert_eq!(zero_sub(Expr::Number(0.0), Expr::Integer(5)), "-5.0");
+        assert_eq!(zero_sub(Expr::Integer(0), Expr::Number(0.0)), "0.0");
+        assert_eq!(zero_sub(Expr::Number(0.0), Expr::Number(-0.0)), "0.0");
+        // Double negation collapses in either spelling, and mixed.
+        for (o, i) in [("neg", "neg"), ("-", "-"), ("neg", "-"), ("-", "neg")] {
+            let e = op(o, vec![op(i, vec![x()])]);
+            assert_eq!(canonical_json(&e).unwrap(), r#""x""#, "{o}({i}(x))");
+        }
+        assert_eq!(
+            canonical_json(&op("neg", vec![Expr::Integer(5)])).unwrap(),
+            "-5"
+        );
+        assert_eq!(
+            canonical_json(&op("-", vec![Expr::Number(2.5)])).unwrap(),
+            "-2.5"
+        );
+        assert_eq!(
+            canonical_json(&op("neg", vec![Expr::Integer(0)])).unwrap(),
+            "0"
+        );
+        // Idempotent: the canonical unary `-` canonicalizes to itself.
+        let once = canonicalize(&op("neg", vec![x()])).unwrap();
+        assert_eq!(canonical_json(&once).unwrap(), unary);
+    }
+
+    /// The deprecated `pow` canonicalizes to `^`; a malformed one is left alone.
+    #[test]
+    fn pow_canonicalizes_to_caret() {
+        let e = op("pow", vec![Expr::Variable("x".into()), Expr::Number(2.5)]);
+        assert_eq!(
+            canonical_json(&e).unwrap(),
+            r#"{"args":["x",2.5],"op":"^"}"#
+        );
+        let bad = op("pow", vec![Expr::Variable("x".into())]);
+        assert_eq!(
+            canonical_json(&bad).unwrap(),
+            r#"{"args":["x"],"op":"pow"}"#
         );
     }
 
@@ -1221,6 +1408,29 @@ mod tests {
             canonical_json(&e).unwrap_err().to_string(),
             "E_CANONICAL_UNSUPPORTED_FIELD"
         );
+    }
+
+    /// The document-level fixtures (tests/conformance/canonical_document):
+    /// `canonicalize_document(input)` equals `expected` as a JSON value.
+    #[test]
+    fn canonical_document_conformance_fixtures() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/conformance/canonical_document");
+        let read = |name: &str| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(dir.join(name)).unwrap()).unwrap()
+        };
+        let manifest = read("manifest.json");
+        let fixtures = manifest["fixtures"].as_array().unwrap();
+        assert!(!fixtures.is_empty());
+        for entry in fixtures {
+            let fixture = read(entry["path"].as_str().unwrap());
+            assert_eq!(
+                canonicalize_document(&fixture["input"]),
+                fixture["expected"],
+                "fixture {}",
+                entry["id"]
+            );
+        }
     }
 
     /// Conformance fixture consumer — the same fixture set is run by every

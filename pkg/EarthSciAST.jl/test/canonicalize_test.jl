@@ -87,10 +87,32 @@ const ESM_Expr = EarthSciAST.ASTExpr
         @test occursin("1.0", ja)
     end
 
-    @testset "neg canonical" begin
+    @testset "negation canonical: unary - (neg deprecated)" begin
+        unary_x = "{\"args\":[\"x\"],\"op\":\"-\"}"
         @test canonical_json(op("neg", Any[op("neg", Any["x"])])) == "\"x\""
+        @test canonical_json(op("neg", Any[op("-", Any["x"])])) == "\"x\""
+        @test canonical_json(op("-", Any[op("neg", Any["x"])])) == "\"x\""
+        @test canonical_json(op("-", Any[op("-", Any["x"])])) == "\"x\""
         @test canonical_json(op("neg", Any[5])) == "-5"
-        @test canonical_json(op("-", Any[0, "x"])) == "{\"args\":[\"x\"],\"op\":\"neg\"}"
+        @test canonical_json(op("-", Any[5])) == "-5"
+        @test canonical_json(op("neg", Any[0])) == "0"
+        # `-(0, x)` is not `-(x)` when x is +0.0, so it stays binary; a literal
+        # subtrahend folds to the exact difference (RFC §5.4.7).
+        @test canonical_json(op("-", Any[0, "x"])) == "{\"args\":[0,\"x\"],\"op\":\"-\"}"
+        @test canonical_json(op("-", Any[0, 5])) == "-5"
+        @test canonical_json(op("-", Any[0.0, 5])) == "-5.0"
+        @test canonical_json(op("-", Any[0, 0.0])) == "0.0"
+        @test canonical_json(op("-", Any[0.0, -0.0])) == "0.0"
+        @test canonical_json(op("neg", Any["x"])) == unary_x
+        @test canonical_json(op("-", Any["x"])) == unary_x
+        # Binary `-` is never read as a negation to collapse.
+        @test canonical_json(op("-", Any[op("-", Any["a", "b"])])) ==
+            "{\"args\":[{\"args\":[\"a\",\"b\"],\"op\":\"-\"}],\"op\":\"-\"}"
+        # `pow` canonicalizes to `^`, keeping its operands.
+        @test canonical_json(op("pow", Any["x", 2])) == "{\"args\":[\"x\",2],\"op\":\"^\"}"
+        # A malformed `pow` is left as written, as in the other bindings.
+        @test canonical_json(op("pow", Any["x"])) == "{\"args\":[\"x\"],\"op\":\"pow\"}"
+        @test !occursin("neg", canonical_json(op("+", Any[op("neg", Any["y"]), "x"])))
     end
 
     @testset "div 0/0" begin
@@ -260,4 +282,27 @@ const ESM_Expr = EarthSciAST.ASTExpr
             end
         end
     end
+end
+
+@testset "canonical document fixtures (esm-spec §4.8.2)" begin
+    # tests/conformance/canonical_document/*.json — canonicalize_document(input)
+    # equals the expected document as a JSON value, in every binding.
+    using JSON3
+    dir = abspath(joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "canonical_document"))
+    plain(x::AbstractDict) = Dict{String, Any}(String(k) => plain(v) for (k, v) in pairs(x))
+    plain(x::AbstractVector) = Any[plain(v) for v in x]
+    plain(x) = x
+    manifest = JSON3.read(read(joinpath(dir, "manifest.json"), String))
+    @test !isempty(manifest.fixtures)
+    for f in manifest.fixtures
+        fixture = JSON3.read(read(joinpath(dir, String(f.path)), String))
+        got = canonicalize_document(fixture.input)
+        @test plain(got) == plain(fixture.expected)
+    end
+    # Key order is kept, as in the other bindings.
+    doc = JSON3.read("{\"z\": 1, \"units\": \"s*m\", \"a\": {\"y\": 2, \"b\": 3}}")
+    got = canonicalize_document(doc)
+    @test collect(keys(got)) == ["z", "units", "a"]
+    @test collect(keys(got["a"])) == ["y", "b"]
+    @test got["units"] == "m*s"
 end

@@ -381,6 +381,11 @@ export const ERROR_CODES = {
   //   `faq` and the `function_tables` block at esm 2.0.0), rejected by name at
   //   the wire boundary (parse.ts).
   REMOVED_OP: 'removed_op',
+  // `deprecated_op` — WARNING, not an error: a document spelled the deprecated
+  //   `neg` (unary `-`) or `pow` (`^`), or `neg` as a `broadcast` `fn`; the wire
+  //   boundary rewrote each use and warns once per document (esm-spec §4.2
+  //   "Deprecated ops", parse.ts `rewriteDeprecatedOps`).
+  DEPRECATED_OP: 'deprecated_op',
   EXPRESSION_TEMPLATE_ERROR: 'expression_template_error',
   ENUM_LOWERING_ERROR: 'enum_lowering_error',
   NONFINITE_NUMBER: 'nonfinite_number',

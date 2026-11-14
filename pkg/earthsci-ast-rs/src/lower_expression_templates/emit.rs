@@ -73,10 +73,29 @@ fn authored_template_names(raw_source: &Value) -> std::collections::HashMap<Stri
 /// when any surviving reference or materialized entry remains (rule 8). Mirrors
 /// the Julia reference `emit_document`. `emit_esm_string ∘ emit_document` is a
 /// byte-wise fixed point under reload.
+///
+/// `raw_source` passes the same wire boundary a load applies, on a copy: a
+/// removed op is refused, and a deprecated `neg` / `pow` is rewritten with the
+/// `deprecated_op` warning, so neither spelling survives into the emitted
+/// document (esm-spec §4.2).
 pub fn emit_document(
     raw_source: &Value,
     base_path: &std::path::Path,
 ) -> Result<Value, ExpressionTemplateError> {
+    let mut prepared = raw_source.clone();
+    crate::parse::prepare_document_ops(&mut prepared).map_err(|e| {
+        let message = match e {
+            crate::EsmError::SchemaValidation(m) => m,
+            other => other.to_string(),
+        };
+        let code = if message.starts_with(codes::FAQ_VERSION_TOO_OLD) {
+            codes::FAQ_VERSION_TOO_OLD
+        } else {
+            codes::REMOVED_OP
+        };
+        crate::diagnostic::err(code, message)
+    })?;
+    let raw_source = &prepared;
     let authored = authored_template_names(raw_source);
     let resolved = crate::template_imports::resolve_template_machinery(
         raw_source,

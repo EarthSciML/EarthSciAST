@@ -8,6 +8,7 @@ import {
   canonicalize,
   formatCanonicalFloat,
 } from './canonicalize.js'
+import { floatLit, intLit } from './numeric-literal.js'
 
 const op = (name: string, args: unknown[]) => ({ op: name, args: args as never }) as never
 
@@ -64,10 +65,24 @@ describe('canonicalize per RFC §5.4 (TS best-effort)', () => {
     expect(canonicalJson(op('*', [-0, 'x']))).toBe('-0.0')
   })
 
-  it('canonicalizes neg / sub / div', () => {
+  it('canonicalizes negation / sub / div', () => {
+    // Every spelling of negation canonicalizes to unary `-`; the deprecated
+    // `neg` (esm-spec §4.2) is never emitted (RFC §5.4.7).
     expect(canonicalJson(op('neg', [op('neg', ['x'])]))).toBe('"x"')
+    expect(canonicalJson(op('neg', [op('-', ['x'])]))).toBe('"x"')
+    expect(canonicalJson(op('-', [op('-', ['x'])]))).toBe('"x"')
     expect(canonicalJson(op('neg', [5]))).toBe('-5.0')
-    expect(canonicalJson(op('-', [0, 'x']))).toBe('{"args":["x"],"op":"neg"}')
+    expect(canonicalJson(op('neg', ['x']))).toBe('{"args":["x"],"op":"-"}')
+    expect(canonicalJson(op('-', ['x']))).toBe('{"args":["x"],"op":"-"}')
+    // `-(0, x)` is not `-(x)` when x is +0.0, so it stays binary; a literal
+    // subtrahend folds to the exact difference.
+    expect(canonicalJson(op('-', [intLit(0), 'x']))).toBe('{"args":[0,"x"],"op":"-"}')
+    expect(canonicalJson(op('-', [intLit(0), intLit(5)]))).toBe('-5')
+    expect(canonicalJson(op('-', [floatLit(0), intLit(5)]))).toBe('-5.0')
+    expect(canonicalJson(op('-', [intLit(0), floatLit(0)]))).toBe('0.0')
+    expect(canonicalJson(op('-', [floatLit(0), floatLit(-0)]))).toBe('0.0')
+    // The deprecated `pow` canonicalizes to `^`.
+    expect(canonicalJson(op('pow', ['x', 'n']))).toBe('{"args":["x","n"],"op":"^"}')
     expect(() => canonicalize(op('/', [0, 0]))).toThrow(
       expect.objectContaining({ code: E_CANONICAL_DIVBY_ZERO }),
     )

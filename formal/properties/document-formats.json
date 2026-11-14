@@ -1,0 +1,84 @@
+{
+  "properties": [
+    {
+      "id": "P-doc-md-round-trip",
+      "defined_by": "formal/Esm/Document/Source/MarkdownDoc.lean",
+      "statement": "Every ESM document in canonical form reads back from its Markdown spelling.",
+      "lean_statement": "∀ (d : Esm.Document.Json), Esm.Document.Source.canonDoc d = true → Esm.Document.Source.Md.parseMd (Esm.Document.Source.Md.printMd d) = some d",
+      "status": "proven",
+      "theorem": "Esm.Document.Source.Md.parseMd_printMd"
+    },
+    {
+      "id": "P-doc-typ-round-trip",
+      "defined_by": "formal/Esm/Document/Source/TypstDoc.lean",
+      "statement": "Every ESM document in canonical form reads back from its Typst spelling.",
+      "lean_statement": "∀ (d : Esm.Document.Json), Esm.Document.Source.canonDoc d = true → Esm.Document.Source.Typ.parseTyp (Esm.Document.Source.Typ.printTyp d) = some d",
+      "status": "proven",
+      "theorem": "Esm.Document.Source.Typ.parseTyp_printTyp"
+    },
+    {
+      "id": "P-doc-md-prose-independence",
+      "defined_by": "formal/Esm/Document/Source/MarkdownDoc.lean",
+      "statement": "The parse of a valid Markdown document depends only on its front matter and its sequence of constructs: not on the prose or code spans between them, nor on equation labels.",
+      "lean_statement": "∀ (front : List (String × Esm.Document.Json)), Esm.Document.Math.jwf (.obj front) = true → ∀ (segs : List Esm.Document.Source.Md.Seg), Esm.Document.Source.Md.Valid true segs → Esm.Document.Source.Md.parseMd (String.ofList (Esm.Document.Source.Md.frontMd front ++ Esm.Document.Source.Md.render segs)) = Esm.Document.Source.Md.parseItemsMd front (Esm.Document.Source.Md.segItems segs)",
+      "status": "proven",
+      "theorem": "Esm.Document.Source.Md.parseMd_body"
+    },
+    {
+      "id": "P-doc-md-insert-prose",
+      "defined_by": "formal/Esm/Document/Source/MarkdownDoc.lean",
+      "statement": "Inserting prose into a valid Markdown document (keeping it valid) does not change its parse.",
+      "lean_statement": "∀ (front : List (String × Esm.Document.Json)), Esm.Document.Math.jwf (.obj front) = true → ∀ (a b : List Esm.Document.Source.Md.Seg) (p : List Char), Esm.Document.Source.Md.Valid true (a ++ b) → Esm.Document.Source.Md.Valid true (a ++ .prose p :: b) → Esm.Document.Source.Md.parseMd (String.ofList (Esm.Document.Source.Md.frontMd front ++ Esm.Document.Source.Md.render (a ++ .prose p :: b))) = Esm.Document.Source.Md.parseMd (String.ofList (Esm.Document.Source.Md.frontMd front ++ Esm.Document.Source.Md.render (a ++ b)))",
+      "status": "proven",
+      "theorem": "Esm.Document.Source.Md.parseMd_insert_prose"
+    },
+    {
+      "id": "P-doc-md-label",
+      "defined_by": "formal/Esm/Document/Source/MarkdownDoc.lean",
+      "statement": "Adding an equation label to a valid Markdown document (keeping it valid) does not change its parse.",
+      "lean_statement": "∀ (front : List (String × Esm.Document.Json)), Esm.Document.Math.jwf (.obj front) = true → ∀ (a b : List Esm.Document.Source.Md.Seg) (raw : String) (l : List Char), Esm.Document.Source.Md.Valid true (a ++ .item (.eqn raw) :: b) → Esm.Document.Source.Md.Valid true (a ++ .labeled raw l :: b) → Esm.Document.Source.Md.parseMd (String.ofList (Esm.Document.Source.Md.frontMd front ++ Esm.Document.Source.Md.render (a ++ .labeled raw l :: b))) = Esm.Document.Source.Md.parseMd (String.ofList (Esm.Document.Source.Md.frontMd front ++ Esm.Document.Source.Md.render (a ++ .item (.eqn raw) :: b)))",
+      "status": "proven",
+      "theorem": "Esm.Document.Source.Md.parseMd_label"
+    },
+    {
+      "id": "P-doc-typ-prose-independence",
+      "defined_by": "formal/Esm/Document/Source/TypstDoc.lean",
+      "statement": "The parse of a valid Typst document depends only on its header and its sequence of constructs: not on the prose between them, nor on equation labels.",
+      "lean_statement": "∀ (front : List (String × Esm.Document.Json)), (∀ a ∈ front, Esm.Document.Source.Typ.argOK a = true) → ∀ (segs : List Esm.Document.Source.Typ.Seg), Esm.Document.Source.Typ.Valid true segs → Esm.Document.Source.Typ.parseTyp (String.ofList (Esm.Document.Source.Typ.headerT front ++ Esm.Document.Source.Typ.render segs)) = Esm.Document.Source.Typ.parseItemsT front (Esm.Document.Source.Typ.segItems segs)",
+      "status": "proven",
+      "theorem": "Esm.Document.Source.Typ.parseTyp_body"
+    },
+    {
+      "id": "P-doc-typ-insert-prose",
+      "defined_by": "formal/Esm/Document/Source/TypstDoc.lean",
+      "statement": "Inserting prose into a valid Typst document (keeping it valid) does not change its parse.",
+      "lean_statement": "∀ (front : List (String × Esm.Document.Json)), (∀ a ∈ front, Esm.Document.Source.Typ.argOK a = true) → ∀ (a b : List Esm.Document.Source.Typ.Seg) (p : List Char), Esm.Document.Source.Typ.Valid true (a ++ b) → Esm.Document.Source.Typ.Valid true (a ++ .prose p :: b) → Esm.Document.Source.Typ.parseTyp (String.ofList (Esm.Document.Source.Typ.headerT front ++ Esm.Document.Source.Typ.render (a ++ .prose p :: b))) = Esm.Document.Source.Typ.parseTyp (String.ofList (Esm.Document.Source.Typ.headerT front ++ Esm.Document.Source.Typ.render (a ++ b)))",
+      "status": "proven",
+      "theorem": "Esm.Document.Source.Typ.parseTyp_insert_prose"
+    },
+    {
+      "id": "P-doc-typ-label",
+      "defined_by": "formal/Esm/Document/Source/TypstDoc.lean",
+      "statement": "Adding an equation label to a valid Typst document (keeping it valid) does not change its parse.",
+      "lean_statement": "∀ (front : List (String × Esm.Document.Json)), (∀ a ∈ front, Esm.Document.Source.Typ.argOK a = true) → ∀ (a b : List Esm.Document.Source.Typ.Seg) (raw : String) (l : List Char), Esm.Document.Source.Typ.Valid true (a ++ .item (.eqn raw) :: b) → Esm.Document.Source.Typ.Valid true (a ++ .labeled raw l :: b) → Esm.Document.Source.Typ.parseTyp (String.ofList (Esm.Document.Source.Typ.headerT front ++ Esm.Document.Source.Typ.render (a ++ .labeled raw l :: b))) = Esm.Document.Source.Typ.parseTyp (String.ofList (Esm.Document.Source.Typ.headerT front ++ Esm.Document.Source.Typ.render (a ++ .item (.eqn raw) :: b)))",
+      "status": "proven",
+      "theorem": "Esm.Document.Source.Typ.parseTyp_label"
+    },
+    {
+      "id": "P-math-latex-round-trip",
+      "defined_by": "formal/Esm/Document/Math/RoundTripLatex.lean",
+      "statement": "Every expression reads back from its LaTeX spelling under the same symbol table.",
+      "lean_statement": "∀ (S : Esm.Document.Math.Sym) (e : Esm.Document.Json), Esm.Document.Math.isE e = true → Esm.Document.Math.parseLatex S (Esm.Document.Math.printLatex S e) = some e",
+      "status": "proven",
+      "theorem": "Esm.Document.Math.parseLatex_printLatex"
+    },
+    {
+      "id": "P-math-typst-round-trip",
+      "defined_by": "formal/Esm/Document/Math/RoundTripTypst.lean",
+      "statement": "Every expression reads back from its Typst math spelling under the same symbol table.",
+      "lean_statement": "∀ (S : Esm.Document.Math.Sym) (e : Esm.Document.Json), Esm.Document.Math.isE e = true → Esm.Document.Math.parseTypst S (Esm.Document.Math.printTypst S e) = some e",
+      "status": "proven",
+      "theorem": "Esm.Document.Math.parseTypst_printTypst"
+    }
+  ]
+}

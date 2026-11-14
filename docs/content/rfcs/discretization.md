@@ -843,7 +843,7 @@ compares node kind first, value second; neither side of an
 integer/float pair can be substituted for the other without changing
 the canonical serialization.
 
-#### 5.4.7 Canonicalization for `-`, `/`, unary `neg` (resolves gt-adhm M6)
+#### 5.4.7 Canonicalization for `-`, `/`, unary `-` (resolves gt-adhm M6)
 
 §5.4.2 and §5.4.3 specify ordering and flattening for `+` and `*` only.
 This subsection pins the canonical form for the remaining arithmetic
@@ -855,20 +855,33 @@ canonicalizer preserves argument order (`args[0]` is the minuend,
 `args[1]` is the subtrahend). Nested same-op `-` is NOT flattened:
 `-(a, -(b, c))` canonicalizes to `-(canonicalize(a), -(canonicalize(b),
 canonicalize(c)))`, not to `+(a, -b, c)`. Identity rules: `-(x, 0)` →
-`x`, `-(0, 0)` → `0`. `-(x, x)` is NOT simplified to `0` (that is an
+`x`, `-(0, 0)` → `0`. A literal zero minuend collapses only against a
+numeric literal (see unary `-` below). `-(x, x)` is NOT simplified to `0` (that is an
 algebraic rewrite, not a canonical-form operation; see §5.4 closing
 paragraph).
 
-**Unary `-` (unary negation, `neg`).** The spec permits both a dedicated
-`{op:"neg", args:[x]}` node and a binary `-` applied with a literal
-zero minuend (`{op:"-", args:[0, x]}`). The canonical form picks **the
-dedicated `neg` node** when the operand is not itself a literal: any
-`{op:"-", args:[0, x]}` canonicalizes to `{op:"neg", args:[x]}`. A
-numeric literal that happens to be negative is kept as the literal
-itself (no `neg` wrapper around numerics): `{op:"neg", args:[5]}`
-canonicalizes to `-5` (a literal integer or float node with negative
-value). Identity rules: `neg(0) → 0`, `neg(0.0) → 0.0`,
-`neg(neg(x)) → x`.
+**Unary `-` (unary negation).** Negation has two input spellings:
+the unary `{op:"-", args:[x]}` and the deprecated word spelling
+`{op:"neg", args:[x]}` (esm-spec §4.2 "Deprecated ops"; a loader has
+already rewritten it to unary `-`, but the canonicalizer accepts it too).
+The canonical form is **the unary `-` node** when the operand is not
+itself a literal: both canonicalize to `{op:"-", args:[x]}`. A binary
+`-` with a literal zero minuend, `{op:"-", args:[0, x]}`, is NOT a
+third spelling: `0 − x` and `−x` differ when `x` is `+0.0` (`0 − 0.0`
+is `+0.0`, `−(0.0)` is `−0.0`), so with a non-literal `x` the binary
+node is kept as written. With a numeric-literal `x` it folds to the
+exact difference: an integer when both literals are integers, else the
+IEEE float difference, so `-(0, 5) → -5`, `-(0.0, 5) → -5.0`, and
+`-(0, 0.0)`, `-(0.0, 0.0)` and `-(0.0, -0.0)` all give `0.0`. A numeric literal that happens to be negative is
+kept as the literal itself (no wrapper around numerics): `-(5)` and
+`neg(5)` canonicalize to `-5` (a literal integer or float node with
+negative value). Identity rules: `-(0) → 0`, `-(0.0) → -0.0` (the sign is kept, as in §5.4.6),
+`-(-(x)) → x` (whichever spelling either negation uses).
+
+*History.* Until the deprecation of `neg` the canonical form was the
+dedicated `{op:"neg", args:[x]}` node. The document notation writes
+negation as `-x` and has no separate surface for `neg`, so the
+canonical form now uses the spelling the notation prints.
 
 **Binary `/`.** `{op:"/", args:[a, b]}` is **kept as a distinct op**;
 it is NOT rewritten to `*(a, inv(b))` (no `inv` node exists in the
@@ -879,11 +892,10 @@ when `x` is not itself `0`; `/(0, 0)` is undefined — the canonicalizer
 emits `E_CANONICAL_DIVBY_ZERO` and aborts). `/(x, x)` is NOT simplified
 to `1`.
 
-**No new AST ops.** `neg` is already permitted by the base spec's op
-taxonomy; this subsection pins its role. No new node types are
-introduced. Bindings that internally represent unary minus as a binary
-`-` with implicit `0` minuend MUST serialize as `{op:"neg", args:[x]}`
-on the canonical wire.
+**No new AST ops.** No new node types are introduced. Bindings that
+internally represent unary minus as a binary `-` with implicit `0`
+minuend, or as `neg`, MUST serialize it as `{op:"-", args:[x]}` on the
+canonical wire. Likewise the deprecated `pow` canonicalizes to `^`.
 
 #### 5.4.8 Worked example
 
@@ -911,6 +923,34 @@ node so each subtree is serialized at most once per sort. This is an
 implementation note, not a conformance requirement — any implementation
 whose output matches the canonical form is conforming regardless of
 complexity.
+
+#### 5.4.10 Unit spelling of a `const` node
+
+A `const` node's `units` string (esm-spec §4.8.5) is written in the canonical
+unit spelling of esm-spec §4.8.2: numerator factors sorted by symbol in
+codepoint order and joined by `*`; at most one `/`, with a denominator of more
+than one factor parenthesized (`J/(K*mol)`); exponent 1 omitted, an integer
+exponent as `^n`, any other rational as `^(p/q)` in lowest terms; no
+cancellation across the fraction bar (`mol/mol` stays `mol/mol`, `mol/mol/s`
+becomes `mol/(mol*s)`); `""`, `"1"` and `"dimensionless"` all become `"1"`;
+and a string that does not parse is left unchanged. So
+`{op:"const", args:[], value:0.44704, units:"m h/(mi s)"}` canonicalizes to the
+same node as one with `units:"m*h/(mi*s)"`, both carrying `units:"h*m/(mi*s)"`.
+
+A `const` whose units spell `1` (`""`, `"1"`, `"dimensionless"`) drops them
+(ruling of 2026-11-14): a scalar one canonicalizes to the bare literal
+(`{op:"const", args:[], value:0, units:"dimensionless"}` is `0`, which §5.4.4
+then eliminates from a sum), and an array one to a `const` without `units`.
+
+The respelling happens in `canonicalize`, before the §5.4.2 ordering, so the
+serialization a `+`/`*` parent sorts by already carries the canonical spelling.
+This is the expression half of a document-level rule: the canonical form of a
+whole document respells every units string in it — variable, species,
+parameter and coordinate `units` and `default_units` as well — through
+`canonicalize_document` (esm-spec §4.8.2).
+The authority is the Lean definition `Esm.Units.canon`
+(`formal/Esm/Units/Canonical.lean`); the cross-binding fixture is
+`tests/conformance/canonical/unit_spelling.json`.
 
 ### 5.5 No other new calculus ops
 
@@ -2807,6 +2847,9 @@ findings it resolves and the section(s) that carry the normative text.
   ops; args order preserved; no flattening; identity rules enumerated.
   Unary negation canonicalized as `{op:"neg", args:[x]}`; numeric
   literals absorb the sign. No new AST ops. Resolves gt-adhm **M6**.
+  *Superseded* by the deprecation of `neg` (esm-spec §4.2 "Deprecated
+  ops"): unary negation now canonicalizes to `{op:"-", args:[x]}`, and
+  `-(0, x)` collapses to it only for a numeric-literal `x` (§5.4.7).
 
 - **F7 — §5.3 / §7.2 `regrid.method` closed set.** `method` now
   validates against a closed enum (`"nearest"`, `"bilinear"`,

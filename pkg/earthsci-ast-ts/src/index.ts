@@ -340,6 +340,7 @@ export type { ReferenceVertex, ReferenceEdge } from './reference-resolution.js'
 // see canonicalize.ts for the gt-ca2u limitation note.
 export {
   canonicalize,
+  canonicalizeDocument,
   canonicalJson,
   formatCanonicalFloat,
   CanonicalizeError,

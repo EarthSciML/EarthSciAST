@@ -29,10 +29,10 @@
 //!     placeholder default, and a zero-length shape is a panic on one path and
 //!     a sum over no rows — a plausible, silent 0 — on the other.
 //!
-//! Gated on the features the `esm` target itself requires: with `cli` or
-//! `solve` off cargo skips the binary and `CARGO_BIN_EXE_esm` does not exist.
+//! Gated on this crate's `diffsol` feature: a build with no time integrator
+//! refuses `esm test` and `esm simulate`, naming the features to build with.
 
-#![cfg(all(not(target_arch = "wasm32"), feature = "cli", feature = "solve"))]
+#![cfg(feature = "diffsol")]
 
 use std::fs;
 use std::path::Path;
@@ -745,7 +745,7 @@ fn a_document_with_no_data_source_is_unaffected() {
         &[
             "test",
             &format!(
-                "{}/tests/fixtures/inline_tests/passing_decay.esm",
+                "{}/../tests/fixtures/inline_tests/passing_decay.esm",
                 env!("CARGO_MANIFEST_DIR")
             ),
         ],

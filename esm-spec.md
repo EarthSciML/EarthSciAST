@@ -1,6 +1,6 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 2.1.0**
+**EarthSciML Abstract Syntax Tree Format — Version 2.2.0**
 
 > **2.1.0 is additive.** A variable MAY declare a lower bound `lb` and an upper
 > bound `ub`, each a number or a reference to another variable of the model
@@ -72,13 +72,36 @@ The full authoring stance, normatively:
 **MIME type:** `application/vnd.earthsciml+json`  
 **Encoding:** UTF-8
 
+### 1.2 Document source formats
+
+An ESM document can also be written as a Markdown (`.md`, with LaTeX math) or
+Typst (`.typ`) source document. Those source formats are not specified here.
+Their specification is the commented Lean source in `formal/`, published as the
+chapter [Document formats](https://earthsci.dev/ast/generated/document-formats/)
+on earthsci.dev. The Lean modules are the authority for the source formats:
+
+- `Esm.Document.Notation` (`formal/Esm/Document/Notation.lean`): the notation
+  tables (operator tiers, precedence, name rules, where each field lives in a
+  document, accepted variants);
+- `Esm.Document.Math.*`: the LaTeX and Typst math grammars, their printers and
+  parsers, and the round-trip theorems;
+- `Esm.Document.Json`, `Esm.Document.Yaml` and `Esm.Document.TypstDict`, with
+  `Esm.Document.Number` and `Esm.Document.Strings`: the value codecs;
+- every other module under `formal/Esm/Document/`, such as the document
+  containers;
+- `Esm.Units.Canonical` and `Esm.Units.Typeset`: the unit spellings a source
+  document uses, built on the §4.8 model in `Esm.Units`.
+
+What a document means is still the `.esm` JSON form this document specifies; a
+source document is a lossless spelling of it.
+
 ---
 
 ## 2. Top-Level Structure
 
 ```json
 {
-  "esm": "2.1.0",
+  "esm": "2.2.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },
@@ -745,7 +768,39 @@ declared version (§4.7).
 | `*` | n-ary | `{"op": "*", "args": ["k", "A", "B"]}` | k·A·B |
 | `/` | binary | `{"op": "/", "args": ["a", "b"]}` | a / b |
 | `^` | binary | `{"op": "^", "args": ["x", 2]}` | x² |
-| `pow` | binary | `{"op": "pow", "args": ["x", 2]}` | x² — the word spelling of `^`, with the same meaning and the same value |
+| `pow` | binary | `{"op": "pow", "args": ["x", 2]}` | **Deprecated** (below): the word spelling of `^`, rewritten to `^` on load |
+| `neg` | unary | `{"op": "neg", "args": ["a"]}` | **Deprecated** (below): the word spelling of unary `-`, rewritten to `-` on load |
+
+**Deprecated ops (`deprecated_op`, normative).** Two core spellings are redundant
+and are **deprecated**: `neg`, the word spelling of unary `-`, and `pow`, the word
+spelling of `^`. Each means exactly what its replacement means. They are still
+loaded, but a loader rewrites them at the wire boundary, on every document a load
+touches and in the same pass as the `removed_op` check above:
+
+| Deprecated | Rewritten to |
+|---|---|
+| `{"op": "neg", "args": [x]}` | `{"op": "-", "args": [x]}` (unary minus) |
+| `{"op": "pow", "args": [x, n]}` | `{"op": "^", "args": [x, n]}` |
+| `{"op": "broadcast", "fn": "neg", …}` | the same node with `"fn": "-"` |
+
+Only the `op` (or the `broadcast` `fn`) changes; every other field of the node is
+kept. A node with the wrong number of operands for its spelling (`neg` with other
+than one, `pow` with other than two, a `broadcast` of `neg` with other than one) is
+NOT rewritten, so it is refused with the arity error it would always have had. A
+document that spelled either one loads with one **warning** per document,
+`deprecated_op`, naming every rewritten node as its RFC 6901 JSON pointer followed by
+the spelling it had: `<pointer> (neg)`, `<pointer> (pow)` or `<pointer> (broadcast fn
+neg)`. It is not an error and changes no value. The rewrite applies on every path that
+reads a document, the reference-preserving emit path included. After the rewrite neither
+spelling survives in the loaded document, so a binding that emits the document
+writes `-` and `^`, and the canonical form (`docs/content/rfcs/discretization.md`
+§5.4.7) never contains `neg` or `pow`. A binding's evaluator MAY still accept a
+`neg` or `pow` node built in code. Both spellings are scheduled for removal in a
+later major version, when they join the `removed_op` list. Fixtures:
+`tests/conformance/scalar_operator_semantics/fixtures/pow_alias.esm` and the
+`negated` observed of `scalar_operator_semantics.esm` (each evaluates to the value
+of its replacement), and the `fn: "neg"` broadcast of
+`tests/fixtures/faq/27_broadcast_unary.esm`.
 
 #### Calculus
 
@@ -787,7 +842,7 @@ by structural recursion, and by nothing else:
 | a name carrying a defining equation `y ~ g` (an **observed** or algebraic unknown) | the resolution of `g` — the **chain rule**, applied by substituting the definition |
 | a name that does not vary with `t` (a **parameter**) | `0` |
 | a numeric **literal** | `0` |
-| `+`, unary and binary `-`, `neg`, n-ary `*`, binary `/` | the operands' resolutions combined by the sum, product and quotient rules |
+| `+`, unary and binary `-`, n-ary `*`, binary `/` | the operands' resolutions combined by the sum, product and quotient rules |
 | anything else | **nothing** — see the refusal rule below |
 
 Two consequences are worth stating. Resolution **recurses**: a tendency may itself name another
@@ -1723,7 +1778,7 @@ The `index` base is a const array when it is **either** a `const` node written i
 
 **Meaning.** `{ "op": "broadcast", "fn": F, "args": A }` denotes exactly what `{ "op": F, "args": A }` denotes, applied element-wise over the broadcast operands. That equivalence is the whole definition, and it settles the ONE-OPERAND case: a `broadcast` with a single operand applies `fn` **unarily**. `broadcast(fn: "-", [x])` is `-x`, `broadcast(fn: "log", [x])` is `log(x)`, and `broadcast(fn: "+", [x])` is `x` — for the same reason the bare `{"op": "+", "args": [x]}` node is `x`, because `+` is n-ary from one operand. A one-operand `broadcast` MUST NOT be treated as the identity on its operand: that discards `fn`, and a binding that folds `args` through a binary kernel degenerates to exactly that on a single-element list.
 
-The `fn` value must name a **scalar operator** — one whose meaning is a pointwise map from scalar operands to a scalar result: the §4.2 arithmetic (`+ - * / ^ neg`), elementary functions (`exp log log10 sqrt abs sign floor ceil`, the trigonometric and hyperbolic families, `atan2`, `min`, `max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name an op whose meaning is not pointwise — the array/tensor ops (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and `broadcast` itself) or the form ops (`D`, `ic`, `Pre`, `const`, `true`, `false`, `enum`, `apply_expression_template`).
+The `fn` value must name a **scalar operator** — one whose meaning is a pointwise map from scalar operands to a scalar result: the §4.2 arithmetic (`+ - * / ^`; a single-operand `-` is unary negation, and the deprecated `neg` is rewritten to `-` on load), elementary functions (`exp log log10 sqrt abs sign floor ceil`, the trigonometric and hyperbolic families, `atan2`, `min`, `max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name an op whose meaning is not pointwise — the array/tensor ops (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and `broadcast` itself) or the form ops (`D`, `ic`, `Pre`, `const`, `true`, `false`, `enum`, `apply_expression_template`).
 
 **Validation.** A schema-valid `broadcast` node must carry an `fn` naming a scalar operator as defined above, applied to a number of `args` that operator admits under its §4.2 arity (so `broadcast(fn: "min", [x])` and `broadcast(fn: "sin", [a, b])` are rejected for exactly the reason the bare `min(x)` and `sin(a, b)` nodes are). Bindings **MUST emit an `invalid_broadcast_fn` error** when this invariant is violated — including when `fn` is absent, for which there is no default; **loading MUST fail**. An operator name that no binding can resolve must never reach an evaluator, because the failure is otherwise silent.
 
@@ -2107,6 +2162,18 @@ A conforming parser MUST resolve exactly the strings this grammar and these toke
 - A `symbol` is a whole run (the token rules above), and it resolves only when the WHOLE run is a §4.8.1 table key. A run is never split into a table-key prefix and a remainder: `s1`, `kgm`, `1s` and `mil` are each one symbol, none is a table key, and none resolves — `s1` is not `s`·`1`, `kgm` is not `kg`·`m`. Table keys are alphanumeric, plus `_` (as in `short_ton`), with two further exceptions — `%` and the empty string — so a lexer MUST admit `%` as a symbol token (`"%"`, `"%/h"`).
 - A digit run that is NOT separated from a symbol by `^`/`**` is part of the same run, so it makes a *different symbol*, not an implicit exponent: `"cm3"` and `"m/s2"` do not resolve (`cm3` is not a table key). Write `"cm^3"`, `"m/s^2"`.
 
+**Canonical spelling.** One unit has many spellings: `m*h/(mi*s)`, `m h/(mi s)` and `m·h/(mi·s)` are the same string to the grammar. The canonical form of a document writes EVERY units string in ONE of them, built from the parsed string: the `units` and `default_units` of every variable, species, parameter and coordinate, and the `units` of every `const` node (§4.8.5), wherever they sit — nested subsystems, template bodies, tests, coupling entries. Free-form objects (`metadata`, `x_esd`, `attrs`, `config`, `reader_options`) are not part of it.
+
+1. Parse the normalised string with the grammar above and flatten it to factors (a symbol and a rational exponent): `*` and juxtaposition concatenate, `/` negates the exponents of its right operand, `^q` multiplies every exponent below it by `q`. The atom `1` and the symbol `dimensionless` contribute no factor.
+2. The **numerator** is the factors with a positive exponent and the **denominator** the factors with a negative one. Within each side, each symbol appears once with its exponents summed, a symbol whose sum is 0 is dropped, and the symbols are sorted in codepoint order (so uppercase before lowercase: `J/(K*mol)`).
+3. **Nothing cancels across the fraction bar.** A symbol on both sides stays on both: `mol/mol` stays `mol/mol`, `mol/mol/s` is `mol/(mol*s)`, `m m^-1` is `m/m`. Summing happens only within a side: `m*m/m` is `m^2/m`, `m^2/m^-1` is `m^3`.
+4. A factor is written as its symbol, then nothing when the exponent's absolute value is 1, `^n` when it is an integer, and `^(p/q)` in lowest terms otherwise (`1/s^0.5` is `1/s^(1/2)`, `m^(4/2)` is `m^2`). Factors are joined by `*` with no spaces; denominator factors are written with the absolute value of their exponent.
+5. The spelling is the numerator alone, or `numerator/factor` when the denominator has one factor, or `numerator/(factor*factor*…)` when it has more: there is at most one `/`. An empty numerator is `1` (`ppb^-1 s^-1` is `1/(ppb*s)`).
+
+So `""`, `"1"` and `"dimensionless"` all canonicalize to `"1"`. **A `const` node is the exception: when its `units` spell `1` the canonical form drops them** (ruling of 2026-11-14) — a scalar `const` becomes the bare literal, and an array `const` stays a `const` without `units`. Its dimension is then a bare literal's (§4.8.4, §4.8.6), so this changes meaning wherever the two differ: a zero is neutral in a sum again, and the rest of the canonical form applies to the literal (`x + const(0, units "dimensionless")` canonicalizes to `x`). A variable, species or parameter keeps `units: "1"`. Symbols are kept as written: the spelling is syntactic, not a reduction to SI, so `km` stays `km`, `ppm` stays `ppm`, and an unknown symbol is spelled like any other (`foo/foo`). A string the spelling leaves **unchanged** is one that does not lex or parse (`"g/hp-hr"`, `"1000/s"`, `" "`), one whose spelling would have to write a symbol containing `.` (`"1.5m"`), and one that drops a zero-exponent symbol that is not a §4.8.1 table key (`"bogus^0*s"`), so a string that does not resolve keeps failing to resolve. Canonicalization never changes the unit a string denotes: the canonical spelling resolves exactly when the original does, to the same dimension and exact scale.
+
+A binding's canonicalizer MUST write every `units` string of the canonical form in this spelling, byte for byte. Two entry points apply it: `canonicalize_document` (API_SPEC.md §5.4) takes a decoded document and respells all of its units strings, changing nothing else; and the expression canonicalizer `canonicalize` (discretization RFC §5.4.10) respells the `units` of each `const` node it visits. The authority is the Lean definition `Esm.Units.canon` in `formal/Esm/Units/Canonical.lean`, with its theorems (idempotent, same unit, spellings with one normal form spell alike) there and its worked examples in `formal/Esm/Units/CanonicalExamples.lean`; where this prose and the Lean definition differ, the Lean definition holds. The cross-binding fixtures are `tests/conformance/canonical/unit_spelling.json` (expressions) and `tests/conformance/canonical_document/units.json` (documents).
+
 #### 4.8.3 Dimensional rules for operators
 
 | Op | Rule |
@@ -2186,7 +2253,7 @@ A bare numeric literal has an undeterminable dimension (§4.8.4): nothing says w
 With `speed_ms` declared `m/s` and `speed_mph` declared `mi/h`, the right-hand side has the dimension and exact scale of `m/s` (§4.8.1, §4.8.3), so the equation is checked; declaring `speed_ms` as `kg`, or omitting the constant, is a provable mismatch.
 
 1. **Only on `const`.** `units` is legal on a `const` node and on no other; the schema rejects it elsewhere.
-2. **Resolved like a variable's units.** The string is resolved against the §4.8.1 registry with the §4.8.2 grammar. A string that does not resolve is `unit_parse_error`, reported at the **containing expression field** — `/models/<M>/equations/<i>/rhs` or `.../lhs` — the same pointer an undefined name in that expression is reported at.
+2. **Resolved like a variable's units.** The string is resolved against the §4.8.1 registry with the §4.8.2 grammar. A string that does not resolve is `unit_parse_error`, reported at the **containing expression field** — `/models/<M>/equations/<i>/rhs` or `.../lhs` — the same pointer an undefined name in that expression is reported at. The canonical form (discretization RFC §5.4.10) writes the string in the canonical spelling (§4.8.2), so a `const` declared `m*h/(mi*s)` and one declared `m h/(mi s)` canonicalize alike. A `const` whose units spell `1` (`""`, `"1"`, `"dimensionless"`) loses them there: a scalar one canonicalizes to the bare literal, with a bare literal's dimension.
 3. **The unit, not the number.** A unit-bearing `const` has the declared dimension and exact scale in every §4.8.3 rule. In particular it is NOT a neutral literal in a `+`/`-` position, and neither is its unary negation: `x [m] + const(1, units "kg")` and `x [m] + -(const(1, units "kg"))` are mismatches, while `x [m] + const(1)` stays neutral. Its numeric `value` is NEVER checked against its units: `const(0.4470, units "m*h/(mi*s)")` is accepted just as `const(0.44704, ...)` is.
 4. **Nothing else changes.** A bare numeric literal, and a `const` without `units`, keep the undeterminable dimension of §4.8.4. §4.8.6 states the rule that will replace this in a future version of EarthSciAST, and the warning that announces it now.
 5. **Templates are checked through their expansion.** An `apply_expression_template` call has the dimension of its expansion (§9.6.4 rule 2), so a unit-bearing `const` inside a template body makes every call of that template checkable. A checker that sees an unexpanded call expands it before propagating dimensions.
@@ -6017,10 +6084,23 @@ For coupling between a 0-D (scalar-shaped) system and a spatially-resolved syste
 |---|---|
 | `pointwise` | **(Default.)** The 0-D system is evaluated independently at each grid point. This is how column physics parameterizations work in climate models. |
 | `broadcast` | A single scalar output from the 0-D system is applied uniformly to all grid points. |
-| `mean` | Inputs to the 0-D system are the spatial mean of the source fields; output is scalar. |
-| `integral` | Inputs to the 0-D system are the spatial integral of the source fields; output is scalar. |
+| `mean` | *(Reserved.)* Inputs to the 0-D system are the spatial mean of the source fields; output is scalar. |
+| `integral` | *(Reserved.)* Inputs to the 0-D system are the spatial integral of the source fields; output is scalar. |
+
+`mean` and `integral` are reserved: no binding evaluates the reduction yet, and flatten substitutes such a `variable_map`'s source unreduced. A document using them stays valid and flattens, but a binding that builds a runnable problem MUST refuse a `variable_map` whose `lifting` is `mean` or `integral` at build, with `unsupported_construct` naming the edge and the lifting kind, until this section specifies the reduction. `broadcast` is not reserved.
 
 When `lifting` is omitted and one side has scalar-shaped (0-D) variables, pointwise lifting is assumed.
+
+**What a pointwise lift lifts (from `esm: 2.2.0`).** A 0-D system is evaluated independently at each grid point however the grid reaches it, not only through an `operator_compose`. After the coupling rules are applied, a scalar state (one declared with no `shape`, or with `shape: []`) is lifted when either of these holds:
+
+- its merged equation carries an operator `makearray` (an `operator_compose` merged a spatial operator into it), or
+- its merged right-hand side is an array under the shape rules of §4.3.4: it reads, through elementwise operators, a variable with a declared `shape`, a variable declared without one whose definition is such an array (a rate fed a grid field by a `variable_map`), or a state already lifted.
+
+The unit of lifting is the whole top-level component. When any state of a top-level model or reaction system (its subsystems included) is lifted, every scalar state of that component is lifted onto the same grid, including a species no coupling touches. Lifting a component can make the right-hand sides of other components arrays, and they are lifted in turn, until nothing changes. The grid is the one the operator `makearray` gives, or else the index sets of the array operands the right-hand side reads. A component whose states would land on two different grids MUST be refused with the binding's dimension-promotion error. A scalar `default` or scalar initial condition of a lifted state gives its value to every cell, and an array initial condition on one sets each cell. Library Specification §4.7.5, "Pointwise lift: which states are lifted", gives the full rules.
+
+Only pointwise lifting does this. A coupling entry that sets `lifting` to `broadcast`, `mean` or `integral` does not trigger it: the source of such a `variable_map` is read as a scalar when deciding whether its target's component is lifted, and the components of such an `operator_compose` are not lifted through its operator. A component that one of these entries feeds is still lifted when a pointwise route also reaches it.
+
+This rule changes what a document that loaded before `esm: 2.2.0` means when a grid reaches one of its 0-D systems other than through an `operator_compose` with an operator `makearray`. Before, bindings lifted only that route, and evaluated the scalar state of any other route at one element of its array right-hand side.
 
 #### Combining regridding and lifting
 
@@ -6064,7 +6144,7 @@ The last dot-separated segment is always the variable name; all preceding segmen
 
 **Per-term provenance is a property of the flattened system, not of the document.** Flattening sums `operator_compose` and `couple` contributions into one right-hand side per equation. The flattened representation keeps, beside each equation, the ordered list of those contributions, each with its author: the dotted path of the component whose equation contained it, or the index of the coupling entry that wrote it (a `couple` connector's expression, a `variable_map` Expression transform's definition). The right-hand side is the left-fold sum of the list. Authorship survives every rewrite flatten applies (`translate` renames, `variable_map` substitution, the pointwise lift), because those change a term's inputs, not who wrote it. Nothing in a document carries the list and no format version gates it; a consumer that splits a right-hand side into operators reads it to select terms by author. Library Specification §4.7.5, "Per-term provenance", specifies how each flattening step fills it.
 
-**A pointwise-lifted state lives on named index sets.** The pointwise lift (§10.5) makes a scalar state an array over the grid of the operator it is composed with. The flattened system gives that state a `shape` naming the index sets of the grid, and ranges the lifted `faq` over the same index sets (`{"from": <name>}`), so a consumer reads the state's shape as it reads any declared one. Each index set is the one an operand gathered at the lift's loops is declared on, else the only declared index set of the dimension's size, else a synthetic interval `_liftdim<d>_<extent>` that the flattened `index_sets` gains. Library Specification §4.7.5, "Pointwise lift: index sets", specifies the choice.
+**A pointwise-lifted state lives on named index sets.** The pointwise lift (§10.5) makes a scalar state an array over a grid: the grid of the operator it is composed with, or the index sets of the arrays its right-hand side reads. The flattened system gives that state a `shape` naming the index sets of the grid, and ranges the lifted `faq` over the same index sets (`{"from": <name>}`), so a consumer reads the state's shape as it reads any declared one. Under an operator, each index set is the one an operand gathered at the lift's loops is declared on, else the only declared index set of the dimension's size, else a synthetic interval `_liftdim<d>_<extent>` that the flattened `index_sets` gains. Otherwise the index sets are those the array operands declare. Library Specification §4.7.5, "Pointwise lift: index sets", specifies the choice.
 
 The flattening algorithm is specified in detail in the ESM Library Specification (Section 4.7.5).
 

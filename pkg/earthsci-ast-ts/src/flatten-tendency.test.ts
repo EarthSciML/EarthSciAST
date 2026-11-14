@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { flatten } from './flatten.js'
 import { toAscii } from './pretty-print.js'
 import { loadFixture } from './test-helpers.js'
+import { loadDocument } from './parse.js'
 import type { Expression } from './types.js'
 
 function flattenRtd(fixture: string) {
@@ -41,5 +42,44 @@ describe('flatten resolves a right-hand-side structural D (esm-spec §4.2)', () 
     ['d_of_unsupported.esm', 'M.dsq', 'D(M.x^2)/Dt'],
   ])('%s is left standing', (fixture, lhs, want) => {
     expect(toAscii(rhsOf(fixture, lhs))).toBe(want)
+  })
+})
+
+describe('a lifted state resolves to its lifted right-hand side (esm-libraries-spec §4.7.5 step 3a)', () => {
+  // `M.A` reads the [lev] `M.km`, so the whole component `M` lifts onto [lev];
+  // `M.B`'s `D(M.A)` is read per cell, `D(index(M.A, _p0))`, and resolves to
+  // that cell of `M.A`'s lifted `faq`.
+  const doc = {
+    esm: '2.2.0',
+    metadata: { name: 'percell' },
+    index_sets: { lev: { kind: 'interval', size: 3 } },
+    models: {
+      M: {
+        variables: {
+          km: { type: 'parameter', units: '1/s', default: 1.0, shape: ['lev'] },
+          A: { type: 'unknown', units: '1', default: 1.0 },
+          B: { type: 'unknown', units: '1', default: 0.0 },
+        },
+        equations: [
+          {
+            lhs: { op: 'D', args: ['A'], wrt: 't' },
+            rhs: { op: '*', args: [{ op: '-', args: ['km'] }, 'A'] },
+          },
+          { lhs: { op: 'D', args: ['B'], wrt: 't' }, rhs: { op: 'D', args: ['A'], wrt: 't' } },
+        ],
+      },
+    },
+  }
+
+  it('D(index(x, l)) is that cell of the lifted faq', () => {
+    const flat = flatten(loadDocument(doc))
+    expect(flat.liftedShapes).toEqual({ 'M.A': [3], 'M.B': [3] })
+    expect(flat.equations.map((e) => `${toAscii(e.lhs)} ~ ${toAscii(e.rhs)}`)).toEqual([
+      'sum[_p0] (D(M.A[_p0])/Dt) where {_p0 in lev} ~ ' +
+        'sum[_p0] ((-M.km[_p0]) * M.A[_p0]) where {_p0 in lev}',
+      'sum[_p0] (D(M.B[_p0])/Dt) where {_p0 in lev} ~ ' +
+        'sum[_p0] ((sum[_p0] ((-M.km[_p0]) * M.A[_p0]) where {_p0 in lev})[_p0]) ' +
+        'where {_p0 in lev}',
+    ])
   })
 })

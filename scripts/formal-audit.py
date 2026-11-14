@@ -14,7 +14,9 @@ Subcommands:
               that section, and every `MUST` in the spec is covered by some
               clause's quote. `--source F --lines A-B` restricts the coverage
               report to one chunk (for whoever is writing that chunk).
-  registry    Every property names inventory clauses that exist and carries the
+  registry    Every property names inventory clauses that exist (or, for the
+              document source formats, which the spec does not define, the
+              `defined_by` file under formal/ that does) and carries the
               fields its status requires. With `--lean`, each proven or refuted
               property's theorem is elaborated against its stated type and its
               axioms are listed.
@@ -321,8 +323,13 @@ def check_registry(args):
         for cid in p.get("clauses", []):
             if cid not in clause_ids:
                 report.error(f"{pid}: cites unknown inventory clause {cid!r}")
-        if not p.get("clauses"):
-            report.error(f"{pid}: must cite at least one inventory clause")
+        defined_by = p.get("defined_by")
+        if defined_by is not None and not (
+            isinstance(defined_by, str) and defined_by.startswith("formal/") and (ROOT / defined_by).is_file()
+        ):
+            report.error(f"{pid}: defined_by must name a file under formal/, got {defined_by!r}")
+        if not p.get("clauses") and not defined_by:
+            report.error(f"{pid}: must cite at least one inventory clause (or the defined_by file)")
         status = p.get("status")
         if status not in STATUSES:
             report.error(f"{pid}: status must be one of {STATUSES}")
@@ -476,10 +483,9 @@ def check_tokens(args):
 
 
 NOTATION = FORMAL / "Esm" / "Document" / "Notation.lean"
-# Operators the notation table covers that no §4.2 `Op` table lists: `neg` is named
-# only in §4.2's derivative-resolution table and §4.3.4's scalar-operator list, and
+# Operators the notation table covers that no §4.2 `Op` table lists:
 # `apply_expression_template` is defined in §9.6.4.
-NOTATION_EXTRA_OPS = {"neg", "apply_expression_template"}
+NOTATION_EXTRA_OPS = {"apply_expression_template"}
 
 
 def spec_core_ops(report):

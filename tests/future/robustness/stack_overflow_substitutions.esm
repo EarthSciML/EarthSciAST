@@ -27,7 +27,7 @@
         "level_4": {
           "type": "algebraic",
           "units": "1",
-          "expression": { "op": "substitute", "var": "level_3", "with": { "op": "pow", "args": ["level_5", 4] } }
+          "expression": { "op": "substitute", "var": "level_3", "with": { "op": "^", "args": ["level_5", 4] } }
         },
         "level_5": {
           "type": "algebraic",

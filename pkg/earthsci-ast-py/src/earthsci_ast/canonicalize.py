@@ -110,6 +110,19 @@ def canonical_json(expr: Expr) -> str:
 def _canon_op(node: ExprNode) -> Expr:
     new_args: list[Expr] = [canonicalize(a) for a in node.args]
     work = replace(node, args=new_args)
+    if getattr(work, "units", None) is not None:
+        # A `const` node's declared units take the canonical unit spelling
+        # (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+        from .units import canonical_unit_spelling
+
+        work = replace(work, units=canonical_unit_spelling(work.units))
+        if work.op == "const" and work.units == "1":
+            # A dimensionless const drops its units (user ruling 2026-11-14):
+            # a scalar becomes the bare literal, an array a unitless const.
+            value = work.value
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return canonicalize(value)
+            work = replace(work, units=None)
     if work.op == "+":
         return _canon_add(work)
     if work.op == "*":
@@ -119,7 +132,11 @@ def _canon_op(node: ExprNode) -> Expr:
     if work.op == "/":
         return _canon_div(work)
     if work.op == "neg":
+        # Deprecated word spelling of unary ``-`` (esm-spec §4.2 "Deprecated ops").
         return _canon_neg(work)
+    if work.op == "pow" and len(work.args) == 2:
+        # Deprecated word spelling of ``^``: the canonical form writes ``^``.
+        return replace(work, op="^")
     return work
 
 
@@ -161,12 +178,32 @@ def _canon_sub(node: ExprNode) -> Expr:
     if len(node.args) == 2:
         a, b = node.args[0], node.args[1]
         if _is_zero_any(a):
-            return _canon_neg_value(b)
+            # `0 - x` is NOT `-x` when x is +0.0 (`0 - 0.0` is +0.0, `-(0.0)` is
+            # -0.0), so only a literal subtrahend folds, to the exact
+            # difference; any other `-(0, x)` stays binary (RFC §5.4.7).
+            if _is_numeric_literal(b):
+                return _sub_from_zero(a, b)
+            return node
         if _is_zero_any(b):
             if isinstance(b, float) and isinstance(a, int) and not isinstance(a, bool):
                 return float(a)
             return a
     return node
+
+
+def _is_numeric_literal(e: Expr) -> bool:
+    return isinstance(e, (int, float))
+
+
+def _sub_from_zero(zero: Expr, b: Expr) -> Expr:
+    """``zero - b`` for a literal zero minuend and a literal ``b``: an integer
+    when both are integers, else the IEEE float difference (``0 - 0.0`` and
+    ``0 - (-0.0)`` are both +0.0)."""
+    if isinstance(b, bool):
+        b = int(b)
+    if isinstance(zero, float) or isinstance(b, float):
+        return 0.0 - float(b)
+    return -b
 
 
 def _canon_div(node: ExprNode) -> Expr:
@@ -197,9 +234,10 @@ def _canon_neg_value(arg: Expr) -> Expr:
         return -arg
     if isinstance(arg, float):
         return -arg
-    if isinstance(arg, ExprNode) and arg.op == "neg" and len(arg.args) == 1:
+    if isinstance(arg, ExprNode) and arg.op in ("-", "neg") and len(arg.args) == 1:
         return arg.args[0]
-    return ExprNode(op="neg", args=[arg])
+    # Canonical negation is unary ``-`` (RFC §5.4.7); ``neg`` is deprecated.
+    return ExprNode(op="-", args=[arg])
 
 
 def _flatten_same_op(args: list[Expr], op: str) -> list[Expr]:
@@ -511,3 +549,73 @@ def _normalize_exponent(s: str) -> str:
         exp = exp[1:]
     exp = exp.lstrip("0") or "0"
     return f"{mant}e{sign}{exp}"
+
+
+# ---------------------------------------------------------------------------
+# The document-level canonical step (esm-spec §4.8.2 "Canonical spelling").
+# ---------------------------------------------------------------------------
+
+#: Object properties whose value is a NAME-KEYED map (esm-schema.json): a map's
+#: keys are names, never fields, so a variable NAMED `units` is not a units
+#: string. The same list in every binding.
+_DOCUMENT_MAP_KEYS = frozenset(
+    {
+        "bind", "bindings", "coordinates", "coords", "coupling_roles", "data_sources",
+        "enums", "expression_template_imports", "expression_templates", "guesses",
+        "index_set_rename", "index_sets", "initial_conditions", "map", "metaparameters",
+        "models", "parameter_overrides", "parameters", "pinned_coords", "ranges",
+        "reaction_systems", "rebind", "rename", "species", "subsystems", "translate",
+        "url_substitutions", "variables", "where",
+    }
+)  # fmt: skip
+
+#: Free-form objects (schema `additionalProperties: true`), never descended.
+_DOCUMENT_FREE_KEYS = frozenset({"attrs", "config", "metadata", "reader_options", "x_esd"})
+
+_DOCUMENT_UNIT_KEYS = ("units", "default_units")
+
+
+def canonicalize_document(doc: Any) -> Any:
+    """The document-level canonical step: every units string of a decoded
+    document (the JSON object ``to_json`` writes and ``load_document`` reads)
+    takes the canonical unit spelling (esm-spec §4.8.2, Lean
+    ``Esm.Units.canon``).
+
+    That is every ``units`` and ``default_units`` string of a variable,
+    species, parameter, coordinate or ``const`` node, wherever it sits:
+    nested subsystems, template bodies, tests, coupling entries. Free-form
+    objects (``metadata``, ``x_esd``, ``attrs``, ``config``,
+    ``reader_options``) are not touched, and neither are the keys of
+    name-keyed maps. A ``const`` node whose units spell ``1`` loses them: a
+    scalar one becomes the bare literal, an array one a ``const`` without
+    ``units``. The input is not mutated; nothing else changes.
+    """
+    from .units import canonical_unit_spelling
+
+    def walk(value: Any, is_map: bool = False) -> Any:
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        if not isinstance(value, dict):
+            return value
+        if is_map:
+            return {k: walk(v) for k, v in value.items()}
+        units = value.get("units")
+        if value.get("op") == "const" and isinstance(units, str):
+            if canonical_unit_spelling(units) == "1":
+                # A dimensionless const drops its units: a scalar becomes the
+                # bare literal, an array a unitless const.
+                literal = value.get("value")
+                if isinstance(literal, (int, float)) and not isinstance(literal, bool):
+                    return literal
+                value = {k: v for k, v in value.items() if k != "units"}
+        out = {}
+        for k, v in value.items():
+            if k in _DOCUMENT_UNIT_KEYS and isinstance(v, str):
+                out[k] = canonical_unit_spelling(v)
+            elif k in _DOCUMENT_FREE_KEYS:
+                out[k] = v
+            else:
+                out[k] = walk(v, k in _DOCUMENT_MAP_KEYS)
+        return out
+
+    return walk(doc)

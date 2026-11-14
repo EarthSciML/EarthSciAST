@@ -20,6 +20,7 @@ import {
   isNumericLiteral,
   formatIntToken,
 } from './numeric-literal.js'
+import { canonicalUnitSpelling } from './unit-conversion.js'
 
 // `CanonicalizeError` is DEFINED in numeric-literal.ts (the lowest module in
 // the canonical-form stack) so its nonfinite specialization
@@ -180,6 +181,19 @@ function assertEmissible(e: Expr | unknown): void {
 function canonOp(node: Node): Expr {
   const newArgs: Expr[] = node.args.map((a) => canonicalize(a))
   const work: Node = { ...node, args: newArgs }
+  if (typeof work.units === 'string') {
+    // A `const` node's declared units take the canonical unit spelling
+    // (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+    work.units = canonicalUnitSpelling(work.units)
+    if (work.op === 'const' && work.units === '1') {
+      // A dimensionless const drops its units (user ruling 2026-11-14): a
+      // scalar becomes the bare literal, an array a unitless const.
+      if (typeof work.value === 'number' || isNumericLiteral(work.value)) {
+        return canonicalize(work.value as Expr)
+      }
+      delete work.units
+    }
+  }
   switch (work.op) {
     case '+':
       return canonAdd(work)
@@ -190,7 +204,12 @@ function canonOp(node: Node): Expr {
     case '/':
       return canonDiv(work)
     case 'neg':
+      // Deprecated word spelling of unary `-` (esm-spec §4.2): canonicalizes
+      // to the unary `-` node, never back to `neg` (RFC §5.4.7).
       return canonNeg(work)
+    case 'pow':
+      // Deprecated word spelling of `^` (esm-spec §4.2).
+      return work.args.length === 2 ? { ...work, op: '^' } : work
     default:
       return work
   }
@@ -276,7 +295,11 @@ function canonSub(node: Node): Expr {
   if (node.args.length === 2) {
     const a = node.args[0]!
     const b = node.args[1]!
-    if (isZeroValue(a)) return canonNegValue(b)
+    // `0 - x` is NOT `-x` when x is +0.0 (`0 - 0.0` is +0.0, `-(0.0)` is
+    // -0.0), so only a literal subtrahend folds, to the exact difference: an
+    // integer when both are integers, else the IEEE float difference. Any
+    // other `-(0, x)` stays binary (RFC §5.4.7).
+    if (isZeroValue(a) && isNumericLeaf(b)) return subFromZero(a, b)
     if (isZeroValue(b)) {
       // Type-preserving: -(intLit(x), floatLit(0)) → floatLit(x) to keep float promotion.
       if (isFloatLit(b) && isIntLit(a)) return floatLit(a.value)
@@ -284,6 +307,15 @@ function canonSub(node: Node): Expr {
     }
   }
   return node
+}
+
+/** `zero - b` for a literal zero minuend and a literal `b` (see {@link canonSub}). */
+function subFromZero(zero: Expr, b: Expr): Expr {
+  // `0 - v` (not `-v`): IEEE subtraction gives +0.0 for both signed zeros.
+  const v = 0 - leafValue(b)
+  if (isIntLit(zero) && isIntLit(b)) return intLit(v)
+  if (isPlainNumber(zero) && isPlainNumber(b)) return v
+  return floatLit(v)
 }
 
 function canonDiv(node: Node): Expr {
@@ -318,8 +350,12 @@ function canonNegValue(arg: Expr): Expr {
   }
   if (isFloatLit(arg)) return floatLit(-arg.value)
   if (isPlainNumber(arg)) return -arg
-  if (isNode(arg) && arg.op === 'neg' && arg.args.length === 1) return arg.args[0]!
-  return { op: 'neg', args: [arg] }
+  // A double negation collapses whichever spelling either negation uses; the
+  // inner one is already canonical, so it can only be unary `-` here unless the
+  // caller handed in an uncanonicalized `neg`.
+  if (isNode(arg) && (arg.op === '-' || arg.op === 'neg') && arg.args.length === 1)
+    return arg.args[0]!
+  return { op: '-', args: [arg] }
 }
 
 function flattenSameOp(args: Expr[], op: string): Expr[] {
@@ -496,4 +532,106 @@ function expandToPlain(f: number): string {
   while (end > dot + 1 && s[end - 1] === '0') end--
   if (end === dot + 1) end = dot
   return s.slice(0, end)
+}
+
+// ---------------------------------------------------------------------------
+// The document-level canonical step (esm-spec §4.8.2 "Canonical spelling").
+// ---------------------------------------------------------------------------
+
+/** Object properties whose value is a NAME-KEYED map (esm-schema.json): a map's
+ * keys are names, never fields, so a variable NAMED `units` is not a units
+ * string. The same list in every binding. */
+const DOCUMENT_MAP_KEYS: ReadonlySet<string> = new Set([
+  'bind',
+  'bindings',
+  'coordinates',
+  'coords',
+  'coupling_roles',
+  'data_sources',
+  'enums',
+  'expression_template_imports',
+  'expression_templates',
+  'guesses',
+  'index_set_rename',
+  'index_sets',
+  'initial_conditions',
+  'map',
+  'metaparameters',
+  'models',
+  'parameter_overrides',
+  'parameters',
+  'pinned_coords',
+  'ranges',
+  'reaction_systems',
+  'rebind',
+  'rename',
+  'species',
+  'subsystems',
+  'translate',
+  'url_substitutions',
+  'variables',
+  'where',
+])
+
+/** Free-form objects (schema `additionalProperties: true`), never descended. */
+const DOCUMENT_FREE_KEYS: ReadonlySet<string> = new Set([
+  'attrs',
+  'config',
+  'metadata',
+  'reader_options',
+  'x_esd',
+])
+
+const DOCUMENT_UNIT_KEYS: ReadonlySet<string> = new Set(['units', 'default_units'])
+
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+  if (typeof x !== 'object' || x === null || isNumericLiteral(x)) return false
+  const proto = Object.getPrototypeOf(x) as unknown
+  return proto === Object.prototype || proto === null
+}
+
+/**
+ * The document-level canonical step: every units string of a document takes
+ * the canonical unit spelling (esm-spec §4.8.2, Lean `Esm.Units.canon`).
+ *
+ * That is every `units` and `default_units` string of a variable, species,
+ * parameter, coordinate or `const` node, wherever it sits: nested subsystems,
+ * template bodies, tests, coupling entries. Free-form objects (`metadata`,
+ * `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither
+ * are the keys of name-keyed maps. A `const` node whose units spell `1` loses
+ * them: a scalar one becomes the bare literal, an array one a `const` without
+ * `units`. Takes the decoded JSON document (an `EsmFile` is one); the input is
+ * not mutated and nothing else changes.
+ */
+export function canonicalizeDocument<T>(doc: T): T {
+  const walk = (value: unknown, isMap: boolean): unknown => {
+    if (Array.isArray(value)) return value.map((v) => walk(v, false))
+    if (!isPlainObject(value)) return value
+    let dropUnits = false
+    if (
+      !isMap &&
+      value.op === 'const' &&
+      typeof value.units === 'string' &&
+      canonicalUnitSpelling(value.units) === '1'
+    ) {
+      // A dimensionless const drops its units: a scalar becomes the bare
+      // literal, an array a unitless const.
+      if (typeof value.value === 'number' || isNumericLiteral(value.value)) return value.value
+      dropUnits = true
+    }
+    // Object.fromEntries defines each key as an own property, so a key named
+    // `__proto__` (a legal name in a name-keyed map) is kept, not turned into
+    // a prototype assignment.
+    const entries: Array<[string, unknown]> = []
+    for (const [k, v] of Object.entries(value)) {
+      if (dropUnits && k === 'units') continue
+      if (isMap) entries.push([k, walk(v, false)])
+      else if (DOCUMENT_UNIT_KEYS.has(k) && typeof v === 'string')
+        entries.push([k, canonicalUnitSpelling(v)])
+      else if (DOCUMENT_FREE_KEYS.has(k)) entries.push([k, v])
+      else entries.push([k, walk(v, DOCUMENT_MAP_KEYS.has(k))])
+    }
+    return Object.fromEntries(entries)
+  }
+  return walk(doc, false) as T
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every binding ships under ONE version number, and nine files carry it.
+# Every binding ships under ONE version number, and twelve sites carry it.
 #
 # Four are the package manifests the release pipeline reads. Two more are
 # hand-maintained mirrors that no manifest can derive:
@@ -21,6 +21,12 @@
 # The last two are the `esm-narrative` crate's manifest and its own lock entry.
 # It is not published to crates.io, but its binary ships on every GitHub
 # release beside `esm`, so it carries the release's version.
+#
+# The last three are the `esm` tool's crate (`earthsci-ast-cli`, in
+# pkg/earthsci-ast-rs/cli): its manifest version, its lock entry, and the
+# EXACT `earthsci-ast` version it pins. It publishes to crates.io right after
+# the library, and a stale pin would make that publish ask for a library
+# version that does not exist.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -31,9 +37,15 @@ rs=$(grep -m1 '^version = ' pkg/earthsci-ast-rs/Cargo.toml | sed 's/.*"\(.*\)".*
 ts=$(node -p "require('./pkg/earthsci-ast-ts/package.json').version")
 ts_const=$(sed -n "s/^export const LIBRARY_VERSION = '\(.*\)'$/\1/p" pkg/earthsci-ast-ts/src/version.ts)
 go_const=$(sed -n 's/^const LibraryVersion = "\(.*\)"$/\1/p' pkg/earthsci-ast-go/pkg/esm/version.go)
-rs_lock=$(awk '/^name = "earthsci-ast"$/ { getline; gsub(/^version = "|"$/, ""); print; exit }' pkg/earthsci-ast-rs/Cargo.lock)
+# The lock can hold a second `earthsci-ast`, from crates.io, that
+# EarthSciIntegrator (the `esm` tool's `integrator` backend) depends on; the
+# workspace's own entry is the one with no `source` line.
+rs_lock=$(awk '/^name = "earthsci-ast"$/ { getline v; getline s; if (s !~ /^source = /) { gsub(/^version = "|"$/, "", v); print v; exit } }' pkg/earthsci-ast-rs/Cargo.lock)
 narr=$(grep -m1 '^version = ' pkg/earthsci-narrative/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 narr_lock=$(awk '/^name = "earthsci-narrative"$/ { getline; gsub(/^version = "|"$/, ""); print; exit }' pkg/earthsci-narrative/Cargo.lock)
+cli=$(grep -m1 '^version = ' pkg/earthsci-ast-rs/cli/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+cli_lock=$(awk '/^name = "earthsci-ast-cli"$/ { getline; gsub(/^version = "|"$/, ""); print; exit }' pkg/earthsci-ast-rs/Cargo.lock)
+cli_pin=$(sed -n 's/^earthsci-ast = { path = "..", version = "=\([^"]*\)".*/\1/p' pkg/earthsci-ast-rs/cli/Cargo.toml)
 
 status=0
 for pair in \
@@ -44,7 +56,10 @@ for pair in \
   "pkg/earthsci-ast-ts/src/version.ts (LIBRARY_VERSION):$ts_const" \
   "pkg/earthsci-ast-go/pkg/esm/version.go (LibraryVersion):$go_const" \
   "pkg/earthsci-narrative/Cargo.toml:$narr" \
-  "pkg/earthsci-narrative/Cargo.lock (earthsci-narrative):$narr_lock"
+  "pkg/earthsci-narrative/Cargo.lock (earthsci-narrative):$narr_lock" \
+  "pkg/earthsci-ast-rs/cli/Cargo.toml:$cli" \
+  "pkg/earthsci-ast-rs/Cargo.lock (earthsci-ast-cli):$cli_lock" \
+  "pkg/earthsci-ast-rs/cli/Cargo.toml (earthsci-ast pin):$cli_pin"
 do
   file=${pair%:*}; got=${pair##*:}
   if [ "$got" != "$jl" ]; then
@@ -56,10 +71,10 @@ done
 
 if [ "$status" -ne 0 ]; then
   echo
-  echo "All nine version sites must agree. Source of truth:"
+  echo "All twelve version sites must agree. Source of truth:"
   echo "  pkg/EarthSciAST.jl/Project.toml = $jl"
   echo "See RELEASING.md, 'Cutting a release'."
   exit 1
 fi
 
-echo "All nine version sites agree on $jl"
+echo "All twelve version sites agree on $jl"

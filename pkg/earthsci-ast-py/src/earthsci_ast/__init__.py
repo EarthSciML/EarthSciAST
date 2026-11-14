@@ -212,6 +212,10 @@ from .relational import (
     serialize_canonical,
 )
 
+# The document-level canonical step (esm-spec §4.8.2): every units string in
+# the canonical unit spelling.
+from .canonicalize import canonicalize_document
+
 # The esm 1.0.0 classification API (esm-spec §6.3.1) — the ONE sanctioned way
 # to recover the finer categories a solver needs from the two declared variable
 # types. Every site that used to branch on `variable.type == "state"` /
@@ -623,6 +627,7 @@ __all__ = [
     "group_aggregate",
     "canonical_index_set_json",
     "serialize_canonical",
+    "canonicalize_document",
     # Build-time cadence-partition pass (structural_simplify analogue)
     "CadenceError",
     "Partition",

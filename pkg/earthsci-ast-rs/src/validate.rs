@@ -619,7 +619,7 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
             // — so run the typed structural pass on a best-effort raw parse and
             // populate `structural_errors` from it. This never flips the verdict:
             // `is_valid` stays false; it only recovers the `(code, path)` records.
-            // (Mirrors the conformance runner's recovery in `bin/esm.rs`.)
+            // (Mirrors the conformance runner's recovery in the `esm` CLI, `cli/`.)
             let structural_errors = match serde_json::from_str::<EsmFile>(json_str) {
                 Ok(esm_file) => validate(&esm_file).structural_errors,
                 Err(_) => vec![],
