@@ -2924,8 +2924,10 @@ pub(crate) fn resolve_rhs_time_derivatives(
     equations: &mut [Equation],
     time_invariant: &HashSet<String>,
 ) -> bool {
+    // An authored model carries no lifted equation: a per-cell tendency
+    // written in the document is not the pointwise lift's.
     let Some((carriers, tables)) =
-        plan_time_derivative_resolution(equations.iter(), time_invariant)
+        plan_time_derivative_resolution(equations.iter().map(|eq| (eq, false)), time_invariant)
     else {
         return false;
     };
@@ -2934,7 +2936,7 @@ pub(crate) fn resolve_rhs_time_derivatives(
     };
     for (eq, carries) in equations.iter_mut().zip(carriers) {
         if carries {
-            let mut active = self_defined(&eq.lhs);
+            let mut active = self_defined(&eq.lhs, false);
             eq.rhs = tables.substitute(&eq.rhs, &mut active);
         }
     }
@@ -2947,12 +2949,12 @@ pub(crate) fn resolve_rhs_time_derivatives(
 /// document with none keeps its equations untouched rather than being rebuilt
 /// through `substitute`.
 fn plan_time_derivative_resolution<'e, 'a>(
-    equations: impl Iterator<Item = &'e Equation> + Clone,
+    equations: impl Iterator<Item = (&'e Equation, bool)> + Clone,
     time_invariant: &'a HashSet<String>,
 ) -> Option<(Vec<bool>, Option<DerivTables<'a>>)> {
     let carriers: Vec<bool> = equations
         .clone()
-        .map(|eq| contains_time_derivative(&eq.rhs))
+        .map(|(eq, _)| contains_time_derivative(&eq.rhs))
         .collect();
     if !carriers.contains(&true) {
         return None;
@@ -2968,14 +2970,15 @@ fn resolve_rhs_time_derivatives_per_contribution(
     equations: &mut [FlatEq],
     time_invariant: &HashSet<String>,
 ) {
-    let Some((carriers, Some(tables))) =
-        plan_time_derivative_resolution(equations.iter().map(|fe| &fe.eq), time_invariant)
-    else {
+    let Some((carriers, Some(tables))) = plan_time_derivative_resolution(
+        equations.iter().map(|fe| (&fe.eq, fe.lifted)),
+        time_invariant,
+    ) else {
         return;
     };
     for (fe, carries) in equations.iter_mut().zip(carriers) {
         if carries {
-            let mut active = self_defined(&fe.eq.lhs);
+            let mut active = self_defined(&fe.eq.lhs, fe.lifted);
             fe.map_contributions(|e| tables.substitute(e, &mut active));
         }
     }
@@ -2985,22 +2988,26 @@ fn resolve_rhs_time_derivatives_per_contribution(
 /// its own right-hand side; seeding `active` with it is what makes
 /// `D(x)/dt ~ k·D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather than
 /// expand forever.
-fn self_defined(lhs: &Expr) -> Vec<String> {
+fn self_defined(lhs: &Expr, lifted: bool) -> Vec<String> {
     match lhs {
         Expr::Operator(node) if is_structural_time_derivative(node) => match node.args.first() {
             Some(Expr::Variable(name)) => vec![name.clone()],
             _ => Vec::new(),
         },
         Expr::Variable(name) => vec![name.clone()],
-        _ => lifted_lhs_target(lhs)
+        _ => lifted_lhs_target(lhs, lifted)
             .map(|name| vec![name.to_string()])
             .unwrap_or_default(),
     }
 }
 
 /// The state a pointwise-lifted equation defines: `x` of its left-hand side
-/// `faq(D(index(x, ℓ…)))`.
-fn lifted_lhs_target(lhs: &Expr) -> Option<&str> {
+/// `faq(D(index(x, ℓ…)))`. `lifted` is whether the lift wrote the equation: an
+/// author's per-cell equation of the same shape defines no lifted state.
+fn lifted_lhs_target(lhs: &Expr, lifted: bool) -> Option<&str> {
+    if !lifted {
+        return None;
+    }
     let Expr::Operator(node) = lhs else {
         return None;
     };
@@ -3047,7 +3054,7 @@ impl<'a> DerivTables<'a> {
     /// The tables `equations` define, or `None` when they define nothing to
     /// resolve against.
     fn build<'e>(
-        equations: impl IntoIterator<Item = &'e Equation>,
+        equations: impl IntoIterator<Item = (&'e Equation, bool)>,
         time_invariant: &'a HashSet<String>,
     ) -> Option<Self> {
         let mut tables = DerivTables {
@@ -3055,7 +3062,7 @@ impl<'a> DerivTables<'a> {
             definition: HashMap::new(),
             time_invariant,
         };
-        for eq in equations {
+        for (eq, lifted) in equations {
             match &eq.lhs {
                 Expr::Operator(node) if is_structural_time_derivative(node) => {
                     if let Some(Expr::Variable(name)) = node.args.first() {
@@ -3064,8 +3071,8 @@ impl<'a> DerivTables<'a> {
                 }
                 // A lifted state's tendency is its lifted right-hand side, the
                 // `faq` over its index sets (esm-libraries-spec §4.7.5 step 3a).
-                lhs @ Expr::Operator(_) if lifted_lhs_target(lhs).is_some() => {
-                    if let Some(name) = lifted_lhs_target(lhs) {
+                lhs @ Expr::Operator(_) if lifted_lhs_target(lhs, lifted).is_some() => {
+                    if let Some(name) = lifted_lhs_target(lhs, lifted) {
                         tables.tendency.insert(name.to_string(), eq.rhs.clone());
                     }
                 }
@@ -6410,55 +6417,92 @@ fn plan_pointwise_lift(
         );
     }
 
+    type Candidates = IndexMap<String, Vec<(String, Vec<String>)>>;
+    let as_set = |a: &[String]| a.iter().cloned().collect::<BTreeSet<String>>();
+    let two_grids = |comp: &str, first: &str, grid: &[String], other: &str, axes: &[String]| {
+        if as_set(axes) == as_set(grid) {
+            return Ok(());
+        }
+        Err(FlattenError::DimensionPromotion {
+            message: format!(
+                "pointwise lift: component '{comp}' would be lifted onto two \
+                 grids: state '{first}' onto {grid:?} and state '{other}' onto \
+                 {axes:?}"
+            ),
+        })
+    };
+    // Operator-route plans, as opposed to the component grid a later pass gives.
+    let operator_plans: HashMap<String, Vec<String>> = plans
+        .iter()
+        .map(|(s, p)| (s.clone(), p.axes.clone()))
+        .collect();
+    let state_vars: &IndexMap<String, ModelVariable> = state_variables;
+    // Every candidate of every component `wanted` accepts, in equation order,
+    // each read with the component's own states scalar and every other lifted
+    // state at its lift index sets.
+    let candidates_of =
+        |lifted_axes: &HashMap<String, Vec<String>>, wanted: &dyn Fn(&str) -> bool| -> Candidates {
+            // Each wanted component's view of the lifted states: every one but its own.
+            let mut others: HashMap<&str, HashMap<String, Vec<String>>> = HashMap::new();
+            for (target, _) in &tendencies {
+                let comp = top_component(target);
+                if wanted(comp) && !others.contains_key(comp) {
+                    let view = lifted_axes
+                        .iter()
+                        .filter(|(s, _)| top_component(s) != comp)
+                        .map(|(s, a)| (s.clone(), a.clone()))
+                        .collect();
+                    others.insert(comp, view);
+                }
+            }
+            let mut found = Candidates::new();
+            let mut inference: HashMap<&str, LiftShapes<'_, '_>> = HashMap::new();
+            for (target, rhs) in &tendencies {
+                let comp = top_component(target);
+                if !wanted(comp) {
+                    continue;
+                }
+                if let Some(axes) = operator_plans.get(target) {
+                    found
+                        .entry(comp.to_string())
+                        .or_default()
+                        .push((target.clone(), axes.clone()));
+                    continue;
+                }
+                let shapes = inference.entry(comp).or_insert_with(|| {
+                    LiftShapes::new(
+                        parameters,
+                        observed_variables,
+                        state_vars,
+                        &defs,
+                        &others[comp],
+                        masks.get(comp),
+                    )
+                });
+                if let Some(axes) = shapes.expr_axes(rhs).filter(|a| !a.is_empty()) {
+                    found
+                        .entry(comp.to_string())
+                        .or_default()
+                        .push((target.clone(), axes));
+                }
+            }
+            found
+        };
+
     // Whole-component lift, to a fixpoint.
     let mut lifted_axes: HashMap<String, Vec<String>> = HashMap::new();
     let mut lifted_components: HashSet<String> = HashSet::new();
+    // The candidate that gave each lifted component its grid.
+    let mut grids: HashMap<String, (String, Vec<String>)> = HashMap::new();
     loop {
-        let mut found: IndexMap<String, Vec<(String, Vec<String>)>> = IndexMap::new();
-        let mut inference: HashMap<String, LiftShapes<'_, '_>> = HashMap::new();
-        for (target, rhs) in &tendencies {
-            let comp = top_component(target).to_string();
-            if lifted_components.contains(&comp) {
-                continue;
-            }
-            if let Some(plan) = plans.get(target) {
-                found
-                    .entry(comp)
-                    .or_default()
-                    .push((target.clone(), plan.axes.clone()));
-                continue;
-            }
-            let shapes = inference.entry(comp.clone()).or_insert_with(|| {
-                LiftShapes::new(
-                    parameters,
-                    observed_variables,
-                    state_variables,
-                    &defs,
-                    &lifted_axes,
-                    masks.get(&comp),
-                )
-            });
-            if let Some(axes) = shapes.expr_axes(rhs).filter(|a| !a.is_empty()) {
-                found.entry(comp).or_default().push((target.clone(), axes));
-            }
-        }
-        drop(inference);
+        let found = candidates_of(&lifted_axes, &|comp| !lifted_components.contains(comp));
         if found.is_empty() {
             break;
         }
         for (comp, candidates) in found {
             let (first, grid) = &candidates[0];
-            let as_set = |a: &[String]| a.iter().cloned().collect::<BTreeSet<String>>();
             for (other, axes) in &candidates[1..] {
-                if as_set(axes) != as_set(grid) {
-                    return Err(FlattenError::DimensionPromotion {
-                        message: format!(
-                            "pointwise lift: component '{comp}' would be lifted onto two \
-                             grids: state '{first}' onto {grid:?} and state '{other}' onto \
-                             {axes:?}"
-                        ),
-                    });
-                }
+                two_grids(&comp, first, grid, other, axes)?;
             }
             if as_set(grid).len() != grid.len() {
                 return Err(FlattenError::DimensionPromotion {
@@ -6493,11 +6537,23 @@ fn plan_pointwise_lift(
                 }
                 lifted_axes.insert(state.clone(), plans[state].axes.clone());
             }
+            grids.insert(comp.clone(), (first.clone(), grid.clone()));
             lifted_components.insert(comp);
         }
     }
     if lifted_axes.is_empty() {
         return Ok(None);
+    }
+    // A state can become a candidate only after its component was lifted, when
+    // a later pass lifts a component it reads. Search the lifted components'
+    // candidates once more with every lift final, so the answer does not depend
+    // on which pass lifted what.
+    for (comp, candidates) in candidates_of(&lifted_axes, &|comp| lifted_components.contains(comp))
+    {
+        let (first, grid) = &grids[&comp];
+        for (other, axes) in &candidates {
+            two_grids(&comp, first, grid, other, axes)?;
+        }
     }
     // The lifted states live on the lift's index sets: each `shape` names them
     // and `lifted_shapes` records their sizes (esm-libraries-spec §4.7.5), so
