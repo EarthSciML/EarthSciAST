@@ -22,7 +22,12 @@ Subcommands:
               registered verified checker.
   notation    The operator list of the document notation table
               (formal/Esm/Document/Notation.lean) is the operator set of spec §4.2.
-  all         All three, with `--lean`.
+  fixtures    The document source format golden set
+              (tests/conformance/document_format/) is what the built `esm-lean`
+              prints and parses now: a printer or parser change that moves a
+              pinned spelling fails here until the fixtures are regenerated
+              (scripts/gen-document-format-fixtures.py). Needs `lake build`.
+  all         All of the above, with `--lean`.
 
 Exit status is 0 only if every requested check passes.
 """
@@ -528,6 +533,24 @@ def check_notation(args):
     return report.done("notation")
 
 
+FIXTURE_GENERATOR = ROOT / "scripts" / "gen-document-format-fixtures.py"
+
+
+def check_fixtures(args):
+    """The document-format fixtures match the Lean printer and parser, by regenerating
+    them in memory from the built `esm-lean` and comparing with the committed files."""
+    report = Report()
+    proc = subprocess.run(
+        [sys.executable, str(FIXTURE_GENERATOR), "--check"], capture_output=True, text=True
+    )
+    out = (proc.stdout + proc.stderr).strip()
+    if proc.returncode != 0:
+        report.error("the document-format fixtures do not match esm-lean:\n" + out)
+    elif out:
+        print(out)
+    return report.done("fixtures")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -538,6 +561,7 @@ def main():
     reg.add_argument("--lean", action="store_true", help="elaborate theorems against statements")
     sub.add_parser("tokens")
     sub.add_parser("notation")
+    sub.add_parser("fixtures")
     sub.add_parser("all")
     args = ap.parse_args()
     if args.cmd == "inventory":
@@ -548,11 +572,19 @@ def main():
         ok = check_tokens(args)
     elif args.cmd == "notation":
         ok = check_notation(args)
+    elif args.cmd == "fixtures":
+        ok = check_fixtures(args)
     else:
         args.source = args.lines = None
         args.lean = True
         ok = all(
-            [check_tokens(args), check_notation(args), check_inventory(args), check_registry(args)]
+            [
+                check_tokens(args),
+                check_notation(args),
+                check_inventory(args),
+                check_registry(args),
+                check_fixtures(args),
+            ]
         )
     sys.exit(0 if ok else 1)
 
