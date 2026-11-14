@@ -1,6 +1,6 @@
 ---
 title: "Arithmetic, comparison, logic"
-description: "+ - * / ^ neg and the relational and boolean operators."
+description: "+ - * / ^ and the relational and boolean operators."
 ---
 
 ## Arithmetic
@@ -12,7 +12,7 @@ description: "+ - * / ^ neg and the relational and boolean operators."
 | `*` | 1 or more | product of the arguments |
 | `/` | 2 | `args[0] / args[1]` |
 | `^` | 2 | `args[0]` raised to `args[1]` |
-| `neg` | 1 | negation — the canonical form of unary `-` |
+| `neg` | 1 | **deprecated** — rewritten to unary `-` on load |
 
 `+` and `*` are **n-ary**, not binary: write `k·A·B` as one node with three
 arguments, not as nested pairs. Canonicalization flattens and sorts them anyway,
@@ -80,19 +80,15 @@ x^2
 ```
 With `x=3` → `9.0`.
 
-`neg` is unary negation as a named operator — the form canonicalization emits,
-and one of the scalar operators admissible as a
-[`broadcast`](../arrays/) `fn`. It means exactly what unary `-` means:
+**Deprecated: `neg` and `pow`.** `neg` is the word spelling of unary `-`, and
+`pow` the word spelling of `^`. Both still load, but the loader rewrites them —
+`{"op": "neg", "args": ["x"]}` to `{"op": "-", "args": ["x"]}`, and
+`{"op": "pow", "args": ["x", 2]}` to `{"op": "^", "args": ["x", 2]}` (a
+[`broadcast`](../arrays/) `fn` of `neg` becomes `-`) — and warns
+`deprecated_op` once per document. Canonicalization writes `-` and `^`, never
+`neg` or `pow`. Write `-` and `^`.
 
-```json
-{ "op": "neg", "args": ["x"] }
-```
-
-It shares the text surface of unary `-` (`-x`), so text round-trips to `-`
-rather than back to `neg`. Write `-` unless you are emitting canonical form.
-
-There is **no `pow`**, and `**` is not a spelling of `^`. Bindings reject both,
-along with `power` and `=`.
+`**` is not a spelling of `^`, and `power` and `=` are not operators either.
 
 **Dimensions.** `+` and `-` require their operands to share a dimension and
 propagate it. `*` and `/` combine dimensions. `^` requires a dimensionless

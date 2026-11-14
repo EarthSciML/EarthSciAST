@@ -25,7 +25,7 @@
             "args": [
               { "op": "-", "args": [
                 { "op": "-", "args": ["b"] },
-                { "op": "sqrt", "args": [{ "op": "-", "args": [{ "op": "pow", "args": ["b", 2] }, { "op": "*", "args": [4, "a", "c"] }] }] }
+                { "op": "sqrt", "args": [{ "op": "-", "args": [{ "op": "^", "args": ["b", 2] }, { "op": "*", "args": [4, "a", "c"] }] }] }
               ]},
               { "op": "*", "args": [2, "a"] }
             ]

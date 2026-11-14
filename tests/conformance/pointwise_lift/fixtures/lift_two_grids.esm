@@ -1,0 +1,98 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "name": "LiftTwoGrids",
+    "description": "Refused: Box.x reads the [lev] Column.T and Box.y reads the [lat] Column.S, so the two candidates would put the one component Box on two different grids. Flatten refuses it with the dimension-promotion error (esm-spec 10.5).",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-13T00:00:00Z"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 300.0,
+          "shape": [
+            "lev"
+          ]
+        },
+        "S": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "shape": [
+            "lat"
+          ]
+        }
+      },
+      "equations": []
+    },
+    "Box": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1e-05,
+              "Column.T",
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "Column.S"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

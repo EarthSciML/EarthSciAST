@@ -70,8 +70,9 @@ const opBroadcast = "broadcast"
 // operators the evaluator already knows, it never invents one. That invariant is
 // what scalarOpArity relies on, and TestScalarOperatorsAllHaveArity pins it.
 var scalarOperators = map[string]struct{}{
-	// Arithmetic (§4.2), including the canonical unary negation the
-	// canonicalizer emits.
+	// Arithmetic (§4.2). `neg` is DEPRECATED (esm-spec §4.2 "Deprecated
+	// ops"): the loader rewrites a `fn: "neg"` to `-` (deprecated_ops.go), so
+	// it stays here only for a `broadcast` built in code.
 	"+": {}, "-": {}, "*": {}, "/": {}, "^": {}, "neg": {},
 	// Elementary functions (§4.2).
 	"exp": {}, "log": {}, "log10": {}, "sqrt": {},

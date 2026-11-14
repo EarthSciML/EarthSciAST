@@ -75,6 +75,21 @@ import Esm.Document.Math.TokTypst
 import Esm.Document.Math.RoundTripTypst
 import Esm.Document.Math.Variants
 import Esm.Document.Math.HandWritten
+import Esm.Document.Source.Keys
+import Esm.Document.Source.Reaction
+import Esm.Document.Source.Skeleton
+import Esm.Document.Source.SkeletonRT
+import Esm.Document.Source.Items
+import Esm.Document.Source.Facts
+import Esm.Document.Source.Lines
+import Esm.Document.Source.YamlLines
+import Esm.Document.Source.Text
+import Esm.Document.Source.Equation
+import Esm.Document.Source.MultiLine
+import Esm.Document.Source.Markdown
+import Esm.Document.Source.MarkdownDoc
+import Esm.Document.Source.Typst
+import Esm.Document.Source.TypstDoc
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/

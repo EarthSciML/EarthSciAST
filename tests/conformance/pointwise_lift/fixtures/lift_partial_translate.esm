@@ -1,0 +1,102 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "name": "LiftPartialTranslate",
+    "description": "Pointwise lift through a partial translate: operator_compose merges Mech.A into the [lev] state Col.A, and Mech.B, which the translate does not name, reads Col.A in its mass-action tendency. Mech.B is lifted onto [lev] (esm-libraries-spec 4.7.5).",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-13T00:00:00Z"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Col": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ]
+        },
+        "src": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0,
+          "shape": [
+            "lev"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "src"
+        }
+      ]
+    }
+  },
+  "reaction_systems": {
+    "Mech": {
+      "species": {
+        "A": {
+          "units": "1",
+          "default": 1.0
+        },
+        "B": {
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "parameters": {
+        "kb": {
+          "units": "1/s",
+          "default": 0.002
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "kb"
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Col",
+        "Mech"
+      ],
+      "translate": {
+        "Col.A": "Mech.A"
+      },
+      "require_match": false
+    }
+  ]
+}

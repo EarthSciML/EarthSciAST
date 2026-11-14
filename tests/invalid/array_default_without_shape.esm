@@ -46,7 +46,7 @@
       "equations": [
         {
           "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
-          "rhs": {"op": "*", "args": [{"op": "neg", "args": ["k"]}, "y"]}
+          "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "y"]}
         }
       ],
       "subsystems": {
@@ -62,7 +62,7 @@
           "equations": [
             {
               "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-              "rhs": {"op": "neg", "args": ["x"]}
+              "rhs": {"op": "-", "args": ["x"]}
             }
           ]
         }

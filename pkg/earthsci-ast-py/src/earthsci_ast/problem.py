@@ -1999,6 +1999,23 @@ def _refuse_unhonoured_float32(flat: FlattenedSystem) -> None:
             )
 
 
+def _refuse_reserved_lifting(flat: FlattenedSystem, evaluator: str) -> None:
+    """esm-spec §10.5: refuse a ``variable_map`` whose ``lifting`` is ``mean`` or
+    ``integral`` with ``unsupported_construct``. Flatten substitutes such an
+    edge's source unreduced, so a build would read the raw array where the
+    target expects its mean or integral: a wrong number with no diagnostic.
+    Flatten records the edges (after ``coupling_import`` expansion) in
+    ``flat.metadata.reserved_liftings``, so a build from a flattened system
+    refuses them as a build from the document does."""
+    for from_var, to_var, kind in flat.metadata.reserved_liftings:
+        raise UnsupportedConstructError(
+            "variable_map lifting",
+            f"'{kind}' on the edge '{from_var}' -> '{to_var}' (reserved by "
+            "esm-spec §10.5, not supported yet)",
+            evaluator,
+        )
+
+
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
     """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
     discrete), an implicit equation or a Wiener-noise parameter before any
@@ -2019,6 +2036,7 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
         or any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations)
         else "Python scalar interpreter"
     )
+    _refuse_reserved_lifting(flat, evaluator)
     # `flatten` lifts only the TOP-LEVEL components' events, so an event owned by
     # an inline subsystem is not in `flat` at all; look for it in the document.
     found = next(

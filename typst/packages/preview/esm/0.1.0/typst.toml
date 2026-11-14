@@ -1,0 +1,11 @@
+[package]
+name = "esm"
+version = "0.1.0"
+entrypoint = "lib.typ"
+authors = ["EarthSciML"]
+license = "AGPL-3.0-only"
+description = "Typesetting for EarthSciML model documents (the ESM Typst source format)."
+repository = "https://github.com/EarthSciML/EarthSciAST"
+keywords = ["earth science", "modeling", "equations"]
+categories = ["paper"]
+compiler = "0.13.0"

@@ -360,14 +360,15 @@ def test_bad_broadcast_fn_still_raises_at_evaluation() -> None:
 
 
 def test_canonicalize_output_is_evaluable() -> None:
-    """``canonicalize()`` rewrites unary ``-`` into ``neg``; Python's registry
-    omitted ``neg``, so its OWN canonicalizer produced trees its OWN evaluator
-    rejected as an unlowered rewrite-target. Rust and Julia both register it.
+    """``canonicalize()`` must produce trees its own evaluator runs. It once
+    wrote unary ``-`` as ``neg``, which Python's registry omitted; it now
+    writes unary ``-`` for every spelling, including the deprecated ``neg``
+    (esm-spec §4.2 "Deprecated ops").
     """
     from earthsci_ast.canonicalize import canonicalize
 
-    node = canonicalize(ExprNode(op="-", args=["x"]))
-    assert node.op == "neg"
+    node = canonicalize(ExprNode(op="neg", args=["x"]))
+    assert node.op == "-"
     ctx = EvalContext(
         state_layout={},
         state_shapes={},
@@ -380,7 +381,7 @@ def test_canonicalize_output_is_evaluable() -> None:
 
 
 def test_neg_renders_exactly_like_unary_minus() -> None:
-    """Canonicalizing must not change how a document reads."""
+    """The deprecated ``neg`` (built in code) reads exactly as unary ``-``."""
     from earthsci_ast import display
 
     for build in (

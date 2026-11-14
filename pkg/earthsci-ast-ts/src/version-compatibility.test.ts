@@ -26,7 +26,7 @@ import { readFixture } from './test-helpers.js'
  *
  * The suite reads the current major from `SCHEMA_VERSION` rather than spelling
  * it, so it states the same rules whichever major the embedded schema declares;
- * only the literal pin at the end names 2.1.0.
+ * only the literal pin at the end names 2.2.0.
  *
  * Most cases apply the version under test to a base document IN MEMORY rather
  * than reading a per-version fixture: the gate is a function of the version
@@ -229,12 +229,13 @@ describe('Version Compatibility', () => {
     // the moment the bindings were released as 0.1.0 against the 1.0.0 format.
     it('exposes the schema version, derived from the embedded schema $id', () => {
       // Moved 2.0.0 -> 2.1.0 with `lb` / `ub` bounds on a model variable
-      // (esm-spec §6.3.2).
+      // (esm-spec §6.3.2), then 2.1.0 -> 2.2.0 with the widened pointwise lift
+      // (esm-spec §10.5).
       // The literal is the point of the test: SCHEMA_VERSION is DERIVED from the
       // embedded schema `$id`, so this pins that the derivation still reads the
       // schema rather than a stale copy, and it is expected to be updated by
       // hand on each format bump.
-      expect(SCHEMA_VERSION).toBe('2.1.0')
+      expect(SCHEMA_VERSION).toBe('2.2.0')
     })
 
     it('exposes the package version separately, under its own name', () => {

@@ -4024,8 +4024,13 @@ impl BareWalk<'_> {
 /// `_promoted_axes`: a `faq` / `makearray` over named ranges has its output
 /// axes' index sets, one over inline `[1, n]` ranges has anonymous axes, an
 /// `index` gather and a geometry kernel are scalar, and every other op
-/// broadcasts its operands' axes by name, the superset winning. Iterated to a
-/// fixed point. A variable declared `shape: []` is a scalar and never inferred.
+/// broadcasts its operands' axes by name, the superset winning. The
+/// definitions are inferred in dependency order
+/// ([`dependency_first_order`]), each after every definition it reads, so a
+/// definition is never inferred from operands not yet inferred, whatever the
+/// order of the equations; one on a cycle of definitions is then retried
+/// until nothing changes. A variable declared `shape: []` is a scalar and
+/// never inferred.
 pub(crate) fn promoted_var_shapes(model: &crate::Model) -> HashMap<String, Vec<String>> {
     let mut shapes: HashMap<String, Vec<String>> = HashMap::new();
     let mut declared_scalar: HashSet<&str> = HashSet::new();
@@ -4054,6 +4059,31 @@ pub(crate) fn promoted_var_shapes(model: &crate::Model) -> HashMap<String, Vec<S
             shapes.insert((*name).to_string(), axes);
         }
     }
+    let def_of: HashMap<&str, usize> = open
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(i, (n, _))| (*n, i))
+        .collect();
+    let deps: Vec<Vec<usize>> = open
+        .iter()
+        .map(|(_, rhs)| {
+            let mut out = Vec::new();
+            for_each_variable(rhs, &mut |n| out.extend(def_of.get(n).copied()));
+            out
+        })
+        .collect();
+    for i in dependency_first_order(&deps) {
+        let (name, rhs) = open[i];
+        if shapes.contains_key(name) {
+            continue;
+        }
+        let inferred = infer_expr_axes(rhs, &shapes, &mut HashMap::new());
+        if !inferred.is_empty() {
+            shapes.insert(name.to_string(), inferred);
+        }
+    }
+    // Only a definition on a cycle can still be open with an operand shaped.
     loop {
         let mut changed = false;
         for (name, rhs) in &open {
@@ -4070,6 +4100,75 @@ pub(crate) fn promoted_var_shapes(model: &crate::Model) -> HashMap<String, Vec<S
             return shapes;
         }
     }
+}
+
+/// An order of `deps.len()` definitions in which each comes after every
+/// definition it reads: `deps[i]` lists, by position, the definitions
+/// definition `i` reads. Otherwise in the order given, each definition's
+/// unplaced dependencies pulled ahead of it. On a cycle, the definition the
+/// walk enters first comes after the others, which read it before it is
+/// placed. Iterative, so a long chain of definitions does not deepen the
+/// stack.
+///
+/// The shape inferences that resolve a definition from the shapes of the
+/// names it reads ([`promoted_var_shapes`],
+/// [`crate::elementwise_lift::plan_elementwise_lift`]) visit definitions in
+/// this order, so what they infer does not depend on the order of the
+/// equations.
+pub(crate) fn dependency_first_order(deps: &[Vec<usize>]) -> Vec<usize> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        New,
+        Open,
+        Done,
+    }
+    let mut mark = vec![Mark::New; deps.len()];
+    let mut order = Vec::with_capacity(deps.len());
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    for root in 0..deps.len() {
+        if mark[root] != Mark::New {
+            continue;
+        }
+        mark[root] = Mark::Open;
+        stack.push((root, 0));
+        while let Some(top) = stack.last_mut() {
+            let (v, next) = *top;
+            match deps[v].get(next) {
+                Some(&w) => {
+                    top.1 += 1;
+                    if mark[w] == Mark::New {
+                        mark[w] = Mark::Open;
+                        stack.push((w, 0));
+                    }
+                }
+                None => {
+                    mark[v] = Mark::Done;
+                    order.push(v);
+                    stack.pop();
+                }
+            }
+        }
+    }
+    order
+}
+
+/// Call `f` with every variable name `expr` holds, in any field, visiting
+/// each shared node once.
+fn for_each_variable<'e>(expr: &'e crate::Expr, f: &mut dyn FnMut(&'e str)) {
+    fn go<'e>(
+        e: &'e crate::Expr,
+        seen: &mut HashSet<*const crate::types::ExpressionNode>,
+        f: &mut dyn FnMut(&'e str),
+    ) {
+        match e {
+            crate::Expr::Variable(n) => f(n),
+            crate::Expr::Operator(node) if seen.insert(std::sync::Arc::as_ptr(node)) => {
+                node.for_each_child(&mut |c| go(c, seen, f));
+            }
+            _ => {}
+        }
+    }
+    go(expr, &mut HashSet::new(), f);
 }
 
 /// The ops whose result is an array over their own `output_idx`.
@@ -6455,5 +6554,52 @@ pub(crate) fn check_circular_dependencies_in_models(
             ),
             details: serde_json::json!({ "cycle": cycle }),
         });
+    }
+}
+
+#[cfg(test)]
+mod dependency_order_tests {
+    use super::*;
+
+    #[test]
+    fn each_definition_comes_after_what_it_reads() {
+        // 0 reads 1, 1 reads 2; 3 is independent; 4 and 5 read each other.
+        let deps = vec![vec![1], vec![2], vec![], vec![], vec![5], vec![4]];
+        let order = dependency_first_order(&deps);
+        let at = |i: usize| order.iter().position(|&o| o == i).unwrap();
+        assert_eq!(order.len(), deps.len());
+        assert!(at(2) < at(1) && at(1) < at(0), "{order:?}");
+        // On the cycle, the one entered first is placed last.
+        assert!(at(5) < at(4), "{order:?}");
+    }
+
+    #[test]
+    fn a_promoted_shape_does_not_depend_on_the_equation_order() {
+        // `k` reads `u` [c] and `w`, defined after it over [c, l].
+        let doc = serde_json::json!({
+            "esm": "2.0.0", "metadata": {"name": "order_probe"},
+            "index_sets": {"c": {"kind": "interval", "size": 3},
+                           "l": {"kind": "interval", "size": 2}},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "parameter", "shape": ["c"], "default": 1.0},
+                    "v": {"type": "parameter", "shape": ["c", "l"], "default": 1.0},
+                    "k": {"type": "unknown"}, "w": {"type": "unknown"},
+                    "s": {"type": "unknown", "default": 0.0}},
+                "equations": [
+                    {"lhs": "k", "rhs": {"op": "*", "args": ["u", "w"]}},
+                    {"lhs": "w", "rhs": {"op": "*", "args": [2, "v"]}},
+                    {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": 0.0}
+                ]
+            }}
+        });
+        let file = crate::parse::load_string(&doc.to_string()).expect("loads");
+        let model = file.models.as_ref().expect("models")["M"].clone();
+        let shapes = promoted_var_shapes(&model);
+        assert_eq!(
+            shapes.get("k"),
+            Some(&vec!["c".to_string(), "l".to_string()]),
+            "{shapes:?}"
+        );
     }
 }

@@ -57,6 +57,9 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -110,7 +113,76 @@ def load_manifest(path: Path) -> dict:
         categories=("pde_simulation", "pde_simulation_pipeline"),
         fixture_fields=("path", "model", "rhs_probes", "trajectory", "golden"),
         check_version=False,
+        validate_fixture=_validate_drop_coupling,
     )
+
+
+def _validate_drop_coupling(fx: dict, fid: str, path: Path) -> None:
+    drop = fx.get("drop_coupling")
+    if drop is None:
+        return
+    if not isinstance(drop, list) or not drop:
+        raise ManifestError(f"{path}: fixtures[{fid}].drop_coupling must be a non-empty array")
+    for edge in drop:
+        if not (
+            isinstance(edge, dict)
+            and isinstance(edge.get("from"), str)
+            and isinstance(edge.get("to"), str)
+        ):
+            raise ManifestError(
+                f"{path}: fixtures[{fid}].drop_coupling entries must be "
+                '{"from": <name>, "to": <name>} objects'
+            )
+
+
+@contextmanager
+def _adapter_manifest(manifest_path: Path) -> Iterator[Path]:
+    """The manifest the adapters read.
+
+    A fixture carrying ``drop_coupling`` (a list of ``{"from", "to"}`` edges) is
+    run on a copy of its document without those coupling entries. The copy and
+    a manifest pointing at it are written to a temporary directory for the
+    run, never committed: a shared document can keep an edge some binding
+    refuses to build (the wildfire fixture's reserved ``lifting: "mean"`` edge,
+    esm-spec §10.5) while the tier still checks the rest of it. Every edge
+    listed must be in the document, exactly once. With no such fixture the
+    manifest itself is yielded."""
+    manifest = load_manifest(manifest_path)
+    if not any(fx.get("drop_coupling") for fx in manifest["fixtures"]):
+        yield manifest_path
+        return
+    with tempfile.TemporaryDirectory(prefix="pde-sim-derived-") as tmp:
+        tmpdir = Path(tmp)
+        for fx in manifest["fixtures"]:
+            # The derived manifest lives elsewhere, so every fixture's path is
+            # made absolute.
+            src = (manifest_path.parent / fx["path"]).resolve()
+            fx["path"] = str(src)
+            drop = fx.pop("drop_coupling", None)
+            if not drop:
+                continue
+            with src.open() as f:
+                doc = json.load(f)
+            coupling = doc.get("coupling") or []
+            kept = []
+            for entry in coupling:
+                hits = [
+                    e for e in drop if entry.get("from") == e["from"] and entry.get("to") == e["to"]
+                ]
+                if not hits:
+                    kept.append(entry)
+            if len(coupling) - len(kept) != len(drop):
+                raise ManifestError(
+                    f"{manifest_path}: fixtures[{fx['id']}].drop_coupling names an edge "
+                    f"{src.name} does not carry exactly once"
+                )
+            doc["coupling"] = kept
+            derived = tmpdir / f"{fx['id']}.esm"
+            derived.write_text(json.dumps(doc, indent=2) + "\n")
+            fx["path"] = str(derived)
+        derived_manifest = tmpdir / "manifest.json"
+        derived_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+        yield derived_manifest
 
 
 # === Numeric comparison ===================================================
@@ -353,7 +425,8 @@ def write_golden(manifest_path: Path, timeout: float | None) -> int:
             f"(set $EARTHSCI_PDE_SIM_ADAPTER_{ref.upper()})"
         )
         return 2
-    payload = _ADAPTERS.run(ref, argv, manifest_path, timeout)
+    with _adapter_manifest(manifest_path) as adapter_manifest:
+        payload = _ADAPTERS.run(ref, argv, adapter_manifest, timeout)
     if payload.get("adapter_status") != "ok":
         _eprint(
             f"--write-golden: reference adapter failed: "
@@ -428,18 +501,20 @@ def run_suite(
     # required simulator is always a fail here (Julia/Python/Rust are all
     # required), so overall_ok alone decides ok/fail. attach_stderr keeps the
     # solver diagnostics for a broken adapter.
-    return run_producer_suite(
-        harness=_ADAPTERS,
-        bindings=bindings,
-        required=required,
-        fixtures=fixtures,
-        manifest_path=manifest_path,
-        output_path=output_path,
-        timeout=timeout,
-        compare_fixture=compare_fixture,
-        print_report=lambda r: _print_summary(r, reference_binding),
-        attach_stderr=True,
-    )
+    with _adapter_manifest(manifest_path) as adapter_manifest:
+        return run_producer_suite(
+            harness=_ADAPTERS,
+            bindings=bindings,
+            required=required,
+            fixtures=fixtures,
+            manifest_path=manifest_path,
+            output_path=output_path,
+            timeout=timeout,
+            compare_fixture=compare_fixture,
+            print_report=lambda r: _print_summary(r, reference_binding),
+            attach_stderr=True,
+            adapter_manifest_path=adapter_manifest,
+        )
 
 
 def _print_summary(report: dict, reference_binding: str) -> None:

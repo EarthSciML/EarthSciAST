@@ -368,6 +368,12 @@
     {
       "id": "wildfire_atmosphere_ocean",
       "path": "../../valid/wildfire_atmosphere_ocean.esm",
+      "drop_coupling": [
+        {
+          "from": "OceanDynamics.SST",
+          "to": "AirSeaFluxCalculator.SST"
+        }
+      ],
       "model": "Flattened",
       "pipeline": "full",
       "tags": [
@@ -378,7 +384,6 @@
         "lifting",
         "operator-compose",
         "pointwise-lift",
-        "mean-reduction",
         "scoped-reference-ic",
         "no-external-inputs"
       ],

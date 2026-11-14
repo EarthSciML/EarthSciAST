@@ -831,8 +831,8 @@ end
 # matching arm in `_eval_acc_op`) — the fold inlines the op into a state RHS,
 # so a non-evaluable op would convert a clear build-time UNSUPPORTED_SHAPE error
 # into a runtime UNSUPPORTED_OP after folding. The set therefore holds only the
-# esm-spec §4.2 evaluable-core elementwise ops (plus the canonicalize-internal
-# `neg`/`pow` aliases). Membership is declared per-op in src/op_registry.jl
+# esm-spec §4.2 evaluable-core elementwise ops (plus the deprecated `neg`/`pow`
+# word spellings, which an AST built in code may still carry). Membership is declared per-op in src/op_registry.jl
 # (flag `:ws4_foldable`) and pinned by op_registry_test.jl; the containment
 # invariant above is pinned by tree_walk_op_table_test.jl.
 const _WS4_FOLDABLE_ELEMENTWISE_OPS = _ops_with(:ws4_foldable)

@@ -38,6 +38,10 @@ documentation and runnable examples on one page.
 **[Narrative models](generated/narrative/)** — pages that define a model in
 their own prose, then validate, test and plot it as they are built.
 
+**[Document formats](generated/document-formats/)** — the Markdown and Typst
+source formats of a document, specified by the commented Lean model that
+defines them and rendered from it.
+
 ## Reference
 
 - [`esm-spec.md`](https://github.com/EarthSciML/EarthSciAST/blob/main/esm-spec.md)

@@ -117,7 +117,7 @@ describe('solver.time_span load gates', () => {
   const doc = (esm: string, solver: string, domain = '') =>
     `{"esm":"${esm}","metadata":{"name":"T"},"solver":${solver},${domain}` +
     `"models":{"M":{"variables":{"x":{"type":"unknown","units":"m","default":1.0}},` +
-    `"equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":{"op":"neg","args":["x"]}}]}}}`
+    `"equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":{"op":"-","args":["x"]}}]}}}`
   const codeOf = (fn: () => unknown): string | null => {
     try {
       fn()

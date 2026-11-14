@@ -119,7 +119,11 @@ def _canon_op(node: ExprNode) -> Expr:
     if work.op == "/":
         return _canon_div(work)
     if work.op == "neg":
+        # Deprecated word spelling of unary ``-`` (esm-spec §4.2 "Deprecated ops").
         return _canon_neg(work)
+    if work.op == "pow" and len(work.args) == 2:
+        # Deprecated word spelling of ``^``: the canonical form writes ``^``.
+        return replace(work, op="^")
     return work
 
 
@@ -161,12 +165,32 @@ def _canon_sub(node: ExprNode) -> Expr:
     if len(node.args) == 2:
         a, b = node.args[0], node.args[1]
         if _is_zero_any(a):
-            return _canon_neg_value(b)
+            # `0 - x` is NOT `-x` when x is +0.0 (`0 - 0.0` is +0.0, `-(0.0)` is
+            # -0.0), so only a literal subtrahend folds, to the exact
+            # difference; any other `-(0, x)` stays binary (RFC §5.4.7).
+            if _is_numeric_literal(b):
+                return _sub_from_zero(a, b)
+            return node
         if _is_zero_any(b):
             if isinstance(b, float) and isinstance(a, int) and not isinstance(a, bool):
                 return float(a)
             return a
     return node
+
+
+def _is_numeric_literal(e: Expr) -> bool:
+    return isinstance(e, (int, float))
+
+
+def _sub_from_zero(zero: Expr, b: Expr) -> Expr:
+    """``zero - b`` for a literal zero minuend and a literal ``b``: an integer
+    when both are integers, else the IEEE float difference (``0 - 0.0`` and
+    ``0 - (-0.0)`` are both +0.0)."""
+    if isinstance(b, bool):
+        b = int(b)
+    if isinstance(zero, float) or isinstance(b, float):
+        return 0.0 - float(b)
+    return -b
 
 
 def _canon_div(node: ExprNode) -> Expr:
@@ -197,9 +221,10 @@ def _canon_neg_value(arg: Expr) -> Expr:
         return -arg
     if isinstance(arg, float):
         return -arg
-    if isinstance(arg, ExprNode) and arg.op == "neg" and len(arg.args) == 1:
+    if isinstance(arg, ExprNode) and arg.op in ("-", "neg") and len(arg.args) == 1:
         return arg.args[0]
-    return ExprNode(op="neg", args=[arg])
+    # Canonical negation is unary ``-`` (RFC §5.4.7); ``neg`` is deprecated.
+    return ExprNode(op="-", args=[arg])
 
 
 def _flatten_same_op(args: list[Expr], op: str) -> list[Expr]:

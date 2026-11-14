@@ -57,7 +57,7 @@ multi-letter.
 A **JSON block with no Text partner** is a form the text notation cannot spell
 today. `broadcast` and `enum` have no surface of their own — the first prints as
 the operator it applies, the second as a dotted name that re-parses as a scoped
-variable reference. `neg` shares the surface of unary `-`. And a few forms lose
+variable reference. And a few forms lose
 a field on the way out: a `D` carrying trailing boundary operands, a `grad`
 carrying `dim`, and an `overlap` join. Whole `.esm` documents are shown as JSON
 throughout; the text notation covers expressions and equations, not files.
@@ -71,7 +71,7 @@ throughout; the text notation covers expressions and equations, not files.
 | `*` | n-ary | [arithmetic, comparison, logic](arithmetic-comparison-logic/) |
 | `/` | 2 | [arithmetic, comparison, logic](arithmetic-comparison-logic/) |
 | `^` | 2 | [arithmetic, comparison, logic](arithmetic-comparison-logic/) |
-| `neg` | 1 | [arithmetic, comparison, logic](arithmetic-comparison-logic/) |
+| `neg` (deprecated) | 1 | [arithmetic, comparison, logic](arithmetic-comparison-logic/) |
 | `==` `!=` `<` `<=` `>` `>=` | 2 | [arithmetic, comparison, logic](arithmetic-comparison-logic/) |
 | `and` `or` | 2+ | [arithmetic, comparison, logic](arithmetic-comparison-logic/) |
 | `not` | 1 | [arithmetic, comparison, logic](arithmetic-comparison-logic/) |
