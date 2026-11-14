@@ -10,6 +10,8 @@
 
 #import "values.typ": show-value, show-pairs
 #import "node.typ" as esm
+// Reactions are written in typsium's `#ce[…]`, re-exported here.
+#import "@preview/typsium:0.3.2": ce
 
 #let _kind-names = (var: "variable", param: "parameter", species: "species")
 
@@ -66,3 +68,39 @@
   radius: 2pt,
   [#text(fill: luma(90), raw(path)) \ #raw(json.encode(value), lang: "json", block: true)],
 )
+
+#let _labelled(name, body, attrs) = block(
+  breakable: false,
+  grid(
+    columns: (auto, 1fr),
+    column-gutter: 1em,
+    row-gutter: 0.4em,
+    text(fill: luma(90), name), body,
+    ..attrs.pairs().map(((k, v)) => (none, [#raw(k): #show-value(v)])).flatten(),
+  ),
+)
+
+/// A reaction with fields besides its equation: the `#ce[…]` line, then the fields.
+#let reaction(..attrs, body) = _labelled("reaction", body, attrs.named())
+
+/// An initialization equation.
+#let initialization(body) = _labelled("initialization", body, (:))
+
+/// A constraint equation.
+#let constraints(body) = _labelled("constraint", body, (:))
+
+/// An expression template with fields besides its definition.
+#let template(..attrs, body) = _labelled("template", body, attrs.named())
+
+/// A rewrite rule: `lhs ⇒ rhs`, then its fields.
+#let rule(name, lhs, rhs, ..attrs) = _labelled(
+  [rule #raw(name)],
+  $#lhs arrow.r.double #rhs$,
+  attrs.named(),
+)
+
+/// A subsystem included by reference.
+#let subsystem(name, ..attrs) = _labelled("subsystem", strong(name), attrs.named())
+
+/// An analysis with one plot: its fields.
+#let plot(..attrs) = _labelled("plot", none, attrs.named())

@@ -31,7 +31,7 @@ function pieces(text) {
       while (i < lines.length && !lines[i].startsWith("```")) i++;
       continue;
     }
-    const one = l.match(/^\$\$(.+)\$\$/);
+    const one = l.match(/^\$\$(.+?)\$\$(\s*\{.*\})?\s*$/);
     if (one) {
       out.push(one[1]);
       continue;
