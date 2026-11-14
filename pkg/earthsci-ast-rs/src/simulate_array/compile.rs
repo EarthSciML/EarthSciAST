@@ -1283,6 +1283,7 @@ impl ArrayCompiled {
             const_scope,
             precision: crate::precision::Env::capture(),
             merged_renames: HashMap::new(),
+            #[cfg(feature = "solve")]
             field_ic_memo: RefCell::new(None),
             inline_param_arrays,
             forcing_decls,

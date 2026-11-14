@@ -131,11 +131,9 @@ rstar = "0.13"
 #
 # OPTIONAL, behind the `solve` feature (esm-libraries-spec §2.5.9): constructing
 # a `Problem` MUST NOT require the solver. Only `solve` / `init` /
-# `solve_to_completion` may; `initial_state` integrates nothing and does not.
-# On by DEFAULT, so nothing a consumer already builds changes;
-# `--no-default-features` yields a crate that parses, validates, flattens,
-# classifies, BUILDS a Problem and computes its initial state with no ODE
-# solver linked at all.
+# `solve_to_completion` may. On by DEFAULT, so nothing a consumer already builds
+# changes; `--no-default-features` yields a crate that parses, validates,
+# flattens, classifies and BUILDS a Problem with no ODE solver linked at all.
 #
 # Held at 0.11 deliberately. 0.18 restructures the vector types (batched
 # columns, no host slice) and changes the integrator's numbers: the
