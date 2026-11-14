@@ -912,6 +912,29 @@ implementation note, not a conformance requirement — any implementation
 whose output matches the canonical form is conforming regardless of
 complexity.
 
+#### 5.4.10 Unit spelling of a `const` node
+
+A `const` node's `units` string (esm-spec §4.8.5) is written in the canonical
+unit spelling of esm-spec §4.8.2: numerator factors sorted by symbol in
+codepoint order and joined by `*`; at most one `/`, with a denominator of more
+than one factor parenthesized (`J/(K*mol)`); exponent 1 omitted, an integer
+exponent as `^n`, any other rational as `^(p/q)` in lowest terms; no
+cancellation across the fraction bar (`mol/mol` stays `mol/mol`, `mol/mol/s`
+becomes `mol/(mol*s)`); `""`, `"1"` and `"dimensionless"` all become `"1"`;
+and a string that does not parse is left unchanged. So
+`{op:"const", args:[], value:0.44704, units:"m h/(mi s)"}` canonicalizes to the
+same node as one with `units:"m*h/(mi*s)"`, both carrying `units:"h*m/(mi*s)"`.
+
+The respelling happens in `canonicalize`, before the §5.4.2 ordering, so the
+serialization a `+`/`*` parent sorts by already carries the canonical spelling.
+This is the expression half of a document-level rule: the canonical form of a
+whole document respells every units string in it — variable, species,
+parameter and coordinate `units` and `default_units` as well — through
+`canonicalize_document` (esm-spec §4.8.2).
+The authority is the Lean definition `Esm.Units.canon`
+(`formal/Esm/Units/Canonical.lean`); the cross-binding fixture is
+`tests/conformance/canonical/unit_spelling.json`.
+
 ### 5.5 No other new calculus ops
 
 `D`, `grad`, `div`, `laplacian` already exist. Beyond `regrid` (§5.3), no

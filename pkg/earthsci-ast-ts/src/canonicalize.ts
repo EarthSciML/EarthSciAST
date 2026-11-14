@@ -20,6 +20,7 @@ import {
   isNumericLiteral,
   formatIntToken,
 } from './numeric-literal.js'
+import { canonicalUnitSpelling } from './unit-conversion.js'
 
 // `CanonicalizeError` is DEFINED in numeric-literal.ts (the lowest module in
 // the canonical-form stack) so its nonfinite specialization
@@ -180,6 +181,11 @@ function assertEmissible(e: Expr | unknown): void {
 function canonOp(node: Node): Expr {
   const newArgs: Expr[] = node.args.map((a) => canonicalize(a))
   const work: Node = { ...node, args: newArgs }
+  if (typeof work.units === 'string') {
+    // A `const` node's declared units take the canonical unit spelling
+    // (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+    work.units = canonicalUnitSpelling(work.units)
+  }
   switch (work.op) {
     case '+':
       return canonAdd(work)
@@ -496,4 +502,87 @@ function expandToPlain(f: number): string {
   while (end > dot + 1 && s[end - 1] === '0') end--
   if (end === dot + 1) end = dot
   return s.slice(0, end)
+}
+
+// ---------------------------------------------------------------------------
+// The document-level canonical step (esm-spec §4.8.2 "Canonical spelling").
+// ---------------------------------------------------------------------------
+
+/** Object properties whose value is a NAME-KEYED map (esm-schema.json): a map's
+ * keys are names, never fields, so a variable NAMED `units` is not a units
+ * string. The same list in every binding. */
+const DOCUMENT_MAP_KEYS: ReadonlySet<string> = new Set([
+  'bind',
+  'bindings',
+  'coordinates',
+  'coords',
+  'coupling_roles',
+  'data_sources',
+  'enums',
+  'expression_template_imports',
+  'expression_templates',
+  'guesses',
+  'index_set_rename',
+  'index_sets',
+  'initial_conditions',
+  'map',
+  'metaparameters',
+  'models',
+  'parameter_overrides',
+  'parameters',
+  'pinned_coords',
+  'ranges',
+  'reaction_systems',
+  'rebind',
+  'rename',
+  'species',
+  'subsystems',
+  'translate',
+  'url_substitutions',
+  'variables',
+  'where',
+])
+
+/** Free-form objects (schema `additionalProperties: true`), never descended. */
+const DOCUMENT_FREE_KEYS: ReadonlySet<string> = new Set([
+  'attrs',
+  'config',
+  'metadata',
+  'reader_options',
+  'x_esd',
+])
+
+const DOCUMENT_UNIT_KEYS: ReadonlySet<string> = new Set(['units', 'default_units'])
+
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+  if (typeof x !== 'object' || x === null || isNumericLiteral(x)) return false
+  const proto = Object.getPrototypeOf(x) as unknown
+  return proto === Object.prototype || proto === null
+}
+
+/**
+ * The document-level canonical step: every units string of a document takes
+ * the canonical unit spelling (esm-spec §4.8.2, Lean `Esm.Units.canon`).
+ *
+ * That is every `units` and `default_units` string of a variable, species,
+ * parameter, coordinate or `const` node, wherever it sits: nested subsystems,
+ * template bodies, tests, coupling entries. Free-form objects (`metadata`,
+ * `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither
+ * are the keys of name-keyed maps. Takes the decoded JSON document (an
+ * `EsmFile` is one); the input is not mutated and nothing else changes.
+ */
+export function canonicalizeDocument<T>(doc: T): T {
+  const walk = (value: unknown, isMap: boolean): unknown => {
+    if (Array.isArray(value)) return value.map((v) => walk(v, false))
+    if (!isPlainObject(value)) return value
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value)) {
+      if (isMap) out[k] = walk(v, false)
+      else if (DOCUMENT_UNIT_KEYS.has(k) && typeof v === 'string') out[k] = canonicalUnitSpelling(v)
+      else if (DOCUMENT_FREE_KEYS.has(k)) out[k] = v
+      else out[k] = walk(v, DOCUMENT_MAP_KEYS.has(k))
+    }
+    return out
+  }
+  return walk(doc, false) as T
 }

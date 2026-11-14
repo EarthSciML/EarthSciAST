@@ -542,6 +542,18 @@
       "why": "As the bare degree sign: `°K` is not in the rewrite table. Kelvin is `K`."
     },
     {
+      "units": "s⁻1",
+      "why": "esm-spec 4.8.2: the superscript minus is rewritten only together with the superscript digits after it. Followed by an ASCII digit it stays an unexpected character; the exponent is `s^-1` or `s⁻¹`."
+    },
+    {
+      "units": "m²⁻¹",
+      "why": "esm-spec 4.8.2: `²` and `⁻¹` are two superscript exponents, so this normalizes to `m^2^-1`, which takes two exponents on one term. It is NOT one run `^-21`: TypeScript read it as m^-21 until this was pinned."
+    },
+    {
+      "units": "toString",
+      "why": "Not a table key. A lookup that reads inherited object properties (TypeScript's `UNIT_TABLE[name]`) must not find it."
+    },
+    {
       "units": "Tm",
       "why": "esm-spec 4.8.1: NO SI-prefix mechanism. `Tm` would be a tera-metre; it is not a table key. Rust resolved it through a prefix fallback until this was pinned."
     },

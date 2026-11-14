@@ -261,3 +261,20 @@ const ESM_Expr = EarthSciAST.ASTExpr
         end
     end
 end
+
+@testset "canonical document fixtures (esm-spec §4.8.2)" begin
+    # tests/conformance/canonical_document/*.json — canonicalize_document(input)
+    # equals the expected document as a JSON value, in every binding.
+    using JSON3
+    dir = abspath(joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "canonical_document"))
+    plain(x::AbstractDict) = Dict{String, Any}(String(k) => plain(v) for (k, v) in pairs(x))
+    plain(x::AbstractVector) = Any[plain(v) for v in x]
+    plain(x) = x
+    manifest = JSON3.read(read(joinpath(dir, "manifest.json"), String))
+    @test !isempty(manifest.fixtures)
+    for f in manifest.fixtures
+        fixture = JSON3.read(read(joinpath(dir, String(f.path)), String))
+        got = canonicalize_document(fixture.input)
+        @test plain(got) == plain(fixture.expected)
+    end
+end
