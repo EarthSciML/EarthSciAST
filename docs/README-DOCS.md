@@ -26,6 +26,7 @@ docs/
     ├── SCHEMA_CHANGE_PROCEDURE.md, STRUCTURAL_ERROR_TEST_FIXTURES.md
     └── generated/         # Build-time output; not checked in
 ├── api/                   # API reference inputs: config.toml, groups.toml, examples, guides
+├── lean/                  # Lean chapter inputs: config.toml, the chapter intro
 ```
 
 ## Narrative pages
@@ -47,6 +48,22 @@ The command exits non-zero when a model does not validate or an inline test
 fails, which is what stops a bad model reaching the site. The directive syntax
 is documented in [`docs/narrative/_index.md`](narrative/_index.md), which is
 itself the section's landing page.
+
+## Document formats chapter
+
+The document source formats (`.md`, `.typ`) are specified by commented Lean
+source in `formal/`, and that source is the chapter: `extract_lean.py` in
+earthsci.dev (`tools/api_docs/`, its README §6) reads the modules listed in
+`docs/lean/config.toml` and writes one page per module into
+`content/generated/document-formats/`, prose from the `/-! -/` module comments
+and a block per documented declaration. It reads source text only, so the docs
+job needs no Lean build. The intro on the chapter's landing page is
+`docs/lean/document-formats.md`. New modules under `formal/Esm/Document/` join
+the chapter without a configuration change.
+
+```bash
+python3 ../earthsci.dev/tools/api_docs/extract_lean.py --repo-root .
+```
 
 ## API reference and guides
 

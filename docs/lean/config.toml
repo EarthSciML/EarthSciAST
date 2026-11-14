@@ -1,0 +1,46 @@
+# Literate Lean chapters: Hugo pages written from the commented Lean source by
+# extract_lean.py in EarthSciML/earthsci.dev (tools/api_docs; schema in its
+# README.md, §6). The docs-bundle action runs it; the pages land under
+# docs/content/generated/ and are never committed.
+
+root = "formal"                    # the Lean package; module A.B.C is formal/A/B/C.lean
+
+[[chapter]]
+title = "Document formats"
+description = "The Markdown and Typst source formats of an ESM document, as the commented Lean model that defines them."
+out = "docs/content/generated/document-formats"
+intro = "docs/lean/document-formats.md"
+# `A.B` is one module, `A.B.*` its direct submodules, `A.B.**` every module
+# below it. A module is listed once, where it first appears, so the explicit
+# entries set the reading order and the globs collect the rest (new modules
+# under formal/Esm/Document/ appear without a change here).
+modules = [
+  "Esm.Document.Notation",
+  "Esm.Document.Number",
+  "Esm.Document.Strings",
+  "Esm.Document.Json",
+  "Esm.Document.Yaml",
+  "Esm.Document.TypstDict",
+  "Esm.Document.Math.Token",
+  "Esm.Document.Math.Surface",
+  "Esm.Document.Math.Latex",
+  "Esm.Document.Math.Typst",
+  "Esm.Document.Math.Expr",
+  "Esm.Document.Math.View",
+  "Esm.Document.Math.Print",
+  "Esm.Document.Math.Parse",
+  "Esm.Document.Math.Variants",
+  "Esm.Document.Math.HandWritten",
+  "Esm.Document.Math.RoundTripLatex",
+  "Esm.Document.Math.RoundTripTypst",
+  "Esm.Document.Math.Main",
+  "Esm.Document.Math.**",
+  "Esm.Document.**",
+  "Esm.Units.Core",
+  "Esm.Units.Registry",
+  "Esm.Units.Grammar",
+  "Esm.Units.Strings",
+  "Esm.Units.Canonical",
+  "Esm.Units.Typeset",
+  "Esm.Units.**",
+]
