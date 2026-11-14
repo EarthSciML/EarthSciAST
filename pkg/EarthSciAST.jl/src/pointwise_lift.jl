@@ -502,37 +502,58 @@ function _apply_pointwise_lift!(
         return iset.size
     end
 
-    # Whole-component lift, to a fixpoint.
+    function two_grids(comp, first_state, grid, other, axes)
+        Set(axes) == Set(grid) && return nothing
+        throw(
+            DimensionPromotionError(
+                "pointwise lift: component '$(comp)' would be lifted onto two " *
+                    "grids: state '$(first_state)' onto $(grid) and state " *
+                    "'$(other)' onto $(axes)"
+            )
+        )
+    end
+
+    # Operator-route plans, as opposed to the component grid a later pass gives.
+    operator_plans = Set(keys(plans))
     lifted_axes = Dict{String, Vector{String}}()
     lifted_components = Set{String}()
-    while true
+
+    # Every candidate of every component `wanted` accepts, in equation order,
+    # each read with the component's own states scalar and every other lifted
+    # state at its lift index sets.
+    function candidates_of(wanted)
         inference = Dict{String, _LiftShapes}()
         found = OrderedDict{String, Vector{Tuple{String, Vector{String}}}}()
         for (target, n) in tendencies
             comp = _lift_top_component(target)
-            comp in lifted_components && continue
-            if haskey(plans, target)
+            wanted(comp) || continue
+            if target in operator_plans
                 push!(get!(found, comp, Tuple{String, Vector{String}}[]), (target, plans[target].axes))
                 continue
             end
             shapes = get!(inference, comp) do
-                _LiftShapes(variables, defs, lifted_axes, get(masks, comp, Set{String}()))
+                others = Dict{String, Vector{String}}(
+                    s => a for (s, a) in lifted_axes if _lift_top_component(s) != comp
+                )
+                _LiftShapes(variables, defs, others, get(masks, comp, Set{String}()))
             end
             axes = _lift_expr_axes(shapes, equations[n].rhs)
             (axes === nothing || isempty(axes)) && continue
             push!(get!(found, comp, Tuple{String, Vector{String}}[]), (target, axes))
         end
+        return found
+    end
+
+    # Whole-component lift, to a fixpoint.
+    # The candidate that gave each lifted component its grid.
+    grids = Dict{String, Tuple{String, Vector{String}}}()
+    while true
+        found = candidates_of(comp -> !(comp in lifted_components))
         isempty(found) && break
         for (comp, candidates) in found
             first_state, grid = candidates[1]
             for (other, axes) in candidates[2:end]
-                Set(axes) == Set(grid) || throw(
-                    DimensionPromotionError(
-                        "pointwise lift: component '$(comp)' would be lifted onto two " *
-                            "grids: state '$(first_state)' onto $(grid) and state " *
-                            "'$(other)' onto $(axes)"
-                    )
-                )
+                two_grids(comp, first_state, grid, other, axes)
             end
             allunique(grid) || throw(
                 DimensionPromotionError(
@@ -550,9 +571,21 @@ function _apply_pointwise_lift!(
                 lifted_axes[state] = plans[state].axes
             end
             push!(lifted_components, comp)
+            grids[comp] = (first_state, grid)
         end
     end
     isempty(lifted_axes) && return
+
+    # A state can become a candidate only after its component was lifted, when
+    # a later pass lifts a component it reads. Search the lifted components'
+    # candidates once more with every lift final, so the answer does not depend
+    # on which pass lifted what.
+    for (comp, candidates) in candidates_of(comp -> comp in lifted_components)
+        first_state, grid = grids[comp]
+        for (other, axes) in candidates
+            two_grids(comp, first_state, grid, other, axes)
+        end
+    end
 
     # The lifted states live on the lift's index sets: each `shape` names them
     # and `lifted_shapes` records their sizes (esm-libraries-spec §4.7.5).
