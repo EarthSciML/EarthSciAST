@@ -716,7 +716,7 @@ const _COMPARISON_ELEMENTWISE_OPS = Tuple(
 
 Ordered table of the MECHANICAL fixed-2-ary elementwise arms: the registry's
 arithmetic/elementary rows with arity exactly `2:2` and a recorded scalar
-function — `/`, `^`, `pow` (the canonicalize-internal `^` alias), `atan2` (the
+function — `/`, `^`, `pow` (the deprecated word spelling of `^`), `atan2` (the
 explicit 2-ary `atan` spelling). NOTE the `^`/`pow` arms are mechanical only
 because the literal-exponent protection lives in the LEAVES, not the arm: a
 literal/const exponent stays `Float64` at every value type (see the `^` notes

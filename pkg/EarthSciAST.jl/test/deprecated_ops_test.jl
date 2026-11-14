@@ -53,7 +53,7 @@ end
         @test rhs isa OpExpr && rhs.op == "^"
         @test length(rhs.args) == 2
         @test length(deps) == 1
-        @test occursin("/models/PowAlias/equations/0/rhs", string(only(deps).message))
+        @test occursin("/models/PowAlias/equations/0/rhs (pow)", string(only(deps).message))
     end
 
     @testset "scalar_operator_semantics.esm: neg loads as unary -" begin
@@ -77,7 +77,7 @@ end
         @test !("fn:neg" in seen)
         @test !("neg" in seen)
         @test length(deps) == 1
-        @test endswith(rstrip(string(only(deps).message), '.'), "/fn")
+        @test endswith(rstrip(string(only(deps).message), '.'), "/models/BroadcastUnary/equations/3/rhs/args/0 (broadcast fn neg)")
     end
 
     @testset "a migrated document loads with no warning" begin
@@ -94,16 +94,57 @@ end
             "d" => Any[Dict{String, Any}("op" => "pow", "args" => Any["x", 2])],
             "e" => Dict{String, Any}("op" => "broadcast", "fn" => "neg", "args" => Any["v"]),
             "f" => Dict{String, Any}("op" => "broadcast", "fn" => "pow", "args" => Any["v", 2]),
+            "g" => Dict{String, Any}("op" => "broadcast", "fn" => "neg", "args" => Any["v", "w"]),
+            "h/i~" => Dict{String, Any}("op" => "neg", "args" => Any["x"]),
         )
         sites = @test_logs (:warn, r"^deprecated_op: ") ESM._rewrite_deprecated_ops!(doc)
-        @test sort(sites) == ["/a", "/d/0", "/e/fn"]
+        # One shared site format across the bindings: the node's RFC 6901
+        # pointer, then the spelling it had.
+        @test sort(sites) == ["/a (neg)", "/d/0 (pow)", "/e (broadcast fn neg)", "/h~1i~0 (neg)"]
         @test doc["a"] == Dict{String, Any}("op" => "-", "args" => Any["x"], "id" => "keep")
         @test doc["b"]["op"] == "neg"
         @test doc["c"]["op"] == "pow"
         @test doc["d"][1]["op"] == "^"
         @test doc["e"]["fn"] == "-"
         @test doc["f"]["fn"] == "pow"
+        @test doc["g"]["fn"] == "neg"  # a two-operand broadcast of neg keeps its arity error
         again = @test_logs ESM._rewrite_deprecated_ops!(doc)
         @test isempty(again)
+    end
+
+    @testset "a two-operand broadcast of neg is refused for its arity" begin
+        doc = Dict{String, Any}(
+            "esm" => "2.0.0",
+            "metadata" => Dict{String, Any}("name" => "B"),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "a" => Dict{String, Any}("type" => "unknown", "units" => "1", "default" => 0.0),
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["a"], "wrt" => "t"),
+                            "rhs" => Dict{String, Any}("op" => "broadcast", "fn" => "neg", "args" => Any["a", "a"]),
+                        ),
+                    ],
+                ),
+            ),
+        )
+        refused = try
+            file = EarthSciAST.load_document(doc)
+            join(string.(EarthSciAST.validate(file).structural_errors), "; ")
+        catch e
+            sprint(showerror, e)
+        end
+        @test occursin("'neg'", refused) || occursin("\"neg\"", refused)
+    end
+
+    @testset "the reference-preserving emit path rewrites them too" begin
+        path = joinpath(sos, "pow_alias.esm")
+        raw = JSON3.read(read(path, String))
+        out = @test_logs (:warn, r"^deprecated_op: ") match_mode = :any EarthSciAST.emit_document(raw, sos)
+        text = EarthSciAST.emit_esm_string(out)
+        @test !occursin("\"pow\"", text)
+        @test occursin("\"^\"", text)
     end
 end

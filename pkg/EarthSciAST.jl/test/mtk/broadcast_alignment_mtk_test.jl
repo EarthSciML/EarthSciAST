@@ -45,7 +45,7 @@ include("../testutils.jl")  # _v/_op builders
         @test isequal(bc, plain)
     end
     # The derived vocabulary is a strict SUPERSET of this exporter's plain-op
-    # ladder, which has no arm for the canonicalize-internal aliases `neg`/`pow`
+    # ladder, which has no arm for the deprecated word spellings `neg`/`pow`
     # (nor for `floor`/`ceil`/`sign`) — `broadcast(fn:"neg")` still lowers, to
     # the same symbolic as unary `-`.
     @test isequal(

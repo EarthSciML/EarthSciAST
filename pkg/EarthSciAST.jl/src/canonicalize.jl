@@ -100,9 +100,9 @@ function _canonicalize_shallow(work::OpExpr)
         return _canon_div(work)
     elseif work.op == "neg"
         return _canon_neg(work)
-    elseif work.op == "pow"
+    elseif work.op == "pow" && length(work.args) == 2
         # Deprecated word spelling of `^` (esm-spec §4.2): the canonical form
-        # never contains it.
+        # never contains it. A malformed `pow` is left as written.
         return reconstruct(work; op = "^")
     end
     return work
@@ -155,8 +155,16 @@ function _canon_sub(node::OpExpr)
     end
     if length(node.args) == 2
         a, b = node.args[1], node.args[2]
+        # `0 - x` is NOT `-x` when x is +0.0 (`0 - 0.0` is +0.0, `-(0.0)` is
+        # -0.0), so only a literal subtrahend folds, to the exact difference:
+        # an integer when both are integers, else the IEEE float difference.
+        # Any other `-(0, x)` stays binary (RFC §5.4.7).
         if _is_zero_any(a)
-            return _canon_neg_value(b)
+            if a isa IntExpr && b isa IntExpr
+                return IntExpr(-b.value)
+            elseif b isa IntExpr || b isa NumExpr
+                return NumExpr(0.0 - Float64(b.value))
+            end
         end
         if _is_zero_any(b)
             if b isa NumExpr && a isa IntExpr

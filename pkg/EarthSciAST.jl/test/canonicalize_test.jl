@@ -96,7 +96,13 @@ const ESM_Expr = EarthSciAST.ASTExpr
         @test canonical_json(op("neg", Any[5])) == "-5"
         @test canonical_json(op("-", Any[5])) == "-5"
         @test canonical_json(op("neg", Any[0])) == "0"
-        @test canonical_json(op("-", Any[0, "x"])) == unary_x
+        # `-(0, x)` is not `-(x)` when x is +0.0, so it stays binary; a literal
+        # subtrahend folds to the exact difference (RFC §5.4.7).
+        @test canonical_json(op("-", Any[0, "x"])) == "{\"args\":[0,\"x\"],\"op\":\"-\"}"
+        @test canonical_json(op("-", Any[0, 5])) == "-5"
+        @test canonical_json(op("-", Any[0.0, 5])) == "-5.0"
+        @test canonical_json(op("-", Any[0, 0.0])) == "0.0"
+        @test canonical_json(op("-", Any[0.0, -0.0])) == "0.0"
         @test canonical_json(op("neg", Any["x"])) == unary_x
         @test canonical_json(op("-", Any["x"])) == unary_x
         # Binary `-` is never read as a negation to collapse.
@@ -104,6 +110,8 @@ const ESM_Expr = EarthSciAST.ASTExpr
             "{\"args\":[{\"args\":[\"a\",\"b\"],\"op\":\"-\"}],\"op\":\"-\"}"
         # `pow` canonicalizes to `^`, keeping its operands.
         @test canonical_json(op("pow", Any["x", 2])) == "{\"args\":[\"x\",2],\"op\":\"^\"}"
+        # A malformed `pow` is left as written, as in the other bindings.
+        @test canonical_json(op("pow", Any["x"])) == "{\"args\":[\"x\"],\"op\":\"pow\"}"
         @test !occursin("neg", canonical_json(op("+", Any[op("neg", Any["y"]), "x"])))
     end
 

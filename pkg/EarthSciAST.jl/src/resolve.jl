@@ -2959,11 +2959,15 @@ end
 
 esm-spec §4.2 "Deprecated ops": rewrite, in place, every expression node of
 `doc` spelling `neg` with one operand to unary `-`, every `pow` with two
-operands to `^`, and every `broadcast` whose `fn` is `neg` to `fn: "-"`. Every
-other field of the node is kept. When anything was rewritten, ONE `@warn` with
-the code `deprecated_op` names the JSON pointer of each rewritten node. Returns
-those pointers. Idempotent: a second pass over the same document finds nothing
-and stays silent.
+operands to `^`, and every one-operand `broadcast` whose `fn` is `neg` to
+`fn: "-"`. Every other field of the node is kept; a use with the wrong operand
+count is left as written, so its arity error is unchanged. When anything was
+rewritten, ONE `@warn` with the code `deprecated_op` names each rewritten node.
+Returns one site per node, in pre-order: its RFC 6901 JSON pointer (`""` for
+the root) and the spelling it had, as `<pointer> (neg)`, `<pointer> (pow)` or
+`<pointer> (broadcast fn neg)`, the format every binding's warning uses.
+Idempotent: a second pass over the same document finds nothing and stays
+silent.
 """
 function _rewrite_deprecated_ops!(doc)::Vector{String}
     sites = String[]
@@ -2991,18 +2995,20 @@ function _rewrite_deprecated_ops_walk!(node, at::String, sites::Vector{String}, 
             rep = op isa AbstractString ? get(_DEPRECATED_OPS, String(op), nothing) : nothing
             if rep !== nothing && args isa AbstractVector && length(args) == _op_spec(op).arity.start
                 node[opk] = rep
-                push!(sites, isempty(at) ? "/" : at)
-            elseif op == "broadcast"
+                push!(sites, string(at, " (", op, ")"))
+            elseif op == "broadcast" && args isa AbstractVector && length(args) == 1
+                # `neg` is strictly unary, so a broadcast of it with any other
+                # operand count keeps its arity error (`invalid_broadcast_fn`).
                 fnk = _node_key(node, "fn")
                 if fnk !== nothing && node[fnk] == "neg"
                     node[fnk] = "-"
-                    push!(sites, string(isempty(at) ? "" : at, "/fn"))
+                    push!(sites, string(at, " (broadcast fn neg)"))
                 end
             end
         end
         for (k, v) in pairs(node)
             _is_json_leaf(v) && continue
-            _rewrite_deprecated_ops_walk!(v, string(at, "/", k), sites, seen)
+            _rewrite_deprecated_ops_walk!(v, string(at, "/", _ptr_escape(string(k))), sites, seen)
         end
     elseif _is_array(node)
         _may_hold_object(node) || return nothing
