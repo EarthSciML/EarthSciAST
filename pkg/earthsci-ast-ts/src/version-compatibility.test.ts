@@ -8,9 +8,10 @@ import {
   LIBRARY_VERSION,
   SCHEMA_VERSION,
   SchemaValidationError,
+  loadPath,
 } from './index.js'
 import { LAST_V1_VERSION } from './parse.js'
-import { readFixture } from './test-helpers.js'
+import { fixturePath, readFixture } from './test-helpers.js'
 
 /**
  * Version gating for esm 2.0.0.
@@ -120,6 +121,49 @@ describe('Version Compatibility', () => {
       )
       expect(result).toBeInstanceOf(SchemaValidationError)
     })
+  })
+
+  // Every shared-matrix entry carrying a `deprecated_op` list: loading its
+  // fixture warns `deprecated_op` exactly ONCE, naming exactly the listed JSON
+  // pointers (esm-spec §4.2 "Deprecated ops"), and no version warning.
+  describe('Matrix deprecated_op entries', () => {
+    interface MatrixCase {
+      file: string
+      deprecated_op?: string[]
+    }
+    const matrixCases: MatrixCase[] = JSON.parse(
+      readFixture('version_compatibility', 'compatibility_matrix.json'),
+    ).version_compatibility_test_matrix.test_cases
+    const deprecatedCases = matrixCases.filter((c) => Array.isArray(c.deprecated_op))
+
+    it('the matrix carries at least one deprecated_op entry', () => {
+      expect(deprecatedCases.length).toBeGreaterThan(0)
+    })
+
+    it.each(deprecatedCases.map((c) => [c.file, c] as const))(
+      '%s warns deprecated_op once, naming the listed pointers',
+      (_file, c) => {
+        // No try/catch: a load error fails the test.
+        const { result, warnings } = captureWarnings(() =>
+          loadPath(fixturePath('version_compatibility', c.file)),
+        )
+        const deprecated = warnings.filter((w) => w.startsWith('deprecated_op'))
+        expect(deprecated).toHaveLength(1)
+        const list = deprecated[0]!.split('Rewritten at: ')[1]
+        expect(list).toBeDefined()
+        const pointers = list!
+          .replace(/\.$/, '')
+          .split(', ')
+          .map((site) => site.slice(0, site.lastIndexOf(' (')))
+        expect(pointers).toEqual(c.deprecated_op)
+        expect(warnings.some((w) => w.includes('is newer than'))).toBe(false)
+        if (c.file === 'version_2_3_0_deprecated_neg.esm') {
+          const decay = result.models!.Decay as { equations: Array<{ rhs: unknown }> }
+          const rhs = decay.equations[0]!.rhs as { args: Array<{ op: string }> }
+          expect(rhs.args[0]!.op).toBe('-')
+        }
+      },
+    )
   })
 
   describe('The 1.x line', () => {

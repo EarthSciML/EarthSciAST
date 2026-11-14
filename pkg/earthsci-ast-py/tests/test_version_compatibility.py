@@ -14,6 +14,7 @@ fixtures are named for the version they carry, and keeping the two in step is
 what makes them test the gate rather than the loader's own version constant.
 """
 
+import json
 import warnings
 from contextlib import contextmanager
 
@@ -47,7 +48,7 @@ def no_version_warning():
     """Assert the body emits no forward-compatibility UserWarning."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        yield
+        yield caught
     stale = [w for w in caught if "is newer than" in str(w.message)]
     assert not stale, f"unexpected forward-compat warning: {[str(w.message) for w in stale]}"
 
@@ -56,7 +57,7 @@ class TestVersionCompatibility:
     """Test version compatibility handling."""
 
     def test_exact_version_match(self):
-        """The library's own version loads with no warning.
+        """The library's own version loads with no version warning.
 
         The fixture is whichever one DECLARES the library's version — the
         corpus keeps each file stamped with the version it is named for
@@ -68,19 +69,17 @@ class TestVersionCompatibility:
         version_2_0_0_baseline.esm until esm 2.1.0,
         version_2_1_0_variable_bounds.esm until esm 2.2.0, and
         version_2_2_0_pointwise_lift.esm until esm 2.3.0.
+
+        The 2.3.0 fixture spells unary minus with the deprecated `neg`, so
+        its load also warns `deprecated_op` (not a version warning); the
+        matrix lists the pointers that warning names, and
+        test_deprecated_op_fixtures checks them.
         """
         fixture = load_fixture("version_2_3_0_deprecated_neg.esm")
         assert fixture["esm"] == _EXPECTED_VERSION
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
+        with no_version_warning():
             result = load_document(fixture)
         assert result.esm == _EXPECTED_VERSION
-        assert not [w for w in caught if "is newer than" in str(w.message)]
-        # The fixture spells unary minus with the deprecated `neg`: the load
-        # warns `deprecated_op` once and the node is unary `-` (esm-spec §4.2).
-        deprecated = [str(w.message) for w in caught if str(w.message).startswith("deprecated_op")]
-        assert len(deprecated) == 1 and "(neg)" in deprecated[0]
-        assert result.models["Decay"].equations[0].rhs.args[0].op == "-"
 
         # The earlier minor of the current major loads as written, with no
         # warning.
@@ -111,6 +110,29 @@ class TestVersionCompatibility:
                 result = load_document(fixture)
 
             assert result.esm == _EXPECTED_VERSION
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            e
+            for e in json.loads((FIXTURES_DIR / "compatibility_matrix.json").read_text())[
+                "version_compatibility_test_matrix"
+            ]["test_cases"]
+            if "deprecated_op" in e
+        ],
+        ids=lambda e: e["file"],
+    )
+    def test_deprecated_op_fixtures(self, entry):
+        """A matrix entry's `deprecated_op` lists the nodes that the load's ONE
+        `deprecated_op` warning names, by JSON pointer (esm-spec §4.2)."""
+        with no_version_warning() as caught:
+            result = load_document(load_fixture(entry["file"]))
+        deprecated = [str(w.message) for w in caught if str(w.message).startswith("deprecated_op")]
+        assert len(deprecated) == 1, deprecated
+        sites = re.findall(r"(/\S*) \(", deprecated[0].split("Rewritten at: ", 1)[1])
+        assert sites == entry["deprecated_op"]
+        if entry["file"] == "version_2_3_0_deprecated_neg.esm":
+            assert result.models["Decay"].equations[0].rhs.args[0].op == "-"
 
     def test_major_version_zero_rejection(self):
         """A 0.x document is REJECTED: 1.0.0 is a clean break, so there is no

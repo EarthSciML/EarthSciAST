@@ -1037,7 +1037,8 @@ end
         # The literal is the point: it pins that the reconstituted document is
         # stamped with the format version this binding implements, and it is
         # expected to be updated by hand on each format bump. 2.2.0 -> 2.3.0
-        # with `lb` / `ub` variable bounds (esm-spec §6.3.2).
+        # with deprecated `neg` / `pow` (esm-spec §4.2), the canonical unit
+        # spelling (§4.8.2) and the Markdown / Typst source formats (§1.2).
         @test E.SCHEMA_VERSION == "2.3.0"
     end
 

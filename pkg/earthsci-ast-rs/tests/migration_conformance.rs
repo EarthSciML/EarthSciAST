@@ -183,3 +183,99 @@ fn migration_is_a_marker_only_bump_over_a_real_document() {
     after.as_object_mut().expect("object").remove("esm");
     assert_eq!(before, after, "migrate touched a field other than `esm`");
 }
+
+/// Set to a fixture path, it makes [`deprecated_op_load_child`] load that
+/// fixture in a child process of this test binary.
+const DEPRECATED_OP_CHILD_ENV: &str = "ESM_TEST_DEPRECATED_OP_CHILD";
+
+/// The child half of [`matrix_deprecated_op_entries_warn_once_naming_their_pointers`]:
+/// a no-op unless [`DEPRECATED_OP_CHILD_ENV`] names a fixture, which it then
+/// loads through `load_path`. The load writes its warnings to stderr
+/// (`eprintln!`), which only a parent process can read, so the parent runs
+/// this test alone with `--nocapture` and reads the child's stderr.
+#[test]
+fn deprecated_op_load_child() {
+    let Some(path) = std::env::var_os(DEPRECATED_OP_CHILD_ENV) else {
+        return;
+    };
+    let file = earthsci_ast::load_path(&path).expect("fixture loads");
+    if std::path::Path::new(&path).ends_with("version_2_3_0_deprecated_neg.esm") {
+        let decay = &file.models.as_ref().expect("models")["Decay"];
+        let earthsci_ast::Expr::Operator(rhs) = &decay.equations[0].rhs else {
+            panic!("Decay rhs is not an operator: {:?}", decay.equations[0].rhs);
+        };
+        let earthsci_ast::Expr::Operator(arg) = &rhs.args[0] else {
+            panic!("Decay rhs args[0] is not an operator: {:?}", rhs.args[0]);
+        };
+        assert_eq!(arg.op, "-", "neg was not rewritten to unary minus");
+    }
+}
+
+/// Every matrix entry carrying a `deprecated_op` list: loading its fixture
+/// writes exactly ONE `deprecated_op` warning, naming exactly the listed JSON
+/// pointers (esm-spec §4.2 "Deprecated ops"), and no forward-compatibility
+/// version warning.
+#[test]
+fn matrix_deprecated_op_entries_warn_once_naming_their_pointers() {
+    let cases: Vec<Value> = matrix()["test_cases"]
+        .as_array()
+        .expect("test_cases")
+        .iter()
+        .filter(|c| c.get("deprecated_op").is_some())
+        .cloned()
+        .collect();
+    assert!(
+        !cases.is_empty(),
+        "no matrix entry carries a deprecated_op list"
+    );
+    let module = module_path!()
+        .split_once("::")
+        .map_or(module_path!(), |(_, m)| m);
+    let child = format!("{module}::deprecated_op_load_child");
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/version_compatibility");
+    for case in cases {
+        let file = case["file"].as_str().expect("file");
+        let want: Vec<&str> = case["deprecated_op"]
+            .as_array()
+            .expect("deprecated_op is a list")
+            .iter()
+            .map(|p| p.as_str().expect("pointer string"))
+            .collect();
+        let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([child.as_str(), "--exact", "--nocapture", "--test-threads=1"])
+            .env(DEPRECATED_OP_CHILD_ENV, dir.join(file))
+            .output()
+            .expect("run the child load");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "{file}: child load failed\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        let warnings: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.contains("deprecated_op"))
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "{file}: want ONE deprecated_op warning: {stderr}"
+        );
+        let list = warnings[0]
+            .split_once("Rewritten at: ")
+            .unwrap_or_else(|| panic!("{file}: warning names no nodes: {}", warnings[0]))
+            .1;
+        let named: Vec<&str> = list
+            .trim_end()
+            .trim_end_matches('.')
+            .split(", ")
+            .map(|site| site.rsplit_once(" (").map_or(site, |(pointer, _)| pointer))
+            .collect();
+        assert_eq!(named, want, "{file}: pointers the warning names");
+        assert!(
+            !stderr.contains("is newer than"),
+            "{file}: version warning: {stderr}"
+        );
+    }
+}

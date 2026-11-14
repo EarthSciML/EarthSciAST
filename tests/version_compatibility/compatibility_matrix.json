@@ -107,8 +107,11 @@
         "file": "version_2_3_0_deprecated_neg.esm",
         "file_version": "2.3.0",
         "expected_behavior": "load_success",
-        "description": "Exact version match - should load successfully, with no version warning. 2.3.0 changes no on-disk shape; it deprecates the word spellings `neg` and `pow` (esm-spec §4.2 \"Deprecated ops\"), adds the canonical unit spelling (§4.8.2) and specifies the Markdown / Typst source formats (§1.2). This document spells unary minus `neg`, so the load also emits the one `deprecated_op` warning (not a version warning, so not listed in `warnings`) and the loaded node is unary `-`.",
-        "warnings": []
+        "description": "Exact version match - should load successfully, with no version warning. 2.3.0 changes no on-disk shape; it deprecates the word spellings `neg` and `pow` (esm-spec §4.2 \"Deprecated ops\"), adds the canonical unit spelling (§4.8.2) and specifies the Markdown / Typst source formats (§1.2). This document spells unary minus `neg`, so the load also emits exactly one `deprecated_op` warning, naming the rewritten node by the JSON pointer listed in `deprecated_op`, and the loaded node is unary `-`. `warnings` lists version warnings only; `deprecated_op` lists the nodes the deprecation warning names.",
+        "warnings": [],
+        "deprecated_op": [
+          "/models/Decay/equations/0/rhs/args/0"
+        ]
       },
       {
         "file": "version_1_10_0_double_digit.esm",

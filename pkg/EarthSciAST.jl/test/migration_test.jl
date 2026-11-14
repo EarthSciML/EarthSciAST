@@ -23,6 +23,7 @@
 # tests/version_compatibility/compatibility_matrix.json.
 
 using Test
+using Logging
 using EarthSciAST
 using JSON3
 
@@ -375,6 +376,42 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
                 @test can_migrate(tgt_version, _MIG_SCHEMA_VERSION) == true
                 target_file = EarthSciAST.load_path(tgt_path)
                 @test migrate(target_file, _MIG_SCHEMA_VERSION).esm == _MIG_SCHEMA_VERSION
+            end
+        end
+    end
+
+    @testset "matrix deprecated_op entries warn once, naming their pointers" begin
+        # Every matrix entry carrying a `deprecated_op` list: loading its
+        # fixture logs exactly ONE `deprecated_op` warning, naming exactly the
+        # listed JSON pointers (esm-spec §4.2 "Deprecated ops"), and no
+        # forward-compatibility version warning.
+        dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "version_compatibility")
+        matrix_path = joinpath(dir, "compatibility_matrix.json")
+        if _require_fixture(matrix_path)
+            root = JSON3.read(read(matrix_path, String))["version_compatibility_test_matrix"]
+            cases = [c for c in root["test_cases"] if haskey(c, "deprecated_op")]
+            @test !isempty(cases)
+            for case in cases
+                file_name = String(case["file"])
+                want = String.(case["deprecated_op"])
+                logger = Test.TestLogger(; min_level = Logging.Warn)
+                file = with_logger(() -> EarthSciAST.load_path(joinpath(dir, file_name)), logger)
+                messages = [string(r.message) for r in logger.logs if r.level == Logging.Warn]
+                deprecated = filter(m -> startswith(m, "deprecated_op:"), messages)
+                @test length(deprecated) == 1
+                length(deprecated) == 1 || continue
+                parts = split(only(deprecated), "Rewritten at: "; limit = 2)
+                @test length(parts) == 2
+                length(parts) == 2 || continue
+                sites = split(rstrip(rstrip(parts[2]), '.'), ", ")
+                named = [String(first(split(s, " ("; limit = 2))) for s in sites]
+                @test named == want
+                @test !any(m -> occursin("is newer than", m), messages)
+                if file_name == "version_2_3_0_deprecated_neg.esm"
+                    rhs = file.models["Decay"].equations[1].rhs
+                    @test rhs isa EarthSciAST.OpExpr && rhs.args[1] isa EarthSciAST.OpExpr &&
+                        rhs.args[1].op == "-"
+                end
             end
         end
     end
