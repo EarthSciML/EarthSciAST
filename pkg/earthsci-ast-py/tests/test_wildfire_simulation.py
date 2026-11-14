@@ -41,12 +41,35 @@ from conftest import VALID_DIR
 
 pytest.importorskip("scipy")
 
-from earthsci_ast.parse import load_path
+from earthsci_ast.expression import UnsupportedConstructError
 from earthsci_ast.inline_tests import _check_assertion
+from earthsci_ast.parse import load_document, load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
-
 FIXTURE = str(VALID_DIR / "wildfire_atmosphere_ocean.esm")
+
+
+def _without_reserved_lifting():
+    """The fixture without its one `lifting: "mean"` edge
+    (``OceanDynamics.SST -> AirSeaFluxCalculator.SST``). esm-spec §10.5
+    reserves `mean`, so the document as written is refused at build
+    (:func:`test_wildfire_reserved_lifting_is_refused`). The edge feeds only
+    the 0-D flux calculator's scalar SST, which no assertion below reads, so
+    the regrid trajectory is checked on the document without it."""
+    with open(FIXTURE) as fp:
+        raw = json.load(fp)
+    raw["coupling"] = [c for c in raw["coupling"] if c.get("lifting") not in ("mean", "integral")]
+    return load_document(raw)
+
+
+def test_wildfire_reserved_lifting_is_refused() -> None:
+    """esm-spec §10.5: a `variable_map` whose `lifting` is `mean` is refused at
+    build with `unsupported_construct`, naming the edge and the kind."""
+    with pytest.raises(UnsupportedConstructError) as err:
+        esm_problem(load_path(FIXTURE), (0.0, 1.0), compiler="interpreter")
+    message = str(err.value)
+    assert "'mean'" in message
+    assert "'OceanDynamics.SST' -> 'AirSeaFluxCalculator.SST'" in message
 
 
 def _resolve_tol(
@@ -77,7 +100,7 @@ def test_wildfire_atmosphere_ocean_simulation() -> None:
     tests = ocean.get("tests") or []
     assert tests, "fixture OceanDynamics model carries no inline tests block"
 
-    file = load_path(FIXTURE)
+    file = _without_reserved_lifting()
 
     passed = 0
     total = 0
@@ -124,7 +147,7 @@ def test_wildfire_constant_and_regrid_states() -> None:
     derivative), and the regridded SST trajectory matches the closed form
     SST(t)=290 + t*surface_heat_flux/4.18e6 with the inline conservative
     weights giving surface_heat_flux=[100, 283.333, 350]."""
-    file = load_path(FIXTURE)
+    file = _without_reserved_lifting()
     result = solve(
         esm_problem(file, (0.0, 3600.0), compiler="interpreter"), reltol=1e-10, abstol=1e-12
     )

@@ -3025,6 +3025,7 @@ fn static_observed_fields(
         }
         (None, None) => return nothing(),
     };
+    crate::compile_error::refuse_reserved_lifting(flat).map_err(SimulateError::Compile)?;
     // The evaluable-core gate runs first (esm-spec §9.6.3 constraint 6): it
     // walks every equation, so an unknown no equation defines — which makes
     // the system not state-free below — does not let a rewrite-target operator

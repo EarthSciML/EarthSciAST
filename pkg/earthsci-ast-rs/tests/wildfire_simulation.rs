@@ -25,11 +25,58 @@
 
 use earthsci_ast::Solution;
 use earthsci_ast::{
-    Alg, EsmFile, Model, ModelTest, SolveOptions, check_assertion, resolve_tolerance,
+    Alg, CouplingEntry, EsmFile, Model, ModelTest, SolveOptions, check_assertion, resolve_tolerance,
 };
 use std::collections::HashMap;
 
 use crate::common;
+
+/// The fixture without its one `lifting: "mean"` edge
+/// (`OceanDynamics.SST -> AirSeaFluxCalculator.SST`). esm-spec §10.5 reserves
+/// `mean`, so the document as written is refused at build
+/// ([`wildfire_reserved_lifting_is_refused`]). The edge feeds only the 0-D flux
+/// calculator's scalar SST, which no assertion here reads, so the regrid
+/// trajectory is checked on the document without it.
+fn fixture_without_reserved_lifting() -> EsmFile {
+    let mut file = common::load_repo_fixture("valid/wildfire_atmosphere_ocean.esm");
+    if let Some(entries) = file.coupling.as_mut() {
+        entries.retain(|e| {
+            !matches!(e, CouplingEntry::VariableMap { lifting: Some(l), .. }
+                if l == "mean" || l == "integral")
+        });
+    }
+    file
+}
+
+/// esm-spec §10.5: a `variable_map` whose `lifting` is `mean` is refused at
+/// build with `unsupported_construct`, naming the edge and the kind, under
+/// both compilers.
+#[test]
+fn wildfire_reserved_lifting_is_refused() {
+    let file = common::load_repo_fixture("valid/wildfire_atmosphere_ocean.esm");
+    for compiler in [
+        earthsci_ast::Compiler::Interpreter,
+        earthsci_ast::Compiler::Native,
+    ] {
+        let err = earthsci_ast::esm_problem(
+            &file,
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                compiler: Some(compiler),
+                ..Default::default()
+            },
+        )
+        .err()
+        .unwrap_or_else(|| panic!("{compiler:?} builds a reserved 'mean' lifting"));
+        let message = err.to_string();
+        assert!(
+            message.contains("unsupported_construct")
+                && message.contains("'mean'")
+                && message.contains("'OceanDynamics.SST' -> 'AirSeaFluxCalculator.SST'"),
+            "{compiler:?}: {message}"
+        );
+    }
+}
 
 fn model<'a>(file: &'a EsmFile, name: &str) -> &'a Model {
     file.models
@@ -96,7 +143,7 @@ fn run(file: &EsmFile, test: &ModelTest) -> Solution {
 /// every assertion within its declared tolerance.
 #[test]
 fn wildfire_ocean_inline_tests() {
-    let file = common::load_repo_fixture("valid/wildfire_atmosphere_ocean.esm");
+    let file = fixture_without_reserved_lifting();
     let ocean = model(&file, "OceanDynamics");
     let tests = ocean
         .tests
@@ -150,7 +197,7 @@ fn wildfire_ocean_inline_tests() {
 /// `heat_release`).
 #[test]
 fn wildfire_regrid_trajectory_and_constant_states() {
-    let file = common::load_repo_fixture("valid/wildfire_atmosphere_ocean.esm");
+    let file = fixture_without_reserved_lifting();
     let opts = SolveOptions {
         alg: Alg::Bdf,
         abstol: Some(1e-12),

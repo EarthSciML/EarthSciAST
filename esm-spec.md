@@ -6017,8 +6017,10 @@ For coupling between a 0-D (scalar-shaped) system and a spatially-resolved syste
 |---|---|
 | `pointwise` | **(Default.)** The 0-D system is evaluated independently at each grid point. This is how column physics parameterizations work in climate models. |
 | `broadcast` | A single scalar output from the 0-D system is applied uniformly to all grid points. |
-| `mean` | Inputs to the 0-D system are the spatial mean of the source fields; output is scalar. |
-| `integral` | Inputs to the 0-D system are the spatial integral of the source fields; output is scalar. |
+| `mean` | *(Reserved.)* Inputs to the 0-D system are the spatial mean of the source fields; output is scalar. |
+| `integral` | *(Reserved.)* Inputs to the 0-D system are the spatial integral of the source fields; output is scalar. |
+
+`mean` and `integral` are reserved: no binding evaluates the reduction yet, and flatten substitutes such a `variable_map`'s source unreduced. A document using them stays valid and flattens, but a binding that builds a runnable problem MUST refuse a `variable_map` whose `lifting` is `mean` or `integral` at build, with `unsupported_construct` naming the edge and the lifting kind, until this section specifies the reduction. `broadcast` is not reserved.
 
 When `lifting` is omitted and one side has scalar-shaped (0-D) variables, pointwise lifting is assumed.
 

@@ -588,12 +588,11 @@
      ]
     }
    },
-   "note": "OceanDynamics only: bin keys split into per-component join columns; the pair key is pair_key(a, o, 1, 1, 4, 3).",
+   "note": "OceanDynamics only: bin keys split into per-component join columns; the pair key is pair_key(a, o, 1, 1, 4, 3). Load-only: the document's `lifting: \"mean\"` edge is reserved by esm-spec §10.5 and refused at build, so its inline tests cannot run.",
    "cases": [],
    "compare": {
-    "inline_tests": true
-   },
-   "golden": "golden/wildfire_atmosphere_ocean.json"
+    "load_only": true
+   }
   },
   {
    "id": "cross_domain_coupling",

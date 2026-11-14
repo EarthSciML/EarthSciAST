@@ -1999,6 +1999,32 @@ def _refuse_unhonoured_float32(flat: FlattenedSystem) -> None:
             )
 
 
+#: The ``lifting`` kinds esm-spec §10.5 reserves: no binding evaluates their
+#: reduction yet, so a build refuses them.
+_RESERVED_LIFTINGS = ("mean", "integral")
+
+
+def _refuse_reserved_lifting(file: EsmFile, evaluator: str) -> None:
+    """esm-spec §10.5: refuse a ``variable_map`` whose ``lifting`` is ``mean`` or
+    ``integral`` with ``unsupported_construct``. Flatten substitutes such an
+    edge's source unreduced, so a build would read the raw array where the
+    target expects its mean or integral: a wrong number with no diagnostic. The
+    coupling read is the one after ``coupling_import`` expansion."""
+    from .coupling_imports import expand_coupling_imports
+
+    for entry in expand_coupling_imports(file):
+        if getattr(entry, "coupling_type", None) != CouplingType.VARIABLE_MAP:
+            continue
+        kind = getattr(entry, "lifting", None)
+        if kind in _RESERVED_LIFTINGS:
+            raise UnsupportedConstructError(
+                "variable_map lifting",
+                f"'{kind}' on the edge '{entry.from_var}' -> '{entry.to_var}' (reserved by "
+                "esm-spec §10.5, not supported yet)",
+                evaluator,
+            )
+
+
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:
     """esm-spec §9.6.6 ``unsupported_construct`` — refuse an event (continuous or
     discrete), an implicit equation or a Wiener-noise parameter before any
@@ -2019,6 +2045,8 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
         or any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations)
         else "Python scalar interpreter"
     )
+    if file is not None:
+        _refuse_reserved_lifting(file, evaluator)
     # `flatten` lifts only the TOP-LEVEL components' events, so an event owned by
     # an inline subsystem is not in `flat` at all; look for it in the document.
     found = next(

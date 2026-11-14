@@ -1988,6 +1988,8 @@ impl<'o> BuildState<'o> {
             }
             Spelling::Qualified => {
                 let flat = Self::whole_document(&file, &mut index_sets)?;
+                crate::compile_error::refuse_reserved_lifting(&flat)
+                    .map_err(|e| err(e.to_string()))?;
                 let mut model = crate::simulate_array::model_from_flattened(&flat);
                 // The shape an unshaped mixed-rank `ifelse` is built at
                 // (esm-spec §4.3.4); the model-local route gets it from

@@ -498,6 +498,13 @@ pub struct FlattenMetadata {
     /// this crate's build, not part of the flattened-system interchange form.
     #[serde(skip)]
     pub bound_inputs: IndexMap<String, (String, Option<f64>)>,
+    /// Every `variable_map` whose `lifting` is `mean` or `integral`, as
+    /// `(from, to, lifting)`. esm-spec §10.5 reserves both kinds: flatten
+    /// leaves such an edge's source unreduced, so a build MUST refuse it
+    /// ([`crate::compile_error::refuse_reserved_lifting`]). Not serialized: it
+    /// is what this crate's build reads, not part of the interchange form.
+    #[serde(skip)]
+    pub reserved_liftings: Vec<(String, String, String)>,
 }
 
 /// Who authored one [`Contribution`] to a flattened equation
@@ -1111,8 +1118,29 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             merged_variable_renames,
             coupling_rewritten_names,
             bound_inputs,
+            reserved_liftings: reserved_liftings(file),
         },
     })
+}
+
+/// Every `variable_map` whose `lifting` is one esm-spec §10.5 reserves
+/// (`mean`, `integral`), as `(from, to, lifting)` in coupling order.
+fn reserved_liftings(file: &EsmFile) -> Vec<(String, String, String)> {
+    file.coupling
+        .iter()
+        .flatten()
+        .filter_map(|entry| match entry {
+            CouplingEntry::VariableMap {
+                from,
+                to,
+                lifting: Some(kind),
+                ..
+            } if crate::compile_error::RESERVED_LIFTINGS.contains(&kind.as_str()) => {
+                Some((from.clone(), to.clone(), kind.clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Write every elementwise template application of the flattened equations
