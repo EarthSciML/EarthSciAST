@@ -1,0 +1,135 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "name": "LiftTwoGridsLate",
+    "description": "Refused: Box.x reads the [lev, lat] Column.TS, so Box is lifted onto [lev, lat] in the first pass. Box.y reads Other.z, which the same pass lifts onto [lev], so Box.y only becomes a candidate, on [lev], once Box is already lifted. All of a component's candidates must name the same index sets however many passes it takes to see them, so flatten refuses it with the dimension-promotion error rather than broadcast Box.y along lat (esm-libraries-spec 4.7.5).",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-14T00:00:00Z"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "shape": [
+            "lev"
+          ]
+        },
+        "TS": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "shape": [
+            "lev",
+            "lat"
+          ]
+        }
+      },
+      "equations": []
+    },
+    "Other": {
+      "variables": {
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "Column.T"
+                ]
+              },
+              "z"
+            ]
+          }
+        }
+      ]
+    },
+    "Box": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "Column.TS"
+                ]
+              },
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "Other.z"
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

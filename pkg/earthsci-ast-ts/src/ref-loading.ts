@@ -433,7 +433,9 @@ async function prefetchRefs(
       // A referenced document is a document: same wire boundary as the root
       // (docs/content/rfcs/faq-node-rename.md §5.2). OUTSIDE the try above, so
       // a `removed_op` is raised rather than silently skipping the target.
-      prepareDocumentOps(parsed)
+      // Silent: this pre-fetch copy is discarded, and the sync core's own read
+      // of the same target warns `deprecated_op` once.
+      prepareDocumentOps(parsed, { warn: false })
       await walkDocument(parsed, refBase)
     }
   }

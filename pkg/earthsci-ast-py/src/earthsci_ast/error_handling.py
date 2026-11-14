@@ -253,6 +253,13 @@ UNITS_DIMENSIONLESS_LITERAL_MISMATCH = "units_dimensionless_literal_mismatch"
 # ``EsmDeprecationWarning`` by ``parse.py``, naming every site.
 DEPRECATED_RECORDS_PER_SAMPLE = "deprecated_records_per_sample"
 
+# A deprecated op spelling (``neg``, ``pow``, or ``neg`` as a ``broadcast``
+# ``fn``; esm-spec §4.2 "Deprecated ops") loaded and was rewritten to its
+# replacement: a WARNING, issued once per document as an
+# ``EsmDeprecationWarning`` by ``parse.prepare_document_ops``, naming every
+# rewritten node.
+DEPRECATED_OP = "deprecated_op"
+
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as
 # ``ExpressionTemplateError`` from ``template_imports.py`` (and

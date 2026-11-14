@@ -480,6 +480,12 @@ const (
 	// two codes above.
 	codeDataSourceMergeConflict = "data_source_merge_conflict"
 
+	// codeDeprecatedOp is the load-time WARNING (not an error) for a document
+	// that spells the deprecated `neg` or `pow` (or `neg` as a `broadcast`
+	// `fn`); the wire boundary rewrites each to unary `-` / `^` (esm-spec §4.2
+	// "Deprecated ops", deprecated_ops.go).
+	codeDeprecatedOp = "deprecated_op"
+
 	// codeDeprecatedRecordsPerSample is the load-time WARNING (not an error)
 	// for a document that writes the deprecated `from.records_per_sample` or
 	// `temporal.records_per_sample` (esm-spec §8.3, §8.5.1; removed at esm

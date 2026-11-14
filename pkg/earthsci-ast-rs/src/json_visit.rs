@@ -49,6 +49,24 @@ impl fmt::Display for JsonPath<'_> {
     }
 }
 
+impl JsonPath<'_> {
+    /// The RFC 6901 JSON pointer of this path: each key escaped (`~` → `~0`,
+    /// `/` → `~1`), unlike [`fmt::Display`], which prints raw keys.
+    pub(crate) fn pointer(&self) -> String {
+        match self {
+            JsonPath::Root(prefix) => (*prefix).to_string(),
+            JsonPath::Key(parent, k) => {
+                format!(
+                    "{}/{}",
+                    parent.pointer(),
+                    crate::inline_test_checks::pointer_token(k)
+                )
+            }
+            JsonPath::Index(parent, i) => format!("{}/{i}", parent.pointer()),
+        }
+    }
+}
+
 /// Read-only pre-order visit of `root` and every value nested under it.
 ///
 /// `f` receives each value together with its [`JsonPath`] from `root` (`""`

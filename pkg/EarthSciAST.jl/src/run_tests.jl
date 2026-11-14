@@ -884,6 +884,9 @@ function run_file_tests!(
     doc_flat_err = nothing
     if has_model_tests || has_mixed_rs_tests
         try
+            # A reserved `mean` / `integral` variable_map lifting is refused at
+            # build (esm-spec §10.5); the refusal is each test's compile failure.
+            _refuse_reserved_liftings(esm_file)
             doc_flat = flatten(
                 esm_file;
                 base_path = dirname(abspath(String(path)))

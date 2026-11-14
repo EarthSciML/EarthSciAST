@@ -1,0 +1,102 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "name": "LiftOperatorComposeMean",
+    "description": "An operator_compose with lifting 'mean' takes Mech and Sink out of the operator route, but its operator is written elementwise, D(_var) = -km * _var with km on [lev], so the merged right-hand sides of Mech's species are arrays and Mech is lifted onto [lev] by the array route anyway (esm-libraries-spec 4.7.5, 'Non-pointwise coupling').",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-14T00:00:00Z"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Sink": {
+      "variables": {
+        "km": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.01,
+          "shape": [
+            "lev"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "_var"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "km"
+                ]
+              },
+              "_var"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "reaction_systems": {
+    "Mech": {
+      "species": {
+        "A": {
+          "units": "1",
+          "default": 1.0
+        },
+        "B": {
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "parameters": {
+        "kb": {
+          "units": "1/s",
+          "default": 0.002
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "kb"
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Mech",
+        "Sink"
+      ],
+      "lifting": "mean"
+    }
+  ]
+}

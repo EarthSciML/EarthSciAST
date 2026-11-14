@@ -58,7 +58,7 @@
     {
       "name": "unary_operator",
       "ast": {
-        "op": "neg",
+        "op": "-",
         "args": ["x"]
       },
       "valid": true,

@@ -30,7 +30,7 @@
       "equations": [
         {
           "lhs": { "op": "D", "args": ["A"], "wrt": "t" },
-          "rhs": { "op": "neg", "args": [{ "op": "*", "args": ["k", "A"] }] }
+          "rhs": { "op": "-", "args": [{ "op": "*", "args": ["k", "A"] }] }
         }
       ],
       "tolerance": { "rel": 0.0, "abs": 1e-6 },

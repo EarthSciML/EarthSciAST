@@ -34,7 +34,7 @@
         "self_reference": {
           "type": "algebraic",
           "units": "1",
-          "expression": { "op": "pow", "args": ["self_reference", 2] }
+          "expression": { "op": "^", "args": ["self_reference", 2] }
         }
       },
       "equations": [

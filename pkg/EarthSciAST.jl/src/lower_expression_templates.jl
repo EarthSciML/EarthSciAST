@@ -2973,8 +2973,17 @@ Produce the reference-preserving, self-contained emitted document (esm-spec
 `expression_template_imports`, and version-stamps `esm: 0.9.0` when any surviving
 reference or materialized entry remains (§9.6.4 rule 8). `emit_esm_string ∘
 emit_document` is a byte-wise fixed point under reload.
+
+`raw_source` passes the same wire boundary a load applies
+(`_prepare_document_ops!`), on a copy: a removed op is refused, and a
+deprecated `neg` / `pow` is rewritten with the `deprecated_op` warning, so
+neither spelling survives into the emitted document (esm-spec §4.2).
 """
 function emit_document(raw_source, base_path::AbstractString)
+    if raw_source isa AbstractDict || _is_object(raw_source)
+        raw_source = _to_ordered(raw_source)
+        _prepare_document_ops!(raw_source)
+    end
     authored = _authored_template_names(raw_source)
     resolved = resolve_template_machinery(raw_source, String(base_path))
     src = resolved === nothing ? raw_source : resolved

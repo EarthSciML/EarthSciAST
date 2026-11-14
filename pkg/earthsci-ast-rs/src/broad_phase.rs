@@ -143,6 +143,21 @@ pub fn broad_phase_candidates(
     out
 }
 
+/// The rank every factor of an overlap envelope list must have, from the
+/// list's length (CONFORMANCE_SPEC §5.5.6): one name is a `[pos, verts,
+/// coord]` ring stack (rank 3), two names point `[x, y]` columns and four
+/// names rect `[xmin, ymin, xmax, ymax]` columns (rank 1 each). Any other
+/// length has no reading. In every form a factor's FIRST axis is its position
+/// axis. Mirrors the Julia `_overlap_env_rank`; every overlap-gate reader
+/// takes the rule from here.
+pub fn overlap_env_rank(len: usize) -> Option<usize> {
+    match len {
+        1 => Some(3),
+        2 | 4 => Some(1),
+        _ => None,
+    }
+}
+
 /// Build per-position `(xmin, ymin, xmax, ymax)` envelopes from named
 /// const-array envelope factors, mirroring the Julia
 /// `_envelope_vectors_from_cols`. `env_names` is 1, 2, or 4 factor names; each
@@ -162,6 +177,12 @@ pub fn envelope_vectors(
             .get(name)
             .ok_or_else(|| format!("overlap-join env factor {name:?} not supplied in const arrays"))
     };
+    if overlap_env_rank(k).is_none() {
+        return Err(format!(
+            "overlap-join env must name 1 (rings), 2 (point [x,y]), or 4 \
+             (rect [xmin,ymin,xmax,ymax]) const-array factors; got {k}"
+        ));
+    }
     match k {
         4 => {
             let (a, b, c, d) = (
@@ -197,11 +218,8 @@ pub fn envelope_vectors(
             let (xv, yv) = (flat(x), flat(y));
             Ok((0..n).map(|p| [xv[p], yv[p], xv[p], yv[p]]).collect())
         }
-        1 => ring_envelopes(col(&env_names[0])?),
-        other => Err(format!(
-            "overlap-join env must name 1 (rings), 2 (point [x,y]), or 4 \
-             (rect [xmin,ymin,xmax,ymax]) const-array factors; got {other}"
-        )),
+        // k == 1, by `overlap_env_rank`.
+        _ => ring_envelopes(col(&env_names[0])?),
     }
 }
 

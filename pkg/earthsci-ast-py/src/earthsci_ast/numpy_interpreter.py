@@ -770,11 +770,12 @@ def _apply_cmp(a: Any, b: Any, uf: Callable) -> np.ndarray:
 
 
 def _apply_neg(v: Any) -> Any:
-    """Unary negation — the ``neg`` op (esm-spec §4.2 arithmetic).
+    """Unary negation — the deprecated ``neg`` op (esm-spec §4.2 "Deprecated
+    ops"), the word spelling of a 1-operand ``-``.
 
-    ``canonicalize()`` rewrites every 1-operand ``-`` into ``neg``, so this is
-    the same computation ``_apply_sub`` performs on a single operand and the two
-    MUST agree.
+    The loader rewrites ``neg`` to ``-``, so it reaches here only from an AST
+    built in code. This is the same computation ``_apply_sub`` performs on a
+    single operand and the two MUST agree.
     """
     return -v
 
@@ -924,11 +925,8 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
     if op == "-":
         return _apply_sub([eval_expr(a, ctx) for a in expr.args])
     if op == "neg":
-        # `canonicalize()` rewrites every 1-operand `-` into `neg`, so a
-        # canonicalized document reaches the evaluator carrying `neg` nodes.
-        # Python's registry used to omit the op, which meant its OWN
-        # canonicalizer produced trees its own evaluator rejected as an
-        # "unlowered rewrite-target" (Rust and Julia both register it).
+        # The deprecated word spelling of unary `-` (esm-spec §4.2): the loader
+        # rewrites it away, so it arrives only in an AST built in code.
         if len(expr.args) != 1:
             raise NumpyInterpreterError("neg expects 1 arg")
         return _apply_neg(eval_expr(expr.args[0], ctx))

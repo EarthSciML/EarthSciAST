@@ -38,7 +38,7 @@
           "name": "overflow_test",
           "substrates": [ { "species": "A", "stoichiometry": 1 } ],
           "products": [ { "species": "A", "stoichiometry": 2 } ],
-          "rate": { "op": "*", "args": ["huge_rate", { "op": "pow", "args": [10, 1000] }] }
+          "rate": { "op": "*", "args": ["huge_rate", { "op": "^", "args": [10, 1000] }] }
         }
       ]
     }
