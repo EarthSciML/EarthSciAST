@@ -364,7 +364,9 @@ mod tests {
         // above. Skipping keeps the witness set stable across the next bump too,
         // and keeps a non-current MINOR in it (`1.2.0`) now that `1.1.0` is
         // current. Mirrors `pkg/EarthSciAST.jl/test/migration_test.jl`.
-        for target in ["1.0.1", "1.1.0", "1.2.0", "1.3.0", "2.0.1", "2.1.0", "2.2.0"] {
+        for target in [
+            "1.0.1", "1.1.0", "1.2.0", "1.3.0", "2.0.1", "2.1.0", "2.2.0",
+        ] {
             if target == CURRENT {
                 continue;
             }
