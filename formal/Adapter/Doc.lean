@@ -3,8 +3,10 @@ import Esm.Document.Source.TypstDoc
 
 /-! `esm-lean canon|print-md|parse-md|print-typ|parse-typ <file>`: the document source formats.
 
-* `canon <doc.esm>`: the document in canonical form (sorted keys, canonical numbers), as
-  compact JSON.
+* `canon <doc.esm>`: the document in canonical form, as compact JSON: sorted keys,
+  canonical numbers (CONFORMANCE §5.5.3.1), every `units` and `default_units` string in
+  the canonical unit spelling (`Esm.Units.canon`, as `canonicalize_document` does), and
+  the deprecated `neg` and `pow` rewritten to unary `-` and `^`.
 * `print-typ <doc.esm>`, `parse-typ <doc.typ>`: the same for Typst.
 * `print-md <doc.esm>`: the Markdown spelling (`Esm.Document.Source.Md.printMd`).
 * `parse-md <doc.md>`: the document a Markdown source holds, as canonical JSON; exit 1
@@ -53,6 +55,47 @@ partial def render : Json → String
   | .obj kvs => "{" ++ ",".intercalate (kvs.map fun (k, v) =>
       String.ofList (Strings.quote false k) ++ ":" ++ render v) ++ "}"
 
+/-- Object properties whose value is a name-keyed map (esm-schema.json): its keys are
+names, never fields, so a variable named `units` is not a units string. The list every
+binding's `canonicalize_document` uses. -/
+def mapKeys : List String :=
+  ["bind", "bindings", "coordinates", "coords", "coupling_roles", "data_sources", "enums",
+   "expression_template_imports", "expression_templates", "guesses", "index_set_rename",
+   "index_sets", "initial_conditions", "map", "metaparameters", "models", "parameter_overrides",
+   "parameters", "pinned_coords", "ranges", "reaction_systems", "rebind", "rename", "species",
+   "subsystems", "translate", "url_substitutions", "variables", "where"]
+
+/-- Free-form objects (schema `additionalProperties: true`), never descended. -/
+def freeKeys : List String := ["attrs", "config", "metadata", "reader_options", "x_esd"]
+
+/-- The deprecated operators and what they are rewritten to, with their arity. -/
+def deprecatedTo : String → Option (String × Nat)
+  | "neg" => some ("-", 1)
+  | "pow" => some ("^", 2)
+  | _ => none
+
+/-- The spelling rules of the canonical form: units strings respelled, `neg` and `pow`
+rewritten. `isMap`: the value is a name-keyed map. -/
+partial def spellRules (isMap : Bool) : Json → Json
+  | .arr xs => .arr (xs.map (spellRules false))
+  | .obj kvs =>
+    if isMap then .obj (kvs.map fun (k, v) => (k, spellRules false v))
+    else
+      let kvs' := kvs.map fun (k, v) =>
+        match k, v with
+        | "units", .str u => (k, .str (Esm.Units.canon u))
+        | "default_units", .str u => (k, .str (Esm.Units.canon u))
+        | _, _ => if freeKeys.contains k then (k, v) else (k, spellRules (mapKeys.contains k) v)
+      match Math.look "op" kvs', Math.look "args" kvs' with
+      | some (.str o), some (.arr as) =>
+        match deprecatedTo o with
+        | some (o', n) =>
+          if as.length = n then .obj (kvs'.map fun (k, v) => if k = "op" then (k, .str o') else (k, v))
+          else .obj kvs'
+        | none => .obj kvs'
+      | _, _ => .obj kvs'
+  | j => j
+
 def readDoc (path : String) : IO Json := do
   let text ← IO.FS.readFile path
   match Lean.Json.parse text with
@@ -64,7 +107,7 @@ def main (mode : String) (args : List String) : IO UInt32 := do
   match mode with
   | "canon" =>
     let d ← readDoc path
-    IO.println (render d)
+    IO.println (render (spellRules false d))
     return 0
   | "print-md" =>
     let d ← readDoc path
