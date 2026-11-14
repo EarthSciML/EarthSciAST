@@ -100,9 +100,11 @@ def capsMd : Caps where
     !n.toList.contains '\n'
   attr a := isIdent a.1.toList
   eqn S e := commentOK e.comment && !(latexOf S e).contains '$' && !(latexOf S e).contains '\n' &&
-    (latexOf S e).head? != some '%' && (envOf (latexOf S e)).isNone
+    (latexOf S e).head? != some '%' && (envOf (latexOf S e)).isNone &&
+    (tmLex (prMd S e).toList).isNone
   rxn S x := rxnOK { x with rate := printLatex S x.rate }
   plot a := a.all attrOK
+  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printLatex S j), body := printLatex S t.body })
 
 theorem heads_sub {c : Char} : ∀ {bol : Bool} {x : List Char}, c ∈ heads bol x → c ∈ x
   | _, [], h => by cases h
@@ -121,7 +123,7 @@ theorem contains_false {c : Char} {x : List Char} (h : x.contains c = false) : c
 theorem ckMd_prMd (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) (hl : isE e.lhs = true)
     (hr : isE e.rhs = true) : ckMd S (prMd S e) = some [e] := by
   simp only [capsMd, Bool.and_eq_true, Bool.not_eq_true', bne_iff_ne, ne_eq] at hc
-  obtain ⟨⟨⟨⟨hcm, hd⟩, hn⟩, hp⟩, henv⟩ := hc
+  obtain ⟨⟨⟨⟨⟨hcm, hd⟩, hn⟩, hp⟩, henv⟩, -⟩ := hc
   have hparse : (parseLatex S (String.ofList (latexOf S e))).bind eqSides = some (e.lhs, e.rhs) := by
     simp only [latexOf, String.ofList_toList, parseLatex_printLatex S _ (isE_eqExpr e hl hr),
       Option.bind_some, eqSides_eqExpr]
@@ -225,6 +227,7 @@ theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true)
     | eqx _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | rxn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | plot _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | tm _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
 
 /-- **The front matter and the body read back.** -/
 theorem lexDoc_front (front : List (String × Json)) (hf : jwf (.obj front) = true)
@@ -253,7 +256,7 @@ theorem lexDoc_front (front : List (String × Json)) (hf : jwf (.obj front) = tr
 theorem prMd_noDollar (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) :
     '$' ∉ (prMd S e).toList ++ ['\n'] := by
   simp only [capsMd, Bool.and_eq_true, Bool.not_eq_true'] at hc
-  obtain ⟨⟨⟨⟨hcm, hd⟩, _⟩, _⟩, _⟩ := hc
+  obtain ⟨⟨⟨⟨⟨hcm, hd⟩, _⟩, _⟩, _⟩, _⟩ := hc
   unfold prMd
   rw [String.toList_ofList]
   intro hm
@@ -280,11 +283,13 @@ theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
   intro it hit
   simp only [items, rawDoc, List.mem_append, List.mem_map, List.mem_flatMap, Option.mem_toList,
     Option.map_eq_some_iff] at hit
-  rcases hit with ((⟨s, hs, rfl⟩) | ⟨kv, hkv, rfl⟩) | ⟨c', ⟨c, hc, rfl⟩, hit⟩
+  rcases hit with (((⟨s, hs, rfl⟩) | ⟨kv, hkv, rfl⟩) | ⟨m', ⟨m, hm, rfl⟩, rfl⟩) | ⟨c', ⟨c, hc, rfl⟩, hit⟩
   · have := h.desc s hs
     simp only [capsMd, Bool.and_eq_true] at this
     exact this.1.1.1.1
   · exact h.blocks kv hkv
+  · obtain ⟨hmc, -, t, rfl⟩ := h.rmath m hm
+    exact hmc
   · simp only [compItems, Comp.mapMath, List.mem_cons, List.mem_append, List.mem_map,
       Option.mem_toList, Option.map_eq_some_iff] at hit
     rcases hit with rfl | (((((⟨s, hs, rfl⟩) | ⟨d, hd, rfl⟩) | ⟨r, ⟨m, hm, rfl⟩, rfl⟩) |
@@ -308,14 +313,17 @@ theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
     · have hmc := (h.math c hc m hm).1
       cases m with
       | eq ro e =>
-        have hns : noStop dd ((prMd (symFor D.blocks c) e).toList ++ ['\n']) = true :=
+        have hns : noStop dd ((prMd (symFor D c) e).toList ++ ['\n']) = true :=
           noStop_of_heads _ _ (fun hm' => prMd_noDollar _ e hmc (heads_sub hm'))
+        have htm : (tmLex (prMd (symFor D c) e).toList).isNone = true := by
+          simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc; exact hmc.2
         cases ro with
-        | eqn => exact hns
-        | init => simp [prMdx, prMx, mItem, itemOK, hns]
-        | cons => simp [prMdx, prMx, mItem, itemOK, hns]
+        | eqn => simp [prMdx, prMx, mItem, itemOK, hns, htm]
+        | init => simp [prMdx, prMx, mItem, itemOK, hns, htm]
+        | cons => simp [prMdx, prMx, mItem, itemOK, hns, htm]
       | rxn x => exact hmc
       | plot a => exact hmc
+      | tm t => exact hmc
     · exact (h.mathBlocks c hc kv hkv).2
     · exact (h.cblocks c hc kv hkv).2
 
@@ -328,23 +336,40 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
   rw [lexDoc_front _ hok.frontWF _ (valid_canon _ (items_ok _ hok) true), segItems_canon]
   simp only [Option.bind_eq_bind, Option.bind_some]
   have hR := unitems_items (rawDoc prMdx (toDoc capsMd d)) (by
-    intro c hc
-    simp only [rawDoc, List.mem_map] at hc
-    obtain ⟨c0, hc0, rfl⟩ := hc
-    exact ⟨fun kv hkv => (hok.cblocks c0 hc0 kv hkv).1, fun kv hkv => (hok.mathBlocks c0 hc0 kv hkv).1⟩)
+    refine ⟨fun c hc => ?_, ?_⟩
+    · simp only [rawDoc, List.mem_map] at hc
+      obtain ⟨c0, hc0, rfl⟩ := hc
+      exact ⟨fun kv hkv => (hok.cblocks c0 hc0 kv hkv).1, fun kv hkv => (hok.mathBlocks c0 hc0 kv hkv).1⟩
+    · intro m hm
+      simp only [rawDoc, List.mem_map] at hm
+      obtain ⟨m0, hm0, rfl⟩ := hm
+      obtain ⟨-, -, t, rfl⟩ := hok.rmath m0 hm0
+      exact ⟨_, rfl⟩)
   rw [show (rawDoc prMdx (toDoc capsMd d)).front = (toDoc capsMd d).front from rfl] at hR
   rw [hR]
   simp only [Option.bind_some]
-  rw [cookDoc_rawDoc prMdx ckMdx _ (fun c hc m hm => by
-    have := hok.math c hc m hm
+  have hck : ∀ S m, capsMd.item S m = true → mathWF m = true → ckMdx S (prMdx S m) = some [m] := by
+    intro S m hc hw
     apply ckMx_prMx
     · intro r e he
       subst he
-      simp only [mathWF, Bool.and_eq_true] at this
-      exact ckMd_prMd _ e this.1 this.2.1 this.2.2
+      simp only [mathWF, Bool.and_eq_true] at hw
+      exact ckMd_prMd _ e hc hw.1 hw.2
     · intro x hx
       subst hx
-      exact parseLatex_printLatex _ _ this.2)]
+      exact parseLatex_printLatex _ _ hw
+    · intro t ht
+      subst ht
+      simp only [mathWF, tmWF, Bool.and_eq_true] at hw
+      refine ⟨parseLatex_printLatex _ _ hw.1, fun l hl => parseLatex_printLatex _ _ ?_⟩
+      have := hw.2; rw [hl] at this; simpa using this
+  rw [cookDoc_rawDoc prMdx ckMdx (fun S => prMx_heads _ _ S) _
+    (fun m hm => by
+      have := hok.rmath m hm
+      exact hck _ m this.1 this.2.1)
+    (fun c hc m hm => by
+      have := hok.math c hc m hm
+      exact hck _ m this.1 this.2)]
   simp only [Option.bind_some]
   exact ofDoc_toDoc capsMd d hd
 

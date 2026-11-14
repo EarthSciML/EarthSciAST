@@ -231,23 +231,23 @@ theorem lookup_declFields_none (caps : Caps) (K : Kind) (k : String) (h : k ∉ 
     have h3 : (k == "subsystems") = false := by simp [declFieldNames] at h; simp [h.2.2]
     simp [declFields, List.lookup, h1, h2, h3]
 
-theorem compOf_blocks (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
+theorem compOf_blocks (caps : Caps) (root : List (String × Json)) (rt : List (String × List String)) (K : Kind) (name : String)
     (kvs : List (String × Json)) :
-    (compOf caps root K name kvs).blocks = (compBase caps K name kvs).blocks := rfl
+    (compOf caps root rt K name kvs).blocks = (compBase caps K name kvs).blocks := rfl
 
-theorem compOf_decls (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
+theorem compOf_decls (caps : Caps) (root : List (String × Json)) (rt : List (String × List String)) (K : Kind) (name : String)
     (kvs : List (String × Json)) :
-    (compOf caps root K name kvs).decls = (compBase caps K name kvs).decls := rfl
+    (compOf caps root rt K name kvs).decls = (compBase caps K name kvs).decls := rfl
 
-theorem compOf_desc (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
+theorem compOf_desc (caps : Caps) (root : List (String × Json)) (rt : List (String × List String)) (K : Kind) (name : String)
     (kvs : List (String × Json)) :
-    (compOf caps root K name kvs).desc = descOf caps (look "description" kvs) := rfl
+    (compOf caps root rt K name kvs).desc = descOf caps (look "description" kvs) := rfl
 
-theorem compOf_kind (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
-    (kvs : List (String × Json)) : (compOf caps root K name kvs).kind = K := rfl
+theorem compOf_kind (caps : Caps) (root : List (String × Json)) (rt : List (String × List String)) (K : Kind) (name : String)
+    (kvs : List (String × Json)) : (compOf caps root rt K name kvs).kind = K := rfl
 
-theorem compOf_name (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
-    (kvs : List (String × Json)) : (compOf caps root K name kvs).name = name := rfl
+theorem compOf_name (caps : Caps) (root : List (String × Json)) (rt : List (String × List String)) (K : Kind) (name : String)
+    (kvs : List (String × Json)) : (compOf caps root rt K name kvs).name = name := rfl
 
 /-- The blocks of a component, key by key. -/
 theorem compBase_blocks_at (caps : Caps) (K : Kind) (name : String) {kvs : List (String × Json)}
@@ -271,15 +271,15 @@ theorem compBase_blocks_at (caps : Caps) (K : Kind) (name : String) {kvs : List 
       · cases h; rfl
 
 /-- A declaration field is rebuilt from the declarations and the residue block. -/
-theorem declKv_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
+theorem declKv_compOf (caps : Caps) (root : List (String × Json)) (rt : List (String × List String)) (K : Kind) (name : String)
     {kvs : List (String × Json)} (hv : canonVal (.obj kvs) = true) (f : String × (String → Json → Option Decl))
     (hf : f ∈ declFields caps K)
     (hsep : ∀ g ∈ declFields caps K, ∀ d ∈ (splitOpt g.2 (look g.1 kvs)).1,
       (declField K d.kind == some f.1) = (g.1 == f.1)) :
-    declKv K (compOf caps root K name kvs) f.1 = some (at_ f.1 kvs) := by
+    declKv K (compOf caps root rt K name kvs) f.1 = some (at_ f.1 kvs) := by
   have hl := canonVal_obj_sorted hv
-  have hblk := compOf_blocks caps root K name kvs
-  have hdec := compOf_decls caps root K name kvs
+  have hblk := compOf_blocks caps root rt K name kvs
+  have hdec := compOf_decls caps root rt K name kvs
   have hfn : f.1 ∈ declFieldNames K := by
     rw [← declFields_names caps K]; exact List.mem_map_of_mem hf
   have hne : f.1 ≠ "description" ∧ f.1 ∉ mathFields := by
@@ -299,7 +299,7 @@ theorem declKv_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (n
       simp only [declFields, List.mem_cons, List.not_mem_nil, or_false] at hf
       rcases hf with rfl | rfl | rfl <;> rfl
   -- the residue block
-  have hpick : pickOne f.1 (compOf caps root K name kvs).blocks = some (splitOpt f.2 (look f.1 kvs)).2 := by
+  have hpick : pickOne f.1 (compOf caps root rt K name kvs).blocks = some (splitOpt f.2 (look f.1 kvs)).2 := by
     rw [hblk, pickOne, compBase_blocks_at caps K name hl f.1]
     cases hk : look f.1 kvs with
     | none => rfl
@@ -307,7 +307,7 @@ theorem declKv_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (n
       simp only [compBlock, hne.1, hne.2, ite_false, hlk]
       cases (splitOpt f.2 (some v)).2 <;> rfl
   -- the declarations
-  have hdecls : (compOf caps root K name kvs).decls.filter (fun d => declField K d.kind == some f.1) =
+  have hdecls : (compOf caps root rt K name kvs).decls.filter (fun d => declField K d.kind == some f.1) =
       (splitOpt f.2 (look f.1 kvs)).1 := by
     rw [hdec]
     simp only [compBase]
@@ -365,13 +365,13 @@ theorem decls_field (caps : Caps) (K : Kind) {kvs : List (String × Json)}
   obtain ⟨kvs', ho, k, w, hm, hp⟩ := mem_splitOpt_fst hd
   exact (declFields_back caps K g hg k w d hp (canonVal_mem (canonVal_look hv ho) hm)).2
 
-theorem declKvs_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
+theorem declKvs_compOf (caps : Caps) (root : List (String × Json)) (rt : List (String × List String)) (K : Kind) (name : String)
     {kvs : List (String × Json)} (hv : canonVal (.obj kvs) = true) :
-    declKvs K (compOf caps root K name kvs) =
+    declKvs K (compOf caps root rt K name kvs) =
       some ((declFieldNames K).flatMap (fun f => at_ f kvs)) := by
   have hdf := decls_field caps K hv
   unfold declKvs
-  have hall : (compOf caps root K name kvs).decls.all (fun d => (declField K d.kind).isSome) = true := by
+  have hall : (compOf caps root rt K name kvs).decls.all (fun d => (declField K d.kind).isSome) = true := by
     rw [compOf_decls, List.all_eq_true]
     intro d hd
     simp only [compBase, List.mem_flatMap] at hd
@@ -382,7 +382,7 @@ theorem declKvs_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (
   rw [mapM_some _ (fun f => at_ f.1 kvs)]
   · simp [List.flatMap, Function.comp_def]
   · intro f hf
-    exact declKv_compOf caps root K name hv f hf (fun g hg d hd => by
+    exact declKv_compOf caps root rt K name hv f hf (fun g hg d hd => by
       rw [hdf g hg d hd]; simp)
 
 /-- The entries of the parts for field `f`, among the parts of distinct fields. -/
@@ -470,36 +470,156 @@ theorem mathPart_key (caps : Caps) (S : Sym) (kvs : List (String × Json)) (g : 
     · cases h; rfl
 
 /-- A math field is rebuilt from its entries or its block. -/
-theorem mathKv_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
+theorem mathKv_compOf (caps : Caps) (root : List (String × Json)) (rt : List (String × List String)) (K : Kind) (name : String)
     {kvs : List (String × Json)} (hl : keysSorted kvs = true) (f : String) (hf : f ∈ mathFields) :
-    mathKv (compOf caps root K name kvs) f = some (at_ f kvs) := by
-  have h1 := filter_flatMap_field (fun g => (mathPart caps (symFor root (compBase caps K name kvs)) kvs g).1)
+    mathKv (compOf caps root rt K name kvs) f = some (at_ f kvs) := by
+  have h1 := filter_flatMap_field (fun g => (mathPart caps (compSym root rt K caps name kvs) kvs g).1)
     (mathPart_fields caps _ kvs) mathFields mathFields_nodup f hf
-  have h2 := at_filterMap_field (fun g => (mathPart caps (symFor root (compBase caps K name kvs)) kvs g).2)
+  have h2 := at_filterMap_field (fun g => (mathPart caps (compSym root rt K caps name kvs) kvs g).2)
     (mathPart_key caps _ kvs) mathFields mathFields_nodup f hf
   unfold mathKv compOf
   simp only [List.flatMap_map, List.filterMap_map]
-  rw [h1, show (Prod.snd ∘ mathPart caps (symFor root (compBase caps K name kvs)) kvs) =
-    (fun g => (mathPart caps (symFor root (compBase caps K name kvs)) kvs g).2) from rfl, h2]
+  rw [h1, show (Prod.snd ∘ mathPart caps (compSym root rt K caps name kvs) kvs) =
+    (fun g => (mathPart caps (compSym root rt K caps name kvs) kvs g).2) from rfl, h2]
   unfold mathPart
   cases hk : look f kvs with
   | none => simp [look_at_none hl hk]
   | some v =>
     rw [look_at hl hk]
-    cases hm : mathOf caps (symFor root (compBase caps K name kvs)) f v with
+    cases hm : mathOf caps (compSym root rt K caps name kvs) f v with
     | none => simp [hm]
     | some ms =>
       obtain ⟨rfl, hne, -⟩ := mathOf_some hm
       obtain ⟨m, ms', rfl⟩ := List.exists_cons_of_ne_nil hne
-      simp only [List.map_cons] at hm
       simp [hm]
 
-theorem mathKvs_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
+theorem mathKvs_compOf (caps : Caps) (root : List (String × Json)) (rt : List (String × List String)) (K : Kind) (name : String)
     {kvs : List (String × Json)} (hl : keysSorted kvs = true) :
-    mathKvs (compOf caps root K name kvs) = some (mathFields.flatMap (fun f => at_ f kvs)) := by
+    mathKvs (compOf caps root rt K name kvs) = some (mathFields.flatMap (fun f => at_ f kvs)) := by
   unfold mathKvs
-  rw [mapM_some _ (fun f => at_ f kvs) mathFields (fun f hf => mathKv_compOf caps root K name hl f hf)]
+  rw [mapM_some _ (fun f => at_ f kvs) mathFields (fun f hf => mathKv_compOf caps root rt K name hl f hf)]
   simp [List.flatMap]
+
+/-! ## The symbol table of a finished section -/
+
+theorem look_of_at_nil {k : String} : ∀ {l : List (String × Json)}, at_ k l = [] → look k l = none
+  | [], _ => rfl
+  | (k', v') :: r, h => by
+    rw [at_cons] at h
+    by_cases hk : k' = k
+    · simp [hk] at h
+    · simp only [hk, ite_false] at h
+      simp only [look, hk, ite_false]
+      exact look_of_at_nil h
+
+theorem look_of_at_single {k : String} {v : Json} : ∀ {l : List (String × Json)},
+    at_ k l = [(k, v)] → look k l = some v
+  | [], h => by simp [at_] at h
+  | (k', v') :: r, h => by
+    rw [at_cons] at h
+    by_cases hk : k' = k
+    · subst hk; simp only [↓reduceIte, List.cons.injEq, Prod.mk.injEq, true_and] at h
+      simp [look, h.1]
+    · simp only [hk, ite_false] at h
+      simp only [look, hk, ite_false]
+      exact look_of_at_single h
+
+/-- The headers of the native template entries are the symbol-table entries of the
+`expression_templates` value. -/
+theorem templatesOf_mathOf {caps : Caps} {S : Sym} {v : Json} {ms : List MC}
+    (h : mathOf caps S "expression_templates" v = some ms) :
+    templatesOf (some v) = ms.filterMap Mx.head := by
+  unfold mathOf at h
+  split at h
+  · simp at h
+  · simp only [↓reduceIte] at h
+    rename_i kv kvs
+    split at h
+    · rename_i ms' hm
+      split at h
+      · cases h
+        obtain ⟨h1, h2⟩ := mapM_tmItem hm
+        rw [h1]
+        simp only [templatesOf]
+        clear * - h2
+        induction ms with
+        | nil => rfl
+        | cons m ms ih =>
+          obtain ⟨-, -, t, rfl, tkvs, hj, hp⟩ := h2 m List.mem_cons_self
+          rw [List.map_cons, List.filterMap_cons, List.filterMap_cons,
+            ih (fun m' hm' => h2 m' (List.mem_cons_of_mem _ hm'))]
+          simp [itemJson, hj, Mx.key, Mx.head, hp]
+      · cases h
+    · cases h
+  · cases h
+
+theorem filterMap_head_parts (P : String → List MC) (hP : ∀ g, ∀ m ∈ P g, m.field = g) :
+    ∀ L : List String, L.Nodup → "expression_templates" ∈ L →
+      (L.flatMap P).filterMap Mx.head = (P "expression_templates").filterMap Mx.head := by
+  intro L hL hm
+  have hnone : ∀ g ≠ "expression_templates", (P g).filterMap Mx.head = [] := by
+    intro g hg
+    rw [List.filterMap_eq_nil_iff]
+    intro m hm'
+    have := hP g m hm'
+    cases m with
+    | tm t => exact absurd this.symm hg
+    | _ => rfl
+  induction L with
+  | nil => cases hm
+  | cons g L ih =>
+    rw [List.nodup_cons] at hL
+    simp only [List.flatMap_cons, List.filterMap_append]
+    by_cases hg : g = "expression_templates"
+    · subst hg
+      have : (L.flatMap P).filterMap Mx.head = [] := by
+        rw [List.filterMap_eq_nil_iff]
+        intro m hm'
+        obtain ⟨g', hg', hm''⟩ := List.mem_flatMap.mp hm'
+        have := hP g' m hm''
+        cases m with
+        | tm t =>
+          have e : "expression_templates" = g' := this
+          exact absurd (by rw [← e] at hg'; exact hg') hL.1
+        | _ => rfl
+      rw [this, List.append_nil]
+    · rw [hnone g hg, List.nil_append]
+      exact ih hL.2 (by rcases List.mem_cons.mp hm with h | h; exact absurd h.symm hg; exact h)
+
+/-- **The finished section's templates are those its entries were decided under.** -/
+theorem compTs_compOf (caps : Caps) (root : List (String × Json)) (rt : List (String × List String))
+    (K : Kind) (name : String) (kvs : List (String × Json)) :
+    compTs (compOf caps root rt K name kvs) = templatesOf (look "expression_templates" kvs) := by
+  have hm : "expression_templates" ∈ mathFields := by decide
+  have h2 := at_filterMap_field (fun g => (mathPart caps (compSym root rt K caps name kvs) kvs g).2)
+    (mathPart_key caps _ kvs) mathFields mathFields_nodup _ hm
+  have h1 := filterMap_head_parts (fun g => (mathPart caps (compSym root rt K caps name kvs) kvs g).1)
+    (mathPart_fields caps _ kvs) mathFields mathFields_nodup hm
+  unfold compTs compOf
+  simp only [List.flatMap_map, List.filterMap_map, Function.comp_def] at h1 h2 ⊢
+  rw [h1]
+  unfold mathPart at h2 ⊢
+  cases hk : look "expression_templates" kvs with
+  | none =>
+    simp only [hk] at h2 ⊢
+    simp [look_of_at_nil h2, templatesOf]
+  | some v =>
+    simp only [hk] at h2 ⊢
+    cases hmo : mathOf caps (compSym root rt K caps name kvs) "expression_templates" v with
+    | none =>
+      simp only [hmo, Option.toList_some] at h2 ⊢
+      simp [look_of_at_single h2, templatesOf]
+    | some ms =>
+      simp only [hmo, Option.toList_none] at h2 ⊢
+      rw [look_of_at_nil h2, templatesOf_mathOf hmo]
+      simp [templatesOf]
+
+/-- The table of a finished section is the one its entries were decided under. -/
+theorem symWith_compOf (caps : Caps) (root : List (String × Json)) (rt : List (String × List String))
+    (K : Kind) (name : String) (kvs : List (String × Json)) :
+    symWith root rt (compOf caps root rt K name kvs) (compTs (compOf caps root rt K name kvs)) =
+      compSym root rt K caps name kvs := by
+  rw [compTs_compOf]; rfl
 
 /-- Restricting a concatenation of restrictions to distinct keys. -/
 theorem at_flatMap_at (k : String) (kvs : List (String × Json)) :
@@ -515,12 +635,12 @@ theorem at_flatMap_at (k : String) (kvs : List (String × Json)) :
       · simp [hg, hk, Ne.symm hg]
 
 /-- **A component is rebuilt exactly from its section.** -/
-theorem ofComp_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
+theorem ofComp_compOf (caps : Caps) (root : List (String × Json)) (rt : List (String × List String)) (K : Kind) (name : String)
     {kvs : List (String × Json)} (hv : canonVal (.obj kvs) = true) :
-    ofComp (compOf caps root K name kvs) = some (.obj kvs) := by
+    ofComp (compOf caps root rt K name kvs) = some (.obj kvs) := by
   have hl := canonVal_obj_sorted hv
   unfold ofComp
-  rw [compOf_kind, declKvs_compOf caps root K name hv, mathKvs_compOf caps root K name hl]
+  rw [compOf_kind, declKvs_compOf caps root rt K name hv, mathKvs_compOf caps root rt K name hl]
   simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def, Option.some.injEq,
     Json.obj.injEq]
   apply sortKeys_ext hl
@@ -542,7 +662,7 @@ theorem ofComp_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (n
   have hen : ∀ f ∈ mathFields, f ∉ declFieldNames K := by
     intro f hf
     simp only [mathFields, List.mem_cons, List.not_mem_nil, or_false] at hf
-    cases K <;> rcases hf with h | h | h | h | h <;> subst h <;> simp [declFieldNames]
+    cases K <;> rcases hf with h | h | h | h | h | h <;> subst h <;> simp [declFieldNames]
   have hdm : "description" ∉ mathFields := by simp [mathFields]
   by_cases hd : k = "description"
   · subst hd
@@ -628,9 +748,9 @@ theorem meta_rebuild (caps : Caps) {mkvs : List (String × Json)} (hl : keysSort
     rw [at_filter]
     intro w; simp [hk]
 
-theorem rootBlocks_at (caps : Caps) {kvs : List (String × Json)} (hl : keysSorted kvs = true)
-    (k : String) : at_ k (rootBlocks caps kvs) = match look k kvs with
-      | some v => (rootBlock caps (k, v)).toList
+theorem rootBlocks_at (caps : Caps) (tn : Bool) {kvs : List (String × Json)} (hl : keysSorted kvs = true)
+    (k : String) : at_ k (rootBlocks caps tn kvs) = match look k kvs with
+      | some v => (rootBlock caps tn (k, v)).toList
       | none => [] := by
   apply at_filterMap hl
   intro kv w h
@@ -645,12 +765,14 @@ theorem rootBlocks_at (caps : Caps) {kvs : List (String × Json)} (hl : keysSort
       · simp only [Option.map_eq_some_iff] at h
         obtain ⟨r, _, rfl⟩ := h
         rfl
-      · cases h; rfl
+      · split at h
+        · cases h
+        · cases h; rfl
 
-theorem comps_filter (caps : Caps) (blocks : List (String × Json)) (K K' : Kind)
-    (ps : List (String × List (String × Json))) :
-    (ps.map (fun p => compOf caps blocks K p.1 p.2)).filter (fun c => c.kind == K') =
-      if K = K' then ps.map (fun p => compOf caps blocks K p.1 p.2) else [] := by
+theorem comps_filter (caps : Caps) (blocks : List (String × Json)) (rt : List (String × List String))
+    (K K' : Kind) (ps : List (String × List (String × Json))) :
+    (ps.map (fun p => compOf caps blocks rt K p.1 p.2)).filter (fun c => c.kind == K') =
+      if K = K' then ps.map (fun p => compOf caps blocks rt K p.1 p.2) else [] := by
   by_cases h : K = K'
   · subst h
     simp only [↓reduceIte]
@@ -666,11 +788,11 @@ theorem comps_filter (caps : Caps) (blocks : List (String × Json)) (K K' : Kind
     obtain ⟨p, _, rfl⟩ := hc
     simp [compOf_kind, h]
 
-theorem compField_pick (caps : Caps) {kvs : List (String × Json)} (hl : keysSorted kvs = true)
+theorem compField_pick (caps : Caps) (tn : Bool) {kvs : List (String × Json)} (hl : keysSorted kvs = true)
     (f : String) (hf : f = "models" ∨ f = "reaction_systems") :
-    pickOne f (rootBlocks caps kvs) = some (splitOpt (pickComp caps) (look f kvs)).2 := by
+    pickOne f (rootBlocks caps tn kvs) = some (splitOpt (pickComp caps) (look f kvs)).2 := by
   unfold pickOne
-  rw [rootBlocks_at caps hl f]
+  rw [rootBlocks_at caps tn hl f]
   have hne1 : f ≠ "esm" := by rcases hf with rfl | rfl <;> simp
   have hne2 : f ≠ "metadata" := by rcases hf with rfl | rfl <;> simp
   cases look f kvs with
@@ -682,9 +804,10 @@ theorem compField_pick (caps : Caps) {kvs : List (String × Json)} (hl : keysSor
 /-- A component field (`models`, `reaction_systems`) is rebuilt from its directives
 and its residue block. -/
 theorem compField_join (caps : Caps) {kvs : List (String × Json)}
-    (hv : canonVal (.obj kvs) = true) (root : List (String × Json)) (K : Kind) (f : String) :
+    (hv : canonVal (.obj kvs) = true) (root : List (String × Json)) (rt : List (String × List String))
+    (K : Kind) (f : String) :
     joinField backComp ((splitOpt (pickComp caps) (look f kvs)).1.map
-        (fun p => compOf caps root K p.1 p.2)) (splitOpt (pickComp caps) (look f kvs)).2 =
+        (fun p => compOf caps root rt K p.1 p.2)) (splitOpt (pickComp caps) (look f kvs)).2 =
       some (look f kvs) := by
   rw [joinField_map]
   apply joinField_splitOpt
@@ -696,7 +819,7 @@ theorem compField_join (caps : Caps) {kvs : List (String × Json)}
       split at hp
       · cases hp
         have hc : canonVal (.obj ckvs) = true := canonVal_mem (canonVal_look hv h) hm
-        simp [backComp, ofComp_compOf caps _ K k hc, compOf_name]
+        simp [backComp, ofComp_compOf caps _ _ K k hc, compOf_name]
       · cases hp
     · cases hp
 
@@ -726,10 +849,45 @@ theorem ofDoc_toDoc (caps : Caps) (d : Json) (hd : canonDoc d = true) :
   | .obj kvs, hd =>
   have hv : canonVal (.obj kvs) = true := by simpa [canonDoc, canonVal] using hd
   have hl := canonVal_obj_sorted hv
-  have hpm := compField_pick caps hl "models" (Or.inl rfl)
-  have hpr := compField_pick caps hl "reaction_systems" (Or.inr rfl)
-  have hjm := compField_join caps hv (rootBlocks caps kvs) .model "models"
-  have hjr := compField_join caps hv (rootBlocks caps kvs) .rs "reaction_systems"
+  have hpm := compField_pick caps (topMath caps kvs).isSome hl "models" (Or.inl rfl)
+  have hpr := compField_pick caps (topMath caps kvs).isSome hl "reaction_systems" (Or.inr rfl)
+  have hjm := compField_join caps hv (rootBlocks caps (topMath caps kvs).isSome kvs)
+    (templatesOf (look "expression_templates" kvs)) .model "models"
+  have hjr := compField_join caps hv (rootBlocks caps (topMath caps kvs).isSome kvs)
+    (templatesOf (look "expression_templates" kvs)) .rs "reaction_systems"
+  -- the top-level templates and the top-level blocks together are the blocks with the
+  -- templates kept
+  have hTB : ∀ k, at_ k (if ((topMath caps kvs).getD []).isEmpty = true then [] else
+      [("expression_templates", fieldJson "expression_templates" ((topMath caps kvs).getD []))]) ++
+      at_ k ((rootBlocks caps (topMath caps kvs).isSome kvs).filter
+        (fun kv => kv.1 != "models" && kv.1 != "reaction_systems")) =
+      at_ k ((rootBlocks caps false kvs).filter
+        (fun kv => kv.1 != "models" && kv.1 != "reaction_systems")) := by
+    intro k
+    rw [at_filter_comm, at_filter_comm, rootBlocks_at caps _ hl, rootBlocks_at caps _ hl]
+    cases htm : topMath caps kvs with
+    | none => simp
+    | some ms =>
+      obtain ⟨v, hv1, hv2⟩ : ∃ v, look "expression_templates" kvs = some v ∧
+          mathOf caps (topSymOf kvs) "expression_templates" v = some ms := by
+        unfold topMath at htm
+        cases h : look "expression_templates" kvs with
+        | none => rw [h] at htm; cases htm
+        | some v => rw [h] at htm; exact ⟨v, rfl, htm⟩
+      obtain ⟨rfl, hne, -⟩ := mathOf_some hv2
+      have hne' : ms.isEmpty = false := by
+        cases ms with
+        | nil => exact absurd rfl hne
+        | cons _ _ => rfl
+      simp only [Option.getD_some, hne', Option.isSome_some, Bool.false_eq_true, ite_false]
+      by_cases hk : k = "expression_templates"
+      · subst hk; rw [hv1]; simp [rootBlock, at_single]
+      · rw [at_single]
+        simp only [show ("expression_templates" = k) = False from propext ⟨fun h => hk h.symm, False.elim⟩,
+          ite_false, List.nil_append]
+        cases look k kvs with
+        | none => rfl
+        | some w => simp [rootBlock, hk]
   unfold ofDoc toDoc
   simp only [List.filter_append, comps_filter, ↓reduceIte, reduceCtorEq, List.append_nil,
     List.nil_append]
@@ -751,16 +909,19 @@ theorem ofDoc_toDoc (caps : Caps) (d : Json) (hd : canonDoc d = true) :
     unfold at_; rw [List.filter_filter, List.filter_eq_nil_iff]
     intro kv _; simp only [bne_iff_ne, ne_eq, Bool.and_eq_true, beq_iff_eq, not_and]
     intro h1 h2; exact h1 h2
-  have hO : at_ k ((rootBlocks caps kvs).filter
+  have hO : at_ k ((rootBlocks caps false kvs).filter
       (fun kv => kv.1 != "models" && kv.1 != "reaction_systems")) =
-      if k = "models" ∨ k = "reaction_systems" then [] else at_ k (rootBlocks caps kvs) := by
+      if k = "models" ∨ k = "reaction_systems" then [] else at_ k (rootBlocks caps false kvs) := by
     by_cases h : k = "models" ∨ k = "reaction_systems"
     · simp only [h, ↓reduceIte]; rw [at_filter_false]; intro w
       rcases h with rfl | rfl <;> simp
     · simp only [h, ↓reduceIte]; rw [at_filter]; intro w
       simp only [not_or] at h; simp [h.1, h.2]
-  simp only [at_append, at_optKv, hO, hE, List.nil_append]
-  rw [rootBlocks_at caps hl k]
+  simp only [at_append, List.append_assoc]
+  rw [hTB k]
+  simp only [← List.append_assoc]
+  simp only [at_optKv, hO, hE, List.nil_append]
+  rw [rootBlocks_at caps false hl k]
   rw [at_idem, at_at]
   -- the entries other than `metadata`, the same whatever `metadata` became
   have hrest : ∀ M : List (String × Json), at_ k M = (if k = "metadata" then M else []) →
@@ -770,7 +931,7 @@ theorem ofDoc_toDoc (caps : Caps) (d : Json) (hd : canonDoc d = true) :
         if "reaction_systems" = k then optKv "reaction_systems" (look "reaction_systems" kvs) else []) ++
       if k = "models" ∨ k = "reaction_systems" then [] else
         match look k kvs with
-        | some v => (rootBlock caps (k, v)).toList
+        | some v => (rootBlock caps false (k, v)).toList
         | none => []) = at_ k kvs := by
     intro M hM hk
     simp only [hM, hk, ↓reduceIte, List.append_nil]

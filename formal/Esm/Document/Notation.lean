@@ -374,11 +374,12 @@ def skeleton : List SkeletonRow := [
   { field := "reactions", home := .reactionLine,
     markdown := r"one line per reaction, $$\ce{A + B ->[{$k$}] C}$$ {#id key=value}",
     typst := "one line per reaction, #ce[A + B ->[$k$] C] <id>; with other fields #reaction(key: value)[#ce[…]] <id>" },
-  { field := "expression_templates (without match)", home := .templateDefinition,
-    markdown := r"$$ \operatorname{f}(a, b) \coloneqq … $$", typst := r#"$ op("f")(a, b) := … $"# },
-  { field := "expression_templates (with match)", home := .ruleDirective,
-    markdown := r"$$ \text{rule } r: \; lhs \Rightarrow rhs $$; where and priority as attributes",
-    typst := r#"#rule("r", $lhs$, $rhs$, …)"# },
+  { field := "expression_templates (without match), of a component or of the document", home := .templateDefinition,
+    markdown := r#"$$, \operatorname{f}(a, b) \coloneqq body on one line, then $$; other fields (description) as attributes after the closing $$: $$ {description="…"}"#,
+    typst := r#"$ op("f")(a, b) := body $; with other fields #template(description: "…")[$ op("f")(a, b) := body $]"# },
+  { field := "expression_templates (with match), of a component or of the document", home := .ruleDirective,
+    markdown := r#"$$, \text{rule } \operatorname{r}: \; lhs \Rightarrow rhs on one line, then $$; params, where, priority and any other field as attributes after the closing $$: $$ {params=["u"] priority=1}"#,
+    typst := r#"#rule("r", $lhs$, $rhs$, params: ("u",), priority: 1, …)"# },
   { field := "subsystems (by ref)", home := .subsystemDirective,
     markdown := r#"::subsystem[Name]{ref="…" key=value …} on a line of its own; the name is not a declared name of the component"#,
     typst := r#"#subsystem("Name", ref: "…", key: value, …)"# },
@@ -393,6 +394,33 @@ def skeleton : List SkeletonRow := [
   { field := "everything else", home := .pathBlock,
     markdown := "```esm:<path> block", typst := r#"#esm-block("<path>", (…))"# }
 ]
+
+/-! ## Templates and rules
+
+`Esm.Document.Source.Skeleton` (`Tm`), decided 2026-11-13 with the native surfaces:
+
+* A template is a display whose math is its header, then `\coloneqq` (`:=` in Typst), then
+  its body. The header is `\operatorname{name}(p, q)`: the name as in a template
+  application (`\operatorname{}` with `escT`), the parameters as names under the empty
+  symbol table, separated by `, `, `()` when there are none. Typst: `op("name")(p, q)`, the
+  name a quoted string.
+* A rule is `\text{rule } \operatorname{name}: \; lhs \Rightarrow rhs` in a Markdown display;
+  in Typst `#rule("name", $lhs$, $rhs$, key: value, …)`. Its parameters are not in the header:
+  `params` is an attribute like `where` and `priority`.
+* The lexer reads the header (and splits a rule at its first ` \Rightarrow `); only the body
+  and the left-hand side are math, read under the component's symbol table (or, at the top
+  level of a library file, the document's index sets and templates) with the parameters
+  declared. The symbol table takes each template's parameter list from its header, never
+  from its math.
+* Every other field is an attribute: Markdown after the closing `$$` (`$$ {description="…"}`),
+  Typst as named arguments (a template with fields is `#template(…)[$ … $]`).
+* A template or rule prints natively only when its header reads back as written (checked
+  by printing it and reading it back) and its math has no `$` or line break; otherwise the
+  whole `expression_templates` field is one path block. A display whose math would read as
+  a template header is never printed as an equation (the equations field falls back). -/
+
+def templateLatex : String := r"\operatorname{upwind\_flux}(u, c) \coloneqq c u"
+def ruleLatex : String := r"\text{rule } \operatorname{Dx}: \; \frac{\partial f}{\partial x} \Rightarrow …"
 
 /-- Skipped by the parser: prose outside these constructs, Typst `<labels>` and `@refs`,
 Markdown `{#id}` after an equation. The Phase 3 theorem says inserting or removing them

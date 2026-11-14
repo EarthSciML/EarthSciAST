@@ -36,6 +36,7 @@ inductive RItem where
   | eqx (r : Role) (raw : String)
   | rxn (x : Rxn String)
   | plot (attrs : List (String × Json))
+  | tm (t : Tm String)
 
 /-- The construct of a math entry. -/
 def mItem : MR → RItem
@@ -43,6 +44,7 @@ def mItem : MR → RItem
   | .eq r raw => .eqx r raw
   | .rxn x => .rxn x
   | .plot a => .plot a
+  | .tm t => .tm t
 
 /-- The constructs of a component section. -/
 def compItems (c : Comp MR) : List RItem :=
@@ -51,10 +53,10 @@ def compItems (c : Comp MR) : List RItem :=
     c.blocks.map (fun kv => RItem.block kv.1 kv.2))
 
 /-- **The constructs of a skeleton**, in the printer's order: the document description,
-the top-level blocks, then each component section. -/
+the top-level blocks, the top-level templates, then each component section. -/
 def items (D : Doc MR) : List RItem :=
   (D.desc.map RItem.desc).toList ++ D.blocks.map (fun kv => RItem.block kv.1 kv.2) ++
-    D.comps.flatMap compItems
+    D.math.map mItem ++ D.comps.flatMap compItems
 
 /-! ## Reading constructs back -/
 
@@ -74,18 +76,20 @@ def addTo (c : Comp MR) : RItem → Option (Comp MR)
   | .eqx ro r => some { c with math := c.math ++ [.eq ro r] }
   | .rxn x => some { c with math := c.math ++ [.rxn x] }
   | .plot a => some { c with math := c.math ++ [.plot a] }
+  | .tm t => some { c with math := c.math ++ [.tm t] }
   | .comp _ _ => none
 
-/-- The reader's state: the document description and blocks, the finished sections,
-and the open one. -/
+/-- The reader's state: the document description, blocks and templates, the finished
+sections, and the open one. -/
 structure St where
   desc : Option String
   blocks : List (String × Json)
+  math : List MR
   comps : List (Comp MR)
   cur : Option (Comp MR)
 
-/-- Read one construct. Before the first directive only a description and blocks are
-allowed. -/
+/-- Read one construct. Before the first directive only a description, blocks and
+templates are allowed. -/
 def step (st : St) : RItem → Option St
   | .comp K n => some { st with comps := st.comps ++ st.cur.toList, cur := some (Comp.fresh K n) }
   | it =>
@@ -95,19 +99,36 @@ def step (st : St) : RItem → Option St
       match it with
       | .desc s => if st.desc.isSome then none else some { st with desc := some s }
       | .block k v => some { st with blocks := st.blocks ++ [(k, v)] }
+      | .tm t => some { st with math := st.math ++ [.tm t] }
       | _ => none
 
 /-- **Read a construct sequence** (with the front matter) into a skeleton. -/
 def unitems (front : List (String × Json)) (its : List RItem) : Option (Doc MR) :=
-  (its.foldlM step ⟨none, [], [], none⟩).map
-    (fun st => ⟨front, st.desc, st.blocks, st.comps ++ st.cur.toList⟩)
+  (its.foldlM step ⟨none, [], [], [], none⟩).map
+    (fun st => ⟨front, st.desc, st.blocks, st.math, st.comps ++ st.cur.toList⟩)
 
 /-! ## The round trip -/
 
 /-- A skeleton the constructs can carry: a component's blocks are not keyed by a math
-field, and its math blocks are (the parser files a block by its key). -/
+field, and its math blocks are (the parser files a block by its key); the top-level
+entries are templates. -/
 def itemsOK (D : Doc MR) : Prop :=
-  ∀ c ∈ D.comps, (∀ kv ∈ c.blocks, kv.1 ∉ mathFields) ∧ ∀ kv ∈ c.mathBlocks, kv.1 ∈ mathFields
+  (∀ c ∈ D.comps, (∀ kv ∈ c.blocks, kv.1 ∉ mathFields) ∧ ∀ kv ∈ c.mathBlocks, kv.1 ∈ mathFields) ∧
+    ∀ m ∈ D.math, ∃ t, m = .tm t
+
+theorem fold_tms (st : St) (hc : st.cur = none) :
+    ∀ ms : List MR, (∀ m ∈ ms, ∃ t, m = .tm t) →
+      (ms.map mItem).foldlM step st = some { st with math := st.math ++ ms }
+  | [], _ => by simp
+  | m :: ms, hm => by
+    obtain ⟨t, rfl⟩ := hm m List.mem_cons_self
+    simp only [List.map_cons, List.foldlM_cons]
+    have h1 : step st (mItem (.tm t)) = some { st with math := st.math ++ [.tm t] } := by
+      simp [step, hc, mItem]
+    rw [h1]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    rw [fold_tms { st with math := st.math ++ [.tm t] } hc ms (fun m' h' => hm m' (List.mem_cons_of_mem _ h'))]
+    simp
 
 theorem fold_blocks_root (st : St) (hc : st.cur = none) :
     ∀ bs : List (String × Json),
@@ -141,6 +162,7 @@ theorem addTo_mItem (c : Comp MR) (m : MR) : addTo c (mItem m) = some { c with m
   | eq r raw => cases r <;> rfl
   | rxn x => rfl
   | plot a => rfl
+  | tm t => rfl
 
 theorem fold_math (st : St) (c : Comp MR) (h : st.cur = some c) :
     ∀ ms : List MR, (ms.map mItem).foldlM step st =
@@ -153,6 +175,7 @@ theorem fold_math (st : St) (c : Comp MR) (h : st.cur = some c) :
         | eq r raw => cases r <;> simp [mItem]
         | rxn x => simp [mItem]
         | plot a => simp [mItem]
+        | tm t => simp [mItem]
       unfold step
       split
       · rename_i K n he; exact absurd he (this K n)
@@ -226,17 +249,20 @@ theorem fold_comp (st : St) (c : Comp MR) (hc : (∀ kv ∈ c.blocks, kv.1 ∉ m
 
 /-- **The construct round trip.** -/
 theorem unitems_items (D : Doc MR) (hD : itemsOK D) : unitems D.front (items D) = some D := by
-  obtain ⟨front, desc, blocks, comps⟩ := D
+  obtain ⟨front, desc, blocks, rmath, comps⟩ := D
+  obtain ⟨hD, hT⟩ := hD
   unfold unitems items
   simp only [List.foldlM_append]
-  have h1 : ((desc.map RItem.desc).toList).foldlM step ⟨none, [], [], none⟩ =
-      some ⟨desc, [], [], none⟩ := by
+  have h1 : ((desc.map RItem.desc).toList).foldlM step ⟨none, [], [], [], none⟩ =
+      some ⟨desc, [], [], [], none⟩ := by
     cases desc with
     | none => rfl
     | some s => rfl
   rw [h1]
   simp only [Option.bind_eq_bind, Option.bind_some]
   rw [fold_blocks_root _ rfl blocks]
+  simp only [Option.bind_some, List.nil_append]
+  rw [fold_tms _ rfl rmath hT]
   simp only [Option.bind_some, List.nil_append]
   -- the sections
   have h2 : ∀ (cs : List (Comp MR)) (st : St), (∀ c ∈ cs, (∀ kv ∈ c.blocks, kv.1 ∉ mathFields) ∧
@@ -274,23 +300,26 @@ theorem unitems_items (D : Doc MR) (hD : itemsOK D) : unitems D.front (items D) 
     subst hl; simp
   | some c =>
     simp only [Option.toList_none, List.append_nil, Option.toList_some, List.nil_append]
-    exact ⟨trivial, trivial, List.dropLast_append_getLast? c hl⟩
+    exact ⟨trivial, trivial, trivial, List.dropLast_append_getLast? c hl⟩
 
 /-! ## Math entries: printed under the symbol table, and read back -/
 
-/-- Print every math entry under its component's symbol table. -/
+/-- Print every math entry under its symbol table: a top-level template under the
+document's, a component's entry under the component's. -/
 def rawDoc (pr : Sym → MC → MR) (D : Doc MC) : Doc MR :=
-  { D with comps := D.comps.map (fun c => c.mapMath (fun c m => pr (symFor D.blocks c) m)) }
+  ⟨D.front, D.desc, D.blocks, D.math.map (pr (topSym D)),
+    D.comps.map (fun c => c.mapMath (fun c m => pr (symFor D c) m))⟩
 
 /-- Read a component's math entries under its symbol table; one math text may hold
 several equations (the multi-line variants). -/
-def cookComp (ck : Sym → MR → Option (List MC)) (root : List (String × Json))
-    (c : Comp MR) : Option (Comp MC) :=
-  (c.math.mapM (ck (symFor root c))).map (fun ms => { c with math := ms.flatten })
+def cookComp (ck : Sym → MR → Option (List MC)) (D : Doc MR) (c : Comp MR) : Option (Comp MC) :=
+  (c.math.mapM (ck (symFor D c))).map (fun ms => { c with math := ms.flatten })
 
 /-- Read every math entry of a skeleton. -/
-def cookDoc (ck : Sym → MR → Option (List MC)) (D : Doc MR) : Option (Doc MC) :=
-  (D.comps.mapM (cookComp ck D.blocks)).map (fun cs => { D with comps := cs })
+def cookDoc (ck : Sym → MR → Option (List MC)) (D : Doc MR) : Option (Doc MC) := do
+  let rm ← D.math.mapM (ck (topSym D))
+  let cs ← D.comps.mapM (cookComp ck D)
+  pure ⟨D.front, D.desc, D.blocks, rm.flatten, cs⟩
 
 theorem mapM_singleton {α β : Type} (f : α → Option (List β)) (g : α → β) :
     ∀ l : List α, (∀ x ∈ l, f x = some [g x]) → (l.mapM f).map List.flatten = some (l.map g)
@@ -305,33 +334,68 @@ theorem mapM_singleton {α β : Type} (f : α → Option (List β)) (g : α → 
       simp only [Option.map_some, Option.some.injEq] at ih
       simp [ih]
 
-/-- **Math entries read back** when each one does under its component's table. The
-table is the same on both sides: `symFor` does not look at math entries. -/
+theorem mapM_flat_id {α : Type} (f : α → Option (List α)) (l : List α) (h : ∀ x ∈ l, f x = some [x]) :
+    ∃ ys, l.mapM f = some ys ∧ ys.flatten = l := by
+  have := mapM_singleton f id l h
+  cases hm : l.mapM f with
+  | none => rw [hm] at this; cases this
+  | some ys => rw [hm] at this; simp at this; exact ⟨ys, rfl, this⟩
+
+/-- The tables of a printed skeleton are those of the skeleton: the printer keeps every
+header. -/
+theorem topSym_rawDoc (pr : Sym → MC → MR) (hpr : ∀ S, HeadsKept (pr S)) (D : Doc MC) :
+    topSym (rawDoc pr D) = topSym D := by
+  simp only [topSym, rawDoc, rootTs, filterMap_head_map _ (hpr _)]
+
+theorem symFor_rawDoc (pr : Sym → MC → MR) (hpr : ∀ S, HeadsKept (pr S)) (D : Doc MC) (c : Comp MC) :
+    symFor (rawDoc pr D) (c.mapMath (fun c m => pr (symFor D c) m)) = symFor D c := by
+  simp only [symFor, rawDoc, rootTs, filterMap_head_map _ (hpr _), symWith_mapMath]
+  rw [compTs_mapMath _ (fun c => hpr _)]
+
+/-- **Math entries read back** when each one does under its table. The table is the same
+on both sides: `symFor` and `topSym` read headers, never math, and the printer keeps
+headers. -/
 theorem cookDoc_rawDoc (pr : Sym → MC → MR) (ck : Sym → MR → Option (List MC))
-    (D : Doc MC)
-    (h : ∀ c ∈ D.comps, ∀ m ∈ c.math, ck (symFor D.blocks c) (pr (symFor D.blocks c) m) = some [m]) :
+    (hpr : ∀ S, HeadsKept (pr S)) (D : Doc MC)
+    (ht : ∀ m ∈ D.math, ck (topSym D) (pr (topSym D) m) = some [m])
+    (h : ∀ c ∈ D.comps, ∀ m ∈ c.math, ck (symFor D c) (pr (symFor D c) m) = some [m]) :
     cookDoc ck (rawDoc pr D) = some D := by
-  obtain ⟨front, desc, blocks, comps⟩ := D
-  unfold cookDoc rawDoc
-  simp only
-  rw [List.mapM_map]
-  have : ∀ c ∈ comps, cookComp ck blocks (c.mapMath (fun c m => pr (symFor blocks c) m)) = some c := by
+  have hT := topSym_rawDoc pr hpr D
+  have hS := symFor_rawDoc pr hpr D
+  obtain ⟨front, desc, blocks, rmath, comps⟩ := D
+  unfold cookDoc
+  have h1 : (rawDoc pr ⟨front, desc, blocks, rmath, comps⟩).math.mapM
+      (ck (topSym (rawDoc pr ⟨front, desc, blocks, rmath, comps⟩))) =
+      (rmath.mapM (fun m => ck (topSym ⟨front, desc, blocks, rmath, comps⟩)
+        (pr (topSym ⟨front, desc, blocks, rmath, comps⟩) m))) := by
+    rw [hT]; simp only [rawDoc, List.mapM_map]; rfl
+  rw [h1]
+  obtain ⟨ys, hys, hyf⟩ := mapM_flat_id _ rmath ht
+  rw [hys]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  have : ∀ c ∈ comps, cookComp ck (rawDoc pr ⟨front, desc, blocks, rmath, comps⟩)
+      (c.mapMath (fun c m => pr (symFor ⟨front, desc, blocks, rmath, comps⟩ c) m)) = some c := by
     intro c hc
     unfold cookComp
-    rw [symFor_mapMath]
+    rw [hS c]
     simp only [Comp.mapMath]
     rw [List.mapM_map]
-    have := mapM_singleton (fun m => ck (symFor blocks c) (pr (symFor blocks c) m)) id c.math
-      (fun m hm => h c hc m hm)
-    cases hm : c.math.mapM (fun m => ck (symFor blocks c) (pr (symFor blocks c) m)) with
+    have := mapM_singleton (fun m => ck (symFor ⟨front, desc, blocks, rmath, comps⟩ c)
+      (pr (symFor ⟨front, desc, blocks, rmath, comps⟩ c) m)) id c.math (fun m hm => h c hc m hm)
+    cases hm : c.math.mapM (fun m => ck (symFor ⟨front, desc, blocks, rmath, comps⟩ c)
+        (pr (symFor ⟨front, desc, blocks, rmath, comps⟩ c) m)) with
     | none => rw [hm] at this; cases this
     | some ms =>
       rw [hm] at this
       simp only [Option.map_some, Option.some.injEq, List.map_id_fun, id_eq] at this
       simp only [Function.comp_def, hm, Option.map_some, this]
-  rw [mapM_some (cookComp ck blocks ∘ fun c => Comp.mapMath (fun c m => pr (symFor blocks c) m) c)
-    id comps this]
-  simp
+  have h2 : (rawDoc pr ⟨front, desc, blocks, rmath, comps⟩).comps.mapM
+      (cookComp ck (rawDoc pr ⟨front, desc, blocks, rmath, comps⟩)) = some comps := by
+    show (List.map _ comps).mapM _ = _
+    rw [List.mapM_map]
+    exact (mapM_some _ id comps (fun c hc => this c hc)).trans (by simp)
+  rw [h2]
+  simp [rawDoc, hyf]
 
 /-! ## A container's math printer and reader, entry by entry -/
 
@@ -340,6 +404,14 @@ def prMx (prE : Sym → Eqn → String) (prR : Sym → Json → String) (S : Sym
   | .eq r e => .eq r (prE S e)
   | .rxn x => .rxn { x with rate := prR S x.rate }
   | .plot a => .plot a
+  | .tm t => .tm { t with lhs := t.lhs.map (prR (t.scope S)), body := prR (t.scope S) t.body }
+
+theorem prMx_heads (prE : Sym → Eqn → String) (prR : Sym → Json → String) (S : Sym) :
+    HeadsKept (prMx prE prR S) := by
+  intro m
+  cases m with
+  | tm t => cases hl : t.lhs <;> simp [prMx, Mx.head, Tm.ps, hl]
+  | _ => rfl
 
 /-- Read a math entry with the container's equation reader and expression reader. -/
 def ckMx (ckE : Sym → String → Option (List Eqn)) (ckR : Sym → String → Option Json) (S : Sym) :
@@ -347,15 +419,41 @@ def ckMx (ckE : Sym → String → Option (List Eqn)) (ckR : Sym → String → 
   | .eq r raw => (ckE S raw).map (fun es => es.map (.eq r))
   | .rxn x => (ckR S x.rate).map (fun j => [.rxn { x with rate := j }])
   | .plot a => some [.plot a]
+  | .tm t =>
+    match t.lhs with
+    | none => (ckR (t.scope S) t.body).map (fun b => [.tm { t with lhs := none, body := b }])
+    | some l =>
+      match ckR (t.scope S) l, ckR (t.scope S) t.body with
+      | some l', some b => some [.tm { t with lhs := some l', body := b }]
+      | _, _ => none
 
 theorem ckMx_prMx (prE : Sym → Eqn → String) (prR : Sym → Json → String)
     (ckE : Sym → String → Option (List Eqn)) (ckR : Sym → String → Option Json) (S : Sym)
     (m : MC) (hE : ∀ r e, m = .eq r e → ckE S (prE S e) = some [e])
-    (hR : ∀ x, m = .rxn x → ckR S (prR S x.rate) = some x.rate) :
+    (hR : ∀ x, m = .rxn x → ckR S (prR S x.rate) = some x.rate)
+    (hT : ∀ t, m = .tm t → ckR (t.scope S) (prR (t.scope S) t.body) = some t.body ∧
+      ∀ l, t.lhs = some l → ckR (t.scope S) (prR (t.scope S) l) = some l) :
     ckMx ckE ckR S (prMx prE prR S m) = some [m] := by
   cases m with
   | eq r e => simp [prMx, ckMx, hE r e rfl]
   | rxn x => simp [prMx, ckMx, hR x rfl]
   | plot a => rfl
+  | tm t =>
+    obtain ⟨hb, hl⟩ := hT t rfl
+    obtain ⟨n, ps, lhs, body, as⟩ := t
+    cases lhs with
+    | none =>
+      have e : Tm.scope S (⟨n, ps, none, prR (Tm.scope S ⟨n, ps, none, body, as⟩) body, as⟩ : Tm String) =
+          Tm.scope S (⟨n, ps, none, body, as⟩ : Tm Json) := rfl
+      simp only [prMx, ckMx, Option.map_none, e]
+      simp only at hb
+      rw [hb]; rfl
+    | some l =>
+      have e : Tm.scope S (⟨n, ps, some (prR (Tm.scope S ⟨n, ps, some l, body, as⟩) l),
+          prR (Tm.scope S ⟨n, ps, some l, body, as⟩) body, as⟩ : Tm String) =
+          Tm.scope S (⟨n, ps, some l, body, as⟩ : Tm Json) := rfl
+      simp only [prMx, ckMx, Option.map_some, e]
+      simp only at hb hl
+      rw [hl l rfl, hb]
 
 end Esm.Document.Source

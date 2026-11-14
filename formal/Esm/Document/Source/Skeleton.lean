@@ -28,14 +28,17 @@ Native surfaces (`Notation.skeleton`):
 * the list entries of a component: its `equations` (display math, one equation each),
   its `initialization_equations` and `constraint_equations` (display math marked as
   such), its `reactions` (one reaction line each), and its `analyses` (a plot directive
-  each, for an analysis with exactly one plot). Each of these five fields is native
-  when every one of its entries is, and otherwise one path block.
+  each, for an analysis with exactly one plot), and the entries of its
+  `expression_templates` (a template display or a rule each, `Tm`). Each of these six
+  fields is native when every one of its entries is, and otherwise one path block;
+* the top-level `expression_templates` of a library file, the same way (`Doc.math`).
 
 Everything else is a path block.
 
 The math entries are printed under the component's symbol table (`symFor`), which is
-computed from the rest of the skeleton only, so the parser can build the same table
-before it reads any math (`symFor_mapMath`).
+computed from the rest of the skeleton and the template headers only (never a template's
+math), so the parser can build the same table before it reads any math
+(`symFor_rawDoc`); the top-level templates are printed under the document's (`topSym`).
 -/
 
 namespace Esm.Document.Source
@@ -165,13 +168,25 @@ structure Rxn (ρ : Type) where
   rate : ρ
   attrs : List (String × Json)
 
+/-- An entry of `expression_templates`: a template (`lhs = none`, applied by name) or a
+rewrite rule (`lhs = some m`, its `match`). Its name, its parameter list (a template's,
+from its header; a rule's `params` stay among its attributes, `params` here is `[]`), its
+body (`ρ`: the expression, or its math text), and its other fields. -/
+structure Tm (ρ : Type) where
+  name : String
+  params : List String
+  lhs : Option ρ
+  body : ρ
+  attrs : List (String × Json)
+
 /-- A list entry of a component: an equation of one of the three equation fields (`α`:
-the equation, or its math text), a reaction, or an analysis with one plot (its fields,
-with `plots` replaced by `plot`, the one plot). -/
+the equation, or its math text), a reaction, an analysis with one plot (its fields,
+with `plots` replaced by `plot`, the one plot), or an entry of `expression_templates`. -/
 inductive Mx (α ρ : Type) where
   | eq (r : Role) (e : α)
   | rxn (x : Rxn ρ)
   | plot (attrs : List (String × Json))
+  | tm (t : Tm ρ)
 
 /-- A math entry as read. -/
 abbrev MC := Mx Eqn Json
@@ -183,10 +198,18 @@ def Mx.field {α ρ : Type} : Mx α ρ → String
   | .eq r _ => r.field
   | .rxn _ => "reactions"
   | .plot _ => "analyses"
+  | .tm _ => "expression_templates"
 
-/-- The list fields with entries of their own, in key order. -/
+/-- The key of an entry of an object-valued field (a template's name). -/
+def Mx.key {α ρ : Type} : Mx α ρ → String
+  | .tm t => t.name
+  | _ => ""
+
+/-- The fields with entries of their own, in key order. `expression_templates` is an
+object (its entries keyed by name); the others are lists. -/
 def mathFields : List String :=
-  ["analyses", "constraint_equations", "equations", "initialization_equations", "reactions"]
+  ["analyses", "constraint_equations", "equations", "expression_templates",
+    "initialization_equations", "reactions"]
 
 /-- One component section. `α` is how a math entry is held: `MC` in the semantic
 skeleton, `MR` (the container's math text) in the raw one. `mathBlocks` holds the math
@@ -201,11 +224,13 @@ structure Comp (α : Type) where
   blocks : List (String × Json)
 
 /-- A document skeleton: the front matter entries, the document description, the
-top-level path blocks, and the component sections in order. -/
+top-level path blocks, the top-level templates (`expression_templates` of a library
+file), and the component sections in order. -/
 structure Doc (α : Type) where
   front : List (String × Json)
   desc : Option String
   blocks : List (String × Json)
+  math : List α
   comps : List (Comp α)
 
 /-- Change how math entries are held. -/
@@ -231,27 +256,74 @@ def templatesOf : Option Json → List (String × List String)
       | _ => none)
   | _ => []
 
-/-- **The symbol table of a component** (Phase 2 `Sym`): the names it declares (its
-declarations and the entries of its declaration fields printed as blocks) and the
-document's index sets; the templates of the document and of the component. It reads
-the top-level blocks and the component's declarations and blocks only, never an
-math entry, so the parser builds it before reading any math. -/
-def symFor {α : Type} (root : List (String × Json)) (c : Comp α) : Sym :=
+/-- The parameter list a template or rule brings into its body's scope: a template's
+header parameters; a rule's `params` attribute. -/
+def Tm.ps {ρ : Type} (t : Tm ρ) : List String :=
+  match t.lhs with
+  | none => t.params
+  | some _ => strsOf (look "params" t.attrs)
+
+/-- The symbol-table entry of a template or rule: its name and parameters. -/
+def Mx.head {α ρ : Type} : Mx α ρ → Option (String × List String)
+  | .tm t => some (t.name, t.ps)
+  | _ => none
+
+/-- The symbol table a template's body is read under: the table around it, with the
+template's parameters declared. -/
+def Tm.scope {ρ : Type} (S : Sym) (t : Tm ρ) : Sym := { S with names := S.names ++ t.ps }
+
+/-- The templates of the document: those of the top-level block, then the top-level
+template entries. -/
+def rootTs {α ρ : Type} (root : List (String × Json)) (rm : List (Mx α ρ)) :
+    List (String × List String) :=
+  templatesOf (look "expression_templates" root) ++ rm.filterMap Mx.head
+
+/-- The templates of a component: those of its block, then its template entries. -/
+def compTs {α ρ : Type} (c : Comp (Mx α ρ)) : List (String × List String) :=
+  templatesOf (look "expression_templates" c.mathBlocks) ++ c.math.filterMap Mx.head
+
+/-- A component's symbol table, given the document's templates `rt` and the component's
+own `ct`: the names it declares (its declarations and the entries of its declaration
+fields printed as blocks) and the document's index sets. -/
+def symWith {α : Type} (root : List (String × Json)) (rt : List (String × List String))
+    (c : Comp α) (ct : List (String × List String)) : Sym :=
   { names := (c.decls.filter (fun d => d.kind != .sub)).map Decl.name ++
       keysOf (look "variables" c.blocks) ++
       keysOf (look "species" c.blocks) ++ keysOf (look "parameters" c.blocks) ++
       keysOf (look "index_sets" root),
-    templates := templatesOf (look "expression_templates" root) ++
-      templatesOf (look "expression_templates" c.blocks) }
+    templates := rt ++ ct }
+
+/-- **The symbol table of a component** (Phase 2 `Sym`): its declared names and the
+document's index sets; the templates of the document and of the component. It reads the
+top-level blocks, the component's declarations and blocks, and the headers of the template
+entries (name and parameters, never the math of a body), so the parser builds it before
+reading any math. -/
+def symFor {α ρ : Type} (D : Doc (Mx α ρ)) (c : Comp (Mx α ρ)) : Sym :=
+  symWith D.blocks (rootTs D.blocks D.math) c (compTs c)
+
+/-- The symbol table of the top-level templates: the document's index sets and
+templates. -/
+def topSym {α ρ : Type} (D : Doc (Mx α ρ)) : Sym :=
+  { names := keysOf (look "index_sets" D.blocks), templates := rootTs D.blocks D.math }
+
+/-- A map of entries that keeps every header. -/
+def HeadsKept {α ρ β σ : Type} (f : Mx α ρ → Mx β σ) : Prop := ∀ m, (f m).head = m.head
+
+theorem filterMap_head_map {α ρ β σ : Type} (f : Mx α ρ → Mx β σ) (hf : HeadsKept f)
+    (l : List (Mx α ρ)) : (l.map f).filterMap Mx.head = l.filterMap Mx.head := by
+  induction l with
+  | nil => rfl
+  | cons m l ih => simp only [List.map_cons, List.filterMap_cons, hf m, ih]
 
 /-- The printer and the parser derive the same table: it does not depend on how the
-math entries are held, nor on the math fallbacks. -/
-theorem symFor_mapMath {α β : Type} (root : List (String × Json)) (f : Comp α → α → β)
-    (c : Comp α) : symFor root (c.mapMath f) = symFor root c := rfl
+math entries are held (a map that keeps headers), nor on the math fallbacks of other
+fields. -/
+theorem symWith_mapMath {α β : Type} (root : List (String × Json)) (rt) (f : Comp α → α → β)
+    (c : Comp α) (ct) : symWith root rt (c.mapMath f) ct = symWith root rt c ct := rfl
 
-theorem symFor_math {α : Type} (root : List (String × Json)) (c : Comp α)
-    (bs : List (String × Json)) (ms : List α) :
-    symFor root { c with mathBlocks := bs, math := ms } = symFor root c := rfl
+theorem compTs_mapMath {α ρ β σ : Type} (f : Comp (Mx α ρ) → Mx α ρ → Mx β σ)
+    (hf : ∀ c, HeadsKept (f c)) (c : Comp (Mx α ρ)) : compTs (c.mapMath f) = compTs c := by
+  simp only [compTs, Comp.mapMath, filterMap_head_map (f c) (hf c)]
 
 /-! ## What a container can spell natively -/
 
@@ -274,12 +346,15 @@ structure Caps where
   rxn : Sym → Rxn Json → Bool
   /-- The fields of a plot directive. -/
   plot : List (String × Json) → Bool
+  /-- A template or rule, under its body's symbol table (`Tm.scope`). -/
+  tm : Sym → Tm Json → Bool
 
 /-- A list entry the container spells. -/
 def Caps.item (caps : Caps) (S : Sym) : MC → Bool
   | .eq _ e => caps.eqn S e
   | .rxn x => caps.rxn S x
   | .plot a => caps.plot a
+  | .tm t => caps.tm (t.scope S) t
 
 /-! ## Equations -/
 
@@ -389,6 +464,101 @@ theorem plotOf_some {v : Json} {a : List (String × Json)} (h : plotOf v = some 
     · cases h
   · cases h
 
+/-! ## Templates and rules -/
+
+/-- The keys of a template or rule with a surface of their own. -/
+def tmKeys (t : Tm Json) : List String :=
+  match t.lhs with
+  | none => ["body", "params"]
+  | some _ => ["body", "match"]
+
+def tmJson (t : Tm Json) : Json :=
+  match t.lhs with
+  | none => .obj (sortKeys ([("body", t.body), ("params", .arr (t.params.map .str))] ++ t.attrs))
+  | some m => .obj (sortKeys ([("body", t.body), ("match", m)] ++ t.attrs))
+
+/-- The string entries of a list, when every entry is a string. -/
+def strList : List Json → Option (List String)
+  | [] => some []
+  | .str x :: r => (strList r).map (x :: ·)
+  | _ :: _ => none
+
+/-- The template (no `match`, `params` a list of strings) or the rule (a `match`) an entry
+of `expression_templates` is, checked by printing it back; the body and the match are
+expressions. -/
+def tmOf (n : String) (v : Json) : Option (Tm Json) :=
+  match v with
+  | .obj kvs =>
+    match look "body" kvs, look "match" kvs, look "params" kvs with
+    | some b, none, some (.arr ps) =>
+      match strList ps with
+      | some ps' =>
+        let t : Tm Json := ⟨n, ps', none, b, kvs.filter (fun kv => kv.1 != "body" && kv.1 != "params")⟩
+        if tmJson t = v ∧ isE b = true then some t else none
+      | none => none
+    | some b, some m, _ =>
+      let t : Tm Json := ⟨n, [], some m, b, kvs.filter (fun kv => kv.1 != "body" && kv.1 != "match")⟩
+      if tmJson t = v ∧ isE b = true ∧ isE m = true then some t else none
+    | _, _, _ => none
+  | _ => none
+
+/-- Well-formed expressions in a template or rule. -/
+def tmWF (t : Tm Json) : Bool := isE t.body && t.lhs.all isE
+
+theorem strList_some : ∀ {ps : List Json} {xs : List String}, strList ps = some xs → ps = xs.map .str
+  | [], xs, h => by simp [strList] at h; subst h; rfl
+  | .str x :: r, xs, h => by
+    simp only [strList, Option.map_eq_some_iff] at h
+    obtain ⟨ys, hy, rfl⟩ := h
+    simp [strList_some hy]
+  | .null :: _, _, h | .bool _ :: _, _, h | .num _ :: _, _, h | .arr _ :: _, _, h | .obj _ :: _, _, h => by
+    simp [strList] at h
+
+theorem strsOf_strs (xs : List String) : strsOf (some (.arr (xs.map .str))) = xs := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih => simp [strsOf]
+
+theorem look_filter_keep (k : String) (p : String × Json → Bool) (hp : ∀ v, p (k, v) = true) :
+    ∀ kvs : List (String × Json), look k (kvs.filter p) = look k kvs
+  | [] => rfl
+  | (k', v') :: r => by
+    have ih := look_filter_keep k p hp r
+    by_cases hk : k' = k
+    · subst hk; simp [hp v', look]
+    · by_cases hq : p (k', v') = true
+      · simp [hq, look, hk, ih]
+      · simp [hq, look, hk, ih]
+
+/-- A template or rule decoded from an entry stands for the entry, and its header is the
+entry's symbol-table entry (`templatesOf`). -/
+theorem tmOf_some {n : String} {v : Json} {t : Tm Json} (h : tmOf n v = some t) :
+    tmJson t = v ∧ t.name = n ∧ tmWF t = true ∧
+      ∃ kvs, v = .obj kvs ∧ t.ps = strsOf (look "params" kvs) := by
+  unfold tmOf at h
+  split at h
+  · rename_i kvs
+    split at h
+    · rename_i b ps hb hm hp
+      split at h
+      · rename_i ps' hps
+        simp only at h
+        split at h
+        · cases h; rename_i hc
+          refine ⟨hc.1, rfl, by simp [tmWF, hc.2], kvs, rfl, ?_⟩
+          simp only [Tm.ps, hp, strList_some hps, strsOf_strs]
+        · cases h
+      · cases h
+    · simp only at h
+      split at h
+      · cases h; rename_i hc
+        refine ⟨hc.1, rfl, by simp [tmWF, hc.2.1, hc.2.2], kvs, rfl, ?_⟩
+        simp only [Tm.ps]
+        rw [look_filter_keep "params" _ (by intro v; simp) kvs]
+      · cases h
+    · cases h
+  · cases h
+
 /-! ## List entries -/
 
 /-- The JSON value of a list entry. -/
@@ -396,6 +566,13 @@ def itemJson : MC → Json
   | .eq _ e => eqnJson e
   | .rxn x => rxnJson x
   | .plot a => plotJson a
+  | .tm t => tmJson t
+
+/-- The value of a field from its entries: an object keyed by the entries' names for
+`expression_templates`, a list otherwise. -/
+def fieldJson (f : String) (ms : List MC) : Json :=
+  if f = "expression_templates" then .obj (ms.map (fun m => (m.key, itemJson m)))
+  else .arr (ms.map itemJson)
 
 /-- The role of an equation field. -/
 def roleOf (f : String) : Option Role := [Role.eqn, .init, .cons].find? (fun r => r.field == f)
@@ -411,6 +588,7 @@ def mathWF : MC → Bool
   | .eq _ e => isE e.lhs && isE e.rhs
   | .rxn x => isE x.rate
   | .plot _ => true
+  | .tm t => tmWF t
 
 theorem roleOf_some {f : String} {r : Role} (h : roleOf f = some r) : r.field = f := by
   unfold roleOf at h
@@ -427,6 +605,8 @@ theorem eqnOf_isE {j : Json} {e : Eqn} (h : eqnOf j = some e) : isE e.lhs = true
     · cases h; simp_all
     · cases h
   · cases h
+
+theorem roleOf_tm : roleOf "expression_templates" = none := by decide
 
 theorem itemOf_some {f : String} {v : Json} {m : MC} (h : itemOf f v = some m) :
     itemJson m = v ∧ m.field = f ∧ mathWF m = true := by
@@ -447,12 +627,22 @@ theorem itemOf_some {f : String} {v : Json} {m : MC} (h : itemOf f v = some m) :
     have := eqnOf_isE he
     exact ⟨eqnJson_eqnOf he, roleOf_some hr, by simp [mathWF, this.1, this.2]⟩
 
+/-- The template entry an entry `(name, value)` of `expression_templates` is. -/
+def tmItem (kv : String × Json) : Option MC := (tmOf kv.1 kv.2).map .tm
+
 /-- The entries of a math field, when all of them print natively. -/
 def mathOf (caps : Caps) (S : Sym) (f : String) : Json → Option (List MC)
   | .arr (x :: xs) =>
+    if f = "expression_templates" then none else
     match (x :: xs).mapM (itemOf f) with
     | some ms => if ms.all (caps.item S) then some ms else none
     | none => none
+  | .obj (kv :: kvs) =>
+    if f = "expression_templates" then
+      match (kv :: kvs).mapM tmItem with
+      | some ms => if ms.all (caps.item S) then some ms else none
+      | none => none
+    else none
   | _ => none
 
 theorem mapM_itemOf {f : String} : ∀ {xs : List Json} {ms : List MC}, xs.mapM (itemOf f) = some ms →
@@ -476,23 +666,68 @@ theorem mapM_itemOf {f : String} : ∀ {xs : List Json} {ms : List MC}, xs.mapM 
         · exact ⟨h2, h3⟩
         · exact h5 m hm
 
+theorem mapM_tmItem : ∀ {kvs : List (String × Json)} {ms : List MC}, kvs.mapM tmItem = some ms →
+    kvs = ms.map (fun m => (m.key, itemJson m)) ∧
+      ∀ m ∈ ms, m.field = "expression_templates" ∧ mathWF m = true ∧
+        ∃ t, m = .tm t ∧ ∃ tkvs, tmJson t = Json.obj tkvs ∧ t.ps = strsOf (look "params" tkvs)
+  | [], ms, h => by simp at h; subst h; simp
+  | (k, v) :: ys, ms, h => by
+    simp only [List.mapM_cons, Option.bind_eq_bind] at h
+    cases hy : tmItem (k, v) with
+    | none => simp [hy] at h
+    | some my =>
+      cases hys : ys.mapM tmItem with
+      | none => simp [hy, hys] at h
+      | some mys =>
+        simp [hy, hys] at h
+        subst h
+        simp only [tmItem, Option.map_eq_some_iff] at hy
+        obtain ⟨t, ht, rfl⟩ := hy
+        obtain ⟨h1, h2, h3, tkvs, rfl, h5⟩ := tmOf_some ht
+        obtain ⟨h4, h6⟩ := mapM_tmItem hys
+        refine ⟨by simp [Mx.key, itemJson, h1, h2, h4], ?_⟩
+        intro m hm
+        rcases List.mem_cons.mp hm with rfl | hm
+        · exact ⟨rfl, h3, t, rfl, tkvs, h1, h5⟩
+        · exact h6 m hm
+
 theorem mathOf_some {caps : Caps} {S : Sym} {f : String} {j : Json} {ms : List MC}
     (h : mathOf caps S f j = some ms) :
-    j = .arr (ms.map itemJson) ∧ ms ≠ [] ∧
+    j = fieldJson f ms ∧ ms ≠ [] ∧
       ∀ m ∈ ms, m.field = f ∧ mathWF m = true ∧ caps.item S m = true := by
   unfold mathOf at h
   split at h
   · rename_i x xs
+    split at h
+    · cases h
+    rename_i hf
     split at h
     · rename_i ms' hm
       split at h
       · cases h
         rename_i hall
         obtain ⟨h1, h2⟩ := mapM_itemOf hm
-        refine ⟨by rw [h1], ?_, fun m hm' => ⟨(h2 m hm').1, (h2 m hm').2, List.all_eq_true.mp hall m hm'⟩⟩
+        refine ⟨by rw [h1]; simp [fieldJson, hf], ?_, fun m hm' => ⟨(h2 m hm').1, (h2 m hm').2, List.all_eq_true.mp hall m hm'⟩⟩
         intro he
         rw [he] at h1
         cases h1
+      · cases h
+    · cases h
+  · rename_i kv kvs
+    split at h
+    · rename_i hf
+      split at h
+      · rename_i ms' hm
+        split at h
+        · cases h
+          rename_i hall
+          obtain ⟨h1, h2⟩ := mapM_tmItem hm
+          refine ⟨by rw [h1]; simp [fieldJson, hf], ?_, fun m hm' => ⟨hf ▸ (h2 m hm').1, (h2 m hm').2.1,
+            List.all_eq_true.mp hall m hm'⟩⟩
+          intro he
+          rw [he] at h1
+          cases h1
+        · cases h
       · cases h
     · cases h
   · cases h
@@ -607,12 +842,19 @@ def mathPart (caps : Caps) (S : Sym) (kvs : List (String × Json)) (f : String) 
     | some ms => (ms, none)
     | none => ([], some (f, v))
 
+/-- The symbol table of a component's entries, from the document's templates `rt`: the
+component's own templates are read from its `expression_templates` value, which is what
+the finished section's table reads from its template entries or its block (`compTs_compOf`). -/
+def compSym (root : List (String × Json)) (rt : List (String × List String)) (K : Kind)
+    (caps : Caps) (name : String) (kvs : List (String × Json)) : Sym :=
+  symWith root rt (compBase caps K name kvs) (templatesOf (look "expression_templates" kvs))
+
 /-- A component: `compBase`, then its math fields, each native when every entry prints
 natively under the component's symbol table, else a block. -/
-def compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
-    (kvs : List (String × Json)) : Comp MC :=
+def compOf (caps : Caps) (root : List (String × Json)) (rt : List (String × List String))
+    (K : Kind) (name : String) (kvs : List (String × Json)) : Comp MC :=
   let c := compBase caps K name kvs
-  let ps := mathFields.map (mathPart caps (symFor root c) kvs)
+  let ps := mathFields.map (mathPart caps (compSym root rt K caps name kvs) kvs)
   { c with math := ps.flatMap Prod.fst, mathBlocks := ps.filterMap Prod.snd }
 
 /-- A component entry prints as a directive when its name does and it is an object. -/
@@ -621,32 +863,46 @@ def pickComp (caps : Caps) (n : String) (v : Json) : Option (String × List (Str
   | .obj kvs => if caps.compName n then some (n, kvs) else none
   | _ => none
 
+/-- The symbol table of the top-level templates: the document's index sets and its
+templates, read from the `expression_templates` value. -/
+def topSymOf (kvs : List (String × Json)) : Sym :=
+  { names := keysOf (look "index_sets" kvs), templates := templatesOf (look "expression_templates" kvs) }
+
+/-- The top-level templates, when every one prints natively. -/
+def topMath (caps : Caps) (kvs : List (String × Json)) : Option (List MC) :=
+  (look "expression_templates" kvs).bind (mathOf caps (topSymOf kvs) "expression_templates")
+
 /-- Where a top-level entry goes when it is not a native surface: every entry without
-a surface of its own, the residues of `models` and `reaction_systems`, and `metadata`
-when it is not in the front matter. -/
-def rootBlock (caps : Caps) (kv : String × Json) : Option (String × Json) :=
+a surface of its own, the residues of `models` and `reaction_systems`, `metadata`
+when it is not in the front matter, and `expression_templates` when it is not native
+(`tn`). -/
+def rootBlock (caps : Caps) (tn : Bool) (kv : String × Json) : Option (String × Json) :=
   if kv.1 = "esm" then none
   else if kv.1 = "metadata" then (if (metaOf caps (some kv.2)).isSome then none else some kv)
   else if kv.1 = "models" ∨ kv.1 = "reaction_systems" then
     (splitOpt (pickComp caps) (some kv.2)).2.map (fun r => (kv.1, r))
+  else if kv.1 = "expression_templates" ∧ tn = true then none
   else some kv
 
 /-- The top-level blocks. -/
-def rootBlocks (caps : Caps) (kvs : List (String × Json)) : List (String × Json) :=
-  kvs.filterMap (rootBlock caps)
+def rootBlocks (caps : Caps) (tn : Bool) (kvs : List (String × Json)) : List (String × Json) :=
+  kvs.filterMap (rootBlock caps tn)
 
 /-- **The skeleton of a document.** -/
 def toDoc (caps : Caps) : Json → Doc MC
   | .obj kvs =>
     let m := metaOf caps (look "metadata" kvs)
-    let blocks := rootBlocks caps kvs
+    let tm := topMath caps kvs
+    let blocks := rootBlocks caps tm.isSome kvs
+    let rt := templatesOf (look "expression_templates" kvs)
     let comps (K : Kind) (f : String) :=
-      (splitOpt (pickComp caps) (look f kvs)).1.map (fun p => compOf caps blocks K p.1 p.2)
+      (splitOpt (pickComp caps) (look f kvs)).1.map (fun p => compOf caps blocks rt K p.1 p.2)
     { front := at_ "esm" kvs ++ (m.map Prod.fst).getD [],
       desc := m.bind Prod.snd,
       blocks := blocks,
+      math := tm.getD [],
       comps := comps .model "models" ++ comps .rs "reaction_systems" }
-  | _ => { front := [], desc := none, blocks := [], comps := [] }
+  | _ => { front := [], desc := none, blocks := [], math := [], comps := [] }
 
 /-! ## From a skeleton back to the document -/
 
@@ -660,7 +916,7 @@ def mathKv (c : Comp MC) (f : String) : Option (List (String × Json)) :=
   match c.math.filter (fun m => m.field == f), at_ f c.mathBlocks with
   | [], [] => some []
   | [], [(_, v)] => some [(f, v)]
-  | m :: ms, [] => some [(f, .arr ((m :: ms).map itemJson))]
+  | m :: ms, [] => some [(f, fieldJson f (m :: ms))]
   | _, _ => none
 
 /-- The rebuilt math fields. -/
@@ -709,9 +965,10 @@ def ofDoc (D : Doc MC) : Option Json := do
   let models ← joinField backComp (D.comps.filter (fun c => c.kind == .model)) mr
   let rr ← pickOne "reaction_systems" D.blocks
   let rss ← joinField backComp (D.comps.filter (fun c => c.kind == .rs)) rr
+  let tkv := if D.math.isEmpty then [] else [("expression_templates", fieldJson "expression_templates" D.math)]
   let others := D.blocks.filter (fun kv => kv.1 != "models" && kv.1 != "reaction_systems")
   let d := Json.obj (sortKeys (esmKv ++ metaKv ++ optKv "models" models ++
-    optKv "reaction_systems" rss ++ others))
+    optKv "reaction_systems" rss ++ tkv ++ others))
   if canonDoc d then pure d else none
 
 end Esm.Document.Source

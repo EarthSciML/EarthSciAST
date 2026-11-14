@@ -39,6 +39,10 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
   mhchem (`Esm.Document.Source.Reaction`) with the rate as LaTeX math over the arrow,
   `->[{$k$}]` (braced, since mhchem ends the label at the first `]`), and the reaction's
   `id` and other fields in the label;
+* at the start of a line: a template, a display whose math is
+  `\operatorname{f}(a, b) \coloneqq body`, or a rule,
+  `\text{rule } \operatorname{r}: \; lhs \Rightarrow rhs`, with any other field as attributes after
+  the closing `$$` (`$$ {description="…"}`);
 * at the start of a line: a subsystem included by reference,
   `::subsystem[Name]{ref="…" key=value …}`;
 * at the start of a line: a plot directive `::plot{key=value …}` on one line, an analysis
@@ -271,13 +275,108 @@ def fenceAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
     if sl.all (· == ' ') then (fenceItem (splitLine u).1 body).map (fun it => (it, rest)) else none
   | none => none
 
-/-- A display equation after its opening `$$`. -/
+/-! ## Templates and rules
+
+A template is a display whose math starts with its header, `\operatorname{f}(a, b) \coloneqq`,
+then its body: `$$`, `\operatorname{f}(a, b) \coloneqq body` on one line, `$$`. A rule is
+`\text{rule } \operatorname{r}: \; lhs \Rightarrow rhs`. The header (the name, the parameters
+as names under the empty symbol table) and the rule's split at its arrow are read here, by
+the lexer; only the body and the left-hand side are math. Any other field follows the
+closing `$$` as attributes, `$$ {description="…"}`. -/
+
+def tmHeadL : List Char := "\\operatorname{".toList
+def tmDef : List Char := ") \\coloneqq ".toList
+def ruleHeadL : List Char := "\\text{rule } \\operatorname{".toList
+def ruleSep : List Char := ": \\; ".toList
+def ruleArrow : List Char := " \\Rightarrow ".toList
+
+/-- The parameters of a template header, separated by `, `. -/
+def paramsTxt : List String → List Char
+  | [] => []
+  | p :: ps => nameLatex p ++ ps.flatMap (fun q => ',' :: ' ' :: nameLatex q)
+
+/-- The math text of a template or rule display (one line). -/
+def tmRaw (t : Tm String) : List Char :=
+  match t.lhs with
+  | none => tmHeadL ++ escT t.name.toList ++ '}' :: '(' :: paramsTxt t.params ++ tmDef ++ t.body.toList
+  | some l => ruleHeadL ++ escT t.name.toList ++ '}' :: ruleSep ++ l.toList ++ ruleArrow ++ t.body.toList
+
+/-- The attributes after the closing `$$` of a template display. -/
+def tmAttrs : List (String × Json) → List Char
+  | [] => []
+  | a :: as => ' ' :: '{' :: attrsMd (a :: as) ++ ['}']
+
+/-- One parameter: a name, up to the next `,` or `)`. -/
+def pName (s : List Char) : Option (String × List Char) :=
+  match parseLatex {} (String.ofList (s.takeWhile (fun c => c != ',' && c != ')'))) with
+  | some (.str n) => some (n, s.drop (s.takeWhile (fun c => c != ',' && c != ')')).length)
+  | _ => none
+
+/-- The parameters after `(`, up to `) \coloneqq `. -/
+def pParams : Nat → List Char → Option (List String × List Char)
+  | 0, _ => none
+  | f + 1, s =>
+    match after tmDef s with
+    | some r => some ([], r)
+    | none =>
+      match pName s with
+      | some (n, r) =>
+        match after tmDef r with
+        | some r' => some ([n], r')
+        | none =>
+          match r with
+          | ',' :: ' ' :: r' => (pParams f r').map (fun q => (n :: q.1, q.2))
+          | _ => none
+      | none => none
+
+/-- Split at the first occurrence of `sep`. -/
+def splitAt (sep : List Char) : List Char → Option (List Char × List Char)
+  | [] => none
+  | c :: r =>
+    if pre sep (c :: r) then some ([], (c :: r).drop sep.length)
+    else (splitAt sep r).map (fun p => (c :: p.1, p.2))
+
+/-- Read the math text of a display as a template or rule: its name, its parameters, its
+left-hand side (a rule's) and its body, as text. -/
+def tmLex (raw : List Char) : Option (String × List String × Option (List Char) × List Char) :=
+  match after ruleHeadL raw with
+  | some u =>
+    match rawB 0 u with
+    | some (nm, u1) =>
+      match after ruleSep u1 with
+      | some u2 => (splitAt ruleArrow u2).map (fun p => (String.ofList (unescT nm), [], some p.1, p.2))
+      | none => none
+    | none => none
+  | none =>
+    match after tmHeadL raw with
+    | some u =>
+      match rawB 0 u with
+      | some (nm, '(' :: u1) => (pParams (u1.length + 1) u1).map (fun p => (String.ofList (unescT nm), p.1, none, p.2))
+      | _ => none
+    | none => none
+
+/-- The attributes after a template display's closing `$$`. -/
+def tmTail (f : Nat) (sl : List Char) : Option (List (String × Json)) :=
+  if sl.all (· == ' ') then some []
+  else
+    match sl with
+    | ' ' :: '{' :: v =>
+      match pAttrs f v with
+      | some (a, r) => if r.all (· == ' ') then some a else none
+      | none => none
+    | _ => none
+
+/-- A display after its opening `$$`: a template or rule when its math reads as one,
+otherwise an equation (optionally labelled). -/
 def mathAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
   if (splitLine u).1.all (· == ' ') then
     match untilStop dd f (splitLine u).2 with
     | some (body, sl, rest) =>
-      if labelOK sl && body.getLast? == some '\n' then
-        some (.eqn (String.ofList body.dropLast), rest)
+      if body.getLast? == some '\n' then
+        match tmLex body.dropLast with
+        | some (n, ps, l, b) =>
+          (tmTail f sl).map (fun as => (.tm ⟨n, ps, l.map String.ofList, String.ofList b, as⟩, rest))
+        | none => if labelOK sl then some (.eqn (String.ofList body.dropLast), rest) else none
       else none
     | none => none
   else none
@@ -985,6 +1084,7 @@ def itemMd : RItem → List Char
   | .eqx r raw => dRole r ++ '\n' :: dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ '\n' :: dEnd ++ ['\n']
   | .rxn x => dRxn ++ rxnBody x
   | .plot a => dPlot ++ attrsMd a ++ ['}', '\n']
+  | .tm t => dd ++ '\n' :: tmRaw t ++ '\n' :: dd ++ tmAttrs t.attrs ++ ['\n']
 
 /-- A display equation with an equation label after its closing `$$` (` {#eq-x}`). -/
 def eqnLabeled (raw : String) (label : List Char) : List Char :=
@@ -1022,10 +1122,13 @@ def itemOK : RItem → Bool
   | .block _ v => jwf v
   | .comp _ n => !n.toList.contains ']' && !n.toList.contains '\n'
   | .decl d => if d.kind = .sub then subOK d else declOK d
-  | .eqn raw => noStop dd (raw.toList ++ ['\n'])
-  | .eqx r raw => r != .eqn && noStop dd (raw.toList ++ ['\n'])
+  | .eqn raw => noStop dd (raw.toList ++ ['\n']) && (tmLex raw.toList).isNone
+  | .eqx r raw => r != .eqn && noStop dd (raw.toList ++ ['\n']) && (tmLex raw.toList).isNone
   | .rxn x => rxnOK x
   | .plot a => a.all attrOK
+  | .tm t => noStop dd (tmRaw t ++ ['\n']) && !(tmRaw t).contains '\n' &&
+      tmLex (tmRaw t) == some (t.name, t.params, t.lhs.map String.toList, t.body.toList) &&
+      t.attrs.all attrOK && !(tmAttrs t.attrs).contains '\n'
 
 /-- **Prose that the lexer skips**: at no character does a construct start (a block
 construct only matters at the start of a line). `t` is the text after the prose. -/
@@ -1186,6 +1289,8 @@ theorem lex_eqnL (raw : String) (l : List Char) (hr : itemOK (.eqn raw) = true)
     (hl : labelOK l = true) (hln : '\n' ∉ l) (bol : Bool) (hbol : bol = true) (t : List Char)
     (g : Nat) (hg : (eqnLabeled raw l).length + t.length < g + 1) :
     lex (g + 1) bol (eqnLabeled raw l ++ t) = (lex g true t).map (.eqn raw :: ·) := by
+  simp only [itemOK, Bool.and_eq_true, Option.isNone_iff_eq_none] at hr
+  obtain ⟨hr, htm⟩ := hr
   apply lex_block_step g bol _ t _ (by simp [eqnLabeled, dd]) _ hbol
   · simp only [eqnLabeled, List.append_assoc, List.cons_append, blockAt, pre_fe_dd, pre_rx_dd,
       pre_append, Bool.false_eq_true, ite_false, ite_true]
@@ -1195,7 +1300,7 @@ theorem lex_eqnL (raw : String) (l : List Char) (hr : itemOK (.eqn raw) = true)
       (by simp [eqnLabeled, List.length_append] at hg ⊢; omega)
     simp only [List.append_assoc, List.cons_append, List.nil_append] at hb
     simp only [List.nil_append, hb]
-    simp [hl]
+    simp [hl, htm]
   · simp [eqnLabeled, blockOpen, dd, fenceEsm, pre]
 
 theorem lex_decl (d : Decl) (hk : d.kind ≠ .sub) (hd : itemOK (.decl d) = true) (bol : Bool)
@@ -1362,6 +1467,46 @@ theorem lex_plot (a : List (String × Json)) (ha : itemOK (.plot a) = true) (bol
     simp [splitLine]
   · simp [itemMd, blockOpen, pre_append]
 
+/-! ### Templates and rules -/
+
+theorem tmTail_attrs (f : Nat) (as : List (String × Json)) (ha : ∀ a ∈ as, attrOK a = true)
+    (hf : as.length < f) : tmTail f (tmAttrs as) = some as := by
+  cases as with
+  | nil => rfl
+  | cons a as' =>
+    simp only [tmAttrs, tmTail, List.cons_append]
+    rw [pAttrs_attrsMd (a :: as') ha [] f hf]
+    simp
+
+theorem lex_tm (t : Tm String) (ht : itemOK (.tm t) = true) (bol : Bool) (hbol : bol = true)
+    (rest : List Char) (g : Nat) (hg : (itemMd (.tm t)).length + rest.length < g + 1) :
+    lex (g + 1) bol (itemMd (.tm t) ++ rest) = (lex g true rest).map (.tm t :: ·) := by
+  simp only [itemOK, Bool.and_eq_true, Bool.not_eq_true', beq_iff_eq] at ht
+  obtain ⟨⟨⟨⟨hns, hnl⟩, hlex⟩, hat⟩, hanl⟩ := ht
+  have hal := attrs_len t.attrs
+  have hanl' : '\n' ∉ tmAttrs t.attrs := by
+    intro h; have := List.contains_iff_mem.mpr h; simp_all
+  have htl : (tmAttrs t.attrs).length ≥ t.attrs.length := by
+    cases h : t.attrs with
+    | nil => simp
+    | cons a as => rw [← h]; simp only [tmAttrs, h, List.length_cons, List.length_append] at *; omega
+  apply lex_block_step g bol _ rest _ (by simp [itemMd, dd]) _ hbol
+  · simp only [itemMd, List.append_assoc, List.cons_append, blockAt, pre_fe_dd, pre_rx_dd,
+      pre_append, Bool.false_eq_true, ite_false, ite_true]
+    rw [show (2 : Nat) = dd.length from rfl, List.drop_left, mathAt]
+    simp only [splitLine, ite_true, List.all_nil]
+    have hb := untilStop_body dd dd_ne dd_noNl (tmRaw t ++ ['\n']) (tmAttrs t.attrs) rest
+      (lines_nl _) hns hanl' g (by simp [itemMd, List.length_append] at hg ⊢; omega)
+    simp only [List.append_assoc, List.cons_append, List.nil_append] at hb
+    simp only [List.nil_append, hb]
+    simp only [List.getLast?_append, List.getLast?_singleton, Option.some_or, beq_self_eq_true,
+      ite_true, List.dropLast_concat, hlex]
+    rw [tmTail_attrs g t.attrs (fun a h => List.all_eq_true.mp hat a h) (by
+      simp [itemMd, List.length_append] at hg; omega)]
+    obtain ⟨n, ps, l, b, as⟩ := t
+    cases l <;> simp
+  · simp [itemMd, blockOpen, dd, fenceEsm, pre]
+
 /-! ### Containers -/
 
 theorem dRole_word (r : Role) (hr : r ≠ .eqn) (g : Nat) (X : List Char) :
@@ -1378,6 +1523,8 @@ theorem contBody_one (r : Role) (raw : String) (hr : itemOK (.eqn raw) = true) (
     (g : Nat) (hg : raw.toList.length + 4 + 3 + t.length < g) :
     contBody r (g + 1) (dd ++ '\n' :: (raw.toList ++ '\n' :: (dd ++ '\n' :: (dEnd ++ '\n' :: t)))) =
       some ([.eqx r raw], t) := by
+  simp only [itemOK, Bool.and_eq_true, Option.isNone_iff_eq_none] at hr
+  obtain ⟨hr, htm⟩ := hr
   obtain ⟨g', rfl⟩ : ∃ g', g = g' + 1 := ⟨g - 1, by omega⟩
   have h1 : ∀ X, pre dEnd (dd ++ X) = false := by intro X; simp [dEnd, dd, pre]
   unfold contBody
@@ -1390,7 +1537,7 @@ theorem contBody_one (r : Role) (raw : String) (hr : itemOK (.eqn raw) = true) (
   simp only [List.append_assoc, List.cons_append, List.nil_append] at hb
   rw [hb]
   obtain ⟨g'', rfl⟩ : ∃ g'', g' = g'' + 1 := ⟨g' - 1, by omega⟩
-  simp [labelOK, contBody, dEnd, pre, splitLine]
+  simp [labelOK, contBody, dEnd, pre, splitLine, htm]
 
 /-- A display followed by a blank line. -/
 def dispTxt (raw : String) : List Char := dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ ['\n', '\n']
@@ -1421,13 +1568,15 @@ theorem contBody_many (r : Role) (t : List Char) : ∀ (raws : List String),
     simp only [Bool.false_eq_true, ite_false, pre_append, ite_true]
     rw [show (2 : Nat) = dd.length from rfl, List.drop_left, mathAt]
     simp only [splitLine, ite_true, List.all_nil]
+    have hr0 := hr raw List.mem_cons_self
+    simp only [itemOK, Bool.and_eq_true, Option.isNone_iff_eq_none] at hr0
     have hb := untilStop_body dd dd_ne dd_noNl (raw.toList ++ ['\n']) [] ('\n' :: X)
-      (lines_nl _) (hr raw List.mem_cons_self) (by simp) (g'' + 1) (by simp [dd]; omega)
+      (lines_nl _) hr0.1 (by simp) (g'' + 1) (by simp [dd]; omega)
     simp only [List.append_assoc, List.cons_append, List.nil_append] at hb
     rw [hb]
     simp only [labelOK, List.dropWhile_nil, List.getLast?_append, List.getLast?_singleton,
-      Option.some_or, beq_self_eq_true, Bool.and_self, ite_true, List.dropLast_concat,
-      String.ofList_toList]
+      Option.some_or, beq_self_eq_true, ite_true, List.dropLast_concat,
+      String.ofList_toList, hr0.2]
     have h2 : contBody r (g'' + 1) ('\n' :: X) = contBody r g'' X := by
       simp [contBody, dEnd, dd, pre]
     rw [h2, ← hX, contBody_many r t raws (fun x hx => hr x (List.mem_cons_of_mem _ hx)) g'' hrec]
@@ -1437,7 +1586,10 @@ theorem lex_eqx (r : Role) (raw : String) (hr : itemOK (.eqx r raw) = true) (bol
     (hbol : bol = true) (t : List Char) (g : Nat)
     (hg : (itemMd (.eqx r raw)).length + t.length < g + 1) :
     lex (g + 1) bol (itemMd (.eqx r raw) ++ t) = (lex g true t).map (.eqx r raw :: ·) := by
+  have hr2 : itemOK (.eqn raw) = true := by
+    simp only [itemOK, Bool.and_eq_true] at hr ⊢; exact ⟨hr.1.2, hr.2⟩
   simp only [itemOK, Bool.and_eq_true, bne_iff_ne, ne_eq] at hr
+  replace hr := And.intro hr.1.1 hr2
   have hroles : (dRole r).take 3 = dEnd ∧ dRole r ≠ [] := by
     cases r with
     | eqn => exact absurd rfl hr.1
@@ -1556,6 +1708,10 @@ theorem lex_render : ∀ (segs : List Seg) (bol : Bool), Valid bol segs →
     | plot a =>
       rw [lex_plot a hok bol (hb rfl) _ g hf',
         lex_render rest true hv g (hlen _ (by simp [itemMd, dPlot]) hf)]
+      rfl
+    | tm t =>
+      rw [lex_tm t hok bol (hb rfl) _ g hf',
+        lex_render rest true hv g (hlen _ (by simp [itemMd, dd]) hf)]
       rfl
 
 /-! ## The declarations table reads as its declarations -/
