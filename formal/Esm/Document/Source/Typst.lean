@@ -34,6 +34,8 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
   wrapped as `#reaction(key: value, …)[#ce[…]] <id>`;
 * at the start of a line: `#initialization[$ … $]` or `#constraints[$ … $]`, an
   initialization equation or a constraint;
+* at the start of a line: `#subsystem("Name", ref: "…", …)`, a subsystem included by
+  reference;
 * at the start of a line: `#plot(key: value, …)`, an analysis with exactly one plot: the
   analysis's fields, the plot as the argument `plot`;
 * anywhere: a declaration `#var($N$, …)`, `#param(…)` or `#species(…)`, the name in
@@ -64,12 +66,14 @@ def oRxn : List Char := "#reaction(".toList
 def oInit : List Char := "#initialization[".toList
 def oCons : List Char := "#constraints[".toList
 def oPlot : List Char := "#plot(".toList
+def oSub : List Char := "#subsystem(".toList
 
 theorem oCe_l : oCe = ['#', 'c', 'e', '['] := rfl
 theorem oRxn_l : oRxn = ['#', 'r', 'e', 'a', 'c', 't', 'i', 'o', 'n', '('] := rfl
 theorem oInit_l : oInit = ['#', 'i', 'n', 'i', 't', 'i', 'a', 'l', 'i', 'z', 'a', 't', 'i', 'o', 'n', '['] := rfl
 theorem oCons_l : oCons = ['#', 'c', 'o', 'n', 's', 't', 'r', 'a', 'i', 'n', 't', 's', '['] := rfl
 theorem oPlot_l : oPlot = ['#', 'p', 'l', 'o', 't', '('] := rfl
+theorem oSub_l : oSub = ['#', 's', 'u', 'b', 's', 'y', 's', 't', 'e', 'm', '('] := rfl
 
 /-- The opener of the equation container of a role. -/
 def oRole : Role → List Char
@@ -160,6 +164,7 @@ def dkw : DKind → List Char
   | .var => oVar
   | .param => oParam
   | .species => oSpecies
+  | .sub => oSub
 
 /-- `#var($N$, default: 100)`. -/
 def declT (d : Decl) : List Char := dkw d.kind ++ '$' :: nameTyp d.name ++ '$' :: argsMoreT d.attrs ++ [')']
@@ -248,7 +253,8 @@ def itemT : RItem → List Char
   | .block k v => oBlock ++ quote true k ++ ',' :: ' ' :: TypstDict.encode v ++ [')', '\n']
   | .comp .model n => oModel ++ quote true n ++ [')', '\n']
   | .comp .rs n => oRs ++ quote true n ++ [')', '\n']
-  | .decl d => declT d
+  | .decl d => if d.kind = .sub then oSub ++ quote true d.name ++ argsMoreT d.attrs ++ [')', '\n']
+    else declT d
   | .eqn raw => oEq ++ raw.toList ++ [' ', '$', '\n']
   | .eqx r raw => oRole r ++ oEq ++ raw.toList ++ [' ', '$', ']', '\n']
   | .rxn x => rxnT x
@@ -269,7 +275,7 @@ def labelOK (sl : List Char) : Bool :=
 
 def blockOpen (s : List Char) : Bool :=
   pre oDesc s || pre oBlock s || pre oModel s || pre oRs s || pre oEq s || pre oCe s || pre oRxn s ||
-    pre oInit s || pre oCons s || pre oPlot s
+    pre oInit s || pre oCons s || pre oPlot s || pre oSub s
 
 def declOpen (s : List Char) : Bool := pre oVar s || pre oParam s || pre oSpecies s
 
@@ -309,6 +315,15 @@ def eqxAt (ro : Role) (u : List Char) : Option (RItem × List Char) :=
     | _ => none
   | none => none
 
+/-- A subsystem directive after `#subsystem(`. -/
+def subAtT (F : Nat) (u : List Char) : Option (RItem × List Char) :=
+  match parseQuoted true u with
+  | some (n, r) =>
+    match pArgsMore F F r with
+    | some (a, r') => (lineEnd r').map (fun r'' => (.decl ⟨.sub, n, a⟩, r''))
+    | none => none
+  | none => none
+
 /-- A plot directive after `#plot(`. -/
 def plotAtT (F : Nat) (u : List Char) : Option (RItem × List Char) :=
   match pArgsFirst F F u with
@@ -325,6 +340,7 @@ def blockAt (F : Nat) (s : List Char) : Option (RItem × List Char) :=
   else if pre oInit s then eqxAt .init (s.drop oInit.length)
   else if pre oCons s then eqxAt .cons (s.drop oCons.length)
   else if pre oPlot s then plotAtT F (s.drop oPlot.length)
+  else if pre oSub s then subAtT F (s.drop oSub.length)
   else eqAt (s.drop oEq.length)
 
 def declBody (F f : Nat) (k : DKind) : List Char → Option (RItem × List Char)
@@ -438,11 +454,17 @@ theorem pArgsFirst_argsFirstT (F : Nat) (as : List (String × Json)) (ha : ∀ a
       (fun b hb => hF b (List.mem_cons_of_mem _ hb)) t f (by simp at hf; omega)]
     rfl
 
+/-- What typsium and the Typst parser read as written inside `#ce[…]`: no `//` or `/*`,
+which would open a comment and swallow the rest of the line. -/
+def typsiumOK (x : Rxn String) : Bool :=
+  let t := sideTxt typR x.subs ++ x.rate.toList ++ sideTxt typR x.prods
+  !hasSub ['/', '/'] t && !hasSub ['/', '*'] t
+
 /-- A reaction the Typst syntax can hold: sides the side syntax holds, a rate on one line
-without `$`, an id label, and named arguments Typst can carry. -/
+without `$`, an id label, named arguments Typst can carry, and nothing typsium misreads. -/
 def rxnOK (x : Rxn String) : Bool :=
   sideOK typR x.subs && sideOK typR x.prods && !x.rate.toList.contains '$' &&
-    !x.rate.toList.contains '\n' && idOK x.id && x.attrs.all argOK
+    !x.rate.toList.contains '\n' && idOK x.id && x.attrs.all argOK && typsiumOK x
 
 /-- A declaration the Typst syntax can hold. -/
 def declOK (d : Decl) : Bool := nameOK d.name && !(nameTyp d.name).contains '$' && d.attrs.all argOK
@@ -511,7 +533,7 @@ def segItems : List Seg → List RItem
   | .prose _ :: r => segItems r
 
 def isBlock : RItem → Bool
-  | .decl _ => false
+  | .decl d => d.kind == .sub
   | _ => true
 
 /-- What each construct's content must satisfy for its text to read back. -/
@@ -519,7 +541,7 @@ def itemOK : RItem → Bool
   | .desc _ => true
   | .block _ v => jwf v
   | .comp _ _ => true
-  | .decl d => declOK d
+  | .decl d => if d.kind = .sub then d.attrs.all argOK else declOK d
   | .eqn raw => !raw.toList.contains '$'
   | .eqx r raw => r != .eqn && !raw.toList.contains '$'
   | .rxn x => rxnOK x
@@ -590,8 +612,8 @@ theorem pre_model_eq (X : List Char) : pre oModel (oEq ++ X) = false := by simp 
 theorem pre_rs_eq (X : List Char) : pre oRs (oEq ++ X) = false := by simp [oRs, oEq, pre]
 theorem pre_new_eq (X : List Char) :
     pre oCe (oEq ++ X) = false ∧ pre oRxn (oEq ++ X) = false ∧ pre oInit (oEq ++ X) = false ∧
-      pre oCons (oEq ++ X) = false ∧ pre oPlot (oEq ++ X) = false := by
-  simp [oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, oEq, pre]
+      pre oCons (oEq ++ X) = false ∧ pre oPlot (oEq ++ X) = false ∧ pre oSub (oEq ++ X) = false := by
+  simp [oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, oSub_l, oEq, pre]
 
 theorem lex_desc (s : String) (bol : Bool) (hbol : bol = true) (t : List Char) (g : Nat) :
     lex (g + 1) bol (itemT (.desc s) ++ t) = (lex g true t).map (.desc s :: ·) := by
@@ -642,7 +664,7 @@ theorem lex_eqnL (raw : String) (l : List Char) (hr : itemOK (.eqn raw) = true)
   apply lex_block_step g bol _ t _ (by simp [eqnLabeled, oEq]) _ hbol
   · simp only [eqnLabeled, List.append_assoc, blockAt, pre_desc_eq, pre_block_eq, pre_model_eq,
       pre_rs_eq, (pre_new_eq _).1, (pre_new_eq _).2.1, (pre_new_eq _).2.2.1, (pre_new_eq _).2.2.2.1,
-      (pre_new_eq _).2.2.2.2,
+      (pre_new_eq _).2.2.2.2.1, (pre_new_eq _).2.2.2.2.2,
       Bool.false_eq_true, ite_false, List.drop_left, List.cons_append]
     unfold eqAt
     have htw : (raw.toList ++ ' ' :: '$' :: (l ++ '\n' :: t)).takeWhile (· != '$') =
@@ -656,15 +678,17 @@ theorem lex_eqnL (raw : String) (l : List Char) (hr : itemOK (.eqn raw) = true)
     simp [splitLine_line l t hln, hl]
   · simp [eqnLabeled, blockOpen, oDesc, oBlock, oModel, oRs, oEq, pre]
 
-theorem lex_decl (d : Decl) (hd : itemOK (.decl d) = true) (bol : Bool) (t : List Char)
-    (g : Nat) (hg : (itemT (.decl d)).length + t.length < g + 1) :
+theorem lex_decl (d : Decl) (hk : d.kind ≠ .sub) (hd : itemOK (.decl d) = true) (bol : Bool)
+    (t : List Char) (g : Nat) (hg : (itemT (.decl d)).length + t.length < g + 1) :
     lex (g + 1) bol (itemT (.decl d) ++ t) = (lex g false t).map (.decl d :: ·) := by
-  simp only [itemOK] at hd
+  simp only [itemOK, hk, ite_false] at hd
+  simp only [itemT, hk, ite_false] at hg ⊢
   have hlen := argsMoreT_len d.attrs
   have hsz := argsMoreT_size d.attrs
   obtain ⟨k, n, as⟩ := d
+  simp only at hk
   have hg' : (dkw k).length + (nameTyp n).length + (argsMoreT as).length + t.length + 3 < g + 1 := by
-    simp [itemT, declT, List.length_append] at hg; omega
+    simp [declT, List.length_append] at hg; omega
   have hb := declBody_declT (3 * g + 3) g ⟨k, n, as⟩ hd t
     (by simp at hlen ⊢; omega)
     (by intro a ha; have := hsz a ha; simp at this; omega)
@@ -672,11 +696,14 @@ theorem lex_decl (d : Decl) (hd : itemOK (.decl d) = true) (bol : Bool) (t : Lis
   have eV : oVar = ['#', 'v', 'a', 'r', '('] := rfl
   have eP : oParam = ['#', 'p', 'a', 'r', 'a', 'm', '('] := rfl
   have eS : oSpecies = ['#', 's', 'p', 'e', 'c', 'i', 'e', 's', '('] := rfl
-  apply lex_decl_step g bol _ t _ (by cases k <;> simp [itemT, declT, dkw, oVar, oParam, oSpecies])
-  · cases k <;> simp [itemT, declT, dkw, blockOpen, oVar, oParam, oSpecies, oDesc, oBlock, oModel,
-      oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, pre]
-  · cases k <;> simp [itemT, declT, dkw, declOpen, oVar, oParam, oSpecies, pre]
-  · cases k <;> simpa [itemT, declT, dkw, declAt, eV, eP, eS, pre] using hb
+  apply lex_decl_step g bol _ t _ (by cases k <;> simp [declT, dkw, oVar, oParam, oSpecies, oSub_l])
+  · cases k <;> simp [declT, dkw, blockOpen, oVar, oParam, oSpecies, oDesc, oBlock, oModel,
+      oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, oSub_l, pre] at hk ⊢
+  · cases k <;> simp [declT, dkw, declOpen, oVar, oParam, oSpecies, pre] at hk ⊢
+  · cases k
+    all_goals first
+      | exact absurd rfl hk
+      | simpa [declT, dkw, declAt, eV, eP, eS, pre] using hb
 
 theorem itemT_eqn (raw : String) : itemT (.eqn raw) = eqnLabeled raw [] := by
   simp [itemT, eqnLabeled]
@@ -708,6 +735,31 @@ theorem lex_eqx (r : Role) (raw : String) (hr : itemOK (.eqx r raw) = true) (bol
         Bool.false_eq_true, List.drop_left]
       simpa using hea
     · simp [itemT, oRole, blockOpen, pre_append]
+
+/-! ### Subsystems -/
+
+theorem lex_sub (d : Decl) (hk : d.kind = .sub) (hd : itemOK (.decl d) = true) (bol : Bool)
+    (hbol : bol = true) (t : List Char) (g : Nat)
+    (hg : (itemT (.decl d)).length + t.length < g + 1) :
+    lex (g + 1) bol (itemT (.decl d) ++ t) = (lex g true t).map (.decl d :: ·) := by
+  obtain ⟨k, n, as⟩ := d
+  simp only at hk
+  subst hk
+  simp only [itemOK, ite_true] at hd
+  have hlen := argsMoreT_len as
+  have hsz := argsMoreT_size as
+  simp only [itemT, ite_true] at hg ⊢
+  apply lex_block_step g bol _ t _ (by simp [oSub_l]) _ hbol
+  · simp only [List.append_assoc, blockAt]
+    simp (disch := decide) only [pre_app_of_pre, pre_app_false, ite_true, ite_false,
+      Bool.false_eq_true, List.drop_left, subAtT]
+    rw [parseQuoted_quote]
+    simp only
+    rw [show argsMoreT as ++ ([')', '\n'] ++ t) = argsMoreT as ++ ')' :: ('\n' :: t) by simp,
+      pArgsMore_argsMoreT _ as (fun b hb => List.all_eq_true.mp hd b hb)
+        (fun b hb => by have := hsz b hb; simp at hg; omega) _ _ (by simp at hg; omega)]
+    simp [lineEnd_nl]
+  · simp [blockOpen, pre_append]
 
 /-! ### Plots -/
 
@@ -754,7 +806,7 @@ theorem coreAt_coreT (F : Nat) (x : Rxn String) (hx : rxnOK x = true) (R : List 
     coreAt F (coreT x ++ R) = some (x.subs, x.rate.toList, x.prods, R) := by
   obtain ⟨i, subs, prods, rate, attrs⟩ := x
   simp only [rxnOK, Bool.and_eq_true, Bool.not_eq_true'] at hx
-  obtain ⟨⟨⟨⟨⟨hs, hp⟩, hrd⟩, hrn⟩, hid⟩, ha⟩ := hx
+  obtain ⟨⟨⟨⟨⟨⟨hs, hp⟩, hrd⟩, hrn⟩, hid⟩, ha⟩, -⟩ := hx
   have hE : typR.empty.contains '$' = false := by decide
   unfold coreAt
   simp only [coreT, List.append_assoc]
@@ -798,7 +850,7 @@ theorem lex_rxn (x : Rxn String) (hx : itemOK (.rxn x) = true) (bol : Bool) (hbo
   have hx' := hx
   simp only [itemOK] at hx
   have hid : idOK x.id = true := by
-    simp only [rxnOK, Bool.and_eq_true] at hx; exact hx.1.2
+    simp only [rxnOK, Bool.and_eq_true] at hx; exact hx.1.1.2
   obtain ⟨i, subs, prods, rate, attrs⟩ := x
   have hl1 := sideLen_le subs
   have hl2 := sideLen_le prods
@@ -829,7 +881,7 @@ theorem lex_rxn (x : Rxn String) (hx : itemOK (.rxn x) = true) (bol : Bool) (hbo
     · simp [itemT, rxnT, blockOpen, pre_append]
   | cons a as =>
     simp only [rxnOK, Bool.and_eq_true, List.all_eq_true] at hx
-    have ha := hx.2
+    have ha := hx.1.2
     have hcore := coreAt_coreT (3 * g + 3) ⟨i, subs, prods, rate, a :: as⟩ hx'
       (']' :: ']' :: ' ' :: '<' :: (i.toList ++ '>' :: '\n' :: t)) (by simp [StopOK, pre])
       (by
@@ -913,9 +965,17 @@ theorem lex_render : ∀ (segs : List Seg) (bol : Bool), Valid bol segs →
         lex_render rest true hv g (hlen _ (by cases K <;> simp [itemT, oModel, oRs]) hf)]
       rfl
     | decl d =>
-      rw [lex_decl d hok bol _ g hf',
-        lex_render rest false hv g (hlen _ (by simp [itemT, declT]) hf)]
-      rfl
+      by_cases hk : d.kind = .sub
+      · have hb' : isBlock (.decl d) = true := by simp [isBlock, hk]
+        rw [lex_sub d hk hok bol (hb hb') _ g hf']
+        simp only [isBlock, hk, beq_self_eq_true] at hv
+        rw [lex_render rest true hv g (hlen _ (by simp [itemT, hk]) hf)]
+        rfl
+      · have hbf : isBlock (.decl d) = false := by simp [isBlock, hk]
+        rw [lex_decl d hk hok bol _ g hf']
+        rw [hbf] at hv
+        rw [lex_render rest false hv g (hlen _ (by simp [itemT, hk, declT]) hf)]
+        rfl
     | eqn raw =>
       rw [itemT_eqn] at hf ⊢
       rw [lex_eqnL raw [] hok rfl (by simp) bol (hb rfl) _ g,

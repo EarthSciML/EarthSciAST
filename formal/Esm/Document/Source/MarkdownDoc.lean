@@ -96,7 +96,8 @@ def capsMd : Caps where
     noStop (' ' :: ' ' :: fence) (s.toList ++ ['\n']) &&
     noStop (' ' :: ' ' :: ' ' :: fence) (s.toList ++ ['\n']) && !s.toList.contains '\r'
   compName n := !n.toList.contains ']' && !n.toList.contains '\n'
-  declName n := nameOK n && !(nameLatex n).contains '$'
+  declName n := nameOK n && !(nameLatex n).contains '$' && !n.toList.contains ']' &&
+    !n.toList.contains '\n'
   attr a := isIdent a.1.toList
   eqn S e := commentOK e.comment && !(latexOf S e).contains '$' && !(latexOf S e).contains '\n' &&
     (latexOf S e).head? != some '%' && (envOf (latexOf S e)).isNone
@@ -188,14 +189,16 @@ theorem segItems_canon (its : List RItem) : segItems (canonSegs its) = its := by
   | cons it its ih =>
     simp only [canonSegs, List.flatMap_cons] at ih ⊢
     rw [segItems_append, ih]
-    cases it <;> simp [segItems, isBlock]
+    cases it with
+    | decl d => by_cases hk : d.kind = .sub <;> simp [segItems, isBlock, hk]
+    | _ => simp [segItems, isBlock]
 
 theorem render_append (a b : List Seg) : render (a ++ b) = render a ++ render b := by
   simp [render]
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
   refine ⟨?_, ?_, ?_, ?_, trivial⟩
-  · simp [blockOpen, fenceEsm, dd, dModel, dRs, dPlot, pre]
+  · simp [blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, pre]
   · simp [declOpen, pre]
   · simp [tableOpen, pre]
   · simp [contOpen, dInit_l, dCons_l, pre]
@@ -208,7 +211,13 @@ theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true)
     have hit := h it List.mem_cons_self
     simp only [canonSegs, List.flatMap_cons] at ih ⊢
     cases it with
-    | decl d => exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+    | decl d =>
+      obtain ⟨k, n, as⟩ := d
+      cases k
+      · exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+      · exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+      · exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+      · exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | desc _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | block _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | comp _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
@@ -286,13 +295,16 @@ theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
       exact this.1.1.1.1
     · have hn := h.declName c hc d hd
       have ha := h.attrs c hc d hd
-      simp only [itemOK, declOK, Bool.and_eq_true]
+      have hat : d.attrs.all attrOK = true := List.all_eq_true.mpr fun a hma => by
+        have := ha a hma
+        simp only [capsMd] at this
+        simp only [attrOK, Bool.and_eq_true]
+        exact ⟨this.1, this.2⟩
       simp only [capsMd, Bool.and_eq_true] at hn
-      refine ⟨hn, List.all_eq_true.mpr fun a hma => ?_⟩
-      have := ha a hma
-      simp only [capsMd] at this
-      simp only [attrOK, Bool.and_eq_true]
-      exact ⟨this.1, this.2⟩
+      simp only [itemOK]
+      split
+      · simp only [subOK, Bool.and_eq_true]; exact ⟨⟨hn.1.2, hn.2⟩, hat⟩
+      · simp only [declOK, Bool.and_eq_true]; exact ⟨hn.1.1, hat⟩
     · have hmc := (h.math c hc m hm).1
       cases m with
       | eq ro e =>

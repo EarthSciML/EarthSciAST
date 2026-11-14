@@ -157,6 +157,18 @@ theorem pickPlain_back {caps : Caps} {k : DKind} {n : String} {v : Json} {d : De
       · cases h
     · cases h
 
+theorem pickSub_back {caps : Caps} {n : String} {v : Json} {d : Decl} (K : Kind)
+    (h : pickSub caps n v = some d) (hv : canonVal v = true) :
+    backDecl K d = some (n, v) ∧ declField K d.kind = some "subsystems" := by
+  unfold pickSub at h
+  split at h
+  · split at h
+    · obtain ⟨hk, kvs, he, rfl, hs⟩ := pickPlain_back h hv
+      cases he
+      cases K <;> exact ⟨by simp [backDecl, sortKeys_eq (List.Perm.refl _) hs], rfl⟩
+    · cases h
+  · cases h
+
 /-- Every declaration a field's picker produces belongs to that field, and stands for
 its entry. -/
 theorem declFields_back (caps : Caps) (K : Kind) :
@@ -165,16 +177,18 @@ theorem declFields_back (caps : Caps) (K : Kind) :
   intro f hf n v d h hv
   cases K with
   | model =>
-    simp only [declFields, List.mem_singleton] at hf
-    subst hf
-    exact pickVar_back h hv
-  | rs =>
     simp only [declFields, List.mem_cons, List.not_mem_nil, or_false] at hf
     rcases hf with rfl | rfl
+    · exact pickVar_back h hv
+    · exact pickSub_back .model h hv
+  | rs =>
+    simp only [declFields, List.mem_cons, List.not_mem_nil, or_false] at hf
+    rcases hf with rfl | rfl | rfl
     · obtain ⟨hk, kvs, rfl, rfl, hs⟩ := pickPlain_back h hv
       exact ⟨by simp [backDecl, sortKeys_eq (List.Perm.refl _) hs], rfl⟩
     · obtain ⟨hk, kvs, rfl, rfl, hs⟩ := pickPlain_back h hv
       exact ⟨by simp [backDecl, sortKeys_eq (List.Perm.refl _) hs], rfl⟩
+    · exact pickSub_back .rs h hv
 
 
 /-! ## A component -/
@@ -208,12 +222,14 @@ theorem lookup_declFields_none (caps : Caps) (K : Kind) (k : String) (h : k ∉ 
     (declFields caps K).lookup k = none := by
   cases K with
   | model =>
-    have h1 : (k == "variables") = false := by simpa [declFieldNames] using h
-    simp [declFields, List.lookup, h1]
+    have h1 : (k == "variables") = false := by simp [declFieldNames] at h; simp [h.1]
+    have h2 : (k == "subsystems") = false := by simp [declFieldNames] at h; simp [h.2]
+    simp [declFields, List.lookup, h1, h2]
   | rs =>
     have h1 : (k == "species") = false := by simp [declFieldNames] at h; simp [h.1]
-    have h2 : (k == "parameters") = false := by simp [declFieldNames] at h; simp [h.2]
-    simp [declFields, List.lookup, h1, h2]
+    have h2 : (k == "parameters") = false := by simp [declFieldNames] at h; simp [h.2.1]
+    have h3 : (k == "subsystems") = false := by simp [declFieldNames] at h; simp [h.2.2]
+    simp [declFields, List.lookup, h1, h2, h3]
 
 theorem compOf_blocks (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
     (kvs : List (String × Json)) :
@@ -268,16 +284,20 @@ theorem declKv_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (n
     rw [← declFields_names caps K]; exact List.mem_map_of_mem hf
   have hne : f.1 ≠ "description" ∧ f.1 ∉ mathFields := by
     cases K with
-    | model => simp only [declFieldNames, List.mem_singleton] at hfn; simp [hfn, mathFields]
-    | rs =>
+    | model =>
       simp only [declFieldNames, List.mem_cons, List.not_mem_nil, or_false] at hfn
       rcases hfn with h | h <;> simp [h, mathFields]
+    | rs =>
+      simp only [declFieldNames, List.mem_cons, List.not_mem_nil, or_false] at hfn
+      rcases hfn with h | h | h <;> simp [h, mathFields]
   have hlk : (declFields caps K).lookup f.1 = some f.2 := by
     cases K with
-    | model => simp only [declFields, List.mem_singleton] at hf; subst hf; rfl
-    | rs =>
+    | model =>
       simp only [declFields, List.mem_cons, List.not_mem_nil, or_false] at hf
       rcases hf with rfl | rfl <;> rfl
+    | rs =>
+      simp only [declFields, List.mem_cons, List.not_mem_nil, or_false] at hf
+      rcases hf with rfl | rfl | rfl <;> rfl
   -- the residue block
   have hpick : pickOne f.1 (compOf caps root K name kvs).blocks = some (splitOpt f.2 (look f.1 kvs)).2 := by
     rw [hblk, pickOne, compBase_blocks_at caps K name hl f.1]
@@ -508,20 +528,8 @@ theorem ofComp_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (n
   rw [compOf_desc, compOf_blocks]
   simp only [at_append]
   have hA : at_ k ((declFieldNames K).flatMap (fun f => at_ f kvs)) =
-      if k ∈ declFieldNames K then at_ k kvs else [] := by
-    cases K with
-    | model =>
-      simp only [declFieldNames, List.flatMap_cons, List.flatMap_nil,
-        List.append_nil, at_at, List.mem_singleton]
-      by_cases h : k = "variables" <;> simp [h, eq_comm]
-    | rs =>
-      simp only [declFieldNames, List.flatMap_cons, List.flatMap_nil,
-        List.append_nil, at_append, at_at, List.mem_cons, List.not_mem_nil, or_false]
-      by_cases h1 : k = "species"
-      · subst h1; simp
-      · by_cases h2 : k = "parameters"
-        · subst h2; simp
-        · simp [h1, h2, Ne.symm h1, Ne.symm h2]
+      if k ∈ declFieldNames K then at_ k kvs else [] :=
+    at_flatMap_at k kvs _ (by cases K <;> decide)
   have hB : at_ k ((compBase caps K name kvs).blocks.filter
       (fun kv => !(declFieldNames K).contains kv.1)) =
       if k ∈ declFieldNames K then [] else at_ k (compBase caps K name kvs).blocks := by

@@ -29,6 +29,9 @@ theorem pre_append (p t : List Char) : pre p (p ++ t) = true := by
   | nil => rfl
   | cons a p ih => simp [pre, ih]
 
+/-- `p` occurs in `s`. -/
+def hasSub (p s : List Char) : Bool := s.tails.any (pre p)
+
 /-- A prefix no longer than `x` is decided within `x`. -/
 theorem pre_app_long : ∀ (p x t : List Char), p.length ≤ x.length → pre p (x ++ t) = pre p x
   | [], _, _, _ => rfl

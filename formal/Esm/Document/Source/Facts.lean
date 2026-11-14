@@ -78,12 +78,38 @@ theorem decls_ok (caps : Caps) (K : Kind) {kvs : List (String × Json)}
   obtain ⟨g, hg, hd⟩ := hd
   obtain ⟨fkvs, hfo, n, w, hm, hp⟩ := mem_splitOpt_fst hd
   have hw : canonVal w = true := canonVal_mem (canonVal_look hv hfo) hm
-  have hpick : ∀ k, g = ("", pickPlain caps k) ∨ True := fun _ => Or.inr trivial
-  clear hpick
+  have hplain : ∀ k, pickPlain caps k n w = some d →
+      caps.declName d.name = true ∧ ∀ a ∈ d.attrs, caps.attr a = true ∧ jwf a.2 = true := by
+    intro k hp
+    simp only [pickPlain] at hp
+    split at hp
+    · cases hp
+    · rename_i hn
+      simp only [Bool.not_eq_true', Bool.not_eq_false] at hn
+      split at hp
+      · rename_i wkvs
+        split at hp
+        · cases hp; rename_i hall
+          refine ⟨hn, ?_⟩
+          intro ⟨x, y⟩ ha
+          exact ⟨List.all_eq_true.mp hall _ ha, jwf_of_canonVal (canonVal_mem hw ha)⟩
+        · cases hp
+      · cases hp
+  have hsub : pickSub caps n w = some d →
+      caps.declName d.name = true ∧ ∀ a ∈ d.attrs, caps.attr a = true ∧ jwf a.2 = true := by
+    intro hp
+    simp only [pickSub] at hp
+    split at hp
+    · split at hp
+      · exact hplain _ hp
+      · cases hp
+    · cases hp
   cases K with
   | model =>
-    simp only [declFields, List.mem_singleton] at hg
-    subst hg
+    simp only [declFields, List.mem_cons, List.not_mem_nil, or_false] at hg
+    rcases hg with rfl | rfl
+    swap
+    · exact hsub hp
     simp only [pickVar] at hp
     split at hp
     · cases hp
@@ -109,27 +135,11 @@ theorem decls_ok (caps : Caps) (K : Kind) {kvs : List (String × Json)}
         · cases hp
       · cases hp
   | rs =>
-    have : ∀ k, pickPlain caps k n w = some d →
-        caps.declName d.name = true ∧ ∀ a ∈ d.attrs, caps.attr a = true ∧ jwf a.2 = true := by
-      intro k hp
-      simp only [pickPlain] at hp
-      split at hp
-      · cases hp
-      · rename_i hn
-        simp only [Bool.not_eq_true', Bool.not_eq_false] at hn
-        split at hp
-        · rename_i wkvs
-          split at hp
-          · cases hp; rename_i hall
-            refine ⟨hn, ?_⟩
-            intro ⟨x, y⟩ ha
-            exact ⟨List.all_eq_true.mp hall _ ha, jwf_of_canonVal (canonVal_mem hw ha)⟩
-          · cases hp
-        · cases hp
     simp only [declFields, List.mem_cons, List.not_mem_nil, or_false] at hg
-    rcases hg with rfl | rfl
-    · exact this _ hp
-    · exact this _ hp
+    rcases hg with rfl | rfl | rfl
+    · exact hplain _ hp
+    · exact hplain _ hp
+    · exact hsub hp
 
 theorem compBase_decls_name (caps : Caps) (K : Kind) (n n' : String) (kvs : List (String × Json)) :
     (compBase caps K n kvs).decls = (compBase caps K n' kvs).decls := rfl

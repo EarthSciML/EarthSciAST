@@ -22,7 +22,9 @@ Native surfaces (`Notation.skeleton`):
 * the description block: `metadata.description`, and a component's `description`;
 * component directives: the entries of `models` and `reaction_systems`;
 * declarations: a model's `variables` (`:var`, and `:param` for `type: "parameter"`), a
-  reaction system's `species` (`:species`) and `parameters` (`:param`);
+  reaction system's `species` (`:species`) and `parameters` (`:param`), and the entries
+  of a component's `subsystems` that are included by reference (`ref`), as subsystem
+  directives (an inline subsystem stays in the `subsystems` block);
 * the list entries of a component: its `equations` (display math, one equation each),
   its `initialization_equations` and `constraint_equations` (display math marked as
   such), its `reactions` (one reaction line each), and its `analyses` (a plot directive
@@ -115,11 +117,13 @@ inductive Kind where
   | rs
   deriving DecidableEq, Repr
 
-/-- The declaration directives. -/
+/-- The declaration directives. `sub` is a subsystem included by reference, printed as a
+directive of its own line. -/
 inductive DKind where
   | var
   | param
   | species
+  | sub
   deriving DecidableEq, Repr
 
 /-- A declaration: the directive, the declared name, and the other fields of the
@@ -233,7 +237,8 @@ document's index sets; the templates of the document and of the component. It re
 the top-level blocks and the component's declarations and blocks only, never an
 math entry, so the parser builds it before reading any math. -/
 def symFor {α : Type} (root : List (String × Json)) (c : Comp α) : Sym :=
-  { names := c.decls.map Decl.name ++ keysOf (look "variables" c.blocks) ++
+  { names := (c.decls.filter (fun d => d.kind != .sub)).map Decl.name ++
+      keysOf (look "variables" c.blocks) ++
       keysOf (look "species" c.blocks) ++ keysOf (look "parameters" c.blocks) ++
       keysOf (look "index_sets" root),
     templates := templatesOf (look "expression_templates" root) ++
@@ -535,10 +540,17 @@ def pickPlain (caps : Caps) (k : DKind) (n : String) (v : Json) : Option Decl :=
   | .obj kvs => if kvs.all caps.attr then some ⟨k, n, kvs⟩ else none
   | _ => none
 
+/-- A subsystem included by reference (it has a `ref`) as a declaration. -/
+def pickSub (caps : Caps) (n : String) (v : Json) : Option Decl :=
+  match v with
+  | .obj kvs => if (look "ref" kvs).isSome then pickPlain caps .sub n v else none
+  | _ => none
+
 /-- The declaration fields of a component kind, with their pickers. -/
 def declFields (caps : Caps) : Kind → List (String × (String → Json → Option Decl))
-  | .model => [("variables", pickVar caps)]
-  | .rs => [("species", pickPlain caps .species), ("parameters", pickPlain caps .param)]
+  | .model => [("variables", pickVar caps), ("subsystems", pickSub caps)]
+  | .rs => [("species", pickPlain caps .species), ("parameters", pickPlain caps .param),
+      ("subsystems", pickSub caps)]
 
 /-- The field a declaration of kind `k` belongs to, in a component of kind `K`. -/
 def declField : Kind → DKind → Option String
@@ -548,6 +560,7 @@ def declField : Kind → DKind → Option String
   | .rs, .species => some "species"
   | .rs, .param => some "parameters"
   | .rs, .var => none
+  | _, .sub => some "subsystems"
 
 /-- The entry a declaration stands for, in a component of kind `K`. -/
 def backDecl (K : Kind) (d : Decl) : Option (String × Json) :=
@@ -560,6 +573,7 @@ def backDecl (K : Kind) (d : Decl) : Option (String × Json) :=
     else some (d.name, .obj (sortKeys (("type", .str "unknown") :: d.attrs)))
   | .rs, .species => some (d.name, .obj (sortKeys d.attrs))
   | .rs, .param => some (d.name, .obj (sortKeys d.attrs))
+  | _, .sub => some (d.name, .obj (sortKeys d.attrs))
   | _, _ => none
 
 /-- Where an entry of a component goes when it is not a native surface: the
@@ -655,8 +669,8 @@ def mathKvs (c : Comp MC) : Option (List (String × Json)) :=
 
 /-- The names of the declaration fields of a component kind. -/
 def declFieldNames : Kind → List String
-  | .model => ["variables"]
-  | .rs => ["species", "parameters"]
+  | .model => ["variables", "subsystems"]
+  | .rs => ["species", "parameters", "subsystems"]
 
 theorem declFields_names (caps : Caps) (K : Kind) :
     (declFields caps K).map Prod.fst = declFieldNames K := by

@@ -39,6 +39,8 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
   mhchem (`Esm.Document.Source.Reaction`) with the rate as LaTeX math over the arrow,
   `->[{$k$}]` (braced, since mhchem ends the label at the first `]`), and the reaction's
   `id` and other fields in the label;
+* at the start of a line: a subsystem included by reference,
+  `::subsystem[Name]{ref="…" key=value …}`;
 * at the start of a line: a plot directive `::plot{key=value …}` on one line, an analysis
   with exactly one plot: the analysis's fields, the plot as the attribute `plot`;
 * at the start of a line: a container `:::initialization` or `:::constraints` on a line
@@ -106,6 +108,10 @@ def dkw : DKind → List Char
   | .var => "var".toList
   | .param => "param".toList
   | .species => "species".toList
+  | .sub => "subsystem".toList
+
+/-- `::subsystem[`, a subsystem included by reference. -/
+def dSub : List Char := "::subsystem[".toList
 
 /-! ## Path-block keys -/
 
@@ -328,6 +334,19 @@ def rxnAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
     | none => none
   | none => none
 
+/-- A subsystem directive after its `::subsystem[`. -/
+def subAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
+  match u.drop (u.takeWhile (fun c => c != ']' && c != '\n')).length with
+  | ']' :: '{' :: v =>
+    match pAttrs f v with
+    | some (a, r) =>
+      if (splitLine r).1.all (· == ' ') then
+        some (.decl ⟨.sub, String.ofList (u.takeWhile (fun c => c != ']' && c != '\n')), a⟩,
+          (splitLine r).2)
+      else none
+    | none => none
+  | _ => none
+
 /-- A plot directive after its `::plot{`. -/
 def plotAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
   match pAttrs f u with
@@ -367,7 +386,7 @@ def contAt (f : Nat) (s : List Char) : Option (List RItem × List Char) :=
 
 /-- A block construct starts here (at the start of a line). -/
 def blockOpen (s : List Char) : Bool :=
-  pre fenceEsm s || pre dd s || pre dModel s || pre dRs s || pre dPlot s
+  pre fenceEsm s || pre dd s || pre dModel s || pre dRs s || pre dPlot s || pre dSub s
 
 /-- A declaration starts here. -/
 def declOpen (s : List Char) : Bool :=
@@ -380,6 +399,7 @@ def blockAt (f : Nat) (s : List Char) : Option (RItem × List Char) :=
   else if pre dd s then mathAt f (s.drop 2)
   else if pre dModel s then dirAt .model (s.drop 8)
   else if pre dPlot s then plotAt f (s.drop 7)
+  else if pre dSub s then subAt f (s.drop 12)
   else dirAt .rs (s.drop 18)
 
 /-- Read the declaration that starts here. -/
@@ -438,6 +458,7 @@ def kindOf (w : List Char) : Option DKind :=
   if w = "var".toList then some .var
   else if w = "param".toList then some .param
   else if w = "species".toList then some .species
+  else if w = "subsystem".toList then some .sub
   else none
 
 /-- One row: `| var | $N$ |` and the cells, then a newline. -/
@@ -821,11 +842,19 @@ theorem pAttrs_attrsMd (as : List (String × Json)) (ha : ∀ a ∈ as, attrOK a
 def declOK (d : Decl) : Bool :=
   nameOK d.name && !(nameLatex d.name).contains '$' && d.attrs.all attrOK
 
+/-- What mhchem reads as written: no escaped brace `\{` or `\}` anywhere inside `\ce{…}`
+(mhchem matches braces by character and fails on them). -/
+def mhchemOK (x : Rxn String) : Bool :=
+  let t := sideTxt latexR x.subs ++ x.rate.toList ++ sideTxt latexR x.prods
+  !hasSub ['\\', '{'] t && !hasSub ['\\', '}'] t
+
 /-- A reaction the Markdown syntax can hold: sides the side syntax holds, a rate on one
 line without `$`, an id label, and attributes the attribute syntax holds. -/
 def rxnOK (x : Rxn String) : Bool :=
   sideOK latexR x.subs && sideOK latexR x.prods && !x.rate.toList.contains '$' &&
-    !x.rate.toList.contains '\n' && idOK x.id && x.attrs.all attrOK
+    !x.rate.toList.contains '\n' && idOK x.id && x.attrs.all attrOK && mhchemOK x
+
+
 
 theorem takeWhile_noDollar (x y : List Char) (hx : x.contains '$' = false) :
     (x ++ '$' :: y).takeWhile (· != '$') = x := by
@@ -937,6 +966,13 @@ theorem keyMd_noNl (k : String) : '\n' ∉ keyMd k := by
 
 /-! ## The printer -/
 
+/-- `::subsystem[Name]{ref="…"}`, on a line of its own. -/
+def subMd (d : Decl) : List Char := dSub ++ d.name.toList ++ ']' :: '{' :: attrsMd d.attrs ++ ['}', '\n']
+
+/-- A subsystem directive the syntax can hold. -/
+def subOK (d : Decl) : Bool :=
+  !d.name.toList.contains ']' && !d.name.toList.contains '\n' && d.attrs.all attrOK
+
 /-- The text of a construct. A description is written verbatim in its fence; a path
 block's value in YAML; a declaration inline (no newline of its own). -/
 def itemMd : RItem → List Char
@@ -944,7 +980,7 @@ def itemMd : RItem → List Char
   | .block k v => fenceEsm ++ keyMd k ++ '\n' :: Yaml.encode v ++ fence ++ ['\n']
   | .comp .model n => dModel ++ n.toList ++ [']', '\n']
   | .comp .rs n => dRs ++ n.toList ++ [']', '\n']
-  | .decl d => declMd d
+  | .decl d => if d.kind = .sub then subMd d else declMd d
   | .eqn raw => dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ ['\n']
   | .eqx r raw => dRole r ++ '\n' :: dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ '\n' :: dEnd ++ ['\n']
   | .rxn x => dRxn ++ rxnBody x
@@ -977,7 +1013,7 @@ def segItems : List Seg → List RItem
 
 /-- A construct that must start a line (all but declarations). -/
 def isBlock : RItem → Bool
-  | .decl _ => false
+  | .decl d => d.kind == .sub
   | _ => true
 
 /-- What each construct's content must satisfy for its text to read back. -/
@@ -985,7 +1021,7 @@ def itemOK : RItem → Bool
   | .desc s => noStop fence (s.toList ++ ['\n'])
   | .block _ v => jwf v
   | .comp _ n => !n.toList.contains ']' && !n.toList.contains '\n'
-  | .decl d => declOK d
+  | .decl d => if d.kind = .sub then subOK d else declOK d
   | .eqn raw => noStop dd (raw.toList ++ ['\n'])
   | .eqx r raw => r != .eqn && noStop dd (raw.toList ++ ['\n'])
   | .rxn x => rxnOK x
@@ -1093,6 +1129,7 @@ theorem pre_rx_dm (X : List Char) : pre dRxn (dModel ++ X) = false := by simp [d
 theorem pre_rx_dr (X : List Char) : pre dRxn (dRs ++ X) = false := by simp [dRxn, dRs, pre]
 theorem pre_rx_dd (X : List Char) : pre dRxn (dd ++ '\n' :: X) = false := by simp [dRxn, dd, pre]
 theorem pre_pl_dr (X : List Char) : pre dPlot (dRs ++ X) = false := by simp [dPlot, dRs, pre]
+theorem pre_sb_dr (X : List Char) : pre dSub (dRs ++ X) = false := by simp [dSub, dRs, pre]
 
 theorem keyMd_ne_desc (k : String) : keyMd k ≠ descInfo := by
   intro h
@@ -1138,7 +1175,7 @@ theorem lex_comp (K : Kind) (n : String) (hn : itemOK (.comp K n) = true) (bol :
     · simp [itemMd, blockOpen, pre_append]
   | rs =>
     apply lex_block_step g bol _ t _ (by simp [itemMd, dRs]) _ hbol
-    · simp only [itemMd, List.append_assoc, blockAt, pre_fe_dr, pre_rx_dr, pre_dd_dr, pre_dm_dr, pre_pl_dr,
+    · simp only [itemMd, List.append_assoc, blockAt, pre_fe_dr, pre_rx_dr, pre_dd_dr, pre_dm_dr, pre_pl_dr, pre_sb_dr,
         Bool.false_eq_true, ite_false]
       rw [show (18 : Nat) = dRs.length from rfl, List.drop_left, dirAt]
       simp only [List.cons_append, List.nil_append, htw, List.drop_left]
@@ -1161,14 +1198,16 @@ theorem lex_eqnL (raw : String) (l : List Char) (hr : itemOK (.eqn raw) = true)
     simp [hl]
   · simp [eqnLabeled, blockOpen, dd, fenceEsm, pre]
 
-theorem lex_decl (d : Decl) (hd : itemOK (.decl d) = true) (bol : Bool) (t : List Char)
-    (g : Nat) (hg : d.attrs.length < g) :
+theorem lex_decl (d : Decl) (hk : d.kind ≠ .sub) (hd : itemOK (.decl d) = true) (bol : Bool)
+    (t : List Char) (g : Nat) (hg : d.attrs.length < g) :
     lex (g + 1) bol (itemMd (.decl d) ++ t) = (lex g false t).map (.decl d :: ·) := by
-  simp only [itemOK] at hd
+  simp only [itemOK, hk, ite_false] at hd
   obtain ⟨k, n, as⟩ := d
-  apply lex_decl_step g bol _ t _ (by simp [itemMd, declMd])
-  · cases k <;> simp [itemMd, declMd, dkw, blockOpen, fenceEsm, dd, dModel, dRs, dPlot, pre]
-  · cases k <;> simp [itemMd, declMd, dkw, declOpen, pre]
+  simp only [itemMd, hk, ite_false]
+  simp only at hk
+  apply lex_decl_step g bol _ t _ (by simp [declMd])
+  · cases k <;> simp [declMd, dkw, blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, pre] at hk ⊢
+  · cases k <;> simp [declMd, dkw, declOpen, pre] at hk ⊢
   · have hb := declBody_declMd g ⟨k, n, as⟩ hd t hg
     simp only [List.cons_append, List.append_assoc] at hb
     have e1 : ":var[".toList = [':', 'v', 'a', 'r', '['] := rfl
@@ -1176,8 +1215,10 @@ theorem lex_decl (d : Decl) (hd : itemOK (.decl d) = true) (bol : Bool) (t : Lis
     have e3 : "var".toList = ['v', 'a', 'r'] := rfl
     have e4 : "param".toList = ['p', 'a', 'r', 'a', 'm'] := rfl
     have e5 : "species".toList = ['s', 'p', 'e', 'c', 'i', 'e', 's'] := rfl
-    cases k <;>
-      simpa [itemMd, declMd, declAt, dkw, e1, e2, e3, e4, e5, pre] using hb
+    cases k
+    all_goals first
+      | exact absurd rfl hk
+      | simpa [declMd, declAt, dkw, e1, e2, e3, e4, e5, pre] using hb
 
 theorem attrs_len : ∀ as : List (String × Json), as.length ≤ (attrsMd as).length
   | [] => le_refl _
@@ -1230,7 +1271,7 @@ theorem rxnAt_body (f : Nat) (x : Rxn String) (hx : rxnOK x = true) (t : List Ch
     (hf : (rxnBody x).length < f) : rxnAt f (rxnBody x ++ t) = some (.rxn x, t) := by
   obtain ⟨i, subs, prods, rate, attrs⟩ := x
   simp only [rxnOK, Bool.and_eq_true, Bool.not_eq_true'] at hx
-  obtain ⟨⟨⟨⟨⟨hs, hp⟩, hrd⟩, hrn⟩, hid⟩, ha⟩ := hx
+  obtain ⟨⟨⟨⟨⟨⟨hs, hp⟩, hrd⟩, hrn⟩, hid⟩, ha⟩, -⟩ := hx
   have hE : latexR.empty.contains '$' = false := by decide
   have hl1 := side_len latexR subs
   have hl2 := side_len latexR prods
@@ -1276,6 +1317,32 @@ theorem lex_rxn (x : Rxn String) (hx : itemOK (.rxn x) = true) (bol : Bool) (hbo
     simp only [List.nil_append]
     exact rxnAt_body g x hx t (by simp [itemMd, dRxn] at hg; omega)
   · simp [itemMd, blockOpen, dRxn, dd, pre]
+
+/-! ### Subsystems -/
+
+theorem lex_sub (d : Decl) (hk : d.kind = .sub) (hd : itemOK (.decl d) = true) (bol : Bool)
+    (hbol : bol = true) (t : List Char) (g : Nat)
+    (hg : (itemMd (.decl d)).length + t.length < g + 1) :
+    lex (g + 1) bol (itemMd (.decl d) ++ t) = (lex g true t).map (.decl d :: ·) := by
+  obtain ⟨k, n, as⟩ := d
+  simp only at hk
+  subst hk
+  simp only [itemOK, ite_true, subOK, Bool.and_eq_true, Bool.not_eq_true'] at hd
+  obtain ⟨⟨h1, h2⟩, ha⟩ := hd
+  have hl := attrs_len as
+  simp only [itemMd, ite_true] at hg ⊢
+  apply lex_block_step g bol _ t _ (by simp [subMd, dSub]) _ hbol
+  · simp only [subMd, List.append_assoc, blockAt]
+    simp (disch := decide) only [pre_app_of_pre, pre_app_false, ite_true, ite_false,
+      Bool.false_eq_true, subAt]
+    rw [show (12 : Nat) = dSub.length from rfl, List.drop_left]
+    simp only [List.cons_append]
+    rw [takeWhile_noBr n.toList _ h1 h2, List.drop_left]
+    simp only [List.nil_append]
+    rw [pAttrs_attrsMd as (fun b hb => List.all_eq_true.mp ha b hb) ('\n' :: t) g
+      (by simp [subMd, dSub] at hg; omega)]
+    simp [splitLine]
+  · simp [subMd, blockOpen, pre_append]
 
 /-! ### Plots -/
 
@@ -1398,9 +1465,7 @@ theorem lex_eqx (r : Role) (raw : String) (hr : itemOK (.eqx r raw) = true) (bol
     refine ⟨c, rest, hcr, ?_⟩
     rw [← hcr]
     simp only [blockOpen, declOpen, contOpen]
-    rw [hlong _ (by decide), hlong _ (by decide), hlong _ (by decide), hlong _ (by decide),
-      hlong _ (by decide), hlong _ (by decide), hlong _ (by decide), hlong _ (by decide),
-      hlong _ (by decide), hlong _ (by decide), hlong _ (by decide)]
+    simp (disch := decide) only [hlong]
     cases r with
     | eqn => exact absurd rfl hr.1
     | init => decide
@@ -1460,12 +1525,21 @@ theorem lex_render : ∀ (segs : List Seg) (bol : Bool), Valid bol segs →
         lex_render rest true hv g (hlen _ (by cases K <;> simp [itemMd, dModel, dRs]) hf)]
       rfl
     | decl d =>
-      have hlen' := hlen _ (by simp [itemMd, declMd]) hf
-      rw [lex_decl d hok bol _ g (by
-        have := attrs_len d.attrs
-        simp [itemMd, declMd] at hf; omega),
-        lex_render rest false hv g hlen']
-      rfl
+      by_cases hk : d.kind = .sub
+      · have hlen' := hlen _ (by simp [itemMd, hk, subMd, dSub]) hf
+        have hb' : isBlock (.decl d) = true := by simp [isBlock, hk]
+        rw [lex_sub d hk hok bol (hb hb') _ g hf']
+        simp only [isBlock, hk, beq_self_eq_true] at hv
+        rw [lex_render rest true hv g hlen']
+        rfl
+      · have hlen' := hlen _ (by simp [itemMd, hk, declMd]) hf
+        have hbf : isBlock (.decl d) = false := by simp [isBlock, hk]
+        rw [lex_decl d hk hok bol _ g (by
+          have := attrs_len d.attrs
+          simp [itemMd, hk, declMd] at hf; omega)]
+        rw [hbf] at hv
+        rw [lex_render rest false hv g hlen']
+        rfl
     | eqn raw =>
       rw [itemMd_eqn] at hf hf' ⊢
       rw [lex_eqnL raw [] hok rfl (by simp) bol (hb rfl) _ g hf',
@@ -1490,6 +1564,7 @@ def kindWord : DKind → List Char
   | .var => "var".toList
   | .param => "param".toList
   | .species => "species".toList
+  | .sub => "subsystem".toList
 
 /-- A header column. -/
 def colText (k : String) : List Char := ' ' :: (k.toList ++ [' ', '|'])
@@ -1678,7 +1753,7 @@ theorem lex_table (cols : List String) (hc : ∀ k ∈ cols, isIdent k.toList = 
     | cons c r => exact ⟨c, r, rfl⟩
   rw [hcr] at htab ⊢
   have hb : blockOpen (c :: r) = false := by
-    rw [← hcr]; simp [tableText, tableOpen, blockOpen, fenceEsm, dd, dModel, dRs, dPlot, pre]
+    rw [← hcr]; simp [tableText, tableOpen, blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, pre]
   have hdo : declOpen (c :: r) = false := by
     rw [← hcr]; simp [tableText, tableOpen, declOpen, pre]
   have hto : pre tableOpen (c :: r) = true := by

@@ -303,7 +303,10 @@ The line (`Esm.Document.Source.Reaction`, decided 2026-11-13 with the native sur
   without `id`, `substrates`, `products` or `rate`, or an id outside letters, digits,
   `_`, `-`, `.` and `:` keeps the whole `reactions` field a path block.
 * The id is part of the reaction line, not a skipped label: removing it changes the
-  parse. -/
+  parse.
+* What the packages would misread keeps the field a block: an escaped brace `\{` or `\}`
+  anywhere inside `\ce{…}` (mhchem matches braces by character), and `//` or `/*` anywhere
+  inside `#ce[…]` (a Typst comment would swallow the rest of the line). -/
 
 def reactionLatex : String :=
   r"$$\ce{$\varnothing$ ->[{$k_{\mathrm{1}}$}] $0.5$ $\mathit{SO4\_aer}$ + $2$ NO2}$$ {#R1}"
@@ -370,7 +373,11 @@ def skeleton : List SkeletonRow := [
     markdown := r"$$ \text{rule } r: \; lhs \Rightarrow rhs $$; where and priority as attributes",
     typst := r#"#rule("r", $lhs$, $rhs$, …)"# },
   { field := "subsystems (by ref)", home := .subsystemDirective,
-    markdown := r#"::subsystem[Name]{ref="…"}"#, typst := r#"#subsystem("Name", ref: "…")"# },
+    markdown := r#"::subsystem[Name]{ref="…" key=value …} on a line of its own; the name is not a declared name of the component"#,
+    typst := r#"#subsystem("Name", ref: "…", key: value, …)"# },
+  { field := "subsystems (inline, for now)", home := .pathBlock,
+    markdown := "the inline entries stay in the subsystems block beside the by-reference directives",
+    typst := "same" },
   { field := "subsystems (inline)", home := .componentDirective,
     markdown := "a nested ::model under a deeper heading", typst := "nested #model" },
   { field := "analyses (one plot)", home := .plotDirective,
