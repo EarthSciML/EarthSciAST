@@ -1,0 +1,472 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "decay",
+    "x_esd": {
+      "narrative": {
+        "version": 1,
+        "models": {
+          "Decay": {
+            "description": "First-order radioactive decay"
+          },
+          "TwoBox": {
+            "description": "Two well-mixed boxes exchanging mass"
+          }
+        },
+        "sources": [
+          {
+            "path": "/models/Decay",
+            "element": 0,
+            "source": {
+              "file": "decay.md",
+              "line": 15
+            }
+          },
+          {
+            "path": "/models/Decay/variables/N",
+            "element": 1,
+            "source": {
+              "file": "decay.md",
+              "line": 18,
+              "column": 1
+            }
+          },
+          {
+            "path": "/models/Decay/variables/lambda",
+            "element": 2,
+            "source": {
+              "file": "decay.md",
+              "line": 20,
+              "column": 20
+            }
+          },
+          {
+            "path": "/models/Decay/equations/0",
+            "element": 3,
+            "source": {
+              "file": "decay.md",
+              "line": 22
+            }
+          },
+          {
+            "path": "/models/Decay/tests/0",
+            "element": 4,
+            "source": {
+              "file": "decay.md",
+              "line": 36,
+              "end_line": 42
+            }
+          },
+          {
+            "path": "/models/Decay/analyses/0/plots/0",
+            "element": 5,
+            "source": {
+              "file": "decay.md",
+              "line": 49,
+              "end_line": 51
+            }
+          },
+          {
+            "path": "/models/Decay/analyses/1/plots/0",
+            "element": 6,
+            "source": {
+              "file": "decay.md",
+              "line": 56,
+              "end_line": 63
+            }
+          },
+          {
+            "path": "/models/TwoBox",
+            "element": 7,
+            "source": {
+              "file": "decay.md",
+              "line": 70
+            }
+          },
+          {
+            "path": "/models/TwoBox/variables/A",
+            "element": 8,
+            "source": {
+              "file": "decay.md",
+              "line": 72,
+              "column": 13
+            }
+          },
+          {
+            "path": "/models/TwoBox/variables/B",
+            "element": 9,
+            "source": {
+              "file": "decay.md",
+              "line": 73,
+              "column": 7
+            }
+          },
+          {
+            "path": "/models/TwoBox/variables/k_ab",
+            "element": 10,
+            "source": {
+              "file": "decay.md",
+              "line": 74,
+              "column": 21
+            }
+          },
+          {
+            "path": "/models/TwoBox/variables/k_ba",
+            "element": 11,
+            "source": {
+              "file": "decay.md",
+              "line": 75,
+              "column": 18
+            }
+          },
+          {
+            "path": "/models/TwoBox/equations/0",
+            "element": 12,
+            "source": {
+              "file": "decay.md",
+              "line": 77
+            }
+          },
+          {
+            "path": "/models/TwoBox/equations/1",
+            "element": 13,
+            "source": {
+              "file": "decay.md",
+              "line": 79
+            }
+          },
+          {
+            "path": "/models/TwoBox/tests/0",
+            "element": 14,
+            "source": {
+              "file": "decay.md",
+              "line": 84,
+              "end_line": 90
+            }
+          },
+          {
+            "path": "/models/TwoBox/analyses/1/plots/0",
+            "element": 15,
+            "source": {
+              "file": "decay.md",
+              "line": 92,
+              "end_line": 95
+            }
+          },
+          {
+            "path": "/models/TwoBox/analyses/0",
+            "element": 16,
+            "source": {
+              "file": "decay.md",
+              "line": 100,
+              "end_line": 115
+            }
+          }
+        ],
+        "labels": {
+          "eq-a": "/models/TwoBox/equations/0",
+          "eq-b": "/models/TwoBox/equations/1",
+          "eq-decay": "/models/Decay/equations/0"
+        }
+      }
+    }
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "N": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 100.0,
+          "description": "Amount of nitrogen"
+        },
+        "lambda": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "description": "Decay constant"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "N"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "lambda",
+                  "N"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "half-life",
+          "time_span": {
+            "start": 0.0,
+            "end": 10.0
+          },
+          "assertions": [
+            {
+              "variable": "N",
+              "time": 6.931471805599453,
+              "expected": 50.0,
+              "tolerance": {
+                "rel": 0.0001
+              }
+            }
+          ]
+        }
+      ],
+      "analyses": [
+        {
+          "id": "decay",
+          "time_span": {
+            "start": 0.0,
+            "end": 50.0
+          },
+          "plots": [
+            {
+              "id": "decay",
+              "type": "line",
+              "description": "The sample decays to about 0.7% of its initial amount in 50 s.",
+              "x": {
+                "variable": "t"
+              },
+              "y": {
+                "variable": "N"
+              }
+            }
+          ]
+        },
+        {
+          "id": "rates",
+          "time_span": {
+            "start": 0.0,
+            "end": 50.0
+          },
+          "parameter_sweep": {
+            "type": "cartesian",
+            "dimensions": [
+              {
+                "parameter": "lambda",
+                "values": [
+                  0.05,
+                  0.1,
+                  0.2
+                ]
+              }
+            ]
+          },
+          "plots": [
+            {
+              "id": "rates",
+              "type": "line",
+              "description": "Faster decay constants empty the sample sooner.",
+              "x": {
+                "variable": "t"
+              },
+              "y": {
+                "variable": "N"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "TwoBox": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 1.0,
+          "description": "Mass in box A"
+        },
+        "B": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 0.0,
+          "description": "Mass in box B"
+        },
+        "k_ab": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.3,
+          "description": "Transfer rate, A to B"
+        },
+        "k_ba": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "description": "Transfer rate, B to A"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "k_ab",
+                      "A"
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "k_ba",
+                  "B"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "B"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k_ab",
+                  "A"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "k_ba",
+                  "B"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "equilibrium",
+          "time_span": {
+            "start": 0.0,
+            "end": 100.0
+          },
+          "assertions": [
+            {
+              "variable": "B",
+              "time": 100.0,
+              "expected": 0.75,
+              "tolerance": {
+                "rel": 0.001
+              }
+            }
+          ]
+        }
+      ],
+      "analyses": [
+        {
+          "id": "rates",
+          "time_span": {
+            "start": 0.0,
+            "end": 100.0
+          },
+          "parameter_sweep": {
+            "type": "cartesian",
+            "dimensions": [
+              {
+                "parameter": "k_ab",
+                "range": {
+                  "start": 0.1,
+                  "stop": 1.0,
+                  "count": 8
+                }
+              },
+              {
+                "parameter": "k_ba",
+                "range": {
+                  "start": 0.01,
+                  "stop": 1.0,
+                  "count": 8,
+                  "scale": "log"
+                }
+              }
+            ]
+          },
+          "plots": [
+            {
+              "id": "final_B",
+              "type": "heatmap",
+              "description": "The share of mass in box B at equilibrium, over both rate constants.",
+              "x": {
+                "variable": "k_ab"
+              },
+              "y": {
+                "variable": "k_ba"
+              },
+              "value": {
+                "variable": "B",
+                "reduce": "final"
+              }
+            }
+          ]
+        },
+        {
+          "id": "boxes",
+          "time_span": {
+            "start": 0.0,
+            "end": 20.0
+          },
+          "plots": [
+            {
+              "id": "boxes",
+              "type": "line",
+              "description": "Mass moves from A to B until the two flows balance.",
+              "x": {
+                "variable": "t"
+              },
+              "y": [
+                {
+                  "variable": "A"
+                },
+                {
+                  "variable": "B"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
