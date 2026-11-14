@@ -210,9 +210,15 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // observed declared without a shape and defined by an `ifelse` over an
     // array keeps no shape (esm-libraries-spec §4.7.5), plus the three
     // `variable_bounds` cases — bounds carried and rewritten by the equations'
-    // renaming (esm-libraries-spec §4.7.5, "Bounds follow the renaming").
-    expect(corpus.cases.length).toBe(59)
-    // 9 = template_import_lib, couple_multiplicative_no_tendency, the
+    // renaming (esm-libraries-spec §4.7.5, "Bounds follow the renaming"),
+    // plus the six `pointwise_lift` cases for the routes besides the operator
+    // `makearray` — a rate fed a grid field by a `variable_map`, an operator
+    // written elementwise, a partial translate, the whole component with its
+    // untouched states, a fixpoint across components, and a `lifting: "mean"`
+    // map that triggers nothing (esm-libraries-spec §4.7.5, "Pointwise lift:
+    // which states are lifted").
+    expect(corpus.cases.length).toBe(65)
+    // 10 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere,
     // `lift_synthetic_name_clash`, a declared index set that takes the
@@ -220,8 +226,9 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // `lift_placeholder_ic_conflict`, a state given two `ic(x)` entries, and
     // the three `variable_map_data_fed` shape conflicts
     // (`scalar_source_onto_shaped_target`, `one_source_two_target_shapes`,
-    // `shapeless_source_two_target_shapes`).
-    expect(corpus.refusals.length).toBe(9)
+    // `shapeless_source_two_target_shapes`), and `lift_two_grids`, a component
+    // whose candidates name different index sets.
+    expect(corpus.refusals.length).toBe(10)
     expect(corpus.oracle).toContain('earthsci_ast.flatten')
   })
 
@@ -397,6 +404,17 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     expect(entry.error).toBe('DimensionPromotionError')
     // esm-libraries-spec §4.7.5, "Pointwise lift: index sets".
     expect(() => flatten(load(entry.fixture))).toThrow(DimensionPromotionError)
+  })
+
+  it('refuses a component whose lift candidates name different index sets', () => {
+    const entry = corpus.refusals.find((r) => r.fixture.endsWith('lift_two_grids.esm')) as Refusal
+    expect(entry.error).toBe('DimensionPromotionError')
+    // esm-libraries-spec §4.7.5, "Pointwise lift: which states are lifted": the
+    // whole component lifts onto one grid, so `Box.x` on [lev] and `Box.y` on
+    // [lat] cannot both be candidates.
+    const run = (): unknown => flatten(load(entry.fixture))
+    expect(run).toThrow(DimensionPromotionError)
+    expect(run).toThrow(/component 'Box' would be lifted onto two grids/)
   })
 
   it('refuses a state with two initial conditions (authored + operator ic(_var))', () => {
