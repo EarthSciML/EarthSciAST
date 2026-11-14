@@ -120,6 +120,156 @@ theorem rawB_escK (s X : List Char) : rawB 0 (escK s ++ '}' :: X) = some (escK s
 
 /-! ## JSON strings -/
 
+theorem rawB_plain (d : Nat) (Z : List Char) :
+    ∀ (cs : List Char), (∀ c ∈ cs, c ≠ '\\' ∧ c ≠ '{' ∧ c ≠ '}') →
+      rawB d (cs ++ Z) = (rawB d Z).map (fun p => (cs ++ p.1, p.2))
+  | [], _ => by simp only [List.nil_append]; cases rawB d Z <;> rfl
+  | c :: cs, h => by
+    obtain ⟨h1, h2, h3⟩ := h c (by simp)
+    rw [List.cons_append, rawB.eq_5 _ _ _ (fun _ _ e _ => h1 e) h2 (fun _ e => h3 e) (fun _ _ e => h3 e),
+      rawB_plain d Z cs (fun x hx => h x (by simp [hx]))]
+    cases rawB d Z <;> simp
+
+theorem digitChar_plain : ∀ d : Fin 10, Esm.digitChar d.val ≠ '}' ∧ Esm.digitChar d.val ≠ '{' ∧
+    Esm.digitChar d.val ≠ '\\' ∧ Esm.digitChar d.val ≠ '"' := by decide +kernel
+
+theorem digitChar_plain' {d : Nat} (h : d < 10) : Esm.digitChar d ≠ '}' ∧ Esm.digitChar d ≠ '{' ∧
+    Esm.digitChar d ≠ '\\' ∧ Esm.digitChar d ≠ '"' := digitChar_plain ⟨d, h⟩
+
+theorem charDigit_digitChar {d : Nat} (h : d < 10) : Number.charDigit (Esm.digitChar d) = d :=
+  (Number.digitChar_spec h).2.1
+
+theorem unescS_plain (c : Char) (r : List Char) (h1 : c ≠ '{') (h2 : c ≠ '\\') :
+    unescS (c :: r) = c :: unescS r :=
+  unescS.eq_4 c r (fun _ _ _ _ e _ => h1 e) (fun _ _ _ _ _ _ _ _ e _ => h1 e) (fun _ _ e _ => h2 e)
+
+theorem unescS_bs (c : Char) (r : List Char) : unescS ('\\' :: c :: r) = c :: unescS r :=
+  unescS.eq_3 c r
+
+theorem charL : "{\\char".toList = ['{', '\\', 'c', 'h', 'a', 'r'] := rfl
+
+theorem unescS_three (n : Nat) (h : n < 1000) (r : List Char) :
+    unescS ("{\\char".toList ++ (dig3 n ++ '}' :: r)) = Char.ofNat n :: unescS r := by
+  have e1 := charDigit_digitChar (show n / 100 % 10 < 10 by omega)
+  have e2 := charDigit_digitChar (show n / 10 % 10 < 10 by omega)
+  have e3 := charDigit_digitChar (show n % 10 < 10 by omega)
+  rw [charL]
+  simp only [dig3, List.cons_append, List.nil_append]
+  rw [unescS.eq_1, e1, e2, e3]
+  congr 2
+  omega
+
+theorem unescS_seven (n : Nat) (h : n < 10000000) (r : List Char) :
+    unescS ("{\\char".toList ++ (dig7 n ++ '}' :: r)) = Char.ofNat n :: unescS r := by
+  have e1 := charDigit_digitChar (show n / 1000000 % 10 < 10 by omega)
+  have e2 := charDigit_digitChar (show n / 100000 % 10 < 10 by omega)
+  have e3 := charDigit_digitChar (show n / 10000 % 10 < 10 by omega)
+  have e4 := charDigit_digitChar (show n / 1000 % 10 < 10 by omega)
+  have e5 := charDigit_digitChar (show n / 100 % 10 < 10 by omega)
+  have e6 := charDigit_digitChar (show n / 10 % 10 < 10 by omega)
+  have e7 := charDigit_digitChar (show n % 10 < 10 by omega)
+  have h4 := (digitChar_plain' (show n / 1000 % 10 < 10 by omega)).1
+  rw [charL]
+  simp only [dig7, List.cons_append, List.nil_append]
+  rw [unescS.eq_2 _ _ _ _ _ _ _ _ h4, e1, e2, e3, e4, e5, e6, e7]
+  congr 2
+  omega
+
+theorem char_toNat_lt (c : Char) : c.toNat < 10000000 := by
+  have h := c.valid
+  simp only [UInt32.isValidChar, Nat.isValidChar] at h
+  show c.val.toNat < _
+  omega
+
+theorem unescS_escS : ∀ s : List Char, unescS (escS s) = s
+  | [] => rfl
+  | c :: cs => by
+    have ih := unescS_escS cs
+    by_cases hp : strPlain c = true
+    · have h1 : c ≠ '{' := by rintro rfl; simp [strPlain] at hp
+      have h2 : c ≠ '\\' := by rintro rfl; simp [strPlain, keySpecial] at hp
+      simp only [escS, hp, ↓reduceIte, List.singleton_append]
+      rw [unescS_plain c _ h1 h2, ih]
+    · simp only [escS, hp, Bool.false_eq_true, ↓reduceIte]
+      by_cases hu : c = '_' ∨ c = '{' ∨ c = '}'
+      · simp only [hu, ↓reduceIte, List.cons_append, List.nil_append]
+        rw [unescS_bs, ih]
+      · simp only [hu, ↓reduceIte]
+        by_cases hl : c.toNat < 1000
+        · simp only [hl, ↓reduceIte, List.append_assoc, List.cons_append, List.nil_append]
+          rw [unescS_three _ hl, ih, Char.ofNat_toNat]
+        · simp only [hl, ↓reduceIte, List.append_assoc, List.cons_append, List.nil_append]
+          rw [unescS_seven _ (char_toNat_lt c), ih, Char.ofNat_toNat]
+
+theorem rawB_group (Z : List Char) (ds : List Char) (hd : ∀ c ∈ ds, c ≠ '\\' ∧ c ≠ '{' ∧ c ≠ '}') :
+    rawB 0 ("{\\char".toList ++ (ds ++ '}' :: Z)) =
+      (rawB 0 Z).map (fun p => ("{\\char".toList ++ (ds ++ '}' :: p.1), p.2)) := by
+  have hh : ∀ c ∈ ['h', 'a', 'r'] ++ ds, c ≠ '\\' ∧ c ≠ '{' ∧ c ≠ '}' := by
+    intro c hc
+    rcases List.mem_append.1 hc with hc | hc
+    · simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl | rfl <;> decide
+    · exact hd c hc
+  have e : "{\\char".toList ++ (ds ++ '}' :: Z) = '{' :: '\\' :: 'c' :: ((['h', 'a', 'r'] ++ ds) ++ '}' :: Z) := by
+    simp
+  rw [e, rawB, rawB, rawB_plain 1 _ _ hh, rawB]
+  cases rawB 0 Z <;> simp
+
+theorem digits_plain (ds : List Nat) (h : ∀ d ∈ ds, d < 10) :
+    ∀ c ∈ ds.map Esm.digitChar, c ≠ '\\' ∧ c ≠ '{' ∧ c ≠ '}' := by
+  intro c hc
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.1 hc
+  have := digitChar_plain' (h d hd)
+  exact ⟨this.2.2.1, this.2.1, this.1⟩
+
+theorem dig3_plain (n : Nat) : ∀ c ∈ dig3 n, c ≠ '\\' ∧ c ≠ '{' ∧ c ≠ '}' := by
+  have : dig3 n = [n / 100 % 10, n / 10 % 10, n % 10].map Esm.digitChar := rfl
+  rw [this]; exact digits_plain _ (by simp; omega)
+
+theorem dig7_plain (n : Nat) : ∀ c ∈ dig7 n, c ≠ '\\' ∧ c ≠ '{' ∧ c ≠ '}' := by
+  have : dig7 n = [n / 1000000 % 10, n / 100000 % 10, n / 10000 % 10, n / 1000 % 10, n / 100 % 10,
+    n / 10 % 10, n % 10].map Esm.digitChar := rfl
+  rw [this]; exact digits_plain _ (by simp; omega)
+
+theorem rawB_escS (Z : List Char) : ∀ s : List Char,
+    rawB 0 (escS s ++ Z) = (rawB 0 Z).map (fun p => (escS s ++ p.1, p.2))
+  | [] => by simp only [escS, List.nil_append]; cases rawB 0 Z <;> rfl
+  | c :: cs => by
+    have ih := rawB_escS Z cs
+    by_cases hp : strPlain c = true
+    · have h1 : c ≠ '{' := by rintro rfl; simp [strPlain] at hp
+      have h2 : c ≠ '\\' := by rintro rfl; simp [strPlain, keySpecial] at hp
+      have h3 : c ≠ '}' := by rintro rfl; simp [strPlain] at hp
+      simp only [escS, hp, ↓reduceIte, List.cons_append]
+      rw [rawB.eq_5 _ _ _ (fun _ _ e _ => h2 e) h1 (fun _ e => h3 e) (fun _ _ e => h3 e)]
+      simp only [List.nil_append] at *
+      rw [ih]
+      cases rawB 0 Z <;> rfl
+    · simp only [escS, hp, Bool.false_eq_true, ↓reduceIte]
+      by_cases hu : c = '_' ∨ c = '{' ∨ c = '}'
+      · simp only [hu, ↓reduceIte, List.cons_append, List.nil_append]
+        rw [rawB, ih]
+        cases rawB 0 Z <;> rfl
+      · simp only [hu, ↓reduceIte]
+        by_cases hl : c.toNat < 1000
+        · simp only [hl, ↓reduceIte, List.append_assoc, List.cons_append, List.nil_append]
+          rw [rawB_group _ _ (dig3_plain _), ih]
+          cases rawB 0 Z <;> simp
+        · simp only [hl, ↓reduceIte, List.append_assoc, List.cons_append, List.nil_append]
+          rw [rawB_group _ _ (dig7_plain _), ih]
+          cases rawB 0 Z <;> simp
+
+theorem rawB_strL (s X : List Char) :
+    rawB 0 ('"' :: (escS s ++ '"' :: '}' :: X)) = some ('"' :: (escS s ++ ['"']), X) := by
+  rw [rawB.eq_5 _ _ _ (by intro _ _ e; cases e) (by intro e; cases e) (by intro _ e; cases e)
+    (by intro _ _ e; cases e), rawB_escS, rawB.eq_5 _ _ _ (by intro _ _ e; cases e)
+    (by intro e; cases e) (by intro _ e; cases e) (by intro _ _ e; cases e), rawB]
+  rfl
+
+theorem textTok_strL (s : List Char) :
+    textTok ('"' :: (escS s ++ ['"'])) = .jstr (String.ofList s) := by
+  simp [textTok, List.getLast?_append, unescS_escS]
+
 theorem unquoteBody_escCharB (c : Char) (r : List Char) :
     Strings.unquoteBody false (escCharB c ++ r) = (Strings.unquoteBody false r).map fun p => (c :: p.1, p.2) := by
   unfold escCharB
@@ -431,7 +581,7 @@ def tokOK : Tok → Prop
   | .word s => s.toList.all isLetter = true ∧ 2 ≤ s.toList.length
   | .it _ | .opn _ | .esc _ | .jstr _ => True
   | .rm raw => balOK raw.toList = true
-  | .txt s => balOK s.toList = true
+  | .txt s => balOK s.toList = true ∧ s.toList.head? ≠ some '"'
   | .units l => unitsOfRaw (String.ofList (Esm.Units.latexBody l)) = some l ∧
       balOK (Esm.Units.latexBody l) = true
   | .kw k => kwOK k = true
@@ -1135,11 +1285,17 @@ theorem lexOne_tok (t : Tok) (ht : tokOK t) (X : List Char) (hX : Sep t X) :
     rw [this, lexOne_ctrl _ (by decide) (by decide) _ (by simp; decide)]
     simp [ctrlTok, rawB_escT, unescT_escT]
   | txt s =>
+    obtain ⟨hb, hq⟩ := (show _ ∧ _ from ht)
     simp only [tokChars]
     have : "\\text{".toList ++ s.toList ++ ['}'] ++ X =
         '\\' :: ("text".toList ++ ('{' :: (s.toList ++ '}' :: X))) := by simp
     rw [this, lexOne_ctrl _ (by decide) (by decide) _ (by simp; decide)]
-    simp [ctrlTok, rawB_bal (show balOK s.toList = true from ht)]
+    have htt : textTok s.toList = .txt s := by
+      unfold textTok
+      split
+      · rename_i q hs; rw [hs] at hq; simp at hq
+      · simp
+    simp [ctrlTok, rawB_bal hb, htt]
   | esc o =>
     simp only [tokChars]
     have : "\\esm{".toList ++ escT o.toList ++ ['}'] ++ X =
@@ -1147,9 +1303,11 @@ theorem lexOne_tok (t : Tok) (ht : tokOK t) (X : List Char) (hX : Sep t X) :
     rw [this, lexOne_ctrl _ (by decide) (by decide) _ (by simp; decide)]
     simp [ctrlTok, rawB_escT, unescT_escT]
   | jstr s =>
-    simp only [tokChars, quoteL, List.cons_append, List.append_assoc]
-    rw [lexOne.eq_2, unquoteBody_quoteL]
-    simp
+    simp only [tokChars, strL]
+    have : "\\text{\"".toList ++ escS s.toList ++ ['"', '}'] ++ X =
+        '\\' :: ("text".toList ++ ('{' :: ('"' :: (escS s.toList ++ '"' :: '}' :: X)))) := by simp
+    rw [this, lexOne_ctrl _ (by decide) (by decide) _ (by simp; decide)]
+    simp [ctrlTok, rawB_strL, textTok_strL]
   | units l =>
     obtain ⟨hu, hb⟩ := (show _ ∧ _ from ht)
     simp only [tokChars]
@@ -1219,8 +1377,10 @@ theorem skipWs_tok (t : Tok) (ht : tokOK t) (X : List Char) (hX : Sep t X) (n : 
         '\\' :: ("esm".toList ++ ('{' :: (escT o.toList ++ '}' :: X))) := by simp
     rw [this]; exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) _ (by simp; decide) n
   | jstr s =>
-    simp only [tokChars, quoteL, List.cons_append]
-    exact skipWs_plain _ (by decide) (by decide) (by decide) (by decide) (by decide) n
+    simp only [tokChars, strL]
+    have : "\\text{\"".toList ++ escS s.toList ++ ['"', '}'] ++ X =
+        '\\' :: ("text".toList ++ ('{' :: ('"' :: (escS s.toList ++ '"' :: '}' :: X)))) := by simp
+    rw [this]; exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) _ (by simp; decide) n
   | units l =>
     simp only [tokChars]
     rw [show "\\,\\mathrm{".toList ++ Esm.Units.latexBody l ++ ['}'] ++ X =
@@ -1287,8 +1447,8 @@ theorem tok_head (t : Tok) (ht : tokOK t) : ∃ c r, tokChars t = c :: r ∧ c �
         rw [show "\\,\\mathrm{".toList ++ Esm.Units.latexBody l ++ ['}'] ++ Y =
           '\\' :: ',' :: ("\\mathrm{".toList ++ (Esm.Units.latexBody l ++ '}' :: Y)) by simp, sciExp_comma]
         exact sciExp_pre _ _ (by decide) (by decide)⟩
-  | jstr s => exact ⟨'"', _, rfl, by decide, fun Y => by
-      simp only [tokChars, quoteL, List.cons_append]; exact sciExp_plain _ _ (by decide) (by decide)⟩
+  | jstr s => exact ⟨'\\', "text{\"".toList ++ escS s.toList ++ ['"', '}'], by simp [tokChars, strL], by decide,
+      fun Y => by simp only [tokChars, strL, List.append_assoc]; exact sciExp_pre _ _ (by decide) (by decide)⟩
   | kw k =>
     have hk : kwOK k = true := ht
     have hne : kwChars k ≠ [] := by cases k <;> first | exact absurd hk (by decide) | decide

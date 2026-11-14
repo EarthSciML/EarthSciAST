@@ -10,8 +10,9 @@ import Esm.Document.Source.MultiLine
 
 1. `toDoc capsMd` (the skeleton, with the path-keyed fallback for anything Markdown
    cannot spell natively) and `ofDoc` — `ofDoc_toDoc`;
-2. `rawDoc prMd` (each equation as LaTeX under its component's symbol table) and
-   `cookDoc ckMd` — `cookDoc_rawDoc`, with the Phase 2 theorem `parseLatex_printLatex`;
+2. `rawDoc prMdx` (each equation, and each reaction's rate, as LaTeX under its
+   component's symbol table) and `cookDoc ckMdx` — `cookDoc_rawDoc`, with the Phase 2
+   theorem `parseLatex_printLatex`;
 3. `items` and `unitems` — `unitems_items`;
 4. the text: front matter, then the constructs separated by blank lines — `lex_render`.
 -/
@@ -71,12 +72,28 @@ def ckMd (S : Sym) (raw : String) : Option (List Eqn) :=
   | '%' :: ' ' :: r => oneMd S (some (String.ofList (splitLine r).1)) (splitLine r).2
   | cs => oneMd S none cs
 
+/-- A math entry's text: an equation's LaTeX (`prMd`), or a reaction with its rate as
+LaTeX. -/
+def prMdx : Sym → MC → MR := prMx prMd (fun S j => printLatex S j)
+
+/-- Read a math entry's text. -/
+def ckMdx : Sym → MR → Option (List MC) := ckMx ckMd (fun S raw => parseLatex S raw)
+
 /-- A comment Markdown can carry on its LaTeX comment line. -/
 def commentOK : Option String → Bool
   | some c => !c.toList.contains '\n' && !c.toList.contains '$'
   | none => true
 
 /-! ## What Markdown spells natively -/
+
+/-- A value remark-directive reads as written in a double-quoted attribute: a string
+whose characters the YAML printer writes as themselves (no `"`, which would end the
+quoted value; no backslash, tab, newline, carriage return or other character written as
+an escape, which remark-directive would not decode) and without `&` (a character
+reference would be decoded); any other value. -/
+def dqOK : Json → Bool
+  | .str s => s.toList.all (fun c => Strings.escChar false c == [c] && c != '&')
+  | _ => true
 
 /-- The Markdown container's predicates. A description must not contain a line that
 would close its fence (`noStop`; CommonMark also closes a fence indented by up to three
@@ -88,10 +105,16 @@ def capsMd : Caps where
     noStop (' ' :: ' ' :: fence) (s.toList ++ ['\n']) &&
     noStop (' ' :: ' ' :: ' ' :: fence) (s.toList ++ ['\n']) && !s.toList.contains '\r'
   compName n := !n.toList.contains ']' && !n.toList.contains '\n'
-  declName n := nameOK n && !(nameLatex n).contains '$'
-  attr a := isIdent a.1.toList && Yaml.isInl a.2
+  declName n := nameOK n && !(nameLatex n).contains '$' && !n.toList.contains ']' &&
+    !n.toList.contains '\n'
+  attr a := isIdent a.1.toList && dqOK a.2
   eqn S e := commentOK e.comment && !(latexOf S e).contains '$' && !(latexOf S e).contains '\n' &&
-    (latexOf S e).head? != some '%' && (envOf (latexOf S e)).isNone
+    (latexOf S e).head? != some '%' && (envOf (latexOf S e)).isNone &&
+    (tmLex (prMd S e).toList).isNone
+  rxn S x := rxnOK { x with rate := printLatex S x.rate }
+  plot a := a.all attrOK && a.all (fun kv => dqOK kv.2)
+  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printLatex S j), body := printLatex S t.body }) &&
+    t.attrs.all (fun kv => dqOK kv.2)
 
 theorem heads_sub {c : Char} : ∀ {bol : Bool} {x : List Char}, c ∈ heads bol x → c ∈ x
   | _, [], h => by cases h
@@ -110,7 +133,7 @@ theorem contains_false {c : Char} {x : List Char} (h : x.contains c = false) : c
 theorem ckMd_prMd (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) (hl : isE e.lhs = true)
     (hr : isE e.rhs = true) : ckMd S (prMd S e) = some [e] := by
   simp only [capsMd, Bool.and_eq_true, Bool.not_eq_true', bne_iff_ne, ne_eq] at hc
-  obtain ⟨⟨⟨⟨hcm, hd⟩, hn⟩, hp⟩, henv⟩ := hc
+  obtain ⟨⟨⟨⟨⟨hcm, hd⟩, hn⟩, hp⟩, henv⟩, -⟩ := hc
   have hparse : (parseLatex S (String.ofList (latexOf S e))).bind eqSides = some (e.lhs, e.rhs) := by
     simp only [latexOf, String.ofList_toList, parseLatex_printLatex S _ (isE_eqExpr e hl hr),
       Option.bind_some, eqSides_eqExpr]
@@ -144,7 +167,7 @@ def canonSegs (its : List RItem) : List Seg :=
 /-- **Print a document as Markdown.** -/
 def printMd (d : Json) : String :=
   let D := toDoc capsMd d
-  String.ofList (frontMd D.front ++ render (canonSegs (items (rawDoc prMd D))))
+  String.ofList (frontMd D.front ++ render (canonSegs (items (rawDoc prMdx D))))
 
 /-- Read the front matter and the constructs. -/
 def lexDoc (s : List Char) : Option (List (String × Json) × List RItem) :=
@@ -165,7 +188,7 @@ endings as LF (`decodeText`). -/
 def parseMd (s : String) : Option Json := do
   let p ← lexDoc (decodeText s.toList)
   let R ← unitems p.1 p.2
-  let D ← cookDoc ckMd R
+  let D ← cookDoc ckMdx R
   ofDoc D
 
 theorem segItems_append (a b : List Seg) : segItems (a ++ b) = segItems a ++ segItems b := by
@@ -179,16 +202,19 @@ theorem segItems_canon (its : List RItem) : segItems (canonSegs its) = its := by
   | cons it its ih =>
     simp only [canonSegs, List.flatMap_cons] at ih ⊢
     rw [segItems_append, ih]
-    cases it <;> simp [segItems, isBlock]
+    cases it with
+    | decl d => by_cases hk : d.kind = .sub <;> simp [segItems, isBlock, hk]
+    | _ => simp [segItems, isBlock]
 
 theorem render_append (a b : List Seg) : render (a ++ b) = render a ++ render b := by
   simp [render]
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
-  refine ⟨?_, ?_, ?_, by decide, trivial⟩
-  · simp [blockOpen, fenceEsm, dd, dModel, dRs, pre]
+  refine ⟨?_, ?_, ?_, ?_, by decide, trivial⟩
+  · simp [blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, dTmpl, dRuleC, pre]
   · simp [declOpen, pre]
   · simp [tableOpen, pre]
+  · simp [contOpen, dInit_l, dCons_l, pre]
 
 theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true) →
     ∀ bol, Valid bol (canonSegs its)
@@ -198,11 +224,21 @@ theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true)
     have hit := h it List.mem_cons_self
     simp only [canonSegs, List.flatMap_cons] at ih ⊢
     cases it with
-    | decl d => exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+    | decl d =>
+      obtain ⟨k, n, as⟩ := d
+      cases k
+      · exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+      · exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+      · exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+      · exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | desc _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | block _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | comp _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | eqn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | eqx _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | rxn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | plot _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | tm _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
 
 /-- **The front matter and the body read back.** -/
 theorem lexDoc_front (front : List (String × Json)) (hf : jwf (.obj front) = true)
@@ -239,7 +275,7 @@ theorem decode_front (front : List (String × Json)) (X : List Char) :
 theorem prMd_noDollar (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) :
     '$' ∉ (prMd S e).toList ++ ['\n'] := by
   simp only [capsMd, Bool.and_eq_true, Bool.not_eq_true'] at hc
-  obtain ⟨⟨⟨⟨hcm, hd⟩, _⟩, _⟩, _⟩ := hc
+  obtain ⟨⟨⟨⟨⟨hcm, hd⟩, _⟩, _⟩, _⟩, _⟩ := hc
   unfold prMd
   rw [String.toList_ofList]
   intro hm
@@ -261,36 +297,54 @@ theorem prMd_noDollar (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) :
   · cases hm
 
 /-- Every construct of the printed skeleton satisfies `itemOK`. -/
-theorem items_ok (D : Doc Eqn) (h : DocOK capsMd D) :
-    ∀ it ∈ items (rawDoc prMd D), itemOK it = true := by
+theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
+    ∀ it ∈ items (rawDoc prMdx D), itemOK it = true := by
   intro it hit
   simp only [items, rawDoc, List.mem_append, List.mem_map, List.mem_flatMap, Option.mem_toList,
     Option.map_eq_some_iff] at hit
-  rcases hit with ((⟨s, hs, rfl⟩) | ⟨kv, hkv, rfl⟩) | ⟨c', ⟨c, hc, rfl⟩, hit⟩
+  rcases hit with (((⟨s, hs, rfl⟩) | ⟨kv, hkv, rfl⟩) | ⟨m', ⟨m, hm, rfl⟩, rfl⟩) | ⟨c', ⟨c, hc, rfl⟩, hit⟩
   · have := h.desc s hs
     simp only [capsMd, Bool.and_eq_true] at this
     exact this.1.1.1.1
   · exact h.blocks kv hkv
-  · simp only [compItems, Comp.mapEqns, List.mem_cons, List.mem_append, List.mem_map,
+  · obtain ⟨hmc, -, t, rfl⟩ := h.rmath m hm
+    simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc
+    exact hmc.1
+  · simp only [compItems, Comp.mapMath, List.mem_cons, List.mem_append, List.mem_map,
       Option.mem_toList, Option.map_eq_some_iff] at hit
-    rcases hit with rfl | (((((⟨s, hs, rfl⟩) | ⟨d, hd, rfl⟩) | ⟨r, ⟨e, he, rfl⟩, rfl⟩) |
-      ⟨v, hv, rfl⟩) | ⟨kv, hkv, rfl⟩)
+    rcases hit with rfl | (((((⟨s, hs, rfl⟩) | ⟨d, hd, rfl⟩) | ⟨r, ⟨m, hm, rfl⟩, rfl⟩) |
+      ⟨kv, hkv, rfl⟩) | ⟨kv, hkv, rfl⟩)
     · exact h.compName c hc
     · have := h.cdesc c hc s hs
       simp only [capsMd, Bool.and_eq_true] at this
       exact this.1.1.1.1
     · have hn := h.declName c hc d hd
       have ha := h.attrs c hc d hd
-      simp only [itemOK, declOK, Bool.and_eq_true]
+      have hat : d.attrs.all attrOK = true := List.all_eq_true.mpr fun a hma => by
+        have := ha a hma
+        simp only [capsMd, Bool.and_eq_true] at this
+        simp only [attrOK, Bool.and_eq_true]
+        exact ⟨this.1.1, this.2⟩
       simp only [capsMd, Bool.and_eq_true] at hn
-      refine ⟨hn, List.all_eq_true.mpr fun a hma => ?_⟩
-      have := ha a hma
-      simp only [capsMd, Bool.and_eq_true] at this
-      simp only [attrOK, Bool.and_eq_true]
-      exact ⟨this.1, this.2⟩
-    · exact noStop_of_heads _ _ (fun hm =>
-        prMd_noDollar _ e (h.eqns c hc e he).1 (heads_sub hm))
-    · exact h.eqBlock c hc v hv
+      simp only [itemOK]
+      split
+      · simp only [subOK, Bool.and_eq_true]; exact ⟨⟨hn.1.2, hn.2⟩, hat⟩
+      · simp only [declOK, Bool.and_eq_true]; exact ⟨hn.1.1, hat⟩
+    · have hmc := (h.math c hc m hm).1
+      cases m with
+      | eq ro e =>
+        have hns : noStop dd ((prMd (symFor D c) e).toList ++ ['\n']) = true :=
+          noStop_of_heads _ _ (fun hm' => prMd_noDollar _ e hmc (heads_sub hm'))
+        have htm : (tmLex (prMd (symFor D c) e).toList).isNone = true := by
+          simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc; exact hmc.2
+        cases ro with
+        | eqn => simp [prMdx, prMx, mItem, itemOK, hns, htm]
+        | init => simp [prMdx, prMx, mItem, itemOK, hns, htm]
+        | cons => simp [prMdx, prMx, mItem, itemOK, hns, htm]
+      | rxn x => exact hmc
+      | plot a => simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc; exact hmc.1
+      | tm t => simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc; exact hmc.1
+    · exact (h.mathBlocks c hc kv hkv).2
     · exact (h.cblocks c hc kv hkv).2
 
 /-- **The Markdown round trip.** Every ESM document in canonical form reads back from its
@@ -301,17 +355,41 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
   simp only [String.toList_ofList]
   rw [decode_front, lexDoc_front _ hok.frontWF _ (valid_canon _ (items_ok _ hok) true), segItems_canon]
   simp only [Option.bind_eq_bind, Option.bind_some]
-  have hR := unitems_items (rawDoc prMd (toDoc capsMd d)) (by
-    intro c hc kv hkv
-    simp only [rawDoc, List.mem_map] at hc
-    obtain ⟨c0, hc0, rfl⟩ := hc
-    exact (hok.cblocks c0 hc0 kv hkv).1)
-  rw [show (rawDoc prMd (toDoc capsMd d)).front = (toDoc capsMd d).front from rfl] at hR
+  have hR := unitems_items (rawDoc prMdx (toDoc capsMd d)) (by
+    refine ⟨fun c hc => ?_, ?_⟩
+    · simp only [rawDoc, List.mem_map] at hc
+      obtain ⟨c0, hc0, rfl⟩ := hc
+      exact ⟨fun kv hkv => (hok.cblocks c0 hc0 kv hkv).1, fun kv hkv => (hok.mathBlocks c0 hc0 kv hkv).1⟩
+    · intro m hm
+      simp only [rawDoc, List.mem_map] at hm
+      obtain ⟨m0, hm0, rfl⟩ := hm
+      obtain ⟨-, -, t, rfl⟩ := hok.rmath m0 hm0
+      exact ⟨_, rfl⟩)
+  rw [show (rawDoc prMdx (toDoc capsMd d)).front = (toDoc capsMd d).front from rfl] at hR
   rw [hR]
   simp only [Option.bind_some]
-  rw [cookDoc_rawDoc prMd ckMd _ (fun c hc e he => by
-    have := hok.eqns c hc e he
-    exact ckMd_prMd _ e this.1 this.2.1 this.2.2)]
+  have hck : ∀ S m, capsMd.item S m = true → mathWF m = true → ckMdx S (prMdx S m) = some [m] := by
+    intro S m hc hw
+    apply ckMx_prMx
+    · intro r e he
+      subst he
+      simp only [mathWF, Bool.and_eq_true] at hw
+      exact ckMd_prMd _ e hc hw.1 hw.2
+    · intro x hx
+      subst hx
+      exact parseLatex_printLatex _ _ hw
+    · intro t ht
+      subst ht
+      simp only [mathWF, tmWF, Bool.and_eq_true] at hw
+      refine ⟨parseLatex_printLatex _ _ hw.1, fun l hl => parseLatex_printLatex _ _ ?_⟩
+      have := hw.2; rw [hl] at this; simpa using this
+  rw [cookDoc_rawDoc prMdx ckMdx (fun S => prMx_heads _ _ S) _
+    (fun m hm => by
+      have := hok.rmath m hm
+      exact hck _ m this.1 this.2.1)
+    (fun c hc m hm => by
+      have := hok.math c hc m hm
+      exact hck _ m this.1 this.2)]
   simp only [Option.bind_some]
   exact ofDoc_toDoc capsMd d hd
 
@@ -320,7 +398,7 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
 /-- What a document says, given its front matter and its constructs. -/
 def parseItemsMd (front : List (String × Json)) (its : List RItem) : Option Json := do
   let R ← unitems front its
-  let D ← cookDoc ckMd R
+  let D ← cookDoc ckMdx R
   ofDoc D
 
 /-- **The parse of a Markdown document depends only on its front matter and its sequence

@@ -13,7 +13,7 @@ namespace Esm.Document.Source
 open Esm.Document Esm.Document.Math
 
 /-- What a container needs of a skeleton. -/
-structure DocOK (caps : Caps) (D : Doc Eqn) : Prop where
+structure DocOK (caps : Caps) (D : Doc MC) : Prop where
   front : ∀ kv ∈ D.front, caps.frontKey kv.1 = true
   frontWF : jwf (.obj D.front) = true
   desc : ∀ s, D.desc = some s → caps.desc s = true
@@ -22,10 +22,10 @@ structure DocOK (caps : Caps) (D : Doc Eqn) : Prop where
   cdesc : ∀ c ∈ D.comps, ∀ s, c.desc = some s → caps.desc s = true
   declName : ∀ c ∈ D.comps, ∀ d ∈ c.decls, caps.declName d.name = true
   attrs : ∀ c ∈ D.comps, ∀ d ∈ c.decls, ∀ a ∈ d.attrs, caps.attr a = true ∧ jwf a.2 = true
-  eqns : ∀ c ∈ D.comps, ∀ e ∈ c.eqns,
-    caps.eqn (symFor D.blocks c) e = true ∧ isE e.lhs = true ∧ isE e.rhs = true
-  eqBlock : ∀ c ∈ D.comps, ∀ v, c.eqBlock = some v → jwf v = true
-  cblocks : ∀ c ∈ D.comps, ∀ kv ∈ c.blocks, kv.1 ≠ "equations" ∧ jwf kv.2 = true
+  math : ∀ c ∈ D.comps, ∀ m ∈ c.math, caps.item (symFor D c) m = true ∧ mathWF m = true
+  mathBlocks : ∀ c ∈ D.comps, ∀ kv ∈ c.mathBlocks, kv.1 ∈ mathFields ∧ jwf kv.2 = true
+  cblocks : ∀ c ∈ D.comps, ∀ kv ∈ c.blocks, kv.1 ∉ mathFields ∧ jwf kv.2 = true
+  rmath : ∀ m ∈ D.math, caps.item (topSym D) m = true ∧ mathWF m = true ∧ ∃ t, m = .tm t
 
 /-! ## Well-formed values -/
 
@@ -70,48 +70,6 @@ theorem descOf_some {caps : Caps} {o : Option Json} {s : String} (h : descOf cap
 
 /-! ## A component -/
 
-theorem eqnOf_isE {j : Json} {e : Eqn} (h : eqnOf j = some e) : isE e.lhs = true ∧ isE e.rhs = true := by
-  unfold eqnOf at h
-  split at h
-  · split at h
-    · cases h; simp_all
-    · cases h
-  · split at h
-    · cases h; simp_all
-    · cases h
-  · cases h
-
-theorem mapM_eqnOf_isE : ∀ {xs : List Json} {es : List Eqn}, xs.mapM eqnOf = some es →
-    ∀ e ∈ es, isE e.lhs = true ∧ isE e.rhs = true
-  | [], es, h, e, he => by simp at h; subst h; cases he
-  | y :: ys, es, h, e, he => by
-    simp only [List.mapM_cons, Option.bind_eq_bind] at h
-    cases hy : eqnOf y with
-    | none => simp [hy] at h
-    | some ey =>
-      cases hys : ys.mapM eqnOf with
-      | none => simp [hy, hys] at h
-      | some eys =>
-        simp [hy, hys] at h
-        subst h
-        rcases List.mem_cons.mp he with rfl | he'
-        · exact eqnOf_isE hy
-        · exact mapM_eqnOf_isE hys e he'
-
-theorem eqnsOf_mem {caps : Caps} {S : Sym} {j : Json} {es : List Eqn} (h : eqnsOf caps S j = some es) :
-    ∀ e ∈ es, caps.eqn S e = true ∧ isE e.lhs = true ∧ isE e.rhs = true := by
-  intro e he
-  unfold eqnsOf at h
-  split at h
-  · split at h
-    · rename_i es' hm
-      split at h
-      · cases h; rename_i hall
-        exact ⟨List.all_eq_true.mp hall e he, mapM_eqnOf_isE hm e he⟩
-      · cases h
-    · cases h
-  · cases h
-
 theorem decls_ok (caps : Caps) (K : Kind) {kvs : List (String × Json)}
     (hv : canonVal (.obj kvs) = true) :
     ∀ d ∈ (compBase caps K "" kvs).decls,
@@ -121,12 +79,38 @@ theorem decls_ok (caps : Caps) (K : Kind) {kvs : List (String × Json)}
   obtain ⟨g, hg, hd⟩ := hd
   obtain ⟨fkvs, hfo, n, w, hm, hp⟩ := mem_splitOpt_fst hd
   have hw : canonVal w = true := canonVal_mem (canonVal_look hv hfo) hm
-  have hpick : ∀ k, g = ("", pickPlain caps k) ∨ True := fun _ => Or.inr trivial
-  clear hpick
+  have hplain : ∀ k, pickPlain caps k n w = some d →
+      caps.declName d.name = true ∧ ∀ a ∈ d.attrs, caps.attr a = true ∧ jwf a.2 = true := by
+    intro k hp
+    simp only [pickPlain] at hp
+    split at hp
+    · cases hp
+    · rename_i hn
+      simp only [Bool.not_eq_true', Bool.not_eq_false] at hn
+      split at hp
+      · rename_i wkvs
+        split at hp
+        · cases hp; rename_i hall
+          refine ⟨hn, ?_⟩
+          intro ⟨x, y⟩ ha
+          exact ⟨List.all_eq_true.mp hall _ ha, jwf_of_canonVal (canonVal_mem hw ha)⟩
+        · cases hp
+      · cases hp
+  have hsub : pickSub caps n w = some d →
+      caps.declName d.name = true ∧ ∀ a ∈ d.attrs, caps.attr a = true ∧ jwf a.2 = true := by
+    intro hp
+    simp only [pickSub] at hp
+    split at hp
+    · split at hp
+      · exact hplain _ hp
+      · cases hp
+    · cases hp
   cases K with
   | model =>
-    simp only [declFields, List.mem_singleton] at hg
-    subst hg
+    simp only [declFields, List.mem_cons, List.not_mem_nil, or_false] at hg
+    rcases hg with rfl | rfl
+    swap
+    · exact hsub hp
     simp only [pickVar] at hp
     split at hp
     · cases hp
@@ -152,39 +136,23 @@ theorem decls_ok (caps : Caps) (K : Kind) {kvs : List (String × Json)}
         · cases hp
       · cases hp
   | rs =>
-    have : ∀ k, pickPlain caps k n w = some d →
-        caps.declName d.name = true ∧ ∀ a ∈ d.attrs, caps.attr a = true ∧ jwf a.2 = true := by
-      intro k hp
-      simp only [pickPlain] at hp
-      split at hp
-      · cases hp
-      · rename_i hn
-        simp only [Bool.not_eq_true', Bool.not_eq_false] at hn
-        split at hp
-        · rename_i wkvs
-          split at hp
-          · cases hp; rename_i hall
-            refine ⟨hn, ?_⟩
-            intro ⟨x, y⟩ ha
-            exact ⟨List.all_eq_true.mp hall _ ha, jwf_of_canonVal (canonVal_mem hw ha)⟩
-          · cases hp
-        · cases hp
     simp only [declFields, List.mem_cons, List.not_mem_nil, or_false] at hg
-    rcases hg with rfl | rfl
-    · exact this _ hp
-    · exact this _ hp
+    rcases hg with rfl | rfl | rfl
+    · exact hplain _ hp
+    · exact hplain _ hp
+    · exact hsub hp
 
 theorem compBase_decls_name (caps : Caps) (K : Kind) (n n' : String) (kvs : List (String × Json)) :
     (compBase caps K n kvs).decls = (compBase caps K n' kvs).decls := rfl
 
-theorem compOf_ok (caps : Caps) (root : List (String × Json)) (K : Kind) (n : String)
-    {kvs : List (String × Json)} (hv : canonVal (.obj kvs) = true) :
-    let c := compOf caps root K n kvs
+theorem compOf_ok (caps : Caps) (root : List (String × Json)) (rt : List (String × List String))
+    (K : Kind) (n : String) {kvs : List (String × Json)} (hv : canonVal (.obj kvs) = true) :
+    let c := compOf caps root rt K n kvs
     (∀ s, c.desc = some s → caps.desc s = true) ∧
     (∀ d ∈ c.decls, caps.declName d.name = true ∧ ∀ a ∈ d.attrs, caps.attr a = true ∧ jwf a.2 = true) ∧
-    (∀ e ∈ c.eqns, caps.eqn (symFor root c) e = true ∧ isE e.lhs = true ∧ isE e.rhs = true) ∧
-    (∀ v, c.eqBlock = some v → jwf v = true) ∧
-    (∀ kv ∈ c.blocks, kv.1 ≠ "equations" ∧ jwf kv.2 = true) := by
+    (∀ m ∈ c.math, caps.item (compSym root rt K caps n kvs) m = true ∧ mathWF m = true) ∧
+    (∀ kv ∈ c.mathBlocks, kv.1 ∈ mathFields ∧ jwf kv.2 = true) ∧
+    (∀ kv ∈ c.blocks, kv.1 ∉ mathFields ∧ jwf kv.2 = true) := by
   intro c
   have hl := canonVal_obj_sorted hv
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
@@ -193,29 +161,28 @@ theorem compOf_ok (caps : Caps) (root : List (String × Json)) (K : Kind) (n : S
     exact (descOf_some hs).1
   · rw [compOf_decls, compBase_decls_name caps K n ""]
     exact decls_ok caps K hv
-  · intro e he
-    unfold c compOf at he ⊢
-    dsimp only at he ⊢
-    split at he
-    · simp [compBase] at he
-    · rename_i ev hev
-      split at he
-      · rename_i es hes
-        simp only at he ⊢
-        exact eqnsOf_mem hes e he
-
-      · simp [compBase] at he
-  · intro v hv'
-    unfold c compOf at hv'
-    dsimp only at hv'
-    split at hv'
-    · simp [compBase] at hv'
-    · rename_i ev hev
-      split at hv'
-      · simp [compBase] at hv'
-      · simp only [Option.some.injEq] at hv'
-        subst hv'
-        exact jwf_of_canonVal (canonVal_look hv hev)
+  · intro m hm
+    simp only [c, compOf, List.mem_flatMap, List.mem_map] at hm ⊢
+    obtain ⟨p, ⟨f, hf, rfl⟩, hm⟩ := hm
+    unfold mathPart at hm
+    split at hm
+    · cases hm
+    · split at hm
+      · rename_i ms hms
+        have := (mathOf_some hms).2.2 m hm
+        exact ⟨this.2.2, this.2.1⟩
+      · cases hm
+  · intro kv hkv
+    simp only [c, compOf, List.mem_filterMap, List.mem_map] at hkv
+    obtain ⟨p, ⟨f, hf, rfl⟩, hkv⟩ := hkv
+    unfold mathPart at hkv
+    split at hkv
+    · cases hkv
+    · rename_i v hlk
+      split at hkv
+      · cases hkv
+      · cases hkv
+        exact ⟨hf, jwf_of_canonVal (canonVal_look hv hlk)⟩
   · intro kv hkv
     rw [compOf_blocks] at hkv
     simp only [compBase, List.mem_filterMap] at hkv
@@ -225,7 +192,7 @@ theorem compOf_ok (caps : Caps) (root : List (String × Json)) (K : Kind) (n : S
     split at hg
     · split at hg
       · cases hg
-      · cases hg; rename_i hk; exact ⟨by simp_all, jwf_of_canonVal hw⟩
+      · cases hg; rename_i hk; exact ⟨by simp_all [mathFields], jwf_of_canonVal hw⟩
     · split at hg
       · cases hg
       · rename_i hk1 hk2
@@ -254,10 +221,11 @@ theorem pickComp_some {caps : Caps} {n : String} {w : Json} {p : String × List 
     · cases h
   · cases h
 
-theorem mem_comps {caps : Caps} {kvs : List (String × Json)} {c : Comp Eqn}
+theorem mem_comps {caps : Caps} {kvs : List (String × Json)} {c : Comp MC}
     (h : c ∈ (toDoc caps (.obj kvs)).comps) :
     ∃ K f fkvs n ckvs, look f kvs = some (.obj fkvs) ∧ (n, .obj ckvs) ∈ fkvs ∧
-      caps.compName n = true ∧ c = compOf caps (rootBlocks caps kvs) K n ckvs := by
+      caps.compName n = true ∧ c = compOf caps (rootBlocks caps (topMath caps kvs).isSome kvs)
+        (templatesOf (look "expression_templates" kvs)) K n ckvs := by
   simp only [toDoc, List.mem_append, List.mem_map] at h
   rcases h with ⟨p, hp, rfl⟩ | ⟨p, hp, rfl⟩
   · obtain ⟨fkvs, hf, n, w, hm, hpk⟩ := mem_splitOpt_fst hp
@@ -266,6 +234,50 @@ theorem mem_comps {caps : Caps} {kvs : List (String × Json)} {c : Comp Eqn}
   · obtain ⟨fkvs, hf, n, w, hm, hpk⟩ := mem_splitOpt_fst hp
     obtain ⟨hn, rfl, hp1⟩ := pickComp_some hpk
     exact ⟨.rs, "reaction_systems", fkvs, n, p.2, hf, hm, hn, by rw [hp1]⟩
+
+/-- The top-level blocks keep `index_sets` as it is. -/
+theorem look_index_sets (caps : Caps) (tn : Bool) {kvs : List (String × Json)} (hl : keysSorted kvs = true) :
+    look "index_sets" (rootBlocks caps tn kvs) = look "index_sets" kvs := by
+  have h := rootBlocks_at caps tn hl "index_sets"
+  cases hk : look "index_sets" kvs with
+  | none => rw [hk] at h; exact look_of_at_nil h
+  | some v =>
+    rw [hk] at h
+    simp [rootBlock] at h
+    exact look_of_at_single h
+
+/-- The document's templates, read from the skeleton, are those of the `expression_templates`
+value. -/
+theorem rootTs_toDoc (caps : Caps) {kvs : List (String × Json)} (hl : keysSorted kvs = true) :
+    rootTs (toDoc caps (.obj kvs)).blocks (toDoc caps (.obj kvs)).math =
+      templatesOf (look "expression_templates" kvs) := by
+  simp only [toDoc, rootTs]
+  have h := rootBlocks_at caps (topMath caps kvs).isSome hl "expression_templates"
+  cases htm : topMath caps kvs with
+  | none =>
+    simp only [htm, Option.isSome_none, Option.getD_none, List.filterMap_nil, List.append_nil] at h ⊢
+    cases hk : look "expression_templates" kvs with
+    | none => rw [hk] at h; rw [look_of_at_nil h]
+    | some v =>
+      rw [hk] at h
+      simp [rootBlock] at h
+      rw [look_of_at_single h]
+  | some ms =>
+    simp only [htm, Option.isSome_some, Option.getD_some] at h ⊢
+    unfold topMath at htm
+    cases hk : look "expression_templates" kvs with
+    | none => rw [hk] at htm; cases htm
+    | some v =>
+      rw [hk] at htm h
+      simp [rootBlock] at h
+      rw [look_of_at_nil h, templatesOf_mathOf htm]
+      simp [templatesOf]
+
+theorem topSym_toDoc (caps : Caps) {kvs : List (String × Json)} (hl : keysSorted kvs = true) :
+    topSym (toDoc caps (.obj kvs)) = topSymOf kvs := by
+  unfold topSym topSymOf
+  rw [rootTs_toDoc caps hl]
+  simp only [toDoc, look_index_sets caps _ hl]
 
 /-- **The skeleton of a canonical document is spellable**, when the container can spell
 the front-matter key `esm`. -/
@@ -277,11 +289,25 @@ theorem toDoc_ok (caps : Caps) (hesm : caps.frontKey "esm" = true) (d : Json)
   have hl := canonVal_obj_sorted hv
   have hcomp : ∀ c ∈ (toDoc caps (.obj kvs)).comps, caps.compName c.name = true ∧
       ∃ ckvs, canonVal (.obj ckvs) = true ∧
-        c = compOf caps (toDoc caps (.obj kvs)).blocks (c.kind) c.name ckvs := by
+        c = compOf caps (toDoc caps (.obj kvs)).blocks (templatesOf (look "expression_templates" kvs))
+          (c.kind) c.name ckvs := by
     intro c hc
     obtain ⟨K, f, fkvs, n, ckvs, hf, hm, hn, rfl⟩ := mem_comps hc
     refine ⟨by rw [compOf_name]; exact hn, ckvs, canonVal_mem (canonVal_look hv hf) hm, ?_⟩
     rw [compOf_kind, compOf_name]; rfl
+  have hrt := rootTs_toDoc caps hl
+  have hsym : ∀ c ∈ (toDoc caps (.obj kvs)).comps, ∃ ckvs, canonVal (.obj ckvs) = true ∧
+      c = compOf caps (toDoc caps (.obj kvs)).blocks (templatesOf (look "expression_templates" kvs))
+          (c.kind) c.name ckvs ∧
+      symFor (toDoc caps (.obj kvs)) c = compSym (toDoc caps (.obj kvs)).blocks
+        (templatesOf (look "expression_templates" kvs)) c.kind caps c.name ckvs := by
+    intro c hc
+    obtain ⟨-, ckvs, hck, he⟩ := hcomp c hc
+    refine ⟨ckvs, hck, he, ?_⟩
+    unfold symFor
+    rw [hrt]
+    conv => lhs; rw [he]
+    rw [symWith_compOf]
   -- the front matter
   have hfront : ∀ kv ∈ (toDoc caps (.obj kvs)).front,
       (kv.1 = "esm" ∧ kv ∈ kvs) ∨ ∃ mkvs, look "metadata" kvs = some (.obj mkvs) ∧ kv ∈ mkvs ∧
@@ -307,7 +333,7 @@ theorem toDoc_ok (caps : Caps) (hesm : caps.frontKey "esm" = true) (d : Json)
           have hin := (List.mem_filter.mp h).1
           exact ⟨mkvs, rfl, hin, List.all_eq_true.mp hall kv hin,
             look_none_mem hnoesm kv hin⟩
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro kv hkv
     rcases hfront kv hkv with ⟨h, -⟩ | ⟨_, _, _, h, _⟩
     · rw [h]; exact hesm
@@ -390,25 +416,47 @@ theorem toDoc_ok (caps : Caps) (hesm : caps.frontKey "esm" = true) (d : Json)
             · cases hr
               exact jwf_obj_sub (jwf_of_canonVal hw) List.filter_sublist
           · cases hr; exact jwf_of_canonVal hw
-        · cases hg; exact jwf_of_canonVal hw
+        · split at hg
+          · cases hg
+          · cases hg; exact jwf_of_canonVal hw
   · intro c hc; exact (hcomp c hc).1
   · intro c hc
     obtain ⟨-, ckvs, hck, he⟩ := hcomp c hc
-    rw [he]; exact (compOf_ok caps _ _ _ hck).1
+    rw [he]; exact (compOf_ok caps _ _ _ _ hck).1
   · intro c hc
     obtain ⟨-, ckvs, hck, he⟩ := hcomp c hc
-    rw [he]; intro d hd; exact ((compOf_ok caps _ _ _ hck).2.1 d hd).1
+    rw [he]; intro d hd; exact ((compOf_ok caps _ _ _ _ hck).2.1 d hd).1
   · intro c hc
     obtain ⟨-, ckvs, hck, he⟩ := hcomp c hc
-    rw [he]; intro d hd; exact ((compOf_ok caps _ _ _ hck).2.1 d hd).2
+    rw [he]; intro d hd; exact ((compOf_ok caps _ _ _ _ hck).2.1 d hd).2
+  · intro c hc
+    obtain ⟨ckvs, hck, he, hs⟩ := hsym c hc
+    rw [hs]; rw [he]; exact (compOf_ok caps _ _ _ _ hck).2.2.1
   · intro c hc
     obtain ⟨-, ckvs, hck, he⟩ := hcomp c hc
-    rw [he]; exact (compOf_ok caps _ _ _ hck).2.2.1
+    rw [he]; exact (compOf_ok caps _ _ _ _ hck).2.2.2.1
   · intro c hc
     obtain ⟨-, ckvs, hck, he⟩ := hcomp c hc
-    rw [he]; exact (compOf_ok caps _ _ _ hck).2.2.2.1
-  · intro c hc
-    obtain ⟨-, ckvs, hck, he⟩ := hcomp c hc
-    rw [he]; exact (compOf_ok caps _ _ _ hck).2.2.2.2
+    rw [he]; exact (compOf_ok caps _ _ _ _ hck).2.2.2.2
+  · intro m hm
+    rw [topSym_toDoc caps hl]
+    simp only [toDoc] at hm
+    cases htm : topMath caps kvs with
+    | none => rw [htm] at hm; cases hm
+    | some ms =>
+      rw [htm] at hm
+      unfold topMath at htm
+      cases hlk : look "expression_templates" kvs with
+      | none => rw [hlk] at htm; cases htm
+      | some v =>
+        rw [hlk] at htm
+        obtain ⟨-, -, hall⟩ := mathOf_some htm
+        obtain ⟨hf, hw, hc⟩ := hall m hm
+        refine ⟨hc, hw, ?_⟩
+        cases m with
+        | tm t => exact ⟨t, rfl⟩
+        | eq r e => cases r <;> simp [Mx.field, Role.field] at hf
+        | rxn _ => simp [Mx.field] at hf
+        | plot _ => simp [Mx.field] at hf
 
 end Esm.Document.Source

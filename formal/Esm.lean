@@ -76,6 +76,7 @@ import Esm.Document.Math.RoundTripTypst
 import Esm.Document.Math.Variants
 import Esm.Document.Math.HandWritten
 import Esm.Document.Source.Keys
+import Esm.Document.Source.Reaction
 import Esm.Document.Source.Skeleton
 import Esm.Document.Source.SkeletonRT
 import Esm.Document.Source.Items

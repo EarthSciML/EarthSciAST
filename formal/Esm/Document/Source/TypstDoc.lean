@@ -36,6 +36,13 @@ def ckT (S : Sym) (raw : String) : Option (List Eqn) :=
   | '/' :: '/' :: ' ' :: r => oneT S (some (String.ofList (splitLine r).1)) (splitLine r).2
   | cs => oneT S none cs
 
+/-- A math entry's text: an equation's Typst math (`prT`), or a reaction with its rate
+as Typst math. -/
+def prTx : Sym → MC → MR := prMx prT (fun S j => printTypst S j)
+
+/-- Read a math entry's text. -/
+def ckTx : Sym → MR → Option (List MC) := ckMx ckT (fun S raw => parseTypst S raw)
+
 /-! ## What Typst spells natively -/
 
 /-- The Typst container's predicates: front-matter keys and attributes are named
@@ -48,12 +55,16 @@ def capsT : Caps where
   compName _ := true
   declName n := nameOK n && !(nameTyp n).contains '$'
   attr a := bareKey TypstDict.reserved a.1
-  eqn S e := Md.commentOK e.comment && !(typOf S e).contains '$' && !pre ['/', '/'] (typOf S e)
+  eqn S e := Md.commentOK e.comment && !(typOf S e).contains '$' && !pre ['/', '/'] (typOf S e) &&
+    (tmLexT (prT S e).toList).isNone
+  rxn S x := rxnOK { x with rate := printTypst S x.rate }
+  plot a := a.all argOK
+  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printTypst S j), body := printTypst S t.body })
 
 theorem ckT_prT (S : Sym) (e : Eqn) (hc : capsT.eqn S e = true) (hl : isE e.lhs = true)
     (hr : isE e.rhs = true) : ckT S (prT S e) = some [e] := by
   simp only [capsT, Bool.and_eq_true, Bool.not_eq_true'] at hc
-  obtain ⟨⟨hcm, hd⟩, hp⟩ := hc
+  obtain ⟨⟨⟨hcm, hd⟩, hp⟩, -⟩ := hc
   have hparse : (parseTypst S (String.ofList (typOf S e))).bind eqSides = some (e.lhs, e.rhs) := by
     simp only [typOf, String.ofList_toList, parseTypst_printTypst S _ (isE_eqExpr e hl hr),
       Option.bind_some, eqSides_eqExpr]
@@ -86,7 +97,7 @@ def canonSegs (its : List RItem) : List Seg :=
 /-- **Print a document as Typst.** -/
 def printTyp (d : Json) : String :=
   let D := toDoc capsT d
-  String.ofList (headerT D.front ++ render (canonSegs (items (rawDoc prT D))))
+  String.ofList (headerT D.front ++ render (canonSegs (items (rawDoc prTx D))))
 
 /-- Read the header and the constructs. -/
 def lexDoc (s : List Char) : Option (List (String × Json) × List RItem) :=
@@ -104,7 +115,7 @@ endings as LF (`decodeText`). -/
 def parseTyp (s : String) : Option Json := do
   let p ← lexDoc (decodeText s.toList)
   let R ← unitems p.1 p.2
-  let D ← cookDoc ckT R
+  let D ← cookDoc ckTx R
   ofDoc D
 
 theorem segItems_append (a b : List Seg) : segItems (a ++ b) = segItems a ++ segItems b := by
@@ -118,11 +129,14 @@ theorem segItems_canon (its : List RItem) : segItems (canonSegs its) = its := by
   | cons it its ih =>
     simp only [canonSegs, List.flatMap_cons] at ih ⊢
     rw [segItems_append, ih]
-    cases it <;> simp [segItems, isBlock]
+    cases it with
+    | decl d => by_cases hk : d.kind = .sub <;> simp [segItems, isBlock, hk]
+    | _ => simp [segItems, isBlock]
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
   refine ⟨?_, ?_, trivial⟩
-  · simp [blockOpen, oDesc, oBlock, oModel, oRs, oEq, pre]
+  · simp [blockOpen, oDesc, oBlock, oModel, oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, oSub_l,
+      oTmpl_l, oRule_l, pre]
   · simp [declOpen, oVar, oParam, oSpecies, pre]
 
 theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true) →
@@ -133,11 +147,21 @@ theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true)
     have hit := h it List.mem_cons_self
     simp only [canonSegs, List.flatMap_cons] at ih ⊢
     cases it with
-    | decl d => exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+    | decl d =>
+      obtain ⟨k, n, as⟩ := d
+      cases k
+      · exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+      · exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+      · exact ⟨inert_nl _ _, hit, fun h => by simp [isBlock] at h, inert_nl _ _, ih _⟩
+      · exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | desc _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | block _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | comp _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | eqn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | eqx _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | rxn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | plot _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | tm _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
 
 theorem argsFirstT_len (as : List (String × Json)) : as.length ≤ (argsFirstT as).length := by
   cases as with
@@ -188,7 +212,7 @@ theorem lexDoc_front (front : List (String × Json)) (hf : ∀ a ∈ front, argO
 theorem typ_noDollar (S : Sym) (e : Eqn) (hc : capsT.eqn S e = true) :
     (prT S e).toList.contains '$' = false := by
   simp only [capsT, Bool.and_eq_true, Bool.not_eq_true'] at hc
-  obtain ⟨⟨hcm, hd⟩, _⟩ := hc
+  obtain ⟨⟨⟨hcm, hd⟩, _⟩, _⟩ := hc
   unfold prT
   rw [String.toList_ofList]
   rw [Bool.eq_false_iff]
@@ -212,31 +236,47 @@ theorem typ_noDollar (S : Sym) (e : Eqn) (hc : capsT.eqn S e = true) :
   · exact Md.contains_false hd hm
 
 /-- Every construct of the printed skeleton satisfies `itemOK`. -/
-theorem items_ok (D : Doc Eqn) (h : DocOK capsT D) :
-    ∀ it ∈ items (rawDoc prT D), itemOK it = true := by
+theorem items_ok (D : Doc MC) (h : DocOK capsT D) :
+    ∀ it ∈ items (rawDoc prTx D), itemOK it = true := by
   intro it hit
   simp only [items, rawDoc, List.mem_append, List.mem_map, List.mem_flatMap, Option.mem_toList,
     Option.map_eq_some_iff] at hit
-  rcases hit with ((⟨s, hs, rfl⟩) | ⟨kv, hkv, rfl⟩) | ⟨c', ⟨c, hc, rfl⟩, hit⟩
+  rcases hit with (((⟨s, hs, rfl⟩) | ⟨kv, hkv, rfl⟩) | ⟨m', ⟨m, hm, rfl⟩, rfl⟩) | ⟨c', ⟨c, hc, rfl⟩, hit⟩
   · rfl
   · exact h.blocks kv hkv
-  · simp only [compItems, Comp.mapEqns, List.mem_cons, List.mem_append, List.mem_map,
+  · obtain ⟨hmc, -, t, rfl⟩ := h.rmath m hm
+    exact hmc
+  · simp only [compItems, Comp.mapMath, List.mem_cons, List.mem_append, List.mem_map,
       Option.mem_toList, Option.map_eq_some_iff] at hit
-    rcases hit with rfl | (((((⟨s, hs, rfl⟩) | ⟨d, hd, rfl⟩) | ⟨r, ⟨e, he, rfl⟩, rfl⟩) |
-      ⟨v, hv, rfl⟩) | ⟨kv, hkv, rfl⟩)
+    rcases hit with rfl | (((((⟨s, hs, rfl⟩) | ⟨d, hd, rfl⟩) | ⟨r, ⟨m, hm, rfl⟩, rfl⟩) |
+      ⟨kv, hkv, rfl⟩) | ⟨kv, hkv, rfl⟩)
     · rfl
     · rfl
     · have hn := h.declName c hc d hd
       have ha := h.attrs c hc d hd
-      simp only [itemOK, declOK, Bool.and_eq_true]
+      have hat : d.attrs.all argOK = true := List.all_eq_true.mpr fun a hma => by
+        have := ha a hma
+        simp only [argOK, Bool.and_eq_true]
+        exact ⟨this.1, this.2⟩
       simp only [capsT, Bool.and_eq_true] at hn
-      refine ⟨hn, List.all_eq_true.mpr fun a hma => ?_⟩
-      have := ha a hma
-      simp only [argOK, Bool.and_eq_true]
-      exact ⟨this.1, this.2⟩
-    · simp only [itemOK, Bool.not_eq_true']
-      exact typ_noDollar _ e (h.eqns c hc e he).1
-    · exact h.eqBlock c hc v hv
+      simp only [itemOK]
+      split
+      · exact hat
+      · simp only [declOK, Bool.and_eq_true]; exact ⟨hn, hat⟩
+    · have hmc := (h.math c hc m hm).1
+      cases m with
+      | eq ro e =>
+        have hns := typ_noDollar _ e hmc
+        have htm : (tmLexT (prT (symFor D c) e).toList).isNone = true := by
+          simp only [Caps.item, capsT, Bool.and_eq_true] at hmc; exact hmc.2
+        cases ro with
+        | eqn => simp only [prTx, prMx, mItem, itemOK, hns, Bool.not_false, htm, Bool.and_self]
+        | init => simp only [prTx, prMx, mItem, itemOK, hns, Bool.not_false, Bool.and_true]; decide
+        | cons => simp only [prTx, prMx, mItem, itemOK, hns, Bool.not_false, Bool.and_true]; decide
+      | rxn x => exact hmc
+      | plot a => exact hmc
+      | tm t => exact hmc
+    · exact (h.mathBlocks c hc kv hkv).2
     · exact (h.cblocks c hc kv hkv).2
 
 /-- **The Typst round trip.** Every ESM document in canonical form reads back from its
@@ -253,17 +293,41 @@ theorem parseTyp_printTyp (d : Json) (hd : canonDoc d = true) : parseTyp (printT
   simp only [String.toList_ofList]
   rw [decode_headerT, lexDoc_front _ hfront _ (valid_canon _ (items_ok _ hok) true), segItems_canon]
   simp only [Option.bind_eq_bind, Option.bind_some]
-  have hR := unitems_items (rawDoc prT (toDoc capsT d)) (by
-    intro c hc kv hkv
-    simp only [rawDoc, List.mem_map] at hc
-    obtain ⟨c0, hc0, rfl⟩ := hc
-    exact (hok.cblocks c0 hc0 kv hkv).1)
-  rw [show (rawDoc prT (toDoc capsT d)).front = (toDoc capsT d).front from rfl] at hR
+  have hR := unitems_items (rawDoc prTx (toDoc capsT d)) (by
+    refine ⟨fun c hc => ?_, ?_⟩
+    · simp only [rawDoc, List.mem_map] at hc
+      obtain ⟨c0, hc0, rfl⟩ := hc
+      exact ⟨fun kv hkv => (hok.cblocks c0 hc0 kv hkv).1, fun kv hkv => (hok.mathBlocks c0 hc0 kv hkv).1⟩
+    · intro m hm
+      simp only [rawDoc, List.mem_map] at hm
+      obtain ⟨m0, hm0, rfl⟩ := hm
+      obtain ⟨-, -, t, rfl⟩ := hok.rmath m0 hm0
+      exact ⟨_, rfl⟩)
+  rw [show (rawDoc prTx (toDoc capsT d)).front = (toDoc capsT d).front from rfl] at hR
   rw [hR]
   simp only [Option.bind_some]
-  rw [cookDoc_rawDoc prT ckT _ (fun c hc e he => by
-    have := hok.eqns c hc e he
-    exact ckT_prT _ e this.1 this.2.1 this.2.2)]
+  have hck : ∀ S m, capsT.item S m = true → mathWF m = true → ckTx S (prTx S m) = some [m] := by
+    intro S m hc hw
+    apply ckMx_prMx
+    · intro r e he
+      subst he
+      simp only [mathWF, Bool.and_eq_true] at hw
+      exact ckT_prT _ e hc hw.1 hw.2
+    · intro x hx
+      subst hx
+      exact parseTypst_printTypst _ _ hw
+    · intro t ht
+      subst ht
+      simp only [mathWF, tmWF, Bool.and_eq_true] at hw
+      refine ⟨parseTypst_printTypst _ _ hw.1, fun l hl => parseTypst_printTypst _ _ ?_⟩
+      have := hw.2; rw [hl] at this; simpa using this
+  rw [cookDoc_rawDoc prTx ckTx (fun S => prMx_heads _ _ S) _
+    (fun m hm => by
+      have := hok.rmath m hm
+      exact hck _ m this.1 this.2.1)
+    (fun c hc m hm => by
+      have := hok.math c hc m hm
+      exact hck _ m this.1 this.2)]
   simp only [Option.bind_some]
   exact ofDoc_toDoc capsT d hd
 
@@ -271,7 +335,7 @@ theorem parseTyp_printTyp (d : Json) (hd : canonDoc d = true) : parseTyp (printT
 
 def parseItemsT (front : List (String × Json)) (its : List RItem) : Option Json := do
   let R ← unitems front its
-  let D ← cookDoc ckT R
+  let D ← cookDoc ckTx R
   ofDoc D
 
 /-- **The parse of a Typst document depends only on its front matter and its sequence of

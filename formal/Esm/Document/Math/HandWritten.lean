@@ -7,7 +7,8 @@ import Esm.Document.Math.RoundTripTypst
 The round-trip theorems cover what the printer writes; these checks cover spellings a
 person writes and the printer never does: binary minus without spaces, scientific
 literals spaced any way, `\,` between names, the italic-d derivative against declared
-names, and field keys with LaTeX-special characters. Each is evaluated by the kernel.
+names, field keys with LaTeX-special characters, and JSON strings. Each is evaluated by
+the kernel.
 -/
 
 namespace Esm.Document.Math.HandWritten
@@ -120,5 +121,30 @@ def oddKey : Json := .obj [("a%b$", int 1), ("args", .arr [x]), ("op", .str "foo
 example : ((printLatex S oddKey).toList.contains '%' || (printLatex S oddKey).toList.contains '$') = false := by
   decide +kernel
 example : reads (parseLatex S (printLatex S oddKey)) oddKey = true := by decide +kernel
+
+/-! ## JSON strings render in KaTeX's text mode -/
+
+/-- An open operator with a string field holding braces. -/
+def strOp : Json := mkNode "myop" [k] [("s", .str "a{b}")]
+
+/-- The string prints inside `\text{"…"}` with the braces escaped, not as `\u007B`, which
+KaTeX refuses in math mode ("accent \u works only in text mode"). -/
+example : printLatex S strOp = "\\operatorname{myop}(k;\\mathrm{s} = \\text{\"a\\{b\\}\"})" := by
+  decide +kernel
+example : reads (parseLatex S (printLatex S strOp)) strOp = true := by decide +kernel
+
+/-- Every other awkward character is `{\char NNN}`: `$`, `%`, `~`, `\`, a line break, a
+non-ASCII letter, and (seven digits) a character above 999. No `$` or line break reaches
+the LaTeX, and it reads back. -/
+def oddStr : Json := mkNode "myop" [k] [("s", .str "x$%é\n\"_~\\ 中")]
+
+example : printLatex S oddStr = "\\operatorname{myop}(k;\\mathrm{s} = \\text{\"x{\\char036}{\\char037}{\\char233}{\\char010}\"\\_{\\char126}{\\char092} {\\char0020013}\"})" := by
+  decide +kernel
+example : reads (parseLatex S (printLatex S oddStr)) oddStr = true := by decide +kernel
+
+/-- The earlier spelling, the string double-quoted with JSON escapes in math mode, still
+reads. -/
+example : reads (parseLatex S "\\operatorname{myop}(k; \\mathrm{s} = \"a\\u007Bb\\u007D\")") strOp = true := by
+  decide +kernel
 
 end Esm.Document.Math.HandWritten
