@@ -2,22 +2,106 @@
 //! gathers every array operand of the lifted right-hand side, whatever the
 //! order of the equations (issue #714).
 //!
-//! The document is the issue's `col_template_obs.esm` with its imports
-//! inlined: a 0-D reaction system `Mech` whose rate `Rates.k1` is lifted over
-//! `lev` by a pointwise `variable_map` of the column temperature, composed
-//! with a column model `Col` whose tendency is a component-local template and
-//! whose observed `dA ~ D(A)` comes before the lifted rate's definition. The
-//! lifted `dA` read `Rates.k1` by bare name, and the build refused it
+//! The documents are the issue's `col_template_obs.esm` and the files it
+//! imports, written to a temporary directory at run time: a 0-D reaction
+//! system `Mech` whose rate `Rates.k1` is lifted over `lev` by a pointwise
+//! `variable_map` of the column temperature, composed with a column model
+//! `Col` whose tendency is a component-local template and whose observed
+//! `dA ~ D(A)` comes before the lifted rate's definition. The lifted `dA`
+//! read `Rates.k1` by bare name, and the build refused it
 //! (`faq_bare_array_operand`).
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
-    Compiler, ProblemOptions, SolveOptions, esm_problem, load_string, run_inline_tests,
+    Compiler, ProblemOptions, SolveOptions, esm_problem, load_path, run_inline_tests_with_base_dir,
 };
+use std::path::{Path, PathBuf};
 
-fn column_document() -> String {
-    let lev = |v: [f64; 3]| serde_json::json!(v);
+/// `rates.esm`: the rate model the mechanism reads.
+fn rates_document() -> serde_json::Value {
     let scalar = |units: &str, default: f64| serde_json::json!({"type": "parameter", "units": units, "default": default});
+    serde_json::json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "Rates", "authors": ["probe"]},
+        "models": {"Rates": {
+            "variables": {
+                "T": scalar("K", 300.0),
+                "c_b": scalar("1", 0.0),
+                "k1": {"type": "unknown", "units": "1/s"},
+                "k2": {"type": "unknown", "units": "1/s"}
+            },
+            "equations": [
+                {"lhs": "k1", "rhs": {"op": "*", "args": [0.001,
+                    {"op": "/", "args": ["T", 300.0]}]}},
+                {"lhs": "k2", "rhs": {"op": "*", "args": [0.01, "c_b"]}}
+            ]
+        }}
+    })
+}
+
+/// `chem.esm`: the 0-D mechanism, and a model that reads its tendencies.
+fn chem_document() -> serde_json::Value {
+    serde_json::json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "Chem", "authors": ["probe"]},
+        "models": {
+            "Rates": {"ref": "./rates.esm"},
+            "Tend": {
+                "variables": {
+                    "dA_dt": {"type": "unknown", "units": "1/s"},
+                    "dB_dt": {"type": "unknown", "units": "1/s"}
+                },
+                "equations": [
+                    {"lhs": "dA_dt", "rhs": {"op": "D", "args": ["Mech.A"], "wrt": "t"}},
+                    {"lhs": "dB_dt", "rhs": {"op": "D", "args": ["Mech.B"], "wrt": "t"}}
+                ]
+            }
+        },
+        "reaction_systems": {"Mech": {
+            "species": {
+                "A": {"units": "1", "default": 1.0},
+                "B": {"units": "1", "default": 0.5}
+            },
+            "parameters": {},
+            "reactions": [
+                {"id": "R1", "substrates": [{"species": "A", "stoichiometry": 1}],
+                 "products": [{"species": "B", "stoichiometry": 1}], "rate": "Rates.k1"},
+                {"id": "R2", "substrates": [{"species": "B", "stoichiometry": 1}],
+                 "products": null, "rate": "Rates.k2"}
+            ]
+        }},
+        "coupling": [{"type": "coupling_import", "ref": "./looplib.esm",
+                      "bind": {"Mech": "Mech", "Rates": "Rates"}}]
+    })
+}
+
+/// `looplib.esm`: the coupling library that feeds `Mech.B` to the rates.
+fn looplib_document() -> serde_json::Value {
+    serde_json::json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "LoopLib", "description": "probe"},
+        "coupling_roles": {"Mech": {"description": "m"}, "Rates": {"description": "r"}},
+        "coupling": [{"type": "variable_map", "from": "Mech.B", "to": "Rates.c_b",
+                      "transform": "param_to_var"}]
+    })
+}
+
+/// The four documents in a fresh directory; the path of the column document.
+fn write_documents(dir: &Path) -> PathBuf {
+    for (name, doc) in [
+        ("rates.esm", rates_document()),
+        ("chem.esm", chem_document()),
+        ("looplib.esm", looplib_document()),
+        ("col_template_obs.esm", column_document()),
+    ] {
+        std::fs::write(dir.join(name), doc.to_string()).expect("write");
+    }
+    dir.join("col_template_obs.esm")
+}
+
+/// `col_template_obs.esm`: the column, composed with the mechanism.
+fn column_document() -> serde_json::Value {
+    let lev = |v: [f64; 3]| serde_json::json!(v);
     let column = |units: &str, ty: &str, default: Option<f64>| {
         let mut v = serde_json::json!({"type": ty, "units": units, "shape": ["lev"]});
         if let Some(d) = default {
@@ -34,19 +118,8 @@ fn column_document() -> String {
         "metadata": {"name": "Col", "authors": ["probe"]},
         "index_sets": {"lev": {"kind": "interval", "size": 3}},
         "models": {
-            "Rates": {
-                "variables": {
-                    "T": scalar("K", 300.0),
-                    "c_b": scalar("1", 0.0),
-                    "k1": {"type": "unknown", "units": "1/s"},
-                    "k2": {"type": "unknown", "units": "1/s"}
-                },
-                "equations": [
-                    {"lhs": "k1", "rhs": {"op": "*", "args": [0.001,
-                        {"op": "/", "args": ["T", 300.0]}]}},
-                    {"lhs": "k2", "rhs": {"op": "*", "args": [0.01, "c_b"]}}
-                ]
-            },
+            "Rates": {"ref": "./rates.esm"},
+            "Tend": {"ref": "./chem.esm", "model": "Tend"},
             "Col": {
                 "variables": {
                     "T": column("K", "parameter", Some(300.0)),
@@ -87,37 +160,25 @@ fn column_document() -> String {
                 }]
             }
         },
-        "reaction_systems": {
-            "Mech": {
-                "species": {
-                    "A": {"units": "1", "default": 1.0},
-                    "B": {"units": "1", "default": 0.5}
-                },
-                "parameters": {},
-                "reactions": [
-                    {"id": "R1", "substrates": [{"species": "A", "stoichiometry": 1}],
-                     "products": [{"species": "B", "stoichiometry": 1}], "rate": "Rates.k1"},
-                    {"id": "R2", "substrates": [{"species": "B", "stoichiometry": 1}],
-                     "products": null, "rate": "Rates.k2"}
-                ]
-            }
-        },
+        "reaction_systems": {"Mech": {"ref": "./chem.esm", "reaction_system": "Mech"}},
         "coupling": [
-            {"type": "variable_map", "from": "Mech.B", "to": "Rates.c_b",
-             "transform": "param_to_var"},
+            {"type": "coupling_import", "ref": "./looplib.esm",
+             "bind": {"Mech": "Mech", "Rates": "Rates"}},
             {"type": "variable_map", "from": "Col.T", "to": "Rates.T",
              "transform": "param_to_var", "lifting": "pointwise"},
             {"type": "operator_compose", "systems": ["Col", "Mech"],
              "translate": {"Col.A": "Mech.A", "Col.B": "Mech.B"}}
         ]
     })
-    .to_string()
 }
 
 #[test]
 fn a_lifted_rate_defined_after_its_reader_is_gathered() {
-    let file = load_string(&column_document()).expect("the document loads");
-    let results = run_inline_tests(&file, None, &SolveOptions::default());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = write_documents(dir.path());
+    let file = load_path(&path).expect("the document loads");
+    let results =
+        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
     assert_eq!(results.len(), 3, "{results:?}");
     for r in &results {
         assert!(r.passed, "{}: {} ({:?})", r.variable, r.message, r.actual);
@@ -126,7 +187,8 @@ fn a_lifted_rate_defined_after_its_reader_is_gathered() {
 
 #[test]
 fn both_compilers_build_the_composed_column() {
-    let file = load_string(&column_document()).expect("the document loads");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = load_path(write_documents(dir.path())).expect("the document loads");
     for compiler in [Compiler::Native, Compiler::Interpreter] {
         let opts = ProblemOptions {
             compiler: Some(compiler),
