@@ -23,10 +23,12 @@ def prT (S : Sym) (e : Eqn) : String :=
     | some c => '/' :: '/' :: ' ' :: c.toList ++ ['\n']
     | none => []) ++ typOf S e)
 
+/-- One display in Typst math: one equation, or (an accepted variant) several rows
+separated by `\` with `&` alignment, read by `cookRows` (`cookRows_layout`). -/
 def oneT (S : Sym) (c : Option String) (body : List Char) : Option (List Eqn) :=
   match (parseTypst S (String.ofList body)).bind eqSides with
   | some (l, r) => some [⟨c, l, r⟩]
-  | none => none
+  | none => ((Typst.lex body).bind (cookRows .typst S false)).map (Md.withComment c)
 
 /-- **Read the math text of a display equation** under the symbol table `S`. -/
 def ckT (S : Sym) (raw : String) : Option (List Eqn) :=

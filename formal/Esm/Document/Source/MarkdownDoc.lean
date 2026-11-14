@@ -1,5 +1,6 @@
 import Esm.Document.Source.Markdown
 import Esm.Document.Source.Equation
+import Esm.Document.Source.MultiLine
 
 /-!
 # Markdown documents: printing, parsing, and the round trip
@@ -30,11 +31,38 @@ def prMd (S : Sym) (e : Eqn) : String :=
     | some c => '%' :: ' ' :: c.toList ++ ['\n']
     | none => []) ++ latexOf S e)
 
-/-- One equation in LaTeX. -/
+/-- The multi-line environments: `true` when all rows are one equation. -/
+def envs : List (String × Bool) :=
+  [("aligned", false), ("align", false), ("align*", false), ("gathered", false),
+    ("split", true), ("multline", true), ("multline*", true)]
+
+def isWsC (c : Char) : Bool := c == ' ' || c == '\n' || c == '\t'
+
+/-- A display that is one multi-line environment: whether its rows are one equation, and
+the environment's body. -/
+def envOf (body : List Char) : Option (Bool × List Char) :=
+  let b := ((body.dropWhile isWsC).reverse.dropWhile isWsC).reverse
+  envs.findSome? (fun E =>
+    let o := ("\\begin{" ++ E.1 ++ "}").toList
+    let c := ("\\end{" ++ E.1 ++ "}").toList
+    if pre o b && pre c.reverse b.reverse then
+      some (E.2, (b.drop o.length).take (b.length - o.length - c.length))
+    else none)
+
+/-- The comment goes to the first equation of a display. -/
+def withComment (c : Option String) : List Eqn → List Eqn
+  | e :: es => { e with comment := c } :: es
+  | [] => []
+
+/-- One display in LaTeX: a multi-line environment (an accepted variant), or one
+equation. -/
 def oneMd (S : Sym) (c : Option String) (body : List Char) : Option (List Eqn) :=
-  match (parseLatex S (String.ofList body)).bind eqSides with
-  | some (l, r) => some [⟨c, l, r⟩]
-  | none => none
+  match envOf body with
+  | some (one, inner) => ((Latex.lex inner).bind (cookRows .latex S one)).map (withComment c)
+  | none =>
+    match (parseLatex S (String.ofList body)).bind eqSides with
+    | some (l, r) => some [⟨c, l, r⟩]
+    | none => none
 
 /-- **Read the math text of a display equation** under the symbol table `S`: an
 optional leading comment line `% …` (the `_comment`), then the equation. -/
@@ -63,7 +91,7 @@ def capsMd : Caps where
   declName n := nameOK n && !(nameLatex n).contains '$'
   attr a := isIdent a.1.toList && Yaml.isInl a.2
   eqn S e := commentOK e.comment && !(latexOf S e).contains '$' && !(latexOf S e).contains '\n' &&
-    (latexOf S e).head? != some '%'
+    (latexOf S e).head? != some '%' && (envOf (latexOf S e)).isNone
 
 theorem heads_sub {c : Char} : ∀ {bol : Bool} {x : List Char}, c ∈ heads bol x → c ∈ x
   | _, [], h => by cases h
@@ -82,7 +110,7 @@ theorem contains_false {c : Char} {x : List Char} (h : x.contains c = false) : c
 theorem ckMd_prMd (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) (hl : isE e.lhs = true)
     (hr : isE e.rhs = true) : ckMd S (prMd S e) = some [e] := by
   simp only [capsMd, Bool.and_eq_true, Bool.not_eq_true', bne_iff_ne, ne_eq] at hc
-  obtain ⟨⟨⟨hcm, hd⟩, hn⟩, hp⟩ := hc
+  obtain ⟨⟨⟨⟨hcm, hd⟩, hn⟩, hp⟩, henv⟩ := hc
   have hparse : (parseLatex S (String.ofList (latexOf S e))).bind eqSides = some (e.lhs, e.rhs) := by
     simp only [latexOf, String.ofList_toList, parseLatex_printLatex S _ (isE_eqExpr e hl hr),
       Option.bind_some, eqSides_eqExpr]
@@ -94,13 +122,13 @@ theorem ckMd_prMd (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) (hl : isE e.l
     simp only [commentOK, Bool.and_eq_true, Bool.not_eq_true'] at hcm
     simp only [List.cons_append, List.append_assoc]
     rw [splitLine_line _ _ (contains_false hcm.1)]
-    simp only [oneMd, String.ofList_toList, List.nil_append]
+    simp only [oneMd, String.ofList_toList, List.nil_append, Option.isNone_iff_eq_none.mp henv]
     rw [hparse]
   | none =>
     simp only [List.nil_append]
     split
     · rename_i r' h; rw [h] at hp; simp at hp
-    · simp only [oneMd]; rw [hparse]
+    · simp only [oneMd, Option.isNone_iff_eq_none.mp henv]; rw [hparse]
 
 /-! ## The document -/
 
@@ -201,7 +229,7 @@ theorem lexDoc_front (front : List (String × Json)) (hf : jwf (.obj front) = tr
 theorem prMd_noDollar (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) :
     '$' ∉ (prMd S e).toList ++ ['\n'] := by
   simp only [capsMd, Bool.and_eq_true, Bool.not_eq_true'] at hc
-  obtain ⟨⟨⟨hcm, hd⟩, _⟩, _⟩ := hc
+  obtain ⟨⟨⟨⟨hcm, hd⟩, _⟩, _⟩, _⟩ := hc
   unfold prMd
   rw [String.toList_ofList]
   intro hm
@@ -327,5 +355,68 @@ theorem parseMd_label (front : List (String × Json)) (hf : jwf (.obj front) = t
     parseMd (String.ofList (frontMd front ++ render (a ++ .labeled raw l :: b))) =
       parseMd (String.ofList (frontMd front ++ render (a ++ .item (.eqn raw) :: b))) :=
   parseMd_eq_of_items front hf _ _ h₂ h₁ (segItems_label a b raw l)
+
+/-! ## Multi-line equations -/
+
+theorem withComment_none (es : List Eqn) (h : ∀ e ∈ es, e.comment = none) : withComment none es = es := by
+  cases es with
+  | nil => rfl
+  | cons e es => cases e; simp at h; simp [withComment, h.1]
+
+/-- **The `aligned` variant reads as the equations it lays out**: a display
+`\begin{aligned} … \end{aligned}` whose rows lay out the canonical LaTeX of equations
+(`Layout`) reads back as exactly those equations. -/
+theorem ckMd_aligned (S : Sym) (Ls : List Layout) (es : List Eqn)
+    (hL : ∀ L ∈ Ls, L.OK) (hne : Ls ≠ [])
+    (h : List.Forall₂ (fun L e => L.toks = print .latex S (eqExpr e) ∧ isE e.lhs = true ∧
+      isE e.rhs = true) Ls es) :
+    ckMd S (String.ofList ("\\begin{aligned}".toList ++ Latex.render (rowsToks Ls) ++
+      "\\end{aligned}".toList)) = some (es.map (fun e => ⟨none, e.lhs, e.rhs⟩)) := by
+  have htok : ∀ t ∈ rowsToks Ls, Latex.tokOK t := by
+    intro t ht
+    rcases mem_rowsToks ht with rfl | rfl | ⟨L, hLm, htL⟩
+    · simp [Latex.tokOK, Latex.kwOK]
+    · simp [Latex.tokOK, Latex.kwOK]
+    · obtain ⟨e, -, he⟩ : ∃ e ∈ es, L.toks = print .latex S (eqExpr e) ∧ isE e.lhs = true ∧
+          isE e.rhs = true := by
+        clear hL hne htL ht
+        induction h with
+        | nil => cases hLm
+        | @cons L' e' _ _ hh _ ih =>
+          rcases List.mem_cons.mp hLm with rfl | hm
+          · exact ⟨e', List.mem_cons_self, hh⟩
+          · obtain ⟨e'', hm', h''⟩ := ih hm
+            exact ⟨e'', List.mem_cons_of_mem _ hm', h''⟩
+      rw [he.1] at htL
+      exact Latex.print_tokOK S _ (isE_eqExpr e he.2.1 he.2.2) t htL
+  set X := Latex.render (rowsToks Ls) with hX
+  have henv : envOf ("\\begin{aligned}".toList ++ X ++ "\\end{aligned}".toList) = some (false, X) := by
+    unfold envOf
+    have h1 : ("\\begin{aligned}".toList ++ X ++ "\\end{aligned}".toList).dropWhile isWsC =
+        "\\begin{aligned}".toList ++ X ++ "\\end{aligned}".toList := by
+      simp [isWsC]
+    have h2 : ("\\begin{aligned}".toList ++ X ++ "\\end{aligned}".toList).reverse.dropWhile isWsC =
+        ("\\begin{aligned}".toList ++ X ++ "\\end{aligned}".toList).reverse := by
+      simp [isWsC]
+    rw [h1, h2, List.reverse_reverse]
+    simp only [envs, List.findSome?_cons]
+    have h3 : pre ("\\begin{" ++ "aligned" ++ "}").toList
+        ("\\begin{aligned}".toList ++ X ++ "\\end{aligned}".toList) = true := by
+      rw [List.append_assoc]; exact pre_append _ _
+    have h4 : pre ("\\end{" ++ "aligned" ++ "}").toList.reverse
+        ("\\begin{aligned}".toList ++ X ++ "\\end{aligned}".toList).reverse = true := by
+      rw [List.reverse_append]; exact pre_append _ _
+    simp only [h3, h4, Bool.and_self, ↓reduceIte]
+    congr 2
+    simp
+  unfold ckMd
+  rw [String.toList_ofList]
+  split
+  · rename_i r hr; simp at hr
+  · simp only [oneMd]
+    rw [henv]
+    simp only [hX, Latex.lex_render _ htok, Option.bind_some,
+      cookRows_layout .latex S Ls es hL hne h, Option.map_some]
+    rw [withComment_none _ (by simp)]
 
 end Esm.Document.Source.Md
