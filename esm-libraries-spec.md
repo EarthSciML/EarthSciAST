@@ -2729,11 +2729,11 @@ pkg/earthsci-ast-rs/
 │   ├── problem.rs          # esm_problem, solve, remake (§2.5)
 │   ├── simulate/           # Solution, SolveOptions, the diffsol driver
 │   ├── simulate_array/     # the array runtime and its tape
-│   ├── wasm.rs             # wasm-bindgen exports (`wasm` feature)
-│   └── bin/esm.rs          # the `esm` CLI (§5.4.5)
+│   └── wasm.rs             # wasm-bindgen exports (`wasm` feature)
+├── cli/                    # the `esm` CLI, crate `earthsci-ast-cli` (§5.4.5)
 ├── tests/
 ├── benches/
-└── Cargo.toml
+└── Cargo.toml              # the library, and the workspace holding cli/
 ```
 
 #### 5.4.3 Key Design Decisions
@@ -2795,7 +2795,7 @@ The WASM build is separate from `@earthsciml/ast`. The TypeScript package is pur
 
 #### 5.4.5 CLI Tool
 
-The Rust crate should also produce a CLI binary:
+The Rust binding should also produce a CLI binary. It is `esm`, from the companion crate `earthsci-ast-cli` (`pkg/earthsci-ast-rs/cli`):
 
 ```bash
 # Validate an ESM file

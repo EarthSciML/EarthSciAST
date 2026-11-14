@@ -426,6 +426,14 @@ jobs:
     env:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      # The feature set of the test, bench-check and doc steps, which all run
+      # over the workspace (the library and the `esm` tool) so they share one
+      # feature resolution; see the test step. Qualified by package, since
+      # the two packages' features differ. Off the MSRV leg each step appends
+      # $FEATURES_ESIO (see the test step for why not there).
+      FEATURES: >-
+        earthsci-ast/conformance-adapters,earthsci-ast/wasm,earthsci-ast/parallel,earthsci-ast/simd,earthsci-ast/zero_copy,earthsci-ast/custom_alloc,earthsci-ast/benchmarks,earthsci-ast/performance
+      FEATURES_ESIO: earthsci-ast/esio,earthsci-ast-cli/esio,earthsci-ast-cli/integrator
     defaults:
       run:
         working-directory: pkg/earthsci-ast-rs
@@ -473,11 +481,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.rust }}-
 
-      - name: Build Rust library
-        run: cargo build --verbose
-
-      - name: Build CLI binary
-        run: cargo build --bin esm --verbose
+      # The library and the `esm` tool (`earthsci-ast-cli`, cli/) in ONE cargo
+      # invocation. Cargo caches a crate per feature set, and the tool
+      # depends on the library with `default-features = false`: built in a
+      # second command, the library would resolve to a different feature set
+      # and compile again from scratch. One `--workspace` invocation unifies
+      # them, so the library compiles once. (The integrator-only build of the
+      # tool is linted in lint.yml, off this job's critical path.)
+      - name: Build Rust library and CLI binary
+        run: cargo build --workspace --verbose
 
       # A consumer that only builds problems (EarthSciIntegrator's planner)
       # depends on the crate with `default-features = false`, so the library
@@ -532,13 +544,19 @@ jobs:
         # just the MSRV one -- including the bench-check and doc steps below,
         # which used to inherit `--all-features` precisely so they would reuse
         # this feature resolution, and still do.
+        #
+        # The `esm` tool's own tests (cli/tests) run in the SAME command
+        # (`--workspace`), so the library compiles once, with one feature set,
+        # for both: a second `cargo test -p earthsci-ast-cli` resolved the
+        # library differently and recompiled it, which pushed this job past
+        # its time limit. Each feature is qualified by its package. Off the
+        # MSRV leg the tool has both backends; the integrator pulls earthsciio
+        # (MSRV 1.91, through zarrs), so the MSRV leg runs diffsol only.
         run: |
           if [ "${{ matrix.rust }}" = "1.89.0" ]; then
-            cargo test --verbose --features \
-              conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance
+            cargo test --verbose --workspace --features "$FEATURES"
           else
-            cargo test --verbose --features \
-              conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio
+            cargo test --verbose --workspace --features "$FEATURES,$FEATURES_ESIO"
           fi
 
       # The scaling tier's gates at the PR sizes
@@ -580,15 +598,11 @@ jobs:
       # how the drift got here.
       - name: Build bench targets
         if: ${{ !cancelled() && matrix.rust != '1.89.0' }}
-        run: |
-          cargo check --benches --features \
-            conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio
+        run: cargo check --benches --workspace --features "$FEATURES,$FEATURES_ESIO"
 
       - name: Generate Rust documentation
         if: matrix.rust == 'stable'
-        run: |
-          cargo doc --no-deps --features \
-            conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio
+        run: cargo doc --no-deps --workspace --features "$FEATURES,$FEATURES_ESIO"
 
   go-tests:
     runs-on: ubuntu-latest

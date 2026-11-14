@@ -9,11 +9,6 @@
 //!
 //! `--check` must not call a document dimensionally consistent when validation
 //! found a provable mismatch, and must exit non-zero in that case.
-//!
-//! Gated on the features the `esm` target itself requires: with `cli` or
-//! `solve` off cargo skips the binary, and `CARGO_BIN_EXE_esm` does not exist.
-
-#![cfg(all(not(target_arch = "wasm32"), feature = "cli", feature = "solve"))]
 
 use std::path::PathBuf;
 use std::process::Command;

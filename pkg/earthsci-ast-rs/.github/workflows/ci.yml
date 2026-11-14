@@ -57,7 +57,7 @@ jobs:
 
     - name: Test CLI
       if: matrix.rust == 'stable'
-      run: cargo run --features cli --bin esm -- --help
+      run: cargo run -p earthsci-ast-cli --bin esm -- --help
 
   build:
     name: Build for Multiple Targets

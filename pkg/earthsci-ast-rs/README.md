@@ -24,14 +24,17 @@ earthsci-ast = "0.3"
 
 ### As a CLI Tool
 
+The `esm` tool is its own crate, `earthsci-ast-cli` (in `cli/`):
+
 ```bash
-cargo install earthsci-ast --features esio
+cargo install earthsci-ast-cli --features esio
 ```
 
-(The `cli` feature is part of the default feature set. `esio` links the
-EarthSciIO data readers, so `esm` can run documents whose parameters read
-`data_sources` (parquet, netcdf, zarr, ...); without it `esm` refuses such a
-document. The prebuilt binaries attached to each GitHub release include it.)
+(`esio` links the EarthSciIO data readers, so `esm` can run documents whose
+parameters read `data_sources` (parquet, netcdf, zarr, ...); without it `esm`
+refuses such a document. The prebuilt binaries attached to each GitHub release
+include it. For the time integrators `esm simulate` can run on, see
+[`cli/README.md`](cli/README.md).)
 
 ### For WASM
 
@@ -99,6 +102,10 @@ esm pretty model.esm -f latex
 # Run a simulation
 esm simulate model.esm --time 10 -o results.json
 
+# ... on EarthSciIntegrator instead of diffsol (a build with the
+# `integrator` feature; see cli/README.md)
+esm simulate model.esm --time 10 --backend integrator -o results.json
+
 # Write GRIDDED output: dimension-labeled, row-major [time, ...spatial]
 # arrays with CF coordinates, plus the named observed fields alongside the
 # state (repeat --observed for several). On a document with nothing to
@@ -139,10 +146,12 @@ wasm-pack build --target web --features wasm
 
 ## Development
 
-Run tests:
+Run tests (`cargo test` in this directory selects the library; the `esm`
+tool's tests are the `earthsci-ast-cli` package's):
 
 ```bash
 cargo test
+cargo test -p earthsci-ast-cli
 ```
 
 Run tests with all features:
@@ -176,10 +185,12 @@ cargo clippy --all-targets --features \
 
 ## Cargo features
 
-- `default`: `cli`, `solve`
-- `cli`: the `esm` command-line binary (requires clap)
+- `default`: `solve`
 - `solve`: the diffsol ODE solver behind `solve` / `init` /
-  `solve_to_completion` (building an `EsmProblem` never needs it)
+  `solve_to_completion` (building an `EsmProblem` and computing its
+  `initial_state` never need it)
+- `cli`: does nothing; kept so manifests that name it still resolve. The `esm`
+  binary is the `earthsci-ast-cli` crate (`cli/`).
 - `wasm`: WebAssembly bindings (requires wasm-bindgen)
 - `parallel` / `simd` / `zero_copy` / `custom_alloc` / `performance`:
   opt-in experimental performance utilities in the `performance` module

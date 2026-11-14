@@ -8,10 +8,13 @@ Five language bindings ship from this repo under one version number:
 | TypeScript | `@earthsciml/ast` | npm |
 | Python | `earthsci-ast` | PyPI |
 | Rust | `earthsci-ast` | crates.io |
+| Rust (`esm` tool) | `earthsci-ast-cli` | crates.io |
 | Go | `.../pkg/earthsci-ast-go` | Go module proxy |
 
 The `esm` and `esm-narrative` command-line tools ship under the same version,
-as per-platform archives attached to the GitHub release.
+as per-platform archives attached to the GitHub release. `esm` is also the
+`earthsci-ast-cli` crate (`pkg/earthsci-ast-rs/cli`), published right after
+`earthsci-ast`, so `cargo install earthsci-ast-cli` builds it.
 
 ## How a release runs
 
@@ -96,7 +99,8 @@ Until this exists, the publish job fails with `invalid-publisher`.
 the **`yank`** scope in addition to publish scopes if you ever have to retract a
 version; a publish-only token gets 403 on `cargo yank`. Never commit it —
 crates.io publishes are **permanent** (a version can be yanked but never deleted
-or reused).
+or reused). Its first publish of `earthsci-ast-cli` needs a token allowed to
+publish NEW crates, not only update existing ones.
 
 ### Julia
 Install the [JuliaRegistrator](https://github.com/JuliaRegistries/Registrator)
@@ -135,7 +139,7 @@ sits in a **3-day AutoMerge waiting period**.
 
 ## Cutting a release
 
-1. Bump the version in all **nine** places **in one reviewed commit**:
+1. Bump the version in all **twelve** places **in one reviewed commit**:
    - `pkg/EarthSciAST.jl/Project.toml`
    - `pkg/earthsci-ast-ts/package.json` (and run `npm install --package-lock-only`)
    - `pkg/earthsci-ast-py/pyproject.toml`
@@ -151,6 +155,10 @@ sits in a **3-day AutoMerge waiting period**.
      >/dev/null` in that directory). It is not published to crates.io, but the
      `esm-narrative` binary ships on the release. Refreshing that lock also
      updates `pkg/earthsci-typst-plugin/Cargo.lock` if you run it there too.
+   - `pkg/earthsci-ast-rs/cli/Cargo.toml` (the `esm` tool, `earthsci-ast-cli`):
+     its `version`, AND its exact `earthsci-ast = { ..., version = "=X.Y.Z" }`
+     pin; its lock entry is in `pkg/earthsci-ast-rs/Cargo.lock` and refreshes
+     with the library's.
 
    The last two are **hand-kept mirrors**, and they are the ones that get
    forgotten. Julia (`pkgversion`), Python (`importlib.metadata`) and Rust
@@ -159,7 +167,7 @@ sits in a **3-day AutoMerge waiting period**.
    (tsconfig's `rootDir` is `./src`) and a Go module has no in-tree version
    manifest at all, so both mirror the number by hand.
 
-   `./scripts/check-version-sync.sh` checks all nine and runs in the lint job.
+   `./scripts/check-version-sync.sh` checks all twelve and runs in the lint job.
    Go carries no version in its own manifest; the module version comes from
    the tag.
 

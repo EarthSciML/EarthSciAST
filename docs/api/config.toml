@@ -34,7 +34,7 @@ extras = ["simulate"]
 path = "pkg/earthsci-ast-rs"
 crate = "earthsci-ast"
 features = ["parallel", "custom_alloc"]
-docs_rs_features = ["cli", "solve"]
+docs_rs_features = ["solve"]
 nightly = "nightly-2026-10-01"
 
 [bindings.go]

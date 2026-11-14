@@ -9,10 +9,12 @@
 //!   * every field inside the cone is bit-identical to the unpruned build's,
 //!     on the build pipeline and on the state-free evaluation, under the
 //!     native compiler and the interpreter;
-//!   * a strict compiler refuses only a rule inside the cone;
-//!   * a name no declared variable could answer is refused by `esm simulate`
-//!     before anything is evaluated, and every name CONFORMANCE_SPEC §5.17.4
-//!     resolves is not.
+//!   * a strict compiler refuses only a rule inside the cone.
+//!
+//! The `esm simulate --observed` half (a name no declared variable could
+//! answer is refused before anything is evaluated, and every name
+//! CONFORMANCE_SPEC §5.17.4 resolves is not) lives with the binary, in
+//! `cli/tests/cli/observed_cone.rs`.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -419,129 +421,5 @@ fn every_field_in_the_cone_is_bit_identical_to_the_unpruned_build() {
                 }
             }
         }
-    }
-}
-
-// --------------------------------------------------------------------------- //
-// The CLI
-// --------------------------------------------------------------------------- //
-
-#[cfg(all(feature = "cli", feature = "solve"))]
-mod cli {
-    use super::cone_document;
-    use serde_json::{Value, json};
-    use std::process::Command;
-
-    fn esm(dir: &std::path::Path, observed: &[&str]) -> (bool, String) {
-        let doc = dir.join("cone.esm");
-        std::fs::write(&doc, cone_document(true).to_string()).expect("write");
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_esm"));
-        cmd.args(["simulate", doc.to_str().unwrap(), "--time", "0", "--output"])
-            .arg(dir.join("out.json"));
-        for o in observed {
-            cmd.args(["--observed", o]);
-        }
-        let out = cmd.output().expect("runs");
-        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-        text.push_str(&String::from_utf8_lossy(&out.stderr));
-        (out.status.success(), text)
-    }
-
-    #[test]
-    fn simulate_observed_writes_its_cone_and_skips_the_rest() {
-        let tmp = tempfile::tempdir().expect("tmpdir");
-        let (ok, text) = esm(tmp.path(), &["good"]);
-        assert!(ok, "`bad` is outside the cone of `good`:\n{text}");
-        assert!(text.contains("good = 180"), "{text}");
-        // Without a request every observed is evaluated, `bad` among them.
-        let (ok, text) = esm(tmp.path(), &[]);
-        assert!(!ok, "{text}");
-        assert!(text.contains("E_TREEWALK_CONSTARRAY_OOB"), "{text}");
-    }
-
-    #[test]
-    fn an_undeclared_observed_is_refused_before_anything_is_evaluated() {
-        let tmp = tempfile::tempdir().expect("tmpdir");
-        let (ok, text) = esm(tmp.path(), &["good", "nope", "Rel.nada"]);
-        assert!(!ok, "{text}");
-        assert!(
-            text.contains("'nope', 'Rel.nada'") && text.contains("declares no variable"),
-            "{text}"
-        );
-        // Refused before the build: not after an evaluation that would have
-        // failed on `bad` first.
-        assert!(!text.contains("E_TREEWALK_CONSTARRAY_OOB"), "{text}");
-        assert!(!text.contains("Running simulation"), "{text}");
-        // Every declared spelling is accepted.
-        for name in ["good", "Rel.good"] {
-            let (ok, text) = esm(tmp.path(), &[name]);
-            assert!(ok, "'{name}':\n{text}");
-        }
-    }
-
-    /// `Chem.O3` and `Emis.NO` integrate; with `with_sink`, `Sink.O3` too.
-    fn two_component_document(with_sink: bool) -> Value {
-        let decay = |v: &str| {
-            json!({"lhs": {"op": "D", "args": [v], "wrt": "t"},
-                   "rhs": {"op": "*", "args": [-1.0, "k", v]}})
-        };
-        let component = |v: &str| {
-            json!({
-                "variables": {
-                    v: {"type": "unknown", "units": "1", "default": 1.0},
-                    "k": {"type": "parameter", "units": "1/s", "default": 0.1},
-                },
-                "equations": [decay(v)],
-            })
-        };
-        let mut models = json!({"Chem": component("O3"), "Emis": component("NO")});
-        if with_sink {
-            models["Sink"] = component("O3");
-        }
-        json!({"esm": "2.0.0", "metadata": {"name": "Two"}, "models": models})
-    }
-
-    fn esm_grid(dir: &std::path::Path, doc: &Value, observed: &str) -> (bool, String) {
-        let path = dir.join("two.esm");
-        std::fs::write(&path, doc.to_string()).expect("write");
-        let out = Command::new(env!("CARGO_BIN_EXE_esm"))
-            .args([
-                "simulate",
-                path.to_str().unwrap(),
-                "--time",
-                "1",
-                "--format",
-                "grid",
-            ])
-            .args(["--observed", observed, "--output"])
-            .arg(dir.join("out.json"))
-            .output()
-            .expect("runs");
-        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-        text.push_str(&String::from_utf8_lossy(&out.stderr));
-        (out.status.success(), text)
-    }
-
-    #[test]
-    fn a_name_the_output_rule_resolves_by_its_last_segment_is_not_refused() {
-        // CONFORMANCE_SPEC §5.17.4 rule 2: `Emis.O3` names no variable
-        // exactly, and `Chem.O3` is the one variable whose last segment is
-        // `O3`.
-        let tmp = tempfile::tempdir().expect("tmpdir");
-        let (ok, text) = esm_grid(tmp.path(), &two_component_document(false), "Emis.O3");
-        assert!(ok, "{text}");
-    }
-
-    #[test]
-    fn an_ambiguous_name_is_refused_as_ambiguous_not_as_undeclared() {
-        let tmp = tempfile::tempdir().expect("tmpdir");
-        let (ok, text) = esm_grid(tmp.path(), &two_component_document(true), "Emis.O3");
-        assert!(!ok, "{text}");
-        assert!(!text.contains("declares no variable"), "{text}");
-        assert!(text.contains("last segment is shared by"), "{text}");
-        assert!(
-            text.contains("Chem.O3") && text.contains("Sink.O3"),
-            "{text}"
-        );
     }
 }
