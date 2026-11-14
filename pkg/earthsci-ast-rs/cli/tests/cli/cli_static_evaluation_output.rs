@@ -26,10 +26,8 @@
 //!     enables all of this is `Rhs::Always` becoming `Rhs::Auto`, which
 //!     only a dynamic-document test can prove was safe.
 //!
-//! Gated on this crate's `diffsol` feature: a build with no time integrator
-//! refuses `esm simulate`, naming the features to build with.
-
-#![cfg(feature = "diffsol")]
+//! The static tests run in every build, including one with no time
+//! integrator; the two that integrate need this crate's `diffsol` feature.
 
 use std::fs;
 use std::path::Path;
@@ -85,6 +83,7 @@ fn relational_document() -> Value {
 
 /// A document that DOES integrate, so the `Rhs::Auto` change can be shown
 /// not to have moved it.
+#[cfg(feature = "diffsol")]
 const DYNAMIC: &str = "../tests/fixtures/inline_tests/passing_decay.esm";
 
 fn write_doc(dir: &Path, doc: &Value) -> std::path::PathBuf {
@@ -253,6 +252,7 @@ fn a_named_field_the_build_did_not_produce_is_an_error() {
 // ...and a document that does integrate is untouched
 // --------------------------------------------------------------------------- //
 
+#[cfg(feature = "diffsol")]
 #[test]
 fn a_dynamic_document_still_integrates_and_writes_its_trajectory() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -285,6 +285,7 @@ fn a_dynamic_document_still_integrates_and_writes_its_trajectory() {
     );
 }
 
+#[cfg(feature = "diffsol")]
 #[test]
 fn format_csv_on_a_trajectory_is_refused() {
     let tmp = tempfile::tempdir().expect("tmpdir");

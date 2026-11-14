@@ -4,20 +4,30 @@
 //! features are additive: `diffsol` (on by default) is the solver
 //! `earthsci-ast` links, and `integrator` is EarthSciIntegrator. With both in
 //! the build, `--backend` picks one per run; with one, it is the default; with
-//! neither, [`select`] refuses and names the features to build with.
+//! neither, [`select`] refuses and names the features to build with. That
+//! refusal comes only when a document has something to integrate: [`choose`]
+//! checks the command line before anything is loaded, and lets a build with
+//! no integrator through, so a static document still evaluates.
 //!
 //! Both answer with an [`earthsci_ast::Solution`], so everything after the
 //! integration (the summary lines, `--output` in either format) is shared.
 
-use earthsci_ast::{EsmProblem, Solution, SolveOptions};
+use earthsci_ast::{EsmFile, EsmProblem, Solution, SolveOptions};
 use std::path::{Path, PathBuf};
 
 /// One integration of a dynamic document. Each backend reads what it needs:
 /// diffsol the Problem, the integrator the document's path and the interval.
-#[cfg_attr(not(feature = "integrator"), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "diffsol", feature = "integrator")),
+    allow(dead_code)
+)]
 pub struct SimulateRun<'a> {
     /// The document, as named on the command line.
     pub file: &'a Path,
+    /// The document as `earthsci-ast` loaded it, with every metaparameter its
+    /// data sources measure closed: the index-set sizes the Problem was built
+    /// with.
+    pub esm_file: &'a EsmFile,
     /// The Problem `earthsci-ast` built for it over [`Self::tspan`].
     pub prob: &'a EsmProblem,
     /// The solve options the command built (`--observed` among them).
@@ -66,30 +76,35 @@ pub fn available() -> &'static [&'static str] {
     ]
 }
 
-/// The backend `--backend` names, or this build's default when it names none.
-pub fn select(
+/// The backend `--backend` names, or this build's default when it names none
+/// (`None` when this build has no time integrator at all). Refuses a name
+/// that is unknown or not in this build, and integrator options given with
+/// diffsol: none of that depends on the document, so the command line is
+/// checked before anything is loaded.
+pub fn choose(
     name: Option<&str>,
-    integrator: IntegratorOptions,
-) -> Result<Box<dyn Backend>, String> {
+    integrator: &IntegratorOptions,
+) -> Result<Option<&'static str>, String> {
     let known = ["diffsol", "integrator"];
-    let name = match name {
-        Some(n) => n.to_ascii_lowercase(),
-        None => match available().first() {
-            Some(n) => (*n).to_string(),
-            None => {
-                return Err("this build of `esm` has no time integrator: rebuild \
-                            with `--features diffsol` or `--features integrator`"
-                    .into());
+    let name: &'static str = match name {
+        Some(n) => {
+            let n = n.to_ascii_lowercase();
+            match known.iter().find(|k| **k == n) {
+                Some(k) => k,
+                None => {
+                    return Err(format!(
+                        "unknown backend {n:?}: expected one of {}",
+                        known.join(", ")
+                    ));
+                }
             }
+        }
+        None => match available().first() {
+            Some(n) => n,
+            None => return Ok(None),
         },
     };
-    if !known.contains(&name.as_str()) {
-        return Err(format!(
-            "unknown backend {name:?}: expected one of {}",
-            known.join(", ")
-        ));
-    }
-    if !available().contains(&name.as_str()) {
+    if !available().contains(&name) {
         return Err(format!(
             "backend {name:?} is not in this build of `esm`: rebuild with \
              `--features {name}`"
@@ -102,14 +117,39 @@ pub fn select(
                 .into(),
         );
     }
-    match name.as_str() {
+    Ok(Some(name))
+}
+
+/// The backend [`choose`] picked. Called only once a document turns out to
+/// have something to integrate, so a build with no time integrator refuses
+/// here, not before.
+pub fn select(
+    choice: Option<&'static str>,
+    integrator: IntegratorOptions,
+) -> Result<Box<dyn Backend>, String> {
+    #[cfg(not(feature = "integrator"))]
+    let _ = integrator;
+    match choice {
+        None => Err(
+            "this document has differential equations to integrate, and \
+                     this build of `esm` has no time integrator: rebuild with \
+                     `--features diffsol` or `--features integrator`"
+                .into(),
+        ),
         #[cfg(feature = "diffsol")]
-        "diffsol" => Ok(Box::new(Diffsol)),
+        Some("diffsol") => Ok(Box::new(Diffsol)),
         #[cfg(feature = "integrator")]
-        "integrator" => Ok(Box::new(integrator::Integrator(integrator))),
-        _ => unreachable!("an available solver has a backend"),
+        Some("integrator") => Ok(Box::new(integrator::Integrator(integrator))),
+        Some(other) => unreachable!("`choose` admits only a backend in this build, not {other}"),
     }
 }
+
+/// The esm major version EarthSciIntegrator reads. It depends on its own
+/// `earthsci-ast` (0.10, schema 1.3.0), not this workspace's, so a document
+/// in esm 2.x is refused by its planner. Raise this when an integrator
+/// release built on `earthsci-ast` 0.12 or later is the one linked here.
+#[cfg(feature = "integrator")]
+pub const INTEGRATOR_ESM_MAJOR: u64 = 1;
 
 /// `earthsci_ast::solve`: diffsol, with the method the document's `solver`
 /// block (or the binding default) names.
@@ -162,11 +202,7 @@ mod integrator {
         }
 
         fn simulate(&self, run: &SimulateRun<'_>) -> Result<Solution, String> {
-            if !run.opts.output_observed.is_empty() {
-                return Err("--observed is evaluated along a diffsol solve only; \
-                            the integrator backend writes the state"
-                    .into());
-            }
+            reads_format(&run.esm_file.esm)?;
             let model = absolute(run.file)?;
             let (dir, _scratch) = match &self.0.plan_dir {
                 Some(d) => {
@@ -190,6 +226,7 @@ mod integrator {
                 Some(rc) => plan(&check_model(rc, &model)?, run.tspan)?,
                 None => default_plan(&dir, &model, run.tspan, self.0.dt)?,
             };
+            same_index_sets(run.esm_file, &planned.model)?;
             planned
                 .write(&dir)
                 .map_err(|e| format!("writing the plan to {}: {e}", dir.display()))?;
@@ -199,6 +236,9 @@ mod integrator {
                 ..Default::default()
             };
             let lp = load_plan_with::<f64>(&dir, &data).map_err(|e| e.to_string())?;
+            // Labeled before integrating, so a state that cannot be labeled is
+            // refused before the run rather than after it.
+            let (names, dofs) = columns(run.prob, &planned.model, &lp.state_dofs, lp.problem.n)?;
             // A resolved plan writes a fixed step in seconds.
             let step_dt = lp
                 .run_config
@@ -220,7 +260,6 @@ mod integrator {
                 .forward(&u0, &p)
                 .map_err(|e| format!("integration failed: {e}"))?;
 
-            let (names, dofs) = columns(run.prob, &lp.state_dofs);
             Ok(Solution {
                 time: fwd.outputs.iter().map(|o| o.0).collect(),
                 state: dofs
@@ -341,49 +380,106 @@ mod integrator {
         Some(t)
     }
 
-    /// Column names and the plan DOF each reads, in the order `earthsci-ast`
-    /// lays the state out, so `--output` matches the diffsol solver's. A
-    /// state the Problem does not list the same number of elements for is
-    /// named `name[k]` (1-based) instead, after the Problem's columns.
-    fn columns(
-        prob: &earthsci_ast::EsmProblem,
-        state_dofs: &std::collections::BTreeMap<String, Vec<usize>>,
-    ) -> (Vec<String>, Vec<usize>) {
-        let mut cells: HashMap<&str, Vec<&str>> = HashMap::new();
-        let flat = prob.state_variable_names();
-        for n in &flat {
-            let base = n.split('[').next().unwrap_or(n);
-            cells.entry(base).or_default().push(n);
+    /// Refuse a document in an esm format newer than the integrator's own
+    /// `earthsci-ast` reads ([`super::INTEGRATOR_ESM_MAJOR`]), before its
+    /// planner fails on it with a schema-version error.
+    fn reads_format(esm: &str) -> Result<(), String> {
+        let major = esm.split('.').next().and_then(|m| m.parse::<u64>().ok());
+        match major {
+            Some(m) if m <= super::INTEGRATOR_ESM_MAJOR => Ok(()),
+            _ => Err(format!(
+                "the integrator backend reads esm {}.x documents only, and this \
+                 document is esm {esm}: the EarthSciIntegrator release linked \
+                 here is built on an older `earthsci-ast`. Run it with \
+                 `--backend diffsol`, or wait for an EarthSciIntegrator release \
+                 built on `earthsci-ast` 0.12",
+                super::INTEGRATOR_ESM_MAJOR
+            )),
         }
-        let mut placed: HashMap<&str, usize> = HashMap::new();
-        let (mut names, mut dofs) = (Vec::new(), Vec::new());
-        for n in &flat {
-            let base = n.split('[').next().unwrap_or(n);
-            let Some(d) = state_dofs.get(base) else {
+    }
+
+    /// The integrator re-reads the document from disk with its own
+    /// `earthsci-ast`, so it never sees a metaparameter this command closed
+    /// from the document's data (`close_declared_extents`). Refuse when an
+    /// index set the integrator planned over has a different size than the
+    /// one the Problem was built with, rather than integrate another grid.
+    fn same_index_sets(
+        file: &earthsci_ast::EsmFile,
+        planned: &earthsci_integrator_planner::model::ModelInfo,
+    ) -> Result<(), String> {
+        let ours = file.index_sets.as_ref();
+        for (name, &theirs) in &planned.index_sets {
+            let Some(size) = ours.and_then(|o| o.get(name)).and_then(|s| s.size) else {
                 continue;
             };
-            if d.len() != cells[base].len() {
-                continue;
-            }
-            let k = placed.entry(base).or_insert(0);
-            names.push(n.clone());
-            dofs.push(d[*k]);
-            *k += 1;
-        }
-        for (name, d) in state_dofs {
-            if placed.contains_key(name.as_str()) {
-                continue;
-            }
-            if d.len() == 1 {
-                names.push(name.clone());
-                dofs.push(d[0]);
-            } else {
-                for (k, &j) in d.iter().enumerate() {
-                    names.push(format!("{name}[{}]", k + 1));
-                    dofs.push(j);
-                }
+            if size != theirs {
+                return Err(format!(
+                    "index set {name} has {size} elements in the Problem `esm` built \
+                     (sized by the document's data) but {theirs} in the integrator's \
+                     plan, which reads the document without its data; the \
+                     integrator backend cannot run this document"
+                ));
             }
         }
-        (names, dofs)
+        Ok(())
+    }
+
+    /// Column names and the plan DOF each reads, in the order `earthsci-ast`
+    /// lays the state out, so `--output` matches the diffsol backend's.
+    ///
+    /// Matched by element NAME, not position: the planner names every DOF the
+    /// way `earthsci-ast` names a state element (`X`, `X[i,j]`), in its own
+    /// canonical order. Its numbering is first checked against the loaded
+    /// plan's, and any element one side has and the other lacks is refused
+    /// rather than written under the wrong name.
+    fn columns(
+        prob: &earthsci_ast::EsmProblem,
+        model: &earthsci_integrator_planner::model::ModelInfo,
+        state_dofs: &std::collections::BTreeMap<String, Vec<usize>>,
+        n: usize,
+    ) -> Result<(Vec<String>, Vec<usize>), String> {
+        let dofs = earthsci_integrator_planner::numeric::Dofs::new(model);
+        let consistent = dofs.n == n
+            && dofs.states.len() == state_dofs.len()
+            && dofs.states.iter().all(|(name, (start, ext))| {
+                let len: usize = ext.iter().product();
+                state_dofs
+                    .get(name)
+                    .is_some_and(|d| d.iter().copied().eq(*start..start + len))
+            });
+        if !consistent {
+            return Err(
+                "the integrator's loaded plan numbers its state differently from its \
+                 planner, so its results cannot be labeled"
+                    .into(),
+            );
+        }
+        let at: HashMap<String, usize> = dofs
+            .element_names()
+            .into_iter()
+            .enumerate()
+            .map(|(j, name)| (name, j))
+            .collect();
+        let names = prob.state_variable_names();
+        if names.len() != at.len() {
+            return Err(format!(
+                "the Problem `esm` built has {} state elements and the integrator's \
+                 plan {}; the integrator backend cannot label this document's results",
+                names.len(),
+                at.len()
+            ));
+        }
+        let mut cols = Vec::with_capacity(names.len());
+        for name in &names {
+            let j = at.get(name).ok_or_else(|| {
+                format!(
+                    "the state element {name} of the Problem `esm` built is not in the \
+                     integrator's plan; the integrator backend cannot label this \
+                     document's results"
+                )
+            })?;
+            cols.push(*j);
+        }
+        Ok((names, cols))
     }
 }

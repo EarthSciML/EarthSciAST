@@ -34,7 +34,8 @@ cargo install earthsci-ast-cli --features integrator
 
 Without `--backend`, `esm simulate` uses diffsol when the build has it and
 the integrator otherwise. Naming a backend the build lacks is an error that
-names the feature to build with.
+names the feature to build with. A build with neither still evaluates a
+document with no differential equations.
 
 The integrator plans a **run configuration** against the document (how the
 right-hand side splits into operators, how they are scheduled, the macro
@@ -63,10 +64,18 @@ at every macro-step boundary; otherwise at the end of the run. The diffsol backe
 `--observed` fields along the trajectory, and `esm test` and
 `esm benchmark --bench-type simulate` run on diffsol only.
 
-EarthSciIntegrator depends on `earthsci-ast` by its own version requirement,
-which can trail this crate's. Cargo then builds a second copy of
-`earthsci-ast` for it. A document in an esm format newer than that copy reads
-is refused by the integrator's planner.
+**The integrator backend reads esm 1.x documents only.** EarthSciIntegrator
+depends on `earthsci-ast` by its own version requirement, which trails this
+crate's: the published integrator (0.0.1) is built on `earthsci-ast` 0.10,
+which reads esm 1.x. Cargo builds that second copy of `earthsci-ast` for it,
+and `esm simulate --backend integrator` refuses an esm 2.x document up front.
+That lifts once an EarthSciIntegrator release built on `earthsci-ast` 0.12
+exists. Use the diffsol backend for esm 2.x documents.
+
+Because the integrator reads the document from disk itself, it also refuses
+what it cannot match with the Problem `esm` builds: `--observed`,
+`--compiler`, a document whose data sizes an index set differently from the
+document's own declaration, and a state it cannot label element by element.
 
 ## Other features
 

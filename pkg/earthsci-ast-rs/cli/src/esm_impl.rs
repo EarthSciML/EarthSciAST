@@ -174,7 +174,10 @@ enum Commands {
         /// default) or `integrator` (EarthSciIntegrator; cargo feature
         /// `integrator`). Omitted, the first of those this build has. A name
         /// this build lacks is refused, naming the feature to build with.
-        /// (Not `--solver`: `esm test --solver` names diffsol's method.)
+        /// The integrator reads esm 1.x documents only, until an
+        /// EarthSciIntegrator release built on `earthsci-ast` 0.12 exists; it
+        /// refuses `--observed` and `--compiler`. (Not `--solver`:
+        /// `esm test --solver` names diffsol's method.)
         #[arg(long, value_name = "NAME")]
         backend: Option<String>,
         /// `integrator` only: the run configuration (EarthSciIntegrator
@@ -507,7 +510,6 @@ fn fail(message: impl Into<String>) -> Box<dyn std::error::Error> {
     })
 }
 
-/// Exit-1 failure whose diagnostics the handler already printed.
 /// The refusal of a command that runs on diffsol only, in a build without it.
 #[cfg(not(feature = "diffsol"))]
 fn needs_diffsol(command: &str) -> Box<dyn std::error::Error> {
@@ -517,6 +519,7 @@ fn needs_diffsol(command: &str) -> Box<dyn std::error::Error> {
     ))
 }
 
+/// Exit-1 failure whose diagnostics the handler already printed.
 fn fail_silent() -> Box<dyn std::error::Error> {
     Box::new(CliFailure { message: None })
 }
@@ -2568,8 +2571,9 @@ fn run_simulate(
     integrator: crate::backend::IntegratorOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Which time integrator, checked before anything is loaded: a name this
-    // build lacks says nothing about the document.
-    let backend = crate::backend::select(backend.as_deref(), integrator).map_err(fail)?;
+    // build lacks says nothing about the document. A build with no integrator
+    // is refused only below, once the document turns out to integrate.
+    let choice = crate::backend::choose(backend.as_deref(), &integrator).map_err(fail)?;
     // A value outside the closed vocabulary is `compiler_unknown` (esm-spec
     // §9.6.6) and is refused HERE, before anything is loaded: it is the one of
     // the three failures that says nothing about the document.
@@ -2651,11 +2655,45 @@ fn run_simulate(
     // not from flattened cell keys.
     let mut evaluated: Vec<(String, ndarray::ArrayD<f64>)> = Vec::new();
     let sol = if prob.is_dynamic() {
+        // The integrator reads the document itself and builds its own right-hand
+        // side, so the options that steer `earthsci-ast`'s build and evaluation
+        // would be silently ignored: refuse them instead. Only for a document that
+        // integrates: a static one is evaluated by `earthsci-ast` whichever backend
+        // was chosen, and takes them all.
+        if choice == Some("integrator") {
+            let ignored: Vec<&str> = [
+                (!observed.is_empty(), "--observed"),
+                (compiler.is_some(), "--compiler"),
+                (no_count_fold, "--no-count-fold"),
+            ]
+            .into_iter()
+            .filter_map(|(given, flag)| given.then_some(flag))
+            .collect();
+            if !ignored.is_empty() {
+                return Err(fail(format!(
+                    "{} {} the right-hand side `earthsci-ast` builds and the diffsol \
+                     backend integrates; the integrator backend builds its own from \
+                     the document and writes the state only",
+                    ignored.join(", "),
+                    if ignored.len() == 1 {
+                        "configures"
+                    } else {
+                        "configure"
+                    }
+                )));
+            }
+        }
+        let backend = crate::backend::select(choice, integrator).map_err(fail)?;
         // API_SPEC §5.8, "Every Problem reports what ran": one line, so a
-        // number in the output below is tied to the way it was produced.
-        println!("{}", prob.compiler_report());
+        // number in the output below is tied to the way it was produced. Not
+        // for the integrator, which never evaluates this Problem's right-hand
+        // side: its report would describe a compiler that did not run.
+        if backend.name() == "diffsol" {
+            println!("{}", prob.compiler_report());
+        }
         let sol = backend.simulate(&crate::backend::SimulateRun {
             file: &file,
+            esm_file: &esm_file,
             prob: &prob,
             opts: &opts,
             tspan: (0.0, time),

@@ -22,15 +22,18 @@ path = "src/main.rs"
 [features]
 default = ["diffsol"]
 # The time integrators behind `esm simulate`. They are additive: a build with
-# both picks one per run with `--solver`, and a build with one uses it. A build
-# with neither still validates, converts and analyzes documents, and refuses
-# the commands that integrate, naming the features to build with.
+# both picks one per run with `--backend`, and a build with one uses it. A build
+# with neither still validates, converts, analyzes and evaluates static
+# documents, and refuses to integrate one, naming the features to build with.
 #
 # diffsol: the solver `earthsci-ast` itself links (its `solve` feature).
 # `esm test` and `esm benchmark --bench-type simulate` run on it only.
 diffsol = ["earthsci-ast/solve"]
 # EarthSciIntegrator: plans a run configuration against the document
-# (operators, schedule, macro step), then runs the plan.
+# (operators, schedule, macro step), then runs the plan. It reads esm 1.x
+# documents ONLY: integrator 0.0.1 is built on `earthsci-ast` 0.10 (schema
+# 1.3.0), so `esm simulate --backend integrator` refuses an esm 2.x document
+# until an EarthSciIntegrator release built on `earthsci-ast` 0.12 exists.
 integrator = ["dep:earthsci-integrator", "dep:earthsci-integrator-planner"]
 # Read the parquet, netcdf and zarr files a document's `data_sources` name
 # (`earthsci-ast/esio`). The binaries attached to each GitHub release have it.
