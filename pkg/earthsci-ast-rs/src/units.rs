@@ -19,6 +19,9 @@
 
 use crate::inline_test_checks::pointer_token;
 use crate::types::{Equation, Expr, ExpressionNode};
+use num_bigint::BigInt;
+use num_rational::BigRational;
+use num_traits::{One, Signed, Zero};
 use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 
@@ -2946,60 +2949,16 @@ fn parse_normalized(s: &str, original: &str) -> Result<Unit, UnitError> {
 // ---------------------------------------------------------------------------
 
 /// An exact rational exponent for the spelling, in lowest terms with a positive
-/// denominator. Wider than [`Rational`] so no realistic exponent overflows; an
-/// overflow leaves the string unspelled (unchanged).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SpellQ {
-    num: i128,
-    den: i128,
-}
+/// denominator. Arbitrary precision, as in Lean and the other bindings, so no
+/// exponent overflows (`m^0.000…001` spells as `m^(1/10^n)` for any `n`).
+type SpellQ = BigRational;
 
-impl SpellQ {
-    const ONE: SpellQ = SpellQ { num: 1, den: 1 };
-
-    fn new(num: i128, den: i128) -> Option<SpellQ> {
-        if den == 0 {
-            return None;
-        }
-        let (mut a, mut b) = (num.checked_abs()?, den.checked_abs()?);
-        while b != 0 {
-            (a, b) = (b, a % b);
-        }
-        let g = if a == 0 { 1 } else { a };
-        let sign = if den < 0 { -1 } else { 1 };
-        Some(SpellQ {
-            num: (num / g).checked_mul(sign)?,
-            den: (den / g).checked_mul(sign)?,
-        })
-    }
-
-    fn mul(self, o: SpellQ) -> Option<SpellQ> {
-        SpellQ::new(self.num.checked_mul(o.num)?, self.den.checked_mul(o.den)?)
-    }
-
-    fn add(self, o: SpellQ) -> Option<SpellQ> {
-        let num = self
-            .num
-            .checked_mul(o.den)?
-            .checked_add(o.num.checked_mul(self.den)?)?;
-        SpellQ::new(num, self.den.checked_mul(o.den)?)
-    }
-
-    fn neg(self) -> Option<SpellQ> {
-        Some(SpellQ {
-            num: self.num.checked_neg()?,
-            den: self.den,
-        })
-    }
-
-    /// The exact value of a number token: digits, optionally `.` and digits.
-    fn of_literal(lit: &str) -> Option<SpellQ> {
-        let (int, frac) = lit.split_once('.').unwrap_or((lit, ""));
-        let digits = format!("{int}{frac}");
-        let num: i128 = digits.parse().ok()?;
-        let den = 10i128.checked_pow(u32::try_from(frac.len()).ok()?)?;
-        SpellQ::new(num, den)
-    }
+/// The exact value of a number token: digits, optionally `.` and digits.
+fn spell_q_of_literal(lit: &str) -> Option<SpellQ> {
+    let (int, frac) = lit.split_once('.').unwrap_or((lit, ""));
+    let num: BigInt = format!("{int}{frac}").parse().ok()?;
+    let den = num_traits::pow(BigInt::from(10u8), frac.len());
+    Some(SpellQ::new(num, den))
 }
 
 type SpellFactor<'a> = (&'a str, SpellQ);
@@ -3008,7 +2967,7 @@ type SpellFactor<'a> = (&'a str, SpellQ);
 /// (`UExpr.factors`) as it goes: `*` and juxtaposition concatenate, `/` negates
 /// the exponents of its right operand, `^q` scales every exponent below it, and
 /// the atom `1` and the symbol `dimensionless` contribute nothing. `None` when
-/// the tokens do not parse (or an exponent overflows).
+/// the tokens do not parse.
 struct SpellParser<'a> {
     toks: Vec<UnitTok<'a>>,
     pos: usize,
@@ -3030,7 +2989,7 @@ impl<'a> SpellParser<'a> {
                 Some(UnitTok::Slash) => {
                     self.pos += 1;
                     for (s, q) in self.term()? {
-                        acc.push((s, q.neg()?));
+                        acc.push((s, -q));
                     }
                 }
                 Some(UnitTok::Sym(_) | UnitTok::Num(_) | UnitTok::LParen) => {
@@ -3048,21 +3007,18 @@ impl<'a> SpellParser<'a> {
         }
         self.pos += 1;
         let q = self.exponent()?;
-        factors
-            .into_iter()
-            .map(|(s, e)| Some((s, q.mul(e)?)))
-            .collect()
+        Some(factors.into_iter().map(|(s, e)| (s, &q * e)).collect())
     }
 
     fn exponent(&mut self) -> Option<SpellQ> {
         match (self.peek(0), self.peek(1)) {
             (Some(UnitTok::Minus), Some(UnitTok::Num(lit))) => {
                 self.pos += 2;
-                SpellQ::of_literal(lit)?.neg()
+                spell_q_of_literal(lit).map(|q| -q)
             }
             (Some(UnitTok::Num(lit)), _) => {
                 self.pos += 1;
-                SpellQ::of_literal(lit)
+                spell_q_of_literal(lit)
             }
             (Some(UnitTok::LParen), _) => {
                 self.pos += 1;
@@ -3072,11 +3028,11 @@ impl<'a> SpellParser<'a> {
                 }
                 self.pos += 1;
                 let q = self.signed_integer()?;
-                if self.peek(0) != Some(UnitTok::RParen) || q.num == 0 {
+                if self.peek(0) != Some(UnitTok::RParen) || q.is_zero() {
                     return None;
                 }
                 self.pos += 1;
-                p.mul(SpellQ::new(q.den, q.num)?)
+                Some(p / q)
             }
             _ => None,
         }
@@ -3088,8 +3044,8 @@ impl<'a> SpellParser<'a> {
         match self.peek(at) {
             Some(UnitTok::Num(lit)) if !lit.contains('.') => {
                 self.pos += at + 1;
-                let v = SpellQ::of_literal(lit)?;
-                if negative { v.neg() } else { Some(v) }
+                let v = spell_q_of_literal(lit)?;
+                Some(if negative { -v } else { v })
             }
             _ => None,
         }
@@ -3102,7 +3058,7 @@ impl<'a> SpellParser<'a> {
             // Any number but the literal `1` is a scaling factor.
             UnitTok::Num("1") => Some(Vec::new()),
             UnitTok::Sym("dimensionless") => Some(Vec::new()),
-            UnitTok::Sym(name) => Some(vec![(name, SpellQ::ONE)]),
+            UnitTok::Sym(name) => Some(vec![(name, SpellQ::one())]),
             UnitTok::LParen => {
                 let inner = self.unit()?;
                 if self.peek(0) != Some(UnitTok::RParen) {
@@ -3118,24 +3074,22 @@ impl<'a> SpellParser<'a> {
 
 /// `Esm.Units.norm`: each symbol once with its exponents summed, zero sums
 /// dropped, sorted by symbol in codepoint order.
-fn spell_side<'a>(factors: impl Iterator<Item = SpellFactor<'a>>) -> Option<Vec<SpellFactor<'a>>> {
+fn spell_side<'a>(factors: impl Iterator<Item = SpellFactor<'a>>) -> Vec<SpellFactor<'a>> {
     let mut total: std::collections::BTreeMap<&'a str, SpellQ> = std::collections::BTreeMap::new();
     for (s, q) in factors {
-        let sum = match total.get(s) {
-            Some(prev) => prev.add(q)?,
-            None => q,
-        };
-        total.insert(s, sum);
+        *total.entry(s).or_insert_with(SpellQ::zero) += q;
     }
-    Some(total.into_iter().filter(|(_, q)| q.num != 0).collect())
+    total.into_iter().filter(|(_, q)| !q.is_zero()).collect()
 }
 
 fn spell_factor((s, q): &SpellFactor<'_>) -> String {
-    let (num, den) = (q.num.unsigned_abs(), q.den);
-    match (num, den) {
-        (1, 1) => (*s).to_string(),
-        (n, 1) => format!("{s}^{n}"),
-        (n, d) => format!("{s}^({n}/{d})"),
+    let q = q.abs();
+    if q.is_one() {
+        (*s).to_string()
+    } else if q.is_integer() {
+        format!("{s}^{}", q.numer())
+    } else {
+        format!("{s}^({}/{})", q.numer(), q.denom())
     }
 }
 
@@ -3174,12 +3128,8 @@ pub(crate) fn canonical_unit_spelling(unit: &str) -> String {
         Some(f) if parser.pos == n_toks => f,
         _ => return unit.to_string(),
     };
-    let (Some(num), Some(den)) = (
-        spell_side(factors.iter().copied().filter(|(_, q)| q.num > 0)),
-        spell_side(factors.iter().copied().filter(|(_, q)| q.num <= 0)),
-    ) else {
-        return unit.to_string();
-    };
+    let num = spell_side(factors.iter().filter(|(_, q)| q.is_positive()).cloned());
+    let den = spell_side(factors.iter().filter(|(_, q)| !q.is_positive()).cloned());
     let kept = |s: &str| num.iter().chain(den.iter()).any(|(k, _)| *k == s);
     if !num
         .iter()
