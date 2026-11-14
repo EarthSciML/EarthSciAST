@@ -181,9 +181,10 @@ def lexDoc (s : List Char) : Option (List (String × Json) × List RItem) :=
     | none => none
   | _ => none
 
-/-- **Read a Markdown document.** -/
+/-- **Read a Markdown document**, after dropping a byte-order mark and reading CRLF line
+endings as LF (`decodeText`). -/
 def parseMd (s : String) : Option Json := do
-  let p ← lexDoc s.toList
+  let p ← lexDoc (decodeText s.toList)
   let R ← unitems p.1 p.2
   let D ← cookDoc ckMdx R
   ofDoc D
@@ -207,7 +208,7 @@ theorem render_append (a b : List Seg) : render (a ++ b) = render a ++ render b 
   simp [render]
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
-  refine ⟨?_, ?_, ?_, ?_, trivial⟩
+  refine ⟨?_, ?_, ?_, ?_, by decide, trivial⟩
   · simp [blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, dTmpl, dRuleC, pre]
   · simp [declOpen, pre]
   · simp [tableOpen, pre]
@@ -260,6 +261,14 @@ theorem lexDoc_front (front : List (String × Json)) (hf : jwf (.obj front) = tr
   simp only [List.all_nil, ↓reduceIte, Yaml.decode_encode _ hw]
   rw [lex_render segs true hv _ (by simp; omega)]
   rfl
+
+/-- A document with front matter is read as written: `decodeText` leaves it alone. -/
+theorem decode_front (front : List (String × Json)) (X : List Char) :
+    decodeText (frontMd front ++ X) = frontMd front ++ X := by
+  have e : frontMd front ++ X = ['-', '-', '-'] ++ '\n' :: (Yaml.encode (.obj front) ++ dashes ++ ['\n'] ++ X) := by
+    simp [frontMd, dashes]
+  rw [e]
+  exact decodeText_line _ _ (by decide) (by decide) (by decide)
 
 theorem prMd_noDollar (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) :
     '$' ∉ (prMd S e).toList ++ ['\n'] := by
@@ -342,7 +351,7 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
   have hok := toDoc_ok capsMd rfl d hd
   unfold parseMd printMd
   simp only [String.toList_ofList]
-  rw [lexDoc_front _ hok.frontWF _ (valid_canon _ (items_ok _ hok) true), segItems_canon]
+  rw [decode_front, lexDoc_front _ hok.frontWF _ (valid_canon _ (items_ok _ hok) true), segItems_canon]
   simp only [Option.bind_eq_bind, Option.bind_some]
   have hR := unitems_items (rawDoc prMdx (toDoc capsMd d)) (by
     refine ⟨fun c hc => ?_, ?_⟩
@@ -397,7 +406,7 @@ theorem parseMd_body (front : List (String × Json)) (hf : jwf (.obj front) = tr
     parseMd (String.ofList (frontMd front ++ render segs)) = parseItemsMd front (segItems segs) := by
   unfold parseMd parseItemsMd
   simp only [String.toList_ofList]
-  rw [lexDoc_front front hf segs hv]
+  rw [decode_front, lexDoc_front front hf segs hv]
   rfl
 
 /-- Two valid documents with the same constructs parse alike. -/

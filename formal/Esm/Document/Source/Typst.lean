@@ -47,7 +47,13 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
 Everything else is prose, which the parser skips, so the parse depends only on the
 sequence of constructs (`lex_render`). Prose may not contain a declaration opener
 (`#var(`, `#param(`, `#species(`), nor start a line with a block opener; in particular
-a line starting with `$ ` is always a model equation.
+a line starting with `$ ` is always a model equation, so outside a model it rejects the
+file. Conversely a model equation must start its line: display math `$ … $` after other
+text on a line is prose (Typst typesets it, but it is not part of the model). Raw text
+(`` `…` ``) is not skipped whole: a declaration opener inside it is still read.
+
+The reader first drops a leading byte-order mark and, when the first line ends in CRLF,
+reads every CRLF as LF (`decodeText`).
 -/
 
 namespace Esm.Document.Source.Typ
