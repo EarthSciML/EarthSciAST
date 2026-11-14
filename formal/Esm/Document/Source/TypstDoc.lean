@@ -99,9 +99,10 @@ def lexDoc (s : List Char) : Option (List (String × Json) × List RItem) :=
     | none => none
   else none
 
-/-- **Read a Typst document.** -/
+/-- **Read a Typst document**, after dropping a byte-order mark and reading CRLF line
+endings as LF (`decodeText`). -/
 def parseTyp (s : String) : Option Json := do
-  let p ← lexDoc s.toList
+  let p ← lexDoc (decodeText s.toList)
   let R ← unitems p.1 p.2
   let D ← cookDoc ckT R
   ofDoc D
@@ -155,6 +156,19 @@ theorem argsFirstT_size (as : List (String × Json)) : ∀ a ∈ as, a.2.size �
     rcases List.mem_cons.mp ha with rfl | h
     · have := size_le_argT a; omega
     · have := argsMoreT_size bs a h; omega
+
+/-- A document with the header is read as written: `decodeText` leaves it alone. -/
+theorem decode_header (X : List Char) : decodeText (header ++ X) = header ++ X := by
+  have e : header ++ X = "#import \"@preview/esm:0.1.0\": *".toList ++
+      '\n' :: ("#show: esm-document.with(".toList ++ X) := by
+    simp [header]
+  rw [e]
+  exact decodeText_line _ _ (by decide) (by decide) (by decide)
+
+theorem decode_headerT (front : List (String × Json)) (X : List Char) :
+    decodeText (headerT front ++ X) = headerT front ++ X := by
+  simp only [headerT, List.append_assoc]
+  exact decode_header _
 
 /-- **The header and the body read back.** -/
 theorem lexDoc_front (front : List (String × Json)) (hf : ∀ a ∈ front, argOK a = true)
@@ -237,7 +251,7 @@ theorem parseTyp_printTyp (d : Json) (hd : canonDoc d = true) : parseTyp (printT
     exact ⟨h1, h2.2 a ha⟩
   unfold parseTyp printTyp
   simp only [String.toList_ofList]
-  rw [lexDoc_front _ hfront _ (valid_canon _ (items_ok _ hok) true), segItems_canon]
+  rw [decode_headerT, lexDoc_front _ hfront _ (valid_canon _ (items_ok _ hok) true), segItems_canon]
   simp only [Option.bind_eq_bind, Option.bind_some]
   have hR := unitems_items (rawDoc prT (toDoc capsT d)) (by
     intro c hc kv hkv
@@ -267,7 +281,7 @@ theorem parseTyp_body (front : List (String × Json)) (hf : ∀ a ∈ front, arg
     parseTyp (String.ofList (headerT front ++ render segs)) = parseItemsT front (segItems segs) := by
   unfold parseTyp parseItemsT
   simp only [String.toList_ofList]
-  rw [lexDoc_front front hf segs hv]
+  rw [decode_headerT, lexDoc_front front hf segs hv]
   rfl
 
 theorem parseTyp_eq_of_items (front : List (String × Json)) (hf : ∀ a ∈ front, argOK a = true)
