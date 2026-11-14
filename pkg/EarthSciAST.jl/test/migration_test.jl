@@ -98,7 +98,7 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
             # The current version is skipped rather than listed, so the case
             # never asserts the opposite of the line above it as the library
             # advances.
-            for target in ("1.0.1", "1.1.0", "1.3.0", "2.0.0", "2.1.0")
+            for target in ("1.0.1", "1.1.0", "1.3.0", "2.0.0", "2.1.0", "2.2.0")
                 target == _MIG_SCHEMA_VERSION && continue
                 @test can_migrate("1.0.0", target) == false
             end

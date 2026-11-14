@@ -65,13 +65,20 @@ class TestVersionCompatibility:
         It was version_1_0_0_baseline.esm until esm 1.1.0,
         version_1_1_0_minor_upgrade.esm until esm 1.2.0,
         version_1_2_0_const_units.esm until esm 1.3.0, and
-        version_2_0_0_baseline.esm until esm 2.1.0.
+        version_2_0_0_baseline.esm until esm 2.1.0, and
+        version_2_1_0_variable_bounds.esm until esm 2.2.0.
         """
-        fixture = load_fixture("version_2_1_0_variable_bounds.esm")
+        fixture = load_fixture("version_2_2_0_pointwise_lift.esm")
         assert fixture["esm"] == _EXPECTED_VERSION
         with no_version_warning():
             result = load_document(fixture)
         assert result.esm == _EXPECTED_VERSION
+
+        # The earlier minor of the current major loads as written, with no
+        # warning.
+        with no_version_warning():
+            result = load_document(load_fixture("version_2_1_0_variable_bounds.esm"))
+        assert result.esm == "2.1.0"
         assert result.models["Decay"].variables["N"].ub == "N0"
 
         # The earlier minor of the current major loads as written, with no

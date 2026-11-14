@@ -1,0 +1,187 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "name": "LiftFixpoint",
+    "description": "Lifting repeats until nothing changes (esm-libraries-spec 4.7.5). Mech is lifted through its rate; that makes Uptake.u's tendency, which reads Mech.A, an array, so Uptake is lifted; that makes Store.s's tendency, which reads Uptake.u, an array, so Store is lifted too. Each component is visited in a later pass than the one it reads.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-13T00:00:00Z"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Store": {
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.1,
+              "Uptake.u"
+            ]
+          }
+        }
+      ]
+    },
+    "Uptake": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "Mech.A"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  -0.1,
+                  "u"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "Column": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 300.0,
+          "shape": [
+            "lev"
+          ]
+        }
+      },
+      "equations": []
+    },
+    "Rates": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 300.0
+        },
+        "k1": {
+          "type": "unknown",
+          "units": "1/s"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "k1",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.001,
+              {
+                "op": "/",
+                "args": [
+                  "T",
+                  300.0
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "reaction_systems": {
+    "Mech": {
+      "species": {
+        "A": {
+          "units": "1",
+          "default": 1.0
+        },
+        "B": {
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "parameters": {
+        "kb": {
+          "units": "1/s",
+          "default": 0.002
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "Rates.k1"
+        },
+        {
+          "id": "R2",
+          "substrates": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "products": null,
+          "rate": "kb"
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Column.T",
+      "to": "Rates.T",
+      "transform": "param_to_var",
+      "lifting": "pointwise"
+    }
+  ]
+}

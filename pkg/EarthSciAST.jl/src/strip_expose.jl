@@ -600,6 +600,30 @@ function _refuse_coupling_events(file::EsmFile, classes)
     return nothing
 end
 
+# Refuse a `variable_map` whose `lifting` is `mean` or `integral`: esm-spec §10.5
+# reserves both kinds and no compiler here implements the reduction, so building
+# would read the raw array where the document asks for its mean or integral.
+# Validation and flatten accept them; only a build of a runnable problem
+# refuses. The coupling read is the one after `coupling_import` expansion, as
+# for `_refuse_coupling_events`.
+function _refuse_reserved_liftings(file::EsmFile)
+    for entry in expand_coupling_imports(file)
+        entry isa CouplingVariableMap || continue
+        kind = entry.lifting
+        (kind == "mean" || kind == "integral") || continue
+        throw(
+            TreeWalkError(
+                ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+                "variable_map $(entry.from) -> $(entry.to) declares lifting " *
+                    "\"$(kind)\", which esm-spec §10.5 reserves and which is not " *
+                    "supported yet; refusing the build rather than running the model " *
+                    "without it"
+            )
+        )
+    end
+    return nothing
+end
+
 # ============================================================================
 # Kernels
 # ============================================================================

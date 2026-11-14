@@ -2989,10 +2989,12 @@ function collectFieldIcs(flat: FlattenedSystem): void {
 // species' reaction ODE with the spatial operator's advection makearray). What
 // operator_compose does NOT do is array-ify the result: the merged
 // `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
-// its advection makearray indexes `sp` per grid cell. This pass performs the
-// `lifting: "pointwise"` promotion — wrapping each merged state ODE in an
-// `faq` over the grid, indexing the bare reaction species per cell and each
-// operator makearray per cell, and recording the species' concrete grid shape.
+// its advection makearray indexes `sp` per grid cell. The same holds for every
+// other route a grid reaches a 0-D system by (a `variable_map` feeding a shaped
+// field into a rate, an operator written elementwise, a partial translate).
+// This pass performs the pointwise promotion — wrapping each lifted state ODE
+// in an `faq` over the grid, reading each array operand and each operator
+// makearray per cell, and recording the state's concrete grid shape.
 
 function collectMakearrays(expr: Expression): ExpressionNode[] {
   const acc: ExpressionNode[] = []
@@ -3286,58 +3288,224 @@ function liftGatherShaped(
   return { op: 'index', args }
 }
 
+/** The state a `D(x, t)` left-hand side differentiates, else `undefined`. */
+function liftDTarget(lhs: Expression): string | undefined {
+  if (isNode(lhs) && lhs.op === 'D' && lhs.args !== undefined && typeof lhs.args[0] === 'string') {
+    return lhs.args[0]
+  }
+  return undefined
+}
+
+/** The top-level component a flattened name belongs to: its first segment. */
+function topComponent(name: string): string {
+  const dot = name.indexOf('.')
+  return dot < 0 ? name : name.slice(0, dot)
+}
+
 /**
- * The pointwise lift (esm-libraries-spec §4.7.5): rewrite each lifted species'
- * scalar merged RHS into a per-cell `faq` over the lift grid.
+ * A value-axes result: the ordered index sets an expression's value spans
+ * (empty: a scalar), or `undefined` when the lift's shape inference cannot
+ * decide.
+ */
+type LiftAxes = string[] | undefined
+
+/**
+ * The lift's shape inference (esm-libraries-spec §4.7.5, "Pointwise lift: which
+ * states are lifted"): the index sets an expression's value spans, under
+ * esm-spec §4.3.4.
+ *
+ * Memoized over definitions, so the answer does not depend on the order the
+ * equations are visited in; a definition cycle is undecided. `masked` names
+ * read as scalars: the sources of the non-pointwise `variable_map` edges into
+ * the component being decided.
+ */
+class LiftShapes {
+  private readonly memo = new Map<string, LiftAxes>()
+
+  constructor(
+    private readonly variables: ReadonlyMap<string, FlattenedVariable>,
+    private readonly defs: ReadonlyMap<string, Expression>,
+    private readonly lifted: ReadonlyMap<string, string[]>,
+    private readonly masked: ReadonlySet<string> = new Set(),
+  ) {}
+
+  nameAxes(name: string): LiftAxes {
+    if (name === 't' || this.masked.has(name)) return []
+    const lifted = this.lifted.get(name)
+    if (lifted !== undefined) return [...lifted]
+    if (this.memo.has(name)) return this.memo.get(name)
+    const v = this.variables.get(name)
+    if (v === undefined) return undefined
+    if (v.shape !== undefined) return [...v.shape]
+    const body = this.defs.get(name)
+    if (body === undefined) return []
+    this.memo.set(name, undefined)
+    const out = this.exprAxes(body)
+    this.memo.set(name, out)
+    return out
+  }
+
+  exprAxes(expr: Expression): LiftAxes {
+    if (typeof expr === 'string') return this.nameAxes(expr)
+    if (numericValue(expr) !== undefined || typeof expr === 'boolean') return []
+    if (!isNode(expr)) return undefined
+    const args = (expr.args ?? []) as Expression[]
+    if (expr.op === 'index') {
+      for (const sub of args.slice(1)) {
+        const axes = this.exprAxes(sub)
+        if (axes === undefined || axes.length > 0) return undefined
+      }
+      return []
+    }
+    if (expr.op === 'faq') {
+      const outputIdx = (expr as { output_idx?: unknown }).output_idx
+      if (!Array.isArray(outputIdx) || outputIdx.length === 0) return []
+      const ranges = ((expr as { ranges?: unknown }).ranges ?? {}) as Record<string, unknown>
+      const axes: string[] = []
+      for (const sym of outputIdx) {
+        const spec = typeof sym === 'string' ? ranges[sym] : undefined
+        const from = (spec as { from?: unknown } | null | undefined)?.from
+        if (typeof spec !== 'object' || spec === null || typeof from !== 'string') return undefined
+        axes.push(from)
+      }
+      return axes
+    }
+    if (expr.op === 'D') {
+      const wrt = (expr as { wrt?: unknown }).wrt
+      if ((wrt === undefined || wrt === null || wrt === 't') && args.length === 1) {
+        return this.exprAxes(args[0])
+      }
+    }
+    if (!isElementwiseNode(expr)) return undefined
+    const out: string[] = []
+    for (const a of args) {
+      const axes = this.exprAxes(a)
+      if (axes === undefined) return undefined
+      for (const x of axes) if (!out.includes(x)) out.push(x)
+    }
+    return out
+  }
+}
+
+/**
+ * `_p0 … _p{n-1}`, with the prefix lengthened by `_` until no name in `exprs`
+ * uses one of them.
+ */
+function freshLiftLoops(exprs: Expression[], n: number): string[] {
+  const used = new Set<string>()
+  const visit = (e: Expression): void => {
+    if (typeof e === 'string') {
+      used.add(e)
+      return
+    }
+    if (!isNode(e)) return
+    const ranges = (e as { ranges?: unknown }).ranges
+    if (typeof ranges === 'object' && ranges !== null) {
+      for (const k of Object.keys(ranges)) used.add(k)
+    }
+    const outputIdx = (e as { output_idx?: unknown }).output_idx
+    if (Array.isArray(outputIdx)) {
+      for (const s of outputIdx) if (typeof s === 'string') used.add(s)
+    }
+    mapChildren(e, (child) => {
+      visit(child as Expression)
+      return child
+    })
+  }
+  exprs.forEach(visit)
+  let prefix = '_p'
+  for (;;) {
+    const loops = Array.from({ length: n }, (_, d) => `${prefix}${d}`)
+    if (!loops.some((l) => used.has(l))) return loops
+    prefix = `_${prefix}`
+  }
+}
+
+/**
+ * How one lifted state's equation is rewritten: the index set of each grid
+ * dimension, their sizes, and, for a state reached by an operator `makearray`,
+ * the loop symbols read off it (`undefined`: fresh loops).
+ */
+interface LiftPlan {
+  axes: string[]
+  extents: number[]
+  loops?: string[]
+}
+
+/**
+ * Pointwise spatial lift (esm-spec §10.5; esm-libraries-spec §4.7.5, "Pointwise
+ * lift: which states are lifted").
+ *
+ * A scalar state is a lift candidate when its merged equation carries an
+ * operator `makearray` (the operator route) or its right-hand side is an array
+ * under the lift's shape inference ({@link LiftShapes}). A candidate lifts its
+ * whole top-level component: every scalar state of that model or reaction
+ * system goes onto the same grid. Lifting can make further right-hand sides
+ * arrays, so the search repeats until no new component is lifted. Each lifted
+ * equation is rewritten into a `faq` over the grid, its array operands read per
+ * cell.
+ *
+ * A component two candidates put on different grids is refused with
+ * {@link DimensionPromotionError}. Coupling entries with an explicit `lifting`
+ * other than `"pointwise"` do not trigger the lift: an `operator_compose` one
+ * takes its components out of the operator route, and a `variable_map` one
+ * reads its source as a scalar when deciding the target's component.
  *
  * @internal Exported only so the unit tests can drive the lift directly; not
  * part of the package's public API (`index.ts` does not re-export it).
  */
 export function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): void {
-  const wanted = coupling.some(
-    (c) =>
-      c.type === 'operator_compose' &&
-      (c as unknown as { lifting?: string }).lifting === 'pointwise',
-  )
-  if (!wanted) return
-
-  const dTarget = (lhs: Expression): string | undefined => {
-    if (
-      isNode(lhs) &&
-      lhs.op === 'D' &&
-      lhs.args !== undefined &&
-      typeof lhs.args[0] === 'string'
+  const noOperatorRoute = new Set<string>()
+  const masks = new Map<string, Set<string>>()
+  for (const c of coupling) {
+    const e = c as unknown as Record<string, unknown>
+    const lifting = e.lifting
+    if (lifting === undefined || lifting === null || lifting === 'pointwise') continue
+    if (c.type === 'operator_compose') {
+      for (const s of (e.systems as string[] | undefined) ?? [])
+        noOperatorRoute.add(topComponent(s))
+    } else if (
+      c.type === 'variable_map' &&
+      typeof e.to === 'string' &&
+      typeof e.from === 'string'
     ) {
-      return lhs.args[0]
+      if (e.to === '' || e.from === '') continue
+      const comp = topComponent(e.to)
+      const set = masks.get(comp)
+      if (set === undefined) masks.set(comp, new Set([e.from]))
+      else set.add(e.from)
     }
-    return undefined
   }
 
-  // A species is lifted iff its state ODE's merged RHS carries a spatial-operator
-  // makearray (the advection contribution operator_compose added) and it does
-  // not already declare a shape: a state that already lives on a grid has
-  // nothing to lift, and its declared shape stands.
-  const lifted = new Set<string>()
+  const isLiftState = (name: string): boolean => {
+    const v = flat.stateVariables[name]
+    return v !== undefined && (v.shape === undefined || v.shape.length === 0)
+  }
+
+  const defs = new Map<string, Expression>()
   for (const eq of flat.equations) {
-    const target = dTarget(eq.lhs)
-    if (target === undefined) continue
-    const shape = flat.stateVariables[target]?.shape
-    if (shape !== undefined && shape.length > 0) continue
-    if (collectMakearrays(eq.rhs).length > 0) lifted.add(target)
+    if (typeof eq.lhs === 'string' && !defs.has(eq.lhs)) defs.set(eq.lhs, eq.rhs)
   }
-  if (lifted.size === 0) return
+  const states = Object.keys(flat.stateVariables).filter(
+    (n) => !defs.has(n) && !(n in flat.observedVariables) && isLiftState(n),
+  )
+  const variables = new Map<string, FlattenedVariable>()
+  for (const table of [flat.parameters, flat.observedVariables, flat.stateVariables]) {
+    for (const [name, v] of Object.entries(table)) variables.set(name, v)
+  }
+  const tendencies: [string, FlattenedEquation][] = []
+  for (const eq of flat.equations) {
+    const t = liftDTarget(eq.lhs)
+    if (t !== undefined && isLiftState(t)) tendencies.push([t, eq])
+  }
 
-  // Operands to read per cell: the lifted species (at every loop) plus every
-  // parameter / observed / state with a declared shape, gathered by index-set
-  // name (liftGatherShaped). The same declared shapes also name the lift's
-  // index sets (liftAxisNames).
-  const arrayVars = new Set<string>(lifted)
+  // Every declared shape: it names the operator route's index sets
+  // (liftAxisNames) and gathers an operand per cell by index-set name.
   const varShapes = new Map<string, string[]>()
   for (const table of [flat.parameters, flat.observedVariables, flat.stateVariables]) {
     for (const [name, v] of Object.entries(table)) {
-      if (v.shape !== undefined && v.shape.length > 0) {
-        arrayVars.add(name)
-        if (!varShapes.has(name)) varShapes.set(name, [...v.shape])
+      if (v.shape !== undefined && v.shape.length > 0 && !varShapes.has(name)) {
+        varShapes.set(name, [...v.shape])
       }
     }
   }
@@ -3353,24 +3521,24 @@ export function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntr
     else names.push(name)
   }
 
-  const next: FlattenedEquation[] = []
-  for (const eq of flat.equations) {
-    const target = dTarget(eq.lhs)
-    if (target === undefined || !lifted.has(target)) {
-      next.push(eq)
-      continue
+  // The operator route: a scalar state whose merged equation carries an
+  // operator makearray. Its grid is read off the makearray.
+  const operatorRoute = new Set<string>()
+  for (const [t, eq] of tendencies) {
+    if (!noOperatorRoute.has(topComponent(t)) && collectMakearrays(eq.rhs).length > 0) {
+      operatorRoute.add(t)
     }
+  }
+  const plans = new Map<string, LiftPlan>()
+  for (const [target, eq] of tendencies) {
+    if (!operatorRoute.has(target) || plans.has(target)) continue
     const mas = collectMakearrays(eq.rhs)
-    const regions =
-      mas.length > 0 ? (((mas[0] as { regions?: number[][][] }).regions ?? []) as number[][][]) : []
-    if (mas.length === 0 || regions.length === 0) {
-      next.push(eq)
-      continue
-    }
+    const regions = ((mas[0] as { regions?: number[][][] }).regions ?? []) as number[][][]
+    if (regions.length === 0) continue
     const rank = regions[0].length
     let loops: string[] | undefined
     for (const ma of mas) {
-      loops = detectLiftLoops(ma, lifted, rank)
+      loops = detectLiftLoops(ma, operatorRoute, rank)
       if (loops !== undefined) break
     }
     if (loops === undefined) {
@@ -3379,7 +3547,6 @@ export function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntr
           `'${target}' from its operator makearray`,
       )
     }
-
     const extents = makearrayExtents(mas[0])
     const axes = liftIndexSets(
       mas,
@@ -3391,19 +3558,121 @@ export function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntr
       flat.indexSets,
       target,
     )
+    plans.set(target, { axes, extents: [...extents], loops: [...loops] })
+  }
+
+  const sizeOf = (axis: string, state: string): number => {
+    const size = indexSetSize(flat.indexSets[axis])
+    if (size === undefined) {
+      throw new DimensionPromotionError(
+        `pointwise lift: state '${state}' would be lifted onto index set ` +
+          `'${axis}', which has no declared size`,
+      )
+    }
+    return size
+  }
+
+  // Whole-component lift, to a fixpoint.
+  const liftedAxes = new Map<string, string[]>()
+  const liftedComponents = new Set<string>()
+  for (;;) {
+    const inference = new Map<string, LiftShapes>()
+    const found = new Map<string, [string, string[]][]>()
+    const record = (comp: string, target: string, axes: string[]): void => {
+      const list = found.get(comp)
+      if (list === undefined) found.set(comp, [[target, axes]])
+      else list.push([target, axes])
+    }
+    for (const [target, eq] of tendencies) {
+      const comp = topComponent(target)
+      if (liftedComponents.has(comp)) continue
+      const plan = plans.get(target)
+      if (plan !== undefined) {
+        record(comp, target, plan.axes)
+        continue
+      }
+      let shapes = inference.get(comp)
+      if (shapes === undefined) {
+        shapes = new LiftShapes(variables, defs, liftedAxes, masks.get(comp) ?? new Set())
+        inference.set(comp, shapes)
+      }
+      const axes = shapes.exprAxes(eq.rhs)
+      if (axes !== undefined && axes.length > 0) record(comp, target, axes)
+    }
+    if (found.size === 0) break
+    for (const [comp, candidates] of found) {
+      const [first, grid] = candidates[0]
+      const gridSet = new Set(grid)
+      for (const [other, axes] of candidates.slice(1)) {
+        const axesSet = new Set(axes)
+        if (axesSet.size !== gridSet.size || [...axesSet].some((a) => !gridSet.has(a))) {
+          throw new DimensionPromotionError(
+            `pointwise lift: component '${comp}' would be lifted onto two grids: ` +
+              `state '${first}' onto ${JSON.stringify(grid)} and state '${other}' onto ` +
+              `${JSON.stringify(axes)}`,
+          )
+        }
+      }
+      if (gridSet.size !== grid.length) {
+        throw new DimensionPromotionError(
+          `pointwise lift: state '${first}' would be lifted onto ${JSON.stringify(grid)}, ` +
+            `which names one index set twice`,
+        )
+      }
+      for (const state of states) {
+        if (topComponent(state) !== comp) continue
+        let plan = plans.get(state)
+        if (plan === undefined) {
+          plan = { axes: [...grid], extents: grid.map((a) => sizeOf(a, state)) }
+          plans.set(state, plan)
+        }
+        liftedAxes.set(state, plan.axes)
+      }
+      liftedComponents.add(comp)
+    }
+  }
+  if (liftedAxes.size === 0) return
+
+  // The lifted states live on the lift's index sets: each `shape` names them
+  // and `liftedShapes` records their sizes (esm-libraries-spec §4.7.5).
+  for (const state of states) {
+    if (!liftedAxes.has(state)) continue
+    const plan = plans.get(state)!
+    flat.liftedShapes[state] = [...plan.extents]
+    flat.stateVariables[state] = { ...flat.stateVariables[state], shape: [...plan.axes] }
+  }
+
+  // Operands read per cell: every array on the lifted system — the lifted
+  // states, every declared shape, and every unshaped observed whose definition
+  // is an array under the lift's shape inference.
+  const readShapes = new Map(varShapes)
+  for (const [name, axes] of liftedAxes) readShapes.set(name, axes)
+  const final = new LiftShapes(variables, defs, liftedAxes)
+  for (const name of defs.keys()) {
+    if (readShapes.has(name) || !variables.has(name)) continue
+    const axes = final.nameAxes(name)
+    if (axes !== undefined && axes.length > 0) readShapes.set(name, axes)
+  }
+  const arrayVars = new Set<string>(readShapes.keys())
+
+  const next: FlattenedEquation[] = []
+  for (const eq of flat.equations) {
+    const target = liftDTarget(eq.lhs)
+    if (target === undefined || !liftedAxes.has(target)) {
+      next.push(eq)
+      continue
+    }
+    const plan = plans.get(target)!
+    const rank = plan.axes.length
+    const loops = plan.loops ?? freshLiftLoops([eq.lhs, eq.rhs], rank)
     const ranges: Record<string, { from: string }> = {}
-    for (let d = 0; d < rank; d++) ranges[loops[d]] = { from: axes[d] }
-    // The lifted state lives on the lift's index sets: its `shape` names them
-    // and `liftedShapes` records their sizes (esm-libraries-spec §4.7.5).
-    flat.liftedShapes[target] = extents
-    const state = flat.stateVariables[target]
-    if (state !== undefined) flat.stateVariables[target] = { ...state, shape: [...axes] }
+    for (let d = 0; d < rank; d++) ranges[loops[d]] = { from: plan.axes[d] }
 
     // Per-cell indexing applies inside each contribution; the `faq` wrapper goes
     // around their sum (§4.7.5 provenance table).
-    const grid: LiftGrid = { loops, axes, species: target }
+    const grid: LiftGrid = { loops, axes: plan.axes, species: target }
     const contributions: Contribution[] = contributionsOf(eq).map((c) => ({
-      expr: liftRhsToCell(c.expr, arrayVars, varShapes, grid, true),
+      expr: liftRhsToCell(c.expr, arrayVars, readShapes, grid, true),
       origins: c.origins,
     }))
     // `args: []` is not decoration: a `faq` carries its body in `expr`,

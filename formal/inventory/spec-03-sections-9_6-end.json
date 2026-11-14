@@ -953,6 +953,24 @@
       "note": "A coupling-library edge transform whose templates would introduce grad/div/spatial D is rejected with coupling_library_illegal_payload."
     },
     {
+      "id": "spec.10.5.reserved-lifting-refused-at-build",
+      "section": "10.5",
+      "quote": "a binding that builds a runnable problem MUST refuse a `variable_map` whose `lifting` is `mean` or `integral` at build",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A build (not validate or flatten) of a document with a variable_map whose lifting is mean or integral fails with unsupported_construct naming the edge and the kind; the reduction is not specified, and the unreduced substitution would read the raw array."
+    },
+    {
+      "id": "spec.10.5.lift-two-grids-refused",
+      "section": "10.5",
+      "quote": "A component whose states would land on two different grids MUST be refused with the binding's dimension-promotion error",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Pointwise lift: when two lift candidates of one top-level component name different sets of index sets, flatten refuses the document with DimensionPromotionError rather than lift the component onto either grid (tests/conformance/pointwise_lift/fixtures/lift_two_grids.esm)."
+    },
+    {
       "id": "spec.10.7.scope-before-merge",
       "section": "10.7",
       "quote": "A binding MUST therefore apply the scoping in the same pass that namespaces the component's equations",

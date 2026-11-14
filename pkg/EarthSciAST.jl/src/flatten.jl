@@ -673,7 +673,9 @@ runner learning anything about reactions.
 
 What `_deriv` covers, and nothing else: a STATE (its tendency, with any `D`
 inside that tendency resolved in turn, so a chained
-`D(lai)/dt ~ sla · D(biomass)/dt` terminates in states); an OBSERVED (the chain
+`D(lai)/dt ~ sla · D(biomass)/dt` terminates in states; a pointwise-lifted
+state's tendency is its lifted `faq`, and one cell `index(x, ℓ…)` of it is that
+cell of the `faq`); an OBSERVED (the chain
 rule, by substituting its definition and differentiating it); a TIME-INVARIANT
 name or a literal (`0`); and `+`, unary and binary `-`, `neg`, n-ary `*` and
 binary `/`, distributed by the sum, product and quotient rules. Every other
@@ -705,7 +707,10 @@ function _resolve_rhs_time_derivatives!(
     definition = Dict{String, ASTExpr}()
     for eq in equations
         t = _rhs_derivative_target(eq.lhs)
+        t === nothing && (t = _lifted_target(eq, lifted_shapes))
         if t !== nothing
+            # A lifted state's tendency is its lifted right-hand side, the `faq`
+            # over its index sets (esm-libraries-spec §4.7.5 step 3a).
             tendency[t] = eq.rhs
         elseif eq.lhs isa VarExpr
             # A bare-variable LHS is a DEFINING equation (§6.3.1's observed /
@@ -722,6 +727,7 @@ function _resolve_rhs_time_derivatives!(
         # `D(x)/dt ~ k·D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather
         # than expand forever.
         own = _rhs_derivative_target(eq.lhs)
+        own === nothing && (own = _lifted_target(eq, lifted_shapes))
         if own === nothing && eq.lhs isa VarExpr
             own = (eq.lhs::VarExpr).name
         end
@@ -738,6 +744,23 @@ function _resolve_rhs_time_derivatives!(
     end
     return equations
 end
+
+"""
+    _lifted_target(eq, lifted_shapes) -> Union{String,Nothing}
+
+The state a pointwise-lifted equation defines: `x` of its left-hand side
+`faq(D(index(x, ℓ…)))`, else `nothing`.
+"""
+function _lifted_target(eq::Equation, lifted_shapes::AbstractDict)::Union{String, Nothing}
+    _is_lifted(eq, lifted_shapes) || return nothing
+    d = (eq.lhs::OpExpr).expr_body::OpExpr
+    _is_structural_time_derivative(d) || return nothing
+    return ((d.args[1]::OpExpr).args[1]::VarExpr).name
+end
+
+"""Whether a tendency is a lifted right-hand side: a `faq` with output indices."""
+_is_lifted_tendency(e)::Bool =
+    e isa OpExpr && e.op == "faq" && e.output_idx !== nothing && !isempty(e.output_idx)
 
 """
     _has_time_derivative(e) -> Bool
@@ -822,6 +845,13 @@ function _deriv(
     d(a) = _deriv(a, tendency, definition, time_invariant, active)
     op = (e::OpExpr).op
     args = (e::OpExpr).args
+    if op == "index" && !isempty(args) && args[1] isa VarExpr &&
+            _is_lifted_tendency(get(tendency, (args[1]::VarExpr).name, nothing))
+        # One cell of a lifted state: that cell of its lifted tendency.
+        whole = d(args[1])
+        whole === nothing && return nothing
+        return OpExpr("index", ASTExpr[whole, args[2:end]...])
+    end
     if op == "+"
         terms = ASTExpr[]
         for a in args
@@ -1502,10 +1532,11 @@ function flatten(
     # boundary expand a stale name.
     _check_registry_coupling_rewrites(template_registry, map_rewritten_names)
 
-    # Step 3b: Pointwise spatial lift (§10.5). operator_compose has merged each
-    # reaction/model state ODE with the spatial operator's advection; array-ify
-    # those merged equations (promote the species to the grid shape and wrap in an
-    # `faq` over the grid) so the lifted reaction network runs pointwise.
+    # Step 3b: Pointwise spatial lift (§10.5). Every scalar state whose merged
+    # equation carries an operator makearray, or whose right-hand side is an
+    # array, lifts its whole top-level component onto the grid (promote each
+    # state to the grid shape and wrap its equation in an `faq` over the grid),
+    # to a fixpoint across components (esm-libraries-spec §4.7.5).
     pointwise = _apply_pointwise_lift!(
         equations, contribs, states, params, observeds, index_sets,
         file.coupling;

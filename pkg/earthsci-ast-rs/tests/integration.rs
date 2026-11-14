@@ -259,6 +259,8 @@ mod pde_vectorized_eval;
 mod performance;
 #[path = "pipeline_flatten_rewrites.rs"]
 mod pipeline_flatten_rewrites;
+#[path = "pointwise_lift_values.rs"]
+mod pointwise_lift_values;
 #[path = "portable_native_interpreter.rs"]
 mod portable_native_interpreter;
 #[path = "ppm_template_chain.rs"]

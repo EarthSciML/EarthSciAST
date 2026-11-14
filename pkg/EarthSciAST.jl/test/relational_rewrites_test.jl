@@ -48,6 +48,13 @@ function _rr_ode_states(doc, model)
     return String[t for t in (target(eq["lhs"]) for eq in doc["models"][model]["equations"]) if t !== nothing]
 end
 
+# Whether `path` carries a variable_map whose `lifting` is `mean` or `integral`,
+# which a build refuses (esm-spec §10.5).
+_rr_reserved_lifting(path) = any(
+    c -> c isa EarthSciAST.CouplingVariableMap && c.lifting in ("mean", "integral"),
+    EarthSciAST.expand_coupling_imports(load_path(path))
+)
+
 # One form of `path` (its single `model`) built with the case's caller data.
 function _rr_build(path, case, compiler, model)
     doc = _rr_native(path)
@@ -199,7 +206,15 @@ const _RR_CASES = [
             (get(cmp, :inline_tests, false) || get(cmp, :load_only, false)) || continue
             path = _rr_path(e)
             @test load_path(path) isa EsmFile
-            if get(cmp, :inline_tests, false)
+            if get(cmp, :inline_tests, false) && _rr_reserved_lifting(path)
+                # A `mean` / `integral` variable_map lifting is reserved by
+                # esm-spec §10.5 and refused at build (`unsupported_construct`),
+                # so every assertion reports that refusal instead of a value.
+                tp = run_inline_tests(path; compiler = :interpreter)
+                @test !isempty(tp)
+                @test all(r -> r.status != EarthSciAST.PASS, tp)
+                @test all(r -> occursin("esm-spec §10.5", r.message), tp)
+            elseif get(cmp, :inline_tests, false)
                 tp = run_inline_tests(path; compiler = :interpreter)
                 # Integrator outputs: within each assertion's tolerance, not bit for bit.
                 gold = _RR_GOLDEN[String(e.id)].inline_tests

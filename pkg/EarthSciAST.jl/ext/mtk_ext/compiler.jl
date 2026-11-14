@@ -588,6 +588,7 @@ function _mtk_run_system(input; metaparameters, base_path, renames_out)
     if input isa EarthSciAST.EsmFile
         coordinates = input.coordinates
         solver_block = input.solver
+        EarthSciAST._refuse_reserved_liftings(input)
         input = flatten(input)
     end
     input isa FlattenedSystem || throw(

@@ -309,6 +309,7 @@ function _prepare_run_doc(
         # A coupling-level event is lowered by no compiler here: refused unless
         # the caller stripped its class (`esm_problem(…; strip)`).
         _refuse_coupling_events(input, get(task_local_storage(), :_esm_strip_taken, String[]))
+        _refuse_reserved_liftings(input)
         input = flatten(input)
     end
     if input isa FlattenedSystem

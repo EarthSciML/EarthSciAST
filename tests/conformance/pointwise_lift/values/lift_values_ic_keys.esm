@@ -1,0 +1,304 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "name": "LiftValuesIcKeys",
+    "description": "Values of a pointwise lift through a variable_map (esm-spec 10.5): a [lev] temperature reaches the rate model, so the reaction system Mech is lifted onto [lev]. Per-cell initial_conditions keys Mech.A[k] set each level, and each level's tendency follows its own temperature and initial value. Before esm 2.2.0 Mech stayed scalar and these keys were rejected. The second test integrates to t = 100 s: each level of Mech.A decays at its own rate, A[k](t) = A[k](0) exp(-k1[k] t).",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-13T00:00:00Z"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "shape": [
+            "lev"
+          ],
+          "default": 300.0
+        }
+      },
+      "equations": [],
+      "tests": [
+        {
+          "id": "per_level",
+          "parameter_overrides": {
+            "Column.T": [
+              300.0,
+              600.0,
+              150.0
+            ]
+          },
+          "initial_conditions": {
+            "Mech.A[1]": 1.0,
+            "Mech.A[2]": 2.0,
+            "Mech.A[3]": 4.0
+          },
+          "time_span": {
+            "start": 0,
+            "end": 0
+          },
+          "assertions": [
+            {
+              "variable": "Mech.A[1]",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "abs": 1e-15,
+                "rel": 0.0
+              }
+            },
+            {
+              "variable": "Mech.A[3]",
+              "time": 0.0,
+              "expected": 4.0,
+              "tolerance": {
+                "abs": 1e-15,
+                "rel": 0.0
+              }
+            },
+            {
+              "variable": "Mech.B[2]",
+              "time": 0.0,
+              "expected": 0.5,
+              "tolerance": {
+                "abs": 1e-15,
+                "rel": 0.0
+              }
+            },
+            {
+              "variable": "Tend.dA_dt[1]",
+              "time": 0.0,
+              "expected": -0.001,
+              "tolerance": {
+                "abs": 1e-15,
+                "rel": 0.0
+              }
+            },
+            {
+              "variable": "Tend.dA_dt[2]",
+              "time": 0.0,
+              "expected": -0.004,
+              "tolerance": {
+                "abs": 1e-15,
+                "rel": 0.0
+              }
+            },
+            {
+              "variable": "Tend.dA_dt[3]",
+              "time": 0.0,
+              "expected": -0.002,
+              "tolerance": {
+                "abs": 1e-15,
+                "rel": 0.0
+              }
+            },
+            {
+              "variable": "Tend.dB_dt[1]",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-15,
+                "rel": 0.0
+              }
+            },
+            {
+              "variable": "Tend.dB_dt[2]",
+              "time": 0.0,
+              "expected": 0.003,
+              "tolerance": {
+                "abs": 1e-15,
+                "rel": 0.0
+              }
+            },
+            {
+              "variable": "Tend.dB_dt[3]",
+              "time": 0.0,
+              "expected": 0.001,
+              "tolerance": {
+                "abs": 1e-15,
+                "rel": 0.0
+              }
+            }
+          ]
+        },
+        {
+          "id": "per_level_decay",
+          "parameter_overrides": {
+            "Column.T": [
+              300.0,
+              600.0,
+              150.0
+            ]
+          },
+          "initial_conditions": {
+            "Mech.A[1]": 1.0,
+            "Mech.A[2]": 2.0,
+            "Mech.A[3]": 4.0
+          },
+          "time_span": {
+            "start": 0,
+            "end": 100
+          },
+          "assertions": [
+            {
+              "variable": "Mech.A[1]",
+              "time": 100.0,
+              "expected": 0.9048374180359595,
+              "tolerance": {
+                "rel": 1e-06
+              }
+            },
+            {
+              "variable": "Mech.A[2]",
+              "time": 100.0,
+              "expected": 1.6374615061559636,
+              "tolerance": {
+                "rel": 1e-06
+              }
+            },
+            {
+              "variable": "Mech.A[3]",
+              "time": 100.0,
+              "expected": 3.804917698002856,
+              "tolerance": {
+                "rel": 1e-06
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Rates": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 300.0
+        },
+        "k1": {
+          "type": "unknown",
+          "units": "1/s"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "k1",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.001,
+              {
+                "op": "/",
+                "args": [
+                  "T",
+                  300.0
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "Tend": {
+      "variables": {
+        "dA_dt": {
+          "type": "unknown",
+          "units": "1/s"
+        },
+        "dB_dt": {
+          "type": "unknown",
+          "units": "1/s"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "dA_dt",
+          "rhs": {
+            "op": "D",
+            "args": [
+              "Mech.A"
+            ],
+            "wrt": "t"
+          }
+        },
+        {
+          "lhs": "dB_dt",
+          "rhs": {
+            "op": "D",
+            "args": [
+              "Mech.B"
+            ],
+            "wrt": "t"
+          }
+        }
+      ]
+    }
+  },
+  "reaction_systems": {
+    "Mech": {
+      "species": {
+        "A": {
+          "units": "1",
+          "default": 1.0
+        },
+        "B": {
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "parameters": {
+        "kb": {
+          "units": "1/s",
+          "default": 0.002
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "Rates.k1"
+        },
+        {
+          "id": "R2",
+          "substrates": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "products": null,
+          "rate": "kb"
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Column.T",
+      "to": "Rates.T",
+      "transform": "param_to_var",
+      "lifting": "pointwise"
+    }
+  ]
+}

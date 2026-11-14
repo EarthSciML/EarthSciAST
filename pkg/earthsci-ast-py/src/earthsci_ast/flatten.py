@@ -3837,6 +3837,32 @@ def _derivative_target(expr: Expr) -> str | None:
     return arg if isinstance(arg, str) else None
 
 
+def _lifted_target(eq: FlattenedEquation) -> str | None:
+    """The state a pointwise-lifted equation defines: ``x`` of its left-hand
+    side ``faq(D(index(x, ℓ…)))``, else ``None``."""
+    lhs = eq.lhs
+    if not (eq.lifted and isinstance(lhs, ExprNode) and lhs.op == "faq"):
+        return None
+    inner = lhs.expr
+    if not _is_structural_time_derivative(inner):
+        return None
+    arg = inner.args[0]  # type: ignore[union-attr]
+    if (
+        isinstance(arg, ExprNode)
+        and arg.op == "index"
+        and arg.args
+        and isinstance(arg.args[0], str)
+    ):
+        return arg.args[0]
+    return None
+
+
+def _is_lifted_tendency(expr: Expr) -> bool:
+    """Whether a tendency is a lifted right-hand side: a ``faq`` with output
+    indices."""
+    return isinstance(expr, ExprNode) and expr.op == "faq" and bool(expr.output_idx)
+
+
 def _zero() -> Expr:
     return 0.0
 
@@ -3971,6 +3997,17 @@ def _deriv(
 
     op = expr.op
     args = list(expr.args or [])
+    if (
+        op == "index"
+        and args
+        and isinstance(args[0], str)
+        and _is_lifted_tendency(tendency.get(args[0]))
+    ):
+        # One cell of a lifted state: that cell of its lifted tendency.
+        whole = _deriv(args[0], tendency, definition, time_invariant, active)
+        if whole is None:
+            return None
+        return ExprNode(op="index", args=[whole, *args[1:]])
     if op == "+":
         terms: list[Expr] = []
         for a in args:
@@ -4067,8 +4104,10 @@ def _resolve_rhs_time_derivatives(flat: FlattenedSystem) -> None:
     tendency: dict[str, Expr] = {}
     definition: dict[str, Expr] = {}
     for eq in flat.equations:
-        target = _derivative_target(eq.lhs)
+        target = _derivative_target(eq.lhs) or _lifted_target(eq)
         if target is not None:
+            # A lifted state's tendency is its lifted right-hand side, the
+            # `faq` over its index sets (esm-libraries-spec §4.7.5 step 3a).
             tendency[target] = eq.rhs
         elif isinstance(eq.lhs, str):
             # A bare-variable LHS is a DEFINING equation (esm-spec §6.3.1's
@@ -4085,7 +4124,7 @@ def _resolve_rhs_time_derivatives(flat: FlattenedSystem) -> None:
         # its own right-hand side; seeding ``active`` with it is what makes
         # ``D(x)/dt ~ k*D(x, t)`` and ``y ~ D(y, t)`` terminate as unresolved
         # rather than expand forever.
-        own = _derivative_target(eq.lhs)
+        own = _derivative_target(eq.lhs) or _lifted_target(eq)
         if own is None and isinstance(eq.lhs, str):
             own = eq.lhs
         active: list[str] = [own] if own is not None else []
@@ -4441,56 +4480,204 @@ def _lift_gather_shaped(name: str, shape: list[str], grid: _LiftGrid, elementwis
     return ExprNode(op="index", args=args)
 
 
+def _d_target(lhs: Expr) -> str | None:
+    """The state a ``D(x, t)`` left-hand side differentiates, else ``None``."""
+    if isinstance(lhs, ExprNode) and lhs.op == "D" and lhs.args and isinstance(lhs.args[0], str):
+        return lhs.args[0]
+    return None
+
+
+def _top_component(name: str) -> str:
+    """The top-level component a flattened name belongs to: its first segment."""
+    return name.split(".", 1)[0]
+
+
+def _is_scalar_shape(shape: Any) -> bool:
+    """A state with no ``shape``, or ``shape: []``, is scalar (esm-spec §6.3)."""
+    return not shape
+
+
+#: A value-axes result: the ordered index sets an expression's value spans
+#: (empty: a scalar), or ``None`` when the lift's shape inference cannot decide.
+_Axes = list[str] | None
+
+
+class _LiftShapes:
+    """The lift's shape inference (esm-libraries-spec §4.7.5, "Pointwise lift:
+    which states are lifted"): the index sets an expression's value spans,
+    under esm-spec §4.3.4.
+
+    Memoized over definitions, so the answer does not depend on the order the
+    equations are visited in; a definition cycle is undecided. ``masked`` names
+    read as scalars: the sources of the non-pointwise ``variable_map`` edges
+    into the component being decided.
+    """
+
+    def __init__(
+        self,
+        variables: dict[str, Any],
+        defs: dict[str, Expr],
+        lifted: dict[str, list[str]],
+        masked: frozenset[str] = frozenset(),
+    ) -> None:
+        self.variables = variables
+        self.defs = defs
+        self.lifted = lifted
+        self.masked = masked
+        self.memo: dict[str, _Axes] = {}
+
+    def name_axes(self, name: str) -> _Axes:
+        if name == "t" or name in self.masked:
+            return []
+        if name in self.lifted:
+            return list(self.lifted[name])
+        if name in self.memo:
+            return self.memo[name]
+        var = self.variables.get(name)
+        if var is None:
+            return None
+        shape = getattr(var, "shape", None)
+        if shape is not None:
+            return list(shape)
+        body = self.defs.get(name)
+        if body is None:
+            return []
+        self.memo[name] = None
+        out = self.expr_axes(body)
+        self.memo[name] = out
+        return out
+
+    def expr_axes(self, expr: Expr) -> _Axes:
+        if isinstance(expr, bool) or isinstance(expr, (int, float)):
+            return []
+        if isinstance(expr, str):
+            return self.name_axes(expr)
+        if not isinstance(expr, ExprNode):
+            return None
+        op = expr.op
+        if op == "index":
+            for sub in expr.args[1:]:
+                if self.expr_axes(sub) != []:
+                    return None
+            return []
+        if op == "faq":
+            if not expr.output_idx:
+                return []
+            axes: list[str] = []
+            for sym in expr.output_idx:
+                spec = (expr.ranges or {}).get(sym) if isinstance(sym, str) else None
+                if not (isinstance(spec, dict) and isinstance(spec.get("from"), str)):
+                    return None
+                axes.append(spec["from"])
+            return axes
+        if op == "D" and expr.wrt in (None, "t") and len(expr.args) == 1:
+            return self.expr_axes(expr.args[0])
+        if not _lift_is_elementwise(expr):
+            return None
+        out: list[str] = []
+        for a in expr.args:
+            axes = self.expr_axes(a)
+            if axes is None:
+                return None
+            out.extend(x for x in axes if x not in out)
+        return out
+
+
+def _fresh_lift_loops(exprs: list[Expr], n: int) -> list[str]:
+    """``_p0 … _p{n-1}``, with the prefix lengthened by ``_`` until no name in
+    ``exprs`` uses one of them."""
+    used: set[str] = set()
+    for e in exprs:
+        for node in walk(e):
+            if isinstance(node, str):
+                used.add(node)
+            elif isinstance(node, ExprNode):
+                used.update((node.ranges or {}).keys())
+                used.update(s for s in (node.output_idx or []) if isinstance(s, str))
+    prefix = "_p"
+    while True:
+        loops = [f"{prefix}{d}" for d in range(n)]
+        if not used.intersection(loops):
+            return loops
+        prefix = "_" + prefix
+
+
+@dataclass
+class _LiftPlan:
+    """How one lifted state's equation is rewritten: the index set of each grid
+    dimension, their sizes, and, for a state reached by an operator
+    ``makearray``, the loop symbols read off it (``None``: fresh loops)."""
+
+    axes: list[str]
+    extents: list[int]
+    loops: list[str] | None = None
+
+
 def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) -> None:
-    """Pointwise spatial lift (esm-spec §10.5) for ``operator_compose`` couplings
-    that declare ``lifting: "pointwise"``. Promotes every state ODE that
-    operator_compose merged with a spatial operator (its merged RHS carries an
-    operator ``makearray``) from a 0-D scalar to the operator's grid shape, and
-    rewrites the equation into an ``faq`` over the grid. No-op when no
-    coupling requests pointwise lifting, or no merged equation carries a
-    spatial-operator makearray."""
-    if not any(
-        isinstance(c, OperatorComposeCoupling) and c.lifting == "pointwise" for c in coupling
-    ):
-        return
+    """Pointwise spatial lift (esm-spec §10.5; esm-libraries-spec §4.7.5,
+    "Pointwise lift: which states are lifted").
 
-    def _d_target(lhs: Expr) -> str | None:
-        if (
-            isinstance(lhs, ExprNode)
-            and lhs.op == "D"
-            and lhs.args
-            and isinstance(lhs.args[0], str)
-        ):
-            return lhs.args[0]
-        return None
+    A scalar state is a lift candidate when its merged equation carries an
+    operator ``makearray`` (the operator route) or its right-hand side is an
+    array under the lift's shape inference (:class:`_LiftShapes`). A candidate
+    lifts its whole top-level component: every scalar state of that model or
+    reaction system goes onto the same grid. Lifting can make further
+    right-hand sides arrays, so the search repeats until no new component is
+    lifted. Each lifted equation is rewritten into a ``faq`` over the grid, its
+    array operands read per cell.
 
-    # A species is lifted iff its state ODE's merged RHS carries a spatial-operator
-    # makearray (the advection contribution operator_compose added) and it does
-    # not already declare a shape: a state that already lives on a grid has
-    # nothing to lift, and its declared shape stands.
-    lifted: set[str] = set()
+    A component two candidates put on different grids is refused with
+    :class:`DimensionPromotionError`. Coupling entries with an explicit
+    ``lifting`` other than ``"pointwise"`` do not trigger the lift: an
+    ``operator_compose`` one takes its components out of the operator route,
+    and a ``variable_map`` one reads its source as a scalar when deciding the
+    target's component.
+    """
+
+    def _non_pointwise(c: Any) -> bool:
+        lifting = getattr(c, "lifting", None)
+        return lifting is not None and lifting != "pointwise"
+
+    no_operator_route: set[str] = set()
+    masks: dict[str, set[str]] = {}
+    for c in coupling:
+        if not _non_pointwise(c):
+            continue
+        if isinstance(c, OperatorComposeCoupling):
+            no_operator_route.update(_top_component(s) for s in c.systems)
+        elif isinstance(c, VariableMapCoupling) and c.to_var and c.from_var:
+            masks.setdefault(_top_component(c.to_var), set()).add(c.from_var)
+
+    def _is_lift_state(name: str) -> bool:
+        var = flat.state_variables.get(name)
+        return var is not None and _is_scalar_shape(getattr(var, "shape", None))
+
+    defs: dict[str, Expr] = {}
     for eq in flat.equations:
-        target = _d_target(eq.lhs)
-        if target is None:
-            continue
-        declared_state = flat.state_variables.get(target)
-        if declared_state is not None and getattr(declared_state, "shape", None):
-            continue
-        if _collect_makearrays(eq.rhs, []):
-            lifted.add(target)
-    if not lifted:
-        return
+        if isinstance(eq.lhs, str):
+            defs.setdefault(eq.lhs, eq.rhs)
+    states = [
+        n
+        for n in flat.state_variables
+        if n not in defs and n not in flat.observed_variables and _is_lift_state(n)
+    ]
+    variables: dict[str, Any] = {
+        **flat.parameters,
+        **flat.observed_variables,
+        **flat.state_variables,
+    }
+    tendencies: list[tuple[str, FlattenedEquation]] = [
+        (t, eq)
+        for eq in flat.equations
+        if (t := _d_target(eq.lhs)) is not None and _is_lift_state(t)
+    ]
 
-    # Operands read per cell: the lifted species (at every loop) plus any already
-    # array-shaped parameter/observed/state (e.g. a grid-shaped wind field bound
-    # from a loader), gathered by index-set name (_lift_gather_shaped). The same
-    # declared shapes also name the lift's index sets (_lift_axis_names).
-    arrayvars: set[str] = set(lifted)
+    # Every declared shape: it names the operator route's index sets
+    # (_lift_axis_names) and gathers an operand per cell by index-set name.
     var_shapes: dict[str, list[str]] = {}
     for table in (flat.parameters, flat.observed_variables, flat.state_variables):
         for name, var in table.items():
             if getattr(var, "shape", None):
-                arrayvars.add(name)
                 var_shapes.setdefault(name, list(var.shape))
 
     # The registry as the document declares it, before the lift adds any
@@ -4502,21 +4689,24 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
         if isinstance(size, int):
             declared_by_size.setdefault(size, []).append(name)
 
-    new_equations: list[FlattenedEquation] = []
-    for eq in flat.equations:
-        target = _d_target(eq.lhs)
-        if target is None or target not in lifted:
-            new_equations.append(eq)
+    # The operator route: a scalar state whose merged equation carries an
+    # operator makearray. Its grid is read off the makearray.
+    operator_route: set[str] = {
+        t
+        for t, eq in tendencies
+        if _top_component(t) not in no_operator_route and _collect_makearrays(eq.rhs, [])
+    }
+    plans: dict[str, _LiftPlan] = {}
+    for target, eq in tendencies:
+        if target not in operator_route or target in plans:
             continue
-
         mas = _collect_makearrays(eq.rhs, [])
-        if not mas or not mas[0].regions:
-            new_equations.append(eq)
+        if not mas[0].regions:
             continue
         rank = len(mas[0].regions[0])
         loops: list[str] | None = None
         for ma in mas:
-            loops = _detect_lift_loops(ma, lifted, rank)
+            loops = _detect_lift_loops(ma, operator_route, rank)
             if loops is not None:
                 break
         if loops is None:
@@ -4524,20 +4714,105 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
                 f"pointwise lift: could not determine the spatial loop variables "
                 f"for species {target!r} from its operator makearray"
             )
-
         extents = _makearray_extents(mas[0])
         axes = _lift_index_sets(
             mas, loops, extents, var_shapes, declared, declared_by_size, flat.index_sets, target
         )
-        ranges: dict[str, Any] = {loops[d]: {"from": axes[d]} for d in range(rank)}
+        plans[target] = _LiftPlan(axes=axes, extents=list(extents), loops=list(loops))
+
+    def _size(axis: str, state: str) -> int:
+        entry = flat.index_sets.get(axis)
+        size = entry.get("size") if isinstance(entry, dict) else None
+        if not isinstance(size, int):
+            raise DimensionPromotionError(
+                f"pointwise lift: state {state!r} would be lifted onto index set "
+                f"{axis!r}, which has no declared size"
+            )
+        return size
+
+    # Whole-component lift, to a fixpoint.
+    lifted_axes: dict[str, list[str]] = {}
+    lifted_components: set[str] = set()
+    while True:
+        inference: dict[str, _LiftShapes] = {}
+        found: dict[str, list[tuple[str, list[str]]]] = {}
+        for target, eq in tendencies:
+            comp = _top_component(target)
+            if comp in lifted_components:
+                continue
+            if target in plans:
+                found.setdefault(comp, []).append((target, plans[target].axes))
+                continue
+            if comp not in inference:
+                inference[comp] = _LiftShapes(
+                    variables, defs, lifted_axes, frozenset(masks.get(comp, ()))
+                )
+            axes = inference[comp].expr_axes(eq.rhs)
+            if axes:
+                found.setdefault(comp, []).append((target, axes))
+        if not found:
+            break
+        for comp, candidates in found.items():
+            first, grid = candidates[0]
+            for other, axes in candidates[1:]:
+                if set(axes) != set(grid):
+                    raise DimensionPromotionError(
+                        f"pointwise lift: component {comp!r} would be lifted onto two "
+                        f"grids: state {first!r} onto {grid!r} and state {other!r} onto "
+                        f"{axes!r}"
+                    )
+            if len(set(grid)) != len(grid):
+                raise DimensionPromotionError(
+                    f"pointwise lift: state {first!r} would be lifted onto {grid!r}, "
+                    f"which names one index set twice"
+                )
+            for state in states:
+                if _top_component(state) != comp:
+                    continue
+                if state not in plans:
+                    plans[state] = _LiftPlan(
+                        axes=list(grid), extents=[_size(a, state) for a in grid]
+                    )
+                lifted_axes[state] = plans[state].axes
+            lifted_components.add(comp)
+    if not lifted_axes:
+        return
+
+    # The lifted states live on the lift's index sets: each `shape` names them
+    # and `lifted_shapes` records their sizes (esm-libraries-spec §4.7.5).
+    for state in states:
+        if state in lifted_axes:
+            flat.lifted_shapes[state] = tuple(plans[state].extents)
+            flat.state_variables[state] = replace(
+                flat.state_variables[state], shape=list(plans[state].axes)
+            )
+
+    # Operands read per cell: every array on the lifted system — the lifted
+    # states, every declared shape, and every unshaped observed whose
+    # definition is an array under the lift's shape inference.
+    read_shapes = dict(var_shapes)
+    read_shapes.update(lifted_axes)
+    final = _LiftShapes(variables, defs, lifted_axes)
+    for name in defs:
+        if name not in read_shapes and name in variables:
+            axes = final.name_axes(name)
+            if axes:
+                read_shapes[name] = axes
+    arrayvars: set[str] = set(read_shapes)
+
+    new_equations: list[FlattenedEquation] = []
+    for eq in flat.equations:
+        target = _d_target(eq.lhs)
+        if target is None or target not in lifted_axes:
+            new_equations.append(eq)
+            continue
+        plan = plans[target]
+        loops = plan.loops
+        if loops is None:
+            loops = _fresh_lift_loops([eq.lhs, eq.rhs], len(plan.axes))
+        rank = len(plan.axes)
+        ranges: dict[str, Any] = {loops[d]: {"from": plan.axes[d]} for d in range(rank)}
         output_idx: list[Any] = list(loops)
-
-        # The lifted state lives on the lift's index sets: its `shape` names them
-        # and `lifted_shapes` records their sizes (esm-libraries-spec §4.7.5).
-        flat.lifted_shapes[target] = tuple(extents)
-        if target in flat.state_variables:
-            flat.state_variables[target] = replace(flat.state_variables[target], shape=list(axes))
-
         idx_species = ExprNode(op="index", args=[target, *loops])
         new_lhs = ExprNode(
             op="faq",
@@ -4547,9 +4822,9 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
         )
         # Per-cell indexing applies inside each contribution; the `faq` wrapper
         # goes around their sum (esm-libraries-spec §4.7.5 provenance table).
-        grid = _LiftGrid(loops=list(loops), axes=list(axes), species=target)
+        grid = _LiftGrid(loops=list(loops), axes=list(plan.axes), species=target)
         contributions = [
-            Contribution(_lift_rhs_to_cell(c.expr, arrayvars, var_shapes, grid), c.origins)
+            Contribution(_lift_rhs_to_cell(c.expr, arrayvars, read_shapes, grid), c.origins)
             for c in eq.contributions
         ]
         new_rhs = ExprNode(

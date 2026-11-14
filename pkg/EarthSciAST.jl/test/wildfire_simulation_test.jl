@@ -1,57 +1,38 @@
-# End-to-end simulation of the coupled wildfire–atmosphere–ocean fixture
-# `tests/valid/wildfire_atmosphere_ocean.esm` through the Julia tree-walk runner
-# (`EarthSciAST.simulate`).
+# The coupled wildfire–atmosphere–ocean fixture
+# `tests/valid/wildfire_atmosphere_ocean.esm` at the Julia build entry points.
 #
-# What this exercises (the whole flatten → build_evaluator → integrate pipeline
-# for a MULTI-model coupled system):
-#   * A REAL inline conservative REGRID inside OceanDynamics: the atmosphere-grid
-#     sensible-heat flux (`flux_field` = [50,150,250,350] on 4 atmos cells) is
-#     remapped onto the 3-cell ocean grid by overlap weights W[a,o]=A[a,o]/A_o
-#     computed INLINE from cell geometry — a binned broad phase (value
-#     invention) + an overlap-area narrow phase (esm-spec §8.6.1). The overlaps are
-#     A=[[1,0,0],[1,0,0],[0,1,0],[0,.5,.5]], A_o=[2,1.5,.5], so
-#     surface_heat_flux = Σ_a W[a,o]·flux_atmos[a] = [100, 850/3, 350] W/m^2
-#     (conservative: Σ_o A_o·shf_o = Σ_a A_a·flux_a = 800).
-#   * SPATIAL LIFTING of a whole-array declared-shape state ODE: D(SST) integrates
-#     per ocean cell; `u_ocean` (a declared array state with an `ic` and no
-#     D-equation) stays 0, so −u_ocean·grad(SST) vanishes and
-#     SST(t) = 290 + t·surface_heat_flux/4.18e6 — LINEAR. Asserting SST(3600)
-#     therefore validates the inline regrid weights indirectly but precisely.
-#   * MULTI-MODEL coupling + flatten namespacing: the 5 models flatten into one
-#     system; the atmosphere/fire 0-D scalar states (T, phi, fuel, winds) have
-#     grad terms that correctly evaluate to 0 over a structurally-0-D field, so
-#     they stay constant (T=288, phi=1, fuel=10) and inject no spurious dynamics.
-#
-# The OceanDynamics model's inline `tests` block is the source of truth for the
-# trajectory; this runner executes every assertion in it, and additionally spot-
-# checks the constant atmosphere/fire states.
+# Its `OceanDynamics.SST -> AirSeaFluxCalculator.SST` variable_map declares
+# `lifting: "mean"`, a kind esm-spec §10.5 reserves and no compiler here
+# implements. A binding that builds a runnable problem MUST refuse it with
+# `unsupported_construct`, naming the edge and the kind, rather than read the
+# raw array where the document asks for its mean. Validation and flatten accept
+# the document; only the build refuses. The last testset pins the refusal on a
+# small inline document, for both reserved kinds.
 using Test
 using EarthSciAST
 import SciMLBase
-import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5: Tsit5
 const _ESS_WF = EarthSciAST
 
-# Resolve (rel, abs) precedence: assertion → test → model (unset field = 0).
-function _wf_resolve_tol(model_tol, test_tol, assertion_tol)
-    for cand in (assertion_tol, test_tol, model_tol)
-        cand === nothing && continue
-        r = cand.rel === nothing ? 0.0 : cand.rel
-        a = cand.abs === nothing ? 0.0 : cand.abs
-        return (r, a)
+# The refusal a build of a document with a reserved lifting raises.
+function _wf_build_error(f)
+    try
+        f()
+    catch e
+        return e
     end
-    return (1.0e-6, 0.0)
+    return nothing
 end
 
-# Index of `t` in the saved time grid (the run `saveat`s the assertion times).
-function _wf_time_index(times::Vector{Float64}, t::Float64)
-    for (i, tv) in enumerate(times)
-        isapprox(tv, t; atol = 1.0e-9) && return i
-    end
-    error("no saved time point at t=$t (saved: $times)")
+function _wf_is_lifting_refusal(err, edge, kind)
+    err isa _ESS_WF.TreeWalkError || return false
+    err.code == _ESS_WF.ERROR_CODES.UNSUPPORTED_CONSTRUCT || return false
+    msg = sprint(showerror, err)
+    return occursin(edge, msg) && occursin("\"$(kind)\"", msg) &&
+        occursin("esm-spec §10.5", msg) && occursin("not supported yet", msg)
 end
 
-@testset "wildfire_atmosphere_ocean.esm — inline regrid + coupled SST simulation" begin
+@testset "wildfire_atmosphere_ocean.esm — the mean variable_map is refused at build" begin
     fixture = joinpath(
         @__DIR__, "..", "..", "..", "tests", "valid",
         "wildfire_atmosphere_ocean.esm"
@@ -59,47 +40,77 @@ end
     @test isfile(fixture)
 
     file = _ESS_WF.load_path(fixture)
-    # The trajectory `tests` block lives on the OceanDynamics model.
     ocean = file.models["OceanDynamics"]
     @test !isempty(ocean.tests)
+    # Validation and flatten are unaffected.
+    @test _ESS_WF.validate(file).is_valid
+    @test _ESS_WF.flatten(file) isa _ESS_WF.FlattenedSystem
 
-    for t in ocean.tests
-        @testset "$(t.id)" begin
-            atimes = sort!(unique(Float64[a.time for a in t.assertions]))
-            tspan = (t.time_span.start, t.time_span.stop)
+    edge = "OceanDynamics.SST -> AirSeaFluxCalculator.SST"
+    @testset "esm_problem [$(c)]" for c in (:interpreter, :native)
+        err = _wf_build_error(() -> _ESS_WF.esm_problem(fixture, (0.0, 3600.0); compiler = c))
+        @test _wf_is_lifting_refusal(err, edge, "mean")
+    end
+    @testset "run_inline_tests" begin
+        results = _ESS_WF.run_inline_tests(fixture; compiler = :interpreter)
+        @test !isempty(results)
+        @test all(r -> r.status != _ESS_WF.PASS, results)
+        @test all(r -> occursin(edge, something(r.message, "")), results)
+    end
+end
 
-            prob = _ESS_WF.esm_problem(fixture, tspan)
-            r = solve(prob, Tsit5(); reltol = 1.0e-9, abstol = 1.0e-11, saveat = atimes)
-            @test SciMLBase.successful_retcode(r)
+# A small coupled document whose variable_map declares `lifting`.
+function _wf_lifting_doc(kind)
+    return Dict{String, Any}(
+        "esm" => "2.2.0",
+        "metadata" => Dict("name" => "reserved_lifting", "authors" => ["EarthSciAST test suite"]),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
+        "models" => Dict(
+            "Grid" => Dict(
+                "variables" => Dict(
+                    "q" => Dict(
+                        "type" => "parameter", "units" => "1", "default" => 1.0,
+                        "shape" => ["x"]
+                    )
+                ),
+                "equations" => []
+            ),
+            "Box" => Dict(
+                "variables" => Dict(
+                    "q_in" => Dict("type" => "parameter", "units" => "1", "default" => 0.0),
+                    "y" => Dict("type" => "unknown", "units" => "1", "default" => 0.0)
+                ),
+                "equations" => [
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => ["y"], "wrt" => "t"),
+                        "rhs" => Dict("op" => "*", "args" => [0.1, "q_in"])
+                    ),
+                ]
+            )
+        ),
+        "coupling" => [
+            Dict(
+                "type" => "variable_map", "from" => "Grid.q", "to" => "Box.q_in",
+                "transform" => "param_to_var", "lifting" => kind
+            ),
+        ]
+    )
+end
 
-            for a in t.assertions
-                # `a.variable` is model-local (e.g. "SST[1]"); the flattened /
-                # simulated element is namespaced under the OceanDynamics model.
-                key = "OceanDynamics." * a.variable
-                @test haskey(prob.var_map, key)
-                ti = _wf_time_index(r.t, Float64(a.time))
-                actual = r[Symbol(key)][ti]
-                rel, abs_ = _wf_resolve_tol(ocean.tolerance, t.tolerance, a.tolerance)
-                if rel > 0
-                    @test isapprox(actual, a.expected; rtol = rel, atol = abs_)
-                else
-                    @test isapprox(actual, a.expected; atol = abs_)
-                end
-            end
-
-            # Spot-check the coupled 0-D scalar states: the wildfire/atmosphere
-            # side has grad terms over structurally-0-D fields (→ 0) and no
-            # activating dynamics, so it stays at its initial condition. This
-            # guards the grad-on-scalar zeroing and the flatten coupling.
-            for (k, expected) in (
-                    "AtmosphericDynamics.T" => 288.0,
-                    "WildfirePropagation.phi" => 1.0,
-                    "WildfirePropagation.fuel" => 10.0,
-                )
-                if haskey(prob.var_map, k)
-                    @test isapprox(r[Symbol(k)][end], expected; atol = 1.0e-8)
-                end
-            end
+@testset "a mean or integral variable_map lifting is refused at build (esm-spec §10.5)" begin
+    @testset "$(kind)" for kind in ("mean", "integral")
+        doc = _wf_lifting_doc(kind)
+        file = _ESS_WF.load_document(doc)
+        @test _ESS_WF.validate(file).is_valid
+        @test _ESS_WF.flatten(file) isa _ESS_WF.FlattenedSystem
+        @testset "[$(c)]" for c in (:interpreter, :native)
+            err = _wf_build_error(() -> _ESS_WF.esm_problem(doc, (0.0, 1.0); compiler = c))
+            @test _wf_is_lifting_refusal(err, "Grid.q -> Box.q_in", kind)
         end
+    end
+    # `broadcast` and `pointwise` are not refused.
+    @testset "$(kind) is not refused" for kind in ("broadcast", "pointwise")
+        file = _ESS_WF.load_document(_wf_lifting_doc(kind))
+        @test _ESS_WF._refuse_reserved_liftings(file) === nothing
     end
 end

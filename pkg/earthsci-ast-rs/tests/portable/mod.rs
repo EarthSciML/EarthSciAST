@@ -327,6 +327,36 @@ fn first_bit_difference(a: &[f64], b: &[f64]) -> Option<(usize, f64, f64)> {
         .map(|i| (i, a[i], b[i]))
 }
 
+/// A `variable_map` whose `lifting` is `mean` or `integral` is reserved by
+/// esm-spec §10.5, so both compilers refuse a document carrying one with
+/// `unsupported_construct`, naming the kind. Check that, then drop those edges
+/// so the rest of the document (its geometry) is still compared.
+fn refuses_then_drops_reserved_lifting(id: &str, doc: &mut Value) {
+    let reserved = |c: &Value| matches!(c["lifting"].as_str(), Some("mean" | "integral"));
+    let Some(kind) = doc["coupling"]
+        .as_array()
+        .and_then(|cs| cs.iter().find(|c| reserved(c)))
+        .map(|c| c["lifting"].as_str().unwrap_or_default().to_string())
+    else {
+        return;
+    };
+    for compiler in [Compiler::Interpreter, Compiler::Native] {
+        match esm_problem(&*doc, (0.0, 1.0), options(compiler, None)) {
+            Ok(_) => panic!("{id}: {compiler:?} builds a reserved '{kind}' lifting"),
+            Err(e) => {
+                let message = e.to_string();
+                assert!(
+                    message.contains("unsupported_construct") && message.contains(&kind),
+                    "{id}: {compiler:?} refuses with the wrong diagnostic: {message}"
+                );
+            }
+        }
+    }
+    if let Some(cs) = doc["coupling"].as_array_mut() {
+        cs.retain(|c| !reserved(c));
+    }
+}
+
 /// Native and the interpreter give the same right-hand side, bit for bit, on
 /// one scaling fixture. Native is required for every document, so a refusal
 /// fails.
@@ -530,6 +560,7 @@ pub fn check_geometry_doc(id: &str, text: &str) {
     let mut doc: Value = serde_json::from_str(text).expect("the document parses");
     supply_polygon_rings(&mut doc);
     supply_state_defaults(&mut doc);
+    refuses_then_drops_reserved_lifting(id, &mut doc);
     let interp = esm_problem(&doc, (0.0, 1.0), options(Compiler::Interpreter, None))
         .unwrap_or_else(|e| panic!("{id}: the interpreter does not build it: {e}"));
     let native = esm_problem(&doc, (0.0, 1.0), options(Compiler::Native, None))

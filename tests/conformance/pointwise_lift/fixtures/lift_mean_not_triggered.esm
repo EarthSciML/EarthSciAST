@@ -1,0 +1,73 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "name": "LiftMeanNotTriggered",
+    "description": "A variable_map with lifting 'mean' does not trigger the pointwise lift (esm-spec 10.5): its source Column.q is read as a scalar when deciding Land, so Land.w stays scalar. No binding implements the mean reduction itself yet, so the flattened tendency still reads the raw [lev] array; this fixture pins only that the lift leaves Land alone.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-13T00:00:00Z"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "q": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.01,
+          "shape": [
+            "lev"
+          ]
+        }
+      },
+      "equations": []
+    },
+    "Land": {
+      "variables": {
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.3
+        },
+        "p": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "w"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.001,
+              "p"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Column.q",
+      "to": "Land.p",
+      "transform": "param_to_var",
+      "lifting": "mean"
+    }
+  ]
+}

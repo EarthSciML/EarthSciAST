@@ -763,6 +763,7 @@ impl ArrayCompiled {
                 independent_variables: flat.independent_variables.clone(),
             });
         }
+        crate::compile_error::refuse_reserved_lifting(flat)?;
         if let Some(event) = flat.continuous_events.first() {
             return Err(crate::compile_error::continuous_event_refusal(
                 crate::compile_error::ARRAY_EVALUATOR,
