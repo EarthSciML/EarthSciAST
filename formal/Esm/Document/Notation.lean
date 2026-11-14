@@ -374,9 +374,12 @@ def skippedConstructs : List String := ["prose", "Typst <label>", "Typst @ref", 
 Spellings the parser reads and normalizes; the printer never writes them. Each math
 variant has a Phase 2 lemma in `Esm.Document.Math.Variants` (the variant parses to the
 same JSON as the canonical spelling) and hand-written checks in
-`Esm.Document.Math.HandWritten`; the document-layer rows (the declarations table,
-aligned blocks, row breaks) get theirs with the document layer in Phase 3. Each gets a
-Phase 4 fixture. `rejected` rows pin spellings the parser refuses. -/
+`Esm.Document.Math.HandWritten`. The document-layer rows have theirs in the Phase 3
+document layer: the declarations table in `Esm.Document.Source.Markdown` (`lex_table`),
+and aligned blocks, continuation rows and row breaks nested in a delimiter in
+`Esm.Document.Source.MultiLine` (`cookRows_layout`; `ckMd_aligned` in
+`Esm.Document.Source.MarkdownDoc` for a Markdown `aligned` display). Each gets a Phase 4 fixture. `rejected` rows pin
+spellings the parser refuses. -/
 
 inductive Surface where
   | latex
