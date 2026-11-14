@@ -128,7 +128,7 @@ def coreOps : List OpRow := [
     latex := r"bmatrix (a column for rank 1); with units, a thin space and the unit after it, as for a scalar: \begin{bmatrix}1\\2\end{bmatrix}\,\mathrm{m}",
     typst := r#"vec(…), mat(…); with units vec(1, 2) thin upright("m")"# },
   { op := "const", shape := "array of more than 16 entries", tier := escape,
-    latex := "a named reference into a data block keyed by the JSON path; the block holds the values and the units",
+    latex := "a named reference into a data block keyed by the JSON path; the block holds the values and the units (decided 2026-11-13 over a native matrix of any size, which stops being readable; until the reference lands the printer writes the escape node with the values inline, which round-trips and renders)",
     typst := "same" },
   { op := "index", tier := native, latex := "A_{i, j}; A[i, j] on a subscript collision",
     typst := "A_(i, j)" },
