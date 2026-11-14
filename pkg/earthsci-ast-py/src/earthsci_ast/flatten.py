@@ -4730,37 +4730,55 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
             )
         return size
 
-    # Whole-component lift, to a fixpoint.
-    lifted_axes: dict[str, list[str]] = {}
-    lifted_components: set[str] = set()
-    while True:
+    def _two_grids(comp: str, first: str, grid: list[str], other: str, axes: list[str]) -> None:
+        raise DimensionPromotionError(
+            f"pointwise lift: component {comp!r} would be lifted onto two "
+            f"grids: state {first!r} onto {grid!r} and state {other!r} onto "
+            f"{axes!r}"
+        )
+
+    # Operator-route plans, as opposed to the component grid a later pass gives.
+    operator_plans: set[str] = set(plans)
+
+    def _candidates(
+        lifted_axes: dict[str, list[str]], comps: set[str] | None
+    ) -> dict[str, list[tuple[str, list[str]]]]:
+        """Every candidate of every component in ``comps`` (``None``: of every
+        component not yet lifted), each read with the component's own states
+        scalar and every other lifted state at its lift index sets."""
         inference: dict[str, _LiftShapes] = {}
         found: dict[str, list[tuple[str, list[str]]]] = {}
         for target, eq in tendencies:
             comp = _top_component(target)
-            if comp in lifted_components:
+            if comp in lifted_components if comps is None else comp not in comps:
                 continue
-            if target in plans:
+            if target in operator_plans:
                 found.setdefault(comp, []).append((target, plans[target].axes))
                 continue
             if comp not in inference:
+                others = {s: a for s, a in lifted_axes.items() if _top_component(s) != comp}
                 inference[comp] = _LiftShapes(
-                    variables, defs, lifted_axes, frozenset(masks.get(comp, ()))
+                    variables, defs, others, frozenset(masks.get(comp, ()))
                 )
             axes = inference[comp].expr_axes(eq.rhs)
             if axes:
                 found.setdefault(comp, []).append((target, axes))
+        return found
+
+    # Whole-component lift, to a fixpoint.
+    lifted_axes: dict[str, list[str]] = {}
+    lifted_components: set[str] = set()
+    # The candidate that gave each lifted component its grid.
+    grids: dict[str, tuple[str, list[str]]] = {}
+    while True:
+        found = _candidates(lifted_axes, None)
         if not found:
             break
         for comp, candidates in found.items():
             first, grid = candidates[0]
             for other, axes in candidates[1:]:
                 if set(axes) != set(grid):
-                    raise DimensionPromotionError(
-                        f"pointwise lift: component {comp!r} would be lifted onto two "
-                        f"grids: state {first!r} onto {grid!r} and state {other!r} onto "
-                        f"{axes!r}"
-                    )
+                    _two_grids(comp, first, grid, other, axes)
             if len(set(grid)) != len(grid):
                 raise DimensionPromotionError(
                     f"pointwise lift: state {first!r} would be lifted onto {grid!r}, "
@@ -4775,8 +4793,19 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
                     )
                 lifted_axes[state] = plans[state].axes
             lifted_components.add(comp)
+            grids[comp] = (first, grid)
     if not lifted_axes:
         return
+
+    # A state can become a candidate only after its component was lifted, when
+    # a later pass lifts a component it reads. Search the lifted components'
+    # candidates once more with every lift final, so the answer does not depend
+    # on which pass lifted what.
+    for comp, candidates in _candidates(lifted_axes, lifted_components).items():
+        first, grid = grids[comp]
+        for other, axes in candidates:
+            if set(axes) != set(grid):
+                _two_grids(comp, first, grid, other, axes)
 
     # The lifted states live on the lift's index sets: each `shape` names them
     # and `lifted_shapes` records their sizes (esm-libraries-spec §4.7.5).
