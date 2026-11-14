@@ -286,7 +286,7 @@ theorem M_dCall (c : Ctx) (w : String) (xs : List Json) (hwn : nameOK w = true)
 
 theorem M_qty (c : Ctx) (u : String) (n : JNum) (hu : unitsOK c.sf u = true)
     (hpr : pr c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)]) =
-      mkOut c.sf 7 (qtyToks c.sf n (factorsOf u))) :
+      mkOut c.sf 7 (qtyToks n (factorsOf u))) :
     M c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)]) := by
   have hacc : addAcc (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)]) =
       [.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)]] := by
@@ -298,24 +298,11 @@ theorem M_qty (c : Ctx) (u : String) (n : JNum) (hu : unitsOK c.sf u = true)
     simp [qty, hsp]
   refine M_of_toks c _ 7 _ hpr (by omega) (by omega) (by omega) hacc ?_ ?_
   · unfold qtyToks
-    split <;> exact hOK_tok c _ _ (by simp [startA, atomStart]) (by simp) (by simp) (by simp) (by simp)
+    exact hOK_tok c _ _ (by simp [startA, atomStart]) (by simp) (by simp) (by simp) (by simp)
       (by simp)
   · intro rest hr f hf
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by unfold need at hf; omega⟩
-    obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
-    · have hl : Esm.Units.parseLatex (Esm.Units.latex (factorsOf u)) = some (factorsOf u) := by
-        simp only [unitsOK, Bool.and_eq_true, beq_iff_eq, hsf] at hu; exact hu.2.1
-      have ht : qtyToks c.sf n (factorsOf u) =
-          [.num n, .kw .thin, .rm (String.ofList (Esm.Units.latexBody (factorsOf u)))] := by
-        simp [qtyToks, hsf]
-      rw [ht]; simp only [List.cons_append, List.nil_append]
-      rw [pPrim.eq_def]; simp only; rw [hsf]; simp only
-      have hr : unitsOfRaw (String.ofList (Esm.Units.latexBody (factorsOf u))) = some (factorsOf u) := by
-        unfold unitsOfRaw; rw [String.toList_ofList]; exact hl
-      rw [hr]; simp [hq]
-    · have ht : qtyToks c.sf n (factorsOf u) = [.num n, .units (factorsOf u)] := by
-        simp [qtyToks, hsf]
-      rw [ht]; simp only [List.cons_append, List.nil_append]
-      rw [pPrim.eq_def]; simp only; rw [hsf]; simp [hq]
+    simp only [qtyToks, List.cons_append, List.nil_append]
+    rw [pPrim.eq_def]; simp [hq]
 
 end Esm.Document.Math

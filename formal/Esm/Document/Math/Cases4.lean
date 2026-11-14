@@ -215,8 +215,10 @@ theorem M_times (c : Ctx) (o : String) (xs : List Json) (ho : kindOf o = .times)
           have hc1 : t ≠ .kw .cdot := by rintro rfl; simp [atomStart] at h1
           have hc2 : t ≠ .kw .times := by rintro rfl; simp [atomStart] at h1
           have hc3 : t ≠ .kw .slash := by rintro rfl; simp [atomStart] at h1
+          have hng : negTok t = false := by
+            rw [he] at hsn; cases t <;> simp_all [negTok, startsNum]
           rw [List.cons_append, mulLoop.eq_5 _ _ _ _ _ hc1 hc2 hc3]
-          simp only [h1, ↓reduceIte]
+          simp only [h1, hng, Bool.not_false, Bool.and_self, ↓reduceIte]
           rw [← List.cons_append, this])
       [x1] g (fun p hp => by
         have := hbl p hp

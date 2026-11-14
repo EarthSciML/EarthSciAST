@@ -38,12 +38,12 @@ theorem length_keyToks (sf : Sf) (k : String) : (keyToks sf k).length = 1 := by
 theorem keyOf_keyToks (c : Ctx) (k : String) (r : List Tok) :
     keyOf c (keyToks c.sf k ++ .kw .eq :: r) = some (k, r) := by
   obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
-  · have : keyToks c.sf k = [.rm (String.ofList (escT k.toList))] := by simp [keyToks, hsf]
+  · have : keyToks c.sf k = [.rm (String.ofList (escK k.toList))] := by simp [keyToks, hsf]
     rw [this]; unfold keyOf; split
     all_goals try (exfalso; simp_all; done)
     rename_i raw r' _ heq
     simp only [List.cons_append, List.nil_append, List.cons.injEq, Tok.rm.injEq] at heq
-    obtain ⟨rfl, -, rfl⟩ := heq; simp [String.toList_ofList, unescT_escT]
+    obtain ⟨rfl, -, rfl⟩ := heq; simp [String.toList_ofList, unescK_escK]
   · have : keyToks c.sf k = [.ups [(k, "")]] := by simp [keyToks, hsf]
     rw [this]; unfold keyOf; split
     all_goals try (exfalso; simp_all; done)

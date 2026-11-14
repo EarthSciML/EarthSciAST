@@ -31,9 +31,9 @@ theorem cmpLoop_stop (c : Ctx) (f : Nat) (x : Json) (r : List Tok) (hr : Fol c.s
     | _ => rfl
 
 theorem addLoop_stop (c : Ctx) (f : Nat) (acc : List Json) (r : List Tok) (hr : Fol c.sf 4 r) :
-    addLoop c (f + 1) acc r = some (close "+" acc, r) :=
-  addLoop.eq_4 _ _ _ _ (by intro r' e; have := hr _ _ e; simp [conts] at this)
-    (by intro r' e; have := hr _ _ e; simp [conts] at this)
+    addLoop c (f + 1) acc r = some (close "+" acc, r) := by
+  rw [addLoop.eq_4 _ _ _ _ (by intro r' e; have := hr _ _ e; simp [conts] at this)
+    (by intro r' e; have := hr _ _ e; simp [conts] at this), negTail_fol hr (by omega)]
 
 theorem mulLoop_stop (c : Ctx) (f : Nat) (acc : List Json) (r : List Tok) (hr : Fol c.sf 5 r) :
     mulLoop c (f + 1) acc r = some (close "*" acc, r) := by

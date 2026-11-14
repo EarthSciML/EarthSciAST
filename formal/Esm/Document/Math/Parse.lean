@@ -165,6 +165,26 @@ def pJsonEntries : Nat → List Tok → Option (List (String × Json) × List To
   | _ + 1, _ => none
 end
 
+/-! ## Negative literals after an operand -/
+
+/-- A negative literal token. -/
+def negTok : Tok → Bool
+  | .num n => negNum n
+  | _ => false
+
+/-- The number with the opposite sign. -/
+def negate : JNum → JNum
+  | .int z => .int (-z)
+  | .dec neg ds e => .dec (!neg) ds e
+
+/-- A negative literal right after an operand (`k-1`, `k -1`) is a binary minus and a
+positive number: the tokens with the sign moved off the number, when the number without
+its sign has a canonical form (the negation of `-2^63` has none, so that spelling is
+refused after an operand). -/
+def negTail : List Tok → Option (List Tok)
+  | .num n :: r => if negNum n && (negate n).wfb then some (.num (negate n) :: r) else none
+  | _ => none
+
 /-! ## Expressions -/
 
 /-- Rebuild a node with fields: `op` and `args` go back to their sorted places. -/
@@ -232,11 +252,10 @@ def gridJson (rows : List (List JNum)) : Json :=
   else .arr (rows.map fun r => .arr (r.map .num))
 
 /-- The unit after an array, if any. -/
-def constTail (c : Ctx) (v : Json) (r : List Tok) : Option (Json × List Tok) :=
-  match c.sf, r with
-  | .latex, .kw .thin :: .rm raw :: r' => (unitsOfRaw raw).map fun l => (constNode v (some (Esm.Units.spell l)), r')
-  | .typst, .units l :: r' => some (constNode v (some (Esm.Units.spell l)), r')
-  | _, _ => some (constNode v none, r)
+def constTail (v : Json) (r : List Tok) : Option (Json × List Tok) :=
+  match r with
+  | .units l :: r' => some (constNode v (some (Esm.Units.spell l)), r')
+  | _ => some (constNode v none, r)
 
 /-- The `ic` tail `(t_{0})` / `(t_0)`. -/
 def icTailP (sf : Sf) : List Tok → Option (List Tok)
@@ -255,7 +274,7 @@ def jsonStart : List Tok → Bool
 /-- A field key: LaTeX `\mathrm{key} =`, Typst `upright("key") =`. -/
 def keyOf (c : Ctx) (ts : List Tok) : Option (String × List Tok) :=
   match c.sf, ts with
-  | .latex, .rm raw :: .kw .eq :: r => some (String.ofList (unescT raw.toList), r)
+  | .latex, .rm raw :: .kw .eq :: r => some (String.ofList (unescK raw.toList), r)
   | .typst, .ups [(k, "")] :: .kw .eq :: r => some (k, r)
   | _, _ => none
 
@@ -289,33 +308,36 @@ def pWord (c : Ctx) (w : String) (r : List Tok) : Option (Json × List Tok) :=
   else if letters && !whole then some (node "*" (w.toList.map fun ch => .str (String.ofList [ch])), r)
   else none
 
-/-- `d` then a name, up to a closing token `k`: `dN}` (a run of letters) or `d N}`. -/
-def dName (sf : Sf) (k : Kw) : List Tok → Option (String × List Tok)
+/-- `d` then a name, up to a closing token `k`: `dN}` (a run of letters that is not
+itself a declared name) or `d N}`. -/
+def dName (c : Ctx) (k : Kw) : List Tok → Option (String × List Tok)
   | .word w :: .kw k' :: r =>
-    if k' = k then
+    if k' = k && !(c.S.names.contains w) then
       match w.toList with
       | 'd' :: x => some (String.ofList x, r)
       | _ => none
     else none
   | .letter 'd' :: r =>
-    match pName sf r with
+    match pName c.sf r with
     | some (n, .kw k' :: r') => if k' = k then some (n, r') else none
     | _ => none
   | _ => none
 
-/-- The italic-d derivative variant, when no variable `d` is declared: LaTeX
+/-- The italic-d derivative variant, when no variable `d` is declared and neither
+`dN` nor `dt` written as one word is a declared name (a declared whole word wins, as in
+`pWord`: `\frac{dx}{dt}` with `dx` and `dt` declared is their quotient): LaTeX
 `\frac{dN}{dt}` after `\frac{`, Typst `(d N)/(d t)` after the first `(`. -/
 def pItalicD (c : Ctx) (r : List Tok) : Option (Json × List Tok) :=
   if c.S.names.contains "d" then none
   else
     match c.sf with
     | .latex =>
-      match dName c.sf .rb r with
-      | some (n, .kw .lb :: r1) => (dName c.sf .rb r1).map fun p => (dNode (.str n) p.1, p.2)
+      match dName c .rb r with
+      | some (n, .kw .lb :: r1) => (dName c .rb r1).map fun p => (dNode (.str n) p.1, p.2)
       | _ => none
     | .typst =>
-      match dName c.sf .rp r with
-      | some (n, .kw .slash :: .kw .lpg :: r1) => (dName c.sf .rp r1).map fun p => (dNode (.str n) p.1, p.2)
+      match dName c .rp r with
+      | some (n, .kw .slash :: .kw .lpg :: r1) => (dName c .rp r1).map fun p => (dNode (.str n) p.1, p.2)
       | _ => none
 
 /-- The token is the keyword `k`. -/
@@ -427,7 +449,8 @@ def cmpLoop (c : Ctx) : Nat → Json → List Tok → Option (Json × List Tok)
     | none => some (x, .kw k :: r)
   | _ + 1, x, r => some (x, r)
 
-/-- Level 4: `+` chains and binary `-`. `x :: acc` is the pending `+` chain. -/
+/-- Level 4: `+` chains and binary `-`, including a negative literal right after an
+operand (`negTail`). `x :: acc` is the pending `+` chain. -/
 def pAdd (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
   | 0, _ => none
   | f + 1, ts =>
@@ -445,10 +468,17 @@ def addLoop (c : Ctx) : Nat → List Json → List Tok → Option (Json × List 
     match pMul c f r with
     | some (y, r') => addLoop c f [node "-" [close "+" acc, y]] r'
     | none => none
-  | _ + 1, acc, r => some (close "+" acc, r)
+  | f + 1, acc, r =>
+    match negTail r with
+    | some r1 =>
+      match pMul c f r1 with
+      | some (y, r') => addLoop c f [node "-" [close "+" acc, y]] r'
+      | none => none
+    | none => some (close "+" acc, r)
 
 /-- Level 5: unary minus, and `*` chains (juxtaposition, `\cdot`, `\times`; LaTeX inline
-`/` groups to the left). -/
+`/` groups to the left). A negative literal never continues a product by juxtaposition
+(`k -1` is `k - 1`); after `\cdot` it is a factor (`k \cdot -1`). -/
 def pMul (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
   | 0, _ => none
   | f + 1, .kw .minus :: r =>
@@ -477,7 +507,7 @@ def mulLoop (c : Ctx) : Nat → List Json → List Tok → Option (Json × List 
       | none => none
     else some (close "*" acc, .kw .slash :: r)
   | f + 1, acc, t :: r =>
-    if atomStart t then
+    if atomStart t && !negTok t then
       match pNot c f (t :: r) with
       | some (y, r') => mulLoop c f (acc ++ [y]) r'
       | none => none
@@ -707,24 +737,23 @@ def pPrim (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
   | f + 1, ts =>
     match ts with
     | .num n :: r =>
-      match c.sf, r with
-      | .latex, .kw .thin :: .rm raw :: r' => (unitsOfRaw raw).map (qty n ·, r')
-      | .typst, .units l :: r' => some (qty n l, r')
-      | _, _ => some (.num n, r)
+      match r with
+      | .units l :: r' => some (qty n l, r')
+      | _ => some (.num n, r)
     | .kw .bmat :: r =>
       match pGrid .amp .nl .emat (r.length + 1) r with
-      | some (rows, r') => constTail c (gridJson rows) r'
+      | some (rows, r') => constTail (gridJson rows) r'
       | none => none
     | .kw .vec :: t :: r =>
       if isLp t then
         match pCells .comma r with
-        | some (ns, .kw .rp :: r') => constTail c (.arr (ns.map .num)) r'
+        | some (ns, .kw .rp :: r') => constTail (.arr (ns.map .num)) r'
         | _ => none
       else none
     | .kw .mat :: t :: r =>
       if isLp t then
         match pGrid .comma .semi .rp (r.length + 1) r with
-        | some (rows, r') => constTail c (.arr (rows.map fun q => .arr (q.map .num))) r'
+        | some (rows, r') => constTail (.arr (rows.map fun q => .arr (q.map .num))) r'
         | none => none
       else none
     | .txt "true" :: r => some (node "true" [], r)

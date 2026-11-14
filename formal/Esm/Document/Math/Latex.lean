@@ -1,4 +1,5 @@
 import Esm.Document.Math.Parse
+import Esm.Document.Math.Surface
 import Esm.Document.Strings
 
 /-!
@@ -12,15 +13,18 @@ juxtaposed factors); the reader skips spaces. `lex_render` is the lexer lemma:
 every token list whose tokens are LaTeX tokens (`tokOK`) reads back.
 
 Spellings: numbers in the canonical spelling, scientific ones as
-`1.8 \times 10^{-12}` (read back as one literal); `\mathit{…}`, `\operatorname{…}` and
+`1.8 \times 10^{-12}` (read back as one literal, with any spacing: `1.8\times10^{-12}`
+too; `Esm.Document.Math.Surface`); a quantity's unit as `\,\mathrm{…}` right after the
+number, one token; `\mathit{…}`, `\operatorname{…}` and
 `\esm{…}` hold their text with `\`, `{`, `}`, `_`, `^` escaped by a backslash;
 `\mathrm{…}` and `\text{…}` hold raw balanced text; a JSON string (inside an escape
 node's fields) is double-quoted with JSON escapes, `_` written `\_`, and `%`, `$`, `#`, `{`, `}`
 written `\uXXXX` so the text is safe inside a LaTeX argument and a Markdown math span.
 
 Accepted on input and never written: `\leq`, `\geq`, `\neq`, `\times`, `\bigl(`,
-`\bigr)`, the spacing commands `\;`, `\:`, `\!`, `\ `, `\quad`, `\qquad` (skipped like
-spaces), and JSON numbers with an `e` exponent.
+`\bigr)`, the spacing commands `\;`, `\:`, `\!`, `\ `, `\quad`, `\qquad` and `\,` (skipped
+like spaces; `\,` is the unit separator only right before a `\mathrm{…}` that spells a
+unit), and JSON numbers with an `e` exponent.
 -/
 
 namespace Esm.Document.Math.Latex
@@ -52,15 +56,6 @@ def fixUs : List Char → List Char
 
 def quoteL (s : String) : List Char := '"' :: s.toList.flatMap escCharL ++ ['"']
 
-/-- The mantissa (with its sign) and exponent of a number printed in scientific
-notation. -/
-def sciSplit : JNum → Option (List Char × Int)
-  | .dec neg (d :: fp) e10 =>
-    if e10 < -4 ∨ 5 < e10 then
-      some ((if neg then ['-'] else []) ++ Esm.digitChar d :: '.' :: (Number.fracDigits fp).map Esm.digitChar, e10)
-    else none
-  | _ => none
-
 def timesTen : List Char := " \\times 10^{".toList
 
 def numChars (n : JNum) : List Char :=
@@ -76,7 +71,7 @@ def kwChars : Kw → List Char
   | .caret => ['^'] | .us => ['_'] | .lp => ['('] | .rp => [')']
   | .lpg => "\\left(".toList | .rpg => "\\right)".toList | .lb => ['{'] | .rb => ['}']
   | .lbk => ['['] | .rbk => [']'] | .comma => [','] | .semi => [';'] | .colon => [':']
-  | .amp => ['&'] | .nl => ['\\', '\\'] | .sdot => ['.'] | .thin => ['\\', ',']
+  | .amp => ['&'] | .nl => ['\\', '\\'] | .sdot => ['.']
   | .frac => "\\frac".toList | .sqrt => "\\sqrt".toList | .exp => "\\exp".toList
   | .ln => "\\ln".toList | .log => "\\log".toList | .sin => "\\sin".toList
   | .cos => "\\cos".toList | .tan => "\\tan".toList | .asin => "\\arcsin".toList
@@ -104,8 +99,9 @@ def tokChars : Tok → List Char
   | .txt s => "\\text{".toList ++ s.toList ++ ['}']
   | .jstr s => quoteL s
   | .esc o => "\\esm{".toList ++ escT o.toList ++ ['}']
+  | .units l => "\\,\\mathrm{".toList ++ Esm.Units.latexBody l ++ ['}']
   | .kw k => kwChars k
-  | .ups _ | .code _ | .units _ => []
+  | .ups _ | .code _ => []
 
 /-! ## Spacing -/
 
@@ -128,13 +124,6 @@ def needSpace (t1 t2 : Tok) : Bool :=
   match (tokChars t2).head? with
   | some c => merges t1 c
   | none => false
-
-/-- Binary operators, spaced on both sides. -/
-def isBin : Tok → Bool
-  | .kw k => match k with
-    | .plus | .eq | .ne | .lt | .gt | .le | .ge | .land | .lor | .cdot | .times | .amp | .nl | .inn => true
-    | _ => false
-  | _ => false
 
 /-- Tokens that end an operand. -/
 def atomEnd : Tok → Bool
@@ -165,12 +154,6 @@ def renderAux : Option Tok → List Tok → List Char
 def render (ts : List Tok) : List Char := renderAux none ts
 
 /-! ## Lexing -/
-
-/-- Strip a literal prefix. -/
-def dropP : List Char → List Char → Option (List Char)
-  | [], cs => some cs
-  | p :: ps, c :: cs => if p = c then dropP ps cs else none
-  | _ :: _, [] => none
 
 /-- Control words that are keywords, with the variants read on input. -/
 def ctrlKw : List (String × Kw) :=
@@ -217,21 +200,52 @@ def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
   else if isGreek w.toList then some (.greek w, r)
   else (ctrlKw.lookup w).map (.kw ·, r)
 
-/-- A number: the canonical spelling, or `mantissa \times 10^{exponent}`. The token ends where the number
-as written ends (`Number.parseRaw`); its value is the canonical form (`Number.parse`). -/
-def lexNum (cs : List Char) : Option (Tok × List Char) :=
-  match Number.parseRaw cs with
-  | none => none
-  | some (_, r) =>
-    match dropP timesTen r with
-    | some r2 =>
-      match Number.parseInt r2 with
-      | some (z, '}' :: r3) =>
-        match Number.parse (cs.take (cs.length - r.length) ++ 'e' :: Number.printInt z) with
-        | some (m, []) => some (.num m, r3)
+/-- White space. -/
+def isWsL (c : Char) : Bool := c == ' ' || c == '\n' || c == '\t' || c == '\r'
+
+/-- Skip white space and the two-character spacing commands, inside a scientific tail. -/
+def skipSp : List Char → List Char
+  | [] => []
+  | c :: r =>
+    if isWsL c then skipSp r
+    else if c = '\\' then
+      match r with
+      | d :: r' => if d = ';' ∨ d = ':' ∨ d = '!' ∨ d = ' ' ∨ d = ',' then skipSp r' else c :: r
+      | [] => c :: r
+    else c :: r
+
+/-- The scientific tail `\times 10^{exponent}` after a mantissa, with any spacing (none
+included) between its parts. -/
+def sciExp (r : List Char) : Option (Int × List Char) :=
+  match dropP "\\times".toList (skipSp r) with
+  | some r1 =>
+    if (r1.head?.map isLetter).getD false then none
+    else
+      match dropP "10".toList (skipSp r1) with
+      | some r2 =>
+        match skipSp r2 with
+        | '^' :: r3 =>
+          match skipSp r3 with
+          | '{' :: r4 =>
+            match Number.parseInt (skipSp r4) with
+            | some (z, r5) =>
+              match skipSp r5 with
+              | '}' :: r6 => some (z, r6)
+              | _ => none
+            | none => none
+          | _ => none
         | _ => none
-      | _ => none
-    | none => (Number.parse cs).map fun p => (.num p.1, p.2)
+      | none => none
+  | none => none
+
+/-- After `\,`: a unit `\mathrm{…}`, with white space between. -/
+def unitTok (r : List Char) : Option (List Esm.Units.Factor × List Char) :=
+  match dropP "\\mathrm{".toList (r.dropWhile isWsL) with
+  | some r1 =>
+    match rawB 0 r1 with
+    | some (raw, r2) => (unitsOfRaw (String.ofList raw)).map (·, r2)
+    | none => none
+  | none => none
 
 def punct : Char → Option Kw
   | '+' => some .plus | '-' => some .minus | '=' => some .eq | '<' => some .lt
@@ -248,12 +262,12 @@ def lexOne (cs : List Char) : Option (Tok × List Char) :=
     if isLetter c then
       let p := letRun (c :: r)
       ctrlTok (String.ofList p.1) p.2
-    else if c = ',' then some (.kw .thin, r)
+    else if c = ',' then (unitTok r).map fun p => (.units p.1, p.2)
     else if c = '\\' then some (.kw .nl, r)
     else none
   | '"' :: r => (Strings.unquoteBody false (fixUs r)).map fun p => (.jstr (String.ofList p.1), p.2)
   | c :: r =>
-    if isDig c || (c == '-' && (r.head?.map isDig).getD false) then lexNum cs
+    if isDig c || (c == '-' && (r.head?.map isDig).getD false) then lexSigned sciExp cs
     else if isLetter c then
       let p := letRun cs
       match p.1 with
@@ -262,7 +276,7 @@ def lexOne (cs : List Char) : Option (Tok × List Char) :=
     else (punct c).map (.kw ·, r)
   | [] => none
 
-/-- Skip spaces and the spacing commands. -/
+/-- Skip spaces and the spacing commands (`\,` too, unless a unit follows it). -/
 def skipWs : Nat → List Char → List Char
   | 0, cs => cs
   | f + 1, c :: r =>
@@ -271,6 +285,7 @@ def skipWs : Nat → List Char → List Char
       match r with
       | d :: r' =>
         if d = ';' ∨ d = ':' ∨ d = '!' ∨ d = ' ' then skipWs f r'
+        else if d = ',' then (if (unitTok r').isSome then c :: r else skipWs f r')
         else
           let p := letRun r
           if (p.1 = "quad".toList ∨ p.1 = "qquad".toList) then skipWs f p.2 else c :: r
@@ -281,7 +296,7 @@ def skipWs : Nat → List Char → List Char
 def lexAux : Nat → List Char → Option (List Tok)
   | 0, _ => none
   | f + 1, cs =>
-    match skipWs cs.length cs with
+    match skipWs (f + 1) cs with
     | [] => some []
     | cs' =>
       match lexOne cs' with

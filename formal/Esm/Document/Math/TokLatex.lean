@@ -121,6 +121,9 @@ theorem rawB_pieces (X : List Char) :
 theorem balOK_escT (s : List Char) : balOK (escT s) = true := by
   simp [balOK, rawB_escT s []]
 
+theorem balOK_escK (s : List Char) : balOK (escK s) = true := by
+  simp [balOK, rawB_escK s []]
+
 theorem balOK_formula (g : List Char) (hf : isFormula g = true) : balOK (formulaRaw g) = true := by
   have hcat := pieces_cat hf
   have hall : ∀ c ∈ g, isLetter c = true ∨ isDig c = true := by
@@ -365,6 +368,11 @@ theorem allOK_faqOut (c : Ctx) (hc : c.sf = .latex) (F : FaqForm) (P : Json → 
 
 /-! ## The induction -/
 
+theorem tokOK_units (u : String) (hu : unitsOK .latex u = true) : tokOK (.units (factorsOf u)) := by
+  simp only [unitsOK, Bool.and_eq_true, beq_iff_eq] at hu
+  refine ⟨?_, hu.2.2⟩
+  unfold unitsOfRaw; rw [String.toList_ofList]; exact hu.2.1
+
 def POK (c : Ctx) (e : Json) : Prop := AllOK (pr c e).toks ∧ AllOK (pr c e).crow
 
 theorem POK_toks {c : Ctx} {e : Json} (h : POK c e) (L : Nat) : AllOK ((pr c e).at .latex L) :=
@@ -498,13 +506,11 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       rw [hpr]; simp only [mkOut, dCall]; constructor <;> aok
     | qty u k hk hu hpr =>
       simp only [hc] at hpr
-      have hb : tokOK (.rm (String.ofList (Esm.Units.latexBody (factorsOf u)))) := by
-        show balOK (String.ofList (Esm.Units.latexBody (factorsOf u))).toList = true
-        rw [String.toList_ofList]
-        simp only [unitsOK, hc, Bool.and_eq_true] at hu
-        exact hu.2.2
+      have hb := tokOK_units u (by rw [← hc]; exact hu)
       have hn : tokOK (.num k) := hk
-      rw [hpr]; simp only [mkOut, qtyToks]; constructor <;> aok
+      have h2 : AllOK [.num k, .units (factorsOf u)] := allOK_cons.2 ⟨hn, allOK_cons.2 ⟨hb, allOK_nil⟩⟩
+      rw [hpr]; simp only [mkOut, qtyToks]
+      exact ⟨h2, allOK_append.2 ⟨h2, allOK_cons.2 ⟨rfl, allOK_cons.2 ⟨rfl, allOK_nil⟩⟩⟩⟩
     | arr xs af haf hpr =>
       simp only [hc] at hpr
       have hA := allOK_arr af (arrForm_spec haf).2
@@ -512,12 +518,11 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
     | arrU u xs af haf hu hpr =>
       simp only [hc] at hpr
       have hA := allOK_arr af (arrForm_spec haf).2
-      have hb : tokOK (.rm (String.ofList (Esm.Units.latexBody (factorsOf u)))) := by
-        show balOK (String.ofList (Esm.Units.latexBody (factorsOf u))).toList = true
-        rw [String.toList_ofList]
-        simp only [unitsOK, hc, Bool.and_eq_true] at hu
-        exact hu.2.2
-      rw [hpr]; simp only [mkOut, unitToks]; constructor <;> aok
+      have hb := tokOK_units u (by rw [← hc]; exact hu)
+      have h2 : AllOK (arrToks .latex af ++ [.units (factorsOf u)]) :=
+        allOK_append.2 ⟨hA, allOK_cons.2 ⟨hb, allOK_nil⟩⟩
+      rw [hpr]; simp only [mkOut, unitToks]
+      exact ⟨h2, allOK_append.2 ⟨h2, allOK_cons.2 ⟨rfl, allOK_cons.2 ⟨rfl, allOK_nil⟩⟩⟩⟩
     | faq kvs F hF hok P hP hpr =>
       rw [hpr]
       exact allOK_faqOut c hc F P (fun x hx => by
@@ -541,9 +546,9 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       have hA := hsep .comma rfl _ (allOK_map _ as (fun x hm => POK_toks (IH x (hsz x hm) (hx x hm)) 4))
       have hF := hsep .comma rfl _ (allOK_map (fun kv => keyToks .latex kv.1 ++ .kw .eq ::
           (if isE kv.2 then (pr c kv.2).at .latex 4 else jsonVal .latex kv.2)) (fieldsOf kvs) (fun kv hkv => by
-          have hK : tokOK (.rm (String.ofList (escT kv.1.toList))) := by
-            show balOK (String.ofList (escT kv.1.toList)).toList = true
-            rw [String.toList_ofList]; exact balOK_escT _
+          have hK : tokOK (.rm (String.ofList (escK kv.1.toList))) := by
+            show balOK (String.ofList (escK kv.1.toList)).toList = true
+            rw [String.toList_ofList]; exact balOK_escK _
           have hV : AllOK (if isE kv.2 = true then (pr c kv.2).at .latex 4 else jsonVal .latex kv.2) := by
             split
             · rename_i hv; exact POK_toks (IH kv.2 (hszf kv hkv) hv) 4

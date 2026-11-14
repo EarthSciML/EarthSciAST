@@ -1,4 +1,5 @@
 import Esm.Document.Math.Parse
+import Esm.Document.Math.Surface
 import Esm.Document.Strings
 import Esm.Document.TypstDict
 
@@ -11,7 +12,8 @@ renderer writes no space between a function name and its `(` (Typst calls a func
 only then) and a space between an operand and a following `(` (juxtaposition).
 
 Spellings: numbers in the canonical spelling, scientific ones as
-`1.8 times 10^(-12)` (read back as one literal); names as `italic("…")`, formulas and
+`1.8 times 10^(-12)` (read back as one literal, with any spacing:
+`1.8times 10^( -12 )` too; `Esm.Document.Math.Surface`); names as `italic("…")`, formulas and
 name subscripts as runs of adjacent `upright("…")` pieces each with an optional digit
 subscript (`upright("CH")_2upright("O")`; a space between two pieces separates two
 names); the scope dot as `"."` (a bare `.` after a Greek name is a symbol modifier in
@@ -27,13 +29,6 @@ namespace Esm.Document.Math.Typst
 open Esm.Document Esm.Document.Math
 
 /-! ## Spelling -/
-
-def sciSplit : JNum → Option (List Char × Int)
-  | .dec neg (d :: fp) e10 =>
-    if e10 < -4 ∨ 5 < e10 then
-      some ((if neg then ['-'] else []) ++ Esm.digitChar d :: '.' :: (Number.fracDigits fp).map Esm.digitChar, e10)
-    else none
-  | _ => none
 
 def timesTen : List Char := " times 10^".toList
 
@@ -61,7 +56,7 @@ def kwChars : Kw → List Char
   | .vec => "vec".toList | .mat => "mat".toList
   | .sum => "sum".toList | .prod => "product".toList | .inn => "in".toList
   | .limits => "limits".toList | .lr => "lr".toList | .nl => ['\\']
-  | .rpg | .lb | .rb | .thin | .frac | .labs | .rabs | .lfloor | .rfloor
+  | .rpg | .lb | .rb | .frac | .labs | .rabs | .lfloor | .rfloor
   | .lceil | .rceil | .dotacc | .bcases | .ecases | .bmat | .emat
   | .substack | .lbkg | .rbkg | .limitsL => []
 
@@ -118,12 +113,6 @@ def needSpace (t1 t2 : Tok) : Bool :=
     | some c => merges t1 c
     | none => false
 
-def isBin : Tok → Bool
-  | .kw k => match k with
-    | .plus | .eq | .ne | .lt | .gt | .le | .ge | .land | .lor | .cdot | .times | .amp | .nl | .inn => true
-    | _ => false
-  | _ => false
-
 def atomEnd : Tok → Bool
   | .num _ | .letter _ | .greek _ | .word _ | .it _ | .ups _ | .txt _ | .code _
   | .units _ => true
@@ -159,11 +148,6 @@ def renderAux : Option Tok → List Tok → List Char
 def render (ts : List Tok) : List Char := renderAux none ts
 
 /-! ## Lexing -/
-
-def dropP : List Char → List Char → Option (List Char)
-  | [], cs => some cs
-  | p :: ps, c :: cs => if p = c then dropP ps cs else none
-  | _ :: _, [] => none
 
 /-- The maximal run of identifier characters. -/
 def idRun : List Char → List Char × List Char
@@ -205,27 +189,31 @@ def pieces : Nat → List Char → List (String × String) × List Char
       | none => ([], cs)
     | none => ([], cs)
 
-/-- A number: the canonical spelling, or `mantissa times 10^exponent`. The token ends where the number
-as written ends (`Number.parseRaw`); its value is the canonical form (`Number.parse`). -/
-def lexNum (cs : List Char) : Option (Tok × List Char) :=
-  match Number.parseRaw cs with
-  | none => none
-  | some (_, r) =>
-    match dropP timesTen r with
-    | some r2 =>
-      let ez : Option (Int × List Char) :=
-        if r2.head? = some '(' then
-          match Number.parseInt (r2.drop 1) with
-          | some (z, ')' :: r4) => some (z, r4)
-          | _ => none
-        else Number.parseInt r2
-      match ez with
-      | some (z, r5) =>
-        match Number.parse (cs.take (cs.length - r.length) ++ 'e' :: Number.printInt z) with
-        | some (m, []) => some (.num m, r5)
+def isWsT (c : Char) : Bool := c = ' ' || c = '\n' || c = '\t' || c = '\r'
+
+/-- The scientific tail `times 10^exponent` after a mantissa (the exponent bare or in
+parentheses), with any white space (none included) between its parts. -/
+def sciExp (r : List Char) : Option (Int × List Char) :=
+  match dropP "times".toList (r.dropWhile isWsT) with
+  | some r1 =>
+    if (r1.head?.map isIdC).getD false then none
+    else
+      match dropP "10".toList (r1.dropWhile isWsT) with
+      | some r2 =>
+        match r2.dropWhile isWsT with
+        | '^' :: r3 =>
+          match r3.dropWhile isWsT with
+          | '(' :: r4 =>
+            match Number.parseInt (r4.dropWhile isWsT) with
+            | some (z, r5) =>
+              match r5.dropWhile isWsT with
+              | ')' :: r6 => some (z, r6)
+              | _ => none
+            | none => none
+          | r4 => Number.parseInt r4
         | _ => none
       | none => none
-    | none => (Number.parse cs).map fun p => (.num p.1, p.2)
+  | none => none
 
 def punct : Char → Option Kw
   | '+' => some .plus | '-' => some .minus | '=' => some .eq | '<' => some .lt
@@ -279,23 +267,23 @@ def lexOne (prev : Option Char) (cs : List Char) : Option (Tok × List Char) :=
   | '>' :: '=' :: r => some (.kw .ge, r)
   | '!' :: '=' :: r => some (.kw .ne, r)
   | c :: r =>
-    if isDig c || (c == '-' && (r.head?.map isDig).getD false) then lexNum cs
+    if isDig c || (c == '-' && (r.head?.map isDig).getD false) then lexSigned sciExp cs
     else if isLetter c then lexIdent cs
     else (punct c).map (.kw ·, r)
   | [] => none
 
-def isWsT (c : Char) : Bool := c = ' ' || c = '\n' || c = '\t' || c = '\r'
-
+/-- The tokens of the input; `prev` is the last character of the previous token's
+spelling when no space came between (the canonical spelling: every token's input
+spellings end in a character of the same kind for the call-parenthesis test). -/
 def lexAux : Nat → Option Char → List Char → Option (List Tok)
   | 0, _, _ => none
   | f + 1, prev, cs =>
-    let cs' := cs.dropWhile isWsT
-    let prev' := if cs'.length = cs.length then prev else none
-    match cs' with
+    let prev' := if (cs.head?.map isWsT).getD false then none else prev
+    match cs.dropWhile isWsT with
     | [] => some []
-    | _ =>
+    | cs' =>
       match lexOne prev' cs' with
-      | some (t, r) => (lexAux f (cs'.take (cs'.length - r.length)).getLast? r).map (t :: ·)
+      | some (t, r) => (lexAux f (tokChars t).getLast? r).map (t :: ·)
       | none => none
 
 /-- Read Typst math into tokens. -/

@@ -216,7 +216,7 @@ theorem pNameLoop_stop (sf : Sf) (f : Nat) (acc : List Char) (rest : List Tok)
   | .kw .times :: _ | .kw .slash :: _ | .kw .caret :: _ | .kw .us :: _ | .kw .lp :: _
   | .kw .rp :: _ | .kw .lpg :: _ | .kw .rpg :: _ | .kw .lb :: _ | .kw .rb :: _ | .kw .lbk :: _
   | .kw .rbk :: _ | .kw .comma :: _ | .kw .semi :: _ | .kw .colon :: _ | .kw .amp :: _
-  | .kw .nl :: _ | .kw .thin :: _ | .kw .frac :: _ | .kw .sqrt :: _ | .kw .exp :: _
+  | .kw .nl :: _ | .kw .frac :: _ | .kw .sqrt :: _ | .kw .exp :: _
   | .kw .ln :: _ | .kw .log :: _ | .kw .sin :: _ | .kw .cos :: _ | .kw .tan :: _ | .kw .asin :: _
   | .kw .acos :: _ | .kw .atan :: _ | .kw .sinh :: _ | .kw .cosh :: _ | .kw .tanh :: _
   | .kw .min :: _ | .kw .max :: _ | .kw .labs :: _ | .kw .rabs :: _ | .kw .lfloor :: _

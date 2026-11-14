@@ -32,7 +32,6 @@ theorem pPrim_num (c : Ctx) (n : JNum) (rest : List Tok) (hr : Fol c.sf 10 rest)
   simp only
   split
   · have := hr _ _ rfl; simp [conts] at this
-  · have := hr _ _ rfl; simp [conts] at this
   · rfl
 
 theorem sqrt_latex (c : Ctx) (hs : c.sf = .latex) (a : Json) (ha : M c a) (rest : List Tok)

@@ -10,10 +10,10 @@ each surface has its own renderer and lexer (`Esm.Document.Math.Latex`,
 tokens.
 
 A few tokens exist on one surface only: `rm` (LaTeX `\mathrm{…}`, kept raw: it holds
-a formula, a name subscript or a unit), `jstr` (LaTeX JSON string, inside an escape
-node's fields), `esc` (LaTeX `\esm{op}`); `ups` (Typst run of adjacent
-`upright("…")` pieces), `code` (Typst `#value`), `units` (Typst ` thin upright(…)…`
-unit block).
+a formula or a name subscript), `jstr` (LaTeX JSON string, inside an escape node's
+fields), `esc` (LaTeX `\esm{op}`); `ups` (Typst run of adjacent `upright("…")` pieces),
+`code` (Typst `#value`). `units` is the unit after a quantity's number, one token on both
+surfaces: LaTeX `\,\mathrm{…}`, Typst ` thin upright(…)…`.
 -/
 
 namespace Esm.Document.Math
@@ -28,7 +28,7 @@ inductive Kw where
   -- delimiters: `lp`/`rp` call parentheses (LaTeX `(` `)`, Typst `(` right after a
   -- name or `)`), `lpg`/`rpg` grouping parentheses (LaTeX `\left(` `\right)`, Typst
   -- `(` after a space or an operator; Typst has no `rpg`)
-  | lp | rp | lpg | rpg | lb | rb | lbk | rbk | comma | semi | colon | amp | nl | sdot | thin
+  | lp | rp | lpg | rpg | lb | rb | lbk | rbk | comma | semi | colon | amp | nl | sdot
   -- functions and notations
   | frac | sqrt | exp | ln | log | sin | cos | tan | asin | acos | atan | sinh | cosh | tanh
   | min | max | labs | rabs | lfloor | rfloor | lceil | rceil | abs | floor | ceil

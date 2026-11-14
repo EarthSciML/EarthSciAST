@@ -38,6 +38,7 @@ import Esm.Document.Yaml
 import Esm.Document.TypstDict
 import Esm.Document.Math.Expr
 import Esm.Document.Math.Token
+import Esm.Document.Math.Surface
 import Esm.Document.Math.Print
 import Esm.Document.Math.Parse
 import Esm.Document.Math.Latex

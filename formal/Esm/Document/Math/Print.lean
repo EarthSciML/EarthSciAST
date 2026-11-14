@@ -1,4 +1,4 @@
-import Esm.Document.Math.Token
+import Esm.Document.Math.Surface
 
 /-!
 # The printer: expressions to tokens
@@ -63,6 +63,53 @@ theorem unescT_escT (s : List Char) : unescT (escT s) = s := by
       | cons d ds =>
         rw [← hc]
         cases c; simp_all [unescT]
+
+/-- Characters of a field key written as `{\char NNN}` (three decimal digits) in LaTeX:
+they would end a Markdown math span (`$`), start a comment (`%`), be read as an alignment
+tab (`&`), a macro parameter (`#`), a space (`~`), a superscript (`^`) or a control
+sequence (`\`). With `_`, `{`, `}` written `\_`, `\{`, `\}`, a key is as safe inside
+`\mathrm{}` as a JSON string value is (`Esm.Document.Math.Latex.quoteL`). -/
+def keySpecial (c : Char) : Bool :=
+  c = '$' || c = '%' || c = '&' || c = '#' || c = '~' || c = '^' || c = '\\'
+
+/-- Three decimal digits. -/
+def dig3 (n : Nat) : List Char :=
+  [Esm.digitChar (n / 100 % 10), Esm.digitChar (n / 10 % 10), Esm.digitChar (n % 10)]
+
+/-- Escape a field key for `\mathrm{}`. -/
+def escK : List Char → List Char
+  | [] => []
+  | c :: cs =>
+    (if keySpecial c then "{\\char".toList ++ dig3 c.toNat ++ ['}']
+      else if c = '_' ∨ c = '{' ∨ c = '}' then ['\\', c] else [c]) ++ escK cs
+
+/-- Undo `escK`. -/
+def unescK : List Char → List Char
+  | '{' :: '\\' :: 'c' :: 'h' :: 'a' :: 'r' :: a :: b :: d :: '}' :: cs =>
+    Char.ofNat (100 * Number.charDigit a + 10 * Number.charDigit b + Number.charDigit d) :: unescK cs
+  | '\\' :: c :: cs => c :: unescK cs
+  | c :: cs => c :: unescK cs
+  | [] => []
+
+theorem unescK_special (c : Char) (h : keySpecial c = true) (R : List Char) :
+    unescK ("{\\char".toList ++ dig3 c.toNat ++ ['}'] ++ R) = c :: unescK R := by
+  simp only [keySpecial, Bool.or_eq_true, decide_eq_true_eq] at h
+  rcases h with ((((((rfl | rfl) | rfl) | rfl) | rfl) | rfl) | rfl) <;> rfl
+
+theorem unescK_escK (s : List Char) : unescK (escK s) = s := by
+  induction s with
+  | nil => rfl
+  | cons c cs ih =>
+    by_cases h : keySpecial c = true
+    · simp only [escK, h, ↓reduceIte, List.append_assoc]
+      rw [← List.append_assoc, ← List.append_assoc, unescK_special c h, ih]
+    · have h1 : c ≠ '\\' := by rintro rfl; simp [keySpecial] at h
+      by_cases h2 : c = '_' ∨ c = '{' ∨ c = '}'
+      · simp only [escK, h, h2, Bool.false_eq_true, ↓reduceIte, List.cons_append, List.nil_append]
+        rw [unescK.eq_2, ih]
+      · have h3 : c ≠ '{' := fun e => h2 (Or.inr (Or.inl e))
+        simp only [escK, h, h2, Bool.false_eq_true, ↓reduceIte, List.singleton_append]
+        rw [unescK.eq_3 _ _ (fun _ _ _ _ e _ => h3 e) (fun _ _ e _ => h1 e), ih]
 
 /-- The digits of a natural number. -/
 def natChars (n : Nat) : List Char := Number.printNat n
@@ -459,7 +506,7 @@ def inlineD (o : Out) : Bool := decide (9 ≤ o.lvl)
 /-- A field key, upright. -/
 def keyToks (sf : Sf) (k : String) : List Tok :=
   match sf with
-  | .latex => [.rm (String.ofList (escT k.toList))]
+  | .latex => [.rm (String.ofList (escK k.toList))]
   | .typst => [.ups [(k, "")]]
 
 /-- A field value that is not an expression, as JSON. -/
@@ -507,11 +554,9 @@ def dCall (sf : Sf) (w : List Tok) (args : List (List Tok)) : List Tok :=
   | .latex => [.opn "D", .kw .us, .kw .lb] ++ w ++ [.kw .rb] ++ callToks sf [] args
   | .typst => [.opn "D", .kw .us, .kw .lpg] ++ w ++ [.kw .rp] ++ callToks sf [] args
 
-/-- The quantity `3\,\mathrm{m/s}` / `3 thin upright("m") thin upright("s")^(-1)`. -/
-def qtyToks (sf : Sf) (n : JNum) (l : List Esm.Units.Factor) : List Tok :=
-  match sf with
-  | .latex => [.num n, .kw .thin, .rm (String.ofList (Esm.Units.latexBody l))]
-  | .typst => [.num n, .units l]
+/-- The quantity `3\,\mathrm{m/s}` / `3 thin upright("m") thin upright("s")^(-1)`: the
+number, then the unit as one token. -/
+def qtyToks (n : JNum) (l : List Esm.Units.Factor) : List Tok := [.num n, .units l]
 
 /-! ## Constant arrays -/
 
@@ -570,10 +615,7 @@ def arrToks (sf : Sf) : AForm → List Tok
         [.kw .rp]
 
 /-- The unit after a number or an array. -/
-def unitToks (sf : Sf) (l : List Esm.Units.Factor) : List Tok :=
-  match sf with
-  | .latex => [.kw .thin, .rm (String.ofList (Esm.Units.latexBody l))]
-  | .typst => [.units l]
+def unitToks (l : List Esm.Units.Factor) : List Tok := [.units l]
 
 /-! ## Reductions (`faq`) -/
 
@@ -1005,10 +1047,10 @@ def pr (c : Ctx) (e : Json) : Out :=
         else esc ()
       | [] => esc ()
     | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)] =>
-      if unitsOK sf u then mkOut sf 7 (qtyToks sf n (factorsOf u)) else esc ()
+      if unitsOK sf u then mkOut sf 7 (qtyToks n (factorsOf u)) else esc ()
     | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)] =>
       match arrForm (.arr xs) with
-      | some af => if unitsOK sf u then mkOut sf 7 (arrToks sf af ++ unitToks sf (factorsOf u)) else esc ()
+      | some af => if unitsOK sf u then mkOut sf 7 (arrToks sf af ++ unitToks (factorsOf u)) else esc ()
       | none => esc ()
     | [("args", .arr []), ("op", .str "const"), ("value", .arr xs)] =>
       match arrForm (.arr xs) with

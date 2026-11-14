@@ -842,7 +842,7 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
       have hlf : factorsOf u ≠ [] ∧ ∀ f ∈ factorsOf u, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0 := by
         simp only [unitsOK, Bool.and_eq_true, bne_iff_ne, ne_eq, List.all_eq_true, bne_iff_ne] at hu
         exact ⟨hu.1.1.1, fun f hf => hu.1.2 f hf⟩
-      have hT : Good (arrToks .typst af ++ unitToks .typst (factorsOf u)) := by
+      have hT : Good (arrToks .typst af ++ unitToks (factorsOf u)) := by
         simp only [unitToks]
         refine ⟨fun t ht => ?_, adj_snoc _ _ hA.2 (by simp) hl⟩
         rcases List.mem_append.1 ht with ht | ht

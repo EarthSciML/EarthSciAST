@@ -32,7 +32,7 @@ def isCmpTok : Tok → Bool
 
 /-- `t` continues an expression parsed at level `L`. -/
 def conts (sf : Sf) (L : Nat) : Tok → Bool
-  | .kw .us | .kw .sdot | .kw .lp | .kw .thin | .units _ => true
+  | .kw .us | .kw .sdot | .kw .lp | .units _ => true
   | .kw .lbk => decide (L ≤ 9)
   | .kw .caret => decide (L ≤ 8)
   | .kw .slash => decide (L ≤ (match sf with | .typst => 7 | .latex => 5))
@@ -145,13 +145,25 @@ theorem lift_cmp {c : Ctx} {f : Nat} {ts r : List Tok} {x : Json} (h : pAdd c f 
         cases k <;> simp_all [conts, cmpOf, isCmpTok]
     | _ => rfl
 
+/-- Nothing that does not continue a level-5 parse starts with a number. -/
+theorem negTail_fol {sf : Sf} {L : Nat} {r : List Tok} (hr : Fol sf L r) (hL : L ≤ 5) :
+    negTail r = none := by
+  cases r with
+  | nil => rfl
+  | cons t r' =>
+    cases t with
+    | num n =>
+      have := hr _ _ rfl
+      simp [conts, atomStart] at this; omega
+    | _ => rfl
+
 theorem lift_add {c : Ctx} {f : Nat} {ts r : List Tok} {x : Json} (h : pMul c f ts = some (x, r))
     (hr : Fol c.sf 4 r) (hf : 1 ≤ f) : pAdd c (f + 1) ts = some (x, r) := by
   obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by omega⟩
   rw [pAdd, h]
   simp only
   rw [addLoop.eq_4 _ _ _ _ (by intro r' e; have := hr _ _ e; simp [conts] at this)
-    (by intro r' e; have := hr _ _ e; simp [conts] at this)]
+    (by intro r' e; have := hr _ _ e; simp [conts] at this), negTail_fol hr (by omega)]
   rfl
 
 theorem lift_mul {c : Ctx} {f : Nat} {ts r : List Tok} {x : Json} (h : pNot c f ts = some (x, r))

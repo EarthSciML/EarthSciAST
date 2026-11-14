@@ -119,10 +119,9 @@ theorem pGrid_read (csep rsep close : Kw) (h1 : rsep ≠ csep) (h2 : close ≠ c
     rw [ih]; rfl
 
 theorem constTail_none (c : Ctx) (v : Json) (X : List Tok) (hX : Fol c.sf 10 X) :
-    constTail c v X = some (constNode v none, X) := by
+    constTail v X = some (constNode v none, X) := by
   unfold constTail
   split
-  · have := hX _ _ rfl; simp [conts] at this
   · have := hX _ _ rfl; simp [conts] at this
   · rfl
 
@@ -160,7 +159,7 @@ theorem numToks_ne (ns : List JNum) : ∀ x ∈ numToks ns, x ≠ [] := by
 
 /-- The array tokens read back as the array, whatever follows them. -/
 theorem pPrim_arr (c : Ctx) (af : AForm) (haf : AOK af) (rest : List Tok) (f : Nat) :
-    pPrim c (f + 1) (arrToks c.sf af ++ rest) = constTail c af.json rest := by
+    pPrim c (f + 1) (arrToks c.sf af ++ rest) = constTail af.json rest := by
   obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
   · cases af with
     | col ns =>
@@ -225,7 +224,7 @@ theorem M_arr (c : Ctx) (xs : List Json) (af : AForm) (haf : arrForm (.arr xs) =
 theorem M_arrU (c : Ctx) (u : String) (xs : List Json) (af : AForm) (haf : arrForm (.arr xs) = some af)
     (hu : unitsOK c.sf u = true)
     (hpr : pr c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)]) =
-      mkOut c.sf 7 (arrToks c.sf af ++ unitToks c.sf (factorsOf u))) :
+      mkOut c.sf 7 (arrToks c.sf af ++ unitToks (factorsOf u))) :
     M c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)]) := by
   obtain ⟨hj, hok⟩ := arrForm_spec haf
   obtain ⟨k, r, he, hk1, hk2, hk3⟩ := arrToks_head c.sf af
@@ -236,15 +235,7 @@ theorem M_arrU (c : Ctx) (u : String) (xs : List Json) (af : AForm) (haf : arrFo
   intro rest hr f hf
   obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by unfold need at hf; omega⟩
   rw [List.append_assoc, pPrim_arr c af hok _ g, hj]
-  obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
-  · have hl : Esm.Units.parseLatex (Esm.Units.latex (factorsOf u)) = some (factorsOf u) := by
-      simp only [unitsOK, Bool.and_eq_true, beq_iff_eq, hsf] at hu; exact hu.2.1
-    have hr' : unitsOfRaw (String.ofList (Esm.Units.latexBody (factorsOf u))) = some (factorsOf u) := by
-      unfold unitsOfRaw; rw [String.toList_ofList]; exact hl
-    simp only [unitToks, hsf, List.cons_append, List.nil_append]
-    unfold constTail; rw [hsf]; simp only
-    rw [hr']; simp [constNode, hsp]
-  · simp only [unitToks, hsf, List.cons_append, List.nil_append]
-    unfold constTail; rw [hsf]; simp [constNode, hsp]
+  simp only [unitToks, List.cons_append, List.nil_append]
+  unfold constTail; simp [constNode, hsp]
 
 end Esm.Document.Math

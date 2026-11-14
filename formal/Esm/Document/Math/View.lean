@@ -109,7 +109,7 @@ inductive V (c : Ctx) : Json → Prop where
       V c (dCallNode w xs)
   | qty (u : String) (n : JNum) (hn : n.WF) (hu : unitsOK c.sf u = true)
       (hpr : pr c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)]) =
-        mkOut c.sf 7 (qtyToks c.sf n (factorsOf u))) :
+        mkOut c.sf 7 (qtyToks n (factorsOf u))) :
       V c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)])
   | arr (xs : List Json) (af : AForm) (haf : arrForm (.arr xs) = some af)
       (hpr : pr c (.obj [("args", .arr []), ("op", .str "const"), ("value", .arr xs)]) =
@@ -118,7 +118,7 @@ inductive V (c : Ctx) : Json → Prop where
   | arrU (u : String) (xs : List Json) (af : AForm) (haf : arrForm (.arr xs) = some af)
       (hu : unitsOK c.sf u = true)
       (hpr : pr c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)]) =
-        mkOut c.sf 7 (arrToks c.sf af ++ unitToks c.sf (factorsOf u))) :
+        mkOut c.sf 7 (arrToks c.sf af ++ unitToks (factorsOf u))) :
       V c (.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)])
   | tpos (n : String) (bs : List (String × Json)) (ps : List String) (hn : tnameOK n = true)
       (hs : keysSorted bs = true) (hb : ∀ kv ∈ bs, isE kv.2 = true) (hps : positional c.S n bs = some ps)

@@ -97,7 +97,7 @@ theorem pName_sdot (sf : Sf) (r : List Tok) : pName sf (.kw .sdot :: r) = none :
   simp [pName, pSeg, formulaOf]
 
 theorem dName_none (c : Ctx) (k : Kw) (toks rest : List Tok) (hh : HeadOK c toks)
-    (hd : c.S.names.contains "d" = false) : dName c.sf k (toks ++ rest) = none := by
+    (hd : c.S.names.contains "d" = false) : dName c k (toks ++ rest) = none := by
   cases toks with
   | nil => exact absurd hh (by simp [HeadOK])
   | cons t tr =>
@@ -123,9 +123,9 @@ theorem pItalicD_none (c : Ctx) (toks rest : List Tok) (hh : HeadOK c toks) :
   · simp only [Bool.false_eq_true, ite_false]
     have h1 := dName_none c .rb toks rest hh hd
     have h2 := dName_none c .rp toks rest hh hd
-    cases hs : c.sf
-    · rw [hs] at h1; simp [h1]
-    · rw [hs] at h2; simp [h2]
+    cases c.sf
+    · simp [h1]
+    · simp [h2]
   · simp
 
 /-- A primary read in parentheses. -/
