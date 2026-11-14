@@ -14,6 +14,9 @@ Each fixture is a JSON document with:
   the fixture is a fail-closed case: `canonical_json(input)` must RAISE with
   this error code rather than produce output. The only value currently used is
   `"E_CANONICAL_UNSUPPORTED_FIELD"`.
+- `cases` — OPTIONAL, documentation only: the unit-spelling fixtures list each
+  input `units` string with its canonical spelling (esm-spec §4.8.2). Bindings
+  ignore it; `expected` is what they check.
 - `tags` — categorization (`integer`, `float`, `subnormal`, `flatten`,
   `zero_elim`, `ordering`, `nonleaf`, `signed_zero`, `fail_closed`,
   `supported`, ...).
@@ -45,3 +48,11 @@ The TypeScript binding cannot distinguish integer from float literals until
 gt-ca2u (rep refactor) lands. Fixtures whose `expected` contains a
 JSON-integer token (no `.`, no `e`) are skipped for TypeScript and tracked
 under gt-z8k0's TS follow-up bead.
+
+## Unit spelling
+
+`unit_spelling.json` and `unit_spelling_ordering.json` pin the canonical
+spelling of a `const` node's `units` (esm-spec §4.8.2, discretization RFC
+§5.4.10). They are generated from the Lean definition `Esm.Units.canon`
+(`formal/Esm/Units/Canonical.lean`) by `scripts/gen-canonical-unit-spelling.py`;
+edit the cases there and re-run it rather than editing the JSON.

@@ -252,6 +252,24 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if let Some(e) = err {
         return Err(e);
     }
+    // A `const` node's declared units take the canonical unit spelling
+    // (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+    if let Some(units) = work.units.as_mut() {
+        *units = crate::units::canonical_unit_spelling(units);
+    }
+    if work.op == "const" && work.units.as_deref() == Some("1") {
+        // A dimensionless const drops its units (user ruling 2026-11-14): a
+        // scalar becomes the bare literal, an array a unitless const.
+        match &work.value {
+            Some(serde_json::Value::Number(n)) if n.is_i64() => {
+                return Ok(Expr::Integer(n.as_i64().unwrap_or_default()));
+            }
+            Some(serde_json::Value::Number(n)) if n.as_f64().is_some() => {
+                return canonicalize(&Expr::Number(n.as_f64().unwrap_or_default()));
+            }
+            _ => work.units = None,
+        }
+    }
     match work.op.as_str() {
         "+" => canon_add(&mut work),
         "*" => canon_mul(&mut work),
@@ -830,6 +848,108 @@ pub(crate) fn push_scientific(out: &mut String, digits: &str, exp: i32, force_fr
     write!(out, "e{exp}").expect("writing to a String cannot fail");
 }
 
+// ---------------------------------------------------------------------------
+// The document-level canonical step (esm-spec §4.8.2 "Canonical spelling").
+// ---------------------------------------------------------------------------
+
+/// Object properties whose value is a NAME-KEYED map (esm-schema.json): a map's
+/// keys are names, never fields, so a variable NAMED `units` is not a units
+/// string. The same list in every binding.
+const DOCUMENT_MAP_KEYS: &[&str] = &[
+    "bind",
+    "bindings",
+    "coordinates",
+    "coords",
+    "coupling_roles",
+    "data_sources",
+    "enums",
+    "expression_template_imports",
+    "expression_templates",
+    "guesses",
+    "index_set_rename",
+    "index_sets",
+    "initial_conditions",
+    "map",
+    "metaparameters",
+    "models",
+    "parameter_overrides",
+    "parameters",
+    "pinned_coords",
+    "ranges",
+    "reaction_systems",
+    "rebind",
+    "rename",
+    "species",
+    "subsystems",
+    "translate",
+    "url_substitutions",
+    "variables",
+    "where",
+];
+
+/// Free-form objects (schema `additionalProperties: true`), never descended.
+const DOCUMENT_FREE_KEYS: &[&str] = &["attrs", "config", "metadata", "reader_options", "x_esd"];
+
+/// The document-level canonical step: every units string of a decoded document
+/// (the JSON value `to_json` writes and `load_document` reads) takes the
+/// canonical unit spelling (esm-spec §4.8.2, Lean `Esm.Units.canon`).
+///
+/// That is every `units` and `default_units` string of a variable, species,
+/// parameter, coordinate or `const` node, wherever it sits: nested subsystems,
+/// template bodies, tests, coupling entries. Free-form objects (`metadata`,
+/// `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither
+/// are the keys of name-keyed maps. A `const` node whose units spell `1` loses
+/// them: a scalar one becomes the bare literal, an array one a `const` without
+/// `units`. Nothing else changes.
+#[must_use]
+pub fn canonicalize_document(doc: &serde_json::Value) -> serde_json::Value {
+    fn walk(value: &serde_json::Value, is_map: bool) -> serde_json::Value {
+        use serde_json::Value;
+        match value {
+            Value::Array(items) => Value::Array(items.iter().map(|v| walk(v, false)).collect()),
+            Value::Object(obj) if !is_map && is_dimensionless_const(obj) => {
+                // A dimensionless const drops its units: a scalar becomes the
+                // bare literal, an array a unitless const.
+                match obj.get("value") {
+                    Some(n @ Value::Number(_)) => n.clone(),
+                    _ => Value::Object(
+                        obj.iter()
+                            .filter(|(k, _)| k.as_str() != "units")
+                            .map(|(k, v)| {
+                                (k.clone(), walk(v, DOCUMENT_MAP_KEYS.contains(&k.as_str())))
+                            })
+                            .collect(),
+                    ),
+                }
+            }
+            Value::Object(obj) => Value::Object(
+                obj.iter()
+                    .map(|(k, v)| {
+                        let out = match v {
+                            _ if is_map => walk(v, false),
+                            Value::String(u) if k == "units" || k == "default_units" => {
+                                Value::String(crate::units::canonical_unit_spelling(u))
+                            }
+                            _ if DOCUMENT_FREE_KEYS.contains(&k.as_str()) => v.clone(),
+                            _ => walk(v, DOCUMENT_MAP_KEYS.contains(&k.as_str())),
+                        };
+                        (k.clone(), out)
+                    })
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+    fn is_dimensionless_const(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+        obj.get("op").and_then(|v| v.as_str()) == Some("const")
+            && obj
+                .get("units")
+                .and_then(|v| v.as_str())
+                .is_some_and(|u| crate::units::canonical_unit_spelling(u) == "1")
+    }
+    walk(doc, false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1288,6 +1408,29 @@ mod tests {
             canonical_json(&e).unwrap_err().to_string(),
             "E_CANONICAL_UNSUPPORTED_FIELD"
         );
+    }
+
+    /// The document-level fixtures (tests/conformance/canonical_document):
+    /// `canonicalize_document(input)` equals `expected` as a JSON value.
+    #[test]
+    fn canonical_document_conformance_fixtures() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/conformance/canonical_document");
+        let read = |name: &str| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(dir.join(name)).unwrap()).unwrap()
+        };
+        let manifest = read("manifest.json");
+        let fixtures = manifest["fixtures"].as_array().unwrap();
+        assert!(!fixtures.is_empty());
+        for entry in fixtures {
+            let fixture = read(entry["path"].as_str().unwrap());
+            assert_eq!(
+                canonicalize_document(&fixture["input"]),
+                fixture["expected"],
+                "fixture {}",
+                entry["id"]
+            );
+        }
     }
 
     /// Conformance fixture consumer — the same fixture set is run by every

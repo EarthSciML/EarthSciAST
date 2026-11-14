@@ -104,6 +104,20 @@ func canonOp(node ExprNode) (Expression, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A `const` node's declared units take the canonical unit spelling
+	// (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+	if work.Units != nil {
+		spelled := canonicalUnitSpelling(*work.Units)
+		work.Units = &spelled
+		if work.Op == "const" && spelled == "1" {
+			// A dimensionless const drops its units (user ruling 2026-11-14):
+			// a scalar becomes the bare literal, an array a unitless const.
+			if lit, ok := constScalarLiteral(work.Value); ok {
+				return Canonicalize(lit)
+			}
+			work.Units = nil
+		}
+	}
 
 	// Step 2: operator-specific rewrites.
 	switch work.Op {
@@ -774,4 +788,25 @@ func emitExprNodeJSON(n ExprNode) (string, error) {
 func formatCanonicalFloat(f float64) string {
 	s, _ := formatCanonicalFloatShared(f)
 	return s
+}
+
+// constScalarLiteral is a const node's scalar value as a literal expression:
+// an integer (int64) or a float (float64), as the JSON token spelled it.
+func constScalarLiteral(v any) (Expression, bool) {
+	switch x := v.(type) {
+	case json.Number:
+		if i, err := x.Int64(); err == nil && !strings.ContainsAny(string(x), ".eE") {
+			return i, true
+		}
+		if f, err := x.Float64(); err == nil {
+			return f, true
+		}
+	case int:
+		return int64(x), true
+	case int64:
+		return x, true
+	case float64:
+		return x, true
+	}
+	return nil, false
 }

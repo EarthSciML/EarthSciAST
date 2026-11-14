@@ -698,10 +698,10 @@ const SUPERSCRIPT_CLASS = `[${SUPERSCRIPT_DIGITS}${SUPERSCRIPT_MINUS}]`
  * ASCII grammar the parser implements. A pure SPELLING normalization — every
  * target already exists in {@link UNIT_TABLE}, no unit is invented here:
  *
- *   - SUPERSCRIPT EXPONENTS `⁰¹²³⁴⁵⁶⁷⁸⁹` and superscript minus `⁻` become an
- *     explicit `^` exponent: `W/m²` → `W/m^2`, `cm³` → `cm^3`, `s⁻¹` → `s^-1`.
- *     A whole superscript RUN maps to one exponent, so `m⁻²` is `m^-2` and not
- *     `m^-^2`.
+ *   - SUPERSCRIPT EXPONENTS `⁰¹²³⁴⁵⁶⁷⁸⁹`, optionally led by the superscript
+ *     minus `⁻`, become an explicit `^` exponent: `W/m²` → `W/m^2`,
+ *     `cm³` → `cm^3`, `s⁻¹` → `s^-1`. A minus not followed by superscript
+ *     digits is not rewritten, and `m²⁻¹` is two exponents, not `m^-21`.
  *   - MIDDOT `·` (U+00B7) and DOT OPERATOR `⋅` (U+22C5) → `*`, the two spellings
  *     of multiplication the corpus uses (`J/(kg·K)`, `kg⋅m/s`).
  *   - U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU → `u` (`μg` → `ug`)
@@ -718,20 +718,295 @@ function normalizeUnitString(s: string): string {
   // Ω GREEK CAPITAL OMEGA and Ω OHM SIGN are visually identical and
   // both occur in the wild; fold each to the ASCII `Ohm` the table registers.
   if (!new RegExp(`[µμ°·⋅ΩΩ]|${SUPERSCRIPT_CLASS}`, 'u').test(s)) return s
-  return s
-    .replace(/°C/g, 'degC')
-    .replace(/°F/g, 'degF')
-    .replace(/[µμ]/g, 'u')
-    .replace(/[ΩΩ]/g, 'Ohm')
-    .replace(/[·⋅]/g, '*')
-    .replace(new RegExp(`${SUPERSCRIPT_CLASS}+`, 'gu'), (run) => {
-      const sign = run.includes(SUPERSCRIPT_MINUS) ? '-' : ''
-      const digits = [...run]
-        .filter((c) => c !== SUPERSCRIPT_MINUS)
-        .map((c) => String(SUPERSCRIPT_DIGITS.indexOf(c)))
-        .join('')
-      return `^${sign}${digits}`
-    })
+  return (
+    s
+      .replace(/°C/g, 'degC')
+      .replace(/°F/g, 'degF')
+      .replace(/[µμ]/g, 'u')
+      .replace(/[ΩΩ]/g, 'Ohm')
+      .replace(/[·⋅]/g, '*')
+      // A run of superscript DIGITS is one exponent (`m¹²` is `m^12`), and a
+      // superscript minus is rewritten only together with the digits right after
+      // it (`m⁻³` is `m^-3`). A minus anywhere else stays an unexpected
+      // character, so `s⁻1` does not resolve, and `m²⁻¹` is the two exponents
+      // `m^2^-1`, not one exponent `-21` (esm-spec §4.8.2, Lean `normalize`).
+      .replace(new RegExp(`${SUPERSCRIPT_MINUS}?[${SUPERSCRIPT_DIGITS}]+`, 'gu'), (run) => {
+        const sign = run.startsWith(SUPERSCRIPT_MINUS) ? '-' : ''
+        const digits = [...run]
+          .filter((c) => c !== SUPERSCRIPT_MINUS)
+          .map((c) => String(SUPERSCRIPT_DIGITS.indexOf(c)))
+          .join('')
+        return `^${sign}${digits}`
+      })
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The canonical unit spelling (esm-spec §4.8.2 "Canonical spelling"). The
+// authority is the Lean definition `Esm.Units.canon`
+// (formal/Esm/Units/Canonical.lean); this is a port of it, and the
+// cross-binding fixture tests/conformance/canonical/unit_spelling.json pins the
+// output.
+//
+// It rewrites the PARSED string; it does not resolve it. Symbols are kept as
+// written (`km` stays `km`), no table lookup decides the spelling, and nothing
+// cancels across the fraction bar (`mol/mol` stays `mol/mol`). It has its own
+// lexer and parser, mirroring the Lean ones, because the resolving parser
+// rejects unknown symbols and the spelling keeps them.
+// ---------------------------------------------------------------------------
+
+/** An exact rational exponent, in lowest terms with a positive denominator. */
+interface SpellQ {
+  readonly n: bigint
+  readonly d: bigint
+}
+
+function spellQ(n: bigint, d: bigint): SpellQ {
+  let [a, b] = [n < 0n ? -n : n, d < 0n ? -d : d]
+  while (b !== 0n) [a, b] = [b, a % b]
+  const g = a === 0n ? 1n : a
+  const sign = d < 0n ? -1n : 1n
+  return { n: (n / g) * sign, d: (d / g) * sign }
+}
+
+const spellMul = (a: SpellQ, b: SpellQ): SpellQ => spellQ(a.n * b.n, a.d * b.d)
+const spellAdd = (a: SpellQ, b: SpellQ): SpellQ => spellQ(a.n * b.d + b.n * a.d, a.d * b.d)
+const spellNeg = (a: SpellQ): SpellQ => ({ n: -a.n, d: a.d })
+
+type SpellTok =
+  | { kind: 'sym'; text: string }
+  | { kind: 'num'; text: string; value: SpellQ; isInt: boolean }
+  | { kind: 'star' | 'dstar' | 'slash' | 'caret' | 'lp' | 'rp' | 'minus' }
+
+const SPELL_OPERATORS: Record<string, 'slash' | 'caret' | 'lp' | 'rp' | 'minus'> = {
+  '/': 'slash',
+  '^': 'caret',
+  '(': 'lp',
+  ')': 'rp',
+  '-': 'minus',
+}
+
+const isSpellIdent = (c: string): boolean => /^[A-Za-z0-9_]$/.test(c)
+const isDigitRun = (s: string): boolean => /^[0-9]+$/.test(s)
+
+/** The §4.8.2 tokens as the Lean lexer `Esm.Units.lex` reads them; null when a
+ * character is outside the token rules. */
+function spellLex(s: string): SpellTok[] | null {
+  const toks: SpellTok[] = []
+  let i = 0
+  while (i < s.length) {
+    const c = s[i]
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+      i += 1
+    } else if (c === '*') {
+      const double = s[i + 1] === '*'
+      toks.push({ kind: double ? 'dstar' : 'star' })
+      i += double ? 2 : 1
+    } else if (Object.hasOwn(SPELL_OPERATORS, c)) {
+      toks.push({ kind: SPELL_OPERATORS[c] })
+      i += 1
+    } else if (c === '%') {
+      toks.push({ kind: 'sym', text: '%' })
+      i += 1
+    } else if (isSpellIdent(c)) {
+      let j = i
+      while (j < s.length && isSpellIdent(s[j])) j += 1
+      const run = s.slice(i, j)
+      if (!isDigitRun(run)) {
+        toks.push({ kind: 'sym', text: run })
+        i = j
+      } else if (s[j] === '.' && j + 1 < s.length && /[0-9]/.test(s[j + 1])) {
+        let k = j + 1
+        while (k < s.length && isSpellIdent(s[k])) k += 1
+        const frac = s.slice(j + 1, k)
+        const lit = s.slice(i, k)
+        if (isDigitRun(frac)) {
+          const value = spellQ(BigInt(run + frac), 10n ** BigInt(frac.length))
+          toks.push({ kind: 'num', text: lit, value, isInt: false })
+        } else {
+          // `1.5m` is one symbol, and no table key can match it.
+          toks.push({ kind: 'sym', text: lit })
+        }
+        i = k
+      } else {
+        toks.push({ kind: 'num', text: run, value: spellQ(BigInt(run), 1n), isInt: true })
+        i = j
+      }
+    } else {
+      return null
+    }
+  }
+  return toks
+}
+
+type SpellFactor = [string, SpellQ]
+
+/** Thrown inside {@link SpellParser} when the tokens do not parse. */
+class NoSpelling extends Error {}
+
+/**
+ * The §4.8.2 grammar (`Esm.Units.parse`), building the factor list
+ * (`UExpr.factors`) as it goes: `*` and juxtaposition concatenate, `/` negates
+ * the exponents of its right operand, `^q` scales every exponent below it, and
+ * the atom `1` and the symbol `dimensionless` contribute nothing.
+ */
+class SpellParser {
+  pos = 0
+  constructor(readonly toks: SpellTok[]) {}
+
+  kind(ahead = 0): SpellTok['kind'] | 'eof' {
+    return this.toks[this.pos + ahead]?.kind ?? 'eof'
+  }
+
+  unit(): SpellFactor[] {
+    const acc = this.term()
+    for (;;) {
+      const k = this.kind()
+      if (k === 'star') {
+        this.pos += 1
+        acc.push(...this.term())
+      } else if (k === 'slash') {
+        this.pos += 1
+        acc.push(...this.term().map(([s, q]): SpellFactor => [s, spellNeg(q)]))
+      } else if (k === 'num' || k === 'sym' || k === 'lp') {
+        acc.push(...this.term())
+      } else {
+        return acc
+      }
+    }
+  }
+
+  term(): SpellFactor[] {
+    const factors = this.atom()
+    if (this.kind() !== 'caret' && this.kind() !== 'dstar') return factors
+    this.pos += 1
+    const q = this.exponent()
+    return factors.map(([s, e]): SpellFactor => [s, spellMul(q, e)])
+  }
+
+  exponent(): SpellQ {
+    if (this.kind() === 'minus' && this.kind(1) === 'num') {
+      this.pos += 2
+      return spellNeg(this.numberAt(this.pos - 1).value)
+    }
+    if (this.kind() === 'num') {
+      this.pos += 1
+      return this.numberAt(this.pos - 1).value
+    }
+    if (this.kind() === 'lp') {
+      this.pos += 1
+      const p = this.signedInteger()
+      if (this.kind() !== 'slash') throw new NoSpelling()
+      this.pos += 1
+      const q = this.signedInteger()
+      if (this.kind() !== 'rp' || q.n === 0n) throw new NoSpelling()
+      this.pos += 1
+      return spellMul(p, spellQ(q.d, q.n))
+    }
+    throw new NoSpelling()
+  }
+
+  signedInteger(): SpellQ {
+    const negative = this.kind() === 'minus'
+    const at = this.pos + (negative ? 1 : 0)
+    const tok = this.toks[at]
+    if (tok?.kind !== 'num' || !tok.isInt) throw new NoSpelling()
+    this.pos = at + 1
+    return negative ? spellNeg(tok.value) : tok.value
+  }
+
+  numberAt(at: number): { value: SpellQ } {
+    const tok = this.toks[at]
+    if (tok.kind !== 'num') throw new NoSpelling()
+    return tok
+  }
+
+  atom(): SpellFactor[] {
+    const tok = this.toks[this.pos]
+    if (tok === undefined) throw new NoSpelling()
+    this.pos += 1
+    if (tok.kind === 'num') {
+      // Any number but the literal `1` is a scaling factor.
+      if (tok.text !== '1') throw new NoSpelling()
+      return []
+    }
+    if (tok.kind === 'sym') {
+      return tok.text === 'dimensionless' ? [] : [[tok.text, spellQ(1n, 1n)]]
+    }
+    if (tok.kind === 'lp') {
+      const inner = this.unit()
+      if (this.kind() !== 'rp') throw new NoSpelling()
+      this.pos += 1
+      return inner
+    }
+    throw new NoSpelling()
+  }
+}
+
+/** `Esm.Units.norm`: each symbol once with its exponents summed, zero sums
+ * dropped, sorted by symbol in codepoint order. */
+function spellSide(factors: SpellFactor[]): SpellFactor[] {
+  const total = new Map<string, SpellQ>()
+  for (const [s, q] of factors) {
+    const prev = total.get(s)
+    total.set(s, prev === undefined ? q : spellAdd(prev, q))
+  }
+  // Symbols are ASCII, so UTF-16 code-unit order is codepoint order.
+  return [...total.entries()]
+    .filter(([, q]) => q.n !== 0n)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+}
+
+function spellFactor([s, q]: SpellFactor): string {
+  const n = q.n < 0n ? -q.n : q.n
+  if (n === 1n && q.d === 1n) return s
+  if (q.d === 1n) return `${s}^${n}`
+  return `${s}^(${n}/${q.d})`
+}
+
+/** `Esm.Units.symOK`: `%`, or an identifier run that is not all digits. */
+const spellSymbolOk = (s: string): boolean =>
+  s === '%' || (/^[A-Za-z0-9_]+$/.test(s) && !isDigitRun(s))
+
+/**
+ * The canonical spelling of a unit string (esm-spec §4.8.2), a port of the Lean
+ * `Esm.Units.canon`.
+ *
+ * The numerator is the factors with a positive exponent, each symbol once with
+ * its exponents summed, sorted by symbol (codepoint order) and joined by `*`.
+ * The denominator is the factors with a negative exponent, treated the same way
+ * and written with the exponent's absolute value; it is parenthesized when it
+ * has more than one factor. Nothing cancels across the bar. An exponent 1 is
+ * omitted, an integer is `^n`, any other rational is `^(p/q)` in lowest terms.
+ * An empty numerator is `1`, so `""`, `"1"` and `"dimensionless"` all become
+ * `"1"`.
+ *
+ * The string is returned unchanged when it does not lex or parse, when the
+ * spelling would have to write a symbol containing `.`, and when it would drop
+ * (exponent 0) a symbol that is not a table key.
+ */
+export function canonicalUnitSpelling(unit: string): string {
+  if (unit === '') return '1'
+  const toks = spellLex(normalizeUnitString(unit))
+  if (toks === null) return unit
+  const parser = new SpellParser(toks)
+  let factors: SpellFactor[]
+  try {
+    factors = parser.unit()
+  } catch (err) {
+    if (err instanceof NoSpelling) return unit
+    throw err
+  }
+  if (parser.pos !== toks.length) return unit
+  const num = spellSide(factors.filter(([, q]) => q.n > 0n))
+  const den = spellSide(factors.filter(([, q]) => q.n <= 0n))
+  const kept = new Set([...num, ...den].map(([s]) => s))
+  if (![...kept].every(spellSymbolOk)) return unit
+  if (!factors.every(([s]) => kept.has(s) || Object.hasOwn(UNIT_TABLE, s))) return unit
+  let spelled = num.length === 0 ? '1' : num.map(spellFactor).join('*')
+  if (den.length === 1) spelled += `/${spellFactor(den[0])}`
+  else if (den.length > 1) spelled += `/(${den.map(spellFactor).join('*')})`
+  return spelled
 }
 
 /**
@@ -1002,7 +1277,9 @@ class UnitParser {
 
   /** A table symbol, exactly as spelled (the table is flat: no prefixes). */
   private lookup(name: string): ParsedUnit {
-    const spec = UNIT_TABLE[name]
+    // Own keys only: `UNIT_TABLE[name]` would also find inherited object
+    // properties, so `toString` or `constructor` would look like a unit.
+    const spec = Object.hasOwn(UNIT_TABLE, name) ? UNIT_TABLE[name] : undefined
     if (!spec) {
       throw new UnitConversionError(`Unknown unit "${name}"`)
     }

@@ -90,6 +90,20 @@ end
 # `canonicalize(e) == _canonicalize_shallow(e with canonicalized args)` and
 # the memoized driver is byte-identical to the plain recursion.
 function _canonicalize_shallow(work::OpExpr)
+    if work.units !== nothing
+        # A `const` node's declared units take the canonical unit spelling
+        # (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+        units = _canonical_units(work.units::String)
+        units == work.units || (work = reconstruct(work; units = units))
+        if work.op == "const" && units == "1"
+            # A dimensionless const drops its units (user ruling 2026-11-14):
+            # a scalar becomes the bare literal, an array a unitless const.
+            v = work.value
+            v isa Integer && !(v isa Bool) && return IntExpr(Int64(v))
+            v isa AbstractFloat && return canonicalize(NumExpr(Float64(v)))
+            work = reconstruct(work; units = nothing)
+        end
+    end
     if work.op == "+"
         return _canon_add(work)
     elseif work.op == "*"
@@ -603,4 +617,87 @@ function _shift_decimal(mant::AbstractString, exp::Int)::String
         return string(sign, digits)
     end
     return string(sign, digits[1:pos], ".", digits[(pos + 1):end])
+end
+
+# ---------------------------------------------------------------------------
+# The document-level canonical step (esm-spec §4.8.2 "Canonical spelling").
+# ---------------------------------------------------------------------------
+
+using OrderedCollections: OrderedDict
+
+# Object properties whose value is a NAME-KEYED map (esm-schema.json): a map's
+# keys are names, never fields, so a variable NAMED `units` is not a units
+# string. The same list in every binding.
+const _DOCUMENT_MAP_KEYS = Set{String}(
+    [
+        "bind", "bindings", "coordinates", "coords", "coupling_roles", "data_sources",
+        "enums", "expression_template_imports", "expression_templates", "guesses",
+        "index_set_rename", "index_sets", "initial_conditions", "map", "metaparameters",
+        "models", "parameter_overrides", "parameters", "pinned_coords", "ranges",
+        "reaction_systems", "rebind", "rename", "species", "subsystems", "translate",
+        "url_substitutions", "variables", "where",
+    ]
+)
+
+# Free-form objects (schema `additionalProperties: true`), never descended.
+const _DOCUMENT_FREE_KEYS = Set{String}(["attrs", "config", "metadata", "reader_options", "x_esd"])
+
+"""
+    canonicalize_document(doc::AbstractDict) -> OrderedDict{String, Any}
+
+The document-level canonical step: every units string of a decoded document
+(the JSON object `to_json` writes and `load_document` reads, e.g. from
+`JSON3.read`) takes the canonical unit spelling (esm-spec §4.8.2, Lean
+`Esm.Units.canon`).
+
+That is every `units` and `default_units` string of a variable, species,
+parameter, coordinate or `const` node, wherever it sits: nested subsystems,
+template bodies, tests, coupling entries. Free-form objects (`metadata`,
+`x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither are
+the keys of name-keyed maps. A `const` node whose units spell `1` loses them: a
+scalar one becomes the bare literal, an array one a `const` without `units`.
+The input is not mutated, key order is kept, and nothing else changes.
+"""
+canonicalize_document(doc::AbstractDict) = _canonicalize_document_value(doc, false)
+
+# A field of a decoded JSON object, whose keys are Strings (Dict) or Symbols
+# (JSON3.Object).
+function _document_field(d::AbstractDict, key::String)
+    for k in keys(d)
+        String(k) == key && return d[k]
+    end
+    return nothing
+end
+
+function _canonicalize_document_value(value, is_map::Bool)
+    if value isa AbstractVector
+        return Any[_canonicalize_document_value(v, false) for v in value]
+    elseif value isa AbstractDict
+        units = _document_field(value, "units")
+        op = _document_field(value, "op")
+        drop_units = false
+        if !is_map && op == "const" && units isa AbstractString && _canonical_units(units) == "1"
+            # A dimensionless const drops its units: a scalar becomes the bare
+            # literal, an array a unitless const.
+            literal = _document_field(value, "value")
+            literal isa Real && !(literal isa Bool) && return literal
+            drop_units = true
+        end
+        out = OrderedDict{String, Any}()
+        for (k, v) in pairs(value)
+            key = String(k)
+            (drop_units && key == "units") && continue
+            out[key] = if is_map
+                _canonicalize_document_value(v, false)
+            elseif (key == "units" || key == "default_units") && v isa AbstractString
+                _canonical_units(v)
+            elseif key in _DOCUMENT_FREE_KEYS
+                v
+            else
+                _canonicalize_document_value(v, key in _DOCUMENT_MAP_KEYS)
+            end
+        end
+        return out
+    end
+    return value
 end

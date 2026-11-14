@@ -827,6 +827,15 @@
       "concern": "'A symbol is a maximal run of characters that is a table key' does not say whether a run is delimited by character class (so `s1` is one unresolvable token) or is the longest table-key prefix (so `s1` lexes as `s` followed by the legal atom `1`, i.e. `s*1`, which the grammar's optional-operator juxtaposition accepts); the two readings disagree on strings like `kg1` and `s1`."
     },
     {
+      "id": "spec.4.8.2.canonical-unit-spelling",
+      "section": "4.8.2",
+      "quote": "A binding's canonicalizer MUST write every `units` string of the canonical form in this spelling, byte for byte.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "canonical",
+      "note": "The canonical form writes a units string as Esm.Units.canon does: numerator sorted by symbol, at most one '/', a compound denominator parenthesized, no cancellation across the bar, the dimensionless spellings as 1, an unparseable string unchanged; the spelling is idempotent and denotes the same unit."
+    },
+    {
       "id": "spec.4.8.3.sum-operands-share-unit",
       "section": "4.8.3",
       "quote": "All operands MUST share a dimension **and a scale**; the result is that unit.",

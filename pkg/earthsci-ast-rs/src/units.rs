@@ -19,6 +19,9 @@
 
 use crate::inline_test_checks::pointer_token;
 use crate::types::{Equation, Expr, ExpressionNode};
+use num_bigint::BigInt;
+use num_rational::BigRational;
+use num_traits::{One, Signed, Zero};
 use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 
@@ -2594,7 +2597,8 @@ pub fn parse_unit(unit_str: &str) -> Result<Unit, UnitError> {
 /// `Pa*m**3` all appear in the shared corpus and all failed to parse, leaving
 /// their variables dimensionless-unknown and silently unchecked.
 ///
-/// * superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` and superscript minus `⁻` → `^n`
+/// * superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` → `^n`, and superscript minus `⁻` → `^-`
+///   only right before superscript digits
 /// * middot `·` (U+00B7) and dot-operator `⋅` (U+22C5) → `*`
 /// * `µ` (U+00B5) / `μ` (U+03BC) → `u`  (so `μg` is the table key `ug`)
 /// * `°C` → `degC`, `°F` → `degF`; a bare `°` is NOT rewritten (it stays an
@@ -2606,10 +2610,13 @@ fn normalize_unit_str(s: &str) -> String {
     // `°C` and `°F` are two-character sequences, so handle them first.
     let s = s.replace("\u{00B0}C", "degC").replace("\u{00B0}F", "degF");
 
-    let mut out = String::with_capacity(s.len());
-    let mut in_superscript = false;
-    for c in s.chars() {
-        let sup = match c {
+    // A run of superscript DIGITS is one exponent (`m¹²` is `m^12`), and a
+    // superscript minus is rewritten only together with the digits right after
+    // it (`m⁻³` is `m^-3`). A minus anywhere else stays an unexpected
+    // character, so `s⁻1` does not resolve, and `m²⁻¹` is the two exponents
+    // `m^2^-1`, not one exponent `-21` (esm-spec §4.8.2, Lean `normalize`).
+    fn sup_digit(c: char) -> Option<char> {
+        match c {
             '⁰' => Some('0'),
             '¹' => Some('1'),
             '²' => Some('2'),
@@ -2620,27 +2627,29 @@ fn normalize_unit_str(s: &str) -> String {
             '⁷' => Some('7'),
             '⁸' => Some('8'),
             '⁹' => Some('9'),
-            '⁻' => Some('-'),
             _ => None,
-        };
-        match sup {
-            // A run of superscripts is one exponent: emit a single `^` before it.
-            Some(ascii) => {
-                if !in_superscript {
-                    out.push('^');
-                    in_superscript = true;
-                }
-                out.push(ascii);
+        }
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let minus = c == '⁻' && chars.peek().is_some_and(|&n| sup_digit(n).is_some());
+        if minus || sup_digit(c).is_some() {
+            out.push_str(if minus { "^-" } else { "^" });
+            if let Some(d) = sup_digit(c) {
+                out.push(d);
             }
-            None => {
-                in_superscript = false;
-                match c {
-                    '\u{00B7}' | '\u{22C5}' => out.push('*'),
-                    '\u{00B5}' | '\u{03BC}' => out.push('u'),
-                    '\u{2126}' | '\u{03A9}' => out.push_str("Ohm"),
-                    _ => out.push(c),
-                }
+            while let Some(d) = chars.peek().and_then(|&n| sup_digit(n)) {
+                out.push(d);
+                chars.next();
             }
+            continue;
+        }
+        match c {
+            '\u{00B7}' | '\u{22C5}' => out.push('*'),
+            '\u{00B5}' | '\u{03BC}' => out.push('u'),
+            '\u{2126}' | '\u{03A9}' => out.push_str("Ohm"),
+            _ => out.push(c),
         }
     }
     out
@@ -2923,6 +2932,235 @@ fn parse_normalized(s: &str, original: &str) -> Result<Unit, UnitError> {
         Some(UnitTok::RParen) => Err(parser.err("unbalanced ')'")),
         Some(_) => Err(parser.err("unexpected token")),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The canonical unit spelling (esm-spec §4.8.2 "Canonical spelling"). The
+// authority is the Lean definition `Esm.Units.canon`
+// (formal/Esm/Units/Canonical.lean); this is a port of it, and the
+// cross-binding fixture tests/conformance/canonical/unit_spelling.json pins the
+// output.
+//
+// It rewrites the PARSED string; it does not resolve it. Symbols are kept as
+// written (`km` stays `km`), no table lookup decides the spelling, and nothing
+// cancels across the fraction bar (`mol/mol` stays `mol/mol`). It shares the
+// lexer above but has its own parser, because the resolving parser rejects
+// unknown symbols and the spelling keeps them.
+// ---------------------------------------------------------------------------
+
+/// An exact rational exponent for the spelling, in lowest terms with a positive
+/// denominator. Arbitrary precision, as in Lean and the other bindings, so no
+/// exponent overflows (`m^0.000…001` spells as `m^(1/10^n)` for any `n`).
+type SpellQ = BigRational;
+
+/// The exact value of a number token: digits, optionally `.` and digits.
+fn spell_q_of_literal(lit: &str) -> Option<SpellQ> {
+    let (int, frac) = lit.split_once('.').unwrap_or((lit, ""));
+    let num: BigInt = format!("{int}{frac}").parse().ok()?;
+    let den = num_traits::pow(BigInt::from(10u8), frac.len());
+    Some(SpellQ::new(num, den))
+}
+
+type SpellFactor<'a> = (&'a str, SpellQ);
+
+/// The §4.8.2 grammar (`Esm.Units.parse`), building the factor list
+/// (`UExpr.factors`) as it goes: `*` and juxtaposition concatenate, `/` negates
+/// the exponents of its right operand, `^q` scales every exponent below it, and
+/// the atom `1` and the symbol `dimensionless` contribute nothing. `None` when
+/// the tokens do not parse.
+struct SpellParser<'a> {
+    toks: Vec<UnitTok<'a>>,
+    pos: usize,
+}
+
+impl<'a> SpellParser<'a> {
+    fn peek(&self, ahead: usize) -> Option<UnitTok<'a>> {
+        self.toks.get(self.pos + ahead).copied()
+    }
+
+    fn unit(&mut self) -> Option<Vec<SpellFactor<'a>>> {
+        let mut acc = self.term()?;
+        loop {
+            match self.peek(0) {
+                Some(UnitTok::Star) => {
+                    self.pos += 1;
+                    acc.extend(self.term()?);
+                }
+                Some(UnitTok::Slash) => {
+                    self.pos += 1;
+                    for (s, q) in self.term()? {
+                        acc.push((s, -q));
+                    }
+                }
+                Some(UnitTok::Sym(_) | UnitTok::Num(_) | UnitTok::LParen) => {
+                    acc.extend(self.term()?);
+                }
+                _ => return Some(acc),
+            }
+        }
+    }
+
+    fn term(&mut self) -> Option<Vec<SpellFactor<'a>>> {
+        let factors = self.atom()?;
+        if self.peek(0) != Some(UnitTok::Pow) {
+            return Some(factors);
+        }
+        self.pos += 1;
+        let q = self.exponent()?;
+        Some(factors.into_iter().map(|(s, e)| (s, &q * e)).collect())
+    }
+
+    fn exponent(&mut self) -> Option<SpellQ> {
+        match (self.peek(0), self.peek(1)) {
+            (Some(UnitTok::Minus), Some(UnitTok::Num(lit))) => {
+                self.pos += 2;
+                spell_q_of_literal(lit).map(|q| -q)
+            }
+            (Some(UnitTok::Num(lit)), _) => {
+                self.pos += 1;
+                spell_q_of_literal(lit)
+            }
+            (Some(UnitTok::LParen), _) => {
+                self.pos += 1;
+                let p = self.signed_integer()?;
+                if self.peek(0) != Some(UnitTok::Slash) {
+                    return None;
+                }
+                self.pos += 1;
+                let q = self.signed_integer()?;
+                if self.peek(0) != Some(UnitTok::RParen) || q.is_zero() {
+                    return None;
+                }
+                self.pos += 1;
+                Some(p / q)
+            }
+            _ => None,
+        }
+    }
+
+    fn signed_integer(&mut self) -> Option<SpellQ> {
+        let negative = self.peek(0) == Some(UnitTok::Minus);
+        let at = usize::from(negative);
+        match self.peek(at) {
+            Some(UnitTok::Num(lit)) if !lit.contains('.') => {
+                self.pos += at + 1;
+                let v = spell_q_of_literal(lit)?;
+                Some(if negative { -v } else { v })
+            }
+            _ => None,
+        }
+    }
+
+    fn atom(&mut self) -> Option<Vec<SpellFactor<'a>>> {
+        let tok = self.peek(0)?;
+        self.pos += 1;
+        match tok {
+            // Any number but the literal `1` is a scaling factor.
+            UnitTok::Num("1") => Some(Vec::new()),
+            UnitTok::Sym("dimensionless") => Some(Vec::new()),
+            UnitTok::Sym(name) => Some(vec![(name, SpellQ::one())]),
+            UnitTok::LParen => {
+                let inner = self.unit()?;
+                if self.peek(0) != Some(UnitTok::RParen) {
+                    return None;
+                }
+                self.pos += 1;
+                Some(inner)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// `Esm.Units.norm`: each symbol once with its exponents summed, zero sums
+/// dropped, sorted by symbol in codepoint order.
+fn spell_side<'a>(factors: impl Iterator<Item = SpellFactor<'a>>) -> Vec<SpellFactor<'a>> {
+    let mut total: std::collections::BTreeMap<&'a str, SpellQ> = std::collections::BTreeMap::new();
+    for (s, q) in factors {
+        *total.entry(s).or_insert_with(SpellQ::zero) += q;
+    }
+    total.into_iter().filter(|(_, q)| !q.is_zero()).collect()
+}
+
+fn spell_factor((s, q): &SpellFactor<'_>) -> String {
+    let q = q.abs();
+    if q.is_one() {
+        (*s).to_string()
+    } else if q.is_integer() {
+        format!("{s}^{}", q.numer())
+    } else {
+        format!("{s}^({}/{})", q.numer(), q.denom())
+    }
+}
+
+/// `Esm.Units.symOK`: `%`, or an identifier run that is not all digits.
+fn spell_symbol_ok(s: &str) -> bool {
+    s == "%"
+        || (!s.is_empty() && s.bytes().all(is_ident_byte) && !s.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The canonical spelling of a unit string (esm-spec §4.8.2), a port of the
+/// Lean `Esm.Units.canon`.
+///
+/// The numerator is the factors with a positive exponent, each symbol once with
+/// its exponents summed, sorted by symbol (codepoint order) and joined by `*`.
+/// The denominator is the factors with a negative exponent, treated the same
+/// way and written with the exponent's absolute value; it is parenthesized when
+/// it has more than one factor. Nothing cancels across the bar. An exponent 1 is
+/// omitted, an integer is `^n`, any other rational is `^(p/q)` in lowest terms.
+/// An empty numerator is `1`, so `""`, `"1"` and `"dimensionless"` all become
+/// `"1"`.
+///
+/// The string is returned unchanged when it does not lex or parse, when the
+/// spelling would have to write a symbol containing `.`, and when it would drop
+/// (exponent 0) a symbol that is not a table key.
+pub(crate) fn canonical_unit_spelling(unit: &str) -> String {
+    if unit.is_empty() {
+        return "1".to_string();
+    }
+    let normalized = normalize_unit_str(unit);
+    let Ok(toks) = lex_unit(&normalized, unit) else {
+        return unit.to_string();
+    };
+    let n_toks = toks.len();
+    let mut parser = SpellParser { toks, pos: 0 };
+    let factors = match parser.unit() {
+        Some(f) if parser.pos == n_toks => f,
+        _ => return unit.to_string(),
+    };
+    let num = spell_side(factors.iter().filter(|(_, q)| q.is_positive()).cloned());
+    let den = spell_side(factors.iter().filter(|(_, q)| !q.is_positive()).cloned());
+    let kept = |s: &str| num.iter().chain(den.iter()).any(|(k, _)| *k == s);
+    if !num
+        .iter()
+        .chain(den.iter())
+        .all(|(s, _)| spell_symbol_ok(s))
+        || !factors
+            .iter()
+            .all(|(s, _)| kept(s) || get_base_units().contains_key(*s))
+    {
+        return unit.to_string();
+    }
+    let join =
+        |side: &[SpellFactor<'_>]| side.iter().map(spell_factor).collect::<Vec<_>>().join("*");
+    let mut spelled = if num.is_empty() {
+        "1".to_string()
+    } else {
+        join(&num)
+    };
+    match den.len() {
+        0 => {}
+        1 => {
+            spelled.push('/');
+            spelled.push_str(&spell_factor(&den[0]));
+        }
+        _ => {
+            spelled.push_str("/(");
+            spelled.push_str(&join(&den));
+            spelled.push(')');
+        }
+    }
+    spelled
 }
 
 /// Get commonly used base units

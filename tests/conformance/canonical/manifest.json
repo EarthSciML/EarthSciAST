@@ -15,6 +15,9 @@
     {"id": "geometry_unsupported",        "path": "geometry_unsupported.json",        "tags": ["fail_closed", "geometry", "manifold", "distinct"]},
     {"id": "bc_fn_supported",             "path": "bc_fn_supported.json",             "tags": ["supported", "bc", "fn", "dim"]},
     {"id": "const_units",                 "path": "const_units.json",                 "tags": ["supported", "const", "units"]},
+    {"id": "unit_spelling",               "path": "unit_spelling.json",               "tags": ["supported", "const", "units", "unit_spelling"]},
+    {"id": "unit_spelling_ordering",      "path": "unit_spelling_ordering.json",      "tags": ["supported", "const", "units", "unit_spelling", "ordering"]},
+    {"id": "unit_spelling_dimensionless", "path": "unit_spelling_dimensionless.json", "tags": ["supported", "const", "units", "unit_spelling", "zero_elim", "integer"]},
     {"id": "unary_minus",                 "path": "unary_minus.json",                 "tags": ["negation", "power", "deprecated", "ordering", "nonleaf"]},
     {"id": "zero_minuend",                "path": "zero_minuend.json",                "tags": ["negation", "signed_zero", "integer", "float", "nonleaf"]}
   ]

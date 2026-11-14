@@ -1,0 +1,11 @@
+{
+  "category": "canonical_document",
+  "version": "1.0",
+  "description": "Document-level canonical form (esm-spec §4.8.2): each fixture's `expected` is the JSON document every binding's canonicalize_document(input) must equal, compared as JSON values.",
+  "fixtures": [
+    {
+      "id": "units",
+      "path": "units.json"
+    }
+  ]
+}

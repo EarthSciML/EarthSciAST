@@ -227,7 +227,9 @@ pub use cadence::{
     Cadence, CadenceError, ClassSummary, MaterializationPoint, Partition, classify, compute_fold,
     partition_model,
 };
-pub use canonicalize::{CanonicalizeError, canonical_json, canonicalize, format_canonical_float};
+pub use canonicalize::{
+    CanonicalizeError, canonical_json, canonicalize, canonicalize_document, format_canonical_float,
+};
 // The esm-spec §6.3.1 classification API. esm 1.0.0 declares two variable
 // types and DERIVES the rest, so these are the only sanctioned way to ask
 // which unknowns are ODE states, which are observed, and which parameters are

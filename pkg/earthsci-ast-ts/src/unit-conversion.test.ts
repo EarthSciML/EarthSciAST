@@ -537,3 +537,19 @@ describe('unit-conversion', () => {
     })
   })
 })
+
+describe('strings that must not resolve', () => {
+  it('does not find inherited object properties in the unit table', () => {
+    for (const name of ['toString', 'constructor', 'hasOwnProperty', '__proto__']) {
+      expect(() => parseUnitForConversion(name)).toThrow(UnitConversionError)
+    }
+  })
+
+  it('rewrites a superscript minus only right before superscript digits', () => {
+    // esm-spec §4.8.2: `s⁻1` keeps an unexpected `⁻`, and `m²⁻¹` is the two
+    // exponents `m^2^-1` (rejected), never the one exponent `m^-21`.
+    expect(() => parseUnitForConversion('s⁻1')).toThrow(UnitConversionError)
+    expect(() => parseUnitForConversion('m²⁻¹')).toThrow(UnitConversionError)
+    expect(parseUnitForConversion('m⁻¹²').dims).toEqual({ m: -12 })
+  })
+})
