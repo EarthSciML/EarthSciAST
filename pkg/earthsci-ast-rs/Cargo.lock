@@ -953,19 +953,43 @@ checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
 
 [[package]]
 name = "earthsci-ast"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93b6edebc470fc410c165bf639379a9adb0c8e3cc0a0be32345b1e93d97b003a"
+dependencies = [
+ "clap",
+ "diffsol",
+ "earthsciio 0.3.0",
+ "faer",
+ "getrandom 0.3.4",
+ "indexmap",
+ "jsonschema 0.60.2",
+ "ndarray",
+ "rayon",
+ "rstar",
+ "rustc-hash",
+ "s2rst",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "thiserror 2.0.21",
+ "time",
+]
+
+[[package]]
+name = "earthsci-ast"
 version = "0.12.0"
 dependencies = [
  "bumpalo",
  "bytemuck",
- "clap",
  "criterion",
  "diffsol",
- "earthsciio",
+ "earthsciio 0.4.0",
  "faer",
  "getrandom 0.3.4",
  "indexmap",
  "js-sys",
- "jsonschema",
+ "jsonschema 0.61.0",
  "ndarray",
  "proptest",
  "rayon",
@@ -986,6 +1010,102 @@ dependencies = [
  "wide 1.7.1",
  "xla",
  "zip",
+]
+
+[[package]]
+name = "earthsci-ast-cli"
+version = "0.12.0"
+dependencies = [
+ "clap",
+ "earthsci-ast 0.12.0",
+ "earthsci-integrator",
+ "earthsci-integrator-planner",
+ "indexmap",
+ "ndarray",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
+name = "earthsci-astdiff"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "175b954c41b754c371697a704559d8f64abf4c7ef66aa9db4802debb36beab3f"
+dependencies = [
+ "earthsci-ast 0.10.0",
+ "indexmap",
+ "ryu",
+ "serde_json",
+]
+
+[[package]]
+name = "earthsci-integrator"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7250486d130b0f5197589bd3cb1069bbf823e006b1aec542bae804867a2708d4"
+dependencies = [
+ "earthsci-ast 0.10.0",
+ "earthsci-astdiff",
+ "earthsci-integrator-planner",
+ "earthsci-integrator-solvers",
+ "earthsciio 0.3.0",
+ "ndarray",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
+name = "earthsci-integrator-planner"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ea806c80e02a934555ddb7834cfec7dcc896107b6ac45b68ee774a667f5bc0"
+dependencies = [
+ "earthsci-ast 0.10.0",
+ "earthsci-astdiff",
+ "earthsci-integrator-solvers",
+ "indexmap",
+ "jsonschema 0.60.2",
+ "ndarray",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "earthsci-integrator-solvers"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f2c2b99b93281f164fecc0b57b614c38c3df100b9130ca6cc7d8ec1430e111f"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "earthsciio"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f45b8f3efde02219bf91a0192da7991ee086d166c2ffaffc2f31da0c9f026cf0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "csv",
+ "fs2",
+ "netcdf-reader",
+ "parquet",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shapefile",
+ "tempfile",
+ "tiff",
+ "time",
+ "zarrs",
+ "zip",
+ "zstd 0.14.3",
 ]
 
 [[package]]
@@ -1172,6 +1292,17 @@ dependencies = [
  "pulp",
  "qd",
  "reborrow",
+]
+
+[[package]]
+name = "fancy-regex"
+version = "0.19.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d301f5bf187b3c295fce6468d3875037a0bccc5f6b151c63cac2f85babf21912"
+dependencies = [
+ "bit-set 0.8.0",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -2119,6 +2250,34 @@ dependencies = [
 
 [[package]]
 name = "jsonschema"
+version = "0.60.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a42a11b47492e6a2cc76e9c7bcc8077776cb31dac444e0795d7f61bcc6441c08"
+dependencies = [
+ "ahash",
+ "bytecount",
+ "data-encoding",
+ "email_address",
+ "fancy-regex 0.19.2",
+ "fraction",
+ "getrandom 0.3.4",
+ "itoa",
+ "jsonschema-regex 0.60.2",
+ "jsonschema-value 0.60.2",
+ "num-cmp",
+ "num-traits",
+ "percent-encoding",
+ "referencing 0.60.2",
+ "regex",
+ "serde",
+ "serde_json",
+ "strum",
+ "unicode-general-category",
+ "uuid-simd",
+]
+
+[[package]]
+name = "jsonschema"
 version = "0.61.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1324c9bebe052584e96e7c80d2f9cf2d86e1a6d83d621a46932c5636996be18"
@@ -2127,16 +2286,16 @@ dependencies = [
  "bytecount",
  "data-encoding",
  "email_address",
- "fancy-regex",
+ "fancy-regex 0.20.1",
  "fraction",
  "getrandom 0.3.4",
  "itoa",
- "jsonschema-regex",
- "jsonschema-value",
+ "jsonschema-regex 0.61.1",
+ "jsonschema-value 0.61.1",
  "num-cmp",
  "num-traits",
  "percent-encoding",
- "referencing",
+ "referencing 0.61.1",
  "regex",
  "serde",
  "serde_json",
@@ -2147,11 +2306,37 @@ dependencies = [
 
 [[package]]
 name = "jsonschema-regex"
+version = "0.60.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "107aeb6ff14b8deb5610096a8ce5c554ec89806b521147eaeb3cae05b07edb7a"
+dependencies = [
+ "regex-syntax",
+]
+
+[[package]]
+name = "jsonschema-regex"
 version = "0.61.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "84cdf272371326ec8db8ce2608a52635d8edeeaf0189604e2ad627327b79e6db"
 dependencies = [
  "regex-syntax",
+]
+
+[[package]]
+name = "jsonschema-value"
+version = "0.60.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e281d6b177bb4834f2ffd6f92aa0443cffe29c996b251c8d94eb6f456186feba"
+dependencies = [
+ "ahash",
+ "bytecount",
+ "fraction",
+ "getrandom 0.3.4",
+ "memchr",
+ "num-cmp",
+ "num-traits",
+ "serde_json",
+ "zmij",
 ]
 
 [[package]]
@@ -3390,6 +3575,23 @@ dependencies = [
 
 [[package]]
 name = "referencing"
+version = "0.60.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f42818036d3b37cda6bd4c494543158a36e431cb717015ef7c93acc6ba214d3b"
+dependencies = [
+ "ahash",
+ "fluent-uri",
+ "getrandom 0.3.4",
+ "hashbrown 0.17.1",
+ "itoa",
+ "micromap",
+ "parking_lot",
+ "percent-encoding",
+ "serde_json",
+]
+
+[[package]]
+name = "referencing"
 version = "0.61.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eba9bfd41f0d7d8fbf9c7ed23b788a3f97e9f5d9419be812ff7e08b8dc6b14ec"
@@ -3585,6 +3787,16 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "s2rst"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32427bddb68a5cc8b2ff1f697ad92a97658a7bbdd9c9dd50604bd228634ea261"
+dependencies = [
+ "num-bigint 0.4.8",
+ "num-traits",
+]
 
 [[package]]
 name = "safe_arch"

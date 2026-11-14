@@ -24,6 +24,8 @@
 //! These tests hold BOTH routes to the same verdict on the same fixture, which
 //! is the check that was missing when the same sentence was true of a causal
 //! self-read (finding F24, §5.19.3b) and then again of an undeclared name.
+//! The same verdict through `esm simulate` is pinned with the binary, in
+//! `cli/tests/cli/undeclared_operand_gate.rs`.
 
 use earthsci_ast::simulate_array::{Value as EvalValue, eval_expression};
 use earthsci_ast::{SolveOptions, load_path, run_inline_tests};
@@ -200,49 +202,5 @@ fn the_same_expression_evaluates_once_the_operand_is_bound() {
     assert!(
         matches!(v, EvalValue::Scalar(x) if x == 10.0),
         "max(2, 10) must be 10, not {v:?} — otherwise the fault above proves nothing"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// The CLI, which is where a person meets this
-// ---------------------------------------------------------------------------
-
-/// `esm simulate` on the fixture must EXIT NON-ZERO and name the operand.
-///
-/// This is the route a person actually takes, and it is the one that was
-/// silent: `simulate`'s static branch rebuilds with the pipeline on in order to
-/// materialize an array observed at all, so a document with nothing to
-/// integrate — every MOVES-shaped calculator — reached the defect without
-/// anyone opting into anything. It wrote `clamped = 2` and exited 0.
-///
-/// Asserted at the process boundary rather than through the library because
-/// that is where "the run succeeded" is decided: a previous verification here
-/// reported an exit code that belonged to `tail`, not to the command.
-#[test]
-fn esm_simulate_exits_non_zero_and_names_the_operand() {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_esm"))
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args([
-            "simulate",
-            "../../tests/fixtures/undeclared_operand/undeclared_operand_in_max.esm",
-            "--time",
-            "0",
-        ])
-        .output()
-        .unwrap_or_else(|e| panic!("could not run the esm binary: {e}"));
-    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&out.stderr));
-    assert!(
-        !out.status.success(),
-        "`esm simulate` SUCCEEDED on a document whose operand is declared nowhere. \
-         Output was:\n{text}"
-    );
-    assert!(
-        text.contains(NAMED),
-        "`esm simulate` must name the undeclared operand; got:\n{text}"
-    );
-    assert!(
-        !text.contains("clamped[1] = 2"),
-        "`esm simulate` reported the laundered value; got:\n{text}"
     );
 }

@@ -1,3 +1,9 @@
+# The library and the `esm` command-line tool (`cli/`, crate
+# `earthsci-ast-cli`). A bare `cargo build` / `cargo test` here still selects
+# only the library, the root package; name the tool with `-p earthsci-ast-cli`.
+[workspace]
+members = [".", "cli"]
+
 [package]
 name = "earthsci-ast"
 version = "0.12.0"
@@ -13,27 +19,15 @@ categories = ["science", "parsing", "simulation"]
 readme = "README.md"
 
 # Every binary target is declared explicitly below, so nothing in `src/bin`
-# should be auto-discovered as one: `esm.rs` is a thin native-only shim over
-# `esm_impl.rs`, and an auto-discovered `esm_impl` bin would have no `main`.
+# is auto-discovered as one. The `esm` command-line tool is not among them: it
+# is the `earthsci-ast-cli` crate in `cli/`, so it can link a time integrator
+# that itself depends on this crate (EarthSciIntegrator) without a cycle.
 autobins = false
 # Integration tests are declared explicitly too (the `[[test]]` targets below):
 # almost every `tests/*.rs` file is a module of the single `integration`
 # binary, because linking ~200 separate test executables cost CI far more
 # than running them. See the header of `tests/integration.rs`.
 autotests = false
-
-# Support both library and CLI binary
-[[bin]]
-name = "esm"
-path = "src/bin/esm.rs"
-# The CLI depends on clap; without this, a --no-default-features build would
-# try (and fail) to compile the binary. With it, cargo simply skips the bin
-# target when neither feature is on — no per-item cfg gates needed.
-#
-# `solve` belongs here too: `esm simulate` and `esm test` call the
-# `solve`-gated `earthsci_ast::solve`, so `--no-default-features --features cli`
-# used to fail to compile the binary with E0425 rather than skipping it.
-required-features = ["cli", "solve"]
 
 # The cross-language conformance ADAPTER binaries. Phase-6 H-5: `esm` is the
 # only shipped command-line tool, so these three are behind a NON-DEFAULT
@@ -137,10 +131,11 @@ rstar = "0.13"
 #
 # OPTIONAL, behind the `solve` feature (esm-libraries-spec §2.5.9): constructing
 # a `Problem` MUST NOT require the solver. Only `solve` / `init` /
-# `solve_to_completion` may. On by DEFAULT, so nothing a consumer already builds
-# changes; `--no-default-features` (or `default-features = false, features =
-# ["cli"]`) now yields a crate that parses, validates, flattens, classifies and
-# BUILDS a Problem with no ODE solver linked at all.
+# `solve_to_completion` may; `initial_state` integrates nothing and does not.
+# On by DEFAULT, so nothing a consumer already builds changes;
+# `--no-default-features` yields a crate that parses, validates, flattens,
+# classifies, BUILDS a Problem and computes its initial state with no ODE
+# solver linked at all.
 #
 # Held at 0.11 deliberately. 0.18 restructures the vector types (batched
 # columns, no host slice) and changes the integrator's numbers: the
@@ -152,7 +147,6 @@ diffsol = { version = "0.11", optional = true }
 # named directly only to set its process-wide parallelism for an explicit
 # solve: see `simulate::driver::SequentialFaer`.
 faer = { version = "0.24", default-features = false, optional = true }
-clap = { version = "4.0", features = ["derive"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys = { version = "0.3", optional = true }
@@ -282,8 +276,10 @@ harness = false
 required-features = ["benchmarks"]
 
 [features]
-default = ["cli", "solve"]
-cli = ["clap"]
+default = ["solve"]
+# Kept so a manifest naming it still resolves. It used to pull in clap for the
+# `esm` binary, which now lives in the `earthsci-ast-cli` crate (`cli/`).
+cli = []
 # The cross-language conformance adapter binaries (phase-6 H-5). OFF by
 # default: `esm` is the only command-line tool this crate ships. The PDE
 # adapter integrates trajectories, so the feature pulls in `solve`.

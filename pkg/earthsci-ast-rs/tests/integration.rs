@@ -47,14 +47,6 @@ mod build_time_tape_route;
 mod cadence_conformance;
 #[path = "classification_conformance.rs"]
 mod classification_conformance;
-#[path = "cli_data_source_ingest.rs"]
-mod cli_data_source_ingest;
-#[path = "cli_static_evaluation_output.rs"]
-mod cli_static_evaluation_output;
-#[path = "cli_test_command.rs"]
-mod cli_test_command;
-#[path = "cli_units_command.rs"]
-mod cli_units_command;
 #[path = "compiled_rhs_adapter.rs"]
 mod compiled_rhs_adapter;
 #[path = "compiler_gate_routes.rs"]
