@@ -1723,7 +1723,12 @@ rewrites their equations.
   grid, with `lifted_shapes` the declared sizes of its index sets.
 - **Fixpoint.** Lifting a component makes its states arrays, and so can make the right-hand
   sides of other components arrays. The candidate search repeats, reading each lifted state at its
-  lift index sets, until a pass lifts no new component.
+  lift index sets, until a pass lifts no new component. A state of a component already lifted can
+  only then become a candidate, so once the search settles the candidates of every lifted
+  component are found once more, reading the component's own states as scalars and every other
+  lifted state at its lift index sets; each MUST name the same set of index sets as the
+  component's grid, or flatten refuses the document as above. Which pass lifted what therefore
+  never changes the answer.
 - **Non-pointwise coupling.** A coupling entry whose `lifting` is present and not `"pointwise"`
   does not trigger the lift. For such a `variable_map`, its `from` reads as a scalar when the lift
   decides the candidates of the component its `to` names. Such an `operator_compose` takes the
