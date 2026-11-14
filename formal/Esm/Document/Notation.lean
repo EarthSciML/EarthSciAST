@@ -300,8 +300,11 @@ formula-shaped species such as `NO2` is left to the package.
 
 The line (`Esm.Document.Source.Reaction`, decided 2026-11-13 with the native surfaces):
 
-* Markdown: `$$\ce{…}$$ {#id key=value …}` on one line. The math is display math on one
-  line, since inline `$…$` would close at the first `$` of a quoted piece. The arrow
+* Markdown: `$$\ce{…}$$ {#id key=value …}` on one line. To remark-math this is a
+  paragraph holding inline math with a two-dollar fence (not display math, which needs
+  `$$` on lines of its own), and a renderer that does not know the label shows
+  `{#id …}` as text. The fence is two dollars because single `$…$` would close at the
+  first `$` of a quoted piece. The arrow
   label is braced, `->[{$k$}]`, since mhchem ends the label at the first `]` (an index
   `k[1]` or a `\left[`). The label holds the `id` and the reaction's other fields as
   attributes, in the declaration attribute syntax.
@@ -386,7 +389,7 @@ def skeleton : List SkeletonRow := [
   { field := "subsystems (inline, for now)", home := .pathBlock,
     markdown := "the inline entries stay in the subsystems block beside the by-reference directives",
     typst := "same" },
-  { field := "subsystems (inline)", home := .componentDirective,
+  { field := "subsystems (inline), future work: not printed this way yet", home := .componentDirective,
     markdown := "a nested ::model under a deeper heading", typst := "nested #model" },
   { field := "analyses (one plot)", home := .plotDirective,
     markdown := r#"::plot{key=value …} on one line: the analysis's fields as attributes, its one plot as plot={…}; the whole analyses field is a block unless every analysis has exactly one plot and no field named plot"#,
