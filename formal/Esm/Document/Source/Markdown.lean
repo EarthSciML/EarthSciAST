@@ -43,7 +43,8 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
   of its own, then display equations, then a line `:::`; each equation in it is an
   initialization equation or a constraint;
 * anywhere in a line: a declaration `:var[$N$]{…}`, `:param[…]{…}` or `:species[…]{…}`,
-  the name in LaTeX math and the attributes as `key=value` pairs with YAML scalars.
+  the name in LaTeX math and the attributes as `key=value` pairs, each value a YAML
+  scalar or a YAML flow collection (`shape=["x", "y"]`).
 
 Everything else is prose, which the parser skips: `lex` reads a construct where one
 starts and otherwise drops one character. So the parse depends only on the sequence of
@@ -130,8 +131,72 @@ def parseKeyMd (info : List Char) : Option String :=
 whatever else the document declares). -/
 def nameLatex (n : String) : List Char := (printLatex {} (.str n)).toList
 
-/-- One attribute: `key=value`, the value a YAML scalar. -/
-def attrMd (a : String × Json) : List Char := a.1.toList ++ '=' :: Yaml.inline a.2
+/-! ## Attribute values: YAML scalars and flow collections
+
+An attribute value is a YAML scalar (`100`, `"mol"`, `true`, `[]`) or a flow
+collection, `["x", "y"]`, `{a: 1, "b c": [2]}`: elements and entries separated by
+`, `, keys bare when they are identifiers that YAML reads as strings, else quoted. -/
+
+mutual
+def flow : Json → List Char
+  | .arr (x :: xs) => '[' :: flow x ++ flowItems xs ++ [']']
+  | .obj ((k, v) :: kvs) => '{' :: printKey false Yaml.reserved k ++ ':' :: ' ' :: flow v ++
+      flowEntries kvs ++ ['}']
+  | v => Yaml.inline v
+
+def flowItems : List Json → List Char
+  | [] => []
+  | x :: xs => ',' :: ' ' :: flow x ++ flowItems xs
+
+def flowEntries : List (String × Json) → List Char
+  | [] => []
+  | (k, v) :: kvs => ',' :: ' ' :: printKey false Yaml.reserved k ++ ':' :: ' ' :: flow v ++
+      flowEntries kvs
+end
+
+mutual
+/-- A value: a flow collection at `[` or `{`, else a scalar. -/
+def pFlow : Nat → List Char → Option (Json × List Char)
+  | 0, _ => none
+  | _ + 1, [] => none
+  | f + 1, c :: r =>
+    if c = '[' then
+      if r.head? = some ']' then some (.arr [], r.tail)
+      else (pFlow f r).bind (fun p => (pItemsF f p.2).map (fun q => (.arr (p.1 :: q.1), q.2)))
+    else if c = '{' then
+      if r.head? = some '}' then some (.obj [], r.tail)
+      else (pEntryF f r).bind (fun p => (pEntriesF f p.2).map (fun q => (.obj (p.1 :: q.1), q.2)))
+    else Yaml.pInline (c :: r)
+
+/-- The elements after the first, each after `, `, up to `]`. -/
+def pItemsF : Nat → List Char → Option (List Json × List Char)
+  | 0, _ => none
+  | f + 1, s =>
+    match s with
+    | ']' :: r => some ([], r)
+    | ',' :: ' ' :: r => (pFlow f r).bind (fun p => (pItemsF f p.2).map (fun q => (p.1 :: q.1, q.2)))
+    | _ => none
+
+/-- One entry: `key: value`. -/
+def pEntryF : Nat → List Char → Option ((String × Json) × List Char)
+  | 0, _ => none
+  | f + 1, s =>
+    match parseKey false Yaml.reserved s with
+    | some (k, ':' :: ' ' :: r) => (pFlow f r).map (fun q => ((k, q.1), q.2))
+    | _ => none
+
+/-- The entries after the first, each after `, `, up to `}`. -/
+def pEntriesF : Nat → List Char → Option (List (String × Json) × List Char)
+  | 0, _ => none
+  | f + 1, s =>
+    match s with
+    | '}' :: r => some ([], r)
+    | ',' :: ' ' :: r => (pEntryF f r).bind (fun p => (pEntriesF f p.2).map (fun q => (p.1 :: q.1, q.2)))
+    | _ => none
+end
+
+/-- One attribute: `key=value`, the value a YAML scalar or flow collection. -/
+def attrMd (a : String × Json) : List Char := a.1.toList ++ '=' :: flow a.2
 
 /-- The attributes, separated by spaces. -/
 def attrsMd : List (String × Json) → List Char
@@ -146,7 +211,7 @@ def declMd (d : Decl) : List Char :=
 def pAttr (s : List Char) : Option ((String × Json) × List Char) :=
   if isIdent (readIdent s).1 then
     match (readIdent s).2 with
-    | '=' :: u => (Yaml.pInline u).map (fun p => ((String.ofList (readIdent s).1, p.1), p.2))
+    | '=' :: u => (pFlow (2 * u.length + 2) u).map (fun p => ((String.ofList (readIdent s).1, p.1), p.2))
     | _ => none
   else none
 
@@ -345,7 +410,7 @@ def pCols : Nat → List Char → Option (List String × List Char)
 def pCell : List Char → Option (Option Json × List Char)
   | ' ' :: '|' :: r => some (none, r)
   | ' ' :: r =>
-    match Yaml.pInline r with
+    match pFlow (2 * r.length + 2) r with
     | some (v, ' ' :: '|' :: r') => some (some v, r')
     | _ => none
   | _ => none
@@ -444,9 +509,222 @@ theorem pInline_gen (v : Json) (hi : Yaml.isInl v = true) (hv : v.WF) (rest : Li
       numHead_ne hc '[', numHead_ne hc '{', numHead_ne hc '"', ite_false, hp]
     rfl
 
-/-- An attribute the Markdown attribute syntax can hold: an identifier key and a YAML
-scalar value. -/
-def attrOK (a : String × Json) : Bool := isIdent a.1.toList && Yaml.isInl a.2 && jwf a.2
+/-- What may follow an attribute value: `,`, `]`, `}`, a space or `|`. -/
+def FStop (rest : List Char) : Prop :=
+  ∀ c ∈ rest.head?, c = ',' ∨ c = ']' ∨ c = '}' ∨ c = ' ' ∨ c = '|'
+
+theorem FStop.num {rest : List Char} (h : FStop rest) : Number.NumStop rest := by
+  intro c hc
+  rcases h c hc with rfl | rfl | rfl | rfl | rfl <;> decide
+
+theorem FStop.ident {rest : List Char} (h : FStop rest) : ∀ c ∈ rest.head?, isIdentChar c = false := by
+  intro c hc
+  rcases h c hc with rfl | rfl | rfl | rfl | rfl <;> decide
+
+theorem inline_head' (v : Json) (hv : v.WF) :
+    ∃ c t, Yaml.inline v = c :: t ∧ c ≠ ']' ∧ c ≠ '}' ∧ c ≠ '|' ∧ c ≠ ' ' := by
+  match v with
+  | .null => exact ⟨_, _, rfl, by decide⟩
+  | .bool true => exact ⟨_, _, rfl, by decide⟩
+  | .bool false => exact ⟨_, _, rfl, by decide⟩
+  | .str s => exact ⟨'"', escape false s.toList ++ ['"'], by simp [Yaml.inline, quote], by decide⟩
+  | .arr _ => exact ⟨_, _, rfl, by decide⟩
+  | .obj _ => exact ⟨_, _, rfl, by decide⟩
+  | .num n =>
+    obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
+    refine ⟨c, t, h, ?_⟩
+    rcases hc with rfl | ⟨d, hd, rfl⟩
+    · decide
+    · exact (by decide : ∀ d : Fin 10, digitChar d.val ≠ ']' ∧ digitChar d.val ≠ '}' ∧
+        digitChar d.val ≠ '|' ∧ digitChar d.val ≠ ' ') ⟨d, hd⟩
+
+theorem flow_head (v : Json) (hv : v.WF) :
+    ∃ c t, flow v = c :: t ∧ c ≠ ']' ∧ c ≠ '}' ∧ c ≠ '|' ∧ c ≠ ' ' := by
+  match v with
+  | .arr (x :: xs) => exact ⟨'[', flow x ++ flowItems xs ++ [']'], by simp [flow], by decide⟩
+  | .obj ((k, w) :: kvs) =>
+    exact ⟨'{', printKey false Yaml.reserved k ++ ':' :: ' ' :: flow w ++ flowEntries kvs ++ ['}'],
+      by simp [flow], by decide⟩
+  | .arr [] => exact ⟨_, _, rfl, by decide⟩
+  | .obj [] => exact ⟨_, _, rfl, by decide⟩
+  | .null => exact inline_head' .null hv
+  | .bool b => exact inline_head' (.bool b) hv
+  | .num n => exact inline_head' (.num n) hv
+  | .str s => exact inline_head' (.str s) hv
+
+theorem pFlow_scalar (v : Json) (hi : Yaml.isInl v = true) (hv : v.WF) (rest : List Char)
+    (hr : FStop rest) (f : Nat) : pFlow (f + 1) (Yaml.inline v ++ rest) = some (v, rest) := by
+  match v with
+  | .arr (_ :: _) => simp [Yaml.isInl] at hi
+  | .obj (_ :: _) => simp [Yaml.isInl] at hi
+  | .arr [] => simp [Yaml.inline, pFlow]
+  | .obj [] => simp [Yaml.inline, pFlow]
+  | .null => simp [Yaml.inline, pFlow, Yaml.pInline]
+  | .bool true => simp [Yaml.inline, pFlow, Yaml.pInline]
+  | .bool false => simp [Yaml.inline, pFlow, Yaml.pInline]
+  | .str s =>
+    have h := pInline_gen (.str s) rfl hv rest hr.num
+    simp only [Yaml.inline, quote, List.cons_append, List.append_assoc] at h ⊢
+    simp only [pFlow, (by decide : ('"' = '[') = False), (by decide : ('"' = '{') = False), ite_false]
+    exact h
+  | .num n =>
+    have h := pInline_gen (.num n) rfl hv rest hr.num
+    obtain ⟨c, t, hct, hc⟩ := Number.print_head n hv
+    have hc1 : c ≠ '[' ∧ c ≠ '{' := by
+      rcases hc with rfl | ⟨d, hd, rfl⟩
+      · decide
+      · exact (by decide : ∀ d : Fin 10, digitChar d.val ≠ '[' ∧ digitChar d.val ≠ '{') ⟨d, hd⟩
+    simp only [Yaml.inline, hct, List.cons_append] at h ⊢
+    simp only [pFlow, hc1.1, hc1.2, ite_false]
+    exact h
+
+mutual
+theorem pFlow_flow : ∀ (v : Json) (f : Nat) (rest : List Char), v.WF → FStop rest → v.size < f →
+    pFlow f (flow v ++ rest) = some (v, rest)
+  | .arr (x :: xs), f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.size] at hf; omega⟩
+    simp only [Json.WF, Json.WFList] at hw
+    simp only [Json.size, Json.sizeList] at hf
+    obtain ⟨c, t, hct, hc⟩ := flow_head x hw.1
+    have hx := pFlow_flow x g (flowItems xs ++ ']' :: rest) hw.1
+      (by cases xs <;> simp [flowItems, FStop]) (by omega)
+    have hxs := pItems_flow xs g rest hw.2 hr (by omega)
+    simp only [flow, List.cons_append, List.append_assoc, pFlow, ite_true,
+      List.nil_append]
+    rw [hct]
+    simp only [List.cons_append, List.head?_cons, Option.some.injEq, hc.1, ite_false]
+    rw [← List.cons_append, ← hct, hx]
+    simp only [Option.bind_some, hxs, Option.map_some]
+  | .obj ((k, w) :: kvs), f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.size] at hf; omega⟩
+    simp only [Json.WF, Json.WFObj] at hw
+    simp only [Json.size, Json.sizeObj] at hf
+    obtain ⟨c, t, hct, hc⟩ := printKey_head false Yaml.reserved k
+    have hc1 : c ≠ '}' := by rcases hc with rfl | h <;> [decide; (intro e; subst e; simp [isIdentStart] at h)]
+    have he := pEntry_flow k w g (flowEntries kvs ++ '}' :: rest) hw.2.1
+      (by cases kvs <;> simp [flowEntries, FStop]) (by omega)
+    have hes := pEntries_flow kvs g rest hw.2.2 hr (by omega)
+    simp only [flow, List.cons_append, List.append_assoc, pFlow, ite_true,
+      List.nil_append, (by decide : ('{' = '[') = False), ite_false]
+    rw [hct]
+    simp only [List.cons_append, List.head?_cons, Option.some.injEq, hc1, ite_false]
+    rw [← List.cons_append, ← hct]
+    simp only [List.cons_append, List.append_assoc] at he
+    rw [he]
+    simp only [Option.bind_some, hes, Option.map_some]
+  | .arr [], f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.size] at hf; omega⟩
+    exact pFlow_scalar (.arr []) rfl hw rest hr g
+  | .obj [], f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.size] at hf; omega⟩
+    exact pFlow_scalar (.obj []) rfl hw rest hr g
+  | .null, f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.size] at hf; omega⟩
+    exact pFlow_scalar .null rfl hw rest hr g
+  | .bool b, f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.size] at hf; omega⟩
+    exact pFlow_scalar (.bool b) rfl hw rest hr g
+  | .num n, f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.size] at hf; omega⟩
+    exact pFlow_scalar (.num n) rfl hw rest hr g
+  | .str s, f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.size] at hf; omega⟩
+    exact pFlow_scalar (.str s) rfl hw rest hr g
+
+theorem pItems_flow : ∀ (xs : List Json) (f : Nat) (rest : List Char), Json.WFList xs → FStop rest →
+    Json.sizeList xs < f → pItemsF f (flowItems xs ++ ']' :: rest) = some (xs, rest)
+  | [], f, rest, _, _, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.sizeList] at hf; omega⟩
+    rfl
+  | x :: xs, f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.sizeList] at hf; omega⟩
+    simp only [Json.WFList] at hw
+    simp only [Json.sizeList] at hf
+    have hx := pFlow_flow x g (flowItems xs ++ ']' :: rest) hw.1
+      (by cases xs <;> simp [flowItems, FStop]) (by omega)
+    have hxs := pItems_flow xs g rest hw.2 hr (by omega)
+    simp only [flowItems, List.cons_append, List.append_assoc, pItemsF]
+    rw [hx]
+    simp only [Option.bind_some, hxs, Option.map_some]
+
+theorem pEntry_flow : ∀ (k : String) (w : Json) (f : Nat) (rest : List Char), w.WF → FStop rest →
+    w.size + 1 < f →
+    pEntryF f (printKey false Yaml.reserved k ++ ':' :: ' ' :: flow w ++ rest) = some ((k, w), rest)
+  | k, w, f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by omega⟩
+    simp only [pEntryF, List.cons_append, List.append_assoc]
+    rw [parseKey_printKey false Yaml.reserved k _ (by simp [isIdentChar])]
+    simp only
+    rw [pFlow_flow w g rest hw hr (by omega)]
+    rfl
+
+theorem pEntries_flow : ∀ (kvs : List (String × Json)) (f : Nat) (rest : List Char), Json.WFObj kvs →
+    FStop rest → Json.sizeObj kvs < f → pEntriesF f (flowEntries kvs ++ '}' :: rest) = some (kvs, rest)
+  | [], f, rest, _, _, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.sizeObj] at hf; omega⟩
+    rfl
+  | (k, w) :: kvs, f, rest, hw, hr, hf => by
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Json.sizeObj] at hf; omega⟩
+    simp only [Json.WFObj] at hw
+    simp only [Json.sizeObj] at hf
+    have hpos := Yaml.sizeObj_pos kvs
+    have he := pEntry_flow k w g (flowEntries kvs ++ '}' :: rest) hw.1
+      (by cases kvs <;> simp [flowEntries, FStop]) (by omega)
+    have hes := pEntries_flow kvs g rest hw.2 hr (by omega)
+    simp only [flowEntries, List.cons_append, List.append_assoc, pEntriesF]
+    simp only [List.append_assoc, List.cons_append] at he
+    rw [he]
+    simp only [Option.bind_some, hes, Option.map_some]
+end
+
+mutual
+theorem size_le_flow : ∀ v : Json, v.WF → v.size ≤ 2 * (flow v).length
+  | .arr (x :: xs), hw => by
+    simp only [Json.WF, Json.WFList] at hw
+    have := size_le_flow x hw.1
+    have := size_le_items xs hw.2
+    simp [Json.size, Json.sizeList, flow]; omega
+  | .obj ((k, w) :: kvs), hw => by
+    simp only [Json.WF, Json.WFObj] at hw
+    have := size_le_flow w hw.2.1
+    have := size_le_entries kvs hw.2.2
+    simp [Json.size, Json.sizeObj, flow]; omega
+  | .arr [], _ => by simp [Json.size, Json.sizeList, flow, Yaml.inline]
+  | .obj [], _ => by simp [Json.size, Json.sizeObj, flow, Yaml.inline]
+  | .null, _ => by simp [Json.size, flow, Yaml.inline]
+  | .bool true, _ => by simp [Json.size, flow, Yaml.inline]
+  | .bool false, _ => by simp [Json.size, flow, Yaml.inline]
+  | .num n, hw => by
+    obtain ⟨c, t, h, -⟩ := Number.print_head n hw
+    simp [Json.size, flow, Yaml.inline, h]; omega
+  | .str s, _ => by simp [Json.size, flow, Yaml.inline, quote]; omega
+
+theorem size_le_items : ∀ xs : List Json, Json.WFList xs → Json.sizeList xs ≤ 2 * (flowItems xs).length + 1
+  | [], _ => by simp [Json.sizeList, flowItems]
+  | x :: xs, hw => by
+    simp only [Json.WFList] at hw
+    have := size_le_flow x hw.1
+    have := size_le_items xs hw.2
+    simp [Json.sizeList, flowItems]; omega
+
+theorem size_le_entries : ∀ kvs : List (String × Json), Json.WFObj kvs →
+    Json.sizeObj kvs ≤ 2 * (flowEntries kvs).length + 1
+  | [], _ => by simp [Json.sizeObj, flowEntries]
+  | (k, w) :: kvs, hw => by
+    simp only [Json.WFObj] at hw
+    have := size_le_flow w hw.1
+    have := size_le_entries kvs hw.2
+    simp [Json.sizeObj, flowEntries]; omega
+end
+
+/-- A value printed as a scalar or flow collection reads back. -/
+theorem pFlow_flow' (v : Json) (hv : v.WF) (rest : List Char) (hr : FStop rest) :
+    pFlow (2 * (flow v ++ rest).length + 2) (flow v ++ rest) = some (v, rest) :=
+  pFlow_flow v _ rest hv hr (by have := size_le_flow v hv; simp; omega)
+
+/-- An attribute the Markdown attribute syntax can hold: an identifier key and a
+well-formed value. -/
+def attrOK (a : String × Json) : Bool := isIdent a.1.toList && jwf a.2
 
 theorem isIdent_chars {cs : List Char} (h : isIdent cs = true) : cs.all isIdentChar = true :=
   isIdent_all h
@@ -456,18 +734,18 @@ theorem pAttr_attrMd (a : String × Json) (ha : attrOK a = true) (rest : List Ch
     pAttr (attrMd a ++ rest) = some (a, rest) := by
   obtain ⟨k, v⟩ := a
   simp only [attrOK, Bool.and_eq_true] at ha
-  obtain ⟨⟨hk, hi⟩, hw⟩ := ha
+  obtain ⟨hk, hw⟩ := ha
   have hwf : v.WF := jwf_sound v hw
-  have hrd : readIdent (attrMd (k, v) ++ rest) = (k.toList, '=' :: (Yaml.inline v ++ rest)) := by
+  have hrd : readIdent (attrMd (k, v) ++ rest) = (k.toList, '=' :: (flow v ++ rest)) := by
     simp only [attrMd, List.append_assoc, List.cons_append]
     exact readIdent_append _ _ (isIdent_chars hk) (by simp [isIdentChar])
   unfold pAttr
   rw [hrd]
   simp only [hk, ite_true]
-  have hns : Number.NumStop rest := by
+  have hns : FStop rest := by
     intro c hc
-    rcases hr with h | h <;> rw [h] at hc <;> cases hc <;> decide
-  rw [pInline_gen v hi hwf rest hns]
+    rcases hr with h | h <;> rw [h] at hc <;> cases hc <;> simp
+  rw [pFlow_flow' v hwf rest hns]
   simp
 
 theorem pAttrsMore_attrs (as : List (String × Json)) (ha : ∀ a ∈ as, attrOK a = true)
@@ -1182,7 +1460,7 @@ def colText (k : String) : List Char := ' ' :: (k.toList ++ [' ', '|'])
 /-- A cell. -/
 def cellText : Option Json → List Char
   | none => [' ', '|']
-  | some v => ' ' :: (Yaml.inline v ++ [' ', '|'])
+  | some v => ' ' :: (flow v ++ [' ', '|'])
 
 /-- A row of the table. -/
 def rowText (cols : List String) (d : Decl) : List Char :=
@@ -1231,19 +1509,20 @@ theorem inline_head (v : Json) (hv : v.WF) : ∃ c t, Yaml.inline v = c :: t ∧
     · decide
     · exact (by decide : ∀ d : Fin 10, digitChar d.val ≠ '|') ⟨d, hd⟩
 
-theorem pCell_some (v : Json) (hi : Yaml.isInl v = true) (hv : v.WF) (rest : List Char) :
+theorem pCell_some (v : Json) (hv : v.WF) (rest : List Char) :
     pCell (cellText (some v) ++ rest) = some (some v, rest) := by
-  obtain ⟨c, t, hct, hc⟩ := inline_head v hv
-  have hp := pInline_gen v hi hv (' ' :: '|' :: rest) (by intro x hx; cases hx; decide)
+  obtain ⟨c, t, hct, hc⟩ := flow_head v hv
+  have hp := pFlow_flow' v hv (' ' :: '|' :: rest) (by intro x hx; cases hx; simp)
   simp only [cellText, List.cons_append, List.append_assoc, List.nil_append]
   rw [hct] at hp ⊢
   simp only [List.cons_append] at hp
   unfold pCell
   split
-  · rename_i r h; simp at h; exact absurd h.1 hc
+  · rename_i r h; simp at h; exact absurd h.1 hc.2.2.1
   · rename_i r _ heq
     simp only [List.cons.injEq, true_and] at heq
-    rw [← heq, List.cons_append, hp]; rfl
+    rw [← heq, List.cons_append, hp]
+    rfl
   · rename_i h1 h2; exact absurd rfl (h2 _)
 
 theorem pCells_cells (cols : List String) (attrs : List (String × Json))
@@ -1264,7 +1543,7 @@ theorem pCells_cells (cols : List String) (attrs : List (String × Json))
     | some v =>
       have hv := ha (k, v) (look_mem' hl)
       simp only [attrOK, Bool.and_eq_true] at hv
-      rw [pCell_some v hv.1.2 (jwf_sound v hv.2)]
+      rw [pCell_some v (jwf_sound v hv.2)]
       simp only [Option.bind_some]
       rw [ih]
       simp [hl]

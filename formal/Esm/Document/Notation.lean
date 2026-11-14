@@ -354,7 +354,7 @@ def skeleton : List SkeletonRow := [
   { field := "reaction_systems.<name>", home := .componentDirective,
     markdown := "::reaction-system[Name]", typst := r#"#reaction-system("Name")"# },
   { field := "variables, species, parameters", home := .declaration,
-    markdown := ":var[$N$]{…}, :param, :species; other fields as attributes in the YAML subset",
+    markdown := r#":var[$N$]{…}, :param, :species; other fields as key=value attributes, each value a YAML scalar or a YAML flow collection (shape=["x", "y"], update={…})"#,
     typst := "#var($N$, …)" },
   { field := "equations", home := .displayMath,
     markdown := "one $$…$$ per equation, in order", typst := "one $ … $ per equation" },

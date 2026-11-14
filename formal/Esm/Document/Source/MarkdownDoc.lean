@@ -97,7 +97,7 @@ def capsMd : Caps where
     noStop (' ' :: ' ' :: ' ' :: fence) (s.toList ++ ['\n']) && !s.toList.contains '\r'
   compName n := !n.toList.contains ']' && !n.toList.contains '\n'
   declName n := nameOK n && !(nameLatex n).contains '$'
-  attr a := isIdent a.1.toList && Yaml.isInl a.2
+  attr a := isIdent a.1.toList
   eqn S e := commentOK e.comment && !(latexOf S e).contains '$' && !(latexOf S e).contains '\n' &&
     (latexOf S e).head? != some '%' && (envOf (latexOf S e)).isNone
   rxn S x := rxnOK { x with rate := printLatex S x.rate }
@@ -288,7 +288,7 @@ theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
       simp only [capsMd, Bool.and_eq_true] at hn
       refine ⟨hn, List.all_eq_true.mpr fun a hma => ?_⟩
       have := ha a hma
-      simp only [capsMd, Bool.and_eq_true] at this
+      simp only [capsMd] at this
       simp only [attrOK, Bool.and_eq_true]
       exact ⟨this.1, this.2⟩
     · have hmc := (h.math c hc m hm).1
