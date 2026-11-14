@@ -831,10 +831,12 @@ pub(crate) struct TapeBuilder<'m> {
     /// every input is build-time data: there the program would copy each
     /// whole input into its slab only to gather a chunk's worth of it.
     defer_consts: bool,
-    /// The scalar parameters a join key column reads, with the values the
-    /// build baked them at (`crate::join::join_key_cone`): build-time data
-    /// to [`TapeBuilder::fold_const_observed`], since a substitution of one
-    /// is refused (CONFORMANCE_SPEC §5.5.8). Empty for a standalone rule.
+    /// The scalar parameters a join key column or an overlap envelope factor
+    /// reads, with the values the build baked them at
+    /// (`crate::join::join_key_cone`): build-time data to
+    /// [`TapeBuilder::fold_const_observed`], since a substitution of one is
+    /// refused (CONFORMANCE_SPEC §5.5.6, §5.5.8). Empty for a standalone
+    /// rule.
     baked_params: FxHashMap<String, f64>,
     /// [`TapeBuilder::fold_const_observed`]'s memo.
     folded: std::cell::RefCell<FxHashMap<String, Option<(DimU, Arc<Vec<f64>>)>>>,
@@ -7750,8 +7752,10 @@ impl<'m> TapeBuilder<'m> {
 /// const-array registry are read straight off `compiled`). Returns the
 /// program — or, when any rule declined, the [`DeclinedTape`] in its place —
 /// and the `(scope, hoist)` value-numbering hit counts.
-/// The scalar parameters a join key column of `compiled` reads, at their
-/// baked values (their defaults, which the build set from the caller's `p`).
+/// The scalar parameters a join key column or an overlap envelope factor of
+/// `compiled` reads, directly or through observeds
+/// ([`crate::join::join_key_cone`]), at their baked values (their defaults,
+/// which the build set from the caller's `p`).
 fn baked_join_key_params(compiled: &ArrayCompiled) -> FxHashMap<String, f64> {
     let bodies: FxHashMap<&str, &Expr> = compiled
         .observed_rules

@@ -3371,15 +3371,24 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone + Retained> GateCache<K, V> {
     }
 }
 
-/// The cache key of a resolved gate: the envelope factor NAMES, the `eps`, and
-/// the two envelope side lengths.
+/// The cache key of a resolved overlap gate: the envelope factor NAMES, the
+/// `eps`, the two envelope side lengths, and a content fingerprint of every
+/// factor.
 ///
 /// §5.5.6 requires a gate's `src_env` / `tgt_env` factors to be build-time
-/// const-array data by the time the broad phase runs, so for a given node the
-/// candidate set is a pure function of this key — but a gate is resolved once
-/// per node and consulted once per RHS evaluation, and rebuilding the R*-tree
-/// each time would cost more than the enumeration it saves.
-type GateKey = (Vec<String>, Vec<String>, u64, usize, usize);
+/// const-array data, so within one build the candidate set never changes —
+/// but a gate is resolved once per node and consulted once per RHS
+/// evaluation, and rebuilding the R*-tree each time would cost more than the
+/// enumeration it saves. The cache is per THREAD, though, not per build: two
+/// builds on one thread can name the same factors with the same sizes and
+/// different geometry (a second document using the same regrid template, or a
+/// rebuild with a different grid origin). The names alone would then serve
+/// the first build's candidate pairs to the second, so the key carries the
+/// factors' contents too. The fingerprint is the equality gate's
+/// ([`EqGateKey`]): one linear fold over the factors' `f64` bits, against a
+/// broad phase that is `O(n log n)` in the same data and a narrow phase over
+/// every candidate pair it admits.
+type GateKey = (Vec<String>, Vec<String>, u64, usize, usize, u64);
 
 thread_local! {
     /// The spatial-overlap gate cache, bounded by [`gate_cache_pair_budget`].
@@ -3387,16 +3396,40 @@ thread_local! {
         RefCell::new(GateCache::new());
 }
 
-/// The dense length of an envelope factor, WITHOUT cloning it (the cache is
-/// consulted on every evaluation; the clone below happens only on a miss).
-fn env_factor_len(name: &str, ctx: &EvalCtx) -> Option<usize> {
-    if let Some(a) = ctx.state_arrays.get(name) {
-        return Some(a.len());
-    }
-    if let Some(a) = ctx.observed_arrays.get(name) {
-        return Some(a.len());
-    }
-    ctx.forcing.borrow().get(name).map(|a| a.len())
+/// The cache key of one overlap clause in this context, WITHOUT cloning a
+/// factor (the clone happens only on a miss): its names and `eps`, each
+/// side's POSITION count — the first factor's first axis, which is the
+/// envelope count for a 1-D column and for a `[pos, verts, coord]` ring stack
+/// alike, and is what the selectivity estimate divides by — and a fingerprint
+/// of every factor's shape and values. `None` when a factor is not array data
+/// here, which declines the gate.
+fn overlap_cache_key(ov: &crate::types::OverlapClause, eps: f64, ctx: &EvalCtx) -> Option<GateKey> {
+    let mut fp: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut positions = |names: &[String]| -> Option<usize> {
+        let mut n = None;
+        for name in names {
+            let len = with_named_array(name, ctx, |a| {
+                for &d in a.shape() {
+                    fp ^= d as u64;
+                    fp = fp.wrapping_mul(0x0000_0100_0000_01B3);
+                }
+                column_fingerprint(a, &mut fp);
+                a.shape().first().copied().unwrap_or(1)
+            })?;
+            n.get_or_insert(len);
+        }
+        n
+    };
+    let nsrc = positions(&ov.src_env)?;
+    let ntgt = positions(&ov.tgt_env)?;
+    Some((
+        ov.src_env.clone(),
+        ov.tgt_env.clone(),
+        eps.to_bits(),
+        nsrc,
+        ntgt,
+        fp,
+    ))
 }
 
 /// Resolve EVERY drivable clause of `join` into a gate, building (or reusing)
@@ -3471,22 +3504,10 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
             continue;
         };
         let eps = ov.eps.unwrap_or(0.0);
-        let (Some(first_src), Some(first_tgt)) = (ov.src_env.first(), ov.tgt_env.first()) else {
+        let Some(key) = overlap_cache_key(ov, eps, ctx) else {
             continue;
         };
-        let (Some(nsrc), Some(ntgt)) = (
-            env_factor_len(first_src, ctx),
-            env_factor_len(first_tgt, ctx),
-        ) else {
-            continue;
-        };
-        let key: GateKey = (
-            ov.src_env.clone(),
-            ov.tgt_env.clone(),
-            eps.to_bits(),
-            nsrc,
-            ntgt,
-        );
+        let (nsrc, ntgt) = (key.3, key.4);
         let budget = crate::broad_phase::gate_cache_pair_budget();
         let cached = GATE_CACHE.with(|c| c.borrow_mut().get_within_budget(&key, budget));
         let index = match cached {

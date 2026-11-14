@@ -1030,7 +1030,7 @@ fn overlap_env_names(ov: &Value, field: &str) -> Result<Vec<String>, ValueInvent
         .iter()
         .map(|x| x.as_str().map(String::from).unwrap_or_default())
         .collect();
-    if !matches!(names.len(), 1 | 2 | 4) {
+    if crate::broad_phase::overlap_env_rank(names.len()).is_none() {
         return err(format!(
             "join `overlap` `{field}` must name 1 (rings), 2 (point [x,y]), or 4 \
              (rect [xmin,ymin,xmax,ymax]) factors; got {}",

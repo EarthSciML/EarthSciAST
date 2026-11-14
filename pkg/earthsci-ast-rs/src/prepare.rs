@@ -2445,8 +2445,10 @@ impl<'o> BuildState<'o> {
     ///
     /// * an OVERLAP gate's two range symbols — without this the dense evaluator
     ///   cannot tell which loop symbol each envelope side runs over and declines
-    ///   to let the gate drive: correct, but back at `O(∏ranges)`. Infallible;
-    ///   an unresolvable gate simply stays undriven.
+    ///   to let the gate drive: correct, but back at `O(∏ranges)`. The
+    ///   resolution is infallible (an unresolvable gate simply stays undriven),
+    ///   but a factor list of the wrong length or a factor of the wrong rank is
+    ///   refused ([`crate::join::check_overlap_factor_ranks`]).
     /// * a value-equality `on` clause, into its `filter` predicate plus the
     ///   drivable [`crate::join::OnGate`] (CONFORMANCE_SPEC §5.5.8). This one is
     ///   NOT optional: `join.on` is the semantics, not an optimisation, and an
@@ -2461,6 +2463,8 @@ impl<'o> BuildState<'o> {
             let var_shapes = crate::join::declared_var_shapes(&self.model);
             for e in defs.values_mut() {
                 crate::join::resolve_overlap_syms_expr(e, &var_shapes);
+                crate::join::check_overlap_factor_ranks(e, &var_shapes)
+                    .map_err(|e| err(format!("resolve join: {e}")))?;
                 crate::join::resolve_expr_joins(e, &self.index_sets, &var_shapes)
                     .map_err(|e| err(format!("resolve join: {e}")))?;
             }
