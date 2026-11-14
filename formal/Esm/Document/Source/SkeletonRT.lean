@@ -597,7 +597,8 @@ theorem metaOf_some {caps : Caps} {v : Json} {mf : List (String × Json)} {d : O
     ∃ mkvs, v = .obj mkvs ∧ mkvs ≠ [] ∧ look "esm" mkvs = none ∧
       d = descOf caps (look "description" mkvs) ∧
       mf = mkvs.filter (fun kv => !(kv.1 == "description" &&
-        (descOf caps (look "description" mkvs)).isSome)) := by
+        (descOf caps (look "description" mkvs)).isSome)) ∧
+      mkvs.all (fun kv => caps.frontKey kv.1) = true := by
   cases v with
   | obj mkvs =>
     simp only [metaOf] at h
@@ -605,7 +606,7 @@ theorem metaOf_some {caps : Caps} {v : Json} {mf : List (String × Json)} {d : O
     · rename_i hc
       simp only [Bool.and_eq_true, Option.isNone_iff_eq_none] at hc
       cases h
-      exact ⟨mkvs, rfl, by simpa using hc.1.1, hc.1.2, rfl, rfl⟩
+      exact ⟨mkvs, rfl, by simpa using hc.1.1, hc.1.2, rfl, rfl, hc.2⟩
     · cases h
   | _ => simp [metaOf] at h
 
@@ -703,7 +704,7 @@ theorem ofDoc_toDoc (caps : Caps) (d : Json) (hd : canonDoc d = true) :
       | none => rw [h] at hm; simp [metaOf] at hm
       | some v => exact ⟨v, rfl⟩
     rw [hlk] at hm
-    obtain ⟨mkvs', rfl, hne, hnoesm, rfl, rfl⟩ := metaOf_some hm
+    obtain ⟨mkvs', rfl, hne, hnoesm, rfl, rfl, -⟩ := metaOf_some hm
     have hmv : canonVal (.obj mkvs') = true := canonVal_look hv hlk
     have hms := canonVal_obj_sorted hmv
     have hfe : (mkvs'.filter (fun kv => !(kv.1 == "description" &&
