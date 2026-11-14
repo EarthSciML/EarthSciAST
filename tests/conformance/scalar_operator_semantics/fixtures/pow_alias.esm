@@ -2,7 +2,7 @@
   "esm": "1.1.0",
   "metadata": {
     "name": "PowAlias",
-    "description": "The `pow` spelling of exponentiation, on its own. esm-spec \u00a74.2 lists `pow` beside `^` as its word spelling, and every binding evaluates it to the same number as `^` (Rust used to class it as a rewrite target and refuse it, issue #461). The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together pin that the two spellings agree.",
+    "description": "The deprecated `pow` spelling of exponentiation, on its own. esm-spec \u00a74.2 \"Deprecated ops\": `pow` is the word spelling of `^`, and a loader rewrites it to `^` with the warning `deprecated_op`, so every binding evaluates it to the same number as `^` (Rust once classed it as a rewrite target and refused it, issue #461). The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together pin that the deprecated spelling still loads and agrees. Kept on purpose when the corpus was migrated off `pow`.",
     "authors": [
       "EarthSciML Authors and Contributors"
     ],
@@ -20,7 +20,7 @@
         "pow_power": {
           "type": "unknown",
           "units": "1",
-          "description": "The operator under test: The `pow` spelling of exponentiation, on its own. esm-spec \u00a74.2 lists `pow` beside `^` as its word spelling, and every binding evaluates it to the same number as `^` (Rust used to class it as a rewrite target and refuse it, issue #461). The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together pin that the two spellings agree."
+          "description": "The operator under test: The deprecated `pow` spelling of exponentiation, on its own. esm-spec \u00a74.2 \"Deprecated ops\": `pow` is the word spelling of `^`, and a loader rewrites it to `^` with the warning `deprecated_op`, so every binding evaluates it to the same number as `^` (Rust once classed it as a rewrite target and refused it, issue #461). The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together pin that the deprecated spelling still loads and agrees. Kept on purpose when the corpus was migrated off `pow`."
         },
         "probe": {
           "type": "unknown",
@@ -60,7 +60,7 @@
       "tests": [
         {
           "id": "pow_power_value",
-          "description": "The `pow` spelling of exponentiation, on its own. esm-spec \u00a74.2 lists `pow` beside `^` as its word spelling, and every binding evaluates it to the same number as `^` (Rust used to class it as a rewrite target and refuse it, issue #461). The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together pin that the two spellings agree.",
+          "description": "The deprecated `pow` spelling of exponentiation, on its own. esm-spec \u00a74.2 \"Deprecated ops\": `pow` is the word spelling of `^`, and a loader rewrites it to `^` with the warning `deprecated_op`, so every binding evaluates it to the same number as `^` (Rust once classed it as a rewrite target and refused it, issue #461). The sibling fixture pins `^(2, 3) = 8` under the caret spelling, so the two documents together pin that the deprecated spelling still loads and agrees. Kept on purpose when the corpus was migrated off `pow`.",
           "time_span": {
             "start": 0.0,
             "end": 1.0

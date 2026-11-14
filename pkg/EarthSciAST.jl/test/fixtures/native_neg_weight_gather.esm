@@ -66,7 +66,7 @@
               "op": "*",
               "args": [
                 {
-                  "op": "neg",
+                  "op": "-",
                   "args": [
                     {
                       "op": "index",

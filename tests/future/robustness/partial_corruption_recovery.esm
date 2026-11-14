@@ -191,7 +191,7 @@
             "op": "*",
             "args": [
               `ROBUST_PARAM_${i % 100}`,
-              { "op": "pow", "args": [
+              { "op": "^", "args": [
                 { "op": "/", "args": ["T", 298.15] },
                 i % 5
               ]}

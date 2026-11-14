@@ -22,7 +22,7 @@
       "expected_odes": [
         {
           "variable": "A",
-          "rhs": {"op": "neg", "args": [{"op": "mult", "args": ["k", "A"]}]}
+          "rhs": {"op": "-", "args": [{"op": "mult", "args": ["k", "A"]}]}
         }
       ],
       "description": "Simple decay reaction A -> 0 with rate k*A"

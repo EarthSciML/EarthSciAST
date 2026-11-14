@@ -222,7 +222,7 @@
           "op": "*",
           "args": [
             `THREAD_SAFE_PARAM_${i % 200}`,
-            { "op": "pow", "args": [
+            { "op": "^", "args": [
               { "op": "/", "args": ["T", 298.15] },
               i % 5
             ]},
