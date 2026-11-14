@@ -110,6 +110,12 @@ def canonical_json(expr: Expr) -> str:
 def _canon_op(node: ExprNode) -> Expr:
     new_args: list[Expr] = [canonicalize(a) for a in node.args]
     work = replace(node, args=new_args)
+    if getattr(work, "units", None) is not None:
+        # A `const` node's declared units take the canonical unit spelling
+        # (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+        from .units import canonical_unit_spelling
+
+        work = replace(work, units=canonical_unit_spelling(work.units))
     if work.op == "+":
         return _canon_add(work)
     if work.op == "*":

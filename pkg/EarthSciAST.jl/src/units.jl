@@ -591,6 +591,275 @@ function parse_units(unit_str::AbstractString)::Union{Unitful.Units, Nothing}
 end
 
 # ---------------------------------------------------------------------------
+# The canonical unit spelling (esm-spec §4.8.2 "Canonical spelling"). The
+# authority is the Lean definition `Esm.Units.canon`
+# (formal/Esm/Units/Canonical.lean); this is a port of it, and the
+# cross-binding fixture tests/conformance/canonical/unit_spelling.json pins
+# the output.
+#
+# It rewrites the PARSED string; it does not resolve it. Symbols are kept as
+# written (`km` stays `km`), no table lookup decides the spelling, and nothing
+# cancels across the fraction bar (`mol/mol` stays `mol/mol`). It has its own
+# lexer and parser, mirroring the Lean ones, because the resolving parser above
+# rejects unknown symbols and the spelling keeps them.
+# ---------------------------------------------------------------------------
+
+# One token: `kind` is :sym, :num, :star, :dstar, :slash, :caret, :lp, :rp or
+# :minus; `text` is the spelling of a symbol or number; `value` and `isint` are
+# a number's exact value and whether it is an integer.
+struct _CanonTok
+    kind::Symbol
+    text::String
+    value::Rational{BigInt}
+    isint::Bool
+end
+_CanonTok(kind::Symbol) = _CanonTok(kind, "", 0 // 1, false)
+
+const _CANON_OPERATORS = Dict{Char, Symbol}(
+    '/' => :slash, '^' => :caret, '(' => :lp, ')' => :rp, '-' => :minus,
+)
+
+_canon_digit_run(cs) = !isempty(cs) && all(_up_digit, cs)
+_canon_digits_value(cs) = parse(BigInt, String(cs))
+
+# The §4.8.2 tokens, read as the Lean lexer `Esm.Units.lex` reads them.
+# `nothing` when a character is outside the token rules.
+function _canon_lex(cs::Vector{Char})::Union{Vector{_CanonTok}, Nothing}
+    toks = _CanonTok[]
+    i, n = 1, length(cs)
+    while i <= n
+        c = cs[i]
+        if _up_space(c)
+            i += 1
+        elseif c == '*'
+            if i < n && cs[i + 1] == '*'
+                push!(toks, _CanonTok(:dstar))
+                i += 2
+            else
+                push!(toks, _CanonTok(:star))
+                i += 1
+            end
+        elseif haskey(_CANON_OPERATORS, c)
+            push!(toks, _CanonTok(_CANON_OPERATORS[c]))
+            i += 1
+        elseif c == '%'
+            push!(toks, _CanonTok(:sym, "%", 0 // 1, false))
+            i += 1
+        elseif _up_ident(c)
+            j = i
+            while j <= n && _up_ident(cs[j])
+                j += 1
+            end
+            run = cs[i:(j - 1)]
+            if !_canon_digit_run(run)
+                push!(toks, _CanonTok(:sym, String(run), 0 // 1, false))
+                i = j
+            elseif j < n && cs[j] == '.' && _up_digit(cs[j + 1])
+                k = j + 1
+                while k <= n && _up_ident(cs[k])
+                    k += 1
+                end
+                frac = cs[(j + 1):(k - 1)]
+                lit = String(cs[i:(k - 1)])
+                if _canon_digit_run(frac)
+                    v = _canon_digits_value(run) + _canon_digits_value(frac) // big(10)^length(frac)
+                    push!(toks, _CanonTok(:num, lit, v, false))
+                else
+                    # `1.5m` is one symbol, and no table key can match it.
+                    push!(toks, _CanonTok(:sym, lit, 0 // 1, false))
+                end
+                i = k
+            else
+                push!(toks, _CanonTok(:num, String(run), _canon_digits_value(run) // 1, true))
+                i = j
+            end
+        else
+            return nothing
+        end
+    end
+    return toks
+end
+
+const _CanonFactor = Tuple{String, Rational{BigInt}}
+
+struct _CanonFail <: Exception end
+
+mutable struct _CanonParser
+    toks::Vector{_CanonTok}
+    i::Int
+end
+
+_cp_kind(p::_CanonParser, ahead::Int = 0) =
+    p.i + ahead <= length(p.toks) ? p.toks[p.i + ahead].kind : :eof
+function _cp_take!(p::_CanonParser)
+    t = p.toks[p.i]
+    p.i += 1
+    return t
+end
+
+# The §4.8.2 grammar (`Esm.Units.parse`), building the factor list
+# (`UExpr.factors`) as it goes: `*` and juxtaposition concatenate, `/` negates
+# the exponents of its right operand, `^q` scales every exponent below it, and
+# the atom `1` and the symbol `dimensionless` contribute nothing.
+function _cp_unit!(p::_CanonParser)::Vector{_CanonFactor}
+    acc = _cp_term!(p)
+    while true
+        k = _cp_kind(p)
+        if k == :star
+            _cp_take!(p)
+            append!(acc, _cp_term!(p))
+        elseif k == :slash
+            _cp_take!(p)
+            append!(acc, [(s, -q) for (s, q) in _cp_term!(p)])
+        elseif k in (:num, :sym, :lp)
+            append!(acc, _cp_term!(p))
+        else
+            return acc
+        end
+    end
+end
+
+function _cp_term!(p::_CanonParser)::Vector{_CanonFactor}
+    fs = _cp_atom!(p)
+    if _cp_kind(p) in (:caret, :dstar)
+        _cp_take!(p)
+        q = _cp_exponent!(p)
+        fs = _CanonFactor[(s, q * e) for (s, e) in fs]
+    end
+    return fs
+end
+
+function _cp_exponent!(p::_CanonParser)::Rational{BigInt}
+    if _cp_kind(p) == :minus && _cp_kind(p, 1) == :num
+        _cp_take!(p)
+        return -_cp_take!(p).value
+    elseif _cp_kind(p) == :num
+        return _cp_take!(p).value
+    elseif _cp_kind(p) == :lp
+        _cp_take!(p)
+        a = _cp_signed_integer!(p)
+        _cp_kind(p) == :slash || throw(_CanonFail())
+        _cp_take!(p)
+        b = _cp_signed_integer!(p)
+        (_cp_kind(p) == :rp && !iszero(b)) || throw(_CanonFail())
+        _cp_take!(p)
+        return a // b
+    end
+    throw(_CanonFail())
+end
+
+function _cp_signed_integer!(p::_CanonParser)::Rational{BigInt}
+    negative = _cp_kind(p) == :minus
+    j = p.i + (negative ? 1 : 0)
+    (j <= length(p.toks) && p.toks[j].kind == :num && p.toks[j].isint) || throw(_CanonFail())
+    p.i = j + 1
+    return negative ? -p.toks[j].value : p.toks[j].value
+end
+
+function _cp_atom!(p::_CanonParser)::Vector{_CanonFactor}
+    k = _cp_kind(p)
+    if k == :num
+        # Any number but the literal `1` is a scaling factor.
+        _cp_take!(p).text == "1" || throw(_CanonFail())
+        return _CanonFactor[]
+    elseif k == :sym
+        name = _cp_take!(p).text
+        return name == "dimensionless" ? _CanonFactor[] : _CanonFactor[(name, 1 // 1)]
+    elseif k == :lp
+        _cp_take!(p)
+        inner = _cp_unit!(p)
+        _cp_kind(p) == :rp || throw(_CanonFail())
+        _cp_take!(p)
+        return inner
+    end
+    throw(_CanonFail())
+end
+
+# `Esm.Units.norm`: each symbol once with its exponents summed, zero sums
+# dropped, sorted by symbol in codepoint order.
+function _canon_side(fs::Vector{_CanonFactor})::Vector{_CanonFactor}
+    total = Dict{String, Rational{BigInt}}()
+    for (s, q) in fs
+        total[s] = get(total, s, 0 // 1) + q
+    end
+    return _CanonFactor[(s, total[s]) for s in sort!(collect(keys(total))) if !iszero(total[s])]
+end
+
+function _canon_factor((s, q)::_CanonFactor)::String
+    q = abs(q)
+    isone(q) && return s
+    isone(denominator(q)) && return string(s, "^", numerator(q))
+    return string(s, "^(", numerator(q), "/", denominator(q), ")")
+end
+
+# `Esm.Units.symOK`: `%`, or an identifier run that is not all digits.
+_canon_symbol_ok(s::String) =
+    s == "%" || (!isempty(s) && all(_up_ident, s) && !_canon_digit_run(collect(s)))
+
+const _SUPERSCRIPT_DIGITS = ('⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹')
+
+# A superscript minus that does not start a superscript exponent: one with no
+# superscript digit after it, or one right after another superscript character.
+# The §4.8.2 rewrite reads `⁻` only at the start of a run followed by
+# superscript digits (Lean `normalize`), so Lean leaves such a string unparsed,
+# while `_normalize_unit_string` folds the run into one exponent (`s⁻1` →
+# `s^-1`).
+function _stranded_superscript_minus(cs::Vector{Char})::Bool
+    for (k, c) in enumerate(cs)
+        c == '⁻' || continue
+        (k > 1 && haskey(_SUPERSCRIPTS, cs[k - 1])) && return true
+        (k == length(cs) || !(cs[k + 1] in _SUPERSCRIPT_DIGITS)) && return true
+    end
+    return false
+end
+
+"""
+    _canonical_units(unit) -> String
+
+The canonical spelling of a unit string (esm-spec §4.8.2), a port of the Lean
+`Esm.Units.canon`.
+
+The numerator is the factors with a positive exponent, each symbol once with
+its exponents summed, sorted by symbol (codepoint order) and joined by `*`. The
+denominator is the factors with a negative exponent, treated the same way and
+written with the exponent's absolute value; it is parenthesized when it has
+more than one factor. Nothing cancels across the bar. An exponent 1 is omitted,
+an integer is `^n`, any other rational is `^(p/q)` in lowest terms. An empty
+numerator is `1`, so `""`, `"1"` and `"dimensionless"` all become `"1"`.
+
+The string is returned unchanged when it does not lex or parse, when the
+spelling would have to write a symbol containing `.`, and when it would drop
+(exponent 0) a symbol that is not a table key.
+"""
+function _canonical_units(unit::AbstractString)::String
+    isempty(unit) && return "1"
+    _stranded_superscript_minus(collect(unit)) && return String(unit)
+    toks = _canon_lex(collect(_normalize_unit_string(unit)))
+    toks === nothing && return String(unit)
+    p = _CanonParser(toks, 1)
+    factors = try
+        fs = _cp_unit!(p)
+        p.i == length(toks) + 1 || return String(unit)
+        fs
+    catch e
+        e isa _CanonFail && return String(unit)
+        rethrow()
+    end
+    num = _canon_side(filter(f -> f[2] > 0, factors))
+    den = _canon_side(filter(f -> f[2] <= 0, factors))
+    kept = Set{String}(first.(vcat(num, den)))
+    all(_canon_symbol_ok, kept) || return String(unit)
+    all(f -> f[1] in kept || haskey(_UNIT_REGISTRY, f[1]), factors) || return String(unit)
+    spelled = isempty(num) ? "1" : join(map(_canon_factor, num), "*")
+    if length(den) == 1
+        spelled *= "/" * _canon_factor(den[1])
+    elseif !isempty(den)
+        spelled *= "/(" * join(map(_canon_factor, den), "*") * ")"
+    end
+    return spelled
+end
+
+# ---------------------------------------------------------------------------
 # The dimensional engine.
 #
 # THE CENTRAL INVARIANT (bug audit 2026-07-14, finding J1): a dimensional rule

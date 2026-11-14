@@ -104,6 +104,12 @@ func canonOp(node ExprNode) (Expression, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A `const` node's declared units take the canonical unit spelling
+	// (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+	if work.Units != nil {
+		spelled := canonicalUnitSpelling(*work.Units)
+		work.Units = &spelled
+	}
 
 	// Step 2: operator-specific rewrites.
 	switch work.Op {

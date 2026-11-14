@@ -20,6 +20,7 @@ import {
   isNumericLiteral,
   formatIntToken,
 } from './numeric-literal.js'
+import { canonicalUnitSpelling } from './unit-conversion.js'
 
 // `CanonicalizeError` is DEFINED in numeric-literal.ts (the lowest module in
 // the canonical-form stack) so its nonfinite specialization
@@ -180,6 +181,11 @@ function assertEmissible(e: Expr | unknown): void {
 function canonOp(node: Node): Expr {
   const newArgs: Expr[] = node.args.map((a) => canonicalize(a))
   const work: Node = { ...node, args: newArgs }
+  if (typeof work.units === 'string') {
+    // A `const` node's declared units take the canonical unit spelling
+    // (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+    work.units = canonicalUnitSpelling(work.units)
+  }
   switch (work.op) {
     case '+':
       return canonAdd(work)

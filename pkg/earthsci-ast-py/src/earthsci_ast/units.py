@@ -782,6 +782,261 @@ def _contract_symbols() -> frozenset[str]:
 _CONTRACT_SYMBOLS: frozenset[str] = _contract_symbols()
 
 
+# ---------------------------------------------------------------------------
+# The canonical unit spelling (esm-spec §4.8.2 "Canonical spelling"). The
+# authority is the Lean definition `Esm.Units.canon`
+# (formal/Esm/Units/Canonical.lean); this is a port of it, and the
+# cross-binding fixture tests/conformance/canonical/unit_spelling.json pins
+# the output.
+#
+# It rewrites the PARSED string; it does not resolve it. Symbols are kept as
+# written (`km` stays `km`), no table lookup decides the spelling, and nothing
+# cancels across the fraction bar (`mol/mol` stays `mol/mol`). It has its own
+# lexer and parser, mirroring the Lean ones, because the resolving grammar
+# above rejects unknown symbols and the spelling keeps them.
+# ---------------------------------------------------------------------------
+
+
+class _NoCanonicalSpelling(Exception):
+    """The string does not lex or parse; the spelling leaves it unchanged."""
+
+
+def _is_ident_char(c: str) -> bool:
+    return ("a" <= c <= "z") or ("A" <= c <= "Z") or ("0" <= c <= "9") or c == "_"
+
+
+def _is_digit_run(s: str) -> bool:
+    return bool(s) and all("0" <= c <= "9" for c in s)
+
+
+_CANON_OPERATORS = {"/": "slash", "^": "caret", "(": "lp", ")": "rp", "-": "minus"}
+
+
+def _canon_lex(text: str) -> list[tuple]:
+    """The §4.8.2 tokens, read as the Lean lexer `Esm.Units.lex` reads them."""
+    toks: list[tuple] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in " \t\n\r":
+            i += 1
+        elif c == "*":
+            double = i + 1 < n and text[i + 1] == "*"
+            toks.append(("dstar",) if double else ("star",))
+            i += 2 if double else 1
+        elif c in _CANON_OPERATORS:
+            toks.append((_CANON_OPERATORS[c],))
+            i += 1
+        elif c == "%":
+            toks.append(("sym", "%"))
+            i += 1
+        elif _is_ident_char(c):
+            j = i
+            while j < n and _is_ident_char(text[j]):
+                j += 1
+            run = text[i:j]
+            if not _is_digit_run(run):
+                toks.append(("sym", run))
+                i = j
+            elif j + 1 < n and text[j] == "." and "0" <= text[j + 1] <= "9":
+                k = j + 1
+                while k < n and _is_ident_char(text[k]):
+                    k += 1
+                frac = text[j + 1 : k]
+                if _is_digit_run(frac):
+                    value = Fraction(int(run)) + Fraction(int(frac), 10 ** len(frac))
+                    toks.append(("num", text[i:k], value, False))
+                else:
+                    # `1.5m` is one symbol, and no table key can match it.
+                    toks.append(("sym", text[i:k]))
+                i = k
+            else:
+                toks.append(("num", run, Fraction(int(run)), True))
+                i = j
+        else:
+            raise _NoCanonicalSpelling
+    return toks
+
+
+class _CanonParser:
+    """The §4.8.2 grammar (`Esm.Units.parse`), building the factor list
+    (`UExpr.factors`) as it goes: `*` and juxtaposition concatenate, `/`
+    negates the exponents of its right operand, `^q` scales every exponent
+    below it, and the atom `1` and the symbol `dimensionless` contribute
+    nothing."""
+
+    def __init__(self, toks: list[tuple]):
+        self.toks = toks
+        self.i = 0
+
+    def kind(self, ahead: int = 0) -> str | None:
+        j = self.i + ahead
+        return self.toks[j][0] if j < len(self.toks) else None
+
+    def take(self) -> tuple:
+        tok = self.toks[self.i]
+        self.i += 1
+        return tok
+
+    def parse(self) -> list[tuple[str, Fraction]]:
+        factors = self.unit()
+        if self.i != len(self.toks):
+            raise _NoCanonicalSpelling
+        return factors
+
+    def unit(self) -> list[tuple[str, Fraction]]:
+        acc = self.term()
+        while True:
+            kind = self.kind()
+            if kind == "star":
+                self.take()
+                acc += self.term()
+            elif kind == "slash":
+                self.take()
+                acc += [(s, -q) for s, q in self.term()]
+            elif kind in ("num", "sym", "lp"):
+                acc += self.term()
+            else:
+                return acc
+
+    def term(self) -> list[tuple[str, Fraction]]:
+        factors = self.atom()
+        if self.kind() in ("caret", "dstar"):
+            self.take()
+            q = self.exponent()
+            factors = [(s, q * e) for s, e in factors]
+        return factors
+
+    def exponent(self) -> Fraction:
+        if self.kind() == "minus" and self.kind(1) == "num":
+            self.take()
+            return -self.take()[2]
+        if self.kind() == "num":
+            return self.take()[2]
+        if self.kind() == "lp":
+            self.take()
+            p = self.signed_integer()
+            if self.kind() != "slash":
+                raise _NoCanonicalSpelling
+            self.take()
+            q = self.signed_integer()
+            if self.kind() != "rp" or q == 0:
+                raise _NoCanonicalSpelling
+            self.take()
+            return p / q
+        raise _NoCanonicalSpelling
+
+    def signed_integer(self) -> Fraction:
+        negative = self.kind() == "minus"
+        j = self.i + (1 if negative else 0)
+        if j >= len(self.toks) or self.toks[j][0] != "num" or not self.toks[j][3]:
+            raise _NoCanonicalSpelling
+        self.i = j + 1
+        return -self.toks[j][2] if negative else self.toks[j][2]
+
+    def atom(self) -> list[tuple[str, Fraction]]:
+        kind = self.kind()
+        if kind == "num":
+            if self.take()[1] != "1":
+                raise _NoCanonicalSpelling  # a scaling factor
+            return []
+        if kind == "sym":
+            name = self.take()[1]
+            return [] if name == "dimensionless" else [(name, Fraction(1))]
+        if kind == "lp":
+            self.take()
+            inner = self.unit()
+            if self.kind() != "rp":
+                raise _NoCanonicalSpelling
+            self.take()
+            return inner
+        raise _NoCanonicalSpelling
+
+
+def _canon_side(factors: list[tuple[str, Fraction]]) -> list[tuple[str, Fraction]]:
+    """`Esm.Units.norm`: each symbol once with its exponents summed, zero sums
+    dropped, sorted by symbol in codepoint order."""
+    total: dict[str, Fraction] = {}
+    for s, q in factors:
+        total[s] = total.get(s, Fraction(0)) + q
+    return [(s, total[s]) for s in sorted(total) if total[s] != 0]
+
+
+def _canon_factor(symbol: str, q: Fraction) -> str:
+    q = abs(q)
+    if q == 1:
+        return symbol
+    if q.denominator == 1:
+        return f"{symbol}^{q.numerator}"
+    return f"{symbol}^({q.numerator}/{q.denominator})"
+
+
+def _canon_symbol_ok(symbol: str) -> bool:
+    """`Esm.Units.symOK`: `%`, or an identifier run that is not all digits."""
+    if symbol == "%":
+        return True
+    return bool(symbol) and all(_is_ident_char(c) for c in symbol) and not _is_digit_run(symbol)
+
+
+def _stranded_superscript_minus(unit: str) -> bool:
+    """A superscript minus that does not start a superscript exponent: one with
+    no superscript digit after it, or one right after another superscript
+    character. The §4.8.2 rewrite reads `⁻` only at the start of a run followed
+    by superscript digits (Lean `normalize`), so Lean leaves such a string
+    unparsed, while :func:`normalize_unit_string` folds the run into one
+    exponent (`s⁻1` → `s^-1`)."""
+    return any(
+        c == "\u207b"
+        and (
+            (k > 0 and unit[k - 1] in _SUPERSCRIPTS)
+            or k + 1 >= len(unit)
+            or unit[k + 1] == "\u207b"
+            or unit[k + 1] not in _SUPERSCRIPTS
+        )
+        for k, c in enumerate(unit)
+    )
+
+
+def canonical_unit_spelling(unit: str) -> str:
+    """The canonical spelling of a unit string (esm-spec §4.8.2), a port of
+    the Lean `Esm.Units.canon`.
+
+    The numerator is the factors with a positive exponent, each symbol once
+    with its exponents summed, sorted by symbol (codepoint order) and joined
+    by `*`. The denominator is the factors with a negative exponent, treated
+    the same way and written with the exponent's absolute value; it is
+    parenthesized when it has more than one factor. Nothing cancels across the
+    bar. An exponent 1 is omitted, an integer is `^n`, any other rational is
+    `^(p/q)` in lowest terms. An empty numerator is `1`, so `""`, `"1"` and
+    `"dimensionless"` all become `"1"`.
+
+    The string is returned unchanged when it does not lex or parse, when the
+    spelling would have to write a symbol containing `.`, and when it would
+    drop (exponent 0) a symbol that is not a table key.
+    """
+    if unit == "":
+        return "1"
+    if _stranded_superscript_minus(unit):
+        return unit
+    try:
+        factors = _CanonParser(_canon_lex(normalize_unit_string(unit))).parse()
+    except _NoCanonicalSpelling:
+        return unit
+    num = _canon_side([f for f in factors if f[1] > 0])
+    den = _canon_side([f for f in factors if f[1] <= 0])
+    kept = {s for s, _ in num} | {s for s, _ in den}
+    if not all(_canon_symbol_ok(s) for s in kept):
+        return unit
+    if not all(s in kept or s in _CONTRACT_SYMBOLS for s, _ in factors):
+        return unit
+    spelled = "*".join(_canon_factor(s, q) for s, q in num) if num else "1"
+    if len(den) == 1:
+        spelled += "/" + _canon_factor(*den[0])
+    elif den:
+        spelled += "/(" + "*".join(_canon_factor(s, q) for s, q in den) + ")"
+    return spelled
+
+
 def parse_unit(unit: str | None):
     """Resolve a declared unit string to a pint ``Unit``.
 

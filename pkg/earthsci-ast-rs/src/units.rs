@@ -2925,6 +2925,290 @@ fn parse_normalized(s: &str, original: &str) -> Result<Unit, UnitError> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The canonical unit spelling (esm-spec §4.8.2 "Canonical spelling"). The
+// authority is the Lean definition `Esm.Units.canon`
+// (formal/Esm/Units/Canonical.lean); this is a port of it, and the
+// cross-binding fixture tests/conformance/canonical/unit_spelling.json pins the
+// output.
+//
+// It rewrites the PARSED string; it does not resolve it. Symbols are kept as
+// written (`km` stays `km`), no table lookup decides the spelling, and nothing
+// cancels across the fraction bar (`mol/mol` stays `mol/mol`). It shares the
+// lexer above but has its own parser, because the resolving parser rejects
+// unknown symbols and the spelling keeps them.
+// ---------------------------------------------------------------------------
+
+/// An exact rational exponent for the spelling, in lowest terms with a positive
+/// denominator. Wider than [`Rational`] so no realistic exponent overflows; an
+/// overflow leaves the string unspelled (unchanged).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SpellQ {
+    num: i128,
+    den: i128,
+}
+
+impl SpellQ {
+    const ONE: SpellQ = SpellQ { num: 1, den: 1 };
+
+    fn new(num: i128, den: i128) -> Option<SpellQ> {
+        if den == 0 {
+            return None;
+        }
+        let (mut a, mut b) = (num.checked_abs()?, den.checked_abs()?);
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        let g = if a == 0 { 1 } else { a };
+        let sign = if den < 0 { -1 } else { 1 };
+        Some(SpellQ {
+            num: (num / g).checked_mul(sign)?,
+            den: (den / g).checked_mul(sign)?,
+        })
+    }
+
+    fn mul(self, o: SpellQ) -> Option<SpellQ> {
+        SpellQ::new(self.num.checked_mul(o.num)?, self.den.checked_mul(o.den)?)
+    }
+
+    fn add(self, o: SpellQ) -> Option<SpellQ> {
+        let num = self.num.checked_mul(o.den)?.checked_add(o.num.checked_mul(self.den)?)?;
+        SpellQ::new(num, self.den.checked_mul(o.den)?)
+    }
+
+    fn neg(self) -> Option<SpellQ> {
+        Some(SpellQ { num: self.num.checked_neg()?, den: self.den })
+    }
+
+    /// The exact value of a number token: digits, optionally `.` and digits.
+    fn of_literal(lit: &str) -> Option<SpellQ> {
+        let (int, frac) = lit.split_once('.').unwrap_or((lit, ""));
+        let digits = format!("{int}{frac}");
+        let num: i128 = digits.parse().ok()?;
+        let den = 10i128.checked_pow(u32::try_from(frac.len()).ok()?)?;
+        SpellQ::new(num, den)
+    }
+}
+
+type SpellFactor<'a> = (&'a str, SpellQ);
+
+/// The §4.8.2 grammar (`Esm.Units.parse`), building the factor list
+/// (`UExpr.factors`) as it goes: `*` and juxtaposition concatenate, `/` negates
+/// the exponents of its right operand, `^q` scales every exponent below it, and
+/// the atom `1` and the symbol `dimensionless` contribute nothing. `None` when
+/// the tokens do not parse (or an exponent overflows).
+struct SpellParser<'a> {
+    toks: Vec<UnitTok<'a>>,
+    pos: usize,
+}
+
+impl<'a> SpellParser<'a> {
+    fn peek(&self, ahead: usize) -> Option<UnitTok<'a>> {
+        self.toks.get(self.pos + ahead).copied()
+    }
+
+    fn unit(&mut self) -> Option<Vec<SpellFactor<'a>>> {
+        let mut acc = self.term()?;
+        loop {
+            match self.peek(0) {
+                Some(UnitTok::Star) => {
+                    self.pos += 1;
+                    acc.extend(self.term()?);
+                }
+                Some(UnitTok::Slash) => {
+                    self.pos += 1;
+                    for (s, q) in self.term()? {
+                        acc.push((s, q.neg()?));
+                    }
+                }
+                Some(UnitTok::Sym(_) | UnitTok::Num(_) | UnitTok::LParen) => {
+                    acc.extend(self.term()?);
+                }
+                _ => return Some(acc),
+            }
+        }
+    }
+
+    fn term(&mut self) -> Option<Vec<SpellFactor<'a>>> {
+        let factors = self.atom()?;
+        if self.peek(0) != Some(UnitTok::Pow) {
+            return Some(factors);
+        }
+        self.pos += 1;
+        let q = self.exponent()?;
+        factors.into_iter().map(|(s, e)| Some((s, q.mul(e)?))).collect()
+    }
+
+    fn exponent(&mut self) -> Option<SpellQ> {
+        match (self.peek(0), self.peek(1)) {
+            (Some(UnitTok::Minus), Some(UnitTok::Num(lit))) => {
+                self.pos += 2;
+                SpellQ::of_literal(lit)?.neg()
+            }
+            (Some(UnitTok::Num(lit)), _) => {
+                self.pos += 1;
+                SpellQ::of_literal(lit)
+            }
+            (Some(UnitTok::LParen), _) => {
+                self.pos += 1;
+                let p = self.signed_integer()?;
+                if self.peek(0) != Some(UnitTok::Slash) {
+                    return None;
+                }
+                self.pos += 1;
+                let q = self.signed_integer()?;
+                if self.peek(0) != Some(UnitTok::RParen) || q.num == 0 {
+                    return None;
+                }
+                self.pos += 1;
+                p.mul(SpellQ::new(q.den, q.num)?)
+            }
+            _ => None,
+        }
+    }
+
+    fn signed_integer(&mut self) -> Option<SpellQ> {
+        let negative = self.peek(0) == Some(UnitTok::Minus);
+        let at = usize::from(negative);
+        match self.peek(at) {
+            Some(UnitTok::Num(lit)) if !lit.contains('.') => {
+                self.pos += at + 1;
+                let v = SpellQ::of_literal(lit)?;
+                if negative { v.neg() } else { Some(v) }
+            }
+            _ => None,
+        }
+    }
+
+    fn atom(&mut self) -> Option<Vec<SpellFactor<'a>>> {
+        let tok = self.peek(0)?;
+        self.pos += 1;
+        match tok {
+            // Any number but the literal `1` is a scaling factor.
+            UnitTok::Num("1") => Some(Vec::new()),
+            UnitTok::Sym("dimensionless") => Some(Vec::new()),
+            UnitTok::Sym(name) => Some(vec![(name, SpellQ::ONE)]),
+            UnitTok::LParen => {
+                let inner = self.unit()?;
+                if self.peek(0) != Some(UnitTok::RParen) {
+                    return None;
+                }
+                self.pos += 1;
+                Some(inner)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// `Esm.Units.norm`: each symbol once with its exponents summed, zero sums
+/// dropped, sorted by symbol in codepoint order.
+fn spell_side<'a>(factors: impl Iterator<Item = SpellFactor<'a>>) -> Option<Vec<SpellFactor<'a>>> {
+    let mut total: std::collections::BTreeMap<&'a str, SpellQ> = std::collections::BTreeMap::new();
+    for (s, q) in factors {
+        let sum = match total.get(s) {
+            Some(prev) => prev.add(q)?,
+            None => q,
+        };
+        total.insert(s, sum);
+    }
+    Some(total.into_iter().filter(|(_, q)| q.num != 0).collect())
+}
+
+fn spell_factor((s, q): &SpellFactor<'_>) -> String {
+    let (num, den) = (q.num.unsigned_abs(), q.den);
+    match (num, den) {
+        (1, 1) => (*s).to_string(),
+        (n, 1) => format!("{s}^{n}"),
+        (n, d) => format!("{s}^({n}/{d})"),
+    }
+}
+
+/// `Esm.Units.symOK`: `%`, or an identifier run that is not all digits.
+fn spell_symbol_ok(s: &str) -> bool {
+    s == "%"
+        || (!s.is_empty()
+            && s.bytes().all(is_ident_byte)
+            && !s.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// A superscript minus that does not start a superscript exponent: one with no
+/// superscript digit after it, or one right after another superscript
+/// character. The §4.8.2 rewrite reads `⁻` only at the start of a run followed
+/// by superscript digits (Lean `normalize`), so Lean leaves such a string
+/// unparsed, while [`normalize_unit_str`] folds the run into one exponent
+/// (`s⁻1` → `s^-1`).
+fn stranded_superscript_minus(unit: &str) -> bool {
+    const DIGITS: &str = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+    let cs: Vec<char> = unit.chars().collect();
+    cs.iter().enumerate().any(|(k, &c)| {
+        c == '⁻'
+            && ((k > 0 && (cs[k - 1] == '⁻' || DIGITS.contains(cs[k - 1])))
+                || !cs.get(k + 1).is_some_and(|&n| DIGITS.contains(n)))
+    })
+}
+
+/// The canonical spelling of a unit string (esm-spec §4.8.2), a port of the
+/// Lean `Esm.Units.canon`.
+///
+/// The numerator is the factors with a positive exponent, each symbol once with
+/// its exponents summed, sorted by symbol (codepoint order) and joined by `*`.
+/// The denominator is the factors with a negative exponent, treated the same
+/// way and written with the exponent's absolute value; it is parenthesized when
+/// it has more than one factor. Nothing cancels across the bar. An exponent 1 is
+/// omitted, an integer is `^n`, any other rational is `^(p/q)` in lowest terms.
+/// An empty numerator is `1`, so `""`, `"1"` and `"dimensionless"` all become
+/// `"1"`.
+///
+/// The string is returned unchanged when it does not lex or parse, when the
+/// spelling would have to write a symbol containing `.`, and when it would drop
+/// (exponent 0) a symbol that is not a table key.
+pub(crate) fn canonical_unit_spelling(unit: &str) -> String {
+    if unit.is_empty() {
+        return "1".to_string();
+    }
+    if stranded_superscript_minus(unit) {
+        return unit.to_string();
+    }
+    let normalized = normalize_unit_str(unit);
+    let Ok(toks) = lex_unit(&normalized, unit) else {
+        return unit.to_string();
+    };
+    let n_toks = toks.len();
+    let mut parser = SpellParser { toks, pos: 0 };
+    let factors = match parser.unit() {
+        Some(f) if parser.pos == n_toks => f,
+        _ => return unit.to_string(),
+    };
+    let (Some(num), Some(den)) = (
+        spell_side(factors.iter().copied().filter(|(_, q)| q.num > 0)),
+        spell_side(factors.iter().copied().filter(|(_, q)| q.num <= 0)),
+    ) else {
+        return unit.to_string();
+    };
+    let kept = |s: &str| num.iter().chain(den.iter()).any(|(k, _)| *k == s);
+    if !num.iter().chain(den.iter()).all(|(s, _)| spell_symbol_ok(s))
+        || !factors.iter().all(|(s, _)| kept(s) || get_base_units().contains_key(*s))
+    {
+        return unit.to_string();
+    }
+    let join = |side: &[SpellFactor<'_>]| side.iter().map(spell_factor).collect::<Vec<_>>().join("*");
+    let mut spelled = if num.is_empty() { "1".to_string() } else { join(&num) };
+    match den.len() {
+        0 => {}
+        1 => {
+            spelled.push('/');
+            spelled.push_str(&spell_factor(&den[0]));
+        }
+        _ => {
+            spelled.push_str("/(");
+            spelled.push_str(&join(&den));
+            spelled.push(')');
+        }
+    }
+    spelled
+}
+
 /// Get commonly used base units
 /// The cached base-unit registry. `parse_unit` recurses (parentheses, `/`,
 /// `*` splits) and runs inside per-equation validation loops, so rebuilding

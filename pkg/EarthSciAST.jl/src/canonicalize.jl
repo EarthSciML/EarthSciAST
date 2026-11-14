@@ -88,6 +88,12 @@ end
 # `canonicalize(e) == _canonicalize_shallow(e with canonicalized args)` and
 # the memoized driver is byte-identical to the plain recursion.
 function _canonicalize_shallow(work::OpExpr)
+    if work.units !== nothing
+        # A `const` node's declared units take the canonical unit spelling
+        # (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+        units = _canonical_units(work.units::String)
+        units == work.units || (work = reconstruct(work; units = units))
+    end
     if work.op == "+"
         return _canon_add(work)
     elseif work.op == "*"

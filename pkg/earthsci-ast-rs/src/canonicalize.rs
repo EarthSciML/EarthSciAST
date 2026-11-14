@@ -252,6 +252,11 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if let Some(e) = err {
         return Err(e);
     }
+    // A `const` node's declared units take the canonical unit spelling
+    // (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
+    if let Some(units) = work.units.as_mut() {
+        *units = crate::units::canonical_unit_spelling(units);
+    }
     match work.op.as_str() {
         "+" => canon_add(&mut work),
         "*" => canon_mul(&mut work),
