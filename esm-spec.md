@@ -1,6 +1,15 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 2.2.0**
+**EarthSciML Abstract Syntax Tree Format — Version 2.3.0**
+
+> **2.3.0 is additive.** The JSON form does not change. The word spellings
+> `neg` and `pow` are deprecated: a loader rewrites them to unary `-` and `^`
+> and warns `deprecated_op` (§4.2, "Deprecated ops"). The canonical form writes
+> every `units` string in one canonical spelling, and drops the units of a
+> `const` whose units spell `1`; `canonicalize_document` applies the spelling
+> to a whole document (§4.8.2). A document can also be written as a Markdown or
+> Typst source document, specified by the Lean source in `formal/` (§1.2).
+> Every 2.2.0 document is a valid 2.3.0 document.
 
 > **2.1.0 is additive.** A variable MAY declare a lower bound `lb` and an upper
 > bound `ub`, each a number or a reference to another variable of the model
@@ -101,7 +110,7 @@ source document is a lossless spelling of it.
 
 ```json
 {
-  "esm": "2.2.0",
+  "esm": "2.3.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },

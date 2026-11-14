@@ -65,14 +65,28 @@ class TestVersionCompatibility:
         It was version_1_0_0_baseline.esm until esm 1.1.0,
         version_1_1_0_minor_upgrade.esm until esm 1.2.0,
         version_1_2_0_const_units.esm until esm 1.3.0, and
-        version_2_0_0_baseline.esm until esm 2.1.0, and
-        version_2_1_0_variable_bounds.esm until esm 2.2.0.
+        version_2_0_0_baseline.esm until esm 2.1.0,
+        version_2_1_0_variable_bounds.esm until esm 2.2.0, and
+        version_2_2_0_pointwise_lift.esm until esm 2.3.0.
         """
-        fixture = load_fixture("version_2_2_0_pointwise_lift.esm")
+        fixture = load_fixture("version_2_3_0_deprecated_neg.esm")
         assert fixture["esm"] == _EXPECTED_VERSION
-        with no_version_warning():
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             result = load_document(fixture)
         assert result.esm == _EXPECTED_VERSION
+        assert not [w for w in caught if "is newer than" in str(w.message)]
+        # The fixture spells unary minus with the deprecated `neg`: the load
+        # warns `deprecated_op` once and the node is unary `-` (esm-spec §4.2).
+        deprecated = [str(w.message) for w in caught if str(w.message).startswith("deprecated_op")]
+        assert len(deprecated) == 1 and "(neg)" in deprecated[0]
+        assert result.models["Decay"].equations[0].rhs.args[0].op == "-"
+
+        # The earlier minor of the current major loads as written, with no
+        # warning.
+        with no_version_warning():
+            result = load_document(load_fixture("version_2_2_0_pointwise_lift.esm"))
+        assert result.esm == "2.2.0"
 
         # The earlier minor of the current major loads as written, with no
         # warning.

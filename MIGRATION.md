@@ -1521,6 +1521,21 @@ accepted. A `variable_map` with `lifting: "mean"`, `"integral"` or
 `"broadcast"` does not trigger the lift; those kinds are not implemented by any
 binding.
 
+## esm 2.3.0: deprecated `neg` / `pow`, canonical unit spelling, document source formats
+
+| Kind | What |
+|---|---|
+| `format` | **No on-disk change; additive.** Every 2.2.0 document is a valid 2.3.0 document. With the three changes below the format version moves to **`esm: 2.3.0`**. |
+| `format` | **Deprecated:** the word spellings `neg` (unary `-`) and `pow` (`^`), and a `broadcast` with `fn: "neg"` (esm-spec §4.2, "Deprecated ops"). A loader rewrites each to its replacement at the wire boundary and warns `deprecated_op` once per document, naming every rewritten node by its JSON pointer. They join `removed_op` in a later major. |
+| `semantics` | The canonical form writes every `units` string in the canonical unit spelling (esm-spec §4.8.2; the Lean definition `Esm.Units.canon` is the authority), so `m h/(mi s)` and `m*h/(mi*s)` canonicalize alike. A `const` whose units spell `1` (`""`, `"1"`, `"dimensionless"`) loses them in the canonical form: a scalar one becomes the bare literal, with a bare literal's dimension. |
+| `new` | `canonicalize_document` (`canonicalizeDocument` in TypeScript, `CanonicalizeDocument` in Go): respells every units string of a decoded document and changes nothing else. |
+| `new` | A document can also be written as a Markdown (`.md`, LaTeX math) or Typst (`.typ`) source document (esm-spec §1.2). The Lean source under `formal/Esm/Document/` specifies both; the golden fixtures are `tests/conformance/document_format/` (CONFORMANCE_SPEC §5.58). |
+
+**What to check.** A document that spells `neg` or `pow` still loads and means
+the same thing; replace them with `-` and `^` to silence the warning. A
+consumer that compares canonical forms byte for byte now sees units in the
+canonical spelling and no `units` on a dimensionless `const`.
+
 ---
 
 # Part V — What did NOT change
