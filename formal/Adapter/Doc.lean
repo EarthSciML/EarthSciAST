@@ -1,10 +1,11 @@
 import Lean.Data.Json
-import Esm.Document.Source.MarkdownDoc
+import Esm.Document.Source.TypstDoc
 
-/-! `esm-lean print-md|parse-md|canon <file>`: the document source formats.
+/-! `esm-lean canon|print-md|parse-md|print-typ|parse-typ <file>`: the document source formats.
 
 * `canon <doc.esm>`: the document in canonical form (sorted keys, canonical numbers), as
   compact JSON.
+* `print-typ <doc.esm>`, `parse-typ <doc.typ>`: the same for Typst.
 * `print-md <doc.esm>`: the Markdown spelling (`Esm.Document.Source.Md.printMd`).
 * `parse-md <doc.md>`: the document a Markdown source holds, as canonical JSON; exit 1
   when it does not parse.
@@ -76,6 +77,17 @@ def main (mode : String) (args : List String) : IO UInt32 := do
     match Source.Md.parseMd text with
     | some d => IO.println (render d); return 0
     | none => IO.eprintln s!"{path}: not an ESM Markdown document"; return 1
+  | "print-typ" =>
+    let d ← readDoc path
+    unless Source.canonDoc d do
+      IO.eprintln s!"{path}: not a document in canonical form (a JSON object)"; return 1
+    IO.print (Source.Typ.printTyp d)
+    return 0
+  | "parse-typ" =>
+    let text ← IO.FS.readFile path
+    match Source.Typ.parseTyp text with
+    | some d => IO.println (render d); return 0
+    | none => IO.eprintln s!"{path}: not an ESM Typst document"; return 1
   | _ => IO.eprintln s!"unknown mode {mode}"; return 2
 
 end Adapter.Doc
