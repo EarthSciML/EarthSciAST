@@ -245,14 +245,16 @@ theorem allPos_named : ∀ bs : List (String × Json), bs ≠ [] →
   | [], h => absurd rfl h
   | _ :: _, _ => rfl
 
-/-- Named template arguments read back as the template application, whether or not the
-symbol table knows the template's parameters (the printer writes them named only when it
-does not; `Esm.Document.Math.Variants.variant_named_args`). -/
+/-- Named template arguments, in any order and with distinct names, read back as the
+template application with its bindings sorted, whether or not the symbol table knows the
+template's parameters (the printer writes them named, in sorted order, only when it does
+not; `Esm.Document.Math.Variants.variant_named_args`). -/
 theorem pPrim_named (c : Ctx) (n : String) (bs : List (String × Json))
     (hn : tnameOK n = true) (hM : ∀ kv ∈ bs, M c kv.2) (hne : bs ≠ [])
-    (hk : ∀ kv ∈ bs, nameOK kv.1 = true) (rest : List Tok) (f : Nat)
+    (hk : ∀ kv ∈ bs, nameOK kv.1 = true) (hnd : (bs.map Prod.fst).Nodup) (rest : List Tok) (f : Nat)
     (hf : need 10 (callToks c.sf [.opn n] (bs.map (itemToks c))).length ≤ f) :
-    pPrim c f (callToks c.sf [.opn n] (bs.map (itemToks c)) ++ rest) = some (tNode n bs, rest) := by
+    pPrim c f (callToks c.sf [.opn n] (bs.map (itemToks c)) ++ rest) =
+      some (tNode n (sortKV bs), rest) := by
   obtain ⟨hco, hneg, hpow, hD, hrem⟩ := tname_facts hn
   obtain ⟨g, rfl⟩ : ∃ g, f = g + 3 := ⟨f - 3, by unfold need at hf; simp [length_callToks] at hf; omega⟩
   simp only [length_callToks] at hf
@@ -284,8 +286,13 @@ theorem pPrim_named (c : Ctx) (n : String) (bs : List (String × Json))
     allNamed_named, allPos_named _ hne]
   split <;> simp_all
 
+/-- Sorted bindings sort to themselves. -/
+theorem sortKV_of_sorted (bs : List (String × Json)) (hs : keysSorted bs = true) : sortKV bs = bs :=
+  eq_of_perm_sorted (sortKV_perm bs) (sortKV_sorted bs (keys_nodup (keysSorted_pairwise bs hs)))
+    (keysSorted_pairwise bs hs)
+
 theorem M_tnamed (c : Ctx) (n : String) (bs : List (String × Json))
-    (hn : tnameOK n = true) (hM : ∀ kv ∈ bs, M c kv.2) (hne : bs ≠ [])
+    (hn : tnameOK n = true) (hs : keysSorted bs = true) (hM : ∀ kv ∈ bs, M c kv.2) (hne : bs ≠ [])
     (hk : ∀ kv ∈ bs, nameOK kv.1 = true)
     (hpr : pr c (tNode n bs) = mkOut c.sf 10 (callToks c.sf [.opn n] (bs.map (itemToks c)))) :
     M c (tNode n bs) := by
@@ -294,7 +301,8 @@ theorem M_tnamed (c : Ctx) (n : String) (bs : List (String × Json))
     · intro rest hr f hf
       rw [hpr] at hf ⊢
       simp only [mkOut] at hf ⊢
-      exact pPrim_named c n bs hn hM hne hk rest f hf
+      have h := pPrim_named c n bs hn hM hne hk (keys_nodup (keysSorted_pairwise bs hs)) rest f hf
+      rwa [sortKV_of_sorted bs hs] at h
     · rw [hpr]; simp [mkOut]
     · rw [hpr]; simp [mkOut]
   · rw [hpr]; exact ⟨by simp, by simp, by simp, by simp, by simp, Or.inl (by simp [startA, atomStart])⟩

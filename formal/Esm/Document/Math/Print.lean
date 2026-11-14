@@ -318,7 +318,7 @@ a non-dimensionless unit whose typeset form reads back (Phase 1: every canonical
 does). -/
 def unitsOK (sf : Sf) (u : String) : Bool :=
   let l := factorsOf u
-  l != [] && Esm.Units.spell l == u &&
+  Esm.Units.spell l == u &&
     l.all (fun f => Esm.Units.symOK f.1 && f.2 != 0) &&
     (match sf with
      | .latex => Esm.Units.parseLatex (Esm.Units.latex l) == some l && balOK (Esm.Units.latexBody l)

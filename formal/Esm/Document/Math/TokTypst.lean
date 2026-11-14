@@ -824,9 +824,9 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
       exact mk_ok hS.1 hselfN.1 hselfN.2
     | qty u k hk hu hpr =>
       simp only [hc] at hpr hu
-      have hl : factorsOf u ≠ [] ∧ ∀ f ∈ factorsOf u, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0 := by
+      have hl : ∀ f ∈ factorsOf u, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0 := by
         simp only [unitsOK, Bool.and_eq_true, bne_iff_ne, ne_eq, List.all_eq_true, bne_iff_ne] at hu
-        exact ⟨hu.1.1.1, fun f hf => hu.1.2 f hf⟩
+        exact fun f hf => hu.1.2 f hf
       rw [hpr] at hselfN ⊢; simp only [mkOut, qtyToks] at hselfN ⊢
       have hT : Good [Tok.num k, .units (factorsOf u)] :=
         ⟨(by simp; exact ⟨hk, hl⟩), ⟨(fun e => by cases e), (fun h => by simp [isUnits] at h), trivial⟩⟩
@@ -839,9 +839,9 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
     | arrU u xs af haf hu hpr =>
       simp only [hc] at hpr hu
       obtain ⟨hA, -, hl⟩ := good_arr af (arrForm_spec haf).2
-      have hlf : factorsOf u ≠ [] ∧ ∀ f ∈ factorsOf u, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0 := by
+      have hlf : ∀ f ∈ factorsOf u, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0 := by
         simp only [unitsOK, Bool.and_eq_true, bne_iff_ne, ne_eq, List.all_eq_true, bne_iff_ne] at hu
-        exact ⟨hu.1.1.1, fun f hf => hu.1.2 f hf⟩
+        exact fun f hf => hu.1.2 f hf
       have hT : Good (arrToks .typst af ++ unitToks (factorsOf u)) := by
         simp only [unitToks]
         refine ⟨fun t ht => ?_, adj_snoc _ _ hA.2 (by simp) hl⟩
@@ -871,7 +871,7 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
             exact ⟨(CH v (sizeOf_tNode_lt hv) (hb _ hv) 4).1, (CH v (sizeOf_tNode_lt hv) (hb _ hv) 4).2.1⟩)
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok hS.1 hselfN.1 hselfN.2
-    | tnamed m bs hm hb hps hne hk hkn hpr =>
+    | tnamed m bs hm _ hb hps hne hk hkn hpr =>
       simp only [hc] at hpr
       have hS := good_callToks [.opn m] (good_single trivial) ⟨by simp, fun u hu => by simp at hu; subst hu; exact callEnd_opn m⟩
         (nice_cons _ (by simp) rfl)

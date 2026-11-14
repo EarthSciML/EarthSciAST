@@ -62,7 +62,8 @@ labels, never changes it.
 Restrictions this places on prose (`Inert`): prose may not contain a declaration opener
 (`:var[`, `:param[`, `:species[`) anywhere, nor start a line with ```` ```esm: ````,
 `$$`, `::model[`, `::reaction-system[`, `| decl | name |`, `:::initialization` or
-`:::constraints`. In particular display math (`$$`) at the start
+`:::constraints`, nor start a line with a table row holding a `rate` cell (a reaction table,
+which the lexer refuses). In particular display math (`$$`) at the start
 of a line is always a model equation; illustrative math in prose uses inline `$…$` or
 another delimiter.
 -/
@@ -574,6 +575,20 @@ attribute key, and a cell is a YAML scalar or empty (the attribute is absent). -
 /-- `| decl | name |`, the start of a declarations table. -/
 def tableOpen : List Char := "| decl | name |".toList
 
+/-- A cell without its surrounding spaces. -/
+def trimCell (s : String) : String :=
+  String.ofList (((s.toList.dropWhile (· == ' ')).reverse.dropWhile (· == ' ')).reverse)
+
+/-- The header cells of a table line: the line split at `|`, each cell trimmed. -/
+def headerCells (s : List Char) : List String :=
+  ((String.ofList (s.takeWhile (· != '\n'))).splitOn "|").map trimCell
+
+/-- The start of a reaction table with a rate column: a line starting with `|` that has a
+cell `rate`. It is not a reaction notation (`Notation.variants`, rejected), and the lexer
+refuses it rather than skipping it as prose, which would drop its reactions. -/
+def rateTable (s : List Char) : Bool :=
+  pre ['|'] s && (headerCells s).contains "rate"
+
 /-- The attribute columns of the header, up to its newline. -/
 def pCols : Nat → List Char → Option (List String × List Char)
   | 0, _ => none
@@ -659,6 +674,7 @@ def lex : Nat → Bool → List Char → Option (List RItem)
       (tableAt f (c :: r)).bind (fun p => (lex f true p.2).map (p.1 ++ ·))
     else if bol && contOpen (c :: r) then
       (contAt f (c :: r)).bind (fun p => (lex f true p.2).map (p.1 ++ ·))
+    else if bol && rateTable (c :: r) then none
     else lex f (c == '\n') r
 
 /-! ## Reading back the pieces -/
@@ -1256,7 +1272,7 @@ def Inert : Bool → List Char → List Char → Prop
   | bol, c :: p, t =>
     (bol && blockOpen (c :: p ++ t)) = false ∧ declOpen (c :: p ++ t) = false ∧
       (bol && pre tableOpen (c :: p ++ t)) = false ∧ (bol && contOpen (c :: p ++ t)) = false ∧
-      Inert (c == '\n') p t
+      (bol && rateTable (c :: p ++ t)) = false ∧ Inert (c == '\n') p t
 
 /-- A document body whose constructs read back: each construct's content is spellable,
 block constructs start a line, labels are labels, and prose is inert. -/
@@ -1272,11 +1288,11 @@ def Valid : Bool → List Seg → Prop
 theorem lex_prose : ∀ (p t : List Char) (bol : Bool), Inert bol p t →
     ∀ f, p.length + t.length < f → lex f bol (p ++ t) = lex (f - p.length) (endBol bol p) t
   | [], t, bol, _, f, _ => by simp [endBol]
-  | c :: p, t, bol, ⟨h1, h2, h4, h5, h3⟩, f, hf => by
+  | c :: p, t, bol, ⟨h1, h2, h4, h5, h6, h3⟩, f, hf => by
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp at hf; omega⟩
     simp only [List.cons_append, lex]
-    simp only [List.cons_append] at h1 h2 h4 h5
-    rw [h1, h2, h4, h5]
+    simp only [List.cons_append] at h1 h2 h4 h5 h6
+    rw [h1, h2, h4, h5, h6]
     simp only [Bool.false_eq_true, ite_false]
     rw [lex_prose p t _ h3 g (by simp at hf; omega), endBol_cons]
     congr 1

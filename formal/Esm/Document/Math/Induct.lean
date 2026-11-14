@@ -82,8 +82,8 @@ theorem M_all (c : Ctx) : ∀ n e, sizeOf e < n → isE e = true → M c e
       exact M_faq c kvs F hF hok P hP hpr (fun x hx => IH x (faqSubs_lt hF hx) (faqSubs_isE hok x hx))
     | tpos m bs ps hm hsb hb hps hpr =>
       exact M_tpos c m bs ps hm hsb (fun kv hkv => IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) hps hpr
-    | tnamed m bs hm hb hps hne hk hkn hpr =>
-      exact M_tnamed c m bs hm (fun kv hkv => IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) hne hk hpr
+    | tnamed m bs hm hks hb hps hne hk hkn hpr =>
+      exact M_tnamed c m bs hm hks (fun kv hkv => IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) hne hk hpr
     | openop kvs o as hop hargs hsk hx hf hcore hopn htp hkey hsz hszf hpr =>
       obtain ⟨o', hop', -, hrem, -⟩ := isE_op he
       rw [hop] at hop'; cases hop'

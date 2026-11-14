@@ -207,11 +207,12 @@ theorem render_append (a b : List Seg) : render (a ++ b) = render a ++ render b 
   simp [render]
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
-  refine ⟨?_, ?_, ?_, ?_, trivial⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, trivial⟩
   · simp [blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, dTmpl, dRuleC, pre]
   · simp [declOpen, pre]
   · simp [tableOpen, pre]
   · simp [contOpen, dInit_l, dCons_l, pre]
+  · simp [rateTable, pre]
 
 theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true) →
     ∀ bol, Valid bol (canonSegs its)

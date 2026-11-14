@@ -523,7 +523,7 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
         (allOK_map _ ps (fun p _ => allOK_lookup bs (fun v => (pr c v).at .latex 4)
           (fun kv hkv => POK_toks (IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) 4) p))
       rw [hpr]; simp only [mkOut]; constructor <;> aok
-    | tnamed m bs hm hb hps hne hk hkn hpr =>
+    | tnamed m bs hm _ hb hps hne hk hkn hpr =>
       simp only [hc] at hpr
       have hS := allOK_callToks [.opn m] (allOK_cons.2 ⟨trivial, allOK_nil⟩) _
         (allOK_map (fun kv => nameToks c kv.1 ++ .kw .eq :: (pr c kv.2).at .latex 4) bs (fun kv hkv => by

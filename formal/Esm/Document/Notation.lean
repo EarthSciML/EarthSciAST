@@ -441,8 +441,11 @@ and aligned blocks, continuation rows and row breaks nested in a delimiter in
 `Esm.Document.Source.MultiLine` (`cookRows_layout`; `ckMd_aligned` in
 `Esm.Document.Source.MarkdownDoc` for a Markdown `aligned` display); the reaction rows in
 `Esm.Document.Source.Reaction` (`pTerm_coef`, `pSpecies_math`), and the container row in
-`Esm.Document.Source.Markdown` (`contBody_many`). Each gets a Phase 4 fixture. `rejected`
-rows pin spellings the parser refuses. -/
+`Esm.Document.Source.Markdown` (`contBody_many`). Unquoted `upright(e)` lexes to the token of
+`upright("e")` (`variant_upright_e`); named template arguments in any order read sorted
+(`variant_named_args`); a native operator in the call form reads as its native node
+(`variant_native_call`). Each gets a Phase 4 fixture. `rejected` rows pin spellings the
+parser refuses (the reaction table: `rateTable` in `Esm.Document.Source.Markdown`). -/
 
 inductive Surface where
   | latex
@@ -466,7 +469,7 @@ def variants : List Variant := [
     readsAs := r"D(N, wrt t) only when no variable d is declared, neither dN nor dt written as one word is itself a declared name, and the fraction is exactly d<name> over d<name>; otherwise the fraction reads as written: with d declared, the quotient (d N)/(d t), which is what the printer means by that text; with dN and dt declared, the quotient of those names (a declared whole word wins, as for any word); with only one of them declared, the other word is unknown and the input is refused" },
   { spelling := "(d N)/(d t) with an italic d", surface := .typst,
     readsAs := "D(N, wrt t) under the same conditions as the LaTeX row; otherwise the quotient" },
-  { spelling := r#"\mathrm{e}^{x}, upright(e)^x"#, surface := .both, readsAs := "exp(x), always" },
+  { spelling := r#"\mathrm{e}^{x}, upright(e)^x, upright("e")^x"#, surface := .both, readsAs := "exp(x), always" },
   { spelling := "e^{x}, e^x with an italic e", surface := .both,
     readsAs := "exp(x) only when no variable e is declared (a bare undeclared e is otherwise an error, so this changes the reading of no valid document); with e declared, the variable e raised to x" },
   { spelling := r"\log", surface := .latex, readsAs := r"log, the same as \ln" },
@@ -486,9 +489,12 @@ def variants : List Variant := [
   { spelling := "[i, j] directly after an operand (a name, a closing ) or ]), in any position",
     surface := .both,
     readsAs := r"index, never a product: k [A + B] is index(k, A + B); the faq output form \left[ … \right]_{i \in S} is a whole term, so x \left[ … \right]_{i \in S} is a product" },
-  { spelling := r#"\mathit{name}, italic("name") for any declared name"#, surface := .both,
+  { spelling := r#"\mathit{name}, italic("name") for any name"#, surface := .both,
     readsAs := "that name (the explicit name shape); bare juxtaposition that could be one name or a product of several is rejected" },
-  { spelling := "named template arguments", surface := .both, readsAs := "apply_expression_template" },
+  { spelling := "named template arguments, in any order", surface := .both,
+    readsAs := "apply_expression_template, the bindings sorted (two arguments with one name are refused)" },
+  { spelling := r#"a native operator in the call form: \operatorname{exp}(x), op("exp")(x)"#, surface := .both,
+    readsAs := "the native node, exp(x)" },
   { spelling := "per-model declarations table", surface := .markdown, readsAs := "the declarations" },
   { spelling := ":::initialization or :::constraints holding several displays, blank lines between",
     surface := .markdown, readsAs := "consecutive initialization equations or constraints" },
@@ -506,14 +512,17 @@ def variants : List Variant := [
     readsAs := "never split an equation; only top-level breaks count" },
   { spelling := "a continuation row starting with its own = (&= …)", surface := .both,
     readsAs := "an equation has one top-level =", rejected := true },
-  { spelling := "reaction table with a rate column", surface := .markdown,
-    readsAs := "not a reaction notation", rejected := true }
+  { spelling := "reaction table with a rate column (a table row with a cell rate at the start of a line)",
+    surface := .markdown, readsAs := "not a reaction notation; refused, never skipped as prose",
+    rejected := true }
 ]
 
 /-! ## Canonical-form spelling rules
 
 Redundant spellings the canonical form merges (landing with the canonical unit spelling).
-Each rule gets a Lean proof that it preserves meaning. -/
+Each rule gets a Lean proof that it preserves meaning. `esm-lean canon` applies the `neg`
+and `pow` rules and respells every `units` and `default_units` string (`Esm.Units.canon`,
+under which `""`, `"1"` and `"dimensionless"` are all `"1"`). -/
 
 structure SpellingRule where
   from_ : String

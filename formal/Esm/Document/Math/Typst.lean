@@ -64,8 +64,13 @@ def pieceChars (p : String × String) : List Char :=
   "upright(".toList ++ Strings.quote true p.1 ++ [')'] ++
     (if p.2 = "" then [] else '_' :: p.2.toList)
 
+/-- The dimensionless unit `1` after `thin`: an upright `1`, so `3 thin upright("1")`
+does not read as the product `3 1`. -/
+def dimlessT : List Char := "upright(\"1\")".toList
+
 def unitChars (l : List Esm.Units.Factor) : List Char :=
-  "thin ".toList ++ Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep l
+  "thin ".toList ++
+    (if l = [] then dimlessT else Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep l)
 
 def tokChars : Tok → List Char
   | .num n => numChars n
@@ -137,8 +142,9 @@ def pretty (p : Option Tok) (t1 t2 : Tok) : Bool :=
   ((t1 matches .kw .minus) && (match p with | some q => atomEnd q | none => false)) ||
   (atomEnd t1 && atomStart t2) || ((t2 matches .units _))
 
+/-- No space before a call parenthesis, nor before the `[` of an index (`k[1]`). -/
 def sp (p : Option Tok) (t1 t2 : Tok) : Bool :=
-  needSpace t1 t2 || (pretty p t1 t2 && !(t2 matches .kw .lp))
+  needSpace t1 t2 || (pretty p t1 t2 && !(t2 matches .kw .lp) && !((t2 matches .kw .lbk) && atomEnd t1))
 
 def renderAux : Option Tok → List Tok → List Char
   | _, [] => []
@@ -223,22 +229,34 @@ def punct : Char → Option Kw
   | '.' => some .sdot | '\\' => some .nl
   | _ => none
 
+/-- `upright(e)`, Euler's number written without quotes (an accepted variant, read as
+`upright("e")`; the printer always quotes). -/
+def uprightE : List Char → Option (Tok × List Char)
+  | '(' :: 'e' :: ')' :: r => some (.ups [("e", "")], r)
+  | _ => none
+
 /-- One identifier-started token. -/
 def lexIdent (cs : List Char) : Option (Tok × List Char) :=
   let p := idRun cs
   let w := String.ofList p.1
   if w = "upright" then
-    match pieces cs.length cs with
-    | ([], _) => none
-    | (ps, r) => some (.ups ps, r)
+    match uprightE p.2 with
+    | some q => some q
+    | none =>
+      match pieces cs.length cs with
+      | ([], _) => none
+      | (ps, r) => some (.ups ps, r)
   else if w = "italic" then (quotedArg p.2).map fun q => (.it q.1, q.2)
   else if w = "op" then (quotedArg p.2).map fun q => (.opn q.1, q.2)
   else if w = "thin" then
     match p.2 with
     | ' ' :: r =>
-      match Esm.Units.pSepBy Esm.Units.pTFactor Esm.Units.thinSep r.length r with
-      | some (l, r') => some (.units l, r')
-      | none => none
+      match dropP dimlessT r with
+      | some r' => some (.units [], r')
+      | none =>
+        match Esm.Units.pSepBy Esm.Units.pTFactor Esm.Units.thinSep r.length r with
+        | some (l, r') => some (.units l, r')
+        | none => none
     | _ => none
   else if w = "esm" then (dropP ".node".toList p.2).map (.kw .esmnode, ·)
   else

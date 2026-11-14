@@ -266,14 +266,16 @@ theorem variant_slash (c : Ctx) (hc : c.sf = .latex) (a b : Json) (ha : M c a) (
     rfl
   · rename_i h; exact absurd hc h
 
-/-- Named template arguments read as the template application even when the symbol table
-knows the template's parameters (the printer then writes them positionally). -/
+/-- Named template arguments read as the template application, in any order (distinct
+names; the bindings are sorted to the printed order), and even when the symbol table knows
+the template's parameters (the printer then writes them positionally). -/
 theorem variant_named_args (c : Ctx) (n : String) (bs : List (String × Json))
     (hn : tnameOK n = true) (hM : ∀ kv ∈ bs, M c kv.2) (hne : bs ≠ [])
-    (hk : ∀ kv ∈ bs, nameOK kv.1 = true) (rest : List Tok) (f : Nat)
+    (hk : ∀ kv ∈ bs, nameOK kv.1 = true) (hnd : (bs.map Prod.fst).Nodup) (rest : List Tok) (f : Nat)
     (hf : need 10 (callToks c.sf [.opn n] (bs.map (itemToks c))).length ≤ f) :
-    pPrim c f (callToks c.sf [.opn n] (bs.map (itemToks c)) ++ rest) = some (tNode n bs, rest) :=
-  pPrim_named c n bs hn hM hne hk rest f hf
+    pPrim c f (callToks c.sf [.opn n] (bs.map (itemToks c)) ++ rest) =
+      some (tNode n (sortKV bs), rest) :=
+  pPrim_named c n bs hn hM hne hk hnd rest f hf
 
 /-- An italic `e^{x}` (LaTeX) reads as `\exp(x)` when no variable `e` is declared. -/
 theorem variant_euler_italic (c : Ctx) (hc : c.sf = .latex) (he : c.S.names.contains "e" = false)
@@ -288,7 +290,14 @@ theorem variant_euler_italic (c : Ctx) (hc : c.sf = .latex) (he : c.S.names.cont
   rw [hc] at hp
   rw [hp]
 
-/-- Typst `upright(e)^x` reads as `exp(x)`, always. -/
+/-- `upright(e)`, unquoted, lexes to the token of `upright("e")`. -/
+theorem variant_upright_e (r : List Char) :
+    Typst.lexIdent ("upright(e)".toList ++ r) = some (.ups [("e", "")], r) := by
+  unfold Typst.lexIdent
+  simp [Typst.idRun, Typst.isIdC, isLetter, isDig, Typst.uprightE]
+
+/-- Typst `upright(e)^x` and `upright("e")^x` read as `exp(x)`, always (both lex to the
+token `.ups [("e", "")]`, `variant_upright_e`). -/
 theorem variant_euler_typst (c : Ctx) (hc : c.sf = .typst) (a : Json) (ha : M c a) (rest : List Tok) (f : Nat)
     (hf : need 1 ((pr c a).at c.sf 1).length ≤ f) :
     pPrim c (f + 3) (.ups [("e", "")] :: .kw .caret :: .kw .lpg :: ((pr c a).at c.sf 1 ++ .kw .rp :: rest)) =
@@ -356,5 +365,25 @@ theorem refuse_removed_esc (c : Ctx) (o : String) (hn : removedOps.contains o = 
   split
   · split <;> simp [hn']
   · rfl
+
+theorem allPos_pos : ∀ xs : List Json, allPos (xs.map CallArg.pos) = some xs
+  | [] => rfl
+  | x :: xs => by simp [allPos, allPos_pos xs]
+
+/-- A native operator written in the call form, `\operatorname{exp}(x)` or `op("exp")(x)`,
+reads as the native node `exp(x)`: an operator name that is not a call-tier, deprecated,
+removed or template name reads as the node it names. -/
+theorem variant_native_call (c : Ctx) (n : String) (hcall : callOps.contains n = false)
+    (hneg : n ≠ "neg") (hpow : n ≠ "pow") (hD : n ≠ "D") (hrem : removedOps.contains n = false)
+    (ht : tparams c.S n = none) (f : Nat) (r : List Tok) (x : Json) (xs : List Json) (r' : List Tok)
+    (ha : pCallArgs c f r = some ((x :: xs).map CallArg.pos, .kw .rp :: r')) :
+    pOpn c (f + 1) n (.kw .lp :: r) = some (node n (x :: xs), r') := by
+  have hc' : n ∉ callOps := by simpa using hcall
+  have hr' : n ∉ removedOps := by simpa using hrem
+  have hlt : ("args" : String) < "op" := by decide
+  rw [pOpn.eq_def]
+  have hap := allPos_pos (x :: xs)
+  simp only [List.map_cons] at ha hap
+  simp [isLp, ha, hc', hr', hneg, hpow, hD, ht, hap, allNamed, mkNode, node, insKV, hlt]
 
 end Esm.Document.Math

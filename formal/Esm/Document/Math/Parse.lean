@@ -692,7 +692,8 @@ def pOpn (c : Ctx) : Nat → String → List Tok → Option (Json × List Tok)
           match tparams c.S n, allPos args, allNamed args with
           | some ps, some vs, _ =>
             if ps.length = vs.length then some (tNode n (sortKV (ps.zip vs)), r') else none
-          | _, _, some (b :: bs) => some (tNode n (b :: bs), r')
+          | _, _, some (b :: bs) =>
+            if ((b :: bs).map Prod.fst).Nodup then some (tNode n (sortKV (b :: bs)), r') else none
           | none, some vs, _ => some (mkNode n vs [], r')
           | _, _, _ => none
       | some (args, .kw .semi :: r1) =>
