@@ -925,6 +925,11 @@ and a string that does not parse is left unchanged. So
 `{op:"const", args:[], value:0.44704, units:"m h/(mi s)"}` canonicalizes to the
 same node as one with `units:"m*h/(mi*s)"`, both carrying `units:"h*m/(mi*s)"`.
 
+A `const` whose units spell `1` (`""`, `"1"`, `"dimensionless"`) drops them
+(ruling of 2026-11-14): a scalar one canonicalizes to the bare literal
+(`{op:"const", args:[], value:0, units:"dimensionless"}` is `0`, which §5.4.4
+then eliminates from a sum), and an array one to a `const` without `units`.
+
 The respelling happens in `canonicalize`, before the §5.4.2 ordering, so the
 serialization a `+`/`*` parent sorts by already carries the canonical spelling.
 This is the expression half of a document-level rule: the canonical form of a

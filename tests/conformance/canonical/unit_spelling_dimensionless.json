@@ -1,0 +1,75 @@
+{
+  "id": "unit_spelling_dimensionless",
+  "description": "A const node whose units spell '1' ('', '1' or 'dimensionless') drops them (esm-spec §4.8.2, discretization RFC §5.4.10, user ruling 2026-11-14): a scalar becomes the bare literal and is then canonicalized like one, so x + const(0, 'dimensionless') is x and const(1, 'dimensionless') * x is x; an array becomes a const without units.",
+  "input": {
+    "op": "max",
+    "args": [
+      {
+        "op": "+",
+        "args": [
+          "x",
+          {
+            "op": "const",
+            "args": [],
+            "value": 0,
+            "units": "dimensionless"
+          }
+        ]
+      },
+      {
+        "op": "*",
+        "args": [
+          {
+            "op": "const",
+            "args": [],
+            "value": 2.5,
+            "units": "1"
+          },
+          "y"
+        ]
+      },
+      {
+        "op": "const",
+        "args": [],
+        "value": 1.5,
+        "units": ""
+      },
+      {
+        "op": "*",
+        "args": [
+          {
+            "op": "const",
+            "args": [],
+            "value": 1,
+            "units": "dimensionless"
+          },
+          "x"
+        ]
+      },
+      {
+        "op": "const",
+        "args": [],
+        "value": 0,
+        "units": "dimensionless"
+      },
+      {
+        "op": "const",
+        "args": [],
+        "value": [
+          1.5,
+          2.5
+        ],
+        "units": "dimensionless"
+      }
+    ]
+  },
+  "expected": "{\"args\":[\"x\",{\"args\":[2.5,\"y\"],\"op\":\"*\"},1.5,\"x\",0,{\"args\":[],\"op\":\"const\",\"value\":[1.5,2.5]}],\"op\":\"max\"}",
+  "tags": [
+    "supported",
+    "const",
+    "units",
+    "unit_spelling",
+    "zero_elim",
+    "integer"
+  ]
+}

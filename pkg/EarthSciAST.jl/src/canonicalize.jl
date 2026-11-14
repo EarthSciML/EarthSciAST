@@ -93,6 +93,14 @@ function _canonicalize_shallow(work::OpExpr)
         # (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
         units = _canonical_units(work.units::String)
         units == work.units || (work = reconstruct(work; units = units))
+        if work.op == "const" && units == "1"
+            # A dimensionless const drops its units (user ruling 2026-11-14):
+            # a scalar becomes the bare literal, an array a unitless const.
+            v = work.value
+            v isa Integer && !(v isa Bool) && return IntExpr(Int64(v))
+            v isa AbstractFloat && return canonicalize(NumExpr(Float64(v)))
+            work = reconstruct(work; units = nothing)
+        end
     end
     if work.op == "+"
         return _canon_add(work)
@@ -626,17 +634,39 @@ That is every `units` and `default_units` string of a variable, species,
 parameter, coordinate or `const` node, wherever it sits: nested subsystems,
 template bodies, tests, coupling entries. Free-form objects (`metadata`,
 `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither are
-the keys of name-keyed maps. The input is not mutated and nothing else changes.
+the keys of name-keyed maps. A `const` node whose units spell `1` loses them: a
+scalar one becomes the bare literal, an array one a `const` without `units`.
+The input is not mutated and nothing else changes.
 """
 canonicalize_document(doc::AbstractDict) = _canonicalize_document_value(doc, false)
+
+# A field of a decoded JSON object, whose keys are Strings (Dict) or Symbols
+# (JSON3.Object).
+function _document_field(d::AbstractDict, key::String)
+    for k in keys(d)
+        String(k) == key && return d[k]
+    end
+    return nothing
+end
 
 function _canonicalize_document_value(value, is_map::Bool)
     if value isa AbstractVector
         return Any[_canonicalize_document_value(v, false) for v in value]
     elseif value isa AbstractDict
+        units = _document_field(value, "units")
+        op = _document_field(value, "op")
+        drop_units = false
+        if !is_map && op == "const" && units isa AbstractString && _canonical_units(units) == "1"
+            # A dimensionless const drops its units: a scalar becomes the bare
+            # literal, an array a unitless const.
+            literal = _document_field(value, "value")
+            literal isa Real && !(literal isa Bool) && return literal
+            drop_units = true
+        end
         out = Dict{String, Any}()
         for (k, v) in pairs(value)
             key = String(k)
+            (drop_units && key == "units") && continue
             out[key] = if is_map
                 _canonicalize_document_value(v, false)
             elseif (key == "units" || key == "default_units") && v isa AbstractString

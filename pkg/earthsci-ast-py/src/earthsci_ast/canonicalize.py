@@ -116,6 +116,13 @@ def _canon_op(node: ExprNode) -> Expr:
         from .units import canonical_unit_spelling
 
         work = replace(work, units=canonical_unit_spelling(work.units))
+        if work.op == "const" and work.units == "1":
+            # A dimensionless const drops its units (user ruling 2026-11-14):
+            # a scalar becomes the bare literal, an array a unitless const.
+            value = work.value
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return canonicalize(value)
+            work = replace(work, units=None)
     if work.op == "+":
         return _canon_add(work)
     if work.op == "*":
@@ -554,7 +561,9 @@ def canonicalize_document(doc: Any) -> Any:
     nested subsystems, template bodies, tests, coupling entries. Free-form
     objects (``metadata``, ``x_esd``, ``attrs``, ``config``,
     ``reader_options``) are not touched, and neither are the keys of
-    name-keyed maps. The input is not mutated; nothing else changes.
+    name-keyed maps. A ``const`` node whose units spell ``1`` loses them: a
+    scalar one becomes the bare literal, an array one a ``const`` without
+    ``units``. The input is not mutated; nothing else changes.
     """
     from .units import canonical_unit_spelling
 
@@ -565,6 +574,15 @@ def canonicalize_document(doc: Any) -> Any:
             return value
         if is_map:
             return {k: walk(v) for k, v in value.items()}
+        units = value.get("units")
+        if value.get("op") == "const" and isinstance(units, str):
+            if canonical_unit_spelling(units) == "1":
+                # A dimensionless const drops its units: a scalar becomes the
+                # bare literal, an array a unitless const.
+                literal = value.get("value")
+                if isinstance(literal, (int, float)) and not isinstance(literal, bool):
+                    return literal
+                value = {k: v for k, v in value.items() if k != "units"}
         out = {}
         for k, v in value.items():
             if k in _DOCUMENT_UNIT_KEYS and isinstance(v, str):

@@ -257,6 +257,19 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if let Some(units) = work.units.as_mut() {
         *units = crate::units::canonical_unit_spelling(units);
     }
+    if work.op == "const" && work.units.as_deref() == Some("1") {
+        // A dimensionless const drops its units (user ruling 2026-11-14): a
+        // scalar becomes the bare literal, an array a unitless const.
+        match &work.value {
+            Some(serde_json::Value::Number(n)) if n.is_i64() => {
+                return Ok(Expr::Integer(n.as_i64().unwrap_or_default()));
+            }
+            Some(serde_json::Value::Number(n)) if n.as_f64().is_some() => {
+                return canonicalize(&Expr::Number(n.as_f64().unwrap_or_default()));
+            }
+            _ => work.units = None,
+        }
+    }
     match work.op.as_str() {
         "+" => canon_add(&mut work),
         "*" => canon_mul(&mut work),
@@ -861,13 +874,30 @@ const DOCUMENT_FREE_KEYS: &[&str] = &["attrs", "config", "metadata", "reader_opt
 /// parameter, coordinate or `const` node, wherever it sits: nested subsystems,
 /// template bodies, tests, coupling entries. Free-form objects (`metadata`,
 /// `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither
-/// are the keys of name-keyed maps. Nothing else changes.
+/// are the keys of name-keyed maps. A `const` node whose units spell `1` loses
+/// them: a scalar one becomes the bare literal, an array one a `const` without
+/// `units`. Nothing else changes.
 #[must_use]
 pub fn canonicalize_document(doc: &serde_json::Value) -> serde_json::Value {
     fn walk(value: &serde_json::Value, is_map: bool) -> serde_json::Value {
         use serde_json::Value;
         match value {
             Value::Array(items) => Value::Array(items.iter().map(|v| walk(v, false)).collect()),
+            Value::Object(obj) if !is_map && is_dimensionless_const(obj) => {
+                // A dimensionless const drops its units: a scalar becomes the
+                // bare literal, an array a unitless const.
+                match obj.get("value") {
+                    Some(n @ Value::Number(_)) => n.clone(),
+                    _ => Value::Object(
+                        obj.iter()
+                            .filter(|(k, _)| k.as_str() != "units")
+                            .map(|(k, v)| {
+                                (k.clone(), walk(v, DOCUMENT_MAP_KEYS.contains(&k.as_str())))
+                            })
+                            .collect(),
+                    ),
+                }
+            }
             Value::Object(obj) => Value::Object(
                 obj.iter()
                     .map(|(k, v)| {
@@ -885,6 +915,13 @@ pub fn canonicalize_document(doc: &serde_json::Value) -> serde_json::Value {
             ),
             other => other.clone(),
         }
+    }
+    fn is_dimensionless_const(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+        obj.get("op").and_then(|v| v.as_str()) == Some("const")
+            && obj
+                .get("units")
+                .and_then(|v| v.as_str())
+                .is_some_and(|u| crate::units::canonical_unit_spelling(u) == "1")
     }
     walk(doc, false)
 }

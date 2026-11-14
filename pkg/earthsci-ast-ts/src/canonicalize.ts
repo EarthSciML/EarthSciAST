@@ -185,6 +185,14 @@ function canonOp(node: Node): Expr {
     // A `const` node's declared units take the canonical unit spelling
     // (esm-spec §4.8.2), so two spellings of one unit canonicalize alike.
     work.units = canonicalUnitSpelling(work.units)
+    if (work.op === 'const' && work.units === '1') {
+      // A dimensionless const drops its units (user ruling 2026-11-14): a
+      // scalar becomes the bare literal, an array a unitless const.
+      if (typeof work.value === 'number' || isNumericLiteral(work.value)) {
+        return canonicalize(work.value as Expr)
+      }
+      delete work.units
+    }
   }
   switch (work.op) {
     case '+':
@@ -568,15 +576,30 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
  * parameter, coordinate or `const` node, wherever it sits: nested subsystems,
  * template bodies, tests, coupling entries. Free-form objects (`metadata`,
  * `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither
- * are the keys of name-keyed maps. Takes the decoded JSON document (an
- * `EsmFile` is one); the input is not mutated and nothing else changes.
+ * are the keys of name-keyed maps. A `const` node whose units spell `1` loses
+ * them: a scalar one becomes the bare literal, an array one a `const` without
+ * `units`. Takes the decoded JSON document (an `EsmFile` is one); the input is
+ * not mutated and nothing else changes.
  */
 export function canonicalizeDocument<T>(doc: T): T {
   const walk = (value: unknown, isMap: boolean): unknown => {
     if (Array.isArray(value)) return value.map((v) => walk(v, false))
     if (!isPlainObject(value)) return value
+    let dropUnits = false
+    if (
+      !isMap &&
+      value.op === 'const' &&
+      typeof value.units === 'string' &&
+      canonicalUnitSpelling(value.units) === '1'
+    ) {
+      // A dimensionless const drops its units: a scalar becomes the bare
+      // literal, an array a unitless const.
+      if (typeof value.value === 'number' || isNumericLiteral(value.value)) return value.value
+      dropUnits = true
+    }
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(value)) {
+      if (dropUnits && k === 'units') continue
       if (isMap) out[k] = walk(v, false)
       else if (DOCUMENT_UNIT_KEYS.has(k) && typeof v === 'string') out[k] = canonicalUnitSpelling(v)
       else if (DOCUMENT_FREE_KEYS.has(k)) out[k] = v

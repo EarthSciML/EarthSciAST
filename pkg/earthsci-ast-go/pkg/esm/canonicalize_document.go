@@ -1,5 +1,7 @@
 package esm
 
+import "encoding/json"
+
 // The document-level canonical step (esm-spec §4.8.2 "Canonical spelling").
 
 // documentMapKeys are the object properties whose value is a NAME-KEYED map
@@ -33,8 +35,9 @@ var documentFreeKeys = map[string]bool{
 // parameter, coordinate or `const` node, wherever it sits: nested subsystems,
 // template bodies, tests, coupling entries. Free-form objects (`metadata`,
 // `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither
-// are the keys of name-keyed maps. The input is not mutated and nothing else
-// changes.
+// are the keys of name-keyed maps. A `const` node whose units spell `1` loses
+// them: a scalar one becomes the bare literal, an array one a `const` without
+// `units`. The input is not mutated and nothing else changes.
 func CanonicalizeDocument(doc any) any {
 	return canonicalizeDocumentValue(doc, false)
 }
@@ -48,8 +51,21 @@ func canonicalizeDocumentValue(value any, isMap bool) any {
 		}
 		return out
 	case map[string]any:
+		dropUnits := false
+		if units, ok := v["units"].(string); ok && !isMap && v["op"] == "const" && canonicalUnitSpelling(units) == "1" {
+			// A dimensionless const drops its units: a scalar becomes the bare
+			// literal, an array a unitless const.
+			switch v["value"].(type) {
+			case float64, json.Number, int, int64:
+				return v["value"]
+			}
+			dropUnits = true
+		}
 		out := make(map[string]any, len(v))
 		for k, item := range v {
+			if dropUnits && k == "units" {
+				continue
+			}
 			s, isString := item.(string)
 			switch {
 			case isMap:
