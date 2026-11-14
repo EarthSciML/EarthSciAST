@@ -116,7 +116,14 @@ func canonOp(node ExprNode) (Expression, error) {
 	case "/":
 		return canonDiv(work)
 	case "neg":
+		// Deprecated spelling of unary `-` (esm-spec §4.2 "Deprecated ops").
 		return canonNeg(work)
+	case "pow":
+		// Deprecated spelling of `^` (esm-spec §4.2 "Deprecated ops").
+		if len(work.Args) == 2 {
+			work.Op = "^"
+		}
+		return work, nil
 	default:
 		return work, nil
 	}
@@ -213,17 +220,16 @@ func allFloatLiterals(args []any) bool {
 }
 
 // canonSub: kept as distinct op, preserve arg order, apply identity rules.
-// Convert {-, 0, x} to {neg, x} when x is not a literal.
+// Convert {-, 0, x} to the unary {-, x} when x is not a literal.
 func canonSub(node ExprNode) (Expression, error) {
 	if len(node.Args) == 1 {
-		// Unary form is typically spelled `neg` on the wire, but tolerate.
-		return canonNeg(ExprNode{Op: "neg", Args: node.Args})
+		return canonNeg(node)
 	}
 	if len(node.Args) == 2 {
 		a, b := node.Args[0], node.Args[1]
-		// -(0, x) -> neg(x) (with type-preserving: -(0, x_literal) folds to negated literal)
+		// -(0, x) -> -(x) (with type-preserving: -(0, x_literal) folds to negated literal)
 		if exprIsZeroAny(a) {
-			return canonNeg(ExprNode{Op: "neg", Args: []any{b}})
+			return canonNeg(ExprNode{Op: "-", Args: []any{b}})
 		}
 		// -(x, 0) -> x, type-preserving: if 0 is float and x is int literal, promote.
 		if exprIsZeroAny(b) {
@@ -262,7 +268,10 @@ func canonDiv(node ExprNode) (Expression, error) {
 	return node, nil
 }
 
-// canonNeg: neg(neg(x))->x, neg(literal)->negated literal, neg(0)->0.
+// canonNeg canonicalizes a negation, spelled unary `-` or the deprecated `neg`
+// (discretization RFC §5.4.7): -(-(x))->x in either or mixed spelling,
+// -(literal)->negated literal, -(0)->0, and otherwise the unary `-` node. The
+// canonical form never contains `neg`.
 func canonNeg(node ExprNode) (Expression, error) {
 	if len(node.Args) != 1 {
 		return node, nil
@@ -274,15 +283,20 @@ func canonNeg(node ExprNode) (Expression, error) {
 	case float64:
 		return -v, nil
 	case ExprNode:
-		if v.Op == "neg" && len(v.Args) == 1 {
+		if isUnaryNegation(v) {
 			return v.Args[0], nil
 		}
 	case *ExprNode:
-		if v.Op == "neg" && len(v.Args) == 1 {
+		if isUnaryNegation(*v) {
 			return v.Args[0], nil
 		}
 	}
-	return ExprNode{Op: "neg", Args: []any{x}}, nil
+	return ExprNode{Op: "-", Args: []any{x}}, nil
+}
+
+// isUnaryNegation reports whether n negates one operand, in either spelling.
+func isUnaryNegation(n ExprNode) bool {
+	return (n.Op == "-" || n.Op == "neg") && len(n.Args) == 1
 }
 
 // flattenSameOp inlines nested same-op children.

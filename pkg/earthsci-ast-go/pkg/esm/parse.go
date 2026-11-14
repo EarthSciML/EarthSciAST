@@ -1127,8 +1127,11 @@ func declaredEsmBelow(jsonStr string, wantMajor, wantMinor int) (declared string
 //     before schema validation, which would otherwise report the removed fields
 //     first.
 //  2. The `faq` version gate: `faq` arrives at esm 1.1.0 (esm-spec §2.2.4).
+//  3. The deprecated ops `neg` and `pow` (and a `broadcast` `fn` of `neg`)
+//     are rewritten to unary `-` and `^` (rewriteDeprecatedOps, esm-spec §4.2
+//     "Deprecated ops"), with one `deprecated_op` warning for the document.
 //
-// It returns the text unchanged.
+// It returns the text, rewritten only by step 3.
 func prepareDocumentOps(jsonStr string) (string, error) {
 	removed, hasFaq := scanOps(jsonStr)
 	if err := checkRemovedConstructs(jsonStr, removed); err != nil {
@@ -1139,7 +1142,9 @@ func prepareDocumentOps(jsonStr string) (string, error) {
 			"faq_version_too_old: the `faq` op arrives at esm 1.1.0; file declares %s. "+
 				"Raise the declared version. See docs/content/rfcs/faq-node-rename.md", declared)
 	}
-	return jsonStr, nil
+	rewritten, sites := rewriteDeprecatedOps(jsonStr)
+	warnDeprecatedOps(sites)
+	return rewritten, nil
 }
 
 // raiseEsmFloorToV11 rewrites the document's declared `esm` string to 1.1.0,

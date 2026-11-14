@@ -52,6 +52,8 @@ var rewriteTargetOps = map[string]struct{}{
 // evaluable-core op must be added here.
 var evaluableCoreOps = map[string]struct{}{
 	// Arithmetic
+	// `pow` and `neg` are deprecated (esm-spec §4.2): the loader rewrites them
+	// to `^` and `-`, but they stay evaluable core for expressions built in code.
 	"+": {}, "-": {}, "*": {}, "/": {}, "^": {}, "pow": {}, "neg": {},
 	// Comparisons
 	"<": {}, "<=": {}, ">": {}, ">=": {}, "==": {}, "!=": {},

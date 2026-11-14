@@ -194,12 +194,33 @@ func TestNegCanonical(t *testing.T) {
 	if string(got) != `-5` {
 		t.Errorf("neg(5): got %s", got)
 	}
-	// -(0, x) -> neg(x)
-	s := ExprNode{Op: "-", Args: []any{int64(0), "x"}}
-	got, _ = CanonicalJSON(s)
-	want := `{"args":["x"],"op":"neg"}`
-	if string(got) != want {
-		t.Errorf("-(0,x): got %s, want %s", got, want)
+	// -(0, x), neg(x) and -(x) -> the unary -(x); the canonical form never
+	// writes the deprecated `neg` (esm-spec §4.2 "Deprecated ops").
+	want := `{"args":["x"],"op":"-"}`
+	for _, in := range []ExprNode{
+		{Op: "-", Args: []any{int64(0), "x"}},
+		{Op: "neg", Args: []any{"x"}},
+		{Op: "-", Args: []any{"x"}},
+	} {
+		got, _ = CanonicalJSON(in)
+		if string(got) != want {
+			t.Errorf("%s%v: got %s, want %s", in.Op, in.Args, got, want)
+		}
+	}
+	// Mixed-spelling double negation collapses: neg(-(x)) and -(neg(x)) -> x.
+	for _, in := range []ExprNode{
+		{Op: "neg", Args: []any{ExprNode{Op: "-", Args: []any{"x"}}}},
+		{Op: "-", Args: []any{ExprNode{Op: "neg", Args: []any{"x"}}}},
+	} {
+		got, _ = CanonicalJSON(in)
+		if string(got) != `"x"` {
+			t.Errorf("mixed double negation: got %s", got)
+		}
+	}
+	// The deprecated `pow` canonicalizes to `^`.
+	got, _ = CanonicalJSON(ExprNode{Op: "pow", Args: []any{"x", 2.5}})
+	if want := `{"args":["x",2.5],"op":"^"}`; string(got) != want {
+		t.Errorf("pow(x, 2.5): got %s, want %s", got, want)
 	}
 }
 
