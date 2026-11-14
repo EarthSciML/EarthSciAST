@@ -907,36 +907,30 @@ pub fn canonicalize_document(doc: &serde_json::Value) -> serde_json::Value {
         use serde_json::Value;
         match value {
             Value::Array(items) => Value::Array(items.iter().map(|v| walk(v, false)).collect()),
-            Value::Object(obj) if !is_map && is_dimensionless_const(obj) => {
+            Value::Object(obj) => {
                 // A dimensionless const drops its units: a scalar becomes the
                 // bare literal, an array a unitless const.
-                match obj.get("value") {
-                    Some(n @ Value::Number(_)) => n.clone(),
-                    _ => Value::Object(
-                        obj.iter()
-                            .filter(|(k, _)| k.as_str() != "units")
-                            .map(|(k, v)| {
-                                (k.clone(), walk(v, DOCUMENT_MAP_KEYS.contains(&k.as_str())))
-                            })
-                            .collect(),
-                    ),
+                let drop_units = !is_map && is_dimensionless_const(obj);
+                if drop_units && let Some(n @ Value::Number(_)) = obj.get("value") {
+                    return n.clone();
                 }
+                Value::Object(
+                    obj.iter()
+                        .filter(|(k, _)| !(drop_units && k.as_str() == "units"))
+                        .map(|(k, v)| {
+                            let out = match v {
+                                _ if is_map => walk(v, false),
+                                Value::String(u) if k == "units" || k == "default_units" => {
+                                    Value::String(crate::units::canonical_unit_spelling(u))
+                                }
+                                _ if DOCUMENT_FREE_KEYS.contains(&k.as_str()) => v.clone(),
+                                _ => walk(v, DOCUMENT_MAP_KEYS.contains(&k.as_str())),
+                            };
+                            (k.clone(), out)
+                        })
+                        .collect(),
+                )
             }
-            Value::Object(obj) => Value::Object(
-                obj.iter()
-                    .map(|(k, v)| {
-                        let out = match v {
-                            _ if is_map => walk(v, false),
-                            Value::String(u) if k == "units" || k == "default_units" => {
-                                Value::String(crate::units::canonical_unit_spelling(u))
-                            }
-                            _ if DOCUMENT_FREE_KEYS.contains(&k.as_str()) => v.clone(),
-                            _ => walk(v, DOCUMENT_MAP_KEYS.contains(&k.as_str())),
-                        };
-                        (k.clone(), out)
-                    })
-                    .collect(),
-            ),
             other => other.clone(),
         }
     }
