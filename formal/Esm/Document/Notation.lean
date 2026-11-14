@@ -43,6 +43,13 @@ namespace Esm.Document.Notation
   with node fields such as `dim` as named arguments after a semicolon.
 * `escape`: the generic node form, `\esm{op}{fields}{args}` / `esm.node("op", fields)[args]`,
   whose arguments are still ordinary math.
+
+A JSON string among a node's fields prints in LaTeX as `\text{"…"}` (decided 2026-11-13, so
+that KaTeX in strict mode renders it): printable ASCII as itself, `_`, `{`, `}` as `\_`,
+`\{`, `\}`, and every other character as `{\char NNN}` (three decimal digits below 1000,
+seven above), so no `$` or line break reaches the LaTeX. The earlier spelling, the string
+double-quoted with JSON escapes in math mode, is still read. In Typst the string is a code
+string, `#"…"`, which Typst sets whatever it holds.
 * `deprecated`: read on input with a warning, rewritten, never printed. -/
 inductive Tier where
   | native

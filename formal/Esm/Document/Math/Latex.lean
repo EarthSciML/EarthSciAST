@@ -18,8 +18,10 @@ too; `Esm.Document.Math.Surface`); a quantity's unit as `\,\mathrm{…}` right a
 number, one token; `\mathit{…}`, `\operatorname{…}` and
 `\esm{…}` hold their text with `\`, `{`, `}`, `_`, `^` escaped by a backslash;
 `\mathrm{…}` and `\text{…}` hold raw balanced text; a JSON string (inside an escape
-node's fields) is double-quoted with JSON escapes, `_` written `\_`, and `%`, `$`, `#`, `{`, `}`
-written `\uXXXX` so the text is safe inside a LaTeX argument and a Markdown math span.
+node's fields) is `\text{"…"}`, its characters spelled by `escS` (`_`, `{`, `}` with a
+backslash, any character that is not plain printable ASCII as `{\char NNN}`), so it renders in
+KaTeX's text mode and is safe inside a Markdown math span. The earlier spelling, the string
+double-quoted with JSON escapes in math mode, is still read.
 
 Accepted on input and never written: `\leq`, `\geq`, `\neq`, `\times`, `\bigl(`,
 `\bigr)`, the spacing commands `\;`, `\:`, `\!`, `\ `, `\quad`, `\qquad` and `\,` (skipped
@@ -55,6 +57,51 @@ def fixUs : List Char → List Char
   | [] => []
 
 def quoteL (s : String) : List Char := '"' :: s.toList.flatMap escCharL ++ ['"']
+
+/-- A character of a JSON string written as itself inside `\text{…}`: printable ASCII
+other than the characters TeX reads specially (`keySpecial`, `_`, `{`, `}`). -/
+def strPlain (c : Char) : Bool :=
+  decide (32 ≤ c.toNat) && decide (c.toNat ≤ 126) && !keySpecial c && c != '_' && c != '{' &&
+    c != '}'
+
+/-- Seven decimal digits. -/
+def dig7 (n : Nat) : List Char :=
+  [Esm.digitChar (n / 1000000 % 10), Esm.digitChar (n / 100000 % 10), Esm.digitChar (n / 10000 % 10),
+    Esm.digitChar (n / 1000 % 10), Esm.digitChar (n / 100 % 10), Esm.digitChar (n / 10 % 10),
+    Esm.digitChar (n % 10)]
+
+/-- The spelling of a JSON string's characters inside `\text{"…"}`: a plain character as
+itself, `_`, `{`, `}` with a backslash, and every other character as `{\char NNN}` (three
+decimal digits below 1000, seven above). Every character renders in KaTeX's text mode,
+none is `$` or a line break, and the braces balance. -/
+def escS : List Char → List Char
+  | [] => []
+  | c :: cs =>
+    (if strPlain c then [c]
+      else if c = '_' ∨ c = '{' ∨ c = '}' then ['\\', c]
+      else if c.toNat < 1000 then "{\\char".toList ++ dig3 c.toNat ++ ['}']
+      else "{\\char".toList ++ dig7 c.toNat ++ ['}']) ++ escS cs
+
+/-- Undo `escS`. -/
+def unescS : List Char → List Char
+  | '{' :: '\\' :: 'c' :: 'h' :: 'a' :: 'r' :: a :: b :: d :: '}' :: cs =>
+    Char.ofNat (100 * Number.charDigit a + 10 * Number.charDigit b + Number.charDigit d) :: unescS cs
+  | '{' :: '\\' :: 'c' :: 'h' :: 'a' :: 'r' :: a1 :: a2 :: a3 :: a4 :: a5 :: a6 :: a7 :: '}' :: cs =>
+    Char.ofNat (1000000 * Number.charDigit a1 + 100000 * Number.charDigit a2 +
+      10000 * Number.charDigit a3 + 1000 * Number.charDigit a4 + 100 * Number.charDigit a5 +
+      10 * Number.charDigit a6 + Number.charDigit a7) :: unescS cs
+  | '\\' :: c :: cs => c :: unescS cs
+  | c :: cs => c :: unescS cs
+  | [] => []
+
+/-- A JSON string in LaTeX: `\text{"…"}`, the characters spelled by `escS`. -/
+def strL (s : String) : List Char := "\\text{\"".toList ++ escS s.toList ++ ['"', '}']
+
+/-- The token of `\text{raw}`: a JSON string when the text is double-quoted, else text. -/
+def textTok (raw : List Char) : Tok :=
+  match raw with
+  | '"' :: q => if q.getLast? = some '"' then .jstr (String.ofList (unescS q.dropLast)) else .txt (String.ofList raw)
+  | _ => .txt (String.ofList raw)
 
 def timesTen : List Char := " \\times 10^{".toList
 
@@ -97,7 +144,7 @@ def tokChars : Tok → List Char
   | .rm raw => "\\mathrm{".toList ++ raw.toList ++ ['}']
   | .opn s => "\\operatorname{".toList ++ escT s.toList ++ ['}']
   | .txt s => "\\text{".toList ++ s.toList ++ ['}']
-  | .jstr s => quoteL s
+  | .jstr s => strL s
   | .esc o => "\\esm{".toList ++ escT o.toList ++ ['}']
   | .units l => "\\,\\mathrm{".toList ++ Esm.Units.latexBody l ++ ['}']
   | .kw k => kwChars k
@@ -175,7 +222,7 @@ def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
         let s := String.ofList p.1
         let u := String.ofList (unescT p.1)
         (if w = "mathit" then .it u else if w = "mathrm" then .rm s
-          else if w = "operatorname" then .opn u else if w = "text" then .txt s else .esc u, p.2)
+          else if w = "operatorname" then .opn u else if w = "text" then textTok p.1 else .esc u, p.2)
     | _ => none
   else if w = "left" ∨ w = "bigl" ∨ w = "Bigl" then
     match r with
