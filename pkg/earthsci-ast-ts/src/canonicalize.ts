@@ -597,15 +597,19 @@ export function canonicalizeDocument<T>(doc: T): T {
       if (typeof value.value === 'number' || isNumericLiteral(value.value)) return value.value
       dropUnits = true
     }
-    const out: Record<string, unknown> = {}
+    // Object.fromEntries defines each key as an own property, so a key named
+    // `__proto__` (a legal name in a name-keyed map) is kept, not turned into
+    // a prototype assignment.
+    const entries: Array<[string, unknown]> = []
     for (const [k, v] of Object.entries(value)) {
       if (dropUnits && k === 'units') continue
-      if (isMap) out[k] = walk(v, false)
-      else if (DOCUMENT_UNIT_KEYS.has(k) && typeof v === 'string') out[k] = canonicalUnitSpelling(v)
-      else if (DOCUMENT_FREE_KEYS.has(k)) out[k] = v
-      else out[k] = walk(v, DOCUMENT_MAP_KEYS.has(k))
+      if (isMap) entries.push([k, walk(v, false)])
+      else if (DOCUMENT_UNIT_KEYS.has(k) && typeof v === 'string')
+        entries.push([k, canonicalUnitSpelling(v)])
+      else if (DOCUMENT_FREE_KEYS.has(k)) entries.push([k, v])
+      else entries.push([k, walk(v, DOCUMENT_MAP_KEYS.has(k))])
     }
-    return out
+    return Object.fromEntries(entries)
   }
   return walk(doc, false) as T
 }

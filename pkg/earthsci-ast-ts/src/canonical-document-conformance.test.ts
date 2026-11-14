@@ -19,3 +19,17 @@ describe('document-level canonical form', () => {
     })
   }
 })
+
+describe('canonicalizeDocument keys', () => {
+  it('keeps a key named __proto__ as an own property', () => {
+    const doc = JSON.parse(
+      '{"variables": {"__proto__": {"units": "s*m"}, "x": {"units": "1/s"}}}',
+    ) as Record<string, unknown>
+    const out = canonicalizeDocument(doc) as { variables: Record<string, unknown> }
+    expect(Object.getPrototypeOf(out.variables)).toBe(Object.prototype)
+    expect(Object.keys(out.variables)).toEqual(['__proto__', 'x'])
+    expect(Object.getOwnPropertyDescriptor(out.variables, '__proto__')?.value).toEqual({
+      units: 'm*s',
+    })
+  })
+})
