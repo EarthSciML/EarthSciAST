@@ -78,7 +78,11 @@ CASES: list[tuple[str, str]] = [
     ("m**2", "** is ^"),
     ("mol^(1/2)*mol^(1/2)", "exponents sum within a side"),
     ("m^10/s^12", "multi-digit exponents"),
+    ("m^0.00000000000000000000000000000000000000001", "exponents are exact at any precision"),
+    ("m^(1234567890123456789012345678901234567890/2)", "integer exponents of any size"),
     ("m^0*s", "a zero exponent drops a table symbol"),
+    ("%^0*s", "a zero exponent drops %, a table key"),
+    ("%^0", "a zero exponent drops %, leaving 1"),
     # Symbols are kept as written: prefixes, aliases, unknown symbols.
     ("km/h", "prefixed symbols are not reduced"),
     ("µg/m³", "micro sign and superscript digits normalized"),
