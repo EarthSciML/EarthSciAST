@@ -7742,7 +7742,8 @@ the same document, as JSON values, for every text read.
 **Shape.** `tests/conformance/document_format/` holds six hand-picked case files
 (`operators`, `names`, `variants`, `documents`, `units`, `refusals`; the contract
 is the directory's `README.md`). A `print` case gives a canonical document with
-its Markdown and Typst texts; a `variant` case gives a hand-written spelling, the
+its Markdown and Typst texts (and, for a case about the canonical form, the document as
+written: units strings respelled, `neg` and `pow` rewritten); a `variant` case gives a hand-written spelling, the
 document it reads as and the canonical text it normalizes to; a `refusal` case
 gives input that is refused and the code reported: `removed_op` (§7.1) for an
 operator removed from the format, in the call or the escape form, and

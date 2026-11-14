@@ -69,6 +69,15 @@
     {
       "id": "upright_e_typst",
       "kind": "variant",
+      "description": "upright(e)^x reads as exp.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = upright(e)^x $\n",
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) $\n"
+    },
+    {
+      "id": "upright_e_quoted_typst",
+      "kind": "variant",
       "description": "upright(\"e\")^x reads as exp.",
       "surface": "typst",
       "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = upright(\"e\")^x $\n",
@@ -292,6 +301,42 @@
       "canonical": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(a, T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n"
     },
     {
+      "id": "named_template_args_any_order",
+      "kind": "variant",
+      "description": "Named template arguments in any order read sorted.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(\\mathit{Ea} = T, A_{\\mathrm{pre}} = a)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(a, T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n"
+    },
+    {
+      "id": "named_template_args_any_order_typst",
+      "kind": "variant",
+      "description": "Named template arguments in any order read sorted.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(italic(\"Ea\") = T, A_(upright(\"pre\")) = a) $\n\n#esm-block(\"expression_templates\", (\n  arrhenius: (\n    body: (\n      args: (\n        \"A_pre\",\n        (\n          args: (\n            (\n              args: (\n                \"Ea\",\n              ),\n              op: \"-\",\n            ),\n          ),\n          op: \"exp\",\n        ),\n      ),\n      op: \"*\",\n    ),\n    params: (\n      \"A_pre\",\n      \"Ea\",\n    ),\n  ),\n))\n",
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n#esm-block(\"expression_templates\", (\n  arrhenius: (\n    body: (\n      args: (\n        \"A_pre\",\n        (\n          args: (\n            (\n              args: (\n                \"Ea\",\n              ),\n              op: \"-\",\n            ),\n          ),\n          op: \"exp\",\n        ),\n      ),\n      op: \"*\",\n    ),\n    params: (\n      \"A_pre\",\n      \"Ea\",\n    ),\n  ),\n))\n"
+    },
+    {
+      "id": "native_call_latex",
+      "kind": "variant",
+      "description": "A native operator written in the call form reads as the native node.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{exp}(x) + \\operatorname{max}(a, x)\n$$\n",
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "exp"}, {"args": ["a", "x"], "op": "max"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\exp(x) + \\max(a, x)\n$$\n"
+    },
+    {
+      "id": "native_call_typst",
+      "kind": "variant",
+      "description": "A native operator written in the call form reads as the native node.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"exp\")(x) + op(\"max\")(a, x) $\n",
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "exp"}, {"args": ["a", "x"], "op": "max"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) + max(a, x) $\n"
+    },
+    {
       "id": "pow_neg_call",
       "kind": "variant",
       "description": "pow(x, n) and neg(x) in the call form read as ^ and unary minus.",
@@ -314,9 +359,9 @@
       "kind": "variant",
       "description": "The earlier JSON-string spelling, double-quoted in math mode.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k;\\mathrm{s} = \"a\\u007Bb\\u007D\")\n$$\n",
+      "input": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k; \\mathrm{s} = \"a\\u007Bb\\u007D\")\n$$\n",
       "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k"], "op": "myop", "s": "a{b}"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k;\\mathrm{s} = \\text{\"a\\{b\\}\"})\n$$\n"
+      "canonical": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k; \\mathrm{s} = \\text{\"a\\{b\\}\"})\n$$\n"
     },
     {
       "id": "aligned_block",

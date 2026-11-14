@@ -202,6 +202,26 @@
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = max(a, x) - min(a, b, x) $\n"
     },
     {
+      "id": "canon_neg",
+      "kind": "print",
+      "description": "The canonical form rewrites the deprecated neg to unary minus.",
+      "written": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "neg", "args": [{"op": "+", "args": ["a", "x"]}]}}]}}},
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "+"}], "op": "-"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = -\\left(a + x\\right)", "typst": "y = -(a + x)"},
+      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = -\\left(a + x\\right)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = -(a + x) $\n"
+    },
+    {
+      "id": "canon_pow",
+      "kind": "print",
+      "description": "The canonical form rewrites the deprecated pow to ^.",
+      "written": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "pow", "args": ["x", 2]}}]}}},
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", 2], "op": "^"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = x^{2}", "typst": "y = x^2"},
+      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x^{2}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x^2 $\n"
+    },
+    {
       "id": "call_tier",
       "kind": "print",
       "description": "sign, atan2, asinh, acosh and atanh print in the call form.",
@@ -413,8 +433,8 @@
       "kind": "print",
       "description": "Node fields of an open operator are named arguments after a semicolon.",
       "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "dim": "x", "op": "myop", "order": 2}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "math": {"latex": "y = \\operatorname{myop}(x;\\mathrm{dim} = x, \\mathrm{order} = 2)", "typst": "y = op(\"myop\")(x; upright(\"dim\") = x, upright(\"order\") = 2)"},
-      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(x;\\mathrm{dim} = x, \\mathrm{order} = 2)\n$$\n",
+      "math": {"latex": "y = \\operatorname{myop}(x; \\mathrm{dim} = x, \\mathrm{order} = 2)", "typst": "y = op(\"myop\")(x; upright(\"dim\") = x, upright(\"order\") = 2)"},
+      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(x; \\mathrm{dim} = x, \\mathrm{order} = 2)\n$$\n",
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"myop\")(x; upright(\"dim\") = x, upright(\"order\") = 2) $\n"
     },
     {
@@ -422,8 +442,8 @@
       "kind": "print",
       "description": "A JSON string among the fields prints as \\text{\"…\"} (Typst #\"…\").",
       "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k"], "op": "myop", "s": "a{b}_c"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "math": {"latex": "y = \\operatorname{myop}(k;\\mathrm{s} = \\text{\"a\\{b\\}\\_c\"})", "typst": "y = op(\"myop\")(k; upright(\"s\") = #\"a{b}_c\")"},
-      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k;\\mathrm{s} = \\text{\"a\\{b\\}\\_c\"})\n$$\n",
+      "math": {"latex": "y = \\operatorname{myop}(k; \\mathrm{s} = \\text{\"a\\{b\\}\\_c\"})", "typst": "y = op(\"myop\")(k; upright(\"s\") = #\"a{b}_c\")"},
+      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k; \\mathrm{s} = \\text{\"a\\{b\\}\\_c\"})\n$$\n",
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = op(\"myop\")(k; upright(\"s\") = #\"a{b}_c\") $\n"
     },
     {

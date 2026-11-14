@@ -271,11 +271,15 @@ class Gen:
             raise SystemExit(f"duplicate case id {cid}")
         self.ids.add(cid)
 
-    def printed(self, area, cid, description, doc, math=False):
-        """Both printed texts of a document, each checked to read back as the document."""
+    def printed(self, area, cid, description, doc, math=False, written=False):
+        """Both printed texts of a document, each checked to read back as the document.
+        `written`: keep the document as written too, for a case about the canonical form."""
         self._id(cid)
         esm = self.lean.canon(doc)
-        case = {"id": cid, "kind": "print", "description": description, "esm": esm}
+        case = {"id": cid, "kind": "print", "description": description}
+        if written:
+            case["written"] = doc
+        case["esm"] = esm
         texts = {}
         for s in SURFACES:
             text = self.lean.print(s, esm)
@@ -356,9 +360,9 @@ class Gen:
 def operators(g):
     a = Area("operators", "Operators, tier by tier: native, call, open, escape")
 
-    def E(cid, desc, rhs, names=None, **kw):
+    def E(cid, desc, rhs, names=None, written=False, **kw):
         names = used(rhs) if names is None else names
-        g.printed(a, cid, desc, expr_doc(rhs, names, **kw), math=True)
+        g.printed(a, cid, desc, expr_doc(rhs, names, **kw), math=True, written=written)
 
     # Native arithmetic.
     E("add_nary", "An n-ary + prints flat.", op("+", "a", "b", 1))
@@ -462,6 +466,20 @@ def operators(g):
         op("+", op("sinh", "x"), op("cosh", "x"), op("tanh", "x")),
     )
     E("min_max", "min and max.", op("-", op("max", "a", "x"), op("min", "a", "b", "x")))
+
+    # The canonical form rewrites the deprecated operators.
+    E(
+        "canon_neg",
+        "The canonical form rewrites the deprecated neg to unary minus.",
+        op("neg", op("+", "a", "x")),
+        written=True,
+    )
+    E(
+        "canon_pow",
+        "The canonical form rewrites the deprecated pow to ^.",
+        op("pow", "x", 2),
+        written=True,
+    )
 
     # The call tier.
     E(
@@ -784,7 +802,14 @@ def variants(g):
 
     ex = expr_doc(op("exp", "x"), ("x",))
     V("upright_e_latex", "\\mathrm{e}^{x} reads as exp.", ex, md, [(r"\exp(x)", r"\mathrm{e}^{x}")])
-    V("upright_e_typst", 'upright("e")^x reads as exp.', ex, typ, [("exp(x)", 'upright("e")^x')])
+    V("upright_e_typst", "upright(e)^x reads as exp.", ex, typ, [("exp(x)", "upright(e)^x")])
+    V(
+        "upright_e_quoted_typst",
+        'upright("e")^x reads as exp.',
+        ex,
+        typ,
+        [("exp(x)", 'upright("e")^x')],
+    )
     V(
         "italic_e_latex",
         "e^{x} reads as exp when no e is declared.",
@@ -933,6 +958,41 @@ def variants(g):
                 r"\operatorname{arrhenius}(A_{\mathrm{pre}} = a, \mathit{Ea} = T)",
             )
         ],
+    )
+
+    V(
+        "named_template_args_any_order",
+        "Named template arguments in any order read sorted.",
+        tdoc,
+        md,
+        [
+            (
+                r"\operatorname{arrhenius}(a, T)",
+                r"\operatorname{arrhenius}(\mathit{Ea} = T, A_{\mathrm{pre}} = a)",
+            )
+        ],
+    )
+    V(
+        "named_template_args_any_order_typst",
+        "Named template arguments in any order read sorted.",
+        tdoc,
+        typ,
+        [('op("arrhenius")(a, T)', 'op("arrhenius")(italic("Ea") = T, A_(upright("pre")) = a)')],
+    )
+    ex2 = expr_doc(op("+", op("exp", "x"), op("max", "a", "x")), ("a", "x"))
+    V(
+        "native_call_latex",
+        "A native operator written in the call form reads as the native node.",
+        ex2,
+        md,
+        [(r"\exp(x) + \max(a, x)", r"\operatorname{exp}(x) + \operatorname{max}(a, x)")],
+    )
+    V(
+        "native_call_typst",
+        "A native operator written in the call form reads as the native node.",
+        ex2,
+        typ,
+        [("exp(x) + max(a, x)", 'op("exp")(x) + op("max")(a, x)')],
     )
 
     pw = expr_doc(op("+", op("^", "x", 2), op("-", "a")), ("a", "x"))
@@ -1582,6 +1642,40 @@ def units(g):
     E("unit_number_density", "A count per volume.", op("*", "k", const(2.5e19, "molec/cm^3")))
     E("unit_small_decimal", "A small decimal with a unit.", op("+", "k", const(0.0025, "m")))
     E("unit_negative", "A negative value with a unit.", op("+", "k", const(-40, "degC")))
+
+    def C(cid, desc, rhs):
+        g.printed(a, cid, desc, expr_doc(rhs, ("k",)), math=True, written=True)
+
+    C(
+        "unit_canon_reciprocal",
+        "The canonical form respells s^-1 as 1/s.",
+        op("*", "k", const(3, "s^-1")),
+    )
+    C(
+        "unit_canon_order",
+        "The canonical form sorts the factors and keeps one /.",
+        op("*", "k", const(3, "m*kg/s/s")),
+    )
+    C(
+        "unit_canon_dimensionless",
+        "dimensionless is spelled 1, which prints as an upright 1.",
+        op("*", "k", const(3, "dimensionless")),
+    )
+    C("unit_one", "The dimensionless unit 1 prints as an upright 1.", op("*", "k", const(3, "1")))
+    g.printed(
+        a,
+        "unit_canon_declaration",
+        "A declaration's units are respelled too.",
+        document(
+            models={
+                "M": {
+                    "variables": {"rho": {"type": "parameter", "units": "kg m^-3", "default": 1.2}},
+                    "equations": [],
+                }
+            }
+        ),
+        written=True,
+    )
     g.variant(
         a,
         "unit_thin_space_spaced",
@@ -1788,6 +1882,28 @@ def refusals(g):
         md,
         "parse_error",
         [("c = 1\n$$\n:::", "c = 1\n$$")],
+    )
+    R(
+        "reaction_table",
+        "A reaction table with a rate column is refused, never skipped as prose.",
+        chem_doc([R1]),
+        md,
+        "parse_error",
+        [
+            (
+                "$$\\ce{NO + O3 ->[{$k_{\\mathrm{1}}$}] NO2}$$ {#R1}",
+                "| id | reaction | rate |\n| --- | --- | --- |\n| R1 | NO + O3 -> NO2 | $k_{\\mathrm{1}}$ |",
+            )
+        ],
+    )
+    tdup = expr_doc(tmpl("scale", f="x", n=2), ("x",))
+    R(
+        "duplicate_named_args",
+        "Two named template arguments with one name.",
+        tdup,
+        md,
+        "parse_error",
+        [(r"\operatorname{scale}(f = x, n = 2)", r"\operatorname{scale}(f = x, f = 2)")],
     )
     R(
         "unclosed_directive_typst",

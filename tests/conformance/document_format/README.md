@@ -33,7 +33,11 @@ Every file is `{"$comment", "oracle", "area", "cases": [...]}`. Each case has an
 
 **`print`** — a document and both of its printed texts.
 
-- `esm`: the document, in canonical form (CONFORMANCE §5.5.3.1).
+- `esm`: the document, in canonical form: sorted keys and canonical numbers
+  (CONFORMANCE §5.5.3.1), every `units` and `default_units` string in the canonical unit
+  spelling, and the deprecated `neg` and `pow` rewritten to unary `-` and `^`.
+- `written` (cases about the canonical form only): the document as written, before the
+  canonical form; `canonicalize(written) == esm`.
 - `markdown`, `typst`: the exact texts the printer writes for it.
 - `math` (expression cases only): `{"latex", "typst"}`, the math of the case's
   equation display, copied from the two texts for reading. It is not a separate
@@ -78,7 +82,12 @@ codes come from the specification, not from the oracle:
   operator to be rejected by name, never read as an open operator.
 - `parse_error`: everything else: an unknown word, an ambiguous juxtaposition, an
   unbalanced delimiter, a display with no `=` or two, an unclosed display,
-  container or directive, a continuation row with its own `=`. This is the code
+  container or directive, a continuation row with its own `=`, two named template
+  arguments with one name, a reaction table with a rate column.
+
+A name nothing declares is not a parse error: a bare undeclared single letter, and
+`\mathit{…}` / `italic("…")` for any name, read as that name. An undeclared reference is
+the validator's finding (`undefined_variable`), not the parser's. This is the code
   the bindings' loaders already raise for malformed input (API_SPEC error
   registry).
 

@@ -228,6 +228,22 @@
       "error": "parse_error"
     },
     {
+      "id": "reaction_table",
+      "kind": "refusal",
+      "description": "A reaction table with a rate column is refused, never skipped as prose.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::reaction-system[Chem]\n\n:species[$\\mathrm{NO}$]{default=0}\n\n:species[$\\mathrm{NO_{2}}$]{default=0}\n\n:species[$\\mathrm{O_{3}}$]{default=0}\n\n:param[$j$]{default=0.01}\n\n:param[$k_{\\mathrm{1}}$]{default=1.8e-12 units=\"1/s\"}\n\n| id | reaction | rate |\n| --- | --- | --- |\n| R1 | NO + O3 -> NO2 | $k_{\\mathrm{1}}$ |\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "duplicate_named_args",
+      "kind": "refusal",
+      "description": "Two named template arguments with one name.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{scale}(f = x, f = 2)\n$$\n",
+      "error": "parse_error"
+    },
+    {
       "id": "unclosed_directive_typst",
       "kind": "refusal",
       "description": "A declaration with no closing parenthesis.",

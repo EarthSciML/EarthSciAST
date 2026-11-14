@@ -80,9 +80,9 @@
       "kind": "print",
       "description": "With k and k_1 declared, index 1 of k prints in brackets.",
       "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k_1", {"args": ["k", 1], "op": "index"}], "op": "+"}}], "variables": {"k": {"type": "parameter"}, "k_1": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "math": {"latex": "y = k_{\\mathrm{1}} + k [1]", "typst": "y = k_(upright(\"1\")) + k [1]"},
-      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$k_{\\mathrm{1}}$]{}\n\n:var[$y$]{}\n\n$$\ny = k_{\\mathrm{1}} + k [1]\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($k_(upright(\"1\"))$)\n\n#var($y$)\n\n$ y = k_(upright(\"1\")) + k [1] $\n"
+      "math": {"latex": "y = k_{\\mathrm{1}} + k[1]", "typst": "y = k_(upright(\"1\")) + k[1]"},
+      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$k_{\\mathrm{1}}$]{}\n\n:var[$y$]{}\n\n$$\ny = k_{\\mathrm{1}} + k[1]\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($k_(upright(\"1\"))$)\n\n#var($y$)\n\n$ y = k_(upright(\"1\")) + k[1] $\n"
     },
     {
       "id": "index_no_collision",
