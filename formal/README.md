@@ -146,6 +146,11 @@ one spec file:
 }
 ```
 
+A property about the document source formats (Markdown, Typst, the math
+notation), which `formal/Esm/Document/Notation.lean` defines and the spec does not,
+names that defining file as `defined_by` instead of citing inventory clauses
+(`properties/document-formats.json`).
+
 `status` is `open`, `proven`, `refuted` (with `reproducer`: a repo path or a
 `QUESTIONS.md` anchor) or `question` (with `question`: a `QUESTIONS.md` anchor
 `Q-n`). For `proven`, the audit elaborates `example : <lean_statement> :=
