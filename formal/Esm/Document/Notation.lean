@@ -522,7 +522,9 @@ def variants : List Variant := [
 Redundant spellings the canonical form merges (landing with the canonical unit spelling).
 Each rule gets a Lean proof that it preserves meaning. `esm-lean canon` applies the `neg`
 and `pow` rules and respells every `units` and `default_units` string (`Esm.Units.canon`,
-under which `""`, `"1"` and `"dimensionless"` are all `"1"`). -/
+under which `""`, `"1"` and `"dimensionless"` are all `"1"`); a `const` node whose units
+spell `"1"` drops them, so a scalar one is the bare number (ruling 2026-11-14; a
+declaration keeps `units: "1"`). -/
 
 structure SpellingRule where
   from_ : String

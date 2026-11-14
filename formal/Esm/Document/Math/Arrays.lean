@@ -229,7 +229,7 @@ theorem M_arrU (c : Ctx) (u : String) (xs : List Json) (af : AForm) (haf : arrFo
   obtain ⟨hj, hok⟩ := arrForm_spec haf
   obtain ⟨k, r, he, hk1, hk2, hk3⟩ := arrToks_head c.sf af
   have hsp : Esm.Units.spell (factorsOf u) = u := by
-    simp only [unitsOK, Bool.and_eq_true, beq_iff_eq] at hu; exact hu.1.1
+    simp only [unitsOK, Bool.and_eq_true, beq_iff_eq] at hu; exact hu.1.1.2
   refine M_of_toks c _ 7 _ hpr (by omega) (by omega) (by omega) (by unfold addAcc; simp)
     (by rw [he]; exact hOK_kw c k _ hk1 hk2 hk3) ?_
   intro rest hr f hf

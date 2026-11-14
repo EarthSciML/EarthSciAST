@@ -35,7 +35,7 @@ def tokOK : Tok → Prop
   | .ups ps => ps ≠ [] ∧ ∀ p ∈ ps, p.2 = "" ∨ (p.2.toList ≠ [] ∧ p.2.toList.all isDig = true)
   | .txt s => s ≠ "."
   | .code j => j.WF
-  | .units l => ∀ f ∈ l, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0
+  | .units l => l ≠ [] ∧ ∀ f ∈ l, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0
   | .kw k => kwOK k = true
   | .word _ | .rm _ | .jstr _ | .esc _ => False
 
@@ -790,31 +790,6 @@ theorem pieces_read (X : List Char) (hX : ∀ c ∈ X.head?, c ≠ 'u' ∧ c ≠
 
 /-! ## One token -/
 
-/-- The dimensionless unit is not the start of a factor: a factor's symbol is not `1`. -/
-theorem dimless_clash (f : Esm.Units.Factor) (hs : Esm.Units.symOK f.1 = true) (Y : List Char) :
-    dropP dimlessT (Esm.Units.typstFactor f ++ Y) = none := by
-  obtain ⟨hne, hall⟩ := Esm.Units.symChars_of_symOK _ hs
-  have hn1 := Esm.Units.symOK_ne_one _ hs
-  obtain ⟨c, t, hct⟩ := List.exists_cons_of_ne_nil hne
-  unfold Esm.Units.typstFactor dimlessT
-  rw [hct]
-  simp only [Esm.Units.uprightOpen, Esm.Units.uprightClose, List.append_assoc]
-  by_cases h1 : c = '1'
-  · subst h1
-    cases t with
-    | nil =>
-      have h := congrArg String.ofList hct
-      rw [String.ofList_toList] at h
-      exact absurd h hn1
-    | cons d t' =>
-      have hd := hall d (by rw [hct]; simp)
-      have hd' : d ≠ '"' := by
-        rcases hd with hd | hd
-        · intro e; subst e; revert hd; decide
-        · rw [hd]; decide
-      simp [dropP, Ne.symm hd']
-  · simp [dropP, Ne.symm h1]
-
 theorem lexOne_tok (prev : Option Char) (t : Tok) (ht : tokOK t) (hl : t ≠ .kw .lp)
     (hlg : t ≠ .kw .lpg) (X : List Char) (hX : Sep t X) :
     lexOne prev (tokChars t ++ X) = some (t, X) := by
@@ -944,51 +919,35 @@ theorem lexOne_tok (prev : Option Char) (t : Tok) (ht : tokOK t) (hl : t ≠ .kw
     simp only [TypstDict.encode] at this ⊢
     rw [this]; rfl
   | units l =>
-    have hfs : ∀ f ∈ l, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0 := ht
-    cases l with
-    | nil =>
-      simp only [tokChars, unitChars, ↓reduceIte]
-      rw [show "thin ".toList ++ dimlessT ++ X = 't' :: ("hin".toList ++ (' ' :: (dimlessT ++ X))) by simp,
-        lexOne_letter _ _ _ (by decide)]
-      unfold lexIdent
-      rw [show 't' :: ("hin".toList ++ (' ' :: (dimlessT ++ X))) = "thin".toList ++ (' ' :: (dimlessT ++ X)) by simp,
-        idRun_append _ _ (by decide) (by simp; decide)]
-      simp only [String.ofList_toList]
-      rw [dropP_append]
-      simp
-    | cons f fs =>
-      have hts : Esm.Units.TStop X := by
-        refine ⟨fun r e => ?_, fun c r e => ?_⟩
-        · have := hX.1 '^' (by rw [e]; rfl); simp [merges] at this
-        · have := hX.1 c (by rw [e]; rfl)
-          show isDig c = false
-          cases hd : isDig c
-          · rfl
-          · simp [merges, hd] at this
-      have hlen := Esm.Units.length_joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs)
-        (fun g _ => by simp [Esm.Units.typstFactor, Esm.Units.uprightOpen])
-      have hp := Esm.Units.pSepBy_joinWith Esm.Units.pTFactor Esm.Units.typstFactor Esm.Units.thinSep
-        (fun g => Esm.Units.symOK g.1 = true ∧ g.2 ≠ 0) Esm.Units.TStop
-        (fun g hg rest hr => Esm.Units.pTFactor_typstFactor g hg.1 hg.2 rest hr) Esm.Units.tStop_sep fs f X
-        hfs hts (hX.2.2.1 rfl) (Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X).length
-        (by simp only [List.length_append, List.length_cons] at hlen ⊢; omega)
-      simp only [tokChars, unitChars, List.cons_ne_nil, ↓reduceIte]
-      have hcl := dimless_clash f (hfs f (by simp)).1
-        ((fs.flatMap fun g => Esm.Units.thinSep ++ Esm.Units.typstFactor g) ++ X)
-      rw [show "thin ".toList ++ Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X =
-          't' :: ("hin".toList ++ (' ' :: (Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X)))
-          by simp,
-        lexOne_letter _ _ _ (by decide)]
-      unfold lexIdent
-      rw [show 't' :: ("hin".toList ++ (' ' :: (Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X))) =
-          "thin".toList ++ (' ' :: (Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X)) by simp,
-        idRun_append _ _ (by decide) (by simp; decide)]
-      simp only [String.ofList_toList]
-      rw [show dropP dimlessT (Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X) = none by
-        simpa [Esm.Units.joinWith] using hcl]
-      simp only
-      rw [hp]
-      rfl
+    obtain ⟨hne, hfs⟩ := (show l ≠ [] ∧ ∀ f ∈ l, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0 from ht)
+    obtain ⟨f, fs, rfl⟩ := List.exists_cons_of_ne_nil hne
+    have hts : Esm.Units.TStop X := by
+      refine ⟨fun r e => ?_, fun c r e => ?_⟩
+      · have := hX.1 '^' (by rw [e]; rfl); simp [merges] at this
+      · have := hX.1 c (by rw [e]; rfl)
+        show isDig c = false
+        cases hd : isDig c
+        · rfl
+        · simp [merges, hd] at this
+    have hlen := Esm.Units.length_joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs)
+      (fun g _ => by simp [Esm.Units.typstFactor, Esm.Units.uprightOpen])
+    have hp := Esm.Units.pSepBy_joinWith Esm.Units.pTFactor Esm.Units.typstFactor Esm.Units.thinSep
+      (fun g => Esm.Units.symOK g.1 = true ∧ g.2 ≠ 0) Esm.Units.TStop
+      (fun g hg rest hr => Esm.Units.pTFactor_typstFactor g hg.1 hg.2 rest hr) Esm.Units.tStop_sep fs f X
+      hfs hts (hX.2.2.1 rfl) (Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X).length
+      (by simp only [List.length_append, List.length_cons] at hlen ⊢; omega)
+    simp only [tokChars, unitChars]
+    rw [show "thin ".toList ++ Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X =
+        't' :: ("hin".toList ++ (' ' :: (Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X)))
+        by simp,
+      lexOne_letter _ _ _ (by decide)]
+    unfold lexIdent
+    rw [show 't' :: ("hin".toList ++ (' ' :: (Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X))) =
+        "thin".toList ++ (' ' :: (Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep (f :: fs) ++ X)) by simp,
+      idRun_append _ _ (by decide) (by simp; decide)]
+    simp only [String.ofList_toList]
+    rw [hp]
+    rfl
   | kw k => exact lexOne_kw prev k ht (fun e => hl (by rw [e])) (fun e => hlg (by rw [e])) X hX.1
   | word _ => exact absurd ht id
   | rm _ => exact absurd ht id

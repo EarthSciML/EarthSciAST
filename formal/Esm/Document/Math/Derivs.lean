@@ -292,7 +292,7 @@ theorem M_qty (c : Ctx) (u : String) (n : JNum) (hu : unitsOK c.sf u = true)
       [.obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)]] := by
     unfold addAcc; simp
   have hsp : Esm.Units.spell (factorsOf u) = u := by
-    simp only [unitsOK, Bool.and_eq_true, beq_iff_eq] at hu; exact hu.1.1
+    simp only [unitsOK, Bool.and_eq_true, beq_iff_eq] at hu; exact hu.1.1.2
   have hq : qty n (factorsOf u) =
       .obj [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)] := by
     simp [qty, hsp]

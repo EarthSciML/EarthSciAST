@@ -6,7 +6,8 @@ import Esm.Document.Source.TypstDoc
 * `canon <doc.esm>`: the document in canonical form, as compact JSON: sorted keys,
   canonical numbers (CONFORMANCE §5.5.3.1), every `units` and `default_units` string in
   the canonical unit spelling (`Esm.Units.canon`, as `canonicalize_document` does), and
-  the deprecated `neg` and `pow` rewritten to unary `-` and `^`.
+  the deprecated `neg` and `pow` rewritten to unary `-` and `^`, and a `const` node in the
+  dimensionless unit without its `units` (a scalar one becomes the bare number).
 * `print-typ <doc.esm>`, `parse-typ <doc.typ>`: the same for Typst.
 * `print-md <doc.esm>`: the Markdown spelling (`Esm.Document.Source.Md.printMd`).
 * `parse-md <doc.md>`: the document a Markdown source holds, as canonical JSON; exit 1
@@ -87,6 +88,15 @@ partial def spellRules (isMap : Bool) : Json → Json
         | "default_units", .str u => (k, .str (Esm.Units.canon u))
         | _, _ => if freeKeys.contains k then (k, v) else (k, spellRules (mapKeys.contains k) v)
       match Math.look "op" kvs', Math.look "args" kvs' with
+      | some (.str "const"), some (.arr []) =>
+        -- A const in the dimensionless unit drops it: a scalar becomes a bare literal.
+        match Math.look "units" kvs' with
+        | some (.str "1") =>
+          let kvs'' := kvs'.filter (fun kv => kv.1 != "units")
+          match kvs'' with
+          | [("args", .arr []), ("op", .str "const"), ("value", .num n)] => .num n
+          | _ => .obj kvs''
+        | _ => .obj kvs'
       | some (.str o), some (.arr as) =>
         match deprecatedTo o with
         | some (o', n) =>

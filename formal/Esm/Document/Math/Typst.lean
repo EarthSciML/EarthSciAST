@@ -64,13 +64,8 @@ def pieceChars (p : String × String) : List Char :=
   "upright(".toList ++ Strings.quote true p.1 ++ [')'] ++
     (if p.2 = "" then [] else '_' :: p.2.toList)
 
-/-- The dimensionless unit `1` after `thin`: an upright `1`, so `3 thin upright("1")`
-does not read as the product `3 1`. -/
-def dimlessT : List Char := "upright(\"1\")".toList
-
 def unitChars (l : List Esm.Units.Factor) : List Char :=
-  "thin ".toList ++
-    (if l = [] then dimlessT else Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep l)
+  "thin ".toList ++ Esm.Units.joinWith Esm.Units.typstFactor Esm.Units.thinSep l
 
 def tokChars : Tok → List Char
   | .num n => numChars n
@@ -251,12 +246,9 @@ def lexIdent (cs : List Char) : Option (Tok × List Char) :=
   else if w = "thin" then
     match p.2 with
     | ' ' :: r =>
-      match dropP dimlessT r with
-      | some r' => some (.units [], r')
-      | none =>
-        match Esm.Units.pSepBy Esm.Units.pTFactor Esm.Units.thinSep r.length r with
-        | some (l, r') => some (.units l, r')
-        | none => none
+      match Esm.Units.pSepBy Esm.Units.pTFactor Esm.Units.thinSep r.length r with
+      | some (l, r') => some (.units l, r')
+      | none => none
     | _ => none
   else if w = "esm" then (dropP ".node".toList p.2).map (.kw .esmnode, ·)
   else
