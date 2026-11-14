@@ -39,8 +39,8 @@ def ckT (S : Sym) (raw : String) : Option (List Eqn) :=
 /-! ## What Typst spells natively -/
 
 /-- The Typst container's predicates: front-matter keys and attributes are named
-arguments (identifiers that are not keywords); an equation's Typst math must be one line
-without `$` and not start with `//`. Descriptions and component names are always
+arguments (identifiers that are not keywords); an equation's Typst math must not contain
+`$` nor start with `//` (it may span lines: a code value inside an escape node does). Descriptions and component names are always
 spellable (escapes). -/
 def capsT : Caps where
   frontKey k := bareKey TypstDict.reserved k
@@ -48,13 +48,12 @@ def capsT : Caps where
   compName _ := true
   declName n := nameOK n && !(nameTyp n).contains '$'
   attr a := bareKey TypstDict.reserved a.1
-  eqn S e := Md.commentOK e.comment && !(typOf S e).contains '$' && !(typOf S e).contains '\n' &&
-    !pre ['/', '/'] (typOf S e)
+  eqn S e := Md.commentOK e.comment && !(typOf S e).contains '$' && !pre ['/', '/'] (typOf S e)
 
 theorem ckT_prT (S : Sym) (e : Eqn) (hc : capsT.eqn S e = true) (hl : isE e.lhs = true)
     (hr : isE e.rhs = true) : ckT S (prT S e) = some [e] := by
   simp only [capsT, Bool.and_eq_true, Bool.not_eq_true'] at hc
-  obtain ⟨⟨⟨hcm, hd⟩, hn⟩, hp⟩ := hc
+  obtain ⟨⟨hcm, hd⟩, hp⟩ := hc
   have hparse : (parseTypst S (String.ofList (typOf S e))).bind eqSides = some (e.lhs, e.rhs) := by
     simp only [typOf, String.ofList_toList, parseTypst_printTypst S _ (isE_eqExpr e hl hr),
       Option.bind_some, eqSides_eqExpr]
@@ -175,7 +174,7 @@ theorem lexDoc_front (front : List (String × Json)) (hf : ∀ a ∈ front, argO
 theorem typ_noDollar (S : Sym) (e : Eqn) (hc : capsT.eqn S e = true) :
     (prT S e).toList.contains '$' = false := by
   simp only [capsT, Bool.and_eq_true, Bool.not_eq_true'] at hc
-  obtain ⟨⟨⟨hcm, hd⟩, _⟩, _⟩ := hc
+  obtain ⟨⟨hcm, hd⟩, _⟩ := hc
   unfold prT
   rw [String.toList_ofList]
   rw [Bool.eq_false_iff]
