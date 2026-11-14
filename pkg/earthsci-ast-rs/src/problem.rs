@@ -829,6 +829,11 @@ pub(crate) struct BuildProducts {
     /// Parameters baked into the build. Substituting one of these needs a
     /// rebuild, so [`remake`] refuses rather than lying.
     pub baked_parameters: Vec<String>,
+    /// The baked parameters a join reads — through an `on` key column or an
+    /// `overlap` envelope factor ([`bind_join_key_params`]) — so [`remake`]'s
+    /// refusal can name that cause. A grid spacing that both builds the cell
+    /// rings and enters a flux is the case a caller will not guess.
+    pub join_baked_parameters: std::collections::HashSet<String>,
     /// Why a state-free document's observed graph could not be evaluated at
     /// construction — a fail-closed evaluation fault such as
     /// `E_TREEWALK_CONSTARRAY_OOB` — so [`observed_field`] can name the cause
@@ -1760,10 +1765,18 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
 
     for name in changes.p.keys() {
         if prob.build.baked_parameters.iter().any(|b| b == name) {
+            let class = if prob.build.join_baked_parameters.contains(name) {
+                "baked into the build as a load-time constant, because a join reads it — an \
+                 `on` key column or an `overlap` envelope factor such as a cell ring, \
+                 directly or through observeds — and the match set or candidate pairs it \
+                 decides are built once (CONFORMANCE_SPEC §5.5.6, §5.5.8); it is baked \
+                 everywhere it is read, not only there — build a new EsmProblem"
+            } else {
+                "baked into the build as a load-time constant — build a new EsmProblem"
+            };
             return Err(SimulateError::UnsubstitutableBinding {
                 name: name.clone(),
-                class: "baked into the build as a load-time constant — build a new EsmProblem"
-                    .to_string(),
+                class: class.to_string(),
             });
         }
         if prob.is_dynamic()
@@ -2430,13 +2443,15 @@ fn build_problem(
                 build.baked_parameters.push(name);
             }
         }
-        // A scalar parameter a join key column reads decides the join's match
-        // set, which the build constructs once (CONFORMANCE_SPEC §5.5.8): it
-        // is baked the same way, under every compiler.
+        // A scalar parameter a join key column or an overlap envelope factor
+        // reads decides the join's match set or the gate's candidate pairs,
+        // which the build constructs once (CONFORMANCE_SPEC §5.5.6, §5.5.8):
+        // it is baked the same way, under every compiler.
         for name in bind_join_key_params(f, &opts.p) {
             if !build.baked_parameters.contains(&name) {
-                build.baked_parameters.push(name);
+                build.baked_parameters.push(name.clone());
             }
+            build.join_baked_parameters.insert(name);
         }
         build.baked_parameters.sort();
     }
@@ -3164,6 +3179,9 @@ fn build_compiler_report(
         Backend::Static(_) => return Ok(CompilerReport::empty(compiler)),
         Backend::Array(c) => c,
     };
+    // Before either compiler's own gate, so both refuse a live envelope
+    // factor the same way (CONFORMANCE_SPEC §5.5.6).
+    compiled.refuse_live_overlap_factors()?;
     #[cfg_attr(not(feature = "solve"), allow(unused_mut))]
     let mut report = rule_report(compiled, model_name, compiler, discrete_forcing, true)?;
     // The field initial conditions are evaluated by the reference evaluator
@@ -4445,29 +4463,28 @@ fn bind_value_invention_params(file: &mut EsmFile, p: &HashMap<String, f64>) -> 
     used
 }
 
-/// Bake every scalar parameter a join key column reads
-/// ([`crate::join::join_key_parameters`]): a caller's `p` entry lands on its
-/// `default`, which the build folds into the match set, and the parameter is
-/// recorded — under both its model-qualified and its bare name, whichever a
-/// later [`remake`] spells — so a substitution of it is refused. Baked whether
-/// or not the caller passed a value: the declared default is a build-time
-/// value just the same.
+/// Bake every scalar parameter a join key column or an overlap envelope
+/// factor reads ([`crate::join::join_key_parameters`], which follows the
+/// cone across components): a caller's `p` entry lands on its `default`,
+/// which the build folds into the match set, and the parameter is recorded —
+/// under both its model-qualified and its bare name, whichever a later
+/// [`remake`] spells — so a substitution of it is refused. Baked whether or
+/// not the caller passed a value: the declared default is a build-time value
+/// just the same.
 fn bind_join_key_params(file: &mut EsmFile, p: &HashMap<String, f64>) -> Vec<String> {
     let mut baked = Vec::new();
     let Some(models) = file.models.as_mut() else {
         return baked;
     };
-    for (mname, m) in models.iter_mut() {
-        for v in crate::join::join_key_parameters(m) {
-            let qualified = format!("{mname}.{v}");
-            if let Some(&x) = p.get(&qualified).or_else(|| p.get(&v))
-                && let Some(var) = m.variables.get_mut(&v)
-            {
-                var.default = Some(crate::types::InlineValue::Scalar(x));
-            }
-            baked.push(qualified);
-            baked.push(v);
+    for (mname, v) in crate::join::join_key_parameters(models) {
+        let qualified = format!("{mname}.{v}");
+        if let Some(&x) = p.get(&qualified).or_else(|| p.get(&v))
+            && let Some(var) = models.get_mut(&mname).and_then(|m| m.variables.get_mut(&v))
+        {
+            var.default = Some(crate::types::InlineValue::Scalar(x));
         }
+        baked.push(qualified);
+        baked.push(v);
     }
     baked
 }

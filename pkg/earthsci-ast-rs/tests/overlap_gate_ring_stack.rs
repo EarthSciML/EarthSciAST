@@ -21,8 +21,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::extension::broad_phase::{overlap_enum_visits, reset_overlap_enum_visits};
-use earthsci_ast::{Compiler, EsmProblem, ProblemOptions, esm_problem, observed_field};
+use earthsci_ast::{
+    Compiler, EsmProblem, ProblemOptions, Remake, esm_problem, observed_field, remake,
+};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 const L: f64 = 12.0;
 
@@ -127,6 +130,10 @@ fn doc(sx: usize, sy: usize, tx: usize, ty: usize) -> Value {
 }
 
 fn build(doc: &Value, compiler: Compiler) -> (EsmProblem, u64) {
+    build_with(doc, compiler, HashMap::new())
+}
+
+fn build_with(doc: &Value, compiler: Compiler, p: HashMap<String, f64>) -> (EsmProblem, u64) {
     reset_overlap_enum_visits();
     let p = esm_problem(
         doc,
@@ -134,6 +141,7 @@ fn build(doc: &Value, compiler: Compiler) -> (EsmProblem, u64) {
         ProblemOptions {
             compiler: Some(compiler),
             model_name: Some("Regrid".into()),
+            p,
             ..Default::default()
         },
     )
@@ -218,4 +226,159 @@ fn native_compiles_a_ring_stack_gate_too_large_to_run_dense() {
     let (sx, sy, tx, ty) = (200usize, 200usize, 15usize, 15usize);
     let (native, _) = build(&doc(sx, sy, tx, ty), Compiler::Native);
     check_areas(&native, sx, sy, tx, ty);
+}
+
+/// Two builds on ONE thread whose gates name the same ring stacks at the same
+/// sizes, but over different geometry (here the target grid moves by half a
+/// cell). The interpreter keeps its candidate-pair index in a per-thread
+/// cache across builds, so it must key the index by the rings' contents, not
+/// only their names: keyed by name, the second build was served the first
+/// build's candidate pairs and silently lost the overlaps the shift created.
+/// Each build is checked against `native`, which builds its own pairs.
+#[test]
+fn two_builds_with_the_same_ring_names_and_different_geometry_both_answer_correctly() {
+    let (sx, sy, tx, ty) = (12usize, 12usize, 3usize, 3usize);
+    let doc = doc(sx, sy, tx, ty);
+    let shifted = || HashMap::from([("tgt_x0".to_string(), 0.5 * L / tx as f64)]);
+
+    let (first, _) = build(&doc, Compiler::Interpreter);
+    let (second, _) = build_with(&doc, Compiler::Interpreter, shifted());
+    let (native_first, _) = build(&doc, Compiler::Native);
+    let (native_second, _) = build_with(&doc, Compiler::Native, shifted());
+
+    assert_eq!(bits(&first, "A_ij"), bits(&native_first, "A_ij"));
+    assert_eq!(bits(&second, "A_ij"), bits(&native_second, "A_ij"));
+    assert_eq!(bits(&second, "A_j"), bits(&native_second, "A_j"));
+    assert_ne!(
+        bits(&first, "A_ij"),
+        bits(&second, "A_ij"),
+        "the shift changes the overlaps"
+    );
+}
+
+/// The model `doc` builds, as a mutable JSON object.
+fn regrid_model(doc: &mut Value) -> &mut Value {
+    &mut doc["models"]["Regrid"]
+}
+
+/// A ring stack that reads a STATE is not build-time data (CONFORMANCE_SPEC
+/// §5.5.6: an envelope factor MUST be build-time const-array data). Both
+/// compilers refuse it, with Julia's code; `native` used to refuse it at its
+/// own gate while `interpreter` declined the gate and ran the full product.
+#[test]
+fn a_ring_stack_read_from_a_state_is_refused_by_both_compilers() {
+    let (sx, sy, tx, ty) = (4usize, 4usize, 2usize, 2usize);
+    let mut doc = doc(sx, sy, tx, ty);
+    let m = regrid_model(&mut doc);
+    m["variables"]["s"] = json!({"type": "unknown", "units": "1", "default": 0.0});
+    m["variables"]["x0s"] = json!({"type": "unknown", "units": "1"});
+    m["variables"]["area"] =
+        json!({"type": "unknown", "units": "1", "shape": ["tgt_cells"], "default": 0.0});
+    let eqs = m["equations"].as_array_mut().unwrap();
+    eqs[1]["rhs"] = rings(tx, "x0s", "tgt_y0", "tgt_dx", "tgt_dy", "tgt_cells");
+    eqs.push(json!({"lhs": "x0s", "rhs": op("+", vec![json!("tgt_x0"), json!("s")])}));
+    eqs.push(json!({"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": 0.0}));
+    eqs.push(json!({"lhs": {"op": "D", "args": ["area"], "wrt": "t"}, "rhs": "A_j"}));
+
+    for compiler in [Compiler::Interpreter, Compiler::Native] {
+        let err = esm_problem(
+            &doc,
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(compiler),
+                model_name: Some("Regrid".into()),
+                ..Default::default()
+            },
+        )
+        .err()
+        .unwrap_or_else(|| panic!("{compiler:?} built a gate over a state-dependent ring"))
+        .to_string();
+        assert!(
+            err.contains("E_TREEWALK_JOIN_OVERLAP") && err.contains("tgt_poly"),
+            "{compiler:?}: {err}"
+        );
+        assert!(err.contains("the state `s`"), "{compiler:?}: {err}");
+    }
+}
+
+/// A ring stack another COMPONENT defines: the gate in `Regrid` names
+/// `Grid.src_poly` / `Grid.tgt_poly`, whose rings read `Grid`'s own grid
+/// parameters by their bare names. The parameters the build bakes follow that
+/// reference across components, so both compilers build the gate from the
+/// same baked values and agree, and a later substitution of one of them is
+/// refused, naming the join as the cause.
+#[test]
+fn a_ring_stack_defined_in_another_component_is_baked() {
+    let (sx, sy, tx, ty) = (6usize, 6usize, 2usize, 2usize);
+    let mut doc = doc(sx, sy, tx, ty);
+    let single = regrid_model(&mut doc).take();
+    let vars = single["variables"].as_object().unwrap();
+    let eqs = single["equations"].as_array().unwrap();
+    let grid_vars: serde_json::Map<String, Value> = vars
+        .iter()
+        .filter(|(k, _)| {
+            k.contains("_x0") || k.contains("_y0") || k.contains("_d") || k.ends_with("_poly")
+        })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let regrid_vars: serde_json::Map<String, Value> = vars
+        .iter()
+        .filter(|(k, _)| !grid_vars.contains_key(*k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let qualify = |e: &Value| -> Value {
+        serde_json::from_str(
+            &serde_json::to_string(e)
+                .unwrap()
+                .replace("\"src_poly\"", "\"Grid.src_poly\"")
+                .replace("\"tgt_poly\"", "\"Grid.tgt_poly\""),
+        )
+        .unwrap()
+    };
+    doc["models"] = json!({
+        "Grid": {"variables": grid_vars, "equations": [eqs[0].clone(), eqs[1].clone()]},
+        "Regrid": {
+            "expression_template_imports": single["expression_template_imports"].clone(),
+            "variables": regrid_vars,
+            "equations": [qualify(&eqs[2]), qualify(&eqs[3])]
+        }
+    });
+    let shifted = HashMap::from([("Grid.tgt_x0".to_string(), 0.5 * L / tx as f64)]);
+    let build = |compiler: Compiler| {
+        esm_problem(
+            &doc,
+            (0.0, 0.0),
+            ProblemOptions {
+                compiler: Some(compiler),
+                p: shifted.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{compiler:?} build: {e}"))
+    };
+    let native = build(Compiler::Native);
+    let interp = build(Compiler::Interpreter);
+    assert_eq!(bits(&native, "Regrid.A_ij"), bits(&interp, "Regrid.A_ij"));
+    // The shifted target origin reached the rings: the first target cell
+    // starts half a cell in, so the first source cell does not reach it.
+    let a_ij: Vec<f64> = observed_field(&native, "Regrid.A_ij")
+        .expect("A_ij")
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(a_ij[0], 0.0, "{a_ij:?}");
+
+    for compiler_problem in [&native, &interp] {
+        let Err(err) = remake(
+            compiler_problem,
+            &Remake {
+                p: HashMap::from([("Grid.tgt_x0".to_string(), 0.0)]),
+                ..Default::default()
+            },
+        ) else {
+            panic!("a ring parameter is baked, so its remake is refused");
+        };
+        let err = err.to_string();
+        assert!(err.contains("overlap"), "{err}");
+    }
 }
