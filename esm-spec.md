@@ -1,6 +1,6 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 2.1.0**
+**EarthSciML Abstract Syntax Tree Format — Version 2.2.0**
 
 > **2.1.0 is additive.** A variable MAY declare a lower bound `lb` and an upper
 > bound `ub`, each a number or a reference to another variable of the model
@@ -78,7 +78,7 @@ The full authoring stance, normatively:
 
 ```json
 {
-  "esm": "2.1.0",
+  "esm": "2.2.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },
@@ -6017,10 +6017,23 @@ For coupling between a 0-D (scalar-shaped) system and a spatially-resolved syste
 |---|---|
 | `pointwise` | **(Default.)** The 0-D system is evaluated independently at each grid point. This is how column physics parameterizations work in climate models. |
 | `broadcast` | A single scalar output from the 0-D system is applied uniformly to all grid points. |
-| `mean` | Inputs to the 0-D system are the spatial mean of the source fields; output is scalar. |
-| `integral` | Inputs to the 0-D system are the spatial integral of the source fields; output is scalar. |
+| `mean` | *(Reserved.)* Inputs to the 0-D system are the spatial mean of the source fields; output is scalar. |
+| `integral` | *(Reserved.)* Inputs to the 0-D system are the spatial integral of the source fields; output is scalar. |
+
+`mean` and `integral` are reserved: no binding evaluates the reduction yet, and flatten substitutes such a `variable_map`'s source unreduced. A document using them stays valid and flattens, but a binding that builds a runnable problem MUST refuse a `variable_map` whose `lifting` is `mean` or `integral` at build, with `unsupported_construct` naming the edge and the lifting kind, until this section specifies the reduction. `broadcast` is not reserved.
 
 When `lifting` is omitted and one side has scalar-shaped (0-D) variables, pointwise lifting is assumed.
+
+**What a pointwise lift lifts (from `esm: 2.2.0`).** A 0-D system is evaluated independently at each grid point however the grid reaches it, not only through an `operator_compose`. After the coupling rules are applied, a scalar state (one declared with no `shape`, or with `shape: []`) is lifted when either of these holds:
+
+- its merged equation carries an operator `makearray` (an `operator_compose` merged a spatial operator into it), or
+- its merged right-hand side is an array under the shape rules of §4.3.4: it reads, through elementwise operators, a variable with a declared `shape`, a variable declared without one whose definition is such an array (a rate fed a grid field by a `variable_map`), or a state already lifted.
+
+The unit of lifting is the whole top-level component. When any state of a top-level model or reaction system (its subsystems included) is lifted, every scalar state of that component is lifted onto the same grid, including a species no coupling touches. Lifting a component can make the right-hand sides of other components arrays, and they are lifted in turn, until nothing changes. The grid is the one the operator `makearray` gives, or else the index sets of the array operands the right-hand side reads. A component whose states would land on two different grids MUST be refused with the binding's dimension-promotion error. A scalar `default` or scalar initial condition of a lifted state gives its value to every cell, and an array initial condition on one sets each cell. Library Specification §4.7.5, "Pointwise lift: which states are lifted", gives the full rules.
+
+Only pointwise lifting does this. A coupling entry that sets `lifting` to `broadcast`, `mean` or `integral` does not trigger it: the source of such a `variable_map` is read as a scalar when deciding whether its target's component is lifted, and the components of such an `operator_compose` are not lifted through its operator. A component that one of these entries feeds is still lifted when a pointwise route also reaches it.
+
+This rule changes what a document that loaded before `esm: 2.2.0` means when a grid reaches one of its 0-D systems other than through an `operator_compose` with an operator `makearray`. Before, bindings lifted only that route, and evaluated the scalar state of any other route at one element of its array right-hand side.
 
 #### Combining regridding and lifting
 
@@ -6064,7 +6077,7 @@ The last dot-separated segment is always the variable name; all preceding segmen
 
 **Per-term provenance is a property of the flattened system, not of the document.** Flattening sums `operator_compose` and `couple` contributions into one right-hand side per equation. The flattened representation keeps, beside each equation, the ordered list of those contributions, each with its author: the dotted path of the component whose equation contained it, or the index of the coupling entry that wrote it (a `couple` connector's expression, a `variable_map` Expression transform's definition). The right-hand side is the left-fold sum of the list. Authorship survives every rewrite flatten applies (`translate` renames, `variable_map` substitution, the pointwise lift), because those change a term's inputs, not who wrote it. Nothing in a document carries the list and no format version gates it; a consumer that splits a right-hand side into operators reads it to select terms by author. Library Specification §4.7.5, "Per-term provenance", specifies how each flattening step fills it.
 
-**A pointwise-lifted state lives on named index sets.** The pointwise lift (§10.5) makes a scalar state an array over the grid of the operator it is composed with. The flattened system gives that state a `shape` naming the index sets of the grid, and ranges the lifted `faq` over the same index sets (`{"from": <name>}`), so a consumer reads the state's shape as it reads any declared one. Each index set is the one an operand gathered at the lift's loops is declared on, else the only declared index set of the dimension's size, else a synthetic interval `_liftdim<d>_<extent>` that the flattened `index_sets` gains. Library Specification §4.7.5, "Pointwise lift: index sets", specifies the choice.
+**A pointwise-lifted state lives on named index sets.** The pointwise lift (§10.5) makes a scalar state an array over a grid: the grid of the operator it is composed with, or the index sets of the arrays its right-hand side reads. The flattened system gives that state a `shape` naming the index sets of the grid, and ranges the lifted `faq` over the same index sets (`{"from": <name>}`), so a consumer reads the state's shape as it reads any declared one. Under an operator, each index set is the one an operand gathered at the lift's loops is declared on, else the only declared index set of the dimension's size, else a synthetic interval `_liftdim<d>_<extent>` that the flattened `index_sets` gains. Otherwise the index sets are those the array operands declare. Library Specification §4.7.5, "Pointwise lift: index sets", specifies the choice.
 
 The flattening algorithm is specified in detail in the ESM Library Specification (Section 4.7.5).
 

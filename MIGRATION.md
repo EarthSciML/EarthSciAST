@@ -1505,6 +1505,22 @@ the value lies. No binding's `solve()` or runner reads it, and the format does
 not say what a consumer should do with it. A per-element bound on an arrayed
 variable is a reference to a shaped parameter of the same shape.
 
+## esm 2.2.0: the pointwise lift applies to every route
+
+| Kind | What |
+|---|---|
+| `format` | **No on-disk change; a meaning change** (esm-spec §10.5). A scalar state whose merged right-hand side is an array (it reads a shaped variable, an observed defined over one, or a lifted state, through elementwise operators) is lifted onto that array's index sets, together with every scalar state of its top-level component, and the search repeats across components. The operator `makearray` route is unchanged. With this the format version moves to **`esm: 2.2.0`**. |
+| `behaviour` | A document in which a grid reaches a 0-D system through a pointwise `variable_map`, an `operator_compose` whose operator is written elementwise, or a partial `translate` now flattens with that system's states shaped and its equations wrapped in a per-cell `faq`. Before, those states stayed scalar and every binding evaluated them at one element of the array right-hand side. |
+| `new` | A component whose states would land on two different grids is refused with the binding's dimension-promotion error (`DimensionPromotionError`). |
+
+**What to check.** A document that relied on such a state being scalar, for
+example an inline-test assertion on `Mech.A` with no subscript, now addresses an
+array: assert per cell (`Mech.A[2]`) or through a `reduce`. Per-cell
+`initial_conditions` keys and array `ic` equations on the lifted state are now
+accepted. A `variable_map` with `lifting: "mean"`, `"integral"` or
+`"broadcast"` does not trigger the lift; those kinds are not implemented by any
+binding.
+
 ---
 
 # Part V — What did NOT change

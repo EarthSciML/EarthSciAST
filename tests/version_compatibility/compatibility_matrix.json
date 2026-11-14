@@ -1,7 +1,7 @@
 {
   "version_compatibility_test_matrix": {
-    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 2.0.0 (library at 2.1.0 since `lb` / `ub` variable bounds, esm-spec §6.3.2, an additive minor): 2.0.0 removed the operators and fields that needed code outside the expression AST (fn, function_tables/table_lookup, skolem, rank, argmin/argmax, the geometry leaves, the aggregate alias) and otherwise changed nothing, so the library implements major version 2 AND still loads major 1 (user ruling): a 1.x document that uses no removed construct loads as written, its own 1.x version gates (solver_*, const units, faq too old) still apply, and one that uses a removed construct is refused with `removed_op`, naming `python -m earthsci_ast.migrate`. Major 0 is REJECTED (the 1.0.0 break carries no deprecation path), and so is any major above 2. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
-    "library_version": "2.1.0",
+    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 2.0.0 (library at 2.2.0: 2.1.0 added `lb` / `ub` variable bounds, esm-spec §6.3.2, and 2.2.0 widened the pointwise lift, esm-spec §10.5, with no on-disk change): 2.0.0 removed the operators and fields that needed code outside the expression AST (fn, function_tables/table_lookup, skolem, rank, argmin/argmax, the geometry leaves, the aggregate alias) and otherwise changed nothing, so the library implements major version 2 AND still loads major 1 (user ruling): a 1.x document that uses no removed construct loads as written, its own 1.x version gates (solver_*, const units, faq too old) still apply, and one that uses a removed construct is refused with `removed_op`, naming `python -m earthsci_ast.migrate`. Major 0 is REJECTED (the 1.0.0 break carries no deprecation path), and so is any major above 2. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
+    "library_version": "2.2.0",
     "migration_notes": {
       "0.x_to_1.0.0": {
         "summary": "Unified variable model — `states` and `observed` collapse into one `unknown` type whose behaviour is stated by equations, the per-variable `expression` field is removed, `brownian` and `discrete` become parameters carrying a `distribution` / `update`, and `data_loaders` becomes `data_sources`, a pure ingest registry. A CLEAN BREAK: a 1.0.0 library rejects every 0.x document rather than migrating it. See esm-spec.md §6.3 and §8.5.",
@@ -93,7 +93,14 @@
         "file": "version_2_1_0_variable_bounds.esm",
         "file_version": "2.1.0",
         "expected_behavior": "load_success",
-        "description": "Exact version match - should load successfully, with no warning. Uses `lb` / `ub` on a model variable, the construct esm 2.1.0 adds (esm-spec §6.3.2).",
+        "description": "An EARLIER minor of the supported major since the esm 2.2.0 bump, loaded without warning. Uses `lb` / `ub` on a model variable, the construct esm 2.1.0 adds (esm-spec §6.3.2). It held the exact-version-match role while the library was 2.1.0; version_2_2_0_pointwise_lift.esm now holds that role.",
+        "warnings": []
+      },
+      {
+        "file": "version_2_2_0_pointwise_lift.esm",
+        "file_version": "2.2.0",
+        "expected_behavior": "load_success",
+        "description": "Exact version match - should load successfully, with no warning. 2.2.0 changes no on-disk shape; it widens the pointwise lift (esm-spec §10.5), and this document's scalar state is lifted through a variable_map.",
         "warnings": []
       },
       {
@@ -139,7 +146,7 @@
         "expected_behavior": "load_with_warning",
         "description": "2.5.1 - a NEWER minor of the supported major 2: loaded with a warning. It was the future-major rejection while the library was 1.x; version_3_0_0_major_rejection.esm took that role.",
         "warnings": [
-          "2.5.1 is newer than the current library version 2.1.0. Some features may not be supported."
+          "2.5.1 is newer than the current library version 2.2.0. Some features may not be supported."
         ]
       },
       {
