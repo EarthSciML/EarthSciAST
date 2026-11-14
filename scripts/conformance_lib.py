@@ -418,6 +418,7 @@ def run_producer_suite(
     print_report: Callable[[dict], None],
     no_producers_message: str | None = None,
     attach_stderr: bool = False,
+    adapter_manifest_path: Path | None = None,
 ) -> int:
     """The shared producer-mode loop for the live manifest runners (determinism,
     cadence, pde-simulation).
@@ -440,14 +441,16 @@ def run_producer_suite(
     ``None`` (the PDE runner) to skip that branch and let ``overall_ok`` alone
     decide ``ok`` vs ``fail``. The report is then written, ``print_report`` renders
     the console summary, and the exit code is ``1`` iff the final status is
-    ``fail`` (``0`` for ``ok`` / ``no_producers``)."""
+    ``fail`` (``0`` for ``ok`` / ``no_producers``). ``adapter_manifest_path``,
+    when given, is the manifest the adapters are handed in place of
+    ``manifest_path`` (the PDE runner's run-time derived copy)."""
     if set(required) & set(OPTIONAL_BINDINGS):
         raise ManifestError(
             f"{manifest_path}: bindings_required names an optional participant "
             f"{sorted(set(required) & set(OPTIONAL_BINDINGS))}; requiring one is a ruling, "
             f"not a manifest edit"
         )
-    adapters = harness.collect(bindings, manifest_path, timeout)
+    adapters = harness.collect(bindings, adapter_manifest_path or manifest_path, timeout)
     report: dict[str, Any] = {
         "manifest_path": str(manifest_path),
         "status": "ok",
