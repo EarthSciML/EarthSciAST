@@ -1332,14 +1332,17 @@ impl TapeBuilder<'_> {
                     }
                 });
             }
-            composite_side_keys(parts).map(Some).ok_or_else(|| Bail {
+            Ok(Some(parts))
+        };
+        let pair = |l, r| {
+            composite_pair_keys(l, r).map(Some).ok_or_else(|| Bail {
                 reason: "aggregate: a composite join key's columns disagree in length".to_string(),
             })
         };
         let sides = match (side(&g.cols_l, true)?, side(&g.cols_r, true)?) {
-            (Some(l), Some(r)) => Some((l, r)),
+            (Some(l), Some(r)) => pair(l, r)?,
             _ => match (side(&g.cols_l, false)?, side(&g.cols_r, false)?) {
-                (Some(l), Some(r)) => Some((l, r)),
+                (Some(l), Some(r)) => pair(l, r)?,
                 _ => None,
             },
         };

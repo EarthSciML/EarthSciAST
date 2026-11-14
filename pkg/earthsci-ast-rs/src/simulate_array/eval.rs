@@ -3954,19 +3954,96 @@ pub(super) fn data_key_column(a: &ArrayD<f64>) -> Option<(Vec<i64>, Vec<crate::r
 /// left and right sides build comparable keys as long as the pairs are listed
 /// in one order —
 /// which the build-time grouping guarantees by construction.
-fn side_keys(
-    cols: &[crate::join::KeyColumn],
-    ctx: &EvalCtx,
-) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
-    let parts = cols
-        .iter()
+fn side_key_parts(cols: &[crate::join::KeyColumn], ctx: &EvalCtx) -> Option<Vec<KeyPart>> {
+    cols.iter()
         .map(|c| key_column_values(c, ctx))
-        .collect::<Option<Vec<_>>>()?;
-    composite_side_keys(parts)
+        .collect::<Option<Vec<_>>>()
+}
+
+/// One key column of one side: the positions it is defined at, and its key
+/// at each.
+pub(super) type KeyPart = (Vec<i64>, Vec<crate::relational::Key>);
+
+/// Both sides' per-position keys for one `on` clause (see [`side_key_parts`]).
+///
+/// A composite clause whose every column holds integers is PACKED: each row's
+/// tuple becomes one [`crate::relational::Key::Int`] in a mixed radix whose
+/// digit ranges are the two sides' JOINT per-column ranges, first column most
+/// significant. The packing is a bijection on the values present, so equality
+/// is exactly tuple equality, and it is monotone in the lexicographic tuple
+/// order, so [`crate::relational::equijoin`]'s canonical key order is the order
+/// the tuples would have had. What it removes is a heap-allocated
+/// [`crate::relational::Key::Tuple`] per row and its hashing: a seven-column
+/// clause over a 1.6M-row table. A clause whose ranges do not fit in an `i64`,
+/// or that holds any non-integer key, keeps the tuples.
+pub(super) fn composite_pair_keys(
+    parts_l: Vec<KeyPart>,
+    parts_r: Vec<KeyPart>,
+) -> Option<(KeyPart, KeyPart)> {
+    if parts_l.len() > 1 && parts_l.len() == parts_r.len() {
+        if let Some(packed) = pack_int_pair(&parts_l, &parts_r) {
+            return Some(packed);
+        }
+    }
+    Some((composite_side_keys(parts_l)?, composite_side_keys(parts_r)?))
+}
+
+fn pack_int_pair(parts_l: &[KeyPart], parts_r: &[KeyPart]) -> Option<(KeyPart, KeyPart)> {
+    use crate::relational::Key;
+    let k = parts_l.len();
+    // The same agreement `composite_side_keys` checks: every column of one
+    // side runs over the same positions. A disagreement is left to it.
+    let pos_l = &parts_l.first()?.0;
+    let pos_r = &parts_r.first()?.0;
+    if parts_l.iter().any(|(p, _)| p != pos_l) || parts_r.iter().any(|(p, _)| p != pos_r) {
+        return None;
+    }
+    let mut lo = vec![i64::MAX; k];
+    let mut hi = vec![i64::MIN; k];
+    for c in 0..k {
+        for key in parts_l[c].1.iter().chain(parts_r[c].1.iter()) {
+            let Key::Int(v) = key else { return None };
+            lo[c] = lo[c].min(*v);
+            hi[c] = hi[c].max(*v);
+        }
+    }
+    let mut span = vec![1u128; k];
+    let mut total: u128 = 1;
+    for c in 0..k {
+        if lo[c] > hi[c] {
+            // No value on either side: a one-value digit.
+            lo[c] = 0;
+            continue;
+        }
+        span[c] = (i128::from(hi[c]) - i128::from(lo[c]) + 1) as u128;
+        total = total.checked_mul(span[c])?;
+        if total > i64::MAX as u128 {
+            return None;
+        }
+    }
+    let pack = |parts: &[KeyPart]| -> Vec<Key> {
+        let n = parts[0].1.len();
+        (0..n)
+            .map(|row| {
+                let mut acc: u128 = 0;
+                for c in 0..k {
+                    let Key::Int(v) = parts[c].1[row] else {
+                        unreachable!("checked above")
+                    };
+                    acc = acc * span[c] + (i128::from(v) - i128::from(lo[c])) as u128;
+                }
+                Key::Int(acc as i64)
+            })
+            .collect()
+    };
+    Some((
+        (pos_l.clone(), pack(parts_l)),
+        (pos_r.clone(), pack(parts_r)),
+    ))
 }
 
 /// Combine one side's per-column `(positions, keys)` into its per-position
-/// key (see [`side_keys`]). `None` for no columns, or for columns that do
+/// key (see [`side_key_parts`]). `None` for no columns, or for columns that do
 /// not run over the same positions.
 pub(super) fn composite_side_keys(
     mut parts: Vec<(Vec<i64>, Vec<crate::relational::Key>)>,
@@ -4014,8 +4091,10 @@ fn equality_cache_key(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqGateKe
 /// `None` declines the gate, and the lowered `filter` predicate then produces
 /// the same answer over the full product.
 fn equality_sides(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqSides> {
-    let (pos_l, keys_l) = side_keys(&g.cols_l, ctx)?;
-    let (pos_r, keys_r) = side_keys(&g.cols_r, ctx)?;
+    let ((pos_l, keys_l), (pos_r, keys_r)) = composite_pair_keys(
+        side_key_parts(&g.cols_l, ctx)?,
+        side_key_parts(&g.cols_r, ctx)?,
+    )?;
     Some((pos_l, keys_l, pos_r, keys_r))
 }
 

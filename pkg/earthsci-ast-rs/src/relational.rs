@@ -308,18 +308,27 @@ pub fn distinct(rows: &[Key]) -> Vec<Key> {
 /// Mirrors the DuckDB oracle
 /// `SELECT l.pos, r.pos FROM l JOIN r USING (key) ORDER BY key, l.pos, r.pos`.
 pub fn equijoin(left: &[Key], right: &[Key]) -> Vec<(usize, usize)> {
-    // Bucket the RIGHT side by key (IndexMap: iteration order is insertion
-    // order, independent of the hasher — and we never iterate it anyway; the
-    // emitted order comes from the sorted key list below, so the fast hasher
-    // decides nothing about the output).
+    // Bucket the SMALLER side by key and probe with the larger, so a join of a
+    // few hundred rows against a national table hashes the few hundred, not
+    // the millions. Which side is bucketed decides nothing about the output:
+    // the emitted order comes from the sorted key list below, then left
+    // position, then right position, both lists collected by ascending index.
+    // (IndexMap: iteration order is insertion order, independent of the hasher
+    // -- and we never iterate it anyway.)
+    let small_is_left = left.len() <= right.len();
+    let (small, large) = if small_is_left {
+        (left, right)
+    } else {
+        (right, left)
+    };
     let mut buckets: FxIndexMap<&Key, Vec<usize>> =
-        FxIndexMap::with_capacity_and_hasher(right.len(), Default::default());
-    for (j, k) in right.iter().enumerate() {
+        FxIndexMap::with_capacity_and_hasher(small.len(), Default::default());
+    for (j, k) in small.iter().enumerate() {
         buckets.entry(k).or_default().push(j);
     }
-    // Probe with the LEFT side, collecting the matched left positions per key.
+    // Probe with the larger side, collecting its matched positions per key.
     let mut matched: FxIndexMap<&Key, Vec<usize>> = FxIndexMap::default();
-    for (i, k) in left.iter().enumerate() {
+    for (i, k) in large.iter().enumerate() {
         if buckets.contains_key(k) {
             matched.entry(k).or_default().push(i);
         }
@@ -333,10 +342,15 @@ pub fn equijoin(left: &[Key], right: &[Key]) -> Vec<(usize, usize)> {
         .sum();
     let mut out = Vec::with_capacity(total);
     for k in keys {
+        let (ls, rs) = if small_is_left {
+            (&buckets[k], &matched[k])
+        } else {
+            (&matched[k], &buckets[k])
+        };
         // Both position lists were collected by ascending index, so the nested
         // walk is already (l asc, r asc) within the key.
-        for &i in &matched[k] {
-            for &j in &buckets[k] {
+        for &i in ls {
+            for &j in rs {
                 out.push((i, j));
             }
         }
@@ -359,12 +373,18 @@ pub fn equijoin(left: &[Key], right: &[Key]) -> Vec<(usize, usize)> {
 /// has already made redundant.
 #[must_use]
 pub(crate) fn equijoin_match_count(left: &[Key], right: &[Key]) -> usize {
+    // The count is symmetric, so bucket the smaller side (see [`equijoin`]).
+    let (small, large) = if left.len() <= right.len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
     let mut buckets: FxIndexMap<&Key, usize> =
-        FxIndexMap::with_capacity_and_hasher(right.len(), Default::default());
-    for k in right {
+        FxIndexMap::with_capacity_and_hasher(small.len(), Default::default());
+    for k in small {
         *buckets.entry(k).or_default() += 1;
     }
-    left.iter()
+    large.iter()
         .filter_map(|k| buckets.get(k))
         .fold(0usize, |acc, n| acc.saturating_add(*n))
 }
