@@ -49,7 +49,7 @@
           "op": "+",
           "args": [
             { "op": "*", "args": [
-              { "op": "pow", "args": [`VAR_${(i * 5 + 0).toString().padStart(5, '0')}`, 2] },
+              { "op": "^", "args": [`VAR_${(i * 5 + 0).toString().padStart(5, '0')}`, 2] },
               { "op": "exp", "args": [{ "op": "/", "args": [-1000, `VAR_${(i * 5 + 1).toString().padStart(5, '0')}`] }] }
             ]},
             { "op": "*", "args": [
@@ -111,7 +111,7 @@
           "op": "*",
           "args": [
             `RATE_CONSTANT_${(i % 2000).toString().padStart(4, '0')}`,
-            { "op": "pow", "args": [{ "op": "/", "args": ["T", 298.15] }, 2.5] },
+            { "op": "^", "args": [{ "op": "/", "args": ["T", 298.15] }, 2.5] },
             { "op": "exp", "args": [{ "op": "/", "args": [{ "op": "-", "args": [i * 100 + 5000] }, "T"] }] },
             { "op": "+", "args": [
               1.0,

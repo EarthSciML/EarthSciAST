@@ -258,6 +258,12 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
         "-" => canon_sub(&mut work),
         "/" => canon_div(&mut work),
         "neg" => canon_neg(&mut work),
+        // The deprecated word spelling of `^` (esm-spec §4.2 "Deprecated
+        // ops"): the canonical form writes `^`.
+        "pow" if work.args.len() == 2 => {
+            work.op = "^".into();
+            Ok(Expr::operator(work))
+        }
         _ => Ok(Expr::operator(work)),
     }
 }
@@ -323,14 +329,14 @@ fn canon_mul(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
 
 fn canon_sub(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if node.args.len() == 1 {
-        // Tolerate unary -, prefer neg on the wire.
+        // Unary `-` is the canonical negation (RFC §5.4.7).
         let arg = node.args.pop().unwrap();
         return canon_neg_value(arg);
     }
     if node.args.len() == 2 {
         let b = node.args.pop().unwrap();
         let a = node.args.pop().unwrap();
-        // -(0, x) -> neg(x)
+        // -(0, x) -> -(x)
         if is_zero_any(&a) {
             return canon_neg_value(b);
         }
@@ -384,6 +390,8 @@ fn canon_div(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     }))
 }
 
+/// The deprecated `neg` (esm-spec §4.2 "Deprecated ops"): canonicalized
+/// exactly as unary `-`.
 fn canon_neg(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if node.args.len() != 1 {
         return Ok(Expr::operator(std::mem::take(node)));
@@ -392,13 +400,19 @@ fn canon_neg(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     canon_neg_value(arg)
 }
 
+/// Negate an already-canonical operand (RFC §5.4.7): a literal becomes the
+/// negative literal, a negation in either spelling (unary `-`, or the
+/// deprecated `neg`) collapses, and anything else is wrapped in unary `-` —
+/// never `neg`, which the canonical form does not contain.
 fn canon_neg_value(arg: Expr) -> Result<Expr, CanonicalizeError> {
     match arg {
         Expr::Integer(i) => Ok(Expr::Integer(-i)),
         Expr::Number(f) => Ok(Expr::Number(-f)),
-        Expr::Operator(n) if n.op == "neg" && n.args.len() == 1 => Ok(n.args[0].clone()),
+        Expr::Operator(n) if (n.op == "neg" || n.op == "-") && n.args.len() == 1 => {
+            Ok(n.args[0].clone())
+        }
         other => Ok(Expr::operator(ExpressionNode {
-            op: "neg".into(),
+            op: "-".into(),
             args: vec![other],
             ..ExpressionNode::default()
         })),
@@ -1066,17 +1080,50 @@ mod tests {
         assert!(ja.contains("1.0"), "float 1.0 not emitted as 1.0: {ja}");
     }
 
+    /// Every spelling of negation canonicalizes to unary `-` (RFC §5.4.7):
+    /// the deprecated `neg` (esm-spec §4.2 "Deprecated ops") is never emitted.
     #[test]
-    fn neg_canonical() {
-        let inner = op("neg", vec![Expr::Variable("x".into())]);
-        let outer = op("neg", vec![inner]);
-        assert_eq!(canonical_json(&outer).unwrap(), r#""x""#);
-        let lit = op("neg", vec![Expr::Integer(5)]);
-        assert_eq!(canonical_json(&lit).unwrap(), "-5");
-        let sub = op("-", vec![Expr::Integer(0), Expr::Variable("x".into())]);
+    fn negation_canonicalizes_to_unary_minus() {
+        let x = || Expr::Variable("x".into());
+        let unary = r#"{"args":["x"],"op":"-"}"#;
+        assert_eq!(canonical_json(&op("neg", vec![x()])).unwrap(), unary);
+        assert_eq!(canonical_json(&op("-", vec![x()])).unwrap(), unary);
+        let sub = op("-", vec![Expr::Integer(0), x()]);
+        assert_eq!(canonical_json(&sub).unwrap(), unary);
+        // Double negation collapses in either spelling, and mixed.
+        for (o, i) in [("neg", "neg"), ("-", "-"), ("neg", "-"), ("-", "neg")] {
+            let e = op(o, vec![op(i, vec![x()])]);
+            assert_eq!(canonical_json(&e).unwrap(), r#""x""#, "{o}({i}(x))");
+        }
         assert_eq!(
-            canonical_json(&sub).unwrap(),
-            r#"{"args":["x"],"op":"neg"}"#
+            canonical_json(&op("neg", vec![Expr::Integer(5)])).unwrap(),
+            "-5"
+        );
+        assert_eq!(
+            canonical_json(&op("-", vec![Expr::Number(2.5)])).unwrap(),
+            "-2.5"
+        );
+        assert_eq!(
+            canonical_json(&op("neg", vec![Expr::Integer(0)])).unwrap(),
+            "0"
+        );
+        // Idempotent: the canonical unary `-` canonicalizes to itself.
+        let once = canonicalize(&op("neg", vec![x()])).unwrap();
+        assert_eq!(canonical_json(&once).unwrap(), unary);
+    }
+
+    /// The deprecated `pow` canonicalizes to `^`; a malformed one is left alone.
+    #[test]
+    fn pow_canonicalizes_to_caret() {
+        let e = op("pow", vec![Expr::Variable("x".into()), Expr::Number(2.5)]);
+        assert_eq!(
+            canonical_json(&e).unwrap(),
+            r#"{"args":["x",2.5],"op":"^"}"#
+        );
+        let bad = op("pow", vec![Expr::Variable("x".into())]);
+        assert_eq!(
+            canonical_json(&bad).unwrap(),
+            r#"{"args":["x"],"op":"pow"}"#
         );
     }
 

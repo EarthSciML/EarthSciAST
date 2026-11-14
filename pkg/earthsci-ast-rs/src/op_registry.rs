@@ -204,6 +204,22 @@ pub fn check_makearray_regions(node: &ExpressionNode) -> Result<(), OpError> {
     Ok(())
 }
 
+/// The DEPRECATED op spellings (esm-spec §4.2 "Deprecated ops"), each with its
+/// replacement: `neg` is the word spelling of unary `-` and `pow` of `^`. Both
+/// remain evaluable-core ops ([`arity_of`]) with exactly their replacement's
+/// meaning, but the loader's wire boundary rewrites every well-formed use to
+/// the replacement and warns `deprecated_op`, and the canonical form
+/// (`crate::canonicalize`) writes the replacement. They join the removed ops
+/// in a later major version.
+pub const DEPRECATED_OPS: [(&str, &str); 2] = [("neg", "-"), ("pow", "^")];
+
+/// The entry of [`DEPRECATED_OPS`] for `op` — `(deprecated spelling,
+/// replacement)` — or `None` when `op` is not deprecated.
+#[must_use]
+pub fn deprecated_op(op: &str) -> Option<(&'static str, &'static str)> {
+    DEPRECATED_OPS.iter().find(|(d, _)| *d == op).copied()
+}
+
 /// The arity of an evaluable-core operator, or `None` if `op` is not in the
 /// closed core set (esm-spec §4.2) — i.e. it is an open-tier rewrite target.
 ///
@@ -216,10 +232,11 @@ pub fn arity_of(op: &str) -> Option<Arity> {
         // `/` and `^` are strictly binary.
         "+" | "*" => Arity::AtLeast(1),
         "-" => Arity::Between(1, 2),
-        // `pow` is the word spelling of `^` — the same binary power, evaluated
-        // by the same kernel — as the Julia and Python registries list it.
+        // `pow` and `neg` are the DEPRECATED word spellings of `^` and unary
+        // `-` ([`DEPRECATED_OPS`]). The loader rewrites them, so no loaded
+        // document carries one; they stay in the core so an AST built in code
+        // still evaluates, by the same kernels as their replacements.
         "/" | "^" | "pow" => Arity::Exact(2),
-        // `neg` is the canonical unary negation `canonicalize.rs` emits.
         "neg" => Arity::Exact(1),
         // The engine-internal precision-boundary marker
         // (`crate::precision_infer::MARKER_OP`), inserted after the typed
@@ -392,17 +409,21 @@ pub fn is_builtin_function_name(name: &str) -> bool {
 /// core, never an extension of it (pinned by `every_scalar_operator_has_an_arity`
 /// and `the_scalar_operator_set_partitions_the_core`), which is the invariant
 /// [`check_broadcast_fn`] relies on when it derives the `fn`'s legal arity. In
-/// particular the registry has no alias mechanism and no alias entries — `pow`,
-/// `**`, `power` are NOT spellings of `^`, `=` is not a spelling of `==`, and
-/// none of them is an operator in this format at all (they are open-tier names
-/// that [`crate::simulate_array`] rejects as `unlowered_operator`). Adding one
+/// particular this list has no alias entries. `**` and `power` are NOT
+/// spellings of `^` and `=` is not a spelling of `==`: none of them is an
+/// operator in this format at all (they are open-tier names that
+/// [`crate::simulate_array`] rejects as `unlowered_operator`), and adding one
 /// here would invent an operator rather than classify one;
-/// `the_registry_has_no_operator_aliases` pins that.
+/// `the_registry_has_no_operator_aliases` pins that. The two DEPRECATED word
+/// spellings ([`DEPRECATED_OPS`]) are different: they are core ops, but the
+/// loader rewrites them. `neg` is listed here because a code-built
+/// `broadcast` may still name it (the loader rewrites an authored
+/// `fn: "neg"` to `-`); `pow` never was a `broadcast` `fn`.
 #[must_use]
 pub fn is_scalar_operator(op: &str) -> bool {
     matches!(
         op,
-        // Arithmetic (§4.2), including the canonical unary negation.
+        // Arithmetic (§4.2), and `neg`, the deprecated spelling of unary `-`.
         "+" | "-" | "*" | "/" | "^" | "neg"
         // Elementary functions (§4.2).
         | "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
@@ -890,16 +911,39 @@ mod tests {
         }
     }
 
-    /// `pow` and `false` are evaluable-core ops: `pow` is the word spelling of
-    /// `^` and `false` the nullary counterpart of `true`, as the Julia and
-    /// Python registries list them. Neither is a `broadcast.fn` — the §4.3.4
-    /// scalar-operator list names `^`, not `pow`, and a literal has no operands.
+    /// `pow` and `false` are evaluable-core ops: `pow` is the DEPRECATED word
+    /// spelling of `^` (esm-spec §4.2 "Deprecated ops"; the loader rewrites
+    /// it, but a code-built node still evaluates) and `false` the nullary
+    /// counterpart of `true`, as the Julia and Python registries list them.
+    /// Neither is a `broadcast.fn` — the §4.3.4 scalar-operator list names
+    /// `^`, not `pow`, and a literal has no operands.
     ///
     /// `**`, `power` and `=` are still not operators in this format: they are
     /// open-tier names, rejected as `unlowered_operator` when a model carrying
     /// one is built. Adding them to [`is_scalar_operator`] so array-level
     /// alignment covers them would invent operators the spec's §4.2 table does
     /// not have, and would not make them runnable either.
+    /// Each deprecated spelling is a core op whose arity is one its
+    /// replacement admits, so the loader's rewrite keeps a legal node legal
+    /// and never reaches a different meaning (`neg` takes exactly one operand,
+    /// where `-` also admits two).
+    #[test]
+    fn deprecated_ops_are_core_and_rewrite_to_core_ops() {
+        assert_eq!(deprecated_op("neg"), Some(("neg", "-")));
+        assert_eq!(deprecated_op("pow"), Some(("pow", "^")));
+        assert_eq!(deprecated_op("-"), None);
+        assert_eq!(deprecated_op("**"), None);
+        for (old, new) in DEPRECATED_OPS {
+            let a = arity_of(old).expect("a deprecated op is still a core op");
+            let b = arity_of(new).expect("its replacement is a core op");
+            for n in 0..4 {
+                if a.admits(n) {
+                    assert!(b.admits(n), "`{new}` must admit {n} operands like `{old}`");
+                }
+            }
+        }
+    }
+
     #[test]
     fn pow_and_false_are_core_and_the_other_spellings_are_not() {
         assert_eq!(arity_of("pow"), Some(Arity::Exact(2)));

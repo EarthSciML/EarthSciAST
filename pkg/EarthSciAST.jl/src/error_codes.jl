@@ -353,6 +353,11 @@ const ERROR_CODES = (
     # `aggregate` and the `function_tables` block at 2.0.0), rejected by name at the wire
     # boundary (CONFORMANCE_SPEC §7).
     REMOVED_OP = "removed_op",
+    # WARNING, not an error: an expression node spelling a DEPRECATED op (`neg`,
+    # the word spelling of unary `-`; `pow`, of `^`; or `neg` as a `broadcast`
+    # `fn`), rewritten to its replacement at the wire boundary (esm-spec §4.2
+    # "Deprecated ops").
+    DEPRECATED_OP = "deprecated_op",
     # ── Its complement (esm-spec §9.6.6): an op that IS in the §4.2 evaluable
     #    core but that the tree-walk evaluator has no rule for (an array/query or
     #    value-invention op outside the position that consumes it, an unlowered

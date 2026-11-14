@@ -1903,7 +1903,10 @@ fn is_iso8601_duration(s: &str) -> bool {
 /// The wire-boundary op checks: a removed op (`arrayop`, removed at esm 0.8.0,
 /// and the ops and the `function_tables` block esm 2.0.0 removed,
 /// [`REMOVED_AT_V2`], `aggregate` among them) is rejected by name with
-/// `removed_op`, and `faq` is refused in a document declaring esm below 1.1.0.
+/// `removed_op`, `faq` is refused in a document declaring esm below 1.1.0, and
+/// the deprecated spellings `neg` and `pow`
+/// ([`crate::op_registry::DEPRECATED_OPS`]) are rewritten
+/// to unary `-` and `^` with one `deprecated_op` warning (esm-spec §4.2).
 pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), EsmError> {
     prepare_document_ops_scanned(value).map(|_| ())
 }
@@ -1981,6 +1984,13 @@ pub(crate) fn prepare_document_ops_scanned(
              declares {esm}. Raise the declared version. \
              See docs/content/rfcs/faq-node-rename.md."
         )));
+    }
+    // 3. Deprecated spellings (esm-spec §4.2 "Deprecated ops"): the walk
+    //    already rewrote them; the document loads with ONE warning naming
+    //    every rewritten node. Every document a load touches passes here, so
+    //    each warns for its own nodes.
+    if let Some(warning) = deprecated_op_warning(&scan.deprecated) {
+        eprintln!("warning: {warning}");
     }
     Ok(facts)
 }
@@ -2081,6 +2091,62 @@ struct OpScan {
     faq: Option<String>,
     /// See [`AuthoredFacts`].
     op_with_units: Option<String>,
+    /// Every node the walk rewrote from a deprecated spelling, as
+    /// `(path, deprecated spelling)`, in pre-order.
+    deprecated: Vec<(String, &'static str)>,
+}
+
+/// Rewrite one node spelled with a deprecated op (esm-spec §4.2 "Deprecated
+/// ops") to its replacement in place, recording its path: `neg` with one
+/// operand becomes unary `-`, `pow` with two becomes `^`, and a `broadcast`
+/// whose `fn` is `neg` gets `fn: "-"`. Only the tag changes; every other field
+/// is kept. A node with the wrong operand count is left as written, so the
+/// arity check refuses it as it always did.
+fn rewrite_deprecated_op(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    at: &crate::json_visit::JsonPath<'_>,
+    out: &mut Vec<(String, &'static str)>,
+) {
+    let Some(op) = map.get("op").and_then(|v| v.as_str()) else {
+        return;
+    };
+    if op == "broadcast" {
+        if map.get("fn").and_then(|v| v.as_str()) == Some("neg") {
+            map.insert("fn".to_string(), serde_json::Value::from("-"));
+            out.push((at.to_string(), "neg"));
+        }
+        return;
+    }
+    let Some((name, replacement)) = crate::op_registry::deprecated_op(op) else {
+        return;
+    };
+    let well_formed = map
+        .get("args")
+        .and_then(|v| v.as_array())
+        .is_some_and(|args| {
+            crate::op_registry::arity_of(name).is_some_and(|a| a.admits(args.len()))
+        });
+    if well_formed {
+        map.insert("op".to_string(), serde_json::Value::from(replacement));
+        out.push((at.to_string(), name));
+    }
+}
+
+/// The `deprecated_op` load warning for the rewrites one document's walk made,
+/// or `None` when it spelled no deprecated op.
+fn deprecated_op_warning(rewritten: &[(String, &'static str)]) -> Option<String> {
+    (!rewritten.is_empty()).then(|| {
+        let sites: Vec<String> = rewritten
+            .iter()
+            .map(|(path, op)| format!("{} ({op})", if path.is_empty() { "/" } else { path }))
+            .collect();
+        format!(
+            "deprecated_op: the deprecated op spellings `neg` (unary `-`) and `pow` (`^`) \
+             were rewritten to their replacements on load, with no change of value; write \
+             `-` and `^` instead (esm-spec §4.2 \"Deprecated ops\"). Rewritten at: {}.",
+            sites.join(", ")
+        )
+    })
 }
 
 /// Pre-order walk (the root included, a container before its elements, array
@@ -2115,6 +2181,7 @@ fn scan_document_ops(
                 }
                 _ => {}
             }
+            rewrite_deprecated_op(map, at, &mut scan.deprecated);
             for (k, v) in map.iter_mut() {
                 scan_document_ops(v, &JsonPath::Key(at, k), scan);
                 if scan.removed.is_some() {
@@ -2137,6 +2204,60 @@ fn scan_document_ops(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The deprecated spellings (esm-spec §4.2 "Deprecated ops") are
+    /// rewritten in place by the wire-boundary walk — `neg` to unary `-`, `pow`
+    /// to `^`, a `broadcast` `fn` of `neg` to `-` — keeping every other field,
+    /// and each rewritten node is recorded, in pre-order, for the ONE
+    /// `deprecated_op` warning. A node with the wrong operand count is left
+    /// alone so the arity check refuses it as before.
+    #[test]
+    fn deprecated_ops_are_rewritten_and_recorded() {
+        use serde_json::json;
+        let mut v = json!({
+            "a": {"op": "neg", "args": ["x"], "id": "keep"},
+            "b": {"op": "pow", "args": [{"op": "neg", "args": [2.5]}, 2]},
+            "c": {"op": "broadcast", "fn": "neg", "args": ["y"]},
+            "d": {"op": "neg", "args": ["x", "y"]},
+            "e": {"op": "pow", "args": ["x"]},
+            "f": {"op": "broadcast", "fn": "pow", "args": ["x", 2]}
+        });
+        let mut scan = OpScan::default();
+        scan_document_ops(&mut v, &crate::json_visit::JsonPath::Root(""), &mut scan);
+        assert_eq!(v["a"], json!({"op": "-", "args": ["x"], "id": "keep"}));
+        assert_eq!(
+            v["b"],
+            json!({"op": "^", "args": [{"op": "-", "args": [2.5]}, 2]})
+        );
+        assert_eq!(v["c"], json!({"op": "broadcast", "fn": "-", "args": ["y"]}));
+        assert_eq!(v["d"]["op"], "neg", "wrong arity is left as written");
+        assert_eq!(v["e"]["op"], "pow", "wrong arity is left as written");
+        assert_eq!(
+            v["f"]["fn"], "pow",
+            "only `fn: neg` is a deprecated broadcast fn"
+        );
+        let mut sites = scan.deprecated.clone();
+        sites.sort();
+        assert_eq!(
+            sites,
+            vec![
+                ("/a".to_string(), "neg"),
+                ("/b".to_string(), "pow"),
+                ("/b/args/0".to_string(), "neg"),
+                ("/c".to_string(), "neg"),
+            ]
+        );
+        let warning = deprecated_op_warning(&scan.deprecated).expect("one warning");
+        assert!(warning.starts_with("deprecated_op: "), "{warning}");
+        for site in ["/a (neg)", "/b (pow)", "/b/args/0 (neg)", "/c (neg)"] {
+            assert!(warning.contains(site), "{warning} lacks {site}");
+        }
+        assert!(deprecated_op_warning(&[]).is_none());
+        // The public pass keeps the rewrite: a document that spells one loads.
+        let mut doc = json!({"esm": "2.0.0", "x": {"op": "neg", "args": ["z"]}});
+        prepare_document_ops(&mut doc).expect("a deprecated op is not an error");
+        assert_eq!(doc["x"]["op"], "-");
+    }
 
     /// The one walk of `prepare_document_ops` reports what its two steps did
     /// taken one at a time: the first removed op anywhere wins over an earlier

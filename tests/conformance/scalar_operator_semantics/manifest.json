@@ -104,7 +104,7 @@
         "esm-spec-9.2",
         "power-alias"
       ],
-      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` when Rust refused the `pow` spelling that Julia and Python evaluate (issue #461); all three now evaluate it.",
+      "note": "Authored here, SPLIT OUT of `scalar_operator_semantics` when Rust refused the `pow` spelling that Julia and Python evaluate (issue #461); all three now evaluate it. `pow` is now deprecated (esm-spec \u00a74.2): the loader rewrites it to `^` with a `deprecated_op` warning, and this fixture is kept to pin that path.",
       "required": {
         "julia": [
           "interpreter",

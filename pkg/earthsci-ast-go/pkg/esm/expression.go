@@ -333,8 +333,10 @@ var arithOpTable = map[string]arithOp{
 		}
 		return p, nil
 	}},
-	// `neg` is the canonical unary negation canonicalize.go emits, and a legal
-	// `broadcast` fn (tests/fixtures/faq/27_broadcast_unary.esm).
+	// `neg` is the DEPRECATED word spelling of unary `-` (esm-spec §4.2
+	// "Deprecated ops"). The loader rewrites it to `-` (deprecated_ops.go) and
+	// the canonicalizer never emits it; it is evaluated here only for an
+	// expression built in code.
 	"neg": {1, 1, func(a []float64) (float64, error) { return -a[0], nil }},
 	"-": {1, 2, func(a []float64) (float64, error) {
 		if len(a) == 1 {
@@ -349,7 +351,7 @@ var arithOpTable = map[string]arithOp{
 		return a[0] / a[1], nil
 	}},
 	"^":   {2, 2, powApply},
-	"pow": {2, 2, powApply}, // §4.2 word spelling of ^: the same meaning, the same value
+	"pow": {2, 2, powApply}, // deprecated §4.2 word spelling of ^; the loader rewrites it
 	"**":  {2, 2, powApply}, // evaluator leniency for ^; not a format operator
 	"exp": unaryMath(math.Exp),
 	"log": {1, 1, logApply},

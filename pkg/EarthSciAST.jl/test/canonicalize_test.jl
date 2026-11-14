@@ -87,10 +87,24 @@ const ESM_Expr = EarthSciAST.ASTExpr
         @test occursin("1.0", ja)
     end
 
-    @testset "neg canonical" begin
+    @testset "negation canonical: unary - (neg deprecated)" begin
+        unary_x = "{\"args\":[\"x\"],\"op\":\"-\"}"
         @test canonical_json(op("neg", Any[op("neg", Any["x"])])) == "\"x\""
+        @test canonical_json(op("neg", Any[op("-", Any["x"])])) == "\"x\""
+        @test canonical_json(op("-", Any[op("neg", Any["x"])])) == "\"x\""
+        @test canonical_json(op("-", Any[op("-", Any["x"])])) == "\"x\""
         @test canonical_json(op("neg", Any[5])) == "-5"
-        @test canonical_json(op("-", Any[0, "x"])) == "{\"args\":[\"x\"],\"op\":\"neg\"}"
+        @test canonical_json(op("-", Any[5])) == "-5"
+        @test canonical_json(op("neg", Any[0])) == "0"
+        @test canonical_json(op("-", Any[0, "x"])) == unary_x
+        @test canonical_json(op("neg", Any["x"])) == unary_x
+        @test canonical_json(op("-", Any["x"])) == unary_x
+        # Binary `-` is never read as a negation to collapse.
+        @test canonical_json(op("-", Any[op("-", Any["a", "b"])])) ==
+            "{\"args\":[{\"args\":[\"a\",\"b\"],\"op\":\"-\"}],\"op\":\"-\"}"
+        # `pow` canonicalizes to `^`, keeping its operands.
+        @test canonical_json(op("pow", Any["x", 2])) == "{\"args\":[\"x\",2],\"op\":\"^\"}"
+        @test !occursin("neg", canonical_json(op("+", Any[op("neg", Any["y"]), "x"])))
     end
 
     @testset "div 0/0" begin

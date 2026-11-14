@@ -156,6 +156,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("data_loader_fixtures_test.jl")
     include("arrayed_vars_test.jl")
     include("canonicalize_test.jl")
+    # `neg` / `pow` are deprecated: rewritten to `-` / `^` on load with one
+    # `deprecated_op` warning per document (esm-spec §4.2).
+    include("deprecated_ops_test.jl")
     include("relational_test.jl")
 
     # ---- End-to-end simulation runs ----

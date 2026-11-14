@@ -190,7 +190,12 @@ function canonOp(node: Node): Expr {
     case '/':
       return canonDiv(work)
     case 'neg':
+      // Deprecated word spelling of unary `-` (esm-spec §4.2): canonicalizes
+      // to the unary `-` node, never back to `neg` (RFC §5.4.7).
       return canonNeg(work)
+    case 'pow':
+      // Deprecated word spelling of `^` (esm-spec §4.2).
+      return work.args.length === 2 ? { ...work, op: '^' } : work
     default:
       return work
   }
@@ -318,8 +323,12 @@ function canonNegValue(arg: Expr): Expr {
   }
   if (isFloatLit(arg)) return floatLit(-arg.value)
   if (isPlainNumber(arg)) return -arg
-  if (isNode(arg) && arg.op === 'neg' && arg.args.length === 1) return arg.args[0]!
-  return { op: 'neg', args: [arg] }
+  // A double negation collapses whichever spelling either negation uses; the
+  // inner one is already canonical, so it can only be unary `-` here unless the
+  // caller handed in an uncanonicalized `neg`.
+  if (isNode(arg) && (arg.op === '-' || arg.op === 'neg') && arg.args.length === 1)
+    return arg.args[0]!
+  return { op: '-', args: [arg] }
 }
 
 function flattenSameOp(args: Expr[], op: string): Expr[] {

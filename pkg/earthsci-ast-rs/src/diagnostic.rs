@@ -281,6 +281,12 @@ diagnostic_code_registry! {
     /// `polygon_intersection_area`, `argmin` and `argmax` at esm 2.0.0. Raised
     /// by name at load, before schema validation, naming the codemod.
     REMOVED_OP = "removed_op";
+    /// A WARNING, not an error: a document spells a DEPRECATED op (esm-spec
+    /// §4.2 "Deprecated ops") — `neg`, the word spelling of unary `-`, or
+    /// `pow`, the word spelling of `^` (or `neg` as a `broadcast` `fn`). The
+    /// wire boundary rewrites each to its replacement and reports this once
+    /// per document, naming every rewritten node.
+    DEPRECATED_OP = "deprecated_op";
 
     // ---- subsystem refs: §4.7 reference resolution (`ref_loading.rs`) ----
     //
@@ -676,6 +682,7 @@ mod error_code_tests {
             "data_source_unbound",
             "data_source_undefined",
             "data_source_url_unresolved",
+            "deprecated_op",
             "derived_index_set_unmaterialized",
             "dimensional_mismatch",
             "domain_unit_mismatch",

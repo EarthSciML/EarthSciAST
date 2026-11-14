@@ -166,7 +166,7 @@ be treated as the identity on its operand.
 ```
 
 `fn` must name a **scalar** operator — the pointwise ones: arithmetic
-(including [`neg`](../arithmetic-comparison-logic/)), the elementary functions,
+(a single-operand `-` is unary negation; the deprecated `neg` is rewritten to `-` on load), the elementary functions,
 comparisons, the logical connectives, and `ifelse`. It may not name a
 non-pointwise op, and `args` must satisfy that operator's arity. There is no
 default: an absent or invalid `fn` is rejected with `invalid_broadcast_fn`.

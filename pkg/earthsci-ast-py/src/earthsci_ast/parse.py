@@ -42,6 +42,7 @@ from . import op_registry
 from .error_handling import (
     AMBIGUOUS_SUBSYSTEM_REF,
     DATA_SOURCE_MERGE_CONFLICT,
+    DEPRECATED_OP,
     ELEMENT_TYPE_UNCARRIED,
     REMOVED_OP,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
@@ -3594,6 +3595,53 @@ def reject_removed_constructs(data: object) -> None:
     raise err
 
 
+def _rewrite_deprecated(node: object, at: str, sites: list[str]) -> None:
+    if isinstance(node, dict):
+        op = node.get("op")
+        args = node.get("args")
+        if (
+            isinstance(op, str)
+            and op in op_registry.DEPRECATED_OPS
+            and isinstance(args, list)
+            and len(args) == op_registry.DEPRECATED_OP_ARITY[op]
+        ):
+            node["op"] = op_registry.DEPRECATED_OPS[op]
+            sites.append(f"{at or '/'} ({op})")
+        elif op == "broadcast" and node.get("fn") == "neg":
+            node["fn"] = "-"
+            sites.append(f"{at or '/'} (broadcast fn neg)")
+        for key, child in node.items():
+            _rewrite_deprecated(child, f"{at}/{_pointer_token(key)}", sites)
+    elif isinstance(node, list):
+        for i, child in enumerate(node):
+            _rewrite_deprecated(child, f"{at}/{i}", sites)
+
+
+def rewrite_deprecated_ops(data: object) -> list[str]:
+    """Rewrite the deprecated op spellings in ``data`` IN PLACE (esm-spec §4.2
+    "Deprecated ops") and return the JSON pointer of every rewritten node, each
+    followed by the spelling it had: ``neg`` with one operand becomes unary
+    ``-``, ``pow`` with two becomes ``^``, and a ``broadcast`` whose ``fn`` is
+    ``neg`` gets ``fn: "-"``. Every other field is kept. A use with the wrong
+    operand count is left as written, so its arity error is unchanged."""
+    sites: list[str] = []
+    _rewrite_deprecated(data, "", sites)
+    return sites
+
+
+def _warn_deprecated_ops(sites: list[str]) -> None:
+    """The one ``deprecated_op`` warning for a document, naming every site."""
+    if not sites:
+        return
+    warnings.warn(
+        f"{DEPRECATED_OP}: the deprecated op spellings `neg` (write unary `-`) and "
+        "`pow` (write `^`) were rewritten on load; they will be removed in a later "
+        'major version (esm-spec §4.2 "Deprecated ops"). Rewritten at: ' + ", ".join(sites) + ".",
+        EsmDeprecationWarning,
+        stacklevel=4,
+    )
+
+
 def prepare_document_ops(data: object) -> None:
     """The wire boundary for expression-node ``op`` spellings, applied to EVERY
     document — root, ``{ref}``-loaded child, template library, coupling library.
@@ -3609,12 +3657,17 @@ def prepare_document_ops(data: object) -> None:
        identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
        rewrite-target op: the document would load silently and fail much later
        as ``unlowered_operator``, or never.
-    2. The ``faq`` version gate — ``faq`` arrives at esm 1.1.0 (esm-spec
+    2. Deprecated spellings are rewritten IN PLACE (esm-spec §4.2
+       "Deprecated ops", :func:`rewrite_deprecated_ops`): ``neg`` to unary
+       ``-``, ``pow`` to ``^``, a ``broadcast`` ``fn`` of ``neg`` to ``-``,
+       with one ``deprecated_op`` warning for the document naming every site.
+    3. The ``faq`` version gate — ``faq`` arrives at esm 1.1.0 (esm-spec
        §2.2.4, same rule as the top-level ``solver`` block).
 
     See ``docs/content/rfcs/faq-node-rename.md``.
     """
     reject_removed_constructs(data)
+    _warn_deprecated_ops(rewrite_deprecated_ops(data))
     faq_at = _find_op(data, "faq")
     if faq_at is not None and _version_below_v11(data):
         declared = data.get("esm") if isinstance(data, dict) else None

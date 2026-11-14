@@ -47,7 +47,9 @@ and canonicalization recurses into `args` only — sub-expressions carried by
 aggregate fields (`expr_body`, `filter`, `lower`/`upper`, `values`,
 `bindings`, …) pass through verbatim, exactly as in the other bindings.
 RFC §5.4 pins rewrite rules only for the scalar arithmetic subset
-(`+ * - / neg`); all other ops are structure-preserving pass-throughs.
+(`+ * - /`, and the deprecated `neg` and `pow`, which canonicalize to unary
+`-` and `^`: esm-spec §4.2 "Deprecated ops"); all other ops are
+structure-preserving pass-throughs.
 Emission of such aggregate-carrying nodes is the restricted step — see
 [`canonical_json`](@ref).
 """
@@ -98,6 +100,10 @@ function _canonicalize_shallow(work::OpExpr)
         return _canon_div(work)
     elseif work.op == "neg"
         return _canon_neg(work)
+    elseif work.op == "pow"
+        # Deprecated word spelling of `^` (esm-spec §4.2): the canonical form
+        # never contains it.
+        return reconstruct(work; op = "^")
     end
     return work
 end
@@ -185,15 +191,19 @@ function _canon_neg(node::OpExpr)
     return _canon_neg_value(node.args[1])
 end
 
+# Negation of an already-canonical operand (RFC §5.4.7). The canonical form is
+# the unary `-` node; the deprecated `neg` spelling (esm-spec §4.2) is accepted
+# on input but never emitted. A double negation collapses whichever spelling
+# either negation uses.
 function _canon_neg_value(arg::ASTExpr)
     if arg isa IntExpr
         return IntExpr(-arg.value)
     elseif arg isa NumExpr
         return NumExpr(-arg.value)
-    elseif arg isa OpExpr && arg.op == "neg" && length(arg.args) == 1
+    elseif arg isa OpExpr && (arg.op == "neg" || arg.op == "-") && length(arg.args) == 1
         return arg.args[1]
     end
-    return OpExpr("neg", ASTExpr[arg])
+    return OpExpr("-", ASTExpr[arg])
 end
 
 function _flatten_same_op(args::Vector{ASTExpr}, op::String)

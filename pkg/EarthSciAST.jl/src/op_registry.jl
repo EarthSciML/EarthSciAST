@@ -170,8 +170,9 @@ change). Row order is meaningful only for the derived ordered table
 listed in the `_eval_node_op` / `_eval_acc_op` ladder-arm order.
 """
 const _OP_TABLE = _OpSpec[
-    # ── Arithmetic (esm-spec §4.2; `neg`/`pow` are the canonicalize-internal
-    #    aliases `canonicalize` may introduce for unary `-` / `^`) ──
+    # ── Arithmetic (esm-spec §4.2; `neg`/`pow` are the DEPRECATED word
+    #    spellings of unary `-` / `^` (see `_DEPRECATED_OPS`): the loader rewrites
+    #    them away, so they reach the evaluator only from an AST built in code) ──
     #    Display: `+`/`<`/`>` have a precedence but no `sep` (uniform
     #    separator handled directly in `_format_infix_op`), `/` renders
     #    `\frac`, `^` superscripts; `pow`/`neg` render as function calls.
@@ -467,6 +468,18 @@ const _OP_TABLE = _OpSpec[
     #    refused with `unevaluable_operator`, not `unlowered_operator`. ──
     _op("distinct"; category = :value_invention),
 ]
+
+"""
+    _DEPRECATED_OPS
+
+The deprecated op spellings (esm-spec §4.2 "Deprecated ops"), each mapped to
+its replacement: `neg` → unary `-`, `pow` → `^`. Both stay registry rows, so an
+AST built in code still evaluates, but the loader rewrites every well-formed
+use (a node with the row's arity; any other is left for its arity error) at
+the wire boundary with the warning `deprecated_op`, and `canonicalize` never
+emits either.
+"""
+const _DEPRECATED_OPS = Dict{String, String}("neg" => "-", "pow" => "^")
 
 # Name → spec lookup (load-time derived; ops are unique by construction —
 # duplicate names would silently shadow, so the ctor loop asserts uniqueness).

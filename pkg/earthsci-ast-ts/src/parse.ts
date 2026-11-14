@@ -391,7 +391,8 @@ export interface LoadOptions {
 
   /**
    * `false` silences the load-time `deprecated_records_per_sample` warning,
-   * emitted with `console.warn` at most once per load. Used by `validate()`,
+   * emitted with `console.warn` at most once per load, and the root
+   * document's `deprecated_op` warning (esm-spec §4.2 "Deprecated ops"). Used by `validate()`,
    * whose internal re-load of a document must not repeat the warning its own
    * load gave.
    */
@@ -484,7 +485,10 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // Step 1a-pre: the wire boundary for `op` spellings — removed ops and blocks
   // are refused by name, ahead of every other pass, and the `faq` version gate
   // reads the authored form.
-  prepareDocumentOps(data)
+  prepareDocumentOps(data, { warn: options?.warn })
+  // In canonical mode the schema view is a separate stripped copy: it gets the
+  // same rewrite, silently (the warning above already named every site).
+  if (validationView !== data) rewriteDeprecatedOps(validationView)
 
   // Step 1a: esm-spec §8.2.1 — resolve every `data_sources[*].source` location
   // against this document's own directory, before schema validation and before
@@ -1119,10 +1123,72 @@ export function raiseFaqVersionFloor(doc: unknown): void {
 }
 
 /**
+ * The deprecated op spellings (esm-spec §4.2 "Deprecated ops") and what a
+ * loader rewrites each to, with the operand count a use must have to be
+ * rewritten. A use with any other count is left as written, so the arity error
+ * it always had is unchanged.
+ */
+export const DEPRECATED_OPS: ReadonlyMap<string, { replacement: string; arity: number }> = new Map([
+  ['neg', { replacement: '-', arity: 1 }],
+  ['pow', { replacement: '^', arity: 2 }],
+])
+
+/**
+ * Rewrite every deprecated op spelling in `doc` IN PLACE (esm-spec §4.2
+ * "Deprecated ops"): `{"op": "neg", "args": [x]}` becomes unary
+ * `{"op": "-", "args": [x]}`, `{"op": "pow", "args": [x, n]}` becomes
+ * `{"op": "^", "args": [x, n]}`, and a `broadcast` node's `"fn": "neg"` becomes
+ * `"fn": "-"`. Every other field of the node is kept. Returns the JSON pointer
+ * of every rewritten node, in pre-order (`""` for the root).
+ */
+export function rewriteDeprecatedOps(doc: unknown): string[] {
+  const sites: string[] = []
+  const visit = (node: unknown, at: string): void => {
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) visit(node[i], `${at}/${i}`)
+      return
+    }
+    if (node === null || typeof node !== 'object') return
+    const obj = node as Record<string, unknown>
+    if (typeof obj.op === 'string') {
+      const dep = DEPRECATED_OPS.get(obj.op)
+      if (dep !== undefined && Array.isArray(obj.args) && obj.args.length === dep.arity) {
+        obj.op = dep.replacement
+        sites.push(at)
+      } else if (obj.op === 'broadcast' && obj.fn === 'neg') {
+        obj.fn = '-'
+        sites.push(at)
+      }
+    }
+    for (const k of Object.keys(obj)) visit(obj[k], `${at}/${k}`)
+  }
+  visit(doc, '')
+  return sites
+}
+
+/** The load-time `deprecated_op` warning naming the rewritten nodes `sites`. */
+export function deprecatedOpWarning(sites: readonly string[]): string {
+  return (
+    'deprecated_op: the op spellings `neg` and `pow` are deprecated (esm-spec §4.2 ' +
+    '"Deprecated ops") and were rewritten on load, `neg` to unary `-` and `pow` to `^`; ' +
+    `write \`-\` and \`^\` instead. Rewritten at: ${sites.map((p) => p || '/').join(', ')}.`
+  )
+}
+
+/** Options for {@link prepareDocumentOps}. */
+export interface PrepareDocumentOpsOptions {
+  /**
+   * `false` silences the `deprecated_op` warning (the rewrite still happens).
+   * Used where the same document is read again later by a pass that warns.
+   */
+  warn?: boolean | undefined
+}
+
+/**
  * The wire boundary for expression-node `op` spellings, applied to EVERY
  * document — root, `{ref}`-loaded child, template library, coupling library.
  *
- * Two steps, in this order:
+ * Three steps, in this order:
  *
  * 1. `arrayop` (removed at esm 0.8.0), the ops removed at esm 2.0.0 (the
  *    `aggregate` alias of `faq` among them) and the `function_tables` block are
@@ -1130,14 +1196,23 @@ export function raiseFaqVersionFloor(doc: unknown): void {
  *    esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op: the
  *    document would load silently and fail much later as `unlowered_operator`,
  *    or never.
- * 2. The `faq` version gate, on the AUTHORED form — `faq` arrives at esm 1.1.0
+ * 2. The deprecated spellings `neg` and `pow` (and `neg` as a `broadcast`
+ *    `fn`) are rewritten IN PLACE to `-` and `^` ({@link rewriteDeprecatedOps}),
+ *    with ONE `deprecated_op` warning for the document, through
+ *    `console.warn`, naming every rewritten node (esm-spec §4.2 "Deprecated
+ *    ops").
+ * 3. The `faq` version gate, on the AUTHORED form — `faq` arrives at esm 1.1.0
  *    (esm-spec §2.2.4).
  *
- * Read-only: the document is not modified.
+ * The document is modified only by step 2.
  */
-export function prepareDocumentOps(doc: unknown): void {
+export function prepareDocumentOps(doc: unknown, options?: PrepareDocumentOpsOptions): void {
   const removed = findRemovedConstruct(doc)
   if (removed !== null) throw new ParseError(removed.message, undefined, ERROR_CODES.REMOVED_OP)
+  const deprecated = rewriteDeprecatedOps(doc)
+  if (deprecated.length > 0 && options?.warn !== false) {
+    console.warn(deprecatedOpWarning(deprecated))
+  }
   const faqAt = findOp(doc, 'faq')
   if (faqAt !== null && declaredBelowV11(doc)) {
     const declared = (doc as Record<string, unknown>).esm

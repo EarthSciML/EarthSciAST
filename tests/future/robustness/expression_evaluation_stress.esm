@@ -35,7 +35,7 @@
                                         { "op": "acosh", "args": [
                                           { "op": "sqrt", "args": [
                                             { "op": "cbrt", "args": [
-                                              { "op": "pow", "args": [
+                                              { "op": "^", "args": [
                                                 { "op": "exp", "args": [
                                                   { "op": "log", "args": [
                                                     { "op": "log10", "args": [
@@ -67,7 +67,7 @@
               {
                 "op": "/",
                 "args": [
-                  { "op": "pow", "args": [
+                  { "op": "^", "args": [
                     { "op": "+", "args": [
                       { "op": "*", "args": [
                         { "op": "sqrt", "args": [2] },
@@ -75,8 +75,8 @@
                       ]},
                       { "op": "log", "args": [
                         { "op": "+", "args": [
-                          { "op": "pow", "args": ["base_var", 2] },
-                          { "op": "pow", "args": [2.718281828, { "op": "*", "args": ["base_var", 0.5] }] }
+                          { "op": "^", "args": ["base_var", 2] },
+                          { "op": "^", "args": [2.718281828, { "op": "*", "args": ["base_var", 0.5] }] }
                         ]}
                       ]}
                     ]},
@@ -87,7 +87,7 @@
                   ]},
                   { "op": "sqrt", "args": [
                     { "op": "+", "args": [
-                      { "op": "pow", "args": [
+                      { "op": "^", "args": [
                         { "op": "tan", "args": [{ "op": "*", "args": ["base_var", 0.3] }] },
                         3
                       ]},
@@ -106,7 +106,7 @@
             "op": "*",
             "args": [
               { "op": "sqrt", "args": [{ "op": "*", "args": [6.283185307, "base_var"] }] },
-              { "op": "pow", "args": [
+              { "op": "^", "args": [
                 { "op": "/", "args": ["base_var", 2.718281828] },
                 "base_var"
               ]},
@@ -130,7 +130,7 @@
                 1,
                 { "op": "+", "args": [
                   "base_var",
-                  { "op": "pow", "args": ["base_var", 2] }
+                  { "op": "^", "args": ["base_var", 2] }
                 ]}
               ]}
             ]
@@ -144,34 +144,34 @@
             "args": [
               { "op": "+", "args": [
                 { "op": "*", "args": [
-                  { "op": "pow", "args": ["base_var", 6] },
+                  { "op": "^", "args": ["base_var", 6] },
                   2.5
                 ]},
                 { "op": "*", "args": [
-                  { "op": "pow", "args": ["base_var", 4] },
+                  { "op": "^", "args": ["base_var", 4] },
                   -3.7
                 ]},
                 { "op": "*", "args": [
-                  { "op": "pow", "args": ["base_var", 2] },
+                  { "op": "^", "args": ["base_var", 2] },
                   1.8
                 ]},
                 0.9
               ]},
               { "op": "+", "args": [
                 { "op": "*", "args": [
-                  { "op": "pow", "args": ["base_var", 8] },
+                  { "op": "^", "args": ["base_var", 8] },
                   1.2
                 ]},
                 { "op": "*", "args": [
-                  { "op": "pow", "args": ["base_var", 6] },
+                  { "op": "^", "args": ["base_var", 6] },
                   -2.1
                 ]},
                 { "op": "*", "args": [
-                  { "op": "pow", "args": ["base_var", 4] },
+                  { "op": "^", "args": ["base_var", 4] },
                   3.4
                 ]},
                 { "op": "*", "args": [
-                  { "op": "pow", "args": ["base_var", 2] },
+                  { "op": "^", "args": ["base_var", 2] },
                   -1.7
                 ]},
                 1.0
@@ -185,7 +185,7 @@
           "expression": {
             "op": "*",
             "args": [
-              { "op": "pow", "args": [
+              { "op": "^", "args": [
                 { "op": "/", "args": ["base_var", 2] },
                 0
               ]},
@@ -193,7 +193,7 @@
                 1,
                 { "op": "*", "args": [
                   { "op": "/", "args": [
-                    { "op": "pow", "args": [
+                    { "op": "^", "args": [
                       { "op": "/", "args": ["base_var", 2] },
                       2
                     ]},
@@ -202,7 +202,7 @@
                   { "op": "+", "args": [
                     1,
                     { "op": "/", "args": [
-                      { "op": "pow", "args": [
+                      { "op": "^", "args": [
                         { "op": "/", "args": ["base_var", 2] },
                         2
                       ]},
@@ -226,7 +226,7 @@
                 { "op": "exp", "args": [
                   { "op": "*", "args": [
                     -0.001,
-                    { "op": "pow", "args": ["t", 2] }
+                    { "op": "^", "args": ["t", 2] }
                   ]}
                 ]}
               ]},
@@ -267,11 +267,11 @@
             "op": "+",
             "args": [
               { "op": "*", "args": [
-                { "op": "pow", "args": ["x", { "op": "+", "args": ["y", "z"] }] },
+                { "op": "^", "args": ["x", { "op": "+", "args": ["y", "z"] }] },
                 { "op": "/", "args": [
                   { "op": "-", "args": [
                     { "op": "*", "args": ["y", "z"] },
-                    { "op": "pow", "args": ["x", 2] }
+                    { "op": "^", "args": ["x", 2] }
                   ]},
                   { "op": "+", "args": [
                     { "op": "sqrt", "args": ["x"] },
@@ -295,7 +295,7 @@
           "type": "algebraic",
           "units": "1",
           "expression": {
-            "op": "pow",
+            "op": "^",
             "args": [
               { "op": "+", "args": [
                 { "op": "/", "args": [
@@ -313,8 +313,8 @@
                   ]},
                   { "op": "sqrt", "args": [
                     { "op": "+", "args": [
-                      { "op": "pow", "args": ["x", 2] },
-                      { "op": "pow", "args": ["y", 2] }
+                      { "op": "^", "args": ["x", 2] },
+                      { "op": "^", "args": ["y", 2] }
                     ]}
                   ]}
                 ]},

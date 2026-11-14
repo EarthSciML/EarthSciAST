@@ -172,7 +172,7 @@ appear in no operator table in `esm-spec.md`, in no schema list, and nowhere in
 the conformance corpus — so nothing holds the bindings to a shared meaning, and
 they do not agree. Python's expression parser reads `pi`, `e`, and `false` as
 ordinary variable *references* rather than operators; the Rust operator registry
-asserts that `false` is not a registered operator at all, alongside `pow`, `**`,
+asserts that `false` is not a registered operator at all, alongside `**`,
 `power`, and `=`.
 
 Write the numeric literal instead — `3.141592653589793` for π, `0` for false.
