@@ -18,6 +18,58 @@ that make that sound:
   residue block is rebuilt exactly.
 -/
 
+namespace Esm.Document.Json
+
+/-! ## Equality of values
+
+Decided structurally, so a decoder can check a candidate by encoding it again. -/
+
+mutual
+def beq : Json → Json → Bool
+  | .null, .null => true
+  | .bool a, .bool b => a == b
+  | .num a, .num b => decide (a = b)
+  | .str a, .str b => a == b
+  | .arr a, .arr b => beqList a b
+  | .obj a, .obj b => beqObj a b
+  | _, _ => false
+
+def beqList : List Json → List Json → Bool
+  | [], [] => true
+  | x :: xs, y :: ys => beq x y && beqList xs ys
+  | _, _ => false
+
+def beqObj : List (String × Json) → List (String × Json) → Bool
+  | [], [] => true
+  | (k, x) :: xs, (l, y) :: ys => k == l && beq x y && beqObj xs ys
+  | _, _ => false
+end
+
+mutual
+theorem beq_iff : ∀ a b : Json, beq a b = true ↔ a = b
+  | .null, b => by cases b <;> simp [beq]
+  | .bool x, b => by cases b <;> simp [beq]
+  | .num x, b => by cases b <;> simp [beq]
+  | .str x, b => by cases b <;> simp [beq]
+  | .arr x, b => by cases b <;> simp [beq, beqList_iff]
+  | .obj x, b => by cases b <;> simp [beq, beqObj_iff]
+
+theorem beqList_iff : ∀ a b : List Json, beqList a b = true ↔ a = b
+  | [], b => by cases b <;> simp [beqList]
+  | x :: xs, b => by cases b <;> simp [beqList, beq_iff, beqList_iff]
+
+theorem beqObj_iff : ∀ a b : List (String × Json), beqObj a b = true ↔ a = b
+  | [], b => by cases b <;> simp [beqObj]
+  | (k, x) :: xs, b => by
+    cases b with
+    | nil => simp [beqObj]
+    | cons p ys => obtain ⟨l, y⟩ := p; simp [beqObj, beq_iff, beqObj_iff, and_assoc]
+end
+
+instance : DecidableEq Json := fun a b => decidable_of_iff _ (beq_iff a b)
+
+end Esm.Document.Json
+
 namespace Esm.Document.Source
 
 open Esm.Document Esm.Document.Math

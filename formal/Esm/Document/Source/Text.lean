@@ -29,6 +29,35 @@ theorem pre_append (p t : List Char) : pre p (p ++ t) = true := by
   | nil => rfl
   | cons a p ih => simp [pre, ih]
 
+/-- A prefix no longer than `x` is decided within `x`. -/
+theorem pre_app_long : ∀ (p x t : List Char), p.length ≤ x.length → pre p (x ++ t) = pre p x
+  | [], _, _, _ => rfl
+  | _ :: _, [], _, h => by simp at h
+  | a :: p, b :: x, t, h => by
+    simp only [List.cons_append, pre]
+    rw [pre_app_long p x t (by simp at h; omega)]
+
+theorem pre_app_of_pre : ∀ (p x t : List Char), pre p x = true → pre p (x ++ t) = true
+  | [], _, _, _ => rfl
+  | _ :: _, [], _, h => by simp [pre] at h
+  | a :: p, b :: x, t, h => by
+    simp only [pre, Bool.and_eq_true, beq_iff_eq] at h
+    simp only [List.cons_append, pre, h.1, beq_self_eq_true, Bool.true_and]
+    exact pre_app_of_pre p x t h.2
+
+/-- Two texts neither of which starts the other differ before either ends. -/
+theorem pre_app_false : ∀ (p x t : List Char), pre p x = false → pre x p = false →
+    pre p (x ++ t) = false
+  | [], _, _, h, _ => by simp [pre] at h
+  | _ :: _, [], _, _, h => by simp [pre] at h
+  | a :: p, b :: x, t, h1, h2 => by
+    simp only [List.cons_append, pre]
+    by_cases hab : a = b
+    · subst hab
+      simp only [pre, beq_self_eq_true, Bool.true_and] at h1 h2 ⊢
+      exact pre_app_false p x t h1 h2
+    · simp [hab]
+
 theorem pre_cons_ne {a b : Char} (p s : List Char) (h : a ≠ b) : pre (a :: p) (b :: s) = false := by
   simp [pre, h]
 

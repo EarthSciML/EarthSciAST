@@ -23,13 +23,16 @@ Native surfaces (`Notation.skeleton`):
 * component directives: the entries of `models` and `reaction_systems`;
 * declarations: a model's `variables` (`:var`, and `:param` for `type: "parameter"`), a
   reaction system's `species` (`:species`) and `parameters` (`:param`);
-* display math: a component's `equations`, one equation each.
+* the math entries of a component: its `equations` (display math, one equation each),
+  its `initialization_equations` and `constraint_equations` (display math marked as
+  such), and its `reactions` (one reaction line each). Each of these four fields is
+  native when every one of its entries is, and otherwise one path block.
 
 Everything else is a path block.
 
-The equations are the only math. They are printed under the component's symbol table
-(`symFor`), which is computed from the rest of the skeleton only, so the parser can
-build the same table before it reads any equation (`symFor_mapEqns`).
+The math entries are printed under the component's symbol table (`symFor`), which is
+computed from the rest of the skeleton only, so the parser can build the same table
+before it reads any math (`symFor_mapMath`).
 -/
 
 namespace Esm.Document.Source
@@ -131,16 +134,62 @@ structure Eqn where
   lhs : Json
   rhs : Json
 
-/-- One component section. `α` is how an equation is held: `Eqn` in the semantic
-skeleton, the container's math text in the raw one. `eqBlock` is the `equations` field
-when it is not printed as display math. -/
+/-- The field an equation belongs to. -/
+inductive Role where
+  | eqn
+  | init
+  | cons
+  deriving DecidableEq, Repr
+
+def Role.field : Role → String
+  | .eqn => "equations"
+  | .init => "initialization_equations"
+  | .cons => "constraint_equations"
+
+/-- One term of a reaction side: a species and its stoichiometric coefficient. -/
+structure Term where
+  species : String
+  coef : JNum
+
+/-- A reaction: its `id`, its sides (`none` for an empty side, JSON `null`), its rate
+(`ρ`: the expression, or its math text), and its other fields. -/
+structure Rxn (ρ : Type) where
+  id : String
+  subs : Option (List Term)
+  prods : Option (List Term)
+  rate : ρ
+  attrs : List (String × Json)
+
+/-- A math entry of a component: an equation of one of the three equation fields (`α`:
+the equation, or its math text), or a reaction. -/
+inductive Mx (α ρ : Type) where
+  | eq (r : Role) (e : α)
+  | rxn (x : Rxn ρ)
+
+/-- A math entry as read. -/
+abbrev MC := Mx Eqn Json
+/-- A math entry as the container's text. -/
+abbrev MR := Mx String String
+
+/-- The field a math entry belongs to. -/
+def Mx.field {α ρ : Type} : Mx α ρ → String
+  | .eq r _ => r.field
+  | .rxn _ => "reactions"
+
+/-- The math fields, in key order. -/
+def mathFields : List String :=
+  ["constraint_equations", "equations", "initialization_equations", "reactions"]
+
+/-- One component section. `α` is how a math entry is held: `MC` in the semantic
+skeleton, `MR` (the container's math text) in the raw one. `mathBlocks` holds the math
+fields that are not printed natively. -/
 structure Comp (α : Type) where
   kind : Kind
   name : String
   desc : Option String
   decls : List Decl
-  eqns : List α
-  eqBlock : Option Json
+  math : List α
+  mathBlocks : List (String × Json)
   blocks : List (String × Json)
 
 /-- A document skeleton: the front matter entries, the document description, the
@@ -151,9 +200,9 @@ structure Doc (α : Type) where
   blocks : List (String × Json)
   comps : List (Comp α)
 
-/-- Change how equations are held. -/
-def Comp.mapEqns {α β : Type} (f : Comp α → α → β) (c : Comp α) : Comp β :=
-  { c with eqns := c.eqns.map (f c) }
+/-- Change how math entries are held. -/
+def Comp.mapMath {α β : Type} (f : Comp α → α → β) (c : Comp α) : Comp β :=
+  { c with math := c.math.map (f c) }
 
 /-! ## The symbol table of a component -/
 
@@ -178,7 +227,7 @@ def templatesOf : Option Json → List (String × List String)
 declarations and the entries of its declaration fields printed as blocks) and the
 document's index sets; the templates of the document and of the component. It reads
 the top-level blocks and the component's declarations and blocks only, never an
-equation, so the parser builds it before reading any math. -/
+math entry, so the parser builds it before reading any math. -/
 def symFor {α : Type} (root : List (String × Json)) (c : Comp α) : Sym :=
   { names := c.decls.map Decl.name ++ keysOf (look "variables" c.blocks) ++
       keysOf (look "species" c.blocks) ++ keysOf (look "parameters" c.blocks) ++
@@ -187,12 +236,13 @@ def symFor {α : Type} (root : List (String × Json)) (c : Comp α) : Sym :=
       templatesOf (look "expression_templates" c.blocks) }
 
 /-- The printer and the parser derive the same table: it does not depend on how the
-equations are held, nor on the `equations` fallback. -/
-theorem symFor_mapEqns {α β : Type} (root : List (String × Json)) (f : Comp α → α → β)
-    (c : Comp α) : symFor root (c.mapEqns f) = symFor root c := rfl
+math entries are held, nor on the math fallbacks. -/
+theorem symFor_mapMath {α β : Type} (root : List (String × Json)) (f : Comp α → α → β)
+    (c : Comp α) : symFor root (c.mapMath f) = symFor root c := rfl
 
-theorem symFor_eqBlock {α : Type} (root : List (String × Json)) (c : Comp α) (e : Option Json)
-    (es : List α) : symFor root { c with eqBlock := e, eqns := es } = symFor root c := rfl
+theorem symFor_math {α : Type} (root : List (String × Json)) (c : Comp α)
+    (bs : List (String × Json)) (ms : List α) :
+    symFor root { c with mathBlocks := bs, math := ms } = symFor root c := rfl
 
 /-! ## What a container can spell natively -/
 
@@ -211,6 +261,13 @@ structure Caps where
   attr : String × Json → Bool
   /-- An equation under the component's symbol table. -/
   eqn : Sym → Eqn → Bool
+  /-- A reaction under the component's symbol table. -/
+  rxn : Sym → Rxn Json → Bool
+
+/-- A math entry the container spells. -/
+def Caps.item (caps : Caps) (S : Sym) : MC → Bool
+  | .eq _ e => caps.eqn S e
+  | .rxn x => caps.rxn S x
 
 /-! ## Equations -/
 
@@ -239,43 +296,153 @@ theorem eqnJson_eqnOf {j : Json} {e : Eqn} (h : eqnOf j = some e) : eqnJson e = 
     · cases h
   · cases h
 
-/-- The equations of an `equations` value, when all of them print natively. -/
-def eqnsOf (caps : Caps) (S : Sym) : Json → Option (List Eqn)
+/-! ## Reactions -/
+
+def termJson (t : Term) : Json := .obj [("species", .str t.species), ("stoichiometry", .num t.coef)]
+
+def termOf : Json → Option Term
+  | .obj [("species", .str s), ("stoichiometry", .num n)] => some ⟨s, n⟩
+  | _ => none
+
+/-- A reaction side: JSON `null` for an empty side, else a non-empty array. -/
+def sideJson : Option (List Term) → Json
+  | none => .null
+  | some ts => .arr (ts.map termJson)
+
+def sideOf : Json → Option (Option (List Term))
+  | .null => some none
+  | .arr (x :: xs) => ((x :: xs).mapM termOf).map some
+  | _ => none
+
+/-- The keys of a reaction with a surface of their own; every other key is an
+attribute. -/
+def rxnKeys : List String := ["id", "products", "rate", "substrates"]
+
+def rxnJson (x : Rxn Json) : Json :=
+  .obj (sortKeys ([("id", .str x.id), ("products", sideJson x.prods), ("rate", x.rate),
+    ("substrates", sideJson x.subs)] ++ x.attrs))
+
+/-- The reaction a JSON value is, checked by printing it back: its `id` is a string, both
+sides are present, and the rate is an expression. -/
+def rxnOf (v : Json) : Option (Rxn Json) :=
+  match v with
+  | .obj kvs =>
+    match look "id" kvs, (look "substrates" kvs).bind sideOf, (look "products" kvs).bind sideOf,
+      look "rate" kvs with
+    | some (.str i), some s, some p, some r =>
+      let x : Rxn Json := ⟨i, s, p, r, kvs.filter (fun kv => !rxnKeys.contains kv.1)⟩
+      if rxnJson x = v ∧ isE r = true then some x else none
+    | _, _, _, _ => none
+  | _ => none
+
+theorem rxnOf_some {v : Json} {x : Rxn Json} (h : rxnOf v = some x) :
+    rxnJson x = v ∧ isE x.rate = true := by
+  unfold rxnOf at h
+  split at h
+  · split at h
+    · simp only at h
+      split at h
+      · cases h; assumption
+      · cases h
+    · cases h
+  · cases h
+
+/-! ## Math entries -/
+
+/-- The JSON value of a math entry. -/
+def itemJson : MC → Json
+  | .eq _ e => eqnJson e
+  | .rxn x => rxnJson x
+
+/-- The role of an equation field. -/
+def roleOf (f : String) : Option Role := [Role.eqn, .init, .cons].find? (fun r => r.field == f)
+
+/-- The math entry an entry of the math field `f` is. -/
+def itemOf (f : String) (v : Json) : Option MC :=
+  if f = "reactions" then (rxnOf v).map .rxn
+  else (roleOf f).bind (fun r => (eqnOf v).map (.eq r))
+
+/-- Well-formed expressions throughout. -/
+def mathWF : MC → Bool
+  | .eq _ e => isE e.lhs && isE e.rhs
+  | .rxn x => isE x.rate
+
+theorem roleOf_some {f : String} {r : Role} (h : roleOf f = some r) : r.field = f := by
+  unfold roleOf at h
+  have := List.find?_some h
+  simpa using this
+
+theorem eqnOf_isE {j : Json} {e : Eqn} (h : eqnOf j = some e) : isE e.lhs = true ∧ isE e.rhs = true := by
+  unfold eqnOf at h
+  split at h
+  · split at h
+    · cases h; simp_all
+    · cases h
+  · split at h
+    · cases h; simp_all
+    · cases h
+  · cases h
+
+theorem itemOf_some {f : String} {v : Json} {m : MC} (h : itemOf f v = some m) :
+    itemJson m = v ∧ m.field = f ∧ mathWF m = true := by
+  unfold itemOf at h
+  split at h
+  · rename_i hf
+    simp only [Option.map_eq_some_iff] at h
+    obtain ⟨x, hx, rfl⟩ := h
+    obtain ⟨h1, h2⟩ := rxnOf_some hx
+    exact ⟨h1, hf.symm, h2⟩
+  · simp only [Option.bind_eq_some_iff, Option.map_eq_some_iff] at h
+    obtain ⟨r, hr, e, he, rfl⟩ := h
+    have := eqnOf_isE he
+    exact ⟨eqnJson_eqnOf he, roleOf_some hr, by simp [mathWF, this.1, this.2]⟩
+
+/-- The entries of a math field, when all of them print natively. -/
+def mathOf (caps : Caps) (S : Sym) (f : String) : Json → Option (List MC)
   | .arr (x :: xs) =>
-    match (x :: xs).mapM eqnOf with
-    | some es => if es.all (caps.eqn S) then some es else none
+    match (x :: xs).mapM (itemOf f) with
+    | some ms => if ms.all (caps.item S) then some ms else none
     | none => none
   | _ => none
 
-theorem mapM_eqnOf : ∀ {xs : List Json} {es : List Eqn}, xs.mapM eqnOf = some es →
-    xs = es.map eqnJson
-  | [], es, h => by simp at h; subst h; rfl
-  | y :: ys, es, h => by
+theorem mapM_itemOf {f : String} : ∀ {xs : List Json} {ms : List MC}, xs.mapM (itemOf f) = some ms →
+    xs = ms.map itemJson ∧ ∀ m ∈ ms, m.field = f ∧ mathWF m = true
+  | [], ms, h => by simp at h; subst h; simp
+  | y :: ys, ms, h => by
     simp only [List.mapM_cons, Option.bind_eq_bind] at h
-    cases hy : eqnOf y with
+    cases hy : itemOf f y with
     | none => simp [hy] at h
-    | some ey =>
-      cases hys : ys.mapM eqnOf with
+    | some my =>
+      cases hys : ys.mapM (itemOf f) with
       | none => simp [hy, hys] at h
-      | some eys =>
+      | some mys =>
         simp [hy, hys] at h
         subst h
-        simp [eqnJson_eqnOf hy, mapM_eqnOf hys]
+        obtain ⟨h1, h2, h3⟩ := itemOf_some hy
+        obtain ⟨h4, h5⟩ := mapM_itemOf hys
+        refine ⟨by simp [h1, h4], ?_⟩
+        intro m hm
+        rcases List.mem_cons.mp hm with rfl | hm
+        · exact ⟨h2, h3⟩
+        · exact h5 m hm
 
-theorem eqnsOf_json {caps : Caps} {S : Sym} {j : Json} {es : List Eqn}
-    (h : eqnsOf caps S j = some es) : j = .arr (es.map eqnJson) ∧ es ≠ [] := by
-  unfold eqnsOf at h
+theorem mathOf_some {caps : Caps} {S : Sym} {f : String} {j : Json} {ms : List MC}
+    (h : mathOf caps S f j = some ms) :
+    j = .arr (ms.map itemJson) ∧ ms ≠ [] ∧
+      ∀ m ∈ ms, m.field = f ∧ mathWF m = true ∧ caps.item S m = true := by
+  unfold mathOf at h
   split at h
   · rename_i x xs
     split at h
-    · rename_i es' hm
+    · rename_i ms' hm
       split at h
       · cases h
-        have := mapM_eqnOf hm
-        refine ⟨by rw [this], ?_⟩
+        rename_i hall
+        obtain ⟨h1, h2⟩ := mapM_itemOf hm
+        refine ⟨by rw [h1], ?_, fun m hm' => ⟨(h2 m hm').1, (h2 m hm').2, List.all_eq_true.mp hall m hm'⟩⟩
         intro he
-        rw [he] at this
-        cases this
+        rw [he] at h1
+        cases h1
       · cases h
     · cases h
   · cases h
@@ -352,35 +519,42 @@ def backDecl (K : Kind) (d : Decl) : Option (String × Json) :=
 
 /-- Where an entry of a component goes when it is not a native surface: the
 description when it does not print natively, every entry without a surface of its own,
-and the residue of each declaration field; the equations are decided later. -/
+and the residue of each declaration field; the math fields are decided later. -/
 def compBlock (caps : Caps) (K : Kind) (desc : Option String) (kv : String × Json) :
     Option (String × Json) :=
   if kv.1 = "description" then (if desc.isSome then none else some kv)
-  else if kv.1 = "equations" then none
+  else if kv.1 ∈ mathFields then none
   else match (declFields caps K).lookup kv.1 with
     | some pick => (splitOpt pick (some kv.2)).2.map (fun r => (kv.1, r))
     | none => some kv
 
 /-- A component, before its equations are decided: its description, its declarations,
 and its blocks. -/
-def compBase (caps : Caps) (K : Kind) (name : String) (kvs : List (String × Json)) : Comp Eqn :=
+def compBase (caps : Caps) (K : Kind) (name : String) (kvs : List (String × Json)) : Comp MC :=
   let desc := descOf caps (look "description" kvs)
   { kind := K, name := name, desc := desc,
     decls := (declFields caps K).flatMap (fun f => (splitOpt f.2 (look f.1 kvs)).1),
-    eqns := [], eqBlock := none,
+    math := [], mathBlocks := [],
     blocks := kvs.filterMap (compBlock caps K desc) }
 
-/-- A component: `compBase`, then its equations, as display math when every one prints
-natively under the component's symbol table, else as the `equations` block. -/
+/-- One math field of a component: its entries when every one prints natively under the
+symbol table `S`, else its block. -/
+def mathPart (caps : Caps) (S : Sym) (kvs : List (String × Json)) (f : String) :
+    List MC × Option (String × Json) :=
+  match look f kvs with
+  | none => ([], none)
+  | some v =>
+    match mathOf caps S f v with
+    | some ms => (ms, none)
+    | none => ([], some (f, v))
+
+/-- A component: `compBase`, then its math fields, each native when every entry prints
+natively under the component's symbol table, else a block. -/
 def compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (name : String)
-    (kvs : List (String × Json)) : Comp Eqn :=
+    (kvs : List (String × Json)) : Comp MC :=
   let c := compBase caps K name kvs
-  match look "equations" kvs with
-  | none => c
-  | some ev =>
-    match eqnsOf caps (symFor root c) ev with
-    | some es => { c with eqns := es }
-    | none => { c with eqBlock := some ev }
+  let ps := mathFields.map (mathPart caps (symFor root c) kvs)
+  { c with math := ps.flatMap Prod.fst, mathBlocks := ps.filterMap Prod.snd }
 
 /-- A component entry prints as a directive when its name does and it is an object. -/
 def pickComp (caps : Caps) (n : String) (v : Json) : Option (String × List (String × Json)) :=
@@ -403,7 +577,7 @@ def rootBlocks (caps : Caps) (kvs : List (String × Json)) : List (String × Jso
   kvs.filterMap (rootBlock caps)
 
 /-- **The skeleton of a document.** -/
-def toDoc (caps : Caps) : Json → Doc Eqn
+def toDoc (caps : Caps) : Json → Doc MC
   | .obj kvs =>
     let m := metaOf caps (look "metadata" kvs)
     let blocks := rootBlocks caps kvs
@@ -422,12 +596,17 @@ def optKv (k : String) : Option Json → List (String × Json)
   | some v => [(k, v)]
   | none => []
 
-/-- The rebuilt `equations` entry. -/
-def eqnsKv (c : Comp Eqn) : Option (List (String × Json)) :=
-  match c.eqns, c.eqBlock with
-  | [], b => some (optKv "equations" b)
-  | es, none => some [("equations", .arr (es.map eqnJson))]
-  | _ :: _, some _ => none
+/-- One rebuilt math field: its entries, or its block, or neither. -/
+def mathKv (c : Comp MC) (f : String) : Option (List (String × Json)) :=
+  match c.math.filter (fun m => m.field == f), at_ f c.mathBlocks with
+  | [], [] => some []
+  | [], [(_, v)] => some [(f, v)]
+  | m :: ms, [] => some [(f, .arr ((m :: ms).map itemJson))]
+  | _, _ => none
+
+/-- The rebuilt math fields. -/
+def mathKvs (c : Comp MC) : Option (List (String × Json)) :=
+  (mathFields.mapM (mathKv c)).map List.flatten
 
 /-- The names of the declaration fields of a component kind. -/
 def declFieldNames : Kind → List String
@@ -439,31 +618,31 @@ theorem declFields_names (caps : Caps) (K : Kind) :
   cases K <;> rfl
 
 /-- One rebuilt declaration field: its declarations joined with its residue block. -/
-def declKv (K : Kind) (c : Comp Eqn) (f : String) : Option (List (String × Json)) := do
+def declKv (K : Kind) (c : Comp MC) (f : String) : Option (List (String × Json)) := do
   let r ← pickOne f c.blocks
   let v ← joinField (backDecl K) (c.decls.filter (fun d => declField K d.kind == some f)) r
   pure (optKv f v)
 
 /-- The rebuilt declaration fields; a declaration of a kind the component does not
 have (`:species` in a model) is refused. -/
-def declKvs (K : Kind) (c : Comp Eqn) : Option (List (String × Json)) :=
+def declKvs (K : Kind) (c : Comp MC) : Option (List (String × Json)) :=
   if c.decls.all (fun d => (declField K d.kind).isSome) then
     ((declFieldNames K).mapM (declKv K c)).map List.flatten
   else none
 
 /-- **A component rebuilt from its section.** -/
-def ofComp (c : Comp Eqn) : Option Json := do
+def ofComp (c : Comp MC) : Option Json := do
   let ds ← declKvs c.kind c
-  let es ← eqnsKv c
+  let es ← mathKvs c
   let others := c.blocks.filter (fun kv => !(declFieldNames c.kind).contains kv.1)
   pure (.obj (sortKeys (optKv "description" (c.desc.map Json.str) ++ ds ++ es ++ others)))
 
 /-- A component back to its entry. -/
-def backComp (c : Comp Eqn) : Option (String × Json) := (ofComp c).map (fun v => (c.name, v))
+def backComp (c : Comp MC) : Option (String × Json) := (ofComp c).map (fun v => (c.name, v))
 
 /-- **A document rebuilt from its skeleton.** The result is checked to be canonical,
 which rejects a field written twice (once natively and once in a block, say). -/
-def ofDoc (D : Doc Eqn) : Option Json := do
+def ofDoc (D : Doc MC) : Option Json := do
   let esmKv := at_ "esm" D.front
   let metaEs := D.front.filter (fun kv => kv.1 != "esm") ++ optKv "description" (D.desc.map Json.str)
   let metaKv := if metaEs.isEmpty then [] else [("metadata", Json.obj (sortKeys metaEs))]

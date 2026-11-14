@@ -10,8 +10,9 @@ import Esm.Document.Source.MultiLine
 
 1. `toDoc capsMd` (the skeleton, with the path-keyed fallback for anything Markdown
    cannot spell natively) and `ofDoc` — `ofDoc_toDoc`;
-2. `rawDoc prMd` (each equation as LaTeX under its component's symbol table) and
-   `cookDoc ckMd` — `cookDoc_rawDoc`, with the Phase 2 theorem `parseLatex_printLatex`;
+2. `rawDoc prMdx` (each equation, and each reaction's rate, as LaTeX under its
+   component's symbol table) and `cookDoc ckMdx` — `cookDoc_rawDoc`, with the Phase 2
+   theorem `parseLatex_printLatex`;
 3. `items` and `unitems` — `unitems_items`;
 4. the text: front matter, then the constructs separated by blank lines — `lex_render`.
 -/
@@ -71,6 +72,13 @@ def ckMd (S : Sym) (raw : String) : Option (List Eqn) :=
   | '%' :: ' ' :: r => oneMd S (some (String.ofList (splitLine r).1)) (splitLine r).2
   | cs => oneMd S none cs
 
+/-- A math entry's text: an equation's LaTeX (`prMd`), or a reaction with its rate as
+LaTeX. -/
+def prMdx : Sym → MC → MR := prMx prMd (fun S j => printLatex S j)
+
+/-- Read a math entry's text. -/
+def ckMdx : Sym → MR → Option (List MC) := ckMx ckMd (fun S raw => parseLatex S raw)
+
 /-- A comment Markdown can carry on its LaTeX comment line. -/
 def commentOK : Option String → Bool
   | some c => !c.toList.contains '\n' && !c.toList.contains '$'
@@ -92,6 +100,7 @@ def capsMd : Caps where
   attr a := isIdent a.1.toList && Yaml.isInl a.2
   eqn S e := commentOK e.comment && !(latexOf S e).contains '$' && !(latexOf S e).contains '\n' &&
     (latexOf S e).head? != some '%' && (envOf (latexOf S e)).isNone
+  rxn S x := rxnOK { x with rate := printLatex S x.rate }
 
 theorem heads_sub {c : Char} : ∀ {bol : Bool} {x : List Char}, c ∈ heads bol x → c ∈ x
   | _, [], h => by cases h
@@ -144,7 +153,7 @@ def canonSegs (its : List RItem) : List Seg :=
 /-- **Print a document as Markdown.** -/
 def printMd (d : Json) : String :=
   let D := toDoc capsMd d
-  String.ofList (frontMd D.front ++ render (canonSegs (items (rawDoc prMd D))))
+  String.ofList (frontMd D.front ++ render (canonSegs (items (rawDoc prMdx D))))
 
 /-- Read the front matter and the constructs. -/
 def lexDoc (s : List Char) : Option (List (String × Json) × List RItem) :=
@@ -164,7 +173,7 @@ def lexDoc (s : List Char) : Option (List (String × Json) × List RItem) :=
 def parseMd (s : String) : Option Json := do
   let p ← lexDoc s.toList
   let R ← unitems p.1 p.2
-  let D ← cookDoc ckMd R
+  let D ← cookDoc ckMdx R
   ofDoc D
 
 theorem segItems_append (a b : List Seg) : segItems (a ++ b) = segItems a ++ segItems b := by
@@ -184,10 +193,11 @@ theorem render_append (a b : List Seg) : render (a ++ b) = render a ++ render b 
   simp [render]
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
-  refine ⟨?_, ?_, ?_, trivial⟩
+  refine ⟨?_, ?_, ?_, ?_, trivial⟩
   · simp [blockOpen, fenceEsm, dd, dModel, dRs, pre]
   · simp [declOpen, pre]
   · simp [tableOpen, pre]
+  · simp [contOpen, dInit_l, dCons_l, pre]
 
 theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true) →
     ∀ bol, Valid bol (canonSegs its)
@@ -202,6 +212,8 @@ theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true)
     | block _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | comp _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | eqn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | eqx _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | rxn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
 
 /-- **The front matter and the body read back.** -/
 theorem lexDoc_front (front : List (String × Json)) (hf : jwf (.obj front) = true)
@@ -252,8 +264,8 @@ theorem prMd_noDollar (S : Sym) (e : Eqn) (hc : capsMd.eqn S e = true) :
   · cases hm
 
 /-- Every construct of the printed skeleton satisfies `itemOK`. -/
-theorem items_ok (D : Doc Eqn) (h : DocOK capsMd D) :
-    ∀ it ∈ items (rawDoc prMd D), itemOK it = true := by
+theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
+    ∀ it ∈ items (rawDoc prMdx D), itemOK it = true := by
   intro it hit
   simp only [items, rawDoc, List.mem_append, List.mem_map, List.mem_flatMap, Option.mem_toList,
     Option.map_eq_some_iff] at hit
@@ -262,10 +274,10 @@ theorem items_ok (D : Doc Eqn) (h : DocOK capsMd D) :
     simp only [capsMd, Bool.and_eq_true] at this
     exact this.1.1.1.1
   · exact h.blocks kv hkv
-  · simp only [compItems, Comp.mapEqns, List.mem_cons, List.mem_append, List.mem_map,
+  · simp only [compItems, Comp.mapMath, List.mem_cons, List.mem_append, List.mem_map,
       Option.mem_toList, Option.map_eq_some_iff] at hit
-    rcases hit with rfl | (((((⟨s, hs, rfl⟩) | ⟨d, hd, rfl⟩) | ⟨r, ⟨e, he, rfl⟩, rfl⟩) |
-      ⟨v, hv, rfl⟩) | ⟨kv, hkv, rfl⟩)
+    rcases hit with rfl | (((((⟨s, hs, rfl⟩) | ⟨d, hd, rfl⟩) | ⟨r, ⟨m, hm, rfl⟩, rfl⟩) |
+      ⟨kv, hkv, rfl⟩) | ⟨kv, hkv, rfl⟩)
     · exact h.compName c hc
     · have := h.cdesc c hc s hs
       simp only [capsMd, Bool.and_eq_true] at this
@@ -279,9 +291,17 @@ theorem items_ok (D : Doc Eqn) (h : DocOK capsMd D) :
       simp only [capsMd, Bool.and_eq_true] at this
       simp only [attrOK, Bool.and_eq_true]
       exact ⟨this.1, this.2⟩
-    · exact noStop_of_heads _ _ (fun hm =>
-        prMd_noDollar _ e (h.eqns c hc e he).1 (heads_sub hm))
-    · exact h.eqBlock c hc v hv
+    · have hmc := (h.math c hc m hm).1
+      cases m with
+      | eq ro e =>
+        have hns : noStop dd ((prMd (symFor D.blocks c) e).toList ++ ['\n']) = true :=
+          noStop_of_heads _ _ (fun hm' => prMd_noDollar _ e hmc (heads_sub hm'))
+        cases ro with
+        | eqn => exact hns
+        | init => simp [prMdx, prMx, mItem, itemOK, hns]
+        | cons => simp [prMdx, prMx, mItem, itemOK, hns]
+      | rxn x => exact hmc
+    · exact (h.mathBlocks c hc kv hkv).2
     · exact (h.cblocks c hc kv hkv).2
 
 /-- **The Markdown round trip.** Every ESM document in canonical form reads back from its
@@ -292,17 +312,24 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
   simp only [String.toList_ofList]
   rw [lexDoc_front _ hok.frontWF _ (valid_canon _ (items_ok _ hok) true), segItems_canon]
   simp only [Option.bind_eq_bind, Option.bind_some]
-  have hR := unitems_items (rawDoc prMd (toDoc capsMd d)) (by
-    intro c hc kv hkv
+  have hR := unitems_items (rawDoc prMdx (toDoc capsMd d)) (by
+    intro c hc
     simp only [rawDoc, List.mem_map] at hc
     obtain ⟨c0, hc0, rfl⟩ := hc
-    exact (hok.cblocks c0 hc0 kv hkv).1)
-  rw [show (rawDoc prMd (toDoc capsMd d)).front = (toDoc capsMd d).front from rfl] at hR
+    exact ⟨fun kv hkv => (hok.cblocks c0 hc0 kv hkv).1, fun kv hkv => (hok.mathBlocks c0 hc0 kv hkv).1⟩)
+  rw [show (rawDoc prMdx (toDoc capsMd d)).front = (toDoc capsMd d).front from rfl] at hR
   rw [hR]
   simp only [Option.bind_some]
-  rw [cookDoc_rawDoc prMd ckMd _ (fun c hc e he => by
-    have := hok.eqns c hc e he
-    exact ckMd_prMd _ e this.1 this.2.1 this.2.2)]
+  rw [cookDoc_rawDoc prMdx ckMdx _ (fun c hc m hm => by
+    have := hok.math c hc m hm
+    apply ckMx_prMx
+    · intro r e he
+      subst he
+      simp only [mathWF, Bool.and_eq_true] at this
+      exact ckMd_prMd _ e this.1 this.2.1 this.2.2
+    · intro x hx
+      subst hx
+      exact parseLatex_printLatex _ _ this.2)]
   simp only [Option.bind_some]
   exact ofDoc_toDoc capsMd d hd
 
@@ -311,7 +338,7 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
 /-- What a document says, given its front matter and its constructs. -/
 def parseItemsMd (front : List (String × Json)) (its : List RItem) : Option Json := do
   let R ← unitems front its
-  let D ← cookDoc ckMd R
+  let D ← cookDoc ckMdx R
   ofDoc D
 
 /-- **The parse of a Markdown document depends only on its front matter and its sequence

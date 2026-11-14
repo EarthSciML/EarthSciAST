@@ -289,12 +289,26 @@ printer writes a restricted spelling both packages read correctly: every
 stoichiometric coefficient and every non-formula species name is quoted as math, and
 an empty side is the empty-set symbol. Names inside the quoted math follow the name rules
 (the rate `k_1` is `k_{\mathrm{1}}`, the word name `SO4_aer` is `\mathit{SO4\_aer}`); a
-formula-shaped species such as `NO2` is left to the package. -/
+formula-shaped species such as `NO2` is left to the package.
+
+The line (`Esm.Document.Source.Reaction`, decided 2026-11-13 with the native surfaces):
+
+* Markdown: `$$\ce{…}$$ {#id key=value …}` on one line. The math is display math on one
+  line, since inline `$…$` would close at the first `$` of a quoted piece. The arrow
+  label is braced, `->[{$k$}]`, since mhchem ends the label at the first `]` (an index
+  `k[1]` or a `\left[`). The label holds the `id` and the reaction's other fields as
+  attributes, in the declaration attribute syntax.
+* Typst: `#ce[…] <id>`; a reaction with other fields is `#reaction(key: value, …)[#ce[…]] <id>`.
+* A coefficient of 1 is left out. A term without `stoichiometry`, a side `[]`, a reaction
+  without `id`, `substrates`, `products` or `rate`, or an id outside letters, digits,
+  `_`, `-`, `.` and `:` keeps the whole `reactions` field a path block.
+* The id is part of the reaction line, not a skipped label: removing it changes the
+  parse. -/
 
 def reactionLatex : String :=
-  r"\ce{$\varnothing$ ->[$k_{\mathrm{1}}$] $0.5$ $\mathit{SO4\_aer}$ + $2$ NO2}"
+  r"$$\ce{$\varnothing$ ->[{$k_{\mathrm{1}}$}] $0.5$ $\mathit{SO4\_aer}$ + $2$ NO2}$$ {#R1}"
 def reactionTypst : String :=
-  r#"#ce[$emptyset$ ->[$k_(upright("1"))$] $0.5$ $italic("SO4_aer")$ + $2$ NO2]"#
+  r#"#ce[$emptyset$ ->[$k_(upright("1"))$] $0.5$ $italic("SO4_aer")$ + $2$ NO2] <R1>"#
 
 /-- Pinned with the format version. -/
 def typstVersion : String := "0.15.1"
@@ -345,10 +359,11 @@ def skeleton : List SkeletonRow := [
   { field := "equations", home := .displayMath,
     markdown := "one $$…$$ per equation, in order", typst := "one $ … $ per equation" },
   { field := "initialization_equations, constraint_equations", home := .mathInContainer,
-    markdown := ":::initialization / :::constraints", typst := "#initialization[$ … $]" },
+    markdown := ":::initialization / :::constraints on a line of its own, one $$ display per equation, then :::",
+    typst := "#initialization[$ … $] / #constraints[$ … $], one per equation" },
   { field := "reactions", home := .reactionLine,
-    markdown := r"one line per reaction, id as label, \ce{A + B ->[$k$] C}",
-    typst := "one line per reaction, #ce[A + B ->[$k$] C]" },
+    markdown := r"one line per reaction, $$\ce{A + B ->[{$k$}] C}$$ {#id key=value}",
+    typst := "one line per reaction, #ce[A + B ->[$k$] C] <id>; with other fields #reaction(key: value)[#ce[…]] <id>" },
   { field := "expression_templates (without match)", home := .templateDefinition,
     markdown := r"$$ \operatorname{f}(a, b) \coloneqq … $$", typst := r#"$ op("f")(a, b) := … $"# },
   { field := "expression_templates (with match)", home := .ruleDirective,
@@ -366,7 +381,8 @@ def skeleton : List SkeletonRow := [
 
 /-- Skipped by the parser: prose outside these constructs, Typst `<labels>` and `@refs`,
 Markdown `{#id}` after an equation. The Phase 3 theorem says inserting or removing them
-never changes the parse. -/
+never changes the parse. A reaction's id label (`{#id}` after its `$$\ce{…}$$`, `<id>`
+after its `#ce[…]`) is not skipped: it is part of the reaction line. -/
 def skippedConstructs : List String := ["prose", "Typst <label>", "Typst @ref", "Markdown {#id}"]
 
 /-! ## Accepted variants
@@ -378,8 +394,10 @@ same JSON as the canonical spelling) and hand-written checks in
 document layer: the declarations table in `Esm.Document.Source.Markdown` (`lex_table`),
 and aligned blocks, continuation rows and row breaks nested in a delimiter in
 `Esm.Document.Source.MultiLine` (`cookRows_layout`; `ckMd_aligned` in
-`Esm.Document.Source.MarkdownDoc` for a Markdown `aligned` display). Each gets a Phase 4 fixture. `rejected` rows pin
-spellings the parser refuses. -/
+`Esm.Document.Source.MarkdownDoc` for a Markdown `aligned` display); the reaction rows in
+`Esm.Document.Source.Reaction` (`pTerm_coef`, `pSpecies_math`), and the container row in
+`Esm.Document.Source.Markdown` (`contBody_many`). Each gets a Phase 4 fixture. `rejected`
+rows pin spellings the parser refuses. -/
 
 inductive Surface where
   | latex
@@ -427,6 +445,12 @@ def variants : List Variant := [
     readsAs := "that name (the explicit name shape); bare juxtaposition that could be one name or a product of several is rejected" },
   { spelling := "named template arguments", surface := .both, readsAs := "apply_expression_template" },
   { spelling := "per-model declarations table", surface := .markdown, readsAs := "the declarations" },
+  { spelling := ":::initialization or :::constraints holding several displays, blank lines between",
+    surface := .markdown, readsAs := "consecutive initialization equations or constraints" },
+  { spelling := r"a stoichiometric coefficient of 1 written out ($1$ A)", surface := .both,
+    readsAs := "coefficient 1" },
+  { spelling := r#"a formula-shaped species written as math ($\mathrm{NO_{2}}$, $upright("NO")_2$)"#,
+    surface := .both, readsAs := "that species" },
   { spelling := "pow(x, n) and neg(x) in the call form", surface := .both,
     readsAs := "x ^ n and -x, with the deprecation warning" },
   { spelling := r"several equations in one aligned block (Typst $ … $ with \ and &): a row with something before its first & starts a new equation",

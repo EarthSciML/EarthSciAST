@@ -1,4 +1,4 @@
-import Esm.Document.Source.Text
+import Esm.Document.Source.Reaction
 import Esm.Document.Source.YamlLines
 
 /-!
@@ -35,6 +35,13 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
   a display equation `$$`, its LaTeX on the following lines, then `$$` (optionally
   followed by an equation label `{#eq-x}`, which is discarded); a component directive
   `::model[Name]` or `::reaction-system[Name]` on a line of its own;
+* at the start of a line: a reaction, `$$\ce{…}$$ {#id key=value …}` on one line, in
+  mhchem (`Esm.Document.Source.Reaction`) with the rate as LaTeX math over the arrow,
+  `->[{$k$}]` (braced, since mhchem ends the label at the first `]`), and the reaction's
+  `id` and other fields in the label;
+* at the start of a line: a container `:::initialization` or `:::constraints` on a line
+  of its own, then display equations, then a line `:::`; each equation in it is an
+  initialization equation or a constraint;
 * anywhere in a line: a declaration `:var[$N$]{…}`, `:param[…]{…}` or `:species[…]{…}`,
   the name in LaTeX math and the attributes as `key=value` pairs with YAML scalars.
 
@@ -45,7 +52,8 @@ labels, never changes it.
 
 Restrictions this places on prose (`Inert`): prose may not contain a declaration opener
 (`:var[`, `:param[`, `:species[`) anywhere, nor start a line with ```` ```esm: ````,
-`$$`, `::model[` or `::reaction-system[`. In particular display math (`$$`) at the start
+`$$`, `::model[`, `::reaction-system[`, `| decl | name |`, `:::initialization` or
+`:::constraints`. In particular display math (`$$`) at the start
 of a line is always a model equation; illustrative math in prose uses inline `$…$` or
 another delimiter.
 -/
@@ -70,6 +78,23 @@ def dRs : List Char := "::reaction-system[".toList
 def dashes : List Char := "---".toList
 /-- The info string of the description block. -/
 def descInfo : List Char := "description".toList
+/-- `$$\ce{`, the start of a reaction line. -/
+def dRxn : List Char := "$$\\ce{".toList
+/-- The containers of initialization equations and constraints, and their end. -/
+def dInit : List Char := ":::initialization".toList
+def dCons : List Char := ":::constraints".toList
+def dEnd : List Char := ":::".toList
+
+theorem dInit_l : dInit = [':', ':', ':', 'i', 'n', 'i', 't', 'i', 'a', 'l', 'i', 'z', 'a', 't', 'i',
+    'o', 'n'] := rfl
+theorem dCons_l : dCons = [':', ':', ':', 'c', 'o', 'n', 's', 't', 'r', 'a', 'i', 'n', 't', 's'] := rfl
+theorem dEnd_l : dEnd = [':', ':', ':'] := rfl
+
+/-- The opening line of the container of a role. -/
+def dRole : Role → List Char
+  | .init => dInit
+  | .cons => dCons
+  | .eqn => dEnd
 
 /-- The directive keyword of a declaration. -/
 def dkw : DKind → List Char
@@ -191,6 +216,78 @@ def dirAt (K : Kind) (u : List Char) : Option (RItem × List Char) :=
     else none
   | _ => none
 
+/-! ## Reactions -/
+
+/-- The math surface of reaction sides: LaTeX under the empty symbol table. -/
+def latexR : RSurf := ⟨parseLatex {}, fun j => (printLatex {} j).toList, "\\varnothing".toList⟩
+
+/-- The arrow with the rate over it, around the rate's text (which ends at its `$`). -/
+def arrowL : List Char := " ->[{$".toList
+def arrowR : List Char := "}] ".toList
+/-- After the products: the end of the math and the start of the label. -/
+def rxnEnd : List Char := "}$$ {#".toList
+
+/-- The text of a reaction line after `$$\ce{`. -/
+def rxnBody (x : Rxn String) : List Char :=
+  sideTxt latexR x.subs ++ arrowL ++ x.rate.toList ++ '$' :: arrowR ++ sideTxt latexR x.prods ++ rxnEnd ++
+    x.id.toList ++ x.attrs.flatMap (fun b => ' ' :: attrMd b) ++ ['}', '\n']
+
+/-- A reaction line after its `$$\ce{`. -/
+def rxnAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
+  match pSide latexR f u with
+  | some (subs, u1) =>
+    match after arrowL u1 with
+    | some u2 =>
+      match pPiece u2 with
+      | some (rate, u2') =>
+        match after arrowR u2' with
+        | some u3 =>
+          match pSide latexR f u3 with
+          | some (prods, u4) =>
+            match after rxnEnd u4 with
+            | some u5 =>
+              match pAttrsMore f (u5.drop (u5.takeWhile idChar).length) with
+              | some (attrs, u6) =>
+                if (u5.takeWhile idChar).isEmpty || !(splitLine u6).1.all (· == ' ') then none
+                else some (.rxn ⟨String.ofList (u5.takeWhile idChar), subs, prods,
+                  String.ofList rate, attrs⟩, (splitLine u6).2)
+              | none => none
+            | none => none
+          | none => none
+        | none => none
+      | none => none
+    | none => none
+  | none => none
+
+/-! ## Containers of initialization equations and constraints -/
+
+/-- The displays of a container, up to its closing `:::` line; blank lines between them
+are skipped. -/
+def contBody (ro : Role) : Nat → List Char → Option (List RItem × List Char)
+  | 0, _ => none
+  | f + 1, s =>
+    if pre dEnd s then
+      (if (splitLine (s.drop 3)).1.all (· == ' ') then some ([], (splitLine (s.drop 3)).2) else none)
+    else if pre dd s then
+      match mathAt f (s.drop 2) with
+      | some (.eqn raw, r) => (contBody ro f r).map (fun q => (.eqx ro raw :: q.1, q.2))
+      | _ => none
+    else if pre ['\n'] s then contBody ro f s.tail
+    else none
+
+/-- A container starts here. -/
+def contOpen (s : List Char) : Bool := pre dInit s || pre dCons s
+
+/-- A container, at its opening line. -/
+def contAt (f : Nat) (s : List Char) : Option (List RItem × List Char) :=
+  if pre dInit s then
+    if (splitLine (s.drop dInit.length)).1.all (· == ' ') then
+      contBody .init f (splitLine (s.drop dInit.length)).2
+    else none
+  else if (splitLine (s.drop dCons.length)).1.all (· == ' ') then
+    contBody .cons f (splitLine (s.drop dCons.length)).2
+  else none
+
 /-! ## The lexer -/
 
 /-- A block construct starts here (at the start of a line). -/
@@ -203,6 +300,7 @@ def declOpen (s : List Char) : Bool :=
 /-- Read the block construct that starts here. -/
 def blockAt (f : Nat) (s : List Char) : Option (RItem × List Char) :=
   if pre fenceEsm s then fenceAt f (s.drop 7)
+  else if pre dRxn s then rxnAt f (s.drop 6)
   else if pre dd s then mathAt f (s.drop 2)
   else if pre dModel s then dirAt .model (s.drop 8)
   else dirAt .rs (s.drop 18)
@@ -313,6 +411,8 @@ def lex : Nat → Bool → List Char → Option (List RItem)
       (declAt f (c :: r)).bind (fun p => (lex f false p.2).map (p.1 :: ·))
     else if bol && pre tableOpen (c :: r) then
       (tableAt f (c :: r)).bind (fun p => (lex f true p.2).map (p.1 ++ ·))
+    else if bol && contOpen (c :: r) then
+      (contAt f (c :: r)).bind (fun p => (lex f true p.2).map (p.1 ++ ·))
     else lex f (c == '\n') r
 
 /-! ## Reading back the pieces -/
@@ -430,6 +530,12 @@ theorem pAttrs_attrsMd (as : List (String × Json)) (ha : ∀ a ∈ as, attrOK a
 /-- A declaration the Markdown syntax can hold. -/
 def declOK (d : Decl) : Bool :=
   nameOK d.name && !(nameLatex d.name).contains '$' && d.attrs.all attrOK
+
+/-- A reaction the Markdown syntax can hold: sides the side syntax holds, a rate on one
+line without `$`, an id label, and attributes the attribute syntax holds. -/
+def rxnOK (x : Rxn String) : Bool :=
+  sideOK latexR x.subs && sideOK latexR x.prods && !x.rate.toList.contains '$' &&
+    !x.rate.toList.contains '\n' && idOK x.id && x.attrs.all attrOK
 
 theorem takeWhile_noDollar (x y : List Char) (hx : x.contains '$' = false) :
     (x ++ '$' :: y).takeWhile (· != '$') = x := by
@@ -550,6 +656,8 @@ def itemMd : RItem → List Char
   | .comp .rs n => dRs ++ n.toList ++ [']', '\n']
   | .decl d => declMd d
   | .eqn raw => dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ ['\n']
+  | .eqx r raw => dRole r ++ '\n' :: dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ '\n' :: dEnd ++ ['\n']
+  | .rxn x => dRxn ++ rxnBody x
 
 /-- A display equation with an equation label after its closing `$$` (` {#eq-x}`). -/
 def eqnLabeled (raw : String) (label : List Char) : List Char :=
@@ -588,6 +696,8 @@ def itemOK : RItem → Bool
   | .comp _ n => !n.toList.contains ']' && !n.toList.contains '\n'
   | .decl d => declOK d
   | .eqn raw => noStop dd (raw.toList ++ ['\n'])
+  | .eqx r raw => r != .eqn && noStop dd (raw.toList ++ ['\n'])
+  | .rxn x => rxnOK x
 
 /-- **Prose that the lexer skips**: at no character does a construct start (a block
 construct only matters at the start of a line). `t` is the text after the prose. -/
@@ -595,7 +705,8 @@ def Inert : Bool → List Char → List Char → Prop
   | _, [], _ => True
   | bol, c :: p, t =>
     (bol && blockOpen (c :: p ++ t)) = false ∧ declOpen (c :: p ++ t) = false ∧
-      (bol && pre tableOpen (c :: p ++ t)) = false ∧ Inert (c == '\n') p t
+      (bol && pre tableOpen (c :: p ++ t)) = false ∧ (bol && contOpen (c :: p ++ t)) = false ∧
+      Inert (c == '\n') p t
 
 /-- A document body whose constructs read back: each construct's content is spellable,
 block constructs start a line, labels are labels, and prose is inert. -/
@@ -611,11 +722,11 @@ def Valid : Bool → List Seg → Prop
 theorem lex_prose : ∀ (p t : List Char) (bol : Bool), Inert bol p t →
     ∀ f, p.length + t.length < f → lex f bol (p ++ t) = lex (f - p.length) (endBol bol p) t
   | [], t, bol, _, f, _ => by simp [endBol]
-  | c :: p, t, bol, ⟨h1, h2, h4, h3⟩, f, hf => by
+  | c :: p, t, bol, ⟨h1, h2, h4, h5, h3⟩, f, hf => by
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp at hf; omega⟩
     simp only [List.cons_append, lex]
-    simp only [List.cons_append] at h1 h2 h4
-    rw [h1, h2, h4]
+    simp only [List.cons_append] at h1 h2 h4 h5
+    rw [h1, h2, h4, h5]
     simp only [Bool.false_eq_true, ite_false]
     rw [lex_prose p t _ h3 g (by simp at hf; omega), endBol_cons]
     congr 1
@@ -686,6 +797,9 @@ theorem pre_dd_dm (X : List Char) : pre dd (dModel ++ X) = false := by simp [dd,
 theorem pre_fe_dr (X : List Char) : pre fenceEsm (dRs ++ X) = false := by simp [fenceEsm, dRs, pre]
 theorem pre_dd_dr (X : List Char) : pre dd (dRs ++ X) = false := by simp [dd, dRs, pre]
 theorem pre_dm_dr (X : List Char) : pre dModel (dRs ++ X) = false := by simp [dModel, dRs, pre]
+theorem pre_rx_dm (X : List Char) : pre dRxn (dModel ++ X) = false := by simp [dRxn, dModel, pre]
+theorem pre_rx_dr (X : List Char) : pre dRxn (dRs ++ X) = false := by simp [dRxn, dRs, pre]
+theorem pre_rx_dd (X : List Char) : pre dRxn (dd ++ '\n' :: X) = false := by simp [dRxn, dd, pre]
 
 theorem keyMd_ne_desc (k : String) : keyMd k ≠ descInfo := by
   intro h
@@ -723,7 +837,7 @@ theorem lex_comp (K : Kind) (n : String) (hn : itemOK (.comp K n) = true) (bol :
   cases K with
   | model =>
     apply lex_block_step g bol _ t _ (by simp [itemMd, dModel]) _ hbol
-    · simp only [itemMd, List.append_assoc, blockAt, pre_fe_dm, pre_dd_dm, pre_append,
+    · simp only [itemMd, List.append_assoc, blockAt, pre_fe_dm, pre_rx_dm, pre_dd_dm, pre_append,
         Bool.false_eq_true, ite_false, ite_true]
       rw [show (8 : Nat) = dModel.length from rfl, List.drop_left, dirAt]
       simp only [List.cons_append, List.nil_append, htw, List.drop_left]
@@ -731,7 +845,7 @@ theorem lex_comp (K : Kind) (n : String) (hn : itemOK (.comp K n) = true) (bol :
     · simp [itemMd, blockOpen, pre_append]
   | rs =>
     apply lex_block_step g bol _ t _ (by simp [itemMd, dRs]) _ hbol
-    · simp only [itemMd, List.append_assoc, blockAt, pre_fe_dr, pre_dd_dr, pre_dm_dr,
+    · simp only [itemMd, List.append_assoc, blockAt, pre_fe_dr, pre_rx_dr, pre_dd_dr, pre_dm_dr,
         Bool.false_eq_true, ite_false]
       rw [show (18 : Nat) = dRs.length from rfl, List.drop_left, dirAt]
       simp only [List.cons_append, List.nil_append, htw, List.drop_left]
@@ -743,8 +857,8 @@ theorem lex_eqnL (raw : String) (l : List Char) (hr : itemOK (.eqn raw) = true)
     (g : Nat) (hg : (eqnLabeled raw l).length + t.length < g + 1) :
     lex (g + 1) bol (eqnLabeled raw l ++ t) = (lex g true t).map (.eqn raw :: ·) := by
   apply lex_block_step g bol _ t _ (by simp [eqnLabeled, dd]) _ hbol
-  · simp only [eqnLabeled, List.append_assoc, List.cons_append, blockAt, pre_fe_dd, pre_append,
-      Bool.false_eq_true, ite_false, ite_true]
+  · simp only [eqnLabeled, List.append_assoc, List.cons_append, blockAt, pre_fe_dd, pre_rx_dd,
+      pre_append, Bool.false_eq_true, ite_false, ite_true]
     rw [show (2 : Nat) = dd.length from rfl, List.drop_left, mathAt]
     simp only [splitLine, ite_true, List.all_nil]
     have hb := untilStop_body dd dd_ne dd_noNl (raw.toList ++ ['\n']) l t (lines_nl _) hr hln g
@@ -786,6 +900,213 @@ theorem attrs_len : ∀ as : List (String × Json), as.length ≤ (attrsMd as).l
 
 theorem itemMd_eqn (raw : String) : itemMd (.eqn raw) = eqnLabeled raw [] := by
   simp [itemMd, eqnLabeled]
+
+/-! ### Reactions -/
+
+theorem latexR_ok : latexR.OK := by
+  intro j hj
+  simp only [latexR, String.ofList_toList]
+  exact parseLatex_printLatex {} j hj
+
+theorem terms_len (R : RSurf) : ∀ ts : List Term, ts.length ≤ (termsTxt R ts).length
+  | [] => le_refl _
+  | t :: ts => by
+    have h1 : 1 ≤ (termTxt R t).length := List.length_pos_of_ne_nil (termTxt_ne R t)
+    have h2 : ts.length ≤ (ts.flatMap (fun u => ' ' :: '+' :: ' ' :: termTxt R u)).length := by
+      clear h1
+      induction ts with
+      | nil => simp
+      | cons u us ih => simp [List.flatMap_cons] at ih ⊢; omega
+    simp only [termsTxt, List.length_append, List.length_cons]
+    omega
+
+theorem side_len (R : RSurf) (s : Option (List Term)) : sideLen s ≤ (sideTxt R s).length := by
+  cases s with
+  | none => simp [sideLen]
+  | some ts => simpa [sideLen, sideTxt] using terms_len R ts
+
+theorem attrsMore_len : ∀ as : List (String × Json),
+    as.length ≤ (as.flatMap (fun b => ' ' :: attrMd b)).length
+  | [] => le_refl _
+  | a :: as => by
+    have := attrsMore_len as
+    simp only [List.flatMap_cons, List.length_append, List.length_cons]
+    omega
+
+theorem rxnAt_body (f : Nat) (x : Rxn String) (hx : rxnOK x = true) (t : List Char)
+    (hf : (rxnBody x).length < f) : rxnAt f (rxnBody x ++ t) = some (.rxn x, t) := by
+  obtain ⟨i, subs, prods, rate, attrs⟩ := x
+  simp only [rxnOK, Bool.and_eq_true, Bool.not_eq_true'] at hx
+  obtain ⟨⟨⟨⟨⟨hs, hp⟩, hrd⟩, hrn⟩, hid⟩, ha⟩ := hx
+  have hE : latexR.empty.contains '$' = false := by decide
+  have hl1 := side_len latexR subs
+  have hl2 := side_len latexR prods
+  have hl3 := attrsMore_len attrs
+  simp only [rxnBody, List.length_append, List.length_cons] at hf
+  unfold rxnAt
+  simp only [rxnBody, List.append_assoc]
+  rw [pSide_txt latexR latexR_ok subs hs hE _ (by simp [StopOK, arrowL, pre]) f (by omega)]
+  simp only
+  rw [after_app]
+  simp only
+  simp only [List.cons_append]
+  rw [pPiece_app _ _ hrd]
+  simp only
+  rw [after_app]
+  simp only
+  rw [pSide_txt latexR latexR_ok prods hp hE _ (by simp [StopOK, rxnEnd, pre]) f (by omega)]
+  simp only
+  rw [after_app]
+  simp only
+  simp only [idOK, Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff] at hid
+  simp only [List.nil_append]
+  have htw : (i.toList ++ (attrs.flatMap (fun b => ' ' :: attrMd b) ++ '}' :: '\n' :: t)).takeWhile idChar =
+      i.toList := by
+    cases attrs with
+    | nil => exact takeWhile_id _ _ hid.2 '}' (by decide)
+    | cons a as =>
+      simp only [List.flatMap_cons, List.cons_append, List.append_assoc]
+      exact takeWhile_id _ _ hid.2 ' ' (by decide)
+  rw [htw, List.drop_left]
+  rw [pAttrsMore_attrs attrs (fun a h => List.all_eq_true.mp ha a h) ('\n' :: t) f (by omega)]
+  simp only [splitLine, ite_true, List.all_nil, Bool.not_true, Bool.or_false]
+  simp [String.ofList_toList, List.isEmpty_iff, hid.1]
+
+theorem lex_rxn (x : Rxn String) (hx : itemOK (.rxn x) = true) (bol : Bool) (hbol : bol = true)
+    (t : List Char) (g : Nat) (hg : (itemMd (.rxn x)).length + t.length < g + 1) :
+    lex (g + 1) bol (itemMd (.rxn x) ++ t) = (lex g true t).map (.rxn x :: ·) := by
+  apply lex_block_step g bol _ t _ (by simp [itemMd, dRxn]) _ hbol
+  · simp only [itemMd, List.append_assoc, blockAt]
+    rw [show (fenceEsm : List Char) = ['`', '`', '`', 'e', 's', 'm', ':'] from rfl,
+      show (dRxn : List Char) = ['$', '$', '\\', 'c', 'e', '{'] from rfl]
+    simp only [pre, List.cons_append, beq_self_eq_true, Bool.and_true, ite_true, List.drop]
+    simp only [List.nil_append]
+    exact rxnAt_body g x hx t (by simp [itemMd, dRxn] at hg; omega)
+  · simp [itemMd, blockOpen, dRxn, dd, pre]
+
+/-! ### Containers -/
+
+theorem dRole_word (r : Role) (hr : r ≠ .eqn) (g : Nat) (X : List Char) :
+    contAt g (dRole r ++ '\n' :: X) = contBody r g X := by
+  cases r with
+  | eqn => exact absurd rfl hr
+  | init => simp [contAt, dRole, pre_append, splitLine]
+  | cons =>
+    have : pre dInit (dCons ++ '\n' :: X) = false := by simp [dInit, dCons, pre]
+    simp only [contAt, dRole, this, Bool.false_eq_true, ite_false, List.drop_left]
+    simp [splitLine]
+
+theorem contBody_one (r : Role) (raw : String) (hr : itemOK (.eqn raw) = true) (t : List Char)
+    (g : Nat) (hg : raw.toList.length + 4 + 3 + t.length < g) :
+    contBody r (g + 1) (dd ++ '\n' :: (raw.toList ++ '\n' :: (dd ++ '\n' :: (dEnd ++ '\n' :: t)))) =
+      some ([.eqx r raw], t) := by
+  obtain ⟨g', rfl⟩ : ∃ g', g = g' + 1 := ⟨g - 1, by omega⟩
+  have h1 : ∀ X, pre dEnd (dd ++ X) = false := by intro X; simp [dEnd, dd, pre]
+  unfold contBody
+  rw [h1]
+  simp only [Bool.false_eq_true, ite_false, pre_append, ite_true]
+  rw [show (2 : Nat) = dd.length from rfl, List.drop_left, mathAt]
+  simp only [splitLine, ite_true, List.all_nil]
+  have hb := untilStop_body dd dd_ne dd_noNl (raw.toList ++ ['\n']) [] (dEnd ++ '\n' :: t)
+    (lines_nl _) hr (by simp) (g' + 1) (by simp [dd]; omega)
+  simp only [List.append_assoc, List.cons_append, List.nil_append] at hb
+  rw [hb]
+  obtain ⟨g'', rfl⟩ : ∃ g'', g' = g'' + 1 := ⟨g' - 1, by omega⟩
+  simp [labelOK, contBody, dEnd, pre, splitLine]
+
+/-- A display followed by a blank line. -/
+def dispTxt (raw : String) : List Char := dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ ['\n', '\n']
+
+/-- **A container holding several displays reads as their equations**, in order: each
+display followed by a blank line, then the closing `:::` line (the printer writes one
+display per container). -/
+theorem contBody_many (r : Role) (t : List Char) : ∀ (raws : List String),
+    (∀ raw ∈ raws, itemOK (.eqn raw) = true) → ∀ g,
+    (raws.flatMap dispTxt).length + t.length + 4 < g →
+    contBody r g (raws.flatMap dispTxt ++ dEnd ++ '\n' :: t) = some (raws.map (.eqx r), t)
+  | [], _, g, hg => by
+    obtain ⟨g', rfl⟩ : ∃ g', g = g' + 1 := ⟨g - 1, by omega⟩
+    simp [contBody, dEnd, pre, splitLine]
+  | raw :: raws, hr, g, hg => by
+    have hdisp : (dispTxt raw).length = raw.toList.length + 8 := by simp [dispTxt, dd]
+    simp only [List.flatMap_cons, List.length_append, hdisp] at hg
+    obtain ⟨g', rfl⟩ : ∃ g', g = g' + 1 := ⟨g - 1, by omega⟩
+    obtain ⟨g'', rfl⟩ : ∃ g'', g' = g'' + 1 := ⟨g' - 1, by omega⟩
+    have h1 : ∀ X, pre dEnd (dd ++ X) = false := by intro X; simp [dEnd, dd, pre]
+    have hrec : (raws.flatMap dispTxt).length + t.length + 4 < g'' := by omega
+    generalize hX : raws.flatMap dispTxt ++ dEnd ++ '\n' :: t = X
+    rw [List.flatMap_cons, List.append_assoc, List.append_assoc, show raws.flatMap dispTxt ++
+      (dEnd ++ '\n' :: t) = X by rw [← hX, List.append_assoc]]
+    simp only [dispTxt, List.append_assoc, List.cons_append, List.nil_append]
+    unfold contBody
+    rw [h1]
+    simp only [Bool.false_eq_true, ite_false, pre_append, ite_true]
+    rw [show (2 : Nat) = dd.length from rfl, List.drop_left, mathAt]
+    simp only [splitLine, ite_true, List.all_nil]
+    have hb := untilStop_body dd dd_ne dd_noNl (raw.toList ++ ['\n']) [] ('\n' :: X)
+      (lines_nl _) (hr raw List.mem_cons_self) (by simp) (g'' + 1) (by simp [dd]; omega)
+    simp only [List.append_assoc, List.cons_append, List.nil_append] at hb
+    rw [hb]
+    simp only [labelOK, List.dropWhile_nil, List.getLast?_append, List.getLast?_singleton,
+      Option.some_or, beq_self_eq_true, Bool.and_self, ite_true, List.dropLast_concat,
+      String.ofList_toList]
+    have h2 : contBody r (g'' + 1) ('\n' :: X) = contBody r g'' X := by
+      simp [contBody, dEnd, dd, pre]
+    rw [h2, ← hX, contBody_many r t raws (fun x hx => hr x (List.mem_cons_of_mem _ hx)) g'' hrec]
+    rfl
+
+theorem lex_eqx (r : Role) (raw : String) (hr : itemOK (.eqx r raw) = true) (bol : Bool)
+    (hbol : bol = true) (t : List Char) (g : Nat)
+    (hg : (itemMd (.eqx r raw)).length + t.length < g + 1) :
+    lex (g + 1) bol (itemMd (.eqx r raw) ++ t) = (lex g true t).map (.eqx r raw :: ·) := by
+  simp only [itemOK, Bool.and_eq_true, bne_iff_ne, ne_eq] at hr
+  have hroles : (dRole r).take 3 = dEnd ∧ dRole r ≠ [] := by
+    cases r with
+    | eqn => exact absurd rfl hr.1
+    | init => decide
+    | cons => decide
+  obtain ⟨g', rfl⟩ : ∃ g', g = g' + 1 := ⟨g - 1, by simp [itemMd] at hg; omega⟩
+  have hopen : ∃ c rest, itemMd (.eqx r raw) ++ t = c :: rest ∧
+      blockOpen (c :: rest) = false ∧ declOpen (c :: rest) = false ∧
+      pre tableOpen (c :: rest) = false ∧ contOpen (c :: rest) = true := by
+    have hx : itemMd (.eqx r raw) ++ t = (dRole r ++ '\n' :: dd ++ ['\n']) ++
+        (raw.toList ++ '\n' :: dd ++ '\n' :: dEnd ++ '\n' :: t) := by
+      simp [itemMd]
+    have hlong : ∀ p, p.length ≤ 18 →
+        pre p (itemMd (.eqx r raw) ++ t) = pre p (dRole r ++ '\n' :: dd ++ ['\n']) := by
+      intro p hp
+      rw [hx, pre_app_long]
+      cases r with
+      | eqn => exact absurd rfl hr.1
+      | init => simp [dRole, dInit_l, dd]; omega
+      | cons => simp [dRole, dCons_l, dd]; omega
+    obtain ⟨c, rest, hcr⟩ : ∃ c rest, itemMd (.eqx r raw) ++ t = c :: rest := by
+      cases h : itemMd (.eqx r raw) ++ t with
+      | nil => simp [itemMd] at h
+      | cons c rest => exact ⟨c, rest, rfl⟩
+    refine ⟨c, rest, hcr, ?_⟩
+    rw [← hcr]
+    simp only [blockOpen, declOpen, contOpen]
+    rw [hlong _ (by decide), hlong _ (by decide), hlong _ (by decide), hlong _ (by decide),
+      hlong _ (by decide), hlong _ (by decide), hlong _ (by decide), hlong _ (by decide),
+      hlong _ (by decide), hlong _ (by decide)]
+    cases r with
+    | eqn => exact absurd rfl hr.1
+    | init => decide
+    | cons => decide
+  obtain ⟨c, rest, hcr, hb, hd, ht, hc⟩ := hopen
+  rw [hcr]
+  simp only [lex, hbol, hb, hd, ht, hc, Bool.and_false, Bool.and_true, Bool.false_eq_true,
+    ite_false, ite_true]
+  rw [← hcr]
+  simp only [itemMd, List.append_assoc, List.cons_append]
+  rw [dRole_word r hr.1]
+  simp only [List.nil_append]
+  rw [contBody_one r raw hr.2 t g' (by
+    simp [itemMd] at hg
+    have : 3 ≤ (dRole r).length := by cases r <;> simp [dRole, dInit_l, dCons_l, dEnd_l]
+    simp [dd, dEnd_l] at hg; omega)]
+  simp
 
 /-- **The Markdown lexer reads back every valid document body**: exactly its constructs,
 whatever prose surrounds them and whatever labels the equations carry. -/
@@ -838,6 +1159,14 @@ theorem lex_render : ∀ (segs : List Seg) (bol : Bool), Valid bol segs →
       rw [itemMd_eqn] at hf hf' ⊢
       rw [lex_eqnL raw [] hok rfl (by simp) bol (hb rfl) _ g hf',
         lex_render rest true hv g (hlen _ (by simp [eqnLabeled, dd]) hf)]
+      rfl
+    | eqx r raw =>
+      rw [lex_eqx r raw hok bol (hb rfl) _ g hf',
+        lex_render rest true hv g (hlen _ (by simp [itemMd]) hf)]
+      rfl
+    | rxn x =>
+      rw [lex_rxn x hok bol (hb rfl) _ g hf',
+        lex_render rest true hv g (hlen _ (by simp [itemMd, dRxn]) hf)]
       rfl
 
 /-! ## The declarations table reads as its declarations -/
