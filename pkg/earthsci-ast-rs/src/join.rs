@@ -591,10 +591,57 @@ fn lower_node_joins(
         node.filter = Some(Box::new(pred));
     }
     if !kept.is_empty() {
-        node.join = Some(kept);
+        node.join = Some(merge_same_pair_gates(kept));
     }
 
     Ok(())
+}
+
+/// Merge `on` gates that gate the SAME two loop symbols into one composite-key
+/// gate, across clauses as [`lower_node_joins`] already does within one.
+///
+/// Two clauses `{on: [[a,x],[b,y]]}` and `{on: [[c,z]]}` over the same symbol
+/// pair admit a pair iff all three keys agree: one composite key, exactly. Kept
+/// apart, each is priced and built as its own gate, and the planner's reach
+/// estimate treats the two symbols as independently narrowed by the first, so
+/// a second, low-selectivity clause on the same pair (a 10-valued column
+/// against a 533k-row relation: ~900M pairs) is materialised and sorted rather
+/// than declined -- minutes, for a match set the first gate had already cut to
+/// a few million. Merged, it is one gate whose match count is the conjunction's.
+///
+/// Only clauses with the same `syms` merge, and the wire-form `on` lists are
+/// concatenated, so re-resolving the merged clause groups its pairs into the
+/// same gate. Overlap clauses and gates over other symbol pairs are untouched,
+/// and every equality stays a conjunct of the node's `filter` either way.
+fn merge_same_pair_gates(kept: Vec<JoinClause>) -> Vec<JoinClause> {
+    let mut merged: Vec<JoinClause> = Vec::with_capacity(kept.len());
+    for clause in kept {
+        let Some(g) = clause.on_gate.as_ref() else {
+            merged.push(clause);
+            continue;
+        };
+        let slot = merged.iter_mut().find(|m| {
+            m.syms == clause.syms
+                && m.on_gate.as_ref().is_some_and(|h| {
+                    (h.sym_l == g.sym_l && h.sym_r == g.sym_r)
+                        || (h.sym_l == g.sym_r && h.sym_r == g.sym_l)
+                })
+        });
+        let Some(m) = slot else {
+            merged.push(clause);
+            continue;
+        };
+        let h = m.on_gate.as_mut().expect("matched on its gate");
+        if h.sym_l == g.sym_l {
+            h.cols_l.extend(g.cols_l.iter().cloned());
+            h.cols_r.extend(g.cols_r.iter().cloned());
+        } else {
+            h.cols_l.extend(g.cols_r.iter().cloned());
+            h.cols_r.extend(g.cols_l.iter().cloned());
+        }
+        m.on.extend(clause.on.iter().cloned());
+    }
+    merged
 }
 
 /// One side of an `on` key pair, resolved to the loop symbol it gates and the
