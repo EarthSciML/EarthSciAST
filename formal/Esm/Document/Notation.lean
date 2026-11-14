@@ -523,11 +523,19 @@ def variants : List Variant := [
 /-! ## Canonical-form spelling rules
 
 Redundant spellings the canonical form merges (landing with the canonical unit spelling).
-Each rule gets a Lean proof that it preserves meaning. `esm-lean canon` applies the `neg`
-and `pow` rules and respells every `units` and `default_units` string (`Esm.Units.canon`,
-under which `""`, `"1"` and `"dimensionless"` are all `"1"`); a `const` node whose units
-spell `"1"` drops them, so a scalar one is the bare number (ruling 2026-11-14; a
-declaration keeps `units: "1"`). -/
+`esm-lean canon` (`spellRules` in `Adapter/Doc.lean`) applies the `neg` and `pow` rules and
+respells every `units` and `default_units` string (`Esm.Units.canon`, under which `""`,
+`"1"` and `"dimensionless"` are all `"1"`); a `const` node whose units spell `"1"` drops
+them, so one whose value is a number is that bare number, whatever other fields it has
+(ruling 2026-11-14; a declaration keeps `units: "1"`).
+
+Only the unit respelling is proved: `Esm.Units.canon` keeps the unit a string resolves to
+(`resolve_canon`, `resolve_of_canon` in `Esm.Units.Canonical`). The other rules, and the
+walk that decides which fields are units strings and which objects are name-keyed maps or
+free-form (key lists copied from esm-schema.json), are adapter code with no proof that they
+preserve meaning. They are pinned instead by the golden files every binding and `esm-lean`
+are checked against: `tests/conformance/canonical_document/` and
+`tests/conformance/document_format/`. -/
 
 structure SpellingRule where
   from_ : String
