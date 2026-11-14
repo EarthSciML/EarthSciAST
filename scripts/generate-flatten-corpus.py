@@ -408,6 +408,11 @@ CASES: list[tuple[str, str, str]] = [
             "lift_untouched_species",
             "lift_fixpoint",
             "lift_mean_not_triggered",
+            # A non-pointwise route next to a pointwise one: a mean
+            # variable_map into a component another read lifts, and a mean
+            # operator_compose whose operator is elementwise.
+            "lift_mean_and_pointwise",
+            "lift_operator_compose_mean",
         )
     ],
     # --- a data-fed parameter mapped onto a shaped target (§4.7.3) ----------
@@ -553,6 +558,29 @@ REFUSALS: list[dict[str, str]] = [
             'grids. esm-spec §10.5 and esm-libraries-spec §4.7.5, "Pointwise lift: which '
             'states are lifted": the unit of lifting is the whole component, so flatten '
             "refuses rather than choose a grid."
+        ),
+    },
+    {
+        "fixture": "conformance/pointwise_lift/fixtures/lift_two_grids_late.esm",
+        "error": "DimensionPromotionError",
+        "reason": (
+            "`Box.x` reads the [lev, lat] `Column.TS`, so `Box` is lifted onto [lev, lat] in "
+            "the first pass; `Box.y` reads `Other.z`, which that pass lifts onto [lev], so "
+            "`Box.y` is a candidate on [lev] only once `Box` is already lifted. "
+            'esm-libraries-spec §4.7.5, "Pointwise lift: which states are lifted": all of a '
+            "component's candidates must name the same index sets, whichever pass sees them, "
+            "so flatten refuses rather than broadcast `Box.y` along lat."
+        ),
+    },
+    {
+        "fixture": "conformance/pointwise_lift/fixtures/lift_two_grids_late_disjoint.esm",
+        "error": "DimensionPromotionError",
+        "reason": (
+            "`Box` is lifted onto [lev] by `Box.x` in the first pass; `Box.y` reads `Other.z`, "
+            "which that pass lifts onto [lat], so `Box.y` is a candidate on [lat] once `Box` "
+            'is already lifted. esm-libraries-spec §4.7.5, "Pointwise lift: which states '
+            'are lifted": the same two-grids refusal as when both candidates are seen in one '
+            "pass."
         ),
     },
     {

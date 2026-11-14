@@ -8877,6 +8877,256 @@
       "lifted_shapes": {}
     },
     {
+      "id": "lift_mean_and_pointwise",
+      "tier": "pointwise_lift",
+      "fixture": "conformance/pointwise_lift/fixtures/lift_mean_and_pointwise.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Land.w",
+          "role": "state",
+          "units": "1",
+          "default": 0.3,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Land"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Column.q",
+          "role": "parameter",
+          "units": "1",
+          "default": 0.01,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Column"
+        },
+        {
+          "name": "Column.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.2,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Column"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 1,
+      "equations": [
+        {
+          "lhs": "sum[_p0] (D(Land.w[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (1.0e-3 * Column.q[_p0] - Column.k[_p0] * Land.w[_p0]) where {_p0 in lev}",
+          "source_system": "Land",
+          "contributions": [
+            {
+              "rhs": "1.0e-3 * Column.q[_p0] - Column.k[_p0] * Land.w[_p0]",
+              "origins": [
+                {
+                  "component": "Land"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Column",
+          "Land"
+        ],
+        "coupling_rules": [
+          "variable_map(Column.q -> Land.p, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "lev"
+      ],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {
+        "Land.w": [
+          3
+        ]
+      }
+    },
+    {
+      "id": "lift_operator_compose_mean",
+      "tier": "pointwise_lift",
+      "fixture": "conformance/pointwise_lift/fixtures/lift_operator_compose_mean.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Mech.A",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        },
+        {
+          "name": "Mech.B",
+          "role": "species",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Sink.km",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.01,
+          "shape": [
+            "lev"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Sink"
+        },
+        {
+          "name": "Mech.kb",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.002,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "lb": null,
+          "ub": null,
+          "source_system": "Mech"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "sum[_p0] (D(Mech.A[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (-1 * Mech.kb * Mech.A[_p0] + (-Sink.km[_p0]) * Mech.A[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "-1 * Mech.kb * Mech.A[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            },
+            {
+              "rhs": "(-Sink.km[_p0]) * Mech.A[_p0]",
+              "origins": [
+                {
+                  "component": "Sink"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[_p0] (D(Mech.B[_p0])/Dt) where {_p0 in lev}",
+          "rhs": "sum[_p0] (Mech.kb * Mech.A[_p0] + (-Sink.km[_p0]) * Mech.B[_p0]) where {_p0 in lev}",
+          "source_system": "Mech",
+          "contributions": [
+            {
+              "rhs": "Mech.kb * Mech.A[_p0]",
+              "origins": [
+                {
+                  "component": "Mech"
+                }
+              ]
+            },
+            {
+              "rhs": "(-Sink.km[_p0]) * Mech.B[_p0]",
+              "origins": [
+                {
+                  "component": "Sink"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Sink",
+          "Mech"
+        ],
+        "coupling_rules": [
+          "operator_compose(Mech + Sink)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "lev"
+      ],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {
+        "Mech.A": [
+          3
+        ],
+        "Mech.B": [
+          3
+        ]
+      }
+    },
+    {
       "id": "variable_map_data_fed_data_fed_source_keeps_declaration",
       "tier": "variable_map_data_fed",
       "fixture": "conformance/variable_map_data_fed/fixtures/data_fed_source_keeps_declaration.esm",
@@ -11983,6 +12233,16 @@
       "fixture": "conformance/pointwise_lift/fixtures/lift_two_grids.esm",
       "error": "DimensionPromotionError",
       "reason": "`Box.x` reads the [lev] `Column.T` and `Box.y` reads the [lat] `Column.S`, so the two lift candidates would put the one component `Box` on two different grids. esm-spec §10.5 and esm-libraries-spec §4.7.5, \"Pointwise lift: which states are lifted\": the unit of lifting is the whole component, so flatten refuses rather than choose a grid."
+    },
+    {
+      "fixture": "conformance/pointwise_lift/fixtures/lift_two_grids_late.esm",
+      "error": "DimensionPromotionError",
+      "reason": "`Box.x` reads the [lev, lat] `Column.TS`, so `Box` is lifted onto [lev, lat] in the first pass; `Box.y` reads `Other.z`, which that pass lifts onto [lev], so `Box.y` is a candidate on [lev] only once `Box` is already lifted. esm-libraries-spec §4.7.5, \"Pointwise lift: which states are lifted\": all of a component's candidates must name the same index sets, whichever pass sees them, so flatten refuses rather than broadcast `Box.y` along lat."
+    },
+    {
+      "fixture": "conformance/pointwise_lift/fixtures/lift_two_grids_late_disjoint.esm",
+      "error": "DimensionPromotionError",
+      "reason": "`Box` is lifted onto [lev] by `Box.x` in the first pass; `Box.y` reads `Other.z`, which that pass lifts onto [lat], so `Box.y` is a candidate on [lat] once `Box` is already lifted. esm-libraries-spec §4.7.5, \"Pointwise lift: which states are lifted\": the same two-grids refusal as when both candidates are seen in one pass."
     },
     {
       "fixture": "valid/template_import_lib.esm",

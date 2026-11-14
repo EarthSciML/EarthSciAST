@@ -50,11 +50,19 @@ The other corpus cases with a lift (`advection_reaction_loaded_ic_bc`,
 | `lift_untouched_species.esm` | The whole component lifts: `Mech.C` is in no reaction and `Box.y` reads no array. | every state of `Mech` and `Box` |
 | `lift_fixpoint.esm` | `Uptake.u` reads `Mech.A`; `Store.s` reads `Uptake.u`. Each is declared before what it reads. | `Mech`, then `Uptake`, then `Store` |
 | `lift_mean_not_triggered.esm` | A `variable_map` with `lifting: "mean"`. It does not trigger the lift. No binding implements the mean itself, so the tendency still reads the raw array; the fixture pins only that `Land.w` stays scalar. | nothing |
+| `lift_mean_and_pointwise.esm` | The same `lifting: "mean"` `variable_map`, but `Land.w` also reads the `[lev]` `Column.k` directly. The mean edge does not exempt `Land` from that route, and once lifted every array it reads, `Column.q` included, is read per cell. | `Land.w` on `[lev]` |
+| `lift_operator_compose_mean.esm` | `lift_operator_elementwise.esm` with `lifting: "mean"` on the `operator_compose`. That takes `Mech` out of the operator route, but the operator is elementwise, so the merged right-hand sides are arrays and the array route lifts `Mech`. | `Mech.A`, `Mech.B` on `[lev]` |
 
-Three fixtures are corpus **refusals** (the corpus's `refusals` array):
+Five fixtures are corpus **refusals** (the corpus's `refusals` array):
 
 - `lift_two_grids.esm` (`DimensionPromotionError`): `Box.x` reads a `[lev]` field and
   `Box.y` a `[lat]` one, so the component `Box` would land on two grids.
+- `lift_two_grids_late.esm` (`DimensionPromotionError`): `Box.x` lifts `Box` onto
+  `[lev, lat]` in the first pass, and `Box.y` reads `Other.z`, which the same pass lifts onto
+  `[lev]`. `Box.y` is a candidate only once `Box` is already lifted, and it is still refused,
+  so the answer does not depend on which pass sees a candidate.
+- `lift_two_grids_late_disjoint.esm` (`DimensionPromotionError`): the same, with `Box` on
+  `[lev]` and `Box.y` a candidate on `[lat]`.
 
 - `lift_synthetic_name_clash.esm` (`DimensionPromotionError`) needs the synthetic index set
   `_liftdim1_3`, but the document declares an index set of that name with size 4, so flatten
