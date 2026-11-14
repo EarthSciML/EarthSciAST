@@ -392,11 +392,11 @@ pub use problem::Compile;
 pub use problem::{
     CallbackFn, CallbackSet, Compiler, CompilerReport, CompilerRuleReport, EnsembleProblem,
     EsmProblem, ProblemInput, ProblemOptions, Remake, Rhs, callbacks, compose, esm_problem,
-    observed_field, remake,
+    initial_state, observed_field, remake,
 };
 #[cfg(feature = "solve")]
 pub use problem::{
-    Integrator, StepStatus, init, initial_state, observed_trajectories, observed_trajectory, solve,
+    Integrator, StepStatus, init, observed_trajectories, observed_trajectory, solve,
     solve_ensemble, solve_to_completion, step,
 };
 // Range-restricted and operator-restricted right-hand sides (API_SPEC §5.8).

@@ -118,7 +118,6 @@ impl ProgramModel {
             conditional_shapes: Default::default(),
             // A tape-build shell is never asked for its variables by name.
             built_variables: Default::default(),
-            #[cfg(feature = "solve")]
             field_ic_memo: std::cell::RefCell::new(None),
             inline_param_arrays: self.inline_param_arrays.clone(),
             forcing_decls: self.forcing_decls.clone(),

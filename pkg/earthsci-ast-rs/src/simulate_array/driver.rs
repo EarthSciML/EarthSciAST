@@ -242,7 +242,6 @@ fn same_bits(a: &[f64], b: &[f64]) -> bool {
 
 /// One evaluation a model's field initial conditions performed
 /// ([`ArrayCompiled::field_ic_records`]).
-#[cfg(feature = "solve")]
 #[derive(Clone, Debug)]
 pub(crate) struct FieldIcRecord {
     /// The `ic` target, or the state-free observed materialized for its scope.
@@ -288,7 +287,6 @@ pub(crate) struct FieldIcRecord {
 /// resolves from the buffer as it stands.
 ///
 /// Initial-condition overrides are applied over the result, not read by it.
-#[cfg(feature = "solve")]
 pub(crate) struct FieldIcMemo {
     params: Vec<u64>,
     forcing_generation: u64,
@@ -301,7 +299,6 @@ pub(crate) struct FieldIcMemo {
 /// Where an `ic` right-hand side reads the start of the run (esm-spec
 /// §11.4.2): the start `t0` itself, which `t` is bound to, and the data-fed
 /// fields' values there.
-#[cfg(feature = "solve")]
 pub(crate) struct IcStart<'a> {
     /// The start of the run, `tspan.0`.
     pub(crate) t0: f64,
@@ -325,7 +322,6 @@ pub(crate) fn field_ic_resolutions() -> u64 {
     FIELD_IC_RESOLUTIONS.with(std::cell::Cell::get)
 }
 
-#[cfg(feature = "solve")]
 fn param_bits(param_vec: &[f64]) -> Vec<u64> {
     param_vec.iter().map(|x| x.to_bits()).collect()
 }
@@ -924,7 +920,6 @@ impl ArrayCompiled {
     /// `records`, when given, receives one [`FieldIcRecord`] per evaluation
     /// this performs — each state-free observed materialized for the `ic`
     /// scope, then each target — saying whether it was walked per cell.
-    #[cfg(feature = "solve")]
     fn resolve_field_ics(
         &self,
         params: &HashMap<String, f64>,
@@ -1140,7 +1135,6 @@ impl ArrayCompiled {
     /// The initial state before any override: each variable's default (one
     /// fill, or one gather of its inline data), then the field `ic` slots.
     /// The mask, when present, flags the slots neither of them set.
-    #[cfg(feature = "solve")]
     fn seeded_defaults(&self, field_ic_map: &HashMap<usize, f64>) -> (Vec<f64>, Option<Vec<bool>>) {
         let mut ic_vec = vec![0.0f64; self.n_states];
         let mut unset: Option<Vec<bool>> = None;
@@ -1174,7 +1168,6 @@ impl ArrayCompiled {
     /// coordinate expression is: the interpreter walks it cell by cell, the
     /// other compilers take the whole-array overlay, and a strict compiler's
     /// walk stops at its first cell (`records` then carries the refusal).
-    #[cfg(feature = "solve")]
     pub(crate) fn seed_initialization_faqs(
         &self,
         ic_vec: &mut [f64],
@@ -1323,7 +1316,6 @@ impl ArrayCompiled {
     /// (`discrete_forcing`) are not sampled yet: each is read here at its
     /// declared default, which exercises the route an evaluation takes but
     /// not its value, so a resolution that read one is not kept.
-    #[cfg(feature = "solve")]
     pub(crate) fn field_ic_records(
         &self,
         params: &HashMap<String, f64>,
@@ -1415,8 +1407,7 @@ impl ArrayCompiled {
     /// The forcing fields an evaluation of the `ic` right-hand sides may
     /// read: the provider-fed fields whose value at the start of the run
     /// it needs (esm-spec §11.4.2).
-    #[cfg(feature = "solve")]
-    pub(crate) fn ic_forcing_reads(&self) -> HashSet<String> {
+        pub(crate) fn ic_forcing_reads(&self) -> HashSet<String> {
         let mut names = self.ic_read_names();
         names.retain(|n| self.serves_forcing(n));
         names
@@ -1483,7 +1474,6 @@ impl ArrayCompiled {
     /// construction resolved ([`FieldIcMemo`], left in place for the first
     /// solve); empty when those could not be resolved there, or a key does not
     /// canonicalize, which leaves the diagnostic to the solve.
-    #[cfg(feature = "solve")]
     pub(crate) fn unset_initial_slots(
         &self,
         initial_conditions: &HashMap<String, f64>,
@@ -1583,7 +1573,6 @@ impl ArrayCompiled {
     /// `initial_conditions` override > loaded field ic > variable default (a
     /// slot with none of the three is an
     /// [`SimulateError::InvalidInitialCondition`]).
-    #[cfg(feature = "solve")]
     fn build_initial_state(
         &self,
         initial_conditions: &HashMap<String, f64>,
@@ -1603,8 +1592,7 @@ impl ArrayCompiled {
     /// from the memo. Like the solve, it reports an out-of-range constant-array
     /// gather an initial condition made rather than returning the `NaN` the
     /// gather substituted.
-    #[cfg(feature = "solve")]
-    pub(crate) fn initial_state(
+        pub(crate) fn initial_state(
         &self,
         params: &HashMap<String, f64>,
         initial_conditions: &HashMap<String, f64>,
@@ -1627,8 +1615,7 @@ impl ArrayCompiled {
 
     /// [`Self::build_initial_state`], taking construction's memo
     /// (`consume_memo`, what a solve does) or reading it in place.
-    #[cfg(feature = "solve")]
-    fn build_initial_state_with(
+        fn build_initial_state_with(
         &self,
         initial_conditions: &HashMap<String, f64>,
         param_vec: &[f64],
@@ -3755,7 +3742,6 @@ pub(super) fn dependency_cone(
 /// A field `ic` that could not be resolved, told why the build-time scope
 /// lacks the observeds its RHS reads, when that is the reason: an observed
 /// left out of the scope is otherwise just an "unusable RHS".
-#[cfg(feature = "solve")]
 fn explain_ic_scope_miss(
     err: SimulateError,
     rhs: &Expr,
