@@ -3871,14 +3871,14 @@ pub(crate) fn faq_bare_array_operand_errors(
     if !holds_derivative(lhs) {
         collect_variable_refs(lhs, &mut defined);
     }
-    let declared_axes: HashMap<&str, &Vec<String>> = var_shapes
-        .iter()
-        .filter(|(n, s)| !s.is_empty() && !defined.contains(n.as_str()))
-        .map(|(n, s)| (n.as_str(), s))
-        .collect();
-    if declared_axes.is_empty() {
-        return;
-    }
+    // A VIEW over `var_shapes` minus `defined`, not a map rebuilt from it:
+    // this runs once per equation, and copying every variable's shape into a
+    // fresh map each time is O(equations x variables) -- about a second on a
+    // 5,000-variable relational model, for a walk that reads a handful.
+    let declared_axes = DeclaredAxes {
+        shapes: var_shapes,
+        defined: &defined,
+    };
     let mut bound: Vec<String> = Vec::new();
     let mut visited = HashMap::new();
     let walk = BareWalk {
@@ -3889,10 +3889,29 @@ pub(crate) fn faq_bare_array_operand_errors(
     walk.faq_operands(expr, &mut bound, &mut visited, errors);
 }
 
+/// The shaped variables a [`faq_bare_array_operand_errors`] walk checks: every
+/// declared variable with a non-empty shape, except those the equation defines.
+struct DeclaredAxes<'a> {
+    shapes: &'a HashMap<String, Vec<String>>,
+    defined: &'a HashSet<String>,
+}
+
+impl<'a> DeclaredAxes<'a> {
+    fn get(&self, name: &str) -> Option<&'a Vec<String>> {
+        self.shapes
+            .get(name)
+            .filter(|s| !s.is_empty() && !self.defined.contains(name))
+    }
+
+    fn contains_key(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+}
+
 /// One [`faq_bare_array_operand_errors`] walk's fixed inputs.
 struct BareWalk<'a> {
     path: &'a str,
-    declared_axes: &'a HashMap<&'a str, &'a Vec<String>>,
+    declared_axes: &'a DeclaredAxes<'a>,
     opaque_applications: bool,
 }
 
@@ -3950,7 +3969,9 @@ impl BareWalk<'_> {
                     if bound.iter().any(|b| b == operand) || !seen.insert(operand) {
                         continue;
                     }
-                    let axes = declared_axes[operand];
+                    let Some(axes) = declared_axes.get(operand) else {
+                        continue;
+                    };
                     let syms: Vec<String> = node
                         .ranges
                         .as_ref()
