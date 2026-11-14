@@ -532,7 +532,9 @@ theorem ofComp_compOf (caps : Caps) (root : List (String × Json)) (K : Kind) (n
     compBase_blocks_at caps K name hl k]
   have hdn : "description" ∉ declFieldNames K := by cases K <;> simp [declFieldNames]
   have hen : ∀ f ∈ mathFields, f ∉ declFieldNames K := by
-    intro f hf; cases K <;> simp [declFieldNames, mathFields] at hf ⊢ <;> rcases hf with h | h | h | h <;> simp [h]
+    intro f hf
+    simp only [mathFields, List.mem_cons, List.not_mem_nil, or_false] at hf
+    cases K <;> rcases hf with h | h | h | h | h <;> subst h <;> simp [declFieldNames]
   have hdm : "description" ∉ mathFields := by simp [mathFields]
   by_cases hd : k = "description"
   · subst hd

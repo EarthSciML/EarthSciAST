@@ -34,6 +34,8 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
   wrapped as `#reaction(key: value, …)[#ce[…]] <id>`;
 * at the start of a line: `#initialization[$ … $]` or `#constraints[$ … $]`, an
   initialization equation or a constraint;
+* at the start of a line: `#plot(key: value, …)`, an analysis with exactly one plot: the
+  analysis's fields, the plot as the argument `plot`;
 * anywhere: a declaration `#var($N$, …)`, `#param(…)` or `#species(…)`, the name in
   Typst math and the attributes as named arguments.
 
@@ -61,11 +63,13 @@ def oCe : List Char := "#ce[".toList
 def oRxn : List Char := "#reaction(".toList
 def oInit : List Char := "#initialization[".toList
 def oCons : List Char := "#constraints[".toList
+def oPlot : List Char := "#plot(".toList
 
 theorem oCe_l : oCe = ['#', 'c', 'e', '['] := rfl
 theorem oRxn_l : oRxn = ['#', 'r', 'e', 'a', 'c', 't', 'i', 'o', 'n', '('] := rfl
 theorem oInit_l : oInit = ['#', 'i', 'n', 'i', 't', 'i', 'a', 'l', 'i', 'z', 'a', 't', 'i', 'o', 'n', '['] := rfl
 theorem oCons_l : oCons = ['#', 'c', 'o', 'n', 's', 't', 'r', 'a', 'i', 'n', 't', 's', '['] := rfl
+theorem oPlot_l : oPlot = ['#', 'p', 'l', 'o', 't', '('] := rfl
 
 /-- The opener of the equation container of a role. -/
 def oRole : Role → List Char
@@ -248,6 +252,7 @@ def itemT : RItem → List Char
   | .eqn raw => oEq ++ raw.toList ++ [' ', '$', '\n']
   | .eqx r raw => oRole r ++ oEq ++ raw.toList ++ [' ', '$', ']', '\n']
   | .rxn x => rxnT x
+  | .plot a => oPlot ++ argsFirstT a ++ [')', '\n']
 
 /-- A display equation with a label after it (` <eq-x>`). -/
 def eqnLabeled (raw : String) (label : List Char) : List Char :=
@@ -264,7 +269,7 @@ def labelOK (sl : List Char) : Bool :=
 
 def blockOpen (s : List Char) : Bool :=
   pre oDesc s || pre oBlock s || pre oModel s || pre oRs s || pre oEq s || pre oCe s || pre oRxn s ||
-    pre oInit s || pre oCons s
+    pre oInit s || pre oCons s || pre oPlot s
 
 def declOpen (s : List Char) : Bool := pre oVar s || pre oParam s || pre oSpecies s
 
@@ -304,6 +309,12 @@ def eqxAt (ro : Role) (u : List Char) : Option (RItem × List Char) :=
     | _ => none
   | none => none
 
+/-- A plot directive after `#plot(`. -/
+def plotAtT (F : Nat) (u : List Char) : Option (RItem × List Char) :=
+  match pArgsFirst F F u with
+  | some (a, r) => (lineEnd r).map (fun r' => (.plot a, r'))
+  | none => none
+
 def blockAt (F : Nat) (s : List Char) : Option (RItem × List Char) :=
   if pre oDesc s then descAt (s.drop oDesc.length)
   else if pre oBlock s then blockAtT F (s.drop oBlock.length)
@@ -313,6 +324,7 @@ def blockAt (F : Nat) (s : List Char) : Option (RItem × List Char) :=
   else if pre oRxn s then rxnAtT F (s.drop oRxn.length)
   else if pre oInit s then eqxAt .init (s.drop oInit.length)
   else if pre oCons s then eqxAt .cons (s.drop oCons.length)
+  else if pre oPlot s then plotAtT F (s.drop oPlot.length)
   else eqAt (s.drop oEq.length)
 
 def declBody (F f : Nat) (k : DKind) : List Char → Option (RItem × List Char)
@@ -511,6 +523,7 @@ def itemOK : RItem → Bool
   | .eqn raw => !raw.toList.contains '$'
   | .eqx r raw => r != .eqn && !raw.toList.contains '$'
   | .rxn x => rxnOK x
+  | .plot a => a.all argOK
 
 /-- Prose that the lexer skips. -/
 def Inert : Bool → List Char → List Char → Prop
@@ -577,8 +590,8 @@ theorem pre_model_eq (X : List Char) : pre oModel (oEq ++ X) = false := by simp 
 theorem pre_rs_eq (X : List Char) : pre oRs (oEq ++ X) = false := by simp [oRs, oEq, pre]
 theorem pre_new_eq (X : List Char) :
     pre oCe (oEq ++ X) = false ∧ pre oRxn (oEq ++ X) = false ∧ pre oInit (oEq ++ X) = false ∧
-      pre oCons (oEq ++ X) = false := by
-  simp [oCe_l, oRxn_l, oInit_l, oCons_l, oEq, pre]
+      pre oCons (oEq ++ X) = false ∧ pre oPlot (oEq ++ X) = false := by
+  simp [oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, oEq, pre]
 
 theorem lex_desc (s : String) (bol : Bool) (hbol : bol = true) (t : List Char) (g : Nat) :
     lex (g + 1) bol (itemT (.desc s) ++ t) = (lex g true t).map (.desc s :: ·) := by
@@ -628,7 +641,8 @@ theorem lex_eqnL (raw : String) (l : List Char) (hr : itemOK (.eqn raw) = true)
   simp only [itemOK, Bool.not_eq_true'] at hr
   apply lex_block_step g bol _ t _ (by simp [eqnLabeled, oEq]) _ hbol
   · simp only [eqnLabeled, List.append_assoc, blockAt, pre_desc_eq, pre_block_eq, pre_model_eq,
-      pre_rs_eq, (pre_new_eq _).1, (pre_new_eq _).2.1, (pre_new_eq _).2.2.1, (pre_new_eq _).2.2.2,
+      pre_rs_eq, (pre_new_eq _).1, (pre_new_eq _).2.1, (pre_new_eq _).2.2.1, (pre_new_eq _).2.2.2.1,
+      (pre_new_eq _).2.2.2.2,
       Bool.false_eq_true, ite_false, List.drop_left, List.cons_append]
     unfold eqAt
     have htw : (raw.toList ++ ' ' :: '$' :: (l ++ '\n' :: t)).takeWhile (· != '$') =
@@ -660,7 +674,7 @@ theorem lex_decl (d : Decl) (hd : itemOK (.decl d) = true) (bol : Bool) (t : Lis
   have eS : oSpecies = ['#', 's', 'p', 'e', 'c', 'i', 'e', 's', '('] := rfl
   apply lex_decl_step g bol _ t _ (by cases k <;> simp [itemT, declT, dkw, oVar, oParam, oSpecies])
   · cases k <;> simp [itemT, declT, dkw, blockOpen, oVar, oParam, oSpecies, oDesc, oBlock, oModel,
-      oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, pre]
+      oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, pre]
   · cases k <;> simp [itemT, declT, dkw, declOpen, oVar, oParam, oSpecies, pre]
   · cases k <;> simpa [itemT, declT, dkw, declAt, eV, eP, eS, pre] using hb
 
@@ -694,6 +708,39 @@ theorem lex_eqx (r : Role) (raw : String) (hr : itemOK (.eqx r raw) = true) (bol
         Bool.false_eq_true, List.drop_left]
       simpa using hea
     · simp [itemT, oRole, blockOpen, pre_append]
+
+/-! ### Plots -/
+
+theorem lex_plot (a : List (String × Json)) (ha : itemOK (.plot a) = true) (bol : Bool)
+    (hbol : bol = true) (t : List Char) (g : Nat)
+    (hg : (itemT (.plot a)).length + t.length < g + 1) :
+    lex (g + 1) bol (itemT (.plot a) ++ t) = (lex g true t).map (.plot a :: ·) := by
+  have hlen : a.length ≤ (argsFirstT a).length := by
+    cases a with
+    | nil => simp [argsFirstT]
+    | cons b bs =>
+      have := argsMoreT_len bs
+      have h1 : 1 ≤ (argT b).length := by simp [argT]; omega
+      simp [argsFirstT]; omega
+  have hsz : ∀ b ∈ a, b.2.size ≤ (argsFirstT a).length := by
+    intro b hb
+    cases a with
+    | nil => cases hb
+    | cons c cs =>
+      simp only [argsFirstT, List.length_append]
+      rcases List.mem_cons.mp hb with rfl | h
+      · have := size_le_argT b; omega
+      · have := argsMoreT_size cs b h; omega
+  apply lex_block_step g bol _ t _ (by simp [itemT, oPlot_l]) _ hbol
+  · simp only [itemT, List.append_assoc, blockAt]
+    simp (disch := decide) only [pre_app_of_pre, pre_app_false, ite_true, ite_false,
+      Bool.false_eq_true, List.drop_left, plotAtT]
+    rw [show [')', '\n'] ++ t = ')' :: ('\n' :: t) from rfl,
+      pArgsFirst_argsFirstT _ a (fun b hb => List.all_eq_true.mp ha b hb)
+        (fun b hb => by have := hsz b hb; simp [itemT] at hg; omega) _ _
+        (by simp [itemT] at hg; omega)]
+    simp [lineEnd_nl]
+  · simp [itemT, blockOpen, pre_append]
 
 /-! ### Reactions -/
 
@@ -881,6 +928,10 @@ theorem lex_render : ∀ (segs : List Seg) (bol : Bool), Valid bol segs →
     | rxn x =>
       rw [lex_rxn x hok bol (hb rfl) _ g hf',
         lex_render rest true hv g (hlen _ (by simp only [itemT, rxnT]; split <;> simp) hf)]
+      rfl
+    | plot a =>
+      rw [lex_plot a hok bol (hb rfl) _ g hf',
+        lex_render rest true hv g (hlen _ (by simp [itemT, oPlot_l]) hf)]
       rfl
 
 end Esm.Document.Source.Typ

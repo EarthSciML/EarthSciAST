@@ -374,7 +374,8 @@ def skeleton : List SkeletonRow := [
   { field := "subsystems (inline)", home := .componentDirective,
     markdown := "a nested ::model under a deeper heading", typst := "nested #model" },
   { field := "analyses (one plot)", home := .plotDirective,
-    markdown := "::plot{…}", typst := "#plot(…)" },
+    markdown := r#"::plot{key=value …} on one line: the analysis's fields as attributes, its one plot as plot={…}; the whole analyses field is a block unless every analysis has exactly one plot and no field named plot"#,
+    typst := r#"#plot(key: value, …, plot: (…)), the same fields"# },
   { field := "everything else", home := .pathBlock,
     markdown := "```esm:<path> block", typst := r#"#esm-block("<path>", (…))"# }
 ]

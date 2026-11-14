@@ -101,6 +101,7 @@ def capsMd : Caps where
   eqn S e := commentOK e.comment && !(latexOf S e).contains '$' && !(latexOf S e).contains '\n' &&
     (latexOf S e).head? != some '%' && (envOf (latexOf S e)).isNone
   rxn S x := rxnOK { x with rate := printLatex S x.rate }
+  plot a := a.all attrOK
 
 theorem heads_sub {c : Char} : ∀ {bol : Bool} {x : List Char}, c ∈ heads bol x → c ∈ x
   | _, [], h => by cases h
@@ -194,7 +195,7 @@ theorem render_append (a b : List Seg) : render (a ++ b) = render a ++ render b 
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
   refine ⟨?_, ?_, ?_, ?_, trivial⟩
-  · simp [blockOpen, fenceEsm, dd, dModel, dRs, pre]
+  · simp [blockOpen, fenceEsm, dd, dModel, dRs, dPlot, pre]
   · simp [declOpen, pre]
   · simp [tableOpen, pre]
   · simp [contOpen, dInit_l, dCons_l, pre]
@@ -214,6 +215,7 @@ theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true)
     | eqn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | eqx _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | rxn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | plot _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
 
 /-- **The front matter and the body read back.** -/
 theorem lexDoc_front (front : List (String × Json)) (hf : jwf (.obj front) = true)
@@ -301,6 +303,7 @@ theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
         | init => simp [prMdx, prMx, mItem, itemOK, hns]
         | cons => simp [prMdx, prMx, mItem, itemOK, hns]
       | rxn x => exact hmc
+      | plot a => exact hmc
     · exact (h.mathBlocks c hc kv hkv).2
     · exact (h.cblocks c hc kv hkv).2
 

@@ -39,6 +39,8 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
   mhchem (`Esm.Document.Source.Reaction`) with the rate as LaTeX math over the arrow,
   `->[{$k$}]` (braced, since mhchem ends the label at the first `]`), and the reaction's
   `id` and other fields in the label;
+* at the start of a line: a plot directive `::plot{key=value …}` on one line, an analysis
+  with exactly one plot: the analysis's fields, the plot as the attribute `plot`;
 * at the start of a line: a container `:::initialization` or `:::constraints` on a line
   of its own, then display equations, then a line `:::`; each equation in it is an
   initialization equation or a constraint;
@@ -79,6 +81,8 @@ def dRs : List Char := "::reaction-system[".toList
 def dashes : List Char := "---".toList
 /-- The info string of the description block. -/
 def descInfo : List Char := "description".toList
+/-- `::plot{`, the start of a plot directive. -/
+def dPlot : List Char := "::plot{".toList
 /-- `$$\ce{`, the start of a reaction line. -/
 def dRxn : List Char := "$$\\ce{".toList
 /-- The containers of initialization equations and constraints, and their end. -/
@@ -324,6 +328,12 @@ def rxnAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
     | none => none
   | none => none
 
+/-- A plot directive after its `::plot{`. -/
+def plotAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
+  match pAttrs f u with
+  | some (a, r) => if (splitLine r).1.all (· == ' ') then some (.plot a, (splitLine r).2) else none
+  | none => none
+
 /-! ## Containers of initialization equations and constraints -/
 
 /-- The displays of a container, up to its closing `:::` line; blank lines between them
@@ -356,7 +366,8 @@ def contAt (f : Nat) (s : List Char) : Option (List RItem × List Char) :=
 /-! ## The lexer -/
 
 /-- A block construct starts here (at the start of a line). -/
-def blockOpen (s : List Char) : Bool := pre fenceEsm s || pre dd s || pre dModel s || pre dRs s
+def blockOpen (s : List Char) : Bool :=
+  pre fenceEsm s || pre dd s || pre dModel s || pre dRs s || pre dPlot s
 
 /-- A declaration starts here. -/
 def declOpen (s : List Char) : Bool :=
@@ -368,6 +379,7 @@ def blockAt (f : Nat) (s : List Char) : Option (RItem × List Char) :=
   else if pre dRxn s then rxnAt f (s.drop 6)
   else if pre dd s then mathAt f (s.drop 2)
   else if pre dModel s then dirAt .model (s.drop 8)
+  else if pre dPlot s then plotAt f (s.drop 7)
   else dirAt .rs (s.drop 18)
 
 /-- Read the declaration that starts here. -/
@@ -936,6 +948,7 @@ def itemMd : RItem → List Char
   | .eqn raw => dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ ['\n']
   | .eqx r raw => dRole r ++ '\n' :: dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ '\n' :: dEnd ++ ['\n']
   | .rxn x => dRxn ++ rxnBody x
+  | .plot a => dPlot ++ attrsMd a ++ ['}', '\n']
 
 /-- A display equation with an equation label after its closing `$$` (` {#eq-x}`). -/
 def eqnLabeled (raw : String) (label : List Char) : List Char :=
@@ -976,6 +989,7 @@ def itemOK : RItem → Bool
   | .eqn raw => noStop dd (raw.toList ++ ['\n'])
   | .eqx r raw => r != .eqn && noStop dd (raw.toList ++ ['\n'])
   | .rxn x => rxnOK x
+  | .plot a => a.all attrOK
 
 /-- **Prose that the lexer skips**: at no character does a construct start (a block
 construct only matters at the start of a line). `t` is the text after the prose. -/
@@ -1078,6 +1092,7 @@ theorem pre_dm_dr (X : List Char) : pre dModel (dRs ++ X) = false := by simp [dM
 theorem pre_rx_dm (X : List Char) : pre dRxn (dModel ++ X) = false := by simp [dRxn, dModel, pre]
 theorem pre_rx_dr (X : List Char) : pre dRxn (dRs ++ X) = false := by simp [dRxn, dRs, pre]
 theorem pre_rx_dd (X : List Char) : pre dRxn (dd ++ '\n' :: X) = false := by simp [dRxn, dd, pre]
+theorem pre_pl_dr (X : List Char) : pre dPlot (dRs ++ X) = false := by simp [dPlot, dRs, pre]
 
 theorem keyMd_ne_desc (k : String) : keyMd k ≠ descInfo := by
   intro h
@@ -1123,7 +1138,7 @@ theorem lex_comp (K : Kind) (n : String) (hn : itemOK (.comp K n) = true) (bol :
     · simp [itemMd, blockOpen, pre_append]
   | rs =>
     apply lex_block_step g bol _ t _ (by simp [itemMd, dRs]) _ hbol
-    · simp only [itemMd, List.append_assoc, blockAt, pre_fe_dr, pre_rx_dr, pre_dd_dr, pre_dm_dr,
+    · simp only [itemMd, List.append_assoc, blockAt, pre_fe_dr, pre_rx_dr, pre_dd_dr, pre_dm_dr, pre_pl_dr,
         Bool.false_eq_true, ite_false]
       rw [show (18 : Nat) = dRs.length from rfl, List.drop_left, dirAt]
       simp only [List.cons_append, List.nil_append, htw, List.drop_left]
@@ -1152,7 +1167,7 @@ theorem lex_decl (d : Decl) (hd : itemOK (.decl d) = true) (bol : Bool) (t : Lis
   simp only [itemOK] at hd
   obtain ⟨k, n, as⟩ := d
   apply lex_decl_step g bol _ t _ (by simp [itemMd, declMd])
-  · cases k <;> simp [itemMd, declMd, dkw, blockOpen, fenceEsm, dd, dModel, dRs, pre]
+  · cases k <;> simp [itemMd, declMd, dkw, blockOpen, fenceEsm, dd, dModel, dRs, dPlot, pre]
   · cases k <;> simp [itemMd, declMd, dkw, declOpen, pre]
   · have hb := declBody_declMd g ⟨k, n, as⟩ hd t hg
     simp only [List.cons_append, List.append_assoc] at hb
@@ -1262,6 +1277,24 @@ theorem lex_rxn (x : Rxn String) (hx : itemOK (.rxn x) = true) (bol : Bool) (hbo
     exact rxnAt_body g x hx t (by simp [itemMd, dRxn] at hg; omega)
   · simp [itemMd, blockOpen, dRxn, dd, pre]
 
+/-! ### Plots -/
+
+theorem lex_plot (a : List (String × Json)) (ha : itemOK (.plot a) = true) (bol : Bool)
+    (hbol : bol = true) (t : List Char) (g : Nat)
+    (hg : (itemMd (.plot a)).length + t.length < g + 1) :
+    lex (g + 1) bol (itemMd (.plot a) ++ t) = (lex g true t).map (.plot a :: ·) := by
+  have hl := attrs_len a
+  apply lex_block_step g bol _ t _ (by simp [itemMd, dPlot]) _ hbol
+  · simp only [itemMd, List.append_assoc, blockAt]
+    simp (disch := decide) only [pre_app_of_pre, pre_app_false, ite_true, ite_false,
+      Bool.false_eq_true, plotAt]
+    rw [show (7 : Nat) = dPlot.length from rfl, List.drop_left]
+    simp only [List.cons_append, List.nil_append]
+    rw [pAttrs_attrsMd a (fun b hb => List.all_eq_true.mp ha b hb) ('\n' :: t) g
+      (by simp [itemMd, dPlot] at hg; omega)]
+    simp [splitLine]
+  · simp [itemMd, blockOpen, pre_append]
+
 /-! ### Containers -/
 
 theorem dRole_word (r : Role) (hr : r ≠ .eqn) (g : Nat) (X : List Char) :
@@ -1367,7 +1400,7 @@ theorem lex_eqx (r : Role) (raw : String) (hr : itemOK (.eqx r raw) = true) (bol
     simp only [blockOpen, declOpen, contOpen]
     rw [hlong _ (by decide), hlong _ (by decide), hlong _ (by decide), hlong _ (by decide),
       hlong _ (by decide), hlong _ (by decide), hlong _ (by decide), hlong _ (by decide),
-      hlong _ (by decide), hlong _ (by decide)]
+      hlong _ (by decide), hlong _ (by decide), hlong _ (by decide)]
     cases r with
     | eqn => exact absurd rfl hr.1
     | init => decide
@@ -1445,6 +1478,10 @@ theorem lex_render : ∀ (segs : List Seg) (bol : Bool), Valid bol segs →
     | rxn x =>
       rw [lex_rxn x hok bol (hb rfl) _ g hf',
         lex_render rest true hv g (hlen _ (by simp [itemMd, dRxn]) hf)]
+      rfl
+    | plot a =>
+      rw [lex_plot a hok bol (hb rfl) _ g hf',
+        lex_render rest true hv g (hlen _ (by simp [itemMd, dPlot]) hf)]
       rfl
 
 /-! ## The declarations table reads as its declarations -/
@@ -1641,7 +1678,7 @@ theorem lex_table (cols : List String) (hc : ∀ k ∈ cols, isIdent k.toList = 
     | cons c r => exact ⟨c, r, rfl⟩
   rw [hcr] at htab ⊢
   have hb : blockOpen (c :: r) = false := by
-    rw [← hcr]; simp [tableText, tableOpen, blockOpen, fenceEsm, dd, dModel, dRs, pre]
+    rw [← hcr]; simp [tableText, tableOpen, blockOpen, fenceEsm, dd, dModel, dRs, dPlot, pre]
   have hdo : declOpen (c :: r) = false := by
     rw [← hcr]; simp [tableText, tableOpen, declOpen, pre]
   have hto : pre tableOpen (c :: r) = true := by

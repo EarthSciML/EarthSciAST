@@ -35,12 +35,14 @@ inductive RItem where
   | eqn (raw : String)
   | eqx (r : Role) (raw : String)
   | rxn (x : Rxn String)
+  | plot (attrs : List (String × Json))
 
 /-- The construct of a math entry. -/
 def mItem : MR → RItem
   | .eq .eqn raw => .eqn raw
   | .eq r raw => .eqx r raw
   | .rxn x => .rxn x
+  | .plot a => .plot a
 
 /-- The constructs of a component section. -/
 def compItems (c : Comp MR) : List RItem :=
@@ -71,6 +73,7 @@ def addTo (c : Comp MR) : RItem → Option (Comp MR)
   | .eqn r => some { c with math := c.math ++ [.eq .eqn r] }
   | .eqx ro r => some { c with math := c.math ++ [.eq ro r] }
   | .rxn x => some { c with math := c.math ++ [.rxn x] }
+  | .plot a => some { c with math := c.math ++ [.plot a] }
   | .comp _ _ => none
 
 /-- The reader's state: the document description and blocks, the finished sections,
@@ -137,6 +140,7 @@ theorem addTo_mItem (c : Comp MR) (m : MR) : addTo c (mItem m) = some { c with m
   cases m with
   | eq r raw => cases r <;> rfl
   | rxn x => rfl
+  | plot a => rfl
 
 theorem fold_math (st : St) (c : Comp MR) (h : st.cur = some c) :
     ∀ ms : List MR, (ms.map mItem).foldlM step st =
@@ -148,6 +152,7 @@ theorem fold_math (st : St) (c : Comp MR) (h : st.cur = some c) :
       have : ∀ K n, mItem m ≠ .comp K n := by intro K n; cases m with
         | eq r raw => cases r <;> simp [mItem]
         | rxn x => simp [mItem]
+        | plot a => simp [mItem]
       unfold step
       split
       · rename_i K n he; exact absurd he (this K n)
@@ -334,12 +339,14 @@ theorem cookDoc_rawDoc (pr : Sym → MC → MR) (ck : Sym → MR → Option (Lis
 def prMx (prE : Sym → Eqn → String) (prR : Sym → Json → String) (S : Sym) : MC → MR
   | .eq r e => .eq r (prE S e)
   | .rxn x => .rxn { x with rate := prR S x.rate }
+  | .plot a => .plot a
 
 /-- Read a math entry with the container's equation reader and expression reader. -/
 def ckMx (ckE : Sym → String → Option (List Eqn)) (ckR : Sym → String → Option Json) (S : Sym) :
     MR → Option (List MC)
   | .eq r raw => (ckE S raw).map (fun es => es.map (.eq r))
   | .rxn x => (ckR S x.rate).map (fun j => [.rxn { x with rate := j }])
+  | .plot a => some [.plot a]
 
 theorem ckMx_prMx (prE : Sym → Eqn → String) (prR : Sym → Json → String)
     (ckE : Sym → String → Option (List Eqn)) (ckR : Sym → String → Option Json) (S : Sym)
@@ -349,5 +356,6 @@ theorem ckMx_prMx (prE : Sym → Eqn → String) (prR : Sym → Json → String)
   cases m with
   | eq r e => simp [prMx, ckMx, hE r e rfl]
   | rxn x => simp [prMx, ckMx, hR x rfl]
+  | plot a => rfl
 
 end Esm.Document.Source

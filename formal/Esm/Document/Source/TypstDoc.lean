@@ -57,6 +57,7 @@ def capsT : Caps where
   attr a := bareKey TypstDict.reserved a.1
   eqn S e := Md.commentOK e.comment && !(typOf S e).contains '$' && !pre ['/', '/'] (typOf S e)
   rxn S x := rxnOK { x with rate := printTypst S x.rate }
+  plot a := a.all argOK
 
 theorem ckT_prT (S : Sym) (e : Eqn) (hc : capsT.eqn S e = true) (hl : isE e.lhs = true)
     (hr : isE e.rhs = true) : ckT S (prT S e) = some [e] := by
@@ -129,7 +130,7 @@ theorem segItems_canon (its : List RItem) : segItems (canonSegs its) = its := by
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
   refine ⟨?_, ?_, trivial⟩
-  · simp [blockOpen, oDesc, oBlock, oModel, oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, pre]
+  · simp [blockOpen, oDesc, oBlock, oModel, oRs, oEq, oCe_l, oRxn_l, oInit_l, oCons_l, oPlot_l, pre]
   · simp [declOpen, oVar, oParam, oSpecies, pre]
 
 theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true) →
@@ -147,6 +148,7 @@ theorem valid_canon : ∀ (its : List RItem), (∀ it ∈ its, itemOK it = true)
     | eqn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | eqx _ _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
     | rxn _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
+    | plot _ => exact ⟨inert_nl _ _, hit, fun _ => rfl, ih _⟩
 
 theorem argsFirstT_len (as : List (String × Json)) : as.length ≤ (argsFirstT as).length := by
   cases as with
@@ -239,6 +241,7 @@ theorem items_ok (D : Doc MC) (h : DocOK capsT D) :
         | init => simp only [prTx, prMx, mItem, itemOK, hns, Bool.not_false, Bool.and_true]; decide
         | cons => simp only [prTx, prMx, mItem, itemOK, hns, Bool.not_false, Bool.and_true]; decide
       | rxn x => exact hmc
+      | plot a => exact hmc
     · exact (h.mathBlocks c hc kv hkv).2
     · exact (h.cblocks c hc kv hkv).2
 

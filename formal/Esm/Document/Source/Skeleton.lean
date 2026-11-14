@@ -23,10 +23,11 @@ Native surfaces (`Notation.skeleton`):
 * component directives: the entries of `models` and `reaction_systems`;
 * declarations: a model's `variables` (`:var`, and `:param` for `type: "parameter"`), a
   reaction system's `species` (`:species`) and `parameters` (`:param`);
-* the math entries of a component: its `equations` (display math, one equation each),
+* the list entries of a component: its `equations` (display math, one equation each),
   its `initialization_equations` and `constraint_equations` (display math marked as
-  such), and its `reactions` (one reaction line each). Each of these four fields is
-  native when every one of its entries is, and otherwise one path block.
+  such), its `reactions` (one reaction line each), and its `analyses` (a plot directive
+  each, for an analysis with exactly one plot). Each of these five fields is native
+  when every one of its entries is, and otherwise one path block.
 
 Everything else is a path block.
 
@@ -160,11 +161,13 @@ structure Rxn (ρ : Type) where
   rate : ρ
   attrs : List (String × Json)
 
-/-- A math entry of a component: an equation of one of the three equation fields (`α`:
-the equation, or its math text), or a reaction. -/
+/-- A list entry of a component: an equation of one of the three equation fields (`α`:
+the equation, or its math text), a reaction, or an analysis with one plot (its fields,
+with `plots` replaced by `plot`, the one plot). -/
 inductive Mx (α ρ : Type) where
   | eq (r : Role) (e : α)
   | rxn (x : Rxn ρ)
+  | plot (attrs : List (String × Json))
 
 /-- A math entry as read. -/
 abbrev MC := Mx Eqn Json
@@ -175,10 +178,11 @@ abbrev MR := Mx String String
 def Mx.field {α ρ : Type} : Mx α ρ → String
   | .eq r _ => r.field
   | .rxn _ => "reactions"
+  | .plot _ => "analyses"
 
-/-- The math fields, in key order. -/
+/-- The list fields with entries of their own, in key order. -/
 def mathFields : List String :=
-  ["constraint_equations", "equations", "initialization_equations", "reactions"]
+  ["analyses", "constraint_equations", "equations", "initialization_equations", "reactions"]
 
 /-- One component section. `α` is how a math entry is held: `MC` in the semantic
 skeleton, `MR` (the container's math text) in the raw one. `mathBlocks` holds the math
@@ -263,11 +267,14 @@ structure Caps where
   eqn : Sym → Eqn → Bool
   /-- A reaction under the component's symbol table. -/
   rxn : Sym → Rxn Json → Bool
+  /-- The fields of a plot directive. -/
+  plot : List (String × Json) → Bool
 
-/-- A math entry the container spells. -/
+/-- A list entry the container spells. -/
 def Caps.item (caps : Caps) (S : Sym) : MC → Bool
   | .eq _ e => caps.eqn S e
   | .rxn x => caps.rxn S x
+  | .plot a => caps.plot a
 
 /-! ## Equations -/
 
@@ -347,12 +354,43 @@ theorem rxnOf_some {v : Json} {x : Rxn Json} (h : rxnOf v = some x) :
     · cases h
   · cases h
 
-/-! ## Math entries -/
+/-! ## Plots -/
 
-/-- The JSON value of a math entry. -/
+/-- The analysis a plot directive stands for: its fields, with `plot` back as the
+one-element `plots`. -/
+def plotJson (attrs : List (String × Json)) : Json :=
+  .obj (sortKeys (attrs.map (fun kv => if kv.1 = "plot" then ("plots", .arr [kv.2]) else kv)))
+
+/-- The plot directive an analysis is, when it has exactly one plot and no `plot` field,
+checked by printing it back. -/
+def plotOf (v : Json) : Option (List (String × Json)) :=
+  match v with
+  | .obj kvs =>
+    match look "plots" kvs, look "plot" kvs with
+    | some (.arr [p]), none =>
+      let a := kvs.map (fun kv => if kv.1 = "plots" then ("plot", p) else kv)
+      if plotJson a = v then some a else none
+    | _, _ => none
+  | _ => none
+
+theorem plotOf_some {v : Json} {a : List (String × Json)} (h : plotOf v = some a) : plotJson a = v := by
+  unfold plotOf at h
+  split at h
+  · split at h
+    · simp only at h
+      split at h
+      · cases h; assumption
+      · cases h
+    · cases h
+  · cases h
+
+/-! ## List entries -/
+
+/-- The JSON value of a list entry. -/
 def itemJson : MC → Json
   | .eq _ e => eqnJson e
   | .rxn x => rxnJson x
+  | .plot a => plotJson a
 
 /-- The role of an equation field. -/
 def roleOf (f : String) : Option Role := [Role.eqn, .init, .cons].find? (fun r => r.field == f)
@@ -360,12 +398,14 @@ def roleOf (f : String) : Option Role := [Role.eqn, .init, .cons].find? (fun r =
 /-- The math entry an entry of the math field `f` is. -/
 def itemOf (f : String) (v : Json) : Option MC :=
   if f = "reactions" then (rxnOf v).map .rxn
+  else if f = "analyses" then (plotOf v).map .plot
   else (roleOf f).bind (fun r => (eqnOf v).map (.eq r))
 
 /-- Well-formed expressions throughout. -/
 def mathWF : MC → Bool
   | .eq _ e => isE e.lhs && isE e.rhs
   | .rxn x => isE x.rate
+  | .plot _ => true
 
 theorem roleOf_some {f : String} {r : Role} (h : roleOf f = some r) : r.field = f := by
   unfold roleOf at h
@@ -392,6 +432,11 @@ theorem itemOf_some {f : String} {v : Json} {m : MC} (h : itemOf f v = some m) :
     obtain ⟨x, hx, rfl⟩ := h
     obtain ⟨h1, h2⟩ := rxnOf_some hx
     exact ⟨h1, hf.symm, h2⟩
+  split at h
+  · rename_i hf
+    simp only [Option.map_eq_some_iff] at h
+    obtain ⟨a, ha, rfl⟩ := h
+    exact ⟨plotOf_some ha, hf.symm, rfl⟩
   · simp only [Option.bind_eq_some_iff, Option.map_eq_some_iff] at h
     obtain ⟨r, hr, e, he, rfl⟩ := h
     have := eqnOf_isE he
