@@ -29,10 +29,15 @@ jobs:
       # aarch64 SIMD paths, which the host build does not compile. Those live in
       # the library, so that run lints `--lib` only: its tests and benches pull
       # in dev-dependencies with C build scripts (criterion's `alloca`), and the
-      # runner has no aarch64 C compiler. The Typst plugin only builds for wasm32
+      # runner has no aarch64 C compiler. The `esm` tool is also linted with
+      # the integrator backend alone (`--bins`: the library's tests need
+      # `solve`), so neither backend's code leans on the other's; that build
+      # lives here rather than in rust-tests, off that job's critical path.
+      # The Typst plugin only builds for wasm32
       # (its .cargo/config.toml sets the target).
       rust-clippy: >-
         [{"dir": "pkg/earthsci-ast-rs", "args": "--features conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio,integrator"},
+         {"dir": "pkg/earthsci-ast-rs", "targets": "--bins", "args": "--no-default-features --features integrator"},
          {"dir": "pkg/earthsci-ast-rs", "target": "aarch64-unknown-linux-gnu", "targets": "--lib", "args": "--features simd"},
          {"dir": "pkg/earthsci-narrative"},
          {"dir": "pkg/earthsci-typst-plugin", "target": "wasm32-unknown-unknown"}]
