@@ -1,0 +1,44 @@
+{
+  "properties": [
+    {
+      "id": "P-units-canonical-spelling-idempotent",
+      "clauses": [
+        "spec.4.8.2.canonical-unit-spelling"
+      ],
+      "statement": "The canonical unit spelling is idempotent: spelling a canonical spelling again changes nothing.",
+      "lean_statement": "∀ s : String, Esm.Units.canon (Esm.Units.canon s) = Esm.Units.canon s",
+      "status": "proven",
+      "theorem": "Esm.Units.canon_idem"
+    },
+    {
+      "id": "P-units-canonical-spelling-same-unit",
+      "clauses": [
+        "spec.4.8.2.canonical-unit-spelling"
+      ],
+      "statement": "A unit string that resolves has a canonical spelling that resolves to the same unit (same dimension and exact scale).",
+      "lean_statement": "∀ (s : String) (u : Esm.Units.U), Esm.Units.resolve s = .ok u → ∃ u', Esm.Units.resolve (Esm.Units.canon s) = .ok u' ∧ u'.Agree u",
+      "status": "proven",
+      "theorem": "Esm.Units.resolve_canon"
+    },
+    {
+      "id": "P-units-canonical-spelling-reflects-resolution",
+      "clauses": [
+        "spec.4.8.2.canonical-unit-spelling"
+      ],
+      "statement": "A unit string whose canonical spelling resolves resolves itself, to the same unit: canonicalization never makes a non-resolving string resolve.",
+      "lean_statement": "∀ (s : String) (u' : Esm.Units.U), Esm.Units.resolve (Esm.Units.canon s) = .ok u' → ∃ u, Esm.Units.resolve s = .ok u ∧ u'.Agree u",
+      "status": "proven",
+      "theorem": "Esm.Units.resolve_of_canon"
+    },
+    {
+      "id": "P-units-canonical-spelling-merges-spellings",
+      "clauses": [
+        "spec.4.8.2.canonical-unit-spelling"
+      ],
+      "statement": "Two unit strings that parse to the same two-sided normal form (the same symbols with the same summed exponents on each side of the fraction bar) have the same canonical spelling.",
+      "lean_statement": "∀ (s t : String) (e e' : Esm.Units.UExpr), Esm.Units.parseChars s.toList = .ok e → Esm.Units.parseChars t.toList = .ok e' → Esm.Units.norm2 e.factors = Esm.Units.norm2 e'.factors → (Esm.Units.norm2 e.factors).all (fun f => Esm.Units.symOK f.1) = true → Esm.Units.keepsSyms e = true → Esm.Units.keepsSyms e' = true → Esm.Units.canon s = Esm.Units.canon t",
+      "status": "proven",
+      "theorem": "Esm.Units.canon_eq_of_factors"
+    }
+  ]
+}
