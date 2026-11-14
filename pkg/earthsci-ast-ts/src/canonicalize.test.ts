@@ -64,10 +64,18 @@ describe('canonicalize per RFC §5.4 (TS best-effort)', () => {
     expect(canonicalJson(op('*', [-0, 'x']))).toBe('-0.0')
   })
 
-  it('canonicalizes neg / sub / div', () => {
+  it('canonicalizes negation / sub / div', () => {
+    // Every spelling of negation canonicalizes to unary `-`; the deprecated
+    // `neg` (esm-spec §4.2) is never emitted (RFC §5.4.7).
     expect(canonicalJson(op('neg', [op('neg', ['x'])]))).toBe('"x"')
+    expect(canonicalJson(op('neg', [op('-', ['x'])]))).toBe('"x"')
+    expect(canonicalJson(op('-', [op('-', ['x'])]))).toBe('"x"')
     expect(canonicalJson(op('neg', [5]))).toBe('-5.0')
-    expect(canonicalJson(op('-', [0, 'x']))).toBe('{"args":["x"],"op":"neg"}')
+    expect(canonicalJson(op('neg', ['x']))).toBe('{"args":["x"],"op":"-"}')
+    expect(canonicalJson(op('-', ['x']))).toBe('{"args":["x"],"op":"-"}')
+    expect(canonicalJson(op('-', [0, 'x']))).toBe('{"args":["x"],"op":"-"}')
+    // The deprecated `pow` canonicalizes to `^`.
+    expect(canonicalJson(op('pow', ['x', 'n']))).toBe('{"args":["x","n"],"op":"^"}')
     expect(() => canonicalize(op('/', [0, 0]))).toThrow(
       expect.objectContaining({ code: E_CANONICAL_DIVBY_ZERO }),
     )
