@@ -86,6 +86,13 @@ def commentOK : Option String → Bool
 
 /-! ## What Markdown spells natively -/
 
+/-- A value remark-directive reads as written in a double-quoted attribute: a string
+without `"` (it would end the quoted value, the YAML escape notwithstanding) and without
+`&` (a character reference would be decoded); any other value. -/
+def dqOK : Json → Bool
+  | .str s => !s.toList.contains '"' && !s.toList.contains '&'
+  | _ => true
+
 /-- The Markdown container's predicates. A description must not contain a line that
 would close its fence (`noStop`; CommonMark also closes a fence indented by up to three
 spaces, and treats a carriage return as a line end). An equation's LaTeX must be one
@@ -98,13 +105,14 @@ def capsMd : Caps where
   compName n := !n.toList.contains ']' && !n.toList.contains '\n'
   declName n := nameOK n && !(nameLatex n).contains '$' && !n.toList.contains ']' &&
     !n.toList.contains '\n'
-  attr a := isIdent a.1.toList
+  attr a := isIdent a.1.toList && dqOK a.2
   eqn S e := commentOK e.comment && !(latexOf S e).contains '$' && !(latexOf S e).contains '\n' &&
     (latexOf S e).head? != some '%' && (envOf (latexOf S e)).isNone &&
     (tmLex (prMd S e).toList).isNone
   rxn S x := rxnOK { x with rate := printLatex S x.rate }
-  plot a := a.all attrOK
-  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printLatex S j), body := printLatex S t.body })
+  plot a := a.all attrOK && a.all (fun kv => dqOK kv.2)
+  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printLatex S j), body := printLatex S t.body }) &&
+    t.attrs.all (fun kv => dqOK kv.2)
 
 theorem heads_sub {c : Char} : ∀ {bol : Bool} {x : List Char}, c ∈ heads bol x → c ∈ x
   | _, [], h => by cases h
@@ -200,7 +208,7 @@ theorem render_append (a b : List Seg) : render (a ++ b) = render a ++ render b 
 
 theorem inert_nl (bol : Bool) (t : List Char) : Inert bol ['\n'] t := by
   refine ⟨?_, ?_, ?_, ?_, trivial⟩
-  · simp [blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, pre]
+  · simp [blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, dTmpl, dRuleC, pre]
   · simp [declOpen, pre]
   · simp [tableOpen, pre]
   · simp [contOpen, dInit_l, dCons_l, pre]
@@ -289,7 +297,8 @@ theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
     exact this.1.1.1.1
   · exact h.blocks kv hkv
   · obtain ⟨hmc, -, t, rfl⟩ := h.rmath m hm
-    exact hmc
+    simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc
+    exact hmc.1
   · simp only [compItems, Comp.mapMath, List.mem_cons, List.mem_append, List.mem_map,
       Option.mem_toList, Option.map_eq_some_iff] at hit
     rcases hit with rfl | (((((⟨s, hs, rfl⟩) | ⟨d, hd, rfl⟩) | ⟨r, ⟨m, hm, rfl⟩, rfl⟩) |
@@ -302,9 +311,9 @@ theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
       have ha := h.attrs c hc d hd
       have hat : d.attrs.all attrOK = true := List.all_eq_true.mpr fun a hma => by
         have := ha a hma
-        simp only [capsMd] at this
+        simp only [capsMd, Bool.and_eq_true] at this
         simp only [attrOK, Bool.and_eq_true]
-        exact ⟨this.1, this.2⟩
+        exact ⟨this.1.1, this.2⟩
       simp only [capsMd, Bool.and_eq_true] at hn
       simp only [itemOK]
       split
@@ -322,8 +331,8 @@ theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
         | init => simp [prMdx, prMx, mItem, itemOK, hns, htm]
         | cons => simp [prMdx, prMx, mItem, itemOK, hns, htm]
       | rxn x => exact hmc
-      | plot a => exact hmc
-      | tm t => exact hmc
+      | plot a => simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc; exact hmc.1
+      | tm t => simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc; exact hmc.1
     · exact (h.mathBlocks c hc kv hkv).2
     · exact (h.cblocks c hc kv hkv).2
 

@@ -41,8 +41,8 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
   `id` and other fields in the label;
 * at the start of a line: a template, a display whose math is
   `\operatorname{f}(a, b) \coloneqq body`, or a rule,
-  `\text{rule } \operatorname{r}: \; lhs \Rightarrow rhs`, with any other field as attributes after
-  the closing `$$` (`$$ {description="…"}`);
+  `\text{rule } \operatorname{r}: \; lhs \Rightarrow rhs`; with other fields the display sits in a
+  container `:::template{key=value …}` or `:::rule{key=value …}` closed by `:::`;
 * at the start of a line: a subsystem included by reference,
   `::subsystem[Name]{ref="…" key=value …}`;
 * at the start of a line: a plot directive `::plot{key=value …}` on one line, an analysis
@@ -52,7 +52,7 @@ The constructs (`Esm.Document.Source.RItem`), and where they may appear:
   initialization equation or a constraint;
 * anywhere in a line: a declaration `:var[$N$]{…}`, `:param[…]{…}` or `:species[…]{…}`,
   the name in LaTeX math and the attributes as `key=value` pairs, each value a YAML
-  scalar or a YAML flow collection (`shape=["x", "y"]`).
+  scalar or a single-quoted YAML flow collection (`shape='["x", "y"]'`).
 
 Everything else is prose, which the parser skips: `lex` reads a construct where one
 starts and otherwise drops one character. So the parse depends only on the sequence of
@@ -147,9 +147,13 @@ def nameLatex (n : String) : List Char := (printLatex {} (.str n)).toList
 
 /-! ## Attribute values: YAML scalars and flow collections
 
-An attribute value is a YAML scalar (`100`, `"mol"`, `true`, `[]`) or a flow
-collection, `["x", "y"]`, `{a: 1, "b c": [2]}`: elements and entries separated by
-`, `, keys bare when they are identifiers that YAML reads as strings, else quoted. -/
+An attribute value is a YAML scalar (`100`, `"mol"`, `true`) or a flow collection,
+`["x", "y"]`, `{a: 1, "b c": [2]}`: elements and entries separated by `, `, keys bare when
+they are identifiers that YAML reads as strings, else quoted. A list or object (empty ones
+too) is written single-quoted, `shape='["x", "y"]'`, since remark-directive refuses an
+unquoted value holding a bracket or brace; inside the quotes `'` is `&#39;` and `&` is
+`&amp;`, the character references remark-directive decodes. The unquoted form is still
+read. -/
 
 mutual
 def flow : Json → List Char
@@ -209,8 +213,33 @@ def pEntriesF : Nat → List Char → Option (List (String × Json) × List Char
     | _ => none
 end
 
-/-- One attribute: `key=value`, the value a YAML scalar or flow collection. -/
-def attrMd (a : String × Json) : List Char := a.1.toList ++ '=' :: flow a.2
+/-- A value whose YAML starts with a bracket or brace (a list or an object, empty ones
+included): micromark-extension-directive, and so remark-directive, refuses such a value
+unquoted. -/
+def isColl : Json → Bool
+  | .arr _ | .obj _ => true
+  | _ => false
+
+/-- The text of a single-quoted attribute value: `'` as `&#39;` and `&` as `&amp;`, the
+character references micromark-extension-directive decodes inside a quoted value. -/
+def sqEsc (cs : List Char) : List Char :=
+  cs.flatMap (fun c => if c = '\'' then ['&', '#', '3', '9', ';'] else if c = '&' then ['&', 'a', 'm', 'p', ';']
+    else [c])
+
+/-- Undo `sqEsc`. -/
+def sqUnesc : List Char → List Char
+  | '&' :: '#' :: '3' :: '9' :: ';' :: r => '\'' :: sqUnesc r
+  | '&' :: 'a' :: 'm' :: 'p' :: ';' :: r => '&' :: sqUnesc r
+  | c :: r => c :: sqUnesc r
+  | [] => []
+
+/-- An attribute value: a scalar as its YAML, a list or object as its YAML flow collection
+single-quoted (`shape='["x", "y"]'`). -/
+def attrVal (v : Json) : List Char :=
+  if isColl v then '\'' :: sqEsc (flow v) ++ ['\''] else flow v
+
+/-- One attribute: `key=value`. -/
+def attrMd (a : String × Json) : List Char := a.1.toList ++ '=' :: attrVal a.2
 
 /-- The attributes, separated by spaces. -/
 def attrsMd : List (String × Json) → List Char
@@ -221,10 +250,22 @@ def attrsMd : List (String × Json) → List Char
 def declMd (d : Decl) : List Char :=
   ':' :: dkw d.kind ++ '[' :: '$' :: nameLatex d.name ++ '$' :: ']' :: '{' :: attrsMd d.attrs ++ ['}']
 
+/-- A single-quoted value after its opening quote: the YAML inside, then the text after
+the closing quote. -/
+def pQuoted (u : List Char) : Option (Json × List Char) :=
+  match u.drop (u.takeWhile (· != '\'')).length with
+  | '\'' :: r =>
+    let y := sqUnesc (u.takeWhile (· != '\''))
+    match pFlow (2 * y.length + 2) y with
+    | some (v, []) => some (v, r)
+    | _ => none
+  | _ => none
+
 /-- One attribute. -/
 def pAttr (s : List Char) : Option ((String × Json) × List Char) :=
   if isIdent (readIdent s).1 then
     match (readIdent s).2 with
+    | '=' :: '\'' :: u => (pQuoted u).map (fun p => ((String.ofList (readIdent s).1, p.1), p.2))
     | '=' :: u => (pFlow (2 * u.length + 2) u).map (fun p => ((String.ofList (readIdent s).1, p.1), p.2))
     | _ => none
   else none
@@ -281,8 +322,13 @@ A template is a display whose math starts with its header, `\operatorname{f}(a, 
 then its body: `$$`, `\operatorname{f}(a, b) \coloneqq body` on one line, `$$`. A rule is
 `\text{rule } \operatorname{r}: \; lhs \Rightarrow rhs`. The header (the name, the parameters
 as names under the empty symbol table) and the rule's split at its arrow are read here, by
-the lexer; only the body and the left-hand side are math. Any other field follows the
-closing `$$` as attributes, `$$ {description="…"}`. -/
+the lexer; only the body and the left-hand side are math. With other fields the display is
+wrapped in a container directive whose attributes hold them, `:::template{description="…"}`
+or `:::rule{params='["u"]' priority=1}`, closed by a line `:::` (attributes after the
+closing `$$` would keep remark-math from closing the display). -/
+
+def dTmpl : List Char := ":::template{".toList
+def dRuleC : List Char := ":::rule{".toList
 
 def tmHeadL : List Char := "\\operatorname{".toList
 def tmDef : List Char := ") \\coloneqq ".toList
@@ -300,11 +346,6 @@ def tmRaw (t : Tm String) : List Char :=
   match t.lhs with
   | none => tmHeadL ++ escT t.name.toList ++ '}' :: '(' :: paramsTxt t.params ++ tmDef ++ t.body.toList
   | some l => ruleHeadL ++ escT t.name.toList ++ '}' :: ruleSep ++ l.toList ++ ruleArrow ++ t.body.toList
-
-/-- The attributes after the closing `$$` of a template display. -/
-def tmAttrs : List (String × Json) → List Char
-  | [] => []
-  | a :: as => ' ' :: '{' :: attrsMd (a :: as) ++ ['}']
 
 /-- One parameter: a name, up to the next `,` or `)`. -/
 def pName (s : List Char) : Option (String × List Char) :=
@@ -355,17 +396,6 @@ def tmLex (raw : List Char) : Option (String × List String × Option (List Char
       | _ => none
     | none => none
 
-/-- The attributes after a template display's closing `$$`. -/
-def tmTail (f : Nat) (sl : List Char) : Option (List (String × Json)) :=
-  if sl.all (· == ' ') then some []
-  else
-    match sl with
-    | ' ' :: '{' :: v =>
-      match pAttrs f v with
-      | some (a, r) => if r.all (· == ' ') then some a else none
-      | none => none
-    | _ => none
-
 /-- A display after its opening `$$`: a template or rule when its math reads as one,
 otherwise an equation (optionally labelled). -/
 def mathAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
@@ -375,11 +405,27 @@ def mathAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
       if body.getLast? == some '\n' then
         match tmLex body.dropLast with
         | some (n, ps, l, b) =>
-          (tmTail f sl).map (fun as => (.tm ⟨n, ps, l.map String.ofList, String.ofList b, as⟩, rest))
+          if sl.all (· == ' ') then some (.tm ⟨n, ps, l.map String.ofList, String.ofList b, []⟩, rest)
+          else none
         | none => if labelOK sl then some (.eqn (String.ofList body.dropLast), rest) else none
       else none
     | none => none
   else none
+
+/-- A template or rule with other fields, after `:::template{` or `:::rule{`: the
+attributes, the display, and the closing `:::` line. -/
+def tmContAt (f : Nat) (u : List Char) : Option (RItem × List Char) :=
+  match pAttrs f u with
+  | some (as, '\n' :: r1) =>
+    if pre dd r1 then
+      match mathAt f (r1.drop 2) with
+      | some (.tm t, r2) =>
+        if pre dEnd r2 && (splitLine (r2.drop 3)).1.all (· == ' ') then
+          some (.tm { t with attrs := as }, (splitLine (r2.drop 3)).2)
+        else none
+      | _ => none
+    else none
+  | _ => none
 
 /-- A component directive after its `[`. -/
 def dirAt (K : Kind) (u : List Char) : Option (RItem × List Char) :=
@@ -485,7 +531,8 @@ def contAt (f : Nat) (s : List Char) : Option (List RItem × List Char) :=
 
 /-- A block construct starts here (at the start of a line). -/
 def blockOpen (s : List Char) : Bool :=
-  pre fenceEsm s || pre dd s || pre dModel s || pre dRs s || pre dPlot s || pre dSub s
+  pre fenceEsm s || pre dd s || pre dModel s || pre dRs s || pre dPlot s || pre dSub s ||
+    pre dTmpl s || pre dRuleC s
 
 /-- A declaration starts here. -/
 def declOpen (s : List Char) : Bool :=
@@ -499,6 +546,8 @@ def blockAt (f : Nat) (s : List Char) : Option (RItem × List Char) :=
   else if pre dModel s then dirAt .model (s.drop 8)
   else if pre dPlot s then plotAt f (s.drop 7)
   else if pre dSub s then subAt f (s.drop 12)
+  else if pre dTmpl s then tmContAt f (s.drop 12)
+  else if pre dRuleC s then tmContAt f (s.drop 8)
   else dirAt .rs (s.drop 18)
 
 /-- Read the declaration that starts here. -/
@@ -861,6 +910,56 @@ def attrOK (a : String × Json) : Bool := isIdent a.1.toList && jwf a.2
 theorem isIdent_chars {cs : List Char} (h : isIdent cs = true) : cs.all isIdentChar = true :=
   isIdent_all h
 
+theorem flow_scalar_head (v : Json) (hc : isColl v = false) (hv : v.WF) :
+    ∃ c t, flow v = c :: t ∧ c ≠ '\'' := by
+  match v, hc with
+  | .null, _ => exact ⟨'n', ['u', 'l', 'l'], by simp [flow, Yaml.inline], by decide⟩
+  | .bool true, _ => exact ⟨'t', ['r', 'u', 'e'], by simp [flow, Yaml.inline], by decide⟩
+  | .bool false, _ => exact ⟨'f', ['a', 'l', 's', 'e'], by simp [flow, Yaml.inline], by decide⟩
+  | .str s, _ => exact ⟨'"', escape false s.toList ++ ['"'], by simp [flow, Yaml.inline, quote], by decide⟩
+  | .num n, _ =>
+    obtain ⟨c, t, h, hn⟩ := Number.print_head n hv
+    exact ⟨c, t, by simp [flow, Yaml.inline, h],
+      Number.NumHead.of_fin (P := fun c => c ≠ '\'') (by decide) (by decide) hn⟩
+
+theorem sqEsc_noq (cs : List Char) : '\'' ∉ sqEsc cs := by
+  induction cs with
+  | nil => simp [sqEsc]
+  | cons c cs ih =>
+    simp only [sqEsc, List.flatMap_cons, List.mem_append, not_or] at ih ⊢
+    refine ⟨?_, ih⟩
+    by_cases h1 : c = '\'' <;> by_cases h2 : c = '&' <;> simp_all [eq_comm]
+
+theorem sqUnesc_sqEsc : ∀ cs : List Char, sqUnesc (sqEsc cs) = cs
+  | [] => rfl
+  | c :: cs => by
+    have ih := sqUnesc_sqEsc cs
+    simp only [sqEsc, List.flatMap_cons] at ih ⊢
+    by_cases h1 : c = '\''
+    · subst h1; simp [sqUnesc, ih]
+    by_cases h2 : c = '&'
+    · subst h2; simp [sqUnesc, ih]
+    simp only [h1, h2, ite_false, List.singleton_append]
+    rw [sqUnesc.eq_def]
+    split <;> simp_all
+
+theorem pQuoted_sq (v : Json) (hv : v.WF) (rest : List Char) :
+    pQuoted (sqEsc (flow v) ++ '\'' :: rest) = some (v, rest) := by
+  have htw : (sqEsc (flow v) ++ '\'' :: rest).takeWhile (· != '\'') = sqEsc (flow v) := by
+    have h := sqEsc_noq (flow v)
+    generalize sqEsc (flow v) = x at h ⊢
+    induction x with
+    | nil => simp
+    | cons c x ih =>
+      simp only [List.mem_cons, not_or] at h
+      simp [Ne.symm h.1, ih h.2]
+  unfold pQuoted
+  rw [htw, List.drop_left]
+  simp only [sqUnesc_sqEsc]
+  have := pFlow_flow' v hv [] (by intro c hc; cases hc)
+  simp only [List.append_nil] at this
+  rw [this]
+
 theorem pAttr_attrMd (a : String × Json) (ha : attrOK a = true) (rest : List Char)
     (hr : rest.head? = some ' ' ∨ rest.head? = some '}') :
     pAttr (attrMd a ++ rest) = some (a, rest) := by
@@ -868,17 +967,33 @@ theorem pAttr_attrMd (a : String × Json) (ha : attrOK a = true) (rest : List Ch
   simp only [attrOK, Bool.and_eq_true] at ha
   obtain ⟨hk, hw⟩ := ha
   have hwf : v.WF := jwf_sound v hw
-  have hrd : readIdent (attrMd (k, v) ++ rest) = (k.toList, '=' :: (flow v ++ rest)) := by
+  have hrd : readIdent (attrMd (k, v) ++ rest) = (k.toList, '=' :: (attrVal v ++ rest)) := by
     simp only [attrMd, List.append_assoc, List.cons_append]
     exact readIdent_append _ _ (isIdent_chars hk) (by simp [isIdentChar])
   unfold pAttr
   rw [hrd]
   simp only [hk, ite_true]
-  have hns : FStop rest := by
-    intro c hc
-    rcases hr with h | h <;> rw [h] at hc <;> cases hc <;> simp
-  rw [pFlow_flow' v hwf rest hns]
-  simp
+  cases hcol : isColl v with
+  | false =>
+    obtain ⟨c, t, hft, hcq⟩ := flow_scalar_head v hcol hwf
+    have hns : FStop rest := by
+      intro c hc
+      rcases hr with h | h <;> rw [h] at hc <;> cases hc <;> simp
+    have hp := pFlow_flow' v hwf rest hns
+    simp only [attrVal, hcol, Bool.false_eq_true, ite_false] at hp ⊢
+    rw [hft] at hp ⊢
+    simp only [List.cons_append] at hp ⊢
+    split
+    · rename_i u he; simp only [List.cons.injEq] at he; exact absurd he.2.1 hcq
+    · rename_i u he
+      simp only [List.cons.injEq] at he
+      obtain ⟨-, rfl⟩ := he
+      rw [hp]; simp
+    · rename_i he; simp at he
+  | true =>
+    simp only [attrVal, hcol, ite_true, List.cons_append, List.append_assoc, List.nil_append]
+    rw [pQuoted_sq v hwf rest]
+    simp
 
 theorem pAttrsMore_attrs (as : List (String × Json)) (ha : ∀ a ∈ as, attrOK a = true)
     (t : List Char) : ∀ f, as.length < f →
@@ -1084,7 +1199,11 @@ def itemMd : RItem → List Char
   | .eqx r raw => dRole r ++ '\n' :: dd ++ '\n' :: raw.toList ++ '\n' :: dd ++ '\n' :: dEnd ++ ['\n']
   | .rxn x => dRxn ++ rxnBody x
   | .plot a => dPlot ++ attrsMd a ++ ['}', '\n']
-  | .tm t => dd ++ '\n' :: tmRaw t ++ '\n' :: dd ++ tmAttrs t.attrs ++ ['\n']
+  | .tm t =>
+    match t.attrs with
+    | [] => dd ++ '\n' :: tmRaw t ++ '\n' :: dd ++ ['\n']
+    | as => (match t.lhs with | none => dTmpl | some _ => dRuleC) ++ attrsMd as ++ '}' :: '\n' ::
+        dd ++ '\n' :: tmRaw t ++ '\n' :: dd ++ '\n' :: dEnd ++ ['\n']
 
 /-- A display equation with an equation label after its closing `$$` (` {#eq-x}`). -/
 def eqnLabeled (raw : String) (label : List Char) : List Char :=
@@ -1128,7 +1247,7 @@ def itemOK : RItem → Bool
   | .plot a => a.all attrOK
   | .tm t => noStop dd (tmRaw t ++ ['\n']) && !(tmRaw t).contains '\n' &&
       tmLex (tmRaw t) == some (t.name, t.params, t.lhs.map String.toList, t.body.toList) &&
-      t.attrs.all attrOK && !(tmAttrs t.attrs).contains '\n'
+      t.attrs.all attrOK
 
 /-- **Prose that the lexer skips**: at no character does a construct start (a block
 construct only matters at the start of a line). `t` is the text after the prose. -/
@@ -1233,6 +1352,8 @@ theorem pre_rx_dr (X : List Char) : pre dRxn (dRs ++ X) = false := by simp [dRxn
 theorem pre_rx_dd (X : List Char) : pre dRxn (dd ++ '\n' :: X) = false := by simp [dRxn, dd, pre]
 theorem pre_pl_dr (X : List Char) : pre dPlot (dRs ++ X) = false := by simp [dPlot, dRs, pre]
 theorem pre_sb_dr (X : List Char) : pre dSub (dRs ++ X) = false := by simp [dSub, dRs, pre]
+theorem pre_tm_dr (X : List Char) : pre dTmpl (dRs ++ X) = false ∧ pre dRuleC (dRs ++ X) = false := by
+  simp [dTmpl, dRuleC, dRs, pre]
 
 theorem keyMd_ne_desc (k : String) : keyMd k ≠ descInfo := by
   intro h
@@ -1278,7 +1399,7 @@ theorem lex_comp (K : Kind) (n : String) (hn : itemOK (.comp K n) = true) (bol :
     · simp [itemMd, blockOpen, pre_append]
   | rs =>
     apply lex_block_step g bol _ t _ (by simp [itemMd, dRs]) _ hbol
-    · simp only [itemMd, List.append_assoc, blockAt, pre_fe_dr, pre_rx_dr, pre_dd_dr, pre_dm_dr, pre_pl_dr, pre_sb_dr,
+    · simp only [itemMd, List.append_assoc, blockAt, pre_fe_dr, pre_rx_dr, pre_dd_dr, pre_dm_dr, pre_pl_dr, pre_sb_dr, (pre_tm_dr _).1, (pre_tm_dr _).2,
         Bool.false_eq_true, ite_false]
       rw [show (18 : Nat) = dRs.length from rfl, List.drop_left, dirAt]
       simp only [List.cons_append, List.nil_append, htw, List.drop_left]
@@ -1311,7 +1432,7 @@ theorem lex_decl (d : Decl) (hk : d.kind ≠ .sub) (hd : itemOK (.decl d) = true
   simp only [itemMd, hk, ite_false]
   simp only at hk
   apply lex_decl_step g bol _ t _ (by simp [declMd])
-  · cases k <;> simp [declMd, dkw, blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, pre] at hk ⊢
+  · cases k <;> simp [declMd, dkw, blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, dTmpl, dRuleC, pre] at hk ⊢
   · cases k <;> simp [declMd, dkw, declOpen, pre] at hk ⊢
   · have hb := declBody_declMd g ⟨k, n, as⟩ hd t hg
     simp only [List.cons_append, List.append_assoc] at hb
@@ -1469,43 +1590,70 @@ theorem lex_plot (a : List (String × Json)) (ha : itemOK (.plot a) = true) (bol
 
 /-! ### Templates and rules -/
 
-theorem tmTail_attrs (f : Nat) (as : List (String × Json)) (ha : ∀ a ∈ as, attrOK a = true)
-    (hf : as.length < f) : tmTail f (tmAttrs as) = some as := by
-  cases as with
-  | nil => rfl
-  | cons a as' =>
-    simp only [tmAttrs, tmTail, List.cons_append]
-    rw [pAttrs_attrsMd (a :: as') ha [] f hf]
-    simp
+theorem mathAt_tm (f : Nat) (t : Tm String) (hns : noStop dd (tmRaw t ++ ['\n']) = true)
+    (hlex : tmLex (tmRaw t) = some (t.name, t.params, t.lhs.map String.toList, t.body.toList))
+    (X : List Char) (hf : (tmRaw t).length + 3 < f) :
+    mathAt f ('\n' :: (tmRaw t ++ '\n' :: (dd ++ '\n' :: X))) = some (.tm { t with attrs := [] }, X) := by
+  rw [mathAt]
+  simp only [splitLine, ite_true, List.all_nil]
+  have hb := untilStop_body dd dd_ne dd_noNl (tmRaw t ++ ['\n']) [] X (lines_nl _) hns (by simp) f
+    (by simp [dd]; omega)
+  simp only [List.append_assoc, List.cons_append, List.nil_append] at hb
+  simp only [hb]
+  simp only [List.getLast?_append, List.getLast?_singleton, Option.some_or, beq_self_eq_true,
+    ite_true, List.dropLast_concat, hlex, List.all_nil]
+  obtain ⟨n, ps, l, b, as⟩ := t
+  cases l <;> simp
 
 theorem lex_tm (t : Tm String) (ht : itemOK (.tm t) = true) (bol : Bool) (hbol : bol = true)
     (rest : List Char) (g : Nat) (hg : (itemMd (.tm t)).length + rest.length < g + 1) :
     lex (g + 1) bol (itemMd (.tm t) ++ rest) = (lex g true rest).map (.tm t :: ·) := by
   simp only [itemOK, Bool.and_eq_true, Bool.not_eq_true', beq_iff_eq] at ht
-  obtain ⟨⟨⟨⟨hns, hnl⟩, hlex⟩, hat⟩, hanl⟩ := ht
-  have hal := attrs_len t.attrs
-  have hanl' : '\n' ∉ tmAttrs t.attrs := by
-    intro h; have := List.contains_iff_mem.mpr h; simp_all
-  have htl : (tmAttrs t.attrs).length ≥ t.attrs.length := by
-    cases h : t.attrs with
-    | nil => simp
-    | cons a as => rw [← h]; simp only [tmAttrs, h, List.length_cons, List.length_append] at *; omega
-  apply lex_block_step g bol _ rest _ (by simp [itemMd, dd]) _ hbol
-  · simp only [itemMd, List.append_assoc, List.cons_append, blockAt, pre_fe_dd, pre_rx_dd,
-      pre_append, Bool.false_eq_true, ite_false, ite_true]
-    rw [show (2 : Nat) = dd.length from rfl, List.drop_left, mathAt]
-    simp only [splitLine, ite_true, List.all_nil]
-    have hb := untilStop_body dd dd_ne dd_noNl (tmRaw t ++ ['\n']) (tmAttrs t.attrs) rest
-      (lines_nl _) hns hanl' g (by simp [itemMd, List.length_append] at hg ⊢; omega)
-    simp only [List.append_assoc, List.cons_append, List.nil_append] at hb
-    simp only [List.nil_append, hb]
-    simp only [List.getLast?_append, List.getLast?_singleton, Option.some_or, beq_self_eq_true,
-      ite_true, List.dropLast_concat, hlex]
-    rw [tmTail_attrs g t.attrs (fun a h => List.all_eq_true.mp hat a h) (by
-      simp [itemMd, List.length_append] at hg; omega)]
-    obtain ⟨n, ps, l, b, as⟩ := t
-    cases l <;> simp
-  · simp [itemMd, blockOpen, dd, fenceEsm, pre]
+  obtain ⟨⟨⟨hns, hnl⟩, hlex⟩, hat⟩ := ht
+  obtain ⟨n, ps, l, b, as⟩ := t
+  cases as with
+  | nil =>
+    simp only [itemMd] at hg ⊢
+    apply lex_block_step g bol _ rest _ (by simp [dd]) _ hbol
+    · simp only [List.append_assoc, List.cons_append, blockAt, pre_fe_dd, pre_rx_dd,
+        pre_append, Bool.false_eq_true, ite_false, ite_true]
+      rw [show (2 : Nat) = dd.length from rfl, List.drop_left]
+      simp only [List.nil_append]
+      rw [mathAt_tm g _ hns hlex rest (by simp [List.length_append, dd] at hg; omega)]
+    · simp [blockOpen, dd, fenceEsm, pre]
+  | cons a as' =>
+    have hal := attrs_len (a :: as')
+    have hcore : ∀ (O : List Char), O.length = 12 ∨ O.length = 8 →
+        tmContAt g (attrsMd (a :: as') ++ '}' :: '\n' :: dd ++ '\n' :: tmRaw ⟨n, ps, l, b, a :: as'⟩ ++
+          '\n' :: dd ++ '\n' :: dEnd ++ '\n' :: rest) = some (.tm ⟨n, ps, l, b, a :: as'⟩, rest) := by
+      intro _ _
+      unfold tmContAt
+      simp only [List.append_assoc, List.cons_append]
+      rw [pAttrs_attrsMd (a :: as') (fun c hc => List.all_eq_true.mp hat c hc) _ g (by simp [itemMd] at hg; omega)]
+      simp only
+      simp only [pre_append, ↓reduceIte]
+      rw [show (2 : Nat) = dd.length from rfl, List.drop_left]
+      rw [mathAt_tm g _ hns hlex _ (by simp [itemMd, List.length_append] at hg; omega)]
+      simp [dEnd, pre, splitLine]
+    cases l with
+    | none =>
+      simp only [itemMd] at hg ⊢
+      apply lex_block_step g bol _ rest _ (by simp [dTmpl]) _ hbol
+      · simp only [List.append_assoc, blockAt]
+        simp (disch := decide) only [pre_app_of_pre, pre_app_false, ite_true, ite_false,
+          Bool.false_eq_true]
+        rw [show (12 : Nat) = dTmpl.length from rfl, List.drop_left]
+        simpa [List.append_assoc] using hcore dTmpl (Or.inl rfl)
+      · simp [blockOpen, pre_append]
+    | some x =>
+      simp only [itemMd] at hg ⊢
+      apply lex_block_step g bol _ rest _ (by simp [dRuleC]) _ hbol
+      · simp only [List.append_assoc, blockAt]
+        simp (disch := decide) only [pre_app_of_pre, pre_app_false, ite_true, ite_false,
+          Bool.false_eq_true]
+        rw [show (8 : Nat) = dRuleC.length from rfl, List.drop_left]
+        simpa [List.append_assoc] using hcore dRuleC (Or.inr rfl)
+      · simp [blockOpen, pre_append]
 
 /-! ### Containers -/
 
@@ -1711,7 +1859,9 @@ theorem lex_render : ∀ (segs : List Seg) (bol : Bool), Valid bol segs →
       rfl
     | tm t =>
       rw [lex_tm t hok bol (hb rfl) _ g hf',
-        lex_render rest true hv g (hlen _ (by simp [itemMd, dd]) hf)]
+        lex_render rest true hv g (hlen _ (by
+          obtain ⟨n, ps, l, b, as⟩ := t
+          cases as <;> cases l <;> simp [itemMd, dd, dTmpl, dRuleC]) hf)]
       rfl
 
 /-! ## The declarations table reads as its declarations -/
@@ -1909,7 +2059,7 @@ theorem lex_table (cols : List String) (hc : ∀ k ∈ cols, isIdent k.toList = 
     | cons c r => exact ⟨c, r, rfl⟩
   rw [hcr] at htab ⊢
   have hb : blockOpen (c :: r) = false := by
-    rw [← hcr]; simp [tableText, tableOpen, blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, pre]
+    rw [← hcr]; simp [tableText, tableOpen, blockOpen, fenceEsm, dd, dModel, dRs, dPlot, dSub, dTmpl, dRuleC, pre]
   have hdo : declOpen (c :: r) = false := by
     rw [← hcr]; simp [tableText, tableOpen, declOpen, pre]
   have hto : pre tableOpen (c :: r) = true := by

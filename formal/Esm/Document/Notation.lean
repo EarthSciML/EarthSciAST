@@ -364,7 +364,7 @@ def skeleton : List SkeletonRow := [
   { field := "reaction_systems.<name>", home := .componentDirective,
     markdown := "::reaction-system[Name]", typst := r#"#reaction-system("Name")"# },
   { field := "variables, species, parameters", home := .declaration,
-    markdown := r#":var[$N$]{…}, :param, :species; other fields as key=value attributes, each value a YAML scalar or a YAML flow collection (shape=["x", "y"], update={…})"#,
+    markdown := r#":var[$N$]{…}, :param, :species; other fields as key=value attributes, each value a YAML scalar or a YAML flow collection; a list or object (empty ones too) single-quoted, with ' written &#39; and & written &amp; inside the quotes (shape='["x", "y"]', update='{…}'), since remark-directive refuses an unquoted value holding a bracket or brace and decodes those character references in a quoted one (decided 2026-11-13); the unquoted form is still read. A string value holding " or & cannot be double-quoted for remark-directive (the YAML escape \" ends the value; & would start a character reference), so a declaration, plot, template or rule with such an attribute stays in its field's block"#,
     typst := "#var($N$, …)" },
   { field := "equations", home := .displayMath,
     markdown := "one $$…$$ per equation, in order", typst := "one $ … $ per equation" },
@@ -375,10 +375,10 @@ def skeleton : List SkeletonRow := [
     markdown := r"one line per reaction, $$\ce{A + B ->[{$k$}] C}$$ {#id key=value}",
     typst := "one line per reaction, #ce[A + B ->[$k$] C] <id>; with other fields #reaction(key: value)[#ce[…]] <id>" },
   { field := "expression_templates (without match), of a component or of the document", home := .templateDefinition,
-    markdown := r#"$$, \operatorname{f}(a, b) \coloneqq body on one line, then $$; other fields (description) as attributes after the closing $$: $$ {description="…"}"#,
+    markdown := r#"$$, \operatorname{f}(a, b) \coloneqq body on one line, then $$; with other fields (description) the display sits in a container directive holding them, :::template{description="…"} … :::"#,
     typst := r#"$ op("f")(a, b) := body $; with other fields #template(description: "…")[$ op("f")(a, b) := body $]"# },
   { field := "expression_templates (with match), of a component or of the document", home := .ruleDirective,
-    markdown := r#"$$, \text{rule } \operatorname{r}: \; lhs \Rightarrow rhs on one line, then $$; params, where, priority and any other field as attributes after the closing $$: $$ {params=["u"] priority=1}"#,
+    markdown := r#"$$, \text{rule } \operatorname{r}: \; lhs \Rightarrow rhs on one line, then $$; params, where, priority and any other field in a container directive around it, :::rule{params='["u"]' priority=1} … :::"#,
     typst := r#"#rule("r", $lhs$, $rhs$, params: ("u",), priority: 1, …)"# },
   { field := "subsystems (by ref)", home := .subsystemDirective,
     markdown := r#"::subsystem[Name]{ref="…" key=value …} on a line of its own; the name is not a declared name of the component"#,
@@ -412,8 +412,10 @@ def skeleton : List SkeletonRow := [
   level of a library file, the document's index sets and templates) with the parameters
   declared. The symbol table takes each template's parameter list from its header, never
   from its math.
-* Every other field is an attribute: Markdown after the closing `$$` (`$$ {description="…"}`),
-  Typst as named arguments (a template with fields is `#template(…)[$ … $]`).
+* Every other field is an attribute. Markdown: the display sits in a container directive,
+  `:::template{description="…"}` or `:::rule{params='["u"]' priority=1}`, then the display,
+  then a line `:::` (attributes after the closing `$$` would keep remark-math from closing
+  the display). Typst: named arguments (a template with fields is `#template(…)[$ … $]`).
 * A template or rule prints natively only when its header reads back as written (checked
   by printing it and reading it back) and its math has no `$` or line break; otherwise the
   whole `expression_templates` field is one path block. A display whose math would read as
