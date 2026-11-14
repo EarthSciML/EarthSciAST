@@ -58,9 +58,9 @@ pub(crate) fn note_applied() {
 /// A/B measurement and for tests that show the rewrite changes cost and not
 /// answers.
 pub(crate) fn row_dedup_enabled() -> bool {
-    ENABLED.with(|c| c.get()).unwrap_or_else(|| {
-        std::env::var("ESS_ROW_DEDUP").map_or(true, |v| v.trim() != "0")
-    })
+    ENABLED
+        .with(|c| c.get())
+        .unwrap_or_else(|| std::env::var("ESS_ROW_DEDUP").map_or(true, |v| v.trim() != "0"))
 }
 
 /// Turn the rewrite on or off for THIS thread, returning the previous override.
@@ -117,7 +117,10 @@ pub(crate) fn plan(name: &str, expr: &Expr, arrays: &ArrMap) -> Option<DedupPlan
     // Every array the rules read at `sym`, with the axis each is read on.
     let mut cols: BTreeMap<String, usize> = BTreeMap::new();
     let ok_col = |v: &str, axis: usize| {
-        v != name && arrays.get(v).is_some_and(|a| a.ndim() > axis && a.shape()[axis] == rows)
+        v != name
+            && arrays
+                .get(v)
+                .is_some_and(|a| a.ndim() > axis && a.shape()[axis] == rows)
     };
     for leaf in &leaves {
         if leaf.output_idx.as_ref() != Some(output_idx)
@@ -272,7 +275,9 @@ fn rewrite_leaves(
         .insert(sym.to_string(), RangeSpec::Interval([1, reps as i64]));
     n.for_each_child_mut(&mut |c| rewrite(c, sym, rename, cols));
     for clause in n.join.iter_mut().flatten() {
-        let Some(g) = &mut clause.on_gate else { continue };
+        let Some(g) = &mut clause.on_gate else {
+            continue;
+        };
         let side = if g.sym_l == sym {
             &mut g.cols_l
         } else if g.sym_r == sym {
@@ -325,7 +330,9 @@ fn scan(
             }
             // A nested node that binds `sym` again is a different variable.
             if n.ranges.as_ref().is_some_and(|r| r.contains_key(sym))
-                || n.output_idx.as_ref().is_some_and(|o| o.iter().any(|s| s == sym))
+                || n.output_idx
+                    .as_ref()
+                    .is_some_and(|o| o.iter().any(|s| s == sym))
                 || n.int_var.as_deref() == Some(sym)
             {
                 return false;
@@ -363,7 +370,12 @@ fn sym_axis(n: &crate::types::ExpressionNode, sym: &str) -> Option<usize> {
 
 /// Rename `V` in every `index(V, ...)` of `e` that reads `sym` on `V`'s
 /// recorded axis; every other read of `V` keeps the whole array.
-fn rewrite(e: &mut Expr, sym: &str, rename: &HashMap<String, String>, cols: &BTreeMap<String, usize>) {
+fn rewrite(
+    e: &mut Expr,
+    sym: &str,
+    rename: &HashMap<String, String>,
+    cols: &BTreeMap<String, usize>,
+) {
     let Some(n) = e.node_mut() else { return };
     if n.op == "index"
         && let Some(ax) = sym_axis(n, sym)
@@ -404,7 +416,12 @@ mod tests {
 
     const N: usize = 4096;
 
-    fn build(doc: &Value, compiler: Compiler, dedup: bool, consts: &HashMap<String, ArrayD<f64>>) -> EsmProblem {
+    fn build(
+        doc: &Value,
+        compiler: Compiler,
+        dedup: bool,
+        consts: &HashMap<String, ArrayD<f64>>,
+    ) -> EsmProblem {
         let prev = super::set_row_dedup(Some(dedup));
         let p = esm_problem(
             doc,
@@ -490,10 +507,20 @@ mod tests {
         let year: Vec<f64> = (0..N).map(|i| (2000 + (i / 7) % 5) as f64 + 0.1).collect();
         let tfuel: Vec<f64> = (0..8).map(|i| (i % 4 + 1) as f64).collect();
         let tval: Vec<f64> = (0..8).map(|i| 1999.0 + 0.7 * i as f64).collect();
-        let consts = [("fuel", fuel), ("year", year), ("tfuel", tfuel), ("tval", tval)]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), ArrayD::from_shape_vec(IxDyn(&[v.len()]), v).unwrap()))
-            .collect();
+        let consts = [
+            ("fuel", fuel),
+            ("year", year),
+            ("tfuel", tfuel),
+            ("tval", tval),
+        ]
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                ArrayD::from_shape_vec(IxDyn(&[v.len()]), v).unwrap(),
+            )
+        })
+        .collect();
         (doc, consts)
     }
 

@@ -384,7 +384,8 @@ pub(crate) fn equijoin_match_count(left: &[Key], right: &[Key]) -> usize {
     for k in small {
         *buckets.entry(k).or_default() += 1;
     }
-    large.iter()
+    large
+        .iter()
         .filter_map(|k| buckets.get(k))
         .fold(0usize, |acc, n| acc.saturating_add(*n))
 }
