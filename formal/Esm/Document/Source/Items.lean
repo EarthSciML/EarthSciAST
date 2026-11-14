@@ -1,0 +1,297 @@
+import Esm.Document.Source.SkeletonRT
+
+/-!
+# The skeleton as a sequence of constructs
+
+A container spells a skeleton as a sequence of *constructs*: description blocks, path
+blocks, component directives, declarations, and equations. This is the
+container-independent middle layer:
+
+* `items` lists the constructs of a skeleton in the printer's order;
+* `unitems` reads a construct sequence back into a skeleton. A construct belongs to
+  the section of the last component directive before it, or to the document when
+  there is none; within a section, constructs may come in any order (a document can
+  interleave declarations and equations with its prose), except that equations keep
+  their order. `unitems_items` is the round trip.
+
+Equations are held as the container's math text (`Doc String`) at this layer;
+`rawDoc` prints them under each component's symbol table and `cookDoc` reads them back
+(`cookDoc_rawDoc`), the symbol table coming from the rest of the skeleton
+(`symFor_mapEqns`), so both sides use the same table.
+-/
+
+namespace Esm.Document.Source
+
+open Esm.Document Esm.Document.Math
+
+/-- One construct of a document. An equation is its math text, uninterpreted. -/
+inductive RItem where
+  | desc (s : String)
+  | block (k : String) (v : Json)
+  | comp (K : Kind) (name : String)
+  | decl (d : Decl)
+  | eqn (raw : String)
+
+/-- The constructs of a component section. -/
+def compItems (c : Comp String) : List RItem :=
+  .comp c.kind c.name :: ((c.desc.map RItem.desc).toList ++ c.decls.map RItem.decl ++
+    c.eqns.map RItem.eqn ++ (c.eqBlock.map (RItem.block "equations")).toList ++
+    c.blocks.map (fun kv => RItem.block kv.1 kv.2))
+
+/-- **The constructs of a skeleton**, in the printer's order: the document description,
+the top-level blocks, then each component section. -/
+def items (D : Doc String) : List RItem :=
+  (D.desc.map RItem.desc).toList ++ D.blocks.map (fun kv => RItem.block kv.1 kv.2) ++
+    D.comps.flatMap compItems
+
+/-! ## Reading constructs back -/
+
+/-- A fresh component section. -/
+def Comp.fresh (K : Kind) (n : String) : Comp String :=
+  ⟨K, n, none, [], [], none, []⟩
+
+/-- Add a construct to a component section. A second description or a second
+`equations` block is refused. -/
+def addTo (c : Comp String) : RItem → Option (Comp String)
+  | .desc s => if c.desc.isSome then none else some { c with desc := some s }
+  | .block k v =>
+    if k = "equations" then
+      (if c.eqBlock.isSome then none else some { c with eqBlock := some v })
+    else some { c with blocks := c.blocks ++ [(k, v)] }
+  | .decl d => some { c with decls := c.decls ++ [d] }
+  | .eqn r => some { c with eqns := c.eqns ++ [r] }
+  | .comp _ _ => none
+
+/-- The reader's state: the document description and blocks, the finished sections,
+and the open one. -/
+structure St where
+  desc : Option String
+  blocks : List (String × Json)
+  comps : List (Comp String)
+  cur : Option (Comp String)
+
+/-- Read one construct. Before the first directive only a description and blocks are
+allowed. -/
+def step (st : St) : RItem → Option St
+  | .comp K n => some { st with comps := st.comps ++ st.cur.toList, cur := some (Comp.fresh K n) }
+  | it =>
+    match st.cur with
+    | some c => (addTo c it).map (fun c' => { st with cur := some c' })
+    | none =>
+      match it with
+      | .desc s => if st.desc.isSome then none else some { st with desc := some s }
+      | .block k v => some { st with blocks := st.blocks ++ [(k, v)] }
+      | _ => none
+
+/-- **Read a construct sequence** (with the front matter) into a skeleton. -/
+def unitems (front : List (String × Json)) (its : List RItem) : Option (Doc String) :=
+  (its.foldlM step ⟨none, [], [], none⟩).map
+    (fun st => ⟨front, st.desc, st.blocks, st.comps ++ st.cur.toList⟩)
+
+/-! ## The round trip -/
+
+/-- A skeleton the constructs can carry: no component keeps a block named
+`equations` (that name is the `equations` fallback, `Comp.eqBlock`). -/
+def itemsOK (D : Doc String) : Prop :=
+  ∀ c ∈ D.comps, ∀ kv ∈ c.blocks, kv.1 ≠ "equations"
+
+theorem fold_blocks_root (st : St) (hc : st.cur = none) :
+    ∀ bs : List (String × Json),
+      (bs.map (fun kv => RItem.block kv.1 kv.2)).foldlM step st =
+        some { st with blocks := st.blocks ++ bs }
+  | [] => by simp
+  | (k, v) :: bs => by
+    simp only [List.map_cons, List.foldlM_cons]
+    have h1 : step st (.block k v) = some { st with blocks := st.blocks ++ [(k, v)] } := by
+      simp [step, hc]
+    rw [h1]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    rw [fold_blocks_root { st with blocks := st.blocks ++ [(k, v)] } hc bs]
+    simp
+
+theorem fold_decls (st : St) (c : Comp String) (h : st.cur = some c) :
+    ∀ ds : List Decl, (ds.map RItem.decl).foldlM step st =
+      some { st with cur := some { c with decls := c.decls ++ ds } }
+  | [] => by cases st; simp at h; subst h; simp
+  | d :: ds => by
+    simp only [List.map_cons, List.foldlM_cons]
+    have h1 : step st (.decl d) = some { st with cur := some { c with decls := c.decls ++ [d] } } := by
+      simp [step, h, addTo]
+    rw [h1]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    rw [fold_decls _ { c with decls := c.decls ++ [d] } rfl ds]
+    simp
+
+theorem fold_eqns (st : St) (c : Comp String) (h : st.cur = some c) :
+    ∀ es : List String, (es.map RItem.eqn).foldlM step st =
+      some { st with cur := some { c with eqns := c.eqns ++ es } }
+  | [] => by cases st; simp at h; subst h; simp
+  | e :: es => by
+    simp only [List.map_cons, List.foldlM_cons]
+    have h1 : step st (.eqn e) = some { st with cur := some { c with eqns := c.eqns ++ [e] } } := by
+      simp [step, h, addTo]
+    rw [h1]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    rw [fold_eqns _ { c with eqns := c.eqns ++ [e] } rfl es]
+    simp
+
+theorem fold_blocks (st : St) (c : Comp String) (h : st.cur = some c) :
+    ∀ bs : List (String × Json), (∀ kv ∈ bs, kv.1 ≠ "equations") →
+      (bs.map (fun kv => RItem.block kv.1 kv.2)).foldlM step st =
+        some { st with cur := some { c with blocks := c.blocks ++ bs } }
+  | [], _ => by cases st; simp at h; subst h; simp
+  | (k, v) :: bs, hb => by
+    simp only [List.map_cons, List.foldlM_cons]
+    have hk : k ≠ "equations" := hb (k, v) List.mem_cons_self
+    have h1 : step st (.block k v) =
+        some { st with cur := some { c with blocks := c.blocks ++ [(k, v)] } } := by
+      simp [step, h, addTo, hk]
+    rw [h1]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    rw [fold_blocks _ { c with blocks := c.blocks ++ [(k, v)] } rfl bs
+      (fun kv hkv => hb kv (List.mem_cons_of_mem _ hkv))]
+    simp
+
+theorem fold_comp (st : St) (c : Comp String) (hc : ∀ kv ∈ c.blocks, kv.1 ≠ "equations") :
+    (compItems c).foldlM step st =
+      some { st with comps := st.comps ++ st.cur.toList, cur := some c } := by
+  obtain ⟨K, n, desc, decls, eqns, eqb, blocks⟩ := c
+  simp only [compItems, List.foldlM_cons, List.foldlM_append]
+  have h0 : step st (.comp K n) =
+      some { st with comps := st.comps ++ st.cur.toList, cur := some (Comp.fresh K n) } := rfl
+  rw [h0]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  -- the description
+  have h1 : ((desc.map RItem.desc).toList).foldlM step
+      { st with comps := st.comps ++ st.cur.toList, cur := some (Comp.fresh K n) } =
+      some { st with comps := st.comps ++ st.cur.toList, cur := some ⟨K, n, desc, [], [], none, []⟩ } := by
+    cases desc with
+    | none => rfl
+    | some s => simp [step, addTo, Comp.fresh]
+  rw [h1]
+  simp only [Option.bind_some]
+  rw [fold_decls _ _ rfl decls]
+  simp only [Option.bind_some]
+  rw [fold_eqns _ _ rfl eqns]
+  simp only [Option.bind_some]
+  have h2 : ∀ (st' : St) (c' : Comp String), st'.cur = some c' → c'.eqBlock = none →
+      ((eqb.map (RItem.block "equations")).toList).foldlM step st' =
+        some { st' with cur := some { c' with eqBlock := eqb } } := by
+    intro st' c' hc' hb'
+    cases eqb with
+    | none => cases st'; simp at hc'; subst hc'; cases c'; simp at hb'; subst hb'; rfl
+    | some v => simp [step, hc', addTo, hb']
+  rw [h2 _ _ rfl rfl]
+  simp only [Option.bind_some]
+  rw [fold_blocks _ _ rfl blocks hc]
+  simp
+
+/-- **The construct round trip.** -/
+theorem unitems_items (D : Doc String) (hD : itemsOK D) : unitems D.front (items D) = some D := by
+  obtain ⟨front, desc, blocks, comps⟩ := D
+  unfold unitems items
+  simp only [List.foldlM_append]
+  have h1 : ((desc.map RItem.desc).toList).foldlM step ⟨none, [], [], none⟩ =
+      some ⟨desc, [], [], none⟩ := by
+    cases desc with
+    | none => rfl
+    | some s => rfl
+  rw [h1]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  rw [fold_blocks_root _ rfl blocks]
+  simp only [Option.bind_some, List.nil_append]
+  -- the sections
+  have h2 : ∀ (cs : List (Comp String)) (st : St), (∀ c ∈ cs, ∀ kv ∈ c.blocks, kv.1 ≠ "equations") →
+      (cs.flatMap compItems).foldlM step st =
+        some (match cs.getLast? with
+          | some c => { st with comps := st.comps ++ st.cur.toList ++ cs.dropLast, cur := some c }
+          | none => st) := by
+    intro cs
+    induction cs with
+    | nil => intro st _; simp
+    | cons c cs ih =>
+      intro st hcs
+      simp only [List.flatMap_cons, List.foldlM_append]
+      rw [fold_comp st c (hcs c List.mem_cons_self)]
+      simp only [Option.bind_eq_bind, Option.bind_some]
+      rw [ih _ (fun c' hc' => hcs c' (List.mem_cons_of_mem _ hc'))]
+      congr 1
+      cases hl : cs.getLast? with
+      | none =>
+        rw [List.getLast?_eq_none_iff] at hl
+        subst hl
+        simp
+      | some c' =>
+        have hne : cs ≠ [] := by intro h; subst h; simp at hl
+        rw [List.getLast?_cons, hl]
+        simp only [Option.getD_some, Option.toList_some, List.append_assoc]
+        rw [List.dropLast_cons_of_ne_nil hne]
+        simp
+  rw [h2 comps _ hD]
+  simp only [Option.map_some, Option.some.injEq, Doc.mk.injEq, true_and]
+  cases hl : comps.getLast? with
+  | none =>
+    rw [List.getLast?_eq_none_iff] at hl
+    subst hl; simp
+  | some c =>
+    simp only [Option.toList_none, List.append_nil, Option.toList_some, List.nil_append]
+    exact ⟨trivial, trivial, List.dropLast_append_getLast? c hl⟩
+
+/-! ## Equations: printed under the symbol table, and read back -/
+
+/-- Print every equation under its component's symbol table. -/
+def rawDoc (pr : Sym → Eqn → String) (D : Doc Eqn) : Doc String :=
+  { D with comps := D.comps.map (fun c => c.mapEqns (fun c e => pr (symFor D.blocks c) e)) }
+
+/-- Read a component's equations under its symbol table; one math text may hold several
+equations (the multi-line variants). -/
+def cookComp (ck : Sym → String → Option (List Eqn)) (root : List (String × Json))
+    (c : Comp String) : Option (Comp Eqn) :=
+  (c.eqns.mapM (ck (symFor root c))).map (fun es => { c with eqns := es.flatten })
+
+/-- Read every equation of a skeleton. -/
+def cookDoc (ck : Sym → String → Option (List Eqn)) (D : Doc String) : Option (Doc Eqn) :=
+  (D.comps.mapM (cookComp ck D.blocks)).map (fun cs => { D with comps := cs })
+
+theorem mapM_singleton {α β : Type} (f : α → Option (List β)) (g : α → β) :
+    ∀ l : List α, (∀ x ∈ l, f x = some [g x]) → (l.mapM f).map List.flatten = some (l.map g)
+  | [], _ => rfl
+  | x :: xs, h => by
+    have ih := mapM_singleton f g xs (fun y hy => h y (List.mem_cons_of_mem _ hy))
+    simp only [List.mapM_cons, h x List.mem_cons_self, Option.bind_eq_bind, Option.bind_some]
+    cases hm : xs.mapM f with
+    | none => rw [hm] at ih; cases ih
+    | some ys =>
+      rw [hm] at ih
+      simp only [Option.map_some, Option.some.injEq] at ih
+      simp [ih]
+
+/-- **Equations read back** when each one does under its component's table. The table
+is the same on both sides: `symFor` does not look at equations. -/
+theorem cookDoc_rawDoc (pr : Sym → Eqn → String) (ck : Sym → String → Option (List Eqn))
+    (D : Doc Eqn)
+    (h : ∀ c ∈ D.comps, ∀ e ∈ c.eqns, ck (symFor D.blocks c) (pr (symFor D.blocks c) e) = some [e]) :
+    cookDoc ck (rawDoc pr D) = some D := by
+  obtain ⟨front, desc, blocks, comps⟩ := D
+  unfold cookDoc rawDoc
+  simp only
+  rw [List.mapM_map]
+  have : ∀ c ∈ comps, cookComp ck blocks (c.mapEqns (fun c e => pr (symFor blocks c) e)) = some c := by
+    intro c hc
+    unfold cookComp
+    rw [symFor_mapEqns]
+    simp only [Comp.mapEqns]
+    rw [List.mapM_map]
+    have := mapM_singleton (fun e => ck (symFor blocks c) (pr (symFor blocks c) e)) id c.eqns
+      (fun e he => h c hc e he)
+    cases hm : c.eqns.mapM (fun e => ck (symFor blocks c) (pr (symFor blocks c) e)) with
+    | none => rw [hm] at this; cases this
+    | some es =>
+      rw [hm] at this
+      simp only [Option.map_some, Option.some.injEq, List.map_id_fun, id_eq] at this
+      simp only [Function.comp_def, hm, Option.map_some, this]
+  rw [mapM_some (cookComp ck blocks ∘ fun c => Comp.mapEqns (fun c e => pr (symFor blocks c) e) c)
+    id comps this]
+  simp
+
+end Esm.Document.Source
