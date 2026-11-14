@@ -20,3 +20,7 @@ path = "coupling/"
 [[nav]]
 title = "Templates"
 path = "templates/"
+
+[[nav]]
+title = "Document formats"
+path = "generated/document-formats/"
