@@ -99,6 +99,8 @@ mod display_conformance;
 mod doubly_defined_state_conformance;
 #[path = "earthscidata_loader_coverage.rs"]
 mod earthscidata_loader_coverage;
+#[path = "elementwise_lift_equation_order.rs"]
+mod elementwise_lift_equation_order;
 #[path = "elementwise_observed_gather_conformance.rs"]
 mod elementwise_observed_gather_conformance;
 #[path = "esio_document_cadence.rs"]

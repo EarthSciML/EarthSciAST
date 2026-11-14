@@ -38,8 +38,91 @@ use std::collections::{HashMap, HashSet};
 /// is never lifted. A field initial condition `ic(x) = rhs` is lifted over
 /// `x`'s declared shape.
 ///
-/// Repeats until no equation changes, so a chain — a lifted observed read by
-/// another elementwise application — is lifted link by link.
+/// The shapes come from [`plan_elementwise_lift`], which decides them all
+/// before anything is rewritten, so what a lifted body gathers does not
+/// depend on the order of the equations.
+///
+/// # Errors
+///
+/// As [`plan_elementwise_lift`].
+pub(crate) fn lift_elementwise_applications(
+    model: &mut Model,
+) -> Result<HashMap<String, Vec<String>>, String> {
+    let LiftPlan {
+        shapes,
+        lifts,
+        lifted,
+    } = plan_elementwise_lift(model)?;
+    for (k, lift) in lifts.into_iter().enumerate() {
+        let Some((lhs, axes)) = lift else { continue };
+        let rhs = &model.equations[k].rhs;
+        let loops = fresh_loops(rhs, axes.len());
+        let ctx = Lift {
+            axes: &axes,
+            loops: &loops,
+            shapes: &shapes,
+            lhs: &lhs,
+        };
+        let body = intern_tree(&ctx.wrap(rhs, &HashSet::new(), false)?);
+        let ranges: HashMap<String, RangeSpec> = loops
+            .iter()
+            .zip(&axes)
+            .map(|(l, a)| {
+                (
+                    l.clone(),
+                    RangeSpec::IndexSetRef {
+                        from: a.clone(),
+                        of: None,
+                    },
+                )
+            })
+            .collect();
+        model.equations[k].rhs = Expr::operator(ExpressionNode {
+            op: "faq".to_string(),
+            args: Vec::new(),
+            output_idx: Some(loops),
+            ranges: Some(ranges),
+            expr: Some(Box::new(body)),
+            ..Default::default()
+        });
+    }
+    for (name, axes) in &lifted {
+        if let Some(var) = model.variables.get_mut(name) {
+            var.shape = Some(axes.clone());
+        }
+    }
+    Ok(lifted)
+}
+
+/// What [`plan_elementwise_lift`] decides about a model, before anything is
+/// rewritten.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct LiftPlan {
+    /// Every array variable, by name, as the lift reads it: the declared
+    /// non-empty shapes, and the elementwise shape (§4.3.4) of each variable
+    /// declared without a `shape` whose bare `x = …` definition is elementwise
+    /// over shaped operands, lifted or not.
+    pub(crate) shapes: HashMap<String, Vec<String>>,
+    /// Per equation, in `model.equations` order: the name it defines (an
+    /// initial condition's state) and the index sets its right-hand side is
+    /// lifted over, or `None` when it is not lifted.
+    pub(crate) lifts: Vec<Option<(String, Vec<String>)>>,
+    /// The variables declared without a `shape` that a lift defines, with the
+    /// index sets it defines them over.
+    pub(crate) lifted: HashMap<String, Vec<String>>,
+}
+
+/// Decide, without rewriting anything, which equations of `model` the
+/// elementwise lift rewrites and every shape it reads ([`LiftPlan`]).
+///
+/// The shape of a variable declared without one follows from the shapes of
+/// the names its definition reads, so the definitions are resolved in
+/// dependency order ([`crate::structural::dependency_first_order`]): each
+/// after every definition it reads, whatever the order of the equations. Each
+/// right-hand side is walked once. Errors are reported only against those
+/// final shapes. A variable on a cycle of definitions (an algebraic loop,
+/// which the build refuses on its own) is resolved with the definition that
+/// closes the cycle read as unshaped.
 ///
 /// # Errors
 ///
@@ -49,9 +132,7 @@ use std::collections::{HashMap, HashSet};
 /// result shape does not), and when an application of any equation reads an
 /// anonymous array (a `const` array literal, a `reshape` result) in a value
 /// position, which has no index sets to align by.
-pub(crate) fn lift_elementwise_applications(
-    model: &mut Model,
-) -> Result<HashMap<String, Vec<String>>, String> {
+pub(crate) fn plan_elementwise_lift(model: &Model) -> Result<LiftPlan, String> {
     let mut shapes: HashMap<String, Vec<String>> = model
         .variables
         .iter()
@@ -60,117 +141,118 @@ pub(crate) fn lift_elementwise_applications(
             _ => None,
         })
         .collect();
-    // A variable declared WITHOUT a shape whose definition is elementwise over
-    // shaped operands is an array too (§4.3.4). Its shape is needed to see it
-    // as an array argument downstream, but nothing here writes it: only a
-    // lifted definition gains a declared shape.
-    let unshaped: HashSet<String> = model
-        .variables
-        .iter()
-        .filter(|(_, v)| v.shape.is_none())
-        .map(|(n, _)| n.clone())
-        .collect();
     for eq in &model.equations {
         refuse_anonymous_arrays(&eq.rhs, &eq.lhs)?;
     }
-    let mut lifted: HashMap<String, Vec<String>> = HashMap::new();
-    let mut changed = true;
-    let mut passes = 0usize;
-    while changed && passes <= model.equations.len() + 1 {
-        changed = false;
-        passes += 1;
-        for k in 0..model.equations.len() {
-            // A field initial condition `ic(x) = rhs` is lifted over `x`'s
-            // declared shape; it defines no variable, so it shapes none.
-            let (lhs, is_ic) = match &model.equations[k].lhs {
-                Expr::Variable(n) => (n.clone(), false),
-                other => match crate::flatten::extract_ic_target(other) {
-                    Some(t) => (t, true),
-                    None => continue,
-                },
-            };
-            let rhs = &model.equations[k].rhs;
-            let mut reads: Vec<(String, bool)> = Vec::new();
-            walk(rhs, &shapes, &HashSet::new(), false, &mut |seen| {
+    // Each equation's target (`None`: it defines no name the lift reads), and
+    // every name its right-hand side reads in a value position, with whether
+    // the read is inside a template application. Collected once, whatever the
+    // shapes: which reads are array arguments is decided against them below.
+    let targets: Vec<Option<(String, bool)>> = model
+        .equations
+        .iter()
+        .map(|eq| match &eq.lhs {
+            Expr::Variable(n) => Some((n.clone(), false)),
+            other => crate::flatten::extract_ic_target(other).map(|t| (t, true)),
+        })
+        .collect();
+    let reads: Vec<Vec<(&str, bool)>> = model
+        .equations
+        .iter()
+        .map(|eq| {
+            let mut out = Vec::new();
+            walk(&eq.rhs, &HashSet::new(), false, &mut |seen| {
                 if let Seen::Read { name, inside } = seen {
-                    reads.push((name.to_string(), inside));
+                    out.push((name, inside));
                 }
             });
-            if !reads.iter().any(|(_, inside)| *inside) {
-                // Not lifted: record the elementwise shape of an unshaped
-                // definition so an application reading it can be lifted.
-                if !is_ic && unshaped.contains(&lhs) && !shapes.contains_key(&lhs) {
-                    let names: Vec<String> = reads.into_iter().map(|(n, _)| n).collect();
-                    if let Ok(Some(axes)) = union_axes(&names, &shapes) {
-                        shapes.insert(lhs, axes);
-                        changed = true;
-                    }
-                }
-                continue;
-            }
-            let declared = model.variables.get(&lhs).and_then(|v| v.shape.clone());
-            let axes = match &declared {
-                // `shape: []` declares a scalar (esm-spec §4.3.1): never lifted.
-                Some(s) if s.is_empty() => continue,
-                Some(s) => s.clone(),
-                // An initial condition takes its state's declared shape only.
-                None if is_ic => continue,
-                None => {
-                    let names: Vec<String> = reads.into_iter().map(|(n, _)| n).collect();
-                    union_axes(&names, &shapes)
-                        .map_err(|m| format!("array_shape_mismatch: '{lhs}': {m}"))?
-                        .ok_or_else(|| format!("array_shape_mismatch: '{lhs}': no array operand"))?
-                }
-            };
-            if (1..axes.len()).any(|d| axes[..d].contains(&axes[d])) {
-                return Err(format!(
-                    "array_shape_mismatch: '{lhs}': the elementwise application is over \
-                     {axes:?}, which names one index set twice, so a read has no single \
-                     axis to align to (esm-spec §9.6.11)"
-                ));
-            }
-            let loops = fresh_loops(rhs, axes.len());
-            let ctx = Lift {
-                axes: &axes,
-                loops: &loops,
-                shapes: &shapes,
-                lhs: &lhs,
-            };
-            let body = intern_tree(&ctx.wrap(rhs, &HashSet::new(), false)?);
-            let ranges: HashMap<String, RangeSpec> = loops
+            out
+        })
+        .collect();
+    // The definitions whose shape is to be resolved: the first bare
+    // `x = …` equation of each variable declared without a `shape`.
+    let mut def_of: HashMap<&str, usize> = HashMap::new();
+    let mut defs: Vec<usize> = Vec::new();
+    for (k, target) in targets.iter().enumerate() {
+        let Some((name, false)) = target else {
+            continue;
+        };
+        let undeclared = model.variables.get(name).is_none_or(|v| v.shape.is_none());
+        if undeclared && !def_of.contains_key(name.as_str()) {
+            def_of.insert(name.as_str(), defs.len());
+            defs.push(k);
+        }
+    }
+    let deps: Vec<Vec<usize>> = defs
+        .iter()
+        .map(|&k| {
+            reads[k]
                 .iter()
-                .zip(&axes)
-                .map(|(l, a)| {
-                    (
-                        l.clone(),
-                        RangeSpec::IndexSetRef {
-                            from: a.clone(),
-                            of: None,
-                        },
-                    )
-                })
-                .collect();
-            model.equations[k].rhs = Expr::operator(ExpressionNode {
-                op: "faq".to_string(),
-                args: Vec::new(),
-                output_idx: Some(loops),
-                ranges: Some(ranges),
-                expr: Some(Box::new(body)),
-                ..Default::default()
-            });
-            if declared.is_none() {
-                shapes.insert(lhs.clone(), axes.clone());
-                lifted.insert(lhs, axes);
+                .filter_map(|(n, _)| def_of.get(n).copied())
+                .collect()
+        })
+        .collect();
+    for d in crate::structural::dependency_first_order(&deps) {
+        let k = defs[d];
+        let names: Vec<&str> = reads[k].iter().map(|(n, _)| *n).collect();
+        // A right-hand side whose array arguments do not meet is left
+        // unshaped here and refused below if it is lifted.
+        if let Ok(Some(axes)) = union_axes(&names, &shapes) {
+            let (name, _) = targets[k].as_ref().expect("a definition has a target");
+            shapes.insert(name.clone(), axes);
+        }
+    }
+    // Every shape is final: decide which equations are lifted, and over what.
+    let mut lifts: Vec<Option<(String, Vec<String>)>> = vec![None; model.equations.len()];
+    let mut lifted: HashMap<String, Vec<String>> = HashMap::new();
+    for (k, target) in targets.iter().enumerate() {
+        let Some((lhs, is_ic)) = target else { continue };
+        if !reads[k]
+            .iter()
+            .any(|(n, inside)| *inside && shapes.contains_key(*n))
+        {
+            continue;
+        }
+        let declared = model.variables.get(lhs).and_then(|v| v.shape.as_ref());
+        let axes = match declared {
+            // `shape: []` declares a scalar (esm-spec §4.3.1): never lifted.
+            Some(s) if s.is_empty() => continue,
+            Some(s) => s.clone(),
+            // An initial condition takes its state's declared shape only.
+            None if *is_ic => continue,
+            None => {
+                let names: Vec<&str> = reads[k].iter().map(|(n, _)| *n).collect();
+                let axes = union_axes(&names, &shapes)
+                    .map_err(|m| format!("array_shape_mismatch: '{lhs}': {m}"))?
+                    .ok_or_else(|| format!("array_shape_mismatch: '{lhs}': no array operand"))?;
+                if shapes.get(lhs) != Some(&axes) {
+                    return Err(format!(
+                        "array_shape_mismatch: '{lhs}': its elementwise application is over \
+                         {axes:?}, but its definition reads itself through a cycle of \
+                         definitions, or another equation also defines it, so it has no one \
+                         shape (esm-spec §9.6.11)"
+                    ));
+                }
+                axes
             }
-            changed = true;
+        };
+        if (1..axes.len()).any(|d| axes[..d].contains(&axes[d])) {
+            return Err(format!(
+                "array_shape_mismatch: '{lhs}': the elementwise application is over \
+                 {axes:?}, which names one index set twice, so a read has no single \
+                 axis to align to (esm-spec §9.6.11)"
+            ));
         }
-    }
-    for (name, axes) in &lifted {
-        if let Some(var) = model.variables.get_mut(name) {
-            var.shape = Some(axes.clone());
+        if declared.is_none() {
+            lifted.insert(lhs.clone(), axes.clone());
         }
+        lifts[k] = Some((lhs.clone(), axes));
     }
-    Ok(lifted)
+    Ok(LiftPlan {
+        shapes,
+        lifts,
+        lifted,
+    })
 }
 
 /// `expr` with every structurally identical subtree one shared node, as load
@@ -204,8 +286,9 @@ fn intern_tree(expr: &Expr) -> Expr {
 
 /// What [`walk`] reports.
 enum Seen<'a> {
-    /// A shaped variable read by bare name in a value position; `inside` when
-    /// the read is inside a template application.
+    /// A variable read by bare name in a value position; `inside` when the
+    /// read is inside a template application. Whether it is an array
+    /// argument is the caller's to decide, against the shapes it knows.
     Read { name: &'a str, inside: bool },
     /// An anonymous array (a `const` array literal, a `reshape` result) in a
     /// value position inside a template application.
@@ -221,16 +304,10 @@ enum Seen<'a> {
 /// binds as a loop symbol is not a read. An `index` base and every operand an
 /// op consumes whole (an array-producing `faq`, `makearray`, the shape and
 /// relational ops) are array positions, not visited.
-fn walk<'a>(
-    expr: &'a Expr,
-    shapes: &HashMap<String, Vec<String>>,
-    bound: &HashSet<String>,
-    inside: bool,
-    f: &mut dyn FnMut(Seen<'a>),
-) {
+fn walk<'a>(expr: &'a Expr, bound: &HashSet<String>, inside: bool, f: &mut dyn FnMut(Seen<'a>)) {
     match expr {
         Expr::Variable(n) => {
-            if !bound.contains(n) && shapes.contains_key(n) {
+            if !bound.contains(n) {
                 f(Seen::Read { name: n, inside });
             }
         }
@@ -240,16 +317,16 @@ fn walk<'a>(
             match node.op.as_str() {
                 "index" if inside => {
                     for a in node.args.iter().skip(1) {
-                        walk(a, shapes, bound, true, f);
+                        walk(a, bound, true, f);
                     }
                 }
                 "faq" if inside && is_reduction(node) => {
                     let inner = reduction_bound(node, bound);
                     if let Some(b) = &node.expr {
-                        walk(b, shapes, &inner, true, f);
+                        walk(b, &inner, true, f);
                     }
                     if let Some(b) = &node.filter {
-                        walk(b, shapes, &inner, true, f);
+                        walk(b, &inner, true, f);
                     }
                 }
                 "const" if inside && node.value.as_ref().is_some_and(|v| v.is_array()) => {
@@ -258,7 +335,7 @@ fn walk<'a>(
                 "reshape" if inside => f(Seen::Anonymous { node }),
                 _ if crate::op_registry::is_elementwise_node(node) => {
                     for a in &node.args {
-                        walk(a, shapes, bound, inside, f);
+                        walk(a, bound, inside, f);
                     }
                 }
                 _ => {}
@@ -277,7 +354,7 @@ fn is_reduction(node: &ExpressionNode) -> bool {
 /// says which element each cell reads (esm-spec §9.6.11).
 fn refuse_anonymous_arrays(rhs: &Expr, lhs: &Expr) -> Result<(), String> {
     let mut found: Option<String> = None;
-    walk(rhs, &HashMap::new(), &HashSet::new(), false, &mut |seen| {
+    walk(rhs, &HashSet::new(), false, &mut |seen| {
         if let Seen::Anonymous { node } = seen {
             found.get_or_insert_with(|| node.op.clone());
         }
@@ -311,12 +388,12 @@ fn reduction_bound(node: &ExpressionNode, bound: &HashSet<String>) -> HashSet<St
 /// `Ok(None)` when nothing is read; `Err` when no read's index sets contain
 /// all the others'.
 fn union_axes(
-    reads: &[String],
+    reads: &[&str],
     shapes: &HashMap<String, Vec<String>>,
 ) -> Result<Option<Vec<String>>, String> {
     let mut acc: Option<&Vec<String>> = None;
     for n in reads {
-        let Some(s) = shapes.get(n) else { continue };
+        let Some(s) = shapes.get(*n) else { continue };
         acc = match acc {
             None => Some(s),
             Some(cur) if s.iter().all(|a| cur.contains(a)) => Some(cur),
@@ -469,8 +546,10 @@ mod tests {
     /// Every `(name, inside)` read [`walk`] reports for `expr`.
     fn reads(expr: &Expr, shapes: &HashMap<String, Vec<String>>) -> Vec<(String, bool)> {
         let mut out = Vec::new();
-        walk(expr, shapes, &HashSet::new(), false, &mut |seen| {
-            if let Seen::Read { name, inside } = seen {
+        walk(expr, &HashSet::new(), false, &mut |seen| {
+            if let Seen::Read { name, inside } = seen
+                && shapes.contains_key(name)
+            {
                 out.push((name.to_string(), inside));
             }
         });
@@ -654,13 +733,205 @@ mod tests {
     }
 
     #[test]
+    fn an_operand_defined_after_its_reader_is_gathered() {
+        // Issue #714: `y` applies a template and also reads `k`, an unshaped
+        // observed that is elementwise over `u` and is DEFINED AFTER `y`. The
+        // lifted body must gather `k` at the cell, whatever the equation order.
+        let doc = serde_json::json!({
+            "esm": "2.0.0", "metadata": {"name": "order_probe"},
+            "index_sets": {"c": {"kind": "interval", "size": 3}},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "parameter", "shape": ["c"], "default": [1.0, 2.0, 3.0]},
+                    "y": {"type": "unknown", "shape": ["c"]},
+                    "k": {"type": "unknown"},
+                    "s": {"type": "unknown", "default": 0.0}},
+                "equations": [
+                    {"lhs": "y", "rhs": {"op": "+", "args": [
+                        {"op": "apply_expression_template", "args": [], "name": "twice",
+                         "bindings": {"x": "u"}},
+                        "k"]}},
+                    {"lhs": "k", "rhs": {"op": "*", "args": [2, "u"]}},
+                    {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": 0.0}
+                ],
+                "expression_templates": {"twice": {"params": ["x"],
+                    "body": {"op": "*", "args": [2, "x"]}}}
+            }}
+        });
+        let (_, _, after) = lift_doc(&doc, "M.y");
+        let Expr::Operator(n) = &after else {
+            panic!("{after:?}")
+        };
+        assert_eq!(n.op, "faq");
+        let body = serde_json::to_string(n.expr.as_deref().expect("body")).unwrap();
+        assert!(
+            body.contains(r#"{"op":"index","args":["M.k","#),
+            "M.k is not gathered at the cell: {body}"
+        );
+    }
+
+    /// `doc`'s model `M` as a single-model build sees it (every template
+    /// expanded at load, nothing flattened or lifted yet), the lift run on
+    /// it: what it lifted, and `<lhs>`'s right-hand side before and after.
+    fn lift_model(
+        doc: &serde_json::Value,
+        lhs: &str,
+    ) -> (HashMap<String, Vec<String>>, Expr, Expr) {
+        let file = crate::parse::load_string(&doc.to_string()).expect("loads");
+        let mut model = file.models.as_ref().expect("models")["M"].clone();
+        let rhs = |m: &Model| {
+            m.equations
+                .iter()
+                .find(|e| matches!(&e.lhs, Expr::Variable(n) if n == lhs))
+                .expect("defined")
+                .rhs
+                .clone()
+        };
+        let before = rhs(&model);
+        let lifted = lift_elementwise_applications(&mut model).expect("lift");
+        (lifted, before, rhs(&model))
+    }
+
+    /// A one-model document over `c` (3) and `l` (2) with `variables`,
+    /// `equations` (plus a trivial ODE, so it is a system) and the `twice`
+    /// template.
+    fn order_doc(
+        variables: serde_json::Value,
+        equations: &[serde_json::Value],
+    ) -> serde_json::Value {
+        let mut variables = variables;
+        variables["s"] = serde_json::json!({"type": "unknown", "default": 0.0});
+        let mut eqs = equations.to_vec();
+        eqs.push(serde_json::json!({"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": 0.0}));
+        serde_json::json!({
+            "esm": "2.0.0", "metadata": {"name": "order_probe"},
+            "index_sets": {"c": {"kind": "interval", "size": 3},
+                           "l": {"kind": "interval", "size": 2}},
+            "models": {"M": {
+                "variables": variables,
+                "equations": eqs,
+                "expression_templates": {"twice": {"params": ["x"],
+                    "body": {"op": "*", "args": [2, "x"]}}}
+            }}
+        })
+    }
+
+    fn twice(x: &str) -> serde_json::Value {
+        serde_json::json!({"op": "apply_expression_template", "args": [],
+            "name": "twice", "bindings": {"x": x}})
+    }
+
+    /// A lifted right-hand side's `faq` body, serialized.
+    fn lifted_body(after: &Expr) -> String {
+        let Expr::Operator(n) = after else {
+            panic!("{after:?}")
+        };
+        assert_eq!(n.op, "faq", "not lifted: {after:?}");
+        serde_json::to_string(n.expr.as_deref().expect("body")).unwrap()
+    }
+
+    #[test]
+    fn an_unlifted_operand_takes_the_shape_of_operands_defined_after_it() {
+        // `k` is not lifted (no template) and is elementwise over `u` [c] and
+        // `w`, which is defined after it and is [c, l]. Its shape is [c, l]
+        // whatever the order, so `y` gathers it on both axes.
+        let vars = serde_json::json!({
+            "u": {"type": "parameter", "shape": ["c"], "default": [1.0, 2.0, 3.0]},
+            "v": {"type": "parameter", "shape": ["c", "l"], "default": 1.0},
+            "y": {"type": "unknown", "shape": ["c", "l"]},
+            "k": {"type": "unknown"},
+            "w": {"type": "unknown"}});
+        let eqs = [
+            serde_json::json!({"lhs": "y", "rhs": {"op": "+", "args": [twice("u"), "k"]}}),
+            serde_json::json!({"lhs": "k", "rhs": {"op": "*", "args": ["u", "w"]}}),
+            serde_json::json!({"lhs": "w", "rhs": {"op": "*", "args": [2, "v"]}}),
+        ];
+        // Every order of the three equations lifts `y` to the same body.
+        let orders = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let mut bodies = Vec::new();
+        for order in orders {
+            let ordered: Vec<serde_json::Value> = order.iter().map(|&i| eqs[i].clone()).collect();
+            let (_, _, after) = lift_model(&order_doc(vars.clone(), &ordered), "y");
+            let body = lifted_body(&after);
+            assert!(
+                body.contains(r#"{"op":"index","args":["k","_p0","_p1"]}"#),
+                "order {order:?}: k is not gathered over [c, l]: {body}"
+            );
+            bodies.push(body);
+        }
+        assert!(bodies.windows(2).all(|w| w[0] == w[1]), "{bodies:?}");
+    }
+
+    #[test]
+    fn provisional_shapes_do_not_refuse_a_valid_document() {
+        // Read before `X` and `w` are defined, `Y` looks like it is over
+        // `Z`'s [l] alone and `X` like it is over `u`'s [c]: incomparable.
+        // Final shapes: `w` and `X` are [c, l], and `Y` = twice(X) + Z is
+        // [c, l] too.
+        let vars = serde_json::json!({
+            "Z": {"type": "parameter", "shape": ["l"], "default": [1.0, 2.0]},
+            "u": {"type": "parameter", "shape": ["c"], "default": [1.0, 2.0, 3.0]},
+            "v": {"type": "parameter", "shape": ["c", "l"], "default": 1.0},
+            "Y": {"type": "unknown"},
+            "X": {"type": "unknown"},
+            "w": {"type": "unknown"}});
+        let eqs = [
+            serde_json::json!({"lhs": "Y", "rhs": {"op": "+", "args": [twice("X"), "Z"]}}),
+            serde_json::json!({"lhs": "X", "rhs": {"op": "+", "args": [twice("u"), "w"]}}),
+            serde_json::json!({"lhs": "w", "rhs": {"op": "*", "args": [2, "v"]}}),
+        ];
+        let (lifted, _, after) = lift_model(&order_doc(vars, &eqs), "Y");
+        let cl = vec!["c".to_string(), "l".to_string()];
+        assert_eq!(lifted.get("Y"), Some(&cl), "{lifted:?}");
+        assert_eq!(lifted.get("X"), Some(&cl), "{lifted:?}");
+        let body = lifted_body(&after);
+        assert!(
+            body.contains(r#"{"op":"index","args":["X","_p0","_p1"]}"#),
+            "{body}"
+        );
+        assert!(
+            body.contains(r#"{"op":"index","args":["Z","_p1"]}"#),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn a_lifted_chain_in_reverse_order_is_lifted_link_by_link() {
+        let vars = serde_json::json!({
+            "u": {"type": "parameter", "shape": ["c"], "default": [1.0, 2.0, 3.0]},
+            "a1": {"type": "unknown"}, "a2": {"type": "unknown"}, "a3": {"type": "unknown"}});
+        let eqs = [
+            serde_json::json!({"lhs": "a3", "rhs": twice("a2")}),
+            serde_json::json!({"lhs": "a2", "rhs": twice("a1")}),
+            serde_json::json!({"lhs": "a1", "rhs": twice("u")}),
+        ];
+        let (lifted, _, after) = lift_model(&order_doc(vars, &eqs), "a3");
+        let c = vec!["c".to_string()];
+        for name in ["a1", "a2", "a3"] {
+            assert_eq!(lifted.get(name), Some(&c), "{name}: {lifted:?}");
+        }
+        let body = lifted_body(&after);
+        assert!(
+            body.contains(r#"{"op":"index","args":["a2","_p0"]}"#),
+            "{body}"
+        );
+    }
+
+    #[test]
     fn incomparable_array_arguments_are_refused() {
         let shapes: HashMap<String, Vec<String>> = [
             ("a".to_string(), vec!["x".to_string()]),
             ("b".to_string(), vec!["y".to_string()]),
         ]
         .into();
-        let err = union_axes(&["a".into(), "b".into()], &shapes).unwrap_err();
+        let err = union_axes(&["a", "b"], &shapes).unwrap_err();
         assert!(err.contains("neither one's index sets"), "{err}");
         let shapes2: HashMap<String, Vec<String>> = [
             ("a".to_string(), vec!["z".to_string()]),
@@ -671,7 +942,7 @@ mod tests {
         ]
         .into();
         assert_eq!(
-            union_axes(&["a".into(), "b".into()], &shapes2).unwrap(),
+            union_axes(&["a", "b"], &shapes2).unwrap(),
             Some(vec!["x".to_string(), "y".to_string(), "z".to_string()])
         );
     }
