@@ -21,9 +21,11 @@ import (
 // operator_compose does NOT do is array-ify the result: the merged
 // `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
 // its advection makearray indexes `sp` per grid cell. This pass performs the
-// `lifting: "pointwise"` promotion — wrapping each merged state ODE in an
-// `faq` over the grid, indexing the bare reaction species per cell and each
-// operator makearray per cell, and recording the species' concrete grid shape.
+// pointwise promotion — wrapping each merged state ODE in an `faq` over the
+// grid, indexing the bare reaction species per cell and each operator makearray
+// per cell, and recording the species' concrete grid shape. The operator route
+// is one of the ways a grid reaches a scalar state: a right-hand side that is
+// an array under the §4.3.4 shape rules lifts it too (applyPointwiseLift).
 
 // collectMakearrays returns every `makearray` node reachable from expr,
 // pre-order.
@@ -387,70 +389,287 @@ func indexArgs(head any, loops []string) []any {
 	return args
 }
 
-// applyPointwiseLift promotes every state ODE that `operator_compose` merged
-// with a spatial operator (its merged RHS carries an operator `makearray`) from
-// a 0-D scalar to the operator's grid shape, and rewrites the equation into an
-// `faq` over the grid. No-op when no coupling entry requests pointwise
-// lifting, or no merged equation carries a spatial-operator makearray.
+// liftTarget is the state a `D(x, t)` left-hand side differentiates, or "".
+func liftTarget(lhs Expression) string {
+	node, ok := asExprNode(lhs)
+	if !ok || node.Op != OpDerivative || len(node.Args) == 0 {
+		return ""
+	}
+	s, _ := node.Args[0].(string)
+	return s
+}
+
+// topComponent is the top-level component a flattened name belongs to: its
+// first dot-separated segment.
+func topComponent(name string) string {
+	head, _, _ := strings.Cut(name, ".")
+	return head
+}
+
+// liftAxesResult is one answer of the lift's shape inference: the ordered index
+// sets an expression's value spans (empty for a scalar), with ok false when the
+// inference cannot decide.
+type liftAxesResult struct {
+	axes []string
+	ok   bool
+}
+
+// liftShapes is the lift's shape inference (esm-libraries-spec §4.7.5,
+// "Pointwise lift: which states are lifted"): the index sets an expression's
+// value spans, under esm-spec §4.3.4.
+//
+// It is memoized over definitions, so the answer does not depend on the order
+// the equations are visited in; a definition cycle is undecided. Names in
+// masked read as scalars: the sources of the non-pointwise `variable_map`
+// entries into the component being decided.
+type liftShapes struct {
+	variables map[string]FlattenedVariable
+	defs      map[string]Expression
+	lifted    map[string][]string
+	masked    map[string]bool
+	memo      map[string]liftAxesResult
+}
+
+func newLiftShapes(variables map[string]FlattenedVariable, defs map[string]Expression,
+	lifted map[string][]string, masked map[string]bool) *liftShapes {
+	return &liftShapes{variables: variables, defs: defs, lifted: lifted, masked: masked,
+		memo: map[string]liftAxesResult{}}
+}
+
+// nameAxes is the value axes of a bare reference.
+func (s *liftShapes) nameAxes(name string) ([]string, bool) {
+	if name == DefaultIndepVar || s.masked[name] {
+		return []string{}, true
+	}
+	if axes, ok := s.lifted[name]; ok {
+		return append([]string{}, axes...), true
+	}
+	if r, ok := s.memo[name]; ok {
+		return r.axes, r.ok
+	}
+	v, ok := s.variables[name]
+	if !ok {
+		return nil, false
+	}
+	if v.Shape != nil {
+		return append([]string{}, v.Shape...), true
+	}
+	body, ok := s.defs[name]
+	if !ok {
+		return []string{}, true
+	}
+	s.memo[name] = liftAxesResult{}
+	axes, decided := s.exprAxes(body)
+	s.memo[name] = liftAxesResult{axes: axes, ok: decided}
+	return axes, decided
+}
+
+// exprAxes is the value axes of an expression.
+func (s *liftShapes) exprAxes(expr Expression) ([]string, bool) {
+	if _, ok := expr.(bool); ok {
+		return []string{}, true
+	}
+	if _, ok := exprNumber(expr); ok {
+		return []string{}, true
+	}
+	if name, ok := expr.(string); ok {
+		return s.nameAxes(name)
+	}
+	node, ok := asExprNode(expr)
+	if !ok {
+		return nil, false
+	}
+	switch {
+	case node.Op == "index":
+		for _, sub := range node.Args[min(1, len(node.Args)):] {
+			if axes, ok := s.exprAxes(sub); !ok || len(axes) != 0 {
+				return nil, false
+			}
+		}
+		return []string{}, true
+	case node.Op == "faq":
+		axes := make([]string, 0, len(node.OutputIdx))
+		for _, sym := range node.OutputIdx {
+			name, ok := sym.(string)
+			if !ok {
+				return nil, false
+			}
+			spec, ok := node.Ranges[name].(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			from, ok := spec["from"].(string)
+			if !ok {
+				return nil, false
+			}
+			axes = append(axes, from)
+		}
+		return axes, true
+	case node.Op == OpDerivative && (node.Wrt == nil || *node.Wrt == DefaultIndepVar) && len(node.Args) == 1:
+		return s.exprAxes(node.Args[0])
+	}
+	if !isElementwiseNode(node) {
+		return nil, false
+	}
+	out := []string{}
+	for _, a := range node.Args {
+		axes, ok := s.exprAxes(a)
+		if !ok {
+			return nil, false
+		}
+		for _, x := range axes {
+			if !slices.Contains(out, x) {
+				out = append(out, x)
+			}
+		}
+	}
+	return out, true
+}
+
+// freshLiftLoops is `_p0 … _p{n-1}`, the prefix lengthened by `_` until no name
+// exprs reads or binds is one of them (esm-spec §9.6.11).
+func freshLiftLoops(exprs []Expression, n int) []string {
+	used := map[string]bool{}
+	var collect func(Expression)
+	collect = func(e Expression) {
+		if s, ok := e.(string); ok {
+			used[s] = true
+			return
+		}
+		node, ok := asExprNode(e)
+		if !ok {
+			return
+		}
+		for k := range node.Ranges {
+			used[k] = true
+		}
+		for _, sym := range node.OutputIdx {
+			if s, ok := sym.(string); ok {
+				used[s] = true
+			}
+		}
+		for _, c := range exprRefChildren(node) {
+			collect(c.Child)
+		}
+	}
+	for _, e := range exprs {
+		collect(e)
+	}
+	prefix := "_p"
+	for {
+		loops := make([]string, n)
+		clash := false
+		for d := range loops {
+			loops[d] = fmt.Sprintf("%s%d", prefix, d)
+			clash = clash || used[loops[d]]
+		}
+		if !clash {
+			return loops
+		}
+		prefix = "_" + prefix
+	}
+}
+
+// liftPlan is how one lifted state's equation is rewritten: the index set of
+// each grid dimension, their sizes, and, for a state the operator route lifts,
+// the loop symbols read off its `makearray` (nil: fresh loops).
+type liftPlan struct {
+	axes    []string
+	extents []int
+	loops   []string
+}
+
+// applyPointwiseLift is the pointwise spatial lift (esm-spec §10.5;
+// esm-libraries-spec §4.7.5, "Pointwise lift: which states are lifted").
+//
+// A scalar state is a lift candidate when its merged equation carries an
+// operator `makearray` (the operator route) or its right-hand side is an array
+// under the lift's shape inference (liftShapes). A candidate lifts its whole
+// top-level component: every scalar state of that model or reaction system goes
+// onto the same grid. Lifting can make further right-hand sides arrays, so the
+// search repeats until no new component is lifted. Each lifted equation is
+// rewritten into an `faq` over the grid, its array operands read per cell.
+//
+// A component two candidates put on different grids is refused with
+// DimensionPromotionError. A coupling entry with an explicit `lifting` other
+// than "pointwise" does not trigger the lift: an `operator_compose` one takes
+// its components out of the operator route, and a `variable_map` one reads its
+// source as a scalar when deciding its target's component.
 func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
-	requested := false
+	nonPointwise := func(l *string) bool { return l != nil && *l != "pointwise" }
+	noOperatorRoute := map[string]bool{}
+	masks := map[string]map[string]bool{}
 	for _, c := range coupling {
-		if oc, ok := c.(OperatorComposeCoupling); ok && oc.Lifting != nil && *oc.Lifting == "pointwise" {
-			requested = true
-			break
+		switch cc := c.(type) {
+		case OperatorComposeCoupling:
+			if nonPointwise(cc.Lifting) {
+				for _, s := range cc.Systems {
+					noOperatorRoute[topComponent(s)] = true
+				}
+			}
+		case VariableMapCoupling:
+			if nonPointwise(cc.Lifting) && cc.To != "" && cc.From != "" {
+				comp := topComponent(cc.To)
+				if masks[comp] == nil {
+					masks[comp] = map[string]bool{}
+				}
+				masks[comp][cc.From] = true
+			}
 		}
 	}
-	if !requested {
-		return nil
-	}
 
-	dTarget := func(lhs Expression) string {
-		node, ok := asExprNode(lhs)
-		if !ok || node.Op != OpDerivative || len(node.Args) == 0 {
-			return ""
-		}
-		s, _ := node.Args[0].(string)
-		return s
-	}
-
-	// A species is lifted iff its state ODE's merged RHS carries a
-	// spatial-operator makearray (the advection contribution operator_compose
-	// added) and it does not already declare a shape: a state that already
-	// lives on a grid has nothing to lift, and its declared shape stands.
-	shaped := map[string]bool{}
+	stateVars := map[string]FlattenedVariable{}
 	for _, v := range flat.StateVariables {
-		if len(v.Shape) > 0 {
-			shaped[v.Name] = true
-		}
+		stateVars[v.Name] = v
 	}
-	lifted := map[string]bool{}
+	isLiftState := func(name string) bool {
+		v, ok := stateVars[name]
+		return ok && len(v.Shape) == 0
+	}
+	defs := map[string]Expression{}
+	var defsOrder []string
 	for _, eq := range flat.Equations {
-		target := dTarget(eq.LHS)
-		if target == "" || shaped[target] {
-			continue
-		}
-		if len(collectMakearrays(eq.RHS)) > 0 {
-			lifted[target] = true
+		if name, ok := eq.LHS.(string); ok {
+			if _, seen := defs[name]; !seen {
+				defs[name] = eq.RHS
+				defsOrder = append(defsOrder, name)
+			}
 		}
 	}
-	if len(lifted) == 0 {
-		return nil
+	observed := map[string]bool{}
+	for _, v := range flat.ObservedVariables {
+		observed[v.Name] = true
+	}
+	var states []string
+	for _, v := range flat.StateVariables {
+		if _, isDef := defs[v.Name]; !isDef && !observed[v.Name] && isLiftState(v.Name) {
+			states = append(states, v.Name)
+		}
+	}
+	variables := map[string]FlattenedVariable{}
+	for _, table := range [][]FlattenedVariable{flat.Parameters, flat.ObservedVariables, flat.StateVariables} {
+		for _, v := range table {
+			variables[v.Name] = v
+		}
+	}
+	type tendency struct {
+		target string
+		eq     FlattenedEquation
+	}
+	var tendencies []tendency
+	for _, eq := range flat.Equations {
+		if t := liftTarget(eq.LHS); t != "" && isLiftState(t) {
+			tendencies = append(tendencies, tendency{t, eq})
+		}
 	}
 
-	// Operands to read per cell: the lifted species plus every parameter /
-	// observed / state with a declared shape (a grid-shaped wind field bound
-	// from a loader, say). A shaped operand is gathered by index-set name
-	// through varShapes (liftGatherShaped); the same declared shapes also name
-	// the lift's index sets (liftAxisNames).
-	arrayvars := map[string]bool{}
-	for name := range lifted {
-		arrayvars[name] = true
-	}
+	// Every declared shape: it names the operator route's index sets
+	// (liftAxisNames) and gathers an operand per cell by index-set name
+	// (liftGatherShaped).
 	varShapes := map[string][]string{}
 	for _, table := range [][]FlattenedVariable{flat.Parameters, flat.ObservedVariables, flat.StateVariables} {
 		for _, v := range table {
 			if len(v.Shape) > 0 {
-				arrayvars[v.Name] = true
 				if _, seen := varShapes[v.Name]; !seen {
 					varShapes[v.Name] = append([]string(nil), v.Shape...)
 				}
@@ -468,22 +687,28 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 		}
 	}
 
-	var out []FlattenedEquation
-	for _, eq := range flat.Equations {
-		target := dTarget(eq.LHS)
-		if target == "" || !lifted[target] {
-			out = append(out, eq)
+	// The operator route: a scalar state whose merged equation carries an
+	// operator makearray. Its grid is read off the makearray.
+	operatorRoute := map[string]bool{}
+	for _, td := range tendencies {
+		if !noOperatorRoute[topComponent(td.target)] && len(collectMakearrays(td.eq.RHS)) > 0 {
+			operatorRoute[td.target] = true
+		}
+	}
+	plans := map[string]*liftPlan{}
+	for _, td := range tendencies {
+		target := td.target
+		if _, planned := plans[target]; planned || !operatorRoute[target] {
 			continue
 		}
-		mas := collectMakearrays(eq.RHS)
-		if len(mas) == 0 || len(mas[0].Regions) == 0 {
-			out = append(out, eq)
+		mas := collectMakearrays(td.eq.RHS)
+		if len(mas[0].Regions) == 0 {
 			continue
 		}
 		rank := len(mas[0].Regions[0])
 		var loops []string
 		for _, ma := range mas {
-			if loops = detectLiftLoops(ma, lifted, rank); loops != nil {
+			if loops = detectLiftLoops(ma, operatorRoute, rank); loops != nil {
 				break
 			}
 		}
@@ -492,34 +717,187 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 				"flatten: pointwise lift: could not determine the spatial loop variables for species %q from its operator makearray",
 				target)}
 		}
-
 		extents := makearrayExtents(mas[0])
 		axes, err := liftIndexSets(flat, sizes, bySize, mas, loops, extents, varShapes, target)
 		if err != nil {
 			return err
 		}
+		plans[target] = &liftPlan{axes: axes, extents: extents, loops: loops}
+	}
+
+	sizeOf := func(axis, state string) (int, error) {
+		for _, is := range flat.IndexSets {
+			if is.Name == axis && is.Set.Size != nil {
+				return *is.Set.Size, nil
+			}
+		}
+		return 0, &DimensionPromotionError{Message: fmt.Sprintf(
+			"flatten: pointwise lift: state %q would be lifted onto index set %q, which has no declared size",
+			state, axis)}
+	}
+	sameSet := func(a, b []string) bool {
+		for _, x := range a {
+			if !slices.Contains(b, x) {
+				return false
+			}
+		}
+		for _, x := range b {
+			if !slices.Contains(a, x) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Whole-component lift, to a fixpoint.
+	type candidate struct {
+		state string
+		axes  []string
+	}
+	liftedAxes := map[string][]string{}
+	liftedComponents := map[string]bool{}
+	for {
+		inference := map[string]*liftShapes{}
+		found := map[string][]candidate{}
+		var foundOrder []string
+		for _, td := range tendencies {
+			comp := topComponent(td.target)
+			if liftedComponents[comp] {
+				continue
+			}
+			var axes []string
+			if p, ok := plans[td.target]; ok {
+				axes = p.axes
+			} else {
+				inf, ok := inference[comp]
+				if !ok {
+					inf = newLiftShapes(variables, defs, liftedAxes, masks[comp])
+					inference[comp] = inf
+				}
+				a, decided := inf.exprAxes(td.eq.RHS)
+				if !decided || len(a) == 0 {
+					continue
+				}
+				axes = a
+			}
+			if _, seen := found[comp]; !seen {
+				foundOrder = append(foundOrder, comp)
+			}
+			found[comp] = append(found[comp], candidate{td.target, axes})
+		}
+		if len(foundOrder) == 0 {
+			break
+		}
+		for _, comp := range foundOrder {
+			candidates := found[comp]
+			first, grid := candidates[0].state, candidates[0].axes
+			for _, other := range candidates[1:] {
+				if !sameSet(other.axes, grid) {
+					return &DimensionPromotionError{Message: fmt.Sprintf(
+						"flatten: pointwise lift: component %q would be lifted onto two grids: state %q onto %v and state %q onto %v",
+						comp, first, grid, other.state, other.axes)}
+				}
+			}
+			for d, a := range grid {
+				if slices.Contains(grid[:d], a) {
+					return &DimensionPromotionError{Message: fmt.Sprintf(
+						"flatten: pointwise lift: state %q would be lifted onto %v, which names one index set twice",
+						first, grid)}
+				}
+			}
+			for _, state := range states {
+				if topComponent(state) != comp {
+					continue
+				}
+				if _, planned := plans[state]; !planned {
+					extents := make([]int, len(grid))
+					for d, a := range grid {
+						n, err := sizeOf(a, state)
+						if err != nil {
+							return err
+						}
+						extents[d] = n
+					}
+					plans[state] = &liftPlan{axes: append([]string(nil), grid...), extents: extents}
+				}
+				liftedAxes[state] = plans[state].axes
+			}
+			liftedComponents[comp] = true
+		}
+	}
+	if len(liftedAxes) == 0 {
+		return nil
+	}
+
+	// The lifted states live on the lift's index sets: each Shape names them
+	// and LiftedShapes records their sizes (esm-libraries-spec §4.7.5).
+	for _, state := range states {
+		if _, ok := liftedAxes[state]; !ok {
+			continue
+		}
+		plan := plans[state]
+		flat.LiftedShapes = append(flat.LiftedShapes, LiftedShape{Name: state, Shape: plan.extents})
+		for i := range flat.StateVariables {
+			if flat.StateVariables[i].Name == state {
+				flat.StateVariables[i].Shape = append([]string(nil), plan.axes...)
+			}
+		}
+	}
+
+	// Operands read per cell: every array on the lifted system — the lifted
+	// states, every declared shape, and every unshaped observed whose
+	// definition is an array under the lift's shape inference.
+	readShapes := map[string][]string{}
+	for name, shape := range varShapes {
+		readShapes[name] = shape
+	}
+	for name, axes := range liftedAxes {
+		readShapes[name] = axes
+	}
+	final := newLiftShapes(variables, defs, liftedAxes, nil)
+	for _, name := range defsOrder {
+		if _, seen := readShapes[name]; seen {
+			continue
+		}
+		if _, ok := variables[name]; !ok {
+			continue
+		}
+		if axes, ok := final.nameAxes(name); ok && len(axes) > 0 {
+			readShapes[name] = axes
+		}
+	}
+	arrayvars := make(map[string]bool, len(readShapes))
+	for name := range readShapes {
+		arrayvars[name] = true
+	}
+
+	var out []FlattenedEquation
+	for _, eq := range flat.Equations {
+		target := liftTarget(eq.LHS)
+		if _, ok := liftedAxes[target]; target == "" || !ok {
+			out = append(out, eq)
+			continue
+		}
+		plan := plans[target]
+		loops := plan.loops
+		if loops == nil {
+			loops = freshLiftLoops([]Expression{eq.LHS, eq.RHS}, len(plan.axes))
+		}
+		rank := len(plan.axes)
 		ranges := make(map[string]any, rank)
 		outputIdx := make([]any, rank)
 		for d := 0; d < rank; d++ {
-			ranges[loops[d]] = map[string]any{"from": axes[d]}
+			ranges[loops[d]] = map[string]any{"from": plan.axes[d]}
 			outputIdx[d] = loops[d]
-		}
-		// The lifted state lives on the lift's index sets: its Shape names them
-		// and LiftedShapes records their sizes (esm-libraries-spec §4.7.5).
-		flat.LiftedShapes = append(flat.LiftedShapes, LiftedShape{Name: target, Shape: extents})
-		for i := range flat.StateVariables {
-			if flat.StateVariables[i].Name == target {
-				flat.StateVariables[i].Shape = append([]string(nil), axes...)
-			}
 		}
 
 		// Per-cell indexing applies inside each contribution; the `faq` wrapper
 		// goes around their sum (§4.7.5 provenance table).
 		in := eq.contributionList()
 		contributions := make([]Contribution, len(in))
-		grid := liftGrid{loops: loops, axes: axes, species: target}
+		grid := liftGrid{loops: loops, axes: plan.axes, species: target}
 		for k, c := range in {
-			lifted, err := liftRHSToCell(c.Expr, arrayvars, varShapes, grid, true)
+			lifted, err := liftRHSToCell(c.Expr, arrayvars, readShapes, grid, true)
 			if err != nil {
 				return err
 			}
