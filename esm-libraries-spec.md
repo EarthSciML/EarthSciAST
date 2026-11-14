@@ -1508,6 +1508,10 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - **after the pointwise lift** (esm-spec §10.5), where a library performs one, so it sees the
      equations the lift produced.
 
+   A lifted state's tendency is its lifted right-hand side, the `faq` over its index sets, so
+   `dxdt ~ D(Chem.A, t)` over a lifted `Chem.A` resolves to an array. Inside a lifted equation the
+   per-cell read `D(index(Chem.A, ℓ…))` resolves to `index(<that faq>, ℓ…)`.
+
    It runs **before** step 4 derives anything from the equations (`independent_variables`, the
    §6.3.1 subsets), so those derivations see the resolved form. The cross-binding gate is
    `tests/conformance/flatten/cases.json` (the `tendency_resolution`, `merged_tendency` and
@@ -1680,8 +1684,69 @@ the contents are pinned by `tests/conformance/records_per_sample/`. The
 flattened parameter's own `update` keeps the deprecated `from.records_per_sample`
 as written, not resolved.
 
-**Pointwise lift: index sets (normative).** The pointwise lift (esm-spec §10.5) promotes a
-scalar state onto the grid of the operator `makearray` its merged equation carries. A state that
+**Pointwise lift: which states are lifted (normative, from `esm: 2.2.0`).** The lift runs
+after step 3 and before step 3a. It decides a set of lifted states and a grid for each, then
+rewrites their equations.
+
+- **Scalar state.** A state is scalar when it declares no `shape` or `shape: []`. A state is a
+  name in `state_variables` that no bare-LHS equation defines: an ODE state, or a reaction-system
+  species, including one §4.6.1 derives no equation for.
+- **Shape inference.** The lift reads the value axes of an expression, an ordered list of index
+  sets (empty for a scalar) or *undecided*, by these rules (esm-spec §4.3.4):
+  - a number, and `t`, are scalars;
+  - a name is its declared `shape` (`[]` is a scalar); a state already lifted is its lift index
+    sets; a parameter declared without a shape is a scalar; an unknown declared without a shape
+    and defined by a bare-LHS equation has the axes of that definition; any other unknown declared
+    without a shape is a scalar;
+  - a structural `D(e)` (`wrt` `t` or absent) has the axes of `e`;
+  - an elementwise operator (esm-spec §4.3.4) has the union of its operands' axes, in order of
+    first appearance, and is undecided if any operand is;
+  - an `index` whose subscripts are all scalars is a scalar, and is undecided otherwise;
+  - a `faq` with no output indices is a scalar; one whose every output index ranges
+    `{"from": X}` has those index sets in `output_idx` order; any other is undecided;
+  - every other node is undecided.
+
+  A definition is followed once and its answer remembered, so the answer does not depend on the
+  order equations are visited in; a name reached again while its own definition is being read
+  (a cycle) is undecided.
+- **Candidates.** A scalar state is a candidate when its merged equation's right-hand side
+  carries an operator `makearray` (the operator route; its grid follows "Pointwise lift: index
+  sets" below), or when that right-hand side's value axes are decided and not empty (its grid is
+  those index sets, each of which MUST declare a `size`).
+- **The whole component.** A component is a top-level `models` or `reaction_systems` entry with
+  its subsystems: the first segment of a flattened name. When a component has a candidate, every
+  scalar state of the component is lifted. All its candidates MUST name the same set of index
+  sets; when two do not, flatten refuses the document with the binding's dimension-promotion
+  error (`DimensionPromotionError`) naming the component and the two states. The component's grid
+  is its first candidate's, in equation order. A state lifted by the operator route keeps the grid
+  and loops its own `makearray` gives; every other state of the component takes the component's
+  grid, with `lifted_shapes` the declared sizes of its index sets.
+- **Fixpoint.** Lifting a component makes its states arrays, and so can make the right-hand
+  sides of other components arrays. The candidate search repeats, reading each lifted state at its
+  lift index sets, until a pass lifts no new component.
+- **Non-pointwise coupling.** A coupling entry whose `lifting` is present and not `"pointwise"`
+  does not trigger the lift. For such a `variable_map`, its `from` reads as a scalar when the lift
+  decides the candidates of the component its `to` names. Such an `operator_compose` takes the
+  components in its `systems` out of the operator route. Neither exempts a component from a
+  pointwise route: when another read makes one of its states a candidate, the component is lifted,
+  and every array it reads is then read per cell.
+- **The rewrite.** Each lifted state's `D` equation becomes the two `faq` wrappers below, its
+  contributions read per cell. A state lifted by the operator route uses the loop symbols of its
+  `makearray`. Any other uses `_p0, _p1, …` in the order of its index sets, each prefixed with one
+  more `_` until none is a name the equation's left- or right-hand side reads or binds (the rule
+  of esm-spec §9.6.11). A lifted state with no equation is given its `shape` and its
+  `lifted_shapes` entry only.
+- **Initial values.** A lifted state's scalar `default`, and a scalar `ic`, give their value to
+  every cell. An array initial condition on a lifted state is accepted like one on a declared
+  shape: a scoped `ic(Sys.x) ~ F` whose `F` is an array on the state's index sets, and per-cell
+  `initial_conditions` keys (`Sys.x[2]`) in a test or analysis.
+
+The cross-binding gate is the `pointwise_lift` tier of `tests/conformance/flatten/cases.json`
+(`tests/conformance/pointwise_lift/README.md` lists one fixture per route).
+
+**Pointwise lift: index sets (normative).** The operator route of the pointwise lift (esm-spec
+§10.5) promotes a scalar state onto the grid of the operator `makearray` its merged equation
+carries; the other routes take their index sets from the array operands, as above. A state that
 already declares a non-empty `shape` lives on a grid and is not lifted: its equation is left
 as merged, its declared `shape` stands, and it has no `lifted_shapes` entry (pinned by
 `tests/conformance/pointwise_lift/fixtures/lift_skips_shaped_state.esm`). The grid

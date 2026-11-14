@@ -1,0 +1,77 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "name": "Version_2_2_0_PointwiseLift",
+    "description": "Exact version match for a 2.2.0 library. 2.2.0 changes no on-disk shape; it widens the pointwise lift (esm-spec §10.5) to every route by which a grid reaches a 0-D system. Here a [lev] temperature reaches the scalar state Box.c through a variable_map, so Box.c is lifted onto [lev].",
+    "authors": [
+      "ESM Format Team"
+    ],
+    "created": "2026-11-13T00:00:00Z",
+    "tags": [
+      "test",
+      "compatibility"
+    ]
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "shape": [
+            "lev"
+          ],
+          "default": 300.0
+        }
+      },
+      "equations": []
+    },
+    "Box": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 300.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1e-05,
+              "T",
+              "c"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Column.T",
+      "to": "Box.T",
+      "transform": "param_to_var"
+    }
+  ]
+}
