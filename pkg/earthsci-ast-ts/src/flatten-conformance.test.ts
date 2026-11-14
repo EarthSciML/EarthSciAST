@@ -216,8 +216,10 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // written elementwise, a partial translate, the whole component with its
     // untouched states, a fixpoint across components, and a `lifting: "mean"`
     // map that triggers nothing (esm-libraries-spec §4.7.5, "Pointwise lift:
-    // which states are lifted").
-    expect(corpus.cases.length).toBe(65)
+    // which states are lifted"), plus the two beside a non-pointwise route —
+    // a mean `variable_map` into a component another read lifts, and a mean
+    // `operator_compose` whose operator is elementwise.
+    expect(corpus.cases.length).toBe(67)
     // 10 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere,
@@ -227,8 +229,10 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // the three `variable_map_data_fed` shape conflicts
     // (`scalar_source_onto_shaped_target`, `one_source_two_target_shapes`,
     // `shapeless_source_two_target_shapes`), and `lift_two_grids`, a component
-    // whose candidates name different index sets.
-    expect(corpus.refusals.length).toBe(10)
+    // whose candidates name different index sets, with `lift_two_grids_late`
+    // and `lift_two_grids_late_disjoint`, the same seen only once the
+    // component is lifted.
+    expect(corpus.refusals.length).toBe(12)
     expect(corpus.oracle).toContain('earthsci_ast.flatten')
   })
 

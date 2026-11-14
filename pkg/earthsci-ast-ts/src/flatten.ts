@@ -3572,10 +3572,32 @@ export function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntr
     return size
   }
 
-  // Whole-component lift, to a fixpoint.
+  const twoGrids = (
+    comp: string,
+    first: string,
+    grid: string[],
+    other: string,
+    axes: string[],
+  ): void => {
+    const gridSet = new Set(grid)
+    const axesSet = new Set(axes)
+    if (axesSet.size === gridSet.size && [...axesSet].every((a) => gridSet.has(a))) return
+    throw new DimensionPromotionError(
+      `pointwise lift: component '${comp}' would be lifted onto two grids: ` +
+        `state '${first}' onto ${JSON.stringify(grid)} and state '${other}' onto ` +
+        `${JSON.stringify(axes)}`,
+    )
+  }
+
+  // Operator-route plans, as opposed to the component grid a later pass gives.
+  const operatorPlans = new Set(plans.keys())
   const liftedAxes = new Map<string, string[]>()
   const liftedComponents = new Set<string>()
-  for (;;) {
+
+  // Every candidate of every component `wanted` accepts, each read with the
+  // component's own states scalar and every other lifted state at its lift
+  // index sets.
+  const candidatesOf = (wanted: (comp: string) => boolean): Map<string, [string, string[]][]> => {
     const inference = new Map<string, LiftShapes>()
     const found = new Map<string, [string, string[]][]>()
     const record = (comp: string, target: string, axes: string[]): void => {
@@ -3585,35 +3607,34 @@ export function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntr
     }
     for (const [target, eq] of tendencies) {
       const comp = topComponent(target)
-      if (liftedComponents.has(comp)) continue
-      const plan = plans.get(target)
-      if (plan !== undefined) {
-        record(comp, target, plan.axes)
+      if (!wanted(comp)) continue
+      if (operatorPlans.has(target)) {
+        record(comp, target, plans.get(target)!.axes)
         continue
       }
       let shapes = inference.get(comp)
       if (shapes === undefined) {
-        shapes = new LiftShapes(variables, defs, liftedAxes, masks.get(comp) ?? new Set())
+        const others = new Map<string, string[]>()
+        for (const [s, a] of liftedAxes) if (topComponent(s) !== comp) others.set(s, a)
+        shapes = new LiftShapes(variables, defs, others, masks.get(comp) ?? new Set())
         inference.set(comp, shapes)
       }
       const axes = shapes.exprAxes(eq.rhs)
       if (axes !== undefined && axes.length > 0) record(comp, target, axes)
     }
+    return found
+  }
+
+  // Whole-component lift, to a fixpoint.
+  // The candidate that gave each lifted component its grid.
+  const grids = new Map<string, [string, string[]]>()
+  for (;;) {
+    const found = candidatesOf((comp) => !liftedComponents.has(comp))
     if (found.size === 0) break
     for (const [comp, candidates] of found) {
       const [first, grid] = candidates[0]
-      const gridSet = new Set(grid)
-      for (const [other, axes] of candidates.slice(1)) {
-        const axesSet = new Set(axes)
-        if (axesSet.size !== gridSet.size || [...axesSet].some((a) => !gridSet.has(a))) {
-          throw new DimensionPromotionError(
-            `pointwise lift: component '${comp}' would be lifted onto two grids: ` +
-              `state '${first}' onto ${JSON.stringify(grid)} and state '${other}' onto ` +
-              `${JSON.stringify(axes)}`,
-          )
-        }
-      }
-      if (gridSet.size !== grid.length) {
+      for (const [other, axes] of candidates.slice(1)) twoGrids(comp, first, grid, other, axes)
+      if (new Set(grid).size !== grid.length) {
         throw new DimensionPromotionError(
           `pointwise lift: state '${first}' would be lifted onto ${JSON.stringify(grid)}, ` +
             `which names one index set twice`,
@@ -3629,9 +3650,19 @@ export function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntr
         liftedAxes.set(state, plan.axes)
       }
       liftedComponents.add(comp)
+      grids.set(comp, [first, grid])
     }
   }
   if (liftedAxes.size === 0) return
+
+  // A state can become a candidate only after its component was lifted, when
+  // a later pass lifts a component it reads. Search the lifted components'
+  // candidates once more with every lift final, so the answer does not depend
+  // on which pass lifted what.
+  for (const [comp, candidates] of candidatesOf((comp) => liftedComponents.has(comp))) {
+    const [first, grid] = grids.get(comp)!
+    for (const [other, axes] of candidates) twoGrids(comp, first, grid, other, axes)
+  }
 
   // The lifted states live on the lift's index sets: each `shape` names them
   // and `liftedShapes` records their sizes (esm-libraries-spec §4.7.5).
