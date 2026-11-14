@@ -13,9 +13,10 @@
 //! vertex reductions over source x target x vertex x vertex and refused ("a
 //! rank-0 output's promoted box is too large").
 //!
-//! Here the source grid is 200 x 200 cells and the target 15 x 15, so that
-//! promoted box is 40 000 x 225 x 4 x 4 = 144 000 000 elements, over the
-//! budget. Driven, the narrow phase runs over the candidate pairs only.
+//! In the large case the source grid is 200 x 200 cells and the target
+//! 15 x 15, so that promoted box is 40 000 x 225 x 4 x 4 = 144 000 000
+//! elements, over the budget. Driven, the narrow phase runs over the
+//! candidate pairs only.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -148,29 +149,12 @@ fn bits(p: &EsmProblem, name: &str) -> Vec<u64> {
         .collect()
 }
 
-#[test]
-fn a_parameter_ring_stack_gate_drives_the_narrow_phase_under_both_compilers() {
-    let (sx, sy, tx, ty) = (200usize, 200usize, 15usize, 15usize);
-    let doc = doc(sx, sy, tx, ty);
-
-    let (native, _) = build(&doc, Compiler::Native);
-    let (interp, interp_visits) = build(&doc, Compiler::Interpreter);
-
-    // The interpreter visits the broad phase's candidate pairs only, not the
-    // 9 000 000-pair product: the gate is driven.
-    let product = (sx * sy * tx * ty) as u64;
-    assert!(
-        interp_visits > 0 && interp_visits < product / 100,
-        "{interp_visits} visits against a {product}-pair product: the ring-stack gate is not driven"
-    );
-
-    // Native agrees with the reference evaluator bit for bit.
-    assert_eq!(bits(&native, "A_ij"), bits(&interp, "A_ij"));
-    assert_eq!(bits(&native, "A_j"), bits(&interp, "A_j"));
-
-    // Both grids tile [0, L]^2, so every target's covered area is its own.
+/// The covered area of every target cell (both grids tile `[0, L]^2`, so it
+/// is the cell's own area), one source cell's share of the first target, and
+/// a pruned pair, which holds the identity.
+fn check_areas(p: &EsmProblem, sx: usize, sy: usize, tx: usize, ty: usize) {
     let area = (L / tx as f64) * (L / ty as f64);
-    let a_j: Vec<f64> = observed_field(&native, "A_j")
+    let a_j: Vec<f64> = observed_field(p, "A_j")
         .expect("A_j")
         .iter()
         .copied()
@@ -182,9 +166,8 @@ fn a_parameter_ring_stack_gate_drives_the_narrow_phase_under_both_compilers() {
             "A_j[{j}] = {a}, want {area}"
         );
     }
-    // One source cell's share of the first target, and a pruned pair.
     // Row-major over (src_cells, tgt_cells).
-    let a_ij: Vec<f64> = observed_field(&native, "A_ij")
+    let a_ij: Vec<f64> = observed_field(p, "A_ij")
         .expect("A_ij")
         .iter()
         .copied()
@@ -200,4 +183,39 @@ fn a_parameter_ring_stack_gate_drives_the_narrow_phase_under_both_compilers() {
         0.0,
         "a pruned pair is the identity"
     );
+}
+
+/// The gate is driven under both compilers, which agree bit for bit.
+#[test]
+fn a_parameter_ring_stack_gate_is_driven_and_both_compilers_agree() {
+    let (sx, sy, tx, ty) = (12usize, 12usize, 3usize, 3usize);
+    let doc = doc(sx, sy, tx, ty);
+
+    let (native, _) = build(&doc, Compiler::Native);
+    let (interp, interp_visits) = build(&doc, Compiler::Interpreter);
+
+    // The interpreter visits the broad phase's candidate pairs only (the
+    // counter moves only on a driven gate). Per axis, the 12 source columns
+    // each meet their own target column, and the 4 that touch an interior
+    // target edge (the closed predicate admits edge contact) meet one more:
+    // 16 x 16 = 256 candidate pairs of the 1296-pair product, walked once by
+    // A_ij and once by A_j.
+    assert_eq!(
+        interp_visits,
+        2 * 256,
+        "the ring-stack gate is not driven over its candidate pairs"
+    );
+    assert_eq!(bits(&native, "A_ij"), bits(&interp, "A_ij"));
+    assert_eq!(bits(&native, "A_j"), bits(&interp, "A_j"));
+    check_areas(&native, sx, sy, tx, ty);
+}
+
+/// At a size whose dense narrow phase does not fit, `native` builds it over
+/// the candidate pairs (it used to refuse: "a rank-0 output's promoted box is
+/// too large").
+#[test]
+fn native_compiles_a_ring_stack_gate_too_large_to_run_dense() {
+    let (sx, sy, tx, ty) = (200usize, 200usize, 15usize, 15usize);
+    let (native, _) = build(&doc(sx, sy, tx, ty), Compiler::Native);
+    check_areas(&native, sx, sy, tx, ty);
 }
