@@ -110,3 +110,56 @@ fn wrong_arity_neg_is_left_alone_and_refused() {
         assert!(msg.contains("neg"), "{msg}");
     }
 }
+
+/// A `broadcast` of `neg` with two operands is NOT rewritten to `fn: "-"`
+/// (which would silently mean subtraction): `neg` is strictly unary, so the
+/// load refuses it with the arity error it always had.
+#[test]
+fn wrong_arity_broadcast_neg_is_left_alone_and_refused() {
+    let json = r#"{
+      "esm": "2.0.0",
+      "metadata": {"name": "bad_broadcast_neg"},
+      "models": {"M": {
+        "variables": {"a": {"type": "unknown", "units": "1", "default": 0.0}},
+        "equations": [{
+          "lhs": {"op": "D", "args": ["a"], "wrt": "t"},
+          "rhs": {"op": "broadcast", "fn": "neg", "args": ["a", "a"]}
+        }]
+      }}
+    }"#;
+    let refused = match earthsci_ast::load_string(json) {
+        Err(e) => e.to_string(),
+        Ok(file) => earthsci_ast::validate(&file)
+            .structural_errors
+            .iter()
+            .map(|e| format!("{} {}", e.code, e.message))
+            .collect::<Vec<_>>()
+            .join("; "),
+    };
+    assert!(
+        refused.contains("'neg'") && refused.contains("got 2"),
+        "a two-operand broadcast of neg must be refused for its arity: {refused}"
+    );
+}
+
+/// The reference-preserving emit path applies the same wire boundary as a
+/// load: the deprecated spellings are rewritten, so neither reaches the
+/// emitted document.
+#[test]
+fn emit_document_rewrites_deprecated_ops() {
+    let path =
+        crate::common::repo_fixture("conformance/scalar_operator_semantics/fixtures/pow_alias.esm");
+    let raw: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let doc = earthsci_ast::extension::lower_expression_templates::emit_document(
+        &raw,
+        path.parent().unwrap(),
+    )
+    .expect("emit");
+    assert_eq!(
+        rhs_of(&doc, "PowAlias", "pow_power"),
+        &serde_json::json!({"op": "^", "args": ["two", 3]})
+    );
+    let mut tags = Vec::new();
+    op_tags(&doc, &mut tags);
+    assert!(!tags.iter().any(|t| t == "pow" || t == "neg"), "{tags:?}");
+}

@@ -287,6 +287,9 @@ diagnostic_code_registry! {
     /// wire boundary rewrites each to its replacement and reports this once
     /// per document, naming every rewritten node.
     DEPRECATED_OP = "deprecated_op";
+    /// A document spells `faq` while declaring esm below 1.1.0, where `faq`
+    /// arrives (esm-spec §2.2.4).
+    FAQ_VERSION_TOO_OLD = "faq_version_too_old";
 
     // ---- subsystem refs: §4.7 reference resolution (`ref_loading.rs`) ----
     //

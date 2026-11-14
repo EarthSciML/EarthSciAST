@@ -336,9 +336,19 @@ fn canon_sub(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if node.args.len() == 2 {
         let b = node.args.pop().unwrap();
         let a = node.args.pop().unwrap();
-        // -(0, x) -> -(x)
+        // `0 - x` is NOT `-x` when x is +0.0 (`0 - 0.0` is +0.0, `-(0.0)` is
+        // -0.0), so only a literal subtrahend folds, to the exact difference:
+        // an integer when both are integers, else the IEEE float difference.
+        // Any other `-(0, x)` stays binary (RFC §5.4.7).
         if is_zero_any(&a) {
-            return canon_neg_value(b);
+            match (&a, &b) {
+                (Expr::Integer(_), Expr::Integer(i)) => return Ok(Expr::Integer(-i)),
+                (Expr::Integer(_) | Expr::Number(_), Expr::Number(f)) => {
+                    return Ok(Expr::Number(0.0 - f));
+                }
+                (Expr::Number(_), Expr::Integer(i)) => return Ok(Expr::Number(0.0 - *i as f64)),
+                _ => {}
+            }
         }
         // -(x, 0) -> x (type-preserving: float-zero with int x promotes)
         if is_zero_any(&b) {
@@ -1088,8 +1098,18 @@ mod tests {
         let unary = r#"{"args":["x"],"op":"-"}"#;
         assert_eq!(canonical_json(&op("neg", vec![x()])).unwrap(), unary);
         assert_eq!(canonical_json(&op("-", vec![x()])).unwrap(), unary);
+        // `-(0, x)` is not `-(x)` when x is +0.0, so it stays binary; a
+        // literal subtrahend folds to the exact difference.
         let sub = op("-", vec![Expr::Integer(0), x()]);
-        assert_eq!(canonical_json(&sub).unwrap(), unary);
+        assert_eq!(
+            canonical_json(&sub).unwrap(),
+            r#"{"args":[0,"x"],"op":"-"}"#
+        );
+        let zero_sub = |a: Expr, b: Expr| canonical_json(&op("-", vec![a, b])).unwrap();
+        assert_eq!(zero_sub(Expr::Integer(0), Expr::Integer(5)), "-5");
+        assert_eq!(zero_sub(Expr::Number(0.0), Expr::Integer(5)), "-5.0");
+        assert_eq!(zero_sub(Expr::Integer(0), Expr::Number(0.0)), "0.0");
+        assert_eq!(zero_sub(Expr::Number(0.0), Expr::Number(-0.0)), "0.0");
         // Double negation collapses in either spelling, and mixed.
         for (o, i) in [("neg", "neg"), ("-", "-"), ("neg", "-"), ("-", "neg")] {
             let e = op(o, vec![op(i, vec![x()])]);

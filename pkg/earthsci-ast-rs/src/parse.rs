@@ -2091,8 +2091,10 @@ struct OpScan {
     faq: Option<String>,
     /// See [`AuthoredFacts`].
     op_with_units: Option<String>,
-    /// Every node the walk rewrote from a deprecated spelling, as
-    /// `(path, deprecated spelling)`, in pre-order.
+    /// Every node the walk rewrote from a deprecated spelling, as its RFC 6901
+    /// JSON pointer and the spelling it had (`neg`, `pow` or `broadcast fn
+    /// neg`), in pre-order: the warning names each as `<pointer> (<spelling>)`,
+    /// the format every binding uses.
     deprecated: Vec<(String, &'static str)>,
 }
 
@@ -2111,9 +2113,15 @@ fn rewrite_deprecated_op(
         return;
     };
     if op == "broadcast" {
-        if map.get("fn").and_then(|v| v.as_str()) == Some("neg") {
+        // `neg` is strictly unary, so a broadcast of it with any other operand
+        // count keeps its arity error (`invalid_broadcast_fn`).
+        let unary = map
+            .get("args")
+            .and_then(|v| v.as_array())
+            .is_some_and(|args| args.len() == 1);
+        if unary && map.get("fn").and_then(|v| v.as_str()) == Some("neg") {
             map.insert("fn".to_string(), serde_json::Value::from("-"));
-            out.push((at.to_string(), "neg"));
+            out.push((at.pointer(), "broadcast fn neg"));
         }
         return;
     }
@@ -2128,7 +2136,7 @@ fn rewrite_deprecated_op(
         });
     if well_formed {
         map.insert("op".to_string(), serde_json::Value::from(replacement));
-        out.push((at.to_string(), name));
+        out.push((at.pointer(), name));
     }
 }
 
@@ -2138,7 +2146,7 @@ fn deprecated_op_warning(rewritten: &[(String, &'static str)]) -> Option<String>
     (!rewritten.is_empty()).then(|| {
         let sites: Vec<String> = rewritten
             .iter()
-            .map(|(path, op)| format!("{} ({op})", if path.is_empty() { "/" } else { path }))
+            .map(|(pointer, spelling)| format!("{pointer} ({spelling})"))
             .collect();
         format!(
             "deprecated_op: the deprecated op spellings `neg` (unary `-`) and `pow` (`^`) \
@@ -2220,7 +2228,9 @@ mod tests {
             "c": {"op": "broadcast", "fn": "neg", "args": ["y"]},
             "d": {"op": "neg", "args": ["x", "y"]},
             "e": {"op": "pow", "args": ["x"]},
-            "f": {"op": "broadcast", "fn": "pow", "args": ["x", 2]}
+            "f": {"op": "broadcast", "fn": "pow", "args": ["x", 2]},
+            "g": {"op": "broadcast", "fn": "neg", "args": ["x", "y"]},
+            "h/i~": {"op": "neg", "args": ["x"]}
         });
         let mut scan = OpScan::default();
         scan_document_ops(&mut v, &crate::json_visit::JsonPath::Root(""), &mut scan);
@@ -2236,6 +2246,10 @@ mod tests {
             v["f"]["fn"], "pow",
             "only `fn: neg` is a deprecated broadcast fn"
         );
+        assert_eq!(
+            v["g"]["fn"], "neg",
+            "a two-operand broadcast of neg keeps its arity error"
+        );
         let mut sites = scan.deprecated.clone();
         sites.sort();
         assert_eq!(
@@ -2244,12 +2258,19 @@ mod tests {
                 ("/a".to_string(), "neg"),
                 ("/b".to_string(), "pow"),
                 ("/b/args/0".to_string(), "neg"),
-                ("/c".to_string(), "neg"),
+                ("/c".to_string(), "broadcast fn neg"),
+                ("/h~1i~0".to_string(), "neg"),
             ]
         );
         let warning = deprecated_op_warning(&scan.deprecated).expect("one warning");
         assert!(warning.starts_with("deprecated_op: "), "{warning}");
-        for site in ["/a (neg)", "/b (pow)", "/b/args/0 (neg)", "/c (neg)"] {
+        for site in [
+            "/a (neg)",
+            "/b (pow)",
+            "/b/args/0 (neg)",
+            "/c (broadcast fn neg)",
+            "/h~1i~0 (neg)",
+        ] {
             assert!(warning.contains(site), "{warning} lacks {site}");
         }
         assert!(deprecated_op_warning(&[]).is_none());

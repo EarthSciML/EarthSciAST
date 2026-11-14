@@ -45,6 +45,8 @@ mod build_time_computed_gathers;
 mod build_time_tape_route;
 #[path = "cadence_conformance.rs"]
 mod cadence_conformance;
+#[path = "canonical_conformance.rs"]
+mod canonical_conformance;
 #[path = "classification_conformance.rs"]
 mod classification_conformance;
 #[path = "cli_data_source_ingest.rs"]

@@ -397,9 +397,9 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // The word spelling of `^`, folded through the `^` kernel itself.
         "pow" => eval_arith("^", &node.args, ctx),
 
-        // Canonical unary negation: `canonicalize.rs` emits `neg`, so a
-        // canonicalized expression can reach this oracle, and the vectorized
-        // overlay already handles it (`vec_negate` / `affine_terms`). Route it
+        // The deprecated word spelling of unary `-` (esm-spec §4.2): the loader
+        // rewrites it away, but an expression built in code can still reach
+        // this oracle, and the vectorized overlay already handles it (`vec_negate` / `affine_terms`). Route it
         // through `negate` — the same primitive the unary-minus arm of
         // `eval_arith` uses — so oracle and overlay agree. Unary only; a
         // non-unary `neg` is malformed ⇒ the NaN sentinel.
