@@ -132,6 +132,23 @@ REMOVED_OPS: dict[str, str] = {
     "argmax": "2.0.0",
 }
 
+#: Ops the format has DEPRECATED, each with its replacement (esm-spec §4.2
+#: "Deprecated ops"). A deprecated op still loads: the loader rewrites it to the
+#: replacement at the wire boundary (``parse.rewrite_deprecated_ops``) and warns
+#: ``deprecated_op``. ``neg`` is the word spelling of unary ``-`` and ``pow`` of
+#: ``^``; both stay in the evaluable core so an AST built in code still runs.
+DEPRECATED_OPS: dict[str, str] = {
+    "neg": "-",
+    "pow": "^",
+}
+
+#: The operand count a deprecated op must have to be rewritten; a use with
+#: any other count is left as written, so its arity error is unchanged.
+DEPRECATED_OP_ARITY: dict[str, int] = {
+    "neg": 1,
+    "pow": 2,
+}
+
 #: The closed set of tier labels.
 TIERS: frozenset[str] = frozenset({"core", "rewrite_target"})
 
@@ -211,15 +228,12 @@ _ALL: tuple[OpSpec, ...] = (
         "arithmetic",
         "unary",
         arity_bounds=(1, 1),
-        note="explicit unary negation. NOT a spelling alias of `-`: `-` is variadic "
-        "(1..n operands) while `neg` is strictly unary, so the two carry "
-        "different arity contracts. `canonicalize()` REWRITES a 1-operand `-` "
-        "into `neg`, so a canonicalized document contains `neg` nodes and every "
-        "consumer (evaluator, display, broadcast `fn` resolution) must accept "
-        "it. Registered in the Rust (`Arity::Exact(1)`) and Julia "
-        "(`category=:arithmetic, arity=1:1`) registries too; Python's omission "
-        "was a binding-local gap that made its own canonicalizer's output "
-        "unevaluable.",
+        note='DEPRECATED word spelling of unary `-` (esm-spec §4.2 "Deprecated '
+        'ops"; see DEPRECATED_OPS): the loader rewrites a 1-operand `neg` to `-` '
+        "with a `deprecated_op` warning, and `canonicalize()` writes unary `-`. "
+        "Kept registered, strictly unary, so an AST built in code still "
+        "evaluates. Not a spelling alias of `-`: `-` is variadic (1..n operands) "
+        "while `neg` is strictly unary.",
     ),
     OpSpec(
         "*",
@@ -231,7 +245,14 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("/", "arithmetic", "binary", arity_bounds=(2, 2)),
     OpSpec("^", "arithmetic", "binary", arity_bounds=(2, 2), note="power"),
     OpSpec("**", "arithmetic", "binary", alias_of="^", note="Python-style power spelling"),
-    OpSpec("pow", "arithmetic", "binary", alias_of="^", note="word spelling of power"),
+    OpSpec(
+        "pow",
+        "arithmetic",
+        "binary",
+        alias_of="^",
+        note="DEPRECATED word spelling of power (esm-spec §4.2; see DEPRECATED_OPS): "
+        "the loader rewrites it to `^` with a `deprecated_op` warning.",
+    ),
     # --- elementary functions (esm-spec §4.2 Elementary Functions) ---
     OpSpec("exp", "elementary", "unary", arity_bounds=(1, 1)),
     OpSpec("log", "elementary", "unary", arity_bounds=(1, 1), note="natural log"),

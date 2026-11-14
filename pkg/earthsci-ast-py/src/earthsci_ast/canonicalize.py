@@ -119,7 +119,11 @@ def _canon_op(node: ExprNode) -> Expr:
     if work.op == "/":
         return _canon_div(work)
     if work.op == "neg":
+        # Deprecated word spelling of unary ``-`` (esm-spec §4.2 "Deprecated ops").
         return _canon_neg(work)
+    if work.op == "pow" and len(work.args) == 2:
+        # Deprecated word spelling of ``^``: the canonical form writes ``^``.
+        return replace(work, op="^")
     return work
 
 
@@ -197,9 +201,10 @@ def _canon_neg_value(arg: Expr) -> Expr:
         return -arg
     if isinstance(arg, float):
         return -arg
-    if isinstance(arg, ExprNode) and arg.op == "neg" and len(arg.args) == 1:
+    if isinstance(arg, ExprNode) and arg.op in ("-", "neg") and len(arg.args) == 1:
         return arg.args[0]
-    return ExprNode(op="neg", args=[arg])
+    # Canonical negation is unary ``-`` (RFC §5.4.7); ``neg`` is deprecated.
+    return ExprNode(op="-", args=[arg])
 
 
 def _flatten_same_op(args: list[Expr], op: str) -> list[Expr]:
