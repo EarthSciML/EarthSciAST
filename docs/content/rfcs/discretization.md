@@ -843,7 +843,7 @@ compares node kind first, value second; neither side of an
 integer/float pair can be substituted for the other without changing
 the canonical serialization.
 
-#### 5.4.7 Canonicalization for `-`, `/`, unary `neg` (resolves gt-adhm M6)
+#### 5.4.7 Canonicalization for `-`, `/`, unary `-` (resolves gt-adhm M6)
 
 §5.4.2 and §5.4.3 specify ordering and flattening for `+` and `*` only.
 This subsection pins the canonical form for the remaining arithmetic
@@ -859,16 +859,23 @@ canonicalize(c)))`, not to `+(a, -b, c)`. Identity rules: `-(x, 0)` →
 algebraic rewrite, not a canonical-form operation; see §5.4 closing
 paragraph).
 
-**Unary `-` (unary negation, `neg`).** The spec permits both a dedicated
-`{op:"neg", args:[x]}` node and a binary `-` applied with a literal
-zero minuend (`{op:"-", args:[0, x]}`). The canonical form picks **the
-dedicated `neg` node** when the operand is not itself a literal: any
-`{op:"-", args:[0, x]}` canonicalizes to `{op:"neg", args:[x]}`. A
-numeric literal that happens to be negative is kept as the literal
-itself (no `neg` wrapper around numerics): `{op:"neg", args:[5]}`
-canonicalizes to `-5` (a literal integer or float node with negative
-value). Identity rules: `neg(0) → 0`, `neg(0.0) → 0.0`,
-`neg(neg(x)) → x`.
+**Unary `-` (unary negation).** Negation has three input spellings:
+the unary `{op:"-", args:[x]}`, a binary `-` with a literal zero minuend
+(`{op:"-", args:[0, x]}`), and the deprecated word spelling
+`{op:"neg", args:[x]}` (esm-spec §4.2 "Deprecated ops"; a loader has
+already rewritten it to unary `-`, but the canonicalizer accepts it too).
+The canonical form is **the unary `-` node** when the operand is not
+itself a literal: each of the three canonicalizes to
+`{op:"-", args:[x]}`. A numeric literal that happens to be negative is
+kept as the literal itself (no wrapper around numerics): `-(5)` and
+`neg(5)` canonicalize to `-5` (a literal integer or float node with
+negative value). Identity rules: `-(0) → 0`, `-(0.0) → 0.0`,
+`-(-(x)) → x` (whichever spelling either negation uses).
+
+*History.* Until the deprecation of `neg` the canonical form was the
+dedicated `{op:"neg", args:[x]}` node. The document notation writes
+negation as `-x` and has no separate surface for `neg`, so the
+canonical form now uses the spelling the notation prints.
 
 **Binary `/`.** `{op:"/", args:[a, b]}` is **kept as a distinct op**;
 it is NOT rewritten to `*(a, inv(b))` (no `inv` node exists in the
@@ -879,11 +886,10 @@ when `x` is not itself `0`; `/(0, 0)` is undefined — the canonicalizer
 emits `E_CANONICAL_DIVBY_ZERO` and aborts). `/(x, x)` is NOT simplified
 to `1`.
 
-**No new AST ops.** `neg` is already permitted by the base spec's op
-taxonomy; this subsection pins its role. No new node types are
-introduced. Bindings that internally represent unary minus as a binary
-`-` with implicit `0` minuend MUST serialize as `{op:"neg", args:[x]}`
-on the canonical wire.
+**No new AST ops.** No new node types are introduced. Bindings that
+internally represent unary minus as a binary `-` with implicit `0`
+minuend, or as `neg`, MUST serialize it as `{op:"-", args:[x]}` on the
+canonical wire. Likewise the deprecated `pow` canonicalizes to `^`.
 
 #### 5.4.8 Worked example
 

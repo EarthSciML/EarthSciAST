@@ -745,7 +745,36 @@ declared version (§4.7).
 | `*` | n-ary | `{"op": "*", "args": ["k", "A", "B"]}` | k·A·B |
 | `/` | binary | `{"op": "/", "args": ["a", "b"]}` | a / b |
 | `^` | binary | `{"op": "^", "args": ["x", 2]}` | x² |
-| `pow` | binary | `{"op": "pow", "args": ["x", 2]}` | x² — the word spelling of `^`, with the same meaning and the same value |
+| `pow` | binary | `{"op": "pow", "args": ["x", 2]}` | **Deprecated** (below): the word spelling of `^`, rewritten to `^` on load |
+| `neg` | unary | `{"op": "neg", "args": ["a"]}` | **Deprecated** (below): the word spelling of unary `-`, rewritten to `-` on load |
+
+**Deprecated ops (`deprecated_op`, normative).** Two core spellings are redundant
+and are **deprecated**: `neg`, the word spelling of unary `-`, and `pow`, the word
+spelling of `^`. Each means exactly what its replacement means. They are still
+loaded, but a loader rewrites them at the wire boundary, on every document a load
+touches and in the same pass as the `removed_op` check above:
+
+| Deprecated | Rewritten to |
+|---|---|
+| `{"op": "neg", "args": [x]}` | `{"op": "-", "args": [x]}` (unary minus) |
+| `{"op": "pow", "args": [x, n]}` | `{"op": "^", "args": [x, n]}` |
+| `{"op": "broadcast", "fn": "neg", …}` | the same node with `"fn": "-"` |
+
+Only the `op` (or the `broadcast` `fn`) changes; every other field of the node is
+kept. A node with the wrong number of operands for its spelling (`neg` with other
+than one, `pow` with other than two) is NOT rewritten, so it is refused with the
+arity error it would always have had. A document that spelled either one loads with
+one **warning** per document, `deprecated_op`, naming the JSON pointer of every
+rewritten node; it is not an error and changes no value. After the rewrite neither
+spelling survives in the loaded document, so a binding that emits the document
+writes `-` and `^`, and the canonical form (`docs/content/rfcs/discretization.md`
+§5.4.7) never contains `neg` or `pow`. A binding's evaluator MAY still accept a
+`neg` or `pow` node built in code. Both spellings are scheduled for removal in a
+later major version, when they join the `removed_op` list. Fixtures:
+`tests/conformance/scalar_operator_semantics/fixtures/pow_alias.esm` and the
+`negated` observed of `scalar_operator_semantics.esm` (each evaluates to the value
+of its replacement), and the `fn: "neg"` broadcast of
+`tests/fixtures/faq/27_broadcast_unary.esm`.
 
 #### Calculus
 
@@ -787,7 +816,7 @@ by structural recursion, and by nothing else:
 | a name carrying a defining equation `y ~ g` (an **observed** or algebraic unknown) | the resolution of `g` — the **chain rule**, applied by substituting the definition |
 | a name that does not vary with `t` (a **parameter**) | `0` |
 | a numeric **literal** | `0` |
-| `+`, unary and binary `-`, `neg`, n-ary `*`, binary `/` | the operands' resolutions combined by the sum, product and quotient rules |
+| `+`, unary and binary `-`, n-ary `*`, binary `/` | the operands' resolutions combined by the sum, product and quotient rules |
 | anything else | **nothing** — see the refusal rule below |
 
 Two consequences are worth stating. Resolution **recurses**: a tendency may itself name another
@@ -1723,7 +1752,7 @@ The `index` base is a const array when it is **either** a `const` node written i
 
 **Meaning.** `{ "op": "broadcast", "fn": F, "args": A }` denotes exactly what `{ "op": F, "args": A }` denotes, applied element-wise over the broadcast operands. That equivalence is the whole definition, and it settles the ONE-OPERAND case: a `broadcast` with a single operand applies `fn` **unarily**. `broadcast(fn: "-", [x])` is `-x`, `broadcast(fn: "log", [x])` is `log(x)`, and `broadcast(fn: "+", [x])` is `x` — for the same reason the bare `{"op": "+", "args": [x]}` node is `x`, because `+` is n-ary from one operand. A one-operand `broadcast` MUST NOT be treated as the identity on its operand: that discards `fn`, and a binding that folds `args` through a binary kernel degenerates to exactly that on a single-element list.
 
-The `fn` value must name a **scalar operator** — one whose meaning is a pointwise map from scalar operands to a scalar result: the §4.2 arithmetic (`+ - * / ^ neg`), elementary functions (`exp log log10 sqrt abs sign floor ceil`, the trigonometric and hyperbolic families, `atan2`, `min`, `max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name an op whose meaning is not pointwise — the array/tensor ops (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and `broadcast` itself) or the form ops (`D`, `ic`, `Pre`, `const`, `true`, `false`, `enum`, `apply_expression_template`).
+The `fn` value must name a **scalar operator** — one whose meaning is a pointwise map from scalar operands to a scalar result: the §4.2 arithmetic (`+ - * / ^`; a single-operand `-` is unary negation, and the deprecated `neg` is rewritten to `-` on load), elementary functions (`exp log log10 sqrt abs sign floor ceil`, the trigonometric and hyperbolic families, `atan2`, `min`, `max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name an op whose meaning is not pointwise — the array/tensor ops (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and `broadcast` itself) or the form ops (`D`, `ic`, `Pre`, `const`, `true`, `false`, `enum`, `apply_expression_template`).
 
 **Validation.** A schema-valid `broadcast` node must carry an `fn` naming a scalar operator as defined above, applied to a number of `args` that operator admits under its §4.2 arity (so `broadcast(fn: "min", [x])` and `broadcast(fn: "sin", [a, b])` are rejected for exactly the reason the bare `min(x)` and `sin(a, b)` nodes are). Bindings **MUST emit an `invalid_broadcast_fn` error** when this invariant is violated — including when `fn` is absent, for which there is no default; **loading MUST fail**. An operator name that no binding can resolve must never reach an evaluator, because the failure is otherwise silent.
 
