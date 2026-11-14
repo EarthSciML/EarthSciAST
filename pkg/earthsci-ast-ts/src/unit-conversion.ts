@@ -698,10 +698,10 @@ const SUPERSCRIPT_CLASS = `[${SUPERSCRIPT_DIGITS}${SUPERSCRIPT_MINUS}]`
  * ASCII grammar the parser implements. A pure SPELLING normalization — every
  * target already exists in {@link UNIT_TABLE}, no unit is invented here:
  *
- *   - SUPERSCRIPT EXPONENTS `⁰¹²³⁴⁵⁶⁷⁸⁹` and superscript minus `⁻` become an
- *     explicit `^` exponent: `W/m²` → `W/m^2`, `cm³` → `cm^3`, `s⁻¹` → `s^-1`.
- *     A whole superscript RUN maps to one exponent, so `m⁻²` is `m^-2` and not
- *     `m^-^2`.
+ *   - SUPERSCRIPT EXPONENTS `⁰¹²³⁴⁵⁶⁷⁸⁹`, optionally led by the superscript
+ *     minus `⁻`, become an explicit `^` exponent: `W/m²` → `W/m^2`,
+ *     `cm³` → `cm^3`, `s⁻¹` → `s^-1`. A minus not followed by superscript
+ *     digits is not rewritten, and `m²⁻¹` is two exponents, not `m^-21`.
  *   - MIDDOT `·` (U+00B7) and DOT OPERATOR `⋅` (U+22C5) → `*`, the two spellings
  *     of multiplication the corpus uses (`J/(kg·K)`, `kg⋅m/s`).
  *   - U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU → `u` (`μg` → `ug`)
@@ -718,20 +718,27 @@ function normalizeUnitString(s: string): string {
   // Ω GREEK CAPITAL OMEGA and Ω OHM SIGN are visually identical and
   // both occur in the wild; fold each to the ASCII `Ohm` the table registers.
   if (!new RegExp(`[µμ°·⋅ΩΩ]|${SUPERSCRIPT_CLASS}`, 'u').test(s)) return s
-  return s
-    .replace(/°C/g, 'degC')
-    .replace(/°F/g, 'degF')
-    .replace(/[µμ]/g, 'u')
-    .replace(/[ΩΩ]/g, 'Ohm')
-    .replace(/[·⋅]/g, '*')
-    .replace(new RegExp(`${SUPERSCRIPT_CLASS}+`, 'gu'), (run) => {
-      const sign = run.includes(SUPERSCRIPT_MINUS) ? '-' : ''
-      const digits = [...run]
-        .filter((c) => c !== SUPERSCRIPT_MINUS)
-        .map((c) => String(SUPERSCRIPT_DIGITS.indexOf(c)))
-        .join('')
-      return `^${sign}${digits}`
-    })
+  return (
+    s
+      .replace(/°C/g, 'degC')
+      .replace(/°F/g, 'degF')
+      .replace(/[µμ]/g, 'u')
+      .replace(/[ΩΩ]/g, 'Ohm')
+      .replace(/[·⋅]/g, '*')
+      // A run of superscript DIGITS is one exponent (`m¹²` is `m^12`), and a
+      // superscript minus is rewritten only together with the digits right after
+      // it (`m⁻³` is `m^-3`). A minus anywhere else stays an unexpected
+      // character, so `s⁻1` does not resolve, and `m²⁻¹` is the two exponents
+      // `m^2^-1`, not one exponent `-21` (esm-spec §4.8.2, Lean `normalize`).
+      .replace(new RegExp(`${SUPERSCRIPT_MINUS}?[${SUPERSCRIPT_DIGITS}]+`, 'gu'), (run) => {
+        const sign = run.startsWith(SUPERSCRIPT_MINUS) ? '-' : ''
+        const digits = [...run]
+          .filter((c) => c !== SUPERSCRIPT_MINUS)
+          .map((c) => String(SUPERSCRIPT_DIGITS.indexOf(c)))
+          .join('')
+        return `^${sign}${digits}`
+      })
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -962,25 +969,6 @@ const spellSymbolOk = (s: string): boolean =>
   s === '%' || (/^[A-Za-z0-9_]+$/.test(s) && !isDigitRun(s))
 
 /**
- * A superscript minus that does not start a superscript exponent: one with no
- * superscript digit after it, or one right after another superscript
- * character. The §4.8.2 rewrite reads `⁻` only at the start of a run followed
- * by superscript digits (Lean `normalize`), so Lean leaves such a string
- * unparsed, while {@link normalizeUnitString} folds the whole run into one
- * exponent (`m²⁻¹` → `m^-21`).
- */
-function strandedSuperscriptMinus(unit: string): boolean {
-  const cs = [...unit]
-  const sup = (c: string | undefined): boolean =>
-    c !== undefined && (SUPERSCRIPT_DIGITS.includes(c) || c === SUPERSCRIPT_MINUS)
-  return cs.some(
-    (c, k) =>
-      c === SUPERSCRIPT_MINUS &&
-      (sup(cs[k - 1]) || cs[k + 1] === undefined || !SUPERSCRIPT_DIGITS.includes(cs[k + 1])),
-  )
-}
-
-/**
  * The canonical spelling of a unit string (esm-spec §4.8.2), a port of the Lean
  * `Esm.Units.canon`.
  *
@@ -999,7 +987,6 @@ function strandedSuperscriptMinus(unit: string): boolean {
  */
 export function canonicalUnitSpelling(unit: string): string {
   if (unit === '') return '1'
-  if (strandedSuperscriptMinus(unit)) return unit
   const toks = spellLex(normalizeUnitString(unit))
   if (toks === null) return unit
   const parser = new SpellParser(toks)
@@ -1290,7 +1277,9 @@ class UnitParser {
 
   /** A table symbol, exactly as spelled (the table is flat: no prefixes). */
   private lookup(name: string): ParsedUnit {
-    const spec = UNIT_TABLE[name]
+    // Own keys only: `UNIT_TABLE[name]` would also find inherited object
+    // properties, so `toString` or `constructor` would look like a unit.
+    const spec = Object.hasOwn(UNIT_TABLE, name) ? UNIT_TABLE[name] : undefined
     if (!spec) {
       throw new UnitConversionError(`Unknown unit "${name}"`)
     }

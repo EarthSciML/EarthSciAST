@@ -258,6 +258,7 @@ const _SUPERSCRIPTS = Dict{Char, Char}(
     '⁵' => '5', '⁶' => '6', '⁷' => '7', '⁸' => '8', '⁹' => '9',
     '⁻' => '-',
 )
+const _SUPERSCRIPT_DIGITS = ('⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹')
 
 function _normalize_unit_string(s::AbstractString)::String
     out = String(s)
@@ -267,16 +268,27 @@ function _normalize_unit_string(s::AbstractString)::String
 
     any(c -> haskey(_SUPERSCRIPTS, c), out) || return out
 
-    # Rewrite each maximal run of superscript characters as `^<digits>`.
+    # A run of superscript DIGITS is one exponent (`m¹²` is `m^12`), and a
+    # superscript minus is rewritten only together with the digits right after
+    # it (`m⁻³` is `m^-3`). A minus anywhere else stays an unexpected
+    # character, so `s⁻1` does not resolve, and `m²⁻¹` is the two exponents
+    # `m^2^-1`, not one exponent `-21` (esm-spec §4.8.2, Lean `normalize`).
+    cs = collect(out)
     io = IOBuffer()
-    in_run = false
-    for c in out
-        if haskey(_SUPERSCRIPTS, c)
-            in_run || (print(io, '^'); in_run = true)
-            print(io, _SUPERSCRIPTS[c])
+    i = 1
+    while i <= length(cs)
+        c = cs[i]
+        minus = c == '⁻' && i < length(cs) && cs[i + 1] in _SUPERSCRIPT_DIGITS
+        if minus || c in _SUPERSCRIPT_DIGITS
+            print(io, minus ? "^-" : "^")
+            i += minus ? 1 : 0
+            while i <= length(cs) && cs[i] in _SUPERSCRIPT_DIGITS
+                print(io, _SUPERSCRIPTS[cs[i]])
+                i += 1
+            end
         else
-            in_run = false
             print(io, c)
+            i += 1
         end
     end
     return String(take!(io))
@@ -796,23 +808,6 @@ end
 _canon_symbol_ok(s::String) =
     s == "%" || (!isempty(s) && all(_up_ident, s) && !_canon_digit_run(collect(s)))
 
-const _SUPERSCRIPT_DIGITS = ('⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹')
-
-# A superscript minus that does not start a superscript exponent: one with no
-# superscript digit after it, or one right after another superscript character.
-# The §4.8.2 rewrite reads `⁻` only at the start of a run followed by
-# superscript digits (Lean `normalize`), so Lean leaves such a string unparsed,
-# while `_normalize_unit_string` folds the run into one exponent (`s⁻1` →
-# `s^-1`).
-function _stranded_superscript_minus(cs::Vector{Char})::Bool
-    for (k, c) in enumerate(cs)
-        c == '⁻' || continue
-        (k > 1 && haskey(_SUPERSCRIPTS, cs[k - 1])) && return true
-        (k == length(cs) || !(cs[k + 1] in _SUPERSCRIPT_DIGITS)) && return true
-    end
-    return false
-end
-
 """
     _canonical_units(unit) -> String
 
@@ -833,7 +828,6 @@ spelling would have to write a symbol containing `.`, and when it would drop
 """
 function _canonical_units(unit::AbstractString)::String
     isempty(unit) && return "1"
-    _stranded_superscript_minus(collect(unit)) && return String(unit)
     toks = _canon_lex(collect(_normalize_unit_string(unit)))
     toks === nothing && return String(unit)
     p = _CanonParser(toks, 1)

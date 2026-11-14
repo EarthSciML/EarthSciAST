@@ -2594,7 +2594,8 @@ pub fn parse_unit(unit_str: &str) -> Result<Unit, UnitError> {
 /// `Pa*m**3` all appear in the shared corpus and all failed to parse, leaving
 /// their variables dimensionless-unknown and silently unchecked.
 ///
-/// * superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` and superscript minus `⁻` → `^n`
+/// * superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` → `^n`, and superscript minus `⁻` → `^-`
+///   only right before superscript digits
 /// * middot `·` (U+00B7) and dot-operator `⋅` (U+22C5) → `*`
 /// * `µ` (U+00B5) / `μ` (U+03BC) → `u`  (so `μg` is the table key `ug`)
 /// * `°C` → `degC`, `°F` → `degF`; a bare `°` is NOT rewritten (it stays an
@@ -2606,10 +2607,13 @@ fn normalize_unit_str(s: &str) -> String {
     // `°C` and `°F` are two-character sequences, so handle them first.
     let s = s.replace("\u{00B0}C", "degC").replace("\u{00B0}F", "degF");
 
-    let mut out = String::with_capacity(s.len());
-    let mut in_superscript = false;
-    for c in s.chars() {
-        let sup = match c {
+    // A run of superscript DIGITS is one exponent (`m¹²` is `m^12`), and a
+    // superscript minus is rewritten only together with the digits right after
+    // it (`m⁻³` is `m^-3`). A minus anywhere else stays an unexpected
+    // character, so `s⁻1` does not resolve, and `m²⁻¹` is the two exponents
+    // `m^2^-1`, not one exponent `-21` (esm-spec §4.8.2, Lean `normalize`).
+    fn sup_digit(c: char) -> Option<char> {
+        match c {
             '⁰' => Some('0'),
             '¹' => Some('1'),
             '²' => Some('2'),
@@ -2620,27 +2624,29 @@ fn normalize_unit_str(s: &str) -> String {
             '⁷' => Some('7'),
             '⁸' => Some('8'),
             '⁹' => Some('9'),
-            '⁻' => Some('-'),
             _ => None,
-        };
-        match sup {
-            // A run of superscripts is one exponent: emit a single `^` before it.
-            Some(ascii) => {
-                if !in_superscript {
-                    out.push('^');
-                    in_superscript = true;
-                }
-                out.push(ascii);
+        }
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let minus = c == '⁻' && chars.peek().is_some_and(|&n| sup_digit(n).is_some());
+        if minus || sup_digit(c).is_some() {
+            out.push_str(if minus { "^-" } else { "^" });
+            if let Some(d) = sup_digit(c) {
+                out.push(d);
             }
-            None => {
-                in_superscript = false;
-                match c {
-                    '\u{00B7}' | '\u{22C5}' => out.push('*'),
-                    '\u{00B5}' | '\u{03BC}' => out.push('u'),
-                    '\u{2126}' | '\u{03A9}' => out.push_str("Ohm"),
-                    _ => out.push(c),
-                }
+            while let Some(d) = chars.peek().and_then(|&n| sup_digit(n)) {
+                out.push(d);
+                chars.next();
             }
+            continue;
+        }
+        match c {
+            '\u{00B7}' | '\u{22C5}' => out.push('*'),
+            '\u{00B5}' | '\u{03BC}' => out.push('u'),
+            '\u{2126}' | '\u{03A9}' => out.push_str("Ohm"),
+            _ => out.push(c),
         }
     }
     out
@@ -2972,12 +2978,18 @@ impl SpellQ {
     }
 
     fn add(self, o: SpellQ) -> Option<SpellQ> {
-        let num = self.num.checked_mul(o.den)?.checked_add(o.num.checked_mul(self.den)?)?;
+        let num = self
+            .num
+            .checked_mul(o.den)?
+            .checked_add(o.num.checked_mul(self.den)?)?;
         SpellQ::new(num, self.den.checked_mul(o.den)?)
     }
 
     fn neg(self) -> Option<SpellQ> {
-        Some(SpellQ { num: self.num.checked_neg()?, den: self.den })
+        Some(SpellQ {
+            num: self.num.checked_neg()?,
+            den: self.den,
+        })
     }
 
     /// The exact value of a number token: digits, optionally `.` and digits.
@@ -3036,7 +3048,10 @@ impl<'a> SpellParser<'a> {
         }
         self.pos += 1;
         let q = self.exponent()?;
-        factors.into_iter().map(|(s, e)| Some((s, q.mul(e)?))).collect()
+        factors
+            .into_iter()
+            .map(|(s, e)| Some((s, q.mul(e)?)))
+            .collect()
     }
 
     fn exponent(&mut self) -> Option<SpellQ> {
@@ -3127,25 +3142,7 @@ fn spell_factor((s, q): &SpellFactor<'_>) -> String {
 /// `Esm.Units.symOK`: `%`, or an identifier run that is not all digits.
 fn spell_symbol_ok(s: &str) -> bool {
     s == "%"
-        || (!s.is_empty()
-            && s.bytes().all(is_ident_byte)
-            && !s.bytes().all(|b| b.is_ascii_digit()))
-}
-
-/// A superscript minus that does not start a superscript exponent: one with no
-/// superscript digit after it, or one right after another superscript
-/// character. The §4.8.2 rewrite reads `⁻` only at the start of a run followed
-/// by superscript digits (Lean `normalize`), so Lean leaves such a string
-/// unparsed, while [`normalize_unit_str`] folds the run into one exponent
-/// (`s⁻1` → `s^-1`).
-fn stranded_superscript_minus(unit: &str) -> bool {
-    const DIGITS: &str = "⁰¹²³⁴⁵⁶⁷⁸⁹";
-    let cs: Vec<char> = unit.chars().collect();
-    cs.iter().enumerate().any(|(k, &c)| {
-        c == '⁻'
-            && ((k > 0 && (cs[k - 1] == '⁻' || DIGITS.contains(cs[k - 1])))
-                || !cs.get(k + 1).is_some_and(|&n| DIGITS.contains(n)))
-    })
+        || (!s.is_empty() && s.bytes().all(is_ident_byte) && !s.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The canonical spelling of a unit string (esm-spec §4.8.2), a port of the
@@ -3167,9 +3164,6 @@ pub(crate) fn canonical_unit_spelling(unit: &str) -> String {
     if unit.is_empty() {
         return "1".to_string();
     }
-    if stranded_superscript_minus(unit) {
-        return unit.to_string();
-    }
     let normalized = normalize_unit_str(unit);
     let Ok(toks) = lex_unit(&normalized, unit) else {
         return unit.to_string();
@@ -3187,13 +3181,23 @@ pub(crate) fn canonical_unit_spelling(unit: &str) -> String {
         return unit.to_string();
     };
     let kept = |s: &str| num.iter().chain(den.iter()).any(|(k, _)| *k == s);
-    if !num.iter().chain(den.iter()).all(|(s, _)| spell_symbol_ok(s))
-        || !factors.iter().all(|(s, _)| kept(s) || get_base_units().contains_key(*s))
+    if !num
+        .iter()
+        .chain(den.iter())
+        .all(|(s, _)| spell_symbol_ok(s))
+        || !factors
+            .iter()
+            .all(|(s, _)| kept(s) || get_base_units().contains_key(*s))
     {
         return unit.to_string();
     }
-    let join = |side: &[SpellFactor<'_>]| side.iter().map(spell_factor).collect::<Vec<_>>().join("*");
-    let mut spelled = if num.is_empty() { "1".to_string() } else { join(&num) };
+    let join =
+        |side: &[SpellFactor<'_>]| side.iter().map(spell_factor).collect::<Vec<_>>().join("*");
+    let mut spelled = if num.is_empty() {
+        "1".to_string()
+    } else {
+        join(&num)
+    };
     match den.len() {
         0 => {}
         1 => {

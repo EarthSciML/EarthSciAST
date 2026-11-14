@@ -572,6 +572,9 @@ _SUPERSCRIPTS: dict[str, str] = {
     "\u207b": "-",  # SUPERSCRIPT MINUS
 }
 
+#: The superscript digits alone (``_SUPERSCRIPTS`` without the minus).
+_SUPERSCRIPT_DIGITS = frozenset(c for c in _SUPERSCRIPTS if c != "\u207b")
+
 
 def normalize_unit_string(unit: str) -> str:
     """Rewrite the non-ASCII spellings the corpus uses into the ASCII grammar.
@@ -584,19 +587,26 @@ def normalize_unit_string(unit: str) -> str:
         unit = unit.replace(src, dst)
     if not any(ch in _SUPERSCRIPTS for ch in unit):
         return unit
-    # A RUN of superscripts is one exponent: `m⁻¹²` is `m^-12`, not `m^-1^2`.
+    # A run of superscript DIGITS is one exponent (`m¹²` is `m^12`), and a
+    # superscript minus is rewritten only together with the digits right after
+    # it (`m⁻³` is `m^-3`). A minus anywhere else stays an unexpected
+    # character, so `s⁻1` does not resolve, and `m²⁻¹` is the two exponents
+    # `m^2^-1`, not one exponent `-21` (esm-spec 4.8.2, Lean `normalize`).
     out: list[str] = []
-    run: list[str] = []
-    for ch in unit:
-        if ch in _SUPERSCRIPTS:
-            run.append(_SUPERSCRIPTS[ch])
-            continue
-        if run:
-            out.append("^" + "".join(run))
-            run = []
-        out.append(ch)
-    if run:
-        out.append("^" + "".join(run))
+    i = 0
+    while i < len(unit):
+        ch = unit[i]
+        minus = ch == "\u207b" and i + 1 < len(unit) and unit[i + 1] in _SUPERSCRIPT_DIGITS
+        if minus or ch in _SUPERSCRIPT_DIGITS:
+            j = i + 1 if minus else i
+            k = j
+            while k < len(unit) and unit[k] in _SUPERSCRIPT_DIGITS:
+                k += 1
+            out.append(("^-" if minus else "^") + "".join(_SUPERSCRIPTS[c] for c in unit[j:k]))
+            i = k
+        else:
+            out.append(ch)
+            i += 1
     return "".join(out)
 
 
@@ -978,25 +988,6 @@ def _canon_symbol_ok(symbol: str) -> bool:
     return bool(symbol) and all(_is_ident_char(c) for c in symbol) and not _is_digit_run(symbol)
 
 
-def _stranded_superscript_minus(unit: str) -> bool:
-    """A superscript minus that does not start a superscript exponent: one with
-    no superscript digit after it, or one right after another superscript
-    character. The §4.8.2 rewrite reads `⁻` only at the start of a run followed
-    by superscript digits (Lean `normalize`), so Lean leaves such a string
-    unparsed, while :func:`normalize_unit_string` folds the run into one
-    exponent (`s⁻1` → `s^-1`)."""
-    return any(
-        c == "\u207b"
-        and (
-            (k > 0 and unit[k - 1] in _SUPERSCRIPTS)
-            or k + 1 >= len(unit)
-            or unit[k + 1] == "\u207b"
-            or unit[k + 1] not in _SUPERSCRIPTS
-        )
-        for k, c in enumerate(unit)
-    )
-
-
 def canonical_unit_spelling(unit: str) -> str:
     """The canonical spelling of a unit string (esm-spec §4.8.2), a port of
     the Lean `Esm.Units.canon`.
@@ -1016,8 +1007,6 @@ def canonical_unit_spelling(unit: str) -> str:
     """
     if unit == "":
         return "1"
-    if _stranded_superscript_minus(unit):
-        return unit
     try:
         factors = _CanonParser(_canon_lex(normalize_unit_string(unit))).parse()
     except _NoCanonicalSpelling:

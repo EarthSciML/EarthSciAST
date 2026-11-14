@@ -318,28 +318,6 @@ func spellSymbolOK(s string) bool {
 	return true
 }
 
-// strandedSuperscriptMinus reports a superscript minus that does not start a
-// superscript exponent: one with no superscript digit after it, or one right
-// after another superscript character. The §4.8.2 rewrite reads `⁻` only at
-// the start of a run followed by superscript digits (Lean `normalize`), so
-// Lean leaves such a string unparsed, while normalizeUnitString folds the run
-// into one exponent (`s⁻1` → `s^-1`).
-func strandedSuperscriptMinus(s string) bool {
-	runes := []rune(s)
-	for i, r := range runes {
-		if r != '⁻' {
-			continue
-		}
-		if i > 0 && isSuperscriptRune(runes[i-1]) {
-			return true
-		}
-		if i+1 == len(runes) || runes[i+1] == '⁻' || !isSuperscriptRune(runes[i+1]) {
-			return true
-		}
-	}
-	return false
-}
-
 // canonicalUnitSpelling is the canonical spelling of a unit string (esm-spec
 // §4.8.2), a port of the Lean `Esm.Units.canon`.
 //
@@ -358,9 +336,6 @@ func strandedSuperscriptMinus(s string) bool {
 func canonicalUnitSpelling(unit string) string {
 	if unit == "" {
 		return "1"
-	}
-	if strandedSuperscriptMinus(unit) {
-		return unit
 	}
 	toks, ok := spellLex(normalizeUnitString(unit))
 	if !ok {
