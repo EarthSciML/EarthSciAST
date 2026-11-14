@@ -2899,7 +2899,10 @@ Settle expression-node `op` spellings for ONE document, in three steps:
 2. The ops and the block esm 2.0.0 removed (`_REMOVED_OPS_2_0_0`, among them
    `aggregate`, the pre-1.1.0 spelling of `faq`) are rejected BY NAME, for the
    same reason (`_reject_removed_2_0_0!`).
-3. The `faq` version gate: `faq` arrives at esm 1.1.0 (esm-spec §2.2.4, the
+3. The deprecated spellings `neg` and `pow` are rewritten to unary `-` and
+   `^`, with one `deprecated_op` warning for the document
+   (`_rewrite_deprecated_ops!`, esm-spec §4.2 "Deprecated ops").
+4. The `faq` version gate: `faq` arrives at esm 1.1.0 (esm-spec §2.2.4, the
    rule the top-level `solver` block follows). With `gate = false`
    (post-inlining: a 1.0.0 parent whose mounted child uses `faq`), the declared
    version is raised to the 1.1.0 floor instead, the same rule `emit` applies
@@ -2919,6 +2922,7 @@ function _prepare_document_ops!(doc; gate::Bool = true)::Nothing
         )
     end
     _reject_removed_2_0_0!(doc)
+    _rewrite_deprecated_ops!(doc)
     faq_at = _find_op_path(doc, "faq")
     (faq_at !== nothing && _declared_below_v11(doc)) || return nothing
     if gate
@@ -2936,6 +2940,77 @@ function _prepare_document_ops!(doc; gate::Bool = true)::Nothing
         if haskey(doc, key)
             doc[key] = "1.1.0"
             break
+        end
+    end
+    return nothing
+end
+
+# The `op` / `fn` / `args` field key of a post-wire node: the carrier is
+# string-keyed, but an in-memory caller's dict may still be symbol-keyed.
+function _node_key(n, name::String)
+    haskey(n, name) && return name
+    sym = Symbol(name)
+    haskey(n, sym) && return sym
+    return nothing
+end
+
+"""
+    _rewrite_deprecated_ops!(doc) -> Vector{String}
+
+esm-spec §4.2 "Deprecated ops": rewrite, in place, every expression node of
+`doc` spelling `neg` with one operand to unary `-`, every `pow` with two
+operands to `^`, and every `broadcast` whose `fn` is `neg` to `fn: "-"`. Every
+other field of the node is kept. When anything was rewritten, ONE `@warn` with
+the code `deprecated_op` names the JSON pointer of each rewritten node. Returns
+those pointers. Idempotent: a second pass over the same document finds nothing
+and stays silent.
+"""
+function _rewrite_deprecated_ops!(doc)::Vector{String}
+    sites = String[]
+    seen = IdDict{Any, Nothing}()
+    _rewrite_deprecated_ops_walk!(doc, "", sites, seen)
+    isempty(sites) && return sites
+    @warn string(
+        "deprecated_op: the op spellings `neg` (write unary `-`) and `pow` ",
+        "(write `^`) are deprecated (esm-spec §4.2 \"Deprecated ops\"); they were ",
+        "rewritten on load and will be removed in a later major version. ",
+        "Rewritten at: ", join(sites, ", "), "."
+    )
+    return sites
+end
+
+function _rewrite_deprecated_ops_walk!(node, at::String, sites::Vector{String}, seen)
+    if _is_object(node)
+        haskey(seen, node) && return nothing
+        seen[node] = nothing
+        opk = _node_key(node, "op")
+        argk = _node_key(node, "args")
+        if opk !== nothing
+            op = node[opk]
+            args = argk === nothing ? nothing : node[argk]
+            rep = op isa AbstractString ? get(_DEPRECATED_OPS, String(op), nothing) : nothing
+            if rep !== nothing && args isa AbstractVector && length(args) == _op_spec(op).arity.start
+                node[opk] = rep
+                push!(sites, isempty(at) ? "/" : at)
+            elseif op == "broadcast"
+                fnk = _node_key(node, "fn")
+                if fnk !== nothing && node[fnk] == "neg"
+                    node[fnk] = "-"
+                    push!(sites, string(isempty(at) ? "" : at, "/fn"))
+                end
+            end
+        end
+        for (k, v) in pairs(node)
+            _is_json_leaf(v) && continue
+            _rewrite_deprecated_ops_walk!(v, string(at, "/", k), sites, seen)
+        end
+    elseif _is_array(node)
+        _may_hold_object(node) || return nothing
+        haskey(seen, node) && return nothing
+        seen[node] = nothing
+        for (i, v) in enumerate(node)
+            _is_json_leaf(v) && continue
+            _rewrite_deprecated_ops_walk!(v, string(at, "/", i - 1), sites, seen)
         end
     end
     return nothing
