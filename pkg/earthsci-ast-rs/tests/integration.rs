@@ -91,6 +91,8 @@ mod data_source_extent_scope;
 mod data_source_unbound_conformance;
 #[path = "data_source_url_conformance.rs"]
 mod data_source_url_conformance;
+#[path = "deprecated_ops.rs"]
+mod deprecated_ops;
 #[path = "discrete_materialize_conformance.rs"]
 mod discrete_materialize_conformance;
 #[path = "display_conformance.rs"]

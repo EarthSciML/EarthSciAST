@@ -2834,9 +2834,11 @@ fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
 /// * an OBSERVED (a name carrying `y ~ g`) — `deriv(g)`, the chain rule
 ///   applied by substituting the definition and differentiating it;
 /// * a TIME-INVARIANT name (a parameter) and a literal — `0`;
-/// * `+`, binary and unary `-`, `neg`, n-ary `*`, and binary `/` — distributed
+/// * `+`, binary and unary `-`, n-ary `*`, and binary `/` — distributed
 ///   by the ordinary sum, product and quotient rules over the operands'
-///   derivatives.
+///   derivatives. The deprecated `neg` (esm-spec §4.2) is read as unary `-`:
+///   the loader has already rewritten an authored one, so only a code-built
+///   node reaches here spelled that way.
 ///
 /// Every other shape — `^`, a call, a reduction, a nested `D`, a name in no
 /// table — resolves to NOTHING and is left exactly as authored, as is any

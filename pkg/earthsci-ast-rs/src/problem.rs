@@ -5493,7 +5493,7 @@ mod stepping_tolerance_tests {
             r#"{{"esm": "2.0.0","metadata":{{"name":"T"}},{solver}"models":{{"M":{{
                  "variables":{{"y":{{"type":"unknown","units":"m","default":1.0}}}},
                  "equations":[{{"lhs":{{"op":"D","args":["y"],"wrt":"t"}},
-                                "rhs":{{"op":"neg","args":["y"]}}}}]}}}}}}"#
+                                "rhs":{{"op":"-","args":["y"]}}}}]}}}}}}"#
         ))
         .expect("fixture parses")
     }
