@@ -151,7 +151,7 @@ describe('solver.external load gates', () => {
   const doc = (esm: string, solver: string) =>
     `{"esm":"${esm}","metadata":{"name":"T"},"solver":${solver},` +
     `"models":{"M":{"variables":{"x":{"type":"unknown","units":"m","default":1.0}},` +
-    `"equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":{"op":"neg","args":["x"]}}]}}}`
+    `"equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":{"op":"-","args":["x"]}}]}}}`
   const codeOf = (fn: () => unknown): string | null => {
     try {
       fn()

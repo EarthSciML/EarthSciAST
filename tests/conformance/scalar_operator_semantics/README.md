@@ -101,6 +101,13 @@ spellings, so the vocabulary the bindings now agree on is the one the spec
 states. The split fixtures stay: `pow_alias` beside the sibling fixture's
 `^(2, 3) = 8` is what pins that the two spellings agree.
 
+`pow` and `neg` are now **deprecated** (esm-spec §4.2 "Deprecated ops"): a
+loader rewrites `pow` to `^` and `neg` to unary `-`, with the warning
+`deprecated_op`. The rest of the corpus was migrated off both spellings;
+`pow_alias.esm` and the `negated` observed of `scalar_operator_semantics.esm`
+are kept on purpose, as the documents that pin that a deprecated spelling still
+loads and evaluates to its replacement's value.
+
 The manifest records a refusal as a **named exclusion**: it is reported with
 the binding, the compiler and the code on every run, and it is green only
 because the ledger names it. If a binding gains the rule, the runner prints a

@@ -113,7 +113,7 @@
             "fallback_expression": {
               "op": "*",
               "args": [
-                { "op": "pow", "args": ["next_gen_var", 0.5] },
+                { "op": "^", "args": ["next_gen_var", 0.5] },
                 { "op": "exp", "args": [{ "op": "/", "args": [-1000, "T"] }] }
               ]
             }

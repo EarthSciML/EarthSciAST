@@ -66,6 +66,14 @@ export interface OpInfo {
    */
   scalar?: true
   /**
+   * The replacement spelling of a DEPRECATED op (esm-spec §4.2 "Deprecated
+   * ops"): `neg` → `-`, `pow` → `^`. The loader's wire boundary rewrites a
+   * document's uses to the replacement with a `deprecated_op` warning
+   * (`parse.ts` `rewriteDeprecatedOps`), so a loaded document never carries
+   * one; the row stays so an expression built in code still evaluates.
+   */
+  deprecated?: string
+  /**
    * Human name used in arity error messages (e.g. 'Division requires
    * exactly 2 arguments'). Defaults to the operator symbol itself.
    */
@@ -142,21 +150,30 @@ export const OPS: Record<string, OpInfo> = {
     cost: 8,
     evaluate: (args) => Math.pow(args[0], args[1]),
   },
-  // The word spelling of `^` (esm-spec §4.2): the same meaning and the same
-  // value. It renders as a call, `pow(x, 2)`, and is not a `broadcast` `fn`
-  // (no `scalar` flag), which is where every other binding's registry puts it.
+  // DEPRECATED word spelling of `^` (esm-spec §4.2 "Deprecated ops"): the same
+  // meaning and the same value. A loader rewrites it to `^`, so only an
+  // expression built in code still carries it. It renders as a call,
+  // `pow(x, 2)`, and is not a `broadcast` `fn` (no `scalar` flag), which is
+  // where every other binding's registry puts it.
   pow: {
+    deprecated: '^',
     arity: { min: 2, max: 2 },
     arityName: 'Exponentiation',
     cost: 8,
     evaluate: (args) => Math.pow(args[0], args[1]),
   },
-  // The CANONICAL unary negation `canonicalize.ts` emits (`-(0, x)` folds to
-  // `neg(x)`, and `neg(neg(x))` to `x`). It is an ordinary scalar operator —
-  // §4.2 arithmetic, listed in the schema's `broadcast.fn` scalar subset and
-  // spelled by `tests/fixtures/faq/27_broadcast_unary.esm` — so it belongs
-  // in the registry rather than falling through to the unlowered-op gate.
-  neg: { arity: { min: 1, max: 1 }, scalar: true, cost: 1, evaluate: (args) => -args[0] },
+  // DEPRECATED word spelling of unary `-` (esm-spec §4.2 "Deprecated ops"). A
+  // loader rewrites it to `-` (and a `broadcast` `fn: 'neg'` to `fn: '-'`), and
+  // canonicalization writes unary `-`, never `neg`. The row stays, scalar, so an
+  // expression built in code still evaluates and a code-built `broadcast` may
+  // still name it.
+  neg: {
+    deprecated: '-',
+    arity: { min: 1, max: 1 },
+    scalar: true,
+    cost: 1,
+    evaluate: (args) => -args[0],
+  },
 
   // ---- exponential / logarithmic ---------------------------------------
   exp: { arity: { min: 1, max: 1 }, scalar: true, cost: 20, evaluate: (args) => Math.exp(args[0]) },

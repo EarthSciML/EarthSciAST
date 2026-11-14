@@ -1,0 +1,16 @@
+{
+  "id": "unary_minus",
+  "description": "Negation and power canonicalize to `-` and `^` (RFC §5.4.7). The two input spellings of negation, unary `-` and the deprecated `neg` (esm-spec §4.2 \"Deprecated ops\"), canonicalize to the unary `-` node; a binary `-` with a literal zero minuend and a non-literal subtrahend stays binary, since `0 - x` and `-x` differ when x is +0.0 (see `zero_minuend`); a double negation in mixed spellings collapses; a negated float literal becomes the negative literal; the deprecated `pow` canonicalizes to `^`. The canonical form never contains `neg` or `pow`.",
+  "input": {
+    "op": "+",
+    "args": [
+      {"op": "neg", "args": ["x"]},
+      {"op": "-", "args": [0, "y"]},
+      {"op": "neg", "args": [{"op": "-", "args": ["z"]}]},
+      {"op": "pow", "args": ["w", 2.5]},
+      {"op": "neg", "args": [2.5]}
+    ]
+  },
+  "expected": "{\"args\":[-2.5,\"z\",{\"args\":[\"w\",2.5],\"op\":\"^\"},{\"args\":[\"x\"],\"op\":\"-\"},{\"args\":[0,\"y\"],\"op\":\"-\"}],\"op\":\"+\"}",
+  "tags": ["negation", "power", "deprecated", "ordering", "nonleaf"]
+}

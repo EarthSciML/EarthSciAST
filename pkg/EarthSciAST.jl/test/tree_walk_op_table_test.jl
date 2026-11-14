@@ -137,7 +137,8 @@ end
     @testset "scalar/access-kernel ladder parity over the evaluable family" begin
         # The canonical elementwise family both ladders must agree on: the
         # arity table is exactly the evaluable-core elementwise surface
-        # (esm-spec §4.2) plus the canonicalize-internal neg/pow aliases.
+        # (esm-spec §4.2) plus the deprecated `neg`/`pow` word spellings, which an
+        # AST built in code may still carry.
         for op in sort!(collect(keys(_OT_ARITY)))
             @test _ot_scalar_supported(op)
             @test _ot_vector_supported(op)

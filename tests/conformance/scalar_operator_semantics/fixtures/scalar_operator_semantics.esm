@@ -190,7 +190,7 @@
         "negated": {
           "type": "unknown",
           "units": "1",
-          "description": "`neg` is canonicalize's spelling of unary minus and must agree with it."
+          "description": "The deprecated `neg` spelling of unary minus (esm-spec \u00a74.2 \"Deprecated ops\"): a loader rewrites it to unary `-` with the warning `deprecated_op`, so it must agree with `unary_minus`. Kept on purpose when the corpus was migrated off `neg`."
         },
         "product_of_three": {
           "type": "unknown",

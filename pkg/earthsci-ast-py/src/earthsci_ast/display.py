@@ -657,10 +657,10 @@ def _get_operator_precedence(op: str) -> int:
         ">=": 3,
         "+": 4,
         "-": 4,
-        # `neg` is the canonicalizer's spelling of a 1-operand `-` and renders
-        # identically to it, so it MUST carry the same precedence — otherwise
-        # `canonicalize()` (which rewrites unary `-` to `neg`) would silently
-        # change a document's parenthesization.
+        # `neg` is the deprecated word spelling of a 1-operand `-` (esm-spec
+        # §4.2) and renders identically to it, so it MUST carry the same
+        # precedence — otherwise an AST built in code with `neg` would print
+        # with different parenthesization than its unary `-` form.
         "neg": 4,
         "*": 5,
         "/": 5,

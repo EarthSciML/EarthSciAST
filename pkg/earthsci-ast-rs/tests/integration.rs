@@ -45,6 +45,8 @@ mod build_time_computed_gathers;
 mod build_time_tape_route;
 #[path = "cadence_conformance.rs"]
 mod cadence_conformance;
+#[path = "canonical_conformance.rs"]
+mod canonical_conformance;
 #[path = "classification_conformance.rs"]
 mod classification_conformance;
 #[path = "cli_data_source_ingest.rs"]
@@ -91,6 +93,8 @@ mod data_source_extent_scope;
 mod data_source_unbound_conformance;
 #[path = "data_source_url_conformance.rs"]
 mod data_source_url_conformance;
+#[path = "deprecated_ops.rs"]
+mod deprecated_ops;
 #[path = "discrete_materialize_conformance.rs"]
 mod discrete_materialize_conformance;
 #[path = "display_conformance.rs"]
