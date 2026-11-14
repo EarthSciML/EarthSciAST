@@ -77,6 +77,45 @@ pub fn print_document(
     }
 }
 
+/// Print one expression, or one equation, as math under a set of declared
+/// names: LaTeX for [`DocumentFormat::Markdown`] (`Math.printLatex`), Typst
+/// math for [`DocumentFormat::Typst`] (`Math.printTypst`).
+///
+/// `expr` is an ESM expression (a number, a name or an operator node) or an
+/// equation, an object with `lhs` and `rhs` (other fields, such as
+/// `_comment`, are not printed), which prints as its two sides around `=` as
+/// in a document (`Source.eqExpr`). `names` plays the part of
+/// the variables a component declares: a name in it prints in its declared
+/// shape, and the printer avoids spellings that would collide with it. The
+/// result is what a document display holds, without its delimiters; it is
+/// meant for showing one expression outside a document, so no template is in
+/// scope.
+pub fn print_math(expr: &serde_json::Value, names: &[String], format: DocumentFormat) -> String {
+    let e = json::sort_keys(&json::from_serde(&canonicalize_document(expr)));
+    let sides = match &e {
+        json::Json::Obj(kvs) => math::expr::look("lhs", kvs).zip(math::expr::look("rhs", kvs)),
+        _ => None,
+    };
+    let e = match sides {
+        Some((lhs, rhs)) => json::Json::Obj(vec![
+            (
+                "args".to_string(),
+                json::Json::Arr(vec![lhs.clone(), rhs.clone()]),
+            ),
+            ("op".to_string(), json::Json::Str("==".to_string())),
+        ]),
+        None => e,
+    };
+    let sym = math::Sym {
+        names: names.to_vec(),
+        templates: Vec::new(),
+    };
+    match format {
+        DocumentFormat::Markdown => math::print_latex(&sym, &e),
+        DocumentFormat::Typst => math::print_typst(&sym, &e),
+    }
+}
+
 /// Read a Markdown ESM document (`Source.Md.parseMd`). The result is in
 /// canonical form.
 ///
