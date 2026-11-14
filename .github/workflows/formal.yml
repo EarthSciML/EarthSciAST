@@ -3,7 +3,10 @@ name: Formal model (Lean)
 # Builds the Lean model of the spec in `formal/` and runs its audit gate
 # (`scripts/formal-audit.py`), then scores the model's adapter on the tiers
 # it covers: the standard-library template tiers (interp, datetime, relational,
-# geometry). A mismatch there fails the job (formal/README.md).
+# geometry). A mismatch there fails the job (formal/README.md). Every .esm under
+# tests/ also goes through the document source formats: printed as Markdown and
+# Typst and read back, the Typst compiled with the repository's `esm` Typst
+# package, and the Markdown's math rendered with KaTeX.
 #
 # The spec files are in `paths` because the inventory audit checks that every
 # MUST clause is accounted for and that every citation still resolves: a spec
@@ -31,6 +34,8 @@ on:
       - 'tests/conformance/datetime_templates/**'
       - 'tests/conformance/relational_templates/**'
       - 'tests/conformance/geometry_templates/**'
+      - 'tests/**/*.esm'
+      - 'typst/packages/**'
       - '.github/workflows/formal.yml'
   pull_request:
     branches: [ main ]
@@ -52,6 +57,8 @@ on:
       - 'tests/conformance/datetime_templates/**'
       - 'tests/conformance/relational_templates/**'
       - 'tests/conformance/geometry_templates/**'
+      - 'tests/**/*.esm'
+      - 'typst/packages/**'
       - '.github/workflows/formal.yml'
   workflow_dispatch:
 
@@ -129,3 +136,21 @@ jobs:
     # `lake build` above already built the adapter.
     - name: Score the model on the template tiers
       run: python3 scripts/run-closed-functions-lean.py --no-build
+
+    # The document source formats on the whole corpus: every .esm under tests/
+    # that is a JSON object round-trips through Markdown and Typst
+    # (`esm-lean print-md|parse-md|print-typ|parse-typ`), every printed .typ
+    # compiles with the `esm` package in typst/packages, and every math piece
+    # of the printed Markdown renders in KaTeX (strict, with mhchem).
+    - name: Install Typst and KaTeX
+      run: |
+        curl -fsSL -o "$RUNNER_TEMP/typst.tar.xz" \
+          https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz
+        echo "a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c  $RUNNER_TEMP/typst.tar.xz" | sha256sum -c -
+        tar -xJf "$RUNNER_TEMP/typst.tar.xz" -C "$RUNNER_TEMP"
+        echo "$RUNNER_TEMP/typst-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+        npm install --prefix "$RUNNER_TEMP/katex" --no-save --no-audit --no-fund katex@0.16.29
+        echo "NODE_PATH=$RUNNER_TEMP/katex/node_modules" >> "$GITHUB_ENV"
+
+    - name: Document formats on the corpus
+      run: python3 formal/scripts/doc-corpus.py --typst typst --katex
