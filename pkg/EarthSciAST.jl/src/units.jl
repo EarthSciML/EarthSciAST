@@ -694,7 +694,9 @@ end
 
 const _CanonFactor = Tuple{String, Rational{BigInt}}
 
-struct _CanonFail <: Exception end
+# Thrown inside the spelling parser on input outside the grammar; caught in
+# `_canonical_units`, which then returns the string unchanged.
+struct _CanonFail <: EarthSciASTError end
 
 mutable struct _CanonParser
     toks::Vector{_CanonTok}
@@ -729,7 +731,7 @@ function _cp_unit!(p::_CanonParser)::Vector{_CanonFactor}
             return acc
         end
     end
-    return
+    return acc
 end
 
 function _cp_term!(p::_CanonParser)::Vector{_CanonFactor}
@@ -844,7 +846,10 @@ function _canonical_units(unit::AbstractString)::String
     den = _canon_side(filter(f -> f[2] <= 0, factors))
     kept = Set{String}(first.(vcat(num, den)))
     all(_canon_symbol_ok, kept) || return String(unit)
-    all(f -> f[1] in kept || haskey(_UNIT_REGISTRY, f[1]), factors) || return String(unit)
+    # `%` is a table key in every other binding; here the resolving parser
+    # special-cases it instead of registering it.
+    all(f -> f[1] in kept || f[1] == "%" || haskey(_UNIT_REGISTRY, f[1]), factors) ||
+        return String(unit)
     spelled = isempty(num) ? "1" : join(map(_canon_factor, num), "*")
     if length(den) == 1
         spelled *= "/" * _canon_factor(den[1])
