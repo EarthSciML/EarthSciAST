@@ -2,6 +2,7 @@ package esm
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -76,7 +77,7 @@ func TestDeprecatedNegRewrittenOnLoad(t *testing.T) {
 func TestDeprecatedBroadcastFnNegRewrittenOnLoad(t *testing.T) {
 	path := deprecatedOpsRepoPath("tests", "fixtures", "faq", "27_broadcast_unary.esm")
 	_, stderr := loadCapturingStderr(t, path)
-	if strings.Count(stderr, codeDeprecatedOp) != 1 || !strings.Contains(stderr, "(fn neg)") {
+	if strings.Count(stderr, codeDeprecatedOp) != 1 || !strings.Contains(stderr, "(broadcast fn neg)") {
 		t.Fatalf("want one %s warning naming the broadcast fn, got %q", codeDeprecatedOp, stderr)
 	}
 }
@@ -108,7 +109,19 @@ func TestRewriteDeprecatedOpsText(t *testing.T) {
 			name:  "broadcast fn",
 			in:    `{"op": "broadcast", "fn": "neg", "args": ["a"]}`,
 			want:  `{"op": "broadcast", "fn": "-", "args": ["a"]}`,
-			sites: []string{"/ (fn neg)"},
+			sites: []string{" (broadcast fn neg)"},
+		},
+		{
+			name:  "two-operand broadcast of neg keeps its arity error",
+			in:    `{"op": "broadcast", "fn": "neg", "args": ["a", "a"]}`,
+			want:  `{"op": "broadcast", "fn": "neg", "args": ["a", "a"]}`,
+			sites: nil,
+		},
+		{
+			name:  "pointer segments are escaped",
+			in:    `{"a/b~c": {"op": "neg", "args": ["x"]}}`,
+			want:  `{"a/b~c": {"op": "-", "args": ["x"]}}`,
+			sites: []string{"/a~1b~0c (neg)"},
 		},
 		{
 			name:  "a string value that merely reads neg is not an op",
@@ -131,5 +144,43 @@ func TestRewriteDeprecatedOpsText(t *testing.T) {
 				t.Errorf("rewritten text is not JSON: %v", err)
 			}
 		})
+	}
+}
+
+// A two-operand broadcast of `neg` is not rewritten to `fn: "-"` (which would
+// silently mean subtraction): the load refuses it for its arity, as before.
+func TestWrongArityBroadcastNegRefused(t *testing.T) {
+	doc := `{"esm": "2.0.0", "metadata": {"name": "B"}, "models": {"M": {
+	  "variables": {"a": {"type": "unknown", "units": "1", "default": 0.0}},
+	  "equations": [{"lhs": {"op": "D", "args": ["a"], "wrt": "t"},
+	                 "rhs": {"op": "broadcast", "fn": "neg", "args": ["a", "a"]}}]}}}`
+	file, err := LoadString(doc)
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	} else {
+		for _, e := range Validate(file).StructuralErrors {
+			msg += e.Code + " " + e.Message + "; "
+		}
+	}
+	if !strings.Contains(msg, "invalid_broadcast_fn") || !strings.Contains(msg, "'neg'") {
+		t.Fatalf("a two-operand broadcast of neg must be refused for its arity, got %q", msg)
+	}
+}
+
+// The reference-preserving emit path applies the same wire boundary as a load,
+// so a deprecated spelling never reaches the emitted document.
+func TestEmitReferencePreservingRewritesDeprecatedOps(t *testing.T) {
+	path := deprecatedOpsRepoPath("tests", "conformance", "scalar_operator_semantics", "fixtures", "pow_alias.esm")
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := EmitReferencePreserving(string(src), filepath.Dir(path), nil)
+	if err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+	if strings.Contains(out, `"pow"`) || strings.Contains(out, `"neg"`) {
+		t.Fatalf("emitted document still spells a deprecated op:\n%s", out)
 	}
 }

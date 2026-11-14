@@ -12,7 +12,7 @@ package esm
 //
 // Only the op (or the `fn`) string changes; every other byte of the document,
 // key order included, is kept. A use with the wrong operand count is left as
-// written, so its arity error is unchanged. The document then loads with one
+// written, so its arity error is unchanged (a `broadcast` of `neg` included). The document then loads with one
 // `deprecated_op` warning naming every rewritten node's JSON pointer.
 
 import (
@@ -42,9 +42,10 @@ type deprecatedOpEdit struct {
 }
 
 // rewriteDeprecatedOps applies the §4.2 deprecated-op rewrite to one
-// document's JSON text. It returns the rewritten text and the JSON pointers of
-// the rewritten nodes (each annotated with its old spelling), in document
-// order. Text that does not decode is returned unchanged; schema validation
+// document's JSON text. It returns the rewritten text and one site per
+// rewritten node, in document order: its RFC 6901 JSON pointer ("" for the
+// root) and the spelling it had, as "<pointer> (neg)", "<pointer> (pow)" or
+// "<pointer> (broadcast fn neg)", the format every binding's warning uses. Text that does not decode is returned unchanged; schema validation
 // reports it.
 func rewriteDeprecatedOps(jsonStr string) (string, []string) {
 	if !strings.Contains(jsonStr, `"neg"`) && !strings.Contains(jsonStr, `"pow"`) {
@@ -68,11 +69,7 @@ func rewriteDeprecatedOps(jsonStr string) (string, []string) {
 		b.WriteString(jsonStr[prev:e.start])
 		b.WriteString(`"` + e.replacement + `"`)
 		prev = e.end
-		where := e.pointer
-		if where == "" {
-			where = "/"
-		}
-		sites = append(sites, fmt.Sprintf("%s (%s)", where, e.spelling))
+		sites = append(sites, fmt.Sprintf("%s (%s)", e.pointer, e.spelling))
 	}
 	b.WriteString(jsonStr[prev:])
 	return b.String(), sites
@@ -182,9 +179,11 @@ func (w *deprecatedOpWalker) object(pointer string) error {
 		w.addEdit(deprecatedOpEdit{start: opStart, end: opEnd, replacement: dep.Replacement,
 			pointer: pointer, spelling: op})
 	}
-	if op == "broadcast" && fn == "neg" && fnStart >= 0 {
+	// `neg` is strictly unary, so a broadcast of it with any other operand
+	// count keeps its arity error (`invalid_broadcast_fn`).
+	if op == "broadcast" && fn == "neg" && fnStart >= 0 && argCount == deprecatedOps["neg"].Arity {
 		w.addEdit(deprecatedOpEdit{start: fnStart, end: fnEnd, replacement: "-",
-			pointer: pointer, spelling: "fn neg"})
+			pointer: pointer, spelling: "broadcast fn neg"})
 	}
 	return nil
 }

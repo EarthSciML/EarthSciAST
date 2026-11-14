@@ -834,7 +834,16 @@ func emitDocument(jsonStr, basePath string, metaparameters map[string]int64) (ma
 // loadOptionB resolves the §9.7 machinery and runs the Option-B lowering,
 // PRESERVING surviving references and per-component registries (no Expand). This
 // is the "loaded" reference-preserving form that emit and flatten consume.
+//
+// The source passes the same wire boundary a load applies (prepareDocumentOps):
+// a removed op is refused, and a deprecated `neg` / `pow` is rewritten with the
+// `deprecated_op` warning, so neither spelling survives into the emitted
+// document (esm-spec §4.2).
 func loadOptionB(jsonStr, basePath string, metaparameters map[string]int64) (map[string]any, error) {
+	jsonStr, err := prepareDocumentOps(jsonStr)
+	if err != nil {
+		return nil, err
+	}
 	view, err := decodeJSONView([]byte(jsonStr))
 	if err != nil {
 		return nil, fmt.Errorf("loadOptionB: decode: %w", err)

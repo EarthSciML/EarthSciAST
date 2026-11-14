@@ -220,16 +220,27 @@ func allFloatLiterals(args []any) bool {
 }
 
 // canonSub: kept as distinct op, preserve arg order, apply identity rules.
-// Convert {-, 0, x} to the unary {-, x} when x is not a literal.
+// `-(0, x)` folds only for a literal x (RFC §5.4.7).
 func canonSub(node ExprNode) (Expression, error) {
 	if len(node.Args) == 1 {
 		return canonNeg(node)
 	}
 	if len(node.Args) == 2 {
 		a, b := node.Args[0], node.Args[1]
-		// -(0, x) -> -(x) (with type-preserving: -(0, x_literal) folds to negated literal)
+		// `0 - x` is NOT `-x` when x is +0.0 (`0 - 0.0` is +0.0, `-(0.0)` is
+		// -0.0), so only a literal subtrahend folds, to the exact difference:
+		// an integer when both are integers, else the IEEE float difference.
+		// Any other `-(0, x)` stays binary.
 		if exprIsZeroAny(a) {
-			return canonNeg(ExprNode{Op: "-", Args: []any{b}})
+			switch bv := b.(type) {
+			case int64:
+				if _, aInt := a.(int64); aInt {
+					return -bv, nil
+				}
+				return 0.0 - float64(bv), nil
+			case float64:
+				return 0.0 - bv, nil
+			}
 		}
 		// -(x, 0) -> x, type-preserving: if 0 is float and x is int literal, promote.
 		if exprIsZeroAny(b) {

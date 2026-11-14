@@ -194,17 +194,33 @@ func TestNegCanonical(t *testing.T) {
 	if string(got) != `-5` {
 		t.Errorf("neg(5): got %s", got)
 	}
-	// -(0, x), neg(x) and -(x) -> the unary -(x); the canonical form never
-	// writes the deprecated `neg` (esm-spec §4.2 "Deprecated ops").
+	// neg(x) and -(x) -> the unary -(x); the canonical form never writes the
+	// deprecated `neg` (esm-spec §4.2 "Deprecated ops").
 	want := `{"args":["x"],"op":"-"}`
 	for _, in := range []ExprNode{
-		{Op: "-", Args: []any{int64(0), "x"}},
 		{Op: "neg", Args: []any{"x"}},
 		{Op: "-", Args: []any{"x"}},
 	} {
 		got, _ = CanonicalJSON(in)
 		if string(got) != want {
 			t.Errorf("%s%v: got %s, want %s", in.Op, in.Args, got, want)
+		}
+	}
+	// -(0, x) is not -(x) when x is +0.0, so it stays binary; a literal
+	// subtrahend folds to the exact difference (RFC §5.4.7).
+	for _, c := range []struct {
+		in   ExprNode
+		want string
+	}{
+		{ExprNode{Op: "-", Args: []any{int64(0), "x"}}, `{"args":[0,"x"],"op":"-"}`},
+		{ExprNode{Op: "-", Args: []any{int64(0), int64(5)}}, `-5`},
+		{ExprNode{Op: "-", Args: []any{0.0, int64(5)}}, `-5.0`},
+		{ExprNode{Op: "-", Args: []any{int64(0), 0.0}}, `0.0`},
+		{ExprNode{Op: "-", Args: []any{0.0, math.Copysign(0, -1)}}, `0.0`},
+	} {
+		got, _ = CanonicalJSON(c.in)
+		if string(got) != c.want {
+			t.Errorf("%v: got %s, want %s", c.in.Args, got, c.want)
 		}
 	}
 	// Mixed-spelling double negation collapses: neg(-(x)) and -(neg(x)) -> x.
