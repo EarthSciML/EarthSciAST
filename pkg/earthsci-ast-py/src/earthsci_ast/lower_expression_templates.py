@@ -1425,9 +1425,18 @@ def emit_document(raw_source: Any, base_path: str) -> dict:
     drops consumed ``expression_template_imports``, and version-stamps
     ``esm: 0.9.0`` when any surviving reference or materialized entry remains
     (§9.6.4 rule 8). ``emit_esm_string ∘ emit_document`` is a byte-wise fixed
-    point under reload."""
+    point under reload.
+
+    ``raw_source`` passes the same wire boundary a load applies
+    (:func:`earthsci_ast.parse.prepare_document_ops`), on a copy: a removed op
+    is refused, and a deprecated ``neg`` / ``pow`` is rewritten with the
+    ``deprecated_op`` warning, so neither spelling survives into the emitted
+    document (esm-spec §4.2)."""
+    from .parse import prepare_document_ops
     from .template_imports import resolve_template_machinery
 
+    raw_source = copy.deepcopy(raw_source)
+    prepare_document_ops(raw_source)
     authored = _authored_template_names(raw_source)
     resolved = resolve_template_machinery(raw_source, base_path)
     loaded = lower_expression_templates(raw_source if resolved is None else resolved)

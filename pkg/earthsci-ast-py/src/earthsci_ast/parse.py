@@ -3606,10 +3606,17 @@ def _rewrite_deprecated(node: object, at: str, sites: list[str]) -> None:
             and len(args) == op_registry.DEPRECATED_OP_ARITY[op]
         ):
             node["op"] = op_registry.DEPRECATED_OPS[op]
-            sites.append(f"{at or '/'} ({op})")
-        elif op == "broadcast" and node.get("fn") == "neg":
+            sites.append(f"{at} ({op})")
+        elif (
+            op == "broadcast"
+            and node.get("fn") == "neg"
+            and isinstance(args, list)
+            and len(args) == op_registry.DEPRECATED_OP_ARITY["neg"]
+        ):
+            # `neg` is strictly unary, so a broadcast of it with any other
+            # operand count keeps its arity error (`invalid_broadcast_fn`).
             node["fn"] = "-"
-            sites.append(f"{at or '/'} (broadcast fn neg)")
+            sites.append(f"{at} (broadcast fn neg)")
         for key, child in node.items():
             _rewrite_deprecated(child, f"{at}/{_pointer_token(key)}", sites)
     elif isinstance(node, list):
@@ -3619,11 +3626,14 @@ def _rewrite_deprecated(node: object, at: str, sites: list[str]) -> None:
 
 def rewrite_deprecated_ops(data: object) -> list[str]:
     """Rewrite the deprecated op spellings in ``data`` IN PLACE (esm-spec §4.2
-    "Deprecated ops") and return the JSON pointer of every rewritten node, each
-    followed by the spelling it had: ``neg`` with one operand becomes unary
-    ``-``, ``pow`` with two becomes ``^``, and a ``broadcast`` whose ``fn`` is
-    ``neg`` gets ``fn: "-"``. Every other field is kept. A use with the wrong
-    operand count is left as written, so its arity error is unchanged."""
+    "Deprecated ops") and return one site per rewritten node, in pre-order:
+    its RFC 6901 JSON pointer (``""`` for the root) followed by the spelling it
+    had, as ``<pointer> (neg)``, ``<pointer> (pow)`` or ``<pointer> (broadcast
+    fn neg)`` — the format every binding's ``deprecated_op`` warning uses.
+    ``neg`` with one operand becomes unary ``-``, ``pow`` with two becomes
+    ``^``, and a one-operand ``broadcast`` whose ``fn`` is ``neg`` gets
+    ``fn: "-"``. Every other field is kept. A use with the wrong operand count
+    is left as written, so its arity error is unchanged."""
     sites: list[str] = []
     _rewrite_deprecated(data, "", sites)
     return sites

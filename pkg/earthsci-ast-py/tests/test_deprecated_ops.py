@@ -73,7 +73,7 @@ def test_negated_observed_rewrites_neg_to_unary_minus():
 def test_broadcast_fn_neg_is_rewritten():
     raw = json.loads((FIXTURES_ROOT / "fixtures" / "faq" / "27_broadcast_unary.esm").read_text())
     sites = rewrite_deprecated_ops(raw)
-    assert len(sites) == 1 and sites[0].endswith("(broadcast fn neg)")
+    assert len(sites) == 1 and sites[0].endswith(" (broadcast fn neg)")
     text = json.dumps(raw)
     assert '"fn": "neg"' not in text
 
@@ -84,13 +84,74 @@ def test_rewrite_keeps_other_fields_and_skips_wrong_arity():
         "b": {"op": "neg", "args": ["x", "y"]},
         "c": {"op": "pow", "args": ["x"]},
         "d": {"op": "pow", "args": ["x", 2]},
+        "e": {"op": "broadcast", "fn": "neg", "args": ["x", "y"]},
+        "f": {"op": "broadcast", "fn": "neg", "args": ["x"]},
+        "g/h~": {"op": "neg", "args": ["x"]},
     }
     sites = rewrite_deprecated_ops(doc)
-    assert sites == ["/a (neg)", "/d (pow)"]
+    # One shared site format across the bindings: the node's RFC 6901
+    # pointer, then the spelling it had.
+    assert sites == ["/a (neg)", "/d (pow)", "/f (broadcast fn neg)", "/g~1h~0 (neg)"]
     assert doc["a"] == {"op": "-", "args": ["x"], "id": "keep"}
     assert doc["b"]["op"] == "neg"
     assert doc["c"]["op"] == "pow"
     assert doc["d"]["op"] == "^"
+    assert doc["e"]["fn"] == "neg", "a two-operand broadcast of neg keeps its arity error"
+    assert doc["f"]["fn"] == "-"
+
+
+def _broadcast_doc(n_args: int) -> dict:
+    args = ["x", "x"][:n_args]
+    return {
+        "esm": "2.0.0",
+        "metadata": {"name": "BroadcastNeg"},
+        "models": {
+            "M": {
+                "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "broadcast", "fn": "neg", "args": args},
+                    }
+                ],
+            }
+        },
+    }
+
+
+def test_wrong_arity_broadcast_neg_is_refused_as_before():
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        with pytest.raises(Exception, match=r"fn 'neg' accepts at most 1 operand"):
+            load_document(_broadcast_doc(2))
+    assert _deprecated_op_warnings(record) == []
+
+
+def test_one_operand_broadcast_neg_loads_as_minus():
+    with pytest.warns(EsmDeprecationWarning, match=r"/rhs \(broadcast fn neg\)"):
+        f = load_document(_broadcast_doc(1))
+    rhs = f.models["M"].equations[0].rhs
+    assert rhs.fn == "-"
+
+
+def test_emit_document_rewrites_deprecated_ops(tmp_path):
+    from earthsci_ast.lower_expression_templates import emit_document
+
+    raw = json.loads((SCALAR_OPS / "pow_alias.esm").read_text())
+    before = copy.deepcopy(raw)
+    with pytest.warns(EsmDeprecationWarning, match=DEPRECATED_OP):
+        out = emit_document(raw, str(SCALAR_OPS))
+    assert raw == before
+    text = json.dumps(out)
+    assert '"pow"' not in text
+    assert _rhs_raw(out, "PowAlias", "pow_power")["op"] == "^"
+
+
+def _rhs_raw(doc: dict, model: str, lhs: str) -> dict:
+    for eq in doc["models"][model]["equations"]:
+        if eq["lhs"] == lhs:
+            return eq["rhs"]
+    raise AssertionError(f"no equation for {lhs}")
 
 
 def test_load_document_does_not_mutate_caller_and_warns_once():
