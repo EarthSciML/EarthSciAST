@@ -762,10 +762,13 @@ touches and in the same pass as the `removed_op` check above:
 
 Only the `op` (or the `broadcast` `fn`) changes; every other field of the node is
 kept. A node with the wrong number of operands for its spelling (`neg` with other
-than one, `pow` with other than two) is NOT rewritten, so it is refused with the
-arity error it would always have had. A document that spelled either one loads with
-one **warning** per document, `deprecated_op`, naming the JSON pointer of every
-rewritten node; it is not an error and changes no value. After the rewrite neither
+than one, `pow` with other than two, a `broadcast` of `neg` with other than one) is
+NOT rewritten, so it is refused with the arity error it would always have had. A
+document that spelled either one loads with one **warning** per document,
+`deprecated_op`, naming every rewritten node as its RFC 6901 JSON pointer followed by
+the spelling it had: `<pointer> (neg)`, `<pointer> (pow)` or `<pointer> (broadcast fn
+neg)`. It is not an error and changes no value. The rewrite applies on every path that
+reads a document, the reference-preserving emit path included. After the rewrite neither
 spelling survives in the loaded document, so a binding that emits the document
 writes `-` and `^`, and the canonical form (`docs/content/rfcs/discretization.md`
 §5.4.7) never contains `neg` or `pow`. A binding's evaluator MAY still accept a

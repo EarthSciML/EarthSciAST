@@ -855,18 +855,24 @@ canonicalizer preserves argument order (`args[0]` is the minuend,
 `args[1]` is the subtrahend). Nested same-op `-` is NOT flattened:
 `-(a, -(b, c))` canonicalizes to `-(canonicalize(a), -(canonicalize(b),
 canonicalize(c)))`, not to `+(a, -b, c)`. Identity rules: `-(x, 0)` →
-`x`, `-(0, 0)` → `0`. `-(x, x)` is NOT simplified to `0` (that is an
+`x`, `-(0, 0)` → `0`. A literal zero minuend collapses only against a
+numeric literal (see unary `-` below). `-(x, x)` is NOT simplified to `0` (that is an
 algebraic rewrite, not a canonical-form operation; see §5.4 closing
 paragraph).
 
-**Unary `-` (unary negation).** Negation has three input spellings:
-the unary `{op:"-", args:[x]}`, a binary `-` with a literal zero minuend
-(`{op:"-", args:[0, x]}`), and the deprecated word spelling
+**Unary `-` (unary negation).** Negation has two input spellings:
+the unary `{op:"-", args:[x]}` and the deprecated word spelling
 `{op:"neg", args:[x]}` (esm-spec §4.2 "Deprecated ops"; a loader has
 already rewritten it to unary `-`, but the canonicalizer accepts it too).
 The canonical form is **the unary `-` node** when the operand is not
-itself a literal: each of the three canonicalizes to
-`{op:"-", args:[x]}`. A numeric literal that happens to be negative is
+itself a literal: both canonicalize to `{op:"-", args:[x]}`. A binary
+`-` with a literal zero minuend, `{op:"-", args:[0, x]}`, is NOT a
+third spelling: `0 − x` and `−x` differ when `x` is `+0.0` (`0 − 0.0`
+is `+0.0`, `−(0.0)` is `−0.0`), so with a non-literal `x` the binary
+node is kept as written. With a numeric-literal `x` it folds to the
+exact difference: an integer when both literals are integers, else the
+IEEE float difference, so `-(0, 5) → -5`, `-(0.0, 5) → -5.0`, and
+`-(0, 0.0)`, `-(0.0, 0.0)` and `-(0.0, -0.0)` all give `0.0`. A numeric literal that happens to be negative is
 kept as the literal itself (no wrapper around numerics): `-(5)` and
 `neg(5)` canonicalize to `-5` (a literal integer or float node with
 negative value). Identity rules: `-(0) → 0`, `-(0.0) → -0.0` (the sign is kept, as in §5.4.6),
@@ -2813,6 +2819,9 @@ findings it resolves and the section(s) that carry the normative text.
   ops; args order preserved; no flattening; identity rules enumerated.
   Unary negation canonicalized as `{op:"neg", args:[x]}`; numeric
   literals absorb the sign. No new AST ops. Resolves gt-adhm **M6**.
+  *Superseded* by the deprecation of `neg` (esm-spec §4.2 "Deprecated
+  ops"): unary negation now canonicalizes to `{op:"-", args:[x]}`, and
+  `-(0, x)` collapses to it only for a numeric-literal `x` (§5.4.7).
 
 - **F7 — §5.3 / §7.2 `regrid.method` closed set.** `method` now
   validates against a closed enum (`"nearest"`, `"bilinear"`,
