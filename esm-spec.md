@@ -72,6 +72,29 @@ The full authoring stance, normatively:
 **MIME type:** `application/vnd.earthsciml+json`  
 **Encoding:** UTF-8
 
+### 1.2 Document source formats
+
+An ESM document can also be written as a Markdown (`.md`, with LaTeX math) or
+Typst (`.typ`) source document. Those source formats are not specified here.
+Their specification is the commented Lean source in `formal/`, published as the
+chapter [Document formats](https://earthsci.dev/ast/generated/document-formats/)
+on earthsci.dev. The Lean modules are the authority for the source formats:
+
+- `Esm.Document.Notation` (`formal/Esm/Document/Notation.lean`): the notation
+  tables (operator tiers, precedence, name rules, where each field lives in a
+  document, accepted variants);
+- `Esm.Document.Math.*`: the LaTeX and Typst math grammars, their printers and
+  parsers, and the round-trip theorems;
+- `Esm.Document.Json`, `Esm.Document.Yaml` and `Esm.Document.TypstDict`, with
+  `Esm.Document.Number` and `Esm.Document.Strings`: the value codecs;
+- every other module under `formal/Esm/Document/`, such as the document
+  containers;
+- `Esm.Units.Canonical` and `Esm.Units.Typeset`: the unit spellings a source
+  document uses, built on the §4.8 model in `Esm.Units`.
+
+What a document means is still the `.esm` JSON form this document specifies; a
+source document is a lossless spelling of it.
+
 ---
 
 ## 2. Top-Level Structure
