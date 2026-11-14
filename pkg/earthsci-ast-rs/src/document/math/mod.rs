@@ -46,6 +46,11 @@ pub fn parse_typst(s: &Sym, text: &str) -> Option<Json> {
     typst::lex(&cs).and_then(|toks| parse_toks(Sf::Typst, s, &toks))
 }
 
+/// `Math.escT` (Print.lean): a backslash before every character of `escSet`.
+pub fn esc_t(_cs: &[char]) -> Vec<char> {
+    todo!("math layer")
+}
+
 /// `Math.unescT` (Print.lean): drop the backslash of every `\c` pair.
 pub fn unesc_t(_cs: &[char]) -> Vec<char> {
     todo!("math layer")
