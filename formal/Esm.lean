@@ -74,6 +74,7 @@ import Esm.Document.Math.LexTypst
 import Esm.Document.Math.TokTypst
 import Esm.Document.Math.RoundTripTypst
 import Esm.Document.Math.Variants
+import Esm.Document.Math.HandWritten
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/

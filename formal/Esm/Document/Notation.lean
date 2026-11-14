@@ -273,8 +273,8 @@ def indexCollisionForm : String := "k[1]"
 `Int64`-representable value is an integer with no point (`1.0` prints as `1`); any other
 finite value prints its shortest round-trip digits, positional for decimal exponents
 -4 to 5 and scientific otherwise. In math, scientific notation is exactly
-`<decimal> \times 10^{<integer>}`, read back as one literal; a real product with a
-power of ten prints with `\cdot`. A negative literal prints as `-3`; unary minus on a
+`<decimal> \times 10^{<integer>}`, read back as one literal (with any spacing, and from an
+integer mantissa too); a real product with a power of ten prints with `\cdot`. A negative literal prints as `-3`; unary minus on a
 positive literal prints as `-(3)`. A `const` with units prints as the number, a thin
 space, then the canonical unit spelling upright: LaTeX `3\,\mathrm{m/s}`, Typst one
 `upright("sym")^(exp)` per unit factor, factors separated by `thin` (Typst sets adjacent
@@ -371,8 +371,11 @@ def skippedConstructs : List String := ["prose", "Typst <label>", "Typst @ref", 
 
 /-! ## Accepted variants
 
-Spellings the parser reads and normalizes; the printer never writes them. Each gets a
-Phase 2 lemma (the variant parses to the same JSON as the canonical spelling) and a
+Spellings the parser reads and normalizes; the printer never writes them. Each math
+variant has a Phase 2 lemma in `Esm.Document.Math.Variants` (the variant parses to the
+same JSON as the canonical spelling) and hand-written checks in
+`Esm.Document.Math.HandWritten`; the document-layer rows (the declarations table,
+aligned blocks, row breaks) get theirs with the document layer in Phase 3. Each gets a
 Phase 4 fixture. `rejected` rows pin spellings the parser refuses. -/
 
 inductive Surface where
@@ -394,9 +397,9 @@ def variants : List Variant := [
     readsAs := "D(N, wrt t)" },
   { spelling := "dot(N)", surface := .typst, readsAs := "D(N, wrt t)" },
   { spelling := r"\frac{dN}{dt}, \frac{d N}{d t} with an italic d", surface := .latex,
-    readsAs := r"D(N, wrt t) only when no variable d is declared and the fraction is exactly d<name> over d<name>; with d declared, the quotient (d N)/(d t), which is what the printer means by that text" },
+    readsAs := r"D(N, wrt t) only when no variable d is declared, neither dN nor dt written as one word is itself a declared name, and the fraction is exactly d<name> over d<name>; otherwise the fraction reads as written: with d declared, the quotient (d N)/(d t), which is what the printer means by that text; with dN and dt declared, the quotient of those names (a declared whole word wins, as for any word); with only one of them declared, the other word is unknown and the input is refused" },
   { spelling := "(d N)/(d t) with an italic d", surface := .typst,
-    readsAs := "D(N, wrt t) under the same condition as the LaTeX row; otherwise the quotient" },
+    readsAs := "D(N, wrt t) under the same conditions as the LaTeX row; otherwise the quotient" },
   { spelling := r#"\mathrm{e}^{x}, upright(e)^x"#, surface := .both, readsAs := "exp(x), always" },
   { spelling := "e^{x}, e^x with an italic e", surface := .both,
     readsAs := "exp(x) only when no variable e is declared (a bare undeclared e is otherwise an error, so this changes the reading of no valid document); with e declared, the variable e raised to x" },
@@ -408,6 +411,12 @@ def variants : List Variant := [
     readsAs := "* (except the scientific-literal shape)" },
   { spelling := "a / b inline", surface := .latex, readsAs := "/" },
   { spelling := r"\leq \geq \neq", surface := .latex, readsAs := "comparisons" },
+  { spelling := r"k-1, k -1: a minus sign written against the number after an operand", surface := .both,
+    readsAs := r"binary minus, k - 1; a negative literal only where no operand precedes it (at the start, after an operator or an opening delimiter: -1, a \cdot -1, x^{-1}); -0 is a minus sign and 0" },
+  { spelling := r"scientific literal with any spacing: 2	imes10^{3}, 2 	imes  10 ^ {3}, 2times 10^( 3 ); an integer mantissa", surface := .both,
+    readsAs := r"the one literal, as 2 	imes 10^{3} (a non-integer exponent, 3 	imes 10^{n}, is an ordinary product)" },
+  { spelling := r"\, between operands (k\,T)", surface := .latex,
+    readsAs := r"a space; \, is the unit separator only right before \mathrm{…} spelling a unit" },
   { spelling := "[i, j] directly after an operand (a name, a closing ) or ]), in any position",
     surface := .both,
     readsAs := r"index, never a product: k [A + B] is index(k, A + B); the faq output form \left[ … \right]_{i \in S} is a whole term, so x \left[ … \right]_{i \in S} is a product" },

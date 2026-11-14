@@ -245,45 +245,56 @@ theorem allPos_named : ∀ bs : List (String × Json), bs ≠ [] →
   | [], h => absurd rfl h
   | _ :: _, _ => rfl
 
+/-- Named template arguments read back as the template application, whether or not the
+symbol table knows the template's parameters (the printer writes them named only when it
+does not; `Esm.Document.Math.Variants.variant_named_args`). -/
+theorem pPrim_named (c : Ctx) (n : String) (bs : List (String × Json))
+    (hn : tnameOK n = true) (hM : ∀ kv ∈ bs, M c kv.2) (hne : bs ≠ [])
+    (hk : ∀ kv ∈ bs, nameOK kv.1 = true) (rest : List Tok) (f : Nat)
+    (hf : need 10 (callToks c.sf [.opn n] (bs.map (itemToks c))).length ≤ f) :
+    pPrim c f (callToks c.sf [.opn n] (bs.map (itemToks c)) ++ rest) = some (tNode n bs, rest) := by
+  obtain ⟨hco, hneg, hpow, hD, hrem⟩ := tname_facts hn
+  obtain ⟨g, rfl⟩ : ∃ g, f = g + 3 := ⟨f - 3, by unfold need at hf; simp [length_callToks] at hf; omega⟩
+  simp only [length_callToks] at hf
+  have hci := pCallItems_named c rest bs hne hM hk g (by simp at hf; unfold need at hf ⊢; omega)
+  obtain ⟨kv, bs', rfl⟩ : ∃ kv bs', bs = kv :: bs' := by
+    cases bs with
+    | nil => exact absurd rfl hne
+    | cons kv bs' => exact ⟨kv, bs', rfl⟩
+  obtain ⟨t, tr, he, h1, -, -, h4, -, -⟩ :=
+    headOK_closer (headOK_at (M_name c kv.1 (hk kv (by simp))) 4)
+  rw [at_name] at he
+  have hs : sepBy [.kw .comma] ((kv :: bs').map (itemToks c)) =
+      t :: (tr ++ .kw .eq :: (pr c kv.2).at c.sf 4 ++
+        (bs'.map (itemToks c)).flatMap (fun y => [.kw .comma] ++ y)) := by
+    rw [List.map_cons, sepBy_cons]; simp [itemToks, he]
+  rw [hs] at hci
+  simp only [callToks, lpC, List.cons_append, List.nil_append, List.append_assoc]
+  rw [hs]
+  simp only [List.cons_append, List.append_assoc]
+  rw [pPrim.eq_def]
+  simp only
+  rw [pOpn.eq_def]
+  simp only [isLp, ↓reduceIte]
+  have ht : t ≠ .kw .rp := by intro e; subst e; simp [isRp] at h1
+  rw [pCallArgs.eq_4 _ _ _ (by intro r' e; cases e; exact ht rfl) (by intro r' e; cases e; exact h4 rfl)]
+  simp only [List.append_assoc, List.cons_append] at hci
+  rw [hci]
+  simp only [hco, hneg, hpow, hD, hrem, Bool.false_eq_true, ↓reduceIte,
+    allNamed_named, allPos_named _ hne]
+  split <;> simp_all
+
 theorem M_tnamed (c : Ctx) (n : String) (bs : List (String × Json))
     (hn : tnameOK n = true) (hM : ∀ kv ∈ bs, M c kv.2) (hne : bs ≠ [])
     (hk : ∀ kv ∈ bs, nameOK kv.1 = true)
     (hpr : pr c (tNode n bs) = mkOut c.sf 10 (callToks c.sf [.opn n] (bs.map (itemToks c)))) :
     M c (tNode n bs) := by
-  obtain ⟨hco, hneg, hpow, hD, hrem⟩ := tname_facts hn
   apply M_of
   · apply P0_of_prim
     · intro rest hr f hf
-      obtain ⟨g, rfl⟩ : ∃ g, f = g + 3 := ⟨f - 3, by rw [hpr] at hf; unfold need at hf; simp [mkOut, length_callToks] at hf; omega⟩
       rw [hpr] at hf ⊢
-      simp only [mkOut, length_callToks] at hf ⊢
-      have hci := pCallItems_named c rest bs hne hM hk g (by simp at hf; unfold need at hf ⊢; omega)
-      obtain ⟨kv, bs', rfl⟩ : ∃ kv bs', bs = kv :: bs' := by
-        cases bs with
-        | nil => exact absurd rfl hne
-        | cons kv bs' => exact ⟨kv, bs', rfl⟩
-      obtain ⟨t, tr, he, h1, -, -, h4, -, -⟩ :=
-        headOK_closer (headOK_at (M_name c kv.1 (hk kv (by simp))) 4)
-      rw [at_name] at he
-      have hs : sepBy [.kw .comma] ((kv :: bs').map (itemToks c)) =
-          t :: (tr ++ .kw .eq :: (pr c kv.2).at c.sf 4 ++
-            (bs'.map (itemToks c)).flatMap (fun y => [.kw .comma] ++ y)) := by
-        rw [List.map_cons, sepBy_cons]; simp [itemToks, he]
-      rw [hs] at hci
-      simp only [callToks, lpC, List.cons_append, List.nil_append, List.append_assoc]
-      rw [hs]
-      simp only [List.cons_append, List.append_assoc]
-      rw [pPrim.eq_def]
-      simp only
-      rw [pOpn.eq_def]
-      simp only [isLp, ↓reduceIte]
-      have ht : t ≠ .kw .rp := by intro e; subst e; simp [isRp] at h1
-      rw [pCallArgs.eq_4 _ _ _ (by intro r' e; cases e; exact ht rfl) (by intro r' e; cases e; exact h4 rfl)]
-      simp only [List.append_assoc, List.cons_append] at hci
-      rw [hci]
-      simp only [hco, hneg, hpow, hD, hrem, Bool.false_eq_true, ↓reduceIte,
-        allNamed_named, allPos_named _ hne]
-      split <;> simp_all
+      simp only [mkOut] at hf ⊢
+      exact pPrim_named c n bs hn hM hne hk rest f hf
     · rw [hpr]; simp [mkOut]
     · rw [hpr]; simp [mkOut]
   · rw [hpr]; exact ⟨by simp, by simp, by simp, by simp, by simp, Or.inl (by simp [startA, atomStart])⟩
