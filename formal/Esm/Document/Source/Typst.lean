@@ -281,9 +281,31 @@ def paramsT : List String → List Char
 def tmRawT (t : Tm String) : List Char :=
   tmOp ++ quote true t.name ++ tmPar ++ paramsT t.params ++ tmDefT ++ t.body.toList
 
+/-- The length of a parameter name's Typst math: up to the first `,` or `)` outside
+parentheses and string literals, since a name prints with both (`italic("Ea")`,
+`A_(upright("pre"))`). `d` is the parenthesis depth, `q` whether inside a string. -/
+def nameLenT : Nat → Bool → List Char → Nat
+  | _, _, [] => 0
+  | d, true, c :: r =>
+    if c == '\\' then
+      match r with
+      | _ :: r' => 2 + nameLenT d true r'
+      | [] => 1
+    else 1 + nameLenT d (c != '"') r
+  | d, false, c :: r =>
+    if c == '"' then 1 + nameLenT d true r
+    else if c == '(' then 1 + nameLenT (d + 1) false r
+    else if c == ')' then
+      match d with
+      | 0 => 0
+      | d' + 1 => 1 + nameLenT d' false r
+    else if c == ',' && d == 0 then 0
+    else 1 + nameLenT d false r
+
+/-- A parameter name in a template header, read as Typst math. -/
 def pNameT (s : List Char) : Option (String × List Char) :=
-  match parseTypst {} (String.ofList (s.takeWhile (fun c => c != ',' && c != ')'))) with
-  | some (.str n) => some (n, s.drop (s.takeWhile (fun c => c != ',' && c != ')')).length)
+  match parseTypst {} (String.ofList (s.take (nameLenT 0 false s))) with
+  | some (.str n) => some (n, s.drop (nameLenT 0 false s))
   | _ => none
 
 def pParamsT : Nat → List Char → Option (List String × List Char)
