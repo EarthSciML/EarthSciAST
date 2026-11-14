@@ -87,10 +87,12 @@ def commentOK : Option String → Bool
 /-! ## What Markdown spells natively -/
 
 /-- A value remark-directive reads as written in a double-quoted attribute: a string
-without `"` (it would end the quoted value, the YAML escape notwithstanding) and without
-`&` (a character reference would be decoded); any other value. -/
+whose characters the YAML printer writes as themselves (no `"`, which would end the
+quoted value; no backslash, tab, newline, carriage return or other character written as
+an escape, which remark-directive would not decode) and without `&` (a character
+reference would be decoded); any other value. -/
 def dqOK : Json → Bool
-  | .str s => !s.toList.contains '"' && !s.toList.contains '&'
+  | .str s => s.toList.all (fun c => Strings.escChar false c == [c] && c != '&')
   | _ => true
 
 /-- The Markdown container's predicates. A description must not contain a line that
