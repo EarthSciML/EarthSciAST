@@ -1,0 +1,141 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "name": "LiftVariableMapRate",
+    "description": "Pointwise lift (esm-spec 10.5) through a variable_map: a [lev] temperature reaches the rate model Rates, so Rates.k1 is an array and the reaction system Mech, whose rate it is, is lifted onto [lev] (esm-libraries-spec 4.7.5, 'Pointwise lift: which states are lifted'). Tend.dA_dt = D(Mech.A) resolves to Mech.A's lifted right-hand side.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-13T00:00:00Z"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 300.0,
+          "shape": [
+            "lev"
+          ]
+        }
+      },
+      "equations": []
+    },
+    "Rates": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 300.0
+        },
+        "k1": {
+          "type": "unknown",
+          "units": "1/s"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "k1",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.001,
+              {
+                "op": "/",
+                "args": [
+                  "T",
+                  300.0
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "Tend": {
+      "variables": {
+        "dA_dt": {
+          "type": "unknown",
+          "units": "1/s"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "dA_dt",
+          "rhs": {
+            "op": "D",
+            "args": [
+              "Mech.A"
+            ],
+            "wrt": "t"
+          }
+        }
+      ]
+    }
+  },
+  "reaction_systems": {
+    "Mech": {
+      "species": {
+        "A": {
+          "units": "1",
+          "default": 1.0
+        },
+        "B": {
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "parameters": {
+        "kb": {
+          "units": "1/s",
+          "default": 0.002
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "Rates.k1"
+        },
+        {
+          "id": "R2",
+          "substrates": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
+          "products": null,
+          "rate": "kb"
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Column.T",
+      "to": "Rates.T",
+      "transform": "param_to_var",
+      "lifting": "pointwise"
+    }
+  ]
+}

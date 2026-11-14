@@ -6,7 +6,7 @@
  */
 
 import type { Expression, ExpressionNode } from './types.js'
-import type { FlattenedSystem } from './flatten.js'
+import type { FlattenedEquation, FlattenedSystem } from './flatten.js'
 import { numericValue } from './numeric-literal.js'
 import { mapChildren } from './expression.js'
 import { isRewriteTargetDerivative } from './op-registry.js'
@@ -29,6 +29,27 @@ function derivativeTarget(e: Expression): string | undefined {
   if (!isStructuralTimeDerivative(e)) return undefined
   const arg = e.args[0]
   return typeof arg === 'string' ? arg : undefined
+}
+
+/**
+ * The state a pointwise-lifted equation defines: `x` of its left-hand side
+ * `faq(D(index(x, ℓ…)))`, else `undefined`.
+ */
+function liftedTarget(eq: FlattenedEquation): string | undefined {
+  const lhs = eq.lhs
+  if (!eq.lifted || !isNode(lhs) || lhs.op !== 'faq') return undefined
+  const inner = (lhs as { expr?: unknown }).expr
+  if (!isStructuralTimeDerivative(inner)) return undefined
+  const arg = inner.args[0]
+  if (isNode(arg) && arg.op === 'index' && typeof arg.args?.[0] === 'string') return arg.args[0]
+  return undefined
+}
+
+/** Whether a tendency is a lifted right-hand side: a `faq` with output indices. */
+function isLiftedTendency(e: Expression | undefined): boolean {
+  if (!isNode(e) || e.op !== 'faq') return false
+  const outputIdx = (e as { output_idx?: unknown }).output_idx
+  return Array.isArray(outputIdx) && outputIdx.length > 0
 }
 
 /** Does `e` carry a structural `D` anywhere? */
@@ -80,8 +101,10 @@ export function resolveRhsTimeDerivatives(flat: FlattenedSystem): void {
     timeInvariant: new Set(Object.keys(flat.parameters)),
   }
   for (const eq of flat.equations) {
-    const target = derivativeTarget(eq.lhs)
+    const target = derivativeTarget(eq.lhs) ?? liftedTarget(eq)
     if (target !== undefined) {
+      // A lifted state's tendency is its lifted right-hand side, the `faq` over
+      // its index sets (esm-libraries-spec §4.7.5 step 3a).
       tables.tendency.set(target, eq.rhs)
     } else if (typeof eq.lhs === 'string') {
       // A bare-variable LHS is a DEFINING equation (esm-spec §6.3.1's observed /
@@ -97,7 +120,10 @@ export function resolveRhsTimeDerivatives(flat: FlattenedSystem): void {
     // own right-hand side; seeding `active` with it is what makes
     // `D(x)/dt ~ k*D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather than
     // expand forever.
-    const own = derivativeTarget(eq.lhs) ?? (typeof eq.lhs === 'string' ? eq.lhs : undefined)
+    const own =
+      derivativeTarget(eq.lhs) ??
+      liftedTarget(eq) ??
+      (typeof eq.lhs === 'string' ? eq.lhs : undefined)
     const active = own === undefined ? [] : [own]
     // The resolved tendency replaces the `D` node INSIDE the referencing
     // contribution, which keeps its origins (esm-libraries-spec §4.7.5).
@@ -146,6 +172,12 @@ function deriv(e: Expression, tables: DerivTables, active: string[]): Expression
 
   const d = (a: Expression): Expression | undefined => deriv(a, tables, active)
   const args = (e.args ?? []) as Expression[]
+  const head = args[0]
+  if (e.op === 'index' && typeof head === 'string' && isLiftedTendency(tables.tendency.get(head))) {
+    // One cell of a lifted state: that cell of its lifted tendency.
+    const whole = d(head)
+    return whole === undefined ? undefined : { op: 'index', args: [whole, ...args.slice(1)] }
+  }
   switch (e.op) {
     case '+': {
       const terms: Expression[] = []

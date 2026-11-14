@@ -1,0 +1,93 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "name": "LiftMeanAndPointwise",
+    "description": "A variable_map with lifting 'mean' feeds Column.q into Land.p, which does not trigger the lift, but Land.w also reads the [lev] Column.k directly, which does (esm-libraries-spec 4.7.5, 'Non-pointwise coupling': neither exempts a component from a pointwise route). Land is lifted onto [lev], and every array its tendency reads, Column.q included, is read per cell.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-14T00:00:00Z"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "q": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.01,
+          "shape": [
+            "lev"
+          ]
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.2,
+          "shape": [
+            "lev"
+          ]
+        }
+      },
+      "equations": []
+    },
+    "Land": {
+      "variables": {
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.3
+        },
+        "p": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "w"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.001,
+                  "p"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "Column.k",
+                  "w"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Column.q",
+      "to": "Land.p",
+      "transform": "param_to_var",
+      "lifting": "mean"
+    }
+  ]
+}

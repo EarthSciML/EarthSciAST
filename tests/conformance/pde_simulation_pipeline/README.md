@@ -91,3 +91,14 @@ Additive, non-breaking scaffold only. Deferred:
 - **Adapters** (`pipeline:"full"` path in each `earthsci-pde-sim-adapter-*`),
   **golden** regeneration (`golden/advection_reaction_loaded_ic_bc.json`), and
   **`test-conformance.sh`** wiring — all Phase 2 (DESIGN §7–§10).
+
+## Dropping a coupling edge at run time
+
+A fixture may carry `drop_coupling`, a list of `{"from": <name>, "to": <name>}`
+coupling edges. `scripts/run-pde-simulation-conformance.py` then hands the
+adapters a copy of the document without those edges, written to a temporary
+directory for the run and never committed. `wildfire_atmosphere_ocean` uses it
+for its `lifting: "mean"` edge `OceanDynamics.SST -> AirSeaFluxCalculator.SST`:
+esm-spec §10.5 reserves `mean` and every binding refuses it at build, while the
+edge feeds only the 0-D flux calculator's scalar SST, which no `state_order`
+element reads. Each listed edge must be in the document exactly once.

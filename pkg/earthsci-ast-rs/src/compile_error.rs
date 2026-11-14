@@ -9,7 +9,7 @@
 //! Keeping the type here lets those modules compile for WASM while `simulate`
 //! re-exports it unchanged for the native API (`crate::simulate::CompileError`).
 
-use crate::flatten::FlattenError;
+use crate::flatten::{FlattenError, FlattenedSystem};
 use thiserror::Error;
 
 /// Errors raised when building a compiled model from a flattened system.
@@ -430,6 +430,31 @@ pub const IMPLICIT_EQUATION: &str = "implicit equation";
 pub const WIENER_NOISE: &str = "Wiener noise";
 /// The array runtime (`crate::simulate_array`), as a refusal names it.
 pub const ARRAY_EVALUATOR: &str = "Rust array evaluator";
+/// [`CompileError::UnsupportedConstruct`]'s `construct` for a `variable_map`
+/// whose `lifting` esm-spec §10.5 reserves.
+pub const RESERVED_LIFTING: &str = "variable_map lifting";
+/// The `lifting` kinds esm-spec §10.5 reserves: no binding evaluates them yet,
+/// so a build refuses them.
+pub const RESERVED_LIFTINGS: [&str; 2] = ["mean", "integral"];
+
+/// Refuse, with `unsupported_construct`, a flattened system one of whose
+/// `variable_map` edges declares a reserved `lifting` (esm-spec §10.5). Flatten
+/// substitutes such an edge's source unreduced, so building it would read the
+/// raw array where the target expects its mean or integral: a wrong number with
+/// no diagnostic.
+pub fn refuse_reserved_lifting(flat: &FlattenedSystem) -> Result<(), CompileError> {
+    match flat.metadata.reserved_liftings.first() {
+        Some((from, to, kind)) => Err(CompileError::UnsupportedConstruct {
+            construct: RESERVED_LIFTING,
+            evaluator: ARRAY_EVALUATOR,
+            detail: format!(
+                "'{kind}' on the edge '{from}' -> '{to}' (reserved by esm-spec §10.5, not \
+                 supported yet)"
+            ),
+        }),
+        None => Ok(()),
+    }
+}
 
 /// The refusal of an event by `evaluator`: `construct` is [`CONTINUOUS_EVENT`]
 /// or [`DISCRETE_EVENT`], and the message names the event.

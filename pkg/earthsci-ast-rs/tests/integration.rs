@@ -103,6 +103,8 @@ mod display_conformance;
 mod doubly_defined_state_conformance;
 #[path = "earthscidata_loader_coverage.rs"]
 mod earthscidata_loader_coverage;
+#[path = "elementwise_lift_equation_order.rs"]
+mod elementwise_lift_equation_order;
 #[path = "elementwise_observed_gather_conformance.rs"]
 mod elementwise_observed_gather_conformance;
 #[path = "esio_document_cadence.rs"]
@@ -241,6 +243,8 @@ mod overlap_gate_conformance;
 mod overlap_gate_dense_scaling;
 #[path = "overlap_gate_live_forcing.rs"]
 mod overlap_gate_live_forcing;
+#[path = "overlap_gate_ring_stack.rs"]
+mod overlap_gate_ring_stack;
 #[path = "override_key_diagnostics_conformance.rs"]
 mod override_key_diagnostics_conformance;
 #[path = "pde_const_hoist.rs"]
@@ -263,6 +267,8 @@ mod pde_vectorized_eval;
 mod performance;
 #[path = "pipeline_flatten_rewrites.rs"]
 mod pipeline_flatten_rewrites;
+#[path = "pointwise_lift_values.rs"]
+mod pointwise_lift_values;
 #[path = "portable_native_interpreter.rs"]
 mod portable_native_interpreter;
 #[path = "ppm_template_chain.rs"]

@@ -1435,6 +1435,98 @@ impl ArrayCompiled {
         }
     }
 
+    /// Refuse an overlap join gate whose envelope factor is not build-time
+    /// data (CONFORMANCE_SPEC §5.5.6): a factor that is, or reads through
+    /// observeds, a state, the time, or an input refreshed from outside the
+    /// model (a data-fed or handler-updated parameter). The candidate pairs
+    /// are built once, so such a gate has no fixed candidate set.
+    ///
+    /// Run before either compiler sees the rules, so `interpreter` and
+    /// `native` refuse the same document with the same diagnostic, Julia's
+    /// `E_TREEWALK_JOIN_OVERLAP`. Without it `native` refused at its own
+    /// gate (the factor is not foldable) while `interpreter` declined the
+    /// gate and walked the full product.
+    pub(crate) fn refuse_live_overlap_factors(&self) -> Result<(), SimulateError> {
+        fn rhs_body(r: &RhsRule) -> &Expr {
+            match r {
+                RhsRule::Scalar { body, .. }
+                | RhsRule::IndexedScalar { body, .. }
+                | RhsRule::ArrayLoop { body, .. } => body,
+            }
+        }
+        fn overlap_factors<'e>(e: &'e Expr, out: &mut Vec<&'e String>) {
+            if let Expr::Operator(n) = e {
+                for ov in n.join.iter().flatten().filter_map(|c| c.overlap.as_ref()) {
+                    out.extend(ov.src_env.iter().chain(&ov.tgt_env));
+                }
+                n.for_each_child(&mut |c| overlap_factors(c, out));
+            }
+        }
+        let mut factors: Vec<&String> = Vec::new();
+        for body in self
+            .observed_rules
+            .iter()
+            .map(observed_rule_body)
+            .chain(self.rhs_rules.iter().map(rhs_body))
+        {
+            overlap_factors(body, &mut factors);
+        }
+        if factors.is_empty() {
+            return Ok(());
+        }
+        let outside: HashSet<&str> = self
+            .forcing_decls
+            .keys()
+            .map(String::as_str)
+            .chain(self.data_fed.iter().map(|(n, _)| n.as_str()))
+            .collect();
+        // Why a name is not build-time data, or `None`. `observed_rules` are
+        // dependency-ordered, so an observed's reads are classified before it.
+        let leaf = |name: &str| -> Option<String> {
+            if name == "t" {
+                Some("the time `t`".to_string())
+            } else if self.var_shapes.contains_key(name) {
+                Some(format!("the state `{name}`"))
+            } else if outside.contains(name) {
+                Some(format!(
+                    "`{name}`, an input refreshed from outside the model"
+                ))
+            } else {
+                None
+            }
+        };
+        let mut live: HashMap<&str, String> = HashMap::new();
+        for rule in &self.observed_rules {
+            let var = observed_rule_var(rule);
+            let mut refs = HashSet::new();
+            collect_expr_var_refs(observed_rule_body(rule), &mut refs);
+            refs.remove(var.as_str());
+            let mut refs: Vec<String> = refs.into_iter().collect();
+            refs.sort();
+            let why = refs.iter().find_map(|r| {
+                leaf(r).or_else(|| live.get(r.as_str()).map(|w| format!("{w} through `{r}`")))
+            });
+            if let Some(why) = why {
+                live.insert(var.as_str(), why);
+            }
+        }
+        for name in factors {
+            let why = leaf(name).or_else(|| live.get(name.as_str()).cloned());
+            if let Some(why) = why {
+                return Err(SimulateError::Compile(
+                    crate::compile_error::CompileError::build_err(format!(
+                        "E_TREEWALK_JOIN_OVERLAP: overlap join env factor `{name}` is not \
+                     build-time data: it reads {why}. An envelope factor must be a const \
+                     array, a const observed or setup geometry, not a live forcing / \
+                     data-loader array or a state, because the gate's candidate pairs are \
+                     built once (CONFORMANCE_SPEC §5.5.6)"
+                    )),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// The component / subsystem names a rule-2 override key may spell in its
     /// LEADING segments (esm-spec §6.6.2, §4.6).
     ///

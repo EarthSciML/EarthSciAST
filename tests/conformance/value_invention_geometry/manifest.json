@@ -202,6 +202,37 @@
     ]
    },
    "named_exclusions": []
+  },
+  {
+   "id": "overlap_gated_regrid_ring_params_ode",
+   "path": "fixtures/overlap_gated_regrid_ring_params_ode.esm",
+   "model": "OverlapGatedRegridRingParams",
+   "golden": "golden/overlap_gated_regrid_ring_params_ode.json",
+   "tags": [
+    "join",
+    "overlap",
+    "ring-stack",
+    "geometry",
+    "overlap_area_planar",
+    "construction",
+    "baked-parameter"
+   ],
+   "note": "Authored here: an overlap gate over parameter-computed ring stacks (the reseact NEIRegrid shape), which the Rust binding did not drive.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
   }
  ]
 }

@@ -44,7 +44,8 @@ and the gaps below went unseen:
 
 ## The fixtures
 
-Authored here (every producer input a `const`-defined unknown):
+Authored here (every producer input a `const`-defined unknown, except the
+parameter-computed rings of `overlap_gated_regrid_ring_params_ode`):
 
 | Fixture | What the right-hand side reads |
 |---|---|
@@ -52,6 +53,7 @@ Authored here (every producer input a `const`-defined unknown):
 | `nearest_generator_ode` | an `argmin` template arg-witness buffer, through a gather `gx[assign[i]]`, including the smallest-id tie-break |
 | `bin_skolem_count_ode` | the size of a bin-key candidate-pair set (5) |
 | `overlap_gated_regrid_ode` | a construction-time conservative regrid whose `faq` nodes carry an `overlap` join gate on the ring envelopes (A_ij by `overlap_area_planar`, the sliver-filtered A_j and F_tgt), four of six pairs pruned (#535; EarthSciDiscretizations `conservative_overlap_gated_*`) |
+| `overlap_gated_regrid_ring_params_ode` | the same gated regrid, but each gate side is one `[pos, verts, coord]` ring stack COMPUTED from scalar grid parameters (origin and spacing), the shape of reseact's `NEIRegrid`: the gate's range symbols come from the ring stacks' position axis, and the parameters feeding the rings are baked (CONFORMANCE_SPEC §5.5.8). Rust resolved an overlap gate only over 1-D envelope factors, so it never drove a ring-stack gate, and at reseact's size its native compiler refused the narrow phase |
 
 Referenced from `tests/valid/geometry/`: `polygon_intersection_area_padded_ring`
 and `polygon_intersection_area_planar` (both `overlap_area_planar` documents,
