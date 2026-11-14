@@ -45,6 +45,11 @@ Fields:
   `parameter_overrides` / `initial_conditions` key, an output selection — to
   resolve a spelling the merge moved out from under it. Empty for a document
   with no renaming merge, which is the overwhelming majority.
+- `reserved_liftings::Vector{NTuple{3,String}}`: every `variable_map` whose
+  `lifting` esm-spec §10.5 reserves (`mean`, `integral`), as
+  `(from, to, lifting)` in coupling order after `coupling_import` expansion.
+  Flatten leaves such an edge's source unreduced, so a build refuses the system
+  (`_refuse_reserved_liftings`), from a flattened system as from a document.
 """
 struct FlattenMetadata
     source_systems::Vector{String}
@@ -52,6 +57,7 @@ struct FlattenMetadata
     dimension_promotions_applied::Vector{NamedTuple}
     opaque_coupling_refs::Vector{String}
     merged_variable_renames::OrderedDict{String, String}
+    reserved_liftings::Vector{NTuple{3, String}}
 end
 
 FlattenMetadata(
@@ -59,13 +65,15 @@ FlattenMetadata(
     coupling_rules_applied::Vector{String} = String[];
     dimension_promotions_applied::Vector{<:NamedTuple} = NamedTuple[],
     opaque_coupling_refs::Vector{String} = String[],
-    merged_variable_renames::AbstractDict = OrderedDict{String, String}()
+    merged_variable_renames::AbstractDict = OrderedDict{String, String}(),
+    reserved_liftings::AbstractVector = NTuple{3, String}[]
 ) =
     FlattenMetadata(
     source_systems, coupling_rules_applied,
     NamedTuple[dp for dp in dimension_promotions_applied],
     opaque_coupling_refs,
-    OrderedDict{String, String}(merged_variable_renames)
+    OrderedDict{String, String}(merged_variable_renames),
+    NTuple{3, String}[r for r in reserved_liftings]
 )
 
 """
@@ -1576,6 +1584,7 @@ function flatten(
         dimension_promotions_applied = NamedTuple[],
         opaque_coupling_refs = opaque_refs,
         merged_variable_renames = merged_renames,
+        reserved_liftings = _reserved_liftings(file.coupling),
     )
 
     # Step 6: the §6.3.1 SUBSET maps, every membership decision delegated to the

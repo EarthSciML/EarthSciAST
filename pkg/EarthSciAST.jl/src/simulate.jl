@@ -318,6 +318,7 @@ function _prepare_run_doc(
         # emit events, so the tree-walk build never sees one and would run the
         # model without it.
         _refuse_flat_events(input)
+        _refuse_reserved_liftings(input)
         _refuse_flat_wiener_noise(input)
         _refuse_flat_symbolic_updates(input)
         renames_out === nothing ||

@@ -600,28 +600,46 @@ function _refuse_coupling_events(file::EsmFile, classes)
     return nothing
 end
 
+# The `lifting` kinds esm-spec §10.5 reserves: no compiler here implements
+# their reduction.
+const _RESERVED_LIFTINGS = ("mean", "integral")
+
+# Every `variable_map` in `coupling` whose `lifting` esm-spec §10.5 reserves, as
+# `(from, to, lifting)` in coupling order. Flatten records them in
+# `FlattenMetadata.reserved_liftings`.
+function _reserved_liftings(coupling)
+    out = NTuple{3, String}[]
+    for entry in coupling
+        entry isa CouplingVariableMap || continue
+        entry.lifting in _RESERVED_LIFTINGS || continue
+        push!(out, (String(entry.from), String(entry.to), String(entry.lifting)))
+    end
+    return out
+end
+
 # Refuse a `variable_map` whose `lifting` is `mean` or `integral`: esm-spec §10.5
 # reserves both kinds and no compiler here implements the reduction, so building
 # would read the raw array where the document asks for its mean or integral.
 # Validation and flatten accept them; only a build of a runnable problem
-# refuses. The coupling read is the one after `coupling_import` expansion, as
-# for `_refuse_coupling_events`.
-function _refuse_reserved_liftings(file::EsmFile)
-    for entry in expand_coupling_imports(file)
-        entry isa CouplingVariableMap || continue
-        kind = entry.lifting
-        (kind == "mean" || kind == "integral") || continue
-        throw(
-            TreeWalkError(
-                ERROR_CODES.UNSUPPORTED_CONSTRUCT,
-                "variable_map $(entry.from) -> $(entry.to) declares lifting " *
-                    "\"$(kind)\", which esm-spec §10.5 reserves and which is not " *
-                    "supported yet; refusing the build rather than running the model " *
-                    "without it"
-            )
+# refuses. From a document the coupling read is the one after `coupling_import`
+# expansion, as for `_refuse_coupling_events`; from a flattened system it is the
+# edges flatten recorded, so a system flattened beforehand is refused too.
+_refuse_reserved_liftings(file::EsmFile) =
+    _refuse_reserved_liftings(_reserved_liftings(expand_coupling_imports(file)))
+_refuse_reserved_liftings(flat::FlattenedSystem) =
+    _refuse_reserved_liftings(flat.metadata.reserved_liftings)
+function _refuse_reserved_liftings(edges::AbstractVector{NTuple{3, String}})
+    isempty(edges) && return nothing
+    from, to, kind = first(edges)
+    throw(
+        TreeWalkError(
+            ERROR_CODES.UNSUPPORTED_CONSTRUCT,
+            "variable_map $(from) -> $(to) declares lifting " *
+                "\"$(kind)\", which esm-spec §10.5 reserves and which is not " *
+                "supported yet; refusing the build rather than running the model " *
+                "without it"
         )
-    end
-    return nothing
+    )
 end
 
 # ============================================================================
