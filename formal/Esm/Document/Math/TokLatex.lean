@@ -56,7 +56,7 @@ macro "aok" : tactic => `(tactic| (
   try simp only [allOK_append, allOK_cons, List.cons_append, List.nil_append, List.append_assoc,
     and_true, true_and]
   repeat' constructor
-  all_goals first | assumption | rfl | exact allOK_nil | exact tokOK_num0 | exact tokOK_num10))
+  all_goals first | assumption | rfl | exact allOK_nil | exact tokOK_num0 | exact tokOK_num10 | decide))
 
 theorem allOK_grp {sf : Sf} (h : sf = .latex) {ts : List Tok} (ht : AllOK ts) : AllOK (grp sf ts) := by
   subst h; simp only [grp, ↓reduceIte]; aok
@@ -85,16 +85,6 @@ theorem plain_of_alnum {c : Char} (h : isLetter c = true ∨ isDig c = true) :
     omega
   · have : ('}').toNat = 125 := rfl
     omega
-
-theorem rawB_plain (d : Nat) (Z : List Char) :
-    ∀ (cs : List Char), (∀ c ∈ cs, c ≠ '\\' ∧ c ≠ '{' ∧ c ≠ '}') →
-      rawB d (cs ++ Z) = (rawB d Z).map (fun p => (cs ++ p.1, p.2))
-  | [], _ => by simp only [List.nil_append]; cases rawB d Z <;> rfl
-  | c :: cs, h => by
-    obtain ⟨h1, h2, h3⟩ := h c (by simp)
-    rw [List.cons_append, rawB.eq_5 _ _ _ (fun _ _ e _ => h1 e) h2 (fun _ e => h3 e) (fun _ _ e => h3 e),
-      rawB_plain d Z cs (fun x hx => h x (by simp [hx]))]
-    cases rawB d Z <;> simp
 
 def fpiece (p : List Char × List Char) : List Char :=
   p.1 ++ (if p.2 = [] then [] else '_' :: '{' :: p.2 ++ ['}'])
@@ -510,7 +500,7 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       have hn : tokOK (.num k) := hk
       have h2 : AllOK [.num k, .units (factorsOf u)] := allOK_cons.2 ⟨hn, allOK_cons.2 ⟨hb, allOK_nil⟩⟩
       rw [hpr]; simp only [mkOut, qtyToks]
-      exact ⟨h2, allOK_append.2 ⟨h2, allOK_cons.2 ⟨rfl, allOK_cons.2 ⟨rfl, allOK_nil⟩⟩⟩⟩
+      exact ⟨h2, allOK_append.2 ⟨h2, allOK_cons.2 ⟨rfl, allOK_cons.2 ⟨⟨rfl, by decide⟩, allOK_nil⟩⟩⟩⟩
     | arr xs af haf hpr =>
       simp only [hc] at hpr
       have hA := allOK_arr af (arrForm_spec haf).2
@@ -522,7 +512,7 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       have h2 : AllOK (arrToks .latex af ++ [.units (factorsOf u)]) :=
         allOK_append.2 ⟨hA, allOK_cons.2 ⟨hb, allOK_nil⟩⟩
       rw [hpr]; simp only [mkOut, unitToks]
-      exact ⟨h2, allOK_append.2 ⟨h2, allOK_cons.2 ⟨rfl, allOK_cons.2 ⟨rfl, allOK_nil⟩⟩⟩⟩
+      exact ⟨h2, allOK_append.2 ⟨h2, allOK_cons.2 ⟨rfl, allOK_cons.2 ⟨⟨rfl, by decide⟩, allOK_nil⟩⟩⟩⟩
     | faq kvs F hF hok P hP hpr =>
       rw [hpr]
       exact allOK_faqOut c hc F P (fun x hx => by

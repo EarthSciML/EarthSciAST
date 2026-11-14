@@ -43,6 +43,13 @@ namespace Esm.Document.Notation
   with node fields such as `dim` as named arguments after a semicolon.
 * `escape`: the generic node form, `\esm{op}{fields}{args}` / `esm.node("op", fields)[args]`,
   whose arguments are still ordinary math.
+
+A JSON string among a node's fields prints in LaTeX as `\text{"…"}` (decided 2026-11-13, so
+that KaTeX in strict mode renders it): printable ASCII as itself, `_`, `{`, `}` as `\_`,
+`\{`, `\}`, and every other character as `{\char NNN}` (three decimal digits below 1000,
+seven above), so no `$` or line break reaches the LaTeX. The earlier spelling, the string
+double-quoted with JSON escapes in math mode, is still read. In Typst the string is a code
+string, `#"…"`, which Typst sets whatever it holds.
 * `deprecated`: read on input with a warning, rewritten, never printed. -/
 inductive Tier where
   | native
@@ -128,7 +135,7 @@ def coreOps : List OpRow := [
     latex := r"bmatrix (a column for rank 1); with units, a thin space and the unit after it, as for a scalar: \begin{bmatrix}1\\2\end{bmatrix}\,\mathrm{m}",
     typst := r#"vec(…), mat(…); with units vec(1, 2) thin upright("m")"# },
   { op := "const", shape := "array of more than 16 entries", tier := escape,
-    latex := "a named reference into a data block keyed by the JSON path; the block holds the values and the units",
+    latex := "a named reference into a data block keyed by the JSON path; the block holds the values and the units (decided 2026-11-13 over a native matrix of any size, which stops being readable; until the reference lands the printer writes the escape node with the values inline, which round-trips and renders)",
     typst := "same" },
   { op := "index", tier := native, latex := "A_{i, j}; A[i, j] on a subscript collision",
     typst := "A_(i, j)" },
@@ -289,12 +296,29 @@ printer writes a restricted spelling both packages read correctly: every
 stoichiometric coefficient and every non-formula species name is quoted as math, and
 an empty side is the empty-set symbol. Names inside the quoted math follow the name rules
 (the rate `k_1` is `k_{\mathrm{1}}`, the word name `SO4_aer` is `\mathit{SO4\_aer}`); a
-formula-shaped species such as `NO2` is left to the package. -/
+formula-shaped species such as `NO2` is left to the package.
+
+The line (`Esm.Document.Source.Reaction`, decided 2026-11-13 with the native surfaces):
+
+* Markdown: `$$\ce{…}$$ {#id key=value …}` on one line. The math is display math on one
+  line, since inline `$…$` would close at the first `$` of a quoted piece. The arrow
+  label is braced, `->[{$k$}]`, since mhchem ends the label at the first `]` (an index
+  `k[1]` or a `\left[`). The label holds the `id` and the reaction's other fields as
+  attributes, in the declaration attribute syntax.
+* Typst: `#ce[…] <id>`; a reaction with other fields is `#reaction(key: value, …)[#ce[…]] <id>`.
+* A coefficient of 1 is left out. A term without `stoichiometry`, a side `[]`, a reaction
+  without `id`, `substrates`, `products` or `rate`, or an id outside letters, digits,
+  `_`, `-`, `.` and `:` keeps the whole `reactions` field a path block.
+* The id is part of the reaction line, not a skipped label: removing it changes the
+  parse.
+* What the packages would misread keeps the field a block: an escaped brace `\{` or `\}`
+  anywhere inside `\ce{…}` (mhchem matches braces by character), and `//` or `/*` anywhere
+  inside `#ce[…]` (a Typst comment would swallow the rest of the line). -/
 
 def reactionLatex : String :=
-  r"\ce{$\varnothing$ ->[$k_{\mathrm{1}}$] $0.5$ $\mathit{SO4\_aer}$ + $2$ NO2}"
+  r"$$\ce{$\varnothing$ ->[{$k_{\mathrm{1}}$}] $0.5$ $\mathit{SO4\_aer}$ + $2$ NO2}$$ {#R1}"
 def reactionTypst : String :=
-  r#"#ce[$emptyset$ ->[$k_(upright("1"))$] $0.5$ $italic("SO4_aer")$ + $2$ NO2]"#
+  r#"#ce[$emptyset$ ->[$k_(upright("1"))$] $0.5$ $italic("SO4_aer")$ + $2$ NO2] <R1>"#
 
 /-- Pinned with the format version. -/
 def typstVersion : String := "0.15.1"
@@ -340,33 +364,70 @@ def skeleton : List SkeletonRow := [
   { field := "reaction_systems.<name>", home := .componentDirective,
     markdown := "::reaction-system[Name]", typst := r#"#reaction-system("Name")"# },
   { field := "variables, species, parameters", home := .declaration,
-    markdown := ":var[$N$]{…}, :param, :species; other fields as attributes in the YAML subset",
+    markdown := r#":var[$N$]{…}, :param, :species; other fields as key=value attributes, each value a YAML scalar or a YAML flow collection; a list or object (empty ones too) single-quoted, with ' written &#39; and & written &amp; inside the quotes (shape='["x", "y"]', update='{…}'), since remark-directive refuses an unquoted value holding a bracket or brace and decodes those character references in a quoted one (decided 2026-11-13); the unquoted form is still read. A string value holding " or & cannot be double-quoted for remark-directive (the YAML escape \" ends the value; & would start a character reference), so a declaration, plot, template or rule with such an attribute stays in its field's block"#,
     typst := "#var($N$, …)" },
   { field := "equations", home := .displayMath,
     markdown := "one $$…$$ per equation, in order", typst := "one $ … $ per equation" },
   { field := "initialization_equations, constraint_equations", home := .mathInContainer,
-    markdown := ":::initialization / :::constraints", typst := "#initialization[$ … $]" },
+    markdown := ":::initialization / :::constraints on a line of its own, one $$ display per equation, then :::",
+    typst := "#initialization[$ … $] / #constraints[$ … $], one per equation" },
   { field := "reactions", home := .reactionLine,
-    markdown := r"one line per reaction, id as label, \ce{A + B ->[$k$] C}",
-    typst := "one line per reaction, #ce[A + B ->[$k$] C]" },
-  { field := "expression_templates (without match)", home := .templateDefinition,
-    markdown := r"$$ \operatorname{f}(a, b) \coloneqq … $$", typst := r#"$ op("f")(a, b) := … $"# },
-  { field := "expression_templates (with match)", home := .ruleDirective,
-    markdown := r"$$ \text{rule } r: \; lhs \Rightarrow rhs $$; where and priority as attributes",
-    typst := r#"#rule("r", $lhs$, $rhs$, …)"# },
+    markdown := r"one line per reaction, $$\ce{A + B ->[{$k$}] C}$$ {#id key=value}",
+    typst := "one line per reaction, #ce[A + B ->[$k$] C] <id>; with other fields #reaction(key: value)[#ce[…]] <id>" },
+  { field := "expression_templates (without match), of a component or of the document", home := .templateDefinition,
+    markdown := r#"$$, \operatorname{f}(a, b) \coloneqq body on one line, then $$; with other fields (description) the display sits in a container directive holding them, :::template{description="…"} … :::"#,
+    typst := r#"$ op("f")(a, b) := body $; with other fields #template(description: "…")[$ op("f")(a, b) := body $]"# },
+  { field := "expression_templates (with match), of a component or of the document", home := .ruleDirective,
+    markdown := r#"$$, \text{rule } \operatorname{r}: \; lhs \Rightarrow rhs on one line, then $$; params, where, priority and any other field in a container directive around it, :::rule{params='["u"]' priority=1} … :::"#,
+    typst := r#"#rule("r", $lhs$, $rhs$, params: ("u",), priority: 1, …)"# },
   { field := "subsystems (by ref)", home := .subsystemDirective,
-    markdown := r#"::subsystem[Name]{ref="…"}"#, typst := r#"#subsystem("Name", ref: "…")"# },
+    markdown := r#"::subsystem[Name]{ref="…" key=value …} on a line of its own; the name is not a declared name of the component"#,
+    typst := r#"#subsystem("Name", ref: "…", key: value, …)"# },
+  { field := "subsystems (inline, for now)", home := .pathBlock,
+    markdown := "the inline entries stay in the subsystems block beside the by-reference directives",
+    typst := "same" },
   { field := "subsystems (inline)", home := .componentDirective,
     markdown := "a nested ::model under a deeper heading", typst := "nested #model" },
   { field := "analyses (one plot)", home := .plotDirective,
-    markdown := "::plot{…}", typst := "#plot(…)" },
+    markdown := r#"::plot{key=value …} on one line: the analysis's fields as attributes, its one plot as plot={…}; the whole analyses field is a block unless every analysis has exactly one plot and no field named plot"#,
+    typst := r#"#plot(key: value, …, plot: (…)), the same fields"# },
   { field := "everything else", home := .pathBlock,
     markdown := "```esm:<path> block", typst := r#"#esm-block("<path>", (…))"# }
 ]
 
+/-! ## Templates and rules
+
+`Esm.Document.Source.Skeleton` (`Tm`), decided 2026-11-13 with the native surfaces:
+
+* A template is a display whose math is its header, then `\coloneqq` (`:=` in Typst), then
+  its body. The header is `\operatorname{name}(p, q)`: the name as in a template
+  application (`\operatorname{}` with `escT`), the parameters as names under the empty
+  symbol table, separated by `, `, `()` when there are none. Typst: `op("name")(p, q)`, the
+  name a quoted string.
+* A rule is `\text{rule } \operatorname{name}: \; lhs \Rightarrow rhs` in a Markdown display;
+  in Typst `#rule("name", $lhs$, $rhs$, key: value, …)`. Its parameters are not in the header:
+  `params` is an attribute like `where` and `priority`.
+* The lexer reads the header (and splits a rule at its first ` \Rightarrow `); only the body
+  and the left-hand side are math, read under the component's symbol table (or, at the top
+  level of a library file, the document's index sets and templates) with the parameters
+  declared. The symbol table takes each template's parameter list from its header, never
+  from its math.
+* Every other field is an attribute. Markdown: the display sits in a container directive,
+  `:::template{description="…"}` or `:::rule{params='["u"]' priority=1}`, then the display,
+  then a line `:::` (attributes after the closing `$$` would keep remark-math from closing
+  the display). Typst: named arguments (a template with fields is `#template(…)[$ … $]`).
+* A template or rule prints natively only when its header reads back as written (checked
+  by printing it and reading it back) and its math has no `$` or line break; otherwise the
+  whole `expression_templates` field is one path block. A display whose math would read as
+  a template header is never printed as an equation (the equations field falls back). -/
+
+def templateLatex : String := r"\operatorname{upwind\_flux}(u, c) \coloneqq c u"
+def ruleLatex : String := r"\text{rule } \operatorname{Dx}: \; \frac{\partial f}{\partial x} \Rightarrow …"
+
 /-- Skipped by the parser: prose outside these constructs, Typst `<labels>` and `@refs`,
 Markdown `{#id}` after an equation. The Phase 3 theorem says inserting or removing them
-never changes the parse. -/
+never changes the parse. A reaction's id label (`{#id}` after its `$$\ce{…}$$`, `<id>`
+after its `#ce[…]`) is not skipped: it is part of the reaction line. -/
 def skippedConstructs : List String := ["prose", "Typst <label>", "Typst @ref", "Markdown {#id}"]
 
 /-! ## Accepted variants
@@ -374,9 +435,14 @@ def skippedConstructs : List String := ["prose", "Typst <label>", "Typst @ref", 
 Spellings the parser reads and normalizes; the printer never writes them. Each math
 variant has a Phase 2 lemma in `Esm.Document.Math.Variants` (the variant parses to the
 same JSON as the canonical spelling) and hand-written checks in
-`Esm.Document.Math.HandWritten`; the document-layer rows (the declarations table,
-aligned blocks, row breaks) get theirs with the document layer in Phase 3. Each gets a
-Phase 4 fixture. `rejected` rows pin spellings the parser refuses. -/
+`Esm.Document.Math.HandWritten`. The document-layer rows have theirs in the Phase 3
+document layer: the declarations table in `Esm.Document.Source.Markdown` (`lex_table`),
+and aligned blocks, continuation rows and row breaks nested in a delimiter in
+`Esm.Document.Source.MultiLine` (`cookRows_layout`; `ckMd_aligned` in
+`Esm.Document.Source.MarkdownDoc` for a Markdown `aligned` display); the reaction rows in
+`Esm.Document.Source.Reaction` (`pTerm_coef`, `pSpecies_math`), and the container row in
+`Esm.Document.Source.Markdown` (`contBody_many`). Each gets a Phase 4 fixture. `rejected`
+rows pin spellings the parser refuses. -/
 
 inductive Surface where
   | latex
@@ -424,6 +490,12 @@ def variants : List Variant := [
     readsAs := "that name (the explicit name shape); bare juxtaposition that could be one name or a product of several is rejected" },
   { spelling := "named template arguments", surface := .both, readsAs := "apply_expression_template" },
   { spelling := "per-model declarations table", surface := .markdown, readsAs := "the declarations" },
+  { spelling := ":::initialization or :::constraints holding several displays, blank lines between",
+    surface := .markdown, readsAs := "consecutive initialization equations or constraints" },
+  { spelling := r"a stoichiometric coefficient of 1 written out ($1$ A)", surface := .both,
+    readsAs := "coefficient 1" },
+  { spelling := r#"a formula-shaped species written as math ($\mathrm{NO_{2}}$, $upright("NO")_2$)"#,
+    surface := .both, readsAs := "that species" },
   { spelling := "pow(x, n) and neg(x) in the call form", surface := .both,
     readsAs := "x ^ n and -x, with the deprecation warning" },
   { spelling := r"several equations in one aligned block (Typst $ … $ with \ and &): a row with something before its first & starts a new equation",
