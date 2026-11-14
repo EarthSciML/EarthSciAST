@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate tests/conformance/canonical/unit_spelling*.json from the Lean model.
+"""Generate the canonical unit-spelling fixtures from the Lean model.
 
 The canonical unit spelling (esm-spec §4.8.2) is defined by the Lean function
 `Esm.Units.canon` (formal/Esm/Units/Canonical.lean). This script evaluates it
@@ -11,6 +11,12 @@ fixtures every binding's canonicalizer must reproduce byte for byte:
 * `unit_spelling_ordering.json`: two `const` nodes under `*`, whose §5.4.2 order
   flips once their units are respelled; a binding that respells after sorting
   (or only when emitting) gets the order wrong.
+* `tests/conformance/canonical_document/units.json`: a document whose `units`
+  and `default_units` strings (variables, parameters, species, coordinates,
+  const nodes, nested subsystems, template bodies) all take the canonical
+  spelling under `canonicalize_document`, while look-alike keys inside
+  free-form objects and name-keyed maps are left alone. The walk here mirrors
+  the bindings' (`document_units_walk`); Lean spells every string.
 
 The Lean package must already be built (`lake build` in formal/); `--formal`
 points at another copy of formal/ that is. Re-run after a change to the cases
@@ -152,6 +158,186 @@ def write(path: Path, doc: dict) -> None:
     print(f"wrote {path.relative_to(ROOT)}")
 
 
+# --- The document-level step (esm-spec §4.8.2, canonicalize_document) ---------
+
+# Object properties whose value is a NAME-KEYED map (from esm-schema.json): a
+# map's keys are names, never fields, so a variable named `units` is not a
+# units string.
+MAP_KEYS = frozenset("""
+    bind bindings coordinates coords coupling_roles data_sources enums
+    expression_template_imports expression_templates guesses index_set_rename
+    index_sets initial_conditions map metaparameters models parameter_overrides
+    parameters pinned_coords ranges reaction_systems rebind rename species
+    subsystems translate url_substitutions variables where
+""".split())
+# Free-form objects (schema `additionalProperties: true`): not descended.
+FREE_KEYS = frozenset({"attrs", "config", "metadata", "reader_options", "x_esd"})
+UNIT_KEYS = ("units", "default_units")
+
+
+def document_units_walk(value, spell, is_map=False):
+    """Apply `spell` to every units string of a decoded document."""
+    if isinstance(value, list):
+        return [document_units_walk(v, spell) for v in value]
+    if not isinstance(value, dict):
+        return value
+    if is_map:
+        return {k: document_units_walk(v, spell) for k, v in value.items()}
+    out = {}
+    for k, v in value.items():
+        if k in UNIT_KEYS and isinstance(v, str):
+            out[k] = spell(v)
+        elif k in FREE_KEYS:
+            out[k] = v
+        else:
+            out[k] = document_units_walk(v, spell, k in MAP_KEYS)
+    return out
+
+
+def units_document() -> dict:
+    def const(value, units):
+        return {"op": "const", "args": [], "value": value, "units": units}
+
+    return {
+        "esm": "2.1.0",
+        "metadata": {
+            "name": "CanonicalUnitsDocument",
+            "description": "Every units string takes the canonical spelling.",
+            "x_esd": {"units": "m h"},
+        },
+        "coordinates": {
+            "lev": {"source": "lev", "standard_name": "air_pressure", "units": "kg m^-1 s^-2"},
+            "lat": {"source": "lat", "standard_name": "latitude", "units": "degrees_north"},
+        },
+        "models": {
+            "Atmos": {
+                "variables": {
+                    "T": {"type": "state", "units": "K", "default": 280.0},
+                    "speed": {"type": "state", "units": "m h/(mi s)", "default": 1.0},
+                    "R": {
+                        "type": "parameter",
+                        "units": "J/mol/K",
+                        "default": 8.314,
+                        "default_units": "J/(mol*K)",
+                    },
+                    "frac": {"type": "parameter", "units": "dimensionless", "default": 0.5},
+                    "units": {"type": "parameter", "units": "", "default": 1.0},
+                    "label": {"type": "parameter", "units": "g/hp-hr", "default": 1.0},
+                },
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["T"], "wrt": "t"},
+                        "rhs": {"op": "*", "args": [const(0.1, "s^-1"), "T"]},
+                    }
+                ],
+                "subsystems": {
+                    "Inner": {
+                        "variables": {
+                            "q": {"type": "state", "units": "kg/kg", "default": 0.01},
+                            "flux": {"type": "parameter", "units": "kg m^-2 s^-1", "default": 0.0},
+                        },
+                        "equations": [
+                            {
+                                "lhs": {"op": "D", "args": ["q"], "wrt": "t"},
+                                "rhs": {"op": "*", "args": ["flux", const(1.0, "m^2/kg")]},
+                            }
+                        ],
+                        "subsystems": {
+                            "Deep": {
+                                "variables": {
+                                    "c": {"type": "state", "units": "molec cm^-3", "default": 1.0}
+                                },
+                                "equations": [
+                                    {
+                                        "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                                        "rhs": {"op": "*", "args": [const(1.0, "1/s^0.5"), "c"]},
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                },
+            }
+        },
+        "reaction_systems": {
+            "Chem": {
+                "species": {
+                    "O3": {"units": "mol/mol", "default": 4e-08},
+                    "NO2": {"units": "ppb", "default": 1.0, "default_units": "ppm"},
+                },
+                "parameters": {
+                    "k1": {"units": "cm^3 molec^-1 s^-1", "default": 1.8e-12},
+                    "j": {"units": "mol/mol/s", "default": 0.01},
+                },
+                "reactions": [
+                    {
+                        "id": "R1",
+                        "substrates": [{"species": "O3", "stoichiometry": 1}],
+                        "products": [{"species": "NO2", "stoichiometry": 1}],
+                        "rate": {"op": "*", "args": ["k1", const(2.5e19, "molec/cm^3")]},
+                    }
+                ],
+                "subsystems": {
+                    "Aerosol": {
+                        "species": {"SO4": {"units": "µg/m³", "default": 1.0}},
+                        "parameters": {"kd": {"units": "s⁻¹", "default": 0.001}},
+                        "reactions": [],
+                    }
+                },
+            }
+        },
+        "data_sources": {
+            "met": {
+                "kind": "grid",
+                "url_template": "file:///met.nc",
+                "metadata": {"units": "m s-1"},
+                "reader_options": {"units": "W m^-2"},
+            }
+        },
+    }
+
+
+def write_document_fixture(formal: Path) -> None:
+    doc = units_document()
+    seen: list[str] = []
+    document_units_walk(doc, lambda u: seen.append(u) or u)
+    unique = sorted(set(seen))
+    spelled = dict(zip(unique, lean_canon(formal, unique)))
+    out_dir = ROOT / "tests" / "conformance" / "canonical_document"
+    out_dir.mkdir(exist_ok=True)
+    write(
+        out_dir / "units.json",
+        {
+            "id": "units",
+            "description": (
+                "canonicalize_document respells every units and default_units string of a "
+                "document (variables, parameters, species, coordinates, const nodes, nested "
+                "subsystems) in the canonical unit spelling (esm-spec §4.8.2); a string that does "
+                "not parse (`g/hp-hr`) is left unchanged, a variable NAMED `units` is not a units "
+                "string, and free-form objects (`metadata`, `x_esd`, `reader_options`) are not "
+                "touched. Generated by scripts/gen-canonical-unit-spelling.py from the Lean "
+                "definition Esm.Units.canon."
+            ),
+            "input": doc,
+            "expected": document_units_walk(doc, spelled.__getitem__),
+            "tags": ["units", "unit_spelling", "document"],
+        },
+    )
+    write(
+        out_dir / "manifest.json",
+        {
+            "category": "canonical_document",
+            "version": "1.0",
+            "description": (
+                "Document-level canonical form (esm-spec §4.8.2): each fixture's `expected` is "
+                "the JSON document every binding's canonicalize_document(input) must equal, "
+                "compared as JSON values."
+            ),
+            "fixtures": [{"id": "units", "path": "units.json"}],
+        },
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("--formal", type=Path, default=ROOT / "formal", help="a built copy of formal/")
@@ -160,6 +346,7 @@ def main() -> None:
     inputs = [u for u, _ in CASES]
     spelled = lean_canon(args.formal.resolve(), inputs + ORDERING_CASES)
     main_out, order_out = spelled[: len(inputs)], spelled[len(inputs) :]
+    write_document_fixture(args.formal.resolve())
 
     write(
         OUT_DIR / "unit_spelling.json",

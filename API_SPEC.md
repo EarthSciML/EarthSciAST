@@ -446,6 +446,7 @@ Divergences:
 | `parse_equation(text) -> Equation` | inverse of `to_ascii` on an equation | yes, `ExpressionParseError` |
 | `canonicalize(expr) -> Expr` | RFC §5.4 canonical form | yes, `CanonicalizeError` |
 | `canonical_json(expr) -> str` | canonical serialization | yes, `CanonicalizeError` |
+| `canonicalize_document(doc) -> doc` | every units string of a decoded JSON document in the canonical unit spelling (esm-spec §4.8.2); nothing else changes | no, anywhere |
 
 Divergences:
 
@@ -462,6 +463,12 @@ Divergences:
   value**. Go has this only behind an unexported function.
 - **`canonical_json` return type.** Go returns `[]byte`; everyone else returns a
   string.
+- **`canonicalize_document` input.** It takes and returns the decoded JSON
+  document, not a typed file: a `dict` (Python), an `AbstractDict` such as a
+  `JSON3.Object` (Julia, returns `Dict{String, Any}`), a `serde_json::Value`
+  (Rust), an `any` from `encoding/json` (Go), and a plain object (TypeScript,
+  where an `EsmFile` is one). Python exports it at the top level, where
+  `canonicalize` and `canonical_json` live only in `earthsci_ast.canonicalize`.
 - **Canonicalization error point.** Go gates emissible fields on the *input*
   tree; TypeScript and Julia gate the *canonicalized* tree. Same error code,
   different detection point.
@@ -1930,6 +1937,7 @@ reading that as a gap.
 | `brownian_parameters` | function | `brownian_parameters` | `brownianParameters` | `brownian_parameters` | `brownian_parameters` | `BrownianParameters` |
 | `build_reference_graph` | function | `build_reference_graph` | `buildReferenceGraph` | `build_reference_graph` | `build_reference_graph` / `build_reference_graph_with_index_sets` | `BuildReferenceGraph` |
 | `can_migrate` | function | `can_migrate` | `canMigrate` | `can_migrate` | `can_migrate` | `CanMigrate` |
+| `canonicalize_document` | function | `canonicalize_document` | `canonicalizeDocument` | `canonicalize_document` | `canonicalize_document` | `CanonicalizeDocument` |
 | `component_node` | type | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` |
 | `constant_parameters` | function | `constant_parameters` | `constantParameters` | `constant_parameters` | `constant_parameters` | `ConstantParameters` |
 | `contribution` | type | `Contribution` | `Contribution` | `Contribution` | `Contribution` | `Contribution` |

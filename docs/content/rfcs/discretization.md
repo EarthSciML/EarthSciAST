@@ -927,6 +927,10 @@ same node as one with `units:"m*h/(mi*s)"`, both carrying `units:"h*m/(mi*s)"`.
 
 The respelling happens in `canonicalize`, before the §5.4.2 ordering, so the
 serialization a `+`/`*` parent sorts by already carries the canonical spelling.
+This is the expression half of a document-level rule: the canonical form of a
+whole document respells every units string in it — variable, species,
+parameter and coordinate `units` and `default_units` as well — through
+`canonicalize_document` (esm-spec §4.8.2).
 The authority is the Lean definition `Esm.Units.canon`
 (`formal/Esm/Units/Canonical.lean`); the cross-binding fixture is
 `tests/conformance/canonical/unit_spelling.json`.

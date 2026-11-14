@@ -517,3 +517,62 @@ def _normalize_exponent(s: str) -> str:
         exp = exp[1:]
     exp = exp.lstrip("0") or "0"
     return f"{mant}e{sign}{exp}"
+
+
+# ---------------------------------------------------------------------------
+# The document-level canonical step (esm-spec §4.8.2 "Canonical spelling").
+# ---------------------------------------------------------------------------
+
+#: Object properties whose value is a NAME-KEYED map (esm-schema.json): a map's
+#: keys are names, never fields, so a variable NAMED `units` is not a units
+#: string. The same list in every binding.
+_DOCUMENT_MAP_KEYS = frozenset(
+    {
+        "bind", "bindings", "coordinates", "coords", "coupling_roles", "data_sources",
+        "enums", "expression_template_imports", "expression_templates", "guesses",
+        "index_set_rename", "index_sets", "initial_conditions", "map", "metaparameters",
+        "models", "parameter_overrides", "parameters", "pinned_coords", "ranges",
+        "reaction_systems", "rebind", "rename", "species", "subsystems", "translate",
+        "url_substitutions", "variables", "where",
+    }
+)  # fmt: skip
+
+#: Free-form objects (schema `additionalProperties: true`), never descended.
+_DOCUMENT_FREE_KEYS = frozenset({"attrs", "config", "metadata", "reader_options", "x_esd"})
+
+_DOCUMENT_UNIT_KEYS = ("units", "default_units")
+
+
+def canonicalize_document(doc: Any) -> Any:
+    """The document-level canonical step: every units string of a decoded
+    document (the JSON object ``to_json`` writes and ``load_document`` reads)
+    takes the canonical unit spelling (esm-spec §4.8.2, Lean
+    ``Esm.Units.canon``).
+
+    That is every ``units`` and ``default_units`` string of a variable,
+    species, parameter, coordinate or ``const`` node, wherever it sits:
+    nested subsystems, template bodies, tests, coupling entries. Free-form
+    objects (``metadata``, ``x_esd``, ``attrs``, ``config``,
+    ``reader_options``) are not touched, and neither are the keys of
+    name-keyed maps. The input is not mutated; nothing else changes.
+    """
+    from .units import canonical_unit_spelling
+
+    def walk(value: Any, is_map: bool = False) -> Any:
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        if not isinstance(value, dict):
+            return value
+        if is_map:
+            return {k: walk(v) for k, v in value.items()}
+        out = {}
+        for k, v in value.items():
+            if k in _DOCUMENT_UNIT_KEYS and isinstance(v, str):
+                out[k] = canonical_unit_spelling(v)
+            elif k in _DOCUMENT_FREE_KEYS:
+                out[k] = v
+            else:
+                out[k] = walk(v, k in _DOCUMENT_MAP_KEYS)
+        return out
+
+    return walk(doc)

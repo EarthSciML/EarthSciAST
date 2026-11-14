@@ -592,3 +592,62 @@ function _shift_decimal(mant::AbstractString, exp::Int)::String
     end
     return string(sign, digits[1:pos], ".", digits[(pos + 1):end])
 end
+
+# ---------------------------------------------------------------------------
+# The document-level canonical step (esm-spec §4.8.2 "Canonical spelling").
+# ---------------------------------------------------------------------------
+
+# Object properties whose value is a NAME-KEYED map (esm-schema.json): a map's
+# keys are names, never fields, so a variable NAMED `units` is not a units
+# string. The same list in every binding.
+const _DOCUMENT_MAP_KEYS = Set{String}(
+    [
+        "bind", "bindings", "coordinates", "coords", "coupling_roles", "data_sources",
+        "enums", "expression_template_imports", "expression_templates", "guesses",
+        "index_set_rename", "index_sets", "initial_conditions", "map", "metaparameters",
+        "models", "parameter_overrides", "parameters", "pinned_coords", "ranges",
+        "reaction_systems", "rebind", "rename", "species", "subsystems", "translate",
+        "url_substitutions", "variables", "where",
+    ]
+)
+
+# Free-form objects (schema `additionalProperties: true`), never descended.
+const _DOCUMENT_FREE_KEYS = Set{String}(["attrs", "config", "metadata", "reader_options", "x_esd"])
+
+"""
+    canonicalize_document(doc::AbstractDict) -> Dict{String, Any}
+
+The document-level canonical step: every units string of a decoded document
+(the JSON object `to_json` writes and `load_document` reads, e.g. from
+`JSON3.read`) takes the canonical unit spelling (esm-spec §4.8.2, Lean
+`Esm.Units.canon`).
+
+That is every `units` and `default_units` string of a variable, species,
+parameter, coordinate or `const` node, wherever it sits: nested subsystems,
+template bodies, tests, coupling entries. Free-form objects (`metadata`,
+`x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither are
+the keys of name-keyed maps. The input is not mutated and nothing else changes.
+"""
+canonicalize_document(doc::AbstractDict) = _canonicalize_document_value(doc, false)
+
+function _canonicalize_document_value(value, is_map::Bool)
+    if value isa AbstractVector
+        return Any[_canonicalize_document_value(v, false) for v in value]
+    elseif value isa AbstractDict
+        out = Dict{String, Any}()
+        for (k, v) in pairs(value)
+            key = String(k)
+            out[key] = if is_map
+                _canonicalize_document_value(v, false)
+            elseif (key == "units" || key == "default_units") && v isa AbstractString
+                _canonical_units(v)
+            elseif key in _DOCUMENT_FREE_KEYS
+                v
+            else
+                _canonicalize_document_value(v, key in _DOCUMENT_MAP_KEYS)
+            end
+        end
+        return out
+    end
+    return value
+end
