@@ -237,6 +237,12 @@ fn next_gate_id() -> u64 {
     NEXT_GATE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// A process-unique gate id for a gate built outside [`resolve_aggregate_joins`]
+/// (a rewrite that changes a gate's key columns must not share its memo).
+pub(crate) fn fresh_gate_id() -> u64 {
+    next_gate_id()
+}
+
 /// Resolve every `join.on` clause in `model` (RFC §5.3), in place. Call once on
 /// an owned model **before** [`crate::faq::resolve_aggregate_ranges`], so
 /// each aggregate range still carries its `{ "from": <index set> }` linkage and

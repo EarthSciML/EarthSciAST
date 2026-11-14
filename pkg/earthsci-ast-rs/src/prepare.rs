@@ -2899,6 +2899,24 @@ impl<'o> BuildState<'o> {
             self.obs_done += 1;
             self.evaluated.insert(name.clone());
             let t = std::time::Instant::now();
+            // A rule that reads its driving row only through key columns is
+            // evaluated once per distinct key signature (crate::row_dedup).
+            if let Some((a, route)) = self.eval_observed_dedup(name)? {
+                self.log(&format!(
+                    "  [prepare] {name:<24} shape={:?}  {:>9.4} s (row-dedup)",
+                    a.shape(),
+                    t.elapsed().as_secs_f64()
+                ));
+                if self.record(PipelineRule {
+                    name: name.clone(),
+                    kind: "build-time observed",
+                    route,
+                }) {
+                    break;
+                }
+                self.arrays.insert(name.clone(), a);
+                continue;
+            }
             let (a, route) = match eval_observed(
                 name,
                 &self.defs[name],
@@ -2923,7 +2941,7 @@ impl<'o> BuildState<'o> {
                 }
             };
             self.log(&format!(
-                "  [prepare] {name:<24} shape={:?}  {:>7.1} s",
+                "  [prepare] {name:<24} shape={:?}  {:>9.4} s",
                 a.shape(),
                 t.elapsed().as_secs_f64()
             ));
@@ -2952,6 +2970,72 @@ impl<'o> BuildState<'o> {
         }
         self.report(PreparePhase::Observeds, n_pending, Some(n_pending), "")?;
         Ok(())
+    }
+
+    /// [`crate::row_dedup`]: evaluate `name` over one representative row per
+    /// distinct key signature and scatter the result back, or `None` to
+    /// evaluate it as written. Only a rule the tape or the whole-array overlay
+    /// takes is kept; a per-cell walk or a refusal is evaluated as written, so
+    /// what is recorded or refused is what it would have been.
+    fn eval_observed_dedup(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<(ArrayD<f64>, Route)>, PrepareError> {
+        // Only under a strict compiler: the reference interpreter is the
+        // oracle the fast tiers are checked against, and promises nothing
+        // about speed.
+        if !self.opts.refuse_per_cell || !crate::row_dedup::row_dedup_enabled() {
+            return Ok(None);
+        }
+        let mut expr = self.defs[name].clone();
+        if resolve_expr_ranges_with_extents(&mut expr, &self.index_sets, &self.extents).is_err() {
+            return Ok(None);
+        }
+        let Some(plan) = crate::row_dedup::plan(name, &expr, &self.arrays) else {
+            return Ok(None);
+        };
+        let fill = self.fill_shape(name).map(|mut s| {
+            if plan.axis < s.len() && s[plan.axis] == plan.rows {
+                s[plan.axis] = plan.reps;
+            }
+            s
+        });
+        let mut scalar = self.scalar_shape(name);
+        if plan.axis < scalar.len() && scalar[plan.axis] == plan.rows {
+            scalar[plan.axis] = plan.reps;
+        }
+        let names: Vec<String> = plan.columns.iter().map(|(n, _)| n.clone()).collect();
+        for (n, a) in &plan.columns {
+            self.arrays.insert(n.clone(), a.clone());
+        }
+        let res = eval_observed(
+            name,
+            &plan.expr,
+            &self.arrays,
+            &self.param_vals,
+            &self.param_names,
+            &self.index_sets,
+            &self.extents,
+            &self.const_scope,
+            fill.as_deref(),
+            &scalar,
+            self.opts.refuse_per_cell,
+        );
+        for n in &names {
+            self.arrays.remove(n);
+        }
+        Ok(match res {
+            Ok(Evaluated::Field(a, route @ (Route::Tape | Route::Overlay))) => {
+                let out = crate::row_dedup::expand(&plan, a).map(|a| (a, route));
+                if out.is_some() {
+                    crate::row_dedup::note_applied();
+                }
+                out
+            }
+            // Any other route or a refusal: evaluate as written, so what is
+            // recorded and refused is exactly what it would have been.
+            _ => None,
+        })
     }
 
     /// Assemble the [`PreparedBuild`] artifact from the accumulated state.

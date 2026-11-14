@@ -183,6 +183,7 @@ pub mod inline_tests_adapter;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod determinism_adapter;
+pub(crate) mod row_dedup;
 
 // Build-time value-invention front-door — derived index-sets (`distinct`
 // producers) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
