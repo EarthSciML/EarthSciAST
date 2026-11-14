@@ -39,6 +39,7 @@ import { rejectVariableBoundsPreV21 } from './variable-bounds.js'
 import { schema } from './embedded-schema.js'
 import { readFileSyncNode, dirnameOf } from './path-utils.js'
 import { deepClone } from './object-utils.js'
+import { pointerToken } from './json-pointer.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { resolveDataSourceUrls } from './data-source-urls.js'
 import {
@@ -1137,9 +1138,13 @@ export const DEPRECATED_OPS: ReadonlyMap<string, { replacement: string; arity: n
  * Rewrite every deprecated op spelling in `doc` IN PLACE (esm-spec §4.2
  * "Deprecated ops"): `{"op": "neg", "args": [x]}` becomes unary
  * `{"op": "-", "args": [x]}`, `{"op": "pow", "args": [x, n]}` becomes
- * `{"op": "^", "args": [x, n]}`, and a `broadcast` node's `"fn": "neg"` becomes
- * `"fn": "-"`. Every other field of the node is kept. Returns the JSON pointer
- * of every rewritten node, in pre-order (`""` for the root).
+ * `{"op": "^", "args": [x, n]}`, and a one-operand `broadcast` node's
+ * `"fn": "neg"` becomes `"fn": "-"`. Every other field of the node is kept; a
+ * use with the wrong operand count is left as written, so its arity error is
+ * unchanged. Returns one site per rewritten node, in pre-order: its RFC 6901
+ * JSON pointer (`""` for the root) and the spelling it had, as
+ * `<pointer> (neg)`, `<pointer> (pow)` or `<pointer> (broadcast fn neg)` — the
+ * format every binding's `deprecated_op` warning uses.
  */
 export function rewriteDeprecatedOps(doc: unknown): string[] {
   const sites: string[] = []
@@ -1153,14 +1158,21 @@ export function rewriteDeprecatedOps(doc: unknown): string[] {
     if (typeof obj.op === 'string') {
       const dep = DEPRECATED_OPS.get(obj.op)
       if (dep !== undefined && Array.isArray(obj.args) && obj.args.length === dep.arity) {
+        sites.push(`${at} (${obj.op})`)
         obj.op = dep.replacement
-        sites.push(at)
-      } else if (obj.op === 'broadcast' && obj.fn === 'neg') {
+      } else if (
+        obj.op === 'broadcast' &&
+        obj.fn === 'neg' &&
+        Array.isArray(obj.args) &&
+        obj.args.length === DEPRECATED_OPS.get('neg')!.arity
+      ) {
+        // `neg` is strictly unary, so a broadcast of it with any other operand
+        // count keeps its arity error (`invalid_broadcast_fn`).
         obj.fn = '-'
-        sites.push(at)
+        sites.push(`${at} (broadcast fn neg)`)
       }
     }
-    for (const k of Object.keys(obj)) visit(obj[k], `${at}/${k}`)
+    for (const k of Object.keys(obj)) visit(obj[k], `${at}/${pointerToken(k)}`)
   }
   visit(doc, '')
   return sites
@@ -1171,7 +1183,7 @@ export function deprecatedOpWarning(sites: readonly string[]): string {
   return (
     'deprecated_op: the op spellings `neg` and `pow` are deprecated (esm-spec §4.2 ' +
     '"Deprecated ops") and were rewritten on load, `neg` to unary `-` and `pow` to `^`; ' +
-    `write \`-\` and \`^\` instead. Rewritten at: ${sites.map((p) => p || '/').join(', ')}.`
+    `write \`-\` and \`^\` instead. Rewritten at: ${sites.join(', ')}.`
   )
 }
 

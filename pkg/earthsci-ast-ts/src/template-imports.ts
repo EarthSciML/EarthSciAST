@@ -2258,12 +2258,19 @@ export function resolveTemplateMachinery(
  * imports, and version-stamps `esm: 0.9.0` when any reference/materialized entry
  * remains (§9.6.4 rule 8). `emitEsmString ∘ emitDocument` is a byte-wise fixed
  * point under reload. Mirrors the Julia reference `emit_document`.
+ *
+ * `rawSource` passes the same wire boundary a load applies
+ * ({@link prepareDocumentOps}), on a copy: a removed op is refused, and a
+ * deprecated `neg` / `pow` is rewritten with the `deprecated_op` warning, so
+ * neither spelling survives into the emitted document (esm-spec §4.2).
  */
 export function emitDocument(
   rawSource: unknown,
   basePath: string,
   options: TemplateResolveOptions = {},
 ): JsonObject {
+  rawSource = deepClone(rawSource)
+  prepareDocumentOps(rawSource)
   const authored = authoredTemplateNames(rawSource)
   const resolved = resolveTemplateMachinery(rawSource, basePath, options)
   const loaded = lowerExpressionTemplates((resolved ?? rawSource) as object) as JsonObject

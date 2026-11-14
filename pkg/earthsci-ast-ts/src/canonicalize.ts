@@ -281,7 +281,11 @@ function canonSub(node: Node): Expr {
   if (node.args.length === 2) {
     const a = node.args[0]!
     const b = node.args[1]!
-    if (isZeroValue(a)) return canonNegValue(b)
+    // `0 - x` is NOT `-x` when x is +0.0 (`0 - 0.0` is +0.0, `-(0.0)` is
+    // -0.0), so only a literal subtrahend folds, to the exact difference: an
+    // integer when both are integers, else the IEEE float difference. Any
+    // other `-(0, x)` stays binary (RFC §5.4.7).
+    if (isZeroValue(a) && isNumericLeaf(b)) return subFromZero(a, b)
     if (isZeroValue(b)) {
       // Type-preserving: -(intLit(x), floatLit(0)) → floatLit(x) to keep float promotion.
       if (isFloatLit(b) && isIntLit(a)) return floatLit(a.value)
@@ -289,6 +293,15 @@ function canonSub(node: Node): Expr {
     }
   }
   return node
+}
+
+/** `zero - b` for a literal zero minuend and a literal `b` (see {@link canonSub}). */
+function subFromZero(zero: Expr, b: Expr): Expr {
+  // `0 - v` (not `-v`): IEEE subtraction gives +0.0 for both signed zeros.
+  const v = 0 - leafValue(b)
+  if (isIntLit(zero) && isIntLit(b)) return intLit(v)
+  if (isPlainNumber(zero) && isPlainNumber(b)) return v
+  return floatLit(v)
 }
 
 function canonDiv(node: Node): Expr {

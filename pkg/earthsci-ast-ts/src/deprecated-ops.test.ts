@@ -6,10 +6,12 @@
  * `deprecated_op` once per document naming every rewritten node.
  */
 
+import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadPath, loadString } from './index'
+import { loadPath, loadString, validate } from './index'
+import { emitDocument } from './template-imports'
 import { prepareDocumentOps, rewriteDeprecatedOps } from './parse'
 import { resolveSubsystemRefsSync } from './ref-loading'
 import type { Model } from './types'
@@ -98,8 +100,8 @@ describe('deprecated ops neg and pow', () => {
     })
     const w = deprecatedWarnings(warn)
     expect(w).toHaveLength(1)
-    expect(w[0]).toContain('/models/M/equations/1/rhs/args/0')
-    expect(w[0]).toContain('/models/M/equations/1/rhs/args/1')
+    expect(w[0]).toContain('/models/M/equations/1/rhs/args/0 (neg)')
+    expect(w[0]).toContain('/models/M/equations/1/rhs/args/1 (pow)')
   })
 
   it('leaves a wrong-arity use as written, so its arity error is unchanged', () => {
@@ -107,16 +109,52 @@ describe('deprecated ops neg and pow', () => {
       a: { op: 'neg', args: ['x', 'y'] },
       b: { op: 'pow', args: ['x'] },
       c: { op: 'broadcast', fn: 'pow', args: ['x', 'y'] },
+      d: { op: 'broadcast', fn: 'neg', args: ['x', 'y'] },
     }
     expect(rewriteDeprecatedOps(raw)).toEqual([])
     expect(raw.a.op).toBe('neg')
     expect(raw.b.op).toBe('pow')
     expect(raw.c.fn).toBe('pow')
+    expect(raw.d.fn).toBe('neg')
+  })
+
+  it('refuses a two-operand broadcast of neg for its arity, as before', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const refusal = (): string => {
+      try {
+        const file = loadString(doc({ op: 'broadcast', fn: 'neg', args: ['x', 'x'] }))
+        return JSON.stringify(validate(file).structural_errors)
+      } catch (e) {
+        return String(e)
+      }
+    }
+    const refused = refusal()
+    expect(refused).toContain("'neg'")
+    expect(deprecatedWarnings(warn)).toHaveLength(0)
+  })
+
+  it('names each site by its escaped pointer and old spelling', () => {
+    const raw = {
+      'a/b~c': { op: 'neg', args: ['x'] },
+      d: { op: 'broadcast', fn: 'neg', args: ['x'] },
+    }
+    expect(rewriteDeprecatedOps(raw)).toEqual(['/a~1b~0c (neg)', '/d (broadcast fn neg)'])
+  })
+
+  it('the reference-preserving emit path rewrites them too', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const dir = join(TESTS, 'conformance', 'scalar_operator_semantics', 'fixtures')
+    const raw = JSON.parse(readFileSync(join(dir, 'pow_alias.esm'), 'utf8'))
+    const before = JSON.stringify(raw)
+    const out = JSON.stringify(emitDocument(raw, dir))
+    expect(JSON.stringify(raw)).toBe(before)
+    expect(out).not.toContain('"pow"')
+    expect(deprecatedWarnings(warn)).toHaveLength(1)
   })
 
   it('keeps every other field of a rewritten node', () => {
     const raw = { op: 'neg', args: ['x'], id: 'n1' }
-    expect(rewriteDeprecatedOps(raw)).toEqual([''])
+    expect(rewriteDeprecatedOps(raw)).toEqual([' (neg)'])
     expect(raw).toEqual({ op: '-', args: ['x'], id: 'n1' })
   })
 
