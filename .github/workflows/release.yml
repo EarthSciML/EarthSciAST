@@ -78,14 +78,15 @@ jobs:
     with:
       tag: ${{ needs.resolve.outputs.tag }}
       version: ${{ needs.resolve.outputs.version }}
-      crates: pkg/earthsci-ast-rs
+      # In dependency order: the tool pins the library exactly.
+      crates: pkg/earthsci-ast-rs pkg/earthsci-ast-rs/cli
       npm-dir: pkg/earthsci-ast-ts
       # Ships as a library only (API_SPEC.md H-5): a module tag and a proxy fetch.
       go-module-dir: pkg/earthsci-ast-go
       cli-name: esm-cli
       # `esm` with `esio`, so the downloaded binary can read the parquet,
       # netcdf and zarr files a document's `data_sources` name (issue #530).
-      cli-bins: pkg/earthsci-ast-rs:esm:esio pkg/earthsci-narrative:esm-narrative
+      cli-bins: pkg/earthsci-ast-rs/cli:esm:esio pkg/earthsci-narrative:esm-narrative
       install-notes: |
         ```
         using Pkg; Pkg.add("EarthSciAST")   # Julia

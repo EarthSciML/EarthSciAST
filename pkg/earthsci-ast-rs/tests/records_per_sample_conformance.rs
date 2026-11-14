@@ -283,37 +283,6 @@ fn loader_field_without_records_per_sample_reads_as_one() {
     assert_eq!(lf.records_per_sample, 1);
 }
 
-/// Loading warns `deprecated_records_per_sample` once, naming the sites,
-/// exactly when the deprecated field is written; checked through the `esm`
-/// binary, whose `validate` loads the file once, so its stderr is the load's.
-#[cfg(all(not(target_arch = "wasm32"), feature = "cli", feature = "solve"))]
-#[test]
-fn loading_warns_once_exactly_when_the_field_is_written() {
-    let m = manifest();
-    for case in cases(&m, "valid") {
-        let id = case["id"].as_str().unwrap();
-        let out = std::process::Command::new(env!("CARGO_BIN_EXE_esm"))
-            .arg("validate")
-            .arg(case_path(case))
-            .output()
-            .unwrap_or_else(|e| panic!("could not run the esm binary: {e}"));
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let warnings = stderr
-            .matches("warning: deprecated_records_per_sample:")
-            .count();
-        let sites = expected_sites(case);
-        if sites.is_empty() {
-            assert_eq!(warnings, 0, "{id}: {stderr}");
-        } else {
-            assert_eq!(warnings, 1, "{id}: {stderr}");
-            assert!(
-                stderr.contains(&format!("Written at: {}.", sites.join(", "))),
-                "{id}: {stderr}"
-            );
-        }
-    }
-}
-
 fn case_by_id<'a>(m: &'a Value, id: &str) -> &'a Value {
     m["cases"]
         .as_array()

@@ -8,10 +8,10 @@
 //! stdout and still exits 0 is a gate that never closes, so every case below
 //! asserts the status alongside the output.
 //!
-//! Gated on the features the `esm` target itself requires: with `cli` or
-//! `solve` off cargo skips the binary, and `CARGO_BIN_EXE_esm` does not exist.
+//! Gated on this crate's `diffsol` feature: a build with no time integrator
+//! refuses `esm test` and `esm simulate`, naming the features to build with.
 
-#![cfg(all(not(target_arch = "wasm32"), feature = "cli", feature = "solve"))]
+#![cfg(feature = "diffsol")]
 
 use std::process::Command;
 
@@ -45,12 +45,12 @@ fn total_row(stdout: &str) -> (usize, usize, usize) {
     (counts[0], counts[1], counts[2])
 }
 
-const PASSING: &str = "tests/fixtures/inline_tests/passing_decay.esm";
-const FAILING: &str = "tests/fixtures/inline_tests/failing_decay.esm";
+const PASSING: &str = "../tests/fixtures/inline_tests/passing_decay.esm";
+const FAILING: &str = "../tests/fixtures/inline_tests/failing_decay.esm";
 /// A document that MOUNTS a leaf carrying its own inline tests, and couples it
 /// (`tests/conformance/mounted_component_tests/`, shared with Julia and Python).
 const MOUNTED_ASSEMBLY: &str =
-    "../../tests/conformance/mounted_component_tests/fixtures/assembly.esm";
+    "../../../tests/conformance/mounted_component_tests/fixtures/assembly.esm";
 
 #[test]
 fn all_assertions_passing_exits_zero_with_no_failures_block() {
@@ -85,7 +85,7 @@ fn a_wrong_expected_value_is_a_fail_and_exits_nonzero() {
 
 #[test]
 fn a_directory_is_walked_and_one_failure_fails_the_batch() {
-    let (ok, stdout) = esm(&["test", "tests/fixtures/inline_tests"]);
+    let (ok, stdout) = esm(&["test", "../tests/fixtures/inline_tests"]);
     assert!(!ok, "one failure must fail the batch; got:\n{stdout}");
     assert!(stdout.contains("Files discovered: 2"), "in:\n{stdout}");
     assert_eq!(total_row(&stdout), (3, 1, 0), "in:\n{stdout}");
@@ -96,7 +96,7 @@ fn a_directory_is_walked_and_one_failure_fails_the_batch() {
 
 #[test]
 fn an_unloadable_file_is_one_error_row_not_a_crash() {
-    let (ok, stdout) = esm(&["test", "tests/fixtures/inline_tests_invalid"]);
+    let (ok, stdout) = esm(&["test", "../tests/fixtures/inline_tests_invalid"]);
     assert!(!ok, "a parse failure must exit non-zero; got:\n{stdout}");
     assert_eq!(total_row(&stdout), (0, 0, 1), "in:\n{stdout}");
     assert!(stdout.contains("<parse>/<load>[0]"), "in:\n{stdout}");
@@ -112,7 +112,7 @@ fn model_and_filter_select_a_subset() {
         "PassingDecay",
         "--filter",
         "decay_trajectory",
-        "tests/fixtures/inline_tests",
+        "../tests/fixtures/inline_tests",
     ]);
     assert!(ok, "the failing model was filtered out; got:\n{stdout}");
     assert_eq!(total_row(&stdout), (3, 0, 0), "in:\n{stdout}");
@@ -124,7 +124,7 @@ fn a_filter_matching_nothing_reports_no_tests_and_exits_zero() {
         "test",
         "--filter",
         "no-such-test-id",
-        "tests/fixtures/inline_tests",
+        "../tests/fixtures/inline_tests",
     ]);
     assert!(ok, "finding no tests is not a failure; got:\n{stdout}");
     assert!(stdout.contains("(no inline tests found)"), "in:\n{stdout}");
@@ -132,9 +132,9 @@ fn a_filter_matching_nothing_reports_no_tests_and_exits_zero() {
 
 #[test]
 fn a_directory_holding_no_esm_files_warns_and_exits_zero() {
-    // `tests/common` is the shared helper module — a real directory with no
+    // `tests/cli` holds this suite's own modules — a real directory with no
     // `.esm` file under it.
-    let (ok, stdout) = esm(&["test", "tests/common"]);
+    let (ok, stdout) = esm(&["test", "tests/cli"]);
     assert!(ok, "discovering nothing is not a failure; got:\n{stdout}");
     assert!(
         stdout.contains("No .esm files discovered"),
@@ -213,7 +213,7 @@ fn final_state(stdout: &str) -> Vec<(String, f64)> {
 
 #[test]
 fn esm_simulate_evaluates_a_recurrence_and_agrees_with_esm_test() {
-    let doc = "../../tests/valid/recurrence_causal_self_reference.esm";
+    let doc = "../../../tests/valid/recurrence_causal_self_reference.esm";
 
     // Both commands name the REFERENCE compiler. A causal self-reference is
     // the one construct CONFORMANCE_SPEC §5.19.2 forbids the tape from
@@ -281,7 +281,7 @@ fn esm_simulate_evaluates_a_recurrence_and_agrees_with_esm_test() {
 #[cfg(feature = "xla")]
 #[test]
 fn esm_simulate_runs_the_xla_compiler_and_names_it() {
-    let doc = "../../tests/simulation/simple_ode.esm";
+    let doc = "../../../tests/simulation/simple_ode.esm";
     let (ok, out) = esm(&["simulate", "--compiler", "xla", "--time", "1.0", doc]);
     assert!(ok, "esm simulate --compiler xla must succeed:\n{out}");
     // The report line: every rule in the emitted program, none on the tape and
@@ -323,7 +323,7 @@ fn esm_simulate_runs_the_xla_compiler_and_names_it() {
 #[cfg(not(feature = "xla"))]
 #[test]
 fn esm_simulate_refuses_xla_without_the_feature() {
-    let doc = "../../tests/simulation/simple_ode.esm";
+    let doc = "../../../tests/simulation/simple_ode.esm";
     let out = Command::new(env!("CARGO_BIN_EXE_esm"))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args(["simulate", "--compiler", "xla", "--time", "1.0", doc])

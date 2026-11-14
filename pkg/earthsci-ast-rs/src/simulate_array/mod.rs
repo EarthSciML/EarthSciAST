@@ -62,7 +62,6 @@
 mod compile;
 mod cse;
 mod driver;
-#[cfg(feature = "solve")]
 pub(crate) use driver::IcStart;
 pub(crate) use driver::ParameterKeyResolver;
 pub(crate) use recurrence_group::lower_recurrence_groups;
@@ -892,7 +891,6 @@ pub struct ArrayCompiled {
     /// The field initial conditions construction resolved
     /// ([`Self::field_ic_records`]), held for the first solve to take instead
     /// of resolving them again. See [`driver::FieldIcMemo`].
-    #[cfg(feature = "solve")]
     field_ic_memo: RefCell<Option<driver::FieldIcMemo>>,
     /// Each shaped parameter whose declared default the build lowered into a
     /// `const` observed, with the dense row-major `(shape, values)` it was

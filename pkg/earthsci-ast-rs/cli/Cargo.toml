@@ -1,0 +1,62 @@
+[package]
+name = "earthsci-ast-cli"
+version = "0.12.0"
+edition = "2024"
+rust-version = "1.89.0"
+authors = ["EarthSciML Authors and Contributors"]
+description = "The `esm` command-line tool for EarthSciML Abstract Syntax Tree Format files"
+license = "AGPL-3.0-only"
+repository = "https://github.com/EarthSciML/EarthSciAST"
+keywords = ["earth-science", "modeling", "cli", "esm"]
+categories = ["science", "command-line-utilities", "simulation"]
+readme = "README.md"
+
+# The command-line tool is a crate of its own, not a binary of `earthsci-ast`,
+# because one of its time integrators (EarthSciIntegrator) depends on
+# `earthsci-ast`: as a binary of that crate, linking the integrator would be a
+# dependency cycle, which cargo refuses.
+[[bin]]
+name = "esm"
+path = "src/main.rs"
+
+[features]
+default = ["diffsol"]
+# The time integrators behind `esm simulate`. They are additive: a build with
+# both picks one per run with `--solver`, and a build with one uses it. A build
+# with neither still validates, converts and analyzes documents, and refuses
+# the commands that integrate, naming the features to build with.
+#
+# diffsol: the solver `earthsci-ast` itself links (its `solve` feature).
+# `esm test` and `esm benchmark --bench-type simulate` run on it only.
+diffsol = ["earthsci-ast/solve"]
+# EarthSciIntegrator: plans a run configuration against the document
+# (operators, schedule, macro step), then runs the plan.
+integrator = ["dep:earthsci-integrator", "dep:earthsci-integrator-planner"]
+# Read the parquet, netcdf and zarr files a document's `data_sources` name
+# (`earthsci-ast/esio`). The binaries attached to each GitHub release have it.
+esio = ["earthsci-ast/esio"]
+# The XLA right-hand-side compiler (`--compiler xla`); see `earthsci-ast/xla`.
+xla = ["earthsci-ast/xla"]
+
+[dependencies]
+# Exact: the tool and the library ship under one version number.
+earthsci-ast = { path = "..", version = "=0.12.0", default-features = false }
+clap = { version = "4.0", features = ["derive"] }
+indexmap = { version = "2", features = ["serde"] }
+ndarray = "0.17"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
+# EarthSciIntegrator and its planner. They depend on `earthsci-ast` by their
+# own version requirement, which may trail this workspace's; cargo then links a
+# second copy of `earthsci-ast` inside them. That is sound because nothing typed
+# crosses between the two: the integrator is handed file paths (the document
+# and a run configuration) and hands back plain `f64` state rows. A document
+# newer than the integrator's `earthsci-ast` reads is refused by its planner.
+earthsci-integrator = { version = "0.0.1", optional = true }
+earthsci-integrator-planner = { version = "0.0.1", optional = true }
+
+[dev-dependencies]
+tempfile = "3.10"
+# Writes the FF10 zip fixture `tests/cli/cli_data_source_ingest.rs` hands the
+# binary (the same pure-Rust `zip` crate EarthSciIO's reader uses).
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }

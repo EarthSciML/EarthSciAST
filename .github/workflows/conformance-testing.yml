@@ -476,8 +476,18 @@ jobs:
       - name: Build Rust library
         run: cargo build --verbose
 
+      # The `esm` tool is its own crate, `earthsci-ast-cli` (cli/), so it can
+      # link EarthSciIntegrator, which depends on this library. A bare
+      # `cargo build` here selects the library alone.
       - name: Build CLI binary
-        run: cargo build --bin esm --verbose
+        run: cargo build -p earthsci-ast-cli --bin esm --verbose
+
+      # Each time integrator alone, so neither build leans on the other's
+      # code: `diffsol` is the default above. The integrator crates pull
+      # earthsciio (MSRV 1.91, through zarrs), so not on the MSRV leg.
+      - name: Build CLI binary with the integrator backend only
+        if: matrix.rust != '1.89.0'
+        run: cargo check -p earthsci-ast-cli --no-default-features --features integrator --verbose
 
       # A consumer that only builds problems (EarthSciIntegrator's planner)
       # depends on the crate with `default-features = false`, so the library
@@ -532,13 +542,18 @@ jobs:
         # just the MSRV one -- including the bench-check and doc steps below,
         # which used to inherit `--all-features` precisely so they would reuse
         # this feature resolution, and still do.
+        #
+        # The `esm` tool's own tests (cli/tests) run in a second command, with
+        # both backends in the build off the MSRV leg.
         run: |
           if [ "${{ matrix.rust }}" = "1.89.0" ]; then
             cargo test --verbose --features \
               conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance
+            cargo test --verbose -p earthsci-ast-cli
           else
             cargo test --verbose --features \
               conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio
+            cargo test --verbose -p earthsci-ast-cli --features esio,integrator
           fi
 
       # The scaling tier's gates at the PR sizes

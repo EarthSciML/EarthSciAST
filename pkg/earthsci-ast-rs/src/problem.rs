@@ -4828,7 +4828,7 @@ fn sample_discrete_providers(
 /// gives it). Only the providers feeding a field the `ic` right-hand sides
 /// read are asked, and the Problem's forcing is not written
 /// ([`crate::provider::RefreshExecutor::sample_detached`]).
-#[cfg(all(feature = "solve", not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn discrete_at_start(
     compiled: &ArrayCompiled,
     exec: &SharedRefresh,
@@ -5048,7 +5048,6 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
 /// [`SimulateError::InvalidInitialCondition`] for an element none of the four
 /// sources values, and the error of an initial condition that cannot be
 /// evaluated.
-#[cfg(feature = "solve")]
 pub fn initial_state(prob: &EsmProblem) -> Result<Vec<f64>, SimulateError> {
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.

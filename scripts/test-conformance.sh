@@ -378,15 +378,16 @@ run_rust_tests() {
 
     # Generate conformance outputs.
     #
-    # `--features conformance-adapters` is not needed by `esm` itself (the
-    # feature only gates the three adapter BIN targets, and its one implied
-    # feature, `solve`, is already default). It is here so that every cargo
-    # invocation in this script shares ONE feature resolution: the determinism
-    # / cadence / PDE adapters below all pass it, and cargo caches builds per
-    # feature set, so without it the crate is compiled twice per run — once
-    # for this line and once for the first adapter (#224).
+    # `esm` is the `earthsci-ast-cli` package (cli/). The library feature
+    # `earthsci-ast/conformance-adapters` is not needed by `esm` itself (it
+    # only gates the adapter BIN targets, and its one implied feature, `solve`,
+    # is the tool's default `diffsol`). It is here so that every cargo
+    # invocation in this script shares ONE feature resolution of the library:
+    # the determinism / cadence / PDE adapters below all pass it, and cargo
+    # caches builds per feature set, so without it the crate is compiled twice
+    # per run — once for this line and once for the first adapter (#224).
     log "Generating Rust conformance outputs..."
-    cargo run --features conformance-adapters --bin esm -- conformance-test "$RUST_OUTPUT" "$CORPUS_MANIFEST"
+    cargo run -p earthsci-ast-cli --features earthsci-ast/conformance-adapters --bin esm -- conformance-test "$RUST_OUTPUT" "$CORPUS_MANIFEST"
 
     return $?
 }

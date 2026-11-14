@@ -23,7 +23,8 @@ jobs:
     uses: EarthSciML/.github/.github/workflows/lint.yml@main
     with:
       rust-dirs: '["pkg/earthsci-ast-rs", "pkg/earthsci-narrative", "pkg/earthsci-typst-plugin"]'
-      # Every earthsci-ast-rs feature except `xla`, whose build script needs a
+      # Every earthsci-ast-rs workspace feature (the library's and the `esm`
+      # tool's, cli/) except `xla`, whose build script needs a
       # separately fetched xla_extension (tested in xla-backends.yml); plus the
       # aarch64 SIMD paths, which the host build does not compile. Those live in
       # the library, so that run lints `--lib` only: its tests and benches pull
@@ -31,7 +32,7 @@ jobs:
       # runner has no aarch64 C compiler. The Typst plugin only builds for wasm32
       # (its .cargo/config.toml sets the target).
       rust-clippy: >-
-        [{"dir": "pkg/earthsci-ast-rs", "args": "--features conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio"},
+        [{"dir": "pkg/earthsci-ast-rs", "args": "--features conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio,integrator"},
          {"dir": "pkg/earthsci-ast-rs", "target": "aarch64-unknown-linux-gnu", "targets": "--lib", "args": "--features simd"},
          {"dir": "pkg/earthsci-narrative"},
          {"dir": "pkg/earthsci-typst-plugin", "target": "wasm32-unknown-unknown"}]

@@ -25,8 +25,11 @@
 //!   * and a document that does integrate is untouched — the change that
 //!     enables all of this is `Rhs::Always` becoming `Rhs::Auto`, which
 //!     only a dynamic-document test can prove was safe.
+//!
+//! Gated on this crate's `diffsol` feature: a build with no time integrator
+//! refuses `esm simulate`, naming the features to build with.
 
-#![cfg(all(not(target_arch = "wasm32"), feature = "cli", feature = "solve"))]
+#![cfg(feature = "diffsol")]
 
 use std::fs;
 use std::path::Path;
@@ -82,7 +85,7 @@ fn relational_document() -> Value {
 
 /// A document that DOES integrate, so the `Rhs::Auto` change can be shown
 /// not to have moved it.
-const DYNAMIC: &str = "tests/fixtures/inline_tests/passing_decay.esm";
+const DYNAMIC: &str = "../tests/fixtures/inline_tests/passing_decay.esm";
 
 fn write_doc(dir: &Path, doc: &Value) -> std::path::PathBuf {
     let path = dir.join("relational.esm");

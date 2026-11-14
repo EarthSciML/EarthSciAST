@@ -2,8 +2,8 @@
 //!
 //! Command-line interface for working with ESM files.
 //!
-//! The `esm` binary target is the thin `esm.rs` next to this file; this is its
-//! whole implementation, compiled for native targets only.
+//! The `esm` binary's whole implementation; `main.rs` is its entry point and
+//! `backend.rs` the time integrators `simulate` runs on.
 
 use clap::{Parser, Subcommand, ValueEnum};
 use earthsci_ast::extension::analysis::{
@@ -169,6 +169,29 @@ enum Commands {
         /// (`CompilerRewrites::count_fold`): the A/B seam for timing it.
         #[arg(long, hide = true)]
         no_count_fold: bool,
+        /// WHICH time integrator runs a document that integrates: `diffsol`
+        /// (the solver `earthsci-ast` links; cargo feature `diffsol`, on by
+        /// default) or `integrator` (EarthSciIntegrator; cargo feature
+        /// `integrator`). Omitted, the first of those this build has. A name
+        /// this build lacks is refused, naming the feature to build with.
+        /// (Not `--solver`: `esm test --solver` names diffsol's method.)
+        #[arg(long, value_name = "NAME")]
+        backend: Option<String>,
+        /// `integrator` only: the run configuration (EarthSciIntegrator
+        /// spec/run-config.md) to plan, whose `model` must be FILE. Omitted,
+        /// one adaptive leaf over every operator of the model runs, with
+        /// global step-size control, inside fixed macro steps of `--dt`.
+        #[arg(long, value_name = "FILE")]
+        run_config: Option<PathBuf>,
+        /// `integrator` only: the fixed macro step of the default run
+        /// configuration, in seconds; default a hundredth of the run.
+        #[arg(long, value_name = "SECONDS")]
+        dt: Option<f64>,
+        /// `integrator` only: where to write the plan. Omitted, it goes in a
+        /// directory under the system temporary directory, removed after the
+        /// run.
+        #[arg(long, value_name = "DIR")]
+        plan_dir: Option<PathBuf>,
     },
     /// Show information about an ESM file
     Info {
@@ -485,6 +508,15 @@ fn fail(message: impl Into<String>) -> Box<dyn std::error::Error> {
 }
 
 /// Exit-1 failure whose diagnostics the handler already printed.
+/// The refusal of a command that runs on diffsol only, in a build without it.
+#[cfg(not(feature = "diffsol"))]
+fn needs_diffsol(command: &str) -> Box<dyn std::error::Error> {
+    fail(format!(
+        "{command} integrates with diffsol, which this build of `esm` does not \
+         have: rebuild with `--features diffsol`"
+    ))
+}
+
 fn fail_silent() -> Box<dyn std::error::Error> {
     Box::new(CliFailure { message: None })
 }
@@ -1915,6 +1947,21 @@ fn bench_simulate(
     content: &str,
     iterations: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(not(feature = "diffsol"))]
+    {
+        let _ = (path, content, iterations);
+        Err(needs_diffsol("benchmark --bench-type simulate"))
+    }
+    #[cfg(feature = "diffsol")]
+    bench_simulate_diffsol(path, content, iterations)
+}
+
+#[cfg(feature = "diffsol")]
+fn bench_simulate_diffsol(
+    path: &std::path::Path,
+    content: &str,
+    iterations: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     let esm_file = load_at(path, content)?;
     let opts = earthsci_ast::SolveOptions::default();
     // Build the EsmProblem ONCE, outside the loop, and time only the solve. That
@@ -2517,7 +2564,12 @@ fn run_simulate(
     format: SimulateFormat,
     compiler: Option<String>,
     no_count_fold: bool,
+    backend: Option<String>,
+    integrator: crate::backend::IntegratorOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Which time integrator, checked before anything is loaded: a name this
+    // build lacks says nothing about the document.
+    let backend = crate::backend::select(backend.as_deref(), integrator).map_err(fail)?;
     // A value outside the closed vocabulary is `compiler_unknown` (esm-spec
     // §9.6.6) and is refused HERE, before anything is loaded: it is the one of
     // the three failures that says nothing about the document.
@@ -2602,9 +2654,15 @@ fn run_simulate(
         // API_SPEC §5.8, "Every Problem reports what ran": one line, so a
         // number in the output below is tied to the way it was produced.
         println!("{}", prob.compiler_report());
-        let sol = earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
+        let sol = backend.simulate(&crate::backend::SimulateRun {
+            file: &file,
+            prob: &prob,
+            opts: &opts,
+            tspan: (0.0, time),
+        })?;
         println!(
-            "✓ Simulation complete: {} output points, alg {}, retcode {}",
+            "✓ Simulation complete ({} backend): {} output points, alg {}, retcode {}",
+            backend.name(),
             sol.time.len(),
             sol.metadata.alg,
             sol.retcode
@@ -3726,7 +3784,9 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
 /// `abstol` of `1e-12` is looser than the assertion it has to clear, so the
 /// run could not be accurate enough to be worth asserting on. That is a
 /// property of the fixtures, not a divergence between the bindings.
+#[cfg(feature = "diffsol")]
 const TEST_RELTOL: f64 = 1e-10;
+#[cfg(feature = "diffsol")]
 const TEST_ABSTOL: f64 = 1e-14;
 
 /// PASS / FAIL / ERROR — the tri-state verdict the Julia runner reports.
@@ -3741,6 +3801,7 @@ const TEST_ABSTOL: f64 = 1e-14;
 /// evaluation. So a non-passing result with no `actual` never reached the
 /// comparison and is an ERROR; one with an `actual` reached it and lost, and
 /// is a FAIL.
+#[cfg(feature = "diffsol")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Verdict {
     Pass,
@@ -3748,6 +3809,7 @@ enum Verdict {
     Error,
 }
 
+#[cfg(feature = "diffsol")]
 impl Verdict {
     /// The verdict of one finished assertion, per the `actual`-is-`None`
     /// invariant documented on [`Verdict`].
@@ -3897,6 +3959,13 @@ fn no_reader_diagnostic(consumed: &BTreeMap<String, Vec<String>>) -> String {
     )
 }
 
+/// What builds a document's data providers, once per build: the shape of
+/// `earthsci_ast::BuildProviderFactory`, spelled out here because that alias
+/// is exported only with the library's solver (`earthsci-ast/solve`), and the
+/// `integrator` solver builds without it.
+type ProviderFactory =
+    dyn Fn() -> Result<Vec<(String, Box<dyn earthsci_ast::PrepareProvider>)>, String>;
+
 /// Close every metaparameter a `data_sources` `extent` binds, by SAMPLING the
 /// sources that measure themselves, and re-load the document with the sizes the
 /// data gave.
@@ -3923,13 +3992,7 @@ fn no_reader_diagnostic(consumed: &BTreeMap<String, Vec<String>>) -> String {
 fn close_declared_extents(
     esm_file: earthsci_ast::EsmFile,
     reload: impl FnOnce(&BTreeMap<String, i64>) -> Result<earthsci_ast::EsmFile, String>,
-) -> Result<
-    (
-        earthsci_ast::EsmFile,
-        Option<Box<earthsci_ast::BuildProviderFactory<'static>>>,
-    ),
-    String,
-> {
+) -> Result<(earthsci_ast::EsmFile, Option<Box<ProviderFactory>>), String> {
     let factory = |file: &earthsci_ast::EsmFile| {
         serde_json::to_value(file)
             .ok()
@@ -3981,9 +4044,7 @@ fn close_declared_extents(
 /// A factory rather than a set because `ProblemOptions` takes providers by
 /// value and `esm test` builds one problem per inline test.
 #[cfg(feature = "esio")]
-fn data_source_providers(
-    doc: &serde_json::Value,
-) -> Option<Box<earthsci_ast::BuildProviderFactory<'static>>> {
+fn data_source_providers(doc: &serde_json::Value) -> Option<Box<ProviderFactory>> {
     let consumed = consumed_data_sources(doc);
     if consumed.is_empty() {
         return None;
@@ -4016,9 +4077,7 @@ fn data_source_providers(
 }
 
 #[cfg(not(feature = "esio"))]
-fn data_source_providers(
-    doc: &serde_json::Value,
-) -> Option<Box<earthsci_ast::BuildProviderFactory<'static>>> {
+fn data_source_providers(doc: &serde_json::Value) -> Option<Box<ProviderFactory>> {
     let consumed = consumed_data_sources(doc);
     if consumed.is_empty() {
         return None;
@@ -4035,6 +4094,7 @@ fn data_source_providers(
 /// a file that fails to LOAD, and a `Verdict` the library's two-state `passed`
 /// does not carry — so the runner keeps its own row type rather than the
 /// library's.
+#[cfg(feature = "diffsol")]
 struct TestRow {
     file: PathBuf,
     container: String,
@@ -4048,6 +4108,7 @@ struct TestRow {
 
 /// Render a float the way Julia's `print` does, so the two runners' summaries
 /// read the same (`100.0`, `1.0e6`, a decimal tie with the even last digit).
+#[cfg(feature = "diffsol")]
 fn julia_float(v: f64) -> String {
     earthsci_ast::extension::canonicalize::format_julia_float(v)
 }
@@ -4058,6 +4119,7 @@ fn julia_float(v: f64) -> String {
 /// does not exist, which then surfaces as a load ERROR naming it rather than
 /// vanishing from the run. Globally sorted and deduplicated, so overlapping
 /// arguments run each file exactly once.
+#[cfg(feature = "diffsol")]
 fn discover_test_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let mut out = Vec::new();
     for path in paths {
@@ -4075,6 +4137,7 @@ fn discover_test_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Box<dyn std::
 /// `path` relative to the working directory when it lies under it, else `path`
 /// verbatim — the Julia summary's `rel`, which relativizes against its root
 /// and otherwise prints the path as given.
+#[cfg(feature = "diffsol")]
 fn relative_to_cwd(path: &std::path::Path) -> String {
     std::env::current_dir()
         .ok()
@@ -4102,6 +4165,7 @@ fn relative_to_cwd(path: &std::path::Path) -> String {
 ///
 /// Best-effort: an unreadable or unparseable file yields nothing, because the
 /// run itself already reports that failure as a load ERROR row.
+#[cfg(feature = "diffsol")]
 fn mounted_components(path: &std::path::Path) -> Vec<String> {
     let Ok(text) = fs::read_to_string(path) else {
         return Vec::new();
@@ -4135,6 +4199,7 @@ fn mounted_components(path: &std::path::Path) -> Vec<String> {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "diffsol")]
 fn run_test(
     paths: Vec<PathBuf>,
     model: Option<String>,
@@ -4298,6 +4363,7 @@ fn run_test(
 /// The per-file `pass | fail | err` table, its `TOTAL` row and the `Failures:`
 /// block — a port of the Julia runner's `_print_summary`, so the two runners'
 /// output can be read side by side.
+#[cfg(feature = "diffsol")]
 fn print_test_summary(files: &[PathBuf], rows: &[TestRow]) {
     println!();
     println!("================ ESM inline-test summary ================");
@@ -4426,6 +4492,10 @@ pub fn main() -> std::process::ExitCode {
             format,
             compiler,
             no_count_fold,
+            backend,
+            run_config,
+            dt,
+            plan_dir,
         } => run_simulate(
             file,
             time,
@@ -4435,6 +4505,12 @@ pub fn main() -> std::process::ExitCode {
             format,
             compiler,
             no_count_fold,
+            backend,
+            crate::backend::IntegratorOptions {
+                run_config,
+                dt,
+                plan_dir,
+            },
         ),
         Commands::Info { file } => run_info(file),
         Commands::Units { file, check } => run_units(file, check),
@@ -4472,9 +4548,21 @@ pub fn main() -> std::process::ExitCode {
             abstol,
             verbose,
             compiler,
-        } => run_test(
-            paths, model, filter, solver, reltol, abstol, verbose, compiler,
-        ),
+        } => {
+            #[cfg(feature = "diffsol")]
+            {
+                run_test(
+                    paths, model, filter, solver, reltol, abstol, verbose, compiler,
+                )
+            }
+            #[cfg(not(feature = "diffsol"))]
+            {
+                let _ = (
+                    paths, model, filter, solver, reltol, abstol, verbose, compiler,
+                );
+                Err(needs_diffsol("esm test"))
+            }
+        }
         Commands::ConformanceTest { out_dir, manifest } => {
             run_conformance_test(&out_dir, manifest.as_deref())
         }
@@ -5139,7 +5227,7 @@ mod tests {
     #[test]
     fn a_failed_toplevel_reaction_system_mount_is_a_structural_finding() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/conformance/toplevel_reaction_system_ref");
+            .join("../../../tests/conformance/toplevel_reaction_system_ref");
         for fixture in ["ambiguous.esm", "unknown_selector.esm", "missing_file.esm"] {
             let record = conformance_validation_record(&dir.join(fixture));
             assert_eq!(record["is_valid"], serde_json::json!(false), "{fixture}");
