@@ -5,7 +5,10 @@ strict YAML subset, Typst dictionaries) and the unit spellings. It is not a
 description of a Lean model; it *is* the Lean model, `formal/` in the
 EarthSciAST repository, rendered page by page.
 
-The Lean modules are the authority for these formats: `esm-spec.md` only points
-here, and a change to the notation is a change to the modules first. Every proof
+The `Esm.Document` modules, with `Esm.Units.Canonical` and `Esm.Units.Typeset`
+for the unit spellings, are the authority for these formats: `esm-spec.md` only
+points here, and a change to the notation is a change to the modules first. The
+other `Esm.Units` modules are included as the supporting model of units and
+dimensional analysis, which `esm-spec.md` §4.8 still defines. Every proof
 is checked by Lean in EarthSciAST's CI (the `formal` workflow; `formal/README.md`
 explains how to build it locally).

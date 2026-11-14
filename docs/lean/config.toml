@@ -13,7 +13,10 @@ intro = "docs/lean/document-formats.md"
 # `A.B` is one module, `A.B.*` its direct submodules, `A.B.**` every module
 # below it. A module is listed once, where it first appears, so the explicit
 # entries set the reading order and the globs collect the rest (new modules
-# under formal/Esm/Document/ appear without a change here).
+# under formal/Esm/Document/ appear without a change here, sorted by name, so
+# a module that others build on goes before them only once it is listed).
+# An explicit entry must name a module that exists: extract_lean.py stops on
+# one that does not, so a module is listed here in the change that adds it.
 modules = [
   "Esm.Document.Notation",
   "Esm.Document.Number",

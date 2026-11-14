@@ -59,9 +59,11 @@ earthsci.dev (`tools/api_docs/`, its README §6) reads the modules listed in
 and a block per documented declaration. It reads source text only, so the docs
 job needs no Lean build. The intro on the chapter's landing page is
 `docs/lean/document-formats.md`. New modules under `formal/Esm/Document/` join
-the chapter without a configuration change.
+the chapter without a configuration change, after the listed ones in name order;
+list a module in `config.toml` to place it earlier.
 
 ```bash
+# Python >= 3.11 (the script reads TOML with tomllib)
 python3 ../earthsci.dev/tools/api_docs/extract_lean.py --repo-root .
 ```
 
