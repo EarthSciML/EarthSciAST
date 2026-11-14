@@ -137,8 +137,9 @@ def pretty (p : Option Tok) (t1 t2 : Tok) : Bool :=
   ((t1 matches .kw .minus) && (match p with | some q => atomEnd q | none => false)) ||
   (atomEnd t1 && atomStart t2) || ((t2 matches .units _))
 
+/-- No space before a call parenthesis, nor before the `[` of an index (`k[1]`). -/
 def sp (p : Option Tok) (t1 t2 : Tok) : Bool :=
-  needSpace t1 t2 || (pretty p t1 t2 && !(t2 matches .kw .lp))
+  needSpace t1 t2 || (pretty p t1 t2 && !(t2 matches .kw .lp) && !((t2 matches .kw .lbk) && atomEnd t1))
 
 def renderAux : Option Tok → List Tok → List Char
   | _, [] => []
@@ -223,14 +224,23 @@ def punct : Char → Option Kw
   | '.' => some .sdot | '\\' => some .nl
   | _ => none
 
+/-- `upright(e)`, Euler's number written without quotes (an accepted variant, read as
+`upright("e")`; the printer always quotes). -/
+def uprightE : List Char → Option (Tok × List Char)
+  | '(' :: 'e' :: ')' :: r => some (.ups [("e", "")], r)
+  | _ => none
+
 /-- One identifier-started token. -/
 def lexIdent (cs : List Char) : Option (Tok × List Char) :=
   let p := idRun cs
   let w := String.ofList p.1
   if w = "upright" then
-    match pieces cs.length cs with
-    | ([], _) => none
-    | (ps, r) => some (.ups ps, r)
+    match uprightE p.2 with
+    | some q => some q
+    | none =>
+      match pieces cs.length cs with
+      | ([], _) => none
+      | (ps, r) => some (.ups ps, r)
   else if w = "italic" then (quotedArg p.2).map fun q => (.it q.1, q.2)
   else if w = "op" then (quotedArg p.2).map fun q => (.opn q.1, q.2)
   else if w = "thin" then

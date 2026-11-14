@@ -22,7 +22,7 @@ It serves two purposes:
 | `Esm/Lib/` | Standard-library templates as ASTs, generated from `lib/*.esm` by `scripts/gen-lib-templates.py` (`--check` runs in CI) |
 | `Esm/Closed/` | Reference definitions (interpolation, calendar, keys and ranks, planar overlap) and the theorems that each standard-library template, expanded and evaluated, computes its reference |
 | `Esm/Document/Source/` | ESM documents as Markdown and Typst sources: the skeleton with its path-keyed fallback, the math entries (equations, initialization equations, constraints, reactions, templates and rules), the two containers, and their round-trip and prose-independence theorems (`parseMd_printMd`, `parseTyp_printTyp`) |
-| `Adapter/Main.lean` | The `esm-lean` executable used by the conformance runners (also `print-md`, `parse-md`, `print-typ`, `parse-typ`, `canon`) |
+| `Adapter/Main.lean` | The `esm-lean` executable used by the conformance runners (also `print-md`, `parse-md`, `print-typ`, `parse-typ`, `canon`, which generate the golden set in `tests/conformance/document_format/` through `scripts/gen-document-format-fixtures.py`; `formal-audit.py fixtures` checks it is current) |
 | `inventory/*.json` | Every normative (`MUST`) clause of the two spec files, classified |
 | `properties/*.json` | The property registry, one file per spec area: what is claimed about which clauses, and its status (`properties.json` lists verified checkers) |
 | `QUESTIONS.md` | Spec ambiguities awaiting a ruling, and the rulings once made |

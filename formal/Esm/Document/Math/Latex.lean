@@ -182,13 +182,14 @@ def atomEnd : Tok → Bool
   | _ => false
 
 /-- Spacing for reading: around binary operators (a `-` after an operand is binary),
-after commas and colons, and between juxtaposed operands (not before a call
-parenthesis). -/
+after commas, colons and semicolons, and between juxtaposed operands (not before a call
+parenthesis, and not before the `[` of an index, `k[1]`). -/
 def pretty (p : Option Tok) (t1 t2 : Tok) : Bool :=
   isBin t1 || isBin t2 || (t1 matches .kw .comma) || (t1 matches .kw .colon) ||
+  (t1 matches .kw .semi) ||
   ((t2 matches .kw .minus) && atomEnd t1) ||
   ((t1 matches .kw .minus) && (match p with | some q => atomEnd q | none => false)) ||
-  (atomEnd t1 && atomStart t2 && !(t2 matches .kw .lp))
+  (atomEnd t1 && atomStart t2 && !(t2 matches .kw .lp) && !(t2 matches .kw .lbk))
 
 def sp (p : Option Tok) (t1 t2 : Tok) : Bool := needSpace t1 t2 || pretty p t1 t2
 

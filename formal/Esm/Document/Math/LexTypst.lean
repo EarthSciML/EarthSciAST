@@ -877,6 +877,9 @@ theorem lexOne_tok (prev : Option Char) (t : Tok) (ht : tokOK t) (hl : t ≠ .kw
     unfold lexIdent
     rw [idRun_append _ _ (by decide) (by simp; decide)]
     simp only [String.ofList_toList, ↓reduceIte]
+    rw [show uprightE ('(' :: (Strings.quote true p.1 ++ ')' :: ((if p.2 = "" then [] else '_' :: p.2.toList) ++
+        (ps'.flatMap pieceChars ++ X)))) = none by simp [uprightE, Strings.quote]]
+    simp only
     rw [← hform]
     have hlen : ∀ qs : List (String × String), qs.length ≤ (qs.flatMap pieceChars).length := by
       intro qs

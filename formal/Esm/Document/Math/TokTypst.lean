@@ -871,7 +871,7 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
             exact ⟨(CH v (sizeOf_tNode_lt hv) (hb _ hv) 4).1, (CH v (sizeOf_tNode_lt hv) (hb _ hv) 4).2.1⟩)
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok hS.1 hselfN.1 hselfN.2
-    | tnamed m bs hm hb hps hne hk hkn hpr =>
+    | tnamed m bs hm _ hb hps hne hk hkn hpr =>
       simp only [hc] at hpr
       have hS := good_callToks [.opn m] (good_single trivial) ⟨by simp, fun u hu => by simp at hu; subst hu; exact callEnd_opn m⟩
         (nice_cons _ (by simp) rfl)

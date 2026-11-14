@@ -125,7 +125,7 @@ inductive V (c : Ctx) : Json → Prop where
       (hpr : pr c (tNode n bs) = mkOut c.sf 10 (callToks c.sf [.opn n]
         (ps.map fun p => ((bs.map fun kv => (kv.1, (pr c kv.2).at c.sf 4)).lookup p).getD []))) :
       V c (tNode n bs)
-  | tnamed (n : String) (bs : List (String × Json)) (hn : tnameOK n = true)
+  | tnamed (n : String) (bs : List (String × Json)) (hn : tnameOK n = true) (hs : keysSorted bs = true)
       (hb : ∀ kv ∈ bs, isE kv.2 = true) (hps : positional c.S n bs = none) (hne : bs ≠ [])
       (hk : ∀ kv ∈ bs, nameOK kv.1 = true) (hkn : (bs.map Prod.fst).Nodup)
       (hpr : pr c (tNode n bs) = mkOut c.sf 10 (callToks c.sf [.opn n]
@@ -445,7 +445,7 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
               have := hf0 ("bindings", .obj bs) (by simp [fieldsOf])
               simp only [jwf, Bool.and_eq_true, decide_eq_true_eq] at this
               exact this.1
-            refine V.tnamed n bs hn hb hps hne.1 hne.2 hkn ?_
+            refine V.tnamed n bs hn hs hb hps hne.1 hne.2 hkn ?_
             unfold tNode; rw [hpr, attach_map_eq bs (fun kv => (kv.1, Out.at c.sf 4 (pr c kv.2))), List.map_map]
             rfl
           · exact fbEsc _ hpr rfl

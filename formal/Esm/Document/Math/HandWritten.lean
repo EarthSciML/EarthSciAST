@@ -129,7 +129,7 @@ def strOp : Json := mkNode "myop" [k] [("s", .str "a{b}")]
 
 /-- The string prints inside `\text{"…"}` with the braces escaped, not as `\u007B`, which
 KaTeX refuses in math mode ("accent \u works only in text mode"). -/
-example : printLatex S strOp = "\\operatorname{myop}(k;\\mathrm{s} = \\text{\"a\\{b\\}\"})" := by
+example : printLatex S strOp = "\\operatorname{myop}(k; \\mathrm{s} = \\text{\"a\\{b\\}\"})" := by
   decide +kernel
 example : reads (parseLatex S (printLatex S strOp)) strOp = true := by decide +kernel
 
@@ -138,7 +138,7 @@ non-ASCII letter, and (seven digits) a character above 999. No `$` or line break
 the LaTeX, and it reads back. -/
 def oddStr : Json := mkNode "myop" [k] [("s", .str "x$%é\n\"_~\\ 中")]
 
-example : printLatex S oddStr = "\\operatorname{myop}(k;\\mathrm{s} = \\text{\"x{\\char036}{\\char037}{\\char233}{\\char010}\"\\_{\\char126}{\\char092} {\\char0020013}\"})" := by
+example : printLatex S oddStr = "\\operatorname{myop}(k; \\mathrm{s} = \\text{\"x{\\char036}{\\char037}{\\char233}{\\char010}\"\\_{\\char126}{\\char092} {\\char0020013}\"})" := by
   decide +kernel
 example : reads (parseLatex S (printLatex S oddStr)) oddStr = true := by decide +kernel
 

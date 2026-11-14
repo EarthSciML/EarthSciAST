@@ -4,8 +4,9 @@
 For every `.esm` file under `tests/` that is a JSON object (the robustness, security and
 malformed-JSON fixtures that are not JSON at all are skipped and counted):
 
-* the Markdown round trip: `esm-lean print-md`, then `esm-lean parse-md` on the printed
-  text, must give the document's canonical form (`esm-lean canon`);
+* the Markdown round trip: `esm-lean print-md` of the document's canonical form
+  (`esm-lean canon`, the form the printers take), then `esm-lean parse-md` on the
+  printed text, must give that canonical form again;
 * the same for Typst (`print-typ`, `parse-typ`);
 * with `--typst`: every printed `.typ` must compile, with the repository's `esm` Typst
   package (`typst/packages`, passed as `--package-path`);
@@ -62,9 +63,11 @@ def check_one(binary, src, out_dir, typst):
     rc, canon, err = run(binary, "canon", src)
     if rc != 0:
         return [("canon", f"{src}: {err}")]
+    canon_path = out_dir / (stem + ".canon.json")
+    canon_path.write_text(canon, encoding="utf-8")
     fails = []
     for fmt, ext in (("md", ".md"), ("typ", ".typ")):
-        rc, text, err = run(binary, f"print-{fmt}", src)
+        rc, text, err = run(binary, f"print-{fmt}", canon_path)
         if rc != 0:
             fails.append((f"print-{fmt}", f"{src}: {err}"))
             continue
