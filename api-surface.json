@@ -95,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 984,
+    "symbols": 991,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 353,
       "typescript": 237,
       "python": 266,
-      "rust": 387,
+      "rust": 394,
       "go": 455
     },
     "by_tier": {
-      "extension": 680,
+      "extension": 687,
       "stable": 304
     }
   },
@@ -2952,6 +2952,14 @@
       }
     },
     {
+      "name": "document_format",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DocumentFormat"
+      }
+    },
+    {
       "name": "domain",
       "kind": "type",
       "tier": "stable",
@@ -5761,6 +5769,14 @@
       }
     },
     {
+      "name": "parse_document",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "parse_document"
+      }
+    },
+    {
       "name": "parse_equation",
       "kind": "function",
       "tier": "stable",
@@ -5794,11 +5810,27 @@
       }
     },
     {
+      "name": "parse_markdown",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "parse_markdown"
+      }
+    },
+    {
       "name": "parse_reaction",
       "kind": "function",
       "tier": "extension",
       "bindings": {
         "typescript": "parseReaction"
+      }
+    },
+    {
+      "name": "parse_typst",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "parse_typst"
       }
     },
     {
@@ -6024,6 +6056,30 @@
       "tier": "extension",
       "bindings": {
         "julia": "PresetTimesTrigger"
+      }
+    },
+    {
+      "name": "print_document",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "print_document"
+      }
+    },
+    {
+      "name": "print_markdown",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "print_markdown"
+      }
+    },
+    {
+      "name": "print_typst",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "print_typst"
       }
     },
     {
