@@ -28,7 +28,9 @@ Subcommands:
               (tests/conformance/document_format/) is what the built `esm-lean`
               prints and parses now: a printer or parser change that moves a
               pinned spelling fails here until the fixtures are regenerated
-              (scripts/gen-document-format-fixtures.py). Needs `lake build`.
+              (scripts/gen-document-format-fixtures.py); and `esm-lean canon`
+              gives the bindings' canonicalize_document golden set
+              (tests/conformance/canonical_document/). Needs `lake build`.
   all         All of the above, with `--lean`.
 
 Exit status is 0 only if every requested check passes.

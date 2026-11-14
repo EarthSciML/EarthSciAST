@@ -75,8 +75,9 @@ def deprecatedTo : String → Option (String × Nat)
   | "pow" => some ("^", 2)
   | _ => none
 
-/-- The spelling rules of the canonical form: units strings respelled, `neg` and `pow`
-rewritten. `isMap`: the value is a name-keyed map. -/
+/-- The spelling rules of the canonical form: units strings respelled, a dimensionless
+`const` dropping its units, `neg` and `pow` rewritten. `isMap`: the value is a name-keyed
+map. Unproved adapter code, pinned by the golden files (`Esm.Document.Notation`). -/
 partial def spellRules (isMap : Bool) : Json → Json
   | .arr xs => .arr (xs.map (spellRules false))
   | .obj kvs =>
@@ -88,15 +89,15 @@ partial def spellRules (isMap : Bool) : Json → Json
         | "default_units", .str u => (k, .str (Esm.Units.canon u))
         | _, _ => if freeKeys.contains k then (k, v) else (k, spellRules (mapKeys.contains k) v)
       match Math.look "op" kvs', Math.look "args" kvs' with
-      | some (.str "const"), some (.arr []) =>
-        -- A const in the dimensionless unit drops it: a scalar becomes a bare literal.
-        match Math.look "units" kvs' with
-        | some (.str "1") =>
-          let kvs'' := kvs'.filter (fun kv => kv.1 != "units")
-          match kvs'' with
-          | [("args", .arr []), ("op", .str "const"), ("value", .num n)] => .num n
-          | _ => .obj kvs''
-        | _ => .obj kvs'
+      | some (.str "const"), _ =>
+        -- A const in the dimensionless unit drops it: one with a number value becomes
+        -- that bare literal, whatever else it carries (`id`, `shape`, `attrs`, no
+        -- `args`); any other keeps its other fields. The rule every binding's
+        -- `canonicalize_document` applies.
+        match Math.look "units" kvs', Math.look "value" kvs' with
+        | some (.str "1"), some (.num n) => .num n
+        | some (.str "1"), _ => .obj (kvs'.filter (fun kv => kv.1 != "units"))
+        | _, _ => .obj kvs'
       | some (.str o), some (.arr as) =>
         match deprecatedTo o with
         | some (o', n) =>
