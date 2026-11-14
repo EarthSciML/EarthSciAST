@@ -749,29 +749,52 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 		return true
 	}
 
-	// Whole-component lift, to a fixpoint.
 	type candidate struct {
 		state string
 		axes  []string
 	}
+	twoGrids := func(comp string, first candidate, other candidate) error {
+		if sameSet(other.axes, first.axes) {
+			return nil
+		}
+		return &DimensionPromotionError{Message: fmt.Sprintf(
+			"flatten: pointwise lift: component %q would be lifted onto two grids: state %q onto %v and state %q onto %v",
+			comp, first.state, first.axes, other.state, other.axes)}
+	}
+
+	// Operator-route plans, as opposed to the component grid a later pass gives.
+	operatorPlans := map[string]bool{}
+	for state := range plans {
+		operatorPlans[state] = true
+	}
 	liftedAxes := map[string][]string{}
 	liftedComponents := map[string]bool{}
-	for {
+
+	// candidatesOf finds every candidate of every component wanted accepts, in
+	// equation order, each read with the component's own states scalar and
+	// every other lifted state at its lift index sets.
+	candidatesOf := func(wanted func(comp string) bool) (map[string][]candidate, []string) {
 		inference := map[string]*liftShapes{}
 		found := map[string][]candidate{}
 		var foundOrder []string
 		for _, td := range tendencies {
 			comp := topComponent(td.target)
-			if liftedComponents[comp] {
+			if !wanted(comp) {
 				continue
 			}
 			var axes []string
-			if p, ok := plans[td.target]; ok {
-				axes = p.axes
+			if operatorPlans[td.target] {
+				axes = plans[td.target].axes
 			} else {
 				inf, ok := inference[comp]
 				if !ok {
-					inf = newLiftShapes(variables, defs, liftedAxes, masks[comp])
+					others := map[string][]string{}
+					for s, a := range liftedAxes {
+						if topComponent(s) != comp {
+							others[s] = a
+						}
+					}
+					inf = newLiftShapes(variables, defs, others, masks[comp])
 					inference[comp] = inf
 				}
 				a, decided := inf.exprAxes(td.eq.RHS)
@@ -785,6 +808,14 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 			}
 			found[comp] = append(found[comp], candidate{td.target, axes})
 		}
+		return found, foundOrder
+	}
+
+	// Whole-component lift, to a fixpoint.
+	// grids holds the candidate that gave each lifted component its grid.
+	grids := map[string]candidate{}
+	for {
+		found, foundOrder := candidatesOf(func(comp string) bool { return !liftedComponents[comp] })
 		if len(foundOrder) == 0 {
 			break
 		}
@@ -792,10 +823,8 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 			candidates := found[comp]
 			first, grid := candidates[0].state, candidates[0].axes
 			for _, other := range candidates[1:] {
-				if !sameSet(other.axes, grid) {
-					return &DimensionPromotionError{Message: fmt.Sprintf(
-						"flatten: pointwise lift: component %q would be lifted onto two grids: state %q onto %v and state %q onto %v",
-						comp, first, grid, other.state, other.axes)}
+				if err := twoGrids(comp, candidates[0], other); err != nil {
+					return err
 				}
 			}
 			for d, a := range grid {
@@ -823,10 +852,24 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 				liftedAxes[state] = plans[state].axes
 			}
 			liftedComponents[comp] = true
+			grids[comp] = candidates[0]
 		}
 	}
 	if len(liftedAxes) == 0 {
 		return nil
+	}
+
+	// A state can become a candidate only after its component was lifted, when
+	// a later pass lifts a component it reads. Search the lifted components'
+	// candidates once more with every lift final, so the answer does not depend
+	// on which pass lifted what.
+	found, foundOrder := candidatesOf(func(comp string) bool { return liftedComponents[comp] })
+	for _, comp := range foundOrder {
+		for _, other := range found[comp] {
+			if err := twoGrids(comp, grids[comp], other); err != nil {
+				return err
+			}
+		}
 	}
 
 	// The lifted states live on the lift's index sets: each Shape names them
