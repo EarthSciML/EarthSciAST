@@ -96,24 +96,53 @@
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"kg\") thin upright(\"m\") thin upright(\"s\")^(-2) $\n"
     },
     {
-      "id": "unit_canon_dimensionless",
+      "id": "unit_dimensionless_word",
       "kind": "print",
-      "description": "dimensionless is spelled 1, which prints as an upright 1.",
+      "description": "A const in units dimensionless drops them: the bare number.",
       "written": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": "dimensionless"}]}}]}}},
-      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "1", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "math": {"latex": "y = k \\cdot 3\\,\\mathrm{1}", "typst": "y = k dot 3 thin upright(\"1\")"},
-      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{1}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"1\") $\n"
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 3], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = k \\cdot 3", "typst": "y = k dot 3"},
+      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 $\n"
     },
     {
-      "id": "unit_one",
+      "id": "unit_dimensionless_one",
       "kind": "print",
-      "description": "The dimensionless unit 1 prints as an upright 1.",
+      "description": "A const in units 1 drops them: the bare number.",
       "written": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": "1"}]}}]}}},
-      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "1", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "math": {"latex": "y = k \\cdot 3\\,\\mathrm{1}", "typst": "y = k dot 3 thin upright(\"1\")"},
-      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{1}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"1\") $\n"
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 3], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = k \\cdot 3", "typst": "y = k dot 3"},
+      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 $\n"
+    },
+    {
+      "id": "unit_dimensionless_empty",
+      "kind": "print",
+      "description": "A const in units \"\" drops them: the bare number.",
+      "written": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": ""}]}}]}}},
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 3], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = k \\cdot 3", "typst": "y = k dot 3"},
+      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 $\n"
+    },
+    {
+      "id": "unit_dimensionless_array",
+      "kind": "print",
+      "description": "An array const in the dimensionless unit drops its units.",
+      "written": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": [1, 2], "units": "dimensionless"}]}}]}}},
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "value": [1, 2]}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = k \\begin{bmatrix}1 \\\\ 2\\end{bmatrix}", "typst": "y = k vec(1, 2)"},
+      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\begin{bmatrix}1 \\\\ 2\\end{bmatrix}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k vec(1, 2) $\n"
+    },
+    {
+      "id": "unit_dimensionless_declaration",
+      "kind": "print",
+      "description": "A declaration keeps units \"1\" (respelled from dimensionless).",
+      "written": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"f": {"type": "parameter", "units": "dimensionless", "default": 0.5}}, "equations": []}}},
+      "esm": {"esm": "2.1.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [], "variables": {"f": {"default": 0.5, "type": "parameter", "units": "1"}}}}},
+      "markdown": "---\nesm: \"2.1.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$f$]{default=0.5 units=\"1\"}\n\n```esm:equations\n[]\n```\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.1.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($f$, default: 0.5, units: \"1\")\n\n#esm-block(\"equations\", ())\n"
     },
     {
       "id": "unit_canon_declaration",

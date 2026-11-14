@@ -1657,11 +1657,41 @@ def units(g):
         op("*", "k", const(3, "m*kg/s/s")),
     )
     C(
-        "unit_canon_dimensionless",
-        "dimensionless is spelled 1, which prints as an upright 1.",
+        "unit_dimensionless_word",
+        "A const in units dimensionless drops them: the bare number.",
         op("*", "k", const(3, "dimensionless")),
     )
-    C("unit_one", "The dimensionless unit 1 prints as an upright 1.", op("*", "k", const(3, "1")))
+    C(
+        "unit_dimensionless_one",
+        "A const in units 1 drops them: the bare number.",
+        op("*", "k", const(3, "1")),
+    )
+    C(
+        "unit_dimensionless_empty",
+        'A const in units "" drops them: the bare number.',
+        op("*", "k", const(3, "")),
+    )
+    C(
+        "unit_dimensionless_array",
+        "An array const in the dimensionless unit drops its units.",
+        op("*", "k", const([1, 2], "dimensionless")),
+    )
+    g.printed(
+        a,
+        "unit_dimensionless_declaration",
+        'A declaration keeps units "1" (respelled from dimensionless).',
+        document(
+            models={
+                "M": {
+                    "variables": {
+                        "f": {"type": "parameter", "units": "dimensionless", "default": 0.5}
+                    },
+                    "equations": [],
+                }
+            }
+        ),
+        written=True,
+    )
     g.printed(
         a,
         "unit_canon_declaration",

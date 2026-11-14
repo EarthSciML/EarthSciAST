@@ -35,7 +35,9 @@ Every file is `{"$comment", "oracle", "area", "cases": [...]}`. Each case has an
 
 - `esm`: the document, in canonical form: sorted keys and canonical numbers
   (CONFORMANCE §5.5.3.1), every `units` and `default_units` string in the canonical unit
-  spelling, and the deprecated `neg` and `pow` rewritten to unary `-` and `^`.
+  spelling, the deprecated `neg` and `pow` rewritten to unary `-` and `^`, and a `const`
+  node whose units spell `1` (`"1"`, `"dimensionless"`, `""`) without them, so a scalar one
+  is the bare number. A declaration keeps `units: "1"`.
 - `written` (cases about the canonical form only): the document as written, before the
   canonical form; `canonicalize(written) == esm`.
 - `markdown`, `typst`: the exact texts the printer writes for it.
