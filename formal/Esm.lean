@@ -84,6 +84,7 @@ import Esm.Document.Source.Lines
 import Esm.Document.Source.YamlLines
 import Esm.Document.Source.Text
 import Esm.Document.Source.Equation
+import Esm.Document.Source.MultiLine
 import Esm.Document.Source.Markdown
 import Esm.Document.Source.MarkdownDoc
 import Esm.Document.Source.Typst

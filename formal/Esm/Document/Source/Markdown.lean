@@ -213,6 +213,93 @@ def declAt (f : Nat) (s : List Char) : Option (RItem × List Char) :=
   else if pre ":param[".toList s then declBody f .param (s.drop 7)
   else declBody f .species (s.drop 9)
 
+/-! ## The declarations table (an accepted input variant)
+
+A per-model declarations table is read as the declarations it lists; the printer never
+writes it (it writes `:var` directives):
+
+```
+| decl | name | default | units |
+| --- | --- | --- | --- |
+| var | $N$ | 100 | "mol" |
+| param | $\lambda$ | 0.1 | "1/s" |
+```
+
+The first two columns are the directive and the name; every other column header is an
+attribute key, and a cell is a YAML scalar or empty (the attribute is absent). -/
+
+/-- `| decl | name |`, the start of a declarations table. -/
+def tableOpen : List Char := "| decl | name |".toList
+
+/-- The attribute columns of the header, up to its newline. -/
+def pCols : Nat → List Char → Option (List String × List Char)
+  | 0, _ => none
+  | _ + 1, '\n' :: r => some ([], r)
+  | f + 1, ' ' :: r =>
+    if isIdent (readIdent r).1 then
+      match (readIdent r).2 with
+      | ' ' :: '|' :: u => (pCols f u).map (fun p => (String.ofList (readIdent r).1 :: p.1, p.2))
+      | _ => none
+    else none
+  | _ + 1, _ => none
+
+/-- One cell: ` value |`, or ` |` when the attribute is absent. -/
+def pCell : List Char → Option (Option Json × List Char)
+  | ' ' :: '|' :: r => some (none, r)
+  | ' ' :: r =>
+    match Yaml.pInline r with
+    | some (v, ' ' :: '|' :: r') => some (some v, r')
+    | _ => none
+  | _ => none
+
+/-- The cells of a row, one per attribute column. -/
+def pCells : List String → List Char → Option (List (String × Json) × List Char)
+  | [], s => some ([], s)
+  | k :: ks, s =>
+    (pCell s).bind (fun p => (pCells ks p.2).map (fun q => ((p.1.map (fun v => (k, v))).toList ++ q.1, q.2)))
+
+/-- The directive keyword of a row. -/
+def kindOf (w : List Char) : Option DKind :=
+  if w = "var".toList then some .var
+  else if w = "param".toList then some .param
+  else if w = "species".toList then some .species
+  else none
+
+/-- One row: `| var | $N$ |` and the cells, then a newline. -/
+def pRow (cols : List String) : List Char → Option (Decl × List Char)
+  | '|' :: ' ' :: r =>
+    match kindOf (readIdent r).1, (readIdent r).2 with
+    | some k, ' ' :: '|' :: ' ' :: '$' :: u =>
+      match u.drop (u.takeWhile (· != '$')).length with
+      | '$' :: ' ' :: '|' :: v =>
+        match parseLatex {} (String.ofList (u.takeWhile (· != '$'))) with
+        | some (.str n) =>
+          (pCells cols v).bind (fun p => match p.2 with
+            | '\n' :: r' => some (⟨k, n, p.1⟩, r')
+            | _ => none)
+        | _ => none
+      | _ => none
+    | _, _ => none
+  | _ => none
+
+/-- The rows, as long as lines start with `| `. -/
+def pRows (cols : List String) : Nat → List Char → Option (List Decl × List Char)
+  | 0, _ => none
+  | f + 1, s =>
+    if pre ['|', ' '] s then
+      (pRow cols s).bind (fun p => (pRows cols f p.2).map (fun q => (p.1 :: q.1, q.2)))
+    else some ([], s)
+
+/-- The separator row: only `|`, `-`, `:` and spaces. -/
+def sepOK (l : List Char) : Bool := l.all (fun c => c == '|' || c == '-' || c == ' ' || c == ':')
+
+/-- A declarations table, at its `| decl | name |`. -/
+def tableAt (f : Nat) (s : List Char) : Option (List RItem × List Char) :=
+  (pCols f (s.drop tableOpen.length)).bind (fun p =>
+    if sepOK (splitLine p.2).1 then
+      (pRows p.1 f (splitLine p.2).2).map (fun q => (q.1.map RItem.decl, q.2))
+    else none)
+
 /-- **The Markdown lexer**: the constructs of a text, skipping prose one character at a
 time. `bol`: the text starts at the beginning of a line. A malformed construct is an
 error (`none`). -/
@@ -224,6 +311,8 @@ def lex : Nat → Bool → List Char → Option (List RItem)
       (blockAt f (c :: r)).bind (fun p => (lex f true p.2).map (p.1 :: ·))
     else if declOpen (c :: r) then
       (declAt f (c :: r)).bind (fun p => (lex f false p.2).map (p.1 :: ·))
+    else if bol && pre tableOpen (c :: r) then
+      (tableAt f (c :: r)).bind (fun p => (lex f true p.2).map (p.1 ++ ·))
     else lex f (c == '\n') r
 
 /-! ## Reading back the pieces -/
@@ -505,7 +594,8 @@ construct only matters at the start of a line). `t` is the text after the prose.
 def Inert : Bool → List Char → List Char → Prop
   | _, [], _ => True
   | bol, c :: p, t =>
-    (bol && blockOpen (c :: p ++ t)) = false ∧ declOpen (c :: p ++ t) = false ∧ Inert (c == '\n') p t
+    (bol && blockOpen (c :: p ++ t)) = false ∧ declOpen (c :: p ++ t) = false ∧
+      (bol && pre tableOpen (c :: p ++ t)) = false ∧ Inert (c == '\n') p t
 
 /-- A document body whose constructs read back: each construct's content is spellable,
 block constructs start a line, labels are labels, and prose is inert. -/
@@ -521,11 +611,11 @@ def Valid : Bool → List Seg → Prop
 theorem lex_prose : ∀ (p t : List Char) (bol : Bool), Inert bol p t →
     ∀ f, p.length + t.length < f → lex f bol (p ++ t) = lex (f - p.length) (endBol bol p) t
   | [], t, bol, _, f, _ => by simp [endBol]
-  | c :: p, t, bol, ⟨h1, h2, h3⟩, f, hf => by
+  | c :: p, t, bol, ⟨h1, h2, h4, h3⟩, f, hf => by
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp at hf; omega⟩
     simp only [List.cons_append, lex]
-    simp only [List.cons_append] at h1 h2
-    rw [h1, h2]
+    simp only [List.cons_append] at h1 h2 h4
+    rw [h1, h2, h4]
     simp only [Bool.false_eq_true, ite_false]
     rw [lex_prose p t _ h3 g (by simp at hf; omega), endBol_cons]
     congr 1
@@ -749,5 +839,206 @@ theorem lex_render : ∀ (segs : List Seg) (bol : Bool), Valid bol segs →
       rw [lex_eqnL raw [] hok rfl (by simp) bol (hb rfl) _ g hf',
         lex_render rest true hv g (hlen _ (by simp [eqnLabeled, dd]) hf)]
       rfl
+
+/-! ## The declarations table reads as its declarations -/
+
+def kindWord : DKind → List Char
+  | .var => "var".toList
+  | .param => "param".toList
+  | .species => "species".toList
+
+/-- A header column. -/
+def colText (k : String) : List Char := ' ' :: (k.toList ++ [' ', '|'])
+
+/-- A cell. -/
+def cellText : Option Json → List Char
+  | none => [' ', '|']
+  | some v => ' ' :: (Yaml.inline v ++ [' ', '|'])
+
+/-- A row of the table. -/
+def rowText (cols : List String) (d : Decl) : List Char :=
+  '|' :: ' ' :: kindWord d.kind ++ ' ' :: '|' :: ' ' :: '$' :: nameLatex d.name ++
+    '$' :: ' ' :: '|' :: cols.flatMap (fun k => cellText (look k d.attrs)) ++ ['\n']
+
+/-- A declarations table over the attribute columns `cols`. -/
+def tableText (cols : List String) (ds : List Decl) : List Char :=
+  tableOpen ++ cols.flatMap colText ++ ['\n'] ++
+    '|' :: (List.replicate (cols.length + 2) " --- |".toList).flatten ++ ['\n'] ++
+    ds.flatMap (rowText cols)
+
+/-- A declaration a table over `cols` holds: its name and attributes spellable, and its
+attributes exactly the columns it has a value in, in column order. -/
+def TableOK (cols : List String) (d : Decl) : Prop :=
+  declOK d = true ∧ d.attrs = cols.filterMap (fun k => (look k d.attrs).map (fun v => (k, v)))
+
+theorem pCols_cols (cols : List String) (hc : ∀ k ∈ cols, isIdent k.toList = true) (t : List Char) :
+    ∀ f, cols.length < f → pCols f (cols.flatMap colText ++ '\n' :: t) = some (cols, t) := by
+  induction cols with
+  | nil => intro f hf; obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by omega⟩; rfl
+  | cons k ks ih =>
+    intro f hf
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp at hf; omega⟩
+    have hk := hc k List.mem_cons_self
+    have ih' := ih (fun k' hk' => hc k' (List.mem_cons_of_mem _ hk')) g (by simp at hf; omega)
+    have hrd : readIdent (k.toList ++ (' ' :: '|' :: (ks.flatMap colText ++ '\n' :: t))) =
+        (k.toList, ' ' :: '|' :: (ks.flatMap colText ++ '\n' :: t)) :=
+      readIdent_append _ _ (isIdent_all hk) (by simp [isIdentChar])
+    rw [List.flatMap_cons, show colText k ++ ks.flatMap colText ++ '\n' :: t =
+      ' ' :: (k.toList ++ (' ' :: '|' :: (ks.flatMap colText ++ '\n' :: t))) by simp [colText]]
+    simp only [pCols, hrd, hk, ite_true, ih', Option.map_some, String.ofList_toList]
+
+theorem inline_head (v : Json) (hv : v.WF) : ∃ c t, Yaml.inline v = c :: t ∧ c ≠ '|' := by
+  match v with
+  | .null => exact ⟨_, _, rfl, by decide⟩
+  | .bool true => exact ⟨_, _, rfl, by decide⟩
+  | .bool false => exact ⟨_, _, rfl, by decide⟩
+  | .str s => exact ⟨'"', escape false s.toList ++ ['"'], by simp [Yaml.inline, quote], by decide⟩
+  | .arr _ => exact ⟨_, _, rfl, by decide⟩
+  | .obj _ => exact ⟨_, _, rfl, by decide⟩
+  | .num n =>
+    obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
+    refine ⟨c, t, h, ?_⟩
+    rcases hc with rfl | ⟨d, hd, rfl⟩
+    · decide
+    · exact (by decide : ∀ d : Fin 10, digitChar d.val ≠ '|') ⟨d, hd⟩
+
+theorem pCell_some (v : Json) (hi : Yaml.isInl v = true) (hv : v.WF) (rest : List Char) :
+    pCell (cellText (some v) ++ rest) = some (some v, rest) := by
+  obtain ⟨c, t, hct, hc⟩ := inline_head v hv
+  have hp := pInline_gen v hi hv (' ' :: '|' :: rest) (by intro x hx; cases hx; decide)
+  simp only [cellText, List.cons_append, List.append_assoc, List.nil_append]
+  rw [hct] at hp ⊢
+  simp only [List.cons_append] at hp
+  unfold pCell
+  split
+  · rename_i r h; simp at h; exact absurd h.1 hc
+  · rename_i r _ heq
+    simp only [List.cons.injEq, true_and] at heq
+    rw [← heq, List.cons_append, hp]; rfl
+  · rename_i h1 h2; exact absurd rfl (h2 _)
+
+theorem pCells_cells (cols : List String) (attrs : List (String × Json))
+    (ha : ∀ a ∈ attrs, attrOK a = true) (t : List Char) :
+    pCells cols (cols.flatMap (fun k => cellText (look k attrs)) ++ t) =
+      some (cols.filterMap (fun k => (look k attrs).map (fun v => (k, v))), t) := by
+  induction cols with
+  | nil => rfl
+  | cons k ks ih =>
+    simp only [List.flatMap_cons, List.append_assoc, pCells]
+    cases hl : look k attrs with
+    | none =>
+      rw [show pCell (cellText none ++ (ks.flatMap (fun k => cellText (look k attrs)) ++ t)) =
+        some (none, ks.flatMap (fun k => cellText (look k attrs)) ++ t) from rfl]
+      simp only [Option.bind_some]
+      rw [ih]
+      simp [hl]
+    | some v =>
+      have hv := ha (k, v) (look_mem' hl)
+      simp only [attrOK, Bool.and_eq_true] at hv
+      rw [pCell_some v hv.1.2 (jwf_sound v hv.2)]
+      simp only [Option.bind_some]
+      rw [ih]
+      simp [hl]
+
+theorem kindOf_kindWord (k : DKind) : kindOf (kindWord k) = some k := by
+  cases k <;> decide
+
+theorem kindWord_ident (k : DKind) : (kindWord k).all isIdentChar = true := by
+  cases k <;> decide
+
+theorem pRow_rowText (cols : List String) (d : Decl) (hd : TableOK cols d) (rest : List Char) :
+    pRow cols (rowText cols d ++ rest) = some (d, rest) := by
+  obtain ⟨k, n, as⟩ := d
+  obtain ⟨hok, has⟩ := hd
+  simp only [declOK, Bool.and_eq_true, Bool.not_eq_true'] at hok
+  obtain ⟨⟨hn, hdol⟩, hall⟩ := hok
+  simp only at hn hdol hall has
+  have hrd : readIdent (kindWord k ++ ' ' :: '|' :: ' ' :: '$' :: (nameLatex n ++
+      '$' :: ' ' :: '|' :: (cols.flatMap (fun c => cellText (look c as)) ++ '\n' :: rest))) =
+      (kindWord k, ' ' :: '|' :: ' ' :: '$' :: (nameLatex n ++
+      '$' :: ' ' :: '|' :: (cols.flatMap (fun c => cellText (look c as)) ++ '\n' :: rest))) :=
+    readIdent_append _ _ (kindWord_ident k) (by simp [isIdentChar])
+  have hp : parseLatex {} (String.ofList (nameLatex n)) = some (.str n) := by
+    simp only [nameLatex, String.ofList_toList]
+    exact parseLatex_printLatex {} (.str n) (by simpa [isE] using hn)
+  have hc := pCells_cells cols as (fun a ha => List.all_eq_true.mp hall a ha) ('\n' :: rest)
+  rw [← has] at hc
+  simp only [rowText, List.cons_append, List.append_assoc, List.nil_append, pRow, hrd,
+    kindOf_kindWord, takeWhile_noDollar _ _ hdol, List.drop_left, hp, hc, Option.bind_some]
+
+theorem pRows_rows (cols : List String) (ds : List Decl) (hd : ∀ d ∈ ds, TableOK cols d)
+    (t : List Char) (ht : pre ['|', ' '] t = false) :
+    ∀ f, ds.length < f → pRows cols f (ds.flatMap (rowText cols) ++ t) = some (ds, t) := by
+  induction ds with
+  | nil => intro f hf; obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by omega⟩; simp [pRows, ht]
+  | cons d ds ih =>
+    intro f hf
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp at hf; omega⟩
+    simp only [List.flatMap_cons, List.append_assoc]
+    have hpre : pre ['|', ' '] (rowText cols d ++ (ds.flatMap (rowText cols) ++ t)) = true := by
+      simp [rowText, pre]
+    simp only [pRows, hpre, ite_true, pRow_rowText cols d (hd d List.mem_cons_self), Option.bind_some]
+    rw [ih (fun d' hd' => hd d' (List.mem_cons_of_mem _ hd')) g (by simp at hf; omega)]
+    rfl
+
+/-- **A declarations table reads as the declarations it lists** (and as the
+`:var`/`:param`/`:species` directives of the same declarations: the same constructs). -/
+theorem lex_table (cols : List String) (hc : ∀ k ∈ cols, isIdent k.toList = true)
+    (ds : List Decl) (hd : ∀ d ∈ ds, TableOK cols d) (t : List Char)
+    (ht : pre ['|', ' '] t = false) (g : Nat) (hg : (tableText cols ds).length + t.length < g + 1) :
+    lex (g + 1) true (tableText cols ds ++ t) = (lex g true t).map (ds.map RItem.decl ++ ·) := by
+  have hlen1 : cols.length ≤ (cols.flatMap colText).length := by
+    clear hc hd hg
+    induction cols with
+    | nil => simp
+    | cons k ks ih => simp [colText] at ih ⊢; omega
+  have hlen2 : ds.length ≤ (ds.flatMap (rowText cols)).length := by
+    clear hc hd hg
+    induction ds with
+    | nil => simp
+    | cons d ds ih => simp [rowText] at ih ⊢; omega
+  have hrep : ∀ n (p : Char → Bool), " --- |".toList.all p = true →
+      ((List.replicate n " --- |".toList).flatten).all p = true := by
+    intro n p hp
+    induction n with
+    | zero => rfl
+    | succ n ih => simp only [List.replicate_succ, List.flatten_cons, List.all_append, hp, ih, Bool.and_self]
+  have hsep : sepOK ('|' :: (List.replicate (cols.length + 2) " --- |".toList).flatten) = true := by
+    simp only [sepOK, List.all_cons]
+    rw [hrep _ _ (by decide)]
+    rfl
+  have hsepnl : '\n' ∉ '|' :: (List.replicate (cols.length + 2) " --- |".toList).flatten := by
+    intro hm
+    have := hrep (cols.length + 2) (fun c => c != '\n') (by decide)
+    rw [List.all_eq_true] at this
+    rcases List.mem_cons.mp hm with h | h
+    · cases h
+    · have := this _ h; simp at this
+  have hT : (cols.flatMap colText).length + (ds.flatMap (rowText cols)).length + 1 ≤
+      (tableText cols ds).length := by
+    unfold tableText; simp only [List.length_append, List.length_cons]; omega
+  have htab : tableAt g (tableText cols ds ++ t) = some (ds.map RItem.decl, t) := by
+    unfold tableAt tableText
+    simp only [List.append_assoc, List.drop_left]
+    rw [show ['\n'] ++ ('|' :: (List.replicate (cols.length + 2) " --- |".toList).flatten ++
+      (['\n'] ++ (ds.flatMap (rowText cols) ++ t))) = '\n' :: ('|' :: (List.replicate (cols.length + 2)
+      " --- |".toList).flatten ++ '\n' :: (ds.flatMap (rowText cols) ++ t)) by simp,
+      pCols_cols cols hc _ g (by omega)]
+    simp only [Option.bind_some, splitLine_line _ _ hsepnl, hsep, ite_true]
+    rw [pRows_rows cols ds hd t ht g (by omega)]
+    rfl
+  obtain ⟨c, r, hcr⟩ : ∃ c r, tableText cols ds ++ t = c :: r := by
+    cases h : tableText cols ds ++ t with
+    | nil => simp [tableText, tableOpen] at h
+    | cons c r => exact ⟨c, r, rfl⟩
+  rw [hcr] at htab ⊢
+  have hb : blockOpen (c :: r) = false := by
+    rw [← hcr]; simp [tableText, tableOpen, blockOpen, fenceEsm, dd, dModel, dRs, pre]
+  have hdo : declOpen (c :: r) = false := by
+    rw [← hcr]; simp [tableText, tableOpen, declOpen, pre]
+  have hto : pre tableOpen (c :: r) = true := by
+    rw [← hcr]; simp only [tableText, List.append_assoc]; exact pre_append _ _
+  simp only [lex, hb, hdo, hto, Bool.and_false, Bool.true_and, Bool.false_eq_true, ite_false,
+    ite_true, htab, Option.bind_some]
 
 end Esm.Document.Source.Md
