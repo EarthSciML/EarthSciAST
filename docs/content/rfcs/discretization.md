@@ -869,7 +869,7 @@ itself a literal: each of the three canonicalizes to
 `{op:"-", args:[x]}`. A numeric literal that happens to be negative is
 kept as the literal itself (no wrapper around numerics): `-(5)` and
 `neg(5)` canonicalize to `-5` (a literal integer or float node with
-negative value). Identity rules: `-(0) → 0`, `-(0.0) → 0.0`,
+negative value). Identity rules: `-(0) → 0`, `-(0.0) → -0.0` (the sign is kept, as in §5.4.6),
 `-(-(x)) → x` (whichever spelling either negation uses).
 
 *History.* Until the deprecation of `neg` the canonical form was the
