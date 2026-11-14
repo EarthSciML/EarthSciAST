@@ -3163,6 +3163,66 @@ pub(crate) fn canonical_unit_spelling(unit: &str) -> String {
     spelled
 }
 
+/// The two-sided factor list of a unit string (`Math.factorsOf`,
+/// formal/Esm/Document/Math/Print.lean): the parse's factors normalized per side
+/// (`Esm.Units.norm2`), positive exponents first. Empty when the string does not
+/// parse (and for the dimensionless unit). The document printer typesets a
+/// quantity's unit from it.
+pub(crate) fn unit_two_sided_factors(unit: &str) -> Vec<(String, BigRational)> {
+    if unit.is_empty() {
+        return Vec::new();
+    }
+    let normalized = normalize_unit_str(unit);
+    let Ok(toks) = lex_unit(&normalized, unit) else {
+        return Vec::new();
+    };
+    let n_toks = toks.len();
+    let mut parser = SpellParser { toks, pos: 0 };
+    let factors = match parser.unit() {
+        Some(f) if parser.pos == n_toks => f,
+        _ => return Vec::new(),
+    };
+    let num = spell_side(factors.iter().filter(|(_, q)| q.is_positive()).cloned());
+    let den = spell_side(factors.iter().filter(|(_, q)| !q.is_positive()).cloned());
+    num.into_iter()
+        .chain(den)
+        .map(|(s, q)| (s.to_string(), q))
+        .collect()
+}
+
+/// The canonical spelling of a factor list (`Esm.Units.spell`,
+/// formal/Esm/Units/Canonical.lean): the positive-exponent factors joined by
+/// `*` (`1` when there are none), then `/` and the others with their exponents'
+/// absolute values, parenthesized when there is more than one.
+pub(crate) fn spell_unit_factors(l: &[(String, BigRational)]) -> String {
+    let side = |pos: bool| -> Vec<String> {
+        l.iter()
+            .filter(|(_, q)| q.is_positive() == pos)
+            .map(|(s, q)| spell_factor(&(s.as_str(), q.clone())))
+            .collect()
+    };
+    let num = side(true);
+    let den = side(false);
+    let mut out = if num.is_empty() {
+        "1".to_string()
+    } else {
+        num.join("*")
+    };
+    match den.len() {
+        0 => {}
+        1 => {
+            out.push('/');
+            out.push_str(&den[0]);
+        }
+        _ => {
+            out.push_str("/(");
+            out.push_str(&den.join("*"));
+            out.push(')');
+        }
+    }
+    out
+}
+
 /// Get commonly used base units
 /// The cached base-unit registry. `parse_unit` recurses (parentheses, `/`,
 /// `*` splits) and runs inside per-equation validation loops, so rebuilding
