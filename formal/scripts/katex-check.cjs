@@ -1,11 +1,15 @@
 // Render every math piece of every printed Markdown document in a directory with KaTeX
 // (strict mode, mhchem loaded), as a Markdown renderer with remark-math and rehype-katex
-// would. Used by doc-corpus.py --katex; needs the `katex` npm package on NODE_PATH.
+// would. Used by doc-corpus.py --katex and scripts/gen-document-format-fixtures.py
+// --validate; needs the `katex` npm package on NODE_PATH.
 //
 //   NODE_PATH=<dir>/node_modules node katex-check.cjs <dir with .md files>
 //
-// The pieces: each display (`$$` lines, or `$$…$$` on one line) and each `[$…$]`
-// directive label, outside the front matter and fenced blocks.
+// The pieces: each display (`$$` lines), each `$$…$$` on one line and each `[$…$]`
+// directive label, outside the front matter and fenced blocks. As remark-math reads them,
+// only the `$$` lines are display math; a one-line `$$…$$` (a reaction line) is inline
+// math with a two-dollar fence, and a label is inline math, so those render in inline
+// mode.
 
 const fs = require("fs");
 const path = require("path");
@@ -33,17 +37,17 @@ function pieces(text) {
     }
     const one = l.match(/^\$\$(.+?)\$\$(\s*\{.*\})?\s*$/);
     if (one) {
-      out.push(one[1]);
+      out.push([one[1], false]);
       continue;
     }
     if (l.startsWith("$$")) {
       const body = [];
       i++;
       while (i < lines.length && !lines[i].startsWith("$$")) body.push(lines[i++]);
-      out.push(body.join("\n"));
+      out.push([body.join("\n"), true]);
       continue;
     }
-    for (const m of l.matchAll(/\[\$([^$\n]+)\$\]/g)) out.push(m[1]);
+    for (const m of l.matchAll(/\[\$([^$\n]+)\$\]/g)) out.push([m[1], false]);
   }
   return out;
 }
@@ -52,10 +56,10 @@ const dir = process.argv[2];
 let n = 0;
 const fails = [];
 for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".md")).sort()) {
-  for (const p of pieces(fs.readFileSync(path.join(dir, f), "utf8"))) {
+  for (const [p, displayMode] of pieces(fs.readFileSync(path.join(dir, f), "utf8"))) {
     n++;
     try {
-      katex.renderToString(p, { displayMode: true, throwOnError: true, strict: "error", macros: { ...macros } });
+      katex.renderToString(p, { displayMode, throwOnError: true, strict: "error", macros: { ...macros } });
     } catch (e) {
       fails.push(`${f}: ${e.message.split("\n")[0]}\n    ${p.slice(0, 200)}`);
     }

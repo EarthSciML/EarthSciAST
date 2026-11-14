@@ -36,8 +36,11 @@ Every file is `{"$comment", "oracle", "area", "cases": [...]}`. Each case has an
 - `esm`: the document, in canonical form: sorted keys and canonical numbers
   (CONFORMANCE §5.5.3.1), every `units` and `default_units` string in the canonical unit
   spelling, the deprecated `neg` and `pow` rewritten to unary `-` and `^`, and a `const`
-  node whose units spell `1` (`"1"`, `"dimensionless"`, `""`) without them, so a scalar one
-  is the bare number. A declaration keeps `units: "1"`.
+  node whose units spell `1` (`"1"`, `"dimensionless"`, `""`) without them, so one whose
+  value is a number is the bare number whatever other fields (`id`, `shape`, …) it has.
+  A declaration keeps `units: "1"`. These are the rules of every binding's
+  `canonicalize_document` (`tests/conformance/canonical_document/`); `esm-lean canon`
+  applies them in adapter code that is checked against those fixtures, not proved.
 - `written` (cases about the canonical form only): the document as written, before the
   canonical form; `canonicalize(written) == esm`.
 - `markdown`, `typst`: the exact texts the printer writes for it.
@@ -109,29 +112,29 @@ python3 scripts/gen-document-format-fixtures.py --check   # fail if they are sta
 
 The generator refuses to write a case that does not hold in the oracle: every
 printed text must read back as its document, every variant must read as the
-expected document, and every refusal must be refused.
+expected document, and every refusal must be refused. It first checks that
+`esm-lean canon` gives the `expected` document of every fixture in
+`tests/conformance/canonical_document/`, the bindings' `canonicalize_document`
+golden set, so the canonical form here is the bindings' canonical form.
 
 `python3 scripts/formal-audit.py fixtures` runs `--check`, and the Formal model
 workflow runs it after `lake build`, so a change to the Lean printer or parser
 that moves a pinned spelling fails CI until these files are regenerated and the
 change is reviewed here.
 
-`--validate` also renders everything the printer wrote: each Typst document must
-compile with Typst 0.15.1, and each piece of math in each Markdown document must
-render in KaTeX in strict mode (with mhchem, and `\esm` defined as the generic
-node form). It needs those tools:
+`--validate` also renders everything the printer wrote, with the same tools the
+whole-corpus check (`formal/scripts/doc-corpus.py`) uses: each Typst document must
+compile with Typst 0.15.1 against the repository's `esm` package
+(`typst/packages`; `--typst-package-path` overrides it), and each piece of math in
+each Markdown document must render in KaTeX in strict mode with mhchem
+(`formal/scripts/katex-check.cjs`). As remark-math reads them, the `$$` display
+lines render as display math and a one-line `$$\ce{…}$$` reaction line and a
+directive label as inline math. It needs Typst and the `katex` npm package:
 
 ```bash
-python3 scripts/gen-document-format-fixtures.py --validate \
-    --typst /path/to/typst \
-    --typst-package-path /path/to/packages \
-    --katex-dir /path/to/dir/holding/node_modules/katex
+NODE_PATH=/path/to/node_modules \
+    python3 scripts/gen-document-format-fixtures.py --validate --typst /path/to/typst
 ```
-
-The package directory must provide `@preview/esm:0.1.0` and
-`@preview/typsium:0.3.2`. Until the `esm` Typst package is published, a stub
-that defines its functions (`esm-document`, `model`, `var`, `esm-block`, `ce`
-through typsium, …) is enough to check that the documents compile.
 
 ## Adding a case
 
