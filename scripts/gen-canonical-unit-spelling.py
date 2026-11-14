@@ -163,13 +163,15 @@ def write(path: Path, doc: dict) -> None:
 # Object properties whose value is a NAME-KEYED map (from esm-schema.json): a
 # map's keys are names, never fields, so a variable named `units` is not a
 # units string.
-MAP_KEYS = frozenset("""
+MAP_KEYS = frozenset(
+    """
     bind bindings coordinates coords coupling_roles data_sources enums
     expression_template_imports expression_templates guesses index_set_rename
     index_sets initial_conditions map metaparameters models parameter_overrides
     parameters pinned_coords ranges reaction_systems rebind rename species
     subsystems translate url_substitutions variables where
-""".split())
+""".split()
+)
 # Free-form objects (schema `additionalProperties: true`): not descended.
 FREE_KEYS = frozenset({"attrs", "config", "metadata", "reader_options", "x_esd"})
 UNIT_KEYS = ("units", "default_units")
@@ -240,7 +242,10 @@ def units_document() -> dict:
                         "lhs": "frac",
                         "rhs": {
                             "op": "*",
-                            "args": [const(0.5, "1"), {"op": "const", "args": [], "value": [1.0, 2.0], "units": ""}],
+                            "args": [
+                                const(0.5, "1"),
+                                {"op": "const", "args": [], "value": [1.0, 2.0], "units": ""},
+                            ],
                         },
                     },
                 ],
@@ -390,8 +395,7 @@ def main() -> None:
                 {"op": "max", "args": [VALUE if c == "1" else const(c) for c in main_out]}
             ),
             "cases": [
-                {"units": u, "canonical": c, "note": note}
-                for (u, note), c in zip(CASES, main_out)
+                {"units": u, "canonical": c, "note": note} for (u, note), c in zip(CASES, main_out)
             ],
             "tags": ["supported", "const", "units", "unit_spelling"],
         },
@@ -437,10 +441,25 @@ def main() -> None:
             "input": {
                 "op": "max",
                 "args": [
-                    {"op": "+", "args": ["x", {"op": "const", "args": [], "value": 0, "units": "dimensionless"}]},
-                    {"op": "*", "args": [{"op": "const", "args": [], "value": 2.5, "units": "1"}, "y"]},
+                    {
+                        "op": "+",
+                        "args": [
+                            "x",
+                            {"op": "const", "args": [], "value": 0, "units": "dimensionless"},
+                        ],
+                    },
+                    {
+                        "op": "*",
+                        "args": [{"op": "const", "args": [], "value": 2.5, "units": "1"}, "y"],
+                    },
                     {"op": "const", "args": [], "value": 1.5, "units": ""},
-                    {"op": "*", "args": [{"op": "const", "args": [], "value": 1, "units": "dimensionless"}, "x"]},
+                    {
+                        "op": "*",
+                        "args": [
+                            {"op": "const", "args": [], "value": 1, "units": "dimensionless"},
+                            "x",
+                        ],
+                    },
                     {"op": "const", "args": [], "value": 0, "units": "dimensionless"},
                     {"op": "const", "args": [], "value": [1.5, 2.5], "units": "dimensionless"},
                 ],

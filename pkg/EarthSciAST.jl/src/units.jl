@@ -729,6 +729,7 @@ function _cp_unit!(p::_CanonParser)::Vector{_CanonFactor}
             return acc
         end
     end
+    return
 end
 
 function _cp_term!(p::_CanonParser)::Vector{_CanonFactor}
