@@ -63,6 +63,33 @@ env:
   CONFORMANCE_TIMEOUT: '300s'
 
 jobs:
+  # Which binding suites this run needs (scripts/ci-changed-bindings.sh). On a
+  # pull request a change confined to one binding's directory runs only that
+  # binding's suite; every other event, and every change outside a single
+  # binding, runs them all.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      julia: ${{ steps.select.outputs.julia }}
+      typescript: ${{ steps.select.outputs.typescript }}
+      python: ${{ steps.select.outputs.python }}
+      rust: ${{ steps.select.outputs.rust }}
+      go: ${{ steps.select.outputs.go }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci-changed-bindings.sh
+          sparse-checkout-cone-mode: false
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: ./scripts/ci-changed-bindings.sh
+
   # The lint and format gates run in lint.yml, through the shared workflow in
   # EarthSciML/.github, which pins the tool versions. What stays here are the
   # repository-specific consistency checks that used to ride along in that
@@ -117,6 +144,8 @@ jobs:
   # the same version the matrix simply runs it twice.
   julia-tests:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.julia == 'true'
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -235,6 +264,8 @@ jobs:
   # with — a suite they do not depend on.
   julia-checks:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.julia == 'true'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -315,6 +346,8 @@ jobs:
 
   typescript-tests:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.typescript == 'true'
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -351,6 +384,8 @@ jobs:
 
   python-tests:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -409,6 +444,8 @@ jobs:
 
   rust-tests:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -606,6 +643,8 @@ jobs:
 
   go-tests:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     timeout-minutes: 35
     strategy:
       fail-fast: false
