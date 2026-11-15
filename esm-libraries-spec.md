@@ -2557,6 +2557,7 @@ pkg/earthsci-ast-py/src/earthsci_ast/
 ├── validation.py        # validate / validate_text / validate_path
 ├── expression.py        # simplify, to_sympy / from_sympy
 ├── substitute.py        # substitute and the model / reaction-system forms
+├── jupyter.py           # Jupyter rich display (_repr_latex_ via print_math)
 ├── flatten.py           # flatten (§4.7.5) and its error taxonomy
 ├── reactions.py         # derive_odes, stoichiometric_matrix
 ├── classification.py    # ode_states, system_kind, ... (esm-spec §6.3.1)
