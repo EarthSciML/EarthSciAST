@@ -36,3 +36,27 @@ func PrintMath(e Json, names []string, latex bool) string {
 	}
 	return mathPrintTypst(s, e)
 }
+
+// ParseMath reads one expression or equation written as LaTeX (latex true) or
+// Typst math under the declared names, with no template in scope: the inverse
+// of PrintMath. A parsed `==` node at the top is an equation, an object with
+// `lhs` and `rhs` (`Source.eqSides`). See ParseMd for lim.
+func ParseMath(lim *Lim, text string, names []string, latex bool) (Json, bool) {
+	s := &Sym{Names: append([]string(nil), names...)}
+	var (
+		e  Json
+		ok bool
+	)
+	if latex {
+		e, ok = mathParseLatex(lim, s, text)
+	} else {
+		e, ok = mathParseTypst(lim, s, text)
+	}
+	if !ok {
+		return nil, false
+	}
+	if l, r, ok := eqnEqSides(e); ok {
+		return Obj{{"lhs", l}, {"rhs", r}}, true
+	}
+	return e, true
+}

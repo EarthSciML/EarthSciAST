@@ -41,10 +41,8 @@ type ExprNode struct {
 
 	// --- Structural / array-query op fields (esm-spec §4.2). These carry the
 	// defining data of the closed structural tier in fields OTHER than `args`,
-	// so the pretty-printer (display.go) can render them non-lossily. They are
-	// stored as interface{}/raw slices so numeric literals inside them keep the
-	// json.Number shape they had at parse time; the display code normalizes on
-	// read. ---
+	// as their own fields. They are stored as interface{}/raw slices so numeric
+	// literals inside them keep the json.Number shape they had at parse time. ---
 
 	// Bindings is the param→expression map of an `apply_expression_template` op.
 	Bindings map[string]any `json:"bindings,omitempty"`
