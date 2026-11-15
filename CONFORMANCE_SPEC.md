@@ -7084,7 +7084,8 @@ carries
 ]
 ```
 
-with `rhs` the contribution's expression in the canonical JSON of §5.4, the
+with `rhs` the contribution's expression as `canonicalize_document` writes it
+(API_SPEC §5.4), the
 form the corpus uses for every expression (`equations`, event conditions and
 affects, expression bounds and defaults, field initial conditions), compared as
 a JSON value with every number in its canonical kind (§5.5.3.1). Every

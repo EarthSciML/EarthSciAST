@@ -29,8 +29,8 @@ WHAT EACH CASE RECORDS
 Every field of the step-4 normative table, in a language-neutral JSON form:
 ordered name lists for each map, the per-variable metadata that matters (units,
 default, shape, update kinds, distribution kind, lb / ub), the equation count and the
-canonical form of every equation (each side an expression in the canonical JSON
-of CONFORMANCE §5.4, so the corpus pins flatten and nothing about a printer) with
+canonical form of every equation (each side an expression as `canonicalize_document`
+writes it (API_SPEC §5.4), so the corpus pins flatten and nothing about a printer) with
 its ordered `contributions` (each a summand and its origins), and the derived `system_kind`.
 Anything left out here cannot be pinned later, so the maps are recorded even
 when empty.
@@ -690,7 +690,7 @@ UNCOVERED_TIERS: list[dict[str, str]] = [
 
 
 def _expr(value):
-    """An expression in canonical JSON (CONFORMANCE §5.4)."""
+    """An expression as `canonicalize_document` writes it (API_SPEC §5.4)."""
     if not isinstance(value, (str, int, float)):
         value = _serialize_expression(value)
     return canonicalize_document(value)
@@ -1013,13 +1013,13 @@ def main() -> int:
             '(esm-libraries-spec §4.7.5, "Pointwise lift: index sets"). '
             "Every expression (an equation side, a summand, an event condition or "
             "affect side, a bound or default that is an expression, a field initial "
-            "condition) is in the canonical JSON of CONFORMANCE §5.4 and compares as "
+            "condition) is as `canonicalize_document` writes it (API_SPEC §5.4) and compares as "
             "a JSON value with every number in its canonical kind (§5.5.3.1). "
             "Entries in `refusals` must be rejected, with the named error type."
         ),
         "oracle": "earthsci_ast.flatten (pkg/earthsci-ast-py)",
         "spec": "esm-libraries-spec §4.7.5 step 4; esm-spec §6.3.1",
-        "expression_form": "canonical JSON (CONFORMANCE §5.4)",
+        "expression_form": "canonicalize_document (API_SPEC §5.4)",
         "cases": cases,
         "refusals": REFUSALS,
         "uncovered_tiers": UNCOVERED_TIERS,
