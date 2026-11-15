@@ -1660,8 +1660,8 @@ TypeScript `camelCase`, others verbatim).
   the same name, and keeps them), and a merged variable's bounds come from the declaration
   its `units` and `default` come from. Flattening never checks or imposes a bound. The
   cross-binding pin is `tests/conformance/flatten/cases.json`, whose variable records carry
-  `lb` and `ub` (`null` when absent, the number, or the flattened bound rendered with
-  `to_ascii`); `variable_bounds_coupled` (namespacing, a `param_to_var` replacement) and
+  `lb` and `ub` (`null` when absent, the number, or the flattened bound as an expression
+  in canonical JSON); `variable_bounds_coupled` (namespacing, a `param_to_var` replacement) and
   `variable_bounds_renames` (an `operator_compose` merged-away retarget, a scaled replacement,
   an expression-transform target) together exercise each rename.
 
@@ -1904,7 +1904,7 @@ field: the `.esm` format has no slot for it, so it is a documented loss. The fie
 document field and changes no format version.
 
 **Serialized form.** The flatten corpus (`tests/conformance/flatten/cases.json`, CONFORMANCE_SPEC
-§5.48) records each equation's list as `"contributions": [{"rhs": <to_ascii(expr)>, "origins":
+§5.48) records each equation's list as `"contributions": [{"rhs": <expr, canonical JSON>, "origins":
 [{"component": "<path>"} | {"coupling": <k>}, …]}, …]`. Rust's serde form of `FlattenedSystem`
 carries `equation_contributions` (origin serde-untagged: `{"component": …}` or `{"coupling": …}`).
 
@@ -2214,17 +2214,14 @@ using EarthSciAST
 file = EarthSciAST.load_path("model.esm")
 EarthSciAST.write_path(file, "model_v2.esm")
 
-# Pretty-print a model
-display(file.models["SuperFast"])
-# Output:
-#   ∂O₃/∂t = −k_NO_O₃·O₃·NO·M + jNO₂·NO₂
-#   ∂NO₂/∂t = k_NO_O₃·O₃·NO·M − jNO₂·NO₂
+# One equation (decoded JSON) as LaTeX or Typst math, and back
+eq = Dict("lhs" => Dict("op" => "D", "args" => ["O3"], "wrt" => "t"),
+          "rhs" => Dict("op" => "*", "args" => ["k", "O3"]))
+text = print_math(eq, expression_names(eq), :typst)
+parse_math(text, expression_names(eq), :typst)
 
-# LaTeX
-EarthSciAST.to_latex(file.models["SuperFast"])
-
-# Print entire file summary (the §6.3 structured summary)
-show(file)
+# A whole decoded document as Markdown or Typst source
+print_markdown(JSON3.read(read("model.esm", String), Dict{String, Any}))
 
 # Validation
 result = EarthSciAST.validate(file)
@@ -2423,7 +2420,6 @@ pkg/earthsci-ast-ts/
 │   ├── validate/            # validate / validateText and the structural checks
 │   ├── expression.ts        # traversal, freeVariables, simplify
 │   ├── substitute.ts        # substitute and the model / reaction-system forms
-│   ├── pretty-print.ts      # toUnicode / toLatex / toAscii
 │   ├── flatten.ts           # flatten (§4.7.5)
 │   ├── reactions.ts         # deriveOdes, stoichiometricMatrix
 │   ├── classification.ts    # odeStates, systemKind, ... (esm-spec §6.3.1)
@@ -2443,7 +2439,7 @@ import {
   loadString, toJson, validate,
   substituteInModel, freeVariables,
   deriveOdes, stoichiometricMatrix,
-  toLatex, toUnicode, toAscii,
+  printMath, parseMath, expressionNames, printMarkdown,
   type EsmFile, type Expr, type Model
 } from '@earthsciml/ast';
 
@@ -2453,12 +2449,13 @@ const file: EsmFile = loadString(jsonString);
 // Serialize back
 const json: string = toJson(file);
 
-// Pretty-print to strings (no DOM, no framework)
-console.log(toUnicode(file.models!['SuperFast']));
-// ∂O₃/∂t = −k_NO_O₃·O₃·NO·M + jNO₂·NO₂
+// One equation as LaTeX or Typst math, and back (no DOM, no framework)
+const eq = { lhs: { op: 'D', args: ['O3'], wrt: 't' }, rhs: { op: '*', args: ['k', 'O3'] } };
+const latex: string = printMath(eq, expressionNames(eq), 'markdown');
+const back = parseMath(latex, expressionNames(eq), 'markdown');
 
-const latex: string = toLatex(file.models!['SuperFast']);
-// \frac{\partial \mathrm{O_3}}{\partial t} = ...
+// The whole document as Markdown source
+const md: string = printMarkdown(file);
 
 // Validate
 const result = validate(file);
@@ -2560,7 +2557,6 @@ pkg/earthsci-ast-py/src/earthsci_ast/
 ├── validation.py        # validate / validate_text / validate_path
 ├── expression.py        # simplify, to_sympy / from_sympy
 ├── substitute.py        # substitute and the model / reaction-system forms
-├── display.py           # to_unicode / to_latex / to_ascii, Jupyter display
 ├── flatten.py           # flatten (§4.7.5) and its error taxonomy
 ├── reactions.py         # derive_odes, stoichiometric_matrix
 ├── classification.py    # ode_states, system_kind, ... (esm-spec §6.3.1)
@@ -2582,12 +2578,10 @@ import earthsci_ast as esm
 file = esm.load_path("model.esm")
 esm.write_path(file, "model_v2.esm")
 
-# Pretty-print (uses sympy.pretty or LaTeX)
-print(esm.to_unicode(file.models["SuperFast"]))
-# ∂O₃/∂t = −k_NO_O₃·O₃·NO·M + jNO₂·NO₂
-
-print(esm.to_latex(file.models["SuperFast"]))
-# \frac{\partial O_3}{\partial t} = ...
+# One equation as Typst or LaTeX math, and back
+eq = {"lhs": {"op": "D", "args": ["O3"], "wrt": "t"}, "rhs": {"op": "*", "args": ["k", "O3"]}}
+text = esm.print_math(eq, esm.expression_names(eq), "typst")
+esm.parse_math(text, esm.expression_names(eq), "typst")
 
 # In Jupyter notebooks — rich display
 file.models["SuperFast"]  # renders LaTeX equations inline
@@ -2680,8 +2674,9 @@ faster["Box.T_air"][-1]   # 2097.5
 #### 5.3.6 Jupyter Integration
 
 ```python
-# In Jupyter, ESM objects have rich _repr_latex_ methods
-file.models["SuperFast"]  # renders equations as LaTeX
+# In Jupyter, a model or reaction system shows its equations as LaTeX math
+# (print_math with format "markdown")
+file.models["SuperFast"]
 ```
 
 ---
@@ -2719,7 +2714,6 @@ pkg/earthsci-ast-rs/
 │   ├── validate.rs         # validate / validate_text
 │   ├── expression.rs       # free_variables, simplify
 │   ├── substitute.rs       # substitution, including the `*_with_context` family
-│   ├── display.rs          # to_unicode / to_latex / to_ascii, the §6.3 summary
 │   ├── flatten.rs          # flatten (§4.7.5) and FlattenError
 │   ├── reactions.rs        # derive_odes, stoichiometric_matrix
 │   ├── classification.rs   # ode_states, system_kind, ... (esm-spec §6.3.1)
@@ -2888,11 +2882,10 @@ Core, in full:
 
 - Parse/serialize ESM files using standard `encoding/json`.
 - Schema validation via `gojsonschema`; structural validation; reference checks.
-- Pretty-print to Unicode, LaTeX and ASCII, over the full domain (expressions,
-  equations, models, reaction systems, whole files).
+- Expressions and equations as LaTeX or Typst math (`PrintMath` / `ParseMath`)
+  and whole documents as Markdown or Typst source.
 - Substitution, including the scoped `*WithContext` family.
-- `Flatten`, the text expression parser (`ParseExpression` / `ParseEquation`),
-  the §4 editing operation set, `Migrate` / `CanMigrate`, and the reference
+- `Flatten`, the §4 editing operation set, `Migrate` / `CanMigrate`, and the reference
   graph.
 - Graph representations and all three §4.8.3 renderings (`ToDOT`, `ToMermaid`,
   `ToJSONGraph`).
@@ -2916,94 +2909,19 @@ and falls back to sorted names. See `API_SPEC.md` §5.10;
 
 ## 6. Display Format Specification
 
-All libraries must produce identical output for a given display format when given the same input. This section specifies the exact rendering rules.
+An expression or an equation displays as math in the document source formats
+(esm-spec §1.2): `print_math(e, names, format)` writes it as LaTeX (format
+`markdown`) or Typst math (format `typst`), and `parse_math(text, names,
+format)` reads it back (API_SPEC §5.1). Where a language shows a value as a
+string, an expression or an equation shows as
+`print_math(e, expression_names(e), typst)`, and a message that quotes an
+expression does the same. A whole document displays as its source text through
+`print_markdown` / `print_typst`. The notation is the Lean model's
+(`Esm.Document.Math.*`), pinned byte for byte by
+`tests/conformance/document_format/` (CONFORMANCE_SPEC §5.58, §5.59).
 
-### 6.1 Unicode Display
-
-**Chemical species subscripts:** Digits following chemical element symbols become subscripts. Libraries must use an **element-aware tokenizer** that recognizes chemical element symbols (one uppercase letter optionally followed by one lowercase letter, matching entries in the periodic table) and subscripts trailing digits.
-
-**Algorithm:**
-
-1. Split the name on underscores into segments (e.g., `k_NO_O3` → `["k", "NO", "O3"]`).
-2. For each segment, scan left-to-right matching the pattern `[A-Z][a-z]?` against a lookup table of chemical element symbols (H, He, Li, Be, B, C, N, O, F, Ne, Na, Mg, Al, Si, P, S, Cl, Ar, K, Ca, …all 118 elements).
-3. If a match is found and is immediately followed by one or more digits, convert those digits to Unicode subscript characters (₀₁₂₃₄₅₆₇₈₉).
-4. If a segment does not start with a recognized element symbol, leave it unchanged (e.g., `k` → `k`, `var2` → `var2`).
-5. Rejoin segments with underscores (for Unicode) or `\_` (for LaTeX).
-
-| Input | Output | Reasoning |
-|---|---|---|
-| `O3` | `O₃` | `O` is oxygen, `3` subscripted |
-| `NO2` | `NO₂` | `N` is nitrogen, `O` is oxygen, `2` follows `O` |
-| `CH2O` | `CH₂O` | `C` is carbon, `H` is hydrogen, `2` follows `H`, `O` is oxygen |
-| `H2O2` | `H₂O₂` | Both digit groups follow element symbols |
-| `k_NO_O3` | `k_NO_O₃` | `k` is not an element, `N`/`O` are elements, `3` follows `O` |
-| `var2` | `var2` | `V` could be vanadium but `va` is not followed by a digit after an element match; `var` doesn't start with a valid element+digit pattern |
-| `T` | `T` | No trailing digits |
-| `jNO2` | `jNO₂` | `j` is not an element, skip; `N` is nitrogen, `O` is oxygen, `2` follows `O` |
-
-**Note:** The element lookup table must be included in each library (a static list of 118 symbol strings). The algorithm is greedy — it tries to match two-character element symbols before one-character symbols (e.g., `Ca` matches calcium before `C` matches carbon).
-
-**Number formatting:** Numbers in Unicode display use the following rules:
-
-| Condition | Format | Example |
-|---|---|---|
-| Integer (no fractional part) | Plain integer | `3`, `−1`, `1000` |
-| Decimal, 1–4 significant digits | Decimal notation | `0.005`, `298.15` |
-| \|value\| < 0.01 or \|value\| ≥ 10000 | Scientific notation with Unicode superscripts | `1.8×10⁻¹²`, `2.46×10¹⁹` |
-| Exactly 0.0 | `0` | `0` |
-
-For LaTeX, use `\times 10^{...}` for scientific notation. For ASCII, use `e` notation (e.g., `1.8e-12`).
-
-**Operators:**
-
-| AST | Unicode |
-|---|---|
-| `D(x, t)` | `∂x/∂t` |
-| `grad(x, y)` | `∂x/∂y` |
-| `a * b` | `a·b` |
-| `-a` (unary) | `−a` (minus sign, not hyphen) |
-| `a + (-b)` | `a − b` |
-| `Pre(x)` | `Pre(x)` |
-
-**Precedence rules** (highest to lowest):
-
-1. Function application: `f(x)`
-2. Exponentiation: `x^n` → `xⁿ` (for small integer exponents) or `x^(expr)`
-3. Unary minus: `−x`
-4. Multiplication/Division: `a·b`, `a/b`
-5. Addition/Subtraction: `a + b`, `a − b`
-
-Parentheses are only added when necessary for disambiguation.
-
-### 6.2 LaTeX Display
-
-Follow standard LaTeX math conventions. Fractions use `\frac{}{}`, derivatives use `\frac{\partial}{\partial t}`, species names use `\mathrm{}`.
-
-### 6.3 Model Summary Display
-
-When displaying a full file, show a structured summary. For a document holding the `Ozone` reaction system of `docs/api/examples/fixtures/ozone.esm` and a `Photolysis` model whose rate replaces `Ozone.jNO2` through a `variable_map`, Go's `ModelSummary` prints:
-
-```
-ESM v1.0.0: PhotolyzedOzone
-  "The NO-NO2-O3 cycle with its photolysis rate supplied by a second model."
-  Authors: EarthSciML
-
-  Reaction Systems:
-    Ozone (3 species, 2 parameters, 2 reactions)
-      R1: NO + O₃ → NO₂    rate: k1
-      R2: NO₂ → NO + O₃    rate: jNO₂
-
-  Models:
-    Photolysis (2 parameters, 1 equation)
-      j = j_max · cos_sza
-
-  Coupling:
-    1. variable_map: Photolysis.j → Ozone.jNO2
-```
-
-A document that declares data sources or a domain gets a section for each.
-
----
+The plain-text, Unicode and old LaTeX renderers and the text summary of a
+model or file that earlier versions specified here are removed.
 
 ## 7. Testing Requirements
 
@@ -3105,7 +3023,7 @@ migrate(file: EsmFile, target_version: string) → EsmFile
 
 1. Type definitions / data model.
 2. JSON parse / serialize with schema validation.
-3. Expression pretty-printing (Unicode + LaTeX).
+3. Expressions as LaTeX and Typst math (`print_math` / `parse_math`).
 4. Expression substitution.
 5. Structural validation (equation counting, reference integrity).
 6. Round-trip tests passing.
