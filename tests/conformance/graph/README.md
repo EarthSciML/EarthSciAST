@@ -120,14 +120,12 @@ majority, not to fix a bug.
 
 #### Why only the HEADER is pinned
 
-Every node line in both formats carries a LABEL, and the majority of bindings
-(TypeScript, Python, Julia — 3-2) run that label through an element-aware
-**chemical-subscript formatter**: `O3` renders `O₃`, `jNO2` renders `jNO₂`. Go
-and Rust have no such formatter — it is a ~1500-line element-table-plus-Greek-
-transliteration module in each of the three bindings that do, with no
-cross-language corpus of its own. Converging Go and Rust on the per-line format
-is therefore a PORT OF THAT FEATURE, not an exporter edit, and it has not been
-done here.
+Every node line in both formats carries a LABEL. TypeScript, Python and Julia
+used to run it through a chemical-subscript formatter (`O3` as `O₃`); that
+formatter went with the plain-text and Unicode renderers it belonged to, and
+those three bindings, like Rust, now label a node with its name as written. Go
+still writes counts and units. The per-line format below the header is not
+pinned until the bindings converge on it.
 
 What the majority rule does settle, for whenever that port happens, is the rest
 of the per-line format. Python and Julia are already byte-identical to each
@@ -137,7 +135,7 @@ DO agree, they agree with that bloc:
 
 | Element | Vote | Winner |
 |---|---|---|
-| node label text | subscripted name (TS, Py, Julia) vs counts-and-units (Go) vs raw name (Rust) | subscripted name, 3-2 |
+| node label text | raw name (TS, Py, Julia, Rust) vs counts-and-units (Go) | raw name, 4-1 |
 | component DOT node attrs | `label` + `fillcolor` (Py, Julia, Go) | `label`, `fillcolor`, `style=filled` |
 | … `style=filled` | Py, Julia, TS | present, 3-2 |
 | … `shape` | TS, Rust only | absent, 3-2 |
