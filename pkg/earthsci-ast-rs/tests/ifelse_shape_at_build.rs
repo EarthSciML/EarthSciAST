@@ -6,6 +6,9 @@
 //!   — the reseact form, `X = ifelse(lev < 2, F / D, 0.0)` with `D` a gather
 //!   from a `const` table — on the default route (the build-pipeline route is
 //!   `native_model_shapes_conformance`).
+//! * `tests/conformance/native_model_shapes/fixtures/ifelse_calendar_scalar_*`
+//!   — the same form with the scalar a calendar field (`hour`, `month` of
+//!   `esm:std/calendar.esm`) or a scalar `const` node (issue #664).
 //! * `tests/conformance/native_model_shapes/runtime_data/ifelse_data_fed_unshaped.esm`
 //!   — a data-fed `F` declared with no `shape` whose provider delivers a
 //!   three-element array: `X` takes the data's shape on both arms, read by a
@@ -31,13 +34,26 @@ const COMPILERS: [Compiler; 2] = [Compiler::Interpreter, Compiler::Native];
 
 #[test]
 fn gathered_scalar_arm_takes_the_array_shape_on_the_default_route() {
+    scalar_arm_fixtures_agree("ifelse_gathered_scalar", "IfelseGatheredScalar");
+}
+
+/// The scalar is a calendar field of `esm:std/calendar.esm` (`hour`, `month`,
+/// whose bodies compare against unit-bearing `const` nodes), or a scalar
+/// `const` node itself: issue #664 as reseact's NEI2016 observeds hit it.
+#[test]
+fn calendar_scalar_arm_takes_the_array_shape_on_the_default_route() {
+    scalar_arm_fixtures_agree("ifelse_calendar_scalar", "IfelseCalendarScalar");
+}
+
+/// Both variants of a `native_model_shapes` fixture pair pass under both
+/// compilers, native equal to the interpreter bit for bit.
+fn scalar_arm_fixtures_agree(stem: &str, model: &str) {
     for kind in ["static", "dynamic"] {
-        let rel =
-            format!("conformance/native_model_shapes/fixtures/ifelse_gathered_scalar_{kind}.esm");
+        let rel = format!("conformance/native_model_shapes/fixtures/{stem}_{kind}.esm");
         let file = common::load_repo_fixture(&rel);
         let run = |compiler| {
             let opts = InlineTestOptions {
-                model_name: Some("IfelseGatheredScalar".to_string()),
+                model_name: Some(model.to_string()),
                 solve: SolveOptions {
                     alg: earthsci_ast::Alg::Erk,
                     reltol: Some(1e-12),

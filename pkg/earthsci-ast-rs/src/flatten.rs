@@ -1559,8 +1559,9 @@ impl ShapeInference<'_, '_> {
     /// What an expression that is elementwise down to its leaves spans, and
     /// whether an `ifelse` is on its value path; or `None` when an op in it
     /// consumes an operand whole, or two operands span different index sets.
-    /// A gather with scalar subscripts and a `faq` with no output indices are
-    /// leaves: scalars, with no `ifelse` on the value path.
+    /// A gather with scalar subscripts, a `faq` with no output indices, a
+    /// `const` whose value is a number and `true`/`false` are leaves: scalars,
+    /// with no `ifelse` on the value path.
     fn body_spans(&mut self, e: &Expr) -> Option<(Spans, bool)> {
         match e {
             Expr::Number(_) | Expr::Integer(_) => Some((Spans::default(), false)),
@@ -1575,6 +1576,21 @@ impl ShapeInference<'_, '_> {
             }
             Expr::Operator(node)
                 if node.op == "faq" && node.output_idx.as_ref().is_some_and(Vec::is_empty) =>
+            {
+                Some((Spans::default(), false))
+            }
+            // A scalar literal written as a node: a `const` whose value is a
+            // number (a unit-bearing constant, esm-spec §4.8.5, such as the
+            // calendar templates' `86400 s`), and `true`/`false`. An array
+            // `const` is anonymous (no index sets), so it stays undecided.
+            Expr::Operator(node)
+                if (node.op == "const"
+                    && node
+                        .value
+                        .as_ref()
+                        .is_some_and(serde_json::Value::is_number))
+                    || node.op == "true"
+                    || node.op == "false" =>
             {
                 Some((Spans::default(), false))
             }
