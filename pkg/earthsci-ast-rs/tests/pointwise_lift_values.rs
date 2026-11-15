@@ -11,9 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use earthsci_ast::{
-    Compiler, InlineTestOptions, load_path, run_inline_tests_with_options, to_ascii,
-};
+use earthsci_ast::{Compiler, InlineTestOptions, load_path, run_inline_tests_with_options};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -98,11 +96,16 @@ fn authored_per_cell_tendency_is_not_a_lifted_one() {
     let r = flat
         .equations
         .iter()
-        .map(|eq| (to_ascii(&eq.lhs), to_ascii(&eq.rhs)))
-        .find(|(lhs, _)| lhs.contains("M.r["))
+        .map(|eq| {
+            (
+                crate::common::canon(&eq.lhs).to_string(),
+                crate::common::canon(&eq.rhs).to_string(),
+            )
+        })
+        .find(|(lhs, _)| lhs.contains(r#""M.r""#))
         .expect("an equation for M.r");
     assert!(
-        r.1.contains("D(M.c["),
+        r.1.contains(r#""op":"D""#) && r.1.contains(r#""M.c""#),
         "M.r resolved against an authored tendency: {r:?}"
     );
 }

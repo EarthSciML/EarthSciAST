@@ -364,7 +364,7 @@ fn refuse_anonymous_arrays(rhs: &Expr, lhs: &Expr) -> Result<(), String> {
     };
     let lhs = match lhs {
         Expr::Variable(n) => n.clone(),
-        other => crate::display::to_unicode(other),
+        other => other.to_string(),
     };
     Err(format!(
         "array_shape_mismatch: '{lhs}': a template application reads an anonymous array \

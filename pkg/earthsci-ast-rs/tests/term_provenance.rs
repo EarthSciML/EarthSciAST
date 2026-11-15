@@ -14,7 +14,6 @@
 
 use earthsci_ast::{
     Contribution, Expr, FlattenedSystem, TermOrigin, evaluate, flatten, free_variables, load_path,
-    to_ascii,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -112,7 +111,7 @@ fn body<'a>(flat: &FlattenedSystem, lhs: &Expr, rhs: &'a Expr) -> &'a Expr {
 fn scalarize(expr: &Expr) -> Expr {
     match expr {
         Expr::Operator(node) if node.op == "index" => {
-            Expr::Variable(format!("<{}>", to_ascii(expr)))
+            Expr::Variable(format!("<{}>", crate::common::canon(expr)))
         }
         Expr::Operator(node) => Expr::operator(node.map_children(&mut |c| scalarize(c))),
         _ => expr.clone(),
@@ -155,7 +154,7 @@ fn check_invariant(
             got.to_bits(),
             fold.to_bits(),
             "{case}: {} — body {got:?} is not the left fold {fold:?} of {values:?}",
-            to_ascii(lhs)
+            lhs
         );
         let right = values[..values.len() - 1]
             .iter()
@@ -178,7 +177,7 @@ fn body_is_the_left_fold_of_the_contributions() {
                 assert!(
                     result.is_some(),
                     "{fixture}: {} could not be evaluated",
-                    to_ascii(&eq.lhs)
+                    eq.lhs
                 );
             }
             // With three or more contributions the check must be able to see
@@ -188,7 +187,7 @@ fn body_is_the_left_fold_of_the_contributions() {
                     result,
                     Some(true),
                     "{fixture}: {} cannot tell sum orders apart",
-                    to_ascii(&eq.lhs)
+                    eq.lhs
                 );
             }
         }
@@ -217,12 +216,12 @@ fn every_contribution_has_an_author() {
             "{id}: one contribution list per equation"
         );
         for (eq, contributions) in flat.equations.iter().zip(&flat.equation_contributions) {
-            assert!(!contributions.is_empty(), "{id}: {}", to_ascii(&eq.lhs));
+            assert!(!contributions.is_empty(), "{id}: {}", eq.lhs);
             for c in contributions {
                 assert!(
                     !c.origins.is_empty(),
                     "{id}: {} has an unattributed term",
-                    to_ascii(&eq.lhs)
+                    eq.lhs
                 );
                 let unique: HashSet<&TermOrigin> = c.origins.iter().collect();
                 assert_eq!(unique.len(), c.origins.len(), "{id}: duplicate origin");
@@ -240,12 +239,12 @@ fn systems_order_pair_has_the_same_contributions() {
             .zip(&flat.equation_contributions)
             .map(|(eq, contributions)| {
                 (
-                    to_ascii(&eq.lhs),
+                    crate::common::canon(&eq.lhs).to_string(),
                     contributions
                         .iter()
                         .map(|c| {
                             (
-                                to_ascii(&c.expr),
+                                crate::common::canon(&c.expr).to_string(),
                                 serde_json::to_value(&c.origins).expect("origins serialize"),
                             )
                         })

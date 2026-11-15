@@ -89,8 +89,6 @@ mod data_source_url_conformance;
 mod deprecated_ops;
 #[path = "discrete_materialize_conformance.rs"]
 mod discrete_materialize_conformance;
-#[path = "display_conformance.rs"]
-mod display_conformance;
 #[path = "document_format.rs"]
 mod document_format;
 #[path = "doubly_defined_state_conformance.rs"]
@@ -113,8 +111,6 @@ mod evaluable_core_gate;
 mod evaluate_leaf_ops;
 #[path = "expression_operations.rs"]
 mod expression_operations;
-#[path = "expression_parse_conformance.rs"]
-mod expression_parse_conformance;
 #[path = "expression_templates_conformance.rs"]
 mod expression_templates_conformance;
 #[path = "faq_bare_array_operand.rs"]
@@ -273,8 +269,6 @@ mod precision_element_type;
 mod prepare_progress;
 #[path = "prepare_pushdown_l1.rs"]
 mod prepare_pushdown_l1;
-#[path = "pretty_print.rs"]
-mod pretty_print;
 #[path = "problem_surface.rs"]
 mod problem_surface;
 #[path = "property_expression.rs"]
