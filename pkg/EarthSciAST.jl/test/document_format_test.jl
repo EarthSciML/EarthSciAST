@@ -261,6 +261,27 @@ end
         @test err isa EarthSciAST.ParseError && err.code == ERROR_CODES.PARSE_ERROR
     end
 
+    @testset "invalid UTF-8" begin
+        bad = "fix\xffture"
+        @test !isvalid(bad)
+        doc = Dict("esm" => "2.3.0", "metadata" => Dict("name" => "fixture"))
+        for format in (:markdown, :typst)
+            text = print_document(doc, format)
+            @test occursin("fixture", text)
+            err = try
+                parse_document(replace(text, "fixture" => bad), format)
+            catch e
+                e
+            end
+            @test err isa EarthSciAST.ParseError && err.code == ERROR_CODES.PARSE_ERROR
+            bad_doc = Dict("esm" => "2.3.0", "metadata" => Dict("name" => bad))
+            @test_throws ArgumentError print_document(bad_doc, format)
+            bad_key = Dict("esm" => "2.3.0", "metadata" => Dict("name" => "x", "attrs" => Dict(bad => 1)))
+            @test_throws ArgumentError print_document(bad_key, format)
+        end
+        @test_throws ArgumentError print_math(bad, String[], :markdown)
+    end
+
     corpus = _docfmt_corpus()
 
     @testset "whole-corpus round trip" begin

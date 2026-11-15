@@ -271,9 +271,6 @@ end
 
 # ## Expressions
 
-"""`Math.mkNodeP`: rebuild a node with fields."""
-mk_node_p(o, args, fs) = mk_node(o, args, fs)
-
 """`Math.CallArg`: what `pCallArgs` read: positional (`named == false`, `k`
 empty) or `name = value`."""
 struct CallArg
