@@ -42,15 +42,16 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Pretty-print mathematical expressions in an ESM file
+    /// Pretty-print the equations and reaction rates in an ESM file as math
     #[command(visible_alias = "display")]
     Pretty {
         /// Path to the ESM file
         #[arg(value_name = "FILE")]
         file: PathBuf,
-        /// Output format (unicode, latex, ascii)
-        #[arg(short, long, default_value = "unicode")]
-        format: DisplayFormat,
+        /// Math notation: typst (Typst math) or markdown (LaTeX math, as the
+        /// ESM Markdown format writes it)
+        #[arg(short, long, default_value = "typst")]
+        format: MathFormat,
     },
     /// Extract a single component from an ESM file
     Extract {
@@ -105,7 +106,8 @@ enum Commands {
         /// Output file (or stdout if not specified)
         #[arg(short, long, value_name = "OUTPUT")]
         output: Option<PathBuf>,
-        /// Target format (json, compact-json)
+        /// Target format: json, compact-json, or a source format, markdown (ESM
+        /// Markdown) or typst (ESM Typst)
         #[arg(long, default_value = "json")]
         to: ConvertFormat,
     },
@@ -391,6 +393,10 @@ enum SimulateFormat {
 enum ConvertFormat {
     Json,
     CompactJson,
+    /// The ESM Markdown source format (`print_markdown`).
+    Markdown,
+    /// The ESM Typst source format (`print_typst`).
+    Typst,
 }
 
 /// `analyze --analysis-type`.
@@ -2073,12 +2079,23 @@ fn print_complexity_analysis(esm_file: &earthsci_ast::EsmFile) {
 
 // === CLI helpers ===========================================================
 
-/// The three expression rendering formats accepted by `pretty --format`.
+/// The math notations accepted by `pretty --format`: those of the two source
+/// formats.
 #[derive(Clone, Copy, ValueEnum)]
-enum DisplayFormat {
-    Unicode,
-    Latex,
-    Ascii,
+enum MathFormat {
+    /// Typst math.
+    Typst,
+    /// LaTeX math, as the ESM Markdown format writes it.
+    Markdown,
+}
+
+impl From<MathFormat> for earthsci_ast::DocumentFormat {
+    fn from(format: MathFormat) -> Self {
+        match format {
+            MathFormat::Typst => earthsci_ast::DocumentFormat::Typst,
+            MathFormat::Markdown => earthsci_ast::DocumentFormat::Markdown,
+        }
+    }
 }
 
 // === Per-subcommand handlers ===============================================
@@ -2132,14 +2149,14 @@ fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-fn run_pretty(file: PathBuf, format: DisplayFormat) -> Result<(), Box<dyn std::error::Error>> {
+fn run_pretty(file: PathBuf, format: MathFormat) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
     let esm_file = load_at(&file, &content)?;
 
-    let render = |expr: &earthsci_ast::Expr| match format {
-        DisplayFormat::Unicode => earthsci_ast::to_unicode(expr),
-        DisplayFormat::Latex => earthsci_ast::to_latex(expr),
-        DisplayFormat::Ascii => earthsci_ast::to_ascii(expr),
+    // An expression or an equation, printed with its own names declared.
+    let render = |value: serde_json::Value| {
+        let names = earthsci_ast::expression_names(&value);
+        earthsci_ast::print_math(&value, &names, format.into())
     };
 
     println!("Displaying expressions in {}:", file.display());
@@ -2153,9 +2170,11 @@ fn run_pretty(file: PathBuf, format: DisplayFormat) -> Result<(), Box<dyn std::e
                 model.name.as_deref().unwrap_or("unnamed")
             );
             for (i, equation) in model.equations.iter().enumerate() {
-                let lhs = render(&equation.lhs);
-                let rhs = render(&equation.rhs);
-                println!("  Eq {}: {} = {}", i + 1, lhs, rhs);
+                let equation = serde_json::json!({
+                    "lhs": serde_json::to_value(&equation.lhs)?,
+                    "rhs": serde_json::to_value(&equation.rhs)?,
+                });
+                println!("  Eq {}: {}", i + 1, render(equation));
             }
         }
     }
@@ -2165,7 +2184,7 @@ fn run_pretty(file: PathBuf, format: DisplayFormat) -> Result<(), Box<dyn std::e
         for (rs_id, rs) in reaction_systems {
             println!("\nReaction System: {rs_id}");
             for (i, reaction) in rs.reactions.iter().enumerate() {
-                let rate = render(&reaction.rate);
+                let rate = render(serde_json::to_value(&reaction.rate)?);
                 println!("  Reaction {}: rate = {}", i + 1, rate);
             }
         }
@@ -2397,6 +2416,16 @@ fn run_convert(
     let output_content = match to {
         ConvertFormat::Json => to_json(&esm_file)?,
         ConvertFormat::CompactJson => to_json_compact(&esm_file)?,
+        ConvertFormat::Markdown | ConvertFormat::Typst => {
+            let format = match to {
+                ConvertFormat::Markdown => earthsci_ast::DocumentFormat::Markdown,
+                _ => earthsci_ast::DocumentFormat::Typst,
+            };
+            match serde_json::from_str::<serde_json::Value>(&to_json(&esm_file)?)? {
+                serde_json::Value::Object(doc) => earthsci_ast::print_document(&doc, format),
+                _ => return Err(fail("the document is not a JSON object")),
+            }
+        }
     };
 
     if let Some(output_path) = output {
@@ -4640,7 +4669,6 @@ pub fn main() -> std::process::ExitCode {
 #[derive(serde::Deserialize)]
 struct ConformanceManifest {
     validation_files: Vec<ManifestValidationEntry>,
-    display_cases: Vec<ManifestDisplayCase>,
     substitution_cases: Vec<ManifestSubstitutionCase>,
 }
 
@@ -4648,17 +4676,6 @@ struct ConformanceManifest {
 struct ManifestValidationEntry {
     id: String,
     path: String,
-}
-
-#[derive(serde::Deserialize)]
-struct ManifestDisplayCase {
-    id: String,
-    // The manifest's `kind` ("formula" | "expression") is deliberately not read
-    // here: `Expr` deserializes a bare string as `Expr::Variable`, and the
-    // renderers chemical-subscript a variable name exactly as they do a formula,
-    // so both kinds take the same path. Bindings whose renderer dispatches on a
-    // static type (Julia, Go) do need the tag. Serde ignores the extra key.
-    input: serde_json::Value,
 }
 
 #[derive(serde::Deserialize)]
@@ -4990,13 +5007,11 @@ fn run_conformance_test(
         .ok_or("Could not locate repo root by walking up from the current directory")?;
 
     let validation = conformance_validation_sweep(&manifest, &repo_root);
-    let display = conformance_display_results(&manifest);
     let substitution = conformance_substitution_results(&manifest)?;
 
     let results = json!({
         "language": "rust",
         "validation_results": validation,
-        "display_results": display,
         "substitution_results": substitution,
         "errors": Vec::<String>::new(),
     });
@@ -5008,9 +5023,8 @@ fn run_conformance_test(
         results_file.display()
     );
     println!(
-        "✓ Validation sweep completed ({} files); display {} cases; substitution {} cases",
+        "✓ Validation sweep completed ({} files); substitution {} cases",
         manifest.validation_files.len(),
-        manifest.display_cases.len(),
         manifest.substitution_cases.len()
     );
 
@@ -5149,46 +5163,6 @@ fn conformance_validation_record(
         json!(if is_valid { "valid" } else { "invalid" }),
     );
     record
-}
-
-/// Display phase: render every manifest case in all three formats.
-///
-/// The producer used to emit a literal `"display_results": {}` here, which the
-/// comparator scored as a category with zero divergences — a permanent,
-/// structurally unfailable 1.00 that diluted the one real category (audit C2).
-fn conformance_display_results(
-    manifest: &ConformanceManifest,
-) -> std::collections::BTreeMap<String, serde_json::Value> {
-    use serde_json::{Value, json};
-
-    let mut display: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
-    for case in &manifest.display_cases {
-        let parsed: Result<earthsci_ast::Expr, _> = serde_json::from_value(case.input.clone());
-        match parsed {
-            Ok(expr) => {
-                display.insert(
-                    case.id.clone(),
-                    json!({
-                        "unicode": earthsci_ast::to_unicode(&expr),
-                        "latex": earthsci_ast::to_latex(&expr),
-                        "ascii": earthsci_ast::to_ascii(&expr),
-                    }),
-                );
-            }
-            Err(e) => {
-                display.insert(
-                    case.id.clone(),
-                    json!({
-                        "unicode": Value::Null,
-                        "latex": Value::Null,
-                        "ascii": Value::Null,
-                        "errors": { "parse": e.to_string() },
-                    }),
-                );
-            }
-        }
-    }
-    display
 }
 
 /// Substitution phase.
