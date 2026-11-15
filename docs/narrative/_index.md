@@ -50,7 +50,7 @@ Tests, figures and tables are narrative's own directives:
 | `:::esm-test{#id span="0..10"}` … `:::` | an esm-spec §6.6 inline test of the current model |
 | `:::esm-plot{#id span="0..50" y=N}` … `:::` | one figure, with its own run |
 | `:::esm-analysis{#id span="0..100"}` … `:::` | an esm-spec §6.7 analysis and its plots |
-| `::esm-example[a + b*c]` | one expression as text, mathematics and JSON |
+| `::esm-example[a + b c]{names="…"}` | one expression as LaTeX, mathematics and JSON |
 | `::esm-variables{}` | a table of what the current model declares |
 | `::esm-download{}` | a link to the page's `.esm` file |
 
