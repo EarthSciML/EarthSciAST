@@ -80,3 +80,35 @@ func typedJSONNumbers(value any) any {
 		return value
 	}
 }
+
+// TestCanonicalDocumentNumberBeyondBinary64: a json.Number token beyond the
+// binary64 range is not turned into ±Inf (which no JSON can hold, so writing
+// the document would fail); it stays as written, and the document still
+// writes. A token below the smallest subnormal is the canonical 0.
+func TestCanonicalDocumentNumberBeyondBinary64(t *testing.T) {
+	var doc any
+	dec := json.NewDecoder(strings.NewReader(
+		`{"x": 1e400, "y": -1e400, "z": 1e-400, "metadata": {"w": 1.0e4294967296}}`))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	got := CanonicalizeDocument(doc).(map[string]any)
+	want := map[string]any{
+		"x": json.Number("1e400"), "y": json.Number("-1e400"), "z": int64(0),
+		"metadata": map[string]any{"w": json.Number("1.0e4294967296")},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v", got)
+	}
+	out, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("the canonical document does not write: %v", err)
+	}
+	// Read back as a float64, the literal is refused, as the Rust binding's JSON
+	// reader refuses it.
+	var back any
+	if err := json.Unmarshal(out, &back); err == nil {
+		t.Errorf("%s read back as %v", out, back)
+	}
+}
