@@ -41,9 +41,15 @@ import {
   type JNum,
   type Json,
 } from './json.js'
-import { MAX_JSON_DEPTH, MAX_NESTING, jsonDepth, reading } from './limits.js'
-import { printLatex, printTypst as printTypstMath } from './math/index.js'
+import { MAX_JSON_DEPTH, MAX_NESTING, jsonDepth, reading, type Findings } from './limits.js'
+import {
+  parseLatex,
+  parseTypst as parseTypstMath,
+  printLatex,
+  printTypst as printTypstMath,
+} from './math/index.js'
 import { printNum } from './number.js'
+import { eqSides } from './source/equation.js'
 import { parseMd, printMd } from './source/markdown-doc.js'
 import { parseTyp, printTyp } from './source/typst-doc.js'
 
@@ -124,6 +130,85 @@ export function printMath(expr: unknown, names: readonly string[], format: Docum
 }
 
 /**
+ * The variable names an expression or an equation uses, in order of first use:
+ * its string leaves under `lhs`, `rhs` and `args`. These are the `names` to
+ * give {@link printMath} to show an expression on its own, with its names
+ * declared.
+ */
+export function expressionNames(expr: unknown): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const walk = (v: unknown): void => {
+    if (typeof v === 'string') {
+      if (!seen.has(v)) {
+        seen.add(v)
+        out.push(v)
+      }
+    } else if (Array.isArray(v)) {
+      for (const item of v) walk(item)
+    } else if (v !== null && typeof v === 'object') {
+      const fields = v as Record<string, unknown>
+      for (const key of ['lhs', 'rhs', 'args']) {
+        if (Object.prototype.hasOwnProperty.call(fields, key)) walk(fields[key])
+      }
+    }
+  }
+  walk(expr)
+  return out
+}
+
+/**
+ * Read one expression, or one equation, written as math under a set of
+ * declared names: LaTeX for `'markdown'` (`Math.parseLatex`), Typst math for
+ * `'typst'` (`Math.parseTypst`). The inverse of {@link printMath}:
+ * `parseMath(printMath(e, names, f), names, f)` is `e` in canonical form.
+ *
+ * `text` is what a document display holds, without its delimiters. Text whose
+ * top is `=` reads as an equation, an object with `lhs` and `rhs`, as a display
+ * does (`Source.eqSides`); any other text reads as an expression. `names` plays
+ * the part of the variables a component declares: it decides how a run of
+ * letters reads (in LaTeX, `RT` is the name `RT` when it is declared, the
+ * product of `R` and `T` when they are). No template is in scope. Numbers come
+ * back as the document readers give them (see {@link ParseDocumentOptions}).
+ *
+ * @throws {EsmDiagnosticError} with code `removed_op` when the math uses an
+ *   operator removed from the format (esm-spec §4.2), and `parse_error` for any
+ *   other text that is not math, and for one past a bound of the reader
+ *   (`limits.ts`): nested too deeply, or holding a number beyond the binary64
+ *   range.
+ */
+export function parseMath(
+  text: string,
+  names: readonly string[],
+  format: DocumentFormat,
+  options?: ParseDocumentOptions,
+): unknown {
+  const sym = { names: [...names], templates: [] }
+  const [e, found] = reading(() =>
+    format === 'markdown' ? parseLatex(sym, text) : parseTypstMath(sym, text),
+  )
+  if (e === undefined && found.removedOp === undefined && !found.tooDeep) {
+    throw new EsmDiagnosticError(
+      ERROR_CODES.PARSE_ERROR,
+      format === 'markdown'
+        ? 'not an ESM expression in LaTeX math'
+        : 'not an ESM expression in Typst math',
+    )
+  }
+  let read = e
+  if (read !== undefined) {
+    const sides = eqSides(read)
+    if (sides !== undefined) {
+      read = jobj([
+        ['lhs', sides[0]],
+        ['rhs', sides[1]],
+      ])
+    }
+  }
+  return checked(read, found, format, options)
+}
+
+/**
  * Read a Markdown ESM document (`Source.Md.parseMd`). The result is in canonical
  * form.
  *
@@ -160,6 +245,19 @@ function read(
   options: ParseDocumentOptions | undefined,
 ): Record<string, unknown> {
   const [doc, found] = reading(() => (format === 'markdown' ? parseMd(text) : parseTyp(text)))
+  return checked(doc, found, format, options) as Record<string, unknown>
+}
+
+/**
+ * A reader's result, checked against the reader's bounds and turned into the
+ * JSON value the caller gets.
+ */
+function checked(
+  doc: Json | undefined,
+  found: Findings,
+  format: DocumentFormat,
+  options: ParseDocumentOptions | undefined,
+): unknown {
   if (found.tooDeep || (doc !== undefined && jsonDepth(doc) > MAX_JSON_DEPTH)) {
     throw new EsmDiagnosticError(
       ERROR_CODES.PARSE_ERROR,
@@ -174,7 +272,7 @@ function read(
       `the number \`${printNum(big)}\` is outside the binary64 range`,
     )
   }
-  return toPlain(doc, options?.canonical === true) as Record<string, unknown>
+  return toPlain(doc, options?.canonical === true)
 }
 
 /**

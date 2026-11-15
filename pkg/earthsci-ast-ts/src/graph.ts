@@ -26,7 +26,6 @@ import {
   type ContainerKind,
   type ComponentEntry,
 } from './traverse.js'
-import { formatChemicalName } from './pretty-print.js'
 import {
   odeStates,
   observedUnknowns,
@@ -925,11 +924,6 @@ export function expressionGraph(
 // Graph exporters (DOT / Mermaid / JSON)
 // ---------------------------------------------------------------------------
 
-// Chemical subscript formatting for node/edge labels delegates to the
-// element-aware formatter in pretty-print.ts so the same species renders
-// identically everywhere.
-const formatChemicalSubscripts = formatChemicalName
-
 /** Narrow a graph node to a {@link ComponentNode} (carries `type`). */
 function isComponentNode(node: object): node is ComponentNode {
   return 'type' in node
@@ -960,11 +954,9 @@ function nodeKey(node: object): string {
   return String(node)
 }
 
-/** The display label for a graph node (its `name` if any, else its key), with
- *  chemical subscripts applied. */
+/** The display label for a graph node: its `name` if any, else its key. */
 function nodeLabel(node: object): string {
-  const raw = 'name' in node ? (node as { name: string }).name : nodeKey(node)
-  return formatChemicalSubscripts(raw)
+  return 'name' in node ? (node as { name: string }).name : nodeKey(node)
 }
 
 /**
@@ -1084,7 +1076,7 @@ export function toDot<N extends object, E>(graph: Graph<N, E>): string {
         case 'variable_map':
           style = 'dashed'
           color = 'green'
-          label = formatChemicalSubscripts(edge.data.label || '')
+          label = edge.data.label || ''
           break
         case 'callback':
           style = 'dotted'
@@ -1201,7 +1193,7 @@ export function toMermaid<N extends object, E>(graph: Graph<N, E>): string {
       switch (edge.data.type) {
         case 'variable_map':
           arrowStyle = '-.->'
-          label = formatChemicalSubscripts(edge.data.label || '')
+          label = edge.data.label || ''
           break
         case 'operator_compose':
         case 'couple':
