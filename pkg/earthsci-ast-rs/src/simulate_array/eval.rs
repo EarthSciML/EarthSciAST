@@ -3973,9 +3973,9 @@ pub(super) type KeyPart = (Vec<i64>, Vec<crate::relational::Key>);
 /// is exactly tuple equality, and it is monotone in the lexicographic tuple
 /// order, so [`crate::relational::equijoin`]'s canonical key order is the order
 /// the tuples would have had. What it removes is a heap-allocated
-/// [`crate::relational::Key::Tuple`] per row and its hashing: a seven-column
-/// clause over a 1.6M-row table. A clause whose ranges do not fit in an `i64`,
-/// or that holds any non-integer key, keeps the tuples.
+/// [`crate::relational::Key::Tuple`] per row and its hashing, O(rows x columns)
+/// allocations on each side. A clause whose ranges do not fit in an `i64`, or
+/// that holds any non-integer key, keeps the tuples.
 pub(super) fn composite_pair_keys(
     parts_l: Vec<KeyPart>,
     parts_r: Vec<KeyPart>,

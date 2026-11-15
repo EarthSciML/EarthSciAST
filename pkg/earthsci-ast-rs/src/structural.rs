@@ -3873,8 +3873,8 @@ pub(crate) fn faq_bare_array_operand_errors(
     }
     // A VIEW over `var_shapes` minus `defined`, not a map rebuilt from it:
     // this runs once per equation, and copying every variable's shape into a
-    // fresh map each time is O(equations x variables) -- about a second on a
-    // 5,000-variable relational model, for a walk that reads a handful.
+    // fresh map each time is O(equations x variables) over the document, for
+    // a walk that reads only the few variables the equation names.
     let declared_axes = DeclaredAxes {
         shapes: var_shapes,
         defined: &defined,
