@@ -169,8 +169,8 @@ end
 _doubly_defined_refusal(name::AbstractString, diff_eq::Equation, bare_eq::Equation) =
     TreeWalkError(
     ERROR_CODES.EQUATION_COUNT_MISMATCH,
-    "unknown '$name' is defined twice — by `$(to_ascii(diff_eq))` and by " *
-        "`$(to_ascii(bare_eq))`. esm-spec §4.9.4 counts an equation whichever form " *
+    "unknown '$name' is defined twice — by `$(diff_eq)` and by " *
+        "`$(bare_eq)`. esm-spec §4.9.4 counts an equation whichever form " *
         "its LHS takes, so this system has one more equation than it has unknowns " *
         "to bind; keeping the derivative and dropping the constraint would run a " *
         "model the document does not describe. Remove one of the two definitions."
@@ -394,7 +394,12 @@ function _binds_any(expr::OpExpr, bindings::Dict{String, ASTExpr})
             haskey(bindings, k) && return true
         end
     end
-    oi = expr.output_idx
+    # A `makearray`'s `output_idx` binds nothing here. The pointwise lift is
+    # what writes one: it tags the operator's makearray with the lift's own
+    # loop symbols (esm-libraries-spec §4.7.5), which name the cell being read,
+    # i.e. the enclosing `faq`'s loop symbols, so a substitution for them must
+    # reach the region values.
+    oi = expr.op == "makearray" ? nothing : expr.output_idx
     if oi !== nothing
         for x in oi
             x isa AbstractString && haskey(bindings, String(x)) && return true

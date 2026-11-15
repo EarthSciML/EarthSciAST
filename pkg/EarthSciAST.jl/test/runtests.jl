@@ -33,8 +33,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # text, so it costs nothing and reports before the run it cannot trust.
     include("test_file_prelude_test.jl")
 
-    # ---- Core types, parse, validate, display (src/types.jl, parse.jl,
-    #      validate.jl, display.jl, graph.jl) ----
+    # ---- Core types, parse, validate (src/types.jl, parse.jl,
+    #      validate.jl, graph.jl) ----
     include("types_test.jl")
     include("solver_block_test.jl")
     include("classification_test.jl")
@@ -68,9 +68,6 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("reactions_test.jl")
     include("reaction_species_order_test.jl")  # species ORDER = declaration order (API_SPEC §5.10)
     include("reaction_lowering_form_test.jl")  # exact lowered tree (esm-libraries-spec §4.6.2)
-    include("display_test.jl")
-    include("display_conformance_test.jl")
-    include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle
     include("units_test.jl")
     include("unit_exact_scale_test.jl")
     include("transcendental_scale_test.jl")
@@ -443,12 +440,12 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("compile_once_templates_test.jl")
     include("expanded_model_seam_test.jl")
 
-    # ---- Shared fixture sweeps (tests/valid, tests/invalid, tests/display) ----
+    # ---- Shared fixture sweeps (tests/valid, tests/invalid) ----
     # Smoke coverage across the shared fixture tree. Deeper checks live in the
     # dedicated files: manifest-driven round-trip idempotence in
     # conformance_round_trip_test.jl, expected-error assertions for specific
-    # invalid fixtures in validate_test.jl / structural_validation_test.jl,
-    # and rendering assertions in display_test.jl. (The former inline
+    # invalid fixtures in validate_test.jl / structural_validation_test.jl.
+    # (The former inline
     # "Round-trip Tests" subset was deleted as redundant with
     # conformance_round_trip_test.jl, which round-trips a superset of those
     # fixtures with a stronger save→load→save idempotence check.)
@@ -513,45 +510,6 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                         # bindings but pass Julia's load+validate. Kept broken
                         # (not skipped) so a src-side fix flips them visibly.
                         @test_broken rejected
-                    end
-                end
-            end
-        end
-
-        @testset "Display fixtures parse" begin
-            display_dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "display")
-            @test isdir(display_dir)
-            for filename in filter(f -> endswith(f, ".json"), readdir(display_dir))
-                @testset "display: $filename" begin
-                    display_data = JSON3.read(read(joinpath(display_dir, filename), String))
-                    # Fixture shape varies: flat arrays of cases, or objects
-                    # keyed by "chemical_formulas" / "test_cases"; a few (e.g.
-                    # model_summary.json) carry no case list at all.
-                    cases = if display_data isa JSON3.Array
-                        display_data
-                    elseif display_data isa JSON3.Object && haskey(display_data, :chemical_formulas)
-                        display_data[:chemical_formulas]
-                    elseif display_data isa JSON3.Object && haskey(display_data, :test_cases)
-                        display_data[:test_cases]
-                    else
-                        nothing
-                    end
-                    if cases === nothing
-                        @test !isempty(display_data)
-                    else
-                        @test !isempty(cases)
-                        # Every expression-shaped "input" must parse. Inputs may
-                        # also be plain strings (chemical formulas), and nested
-                        # {description, tests: [...]} groups keep their shape.
-                        for case in cases
-                            if case isa JSON3.Object && haskey(case, :input) &&
-                                    case[:input] isa JSON3.Object
-                                expr = EarthSciAST.expression_from_json(case[:input])
-                                @test expr isa EarthSciAST.ASTExpr
-                            elseif case isa JSON3.Object && haskey(case, :tests)
-                                @test case[:tests] isa JSON3.Array
-                            end
-                        end
                     end
                 end
             end

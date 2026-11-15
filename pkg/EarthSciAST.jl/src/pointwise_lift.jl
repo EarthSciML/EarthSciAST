@@ -203,7 +203,9 @@ function _lift_rhs_to_cell(
     cached = get(tbl, expr, nothing)
     cached === nothing || return cached
     result = if expr.op == "makearray"
-        _index_wrap(expr, grid.loops)
+        # Tag the makearray with the lift's loop symbols (as every binding
+        # does), then read it per cell.
+        _index_wrap(reconstruct(expr; output_idx = Any[grid.loops...]), grid.loops)
     elseif expr.op == "index" || expr.op == "faq"
         expr
     elseif expr.op in _LIFT_WHOLE_ARRAY_OPS

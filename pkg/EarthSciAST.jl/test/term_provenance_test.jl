@@ -37,8 +37,11 @@ _tp_origins(c::Contribution) = [
         (:component, o.component) for o in c.origins
 ]
 
-function _tp_equation(flat, lhs::AbstractString)
-    hits = [i for (i, eq) in enumerate(flat.equations) if to_ascii(eq.lhs) == lhs]
+# The one equation whose left-hand side is `lhs`, a typed expression (`_D(name)`
+# for a tendency, `_v(name)` for a bare definition), compared as canonical JSON.
+function _tp_equation(flat, lhs::ASTExpr)
+    want = canonical_expr_json(lhs)
+    hits = [i for (i, eq) in enumerate(flat.equations) if canonical_expr_json(eq.lhs) == want]
     @assert length(hits) == 1 "expected one equation $(lhs), got $(length(hits))"
     return flat.equations[hits[1]], equation_contributions(flat)[hits[1]]
 end
@@ -128,8 +131,8 @@ function _tp_check_invariant(flat, eq, cs; label = "")
         end
         for (body, parts) in zip(bodies, partss)
             fold = _tp_left_fold(parts)
-            @test (label, to_ascii(eq.lhs), salt, reinterpret(UInt64, body)) ==
-                (label, to_ascii(eq.lhs), salt, reinterpret(UInt64, fold))
+            @test (label, string(eq.lhs), salt, reinterpret(UInt64, body)) ==
+                (label, string(eq.lhs), salt, reinterpret(UInt64, fold))
             discriminating |= reinterpret(UInt64, _tp_right_fold(parts)) !=
                 reinterpret(UInt64, fold)
         end
@@ -179,10 +182,10 @@ end
             id = String(case.id)
             @test (id, length(equation_contributions(flat))) == (id, length(flat.equations))
             for (eq, cs) in zip(flat.equations, equation_contributions(flat))
-                @test (id, to_ascii(eq.lhs), isempty(cs)) == (id, to_ascii(eq.lhs), false)
+                @test (id, string(eq.lhs), isempty(cs)) == (id, string(eq.lhs), false)
                 for c in cs
-                    @test (id, to_ascii(eq.lhs), isempty(c.origins), allunique(c.origins)) ==
-                        (id, to_ascii(eq.lhs), false, true)
+                    @test (id, string(eq.lhs), isempty(c.origins), allunique(c.origins)) ==
+                        (id, string(eq.lhs), false, true)
                 end
             end
         end
@@ -191,46 +194,50 @@ end
     # ── the step table, row by row ───────────────────────────────────────────
 
     @testset "the systems order changes the order, not the origins" begin
-        _, ab = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "systems_order_ab.esm")), "D(Chem.O3)/Dt")
-        _, ba = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "systems_order_ba.esm")), "D(Chem.O3)/Dt")
-        pairs(cs) = [(to_ascii(c.expr), _tp_origins(c)) for c in cs]
+        _, ab = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "systems_order_ab.esm")), _D("Chem.O3"))
+        _, ba = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "systems_order_ba.esm")), _D("Chem.O3"))
+        pairs(cs) = [(canonical_expr_json(c.expr), _tp_origins(c)) for c in cs]
         @test sort(pairs(ab), by = string) == sort(pairs(ba), by = string)
         @test [_tp_origins(c) for c in ab] == [[(:component, "Chem")], [(:component, "Sink")]]
         @test [_tp_origins(c) for c in ba] == [[(:component, "Sink")], [(:component, "Chem")]]
     end
 
     @testset "structurally identical contributions stay two" begin
-        _, cs = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "non_vacuity.esm")), "D(Chem.O3)/Dt")
-        @test [to_ascii(c.expr) for c in cs[2:end]] == ["Emis.flux", "Emis.flux"]
+        _, cs = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "non_vacuity.esm")), _D("Chem.O3"))
+        @test [canonical_expr_json(c.expr) for c in cs[2:end]] ==
+            [canonical_expr_json("Emis.flux"), canonical_expr_json("Emis.flux")]
         @test [_tp_origins(c) for c in cs[2:end]] ==
             [[(:component, "OpA")], [(:component, "OpB")]]
     end
 
     @testset "a chained compose names every author" begin
         flat = _tp_flatten(joinpath(_TP_TESTS, "coupling", "chained_operator_compose.esm"))
-        eq, cs = _tp_equation(flat, "D(Chem.O3)/Dt")
+        eq, cs = _tp_equation(flat, _D("Chem.O3"))
         @test [_tp_origins(c) for c in cs] ==
             [[(:component, c)] for c in ("Src", "Sink", "Chem", "Adv")]
-        # The right-hand side is built from the list: one sum over the four.
-        @test eq.rhs isa OpExpr && eq.rhs.op == "+" && length(eq.rhs.args) == 4
+        # The right-hand side is built from the list: the left fold of the four,
+        # `+(+(+(c1, c2), c3), c4)` (esm-libraries-spec §4.7.5).
+        fold = foldl((a, c) -> OpExpr("+", ASTExpr[a, c.expr]), cs[2:end]; init = cs[1].expr)
+        @test canonical_expr_json(eq.rhs) == canonical_expr_json(fold)
+        @test eq.rhs isa OpExpr && eq.rhs.op == "+" && length(eq.rhs.args) == 2
     end
 
     @testset "an additive couple appends, and creates a tendency for an unknown only" begin
         flat = _tp_flatten(joinpath(_TP_DIR, "couple_additive.esm"))
-        _, co2 = _tp_equation(flat, "D(Atm.CO2)/Dt")
+        _, co2 = _tp_equation(flat, _D("Atm.CO2"))
         @test [_tp_origins(c) for c in co2] == [[(:component, "Atm")], [(:coupling, 1)]]
         # The variable_map that ran afterwards rewrote the input, not the author.
-        @test to_ascii(co2[2].expr) == "Ocean.Fref"
-        _, o2 = _tp_equation(flat, "D(Atm.O2)/Dt")
+        @test canonical_expr_json(co2[2].expr) == canonical_expr_json("Ocean.Fref")
+        _, o2 = _tp_equation(flat, _D("Atm.O2"))
         @test [_tp_origins(c) for c in o2] == [[(:coupling, 1)], [(:coupling, 1)]]
         # A parameter target takes no tendency.
-        @test isempty([eq for eq in flat.equations if occursin("Atm.flux", to_ascii(eq.lhs))])
+        @test isempty([eq for eq in flat.equations if occursin("Atm.flux", canonical_expr_json(eq.lhs))])
     end
 
     @testset "a multiplicative couple collapses to the union" begin
         _, cs = _tp_equation(
             _tp_flatten(joinpath(_TP_DIR, "couple_multiplicative.esm")),
-            "D(Chem.O3)/Dt"
+            _D("Chem.O3")
         )
         @test length(cs) == 1
         @test _tp_origins(cs[1]) ==
@@ -239,28 +246,28 @@ end
 
     @testset "a translate factor collapses only a multi-contribution B" begin
         flat = _tp_flatten(joinpath(_TP_DIR, "translate_factor.esm"))
-        _, y = _tp_equation(flat, "D(Host.Y)/Dt")
+        _, y = _tp_equation(flat, _D("Host.Y"))
         @test [_tp_origins(c) for c in y] ==
             [[(:component, "Host")], [(:component, "Chem"), (:component, "Sink")]]
-        _, w = _tp_equation(flat, "D(Host.W)/Dt")
+        _, w = _tp_equation(flat, _D("Host.W"))
         @test [_tp_origins(c) for c in w] == [[(:component, "Host")], [(:component, "Chem")]]
     end
 
     @testset "an expression transform's observed is authored by the coupling" begin
         flat = _tp_flatten(joinpath(_TP_DIR, "variable_map.esm"))
-        _, e = _tp_equation(flat, "Chem.e")
+        _, e = _tp_equation(flat, _v("Chem.e"))
         @test [_tp_origins(c) for c in e] == [[(:coupling, 1)]]
-        _, o3 = _tp_equation(flat, "D(Chem.O3)/Dt")
+        _, o3 = _tp_equation(flat, _D("Chem.O3"))
         @test [_tp_origins(c) for c in o3] == [[(:component, "Chem")]]
     end
 
     @testset "a resolved time derivative keeps the referencing origin" begin
         eq, cs = _tp_equation(
             _tp_flatten(joinpath(_TP_DIR, "rhs_time_derivative.esm")),
-            "Diag.rate"
+            _v("Diag.rate")
         )
         @test [_tp_origins(c) for c in cs] == [[(:component, "Diag")]]
-        @test !occursin("D(", to_ascii(eq.rhs))
+        @test !occursin("\"op\":\"D\"", canonical_expr_json(eq.rhs))
     end
 
     @testset "the lift indexes inside each contribution and wraps their sum" begin
@@ -273,15 +280,16 @@ end
         eq, cs = only(lifted)
         @test eq.rhs isa OpExpr && eq.rhs.op == "faq"
         @test [_tp_origins(c) for c in cs] == [[(:component, c)] for c in ("Chem", "Src", "Adv")]
-        @test to_ascii(eq.rhs.expr_body) == to_ascii(EarthSciAST._fold_contributions(cs))
+        @test canonical_expr_json(eq.rhs.expr_body) ==
+            canonical_expr_json(EarthSciAST._fold_contributions(cs))
     end
 
     @testset "template expansion rewrites inside the contribution" begin
         flat = _tp_flatten(joinpath(_TP_DIR, "template_reference.esm"))
-        _, before = _tp_equation(flat, "D(Chem.O3)/Dt")
-        _, after = _tp_equation(expand_flattened_refs(flat), "D(Chem.O3)/Dt")
+        _, before = _tp_equation(flat, _D("Chem.O3"))
+        _, after = _tp_equation(expand_flattened_refs(flat), _D("Chem.O3"))
         @test [_tp_origins(c) for c in after] == [_tp_origins(c) for c in before]
-        @test !occursin("<", to_ascii(after[1].expr))
+        @test !occursin("apply_expression_template", canonical_expr_json(after[1].expr))
     end
 
     @testset "a multiplicative couple scales the tendency, not a later bare definition" begin
@@ -301,7 +309,7 @@ end
             eqs, cs, "x", m, "*", C;
             owners = ["A", "A"], states = Dict("x" => nothing), components = ["A"]
         )
-        @test to_ascii(eqs[1].rhs) == to_ascii(OpExpr("*", ASTExpr[f, m]))
+        @test canonical_expr_json(eqs[1].rhs) == canonical_expr_json(OpExpr("*", ASTExpr[f, m]))
         @test [_tp_origins(c) for c in cs[1]] == [[(:component, "A"), (:coupling, 0)]]
         @test eqs[2].rhs === g
         @test [_tp_origins(c) for c in cs[2]] == [[(:component, "A")]]
@@ -317,12 +325,13 @@ end
 
     _tp_template_flat() = _tp_flatten(joinpath(_TP_DIR, "template_reference.esm"))
     _tp_index(flat, lhs) = only(
-        i for (i, eq) in enumerate(flat.equations) if to_ascii(eq.lhs) == lhs
+        i for (i, eq) in enumerate(flat.equations)
+            if canonical_expr_json(eq.lhs) == canonical_expr_json(lhs)
     )
 
     @testset "an edited right-hand side survives a pass that rebuilds from the list" begin
         flat = _tp_template_flat()
-        i = _tp_index(flat, "D(Chem.O3)/Dt")
+        i = _tp_index(flat, _D("Chem.O3"))
         authors = _tp_origins(
             Contribution(
                 flat.equations[i].rhs,
@@ -332,19 +341,19 @@ end
         eq = flat.equations[i]
         flat.equations[i] = Equation(eq.lhs, OpExpr("+", ASTExpr[eq.rhs, NumExpr(2.5)]))
         expanded = expand_flattened_refs(flat)
-        rhs = to_ascii(expanded.equations[i].rhs)
+        rhs = canonical_expr_json(expanded.equations[i].rhs)
         @test occursin("2.5", rhs)
-        @test !occursin("<", rhs)
+        @test !occursin("apply_expression_template", rhs)
         cs = equation_contributions(expanded)[i]
         # The stale list collapses to the current body, keeping its authors.
         @test length(cs) == 1
         @test _tp_origins(cs[1]) == authors
-        @test to_ascii(cs[1].expr) == rhs
+        @test canonical_expr_json(cs[1].expr) == rhs
     end
 
     @testset "an emptied list is one contribution with no author" begin
         flat = _tp_template_flat()
-        i = _tp_index(flat, "D(Chem.O3)/Dt")
+        i = _tp_index(flat, _D("Chem.O3"))
         empty!(flat.equation_contributions[i])
         expanded = expand_flattened_refs(flat)
         cs = equation_contributions(expanded)[i]
