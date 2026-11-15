@@ -10,7 +10,13 @@
  * order. {@link fromPlain} and {@link toPlain} convert at the public boundary.
  */
 
-import { floatLit, intLit, isNumericLiteral } from '../numeric-literal.js'
+import {
+  exactInteger,
+  floatLit,
+  intLit,
+  intLitExact,
+  isNumericLiteral,
+} from '../numeric-literal.js'
 
 /**
  * A JSON number in canonical form (`Esm.Document.JNum`).
@@ -211,6 +217,9 @@ export function fromPlain(v: unknown): Json {
   }
   if (typeof v === 'bigint') return jint(v)
   if (isNumericLiteral(v)) {
+    // An integer token past 2^53 in Int64 is that integer, not its rounded value.
+    const z = exactInteger(v)
+    if (z !== undefined && inInt64(z)) return jint(z)
     const n = jnumOfFloat(v.value)
     return n === undefined ? JNULL : jnum(n)
   }
@@ -229,7 +238,8 @@ export function fromPlain(v: unknown): Json {
  * A document value as a plain JSON value. Numbers are plain `number`s, or, with
  * `tagged`, `NumericLiteral` leaves: an integer is an int literal and a decimal a
  * float literal, so `1.0e19` (integral, outside Int64) stays a float. An integer
- * past 2^53 keeps only the nearest binary64 (JavaScript has no exact form).
+ * past 2^53 is, as a plain number, the nearest binary64 (JavaScript has no
+ * exact form); as an int literal it keeps the exact integer (`exactInteger`).
  */
 export function toPlain(j: Json, tagged: boolean): unknown {
   switch (j.t) {
@@ -247,7 +257,7 @@ export function toPlain(j: Json, tagged: boolean): unknown {
       // the document readers refuse it before converting.)
       if (f === 0) return tagged ? intLit(0) : 0
       if (!tagged) return f
-      return j.n.k === 'int' ? intLit(f) : floatLit(f)
+      return j.n.k === 'int' ? intLitExact(j.n.v) : floatLit(f)
     }
     case 'arr':
       return j.xs.map((x) => toPlain(x, tagged))

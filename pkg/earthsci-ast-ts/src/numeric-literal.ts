@@ -51,12 +51,42 @@ export function floatLit(value: number): NumericLiteral {
   return makeTagged('float', value)
 }
 
-function makeTagged(kind: 'int' | 'float', value: number): TaggedNumericLiteral {
-  return Object.freeze({
+/**
+ * An int literal of the exact integer `z`. Its `value` is the nearest binary64;
+ * when that is not `z` (past 2^53), `exactInteger` still gives `z`, and the
+ * serializers write `z`.
+ */
+export function intLitExact(z: bigint): NumericLiteral {
+  return makeTagged('int', Number(z), z)
+}
+
+const EXACT_INTEGER = Symbol.for('@earthsciml/ast.NumericLiteral.exactInteger')
+
+/**
+ * The exact integer a literal was written as, when its `value` (a binary64)
+ * does not hold it: an integer token past 2^53 read by `losslessJsonParse`
+ * (`9223372036854775807`, whose `value` is 2^63), or an `intLitExact`.
+ * `undefined` for every other literal, whose `value` is exact.
+ *
+ * Canonical forms decide from this, not from the rounded `value`, whether an
+ * integer token is in Int64 (CONFORMANCE §5.5.3.1).
+ */
+export function exactInteger(x: NumericLiteral): bigint | undefined {
+  return (x as { [EXACT_INTEGER]?: bigint })[EXACT_INTEGER]
+}
+
+function makeTagged(kind: 'int' | 'float', value: number, exact?: bigint): TaggedNumericLiteral {
+  const lit = {
     kind,
     value,
     [NUMERIC_LITERAL_TAG]: true as const,
-  })
+  }
+  // Kept out of enumeration (and so out of structural equality): two literals
+  // with one `kind` and `value` compare equal as before.
+  if (exact !== undefined && !(Number.isInteger(value) && BigInt(value) === exact)) {
+    Object.defineProperty(lit, EXACT_INTEGER, { value: exact })
+  }
+  return Object.freeze(lit)
 }
 
 export function isNumericLiteral(x: unknown): x is NumericLiteral {
@@ -109,7 +139,8 @@ export class LosslessJsonParseError extends EsmDiagnosticError {
  *
  * Integer-grammar tokens outside the safe-integer range fall back to
  * `float` kind to avoid silent precision loss, matching the Go
- * binding's `normalizeJSONNumber` behavior.
+ * binding's `normalizeJSONNumber` behavior; `exactInteger` gives the
+ * token's exact integer.
  */
 export function losslessJsonParse(text: string): unknown {
   const parser = new Parser(text)
@@ -318,9 +349,10 @@ class Parser {
     }
     if (isFloat) return makeTagged('float', value)
     // JSON-integer grammar. Fall back to float if outside safe-integer
-    // range to avoid silent precision loss.
+    // range to avoid silent precision loss; the token's exact integer stays
+    // on the literal (`exactInteger`), for the canonical forms to decide by.
     if (Number.isSafeInteger(value)) return makeTagged('int', value)
-    return makeTagged('float', value)
+    return makeTagged('float', value, BigInt(token))
   }
 
   expect(ch: string): void {
@@ -435,11 +467,11 @@ export function formatIntToken(value: number, path: string): string {
     // Integer nodes cannot hold negative zero (RFC §5.4.6).
     throw new TypeError(`int NumericLiteral cannot hold -0 at ${path}`)
   }
-  // Emit as plain decimal — JS toString on finite integers in the
-  // safe-integer range produces the JSON-integer grammar already.
-  // For out-of-safe-range floats that ended up tagged int, we still
-  // defensively drop any exponent.
-  const s = String(value)
+  // Emit as plain decimal: the exact integer the binary64 holds. Past the
+  // safe-integer range `String` would write the shortest round-trip digits
+  // instead (-2^63 as -9223372036854776000, outside Int64); from 1e21 it
+  // writes an exponent, which the guard below refuses.
+  const s = Math.abs(value) < 1e21 ? BigInt(value).toString() : String(value)
   if (s.includes('.') || s.includes('e') || s.includes('E')) {
     throw new TypeError(`int NumericLiteral produced non-integer token ${s} at ${path}`)
   }
@@ -452,7 +484,10 @@ export function formatIntToken(value: number, path: string): string {
  */
 export function formatNumericLiteral(lit: NumericLiteral, path: string): string {
   const { kind, value } = lit
-  if (kind === 'int') return formatIntToken(value, path)
+  if (kind === 'int') {
+    const exact = exactInteger(lit)
+    return exact === undefined ? formatIntToken(value, path) : exact.toString()
+  }
   if (!Number.isFinite(value)) throw new CanonicalNonfiniteError(value, path)
   return formatFloatToken(value)
 }

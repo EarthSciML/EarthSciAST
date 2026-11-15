@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { canonicalizeDocument } from './canonicalize.js'
-import { isIntLit, isNumericLiteral, losslessJsonParse } from './numeric-literal.js'
+import { printMarkdown } from './document/index.js'
+import {
+  exactInteger,
+  isFloatLit,
+  isIntLit,
+  isNumericLiteral,
+  losslessJsonParse,
+  losslessJsonStringify,
+  type NumericLiteral,
+} from './numeric-literal.js'
 import { readFixture } from './test-helpers.js'
 
 const read = (name: string): Record<string, unknown> =>
@@ -55,6 +64,42 @@ describe('document-level canonical form, numbers by kind', () => {
       expect(typed(got, false)).toEqual(typed(fixture.expected, true))
     })
   }
+})
+
+describe('canonicalizeDocument integers past 2^53', () => {
+  // As a binary64, 9223372036854775807 (Int64 max) and 9223372036854775808 are
+  // both 2^63; the integer written decides which is in Int64, as in the other
+  // bindings.
+  const text =
+    '{"max": 9223372036854775807, "past": 9223372036854775808, "min": -9223372036854775808}'
+  const out = canonicalizeDocument(losslessJsonParse(text)) as Record<string, NumericLiteral>
+
+  it('keeps Int64 max an integer and makes 2^63 a float', () => {
+    expect(isIntLit(out.max)).toBe(true)
+    expect(exactInteger(out.max)).toBe(9223372036854775807n)
+    expect(isFloatLit(out.past)).toBe(true)
+    expect(isIntLit(out.min)).toBe(true)
+    expect(out.min.value).toBe(-(2 ** 63))
+  })
+
+  it('writes the integer as it was written', () => {
+    expect(losslessJsonStringify(out)).toBe(
+      '{"max":9223372036854775807,"past":9223372036854776000.0,"min":-9223372036854775808}',
+    )
+    const md = printMarkdown({
+      esm: '2.3.0',
+      metadata: { name: 'm' },
+      models: {
+        M: {
+          variables: {
+            k: { type: 'parameter', default: losslessJsonParse('9223372036854775807') },
+          },
+          equations: [],
+        },
+      },
+    })
+    expect(md).toContain('default=9223372036854775807')
+  })
 })
 
 describe('canonicalizeDocument keys', () => {

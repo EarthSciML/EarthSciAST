@@ -13,7 +13,9 @@
 import type { Expr } from './types.js'
 import {
   CanonicalizeError,
+  exactInteger,
   intLit,
+  intLitExact,
   floatLit,
   isFloatLit,
   isIntLit,
@@ -425,7 +427,7 @@ function emitJson(e: Expr | unknown): string {
   if (isIntLit(e)) {
     // Value is guaranteed integer-valued and finite by intLit(); the shared
     // token emitter re-checks defensively.
-    return formatIntToken(e.value, '$')
+    return exactInteger(e)?.toString() ?? formatIntToken(e.value, '$')
   }
   if (isFloatLit(e)) {
     if (!Number.isFinite(e.value)) throw new CanonicalizeError(E_CANONICAL_NONFINITE)
@@ -676,10 +678,23 @@ function canonicalDocumentNumber(value: number): number {
   return Object.is(value, -0) ? 0 : value
 }
 
+const INT64_MIN = -(2n ** 63n)
+const INT64_MAX = 2n ** 63n - 1n
+
 /** Every number of a JSON value in canonical form, at every depth. */
 function canonicalDocumentNumbers(value: unknown): unknown {
   if (typeof value === 'number') return canonicalDocumentNumber(value)
   if (isNumericLiteral(value)) {
+    // An integer token past 2^53 is decided by the integer written, not by its
+    // rounded value: `9223372036854775807` (Int64 max) is an integer although
+    // its binary64 is 2^63.
+    const exact = exactInteger(value)
+    if (exact !== undefined) {
+      if (exact >= INT64_MIN && exact <= INT64_MAX) {
+        return isIntLit(value) ? value : intLitExact(exact)
+      }
+      return isFloatLit(value) ? value : floatLit(value.value)
+    }
     const v = canonicalDocumentNumber(value.value)
     const integral = Number.isInteger(v) && v >= -INT64_BOUND && v < INT64_BOUND
     if (integral) return isIntLit(value) && v === value.value ? value : intLit(v)
