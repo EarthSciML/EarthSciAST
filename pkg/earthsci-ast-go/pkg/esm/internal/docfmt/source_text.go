@@ -98,6 +98,3 @@ func textAfterS(p string, s []rune) ([]rune, bool) {
 	}
 	return r, true
 }
-
-// textString is `String.ofList`.
-func textString(cs []rune) string { return string(cs) }

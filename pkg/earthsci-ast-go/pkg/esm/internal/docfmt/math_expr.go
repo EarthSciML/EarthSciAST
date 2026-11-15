@@ -217,7 +217,7 @@ func exprNumOk(n JNum) bool { return n.Wfb() }
 // exprKeysSorted is `Math.keysSorted`: object keys strictly increasing.
 func exprKeysSorted(kvs Obj) bool {
 	for i := 1; i < len(kvs); i++ {
-		if !(kvs[i-1].K < kvs[i].K) {
+		if kvs[i-1].K >= kvs[i].K {
 			return false
 		}
 	}

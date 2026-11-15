@@ -200,7 +200,7 @@ func typPretty(p *Tok, t1, t2 Tok) bool {
 // of an index.
 func typSp(p *Tok, t1, t2 Tok) bool {
 	return typNeedSpace(t1, t2) ||
-		(typPretty(p, t1, t2) && !t2.isKw(KwLp) && !(t2.isKw(KwLbk) && typAtomEnd(t1)))
+		(typPretty(p, t1, t2) && !t2.isKw(KwLp) && (!t2.isKw(KwLbk) || !typAtomEnd(t1)))
 }
 
 // typRender is `Typst.render` (`renderAux`).
@@ -480,7 +480,7 @@ func typLex(cs []rune) ([]Tok, bool) {
 	var prev rune
 	hasPrev := false
 	for {
-		hasPrev2 := hasPrev && !(len(cs) > 0 && typIsWsT(cs[0]))
+		hasPrev2 := hasPrev && (len(cs) == 0 || !typIsWsT(cs[0]))
 		cs2 := typSkip(cs)
 		if len(cs2) == 0 {
 			return out, true

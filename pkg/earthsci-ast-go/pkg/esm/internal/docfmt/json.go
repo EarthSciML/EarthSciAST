@@ -141,7 +141,7 @@ func (n JNum) Wfb() bool {
 		}
 	}
 	_, integral, fits := jsonDecInt(n.Neg, ds, n.E10)
-	return !(integral && fits)
+	return !integral || !fits
 }
 
 // JsonWfb is `Json.wfb`: every number canonical, every object with distinct

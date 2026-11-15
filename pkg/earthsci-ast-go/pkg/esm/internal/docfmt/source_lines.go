@@ -29,7 +29,7 @@ func linesFirstCrlf(s []rune) bool {
 func linesUnCrlf(s []rune) []rune {
 	out := make([]rune, 0, len(s))
 	for i, c := range s {
-		if !(c == '\r' && i+1 < len(s) && s[i+1] == '\n') {
+		if c != '\r' || i+1 >= len(s) || s[i+1] != '\n' {
 			out = append(out, c)
 		}
 	}

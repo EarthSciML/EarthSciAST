@@ -765,7 +765,7 @@ func skMetaOf(caps Caps, v Json, present bool) (es Obj, hasD bool, d string, ok 
 	dv, dp := exprLook("description", kvs)
 	d, hasD = skDescOf(caps, dv, dp)
 	for _, kv := range kvs {
-		if !(kv.K == "description" && hasD) {
+		if kv.K != "description" || !hasD {
 			es = append(es, kv)
 		}
 	}
@@ -985,12 +985,6 @@ func skMathPart(caps Caps, s *Sym, kvs Obj, f string) ([]MC, KV, bool) {
 		return ms, KV{}, false
 	}
 	return nil, KV{f, v}, true
-}
-
-// skCompSym is `Source.compSym`.
-func skCompSym(root Obj, rt []TemplateParams, k Kind, caps Caps, name string, kvs Obj) *Sym {
-	base := skCompBase(caps, k, name, kvs)
-	return skSymWith(root, rt, &base, skTemplatesOf(lookV("expression_templates", kvs)))
 }
 
 // skCompOf is `Source.compOf`: a component, with its math fields decided.

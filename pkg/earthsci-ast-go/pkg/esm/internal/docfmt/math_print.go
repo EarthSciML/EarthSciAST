@@ -968,11 +968,11 @@ func prSubOk(s *Sym, base Json, is []Json) bool {
 		switch x := is[0].(type) {
 		case string:
 			xc := []rune(x)
-			return !(len(exprSplitDots(xc)) == 1 && exprIsFormula(xc))
+			return len(exprSplitDots(xc)) != 1 || !exprIsFormula(xc)
 		case JNum:
 			if !x.Dec {
 				nm := b + "_" + strconv.FormatInt(x.I, 10)
-				return !(x.I >= 0 && slices.Contains(s.Names, nm))
+				return x.I < 0 || !slices.Contains(s.Names, nm)
 			}
 		}
 	}
@@ -1422,7 +1422,7 @@ func prFaqOk(f FaqForm) bool {
 		if !exprNameOk(kv.K) || !prRangeOk(kv.V) {
 			return false
 		}
-		if !(slices.Contains(names, kv.K) || prOccursJ(kv.K, f.expr) || (f.hasFlt && prOccursJ(kv.K, f.filter))) {
+		if !slices.Contains(names, kv.K) && !prOccursJ(kv.K, f.expr) && (!f.hasFlt || !prOccursJ(kv.K, f.filter)) {
 			return false
 		}
 	}

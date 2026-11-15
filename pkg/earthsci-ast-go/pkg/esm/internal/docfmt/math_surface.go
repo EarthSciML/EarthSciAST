@@ -24,7 +24,7 @@ func surfIsBin(t Tok) bool {
 // surfSciSplit is `Math.sciSplit`: the mantissa (with its sign) and exponent
 // of a number printed in scientific notation.
 func surfSciSplit(n JNum) ([]rune, int64, bool) {
-	if !n.Dec || len(n.Digits) == 0 || !(n.E10 < -4 || n.E10 > 5) {
+	if !n.Dec || len(n.Digits) == 0 || (n.E10 >= -4 && n.E10 <= 5) {
 		return nil, 0, false
 	}
 	var m []rune

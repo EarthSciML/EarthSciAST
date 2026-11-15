@@ -100,14 +100,6 @@ func rxnSideOk(r *RSurf, has bool, ts []Term) bool {
 	return true
 }
 
-// rxnAfter is `Source.after`: the text after the prefix p, when it is one.
-func rxnAfter(p, s []rune) ([]rune, bool) {
-	if textPre(p, s) {
-		return s[len(p):], true
-	}
-	return nil, false
-}
-
 // rxnIdChar is `Source.idChar`.
 func rxnIdChar(c rune) bool { return strIsIdentChar(c) || c == '-' || c == '.' || c == ':' }
 

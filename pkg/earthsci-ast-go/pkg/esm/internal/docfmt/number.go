@@ -47,24 +47,6 @@ func numReadDigits(input []rune) ([]byte, []rune) {
 	return ds, input[n:]
 }
 
-// numParseNat is `Number.parseNat` (ok false also when the value overflows
-// Int64).
-func numParseNat(input []rune) (int64, []rune, bool) {
-	ds, r := numReadDigits(input)
-	if len(ds) == 0 {
-		return 0, nil, false
-	}
-	u, ok := jsonDigitsVal(ds)
-	if !ok {
-		return 0, nil, false
-	}
-	z, ok := jsonSigned(false, u)
-	if !ok {
-		return 0, nil, false
-	}
-	return z, r, true
-}
-
 // numParseInt is `Number.parseInt`: an optional `-`, then digits.
 func numParseInt(input []rune) (int64, []rune, bool) {
 	neg := len(input) > 0 && input[0] == '-'

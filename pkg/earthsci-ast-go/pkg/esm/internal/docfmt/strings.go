@@ -61,7 +61,7 @@ func strHex4Val(a, b, c, d rune) (uint32, bool) {
 	vb, ok2 := strHexVal(b)
 	vc, ok3 := strHexVal(c)
 	vd, ok4 := strHexVal(d)
-	if !(ok1 && ok2 && ok3 && ok4) {
+	if !ok1 || !ok2 || !ok3 || !ok4 {
 		return 0, false
 	}
 	return va*4096 + vb*256 + vc*16 + vd, true
@@ -227,15 +227,6 @@ func strReadIdent(input []rune) ([]rune, []rune) {
 		n++
 	}
 	return input[:n], input[n:]
-}
-
-// strSpaces is `Strings.spaces`.
-func strSpaces(n int) []rune {
-	out := make([]rune, n)
-	for i := range out {
-		out[i] = ' '
-	}
-	return out
 }
 
 // strBareKey is `Strings.bareKey`: a key prints bare when it is an identifier
