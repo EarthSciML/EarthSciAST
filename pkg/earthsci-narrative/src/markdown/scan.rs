@@ -425,9 +425,11 @@ fn scan_line(line: &str, file: &str, line_no: u32, text: &mut String, out: &mut 
             continue;
         }
         if bytes[at] != b':' || line[at..].starts_with("::") {
-            let next = line[at + 1..]
+            // Past the whole character, which may be more than one byte.
+            let step = line[at..].chars().next().map_or(1, char::len_utf8);
+            let next = line[at + step..]
                 .find([':', '`'])
-                .map_or(line.len(), |p| at + 1 + p);
+                .map_or(line.len(), |p| at + step + p);
             text.push_str(&line[at..next]);
             at = next;
             continue;
@@ -748,6 +750,13 @@ Done.
 ";
         assert!(directives(source).is_empty());
         assert_eq!(text(source), source);
+    }
+
+    #[test]
+    fn a_line_may_start_with_any_character() {
+        let source = "— a dash, then :var[$N$]{}.\n";
+        assert_eq!(directives(source)[0].name, "var");
+        assert_eq!(text(source), "— a dash, then .\n");
     }
 
     #[test]
