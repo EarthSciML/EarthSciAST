@@ -479,6 +479,60 @@
    "named_exclusions": []
   },
   {
+   "id": "ifelse_calendar_scalar_static",
+   "path": "fixtures/ifelse_calendar_scalar_static.esm",
+   "model": "IfelseCalendarScalar",
+   "golden": "golden/ifelse_calendar_scalar_static.json",
+   "tags": [
+    "ifelse",
+    "scalar-condition",
+    "broadcast",
+    "undeclared-shape",
+    "expression-templates",
+    "calendar",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "ifelse_calendar_scalar_dynamic",
+   "path": "fixtures/ifelse_calendar_scalar_dynamic.esm",
+   "model": "IfelseCalendarScalar",
+   "golden": "golden/ifelse_calendar_scalar_dynamic.json",
+   "tags": [
+    "ifelse",
+    "scalar-condition",
+    "broadcast",
+    "undeclared-shape",
+    "expression-templates",
+    "calendar",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
    "id": "guarded_out_of_range_static",
    "path": "fixtures/guarded_out_of_range_static.esm",
    "model": "GuardedOutOfRange",

@@ -502,7 +502,7 @@
       "class": "semantic",
       "phase": 3,
       "area": "arrays",
-      "note": "The array branch shape of an unshaped mixed ifelse is fixed at build from operand shapes: declared shapes, the shapes bare definitions give, an index with all-scalar subscripts or a faq with no output indices counted as scalar (table lookups), and an unshaped data-fed parameter's data shape. Every array on the value path must share one shape; any other whole-operand op or two different shapes and the rule does not apply."
+      "note": "The array branch shape of an unshaped mixed ifelse is fixed at build from operand shapes: declared shapes, the shapes bare definitions give, an index with all-scalar subscripts or a faq with no output indices counted as scalar (table lookups), a number written as a const node and true/false counted as scalar (the calendar templates), and an unshaped data-fed parameter's data shape. Every array on the value path must share one shape; any other whole-operand op or two different shapes and the rule does not apply."
     },
     {
       "id": "spec.4.5.enum-args-match-declared",

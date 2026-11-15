@@ -1,0 +1,600 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ifelse_calendar_scalar_static",
+  "description": "Observeds with NO declared shape, `X = ifelse(lev < 2, F * H, 0.0)`, whose array arm multiplies a `cell`-shaped parameter by a scalar computed by a calendar template of esm:std/calendar.esm (`H = hour(t_inst)`, `Mo = month(t_inst)`), or by a scalar `const` node directly. The calendar bodies compare against unit-bearing `const` nodes (esm-spec §4.8.5); a scalar `const` is a scalar literal, so the build gives `X` the `cell` shape before it evaluates anything (esm-spec §4.3.4) and the scalar arm fills every element, whichever arm the runtime scalar condition takes. Both arm orders, condition true and false (the NEI2016 emission observeds as reseact builds them, `days_in_month` from `month(t)` and `diurnal_factor` from `hour(t)`; issue #664).",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "cell": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "IfelseCalendarScalar": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/calendar.esm",
+     "only": [
+      "hour",
+      "month"
+     ]
+    }
+   ],
+   "variables": {
+    "F": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.0,
+      2.0,
+      3.0
+     ],
+     "shape": [
+      "cell"
+     ]
+    },
+    "lev_on": {
+     "type": "parameter",
+     "units": "1",
+     "default": 1.0
+    },
+    "lev_off": {
+     "type": "parameter",
+     "units": "1",
+     "default": 3.0
+    },
+    "t_inst": {
+     "type": "parameter",
+     "units": "s",
+     "default": 3466800.0,
+     "description": "1970-02-10T03:00:00Z: hour 3 of day 41, month 2."
+    },
+    "H": {
+     "type": "unknown",
+     "units": "1",
+     "description": "hour(t_inst) = 3, from esm:std/calendar.esm"
+    },
+    "Mo": {
+     "type": "unknown",
+     "units": "1",
+     "description": "month(t_inst) = 2, from esm:std/calendar.esm"
+    },
+    "X_on": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "R_on": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "X_off": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "R_off": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "X_rev_on": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "R_rev_on": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "X_rev_off": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "R_rev_off": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "X_const_on": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "R_const_on": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "X_const_off": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "R_const_off": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "H",
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "hour",
+      "bindings": {
+       "t": "t_inst"
+      }
+     }
+    },
+    {
+     "lhs": "Mo",
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "month",
+      "bindings": {
+       "t": "t_inst"
+      }
+     }
+    },
+    {
+     "lhs": "X_on",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       {
+        "op": "*",
+        "args": [
+         "F",
+         "H"
+        ]
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "R_on",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_on",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "X_off",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_off",
+         2.0
+        ]
+       },
+       {
+        "op": "*",
+        "args": [
+         "F",
+         "H"
+        ]
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "R_off",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_off",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "X_rev_on",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": ">=",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       0.0,
+       {
+        "op": "*",
+        "args": [
+         "F",
+         "Mo"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "R_rev_on",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_rev_on",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "X_rev_off",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": ">=",
+        "args": [
+         "lev_off",
+         2.0
+        ]
+       },
+       0.0,
+       {
+        "op": "*",
+        "args": [
+         "F",
+         "Mo"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "R_rev_off",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_rev_off",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "X_const_on",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       {
+        "op": "*",
+        "args": [
+         "F",
+         {
+          "op": "const",
+          "args": [],
+          "value": 0.5
+         }
+        ]
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "R_const_on",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_const_on",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "X_const_off",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_off",
+         2.0
+        ]
+       },
+       {
+        "op": "*",
+        "args": [
+         "F",
+         {
+          "op": "const",
+          "args": [],
+          "value": 0.5
+         }
+        ]
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "R_const_off",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_const_off",
+        "i"
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "R_on",
+       "time": 0.0,
+       "expected": 3.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_on",
+       "time": 0.0,
+       "expected": 6.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_on",
+       "time": 0.0,
+       "expected": 9.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_rev_on",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_rev_on",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_rev_on",
+       "time": 0.0,
+       "expected": 6.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_rev_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_rev_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_rev_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_const_on",
+       "time": 0.0,
+       "expected": 0.5,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_const_on",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_const_on",
+       "time": 0.0,
+       "expected": 1.5,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_const_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_const_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_const_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 3
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
