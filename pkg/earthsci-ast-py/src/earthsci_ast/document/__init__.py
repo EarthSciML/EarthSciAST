@@ -57,9 +57,11 @@ class DocumentFormat(str, Enum):
     TYPST = "typst"
 
 
-#: Python frames per nesting level of an expression in the readers and printers;
-#: the limit is raised (never lowered) to fit a deep expression.
-_RECURSION_FLOOR = 20000
+#: The recursive readers spend about ten Python frames per nesting level of an
+#: expression (one per precedence level), so the interpreter's default limit of
+#: 1000 caps a readable expression near 90 levels. The limit is raised to this
+#: floor (never lowered), which every document of the corpus is far below.
+_RECURSION_FLOOR = 10000
 
 
 def _deep() -> None:
