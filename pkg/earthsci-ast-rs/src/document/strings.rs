@@ -218,9 +218,13 @@ pub fn parse_key(
 }
 
 /// `Strings.nonKeyHeads`.
+// Ported with the module; nothing outside the Lean proofs calls it yet.
+#[allow(dead_code)]
 pub const NON_KEY_HEADS: &[char] = &[')', ':', '-', '?', ' ', '\n', '\t', '\r'];
 
 /// `Strings.nonNumHeads`.
+// Ported with the module; nothing outside the Lean proofs calls it yet.
+#[allow(dead_code)]
 pub const NON_NUM_HEADS: &[char] = &[
     '(', ')', '"', 'n', 't', 'f', ':', '[', '{', '?', ' ', '\n', '\t', '\r',
 ];

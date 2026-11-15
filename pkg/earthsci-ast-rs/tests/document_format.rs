@@ -265,11 +265,12 @@ fn document_format_matches_lean() {
                 failures.push(format!("{name}: esm-lean {print_mode} refused"));
                 continue;
             };
+            // The Rust text is kept beside the Lean one, for the renderer checks.
+            if let Some(t) = &rust_text {
+                std::fs::write(stem.with_extension(format!("rust.{ext}")), t).ok();
+            }
             if rust_text.as_deref() != Some(lean_text.as_str()) {
                 failures.push(format!("{name}: {print_mode} differs"));
-                if let Some(t) = &rust_text {
-                    std::fs::write(stem.with_extension(format!("rust.{ext}")), t).ok();
-                }
             }
             let text_path = stem.with_extension(ext);
             std::fs::write(&text_path, &lean_text).expect("write text");

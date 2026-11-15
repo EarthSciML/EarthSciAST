@@ -22,9 +22,10 @@ pub fn digit_char(d: u8) -> char {
     char::from(b'0' + d)
 }
 
-/// `Number.charDigit`.
+/// `Number.charDigit` (Lean's natural subtraction: `0` below `'0'`). Callers
+/// pass digit characters.
 pub fn char_digit(c: char) -> u8 {
-    (c as u32 - 48) as u8
+    (c as u32).saturating_sub(48) as u8
 }
 
 /// `Number.natDigits`: the decimal digits, `[0]` for zero.
@@ -128,6 +129,7 @@ pub fn print(n: &JNum) -> Vec<char> {
 }
 
 /// [`print`] as a `String`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn print_string(n: &JNum) -> String {
     print(n).into_iter().collect()
 }

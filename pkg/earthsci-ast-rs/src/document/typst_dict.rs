@@ -210,8 +210,11 @@ fn p_items(mut input: &[char]) -> Option<(Vec<Json>, &[char])> {
     }
 }
 
+/// Dictionary entries, in order.
+type Entries = Vec<(String, Json)>;
+
 /// `TypstDict.pEntries`: dictionary entries, at the first key.
-fn p_entries(mut input: &[char]) -> Option<(Vec<(String, Json)>, &[char])> {
+fn p_entries(mut input: &[char]) -> Option<(Entries, &[char])> {
     let mut out = Vec::new();
     loop {
         let (k, r) = parse_key(true, reserved, input)?;
@@ -229,6 +232,7 @@ fn p_entries(mut input: &[char]) -> Option<(Vec<(String, Json)>, &[char])> {
 
 /// `TypstDict.decode`: whitespace, the value, whitespace, end of input. The
 /// value must be well formed.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn decode(s: &[char]) -> Option<Json> {
     let (v, r) = p_val(skip_ws(s))?;
     if skip_ws(r).is_empty() && v.wfb() {

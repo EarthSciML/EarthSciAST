@@ -330,6 +330,8 @@ pub fn typst_factor(f: &Factor) -> Vec<char> {
 
 /// `Esm.Units.typst`: the Typst form of a canonical factor list (`1` when
 /// empty).
+// Ported with the module; nothing outside the Lean proofs calls it yet.
+#[allow(dead_code)]
 pub fn typst(l: &[Factor]) -> Vec<char> {
     if l.is_empty() {
         return vec!['1'];
@@ -378,6 +380,8 @@ pub fn p_t_factor(cs: &[char]) -> Option<(Factor, &[char])> {
 }
 
 /// `Esm.Units.parseTypst`: a Typst unit back to its two-sided factor list.
+// Ported with the module; nothing outside the Lean proofs calls it yet.
+#[allow(dead_code)]
 pub fn parse_typst(s: &[char]) -> Option<Vec<Factor>> {
     if s == ['1'] {
         return Some(Vec::new());

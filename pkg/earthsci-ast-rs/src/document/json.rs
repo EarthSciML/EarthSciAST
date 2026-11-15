@@ -107,6 +107,7 @@ impl Json {
     }
 
     /// Shorthand for an integer `Json::Num`.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn int(z: i128) -> Json {
         Json::Num(JNum::Int(z))
     }
@@ -118,11 +119,6 @@ pub fn keys_distinct(kvs: &[(String, Json)]) -> bool {
     kvs.iter().all(|(k, _)| seen.insert(k.as_str()))
 }
 
-/// `Math.jbeq`: structural equality, key order included (it is part of the value).
-pub fn jbeq(a: &Json, b: &Json) -> bool {
-    a == b
-}
-
 /// The canonical number of a finite `f64` (§5.5.3.1): an integral value in
 /// `Int64` is the integer, any other value its shortest round-trip digits.
 pub fn jnum_of_f64(f: f64) -> Option<JNum> {
@@ -132,7 +128,8 @@ pub fn jnum_of_f64(f: f64) -> Option<JNum> {
     if f == 0.0 {
         return Some(JNum::Int(0));
     }
-    if f.fract() == 0.0 && f >= -9_223_372_036_854_775_808.0 && f < 9_223_372_036_854_775_808.0 {
+    if f.fract() == 0.0 && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f)
+    {
         return Some(JNum::Int(f as i64 as i128));
     }
     let d = shortest_digits(f);
@@ -239,8 +236,10 @@ pub fn sort_keys(j: &Json) -> Json {
     }
 }
 
-/// Compact canonical JSON text (`Adapter.Doc.render`): entries in their order,
+/// Compact canonical JSON text (`Adapter.Doc.render`), as `esm-lean` prints a
+/// parsed document; used by the tests: entries in their order,
 /// canonical numbers, strings quoted with `\uXXXX` escapes.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn render(j: &Json) -> String {
     let mut out = String::new();
     render_into(j, &mut out);

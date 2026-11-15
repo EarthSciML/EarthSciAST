@@ -42,6 +42,8 @@ pub fn split_dots(cs: &[char]) -> Vec<Vec<char>> {
 }
 
 /// `Math.joinDots`.
+// Ported with the module; nothing outside the Lean proofs calls it yet.
+#[allow(dead_code)]
 pub fn join_dots(ss: &[Vec<char>]) -> Vec<char> {
     let mut out = Vec::new();
     for (i, s) in ss.iter().enumerate() {
