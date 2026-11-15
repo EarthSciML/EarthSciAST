@@ -1,6 +1,7 @@
 //! `earthsci-document-format-adapter-rust` — the Rust batch driver of the
-//! document-format gate (`scripts/run-document-format-gate.py`,
-//! CONFORMANCE_SPEC.md §5.59).
+//! document formats: it generates the reader limits fixture
+//! (`scripts/gen-document-format-limits.py`) and is the Rust participant of the
+//! cross-binding gate (`scripts/run-document-format-gate.py`).
 //!
 //! Invoked as `earthsci-document-format-adapter-rust print|parse <manifest> <out>`.
 //! `print` writes each corpus document's canonical form and both printed texts;

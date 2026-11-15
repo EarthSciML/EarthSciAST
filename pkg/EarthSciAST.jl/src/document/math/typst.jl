@@ -150,14 +150,6 @@ function atom_end(t::Tok)
     return iskw(t, KRp) || iskw(t, KRbk)
 end
 
-const HEAD_KWS = (
-    KSqrt, KExp, KLn, KLog, KSin, KCos, KTan, KAsin, KAcos, KAtan, KSinh, KCosh, KTanh, KMin,
-    KMax, KAbs, KFloor, KCeil, KCases, KEsmnode, KCdot, KVec, KMat,
-)
-
-"""`Typst.isHead`: function names: no space before their `(`."""
-is_head(t::Tok) = t isa TOpn || (t isa TKw && t.k in HEAD_KWS)
-
 """`Typst.pretty`."""
 pretty(p, t1::Tok, t2::Tok) =
     is_bin(t1) || is_bin(t2) || iskw(t1, KComma) || iskw(t1, KColon) || iskw(t1, KSemi) ||

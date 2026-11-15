@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm/internal/unitspell"
 )
 
 func sym(names ...string) *Sym { return &Sym{Names: names} }
@@ -148,7 +150,7 @@ func TestHandWrittenJsonStrings(t *testing.T) {
 }
 
 func TestUnitsLatexAndTypstRoundTrip(t *testing.T) {
-	f := func(s string, p, q int64) Factor { return Factor{s, big.NewRat(p, q)} }
+	f := func(s string, p, q int64) Factor { return Factor{Sym: s, Exp: big.NewRat(p, q)} }
 	l := []Factor{f("cm", 3, 1), f("short_ton", 1, 3), f("K", -1, 1), f("mol", -1, 2)}
 	if lx := string(unitsLatex(l)); lx != "\\mathrm{cm^{3}\\,short\\_ton^{1/3}/(K\\,mol^{1/2})}" {
 		t.Errorf("latex: %s", lx)
@@ -170,8 +172,14 @@ func TestUnitsLatexAndTypstRoundTrip(t *testing.T) {
 
 func TestFactorsOfCanonicalSpellings(t *testing.T) {
 	for _, u := range []string{"m", "mol/(m^3*s)", "1/s", "kg*m^2/s^2", "m^(1/2)", "%", "K^(3/2)/(m*s)"} {
-		if l := prFactorsOf(u); len(l) == 0 || prSpellUnitFactors(l) != u {
+		if l := prFactorsOf(u); len(l) == 0 || unitspell.Spell(l) != u {
 			t.Errorf("%s: %v", u, l)
+		}
+	}
+	// Any spelling the binding's unit parser reads gives its normalized list.
+	for u, want := range map[string]string{"m s^-1": "m/s", "W/m²": "W/m^2", "(mol/m^3)^(1/2)*m": "m*mol^(1/2)/m^(3/2)", "kg·m/s/s": "kg*m/s^2"} {
+		if got := unitspell.Spell(prFactorsOf(u)); got != want {
+			t.Errorf("%s: %s, want %s", u, got, want)
 		}
 	}
 	for _, u := range []string{"m*m", "s*m", "1", "", "dimensionless", "m/1", "m s"} {

@@ -7,14 +7,11 @@ package docfmt
 // `and` in Typst), so one parser reads both; each surface has its own renderer
 // and lexer.
 
-import "math/big"
+import "github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm/internal/unitspell"
 
 // Factor is `Esm.Units.Factor`: a unit symbol and its (signed, rational)
 // exponent.
-type Factor struct {
-	Sym string
-	Exp *big.Rat
-}
+type Factor = unitspell.Factor
 
 // Kw is a keyword token (`Math.Kw`).
 type Kw uint8

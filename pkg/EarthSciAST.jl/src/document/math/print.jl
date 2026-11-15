@@ -824,12 +824,6 @@ function arr_form(j)
     return nothing
 end
 
-"""`Math.AForm.json`."""
-function aform_json(a::AForm)
-    a.tag === :col && return JArr(Any[n for n in a.ns])
-    return JArr(Any[JArr(Any[n for n in r]) for r in a.rs])
-end
-
 """`Math.numToks`."""
 num_toks(ns) = [Tok[TNum(n)] for n in ns]
 

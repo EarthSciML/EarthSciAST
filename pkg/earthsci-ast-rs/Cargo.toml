@@ -81,8 +81,9 @@ name = "earthsci-inline-tests-adapter-rust"
 path = "src/bin/earthsci-inline-tests-adapter-rust.rs"
 required-features = ["conformance-adapters"]
 
-# The document-format gate's batch driver (scripts/run-document-format-gate.py):
-# prints the corpus as Markdown and Typst, and reads printed texts back.
+# The document formats' batch driver: prints corpus files as Markdown and Typst,
+# and reads printed texts back (scripts/gen-document-format-limits.py, and the
+# cross-binding gate).
 [[bin]]
 name = "earthsci-document-format-adapter-rust"
 path = "src/bin/earthsci-document-format-adapter-rust.rs"

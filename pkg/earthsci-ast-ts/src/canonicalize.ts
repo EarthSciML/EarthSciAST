@@ -13,14 +13,13 @@
 import type { Expr } from './types.js'
 import {
   CanonicalizeError,
-  exactInteger,
   intLit,
-  intLitExact,
   floatLit,
   isFloatLit,
   isIntLit,
   isNumericLiteral,
   formatIntToken,
+  type NumericLiteral,
 } from './numeric-literal.js'
 import { canonicalUnitSpelling } from './unit-conversion.js'
 
@@ -427,8 +426,10 @@ function emitJson(e: Expr | unknown): string {
   if (isIntLit(e)) {
     // Value is guaranteed integer-valued and finite by intLit(); the shared
     // token emitter re-checks defensively.
-    return exactInteger(e)?.toString() ?? formatIntToken(e.value, '$')
+    return formatIntToken(e.value, '$')
   }
+  // An integer past 2^53, as `canonicalizeDocument` gives it.
+  if (typeof e === 'bigint') return e.toString()
   if (isFloatLit(e)) {
     if (!Number.isFinite(e.value)) throw new CanonicalizeError(E_CANONICAL_NONFINITE)
     return formatCanonicalFloat(e.value)
@@ -606,11 +607,13 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
  * one argument becomes unary `-`, a `pow` node with two becomes `^`, and a
  * `broadcast` of `neg` with one argument maps `-`. Every number, free-form
  * objects included, takes its canonical form (CONFORMANCE §5.5.3.1): a
- * `NumericLiteral` whose value is integral and in Int64 is an int literal
- * (`2.0` is `2`), any other a float literal, and `-0` is `0`; a plain number
+ * `NumericLiteral` or `bigint` whose value is integral and in Int64 is an
+ * integer (`2.0` is `2`): an int literal, or past 2^53 a `bigint` of the exact
+ * integer; any other is a float literal, and `-0` is `0`; a plain number
  * already holds the nearest binary64 of its token. Takes the decoded JSON
- * document (an `EsmFile` is one; plain numbers or the tagged literals of
- * `losslessJsonParse`); the input is not mutated and nothing else changes.
+ * document (an `EsmFile` is one; plain numbers, or the tagged literals and
+ * bigints of `losslessJsonParse`); the input is not mutated and nothing else
+ * changes.
  * These are the rules of Lean `Adapter.Doc.spellRules` and `Adapter.Doc.conv`.
  */
 export function canonicalizeDocument<T>(doc: T): T {
@@ -671,33 +674,43 @@ function rewriteDeprecatedDocumentOp(out: Record<string, unknown>): void {
   }
 }
 
-const INT64_BOUND = 2 ** 63
-
-/** A JSON number in canonical form (CONFORMANCE §5.5.3.1). */
-function canonicalDocumentNumber(value: number): number {
-  return Object.is(value, -0) ? 0 : value
-}
-
 const INT64_MIN = -(2n ** 63n)
 const INT64_MAX = 2n ** 63n - 1n
 
-/** Every number of a JSON value in canonical form, at every depth. */
+/**
+ * An integer in Int64 in canonical form: an int literal, or, past 2^53, where
+ * no `number` holds every integer, the `bigint` itself.
+ */
+function canonicalDocumentInt(z: bigint): NumericLiteral | bigint {
+  const v = Number(z)
+  return Number.isSafeInteger(v) ? intLit(v) : z
+}
+
+/**
+ * Every number of a JSON value in canonical form, at every depth
+ * (CONFORMANCE §5.5.3.1). A plain number stays plain (`-0` is `0`). A
+ * `NumericLiteral` or a `bigint` takes the kind of its value: an integral value
+ * in Int64 is an integer (a `bigint` past 2^53), every other value a float
+ * literal. A `bigint` is decided by the integer written, not by its rounded
+ * value: `9223372036854775807` (Int64 max) is an integer, although its binary64,
+ * 2^63, is outside Int64.
+ */
 function canonicalDocumentNumbers(value: unknown): unknown {
-  if (typeof value === 'number') return canonicalDocumentNumber(value)
+  if (typeof value === 'number') return Object.is(value, -0) ? 0 : value
+  if (typeof value === 'bigint') {
+    return value >= INT64_MIN && value <= INT64_MAX
+      ? canonicalDocumentInt(value)
+      : floatLit(Number(value))
+  }
   if (isNumericLiteral(value)) {
-    // An integer token past 2^53 is decided by the integer written, not by its
-    // rounded value: `9223372036854775807` (Int64 max) is an integer although
-    // its binary64 is 2^63.
-    const exact = exactInteger(value)
-    if (exact !== undefined) {
-      if (exact >= INT64_MIN && exact <= INT64_MAX) {
-        return isIntLit(value) ? value : intLitExact(exact)
-      }
-      return isFloatLit(value) ? value : floatLit(value.value)
+    const v = value.value
+    if (Number.isSafeInteger(v)) {
+      const z = Object.is(v, -0) ? 0 : v
+      return isIntLit(value) && Object.is(z, v) ? value : intLit(z)
     }
-    const v = canonicalDocumentNumber(value.value)
-    const integral = Number.isInteger(v) && v >= -INT64_BOUND && v < INT64_BOUND
-    if (integral) return isIntLit(value) && v === value.value ? value : intLit(v)
+    // A binary64 integer of 2^53 or more is exact; the ones below 2^63 are in Int64.
+    if (Number.isInteger(v) && v >= -(2 ** 63) && v < 2 ** 63)
+      return canonicalDocumentInt(BigInt(v))
     return isFloatLit(value) ? value : floatLit(v)
   }
   if (Array.isArray(value)) return value.map(canonicalDocumentNumbers)

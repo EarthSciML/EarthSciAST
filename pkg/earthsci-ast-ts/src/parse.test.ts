@@ -296,6 +296,14 @@ describe('Parse and Serialize', () => {
         expect((rhs.args[1] as any).value).toBe(1.5)
       })
 
+      it('canonical mode reads an integer past 2^53 as a float literal', () => {
+        const text = canonicalEsmJson.replace('"default":2', '"default":9007199254740993')
+        const canon = loadString(text, { canonical: true }) as any
+        const k = canon.models.m.variables.y.default
+        expect(isFloatLit(k)).toBe(true)
+        expect(k.value).toBe(9007199254740992)
+      })
+
       it('canonical mode still validates against the schema', () => {
         const invalid = '{"esm": "1.0.0","metadata":{"name":"x"}}' // missing models/reaction_systems
         expect(() => loadString(invalid, { canonical: true })).toThrow(SchemaValidationError)

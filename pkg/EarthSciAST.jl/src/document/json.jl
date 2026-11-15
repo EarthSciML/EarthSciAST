@@ -247,7 +247,8 @@ end
 
 """A decoded JSON value of the binding (`OrderedDict`/`Dict`/`JSON3.Object`,
 vectors, strings, numbers, `nothing`) as a document value. A non-finite number
-becomes `null`."""
+becomes `null`. A string or key that is not valid UTF-8 is not a JSON value:
+it throws an `ArgumentError`."""
 function from_value(v)
     v === nothing && return JNULL
     v isa Bool && return v
@@ -255,17 +256,22 @@ function from_value(v)
         n = jnum_of_real(v)
         return n === nothing ? JNULL : n
     end
-    v isa AbstractString && return String(v)
-    v isa Symbol && return String(v)
+    (v isa AbstractString || v isa Symbol) && return utf8_string(v)
     v isa AbstractVector && return JArr(Any[from_value(x) for x in v])
     if v isa AbstractDict
         kvs = Kvs()
         for (k, x) in pairs(v)
-            push!(kvs, String(k) => from_value(x))
+            push!(kvs, utf8_string(k) => from_value(x))
         end
         return JObj(kvs)
     end
     throw(ArgumentError("not a JSON value: $(typeof(v))"))
+end
+
+function utf8_string(s)
+    str = String(s)
+    isvalid(str) || throw(ArgumentError("not a JSON value: the string $(repr(str)) is not valid UTF-8"))
+    return str
 end
 
 """A decimal beyond the binary64 range, which no decoded JSON value holds;
