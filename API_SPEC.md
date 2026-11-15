@@ -382,12 +382,27 @@ collide with it. No template is in scope. The golden set's `math` field is
 A text a reader refuses raises the binding's diagnostic error with one of two
 codes:
 
-- `removed_op`: the text writes an operator removed from the format
-  (esm-spec §4.2) in the call or escape form; it is refused by name, never
-  read as an open operator (CONFORMANCE_SPEC §7.1).
-- `parse_error`: any other text that is not a document in that format. A name
-  nothing declares is not a parse error; an undeclared reference is the
-  validator's finding.
+- `removed_op`: the document's math writes an operator removed from the
+  format (esm-spec §4.2) in the call or escape form; it is refused by name,
+  never read as an open operator (CONFORMANCE_SPEC §7.1). The operator's
+  name elsewhere in the text is not this refusal.
+- `parse_error`: any other text that is not a document in that format, and a
+  text past one of the readers' bounds, which the Lean model leaves unbounded:
+  - nesting too deep: more than 128 constructs open at once across the
+    readers (a math bracket, fraction, prefix `-` or `\lnot`, `cases` row or
+    escape-node JSON value; a Typst value; a YAML block or flow collection),
+    or a result that nests more than 127 arrays and objects (the depth
+    `serde_json` reads, so whatever a reader returns can be written as JSON
+    and read back). A left-nested chain such as `a - b - c - …` or
+    `a / b / c` counts toward the second bound as it grows, though it does
+    not nest the reader. Either bound is refused as `parse_error` even when
+    the math also writes a removed operator.
+  - a decimal outside the binary64 range (`1.0e400`), which no JSON document
+    can hold. A decimal too small to represent (`1.0e-400`) is not refused;
+    it reads as the integer `0`.
+
+  A name nothing declares is not a parse error; an undeclared reference is
+  the validator's finding.
 
 The error is `ParseError` with a `code` field in Julia and Python,
 `EsmDiagnosticError` in TypeScript, `DiagnosticError` in Rust, and
