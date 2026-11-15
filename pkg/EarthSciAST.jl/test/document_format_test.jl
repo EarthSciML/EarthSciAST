@@ -22,7 +22,7 @@
 # directory).
 
 using Test
-using JSON3
+using JSON
 using EarthSciAST
 include("testutils.jl")
 
@@ -60,47 +60,47 @@ _docfmt_format(name) = name == "markdown" ? :markdown :
 
 # Run one case; the failures, as messages.
 function _docfmt_case(case)
-    id = String(case[:id])
+    id = String(case["id"])
     out = String[]
     check(ok, what) = ok || push!(out, "$id: $what")
-    kind = String(case[:kind])
+    kind = String(case["kind"])
     if kind == "print"
-        esm = case[:esm]
-        if haskey(case, :written)
+        esm = case["esm"]
+        if haskey(case, "written")
             check(
-                _docfmt_jeq(canonicalize_document(case[:written]), esm),
+                _docfmt_jeq(canonicalize_document(case["written"]), esm),
                 "canonicalize(written) != esm"
             )
         end
-        for (key, format) in ((:markdown, :markdown), (:typst, :typst))
+        for (key, format) in (("markdown", :markdown), ("typst", :typst))
             text = String(case[key])
             printed = print_document(esm, format)
             check(printed == text, "print $key differs:\n--- got\n$printed\n--- want\n$text")
             try
                 back = parse_document(text, format)
-                check(_docfmt_jeq(back, esm), "parse $key differs:\n--- got\n$(JSON3.write(back))")
+                check(_docfmt_jeq(back, esm), "parse $key differs:\n--- got\n$(JSON.json(back))")
             catch e
                 check(false, "parse $key refused: $(sprint(showerror, e))")
             end
         end
     elseif kind == "variant"
-        format = _docfmt_format(String(case[:surface]))
-        esm = case[:esm]
+        format = _docfmt_format(String(case["surface"]))
+        esm = case["esm"]
         try
-            back = parse_document(String(case[:input]), format)
-            check(_docfmt_jeq(back, esm), "parse differs:\n--- got\n$(JSON3.write(back))")
+            back = parse_document(String(case["input"]), format)
+            check(_docfmt_jeq(back, esm), "parse differs:\n--- got\n$(JSON.json(back))")
         catch e
             check(false, "parse refused: $(sprint(showerror, e))")
         end
-        canonical = String(case[:canonical])
+        canonical = String(case["canonical"])
         printed = print_document(esm, format)
         check(printed == canonical, "print differs:\n--- got\n$printed\n--- want\n$canonical")
     elseif kind == "refusal"
-        format = _docfmt_format(String(case[:surface]))
-        want = String(case[:error])
+        format = _docfmt_format(String(case["surface"]))
+        want = String(case["error"])
         try
-            v = parse_document(String(case[:input]), format)
-            check(false, "expected `$want`, read $(JSON3.write(v))")
+            v = parse_document(String(case["input"]), format)
+            check(false, "expected `$want`, read $(JSON.json(v))")
         catch e
             check(e isa EarthSciAST.ParseError && e.code == want, "expected `$want`, got $(sprint(showerror, e))")
         end
@@ -108,26 +108,6 @@ function _docfmt_case(case)
         error("$id: unknown kind $kind")
     end
     return out
-end
-
-# Every key of a decoded value, touched (JSON3 decodes lazily, and a key it
-# cannot hold as a Symbol only fails when it is reached).
-_docfmt_touch(x::AbstractDict) = foreach(((k, v),) -> _docfmt_touch(v), pairs(x))
-_docfmt_touch(x::AbstractVector) = foreach(_docfmt_touch, x)
-_docfmt_touch(x) = nothing
-
-# A JSON text, decoded. A key JSON3 cannot hold as a Symbol (one with a NUL in
-# it) is read with string-keyed dictionaries instead; the printers sort every
-# object's keys, so the order is not lost.
-function _docfmt_read(text::AbstractString)
-    doc = JSON3.read(text)
-    try
-        _docfmt_touch(doc)
-        return doc
-    catch e
-        e isa ArgumentError || rethrow()
-        return JSON3.read(text, Dict{String, Any})
-    end
 end
 
 # The `.esm` files under `tests/` that are JSON objects, the corpus
@@ -140,7 +120,7 @@ function _docfmt_corpus()
             endswith(f, ".esm") || continue
             path = joinpath(dir, f)
             doc = try
-                _docfmt_read(read(path, String))
+                JSON.parse(read(path, String))
             catch
                 continue
             end
@@ -153,15 +133,15 @@ end
 
 @testset "document source formats (CONFORMANCE §5.58)" begin
     @testset "golden set: $file" for file in DOCFMT_FILES
-        fixture = JSON3.read(read(joinpath(DOCFMT_DIR, file), String))
+        fixture = JSON.parse(read(joinpath(DOCFMT_DIR, file), String))
         failures = String[]
-        for case in fixture[:cases]
+        for case in fixture["cases"]
             append!(failures, _docfmt_case(case))
         end
         isempty(failures) || @info "document_format/$file failures" n = length(failures) first =
             join(first(failures, 5), "\n\n")
         @test isempty(failures)
-        @test !isempty(fixture[:cases])
+        @test !isempty(fixture["cases"])
     end
 
     @testset "format selector" begin
@@ -221,7 +201,7 @@ end
                 canon_path = stem * ".canon.json"
                 write(canon_path, lean_canon)
                 canon = canonicalize_document(doc)
-                if !_docfmt_jeq(_docfmt_read(lean_canon), canon)
+                if !_docfmt_jeq(JSON.parse(lean_canon), canon)
                     return ["$path: canonical forms differ"]
                 end
                 for (format, pmode, rmode, ext) in (
@@ -250,13 +230,14 @@ end
                     agree = if lean_back === nothing || our_back === nothing
                         lean_back === our_back
                     else
-                        _docfmt_jeq(_docfmt_read(lean_back), our_back)
+                        _docfmt_jeq(JSON.parse(lean_back), our_back)
                     end
                     agree || push!(diffs, "$path: $rmode differs")
                 end
                 return diffs
             end
             diffs = reduce(vcat, results; init = String[])
+            write(joinpath(scratch, "differences.txt"), join(diffs, "\n"))
             @info "esm-lean comparison" documents = length(corpus) differences = length(diffs) first =
                 join(first(diffs, 20), "\n")
             @test isempty(diffs)
