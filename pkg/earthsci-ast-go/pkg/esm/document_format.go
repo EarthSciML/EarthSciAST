@@ -13,8 +13,6 @@ package esm
 
 import (
 	"fmt"
-	"slices"
-	"strings"
 
 	"github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm/internal/docfmt"
 )
@@ -41,9 +39,9 @@ func (f DocumentFormat) String() string {
 }
 
 // DocumentFormatError is the diagnostic for a text that is not an ESM document
-// in the format it was read as. Code is `removed_op` when the text writes an
-// operator removed from the format in the call or escape form (esm-spec §4.2,
-// CONFORMANCE §7.1), and `parse_error` for any other text.
+// in the format it was read as. Code is `removed_op` when the document's math
+// writes an operator removed from the format in the call or escape form
+// (esm-spec §4.2, CONFORMANCE §7.1), and `parse_error` for any other text.
 type DocumentFormatError struct {
 	Code    string
 	Message string
@@ -102,7 +100,11 @@ func PrintMath(expr any, names []string, f DocumentFormat) string {
 // (map[string]any, []any, int64 for an integer, float64 for a decimal).
 //
 // A text that is not a Markdown ESM document returns a *DocumentFormatError
-// with code `removed_op` or `parse_error`.
+// with code `removed_op` when the document's math uses an operator removed
+// from the format (esm-spec §4.2), and `parse_error` for any other text, and
+// for one past a bound of the reader: nested too deeply (more than 128 reader
+// constructs open at once, or more than 127 levels of arrays and objects), or
+// holding a number beyond the binary64 range.
 func ParseMarkdown(text string) (any, error) { return ParseDocument(text, DocumentMarkdown) }
 
 // ParseTypst reads a Typst ESM document (Lean `Source.Typ.parseTyp`). See
@@ -113,66 +115,49 @@ func ParseTypst(text string) (any, error) { return ParseDocument(text, DocumentT
 // ParseMarkdown.
 func ParseDocument(text string, format DocumentFormat) (any, error) {
 	var (
-		d  docfmt.Json
-		ok bool
+		lim docfmt.Lim
+		d   docfmt.Json
+		ok  bool
 	)
 	if format == DocumentTypst {
-		d, ok = docfmt.ParseTyp(text)
+		d, ok = docfmt.ParseTyp(&lim, text)
 	} else {
-		d, ok = docfmt.ParseMd(text)
+		d, ok = docfmt.ParseMd(&lim, text)
+	}
+	if lim.TooDeep || (ok && docfmt.JSONDepth(d) > docfmt.MaxJSONDepth) {
+		return nil, &DocumentFormatError{
+			Code: CodeParseError,
+			Message: fmt.Sprintf("the document nests too deeply for the reader (at most %d constructs open at once, and %d levels of arrays and objects)",
+				docfmt.MaxNesting, docfmt.MaxJSONDepth),
+		}
 	}
 	if !ok {
-		return nil, documentRefusal(text, format)
+		return nil, documentRefusal(lim.RemovedOp, format)
 	}
-	return docfmt.ToGo(d), nil
+	v, bad, ok := docfmt.ToGo(d)
+	if !ok {
+		return nil, &DocumentFormatError{
+			Code:    CodeParseError,
+			Message: fmt.Sprintf("the number `%s` is outside the binary64 range", docfmt.PrintNum(bad)),
+		}
+	}
+	return v, nil
 }
 
 // documentRefusal is the diagnostic for a text the reader refused. The Lean
 // reader refuses every bad input alike; the code comes from the specification:
-// a removed operator written in the call form or the escape form is refused by
-// name (CONFORMANCE §7.1), everything else is a parse error.
-func documentRefusal(text string, format DocumentFormat) *DocumentFormatError {
-	if op, ok := removedOpIn(text, format); ok {
+// a removed operator the math writes in the call form or the escape form
+// (removedOp, as the reader met it) is refused by name (CONFORMANCE §7.1),
+// everything else is a parse error.
+func documentRefusal(removedOp string, format DocumentFormat) *DocumentFormatError {
+	if removedOp != "" {
 		return &DocumentFormatError{
 			Code:    codeRemovedOp,
-			Message: fmt.Sprintf("`%s` was removed from the format (esm-spec §4.2)", op),
+			Message: fmt.Sprintf("`%s` was removed from the format (esm-spec §4.2)", removedOp),
 		}
 	}
 	return &DocumentFormatError{
 		Code:    CodeParseError,
 		Message: fmt.Sprintf("not an ESM %s document", map[DocumentFormat]string{DocumentMarkdown: "Markdown", DocumentTypst: "Typst"}[format]),
 	}
-}
-
-// removedOpIn is the first removed operator the text writes in a call or escape
-// form: `\operatorname{op}` / `\esm{op}` in LaTeX (with `\_` for `_`),
-// `op("op")` / `esm.node("op"` in Typst.
-func removedOpIn(text string, format DocumentFormat) (string, bool) {
-	opens, closer := []string{`\operatorname{`, `\esm{`}, "}"
-	if format == DocumentTypst {
-		opens, closer = []string{`op("`, `esm.node("`}, `"`
-	}
-	removed := docfmt.ExprRemovedOps()
-	for _, open := range opens {
-		rest := text
-		for {
-			i := strings.Index(rest, open)
-			if i < 0 {
-				break
-			}
-			rest = rest[i+len(open):]
-			j := strings.Index(rest, closer)
-			if j < 0 {
-				break
-			}
-			name := rest[:j]
-			if format == DocumentMarkdown {
-				name = strings.ReplaceAll(name, `\_`, "_")
-			}
-			if slices.Contains(removed, name) {
-				return name, true
-			}
-		}
-	}
-	return "", false
 }

@@ -21,8 +21,10 @@ package docfmt
 func mathPrint(sf Sf, s *Sym, e Json) []Tok { return prPrint(sf, s, e) }
 
 // mathParseToks is `Math.parseToks` (Induct.lean): read a token list back
-// under the symbol table s.
-func mathParseToks(sf Sf, s *Sym, toks []Tok) (Json, bool) { return psParseToks(sf, s, toks) }
+// under the symbol table s; lim is the read's state (limits.go).
+func mathParseToks(lim *Lim, sf Sf, s *Sym, toks []Tok) (Json, bool) {
+	return psParseToks(lim, sf, s, toks)
+}
 
 // mathPrintLatex is `Math.printLatex` (RoundTripLatex.lean).
 func mathPrintLatex(s *Sym, e Json) string {
@@ -30,12 +32,12 @@ func mathPrintLatex(s *Sym, e Json) string {
 }
 
 // mathParseLatex is `Math.parseLatex` (RoundTripLatex.lean).
-func mathParseLatex(s *Sym, text string) (Json, bool) {
+func mathParseLatex(lim *Lim, s *Sym, text string) (Json, bool) {
 	toks, ok := latexLex([]rune(text))
 	if !ok {
 		return nil, false
 	}
-	return mathParseToks(SfLatex, s, toks)
+	return mathParseToks(lim, SfLatex, s, toks)
 }
 
 // mathPrintTypst is `Math.printTypst`.
@@ -44,10 +46,10 @@ func mathPrintTypst(s *Sym, e Json) string {
 }
 
 // mathParseTypst is `Math.parseTypst`.
-func mathParseTypst(s *Sym, text string) (Json, bool) {
-	toks, ok := typLex([]rune(text))
+func mathParseTypst(lim *Lim, s *Sym, text string) (Json, bool) {
+	toks, ok := typLex(lim, []rune(text))
 	if !ok {
 		return nil, false
 	}
-	return mathParseToks(SfTypst, s, toks)
+	return mathParseToks(lim, SfTypst, s, toks)
 }

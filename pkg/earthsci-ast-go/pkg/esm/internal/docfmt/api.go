@@ -4,17 +4,19 @@ package docfmt
 
 // PrintMd prints a document (canonical form, keys sorted) as Markdown
 // (`Source.Md.printMd`).
-func PrintMd(d Json) string { return mdDocPrintMd(d) }
+func PrintMd(d Json) string { return mdDocPrintMd(&Lim{}, d) }
 
-// ParseMd reads a Markdown document (`Source.Md.parseMd`).
-func ParseMd(text string) (Json, bool) { return mdDocParseMd(text) }
+// ParseMd reads a Markdown document (`Source.Md.parseMd`). lim is the read's
+// state, fresh for each read: afterwards it holds what the read ran into
+// (limits.go).
+func ParseMd(lim *Lim, text string) (Json, bool) { return mdDocParseMd(lim, text) }
 
 // PrintTyp prints a document (canonical form, keys sorted) as Typst
 // (`Source.Typ.printTyp`).
-func PrintTyp(d Json) string { return typDocPrintTyp(d) }
+func PrintTyp(d Json) string { return typDocPrintTyp(&Lim{}, d) }
 
-// ParseTyp reads a Typst document (`Source.Typ.parseTyp`).
-func ParseTyp(text string) (Json, bool) { return typDocParseTyp(text) }
+// ParseTyp reads a Typst document (`Source.Typ.parseTyp`). See ParseMd.
+func ParseTyp(lim *Lim, text string) (Json, bool) { return typDocParseTyp(lim, text) }
 
 // PrintMath prints one expression or equation (canonical form, keys sorted) as
 // LaTeX (latex true) or Typst math under the declared names, with no template

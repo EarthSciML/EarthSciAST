@@ -19,24 +19,24 @@ func TestSourceRoundTripWithoutMath(t *testing.T) {
 	if !skCanonDoc(doc) {
 		t.Fatal("test document is not canonical")
 	}
-	md := mdDocPrintMd(doc)
-	back, ok := mdDocParseMd(md)
+	md := mdDocPrintMd(&Lim{}, doc)
+	back, ok := mdDocParseMd(&Lim{}, md)
 	if !ok || !JsonEqual(back, doc) {
 		t.Errorf("markdown round trip failed (%v):\n%s\n%s", ok, md, Render(back))
 	}
-	typ := typDocPrintTyp(doc)
-	back, ok = typDocParseTyp(typ)
+	typ := typDocPrintTyp(&Lim{}, doc)
+	back, ok = typDocParseTyp(&Lim{}, typ)
 	if !ok || !JsonEqual(back, doc) {
 		t.Errorf("typst round trip failed (%v):\n%s\n%s", ok, typ, Render(back))
 	}
 	// Prose between the constructs is ignored.
 	withProse := md + "\nSome prose with `` ` `` code.\n"
-	if back, ok := mdDocParseMd(withProse); !ok || !JsonEqual(back, doc) {
+	if back, ok := mdDocParseMd(&Lim{}, withProse); !ok || !JsonEqual(back, doc) {
 		t.Errorf("prose changed the markdown reading")
 	}
 	// CRLF and a BOM are accepted.
 	crlf := "\uFEFF" + replaceNl(md)
-	if back, ok := mdDocParseMd(crlf); !ok || !JsonEqual(back, doc) {
+	if back, ok := mdDocParseMd(&Lim{}, crlf); !ok || !JsonEqual(back, doc) {
 		t.Errorf("CRLF input not read")
 	}
 }
@@ -54,11 +54,11 @@ func replaceNl(s string) string {
 
 func TestSourceRefusesBadFrontMatter(t *testing.T) {
 	for _, text := range []string{"", "---\nesm: 1\n", "--\nesm: 1\n---\n", "---\nesm: 1\n--- x\n"} {
-		if _, ok := mdDocParseMd(text); ok {
+		if _, ok := mdDocParseMd(&Lim{}, text); ok {
 			t.Errorf("%q reads", text)
 		}
 	}
-	if _, ok := typDocParseTyp("#import nothing\n"); ok {
+	if _, ok := typDocParseTyp(&Lim{}, "#import nothing\n"); ok {
 		t.Error("bad typst header reads")
 	}
 }
@@ -69,11 +69,11 @@ func TestMdFlowAttrs(t *testing.T) {
 	if string(text) != "'{a: [1, \"it&#39;s &amp; x\"], \"yes\": {}}'" {
 		t.Fatalf("got %s", string(text))
 	}
-	got, rest, ok := mdPQuoted(text[1:])
+	got, rest, ok := mdPQuoted(&Lim{}, text[1:])
 	if !ok || len(rest) != 0 || !JsonEqual(got, v) {
 		t.Fatalf("read back %v %v %q", got, ok, string(rest))
 	}
-	as, rest, ok := mdPAttrs([]rune("a=1 b='[2]' c=\"s\"} x"))
+	as, rest, ok := mdPAttrs(&Lim{}, []rune("a=1 b='[2]' c=\"s\"} x"))
 	if !ok || len(as) != 3 || string(rest) != " x" {
 		t.Fatalf("attrs %v %v %q", as, ok, string(rest))
 	}
@@ -191,23 +191,23 @@ func TestSourceGoldenLayoutWithoutMath(t *testing.T) {
 		"name: \"box\", tags: (\n  \"test\",\n))\n\n#description[A well-mixed box.\nTwo lines.]\n\n" +
 		"#esm-block(\"coupling\", (\n  (\n    systems: (\n      \"M\",\n      \"M\",\n    ),\n" +
 		"    type: \"operator_compose\",\n  ),\n))\n\n#esm-block(\"tolerance\", (\n  rel: 1.0e-6,\n))\n"
-	if got := mdDocPrintMd(doc); got != wantMd {
+	if got := mdDocPrintMd(&Lim{}, doc); got != wantMd {
 		t.Errorf("markdown:\n%s", got)
 	}
-	if got := typDocPrintTyp(doc); got != wantTyp {
+	if got := typDocPrintTyp(&Lim{}, doc); got != wantTyp {
 		t.Errorf("typst:\n%s", got)
 	}
-	for _, f := range []func(string) (Json, bool){mdDocParseMd, typDocParseTyp} {
+	for _, f := range []func(*Lim, string) (Json, bool){mdDocParseMd, typDocParseTyp} {
 		for _, text := range []string{wantMd, wantTyp} {
-			if back, ok := f(text); ok && !JsonEqual(back, doc) {
+			if back, ok := f(&Lim{}, text); ok && !JsonEqual(back, doc) {
 				t.Errorf("reads back differently: %s", Render(back))
 			}
 		}
 	}
-	if back, ok := mdDocParseMd(wantMd); !ok || !JsonEqual(back, doc) {
+	if back, ok := mdDocParseMd(&Lim{}, wantMd); !ok || !JsonEqual(back, doc) {
 		t.Error("markdown does not read back")
 	}
-	if back, ok := typDocParseTyp(wantTyp); !ok || !JsonEqual(back, doc) {
+	if back, ok := typDocParseTyp(&Lim{}, wantTyp); !ok || !JsonEqual(back, doc) {
 		t.Error("typst does not read back")
 	}
 }
