@@ -62,16 +62,24 @@ class DocumentFormat(str, Enum):
     TYPST = "typst"
 
 
-#: The recursive readers spend about ten Python frames per nesting level of an
-#: expression (one per precedence level), so the interpreter's default limit of
-#: 1000 caps a readable expression near 90 levels. The limit is raised to this
-#: floor (never lowered), which every document of the corpus is far below.
-_RECURSION_FLOOR = 10000
+#: The Python frames a read may need above its caller. The readers hold at most
+#: ``limits.MAX_NESTING`` constructs open, and the deepest text they accept (a
+#: chain of 61 ``\\max(k, …)`` or ``\\esm`` arguments, about 13 frames per
+#: level) needs about 840 frames; every document of the corpus needs under 300.
+#: The interpreter's default limit of 1000 covers that only for a caller less
+#: than about 160 frames deep, so a read lifts the limit to give itself this
+#: headroom while it runs, and puts it back afterwards. Printing needs no
+#: headroom: the deepest document a read returns prints in under 300 frames.
+_READ_FRAMES = 1000
 
 
-def _deep() -> None:
-    if sys.getrecursionlimit() < _RECURSION_FLOOR:
-        sys.setrecursionlimit(_RECURSION_FLOOR)
+def _stack_depth() -> int:
+    n = 0
+    f = sys._getframe(1)
+    while f is not None:
+        n += 1
+        f = f.f_back
+    return n
 
 
 def _format(fmt: Any) -> DocumentFormat:
@@ -102,14 +110,12 @@ def print_markdown(doc: dict) -> str:
     canonicalize alike print alike, and ``parse_markdown(print_markdown(d))`` is
     ``canonicalize_document(d)``.
     """
-    _deep()
     return print_md(_printable(doc))
 
 
 def print_typst(doc: dict) -> str:
     """Print an ESM document as Typst (``Source.Typ.printTyp``). See
     :func:`print_markdown`."""
-    _deep()
     return print_typ(_printable(doc))
 
 
@@ -138,7 +144,6 @@ def print_math(expr: Any, names: Iterable[str], format: DocumentFormat | str) ->
     from ..canonicalize import canonicalize_document
 
     fmt = _format(format)
-    _deep()
     e = sort_obj(from_plain(canonicalize_document(expr)))
     if type(e) is Obj:
         lhs, rhs = look("lhs", e), look("rhs", e)
@@ -174,10 +179,17 @@ def _read(text: str, fmt: DocumentFormat) -> dict:
 
     if not isinstance(text, str):
         raise TypeError("a document source is a str")
-    _deep()
-    d, found = limits.reading(
-        lambda: parse_md(text) if fmt is DocumentFormat.MARKDOWN else parse_typ(text)
-    )
+    need = _stack_depth() + _READ_FRAMES
+    old = sys.getrecursionlimit()
+    if old < need:
+        sys.setrecursionlimit(need)
+    try:
+        d, found = limits.reading(
+            lambda: parse_md(text) if fmt is DocumentFormat.MARKDOWN else parse_typ(text)
+        )
+    finally:
+        if old < need:
+            sys.setrecursionlimit(old)
     if type(d) is not Obj:
         d = None
     if found.too_deep or (d is not None and limits.json_depth(d) > limits.MAX_JSON_DEPTH):

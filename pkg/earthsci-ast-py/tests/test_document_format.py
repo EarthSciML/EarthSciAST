@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -134,6 +135,25 @@ def test_document_format_limits(case):
         with pytest.raises(ParseError) as info:
             parse_document(text, case["surface"])
         assert getattr(info.value, "code", None) == case["error"]
+
+
+def test_a_read_leaves_the_recursion_limit_as_it_found_it():
+    """The deepest text the reader accepts reads under the interpreter's default
+    recursion limit from a caller already hundreds of frames deep, and the
+    limit is the same afterwards."""
+    head = _limits()["heads"]["markdown"]
+    text = head + "$$\ny = " + "\\max(k, " * 61 + "k" + ")" * 61 + "\n$$\n"
+
+    def nested(n):
+        return nested(n - 1) if n else parse_markdown(text)
+
+    saved = sys.getrecursionlimit()
+    sys.setrecursionlimit(1000)
+    try:
+        assert "models" in nested(400)
+        assert sys.getrecursionlimit() == 1000
+    finally:
+        sys.setrecursionlimit(saved)
 
 
 def test_limits_file_is_nonempty():
