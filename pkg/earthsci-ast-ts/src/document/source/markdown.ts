@@ -9,6 +9,7 @@
  */
 
 import { jarr, jobj, jstr, type Json } from '../json.js'
+import { nested } from '../limits.js'
 import { escT, jwf, nameOk, parseLatex, printLatex, rawB, unescT, type Sym } from '../math/index.js'
 import { chars, type Chars, type Read } from '../number.js'
 import { escChar, isIdent, parseKey, parseQuoted, printKey, readIdent } from '../strings.js'
@@ -96,6 +97,10 @@ function flow(v: Json): string {
 
 /** `Md.pFlow`: a flow collection at `[` or `{`, else a scalar. */
 function pFlow(cs: Chars, i: number): Read<Json> {
+  return nested(() => pFlowIn(cs, i))
+}
+
+function pFlowIn(cs: Chars, i: number): Read<Json> {
   const c = cs[i]
   if (c === undefined) return undefined
   if (c === '[') {

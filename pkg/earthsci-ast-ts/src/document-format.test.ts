@@ -155,6 +155,62 @@ describe('document format fixtures', () => {
   }
 })
 
+interface LimitsCase {
+  id: string
+  surface: DocumentFormat
+  input: {
+    prefix?: string
+    open?: string
+    n?: number
+    middle?: string
+    close?: string
+    suffix?: string
+    yaml_levels?: number
+  }
+  esm_json?: string
+  error?: string
+}
+
+/** A `limits.json` input, built from its recipe (README, section Limits). */
+function limitsText(head: string, input: LimitsCase['input']): string {
+  if (input.yaml_levels !== undefined) {
+    let body = '```esm:metaparameters\nx:\n'
+    for (let i = 1; i < input.yaml_levels; i++) body += ' '.repeat(2 * i) + '-\n'
+    return head + body + '```\n'
+  }
+  const n = input.n ?? 0
+  return (
+    head +
+    (input.prefix ?? '') +
+    (input.open ?? '').repeat(n) +
+    (input.middle ?? '') +
+    (input.close ?? '').repeat(n) +
+    (input.suffix ?? '')
+  )
+}
+
+/**
+ * `limits.json`: the readers' bounds on nesting and numbers, and `removed_op`
+ * only for an operator the math meets. Each case reads as `esm_json` or is
+ * refused with `error`, without exhausting the stack.
+ */
+describe('document format limits', () => {
+  const fixture = JSON.parse(readFixture('conformance', 'document_format', 'limits.json')) as {
+    heads: Record<DocumentFormat, string>
+    cases: LimitsCase[]
+  }
+  for (const c of fixture.cases) {
+    it(c.id, () => {
+      const text = limitsText(fixture.heads[c.surface], c.input)
+      if (c.error !== undefined) {
+        expect(refusalCode(text, c.surface)).toBe(c.error)
+      } else {
+        expect(parseTyped(text, c.surface)).toEqual(typed(JSON.parse(c.esm_json!)))
+      }
+    })
+  }
+})
+
 /** The `.esm` files under `tests/` that are JSON objects, sorted. */
 function corpus(): Array<{ file: string; text: string }> {
   const out: Array<{ file: string; text: string }> = []

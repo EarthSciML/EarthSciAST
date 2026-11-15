@@ -9,7 +9,16 @@
  */
 
 import { jnumWfb, type JNum } from '../json.js'
-import { canonize, digitChar, mkDec, parseNum, parseRaw, type Chars, type Read } from '../number.js'
+import {
+  canonize,
+  digitChar,
+  exponent,
+  mkDec,
+  parseNum,
+  parseRaw,
+  type Chars,
+  type Read,
+} from '../number.js'
 import { kw, tNum, type Tok } from './token.js'
 
 /** `Math.dropP`: the index after the literal prefix `p` at `i`, if it is there. */
@@ -64,26 +73,25 @@ function natDigits(n: bigint): number[] {
   return Array.from(n.toString(), (c) => c.charCodeAt(0) - 48)
 }
 
-const EXP_BOUND = 2n ** 53n
-
 /**
  * `Math.sciNum`: the value of a mantissa times `10^z`, in canonical form.
  *
- * Lean's exponents are unbounded; Rust gives `None` for a decimal exponent
- * outside `i64`, and this port (whose exponents are JavaScript numbers, as in
- * `number.ts`) for one outside `±2^53`. No document writes either.
+ * Lean's exponents are unbounded; a decimal exponent outside Int64 gives
+ * `undefined` here, as in Rust (Lean would build that decimal), which no
+ * document writes. See `exponent` in `number.ts`.
  */
 export function sciNum(n0: JNum, z: bigint): JNum | undefined {
   let m: JNum
   if (n0.k === 'dec') {
-    const e = BigInt(n0.e10) + z
-    if (e > EXP_BOUND || e < -EXP_BOUND) return undefined
-    m = canonize({ k: 'dec', neg: n0.neg, digits: n0.digits, e10: Number(e) })
+    const e = exponent(BigInt(n0.e10) + z)
+    if (e === undefined) return undefined
+    m = canonize({ k: 'dec', neg: n0.neg, digits: n0.digits, e10: e })
   } else {
     const ds = natDigits(n0.v < 0n ? -n0.v : n0.v)
-    const e = BigInt(ds.length - 1) + z
-    if (e > EXP_BOUND || e < -EXP_BOUND) return undefined
-    m = canonize(mkDec(n0.v < 0n, ds, Number(e)))
+    const e = exponent(BigInt(ds.length - 1) + z)
+    const d = e === undefined ? undefined : mkDec(n0.v < 0n, ds, e)
+    if (d === undefined) return undefined
+    m = canonize(d)
   }
   return jnumWfb(m) ? m : undefined
 }

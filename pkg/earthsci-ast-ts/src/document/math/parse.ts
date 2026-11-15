@@ -54,6 +54,7 @@ import {
   type FaqForm,
   type RedK,
 } from './print.js'
+import { nested, removedOp, shallow } from '../limits.js'
 import { negNum } from './surface.js'
 import { isKwTok, tNum, tokEq, type Kw, type Sf, type Tok } from './token.js'
 import {
@@ -294,7 +295,10 @@ export function pName(sf: Sf, ts: Toks, i: number): P<string> {
 /** `Math.pJson`. */
 export function pJson(f: number, ts: Toks, i: number): P<Json> {
   if (f === 0) return undefined
-  f -= 1
+  return nested(() => pJsonIn(f - 1, ts, i))
+}
+
+function pJsonIn(f: number, ts: Toks, i: number): P<Json> {
   const t = ts[i]
   if (t === undefined) return undefined
   switch (t.t) {
@@ -790,7 +794,9 @@ export function pAdd(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
     } else if (k === 'Minus') {
       const y = pMul(c, f, ts, j + 1)
       if (y === undefined) return undefined
-      acc = [node('-', [close('+', acc), y[0]])]
+      const z = shallow(node('-', [close('+', acc), y[0]]))
+      if (z === undefined) return undefined
+      acc = [z]
       j = y[1]
     } else {
       const m = negTail(ts, j)
@@ -799,7 +805,9 @@ export function pAdd(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
       ts1[j] = tNum(m)
       const y = pMul(c, f, ts1, j)
       if (y === undefined) return undefined
-      acc = [node('-', [close('+', acc), y[0]])]
+      const z = shallow(node('-', [close('+', acc), y[0]]))
+      if (z === undefined) return undefined
+      acc = [z]
       j = y[1]
     }
   }
@@ -808,7 +816,10 @@ export function pAdd(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
 /** `Math.pMul`: level 5, unary minus and `*` chains (`mulLoop`). */
 export function pMul(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   if (f === 0) return undefined
-  f -= 1
+  return nested(() => pMulIn(c, f - 1, ts, i))
+}
+
+function pMulIn(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   if (isKwTok(ts[i], 'Minus')) {
     const r = pMul(c, f, ts, i + 1)
     return r && [node('-', [r[0]]), r[1]]
@@ -831,7 +842,9 @@ export function pMul(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
       if (c.sf !== 'latex') return [close('*', acc), j]
       const y = pNot(c, f, ts, j + 1)
       if (y === undefined) return undefined
-      acc = [node('/', [close('*', acc), y[0]])]
+      const z = shallow(node('/', [close('*', acc), y[0]]))
+      if (z === undefined) return undefined
+      acc = [z]
       j = y[1]
     } else if (atomStart(t) && !negTok(t)) {
       const y = pNot(c, f, ts, j)
@@ -846,11 +859,13 @@ export function pMul(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
 export function pNot(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   if (f === 0) return undefined
   f -= 1
-  if (isKwTok(ts[i], 'Lnot')) {
-    const r = pNot(c, f, ts, i + 1)
-    return r && [node('not', [r[0]]), r[1]]
-  }
-  return pFrac(c, f, ts, i)
+  return nested(() => {
+    if (isKwTok(ts[i], 'Lnot')) {
+      const r = pNot(c, f, ts, i + 1)
+      return r && [node('not', [r[0]]), r[1]]
+    }
+    return pFrac(c, f, ts, i)
+  })
 }
 
 /** `Math.pFrac`: level 7, the Typst fraction, grouping to the left (`fracLoop`). */
@@ -866,7 +881,9 @@ export function pFrac(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
     if (!(isKwTok(ts[j], 'Slash') && c.sf === 'typst')) return [x, j]
     const y = pPow(c, f, ts, j + 1)
     if (y === undefined) return undefined
-    x = node('/', [x, y[0]])
+    const z = shallow(node('/', [x, y[0]]))
+    if (z === undefined) return undefined
+    x = z
     j = y[1]
   }
 }
@@ -1112,6 +1129,22 @@ export function pDCall(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   return xs && [dCallNode(w[0], xs), r[1] + 1]
 }
 
+/**
+ * Record a removed operator written in the call or escape form at `i`, so a
+ * refusal can name it (CONFORMANCE §7.1). Not in Lean, whose reader refuses
+ * every bad input alike.
+ */
+function noteRemovedOp(ts: Toks, i: number): void {
+  const t = ts[i]
+  let name: string | undefined
+  if (t?.t === 'opn' || t?.t === 'esc') name = t.s
+  else if (isKwTok(t, 'Esmnode')) {
+    const t2 = ts[i + 2]
+    if (t2?.t === 'txt') name = t2.s
+  }
+  if (name !== undefined && REMOVED_OPS.includes(name)) removedOp(name)
+}
+
 function opAllowed(o: string): boolean {
   return opOk(o) && !REMOVED_OPS.includes(o) && !DEPRECATED_OPS.includes(o)
 }
@@ -1120,6 +1153,7 @@ function opAllowed(o: string): boolean {
 export function pPrim(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   if (f === 0) return undefined
   f -= 1
+  noteRemovedOp(ts, i)
   const parenClose = (j: number): P<Json> => {
     const r = pOr(c, f, ts, j)
     return r !== undefined && isRp(ts[r[1]]) ? [r[0], r[1] + 1] : undefined
@@ -1588,7 +1622,10 @@ export function pDApply(c: Ctx, f: number, w: string, ts: Toks, i: number): P<Js
 /** `Math.pCases`: `cases` rows; a chain re-nests to the right. */
 export function pCases(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   if (f === 0) return undefined
-  f -= 1
+  return nested(() => pCasesIn(c, f - 1, ts, i))
+}
+
+function pCasesIn(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   const r = pOr(c, f, ts, i)
   if (r === undefined) return undefined
   const [v, j] = r

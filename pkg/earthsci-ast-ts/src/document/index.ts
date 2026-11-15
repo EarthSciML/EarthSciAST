@@ -19,6 +19,7 @@
  * | `strings.ts` | `Strings.lean` |
  * | `yaml.ts` | `Yaml.lean` |
  * | `typst-dict.ts` | `TypstDict.lean` |
+ * | `limits.ts` | (none: the readers' own bounds, as in Rust) |
  * | `math/` | `Math/*.lean` |
  * | `source/` | `Source/*.lean` |
  *
@@ -28,8 +29,21 @@
 
 import { canonicalizeDocument } from '../canonicalize.js'
 import { ERROR_CODES, EsmDiagnosticError } from '../errors.js'
-import { fromPlain, jarr, jobj, jstr, lookKvs, sortKeys, toPlain, type Json } from './json.js'
-import { REMOVED_OPS, printLatex, printTypst as printTypstMath } from './math/index.js'
+import {
+  fromPlain,
+  jarr,
+  jnumToFloat,
+  jobj,
+  jstr,
+  lookKvs,
+  sortKeys,
+  toPlain,
+  type JNum,
+  type Json,
+} from './json.js'
+import { MAX_JSON_DEPTH, MAX_NESTING, jsonDepth, reading } from './limits.js'
+import { printLatex, printTypst as printTypstMath } from './math/index.js'
+import { printNum } from './number.js'
 import { parseMd, printMd } from './source/markdown-doc.js'
 import { parseTyp, printTyp } from './source/typst-doc.js'
 
@@ -110,24 +124,22 @@ export function printMath(expr: unknown, names: readonly string[], format: Docum
  * Read a Markdown ESM document (`Source.Md.parseMd`). The result is in canonical
  * form.
  *
- * @throws {EsmDiagnosticError} with code `removed_op` when the text uses an
- *   operator removed from the format (esm-spec §4.2), and `parse_error` for any
- *   other text that is not a Markdown ESM document.
+ * @throws {EsmDiagnosticError} with code `removed_op` when the document's math
+ *   uses an operator removed from the format (esm-spec §4.2), and `parse_error`
+ *   for any other text that is not a Markdown ESM document, and for one past a
+ *   bound of the reader (`limits.ts`): nested too deeply, or holding a number
+ *   beyond the binary64 range.
  */
 export function parseMarkdown(
   text: string,
   options?: ParseDocumentOptions,
 ): Record<string, unknown> {
-  const d = parseMd(text)
-  if (d === undefined) throw refusal(text, 'markdown')
-  return toPlain(d, options?.canonical === true) as Record<string, unknown>
+  return read(text, 'markdown', options)
 }
 
 /** Read a Typst ESM document (`Source.Typ.parseTyp`). See {@link parseMarkdown}. */
 export function parseTypst(text: string, options?: ParseDocumentOptions): Record<string, unknown> {
-  const d = parseTyp(text)
-  if (d === undefined) throw refusal(text, 'typst')
-  return toPlain(d, options?.canonical === true) as Record<string, unknown>
+  return read(text, 'typst', options)
 }
 
 /** Read an ESM document written in the given format. See {@link parseMarkdown}. */
@@ -136,17 +148,58 @@ export function parseDocument(
   format: DocumentFormat,
   options?: ParseDocumentOptions,
 ): Record<string, unknown> {
-  return format === 'markdown' ? parseMarkdown(text, options) : parseTypst(text, options)
+  return read(text, format, options)
+}
+
+function read(
+  text: string,
+  format: DocumentFormat,
+  options: ParseDocumentOptions | undefined,
+): Record<string, unknown> {
+  const [doc, found] = reading(() => (format === 'markdown' ? parseMd(text) : parseTyp(text)))
+  if (found.tooDeep || (doc !== undefined && jsonDepth(doc) > MAX_JSON_DEPTH)) {
+    throw new EsmDiagnosticError(
+      ERROR_CODES.PARSE_ERROR,
+      `the document nests too deeply for the reader (at most ${MAX_NESTING} constructs open at once, and ${MAX_JSON_DEPTH} levels of arrays and objects)`,
+    )
+  }
+  if (doc === undefined) throw refusal(found.removedOp, format)
+  const big = beyondBinary64(doc)
+  if (big !== undefined) {
+    throw new EsmDiagnosticError(
+      ERROR_CODES.PARSE_ERROR,
+      `the number \`${printNum(big)}\` is outside the binary64 range`,
+    )
+  }
+  return toPlain(doc, options?.canonical === true) as Record<string, unknown>
+}
+
+/**
+ * The first number of a document (in document order) that is beyond the
+ * binary64 range (`1.0e400`): it has no nearest finite binary64 value, so no
+ * JSON document can hold it.
+ */
+function beyondBinary64(doc: Json): JNum | undefined {
+  const stack: Json[] = [doc]
+  for (let v = stack.pop(); v !== undefined; v = stack.pop()) {
+    if (v.t === 'num') {
+      if (!Number.isFinite(jnumToFloat(v.n))) return v.n
+    } else if (v.t === 'arr') {
+      for (let k = v.xs.length - 1; k >= 0; k--) stack.push(v.xs[k])
+    } else if (v.t === 'obj') {
+      for (let k = v.kvs.length - 1; k >= 0; k--) stack.push(v.kvs[k][1])
+    }
+  }
+  return undefined
 }
 
 /**
  * The diagnostic for a text the reader refused. The Lean reader refuses every
  * bad input alike; the code comes from the specification: a removed operator
- * written in the call form or the escape form is refused by name (CONFORMANCE
- * §7.1), everything else is a parse error.
+ * the math writes in the call form or the escape form is refused by name
+ * (CONFORMANCE §7.1), everything else is a parse error.
  */
-function refusal(text: string, format: DocumentFormat): EsmDiagnosticError {
-  const op = removedOpIn(text, format)
+function refusal(op: string | undefined, format: DocumentFormat): EsmDiagnosticError {
   if (op !== undefined) {
     return new EsmDiagnosticError(
       ERROR_CODES.REMOVED_OP,
@@ -160,25 +213,4 @@ function refusal(text: string, format: DocumentFormat): EsmDiagnosticError {
     ERROR_CODES.PARSE_ERROR,
     format === 'markdown' ? 'not an ESM Markdown document' : 'not an ESM Typst document',
   )
-}
-
-/**
- * The first removed operator the text writes in a call or escape form:
- * `\operatorname{op}` / `\esm{op}` in LaTeX (with `\_` for `_`), `op("op")` /
- * `esm.node("op"` in Typst.
- */
-function removedOpIn(text: string, format: DocumentFormat): string | undefined {
-  const [opens, close] =
-    format === 'markdown' ? [['\\operatorname{', '\\esm{'], '}'] : [['op("', 'esm.node("'], '"']
-  for (const open of opens) {
-    for (let i = text.indexOf(open); i >= 0; i = text.indexOf(open, i + 1)) {
-      const start = i + open.length
-      const end = text.indexOf(close, start)
-      if (end < 0) continue
-      let body = text.slice(start, end)
-      if (format === 'markdown') body = body.replace(/\\_/g, '_')
-      if (REMOVED_OPS.includes(body)) return body
-    }
-  }
-  return undefined
 }

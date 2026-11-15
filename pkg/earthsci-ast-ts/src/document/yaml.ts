@@ -30,6 +30,7 @@ import {
   type Json,
   type Kvs,
 } from './json.js'
+import { nested } from './limits.js'
 import { parseNum, printNum, type Chars, type Read } from './number.js'
 import { isIdentStart, parseKey, parseQuoted, printKey, quote, spaces } from './strings.js'
 
@@ -224,6 +225,10 @@ function pItems(m: number, cs: Chars, i: number): Read<Json[]> {
 
 /** `Yaml.pItemBody`: after the `-` of an element at indentation `m`. */
 function pItemBody(m: number, cs: Chars, i: number): Read<Json> {
+  return nested(() => pItemBodyIn(m, cs, i))
+}
+
+function pItemBodyIn(m: number, cs: Chars, i: number): Read<Json> {
   if (cs[i] === '\n') {
     const r = pItems(m + 2, cs, i + 1)
     return r && [jarr(r[0]), r[1]]
@@ -259,6 +264,10 @@ function pEntry(m: number, cs: Chars, i: number): Read<[string, Json]> {
 
 /** `Yaml.pValBody`: after the `:` of an entry whose key is at indentation `m`. */
 function pValBody(m: number, cs: Chars, i: number): Read<Json> {
+  return nested(() => pValBodyIn(m, cs, i))
+}
+
+function pValBodyIn(m: number, cs: Chars, i: number): Read<Json> {
   if (cs[i] === ' ') return pScalarLine(cs, i + 1)
   if (cs[i] === '\n') {
     if (isItemLine(m + 2, cs, i + 1)) {
