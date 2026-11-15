@@ -1788,6 +1788,10 @@ never matched by size for the next. Then, for each lifted state `x`:
 - both `faq` wrappers the lift writes, the left-hand side over `D(index(x, ℓ_1, …, ℓ_k))` and
   the right-hand side around the left-fold sum of the contributions, MUST range each
   `ℓ_d` as `{"from": X_d}`, never as an interval.
+- every operator `makearray` inside the lifted right-hand side MUST carry `output_idx`
+  `[ℓ_1, …, ℓ_k]`, the grid's loop symbols in grid order, replacing any it had, so an
+  evaluator binds each region's own range to the loop symbols when it materializes the field
+  rather than reading a per-cell gather out of bounds.
 
 So a consumer reads a lifted state's shape from the state itself, like any declared shape,
 and every name in it resolves in the flattened `index_sets`; it never has to search other
