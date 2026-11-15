@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .. import limits
 from .. import yaml_codec as yaml
 from ..math import EMPTY_SYM, latex, parse_latex, print_latex
 from ..math import token as K
@@ -123,46 +124,51 @@ def flow(v: Any) -> str:
 
 def p_flow(s: str, i: int):
     """``Md.pFlow``: a flow collection at ``[`` or ``{``, else a scalar."""
-    if i >= len(s):
+    if not limits.enter():
         return None
-    c = s[i]
-    if c == "[":
-        if s.startswith("]", i + 1):
-            return [], i + 2
-        r = p_flow(s, i + 1)
-        if r is None:
+    try:
+        if i >= len(s):
             return None
-        out = [r[0]]
-        j = r[1]
-        while True:
-            if s.startswith("]", j):
-                return out, j + 1
-            if not s.startswith(", ", j):
-                return None
-            r = p_flow(s, j + 2)
+        c = s[i]
+        if c == "[":
+            if s.startswith("]", i + 1):
+                return [], i + 2
+            r = p_flow(s, i + 1)
             if r is None:
                 return None
-            out.append(r[0])
+            out = [r[0]]
             j = r[1]
-    if c == "{":
-        if s.startswith("}", i + 1):
-            return Obj(), i + 2
-        e = _p_entry_f(s, i + 1)
-        if e is None:
-            return None
-        out = [e[0]]
-        j = e[1]
-        while True:
-            if s.startswith("}", j):
-                return Obj(out), j + 1
-            if not s.startswith(", ", j):
-                return None
-            e = _p_entry_f(s, j + 2)
+            while True:
+                if s.startswith("]", j):
+                    return out, j + 1
+                if not s.startswith(", ", j):
+                    return None
+                r = p_flow(s, j + 2)
+                if r is None:
+                    return None
+                out.append(r[0])
+                j = r[1]
+        if c == "{":
+            if s.startswith("}", i + 1):
+                return Obj(), i + 2
+            e = _p_entry_f(s, i + 1)
             if e is None:
                 return None
-            out.append(e[0])
+            out = [e[0]]
             j = e[1]
-    return yaml.p_inline(s, i)
+            while True:
+                if s.startswith("}", j):
+                    return Obj(out), j + 1
+                if not s.startswith(", ", j):
+                    return None
+                e = _p_entry_f(s, j + 2)
+                if e is None:
+                    return None
+                out.append(e[0])
+                j = e[1]
+        return yaml.p_inline(s, i)
+    finally:
+        limits.leave()
 
 
 def _p_entry_f(s: str, i: int):

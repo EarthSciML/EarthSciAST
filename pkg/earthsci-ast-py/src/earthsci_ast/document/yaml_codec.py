@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import number
+from . import limits, number
 from .strings import is_ident_start, parse_key, parse_quoted, print_key, quote
 from .value import Dec, Obj, wf
 
@@ -193,21 +193,26 @@ def _p_items(m: int, s: str, i: int):
 
 
 def _p_item_body(m: int, s: str, i: int):
-    if i >= len(s):
+    if not limits.enter():
         return None
-    c = s[i]
-    if c == "\n":
-        r = _p_items(m + 2, s, i + 1)
-        return None if r is None else (r[0], r[1])
-    if c == " ":
-        e = _p_entry(m + 2, s, i + 1)
-        if e is not None:
-            r = _p_entries(m + 2, s, e[1])
-            if r is None:
-                return None
-            return Obj([e[0], *r[0]]), r[1]
-        return _p_scalar_line(s, i + 1)
-    return None
+    try:
+        if i >= len(s):
+            return None
+        c = s[i]
+        if c == "\n":
+            r = _p_items(m + 2, s, i + 1)
+            return None if r is None else (r[0], r[1])
+        if c == " ":
+            e = _p_entry(m + 2, s, i + 1)
+            if e is not None:
+                r = _p_entries(m + 2, s, e[1])
+                if r is None:
+                    return None
+                return Obj([e[0], *r[0]]), r[1]
+            return _p_scalar_line(s, i + 1)
+        return None
+    finally:
+        limits.leave()
 
 
 def _p_entries(m: int, s: str, i: int):
@@ -230,17 +235,22 @@ def _p_entry(m: int, s: str, i: int):
 
 
 def _p_val_body(m: int, s: str, i: int):
-    if i >= len(s):
+    if not limits.enter():
         return None
-    c = s[i]
-    if c == " ":
-        return _p_scalar_line(s, i + 1)
-    if c == "\n":
-        if _is_item_line(m + 2, s, i + 1):
-            return _p_items(m + 2, s, i + 1)
-        r = _p_entries(m + 2, s, i + 1)
-        return None if r is None else (Obj(r[0]), r[1])
-    return None
+    try:
+        if i >= len(s):
+            return None
+        c = s[i]
+        if c == " ":
+            return _p_scalar_line(s, i + 1)
+        if c == "\n":
+            if _is_item_line(m + 2, s, i + 1):
+                return _p_items(m + 2, s, i + 1)
+            r = _p_entries(m + 2, s, i + 1)
+            return None if r is None else (Obj(r[0]), r[1])
+        return None
+    finally:
+        limits.leave()
 
 
 def _top_is_array(s: str) -> bool:

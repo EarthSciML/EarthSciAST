@@ -35,3 +35,23 @@ def test_canonical_document_conformance(entry):
     got = canonicalize_document(fixture["input"])
     assert _typed(got) == _typed(fixture["expected"])
     assert fixture["input"] == before, "canonicalize_document mutated its input"
+
+
+def test_deprecated_op_rewrite_skips_name_keyed_maps():
+    """A name-keyed map is not an operator node even when its keys are ``op``
+    and ``args`` (here, variables or bindings with those names), so the
+    deprecated-operator rewrite leaves it alone, as in every other binding;
+    an expression inside one is still rewritten."""
+    doc = {
+        "variables": {"op": "neg", "args": ["x"]},
+        "subsystems": {"op": "pow", "args": ["x", 2]},
+        "bind": {"op": "broadcast", "fn": "neg", "args": ["x"]},
+        "where": {"y": {"op": "neg", "args": ["x"]}},
+    }
+    want = {
+        "variables": {"op": "neg", "args": ["x"]},
+        "subsystems": {"op": "pow", "args": ["x", 2]},
+        "bind": {"op": "broadcast", "fn": "neg", "args": ["x"]},
+        "where": {"y": {"op": "-", "args": ["x"]}},
+    }
+    assert _typed(canonicalize_document(doc)) == _typed(want)
