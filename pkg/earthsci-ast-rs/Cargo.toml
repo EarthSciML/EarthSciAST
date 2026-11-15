@@ -81,6 +81,13 @@ name = "earthsci-inline-tests-adapter-rust"
 path = "src/bin/earthsci-inline-tests-adapter-rust.rs"
 required-features = ["conformance-adapters"]
 
+# The document-format gate's batch driver (scripts/run-document-format-gate.py):
+# prints the corpus as Markdown and Typst, and reads printed texts back.
+[[bin]]
+name = "earthsci-document-format-adapter-rust"
+path = "src/bin/earthsci-document-format-adapter-rust.rs"
+required-features = ["conformance-adapters"]
+
 # The scaling conformance tier's adapter (tests/conformance/scaling/): build
 # time, tape length, first-call latency, steady right-hand-side time, bytes
 # allocated per call and the hand-written reference loops, one document per
