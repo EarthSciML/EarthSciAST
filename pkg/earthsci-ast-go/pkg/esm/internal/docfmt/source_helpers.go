@@ -28,3 +28,32 @@ func asStr(j Json) (string, bool) {
 	s, ok := j.(string)
 	return s, ok
 }
+
+// dropN is s without its first n characters (empty when it is shorter).
+func dropN(s []rune, n int) []rune {
+	if n >= len(s) {
+		return nil
+	}
+	return s[n:]
+}
+
+// symEmpty is the empty symbol table. It is never modified.
+var symEmpty = &Sym{}
+
+// containsRune reports whether s contains c.
+func containsRune(s []rune, c rune) bool {
+	for _, d := range s {
+		if d == c {
+			return true
+		}
+	}
+	return false
+}
+
+// lastIsNewline splits a text ending in a newline into the text before it.
+func cutTrailingNewline(s []rune) ([]rune, bool) {
+	if len(s) == 0 || s[len(s)-1] != '\n' {
+		return nil, false
+	}
+	return s[:len(s)-1], true
+}
