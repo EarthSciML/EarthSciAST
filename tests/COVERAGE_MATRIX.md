@@ -10,8 +10,8 @@ This document maps ESM format specifications to test fixtures to ensure complete
 | 2. Top-Level Structure | All 8 required fields | ✅ Created | `valid/minimal_chemistry.esm` |
 | 2.2 Solver Hints | `stiffness`, `abstol`, `reltol`, `splitting`, `external` (§2.2.6, esm 1.3.0), `time_span` (§2.2.7, esm 1.3.0); all three version gates; `${` refusal; `external` resolution, mount rule, advisory gate and flatten invariance; `time_span` conversion, time origin, interval check and mount rule | ✅ Created | `valid/solver_block.esm`, `valid/solver_external.esm`, `valid/solver_external_only.esm`, `valid/solver_time_span.esm`, `valid/solver_time_span_only.esm`, `invalid/solver_*.esm` (12), `conformance/solver_external/` (CONFORMANCE_SPEC §5.47), `conformance/solver_time_span/` (§5.49), `simulation/solver_external_advisory.esm` |
 | 3. Metadata | Authors, license, created, etc. | ❌ Missing | **GAP**: Need `metadata_complete.esm` |
-| 4. Expression AST | All operators, numbers, strings | ✅ Partial | `display/expr_precedence.json` (18 cases) |
-| 4.2 Built-in Operators | All 30+ operators | ✅ Created | `display/all_operators.json` (35+ cases) |
+| 4. Expression AST | All operators, numbers, strings | ✅ Created | `conformance/document_format/operators.json` (every operator, printed and read back in Markdown and Typst) |
+| 4.2 Built-in Operators | All 30+ operators | ✅ Created | `conformance/document_format/operators.json` |
 | 4.3 Scoped References | Hierarchical dot notation | ✅ Created | `scoping/hierarchical_scoped_references.esm` |
 | 5. Events | Continuous and discrete | ✅ Created | `events/continuous_events.esm`, `events/discrete_events.esm` |
 | 5.2 Continuous Events | Root-finding, affect_neg | ✅ Created | `events/continuous_events.esm` (bouncing_ball) |
@@ -36,7 +36,7 @@ This document maps ESM format specifications to test fixtures to ensure complete
 |------|------------|------------|--------|------|-------|----|----- ---|
 | **Core** | Parse/serialize | Required | Required | Required | Required | Required | ✅ Round-trip tests |
 | **Core** | Schema validation | Required | Required | Required | Required | Required | ✅ Invalid file tests |
-| **Core** | Pretty-print | Required | Required | Required | Required | Required | ✅ Display format tests |
+| **Core** | Markdown / Typst print and parse | Required | Required | Required | Required | Required | ✅ `conformance/document_format/` |
 | **Core** | Substitute | Required | Required | Required | Required | Required | ✅ Substitution tests |
 | **Analysis** | Unit checking | Required | Required | Required | Required | Optional | ❌ Missing unit test fixtures |
 | **Analysis** | Derive ODEs | Required | Required | Required | Required | Optional | ✅ Created `expected_trajectories/ode_derivation_examples.json` |
@@ -128,26 +128,21 @@ Based on libraries spec Section 3.4:
 
 ### Immediate Actions (Fix Phase 1 Blockers)
 
-1. **Create Complete Operator Test Suite**
-   ```
-   tests/display/all_operators.json  # All 30+ operators with examples
-   ```
-
-2. **Create Coupling Test Suite**
+1. **Create Coupling Test Suite**
    ```
    tests/coupling/couple_examples.esm        # Connector equations
    tests/coupling/operator_apply_examples.esm  # Runtime operators
    tests/coupling/callback_examples.esm        # Simulation callbacks
    ```
 
-3. **Create Event Test Suite**
+2. **Create Event Test Suite**
    ```
    tests/events/continuous_events.esm  # Root-finding, affect_neg
    tests/events/discrete_events.esm    # All trigger types
    tests/events/cross_system_events.esm # Multi-system events
    ```
 
-4. **Create Scoped Reference Test Suite**
+3. **Create Scoped Reference Test Suite**
    ```
    tests/scoping/nested_subsystems.esm     # A.B.C.variable resolution
    tests/scoping/scoped_coupling.esm       # Cross-system references
