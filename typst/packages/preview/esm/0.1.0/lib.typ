@@ -21,6 +21,9 @@
   let name = meta.at("name", default: none)
   set document(title: name) if type(name) == str
   set heading(numbering: none)
+  // Display equations are numbered, so a label after one (`$ … $ <eq-loss>`)
+  // can be referenced from the prose (`@eq-loss`).
+  set math.equation(numbering: "(1)")
   if name != none {
     align(center, text(1.6em, weight: "bold", show-value(name)))
   }

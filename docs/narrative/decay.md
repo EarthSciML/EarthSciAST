@@ -1,8 +1,10 @@
 ---
-title: "Writing a model in prose"
 description: "A tutorial: define, test and plot a model inside the page that explains it."
-weight: 10
+esm: "2.2.0"
+name: "decay"
 show_source: true
+title: "Writing a model in prose"
+weight: 10
 ---
 
 A narrative page defines its model as it explains it. The mathematics you read
@@ -12,18 +14,22 @@ page fails to build if the model does not.
 
 ## A first model
 
-::model[Decay]{description="First-order radioactive decay"}
+::model[Decay]
 
-Start with radioactive decay. A sample holds an amount of nitrogen,
-:var[N]{default=100 units="mol" description="Amount of nitrogen"}, which decays
+Start with first-order radioactive decay. A sample holds an amount of nitrogen,
+:var[$N$]{default=100 units="mol" description="Amount of nitrogen"}, which decays
 at a rate proportional to how much is left. The constant of proportionality is
-the decay constant :param[lambda]{default=0.1 units="1/s" description="Decay constant"}:
+the decay constant :param[$\lambda$]{default=0.1 units="1/s" description="Decay constant"}:
 
-::eq[D(N, t) = -lambda*N]{#eq-decay}
+$$
+\frac{\mathrm{d} N}{\mathrm{d} t} = -\lambda N
+$$ {#eq-decay}
 
-That is the whole model. `D(N, t)` is the text syntax for the derivative of
-\(N\) with respect to time, and every name in the equation has to be declared
-somewhere on the page, or the build stops and points at the equation.
+That is the whole model. The equation is a display in LaTeX, the notation of
+the ESM Markdown format: \(\frac{\mathrm{d} N}{\mathrm{d} t}\) is the derivative
+of \(N\) with respect to time, and `{#eq-decay}` after the closing `$$` gives it
+an anchor. Every name in the equation has to be declared somewhere on the page,
+or the build stops and points at the equation.
 
 ::esm-variables{}
 
@@ -67,16 +73,20 @@ parameter_sweep:
 A model with more than one state variable is no harder. Two reservoirs exchange
 mass, and nothing leaves the pair:
 
-::model[TwoBox]{description="Two well-mixed boxes exchanging mass"}
+::model[TwoBox]
 
-Box A holds :var[A]{default=1 units="mol" description="Mass in box A"} and box B
-holds :var[B]{default=0 units="mol" description="Mass in box B"}. Mass moves
-from A to B at rate :param[k_ab]{default=0.3 units="1/s" description="Transfer rate, A to B"}
-and back at rate :param[k_ba]{default=0.1 units="1/s" description="Transfer rate, B to A"}:
+Box A holds :var[$A$]{default=1 units="mol" description="Mass in box A"} and box B
+holds :var[$B$]{default=0 units="mol" description="Mass in box B"}. Mass moves
+from A to B at rate :param[$k_{\mathrm{ab}}$]{default=0.3 units="1/s" description="Transfer rate, A to B"}
+and back at rate :param[$k_{\mathrm{ba}}$]{default=0.1 units="1/s" description="Transfer rate, B to A"}:
 
-::eq[D(A, t) = -k_ab*A + k_ba*B]{#eq-a}
+$$
+\frac{\mathrm{d} A}{\mathrm{d} t} = -k_{\mathrm{ab}} A + k_{\mathrm{ba}} B
+$$ {#eq-a}
 
-::eq[D(B, t) = k_ab*A - k_ba*B]{#eq-b}
+$$
+\frac{\mathrm{d} B}{\mathrm{d} t} = k_{\mathrm{ab}} A - k_{\mathrm{ba}} B
+$$ {#eq-b}
 
 At equilibrium the two flows balance, so \(B = k_{ab} / (k_{ab} + k_{ba})\),
 which is 0.75 for these rates:
@@ -118,7 +128,8 @@ plots:
 
 ## The file behind the page
 
-Everything above is one `.esm` document, which you can read, run or import like
-any other:
+The page itself is an `.esm` document in the ESM Markdown format: the core reads
+it, prose and all, and this build adds the tests and figures. Here is the file,
+which you can read, run or import like any other:
 
 ::esm-download{}

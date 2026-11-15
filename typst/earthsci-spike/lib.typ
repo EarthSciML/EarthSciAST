@@ -32,6 +32,13 @@
   )))
 }
 
-// Build a narrative document (the element format of `earthsci-narrative`):
-// assemble, validate, render math, run tests and analyses, draw figures.
+// Build a narrative document (the internal element format of
+// `earthsci-narrative`): assemble, validate, render math, run tests and
+// analyses, draw figures.
 #let build(doc, ..opts) = _call(_p.build, json.encode(doc), json.encode(opts.named()))
+
+// Build an `.esm` document from its text, read by the core: validate it, run
+// its tests and analyses, draw its figures. `format` is "typst" (the default;
+// a document can pass its own source, `read("model.typ")`), "markdown" or
+// "json".
+#let build-document(text, ..opts) = _call(_p.build_document_text, text, json.encode(opts.named()))

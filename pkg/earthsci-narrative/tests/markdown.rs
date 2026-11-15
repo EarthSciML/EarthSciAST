@@ -1,12 +1,11 @@
 //! End-to-end: a Markdown page in, a built page and an `.esm` file out.
 
-use earthsci_narrative::build::{BuildOptions, BuildOutput, build_value};
+use earthsci_narrative::build::{BuildOptions, BuildOutput};
 use earthsci_narrative::markdown::{self, Page, RenderOptions};
 
 fn build(source: &str) -> (Page, BuildOutput, String) {
     let page = markdown::parse(source, "page.md", "Page");
-    let mut out = build_value(page.document(), &BuildOptions::default());
-    out.diagnostics.extend(page.diagnostics.iter().cloned());
+    let out = markdown::build(&page, &BuildOptions::default());
     let rendered = markdown::render(
         &page,
         &out,
@@ -20,15 +19,18 @@ fn build(source: &str) -> (Page, BuildOutput, String) {
 }
 
 const DECAY: &str = r#"---
-title: Decay
+esm: "2.2.0"
+title: "Decay"
 ---
 
-::model[Decay]{description="First-order decay"}
+::model[Decay]
 
-Nitrogen :var[N]{default=100 units="mol" description="Amount of nitrogen"} decays
-at rate :param[lambda]{default=0.1 units="1/s"}:
+Nitrogen :var[$N$]{default=100 units="mol" description="Amount of nitrogen"} decays
+at rate :param[$\lambda$]{default=0.1 units="1/s"}:
 
-::eq[D(N, t) = -lambda*N]{#eq-decay}
+$$
+\frac{\mathrm{d} N}{\mathrm{d} t} = -\lambda N
+$$ {#eq-decay}
 
 ::esm-variables{}
 
@@ -51,11 +53,15 @@ description: Decay of N.
 fn a_page_builds_into_a_page() {
     let (page, out, md) = build(DECAY);
     assert!(out.ok, "{:#?}", out.diagnostics);
-    assert_eq!(page.elements.len(), 6);
+    assert_eq!(page.elements.len(), 2);
 
     // Front matter is passed through untouched.
-    assert!(md.starts_with("---\ntitle: Decay\n---\n"), "{md}");
-    // Mathematics, in the delimiters the docs site renders.
+    assert!(
+        md.starts_with("---\nesm: \"2.2.0\"\ntitle: \"Decay\"\n---\n"),
+        "{md}"
+    );
+    // Mathematics, as the page wrote it, in the delimiters the docs site
+    // renders.
     assert!(md.contains("Nitrogen \\(N\\) decays"), "{md}");
     assert!(md.contains("at rate \\(\\lambda\\):"), "{md}");
     assert!(
@@ -63,7 +69,7 @@ fn a_page_builds_into_a_page() {
         "{md}"
     );
     assert!(
-        md.contains("\\[\n\\frac{\\partial N}{\\partial t} = -\\lambda \\cdot N\n\\]"),
+        md.contains("\\[\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -\\lambda N\n\\]"),
         "{md}"
     );
     // The variables table.
@@ -83,15 +89,12 @@ fn a_page_builds_into_a_page() {
     assert!(md.contains("<figcaption>Decay of N.</figcaption>"), "{md}");
     assert!(md.contains("href=\"page.esm\""), "{md}");
 
-    // And the `.esm` file the page defines.
-    assert_eq!(
-        out.esm["models"]["Decay"]["variables"]["N"]["default"],
-        100.0
-    );
-    assert_eq!(
-        out.esm["metadata"]["x_esd"]["narrative"]["labels"]["eq-decay"],
-        "/models/Decay/equations/0"
-    );
+    // And the `.esm` file the page defines: the core's reading of the page,
+    // with the page's test and figure added and the site's keys dropped.
+    assert_eq!(out.esm["models"]["Decay"]["variables"]["N"]["default"], 100);
+    assert_eq!(out.esm["models"]["Decay"]["tests"][0]["id"], "half-life");
+    assert_eq!(out.esm["metadata"]["name"], "Page");
+    assert!(out.esm["metadata"].get("title").is_none());
 }
 
 #[test]
@@ -110,34 +113,89 @@ fn a_failing_test_fails_the_page_and_shows_where() {
     // The diagnostic points at the page, at the line the test is on.
     let source_span = failed[0].source.as_ref().unwrap();
     assert_eq!(source_span.file.as_deref(), Some("page.md"));
-    assert_eq!(source_span.line, Some(14));
+    assert_eq!(source_span.line, Some(17));
 }
 
 #[test]
-fn an_undeclared_name_points_at_its_equation() {
-    let source = DECAY.replace("-lambda*N", "-lamda*N");
+fn an_undeclared_name_is_shown_at_its_equation() {
+    let source = DECAY.replace("= -\\lambda N", "= -\\lambda N - q");
     let (_, out, md) = build(&source);
     assert!(!out.ok);
     let d = out
         .diagnostics
         .iter()
-        .find(|d| d.code == "undeclared_name")
-        .expect("an undeclared name");
-    assert_eq!(d.source.as_ref().unwrap().line, Some(10));
-    assert!(d.message.contains("lamda"), "{}", d.message);
-    // The problem is shown on the page, and the test that would have run
-    // against a broken model is not run.
-    assert!(md.contains("error[undeclared_name]"), "{md}");
+        .find(|d| {
+            d.path
+                .as_deref()
+                .is_some_and(|p| p.starts_with("/models/Decay/equations/0"))
+        })
+        .unwrap_or_else(|| panic!("{:#?}", out.diagnostics));
+    assert!(d.is_error());
+    // The core's finding is placed at the display, with its line.
+    assert_eq!(d.source.as_ref().unwrap().line, Some(11));
+    let at = md.find(&format!("error[{}]", d.code)).expect(&md);
+    assert!(at > md.find("\\frac{\\mathrm{d} N}").unwrap(), "{md}");
+    assert!(at < md.find("esm-variables").unwrap_or(md.len()), "{md}");
+    // The test that would have run against a broken model is not run.
     assert!(md.contains("esm-problem--skipped"), "{md}");
 }
 
 #[test]
+fn a_page_the_core_refuses_is_reported_and_still_rendered() {
+    let source = DECAY.replace(":var[$N$]", ":var[N]");
+    let (page, out, md) = build(&source);
+    assert!(page.esm.is_none());
+    assert!(!out.ok);
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("not an ESM Markdown document")),
+        "{:#?}",
+        out.diagnostics
+    );
+    assert!(md.contains("error[bad_directive]"), "{md}");
+    // The equations still render: they are the page's own LaTeX.
+    assert!(md.contains("\\frac{\\mathrm{d} N}{\\mathrm{d} t}"), "{md}");
+}
+
+#[test]
+fn the_documents_own_tests_and_plots_are_shown_where_they_are() {
+    let source = r#"---
+esm: "2.2.0"
+name: "box"
+---
+
+::model[Box]
+
+:var[$c$]{default=1 units="kg/m^3"}
+
+:param[$u$]{default=1 units="1/s"}
+
+$$
+\frac{\mathrm{d} c}{\mathrm{d} t} = -u c
+$$
+
+::plot{id="run" plot='{id: "trace", type: "line", x: {variable: "t"}, "y": {variable: "c"}}' time_span='{end: 10, start: 0}'}
+
+Text after the plot.
+"#;
+    let (_, out, md) = build(source);
+    assert!(out.ok, "{:#?}", out.diagnostics);
+    assert_eq!(out.constructs[0].path, "/models/Box/analyses/0");
+    let figure = md
+        .find("<figure class=\"esm-figure\" id=\"fig-trace\">")
+        .expect(&md);
+    assert!(figure < md.find("Text after the plot.").unwrap(), "{md}");
+}
+
+#[test]
 fn a_page_with_no_model_still_renders_examples() {
-    let (page, out, md) = build("Text.\n\n::esm-example[a + b*c]\n");
+    let (page, out, md) =
+        build("---\ntitle: \"Examples\"\n---\n\nText.\n\n::esm-example[a + b*c]\n");
     assert!(page.elements.is_empty());
     assert!(out.ok, "{:#?}", out.diagnostics);
     assert!(md.contains("```text\na + b*c\n```"), "{md}");
-    assert!(md.contains("a + b \\cdot c"), "{md}");
+    assert!(md.contains("a + b c"), "{md}");
     assert!(md.contains("\"op\": \"+\""), "{md}");
 }
 
@@ -159,25 +217,27 @@ fn a_page_can_show_the_source_of_each_block() {
     let (_, _, md) = build(DECAY);
     assert!(!md.contains("esm-source"), "{md}");
 
-    let source = DECAY.replace("title: Decay\n", "title: Decay\nshow_source: true\n");
+    let source = DECAY.replace(
+        "title: \"Decay\"\n",
+        "title: \"Decay\"\nshow_source: true\n",
+    );
     let (_, out, md) = build(&source);
     assert!(out.ok, "{:#?}", out.diagnostics);
     let shown =
         |src: &str| format!("<div class=\"esm-source\">\n\n```markdown\n{src}\n```\n\n</div>\n\n");
 
     // A paragraph with inline directives is shown whole, then rendered.
-    let paragraph = "Nitrogen :var[N]{default=100 units=\"mol\" description=\"Amount of nitrogen\"} decays\nat rate :param[lambda]{default=0.1 units=\"1/s\"}:";
+    let paragraph = "Nitrogen :var[$N$]{default=100 units=\"mol\" description=\"Amount of nitrogen\"} decays\nat rate :param[$\\lambda$]{default=0.1 units=\"1/s\"}:";
     let at = md.find(&shown(paragraph)).expect(&md);
     assert!(md[at..].contains("Nitrogen \\(N\\) decays"), "{md}");
     // Each leaf or container directive is its own block, ahead of its output.
     let eq = md
-        .find(&shown("::eq[D(N, t) = -lambda*N]{#eq-decay}"))
+        .find(&shown(
+            "$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -\\lambda N\n$$ {#eq-decay}",
+        ))
         .expect(&md);
     assert!(eq < md.find("<a id=\"eq-decay\"").unwrap(), "{md}");
-    assert!(
-        md.contains(&shown("::model[Decay]{description=\"First-order decay\"}")),
-        "{md}"
-    );
+    assert!(md.contains(&shown("::model[Decay]")), "{md}");
     let test = md.find("```markdown\n:::esm-test{#half-life").expect(&md);
     assert!(
         test < md.find("Test <code>half-life</code> passed").unwrap(),
@@ -192,22 +252,22 @@ fn a_page_can_show_the_source_of_each_block() {
 fn shown_source_with_a_fence_in_it_gets_a_longer_fence() {
     // A code fence straight after a paragraph, with no blank line, is part of
     // the paragraph's block, so the source shown holds a fence of its own.
-    let source = "---\nshow_source: true\n---\n\nRead :var[N]{default=1} as:\n```text\nN\n```\n";
+    let source = "---\nshow_source: true\n---\n\n::model[M]\n\nRead :var[$N$]{default=1} as:\n```text\nN\n```\n";
     let (_, _, md) = build(source);
     assert!(
-        md.contains("````markdown\nRead :var[N]{default=1} as:\n```text\nN\n```\n````"),
+        md.contains("````markdown\nRead :var[$N$]{default=1} as:\n```text\nN\n```\n````"),
         "{md}"
     );
 }
 
 #[test]
 fn shown_source_splits_on_whitespace_blank_lines_with_crlf() {
-    let source = "---\r\nshow_source: true\r\n---\r\n\r\nFirst paragraph.\r\n \t\r\nRead :var[N]{default=1}.\r\n";
+    let source = "---\r\nshow_source: true\r\n---\r\n\r\nFirst paragraph.\r\n \t\r\nRead :var[$N$]{default=1}.\r\n";
     let (_, _, md) = build(source);
 
     assert!(
         md.contains(
-            "<div class=\"esm-source\">\n\n```markdown\nRead :var[N]{default=1}.\r\n```\n\n</div>\n\n"
+            "<div class=\"esm-source\">\n\n```markdown\nRead :var[$N$]{default=1}.\r\n```\n\n</div>\n\n"
         ),
         "{md}"
     );
