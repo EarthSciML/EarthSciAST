@@ -16,6 +16,7 @@ file with executable definitions):
 | Julia | Lean |
 |---|---|
 | `DJson` | `Json.lean` (the value type, canonical numbers) |
+| `DLimits` | none: the bounds the readers add to the Lean model (Rust `document::limits`) |
 | `DNumber` | `Number.lean` |
 | `DStrings` | `Strings.lean` |
 | `DYaml` | `Yaml.lean` |
@@ -30,6 +31,7 @@ points ([`print_markdown`](@ref) and the rest) are in `src/document_format.jl`.
 module DocumentFormats
 
 include("json.jl")
+include("limits.jl")
 include("number.jl")
 include("strings.jl")
 include("yaml.jl")

@@ -19,6 +19,7 @@ module DTypstDict
 
 using ..DJson
 import ..DNumber
+using ..DLimits: nested
 using ..DStrings: parse_key, parse_quoted, print_key, quote_str, spaces
 
 """`TypstDict.keywords`: Typst keywords, which cannot be bare dictionary keys."""
@@ -140,7 +141,10 @@ function p_min(r::Chars)
 end
 
 """`TypstDict.pVal`: a value, at its first character."""
-function p_val(input::Chars)
+p_val(input::Chars) = nested(_p_val, input)
+
+# The body of `p_val`, with its construct open (Rust `Nest::enter`).
+function _p_val(input::Chars)
     c = at(input)
     c == EOFC && return nothing
     if c == '('

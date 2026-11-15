@@ -14,6 +14,7 @@ module SMarkdown
 using ..DJson
 import ..DMath
 import ..DYaml
+using ..DLimits: nested
 using ..MExpr: Sym, name_ok, jwf
 using ..DStrings: esc_char, hex4, is_ident, parse_key, parse_quoted, print_key, read_ident
 using ..SSkeleton
@@ -114,7 +115,10 @@ end
 flow_v(v) = flow(v, Char[])
 
 """`Md.pFlow`: a flow collection at `[` or `{`, else a scalar."""
-function p_flow(s::Chars)
+p_flow(s::Chars) = nested(_p_flow, s)
+
+# The body of `p_flow`, with its construct open (Rust `Nest::enter`).
+function _p_flow(s::Chars)
     c = at(s)
     c == EOFC && return nothing
     if c == '['

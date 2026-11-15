@@ -9,6 +9,10 @@
 # * `variant`: `parse(surface, input) == esm` and `print(surface, esm) == canonical`;
 # * `refusal`: `parse(surface, input)` fails with the diagnostic code `error`.
 #
+# `limits.json` (README, section Limits) holds the bounds of the readers: each
+# case's text is built from its recipe and must read as `esm_json` or be
+# refused with the code `error`, without exhausting the stack.
+#
 # The corpus round trip is computed here from the corpus itself, never stored:
 # every `.esm` under `tests/` that is a JSON object (the corpus of
 # `formal/scripts/doc-corpus.py`), canonicalized, printed in each format and
@@ -110,6 +114,47 @@ function _docfmt_case(case)
     return out
 end
 
+# The text of a `limits.json` case, built from its recipe (README, section
+# Limits).
+function _docfmt_limit_input(heads, case)
+    input = case["input"]
+    head = String(heads[String(case["surface"])])
+    if haskey(input, "yaml_levels")
+        io = IOBuffer()
+        print(io, head, "```esm:metaparameters\nx:\n")
+        for i in 1:(Int(input["yaml_levels"]) - 1)
+            print(io, " "^(2i), "-\n")
+        end
+        print(io, "```\n")
+        return String(take!(io))
+    end
+    field(k) = String(get(input, k, ""))
+    n = Int(get(input, "n", 0))
+    return head * field("prefix") * field("open")^n * field("middle") * field("close")^n *
+        field("suffix")
+end
+
+# Run one `limits.json` case; the failure, as a message, or `nothing`.
+function _docfmt_limit_case(heads, case)
+    id = String(case["id"])
+    format = _docfmt_format(String(case["surface"]))
+    text = _docfmt_limit_input(heads, case)
+    got = try
+        parse_document(text, format)
+    catch e
+        e
+    end
+    if haskey(case, "esm_json")
+        want = JSON.parse(String(case["esm_json"]))
+        got isa Exception && return "$id: refused: $(sprint(showerror, got))"
+        return _docfmt_jeq(got, want) ? nothing : "$id: read differently:\n$(JSON.json(got))"
+    end
+    code = String(case["error"])
+    got isa EarthSciAST.ParseError && got.code == code && return nothing
+    return got isa Exception ? "$id: expected `$code`, got $(sprint(showerror, got))" :
+        "$id: expected `$code`, read $(JSON.json(got))"
+end
+
 # The `.esm` files under `tests/` that are JSON objects, the corpus
 # `formal/scripts/doc-corpus.py` reads: (path, decoded document) pairs.
 function _docfmt_corpus()
@@ -186,6 +231,20 @@ end
         @test isempty(failures)
         @test checked > 0
         @test_throws ArgumentError print_math("x", String[], :latex)
+    end
+
+    @testset "reader limits (limits.json)" begin
+        limits = JSON.parsefile(joinpath(DOCFMT_DIR, "limits.json"))
+        cases = limits["cases"]
+        @test length(cases) > 30
+        failures = String[]
+        for case in cases
+            msg = _docfmt_limit_case(limits["heads"], case)
+            msg === nothing || push!(failures, msg)
+        end
+        isempty(failures) || @info "limits.json failures" count = length(failures) first =
+            join(first(failures, 10), "\n")
+        @test isempty(failures)
     end
 
     @testset "format selector" begin
