@@ -9,7 +9,12 @@ import type { ErrorObject } from 'ajv'
 import validator from './generated-validator.js'
 import type { EsmFile } from './types.js'
 import { validateUnits, type UnitWarning } from './units.js'
-import { losslessJsonParse, stripNumericLiterals } from './numeric-literal.js'
+import {
+  floatLit,
+  isNumericLiteral,
+  losslessJsonParse,
+  stripNumericLiterals,
+} from './numeric-literal.js'
 import { lowerEnums } from './lower-enums.js'
 import {
   expandDocument,
@@ -188,17 +193,32 @@ function parseJson(input: string): unknown {
 /**
  * Parse JSON string preserving integer-vs-float distinction via
  * `losslessJsonParse`. Numeric literals in the result are tagged
- * `NumericLiteral` leaves per RFC §5.4.1.
+ * `NumericLiteral` leaves per RFC §5.4.1; an integer token past 2^53 (a
+ * `bigint` from `losslessJsonParse`) is a float literal of its nearest
+ * binary64, as in the Go binding's `normalizeJSONNumber`.
  */
 function parseJsonLossless(input: string): unknown {
   try {
-    return losslessJsonParse(input)
+    return bigintsToFloatLits(losslessJsonParse(input))
   } catch (error) {
     throw new ParseError(
       `Invalid JSON: ${error instanceof Error ? error.message : 'Unknown error'}`,
       error instanceof Error ? error : undefined,
     )
   }
+}
+
+/** The bigints of a fresh `losslessJsonParse` tree as float literals, in place. */
+function bigintsToFloatLits(value: unknown): unknown {
+  if (typeof value === 'bigint') return floatLit(Number(value))
+  if (isNumericLiteral(value)) return value
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) value[i] = bigintsToFloatLits(value[i])
+  } else if (value !== null && typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    for (const key of Object.keys(obj)) obj[key] = bigintsToFloatLits(obj[key])
+  }
+  return value
 }
 
 /**

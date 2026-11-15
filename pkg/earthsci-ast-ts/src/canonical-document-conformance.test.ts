@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { canonicalizeDocument } from './canonicalize.js'
 import { printMarkdown } from './document/index.js'
 import {
-  exactInteger,
   isFloatLit,
   isIntLit,
   isNumericLiteral,
@@ -72,14 +71,15 @@ describe('canonicalizeDocument integers past 2^53', () => {
   // bindings.
   const text =
     '{"max": 9223372036854775807, "past": 9223372036854775808, "min": -9223372036854775808}'
-  const out = canonicalizeDocument(losslessJsonParse(text)) as Record<string, NumericLiteral>
+  const out = canonicalizeDocument(losslessJsonParse(text)) as Record<
+    string,
+    NumericLiteral | bigint
+  >
 
   it('keeps Int64 max an integer and makes 2^63 a float', () => {
-    expect(isIntLit(out.max)).toBe(true)
-    expect(exactInteger(out.max)).toBe(9223372036854775807n)
+    expect(out.max).toBe(9223372036854775807n)
     expect(isFloatLit(out.past)).toBe(true)
-    expect(isIntLit(out.min)).toBe(true)
-    expect(out.min.value).toBe(-(2 ** 63))
+    expect(out.min).toBe(-9223372036854775808n)
   })
 
   it('writes the integer as it was written', () => {
