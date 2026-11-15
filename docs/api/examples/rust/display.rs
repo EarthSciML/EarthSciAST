@@ -1,26 +1,31 @@
-//! Render equations and expressions for people: Unicode, LaTeX and plain text.
+//! Print equations and expressions as math for people: LaTeX or Typst.
 
-use earthsci_ast::{load_path, to_ascii, to_latex, to_unicode};
+use earthsci_ast::{DocumentFormat, expression_names, load_path, print_math};
 use earthsci_ast_api_examples::fixture;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // region: display ops=to_unicode,to_latex,to_ascii
+    // region: display ops=print_math,expression_names
     let doc = load_path(fixture("decay.esm"))?;
     let model = &doc.models.as_ref().unwrap()["Decay"];
-    let decay = &model.equations[0];
 
-    let unicode = to_unicode(decay);
-    let latex = to_latex(decay);
-    let ascii = to_ascii(decay);
-    println!("{unicode}\n{latex}\n{ascii}");
-    assert_eq!(ascii, "D(N)/Dt = (-lambda) * N");
-    assert!(unicode.contains('λ'));
-    assert!(latex.contains("\\lambda"));
+    // print_math takes the JSON form of an expression or equation, and the
+    // names it may use: a run of letters is one name only when declared.
+    let decay = serde_json::to_value(&model.equations[0])?;
+    let names = expression_names(&decay);
+    assert_eq!(names, ["N", "lambda"]);
 
-    // The same functions take a single expression, or a whole model (which
-    // renders a summary).
-    assert_eq!(to_ascii(&model.equations[1].rhs), "log(2) / lambda");
-    assert!(to_unicode(model).contains("half_life"));
+    let latex = print_math(&decay, &names, DocumentFormat::Markdown);
+    let typst = print_math(&decay, &names, DocumentFormat::Typst);
+    println!("{latex}\n{typst}");
+    assert_eq!(
+        latex,
+        r"\frac{\mathrm{d} N}{\mathrm{d} t} = \left(-\lambda\right) N"
+    );
+    assert_eq!(typst, "(dif N)/(dif t) = (-lambda) N");
+
+    // An expression prints the same way, and `Display` is its Typst math.
+    let rhs = &model.equations[1].rhs;
+    assert_eq!(rhs.to_string(), "ln(2)/lambda");
     // endregion
 
     Ok(())
