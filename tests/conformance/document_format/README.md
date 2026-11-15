@@ -34,8 +34,11 @@ Every file is `{"$comment", "oracle", "area", "cases": [...]}`. Each case has an
 **`print`** — a document and both of its printed texts.
 
 - `esm`: the document, in canonical form: sorted keys and canonical numbers
-  (CONFORMANCE §5.5.3.1), every `units` and `default_units` string in the canonical unit
-  spelling, the deprecated `neg` and `pow` rewritten to unary `-` and `^`, and a `const`
+  (CONFORMANCE §5.5.3.1: a decimal is read as the nearest binary64, which is an integer
+  when integral and in Int64 and otherwise its shortest round-trip digits; an integer
+  token in Int64 is kept exactly), every `units` and `default_units` string in the
+  canonical unit spelling, the deprecated `neg` and `pow` rewritten to unary `-` and `^`
+  (and a `broadcast` `fn` of `neg` to `-`), and a `const`
   node whose units spell `1` (`"1"`, `"dimensionless"`, `""`) without them, so one whose
   value is a number is the bare number whatever other fields (`id`, `shape`, …) it has.
   A declaration keeps `units: "1"`. These are the rules of every binding's
