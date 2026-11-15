@@ -366,11 +366,18 @@ end
 
 # Render one side (substrates or products) of a reaction from the ordered
 # StoichiometryEntry vector (see raw_substrates/raw_products — the
-# backward-compat Dict property shim loses author order). Thin wrapper over
-# display.jl's shared `_format_stoichiometry_side` with code-emitter
-# formatting: bare species names, `<coeff>*` prefixes, ∅ for empty sides.
-_format_reaction_side(entries::Union{Vector{StoichiometryEntry}, Nothing}) =
-    _format_stoichiometry_side(entries; format_coefficient = c -> "$(c)*")
+# backward-compat Dict property shim loses author order): bare species names
+# joined with ` + `, a `<coeff>*` prefix when the stoichiometry is not 1, ∅ for
+# an empty side.
+function _format_reaction_side(entries::Union{Vector{StoichiometryEntry}, Nothing})
+    (entries === nothing || isempty(entries)) && return "∅"
+    return join(
+        [
+            (entry.stoichiometry == 1 ? "" : "$(entry.stoichiometry)*") * entry.species
+                for entry in entries
+        ], " + "
+    )
+end
 
 function format_reaction(reaction::Reaction)
     rate = isnothing(reaction.rate) ? "1.0" : format_julia_expression(reaction.rate)
@@ -384,9 +391,8 @@ end
 # ---------------------------------------------------------------------------
 # Precedence-aware parenthesization for emitted Julia code
 #
-# Adapted from display.jl's `get_operator_precedence` / `needs_parentheses`,
-# but tuned for CODE that is *executed*, not just read: the table must match
-# Julia's parser so the emitted script re-parses to the same AST.
+# The table matches Julia's parser so the emitted script re-parses to the same
+# AST.
 # ---------------------------------------------------------------------------
 
 # Julia surface syntax: ||, && loosest; ^ tightest and right-associative.
@@ -418,12 +424,8 @@ function _codegen_needs_parens(
     child_prec > parent_prec && return false
     # Equal precedence:
     parent_op in ("-", "/") && return is_right   # left-associative, non-commutative
-    # `^` right-associative: parenthesize the LEFT operand. NOTE deliberate
-    # divergence from display.jl `needs_parentheses`, which parenthesizes the
-    # RIGHT operand of `^` — that rule is frozen by the cross-language
-    # pretty-printer contract (pretty-print.ts, pinned by the tests/display
-    # fixtures). Emitted code must instead re-parse correctly in Julia, so the
-    # emitter wraps the left. Do not reconcile.
+    # `^` right-associative: parenthesize the LEFT operand, so the emitted code
+    # re-parses correctly in Julia.
     parent_op == "^" && return !is_right
     # Chained comparisons mean something different in Julia — wrap.
     parent_op in ("==", "!=", "<", ">", "<=", ">=") && return true
@@ -440,10 +442,7 @@ function _format_unary_minus_operand(arg::ASTExpr, table::Dict{String, Int}, fmt
     return inner
 end
 
-# Julia-source emitter. Named `format_julia_expression` (not the bare
-# `format_expression`) so it cannot be confused with display.jl's same-named
-# pretty-printer, whose 2-arg method renders notation rather than executable
-# code.
+# Julia-source emitter.
 function format_julia_expression(expr::ASTExpr)
     if isa(expr, IntExpr)
         return string(expr.value)

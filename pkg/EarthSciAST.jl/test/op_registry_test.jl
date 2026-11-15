@@ -207,45 +207,10 @@ const ESM = EarthSciAST
         end
         # The spellings with no registry row stay OUT of the registry (their
         # rows would silently reclassify them for template lowering).
-        for name in ("ln", "log2", "expm1")
+        for name in ("ln", "log2", "expm1", "=")
             @test ESM._op_spec(name) === nothing
         end
         @test_throws ArgumentError ESM._ops_with_dim_class(:not_a_class)
-    end
-
-    @testset "display precedence / separator lookups (pre-registry literals)" begin
-        # Display output is contract-pinned (RENDERING_CONTRACT + the display
-        # goldens), so these two lookups are pinned literal-for-literal. Both
-        # derive from the registry (`display_prec` / `infix_sep`) plus the
-        # derivation-site wire alias "=" ↦ the "==" row's values ("=" has no
-        # registry row for the same `_op_in_T` reason as above).
-        @test ESM._DISPLAY_OP_PRECEDENCE == Dict{String, Int}(
-            "or" => 1,
-            "and" => 2,
-            "==" => 3, "=" => 3, "!=" => 3,
-            "<" => 3, ">" => 3, "<=" => 3, ">=" => 3,
-            "+" => 4, "-" => 4,
-            "*" => 5, "/" => 5,
-            "not" => 6,
-            "^" => 7,
-        )
-        @test ESM._INFIX_SEPARATORS == Dict(
-            "-" => (ascii = " - ", unicode = " − ", latex = " - "),
-            "*" => (ascii = " * ", unicode = "·", latex = " \\cdot "),
-            ">=" => (ascii = " >= ", unicode = " ≥ ", latex = " \\geq "),
-            "<=" => (ascii = " <= ", unicode = " ≤ ", latex = " \\leq "),
-            "==" => (ascii = " == ", unicode = " = ", latex = " = "),
-            "=" => (ascii = " == ", unicode = " = ", latex = " = "),
-            "!=" => (ascii = " != ", unicode = " ≠ ", latex = " \\neq "),
-            "and" => (ascii = " and ", unicode = " ∧ ", latex = " \\land "),
-            "or" => (ascii = " or ", unicode = " ∨ ", latex = " \\lor "),
-        )
-        @test ESM._op_spec("=") === nothing
-        # Anything without an explicit infix precedence binds atom-tight.
-        @test ESM._DISPLAY_FUNCTION_PRECEDENCE == 8
-        @test ESM.get_operator_precedence("sin") == 8
-        @test ESM.is_function_call_op("sin")
-        @test !ESM.is_function_call_op("=")
     end
 
     @testset "_UNARY_ELEMENTWISE_OPS: the mechanical unary ladder arms, in order" begin

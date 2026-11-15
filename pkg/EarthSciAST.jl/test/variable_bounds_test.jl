@@ -279,6 +279,6 @@ _vb_param(; kw...) = Dict{String, Any}("type" => "parameter", "units" => "1", "d
         flat = EarthSciAST.flatten(_vb_load(doc))
         ub = flat.state_variables["A.x"].ub
         @test ub isa EarthSciAST.ASTExpr
-        @test EarthSciAST.to_ascii(ub) == EarthSciAST.to_ascii(flat.equations[1].rhs.args[1])
+        @test canonical_expr_json(ub) == canonical_expr_json(flat.equations[1].rhs.args[1])
     end
 end

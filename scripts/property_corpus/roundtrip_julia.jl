@@ -21,18 +21,14 @@ function roundtrip_one(path::String)::Dict{String, Any}
     try
         raw = read(path, String)
         data = JSON3.read(raw)
-        # `expression_from_json` is the wire-JSON decoder. It is NOT
-        # `parse_expression`, which since 3f2c468b7 means "parse ASCII
-        # expression TEXT" and only accepts an AbstractString — calling it here
-        # made every fixture a MethodError, so Julia reported `null` for all 50
-        # and the whole stage read as cross-binding divergence.
+        # `expression_from_json` is the wire-JSON decoder.
         expr = EarthSciAST.expression_from_json(data)
         # `serialize_expression` returns a plain string-keyed
         # `Dict{String,Any}`/`Vector`/scalar tree directly (since the
         # `f02f99d2` "one post-wire carrier" refactor there are no JSON3
         # carrier types left to scrub, so the former `_plain_json` pass was
         # removed from the package). The plain tree preserves each scalar's
-        # Julia type — the `Int64` literals `parse_expression` narrowed to
+        # Julia type — the `Int64` literals the decoder narrowed to
         # `IntExpr` (CONFORMANCE_SPEC §5.5.3.1 rule 1) stay `Int64`, so the
         # outer `JSON3.write` emits them as integers (no heterogeneous-array
         # re-floating). Emit `out` verbatim.

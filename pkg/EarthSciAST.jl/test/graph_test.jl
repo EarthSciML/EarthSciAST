@@ -1,6 +1,6 @@
 """
 Tests for graph analysis functionality (src/graph.jl):
-component-level and expression-level graphs, chemical formula rendering,
+component-level and expression-level graphs
 and Mermaid/DOT/JSON export sanitization.
 """
 
@@ -65,20 +65,6 @@ _graph_rsys() = ReactionSystem(
         desc = g.edges[1].data.description
         @test desc == "Variable mapping: M.x -> N.x"
         @test !occursin("\$(coupling.from)", desc)
-    end
-
-    @testset "render_chemical_formula delegates to element-aware formatter" begin
-        @test render_chemical_formula("CO2") == "CO₂"
-        @test render_chemical_formula("H2SO4") == "H₂SO₄"
-        @test render_chemical_formula("CH3OH") == "CH₃OH"
-        # Element-aware: digits after a non-element are untouched
-        @test render_chemical_formula("x2") == "x2"
-        # Graph rendering and display rendering agree
-        @test render_chemical_formula("CO2") ==
-            ESSG.format_chemical_subscripts("CO2", :unicode)
-        # 1-arg format_node_label
-        @test format_node_label("CO2") == "CO₂"
-        @test format_node_label("temp") == "temp"
     end
 
     @testset "to_mermaid sanitizes dotted ids and quotes labels" begin

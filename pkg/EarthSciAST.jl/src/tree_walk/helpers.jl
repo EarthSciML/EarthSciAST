@@ -169,8 +169,8 @@ end
 _doubly_defined_refusal(name::AbstractString, diff_eq::Equation, bare_eq::Equation) =
     TreeWalkError(
     ERROR_CODES.EQUATION_COUNT_MISMATCH,
-    "unknown '$name' is defined twice — by `$(to_ascii(diff_eq))` and by " *
-        "`$(to_ascii(bare_eq))`. esm-spec §4.9.4 counts an equation whichever form " *
+    "unknown '$name' is defined twice — by `$(diff_eq)` and by " *
+        "`$(bare_eq)`. esm-spec §4.9.4 counts an equation whichever form " *
         "its LHS takes, so this system has one more equation than it has unknowns " *
         "to bind; keeping the derivative and dropping the constraint would run a " *
         "model the document does not describe. Remove one of the two definitions."

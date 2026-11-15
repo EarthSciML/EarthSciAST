@@ -96,6 +96,149 @@ function print_math(expr, names, format::Symbol)::String
 end
 
 """
+    expression_names(expr) -> Vector{String}
+
+The variable names an expression or an equation uses, in order of first use:
+its string leaves under `lhs`, `rhs` and `args`. These are the `names` to give
+[`print_math`](@ref) to show an expression on its own, with its names declared.
+
+`expr` is a decoded ESM expression or equation (the value `print_math` takes),
+or a typed [`ASTExpr`](@ref) or [`Equation`](@ref).
+
+```julia
+julia> expression_names(Dict("lhs" => "y", "rhs" => Dict("op" => "*", "args" => ["k", "y"])))
+2-element Vector{String}:
+ "y"
+ "k"
+```
+"""
+function expression_names(expr)
+    out = String[]
+    _expression_names!(out, expr)
+    return out
+end
+
+function _expression_names!(out::Vector{String}, v)
+    if v isa AbstractString
+        name = String(v)
+        name in out || push!(out, name)
+    elseif v isa AbstractVector
+        foreach(x -> _expression_names!(out, x), v)
+    elseif v isa AbstractDict
+        for key in ("lhs", "rhs", "args")
+            child = get(v, key, get(v, Symbol(key), nothing))
+            child === nothing || _expression_names!(out, child)
+        end
+    elseif v isa VarExpr
+        v.name in out || push!(out, v.name)
+    elseif v isa OpExpr
+        foreach(x -> _expression_names!(out, x), v.args)
+    elseif v isa Equation
+        _expression_names!(out, v.lhs)
+        _expression_names!(out, v.rhs)
+    end
+    return out
+end
+
+"""
+    parse_math(text::AbstractString, names, format::Symbol)
+
+Read one expression, or one equation, written as math under a set of declared
+names: LaTeX for `:markdown` (Lean `Math.parseLatex`), Typst math for `:typst`
+(`Math.parseTypst`). The inverse of [`print_math`](@ref):
+`parse_math(print_math(e, names, f), names, f)` is `e` in canonical form.
+
+`text` is what a document display holds, without its delimiters. Text whose top
+is `=` reads as an equation, an `OrderedDict` with `lhs` and `rhs`, as a display
+does (`Source.eqSides`); any other text reads as an expression (a number, a name
+or an operator node, decoded as [`parse_markdown`](@ref) decodes a document).
+`names` (any collection of strings) plays the part of the variables a component
+declares: it decides how a run of letters reads (in LaTeX, `RT` is the name `RT`
+when it is declared, the product of `R` and `T` when they are). No template is
+in scope.
+
+Throws a [`ParseError`](@ref) whose `code` is `"removed_op"` when the math uses
+an operator removed from the format (esm-spec §4.2), and `"parse_error"` for
+any other text that is not math, and for one past a bound of the reader (nested
+too deeply, or holding a number beyond the binary64 range).
+
+```julia
+parse_math("y = 2 k", ["k", "y"], :typst)
+# OrderedDict("lhs" => "y", "rhs" => OrderedDict("args" => Any[2, "k"], "op" => "*"))
+```
+"""
+function parse_math(text::AbstractString, names, format::Symbol)
+    (format === :markdown || format === :typst) ||
+        throw(ArgumentError("unknown document format :$format (expected :markdown or :typst)"))
+    DF = DocumentFormats
+    DJ = DF.DJson
+    DL = DF.DLimits
+    str = String(text)
+    isvalid(str) ||
+        throw(ParseError("the text is not valid UTF-8"; code = ERROR_CODES.PARSE_ERROR))
+    sym = DF.MExpr.Sym(String[String(n) for n in names], Tuple{String, Vector{String}}[])
+    e, found = DL.reading() do
+        format === :markdown ? DF.DMath.parse_latex(sym, str) : DF.DMath.parse_typst(sym, str)
+    end
+    if e !== nothing
+        sides = DF.SEquation.eq_sides(e)
+        sides === nothing || (e = DJ.JObj(DJ.Kvs(["lhs" => sides[1], "rhs" => sides[2]])))
+    end
+    if found.too_deep || (e !== nothing && DL.json_depth(e) > DL.MAX_JSON_DEPTH)
+        throw(
+            ParseError(
+                "the document nests too deeply for the reader (at most $(DL.MAX_NESTING) " *
+                    "constructs open at once, and $(DL.MAX_JSON_DEPTH) levels of arrays and objects)";
+                code = ERROR_CODES.PARSE_ERROR
+            )
+        )
+    end
+    if e === nothing
+        found.removed_op === nothing || throw(_document_refusal(found.removed_op, format))
+        what = format === :markdown ? "LaTeX" : "Typst"
+        throw(ParseError("not an ESM expression in $what math"; code = ERROR_CODES.PARSE_ERROR))
+    end
+    return try
+        DJ.to_value(e)
+    catch err
+        err isa DJ.OutOfRange || rethrow()
+        throw(
+            ParseError(
+                "the number `$(String(DF.DNumber.print(err.n)))` is outside the binary64 range";
+                code = ERROR_CODES.PARSE_ERROR
+            )
+        )
+    end
+end
+
+# The Typst math of an expression or an equation for messages and `show`
+# (`print_math` under the names it uses). A typed expression is serialized to
+# its JSON form first.
+function _math_text(x)
+    v = x isa Equation ? Dict{String, Any}("lhs" => serialize_expression(x.lhs), "rhs" => serialize_expression(x.rhs)) :
+        x isa ASTExpr ? serialize_expression(x) : x
+    return print_math(v, expression_names(v), :typst)
+end
+
+# `show` of an expression or an equation: its Typst math. An expression the
+# printer cannot take (e.g. a malformed node built by hand) shows as its JSON
+# form, so a `show` inside an error message never throws in turn.
+function _show_math(io::IO, x)
+    text = try
+        _math_text(x)
+    catch err
+        err isa InterruptException && rethrow()
+        v = x isa Equation ? Dict("lhs" => serialize_expression(x.lhs), "rhs" => serialize_expression(x.rhs)) :
+            serialize_expression(x)
+        JSON3.write(v)
+    end
+    return print(io, text)
+end
+
+Base.show(io::IO, expr::ASTExpr) = _show_math(io, expr)
+Base.show(io::IO, eq::Equation) = _show_math(io, eq)
+
+"""
     parse_markdown(text::AbstractString) -> OrderedDict{String, Any}
 
 Read a Markdown ESM document (Lean `Source.Md.parseMd`). The result is a

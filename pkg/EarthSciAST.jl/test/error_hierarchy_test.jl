@@ -65,7 +65,7 @@ include("testutils.jl")
         end
         caught = Symbol[]
         for f in (
-                () -> parse_expression("1 +"),                              # parse_expression_text.jl
+                () -> parse_math("1 +", String[], :typst),                  # document_format.jl
                 () -> canonicalize(NumExpr(NaN)),                           # canonicalize.jl
                 () -> migrate(EsmFile("0.5.0", Metadata("m")), "1.0.0"),     # migration.jl
                 bad_json,

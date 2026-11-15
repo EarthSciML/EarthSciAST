@@ -8,6 +8,15 @@ include("testutils.jl")  # _op builder + TESTUTILS_REPO_ROOT
 const _N = EarthSciAST.NumExpr
 const _V = EarthSciAST.VarExpr
 _deriv(name) = _op("D", _V(name); wrt = "t")
+# Two expressions compared as canonical JSON (testutils.jl `canonical_expr_json`).
+_cj(x) = canonical_expr_json(x)
+# A faq node as a decoded JSON value, for the expected expressions below.
+_jfaq(body, idx, ranges) = Dict{String, Any}(
+    "op" => "faq", "args" => Any[], "expr" => body, "output_idx" => Any[idx...],
+    "ranges" => Dict{String, Any}(k => Any[lo, hi] for (k, lo, hi) in ranges)
+)
+_jop(op, args...; kw...) =
+    Dict{String, Any}("op" => op, "args" => Any[args...], (String(k) => v for (k, v) in kw)...)
 
 # Locate a flattened equation whose LHS dependent variable matches `dep`.
 function _find_eq(flat::FlattenedSystem, dep::String)
@@ -577,7 +586,7 @@ end
         @test _has_op(eq_A.rhs, "-")          # negation of Sink.k
         @test _uses_var(eq_A.rhs, "Sink.k")
         @test _uses_var(eq_A.rhs, "Chem.A")
-        @test to_ascii(eq_A.rhs) == "(-Sink.k) * Chem.A"
+        @test _cj(eq_A.rhs) == _cj(_op("*", _op("-", _V("Sink.k")), _V("Chem.A")))
         # Exactly one D(Chem.A) equation (no over-determining duplicate).
         @test count(
             eq -> EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.A",
@@ -791,12 +800,12 @@ end
         # The binder fields themselves are untouched.
         @test o.output_idx == Any["j"] && haskey(o.ranges, "j")
         # Inside the outer faq: `j` is the index, `k` is still the parameter.
-        @test to_ascii(o.expr_body.args[1]) == "M.k * M.u[j]"
-        @test to_ascii(o.filter) == "j > M.k"
+        @test _cj(o.expr_body.args[1]) == _cj(_op("*", _V("M.k"), _op("index", _V("M.u"), _V("j"))))
+        @test _cj(o.filter) == _cj(_op(">", _V("j"), _V("M.k")))
         # The nested faq rebinds `k`, so inside it `k` is the index again.
-        @test to_ascii(o.expr_body.args[2].expr_body) == "M.u[k]"
+        @test _cj(o.expr_body.args[2].expr_body) == _cj(_op("index", _V("M.u"), _V("k")))
         # Outside the binder the same subtree reads the parameter.
-        @test to_ascii(out.args[2]) == "M.u[M.j]"
+        @test _cj(out.args[2]) == _cj(_op("index", _V("M.u"), _V("M.j")))
 
         # End to end through `flatten`, on the shared conformance fixture.
         flat = flatten(
@@ -809,8 +818,16 @@ end
         )
         eq_u = _find_eq(flat, "Shadow.u")
         @test eq_u !== nothing
-        @test to_ascii(eq_u.rhs) == "sum[j] (Shadow.k * Shadow.u[j] - " *
-            "sum[] (Shadow.u[k]) where {k in 1:3}) where {j in 1:3}"
+        @test _cj(eq_u.rhs) == _cj(
+            _jfaq(
+                _jop(
+                    "-",
+                    _jop("*", "Shadow.k", _jop("index", "Shadow.u", "j")),
+                    _jfaq(_jop("index", "Shadow.u", "k"), (), (("k", 1, 3),)),
+                ),
+                ("j",), (("j", 1, 3),)
+            )
+        )
         @test !_uses_var(eq_u.rhs, "Shadow.j")
         eq_y = _find_eq(flat, "Shadow.y")
         @test eq_y !== nothing && _uses_var(eq_y.rhs, "Shadow.j")
@@ -823,15 +840,15 @@ end
             int_var = "z", lower = E.NumExpr(0.0), upper = E.NumExpr(1.0)
         )
         out = E.namespace_expr(_op("*", _V("z"), integ), "M", Set(["y", "z"]))
-        @test to_ascii(out.args[1]) == "M.z"
-        @test to_ascii(out.args[2].args[1]) == "z * M.y"
+        @test _cj(out.args[1]) == _cj("M.z")
+        @test _cj(out.args[2].args[1]) == _cj(_op("*", _V("z"), _V("M.y")))
         sub = E.OpExpr(
             "faq", E.ASTExpr[]; output_idx = Any["j"],
             ranges = Dict{String, Any}("j" => Any[1, 3]),
             expr_body = _op("*", _op("index", _V("u"), _V("j")), _V("j.x"))
         )
         out = E.namespace_expr(sub, "M", Set(["u", "j"]))
-        @test to_ascii(out.expr_body) == "M.u[j] * M.j.x"
+        @test _cj(out.expr_body) == _cj(_op("*", _op("index", _V("M.u"), _V("j")), _V("M.j.x")))
 
         flat = flatten(
             EarthSciAST.load_path(
@@ -841,12 +858,29 @@ end
                 )
             )
         )
-        @test to_ascii(_find_eq(flat, "Edges.a").rhs) ==
-            "Edges.z * integral(z * Edges.a, z, 0, 1)"
-        @test to_ascii(_find_eq(flat, "Edges.b").rhs) ==
-            "Edges.k_argmin_1 * argmin<f=Edges.w[k_argmin_1], n=3>"
-        @test to_ascii(_find_eq(flat, "Outer.u").rhs) ==
-            "sum[j] (Outer.u[j] * Outer.j.x) where {j in 1:3}"
+        @test _cj(_find_eq(flat, "Edges.a").rhs) == _cj(
+            _jop(
+                "*", "Edges.z",
+                _jop("integral", _jop("*", "z", "Edges.a"); var = "z", lower = 0, upper = 1)
+            )
+        )
+        @test _cj(_find_eq(flat, "Edges.b").rhs) == _cj(
+            _jop(
+                "*", "Edges.k_argmin_1",
+                _jop(
+                    "apply_expression_template"; name = "argmin",
+                    bindings = Dict{String, Any}(
+                        "f" => _jop("index", "Edges.w", "k_argmin_1"), "n" => 3
+                    )
+                )
+            )
+        )
+        @test _cj(_find_eq(flat, "Outer.u").rhs) == _cj(
+            _jfaq(
+                _jop("*", _jop("index", "Outer.u", "j"), "Outer.j.x"),
+                ("j",), (("j", 1, 3),)
+            )
+        )
     end
 
     @testset "14. §4.7.6 DomainUnitMismatchError from real variable_map flatten" begin
