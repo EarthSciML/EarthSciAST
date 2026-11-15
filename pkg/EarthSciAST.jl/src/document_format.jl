@@ -109,7 +109,7 @@ the call or the escape form, and `"parse_error"` for any other text that is not
 a Markdown ESM document, and for one past a bound of the reader: more than 128
 constructs (brackets, fractions, signs, flow collections, YAML levels, …) open
 at once, a value nested more than 127 arrays and objects deep, or a number
-beyond the binary64 range. A name nothing declares is not a parse error: an
+beyond the binary64 range, and for a text that is not valid UTF-8. A name nothing declares is not a parse error: an
 undeclared reference is the validator's finding.
 """
 parse_markdown(text::AbstractString) = _read_document(text, :markdown)
@@ -145,6 +145,8 @@ function _read_document(text::AbstractString, format::Symbol)
     DF = DocumentFormats
     DL = DF.DLimits
     str = String(text)
+    isvalid(str) ||
+        throw(ParseError("the text is not valid UTF-8"; code = ERROR_CODES.PARSE_ERROR))
     d, found = DL.reading() do
         format === :markdown ? DF.DSource.parse_md(str) : DF.DSource.parse_typ(str)
     end
@@ -164,7 +166,7 @@ function _read_document(text::AbstractString, format::Symbol)
         e isa DF.DJson.OutOfRange || rethrow()
         throw(
             ParseError(
-                "the number `$(DF.DNumber.print_string(e.n))` is outside the binary64 range";
+                "the number `$(String(DF.DNumber.print(e.n)))` is outside the binary64 range";
                 code = ERROR_CODES.PARSE_ERROR
             )
         )

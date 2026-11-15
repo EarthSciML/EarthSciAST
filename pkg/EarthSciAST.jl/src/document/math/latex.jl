@@ -34,9 +34,6 @@ function esc_char_b(c::Char)
     return DStrings.esc_char(false, c, Char[])
 end
 
-"""`Latex.escCharL`: `_` as `\\_`, otherwise [`esc_char_b`](@ref)."""
-esc_char_l(c::Char) = c == '_' ? Char['\\', '_'] : esc_char_b(c)
-
 """`Latex.fixUs`: undo the `\\_` of `escCharL` up to the closing quote."""
 function fix_us(cs::Chars)
     out = Char[]
@@ -58,16 +55,6 @@ function fix_us(cs::Chars)
             return out
         end
     end
-    return out
-end
-
-"""`Latex.quoteL`."""
-function quote_l(s::AbstractString)
-    out = Char['"']
-    for c in s
-        append!(out, esc_char_l(c))
-    end
-    push!(out, '"')
     return out
 end
 

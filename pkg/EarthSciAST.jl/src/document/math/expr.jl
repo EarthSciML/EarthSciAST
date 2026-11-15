@@ -188,9 +188,6 @@ end
 
 # ## Numbers and JSON well-formedness, as checks
 
-"""`Math.int64OK`."""
-int64_ok(z::Integer) = in_int64(z)
-
 """`Math.numOK`: `JNum.WF` as a check."""
 num_ok(n::JNum) = wfb(n)
 

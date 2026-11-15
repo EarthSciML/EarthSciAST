@@ -32,9 +32,6 @@ nat_digits(n::Integer) = UInt8[UInt8(c - '0') for c in string(n)]
 """`Number.leadZero`."""
 lead_zero(ip) = length(ip) > 1 && first(ip) == 0
 
-"""`Number.printNat`."""
-print_nat(n::Integer) = collect(Char, string(n))
-
 """`Number.printInt`."""
 print_int(z::Integer) = collect(Char, string(z))
 
@@ -108,9 +105,6 @@ function print(n::JDec)
     append!(out, dec_body(n.digits, n.e10))
     return out
 end
-
-"""[`print`](@ref) as a `String`."""
-print_string(n::JNum) = String(print(n))
 
 """`Number.mkDec`: the decimal with digits `ds` (leading and trailing zeros
 dropped) whose first listed digit sits at decimal exponent `e10`.
