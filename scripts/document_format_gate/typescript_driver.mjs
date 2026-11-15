@@ -7,10 +7,12 @@
 //     node typescript_driver.mjs parse MANIFEST OUT   read each text back
 //
 // The gate compares numbers by their canonical kind (an integral value in Int64
-// is an integer), which follows from the value, so a plain number is enough. An
-// integral number is written with all its digits (`BigInt`): `JSON.stringify`
-// writes the shortest decimal that rounds to the same double, which above 2^53
-// reads back as a different integer (-19999999999999992 as -19999999999999990).
+// is an integer), which follows from the value, so a plain number is enough. A
+// canonical document holds an Int64 value past 2^53 as a bigint, written as its
+// digits. An integral number is written with all its digits too (`BigInt`):
+// `JSON.stringify` writes the shortest decimal that rounds to the same double,
+// which above 2^53 reads back as a different integer (-19999999999999992 as
+// -19999999999999990).
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -25,6 +27,7 @@ const [mode, manifestPath, out] = process.argv.slice(2)
 const items = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
 
 function exact(v) {
+  if (typeof v === 'bigint') return v.toString()
   if (typeof v === 'number' && Number.isInteger(v)) return BigInt(v).toString()
   if (Array.isArray(v)) return `[${v.map(exact).join(',')}]`
   if (v !== null && typeof v === 'object') {
