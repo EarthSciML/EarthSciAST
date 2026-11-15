@@ -13,16 +13,17 @@ The previous comparator could not fail. Three independent reasons:
    suite that tolerates a percentage of disagreement is not testing conformance,
    it is measuring it and shrugging.
 
-2. **Two of its three categories were structurally vacuous, and they DILUTED the
-   third.** Rust emitted literal `"display_results": {}, "substitution_results":
-   {}`; Julia and TypeScript populated theirs only for top-level fixture keys
-   that no fixture in `tests/display/` has. The comparator took
-   `reference_lang = list(file_results)[0]` — julia, empty — found zero
-   divergences, and scored both categories a permanent 1.00, which is how a 20%
-   VALIDATION divergence still averaged out to PASS. Both categories are now
-   REAL: every binding renders the same expanded case list from the shared
-   corpus manifest, and every rendering is compared byte-for-byte, against the
-   corpus's pinned expectation AND across bindings.
+2. **Its non-validation categories were structurally vacuous, and they DILUTED
+   validation.** Some bindings emitted empty result sections; the comparator took
+   `reference_lang = list(file_results)[0]` — an empty one — found zero
+   divergences, and scored those categories a permanent 1.00, which is how a 20%
+   VALIDATION divergence still averaged out to PASS. Substitution is now REAL:
+   every binding evaluates the same expanded case list from the shared corpus
+   manifest, and every substituted AST is compared against the corpus's pinned
+   expectation AND across bindings. (The old display-rendering category, the
+   ASCII/Unicode/LaTeX renderers and their `tests/display` fixtures, was retired
+   with those renderers; the lossless Markdown/Typst source formats that replace
+   them are gated by `scripts/run-document-format-gate.py`, not here.)
 
 3. **It never checked the EXPECTED outcome.** It compared languages to each
    other and never to the fixture's declared verdict. The `is_expected_error`
@@ -47,9 +48,9 @@ CHECKS, IN ORDER OF STRENGTH
                     MUST be rejected. Per binding, no exceptions.
   C. PINS         — every `tests/invalid/**` rejection must carry the pinned
                     `(code, path)` findings (required-subset, §7.1.2).
-  D. RENDERING    — display / substitution output must equal the corpus's pin.
+  D. SUBSTITUTION — every substituted AST must equal the corpus's pin.
   E. AGREEMENT    — the bindings must agree with each other (validation verdict,
-                    every rendering, every substituted AST).
+                    every substituted AST).
 
 Any failure in ANY check → exit 1.
 
@@ -142,7 +143,6 @@ def check_coverage(manifest: dict[str, Any], results: dict[str, dict[str, Any]])
     failures: list[Failure] = []
     expected_sets = {
         "validation_results": [e["id"] for e in manifest["validation_files"]],
-        "display_results": [c["id"] for c in manifest["display_cases"]],
         "substitution_results": [c["id"] for c in manifest["substitution_cases"]],
     }
 
@@ -335,9 +335,7 @@ def check_pins(
     return failures, corpus_failures
 
 
-# --- D. rendering vs the corpus pin -----------------------------------------
-
-FORMATS = ("unicode", "latex", "ascii")
+# --- D. substitution vs the corpus pin --------------------------------------
 
 
 def _route_pin_mismatch(
@@ -358,9 +356,7 @@ def _route_pin_mismatch(
 
     This is attribution, not absolution: the run fails either way. Nothing here
     is suppressed, skipped, or scored down — it is only addressed to whoever can
-    fix it. (`tests/display/RENDERING_CONTRACT.md` is normative and says all five
-    bindings MUST be byte-identical, so a unanimous deviation means the contract
-    and its fixtures have drifted apart and one of them has to move.)
+    fix it.
     """
     mismatched = {lang: got for lang, got in got_by_lang.items() if got != want}
     if not mismatched:
@@ -394,48 +390,23 @@ def _route_pin_mismatch(
         )
 
 
-def check_rendering(
+def check_substitution(
     manifest: dict[str, Any], results: dict[str, dict[str, Any]]
 ) -> tuple[list[Failure], list[Failure]]:
-    """Display renderings and substituted ASTs must equal the corpus's pin.
+    """Substituted ASTs must equal the corpus's pin.
 
-    This is the display/substitution analogue of check B: the fixture DECLARES an
+    This is the substitution analogue of check B: the fixture DECLARES an
     answer, so compare against it, not merely against the other bindings.
-    `tests/display/RENDERING_CONTRACT.md` is explicit that all five bindings must
-    produce byte-identical output "verified by the shared fixtures in this
-    directory via ./scripts/test-conformance.sh" — a claim the harness had never
-    actually made.
     """
     failures: list[Failure] = []
     corpus_failures: list[Failure] = []
-
-    for case in manifest["display_cases"]:
-        expected = case.get("expected") or {}
-        for fmt, want in expected.items():
-            got_by_lang: dict[str, Any] = {}
-            notes: dict[str, str] = {}
-            for language, payload in results.items():
-                record = (payload.get("display_results") or {}).get(case["id"])
-                if record is None:
-                    continue
-                got_by_lang[language] = record.get(fmt)
-                notes[language] = (record.get("errors") or {}).get(fmt, "")
-            _route_pin_mismatch(
-                "display",
-                f"{case['id']}[{fmt}]",
-                want,
-                got_by_lang,
-                notes,
-                failures,
-                corpus_failures,
-            )
 
     for case in manifest["substitution_cases"]:
         want = case.get("expected")
         if want is None:
             continue
-        got_by_lang = {}
-        notes = {}
+        got_by_lang: dict[str, Any] = {}
+        notes: dict[str, str] = {}
         for language, payload in results.items():
             record = (payload.get("substitution_results") or {}).get(case["id"])
             if record is None:
@@ -486,16 +457,6 @@ def check_agreement(manifest: dict[str, Any], results: dict[str, dict[str, Any]]
                 verdicts[language] = record.get("outcome")
         if len(verdicts) >= 2:
             disagree("verdict", entry["id"], verdicts, "agreement:validation")
-
-    for case in manifest["display_cases"]:
-        for fmt in FORMATS:
-            renderings = {}
-            for language, payload in results.items():
-                record = (payload.get("display_results") or {}).get(case["id"])
-                if record is not None:
-                    renderings[language] = record.get(fmt)
-            if len(renderings) >= 2:
-                disagree("rendering", f"{case['id']}[{fmt}]", renderings, "agreement:display")
 
     for case in manifest["substitution_cases"]:
         outputs = {}
@@ -598,7 +559,6 @@ def build_analysis(
         }
 
     n_val = len(manifest["validation_files"])
-    n_disp = len(manifest["display_cases"]) * len(FORMATS)
     n_sub = len(manifest["substitution_cases"])
     status = "PASS" if not failures and not corpus_failures else "FAIL"
 
@@ -606,7 +566,6 @@ def build_analysis(
         "languages_tested": languages,
         "overall_status": status,
         "validation_analysis": section("outcome", n_val),
-        "display_analysis": section("display", n_disp),
         "substitution_analysis": section("substitution", n_sub),
         "divergence_summary": {
             "overall_score": 1.0 if status == "PASS" else 0.0,
@@ -690,7 +649,6 @@ def main() -> int:
     print(
         f"\nComparing {len(results)} bindings over "
         f"{len(manifest['validation_files'])} validation files, "
-        f"{len(manifest['display_cases'])} display cases, "
         f"{len(manifest['substitution_cases'])} substitution cases"
     )
 
@@ -704,9 +662,9 @@ def main() -> int:
     failures += pin_failures
     corpus_failures += pin_corpus
 
-    render_failures, render_corpus = check_rendering(manifest, results)
-    failures += render_failures
-    corpus_failures += render_corpus
+    sub_failures, sub_corpus = check_substitution(manifest, results)
+    failures += sub_failures
+    corpus_failures += sub_corpus
 
     failures += check_agreement(manifest, results)
 
