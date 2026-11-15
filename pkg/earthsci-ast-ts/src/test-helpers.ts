@@ -18,9 +18,53 @@
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
+import { canonicalizeDocument } from './canonicalize.js'
+import { isIntLit, isNumericLiteral } from './numeric-literal.js'
 import { loadString, type LoadOptions } from './parse.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import type { EsmFile } from './types.js'
+
+const INT64_BOUND = 2 ** 63
+
+/**
+ * A JSON value with every number as its kind and value, an integer as a
+ * `bigint`: `{ int }` or `{ float }`. A `NumericLiteral` keeps its kind, and a
+ * `bigint` (an integer past 2^53) is an int; a plain number is an int when it
+ * is integral and in Int64 (the canonical kind of CONFORMANCE §5.5.3.1), and
+ * `-0` is the float `0`. Two values compare equal with `toEqual` exactly when
+ * they are the same JSON value with the same number kinds.
+ */
+export function numberKinds(value: unknown): unknown {
+  if (typeof value === 'bigint') return { int: value }
+  if (isNumericLiteral(value)) {
+    return isIntLit(value) ? { int: BigInt(value.value) } : { float: value.value }
+  }
+  if (typeof value === 'number') {
+    const int = Number.isInteger(value) && value >= -INT64_BOUND && value < INT64_BOUND
+    return int ? { int: BigInt(value) } : { float: Object.is(value, -0) ? 0 : value }
+  }
+  if (Array.isArray(value)) return value.map(numberKinds)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, numberKinds(v)]))
+  }
+  return value
+}
+
+/**
+ * An expression (or any JSON value) in canonical JSON (CONFORMANCE §5.4,
+ * `canonicalizeDocument`), with every number in its canonical kind
+ * ({@link numberKinds}). This is how the shared corpora that record
+ * expressions (the flatten corpus) compare them.
+ */
+export function canonicalJson(value: unknown): unknown {
+  return numberKinds(canonicalizeDocument(value))
+}
+
+/** Whether two expressions are the same in canonical JSON ({@link canonicalJson}). */
+export function sameExpr(a: unknown, b: unknown): boolean {
+  return isDeepStrictEqual(canonicalJson(a), canonicalJson(b))
+}
 
 /**
  * Absolute path to the repository root. This file lives at

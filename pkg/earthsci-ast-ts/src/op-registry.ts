@@ -5,16 +5,12 @@
  *   - arity bounds (+ the human name used in arity error messages),
  *   - whether the operator is SCALAR (pointwise) — see {@link OpInfo.scalar},
  *   - the scalar evaluator used by the official TS runner (codegen.ts),
- *   - infix precedence for the pretty-printers (absent = renders as a
- *     function call),
  *   - a relative computational-cost weight for complexity analysis.
  *
- * Adding a new scalar operator is ONE entry here plus any per-format render
- * strings in pretty-print.ts. Open-tier rewrite-target sugar (grad, div,
- * laplacian, integral) is NOT registered here — it carries no evaluator and,
- * per esm-spec §4.2, gets no special treatment: it renders through the
- * generic pretty-print fallback and is lowered by rewrite rules before
- * evaluation. Structural ops (const, enum, fn, aggregate, ...) are handled
+ * Adding a new scalar operator is ONE entry here. Open-tier rewrite-target
+ * sugar (grad, div, laplacian, integral) is NOT registered here — it carries
+ * no evaluator and, per esm-spec §4.2, gets no special treatment: it is
+ * lowered by rewrite rules before evaluation. Structural ops (const, enum, fn, aggregate, ...) are handled
  * specially by their consumers and carry no `evaluate`.
  */
 
@@ -79,11 +75,6 @@ export interface OpInfo {
    */
   arityName?: string
   /**
-   * Infix precedence for parenthesization (higher binds tighter). Absent
-   * for operators that render as function calls.
-   */
-  precedence?: number
-  /**
    * Scalar evaluator per the official ESS TypeScript runner semantics.
    * Domain checks (positive log argument, ...) live inside. Absent for
    * ops that cannot be scalar-evaluated.
@@ -96,9 +87,6 @@ export interface OpInfo {
 /** Cost assumed for operators without a registry entry / cost. */
 export const DEFAULT_OP_COST = 10
 
-/** Precedence assigned to function-call rendering (binds tightest). */
-export const FUNCTION_PRECEDENCE = 8
-
 export const OPS: Record<string, OpInfo> = {
   // ---- arithmetic -------------------------------------------------------
   // n-ary FROM ONE OPERAND, not from zero: `{op:'+', args:[x]}` is `x` (the
@@ -109,14 +97,12 @@ export const OPS: Record<string, OpInfo> = {
   '+': {
     arity: { min: 1, max: null },
     scalar: true,
-    precedence: 4,
     cost: 1,
     evaluate: (args) => args.reduce((sum, val) => sum + val, 0),
   },
   '-': {
     arity: { min: 1, max: null },
     scalar: true,
-    precedence: 4,
     cost: 1,
     evaluate: (args) =>
       args.length === 1
@@ -127,7 +113,6 @@ export const OPS: Record<string, OpInfo> = {
   '*': {
     arity: { min: 1, max: null },
     scalar: true,
-    precedence: 5,
     cost: 2,
     evaluate: (args) => args.reduce((prod, val) => prod * val, 1),
   },
@@ -135,7 +120,6 @@ export const OPS: Record<string, OpInfo> = {
     arity: { min: 2, max: 2 },
     scalar: true,
     arityName: 'Division',
-    precedence: 5,
     cost: 4,
     evaluate: (args) => {
       if (args[1] === 0) throw new Error('Division by zero')
@@ -146,7 +130,6 @@ export const OPS: Record<string, OpInfo> = {
     arity: { min: 2, max: 2 },
     scalar: true,
     arityName: 'Exponentiation',
-    precedence: 7,
     cost: 8,
     evaluate: (args) => Math.pow(args[0], args[1]),
   },
@@ -335,46 +318,40 @@ export const OPS: Record<string, OpInfo> = {
   '>': {
     arity: { min: 2, max: 2 },
     scalar: true,
-    precedence: 3,
     cost: 2,
     evaluate: (args) => (args[0] > args[1] ? 1 : 0),
   },
   '<': {
     arity: { min: 2, max: 2 },
     scalar: true,
-    precedence: 3,
     cost: 2,
     evaluate: (args) => (args[0] < args[1] ? 1 : 0),
   },
   '>=': {
     arity: { min: 2, max: 2 },
     scalar: true,
-    precedence: 3,
     cost: 2,
     evaluate: (args) => (args[0] >= args[1] ? 1 : 0),
   },
   '<=': {
     arity: { min: 2, max: 2 },
     scalar: true,
-    precedence: 3,
     cost: 2,
     evaluate: (args) => (args[0] <= args[1] ? 1 : 0),
   },
   '==': {
     arity: { min: 2, max: 2 },
     scalar: true,
-    precedence: 3,
     cost: 2,
     evaluate: (args) => (args[0] === args[1] ? 1 : 0),
   },
   '!=': {
     arity: { min: 2, max: 2 },
     scalar: true,
-    precedence: 3,
     cost: 2,
     evaluate: (args) => (args[0] !== args[1] ? 1 : 0),
   },
-  '=': { arity: { min: 2, max: 2 }, precedence: 3 },
+  '=': { arity: { min: 2, max: 2 } },
   // A CONNECTIVE needs two things to connect. The §4.2 conditionals table reads
   // "| `and`, `or`, `not` | `[a, b]` or `[a]` |" — one Args cell shared by three
   // ops, where `[a]` is `not`'s unary form and `[a, b]` is `and`/`or`'s binary
@@ -385,21 +362,18 @@ export const OPS: Record<string, OpInfo> = {
   and: {
     arity: { min: 2, max: null },
     scalar: true,
-    precedence: 2,
     cost: 2,
     evaluate: (args) => (args.every((x) => x !== 0) ? 1 : 0),
   },
   or: {
     arity: { min: 2, max: null },
     scalar: true,
-    precedence: 1,
     cost: 2,
     evaluate: (args) => (args.some((x) => x !== 0) ? 1 : 0),
   },
   not: {
     arity: { min: 1, max: 1 },
     scalar: true,
-    precedence: 6,
     cost: 1,
     evaluate: (args) => (args[0] === 0 ? 1 : 0),
   },
@@ -442,20 +416,6 @@ export const REWRITE_TARGET_DERIVATIVE_ARITY: OpArity = { min: 1, max: null }
 /** Registry entry for an operator, or undefined for unknown ops. */
 export function getOpInfo(op: string): OpInfo | undefined {
   return Object.prototype.hasOwnProperty.call(OPS, op) ? OPS[op] : undefined
-}
-
-/**
- * Infix precedence for parenthesization. Function-call ops and unknown ops
- * bind tightest ({@link FUNCTION_PRECEDENCE}).
- */
-export function opPrecedence(op: string): number {
-  return getOpInfo(op)?.precedence ?? FUNCTION_PRECEDENCE
-}
-
-/** True when the operator renders as a function call (no infix precedence). */
-export function isFunctionCallOp(op: string): boolean {
-  const info = getOpInfo(op)
-  return info !== undefined && info.precedence === undefined
 }
 
 /** Relative computational cost for complexity analysis. */
