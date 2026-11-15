@@ -67,10 +67,19 @@ _is_anonymous_array(e::OpExpr) =
 # literal, a `reshape` result) in a value position inside an application. An
 # `index` base and every operand an op consumes whole are array positions, not
 # visited.
+#
+# Each node is visited once per `(bound, inside)`: `seen` records the visits
+# made, by node identity. Expansions share their subtrees (a template that
+# references another twice holds one expansion of it), so walking them as a
+# tree is exponential in the depth of the template chain. A repeated visit
+# would only report again what the first one reported, so every caller sees
+# the same reads and anonymous arrays, each first reported in the same order,
+# without the repeats.
 function _ew_visit(
         expr::ASTExpr, shapes::Dict{String, Vector{String}},
         ctx::Union{Nothing, _ElementwiseContext}, bound::Set{String}, inside::Bool,
-        on_read, on_anonymous = nothing
+        on_read, on_anonymous = nothing,
+        seen::IdDict{OpExpr, Set{Tuple{Bool, Set{String}}}} = IdDict{OpExpr, Set{Tuple{Bool, Set{String}}}}()
     )
     if expr isa VarExpr
         (expr.name in bound || isempty(get(shapes, expr.name, String[]))) && return
@@ -78,15 +87,18 @@ function _ew_visit(
         return
     end
     expr isa OpExpr || return
+    visits = get!(() -> Set{Tuple{Bool, Set{String}}}(), seen, expr)
+    (inside, bound) in visits && return
+    push!(visits, (inside, bound))
     op = expr.op
     if op == "apply_expression_template"
         ex = _ew_expansion(expr, ctx)
         ex === nothing ||
-            _ew_visit(ex, shapes, ctx, bound, true, on_read, on_anonymous)
+            _ew_visit(ex, shapes, ctx, bound, true, on_read, on_anonymous, seen)
         return
     end
     inside = inside || expr.template_origin !== nothing
-    rec(a, b = bound, i = inside) = _ew_visit(a, shapes, ctx, b, i, on_read, on_anonymous)
+    rec(a, b = bound, i = inside) = _ew_visit(a, shapes, ctx, b, i, on_read, on_anonymous, seen)
     if op == "index"
         inside && foreach(a -> rec(a, bound, true), expr.args[2:end])
     elseif op == "const" || op == "reshape"
@@ -149,23 +161,39 @@ end
 # `expr` read at the current cell of `loops`: every shaped read `_ew_visit`
 # reports gathered at the loops its index sets name; a template reference is
 # replaced by its expansion, so read.
+#
+# Memoized by node identity and `(bound, inside)`, as `_ew_visit` is: a subtree
+# an expansion shares is rewritten once, and the rewrite shares it too, rather
+# than re-inflating the shared expansion into a tree exponential in the depth
+# of the template chain.
 function _ew_at_cell(
         expr::ASTExpr, shapes::Dict{String, Vector{String}}, ctx,
-        loops::Vector{String}, align, bound::Set{String} = Set{String}(), inside::Bool = false
+        loops::Vector{String}, align, bound::Set{String} = Set{String}(), inside::Bool = false,
+        memo::IdDict{OpExpr, Dict{Tuple{Bool, Set{String}}, ASTExpr}} = IdDict{OpExpr, Dict{Tuple{Bool, Set{String}}, ASTExpr}}()
     )::ASTExpr
     if expr isa VarExpr
         (expr.name in bound || isempty(get(shapes, expr.name, String[]))) && return expr
         return _index_wrap_var(expr, loops, align)
     end
     expr isa OpExpr || return expr
+    done = get!(() -> Dict{Tuple{Bool, Set{String}}, ASTExpr}(), memo, expr)
+    return get!(done, (inside, bound)) do
+        _ew_at_cell_op(expr, shapes, ctx, loops, align, bound, inside, memo)
+    end
+end
+
+function _ew_at_cell_op(
+        expr::OpExpr, shapes::Dict{String, Vector{String}}, ctx,
+        loops::Vector{String}, align, bound::Set{String}, inside::Bool, memo
+    )::ASTExpr
     op = expr.op
     if op == "apply_expression_template"
         ex = _ew_expansion(expr, ctx)
         ex === nothing && return expr
-        return _ew_at_cell(ex, shapes, ctx, loops, align, bound, true)
+        return _ew_at_cell(ex, shapes, ctx, loops, align, bound, true, memo)
     end
     inside = inside || expr.template_origin !== nothing
-    rec(a, b = bound, i = inside) = _ew_at_cell(a, shapes, ctx, loops, align, b, i)
+    rec(a, b = bound, i = inside) = _ew_at_cell(a, shapes, ctx, loops, align, b, i, memo)
     if op == "index"
         inside || return expr
         return reconstruct(
