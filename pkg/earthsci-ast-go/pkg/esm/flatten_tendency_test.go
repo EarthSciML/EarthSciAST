@@ -36,13 +36,17 @@ func TestFlattenLeavesUnresolvableRHSTimeDerivatives(t *testing.T) {
 
 func TestFlattenResolvesRHSTimeDerivativeRules(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "..", "tests", "conformance", "rhs_time_derivative", "fixtures")
-	for _, tc := range []struct{ fixture, lhs, want string }{
+	negKX := map[string]any{"op": "*", "args": []any{map[string]any{"op": "-", "args": []any{"M.k"}}, "M.x"}}
+	for _, tc := range []struct {
+		fixture, lhs string
+		want         any
+	}{
 		// Chain rule through an observed's definition.
-		{"d_of_observed.esm", "M.dcombo", "(-M.k) * M.x * 2"},
+		{"d_of_observed.esm", "M.dcombo", map[string]any{"op": "*", "args": []any{negKX, 2}}},
 		// Product rule, with the parameter factor's derivative folded away.
-		{"d_of_compound.esm", "M.dscaled", "(-M.k) * M.x * M.scale"},
+		{"d_of_compound.esm", "M.dscaled", map[string]any{"op": "*", "args": []any{negKX, "M.scale"}}},
 		// A time-invariant name is the literal 0.
-		{"d_of_parameter.esm", "M.dk", "0"},
+		{"d_of_parameter.esm", "M.dk", 0},
 	} {
 		t.Run(tc.fixture, func(t *testing.T) {
 			file, err := LoadPath(filepath.Join(dir, tc.fixture))
@@ -55,8 +59,8 @@ func TestFlattenResolvesRHSTimeDerivativeRules(t *testing.T) {
 			}
 			for _, eq := range flat.Equations {
 				if s, ok := eq.LHS.(string); ok && s == tc.lhs {
-					if got := ToASCII(eq.RHS); got != tc.want {
-						t.Fatalf("%s: got %q, want %q", tc.lhs, got, tc.want)
+					if !sameExpression(eq.RHS, tc.want) {
+						t.Fatalf("%s: got %s, want %s", tc.lhs, showJSON(eq.RHS), showJSON(tc.want))
 					}
 					return
 				}

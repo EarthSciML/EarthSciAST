@@ -282,7 +282,8 @@ func TestDocumentFormatLimitMessages(t *testing.T) {
 // TestDocumentFormatPrintMath: the `math` field of a fixture case is the math
 // of the case's one equation display, so PrintMath of that equation under the
 // names its model declares (the keys of its variables, species and parameters,
-// and the document's index sets) gives it in both formats. A case whose model
+// and the document's index sets) gives it in both formats, and ParseMath reads
+// it back to the equation in canonical form. A case whose model
 // or document declares expression templates is skipped: no template is in
 // scope for PrintMath.
 func TestDocumentFormatPrintMath(t *testing.T) {
@@ -349,6 +350,15 @@ func TestDocumentFormatPrintMath(t *testing.T) {
 				} else if got != want[key] {
 					t.Errorf("%s: PrintMath %s = %q, want %q", id, f, got, want[key])
 				}
+				eq := CanonicalizeDocument(eqs[0])
+				text, _ := want[key].(string)
+				read, err := ParseMath(text, names, f)
+				switch {
+				case err != nil:
+					t.Errorf("%s: ParseMath %s refused: %v", id, key, err)
+				case !reflect.DeepEqual(read, eq):
+					t.Errorf("%s: ParseMath %s = %s, want %s", id, key, docfmtJSONText(read), docfmtJSONText(eq))
+				}
 			}
 			checked++
 		}
@@ -356,7 +366,7 @@ func TestDocumentFormatPrintMath(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no math case checked")
 	}
-	t.Logf("PrintMath: %d math cases checked, %d skipped (a template in scope)", checked, skipped)
+	t.Logf("PrintMath and ParseMath: %d math cases checked, %d skipped (a template in scope)", checked, skipped)
 }
 
 // documentFormatCorpus is the corpus of formal/scripts/doc-corpus.py: every
@@ -562,5 +572,74 @@ func TestDocumentFormatMatchesLean(t *testing.T) {
 	t.Logf("%d differences over %d documents", len(all), len(paths))
 	if len(all) > 0 {
 		t.Errorf("%d differences over %d documents:\n%s", len(all), len(paths), strings.Join(all, "\n"))
+	}
+}
+
+// TestParseMathReadsAnExpressionOrAnEquation: under the declared names a run
+// of letters in LaTeX is one name or a product; text whose top is `=` is an
+// equation; ParseMath inverts PrintMath.
+func TestParseMathReadsAnExpressionOrAnEquation(t *testing.T) {
+	names := []string{"RT", "k", "y"}
+	read := func(text string, names []string, f DocumentFormat) any {
+		t.Helper()
+		e, err := ParseMath(text, names, f)
+		if err != nil {
+			t.Fatalf("ParseMath(%q, %s): %v", text, f, err)
+		}
+		return e
+	}
+	same := func(got any, want string) {
+		t.Helper()
+		w, err := decodeDocJSON([]byte(want))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, CanonicalizeDocument(w)) {
+			t.Errorf("got %s, want %s", docfmtJSONText(got), want)
+		}
+	}
+	same(read("RT + k", names, DocumentMarkdown), `{"op": "+", "args": ["RT", "k"]}`)
+	// With its letters declared instead, a run of letters in LaTeX is their
+	// product; with neither, it is not read.
+	same(read("RT", []string{"R", "T"}, DocumentMarkdown), `{"op": "*", "args": ["R", "T"]}`)
+	if _, err := ParseMath("RT", nil, DocumentMarkdown); err == nil {
+		t.Error("RT read with no names declared")
+	}
+	same(read("y = 2 k", names, DocumentTypst), `{"lhs": "y", "rhs": {"op": "*", "args": [2, "k"]}}`)
+	for _, c := range []struct {
+		text string
+		f    DocumentFormat
+	}{{"y = k", DocumentMarkdown}, {"(dif y)/(dif t) = -k y", DocumentTypst}} {
+		if got := PrintMath(read(c.text, names, c.f), names, c.f); got != c.text {
+			t.Errorf("PrintMath(ParseMath(%q)) = %q", c.text, got)
+		}
+	}
+}
+
+// TestParseMathRefusesAsADocumentReadDoes: ParseMath refuses with the codes and
+// inside the bounds of a document read.
+func TestParseMathRefusesAsADocumentReadDoes(t *testing.T) {
+	names := []string{"k"}
+	code := func(text string, f DocumentFormat) (string, string) {
+		t.Helper()
+		_, err := ParseMath(text, names, f)
+		var de *DocumentFormatError
+		if !errors.As(err, &de) {
+			t.Fatalf("ParseMath(%.40q): want a *DocumentFormatError, got %v", text, err)
+		}
+		return de.Code, de.Message
+	}
+	if c, m := code("k +", DocumentMarkdown); c != CodeParseError {
+		t.Errorf("k +: %s %s", c, m)
+	}
+	if c, m := code("1.0e400 k", DocumentTypst); c != CodeParseError {
+		t.Errorf("1.0e400 k: %s %s", c, m)
+	}
+	if c, m := code(`\operatorname{arrayop}(k)`, DocumentMarkdown); c != codeRemovedOp {
+		t.Errorf("arrayop: %s %s", c, m)
+	}
+	deep := strings.Repeat("(", 50_000) + "k" + strings.Repeat(")", 50_000)
+	if c, m := code(deep, DocumentTypst); c != CodeParseError {
+		t.Errorf("deep: %s %s", c, m)
 	}
 }
