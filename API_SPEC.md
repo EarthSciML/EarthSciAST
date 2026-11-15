@@ -446,7 +446,7 @@ Divergences:
 | `parse_equation(text) -> Equation` | inverse of `to_ascii` on an equation | yes, `ExpressionParseError` |
 | `canonicalize(expr) -> Expr` | RFC §5.4 canonical form | yes, `CanonicalizeError` |
 | `canonical_json(expr) -> str` | canonical serialization | yes, `CanonicalizeError` |
-| `canonicalize_document(doc) -> doc` | every units string of a decoded JSON document in the canonical unit spelling (esm-spec §4.8.2); nothing else changes | no, anywhere |
+| `canonicalize_document(doc) -> doc` | every units string of a decoded JSON document in the canonical unit spelling (esm-spec §4.8.2), the deprecated `neg`/`pow` rewritten to `-`/`^` (esm-spec §4.2), every number in canonical form (CONFORMANCE_SPEC §5.5.3.1); nothing else changes | no, anywhere |
 
 Divergences:
 
@@ -467,7 +467,12 @@ Divergences:
   document, not a typed file: a `dict` (Python), an `AbstractDict` such as a
   `JSON3.Object` (Julia, returns `Dict{String, Any}`), a `serde_json::Value`
   (Rust), an `any` from `encoding/json` (Go), and a plain object (TypeScript,
-  where an `EsmFile` is one). Python exports it at the top level, where
+  where an `EsmFile` is one). A number is canonical as that value type can
+  hold it: an integral value in Int64 is an integer (`int`, `Int64`, an
+  integer serde number, `int64`, an int `NumericLiteral`); a binding whose
+  reader holds every number as a double (TypeScript `JSON.parse`, Go
+  `encoding/json` without `UseNumber`) cannot keep an integer token past 2^53.
+  Python exports it at the top level, where
   `canonicalize` and `canonical_json` live only in `earthsci_ast.canonicalize`.
 - **Canonicalization error point.** Go gates emissible fields on the *input*
   tree; TypeScript and Julia gate the *canonicalized* tree. Same error code,

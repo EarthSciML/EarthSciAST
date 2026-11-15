@@ -6,6 +6,10 @@
     {
       "id": "units",
       "path": "units.json"
+    },
+    {
+      "id": "ops_and_numbers",
+      "path": "ops_and_numbers.json"
     }
   ]
 }

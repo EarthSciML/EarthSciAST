@@ -16,7 +16,14 @@ fixtures every binding's canonicalizer must reproduce byte for byte:
   const nodes, nested subsystems, template bodies) all take the canonical
   spelling under `canonicalize_document`, while look-alike keys inside
   free-form objects and name-keyed maps are left alone. The walk here mirrors
-  the bindings' (`document_units_walk`); Lean spells every string.
+  the bindings' (`document_units_walk`); Lean spells every string. Its numbers
+  are in canonical form in `expected` (an integral value in Int64 is an integer).
+* `tests/conformance/canonical_document/ops_and_numbers.json`: the other rules of
+  `canonicalize_document`. The deprecated `neg` and `pow` become unary `-` and
+  `^` (and a `broadcast` of `neg` maps `-`), and every number, free-form objects
+  included, takes its canonical form (CONFORMANCE §5.5.3.1). Its `expected` is
+  what `esm-lean canon` writes for the input, keys back in input order, so the
+  built `esm-lean` (formal/.lake/build/bin) must be current.
 
 The Lean package must already be built (`lake build` in formal/); `--formal`
 points at another copy of formal/ that is. Re-run after a change to the cases
@@ -157,9 +164,52 @@ def canonical_bytes(obj) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+class Raw:
+    """A JSON number token written exactly as given (Python would respell it)."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+def dumps(doc, indent=2) -> str:
+    """JSON text with every `Raw` token spelled as written."""
+    raws: list[str] = []
+
+    def mark(v):
+        if isinstance(v, Raw):
+            raws.append(v.text)
+            return f"@@raw{len(raws) - 1}@@"
+        if isinstance(v, dict):
+            return {k: mark(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [mark(x) for x in v]
+        return v
+
+    text = json.dumps(mark(doc), indent=indent, ensure_ascii=False)
+    for i, raw in enumerate(raws):
+        text = text.replace(f'"@@raw{i}@@"', raw)
+    return text
+
+
 def write(path: Path, doc: dict) -> None:
-    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(dumps(doc) + "\n", encoding="utf-8")
     print(f"wrote {path.relative_to(ROOT)}")
+
+
+def canonical_numbers(value):
+    """Every number in canonical form (CONFORMANCE §5.5.3.1): an integral float in Int64
+    is an integer, an integer outside it a float."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer() and -(2**63) <= value < 2**63:
+        return int(value)
+    if isinstance(value, int) and not -(2**63) <= value < 2**63:
+        return float(value)
+    if isinstance(value, list):
+        return [canonical_numbers(v) for v in value]
+    if isinstance(value, dict):
+        return {k: canonical_numbers(v) for k, v in value.items()}
+    return value
 
 
 # --- The document-level step (esm-spec §4.8.2, canonicalize_document) ---------
@@ -370,10 +420,11 @@ def write_document_fixture(formal: Path) -> None:
                 "definition Esm.Units.canon."
             ),
             "input": doc,
-            "expected": document_units_walk(doc, spelled.__getitem__),
+            "expected": canonical_numbers(document_units_walk(doc, spelled.__getitem__)),
             "tags": ["units", "unit_spelling", "document"],
         },
     )
+    write_ops_numbers_fixture(formal, out_dir)
     write(
         out_dir / "manifest.json",
         {
@@ -384,7 +435,123 @@ def write_document_fixture(formal: Path) -> None:
                 "the JSON document every binding's canonicalize_document(input) must equal, "
                 "compared as JSON values."
             ),
-            "fixtures": [{"id": "units", "path": "units.json"}],
+            "fixtures": [
+                {"id": "units", "path": "units.json"},
+                {"id": "ops_and_numbers", "path": "ops_and_numbers.json"},
+            ],
+        },
+    )
+
+
+def ops_numbers_document() -> dict:
+    def var(default, units="1"):
+        return {"type": "parameter", "units": units, "default": default}
+
+    return {
+        "esm": "2.1.0",
+        "metadata": {
+            "name": "CanonicalOpsAndNumbers",
+            "description": "Deprecated ops rewritten, every number in canonical form.",
+            # Free-form: its numbers are canonical too, its ops are not rewritten.
+            "x_esd": {"scale": Raw("2.0"), "node": {"op": "neg", "args": ["x"]}},
+        },
+        "models": {
+            "M": {
+                "variables": {
+                    "x": {"type": "state", "units": "m", "default": Raw("2.0")},
+                    # Not the shortest digits of its double: 1.4715177646857693.
+                    "a": var(Raw("1.4715177646857694")),
+                    # Rounds to the double 1.0, so it is the integer 1.
+                    "b": var(Raw("1.0000000000000001")),
+                    # A decimal token is a double: the nearest one to
+                    # -19999999999999990 is -19999999999999992, an integer in Int64.
+                    "c": var(Raw("-1.999999999999999e16")),
+                    # An integer token in Int64 is that integer, past 2^53 too.
+                    "d": var(Raw("-19999999999999990")),
+                    "e": var(Raw("-0.0")),
+                    # An integral double outside Int64 stays a float.
+                    "f": var(Raw("1.0e19")),
+                    "g": var(Raw("4.940656458412465e-324")),
+                    "h": var(Raw("2.50e1")),
+                    "values": var([Raw("1.0"), Raw("2.5")]),
+                },
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {
+                            "op": "neg",
+                            "args": [{"op": "pow", "args": ["x", Raw("2.0")]}],
+                        },
+                    },
+                    {
+                        "lhs": "a",
+                        "rhs": {
+                            "op": "+",
+                            "args": [
+                                # The wrong operand count: not rewritten.
+                                {"op": "neg", "args": ["x", "b"]},
+                                {"op": "pow", "args": ["x", "b", "c"]},
+                                {"op": "broadcast", "fn": "neg", "args": ["values"]},
+                                {"op": "broadcast", "fn": "neg", "args": ["values", "b"]},
+                            ],
+                        },
+                    },
+                ],
+            }
+        },
+    }
+
+
+def esm_lean_canon(formal: Path, text: str):
+    """What `esm-lean canon` writes for a document's JSON text."""
+    binary = formal / ".lake" / "build" / "bin" / "esm-lean"
+    path = formal / ".lake" / "gen" / "ops_and_numbers.esm"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    proc = subprocess.run([str(binary), "canon", str(path)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise SystemExit(f"esm-lean canon failed:\n{proc.stdout}{proc.stderr}")
+    # Floats keep the canonical spelling esm-lean writes (`1.0e19`, not `1e+19`).
+    return json.loads(proc.stdout, parse_float=Raw)
+
+
+def in_order_of(value, like):
+    """`value` with each object's keys in the order `like` (the input) has them."""
+    if isinstance(value, dict) and isinstance(like, dict):
+        keys = [k for k in like if k in value] + [k for k in value if k not in like]
+        return {k: in_order_of(value[k], like.get(k)) for k in keys}
+    if isinstance(value, list) and isinstance(like, list) and len(value) == len(like):
+        return [in_order_of(v, w) for v, w in zip(value, like)]
+    return value
+
+
+def write_ops_numbers_fixture(formal: Path, out_dir: Path) -> None:
+    doc = ops_numbers_document()
+    text = dumps(doc)
+    expected = in_order_of(esm_lean_canon(formal, text), json.loads(text))
+    write(
+        out_dir / "ops_and_numbers.json",
+        {
+            "id": "ops_and_numbers",
+            "description": (
+                "canonicalize_document rewrites the deprecated ops (esm-spec §4.2): neg with one "
+                "operand is unary -, pow with two is ^, a broadcast of neg with one operand maps "
+                "-, and a use with the wrong operand count, or inside a free-form object, is "
+                "left as written. Every number, free-form objects included, takes its canonical "
+                "form (CONFORMANCE §5.5.3.1): a decimal token is rounded to binary64, an integral "
+                "double in Int64 is an integer (2.0 is 2, 1.0000000000000001 is 1, "
+                "-1.999999999999999e16 is -19999999999999992, -0.0 is 0), an integer token in "
+                "Int64 is kept exactly (-19999999999999990), and any other double is a float "
+                "with its shortest round-trip digits (1.4715177646857694 is 1.4715177646857693, "
+                "4.940656458412465e-324 is 5.0e-324, 1.0e19 stays a float). Compare numbers by "
+                "type and value: 2 and 2.0 differ. A binding whose JSON reader holds every "
+                "number as a double cannot hold -19999999999999990 and reads it as "
+                "-19999999999999992 on both sides. Generated by scripts/gen-canonical-unit-"
+                "spelling.py; expected is what esm-lean canon writes."
+            ),
+            "input": json.loads(text, parse_float=Raw, parse_int=Raw),
+            "expected": expected,
+            "tags": ["deprecated_op", "canonical_number", "document"],
         },
     )
 

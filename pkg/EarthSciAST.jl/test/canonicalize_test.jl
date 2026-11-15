@@ -286,18 +286,25 @@ end
 
 @testset "canonical document fixtures (esm-spec §4.8.2)" begin
     # tests/conformance/canonical_document/*.json — canonicalize_document(input)
-    # equals the expected document as a JSON value, in every binding.
+    # equals the expected document as a JSON value, in every binding; a number
+    # of the result compares by type too (`2` is not `2.0`). JSON3 can read an
+    # integer token of `expected` as a Float64 (its structural inference), so
+    # there an integral value in Int64 is an int: `expected` is canonical.
     using JSON3
     dir = abspath(joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "canonical_document"))
-    plain(x::AbstractDict) = Dict{String, Any}(String(k) => plain(v) for (k, v) in pairs(x))
-    plain(x::AbstractVector) = Any[plain(v) for v in x]
-    plain(x) = x
+    plain(x::AbstractDict, e) = Dict{String, Any}(String(k) => plain(v, e) for (k, v) in pairs(x))
+    plain(x::AbstractVector, e) = Any[plain(v, e) for v in x]
+    plain(x::Bool, e) = x
+    plain(x::Integer, e) = (:int, x)
+    plain(x::AbstractFloat, e) =
+        e && isinteger(x) && -0x1p63 <= x < 0x1p63 ? (:int, Int64(x)) : (:float, x)
+    plain(x, e) = x
     manifest = JSON3.read(read(joinpath(dir, "manifest.json"), String))
     @test !isempty(manifest.fixtures)
     for f in manifest.fixtures
         fixture = JSON3.read(read(joinpath(dir, String(f.path)), String))
         got = canonicalize_document(fixture.input)
-        @test plain(got) == plain(fixture.expected)
+        @test plain(got, false) == plain(fixture.expected, true)
     end
     # Key order is kept, as in the other bindings.
     doc = JSON3.read("{\"z\": 1, \"units\": \"s*m\", \"a\": {\"y\": 2, \"b\": 3}}")

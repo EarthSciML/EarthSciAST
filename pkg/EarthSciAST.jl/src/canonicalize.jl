@@ -653,12 +653,63 @@ The document-level canonical step: every units string of a decoded document
 That is every `units` and `default_units` string of a variable, species,
 parameter, coordinate or `const` node, wherever it sits: nested subsystems,
 template bodies, tests, coupling entries. Free-form objects (`metadata`,
-`x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither are
+`x_esd`, `attrs`, `config`, `reader_options`) are not respelled, and neither are
 the keys of name-keyed maps. A `const` node whose units spell `1` loses them: a
 scalar one becomes the bare literal, an array one a `const` without `units`.
-The input is not mutated, key order is kept, and nothing else changes.
+The deprecated ops are rewritten (esm-spec §4.2): a `neg` node with one argument
+becomes unary `-`, a `pow` node with two becomes `^`, and a `broadcast` of `neg`
+with one argument maps `-`. Every number, free-form objects included, takes its
+canonical form (CONFORMANCE §5.5.3.1): an integral value in `Int64` is an
+integer (`2.0` is `2`, `-0.0` is `0`). The input is not mutated, key order is
+kept, and nothing else changes. These are the rules of Lean
+`Adapter.Doc.spellRules` and `Adapter.Doc.conv`.
 """
-canonicalize_document(doc::AbstractDict) = _canonicalize_document_value(doc, false)
+canonicalize_document(doc::AbstractDict) =
+    _canonical_document_numbers(_canonicalize_document_value(doc, false))
+
+# The deprecated ops (esm-spec §4.2): spelling => (replacement, operand count).
+const _DEPRECATED_DOCUMENT_OPS = Dict("neg" => ("-", 1), "pow" => ("^", 2))
+
+# A JSON number in canonical form (CONFORMANCE §5.5.3.1): an integral float in
+# Int64 is an integer, an integer outside Int64 a float. A float already holds
+# the nearest binary64 of its token.
+function _canonical_document_number(x::Real)
+    x isa Bool && return x
+    if x isa AbstractFloat
+        return isinteger(x) && -0x1p63 <= x < 0x1p63 ? Int64(x) : Float64(x)
+    end
+    x isa Integer && !(typemin(Int64) <= x <= typemax(Int64)) && return Float64(x)
+    return x
+end
+
+# Every number of a JSON value in canonical form, at every depth.
+function _canonical_document_numbers(value)
+    value isa Real && return _canonical_document_number(value)
+    value isa AbstractVector && return Any[_canonical_document_numbers(v) for v in value]
+    if value isa AbstractDict
+        out = OrderedDict{String, Any}()
+        for (k, v) in pairs(value)
+            out[String(k)] = _canonical_document_numbers(v)
+        end
+        return out
+    end
+    return value
+end
+
+# `neg` with one argument is unary `-`, `pow` with two is `^`, a `broadcast` of
+# `neg` with one argument maps `-` (Lean `Adapter.Doc.deprecatedTo`).
+function _rewrite_deprecated_document_op!(out::OrderedDict{String, Any})
+    op = get(out, "op", nothing)
+    args = get(out, "args", nothing)
+    (op isa AbstractString && args isa AbstractVector) || return out
+    rule = get(_DEPRECATED_DOCUMENT_OPS, op, nothing)
+    if rule !== nothing
+        length(args) == rule[2] && (out["op"] = rule[1])
+    elseif op == "broadcast" && get(out, "fn", nothing) == "neg" && length(args) == 1
+        out["fn"] = "-"
+    end
+    return out
+end
 
 # A field of a decoded JSON object, whose keys are Strings (Dict) or Symbols
 # (JSON3.Object).
@@ -697,6 +748,7 @@ function _canonicalize_document_value(value, is_map::Bool)
                 _canonicalize_document_value(v, key in _DOCUMENT_MAP_KEYS)
             end
         end
+        is_map || _rewrite_deprecated_document_op!(out)
         return out
     end
     return value
