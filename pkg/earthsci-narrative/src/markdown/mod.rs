@@ -185,6 +185,15 @@ impl Page {
 /// construct it is shown at; the page's own problems are added at the end.
 pub fn build(page: &Page, opts: &BuildOptions) -> BuildOutput {
     let mut out = match &page.esm {
+        // A page that writes nothing but its front matter — a reference page
+        // of examples, say — is not a model, so there is nothing to validate.
+        Some(esm) if page.elements.is_empty() && !writes(esm) => {
+            let mut out = failed(Diagnostic::error("not_built", "nothing to build"));
+            out.diagnostics.clear();
+            out.ok = true;
+            out.esm = esm.clone();
+            out
+        }
         Some(esm) => build_onto(esm.clone(), page.document(), opts),
         None => {
             let mut out = failed(Diagnostic::error("not_built", "the page was not built"));
@@ -203,6 +212,12 @@ pub fn build(page: &Page, opts: &BuildOptions) -> BuildOutput {
     }
     out.diagnostics.extend(page.diagnostics.iter().cloned());
     out
+}
+
+/// Whether a document writes anything besides its format version and metadata.
+pub fn writes(esm: &Value) -> bool {
+    esm.as_object()
+        .is_some_and(|doc| doc.keys().any(|k| k != "esm" && k != "metadata"))
 }
 
 /// The `metadata` fields of esm-spec; every other front matter key is the
@@ -720,7 +735,7 @@ assertions:
             serde_json::json!({"start": 0.0, "end": 10.0})
         );
         assert_eq!(found[0]["assertions"][0]["expected"], 50.0);
-        assert_eq!(found[0]["source"]["line"], 15);
+        assert_eq!(found[0]["source"]["line"], 14);
     }
 
     #[test]

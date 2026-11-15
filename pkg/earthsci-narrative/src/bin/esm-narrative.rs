@@ -220,11 +220,7 @@ fn build_page(build: &Build, source: &Path, report: &mut Report) -> Result<(), S
     write(build, &page_path, &rendered, report)?;
     // A page that writes nothing but its front matter — a reference page of
     // examples, say — has no model to download.
-    let writes = out
-        .esm
-        .as_object()
-        .is_some_and(|doc| doc.keys().any(|k| k != "esm" && k != "metadata"));
-    if writes {
+    if markdown::writes(&out.esm) {
         let esm = serde_json::to_string_pretty(&out.esm).map_err(|e| e.to_string())?;
         write(build, &esm_path, &format!("{esm}\n"), report)?;
     }
