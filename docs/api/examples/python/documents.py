@@ -89,21 +89,30 @@ assert earthsci_ast.is_ode_state(model, "N")
 assert not earthsci_ast.is_ode_state(model, "half_life")
 
 definitions = earthsci_ast.observed_definitions(model)
-assert earthsci_ast.to_ascii(definitions["half_life"]) == "log(2) / lambda"
+assert definitions["half_life"] == ExprNode(op="/", args=[ExprNode(op="log", args=[2]), "lambda"])
 # endregion
 
 
-# region: display ops=to_unicode,to_latex,to_ascii
-decay_eq, half_life_eq = model.equations
-print(earthsci_ast.to_unicode(decay_eq))
-print(earthsci_ast.to_latex(decay_eq))
-print(earthsci_ast.to_ascii(half_life_eq))
-assert earthsci_ast.to_unicode(decay_eq) == "∂N/∂t = (−λ)·N"
-assert earthsci_ast.to_latex(decay_eq) == r"\frac{\partial N}{\partial t} = (-\lambda) \cdot N"
-assert earthsci_ast.to_ascii(half_life_eq) == "half_life = log(2) / lambda"
+# region: display ops=print_math,expression_names
+# print_math takes an expression or equation in its JSON form, as in the
+# decoded document, and the names it may use: a run of letters is one name
+# only when it is declared.
+decoded = json.loads(earthsci_ast.to_json(doc))
+decay_eq, half_life_eq = decoded["models"]["Decay"]["equations"]
+names = earthsci_ast.expression_names(decay_eq)
+assert names == ["N", "lambda"]
+print(earthsci_ast.print_math(decay_eq, names, "markdown"))
+print(earthsci_ast.print_math(decay_eq, names, "typst"))
+assert earthsci_ast.print_math(decay_eq, names, "markdown") == (
+    r"\frac{\mathrm{d} N}{\mathrm{d} t} = \left(-\lambda\right) N"
+)
+assert earthsci_ast.print_math(decay_eq, names, "typst") == "(dif N)/(dif t) = (-lambda) N"
 
-# A whole model renders as a one-line summary.
-assert earthsci_ast.to_unicode(model) == "Model: Decay (1 state, 1 parameter, 1 observed, 2 equations)"
+# LaTeX spells a multi-letter name more readably than Typst does.
+half_life_names = earthsci_ast.expression_names(half_life_eq)
+assert earthsci_ast.print_math(half_life_eq, half_life_names, "markdown") == (
+    r"\mathit{half\_life} = \frac{\ln(2)}{\lambda}"
+)
 # endregion
 
 
@@ -149,7 +158,7 @@ assert json.loads(compact) == json.loads(earthsci_ast.to_json(doc))
 # region: rename_variable ops=rename_variable,remove_variable
 renamed = earthsci_ast.rename_variable(doc.models["Decay"], "lambda", "k").modified_object
 assert "k" in renamed.variables and "lambda" not in renamed.variables
-assert earthsci_ast.to_ascii(renamed.equations[1]) == "half_life = log(2) / k"
+assert renamed.equations[1].rhs == ExprNode(op="/", args=[ExprNode(op="log", args=[2]), "k"])
 
 trimmed = earthsci_ast.remove_variable(renamed, "N0")
 assert "N0" not in trimmed.modified_object.variables
