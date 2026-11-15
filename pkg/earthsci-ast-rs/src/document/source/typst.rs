@@ -5,8 +5,11 @@
 //! declaration anywhere) and otherwise drops one character of prose. The Lean
 //! fuel (the input length plus one, tripled for values) is never exhausted,
 //! since every step consumes a character, so the port loops without it.
+//!
+//! Not ported: `Typ.segItems`, `Typ.eqnLabeled`, the `Seg.labeled` piece. No
+//! executable path uses them; only the Lean proofs do.
 
-use super::items::RItem;
+use super::items::{RItem, Spanned};
 use super::keys::Kvs;
 use super::reaction::{RSurf, after, id_char, id_ok, p_piece, p_side, side_ok, side_txt};
 use super::skeleton::{DKind, Decl, Kind, Role, Rxn, Tm};
@@ -508,16 +511,6 @@ pub fn item_t(it: &RItem) -> Vec<char> {
     out
 }
 
-/// `Typ.eqnLabeled`: a display equation with a label after it.
-pub fn eqn_labeled(raw: &str, label: &[char]) -> Vec<char> {
-    let mut out: Vec<char> = O_EQ.chars().collect();
-    out.extend(raw.chars());
-    out.extend([' ', '$']);
-    out.extend_from_slice(label);
-    out.push('\n');
-    out
-}
-
 /// `Typ.labelOK`: nothing, or `<id>`, with spaces around.
 pub fn label_ok(sl: &[char]) -> bool {
     let (_, t) = take_while(sl, |c| c == ' ');
@@ -743,18 +736,21 @@ pub fn decl_at(s: &[char]) -> Option<(RItem, &[char])> {
 }
 
 /// `Typ.lex`: the constructs of a text, skipping prose one character at a
-/// time.
-pub fn lex(mut bol: bool, mut s: &[char]) -> Option<Vec<RItem>> {
+/// time. Each construct comes with the range of `s` it is written in (Lean's
+/// `lex` returns the constructs alone).
+pub fn lex_spanned(mut bol: bool, mut s: &[char]) -> Option<Vec<Spanned>> {
+    let len = s.len();
+    let at = |s: &[char], rest: &[char]| (len - s.len())..(len - rest.len());
     let mut out = Vec::new();
     while let [c, r @ ..] = s {
         if bol && block_open(s) {
             let (it, rest) = block_at(s)?;
-            out.push(it);
+            out.push((it, at(s, rest)));
             s = rest;
             bol = true;
         } else if decl_open(s) {
             let (it, rest) = decl_at(s)?;
-            out.push(it);
+            out.push((it, at(s, rest)));
             s = rest;
             bol = false;
         } else {
@@ -792,11 +788,9 @@ pub fn decl_ok(d: &Decl) -> bool {
 }
 
 /// `Typ.Seg`: a piece of a Typst document.
-#[allow(dead_code)] // only the Lean proofs use it
 #[derive(Clone, Debug, PartialEq)]
 pub enum Seg {
     Item(RItem),
-    Labeled(String, Vec<char>),
     Prose(Vec<char>),
 }
 
@@ -804,7 +798,6 @@ pub enum Seg {
 pub fn seg_text(s: &Seg) -> Vec<char> {
     match s {
         Seg::Item(it) => item_t(it),
-        Seg::Labeled(raw, l) => eqn_labeled(raw, l),
         Seg::Prose(p) => p.clone(),
     }
 }
@@ -812,18 +805,6 @@ pub fn seg_text(s: &Seg) -> Vec<char> {
 /// `Typ.render`.
 pub fn render(segs: &[Seg]) -> Vec<char> {
     segs.iter().flat_map(seg_text).collect()
-}
-
-/// `Typ.segItems`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn seg_items(segs: &[Seg]) -> Vec<RItem> {
-    segs.iter()
-        .filter_map(|s| match s {
-            Seg::Item(it) => Some(it.clone()),
-            Seg::Labeled(raw, _) => Some(RItem::Eqn(raw.clone())),
-            Seg::Prose(_) => None,
-        })
-        .collect()
 }
 
 /// `Typ.isBlock`.

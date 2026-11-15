@@ -8,6 +8,9 @@
 //! The Lean lexer (`lexAux`, `skipWs`) carries fuel equal to the input length
 //! plus one, never exhausted (every step consumes a character); the port loops
 //! without it.
+//!
+//! Not ported: `Latex.specials`, `Latex.escCharB`, `Latex.escCharL`,
+//! `Latex.quoteL`. No executable path uses them; only the Lean proofs do.
 
 use super::parse::{atom_start, units_of_raw};
 use super::print::{char_digit_nat, char_of_nat, dig3, esc_t, key_special, raw_b, unesc_t};
@@ -19,35 +22,6 @@ use crate::document::math::expr::{is_dig, is_greek, is_letter, let_run};
 use crate::document::{number, strings};
 
 // ## Spelling
-
-/// `Latex.specials`: characters of a JSON string written as a hex escape.
-#[allow(dead_code)] // ported one-to-one; no executable path uses it yet
-pub const SPECIALS: &[char] = &['%', '$', '#', '{', '}'];
-
-/// `Latex.escCharB`: the JSON escape of one character, with the specials as
-/// hex escapes.
-#[allow(dead_code)] // ported one-to-one; no executable path uses it yet
-pub fn esc_char_b(c: char) -> Vec<char> {
-    if SPECIALS.contains(&c) {
-        let mut out = vec!['\\', 'u'];
-        out.extend(strings::hex4(c as u32));
-        out
-    } else {
-        let mut out = Vec::new();
-        strings::esc_char(false, c, &mut out);
-        out
-    }
-}
-
-/// `Latex.escCharL`: `_` as `\_`, otherwise [`esc_char_b`].
-#[allow(dead_code)] // ported one-to-one; no executable path uses it yet
-pub fn esc_char_l(c: char) -> Vec<char> {
-    if c == '_' {
-        vec!['\\', '_']
-    } else {
-        esc_char_b(c)
-    }
-}
 
 /// `Latex.fixUs`: undo the `\_` of `escCharL` up to the closing quote.
 pub fn fix_us(cs: &[char]) -> Vec<char> {
@@ -75,17 +49,6 @@ pub fn fix_us(cs: &[char]) -> Vec<char> {
             [] => return out,
         }
     }
-}
-
-/// `Latex.quoteL`.
-#[allow(dead_code)] // ported one-to-one; no executable path uses it yet
-pub fn quote_l(s: &str) -> Vec<char> {
-    let mut out = vec!['"'];
-    for c in s.chars() {
-        out.extend(esc_char_l(c));
-    }
-    out.push('"');
-    out
 }
 
 /// `Latex.strPlain`: a character of a JSON string written as itself inside

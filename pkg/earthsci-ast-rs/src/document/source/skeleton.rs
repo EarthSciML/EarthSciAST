@@ -6,6 +6,9 @@
 //! every field a container cannot spell natively falls back to a block keyed by
 //! its JSON path relative to the enclosing section. [`Caps`] are the
 //! container's predicates saying which values it spells natively.
+//!
+//! Not ported: `Source.canonVal`, `Source.tmKeys`, `Source.tmWF`,
+//! `Source.mathWF`. No executable path uses them; only the Lean proofs do.
 
 use super::keys::{Kvs, at_, join_field, pick_one, sort_keys, split_opt};
 use crate::document::json::{JNum, Json};
@@ -28,12 +31,6 @@ pub fn sorted_deep(j: &Json) -> bool {
 /// depth.
 pub fn canon_doc(j: &Json) -> bool {
     matches!(j, Json::Obj(_)) && jwf(j) && sorted_deep(j)
-}
-
-/// `Source.canonVal`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn canon_val(v: &Json) -> bool {
-    jwf(v) && sorted_deep(v)
 }
 
 /// `Source.Kind`: a model or a reaction system.
@@ -514,15 +511,6 @@ pub fn plot_of(v: &Json) -> Option<Kvs> {
     }
 }
 
-/// `Source.tmKeys`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn tm_keys(t: &Tm<Json>) -> [&'static str; 2] {
-    match t.lhs {
-        None => ["body", "params"],
-        Some(_) => ["body", "match"],
-    }
-}
-
 /// `Source.tmJson`.
 pub fn tm_json(t: &Tm<Json>) -> Json {
     let mut kvs = match &t.lhs {
@@ -591,12 +579,6 @@ pub fn tm_of(n: &str, v: &Json) -> Option<Tm<Json>> {
     }
 }
 
-/// `Source.tmWF`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn tm_wf(t: &Tm<Json>) -> bool {
-    is_e(&t.body) && t.lhs.as_ref().is_none_or(is_e)
-}
-
 /// `Source.itemJson`.
 pub fn item_json(m: &MC) -> Json {
     match m {
@@ -636,17 +618,6 @@ pub fn item_of(f: &str, v: &Json) -> Option<MC> {
         plot_of(v).map(Mx::Plot)
     } else {
         role_of(f).and_then(|r| eqn_of(v).map(|e| Mx::Eq(r, e)))
-    }
-}
-
-/// `Source.mathWF`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn math_wf(m: &MC) -> bool {
-    match m {
-        Mx::Eq(_, e) => is_e(&e.lhs) && is_e(&e.rhs),
-        Mx::Rxn(x) => is_e(&x.rate),
-        Mx::Plot(_) => true,
-        Mx::Tm(t) => tm_wf(t),
     }
 }
 

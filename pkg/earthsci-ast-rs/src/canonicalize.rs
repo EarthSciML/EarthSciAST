@@ -896,7 +896,8 @@ fn canonical_numbers(value: &serde_json::Value) -> serde_json::Value {
     use crate::document::json::{from_serde, to_serde};
     use serde_json::Value;
     match value {
-        Value::Number(_) => to_serde(&from_serde(value)),
+        // A finite binary64 value always has a `serde_json` value again.
+        Value::Number(_) => to_serde(&from_serde(value)).expect("a serde_json number is finite"),
         Value::Array(items) => Value::Array(items.iter().map(canonical_numbers).collect()),
         Value::Object(obj) => Value::Object(
             obj.iter()

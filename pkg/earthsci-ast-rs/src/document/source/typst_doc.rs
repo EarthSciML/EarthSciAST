@@ -4,7 +4,7 @@
 //! Markdown documents ([`super::markdown_doc`]).
 
 use super::equation::{eq_expr, eq_sides};
-use super::items::{RItem, ck_mx, cook_doc, items, pr_mx, raw_doc, unitems};
+use super::items::{RItem, Spanned, ck_mx, cook_doc, items, pr_mx, raw_doc, unitems};
 use super::keys::Kvs;
 use super::lines::decode_text;
 use super::markdown_doc::{comment_ok, with_comment};
@@ -12,8 +12,8 @@ use super::multi_line::cook_rows;
 use super::skeleton::{Caps, Eqn, MC, MR, Rxn, Tm, of_doc, to_doc};
 use super::text::{pre, pre_s, split_line, string};
 use super::typst::{
-    HEADER, Seg, arg_ok, args_first_t, is_block, item_ok, lex, line_end, name_typ, p_args_first,
-    render, rxn_ok, tm_lex_t,
+    HEADER, Seg, arg_ok, args_first_t, is_block, item_ok, lex_spanned, line_end, name_typ,
+    p_args_first, render, rxn_ok, tm_lex_t,
 };
 use crate::document::json::Json;
 use crate::document::math::expr::name_ok;
@@ -166,12 +166,24 @@ pub fn print_typ(d: &Json) -> String {
 
 /// `Typ.lexDoc`: read the header and the constructs.
 pub fn lex_doc(s: &[char]) -> Option<(Kvs, Vec<RItem>)> {
+    lex_doc_spanned(s).map(|(kvs, its)| (kvs, its.into_iter().map(|(it, _)| it).collect()))
+}
+
+/// [`lex_doc`], with where in `s` each construct is written (not in Lean).
+pub fn lex_doc_spanned(s: &[char]) -> Option<(Kvs, Vec<Spanned>)> {
     if !pre_s(HEADER, s) {
         return None;
     }
     let (front, r) = p_args_first(&s[HEADER.chars().count()..])?;
     let r1 = line_end(r)?;
-    lex(true, r1).map(|its| (front, its))
+    let base = s.len() - r1.len();
+    lex_spanned(true, r1).map(|its| {
+        let its = its
+            .into_iter()
+            .map(|(it, at)| (it, at.start + base..at.end + base))
+            .collect();
+        (front, its)
+    })
 }
 
 /// `Typ.parseTyp`: read a Typst document, after `decodeText`.

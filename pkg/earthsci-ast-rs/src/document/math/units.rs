@@ -14,6 +14,9 @@
 //! The Lean parser `pSepBy` carries fuel equal to the input length, which every
 //! caller gives and which is never exhausted (each item consumes a character);
 //! the port loops without it.
+//!
+//! Not ported: `Esm.Units.typst`, `Esm.Units.parseTypst`. No executable path
+//! uses them; only the Lean proofs do.
 
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -328,19 +331,6 @@ pub fn typst_factor(f: &Factor) -> Vec<char> {
     out
 }
 
-/// `Esm.Units.typst`: the Typst form of a canonical factor list (`1` when
-/// empty).
-// Ported with the module; nothing outside the Lean proofs calls it yet.
-#[allow(dead_code)]
-pub fn typst(l: &[Factor]) -> Vec<char> {
-    if l.is_empty() {
-        return vec!['1'];
-    }
-    let mut ordered = num_factors(l);
-    ordered.extend(den_factors(l));
-    join_with(typst_factor, THIN_SEP, &ordered)
-}
-
 /// `Esm.Units.pTParen`: after `^(`: `'-'? digits (')' | '\/' digits ')')`.
 pub fn p_t_paren(cs: &[char]) -> Option<(BigRational, &[char])> {
     let neg = cs.first() == Some(&'-');
@@ -379,19 +369,6 @@ pub fn p_t_factor(cs: &[char]) -> Option<(Factor, &[char])> {
     Some(((sym.iter().collect(), q), r3))
 }
 
-/// `Esm.Units.parseTypst`: a Typst unit back to its two-sided factor list.
-// Ported with the module; nothing outside the Lean proofs calls it yet.
-#[allow(dead_code)]
-pub fn parse_typst(s: &[char]) -> Option<Vec<Factor>> {
-    if s == ['1'] {
-        return Some(Vec::new());
-    }
-    match p_sep_by(p_t_factor, THIN_SEP, s) {
-        Some((fs, [])) => Some(fs),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,12 +388,5 @@ mod tests {
         let lx: String = latex(&l).into_iter().collect();
         assert_eq!(lx, "\\mathrm{cm^{3}\\,short\\_ton^{1/3}/(K\\,mol^{1/2})}");
         assert_eq!(parse_latex(&latex(&l)), Some(l.clone()));
-        let ty: String = typst(&l).into_iter().collect();
-        assert_eq!(
-            ty,
-            "upright(\"cm\")^3 thin upright(\"short_ton\")^(1\\/3) thin upright(\"K\")^(-1) thin upright(\"mol\")^(-1\\/2)"
-        );
-        assert_eq!(parse_typst(&typst(&l)), Some(l));
-        assert_eq!(parse_typst(&['1']), Some(vec![]));
     }
 }

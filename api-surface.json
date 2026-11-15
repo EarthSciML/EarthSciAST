@@ -95,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 992,
+    "symbols": 995,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 353,
       "typescript": 237,
       "python": 266,
-      "rust": 395,
+      "rust": 398,
       "go": 455
     },
     "by_tier": {
-      "extension": 688,
+      "extension": 691,
       "stable": 304
     }
   },
@@ -2229,6 +2229,14 @@
       }
     },
     {
+      "name": "construct_source",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ConstructSource"
+      }
+    },
+    {
       "name": "contains",
       "kind": "function",
       "tier": "stable",
@@ -3884,6 +3892,14 @@
       "tier": "extension",
       "bindings": {
         "typescript": "ExpressionLocation"
+      }
+    },
+    {
+      "name": "expression_names",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "expression_names"
       }
     },
     {
@@ -5774,6 +5790,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "parse_document"
+      }
+    },
+    {
+      "name": "parse_document_with_sources",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "parse_document_with_sources"
       }
     },
     {

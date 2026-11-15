@@ -1,31 +1,9 @@
 //! Lines of text, and the input decoding.
 //!
 //! Port of `formal/Esm/Document/Source/Lines.lean`.
-
-/// `Source.heads`: the characters that start a line of `s` (the first one when
-/// `s` starts at the beginning of a line, `bol`).
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn heads(bol: bool, s: &[char]) -> Vec<char> {
-    let mut out = Vec::new();
-    let mut b = bol;
-    for &c in s {
-        if b {
-            out.push(c);
-        }
-        b = c == '\n';
-    }
-    out
-}
-
-/// `Source.endBol`: whether the text after `s` starts at the beginning of a
-/// line.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn end_bol(bol: bool, s: &[char]) -> bool {
-    match s.last() {
-        None => bol,
-        Some(&c) => c == '\n',
-    }
-}
+//!
+//! Not ported: `Source.heads`, `Source.endBol`. No executable path uses them;
+//! only the Lean proofs do.
 
 /// `Source.dropBOM`.
 pub fn drop_bom(s: &[char]) -> &[char] {

@@ -4,6 +4,9 @@
 //! at an expression position (spec §4.1): a number, a name (dot-separated
 //! identifier segments), or a node (`op`, `args` and any other fields).
 //! [`is_e`] is the well-formedness check; [`Sym`] is what a document declares.
+//!
+//! Not ported: `Math.joinDots`. No executable path uses it; only the Lean
+//! proofs do.
 
 use crate::document::json::{JNum, Json, dec_int, in_int64, keys_distinct};
 
@@ -39,20 +42,6 @@ pub fn is_id_char(c: char) -> bool {
 /// `Math.splitDots`: split at every `.` (an empty input is one empty segment).
 pub fn split_dots(cs: &[char]) -> Vec<Vec<char>> {
     cs.split(|&c| c == '.').map(|s| s.to_vec()).collect()
-}
-
-/// `Math.joinDots`.
-// Ported with the module; nothing outside the Lean proofs calls it yet.
-#[allow(dead_code)]
-pub fn join_dots(ss: &[Vec<char>]) -> Vec<char> {
-    let mut out = Vec::new();
-    for (i, s) in ss.iter().enumerate() {
-        if i > 0 {
-            out.push('.');
-        }
-        out.extend(s);
-    }
-    out
 }
 
 /// `Math.segOK`: an identifier segment `[A-Za-z_][A-Za-z0-9_]*`.

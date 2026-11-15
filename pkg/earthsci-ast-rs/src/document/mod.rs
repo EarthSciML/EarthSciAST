@@ -21,10 +21,14 @@
 //! | [`math`] | `Math/*.lean` |
 //! | [`source`] | `Source/*.lean` |
 //!
+//! The Rust readers also bound what Lean leaves unbounded (nesting depth,
+//! the number range); [`limits`] says how, and why each is Rust's own.
+//!
 //! The golden set every binding reproduces is
 //! `tests/conformance/document_format/` (CONFORMANCE_SPEC §5.58).
 
 pub(crate) mod json;
+pub(crate) mod limits;
 pub(crate) mod math;
 pub(crate) mod number;
 pub(crate) mod source;
@@ -116,19 +120,42 @@ pub fn print_math(expr: &serde_json::Value, names: &[String], format: DocumentFo
     }
 }
 
+/// The variable names an expression or an equation uses, in order of first
+/// use: its string leaves under `lhs`, `rhs` and `args`. These are the
+/// `names` to give [`print_math`] to show an expression on its own, with its
+/// names declared.
+pub fn expression_names(expr: &serde_json::Value) -> Vec<String> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::String(name) if !out.contains(name) => out.push(name.clone()),
+            serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+            serde_json::Value::Object(fields) => {
+                for key in ["lhs", "rhs", "args"] {
+                    if let Some(child) = fields.get(key) {
+                        walk(child, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(expr, &mut out);
+    out
+}
+
 /// Read a Markdown ESM document (`Source.Md.parseMd`). The result is in
 /// canonical form.
 ///
 /// # Errors
 ///
-/// A [`DiagnosticError`] with code `removed_op` when the text uses an operator
-/// removed from the format (spec §4.2), and `parse_error` for any other text
-/// that is not a Markdown ESM document.
+/// A [`DiagnosticError`] with code `removed_op` when the document's math uses
+/// an operator removed from the format (spec §4.2), and `parse_error` for any
+/// other text that is not a Markdown ESM document, and for one past a bound
+/// of the Rust reader ([`limits`]): nested too deeply, or holding a number
+/// beyond the binary64 range.
 pub fn parse_markdown(text: &str) -> Result<serde_json::Value, DiagnosticError> {
-    match source::parse_md(text) {
-        Some(d) => Ok(json::to_serde(&d)),
-        None => Err(refusal(text, DocumentFormat::Markdown)),
-    }
+    read(text, DocumentFormat::Markdown)
 }
 
 /// Read a Typst ESM document (`Source.Typ.parseTyp`). See [`parse_markdown`].
@@ -137,10 +164,7 @@ pub fn parse_markdown(text: &str) -> Result<serde_json::Value, DiagnosticError> 
 ///
 /// As [`parse_markdown`].
 pub fn parse_typst(text: &str) -> Result<serde_json::Value, DiagnosticError> {
-    match source::parse_typ(text) {
-        Some(d) => Ok(json::to_serde(&d)),
-        None => Err(refusal(text, DocumentFormat::Typst)),
-    }
+    read(text, DocumentFormat::Typst)
 }
 
 /// Read an ESM document written in the given format.
@@ -152,18 +176,100 @@ pub fn parse_document(
     text: &str,
     format: DocumentFormat,
 ) -> Result<serde_json::Value, DiagnosticError> {
-    match format {
-        DocumentFormat::Markdown => parse_markdown(text),
-        DocumentFormat::Typst => parse_typst(text),
+    read(text, format)
+}
+
+/// One construct of a document's source text: where its content is in the
+/// document the text reads as, and where the text writes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConstructSource {
+    /// The JSON pointer of the construct's content: `/models/Decay` for a
+    /// `::model[Decay]` directive, `/models/Decay/variables/N` for a
+    /// declaration, `/models/Decay/equations/0` for an equation,
+    /// `/models/Decay/analyses/0` for a plot, `/models/Decay/equations` for an
+    /// ```` ```esm:equations ```` block.
+    pub pointer: String,
+    /// The byte range of the construct in the text.
+    pub span: std::ops::Range<usize>,
+}
+
+/// Read an ESM document as [`parse_document`] does, with where each of its
+/// constructs is: one [`ConstructSource`] per pointer, in the order the text
+/// writes them. A construct that reads as several entries (a display holding
+/// several equations, a container of initialization equations or
+/// constraints, a table of declarations) gives one per entry, all with its
+/// span. Prose, front matter and anything else that is not a construct of
+/// the format gives none.
+///
+/// # Errors
+///
+/// As [`parse_markdown`].
+pub fn parse_document_with_sources(
+    text: &str,
+    format: DocumentFormat,
+) -> Result<(serde_json::Value, Vec<ConstructSource>), DiagnosticError> {
+    let (read, found) = limits::reading(|| match format {
+        DocumentFormat::Markdown => source::parse_md_sourced(text),
+        DocumentFormat::Typst => source::parse_typ_sourced(text),
+    });
+    let (doc, spans) = match read {
+        Some((d, s)) => (Some(d), s),
+        None => (None, Vec::new()),
+    };
+    let doc = checked(doc, found, format)?;
+    let spans = spans
+        .into_iter()
+        .map(|(pointer, span)| ConstructSource { pointer, span })
+        .collect();
+    Ok((doc, spans))
+}
+
+fn read(text: &str, format: DocumentFormat) -> Result<serde_json::Value, DiagnosticError> {
+    let (doc, found) = limits::reading(|| match format {
+        DocumentFormat::Markdown => source::parse_md(text),
+        DocumentFormat::Typst => source::parse_typ(text),
+    });
+    checked(doc, found, format)
+}
+
+/// The document a read returned, as a `serde_json` value, or the refusal.
+fn checked(
+    doc: Option<json::Json>,
+    found: limits::Findings,
+    format: DocumentFormat,
+) -> Result<serde_json::Value, DiagnosticError> {
+    let too_deep = found.too_deep
+        || doc
+            .as_ref()
+            .is_some_and(|d| limits::json_depth(d) > limits::MAX_JSON_DEPTH);
+    if too_deep {
+        return Err(DiagnosticError {
+            code: codes::PARSE_ERROR,
+            message: format!(
+                "the document nests too deeply for the reader (at most {} constructs open at once, and {} levels of arrays and objects)",
+                limits::MAX_NESTING,
+                limits::MAX_JSON_DEPTH
+            ),
+        });
+    }
+    match doc {
+        Some(d) => json::to_serde(&d).map_err(|n| DiagnosticError {
+            code: codes::PARSE_ERROR,
+            message: format!(
+                "the number `{}` is outside the binary64 range",
+                number::print(&n).into_iter().collect::<String>()
+            ),
+        }),
+        None => Err(refusal(found.removed_op, format)),
     }
 }
 
 /// The diagnostic for a text the reader refused. The Lean reader refuses every
 /// bad input alike; the code comes from the specification: a removed operator
-/// written in the call form or the escape form is refused by name
+/// the math writes in the call form or the escape form is refused by name
 /// (CONFORMANCE §7.1), everything else is a parse error.
-fn refusal(text: &str, format: DocumentFormat) -> DiagnosticError {
-    match removed_op_in(text, format) {
+fn refusal(removed_op: Option<&str>, format: DocumentFormat) -> DiagnosticError {
+    match removed_op {
         Some(op) => DiagnosticError {
             code: codes::REMOVED_OP,
             message: format!("`{op}` was removed from the format (esm-spec §4.2)"),
@@ -178,24 +284,166 @@ fn refusal(text: &str, format: DocumentFormat) -> DiagnosticError {
     }
 }
 
-/// The first removed operator the text writes in a call or escape form:
-/// `\operatorname{op}` / `\esm{op}` in LaTeX (with `\_` for `_`), `op("op")` /
-/// `esm.node("op"` in Typst.
-fn removed_op_in(text: &str, format: DocumentFormat) -> Option<&'static str> {
-    let named = |name: &str| math::expr::REMOVED_OPS.iter().copied().find(|o| *o == name);
-    match format {
-        DocumentFormat::Markdown => ["\\operatorname{", "\\esm{"].iter().find_map(|open| {
-            text.match_indices(open).find_map(|(i, _)| {
-                let rest = &text[i + open.len()..];
-                let body = &rest[..rest.find('}')?];
-                named(&body.replace("\\_", "_"))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MD_HEAD: &str = "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n";
+    const TYP_HEAD: &str = "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n";
+
+    fn md(body: &str) -> String {
+        format!("{MD_HEAD}{body}")
+    }
+
+    fn typ(body: &str) -> String {
+        format!("{TYP_HEAD}{body}")
+    }
+
+    fn code(r: Result<serde_json::Value, DiagnosticError>) -> (&'static str, String) {
+        let e = r.expect_err("refused");
+        (e.code, e.message)
+    }
+
+    #[test]
+    fn a_number_beyond_binary64_is_refused_not_zeroed() {
+        let (c, m) = code(parse_markdown(&md("$$\ny = 1.0e400 k\n$$\n")));
+        assert_eq!(c, codes::PARSE_ERROR);
+        assert!(m.contains("1.0e400") && m.contains("binary64"), "{m}");
+        let (c, _) = code(parse_typst(&typ("$ y = 1.0e400 k $\n")));
+        assert_eq!(c, codes::PARSE_ERROR);
+        // An exponent past `u32` is not read as `10^0`.
+        let (c, _) = code(parse_markdown(&md("$$\ny = 1.0e4294967296 k\n$$\n")));
+        assert_eq!(c, codes::PARSE_ERROR);
+        // Below the smallest subnormal: zero, as the JSON readers read it.
+        let d = parse_markdown(&md("$$\ny = 1.0e-400 k\n$$\n")).unwrap();
+        assert_eq!(
+            d["models"]["M"]["equations"][0]["rhs"]["args"][0],
+            serde_json::json!(0)
+        );
+    }
+
+    #[test]
+    fn deep_nesting_is_refused_without_exhausting_the_stack() {
+        let n = 50_000;
+        let deep = |open: &str, close: &str| {
+            format!("$$\ny = {}k{}\n$$\n", open.repeat(n), close.repeat(n))
+        };
+        for text in [
+            md(&deep("(", ")")),
+            md(&deep("\\frac{", "}{k}")),
+            md(&deep("-", "")),
+            md(&deep("\\left(", "\\right)")),
+            typ(&format!("$ y = {}k{} $\n", "(".repeat(n), ")".repeat(n))),
+        ] {
+            let format = if text.starts_with("---") {
+                DocumentFormat::Markdown
+            } else {
+                DocumentFormat::Typst
+            };
+            let (c, m) = code(parse_document(&text, format));
+            assert_eq!(c, codes::PARSE_ERROR);
+            assert!(m.contains("nests too deeply"), "{m}");
+        }
+        // A chain that nests the value, not the reader.
+        let chain = format!("$$\ny = k{}\n$$\n", " - k".repeat(n));
+        let (_, m) = code(parse_markdown(&md(&chain)));
+        assert!(m.contains("nests too deeply"), "{m}");
+        // A deep YAML block and a deep flow collection.
+        let mut yaml = String::from("```esm:metaparameters\nx:\n");
+        for i in 1..2000 {
+            yaml.push_str(&" ".repeat(2 * i));
+            yaml.push_str("-\n");
+        }
+        yaml.push_str("```\n");
+        let (_, m) = code(parse_markdown(&md(&yaml)));
+        assert!(m.contains("nests too deeply"), "{m}");
+        let flow = format!(
+            ":var[$z$]{{default='{}1{}'}}\n",
+            "[".repeat(n),
+            "]".repeat(n)
+        );
+        let (_, m) = code(parse_markdown(&md(&flow)));
+        assert!(m.contains("nests too deeply"), "{m}");
+        // Ordinary nesting reads.
+        let ok = format!("$$\ny = {}k{}\n$$\n", "(".repeat(20), ")".repeat(20));
+        assert!(parse_markdown(&md(&ok)).is_ok());
+    }
+
+    #[test]
+    fn the_deepest_nesting_read_fits_a_wasm_sized_stack() {
+        // The Typst plugin runs on a 1 MiB stack. The deepest brackets and
+        // fractions the reader accepts must read there, in an unoptimized
+        // build whose frames are larger than the plugin's.
+        let deepest = |open: &str, close: &str| {
+            (1..)
+                .map(|n| {
+                    md(&format!(
+                        "$$\ny = {}k{}\n$$\n",
+                        open.repeat(n),
+                        close.repeat(n)
+                    ))
+                })
+                .take_while(|t| parse_markdown(t).is_ok())
+                .last()
+                .expect("one level reads")
+        };
+        let texts = [deepest("(", ")"), deepest("\\frac{", "}{k}")];
+        std::thread::Builder::new()
+            .stack_size(1 << 20)
+            .spawn(move || {
+                for t in &texts {
+                    parse_markdown(t).unwrap();
+                    print_markdown(parse_markdown(t).unwrap().as_object().unwrap());
+                }
             })
-        }),
-        DocumentFormat::Typst => ["op(\"", "esm.node(\""].iter().find_map(|open| {
-            text.match_indices(open).find_map(|(i, _)| {
-                let rest = &text[i + open.len()..];
-                named(&rest[..rest.find('"')?])
-            })
-        }),
+            .unwrap()
+            .join()
+            .expect("read within 1 MiB of stack");
+    }
+
+    #[test]
+    fn a_removed_operator_counts_only_in_math() {
+        let removed = "$$\ny = \\operatorname{arrayop}(k)\n$$\n";
+        assert_eq!(code(parse_markdown(&md(removed))).0, codes::REMOVED_OP);
+        // Prose and code that mention one do not hide the real error.
+        for prose in [
+            "The old `\\operatorname{arrayop}` is gone.\n\n",
+            "```\n\\esm{arrayop}{}{k}\n```\n\n",
+            "Write \\operatorname{fn} no more.\n\n",
+        ] {
+            let text = md(&format!("{prose}$$\ny = k +\n$$\n"));
+            assert_eq!(code(parse_markdown(&text)).0, codes::PARSE_ERROR, "{prose}");
+        }
+        let typ_removed = typ("$ y = op(\"fn\")(k) $\n");
+        assert_eq!(code(parse_typst(&typ_removed)).0, codes::REMOVED_OP);
+        // `stop("fn")` is not `op("fn")`, and prose is not math.
+        for prose in ["Call stop(\"fn\") here.\n\n", "No more op(\"rank\").\n\n"] {
+            let text = typ(&format!("{prose}$ y = k + $\n"));
+            assert_eq!(code(parse_typst(&text)).0, codes::PARSE_ERROR, "{prose}");
+        }
+    }
+
+    #[test]
+    fn sources_point_at_what_each_construct_reads_as() {
+        let text = md(concat!(
+            "$$\n\\begin{aligned}y &= k \\\\\ny &= 2 k\\end{aligned}\n$$\n\n",
+            "$$\ny = 3 k\n$$\n\n",
+            "$$\n\\operatorname{loss}(r, v) \\coloneqq -r v\n$$\n",
+        ));
+        let (doc, found) = parse_document_with_sources(&text, DocumentFormat::Markdown).unwrap();
+        assert_eq!(doc, parse_markdown(&text).unwrap());
+        let at = |p: &str| {
+            let s = found
+                .iter()
+                .find(|s| s.pointer == p)
+                .unwrap_or_else(|| panic!("{p}"));
+            &text[s.span.clone()]
+        };
+        assert!(at("/models/M").starts_with("::model[M]"));
+        assert_eq!(at("/models/M/variables/k"), ":param[$k$]{}");
+        assert!(at("/models/M/equations/0").contains("aligned"));
+        assert_eq!(at("/models/M/equations/0"), at("/models/M/equations/1"));
+        assert!(at("/models/M/equations/2").contains("3 k"));
+        assert!(at("/models/M/expression_templates/loss").contains("coloneqq"));
     }
 }

@@ -35,7 +35,6 @@ pub mod units;
 mod tests;
 
 pub use expr::Sym;
-#[allow(unused_imports)] // the contract with the source layer
 pub use print::{esc_t, raw_b, unesc_t};
 use token::{Sf, Tok};
 
