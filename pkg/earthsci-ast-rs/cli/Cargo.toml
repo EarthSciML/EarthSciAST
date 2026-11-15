@@ -30,10 +30,8 @@ default = ["diffsol"]
 # `esm test` and `esm benchmark --bench-type simulate` run on it only.
 diffsol = ["earthsci-ast/solve"]
 # EarthSciIntegrator: plans a run configuration against the document
-# (operators, schedule, macro step), then runs the plan. It reads esm 1.x
-# documents ONLY: integrator 0.0.1 is built on `earthsci-ast` 0.10 (schema
-# 1.3.0), so `esm simulate --backend integrator` refuses an esm 2.x document
-# until an EarthSciIntegrator release built on `earthsci-ast` 0.12 exists.
+# (operators, schedule, macro step), then runs the plan. It turns on
+# `earthsci-ast/solve` and `earthsci-ast/esio` itself.
 integrator = ["dep:earthsci-integrator", "dep:earthsci-integrator-planner"]
 # Read the parquet, netcdf and zarr files a document's `data_sources` name
 # (`earthsci-ast/esio`). The binaries attached to each GitHub release have it.
@@ -49,14 +47,16 @@ indexmap = { version = "2", features = ["serde"] }
 ndarray = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
-# EarthSciIntegrator and its planner. They depend on `earthsci-ast` by their
-# own version requirement, which may trail this workspace's; cargo then links a
-# second copy of `earthsci-ast` inside them. That is sound because nothing typed
-# crosses between the two: the integrator is handed file paths (the document
-# and a run configuration) and hands back plain `f64` state rows. A document
-# newer than the integrator's `earthsci-ast` reads is refused by its planner.
-earthsci-integrator = { version = "0.0.1", optional = true }
-earthsci-integrator-planner = { version = "0.0.1", optional = true }
+# EarthSciIntegrator and its planner. They depend on `earthsci-ast` from
+# crates.io; the workspace's `[patch.crates-io]` builds them on this one. When
+# this crate's version is outside their requirement (one was released before
+# the other), cargo links a second copy of `earthsci-ast` inside them. That is
+# sound because nothing typed crosses between the two: the integrator is handed
+# file paths (the document and a run configuration) and hands back plain `f64`
+# state rows. A document newer than the integrator's `earthsci-ast` reads is
+# refused by its planner.
+earthsci-integrator = { version = "0.1.0", optional = true }
+earthsci-integrator-planner = { version = "0.1.0", optional = true }
 
 [dev-dependencies]
 tempfile = "3.10"

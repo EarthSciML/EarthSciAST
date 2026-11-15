@@ -174,16 +174,14 @@ enum Commands {
         /// default) or `integrator` (EarthSciIntegrator; cargo feature
         /// `integrator`). Omitted, the first of those this build has. A name
         /// this build lacks is refused, naming the feature to build with.
-        /// The integrator reads esm 1.x documents only, until an
-        /// EarthSciIntegrator release built on `earthsci-ast` 0.12 exists; it
-        /// refuses `--observed` and `--compiler`. (Not `--solver`:
+        /// The integrator refuses `--observed` and `--compiler`. (Not `--solver`:
         /// `esm test --solver` names diffsol's method.)
         #[arg(long, value_name = "NAME")]
         backend: Option<String>,
         /// `integrator` only: the run configuration (EarthSciIntegrator
         /// spec/run-config.md) to plan, whose `model` must be FILE. Omitted,
-        /// one adaptive leaf over every operator of the model runs, with
-        /// global step-size control, inside fixed macro steps of `--dt`.
+        /// the integrator's own default schedule (`"auto"`) runs, inside
+        /// fixed macro steps of `--dt`.
         #[arg(long, value_name = "FILE")]
         run_config: Option<PathBuf>,
         /// `integrator` only: the fixed macro step of the default run

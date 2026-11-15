@@ -42,8 +42,8 @@ right-hand side splits into operators, how they are scheduled, the macro
 step) and then runs the plan:
 
 ```bash
-# Default: one adaptive leaf over every operator of the model, inside fixed
-# macro steps of --dt seconds (default: a hundredth of the run)
+# Default: the integrator's own schedule ("auto"), inside fixed macro steps
+# of --dt seconds (default: a hundredth of the run)
 esm simulate model.esm --time 3600 --backend integrator --dt 60 -o out.json
 
 # Your own run configuration; its `model` must name model.esm
@@ -54,23 +54,19 @@ esm simulate model.esm --time 3600 --backend integrator --run-config run.json
 esm simulate model.esm --time 3600 --backend integrator --plan-dir plan/
 ```
 
-The default is not the integrator's own `"auto"` schedule (one leaf per
-locality): integrator 0.0.1 gives a pointwise leaf there per-cell step-size
-control, which its runtime does not run yet, and its runtime needs a fixed
-macro step. A `--run-config` must give `step.dt` for the same reason.
+The integrator's runtime needs a fixed macro step, so a `--run-config` must
+give `step.dt`.
 
 With a fixed macro step, the integrator reports the state at the start and
-at every macro-step boundary; otherwise at the end of the run. The diffsol backend alone evaluates
-`--observed` fields along the trajectory, and `esm test` and
-`esm benchmark --bench-type simulate` run on diffsol only.
+at every macro-step boundary; otherwise at the end of the run. The diffsol
+backend alone evaluates `--observed` fields along the trajectory, and
+`esm test` and `esm benchmark --bench-type simulate` run on diffsol only.
 
-**The integrator backend reads esm 1.x documents only.** EarthSciIntegrator
-depends on `earthsci-ast` by its own version requirement, which trails this
-crate's: the published integrator (0.0.1) is built on `earthsci-ast` 0.10,
-which reads esm 1.x. Cargo builds that second copy of `earthsci-ast` for it,
-and `esm simulate --backend integrator` refuses an esm 2.x document up front.
-That lifts once an EarthSciIntegrator release built on `earthsci-ast` 0.12
-exists. Use the diffsol backend for esm 2.x documents.
+EarthSciIntegrator depends on `earthsci-ast` by its own version requirement.
+When this crate's version is outside that requirement (one was released before
+the other), cargo builds a second copy of `earthsci-ast` for the integrator,
+and its planner refuses a document in an esm format newer than that copy
+reads.
 
 Because the integrator reads the document from disk itself, it also refuses
 what it cannot match with the Problem `esm` builds: `--observed`,
