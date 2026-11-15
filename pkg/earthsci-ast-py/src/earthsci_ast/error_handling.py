@@ -373,6 +373,13 @@ ENUM_DUPLICATE_VALUE = "enum_duplicate_value"
 #: rewrite-target tier never admits one as ``unlowered_operator``.
 REMOVED_OP = "removed_op"
 
+#: A Markdown or Typst document source the reader refuses for any reason other
+#: than a removed operator (CONFORMANCE_SPEC §5.58): an unknown word, an
+#: ambiguous juxtaposition, an unbalanced delimiter, an unclosed display or
+#: container, and the like. Raised as ``ParseError`` by
+#: :func:`earthsci_ast.parse_markdown` / :func:`earthsci_ast.parse_typst`.
+PARSE_ERROR = "parse_error"
+
 
 # ===========================================================================
 # Causal self-reference (recurrence) codes (esm-spec §4.3.1.1;
