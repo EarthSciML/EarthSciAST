@@ -19,8 +19,8 @@
 use std::collections::HashSet;
 
 use earthsci_ast::{
-    AssertionResult, DocumentFormat, EsmFile, Expr, SolveOptions, parse_document, parse_equation,
-    print_math, run_inline_tests, to_unicode,
+    AssertionResult, DocumentFormat, EsmFile, SolveOptions, parse_document, parse_math, print_math,
+    run_inline_tests,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -133,8 +133,6 @@ pub struct Math {
     pub typst: String,
     /// LaTeX, as KaTeX reads it.
     pub latex: String,
-    /// Unicode text.
-    pub unicode: String,
 }
 
 /// A test's results.
@@ -390,21 +388,14 @@ fn model_part(path: &str) -> Option<(String, &str)> {
 /// A `var` or `param`'s name, or an `eq`'s equation, as math, with `names`
 /// (its model's declarations) in scope.
 fn math_of(kind: &ElementKind, names: &[String]) -> Option<Math> {
-    let (json, unicode) = match kind {
-        ElementKind::Var(q) | ElementKind::Param(q) => (
-            Value::String(q.name.clone()),
-            to_unicode(&Expr::Variable(q.name.clone())),
-        ),
-        ElementKind::Eq(eq) => {
-            let parsed = parse_equation(&eq.text).ok()?;
-            (serde_json::to_value(&parsed).ok()?, to_unicode(&parsed))
-        }
+    let json = match kind {
+        ElementKind::Var(q) | ElementKind::Param(q) => Value::String(q.name.clone()),
+        ElementKind::Eq(eq) => parse_math(&eq.math, names, DocumentFormat::Typst).ok()?,
         _ => return None,
     };
     Some(Math {
         typst: print_math(&json, names, DocumentFormat::Typst),
         latex: print_math(&json, names, DocumentFormat::Markdown),
-        unicode,
     })
 }
 

@@ -20,8 +20,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use earthsci_ast::{
-    EsmFile, Expr, ModelAnalysis, ModelTest, Plot, PlotAxis, PlotY, SCHEMA_VERSION,
-    StructuralErrorCode, load_document, parse_equation, parse_expression, validate,
+    DocumentFormat, EsmFile, Expr, ModelAnalysis, ModelTest, Plot, PlotAxis, PlotY, SCHEMA_VERSION,
+    StructuralErrorCode, load_document, parse_math, validate,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -477,6 +477,10 @@ impl<'a> Assembler<'a> {
     fn gather(&mut self) {
         let doc = self.doc;
         let mut current: Option<usize> = None;
+        // An equation is read with its model's names in scope, and a quantity
+        // may be declared after the equation that uses it, so equations wait
+        // until every declaration is in.
+        let mut equations: Vec<(usize, usize, &EqElement)> = Vec::new();
         for (index, element) in doc.elements.iter().enumerate() {
             if element.is_placeholder() {
                 continue;
@@ -545,11 +549,14 @@ impl<'a> Assembler<'a> {
                 }
                 ElementKind::Var(q) => self.declare(m, index, q, false),
                 ElementKind::Param(q) => self.declare(m, index, q, true),
-                ElementKind::Eq(eq) => self.equation(m, index, eq),
+                ElementKind::Eq(eq) => equations.push((m, index, eq)),
                 ElementKind::Test(t) => self.models[m].tests.push((index, t.clone())),
                 ElementKind::Analysis(a) => self.models[m].analyses.push((Some(index), a.clone())),
                 ElementKind::Plot(p) => self.models[m].plots.push((index, p.clone())),
             }
+        }
+        for (m, index, eq) in equations {
+            self.equation(m, index, eq);
         }
     }
 
@@ -572,11 +579,14 @@ impl<'a> Assembler<'a> {
             );
             return;
         }
-        if !matches!(parse_expression(&q.name), Ok(Expr::Variable(ref v)) if *v == q.name) {
+        if !is_identifier(&q.name) {
             self.error(
                 index,
                 "invalid_name",
-                format!("`{}` is not a name the equation syntax can use", q.name),
+                format!(
+                    "`{}` is not a variable name: a letter or `_`, then letters, digits and `_`",
+                    q.name
+                ),
             );
             return;
         }
@@ -659,12 +669,32 @@ impl<'a> Assembler<'a> {
     }
 
     fn equation(&mut self, m: usize, index: usize, eq: &EqElement) {
-        match parse_equation(&eq.text) {
-            Ok(parsed) => {
+        let names: Vec<String> = self.models[m]
+            .quantities
+            .iter()
+            .map(|q| q.name.clone())
+            .collect();
+        let sides = parse_math(&eq.math, &names, DocumentFormat::Typst)
+            .map_err(|e| (e.code, e.message))
+            .and_then(|parsed| match parsed {
+                Value::Object(mut fields) if fields.contains_key("lhs") => {
+                    let side = |v: Option<Value>| {
+                        serde_json::from_value::<Expr>(v.unwrap_or_default())
+                            .map_err(|e| ("parse_error", e.to_string()))
+                    };
+                    Ok((side(fields.remove("lhs"))?, side(fields.remove("rhs"))?))
+                }
+                _ => Err((
+                    "parse_error",
+                    "it is an expression, not an equation (`lhs = rhs`)".to_string(),
+                )),
+            });
+        match sides {
+            Ok((lhs, rhs)) => {
                 let model = &mut self.models[m];
                 model
                     .equations
-                    .push((index, parsed.lhs, parsed.rhs, eq.description.clone()));
+                    .push((index, lhs, rhs, eq.description.clone()));
                 let path = format!(
                     "/models/{}/equations/{}",
                     pointer(&model.name),
@@ -684,14 +714,14 @@ impl<'a> Assembler<'a> {
                 }
                 self.record(path, index);
             }
-            Err(e) => {
-                let end = (e.pos + 1).min(eq.text.chars().count()).max(e.pos);
+            Err((code, message)) => {
                 self.error(
                     index,
-                    "parse_error",
-                    format!("cannot read the equation: {}", e.message),
-                )
-                .span = Some(crate::diagnostic::TextSpan { start: e.pos, end });
+                    code,
+                    format!(
+                        "cannot read the equation as Typst math: {message} (a name of more than one letter must be declared with `var` or `param`, and spelled as an ESM Typst display spells it)"
+                    ),
+                );
             }
         }
     }
@@ -703,7 +733,7 @@ impl<'a> Assembler<'a> {
         let equations = std::mem::take(&mut self.models[m].equations);
         for (index, lhs, rhs, _) in &equations {
             let text = match &self.doc.elements[*index].kind {
-                ElementKind::Eq(eq) => eq.text.clone(),
+                ElementKind::Eq(eq) => eq.math.clone(),
                 _ => unreachable!("only eq elements hold equations"),
             };
             match defined_by(lhs) {
@@ -714,7 +744,7 @@ impl<'a> Assembler<'a> {
                     self.error(
                         *index,
                         "unsupported_equation",
-                        "only a time derivative of one variable, `D(x, t)`, can stand on the left"
+                        "only a time derivative of one variable, `(dif x)/(dif t)`, can stand on the left"
                             .to_string(),
                     );
                 }
@@ -1476,7 +1506,7 @@ mod tests {
     fn decay_assembles_and_validates() {
         let d = doc(json!([
             {"kind": "model", "name": "Decay", "description": "First-order decay"},
-            {"kind": "eq", "text": "D(N, t) = -lambda*N", "label": "eq-decay"},
+            {"kind": "eq", "math": "(dif N)/(dif t) = -lambda N", "label": "eq-decay"},
             {"kind": "var", "name": "N", "default": 100, "units": "mol", "source": {"line": 4}},
             {"kind": "param", "name": "lambda", "default": 0.1, "units": "1/s"},
             {"kind": "var", "name": "N"},
@@ -1526,8 +1556,8 @@ mod tests {
     fn undeclared_names_point_at_the_text() {
         let d = doc(json!([
             {"kind": "var", "name": "N", "default": 1},
-            {"kind": "param", "name": "lambda", "default": 0.1},
-            {"kind": "eq", "text": "D(N) = -lamda*N"}
+            {"kind": "param", "name": "k", "default": 0.1},
+            {"kind": "eq", "math": "(dif N)/(dif t) = -K N"}
         ]));
         let mut a = assemble(&d);
         check(&mut a);
@@ -1539,8 +1569,8 @@ mod tests {
         assert_eq!(undeclared.len(), 1, "{:?}", a.diagnostics);
         let d = undeclared[0];
         assert_eq!(d.element, Some(2));
-        assert!(d.message.contains("did you mean `lambda`"), "{}", d.message);
-        assert_eq!(d.span.map(|s| (s.start, s.end)), Some((8, 13)));
+        assert!(d.message.contains("did you mean `k`"), "{}", d.message);
+        assert_eq!(d.span.map(|s| (s.start, s.end)), Some((19, 20)));
     }
 
     #[test]
@@ -1550,7 +1580,7 @@ mod tests {
             {"kind": "var", "name": "N", "units": "mol"},
             {"kind": "var", "name": "N", "default": 2},
             {"kind": "param", "name": "N"},
-            {"kind": "eq", "text": "D(N) = -N"}
+            {"kind": "eq", "math": "(dif N)/(dif t) = -N"}
         ]));
         let a = assemble(&d);
         assert_eq!(
@@ -1570,11 +1600,11 @@ mod tests {
             {"kind": "var", "name": "z", "default": 0},
             {"kind": "var", "name": "w"},
             {"kind": "param", "name": "k"},
-            {"kind": "eq", "text": "D(x) = -k*x"},
-            {"kind": "eq", "text": "D(x) = -x"},
-            {"kind": "eq", "text": "D(k) = 1"},
-            {"kind": "eq", "text": "D(w) = x"},
-            {"kind": "eq", "text": "z = x + y"}
+            {"kind": "eq", "math": "(dif x)/(dif t) = -k x"},
+            {"kind": "eq", "math": "(dif x)/(dif t) = -x"},
+            {"kind": "eq", "math": "(dif k)/(dif t) = 1"},
+            {"kind": "eq", "math": "(dif w)/(dif t) = x"},
+            {"kind": "eq", "math": "z = x + y"}
         ]));
         let a = assemble(&d);
         assert_eq!(
@@ -1595,10 +1625,10 @@ mod tests {
             {"kind": "param", "name": "k", "default": 1},
             {"kind": "model", "name": "A"},
             {"kind": "var", "name": "x", "default": 1},
-            {"kind": "eq", "text": "D(x) = -k*x"},
+            {"kind": "eq", "math": "(dif x)/(dif t) = -k x"},
             {"kind": "model", "name": "B"},
             {"kind": "var", "name": "y", "default": 1},
-            {"kind": "eq", "text": "D(y) = -y"},
+            {"kind": "eq", "math": "(dif y)/(dif t) = -y"},
             {"kind": "var", "name": "x", "model": "A"},
             {"kind": "var", "name": "q", "model": "C"}
         ]));
@@ -1626,7 +1656,7 @@ mod tests {
     fn implicit_model_takes_the_document_name() {
         let (d, _) = Document::from_value(json!({
             "version": 1, "name": "Box",
-            "elements": [{"kind": "var", "name": "x", "default": 1}, {"kind": "eq", "text": "D(x) = -x"}]
+            "elements": [{"kind": "var", "name": "x", "default": 1}, {"kind": "eq", "math": "(dif x)/(dif t) = -x"}]
         }))
         .unwrap();
         let a = assemble(&d);
@@ -1635,12 +1665,41 @@ mod tests {
     }
 
     #[test]
-    fn parse_errors_carry_a_span() {
-        let d = doc(json!([{"kind": "eq", "text": "D(x) = -k*"}]));
+    fn unreadable_math_is_a_parse_error() {
+        let d = doc(json!([
+            {"kind": "var", "name": "x", "default": 1},
+            {"kind": "eq", "math": "(dif x)/(dif t) = -x +"},
+            {"kind": "eq", "math": "(dif x)/(dif t) = -rate x"},
+            {"kind": "eq", "math": "-x"}
+        ]));
         let a = assemble(&d);
-        let d = &a.diagnostics[0];
-        assert_eq!(d.code, "parse_error");
-        assert!(d.span.is_some());
+        let parse_errors: Vec<_> = a
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == "parse_error")
+            .collect();
+        assert_eq!(
+            parse_errors.iter().map(|d| d.element).collect::<Vec<_>>(),
+            [Some(1), Some(2), Some(3)]
+        );
+        assert!(parse_errors[1].message.contains("must be declared"));
+        assert!(parse_errors[2].message.contains("not an equation"));
+    }
+
+    #[test]
+    fn an_equation_reads_names_declared_after_it() {
+        let d = doc(json!([
+            {"kind": "eq", "math": "(dif x)/(dif t) = -kappa x"},
+            {"kind": "var", "name": "x", "default": 1},
+            {"kind": "param", "name": "kappa", "default": 1}
+        ]));
+        let mut a = assemble(&d);
+        check(&mut a);
+        assert!(a.diagnostics.is_empty(), "{:?}", a.diagnostics);
+        assert_eq!(
+            a.esm["models"]["Model"]["equations"][0]["rhs"]["args"][0]["args"][0],
+            "kappa"
+        );
     }
 
     #[test]
@@ -1648,7 +1707,7 @@ mod tests {
         let d = doc(json!([
             {"kind": "var", "name": "x", "default": 1},
             {"kind": "param", "name": "k", "default": 1},
-            {"kind": "eq", "text": "D(x) = -k*x"},
+            {"kind": "eq", "math": "(dif x)/(dif t) = -k x"},
             {"kind": "plot", "id": "p", "analysis": "run", "y": "x"},
             {"kind": "analysis", "id": "run", "time_span": {"start": 0, "end": 1}},
             {"kind": "plot", "analysis": "runs", "y": "x"},
@@ -1688,7 +1747,7 @@ mod tests {
     fn validator_findings_map_to_elements() {
         let d = doc(json!([
             {"kind": "var", "name": "x", "default": 1},
-            {"kind": "eq", "text": "D(x) = -x"},
+            {"kind": "eq", "math": "(dif x)/(dif t) = -x"},
             {"kind": "test", "id": "t", "time_span": {"start": 0, "end": 1},
              "assertions": [{"variable": "Q", "time": 1, "expected": 1}]}
         ]));
