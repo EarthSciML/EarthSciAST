@@ -129,6 +129,19 @@ describe('losslessJsonParse — RFC §5.4.6 parse rule', () => {
   it('handles whitespace', () => {
     expect(losslessJsonParse('  [ 1 , 2.0 ] ')).toEqual([intLit(1), floatLit(2)])
   })
+
+  it('keeps a key named __proto__ as an own key, as JSON.parse does', () => {
+    const parsed = losslessJsonParse('{"__proto__": {"polluted": true}, "a": "x"}') as Record<
+      string,
+      unknown
+    >
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype)
+    expect(Object.keys(parsed)).toEqual(['__proto__', 'a'])
+    expect(Object.getOwnPropertyDescriptor(parsed, '__proto__')?.value).toEqual({
+      polluted: true,
+    })
+    expect((parsed as { polluted?: unknown }).polluted).toBeUndefined()
+  })
 })
 
 describe('losslessJsonStringify — RFC §5.4.6 emit rule', () => {

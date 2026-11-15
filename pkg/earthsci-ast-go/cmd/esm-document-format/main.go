@@ -43,7 +43,11 @@ func decode(raw []byte) (any, error) {
 	return v, nil
 }
 
-// guarded runs f, turning a panic into an error.
+// guarded runs f, turning a panic into an error. A stack overflow or an
+// out-of-memory error is fatal in Go and recover cannot catch it; the gate
+// runner (run_driver) blames such a crash on the item without output, writes
+// its error and runs the driver again on the items after it. Items are
+// therefore handled in manifest order, one at a time.
 func guarded(f func() (string, error)) (out string, err error) {
 	defer func() {
 		if r := recover(); r != nil {

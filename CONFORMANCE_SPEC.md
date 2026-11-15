@@ -7823,15 +7823,19 @@ in one process: `scripts/document_format_gate/python_driver.py`,
 `earthsci-document-format-adapter-rust` (feature `conformance-adapters`) and
 the Go command `pkg/earthsci-ast-go/cmd/esm-document-format`. A reader reads
 each distinct printed text once; identical texts from different printers are
-the same input.
+the same input. A driver that dies partway (a fatal stack overflow, say) fails
+only the item it was on, which gets that error, and runs again on the rest.
 
 **CI.** `.github/workflows/document-format-gate.yml` runs on every pull
 request and every push to `main`, with no path filter: a print stage (one job
 per participant), a parse stage (one job per participant, reading every
 participant's texts) and a gate job that applies the three rules, writes the
-printer-by-reader table to the job summary and fails on any failure. The gate
-job always runs and fails when either stage did not succeed, so it cannot be
-skipped into a pass; it is the job to make a required status check.
+printer-by-reader table to the job summary and fails on any failure. The parse
+stage runs even when a print job failed, and the gate compares the participants
+that did run, listing the missing ones as failures, so one broken job does not
+hide the rest of the matrix. The gate job always runs and fails when either
+stage did not succeed, so it cannot be skipped into a pass; it is the job to
+make a required status check.
 
 ## 6. CI Integration
 
