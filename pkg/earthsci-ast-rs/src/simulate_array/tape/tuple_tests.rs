@@ -1022,9 +1022,79 @@ fn a_list_given_part_of_the_shared_budget_switches_to_folding_mid_walk() {
 /// anyway is how a six-valued key against a 1.4-million-row table came to
 /// hold a 1.2-billion-pair index under `native`. Same answer either way
 /// (`ab_check`), and the same tuple list, since the declined clause admits
-/// every pair.
+/// every pair. The constant clause names its `syms`, so it is not merged into
+/// its sibling's composite key (see the test below) and is priced on its own.
 #[test]
 fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
+    let n = 200usize;
+    // `k` matches 20 of the 40 000 pairs; `c` matches all of them.
+    let kl: Vec<f64> = (1..=n).map(|i| i as f64).collect();
+    let kr: Vec<f64> = (1..=n)
+        .map(|i| if i <= 20 { i as f64 } else { (1000 + i) as f64 })
+        .collect();
+    let ones = vec![1.0f64; n];
+    let doc = json!({
+        "esm": "2.0.0",
+        "metadata": {"name": "gate_planner", "authors": ["tape tests"]},
+        "index_sets": {"ls": {"kind": "interval", "size": n}, "rs": {"kind": "interval", "size": n}},
+        "models": {"M": {
+            "variables": {
+                "kl": {"type": "unknown", "units": "1", "shape": ["ls"]},
+                "kr": {"type": "unknown", "units": "1", "shape": ["rs"]},
+                "cl": {"type": "unknown", "units": "1", "shape": ["ls"]},
+                "cr": {"type": "unknown", "units": "1", "shape": ["rs"]},
+                "v": {"type": "unknown", "units": "1", "shape": ["rs"], "default": 1.0},
+                "total": {"type": "unknown", "units": "1", "default": 0.0}
+            },
+            "equations": [
+                {"lhs": "kl", "rhs": cnst(json!(kl))},
+                {"lhs": "kr", "rhs": cnst(json!(kr))},
+                {"lhs": "cl", "rhs": cnst(json!(ones))},
+                {"lhs": "cr", "rhs": cnst(json!(ones))},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
+                         "expr": {"op": "D", "args": [idx(json!("v"), &[json!("j")])], "wrt": "t"},
+                         "ranges": {"j": {"from": "rs"}}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["j"], "ranges": {"j": {"from": "rs"}},
+                         "expr": {"op": "*", "args": [-0.5, idx(json!("v"), &[json!("j")])]}}},
+                {"lhs": {"op": "D", "args": ["total"], "wrt": "t"},
+                 "rhs": {"op": "faq", "args": [], "output_idx": [], "semiring": "sum_product",
+                         "ranges": {"l": {"from": "ls"}, "r": {"from": "rs"}},
+                         "join": [{"on": [["cl", "cr"]], "syms": ["l", "r"]}, {"on": [["kl", "kr"]]}],
+                         "expr": {"op": "*", "args": [
+                             idx(json!("kl"), &[json!("l")]),
+                             idx(json!("v"), &[json!("r")])]}}}
+            ]
+        }}
+    });
+    let declines = crate::broad_phase::gate_plan_declines;
+    // The default floor keeps a gate this small; with no floor it is declined.
+    let before = declines();
+    let prog = ab_check(doc.clone(), -2.0, 2.0);
+    assert_eq!(declines(), before, "under the floor nothing is declined");
+    assert_eq!(prog.seg_tables[0].rows, vec![0, 20]);
+    let prev = crate::broad_phase::set_gate_plan(4, 0);
+    let prog = ab_check(doc.clone(), -2.0, 2.0);
+    // One tape build on its own, so no interpreter evaluation is counted.
+    let compiled = super::tests::compile(doc);
+    let before = declines();
+    let built = compiled.build_tape_opts(&std::collections::HashSet::new(), None);
+    let declined = declines() - before;
+    crate::broad_phase::set_gate_plan(prev.0, prev.1);
+    assert!(built.0.is_ok());
+    assert_eq!(declined, 1, "the constant-key gate was built");
+    assert_eq!(
+        prog.seg_tables[0].rows,
+        vec![0, 20],
+        "the selective gate still drives"
+    );
+}
+
+/// Two `on` clauses over the SAME two loop symbols are one composite-key gate
+/// (`join::merge_same_pair_gates`): the constant clause cannot be priced and
+/// built on its own, so nothing is declined even with no floor, and the
+/// composite still drives the same 20 pairs with the same answer.
+#[test]
+fn two_on_clauses_over_one_symbol_pair_are_one_composite_gate() {
     let n = 200usize;
     // `k` matches 20 of the 40 000 pairs; `c` matches all of them.
     let kl: Vec<f64> = (1..=n).map(|i| i as f64).collect();
@@ -1080,12 +1150,64 @@ fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
     let declined = declines() - before;
     crate::broad_phase::set_gate_plan(prev.0, prev.1);
     assert!(built.0.is_ok());
-    assert_eq!(declined, 1, "the constant-key gate was built");
+    assert_eq!(declined, 0, "a merged clause is not priced on its own");
     assert_eq!(
         prog.seg_tables[0].rows,
         vec![0, 20],
-        "the selective gate still drives"
+        "the composite gate drives"
     );
+}
+
+/// A constant-key clause (the two loop symbols' own ids) and a data-column
+/// clause over the same pair stay two gates: merged, a composite of a literal
+/// key and a column that is not exact integers has no drivable form and the
+/// strict tape build refuses it, where each gate alone is driven (the literal
+/// on its integers, the column on its float bits).
+#[test]
+fn a_constant_key_clause_and_a_float_column_clause_stay_separate_gates() {
+    let n = 200usize;
+    // Non-integer keys: `kl[i] == kr[i]` for the first 20 rows only.
+    let kl: Vec<f64> = (1..=n).map(|i| i as f64 + 0.5).collect();
+    let kr: Vec<f64> = (1..=n)
+        .map(|i| {
+            if i <= 20 {
+                i as f64 + 0.5
+            } else {
+                (1000 + i) as f64 + 0.25
+            }
+        })
+        .collect();
+    let doc = json!({
+        "esm": "2.0.0",
+        "metadata": {"name": "gate_planner", "authors": ["tape tests"]},
+        "index_sets": {"ls": {"kind": "interval", "size": n}, "rs": {"kind": "interval", "size": n}},
+        "models": {"M": {
+            "variables": {
+                "kl": {"type": "unknown", "units": "1", "shape": ["ls"]},
+                "kr": {"type": "unknown", "units": "1", "shape": ["rs"]},
+                "v": {"type": "unknown", "units": "1", "shape": ["rs"], "default": 1.0},
+                "total": {"type": "unknown", "units": "1", "default": 0.0}
+            },
+            "equations": [
+                {"lhs": "kl", "rhs": cnst(json!(kl))},
+                {"lhs": "kr", "rhs": cnst(json!(kr))},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
+                         "expr": {"op": "D", "args": [idx(json!("v"), &[json!("j")])], "wrt": "t"},
+                         "ranges": {"j": {"from": "rs"}}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["j"], "ranges": {"j": {"from": "rs"}},
+                         "expr": {"op": "*", "args": [-0.5, idx(json!("v"), &[json!("j")])]}}},
+                {"lhs": {"op": "D", "args": ["total"], "wrt": "t"},
+                 "rhs": {"op": "faq", "args": [], "output_idx": [], "semiring": "sum_product",
+                         "ranges": {"l": {"from": "ls"}, "r": {"from": "rs"}},
+                         "join": [{"on": [["ls", "rs"]]}, {"on": [["kl", "kr"]]}],
+                         "expr": {"op": "*", "args": [
+                             idx(json!("kl"), &[json!("l")]),
+                             idx(json!("v"), &[json!("r")])]}}}
+            ]
+        }}
+    });
+    // Builds on the tape and agrees with the interpreter bit for bit.
+    ab_check(doc, -2.0, 2.0);
 }
 
 /// A ragged `+` contraction is seeded from `0` like every other (esm-spec

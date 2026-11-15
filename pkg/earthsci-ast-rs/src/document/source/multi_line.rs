@@ -3,6 +3,9 @@
 //!
 //! Port of `formal/Esm/Document/Source/MultiLine.lean`. The reader works on
 //! the math tokens, so rows and cells are found by token and depth.
+//!
+//! Not ported: `Source.noTop`, `Source.joinRows`. No executable path uses them;
+//! only the Lean proofs do.
 
 use super::equation::eq_sides;
 use super::skeleton::Eqn;
@@ -32,18 +35,6 @@ pub fn cut(k: Kw, mut d: i64, ts: &[Tok]) -> (&[Tok], Option<&[Tok]>) {
         d += delta(t);
     }
     (ts, None)
-}
-
-/// `Source.noTop`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn no_top(k: Kw, mut d: i64, ts: &[Tok]) -> bool {
-    for t in ts {
-        if d == 0 && is_kw(k, t) {
-            return false;
-        }
-        d += delta(t);
-    }
-    d == 0
 }
 
 /// `Source.splitAll`: split at every top-level `k`. (Fuel dropped: callers
@@ -128,17 +119,4 @@ pub fn cook_rows(sf: Sf, s: &Sym, one: bool, ts: &[Tok]) -> Option<Vec<Eqn>> {
             })
         })
         .collect()
-}
-
-/// `Source.joinRows`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn join_rows(rows: &[Vec<Tok>]) -> Vec<Tok> {
-    let mut out = Vec::new();
-    for (i, r) in rows.iter().enumerate() {
-        if i > 0 {
-            out.push(Tok::Kw(Kw::Nl));
-        }
-        out.extend(r.iter().cloned());
-    }
-    out
 }

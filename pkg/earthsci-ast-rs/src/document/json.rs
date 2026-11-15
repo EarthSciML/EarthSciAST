@@ -48,15 +48,21 @@ pub fn digits_val(ds: &[u8]) -> Option<i128> {
 /// inner one is `None` when the integer does not fit in `i128` (so certainly
 /// not in `Int64`).
 pub fn dec_int(neg: bool, ds: &[u8], e10: i64) -> Option<Option<i128>> {
-    let len = ds.len() as i64;
-    if len <= e10 + 1 {
-        let zeros = (e10 + 1 - len) as u32;
-        let m =
-            digits_val(ds).and_then(|v| 10i128.checked_pow(zeros).and_then(|p| v.checked_mul(p)));
-        Some(m.map(|m| if neg { -m } else { m }))
-    } else {
-        None
+    // In `i128`, where `e10 + 1 - len` cannot overflow for any `i64` exponent
+    // and any digit list that fits in memory.
+    let zeros = i128::from(e10) + 1 - ds.len() as i128;
+    if zeros < 0 {
+        return None;
     }
+    let m = digits_val(ds).and_then(|v| {
+        if v == 0 {
+            return Some(0);
+        }
+        // `10^zeros` overflows `i128` well before `zeros` leaves `u32`.
+        let p = 10i128.checked_pow(u32::try_from(zeros).ok()?)?;
+        v.checked_mul(p)
+    });
+    Some(m.map(|m| if neg { -m } else { m }))
 }
 
 impl JNum {
@@ -162,25 +168,36 @@ pub fn jnum_of_serde(n: &serde_json::Number) -> Option<JNum> {
     jnum_of_f64(n.as_f64()?)
 }
 
-/// A canonical number as a `serde_json` number.
-pub fn jnum_to_serde(n: &JNum) -> serde_json::Number {
+/// A canonical number as a `serde_json` number: the binary64 value nearest to
+/// it, as `serde_json` reads its spelling.
+///
+/// `None` for a decimal beyond the binary64 range (`1.0e400`), which has no
+/// nearest finite binary64 value; `serde_json` refuses that literal in a JSON
+/// document too. A nonzero decimal below the smallest subnormal (`1.0e-400`)
+/// rounds to zero, as every binding's JSON reader rounds it, and is the
+/// canonical zero, the integer `0`, as `canonicalize_document` makes a JSON
+/// `1e-400`.
+pub fn jnum_to_serde(n: &JNum) -> Option<serde_json::Number> {
     match n {
-        JNum::Int(z) => {
-            if let Ok(i) = i64::try_from(*z) {
-                serde_json::Number::from(i)
-            } else if let Ok(u) = u64::try_from(*z) {
-                serde_json::Number::from(u)
-            } else {
-                serde_json::Number::from_f64(*z as f64).expect("finite")
-            }
-        }
+        JNum::Int(z) => Some(if let Ok(i) = i64::try_from(*z) {
+            serde_json::Number::from(i)
+        } else if let Ok(u) = u64::try_from(*z) {
+            serde_json::Number::from(u)
+        } else {
+            // Finite: every `i128` is far inside the binary64 range.
+            serde_json::Number::from_f64(*z as f64)?
+        }),
         JNum::Dec { .. } => {
             // The value `serde_json` reads from the canonical spelling, which
             // always has a decimal point: a float, even for an integral decimal
             // outside `Int64` (`1.0e19`).
             let text: String = super::number::print(n).into_iter().collect();
-            let f: f64 = text.parse().expect("a printed number parses");
-            serde_json::Number::from_f64(f).unwrap_or_else(|| serde_json::Number::from(0))
+            let f: f64 = text.parse().ok()?;
+            if f == 0.0 {
+                Some(serde_json::Number::from(0))
+            } else {
+                serde_json::Number::from_f64(f)
+            }
         }
     }
 }
@@ -204,21 +221,27 @@ pub fn from_serde(v: &serde_json::Value) -> Json {
 }
 
 /// A document value as a `serde_json` value (entry order kept).
-pub fn to_serde(j: &Json) -> serde_json::Value {
-    match j {
+///
+/// # Errors
+///
+/// The first number with no `serde_json` value ([`jnum_to_serde`]).
+pub fn to_serde(j: &Json) -> Result<serde_json::Value, JNum> {
+    Ok(match j {
         Json::Null => serde_json::Value::Null,
         Json::Bool(b) => serde_json::Value::Bool(*b),
-        Json::Num(n) => serde_json::Value::Number(jnum_to_serde(n)),
+        Json::Num(n) => serde_json::Value::Number(jnum_to_serde(n).ok_or_else(|| n.clone())?),
         Json::Str(s) => serde_json::Value::String(s.clone()),
-        Json::Arr(xs) => serde_json::Value::Array(xs.iter().map(to_serde).collect()),
+        Json::Arr(xs) => {
+            serde_json::Value::Array(xs.iter().map(to_serde).collect::<Result<_, _>>()?)
+        }
         Json::Obj(kvs) => {
             let mut m = serde_json::Map::new();
             for (k, v) in kvs {
-                m.insert(k.clone(), to_serde(v));
+                m.insert(k.clone(), to_serde(v)?);
             }
             serde_json::Value::Object(m)
         }
-    }
+    })
 }
 
 /// The value with every object's entries sorted by key (code point order), the
@@ -287,6 +310,45 @@ mod tests {
         let n: serde_json::Value = serde_json::from_str("[1.0, 2.5, 1e-9, 1e300, -3]").unwrap();
         let j = from_serde(&n);
         assert_eq!(render(&j), "[1,2.5,1.0e-9,1.0e300,-3]");
-        assert_eq!(to_serde(&j), serde_json::json!([1, 2.5, 1e-9, 1e300, -3]));
+        assert_eq!(
+            to_serde(&j).unwrap(),
+            serde_json::json!([1, 2.5, 1e-9, 1e300, -3])
+        );
+    }
+
+    fn dec(digits: &[u8], e10: i64) -> JNum {
+        JNum::Dec {
+            neg: false,
+            digits: digits.to_vec(),
+            e10,
+        }
+    }
+
+    #[test]
+    fn a_decimal_beyond_binary64_has_no_serde_value() {
+        assert_eq!(jnum_to_serde(&dec(&[1], 400)), None);
+        assert_eq!(
+            to_serde(&Json::Arr(vec![Json::Num(dec(&[1], 400))])),
+            Err(dec(&[1], 400))
+        );
+        // Below the smallest subnormal: the canonical zero.
+        assert_eq!(
+            jnum_to_serde(&dec(&[1], -400)),
+            Some(serde_json::Number::from(0))
+        );
+        assert_eq!(
+            jnum_to_serde(&dec(&[1, 7, 9], 308)),
+            serde_json::Number::from_f64(1.79e308)
+        );
+    }
+
+    #[test]
+    fn dec_int_never_wraps_the_exponent() {
+        assert_eq!(dec_int(false, &[1], 2), Some(Some(100)));
+        assert_eq!(dec_int(false, &[1, 5], 0), None);
+        // `10^(2^32)` is no `i128`; a wrapped `u32` would make it `10^0`.
+        assert_eq!(dec_int(false, &[1], 4_294_967_296), Some(None));
+        assert_eq!(dec_int(false, &[1], i64::MAX), Some(None));
+        assert_eq!(dec_int(true, &[1], i64::MIN), None);
     }
 }

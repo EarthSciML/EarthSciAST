@@ -28,6 +28,11 @@ pub enum RItem {
     Tm(Tm<String>),
 }
 
+/// A construct and the range of characters it is written in (not in Lean:
+/// the readers record it so a document's constructs can be traced back to
+/// their source, [`super::sources`]).
+pub type Spanned = (RItem, std::ops::Range<usize>);
+
 /// `Source.mItem`: the construct of a math entry.
 pub fn m_item(m: &MR) -> RItem {
     match m {
@@ -192,47 +197,77 @@ pub fn raw_doc(pr: &dyn Fn(&Sym, &MC) -> MR, d: &Doc<MC>) -> Doc<MR> {
 }
 
 /// `Source.cookComp`: read a component's math entries under its symbol table;
-/// one math text may hold several equations.
-pub fn cook_comp(
+/// one math text may hold several equations. Also returns how many entries
+/// each math text read as (Lean's `cookComp` returns the component alone).
+pub fn cook_comp_counted(
     ck: &dyn Fn(&Sym, &MR) -> Option<Vec<MC>>,
     d: &Doc<MR>,
     c: &Comp<MR>,
-) -> Option<Comp<MC>> {
+) -> Option<(Comp<MC>, Vec<usize>)> {
     let s = sym_for(d, c);
     let mut math = Vec::new();
+    let mut counts = Vec::with_capacity(c.math.len());
     for m in &c.math {
-        math.extend(ck(&s, m)?);
+        let ms = ck(&s, m)?;
+        counts.push(ms.len());
+        math.extend(ms);
     }
-    Some(Comp {
-        kind: c.kind,
-        name: c.name.clone(),
-        desc: c.desc.clone(),
-        decls: c.decls.clone(),
-        math,
-        math_blocks: c.math_blocks.clone(),
-        blocks: c.blocks.clone(),
-    })
+    Some((
+        Comp {
+            kind: c.kind,
+            name: c.name.clone(),
+            desc: c.desc.clone(),
+            decls: c.decls.clone(),
+            math,
+            math_blocks: c.math_blocks.clone(),
+            blocks: c.blocks.clone(),
+        },
+        counts,
+    ))
 }
 
 /// `Source.cookDoc`: read every math entry of a skeleton.
 pub fn cook_doc(ck: &dyn Fn(&Sym, &MR) -> Option<Vec<MC>>, d: &Doc<MR>) -> Option<Doc<MC>> {
+    cook_doc_counted(ck, d).map(|(d, _)| d)
+}
+
+/// How many entries each math entry of a skeleton read as: the top-level
+/// templates, then each component's math entries.
+pub struct Counts {
+    pub top: Vec<usize>,
+    pub comps: Vec<Vec<usize>>,
+}
+
+/// [`cook_doc`], with the [`Counts`] (not in Lean).
+pub fn cook_doc_counted(
+    ck: &dyn Fn(&Sym, &MR) -> Option<Vec<MC>>,
+    d: &Doc<MR>,
+) -> Option<(Doc<MC>, Counts)> {
     let ts = top_sym(d);
     let mut rm = Vec::new();
+    let mut top = Vec::with_capacity(d.math.len());
     for m in &d.math {
-        rm.extend(ck(&ts, m)?);
+        let ms = ck(&ts, m)?;
+        top.push(ms.len());
+        rm.extend(ms);
     }
-    let cs = d
+    let (cs, comps): (Vec<_>, Vec<_>) = d
         .comps
         .iter()
-        .map(|c| cook_comp(ck, d, c))
-        .collect::<Option<Vec<_>>>()?;
-    Some(Doc {
-        front: d.front.clone(),
-        desc: d.desc.clone(),
-        blocks: d.blocks.clone(),
-        math: rm,
-        comps: cs,
-    })
+        .map(|c| cook_comp_counted(ck, d, c))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .unzip();
+    Some((
+        Doc {
+            front: d.front.clone(),
+            desc: d.desc.clone(),
+            blocks: d.blocks.clone(),
+            math: rm,
+            comps: cs,
+        },
+        Counts { top, comps },
+    ))
 }
 
 /// `Source.prMx`: a math entry's text, from the equation and expression

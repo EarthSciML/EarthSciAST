@@ -9,6 +9,9 @@
 //! The Lean lexer (`lexAux`, `pieces`, `pSepBy`) carries fuel equal to the
 //! input length, never exhausted (every step consumes a character); the port
 //! loops without it.
+//!
+//! Not ported: `Typst.isHead`. No executable path uses it; only the Lean proofs
+//! do.
 
 use super::expr::{dig_run, is_dig, is_greek, is_letter};
 use super::parse::atom_start;
@@ -220,41 +223,6 @@ pub fn atom_end(t: &Tok) -> bool {
         | Tok::Code(_)
         | Tok::Units(_) => true,
         Tok::Kw(k) => matches!(k, Kw::Rp | Kw::Rbk),
-        _ => false,
-    }
-}
-
-/// `Typst.isHead`: function names: no space before their `(`.
-#[allow(dead_code)] // ported one-to-one; no executable path uses it yet
-pub fn is_head(t: &Tok) -> bool {
-    match t {
-        Tok::Opn(_) => true,
-        Tok::Kw(k) => matches!(
-            k,
-            Kw::Sqrt
-                | Kw::Exp
-                | Kw::Ln
-                | Kw::Log
-                | Kw::Sin
-                | Kw::Cos
-                | Kw::Tan
-                | Kw::Asin
-                | Kw::Acos
-                | Kw::Atan
-                | Kw::Sinh
-                | Kw::Cosh
-                | Kw::Tanh
-                | Kw::Min
-                | Kw::Max
-                | Kw::Abs
-                | Kw::Floor
-                | Kw::Ceil
-                | Kw::Cases
-                | Kw::Esmnode
-                | Kw::Cdot
-                | Kw::Vec
-                | Kw::Mat
-        ),
         _ => false,
     }
 }

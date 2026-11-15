@@ -591,10 +591,70 @@ fn lower_node_joins(
         node.filter = Some(Box::new(pred));
     }
     if !kept.is_empty() {
+        merge_same_pair_gates(&mut kept);
         node.join = Some(kept);
     }
 
     Ok(())
+}
+
+/// Merge `on` gates that gate the SAME two loop symbols into one composite-key
+/// gate, across clauses as [`lower_node_joins`] already does within one.
+///
+/// Two clauses `{on: [[a,x],[b,y]]}` and `{on: [[c,z]]}` over the same symbol
+/// pair admit a pair iff all three keys agree: one composite key, exactly. Kept
+/// apart, each is priced and built as its own gate, and the planner's reach
+/// estimate treats the two symbols as independently narrowed by the first, so
+/// a second, low-selectivity clause on the same pair is materialised and
+/// sorted -- O(|L| x |R| / distinct keys) pairs -- rather than declined.
+/// Merged, it is one gate whose match count is the conjunction's.
+///
+/// Only the RESOLVED gates merge: the later clause's columns are appended to
+/// the earlier clause's [`OnGate`], and the later clause keeps its authored
+/// `on` list with no gate of its own. The join list itself -- every clause,
+/// every `on` pair -- is left exactly as resolution produced it, and every
+/// equality stays a conjunct of the node's `filter` either way.
+///
+/// Only clauses with the same `syms`, and only gates whose key columns are all
+/// DATA columns, merge. A [`KeyColumn::Const`] key is driven on exact integer
+/// or categorical values over the symbol's own positions, a data column over
+/// `1..=N` and, when it is not exact integers, on its float bits; a composite of
+/// the two can be undrivable where each alone was not, so such a gate stays
+/// on its own. Overlap clauses and gates over other symbol pairs are untouched.
+fn merge_same_pair_gates(kept: &mut [JoinClause]) {
+    let all_data = |g: &OnGate| {
+        g.cols_l
+            .iter()
+            .chain(g.cols_r.iter())
+            .all(|c| matches!(c, KeyColumn::Column(_)))
+    };
+    for i in 1..kept.len() {
+        let (head, tail) = kept.split_at_mut(i);
+        let clause = &mut tail[0];
+        let Some(g) = clause.on_gate.as_ref().filter(|g| all_data(g)) else {
+            continue;
+        };
+        let slot = head.iter_mut().find(|m| {
+            m.syms == clause.syms
+                && m.on_gate.as_ref().is_some_and(|h| {
+                    all_data(h)
+                        && ((h.sym_l == g.sym_l && h.sym_r == g.sym_r)
+                            || (h.sym_l == g.sym_r && h.sym_r == g.sym_l))
+                })
+        });
+        let Some(m) = slot else {
+            continue;
+        };
+        let g = clause.on_gate.take().expect("matched on its gate");
+        let h = m.on_gate.as_mut().expect("matched on its gate");
+        if h.sym_l == g.sym_l {
+            h.cols_l.extend(g.cols_l);
+            h.cols_r.extend(g.cols_r);
+        } else {
+            h.cols_l.extend(g.cols_r);
+            h.cols_r.extend(g.cols_l);
+        }
+    }
 }
 
 /// One side of an `on` key pair, resolved to the loop symbol it gates and the
@@ -2069,5 +2129,110 @@ mod tests {
             panic!("expr is not an operator");
         };
         assert!(node.filter.is_none(), "no join ⇒ no synthesized filter");
+    }
+
+    /// A two-clause node over `l` (from `ls`) and `r` (from `rs`), with 1-D data
+    /// columns `kl`/`cl` over `ls` and `kr`/`cr` over `rs`, resolved.
+    fn two_clause_node(second: [&str; 2]) -> ExpressionNode {
+        let ranges = HashMap::from([
+            (
+                "l".to_string(),
+                RangeSpec::IndexSetRef {
+                    from: "ls".into(),
+                    of: None,
+                },
+            ),
+            (
+                "r".to_string(),
+                RangeSpec::IndexSetRef {
+                    from: "rs".into(),
+                    of: None,
+                },
+            ),
+        ]);
+        let mut expr = Expr::operator(ExpressionNode {
+            op: "faq".into(),
+            ranges: Some(ranges),
+            output_idx: Some(vec![]),
+            join: Some(vec![
+                JoinClause {
+                    on: vec![["kl".into(), "kr".into()]],
+                    ..Default::default()
+                },
+                JoinClause {
+                    on: vec![[second[0].into(), second[1].into()]],
+                    ..Default::default()
+                },
+            ]),
+            expr: Some(Box::new(Expr::Number(1.0))),
+            ..Default::default()
+        });
+        let isets = HashMap::from([
+            ("ls".to_string(), interval(4)),
+            ("rs".to_string(), interval(4)),
+        ]);
+        let shapes: HashMap<String, Vec<String>> =
+            [("kl", "ls"), ("cl", "ls"), ("kr", "rs"), ("cr", "rs")]
+                .into_iter()
+                .map(|(v, s)| (v.to_string(), vec![s.to_string()]))
+                .collect();
+        lower_expr_joins(&mut expr, &isets, &shapes).unwrap();
+        let Expr::Operator(node) = expr else {
+            panic!("expr is not an operator");
+        };
+        (*node).clone()
+    }
+
+    /// Two data-column clauses over one symbol pair merge into ONE resolved
+    /// gate, but the join list keeps both authored clauses with their `on`
+    /// lists untouched: the merge lives only in the derived gate structure.
+    #[test]
+    fn merged_same_pair_gates_leave_the_authored_join_list_intact() {
+        let node = two_clause_node(["cl", "cr"]);
+        let join = node.join.as_ref().expect("the clauses survive");
+        assert_eq!(join.len(), 2, "no clause is dropped");
+        let on: Vec<_> = join.iter().map(|c| c.on.clone()).collect();
+        assert_eq!(
+            on,
+            vec![
+                vec![["kl".to_string(), "kr".to_string()]],
+                vec![["cl".to_string(), "cr".to_string()]],
+            ],
+            "each clause keeps exactly its authored pairs"
+        );
+        let g = join[0].on_gate.as_ref().expect("the first clause gates");
+        assert_eq!(
+            (g.cols_l.clone(), g.cols_r.clone()),
+            (
+                vec![
+                    KeyColumn::Column("kl".into()),
+                    KeyColumn::Column("cl".into())
+                ],
+                vec![
+                    KeyColumn::Column("kr".into()),
+                    KeyColumn::Column("cr".into())
+                ],
+            ),
+            "one composite gate over both clauses' columns"
+        );
+        assert!(
+            join[1].on_gate.is_none(),
+            "the absorbed clause has no gate of its own"
+        );
+    }
+
+    /// A constant-key clause (`[["ls","rs"]]`, the two sets' members) is not
+    /// merged with a data-column clause over the same pair: the composite of a
+    /// literal key and a column that is not exact integers cannot be driven,
+    /// where each gate on its own can.
+    #[test]
+    fn a_constant_key_gate_is_not_merged_with_a_data_column_gate() {
+        let node = two_clause_node(["ls", "rs"]);
+        let join = node.join.as_ref().expect("the clauses survive");
+        assert_eq!(join.len(), 2);
+        let g0 = join[0].on_gate.as_ref().expect("the data clause gates");
+        let g1 = join[1].on_gate.as_ref().expect("the constant clause gates");
+        assert_eq!(g0.cols_l, vec![KeyColumn::Column("kl".into())]);
+        assert!(matches!(g1.cols_l[..], [KeyColumn::Const { .. }]));
     }
 }

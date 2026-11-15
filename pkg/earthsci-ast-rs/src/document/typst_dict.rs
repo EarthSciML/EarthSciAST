@@ -149,6 +149,7 @@ fn p_min(r: &[char]) -> Option<&[char]> {
 
 /// `TypstDict.pVal`: a value, at its first character.
 pub fn p_val(input: &[char]) -> Option<(Json, &[char])> {
+    let _nest = super::limits::Nest::enter()?;
     match input {
         [] => None,
         ['(', r @ ..] => match p_min(skip_ws(r)) {

@@ -7,8 +7,13 @@
 //! functions carry fuel that the document reader gives as the input length
 //! plus one, and every step consumes a character, so the port loops without
 //! it.
+//!
+//! Not ported: `Md.segItems`, `Md.eqnLabeled`, `Md.dispTxt`, `Md.kindWord`,
+//! `Md.colText`, `Md.cellText`, `Md.rowText`, `Md.tableText`, the `Seg.labeled`
+//! and `Seg.code` pieces. No executable path uses them; only the Lean proofs
+//! do.
 
-use super::items::RItem;
+use super::items::{RItem, Spanned};
 use super::keys::Kvs;
 use super::reaction::{RSurf, id_char, id_ok, p_piece, p_side, side_ok, side_txt};
 use super::skeleton::{DKind, Decl, Kind, Role, Rxn, Tm};
@@ -16,7 +21,7 @@ use super::text::{
     after_s, blank, has_sub, no_stop, pre, pre_s, split_line, string, take_while, until_stop,
 };
 use crate::document::json::Json;
-use crate::document::math::expr::{look, name_ok};
+use crate::document::math::expr::name_ok;
 use crate::document::math::{Sym, esc_t, parse_latex, print_latex, raw_b, unesc_t};
 use crate::document::strings::{
     esc_char, hex4, is_ident, parse_key, parse_quoted, print_key, read_ident,
@@ -168,6 +173,7 @@ pub fn flow_v(v: &Json) -> Vec<char> {
 
 /// `Md.pFlow`: a flow collection at `[` or `{`, else a scalar.
 pub fn p_flow(s: &[char]) -> Option<(Json, &[char])> {
+    let _nest = crate::document::limits::Nest::enter()?;
     match s {
         [] => None,
         ['[', r @ ..] => {
@@ -942,28 +948,33 @@ pub fn skip_code(s: &[char]) -> &[char] {
 }
 
 /// `Md.lex`: the constructs of a text, skipping prose one character at a time
-/// and code spans whole. A malformed construct is an error.
-pub fn lex(mut bol: bool, mut s: &[char]) -> Option<Vec<RItem>> {
+/// and code spans whole. A malformed construct is an error. Each construct
+/// comes with the range of `s` it is written in (Lean's `lex` returns the
+/// constructs alone); the constructs of a table or a container share its
+/// range.
+pub fn lex_spanned(mut bol: bool, mut s: &[char]) -> Option<Vec<Spanned>> {
+    let len = s.len();
+    let at = |s: &[char], rest: &[char]| (len - s.len())..(len - rest.len());
     let mut out = Vec::new();
     while let [c, r @ ..] = s {
         if bol && block_open(s) {
             let (it, rest) = block_at(s)?;
-            out.push(it);
+            out.push((it, at(s, rest)));
             s = rest;
             bol = true;
         } else if decl_open(s) {
             let (it, rest) = decl_at(s)?;
-            out.push(it);
+            out.push((it, at(s, rest)));
             s = rest;
             bol = false;
         } else if bol && pre_s(TABLE_OPEN, s) {
             let (its, rest) = table_at(s)?;
-            out.extend(its);
+            out.extend(its.into_iter().map(|it| (it, at(s, rest))));
             s = rest;
             bol = true;
         } else if bol && cont_open(s) {
             let (its, rest) = cont_at(s)?;
-            out.extend(its);
+            out.extend(its.into_iter().map(|it| (it, at(s, rest))));
             s = rest;
             bol = true;
         } else if bol && rate_table(s) {
@@ -1114,58 +1125,24 @@ pub fn item_md(it: &RItem) -> Vec<char> {
     out
 }
 
-/// `Md.eqnLabeled`: a display equation with an equation label after it.
-pub fn eqn_labeled(raw: &str, label: &[char]) -> Vec<char> {
-    let mut out: Vec<char> = DD.chars().collect();
-    out.push('\n');
-    out.extend(raw.chars());
-    out.push('\n');
-    push_s(&mut out, DD);
-    out.extend_from_slice(label);
-    out.push('\n');
-    out
-}
-
 /// `Md.Seg`: a piece of a Markdown document.
-#[allow(dead_code)] // only the Lean proofs use it
 #[derive(Clone, Debug, PartialEq)]
 pub enum Seg {
     Item(RItem),
-    Labeled(String, Vec<char>),
     Prose(Vec<char>),
-    Code(Vec<char>),
 }
 
 /// `Md.segText`.
 pub fn seg_text(s: &Seg) -> Vec<char> {
     match s {
         Seg::Item(it) => item_md(it),
-        Seg::Labeled(raw, l) => eqn_labeled(raw, l),
         Seg::Prose(p) => p.clone(),
-        Seg::Code(body) => {
-            let mut out = vec!['`'];
-            out.extend_from_slice(body);
-            out.push('`');
-            out
-        }
     }
 }
 
 /// `Md.render`: the text of a document body.
 pub fn render(segs: &[Seg]) -> Vec<char> {
     segs.iter().flat_map(seg_text).collect()
-}
-
-/// `Md.segItems`: the constructs of a document body.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn seg_items(segs: &[Seg]) -> Vec<RItem> {
-    segs.iter()
-        .filter_map(|s| match s {
-            Seg::Item(it) => Some(it.clone()),
-            Seg::Labeled(raw, _) => Some(RItem::Eqn(raw.clone())),
-            _ => None,
-        })
-        .collect()
 }
 
 /// `Md.isBlock`: a construct that must start a line (all but declarations).
@@ -1224,79 +1201,4 @@ pub fn item_ok(it: &RItem) -> bool {
                 && t.attrs.iter().all(attr_ok)
         }
     }
-}
-
-/// `Md.dispTxt`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn disp_txt(raw: &str) -> Vec<char> {
-    let mut out: Vec<char> = DD.chars().collect();
-    out.push('\n');
-    out.extend(raw.chars());
-    out.push('\n');
-    push_s(&mut out, DD);
-    out.extend(['\n', '\n']);
-    out
-}
-
-/// `Md.kindWord`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn kind_word(k: DKind) -> &'static str {
-    dkw(k)
-}
-
-/// `Md.colText`: a header column.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn col_text(k: &str) -> Vec<char> {
-    let mut out = vec![' '];
-    out.extend(k.chars());
-    out.extend([' ', '|']);
-    out
-}
-
-/// `Md.cellText`: a cell.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn cell_text(v: Option<&Json>) -> Vec<char> {
-    match v {
-        None => vec![' ', '|'],
-        Some(v) => {
-            let mut out = vec![' '];
-            flow(v, &mut out);
-            out.extend([' ', '|']);
-            out
-        }
-    }
-}
-
-/// `Md.rowText`: a row of the table.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn row_text(cols: &[String], d: &Decl) -> Vec<char> {
-    let mut out = vec!['|', ' '];
-    push_s(&mut out, kind_word(d.kind));
-    out.extend([' ', '|', ' ', '$']);
-    out.extend(name_latex(&d.name));
-    out.extend(['$', ' ', '|']);
-    for k in cols {
-        out.extend(cell_text(look(k, &d.attrs)));
-    }
-    out.push('\n');
-    out
-}
-
-/// `Md.tableText`: a declarations table over the attribute columns `cols`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn table_text(cols: &[String], ds: &[Decl]) -> Vec<char> {
-    let mut out: Vec<char> = TABLE_OPEN.chars().collect();
-    for k in cols {
-        out.extend(col_text(k));
-    }
-    out.push('\n');
-    out.push('|');
-    for _ in 0..cols.len() + 2 {
-        push_s(&mut out, " --- |");
-    }
-    out.push('\n');
-    for d in ds {
-        out.extend(row_text(cols, d));
-    }
-    out
 }

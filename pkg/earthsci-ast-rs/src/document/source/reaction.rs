@@ -5,6 +5,9 @@
 //! term is its coefficient as math and a space (left out when it is 1), then
 //! the species, bare when formula-shaped and otherwise its name as math under
 //! the empty symbol table.
+//!
+//! Not ported: `Source.sideLen`. No executable path uses it; only the Lean
+//! proofs do.
 
 use super::skeleton::Term;
 use super::text::{pre, take_while};
@@ -81,12 +84,6 @@ pub fn term_ok(r: &RSurf, t: &Term) -> bool {
             let pc = (r.prm)(&Json::Num(t.coef.clone()));
             num_ok(&t.coef) && !pc.contains(&'$') && pc != r.empty
         })
-}
-
-/// `Source.sideLen`.
-#[allow(dead_code)] // only the Lean proofs use it
-pub fn side_len(s: &Option<Vec<Term>>) -> usize {
-    s.as_ref().map_or(0, Vec::len)
 }
 
 /// `Source.sideOK`.

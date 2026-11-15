@@ -6,11 +6,11 @@
 //! the text (front matter, then the constructs separated by blank lines).
 
 use super::equation::{eq_expr, eq_sides};
-use super::items::{RItem, ck_mx, cook_doc, items, pr_mx, raw_doc, unitems};
+use super::items::{RItem, Spanned, ck_mx, cook_doc, items, pr_mx, raw_doc, unitems};
 use super::keys::Kvs;
 use super::lines::decode_text;
 use super::markdown::{
-    DASHES, FENCE, Seg, attr_ok, is_block, item_ok, lex, name_latex, render, rxn_ok, tm_lex,
+    DASHES, FENCE, Seg, attr_ok, is_block, item_ok, lex_spanned, name_latex, render, rxn_ok, tm_lex,
 };
 use super::multi_line::cook_rows;
 use super::skeleton::{Caps, Eqn, MC, MR, Rxn, Tm, of_doc, to_doc};
@@ -251,6 +251,11 @@ pub fn print_md(d: &Json) -> String {
 
 /// `Md.lexDoc`: read the front matter and the constructs.
 pub fn lex_doc(s: &[char]) -> Option<(Kvs, Vec<RItem>)> {
+    lex_doc_spanned(s).map(|(kvs, its)| (kvs, its.into_iter().map(|(it, _)| it).collect()))
+}
+
+/// [`lex_doc`], with where in `s` each construct is written (not in Lean).
+pub fn lex_doc_spanned(s: &[char]) -> Option<(Kvs, Vec<Spanned>)> {
     let ['-', '-', '-', '\n', r @ ..] = s else {
         return None;
     };
@@ -259,8 +264,15 @@ pub fn lex_doc(s: &[char]) -> Option<(Kvs, Vec<RItem>)> {
     if !blank(sl) {
         return None;
     }
+    let base = s.len() - rest.len();
     match yaml::decode(&body) {
-        Some(Json::Obj(kvs)) => lex(true, rest).map(|its| (kvs, its)),
+        Some(Json::Obj(kvs)) => lex_spanned(true, rest).map(|its| {
+            let its = its
+                .into_iter()
+                .map(|(it, at)| (it, at.start + base..at.end + base))
+                .collect();
+            (kvs, its)
+        }),
         _ => None,
     }
 }

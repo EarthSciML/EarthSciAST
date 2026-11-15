@@ -19,6 +19,9 @@
 //!
 //! Which notation a node gets is decided from its exact JSON shape; anything
 //! without a native or call notation prints in the generic escape form.
+//!
+//! Not ported: `Math.AForm.json`. No executable path uses it; only the Lean
+//! proofs do.
 
 use super::expr::{
     REMOVED_OPS, Sym, is_e, is_formula, is_id_char, is_id_start, is_single, keys_sorted, look,
@@ -1156,19 +1159,6 @@ pub fn arr_form(j: &Json) -> Option<AForm> {
             }
             _ => None,
         },
-    }
-}
-
-/// `Math.AForm.json`.
-#[allow(dead_code)] // ported one-to-one; no executable path uses it yet
-pub fn aform_json(a: &AForm) -> Json {
-    match a {
-        AForm::Col(ns) => Json::Arr(ns.iter().cloned().map(Json::Num).collect()),
-        AForm::Mat(rs) => Json::Arr(
-            rs.iter()
-                .map(|r| Json::Arr(r.iter().cloned().map(Json::Num).collect()))
-                .collect(),
-        ),
     }
 }
 
