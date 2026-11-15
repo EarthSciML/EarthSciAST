@@ -46,7 +46,9 @@
 pub mod render;
 pub mod scan;
 
-use earthsci_ast::{DocumentFormat, SCHEMA_VERSION, parse_markdown, print_math};
+use std::collections::BTreeMap;
+
+use earthsci_ast::{ConstructSource, DocumentFormat, SCHEMA_VERSION, parse_document_with_sources};
 use serde_json::{Map, Value};
 
 use crate::build::{BuildOptions, BuildOutput, build_onto, failed};
@@ -101,10 +103,13 @@ pub enum Part {
 pub struct Construct {
     /// What was written.
     pub piece: ConstructPiece,
-    /// Where its content is in the `.esm` document, as a JSON pointer, when
-    /// the page knows: `/models/Decay/equations/0` for the first display in
-    /// model `Decay`. Diagnostics and results at or under it are shown here.
-    pub path: Option<String>,
+    /// Where its content is in the `.esm` document, as JSON pointers, as the
+    /// core read the page: `/models/Decay/equations/0` for the first equation
+    /// in model `Decay`. Most constructs have one; a display of several
+    /// equations, or a container, has one for each entry it reads as; and a
+    /// construct of a page the core refused has none. Diagnostics and results
+    /// at or under one of them are shown here.
+    pub paths: Vec<String>,
     /// The model the construct is in, if any.
     pub model: Option<String>,
 }
@@ -160,18 +165,19 @@ impl Page {
         })
     }
 
-    /// The construct whose path is the longest prefix of the JSON pointer
-    /// `path`, as an index into [`Page::parts`]: where a diagnostic or a
-    /// result at `path` is shown.
+    /// The construct with a path that is the longest prefix of the JSON
+    /// pointer `path`, as an index into [`Page::parts`]: where a diagnostic or
+    /// a result at `path` is shown.
     pub fn owner_of(&self, path: &str) -> Option<usize> {
         let mut best: Option<(usize, usize)> = None;
         for (i, part) in self.parts.iter().enumerate() {
             let Part::Construct(c) = part else { continue };
-            let Some(p) = &c.path else { continue };
-            let under =
-                path == p || (path.starts_with(p.as_str()) && path[p.len()..].starts_with('/'));
-            if under && best.is_none_or(|(len, _)| p.len() > len) {
-                best = Some((p.len(), i));
+            for p in &c.paths {
+                let under =
+                    path == p || (path.starts_with(p.as_str()) && path[p.len()..].starts_with('/'));
+                if under && best.is_none_or(|(len, _)| p.len() > len) {
+                    best = Some((p.len(), i));
+                }
             }
         }
         best.map(|(_, i)| i)
@@ -262,14 +268,40 @@ struct Scope {
     /// `models` or `reaction_systems`.
     field: &'static str,
     name: String,
-    equations: usize,
-    reactions: usize,
-    plots: usize,
 }
 
-/// A JSON pointer token.
-fn token(s: &str) -> String {
-    s.replace('~', "~0").replace('/', "~1")
+/// Where the core found each construct of the page: for each line, the
+/// constructs that start on it, in order, each with its JSON pointers. A
+/// construct that owns its line is alone on it; inline declarations share a
+/// line in the order they are written.
+#[derive(Default)]
+struct Sources(BTreeMap<u32, std::collections::VecDeque<Vec<String>>>);
+
+impl Sources {
+    /// The core's constructs of `text`, which is the page after `skip`
+    /// lines the page does not have.
+    fn new(text: &str, skip: usize, found: Vec<ConstructSource>) -> Sources {
+        let mut by_line: BTreeMap<u32, std::collections::VecDeque<Vec<String>>> = BTreeMap::new();
+        let mut last: Option<std::ops::Range<usize>> = None;
+        for ConstructSource { pointer, span } in found {
+            let before = &text[..span.start];
+            let line = before.matches('\n').count() - skip + 1;
+            let group = by_line.entry(line as u32).or_default();
+            // The entries of one construct share its span, and come together.
+            match group.back_mut() {
+                Some(ps) if last.as_ref() == Some(&span) => ps.push(pointer),
+                _ => group.push_back(vec![pointer]),
+            }
+            last = Some(span);
+        }
+        Sources(by_line)
+    }
+
+    /// The pointers of the next construct on `line`.
+    fn take(&mut self, line: Option<u32>) -> Vec<String> {
+        line.and_then(|l| self.0.get_mut(&l)?.pop_front())
+            .unwrap_or_default()
+    }
 }
 
 /// Read a Markdown page. `file` names it in diagnostics and `name` is the
@@ -287,13 +319,18 @@ pub fn parse(source: &str, file: &str, name: &str) -> Page {
     };
     // The core reads a document from its front matter on; a page without
     // any is read as one that sets nothing but the format version.
-    let text = if page.front_matter.is_empty() {
-        format!("---\nesm: \"{SCHEMA_VERSION}\"\n---\n\n{source}")
+    let prefix = if page.front_matter.is_empty() {
+        format!("---\nesm: \"{SCHEMA_VERSION}\"\n---\n\n")
     } else {
-        source.to_string()
+        String::new()
     };
-    match parse_markdown(&text) {
-        Ok(esm) => page.esm = Some(finish(esm, name)),
+    let text = format!("{prefix}{source}");
+    let mut sources = Sources::default();
+    match parse_document_with_sources(&text, DocumentFormat::Markdown) {
+        Ok((esm, found)) => {
+            page.esm = Some(finish(esm, name));
+            sources = Sources::new(&text, prefix.matches('\n').count(), found);
+        }
         Err(e) => {
             let mut d = Diagnostic::error(
                 e.code.to_string(),
@@ -315,29 +352,22 @@ pub fn parse(source: &str, file: &str, name: &str) -> Page {
         match piece {
             Piece::Text(text) => page.parts.push(Part::Text(text)),
             Piece::Display(d) => {
-                let path = scope.as_mut().and_then(|s| display_path(s, &d));
+                let paths = sources.take(d.source.line);
                 page.parts.push(Part::Construct(Construct {
                     piece: ConstructPiece::Display(d),
-                    path,
+                    paths,
                     model: model_of(&scope),
                 }));
             }
             Piece::Block(b) => {
-                let key = block_key(&b.key);
-                let path = match (&scope, key.as_str()) {
-                    (Some(s), _) => {
-                        Some(format!("/{}/{}/{}", s.field, token(&s.name), token(&key)))
-                    }
-                    (None, "description") => Some("/metadata/description".to_string()),
-                    (None, _) => Some(format!("/{}", token(&key))),
-                };
+                let paths = sources.take(b.source.line);
                 page.parts.push(Part::Construct(Construct {
                     piece: ConstructPiece::Block(b),
-                    path,
+                    paths,
                     model: model_of(&scope),
                 }));
             }
-            Piece::Directive(d) => directive(&mut page, &mut scope, d),
+            Piece::Directive(d) => directive(&mut page, &mut scope, &mut sources, d),
         }
     }
     page
@@ -350,62 +380,17 @@ fn model_of(scope: &Option<Scope>) -> Option<String> {
         .map(|s| s.name.clone())
 }
 
-/// The key of an ```` ```esm:<key> ```` block, unquoted.
-fn block_key(raw: &str) -> String {
-    if raw.starts_with('"') {
-        serde_json::from_str::<String>(raw).unwrap_or_else(|_| raw.to_string())
-    } else {
-        raw.to_string()
-    }
-}
-
-/// Where a display's content is: a reaction, an equation, or (a template or
-/// a rule, which have no fixed place) nowhere the page tracks.
-fn display_path(s: &mut Scope, d: &Display) -> Option<String> {
-    let base = format!("/{}/{}", s.field, token(&s.name));
-    if d.reaction {
-        s.reactions += 1;
-        return Some(format!("{base}/reactions/{}", s.reactions - 1));
-    }
-    if d.latex.contains("\\coloneqq") || d.latex.trim_start().starts_with("\\text{rule }") {
-        return None;
-    }
-    s.equations += 1;
-    Some(format!("{base}/equations/{}", s.equations - 1))
-}
-
-/// The names a component declares, and the field each sits in.
-fn declared(esm: Option<&Value>, s: &Scope) -> Vec<(String, &'static str)> {
-    let fields: &[&'static str] = if s.field == "models" {
-        &["variables"]
-    } else {
-        &["species", "parameters"]
-    };
-    let comp = esm
-        .and_then(|e| e.get(s.field))
-        .and_then(|c| c.get(&s.name));
-    fields
-        .iter()
-        .flat_map(|f| {
-            comp.and_then(|c| c.get(*f))
-                .and_then(Value::as_object)
-                .into_iter()
-                .flat_map(move |m| m.keys().map(move |k| (k.clone(), *f)))
-        })
-        .collect()
-}
-
 /// A construct or narrative directive found in the page.
-fn directive(page: &mut Page, scope: &mut Option<Scope>, d: Directive) {
+fn directive(page: &mut Page, scope: &mut Option<Scope>, sources: &mut Sources, d: Directive) {
     let bad = |message: String| {
         let mut e = Diagnostic::error("bad_directive", message);
         e.source = Some(d.source.clone());
         e
     };
-    let construct = |path: Option<String>, scope: &Option<Scope>, d: Directive| {
+    let construct = |sources: &mut Sources, scope: &Option<Scope>, d: Directive| {
         Part::Construct(Construct {
+            paths: sources.take(d.source.line),
             piece: ConstructPiece::Directive(d),
-            path,
             model: model_of(scope),
         })
     };
@@ -425,19 +410,11 @@ fn directive(page: &mut Page, scope: &mut Option<Scope>, d: Directive) {
             *scope = Some(Scope {
                 field,
                 name: d.content.clone(),
-                equations: 0,
-                reactions: 0,
-                plots: 0,
             });
-            let path = Some(format!("/{field}/{}", token(&d.content)));
-            page.parts.push(construct(path, scope, d));
+            page.parts.push(construct(sources, scope, d));
         }
         ("var" | "param" | "species", Form::Inline) => {
-            let Some(latex) = d
-                .content
-                .strip_prefix('$')
-                .and_then(|c| c.strip_suffix('$'))
-            else {
+            if !(d.content.starts_with('$') && d.content.ends_with('$') && d.content.len() > 1) {
                 let e = bad(format!(
                     "a declaration names its quantity in math: `:{}[${}$]`, not `:{}[{}]`",
                     d.name, d.content, d.name, d.content
@@ -445,42 +422,12 @@ fn directive(page: &mut Page, scope: &mut Option<Scope>, d: Directive) {
                 page.diagnostics.push(e.clone());
                 page.parts.push(Part::Broken(e));
                 return;
-            };
-            // The declaration's name, found by printing each declared name
-            // the way the core prints it.
-            let path = scope.as_ref().and_then(|s| {
-                let names = declared(page.esm.as_ref(), s);
-                let plain: Vec<String> = names.iter().map(|(n, _)| n.clone()).collect();
-                names
-                    .iter()
-                    .find(|(n, _)| {
-                        print_math(&Value::String(n.clone()), &plain, DocumentFormat::Markdown)
-                            == latex
-                    })
-                    .map(|(n, f)| format!("/{}/{}/{f}/{}", s.field, token(&s.name), token(n)))
-            });
-            page.parts.push(construct(path, scope, d));
+            }
+            page.parts.push(construct(sources, scope, d));
         }
-        ("subsystem", Form::Leaf) => {
-            let path = scope.as_ref().map(|s| {
-                format!(
-                    "/{}/{}/subsystems/{}",
-                    s.field,
-                    token(&s.name),
-                    token(&d.content)
-                )
-            });
-            page.parts.push(construct(path, scope, d));
-        }
-        ("plot", Form::Leaf) => {
-            let path = scope.as_mut().map(|s| {
-                s.plots += 1;
-                format!("/{}/{}/analyses/{}", s.field, token(&s.name), s.plots - 1)
-            });
-            page.parts.push(construct(path, scope, d));
-        }
-        ("initialization" | "constraints" | "template" | "rule", Form::Container) => {
-            page.parts.push(construct(None, scope, d));
+        ("subsystem" | "plot", Form::Leaf)
+        | ("initialization" | "constraints" | "template" | "rule", Form::Container) => {
+            page.parts.push(construct(sources, scope, d));
         }
         ("eq", Form::Leaf) => {
             let e = bad(
@@ -660,6 +607,13 @@ mod tests {
         page
     }
 
+    /// A page the core reads.
+    fn page_ok(source: &str) -> Page {
+        let page = page(source);
+        assert!(page.esm.is_some());
+        page
+    }
+
     const DECAY: &str = r#"---
 esm: "2.2.0"
 title: "Decay"
@@ -702,9 +656,10 @@ assertions:
             .parts
             .iter()
             .filter_map(|p| match p {
-                Part::Construct(c) => c.path.clone(),
+                Part::Construct(c) => Some(c.paths.clone()),
                 _ => None,
             })
+            .flatten()
             .collect();
         assert_eq!(
             paths,
@@ -720,6 +675,108 @@ assertions:
             page.owner_of("/models/Decay/equations/0")
         );
         assert!(page.owner_of("/models/Other").is_none());
+    }
+
+    /// The paths of the page's constructs, by the first line of each.
+    fn paths_of(page: &Page) -> Vec<(String, Vec<String>)> {
+        page.parts
+            .iter()
+            .filter_map(|p| match p {
+                Part::Construct(c) => Some((c.raw().to_string(), c.paths.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn paths_at<'a>(paths: &'a [(String, Vec<String>)], first: &str) -> &'a [String] {
+        &paths
+            .iter()
+            .find(|(l, _)| l.starts_with(first))
+            .unwrap_or_else(|| panic!("no construct starting {first}: {paths:?}"))
+            .1
+    }
+
+    const BOX_HEAD: &str = "---\nesm: \"2.3.0\"\n---\n\n::model[Box]\n\n:var[$c$]{default=0} and :param[$u$]{default=1}.\n\n";
+
+    #[test]
+    fn paths_follow_the_core_through_a_display_of_several_equations() {
+        let page = page(&format!(
+            "{BOX_HEAD}$$\n\\begin{{aligned}}c &= u \\\\\nc &= 2 u\\end{{aligned}}\n$$\n\n$$\n\\frac{{\\mathrm{{d}} c}}{{\\mathrm{{d}} t}} = -u c\n$$\n"
+        ));
+        let paths = paths_of(&page);
+        assert_eq!(
+            paths_at(&paths, "$$\n\\begin").to_vec(),
+            ["/models/Box/equations/0", "/models/Box/equations/1"]
+        );
+        assert_eq!(
+            paths_at(&paths, "$$\n\\frac").to_vec(),
+            ["/models/Box/equations/2"]
+        );
+        // The two declarations on one line, in order.
+        assert_eq!(
+            paths_at(&paths, ":var").to_vec(),
+            ["/models/Box/variables/c"]
+        );
+        assert_eq!(
+            paths_at(&paths, ":param").to_vec(),
+            ["/models/Box/variables/u"]
+        );
+    }
+
+    #[test]
+    fn a_plot_never_takes_the_place_of_an_analyses_block() {
+        let text = format!(
+            "{BOX_HEAD}```esm:analyses\n- id: \"run\"\n  time_span:\n    end: 10\n    start: 0\n```\n\n::plot{{id=\"p\" time_span='{{end: 5, start: 0}}'}}\n"
+        );
+        let page = parse(&text, "page.md", "Page");
+        // The core does not read a field from both a block and entries.
+        assert!(page.esm.is_none());
+        let paths = paths_of(&page);
+        assert!(
+            !paths.iter().any(|(l, ps)| l.starts_with("::plot")
+                && ps.contains(&"/models/Box/analyses/0".to_string())),
+            "{paths:?}"
+        );
+        // A plot alone is the model's first analysis.
+        let page = page_ok(&format!(
+            "{BOX_HEAD}::plot{{id=\"p\" time_span='{{end: 5, start: 0}}'}}\n"
+        ));
+        assert_eq!(
+            paths_at(&paths_of(&page), "::plot").to_vec(),
+            ["/models/Box/analyses/0"]
+        );
+    }
+
+    #[test]
+    fn displays_never_take_the_place_of_an_equations_block() {
+        let text = format!(
+            "{BOX_HEAD}```esm:equations\n- lhs: \"c\"\n  rhs: \"u\"\n```\n\n$$\nc = 2 u\n$$\n"
+        );
+        let page = parse(&text, "page.md", "Page");
+        // The core does not read a field from both a block and entries.
+        assert!(page.esm.is_none());
+        let paths = paths_of(&page);
+        assert!(
+            !paths.iter().any(|(l, ps)| l.starts_with("$$")
+                && ps.contains(&"/models/Box/equations/0".to_string())),
+            "{paths:?}"
+        );
+    }
+
+    #[test]
+    fn a_template_display_is_a_template_not_an_equation() {
+        let page = page_ok(&format!(
+            "{BOX_HEAD}$$\n\\operatorname{{loss}}(r, v) \\coloneqq -r v\n$$\n\n$$\nc = \\operatorname{{loss}}(u, c)\n$$\n"
+        ));
+        let paths = paths_of(&page);
+        assert_eq!(
+            paths_at(&paths, "$$\n\\operatorname{loss}(r").to_vec(),
+            ["/models/Box/expression_templates/loss"]
+        );
+        assert_eq!(
+            paths_at(&paths, "$$\nc =").to_vec(),
+            ["/models/Box/equations/0"]
+        );
     }
 
     #[test]

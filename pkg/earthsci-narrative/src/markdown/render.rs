@@ -20,7 +20,9 @@
 
 use std::fmt::Write as _;
 
-use earthsci_ast::{DocumentFormat, parse_equation, parse_expression, print_math};
+use earthsci_ast::{
+    DocumentFormat, expression_names, parse_equation, parse_expression, print_math,
+};
 use serde_json::Value;
 
 use crate::assemble::{QuantityInfo, Role};
@@ -451,8 +453,7 @@ fn example_block(text: &str) -> String {
     };
     let parsed = parsed.map(|json| {
         let json = json.unwrap_or_default();
-        let mut names = Vec::new();
-        names_in(&json, &mut names);
+        let names = expression_names(&json);
         (
             print_math(&json, &names, DocumentFormat::Markdown),
             serde_json::to_string_pretty(&json).unwrap_or_default(),
@@ -470,22 +471,6 @@ fn example_block(text: &str) -> String {
     format!(
         "<div class=\"esm-example\">\n\n```text\n{text}\n```\n\n\\[\n{latex}\n\\]\n\n<details class=\"esm-example__json\"><summary>As JSON</summary>\n\n```json\n{json}\n```\n\n</details>\n\n</div>\n"
     )
-}
-
-/// The variable names an expression or equation uses: its string leaves.
-fn names_in(v: &Value, out: &mut Vec<String>) {
-    match v {
-        Value::String(name) if !out.contains(name) => out.push(name.clone()),
-        Value::Array(items) => items.iter().for_each(|i| names_in(i, out)),
-        Value::Object(fields) => {
-            for key in ["lhs", "rhs", "args"] {
-                if let Some(child) = fields.get(key) {
-                    names_in(child, out);
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 fn test_block(test: &TestOutcome) -> String {
