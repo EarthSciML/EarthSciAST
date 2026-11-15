@@ -88,9 +88,12 @@ describe('losslessJsonParse — RFC §5.4.6 parse rule', () => {
     expect((losslessJsonParse('-3.14') as NumericLiteral).kind).toBe('float')
   })
 
-  it('falls back to float for integer tokens outside safe-integer range', () => {
-    const huge = losslessJsonParse('9007199254740993') as NumericLiteral
-    expect(huge.kind).toBe('float')
+  it('reads an integer token outside the safe-integer range as its exact bigint', () => {
+    expect(losslessJsonParse('9007199254740993')).toBe(9007199254740993n)
+    expect(losslessJsonParse('-9223372036854775808')).toBe(-9223372036854775808n)
+    expect(losslessJsonStringify(losslessJsonParse('[9007199254740993]'))).toBe(
+      '[9007199254740993]',
+    )
   })
 
   it('parses nested structures with tagged numbers', () => {

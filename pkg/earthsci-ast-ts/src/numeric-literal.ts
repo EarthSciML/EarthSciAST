@@ -12,7 +12,7 @@
  *   - `losslessJsonParse` — a minimal JSON parser that emits
  *     `NumericLiteral` at every numeric-token position. Token shape
  *     (presence of `.`, `e`, `E`) determines kind per the RFC §5.4.6
- *     round-trip parse rule.
+ *     round-trip parse rule; an integer token past 2^53 is a `bigint`.
  *   - `losslessJsonStringify` — inverse: `NumericLiteral{kind:int}`
  *     → JSON integer; `NumericLiteral{kind:float}` → RFC §5.4.6 float
  *     with the trailing-`.0` override for integer-valued magnitudes
@@ -51,42 +51,12 @@ export function floatLit(value: number): NumericLiteral {
   return makeTagged('float', value)
 }
 
-/**
- * An int literal of the exact integer `z`. Its `value` is the nearest binary64;
- * when that is not `z` (past 2^53), `exactInteger` still gives `z`, and the
- * serializers write `z`.
- */
-export function intLitExact(z: bigint): NumericLiteral {
-  return makeTagged('int', Number(z), z)
-}
-
-const EXACT_INTEGER = Symbol.for('@earthsciml/ast.NumericLiteral.exactInteger')
-
-/**
- * The exact integer a literal was written as, when its `value` (a binary64)
- * does not hold it: an integer token past 2^53 read by `losslessJsonParse`
- * (`9223372036854775807`, whose `value` is 2^63), or an `intLitExact`.
- * `undefined` for every other literal, whose `value` is exact.
- *
- * Canonical forms decide from this, not from the rounded `value`, whether an
- * integer token is in Int64 (CONFORMANCE §5.5.3.1).
- */
-export function exactInteger(x: NumericLiteral): bigint | undefined {
-  return (x as { [EXACT_INTEGER]?: bigint })[EXACT_INTEGER]
-}
-
-function makeTagged(kind: 'int' | 'float', value: number, exact?: bigint): TaggedNumericLiteral {
-  const lit = {
+function makeTagged(kind: 'int' | 'float', value: number): TaggedNumericLiteral {
+  return Object.freeze({
     kind,
     value,
     [NUMERIC_LITERAL_TAG]: true as const,
-  }
-  // Kept out of enumeration (and so out of structural equality): two literals
-  // with one `kind` and `value` compare equal as before.
-  if (exact !== undefined && !(Number.isInteger(value) && BigInt(value) === exact)) {
-    Object.defineProperty(lit, EXACT_INTEGER, { value: exact })
-  }
-  return Object.freeze(lit)
+  })
 }
 
 export function isNumericLiteral(x: unknown): x is NumericLiteral {
@@ -137,10 +107,9 @@ export class LosslessJsonParseError extends EsmDiagnosticError {
  * `NumericLiteral{kind:'int'}`. All other JSON values (strings, bools,
  * null, arrays, objects) decode to their native JS equivalents.
  *
- * Integer-grammar tokens outside the safe-integer range fall back to
- * `float` kind to avoid silent precision loss, matching the Go
- * binding's `normalizeJSONNumber` behavior; `exactInteger` gives the
- * token's exact integer.
+ * An integer-grammar token outside the safe-integer range (`|z| > 2^53 - 1`)
+ * becomes a `bigint` of the integer written, which no `number` holds exactly
+ * (`9223372036854775807`, Int64 max, is 2^63 as a binary64).
  */
 export function losslessJsonParse(text: string): unknown {
   const parser = new Parser(text)
@@ -317,7 +286,7 @@ class Parser {
     throw new LosslessJsonParseError('Invalid literal', this.pos)
   }
 
-  parseNumber(): NumericLiteral {
+  parseNumber(): NumericLiteral | bigint {
     const start = this.pos
     if (this.peek() === '-') this.pos++
     while (this.pos < this.src.length && this.src[this.pos] >= '0' && this.src[this.pos] <= '9') {
@@ -348,11 +317,8 @@ class Parser {
       throw new LosslessJsonParseError(`Invalid number ${JSON.stringify(token)}`, start)
     }
     if (isFloat) return makeTagged('float', value)
-    // JSON-integer grammar. Fall back to float if outside safe-integer
-    // range to avoid silent precision loss; the token's exact integer stays
-    // on the literal (`exactInteger`), for the canonical forms to decide by.
     if (Number.isSafeInteger(value)) return makeTagged('int', value)
-    return makeTagged('float', value, BigInt(token))
+    return BigInt(token)
   }
 
   expect(ch: string): void {
@@ -416,6 +382,8 @@ export class CanonicalNonfiniteError extends CanonicalizeError {
  *   - `kind: 'float'` otherwise → native `ToString(Number)` (which is
  *     already distinguishable via `.` or `e`).
  *   - `-0.0` float → `-0.0`.
+ *   - a `bigint` (an integer past 2^53, as `losslessJsonParse` reads it)
+ *     → its exact JSON-integer token.
  *   - NaN or ±Infinity → throws `CanonicalNonfiniteError`.
  *
  * Plain JS `number` values are serialized with `JSON.stringify`'s
@@ -432,6 +400,7 @@ function stringifyValue(v: unknown, path: string): string {
   if (typeof v === 'boolean') return v ? 'true' : 'false'
   if (typeof v === 'string') return JSON.stringify(v)
   if (isNumericLiteral(v)) return formatNumericLiteral(v, path)
+  if (typeof v === 'bigint') return v.toString()
   if (typeof v === 'number') {
     if (!Number.isFinite(v)) throw new CanonicalNonfiniteError(v, path)
     return JSON.stringify(v)
@@ -484,10 +453,7 @@ export function formatIntToken(value: number, path: string): string {
  */
 export function formatNumericLiteral(lit: NumericLiteral, path: string): string {
   const { kind, value } = lit
-  if (kind === 'int') {
-    const exact = exactInteger(lit)
-    return exact === undefined ? formatIntToken(value, path) : exact.toString()
-  }
+  if (kind === 'int') return formatIntToken(value, path)
   if (!Number.isFinite(value)) throw new CanonicalNonfiniteError(value, path)
   return formatFloatToken(value)
 }
@@ -517,7 +483,8 @@ export function formatFloatToken(value: number): string {
 }
 
 /**
- * Recursively replace `NumericLiteral` leaves with their plain-number value.
+ * Recursively replace `NumericLiteral` leaves (and the `bigint` of an integer
+ * past 2^53) with their plain-number value.
  *
  * Returns a NEW tree; the input is never mutated. Non-literal objects and
  * arrays are shallow-copied ONLY when a descendant is actually rewritten, so
@@ -530,6 +497,7 @@ export function formatFloatToken(value: number): string {
  */
 export function stripNumericLiterals(value: unknown): unknown {
   if (isNumericLiteral(value)) return value.value
+  if (typeof value === 'bigint') return Number(value)
   if (Array.isArray(value)) {
     let changed = false
     const out: unknown[] = new Array(value.length)

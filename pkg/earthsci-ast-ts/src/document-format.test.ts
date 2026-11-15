@@ -29,7 +29,7 @@ import { describe, expect, it } from 'vitest'
 import { canonicalizeDocument } from './canonicalize.js'
 import { parseDocument, printDocument, printMath, type DocumentFormat } from './document/index.js'
 import { EsmDiagnosticError } from './errors.js'
-import { isIntLit, isNumericLiteral } from './numeric-literal.js'
+import { intLit, isIntLit, isNumericLiteral } from './numeric-literal.js'
 import { fixturesDir, readFixture } from './test-helpers.js'
 
 const FILES = [
@@ -59,15 +59,19 @@ interface Case {
 const INT64_BOUND = 2 ** 63
 
 /**
- * A JSON value with every number as its kind and value. A `NumericLiteral` keeps
- * its kind; a plain number (an expected value) is an int when it is integral and
- * in Int64.
+ * A JSON value with every number as its kind and value, an integer as a
+ * `bigint`. A `NumericLiteral` keeps its kind, and a `bigint` (an integer past
+ * 2^53) is an int; a plain number (an expected value) is an int when it is
+ * integral and in Int64.
  */
 function typed(value: unknown): unknown {
-  if (isNumericLiteral(value)) return { [isIntLit(value) ? 'int' : 'float']: value.value }
+  if (typeof value === 'bigint') return { int: value }
+  if (isNumericLiteral(value)) {
+    return isIntLit(value) ? { int: BigInt(value.value) } : { float: value.value }
+  }
   if (typeof value === 'number') {
     const int = Number.isInteger(value) && value >= -INT64_BOUND && value < INT64_BOUND
-    return { [int ? 'int' : 'float']: Object.is(value, -0) ? 0 : value }
+    return int ? { int: BigInt(value) } : { float: Object.is(value, -0) ? 0 : value }
   }
   if (Array.isArray(value)) return value.map(typed)
   if (value !== null && typeof value === 'object') {
@@ -153,6 +157,84 @@ describe('document format fixtures', () => {
       }
     })
   }
+})
+
+describe('document format integers past 2^53', () => {
+  const doc = (k: unknown, rhs: unknown): Record<string, unknown> => ({
+    esm: '2.3.0',
+    metadata: { name: 'm' },
+    models: {
+      M: {
+        variables: { k: { type: 'parameter', default: k }, x: { type: 'state' } },
+        equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs }],
+      },
+    },
+  })
+  type Read = {
+    models: { M: { variables: { k: { default: unknown } }; equations: [{ rhs: unknown }] } }
+  }
+  const parts = (d: Record<string, unknown>): [unknown, unknown] => {
+    const m = (d as Read).models.M
+    return [m.variables.k.default, m.equations[0].rhs]
+  }
+  const INTS = [2n ** 53n + 1n, -(2n ** 53n) - 1n, 2n ** 63n - 1n, -(2n ** 63n)]
+
+  for (const format of FORMATS) {
+    for (const z of INTS) {
+      it(`${format}: ${z} reads as its exact bigint and prints back exactly`, () => {
+        const text = printDocument(doc(z, { op: '*', args: [z, 'k'] }), format)
+        const lit = format === 'typst' && z === -(2n ** 63n) ? '(-9223372036854775807 - 1)' : `${z}`
+        expect(text).toContain(lit)
+        expect(text).toContain(`${z}`)
+        const back = parseDocument(text, format, { canonical: true })
+        const [k, rhs] = parts(back)
+        expect(k).toBe(z)
+        expect((rhs as { args: unknown[] }).args).toContain(z)
+        expect(printDocument(back, format)).toBe(text)
+        // Without `canonical`, a plain number, as `JSON.parse` gives it.
+        const [plain] = parts(parseDocument(text, format))
+        expect(plain).toBe(Number(z))
+      })
+    }
+  }
+
+  it('reads the integer written in Markdown, not its nearest binary64', () => {
+    const text = printDocument(doc(1, 'k'), 'markdown').replace(
+      'default=1',
+      'default=9007199254740993',
+    )
+    expect(parts(parseDocument(text, 'markdown', { canonical: true }))[0]).toBe(9007199254740993n)
+  })
+
+  // As in Rust: a mantissa times `10^{Int64 max}` is a decimal far beyond the
+  // binary64 range (refused) when its exponent fits in Int64, and otherwise the
+  // product of the mantissa and a power whose exponent is the exact integer.
+  it('a power of ten with exponent Int64 max reads as in Rust', () => {
+    const max = 2n ** 63n - 1n
+    for (const format of FORMATS) {
+      const sci = (m: string, e: string): string =>
+        format === 'markdown' ? `${m} \\times 10^{${e}}` : `${m} times 10^(${e})`
+      const base = printDocument(doc(1, { op: '*', args: [2.5, 'k'] }), format)
+      const read = (m: string, e: string): Record<string, unknown> =>
+        parseDocument(base.replace('2.5', sci(m, e)), format, { canonical: true })
+      expect(refusalCode(base.replace('2.5', sci('1.5', `${max}`)), format)).toBe('parse_error')
+      expect(typed(parts(read('15', `${max}`))[1])).toEqual(
+        typed({ op: '*', args: [intLit(15), { op: '^', args: [intLit(10), max] }, 'k'] }),
+      )
+      expect(typed(parts(read('1.5', `${-max - 1n}`))[1])).toEqual(
+        typed({ op: '*', args: [intLit(0), 'k'] }),
+      )
+    }
+  })
+
+  it('a plain number past 2^53 in Int64 prints as an integer', () => {
+    for (const format of FORMATS) {
+      const text = printDocument(doc(-(2 ** 63), 'k'), format)
+      expect(text).not.toMatch(/9\.22/)
+      expect(parts(parseDocument(text, format))[0]).toBe(-(2 ** 63))
+      expect(printDocument(doc(2 ** 60, 'k'), format)).toContain(`${2n ** 60n}`)
+    }
+  })
 })
 
 interface LimitsCase {

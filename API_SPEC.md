@@ -397,8 +397,10 @@ Per-binding decorations, sanctioned under §2.2:
 
 - **TypeScript** readers take `ParseDocumentOptions` (extension tier) with
   `canonical`, as `loadString` does: every number comes back as a
-  `NumericLiteral`, so an integer and a decimal keep their kinds. Without it
-  numbers are plain `number`s and an integer past 2^53 is not kept exactly.
+  `NumericLiteral`, so an integer and a decimal keep their kinds, except an
+  integer past 2^53, which comes back as a `bigint` of its exact value (the
+  printers write it exactly). Without it numbers are plain `number`s and an
+  integer past 2^53 is its nearest binary64, as `JSON.parse` gives it.
 - **Go** readers return `any` in the representation `CanonicalizeDocument`
   returns (`int64` for an integer, `float64` for a decimal); a printer accepts
   numbers as `float64`, `int64` or `json.Number`. Decode with `UseNumber` to

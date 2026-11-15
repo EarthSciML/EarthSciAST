@@ -55,8 +55,11 @@ export interface ParseDocumentOptions {
   /**
    * Give every number as a `NumericLiteral` (as `loadString` does with
    * `canonical: true`): an integer is an int literal and a decimal a float
-   * literal, so `2` and `1.0e19` keep their kinds. Without it numbers are plain
-   * `number`s, as `JSON.parse` gives.
+   * literal, so `2` and `1.0e19` keep their kinds. An integer past 2^53
+   * (`|z| > 2^53 - 1`), which no `number` holds exactly, is a `bigint` of its
+   * exact value instead, so `9223372036854775807` stays that integer. Without
+   * it numbers are plain `number`s, as `JSON.parse` gives (an integer past 2^53
+   * is then its nearest binary64).
    */
   canonical?: boolean
 }
@@ -73,7 +76,7 @@ function printable(doc: unknown): Json {
  * Print an ESM document as Markdown (`Source.Md.printMd`).
  *
  * `doc` is the JSON document value (plain numbers, or the `NumericLiteral`
- * leaves of `losslessJsonParse`). It is put in canonical form first
+ * leaves and `bigint`s of `losslessJsonParse`). It is put in canonical form first
  * (`canonicalizeDocument`), so two documents that canonicalize alike print
  * alike, and `parseMarkdown(printMarkdown(d))` is `canonicalizeDocument(d)`.
  */
