@@ -1,0 +1,151 @@
+name: Document format gate participant
+description: >
+  Set up one participant of the document-format gate
+  (.github/workflows/document-format-gate.yml) and point
+  scripts/run-document-format-gate.py at its driver. The compiled participants
+  (lean, rust, go) build their driver into gate/driver when `build` is true;
+  otherwise they expect it already there (downloaded from the print stage).
+
+inputs:
+  participant:
+    description: lean, rust, julia, python, typescript or go
+    required: true
+  build:
+    description: "'true' to build a compiled participant's driver into gate/driver"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # ---------------------------------------------------------------- lean
+    - name: Cache Lean toolchain
+      if: ${{ inputs.participant == 'lean' && inputs.build == 'true' }}
+      uses: actions/cache@v6
+      with:
+        path: ~/.elan
+        key: ${{ runner.os }}-elan-${{ hashFiles('formal/lean-toolchain') }}
+
+    # The package checkouts and the prebuilt Mathlib oleans, as in formal.yml.
+    - name: Cache Lake packages
+      if: ${{ inputs.participant == 'lean' && inputs.build == 'true' }}
+      uses: actions/cache@v6
+      with:
+        path: formal/.lake/packages
+        key: ${{ runner.os }}-lake-${{ hashFiles('formal/lean-toolchain', 'formal/lake-manifest.json') }}
+
+    - name: Build esm-lean
+      if: ${{ inputs.participant == 'lean' && inputs.build == 'true' }}
+      shell: bash
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+          | sh -s -- -y --no-modify-path --default-toolchain none
+        export PATH="$HOME/.elan/bin:$PATH"
+        cd formal
+        lake exe cache get
+        lake build esm-lean
+        mkdir -p "$GATE/driver"
+        cp .lake/build/bin/esm-lean "$GATE/driver/esm-lean"
+
+    - name: Use esm-lean
+      if: ${{ inputs.participant == 'lean' }}
+      shell: bash
+      run: |
+        chmod +x "$GATE/driver/esm-lean"
+        echo "ESM_LEAN=$GATE/driver/esm-lean" >> "$GITHUB_ENV"
+
+    # ---------------------------------------------------------------- rust
+    - name: Set up Rust
+      if: ${{ inputs.participant == 'rust' && inputs.build == 'true' }}
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Rust build
+      if: ${{ inputs.participant == 'rust' && inputs.build == 'true' }}
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: pkg/earthsci-ast-rs
+
+    - name: Build the Rust driver
+      if: ${{ inputs.participant == 'rust' && inputs.build == 'true' }}
+      shell: bash
+      working-directory: pkg/earthsci-ast-rs
+      run: |
+        cargo build --features conformance-adapters --bin earthsci-document-format-adapter-rust
+        mkdir -p "$GATE/driver"
+        cp target/debug/earthsci-document-format-adapter-rust "$GATE/driver/"
+
+    - name: Use the Rust driver
+      if: ${{ inputs.participant == 'rust' }}
+      shell: bash
+      run: |
+        chmod +x "$GATE/driver/earthsci-document-format-adapter-rust"
+        echo "ESM_GATE_RUST=$GATE/driver/earthsci-document-format-adapter-rust" >> "$GITHUB_ENV"
+
+    # ---------------------------------------------------------------- go
+    - name: Set up Go
+      if: ${{ inputs.participant == 'go' && inputs.build == 'true' }}
+      uses: actions/setup-go@v7
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache-dependency-path: pkg/earthsci-ast-go/go.sum
+
+    - name: Build the Go driver
+      if: ${{ inputs.participant == 'go' && inputs.build == 'true' }}
+      shell: bash
+      working-directory: pkg/earthsci-ast-go
+      run: go build -o "$GATE/driver/esm-document-format" ./cmd/esm-document-format
+
+    - name: Use the Go driver
+      if: ${{ inputs.participant == 'go' }}
+      shell: bash
+      run: |
+        chmod +x "$GATE/driver/esm-document-format"
+        echo "ESM_GATE_GO=$GATE/driver/esm-document-format" >> "$GITHUB_ENV"
+
+    # ---------------------------------------------------------------- julia
+    - name: Set up Julia
+      if: ${{ inputs.participant == 'julia' }}
+      uses: julia-actions/setup-julia@v3
+      with:
+        version: ${{ env.JULIA_VERSION }}
+
+    - name: Cache Julia depot
+      if: ${{ inputs.participant == 'julia' }}
+      uses: julia-actions/cache@v3
+
+    - name: Install EarthSciAST.jl
+      if: ${{ inputs.participant == 'julia' }}
+      shell: bash
+      run: julia --project=pkg/EarthSciAST.jl -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+
+    # ---------------------------------------------------------------- python
+    - name: Set up Python
+      if: ${{ inputs.participant == 'python' }}
+      uses: actions/setup-python@v7
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: pip
+        cache-dependency-path: pkg/earthsci-ast-py/pyproject.toml
+
+    - name: Install earthsci-ast
+      if: ${{ inputs.participant == 'python' }}
+      shell: bash
+      run: |
+        python -m pip install -e pkg/earthsci-ast-py
+        echo "ESM_GATE_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
+
+    # ---------------------------------------------------------------- typescript
+    - name: Set up Node.js
+      if: ${{ inputs.participant == 'typescript' }}
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: npm
+        cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
+
+    - name: Build @earthsciml/ast
+      if: ${{ inputs.participant == 'typescript' }}
+      shell: bash
+      working-directory: pkg/earthsci-ast-ts
+      run: |
+        npm ci
+        npm run build
