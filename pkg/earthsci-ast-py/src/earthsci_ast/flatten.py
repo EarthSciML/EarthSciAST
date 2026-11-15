@@ -16,6 +16,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from ._show import canonical_key
 from . import compiler as _compiler
 from . import op_registry
 from .classification import inlined_unknowns, observed_unknowns, ode_states
@@ -470,10 +471,6 @@ def _fold_contributions(contributions: list[Contribution]) -> Expr:
 class FlattenedEquation:
     """An equation in the flattened system, with namespaced Expr trees.
 
-    Backwards-compatibility note: ``lhs`` and ``rhs`` are stored as Expr trees
-    (the canonical form), and ``lhs_str`` / ``rhs_str`` provide pretty-printed
-    versions for tests and display.
-
     ``contributions`` is the equation's per-term provenance (esm-libraries-spec
     §4.7.5): the ordered summands of the right-hand side, each with the
     component or coupling entry that authored it. ``body`` (``rhs``, or the
@@ -494,16 +491,10 @@ class FlattenedEquation:
     lhs: Expr
     rhs: Expr
     source_system: str
-    lhs_str: str = ""
-    rhs_str: str = ""
     contributions: list[Contribution] = field(default_factory=list)
     lifted: bool = False
 
     def __post_init__(self) -> None:
-        if not self.lhs_str:
-            self.lhs_str = _expr_to_string(self.lhs)
-        if not self.rhs_str:
-            self.rhs_str = _expr_to_string(self.rhs)
         if not self.contributions:
             self.contributions = [Contribution(self.body, [])]
 
@@ -790,71 +781,6 @@ _ARRAY_OPS = ARRAY_OPS
 
 def _is_number(x: Any) -> bool:
     return isinstance(x, (int, float)) and not isinstance(x, bool)
-
-
-def _expr_to_string(expr: Expr) -> str:
-    """Pretty-print an Expr tree to a single-line human-readable string."""
-    if expr is None:
-        return ""
-    if _is_number(expr):
-        return str(expr)
-    if isinstance(expr, str):
-        return expr
-    if isinstance(expr, ExprNode):
-        op = expr.op
-        args = [_expr_to_string(a) for a in expr.args]
-
-        if op == "D":
-            # An ABSENT `wrt` MEANS `t` (esm-spec §4.2), so the short spelling
-            # prints as the explicit one does. Gating on `expr.wrt` being truthy
-            # instead rendered `D(x)`, which made the SAME tendency written the
-            # two ways compare unequal in the duplicate-LHS check that uses
-            # this rendering (EarthSciAST#407).
-            inner = args[0] if args else ""
-            wrt = expr.wrt or TIME_VAR
-            return f"D({inner}, {wrt})"
-
-        # An op carrying a `dim` axis field (the open-tier differential sugar
-        # grad/div/laplacian/curl, or any custom rewrite-target op with a `dim`)
-        # renders as `op(inner, dim)`. Keyed STRUCTURALLY on the `dim` field, not
-        # on an op-name list — the sugar ops carry no rendering privilege.
-        if expr.dim is not None:
-            inner = args[0] if args else ""
-            return f"{op}({inner}, {expr.dim})"
-
-        if op == "faq":
-            body = _expr_to_string(expr.expr) if expr.expr is not None else ""
-            idxs = ",".join(str(i) for i in (expr.output_idx or []))
-            ranges = expr.ranges or {}
-            ranges_str = ",".join(f"{k}={v}" for k, v in ranges.items())
-            return f"{op}[{idxs}]({body}; {ranges_str})"
-
-        if op == "makearray":
-            vals = ",".join(_expr_to_string(v) for v in (expr.values or []))
-            return f"makearray(regions={expr.regions}, values=[{vals}])"
-
-        if op == "index":
-            return f"index({', '.join(args)})"
-
-        if op == "reshape":
-            return f"reshape({', '.join(args)}, shape={expr.shape})"
-
-        if op == "transpose":
-            return f"transpose({', '.join(args)})"
-
-        if op == "concat":
-            return f"concat({', '.join(args)}, axis={expr.axis})"
-
-        if op == "broadcast":
-            return f"broadcast[{expr.fn}]({', '.join(args)})"
-
-        if op in ("+", "-", "*", "/", "^", "**"):
-            if op == "-" and len(args) == 1:
-                return f"(-{args[0]})"
-            return "(" + f" {op} ".join(args) + ")"
-
-        return f"{op}({', '.join(args)})"
-    return str(expr)
 
 
 def _namespace_join(
@@ -3065,7 +2991,7 @@ def _assemble_system(
         if dep is not None and not is_array_eq:
             if dep in seen_lhs:
                 existing = seen_lhs[dep]
-                if _expr_to_string(existing.rhs) != _expr_to_string(eq.rhs):
+                if canonical_key(existing.rhs) != canonical_key(eq.rhs):
                     # A single source system that authored two equations
                     # with the same scalar LHS expressed an algebraic
                     # constraint on purpose — e.g. an equilibrium model

@@ -23,19 +23,21 @@ import zlib
 
 import numpy as np
 import pytest
-from conftest import CONFORMANCE_DIR, FIXTURES_ROOT
+from conftest import CONFORMANCE_DIR, FIXTURES_ROOT, canonical_expr
 
 from earthsci_ast import (
     Contribution,
     FlattenedEquation,
     TermOrigin,
     flatten,
+    expression_names,
     load_path,
-    to_ascii,
+    print_math,
 )
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.expression import free_variables
 from earthsci_ast.numpy_interpreter import EvalContext, eval_expr
+from earthsci_ast.serialize import _serialize_expression
 
 TP_DIR = CONFORMANCE_DIR / "term_provenance" / "fixtures"
 TP_FIXTURES = sorted(p.name for p in TP_DIR.glob("*.esm"))
@@ -52,9 +54,22 @@ def _origins(contribution: Contribution) -> list[dict]:
     return [o.to_json() for o in contribution.origins]
 
 
-def _equation(flat, lhs: str) -> FlattenedEquation:
-    matches = [eq for eq in flat.equations if to_ascii(eq.lhs) == lhs]
-    assert len(matches) == 1, f"expected one equation {lhs!r}, got {len(matches)}"
+def _show(expr) -> str:
+    """An expression as Typst math, for a failure message."""
+    e = _serialize_expression(expr)
+    return print_math(e, expression_names(e), "typst")
+
+
+def _ddt(name: str) -> dict:
+    return {"op": "D", "args": [name], "wrt": "t"}
+
+
+def _equation(flat, lhs) -> FlattenedEquation:
+    """The one equation whose left-hand side is ``lhs`` (a name, or the JSON of
+    an expression such as :func:`_ddt`), compared in canonical JSON."""
+    want = canonical_expr(lhs)
+    matches = [eq for eq in flat.equations if canonical_expr(eq.lhs) == want]
+    assert len(matches) == 1, f"expected one equation {want}, got {len(matches)}"
     return matches[0]
 
 
@@ -149,7 +164,7 @@ def _check_invariant(flat, eq: FlattenedEquation) -> tuple[bool, bool]:
                 for part in parts[1:]:
                     fold = fold + part
                 assert _bits(body) == _bits(fold), (
-                    f"{to_ascii(eq.lhs)} at {cell}: body {body!r} != left fold {fold!r} of {parts}"
+                    f"{_show(eq.lhs)} at {cell}: body {body!r} != left fold {fold!r} of {parts}"
                 )
                 right = parts[-1]
                 for part in reversed(parts[:-1]):
@@ -174,7 +189,7 @@ def test_body_is_the_left_fold_of_the_contributions(fixture):
     # With three or more contributions the check must be able to see the order.
     for eq, (ok, discriminating) in zip(flat.equations, results):
         if ok and len(eq.contributions) >= 3:
-            assert discriminating, f"{fixture}: {to_ascii(eq.lhs)} cannot tell sum orders apart"
+            assert discriminating, f"{fixture}: {_show(eq.lhs)} cannot tell sum orders apart"
 
 
 @pytest.mark.parametrize("case", CORPUS_CASES, ids=[c["id"] for c in CORPUS_CASES])
@@ -194,7 +209,7 @@ def test_every_contribution_has_an_author(case):
     for eq in flat.equations:
         assert eq.contributions
         for c in eq.contributions:
-            assert c.origins, f"{case['id']}: {to_ascii(eq.lhs)} has an unattributed term"
+            assert c.origins, f"{case['id']}: {_show(eq.lhs)} has an unattributed term"
             assert len(set(c.origins)) == len(c.origins)
 
 
@@ -202,24 +217,24 @@ def test_every_contribution_has_an_author(case):
 
 
 def test_systems_order_changes_order_not_origins():
-    ab = _equation(_flatten(TP_DIR / "systems_order_ab.esm"), "D(Chem.O3)/Dt")
-    ba = _equation(_flatten(TP_DIR / "systems_order_ba.esm"), "D(Chem.O3)/Dt")
-    as_pairs = lambda eq: [(to_ascii(c.expr), _origins(c)) for c in eq.contributions]  # noqa: E731
+    ab = _equation(_flatten(TP_DIR / "systems_order_ab.esm"), _ddt("Chem.O3"))
+    ba = _equation(_flatten(TP_DIR / "systems_order_ba.esm"), _ddt("Chem.O3"))
+    as_pairs = lambda eq: [(canonical_expr(c.expr), _origins(c)) for c in eq.contributions]  # noqa: E731
     assert sorted(as_pairs(ab), key=str) == sorted(as_pairs(ba), key=str)
     assert [o for _, o in as_pairs(ab)] == [[{"component": "Chem"}], [{"component": "Sink"}]]
     assert [o for _, o in as_pairs(ba)] == [[{"component": "Sink"}], [{"component": "Chem"}]]
 
 
 def test_structurally_identical_contributions_stay_two():
-    eq = _equation(_flatten(TP_DIR / "non_vacuity.esm"), "D(Chem.O3)/Dt")
+    eq = _equation(_flatten(TP_DIR / "non_vacuity.esm"), _ddt("Chem.O3"))
     tail = eq.contributions[1:]
-    assert [to_ascii(c.expr) for c in tail] == ["Emis.flux", "Emis.flux"]
+    assert [canonical_expr(c.expr) for c in tail] == [canonical_expr("Emis.flux")] * 2
     assert [_origins(c) for c in tail] == [[{"component": "OpA"}], [{"component": "OpB"}]]
 
 
 def test_chained_compose_names_every_author():
     flat = _flatten(FIXTURES_ROOT / "coupling" / "chained_operator_compose.esm")
-    eq = _equation(flat, "D(Chem.O3)/Dt")
+    eq = _equation(flat, _ddt("Chem.O3"))
     assert [_origins(c) for c in eq.contributions] == [
         [{"component": c}] for c in ("Src", "Sink", "Chem", "Adv")
     ]
@@ -229,18 +244,20 @@ def test_chained_compose_names_every_author():
 
 def test_additive_couple_appends_and_creates_with_the_coupling_index():
     flat = _flatten(TP_DIR / "couple_additive.esm")
-    co2 = _equation(flat, "D(Atm.CO2)/Dt")
+    co2 = _equation(flat, _ddt("Atm.CO2"))
     assert [_origins(c) for c in co2.contributions] == [[{"component": "Atm"}], [{"coupling": 1}]]
     # The variable_map that ran afterwards rewrote the input, not the author.
-    assert to_ascii(co2.contributions[1].expr) == "Ocean.Fref"
-    o2 = _equation(flat, "D(Atm.O2)/Dt")
+    assert canonical_expr(co2.contributions[1].expr) == canonical_expr("Ocean.Fref")
+    o2 = _equation(flat, _ddt("Atm.O2"))
     assert [_origins(c) for c in o2.contributions] == [[{"coupling": 1}], [{"coupling": 1}]]
     # A parameter target takes no tendency.
-    assert not [eq for eq in flat.equations if "Atm.flux" in to_ascii(eq.lhs)]
+    assert not [
+        eq for eq in flat.equations if "Atm.flux" in expression_names(_serialize_expression(eq.lhs))
+    ]
 
 
 def test_multiplicative_couple_collapses_to_the_union():
-    eq = _equation(_flatten(TP_DIR / "couple_multiplicative.esm"), "D(Chem.O3)/Dt")
+    eq = _equation(_flatten(TP_DIR / "couple_multiplicative.esm"), _ddt("Chem.O3"))
     assert len(eq.contributions) == 1
     assert _origins(eq.contributions[0]) == [
         {"component": "Chem"},
@@ -251,12 +268,12 @@ def test_multiplicative_couple_collapses_to_the_union():
 
 def test_translate_factor_collapses_only_a_multi_contribution_b():
     flat = _flatten(TP_DIR / "translate_factor.esm")
-    y = _equation(flat, "D(Host.Y)/Dt")
+    y = _equation(flat, _ddt("Host.Y"))
     assert [_origins(c) for c in y.contributions] == [
         [{"component": "Host"}],
         [{"component": "Chem"}, {"component": "Sink"}],
     ]
-    w = _equation(flat, "D(Host.W)/Dt")
+    w = _equation(flat, _ddt("Host.W"))
     assert [_origins(c) for c in w.contributions] == [
         [{"component": "Host"}],
         [{"component": "Chem"}],
@@ -266,14 +283,14 @@ def test_translate_factor_collapses_only_a_multi_contribution_b():
 def test_expression_transform_observed_is_authored_by_the_coupling():
     flat = _flatten(TP_DIR / "variable_map.esm")
     assert [_origins(c) for c in _equation(flat, "Chem.e").contributions] == [[{"coupling": 1}]]
-    o3 = _equation(flat, "D(Chem.O3)/Dt")
+    o3 = _equation(flat, _ddt("Chem.O3"))
     assert [_origins(c) for c in o3.contributions] == [[{"component": "Chem"}]]
 
 
 def test_resolved_time_derivative_keeps_the_referencing_origin():
     eq = _equation(_flatten(TP_DIR / "rhs_time_derivative.esm"), "Diag.rate")
     assert [_origins(c) for c in eq.contributions] == [[{"component": "Diag"}]]
-    assert "D(" not in to_ascii(eq.rhs)
+    assert '"op": "D"' not in canonical_expr(eq.rhs)
 
 
 def test_the_lift_indexes_inside_each_contribution():
@@ -309,11 +326,12 @@ def test_multiplicative_couple_scales_the_tendency_not_a_later_bare_equation():
     """The factor applies to the last `D(to, t)` equation, the ODE right-hand
     side, even when a bare `to ~ g` comes after it (esm-libraries-spec §4.7.2)."""
     flat = _flatten(TP_DIR / "couple_multiplicative_tendency_first.esm")
-    d = _equation(flat, "D(Chem.O3)/Dt")
-    assert to_ascii(d.rhs) == "(-Chem.k1) * Chem.O3 * Light.f"
+    d = _equation(flat, _ddt("Chem.O3"))
+    k1_o3 = {"op": "*", "args": [{"op": "-", "args": ["Chem.k1"]}, "Chem.O3"]}
+    assert canonical_expr(d.rhs) == canonical_expr({"op": "*", "args": [k1_o3, "Light.f"]})
     assert [_origins(c) for c in d.contributions] == [[{"component": "Chem"}, {"coupling": 0}]]
     bare = _equation(flat, "Chem.O3")
-    assert to_ascii(bare.rhs) == "Chem.O3_ref"
+    assert canonical_expr(bare.rhs) == canonical_expr("Chem.O3_ref")
     assert [_origins(c) for c in bare.contributions] == [[{"component": "Chem"}]]
 
 

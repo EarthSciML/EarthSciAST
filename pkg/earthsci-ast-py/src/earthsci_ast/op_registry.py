@@ -7,8 +7,6 @@ tables / dispatch chains that could (and did) drift apart:
 
 * :mod:`earthsci_ast.expression` — ``_UNARY_SYMPY`` / ``_BINARY_SYMPY`` (ESM→SymPy)
   and the ``_FROM_SYMPY_*`` reverse tables.
-* :mod:`earthsci_ast.display` — the operator-precedence map plus the big
-  render dispatch (``_format_structural_op`` + ``_format_expression_node``).
 * :mod:`earthsci_ast.codegen` — the Julia and Python ``op → handler`` chains.
 * :mod:`earthsci_ast.numpy_interpreter` — ``_SCALAR_FUNCS`` / ``_CMP_UFUNCS`` /
   ``_broadcast_fn`` and the ``eval_expr`` dispatch.
@@ -16,11 +14,11 @@ tables / dispatch chains that could (and did) drift apart:
 
 The historical failure mode (flagged by the Python audit): when a new op is
 added it raises loudly in the SymPy path but **silently degrades** to generic
-``op(args)`` rendering in ``display`` / ``codegen`` — no error, just wrong-looking
+``op(args)`` rendering in ``codegen`` — no error, just wrong-looking
 output. The registry, together with ``tests/test_op_registry.py``, closes that
 gap: the test asserts each renderer/dispatcher stays in sync with this registry,
 so adding an op to the registry without updating a renderer fails loudly at test
-time. (``display`` / ``codegen`` do NOT warn at runtime: an op reaching the
+time. (``codegen`` does NOT warn at runtime: an op reaching the
 generic ``op(args)`` fallback is either an evaluable-core function that renders
 correctly as a call — ``sin(x)`` — or an open-tier rewrite-target op that is a
 legitimate document element lowered before evaluation. Both are correct outputs,
@@ -44,10 +42,10 @@ sympy/numpy-free leaf) but derive their KEY SETS from the registry categories:
 ``numpy_interpreter._SCALAR_FUNCS`` / ``_CMP_UFUNCS`` (via :func:`unary_elementary`,
 :func:`by_category`, :func:`canonical_names`). The remaining per-op VALUE maps whose
 key sets are NOT a clean registry category — ``codegen._INFIX_SEP`` / ``_CALL_NAME``
-and ``display``'s precedence map — stay hand-authored and are cross-checked here.
+— stay hand-authored and are cross-checked here.
 
 **Derivation.** The set is the union of esm-spec.md §4.2's op vocabulary and
-every one of the six tables above (read exhaustively). It is intentionally the
+every one of the tables above (read exhaustively). It is intentionally the
 honest union, so accepted spelling aliases (``**`` / ``pow`` for ``^``; ``=`` for
 ``==``) are included and marked via :attr:`OpSpec.alias_of`.
 
@@ -75,9 +73,7 @@ The open-tier rewrite-target sugar (grad/div/laplacian/curl/integral, esm-spec
 §4.2) is intentionally **NOT** registered: those ops carry no dimensional rule,
 no evaluator, no privileged arity, and are not used for spatial detection, so
 they are ordinary unregistered rewrite-target ops indistinguishable from a
-custom user op (``godunov_hamiltonian``). ``integral``'s ∫ rendering reads its
-own ``var``/``lower``/``upper`` sidecar fields via a structural ``op ==
-"integral"`` branch in :mod:`.display`, which needs no registry entry.
+custom user op (``godunov_hamiltonian``).
 
 Tiers
 -----
@@ -305,7 +301,7 @@ _ALL: tuple[OpSpec, ...] = (
         "comparison",
         "binary",
         alias_of="==",
-        note="equality spelling used by the equation/display layer",
+        note="equality spelling used by the equation layer",
     ),
     # --- logical (esm-spec §4.2 Conditionals + boolean literals) ---
     OpSpec("and", "logical", "nary", arity_bounds=(2, None)),
@@ -379,10 +375,8 @@ _ALL: tuple[OpSpec, ...] = (
     # count exactly as it does for an unregistered op), and they are NOT used for
     # spatial detection (that is now derived structurally from variable shapes /
     # the `dim` field — see `flatten`). They are therefore left UNregistered: the
-    # display/codegen generic `op(args)` fallback renders them without warning,
-    # exactly like `godunov_hamiltonian`. `integral`'s ∫ rendering reads its own
-    # `var`/`lower`/`upper` sidecar fields via a structural `op == "integral"`
-    # branch in `display`, which needs no registry entry.
+    # codegen generic `op(args)` fallback renders them without warning,
+    # exactly like `godunov_hamiltonian`.
 )
 
 

@@ -57,7 +57,8 @@ def test_the_build_refuses_the_second_definition(case, compiler):
     # The unknown and BOTH equations are named, so the author can see which of
     # the two definitions to remove.
     assert case["unknown"] in message
-    assert "D(" in message
+    # The messages print each equation as Typst math: the derivative is `dif`.
+    assert "dif" in message
     assert "§4.9.4" in message
 
 

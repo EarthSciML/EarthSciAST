@@ -1,8 +1,10 @@
 """Tests for the coupled-system flattening implementation (spec §4.7.5)."""
 
-import pytest
+import json
 
-from earthsci_ast.display import to_ascii
+import pytest
+from conftest import canonical_expr
+
 from earthsci_ast.flatten import (
     ConflictingDerivativeError,
     VariableMapUnresolvedEndpointError,
@@ -23,6 +25,12 @@ from earthsci_ast.esm_types import (
     OperatorComposeCoupling,
     VariableMapCoupling,
 )
+from earthsci_ast.serialize import _serialize_expression
+
+
+def _text(expr) -> str:
+    """An expression as JSON text, for checks that a name or an op appears in it."""
+    return json.dumps(_serialize_expression(expr))
 
 
 def _make_metadata() -> Metadata:
@@ -60,9 +68,9 @@ def test_flatten_single_model_namespaces_variables():
     assert len(flat.equations) == 1
     eq0 = flat.equations[0]
     assert eq0.source_system == "Atmos"
-    assert "Atmos.T" in eq0.lhs_str
-    assert "Atmos.k" in eq0.rhs_str
-    assert "Atmos.T" in eq0.rhs_str
+    assert "Atmos.T" in _text(eq0.lhs)
+    assert "Atmos.k" in _text(eq0.rhs)
+    assert "Atmos.T" in _text(eq0.rhs)
     # The Expr tree is preserved.
     assert isinstance(eq0.lhs, ExprNode)
     assert eq0.lhs.op == "D"
@@ -182,9 +190,9 @@ def test_flatten_lowers_reaction_system_to_odes():
     assert "Chem.k" in flat.parameters
     # Two ODE equations were derived (one for each species).
     assert len(flat.equations) == 2
-    lhs_strs = [eq.lhs_str for eq in flat.equations]
-    assert any("Chem.A" in s for s in lhs_strs)
-    assert any("Chem.B" in s for s in lhs_strs)
+    lhs_texts = [_text(eq.lhs) for eq in flat.equations]
+    assert any("Chem.A" in s for s in lhs_texts)
+    assert any("Chem.B" in s for s in lhs_texts)
 
 
 # ----------------------------------------------------------------------------
@@ -253,14 +261,14 @@ def test_flatten_operator_compose_lhs_match_and_sum():
 
     flat = flatten(file)
     # Only the merged equation survives — Chem retains the canonical LHS.
-    chem_eqs = [e for e in flat.equations if "Chem.O3" in e.lhs_str]
+    chem_eqs = [e for e in flat.equations if "Chem.O3" in _text(e.lhs)]
     assert len(chem_eqs) == 1
     merged = chem_eqs[0]
     # The merged RHS contains BOTH the chemistry and advection terms.
-    assert "Chem.O3" in merged.rhs_str
-    assert "grad" in merged.rhs_str
+    assert "Chem.O3" in _text(merged.rhs)
+    assert "grad" in _text(merged.rhs)
     # The Adv equation was consumed — no orphan D(Adv.O3, t).
-    assert not any("Adv.O3" in e.lhs_str for e in flat.equations)
+    assert not any("Adv.O3" in _text(e.lhs) for e in flat.equations)
 
 
 def test_flatten_operator_compose_var_placeholder_expansion():
@@ -286,9 +294,9 @@ def test_flatten_operator_compose_var_placeholder_expansion():
     # Both A and B should now have advection terms summed into their equations.
     chem_eqs = [e for e in flat.equations if e.source_system == "Chem"]
     assert len(chem_eqs) == 2
-    rhs_strs = [e.rhs_str for e in chem_eqs]
-    assert any("Chem.A" in r and "grad" in r for r in rhs_strs)
-    assert any("Chem.B" in r and "grad" in r for r in rhs_strs)
+    rhs_texts = [_text(e.rhs) for e in chem_eqs]
+    assert any("Chem.A" in r and "grad" in r for r in rhs_texts)
+    assert any("Chem.B" in r and "grad" in r for r in rhs_texts)
 
 
 def test_flatten_operator_compose_chained_with_operator_as_a():
@@ -375,14 +383,42 @@ def test_flatten_operator_compose_chained_with_operator_as_a():
     # ONE equation per species, every chained contribution in its RHS. The
     # POSITIONS are the merge trail: each species trails to the entry that
     # merged it LAST, so NO (entry 1) comes ahead of O3 (entry 2).
-    assert [(to_ascii(eq.lhs), to_ascii(eq.rhs)) for eq in flat.equations] == [
+    def neg(x):
+        return {"op": "-", "args": [x]}
+
+    def times(a, b):
+        return {"op": "*", "args": [a, b]}
+
+    def plus(a, b):
+        return {"op": "+", "args": [a, b]}
+
+    def ddt(x):
+        return {"op": "D", "args": [x], "wrt": "t"}
+
+    def transport(x):
+        return times(neg("Adv.wind"), {"op": "grad", "args": [x]})
+
+    assert [(canonical_expr(eq.lhs), canonical_expr(eq.rhs)) for eq in flat.equations] == [
         (
-            "D(Chem.NO)/Dt",
-            "(-Sink.kd) * Chem.NO + (-Chem.k2) * Chem.NO + (-Adv.wind) * grad(Chem.NO)",
+            canonical_expr(ddt("Chem.NO")),
+            canonical_expr(
+                plus(
+                    plus(times(neg("Sink.kd"), "Chem.NO"), times(neg("Chem.k2"), "Chem.NO")),
+                    transport("Chem.NO"),
+                )
+            ),
         ),
         (
-            "D(Chem.O3)/Dt",
-            "Src.e + (-Sink.kd) * Chem.O3 + (-Chem.k1) * Chem.O3 + (-Adv.wind) * grad(Chem.O3)",
+            canonical_expr(ddt("Chem.O3")),
+            canonical_expr(
+                plus(
+                    plus(
+                        plus("Src.e", times(neg("Sink.kd"), "Chem.O3")),
+                        times(neg("Chem.k1"), "Chem.O3"),
+                    ),
+                    transport("Chem.O3"),
+                )
+            ),
         ),
     ]
     assert sorted(flat.state_variables) == ["Chem.NO", "Chem.O3"]
@@ -422,10 +458,10 @@ def test_flatten_variable_map_param_to_var():
     # Chem.T was promoted to a variable and removed from parameters.
     assert "Chem.T" not in flat.parameters
     # The chemistry equation now references GEOSFP.T.
-    chem_eqs = [e for e in flat.equations if "Chem.O3" in e.lhs_str]
+    chem_eqs = [e for e in flat.equations if "Chem.O3" in _text(e.lhs)]
     assert len(chem_eqs) == 1
-    assert "GEOSFP.T" in chem_eqs[0].rhs_str
-    assert "Chem.T" not in chem_eqs[0].rhs_str
+    assert "GEOSFP.T" in _text(chem_eqs[0].rhs)
+    assert "Chem.T" not in _text(chem_eqs[0].rhs)
 
 
 # ----------------------------------------------------------------------------
@@ -467,9 +503,9 @@ def test_flatten_variable_map_into_subsystem_parameter():
     """
     flat = flatten(_subsystem_map_file("Wrap.inner.gain"))
     assert "Wrap.inner.gain" not in flat.parameters
-    eqs = [e for e in flat.equations if "Wrap.inner.x" in e.lhs_str]
+    eqs = [e for e in flat.equations if "Wrap.inner.x" in _text(e.lhs)]
     assert len(eqs) == 1
-    assert eqs[0].rhs_str == "Src.T"
+    assert canonical_expr(eqs[0].rhs) == canonical_expr("Src.T")
 
 
 def test_flatten_variable_map_unresolved_to_endpoint_raises():
@@ -554,7 +590,7 @@ def test_flatten_same_system_multi_lhs_passes_through():
     file = _empty_file(models={"Eq": model})
 
     flat = flatten(file)
-    eqs_for_K = [e for e in flat.equations if e.lhs_str == "Eq.K"]
+    eqs_for_K = [e for e in flat.equations if canonical_expr(e.lhs) == canonical_expr("Eq.K")]
     assert len(eqs_for_K) == 2
 
 
