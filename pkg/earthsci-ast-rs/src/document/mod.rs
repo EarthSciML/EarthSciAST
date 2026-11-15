@@ -179,10 +179,9 @@ pub fn parse_math(
         DocumentFormat::Typst => math::parse_typst(&sym, text),
     });
     let e = e.map(|e| match source::equation::eq_sides(e.clone()) {
-        Some((lhs, rhs)) => json::Json::Obj(vec![
-            ("lhs".to_string(), lhs),
-            ("rhs".to_string(), rhs),
-        ]),
+        Some((lhs, rhs)) => {
+            json::Json::Obj(vec![("lhs".to_string(), lhs), ("rhs".to_string(), rhs)])
+        }
         None => e,
     });
     if e.is_none() && found.removed_op.is_none() && !found.too_deep {

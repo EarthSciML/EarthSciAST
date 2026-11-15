@@ -247,7 +247,9 @@ fn print_math_reproduces_the_display() {
                 let eq = canonicalize_document(&eqs[0]);
                 match parse_math(want, &names, format) {
                     Ok(read) if read == eq => {}
-                    Ok(read) => failures.push(format!("{id}: parse_math {key} = {read}, want {eq}")),
+                    Ok(read) => {
+                        failures.push(format!("{id}: parse_math {key} = {read}, want {eq}"))
+                    }
                     Err(e) => failures.push(format!("{id}: parse_math {key} refused: {e:?}")),
                 }
             }
