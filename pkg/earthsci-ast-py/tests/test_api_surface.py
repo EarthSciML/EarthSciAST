@@ -39,17 +39,7 @@ MANIFEST_PATH = REPO_ROOT / "api-surface.json"
 # ---------------------------------------------------------------------------
 
 #: Exported by the Python binding now; not yet in the manifest.
-PENDING_ADDED: set[str] = {
-    # The document source formats (CONFORMANCE_SPEC §5.58), in the manifest for
-    # Rust only until `scripts/gen-api-surface.py` runs for the Python port.
-    "DocumentFormat",
-    "parse_document",
-    "parse_markdown",
-    "parse_typst",
-    "print_document",
-    "print_markdown",
-    "print_typst",
-}
+PENDING_ADDED: set[str] = set()
 
 #: Still in the manifest; deleted from the Python binding.
 PENDING_REMOVED: set[str] = set()
