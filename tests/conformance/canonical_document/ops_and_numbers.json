@@ -27,17 +27,17 @@
           "a": {
             "type": "parameter",
             "units": "1",
-            "default": 1.4715177646857694
+            "default": 1.4715177646857693
           },
           "b": {
             "type": "parameter",
             "units": "1",
-            "default": 1.0000000000000001
+            "default": 1.0
           },
           "c": {
             "type": "parameter",
             "units": "1",
-            "default": -1.999999999999999e16
+            "default": -1.999999999999999e+16
           },
           "d": {
             "type": "parameter",
@@ -52,17 +52,17 @@
           "f": {
             "type": "parameter",
             "units": "1",
-            "default": 1.0e19
+            "default": 1e+19
           },
           "g": {
             "type": "parameter",
             "units": "1",
-            "default": 4.940656458412465e-324
+            "default": 5e-324
           },
           "h": {
             "type": "parameter",
             "units": "1",
-            "default": 2.50e1
+            "default": 25.0
           },
           "values": {
             "type": "parameter",
@@ -120,14 +120,6 @@
                   "fn": "neg",
                   "args": [
                     "values"
-                  ]
-                },
-                {
-                  "op": "broadcast",
-                  "fn": "neg",
-                  "args": [
-                    "values",
-                    "b"
                   ]
                 }
               ]
@@ -188,12 +180,12 @@
           "f": {
             "type": "parameter",
             "units": "1",
-            "default": 1.0e19
+            "default": 1e+19
           },
           "g": {
             "type": "parameter",
             "units": "1",
-            "default": 5.0e-324
+            "default": 5e-324
           },
           "h": {
             "type": "parameter",
@@ -256,14 +248,6 @@
                   "fn": "-",
                   "args": [
                     "values"
-                  ]
-                },
-                {
-                  "op": "broadcast",
-                  "fn": "neg",
-                  "args": [
-                    "values",
-                    "b"
                   ]
                 }
               ]

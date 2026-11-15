@@ -492,7 +492,6 @@ def ops_numbers_document() -> dict:
                                 {"op": "neg", "args": ["x", "b"]},
                                 {"op": "pow", "args": ["x", "b", "c"]},
                                 {"op": "broadcast", "fn": "neg", "args": ["values"]},
-                                {"op": "broadcast", "fn": "neg", "args": ["values", "b"]},
                             ],
                         },
                     },

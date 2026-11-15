@@ -722,6 +722,7 @@ mod error_code_tests {
             "null_reaction",
             "observed_cycle",
             "operator_variable_missing",
+            "parse_error",
             "ragged_values_not_gathered",
             "range_box_invalid",
             "range_global_locality",
