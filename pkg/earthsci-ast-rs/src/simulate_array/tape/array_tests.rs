@@ -1066,6 +1066,60 @@ fn ifelse_reading_a_gathered_scalar_takes_the_array_arms_box() {
     }
 }
 
+/// The NEI2016 emission observeds as reseact builds them,
+/// `CO = ifelse(lev < 2, flux_CO / days_in_month … * diurnal_factor, 0.0)`,
+/// where `days_in_month` and `diurnal_factor` come from `month(t)` and
+/// `hour(t)` of `esm:std/calendar.esm` (issue #664). Those bodies guard on
+/// `abs(t) < const(2^52, "s")`, a unit-bearing `const` NODE (esm-spec §4.8.5).
+/// A `const` whose value is a number is a scalar literal, as are `true` and
+/// `false`, so the build gives `X` the array arm's box; it did not, and native
+/// refused the rule with "branch value boxes differ".
+#[test]
+fn ifelse_reading_a_scalar_const_node_takes_the_array_arms_box() {
+    let guard = json!({"op": "const", "args": [], "value": 4503599627370496.0_f64, "units": "s"});
+    // `hour(t)` as calendar.esm writes it, minus the template references.
+    let hour = json!({"op": "ifelse", "args": [
+        {"op": "<", "args": [{"op": "abs", "args": ["t"]}, guard]},
+        {"op": "floor", "args": [{"op": "/", "args": ["t", 3600.0]}]},
+        {"op": "/", "args": [0, 0]}]});
+    let half = json!({"op": "const", "args": [], "value": 0.5});
+    let truth = json!({"op": "ifelse", "args": [{"op": "true", "args": []}, 2.0, 3.0]});
+    for scalar in [json!("H"), half, truth] {
+        let fh = json!({"op": "*", "args": ["F", scalar]});
+        let bodies = [
+            mixed_ifelse(fh.clone(), json!(0.0)),
+            json!({"op": "ifelse", "args": [{"op": ">=", "args": ["lev", 2.0]}, 0.0, fh]}),
+        ];
+        for x in bodies {
+            let h = json!({"lhs": "H", "rhs": hour.clone()});
+            let (mut vars, mut readers) = mixed_readers();
+            vars["H"] = json!({"type": "unknown"});
+            readers.push(h.clone());
+            let compiled = compile(undeclared_mixed_doc(x.clone(), vars, readers));
+            assert_eq!(compiled.conditional_shapes["X"], ["cell"], "{x}");
+            assert_eq!(declared_box(&compiled, "X"), Some(Some(vec![3])), "{x}");
+            ab(&compiled, &both_arms());
+            // Unread, as `NEI2016Emis.CO` is in reseact.
+            let unread = compile(undeclared_mixed_doc(
+                x.clone(),
+                json!({"H": {"type": "unknown"}}),
+                vec![h],
+            ));
+            assert!(!refuses_mixed_arms(&unread), "{x}");
+        }
+    }
+}
+
+/// An ARRAY `const` on the value path is anonymous (no index sets), so it
+/// does not give `X` a shape.
+#[test]
+fn ifelse_reading_an_array_const_node_is_not_promoted() {
+    let arr = json!({"op": "const", "args": [], "value": [1.0, 2.0, 3.0]});
+    let x = mixed_ifelse(json!({"op": "*", "args": ["F", arr]}), json!(0.0));
+    let compiled = compile(undeclared_mixed_doc(x, json!({}), vec![]));
+    assert!(!compiled.conditional_shapes.contains_key("X"));
+}
+
 /// Where the data arm is consumed whole, or meets an array of another shape,
 /// the oracle's answer still follows the taken arm, so native still refuses;
 /// and `shape: []` still declares a scalar.

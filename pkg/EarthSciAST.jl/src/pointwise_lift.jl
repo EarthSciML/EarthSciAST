@@ -67,14 +67,21 @@ function _detect_lift_loops(
     )
     result = Ref{Union{Vector{String}, Nothing}}(nothing)
     peek = IdDict{OpExpr, Any}()
+    # Expansions share their subtrees, so each reference is expanded through
+    # one memo and each node is walked once: a second visit finds nothing the
+    # first did not.
+    memo = _ExpandCache()
+    seen = IdDict{OpExpr, Nothing}()
     function walk(e)
         result[] === nothing || return
         e isa OpExpr || return
+        haskey(seen, e) && return
+        seen[e] = nothing
         if e.op == APPLY_EXPRESSION_TEMPLATE_OP
             reg === nothing && return
             body = get!(peek, e) do
                 try
-                    _expand_expr_refs(e, reg)
+                    _expand_expr_refs(e, reg, nothing, memo)
                 catch err
                     _is_resource_error(err) && rethrow()
                     # Unknown template / bad bindings: leave detection to fail
@@ -770,6 +777,9 @@ function _lift_axis_names(
     end
     peek = IdDict{OpExpr, Any}()
     seen = IdDict{OpExpr, Bool}()
+    # One memo for every reference, so a template referenced at several depths
+    # is expanded once (and its expansion's shared subtrees walked once).
+    memo = _ExpandCache()
     function walk(e)
         e isa OpExpr || return
         get!(seen, e, false) && return
@@ -778,7 +788,7 @@ function _lift_axis_names(
             reg === nothing && return
             body = get!(peek, e) do
                 try
-                    _expand_expr_refs(e, reg)
+                    _expand_expr_refs(e, reg, nothing, memo)
                 catch err
                     _is_resource_error(err) && rethrow()
                     nothing   # unknown template: the build path raises the real diagnostic
