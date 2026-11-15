@@ -699,6 +699,7 @@ mod error_code_tests {
             "event_var_undeclared",
             "factor_with_expression_transform",
             "faq_bare_array_operand",
+            "faq_version_too_old",
             "ic_in_reaction_system",
             "indexed_definition_unsupported_form",
             "invalid_broadcast_fn",

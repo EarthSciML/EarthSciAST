@@ -1,0 +1,54 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "Version_2_3_0_DeprecatedNeg",
+    "description": "Exact version match for a 2.3.0 library. 2.3.0 changes no on-disk shape; among what it adds, the word spelling `neg` is deprecated (esm-spec §4.2 \"Deprecated ops\"). This document spells unary minus `neg`, so it loads with no version warning and with one `deprecated_op` warning naming /models/Decay/equations/0/rhs/args/0, and the loaded rate is `-(k)`.",
+    "authors": [
+      "ESM Format Team"
+    ],
+    "created": "2026-11-14T00:00:00Z",
+    "tags": [
+      "test",
+      "compatibility"
+    ]
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "N": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "N"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "neg",
+                "args": [
+                  "k"
+                ]
+              },
+              "N"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

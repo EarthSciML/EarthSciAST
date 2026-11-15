@@ -1,6 +1,15 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 2.2.0**
+**EarthSciML Abstract Syntax Tree Format — Version 2.3.0**
+
+> **2.3.0 is additive.** The JSON form does not change. The word spellings
+> `neg` and `pow` are deprecated: a loader rewrites them to unary `-` and `^`
+> and warns `deprecated_op` (§4.2, "Deprecated ops"). The canonical form writes
+> every `units` string in one canonical spelling, and drops the units of a
+> `const` whose units spell `1`, which can change its unit-check verdict;
+> `canonicalize_document` applies the spelling to a whole document (§4.8.2). A document can also be written as a Markdown or
+> Typst source document, specified by the Lean source in `formal/` (§1.2).
+> Every 2.2.0 document is a valid 2.3.0 document.
 
 > **2.1.0 is additive.** A variable MAY declare a lower bound `lb` and an upper
 > bound `ub`, each a number or a reference to another variable of the model
@@ -101,7 +110,7 @@ source document is a lossless spelling of it.
 
 ```json
 {
-  "esm": "2.2.0",
+  "esm": "2.3.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },
@@ -2170,7 +2179,7 @@ A conforming parser MUST resolve exactly the strings this grammar and these toke
 4. A factor is written as its symbol, then nothing when the exponent's absolute value is 1, `^n` when it is an integer, and `^(p/q)` in lowest terms otherwise (`1/s^0.5` is `1/s^(1/2)`, `m^(4/2)` is `m^2`). Factors are joined by `*` with no spaces; denominator factors are written with the absolute value of their exponent.
 5. The spelling is the numerator alone, or `numerator/factor` when the denominator has one factor, or `numerator/(factor*factor*…)` when it has more: there is at most one `/`. An empty numerator is `1` (`ppb^-1 s^-1` is `1/(ppb*s)`).
 
-So `""`, `"1"` and `"dimensionless"` all canonicalize to `"1"`. **A `const` node is the exception: when its `units` spell `1` the canonical form drops them** (ruling of 2026-11-14) — a scalar `const` becomes the bare literal, and an array `const` stays a `const` without `units`. Its dimension is then a bare literal's (§4.8.4, §4.8.6), so this changes meaning wherever the two differ: a zero is neutral in a sum again, and the rest of the canonical form applies to the literal (`x + const(0, units "dimensionless")` canonicalizes to `x`). A variable, species or parameter keeps `units: "1"`. Symbols are kept as written: the spelling is syntactic, not a reduction to SI, so `km` stays `km`, `ppm` stays `ppm`, and an unknown symbol is spelled like any other (`foo/foo`). A string the spelling leaves **unchanged** is one that does not lex or parse (`"g/hp-hr"`, `"1000/s"`, `" "`), one whose spelling would have to write a symbol containing `.` (`"1.5m"`), and one that drops a zero-exponent symbol that is not a §4.8.1 table key (`"bogus^0*s"`), so a string that does not resolve keeps failing to resolve. Canonicalization never changes the unit a string denotes: the canonical spelling resolves exactly when the original does, to the same dimension and exact scale.
+So `""`, `"1"` and `"dimensionless"` all canonicalize to `"1"`. **A `const` node is the exception: when its `units` spell `1` the canonical form drops them** (ruling of 2026-11-14) — a scalar `const` becomes the bare literal, and an array `const` stays a `const` without `units`. Its dimension is then a bare literal's (§4.8.4, §4.8.6), so this changes meaning wherever the two differ, and validating the canonical form can give a different verdict than validating the document. While bare literals are undeterminable (the §4.8.6 warning stage) that holds for **every value**: `x [m] + const(5, units "1")` is a mismatch, but its canonical form `x [m] + 5` passes with only `units_dimensionless_literal_mismatch`, and `L [m] = const(2, units "1") * y [kg]` is a mismatch whose canonical form is skipped as undeterminable. Once nonzero literals are dimensionless (§4.8.6, "A future version"), only zero still differs: a zero is neutral in a sum, and the rest of the canonical form applies to the literal (`x + const(0, units "dimensionless")` canonicalizes to `x`). A variable, species or parameter keeps `units: "1"`. Symbols are kept as written: the spelling is syntactic, not a reduction to SI, so `km` stays `km`, `ppm` stays `ppm`, and an unknown symbol is spelled like any other (`foo/foo`). A string the spelling leaves **unchanged** is one that does not lex or parse (`"g/hp-hr"`, `"1000/s"`, `" "`), one whose spelling would have to write a symbol containing `.` (`"1.5m"`), and one that drops a zero-exponent symbol that is not a §4.8.1 table key (`"bogus^0*s"`), so a string that does not resolve keeps failing to resolve. Canonicalization never changes the unit a string denotes: the canonical spelling resolves exactly when the original does, to the same dimension and exact scale.
 
 A binding's canonicalizer MUST write every `units` string of the canonical form in this spelling, byte for byte. Two entry points apply it: `canonicalize_document` (API_SPEC.md §5.4) takes a decoded document and respells all of its units strings, changing nothing else; and the expression canonicalizer `canonicalize` (discretization RFC §5.4.10) respells the `units` of each `const` node it visits. The authority is the Lean definition `Esm.Units.canon` in `formal/Esm/Units/Canonical.lean`, with its theorems (idempotent, same unit, spellings with one normal form spell alike) there and its worked examples in `formal/Esm/Units/CanonicalExamples.lean`; where this prose and the Lean definition differ, the Lean definition holds. The cross-binding fixtures are `tests/conformance/canonical/unit_spelling.json` (expressions) and `tests/conformance/canonical_document/units.json` (documents).
 

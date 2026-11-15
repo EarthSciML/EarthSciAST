@@ -327,7 +327,9 @@ def check_registry(args):
                 report.error(f"{pid}: cites unknown inventory clause {cid!r}")
         defined_by = p.get("defined_by")
         if defined_by is not None and not (
-            isinstance(defined_by, str) and defined_by.startswith("formal/") and (ROOT / defined_by).is_file()
+            isinstance(defined_by, str)
+            and defined_by.startswith("formal/")
+            and (ROOT / defined_by).is_file()
         ):
             report.error(f"{pid}: defined_by must name a file under formal/, got {defined_by!r}")
         if not p.get("clauses") and not defined_by:
