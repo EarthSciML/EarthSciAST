@@ -11,7 +11,9 @@ Port of `formal/Esm/Document/Number.lean` (and `Esm.digitChar` from
 [`parse`](@ref) reads any decimal spelling and returns the canonical number;
 [`parse_raw`](@ref) reads the token as written. A digit run whose value does
 not fit in `Int128` is not a number token (it has no canonical form either
-way, since it is outside `Int64`).
+way, since it is outside `Int64`). Likewise a decimal whose exponent leaves
+`Int64` is not a number token here ([`mk_dec`](@ref)), and the exponent
+arithmetic is checked, never wrapped.
 """
 module DNumber
 
@@ -111,7 +113,10 @@ end
 print_string(n::JNum) = String(print(n))
 
 """`Number.mkDec`: the decimal with digits `ds` (leading and trailing zeros
-dropped) whose first listed digit sits at decimal exponent `e10`."""
+dropped) whose first listed digit sits at decimal exponent `e10`.
+
+`nothing` when the exponent of the first nonzero digit leaves `Int64` (Lean's
+exponent is unbounded); the readers refuse such a token."""
 function mk_dec(neg::Bool, ds, e10::Integer)
     lead = 0
     while lead < length(ds) && ds[lead + 1] == 0
@@ -121,7 +126,9 @@ function mk_dec(neg::Bool, ds, e10::Integer)
     while !isempty(core) && last(core) == 0
         pop!(core)
     end
-    return JDec(neg, core, e10 - lead)
+    e, o = Base.Checked.sub_with_overflow(Int64(e10), Int64(lead))
+    o && return nothing
+    return JDec(neg, core, e)
 end
 
 """`Number.finishDec`: an optional `e` exponent after the fraction digits."""
@@ -133,9 +140,13 @@ function finish_dec(neg::Bool, ds, e10::Integer, r::Chars)
         in_int64(ex) || return nothing
         s, o = Base.Checked.add_with_overflow(Int64(e10), Int64(ex))
         o && return nothing
-        return mk_dec(neg, ds, s), rest
+        d = mk_dec(neg, ds, s)
+        d === nothing && return nothing
+        return d, rest
     end
-    return mk_dec(neg, ds, e10), r
+    d = mk_dec(neg, ds, e10)
+    d === nothing && return nothing
+    return d, r
 end
 
 """`Number.afterInt`."""
