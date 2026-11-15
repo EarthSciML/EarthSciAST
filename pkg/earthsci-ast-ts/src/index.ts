@@ -348,6 +348,18 @@ export {
   E_CANONICAL_DIVBY_ZERO,
 } from './canonicalize.js'
 
+// Document source formats: Markdown and Typst (CONFORMANCE_SPEC §5.58).
+export {
+  printMarkdown,
+  printTypst,
+  printDocument,
+  printMath,
+  parseMarkdown,
+  parseTypst,
+  parseDocument,
+} from './document/index.js'
+export type { DocumentFormat, ParseDocumentOptions } from './document/index.js'
+
 // Load-time enum lowering (esm-spec §9.3).
 export { lowerEnums, EnumLoweringError } from './lower-enums.js'
 
