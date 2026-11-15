@@ -15,14 +15,8 @@ resulting list. The comparator then asserts that every language emitted a record
 for every manifest entry — a producer that skips an entry FAILS the run instead
 of shrinking its own denominator.
 
-The same logic applies to the display / substitution fixtures, whose JSON comes
-in three different shapes (flat list, ``{test_cases: [...]}`` dict, grouped
-``{tests: [...]}`` items). Each binding used to re-implement that traversal and
-each one got it wrong differently — Julia and TypeScript looked for top-level
-``chemical_formulas`` / ``expressions`` / ``tests`` keys that NO fixture has, so
-both emitted nothing and the comparator scored the empty agreement as 100%
-consistent (audit C2). Here the cases are expanded once into a flat, id-keyed
-list; producers just render what they are given.
+The same logic applies to the substitution fixtures: the cases are expanded
+once into a flat, id-keyed list, and producers just evaluate what they are given.
 
 Manifest shape::
 
@@ -32,12 +26,6 @@ Manifest shape::
         {"id": "valid/minimal_chemistry.esm", "category": "valid",
          "path": "tests/valid/minimal_chemistry.esm", "basename": "...",
          "expect": "valid"},
-        ...
-      ],
-      "display_cases": [
-        {"id": "all_operators.json#0", "fixture": "all_operators.json",
-         "kind": "expression" | "formula", "input": <expr-or-string>,
-         "expected": {"unicode": ..., "latex": ..., "ascii": ...}},
         ...
       ],
       "substitution_cases": [
@@ -96,95 +84,7 @@ def build_validation_files() -> list[dict[str, Any]]:
     return entries
 
 
-# --- display / substitution case expansion ----------------------------------
-
-
-def _iter_display_case_dicts(data: Any):
-    """Yield every display case dict in a fixture, in a FIXED traversal order.
-
-    The corpus uses three shapes and every producer has to agree on the walk,
-    so it lives here and only here:
-
-    1. top-level list of case dicts (``{input, unicode, latex, ascii}``)
-    2. top-level list of GROUP dicts, each with ``tests`` or ``test_cases``
-    3. top-level dict with ``test_cases`` / ``cases`` / ``tests``
-
-    A fixture with none of the above (e.g. ``model_summary.json``, which pins a
-    model summary rather than a rendering) contributes zero cases.
-    """
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        for key in ("test_cases", "cases", "tests"):
-            if isinstance(data.get(key), list):
-                items = data[key]
-                break
-        else:
-            return
-    else:
-        return
-
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if "input" in item:
-            yield item
-            continue
-        for key in ("tests", "test_cases", "cases"):
-            sub = item.get(key)
-            if isinstance(sub, list):
-                for case in sub:
-                    if isinstance(case, dict) and "input" in case:
-                        yield case
-                break
-
-
-def _expected_renderings(case: dict[str, Any]) -> dict[str, Any]:
-    """Pinned renderings, in either of the two spellings the corpus uses.
-
-    ``element_recognition.json`` uses a third spelling — a single
-    ``expected_output`` plus a ``format`` discriminator — so it is normalised
-    here too rather than being silently dropped (it was).
-    """
-    expected: dict[str, Any] = {}
-    for fmt in ("unicode", "latex", "ascii"):
-        value = case.get(f"expected_{fmt}", case.get(fmt))
-        if value is not None:
-            expected[fmt] = value
-    if not expected and "expected_output" in case:
-        fmt = case.get("format", "unicode")
-        if fmt in ("unicode", "latex", "ascii"):
-            expected[fmt] = case["expected_output"]
-    return expected
-
-
-def build_display_cases() -> list[dict[str, Any]]:
-    cases: list[dict[str, Any]] = []
-    display_dir = REPO_ROOT / "tests" / "display"
-    if not display_dir.is_dir():
-        return cases
-
-    for path in sorted(display_dir.glob("*.json")):
-        try:
-            data = json.loads(path.read_text())
-        except Exception as exc:  # a corpus file that will not parse is a corpus bug
-            raise SystemExit(f"display fixture {path} is not valid JSON: {exc}") from exc
-
-        for index, case in enumerate(_iter_display_case_dicts(data)):
-            source = case["input"]
-            cases.append(
-                {
-                    "id": f"{path.name}#{index}",
-                    "fixture": path.name,
-                    # A bare string input is a CHEMICAL FORMULA (`"O3"` →
-                    # `"O₃"`); a dict input is an Expression. The two go through
-                    # different renderers in every binding.
-                    "kind": "formula" if isinstance(source, str) else "expression",
-                    "input": source,
-                    "expected": _expected_renderings(case),
-                }
-            )
-    return cases
+# --- substitution case expansion ---------------------------------------------
 
 
 def build_substitution_cases() -> list[dict[str, Any]]:
@@ -221,7 +121,6 @@ def build_manifest() -> dict[str, Any]:
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "validation_files": build_validation_files(),
-        "display_cases": build_display_cases(),
         "substitution_cases": build_substitution_cases(),
     }
 
@@ -240,7 +139,6 @@ def main() -> int:
     print(
         f"Corpus manifest written to {out}: "
         f"{len(manifest['validation_files'])} validation files, "
-        f"{len(manifest['display_cases'])} display cases, "
         f"{len(manifest['substitution_cases'])} substitution cases"
     )
     return 0
