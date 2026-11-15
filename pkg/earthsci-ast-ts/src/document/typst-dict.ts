@@ -30,6 +30,7 @@ import {
   type JNum,
   type Json,
 } from './json.js'
+import { nested } from './limits.js'
 import { parseNum, printNum as printCanonical, type Chars, type Read } from './number.js'
 import { parseKey, parseQuoted, printKey, quote, spaces } from './strings.js'
 
@@ -176,6 +177,10 @@ const word = (cs: Chars, i: number, w: string): boolean => {
 
 /** `TypstDict.pVal`: a value, at its first character. */
 export function pVal(cs: Chars, i: number): Read<Json> {
+  return nested(() => pValIn(cs, i))
+}
+
+function pValIn(cs: Chars, i: number): Read<Json> {
   switch (cs[i]) {
     case undefined:
       return undefined
