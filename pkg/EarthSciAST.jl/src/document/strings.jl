@@ -84,7 +84,7 @@ function quote_str(braces::Bool, s)
 end
 
 """Lean's `Char.ofNat`: a surrogate code point becomes `'\\0'`."""
-char_of(n::Integer) = (0xd800 <= n <= 0xdfff || n > 0x10ffff) ? '\0' : Char(n)
+char_of(n::Integer) = (0xd800 <= n <= 0xdfff || n > 0x0010ffff) ? '\0' : Char(n)
 
 """`Strings.unquoteBody`: the characters up to the closing quote, and what
 follows it."""
