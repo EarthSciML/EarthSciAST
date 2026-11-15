@@ -402,6 +402,11 @@ const (
 	// resolvable units) — and is the code the shared corpus pins for
 	// tests/invalid/unparseable_unit.esm.
 	ErrorUnitParseError = "unit_parse_error"
+	// CodeParseError is a text that is not an ESM document in the source format
+	// it was read as (ParseMarkdown / ParseTypst, CONFORMANCE §5.58): an unknown
+	// word, an unbalanced delimiter, a display with no `=`, an unclosed container.
+	// A removed operator in such a text is `removed_op` instead.
+	CodeParseError = "parse_error"
 	// ErrorCircularDependency is a cycle in the cross-model reference graph:
 	// ModelA's equations reference ModelB's variables and vice versa
 	// (tests/invalid/circular_coupling.esm).
