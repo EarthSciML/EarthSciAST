@@ -208,7 +208,12 @@ def from_plain(v: Any) -> Any:
 
 def to_plain(j: Any) -> Any:
     """A document value as plain decoded JSON: a :class:`Dec` is the float its
-    canonical spelling reads as (a float even when integral outside Int64)."""
+    canonical spelling reads as (a float even when integral outside Int64). A
+    nonzero decimal below the smallest subnormal (``1.0e-400``) reads as zero, as
+    every binding's JSON reader rounds it, and is the canonical zero, the integer
+    ``0``, as ``canonicalize_document`` makes a JSON ``1e-400``. A decimal beyond
+    the binary64 range has no value here; the document readers refuse it first
+    (:func:`.limits.out_of_range`)."""
     from .number import print_num
 
     t = type(j)
@@ -217,7 +222,8 @@ def to_plain(j: Any) -> Any:
     if t is list:
         return [to_plain(x) for x in j]
     if t is Dec:
-        return float(print_num(j))
+        f = float(print_num(j))
+        return 0 if f == 0.0 else f
     if t is int and not in_int64(j):
         return float(j)
     return j

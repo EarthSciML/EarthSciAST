@@ -99,6 +99,47 @@ def test_document_format_fixture(case):
         raise AssertionError(f"unknown case kind {kind!r}")
 
 
+def _limits():
+    return json.loads((FIXTURES_DIR / "limits.json").read_text(encoding="utf-8"))
+
+
+def _limit_input(heads: dict, case: dict) -> str:
+    """The input text of a ``limits.json`` case (the README's recipe)."""
+    r = case["input"]
+    head = heads[case["surface"]]
+    if "yaml_levels" in r:
+        lines = "".join(" " * (2 * i) + "-\n" for i in range(1, r["yaml_levels"]))
+        return f"{head}```esm:metaparameters\nx:\n{lines}```\n"
+    n = r.get("n", 0)
+    return (
+        head
+        + r.get("prefix", "")
+        + r.get("open", "") * n
+        + r.get("middle", "")
+        + r.get("close", "") * n
+        + r.get("suffix", "")
+    )
+
+
+@pytest.mark.parametrize("case", _limits()["cases"], ids=lambda c: c["id"])
+def test_document_format_limits(case):
+    """``limits.json``: the reader limits every binding shares (README, Limits):
+    each case reads as ``esm_json`` or is refused with ``error``, never by
+    exhausting the stack."""
+    text = _limit_input(_limits()["heads"], case)
+    if "esm_json" in case:
+        got = parse_document(text, case["surface"])
+        assert _typed(got) == _typed(json.loads(case["esm_json"]))
+    else:
+        with pytest.raises(ParseError) as info:
+            parse_document(text, case["surface"])
+        assert getattr(info.value, "code", None) == case["error"]
+
+
+def test_limits_file_is_nonempty():
+    assert len(_limits()["cases"]) > 30
+
+
 def _math_cases():
     return [c for c in _cases() if "math" in c]
 
