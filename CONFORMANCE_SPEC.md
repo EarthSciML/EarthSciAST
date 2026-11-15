@@ -7784,7 +7784,54 @@ directory): over the whole corpus, the binding's canonical forms and printed
 texts must equal what `esm-lean` writes, and its readers must read the
 Lean-printed texts as `esm-lean` does. It is skipped without `ESM_LEAN`; the
 Rust test is `#[ignore]`d and runs under `cargo test --test integration
-document_format_matches_lean -- --ignored`.
+document_format_matches_lean -- --ignored`. The blocking form of that
+comparison, across every pair of participants, is the gate of §5.59.
+
+### 5.59 Document Source Formats: the Cross-Binding Gate (normative)
+
+**Decision pinned.** One participant prints and a different participant reads,
+across the full matrix of the five bindings and `esm-lean`, on the whole
+corpus, and the reference is computed from the corpus file by the Lean model.
+A per-binding round trip compares a binding only with itself, so a printer and
+a reader that drift together in one binding pass it; this gate is the check
+that cannot be passed that way.
+
+**Corpus.** Every `.esm` under `tests/` that is a JSON object (the corpus of
+§5.58's round trip and of `formal/scripts/doc-corpus.py`), read at run time and
+never stored.
+
+**Rules.** For every corpus document `d`, both formats, every printer `P` and
+every reader `Q` among the six participants, with `R(d)` the output of
+`esm-lean canon` on the corpus file:
+
+1. `canonicalize_document_P(d) == R(d)`;
+2. `print_P(d)` is byte for byte the text `esm-lean` prints;
+3. `parse_Q(print_P(d)) == R(d)`.
+
+Documents compare as JSON values, with every number in its canonical kind
+(§5.5.3.1: an integral value in Int64 is an integer, any other number a
+binary64), so the int-or-float typing of a binding's JSON reader is not a
+difference. There is no allowlist: a refusal, a missing output or a different
+document anywhere in the matrix fails the gate.
+
+**Harness.** `scripts/run-document-format-gate.py` (`print`, `parse`,
+`compare`, and `all` to run every stage locally). Each binding has a batch
+driver that prints a list of corpus files, or reads a list of printed texts,
+in one process: `scripts/document_format_gate/python_driver.py`,
+`scripts/document_format_gate/typescript_driver.mjs`,
+`scripts/document_format_gate/julia_driver.jl`, the Rust binary
+`earthsci-document-format-adapter-rust` (feature `conformance-adapters`) and
+the Go command `pkg/earthsci-ast-go/cmd/esm-document-format`. A reader reads
+each distinct printed text once; identical texts from different printers are
+the same input.
+
+**CI.** `.github/workflows/document-format-gate.yml` runs on every pull
+request and every push to `main`, with no path filter: a print stage (one job
+per participant), a parse stage (one job per participant, reading every
+participant's texts) and a gate job that applies the three rules, writes the
+printer-by-reader table to the job summary and fails on any failure. The gate
+job always runs and fails when either stage did not succeed, so it cannot be
+skipped into a pass; it is the job to make a required status check.
 
 ## 6. CI Integration
 

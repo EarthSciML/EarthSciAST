@@ -1,0 +1,167 @@
+name: Document format gate
+
+# The cross-binding gate for the document source formats (CONFORMANCE §5.59,
+# scripts/run-document-format-gate.py). Six participants: the five bindings and
+# `esm-lean`, the executable Lean model.
+#
+#   print   each participant writes, for every corpus document (every .esm under
+#           tests/ that is a JSON object), its canonical form and its Markdown
+#           and Typst texts.
+#   parse   each participant reads back every distinct text any participant
+#           printed.
+#   gate    every canonical form must be the Lean model's, every printed text
+#           the Lean model's byte for byte, and every reader must read every
+#           printer's text as the Lean canonical form of the corpus file.
+#
+# The reference is computed from the corpus file by the Lean model, so no
+# binding is ever compared only with itself: a printer and a reader that drift
+# together still disagree with the model and with the other four.
+#
+# No `paths` filter: the corpus is every .esm under tests/ and the code is all
+# five bindings and formal/, and a required check whose workflow is filtered out
+# never reports.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: document-format-gate-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: 'lts/*'
+  PYTHON_VERSION: '3.x'
+  JULIA_VERSION: 'lts'
+  GO_VERSION: 'stable'
+  GATE: ${{ github.workspace }}/gate
+  # The compiled drivers carry no debug info: they are uploaded for the parse
+  # stage, and debug info would make them several times larger.
+  CARGO_PROFILE_DEV_DEBUG: '0'
+
+jobs:
+  print:
+    name: print (${{ matrix.participant }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        participant: [lean, rust, julia, python, typescript, go]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up the participant
+        uses: ./.github/actions/document-format-participant
+        with:
+          participant: ${{ matrix.participant }}
+          build: 'true'
+
+      - name: Print the corpus
+        run: |
+          python3 scripts/run-document-format-gate.py print \
+            --participant ${{ matrix.participant }} --out "$GATE/prints/${{ matrix.participant }}"
+
+      - name: Upload the printed corpus
+        uses: actions/upload-artifact@v7
+        with:
+          name: prints-${{ matrix.participant }}
+          path: gate/prints/${{ matrix.participant }}
+          if-no-files-found: error
+          retention-days: 7
+
+      # The compiled drivers are handed to the parse stage, which then needs no
+      # toolchain and no second build.
+      - name: Upload the driver
+        if: ${{ matrix.participant == 'lean' || matrix.participant == 'rust' || matrix.participant == 'go' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: driver-${{ matrix.participant }}
+          path: gate/driver
+          if-no-files-found: error
+          retention-days: 1
+
+  parse:
+    name: parse (${{ matrix.participant }})
+    needs: print
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        participant: [lean, rust, julia, python, typescript, go]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the driver
+        if: ${{ matrix.participant == 'lean' || matrix.participant == 'rust' || matrix.participant == 'go' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: driver-${{ matrix.participant }}
+          path: gate/driver
+
+      - name: Set up the participant
+        uses: ./.github/actions/document-format-participant
+        with:
+          participant: ${{ matrix.participant }}
+          build: 'false'
+
+      - name: Download every printed corpus
+        uses: actions/download-artifact@v8
+        with:
+          pattern: prints-*
+          path: gate/prints
+
+      - name: Read back every printed text
+        run: |
+          python3 scripts/run-document-format-gate.py parse \
+            --participant ${{ matrix.participant }} \
+            --prints "$GATE"/prints/prints-* --out "$GATE/parses/${{ matrix.participant }}"
+
+      - name: Upload what was read
+        uses: actions/upload-artifact@v7
+        with:
+          name: parses-${{ matrix.participant }}
+          path: gate/parses/${{ matrix.participant }}
+          if-no-files-found: error
+          retention-days: 7
+
+  gate:
+    needs: [print, parse]
+    # Always run, and fail unless both stages succeeded: a skipped job would
+    # count as passing for a required check.
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Require both stages
+        if: ${{ needs.print.result != 'success' || needs.parse.result != 'success' }}
+        run: |
+          echo "::error::print: ${{ needs.print.result }}, parse: ${{ needs.parse.result }}. A participant could not print or read the corpus; see its job."
+          exit 1
+
+      - name: Download the printed corpora
+        uses: actions/download-artifact@v8
+        with:
+          pattern: prints-*
+          path: gate/prints
+
+      - name: Download what was read
+        uses: actions/download-artifact@v8
+        with:
+          pattern: parses-*
+          path: gate/parses
+
+      - name: Compare
+        run: |
+          python3 scripts/run-document-format-gate.py compare \
+            --prints "$GATE"/prints/prints-* --parses "$GATE"/parses/parses-* \
+            --reference lean --summary "$GITHUB_STEP_SUMMARY"

@@ -13,7 +13,11 @@ was produced by `esm-lean`, the executable Lean model (`formal/Adapter`); only t
 inputs were written by hand. A binding's printer and parser must reproduce them.
 
 The whole-corpus round trip (every `.esm` under `tests/` through both formats)
-is run at run time from the corpus itself. It is never written here.
+is run at run time from the corpus itself. It is never written here. Across
+bindings, the corpus goes through the cross-binding gate
+(`scripts/run-document-format-gate.py`, CONFORMANCE §5.59): every participant,
+the Lean model included, prints it, and every participant reads every printed
+text back.
 
 ## Files
 
