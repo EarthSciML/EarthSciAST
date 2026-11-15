@@ -1531,11 +1531,7 @@ end
 """`Math.pDApply`: a derivative operator applied to a parenthesized operand."""
 function p_d_apply(c::Ctx, f::Int, w::AbstractString, ts::Toks)
     f == 0 && return nothing
-    return nested(_p_d_apply, c, f - 1, w, ts)
-end
-
-# The body of `p_d_apply`, with its construct open (Rust `Nest::enter`).
-function _p_d_apply(c::Ctx, f::Int, w::AbstractString, ts::Toks)
+    f -= 1
     kat(ts, 1, KLpg) || return nothing
     x = p_or(c, f, tdrop(ts))
     (x !== nothing && is_rp(tk(x[2]))) || return nothing
