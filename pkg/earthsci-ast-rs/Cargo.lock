@@ -954,6 +954,31 @@ checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
 [[package]]
 name = "earthsci-ast"
 version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "420b98a28136c4910d670755e436ac8359a0f00db5d881123ccc89cb2349eba0"
+dependencies = [
+ "clap",
+ "diffsol",
+ "earthsciio",
+ "faer",
+ "getrandom 0.3.4",
+ "indexmap",
+ "jsonschema",
+ "ndarray",
+ "rayon",
+ "rstar",
+ "rustc-hash",
+ "ryu",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "thiserror 2.0.21",
+ "time",
+]
+
+[[package]]
+name = "earthsci-ast"
+version = "0.13.0"
 dependencies = [
  "bumpalo",
  "bytemuck",
@@ -992,10 +1017,10 @@ dependencies = [
 
 [[package]]
 name = "earthsci-ast-cli"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "clap",
- "earthsci-ast",
+ "earthsci-ast 0.13.0",
  "earthsci-integrator",
  "earthsci-integrator-planner",
  "indexmap",
@@ -1012,7 +1037,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6723039de2806815ce23281ab1876cf4ffe0857a36280dc000e57bed41a262e"
 dependencies = [
- "earthsci-ast",
+ "earthsci-ast 0.12.1",
  "indexmap",
  "ryu",
  "serde_json",
@@ -1024,7 +1049,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c013f3b7252d1067fb5490c80a9c0072edd882ef456b551a5a673d1d6103ff1a"
 dependencies = [
- "earthsci-ast",
+ "earthsci-ast 0.12.1",
  "earthsci-astdiff",
  "earthsci-integrator-planner",
  "earthsci-integrator-solvers",
@@ -1041,7 +1066,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b8e75682d65d03173107cb891e275ed821cb0a4424e17b3d38ff2a0d264294c"
 dependencies = [
- "earthsci-ast",
+ "earthsci-ast 0.12.1",
  "earthsci-astdiff",
  "earthsci-integrator-solvers",
  "indexmap",
