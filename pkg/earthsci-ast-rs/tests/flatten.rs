@@ -14,6 +14,7 @@ use earthsci_ast::{
 };
 use earthsci_ast::{FlattenError, flatten, flatten_model};
 use indexmap::IndexMap;
+use serde_json::json;
 
 fn empty_metadata() -> Metadata {
     Metadata {
@@ -1117,9 +1118,9 @@ fn flatten_derives_spatial_independent_variable_from_non_time_derivative() {
 // trip it were migrated to `variable_map` Expression transforms).
 // ---------------------------------------------------------------------------
 
-/// The rendered form of the one equation defining `target`, for assertions
+/// The canonical JSON of the one equation defining `target`, for assertions
 /// that care about the whole merged RHS rather than its variable set.
-fn rendered_rhs(flat: &earthsci_ast::FlattenedSystem, target: &str) -> String {
+fn rendered_rhs(flat: &earthsci_ast::FlattenedSystem, target: &str) -> serde_json::Value {
     let eq = flat
         .equations
         .iter()
@@ -1130,7 +1131,7 @@ fn rendered_rhs(flat: &earthsci_ast::FlattenedSystem, target: &str) -> String {
             _ => false,
         })
         .unwrap_or_else(|| panic!("no D({target}) equation in the flattened system"));
-    earthsci_ast::to_ascii(&eq.rhs)
+    crate::common::canon(&eq.rhs)
 }
 
 /// §4.7.1 step 3, placeholder expansion: ONE `_var` equation in the operator
@@ -1170,17 +1171,20 @@ fn operator_compose_expands_the_var_placeholder_over_every_state() {
     // The single placeholder equation was cloned once per state of Chem and
     // merged into each — the operator model contributes no equation of its own.
     assert_eq!(flat.equations.len(), 2, "equations: {:?}", flat.equations);
-    assert_eq!(rendered_rhs(&flat, "Chem.O3"), "-Chem.k + Adv.u * Chem.O3");
-    assert_eq!(rendered_rhs(&flat, "Chem.NO"), "Chem.k + Adv.u * Chem.NO");
+    assert_eq!(
+        rendered_rhs(&flat, "Chem.O3"),
+        json!({"op": "+", "args": [{"op": "-", "args": ["Chem.k"]},
+            {"op": "*", "args": ["Adv.u", "Chem.O3"]}]})
+    );
+    assert_eq!(
+        rendered_rhs(&flat, "Chem.NO"),
+        json!({"op": "+", "args": ["Chem.k", {"op": "*", "args": ["Adv.u", "Chem.NO"]}]})
+    );
 
     // `_var` is a GLOBAL sentinel: it must survive nowhere, neither bare nor
     // namespaced to the operator model that spelled it.
     for eq in &flat.equations {
-        let rendered = format!(
-            "{} ~ {}",
-            earthsci_ast::to_ascii(&eq.lhs),
-            earthsci_ast::to_ascii(&eq.rhs)
-        );
+        let rendered = crate::common::canon(eq).to_string();
         assert!(
             !rendered.contains("_var"),
             "the `_var` sentinel leaked into the flattened system: {rendered}"
@@ -1234,7 +1238,8 @@ fn operator_compose_translate_is_a_keyed_and_carries_the_factor() {
     // to A's spelling. `Photo.j`, a parameter of B, keeps its name.
     assert_eq!(
         rendered_rhs(&flat, "Chem.ozone"),
-        "Chem.k + 1.0e-9 * Photo.j * Chem.ozone"
+        json!({"op": "+", "args": ["Chem.k",
+            {"op": "*", "args": [1.0e-9, {"op": "*", "args": ["Photo.j", "Chem.ozone"]}]}]})
     );
 }
 
@@ -1284,7 +1289,7 @@ fn operator_compose_translate_endpoints_may_be_authored_bare() {
 
     assert_eq!(
         rendered_rhs(&bare, "Chem.ozone"),
-        "Chem.k + Diff.kh * Chem.ozone",
+        json!({"op": "+", "args": ["Chem.k", {"op": "*", "args": ["Diff.kh", "Chem.ozone"]}]}),
         "a bare translate endpoint must be qualified before matching"
     );
     assert_eq!(
@@ -1371,8 +1376,8 @@ fn operator_compose_prunes_the_merged_away_name_after_a_document_wide_retarget()
         .find(|eq| matches!(&eq.lhs, Expr::Variable(v) if v == "Obs.burden"))
         .expect("Obs.burden equation survives");
     assert_eq!(
-        earthsci_ast::to_ascii(&obs.rhs),
-        "2 * Chem.ozone",
+        crate::common::canon(&obs.rhs),
+        json!({"op": "*", "args": [2, "Chem.ozone"]}),
         "a document-wide retarget must reach a third system's reference"
     );
 }
@@ -1500,15 +1505,19 @@ fn couple_multiplicative_scales_the_tendency_not_a_later_bare_equation() {
         flat.equations
             .iter()
             .find(|eq| matches!(&eq.lhs, Expr::Operator(_)) == want_tendency)
-            .map(|eq| earthsci_ast::to_ascii(&eq.rhs))
+            .map(|eq| crate::common::canon(&eq.rhs))
             .expect("both equations survive")
     };
     assert_eq!(
         rhs_of(true),
-        "Chem.f * Surface.m",
+        json!({"op": "*", "args": ["Chem.f", "Surface.m"]}),
         "only the tendency is scaled"
     );
-    assert_eq!(rhs_of(false), "Chem.g", "the bare equation is untouched");
+    assert_eq!(
+        rhs_of(false),
+        json!("Chem.g"),
+        "the bare equation is untouched"
+    );
 }
 
 /// The deliberate asymmetry (§4.7.2): `additive` against an absent tendency is
@@ -1580,8 +1589,8 @@ fn nested_subsystems_are_lowered_into_the_parent() {
 
     assert!(flat.state_variables.contains_key("Outer.Inner.y"));
     assert!(flat.parameters.contains_key("Outer.Inner.r"));
-    assert_eq!(rendered_rhs(&flat, "Outer.Inner.y"), "Outer.Inner.r");
+    assert_eq!(rendered_rhs(&flat, "Outer.Inner.y"), json!("Outer.Inner.r"));
     // The parent's bare `Inner.y` is subsystem-LOCAL, not an already-absolute
     // cross-component reference, so it lifts to the lowered name.
-    assert_eq!(rendered_rhs(&flat, "Outer.x"), "Outer.Inner.y");
+    assert_eq!(rendered_rhs(&flat, "Outer.x"), json!("Outer.Inner.y"));
 }

@@ -391,7 +391,10 @@ fn a_scaled_replacement_leaves_an_expression_bound() {
     let ub = flat.state_variables["A.x"].ub.clone().expect("ub carried");
     match ub {
         VariableBound::Expression(e) => {
-            assert_eq!(earthsci_ast::to_ascii(&e).replace(' ', ""), "2*Src.c")
+            assert_eq!(
+                crate::common::canon(&e),
+                serde_json::json!({"op": "*", "args": [2, "Src.c"]})
+            )
         }
         other => panic!("expected an expression bound, got {other:?}"),
     }

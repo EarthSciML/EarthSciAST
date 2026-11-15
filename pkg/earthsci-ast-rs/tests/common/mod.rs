@@ -72,3 +72,31 @@ pub fn supply_state_defaults(doc: &mut serde_json::Value) {
         }
     }
 }
+
+/// An expression, equation or any other serializable AST value in canonical
+/// JSON (`canonicalize_document`: CONFORMANCE §5.4, numbers in their
+/// canonical kind), the form tests compare expressions in.
+pub fn canon<T: serde::Serialize + ?Sized>(value: &T) -> serde_json::Value {
+    earthsci_ast::canonicalize_document(
+        &serde_json::to_value(value).expect("an AST value serializes"),
+    )
+}
+
+/// Every operator node with op `op` in a JSON expression tree, outermost first.
+pub fn nodes_with_op<'a>(value: &'a serde_json::Value, op: &str) -> Vec<&'a serde_json::Value> {
+    fn walk<'a>(v: &'a serde_json::Value, op: &str, out: &mut Vec<&'a serde_json::Value>) {
+        match v {
+            serde_json::Value::Object(fields) => {
+                if fields.get("op").and_then(|o| o.as_str()) == Some(op) {
+                    out.push(v);
+                }
+                fields.values().for_each(|c| walk(c, op, out));
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|c| walk(c, op, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(value, op, &mut out);
+    out
+}

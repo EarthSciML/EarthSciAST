@@ -284,25 +284,6 @@ fn test_component_graph() {
     assert!(!mermaid_output.is_empty());
 }
 
-/// Test pretty printing
-#[test]
-fn test_pretty_printing() {
-    let test_strings = ["H2O", "CO2", "CH4", "NO2", "D", "*", "+"];
-
-    for input in &test_strings {
-        // Create simple expressions to test display functions
-        let expr = Expr::Variable(input.to_string());
-
-        let unicode_result = to_unicode(&expr);
-        let latex_result = to_latex(&expr);
-        let ascii_result = to_ascii(&expr);
-
-        assert!(!unicode_result.is_empty());
-        assert!(!latex_result.is_empty());
-        assert!(!ascii_result.is_empty());
-    }
-}
-
 /// Test editing operations
 #[test]
 fn test_editing() {

@@ -4,7 +4,7 @@
 //!
 //! ## Features
 //!
-//! - **Core**: Parse, serialize, pretty-print, substitute, validate schema
+//! - **Core**: Parse, serialize, Markdown and Typst source text, substitute, validate schema
 //! - **Analysis**: Unit checking, equation counting, structural validation
 //! - **CLI Tool**: Command-line interface for validation and conversion
 //! - **WASM**: WebAssembly compilation for web use
@@ -119,9 +119,6 @@ pub(crate) mod migration;
 pub(crate) mod observed_cone;
 pub(crate) mod op_registry;
 pub(crate) mod parse;
-/// Text→AST parsing of the INFIX expression surface `display::to_ascii` emits
-/// (the inverse of that printer). Pure and wasm32-clean.
-pub(crate) mod parse_expression;
 /// The evaluator's working precision — `domain.element_type` (esm-spec
 /// §11.3). Public because the contract it implements (`"Float32"` means
 /// per-operation binary32 rounding) is observable, and a host embedding the
@@ -259,7 +256,6 @@ pub use data_output::{
     derive_output_gridding, derive_output_meta, derive_output_plan, group_gridding_by_grid,
     parse_cell_key, plan_dimension_coordinates,
 };
-pub use display::{to_ascii, to_latex, to_unicode};
 #[cfg(not(target_arch = "wasm32"))]
 pub use expression::evaluate;
 pub use expression::{contains, free_parameters, free_variables, simplify};
@@ -278,7 +274,6 @@ pub use parse::{
     LoadOptions, load_document, load_document_with_options, load_path, load_path_with_options,
     load_string, load_string_with_options,
 };
-pub use parse_expression::{ExpressionParseError, parse_equation, parse_expression};
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };
