@@ -3,7 +3,7 @@ using EarthSciAST
 
 const FIXTURES = joinpath(@__DIR__, "..", "fixtures")
 
-# region: edit ops=add_variable,add_equation,model_variable,to_json,write_path
+# region: edit ops=add_variable,add_equation,parse_math,model_variable,to_json,write_path
 doc = load_path(joinpath(FIXTURES, "decay.esm"))
 model = doc.models["Decay"]
 
@@ -13,7 +13,9 @@ decayed = ModelVariable(
     description = "Amount that has decayed"
 )
 edited = add_variable(model, "decayed", decayed)
-edited = add_equation(edited, parse_equation("D(decayed, t) = lambda * N"))
+# The new equation, read from Typst math under the names it uses.
+eq = parse_math("(dif italic(\"decayed\"))/(dif t) = lambda N", ["decayed", "lambda", "N"], :typst)
+edited = add_equation(edited, Equation(expression_from_json(eq["lhs"]), expression_from_json(eq["rhs"])))
 @assert ode_states(model) == ["N"]
 @assert ode_states(edited) == ["N", "decayed"]
 
@@ -32,7 +34,7 @@ reloaded = load_path(path)
 # region: rename_variable ops=rename_variable,remove_equation,remove_variable,edit_error
 renamed = rename_variable(model, "lambda", "k")
 @assert parameters(renamed) == ["k"]
-@assert to_ascii(renamed.equations[1]) == "D(N)/Dt = (-k) * N"
+@assert string(renamed.equations[1]) == "(dif N)/(dif t) = (-k) N"
 
 # Drop the half_life equation, then the variable it defined.
 trimmed = remove_variable(remove_equation(model, 2), "half_life")
