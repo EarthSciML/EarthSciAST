@@ -117,7 +117,7 @@ func stypArgT(a KV, out []rune) []rune {
 }
 
 // stypPArg is `Typ.pArg`: one named argument at its key.
-func stypPArg(s []rune) (KV, []rune, bool) {
+func stypPArg(lim *Lim, s []rune) (KV, []rune, bool) {
 	id, rest := strReadIdent(s)
 	k := string(id)
 	if !strIsIdent(id) || tdictReserved(k) {
@@ -127,7 +127,7 @@ func stypPArg(s []rune) (KV, []rune, bool) {
 	if !ok {
 		return KV{}, nil, false
 	}
-	v, r, ok := tdictPVal(u)
+	v, r, ok := tdictPVal(lim, u)
 	if !ok {
 		return KV{}, nil, false
 	}
@@ -135,7 +135,7 @@ func stypPArg(s []rune) (KV, []rune, bool) {
 }
 
 // stypPArgsMore is `Typ.pArgsMore`: `, key: value` repeated, up to `)`.
-func stypPArgsMore(s []rune) (Obj, []rune, bool) {
+func stypPArgsMore(lim *Lim, s []rune) (Obj, []rune, bool) {
 	var out Obj
 	for {
 		if len(s) > 0 && s[0] == ')' {
@@ -145,7 +145,7 @@ func stypPArgsMore(s []rune) (Obj, []rune, bool) {
 		if !ok {
 			return nil, nil, false
 		}
-		a, r1, ok := stypPArg(r)
+		a, r1, ok := stypPArg(lim, r)
 		if !ok {
 			return nil, nil, false
 		}
@@ -155,15 +155,15 @@ func stypPArgsMore(s []rune) (Obj, []rune, bool) {
 }
 
 // stypPArgsFirst is `Typ.pArgsFirst`: arguments directly after `(`.
-func stypPArgsFirst(s []rune) (Obj, []rune, bool) {
+func stypPArgsFirst(lim *Lim, s []rune) (Obj, []rune, bool) {
 	if len(s) > 0 && s[0] == ')' {
 		return Obj{}, s[1:], true
 	}
-	a, r, ok := stypPArg(s)
+	a, r, ok := stypPArg(lim, s)
 	if !ok {
 		return nil, nil, false
 	}
-	as, r1, ok := stypPArgsMore(r)
+	as, r1, ok := stypPArgsMore(lim, r)
 	if !ok {
 		return nil, nil, false
 	}
@@ -234,7 +234,7 @@ func stypLineEnd(t []rune) ([]rune, bool) {
 
 // stypTypR is `Typ.typR`: Typst math under the empty symbol table.
 var stypTypR = &RSurf{
-	pm:    func(s string) (Json, bool) { return mathParseTypst(symEmpty, s) },
+	pm:    func(lim *Lim, s string) (Json, bool) { return mathParseTypst(lim, symEmpty, s) },
 	prm:   func(j Json) []rune { return []rune(mathPrintTypst(symEmpty, j)) },
 	empty: []rune("emptyset"),
 }
@@ -283,8 +283,8 @@ type stypCore struct {
 }
 
 // stypCoreAt is `Typ.coreAt`.
-func stypCoreAt(u []rune) (stypCore, bool) {
-	subs, hs, u1, ok := rxnPSide(stypTypR, u)
+func stypCoreAt(lim *Lim, u []rune) (stypCore, bool) {
+	subs, hs, u1, ok := rxnPSide(lim, stypTypR, u)
 	if !ok {
 		return stypCore{}, false
 	}
@@ -300,7 +300,7 @@ func stypCoreAt(u []rune) (stypCore, bool) {
 	if !ok {
 		return stypCore{}, false
 	}
-	prods, hp, u4, ok := rxnPSide(stypTypR, u3)
+	prods, hp, u4, ok := rxnPSide(lim, stypTypR, u3)
 	if !ok {
 		return stypCore{}, false
 	}
@@ -332,8 +332,8 @@ func stypRxnItem(id string, c *stypCore, attrs Obj) RItem {
 }
 
 // stypCeAt is `Typ.ceAt`: a reaction after `#ce[`.
-func stypCeAt(u []rune) (RItem, []rune, bool) {
-	c, ok := stypCoreAt(u)
+func stypCeAt(lim *Lim, u []rune) (RItem, []rune, bool) {
+	c, ok := stypCoreAt(lim, u)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -349,8 +349,8 @@ func stypCeAt(u []rune) (RItem, []rune, bool) {
 }
 
 // stypRxnAtT is `Typ.rxnAtT`: a reaction after `#reaction(`.
-func stypRxnAtT(u []rune) (RItem, []rune, bool) {
-	as, u1, ok := stypPArgsFirst(u)
+func stypRxnAtT(lim *Lim, u []rune) (RItem, []rune, bool) {
+	as, u1, ok := stypPArgsFirst(lim, u)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -358,7 +358,7 @@ func stypRxnAtT(u []rune) (RItem, []rune, bool) {
 	if !ok {
 		return RItem{}, nil, false
 	}
-	c, ok := stypCoreAt(u2)
+	c, ok := stypCoreAt(lim, u2)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -449,9 +449,9 @@ func stypNameLenT(s []rune) int {
 }
 
 // stypPNameT is `Typ.pNameT`: a parameter name in a template header.
-func stypPNameT(s []rune) (string, []rune, bool) {
+func stypPNameT(lim *Lim, s []rune) (string, []rune, bool) {
 	k := min(stypNameLenT(s), len(s))
-	v, ok := mathParseTypst(symEmpty, string(s[:k]))
+	v, ok := mathParseTypst(lim, symEmpty, string(s[:k]))
 	n, isStr := v.(string)
 	if !ok || !isStr {
 		return "", nil, false
@@ -460,13 +460,13 @@ func stypPNameT(s []rune) (string, []rune, bool) {
 }
 
 // stypPParamsT is `Typ.pParamsT`: the parameters up to `) := `.
-func stypPParamsT(s []rune) ([]string, []rune, bool) {
+func stypPParamsT(lim *Lim, s []rune) ([]string, []rune, bool) {
 	out := []string{}
 	for {
 		if r, ok := textAfterS(stypTmDefT, s); ok {
 			return out, r, true
 		}
-		n, r, ok := stypPNameT(s)
+		n, r, ok := stypPNameT(lim, s)
 		if !ok {
 			return nil, nil, false
 		}
@@ -484,7 +484,7 @@ func stypPParamsT(s []rune) ([]string, []rune, bool) {
 
 // stypTmLexT is `Typ.tmLexT`: read the math text of a display as a template:
 // its name, parameters and body text.
-func stypTmLexT(raw []rune) (string, []string, []rune, bool) {
+func stypTmLexT(lim *Lim, raw []rune) (string, []string, []rune, bool) {
 	u, ok := textAfterS(stypTmOp, raw)
 	if !ok {
 		return "", nil, nil, false
@@ -497,7 +497,7 @@ func stypTmLexT(raw []rune) (string, []string, []rune, bool) {
 	if !ok {
 		return "", nil, nil, false
 	}
-	ps, b, ok := stypPParamsT(u2)
+	ps, b, ok := stypPParamsT(lim, u2)
 	if !ok {
 		return "", nil, nil, false
 	}
@@ -650,7 +650,7 @@ func stypDescAt(u []rune) (RItem, []rune, bool) {
 }
 
 // stypBlockAtT is `Typ.blockAtT`: a path block after `#esm-block(`.
-func stypBlockAtT(u []rune) (RItem, []rune, bool) {
+func stypBlockAtT(lim *Lim, u []rune) (RItem, []rune, bool) {
 	k, r, ok := strParseQuoted(true, u)
 	if !ok {
 		return RItem{}, nil, false
@@ -659,7 +659,7 @@ func stypBlockAtT(u []rune) (RItem, []rune, bool) {
 	if !ok {
 		return RItem{}, nil, false
 	}
-	v, r2, ok := tdictPVal(w)
+	v, r2, ok := tdictPVal(lim, w)
 	if !ok || len(r2) == 0 || r2[0] != ')' {
 		return RItem{}, nil, false
 	}
@@ -685,8 +685,8 @@ func stypCompAt(k Kind, u []rune) (RItem, []rune, bool) {
 
 // stypDispItem is `Typ.dispItem`: a template when the display reads as one,
 // else an equation.
-func stypDispItem(raw []rune) RItem {
-	if n, ps, b, ok := stypTmLexT(raw); ok {
+func stypDispItem(lim *Lim, raw []rune) RItem {
+	if n, ps, b, ok := stypTmLexT(lim, raw); ok {
 		return RItem{K: RITm, Tm: Tm[string]{Name: n, Params: ps, Body: string(b)}}
 	}
 	return RItem{K: RIEqn, S: string(raw)}
@@ -701,7 +701,7 @@ func cutTrailingSpace(s []rune) ([]rune, bool) {
 }
 
 // stypEqAt is `Typ.eqAt`: a display after its `$ `.
-func stypEqAt(u []rune) (RItem, []rune, bool) {
+func stypEqAt(lim *Lim, u []rune) (RItem, []rune, bool) {
 	body, r := textTakeWhile(u, func(c rune) bool { return c != '$' })
 	if len(r) == 0 {
 		return RItem{}, nil, false
@@ -711,13 +711,13 @@ func stypEqAt(u []rune) (RItem, []rune, bool) {
 	if !ok || !stypLabelOk(l) {
 		return RItem{}, nil, false
 	}
-	return stypDispItem(b), rest, true
+	return stypDispItem(lim, b), rest, true
 }
 
 // stypTmplAtT is `Typ.tmplAtT`: a template with other fields, after
 // `#template(`.
-func stypTmplAtT(u []rune) (RItem, []rune, bool) {
-	as, u1, ok := stypPArgsFirst(u)
+func stypTmplAtT(lim *Lim, u []rune) (RItem, []rune, bool) {
+	as, u1, ok := stypPArgsFirst(lim, u)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -733,7 +733,7 @@ func stypTmplAtT(u []rune) (RItem, []rune, bool) {
 	if !ok || len(r0) == 0 || r0[0] != ']' {
 		return RItem{}, nil, false
 	}
-	n, ps, bd, ok := stypTmLexT(b)
+	n, ps, bd, ok := stypTmLexT(lim, b)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -745,7 +745,7 @@ func stypTmplAtT(u []rune) (RItem, []rune, bool) {
 }
 
 // stypRuleAtT is `Typ.ruleAtT`: a rule, after `#rule(`.
-func stypRuleAtT(u []rune) (RItem, []rune, bool) {
+func stypRuleAtT(lim *Lim, u []rune) (RItem, []rune, bool) {
 	n, r, ok := strParseQuoted(true, u)
 	if !ok {
 		return RItem{}, nil, false
@@ -766,7 +766,7 @@ func stypRuleAtT(u []rune) (RItem, []rune, bool) {
 	if !ok {
 		return RItem{}, nil, false
 	}
-	as, r5, ok := stypPArgsMore(r4)
+	as, r5, ok := stypPArgsMore(lim, r4)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -800,12 +800,12 @@ func stypEqxAt(ro Role, u []rune) (RItem, []rune, bool) {
 }
 
 // stypSubAtT is `Typ.subAtT`: a subsystem directive after `#subsystem(`.
-func stypSubAtT(u []rune) (RItem, []rune, bool) {
+func stypSubAtT(lim *Lim, u []rune) (RItem, []rune, bool) {
 	n, r, ok := strParseQuoted(true, u)
 	if !ok {
 		return RItem{}, nil, false
 	}
-	a, r1, ok := stypPArgsMore(r)
+	a, r1, ok := stypPArgsMore(lim, r)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -817,8 +817,8 @@ func stypSubAtT(u []rune) (RItem, []rune, bool) {
 }
 
 // stypPlotAtT is `Typ.plotAtT`: a plot directive after `#plot(`.
-func stypPlotAtT(u []rune) (RItem, []rune, bool) {
-	a, r, ok := stypPArgsFirst(u)
+func stypPlotAtT(lim *Lim, u []rune) (RItem, []rune, bool) {
+	a, r, ok := stypPArgsFirst(lim, u)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -830,39 +830,39 @@ func stypPlotAtT(u []rune) (RItem, []rune, bool) {
 }
 
 // stypBlockAt is `Typ.blockAt`: read the block construct that starts here.
-func stypBlockAt(s []rune) (RItem, []rune, bool) {
+func stypBlockAt(lim *Lim, s []rune) (RItem, []rune, bool) {
 	d := func(o string) []rune { return s[utf8.RuneCountInString(o):] }
 	switch {
 	case textPreS(stypODesc, s):
 		return stypDescAt(d(stypODesc))
 	case textPreS(stypOBlock, s):
-		return stypBlockAtT(d(stypOBlock))
+		return stypBlockAtT(lim, d(stypOBlock))
 	case textPreS(stypOModel, s):
 		return stypCompAt(KindModel, d(stypOModel))
 	case textPreS(stypORs, s):
 		return stypCompAt(KindRs, d(stypORs))
 	case textPreS(stypOCe, s):
-		return stypCeAt(d(stypOCe))
+		return stypCeAt(lim, d(stypOCe))
 	case textPreS(stypORxn, s):
-		return stypRxnAtT(d(stypORxn))
+		return stypRxnAtT(lim, d(stypORxn))
 	case textPreS(stypOInit, s):
 		return stypEqxAt(RoleInit, d(stypOInit))
 	case textPreS(stypOCons, s):
 		return stypEqxAt(RoleCons, d(stypOCons))
 	case textPreS(stypOPlot, s):
-		return stypPlotAtT(d(stypOPlot))
+		return stypPlotAtT(lim, d(stypOPlot))
 	case textPreS(stypOSub, s):
-		return stypSubAtT(d(stypOSub))
+		return stypSubAtT(lim, d(stypOSub))
 	case textPreS(stypOTmpl, s):
-		return stypTmplAtT(d(stypOTmpl))
+		return stypTmplAtT(lim, d(stypOTmpl))
 	case textPreS(stypORule, s):
-		return stypRuleAtT(d(stypORule))
+		return stypRuleAtT(lim, d(stypORule))
 	}
-	return stypEqAt(dropN(s, len(stypOEq)))
+	return stypEqAt(lim, dropN(s, len(stypOEq)))
 }
 
 // stypDeclBody is `Typ.declBody`: a declaration after its opener.
-func stypDeclBody(k DKind, s []rune) (RItem, []rune, bool) {
+func stypDeclBody(lim *Lim, k DKind, s []rune) (RItem, []rune, bool) {
 	if len(s) == 0 || s[0] != '$' {
 		return RItem{}, nil, false
 	}
@@ -870,12 +870,12 @@ func stypDeclBody(k DKind, s []rune) (RItem, []rune, bool) {
 	if len(rest) == 0 {
 		return RItem{}, nil, false
 	}
-	v, ok := mathParseTypst(symEmpty, string(name))
+	v, ok := mathParseTypst(lim, symEmpty, string(name))
 	n, isStr := v.(string)
 	if !ok || !isStr {
 		return RItem{}, nil, false
 	}
-	a, r, ok := stypPArgsMore(rest[1:])
+	a, r, ok := stypPArgsMore(lim, rest[1:])
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -883,32 +883,32 @@ func stypDeclBody(k DKind, s []rune) (RItem, []rune, bool) {
 }
 
 // stypDeclAt is `Typ.declAt`.
-func stypDeclAt(s []rune) (RItem, []rune, bool) {
+func stypDeclAt(lim *Lim, s []rune) (RItem, []rune, bool) {
 	switch {
 	case textPreS(stypOVar, s):
-		return stypDeclBody(DKVar, s[len(stypOVar):])
+		return stypDeclBody(lim, DKVar, s[len(stypOVar):])
 	case textPreS(stypOParam, s):
-		return stypDeclBody(DKParam, s[len(stypOParam):])
+		return stypDeclBody(lim, DKParam, s[len(stypOParam):])
 	}
-	return stypDeclBody(DKSpecies, dropN(s, len(stypOSpecies)))
+	return stypDeclBody(lim, DKSpecies, dropN(s, len(stypOSpecies)))
 }
 
 // stypLex is `Typ.lex`: the constructs of a text, skipping prose one character
 // at a time.
-func stypLex(bol bool, s []rune) ([]RItem, bool) {
+func stypLex(lim *Lim, bol bool, s []rune) ([]RItem, bool) {
 	var out []RItem
 	for len(s) > 0 {
 		c := s[0]
 		switch {
 		case bol && stypBlockOpen(s):
-			it, rest, ok := stypBlockAt(s)
+			it, rest, ok := stypBlockAt(lim, s)
 			if !ok {
 				return nil, false
 			}
 			out = append(out, it)
 			s, bol = rest, true
 		case stypDeclOpen(s):
-			it, rest, ok := stypDeclAt(s)
+			it, rest, ok := stypDeclAt(lim, s)
 			if !ok {
 				return nil, false
 			}
@@ -993,7 +993,7 @@ func stypIsBlock(it *RItem) bool {
 
 // stypItemOk is `Typ.itemOK`: what each construct's content must satisfy for
 // its text to read back.
-func stypItemOk(it *RItem) bool {
+func stypItemOk(lim *Lim, it *RItem) bool {
 	switch it.K {
 	case RIDesc, RIComp:
 		return true
@@ -1008,7 +1008,7 @@ func stypItemOk(it *RItem) bool {
 		if strings.ContainsRune(it.S, '$') {
 			return false
 		}
-		_, _, _, ok := stypTmLexT([]rune(it.S))
+		_, _, _, ok := stypTmLexT(lim, []rune(it.S))
 		return !ok
 	case RIEqx:
 		return it.Role != RoleEqn && !strings.ContainsRune(it.S, '$')
@@ -1028,7 +1028,7 @@ func stypItemOk(it *RItem) bool {
 		if containsRune(raw, '$') {
 			return false
 		}
-		n, ps, b, ok := stypTmLexT(raw)
+		n, ps, b, ok := stypTmLexT(lim, raw)
 		return ok && n == t.Name && stringsEqual(ps, t.Params) && string(b) == t.Body
 	}
 	return false

@@ -72,7 +72,11 @@ func surfSciNum(n0 JNum, z int64) (JNum, bool) {
 	if n0.Dec {
 		m = numCanonize(JNum{Dec: true, Neg: neg, Digits: ds, E10: s})
 	} else {
-		m = numCanonize(numMkDec(neg, ds, s))
+		d, ok := numMkDec(neg, ds, s)
+		if !ok {
+			return JNum{}, false
+		}
+		m = numCanonize(d)
 	}
 	if !m.Wfb() {
 		return JNum{}, false
@@ -96,7 +100,8 @@ func surfParseRawWide(input []rune) (JNum, []rune, bool) {
 	if len(p) == 0 || numLeadZero(p) || (len(rest) > 0 && rest[0] == '.') {
 		return JNum{}, nil, false
 	}
-	return numMkDec(neg, p, int64(len(p))-1), rest, true
+	n, ok := numMkDec(neg, p, int64(len(p))-1)
+	return n, rest, ok
 }
 
 // surfLexNum is `Math.lexNum`: a number: its JSON spelling, or a decimal

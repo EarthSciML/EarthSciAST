@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from .. import limits
 from ..value import Dec, Obj
 from . import token as K
 from . import units as U
@@ -179,33 +180,38 @@ def p_json(f: int, ts: list, i: int):
     if f == 0:
         return None
     f -= 1
-    t = _at(ts, i)
-    tag = _tag(t)
-    if tag == "word":
-        if t[1] == "null":
-            return None, i + 1
-        if t[1] == "true":
-            return True, i + 1
-        if t[1] == "false":
-            return False, i + 1
+    if not limits.enter():
         return None
-    if tag == "num" or tag == "jstr":
-        return t[1], i + 1
-    if t == K.LBK:
-        if _at(ts, i + 1) == K.RBK:
-            return [], i + 2
-        r = _p_json_items(f, ts, i + 1)
-        if r is not None and _at(ts, r[1]) == K.RBK:
-            return r[0], r[1] + 1
+    try:
+        t = _at(ts, i)
+        tag = _tag(t)
+        if tag == "word":
+            if t[1] == "null":
+                return None, i + 1
+            if t[1] == "true":
+                return True, i + 1
+            if t[1] == "false":
+                return False, i + 1
+            return None
+        if tag == "num" or tag == "jstr":
+            return t[1], i + 1
+        if t == K.LBK:
+            if _at(ts, i + 1) == K.RBK:
+                return [], i + 2
+            r = _p_json_items(f, ts, i + 1)
+            if r is not None and _at(ts, r[1]) == K.RBK:
+                return r[0], r[1] + 1
+            return None
+        if t == K.LB:
+            if _at(ts, i + 1) == K.RB:
+                return Obj(), i + 2
+            r = _p_json_entries(f, ts, i + 1)
+            if r is not None and _at(ts, r[1]) == K.RB:
+                return Obj(r[0]), r[1] + 1
+            return None
         return None
-    if t == K.LB:
-        if _at(ts, i + 1) == K.RB:
-            return Obj(), i + 2
-        r = _p_json_entries(f, ts, i + 1)
-        if r is not None and _at(ts, r[1]) == K.RB:
-            return Obj(r[0]), r[1] + 1
-        return None
-    return None
+    finally:
+        limits.leave()
 
 
 def _p_json_items(f: int, ts: list, i: int):
@@ -649,7 +655,10 @@ def p_add(c: Ctx, f: int, ts: list, i: int):
             r = p_mul(c, f, ts, i + 1)
             if r is None:
                 return None
-            acc = [node("-", [close("+", acc), r[0]])]
+            x = limits.shallow(node("-", [close("+", acc), r[0]]))
+            if x is None:
+                return None
+            acc = [x]
             i = r[1]
         elif _tag(t) == "num" and neg_num(t[1]):
             from ..value import num_wf
@@ -662,7 +671,10 @@ def p_add(c: Ctx, f: int, ts: list, i: int):
             r = p_mul(c, f, ts2, i)
             if r is None:
                 return None
-            acc = [node("-", [close("+", acc), r[0]])]
+            x = limits.shallow(node("-", [close("+", acc), r[0]]))
+            if x is None:
+                return None
+            acc = [x]
             i = r[1]
         else:
             return close("+", acc), i
@@ -673,41 +685,49 @@ def p_mul(c: Ctx, f: int, ts: list, i: int):
     if f == 0:
         return None
     f -= 1
-    if _at(ts, i) == K.MINUS:
-        r = p_mul(c, f, ts, i + 1)
-        return None if r is None else (node("-", [r[0]]), r[1])
-    r = p_not(c, f, ts, i)
-    if r is None:
+    if not limits.enter():
         return None
-    acc = [r[0]]
-    i = r[1]
-    while True:
-        if f == 0:
+    try:
+        if _at(ts, i) == K.MINUS:
+            r = p_mul(c, f, ts, i + 1)
+            return None if r is None else (node("-", [r[0]]), r[1])
+        r = p_not(c, f, ts, i)
+        if r is None:
             return None
-        f -= 1
-        t = _at(ts, i)
-        if t == K.CDOT or t == K.TIMES:
-            r = p_not(c, f, ts, i + 1)
-            if r is None:
+        acc = [r[0]]
+        i = r[1]
+        while True:
+            if f == 0:
                 return None
-            acc.append(r[0])
-            i = r[1]
-        elif t == K.SLASH:
-            if c.sf != K.LATEX:
+            f -= 1
+            t = _at(ts, i)
+            if t == K.CDOT or t == K.TIMES:
+                r = p_not(c, f, ts, i + 1)
+                if r is None:
+                    return None
+                acc.append(r[0])
+                i = r[1]
+            elif t == K.SLASH:
+                if c.sf != K.LATEX:
+                    return close("*", acc), i
+                r = p_not(c, f, ts, i + 1)
+                if r is None:
+                    return None
+                x = limits.shallow(node("/", [close("*", acc), r[0]]))
+                if x is None:
+                    return None
+                acc = [x]
+                i = r[1]
+            elif t is not None and atom_start(t) and not neg_tok(t):
+                r = p_not(c, f, ts, i)
+                if r is None:
+                    return None
+                acc.append(r[0])
+                i = r[1]
+            else:
                 return close("*", acc), i
-            r = p_not(c, f, ts, i + 1)
-            if r is None:
-                return None
-            acc = [node("/", [close("*", acc), r[0]])]
-            i = r[1]
-        elif t is not None and atom_start(t) and not neg_tok(t):
-            r = p_not(c, f, ts, i)
-            if r is None:
-                return None
-            acc.append(r[0])
-            i = r[1]
-        else:
-            return close("*", acc), i
+    finally:
+        limits.leave()
 
 
 def p_not(c: Ctx, f: int, ts: list, i: int):
@@ -715,10 +735,15 @@ def p_not(c: Ctx, f: int, ts: list, i: int):
     if f == 0:
         return None
     f -= 1
-    if _at(ts, i) == K.LNOT:
-        r = p_not(c, f, ts, i + 1)
-        return None if r is None else (node("not", [r[0]]), r[1])
-    return p_frac(c, f, ts, i)
+    if not limits.enter():
+        return None
+    try:
+        if _at(ts, i) == K.LNOT:
+            r = p_not(c, f, ts, i + 1)
+            return None if r is None else (node("not", [r[0]]), r[1])
+        return p_frac(c, f, ts, i)
+    finally:
+        limits.leave()
 
 
 def p_frac(c: Ctx, f: int, ts: list, i: int):
@@ -738,7 +763,9 @@ def p_frac(c: Ctx, f: int, ts: list, i: int):
             r = p_pow(c, f, ts, i + 1)
             if r is None:
                 return None
-            x = node("/", [x, r[0]])
+            x = limits.shallow(node("/", [x, r[0]]))
+            if x is None:
+                return None
             i = r[1]
         else:
             return x, i
@@ -1021,11 +1048,27 @@ def _op_allowed(o: str) -> bool:
     return op_ok(o) and o not in REMOVED_SET and o not in DEPRECATED_OPS
 
 
+def _note_removed_op(ts: list, i: int) -> None:
+    """Record a removed operator written in the call or escape form at ``ts[i]``,
+    so a refusal can name it (CONFORMANCE §7.1). Not in Lean, whose reader
+    refuses every bad input alike."""
+    t = _at(ts, i)
+    if t == K.ESMNODE:
+        t = _at(ts, i + 2)
+        if _tag(t) != "txt" or _at(ts, i + 1) is None:
+            return
+    elif _tag(t) not in ("opn", "esc"):
+        return
+    if t[1] in REMOVED_SET:
+        limits.removed_op(t[1])
+
+
 def p_prim(c: Ctx, f: int, ts: list, i: int):
     """``Math.pPrim``: a primary."""
     if f == 0:
         return None
     f -= 1
+    _note_removed_op(ts, i)
     t = _at(ts, i)
     if t is None:
         return None
@@ -1525,29 +1568,34 @@ def _p_cases(c: Ctx, f: int, ts: list, i: int):
     if f == 0:
         return None
     f -= 1
-    r = p_or(c, f, ts, i)
-    if r is None:
+    if not limits.enter():
         return None
-    v, j = r
-    if _at(ts, j) != K.AMP:
-        return None
-    tt = _at(ts, j + 1)
-    if tt == ("txt", "otherwise"):
-        end = K.ECASES if c.sf == K.LATEX else K.RP
-        if _at(ts, j + 2) == end:
-            return v, j + 3
-        return None
-    if tt == ("txt", "if "):
-        r2 = p_or(c, f, ts, j + 2)
-        if r2 is None:
+    try:
+        r = p_or(c, f, ts, i)
+        if r is None:
             return None
-        brk = K.NL if c.sf == K.LATEX else K.COMMA
-        tk = _at(ts, r2[1])
-        if type(tk) is not str or tk != brk:
+        v, j = r
+        if _at(ts, j) != K.AMP:
             return None
-        r3 = _p_cases(c, f, ts, r2[1] + 1)
-        return None if r3 is None else (node("ifelse", [r2[0], v, r3[0]]), r3[1])
-    return None
+        tt = _at(ts, j + 1)
+        if tt == ("txt", "otherwise"):
+            end = K.ECASES if c.sf == K.LATEX else K.RP
+            if _at(ts, j + 2) == end:
+                return v, j + 3
+            return None
+        if tt == ("txt", "if "):
+            r2 = p_or(c, f, ts, j + 2)
+            if r2 is None:
+                return None
+            brk = K.NL if c.sf == K.LATEX else K.COMMA
+            tk = _at(ts, r2[1])
+            if type(tk) is not str or tk != brk:
+                return None
+            r3 = _p_cases(c, f, ts, r2[1] + 1)
+            return None if r3 is None else (node("ifelse", [r2[0], v, r3[0]]), r3[1])
+        return None
+    finally:
+        limits.leave()
 
 
 def _p_esc_args(c: Ctx, f: int, ts: list, i: int):

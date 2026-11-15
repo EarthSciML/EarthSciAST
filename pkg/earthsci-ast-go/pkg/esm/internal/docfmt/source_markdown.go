@@ -148,7 +148,11 @@ func mdFlow(v Json, out []rune) []rune {
 }
 
 // mdPFlow is `Md.pFlow`: a flow collection at `[` or `{`, else a scalar.
-func mdPFlow(s []rune) (Json, []rune, bool) {
+func mdPFlow(lim *Lim, s []rune) (Json, []rune, bool) {
+	if !lim.enter() {
+		return nil, nil, false
+	}
+	defer lim.leave()
 	if len(s) == 0 {
 		return nil, nil, false
 	}
@@ -158,11 +162,11 @@ func mdPFlow(s []rune) (Json, []rune, bool) {
 		if len(r) > 0 && r[0] == ']' {
 			return []Json{}, r[1:], true
 		}
-		x, r1, ok := mdPFlow(r)
+		x, r1, ok := mdPFlow(lim, r)
 		if !ok {
 			return nil, nil, false
 		}
-		xs, r2, ok := mdPItemsF(r1)
+		xs, r2, ok := mdPItemsF(lim, r1)
 		if !ok {
 			return nil, nil, false
 		}
@@ -172,11 +176,11 @@ func mdPFlow(s []rune) (Json, []rune, bool) {
 		if len(r) > 0 && r[0] == '}' {
 			return Obj{}, r[1:], true
 		}
-		e, r1, ok := mdPEntryF(r)
+		e, r1, ok := mdPEntryF(lim, r)
 		if !ok {
 			return nil, nil, false
 		}
-		es, r2, ok := mdPEntriesF(r1)
+		es, r2, ok := mdPEntriesF(lim, r1)
 		if !ok {
 			return nil, nil, false
 		}
@@ -187,7 +191,7 @@ func mdPFlow(s []rune) (Json, []rune, bool) {
 
 // mdPItemsF is `Md.pItemsF`: the elements after the first, each after `, `,
 // up to `]`.
-func mdPItemsF(s []rune) ([]Json, []rune, bool) {
+func mdPItemsF(lim *Lim, s []rune) ([]Json, []rune, bool) {
 	var out []Json
 	for {
 		if len(s) > 0 && s[0] == ']' {
@@ -196,7 +200,7 @@ func mdPItemsF(s []rune) ([]Json, []rune, bool) {
 		if !hasPrefix(s, ", ") {
 			return nil, nil, false
 		}
-		x, r1, ok := mdPFlow(s[2:])
+		x, r1, ok := mdPFlow(lim, s[2:])
 		if !ok {
 			return nil, nil, false
 		}
@@ -206,12 +210,12 @@ func mdPItemsF(s []rune) ([]Json, []rune, bool) {
 }
 
 // mdPEntryF is `Md.pEntryF`: one entry, `key: value`.
-func mdPEntryF(s []rune) (KV, []rune, bool) {
+func mdPEntryF(lim *Lim, s []rune) (KV, []rune, bool) {
 	k, r, ok := strParseKey(false, yamlReserved, s)
 	if !ok || !hasPrefix(r, ": ") {
 		return KV{}, nil, false
 	}
-	v, r1, ok := mdPFlow(r[2:])
+	v, r1, ok := mdPFlow(lim, r[2:])
 	if !ok {
 		return KV{}, nil, false
 	}
@@ -220,7 +224,7 @@ func mdPEntryF(s []rune) (KV, []rune, bool) {
 
 // mdPEntriesF is `Md.pEntriesF`: the entries after the first, each after `, `,
 // up to `}`.
-func mdPEntriesF(s []rune) (Obj, []rune, bool) {
+func mdPEntriesF(lim *Lim, s []rune) (Obj, []rune, bool) {
 	var out Obj
 	for {
 		if len(s) > 0 && s[0] == '}' {
@@ -229,7 +233,7 @@ func mdPEntriesF(s []rune) (Obj, []rune, bool) {
 		if !hasPrefix(s, ", ") {
 			return nil, nil, false
 		}
-		e, r1, ok := mdPEntryF(s[2:])
+		e, r1, ok := mdPEntryF(lim, s[2:])
 		if !ok {
 			return nil, nil, false
 		}
@@ -322,13 +326,13 @@ func mdDeclMd(d *Decl) []rune {
 }
 
 // mdPQuoted is `Md.pQuoted`: a single-quoted value after its opening quote.
-func mdPQuoted(u []rune) (Json, []rune, bool) {
+func mdPQuoted(lim *Lim, u []rune) (Json, []rune, bool) {
 	inner, r := textTakeWhile(u, func(c rune) bool { return c != '\'' })
 	if len(r) == 0 {
 		return nil, nil, false
 	}
 	y := mdSqUnesc(inner)
-	v, rest, ok := mdPFlow(y)
+	v, rest, ok := mdPFlow(lim, y)
 	if !ok || len(rest) != 0 {
 		return nil, nil, false
 	}
@@ -336,21 +340,21 @@ func mdPQuoted(u []rune) (Json, []rune, bool) {
 }
 
 // mdPAttr is `Md.pAttr`: one attribute.
-func mdPAttr(s []rune) (KV, []rune, bool) {
+func mdPAttr(lim *Lim, s []rune) (KV, []rune, bool) {
 	id, rest := strReadIdent(s)
 	if !strIsIdent(id) {
 		return KV{}, nil, false
 	}
 	k := string(id)
 	if u, ok := cutPrefix(rest, "='"); ok {
-		v, r, ok := mdPQuoted(u)
+		v, r, ok := mdPQuoted(lim, u)
 		if !ok {
 			return KV{}, nil, false
 		}
 		return KV{k, v}, r, true
 	}
 	if len(rest) > 0 && rest[0] == '=' {
-		v, r, ok := mdPFlow(rest[1:])
+		v, r, ok := mdPFlow(lim, rest[1:])
 		if !ok {
 			return KV{}, nil, false
 		}
@@ -361,7 +365,7 @@ func mdPAttr(s []rune) (KV, []rune, bool) {
 
 // mdPAttrsMore is `Md.pAttrsMore`: the attributes after the first, each after
 // a space, up to the closing brace.
-func mdPAttrsMore(s []rune) (Obj, []rune, bool) {
+func mdPAttrsMore(lim *Lim, s []rune) (Obj, []rune, bool) {
 	var out Obj
 	for {
 		if len(s) == 0 {
@@ -371,7 +375,7 @@ func mdPAttrsMore(s []rune) (Obj, []rune, bool) {
 		case '}':
 			return out, s[1:], true
 		case ' ':
-			a, r1, ok := mdPAttr(s[1:])
+			a, r1, ok := mdPAttr(lim, s[1:])
 			if !ok {
 				return nil, nil, false
 			}
@@ -385,15 +389,15 @@ func mdPAttrsMore(s []rune) (Obj, []rune, bool) {
 
 // mdPAttrs is `Md.pAttrs`: the attributes after the opening brace, up to the
 // closing one.
-func mdPAttrs(s []rune) (Obj, []rune, bool) {
+func mdPAttrs(lim *Lim, s []rune) (Obj, []rune, bool) {
 	if len(s) > 0 && s[0] == '}' {
 		return Obj{}, s[1:], true
 	}
-	a, r, ok := mdPAttr(s)
+	a, r, ok := mdPAttr(lim, s)
 	if !ok {
 		return nil, nil, false
 	}
-	as, r1, ok := mdPAttrsMore(r)
+	as, r1, ok := mdPAttrsMore(lim, r)
 	if !ok {
 		return nil, nil, false
 	}
@@ -401,7 +405,7 @@ func mdPAttrs(s []rune) (Obj, []rune, bool) {
 }
 
 // mdDeclBody is `Md.declBody`: a declaration after its `[`.
-func mdDeclBody(k DKind, s []rune) (RItem, []rune, bool) {
+func mdDeclBody(lim *Lim, k DKind, s []rune) (RItem, []rune, bool) {
 	if len(s) == 0 || s[0] != '$' {
 		return RItem{}, nil, false
 	}
@@ -410,12 +414,12 @@ func mdDeclBody(k DKind, s []rune) (RItem, []rune, bool) {
 	if !ok {
 		return RItem{}, nil, false
 	}
-	v, ok := mathParseLatex(symEmpty, string(name))
+	v, ok := mathParseLatex(lim, symEmpty, string(name))
 	n, isStr := v.(string)
 	if !ok || !isStr {
 		return RItem{}, nil, false
 	}
-	a, r, ok := mdPAttrs(u)
+	a, r, ok := mdPAttrs(lim, u)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -426,7 +430,7 @@ func mdDeclBody(k DKind, s []rune) (RItem, []rune, bool) {
 
 // mdFenceItem is `Md.fenceItem`: a fenced block's construct, from its info
 // string and body.
-func mdFenceItem(info, body []rune) (RItem, bool) {
+func mdFenceItem(lim *Lim, info, body []rune) (RItem, bool) {
 	if string(info) == mdDescInfo {
 		b, ok := cutTrailingNewline(body)
 		if !ok {
@@ -438,7 +442,7 @@ func mdFenceItem(info, body []rune) (RItem, bool) {
 	if !ok {
 		return RItem{}, false
 	}
-	v, ok := yamlDecode(body)
+	v, ok := yamlDecode(lim, body)
 	if !ok {
 		return RItem{}, false
 	}
@@ -459,13 +463,13 @@ func mdLabelOk(sl []rune) bool {
 }
 
 // mdFenceAt is `Md.fenceAt`: a fenced block after "```esm:".
-func mdFenceAt(u []rune) (RItem, []rune, bool) {
+func mdFenceAt(lim *Lim, u []rune) (RItem, []rune, bool) {
 	info, after := textSplitLine(u)
 	body, sl, rest, ok := textUntilStop(mdFenceR, after)
 	if !ok || !textBlank(sl) {
 		return RItem{}, nil, false
 	}
-	it, ok := mdFenceItem(info, body)
+	it, ok := mdFenceItem(lim, info, body)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -519,9 +523,9 @@ func mdTmRaw(t *Tm[string]) []rune {
 }
 
 // mdPName is `Md.pName`: one parameter, up to the next `,` or `)`.
-func mdPName(s []rune) (string, []rune, bool) {
+func mdPName(lim *Lim, s []rune) (string, []rune, bool) {
 	a, rest := textTakeWhile(s, func(c rune) bool { return c != ',' && c != ')' })
-	v, ok := mathParseLatex(symEmpty, string(a))
+	v, ok := mathParseLatex(lim, symEmpty, string(a))
 	n, isStr := v.(string)
 	if !ok || !isStr {
 		return "", nil, false
@@ -530,13 +534,13 @@ func mdPName(s []rune) (string, []rune, bool) {
 }
 
 // mdPParams is `Md.pParams`: the parameters after `(`, up to `) \coloneqq `.
-func mdPParams(s []rune) ([]string, []rune, bool) {
+func mdPParams(lim *Lim, s []rune) ([]string, []rune, bool) {
 	out := []string{}
 	for {
 		if r, ok := textAfterS(mdTmDef, s); ok {
 			return out, r, true
 		}
-		n, r, ok := mdPName(s)
+		n, r, ok := mdPName(lim, s)
 		if !ok {
 			return nil, nil, false
 		}
@@ -575,7 +579,7 @@ type TmLex struct {
 
 // mdTmLex is `Md.tmLex`: read the math text of a display as a template or
 // rule.
-func mdTmLex(raw []rune) (TmLex, bool) {
+func mdTmLex(lim *Lim, raw []rune) (TmLex, bool) {
 	if u, ok := textAfterS(mdRuleHeadL, raw); ok {
 		nm, u1, ok := prRawB(0, u)
 		if !ok {
@@ -599,7 +603,7 @@ func mdTmLex(raw []rune) (TmLex, bool) {
 	if !ok || len(u1) == 0 || u1[0] != '(' {
 		return TmLex{}, false
 	}
-	ps, b, ok := mdPParams(u1[1:])
+	ps, b, ok := mdPParams(lim, u1[1:])
 	if !ok {
 		return TmLex{}, false
 	}
@@ -609,7 +613,7 @@ func mdTmLex(raw []rune) (TmLex, bool) {
 // mdMathAt is `Md.mathAt`: a display after its opening `$$`: a template or
 // rule when its math reads as one, otherwise an equation (optionally
 // labelled).
-func mdMathAt(u []rune) (RItem, []rune, bool) {
+func mdMathAt(lim *Lim, u []rune) (RItem, []rune, bool) {
 	first, after := textSplitLine(u)
 	if !textBlank(first) {
 		return RItem{}, nil, false
@@ -622,7 +626,7 @@ func mdMathAt(u []rune) (RItem, []rune, bool) {
 	if !ok {
 		return RItem{}, nil, false
 	}
-	if tl, ok := mdTmLex(b); ok {
+	if tl, ok := mdTmLex(lim, b); ok {
 		if !textBlank(sl) {
 			return RItem{}, nil, false
 		}
@@ -640,8 +644,8 @@ func mdMathAt(u []rune) (RItem, []rune, bool) {
 
 // mdTmContAt is `Md.tmContAt`: a template or rule with other fields, after
 // `:::template{` or `:::rule{`.
-func mdTmContAt(u []rune) (RItem, []rune, bool) {
-	as, r, ok := mdPAttrs(u)
+func mdTmContAt(lim *Lim, u []rune) (RItem, []rune, bool) {
+	as, r, ok := mdPAttrs(lim, u)
 	if !ok || len(r) == 0 || r[0] != '\n' {
 		return RItem{}, nil, false
 	}
@@ -649,7 +653,7 @@ func mdTmContAt(u []rune) (RItem, []rune, bool) {
 	if !textPreS(mdDD, r1) {
 		return RItem{}, nil, false
 	}
-	it, r2, ok := mdMathAt(r1[2:])
+	it, r2, ok := mdMathAt(lim, r1[2:])
 	if !ok || it.K != RITm {
 		return RItem{}, nil, false
 	}
@@ -678,7 +682,7 @@ func mdDirAt(k Kind, u []rune) (RItem, []rune, bool) {
 
 // mdLatexR is `Md.latexR`: LaTeX under the empty symbol table.
 var mdLatexR = &RSurf{
-	pm:    func(s string) (Json, bool) { return mathParseLatex(symEmpty, s) },
+	pm:    func(lim *Lim, s string) (Json, bool) { return mathParseLatex(lim, symEmpty, s) },
 	prm:   func(j Json) []rune { return []rune(mathPrintLatex(symEmpty, j)) },
 	empty: []rune("\\varnothing"),
 }
@@ -707,8 +711,8 @@ func mdRxnBody(x *Rxn[string]) []rune {
 }
 
 // mdRxnAt is `Md.rxnAt`: a reaction line after its `$$\ce{`.
-func mdRxnAt(u []rune) (RItem, []rune, bool) {
-	subs, hs, u1, ok := rxnPSide(mdLatexR, u)
+func mdRxnAt(lim *Lim, u []rune) (RItem, []rune, bool) {
+	subs, hs, u1, ok := rxnPSide(lim, mdLatexR, u)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -724,7 +728,7 @@ func mdRxnAt(u []rune) (RItem, []rune, bool) {
 	if !ok {
 		return RItem{}, nil, false
 	}
-	prods, hp, u4, ok := rxnPSide(mdLatexR, u3)
+	prods, hp, u4, ok := rxnPSide(lim, mdLatexR, u3)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -733,7 +737,7 @@ func mdRxnAt(u []rune) (RItem, []rune, bool) {
 		return RItem{}, nil, false
 	}
 	id, u5b := textTakeWhile(u5, rxnIdChar)
-	attrs, u6, ok := mdPAttrsMore(u5b)
+	attrs, u6, ok := mdPAttrsMore(lim, u5b)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -748,13 +752,13 @@ func mdRxnAt(u []rune) (RItem, []rune, bool) {
 }
 
 // mdSubAt is `Md.subAt`: a subsystem directive after its `::subsystem[`.
-func mdSubAt(u []rune) (RItem, []rune, bool) {
+func mdSubAt(lim *Lim, u []rune) (RItem, []rune, bool) {
 	name, rest := textTakeWhile(u, func(c rune) bool { return c != ']' && c != '\n' })
 	v, ok := cutPrefix(rest, "]{")
 	if !ok {
 		return RItem{}, nil, false
 	}
-	a, r, ok := mdPAttrs(v)
+	a, r, ok := mdPAttrs(lim, v)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -766,8 +770,8 @@ func mdSubAt(u []rune) (RItem, []rune, bool) {
 }
 
 // mdPlotAt is `Md.plotAt`: a plot directive after its `::plot{`.
-func mdPlotAt(u []rune) (RItem, []rune, bool) {
-	a, r, ok := mdPAttrs(u)
+func mdPlotAt(lim *Lim, u []rune) (RItem, []rune, bool) {
+	a, r, ok := mdPAttrs(lim, u)
 	if !ok {
 		return RItem{}, nil, false
 	}
@@ -782,7 +786,7 @@ func mdPlotAt(u []rune) (RItem, []rune, bool) {
 
 // mdContBody is `Md.contBody`: the displays of a container, up to its closing
 // `:::` line; blank lines between them are skipped.
-func mdContBody(ro Role, s []rune) ([]RItem, []rune, bool) {
+func mdContBody(lim *Lim, ro Role, s []rune) ([]RItem, []rune, bool) {
 	var out []RItem
 	for {
 		switch {
@@ -793,7 +797,7 @@ func mdContBody(ro Role, s []rune) ([]RItem, []rune, bool) {
 			}
 			return out, r, true
 		case textPreS(mdDD, s):
-			it, r, ok := mdMathAt(s[2:])
+			it, r, ok := mdMathAt(lim, s[2:])
 			if !ok || it.K != RIEqn {
 				return nil, nil, false
 			}
@@ -811,7 +815,7 @@ func mdContBody(ro Role, s []rune) ([]RItem, []rune, bool) {
 func mdContOpen(s []rune) bool { return textPreS(mdDInit, s) || textPreS(mdDCons, s) }
 
 // mdContAt is `Md.contAt`: a container, at its opening line.
-func mdContAt(s []rune) ([]RItem, []rune, bool) {
+func mdContAt(lim *Lim, s []rune) ([]RItem, []rune, bool) {
 	ro, n := RoleCons, len(mdDCons)
 	if textPreS(mdDInit, s) {
 		ro, n = RoleInit, len(mdDInit)
@@ -820,7 +824,7 @@ func mdContAt(s []rune) ([]RItem, []rune, bool) {
 	if !textBlank(l) {
 		return nil, nil, false
 	}
-	return mdContBody(ro, r)
+	return mdContBody(lim, ro, r)
 }
 
 // ## The lexer
@@ -851,37 +855,37 @@ func mdDeclOpen(s []rune) bool {
 }
 
 // mdBlockAt is `Md.blockAt`: read the block construct that starts here.
-func mdBlockAt(s []rune) (RItem, []rune, bool) {
+func mdBlockAt(lim *Lim, s []rune) (RItem, []rune, bool) {
 	switch {
 	case textPreS(mdFenceEsm, s):
-		return mdFenceAt(dropN(s, 7))
+		return mdFenceAt(lim, dropN(s, 7))
 	case textPreS(mdDRxn, s):
-		return mdRxnAt(dropN(s, 6))
+		return mdRxnAt(lim, dropN(s, 6))
 	case textPreS(mdDD, s):
-		return mdMathAt(dropN(s, 2))
+		return mdMathAt(lim, dropN(s, 2))
 	case textPreS(mdDModel, s):
 		return mdDirAt(KindModel, dropN(s, 8))
 	case textPreS(mdDPlot, s):
-		return mdPlotAt(dropN(s, 7))
+		return mdPlotAt(lim, dropN(s, 7))
 	case textPreS(mdDSub, s):
-		return mdSubAt(dropN(s, 12))
+		return mdSubAt(lim, dropN(s, 12))
 	case textPreS(mdDTmpl, s):
-		return mdTmContAt(dropN(s, 12))
+		return mdTmContAt(lim, dropN(s, 12))
 	case textPreS(mdDRuleC, s):
-		return mdTmContAt(dropN(s, 8))
+		return mdTmContAt(lim, dropN(s, 8))
 	}
 	return mdDirAt(KindRs, dropN(s, 18))
 }
 
 // mdDeclAt is `Md.declAt`: read the declaration that starts here.
-func mdDeclAt(s []rune) (RItem, []rune, bool) {
+func mdDeclAt(lim *Lim, s []rune) (RItem, []rune, bool) {
 	switch {
 	case textPreS(":var[", s):
-		return mdDeclBody(DKVar, dropN(s, 5))
+		return mdDeclBody(lim, DKVar, dropN(s, 5))
 	case textPreS(":param[", s):
-		return mdDeclBody(DKParam, dropN(s, 7))
+		return mdDeclBody(lim, DKParam, dropN(s, 7))
 	}
-	return mdDeclBody(DKSpecies, dropN(s, 9))
+	return mdDeclBody(lim, DKSpecies, dropN(s, 9))
 }
 
 // ## The declarations table (an accepted input variant)
@@ -945,12 +949,12 @@ func mdPCols(s []rune) ([]string, []rune, bool) {
 }
 
 // mdPCell is `Md.pCell`: ` value |`, or ` |` when the attribute is absent.
-func mdPCell(s []rune) (Json, bool, []rune, bool) {
+func mdPCell(lim *Lim, s []rune) (Json, bool, []rune, bool) {
 	if r, ok := cutPrefix(s, " |"); ok {
 		return nil, false, r, true
 	}
 	if len(s) > 0 && s[0] == ' ' {
-		v, r, ok := mdPFlow(s[1:])
+		v, r, ok := mdPFlow(lim, s[1:])
 		if !ok {
 			return nil, false, nil, false
 		}
@@ -964,10 +968,10 @@ func mdPCell(s []rune) (Json, bool, []rune, bool) {
 }
 
 // mdPCells is `Md.pCells`: the cells of a row, one per attribute column.
-func mdPCells(cols []string, s []rune) (Obj, []rune, bool) {
+func mdPCells(lim *Lim, cols []string, s []rune) (Obj, []rune, bool) {
 	out := Obj{}
 	for _, k := range cols {
-		v, has, r, ok := mdPCell(s)
+		v, has, r, ok := mdPCell(lim, s)
 		if !ok {
 			return nil, nil, false
 		}
@@ -995,7 +999,7 @@ func mdKindOf(w []rune) (DKind, bool) {
 }
 
 // mdPRow is `Md.pRow`: `| var | $N$ |` and the cells, then a newline.
-func mdPRow(cols []string, s []rune) (Decl, []rune, bool) {
+func mdPRow(lim *Lim, cols []string, s []rune) (Decl, []rune, bool) {
 	r, ok := cutPrefix(s, "| ")
 	if !ok {
 		return Decl{}, nil, false
@@ -1014,12 +1018,12 @@ func mdPRow(cols []string, s []rune) (Decl, []rune, bool) {
 	if !ok {
 		return Decl{}, nil, false
 	}
-	j, ok := mathParseLatex(symEmpty, string(name))
+	j, ok := mathParseLatex(lim, symEmpty, string(name))
 	n, isStr := j.(string)
 	if !ok || !isStr {
 		return Decl{}, nil, false
 	}
-	a, r1, ok := mdPCells(cols, v)
+	a, r1, ok := mdPCells(lim, cols, v)
 	if !ok || len(r1) == 0 || r1[0] != '\n' {
 		return Decl{}, nil, false
 	}
@@ -1027,10 +1031,10 @@ func mdPRow(cols []string, s []rune) (Decl, []rune, bool) {
 }
 
 // mdPRows is `Md.pRows`: the rows, as long as lines start with `| `.
-func mdPRows(cols []string, s []rune) ([]Decl, []rune, bool) {
+func mdPRows(lim *Lim, cols []string, s []rune) ([]Decl, []rune, bool) {
 	var out []Decl
 	for textPreS("| ", s) {
-		d, r, ok := mdPRow(cols, s)
+		d, r, ok := mdPRow(lim, cols, s)
 		if !ok {
 			return nil, nil, false
 		}
@@ -1051,7 +1055,7 @@ func mdSepOk(l []rune) bool {
 }
 
 // mdTableAt is `Md.tableAt`: a declarations table, at its `| decl | name |`.
-func mdTableAt(s []rune) ([]RItem, []rune, bool) {
+func mdTableAt(lim *Lim, s []rune) ([]RItem, []rune, bool) {
 	cols, r, ok := mdPCols(dropN(s, len(mdTableOpen)))
 	if !ok {
 		return nil, nil, false
@@ -1060,7 +1064,7 @@ func mdTableAt(s []rune) ([]RItem, []rune, bool) {
 	if !mdSepOk(l) {
 		return nil, nil, false
 	}
-	ds, r2, ok := mdPRows(cols, r1)
+	ds, r2, ok := mdPRows(lim, cols, r1)
 	if !ok {
 		return nil, nil, false
 	}
@@ -1105,34 +1109,34 @@ func mdSkipCode(s []rune) []rune {
 
 // mdLex is `Md.lex`: the constructs of a text, skipping prose one character
 // at a time and code spans whole. A malformed construct is an error.
-func mdLex(bol bool, s []rune) ([]RItem, bool) {
+func mdLex(lim *Lim, bol bool, s []rune) ([]RItem, bool) {
 	var out []RItem
 	for len(s) > 0 {
 		c := s[0]
 		switch {
 		case bol && mdBlockOpen(s):
-			it, rest, ok := mdBlockAt(s)
+			it, rest, ok := mdBlockAt(lim, s)
 			if !ok {
 				return nil, false
 			}
 			out = append(out, it)
 			s, bol = rest, true
 		case mdDeclOpen(s):
-			it, rest, ok := mdDeclAt(s)
+			it, rest, ok := mdDeclAt(lim, s)
 			if !ok {
 				return nil, false
 			}
 			out = append(out, it)
 			s, bol = rest, false
 		case bol && textPreS(mdTableOpen, s):
-			its, rest, ok := mdTableAt(s)
+			its, rest, ok := mdTableAt(lim, s)
 			if !ok {
 				return nil, false
 			}
 			out = append(out, its...)
 			s, bol = rest, true
 		case bol && mdContOpen(s):
-			its, rest, ok := mdContAt(s)
+			its, rest, ok := mdContAt(lim, s)
 			if !ok {
 				return nil, false
 			}
@@ -1371,7 +1375,7 @@ func withNl(s string) []rune {
 
 // mdItemOk is `Md.itemOK`: what each construct's content must satisfy for its
 // text to read back.
-func mdItemOk(it *RItem) bool {
+func mdItemOk(lim *Lim, it *RItem) bool {
 	switch it.K {
 	case RIDesc:
 		return textNoStop(mdFenceR, withNl(it.S))
@@ -1391,7 +1395,7 @@ func mdItemOk(it *RItem) bool {
 		if !textNoStop(mdDDR, withNl(it.S)) {
 			return false
 		}
-		_, ok := mdTmLex([]rune(it.S))
+		_, ok := mdTmLex(lim, []rune(it.S))
 		return !ok
 	case RIRxn:
 		return mdRxnOk(&it.Rxn)
@@ -1409,7 +1413,7 @@ func mdItemOk(it *RItem) bool {
 		if !textNoStop(mdDDR, rn) || containsRune(raw, '\n') {
 			return false
 		}
-		tl, ok := mdTmLex(raw)
+		tl, ok := mdTmLex(lim, raw)
 		if !ok || tl.Name != t.Name || tl.HasLhs != t.HasLhs || string(tl.Body) != t.Body ||
 			(t.HasLhs && string(tl.Lhs) != t.Lhs) || !stringsEqual(tl.Params, t.Params) {
 			return false

@@ -15,7 +15,7 @@ import "slices"
 // RSurf is `Source.RSurf`: how a math piece prints and reads back (under the
 // empty symbol table), and the content of the empty-set piece.
 type RSurf struct {
-	pm    func(string) (Json, bool)
+	pm    func(*Lim, string) (Json, bool)
 	prm   func(Json) []rune
 	empty []rune
 }
@@ -128,13 +128,13 @@ func rxnPPiece(t []rune) ([]rune, []rune, bool) {
 
 // rxnPSpecies is `Source.pSpecies`: a math piece holding a name, or a bare run
 // of letters and digits.
-func rxnPSpecies(r *RSurf, s []rune) (string, []rune, bool) {
+func rxnPSpecies(lim *Lim, r *RSurf, s []rune) (string, []rune, bool) {
 	if len(s) > 0 && s[0] == '$' {
 		p, rest, ok := rxnPPiece(s[1:])
 		if !ok {
 			return "", nil, false
 		}
-		v, ok := r.pm(string(p))
+		v, ok := r.pm(lim, string(p))
 		n, isStr := v.(string)
 		if !ok || !isStr {
 			return "", nil, false
@@ -149,13 +149,13 @@ func rxnPSpecies(r *RSurf, s []rune) (string, []rune, bool) {
 }
 
 // rxnPTerm is `Source.pTerm`.
-func rxnPTerm(r *RSurf, s []rune) (Term, []rune, bool) {
+func rxnPTerm(lim *Lim, r *RSurf, s []rune) (Term, []rune, bool) {
 	if len(s) > 0 && s[0] == '$' {
 		p, rest, ok := rxnPPiece(s[1:])
 		if !ok {
 			return Term{}, nil, false
 		}
-		v, ok := r.pm(string(p))
+		v, ok := r.pm(lim, string(p))
 		if !ok {
 			return Term{}, nil, false
 		}
@@ -164,7 +164,7 @@ func rxnPTerm(r *RSurf, s []rune) (Term, []rune, bool) {
 			if len(rest) == 0 || rest[0] != ' ' {
 				return Term{}, nil, false
 			}
-			n, r3, ok := rxnPSpecies(r, rest[1:])
+			n, r3, ok := rxnPSpecies(lim, r, rest[1:])
 			if !ok {
 				return Term{}, nil, false
 			}
@@ -174,7 +174,7 @@ func rxnPTerm(r *RSurf, s []rune) (Term, []rune, bool) {
 		}
 		return Term{}, nil, false
 	}
-	n, r2, ok := rxnPSpecies(r, s)
+	n, r2, ok := rxnPSpecies(lim, r, s)
 	if !ok {
 		return Term{}, nil, false
 	}
@@ -182,10 +182,10 @@ func rxnPTerm(r *RSurf, s []rune) (Term, []rune, bool) {
 }
 
 // rxnPTerms is `Source.pTerms`: terms separated by ` + `.
-func rxnPTerms(r *RSurf, s []rune) ([]Term, []rune, bool) {
+func rxnPTerms(lim *Lim, r *RSurf, s []rune) ([]Term, []rune, bool) {
 	var out []Term
 	for {
-		t, rest, ok := rxnPTerm(r, s)
+		t, rest, ok := rxnPTerm(lim, r, s)
 		if !ok {
 			return nil, nil, false
 		}
@@ -199,7 +199,7 @@ func rxnPTerms(r *RSurf, s []rune) ([]Term, []rune, bool) {
 }
 
 // rxnPSide is `Source.pSide`: the empty-set piece (has false), or terms.
-func rxnPSide(r *RSurf, s []rune) (ts []Term, has bool, rest []rune, ok bool) {
+func rxnPSide(lim *Lim, r *RSurf, s []rune) (ts []Term, has bool, rest []rune, ok bool) {
 	if len(s) > 0 && s[0] == '$' {
 		p, rest, ok := rxnPPiece(s[1:])
 		if !ok {
@@ -209,7 +209,7 @@ func rxnPSide(r *RSurf, s []rune) (ts []Term, has bool, rest []rune, ok bool) {
 			return nil, false, rest, true
 		}
 	}
-	ts, r2, ok := rxnPTerms(r, s)
+	ts, r2, ok := rxnPTerms(lim, r, s)
 	if !ok {
 		return nil, false, nil, false
 	}

@@ -7,7 +7,7 @@ import (
 
 func yamlRt(t *testing.T, text string) string {
 	t.Helper()
-	v, ok := yamlDecode([]rune(text))
+	v, ok := yamlDecode(&Lim{}, []rune(text))
 	if !ok {
 		t.Fatalf("does not decode: %q", text)
 	}
@@ -30,7 +30,7 @@ func TestYamlRoundTrips(t *testing.T) {
 
 func TestYamlRefusals(t *testing.T) {
 	for _, text := range []string{"a: 1\na: 2\n", "yes: 1\n", "a: 01\n", "a:  1\n", "a: 1"} {
-		if _, ok := yamlDecode([]rune(text)); ok {
+		if _, ok := yamlDecode(&Lim{}, []rune(text)); ok {
 			t.Errorf("%q decodes", text)
 		}
 	}
@@ -43,7 +43,7 @@ func TestYamlLongKeyExplicitForm(t *testing.T) {
 	if want := "a:\n  ? \"" + k + "\"\n  : 1\n"; text != want {
 		t.Fatalf("got %q", text)
 	}
-	back, ok := yamlDecode([]rune(text))
+	back, ok := yamlDecode(&Lim{}, []rune(text))
 	if !ok || !JsonEqual(back, v) {
 		t.Fatalf("read back %v %v", back, ok)
 	}

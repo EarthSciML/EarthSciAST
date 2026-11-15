@@ -22,6 +22,7 @@ module DYaml
 
 using ..DJson
 import ..DNumber
+using ..DLimits: nested
 using ..DStrings: is_ident_start, parse_key, parse_quoted, print_key, quote_str, spaces
 
 """`Yaml.specialWords`."""
@@ -229,7 +230,10 @@ function p_items(m::Int, input::Chars)
 end
 
 """`Yaml.pItemBody`: after the `-` of an element at indentation `m`."""
-function p_item_body(m::Int, input::Chars)
+p_item_body(m::Int, input::Chars) = nested(_p_item_body, m, input)
+
+# The body of `p_item_body`, with its construct open (Rust `Nest::enter`).
+function _p_item_body(m::Int, input::Chars)
     c = at(input)
     if c == '\n'
         x = p_items(m + 2, drop(input))
@@ -275,7 +279,10 @@ end
 
 """`Yaml.pValBody`: after the `:` of an entry whose key is at indentation
 `m`."""
-function p_val_body(m::Int, input::Chars)
+p_val_body(m::Int, input::Chars) = nested(_p_val_body, m, input)
+
+# The body of `p_val_body`, with its construct open (Rust `Nest::enter`).
+function _p_val_body(m::Int, input::Chars)
     c = at(input)
     if c == ' '
         return p_scalar_line(drop(input))

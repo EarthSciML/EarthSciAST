@@ -140,11 +140,15 @@ end
 `Some(z)`, with `z` `nothing` when the integer does not fit in `Int128` (so
 certainly not in `Int64`)."""
 function dec_int(neg::Bool, ds, e10::Integer)
-    len = length(ds)
-    len <= e10 + 1 || return nothing
-    zeros = e10 + 1 - len
+    # In `Int128`, where `e10 + 1 - len` cannot overflow for any `Int64`
+    # exponent and any digit list that fits in memory.
+    zeros = Int128(e10) + 1 - length(ds)
+    zeros < 0 && return nothing
     v = digits_val(ds)
     v === nothing && return Some(nothing)
+    v == 0 && return Some(Int128(0))
+    # `10^39` is no `Int128`, and `v` is at least 1.
+    zeros > 38 && return Some(nothing)
     m = v
     for _ in 1:zeros
         m, o = Base.Checked.mul_with_overflow(m, Int128(10))
@@ -264,17 +268,42 @@ function from_value(v)
     throw(ArgumentError("not a JSON value: $(typeof(v))"))
 end
 
+"""A decimal beyond the binary64 range, which no decoded JSON value holds;
+[`to_value`](@ref) throws it."""
+struct OutOfRange <: Exception
+    n::JNum
+end
+
+"""The binary64 value nearest to a decimal, as a JSON reader reads its
+canonical spelling: `nothing` beyond the binary64 range (`1.0e400`), which has
+no nearest finite value, and the canonical zero, the integer `0`, below the
+smallest subnormal (`1.0e-400`), as every binding's JSON reader rounds it and
+`canonicalize_document` makes a JSON `1e-400`."""
+function dec_value(n::JDec)
+    f = tryparse(Float64, String(print_number(n)))
+    # The canonical spelling is always a valid literal: `tryparse` refuses it
+    # only when it rounds to zero or past the largest finite value.
+    f === nothing && return n.e10 < 0 ? Int64(0) : nothing
+    isfinite(f) || return nothing
+    return f == 0.0 ? Int64(0) : f
+end
+
 """A document value as the binding's decoded JSON (`OrderedDict{String, Any}`,
 `Vector{Any}`, `String`, `Int64`/`Float64`, `Bool`, `nothing`). An integer
 outside `Int64` and a decimal become `Float64`, as the canonical form reads
-them."""
+them ([`dec_value`](@ref)); a decimal beyond the binary64 range throws
+[`OutOfRange`](@ref)."""
 function to_value(j)
     j isa JNull && return nothing
     j isa Bool && return j
     if j isa JInt
         return in_int64(j.z) ? Int64(j.z) : Float64(j.z)
     end
-    j isa JDec && return parse(Float64, String(print_number(j)))
+    if j isa JDec
+        v = dec_value(j)
+        v === nothing && throw(OutOfRange(j))
+        return v
+    end
     j isa String && return j
     j isa JArr && return Any[to_value(x) for x in j.xs]
     if j isa JObj

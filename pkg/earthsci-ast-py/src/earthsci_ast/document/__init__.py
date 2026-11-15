@@ -35,7 +35,9 @@ from typing import Any
 
 from ..errors import ParseError
 from . import math as _math
-from .math.expr import REMOVED_OPS, Sym
+from . import limits
+from .math.expr import Sym
+from .number import print_num
 from .source.markdown import parse_md, print_md
 from .source.typst import parse_typ, print_typ
 from .value import MISSING, Obj, from_plain, look, sort_obj, to_plain
@@ -60,16 +62,24 @@ class DocumentFormat(str, Enum):
     TYPST = "typst"
 
 
-#: The recursive readers spend about ten Python frames per nesting level of an
-#: expression (one per precedence level), so the interpreter's default limit of
-#: 1000 caps a readable expression near 90 levels. The limit is raised to this
-#: floor (never lowered), which every document of the corpus is far below.
-_RECURSION_FLOOR = 10000
+#: The Python frames a read may need above its caller. The readers hold at most
+#: ``limits.MAX_NESTING`` constructs open, and the deepest text they accept (a
+#: chain of 61 ``\\max(k, …)`` or ``\\esm`` arguments, about 13 frames per
+#: level) needs about 840 frames; every document of the corpus needs under 300.
+#: The interpreter's default limit of 1000 covers that only for a caller less
+#: than about 160 frames deep, so a read lifts the limit to give itself this
+#: headroom while it runs, and puts it back afterwards. Printing needs no
+#: headroom: the deepest document a read returns prints in under 300 frames.
+_READ_FRAMES = 1000
 
 
-def _deep() -> None:
-    if sys.getrecursionlimit() < _RECURSION_FLOOR:
-        sys.setrecursionlimit(_RECURSION_FLOOR)
+def _stack_depth() -> int:
+    n = 0
+    f = sys._getframe(1)
+    while f is not None:
+        n += 1
+        f = f.f_back
+    return n
 
 
 def _format(fmt: Any) -> DocumentFormat:
@@ -100,14 +110,12 @@ def print_markdown(doc: dict) -> str:
     canonicalize alike print alike, and ``parse_markdown(print_markdown(d))`` is
     ``canonicalize_document(d)``.
     """
-    _deep()
     return print_md(_printable(doc))
 
 
 def print_typst(doc: dict) -> str:
     """Print an ESM document as Typst (``Source.Typ.printTyp``). See
     :func:`print_markdown`."""
-    _deep()
     return print_typ(_printable(doc))
 
 
@@ -136,7 +144,6 @@ def print_math(expr: Any, names: Iterable[str], format: DocumentFormat | str) ->
     from ..canonicalize import canonicalize_document
 
     fmt = _format(format)
-    _deep()
     e = sort_obj(from_plain(canonicalize_document(expr)))
     if type(e) is Obj:
         lhs, rhs = look("lhs", e), look("rhs", e)
@@ -148,55 +155,55 @@ def print_math(expr: Any, names: Iterable[str], format: DocumentFormat | str) ->
     return _math.print_typst(sym, e)
 
 
-def _removed_op_in(text: str, fmt: DocumentFormat) -> str | None:
-    """The first removed operator the text writes in a call or escape form:
-    ``\\operatorname{op}`` / ``\\esm{op}`` in LaTeX (with ``\\_`` for ``_``),
-    ``op("op")`` / ``esm.node("op"`` in Typst."""
-    if fmt is DocumentFormat.MARKDOWN:
-        opens, close = ("\\operatorname{", "\\esm{"), "}"
-    else:
-        opens, close = ('op("', 'esm.node("'), '"'
-    for open_ in opens:
-        i = text.find(open_)
-        while i >= 0:
-            j = i + len(open_)
-            k = text.find(close, j)
-            if k < 0:
-                break
-            body = text[j:k]
-            if fmt is DocumentFormat.MARKDOWN:
-                body = body.replace("\\_", "_")
-            if body in REMOVED_OPS:
-                return body
-            i = text.find(open_, i + 1)
-    return None
-
-
-def _refusal(text: str, fmt: DocumentFormat) -> ParseError:
-    """The diagnostic for a text the reader refused. The Lean reader refuses every
-    bad input alike; the code comes from the specification: a removed operator
-    written in the call form or the escape form is refused by name (CONFORMANCE
-    §7.1), everything else is a parse error."""
-    from ..error_handling import PARSE_ERROR, REMOVED_OP
-
-    op = _removed_op_in(text, fmt)
-    if op is not None:
-        err = ParseError(f"removed_op: `{op}` was removed from the format (esm-spec §4.2)")
-        err.code = REMOVED_OP  # type: ignore[attr-defined]
-        return err
-    what = "Markdown" if fmt is DocumentFormat.MARKDOWN else "Typst"
-    err = ParseError(f"parse_error: not an ESM {what} document")
-    err.code = PARSE_ERROR  # type: ignore[attr-defined]
+def _error(code: str, message: str) -> ParseError:
+    err = ParseError(f"{code}: {message}")
+    err.code = code  # type: ignore[attr-defined]
     return err
 
 
+def _refusal(removed_op: str | None, fmt: DocumentFormat) -> ParseError:
+    """The diagnostic for a text the reader refused. The Lean reader refuses every
+    bad input alike; the code comes from the specification: a removed operator
+    the math writes in the call form or the escape form is refused by name
+    (CONFORMANCE §7.1), everything else is a parse error."""
+    from ..error_handling import PARSE_ERROR, REMOVED_OP
+
+    if removed_op is not None:
+        return _error(REMOVED_OP, f"`{removed_op}` was removed from the format (esm-spec §4.2)")
+    what = "Markdown" if fmt is DocumentFormat.MARKDOWN else "Typst"
+    return _error(PARSE_ERROR, f"not an ESM {what} document")
+
+
 def _read(text: str, fmt: DocumentFormat) -> dict:
+    from ..error_handling import PARSE_ERROR
+
     if not isinstance(text, str):
         raise TypeError("a document source is a str")
-    _deep()
-    d = parse_md(text) if fmt is DocumentFormat.MARKDOWN else parse_typ(text)
+    need = _stack_depth() + _READ_FRAMES
+    old = sys.getrecursionlimit()
+    if old < need:
+        sys.setrecursionlimit(need)
+    try:
+        d, found = limits.reading(
+            lambda: parse_md(text) if fmt is DocumentFormat.MARKDOWN else parse_typ(text)
+        )
+    finally:
+        if old < need:
+            sys.setrecursionlimit(old)
     if type(d) is not Obj:
-        raise _refusal(text, fmt)
+        d = None
+    if found.too_deep or (d is not None and limits.json_depth(d) > limits.MAX_JSON_DEPTH):
+        raise _error(
+            PARSE_ERROR,
+            "the document nests too deeply for the reader (at most "
+            f"{limits.MAX_NESTING} constructs open at once, and "
+            f"{limits.MAX_JSON_DEPTH} levels of arrays and objects)",
+        )
+    if d is None:
+        raise _refusal(found.removed_op, fmt)
+    big = limits.out_of_range(d)
+    if big is not None:
+        raise _error(PARSE_ERROR, f"the number `{print_num(big)}` is outside the binary64 range")
     return to_plain(d)
 
 

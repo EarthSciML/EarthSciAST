@@ -22,7 +22,7 @@ func hw() *Sym { return sym("x", "k", "a", "T", "n", "N") }
 
 func readsL(t *testing.T, sy *Sym, text string, e Json) {
 	t.Helper()
-	got, ok := mathParseLatex(sy, text)
+	got, ok := mathParseLatex(&Lim{}, sy, text)
 	if !ok || !JsonEqual(got, e) {
 		t.Errorf("LaTeX %q: got %v (ok %v), want %s", text, renderOrNil(got, ok), ok, Render(e))
 	}
@@ -30,7 +30,7 @@ func readsL(t *testing.T, sy *Sym, text string, e Json) {
 
 func readsT(t *testing.T, sy *Sym, text string, e Json) {
 	t.Helper()
-	got, ok := mathParseTypst(sy, text)
+	got, ok := mathParseTypst(&Lim{}, sy, text)
 	if !ok || !JsonEqual(got, e) {
 		t.Errorf("Typst %q: got %v (ok %v), want %s", text, renderOrNil(got, ok), ok, Render(e))
 	}
@@ -111,7 +111,7 @@ func TestHandWrittenItalicD(t *testing.T) {
 	q := prNode("/", []Json{"dx", "dt"})
 	readsL(t, sdx, "\\frac{dx}{dt}", q)
 	readsT(t, sdx, "(dx)/(dt)", q)
-	if _, ok := mathParseLatex(sdx1, "\\frac{dx}{dt}"); ok {
+	if _, ok := mathParseLatex(&Lim{}, sdx1, "\\frac{dx}{dt}"); ok {
 		t.Errorf("\\frac{dx}{dt} with dx but not dt declared must be refused")
 	}
 }
@@ -275,13 +275,13 @@ func TestGoldenSetMath(t *testing.T) {
 			if pl := mathPrintLatex(sy, e); pl != lx {
 				t.Errorf("%s: print_latex\n  got  %s\n  want %s", id, pl, lx)
 			}
-			if got, ok := mathParseLatex(sy, lx); !ok || !JsonEqual(got, e) {
+			if got, ok := mathParseLatex(&Lim{}, sy, lx); !ok || !JsonEqual(got, e) {
 				t.Errorf("%s: parse_latex %s\n  got %s", id, lx, renderOrNil(got, ok))
 			}
 			if pt := mathPrintTypst(sy, e); pt != ty {
 				t.Errorf("%s: print_typst\n  got  %s\n  want %s", id, pt, ty)
 			}
-			if got, ok := mathParseTypst(sy, ty); !ok || !JsonEqual(got, e) {
+			if got, ok := mathParseTypst(&Lim{}, sy, ty); !ok || !JsonEqual(got, e) {
 				t.Errorf("%s: parse_typst %s\n  got %s", id, ty, renderOrNil(got, ok))
 			}
 		}

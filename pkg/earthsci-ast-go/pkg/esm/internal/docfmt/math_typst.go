@@ -429,7 +429,7 @@ func typLexIdent(cs []rune) (Tok, []rune, bool) {
 
 // typLexOne is `Typst.lexOne`: one token at the front of the input; prev is
 // the character just before it, if no space came between (hasPrev).
-func typLexOne(prev rune, hasPrev bool, cs []rune) (Tok, []rune, bool) {
+func typLexOne(lim *Lim, prev rune, hasPrev bool, cs []rune) (Tok, []rune, bool) {
 	if len(cs) == 0 {
 		return Tok{}, nil, false
 	}
@@ -450,7 +450,7 @@ func typLexOne(prev rune, hasPrev bool, cs []rune) (Tok, []rune, bool) {
 		}
 		return tTxt(s), r2, true
 	case c == '#':
-		v, r2, ok := tdictPVal(r)
+		v, r2, ok := tdictPVal(lim, r)
 		if !ok {
 			return Tok{}, nil, false
 		}
@@ -475,7 +475,7 @@ func typLexOne(prev rune, hasPrev bool, cs []rune) (Tok, []rune, bool) {
 // typLex is `Typst.lex`: read Typst math into tokens (`lexAux`). prev is the
 // last character of the previous token's canonical spelling when no space came
 // between.
-func typLex(cs []rune) ([]Tok, bool) {
+func typLex(lim *Lim, cs []rune) ([]Tok, bool) {
 	out := []Tok{}
 	var prev rune
 	hasPrev := false
@@ -485,7 +485,7 @@ func typLex(cs []rune) ([]Tok, bool) {
 		if len(cs2) == 0 {
 			return out, true
 		}
-		t, r, ok := typLexOne(prev, hasPrev2, cs2)
+		t, r, ok := typLexOne(lim, prev, hasPrev2, cs2)
 		if !ok {
 			return nil, false
 		}

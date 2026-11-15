@@ -103,14 +103,14 @@ func mlGroup(one bool, rows [][]Tok) ([][]Tok, bool) {
 
 // mlCookRows is `Source.cookRows`: read the rows of a multi-line display into
 // equations.
-func mlCookRows(sf Sf, s *Sym, one bool, ts []Tok) ([]Eqn, bool) {
+func mlCookRows(lim *Lim, sf Sf, s *Sym, one bool, ts []Tok) ([]Eqn, bool) {
 	eqs, ok := mlGroup(one, mlSplitAll(KwNl, ts))
 	if !ok {
 		return nil, false
 	}
 	out := make([]Eqn, len(eqs))
 	for i, t := range eqs {
-		j, ok := mathParseToks(sf, s, t)
+		j, ok := mathParseToks(lim, sf, s, t)
 		if !ok {
 			return nil, false
 		}

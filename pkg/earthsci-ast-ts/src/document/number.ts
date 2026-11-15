@@ -13,6 +13,10 @@
  *
  * Text is a code point array (`Chars`) read from an index; a reader returns the
  * value and the index after it, or `undefined`.
+ *
+ * Lean's exponents are unbounded; as in Rust, a decimal whose exponent leaves
+ * Int64 is not a number token here ({@link exponent}), and the exponent
+ * arithmetic is checked, never wrapped.
  */
 
 import { decInt, digitsVal, inInt64, jnumWfb, mkInt, type JNum } from './json.js'
@@ -31,6 +35,19 @@ export const isDigitChar = (c: string | undefined): boolean =>
 
 /** `Esm.digitChar`. */
 export const digitChar = (d: number): string => String.fromCharCode(48 + d)
+
+const I64_MIN = -(2n ** 63n)
+const I64_MAX = 2n ** 63n - 1n
+
+/**
+ * A decimal exponent as a `JNum` keeps it: `undefined` outside Int64, where the
+ * Rust binding's checked `i64` arithmetic fails. An exponent past `±2^53` is
+ * kept as the nearest binary64; every such decimal is far outside the binary64
+ * range, so the value it reads as (refused, or 0) is the same.
+ */
+export function exponent(e: bigint): number | undefined {
+  return e < I64_MIN || e > I64_MAX ? undefined : Number(e)
+}
 
 /** `Number.printInt`. */
 export function printInt(z: bigint): string {
@@ -84,13 +101,17 @@ export function printNum(n: JNum): string {
 /**
  * `Number.mkDec`: the decimal with digits `ds` (leading and trailing zeros
  * dropped) whose first listed digit sits at decimal exponent `e10`.
+ *
+ * `undefined` when the exponent of the first nonzero digit leaves Int64
+ * (Lean's exponent is unbounded); the readers refuse such a token.
  */
-export function mkDec(neg: boolean, ds: readonly number[], e10: number): JNum {
+export function mkDec(neg: boolean, ds: readonly number[], e10: number): JNum | undefined {
   let lead = 0
   while (lead < ds.length && ds[lead] === 0) lead++
   let end = ds.length
   while (end > lead && ds[end - 1] === 0) end--
-  return { k: 'dec', neg, digits: ds.slice(lead, end), e10: e10 - lead }
+  const e = lead === 0 ? e10 : exponent(BigInt(e10) - BigInt(lead))
+  return e === undefined ? undefined : { k: 'dec', neg, digits: ds.slice(lead, end), e10: e }
 }
 
 /** `Number.finishDec`: an optional `e` exponent after the fraction digits. */
@@ -104,11 +125,13 @@ function finishDec(
   if (cs[i] === 'e') {
     const r = parseIntTok(cs, i + 1)
     if (r === undefined) return undefined
-    const x = r[0]
-    if (x > 2n ** 53n || x < -(2n ** 53n)) return undefined
-    return [mkDec(neg, ds, e10 + Number(x)), r[1]]
+    if (exponent(r[0]) === undefined) return undefined
+    const e = exponent(BigInt(e10) + r[0])
+    const d = e === undefined ? undefined : mkDec(neg, ds, e)
+    return d && [d, r[1]]
   }
-  return [mkDec(neg, ds, e10), i]
+  const d = mkDec(neg, ds, e10)
+  return d && [d, i]
 }
 
 /** `Number.afterInt`. */

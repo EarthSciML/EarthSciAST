@@ -283,10 +283,10 @@ func yamlIsEntryLine(m int, input []rune) bool {
 }
 
 // yamlPItems is `Yaml.pItems`: array elements at indentation m.
-func yamlPItems(m int, input []rune) ([]Json, []rune, bool) {
+func yamlPItems(lim *Lim, m int, input []rune) ([]Json, []rune, bool) {
 	out := []Json{}
 	for yamlIsItemLine(m, input) {
-		v, r, ok := yamlPItemBody(m, input[m+1:])
+		v, r, ok := yamlPItemBody(lim, m, input[m+1:])
 		if !ok {
 			return nil, nil, false
 		}
@@ -298,21 +298,25 @@ func yamlPItems(m int, input []rune) ([]Json, []rune, bool) {
 
 // yamlPItemBody is `Yaml.pItemBody`: after the `-` of an element at
 // indentation m.
-func yamlPItemBody(m int, input []rune) (Json, []rune, bool) {
+func yamlPItemBody(lim *Lim, m int, input []rune) (Json, []rune, bool) {
+	if !lim.enter() {
+		return nil, nil, false
+	}
+	defer lim.leave()
 	if len(input) == 0 {
 		return nil, nil, false
 	}
 	switch input[0] {
 	case '\n':
-		xs, r, ok := yamlPItems(m+2, input[1:])
+		xs, r, ok := yamlPItems(lim, m+2, input[1:])
 		if !ok {
 			return nil, nil, false
 		}
 		return xs, r, true
 	case ' ':
 		r := input[1:]
-		if e, r1, ok := yamlPEntry(m+2, r); ok {
-			es, r2, ok := yamlPEntries(m+2, r1)
+		if e, r1, ok := yamlPEntry(lim, m+2, r); ok {
+			es, r2, ok := yamlPEntries(lim, m+2, r1)
 			if !ok {
 				return nil, nil, false
 			}
@@ -324,10 +328,10 @@ func yamlPItemBody(m int, input []rune) (Json, []rune, bool) {
 }
 
 // yamlPEntries is `Yaml.pEntries`: object entries at indentation m.
-func yamlPEntries(m int, input []rune) (Obj, []rune, bool) {
+func yamlPEntries(lim *Lim, m int, input []rune) (Obj, []rune, bool) {
 	out := Obj{}
 	for yamlIsEntryLine(m, input) {
-		e, r, ok := yamlPEntry(m, input[m:])
+		e, r, ok := yamlPEntry(lim, m, input[m:])
 		if !ok {
 			return nil, nil, false
 		}
@@ -338,12 +342,12 @@ func yamlPEntries(m int, input []rune) (Obj, []rune, bool) {
 }
 
 // yamlPEntry is `Yaml.pEntry`: one entry, at its key.
-func yamlPEntry(m int, input []rune) (KV, []rune, bool) {
+func yamlPEntry(lim *Lim, m int, input []rune) (KV, []rune, bool) {
 	k, r, ok := yamlParseKeyAt(m, input)
 	if !ok || len(r) == 0 || r[0] != ':' {
 		return KV{}, nil, false
 	}
-	v, r, ok := yamlPValBody(m, r[1:])
+	v, r, ok := yamlPValBody(lim, m, r[1:])
 	if !ok {
 		return KV{}, nil, false
 	}
@@ -352,7 +356,11 @@ func yamlPEntry(m int, input []rune) (KV, []rune, bool) {
 
 // yamlPValBody is `Yaml.pValBody`: after the `:` of an entry whose key is at
 // indentation m.
-func yamlPValBody(m int, input []rune) (Json, []rune, bool) {
+func yamlPValBody(lim *Lim, m int, input []rune) (Json, []rune, bool) {
+	if !lim.enter() {
+		return nil, nil, false
+	}
+	defer lim.leave()
 	if len(input) == 0 {
 		return nil, nil, false
 	}
@@ -362,13 +370,13 @@ func yamlPValBody(m int, input []rune) (Json, []rune, bool) {
 	case '\n':
 		r := input[1:]
 		if yamlIsItemLine(m+2, r) {
-			xs, r, ok := yamlPItems(m+2, r)
+			xs, r, ok := yamlPItems(lim, m+2, r)
 			if !ok {
 				return nil, nil, false
 			}
 			return xs, r, true
 		}
-		es, r, ok := yamlPEntries(m+2, r)
+		es, r, ok := yamlPEntries(lim, m+2, r)
 		if !ok {
 			return nil, nil, false
 		}
@@ -383,16 +391,16 @@ func yamlTopIsArray(input []rune) bool {
 }
 
 // yamlPTop is `Yaml.pTop`: an array, an object, or one scalar line.
-func yamlPTop(input []rune) (Json, []rune, bool) {
+func yamlPTop(lim *Lim, input []rune) (Json, []rune, bool) {
 	if yamlTopIsArray(input) {
-		xs, r, ok := yamlPItems(0, input)
+		xs, r, ok := yamlPItems(lim, 0, input)
 		if !ok {
 			return nil, nil, false
 		}
 		return xs, r, true
 	}
-	if e, r, ok := yamlPEntry(0, input); ok {
-		es, r, ok := yamlPEntries(0, r)
+	if e, r, ok := yamlPEntry(lim, 0, input); ok {
+		es, r, ok := yamlPEntries(lim, 0, r)
 		if !ok {
 			return nil, nil, false
 		}
@@ -403,8 +411,8 @@ func yamlPTop(input []rune) (Json, []rune, bool) {
 
 // yamlDecode is `Yaml.decode`: all of the input consumed, and the value well
 // formed.
-func yamlDecode(s []rune) (Json, bool) {
-	v, r, ok := yamlPTop(s)
+func yamlDecode(lim *Lim, s []rune) (Json, bool) {
+	v, r, ok := yamlPTop(lim, s)
 	if !ok || len(r) != 0 || !JsonWfb(v) {
 		return nil, false
 	}

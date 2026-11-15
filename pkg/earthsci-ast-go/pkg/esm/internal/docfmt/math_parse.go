@@ -208,11 +208,15 @@ func psPName(sf Sf, ts []Tok) (string, []Tok, bool) {
 // ## JSON inside LaTeX escape nodes
 
 // psPJson is `Math.pJson`.
-func psPJson(f int, ts []Tok) (Json, []Tok, bool) {
-	if f == 0 || len(ts) == 0 {
+func psPJson(lim *Lim, f int, ts []Tok) (Json, []Tok, bool) {
+	if f == 0 || !lim.enter() {
 		return nil, nil, false
 	}
+	defer lim.leave()
 	f--
+	if len(ts) == 0 {
+		return nil, nil, false
+	}
 	t, r := ts[0], ts[1:]
 	switch {
 	case t.K == TWord && t.S == "null":
@@ -228,14 +232,14 @@ func psPJson(f int, ts []Tok) (Json, []Tok, bool) {
 	case t.isKw(KwLbk) && at(r, 0, KwRbk):
 		return []Json{}, r[1:], true
 	case t.isKw(KwLbk):
-		xs, r2, ok := psPJsonItems(f, r)
+		xs, r2, ok := psPJsonItems(lim, f, r)
 		if ok && at(r2, 0, KwRbk) {
 			return xs, r2[1:], true
 		}
 	case t.isKw(KwLb) && at(r, 0, KwRb):
 		return Obj{}, r[1:], true
 	case t.isKw(KwLb):
-		kvs, r2, ok := psPJsonEntries(f, r)
+		kvs, r2, ok := psPJsonEntries(lim, f, r)
 		if ok && at(r2, 0, KwRb) {
 			return kvs, r2[1:], true
 		}
@@ -244,14 +248,14 @@ func psPJson(f int, ts []Tok) (Json, []Tok, bool) {
 }
 
 // psPJsonItems is `Math.pJsonItems`.
-func psPJsonItems(f int, ts []Tok) ([]Json, []Tok, bool) {
+func psPJsonItems(lim *Lim, f int, ts []Tok) ([]Json, []Tok, bool) {
 	out := []Json{}
 	for {
 		if f == 0 {
 			return nil, nil, false
 		}
 		f--
-		v, r, ok := psPJson(f, ts)
+		v, r, ok := psPJson(lim, f, ts)
 		if !ok {
 			return nil, nil, false
 		}
@@ -264,7 +268,7 @@ func psPJsonItems(f int, ts []Tok) ([]Json, []Tok, bool) {
 }
 
 // psPJsonEntries is `Math.pJsonEntries`.
-func psPJsonEntries(f int, ts []Tok) (Obj, []Tok, bool) {
+func psPJsonEntries(lim *Lim, f int, ts []Tok) (Obj, []Tok, bool) {
 	out := Obj{}
 	for {
 		if f == 0 {
@@ -275,7 +279,7 @@ func psPJsonEntries(f int, ts []Tok) (Obj, []Tok, bool) {
 			return nil, nil, false
 		}
 		k := ts[0].S
-		v, r, ok := psPJson(f, ts[2:])
+		v, r, ok := psPJson(lim, f, ts[2:])
 		if !ok {
 			return nil, nil, false
 		}
@@ -874,7 +878,11 @@ func psAddLoop(c Ctx, f int, acc []Json, ts []Tok) (Json, []Tok, bool) {
 			if !ok {
 				return nil, nil, false
 			}
-			acc = []Json{prNode("-", []Json{psClose("+", acc), y})}
+			v, ok := c.lim.shallow(prNode("-", []Json{psClose("+", acc), y}))
+			if !ok {
+				return nil, nil, false
+			}
+			acc = []Json{v}
 			ts = r2
 		default:
 			m, r, ok := psNegTail(ts)
@@ -889,7 +897,11 @@ func psAddLoop(c Ctx, f int, acc []Json, ts []Tok) (Json, []Tok, bool) {
 				return nil, nil, false
 			}
 			n := min(len(rest), len(r))
-			acc = []Json{prNode("-", []Json{psClose("+", acc), y})}
+			v, ok := c.lim.shallow(prNode("-", []Json{psClose("+", acc), y}))
+			if !ok {
+				return nil, nil, false
+			}
+			acc = []Json{v}
 			ts = r[len(r)-n:]
 		}
 	}
@@ -897,9 +909,10 @@ func psAddLoop(c Ctx, f int, acc []Json, ts []Tok) (Json, []Tok, bool) {
 
 // psPMul is `Math.pMul`: level 5, unary minus and `*` chains.
 func psPMul(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
-	if f == 0 {
+	if f == 0 || !c.lim.enter() {
 		return nil, nil, false
 	}
+	defer c.lim.leave()
 	f--
 	if at(ts, 0, KwMinus) {
 		x, r2, ok := psPMul(c, f, ts[1:])
@@ -938,7 +951,11 @@ func psMulLoop(c Ctx, f int, acc []Json, ts []Tok) (Json, []Tok, bool) {
 			if !ok {
 				return nil, nil, false
 			}
-			acc = []Json{prNode("/", []Json{psClose("*", acc), y})}
+			v, ok := c.lim.shallow(prNode("/", []Json{psClose("*", acc), y}))
+			if !ok {
+				return nil, nil, false
+			}
+			acc = []Json{v}
 			ts = r2
 		case len(ts) > 0:
 			if !psAtomStart(ts[0]) || psNegTok(ts[0]) {
@@ -958,9 +975,10 @@ func psMulLoop(c Ctx, f int, acc []Json, ts []Tok) (Json, []Tok, bool) {
 
 // psPNot is `Math.pNot`: level 6, `not`.
 func psPNot(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
-	if f == 0 {
+	if f == 0 || !c.lim.enter() {
 		return nil, nil, false
 	}
+	defer c.lim.leave()
 	f--
 	if at(ts, 0, KwLnot) {
 		x, r2, ok := psPNot(c, f, ts[1:])
@@ -999,7 +1017,10 @@ func psFracLoop(c Ctx, f int, x Json, ts []Tok) (Json, []Tok, bool) {
 		if !ok {
 			return nil, nil, false
 		}
-		x = prNode("/", []Json{x, y})
+		x, ok = c.lim.shallow(prNode("/", []Json{x, y}))
+		if !ok {
+			return nil, nil, false
+		}
 		ts = r2
 	}
 }
@@ -1252,7 +1273,7 @@ func psPVal(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		return psPAdd(c, f, ts)
 	}
 	if psJsonStart(ts) {
-		return psPJson(f, ts)
+		return psPJson(c.lim, f, ts)
 	}
 	return psPAdd(c, f, ts)
 }
@@ -1386,6 +1407,24 @@ func psPDCall(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 	return psDCallNode(w, xs), r4[1:], true
 }
 
+// psNoteRemovedOp records a removed operator written in the call or escape
+// form at the front of ts, so a refusal can name it (CONFORMANCE §7.1). Not in
+// Lean, whose reader refuses every bad input alike.
+func psNoteRemovedOp(lim *Lim, ts []Tok) {
+	var name string
+	switch {
+	case len(ts) > 0 && (ts[0].K == TOpn || ts[0].K == TEsc):
+		name = ts[0].S
+	case len(ts) > 2 && ts[0].isKw(KwEsmnode) && ts[2].K == TTxt:
+		name = ts[2].S
+	default:
+		return
+	}
+	if slices.Contains(exprRemovedOps, name) {
+		lim.noteRemovedOp(name)
+	}
+}
+
 func psOpAllowed(o string) bool {
 	return exprOpOk(o) && !slices.Contains(exprRemovedOps, o) && !slices.Contains(exprDeprecatedOps, o)
 }
@@ -1397,6 +1436,7 @@ func psPPrim(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		return nil, nil, false
 	}
 	f--
+	psNoteRemovedOp(c.lim, ts)
 	fail := func() (Json, []Tok, bool) { return nil, nil, false }
 	parenClose := func(r []Tok) (Json, []Tok, bool) {
 		x, r1, ok := psPOr(c, f, r)
@@ -1552,7 +1592,7 @@ func psPPrim(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		return fail()
 	}
 	if t0.K == TEsc && at(r, 0, KwLb) {
-		fsv, r1, ok := psPJson(f, r[1:])
+		fsv, r1, ok := psPJson(c.lim, f, r[1:])
 		fs, isObj := fsv.(Obj)
 		if !ok || !isObj || !atKws(r1, KwRb, KwLb) {
 			return fail()
@@ -1949,9 +1989,10 @@ func psPDApply(c Ctx, f int, w string, ts []Tok) (Json, []Tok, bool) {
 
 // psPCases is `Math.pCases`: `cases` rows; a chain re-nests to the right.
 func psPCases(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
-	if f == 0 {
+	if f == 0 || !c.lim.enter() {
 		return nil, nil, false
 	}
+	defer c.lim.leave()
 	f--
 	v, r0, ok := psPOr(c, f, ts)
 	if !ok || len(r0) < 2 || !r0[0].isKw(KwAmp) || r0[1].K != TTxt {
@@ -2017,8 +2058,8 @@ func psPEscArgs(c Ctx, f int, ts []Tok) ([]Json, []Tok, bool) {
 func psNeed(l, n int) int { return 30*n + max(12-l, 0) }
 
 // psParseToks is `Math.parseToks` (Induct.lean): read a whole token list.
-func psParseToks(sf Sf, s *Sym, ts []Tok) (Json, bool) {
-	e, r, ok := psPOr(Ctx{sf, s}, psNeed(1, len(ts)), ts)
+func psParseToks(lim *Lim, sf Sf, s *Sym, ts []Tok) (Json, bool) {
+	e, r, ok := psPOr(Ctx{sf: sf, s: s, lim: lim}, psNeed(1, len(ts)), ts)
 	if !ok || len(r) != 0 {
 		return nil, false
 	}

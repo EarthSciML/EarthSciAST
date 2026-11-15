@@ -54,7 +54,9 @@ function sci_num(n0::JNum, z::Integer)
         ds = DNumber.nat_digits(abs(n0.z))
         e = Int128(length(ds) - 1) + Int128(z)
         in_int64(e) || return nothing
-        DNumber.canonize(DNumber.mk_dec(n0.z < 0, ds, Int(e)))
+        d = DNumber.mk_dec(n0.z < 0, ds, Int(e))
+        d === nothing && return nothing
+        DNumber.canonize(d)
     end
     return wfb(m) ? m : nothing
 end

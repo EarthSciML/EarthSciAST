@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import number
+from . import limits, number
 from .strings import parse_key, parse_quoted, print_key, quote
 from .value import INT64_MIN, Dec, Obj, wf
 
@@ -137,24 +137,29 @@ def _p_min(s: str, i: int) -> int | None:
 
 def p_val(s: str, i: int):
     """``TypstDict.pVal``: a value, at its first character; ``(value, position)``."""
-    if i >= len(s):
+    if not limits.enter():
         return None
-    c = s[i]
-    if c == "(":
-        j = skip_ws(s, i + 1)
-        k = _p_min(s, j)
-        if k is not None:
-            return INT64_MIN, k
-        return _p_paren(s, j)
-    if c == '"':
-        return parse_quoted(True, s, i)
-    if c == "n":
-        return (None, i + 4) if s.startswith("none", i) else None
-    if c == "t":
-        return (True, i + 4) if s.startswith("true", i) else None
-    if c == "f":
-        return (False, i + 5) if s.startswith("false", i) else None
-    return number.parse(s, i)
+    try:
+        if i >= len(s):
+            return None
+        c = s[i]
+        if c == "(":
+            j = skip_ws(s, i + 1)
+            k = _p_min(s, j)
+            if k is not None:
+                return INT64_MIN, k
+            return _p_paren(s, j)
+        if c == '"':
+            return parse_quoted(True, s, i)
+        if c == "n":
+            return (None, i + 4) if s.startswith("none", i) else None
+        if c == "t":
+            return (True, i + 4) if s.startswith("true", i) else None
+        if c == "f":
+            return (False, i + 5) if s.startswith("false", i) else None
+        return number.parse(s, i)
+    finally:
+        limits.leave()
 
 
 def _p_paren(s: str, i: int):

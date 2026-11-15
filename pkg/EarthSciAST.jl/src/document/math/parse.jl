@@ -23,6 +23,7 @@ using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, is_formula, is_greek, is_letter, op_
 using ..MPrint: CALL_OPS, CORE_OPS, Ctx, FaqForm, faq_json, formula_raw, ins_kv, mk_node,
     node, simple_tok, tparams, unesc_k, unesc_t, spell_unit_factors
 using ..MSurface: neg_num
+using ..DLimits: nested, removed_op!, shallow
 
 const Toks = AbstractVector{<:Tok}
 
@@ -175,7 +176,11 @@ end
 """`Math.pJson`."""
 function p_json(f::Int, ts::Toks)
     f == 0 && return nothing
-    f -= 1
+    return nested(_p_json, f - 1, ts)
+end
+
+# The body of `p_json`, with its construct open (Rust `Nest::enter`).
+function _p_json(f::Int, ts::Toks)
     t = tk(ts)
     r = tdrop(ts, min(1, length(ts)))
     if t isa TWord && t.s == "null"
@@ -712,7 +717,9 @@ function add_loop(c::Ctx, f::Int, acc::Vector{Any}, ts::Toks)
         elseif kat(ts, 1, KMinus)
             y = p_mul(c, f, tdrop(ts))
             y === nothing && return nothing
-            acc = Any[node("-", Any[close_chain("+", acc), y[1]])]
+            z = shallow(node("-", Any[close_chain("+", acc), y[1]]))
+            z === nothing && return nothing
+            acc = Any[z]
             ts = y[2]
         else
             nt = neg_tail(ts)
@@ -724,7 +731,9 @@ function add_loop(c::Ctx, f::Int, acc::Vector{Any}, ts::Toks)
             y === nothing && return nothing
             n = length(y[2])
             r2 = view(r, (length(r) - min(n, length(r)) + 1):length(r))
-            acc = Any[node("-", Any[close_chain("+", acc), y[1]])]
+            z = shallow(node("-", Any[close_chain("+", acc), y[1]]))
+            z === nothing && return nothing
+            acc = Any[z]
             ts = r2
         end
     end
@@ -734,7 +743,11 @@ end
 """`Math.pMul`: level 5, unary minus and `*` chains."""
 function p_mul(c::Ctx, f::Int, ts::Toks)
     f == 0 && return nothing
-    f -= 1
+    return nested(_p_mul, c, f - 1, ts)
+end
+
+# The body of `p_mul`, with its construct open (Rust `Nest::enter`).
+function _p_mul(c::Ctx, f::Int, ts::Toks)
     if kat(ts, 1, KMinus)
         x = p_mul(c, f, tdrop(ts))
         x === nothing && return nothing
@@ -760,7 +773,9 @@ function mul_loop(c::Ctx, f::Int, acc::Vector{Any}, ts::Toks)
             c.sf == SF_LATEX || return close_chain("*", acc), ts
             y = p_not(c, f, tdrop(ts))
             y === nothing && return nothing
-            acc = Any[node("/", Any[close_chain("*", acc), y[1]])]
+            z = shallow(node("/", Any[close_chain("*", acc), y[1]]))
+            z === nothing && return nothing
+            acc = Any[z]
             ts = y[2]
         elseif t !== nothing
             (atom_start(t) && !neg_tok(t)) || return close_chain("*", acc), ts
@@ -778,7 +793,11 @@ end
 """`Math.pNot`: level 6, `not`."""
 function p_not(c::Ctx, f::Int, ts::Toks)
     f == 0 && return nothing
-    f -= 1
+    return nested(_p_not, c, f - 1, ts)
+end
+
+# The body of `p_not`, with its construct open (Rust `Nest::enter`).
+function _p_not(c::Ctx, f::Int, ts::Toks)
     if kat(ts, 1, KLnot)
         x = p_not(c, f, tdrop(ts))
         x === nothing && return nothing
@@ -804,7 +823,8 @@ function frac_loop(c::Ctx, f::Int, x, ts::Toks)
         if kat(ts, 1, KSlash) && c.sf == SF_TYPST
             y = p_pow(c, f, tdrop(ts))
             y === nothing && return nothing
-            x = node("/", Any[x, y[1]])
+            x = shallow(node("/", Any[x, y[1]]))
+            x === nothing && return nothing
             ts = y[2]
         else
             return x, ts
@@ -1109,10 +1129,28 @@ function closed(c::Ctx, f::Int, r::Toks, k::Kw, o::AbstractString)
     return node(o, Any[x[1]]), tdrop(x[2])
 end
 
+# Record a removed operator written in the call or escape form at the front
+# of `ts`, so a refusal can name it (CONFORMANCE §7.1). Not in Lean, whose
+# reader refuses every bad input alike.
+function note_removed_op(ts::Toks)
+    t = tk(ts)
+    name = if t isa TOpn || t isa TEsc
+        t.s
+    elseif iskw(t, KEsmnode) && length(ts) >= 3 && ts[3] isa TTxt
+        ts[3].s
+    else
+        return nothing
+    end
+    i = findfirst(==(name), REMOVED_OPS)
+    i === nothing || removed_op!(REMOVED_OPS[i])
+    return nothing
+end
+
 """`Math.pPrim`: a primary."""
 function p_prim(c::Ctx, f::Int, ts::Toks)
     f == 0 && return nothing
     f -= 1
+    note_removed_op(ts)
     t1 = tk(ts)
     t2 = tk(ts, 2)
     r = tdrop(ts, min(1, length(ts)))
@@ -1503,7 +1541,11 @@ end
 """`Math.pCases`: `cases` rows; a chain re-nests to the right."""
 function p_cases(c::Ctx, f::Int, ts::Toks)
     f == 0 && return nothing
-    f -= 1
+    return nested(_p_cases, c, f - 1, ts)
+end
+
+# The body of `p_cases`, with its construct open (Rust `Nest::enter`).
+function _p_cases(c::Ctx, f::Int, ts::Toks)
     x = p_or(c, f, ts)
     x === nothing && return nothing
     v, r0 = x

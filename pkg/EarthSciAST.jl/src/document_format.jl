@@ -103,17 +103,16 @@ decoded JSON document in canonical form, as [`canonicalize_document`](@ref)
 returns it with every object's keys sorted. A byte-order mark is dropped, and
 CRLF line endings are read as LF when the first line ends in CRLF.
 
-Throws a [`ParseError`](@ref) whose `code` is `"removed_op"` when the text
-writes an operator removed from the format (esm-spec §4.2) in the call or the
-escape form, and `"parse_error"` for any other text that is not a Markdown ESM
-document. A name nothing declares is not a parse error: an undeclared
-reference is the validator's finding.
+Throws a [`ParseError`](@ref) whose `code` is `"removed_op"` when the
+document's math writes an operator removed from the format (esm-spec §4.2) in
+the call or the escape form, and `"parse_error"` for any other text that is not
+a Markdown ESM document, and for one past a bound of the reader: more than 128
+constructs (brackets, fractions, signs, flow collections, YAML levels, …) open
+at once, a value nested more than 127 arrays and objects deep, or a number
+beyond the binary64 range. A name nothing declares is not a parse error: an
+undeclared reference is the validator's finding.
 """
-function parse_markdown(text::AbstractString)
-    d = DocumentFormats.DSource.parse_md(String(text))
-    d === nothing && throw(_document_refusal(text, :markdown))
-    return DocumentFormats.DJson.to_value(d)::OrderedDict{String, Any}
-end
+parse_markdown(text::AbstractString) = _read_document(text, :markdown)
 
 """
     parse_typst(text::AbstractString) -> OrderedDict{String, Any}
@@ -121,11 +120,7 @@ end
 Read a Typst ESM document (Lean `Source.Typ.parseTyp`). See
 [`parse_markdown`](@ref).
 """
-function parse_typst(text::AbstractString)
-    d = DocumentFormats.DSource.parse_typ(String(text))
-    d === nothing && throw(_document_refusal(text, :typst))
-    return DocumentFormats.DJson.to_value(d)::OrderedDict{String, Any}
-end
+parse_typst(text::AbstractString) = _read_document(text, :typst)
 
 """
     parse_document(text::AbstractString, format::Symbol) -> OrderedDict{String, Any}
@@ -144,39 +139,49 @@ end
 _printable_document(doc::AbstractDict) =
     DocumentFormats.DJson.sort_keys(DocumentFormats.DJson.from_value(canonicalize_document(doc)))
 
+# Read a document, and turn a refusal into its diagnostic (Rust `read` and
+# `checked`).
+function _read_document(text::AbstractString, format::Symbol)
+    DF = DocumentFormats
+    DL = DF.DLimits
+    str = String(text)
+    d, found = DL.reading() do
+        format === :markdown ? DF.DSource.parse_md(str) : DF.DSource.parse_typ(str)
+    end
+    if found.too_deep || (d !== nothing && DL.json_depth(d) > DL.MAX_JSON_DEPTH)
+        throw(
+            ParseError(
+                "the document nests too deeply for the reader (at most $(DL.MAX_NESTING) " *
+                    "constructs open at once, and $(DL.MAX_JSON_DEPTH) levels of arrays and objects)";
+                code = ERROR_CODES.PARSE_ERROR
+            )
+        )
+    end
+    d === nothing && throw(_document_refusal(found.removed_op, format))
+    return try
+        DF.DJson.to_value(d)::OrderedDict{String, Any}
+    catch e
+        e isa DF.DJson.OutOfRange || rethrow()
+        throw(
+            ParseError(
+                "the number `$(DF.DNumber.print_string(e.n))` is outside the binary64 range";
+                code = ERROR_CODES.PARSE_ERROR
+            )
+        )
+    end
+end
+
 # The diagnostic for a text the reader refused. The Lean reader refuses every
 # bad input alike; the code comes from the specification: a removed operator
-# written in the call form or the escape form is refused by name
+# the math writes in the call form or the escape form is refused by name
 # (CONFORMANCE §7.1), everything else is a parse error.
-function _document_refusal(text::AbstractString, format::Symbol)
-    op = _removed_op_in(text, format)
-    if op !== nothing
+function _document_refusal(removed_op::Union{Nothing, String}, format::Symbol)
+    if removed_op !== nothing
         return ParseError(
-            "`$op` was removed from the format (esm-spec §4.2)";
+            "`$removed_op` was removed from the format (esm-spec §4.2)";
             code = ERROR_CODES.REMOVED_OP
         )
     end
     what = format === :markdown ? "Markdown" : "Typst"
     return ParseError("not an ESM $what document"; code = ERROR_CODES.PARSE_ERROR)
-end
-
-# The first removed operator the text writes in a call or escape form:
-# `\operatorname{op}` / `\esm{op}` in LaTeX (with `\_` for `_`), `op("op")` /
-# `esm.node("op"` in Typst.
-function _removed_op_in(text::AbstractString, format::Symbol)
-    removed = DocumentFormats.MExpr.REMOVED_OPS
-    opens, close = format === :markdown ? (("\\operatorname{", "\\esm{"), '}') :
-        (("op(\"", "esm.node(\""), '"')
-    for open in opens
-        for m in findall(open, text)
-            rest = SubString(text, nextind(text, last(m)))
-            stop = findfirst(close, rest)
-            stop === nothing && continue
-            body = rest[1:prevind(rest, stop)]
-            format === :markdown && (body = replace(body, "\\_" => "_"))
-            i = findfirst(==(body), removed)
-            i === nothing || return removed[i]
-        end
-    end
-    return nothing
 end

@@ -4,7 +4,7 @@ import "testing"
 
 func tdictRt(t *testing.T, text string) string {
 	t.Helper()
-	v, ok := tdictDecode([]rune(text))
+	v, ok := tdictDecode(&Lim{}, []rune(text))
 	if !ok {
 		t.Fatalf("does not decode: %q", text)
 	}
@@ -20,7 +20,7 @@ func TestTdictRoundTrip(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 	for _, bad := range []string{"(1)", "(none: 1)"} {
-		if _, ok := tdictDecode([]rune(bad)); ok {
+		if _, ok := tdictDecode(&Lim{}, []rune(bad)); ok {
 			t.Errorf("%q decodes", bad)
 		}
 	}

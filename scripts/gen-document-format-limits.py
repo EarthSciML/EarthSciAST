@@ -108,6 +108,13 @@ NESTS = [
     ("signs", "markdown", lambda n: md_math("-", "", n), 61),
     ("signs", "typst", lambda n: typ_math("-", "", n), 61),
     ("chain", "markdown", lambda n: md_math("", " - k", n), 61),
+    (
+        "derivatives",
+        "markdown",
+        lambda n: md_math("\\frac{\\mathrm{d}}{\\mathrm{d} t} \\left(", "\\right)", n),
+        61,
+    ),
+    ("derivatives", "typst", lambda n: typ_math("(dif)/(dif t) (", ")", n), 61),
     ("flow_collection", "markdown", flow, 122),
     ("yaml_block", "markdown", lambda n: {"yaml_levels": n}, 123),
 ]

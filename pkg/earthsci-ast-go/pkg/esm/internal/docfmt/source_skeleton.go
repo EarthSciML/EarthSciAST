@@ -362,26 +362,26 @@ type Caps interface {
 	// attr: a declaration attribute.
 	attr(a KV) bool
 	// eqn: an equation under the component's symbol table.
-	eqn(s *Sym, e *Eqn) bool
+	eqn(lim *Lim, s *Sym, e *Eqn) bool
 	// rxn: a reaction under the component's symbol table.
 	rxn(s *Sym, x *Rxn[Json]) bool
 	// plot: the fields of a plot directive.
 	plot(a Obj) bool
 	// tm: a template or rule, under its body's symbol table.
-	tm(s *Sym, t *Tm[Json]) bool
+	tm(lim *Lim, s *Sym, t *Tm[Json]) bool
 }
 
 // skCapsItem is `Caps.item`: a list entry the container spells.
-func skCapsItem(caps Caps, s *Sym, m *MC) bool {
+func skCapsItem(lim *Lim, caps Caps, s *Sym, m *MC) bool {
 	switch m.K {
 	case MxRxn:
 		return caps.rxn(s, &m.Rxn)
 	case MxPlot:
 		return caps.plot(m.Plot)
 	case MxTm:
-		return caps.tm(m.Tm.scope(s), &m.Tm)
+		return caps.tm(lim, m.Tm.scope(s), &m.Tm)
 	}
-	return caps.eqn(s, &m.Eq)
+	return caps.eqn(lim, s, &m.Eq)
 }
 
 // ## Equations and the other math entries
@@ -700,7 +700,7 @@ func skTmItem(kv KV) (MC, bool) {
 
 // skMathOf is `Source.mathOf`: the entries of a math field, when all of them
 // print natively.
-func skMathOf(caps Caps, s *Sym, f string, v Json) ([]MC, bool) {
+func skMathOf(lim *Lim, caps Caps, s *Sym, f string, v Json) ([]MC, bool) {
 	var ms []MC
 	switch x := v.(type) {
 	case []Json:
@@ -731,7 +731,7 @@ func skMathOf(caps Caps, s *Sym, f string, v Json) ([]MC, bool) {
 		return nil, false
 	}
 	for i := range ms {
-		if !skCapsItem(caps, s, &ms[i]) {
+		if !skCapsItem(lim, caps, s, &ms[i]) {
 			return nil, false
 		}
 	}
@@ -976,23 +976,23 @@ func skCompBase(caps Caps, k Kind, name string, kvs Obj) Comp[MC] {
 
 // skMathPart is `Source.mathPart`: one math field of a component: its entries
 // when every one prints natively under s, else its block.
-func skMathPart(caps Caps, s *Sym, kvs Obj, f string) ([]MC, KV, bool) {
+func skMathPart(lim *Lim, caps Caps, s *Sym, kvs Obj, f string) ([]MC, KV, bool) {
 	v, present := exprLook(f, kvs)
 	if !present {
 		return nil, KV{}, false
 	}
-	if ms, ok := skMathOf(caps, s, f, v); ok {
+	if ms, ok := skMathOf(lim, caps, s, f, v); ok {
 		return ms, KV{}, false
 	}
 	return nil, KV{f, v}, true
 }
 
 // skCompOf is `Source.compOf`: a component, with its math fields decided.
-func skCompOf(caps Caps, root Obj, rt []TemplateParams, k Kind, name string, kvs Obj) Comp[MC] {
+func skCompOf(lim *Lim, caps Caps, root Obj, rt []TemplateParams, k Kind, name string, kvs Obj) Comp[MC] {
 	c := skCompBase(caps, k, name, kvs)
 	s := skSymWith(root, rt, &c, skTemplatesOf(lookV("expression_templates", kvs)))
 	for _, f := range skMathFields {
-		ms, b, hasB := skMathPart(caps, s, kvs, f)
+		ms, b, hasB := skMathPart(lim, caps, s, kvs, f)
 		c.Math = append(c.Math, ms...)
 		if hasB {
 			c.MathBlocks = append(c.MathBlocks, b)
@@ -1026,12 +1026,12 @@ func skTopSymOf(kvs Obj) *Sym {
 
 // skTopMath is `Source.topMath`: the top-level templates, when every one
 // prints natively.
-func skTopMath(caps Caps, kvs Obj) ([]MC, bool) {
+func skTopMath(lim *Lim, caps Caps, kvs Obj) ([]MC, bool) {
 	v, present := exprLook("expression_templates", kvs)
 	if !present {
 		return nil, false
 	}
-	return skMathOf(caps, skTopSymOf(kvs), "expression_templates", v)
+	return skMathOf(lim, caps, skTopSymOf(kvs), "expression_templates", v)
 }
 
 // skRootBlock is `Source.rootBlock`.
@@ -1068,14 +1068,14 @@ func skRootBlocks(caps Caps, tn bool, kvs Obj) Obj {
 }
 
 // skToDoc is `Source.toDoc`: the skeleton of a document.
-func skToDoc(caps Caps, d Json) Doc[MC] {
+func skToDoc(lim *Lim, caps Caps, d Json) Doc[MC] {
 	kvs, ok := d.(Obj)
 	if !ok {
 		return Doc[MC]{}
 	}
 	mv, mp := exprLook("metadata", kvs)
 	es, hasD, desc, hasM := skMetaOf(caps, mv, mp)
-	tm, hasTm := skTopMath(caps, kvs)
+	tm, hasTm := skTopMath(lim, caps, kvs)
 	blocks := skRootBlocks(caps, hasTm, kvs)
 	rt := skTemplatesOf(lookV("expression_templates", kvs))
 	comps := func(k Kind, f string) []Comp[MC] {
@@ -1083,7 +1083,7 @@ func skToDoc(caps Caps, d Json) Doc[MC] {
 		ns, _, _ := keysSplitOpt(func(n string, v Json) (skNamedObj, bool) { return skPickComp(caps, n, v) }, v, present)
 		out := make([]Comp[MC], len(ns))
 		for i, n := range ns {
-			out[i] = skCompOf(caps, blocks, rt, k, n.name, n.kvs)
+			out[i] = skCompOf(lim, caps, blocks, rt, k, n.name, n.kvs)
 		}
 		return out
 	}
