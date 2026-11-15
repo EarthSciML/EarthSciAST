@@ -195,6 +195,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("state_layout_test.jl")                # the flat state layout ≡ the per-cell name map it replaced
     include("compiled_lane_eval_test.jl")          # the affine tier's compiled lane evaluator ≡ _eval_recipe
     include("dag_walk_memo_test.jl")               # ESS-1p5 exponential-path DAG walk regression
+    include("flatten_template_chain_test.jl")      # flatten visits a deep chain of template expansions once per shared subtree
     include("intern_oracle_test.jl")               # A1 hash-consing ≡ the interpreter (differential)
     include("xeq_variant_oracle_test.jl")          # A3 cross-eq variant memo ≡ the interpreter (differential)
     include("expand_memo_oracle_test.jl")          # A4 template-expansion memo ≡ expand_flattened_refs (differential)
