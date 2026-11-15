@@ -1502,7 +1502,7 @@ Each requirement can be mapped to specific test fixtures:
   load-time expansion of `apply_expression_template`)
 
 ### Priority 3 (Phase 3+ Advanced)
-- **display**: Pretty-printing format tests in `tests/display/`
+- **display**: math text is pinned by `tests/conformance/document_format/` (the old `tests/display/` tier is retired)
 - **versioning**: Version compatibility tests
 
 ### v0.4.0 Conformance Fixture Inventory
