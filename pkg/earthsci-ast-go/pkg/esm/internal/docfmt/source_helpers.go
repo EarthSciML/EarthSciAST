@@ -23,12 +23,6 @@ func runesEqual(a, b []rune) bool {
 	return true
 }
 
-// asStr is the string a value holds.
-func asStr(j Json) (string, bool) {
-	s, ok := j.(string)
-	return s, ok
-}
-
 // dropN is s without its first n characters (empty when it is shorter).
 func dropN(s []rune, n int) []rune {
 	if n >= len(s) {
@@ -50,7 +44,7 @@ func containsRune(s []rune, c rune) bool {
 	return false
 }
 
-// lastIsNewline splits a text ending in a newline into the text before it.
+// cutTrailingNewline splits a text ending in a newline into the text before it.
 func cutTrailingNewline(s []rune) ([]rune, bool) {
 	if len(s) == 0 || s[len(s)-1] != '\n' {
 		return nil, false
