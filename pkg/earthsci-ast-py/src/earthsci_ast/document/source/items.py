@@ -22,7 +22,7 @@ from ..math.expr import Sym, is_dig, is_formula, is_letter, name_ok, num_ok
 from ..math.parser import parse_toks
 from ..strings import is_ident_char
 from ..value import Dec, Obj
-from .skeleton import EQN, Comp, Doc, Eqn, Rxn, Tm, is_math_field, sym_for, top_sym
+from .skeleton import EQN, Comp, Doc, Eqn, Tm, is_math_field, sym_for, top_sym
 
 # ## Constructs
 
@@ -380,27 +380,27 @@ def _group(one: bool, rows: list):
     equation)."""
     acc: list = []
     for row in rows:
-        l, r = _cut(K.AMP, row)
+        left, r = _cut(K.AMP, row)
         if r is None:
-            if not l:
+            if not left:
                 continue
             if one and acc:
-                acc[-1] = acc[-1] + l
+                acc[-1] = acc[-1] + left
             else:
-                acc.append(list(l))
+                acc.append(list(left))
             continue
         if _cut(K.AMP, r)[1] is not None:
             return None
-        if not l and not one:
+        if not left and not one:
             if not acc:
                 return None
             if r and r[0] == K.EQ:
                 return None
             acc[-1] = acc[-1] + r
         elif one and acc:
-            acc[-1] = acc[-1] + l + r
+            acc[-1] = acc[-1] + left + r
         else:
-            acc.append(l + r)
+            acc.append(left + r)
     return acc
 
 

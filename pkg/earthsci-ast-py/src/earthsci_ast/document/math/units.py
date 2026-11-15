@@ -25,14 +25,14 @@ def _is_ident(c: str) -> bool:
     return ("a" <= c <= "z") or ("A" <= c <= "Z") or ("0" <= c <= "9") or c == "_"
 
 
-def num_factors(l: tuple) -> tuple:
+def num_factors(fs: tuple) -> tuple:
     """``Esm.Units.numFactors``: the factors with a positive exponent."""
-    return tuple(f for f in l if f[1] > 0)
+    return tuple(f for f in fs if f[1] > 0)
 
 
-def den_factors(l: tuple) -> tuple:
+def den_factors(fs: tuple) -> tuple:
     """``Esm.Units.denFactors``: the factors with a nonpositive exponent."""
-    return tuple(f for f in l if f[1] <= 0)
+    return tuple(f for f in fs if f[1] <= 0)
 
 
 def sym_ok(s: str) -> bool:
@@ -55,8 +55,8 @@ def _p_digits(s: str, i: int):
     return int(s[i:j]), j
 
 
-def join_with(pr: Callable, sep: str, l: tuple) -> str:
-    return sep.join(pr(f) for f in l)
+def join_with(pr: Callable, sep: str, fs: tuple) -> str:
+    return sep.join(pr(f) for f in fs)
 
 
 def p_sep_by(pf: Callable, sep: str, s: str, i: int):
@@ -106,11 +106,11 @@ LATEX_SEP = "\\,"
 MATHRM_OPEN = "\\mathrm{"
 
 
-def latex_body(l: tuple) -> str:
+def latex_body(fs: tuple) -> str:
     """``Esm.Units.latexBody``: the body of ``\\mathrm{…}``."""
-    nf = num_factors(l)
+    nf = num_factors(fs)
     out = join_with(latex_factor, LATEX_SEP, nf) if nf else "1"
-    df = den_factors(l)
+    df = den_factors(fs)
     if len(df) == 1:
         out += "/" + latex_factor(df[0])
     elif df:
@@ -118,9 +118,9 @@ def latex_body(l: tuple) -> str:
     return out
 
 
-def latex(l: tuple) -> str:
+def latex(fs: tuple) -> str:
     """``Esm.Units.latex``."""
-    return MATHRM_OPEN + latex_body(l) + "}"
+    return MATHRM_OPEN + latex_body(fs) + "}"
 
 
 def _p_l_sym(s: str, i: int):
@@ -274,8 +274,13 @@ def factors_of(unit: str) -> tuple:
     """The two-sided factor list of a units string (``Math.factorsOf``): the parse's
     factors normalized per side (``Esm.Units.norm2``), positive exponents first.
     Empty when the string does not parse (and for the dimensionless unit)."""
-    from ...units import _canon_lex, _canon_side, _CanonParser, _NoCanonicalSpelling
-    from ...units import normalize_unit_string
+    from ...units import (
+        _canon_lex,
+        _canon_side,
+        _CanonParser,
+        _NoCanonicalSpelling,
+        normalize_unit_string,
+    )
 
     if unit == "":
         return ()
@@ -297,10 +302,10 @@ def _spell_factor(s: str, q: Fraction) -> str:
     return f"{s}^({q.numerator}/{q.denominator})"
 
 
-def spell(l: tuple) -> str:
+def spell(fs: tuple) -> str:
     """The canonical spelling of a factor list (``Esm.Units.spell``)."""
-    num = [_spell_factor(s, q) for s, q in l if q > 0]
-    den = [_spell_factor(s, q) for s, q in l if not q > 0]
+    num = [_spell_factor(s, q) for s, q in fs if q > 0]
+    den = [_spell_factor(s, q) for s, q in fs if not q > 0]
     out = "*".join(num) if num else "1"
     if len(den) == 1:
         out += "/" + den[0]

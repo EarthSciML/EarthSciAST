@@ -173,7 +173,9 @@ class Comp:
         self.blocks = blocks if blocks is not None else []
 
     def with_math(self, math: list) -> Comp:
-        return Comp(self.kind, self.name, self.desc, self.decls, math, self.math_blocks, self.blocks)
+        return Comp(
+            self.kind, self.name, self.desc, self.decls, math, self.math_blocks, self.blocks
+        )
 
 
 class Doc:
@@ -301,13 +303,13 @@ def eqn_of(v: Any) -> Eqn | None:
     if type(v) is not Obj:
         return None
     if len(v) == 3:
-        (c, cm), (l, lv), (r, rv) = v
-        if c == "_comment" and type(cm) is str and l == "lhs" and r == "rhs":
+        (c, cm), (lk, lv), (r, rv) = v
+        if c == "_comment" and type(cm) is str and lk == "lhs" and r == "rhs":
             return Eqn(cm, lv, rv) if is_e(lv) and is_e(rv) else None
         return None
     if len(v) == 2:
-        (l, lv), (r, rv) = v
-        if l == "lhs" and r == "rhs":
+        (lk, lv), (r, rv) = v
+        if lk == "lhs" and r == "rhs":
             return Eqn(None, lv, rv) if is_e(lv) and is_e(rv) else None
     return None
 
@@ -495,12 +497,7 @@ def desc_of(caps: Caps, v: Any):
 def meta_of(caps: Caps, v: Any):
     """``Source.metaOf``: ``metadata`` printed in the front matter: the
     front-matter entries and the description."""
-    if (
-        type(v) is Obj
-        and v
-        and look("esm", v) is MISSING
-        and all(caps.front_key(k) for k, _ in v)
-    ):
+    if type(v) is Obj and v and look("esm", v) is MISSING and all(caps.front_key(k) for k, _ in v):
         d = desc_of(caps, look("description", v))
         es = [kv for kv in v if not (kv[0] == "description" and d is not None)]
         return es, d

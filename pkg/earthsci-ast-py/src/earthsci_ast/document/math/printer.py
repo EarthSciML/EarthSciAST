@@ -116,7 +116,9 @@ def unesc_k(s: str) -> str:
     while i < n:
         if s.startswith("{\\char", i) and i + 9 < n and s[i + 9] == "}":
             a, b, d = s[i + 6], s[i + 7], s[i + 8]
-            out.append(char_of_nat(100 * char_digit_nat(a) + 10 * char_digit_nat(b) + char_digit_nat(d)))
+            out.append(
+                char_of_nat(100 * char_digit_nat(a) + 10 * char_digit_nat(b) + char_digit_nat(d))
+            )
             i += 10
         elif s[i] == "\\" and i + 1 < n:
             out.append(s[i + 1])
@@ -308,15 +310,15 @@ def key_ok(s: str) -> bool:
     return seg_ok(s)
 
 
-def ins_kv(kv: tuple, l: list) -> list:
+def ins_kv(kv: tuple, entries: list) -> list:
     """``Math.insKV``: sorted insertion by key."""
-    l = list(l)
-    for i, e in enumerate(l):
+    entries = list(entries)
+    for i, e in enumerate(entries):
         if kv[0] < e[0]:
-            l.insert(i, kv)
-            return l
-    l.append(kv)
-    return l
+            entries.insert(i, kv)
+            return entries
+    entries.append(kv)
+    return entries
 
 
 def fields_of(kvs: list) -> list:
@@ -417,22 +419,22 @@ factors_of = U.factors_of
 
 def units_ok(sf: str, u: str) -> bool:
     """``Math.unitsOK``: the units of a quantity print typeset."""
-    l = factors_of(u)
-    if not l or U.spell(l) != u:
+    fs = factors_of(u)
+    if not fs or U.spell(fs) != u:
         return False
-    if not all(U.sym_ok(f[0]) and f[1] != 0 for f in l):
+    if not all(U.sym_ok(f[0]) and f[1] != 0 for f in fs):
         return False
     if sf == K.LATEX:
-        return U.parse_latex(U.latex(l)) == l and bal_ok(U.latex_body(l))
-    return U.num_factors(l) + U.den_factors(l) == l
+        return U.parse_latex(U.latex(fs)) == fs and bal_ok(U.latex_body(fs))
+    return U.num_factors(fs) + U.den_factors(fs) == fs
 
 
 # ## The printer
 
 
-def wrap(sf: str, l: int, lvl: int, ts: list) -> list:
+def wrap(sf: str, need: int, lvl: int, ts: list) -> list:
     """``Math.wrap``: wrap a printed form for a position needing level ``L``."""
-    return ts if l <= lvl else grp(sf, ts)
+    return ts if need <= lvl else grp(sf, ts)
 
 
 def mul_toks(xs: list) -> list:
@@ -512,10 +514,9 @@ class Out:
             return self.toks + _OTHERWISE
         return self._crow
 
-    def at(self, sf: str, l: int) -> list:
+    def at(self, sf: str, need: int) -> list:
         """``Math.Out.at``."""
-        return self.toks if l <= self.lvl else grp(sf, self.toks)
-
+        return self.toks if need <= self.lvl else grp(sf, self.toks)
 
 
 def esc_toks(sf: str, o: str, fs: list, args: list) -> list:
@@ -853,7 +854,7 @@ def range_ok(j: Any) -> bool:
         return len(j) == 2 and is_e(j[0]) and is_e(j[1])
     if t is Obj:
         if len(j) == 1:
-            (k, s), = j
+            ((k, s),) = j
             return k == "from" and type(s) is str and name_ok(s)
         if len(j) == 2:
             (k, s), (k2, ps) = j
@@ -906,9 +907,7 @@ def faq_ok(f: FaqForm) -> bool:
         if not (name_ok(k) and range_ok(v)):
             return False
         if not (
-            k in names
-            or occurs_j(k, f.expr)
-            or (f.filter is not MISSING and occurs_j(k, f.filter))
+            k in names or occurs_j(k, f.expr) or (f.filter is not MISSING and occurs_j(k, f.filter))
         ):
             return False
     return True
@@ -1069,7 +1068,14 @@ def pr(c: Ctx, e: Any) -> Out:
             return _pr_plain(c, kvs, o, args)
     elif n == 3:
         (k0, args), (k1, o), (k2, v2) = kvs
-        if k0 == "args" and type(args) is list and k1 == "op" and o == "D" and k2 == "wrt" and type(v2) is str:
+        if (
+            k0 == "args"
+            and type(args) is list
+            and k1 == "op"
+            and o == "D"
+            and k2 == "wrt"
+            and type(v2) is str
+        ):
             w = v2
             if len(args) == 1:
                 if w == "t":
@@ -1098,7 +1104,14 @@ def pr(c: Ctx, e: Any) -> Out:
     elif n == 4:
         (k0, args), (k1, v1), (k2, v2), (k3, v3) = kvs
         empty_args = k0 == "args" and type(args) is list and not args
-        if empty_args and k1 == "op" and v1 == "const" and k2 == "units" and type(v2) is str and k3 == "value":
+        if (
+            empty_args
+            and k1 == "op"
+            and v1 == "const"
+            and k2 == "units"
+            and type(v2) is str
+            and k3 == "value"
+        ):
             u = v2
             tv = type(v3)
             if tv is int or tv is Dec:
@@ -1230,19 +1243,16 @@ def _pr_template(c: Ctx, kvs: Obj, n: str, bs: Obj) -> Out:
             args.append(got)
         return Out(10, call_toks(sf, [("opn", n)], args))
     if bs and all(name_ok(k) for k, _ in bs):
-        return Out(
-            10, call_toks(sf, [("opn", n)], [[*name_toks(c, k), K.EQ, *v] for k, v in vals])
-        )
+        return Out(10, call_toks(sf, [("opn", n)], [[*name_toks(c, k), K.EQ, *v] for k, v in vals]))
     return _esc(c, kvs)
 
 
-def pa(c: Ctx, l: int, e: Any) -> list:
+def pa(c: Ctx, need: int, e: Any) -> list:
     """``Math.pa``: the tokens of an expression for a position needing level
     ``L``."""
-    return pr(c, e).at(c.sf, l)
+    return pr(c, e).at(c.sf, need)
 
 
 def print_toks(sf: str, s: Sym, e: Any) -> list:
     """``Math.print``: the tokens of a whole expression."""
     return pa(Ctx(sf, s), 1, e)
-

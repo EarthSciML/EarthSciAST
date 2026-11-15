@@ -287,9 +287,9 @@ def units_of_raw(raw: str):
     return U.parse_latex(U.MATHRM_OPEN + raw + "}")
 
 
-def qty(n: Any, l: tuple) -> Obj:
+def qty(n: Any, fs: tuple) -> Obj:
     """``Math.qty``: a quantity node."""
-    return Obj([("args", []), ("op", "const"), ("units", U.spell(l)), ("value", n)])
+    return Obj([("args", []), ("op", "const"), ("units", U.spell(fs)), ("value", n)])
 
 
 def d_node(x: Any, w: str) -> Obj:
@@ -485,12 +485,7 @@ def _p_red_head(sf: str, ts: list, i: int):
     if type(t) is not str:
         return None
     t2 = _at(ts, i + 2)
-    if (
-        t == K.LIMITS
-        and _at(ts, i + 1) == K.LP
-        and type(t2) is str
-        and _at(ts, i + 3) == K.RP
-    ):
+    if t == K.LIMITS and _at(ts, i + 1) == K.LP and type(t2) is str and _at(ts, i + 3) == K.RP:
         if sf == K.TYPST and t2 in _RED_OF:
             return _RED_OF[t2], True, i + 4
         return None
@@ -835,7 +830,7 @@ def p_post(c: Ctx, f: int, ts: list, i: int):
             return x, i
 
 
-def p_list(c: Ctx, f: int, l: int, ts: list, i: int):
+def p_list(c: Ctx, f: int, level: int, ts: list, i: int):
     """``Math.pList``: a comma-separated list at level ``L`` (1 or 4), possibly
     empty when the next token closes it."""
     if f == 0:
@@ -844,16 +839,16 @@ def p_list(c: Ctx, f: int, l: int, ts: list, i: int):
     t = _at(ts, i)
     if t is None or is_rp(t) or t == K.RB or t == K.RBK:
         return [], i
-    return _p_items(c, f, l, ts, i)
+    return _p_items(c, f, level, ts, i)
 
 
-def _p_items(c: Ctx, f: int, l: int, ts: list, i: int):
+def _p_items(c: Ctx, f: int, level: int, ts: list, i: int):
     out = []
     while True:
         if f == 0:
             return None
         f -= 1
-        r = _p_lv(c, f, l, ts, i)
+        r = _p_lv(c, f, level, ts, i)
         if r is None:
             return None
         out.append(r[0])
@@ -863,11 +858,11 @@ def _p_items(c: Ctx, f: int, l: int, ts: list, i: int):
             return out, r[1]
 
 
-def _p_lv(c: Ctx, f: int, l: int, ts: list, i: int):
+def _p_lv(c: Ctx, f: int, level: int, ts: list, i: int):
     if f == 0:
         return None
     f -= 1
-    return p_add(c, f, ts, i) if l == 4 else p_or(c, f, ts, i)
+    return p_add(c, f, ts, i) if level == 4 else p_or(c, f, ts, i)
 
 
 def _p_call_args(c: Ctx, f: int, ts: list, i: int):
@@ -879,7 +874,7 @@ def _p_call_args(c: Ctx, f: int, ts: list, i: int):
     t = _at(ts, i)
     if t == K.RP or t == K.SEMI:
         return [], i
-    out = []
+    out: list = []
     while True:
         if f == 0:
             return None
@@ -1557,7 +1552,7 @@ def _p_cases(c: Ctx, f: int, ts: list, i: int):
 
 def _p_esc_args(c: Ctx, f: int, ts: list, i: int):
     """``Math.pEscArgs``: Typst escape arguments: ``, a`` repeated, then ``)``."""
-    out = []
+    out: list = []
     while True:
         if f == 0:
             return None
@@ -1575,10 +1570,10 @@ def _p_esc_args(c: Ctx, f: int, ts: list, i: int):
             return None
 
 
-def need(l: int, n: int) -> int:
+def need(level: int, n: int) -> int:
     """``Math.need`` (RoundTrip.lean): the fuel a token list of length ``n`` is
     read with at level ``L``."""
-    return 30 * n + max(0, 12 - l)
+    return 30 * n + max(0, 12 - level)
 
 
 def parse_toks(sf: str, s: Any, ts: list):

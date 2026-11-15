@@ -99,9 +99,9 @@ def piece_chars(p: tuple) -> str:
     return out + "_" + p[1] if p[1] else out
 
 
-def unit_chars(l: tuple) -> str:
+def unit_chars(fs: tuple) -> str:
     """``Typst.unitChars``."""
-    return "thin " + U.join_with(U.typst_factor, U.THIN_SEP, l)
+    return "thin " + U.join_with(U.typst_factor, U.THIN_SEP, fs)
 
 
 def tok_chars(t: Any) -> str:
@@ -204,9 +204,7 @@ def render(ts: list) -> str:
             else:
                 need = c2 != "" and merges(t, last, c2[0])
             p = ts[i - 1] if i > 0 else None
-            if need or (
-                _pretty(p, t, t2) and t2 != K.LP and not (t2 == K.LBK and atom_end(t))
-            ):
+            if need or (_pretty(p, t, t2) and t2 != K.LP and not (t2 == K.LBK and atom_end(t))):
                 out.append(" ")
     return "".join(out)
 
@@ -270,7 +268,7 @@ def _quoted_arg(s: str, i: int):
 def _upright_pieces(s: str, i: int):
     """``Typst.pieces``: adjacent ``upright("…")`` pieces, each with an optional
     digit subscript."""
-    out = []
+    out: list = []
     while True:
         if not s.startswith("upright", i):
             return out, i
@@ -419,7 +417,7 @@ def _lex_one(prev: str, s: str, i: int):
 
 def lex(s: str):
     """``Typst.lex``: read Typst math into tokens."""
-    out = []
+    out: list = []
     prev = ""
     i = 0
     n = len(s)

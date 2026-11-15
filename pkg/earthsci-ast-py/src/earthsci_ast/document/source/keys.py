@@ -24,14 +24,14 @@ class _Fail:
 FAIL: Any = _Fail()
 
 
-def sort_keys(l: list) -> list:
+def sort_keys(entries: list) -> list:
     """``Source.sortKeys``: the entries ordered by key (a stable sort)."""
-    return sorted(l, key=lambda kv: kv[0])
+    return sorted(entries, key=lambda kv: kv[0])
 
 
-def at_(k: str, l: list) -> list:
-    """``Source.at_``: the entries of ``l`` with key ``k``."""
-    return [kv for kv in l if kv[0] == k]
+def at_(k: str, entries: list) -> list:
+    """``Source.at_``: the entries of ``entries`` with key ``k``."""
+    return [kv for kv in entries if kv[0] == k]
 
 
 def split_field(pick: Callable, v: Any) -> tuple[list, Any]:
@@ -77,10 +77,10 @@ def join_field(back: Callable, ps: list, r: Any) -> Any:
     return FAIL
 
 
-def pick_one(k: str, l: list) -> Any:
+def pick_one(k: str, entries: list) -> Any:
     """``Source.pickOne``: the value of key ``k`` (``MISSING`` when absent), or
     ``FAIL`` when it occurs more than once."""
-    found = [v for k2, v in l if k2 == k]
+    found = [v for k2, v in entries if k2 == k]
     if not found:
         return MISSING
     if len(found) == 1:

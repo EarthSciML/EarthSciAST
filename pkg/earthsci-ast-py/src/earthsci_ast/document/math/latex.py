@@ -434,8 +434,8 @@ def unit_tok(s: str, i: int):
     r = raw_b(0, s, i + len(U.MATHRM_OPEN))
     if r is None:
         return None
-    l = units_of_raw(r[0])
-    return None if l is None else (l, r[1])
+    fs = units_of_raw(r[0])
+    return None if fs is None else (fs, r[1])
 
 
 PUNCT = {
@@ -525,7 +525,7 @@ def _skip_ws(s: str, i: int) -> int:
 
 def lex(s: str):
     """``Latex.lex``: read LaTeX math into tokens."""
-    out = []
+    out: list = []
     i = 0
     n = len(s)
     while True:

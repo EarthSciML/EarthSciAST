@@ -33,10 +33,7 @@ def needs_hex(c: str) -> bool:
     """``Strings.needsHex``: characters written as a hex escape."""
     n = ord(c)
     return (
-        n < 0x20
-        or n == 0x7F
-        or 0x80 <= n <= 0x9F
-        or n in (0x2028, 0x2029, 0xFEFF, 0xFFFE, 0xFFFF)
+        n < 0x20 or n == 0x7F or 0x80 <= n <= 0x9F or n in (0x2028, 0x2029, 0xFEFF, 0xFFFE, 0xFFFF)
     )
 
 

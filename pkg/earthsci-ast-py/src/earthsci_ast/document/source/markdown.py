@@ -115,7 +115,9 @@ def flow(v: Any) -> str:
     if t is list and v:
         return "[" + ", ".join(flow(x) for x in v) + "]"
     if t is Obj and v:
-        return "{" + ", ".join(print_key(False, yaml.reserved, k) + ": " + flow(x) for k, x in v) + "}"
+        return (
+            "{" + ", ".join(print_key(False, yaml.reserved, k) + ": " + flow(x) for k, x in v) + "}"
+        )
     return yaml.inline(v)
 
 
@@ -249,7 +251,7 @@ def _p_attr(s: str, i: int):
 def p_attrs_more(s: str, i: int):
     """``Md.pAttrsMore``: the attributes after the first, each after a space, up to
     the closing brace."""
-    out = []
+    out: list = []
     while True:
         if s.startswith("}", i):
             return out, i + 1
@@ -356,7 +358,7 @@ def _p_name(s: str, i: int):
 
 def _p_params(s: str, i: int):
     """``Md.pParams``: the parameters after ``(``, up to ``) \\coloneqq ``."""
-    out = []
+    out: list = []
     while True:
         if s.startswith(TM_DEF, i):
             return out, i + len(TM_DEF)
@@ -537,7 +539,7 @@ def _plot_at(s: str, i: int):
 def _cont_body(ro: str, s: str, i: int):
     """``Md.contBody``: the displays of a container, up to its closing ``:::``
     line; blank lines between them are skipped."""
-    out = []
+    out: list = []
     while True:
         if s.startswith(D_END, i):
             a, b = split_line(s, i + 3)
@@ -618,7 +620,7 @@ def _rate_table(s: str, i: int) -> bool:
 
 def _p_cols(s: str, i: int):
     """``Md.pCols``: the attribute columns of the header, up to its newline."""
-    out = []
+    out: list = []
     while True:
         if s.startswith("\n", i):
             return out, i + 1
@@ -677,8 +679,8 @@ def _p_row(cols: list, s: str, i: int):
     return Decl(k, n, attrs), p + 1
 
 
-def _sep_ok(l: str) -> bool:
-    return all(c in "|- :" for c in l)
+def _sep_ok(line: str) -> bool:
+    return all(c in "|- :" for c in line)
 
 
 def _table_at(s: str, i: int):
@@ -954,12 +956,12 @@ class CapsMd(Caps):
         return is_ident(a[0]) and dq_ok(a[1])
 
     def eqn(self, s: Sym, e: Eqn) -> bool:
-        l = latex_of(s, e)
-        if not comment_ok(e.comment) or "$" in l or "\n" in l or l.startswith("%"):
+        line = latex_of(s, e)
+        if not comment_ok(e.comment) or "$" in line or "\n" in line or line.startswith("%"):
             return False
-        if env_of(l) is not None:
+        if env_of(line) is not None:
             return False
-        p = l if e.comment is None else "% " + e.comment + "\n" + l
+        p = line if e.comment is None else "% " + e.comment + "\n" + line
         return tm_lex(p) is None
 
     def rxn(self, s: Sym, x: Rxn) -> bool:

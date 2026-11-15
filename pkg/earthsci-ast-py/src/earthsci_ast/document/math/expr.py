@@ -231,4 +231,3 @@ class Sym(NamedTuple):
 
 
 EMPTY_SYM = Sym(frozenset(), ())
-

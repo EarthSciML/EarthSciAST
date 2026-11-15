@@ -103,7 +103,7 @@ def esc_t(bol: bool, s: str) -> str:
 
 def _read_esc(s: str, i: int):
     """``Typ.readEsc``: the text of a content block up to its unescaped ``]``."""
-    out = []
+    out: list = []
     n = len(s)
     while True:
         if i >= n:
@@ -138,7 +138,7 @@ def _p_arg(s: str, i: int):
 
 def p_args_more(s: str, i: int):
     """``Typ.pArgsMore``: ``, key: value`` repeated, up to ``)``."""
-    out = []
+    out: list = []
     while True:
         if s.startswith(")", i):
             return out, i + 1
@@ -283,7 +283,14 @@ SEP_D = ", $"
 
 def tm_raw_t(t: Tm) -> str:
     """``Typ.tmRawT``: the math text of a template display (one line)."""
-    return TM_OP + quote(True, t.name) + TM_PAR + ", ".join(name_typ(p) for p in t.params) + TM_DEF_T + t.body
+    return (
+        TM_OP
+        + quote(True, t.name)
+        + TM_PAR
+        + ", ".join(name_typ(p) for p in t.params)
+        + TM_DEF_T
+        + t.body
+    )
 
 
 def _name_len_t(s: str, i: int) -> int:
@@ -335,7 +342,7 @@ def _p_name_t(s: str, i: int):
 
 def _p_params_t(s: str, i: int):
     """``Typ.pParamsT``: the parameters up to ``) := ``."""
-    out = []
+    out: list = []
     while True:
         if s.startswith(TM_DEF_T, i):
             return out, i + len(TM_DEF_T)
@@ -489,17 +496,17 @@ def _rule_at_t(s: str, i: int):
     r = parse_quoted(True, s, i)
     if r is None or not s.startswith(SEP_D, r[1]):
         return None
-    l = p_piece(s, r[1] + len(SEP_D))
-    if l is None or not s.startswith(SEP_D, l[1]):
+    fs = p_piece(s, r[1] + len(SEP_D))
+    if fs is None or not s.startswith(SEP_D, fs[1]):
         return None
-    b = p_piece(s, l[1] + len(SEP_D))
+    b = p_piece(s, fs[1] + len(SEP_D))
     if b is None:
         return None
     m = p_args_more(s, b[1])
     if m is None:
         return None
     e = _line_end(s, m[1])
-    return None if e is None else (("tm", Tm(r[0], [], l[0], b[0], m[0])), e)
+    return None if e is None else (("tm", Tm(r[0], [], fs[0], b[0], m[0])), e)
 
 
 def _eqx_at(ro: str, s: str, i: int):

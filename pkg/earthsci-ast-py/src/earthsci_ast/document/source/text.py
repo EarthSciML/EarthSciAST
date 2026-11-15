@@ -29,9 +29,9 @@ def split_line(s: str, i: int) -> tuple[int, int]:
     return j, j + 1
 
 
-def blank(l: str) -> bool:
+def blank(line: str) -> bool:
     """``l.all (· == ' ')``."""
-    return l.strip(" ") == ""
+    return line.strip(" ") == ""
 
 
 def no_stop(stop: str, s: str) -> bool:

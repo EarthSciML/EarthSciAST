@@ -52,7 +52,7 @@ class Obj(list):
     def __ne__(self, other: object) -> bool:
         return not self.__eq__(other)
 
-    __hash__ = None  # type: ignore[assignment]
+    __hash__ = None
 
 
 def is_int(v: Any) -> bool:
@@ -169,8 +169,8 @@ def dec_of_float(f: float) -> Any:
     _, digs, exp = Decimal(repr(abs(f))).as_tuple()
     ds = "".join(str(d) for d in digs).lstrip("0")
     stripped = ds.rstrip("0")
-    exp += len(ds) - len(stripped)
-    return Dec(f < 0, stripped, int(exp) + len(stripped) - 1)
+    e = int(exp) + len(ds) - len(stripped)
+    return Dec(f < 0, stripped, e + len(stripped) - 1)
 
 
 def from_plain(v: Any) -> Any:
