@@ -178,29 +178,13 @@ pub fn jnum_to_serde(n: &JNum) -> serde_json::Number {
             }
         }
         JNum::Dec { .. } => {
+            // The value `serde_json` reads from the canonical spelling, which
+            // always has a decimal point: a float, even for an integral decimal
+            // outside `Int64` (`1.0e19`).
             let text: String = super::number::print(n).into_iter().collect();
             let f: f64 = text.parse().expect("a printed number parses");
-            if let Some(dec_u) = dec_as_u64(n) {
-                return serde_json::Number::from(dec_u);
-            }
             serde_json::Number::from_f64(f).unwrap_or_else(|| serde_json::Number::from(0))
         }
-    }
-}
-
-/// An integral decimal above `i64::MAX` that still fits in `u64`, which
-/// `serde_json` holds exactly.
-fn dec_as_u64(n: &JNum) -> Option<u64> {
-    match n {
-        JNum::Dec {
-            neg: false,
-            digits,
-            e10,
-        } => match dec_int(false, digits, *e10) {
-            Some(Some(z)) => u64::try_from(z).ok(),
-            _ => None,
-        },
-        _ => None,
     }
 }
 
