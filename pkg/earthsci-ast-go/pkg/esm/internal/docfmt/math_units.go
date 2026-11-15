@@ -254,7 +254,7 @@ func unitsPLFactor(cs []rune) (Factor, []rune, bool) {
 	if !ok {
 		return Factor{}, nil, false
 	}
-	return Factor{string(s), q}, r2, true
+	return Factor{Sym: string(s), Exp: q}, r2, true
 }
 
 // unitsPLDen is `Esm.Units.pLDen`: a LaTeX denominator (after the `/`).
@@ -303,7 +303,7 @@ func unitsParseLatex(s []rune) ([]Factor, bool) {
 	}
 	out := append([]Factor{}, num...)
 	for _, f := range den {
-		out = append(out, Factor{f.Sym, new(big.Rat).Neg(f.Exp)})
+		out = append(out, Factor{Sym: f.Sym, Exp: new(big.Rat).Neg(f.Exp)})
 	}
 	return out, true
 }
@@ -425,7 +425,7 @@ func unitsPTFactor(cs []rune) (Factor, []rune, bool) {
 	if !ok {
 		return Factor{}, nil, false
 	}
-	return Factor{string(sym), q}, r3, true
+	return Factor{Sym: string(sym), Exp: q}, r3, true
 }
 
 // unitsParseTypst is `Esm.Units.parseTypst`: a Typst unit back to its

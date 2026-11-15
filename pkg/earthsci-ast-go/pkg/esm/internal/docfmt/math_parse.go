@@ -14,7 +14,11 @@ package docfmt
 //
 // Every parser returns (value, rest, ok).
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm/internal/unitspell"
+)
 
 // at reports whether ts[i] is the keyword k.
 func at(ts []Tok, i int, k Kw) bool { return i < len(ts) && ts[i].isKw(k) }
@@ -378,7 +382,7 @@ func psUnitsOfRaw(raw []rune) ([]Factor, bool) {
 
 // psQty is `Math.qty`: a quantity node.
 func psQty(n JNum, l []Factor) Json {
-	return Obj{{"args", []Json{}}, {"op", "const"}, {"units", prSpellUnitFactors(l)}, {"value", n}}
+	return Obj{{"args", []Json{}}, {"op", "const"}, {"units", unitspell.Spell(l)}, {"value", n}}
 }
 
 // psDNode is `Math.dNode`: a derivative node.
@@ -474,7 +478,7 @@ func psNumsJson(ns []JNum) Json {
 // psConstTail is `Math.constTail`: the unit after an array, if any.
 func psConstTail(v Json, r []Tok) (Json, []Tok, bool) {
 	if len(r) > 0 && r[0].K == TUnits {
-		u := prSpellUnitFactors(r[0].U)
+		u := unitspell.Spell(r[0].U)
 		return psConstNode(v, &u), r[1:], true
 	}
 	return psConstNode(v, nil), r, true

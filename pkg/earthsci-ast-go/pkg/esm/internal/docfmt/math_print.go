@@ -23,11 +23,10 @@ package docfmt
 // without a native or call notation prints in the generic escape form.
 
 import (
-	"math/big"
 	"slices"
-	"sort"
 	"strconv"
-	"strings"
+
+	"github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm/internal/unitspell"
 )
 
 // ## Text pieces
@@ -531,173 +530,15 @@ func prBalOk(raw []rune) bool {
 }
 
 // prFactorsOf is `Math.factorsOf`: the two-sided factor list of a units string
-// ([] when it does not parse): the factors normalized per side (each symbol
-// once with its exponents summed, zero sums dropped, sorted by symbol),
-// positive exponents first.
-//
-// Rust reads the string with the binding's unit-spelling parser
-// (`unit_two_sided_factors`), which package esm also has but this package
-// cannot import. The printer only uses the list when its canonical spelling
-// (prSpellUnitFactors) is the string itself (prUnitsOk), so reading just the
-// canonical layout gives the same answer everywhere it matters: on a canonical
-// spelling both readers give the same normalized list, and on any other
-// string the spelling check fails whichever list is returned.
-func prFactorsOf(u string) []Factor {
-	cs := []rune(u)
-	num, r, ok := prCanonSide(cs)
-	if !ok {
-		return nil
-	}
-	if len(num) == 1 && num[0].Sym == "1" && unitsIsOne(num[0].Exp) {
-		num = nil
-	}
-	var den []Factor
-	if len(r) > 0 {
-		if r[0] != '/' {
-			return nil
-		}
-		r = r[1:]
-		if len(r) > 0 && r[0] == '(' {
-			den, r, ok = prCanonSide(r[1:])
-			if !ok || len(r) == 0 || r[0] != ')' {
-				return nil
-			}
-			r = r[1:]
-		} else {
-			var f Factor
-			f, r, ok = prCanonFactor(r)
-			if !ok {
-				return nil
-			}
-			den = []Factor{f}
-		}
-		if len(r) != 0 {
-			return nil
-		}
-	}
-	all := append([]Factor{}, num...)
-	for _, f := range den {
-		all = append(all, Factor{f.Sym, new(big.Rat).Neg(f.Exp)})
-	}
-	return append(prNormSide(all, true), prNormSide(all, false)...)
-}
-
-// prNormSide is `Esm.Units.norm` on one side (positive exponents when pos).
-func prNormSide(l []Factor, pos bool) []Factor {
-	total := map[string]*big.Rat{}
-	var syms []string
-	for _, f := range l {
-		if (f.Exp.Sign() > 0) != pos {
-			continue
-		}
-		if total[f.Sym] == nil {
-			total[f.Sym] = new(big.Rat)
-			syms = append(syms, f.Sym)
-		}
-		total[f.Sym].Add(total[f.Sym], f.Exp)
-	}
-	sort.Strings(syms)
-	var out []Factor
-	for _, s := range syms {
-		if total[s].Sign() != 0 {
-			out = append(out, Factor{s, total[s]})
-		}
-	}
-	return out
-}
-
-// prCanonSide reads factors joined by `*`.
-func prCanonSide(cs []rune) ([]Factor, []rune, bool) {
-	var out []Factor
-	for {
-		f, r, ok := prCanonFactor(cs)
-		if !ok {
-			return nil, nil, false
-		}
-		out = append(out, f)
-		if len(r) == 0 || r[0] != '*' {
-			return out, r, true
-		}
-		cs = r[1:]
-	}
-}
-
-// prCanonFactor reads `sym`, `sym^n` or `sym^(p/q)`.
-func prCanonFactor(cs []rune) (Factor, []rune, bool) {
-	n := 0
-	for n < len(cs) && (unitsIsIdent(cs[n]) || cs[n] == '%') {
-		n++
-	}
-	if n == 0 {
-		return Factor{}, nil, false
-	}
-	sym, r := string(cs[:n]), cs[n:]
-	if len(r) == 0 || r[0] != '^' {
-		return Factor{sym, big.NewRat(1, 1)}, r, true
-	}
-	r = r[1:]
-	if len(r) > 0 && r[0] == '(' {
-		p, r1, ok := unitsPDigits(r[1:])
-		if !ok || len(r1) == 0 || r1[0] != '/' {
-			return Factor{}, nil, false
-		}
-		d, r2, ok := unitsPDigits(r1[1:])
-		if !ok || len(r2) == 0 || r2[0] != ')' || d.Sign() == 0 {
-			return Factor{}, nil, false
-		}
-		return Factor{sym, new(big.Rat).SetFrac(p, d)}, r2[1:], true
-	}
-	p, r1, ok := unitsPDigits(r)
-	if !ok {
-		return Factor{}, nil, false
-	}
-	return Factor{sym, unitsRat(p)}, r1, true
-}
-
-// prSpellFactor is one factor of the canonical spelling.
-func prSpellFactor(f Factor) string {
-	q := new(big.Rat).Abs(f.Exp)
-	switch {
-	case unitsIsOne(q):
-		return f.Sym
-	case q.IsInt():
-		return f.Sym + "^" + q.Num().String()
-	default:
-		return f.Sym + "^(" + q.Num().String() + "/" + q.Denom().String() + ")"
-	}
-}
-
-// prSpellUnitFactors is the canonical spelling of a factor list
-// (`Esm.Units.spell`): the positive-exponent factors joined by `*` (`1` when
-// there are none), then `/` and the others with their exponents' absolute
-// values, parenthesized when there is more than one.
-func prSpellUnitFactors(l []Factor) string {
-	var num, den []string
-	for _, f := range l {
-		if f.Exp.Sign() > 0 {
-			num = append(num, prSpellFactor(f))
-		} else {
-			den = append(den, prSpellFactor(f))
-		}
-	}
-	out := "1"
-	if len(num) > 0 {
-		out = strings.Join(num, "*")
-	}
-	switch len(den) {
-	case 0:
-	case 1:
-		out += "/" + den[0]
-	default:
-		out += "/(" + strings.Join(den, "*") + ")"
-	}
-	return out
-}
+// ([] when it does not parse), read with the binding's unit-spelling parser:
+// the factors normalized per side (each symbol once with its exponents summed,
+// zero sums dropped, sorted by symbol), positive exponents first.
+func prFactorsOf(u string) []Factor { return unitspell.TwoSided(u) }
 
 // prUnitsOk is `Math.unitsOK`: the units of a quantity print typeset.
 func prUnitsOk(sf Sf, u string) bool {
 	l := prFactorsOf(u)
-	if len(l) == 0 || prSpellUnitFactors(l) != u {
+	if len(l) == 0 || unitspell.Spell(l) != u {
 		return false
 	}
 	for _, f := range l {
