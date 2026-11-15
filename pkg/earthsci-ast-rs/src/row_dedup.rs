@@ -21,9 +21,11 @@
 //! The rewrite declines (returns `None`, and the rule is evaluated as written)
 //! whenever exactness is not evident from the syntax: `b` read any way other
 //! than `index(V, b)` of a materialized 1-D array of `b`'s length or a join key
-//! column on `b`'s side; `b` rebound by a nested node; a template application
-//! left unexpanded; a constant join key; or too few duplicate signatures for
-//! the rewrite to pay.
+//! column on `b`'s side; `b` rebound by a nested node; a range whose extent
+//! depends on `b` (a ragged range `of` it); any read of the observed being
+//! defined, whose `b` axis the rewrite shrinks; a template application left
+//! unexpanded; a constant join key; or too few duplicate signatures for the
+//! rewrite to pay.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -54,13 +56,14 @@ pub(crate) fn note_applied() {
 }
 
 /// Whether the rewrite is on for this thread: a [`set_row_dedup`] override,
-/// else `ESS_ROW_DEDUP` (`0` turns it off), else on. The switch exists for
-/// A/B measurement and for tests that show the rewrite changes cost and not
-/// answers.
+/// else `ESS_ROW_DEDUP` (`0` turns it off; read once per process), else on.
+/// The switch exists for A/B measurement and for tests that show the rewrite
+/// changes cost and not answers.
 pub(crate) fn row_dedup_enabled() -> bool {
-    ENABLED
-        .with(|c| c.get())
-        .unwrap_or_else(|| std::env::var("ESS_ROW_DEDUP").map_or(true, |v| v.trim() != "0"))
+    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    ENABLED.with(|c| c.get()).unwrap_or_else(|| {
+        *ENV.get_or_init(|| std::env::var("ESS_ROW_DEDUP").map_or(true, |v| v.trim() != "0"))
+    })
 }
 
 /// Turn the rewrite on or off for THIS thread, returning the previous override.
@@ -74,7 +77,8 @@ pub(crate) fn set_row_dedup(on: Option<bool>) -> Option<bool> {
 pub(crate) struct DedupPlan {
     /// The rule over the representative rows.
     pub expr: Expr,
-    /// `(temporary name, gathered column)` pairs the rewritten rule reads.
+    /// `(temporary name, gathered column)` pairs the rewritten rule reads;
+    /// the caller moves them into its namespace.
     pub columns: Vec<(String, ArrayD<f64>)>,
     /// Position of `b` in the rule's `output_idx`, i.e. the result's axis.
     pub axis: usize,
@@ -117,16 +121,20 @@ pub(crate) fn plan(name: &str, expr: &Expr, arrays: &ArrMap) -> Option<DedupPlan
     // Every array the rules read at `sym`, with the axis each is read on.
     let mut cols: BTreeMap<String, usize> = BTreeMap::new();
     let ok_col = |v: &str, axis: usize| {
-        v != name
-            && arrays
-                .get(v)
-                .is_some_and(|a| a.ndim() > axis && a.shape()[axis] == rows)
+        arrays
+            .get(v)
+            .is_some_and(|a| a.ndim() > axis && a.shape()[axis] == rows)
     };
+    let scope = Scope { name, sym };
     for leaf in &leaves {
         if leaf.output_idx.as_ref() != Some(output_idx)
             || leaf.ranges.as_ref().and_then(|r| r.get(sym))
                 != Some(&RangeSpec::Interval([1, rows as i64]))
-            || !leaf_reads(leaf, sym, &ok_col, arrays, &mut cols)
+            || leaf
+                .ranges
+                .as_ref()
+                .is_some_and(|r| r.values().any(|spec| range_reads(spec, sym)))
+            || !leaf_reads(leaf, &scope, &ok_col, arrays, &mut cols)
         {
             return None;
         }
@@ -153,11 +161,16 @@ pub(crate) fn plan(name: &str, expr: &Expr, arrays: &ArrMap) -> Option<DedupPlan
                 sig.extend(a.index_axis(Axis(ax), r).iter().map(|v| v.to_bits()));
             }
         }
-        let next = rep_rows.len();
-        let rep = *seen.entry(sig.clone()).or_insert(next);
-        if rep == next {
-            rep_rows.push(r);
-        }
+        // Look up first: only a NEW signature is copied into the map.
+        let rep = match seen.get(sig.as_slice()) {
+            Some(&rep) => rep,
+            None => {
+                let rep = rep_rows.len();
+                seen.insert(sig.clone(), rep);
+                rep_rows.push(r);
+                rep
+            }
+        };
         row_to_rep.push(rep);
     }
     let reps = rep_rows.len();
@@ -210,18 +223,36 @@ fn faq_leaves<'e>(e: &'e Expr, out: &mut Vec<&'e ExpressionNode>) -> bool {
     }
 }
 
+/// The rule being planned: the observed it defines, and its driving symbol.
+struct Scope<'a> {
+    name: &'a str,
+    sym: &'a str,
+}
+
+/// Whether a range's extent is a function of `sym`: a ragged range `of` it
+/// (its per-row length is read from an `offsets` array at `sym`, which the
+/// row signature does not cover).
+fn range_reads(spec: &RangeSpec, sym: &str) -> bool {
+    match spec {
+        RangeSpec::RaggedDyn { of, .. } => of.iter().any(|s| s == sym),
+        RangeSpec::IndexSetRef { of: Some(of), .. } => of.iter().any(|s| s == sym),
+        _ => false,
+    }
+}
+
 /// Whether `leaf` reads `sym` only as `index` subscripts and join key columns
 /// over materialized arrays, collecting them into `cols`.
 fn leaf_reads(
     leaf: &ExpressionNode,
-    sym: &str,
+    scope: &Scope<'_>,
     ok_col: &impl Fn(&str, usize) -> bool,
     arrays: &ArrMap,
     cols: &mut BTreeMap<String, usize>,
 ) -> bool {
+    let sym = scope.sym;
     let mut body_ok = true;
     leaf.for_each_child(&mut |c| {
-        body_ok = body_ok && scan(c, sym, ok_col, cols);
+        body_ok = body_ok && scan(c, scope, ok_col, cols);
     });
     if !body_ok {
         return false;
@@ -234,6 +265,14 @@ fn leaf_reads(
             continue;
         }
         let Some(g) = &clause.on_gate else { continue };
+        // A key column naming the observed being defined reads it whole.
+        if g.cols_l
+            .iter()
+            .chain(g.cols_r.iter())
+            .any(|c| matches!(c, KeyColumn::Column(v) if v == scope.name))
+        {
+            return false;
+        }
         let side = if g.sym_l == sym {
             &g.cols_l
         } else if g.sym_r == sym {
@@ -285,6 +324,9 @@ fn rewrite_leaves(
         } else {
             continue;
         };
+        // The gate keeps its id: the evaluator's match-set memo is keyed by
+        // the id together with each data key column's length and content
+        // fingerprint, and a gathered column is shorter than the original.
         for c in side.iter_mut() {
             if let KeyColumn::Column(v) = c
                 && let Some(new) = rename.get(v)
@@ -292,23 +334,23 @@ fn rewrite_leaves(
                 *v = new.clone();
             }
         }
-        // A fresh id: the rewritten gate's match set is not the original's,
-        // so it must not share its memo.
-        g.id = crate::join::fresh_gate_id();
     }
 }
 
 /// Whether `e` reads `sym` only as one argument of `index(V, ...)` with
 /// `ok_col(V, axis)`, always on the same axis of a given `V`, collecting those
-/// `V` and their axes.
+/// `V` and their axes. Any read of the observed being defined declines: the
+/// rewrite shrinks its `sym` axis, so even a read at a fixed row (a causal
+/// self-reference) would address a representative, not that row.
 fn scan(
     e: &Expr,
-    sym: &str,
+    scope: &Scope<'_>,
     ok_col: &impl Fn(&str, usize) -> bool,
     cols: &mut BTreeMap<String, usize>,
 ) -> bool {
+    let sym = scope.sym;
     match e {
-        Expr::Variable(v) => v != sym,
+        Expr::Variable(v) => v != sym && v != scope.name,
         Expr::Operator(n) => {
             if n.op == "apply_expression_template" {
                 return false;
@@ -319,17 +361,20 @@ fn scan(
                 let Expr::Variable(v) = &n.args[0] else {
                     return false;
                 };
-                if !ok_col(v, ax) || *cols.entry(v.clone()).or_insert(ax) != ax {
+                if v == scope.name || !ok_col(v, ax) || *cols.entry(v.clone()).or_insert(ax) != ax {
                     return false;
                 }
                 // The other subscripts must not read `sym` themselves.
                 return n.args[1..]
                     .iter()
                     .enumerate()
-                    .all(|(i, a)| i == ax || scan(a, sym, ok_col, cols));
+                    .all(|(i, a)| i == ax || scan(a, scope, ok_col, cols));
             }
-            // A nested node that binds `sym` again is a different variable.
-            if n.ranges.as_ref().is_some_and(|r| r.contains_key(sym))
+            // A nested node that binds `sym` again is a different variable,
+            // and one whose range extent depends on `sym` reads it unseen.
+            if n.ranges
+                .as_ref()
+                .is_some_and(|r| r.contains_key(sym) || r.values().any(|s| range_reads(s, sym)))
                 || n.output_idx
                     .as_ref()
                     .is_some_and(|o| o.iter().any(|s| s == sym))
@@ -337,17 +382,23 @@ fn scan(
             {
                 return false;
             }
-            // A nested gate keyed on `sym` would read columns at it too.
+            // A nested gate keyed on `sym` would read columns at it too, and
+            // one keyed on the observed being defined reads it whole.
             if n.join.as_ref().is_some_and(|js| {
                 js.iter().any(|c| {
-                    c.on_gate
-                        .as_ref()
-                        .is_some_and(|g| g.sym_l == sym || g.sym_r == sym)
+                    c.on_gate.as_ref().is_some_and(|g| {
+                        g.sym_l == sym
+                            || g.sym_r == sym
+                            || g.cols_l
+                                .iter()
+                                .chain(g.cols_r.iter())
+                                .any(|c| matches!(c, KeyColumn::Column(v) if v == scope.name))
+                    })
                 })
             }) {
                 return false;
             }
-            !n.any_child(&mut |c| !scan(c, sym, ok_col, cols))
+            !n.any_child(&mut |c| !scan(c, scope, ok_col, cols))
         }
         _ => true,
     }
@@ -579,5 +630,112 @@ mod tests {
         let plan = super::plan("tree", &rule("tree"), &arrays).expect("tree is rewritten");
         assert_eq!((plan.rows, plan.reps), (N, 15));
         assert!(super::plan("reads_row", &rule("reads_row"), &arrays).is_none());
+    }
+
+    /// A ragged inner range `of` the driving row reads that row's member
+    /// count from `offsets`, which no subscript in the body names. Every row
+    /// here has the same key (`fuel`) and the same padded member row, but its
+    /// count cycles 1, 2, 3, so the rule must not be rewritten: one
+    /// representative's count would be scattered to every row.
+    #[test]
+    fn a_ragged_range_of_the_driving_row_is_not_rewritten() {
+        let doc = json!({
+            "esm": "2.0.0",
+            "metadata": {"name": "RowDedupRagged"},
+            "index_sets": {
+                "rows": {"kind": "interval", "size": N},
+                "slots": {"kind": "interval", "size": 3},
+                "flat": {"kind": "interval", "size": 3},
+                "mof": {"kind": "ragged", "of": ["rows"], "offsets": "cnt", "values": "mem"}
+            },
+            "models": {"M": {
+                "variables": {
+                    "fuel": {"type": "parameter", "default": 0.0, "shape": ["rows"]},
+                    "cnt": {"type": "parameter", "default": 0.0, "shape": ["rows"]},
+                    "mem": {"type": "parameter", "default": 0.0, "shape": ["rows", "slots"]},
+                    "flatv": {"type": "parameter", "default": 0.0, "shape": ["flat"]},
+                    "rag": {"type": "unknown", "shape": ["rows"]}
+                },
+                "equations": [
+                    {"lhs": "rag", "rhs": {"op": "faq", "args": [], "output_idx": ["b"],
+                        "ranges": {"b": {"from": "rows"}, "j": {"from": "mof", "of": ["b"]}},
+                        "expr": {"op": "*", "args": [
+                            {"op": "index", "args": ["fuel", "b"]},
+                            {"op": "index", "args": ["flatv",
+                                {"op": "index", "args": ["mem", "b", "j"]}]}]}}}
+                ]
+            }}
+        });
+        let arr = |shape: &[usize], v: Vec<f64>| ArrayD::from_shape_vec(IxDyn(shape), v).unwrap();
+        let consts: HashMap<String, ArrayD<f64>> = [
+            ("fuel", arr(&[N], vec![2.0; N])),
+            (
+                "cnt",
+                arr(&[N], (0..N).map(|i| (i % 3 + 1) as f64).collect()),
+            ),
+            (
+                "mem",
+                arr(&[N, 3], (0..N).flat_map(|_| [1.0, 2.0, 3.0]).collect()),
+            ),
+            ("flatv", arr(&[3], vec![10.0, 20.0, 30.0])),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let on = build(&doc, Compiler::Native, true, &consts);
+        let off = build(&doc, Compiler::Native, false, &consts);
+        let oracle = build(&doc, Compiler::Interpreter, true, &consts);
+        assert_eq!(bits(&on, "M.rag"), bits(&off, "M.rag"), "on vs off");
+        assert_eq!(
+            bits(&on, "M.rag"),
+            bits(&oracle, "M.rag"),
+            "native vs interpreter"
+        );
+        let field = observed_field(&on, "M.rag").unwrap();
+        assert_eq!(
+            field.iter().take(3).copied().collect::<Vec<_>>(),
+            vec![20.0, 60.0, 120.0],
+            "each row sums its own members"
+        );
+    }
+
+    /// A read of the observed being defined at a FIXED row (a causal
+    /// self-reference) is declined too: the rewrite shrinks the output's
+    /// driving axis, so `index(out, 5)` would read the fifth representative,
+    /// not original row 5.
+    #[test]
+    fn a_self_read_of_the_observed_is_not_rewritten() {
+        let year: Vec<f64> = (0..N).map(|i| (2000 + i % 5) as f64).collect();
+        let mut arrays = crate::simulate_array::ArrMap::default();
+        arrays.insert(
+            "year".into(),
+            ArrayD::from_shape_vec(IxDyn(&[N]), year).unwrap(),
+        );
+        arrays.insert("out".into(), ArrayD::zeros(IxDyn(&[N])));
+        let rule = |extra: Value| -> crate::Expr {
+            serde_json::from_value(json!({
+                "op": "faq", "args": [], "output_idx": ["b"],
+                "ranges": {"b": [1, N]},
+                "expr": {"op": "+", "args": [{"op": "index", "args": ["year", "b"]}, extra]}
+            }))
+            .unwrap()
+        };
+        assert!(
+            super::plan("out", &rule(json!(1.0)), &arrays).is_some(),
+            "without the self-read the rule is rewritten"
+        );
+        assert!(
+            super::plan(
+                "out",
+                &rule(json!({"op": "index", "args": ["out", 5]})),
+                &arrays
+            )
+            .is_none(),
+            "a fixed-row self-read is declined"
+        );
+        assert!(
+            super::plan("out", &rule(json!("out")), &arrays).is_none(),
+            "a bare self-read is declined"
+        );
     }
 }
