@@ -106,16 +106,23 @@ func jsonSigned(neg bool, u uint64) (int64, bool) {
 // jsonDecInt is `JNum.decInt?`: integral reports whether the decimal is
 // integral; when it is, fits reports whether its value is in Int64 and z is
 // that value.
+//
+// The exponent arithmetic never wraps: e10+1-len is compared as e10 against
+// len-1, which cannot overflow for any int64 exponent.
 func jsonDecInt(neg bool, ds []byte, e10 int64) (z int64, integral, fits bool) {
 	l := int64(len(ds))
-	if l > e10+1 {
+	if e10 < l-1 {
 		return 0, false, false
 	}
-	zeros := e10 + 1 - l
 	u, ok := jsonDigitsVal(ds)
 	if !ok {
 		return 0, true, false
 	}
+	if u == 0 {
+		return 0, true, true
+	}
+	// u ≠ 0, so the loop overflows uint64 within 20 steps of a huge exponent.
+	zeros := e10 - (l - 1)
 	for i := int64(0); i < zeros; i++ {
 		if u != 0 && u > math.MaxUint64/10 {
 			return 0, true, false
@@ -297,29 +304,50 @@ func fromFloat(f float64) Json {
 
 // ToGo converts a Json value to the decoded-document representation the esm
 // package uses: map[string]any, []any, string, bool, nil, int64 for an
-// integer, float64 for a decimal.
-func ToGo(j Json) any {
+// integer, float64 for a decimal (the binary64 value nearest to it, as a JSON
+// reader reads its spelling).
+//
+// ok is false, with bad the first such number, when a decimal is beyond the
+// binary64 range (`1.0e400`): it has no nearest finite binary64 value, and a
+// JSON reader refuses that literal too. A nonzero decimal below the smallest
+// subnormal (`1.0e-400`) rounds to zero, as every binding's JSON reader rounds
+// it, and is the canonical zero, the integer 0.
+func ToGo(j Json) (v any, bad JNum, ok bool) {
 	switch x := j.(type) {
 	case JNum:
 		if !x.Dec {
-			return x.I
+			return x.I, JNum{}, true
 		}
-		return x.Float()
+		f := x.Float()
+		switch {
+		case math.IsInf(f, 0):
+			return nil, x, false
+		case f == 0:
+			return int64(0), JNum{}, true
+		}
+		return f, JNum{}, true
 	case []Json:
 		out := make([]any, len(x))
 		for i, e := range x {
-			out[i] = ToGo(e)
+			if out[i], bad, ok = ToGo(e); !ok {
+				return nil, bad, false
+			}
 		}
-		return out
+		return out, JNum{}, true
 	case Obj:
 		out := make(map[string]any, len(x))
 		for _, kv := range x {
-			out[kv.K] = ToGo(kv.V)
+			if out[kv.K], bad, ok = ToGo(kv.V); !ok {
+				return nil, bad, false
+			}
 		}
-		return out
+		return out, JNum{}, true
 	}
-	return j
+	return j, JNum{}, true
 }
+
+// PrintNum is the canonical spelling of a number.
+func PrintNum(n JNum) string { return string(numPrint(n)) }
 
 // SortKeys is the value with every object's entries sorted by key (code point
 // order), the key order of the canonical serialization.

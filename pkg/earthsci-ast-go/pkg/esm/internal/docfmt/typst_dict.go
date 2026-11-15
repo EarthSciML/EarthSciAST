@@ -158,7 +158,11 @@ func tdictPMin(r []rune) ([]rune, bool) {
 }
 
 // tdictPVal is `TypstDict.pVal`: a value, at its first character.
-func tdictPVal(input []rune) (Json, []rune, bool) {
+func tdictPVal(lim *Lim, input []rune) (Json, []rune, bool) {
+	if !lim.enter() {
+		return nil, nil, false
+	}
+	defer lim.leave()
 	if len(input) == 0 {
 		return nil, nil, false
 	}
@@ -168,7 +172,7 @@ func tdictPVal(input []rune) (Json, []rune, bool) {
 		if r1, ok := tdictPMin(r); ok {
 			return IntNum(math.MinInt64), r1, true
 		}
-		return tdictPParen(r)
+		return tdictPParen(lim, r)
 	case '"':
 		s, r, ok := strParseQuoted(true, input)
 		if !ok {
@@ -199,7 +203,7 @@ func tdictPVal(input []rune) (Json, []rune, bool) {
 }
 
 // tdictPParen is `TypstDict.pParen`: after `(` and any whitespace.
-func tdictPParen(input []rune) (Json, []rune, bool) {
+func tdictPParen(lim *Lim, input []rune) (Json, []rune, bool) {
 	if len(input) == 0 {
 		return nil, nil, false
 	}
@@ -214,13 +218,13 @@ func tdictPParen(input []rune) (Json, []rune, bool) {
 		return nil, nil, false
 	}
 	if tdictIsEntry(input) {
-		kvs, r, ok := tdictPEntries(input)
+		kvs, r, ok := tdictPEntries(lim, input)
 		if !ok {
 			return nil, nil, false
 		}
 		return kvs, r, true
 	}
-	xs, r, ok := tdictPItems(input)
+	xs, r, ok := tdictPItems(lim, input)
 	if !ok {
 		return nil, nil, false
 	}
@@ -229,11 +233,11 @@ func tdictPParen(input []rune) (Json, []rune, bool) {
 
 // tdictPItems is `TypstDict.pItems`: array elements; the first needs a `,`
 // after it even when it is the last.
-func tdictPItems(input []rune) ([]Json, []rune, bool) {
+func tdictPItems(lim *Lim, input []rune) ([]Json, []rune, bool) {
 	out := []Json{}
 	first := true
 	for {
-		v, r, ok := tdictPVal(input)
+		v, r, ok := tdictPVal(lim, input)
 		if !ok {
 			return nil, nil, false
 		}
@@ -257,7 +261,7 @@ func tdictPItems(input []rune) ([]Json, []rune, bool) {
 }
 
 // tdictPEntries is `TypstDict.pEntries`: dictionary entries, at the first key.
-func tdictPEntries(input []rune) (Obj, []rune, bool) {
+func tdictPEntries(lim *Lim, input []rune) (Obj, []rune, bool) {
 	out := Obj{}
 	for {
 		k, r, ok := strParseKey(true, tdictReserved, input)
@@ -268,7 +272,7 @@ func tdictPEntries(input []rune) (Obj, []rune, bool) {
 		if len(r) == 0 || r[0] != ':' {
 			return nil, nil, false
 		}
-		v, r2, ok := tdictPVal(tdictSkipWs(r[1:]))
+		v, r2, ok := tdictPVal(lim, tdictSkipWs(r[1:]))
 		if !ok {
 			return nil, nil, false
 		}
@@ -286,8 +290,8 @@ func tdictPEntries(input []rune) (Obj, []rune, bool) {
 
 // tdictDecode is `TypstDict.decode`: whitespace, the value, whitespace, end of
 // input. The value must be well formed.
-func tdictDecode(s []rune) (Json, bool) {
-	v, r, ok := tdictPVal(tdictSkipWs(s))
+func tdictDecode(lim *Lim, s []rune) (Json, bool) {
+	v, r, ok := tdictPVal(lim, tdictSkipWs(s))
 	if !ok || len(tdictSkipWs(r)) != 0 || !JsonWfb(v) {
 		return nil, false
 	}

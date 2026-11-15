@@ -11,7 +11,10 @@ package docfmt
 // numParseRaw reads the token as written. A digit run whose value does not
 // fit in Int64 is not an integer token (it has no canonical form).
 
-import "strconv"
+import (
+	"math"
+	"strconv"
+)
 
 // numDigitChar is `Esm.digitChar`.
 func numDigitChar(d byte) rune { return rune('0' + d) }
@@ -133,7 +136,10 @@ func numPrint(n JNum) []rune {
 
 // numMkDec is `Number.mkDec`: the decimal with digits ds (leading and trailing
 // zeros dropped) whose first listed digit sits at decimal exponent e10.
-func numMkDec(neg bool, ds []byte, e10 int64) JNum {
+//
+// ok is false when the exponent of the first nonzero digit leaves int64
+// (Lean's exponent is unbounded); the readers refuse such a token.
+func numMkDec(neg bool, ds []byte, e10 int64) (JNum, bool) {
 	lead := 0
 	for lead < len(ds) && ds[lead] == 0 {
 		lead++
@@ -142,7 +148,10 @@ func numMkDec(neg bool, ds []byte, e10 int64) JNum {
 	for len(core) > 0 && core[len(core)-1] == 0 {
 		core = core[:len(core)-1]
 	}
-	return JNum{Dec: true, Neg: neg, Digits: core, E10: e10 - int64(lead)}
+	if e10 < math.MinInt64+int64(lead) {
+		return JNum{}, false
+	}
+	return JNum{Dec: true, Neg: neg, Digits: core, E10: e10 - int64(lead)}, true
 }
 
 // numFinishDec is `Number.finishDec`: an optional `e` exponent after the
@@ -157,9 +166,11 @@ func numFinishDec(neg bool, ds []byte, e10 int64, r []rune) (JNum, []rune, bool)
 		if (x > 0 && s < e10) || (x < 0 && s > e10) {
 			return JNum{}, nil, false
 		}
-		return numMkDec(neg, ds, s), rest, true
+		n, ok := numMkDec(neg, ds, s)
+		return n, rest, ok
 	}
-	return numMkDec(neg, ds, e10), r, true
+	n, ok := numMkDec(neg, ds, e10)
+	return n, r, ok
 }
 
 // numAfterInt is `Number.afterInt`.

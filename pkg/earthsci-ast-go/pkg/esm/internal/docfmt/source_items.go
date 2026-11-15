@@ -203,11 +203,11 @@ func itemsRawDoc(pr func(*Sym, *MC) MR, d *Doc[MC]) Doc[MR] {
 
 // itemsCookComp is `Source.cookComp`: read a component's math entries under
 // its symbol table; one math text may hold several equations.
-func itemsCookComp(ck func(*Sym, *MR) ([]MC, bool), d *Doc[MR], c *Comp[MR]) (Comp[MC], bool) {
+func itemsCookComp(lim *Lim, ck func(*Lim, *Sym, *MR) ([]MC, bool), d *Doc[MR], c *Comp[MR]) (Comp[MC], bool) {
 	s := skSymFor(d, c)
 	var math []MC
 	for i := range c.Math {
-		ms, ok := ck(s, &c.Math[i])
+		ms, ok := ck(lim, s, &c.Math[i])
 		if !ok {
 			return Comp[MC]{}, false
 		}
@@ -220,11 +220,11 @@ func itemsCookComp(ck func(*Sym, *MR) ([]MC, bool), d *Doc[MR], c *Comp[MR]) (Co
 }
 
 // itemsCookDoc is `Source.cookDoc`: read every math entry of a skeleton.
-func itemsCookDoc(ck func(*Sym, *MR) ([]MC, bool), d *Doc[MR]) (Doc[MC], bool) {
+func itemsCookDoc(lim *Lim, ck func(*Lim, *Sym, *MR) ([]MC, bool), d *Doc[MR]) (Doc[MC], bool) {
 	ts := skTopSym(d)
 	var rm []MC
 	for i := range d.Math {
-		ms, ok := ck(ts, &d.Math[i])
+		ms, ok := ck(lim, ts, &d.Math[i])
 		if !ok {
 			return Doc[MC]{}, false
 		}
@@ -232,7 +232,7 @@ func itemsCookDoc(ck func(*Sym, *MR) ([]MC, bool), d *Doc[MR]) (Doc[MC], bool) {
 	}
 	cs := make([]Comp[MC], len(d.Comps))
 	for i := range d.Comps {
-		c, ok := itemsCookComp(ck, d, &d.Comps[i])
+		c, ok := itemsCookComp(lim, ck, d, &d.Comps[i])
 		if !ok {
 			return Doc[MC]{}, false
 		}
@@ -266,11 +266,11 @@ func itemsPrMx(prE func(*Sym, *Eqn) string, prR func(*Sym, Json) string, s *Sym,
 }
 
 // itemsCkMx is `Source.ckMx`: read a math entry's text back.
-func itemsCkMx(ckE func(*Sym, string) ([]Eqn, bool), ckR func(*Sym, string) (Json, bool), s *Sym, m *MR) ([]MC, bool) {
+func itemsCkMx(lim *Lim, ckE func(*Lim, *Sym, string) ([]Eqn, bool), ckR func(*Lim, *Sym, string) (Json, bool), s *Sym, m *MR) ([]MC, bool) {
 	switch m.K {
 	case MxRxn:
 		x := &m.Rxn
-		j, ok := ckR(s, x.Rate)
+		j, ok := ckR(lim, s, x.Rate)
 		if !ok {
 			return nil, false
 		}
@@ -285,20 +285,20 @@ func itemsCkMx(ckE func(*Sym, string) ([]Eqn, bool), ckR func(*Sym, string) (Jso
 		sc := t.scope(s)
 		out := Tm[Json]{Name: t.Name, Params: t.Params, HasLhs: t.HasLhs, Attrs: t.Attrs}
 		if t.HasLhs {
-			l, ok := ckR(sc, t.Lhs)
+			l, ok := ckR(lim, sc, t.Lhs)
 			if !ok {
 				return nil, false
 			}
 			out.Lhs = l
 		}
-		b, ok := ckR(sc, t.Body)
+		b, ok := ckR(lim, sc, t.Body)
 		if !ok {
 			return nil, false
 		}
 		out.Body = b
 		return []MC{{K: MxTm, Tm: out}}, true
 	}
-	es, ok := ckE(s, m.Eq)
+	es, ok := ckE(lim, s, m.Eq)
 	if !ok {
 		return nil, false
 	}

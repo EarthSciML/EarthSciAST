@@ -173,6 +173,112 @@ func TestDocumentFormatFixtures(t *testing.T) {
 	}
 }
 
+// docfmtLimitText builds a limits.json case's text from its recipe (README,
+// section Limits): heads[surface] + prefix + open*n + middle + close*n +
+// suffix, or, for yaml_levels n, an esm:metaparameters block holding `x:` and
+// the lines " "*2i + "-" for i in 1..n-1.
+func docfmtLimitText(head string, input map[string]any) string {
+	var b strings.Builder
+	b.WriteString(head)
+	if levels, ok := input["yaml_levels"]; ok {
+		n, _ := levels.(json.Number).Int64()
+		b.WriteString("```esm:metaparameters\nx:\n")
+		for i := 1; i < int(n); i++ {
+			b.WriteString(strings.Repeat(" ", 2*i))
+			b.WriteString("-\n")
+		}
+		b.WriteString("```\n")
+		return b.String()
+	}
+	field := func(k string) string { s, _ := input[k].(string); return s }
+	n := 0
+	if v, ok := input["n"].(json.Number); ok {
+		i, _ := v.Int64()
+		n = int(i)
+	}
+	b.WriteString(field("prefix"))
+	b.WriteString(strings.Repeat(field("open"), n))
+	b.WriteString(field("middle"))
+	b.WriteString(strings.Repeat(field("close"), n))
+	b.WriteString(field("suffix"))
+	return b.String()
+}
+
+// TestDocumentFormatLimits runs every case of limits.json: the bounds the
+// readers keep (nesting, the binary64 range) refuse exactly where the Rust
+// reader's do, and a removed operator is named only when the math meets it.
+// The cases run in parallel, so concurrent reads must not share state.
+func TestDocumentFormatLimits(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoTestsDir(t), "conformance", "document_format", "limits.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := decodeDocJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	heads := doc.(map[string]any)["heads"].(map[string]any)
+	cases, _ := doc.(map[string]any)["cases"].([]any)
+	if len(cases) == 0 {
+		t.Fatal("limits.json has no cases")
+	}
+	for _, rawCase := range cases {
+		c := rawCase.(map[string]any)
+		t.Run(c["id"].(string), func(t *testing.T) {
+			t.Parallel()
+			surface := c["surface"].(string)
+			text := docfmtLimitText(heads[surface].(string), c["input"].(map[string]any))
+			got, err := ParseDocument(text, docfmtSurface(t, surface))
+			if want, ok := c["error"].(string); ok {
+				var de *DocumentFormatError
+				switch {
+				case err == nil:
+					t.Fatalf("expected %q, read a document", want)
+				case !errors.As(err, &de):
+					t.Fatalf("expected a *DocumentFormatError, got %T", err)
+				case de.Code != want:
+					t.Fatalf("expected %q, got %q (%s)", want, de.Code, de.Message)
+				}
+				// The refusal is for the bound the case is about.
+				id := c["id"].(string)
+				if strings.HasPrefix(id, "limit_") && !strings.Contains(de.Message, "nests too deeply") {
+					t.Errorf("refused for another reason: %s", de.Message)
+				}
+				if strings.HasPrefix(id, "number_") && !strings.Contains(de.Message, "binary64") {
+					t.Errorf("refused for another reason: %s", de.Message)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			esm, err := decodeDocJSON([]byte(c["esm_json"].(string)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := typedJSONNumbers(esm); !reflect.DeepEqual(got, want) {
+				t.Errorf("differs:\n--- got\n%s\n--- want\n%s", docfmtJSONText(got), docfmtJSONText(want))
+			}
+		})
+	}
+}
+
+// TestDocumentFormatLimitMessages: a refusal past a bound says which bound.
+func TestDocumentFormatLimitMessages(t *testing.T) {
+	const head = "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n"
+	for text, want := range map[string]string{
+		"$$\ny = " + strings.Repeat("(", 64) + "k" + strings.Repeat(")", 64) + "\n$$\n": "nests too deeply",
+		"$$\ny = k" + strings.Repeat(" - k", 62) + "\n$$\n":                             "nests too deeply",
+		"$$\ny = 1.0e400 k\n$$\n":                  "`1.0e400` is outside the binary64 range",
+		"$$\ny = \\operatorname{arrayop}(k)\n$$\n": "`arrayop` was removed",
+	} {
+		_, err := ParseMarkdown(head + text)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: expected %q, got %v", text, want, err)
+		}
+	}
+}
+
 // TestDocumentFormatPrintMath: the `math` field of a fixture case is the math
 // of the case's one equation display, so PrintMath of that equation under the
 // names its model declares (the keys of its variables, species and parameters,

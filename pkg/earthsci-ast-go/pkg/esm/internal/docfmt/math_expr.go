@@ -240,9 +240,6 @@ var exprRemovedOps = []string{
 // rewritten, never printed.
 var exprDeprecatedOps = []string{"neg", "pow"}
 
-// ExprRemovedOps is exprRemovedOps, for the esm package's refusal diagnostic.
-func ExprRemovedOps() []string { return exprRemovedOps }
-
 // exprOpOk is `Math.opOK`: `[A-Za-z_][A-Za-z0-9_.]*` or `[-+*/^<>=!]+`.
 func exprOpOk(s string) bool {
 	cs := []rune(s)

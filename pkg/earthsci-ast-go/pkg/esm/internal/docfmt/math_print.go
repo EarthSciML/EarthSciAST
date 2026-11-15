@@ -145,6 +145,8 @@ func prUnescK(cs []rune) []rune {
 type Ctx struct {
 	sf Sf
 	s  *Sym
+	// lim is the read's state (limits.go); nil when printing.
+	lim *Lim
 }
 
 // prRpG is `Math.rpG`: the closing token of a grouping parenthesis.
@@ -1926,4 +1928,4 @@ func prTemplate(c Ctx, n string, bs Obj, esc func() Out) Out {
 func prPa(c Ctx, l int, e Json) []Tok { return prPr(c, e).at(c.sf, l) }
 
 // prPrint is `Math.print`: the tokens of a whole expression.
-func prPrint(sf Sf, s *Sym, e Json) []Tok { return prPa(Ctx{sf, s}, 1, e) }
+func prPrint(sf Sf, s *Sym, e Json) []Tok { return prPa(Ctx{sf: sf, s: s}, 1, e) }

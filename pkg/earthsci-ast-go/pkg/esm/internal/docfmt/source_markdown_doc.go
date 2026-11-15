@@ -94,19 +94,19 @@ func mdDocWithComment(has bool, c string, es []Eqn) []Eqn {
 
 // mdDocOneMd is `Md.oneMd`: one display in LaTeX: a multi-line environment,
 // or one equation.
-func mdDocOneMd(s *Sym, hasC bool, c string, body []rune) ([]Eqn, bool) {
+func mdDocOneMd(lim *Lim, s *Sym, hasC bool, c string, body []rune) ([]Eqn, bool) {
 	if one, inner, ok := mdDocEnvOf(body); ok {
 		ts, ok := latexLex(inner)
 		if !ok {
 			return nil, false
 		}
-		es, ok := mlCookRows(SfLatex, s, one, ts)
+		es, ok := mlCookRows(lim, SfLatex, s, one, ts)
 		if !ok {
 			return nil, false
 		}
 		return mdDocWithComment(hasC, c, es), true
 	}
-	j, ok := mathParseLatex(s, string(body))
+	j, ok := mathParseLatex(lim, s, string(body))
 	if !ok {
 		return nil, false
 	}
@@ -119,20 +119,22 @@ func mdDocOneMd(s *Sym, hasC bool, c string, body []rune) ([]Eqn, bool) {
 
 // mdDocCkMd is `Md.ckMd`: read the math text of a display equation: an
 // optional leading comment line `% …`, then the equation.
-func mdDocCkMd(s *Sym, raw string) ([]Eqn, bool) {
+func mdDocCkMd(lim *Lim, s *Sym, raw string) ([]Eqn, bool) {
 	cs := []rune(raw)
 	if r, ok := cutPrefix(cs, "% "); ok {
 		c, rest := textSplitLine(r)
-		return mdDocOneMd(s, true, string(c), rest)
+		return mdDocOneMd(lim, s, true, string(c), rest)
 	}
-	return mdDocOneMd(s, false, "", cs)
+	return mdDocOneMd(lim, s, false, "", cs)
 }
 
 // mdDocPrMdx is `Md.prMdx`: a math entry's text.
 func mdDocPrMdx(s *Sym, m *MC) MR { return itemsPrMx(mdDocPrMd, mathPrintLatex, s, m) }
 
 // mdDocCkMdx is `Md.ckMdx`: read a math entry's text.
-func mdDocCkMdx(s *Sym, m *MR) ([]MC, bool) { return itemsCkMx(mdDocCkMd, mathParseLatex, s, m) }
+func mdDocCkMdx(lim *Lim, s *Sym, m *MR) ([]MC, bool) {
+	return itemsCkMx(lim, mdDocCkMd, mathParseLatex, s, m)
+}
 
 // mdDocCommentOk is `Md.commentOK`.
 func mdDocCommentOk(has bool, c string) bool {
@@ -183,7 +185,7 @@ func (capsMd) declName(n string) bool {
 
 func (capsMd) attr(a KV) bool { return strIsIdent([]rune(a.K)) && mdDocDqOk(a.V) }
 
-func (capsMd) eqn(s *Sym, e *Eqn) bool {
+func (capsMd) eqn(lim *Lim, s *Sym, e *Eqn) bool {
 	l := mdDocLatexOf(s, e)
 	if !mdDocCommentOk(e.HasComment, e.Comment) || containsRune(l, '$') || containsRune(l, '\n') ||
 		(len(l) > 0 && l[0] == '%') {
@@ -192,7 +194,7 @@ func (capsMd) eqn(s *Sym, e *Eqn) bool {
 	if _, _, ok := mdDocEnvOf(l); ok {
 		return false
 	}
-	_, ok := mdTmLex([]rune(mdDocPrMd(s, e)))
+	_, ok := mdTmLex(lim, []rune(mdDocPrMd(s, e)))
 	return !ok
 }
 
@@ -212,12 +214,12 @@ func (capsMd) plot(a Obj) bool {
 	return true
 }
 
-func (capsMd) tm(s *Sym, t *Tm[Json]) bool {
+func (capsMd) tm(lim *Lim, s *Sym, t *Tm[Json]) bool {
 	rt := Tm[string]{Name: t.Name, Params: t.Params, HasLhs: t.HasLhs, Body: mathPrintLatex(s, t.Body), Attrs: t.Attrs}
 	if t.HasLhs {
 		rt.Lhs = mathPrintLatex(s, t.Lhs)
 	}
-	if !mdItemOk(&RItem{K: RITm, Tm: rt}) {
+	if !mdItemOk(lim, &RItem{K: RITm, Tm: rt}) {
 		return false
 	}
 	for _, kv := range t.Attrs {
@@ -253,8 +255,8 @@ func mdDocCanonSegs(its []RItem) []Seg {
 }
 
 // mdDocPrintMd is `Md.printMd`: print a document as Markdown.
-func mdDocPrintMd(d Json) string {
-	doc := skToDoc(capsMd{}, d)
+func mdDocPrintMd(lim *Lim, d Json) string {
+	doc := skToDoc(lim, capsMd{}, d)
 	out := mdDocFrontMd(doc.Front)
 	raw := itemsRawDoc(mdDocPrMdx, &doc)
 	out = append(out, mdRender(mdDocCanonSegs(itemsItems(&raw)))...)
@@ -262,7 +264,7 @@ func mdDocPrintMd(d Json) string {
 }
 
 // mdDocLexDoc is `Md.lexDoc`: read the front matter and the constructs.
-func mdDocLexDoc(s []rune) (Obj, []RItem, bool) {
+func mdDocLexDoc(lim *Lim, s []rune) (Obj, []RItem, bool) {
 	r, ok := cutPrefix(s, "---\n")
 	if !ok {
 		return nil, nil, false
@@ -271,12 +273,12 @@ func mdDocLexDoc(s []rune) (Obj, []RItem, bool) {
 	if !ok || !textBlank(sl) {
 		return nil, nil, false
 	}
-	v, ok := yamlDecode(body)
+	v, ok := yamlDecode(lim, body)
 	kvs, isObj := v.(Obj)
 	if !ok || !isObj {
 		return nil, nil, false
 	}
-	its, ok := mdLex(true, rest)
+	its, ok := mdLex(lim, true, rest)
 	if !ok {
 		return nil, nil, false
 	}
@@ -284,21 +286,21 @@ func mdDocLexDoc(s []rune) (Obj, []RItem, bool) {
 }
 
 // mdDocParseMd is `Md.parseMd`: read a Markdown document, after decodeText.
-func mdDocParseMd(s string) (Json, bool) {
-	front, its, ok := mdDocLexDoc(linesDecodeText([]rune(s)))
+func mdDocParseMd(lim *Lim, s string) (Json, bool) {
+	front, its, ok := mdDocLexDoc(lim, linesDecodeText([]rune(s)))
 	if !ok {
 		return nil, false
 	}
-	return mdDocParseItemsMd(front, its)
+	return mdDocParseItemsMd(lim, front, its)
 }
 
 // mdDocParseItemsMd is `Md.parseItemsMd`.
-func mdDocParseItemsMd(front Obj, its []RItem) (Json, bool) {
+func mdDocParseItemsMd(lim *Lim, front Obj, its []RItem) (Json, bool) {
 	r, ok := itemsUnitems(front, its)
 	if !ok {
 		return nil, false
 	}
-	d, ok := itemsCookDoc(mdDocCkMdx, &r)
+	d, ok := itemsCookDoc(lim, mdDocCkMdx, &r)
 	if !ok {
 		return nil, false
 	}
