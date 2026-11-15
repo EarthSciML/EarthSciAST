@@ -215,8 +215,11 @@ end
         eq, cs = _tp_equation(flat, _D("Chem.O3"))
         @test [_tp_origins(c) for c in cs] ==
             [[(:component, c)] for c in ("Src", "Sink", "Chem", "Adv")]
-        # The right-hand side is built from the list: one sum over the four.
-        @test eq.rhs isa OpExpr && eq.rhs.op == "+" && length(eq.rhs.args) == 4
+        # The right-hand side is built from the list: the left fold of the four,
+        # `+(+(+(c1, c2), c3), c4)` (esm-libraries-spec §4.7.5).
+        fold = foldl((a, c) -> OpExpr("+", ASTExpr[a, c.expr]), cs[2:end]; init = cs[1].expr)
+        @test canonical_expr_json(eq.rhs) == canonical_expr_json(fold)
+        @test eq.rhs isa OpExpr && eq.rhs.op == "+" && length(eq.rhs.args) == 2
     end
 
     @testset "an additive couple appends, and creates a tendency for an unknown only" begin

@@ -1176,11 +1176,20 @@ end
         # O3's at the source's (its last matching A).
         loss(k, v) = _fe("*", _fe("-", k), "Chem.$v")
         adv(v) = _fe("*", _fe("-", "Adv.wind"), _fe("grad", "Chem.$v"))
+        # Each right-hand side is the left fold of its contributions
+        # (esm-libraries-spec §4.7.5).
         @test _fjson(flat.equations) == [
-            _feq(_fD("Chem.NO"), _fe("+", loss("Sink.kd", "NO"), loss("Chem.k2", "NO"), adv("NO"))),
+            _feq(
+                _fD("Chem.NO"),
+                _fe("+", _fe("+", loss("Sink.kd", "NO"), loss("Chem.k2", "NO")), adv("NO"))
+            ),
             _feq(
                 _fD("Chem.O3"),
-                _fe("+", "Src.e", loss("Sink.kd", "O3"), loss("Chem.k1", "O3"), adv("O3"))
+                _fe(
+                    "+",
+                    _fe("+", _fe("+", "Src.e", loss("Sink.kd", "O3")), loss("Chem.k1", "O3")),
+                    adv("O3")
+                )
             ),
         ]
         @test sort(collect(keys(flat.state_variables))) == ["Chem.NO", "Chem.O3"]
