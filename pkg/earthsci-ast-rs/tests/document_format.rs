@@ -147,6 +147,58 @@ fn document_format_fixtures() {
 /// keys of its variables, species and parameters, and the document's index
 /// sets) gives it in both formats. A case whose model or document declares
 /// expression templates is skipped: no template is in scope for `print_math`.
+/// The input text of a `limits.json` case (the README's recipe).
+fn limit_input(heads: &Value, case: &Value) -> String {
+    let r = &case["input"];
+    let head = heads[case["surface"].as_str().expect("surface")]
+        .as_str()
+        .expect("head");
+    let field = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
+    if let Some(n) = r.get("yaml_levels").and_then(Value::as_u64) {
+        let lines: String = (1..n as usize)
+            .map(|i| format!("{}-\n", " ".repeat(2 * i)))
+            .collect();
+        return format!("{head}```esm:metaparameters\nx:\n{lines}```\n");
+    }
+    let n = r.get("n").and_then(Value::as_u64).unwrap_or(0) as usize;
+    format!(
+        "{head}{}{}{}{}{}",
+        field("prefix"),
+        field("open").repeat(n),
+        field("middle"),
+        field("close").repeat(n),
+        field("suffix")
+    )
+}
+
+/// `limits.json`: the reader limits every binding shares (README, Limits).
+#[test]
+fn document_format_limits() {
+    let path = repo_tests_dir().join("conformance/document_format/limits.json");
+    let text = std::fs::read_to_string(&path).expect("limits.json");
+    let doc: Value = serde_json::from_str(&text).expect("limits JSON");
+    let mut failures = Vec::new();
+    let cases = doc["cases"].as_array().expect("cases");
+    for case in cases {
+        let id = case["id"].as_str().expect("id");
+        let got = parse_document(
+            &limit_input(&doc["heads"], case),
+            surface(case["surface"].as_str().expect("surface")),
+        );
+        let esm = case
+            .get("esm_json")
+            .map(|t| serde_json::from_str::<Value>(t.as_str().expect("esm_json")).expect("esm"));
+        match (esm, case.get("error"), got) {
+            (Some(esm), _, Ok(d)) if d == esm => {}
+            (_, Some(code), Err(e)) if e.code == code.as_str().expect("code") => {}
+            (_, _, Ok(_)) => failures.push(format!("{id}: read, or read differently")),
+            (_, _, Err(e)) => failures.push(format!("{id}: refused with {}", e.code)),
+        }
+    }
+    assert!(cases.len() > 30, "only {} limit cases", cases.len());
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 #[test]
 fn print_math_reproduces_the_display() {
     let dir = repo_tests_dir().join("conformance/document_format");
