@@ -13,6 +13,21 @@ esm --help
 Prebuilt binaries are attached to each
 [GitHub release](https://github.com/EarthSciML/EarthSciAST/releases).
 
+## Math and source formats
+
+`esm pretty` (alias `esm display`) prints a document's equations and
+reaction rates as math, in the notation of one of the two ESM source formats:
+`--format typst` (Typst math, the default) or `--format markdown` (LaTeX math,
+as the ESM Markdown format writes it). `esm convert --to markdown` and
+`esm convert --to typst` print the whole document in the ESM Markdown or
+Typst source format; `--to json` (the default) and `--to compact-json` write
+it as JSON.
+
+```bash
+esm pretty model.esm --format markdown
+esm convert model.esm --to typst -o model.typ
+```
+
 ## Time integrators
 
 `esm simulate` integrates a document's differential equations on one of two
