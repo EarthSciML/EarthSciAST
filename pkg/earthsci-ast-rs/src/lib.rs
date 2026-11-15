@@ -238,6 +238,7 @@ pub use canonicalize::{
 // spellings of a whole `.esm` document, printed and read losslessly.
 pub use document::{
     ConstructSource, DocumentFormat, expression_names, parse_document, parse_document_with_sources,
+    parse_math,
     parse_markdown, parse_typst, print_document, print_markdown, print_math, print_typst,
 };
 // The esm-spec §6.3.1 classification API. esm 1.0.0 declares two variable

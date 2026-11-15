@@ -144,6 +144,59 @@ pub fn expression_names(expr: &serde_json::Value) -> Vec<String> {
     out
 }
 
+/// Read one expression, or one equation, written as math under a set of
+/// declared names: LaTeX for [`DocumentFormat::Markdown`] (`Math.parseLatex`),
+/// Typst math for [`DocumentFormat::Typst`] (`Math.parseTypst`). The inverse
+/// of [`print_math`]: `parse_math(&print_math(e, names, f), names, f)` is `e`
+/// in canonical form.
+///
+/// `text` is what a document display holds, without its delimiters. Text
+/// whose top is `=` reads as an equation, an object with `lhs` and `rhs`, as
+/// a display does (`Source.eqSides`); any other text reads as an expression.
+/// `names` plays the part of the variables a component declares: it decides
+/// how a run of letters reads (in LaTeX, `RT` is the name `RT` when it is
+/// declared, the product of `R` and `T` when they are). No template is in
+/// scope.
+///
+/// # Errors
+///
+/// A [`DiagnosticError`] with code `removed_op` when the math uses an
+/// operator removed from the format (spec §4.2), and `parse_error` for any
+/// other text that is not math, and for one past a bound of the Rust reader
+/// ([`limits`]): nested too deeply, or holding a number beyond the binary64
+/// range.
+pub fn parse_math(
+    text: &str,
+    names: &[String],
+    format: DocumentFormat,
+) -> Result<serde_json::Value, DiagnosticError> {
+    let sym = math::Sym {
+        names: names.to_vec(),
+        templates: Vec::new(),
+    };
+    let (e, found) = limits::reading(|| match format {
+        DocumentFormat::Markdown => math::parse_latex(&sym, text),
+        DocumentFormat::Typst => math::parse_typst(&sym, text),
+    });
+    let e = e.map(|e| match source::equation::eq_sides(e.clone()) {
+        Some((lhs, rhs)) => json::Json::Obj(vec![
+            ("lhs".to_string(), lhs),
+            ("rhs".to_string(), rhs),
+        ]),
+        None => e,
+    });
+    if e.is_none() && found.removed_op.is_none() && !found.too_deep {
+        return Err(DiagnosticError {
+            code: codes::PARSE_ERROR,
+            message: match format {
+                DocumentFormat::Markdown => "not an ESM expression in LaTeX math".to_string(),
+                DocumentFormat::Typst => "not an ESM expression in Typst math".to_string(),
+            },
+        });
+    }
+    checked(e, found, format)
+}
+
 /// Read a Markdown ESM document (`Source.Md.parseMd`). The result is in
 /// canonical form.
 ///
@@ -302,6 +355,49 @@ mod tests {
     fn code(r: Result<serde_json::Value, DiagnosticError>) -> (&'static str, String) {
         let e = r.expect_err("refused");
         (e.code, e.message)
+    }
+
+    #[test]
+    fn parse_math_reads_an_expression_or_an_equation() {
+        let names = vec!["RT".to_string(), "k".to_string(), "y".to_string()];
+        let e = parse_math("RT + k", &names, DocumentFormat::Markdown).unwrap();
+        assert_eq!(e, serde_json::json!({"op": "+", "args": ["RT", "k"]}));
+        // With its letters declared instead, a run of letters in LaTeX is
+        // their product; with neither, it is not read.
+        let rt = vec!["R".to_string(), "T".to_string()];
+        let e = parse_math("RT", &rt, DocumentFormat::Markdown).unwrap();
+        assert_eq!(e, serde_json::json!({"op": "*", "args": ["R", "T"]}));
+        assert!(parse_math("RT", &[], DocumentFormat::Markdown).is_err());
+        let e = parse_math("y = 2 k", &names, DocumentFormat::Typst).unwrap();
+        assert_eq!(
+            e,
+            serde_json::json!({"lhs": "y", "rhs": {"op": "*", "args": [2, "k"]}})
+        );
+        for (text, format) in [
+            ("y = k", DocumentFormat::Markdown),
+            ("(dif y)/(dif t) = -k y", DocumentFormat::Typst),
+        ] {
+            let e = parse_math(text, &names, format).unwrap();
+            assert_eq!(print_math(&e, &names, format), text);
+        }
+    }
+
+    #[test]
+    fn parse_math_refuses_as_a_document_read_does() {
+        let names = vec!["k".to_string()];
+        let (c, _) = code(parse_math("k +", &names, DocumentFormat::Markdown));
+        assert_eq!(c, codes::PARSE_ERROR);
+        let (c, _) = code(parse_math("1.0e400 k", &names, DocumentFormat::Typst));
+        assert_eq!(c, codes::PARSE_ERROR);
+        let (c, m) = code(parse_math(
+            "\\operatorname{arrayop}(k)",
+            &names,
+            DocumentFormat::Markdown,
+        ));
+        assert_eq!(c, codes::REMOVED_OP, "{m}");
+        let deep = format!("{}k{}", "(".repeat(50_000), ")".repeat(50_000));
+        let (c, _) = code(parse_math(&deep, &names, DocumentFormat::Typst));
+        assert_eq!(c, codes::PARSE_ERROR);
     }
 
     #[test]

@@ -29,9 +29,9 @@ WHAT EACH CASE RECORDS
 Every field of the step-4 normative table, in a language-neutral JSON form:
 ordered name lists for each map, the per-variable metadata that matters (units,
 default, shape, update kinds, distribution kind, lb / ub), the equation count and the
-`to_ascii` rendering of every equation (the same renderer the shared display
-fixtures and the expression-parse corpus use) with its ordered `contributions`
-(each a rendered summand and its origins), and the derived `system_kind`.
+canonical form of every equation (each side an expression in the canonical JSON
+of CONFORMANCE §5.4, so the corpus pins flatten and nothing about a printer) with
+its ordered `contributions` (each a summand and its origins), and the derived `system_kind`.
 Anything left out here cannot be pinned later, so the maps are recorded even
 when empty.
 
@@ -70,12 +70,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "pkg", "earthsci-ast-py", "src"))
 
-from earthsci_ast import flatten, load_path, to_ascii  # noqa: E402
+from earthsci_ast import canonicalize_document, flatten, load_path  # noqa: E402
+from earthsci_ast.serialize import _serialize_expression  # noqa: E402
 from earthsci_ast.classification import SYSTEM_KINDS  # noqa: E402
 from earthsci_ast.esm_types import ExprNode  # noqa: E402
 
@@ -687,10 +689,17 @@ UNCOVERED_TIERS: list[dict[str, str]] = [
 # --- recording ---------------------------------------------------------------
 
 
+def _expr(value):
+    """An expression in canonical JSON (CONFORMANCE §5.4)."""
+    if not isinstance(value, (str, int, float)):
+        value = _serialize_expression(value)
+    return canonicalize_document(value)
+
+
 def _scalar(value):
     """A default / literal in a JSON-safe, language-neutral form."""
     if isinstance(value, ExprNode):
-        return {"expr": to_ascii(value)}
+        return {"expr": _expr(value)}
     if isinstance(value, (list, tuple)):
         return [_scalar(v) for v in value]
     return value
@@ -714,11 +723,10 @@ def _update_kinds(update) -> list[str]:
 
 def _bound(value):
     """A flattened bound: null when absent, the number, or the flattened
-    reference (a namespaced name, or a scaled replacement) rendered with
-    `to_ascii`."""
+    reference (a namespaced name, or a scaled replacement) in canonical JSON."""
     if value is None or (isinstance(value, (int, float)) and not isinstance(value, bool)):
         return value
-    return to_ascii(value)
+    return _expr(value)
 
 
 def _variable_record(var) -> dict:
@@ -745,9 +753,9 @@ def _variable_map(m) -> list[dict]:
 def _event_record(ev) -> dict:
     return {
         "name": getattr(ev, "name", None),
-        "conditions": [to_ascii(c) for c in (getattr(ev, "conditions", None) or [])],
+        "conditions": [_expr(c) for c in (getattr(ev, "conditions", None) or [])],
         "affects": [
-            f"{to_ascii(a.lhs)} = {to_ascii(a.rhs)}" for a in (getattr(ev, "affects", None) or [])
+            {"lhs": _expr(a.lhs), "rhs": _expr(a.rhs)} for a in (getattr(ev, "affects", None) or [])
         ],
     }
 
@@ -766,11 +774,11 @@ def _record(flat) -> dict:
         "equation_count": len(flat.equations),
         "equations": [
             {
-                "lhs": to_ascii(eq.lhs),
-                "rhs": to_ascii(eq.rhs),
+                "lhs": _expr(eq.lhs),
+                "rhs": _expr(eq.rhs),
                 "source_system": eq.source_system,
                 "contributions": [
-                    {"rhs": to_ascii(c.expr), "origins": [o.to_json() for o in c.origins]}
+                    {"rhs": _expr(c.expr), "origins": [o.to_json() for o in c.origins]}
                     for c in eq.contributions
                 ],
             }
@@ -793,7 +801,7 @@ def _record(flat) -> dict:
         },
         "index_sets": list(flat.index_sets),
         "template_registry": list(flat.template_registry),
-        "field_ics": [{"state": s, "expr": to_ascii(e)} for s, e in flat.field_ics],
+        "field_ics": [{"state": s, "expr": _expr(e)} for s, e in flat.field_ics],
         "loader_fields": [
             {
                 "name": lf.name,
@@ -909,6 +917,36 @@ def _check(case_id: str, rec: dict) -> None:
 # --- build -------------------------------------------------------------------
 
 
+_EXPR_KEYS = {"lhs", "rhs", "expr", "lb", "ub", "conditions"}
+
+
+def _dump(corpus) -> str:
+    """The corpus, indented, with each expression object on one line: an
+    expression tree pretty-printed is mostly indentation."""
+    compact = []
+
+    def mark(v, key=None):
+        if key in _EXPR_KEYS:
+            if isinstance(v, dict):
+                compact.append(v)
+                return f"\x00{len(compact) - 1}"
+            if key == "conditions" and isinstance(v, list):
+                return [mark(c, "expr") for c in v]
+            return v
+        if isinstance(v, dict):
+            return {k: mark(x, k) for k, x in v.items()}
+        if isinstance(v, list):
+            return [mark(x) for x in v]
+        return v
+
+    text = json.dumps(mark(corpus), indent=2, ensure_ascii=False)
+    return re.sub(
+        r'"\\u0000(\d+)"',
+        lambda m: json.dumps(compact[int(m.group(1))], ensure_ascii=False, separators=(", ", ": ")),
+        text,
+    )
+
+
 def main() -> int:
     cases = []
     for tier, case_id, rel in CASES:
@@ -947,10 +985,10 @@ def main() -> int:
             "esm-libraries-spec §4.7.5 step 4 for one shared fixture: the ordered "
             "contents of every map, the per-variable metadata (units, default, "
             "shape, update kinds, distribution kind, and the bounds `lb` / `ub`: "
-            "null when absent, the number, or the flattened reference rendered "
-            'with to_ascii - esm-libraries-spec §4.7.5, "Bounds follow the '
-            'renaming"), every equation rendered with '
-            "to_ascii, and the derived system_kind. ORDER IS PART OF THE CONTRACT "
+            "null when absent, the number, or the flattened reference - "
+            'esm-libraries-spec §4.7.5, "Bounds follow the '
+            'renaming"), every equation, and the derived system_kind. '
+            "ORDER IS PART OF THE CONTRACT "
             "- a parameter vector is positional, so a binding that sorts or uses "
             "map-iteration order is non-conforming. The parameter subsets "
             "brownian_parameters / discrete_parameters PARTITION `parameters` "
@@ -965,19 +1003,23 @@ def main() -> int:
             "Each equation's `contributions` is its per-term provenance "
             "(esm-libraries-spec §4.7.5): the ordered summands whose LEFT-FOLD sum "
             "is the right-hand side (the `faq` body for a pointwise-lifted "
-            "equation), each rendered with to_ascii and carrying its origins, "
+            "equation), each carrying its origins, "
             '`{"component": <dotted path>}` or `{"coupling": <0-based index into '
             "the coupling sequence after coupling_import expansion>}`. Compared "
             "exactly and in order. "
             "A pointwise-lifted state (a key of `lifted_shapes`) carries the "
             "lift's index sets as its `shape`, and its lifted `faq` ranges read "
-            '`{"from": <index set>}`, rendered `i in <index set>` '
+            '`{"from": <index set>}` '
             '(esm-libraries-spec §4.7.5, "Pointwise lift: index sets"). '
+            "Every expression (an equation side, a summand, an event condition or "
+            "affect side, a bound or default that is an expression, a field initial "
+            "condition) is in the canonical JSON of CONFORMANCE §5.4 and compares as "
+            "a JSON value with every number in its canonical kind (§5.5.3.1). "
             "Entries in `refusals` must be rejected, with the named error type."
         ),
         "oracle": "earthsci_ast.flatten (pkg/earthsci-ast-py)",
         "spec": "esm-libraries-spec §4.7.5 step 4; esm-spec §6.3.1",
-        "equation_renderer": "to_ascii",
+        "expression_form": "canonical JSON (CONFORMANCE §5.4)",
         "cases": cases,
         "refusals": REFUSALS,
         "uncovered_tiers": UNCOVERED_TIERS,
@@ -986,7 +1028,7 @@ def main() -> int:
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, "cases.json")
     with open(out, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(corpus, indent=2, ensure_ascii=False) + "\n")
+        fh.write(_dump(corpus) + "\n")
 
     tiers: dict[str, int] = {}
     for c in cases:
