@@ -13,10 +13,10 @@ NOT drive stay in sync with it:
   local SymPy/ufunc values but derive their KEY SETS from the registry — a
   missing value is a loud import-time KeyError, and the checks here pin the
   derived key set to the intended registry-computed subset; and
-* the if-chain renderers (``display`` / ``codegen``) are NOT derived (their
-  spellings/precedence are heterogeneous target values); they are checked by
-  extracting the op string literals their dispatch branches on from the module
-  source, so a handler that is added/removed is reflected in the check.
+* the if-chain renderer ``codegen`` is NOT derived (its spellings are
+  heterogeneous target values); it is checked by extracting the op string
+  literals its dispatch branches on from the module source, so a handler that is
+  added/removed is reflected in the check.
 
 The intended failure mode: adding a new op to the registry WITHOUT supplying its
 value / renderer makes a check here (or the import itself) fail loudly, naming
@@ -35,7 +35,6 @@ import warnings
 # function. ``import_module`` always returns the real module.
 cadence = importlib.import_module("earthsci_ast.cadence")
 codegen = importlib.import_module("earthsci_ast.codegen")
-display = importlib.import_module("earthsci_ast.display")
 esm_types = importlib.import_module("earthsci_ast.esm_types")
 expression = importlib.import_module("earthsci_ast.expression")
 flatten = importlib.import_module("earthsci_ast.flatten")
@@ -133,7 +132,7 @@ def test_open_tier_sugar_ops_are_unregistered():
     # The demoted open-tier sugar ops are NOT in the registry at all: they are
     # ordinary unregistered rewrite-target ops with no privilege over any other
     # user op (`godunov_hamiltonian`). They therefore carry no structural arity
-    # contract, no evaluator, and no display/codegen registry membership —
+    # contract, no evaluator, and no codegen registry membership —
     # structural validation skips their operand count exactly as it does for an
     # unregistered custom op. Re-registering any of them is a regression.
     for op in ("grad", "div", "laplacian", "curl", "integral"):
@@ -161,7 +160,7 @@ def test_no_registered_rewrite_target_ops():
     # registered op is evaluable-core. The open-tier sugar
     # (grad/div/laplacian/curl/integral) and every custom op are rewrite-targets
     # by virtue of NOT being registered, so they need no registry entry — the
-    # display/codegen generic fallback renders them with no warning. The
+    # codegen generic fallback renders them with no warning. The
     # `rewrite_target` tier label remains a valid (currently unpopulated) member
     # of the vocabulary.
     assert set(reg.by_tier("rewrite_target")) == set()
@@ -278,7 +277,7 @@ def test_flatten_has_no_op_name_spatial_detector():
 
 
 # ---------------------------------------------------------------------------
-# display.py / codegen.py — if-chain renderers (source-literal extraction)
+# codegen.py — if-chain renderer (source-literal extraction)
 # ---------------------------------------------------------------------------
 
 
@@ -295,52 +294,6 @@ def _op_literals_in_source(module) -> set[str]:
     for m in re.finditer(r"\bop\s+in\s*[\(\[]([^\)\]]*)[\)\]]", src):
         ops.update(re.findall(r'"([^"]+)"', m.group(1)))
     return ops
-
-
-# Registered ops for which display's generic `op(args)` fallback IS the intended
-# rendering (they carry no dedicated math notation): the equation-LHS `ic` and the
-# build-time relational ops. Every OTHER registered op must be specifically rendered.
-# (The open-tier spatial sugar grad/div/laplacian/curl is UNregistered — it also
-# renders via the generic fallback, but is not a *registered* op, so it is not
-# listed here.)
-DISPLAY_GENERIC_OK = {
-    "ic",  # equation-LHS declaration
-    "distinct",
-    "join",  # build-time value-invention ops
-}
-
-# Unregistered ops display nonetheless branches on a source literal for: `integral`
-# is an open-tier rewrite-target op that carries its OWN `var`/`lower`/`upper`
-# sidecar fields, so its ∫ rendering needs a structural `op == "integral"` branch
-# even though the op is not in the registry (exactly like a custom user op).
-DISPLAY_STRUCTURAL_UNREGISTERED = {"integral"}
-
-
-def test_display_covers_every_registered_op():
-    handled = _op_literals_in_source(display)
-
-    # 1. Every op display branches on must be registered (no orphan handler/typo),
-    #    save the unregistered sugar ops with a deliberate structural renderer.
-    orphan = handled - REG_NAMES - DISPLAY_STRUCTURAL_UNREGISTERED
-    assert not orphan, f"display renders ops not in the registry: {sorted(orphan)}"
-
-    # 2. The generic-fallback allowlist must itself be registered and must not
-    #    overlap the specifically-handled set.
-    assert DISPLAY_GENERIC_OK <= REG_NAMES
-    assert handled.isdisjoint(DISPLAY_GENERIC_OK), (
-        "op(s) both specifically handled AND listed as generic-ok in display: "
-        f"{sorted(handled & DISPLAY_GENERIC_OK)}"
-    )
-
-    # 3. THE LOUD CHECK: every registered op that is not explicitly allowed to
-    #    render generically must have a dedicated display handler. A new op added
-    #    to the registry without a renderer fails here, naming itself.
-    missing = (REG_NAMES - DISPLAY_GENERIC_OK) - handled
-    assert not missing, (
-        f"display has no dedicated renderer for registered op(s): {sorted(missing)}. "
-        "Add a handler in display._format_structural_op / _format_expression_node, "
-        "or (if generic `op(args)` really is correct) add it to DISPLAY_GENERIC_OK."
-    )
 
 
 # codegen intentionally special-cases only the operator / control-flow subset it
@@ -399,21 +352,10 @@ def test_codegen_special_cases_are_registered_and_pinned():
 
 # ---------------------------------------------------------------------------
 # No privilege: an open-tier rewrite-target op reaching the generic `op(args)`
-# fallback is a LEGITIMATE document element (lowered before eval), so neither
-# display nor codegen warns — the registered sugar of the past and an arbitrary
-# custom op render identically. (The former "unknown op" RuntimeWarning is gone.)
+# fallback is a LEGITIMATE document element (lowered before eval), so codegen
+# does not warn — the registered sugar of the past and an arbitrary custom op
+# render identically. (The former "unknown op" RuntimeWarning is gone.)
 # ---------------------------------------------------------------------------
-
-
-def test_display_does_not_warn_on_any_open_tier_op():
-    # Neither the demoted (now unregistered) sugar `grad` nor an arbitrary custom
-    # op warns; both render via the generic fallback.
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        for op in ("grad", "totally_made_up_op_xyz"):
-            display.to_unicode({"op": op, "args": ["x"]})
-            display.to_latex({"op": op, "args": ["x"]})
-            display.to_ascii({"op": op, "args": ["x"]})
 
 
 def test_codegen_does_not_warn_on_any_open_tier_op():
@@ -429,21 +371,13 @@ def test_codegen_does_not_warn_on_any_open_tier_op():
 def test_grad_renders_identically_to_an_arbitrary_user_op():
     # The core requirement of the despecialization: the demoted spatial sugar
     # `grad` carries NO privilege over an arbitrary open-tier user op
-    # (`godunov_hamiltonian`) in display OR codegen — same generic `op(args)`
-    # shape, and (crucially) NO warning for either. The ONLY difference is the op
-    # name itself; once substituted the renderings are byte-identical. (In LaTeX
-    # the name passes through `_latex_name`, which escapes `_` — a name-escaping
-    # detail that applies to ANY op, `grad` included, not a privilege; normalize
-    # both the raw and the escaped spelling of the substituted name.)
+    # (`godunov_hamiltonian`) in codegen — same generic `op(args)` shape, and
+    # (crucially) NO warning for either. The ONLY difference is the op name
+    # itself; once substituted the renderings are byte-identical.
     def _sub(rendered: str) -> str:
-        return rendered.replace("godunov\\_hamiltonian", "grad").replace(
-            "godunov_hamiltonian", "grad"
-        )
+        return rendered.replace("godunov_hamiltonian", "grad")
 
     renderers = (
-        display.to_unicode,
-        display.to_latex,
-        display.to_ascii,
         codegen._format_expression,
         codegen._format_python_expression,
     )

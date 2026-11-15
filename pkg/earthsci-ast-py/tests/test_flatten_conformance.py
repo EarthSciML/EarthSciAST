@@ -12,7 +12,9 @@ What is pinned per fixture:
 
 * the ordered contents of every step-4 map, with per-variable metadata (units,
   ``default``, ``shape``, update kinds, distribution kind);
-* the equation count and every equation rendered with ``to_ascii``;
+* the equation count and every expression in the form ``canonicalize_document``
+  writes (API_SPEC §5.4), compared as a JSON value with numbers in their
+  canonical kind (CONFORMANCE §5.5.3.1);
 * the derived ``system_kind``;
 * the registries — ``index_sets``, ``template_registry`` —
   and ``field_ics`` / ``loader_fields`` / ``lifted_shapes``.
@@ -56,6 +58,12 @@ IDS = [c["id"] for c in CASES]
 _BOOKKEEPING = {"id", "tier", "fixture"}
 
 
+def _typed(value) -> str:
+    """JSON text with sorted keys, so an int and an equal float differ: the
+    corpus records every number in its canonical kind (CONFORMANCE §5.5.3.1)."""
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
 @pytest.fixture(scope="module")
 def generator():
     """The corpus generator module, loaded once."""
@@ -89,7 +97,9 @@ def test_flatten_matches_the_corpus(case, generator):
         if key in _BOOKKEEPING:
             continue
         assert key in actual, f"{case['id']}: `{key}` is recorded but no longer produced"
-        assert actual[key] == expected, f"{case['id']}: `{key}` diverged from the corpus"
+        assert _typed(actual[key]) == _typed(expected), (
+            f"{case['id']}: `{key}` diverged from the corpus"
+        )
     extra = set(actual) - set(case) - _BOOKKEEPING
     assert not extra, (
         f"{case['id']}: flatten now produces {sorted(extra)}, which the corpus does not "

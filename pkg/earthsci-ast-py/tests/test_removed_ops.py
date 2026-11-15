@@ -15,11 +15,10 @@ import json
 
 import pytest
 
-from earthsci_ast import load_string, validate_text
+from earthsci_ast import load_string, parse_math, validate_text
 from earthsci_ast.error_handling import ERROR_CODES, REMOVED_OP
 from earthsci_ast.errors import ParseError
 from earthsci_ast.op_registry import REMOVED_OPS
-from earthsci_ast.parse_expression import ExpressionParseError, parse_expression
 
 REMOVED_AT_2_0_0 = sorted(op for op, version in REMOVED_OPS.items() if version == "2.0.0")
 
@@ -137,20 +136,12 @@ def test_validate_reports_the_load_error():
     assert any("removed_op" in e.message for e in result.schema_errors)
 
 
+@pytest.mark.parametrize("op", sorted(REMOVED_OPS))
 @pytest.mark.parametrize(
-    "text",
-    [
-        "fn(a)",
-        "aggregate(a)",
-        "skolem(a, b)",
-        "rank(a)",
-        "argmin(a)",
-        "intersect_polygon(a, b)",
-        "polygon_intersection_area(a, b)",
-        "table_lookup(a)",
-        "datetime.year(t)",
-    ],
+    ("template", "fmt"), [("\\operatorname{%s}(a)", "markdown"), ('op("%s")(a)', "typst")]
 )
-def test_the_text_parser_refuses_a_removed_op(text):
-    with pytest.raises(ExpressionParseError, match="removed_op"):
-        parse_expression(text)
+def test_the_math_reader_refuses_a_removed_op(op, template, fmt):
+    with pytest.raises(ParseError) as info:
+        parse_math(template % op, ["a"], fmt)
+    assert info.value.code == REMOVED_OP
+    assert f"`{op}`" in str(info.value)

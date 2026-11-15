@@ -417,11 +417,9 @@ class TestExports:
         assert '"SimpleOzone.T" [label="SimpleOzone.T", shape=box];' in dot
         assert '"SimpleOzone.T" -> "SimpleOzone.NO2" [label="rate", style=dotted];' in dot
 
-    def test_dot_renders_chemical_subscripts(self, chemistry_file):
+    def test_dot_labels_names_as_written(self, chemistry_file):
         dot = to_dot(expression_graph(chemistry_file))
-        assert 'label="SimpleOzone.O₃"' in dot
-        # The node ID keeps the raw name; only the LABEL is formatted.
-        assert '"SimpleOzone.O3" [' in dot
+        assert '"SimpleOzone.O3" [label="SimpleOzone.O3",' in dot
 
     def test_dot_escapes_quotes_and_backslashes(self):
         graph = Graph(

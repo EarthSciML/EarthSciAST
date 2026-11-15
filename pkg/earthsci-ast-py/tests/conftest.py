@@ -81,3 +81,24 @@ def load_fixture(relative_path: Union[str, Path]) -> dict:
 def repo_root() -> Path:
     """Session-scoped fixture exposing the repository root."""
     return REPO_ROOT
+
+
+def canonical_expr(expr) -> str:
+    """An expression (an ``ExprNode``, a name, a number or its JSON form) as
+    canonical JSON text: the form ``canonicalize_document`` writes (API_SPEC
+    §5.4) of the serialized expression, keys sorted, numbers in their canonical
+    kind (CONFORMANCE §5.5.3.1). Tests compare expressions this way."""
+    from earthsci_ast.canonicalize import canonicalize_document
+    from earthsci_ast.serialize import _serialize_expression
+
+    if not isinstance(expr, (dict, list)):
+        expr = _serialize_expression(expr)
+    return json.dumps(canonicalize_document(expr), sort_keys=True, ensure_ascii=False)
+
+
+def typst_expr(text: str, names) -> str:
+    """The canonical JSON text (:func:`canonical_expr`) of an expression written
+    as Typst math under the declared ``names``."""
+    from earthsci_ast import parse_math
+
+    return canonical_expr(parse_math(text, list(names), "typst"))

@@ -203,9 +203,8 @@ def test_expression_graph_target(case):
 def test_text_export_headers(case):
     """The DOT and Mermaid HEADER lines (esm-libraries-spec §4.8.3).
 
-    The corpus pins only the first line of each: the rest carries node labels
-    run through the chemical-subscript formatter, which two of the five bindings
-    do not have. See ``tests/conformance/graph/README.md``.
+    The corpus pins only the first line of each. See
+    ``tests/conformance/graph/README.md``.
     """
     file = _load(case)
     component = component_graph(file)
