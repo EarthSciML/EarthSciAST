@@ -80,7 +80,7 @@ pub fn sci_num(n0: &JNum, z: i128) -> Option<JNum> {
         JNum::Int(i) => {
             let ds = number::nat_digits(i.unsigned_abs());
             let e = i64::try_from((ds.len() as i128 - 1).checked_add(z)?).ok()?;
-            number::canonize(number::mk_dec(*i < 0, &ds, e))
+            number::canonize(number::mk_dec(*i < 0, &ds, e)?)
         }
     };
     if m.wfb() { Some(m) } else { None }

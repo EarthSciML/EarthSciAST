@@ -1109,7 +1109,22 @@ fn shape_like_interpreter(a: ArrayD<f64>, scalar_shape: &[usize]) -> ArrayD<f64>
     }
 }
 
-/// Evaluate one observed through the full evaluator; returns the dense field.
+/// An observed's definition with every range resolved against the index sets
+/// and the materialized extents: the form [`eval_observed`] evaluates.
+fn resolve_observed(
+    name: &str,
+    def: &Expr,
+    index_sets: &HashMap<String, IndexSet>,
+    extents: &HashMap<String, i64>,
+) -> Result<Expr, PrepareError> {
+    let mut expr = def.clone();
+    resolve_expr_ranges_with_extents(&mut expr, index_sets, extents)
+        .map_err(|e| err(format!("resolve ranges for {name}: {e}")))?;
+    Ok(expr)
+}
+
+/// Evaluate one observed, its ranges already resolved ([`resolve_observed`]),
+/// through the full evaluator; returns the dense field.
 ///
 /// Under `refuse_per_cell` a per-cell walk stops at its first cell, so a
 /// document the strict compiler refuses is refused for the price of one cell
@@ -1117,11 +1132,10 @@ fn shape_like_interpreter(a: ArrayD<f64>, scalar_shape: &[usize]) -> ArrayD<f64>
 #[allow(clippy::too_many_arguments)]
 fn eval_observed(
     name: &str,
-    def: &Expr,
+    expr: &Expr,
     arrays: &ArrMap,
     param_vals: &[f64],
     param_names: &[String],
-    index_sets: &HashMap<String, IndexSet>,
     extents: &HashMap<String, i64>,
     const_arrays: &ConstArrayScope,
     fill_shape: Option<&[usize]>,
@@ -1138,9 +1152,6 @@ fn eval_observed(
     // that declares no per-variable element type.
     let _rule_precision = crate::precision::has_variable_overrides()
         .then(|| crate::precision::enter(crate::precision::of_variable(name)));
-    let mut expr = def.clone();
-    resolve_expr_ranges_with_extents(&mut expr, index_sets, extents)
-        .map_err(|e| err(format!("resolve ranges for {name}: {e}")))?;
     // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) cannot be evaluated
     // wholesale: its cells are not independent, and the self-read would
     // resolve against a map that does not yet hold the array being built.
@@ -1160,7 +1171,7 @@ fn eval_observed(
     if refuse_per_cell
         && let Some(tape) = compile_on_tape(
             name,
-            &expr,
+            expr,
             arrays,
             param_vals,
             param_names,
@@ -1182,7 +1193,7 @@ fn eval_observed(
     let refused = || stop.is_some() && crate::simulate_array::per_cell_walk_refused();
     if let Some(res) = crate::simulate_array::eval_observed_recurrence(
         name,
-        &expr,
+        expr,
         arrays,
         param_vals,
         param_names,
@@ -1200,7 +1211,7 @@ fn eval_observed(
     let walks_before = crate::simulate_array::per_cell_walks();
     crate::simulate_array::take_overlay_decline();
     let val = eval_expression_with_extents_and_consts_shared(
-        &expr,
+        expr,
         arrays,
         param_vals,
         param_names,
@@ -1218,7 +1229,7 @@ fn eval_observed(
         drop(stop);
         let tape = compile_on_tape(
             name,
-            &expr,
+            expr,
             arrays,
             param_vals,
             param_names,
@@ -2521,19 +2532,21 @@ impl<'o> BuildState<'o> {
         let n_coords = coords.len();
         for (i, name) in coords.into_iter().enumerate() {
             self.report(PreparePhase::Coordinates, i, Some(n_coords), name.as_str())?;
-            match eval_observed(
-                &name,
-                &self.defs[&name],
-                &self.arrays,
-                &self.param_vals,
-                &self.param_names,
-                &self.index_sets,
-                &no_extents,
-                &self.const_scope,
-                self.fill_shape(&name).as_deref(),
-                &self.scalar_shape(&name),
-                self.opts.refuse_per_cell,
-            ) {
+            match resolve_observed(&name, &self.defs[&name], &self.index_sets, &no_extents)
+                .and_then(|expr| {
+                    eval_observed(
+                        &name,
+                        &expr,
+                        &self.arrays,
+                        &self.param_vals,
+                        &self.param_names,
+                        &no_extents,
+                        &self.const_scope,
+                        self.fill_shape(&name).as_deref(),
+                        &self.scalar_shape(&name),
+                        self.opts.refuse_per_cell,
+                    )
+                }) {
                 Ok(Evaluated::Refused(why)) => {
                     self.record(PipelineRule {
                         name,
@@ -2899,13 +2912,33 @@ impl<'o> BuildState<'o> {
             self.obs_done += 1;
             self.evaluated.insert(name.clone());
             let t = std::time::Instant::now();
+            // Resolved once, for the row-dedup attempt and the evaluation as
+            // written alike.
+            let expr = resolve_observed(name, &self.defs[name], &self.index_sets, &self.extents)?;
+            // A rule that reads its driving row only through key columns is
+            // evaluated once per distinct key signature (crate::row_dedup).
+            if let Some((a, route)) = self.eval_observed_dedup(name, &expr)? {
+                self.log(&format!(
+                    "  [prepare] {name:<24} shape={:?}  {:>9.4} s (row-dedup)",
+                    a.shape(),
+                    t.elapsed().as_secs_f64()
+                ));
+                if self.record(PipelineRule {
+                    name: name.clone(),
+                    kind: "build-time observed",
+                    route,
+                }) {
+                    break;
+                }
+                self.arrays.insert(name.clone(), a);
+                continue;
+            }
             let (a, route) = match eval_observed(
                 name,
-                &self.defs[name],
+                &expr,
                 &self.arrays,
                 &self.param_vals,
                 &self.param_names,
-                &self.index_sets,
                 &self.extents,
                 &self.const_scope,
                 self.fill_shape(name).as_deref(),
@@ -2923,7 +2956,7 @@ impl<'o> BuildState<'o> {
                 }
             };
             self.log(&format!(
-                "  [prepare] {name:<24} shape={:?}  {:>7.1} s",
+                "  [prepare] {name:<24} shape={:?}  {:>9.4} s",
                 a.shape(),
                 t.elapsed().as_secs_f64()
             ));
@@ -2952,6 +2985,72 @@ impl<'o> BuildState<'o> {
         }
         self.report(PreparePhase::Observeds, n_pending, Some(n_pending), "")?;
         Ok(())
+    }
+
+    /// [`crate::row_dedup`]: evaluate `name` over one representative row per
+    /// distinct key signature and scatter the result back, or `None` to
+    /// evaluate it as written. Only a rule the tape or the whole-array overlay
+    /// takes is kept; a per-cell walk or a refusal is evaluated as written, so
+    /// what is recorded or refused is what it would have been. That second
+    /// evaluation happens only on a refusal, which ends the pipeline; the
+    /// syntactic [`crate::row_dedup::plan`] declines every other rule before
+    /// anything is evaluated or copied.
+    fn eval_observed_dedup(
+        &mut self,
+        name: &str,
+        expr: &Expr,
+    ) -> Result<Option<(ArrayD<f64>, Route)>, PrepareError> {
+        // Only under a strict compiler: the reference interpreter is the
+        // oracle the fast tiers are checked against, and promises nothing
+        // about speed.
+        if !self.opts.refuse_per_cell || !crate::row_dedup::row_dedup_enabled() {
+            return Ok(None);
+        }
+        let Some(mut plan) = crate::row_dedup::plan(name, expr, &self.arrays) else {
+            return Ok(None);
+        };
+        let fill = self.fill_shape(name).map(|mut s| {
+            if plan.axis < s.len() && s[plan.axis] == plan.rows {
+                s[plan.axis] = plan.reps;
+            }
+            s
+        });
+        let mut scalar = self.scalar_shape(name);
+        if plan.axis < scalar.len() && scalar[plan.axis] == plan.rows {
+            scalar[plan.axis] = plan.reps;
+        }
+        let mut names: Vec<String> = Vec::with_capacity(plan.columns.len());
+        for (n, a) in std::mem::take(&mut plan.columns) {
+            names.push(n.clone());
+            self.arrays.insert(n, a);
+        }
+        let res = eval_observed(
+            name,
+            &plan.expr,
+            &self.arrays,
+            &self.param_vals,
+            &self.param_names,
+            &self.extents,
+            &self.const_scope,
+            fill.as_deref(),
+            &scalar,
+            self.opts.refuse_per_cell,
+        );
+        for n in &names {
+            self.arrays.remove(n);
+        }
+        Ok(match res {
+            Ok(Evaluated::Field(a, route @ (Route::Tape | Route::Overlay))) => {
+                let out = crate::row_dedup::expand(&plan, a).map(|a| (a, route));
+                if out.is_some() {
+                    crate::row_dedup::note_applied();
+                }
+                out
+            }
+            // Any other route or a refusal: evaluate as written, so what is
+            // recorded and refused is exactly what it would have been.
+            _ => None,
+        })
     }
 
     /// Assemble the [`PreparedBuild`] artifact from the accumulated state.

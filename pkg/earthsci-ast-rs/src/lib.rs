@@ -186,6 +186,7 @@ pub mod inline_tests_adapter;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod determinism_adapter;
+pub(crate) mod row_dedup;
 
 // Build-time value-invention front-door — derived index-sets (`distinct`
 // producers) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
@@ -236,8 +237,8 @@ pub use canonicalize::{
 // The document source formats (esm-spec, CONFORMANCE §5.58): Markdown and Typst
 // spellings of a whole `.esm` document, printed and read losslessly.
 pub use document::{
-    DocumentFormat, parse_document, parse_markdown, parse_typst, print_document, print_markdown,
-    print_math, print_typst,
+    ConstructSource, DocumentFormat, expression_names, parse_document, parse_document_with_sources,
+    parse_markdown, parse_typst, print_document, print_markdown, print_math, print_typst,
 };
 // The esm-spec §6.3.1 classification API. esm 1.0.0 declares two variable
 // types and DERIVES the rest, so these are the only sanctioned way to ask

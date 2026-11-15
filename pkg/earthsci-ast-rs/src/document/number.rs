@@ -13,7 +13,9 @@
 //! Lean's integers are unbounded; here a digit run whose value does not fit in
 //! `i128` is not a number token (it has no canonical form either way, since it
 //! is outside `Int64`). The only reading that differs is a mantissa of more
-//! than 38 digits in a scientific literal, which no document writes.
+//! than 38 digits in a scientific literal, which no document writes. Likewise
+//! a decimal whose exponent leaves `i64` is not a number token here
+//! ([`mk_dec`]), and the exponent arithmetic is checked, never wrapped.
 
 use super::json::{JNum, dec_int, digits_val, in_int64};
 
@@ -136,17 +138,20 @@ pub fn print_string(n: &JNum) -> String {
 
 /// `Number.mkDec`: the decimal with digits `ds` (leading and trailing zeros
 /// dropped) whose first listed digit sits at decimal exponent `e10`.
-pub fn mk_dec(neg: bool, ds: &[u8], e10: i64) -> JNum {
+///
+/// `None` when the exponent of the first nonzero digit leaves `i64` (Lean's
+/// exponent is unbounded); the readers refuse such a token.
+pub fn mk_dec(neg: bool, ds: &[u8], e10: i64) -> Option<JNum> {
     let lead = ds.iter().take_while(|&&d| d == 0).count();
     let mut core: Vec<u8> = ds[lead..].to_vec();
     while core.last() == Some(&0) {
         core.pop();
     }
-    JNum::Dec {
+    Some(JNum::Dec {
         neg,
         digits: core,
-        e10: e10 - lead as i64,
-    }
+        e10: e10.checked_sub(i64::try_from(lead).ok()?)?,
+    })
 }
 
 /// `Number.finishDec`: an optional `e` exponent after the fraction digits.
@@ -154,9 +159,9 @@ pub fn finish_dec<'a>(neg: bool, ds: &[u8], e10: i64, r: &'a [char]) -> Option<(
     match r {
         ['e', r4 @ ..] => parse_int(r4).and_then(|(x, rest)| {
             let x = i64::try_from(x).ok()?;
-            Some((mk_dec(neg, ds, e10.checked_add(x)?), rest))
+            Some((mk_dec(neg, ds, e10.checked_add(x)?)?, rest))
         }),
-        _ => Some((mk_dec(neg, ds, e10), r)),
+        _ => Some((mk_dec(neg, ds, e10)?, r)),
     }
 }
 
@@ -170,7 +175,7 @@ pub fn after_int<'a>(neg: bool, ip: &[u8], r: &'a [char]) -> Option<(JNum, &'a [
             } else {
                 let mut ds = ip.to_vec();
                 ds.extend(q);
-                finish_dec(neg, &ds, ip.len() as i64 - 1, rest)
+                finish_dec(neg, &ds, i64::try_from(ip.len()).ok()? - 1, rest)
             }
         }
         _ => {
@@ -234,5 +239,14 @@ mod tests {
         assert_eq!(p("1.0e19"), "1.0e19");
         assert!(parse(&"007".chars().collect::<Vec<_>>()).is_none());
         assert!(parse(&"9223372036854775808".chars().collect::<Vec<_>>()).is_none());
+        // An exponent past `u32` stays a decimal, not a wrapped `10^0`.
+        assert_eq!(p("1.0e4294967296"), "1.0e4294967296");
+        assert_eq!(p("1.0e400"), "1.0e400");
+        assert_eq!(p("1.0e-400"), "1.0e-400");
+        let huge = format!("1.0e{}", i64::MAX);
+        assert_eq!(p(&huge), huge);
+        // The exponent of the first nonzero digit leaves `i64`.
+        assert!(parse(&format!("0.01e{}", i64::MIN + 1).chars().collect::<Vec<_>>()).is_none());
+        assert!(parse(&"1.0e9223372036854775808".chars().collect::<Vec<_>>()).is_none());
     }
 }

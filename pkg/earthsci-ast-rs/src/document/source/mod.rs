@@ -19,6 +19,9 @@
 //! | [`markdown_doc`] | `MarkdownDoc.lean` |
 //! | [`typst`] | `Typst.lean` |
 //! | [`typst_doc`] | `TypstDoc.lean` |
+//!
+//! [`sources`] has no Lean counterpart: it runs the same readers keeping where
+//! each construct is written, for tools that show a document's source.
 
 pub mod equation;
 pub mod items;
@@ -29,18 +32,12 @@ pub mod markdown_doc;
 pub mod multi_line;
 pub mod reaction;
 pub mod skeleton;
+pub mod sources;
 pub mod text;
 pub mod typst;
 pub mod typst_doc;
 
 use crate::document::json::Json;
-
-/// `Source.canonDoc` (Skeleton.lean): a JSON object, well formed, with sorted
-/// keys at every depth.
-#[allow(dead_code)] // part of the contract with `document`; the readers check it via `of_doc`
-pub fn canon_doc(d: &Json) -> bool {
-    skeleton::canon_doc(d)
-}
 
 /// `Source.Md.printMd` (MarkdownDoc.lean).
 pub fn print_md(d: &Json) -> String {
@@ -60,4 +57,15 @@ pub fn print_typ(d: &Json) -> String {
 /// `Source.Typ.parseTyp` (TypstDoc.lean).
 pub fn parse_typ(text: &str) -> Option<Json> {
     typst_doc::parse_typ(text)
+}
+
+/// [`parse_md`], with each construct's JSON pointer and byte range
+/// ([`sources::read_sourced`]).
+pub fn parse_md_sourced(text: &str) -> Option<sources::Sourced> {
+    sources::read_sourced(text, markdown_doc::lex_doc_spanned, &markdown_doc::ck_mdx)
+}
+
+/// [`parse_typ`], with each construct's JSON pointer and byte range.
+pub fn parse_typ_sourced(text: &str) -> Option<sources::Sourced> {
+    sources::read_sourced(text, typst_doc::lex_doc_spanned, &typst_doc::ck_tx)
 }

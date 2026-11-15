@@ -2,8 +2,10 @@
 //!
 //! Port of `formal/Esm/Document/Strings.lean`: double-quoted strings with
 //! JSON-style escapes (YAML writes the hex escape `\uXXXX`, Typst `\u{XXXX}`;
-//! `braces` selects the Typst spelling), bare identifier keys, and the
-//! characters a number or a key never starts with.
+//! `braces` selects the Typst spelling), and bare identifier keys.
+//!
+//! Not ported: `Strings.nonKeyHeads`, `Strings.nonNumHeads`. No executable path
+//! uses them; only the Lean proofs do.
 
 /// `Strings.hexChar`: a lowercase hex digit.
 pub fn hex_char(d: u32) -> char {
@@ -216,15 +218,3 @@ pub fn parse_key(
         _ => None,
     }
 }
-
-/// `Strings.nonKeyHeads`.
-// Ported with the module; nothing outside the Lean proofs calls it yet.
-#[allow(dead_code)]
-pub const NON_KEY_HEADS: &[char] = &[')', ':', '-', '?', ' ', '\n', '\t', '\r'];
-
-/// `Strings.nonNumHeads`.
-// Ported with the module; nothing outside the Lean proofs calls it yet.
-#[allow(dead_code)]
-pub const NON_NUM_HEADS: &[char] = &[
-    '(', ')', '"', 'n', 't', 'f', ':', '[', '{', '?', ' ', '\n', '\t', '\r',
-];

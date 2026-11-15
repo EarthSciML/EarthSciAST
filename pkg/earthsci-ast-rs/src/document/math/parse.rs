@@ -8,6 +8,9 @@
 //! of fuel per iteration as the Lean recursion does. The helpers whose fuel only
 //! serves termination and is given as the input length (`pNameLoop`, `pNames`,
 //! `pGrid`, `pCells`) loop without it.
+//!
+//! Not ported: `Math.expect`, `Math.mkNodeP`. No executable path uses them;
+//! only the Lean proofs do.
 
 use super::expr::{DEPRECATED_OPS, REMOVED_OPS, is_formula, is_greek, is_letter, op_ok, pieces};
 use super::print::{
@@ -18,6 +21,7 @@ use super::surface::neg_num;
 use super::token::{Kw, Sf, Tok};
 use super::units::{self, Factor};
 use crate::document::json::{JNum, Json};
+use crate::document::limits::{self, Nest};
 
 /// A parse result: the value and the rest of the tokens.
 pub type P<'a, T> = Option<(T, &'a [Tok])>;
@@ -26,15 +30,6 @@ pub type P<'a, T> = Option<(T, &'a [Tok])>;
 pub type Ranges = Vec<(String, Json)>;
 
 // ## Small pieces
-
-/// `Math.expect`.
-#[allow(dead_code)] // ported one-to-one; no executable path uses it yet
-pub fn expect(k: Kw, ts: &[Tok]) -> Option<&[Tok]> {
-    match ts {
-        [Tok::Kw(k2), r @ ..] if *k2 == k => Some(r),
-        _ => None,
-    }
-}
 
 /// `Math.close`: close an n-ary chain: one operand is itself, more make a node.
 pub fn close(o: &str, xs: Vec<Json>) -> Json {
@@ -277,6 +272,7 @@ pub fn p_name(sf: Sf, ts: &[Tok]) -> P<'_, String> {
 /// `Math.pJson`.
 pub fn p_json(f: usize, ts: &[Tok]) -> P<'_, Json> {
     let f = f.checked_sub(1)?;
+    let _nest = Nest::enter()?;
     match ts {
         [Tok::Word(w), r @ ..] if w == "null" => Some((Json::Null, r)),
         [Tok::Word(w), r @ ..] if w == "true" => Some((Json::Bool(true), r)),
@@ -378,12 +374,6 @@ pub fn neg_tail(ts: &[Tok]) -> Option<(JNum, &[Tok])> {
 }
 
 // ## Expressions
-
-/// `Math.mkNodeP`: rebuild a node with fields.
-#[allow(dead_code)] // ported one-to-one; no executable path uses it yet
-pub fn mk_node_p(o: &str, args: Vec<Json>, fs: Vec<(String, Json)>) -> Json {
-    mk_node(o, args, fs)
-}
 
 /// `Math.CallArg`: what `pCallArgs` read.
 #[derive(Clone, Debug, PartialEq)]
@@ -909,7 +899,7 @@ pub fn add_loop<'a>(c: Ctx, f: usize, acc: Vec<Json>, ts: &'a [Tok]) -> P<'a, Js
             }
             [Tok::Kw(Kw::Minus), r @ ..] => {
                 let (y, r2) = p_mul(c, f, r)?;
-                acc = vec![node("-", vec![close("+", acc), y])];
+                acc = vec![limits::shallow(node("-", vec![close("+", acc), y]))?];
                 ts = r2;
             }
             _ => match neg_tail(ts) {
@@ -921,7 +911,7 @@ pub fn add_loop<'a>(c: Ctx, f: usize, acc: Vec<Json>, ts: &'a [Tok]) -> P<'a, Js
                     let n = rest.len();
                     // the parse consumed at least the number token
                     let r2 = &r[r.len() - n.min(r.len())..];
-                    acc = vec![node("-", vec![close("+", acc), y])];
+                    acc = vec![limits::shallow(node("-", vec![close("+", acc), y]))?];
                     ts = r2;
                 }
                 None => return Some((close("+", acc), ts)),
@@ -933,6 +923,7 @@ pub fn add_loop<'a>(c: Ctx, f: usize, acc: Vec<Json>, ts: &'a [Tok]) -> P<'a, Js
 /// `Math.pMul`: level 5, unary minus and `*` chains.
 pub fn p_mul<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     let f = f.checked_sub(1)?;
+    let _nest = Nest::enter()?;
     match ts {
         [Tok::Kw(Kw::Minus), r @ ..] => {
             let (x, r2) = p_mul(c, f, r)?;
@@ -961,7 +952,7 @@ pub fn mul_loop<'a>(c: Ctx, f: usize, acc: Vec<Json>, ts: &'a [Tok]) -> P<'a, Js
             [Tok::Kw(Kw::Slash), r @ ..] => {
                 if c.sf == Sf::Latex {
                     let (y, r2) = p_not(c, f, r)?;
-                    acc = vec![node("/", vec![close("*", acc), y])];
+                    acc = vec![limits::shallow(node("/", vec![close("*", acc), y]))?];
                     ts = r2;
                 } else {
                     return Some((close("*", acc), ts));
@@ -984,6 +975,7 @@ pub fn mul_loop<'a>(c: Ctx, f: usize, acc: Vec<Json>, ts: &'a [Tok]) -> P<'a, Js
 /// `Math.pNot`: level 6, `not`.
 pub fn p_not<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     let f = f.checked_sub(1)?;
+    let _nest = Nest::enter()?;
     match ts {
         [Tok::Kw(Kw::Lnot), r @ ..] => {
             let (x, r2) = p_not(c, f, r)?;
@@ -1010,7 +1002,7 @@ pub fn frac_loop<'a>(c: Ctx, f: usize, x: Json, ts: &'a [Tok]) -> P<'a, Json> {
         match ts {
             [Tok::Kw(Kw::Slash), r @ ..] if c.sf == Sf::Typst => {
                 let (y, r2) = p_pow(c, f, r)?;
-                x = node("/", vec![x, y]);
+                x = limits::shallow(node("/", vec![x, y]))?;
                 ts = r2;
             }
             _ => return Some((x, ts)),
@@ -1353,6 +1345,20 @@ pub fn p_d_call<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     }
 }
 
+/// Record a removed operator written in the call or escape form at the front
+/// of `ts`, so a refusal can name it (CONFORMANCE §7.1). Not in Lean, whose
+/// reader refuses every bad input alike.
+fn note_removed_op(ts: &[Tok]) {
+    let name = match ts {
+        [Tok::Opn(n), ..] | [Tok::Esc(n), ..] => n,
+        [Tok::Kw(Kw::Esmnode), _, Tok::Txt(n), ..] => n,
+        _ => return,
+    };
+    if let Some(op) = REMOVED_OPS.iter().find(|o| **o == name.as_str()) {
+        limits::removed_op(op);
+    }
+}
+
 fn op_allowed(o: &str) -> bool {
     op_ok(o) && !REMOVED_OPS.contains(&o) && !DEPRECATED_OPS.contains(&o)
 }
@@ -1360,6 +1366,7 @@ fn op_allowed(o: &str) -> bool {
 /// `Math.pPrim`: a primary.
 pub fn p_prim<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     let f = f.checked_sub(1)?;
+    note_removed_op(ts);
     let paren_close = |r: &'a [Tok]| -> P<'a, Json> {
         match p_or(c, f, r) {
             Some((x, [t, r2 @ ..])) => {
@@ -1924,6 +1931,7 @@ pub fn p_d_apply<'a>(c: Ctx, f: usize, w: &str, ts: &'a [Tok]) -> P<'a, Json> {
 /// `Math.pCases`: `cases` rows; a chain re-nests to the right.
 pub fn p_cases<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     let f = f.checked_sub(1)?;
+    let _nest = Nest::enter()?;
     match p_or(c, f, ts) {
         Some((v, [Tok::Kw(Kw::Amp), Tok::Txt(t), r @ ..])) if t == "otherwise" => match (c.sf, r) {
             (Sf::Latex, [Tok::Kw(Kw::Ecases), r2 @ ..]) => Some((v, r2)),

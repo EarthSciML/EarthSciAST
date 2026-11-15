@@ -12,8 +12,9 @@
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Alg, DocumentFormat, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string,
-    parse_equation, print_math, solve, to_ascii, to_unicode, validate as validate_file,
+    Alg, DocumentFormat, ProblemOptions, Rhs, SolveOptions, esm_problem, expression_names,
+    load_string, parse_equation, print_math, solve, to_ascii, to_unicode,
+    validate as validate_file,
 };
 use earthsci_narrative::build::{BuildOptions, build_document, build_json, build_text};
 use serde_json::{Value, json};
@@ -55,22 +56,6 @@ pub fn version() -> Vec<u8> {
     env!("CARGO_PKG_VERSION").as_bytes().to_vec()
 }
 
-/// The variable names an expression uses: its string leaves.
-fn names_in(v: &Value, out: &mut Vec<String>) {
-    match v {
-        Value::String(name) if !out.contains(name) => out.push(name.clone()),
-        Value::Array(items) => items.iter().for_each(|i| names_in(i, out)),
-        Value::Object(fields) => {
-            for key in ["lhs", "rhs", "args"] {
-                if let Some(child) = fields.get(key) {
-                    names_in(child, out);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
 /// Parse one equation in the text syntax (`D(N, t) = -lambda*N`) and return
 /// `{ascii, unicode, latex, typst}` renderings of it. The LaTeX and the Typst
 /// are the core's printers (`earthsci_ast::print_math`), the math of the ESM
@@ -80,8 +65,7 @@ pub fn render_equation(text: &[u8]) -> Result<Vec<u8>, String> {
     let text = utf8(text, "equation")?;
     let eq = parse_equation(&text).map_err(|e| e.to_string())?;
     let json = serde_json::to_value(&eq).map_err(|e| e.to_string())?;
-    let mut names = Vec::new();
-    names_in(&json, &mut names);
+    let names = expression_names(&json);
     Ok(to_bytes(&json!({
         "ascii": format!("{} = {}", to_ascii(&eq.lhs), to_ascii(&eq.rhs)),
         "unicode": format!("{} = {}", to_unicode(&eq.lhs), to_unicode(&eq.rhs)),

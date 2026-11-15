@@ -229,6 +229,7 @@ pub fn p_items(m: usize, mut input: &[char]) -> Option<(Vec<Json>, &[char])> {
 
 /// `Yaml.pItemBody`: after the `-` of an element at indentation `m`.
 pub fn p_item_body(m: usize, input: &[char]) -> Option<(Json, &[char])> {
+    let _nest = super::limits::Nest::enter()?;
     match input {
         ['\n', r @ ..] => p_items(m + 2, r).map(|(xs, r)| (Json::Arr(xs), r)),
         [' ', r @ ..] => match p_entry(m + 2, r) {
@@ -263,6 +264,7 @@ pub fn p_entry(m: usize, input: &[char]) -> Option<((String, Json), &[char])> {
 
 /// `Yaml.pValBody`: after the `:` of an entry whose key is at indentation `m`.
 pub fn p_val_body(m: usize, input: &[char]) -> Option<(Json, &[char])> {
+    let _nest = super::limits::Nest::enter()?;
     match input {
         [' ', r @ ..] => p_scalar_line(r),
         ['\n', r @ ..] => {
