@@ -353,6 +353,12 @@ const ERROR_CODES = (
     # `aggregate` and the `function_tables` block at 2.0.0), rejected by name at the wire
     # boundary (CONFORMANCE_SPEC §7).
     REMOVED_OP = "removed_op",
+    # A Markdown or Typst source text is not an ESM document: an unknown word,
+    # an ambiguous juxtaposition, an unbalanced delimiter, an unclosed display,
+    # container or directive, and every other malformed input the document
+    # readers refuse (CONFORMANCE §5.58; document_format.jl). A removed
+    # operator in the text is `removed_op` instead.
+    PARSE_ERROR = "parse_error",
     # WARNING, not an error: an expression node spelling a DEPRECATED op (`neg`,
     # the word spelling of unary `-`; `pow`, of `^`; or `neg` as a `broadcast`
     # `fn`), rewritten to its replacement at the wire boundary (esm-spec §4.2

@@ -15,7 +15,9 @@
 //! each format and read back, must give its canonical form again.
 
 use crate::common::repo_tests_dir;
-use earthsci_ast::{DocumentFormat, canonicalize_document, parse_document, print_document};
+use earthsci_ast::{
+    DocumentFormat, canonicalize_document, parse_document, print_document, print_math,
+};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -137,6 +139,122 @@ fn document_format_fixtures() {
         "{} of {n} cases failed:\n\n{}",
         failures.len(),
         failures.join("\n\n")
+    );
+}
+
+/// The `math` field of a case is the math of the case's one equation display,
+/// so `print_math` of that equation under the names its model declares (the
+/// keys of its variables, species and parameters, and the document's index
+/// sets) gives it in both formats. A case whose model or document declares
+/// expression templates is skipped: no template is in scope for `print_math`.
+/// The input text of a `limits.json` case (the README's recipe).
+fn limit_input(heads: &Value, case: &Value) -> String {
+    let r = &case["input"];
+    let head = heads[case["surface"].as_str().expect("surface")]
+        .as_str()
+        .expect("head");
+    let field = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
+    if let Some(n) = r.get("yaml_levels").and_then(Value::as_u64) {
+        let lines: String = (1..n as usize)
+            .map(|i| format!("{}-\n", " ".repeat(2 * i)))
+            .collect();
+        return format!("{head}```esm:metaparameters\nx:\n{lines}```\n");
+    }
+    let n = r.get("n").and_then(Value::as_u64).unwrap_or(0) as usize;
+    format!(
+        "{head}{}{}{}{}{}",
+        field("prefix"),
+        field("open").repeat(n),
+        field("middle"),
+        field("close").repeat(n),
+        field("suffix")
+    )
+}
+
+/// `limits.json`: the reader limits every binding shares (README, Limits).
+#[test]
+fn document_format_limits() {
+    let path = repo_tests_dir().join("conformance/document_format/limits.json");
+    let text = std::fs::read_to_string(&path).expect("limits.json");
+    let doc: Value = serde_json::from_str(&text).expect("limits JSON");
+    let mut failures = Vec::new();
+    let cases = doc["cases"].as_array().expect("cases");
+    for case in cases {
+        let id = case["id"].as_str().expect("id");
+        let got = parse_document(
+            &limit_input(&doc["heads"], case),
+            surface(case["surface"].as_str().expect("surface")),
+        );
+        let esm = case
+            .get("esm_json")
+            .map(|t| serde_json::from_str::<Value>(t.as_str().expect("esm_json")).expect("esm"));
+        match (esm, case.get("error"), got) {
+            (Some(esm), _, Ok(d)) if d == esm => {}
+            (_, Some(code), Err(e)) if e.code == code.as_str().expect("code") => {}
+            (_, _, Ok(_)) => failures.push(format!("{id}: read, or read differently")),
+            (_, _, Err(e)) => failures.push(format!("{id}: refused with {}", e.code)),
+        }
+    }
+    assert!(cases.len() > 30, "only {} limit cases", cases.len());
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn print_math_reproduces_the_display() {
+    let dir = repo_tests_dir().join("conformance/document_format");
+    let mut failures = Vec::new();
+    let (mut checked, mut skipped) = (0, 0);
+    for file in FILES {
+        let path = dir.join(file);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let doc: Value = serde_json::from_str(&text).expect("fixture JSON");
+        for case in doc["cases"].as_array().expect("cases") {
+            let Some(math) = case.get("math") else {
+                continue;
+            };
+            let id = case["id"].as_str().expect("case id");
+            let esm = &case["esm"];
+            let models = esm["models"].as_object().expect("a math case has models");
+            assert_eq!(models.len(), 1, "{id}: a math case has one model");
+            let model = models.values().next().expect("one model");
+            if model.get("expression_templates").is_some()
+                || esm.get("expression_templates").is_some()
+            {
+                skipped += 1;
+                continue;
+            }
+            let eqs = model["equations"].as_array().expect("equations");
+            assert_eq!(eqs.len(), 1, "{id}: a math case has one equation");
+            let mut names: Vec<String> = Vec::new();
+            for field in ["variables", "species", "parameters"] {
+                if let Some(m) = model.get(field).and_then(Value::as_object) {
+                    names.extend(m.keys().cloned());
+                }
+            }
+            if let Some(m) = esm.get("index_sets").and_then(Value::as_object) {
+                names.extend(m.keys().cloned());
+            }
+            for (key, format) in [
+                ("latex", DocumentFormat::Markdown),
+                ("typst", DocumentFormat::Typst),
+            ] {
+                let got = print_math(&eqs[0], &names, format);
+                let want = math[key].as_str().expect("math text");
+                if got != want {
+                    failures.push(format!("{id}: print_math {key} = {got:?}, want {want:?}"));
+                }
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no math case checked");
+    eprintln!("print_math: {checked} math cases checked, {skipped} skipped (a template in scope)");
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
     );
 }
 

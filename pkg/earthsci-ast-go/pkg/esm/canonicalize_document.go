@@ -49,7 +49,9 @@ var documentFreeKeys = map[string]bool{
 // value in Int64 is an int64 (`2.0` is `2`, `-0.0` is `0`), any other finite
 // value a float64. A json.Number (a decoder with UseNumber) that is an integer
 // token in Int64 is that int64 exactly, past 2^53 too; any other token is read
-// as the nearest float64. The input is not mutated and nothing else changes.
+// as the nearest float64 (one below the smallest subnormal is 0); a token
+// beyond the binary64 range (`1e400`) has no nearest float64 and is kept as
+// written. The input is not mutated and nothing else changes.
 // These are the rules of Lean `Adapter.Doc.spellRules` and `Adapter.Doc.conv`.
 func CanonicalizeDocument(doc any) any {
 	return canonicalDocumentNumbers(canonicalizeDocumentValue(doc, false))
@@ -68,7 +70,11 @@ func canonicalDocumentNumber(value any) (any, bool) {
 			}
 		}
 		parsed, err := strconv.ParseFloat(s, 64)
-		if err != nil && !math.IsInf(parsed, 0) {
+		if err != nil {
+			// A token beyond the binary64 range (`1e400`) has no nearest finite
+			// value, so it stays as written rather than becoming ±Inf, which no
+			// JSON can hold. The Rust binding's JSON reader refuses the literal,
+			// as encoding/json does decoding it into a float64.
 			return value, true
 		}
 		f = parsed

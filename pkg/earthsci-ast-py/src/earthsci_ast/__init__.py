@@ -216,6 +216,19 @@ from .relational import (
 # the canonical unit spelling.
 from .canonicalize import canonicalize_document
 
+# The document source formats (CONFORMANCE_SPEC §5.58): a document as Markdown or
+# Typst text, printed and read back losslessly.
+from .document import (
+    DocumentFormat,
+    parse_document,
+    parse_markdown,
+    parse_typst,
+    print_document,
+    print_markdown,
+    print_math,
+    print_typst,
+)
+
 # The esm 1.0.0 classification API (esm-spec §6.3.1) — the ONE sanctioned way
 # to recover the finer categories a solver needs from the two declared variable
 # types. Every site that used to branch on `variable.type == "state"` /
@@ -628,6 +641,15 @@ __all__ = [
     "canonical_index_set_json",
     "serialize_canonical",
     "canonicalize_document",
+    # Document source formats (Markdown / Typst)
+    "DocumentFormat",
+    "parse_document",
+    "parse_markdown",
+    "parse_typst",
+    "print_document",
+    "print_markdown",
+    "print_math",
+    "print_typst",
     # Build-time cadence-partition pass (structural_simplify analogue)
     "CadenceError",
     "Partition",

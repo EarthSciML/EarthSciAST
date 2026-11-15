@@ -7766,8 +7766,25 @@ fails when a committed file no longer matches the model. The generator's
 every piece of printed Markdown math in KaTeX in strict mode. The whole-corpus
 round trip is generated at run time from `tests/` and is never committed.
 
-**Adapters.** None yet: no binding has a document parser. The five bindings
-gain one each, with an adapter over these files, when the parser is ported.
+**Adapters.** All five bindings implement the document format API (API_SPEC
+§5.1: `print_markdown`, `parse_markdown`, `print_typst`, `parse_typst`,
+`print_document`, `parse_document`, `print_math`) and run the golden set, the
+`math` field of every expression case through `print_math` (a case whose
+display depends on a template is skipped, as no template is in scope there),
+and the whole-corpus round trip, in one test file each:
+`pkg/EarthSciAST.jl/test/document_format_test.jl` (Julia),
+`pkg/earthsci-ast-ts/src/document-format.test.ts` (TypeScript),
+`pkg/earthsci-ast-py/tests/test_document_format.py` (Python),
+`pkg/earthsci-ast-rs/tests/document_format.rs` (Rust, in the `integration`
+test binary) and `pkg/earthsci-ast-go/pkg/esm/document_format_test.go` (Go).
+The round trip alone cannot see a printer and a reader that drift together, so
+each file also has an optional comparison with the Lean model, run when
+`ESM_LEAN` names a built `esm-lean` (`ESM_LEAN_SCRATCH` names its scratch
+directory): over the whole corpus, the binding's canonical forms and printed
+texts must equal what `esm-lean` writes, and its readers must read the
+Lean-printed texts as `esm-lean` does. It is skipped without `ESM_LEAN`; the
+Rust test is `#[ignore]`d and runs under `cargo test --test integration
+document_format_matches_lean -- --ignored`.
 
 ## 6. CI Integration
 

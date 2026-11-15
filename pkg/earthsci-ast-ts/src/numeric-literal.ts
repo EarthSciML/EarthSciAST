@@ -12,7 +12,7 @@
  *   - `losslessJsonParse` — a minimal JSON parser that emits
  *     `NumericLiteral` at every numeric-token position. Token shape
  *     (presence of `.`, `e`, `E`) determines kind per the RFC §5.4.6
- *     round-trip parse rule.
+ *     round-trip parse rule; an integer token past 2^53 is a `bigint`.
  *   - `losslessJsonStringify` — inverse: `NumericLiteral{kind:int}`
  *     → JSON integer; `NumericLiteral{kind:float}` → RFC §5.4.6 float
  *     with the trailing-`.0` override for integer-valued magnitudes
@@ -107,9 +107,9 @@ export class LosslessJsonParseError extends EsmDiagnosticError {
  * `NumericLiteral{kind:'int'}`. All other JSON values (strings, bools,
  * null, arrays, objects) decode to their native JS equivalents.
  *
- * Integer-grammar tokens outside the safe-integer range fall back to
- * `float` kind to avoid silent precision loss, matching the Go
- * binding's `normalizeJSONNumber` behavior.
+ * An integer-grammar token outside the safe-integer range (`|z| > 2^53 - 1`)
+ * becomes a `bigint` of the integer written, which no `number` holds exactly
+ * (`9223372036854775807`, Int64 max, is 2^63 as a binary64).
  */
 export function losslessJsonParse(text: string): unknown {
   const parser = new Parser(text)
@@ -286,7 +286,7 @@ class Parser {
     throw new LosslessJsonParseError('Invalid literal', this.pos)
   }
 
-  parseNumber(): NumericLiteral {
+  parseNumber(): NumericLiteral | bigint {
     const start = this.pos
     if (this.peek() === '-') this.pos++
     while (this.pos < this.src.length && this.src[this.pos] >= '0' && this.src[this.pos] <= '9') {
@@ -317,10 +317,8 @@ class Parser {
       throw new LosslessJsonParseError(`Invalid number ${JSON.stringify(token)}`, start)
     }
     if (isFloat) return makeTagged('float', value)
-    // JSON-integer grammar. Fall back to float if outside safe-integer
-    // range to avoid silent precision loss.
     if (Number.isSafeInteger(value)) return makeTagged('int', value)
-    return makeTagged('float', value)
+    return BigInt(token)
   }
 
   expect(ch: string): void {
@@ -384,6 +382,8 @@ export class CanonicalNonfiniteError extends CanonicalizeError {
  *   - `kind: 'float'` otherwise → native `ToString(Number)` (which is
  *     already distinguishable via `.` or `e`).
  *   - `-0.0` float → `-0.0`.
+ *   - a `bigint` (an integer past 2^53, as `losslessJsonParse` reads it)
+ *     → its exact JSON-integer token.
  *   - NaN or ±Infinity → throws `CanonicalNonfiniteError`.
  *
  * Plain JS `number` values are serialized with `JSON.stringify`'s
@@ -400,6 +400,7 @@ function stringifyValue(v: unknown, path: string): string {
   if (typeof v === 'boolean') return v ? 'true' : 'false'
   if (typeof v === 'string') return JSON.stringify(v)
   if (isNumericLiteral(v)) return formatNumericLiteral(v, path)
+  if (typeof v === 'bigint') return v.toString()
   if (typeof v === 'number') {
     if (!Number.isFinite(v)) throw new CanonicalNonfiniteError(v, path)
     return JSON.stringify(v)
@@ -435,11 +436,11 @@ export function formatIntToken(value: number, path: string): string {
     // Integer nodes cannot hold negative zero (RFC §5.4.6).
     throw new TypeError(`int NumericLiteral cannot hold -0 at ${path}`)
   }
-  // Emit as plain decimal — JS toString on finite integers in the
-  // safe-integer range produces the JSON-integer grammar already.
-  // For out-of-safe-range floats that ended up tagged int, we still
-  // defensively drop any exponent.
-  const s = String(value)
+  // Emit as plain decimal: the exact integer the binary64 holds. Past the
+  // safe-integer range `String` would write the shortest round-trip digits
+  // instead (-2^63 as -9223372036854776000, outside Int64); from 1e21 it
+  // writes an exponent, which the guard below refuses.
+  const s = Math.abs(value) < 1e21 ? BigInt(value).toString() : String(value)
   if (s.includes('.') || s.includes('e') || s.includes('E')) {
     throw new TypeError(`int NumericLiteral produced non-integer token ${s} at ${path}`)
   }
@@ -482,7 +483,8 @@ export function formatFloatToken(value: number): string {
 }
 
 /**
- * Recursively replace `NumericLiteral` leaves with their plain-number value.
+ * Recursively replace `NumericLiteral` leaves (and the `bigint` of an integer
+ * past 2^53) with their plain-number value.
  *
  * Returns a NEW tree; the input is never mutated. Non-literal objects and
  * arrays are shallow-copied ONLY when a descendant is actually rewritten, so
@@ -495,6 +497,7 @@ export function formatFloatToken(value: number): string {
  */
 export function stripNumericLiterals(value: unknown): unknown {
   if (isNumericLiteral(value)) return value.value
+  if (typeof value === 'bigint') return Number(value)
   if (Array.isArray(value)) {
     let changed = false
     const out: unknown[] = new Array(value.length)

@@ -129,6 +129,9 @@ include("variable_bounds.jl")  # esm-spec §6.3.2 lb / ub: gate, validity, flatt
 include("edit.jl")
 include("codegen.jl")
 include("canonicalize.jl")
+# Markdown and Typst document source formats (CONFORMANCE §5.58); after
+# canonicalize.jl, whose `canonicalize_document` the printers apply first.
+include("document_format.jl")
 # Build-time kernels, MTK-export glue
 include("relational.jl")
 include("mtk_export.jl")
@@ -329,6 +332,9 @@ export
     # Canonical AST form (RFC §5.4)
     canonicalize, canonical_json, format_canonical_float, CanonicalizeError,
     canonicalize_document,
+    # Markdown and Typst document source formats (CONFORMANCE §5.58)
+    print_markdown, print_typst, print_document, print_math,
+    parse_markdown, parse_typst, parse_document,
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,
     # Planar spatial-index broad phase (projection-pushdown Phase 3a)

@@ -25,6 +25,7 @@ is run at run time from the corpus itself. It is never written here.
 | `documents.json` | print, variant | Front matter, descriptions, declarations, equations and their comments, reactions (coefficients, empty sides, attributes), initialization and constraint containers, templates and rules, by-reference subsystems, path-keyed blocks, quoted flow-collection attributes, the plot shorthand next to the analyses block it stands for, the document-layer variants, and prose and label independence |
 | `units.json` | print, variant | Constants with units in both notations |
 | `refusals.json` | refusal | Removed operators refused by name, and malformed input |
+| `limits.json` | limit | The reader limits every binding shares and the Lean model does not have (see Limits) |
 
 ## Case format
 
@@ -145,3 +146,39 @@ Add it to the case lists in `scripts/gen-document-format-fixtures.py` (the
 `operators`, `names`, `variants`, `documents`, `units` and `refusals`
 functions), regenerate, run `--validate`, and read the diff. Keep the set
 small: a case earns its place by pinning a notation choice no other case pins.
+
+## Limits
+
+`limits.json` is the one file here that `esm-lean` does not generate. The Lean model
+reads exact decimals and recurses as deep as its input; a binding reads binary64
+numbers on a finite stack. Every binding refuses, with `parse_error`:
+
+- a number beyond the binary64 range (`1.0e400`; an exponent past 2^32 is never
+  wrapped). A number below the smallest subnormal reads as 0, as every binding's
+  JSON reader rounds it;
+- a text that holds more than 128 reader constructs open at once (brackets,
+  fractions, signs, operator chains, flow collections, YAML levels), or that reads
+  as a value nested more than 127 arrays and objects deep. The count is of the
+  reader's constructs, not of the document's depth: `((k))` reads as `k` but opens
+  four;
+
+and reports `removed_op` only for a removed operator the math reader meets, never
+for one named in prose or in code.
+
+Each case is `{"id", "surface", "input", "description"}` plus `esm_json` (the
+document it reads as, as JSON text: the deepest are within the 127 levels a reader
+takes, but not once nested inside this file) or `error` (the code). `input` is a recipe, so the deep inputs are
+built at run time:
+
+```
+text = heads[surface] + prefix + open * n + middle + close * n + suffix
+```
+
+with missing fields empty, or, when `input` has `yaml_levels: n`, `heads[surface]`
+followed by a ```` ```esm:metaparameters ```` block holding `x:` and the lines
+`" " * 2i + "-"` for `i` in `1..n-1`, closed by ```` ``` ````. A binding MUST read
+every case as `esm_json`, or refuse it with `error`, without exhausting its stack.
+
+The expected outcomes come from the Rust binding
+(`scripts/gen-document-format-limits.py`, which runs
+`earthsci-document-format-adapter-rust`).

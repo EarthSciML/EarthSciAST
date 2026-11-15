@@ -345,6 +345,84 @@ Python kept the format version PRIVATE as `parse._CURRENT_VERSION`, and as a
 `(major, minor, patch)` TUPLE rather than a string. Go exposed neither
 publicly. `VERSION` is **deleted** in TypeScript and Rust.
 
+#### `print_markdown` / `parse_markdown` / `print_typst` / `parse_typst` — documents as source text
+
+**Canonical, and landed in all five.** A document can be written as Markdown
+(LaTeX math, remark directives, YAML front matter) or as Typst, and printed
+and read back losslessly (esm-spec §1.2, CONFORMANCE_SPEC §5.58). The
+printers and readers are ports of the Lean model in `formal/Esm/Document/`;
+`tests/conformance/document_format/` is the golden set every binding
+reproduces byte for byte.
+
+| Canonical | Contract | Julia | TypeScript | Python | Rust | Go |
+|---|---|---|---|---|---|---|
+| `print_markdown` | document → Markdown text | `print_markdown` | `printMarkdown` | `print_markdown` | `print_markdown` | `PrintMarkdown` |
+| `print_typst` | document → Typst text | `print_typst` | `printTypst` | `print_typst` | `print_typst` | `PrintTypst` |
+| `print_document` | either, by format | `print_document` | `printDocument` | `print_document` | `print_document` | `PrintDocument` |
+| `parse_markdown` | Markdown text → document | `parse_markdown` | `parseMarkdown` | `parse_markdown` | `parse_markdown` | `ParseMarkdown` |
+| `parse_typst` | Typst text → document | `parse_typst` | `parseTypst` | `parse_typst` | `parse_typst` | `ParseTypst` |
+| `parse_document` | either, by format | `parse_document` | `parseDocument` | `parse_document` | `parse_document` | `ParseDocument` |
+| `print_math` | one expression or equation → LaTeX or Typst math | `print_math` | `printMath` | `print_math` | `print_math` | `PrintMath` |
+| `document_format` | the format selector | `:markdown` / `:typst` | `'markdown' \| 'typst'` | `DocumentFormat` (or the string) | `DocumentFormat` | `DocumentMarkdown` / `DocumentTypst` |
+
+Like `canonicalize_document`, these take and return the decoded JSON document,
+not a typed file. A printer puts the document in canonical form first, so
+`parse_markdown(print_markdown(d)) == canonicalize_document(d)`, and a reader's
+result is in canonical form.
+
+`print_math(expr, names, format)` prints one expression, or one equation (an
+object with `lhs` and `rhs`, printed as its two sides around `=`), as the math a
+document display holds, without its delimiters: LaTeX for `markdown`, Typst
+math for `typst`. `names` plays the part of the names a component declares
+(its variables, species and parameters, and the document's index sets): a name
+in it prints in its declared shape and the printer avoids spellings that would
+collide with it. No template is in scope. The golden set's `math` field is
+`print_math` of the case's equation under its model's names.
+
+A text a reader refuses raises the binding's diagnostic error with one of two
+codes:
+
+- `removed_op`: the document's math writes an operator removed from the
+  format (esm-spec §4.2) in the call or escape form; it is refused by name,
+  never read as an open operator (CONFORMANCE_SPEC §7.1). The operator's
+  name elsewhere in the text is not this refusal.
+- `parse_error`: any other text that is not a document in that format, and a
+  text past one of the readers' bounds, which the Lean model leaves unbounded:
+  - nesting too deep: more than 128 constructs open at once across the
+    readers (a math bracket, fraction, prefix `-` or `\lnot`, `cases` row or
+    escape-node JSON value; a Typst value; a YAML block or flow collection),
+    or a result that nests more than 127 arrays and objects (the depth
+    `serde_json` reads, so whatever a reader returns can be written as JSON
+    and read back). A left-nested chain such as `a - b - c - …` or
+    `a / b / c` counts toward the second bound as it grows, though it does
+    not nest the reader. Either bound is refused as `parse_error` even when
+    the math also writes a removed operator.
+  - a decimal outside the binary64 range (`1.0e400`), which no JSON document
+    can hold. A decimal too small to represent (`1.0e-400`) is not refused;
+    it reads as the integer `0`.
+
+  A name nothing declares is not a parse error; an undeclared reference is
+  the validator's finding.
+
+The error is `ParseError` with a `code` field in Julia and Python,
+`EsmDiagnosticError` in TypeScript, `DiagnosticError` in Rust, and
+`*DocumentFormatError` (whose `DiagnosticCode()` is the code) in Go.
+
+Per-binding decorations, sanctioned under §2.2:
+
+- **TypeScript** readers take `ParseDocumentOptions` (extension tier) with
+  `canonical`, as `loadString` does: every number comes back as a
+  `NumericLiteral`, so an integer and a decimal keep their kinds, except an
+  integer past 2^53, which comes back as a `bigint` of its exact value (the
+  printers write it exactly). Without it numbers are plain `number`s and an
+  integer past 2^53 is its nearest binary64, as `JSON.parse` gives it.
+- **Go** readers return `any` in the representation `CanonicalizeDocument`
+  returns (`int64` for an integer, `float64` for a decimal); a printer accepts
+  numbers as `float64`, `int64` or `json.Number`. Decode with `UseNumber` to
+  keep an integer token past 2^53. `DocumentFormatError`, `DocumentMarkdown`,
+  `DocumentTypst` and `CodeParseError` are extension tier.
+- **Julia** selects the format with a `Symbol` and has no format type.
+
 ### 5.2 Validation
 
 #### `validate`
@@ -1968,8 +2046,15 @@ reading that as a gap.
 | `migration_error` | error | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` |
 | `observed_unknowns` | function | `observed_unknowns` | `observedUnknowns` | `observed_unknowns` | `observed_unknowns` | `ObservedUnknowns` |
 | `ode_states` | function | `ode_states` | `odeStates` | `ode_states` | `ode_states` | `ODEStates` |
+| `parse_document` | function | `parse_document` | `parseDocument` | `parse_document` | `parse_document` | `ParseDocument` |
 | `parse_equation` | function | `parse_equation` | `parseEquation` | `parse_equation` | `parse_equation` | `ParseEquation` |
 | `parse_expression` | function | `parse_expression` | `parseExpression` | `parse_expression` | `parse_expression` | `ParseExpression` |
+| `parse_markdown` | function | `parse_markdown` | `parseMarkdown` | `parse_markdown` | `parse_markdown` | `ParseMarkdown` |
+| `parse_typst` | function | `parse_typst` | `parseTypst` | `parse_typst` | `parse_typst` | `ParseTypst` |
+| `print_document` | function | `print_document` | `printDocument` | `print_document` | `print_document` | `PrintDocument` |
+| `print_markdown` | function | `print_markdown` | `printMarkdown` | `print_markdown` | `print_markdown` | `PrintMarkdown` |
+| `print_math` | function | `print_math` | `printMath` | `print_math` | `print_math` | `PrintMath` |
+| `print_typst` | function | `print_typst` | `printTypst` | `print_typst` | `print_typst` | `PrintTypst` |
 | `reference_edge` | type | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` |
 | `reference_graph` | type | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` |
 | `reference_resolution_error` | error | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceError` / `ReferenceResolutionError` | `ReferenceResolutionError` |
@@ -2034,6 +2119,7 @@ reading that as a gap.
 | `discrete_event` | type | `DiscreteEvent` | – | `DiscreteEvent` | `DiscreteEvent` | `DiscreteEvent` |
 | `discrete_event_trigger` | type | `DiscreteEventTrigger` | – | `DiscreteEventTrigger` | `DiscreteEventTrigger` | `DiscreteEventTrigger` |
 | `distribution` | type | `Distribution` | – | `Distribution` | `Distribution` | `Distribution` |
+| `document_format` | type | – | `DocumentFormat` | `DocumentFormat` | `DocumentFormat` | `DocumentFormat` |
 | `domain` | type | `Domain` | – | `Domain` | `Domain` | `Domain` |
 | `edge_kind` | type | – | `EdgeKind` | `EdgeKind` | `EdgeKind` | `EdgeKind` |
 | `effective_system_kind` | function | `effective_system_kind` | `effectiveSystemKind` | `effective_system_kind` | – | `EffectiveSystemKind` |
