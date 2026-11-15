@@ -225,6 +225,7 @@ from .document import (
     parse_typst,
     print_document,
     print_markdown,
+    print_math,
     print_typst,
 )
 
@@ -647,6 +648,7 @@ __all__ = [
     "parse_typst",
     "print_document",
     "print_markdown",
+    "print_math",
     "print_typst",
     # Build-time cadence-partition pass (structural_simplify analogue)
     "CadenceError",

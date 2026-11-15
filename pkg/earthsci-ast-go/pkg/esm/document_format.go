@@ -81,6 +81,22 @@ func PrintDocument(doc any, format DocumentFormat) string {
 	return PrintMarkdown(doc)
 }
 
+// PrintMath prints one expression, or one equation, as math under a set of
+// declared names: LaTeX for DocumentMarkdown (Lean `Math.printLatex`), Typst
+// math for DocumentTypst (`Math.printTypst`).
+//
+// expr is a decoded ESM expression (a number, a name or an operator node) or an
+// equation, an object with `lhs` and `rhs` (other fields, such as `_comment`,
+// are not printed), which prints as its two sides around `=` as in a document
+// (`Source.eqExpr`). names plays the part of the variables a component
+// declares: a name in it prints in its declared shape, and the printer avoids
+// spellings that would collide with it. The result is what a document display
+// holds, without its delimiters; it is meant for showing one expression outside
+// a document, so no template is in scope.
+func PrintMath(expr any, names []string, f DocumentFormat) string {
+	return docfmt.PrintMath(docfmt.FromGo(CanonicalizeDocument(expr)), names, f != DocumentTypst)
+}
+
 // ParseMarkdown reads a Markdown ESM document (Lean `Source.Md.parseMd`). The
 // result is in canonical form, the representation CanonicalizeDocument returns
 // (map[string]any, []any, int64 for an integer, float64 for a decimal).

@@ -173,6 +173,86 @@ func TestDocumentFormatFixtures(t *testing.T) {
 	}
 }
 
+// TestDocumentFormatPrintMath: the `math` field of a fixture case is the math
+// of the case's one equation display, so PrintMath of that equation under the
+// names its model declares (the keys of its variables, species and parameters,
+// and the document's index sets) gives it in both formats. A case whose model
+// or document declares expression templates is skipped: no template is in
+// scope for PrintMath.
+func TestDocumentFormatPrintMath(t *testing.T) {
+	dir := filepath.Join(repoTestsDir(t), "conformance", "document_format")
+	checked, skipped := 0, 0
+	for _, file := range documentFormatFixtureFiles {
+		raw, err := os.ReadFile(filepath.Join(dir, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc, err := decodeDocJSON(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		cases, _ := doc.(map[string]any)["cases"].([]any)
+		for _, rawCase := range cases {
+			c := rawCase.(map[string]any)
+			want, ok := c["math"].(map[string]any)
+			if !ok {
+				continue
+			}
+			id := c["id"].(string)
+			esm := c["esm"].(map[string]any)
+			models, _ := esm["models"].(map[string]any)
+			if len(models) != 1 {
+				t.Errorf("%s: a math case has %d models, want 1", id, len(models))
+				continue
+			}
+			var model map[string]any
+			for _, m := range models {
+				model = m.(map[string]any)
+			}
+			if _, ok := model["expression_templates"]; ok {
+				skipped++
+				continue
+			}
+			if _, ok := esm["expression_templates"]; ok {
+				skipped++
+				continue
+			}
+			eqs, _ := model["equations"].([]any)
+			if len(eqs) != 1 {
+				t.Errorf("%s: a math case has %d equations, want 1", id, len(eqs))
+				continue
+			}
+			var names []string
+			for _, field := range []string{"variables", "species", "parameters"} {
+				if m, ok := model[field].(map[string]any); ok {
+					for k := range m {
+						names = append(names, k)
+					}
+				}
+			}
+			if m, ok := esm["index_sets"].(map[string]any); ok {
+				for k := range m {
+					names = append(names, k)
+				}
+			}
+			for _, f := range documentFormats {
+				key := map[DocumentFormat]string{DocumentMarkdown: "latex", DocumentTypst: "typst"}[f]
+				got, err := docfmtGuarded(func() string { return PrintMath(eqs[0], names, f) })
+				if err != nil {
+					t.Errorf("%s: PrintMath %s: %v", id, f, err)
+				} else if got != want[key] {
+					t.Errorf("%s: PrintMath %s = %q, want %q", id, f, got, want[key])
+				}
+			}
+			checked++
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no math case checked")
+	}
+	t.Logf("PrintMath: %d math cases checked, %d skipped (a template in scope)", checked, skipped)
+}
+
 // documentFormatCorpus is the corpus of formal/scripts/doc-corpus.py: every
 // .esm file under tests/ that decodes as a JSON object, in path order, with
 // its decoded value (numbers kept exactly).

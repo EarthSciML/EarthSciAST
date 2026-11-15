@@ -54,6 +54,48 @@ function print_document(doc::AbstractDict, format::Symbol)::String
 end
 
 """
+    print_math(expr, names, format::Symbol) -> String
+
+Print one expression, or one equation, as math under a set of declared names:
+LaTeX for `:markdown` (Lean `Math.printLatex`), Typst math for `:typst`
+(`Math.printTypst`).
+
+`expr` is a decoded ESM expression (a number, a name or an operator node) or an
+equation, an object with `lhs` and `rhs` (other fields, such as `_comment`, are
+not printed), which prints as its two sides around `=` as in a document
+(`Source.eqExpr`). `names` (any collection of strings) plays the part of the
+variables a component declares: a name in it prints in its declared shape, and
+the printer avoids spellings that would collide with it. The result is what a
+document display holds, without its delimiters; it is meant for showing one
+expression outside a document, so no template is in scope.
+
+```julia
+julia> print_math(Dict("lhs" => "y", "rhs" => Dict("op" => "+", "args" => ["a", "T"])), ["a", "T", "y"], :typst)
+"y = a + T"
+```
+"""
+function print_math(expr, names, format::Symbol)::String
+    (format === :markdown || format === :typst) ||
+        throw(ArgumentError("unknown document format :$format (expected :markdown or :typst)"))
+    DJ = DocumentFormats.DJson
+    e = DJ.sort_keys(
+        DJ.from_value(
+            _canonical_document_numbers(_canonicalize_document_value(expr, false))
+        )
+    )
+    if e isa DJ.JObj
+        lhs = DJ.look("lhs", e.kvs)
+        rhs = DJ.look("rhs", e.kvs)
+        if lhs !== nothing && rhs !== nothing
+            e = DJ.JObj(DJ.Kvs(["args" => DJ.JArr(Any[lhs, rhs]), "op" => "=="]))
+        end
+    end
+    sym = DocumentFormats.MExpr.Sym(String[String(n) for n in names], Tuple{String, Vector{String}}[])
+    return format === :markdown ? DocumentFormats.DMath.print_latex(sym, e) :
+        DocumentFormats.DMath.print_typst(sym, e)
+end
+
+"""
     parse_markdown(text::AbstractString) -> OrderedDict{String, Any}
 
 Read a Markdown ESM document (Lean `Source.Md.parseMd`). The result is a

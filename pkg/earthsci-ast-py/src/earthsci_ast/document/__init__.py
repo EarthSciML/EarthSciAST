@@ -29,14 +29,16 @@ The golden set every binding reproduces is ``tests/conformance/document_format/`
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterable
 from enum import Enum
 from typing import Any
 
 from ..errors import ParseError
-from .math.expr import REMOVED_OPS
+from . import math as _math
+from .math.expr import REMOVED_OPS, Sym
 from .source.markdown import parse_md, print_md
 from .source.typst import parse_typ, print_typ
-from .value import Obj, from_plain, sort_obj, to_plain
+from .value import MISSING, Obj, from_plain, look, sort_obj, to_plain
 
 __all__ = [
     "DocumentFormat",
@@ -45,6 +47,7 @@ __all__ = [
     "parse_typst",
     "print_document",
     "print_markdown",
+    "print_math",
     "print_typst",
 ]
 
@@ -114,6 +117,35 @@ def print_document(doc: dict, format: DocumentFormat | str) -> str:
     if _format(format) is DocumentFormat.MARKDOWN:
         return print_markdown(doc)
     return print_typst(doc)
+
+
+def print_math(expr: Any, names: Iterable[str], format: DocumentFormat | str) -> str:
+    """Print one expression, or one equation, as math under a set of declared
+    names: LaTeX for ``"markdown"`` (``Math.printLatex``), Typst math for
+    ``"typst"`` (``Math.printTypst``).
+
+    ``expr`` is an ESM expression (a number, a name or an operator node) or an
+    equation, a dict with ``lhs`` and ``rhs`` (other fields, such as
+    ``_comment``, are not printed), which prints as its two sides around ``=``
+    as in a document (``Source.eqExpr``). ``names`` plays the part of the
+    variables a component declares: a name in it prints in its declared shape,
+    and the printer avoids spellings that would collide with it. The result is
+    what a document display holds, without its delimiters; it is meant for
+    showing one expression outside a document, so no template is in scope.
+    """
+    from ..canonicalize import canonicalize_document
+
+    fmt = _format(format)
+    _deep()
+    e = sort_obj(from_plain(canonicalize_document(expr)))
+    if type(e) is Obj:
+        lhs, rhs = look("lhs", e), look("rhs", e)
+        if lhs is not MISSING and rhs is not MISSING:
+            e = Obj([("args", [lhs, rhs]), ("op", "==")])
+    sym = Sym(frozenset(names), ())
+    if fmt is DocumentFormat.MARKDOWN:
+        return _math.print_latex(sym, e)
+    return _math.print_typst(sym, e)
 
 
 def _removed_op_in(text: str, fmt: DocumentFormat) -> str | None:

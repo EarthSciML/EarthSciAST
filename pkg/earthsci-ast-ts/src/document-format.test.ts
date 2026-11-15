@@ -27,7 +27,7 @@ import * as path from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { canonicalizeDocument } from './canonicalize.js'
-import { parseDocument, printDocument, type DocumentFormat } from './document/index.js'
+import { parseDocument, printDocument, printMath, type DocumentFormat } from './document/index.js'
 import { EsmDiagnosticError } from './errors.js'
 import { isIntLit, isNumericLiteral } from './numeric-literal.js'
 import { fixturesDir, readFixture } from './test-helpers.js'
@@ -53,6 +53,7 @@ interface Case {
   input?: string
   canonical?: string
   error?: string
+  math?: { latex: string; typst: string }
 }
 
 const INT64_BOUND = 2 ** 63
@@ -88,6 +89,42 @@ function refusalCode(text: string, format: DocumentFormat): string | undefined {
     throw e
   }
 }
+
+/**
+ * The `math` field of a case is the math of the case's one equation display, so
+ * `printMath` of that equation under the names its model declares (the keys of
+ * its variables, species and parameters, and the document's index sets) gives
+ * it in both formats. A case whose model or document declares expression
+ * templates is skipped: no template is in scope for `printMath`.
+ */
+describe('printMath reproduces the math of a display', () => {
+  type Obj = Record<string, unknown>
+  for (const file of FILES) {
+    const fixture = JSON.parse(readFixture('conformance', 'document_format', file)) as {
+      cases: Case[]
+    }
+    for (const c of fixture.cases) {
+      if (c.math === undefined) continue
+      const esm = c.esm!
+      const model = Object.values((esm.models ?? {}) as Obj)[0] as Obj | undefined
+      const template =
+        model?.expression_templates !== undefined || esm.expression_templates !== undefined
+      it.skipIf(template)(c.id, () => {
+        expect(Object.keys((esm.models ?? {}) as Obj)).toHaveLength(1)
+        const eqs = model!.equations as unknown[]
+        expect(eqs).toHaveLength(1)
+        const names = [
+          ...['variables', 'species', 'parameters'].flatMap((f) =>
+            Object.keys((model![f] ?? {}) as Obj),
+          ),
+          ...Object.keys((esm.index_sets ?? {}) as Obj),
+        ]
+        expect(printMath(eqs[0], names, 'markdown')).toBe(c.math!.latex)
+        expect(printMath(eqs[0], names, 'typst')).toBe(c.math!.typst)
+      })
+    }
+  }
+})
 
 describe('document format fixtures', () => {
   for (const file of FILES) {

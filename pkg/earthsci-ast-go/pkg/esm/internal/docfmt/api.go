@@ -15,3 +15,22 @@ func PrintTyp(d Json) string { return typDocPrintTyp(d) }
 
 // ParseTyp reads a Typst document (`Source.Typ.parseTyp`).
 func ParseTyp(text string) (Json, bool) { return typDocParseTyp(text) }
+
+// PrintMath prints one expression or equation (canonical form, keys sorted) as
+// LaTeX (latex true) or Typst math under the declared names, with no template
+// in scope. An object with `lhs` and `rhs` prints as its two sides around `=`
+// (`Source.eqExpr`).
+func PrintMath(e Json, names []string, latex bool) string {
+	if kvs, ok := e.(Obj); ok {
+		lhs, okL := exprLook("lhs", kvs)
+		rhs, okR := exprLook("rhs", kvs)
+		if okL && okR {
+			e = Obj{{"args", []Json{lhs, rhs}}, {"op", "=="}}
+		}
+	}
+	s := &Sym{Names: append([]string(nil), names...)}
+	if latex {
+		return mathPrintLatex(s, e)
+	}
+	return mathPrintTypst(s, e)
+}

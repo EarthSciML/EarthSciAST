@@ -15,7 +15,9 @@
 //! each format and read back, must give its canonical form again.
 
 use crate::common::repo_tests_dir;
-use earthsci_ast::{DocumentFormat, canonicalize_document, parse_document, print_document};
+use earthsci_ast::{
+    DocumentFormat, canonicalize_document, parse_document, print_document, print_math,
+};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -137,6 +139,70 @@ fn document_format_fixtures() {
         "{} of {n} cases failed:\n\n{}",
         failures.len(),
         failures.join("\n\n")
+    );
+}
+
+/// The `math` field of a case is the math of the case's one equation display,
+/// so `print_math` of that equation under the names its model declares (the
+/// keys of its variables, species and parameters, and the document's index
+/// sets) gives it in both formats. A case whose model or document declares
+/// expression templates is skipped: no template is in scope for `print_math`.
+#[test]
+fn print_math_reproduces_the_display() {
+    let dir = repo_tests_dir().join("conformance/document_format");
+    let mut failures = Vec::new();
+    let (mut checked, mut skipped) = (0, 0);
+    for file in FILES {
+        let path = dir.join(file);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let doc: Value = serde_json::from_str(&text).expect("fixture JSON");
+        for case in doc["cases"].as_array().expect("cases") {
+            let Some(math) = case.get("math") else {
+                continue;
+            };
+            let id = case["id"].as_str().expect("case id");
+            let esm = &case["esm"];
+            let models = esm["models"].as_object().expect("a math case has models");
+            assert_eq!(models.len(), 1, "{id}: a math case has one model");
+            let model = models.values().next().expect("one model");
+            if model.get("expression_templates").is_some()
+                || esm.get("expression_templates").is_some()
+            {
+                skipped += 1;
+                continue;
+            }
+            let eqs = model["equations"].as_array().expect("equations");
+            assert_eq!(eqs.len(), 1, "{id}: a math case has one equation");
+            let mut names: Vec<String> = Vec::new();
+            for field in ["variables", "species", "parameters"] {
+                if let Some(m) = model.get(field).and_then(Value::as_object) {
+                    names.extend(m.keys().cloned());
+                }
+            }
+            if let Some(m) = esm.get("index_sets").and_then(Value::as_object) {
+                names.extend(m.keys().cloned());
+            }
+            for (key, format) in [
+                ("latex", DocumentFormat::Markdown),
+                ("typst", DocumentFormat::Typst),
+            ] {
+                let got = print_math(&eqs[0], &names, format);
+                let want = math[key].as_str().expect("math text");
+                if got != want {
+                    failures.push(format!("{id}: print_math {key} = {got:?}, want {want:?}"));
+                }
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no math case checked");
+    eprintln!("print_math: {checked} math cases checked, {skipped} skipped (a template in scope)");
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
     );
 }
 

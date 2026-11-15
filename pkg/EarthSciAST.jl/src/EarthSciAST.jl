@@ -333,7 +333,7 @@ export
     canonicalize, canonical_json, format_canonical_float, CanonicalizeError,
     canonicalize_document,
     # Markdown and Typst document source formats (CONFORMANCE §5.58)
-    print_markdown, print_typst, print_document,
+    print_markdown, print_typst, print_document, print_math,
     parse_markdown, parse_typst, parse_document,
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,

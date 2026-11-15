@@ -144,6 +144,50 @@ end
         @test !isempty(fixture["cases"])
     end
 
+    # The `math` field of a case is the math of the case's one equation display,
+    # so `print_math` of that equation under the names its model declares (the
+    # keys of its variables, species and parameters, and the document's index
+    # sets) gives it in both formats. A case whose model or document declares
+    # expression templates is skipped: no template is in scope for `print_math`.
+    @testset "print_math reproduces the math of a display" begin
+        failures = String[]
+        checked = skipped = 0
+        for file in DOCFMT_FILES
+            fixture = JSON.parse(read(joinpath(DOCFMT_DIR, file), String))
+            for case in fixture["cases"]
+                haskey(case, "math") || continue
+                id = String(case["id"])
+                esm = case["esm"]
+                models = get(esm, "models", Dict())
+                @test length(models) == 1
+                model = first(values(models))
+                if haskey(model, "expression_templates") || haskey(esm, "expression_templates")
+                    skipped += 1
+                    continue
+                end
+                eqs = model["equations"]
+                @test length(eqs) == 1
+                names = String[]
+                for field in ("variables", "species", "parameters")
+                    append!(names, String.(collect(keys(get(model, field, Dict())))))
+                end
+                append!(names, String.(collect(keys(get(esm, "index_sets", Dict())))))
+                for (key, format) in (("latex", :markdown), ("typst", :typst))
+                    got = print_math(eqs[1], names, format)
+                    want = String(case["math"][key])
+                    got == want || push!(failures, "$id: print_math $key = $(repr(got)), want $(repr(want))")
+                end
+                checked += 1
+            end
+        end
+        @info "print_math: $checked math cases checked, $skipped skipped (a template in scope)"
+        isempty(failures) || @info "print_math failures" n = length(failures) first =
+            join(first(failures, 5), "\n")
+        @test isempty(failures)
+        @test checked > 0
+        @test_throws ArgumentError print_math("x", String[], :latex)
+    end
+
     @testset "format selector" begin
         doc = Dict("esm" => "2.3.0", "metadata" => Dict("name" => "x"))
         @test print_document(doc, :markdown) == print_markdown(doc)

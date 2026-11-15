@@ -47,6 +47,7 @@ from earthsci_ast import (
     parse_typst,
     print_document,
     print_markdown,
+    print_math,
     print_typst,
 )
 from earthsci_ast.errors import ParseError
@@ -96,6 +97,32 @@ def test_document_format_fixture(case):
         assert getattr(info.value, "code", None) == case["error"]
     else:
         raise AssertionError(f"unknown case kind {kind!r}")
+
+
+def _math_cases():
+    return [c for c in _cases() if "math" in c]
+
+
+@pytest.mark.parametrize("case", _math_cases(), ids=lambda c: c["id"])
+def test_print_math_reproduces_the_display(case):
+    """The ``math`` field of a case is the math of the case's one equation
+    display, so ``print_math`` of that equation under the names its model
+    declares (the keys of its variables, species and parameters, and the
+    document's index sets) gives it in both formats. A case whose model or
+    document declares expression templates is skipped: no template is in scope
+    for ``print_math``."""
+    esm = case["esm"]
+    models = esm.get("models", {})
+    assert len(models) == 1, "a math case has one model"
+    (model,) = models.values()
+    if "expression_templates" in model or "expression_templates" in esm:
+        pytest.skip("the display depends on a template")
+    (eq,) = model["equations"]
+    names = [
+        k for field in ("variables", "species", "parameters") for k in model.get(field, {})
+    ] + list(esm.get("index_sets", {}))
+    assert print_math(eq, names, "markdown") == case["math"]["latex"]
+    assert print_math(eq, names, DocumentFormat.TYPST) == case["math"]["typst"]
 
 
 def test_fixture_files_are_nonempty():
