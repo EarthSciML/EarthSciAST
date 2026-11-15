@@ -324,12 +324,12 @@
           "T": {
             "type": "state",
             "units": "K",
-            "default": 280.0
+            "default": 280
           },
           "speed": {
             "type": "state",
             "units": "h*m/(mi*s)",
-            "default": 1.0
+            "default": 1
           },
           "R": {
             "type": "parameter",
@@ -345,12 +345,12 @@
           "units": {
             "type": "parameter",
             "units": "1",
-            "default": 1.0
+            "default": 1
           },
           "label": {
             "type": "parameter",
             "units": "g/hp-hr",
-            "default": 1.0
+            "default": 1
           }
         },
         "equations": [
@@ -385,8 +385,8 @@
                   "op": "const",
                   "args": [],
                   "value": [
-                    1.0,
-                    2.0
+                    1,
+                    2
                   ]
                 },
                 2,
@@ -394,8 +394,8 @@
                   "op": "const",
                   "args": [],
                   "value": [
-                    3.0,
-                    4.0
+                    3,
+                    4
                   ],
                   "id": "pair",
                   "attrs": {
@@ -421,7 +421,7 @@
               "flux": {
                 "type": "parameter",
                 "units": "kg/(m^2*s)",
-                "default": 0.0
+                "default": 0
               }
             },
             "equations": [
@@ -443,7 +443,7 @@
                         {
                           "op": "const",
                           "args": [],
-                          "value": 1.0,
+                          "value": 1,
                           "units": "m^2/kg"
                         }
                       ]
@@ -459,7 +459,7 @@
                   "c": {
                     "type": "state",
                     "units": "molec/cm^3",
-                    "default": 1.0
+                    "default": 1
                   }
                 },
                 "equations": [
@@ -477,7 +477,7 @@
                         {
                           "op": "const",
                           "args": [],
-                          "value": 1.0,
+                          "value": 1,
                           "units": "1/s^(1/2)"
                         },
                         "c"
@@ -500,7 +500,7 @@
           },
           "NO2": {
             "units": "ppb",
-            "default": 1.0,
+            "default": 1,
             "default_units": "ppm"
           }
         },
@@ -548,7 +548,7 @@
             "species": {
               "SO4": {
                 "units": "ug/m^3",
-                "default": 1.0
+                "default": 1
               }
             },
             "parameters": {

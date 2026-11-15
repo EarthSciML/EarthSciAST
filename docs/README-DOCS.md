@@ -32,8 +32,10 @@ docs/
 ## Narrative pages
 
 [`docs/narrative/`](narrative/) holds pages that define an EarthSciAST model in
-their own prose. `esm-narrative` assembles the model from the page's directives,
-validates it, runs its inline tests, runs its analyses, draws the figures, and
+their own prose. Each page is an `.esm` document in the ESM Markdown format;
+`esm-narrative` reads it with the core, adds the tests and figures written with
+its `esm-` directives, validates it, runs its inline tests, runs its analyses,
+draws the figures, and
 writes the finished page into `content/generated/narrative/` as a page bundle,
 `decay/index.md` with `decay.esm` beside it, so the download link is relative
 and works under any base URL. Neither output is checked in.
@@ -45,8 +47,8 @@ cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative 
 ```
 
 The command exits non-zero when a model does not validate or an inline test
-fails, which is what stops a bad model reaching the site. The directive syntax
-is documented in [`docs/narrative/_index.md`](narrative/_index.md), which is
+fails, which is what stops a bad model reaching the site. The page syntax is
+documented in [`docs/narrative/_index.md`](narrative/_index.md), which is
 itself the section's landing page.
 
 ## Document formats chapter

@@ -575,22 +575,67 @@ _DOCUMENT_FREE_KEYS = frozenset({"attrs", "config", "metadata", "reader_options"
 _DOCUMENT_UNIT_KEYS = ("units", "default_units")
 
 
+#: The deprecated ops (esm-spec §4.2): spelling -> (replacement, operand count).
+_DEPRECATED_OPS = {"neg": ("-", 1), "pow": ("^", 2)}
+
+
+def _canonical_document_number(value: Any) -> Any:
+    """A JSON number in canonical form (CONFORMANCE §5.5.3.1): an integral float in
+    Int64 is an integer (``2.0`` is ``2``, ``-0.0`` is ``0``), an integer outside Int64
+    a float. A float already holds the nearest binary64 of its token."""
+    if isinstance(value, float) and value.is_integer() and -(2**63) <= value < 2**63:
+        return int(value)
+    if isinstance(value, int) and not -(2**63) <= value < 2**63:
+        return float(value)
+    return value
+
+
+def _canonical_document_numbers(value: Any) -> Any:
+    """Every number of a JSON value in canonical form, at every depth."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return _canonical_document_number(value)
+    if isinstance(value, list):
+        return [_canonical_document_numbers(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _canonical_document_numbers(v) for k, v in value.items()}
+    return value
+
+
 def canonicalize_document(doc: Any) -> Any:
-    """The document-level canonical step: every units string of a decoded
-    document (the JSON object ``to_json`` writes and ``load_document`` reads)
-    takes the canonical unit spelling (esm-spec §4.8.2, Lean
-    ``Esm.Units.canon``).
+    """The document-level canonical step (esm-spec §4.8.2): every units string of a
+    decoded document (the JSON object ``to_json`` writes and ``load_document`` reads)
+    takes the canonical unit spelling (Lean ``Esm.Units.canon``).
 
     That is every ``units`` and ``default_units`` string of a variable,
     species, parameter, coordinate or ``const`` node, wherever it sits:
     nested subsystems, template bodies, tests, coupling entries. Free-form
     objects (``metadata``, ``x_esd``, ``attrs``, ``config``,
-    ``reader_options``) are not touched, and neither are the keys of
+    ``reader_options``) are not respelled, and neither are the keys of
     name-keyed maps. A ``const`` node whose units spell ``1`` loses them: a
     scalar one becomes the bare literal, an array one a ``const`` without
-    ``units``. The input is not mutated; nothing else changes.
+    ``units``. The deprecated ops are rewritten (esm-spec §4.2): a ``neg`` node
+    with one argument becomes unary ``-``, a ``pow`` node with two becomes
+    ``^``, and a ``broadcast`` of ``neg`` with one argument maps ``-``. Every
+    number, free-form objects included, takes its canonical form (CONFORMANCE
+    §5.5.3.1): an integral value in Int64 is an integer (``2.0`` is ``2``).
+    The input is not mutated; nothing else changes. These are the rules of
+    Lean ``Adapter.Doc.spellRules`` and ``Adapter.Doc.conv``.
     """
     from .units import canonical_unit_spelling
+
+    def rewrite_deprecated(node: dict) -> dict:
+        op, args = node.get("op"), node.get("args")
+        if not isinstance(args, list):
+            return node
+        if isinstance(op, str) and op in _DEPRECATED_OPS:
+            replacement, arity = _DEPRECATED_OPS[op]
+            if len(args) == arity:
+                return {k: (replacement if k == "op" else v) for k, v in node.items()}
+        elif op == "broadcast" and node.get("fn") == "neg" and len(args) == 1:
+            return {k: ("-" if k == "fn" else v) for k, v in node.items()}
+        return node
 
     def walk(value: Any, is_map: bool = False) -> Any:
         if isinstance(value, list):
@@ -616,6 +661,6 @@ def canonicalize_document(doc: Any) -> Any:
                 out[k] = v
             else:
                 out[k] = walk(v, k in _DOCUMENT_MAP_KEYS)
-        return out
+        return rewrite_deprecated(out)
 
-    return walk(doc)
+    return _canonical_document_numbers(walk(doc))

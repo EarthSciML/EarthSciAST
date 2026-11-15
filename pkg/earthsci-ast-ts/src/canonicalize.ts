@@ -597,11 +597,19 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
  * That is every `units` and `default_units` string of a variable, species,
  * parameter, coordinate or `const` node, wherever it sits: nested subsystems,
  * template bodies, tests, coupling entries. Free-form objects (`metadata`,
- * `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither
+ * `x_esd`, `attrs`, `config`, `reader_options`) are not respelled, and neither
  * are the keys of name-keyed maps. A `const` node whose units spell `1` loses
  * them: a scalar one becomes the bare literal, an array one a `const` without
- * `units`. Takes the decoded JSON document (an `EsmFile` is one); the input is
- * not mutated and nothing else changes.
+ * `units`. The deprecated ops are rewritten (esm-spec §4.2): a `neg` node with
+ * one argument becomes unary `-`, a `pow` node with two becomes `^`, and a
+ * `broadcast` of `neg` with one argument maps `-`. Every number, free-form
+ * objects included, takes its canonical form (CONFORMANCE §5.5.3.1): a
+ * `NumericLiteral` whose value is integral and in Int64 is an int literal
+ * (`2.0` is `2`), any other a float literal, and `-0` is `0`; a plain number
+ * already holds the nearest binary64 of its token. Takes the decoded JSON
+ * document (an `EsmFile` is one; plain numbers or the tagged literals of
+ * `losslessJsonParse`); the input is not mutated and nothing else changes.
+ * These are the rules of Lean `Adapter.Doc.spellRules` and `Adapter.Doc.conv`.
  */
 export function canonicalizeDocument<T>(doc: T): T {
   const walk = (value: unknown, isMap: boolean): unknown => {
@@ -631,7 +639,57 @@ export function canonicalizeDocument<T>(doc: T): T {
       else if (DOCUMENT_FREE_KEYS.has(k)) entries.push([k, v])
       else entries.push([k, walk(v, DOCUMENT_MAP_KEYS.has(k))])
     }
-    return Object.fromEntries(entries)
+    const out = Object.fromEntries(entries) as Record<string, unknown>
+    if (!isMap) rewriteDeprecatedDocumentOp(out)
+    return out
   }
-  return walk(doc, false) as T
+  return canonicalDocumentNumbers(walk(doc, false)) as T
+}
+
+/** The deprecated ops (esm-spec §4.2): spelling -> [replacement, operand count]. */
+const DEPRECATED_DOCUMENT_OPS: ReadonlyMap<string, readonly [string, number]> = new Map([
+  ['neg', ['-', 1]],
+  ['pow', ['^', 2]],
+])
+
+/**
+ * `neg` with one argument is unary `-`, `pow` with two is `^`, a `broadcast`
+ * of `neg` with one argument maps `-` (Lean `Adapter.Doc.deprecatedTo`).
+ * `out` is a fresh object, rewritten in place.
+ */
+function rewriteDeprecatedDocumentOp(out: Record<string, unknown>): void {
+  const op = out.op
+  const args = out.args
+  if (typeof op !== 'string' || !Array.isArray(args)) return
+  const rule = DEPRECATED_DOCUMENT_OPS.get(op)
+  if (rule !== undefined) {
+    if (args.length === rule[1]) out.op = rule[0]
+  } else if (op === 'broadcast' && out.fn === 'neg' && args.length === 1) {
+    out.fn = '-'
+  }
+}
+
+const INT64_BOUND = 2 ** 63
+
+/** A JSON number in canonical form (CONFORMANCE §5.5.3.1). */
+function canonicalDocumentNumber(value: number): number {
+  return Object.is(value, -0) ? 0 : value
+}
+
+/** Every number of a JSON value in canonical form, at every depth. */
+function canonicalDocumentNumbers(value: unknown): unknown {
+  if (typeof value === 'number') return canonicalDocumentNumber(value)
+  if (isNumericLiteral(value)) {
+    const v = canonicalDocumentNumber(value.value)
+    const integral = Number.isInteger(v) && v >= -INT64_BOUND && v < INT64_BOUND
+    if (integral) return isIntLit(value) && v === value.value ? value : intLit(v)
+    return isFloatLit(value) ? value : floatLit(v)
+  }
+  if (Array.isArray(value)) return value.map(canonicalDocumentNumbers)
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, canonicalDocumentNumbers(v)]),
+    )
+  }
+  return value
 }

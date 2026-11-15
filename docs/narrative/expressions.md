@@ -8,10 +8,11 @@ show_source: true
 An `.esm` document stores expressions as JSON trees, but nobody wants to write
 them that way. The text syntax is the input form, and every binding parses it.
 
-Each example below is one expression, written once in the text syntax and then
-printed by the parser as mathematics and as the JSON the file stores. They
-cannot drift apart: if the parser changes, this page changes with it, and if an
-example stops parsing, the build fails.
+Each example below is one expression, written once in the text syntax, then
+printed as the mathematics an ESM Markdown document writes for it (the LaTeX of
+a `$$` display) and as the JSON the file stores. They cannot drift apart: if
+the parser or the printer changes, this page changes with it, and if an example
+stops parsing, the build fails.
 
 ## Arithmetic
 

@@ -222,6 +222,36 @@
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x^2 $\n"
     },
     {
+      "id": "canon_float_shortest",
+      "kind": "print",
+      "description": "A decimal with more digits than its double needs is written with the shortest digits that read back as the same double.",
+      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": [1.4715177646857694, "x"]}}]}}},
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [1.4715177646857693, "x"], "op": "*"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = 1.4715177646857693 x", "typst": "y = 1.4715177646857693 x"},
+      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = 1.4715177646857693 x\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = 1.4715177646857693 x $\n"
+    },
+    {
+      "id": "canon_float_integral",
+      "kind": "print",
+      "description": "A decimal whose nearest double is integral is that integer.",
+      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "+", "args": ["x", 1.0000000000000001]}}]}}},
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", 1], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = x + 1", "typst": "y = x + 1"},
+      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x + 1\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x + 1 $\n"
+    },
+    {
+      "id": "canon_float_large_integral",
+      "kind": "print",
+      "description": "A decimal past 2^53 is the integer its nearest double is, not the one it spells.",
+      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "+", "args": ["x", -1.999999999999999e16]}}]}}},
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", -19999999999999992], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = x + -19999999999999992", "typst": "y = x + -19999999999999992"},
+      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x + -19999999999999992\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x + -19999999999999992 $\n"
+    },
+    {
       "id": "call_tier",
       "kind": "print",
       "description": "sign, atan2, asinh, acosh and atanh print in the call form.",

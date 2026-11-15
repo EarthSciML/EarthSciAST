@@ -91,6 +91,8 @@ mod deprecated_ops;
 mod discrete_materialize_conformance;
 #[path = "display_conformance.rs"]
 mod display_conformance;
+#[path = "document_format.rs"]
+mod document_format;
 #[path = "doubly_defined_state_conformance.rs"]
 mod doubly_defined_state_conformance;
 #[path = "earthscidata_loader_coverage.rs"]

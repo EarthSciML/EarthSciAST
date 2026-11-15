@@ -12,11 +12,11 @@
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Alg, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string, parse_equation, solve,
-    to_ascii, to_latex, to_unicode, validate as validate_file,
+    Alg, DocumentFormat, ProblemOptions, Rhs, SolveOptions, esm_problem, expression_names,
+    load_string, parse_equation, print_math, solve, to_ascii, to_unicode,
+    validate as validate_file,
 };
-use earthsci_narrative::build::{BuildOptions, build_json};
-use earthsci_narrative::typst_math::equation_to_typst;
+use earthsci_narrative::build::{BuildOptions, build_document, build_json, build_text};
 use serde_json::{Value, json};
 use wasm_minimal_protocol::*;
 
@@ -57,16 +57,20 @@ pub fn version() -> Vec<u8> {
 }
 
 /// Parse one equation in the text syntax (`D(N, t) = -lambda*N`) and return
-/// `{ascii, unicode, latex, typst}` renderings of it.
+/// `{ascii, unicode, latex, typst}` renderings of it. The LaTeX and the Typst
+/// are the core's printers (`earthsci_ast::print_math`), the math of the ESM
+/// Markdown and Typst formats, with the equation's own names declared.
 #[wasm_func]
 pub fn render_equation(text: &[u8]) -> Result<Vec<u8>, String> {
     let text = utf8(text, "equation")?;
     let eq = parse_equation(&text).map_err(|e| e.to_string())?;
+    let json = serde_json::to_value(&eq).map_err(|e| e.to_string())?;
+    let names = expression_names(&json);
     Ok(to_bytes(&json!({
         "ascii": format!("{} = {}", to_ascii(&eq.lhs), to_ascii(&eq.rhs)),
         "unicode": format!("{} = {}", to_unicode(&eq.lhs), to_unicode(&eq.rhs)),
-        "latex": format!("{} = {}", to_latex(&eq.lhs), to_latex(&eq.rhs)),
-        "typst": equation_to_typst(&eq),
+        "latex": print_math(&json, &names, DocumentFormat::Markdown),
+        "typst": print_math(&json, &names, DocumentFormat::Typst),
     })))
 }
 
@@ -136,17 +140,9 @@ pub fn solve_esm(esm: &[u8], opts: &[u8]) -> Result<Vec<u8>, String> {
     })))
 }
 
-/// Build a narrative document: element-format JSON in, the narrative
-/// `BuildOutput` JSON out (the assembled `.esm`, diagnostics, and one output
-/// per element — math, test results, figures).
-///
-/// `opts` is a JSON object: `{run_tests?, run_analyses?, render_svg?, points?,
-/// width?, height?}`, all optional. Problems in the document are diagnostics in
-/// the output, never a plugin error, so the document can show them in place.
-#[wasm_func]
-pub fn build(doc: &[u8], opts: &[u8]) -> Result<Vec<u8>, String> {
-    let doc = utf8(doc, "document")?;
-    let opts: Value = serde_json::from_slice(opts).map_err(|e| format!("options: {e}"))?;
+/// The narrative build options from the plugin's JSON options:
+/// `{run_tests?, run_analyses?, render_svg?, points?, width?, height?}`.
+fn build_options(opts: &Value) -> BuildOptions {
     let flag = |key: &str, default: bool| opts.get(key).and_then(Value::as_bool).unwrap_or(default);
     let mut build_opts = BuildOptions {
         run_tests: flag("run_tests", true),
@@ -163,6 +159,53 @@ pub fn build(doc: &[u8], opts: &[u8]) -> Result<Vec<u8>, String> {
     if let Some(h) = opts.get("height").and_then(Value::as_f64) {
         build_opts.svg.height = h;
     }
-    let out = build_json(&doc, &build_opts);
+    build_opts
+}
+
+/// Build a narrative document in the element format: element JSON in, the
+/// narrative `BuildOutput` JSON out (the assembled `.esm`, diagnostics, and one
+/// output per element — math, test results, figures).
+///
+/// `opts` is a JSON object: `{run_tests?, run_analyses?, render_svg?, points?,
+/// width?, height?}`, all optional. Problems in the document are diagnostics in
+/// the output, never a plugin error, so the document can show them in place.
+#[wasm_func]
+pub fn build(doc: &[u8], opts: &[u8]) -> Result<Vec<u8>, String> {
+    let doc = utf8(doc, "document")?;
+    let opts: Value = serde_json::from_slice(opts).map_err(|e| format!("options: {e}"))?;
+    let out = build_json(&doc, &build_options(&opts));
+    serde_json::to_vec(&out).map_err(|e| e.to_string())
+}
+
+/// Build an `.esm` document: its text in, the narrative `BuildOutput` JSON
+/// out (validation, the results of its tests, its figures, under
+/// `constructs` by JSON pointer).
+///
+/// The text is read by the core as `opts.format`: `"typst"` (the default; a
+/// Typst document can pass its own source, `read("model.typ")`), `"markdown"`,
+/// or `"json"`. The other options are [`build`]'s. A text the core refuses is
+/// a diagnostic in the output, never a plugin error.
+#[wasm_func]
+pub fn build_document_text(text: &[u8], opts: &[u8]) -> Result<Vec<u8>, String> {
+    let text = utf8(text, "document")?;
+    let opts: Value = serde_json::from_slice(opts).map_err(|e| format!("options: {e}"))?;
+    let build_opts = build_options(&opts);
+    let out = match opts
+        .get("format")
+        .and_then(Value::as_str)
+        .unwrap_or("typst")
+    {
+        "typst" => build_text(&text, DocumentFormat::Typst, &build_opts),
+        "markdown" => build_text(&text, DocumentFormat::Markdown, &build_opts),
+        "json" => {
+            let esm: Value = serde_json::from_str(&text).map_err(|e| format!("document: {e}"))?;
+            build_document(esm, &build_opts)
+        }
+        other => {
+            return Err(format!(
+                "unknown format `{other}` (expected typst, markdown or json)"
+            ));
+        }
+    };
     serde_json::to_vec(&out).map_err(|e| e.to_string())
 }

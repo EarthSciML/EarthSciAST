@@ -890,6 +890,24 @@ const DOCUMENT_MAP_KEYS: &[&str] = &[
 /// Free-form objects (schema `additionalProperties: true`), never descended.
 const DOCUMENT_FREE_KEYS: &[&str] = &["attrs", "config", "metadata", "reader_options", "x_esd"];
 
+/// Every number of a JSON value in canonical form (CONFORMANCE §5.5.3.1),
+/// at every depth: the numbers the document readers produce.
+fn canonical_numbers(value: &serde_json::Value) -> serde_json::Value {
+    use crate::document::json::{from_serde, to_serde};
+    use serde_json::Value;
+    match value {
+        // A finite binary64 value always has a `serde_json` value again.
+        Value::Number(_) => to_serde(&from_serde(value)).expect("a serde_json number is finite"),
+        Value::Array(items) => Value::Array(items.iter().map(canonical_numbers).collect()),
+        Value::Object(obj) => Value::Object(
+            obj.iter()
+                .map(|(k, v)| (k.clone(), canonical_numbers(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 /// The document-level canonical step: every units string of a decoded document
 /// (the JSON value `to_json` writes and `load_document` reads) takes the
 /// canonical unit spelling (esm-spec §4.8.2, Lean `Esm.Units.canon`).
@@ -897,10 +915,16 @@ const DOCUMENT_FREE_KEYS: &[&str] = &["attrs", "config", "metadata", "reader_opt
 /// That is every `units` and `default_units` string of a variable, species,
 /// parameter, coordinate or `const` node, wherever it sits: nested subsystems,
 /// template bodies, tests, coupling entries. Free-form objects (`metadata`,
-/// `x_esd`, `attrs`, `config`, `reader_options`) are not touched, and neither
+/// `x_esd`, `attrs`, `config`, `reader_options`) are not respelled, and neither
 /// are the keys of name-keyed maps. A `const` node whose units spell `1` loses
 /// them: a scalar one becomes the bare literal, an array one a `const` without
-/// `units`. Nothing else changes.
+/// `units`. The deprecated operators are rewritten (esm-spec §4.2): a `neg`
+/// node with one argument becomes unary `-`, a `pow` node with two becomes `^`,
+/// and a `broadcast` of `neg` with one argument maps `-`. Every number,
+/// free-form objects included, takes its canonical form (CONFORMANCE
+/// §5.5.3.1): an integral value in `Int64` is an integer (`0.0` is `0`). Nothing
+/// else changes. These are the rules of Lean `Adapter.Doc.spellRules` (the
+/// spelling rules) and `Adapter.Doc.conv` (the numbers).
 #[must_use]
 pub fn canonicalize_document(doc: &serde_json::Value) -> serde_json::Value {
     fn walk(value: &serde_json::Value, is_map: bool) -> serde_json::Value {
@@ -914,25 +938,47 @@ pub fn canonicalize_document(doc: &serde_json::Value) -> serde_json::Value {
                 if drop_units && let Some(n @ Value::Number(_)) = obj.get("value") {
                     return n.clone();
                 }
-                Value::Object(
-                    obj.iter()
-                        .filter(|(k, _)| !(drop_units && k.as_str() == "units"))
-                        .map(|(k, v)| {
-                            let out = match v {
-                                _ if is_map => walk(v, false),
-                                Value::String(u) if k == "units" || k == "default_units" => {
-                                    Value::String(crate::units::canonical_unit_spelling(u))
-                                }
-                                _ if DOCUMENT_FREE_KEYS.contains(&k.as_str()) => v.clone(),
-                                _ => walk(v, DOCUMENT_MAP_KEYS.contains(&k.as_str())),
-                            };
-                            (k.clone(), out)
-                        })
-                        .collect(),
-                )
+                let mut out: serde_json::Map<String, Value> = obj
+                    .iter()
+                    .filter(|(k, _)| !(drop_units && k.as_str() == "units"))
+                    .map(|(k, v)| {
+                        let out = match v {
+                            _ if is_map => walk(v, false),
+                            Value::String(u) if k == "units" || k == "default_units" => {
+                                Value::String(crate::units::canonical_unit_spelling(u))
+                            }
+                            _ if DOCUMENT_FREE_KEYS.contains(&k.as_str()) => v.clone(),
+                            _ => walk(v, DOCUMENT_MAP_KEYS.contains(&k.as_str())),
+                        };
+                        (k.clone(), out)
+                    })
+                    .collect();
+                if !is_map {
+                    rewrite_deprecated(&mut out);
+                }
+                Value::Object(out)
             }
             other => other.clone(),
         }
+    }
+    /// `neg` with one argument is unary `-`, `pow` with two is `^`, a
+    /// `broadcast` of `neg` with one argument maps `-` (Lean
+    /// `Adapter.Doc.deprecatedTo`).
+    fn rewrite_deprecated(obj: &mut serde_json::Map<String, serde_json::Value>) {
+        let Some(arity) = obj.get("args").and_then(|a| a.as_array()).map(Vec::len) else {
+            return;
+        };
+        let (key, to) = match obj.get("op").and_then(|v| v.as_str()) {
+            Some("neg") if arity == 1 => ("op", "-"),
+            Some("pow") if arity == 2 => ("op", "^"),
+            Some("broadcast")
+                if arity == 1 && obj.get("fn").and_then(|v| v.as_str()) == Some("neg") =>
+            {
+                ("fn", "-")
+            }
+            _ => return,
+        };
+        obj.insert(key.into(), serde_json::Value::String(to.into()));
     }
     fn is_dimensionless_const(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
         obj.get("op").and_then(|v| v.as_str()) == Some("const")
@@ -941,7 +987,7 @@ pub fn canonicalize_document(doc: &serde_json::Value) -> serde_json::Value {
                 .and_then(|v| v.as_str())
                 .is_some_and(|u| crate::units::canonical_unit_spelling(u) == "1")
     }
-    walk(doc, false)
+    canonical_numbers(&walk(doc, false))
 }
 
 #[cfg(test)]
@@ -1405,7 +1451,8 @@ mod tests {
     }
 
     /// The document-level fixtures (tests/conformance/canonical_document):
-    /// `canonicalize_document(input)` equals `expected` as a JSON value.
+    /// `canonicalize_document(input)` equals `expected` as a JSON value, its
+    /// numbers compared by kind too.
     #[test]
     fn canonical_document_conformance_fixtures() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1418,6 +1465,7 @@ mod tests {
         assert!(!fixtures.is_empty());
         for entry in fixtures {
             let fixture = read(entry["path"].as_str().unwrap());
+            // serde numbers compare by kind too: `2` is not `2.0`.
             assert_eq!(
                 canonicalize_document(&fixture["input"]),
                 fixture["expected"],

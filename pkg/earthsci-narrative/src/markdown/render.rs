@@ -1,27 +1,35 @@
 //! Writing the output page.
 //!
-//! Every directive is replaced by what it stands for, and everything else is
-//! copied through, so the result is ordinary Markdown: KaTeX math in the `\(…\)`
-//! and `\[…\]` delimiters the docs site already renders, a variables table,
-//! test results, and figures with their SVG inline. Nothing here needs a Hugo
-//! shortcode, so the same output would serve any Markdown site.
+//! Every construct and directive is replaced by what it stands for, and
+//! everything else is copied through, so the result is ordinary Markdown:
+//! KaTeX math in the `\(…\)` and `\[…\]` delimiters the docs site already
+//! renders, a variables table, test results, and figures with their SVG
+//! inline. Nothing here needs a Hugo shortcode, so the same output would serve
+//! any Markdown site.
+//!
+//! The mathematics is the page's own: a declaration's name and a display's
+//! LaTeX are already in the notation of the ESM Markdown format, which KaTeX
+//! reads. What the page does not spell out — a variables table, an
+//! `::esm-example` — is printed by the core (`earthsci_ast::print_math`).
 //!
 //! A page whose front matter sets `show_source: true` also shows how it was
-//! written: each block of the source that holds a directive — a paragraph with
-//! `:var[…]` in it, an `::eq` line, an `:::esm-test` container — is printed as
+//! written: each block of the source that holds a construct — a paragraph with
+//! `:var[…]` in it, a `$$` display, an `:::esm-test` container — is printed as
 //! a Markdown code block just before what it renders to. A tutorial wants this;
 //! a paper written in the format does not, so it is off unless asked for.
 
 use std::fmt::Write as _;
 
-use earthsci_ast::{Expr, parse_equation, parse_expression, to_latex};
+use earthsci_ast::{
+    DocumentFormat, expression_names, parse_equation, parse_expression, print_math,
+};
 use serde_json::Value;
 
 use crate::assemble::{QuantityInfo, Role};
-use crate::build::{BuildOutput, ElementOutput, Figure, TestOutcome};
+use crate::build::{BuildOutput, ConstructOutput, ElementOutput, Figure, TestOutcome};
 use crate::diagnostic::Diagnostic;
-use crate::markdown::scan::{Directive, Form};
-use crate::markdown::{Page, Part};
+use crate::markdown::scan::{self, Directive, Display, Form, Piece};
+use crate::markdown::{Construct, ConstructPiece, Page, Part};
 
 /// How to write the output page.
 #[derive(Debug, Clone, Default)]
@@ -45,26 +53,64 @@ pub fn render(page: &Page, out: &BuildOutput, opts: &RenderOptions) -> String {
     // Diagnostics are shown where they belong, so the ones left over — the
     // document's own — go at the end where they cannot be missed.
     let mut shown = vec![false; out.diagnostics.len()];
+    // A finding about the document itself is shown at the construct its path
+    // is in; so are the results of the tests and analyses the document writes.
+    let at_construct: Vec<Option<usize>> = out
+        .diagnostics
+        .iter()
+        .map(|d| match d.element {
+            None => d.path.as_deref().and_then(|p| page.owner_of(p)),
+            Some(_) => None,
+        })
+        .collect();
+    let result_at: Vec<Option<usize>> = out
+        .constructs
+        .iter()
+        .map(|c| page.owner_of(&c.path))
+        .collect();
     // The model the page is in the middle of, so that `::esm-variables`
-    // tabulates that one, the way an element belongs to the model above it.
+    // tabulates that one, the way a test belongs to the model above it.
     let mut model: Option<&str> = None;
     let mut block = Block {
         show_source: shows_source(&page.front_matter),
         ..Block::default()
     };
-    for part in &page.parts {
+    for (at, part) in page.parts.iter().enumerate() {
         match part {
             Part::Text(text) => block.text(&mut md, text),
+            Part::Construct(c) => {
+                if let Some(name) = c.model.as_deref() {
+                    model = Some(name);
+                }
+                let mut problems = Vec::new();
+                for ((d, seen), owner) in out
+                    .diagnostics
+                    .iter()
+                    .zip(shown.iter_mut())
+                    .zip(&at_construct)
+                {
+                    if *owner == Some(at) {
+                        *seen = true;
+                        problems.push(d.clone());
+                    }
+                }
+                let results: Vec<&ConstructOutput> = out
+                    .constructs
+                    .iter()
+                    .zip(&result_at)
+                    .filter(|(_, owner)| **owner == Some(at))
+                    .map(|(c, _)| c)
+                    .collect();
+                block.directive(
+                    &mut md,
+                    c.raw(),
+                    &render_construct(c, &results, &problems),
+                    c.form(),
+                );
+            }
             Part::Broken(d) => block.output(&problem_block(std::slice::from_ref(d))),
             Part::Whole(d) => block.directive(&mut md, &d.raw, &whole(d, out, opts, model), d.form),
             Part::Element(index, directive) => {
-                if let Some(name) = out
-                    .elements
-                    .get(*index)
-                    .and_then(|e| e.info.model.as_deref())
-                {
-                    model = Some(name);
-                }
                 let mut problems = Vec::new();
                 for (d, seen) in out.diagnostics.iter().zip(shown.iter_mut()) {
                     if d.element == Some(*index) {
@@ -83,6 +129,11 @@ pub fn render(page: &Page, out: &BuildOutput, opts: &RenderOptions) -> String {
         }
     }
     block.flush(&mut md);
+    for (c, owner) in out.constructs.iter().zip(&result_at) {
+        if owner.is_none() {
+            md.push_str(&construct_results(c));
+        }
+    }
     let left: Vec<Diagnostic> = out
         .diagnostics
         .iter()
@@ -184,6 +235,100 @@ fn source_block(source: &str) -> String {
     format!("<div class=\"esm-source\">\n\n{fence}markdown\n{source}\n{fence}\n\n</div>\n\n")
 }
 
+/// What a construct of the document renders to.
+fn render_construct(
+    c: &Construct,
+    results: &[&ConstructOutput],
+    problems: &[Diagnostic],
+) -> String {
+    let mut out = match &c.piece {
+        ConstructPiece::Directive(d) => match d.name.as_str() {
+            // A declaration shows its name, already in LaTeX.
+            "var" | "param" | "species" => {
+                let latex = d.content.trim_matches('$');
+                format!("\\({latex}\\)")
+            }
+            "subsystem" => {
+                let from = d
+                    .attrs
+                    .get("ref")
+                    .and_then(Value::as_str)
+                    .map(|r| format!(" from <code>{}</code>", escape(r)))
+                    .unwrap_or_default();
+                format!(
+                    "<p class=\"esm-subsystem\">Subsystem <code>{}</code>{from}</p>\n\n",
+                    escape(&d.content)
+                )
+            }
+            // A container of displays: the displays.
+            "initialization" | "constraints" | "template" | "rule" => {
+                let mut inner = String::new();
+                for piece in scan::scan(&d.body, "").pieces {
+                    match piece {
+                        Piece::Display(display) => inner.push_str(&display_block(&display)),
+                        Piece::Text(text) => inner.push_str(&text),
+                        _ => {}
+                    }
+                }
+                format!(
+                    "<div class=\"esm-{}\">\n\n{}\n</div>\n\n",
+                    d.name,
+                    inner.trim_matches('\n')
+                )
+            }
+            // A component marker shows nothing: the prose around it says what
+            // it is. A plot directive shows its figure, below.
+            _ => String::new(),
+        },
+        ConstructPiece::Display(display) => display_block(display),
+        ConstructPiece::Block(b) if b.key == "description" => format!(
+            "<div class=\"esm-description\">\n\n{}\n</div>\n\n",
+            b.body.trim_end()
+        ),
+        // Any other field of the document is shown as the YAML it is.
+        ConstructPiece::Block(b) => format!("{}\n", b.raw),
+    };
+    for r in results {
+        out.push_str(&construct_results(r));
+    }
+    if !problems.is_empty() {
+        if c.form() == Form::Inline {
+            out.push('\n');
+        }
+        out.push_str(&problem_block(problems));
+    }
+    out
+}
+
+/// A display equation, with its anchor, or a reaction.
+fn display_block(d: &Display) -> String {
+    let mut out = String::new();
+    if let Some(label) = d.attrs.get("#").and_then(Value::as_str) {
+        let _ = writeln!(out, "<a id=\"{}\" class=\"esm-eq\"></a>\n", escape(label));
+    }
+    if d.reaction {
+        let _ = writeln!(out, "\\[{}\\]\n", d.latex);
+    } else {
+        let _ = writeln!(out, "\\[\n{}\n\\]\n", d.latex);
+    }
+    out
+}
+
+/// The result of a test or an analysis the document writes itself.
+fn construct_results(c: &ConstructOutput) -> String {
+    let mut out = String::new();
+    if let Some(test) = &c.test {
+        out.push_str(&test_block(test));
+    }
+    for figure in &c.figures {
+        out.push_str(&figure_block(figure, None));
+    }
+    if c.skipped {
+        out.push_str("<div class=\"esm-problem esm-problem--skipped\">Not run: the model this belongs to has errors.</div>\n\n");
+    }
+    out
+}
+
 fn render_element(
     d: &Directive,
     element: Option<&ElementOutput>,
@@ -192,50 +337,20 @@ fn render_element(
     index: usize,
 ) -> String {
     let mut out = String::new();
-    let math = element.and_then(|e| e.math.as_ref());
-    match d.name.as_str() {
-        // A model marker shows nothing: the prose around it says what it is.
-        "model" => {}
-        "var" | "param" => match math {
-            Some(math) => {
-                let _ = write!(out, "\\({}\\)", math.latex);
-            }
-            // The name could not be parsed as an expression; show it as it was
-            // written so the sentence still reads.
-            None => {
-                let _ = write!(out, "`{}`", d.content);
-            }
-        },
-        "eq" => {
-            if let Some(label) = d.attrs.get("#").and_then(Value::as_str) {
-                let _ = writeln!(out, "<a id=\"{}\" class=\"esm-eq\"></a>\n", escape(label));
-            }
-            match math {
-                Some(math) => {
-                    let _ = writeln!(out, "\\[\n{}\n\\]\n", math.latex);
-                }
-                None => {
-                    let _ = writeln!(out, "```text\n{}\n```\n", d.content);
-                }
-            }
+    if let Some(element) = element {
+        if let Some(test) = &element.test {
+            out.push_str(&test_block(test));
         }
-        _ => {
-            if let Some(element) = element {
-                if let Some(test) = &element.test {
-                    out.push_str(&test_block(test));
-                }
-                let sliders = page.elements[index].get("interactive");
-                for figure in &element.figures {
-                    out.push_str(&figure_block(figure, sliders));
-                }
-                if element.skipped {
-                    let _ = writeln!(
-                        out,
-                        "<div class=\"esm-problem esm-problem--skipped\">Not run: the model this {} belongs to has errors.</div>\n",
-                        element.kind
-                    );
-                }
-            }
+        let sliders = page.elements[index].get("interactive");
+        for figure in &element.figures {
+            out.push_str(&figure_block(figure, sliders));
+        }
+        if element.skipped {
+            let _ = writeln!(
+                out,
+                "<div class=\"esm-problem esm-problem--skipped\">Not run: the model this {} belongs to has errors.</div>\n",
+                element.kind
+            );
         }
     }
     if !problems.is_empty() {
@@ -280,11 +395,19 @@ fn whole(d: &Directive, out: &BuildOutput, opts: &RenderOptions, in_scope: Optio
     }
 }
 
-/// The table of everything the document declares.
+/// The table of everything the document declares, each name printed by the
+/// core with its model's other names in scope.
 fn variables_table(quantities: &[&QuantityInfo]) -> String {
     if quantities.is_empty() {
         return String::new();
     }
+    let names_of = |model: &str| -> Vec<String> {
+        quantities
+            .iter()
+            .filter(|q| q.model == model)
+            .map(|q| q.name.clone())
+            .collect()
+    };
     let mut out = String::from("\n| Symbol | Role | Value | Units | Description |\n");
     out.push_str("| --- | --- | --- | --- | --- |\n");
     for q in quantities {
@@ -297,7 +420,11 @@ fn variables_table(quantities: &[&QuantityInfo]) -> String {
         let _ = writeln!(
             out,
             "| \\({}\\) | {role} | {} | {} | {} |",
-            to_latex(&Expr::Variable(q.name.clone())),
+            print_math(
+                &Value::String(q.name.clone()),
+                &names_of(&q.model),
+                DocumentFormat::Markdown
+            ),
             q.default.map(number).unwrap_or_default(),
             q.units.clone().map(cell).unwrap_or_default(),
             q.description.clone().map(cell).unwrap_or_default(),
@@ -307,23 +434,33 @@ fn variables_table(quantities: &[&QuantityInfo]) -> String {
     out
 }
 
-/// One expression in each of its forms: as written, as mathematics, and as the
-/// JSON the format stores. Parsing it here is what keeps a reference page from
-/// drifting away from the parser.
+/// One expression in each of its forms: as written in the text syntax, as the
+/// mathematics the ESM Markdown format writes for it (the core's printer,
+/// with the expression's own names declared), and as the JSON the format
+/// stores. Parsing it here is what keeps a reference page from drifting away
+/// from the parser.
 fn example_block(text: &str) -> String {
     // An equation and a bare expression are different types, and each is
     // written to JSON the way an `.esm` file stores it.
     let parsed = if text.contains('=') {
         parse_equation(text)
-            .map(|eq| (to_latex(&eq), serde_json::to_string_pretty(&eq)))
+            .map(|eq| serde_json::to_value(&eq))
             .map_err(|e| e.message)
     } else {
         parse_expression(text)
-            .map(|expr| (to_latex(&expr), serde_json::to_string_pretty(&expr)))
+            .map(|expr| serde_json::to_value(&expr))
             .map_err(|e| e.message)
     };
+    let parsed = parsed.map(|json| {
+        let json = json.unwrap_or_default();
+        let names = expression_names(&json);
+        (
+            print_math(&json, &names, DocumentFormat::Markdown),
+            serde_json::to_string_pretty(&json).unwrap_or_default(),
+        )
+    });
     let (latex, json) = match parsed {
-        Ok((latex, json)) => (latex, json.unwrap_or_default()),
+        Ok((latex, json)) => (latex, json),
         Err(message) => {
             return problem_block(&[Diagnostic::error(
                 "parse_error",
@@ -468,7 +605,7 @@ mod tests {
             "{block}"
         );
         assert!(
-            block.contains("\\frac{\\partial N}{\\partial t}"),
+            block.contains("\\frac{\\mathrm{d} N}{\\mathrm{d} t}"),
             "{block}"
         );
         assert!(block.contains("```json"), "{block}");

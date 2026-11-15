@@ -482,6 +482,28 @@ def operators(g):
         written=True,
     )
 
+    # The canonical form reads a decimal as the nearest binary64 and writes that double
+    # (CONFORMANCE §5.5.3.1).
+    E(
+        "canon_float_shortest",
+        "A decimal with more digits than its double needs is written with the shortest "
+        "digits that read back as the same double.",
+        op("*", Num("1.4715177646857694"), "x"),
+        written=True,
+    )
+    E(
+        "canon_float_integral",
+        "A decimal whose nearest double is integral is that integer.",
+        op("+", "x", Num("1.0000000000000001")),
+        written=True,
+    )
+    E(
+        "canon_float_large_integral",
+        "A decimal past 2^53 is the integer its nearest double is, not the one it spells.",
+        op("+", "x", Num("-1.999999999999999e16")),
+        written=True,
+    )
+
     # The call tier.
     E(
         "call_tier",
@@ -2025,13 +2047,19 @@ CANONICAL_DOCUMENT = ROOT / "tests" / "conformance" / "canonical_document"
 def check_canonical_document(lean):
     """`esm-lean canon` agrees with the shared document-level canonical fixtures every
     binding's canonicalize_document is tested against, so the spelling rules the oracle
-    applies to the `esm` documents here are the bindings' rules. Returns the mismatches."""
+    applies to the `esm` documents here are the bindings' rules. The input goes to
+    esm-lean with its numbers as written; numbers compare by type (`2` is not `2.0`).
+    Returns the mismatches."""
     manifest = json.loads((CANONICAL_DOCUMENT / "manifest.json").read_text(encoding="utf-8"))
+
+    def typed(v):
+        return json.dumps(v, sort_keys=True, ensure_ascii=False)
+
     bad = []
     for entry in manifest["fixtures"]:
-        case = json.loads((CANONICAL_DOCUMENT / entry["path"]).read_text(encoding="utf-8"))
-        got = json.loads(enc(lean.canon(case["input"])))
-        if got != case["expected"]:
+        text = (CANONICAL_DOCUMENT / entry["path"]).read_text(encoding="utf-8")
+        got = json.loads(enc(lean.canon(loads(text)["input"])))
+        if typed(got) != typed(json.loads(text)["expected"]):
             bad.append(f"esm-lean canon disagrees with canonical_document/{entry['path']}")
     return bad
 

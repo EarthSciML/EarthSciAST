@@ -287,6 +287,12 @@ diagnostic_code_registry! {
     /// wire boundary rewrites each to its replacement and reports this once
     /// per document, naming every rewritten node.
     DEPRECATED_OP = "deprecated_op";
+    /// A Markdown or Typst source text is not an ESM document: an unknown
+    /// word, an ambiguous juxtaposition, an unbalanced delimiter, an unclosed
+    /// display, container or directive, and every other malformed input the
+    /// document readers refuse (CONFORMANCE §5.58). A removed operator in the
+    /// text is `removed_op` instead.
+    PARSE_ERROR = "parse_error";
     /// A document spells `faq` while declaring esm below 1.1.0, where `faq`
     /// arrives (esm-spec §2.2.4).
     FAQ_VERSION_TOO_OLD = "faq_version_too_old";
@@ -716,6 +722,7 @@ mod error_code_tests {
             "null_reaction",
             "observed_cycle",
             "operator_variable_missing",
+            "parse_error",
             "ragged_values_not_gathered",
             "range_box_invalid",
             "range_global_locality",

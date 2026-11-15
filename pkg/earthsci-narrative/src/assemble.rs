@@ -1,5 +1,12 @@
 //! Turn a [`Document`]'s elements into an `.esm` document.
 //!
+//! Two ways in. [`assemble_onto`] starts from an `.esm` document the core has
+//! read (a page in the ESM Markdown or Typst format) and adds narrative's own
+//! tests, analyses and figures to it; that is how the Markdown front end
+//! works. [`assemble`] builds the whole document from elements, declarations
+//! and equations included; only the element-format entry points
+//! ([`crate::build::build_json`]) use it.
+//!
 //! Element order does not matter: papers often use a quantity before they
 //! define it ("… where N is the amount of nitrogen"), so the whole document is
 //! gathered first and checked as a whole. Every problem becomes a
@@ -107,6 +114,19 @@ pub struct QuantityInfo {
 /// could be assembled is in `esm`.
 pub fn assemble(doc: &Document) -> Assembly {
     Assembler::new(doc).run()
+}
+
+/// Add a document's `test`, `analysis` and `plot` elements to `esm`, an `.esm`
+/// document read by the core. Never fails: problems are diagnostics.
+///
+/// The models, their declarations and their equations are the document's
+/// own, so a `model`, `var`, `param` or `eq` element is an error here. A test
+/// or analysis goes after the ones the document already has, so every path
+/// into the document stays where it was.
+pub fn assemble_onto(esm: Value, doc: &Document) -> Assembly {
+    let mut assembler = Assembler::new(doc);
+    assembler.base = Some(esm);
+    assembler.run()
 }
 
 /// Load and validate an assembly with the core, adding the core's findings to
@@ -220,6 +240,13 @@ struct ModelBuild {
     tests: Vec<(usize, ModelTest)>,
     analyses: Vec<(Option<usize>, ModelAnalysis)>,
     plots: Vec<(usize, PlotElement)>,
+    /// A document read by the core: its equations' left-hand sides, for the
+    /// roles in the variables table.
+    base_lhs: Vec<Expr>,
+    /// A document read by the core: the ids of the tests it already has.
+    base_tests: Vec<String>,
+    /// A document read by the core: the ids of the analyses it already has.
+    base_analyses: Vec<String>,
 }
 
 struct Quantity {
@@ -240,6 +267,8 @@ struct Assembler<'a> {
     paths: Vec<(String, usize)>,
     labels: BTreeMap<String, (String, usize)>,
     interactive: Map<String, Value>,
+    /// The document read by the core that the elements are added to, if any.
+    base: Option<Value>,
 }
 
 impl<'a> Assembler<'a> {
@@ -253,6 +282,7 @@ impl<'a> Assembler<'a> {
             paths: Vec::new(),
             labels: BTreeMap::new(),
             interactive: Map::new(),
+            base: None,
         }
     }
 
@@ -280,10 +310,17 @@ impl<'a> Assembler<'a> {
     }
 
     fn run(mut self) -> Assembly {
-        self.declare_models();
+        let onto = self.base.is_some();
+        if onto {
+            self.adopt_base();
+        } else {
+            self.declare_models();
+        }
         self.gather();
         for m in 0..self.models.len() {
-            self.check_equations(m);
+            if !onto {
+                self.check_equations(m);
+            }
             self.resolve_plots(m);
             self.check_ids(m);
         }
@@ -349,6 +386,71 @@ impl<'a> Assembler<'a> {
         }
     }
 
+    /// Take the models of the document read by the core: their names, their
+    /// declarations, what their equations define, and the ids of the tests and
+    /// analyses they already have.
+    fn adopt_base(&mut self) {
+        let models: Vec<(String, Value)> = self
+            .base
+            .as_ref()
+            .and_then(|b| b.get("models"))
+            .and_then(Value::as_object)
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+        for (name, model) in models {
+            let at = self.model_slot(&name);
+            let slot = &mut self.models[at];
+            for (vname, v) in model
+                .get("variables")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+            {
+                let text = |key: &str| {
+                    v.get(key)
+                        .and_then(Value::as_str)
+                        .map(|s| (s.to_string(), usize::MAX))
+                };
+                slot.quantities.push(Quantity {
+                    name: vname.clone(),
+                    param: v.get("type").and_then(Value::as_str) == Some("parameter"),
+                    default: v
+                        .get("default")
+                        .and_then(Value::as_f64)
+                        .map(|d| (d, usize::MAX)),
+                    units: text("units"),
+                    description: text("description"),
+                    elements: Vec::new(),
+                });
+                slot.by_name
+                    .insert(vname.clone(), slot.quantities.len() - 1);
+            }
+            slot.base_lhs = model
+                .get("equations")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|e| serde_json::from_value(e.get("lhs")?.clone()).ok())
+                .collect();
+            let ids = |field: &str| -> Vec<String> {
+                model
+                    .get(field)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|t| {
+                        t.get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .collect()
+            };
+            slot.base_tests = ids("tests");
+            slot.base_analyses = ids("analyses");
+        }
+    }
+
     fn model_slot(&mut self, name: &str) -> usize {
         if let Some(&at) = self.by_name.get(name) {
             return at;
@@ -363,6 +465,9 @@ impl<'a> Assembler<'a> {
             tests: Vec::new(),
             analyses: Vec::new(),
             plots: Vec::new(),
+            base_lhs: Vec::new(),
+            base_tests: Vec::new(),
+            base_analyses: Vec::new(),
         });
         self.by_name.insert(name.to_string(), self.models.len() - 1);
         self.models.len() - 1
@@ -375,6 +480,36 @@ impl<'a> Assembler<'a> {
         for (index, element) in doc.elements.iter().enumerate() {
             if element.is_placeholder() {
                 continue;
+            }
+            if self.base.is_some() {
+                if matches!(
+                    element.kind,
+                    ElementKind::Model(_)
+                        | ElementKind::Var(_)
+                        | ElementKind::Param(_)
+                        | ElementKind::Eq(_)
+                ) {
+                    self.error(
+                        index,
+                        "not_an_addition",
+                        format!(
+                            "a `{}` element cannot be added to a document: the document declares its own models, variables and equations",
+                            element.kind.name()
+                        ),
+                    );
+                    continue;
+                }
+                if self.models.is_empty() {
+                    self.error(
+                        index,
+                        "no_model",
+                        format!(
+                            "the document has no model for this {} to belong to",
+                            element.kind.name()
+                        ),
+                    );
+                    continue;
+                }
             }
             let model = if let ElementKind::Model(m) = &element.kind {
                 current = self.by_name.get(&m.name).copied();
@@ -746,6 +881,13 @@ impl<'a> Assembler<'a> {
                 let model = &self.models[m];
                 match model.analyses.iter().position(|(_, a)| a.id == *analysis) {
                     Some(at) => at,
+                    None if model.base_analyses.contains(analysis) => {
+                        let message = format!(
+                            "analysis `{analysis}` is written in the document itself, so it draws its own plots; a narrative plot can only join an `analysis` element"
+                        );
+                        self.error(index, "unknown_analysis", message);
+                        continue;
+                    }
                     None => {
                         let hint =
                             suggest(analysis, model.analyses.iter().map(|(_, a)| a.id.as_str()))
@@ -787,8 +929,9 @@ impl<'a> Assembler<'a> {
             let plot_at = plots.len() - 1;
             self.info[index].analysis = Some(analysis.id.clone());
             let path = format!(
-                "/models/{}/analyses/{at}/plots/{plot_at}",
-                pointer(&self.models[m].name)
+                "/models/{}/analyses/{}/plots/{plot_at}",
+                pointer(&self.models[m].name),
+                self.models[m].base_analyses.len() + at
             );
             self.record(path.clone(), index);
             self.check_sliders(m, index, &p.interactive);
@@ -849,6 +992,9 @@ impl<'a> Assembler<'a> {
 
     /// Test and analysis ids must be unique within a model.
     fn check_ids(&mut self, m: usize) {
+        let in_base = |ids: &[String], id: &str| ids.iter().any(|b| b == id);
+        let base_tests = self.models[m].base_tests.clone();
+        let base_analyses = self.models[m].base_analyses.clone();
         let mut seen: HashMap<String, usize> = HashMap::new();
         let tests: Vec<(usize, String)> = self.models[m]
             .tests
@@ -856,7 +1002,13 @@ impl<'a> Assembler<'a> {
             .map(|(i, t)| (*i, t.id.clone()))
             .collect();
         for (index, id) in tests {
-            if let Some(&first) = seen.get(&id) {
+            if in_base(&base_tests, &id) {
+                self.error(
+                    index,
+                    "duplicate_id",
+                    format!("the document already has a test with id `{id}`"),
+                );
+            } else if let Some(&first) = seen.get(&id) {
                 let first = self.place(first);
                 self.error(
                     index,
@@ -874,6 +1026,15 @@ impl<'a> Assembler<'a> {
             .map(|(i, a)| (*i, a.id.clone()))
             .collect();
         for (index, id) in analyses {
+            if in_base(&base_analyses, &id) {
+                let at = index.or_else(|| self.plot_element(m, &id)).unwrap_or(0);
+                self.error(
+                    at,
+                    "duplicate_id",
+                    format!("the document already has an analysis with id `{id}`"),
+                );
+                continue;
+            }
             match seen.get(&id) {
                 Some(first) => {
                     let first = first
@@ -905,6 +1066,9 @@ impl<'a> Assembler<'a> {
 
     /// Write the `.esm` document, recording where tests and analyses landed.
     fn emit(&mut self) -> Value {
+        if let Some(base) = self.base.take() {
+            return self.emit_onto(base);
+        }
         let mut models = Map::new();
         for m in 0..self.models.len() {
             let model = &self.models[m];
@@ -998,6 +1162,75 @@ impl<'a> Assembler<'a> {
         })
     }
 
+    /// The document read by the core, with the elements' tests and analyses
+    /// after its own, and the interactive controls in
+    /// `metadata.x_esd.narrative`.
+    fn emit_onto(&mut self, mut esm: Value) -> Value {
+        for m in 0..self.models.len() {
+            let model = &self.models[m];
+            if model.tests.is_empty() && model.analyses.is_empty() {
+                continue;
+            }
+            let name = model.name.clone();
+            let base = format!("/models/{}", pointer(&name));
+            let tests: Vec<(usize, Value)> = model
+                .tests
+                .iter()
+                .map(|(i, t)| (*i, serde_json::to_value(t).expect("tests serialize")))
+                .collect();
+            let analyses: Vec<(Option<usize>, Value)> = model
+                .analyses
+                .iter()
+                .map(|(i, a)| (*i, serde_json::to_value(a).expect("analyses serialize")))
+                .collect();
+            let Some(body) = esm
+                .get_mut("models")
+                .and_then(|ms| ms.get_mut(&name))
+                .and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            let mut landed = Vec::new();
+            for (field, items) in [
+                (
+                    "tests",
+                    tests.into_iter().map(|(i, v)| (Some(i), v)).collect(),
+                ),
+                ("analyses", analyses),
+            ] {
+                let list = body
+                    .entry(field)
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                let Some(list) = list.as_array_mut() else {
+                    continue;
+                };
+                for (index, value) in items {
+                    if let Some(index) = index {
+                        landed.push((format!("{base}/{field}/{}", list.len()), index));
+                    }
+                    list.push(value);
+                }
+            }
+            for (path, index) in landed {
+                self.record(path, index);
+            }
+        }
+        if !self.interactive.is_empty()
+            && let Some(metadata) = esm.get_mut("metadata").and_then(Value::as_object_mut)
+        {
+            let x_esd = metadata
+                .entry("x_esd")
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(x_esd) = x_esd.as_object_mut() {
+                x_esd.insert(
+                    "narrative".into(),
+                    json!({"version": FORMAT_VERSION, "interactive": self.interactive}),
+                );
+            }
+        }
+        esm
+    }
+
     /// `metadata.x_esd.narrative`: where each piece came from, equation
     /// labels, and the interactive controls, versioned with the element format.
     fn provenance(&self) -> Value {
@@ -1050,7 +1283,12 @@ impl<'a> Assembler<'a> {
         let mut out = Vec::new();
         for model in &self.models {
             let mut roles: HashMap<&str, Role> = HashMap::new();
-            for (_, lhs, _, _) in &model.equations {
+            let lhs_all = model
+                .equations
+                .iter()
+                .map(|(_, lhs, _, _)| lhs)
+                .chain(&model.base_lhs);
+            for lhs in lhs_all {
                 if let Some((name, derivative)) = defined_by(lhs)
                     && let Some(&q) = model.by_name.get(&name)
                 {

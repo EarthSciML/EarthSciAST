@@ -94,6 +94,9 @@ pub(crate) mod data_output;
 pub(crate) mod data_source_urls;
 pub(crate) mod diagnostic;
 pub(crate) mod display;
+/// ESM documents as Markdown and Typst source text, ported from the Lean model
+/// in `formal/Esm/Document/`.
+pub(crate) mod document;
 pub(crate) mod edit;
 pub(crate) mod elementwise_lift;
 pub(crate) mod error;
@@ -230,6 +233,12 @@ pub use cadence::{
 };
 pub use canonicalize::{
     CanonicalizeError, canonical_json, canonicalize, canonicalize_document, format_canonical_float,
+};
+// The document source formats (esm-spec, CONFORMANCE §5.58): Markdown and Typst
+// spellings of a whole `.esm` document, printed and read losslessly.
+pub use document::{
+    ConstructSource, DocumentFormat, expression_names, parse_document, parse_document_with_sources,
+    parse_markdown, parse_typst, print_document, print_markdown, print_math, print_typst,
 };
 // The esm-spec §6.3.1 classification API. esm 1.0.0 declares two variable
 // types and DERIVES the rest, so these are the only sanctioned way to ask

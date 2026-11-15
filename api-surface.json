@@ -95,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 984,
+    "symbols": 995,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 353,
       "typescript": 237,
       "python": 266,
-      "rust": 387,
+      "rust": 398,
       "go": 455
     },
     "by_tier": {
-      "extension": 680,
+      "extension": 691,
       "stable": 304
     }
   },
@@ -2229,6 +2229,14 @@
       }
     },
     {
+      "name": "construct_source",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ConstructSource"
+      }
+    },
+    {
       "name": "contains",
       "kind": "function",
       "tier": "stable",
@@ -2949,6 +2957,14 @@
       "tier": "extension",
       "bindings": {
         "go": "DistributionUniform"
+      }
+    },
+    {
+      "name": "document_format",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DocumentFormat"
       }
     },
     {
@@ -3876,6 +3892,14 @@
       "tier": "extension",
       "bindings": {
         "typescript": "ExpressionLocation"
+      }
+    },
+    {
+      "name": "expression_names",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "expression_names"
       }
     },
     {
@@ -5761,6 +5785,22 @@
       }
     },
     {
+      "name": "parse_document",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "parse_document"
+      }
+    },
+    {
+      "name": "parse_document_with_sources",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "parse_document_with_sources"
+      }
+    },
+    {
       "name": "parse_equation",
       "kind": "function",
       "tier": "stable",
@@ -5794,11 +5834,27 @@
       }
     },
     {
+      "name": "parse_markdown",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "parse_markdown"
+      }
+    },
+    {
       "name": "parse_reaction",
       "kind": "function",
       "tier": "extension",
       "bindings": {
         "typescript": "parseReaction"
+      }
+    },
+    {
+      "name": "parse_typst",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "parse_typst"
       }
     },
     {
@@ -6024,6 +6080,38 @@
       "tier": "extension",
       "bindings": {
         "julia": "PresetTimesTrigger"
+      }
+    },
+    {
+      "name": "print_document",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "print_document"
+      }
+    },
+    {
+      "name": "print_markdown",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "print_markdown"
+      }
+    },
+    {
+      "name": "print_math",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "print_math"
+      }
+    },
+    {
+      "name": "print_typst",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "print_typst"
       }
     },
     {
