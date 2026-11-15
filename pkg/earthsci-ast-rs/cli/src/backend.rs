@@ -144,13 +144,6 @@ pub fn select(
     }
 }
 
-/// The esm major version EarthSciIntegrator reads. It depends on its own
-/// `earthsci-ast` (0.10, schema 1.3.0), not this workspace's, so a document
-/// in esm 2.x is refused by its planner. Raise this when an integrator
-/// release built on `earthsci-ast` 0.12 or later is the one linked here.
-#[cfg(feature = "integrator")]
-pub const INTEGRATOR_ESM_MAJOR: u64 = 1;
-
 /// `earthsci_ast::solve`: diffsol, with the method the document's `solver`
 /// block (or the binding default) names.
 #[cfg(feature = "diffsol")]
@@ -202,7 +195,6 @@ mod integrator {
         }
 
         fn simulate(&self, run: &SimulateRun<'_>) -> Result<Solution, String> {
-            reads_format(&run.esm_file.esm)?;
             let model = absolute(run.file)?;
             let (dir, _scratch) = match &self.0.plan_dir {
                 Some(d) => {
@@ -313,16 +305,9 @@ mod integrator {
             .map_err(|e| format!("the integrator's planner refused the run: {e}"))
     }
 
-    /// The plan used without `--run-config`: ONE leaf over every operator of
-    /// the model, stepping adaptively with the method the planner picks and
-    /// global step-size control, inside fixed macro steps of `dt`.
-    ///
-    /// Not the integrator's own default schedule (`"auto"`, one leaf per
-    /// locality, spec/run-config.md §4.1): that gives a pointwise leaf
-    /// per-cell step-size control, which the integrator's runtime refuses
-    /// until its milestone M3, and its runtime needs a fixed macro step. The
-    /// model's operators are what `"auto"` plans, so it is planned once to
-    /// find them.
+    /// The plan used without `--run-config`: the integrator's own default
+    /// schedule (`"auto"`, spec/run-config.md §4.1) inside fixed macro steps
+    /// of `dt`, which its runtime needs.
     fn default_plan(
         dir: &Path,
         model: &Path,
@@ -335,30 +320,16 @@ mod integrator {
                 "--dt must be a positive number of seconds, not {dt}"
             ));
         }
-        let write = |schedule: serde_json::Value| -> Result<PathBuf, String> {
-            let rc = serde_json::json!({
-                "esm_integrator": earthsci_integrator::SPEC_VERSION,
-                "model": model.to_string_lossy(),
-                "schedule": schedule,
-                "step": {"dt": dt},
-            });
-            let path = dir.join("run.json");
-            std::fs::write(&path, serde_json::to_vec_pretty(&rc).expect("JSON"))
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-            Ok(path)
-        };
-        let operators: Vec<String> = plan(&write("auto".into())?, tspan)?
-            .operators
-            .into_keys()
-            .collect();
-        plan(
-            &write(serde_json::json!({
-                "leaf": operators,
-                "alg": "auto",
-                "control": {"dt_scope": "global"},
-            }))?,
-            tspan,
-        )
+        let rc = serde_json::json!({
+            "esm_integrator": earthsci_integrator::SPEC_VERSION,
+            "model": model.to_string_lossy(),
+            "schedule": "auto",
+            "step": {"dt": dt},
+        });
+        let path = dir.join("run.json");
+        std::fs::write(&path, serde_json::to_vec_pretty(&rc).expect("JSON"))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        plan(&path, tspan)
     }
 
     /// Output at every macro-step boundary under a fixed `step.dt`, and at the
@@ -380,27 +351,8 @@ mod integrator {
         Some(t)
     }
 
-    /// Refuse a document in an esm format newer than the integrator's own
-    /// `earthsci-ast` reads ([`super::INTEGRATOR_ESM_MAJOR`]), before its
-    /// planner fails on it with a schema-version error.
-    fn reads_format(esm: &str) -> Result<(), String> {
-        let major = esm.split('.').next().and_then(|m| m.parse::<u64>().ok());
-        match major {
-            Some(m) if m <= super::INTEGRATOR_ESM_MAJOR => Ok(()),
-            _ => Err(format!(
-                "the integrator backend reads esm {}.x documents only, and this \
-                 document is esm {esm}: the EarthSciIntegrator release linked \
-                 here is built on an older `earthsci-ast`. Run it with \
-                 `--backend diffsol`, or wait for an EarthSciIntegrator release \
-                 built on `earthsci-ast` 0.12",
-                super::INTEGRATOR_ESM_MAJOR
-            )),
-        }
-    }
-
-    /// The integrator re-reads the document from disk with its own
-    /// `earthsci-ast`, so it never sees a metaparameter this command closed
-    /// from the document's data (`close_declared_extents`). Refuse when an
+    /// The integrator re-reads the document from disk, so it never sees a
+    /// metaparameter this command closed from the document's data (`close_declared_extents`). Refuse when an
     /// index set the integrator planned over has a different size than the
     /// one the Problem was built with, rather than integrate another grid.
     fn same_index_sets(

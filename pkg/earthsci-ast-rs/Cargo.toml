@@ -4,6 +4,14 @@
 [workspace]
 members = [".", "cli"]
 
+# EarthSciIntegrator, behind the CLI's `integrator` feature, depends on
+# `earthsci-ast` from crates.io. Within the workspace, point that dependency
+# here, so one copy of the library is built rather than two. Cargo ignores
+# this patch when it is not used (the integrator requires a version this
+# crate is not at), and a crate published from the workspace never carries it.
+[patch.crates-io]
+earthsci-ast = { path = "." }
+
 [package]
 name = "earthsci-ast"
 version = "0.12.1"

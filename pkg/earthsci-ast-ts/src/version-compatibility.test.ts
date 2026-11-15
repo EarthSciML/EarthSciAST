@@ -8,9 +8,10 @@ import {
   LIBRARY_VERSION,
   SCHEMA_VERSION,
   SchemaValidationError,
+  loadPath,
 } from './index.js'
 import { LAST_V1_VERSION } from './parse.js'
-import { readFixture } from './test-helpers.js'
+import { fixturePath, readFixture } from './test-helpers.js'
 
 /**
  * Version gating for esm 2.0.0.
@@ -26,7 +27,7 @@ import { readFixture } from './test-helpers.js'
  *
  * The suite reads the current major from `SCHEMA_VERSION` rather than spelling
  * it, so it states the same rules whichever major the embedded schema declares;
- * only the literal pin at the end names 2.2.0.
+ * only the literal pin at the end names 2.3.0.
  *
  * Most cases apply the version under test to a base document IN MEMORY rather
  * than reading a per-version fixture: the gate is a function of the version
@@ -120,6 +121,49 @@ describe('Version Compatibility', () => {
       )
       expect(result).toBeInstanceOf(SchemaValidationError)
     })
+  })
+
+  // Every shared-matrix entry carrying a `deprecated_op` list: loading its
+  // fixture warns `deprecated_op` exactly ONCE, naming exactly the listed JSON
+  // pointers (esm-spec §4.2 "Deprecated ops"), and no version warning.
+  describe('Matrix deprecated_op entries', () => {
+    interface MatrixCase {
+      file: string
+      deprecated_op?: string[]
+    }
+    const matrixCases: MatrixCase[] = JSON.parse(
+      readFixture('version_compatibility', 'compatibility_matrix.json'),
+    ).version_compatibility_test_matrix.test_cases
+    const deprecatedCases = matrixCases.filter((c) => Array.isArray(c.deprecated_op))
+
+    it('the matrix carries at least one deprecated_op entry', () => {
+      expect(deprecatedCases.length).toBeGreaterThan(0)
+    })
+
+    it.each(deprecatedCases.map((c) => [c.file, c] as const))(
+      '%s warns deprecated_op once, naming the listed pointers',
+      (_file, c) => {
+        // No try/catch: a load error fails the test.
+        const { result, warnings } = captureWarnings(() =>
+          loadPath(fixturePath('version_compatibility', c.file)),
+        )
+        const deprecated = warnings.filter((w) => w.startsWith('deprecated_op'))
+        expect(deprecated).toHaveLength(1)
+        const list = deprecated[0]!.split('Rewritten at: ')[1]
+        expect(list).toBeDefined()
+        const pointers = list!
+          .replace(/\.$/, '')
+          .split(', ')
+          .map((site) => site.slice(0, site.lastIndexOf(' (')))
+        expect(pointers).toEqual(c.deprecated_op)
+        expect(warnings.some((w) => w.includes('is newer than'))).toBe(false)
+        if (c.file === 'version_2_3_0_deprecated_neg.esm') {
+          const decay = result.models!.Decay as { equations: Array<{ rhs: unknown }> }
+          const rhs = decay.equations[0]!.rhs as { args: Array<{ op: string }> }
+          expect(rhs.args[0]!.op).toBe('-')
+        }
+      },
+    )
   })
 
   describe('The 1.x line', () => {
@@ -230,12 +274,14 @@ describe('Version Compatibility', () => {
     it('exposes the schema version, derived from the embedded schema $id', () => {
       // Moved 2.0.0 -> 2.1.0 with `lb` / `ub` bounds on a model variable
       // (esm-spec §6.3.2), then 2.1.0 -> 2.2.0 with the widened pointwise lift
-      // (esm-spec §10.5).
+      // (esm-spec §10.5), then 2.2.0 -> 2.3.0 with the deprecated `neg` / `pow`
+      // (esm-spec §4.2), the canonical unit spelling (§4.8.2) and the document
+      // source formats (§1.2).
       // The literal is the point of the test: SCHEMA_VERSION is DERIVED from the
       // embedded schema `$id`, so this pins that the derivation still reads the
       // schema rather than a stale copy, and it is expected to be updated by
       // hand on each format bump.
-      expect(SCHEMA_VERSION).toBe('2.2.0')
+      expect(SCHEMA_VERSION).toBe('2.3.0')
     })
 
     it('exposes the package version separately, under its own name', () => {

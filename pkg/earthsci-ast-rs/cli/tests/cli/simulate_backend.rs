@@ -3,8 +3,9 @@
 //!
 //! The document is written at run time: `u' = -k u + sin(ω t)`, `u(0) = 1`,
 //! EarthSciIntegrator's `forced_decay` toy (its spec/toy-problems.md §1.1),
-//! which has a closed form. It is written in esm 1.3.0 so the integrator's own
-//! `earthsci-ast` (0.10, which reads esm 1.x only) reads it too.
+//! which has a closed form. It is written in esm 1.3.0, which every
+//! `earthsci-ast` the integrator may be built on reads; one test runs it in
+//! the esm format this workspace writes.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -271,19 +272,33 @@ mod integrator {
         assert!(stderr(&out).contains("--observed"), "{}", stderr(&out));
     }
 
-    /// Integrator 0.0.1 is built on `earthsci-ast` 0.10, which reads esm 1.x
-    /// only: an esm 2.x document is refused up front, saying so, rather than
-    /// with the integrator's planner error.
+    /// A document in the esm format this workspace writes (2.x) runs.
     #[test]
-    fn an_esm_2_document_is_refused_by_the_integrator_naming_the_limit() {
+    fn an_esm_2_document_runs_on_the_integrator() {
         let dir = tempfile::tempdir().unwrap();
         let doc = document_current(dir.path());
-        let out = esm(&["simulate", doc.to_str().unwrap(), "--backend", "integrator"]);
-        assert!(!out.status.success());
-        let err = stderr(&out);
-        assert!(err.contains("reads esm 1.x documents only"), "{err}");
-        assert!(err.contains("--backend diffsol"), "{err}");
-        assert!(!err.contains("Unsupported major version"), "{err}");
+        let out_json = dir.path().join("out.json");
+        let out = esm(&[
+            "simulate",
+            doc.to_str().unwrap(),
+            "--time",
+            "1",
+            "--backend",
+            "integrator",
+            "--dt",
+            "0.1",
+            "-o",
+            out_json.to_str().unwrap(),
+        ]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let (t, _, state) = trajectory(&out_json);
+        let (tn, un) = (t[t.len() - 1], state[0][t.len() - 1]);
+        assert_eq!(tn, 1.0);
+        assert!(
+            (un - exact(tn)).abs() < 1e-6,
+            "u(1) = {un}, exact {}",
+            exact(tn)
+        );
     }
 
     /// The integrator builds its own right-hand side, so the options that

@@ -27,6 +27,9 @@ type compatMatrix struct {
 			File             string `json:"file"`
 			ExpectedBehavior string `json:"expected_behavior"`
 			Description      string `json:"description"`
+			// DeprecatedOp lists the JSON pointers the load's ONE
+			// `deprecated_op` warning names (esm-spec §4.2).
+			DeprecatedOp []string `json:"deprecated_op"`
 		} `json:"test_cases"`
 		MigrationTests []struct {
 			Source      string `json:"source"`
@@ -143,6 +146,62 @@ func TestMigrationOverSharedCorpus(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestMatrixDeprecatedOpWarnings loads, through LoadPath, every matrix
+// fixture that carries a `deprecated_op` list and asserts the load writes
+// exactly ONE `deprecated_op` warning naming exactly those JSON pointers, and
+// no forward-compatibility version warning (esm-spec §4.2 "Deprecated ops").
+func TestMatrixDeprecatedOpWarnings(t *testing.T) {
+	dir, m := loadCompatMatrix(t)
+	checked := 0
+	for _, tc := range m.Matrix.TestCases {
+		if tc.DeprecatedOp == nil {
+			continue
+		}
+		checked++
+		tc := tc
+		t.Run(tc.File, func(t *testing.T) {
+			file, stderr := loadCapturingStderr(t, filepath.Join(dir, tc.File))
+			var warnings []string
+			for _, line := range strings.Split(stderr, "\n") {
+				if strings.Contains(line, codeDeprecatedOp) {
+					warnings = append(warnings, line)
+				}
+			}
+			if len(warnings) != 1 {
+				t.Fatalf("want exactly one %s warning, got %d: %q", codeDeprecatedOp, len(warnings), stderr)
+			}
+			_, list, ok := strings.Cut(warnings[0], "Rewritten at: ")
+			if !ok {
+				t.Fatalf("warning names no rewritten nodes: %q", warnings[0])
+			}
+			var pointers []string
+			for _, site := range strings.Split(strings.TrimSuffix(strings.TrimSpace(list), "."), ", ") {
+				pointer, _, _ := strings.Cut(site, " (")
+				pointers = append(pointers, pointer)
+			}
+			if strings.Join(pointers, "\n") != strings.Join(tc.DeprecatedOp, "\n") {
+				t.Fatalf("warning names %q, matrix lists %q", pointers, tc.DeprecatedOp)
+			}
+			if strings.Contains(stderr, "is newer than") {
+				t.Fatalf("unexpected forward-compat warning: %q", stderr)
+			}
+			if tc.File == "version_2_3_0_deprecated_neg.esm" {
+				rhs, ok := asExprNode(file.Models["Decay"].Equations[0].RHS)
+				if !ok || len(rhs.Args) == 0 {
+					t.Fatalf("Decay rhs is not an operator with args: %+v", file.Models["Decay"].Equations[0].RHS)
+				}
+				arg, ok := asExprNode(rhs.Args[0])
+				if !ok || arg.Op != "-" {
+					t.Fatalf("Decay rhs args[0] = %+v, want op \"-\" (neg not rewritten)", rhs.Args[0])
+				}
+			}
+		})
+	}
+	if checked == 0 {
+		t.Fatal("no matrix entry carries a deprecated_op list")
 	}
 }
 
