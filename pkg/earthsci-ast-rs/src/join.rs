@@ -229,6 +229,29 @@ impl OnGate {
     }
 }
 
+impl JoinClause {
+    /// This clause with `f` applied to every VARIABLE REFERENCE it carries as a
+    /// plain string (CONFORMANCE_SPEC §5.5.6): each `on` key column, each
+    /// `overlap` envelope factor, and the data-column names of a resolved
+    /// `on_gate`. The clause's loop symbols (`syms`, `overlap.sym_src` /
+    /// `sym_tgt`, the gate's two gated symbols) are binders of the node, not
+    /// references, and are kept as they are.
+    pub(crate) fn map_reference_names(&self, f: impl Fn(&String) -> String) -> JoinClause {
+        JoinClause {
+            on: self.on.iter().map(|[l, r]| [f(l), f(r)]).collect(),
+            syms: self.syms.clone(),
+            overlap: self.overlap.as_ref().map(|ov| crate::types::OverlapClause {
+                src_env: ov.src_env.iter().map(&f).collect(),
+                tgt_env: ov.tgt_env.iter().map(&f).collect(),
+                eps: ov.eps,
+                sym_src: ov.sym_src.clone(),
+                sym_tgt: ov.sym_tgt.clone(),
+            }),
+            on_gate: self.on_gate.as_ref().map(|g| g.map_column_names(&f)),
+        }
+    }
+}
+
 /// Source of [`OnGate::id`]. A gate is resolved once per node per build, and the
 /// id only ever has to distinguish gates *within* one process's evaluator cache.
 static NEXT_GATE_ID: AtomicU64 = AtomicU64::new(1);

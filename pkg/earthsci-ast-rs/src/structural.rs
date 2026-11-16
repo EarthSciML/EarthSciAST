@@ -12,6 +12,7 @@
 //! both layers — see the note in parse.rs before changing a shared rule.
 
 use crate::EsmFile;
+use crate::binders::{Binders, collect_bare_symbols};
 use crate::causal_self_read::{SelfReadDefect, SelfReads, classify_self_reads, data_lag_guidance};
 use crate::op_registry::is_builtin_function_name;
 use crate::units::{
@@ -1784,7 +1785,7 @@ fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
                 // free symbols name spatial coordinates, e.g. an ignition front
                 // at `x < x0`.
                 if is_ic_equation(&eq.lhs) {
-                    collect_free_symbols(&eq.rhs, &mut symbols);
+                    collect_bare_symbols(&eq.rhs, &mut symbols);
                 }
                 collect_coordinate_symbols(&eq.lhs, &mut symbols);
                 collect_coordinate_symbols(&eq.rhs, &mut symbols);
@@ -2551,23 +2552,6 @@ fn collect_coordinate_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
     }
 }
 
-/// Collect every free symbol (bare variable reference) in `expr`.
-fn collect_free_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
-    match expr {
-        crate::Expr::Variable(name) => {
-            // A scoped reference names another system's variable, not a local
-            // coordinate.
-            if !name.contains('.') && !is_builtin_function_name(name) {
-                out.insert(name.clone());
-            }
-        }
-        crate::Expr::Operator(op) => {
-            op.for_each_child(&mut |child| collect_free_symbols(child, out));
-        }
-        crate::Expr::Number(_) | crate::Expr::Integer(_) => {}
-    }
-}
-
 /// Static `faq`-node constraints (RFC semiring-faq-unified-ir), decidable
 /// from this single document. Walk every `faq` node in the model's
 /// `equations` and emit, at the CONTAINING equation FIELD (`.../equations/<i>/lhs`
@@ -3179,7 +3163,7 @@ fn recurrence_candidate_vars_of_parts(
 ///
 /// Deliberately its own walk rather than a call into
 /// [`crate::causal_self_read::collect_self_reads`], because THE TWO WALKS MUST SEE THE SAME
-/// TREE. The edge set of the cycle graph comes from [`collect_free_symbols`],
+/// TREE. The edge set of the cycle graph comes from [`collect_bare_symbols`],
 /// which descends the canonical child set (`ExpressionNode::for_each_child` —
 /// esm-spec §4.9.5 requires every Expression-valued field, `bindings` and
 /// `axes` included). `collect_self_reads` descends the smaller set
@@ -3232,7 +3216,7 @@ fn observed_dependency_graph(
         .iter()
         .map(|(name, rhs)| {
             let mut free = HashSet::new();
-            collect_free_symbols(rhs, &mut free);
+            collect_bare_symbols(rhs, &mut free);
             let mut bound = HashSet::new();
             collect_bound_symbols(rhs, &mut bound);
             let mut deps: std::collections::BTreeSet<String> = free
@@ -3671,10 +3655,9 @@ impl BareWalk<'_> {
         scopes.push(bound.clone());
         let is_faq = crate::faq::is_faq_op(&node.op);
         let pushed = if is_faq {
-            let syms = bound_index_symbols(node);
-            let n = syms.len();
-            bound.extend(syms);
-            n
+            let before = bound.len();
+            node.for_each_binder(Binders::ALL, |n| bound.push(n.to_string()));
+            bound.len() - before
         } else {
             0
         };
@@ -4324,10 +4307,10 @@ fn check_aggregate_node(
     if node.distinct == Some(true) {
         let mut free = HashSet::new();
         if let Some(key) = node.key.as_deref() {
-            collect_free_symbols(key, &mut free);
+            collect_bare_symbols(key, &mut free);
         }
         if let Some(body) = node.expr.as_deref() {
-            collect_free_symbols(body, &mut free);
+            collect_bare_symbols(body, &mut free);
         }
         let mut states_read: Vec<String> = free.into_iter().filter(|name| is_state(name)).collect();
         if !states_read.is_empty() {
@@ -4553,7 +4536,7 @@ fn analyze_equation_mismatch(
             // names.
             crate::Expr::Operator(_) => {
                 let mut free = HashSet::new();
-                collect_free_symbols(&equation.lhs, &mut free);
+                collect_bare_symbols(&equation.lhs, &mut free);
                 lhs_vars.extend(free.intersection(&state_vars_set).cloned());
             }
             crate::Expr::Number(_) | crate::Expr::Integer(_) => {}
@@ -5053,75 +5036,30 @@ fn reaction_rate_units_str(rate: &crate::Expr, rs: &crate::ReactionSystem) -> St
     String::new()
 }
 
-/// The index / integration symbols an operator node BINDS for its own body:
-/// `output_idx` and `ranges` keys (`faq`) and the `integral` op's `var`.
-/// These are in scope for the
-/// node's child expressions (the aggregate body, filter predicate, grouping
-/// key, integral bounds) but are NOT model/parameter declarations, so a
-/// reference-checking walk that descends into those children (via
-/// [`crate::types::ExpressionNode::for_each_child`], which enumerates children
-/// only) must treat them as defined to avoid spurious "undefined" errors on
-/// bound loop indices such as the `i` in `index(u, i)`.
-fn bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
-    let mut syms = Vec::new();
-    if let Some(idx) = &node.output_idx {
-        syms.extend(idx.iter().cloned());
-    }
-    if let Some(ranges) = &node.ranges {
-        syms.extend(ranges.keys().cloned());
-    }
-    if let Some(v) = &node.int_var {
-        syms.push(v.clone());
-    }
-    // `index(array, i, j, …)` BINDS its element positions: the names after the
-    // array head are loop positions, not declared variables. This is the binder
-    // the doc above always claimed ("the `i` in `index(u, i)`") but that the
-    // code never actually credited — so the LHS of every indexed array equation
-    // (`index(nearest, i) ~ aggregate(output_idx: ["i"], …)`) reported its own
-    // output index as an `undefined_variable`. Only a BARE name is a binder; an
-    // index position that is an expression (`i + 1`) is a USE of a symbol bound
-    // further out, and is checked normally.
-    if node.op == "index" {
-        for arg in node.args.iter().skip(1) {
-            if let crate::Expr::Variable(name) = arg {
-                syms.push(name.clone());
-            }
-        }
-    }
-    // `apply_expression_template` binds its formal parameter names.
-    if let Some(bindings) = &node.bindings {
-        syms.extend(bindings.keys().cloned());
-    }
-    syms
-}
-
 /// Collect every binder-introduced symbol anywhere in an expression subtree —
-/// `index` element positions, `output_idx`/`ranges` keys, integral vars and
-/// template `bindings`. Per-node scoping alone binds
-/// a symbol only for the subtree UNDER the node that introduces it, which is too
+/// every [`Binders::ALL`] kind: `index` element positions, `output_idx`/`ranges`
+/// keys, integral vars and template `bindings`. Per-node scoping alone binds a
+/// symbol only for the subtree UNDER the node that introduces it, which is too
 /// narrow for a `makearray` stencil: it binds the grid indices `i`/`j` for ALL
 /// its `values`, yet an index spelled `i + 1` in one value is a USE of the `i`
 /// bound (as a bare `index` position) in another. Scanning the whole expression
 /// once and holding the union in scope throughout it matches Go
 /// `collectBoundSymbols` / TS `collectIndexSymbols`.
+fn collect_bound_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
+    crate::binders::collect_binders(expr, Binders::ALL, out);
+}
+
 /// [`collect_bound_symbols`], also noting in `faq` whether a `faq` node was
 /// reached.
 fn collect_bound_symbols_noting_faq(expr: &crate::Expr, out: &mut HashSet<String>, faq: &mut bool) {
-    if let crate::Expr::Operator(node) = expr {
-        *faq |= node.op == "faq";
-        for sym in bound_index_symbols(node) {
-            out.insert(sym);
-        }
-        node.for_each_child(&mut |child| collect_bound_symbols_noting_faq(child, out, faq));
-    }
+    collect_bound_symbols(expr, out);
+    *faq |= expr_has_faq(expr);
 }
 
-fn collect_bound_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
-    if let crate::Expr::Operator(node) = expr {
-        for sym in bound_index_symbols(node) {
-            out.insert(sym);
-        }
-        node.for_each_child(&mut |child| collect_bound_symbols(child, out));
+fn expr_has_faq(expr: &crate::Expr) -> bool {
+    match expr {
+        crate::Expr::Operator(node) => node.op == "faq" || node.any_child(&mut expr_has_faq),
+        _ => false,
     }
 }
 
@@ -5224,7 +5162,7 @@ fn validate_rate_expression(
             // any index symbols the node BINDS to the in-scope parameter set so
             // a bound loop index inside the body is not mistaken for an
             // undeclared parameter.
-            let bound = bound_index_symbols(op_node);
+            let bound = op_node.binders(Binders::ALL);
             if bound.is_empty() {
                 op_node.for_each_child(&mut |arg| {
                     validate_rate_expression(
@@ -5238,7 +5176,7 @@ fn validate_rate_expression(
                 });
             } else {
                 let mut scope = defined_parameters.clone();
-                scope.extend(bound);
+                scope.extend(bound.into_iter().map(str::to_string));
                 op_node.for_each_child(&mut |arg| {
                     validate_rate_expression(
                         arg,
@@ -5443,7 +5381,7 @@ pub(crate) fn validate_expression_references_with_systems<S: std::hash::BuildHas
 #[derive(Clone, Copy)]
 enum NameScope<'a> {
     Set(&'a dyn Fn(&str) -> bool),
-    With(&'a NameScope<'a>, &'a [String]),
+    With(&'a NameScope<'a>, &'a [&'a str]),
     WithSet(&'a NameScope<'a>, &'a HashSet<String>),
 }
 
@@ -5451,9 +5389,7 @@ impl NameScope<'_> {
     fn contains(&self, name: &str) -> bool {
         match self {
             NameScope::Set(declared) => declared(name),
-            NameScope::With(outer, names) => {
-                names.iter().any(|n| n == name) || outer.contains(name)
-            }
+            NameScope::With(outer, names) => names.contains(&name) || outer.contains(name),
             NameScope::WithSet(outer, names) => names.contains(name) || outer.contains(name),
         }
     }
@@ -5579,7 +5515,7 @@ fn references_in_scope(
             // (`output_idx`/`ranges`/`var`/`arg`) are added to the in-scope set
             // for the descent so a bound loop index is not flagged as
             // undefined.
-            let bound = bound_index_symbols(op_node);
+            let bound = op_node.binders(Binders::ALL);
             seen.binder |= !bound.is_empty();
             let scope = if bound.is_empty() {
                 *defined_vars
@@ -6085,7 +6021,7 @@ pub(crate) fn resolve_observed_ref(
 }
 
 /// Every name in `expr` that a reference may resolve through: the free bare
-/// symbols ([`collect_free_symbols`], the §4.9.6 walk, minus the binders
+/// symbols ([`collect_bare_symbols`], the §4.9.6 walk, minus the binders
 /// [`collect_bound_symbols`] finds) and every dotted reference, descending
 /// every Expression child.
 pub(crate) fn referenced_names(expr: &crate::Expr) -> HashSet<String> {
@@ -6099,7 +6035,7 @@ pub(crate) fn referenced_names(expr: &crate::Expr) -> HashSet<String> {
         }
     }
     let mut names = HashSet::new();
-    collect_free_symbols(expr, &mut names);
+    collect_bare_symbols(expr, &mut names);
     let mut bound = HashSet::new();
     collect_bound_symbols(expr, &mut bound);
     names.retain(|n| !bound.contains(n));

@@ -54,6 +54,7 @@
 // hidden from the published rustdoc API surface.
 #[doc(hidden)]
 pub mod adapter_support;
+pub(crate) mod binders;
 /// Planar spatial-index broad phase (rstar R*-tree + brute-force oracle) for the
 /// projection-pushdown overlap join-gate.
 pub(crate) mod broad_phase;

@@ -5,14 +5,13 @@
 //! lowering helpers.
 
 use super::*;
+use crate::binders::Binders;
 use crate::causal_self_read::{self, SelfReadDefect};
 use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
 use crate::flatten::{BuiltShapes, ConditionalShapes, FlattenedSystem};
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
-use crate::types::{
-    EsmFile, ExpressionNode, JoinClause, Model, ModelVariable, OverlapClause, VariableType,
-};
+use crate::types::{EsmFile, ExpressionNode, JoinClause, Model, ModelVariable, VariableType};
 use crate::value_invention::{ValueInventionResult, materialize_value_invention};
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
@@ -1485,7 +1484,7 @@ pub(crate) fn check_free_variables(
         // doc note on `collect_dims_and_index_heads`.
         let mut binders = NameSet::default();
         if is_ic_lhs(&eq.lhs) {
-            collect_free_bare_symbols(&eq.rhs, &mut bound);
+            crate::binders::collect_bare_symbols(&eq.rhs, &mut bound);
             collect_dims_and_index_heads(&eq.lhs, &mut bound);
             collect_dims_and_index_heads(&eq.rhs, &mut bound);
         } else {
@@ -1518,7 +1517,7 @@ pub(crate) fn check_free_variables(
             if failure.is_some() {
                 return;
             }
-            collect_binders(expr, &mut binders);
+            crate::binders::collect_binders(expr, Binders::ALL, &mut binders);
             if let Err(e) = with_binders(&mut bound, &mut binders, |scope| {
                 check_expr_free_vars(expr, &|name: &str| {
                     declared.contains(name) || scope.contains(name)
@@ -1563,62 +1562,13 @@ fn is_ic_lhs(lhs: &Expr) -> bool {
     matches!(lhs, Expr::Operator(op) if op.op == "ic")
 }
 
-/// The index / integration symbols a single node BINDS for its body (mirrors
-/// `structural.rs` `bound_index_symbols`): `output_idx` / `ranges` keys, an
-/// `integral` `int_var`, the BARE subscript positions of
-/// an `index(array, i…)` node, and `apply_expression_template` `bindings` keys.
-fn node_binders(node: &ExpressionNode, out: &mut NameSet) {
-    node_loop_binders(node, out);
-    if node.op == "index" {
-        // Only a BARE position (`index(u, i)`) is a binder; an index EXPRESSION
-        // (`index(u, i+1)`) is a USE of a symbol bound elsewhere and is checked.
-        for arg in node.args.iter().skip(1) {
-            if let Expr::Variable(name) = arg {
-                out.insert(name.clone());
-            }
+/// Insert every name `node` binds as one of `kinds` into `out`.
+fn insert_binders(node: &ExpressionNode, kinds: Binders, out: &mut NameSet) {
+    node.for_each_binder(kinds, |n| {
+        if !out.contains(n) {
+            out.insert(n.to_string());
         }
-    }
-}
-
-/// [`node_binders`] less the bare `index` subscripts: the names a node binds
-/// for its body and nothing else.
-fn node_loop_binders(node: &ExpressionNode, out: &mut NameSet) {
-    if let Some(idx) = &node.output_idx {
-        out.extend(idx.iter().cloned());
-    }
-    if let Some(ranges) = &node.ranges {
-        out.extend(ranges.keys().cloned());
-    }
-    if let Some(v) = &node.int_var {
-        out.insert(v.clone());
-    }
-    if let Some(bindings) = &node.bindings {
-        out.extend(bindings.keys().cloned());
-    }
-}
-
-/// Union every binder introduced anywhere in the subtree (whole-tree, like
-/// `structural.rs` `collect_bound_symbols`). Widening the bound set only ever
-/// prevents a false positive, which is the cardinal requirement here.
-fn collect_binders(expr: &Expr, out: &mut NameSet) {
-    if let Expr::Operator(node) = expr {
-        node_binders(node, out);
-        node.for_each_child(&mut |child| collect_binders(child, out));
-    }
-}
-
-/// Collect every free BARE (non-dotted, non-builtin) symbol in the subtree —
-/// used to credit an `ic` RHS's coordinate symbols into the bound set.
-fn collect_free_bare_symbols(expr: &Expr, out: &mut NameSet) {
-    match expr {
-        Expr::Variable(name) if !name.contains('.') && !is_builtin_function_name(name) => {
-            out.insert(name.clone());
-        }
-        Expr::Operator(node) => {
-            node.for_each_child(&mut |child| collect_free_bare_symbols(child, out));
-        }
-        _ => {}
-    }
+    });
 }
 
 /// Collect, in one walk of the subtree:
@@ -1649,7 +1599,7 @@ fn collect_dims_and_index_heads(expr: &Expr, out: &mut NameSet) {
 }
 
 /// [`collect_dims_and_index_heads`] into `credited` and, in the same walk, the
-/// binders into `binders`: as [`collect_binders`] for a left-hand side
+/// binders into `binders`: every [`Binders::ALL`] binder for a left-hand side
 /// (`rhs: None`); for a right-hand side (`rhs: Some(enclosed)`), the same less
 /// one case: a bare `index(array, i)` subscript that no enclosing node binds
 /// and the left-hand side does not bind either. There it is a READ of `i` with
@@ -1678,16 +1628,13 @@ fn collect_dims_heads_and_binders(
     }
     let child_rhs = match rhs {
         None => {
-            node_binders(node, binders);
+            insert_binders(node, Binders::ALL, binders);
             None
         }
         Some(enclosed) => {
-            let carries = node.output_idx.is_some()
-                || node.ranges.is_some()
-                || node.int_var.is_some()
-                || node.bindings.is_some();
+            let carries = node.carries_binders(Binders::BODY);
             if enclosed || node.op != "index" {
-                node_binders(node, binders);
+                insert_binders(node, Binders::ALL, binders);
             }
             Some(enclosed || carries)
         }
@@ -1774,31 +1721,12 @@ pub(super) struct IcScope {
     pub(super) state_reads: Vec<(String, String)>,
 }
 
-/// The names `expr` reads FREE: every bare variable reference not bound by an
-/// enclosing node (a `faq`'s `output_idx` / `ranges` keys, an `integral`'s
-/// variable, …). A loop index is no read of the observed or state that
-/// happens to share its name.
-fn collect_free_names(expr: &Expr, bound: &mut Vec<String>, out: &mut HashSet<String>) {
-    match expr {
-        Expr::Variable(name) if !bound.contains(name) => {
-            out.insert(name.clone());
-        }
-        Expr::Operator(node) => {
-            let mut own = NameSet::default();
-            node_loop_binders(node, &mut own);
-            let depth = bound.len();
-            bound.extend(own);
-            node.for_each_child(&mut |child| collect_free_names(child, bound, out));
-            bound.truncate(depth);
-        }
-        _ => {}
-    }
-}
-
+/// The names `expr` reads FREE: every variable reference not bound by an
+/// enclosing node ([`Binders::BODY`]: a `faq`'s `output_idx` / `ranges` keys,
+/// an `integral`'s variable, a template application's parameters). A loop
+/// index is no read of the observed or state that happens to share its name.
 pub(super) fn free_names(expr: &Expr) -> HashSet<String> {
-    let mut out = HashSet::new();
-    collect_free_names(expr, &mut Vec::new(), &mut out);
-    out
+    crate::binders::free_names(expr, Binders::BODY)
 }
 
 /// Memoized walk over the observed definitions marking each one that reads
@@ -4506,22 +4434,6 @@ fn value_invention_factors(
         }
         node.for_each_child(&mut |c| index_targets(c, out));
     }
-    /// The names `e` reads that it does not bind itself.
-    fn free_names(e: &Expr, bound: &mut Vec<String>, out: &mut BTreeSet<String>) {
-        match e {
-            Expr::Variable(v) if !bound.contains(v) => {
-                out.insert(v.clone());
-            }
-            Expr::Operator(node) => {
-                let mark = bound.len();
-                bound.extend(node.output_idx.iter().flatten().cloned());
-                bound.extend(node.ranges.iter().flat_map(|r| r.keys().cloned()));
-                node.for_each_child(&mut |c| free_names(c, bound, out));
-                bound.truncate(mark);
-            }
-            _ => {}
-        }
-    }
     struct Cx<'a> {
         defs: BTreeMap<String, Expr>,
         index_sets: &'a HashMap<String, IndexSet>,
@@ -4538,7 +4450,9 @@ fn value_invention_factors(
             return false;
         };
         let mut free = BTreeSet::new();
-        free_names(&body, &mut Vec::new(), &mut free);
+        crate::binders::for_each_free_name(&body, Binders::LOOP, &mut |n| {
+            free.insert(n.to_string());
+        });
         for v in &free {
             if !cx.index_sets.contains_key(v) && !derive(cx, v, depth + 1) {
                 return false;
@@ -4973,13 +4887,7 @@ fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
             .get(v.as_str())
             .map_or_else(|| expr.clone(), |l| Expr::Variable((*l).to_string())),
         Expr::Operator(node) => {
-            let binds = |s: &str| {
-                node.output_idx
-                    .as_ref()
-                    .is_some_and(|ix| ix.iter().any(|x| x == s))
-                    || node.ranges.as_ref().is_some_and(|r| r.contains_key(s))
-                    || node.int_var.as_deref() == Some(s)
-            };
+            let binds = |s: &str| node.binds(Binders::SCOPE, s);
             // Only reallocate the map on the rare node that shadows something.
             let narrowed: Option<HashMap<&str, &str>> =
                 hits.iter().any(|(q, l)| binds(q) || binds(l)).then(|| {
@@ -4994,11 +4902,16 @@ fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
             // string-encoded variable references catch up with its child ones
             // here — see [`rename_join_names`].
             if let Some(join) = &out.join {
-                let mut renamed = join.clone();
-                for (q, l) in sub {
-                    renamed = rename_join_names(&renamed, q, l);
-                }
-                out.join = Some(renamed);
+                out.join = Some(
+                    join.iter()
+                        .map(|c| {
+                            c.map_reference_names(|n| {
+                                sub.get(n.as_str())
+                                    .map_or_else(|| n.clone(), |l| l.to_string())
+                            })
+                        })
+                        .collect(),
+                );
             }
             Expr::operator(out)
         }
@@ -5020,17 +4933,7 @@ pub(super) fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
     match expr {
         Expr::Variable(v) if v == from => Expr::Variable(to.to_string()),
         Expr::Operator(node) => {
-            let binds = node
-                .output_idx
-                .as_ref()
-                .map(|ix| ix.iter().any(|s| s == from))
-                .unwrap_or(false)
-                || node
-                    .ranges
-                    .as_ref()
-                    .map(|r| r.contains_key(from))
-                    .unwrap_or(false);
-            if binds {
+            if node.binds(Binders::LOOP, from) {
                 return expr.clone();
             }
             let mut out = node.map_children(&mut |a| rename_free_symbol(a, from, to));
@@ -5061,21 +4964,8 @@ pub(super) fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
 /// references into the variable registry. (`map_column_names` renames the gate's
 /// COLUMNS only, for exactly that reason.)
 fn rename_join_names(join: &[JoinClause], from: &str, to: &str) -> Vec<JoinClause> {
-    let ren = |n: &String| -> String { if n == from { to.to_string() } else { n.clone() } };
     join.iter()
-        .map(|c| JoinClause {
-            on: c.on.iter().map(|[l, r]| [ren(l), ren(r)]).collect(),
-            // Binders of the node, not references — renaming leaves them alone.
-            syms: c.syms.clone(),
-            overlap: c.overlap.as_ref().map(|ov| OverlapClause {
-                src_env: ov.src_env.iter().map(&ren).collect(),
-                tgt_env: ov.tgt_env.iter().map(&ren).collect(),
-                eps: ov.eps,
-                sym_src: ov.sym_src.clone(),
-                sym_tgt: ov.sym_tgt.clone(),
-            }),
-            on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(ren)),
-        })
+        .map(|c| c.map_reference_names(|n| if n == from { to.to_string() } else { n.clone() }))
         .collect()
 }
 
