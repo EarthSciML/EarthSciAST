@@ -4,6 +4,7 @@
 //! build-time field evaluators, and the shape-inference / LHS-parsing
 //! lowering helpers.
 
+use super::normalize::{BuildInput, NormalizedModel, normalize};
 use super::*;
 use crate::binders::Binders;
 use crate::causal_self_read::{self, SelfReadDefect};
@@ -499,7 +500,7 @@ pub(crate) fn promote_conditional_shapes(
 }
 
 /// Write `shapes` into `model`'s declarations, by name.
-fn set_declared_shapes(model: &mut Model, shapes: &BuiltShapes) {
+pub(super) fn set_declared_shapes(model: &mut Model, shapes: &BuiltShapes) {
     for (name, axes) in shapes {
         if let Some(var) = model.variables.get_mut(name) {
             var.shape = Some(axes.clone());
@@ -575,17 +576,14 @@ impl ArrayCompiled {
             .unwrap_or_default()
             .into_iter()
             .collect();
-        // `from_model` clones the model internally anyway, so taking the clone
-        // here costs nothing extra — same shape as `from_file_owned` below,
-        // which owns its model outright. The model's name rides along so the
-        // pipeline can resolve self-qualified references once the subsystems
-        // are mounted.
-        let mut compiled = Self::compile_pipeline(
+        // The build rewrites the model in place, so it takes a clone — the
+        // same shape as `from_file_owned` below, which owns its model
+        // outright.
+        let mut compiled = Self::compile_authored(
             model.clone(),
-            &[],
-            &index_sets,
-            None,
             Some(model_name),
+            index_sets,
+            None,
             runtime_array_parameters,
         )?;
         // Record the model's namespace so overrides may be keyed `Model.param`
@@ -627,12 +625,11 @@ impl ArrayCompiled {
         let index_sets: HashMap<String, IndexSet> =
             file.index_sets.unwrap_or_default().into_iter().collect();
         let (model_name, model) = models.into_iter().next().unwrap();
-        let mut compiled = Self::compile_pipeline(
+        let mut compiled = Self::compile_authored(
             model,
-            &[],
-            &index_sets,
-            None,
             Some(&model_name),
+            index_sets,
+            None,
             runtime_array_parameters,
         )?;
         compiled.qualify_data_fed(&model_name);
@@ -741,10 +738,6 @@ impl ArrayCompiled {
             ));
         }
 
-        let mut model = model_from_flattened(flat);
-        if let Some(shapes) = inherited {
-            set_declared_shapes(&mut model, shapes);
-        }
         // The document `index_sets` registry is carried through flatten
         // (`FlattenedSystem::index_sets`), so a coupled array system can resolve
         // `faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
@@ -756,21 +749,9 @@ impl ArrayCompiled {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let mut compiled = Self::compile_pipeline(
-            model,
-            &flat.field_ics,
-            &index_sets,
-            None,
-            None,
-            runtime_array_parameters,
-        )?;
-        // The pipeline recorded only what it inferred; the inherited shapes
-        // were already declared when it ran.
-        if let Some(shapes) = inherited {
-            compiled
-                .conditional_shapes
-                .extend(shapes.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
+        let normalized = normalize(BuildInput::Flattened { flat, inherited }, index_sets)?;
+        let mut compiled =
+            Self::compile_normalized(normalized, &flat.field_ics, None, runtime_array_parameters)?;
         // `flatten` routed every `ic` equation out of `flat.equations`, so the
         // synthetic model's stage-(0) walk never saw an initial-condition
         // right-hand side. Walk them here, before anything evaluates one
@@ -842,170 +823,78 @@ impl ArrayCompiled {
         index_sets: &HashMap<String, IndexSet>,
         vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
     ) -> Result<Self, CompileError> {
-        Self::compile_pipeline(model_owned, &[], index_sets, vi_arrays, None, false)
+        Self::compile_authored(model_owned, None, index_sets.clone(), vi_arrays, false)
     }
 
-    /// The compile pipeline itself; every public entry point above delegates
-    /// here. `model_name` names the document model being compiled on the
-    /// single-model route. With a name, every self-qualified reference (`M.x`,
-    /// `M.sub.x`) is resolved to its local spelling right after the subsystems
-    /// are mounted, so one authored inside a subsystem body resolves as well
-    /// as one in the parent's own equations.
-    fn compile_pipeline(
-        mut model_owned: Model,
-        // The flattened system's `ic` right-hand sides (`field_ics`), which
-        // flatten moved out of the model's equations; empty on the
-        // single-model route, whose `ic` equations are still in the model.
-        flat_ics: &[(String, Expr)],
-        index_sets: &HashMap<String, IndexSet>,
-        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+    /// The single-model route: refuse an event on the authored model, then
+    /// [`normalize`] it and [`Self::compile_normalized`]. `model_name` names
+    /// the document model; with a name, every self-qualified reference (`M.x`,
+    /// `M.sub.x`) resolves to its local spelling once the subsystems are
+    /// mounted.
+    fn compile_authored(
+        model: Model,
         model_name: Option<&str>,
+        index_sets: HashMap<String, IndexSet>,
+        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
         runtime_array_parameters: bool,
     ) -> Result<Self, CompileError> {
-        // Resolve `{ "from": <index set> }` range references (RFC
-        // semiring-faq-unified-ir §5.2) into concrete `[lo, hi]` intervals
-        // before any shape inference or rule building; every downstream
-        // consumer then sees only dense interval ranges.
-        //
-        // Mount subsystems under dot-prefixed names (esm-spec §4.6) and resolve
-        // each ragged index set's keyed factors against the resulting model
-        // scope (RFC §5.4; the Julia `_factor_scope` mirror). Both are no-ops —
-        // and the registry copy is byte-identical — for models without
-        // subsystems / ragged sets.
         // An event, continuous or discrete, is refused before anything is
-        // built. This is the SINGLE-MODEL route's check: `from_flattened` checks
-        // the flattened event lists itself, because the synthetic model it hands
-        // down carries no events. Subsystems are searched too, since mounting
-        // keeps only their variables and equations.
-        if let Some((construct, name)) = crate::compile_error::first_event(&model_owned) {
+        // built. `from_flattened` checks the flattened event lists itself,
+        // because the model it normalizes carries no events. Subsystems are
+        // searched too, since mounting keeps only their variables and
+        // equations.
+        if let Some((construct, name)) = crate::compile_error::first_event(&model) {
             return Err(crate::compile_error::event_refusal(
                 construct,
                 crate::compile_error::ARRAY_EVALUATOR,
                 name.as_deref(),
             ));
         }
-        let mut index_sets_owned = index_sets.clone();
-        mount_subsystems(&mut model_owned)?;
-        if let Some(name) = model_name {
-            resolve_self_references(&mut model_owned, name);
-        }
-        // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
-        // (see `from_file_owned`). Runs after mounting so a subsystem's
-        // equations and declarations are in scope under their mounted names.
-        let (
-            ConditionalShapes {
-                built: conditional_shapes,
-                data_shaped,
+        let normalized = normalize(
+            BuildInput::Authored {
+                model: Box::new(model),
+                name: model_name,
             },
-            variable_axes,
-        ) = apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
-        // esm-spec §4.3.1.2: each recurrence group becomes the single stacked
-        // recurrence every route below already sweeps (`recurrence_group`).
-        super::recurrence_group::lower_recurrence_groups(&mut model_owned, &mut index_sets_owned)?;
-        // Lower every SHAPED parameter whose value the document supplies —
-        // inline array data, or one scalar broadcast over the grid (esm-spec
-        // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
-        // already reads. Runs after mounting so a subsystem's shaped parameter
-        // is lowered under its namespaced name too; `vi_arrays` is passed so a
-        // caller-supplied factor array stays authoritative over a declared
-        // default.
-        let (inline_param_arrays, runtime_params) = lower_inline_array_parameters(
-            &mut model_owned,
-            &index_sets_owned,
-            vi_arrays,
-            runtime_array_parameters,
+            index_sets,
         )?;
-        apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
-        // Under `element_type: "Float32"`, reject an index set whose subscripts
-        // binary32 cannot address exactly. Index expressions share the value
-        // kernels — there is no integer type in the expression language — so
-        // `i + 1` above 2^24 would round, and a gather would silently read the
-        // wrong cell. A no-op under Float64, and for every realistic extent.
-        if crate::precision::is_f32() {
-            let mut names: Vec<&String> = index_sets_owned.keys().collect();
-            names.sort();
-            for name in names {
-                if let Some(size) = index_sets_owned[name].size {
-                    crate::precision::check_index_set_extent(name, size)?;
-                }
-            }
-        }
-        // Build-time value invention for every derived index set (a
-        // `distinct` producer, RFC §6.1): the producer's member count sizes a
-        // range over the set. Runs before `strip_value_invention` drops the
-        // producer. A producer that cannot run is recorded rather than raised, and
-        // is refused below only if a surviving expression ranges over its set.
-        let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays);
-        bind_member_factors(&mut model_owned, &derived.member_factors);
-        let index_sets = &index_sets_owned;
-        // Drop value-invention (relational) scaffolding — `distinct` producers
-        // and membership sets over `kind: "derived"` index sets — plus the
-        // `join.on` gates keyed on them, BEFORE join/range resolution. The
-        // extents counted above (and the fed-back member factors) are all that
-        // survive of such a set (see `strip_value_invention`). A no-op unless a
-        // `distinct` producer or a derived-set-shaped variable is present.
-        // A producer that could not run leaves its derived set with no
-        // members: a stage that then trips over the stripped producer (a
-        // surviving read of one of its outputs, an output shaped on its set)
-        // names that set (`derived_index_set_unmaterialized`, esm-spec §4.2)
-        // rather than the operator or the axis it met.
-        strip_value_invention(&mut model_owned, index_sets)
-            .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
-        // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
-        // `const`-literal factor variables — Fornberg weights, mesh
-        // connectivity, a geometry table — that [`collect_const_factor_arrays`]
-        // already identifies as the Rust analogue of the Julia reference's
-        // `const_arrays`. Captured HERE, before stage (6) MOVES each observed
-        // body out of the variable registry. A gather on one of these resolves
-        // an out-of-range index by its declared boundary policy instead of the
-        // state gather's zero ghost, which §5.5.5 says is never a const array's.
-        let const_scope = std::sync::Arc::new(ConstArrayScope::from_names(
-            observed_bodies(&model_owned)
-                .into_iter()
-                .filter(|(_, body)| matches!(body, Expr::Operator(n) if n.op == "const"))
-                .map(|(n, _)| n),
-        ));
-        // Resolve `join.on` value-equality clauses (RFC §5.3) FIRST, while each
-        // aggregate range still carries its `{ "from": <index set> }` linkage so
-        // the join key columns' member values can be read. A join whose key
-        // columns resolve to the same loop symbol is the degenerate positional
-        // no-op (byte-identical to the no-join form); a join over two distinct
-        // loop symbols is the data-derived value-equality case and is lowered
-        // into a member-equality `filter` over the contraction; a join over a
-        // genuine (non-loop) data column is rejected rather than mis-combined.
-        crate::join::resolve_aggregate_joins(&mut model_owned, index_sets)?;
-        // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
-        // into a concrete `[lo, hi]` interval before shape inference / rule
-        // building, so every downstream consumer sees only dense intervals.
-        // The next three passes look only at nodes with `ranges` and at `faq`
-        // nodes, and shape inference only at `index` nodes; no pass from here
-        // to there adds any of them, so one walk says whether there are any.
-        let census = OpCensus::of(&model_owned);
-        if census.ranges {
-            crate::faq::resolve_aggregate_ranges_with_extents(
-                &mut model_owned,
-                index_sets,
-                &derived.extents,
-            )
-            .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
-            // A range over a non-geometry derived set that value invention did
-            // not size would contract as empty and read 0 (esm-spec §9.6.6):
-            // refuse it.
-            refuse_unmaterialized_derived_ranges(&model_owned, index_sets, &derived)?;
-        }
-        // Reject any aggregate whose ⊕ is spelled outside the schema's closed
-        // `reduce` / `semiring` enums. The gate lives here, at the one funnel
-        // every array-runtime build passes through, because the seams that
-        // actually resolve ⊕ (`extract_derivative_faq`, `faq_spec`)
-        // return `Option` and so could only decline silently.
-        if census.faq {
-            validate_oplus_spellings(&model_owned)?;
-        }
+        Self::compile_normalized(normalized, &[], vi_arrays, runtime_array_parameters)
+    }
+
+    /// Compile a [`NormalizedModel`]; every entry point above reaches the
+    /// array runtime through here. `flat_ics` are the flattened system's `ic`
+    /// right-hand sides (`field_ics`), which flatten moved out of the model's
+    /// equations; empty on the single-model route, whose `ic` equations are
+    /// still in the model.
+    fn compile_normalized(
+        normalized: NormalizedModel,
+        flat_ics: &[(String, Expr)],
+        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+        runtime_array_parameters: bool,
+    ) -> Result<Self, CompileError> {
+        let NormalizedModel {
+            model,
+            index_sets,
+            shapes:
+                ConditionalShapes {
+                    built: conditional_shapes,
+                    data_shaped,
+                },
+            axes: variable_axes,
+        } = normalized;
+        let ResolvedModel {
+            model: mut model_owned,
+            index_sets,
+            inline_param_arrays,
+            runtime_params,
+            const_scope,
+            any_index,
+        } = resolve_for_compile(model, index_sets, vi_arrays, runtime_array_parameters)?;
+        let index_sets = &index_sets;
 
         // Stages (0)-(5) read the model immutably; only OWNED products leave
-        // this block, so stage (6) below can borrow the model mutably (it
-        // moves each observed body out of the variable registry).
-        let (
+        // them, so stage (6) below can borrow the model mutably (it moves each
+        // observed body out of the variable registry).
+        let Classified {
             observed_names,
             forcing_decls,
             declared_forcing_shapes,
@@ -1018,145 +907,7 @@ impl ArrayCompiled {
             unvalued_shaped_params,
             forcing_defaults,
             data_fed,
-        ) = {
-            let model = &model_owned;
-
-            // (0) Reject spatial differential operators anywhere in the model's
-            // equations or observed-variable expressions (esm-i7b).
-            reject_unlowered_spatial_ops(model)?;
-
-            // (0a) Reject an implicit equation: this runtime has no algebraic
-            // solve, and every stage below would skip the equation, leaving the
-            // unknown at its initial value.
-            if let Some(eq) = crate::compile_error::first_implicit_equation(&model.equations) {
-                return Err(crate::compile_error::implicit_equation_refusal(
-                    crate::compile_error::ARRAY_EVALUATOR,
-                    eq,
-                ));
-            }
-
-            // (0a′) Reject an unknown carrying BOTH a derivative equation and a
-            // bare-LHS one. esm-spec §4.9.4 counts both, so the document has one
-            // more equation than it has unknowns and `validate` reports
-            // `equation_count_mismatch`; the build says the same rather than
-            // integrating a system free of the constraint the file declares.
-            // After mounting, so a pair inside a subsystem is seen under its
-            // mounted names, and ahead of `partition_states`, which would
-            // otherwise pick one of the two without saying so.
-            if let Some((name, diff, alg)) =
-                crate::compile_error::first_doubly_defined_unknown(&model.equations)
-            {
-                return Err(crate::compile_error::doubly_defined_unknown_refusal(
-                    &name, diff, alg,
-                ));
-            }
-
-            // (0b) Reject a reference to a variable bound in NONE of the model's
-            // binding categories — the same function `crate::prepare` calls on
-            // the build-pipeline route
-            // (CONFORMANCE_SPEC §5.23; `extra_bound` is empty here because this
-            // path's evaluation scope is the model's own declarations). Without
-            // it a typo'd/undeclared bare name reaches `lookup_variable`'s final
-            // arm, which now fails closed but only names the fault at the drain;
-            // catching it HERE names the variable before anything is built.
-            check_free_variables(model, index_sets, &[])?;
-
-            // (1) Collect state / parameter / observed variables.
-            let (state_vars, param_vars, observed_vars, data_fed) =
-                classify_variables(model, &runtime_params)?;
-
-            // (2)+(2b) Infer state shapes from every equation usage, seeding
-            // declared array shapes where the index-usage inference left an
-            // array state scalar.
-            let shape_map = infer_state_shapes(model, &state_vars, index_sets, census.index)?;
-
-            // (3) Partition state variables into integrated / eliminated /
-            // held-at-ic.
-            let (final_states, eliminated, held_at_ic) = partition_states(model, &state_vars);
-
-            // (4) Build flat offsets and scalar-slot names per state variable.
-            let slots = build_slot_tables(model, &final_states, &shape_map)?;
-
-            // (5) Build the param tables.
-            let (param_names, param_index, param_defaults) = build_param_tables(model, &param_vars);
-            // A SHAPED parameter that reached the scalar table with no value —
-            // no `default`, no `distribution`, no inline data, not refreshed
-            // from outside. The front door refuses these by name
-            // (`crate::problem::esm_problem`, esm-spec §10.10); a lower-level
-            // caller reaches them as a solve-time missing parameter.
-            let unvalued_shaped_params: Vec<String> = param_vars
-                .iter()
-                .filter(|name| {
-                    model.variables.get(**name).is_some_and(|v| {
-                        v.shape.as_ref().is_some_and(|s| !s.is_empty())
-                            && v.default.is_none()
-                            && v.distribution.is_none()
-                    })
-                })
-                .map(|name| (*name).clone())
-                .collect();
-
-            // Stage (6) consumes the observed bodies by NAME (sorted order,
-            // exactly the order `classify_variables` produced them in).
-            let observed_names: Vec<String> =
-                observed_vars.iter().map(|(n, _)| (*n).clone()).collect();
-            // The externally refreshed parameters ride in `observed_vars` with
-            // no defining rule (see `classify_variables`); these are the
-            // forcing buffer's names.
-            let mut forcing_decls: IndexMap<String, Option<Vec<usize>>> = observed_vars
-                .iter()
-                .filter(|(_, var)| var.var_type == VariableType::Parameter)
-                .map(|(name, var)| {
-                    let shape = match var.shape.as_deref() {
-                        None => Some(Vec::new()),
-                        // A declared shape the registry cannot size takes the
-                        // extents of the parameter's inline array data, when it
-                        // has some (its rank was checked against the
-                        // declaration by `lower_inline_array_parameters`), so
-                        // the default is never checked against a guessed shape.
-                        Some(decl) => resolve_declared_shape(decl, index_sets).or_else(|| {
-                            var.default
-                                .as_ref()
-                                .filter(|d| d.is_array())
-                                .and_then(|d| d.to_dense().ok())
-                                .map(|(shape, _)| shape)
-                                .filter(|shape| shape.len() == decl.len())
-                        }),
-                    };
-                    ((*name).clone(), shape)
-                })
-                .collect();
-            // The shapes as declared, before inference sizes the unsized
-            // ones from how the equations index them: what a provider's
-            // sample is checked against.
-            // A data-fed parameter declared without a shape takes the shape
-            // of its data (esm-spec §4.3.4), so a provider's sample of it is
-            // not checked against the one-value box its read defaults to.
-            let mut declared_forcing_shapes = forcing_decls.clone();
-            for (name, var) in &observed_vars {
-                if is_data_fed_unshaped(var)
-                    && let Some(decl) = declared_forcing_shapes.get_mut(*name)
-                {
-                    *decl = None;
-                }
-            }
-            infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
-            let forcing_defaults = forcing_default_values(&observed_vars, &forcing_decls)?;
-            (
-                observed_names,
-                forcing_decls,
-                declared_forcing_shapes,
-                eliminated,
-                held_at_ic,
-                slots,
-                param_names,
-                param_index,
-                param_defaults,
-                unvalued_shaped_params,
-                forcing_defaults,
-                data_fed,
-            )
-        };
+        } = classify_model(&model_owned, index_sets, &runtime_params, any_index)?;
 
         // (5c) The build-time array scope a field `ic` may read (esm-spec
         // §6.6.5) — captured before stage (6) moves the bodies out.
@@ -1250,6 +1001,315 @@ impl ArrayCompiled {
             tape_cache: tape::TapeCache::new(),
         })
     }
+}
+
+/// A normalized model with everything a range or a gate reads resolved to
+/// concrete values: the stage between [`normalize`] and the staged build.
+struct ResolvedModel {
+    model: Model,
+    /// The registry with every ragged keyed factor scoped and every recurrence
+    /// group's index set in place.
+    index_sets: HashMap<String, IndexSet>,
+    /// Shaped parameters whose document-supplied data was lowered into the
+    /// `const`-observed channel ([`lower_inline_array_parameters`]).
+    inline_param_arrays: HashMap<String, (Vec<usize>, Vec<f64>)>,
+    /// Shaped parameters kept as run-time inputs.
+    runtime_params: HashSet<String>,
+    /// The const-array registry (CONFORMANCE_SPEC §5.5.5).
+    const_scope: std::sync::Arc<ConstArrayScope>,
+    /// Whether any `index` node survives, which is all shape inference needs
+    /// to know before it walks the equations.
+    any_index: bool,
+}
+
+/// Resolve a [`NormalizedModel`]'s data-dependent structure for the compile:
+/// inline array parameters lowered, ragged keyed factors scoped, derived
+/// index sets sized by value invention and its scaffolding stripped, `join.on`
+/// clauses lowered, and every `{ "from": <set> }` range made a concrete
+/// interval. The order is fixed here: the joins read the `from` linkage the
+/// range resolution erases, and value invention reads the producers the strip
+/// drops.
+fn resolve_for_compile(
+    mut model: Model,
+    mut index_sets: HashMap<String, IndexSet>,
+    vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+    runtime_array_parameters: bool,
+) -> Result<ResolvedModel, CompileError> {
+    // Lower every SHAPED parameter whose value the document supplies —
+    // inline array data, or one scalar broadcast over the grid (esm-spec
+    // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
+    // already reads. Runs after mounting so a subsystem's shaped parameter
+    // is lowered under its namespaced name too; `vi_arrays` is passed so a
+    // caller-supplied factor array stays authoritative over a declared
+    // default.
+    let (inline_param_arrays, runtime_params) = lower_inline_array_parameters(
+        &mut model,
+        &index_sets,
+        vi_arrays,
+        runtime_array_parameters,
+    )?;
+    apply_ragged_factor_scope(&mut index_sets, &model.variables)?;
+    // Under `element_type: "Float32"`, reject an index set whose subscripts
+    // binary32 cannot address exactly. Index expressions share the value
+    // kernels — there is no integer type in the expression language — so
+    // `i + 1` above 2^24 would round, and a gather would silently read the
+    // wrong cell. A no-op under Float64, and for every realistic extent.
+    if crate::precision::is_f32() {
+        let mut names: Vec<&String> = index_sets.keys().collect();
+        names.sort();
+        for name in names {
+            if let Some(size) = index_sets[name].size {
+                crate::precision::check_index_set_extent(name, size)?;
+            }
+        }
+    }
+    // Build-time value invention for every derived index set (a
+    // `distinct` producer, RFC §6.1): the producer's member count sizes a
+    // range over the set. Runs before `strip_value_invention` drops the
+    // producer. A producer that cannot run is recorded rather than raised, and
+    // is refused below only if a surviving expression ranges over its set.
+    let derived = materialize_derived_extents(&model, &index_sets, vi_arrays);
+    bind_member_factors(&mut model, &derived.member_factors);
+    // Drop value-invention (relational) scaffolding — `distinct` producers
+    // and membership sets over `kind: "derived"` index sets — plus the
+    // `join.on` gates keyed on them, BEFORE join/range resolution. The
+    // extents counted above (and the fed-back member factors) are all that
+    // survive of such a set (see `strip_value_invention`). A no-op unless a
+    // `distinct` producer or a derived-set-shaped variable is present.
+    // A producer that could not run leaves its derived set with no
+    // members: a stage that then trips over the stripped producer (a
+    // surviving read of one of its outputs, an output shaped on its set)
+    // names that set (`derived_index_set_unmaterialized`, esm-spec §4.2)
+    // rather than the operator or the axis it met.
+    strip_value_invention(&mut model, &index_sets)
+        .or_else(|e| derived.refuse_on_failure(&index_sets).and(Err(e)))?;
+    // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
+    // `const`-literal factor variables — Fornberg weights, mesh
+    // connectivity, a geometry table — that [`collect_const_factor_arrays`]
+    // already identifies as the Rust analogue of the Julia reference's
+    // `const_arrays`. Captured HERE, before stage (6) MOVES each observed
+    // body out of the variable registry. A gather on one of these resolves
+    // an out-of-range index by its declared boundary policy instead of the
+    // state gather's zero ghost, which §5.5.5 says is never a const array's.
+    let const_scope = std::sync::Arc::new(ConstArrayScope::from_names(
+        observed_bodies(&model)
+            .into_iter()
+            .filter(|(_, body)| matches!(body, Expr::Operator(n) if n.op == "const"))
+            .map(|(n, _)| n),
+    ));
+    // Resolve `join.on` value-equality clauses (RFC §5.3) FIRST, while each
+    // aggregate range still carries its `{ "from": <index set> }` linkage so
+    // the join key columns' member values can be read. A join whose key
+    // columns resolve to the same loop symbol is the degenerate positional
+    // no-op (byte-identical to the no-join form); a join over two distinct
+    // loop symbols is the data-derived value-equality case and is lowered
+    // into a member-equality `filter` over the contraction; a join over a
+    // genuine (non-loop) data column is rejected rather than mis-combined.
+    crate::join::resolve_aggregate_joins(&mut model, &index_sets)?;
+    // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
+    // into a concrete `[lo, hi]` interval before shape inference / rule
+    // building, so every downstream consumer sees only dense intervals.
+    // The next three passes look only at nodes with `ranges` and at `faq`
+    // nodes, and shape inference only at `index` nodes; no pass from here
+    // to there adds any of them, so one walk says whether there are any.
+    let census = OpCensus::of(&model);
+    if census.ranges {
+        crate::faq::resolve_aggregate_ranges_with_extents(
+            &mut model,
+            &index_sets,
+            &derived.extents,
+        )
+        .or_else(|e| derived.refuse_on_failure(&index_sets).and(Err(e)))?;
+        // A range over a non-geometry derived set that value invention did
+        // not size would contract as empty and read 0 (esm-spec §9.6.6):
+        // refuse it.
+        refuse_unmaterialized_derived_ranges(&model, &index_sets, &derived)?;
+    }
+    // Reject any aggregate whose ⊕ is spelled outside the schema's closed
+    // `reduce` / `semiring` enums. The gate lives here, at the one funnel
+    // every array-runtime build passes through, because the seams that
+    // actually resolve ⊕ (`extract_derivative_faq`, `faq_spec`)
+    // return `Option` and so could only decline silently.
+    if census.faq {
+        validate_oplus_spellings(&model)?;
+    }
+
+    Ok(ResolvedModel {
+        model,
+        index_sets,
+        inline_param_arrays,
+        runtime_params,
+        const_scope,
+        any_index: census.index,
+    })
+}
+
+/// What stages (0)-(5) of the staged build decide about a resolved model,
+/// all owned, so stage (6) can then take the observed bodies out of it.
+struct Classified {
+    /// Observed names, in the order stage (6) consumes their bodies.
+    observed_names: Vec<String>,
+    /// The forcing buffer's parameters and their shapes, inferred where the
+    /// declaration leaves them unsized.
+    forcing_decls: IndexMap<String, Option<Vec<usize>>>,
+    /// The same parameters at their DECLARED shapes, which a provider's sample
+    /// is checked against.
+    declared_forcing_shapes: IndexMap<String, Option<Vec<usize>>>,
+    eliminated: HashSet<String>,
+    held_at_ic: HashSet<String>,
+    slots: SlotTables,
+    param_names: Vec<String>,
+    param_index: HashMap<String, usize>,
+    param_defaults: Vec<Option<f64>>,
+    /// Shaped parameters that reached the scalar table with no value.
+    unvalued_shaped_params: Vec<String>,
+    forcing_defaults: HashMap<String, Option<(Vec<usize>, Vec<f64>)>>,
+    data_fed: Vec<(String, String)>,
+}
+
+/// Stages (0)-(5): refuse what cannot be evaluated, classify the variables,
+/// infer state shapes, partition the states and lay out the state and
+/// parameter tables.
+fn classify_model(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    runtime_params: &HashSet<String>,
+    any_index: bool,
+) -> Result<Classified, CompileError> {
+    // (0) Reject spatial differential operators anywhere in the model's
+    // equations or observed-variable expressions (esm-i7b).
+    reject_unlowered_spatial_ops(model)?;
+
+    // (0a) Reject an implicit equation: this runtime has no algebraic
+    // solve, and every stage below would skip the equation, leaving the
+    // unknown at its initial value.
+    if let Some(eq) = crate::compile_error::first_implicit_equation(&model.equations) {
+        return Err(crate::compile_error::implicit_equation_refusal(
+            crate::compile_error::ARRAY_EVALUATOR,
+            eq,
+        ));
+    }
+
+    // (0a′) Reject an unknown carrying BOTH a derivative equation and a
+    // bare-LHS one. esm-spec §4.9.4 counts both, so the document has one
+    // more equation than it has unknowns and `validate` reports
+    // `equation_count_mismatch`; the build says the same rather than
+    // integrating a system free of the constraint the file declares.
+    // After mounting, so a pair inside a subsystem is seen under its
+    // mounted names, and ahead of `partition_states`, which would
+    // otherwise pick one of the two without saying so.
+    if let Some((name, diff, alg)) =
+        crate::compile_error::first_doubly_defined_unknown(&model.equations)
+    {
+        return Err(crate::compile_error::doubly_defined_unknown_refusal(
+            &name, diff, alg,
+        ));
+    }
+
+    // (0b) Reject a reference to a variable bound in NONE of the model's
+    // binding categories — the same function `crate::prepare` calls on
+    // the build-pipeline route
+    // (CONFORMANCE_SPEC §5.23; `extra_bound` is empty here because this
+    // path's evaluation scope is the model's own declarations). Without
+    // it a typo'd/undeclared bare name reaches `lookup_variable`'s final
+    // arm, which now fails closed but only names the fault at the drain;
+    // catching it HERE names the variable before anything is built.
+    check_free_variables(model, index_sets, &[])?;
+
+    // (1) Collect state / parameter / observed variables.
+    let (state_vars, param_vars, observed_vars, data_fed) =
+        classify_variables(model, runtime_params)?;
+
+    // (2)+(2b) Infer state shapes from every equation usage, seeding
+    // declared array shapes where the index-usage inference left an
+    // array state scalar.
+    let shape_map = infer_state_shapes(model, &state_vars, index_sets, any_index)?;
+
+    // (3) Partition state variables into integrated / eliminated /
+    // held-at-ic.
+    let (final_states, eliminated, held_at_ic) = partition_states(model, &state_vars);
+
+    // (4) Build flat offsets and scalar-slot names per state variable.
+    let slots = build_slot_tables(model, &final_states, &shape_map)?;
+
+    // (5) Build the param tables.
+    let (param_names, param_index, param_defaults) = build_param_tables(model, &param_vars);
+    // A SHAPED parameter that reached the scalar table with no value —
+    // no `default`, no `distribution`, no inline data, not refreshed
+    // from outside. The front door refuses these by name
+    // (`crate::problem::esm_problem`, esm-spec §10.10); a lower-level
+    // caller reaches them as a solve-time missing parameter.
+    let unvalued_shaped_params: Vec<String> = param_vars
+        .iter()
+        .filter(|name| {
+            model.variables.get(**name).is_some_and(|v| {
+                v.shape.as_ref().is_some_and(|s| !s.is_empty())
+                    && v.default.is_none()
+                    && v.distribution.is_none()
+            })
+        })
+        .map(|name| (*name).clone())
+        .collect();
+
+    // Stage (6) consumes the observed bodies by NAME (sorted order,
+    // exactly the order `classify_variables` produced them in).
+    let observed_names: Vec<String> = observed_vars.iter().map(|(n, _)| (*n).clone()).collect();
+    // The externally refreshed parameters ride in `observed_vars` with
+    // no defining rule (see `classify_variables`); these are the
+    // forcing buffer's names.
+    let mut forcing_decls: IndexMap<String, Option<Vec<usize>>> = observed_vars
+        .iter()
+        .filter(|(_, var)| var.var_type == VariableType::Parameter)
+        .map(|(name, var)| {
+            let shape = match var.shape.as_deref() {
+                None => Some(Vec::new()),
+                // A declared shape the registry cannot size takes the
+                // extents of the parameter's inline array data, when it
+                // has some (its rank was checked against the
+                // declaration by `lower_inline_array_parameters`), so
+                // the default is never checked against a guessed shape.
+                Some(decl) => resolve_declared_shape(decl, index_sets).or_else(|| {
+                    var.default
+                        .as_ref()
+                        .filter(|d| d.is_array())
+                        .and_then(|d| d.to_dense().ok())
+                        .map(|(shape, _)| shape)
+                        .filter(|shape| shape.len() == decl.len())
+                }),
+            };
+            ((*name).clone(), shape)
+        })
+        .collect();
+    // The shapes as declared, before inference sizes the unsized
+    // ones from how the equations index them: what a provider's
+    // sample is checked against.
+    // A data-fed parameter declared without a shape takes the shape
+    // of its data (esm-spec §4.3.4), so a provider's sample of it is
+    // not checked against the one-value box its read defaults to.
+    let mut declared_forcing_shapes = forcing_decls.clone();
+    for (name, var) in &observed_vars {
+        if is_data_fed_unshaped(var)
+            && let Some(decl) = declared_forcing_shapes.get_mut(*name)
+        {
+            *decl = None;
+        }
+    }
+    infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
+    let forcing_defaults = forcing_default_values(&observed_vars, &forcing_decls)?;
+    Ok(Classified {
+        observed_names,
+        forcing_decls,
+        declared_forcing_shapes,
+        eliminated,
+        held_at_ic,
+        slots,
+        param_names,
+        param_index,
+        param_defaults,
+        unvalued_shaped_params,
+        forcing_defaults,
+        data_fed,
+    })
 }
 
 // ============================================================================
