@@ -794,27 +794,6 @@ pub(crate) enum MicroOp {
         swap: bool,
         out: GroupIx,
     },
-    /// Step 4b superop: a three-op `+ - * /` chain whose two intermediates
-    /// each have exactly one consumer (the next op):
-    /// `t1 = kernel(op1)(a, b); t2 = swap2 ? kernel(op2)(c, t1) :
-    /// kernel(op2)(t1, c); out = swap3 ? kernel(op3)(d, t2) :
-    /// kernel(op3)(t2, d)`. Element semantics are EXACTLY the three
-    /// constituent kernels applied in order — never a hardware FMA, which
-    /// would change bits. Executed all-pointer: scalar operands read from
-    /// splat registers, ghost inputs from the zero register (identical
-    /// values, so identical bits).
-    Bin3 {
-        op1: BinCode,
-        a: MRef,
-        b: MRef,
-        op2: BinCode,
-        c: MRef,
-        swap2: bool,
-        op3: BinCode,
-        d: MRef,
-        swap3: bool,
-        out: GroupIx,
-    },
     /// An absorbed [`Instr::Scan`] along one axis of the group box: `row`
     /// steps along that axis, each `post` flat elements apart (the extent of
     /// the axes after it). Lane `q = flat % post` keeps its running fold of
@@ -871,8 +850,8 @@ pub(crate) struct FusedInput {
     /// broadcast along the box's innermost axis). Meaningful only for shifted
     /// inputs.
     pub elem_stride: i64,
-    /// For a shifted input with `elem_stride` other than 1 and 0 (and 0 too in
-    /// a group with a `Bin3` superop): the chunk register the executor
+    /// For a shifted input with `elem_stride` other than 1 and 0: the chunk
+    /// register the executor
     /// pre-loads this input into (`GroupIx::MAX` otherwise; a zero-stride
     /// input is then read as the run's one element). A folded data-subscript
     /// gather is always pre-loaded.
@@ -1340,11 +1319,6 @@ pub(crate) struct FusedSpec {
     /// pre-loads (`FusedInput::load_reg` indexes into `n_regs..n_regs +
     /// n_load_regs`).
     pub n_load_regs: GroupIx,
-    /// Step 4b: registers appended after the load registers for the
-    /// all-pointer superops ([`MicroOp::Bin3`]): one splat register per
-    /// entry of `scalars` (filled once per call) plus a trailing zero
-    /// register (the ghost read). 0 when the micro-program has no Bin3.
-    pub n_splat_regs: GroupIx,
     /// `(register, slot)` live-outs stored back to the slab.
     pub outputs: SmallVec<[(GroupIx, SlotId); 2]>,
     /// `(micro-op, output)`: the micro-op writes that entry of `outputs`

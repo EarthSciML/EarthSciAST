@@ -30,18 +30,7 @@ pub(super) fn compile(doc: serde_json::Value) -> ArrayCompiled {
 
 /// The production superop configuration (env-independent for tests).
 fn default_cfg() -> super::fuse::SuperopCfg {
-    super::fuse::SuperopCfg {
-        bin3: false,
-        ext_pairs: true,
-    }
-}
-
-/// Every superop enabled (the Bin3 A/B arm).
-fn all_superops_cfg() -> super::fuse::SuperopCfg {
-    super::fuse::SuperopCfg {
-        bin3: true,
-        ext_pairs: true,
-    }
+    super::fuse::SuperopCfg { ext_pairs: true }
 }
 
 /// Deterministic pseudo-random state in `[lo, hi)` (xorshift-style LCG).
@@ -2608,18 +2597,17 @@ fn export_demotion_skips_unread_publishes() {
     );
 }
 
-/// Step 4b superop composition: arith three-op chains must merge into `Bin3`
-/// and the extended (mask / clamp) pairs into `Bin2`, with bitwise `dy`
-/// equality across fused/unfused programs on BOTH executors (the fixture
-/// A/B) — the superops apply the identical scalar kernels in the identical
-/// order, so no bit may move.
+/// Superop composition: arith chains and the extended (mask / clamp) pairs
+/// merge into `Bin2`, with bitwise `dy` equality across fused/unfused
+/// programs on BOTH executors (the fixture A/B) — a superop applies the
+/// identical scalar kernels in the identical order, so no bit may move.
 #[test]
-fn ab_superop_bin3_and_extended_pairs() {
+fn ab_superop_extended_pairs() {
     let n = 9;
     let u = idx("u", json!("i"));
     let v = idx("v", json!("i"));
     // ((u * 2.5 + v) * u - 1.5) / (v + 3.0): a four-op arith chain plus a
-    // divisor — long enough that a Bin3 must form.
+    // divisor.
     let chain = json!({"op": "/", "args": [
         {"op": "-", "args": [
             {"op": "*", "args": [
@@ -2651,14 +2639,9 @@ fn ab_superop_bin3_and_extended_pairs() {
             ]
         }}
     });
-    // Default configuration (ext pairs on, Bin3 off) through the standard
-    // fixture A/B: fused + unfused × reference + fast executors.
-    let prog = ab_check(doc.clone(), -3.0, 3.0);
-    let has_bin3 = |p: &TapeProgram| {
-        p.fused
-            .iter()
-            .any(|f| f.micro.iter().any(|m| matches!(m, MicroOp::Bin3 { .. })))
-    };
+    // Default configuration (ext pairs on) through the standard fixture
+    // A/B: fused + unfused × reference + fast executors.
+    let prog = ab_check(doc, -3.0, 3.0);
     let has_ext_bin2 = prog.fused.iter().any(|f| {
         f.micro.iter().any(|m| {
             matches!(m, MicroOp::Bin2 { op1, op2, .. }
@@ -2671,67 +2654,6 @@ fn ab_superop_bin3_and_extended_pairs() {
         has_ext_bin2,
         "expected an extended-pair Bin2 ((Mul,Gt) or (Min,Max)) in the fused program"
     );
-    assert!(
-        !has_bin3(&prog),
-        "Bin3 must stay off in the default configuration"
-    );
-
-    // The Bin3 arm (`all_superops_cfg`, the `ESS_TAPE_BIN3=1` threshold): the
-    // three-op chain must merge, splat registers must be provisioned, and
-    // BOTH executors must stay bitwise equal to the production interpreter.
-    let compiled = compile(doc);
-    let (prog3, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg())));
-    assert!(
-        has_bin3(&prog3),
-        "expected a Bin3 superop with bin3 enabled"
-    );
-    for f in &prog3.fused {
-        let has3 = f.micro.iter().any(|m| matches!(m, MicroOp::Bin3 { .. }));
-        if has3 {
-            assert_eq!(f.n_splat_regs as usize, f.scalars.len() + 1);
-        } else {
-            assert_eq!(f.n_splat_regs, 0);
-        }
-    }
-    let n_state = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast3 = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast3.install_tape(std::sync::Arc::new(
-        taped(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg()))).0,
-    ));
-    let mut stats = RhsStats::default();
-    for seed in 0..4u64 {
-        let state = seeded_state(n_state, seed, -3.0, 3.0);
-        for &t in &[0.0, 0.37, 2.5] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
-            let mut dy = vec![0.0f64; n_state];
-            run_reference(&prog3, &compiled, &state, &param_vec, t, &mut dy);
-            for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "seed {seed} t {t}: dy[{k}] diverged: bin3 tape-ref vs interpreter"
-                );
-            }
-            let mut dy_fast = vec![0.0f64; n_state];
-            compiled.debug_eval_rhs_into(
-                &state,
-                t,
-                &param_vec,
-                &mut dy_fast,
-                &mut fast3,
-                &mut stats,
-            );
-            for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "seed {seed} t {t}: dy[{k}] diverged: bin3 FAST exec vs interpreter"
-                );
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3319,7 +3241,7 @@ fn ab_fused_box_past_u16_splits_into_groups() {
         "the fixture must put more scalar operands on the box than one group can index ({scalars})"
     );
     for f in &prog.fused {
-        let regs = f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize;
+        let regs = f.n_regs as usize + f.n_load_regs as usize;
         assert!(
             f.micro.len() < GroupIx::MAX as usize
                 && f.scalars.len() < GroupIx::MAX as usize

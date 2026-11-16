@@ -83,10 +83,7 @@ pub(super) fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
         .unwrap_or(file);
     let _env = env.enter();
     let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
-    let cfg = super::fuse::SuperopCfg {
-        bin3: false,
-        ext_pairs: true,
-    };
+    let cfg = super::fuse::SuperopCfg { ext_pairs: true };
     let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(cfg)));
     let (prog_uf, report_uf) = taped(compiled.build_tape_opts(&HashSet::new(), None));
     let unfused_len = prog_uf.instrs.len();

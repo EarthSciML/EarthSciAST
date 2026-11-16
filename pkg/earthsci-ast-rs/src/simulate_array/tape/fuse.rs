@@ -374,9 +374,9 @@ impl GBuilder {
     }
 
     /// Whether one more member keeps every group-local index inside
-    /// [`GroupIx`]. The register file (`n_regs + n_load_regs +
-    /// n_splat_regs`) is bounded by `micro + inputs + scalars + 1`, one
-    /// member adds at most one micro-op, three inputs and three scalars, and
+    /// [`GroupIx`]. The register file (`n_regs + n_load_regs`) is bounded
+    /// by `micro + inputs`, one member adds at most one micro-op, three
+    /// inputs and three scalars, and
     /// `GroupIx::MAX` itself is the `load_reg` sentinel. A full group is
     /// flushed and a fresh one opened, which only moves where the slab is
     /// written.
@@ -1353,22 +1353,13 @@ fn bin2_arith(op: BinCode) -> bool {
 /// before trusting them for a different shape of workload.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SuperopCfg {
-    /// Merge `+ - * /` three-op chains into [`MicroOp::Bin3`]. Default OFF: it
-    /// measured slower — the chunked executor is bound by the per-op loads/stores
-    /// through the (L2-resident) register file, not by dispatch, and Bin3's
-    /// all-pointer form adds a fourth input stream plus splat-register traffic
-    /// that outweighs the two intermediate round-trips it saves. Opt-in via
-    /// `ESS_TAPE_BIN3=1`: a TUNING THRESHOLD, and under `native` a refusal
-    /// boundary rather than a fallback trigger — moving it changes which
-    /// program is built, never which evaluator runs
-    /// (`esm-libraries-spec.md` §2.5.10).
-    pub bin3: bool,
     /// Extend Bin2 beyond the `+ - * /` square to the mask/clamp pairs of
     /// [`bin2_pair_ok`]. Default ON: faster in the generic build, neutral under
     /// the SIMD clones, and fewer element-ops either way.
-    /// `ESS_TAPE_EXTPAIR_DISABLE=1` reverts: a TUNING THRESHOLD like
-    /// `ESS_TAPE_BIN3`, shaping the program a compiler builds and never
-    /// selecting a different evaluator.
+    /// `ESS_TAPE_EXTPAIR_DISABLE=1` reverts: a TUNING THRESHOLD, and under
+    /// `native` a refusal boundary rather than a fallback trigger — moving it
+    /// changes which program is built, never which evaluator runs
+    /// (`esm-libraries-spec.md` §2.5.10).
     pub ext_pairs: bool,
 }
 
@@ -1383,7 +1374,6 @@ impl SuperopCfg {
                 .unwrap_or(false)
         };
         *CFG.get_or_init(|| SuperopCfg {
-            bin3: truthy("ESS_TAPE_BIN3"),
             ext_pairs: !truthy("ESS_TAPE_EXTPAIR_DISABLE"),
         })
     }
@@ -1441,12 +1431,6 @@ fn for_each_operand(op: &MicroOp, mut f: impl FnMut(&MRef)) {
             f(a);
             f(b);
             f(c);
-        }
-        MicroOp::Bin3 { a, b, c, d, .. } => {
-            f(a);
-            f(b);
-            f(c);
-            f(d);
         }
     }
 }
@@ -1631,12 +1615,6 @@ fn for_each_operand_mut(op: &mut MicroOp, mut f: impl FnMut(&mut MRef)) {
             f(b);
             f(c);
         }
-        MicroOp::Bin3 { a, b, c, d, .. } => {
-            f(a);
-            f(b);
-            f(c);
-            f(d);
-        }
     }
 }
 
@@ -1649,7 +1627,6 @@ fn set_micro_out(op: &mut MicroOp, r: GroupIx) {
         | MicroOp::Mov { out, .. }
         | MicroOp::Select { out, .. }
         | MicroOp::Bin2 { out, .. }
-        | MicroOp::Bin3 { out, .. }
         | MicroOp::Load { out, .. }
         | MicroOp::Scan { out, .. } => *out = r,
     }
@@ -1664,7 +1641,6 @@ pub(super) fn micro_out(op: &MicroOp) -> GroupIx {
         | MicroOp::Mov { out, .. }
         | MicroOp::Select { out, .. }
         | MicroOp::Bin2 { out, .. }
-        | MicroOp::Bin3 { out, .. }
         | MicroOp::Load { out, .. }
         | MicroOp::Scan { out, .. } => *out,
     }
@@ -1720,9 +1696,6 @@ fn mop_label(op: &MicroOp) -> String {
         MicroOp::Bin2 { op1, op2, swap, .. } => {
             format!("Bin2({op1:?},{op2:?}{})", if *swap { ",swap" } else { "" })
         }
-        MicroOp::Bin3 { op1, op2, op3, .. } => {
-            format!("Bin3({op1:?},{op2:?},{op3:?})")
-        }
     }
 }
 
@@ -1757,7 +1730,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], c
                 count(a, &mut uses);
                 count(b, &mut uses);
             }
-            MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } => unreachable!("peephole runs once"),
+            MicroOp::Bin2 { .. } => unreachable!("peephole runs once"),
         }
     }
     for &(ssa, _) in outputs.iter() {
@@ -1789,62 +1762,6 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], c
     };
     let mut i = 0usize;
     while i < micro.len() {
-        // Try to merge micro[i..i+3] into a Bin3 (a `+ - * /` three-op chain
-        // whose two intermediates are each single-use, consumed by the next
-        // op), then micro[i..i+2] into a Bin2.
-        if i + 2 < micro.len() && cfg.bin3 {
-            if let (
-                MicroOp::Bin {
-                    op: op1,
-                    a,
-                    b,
-                    out: t1,
-                },
-                MicroOp::Bin {
-                    op: op2,
-                    a: ca,
-                    b: cb,
-                    out: t2,
-                },
-                MicroOp::Bin {
-                    op: op3,
-                    a: da,
-                    b: db,
-                    ..
-                },
-            ) = (&micro[i], &micro[i + 1], &micro[i + 2])
-            {
-                if let (Some((swap2, other2)), Some((swap3, other3))) =
-                    (consumes(ca, cb, *t1), consumes(da, db, *t2))
-                {
-                    if uses[*t1 as usize] == 1
-                        && uses[*t2 as usize] == 1
-                        && bin2_arith(*op1)
-                        && bin2_arith(*op2)
-                        && bin2_arith(*op3)
-                        && *other3 != MRef::Reg(*t1)
-                    {
-                        let new_id = merged.len() as GroupIx;
-                        let mop = MicroOp::Bin3 {
-                            op1: *op1,
-                            a: remap(a, &new_of),
-                            b: remap(b, &new_of),
-                            op2: *op2,
-                            c: remap(other2, &new_of),
-                            swap2,
-                            op3: *op3,
-                            d: remap(other3, &new_of),
-                            swap3,
-                            out: new_id,
-                        };
-                        merged.push(mop);
-                        new_of[i + 2] = Some(new_id); // final consumer's value
-                        i += 3;
-                        continue;
-                    }
-                }
-            }
-        }
         // Try to merge micro[i] (producer) into micro[i+1] (consumer).
         if i + 1 < micro.len() {
             if let (
@@ -1904,7 +1821,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], c
                 *b = remap(b, &new_of);
                 *out = new_id;
             }
-            MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } => unreachable!(),
+            MicroOp::Bin2 { .. } => unreachable!(),
         }
         merged.push(op);
         new_of[i] = Some(new_id);
@@ -2018,15 +1935,6 @@ pub(super) fn allocate_registers(
                 remap(a);
                 remap(b);
                 remap(c);
-                *out = phys_of[*out as usize];
-            }
-            MicroOp::Bin3 {
-                a, b, c, d, out, ..
-            } => {
-                remap(a);
-                remap(b);
-                remap(c);
-                remap(d);
                 *out = phys_of[*out as usize];
             }
         }
@@ -2607,14 +2515,6 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
             n_inner: r.n_inner,
         }
     });
-    // Bin3 executes all-pointer: its scalar operands read from per-scalar
-    // splat registers and ghost reads from a trailing zero register, all
-    // appended after the load registers and filled once per call.
-    let n_splat_regs = if micro.iter().any(|m| matches!(m, MicroOp::Bin3 { .. })) {
-        scalars.len() as GroupIx + 1
-    } else {
-        0
-    };
     let schedule = build_schedule(&shape, &new_segs);
     let interleave = reduce.as_ref().and_then(|r| {
         const MAX_INTERLEAVED: usize = 16;
@@ -2635,14 +2535,11 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     // appended after the micro register file.
     let mut n_load_regs: GroupIx = 0;
     // A zero-stride input (constant along each run) is read as a per-run
-    // scalar instead, except under the all-pointer Bin3 superop, which
-    // needs every operand in a register.
+    // scalar instead.
     for inp in inputs.iter_mut() {
         if inp.index.is_some_and(|fi| fi.preloaded())
             || inp.gather.as_deref().is_some_and(|g| !g.whole)
-            || inp.shifted_ix.is_some()
-                && inp.elem_stride != 1
-                && (inp.elem_stride != 0 || n_splat_regs > 0)
+            || inp.shifted_ix.is_some() && inp.elem_stride != 1 && inp.elem_stride != 0
         {
             inp.load_reg = n_regs + n_load_regs;
             n_load_regs += 1;
@@ -2671,7 +2568,6 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         micro,
         n_regs,
         n_load_regs,
-        n_splat_regs,
         outputs,
         direct,
         scan_fuse,

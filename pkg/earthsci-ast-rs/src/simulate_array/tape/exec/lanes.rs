@@ -386,10 +386,7 @@ fn exec_block(
                 regs[*out as usize] = if c != 0.0 { x } else { y };
             }
             MicroOp::Mov { a, out } => regs[*out as usize] = get(a, regs),
-            MicroOp::Bin2 { .. }
-            | MicroOp::Bin3 { .. }
-            | MicroOp::Scan { .. }
-            | MicroOp::Load { .. } => {
+            MicroOp::Bin2 { .. } | MicroOp::Scan { .. } | MicroOp::Load { .. } => {
                 unreachable!("a lane program holds no superops, scans or loads")
             }
         }
@@ -585,10 +582,7 @@ unsafe fn micro_chunk(op: &MicroOp, msrc: &impl Fn(&MRef) -> MSrc, dst: *mut f64
             fch_sel(dst, c, msrc(cond), msrc(a), msrc(b))
         },
         MicroOp::Mov { a, .. } => unsafe { fch1(dst, c, msrc(a), |x| x) },
-        MicroOp::Bin2 { .. }
-        | MicroOp::Bin3 { .. }
-        | MicroOp::Scan { .. }
-        | MicroOp::Load { .. } => {
+        MicroOp::Bin2 { .. } | MicroOp::Scan { .. } | MicroOp::Load { .. } => {
             unreachable!("a lane program holds no superops, scans or loads")
         }
     }

@@ -180,37 +180,6 @@ unsafe fn fch3(
     }
 }
 
-/// `dst[k] = g(a[k], b[k], c[k], d[k])` over one chunk, all operands
-/// pointers (the Bin3 superop; scalar/ghost operands were resolved to splat
-/// registers by the caller). See `fch1` for the aliasing argument; operands
-/// may alias each other, which shared slices permit.
-#[inline(always)]
-unsafe fn fch4(
-    dst: *mut f64,
-    n: usize,
-    pa: *const f64,
-    pb: *const f64,
-    pc: *const f64,
-    pd: *const f64,
-    g: impl Fn(f64, f64, f64, f64) -> f64 + Copy,
-) {
-    unsafe {
-        let o = std::slice::from_raw_parts_mut(dst, n);
-        let a = std::slice::from_raw_parts(pa, n);
-        let b = std::slice::from_raw_parts(pb, n);
-        let c = std::slice::from_raw_parts(pc, n);
-        let d = std::slice::from_raw_parts(pd, n);
-        for k in 0..n {
-            *o.get_unchecked_mut(k) = g(
-                *a.get_unchecked(k),
-                *b.get_unchecked(k),
-                *c.get_unchecked(k),
-                *d.get_unchecked(k),
-            );
-        }
-    }
-}
-
 /// One chunk (`c` values at flat box offset `at`) of an absorbed scan along
 /// rows of `row` elements: the running value restarts at `init` at each
 /// row's first element and otherwise continues from `*carry`, which it
@@ -1737,27 +1706,6 @@ unsafe fn exec_fused_runs(
             fs.direct.iter().any(|&(_, d)| d as usize == k)
         }
     };
-    // Bin3 splat registers: one FCHUNK broadcast per scalar plus a zero
-    // register (the ghost read), filled once per call. The values are the
-    // EXACT scalars / the exact `+0.0` ghost, so an all-pointer superop
-    // reads identical bits to the `MSrc::C` broadcast it replaces.
-    let splat_base = fs.n_regs as usize + fs.n_load_regs as usize;
-    let zero_ix = splat_base + svals.len();
-    if fs.n_splat_regs > 0 {
-        debug_assert_eq!(fs.n_splat_regs as usize, svals.len() + 1);
-        unsafe {
-            for (i, &v) in svals.iter().enumerate() {
-                let p = rp.add((splat_base + i) * cs);
-                for k in 0..cs {
-                    *p.add(k) = v;
-                }
-            }
-            let z = rp.add(zero_ix * cs);
-            for k in 0..cs {
-                *z.add(k) = 0.0;
-            }
-        }
-    }
     let RunCursor {
         frames,
         in_delta,
@@ -1893,27 +1841,6 @@ unsafe fn exec_fused_runs(
                                         bases[*i as usize].offset(o as isize + done as isize)
                                     })
                                 }
-                            }
-                        }
-                    }
-                }
-            };
-            // All-pointer operand resolution for the Bin3 superop: scalar
-            // operands point at their splat registers, ghost reads at the
-            // zero register — same values, so same bits, with ONE loop shape
-            // per (op1, op2, op3) instead of 2^4 operand-kind arms.
-            let msrc_p = |m: &MRef| -> *const f64 {
-                match msrc(m) {
-                    MSrc::P(p) => p,
-                    MSrc::C(v) => {
-                        if v == 0.0 && v.is_sign_positive() {
-                            unsafe { rp.add(zero_ix * cs) as *const f64 }
-                        } else {
-                            match m {
-                                MRef::Scal(i) => unsafe {
-                                    rp.add((splat_base + *i as usize) * cs) as *const f64
-                                },
-                                _ => unreachable!("non-scalar constant operand"),
                             }
                         }
                     }
@@ -2186,118 +2113,6 @@ unsafe fn exec_fused_runs(
                             (Mul, Max) => b2!(mul, max),
                             (Max, Mul) => b2!(max, mul),
                             other => unreachable!("Bin2 pair not monomorphized ({other:?})"),
-                        }
-                    }
-                    MicroOp::Bin3 {
-                        op1,
-                        a,
-                        b,
-                        op2,
-                        c: c3,
-                        swap2,
-                        op3,
-                        d: d4,
-                        swap3,
-                        out,
-                    } => {
-                        let (pa, pb, pc, pd) = (msrc_p(a), msrc_p(b), msrc_p(c3), msrc_p(d4));
-                        let dst = dst_of(mi, *out);
-                        // See `Bin2`: Float32 composes the three shared kernels
-                        // in the same order rather than the f64-only closures.
-                        if crate::precision::is_f32() {
-                            let f1 = binary_kernel_of(*op1);
-                            let f2 = binary_kernel_of(*op2);
-                            let f3 = binary_kernel_of(*op3);
-                            match (*swap2, *swap3) {
-                                (false, false) => unsafe {
-                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                        f3(f2(f1(x, y), z), w)
-                                    })
-                                },
-                                (true, false) => unsafe {
-                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                        f3(f2(z, f1(x, y)), w)
-                                    })
-                                },
-                                (false, true) => unsafe {
-                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                        f3(w, f2(f1(x, y), z))
-                                    })
-                                },
-                                (true, true) => unsafe {
-                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                        f3(w, f2(z, f1(x, y)))
-                                    })
-                                },
-                            }
-                            continue;
-                        }
-                        use BinCode::{Add, Div, Mul, Sub};
-                        // Monomorphized composition of the same three kernel
-                        // bodies applied in order:
-                        // t1 = op1(a, b); t2 = swap2 ? op2(c, t1) : op2(t1, c);
-                        // out = swap3 ? op3(d, t2) : op3(t2, d).
-                        macro_rules! b3 {
-                            ($f1:expr, $f2:expr, $f3:expr) => {
-                                match (*swap2, *swap3) {
-                                    (false, false) => unsafe {
-                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                            $f3($f2($f1(x, y), z), w)
-                                        })
-                                    },
-                                    (true, false) => unsafe {
-                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                            $f3($f2(z, $f1(x, y)), w)
-                                        })
-                                    },
-                                    (false, true) => unsafe {
-                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                            $f3(w, $f2($f1(x, y), z))
-                                        })
-                                    },
-                                    (true, true) => unsafe {
-                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                            $f3(w, $f2(z, $f1(x, y)))
-                                        })
-                                    },
-                                }
-                            };
-                        }
-                        let add = |x: f64, y: f64| x + y;
-                        let sub = |x: f64, y: f64| x - y;
-                        let mul = |x: f64, y: f64| x * y;
-                        let div = |x: f64, y: f64| x / y;
-                        macro_rules! b3_op12 {
-                            ($f3:expr) => {
-                                match (op1, op2) {
-                                    (Add, Add) => b3!(add, add, $f3),
-                                    (Add, Sub) => b3!(add, sub, $f3),
-                                    (Add, Mul) => b3!(add, mul, $f3),
-                                    (Add, Div) => b3!(add, div, $f3),
-                                    (Sub, Add) => b3!(sub, add, $f3),
-                                    (Sub, Sub) => b3!(sub, sub, $f3),
-                                    (Sub, Mul) => b3!(sub, mul, $f3),
-                                    (Sub, Div) => b3!(sub, div, $f3),
-                                    (Mul, Add) => b3!(mul, add, $f3),
-                                    (Mul, Sub) => b3!(mul, sub, $f3),
-                                    (Mul, Mul) => b3!(mul, mul, $f3),
-                                    (Mul, Div) => b3!(mul, div, $f3),
-                                    (Div, Add) => b3!(div, add, $f3),
-                                    (Div, Sub) => b3!(div, sub, $f3),
-                                    (Div, Mul) => b3!(div, mul, $f3),
-                                    (Div, Div) => b3!(div, div, $f3),
-                                    other => {
-                                        unreachable!("Bin3 restricted to + - * / ({other:?})")
-                                    }
-                                }
-                            };
-                        }
-                        match op3 {
-                            Add => b3_op12!(add),
-                            Sub => b3_op12!(sub),
-                            Mul => b3_op12!(mul),
-                            Div => b3_op12!(div),
-                            other => unreachable!("Bin3 restricted to + - * / ({other:?})"),
                         }
                     }
                 }
@@ -2626,10 +2441,10 @@ pub(super) unsafe fn exec_fused_runs_avx512(
 /// * `Bin`/`Un` apply [`binary_kernel_of`] / [`unary_kernel_of`] — the same
 ///   fn-pointer tables the unfused instructions dispatch through.
 /// * `Neg` is `x → -x`, NOT `0 - x` (which differs on signed zero).
-/// * `Bin2`/`Bin3` operand orientation: the fused intermediate always feeds
-///   the NEXT kernel, and `swap*` records which SIDE it enters on —
-///   `t = op1(a, b); out = swap ? op2(c, t) : op2(t, c)` (likewise `swap2`
-///   then `swap3` for `Bin3`). The constituent kernels are applied strictly
+/// * `Bin2` operand orientation: the fused intermediate always feeds the
+///   NEXT kernel, and `swap` records which SIDE it enters on —
+///   `t = op1(a, b); out = swap ? op2(c, t) : op2(t, c)`. The constituent
+///   kernels are applied strictly
 ///   in order — never contracted into a hardware FMA, which would change
 ///   bits.
 /// * `Scan` folds into `carries[carry + at % post]`, restarting at `init`
@@ -2716,32 +2531,6 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
                 binary_kernel_of(*op2)(cv, t)
             } else {
                 binary_kernel_of(*op2)(t, cv)
-            };
-        }
-        MicroOp::Bin3 {
-            op1,
-            a,
-            b,
-            op2,
-            c,
-            swap2,
-            op3,
-            d,
-            swap3,
-            out,
-        } => {
-            let t1 = binary_kernel_of(*op1)(get(a, regs), get(b, regs));
-            let cv = get(c, regs);
-            let t2 = if *swap2 {
-                binary_kernel_of(*op2)(cv, t1)
-            } else {
-                binary_kernel_of(*op2)(t1, cv)
-            };
-            let dv = get(d, regs);
-            regs[*out as usize] = if *swap3 {
-                binary_kernel_of(*op3)(dv, t2)
-            } else {
-                binary_kernel_of(*op3)(t2, dv)
             };
         }
     }

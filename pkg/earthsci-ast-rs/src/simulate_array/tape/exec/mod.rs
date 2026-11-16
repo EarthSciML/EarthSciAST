@@ -371,7 +371,7 @@ impl TapeExec {
         let max_fregs = prog
             .fused
             .iter()
-            .map(|f| f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize)
+            .map(|f| f.n_regs as usize + f.n_load_regs as usize)
             .max()
             .unwrap_or(0);
         #[cfg(not(target_arch = "wasm32"))]

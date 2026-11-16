@@ -3193,7 +3193,7 @@ arithmetic. In the Rust binding the audit found **five** places that compute
 | `apply_binary` / `apply_unary`, `binary_kernel_of` / `unary_kernel_of` | the shared tables — precision-aware |
 | `vectorized::vec_combine`'s monomorphized arms | hand-copied f64 closures; **this is the one the witness document actually executed** |
 | `tape::exec::fused`'s `dispatch_bin_kernel!` / `dispatch_un_kernel!` | hand-copied f64 closures |
-| `tape::exec::fused`'s `MicroOp::Bin2` / `Bin3` compositions | hand-copied f64 closures |
+| `tape::exec::fused`'s `MicroOp::Bin2` compositions | hand-copied f64 closures |
 | `vectorized::eval_vec_contracted`'s sum-of-products fusion | hand-written `*o += x * s` |
 
 Each was there for a good reason (removing an indirect call from an element

@@ -562,10 +562,7 @@ fn a_failed_sub_box_lowering_falls_back_to_the_full_box() {
     let pv = compiled.debug_resolve_params(&HashMap::new());
     let fused = taped(compiled.build_tape_opts(
         &HashSet::new(),
-        Some(super::fuse::SuperopCfg {
-            bin3: false,
-            ext_pairs: true,
-        }),
+        Some(super::fuse::SuperopCfg { ext_pairs: true }),
     ))
     .0;
     let unfused = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;

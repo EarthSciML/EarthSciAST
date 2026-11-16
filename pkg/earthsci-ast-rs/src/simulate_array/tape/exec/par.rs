@@ -743,9 +743,7 @@ impl FusedWorkers {
             call_ways: 1,
             threads: 1,
             workers: Vec::new(),
-            fregs_len: most(|f| {
-                f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize
-            }) * super::fused::FCHUNK,
+            fregs_len: most(|f| f.n_regs as usize + f.n_load_regs as usize) * super::fused::FCHUNK,
             depth: most(|f| f.schedule.depth),
             shifted: most(n_shifted),
             scans: most(n_scans),

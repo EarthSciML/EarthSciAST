@@ -52,10 +52,7 @@ fn assert_bits_eq(a: &[f64], b: &[f64], what: &str) {
 }
 
 fn cfg() -> super::fuse::SuperopCfg {
-    super::fuse::SuperopCfg {
-        bin3: false,
-        ext_pairs: true,
-    }
+    super::fuse::SuperopCfg { ext_pairs: true }
 }
 
 /// A fresh scratch carrying `prog`.
