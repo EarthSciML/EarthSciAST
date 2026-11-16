@@ -15,7 +15,9 @@ whose first element is its tag:
 * ``("jstr", s)``: a LaTeX JSON string inside an escape node's fields;
 * ``("esc", op)``: LaTeX ``\\esm{op}``;
 * ``("code", value)``: Typst ``#value``;
-* ``("units", ((symbol, exponent), …))``: the unit after a quantity's number.
+* ``("units", ((symbol, exponent), …))``: the unit after a quantity's number;
+* ``("arrc", n)``: LaTeX ``\\begin{array}{c…c}`` with ``n`` columns, the opener of a
+  constant matrix wider than ``bmatrix`` allows.
 """
 
 from __future__ import annotations
@@ -101,14 +103,10 @@ RBKG = "Rbkg"
 LR = "Lr"
 #: The LaTeX marker ``\\limits``.
 LIMITS_L = "LimitsL"
-# makearray: LaTeX ``\\begin{array}{l|l}`` ``\\end{array}``; the region product with
-# the bracket of the next bound pair, LaTeX ``\\times [``, Typst ``times [``; the Typst
-# named arguments ``delim`` and ``augment`` of its ``mat(…)``
+# makearray: LaTeX ``\\begin{array}{l|l}`` ``\\end{array}`` (the closer also ends a
+# wide constant matrix, opened by the ``("arrc", n)`` token)
 BARR = "Barr"
 EARR = "Earr"
-TIMES_LBK = "TimesLbk"
-DELIM_K = "DelimK"
-AUG_K = "AugK"
 # a set of names, LaTeX ``\\{`` ``\\}``, Typst ``{`` ``}`` (the ``args`` of a ``faq``)
 LSET = "Lset"
 RSET = "Rset"

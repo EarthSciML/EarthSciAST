@@ -90,9 +90,6 @@ KW_CHARS = {
     K.LIMITS: "limits",
     K.LR: "lr",
     K.NL: "\\",
-    K.TIMES_LBK: "times [",
-    K.DELIM_K: "delim",
-    K.AUG_K: "augment",
     K.LSET: "{",
     K.RSET: "}",
 }
@@ -185,7 +182,6 @@ def _pretty(p: Any, t1: Any, t2: Any) -> bool:
         or (t1 == K.MINUS and p is not None and atom_end(p))
         or (atom_end(t1) and atom_start(t2))
         or (type(t2) is tuple and t2[0] == "units")
-        or t2 == K.TIMES_LBK
     )
 
 
@@ -251,8 +247,6 @@ IDENT_KW = {
     "in": K.INN,
     "limits": K.LIMITS,
     "lr": K.LR,
-    "delim": K.DELIM_K,
-    "augment": K.AUG_K,
 }
 
 
@@ -381,11 +375,6 @@ def _lex_ident(s: str, i: int):
         if s.startswith(".node", j):
             return K.ESMNODE, j + 5
         return None
-    if w == "times":
-        k = _skip(s, j)
-        if s.startswith("[", k):
-            return K.TIMES_LBK, k + 1
-        return K.TIMES, j
     k = IDENT_KW.get(w)
     if k is not None:
         return k, j

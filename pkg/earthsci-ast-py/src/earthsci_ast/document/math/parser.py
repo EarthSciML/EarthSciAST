@@ -21,9 +21,8 @@ from . import token as K
 from . import units as U
 from .expr import DEPRECATED_OPS, REMOVED_SET, is_formula, is_greek, is_letter, op_ok, pieces
 from .printer import (
+    BMAT_MAX_COLS,
     CALL_OPS,
-    CORE_OPS,
-    FIELD_CALL_OPS,
     Ctx,
     FaqForm,
     MkForm,
@@ -33,6 +32,7 @@ from .printer import (
     mk_json,
     mk_node,
     node,
+    prints_call_form,
     simple_tok,
     tname_ok,
     tparams,
@@ -93,12 +93,6 @@ def atom_start(t: Any) -> bool:
     if type(t) is tuple:
         return t[0] in _ATOM_START_TAGS
     return False
-
-
-def is_times_lbk(t: Any) -> bool:
-    """``Math.isTimesLbk``: the region product with its bracket (``\\times [``);
-    outside a ``makearray`` region it reads as ``\\times`` then ``[``."""
-    return t == K.TIMES_LBK
 
 
 def is_lp(t: Any) -> bool:
@@ -728,14 +722,6 @@ def p_mul(c: Ctx, f: int, ts: list, i: int):
                     return None
                 acc = [x]
                 i = r[1]
-            elif is_times_lbk(t):
-                ts2 = list(ts)
-                ts2[i] = K.LBK
-                r = p_not(c, f, ts2, i)
-                if r is None:
-                    return None
-                acc.append(r[0])
-                i = r[1]
             elif t is not None and atom_start(t) and not neg_tok(t):
                 r = p_not(c, f, ts, i)
                 if r is None:
@@ -989,7 +975,7 @@ def _p_opn(c: Ctx, f: int, n: str, ts: list, i: int):
     f -= 1
     t0 = _at(ts, i)
     if t0 is None:
-        return (t_node(n, []), i) if tname_ok(n) else None
+        return (t_node(n, []), i) if _bare_ok(c, n) else None
     if is_lp(t0):
         r = _p_call_args(c, f, ts, i + 1)
         if r is None:
@@ -1022,23 +1008,31 @@ def _p_opn(c: Ctx, f: int, n: str, ts: list, i: int):
                 return mk_node(n, vs, []), j
             return None
         if tj == K.SEMI:
-            if (
-                n in REMOVED_SET
-                or (n in CORE_OPS and n not in FIELD_CALL_OPS)
-                or tparams(c.s, n) is not None
-            ):
+            if n in REMOVED_SET:
                 return None
             vs = _all_pos(args)
             fr = _p_fields(c, f, ts, j + 1)
-            if vs is not None and fr is not None and _at(ts, fr[1]) == K.RP:
-                return mk_node(n, vs, fr[0]), fr[1] + 1
-            return None
+            if vs is None or fr is None or _at(ts, fr[1]) != K.RP:
+                return None
+            x = mk_node(n, vs, fr[0])
+            # canonical only: the node the printer writes in this call form
+            return (x, fr[1] + 1) if prints_call_form(c, x) else None
         return None
     if t0 == K.US:
         return _p_d_call(c, f, ts, i + 1) if n == "D" else None
-    if tname_ok(n):
+    if _bare_ok(c, n):
         return t_node(n, []), i
     return None
+
+
+def _bare_ok(c: Ctx, n: str) -> bool:
+    """A bare ``\\operatorname{n}``: the template application with no bindings,
+    which prints bare unless a template ``n`` with no parameters is in scope (that
+    one prints ``\\operatorname{n}()``)."""
+    if not tname_ok(n):
+        return False
+    ps = tparams(c.s, n)
+    return ps is None or len(ps) > 0
 
 
 def _p_d_call(c: Ctx, f: int, ts: list, i: int):
@@ -1135,7 +1129,18 @@ def p_prim(c: Ctx, f: int, ts: list, i: int):
     t1 = _at(ts, i + 1)
     if t == K.BMAT:
         r = _p_grid(K.AMP, K.NL, K.EMAT, ts, i + 1)
-        return None if r is None else _const_tail(_grid_json(r[0]), ts, r[1])
+        if r is None or any(len(q) > BMAT_MAX_COLS for q in r[0]):
+            return None
+        return _const_tail(_grid_json(r[0]), ts, r[1])
+    if t == K.LBKG and _tag(t1) == "arrc":
+        # a matrix wider than ``bmatrix`` allows: one ``c`` per column
+        r = _p_grid(K.AMP, K.NL, K.EARR, ts, i + 2)
+        n = t1[1]
+        if r is None or _at(ts, r[1]) != K.RBKG or n <= BMAT_MAX_COLS:
+            return None
+        if any(len(q) != n for q in r[0]):
+            return None
+        return _const_tail([list(q) for q in r[0]], ts, r[1] + 1)
     if t == K.VEC and t1 is not None:
         if not is_lp(t1):
             return None
@@ -1423,6 +1428,9 @@ def _p_red_body(c: Ctx, f: int, red: str, marked: bool, ts: list, i: int):
     sp = _p_sup(c.sf, ts, rows[1])
     if rp is None or sp is None:
         return None
+    if marked and sp[0]:
+        # a marked head's ``args`` are the body's arrays: no set is printed with it
+        return None
     body = p_mul(c, f, ts, sp[1])
     if body is None:
         return None
@@ -1447,10 +1455,8 @@ def _with_out(form: FaqForm, outs: list, ors: list) -> FaqForm:
 
 
 def _with_sup(form: FaqForm, st: list) -> FaqForm:
-    """``Math.withSup``: a superscript set read after the output entries replaces
-    the reduction's own."""
-    if not st:
-        return form
+    """``Math.withSup``: the superscript set read on the bracket of the output
+    form (the inner reduction carries none)."""
     return FaqForm(form.red, form.marked, form.out, form.ranges, form.expr, form.filter, st)
 
 
@@ -1470,6 +1476,9 @@ def _p_red(c: Ctx, f: int, ts: list, i: int):
         if b is None:
             return None
         form, j2 = b
+        if form.set:
+            # the set of an output form is written on the bracket only
+            return None
         for k, tk in enumerate(rbr):
             if _at(ts, j2 + k) != tk:
                 return None
@@ -1477,6 +1486,8 @@ def _p_red(c: Ctx, f: int, ts: list, i: int):
         if sp is None:
             return None
         st, j3 = sp
+        if marked and st:
+            return None
         for k, tk in enumerate(sub):
             if _at(ts, j3 + k) != tk:
                 return None
@@ -1663,9 +1674,10 @@ def _p_cases(c: Ctx, f: int, ts: list, i: int):
 
 def _mat_head(ts: list, i: int) -> bool:
     """The rest of the Typst table head after ``mat(``:
-    ``delim: "[", augment: #1,``."""
+    ``delim: "[", augment: #1,``. ``delim`` and ``augment`` are ordinary words,
+    named arguments only at this position."""
     if [_at(ts, i + k) for k in (0, 1, 2, 3, 4, 5, 7)] != [
-        K.DELIM_K, K.COLON, ("txt", "["), K.COMMA, K.AUG_K, K.COLON, K.COMMA
+        ("word", "delim"), K.COLON, ("txt", "["), K.COMMA, ("word", "augment"), K.COLON, K.COMMA
     ]:  # fmt: skip
         return False
     t = _at(ts, i + 6)
@@ -1722,15 +1734,15 @@ def _p_pair(c: Ctx, f: int, ts: list, i: int):
 
 def _p_reg_tail(c: Ctx, f: int, ts: list, i: int):
     """``Math.pRegTail``: the further bound pairs of a region, each after
-    ``\\times [``."""
+    ``\\times [`` (the two tokens ``\\times`` and ``[``)."""
     out = []
     while True:
         if f == 0:
             return None
         f -= 1
-        if not is_times_lbk(_at(ts, i)):
+        if _at(ts, i) != K.TIMES or _at(ts, i + 1) != K.LBK:
             return out, i
-        r = _p_pair(c, f, ts, i + 1)
+        r = _p_pair(c, f, ts, i + 2)
         if r is None:
             return None
         out.append(r[0])

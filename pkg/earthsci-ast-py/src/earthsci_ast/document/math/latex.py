@@ -184,7 +184,6 @@ KW_CHARS = {
     K.RBKG: "\\right]",
     K.BARR: "\\begin{array}{l|l}",
     K.EARR: "\\end{array}",
-    K.TIMES_LBK: "\\times [",
     K.LSET: "\\{",
     K.RSET: "\\}",
 }
@@ -215,6 +214,8 @@ def tok_chars(t: Any) -> str:
         return "\\esm{" + esc_t(v) + "}"
     if tag == "units":
         return "\\,\\mathrm{" + U.latex_body(v) + "}"
+    if tag == "arrc":
+        return "\\begin{array}{" + "c" * v + "}"
     return ""
 
 
@@ -261,7 +262,6 @@ def pretty(p: Any, t1: Any, t2: Any) -> bool:
         or (t2 == K.MINUS and atom_end(t1))
         or (t1 == K.MINUS and p is not None and atom_end(p))
         or (atom_end(t1) and atom_start(t2) and t2 != K.LP and t2 != K.LBK)
-        or t2 == K.TIMES_LBK
         or t1 == K.BARR
         or t2 == K.EARR
     )
@@ -335,19 +335,6 @@ def _let_end(s: str, i: int) -> int:
     return i
 
 
-def times_tok(s: str, i: int) -> tuple:
-    """``Latex.timesTok``: ``\\times`` followed (after white space) by ``[``: the
-    region product of a ``makearray`` with the bracket of the next bound pair, one
-    token; any other ``\\times`` is a product."""
-    j = i
-    n = len(s)
-    while j < n and s[j] in _WS:
-        j += 1
-    if j < n and s[j] == "[":
-        return K.TIMES_LBK, j + 1
-    return K.TIMES, i
-
-
 def ctrl_tok(w: str, s: str, i: int):
     """``Latex.ctrlTok``: after a control word: its token."""
     if w in ("mathit", "mathrm", "operatorname", "text", "esm"):
@@ -391,6 +378,12 @@ def ctrl_tok(w: str, s: str, i: int):
             return K.BMAT, i + 9
         if s.startswith("{array}{l|l}", i):
             return K.BARR, i + 12
+        if s.startswith("{array}{c", i):
+            j = i + 8
+            while j < len(s) and s[j] == "c":
+                j += 1
+            if s.startswith("}", j):
+                return ("arrc", j - i - 8), j + 1
         return None
     if w == "end":
         if s.startswith("{cases}", i):
@@ -400,8 +393,6 @@ def ctrl_tok(w: str, s: str, i: int):
         if s.startswith("{array}", i):
             return K.EARR, i + 7
         return None
-    if w == "times":
-        return times_tok(s, i)
     if is_greek(w):
         return ("greek", w), i
     k = CTRL_KW.get(w)

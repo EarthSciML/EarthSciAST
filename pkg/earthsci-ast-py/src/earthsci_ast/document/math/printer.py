@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+from ...esm_types import NODE_ANNOTATION_KEYS
 from ..value import MISSING, Dec, Obj, look, num_wf
 from . import token as K
 from . import units as U
@@ -313,7 +314,7 @@ def opn_ok(s: str) -> bool:
 
 
 #: ``Math.annotKeys``: the fields that annotate a node.
-ANNOT_KEYS = frozenset({"id", "expect_cadence"})
+ANNOT_KEYS = NODE_ANNOTATION_KEYS
 
 
 def call_form_ok(o: str, fs: list) -> bool:
@@ -756,15 +757,24 @@ def _num_toks(ns: list) -> list:
     return [[("num", n)] for n in ns]
 
 
+#: The most columns amsmath's ``bmatrix`` typesets (its ``MaxMatrixCols``).
+BMAT_MAX_COLS = 10
+
+
 def arr_toks(sf: str, a: tuple) -> list:
-    """``Math.arrToks``: LaTeX ``bmatrix``, Typst ``vec(…)`` / ``mat(…)``."""
+    """``Math.arrToks``: LaTeX ``bmatrix`` (a matrix wider than
+    :data:`BMAT_MAX_COLS` as ``\\left[\\begin{array}{c…c} … \\end{array}\\right]``),
+    Typst ``vec(…)`` / ``mat(…)``."""
     kind, v = a
     if kind == "col":
         if sf == K.LATEX:
             return [K.BMAT, *sep_by([K.NL], _num_toks(v)), K.EMAT]
         return [K.VEC, K.LP, *sep_by([K.COMMA], _num_toks(v)), K.RP]
     if sf == K.LATEX:
-        return [K.BMAT, *sep_by([K.NL], [sep_by([K.AMP], _num_toks(r)) for r in v]), K.EMAT]
+        rows = sep_by([K.NL], [sep_by([K.AMP], _num_toks(r)) for r in v])
+        if len(v[0]) > BMAT_MAX_COLS:
+            return [K.LBKG, ("arrc", len(v[0])), *rows, K.EARR, K.RBKG]
+        return [K.BMAT, *rows, K.EMAT]
     return [K.MAT, K.LP, *sep_by([K.SEMI], [sep_by([K.COMMA], _num_toks(r)) for r in v]), K.RP]
 
 
@@ -1192,13 +1202,14 @@ def _reg_toks(c: Ctx, r: list) -> list:
     dimension."""
     out = [K.LBK, *_pair_toks(c, r[0]), K.RBK]
     for q in r[1:]:
-        out.extend([K.TIMES_LBK, *_pair_toks(c, q), K.RBK])
+        out.extend([K.TIMES, K.LBK, *_pair_toks(c, q), K.RBK])
     return out
 
 
 #: ``Math.matHead``: the Typst table head ``mat(delim: "[", augment: #1,``.
 MAT_HEAD = [
-    K.MAT, K.LP, K.DELIM_K, K.COLON, ("txt", "["), K.COMMA, K.AUG_K, K.COLON, ("code", 1), K.COMMA,
+    K.MAT, K.LP, ("word", "delim"), K.COLON, ("txt", "["), K.COMMA, ("word", "augment"),
+    K.COLON, ("code", 1), K.COMMA,
 ]  # fmt: skip
 
 
@@ -1260,6 +1271,25 @@ def _opn(c: Ctx, kvs: Obj) -> Out:
             ]
             return Out(10, open_toks(c.sf, o, [pa(c, 4, a) for a in args], fields))
     return _esc(c, kvs)
+
+
+def prints_call_form(c: Ctx, kvs: Obj) -> bool:
+    """The node ``kvs`` (of operator ``o``) is one the reader takes in the call
+    form ``\\operatorname{o}(…; …)``: :func:`call_form_ok` holds, ``o`` is an
+    operator name, no template ``o`` is in scope, and no native spelling applies.
+    Field keys are not checked: a key :func:`key_ok` refuses still reads. Every
+    native spelling has a fixed set of identifier keys, so a node with another key
+    has none; otherwise :func:`pr` decides."""
+    o = look("op", kvs)
+    if type(o) is not str:
+        return False
+    fs = fields_of(kvs)
+    if not (call_form_ok(o, fs) and opn_ok(o) and tparams(c.s, o) is None):
+        return False
+    if not all(key_ok(k) for k, _ in fs):
+        return True
+    ts = pr(c, kvs).toks
+    return bool(ts) and ts[0] == ("opn", o)
 
 
 def pr(c: Ctx, e: Any) -> Out:

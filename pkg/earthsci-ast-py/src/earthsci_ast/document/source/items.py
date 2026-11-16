@@ -338,7 +338,7 @@ def p_side(r: RSurf, s: str, i: int):
 
 # ## Multi-line equations (MultiLine.lean)
 
-_OPEN_KW = frozenset({K.LP, K.LPG, K.LB, K.LBK, K.BCASES, K.BMAT, K.LBKG, K.BARR, K.TIMES_LBK})
+_OPEN_KW = frozenset({K.LP, K.LPG, K.LB, K.LBK, K.BCASES, K.BMAT, K.LBKG, K.BARR})
 _CLOSE_KW = frozenset({K.RP, K.RPG, K.RB, K.RBK, K.ECASES, K.EMAT, K.RBKG, K.EARR})
 
 
@@ -348,6 +348,8 @@ def _delta(t: Any) -> int:
             return 1
         if t in _CLOSE_KW:
             return -1
+    elif t[0] == "arrc":
+        return 1
     return 0
 
 
