@@ -11,8 +11,27 @@ import { parseToks, type Kw, type Sf, type Sym, type Tok } from '../math/index.j
 import { eqSides } from './equation.js'
 import type { Eqn } from './skeleton.js'
 
-const OPENS: ReadonlySet<Kw> = new Set<Kw>(['Lp', 'Lpg', 'Lb', 'Lbk', 'Bcases', 'Bmat', 'Lbkg'])
-const CLOSES: ReadonlySet<Kw> = new Set<Kw>(['Rp', 'Rpg', 'Rb', 'Rbk', 'Ecases', 'Emat', 'Rbkg'])
+const OPENS: ReadonlySet<Kw> = new Set<Kw>([
+  'Lp',
+  'Lpg',
+  'Lb',
+  'Lbk',
+  'Bcases',
+  'Bmat',
+  'Lbkg',
+  'Barr',
+  'TimesLbk',
+])
+const CLOSES: ReadonlySet<Kw> = new Set<Kw>([
+  'Rp',
+  'Rpg',
+  'Rb',
+  'Rbk',
+  'Ecases',
+  'Emat',
+  'Rbkg',
+  'Earr',
+])
 
 /** `Source.delta`: how a token changes the delimiter depth. */
 function delta(t: Tok): number {

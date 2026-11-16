@@ -105,6 +105,11 @@ const KW_CHARS: Record<Kw, string> = {
   Limits: 'limits',
   Lr: 'lr',
   Nl: '\\',
+  TimesLbk: 'times [',
+  DelimK: 'delim',
+  AugK: 'augment',
+  Lset: '{',
+  Rset: '}',
   Rpg: '',
   Lb: '',
   Rb: '',
@@ -124,6 +129,8 @@ const KW_CHARS: Record<Kw, string> = {
   Lbkg: '',
   Rbkg: '',
   LimitsL: '',
+  Barr: '',
+  Earr: '',
 }
 
 /** `Typst.kwChars`. */
@@ -277,7 +284,8 @@ export function pretty(p: Tok | undefined, t1: Tok, t2: Tok): boolean {
     (isKwIn(t2, 'Minus') && atomEnd(t1)) ||
     (isKwIn(t1, 'Minus') && p !== undefined && atomEnd(p)) ||
     (atomEnd(t1) && atomStart(t2)) ||
-    t2.t === 'units'
+    t2.t === 'units' ||
+    isKwIn(t2, 'TimesLbk')
   )
 }
 
@@ -342,6 +350,8 @@ export const IDENT_KW: readonly (readonly [string, Kw])[] = [
   ['in', 'Inn'],
   ['limits', 'Limits'],
   ['lr', 'Lr'],
+  ['delim', 'DelimK'],
+  ['augment', 'AugK'],
 ]
 const IDENT_KW_MAP: ReadonlyMap<string, Kw> = new Map(IDENT_KW)
 
@@ -424,6 +434,8 @@ const PUNCT: Readonly<Record<string, Kw>> = {
   '&': 'Amp',
   '.': 'Sdot',
   '\\': 'Nl',
+  '{': 'Lset',
+  '}': 'Rset',
 }
 
 /** `Typst.punct`. */
@@ -466,6 +478,8 @@ export function lexIdent(cs: Chars, i: number): Read<Tok> {
       const r = dropP('.node', cs, e)
       return r === undefined ? undefined : [kw('Esmnode'), r]
     }
+    case 'times':
+      return cs[skip(cs, e)] === '[' ? [kw('TimesLbk'), skip(cs, e) + 1] : [kw('Times'), e]
   }
   const k = IDENT_KW_MAP.get(w)
   if (k !== undefined) return [kw(k), e]

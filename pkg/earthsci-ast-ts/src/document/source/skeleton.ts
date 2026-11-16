@@ -210,6 +210,17 @@ export function tmScope<R>(t: Tm<R>, s: Sym): Sym {
   return { names: [...s.names, ...tmPs(t)], templates: s.templates }
 }
 
+/**
+ * `Tm.mscope`: the symbol table a rule's `match` pattern is read under: its
+ * body's, with no templates. A pattern never applies a template (spec §9.7.3:
+ * `match` patterns MUST NOT contain `apply_expression_template` nodes), so an
+ * operator in it named like a template in scope (a rule is in scope under its
+ * own name) reads as that operator, in the call form.
+ */
+export function tmMscope<R>(t: Tm<R>, s: Sym): Sym {
+  return { names: tmScope(t, s).names, templates: [] }
+}
+
 /** `Source.rootTs`. */
 export function rootTs<A, R>(root: Kvs, rm: readonly Mx<A, R>[]): THead[] {
   const out = templatesOf(look('expression_templates', root))

@@ -101,7 +101,7 @@ const CAPS_T: Caps = {
       i: 'tm',
       t: {
         ...t,
-        lhs: t.lhs === undefined ? undefined : printTypst(s, t.lhs),
+        lhs: t.lhs === undefined ? undefined : printTypst({ names: s.names, templates: [] }, t.lhs),
         body: printTypst(s, t.body),
       },
     }),
