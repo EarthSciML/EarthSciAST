@@ -37,7 +37,7 @@
 
 use super::ir::*;
 use rustc_hash::FxHashMap;
-use smallvec::smallvec;
+use smallvec::{SmallVec, smallvec};
 
 /// The fewest repetitions worth rerolling: below this the gathers and the
 /// fused group's setup cost about what the scalar instructions do.
@@ -51,18 +51,22 @@ const MAX_PIECE: usize = 1 << 14;
 /// The fewest scalar instructions worth compiling into a one-lane block.
 const MIN_BLOCK: usize = 4;
 
-/// Encoding tags (high byte of a token).
-const T_BIN: u64 = 1 << 56;
-const T_UN: u64 = 2 << 56;
-const T_NEG: u64 = 3 << 56;
-const T_SEL: u64 = 4 << 56;
-const T_FILL: u64 = 5 << 56;
-const T_COPY: u64 = 6 << 56;
-const T_DY: u64 = 7 << 56;
-const T_INT: u64 = 8 << 56;
-const T_LEAF: u64 = 9 << 56;
-const T_TIME: u64 = 10 << 56;
-const T_LIT: u64 = 11 << 56;
+/// One token of a piece's structural encoding: two pieces with equal token
+/// strings apply the same kernels to operands wired the same way.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Tok {
+    /// An elementwise instruction's kernel.
+    Op(Kernel),
+    /// A `dy` write.
+    Dy,
+    /// A value the piece's instruction at this position defines.
+    Int(u32),
+    /// The piece's leaf at this position, of this kind.
+    Leaf(LaneKind, u32),
+    Time,
+    /// A literal, by its bits.
+    Lit(u64),
+}
 
 /// A source a piece reads that its own instructions do not define.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -94,14 +98,10 @@ impl Leaf {
 /// slot).
 fn operands(ins: &Instr, prog: &TapeProgram) -> smallvec::SmallVec<[Operand; 3]> {
     match ins {
-        Instr::Bin { a, b, .. } => smallvec![*a, *b],
-        Instr::Un { a, .. } | Instr::Neg { a, .. } | Instr::Copy { a, .. } => smallvec![*a],
-        Instr::Fill { v, .. } => smallvec![*v],
-        Instr::Select { cond, a, b, .. } => smallvec![*cond, *a, *b],
         Instr::DyWrite { write } => {
             smallvec![Operand::Slot(prog.dy_writes[*write as usize].slot)]
         }
-        _ => smallvec![],
+        other => other.as_elementwise().map(|ew| ew.ops).unwrap_or_default(),
     }
 }
 
@@ -117,17 +117,11 @@ fn batchable(ins: &Instr, prog: &TapeProgram, n_defs: &[u32]) -> bool {
         Operand::Lit(_) | Operand::Param(_) | Operand::Time => true,
     };
     let shape_ok = match ins {
-        Instr::Bin { out, .. }
-        | Instr::Un { out, .. }
-        | Instr::Neg { out, .. }
-        | Instr::Select { out, .. }
-        | Instr::Fill { out, .. }
-        | Instr::Copy { out, .. } => scalar_out(out),
         Instr::DyWrite { write } => {
             let w = &prog.dy_writes[*write as usize];
             w.scalar_flat.is_some() && w.scatter.is_none() && prog.slots[w.slot as usize].scalar
         }
-        _ => false,
+        other => other.as_elementwise().is_some_and(|ew| scalar_out(&ew.out)),
     };
     shape_ok && operands(ins, prog).iter().all(ok_operand)
 }
@@ -242,17 +236,6 @@ impl Analysis {
     }
 }
 
-/// An operand as two words, for the sharing key.
-fn op_key(o: &Operand) -> [u64; 2] {
-    match o {
-        Operand::Slot(s) => [0, *s as u64],
-        Operand::Lit(v) => [1, v.to_bits()],
-        Operand::Param(p) => [2, *p as u64],
-        Operand::Time => [3, 0],
-        Operand::State(i) => [4, *i as u64],
-    }
-}
-
 /// Share repeated pure scalar instructions within one run: an instruction
 /// that applies the same kernel to the same operands as an earlier one of
 /// the run computes the same bits, so its readers read the earlier value
@@ -271,7 +254,7 @@ fn cse_run(
 ) -> Option<Vec<(Instr, usize)>> {
     let mut rename: FxHashMap<SlotId, SlotId> = FxHashMap::default();
     // Sized for the run up front: growing a map this size rehashes every key.
-    let mut seen: FxHashMap<[u64; 7], SlotId> =
+    let mut seen: FxHashMap<ElemKey<OperandKey>, SlotId> =
         FxHashMap::with_capacity_and_hasher(run.len(), Default::default());
     let mut body: Vec<(Instr, usize)> = Vec::with_capacity(run.len());
     for pc in run.clone() {
@@ -281,27 +264,11 @@ fn cse_run(
                 *s = t;
             }
         });
-        let key: Option<([u64; 7], SlotId)> = match &ins {
-            Instr::Bin { op, a, b, out } => {
-                let (x, y) = (op_key(a), op_key(b));
-                Some(([1, *op as u64, x[0], x[1], y[0], y[1], 0], *out))
-            }
-            Instr::Un { op, a, out } => {
-                let x = op_key(a);
-                Some(([2, *op as u64, x[0], x[1], 0, 0, 0], *out))
-            }
-            Instr::Neg { a, out } => {
-                let x = op_key(a);
-                Some(([3, 0, x[0], x[1], 0, 0, 0], *out))
-            }
-            Instr::Select { cond, a, b, out } => {
-                let (c, x, y) = (op_key(cond), op_key(a), op_key(b));
-                // `Select` has three operands; the op word carries the first.
-                Some(([4 | (c[0] << 8), c[1], x[0], x[1], y[0], y[1], 0], *out))
-            }
-            Instr::Fill { .. } | Instr::Copy { .. } | Instr::DyWrite { .. } => None,
-            _ => unreachable!("only batchable instructions reach a run"),
-        };
+        // A `Fill` or `Copy` is its operand: nothing to share.
+        let key = ins
+            .as_elementwise()
+            .filter(|ew| ew.kernel != Kernel::Mov)
+            .map(|ew| (ew.key(Operand::key), ew.out));
         if let Some((k, out)) = key {
             match seen.get(&k) {
                 Some(&prev) if !a.escapes(out, &run) => {
@@ -423,8 +390,8 @@ impl Ctx<'_> {
         }
 
         // Encode each piece; group the ones with equal encodings.
-        let mut classes: FxHashMap<Vec<u64>, Vec<usize>> = FxHashMap::default();
-        let mut order: Vec<Vec<u64>> = Vec::new();
+        let mut classes: FxHashMap<Vec<Tok>, Vec<usize>> = FxHashMap::default();
+        let mut order: Vec<Vec<Tok>> = Vec::new();
         let mut encoded: Vec<Option<Piece>> = Vec::with_capacity(pieces.len());
         for (pi, ks) in pieces.iter().enumerate() {
             match self.encode(&run, ks, &local, &lane_free) {
@@ -544,12 +511,12 @@ impl Ctx<'_> {
         ks: &[usize],
         local: &impl Fn(SlotId) -> Option<usize>,
         lane_free: &[bool],
-    ) -> Option<(Vec<u64>, Piece)> {
+    ) -> Option<(Vec<Tok>, Piece)> {
         let prog = self.prog;
-        let mut pos_in_piece: FxHashMap<usize, u64> = FxHashMap::default();
+        let mut pos_in_piece: FxHashMap<usize, u32> = FxHashMap::default();
         let mut leaves: Vec<Leaf> = Vec::new();
         let mut leaf_ix: FxHashMap<Leaf, usize> = FxHashMap::default();
-        let mut code: Vec<u64> = Vec::with_capacity(ks.len() * 4);
+        let mut code: Vec<Tok> = Vec::with_capacity(ks.len() * 4);
         for (i, &k) in ks.iter().enumerate() {
             let pc = run.start + k;
             let ins = &prog.instrs[pc];
@@ -559,29 +526,27 @@ impl Ctx<'_> {
                 return None;
             }
             code.push(match ins {
-                Instr::Bin { op, .. } => T_BIN | *op as u64,
-                Instr::Un { op, .. } => T_UN | *op as u64,
-                Instr::Neg { .. } => T_NEG,
-                Instr::Select { .. } => T_SEL,
-                Instr::Fill { .. } => T_FILL,
-                Instr::Copy { .. } => T_COPY,
-                Instr::DyWrite { .. } => T_DY,
-                _ => unreachable!("only batchable instructions reach a piece"),
+                Instr::DyWrite { .. } => Tok::Dy,
+                other => Tok::Op(
+                    other
+                        .as_elementwise()
+                        .expect("only batchable instructions reach a piece")
+                        .kernel,
+                ),
             });
             for o in operands(ins, prog) {
                 let leaf = match o {
                     Operand::Lit(v) => {
-                        code.push(T_LIT);
-                        code.push(v.to_bits());
+                        code.push(Tok::Lit(v.to_bits()));
                         continue;
                     }
                     Operand::Time => {
-                        code.push(T_TIME);
+                        code.push(Tok::Time);
                         continue;
                     }
                     Operand::Slot(s) => match local(s) {
                         Some(j) if !lane_free[j] => {
-                            code.push(T_INT | pos_in_piece[&j]);
+                            code.push(Tok::Int(pos_in_piece[&j]));
                             continue;
                         }
                         _ => Leaf::Slot(s),
@@ -593,14 +558,9 @@ impl Ctx<'_> {
                     leaves.push(leaf);
                     leaves.len() - 1
                 });
-                let kind = match leaf.kind() {
-                    LaneKind::State => 0u64,
-                    LaneKind::Param => 1,
-                    LaneKind::Slot => 2,
-                };
-                code.push(T_LEAF | (kind << 32) | j as u64);
+                code.push(Tok::Leaf(leaf.kind(), j as u32));
             }
-            pos_in_piece.insert(k, i as u64);
+            pos_in_piece.insert(k, i as u32);
         }
         // A piece that writes no derivative computes nothing anything reads;
         // one too large for a lane program's 16-bit tables stays scalar.
@@ -653,9 +613,9 @@ fn emit_class(
 ) {
     let head = &lanes[0];
     let mut scalars: Vec<Operand> = Vec::new();
-    let mut scal_ix: FxHashMap<[u64; 2], GroupIx> = FxHashMap::default();
+    let mut scal_ix: FxHashMap<OperandKey, GroupIx> = FxHashMap::default();
     let mut scal = |o: Operand, scalars: &mut Vec<Operand>| -> MRef {
-        let ix = *scal_ix.entry(op_key(&o)).or_insert_with(|| {
+        let ix = *scal_ix.entry(o.key()).or_insert_with(|| {
             scalars.push(o);
             (scalars.len() - 1) as GroupIx
         });
@@ -703,60 +663,34 @@ fn emit_class(
             }
         };
         let k = micro.len() as GroupIx;
-        let (op, def) = match &old[pc] {
-            Instr::Bin { op, a, b, out } => {
-                let (a, b) = (map(*a, &mut scalars), map(*b, &mut scalars));
-                (
-                    Some(MicroOp::Bin {
-                        op: *op,
-                        a,
-                        b,
-                        out: k,
-                    }),
-                    *out,
-                )
-            }
-            Instr::Un { op, a, out } => {
-                let a = map(*a, &mut scalars);
-                (Some(MicroOp::Un { op: *op, a, out: k }), *out)
-            }
-            Instr::Neg { a, out } => {
-                let a = map(*a, &mut scalars);
-                (Some(MicroOp::Neg { a, out: k }), *out)
-            }
-            Instr::Select { cond, a, b, out } => {
-                let cond = map(*cond, &mut scalars);
-                let a = map(*a, &mut scalars);
-                let b = map(*b, &mut scalars);
-                (Some(MicroOp::Select { cond, a, b, out: k }), *out)
-            }
-            Instr::Fill { v: a, out } | Instr::Copy { a, out } => {
-                let v = map(*a, &mut scalars);
-                value.insert(*out, v);
-                continue;
-            }
-            Instr::DyWrite { write } => {
-                let v = map(
-                    Operand::Slot(prog.dy_writes[*write as usize].slot),
-                    &mut scalars,
-                );
-                let pos: Vec<u32> = lanes
-                    .iter()
-                    .map(|p| match &old[p.instrs[i]] {
-                        Instr::DyWrite { write } => prog.dy_writes[*write as usize]
-                            .scalar_flat
-                            .expect("scalar write")
-                            as u32,
-                        _ => unreachable!("lanes share their structure"),
-                    })
-                    .collect();
-                writes.push((v, LaneIx::of(pos)));
-                continue;
-            }
-            _ => unreachable!("only batchable instructions reach a piece"),
-        };
-        micro.extend(op);
-        value.insert(def, MRef::Reg(k));
+        if let Instr::DyWrite { write } = &old[pc] {
+            let v = map(
+                Operand::Slot(prog.dy_writes[*write as usize].slot),
+                &mut scalars,
+            );
+            let pos: Vec<u32> = lanes
+                .iter()
+                .map(|p| match &old[p.instrs[i]] {
+                    Instr::DyWrite { write } => prog.dy_writes[*write as usize]
+                        .scalar_flat
+                        .expect("scalar write")
+                        as u32,
+                    _ => unreachable!("lanes share their structure"),
+                })
+                .collect();
+            writes.push((v, LaneIx::of(pos)));
+            continue;
+        }
+        let ew = old[pc]
+            .as_elementwise()
+            .expect("only batchable instructions reach a piece");
+        let refs: SmallVec<[MRef; 3]> = ew.ops.iter().map(|o| map(*o, &mut scalars)).collect();
+        if ew.kernel == Kernel::Mov {
+            value.insert(ew.out, refs[0]);
+            continue;
+        }
+        micro.push(ew.kernel.to_micro(&refs, k));
+        value.insert(ew.out, MRef::Reg(k));
     }
 
     // Registers: every written register lives to the end.
@@ -832,7 +766,7 @@ fn emit_block(
     out: &mut Vec<(Instr, usize)>,
 ) {
     let mut scalars: Vec<Operand> = Vec::new();
-    let mut scal_ix: FxHashMap<[u64; 2], GroupIx> = FxHashMap::default();
+    let mut scal_ix: FxHashMap<OperandKey, GroupIx> = FxHashMap::default();
     let mut micro: Vec<MicroOp> = Vec::new();
     let mut value: FxHashMap<SlotId, MRef> = FxHashMap::default();
     let mut writes: Vec<(MRef, LaneDst)> = Vec::new();
@@ -843,55 +777,30 @@ fn emit_block(
             {
                 return *m;
             }
-            let ix = *scal_ix.entry(op_key(&o)).or_insert_with(|| {
+            let ix = *scal_ix.entry(o.key()).or_insert_with(|| {
                 scalars.push(o);
                 (scalars.len() - 1) as GroupIx
             });
             MRef::Scal(ix)
         };
         let k = micro.len() as GroupIx;
-        let (op, def) = match &old[pc] {
-            Instr::Bin { op, a, b, out } => {
-                let (a, b) = (map(*a), map(*b));
-                (
-                    MicroOp::Bin {
-                        op: *op,
-                        a,
-                        b,
-                        out: k,
-                    },
-                    *out,
-                )
-            }
-            Instr::Un { op, a, out } => (
-                MicroOp::Un {
-                    op: *op,
-                    a: map(*a),
-                    out: k,
-                },
-                *out,
-            ),
-            Instr::Neg { a, out } => (MicroOp::Neg { a: map(*a), out: k }, *out),
-            Instr::Select { cond, a, b, out } => {
-                let (cond, a, b) = (map(*cond), map(*a), map(*b));
-                (MicroOp::Select { cond, a, b, out: k }, *out)
-            }
-            Instr::Fill { v: a, out } | Instr::Copy { a, out } => {
-                let v = map(*a);
-                value.insert(*out, v);
-                continue;
-            }
-            Instr::DyWrite { write } => {
-                let w = &prog.dy_writes[*write as usize];
-                let v = map(Operand::Slot(w.slot));
-                let pos = w.scalar_flat.expect("scalar write") as u32;
-                writes.push((v, LaneDst::Dy(LaneIx::Affine { base: pos, step: 0 })));
-                continue;
-            }
-            _ => unreachable!("only batchable instructions reach a block"),
-        };
-        micro.push(op);
-        value.insert(def, MRef::Reg(k));
+        if let Instr::DyWrite { write } = &old[pc] {
+            let w = &prog.dy_writes[*write as usize];
+            let v = map(Operand::Slot(w.slot));
+            let pos = w.scalar_flat.expect("scalar write") as u32;
+            writes.push((v, LaneDst::Dy(LaneIx::Affine { base: pos, step: 0 })));
+            continue;
+        }
+        let ew = old[pc]
+            .as_elementwise()
+            .expect("only batchable instructions reach a block");
+        let refs: SmallVec<[MRef; 3]> = ew.ops.iter().map(|o| map(*o)).collect();
+        if ew.kernel == Kernel::Mov {
+            value.insert(ew.out, refs[0]);
+            continue;
+        }
+        micro.push(ew.kernel.to_micro(&refs, k));
+        value.insert(ew.out, MRef::Reg(k));
     }
     for &s in outs {
         writes.push((value[&s], LaneDst::Slot(s)));

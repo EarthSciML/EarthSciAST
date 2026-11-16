@@ -75,27 +75,6 @@ fn rm_strides(shape: &[usize]) -> SmallVec<[i64; 4]> {
 }
 
 // ---------------------------------------------------------------------------
-// Operand / source keys for deduplication.
-// ---------------------------------------------------------------------------
-
-#[derive(Hash, PartialEq, Eq, Clone, Copy)]
-enum ScalKey {
-    Lit(u64),
-    Param(u32),
-    Time,
-    Slot(SlotId),
-    State(u32),
-}
-
-/// Dedupe key for ALIGNED array inputs (observed operands are never fused,
-/// so no `Obs` arm is needed).
-#[derive(Hash, PartialEq, Eq, Clone, Copy)]
-enum SrcKey {
-    Slot(SlotId),
-    State(u32),
-}
-
-// ---------------------------------------------------------------------------
 // Group builder.
 // ---------------------------------------------------------------------------
 
@@ -135,9 +114,9 @@ struct GBuilder {
     inputs: Vec<FusedInput>,
     /// Per SHIFTED input: its fold geometry.
     shifted_segs: Vec<ShiftedGeom>,
-    aligned_ix: FxHashMap<SrcKey, GroupIx>,
+    aligned_ix: FxHashMap<SrcRef, GroupIx>,
     scalars: Vec<Operand>,
-    scalar_ix: FxHashMap<ScalKey, GroupIx>,
+    scalar_ix: FxHashMap<OperandKey, GroupIx>,
     /// Computed member slots in definition order: `(slot, ssa register)`.
     defs: Vec<(SlotId, GroupIx)>,
     /// Folded gathers: `(original instr index, out slot, input index)`.
@@ -157,7 +136,7 @@ struct GBuilder {
     /// Value numbering over the group's pure micro-ops: an op with the same
     /// kernel and the same operands as an earlier one is that op's register
     /// (the kernels are pure, so it would compute the same bits).
-    vn: FxHashMap<MKey, GroupIx>,
+    vn: FxHashMap<ElemKey<MRef>, GroupIx>,
     /// Carry slots the absorbed scans use so far (each scan owns one per
     /// lane, the next ones).
     n_carries: u32,
@@ -176,30 +155,11 @@ struct ReduceTail {
     n_inner: usize,
 }
 
-/// A pure micro-op without its destination: the value-numbering key.
-#[derive(Hash, PartialEq, Eq)]
-enum MKey {
-    Bin(BinCode, MRef, MRef),
-    Un(super::super::UnCode, MRef),
-    Neg(MRef),
-    Select(MRef, MRef, MRef),
-    Mov(MRef),
-}
-
-/// The same source (`SrcRef` has no equality of its own).
-fn same_src(a: &SrcRef, b: &SrcRef) -> bool {
-    match (a, b) {
-        (SrcRef::Slot(x), SrcRef::Slot(y)) => x == y,
-        (SrcRef::State(x), SrcRef::State(y)) => x == y,
-        _ => false,
-    }
-}
-
 /// Operand resolved for group membership (pre-commit description).
 enum ResOp {
     Existing(MRef),
-    NewScalar(ScalKey, Operand),
-    NewAligned(SrcKey, SrcRef),
+    NewScalar(OperandKey, Operand),
+    NewAligned(SrcRef),
 }
 
 impl GBuilder {
@@ -392,18 +352,16 @@ impl GBuilder {
     /// a foreign-box array).
     fn resolve(&self, op: &Operand, prog: &TapeProgram) -> Option<ResOp> {
         match op {
-            Operand::Lit(v) => Some(self.scal(ScalKey::Lit(v.to_bits()), *op)),
-            Operand::Param(p) => Some(self.scal(ScalKey::Param(*p), *op)),
-            Operand::Time => Some(self.scal(ScalKey::Time, *op)),
+            Operand::Lit(_) | Operand::Param(_) | Operand::Time => Some(self.scal(*op)),
             Operand::Slot(s) => {
                 if let Some(m) = self.val_of.get(s) {
                     return Some(ResOp::Existing(*m));
                 }
                 let d = &prog.slots[*s as usize];
                 if d.scalar {
-                    Some(self.scal(ScalKey::Slot(*s), *op))
+                    Some(self.scal(*op))
                 } else if d.shape == self.shape {
-                    Some(self.aligned(SrcKey::Slot(*s), SrcRef::Slot(*s)))
+                    Some(self.aligned(SrcRef::Slot(*s)))
                 } else {
                     None
                 }
@@ -411,9 +369,9 @@ impl GBuilder {
             Operand::State(ix) => {
                 let sv = &prog.state_vars[*ix as usize];
                 if sv.shape.is_empty() {
-                    Some(self.scal(ScalKey::State(*ix), *op))
+                    Some(self.scal(*op))
                 } else if sv.shape == self.shape {
-                    Some(self.aligned(SrcKey::State(*ix), SrcRef::State(*ix)))
+                    Some(self.aligned(SrcRef::State(*ix)))
                 } else {
                     None
                 }
@@ -421,17 +379,18 @@ impl GBuilder {
         }
     }
 
-    fn scal(&self, key: ScalKey, op: Operand) -> ResOp {
+    fn scal(&self, op: Operand) -> ResOp {
+        let key = op.key();
         match self.scalar_ix.get(&key) {
             Some(&i) => ResOp::Existing(MRef::Scal(i)),
             None => ResOp::NewScalar(key, op),
         }
     }
 
-    fn aligned(&self, key: SrcKey, src: SrcRef) -> ResOp {
-        match self.aligned_ix.get(&key) {
+    fn aligned(&self, src: SrcRef) -> ResOp {
+        match self.aligned_ix.get(&src) {
             Some(&i) => ResOp::Existing(MRef::In(i)),
-            None => ResOp::NewAligned(key, src),
+            None => ResOp::NewAligned(src),
         }
     }
 
@@ -444,7 +403,7 @@ impl GBuilder {
                 self.scalar_ix.insert(key, i);
                 MRef::Scal(i)
             }
-            ResOp::NewAligned(key, src) => {
+            ResOp::NewAligned(src) => {
                 let i = self.inputs.len() as GroupIx;
                 self.inputs.push(FusedInput {
                     src,
@@ -455,7 +414,7 @@ impl GBuilder {
                     index: None,
                     gather: None,
                 });
-                self.aligned_ix.insert(key, i);
+                self.aligned_ix.insert(src, i);
                 MRef::In(i)
             }
         }
@@ -465,32 +424,21 @@ impl GBuilder {
     /// group's shape. Returns `false` (group untouched) if an operand is
     /// unfusable.
     fn try_add(&mut self, ix: u32, ins: &Instr, prog: &TapeProgram) -> bool {
-        let (ops, out): (SmallVec<[&Operand; 3]>, SlotId) = match ins {
-            Instr::Bin { a, b, out, .. } => (SmallVec::from_slice(&[a, b]), *out),
-            Instr::Un { a, out, .. } | Instr::Neg { a, out } => (SmallVec::from_slice(&[a]), *out),
-            Instr::Select { cond, a, b, out } => (SmallVec::from_slice(&[cond, a, b]), *out),
-            Instr::Fill { v, out } => (SmallVec::from_slice(&[v]), *out),
-            Instr::Copy { a, out } => (SmallVec::from_slice(&[a]), *out),
-            _ => return false,
+        let Some(ew) = ins.as_elementwise() else {
+            return false;
         };
+        let out = ew.out;
         let mut resolved: SmallVec<[ResOp; 3]> = SmallVec::new();
-        for op in &ops {
+        for op in &ew.ops {
             match self.resolve(op, prog) {
                 Some(r) => resolved.push(r),
                 None => return false,
             }
         }
-        let mut mrefs: SmallVec<[MRef; 3]> = SmallVec::new();
-        for r in resolved {
-            mrefs.push(self.commit(r));
-        }
-        let key = match ins {
-            Instr::Bin { op, .. } => MKey::Bin(*op, mrefs[0], mrefs[1]),
-            Instr::Un { op, .. } => MKey::Un(*op, mrefs[0]),
-            Instr::Neg { .. } => MKey::Neg(mrefs[0]),
-            Instr::Select { .. } => MKey::Select(mrefs[0], mrefs[1], mrefs[2]),
-            Instr::Fill { .. } | Instr::Copy { .. } => MKey::Mov(mrefs[0]),
-            _ => unreachable!(),
+        let mrefs: SmallVec<[MRef; 3]> = resolved.into_iter().map(|r| self.commit(r)).collect();
+        let key = ElemKey {
+            kernel: ew.kernel,
+            ops: mrefs.clone(),
         };
         if let Some(&ssa) = self.vn.get(&key) {
             self.val_of.insert(out, MRef::Reg(ssa));
@@ -501,34 +449,7 @@ impl GBuilder {
         }
         let ssa = self.micro.len() as GroupIx;
         self.vn.insert(key, ssa);
-        let mop = match ins {
-            Instr::Bin { op, .. } => MicroOp::Bin {
-                op: *op,
-                a: mrefs[0],
-                b: mrefs[1],
-                out: ssa,
-            },
-            Instr::Un { op, .. } => MicroOp::Un {
-                op: *op,
-                a: mrefs[0],
-                out: ssa,
-            },
-            Instr::Neg { .. } => MicroOp::Neg {
-                a: mrefs[0],
-                out: ssa,
-            },
-            Instr::Select { .. } => MicroOp::Select {
-                cond: mrefs[0],
-                a: mrefs[1],
-                b: mrefs[2],
-                out: ssa,
-            },
-            Instr::Fill { .. } | Instr::Copy { .. } => MicroOp::Mov {
-                a: mrefs[0],
-                out: ssa,
-            },
-            _ => unreachable!(),
-        };
+        let mop = ew.kernel.to_micro(&mrefs, ssa);
         self.micro.push(mop);
         self.val_of.insert(out, MRef::Reg(ssa));
         self.defs.push((out, ssa));
@@ -626,9 +547,10 @@ impl GBuilder {
         src_shape: &super::super::DimU,
         out: SlotId,
     ) {
-        let twin = self.inputs.iter().position(|inp| {
-            same_src(&inp.src, &src) && inp.gather.as_deref().is_some_and(|h| *h == g)
-        });
+        let twin = self
+            .inputs
+            .iter()
+            .position(|inp| inp.src == src && inp.gather.as_deref().is_some_and(|h| *h == g));
         let input_ix = match twin {
             Some(t) => t as GroupIx,
             None => {
@@ -662,7 +584,7 @@ impl GBuilder {
     ) {
         let twin = self.inputs.iter().position(|inp| {
             inp.shifted_ix
-                .is_some_and(|s| same_src(&inp.src, &src) && self.shifted_segs[s as usize] == geom)
+                .is_some_and(|s| inp.src == src && self.shifted_segs[s as usize] == geom)
         });
         if let Some(t) = twin {
             let input_ix = t as GroupIx;

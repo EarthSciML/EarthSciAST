@@ -341,33 +341,15 @@ fn same_slot(prog: &TapeProgram, defs: &DefUse, x: SlotId, y: SlotId, depth: u32
     if prog.precision.get(ix) != prog.precision.get(iy) {
         return false;
     }
-    let same_op = |a: Operand, b: Operand| match (a, b) {
-        (Operand::Slot(p), Operand::Slot(q)) => same_slot(prog, defs, p, q, depth - 1),
-        (Operand::Lit(p), Operand::Lit(q)) => p.to_bits() == q.to_bits(),
-        (Operand::Param(p), Operand::Param(q)) => p == q,
-        (Operand::State(p), Operand::State(q)) => p == q,
-        (Operand::Time, Operand::Time) => true,
-        _ => false,
+    let same_op = |a: &Operand, b: &Operand| match (a, b) {
+        (Operand::Slot(p), Operand::Slot(q)) => same_slot(prog, defs, *p, *q, depth - 1),
+        _ => a.key() == b.key(),
     };
-    match (&prog.instrs[ix], &prog.instrs[iy]) {
-        (
-            Instr::Bin {
-                op: o1,
-                a: a1,
-                b: b1,
-                ..
-            },
-            Instr::Bin {
-                op: o2,
-                a: a2,
-                b: b2,
-                ..
-            },
-        ) => o1 == o2 && same_op(*a1, *a2) && same_op(*b1, *b2),
-        (Instr::Un { op: o1, a: a1, .. }, Instr::Un { op: o2, a: a2, .. }) => {
-            o1 == o2 && same_op(*a1, *a2)
-        }
-        (Instr::Neg { a: a1, .. }, Instr::Neg { a: a2, .. }) => same_op(*a1, *a2),
+    let (x, y) = (&prog.instrs[ix], &prog.instrs[iy]);
+    if let (Some(ex), Some(ey)) = (x.as_elementwise(), y.as_elementwise()) {
+        return ex.kernel == ey.kernel && ex.ops.iter().zip(&ey.ops).all(|(a, b)| same_op(a, b));
+    }
+    match (x, y) {
         (
             Instr::Gather {
                 src: s1, plan: p1, ..

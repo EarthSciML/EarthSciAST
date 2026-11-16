@@ -21,30 +21,16 @@ use super::ir::*;
 use rustc_hash::FxHashMap;
 use std::fmt::Write;
 
-/// An operand, literals by their bits, slots after renaming.
-fn opk(k: &mut String, o: &Operand, canon: &[SlotId]) {
+/// An operand's identity, slots after renaming.
+fn opk(o: &Operand, canon: &[SlotId]) -> OperandKey {
     match o {
-        Operand::Lit(v) => {
-            let _ = write!(k, "L{:x},", v.to_bits());
-        }
-        Operand::Slot(s) => {
-            let _ = write!(k, "S{},", canon[*s as usize]);
-        }
-        other => {
-            let _ = write!(k, "{other:?},");
-        }
+        Operand::Slot(s) => OperandKey::Slot(canon[*s as usize]),
+        other => other.key(),
     }
 }
 
 fn srck(k: &mut String, s: &SrcRef, canon: &[SlotId]) {
-    match s {
-        SrcRef::Slot(s) => {
-            let _ = write!(k, "S{},", canon[*s as usize]);
-        }
-        other => {
-            let _ = write!(k, "{other:?},");
-        }
-    }
+    let _ = write!(k, "{:?},", opk(&Operand::from(*s), canon));
 }
 
 /// The identity of `ins` at `pc`, or `None` for an instruction that does not
@@ -59,30 +45,11 @@ pub(super) fn key(prog: &TapeProgram, pc: usize, ins: &Instr, canon: &[SlotId]) 
         d.scalar,
         prog.precision.get(pc)
     );
+    if let Some(ew) = ins.as_elementwise() {
+        let _ = write!(k, "{:?}", ew.key(|o| opk(o, canon)));
+        return Some(k);
+    }
     match ins {
-        Instr::Bin { op, a, b, .. } => {
-            let _ = write!(k, "Bin{op:?}:");
-            opk(&mut k, a, canon);
-            opk(&mut k, b, canon);
-        }
-        Instr::Un { op, a, .. } => {
-            let _ = write!(k, "Un{op:?}:");
-            opk(&mut k, a, canon);
-        }
-        Instr::Neg { a, .. } => {
-            k.push_str("Neg:");
-            opk(&mut k, a, canon);
-        }
-        Instr::Select { cond, a, b, .. } => {
-            k.push_str("Sel:");
-            opk(&mut k, cond, canon);
-            opk(&mut k, a, canon);
-            opk(&mut k, b, canon);
-        }
-        Instr::Fill { v, .. } => {
-            k.push_str("Fill:");
-            opk(&mut k, v, canon);
-        }
         Instr::Ramp { axis, lo, .. } => {
             let _ = write!(k, "Ramp{axis},{lo}");
         }
@@ -122,7 +89,7 @@ pub(super) fn key(prog: &TapeProgram, pc: usize, ins: &Instr, canon: &[SlotId]) 
         } => {
             let _ = write!(k, "Count{rel:?},{lo},{n},{sorted}:");
             srck(&mut k, axis, canon);
-            opk(&mut k, x, canon);
+            let _ = write!(k, "{:?},", opk(x, canon));
         }
         Instr::DataGather {
             src,
@@ -141,7 +108,7 @@ pub(super) fn key(prog: &TapeProgram, pc: usize, ins: &Instr, canon: &[SlotId]) 
             );
             srck(&mut k, src, canon);
             for s in &sp.subs {
-                opk(&mut k, s, canon);
+                let _ = write!(k, "{:?},", opk(s, canon));
             }
         }
         _ => return None,

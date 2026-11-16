@@ -137,7 +137,7 @@ pub(crate) enum Operand {
 }
 
 /// An array source for [`Instr::Gather`] / [`Instr::LoadElem`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum SrcRef {
     Slot(SlotId),
     State(u32),
@@ -149,6 +149,97 @@ impl From<SrcRef> for Operand {
         match src {
             SrcRef::Slot(s) => Operand::Slot(s),
             SrcRef::State(i) => Operand::State(i),
+        }
+    }
+}
+
+/// An operand by identity, for comparing and hashing values: a literal by its
+/// bits, so `-0.0` and `0.0` stay apart and a `NaN` equals itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum OperandKey {
+    Slot(SlotId),
+    Lit(u64),
+    Param(u32),
+    Time,
+    State(u32),
+}
+
+impl Operand {
+    /// This operand's identity.
+    pub(crate) fn key(&self) -> OperandKey {
+        match *self {
+            Operand::Slot(s) => OperandKey::Slot(s),
+            Operand::Lit(v) => OperandKey::Lit(v.to_bits()),
+            Operand::Param(p) => OperandKey::Param(p),
+            Operand::Time => OperandKey::Time,
+            Operand::State(i) => OperandKey::State(i),
+        }
+    }
+}
+
+/// The scalar kernel of an elementwise instruction ([`Instr::as_elementwise`])
+/// or micro-op, without its operands. `Mov` is a [`Instr::Fill`] or an
+/// [`Instr::Copy`]: per element, its operand's value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Kernel {
+    Bin(BinCode),
+    Un(UnCode),
+    Neg,
+    Select,
+    Mov,
+}
+
+/// "This kernel on these operands": the identity of an elementwise value,
+/// over whatever names its operands (`R`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ElemKey<R> {
+    pub kernel: Kernel,
+    pub ops: SmallVec<[R; 3]>,
+}
+
+/// An elementwise instruction taken apart: its kernel, its operands in
+/// order and the slot it defines.
+#[derive(Clone, Debug)]
+pub(crate) struct Elementwise {
+    pub kernel: Kernel,
+    pub ops: SmallVec<[Operand; 3]>,
+    pub out: SlotId,
+}
+
+impl Elementwise {
+    /// Its identity, each operand named by `name`.
+    pub(crate) fn key<R>(&self, name: impl FnMut(&Operand) -> R) -> ElemKey<R> {
+        ElemKey {
+            kernel: self.kernel,
+            ops: self.ops.iter().map(name).collect(),
+        }
+    }
+}
+
+impl Kernel {
+    /// The micro-op applying this kernel to `refs` (the operands in order)
+    /// into register `out`.
+    pub(crate) fn to_micro(self, refs: &[MRef], out: GroupIx) -> MicroOp {
+        match self {
+            Kernel::Bin(op) => MicroOp::Bin {
+                op,
+                a: refs[0],
+                b: refs[1],
+                out,
+            },
+            Kernel::Un(op) => MicroOp::Un {
+                op,
+                a: refs[0],
+                out,
+            },
+            Kernel::Neg => MicroOp::Neg { a: refs[0], out },
+            Kernel::Select => MicroOp::Select {
+                cond: refs[0],
+                a: refs[1],
+                b: refs[2],
+                out,
+            },
+            Kernel::Mov => MicroOp::Mov { a: refs[0], out },
         }
     }
 }
@@ -843,6 +934,24 @@ impl Instr {
                 }
             }
         }
+    }
+
+    /// The elementwise family taken apart: `Bin`, `Un`, `Neg`, `Select`,
+    /// `Fill` and `Copy`, each a per-element map of its operands; `None` for
+    /// every other instruction.
+    pub(crate) fn as_elementwise(&self) -> Option<Elementwise> {
+        let (kernel, ops, out) = match *self {
+            Instr::Bin { op, a, b, out } => (Kernel::Bin(op), smallvec::smallvec![a, b], out),
+            Instr::Un { op, a, out } => (Kernel::Un(op), smallvec::smallvec![a], out),
+            Instr::Neg { a, out } => (Kernel::Neg, smallvec::smallvec![a], out),
+            Instr::Select { cond, a, b, out } => {
+                (Kernel::Select, smallvec::smallvec![cond, a, b], out)
+            }
+            Instr::Fill { v, out } => (Kernel::Mov, smallvec::smallvec![v], out),
+            Instr::Copy { a, out } => (Kernel::Mov, smallvec::smallvec![a], out),
+            _ => return None,
+        };
+        Some(Elementwise { kernel, ops, out })
     }
 
     /// A short opcode name for diagnostics.
