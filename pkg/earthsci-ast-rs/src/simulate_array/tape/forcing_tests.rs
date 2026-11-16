@@ -76,7 +76,7 @@ fn bc_values(n: usize, scale: f64) -> ArrayD<f64> {
 }
 
 fn feed(compiled: &ArrayCompiled, n: usize, scale: f64, k: f64) {
-    let buf = compiled.forcing_buffer();
+    let buf = compiled.forcing_handle();
     let mut buf = buf.borrow_mut();
     buf.insert("bc".into(), bc_values(n, scale));
     buf.insert("k".into(), ArrayD::from_elem(IxDyn(&[]), k));
@@ -257,7 +257,7 @@ fn a_forcing_entry_of_another_shape_faults() {
     assert!(crate::simulate_array::take_const_array_oob().is_none());
     // The buffer changes shape under a program built against the old one.
     compiled
-        .forcing_buffer()
+        .forcing_handle()
         .borrow_mut()
         .insert("bc".into(), bc_values(n + 1, 1.0));
     let dy = fast(
@@ -334,7 +334,7 @@ fn segmented_solve(
     let n = 5usize;
     let mut compiled = compile(n as i64);
     compiled.runtime_mode = mode;
-    let buf = compiled.forcing_buffer();
+    let buf = compiled.forcing_handle();
     let discrete: HashSet<String> = ["bc".to_string()].into();
     let opts = crate::simulate::SolveOptions {
         saveat: Some(vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0]),
@@ -451,7 +451,7 @@ fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
         // precision would change `b`.
         let k = 0.1 + 2f64.powi(-40);
         compiled
-            .forcing_buffer()
+            .forcing_handle()
             .borrow_mut()
             .insert("k".into(), ArrayD::from_elem(IxDyn(&[]), k));
         let params = HashMap::new();

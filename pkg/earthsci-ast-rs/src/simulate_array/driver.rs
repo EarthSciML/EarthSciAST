@@ -435,30 +435,25 @@ pub(crate) struct FieldIcRecord {
 /// * the parameters, checked here bit for bit against the positional vector
 ///   the solve resolved (a [`crate::remake`] with new `p` shares this model and
 ///   misses);
-/// * the provider forcing buffer, which the crate's own drivers leave as
-///   construction had it until the initial state is built (the CONST providers
-///   are bound before the compiler gate runs, and a discrete refresh comes
-///   after `u0`). A host can write it in between through
-///   [`ArrayCompiled::forcing_handle`], so the memo records the buffer's
-///   handle generation, which every call to that accessor bumps, and answers
-///   only while it is unchanged.
+/// * the forcing fields the resolution read (every name
+///   [`ArrayCompiled::ic_read_names`] gives, as the forcing buffer holds it),
+///   recorded as a fingerprint of their names, shapes and values
+///   ([`ArrayCompiled::ic_forcing_fingerprint`]) and compared when the memo
+///   is read, so a write to one of them by anyone, between construction and
+///   the solve, retires the memo, and a write to any other field does not.
 ///
-/// The crate's discrete-cadence refresh writes the buffer through
-/// [`ArrayCompiled::forcing_buffer`], which leaves the generation alone, but
-/// the fields it writes are never in a field initial condition's scope
-/// ([`ArrayCompiled::resolve_field_ics`] reads the buffer without them), so a
-/// refresh cannot move what the memo holds. A write through `forcing_buffer`
-/// to any OTHER field after construction would, and is what the generation
-/// cannot see: the crate's drivers make none, and a new one has to take
-/// [`ArrayCompiled::forcing_handle`] instead. Every read but the first solve's
-/// leaves the memo in place; the first solve takes it, and every later one
-/// resolves from the buffer as it stands.
+/// A resolution that read a discrete-cadence field is never kept (the field
+/// is not sampled yet at construction), so the refresh a solve makes at its
+/// start, before the initial state, cannot move what the memo holds. Every
+/// read but the first solve's leaves the memo in place; the first solve takes
+/// it, and every later one resolves from the buffer as it stands.
 ///
 /// Initial-condition overrides are applied over the result, not read by it.
 #[cfg(feature = "solve")]
 pub(crate) struct FieldIcMemo {
     params: Vec<u64>,
-    forcing_generation: u64,
+    /// [`ArrayCompiled::ic_forcing_fingerprint`] when the resolution ran.
+    forcing: u64,
     /// The start of the run the `ic` right-hand sides were evaluated at
     /// (esm-spec §11.4.2), as bits.
     t0: u64,
@@ -658,21 +653,10 @@ impl ArrayCompiled {
     /// `Rc`); mutate it only *between* segments, never inside a solver step, to
     /// keep the RHS pure within a segment.
     ///
-    /// Whoever holds the handle may write the buffer at any later point, so
-    /// taking one also retires the field initial conditions construction
-    /// resolved from it ([`FieldIcMemo`]): the next solve resolves them from
-    /// the buffer as it then stands.
+    /// A write to a field the model's field initial conditions read retires
+    /// what construction resolved from it ([`FieldIcMemo`]): the next solve
+    /// resolves them from the buffer as it then stands.
     pub fn forcing_handle(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
-        self.forcing_generation
-            .set(self.forcing_generation.get().wrapping_add(1));
-        Rc::clone(&self.forcing)
-    }
-
-    /// The forcing buffer, for the crate's own drivers, which write it only
-    /// where [`FieldIcMemo`] allows: before construction records the memo, or
-    /// after the initial state is built. Unlike [`Self::forcing_handle`] it
-    /// leaves the memo standing.
-    pub(crate) fn forcing_buffer(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
         Rc::clone(&self.forcing)
     }
 
@@ -1577,7 +1561,7 @@ impl ArrayCompiled {
         {
             *self.field_ic_memo.borrow_mut() = Some(FieldIcMemo {
                 params: param_bits(&param_vec),
-                forcing_generation: self.forcing_generation.get(),
+                forcing: self.ic_forcing_fingerprint(),
                 t0: t0.to_bits(),
                 slots,
             });
@@ -1608,6 +1592,33 @@ impl ArrayCompiled {
         let mut names = self.ic_read_names();
         names.retain(|n| self.serves_forcing(n));
         names
+    }
+
+    /// A fingerprint of the forcing fields an evaluation of the `ic`
+    /// right-hand sides reads ([`Self::ic_read_names`]) as the buffer holds
+    /// them: each name, in byte order, with its entry's shape and value bits,
+    /// or its absence. What [`FieldIcMemo`] compares to tell whether the
+    /// buffer moved under a resolution.
+    #[cfg(feature = "solve")]
+    fn ic_forcing_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut names: Vec<String> = self.ic_read_names().into_iter().collect();
+        names.sort();
+        let buffer = self.forcing.borrow();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for name in &names {
+            name.hash(&mut h);
+            match buffer.get(name) {
+                Some(a) => {
+                    a.shape().hash(&mut h);
+                    for v in a.iter() {
+                        v.to_bits().hash(&mut h);
+                    }
+                }
+                None => u8::MAX.hash(&mut h),
+            }
+        }
+        h.finish()
     }
 
     /// Refuse an `ic` right-hand side that reads a state, directly or through
@@ -1927,8 +1938,8 @@ impl ArrayCompiled {
         let bits = param_bits(param_vec);
         let fresh = |m: &FieldIcMemo| {
             m.params == bits
-                && m.forcing_generation == self.forcing_generation.get()
                 && m.t0 == start.t0.to_bits()
+                && m.forcing == self.ic_forcing_fingerprint()
         };
         let taken = consume_memo
             .then(|| self.field_ic_memo.borrow_mut().take())
@@ -3509,6 +3520,25 @@ mod field_ic_memo_tests {
             let sol = solve(&prob, &SolveOptions::default()).expect("solves");
             assert_eq!(field_ic_resolutions() - before, 1, "[{compiler}]");
             assert_eq!(first_column(&sol), [1.0, 2.0, 3.0], "[{compiler}]");
+        }
+    }
+
+    /// The memo answers to what the resolution read, not to who holds the
+    /// buffer: taking a handle, or writing a field no initial condition
+    /// reads, leaves it standing.
+    #[test]
+    fn a_handle_or_an_unread_write_keeps_the_memo() {
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            let prob = loaded(compiler);
+            let compiled = prob.debug_array_compiled().expect("an array model");
+            compiled.forcing_handle().borrow_mut().insert(
+                "not_read_by_any_ic".to_string(),
+                ndarray::ArrayD::from_elem(ndarray::IxDyn(&[]), 7.0),
+            );
+            let before = field_ic_resolutions();
+            let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(field_ic_resolutions() - before, 0, "[{compiler}]");
+            assert_eq!(first_column(&sol), [0.0, 0.0, 0.0], "[{compiler}]");
         }
     }
 

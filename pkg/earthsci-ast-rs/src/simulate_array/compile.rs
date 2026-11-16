@@ -1231,7 +1231,6 @@ impl ArrayCompiled {
             },
             forcing: Rc::new(RefCell::new(HashMap::new())),
             data_fed,
-            forcing_generation: std::cell::Cell::new(0),
             field_ics,
             init_faqs,
             ic_scope,

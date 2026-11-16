@@ -4233,7 +4233,7 @@ impl SuppliedData {
             Some(ns) if !name.starts_with(&format!("{ns}.")) => format!("{ns}.{name}"),
             _ => name.to_string(),
         };
-        let forcing = c.forcing_buffer();
+        let forcing = c.forcing_handle();
         for name in c.forcing_names() {
             if forcing.borrow().contains_key(name) {
                 continue;
@@ -4637,7 +4637,7 @@ fn bind_providers(
     let declared = provider_declared_shapes(compiled, providers.keys());
     let mut exec =
         crate::provider::RefreshExecutor::from_providers_with_shapes(providers, &declared, &given);
-    let forcing = compiled.forcing_buffer();
+    let forcing = compiled.forcing_handle();
     exec.materialize_const_named(&forcing)
         .map_err(|e| loader_error(&given, e))?;
 
@@ -4786,7 +4786,7 @@ fn sample_discrete_providers(
     if discrete.is_empty() {
         return Ok(());
     }
-    let forcing = compiled.forcing_buffer();
+    let forcing = compiled.forcing_handle();
     let mut written = Vec::new();
     let mut vacant = exec
         .borrow_mut()
@@ -4828,7 +4828,7 @@ fn discrete_at_start(
 ) -> Result<HashMap<String, ndarray::ArrayD<f64>>, SimulateError> {
     let (mut out, vacant) = exec
         .borrow_mut()
-        .sample_detached(t0, read, &compiled.forcing_buffer())
+        .sample_detached(t0, read, &compiled.forcing_handle())
         .map_err(|e| loader_error(given, e))?;
     seed_vacant_discrete(
         compiled,
@@ -5022,7 +5022,7 @@ impl<'p> ProviderRefresh<'p> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some((exec, compiled)) = self.exec {
             let given = &self.prob.provider_keys;
-            let forcing = compiled.forcing_buffer();
+            let forcing = compiled.forcing_handle();
             let mut exec = exec.borrow_mut();
             if std::mem::replace(&mut self.started, true) {
                 return exec
