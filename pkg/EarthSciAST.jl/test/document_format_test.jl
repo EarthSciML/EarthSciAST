@@ -399,10 +399,9 @@ end
         @test round_trips(S, mk3)
 
         # `\times [` outside a region is a product with a bracketed operand.
-        for (sf, text) in ((:latex, "a \\times [1, 2] \\times b"), (:typst, "a times [1, 2] times b"))
-            r = rd(sf, S, text)
-            @test r !== nothing && r["op"] == "*" && r["args"][1] == "a"
-        end
+        prod_ab = Dict("op" => "*", "args" => Any["a", "b"])
+        @test reads(:latex, S, "a \\times [b]", prod_ab)
+        @test reads(:typst, S, "a times [b]", prod_ab)
 
         # The `;` call form reads only a node the printer writes that way.
         ann = Dict("op" => "myop", "args" => Any["x"], "id" => "n1", "shape" => Any[2])
