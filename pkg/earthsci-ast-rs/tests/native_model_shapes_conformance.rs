@@ -121,13 +121,13 @@ fn ingested_shapes_agree() {
     use serde_json::Value;
 
     let dir = tier_dir().join("ingest");
-    let manifest = common::read_json(&dir.join("manifest.json"));
+    let manifest = common::read_json(dir.join("manifest.json"));
     let fixtures = manifest["fixtures"].as_array().expect("fixtures");
     assert!(!fixtures.is_empty());
     let mut bad = Vec::new();
     for fx in fixtures {
         let id = fx["id"].as_str().expect("id");
-        let mut doc = common::read_json(&dir.join(fx["path"].as_str().expect("path")));
+        let mut doc = common::read_json(dir.join(fx["path"].as_str().expect("path")));
         let mut overrides: HashMap<String, String> = HashMap::new();
         for (src, rel) in fx["url_overrides"].as_object().expect("url_overrides") {
             let p = dir
