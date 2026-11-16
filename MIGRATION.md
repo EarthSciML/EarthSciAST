@@ -1755,6 +1755,7 @@ time derivative. A flattened name with a dot prints as a quoted name joined by
 | `PrepareError::is_cancelled`, `PrepareError::CANCELLED_PREFIX` | `SimulateError::is_cancelled` (a cancelled build is `SimulateError::Cancelled`, whose details no longer repeat the prefix) | `deleted` |
 | a coded refusal raised inside the build pipeline as `CompileError::InterpreterBuildError` text | the typed error itself (`SimulateError::Compile(CompileError::ValueInventionRefused { .. })`, …), so its code survives | `changed` |
 | — | `code()` on `CompileError`, `FlattenError` and `SimulateError`; `StructuralErrorCode::as_str()` | `added` |
+| `ExpressionNode::value: Option<serde_json::Value>` | `Option<ConstValue>`: a rectangular all-float or all-integer array is held dense (`as_dense()`), any other literal as its JSON (`as_json()`); `to_json()` gives the JSON of either, `ConstValue::from_dense(shape, values)` builds one from data, and `From<serde_json::Value>` builds one from JSON (`Some(json!(…).into())`). The serialized form is unchanged | `changed` |
 
 `compile_array`, the `ArrayCompiled::from_*` constructors and the `debug_*`
 right-hand-side seams build the `native` compiler, the default of

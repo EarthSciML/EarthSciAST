@@ -909,7 +909,7 @@ impl ArrayCompiled {
         // is lowered under its namespaced name too; `vi_arrays` is passed so a
         // caller-supplied factor array stays authoritative over a declared
         // default.
-        let (inline_param_arrays, runtime_params) = lower_inline_array_parameters(
+        let runtime_params = lower_inline_array_parameters(
             &mut model_owned,
             &index_sets_owned,
             vi_arrays,
@@ -1221,7 +1221,6 @@ impl ArrayCompiled {
             param_defaults,
             observed_rules,
             rhs_rules,
-            rule_set: next_rule_set_id(),
             n_states,
             declared_names,
             conditional_shapes,
@@ -1241,7 +1240,6 @@ impl ArrayCompiled {
             merged_renames: HashMap::new(),
             #[cfg(feature = "solve")]
             field_ic_memo: RefCell::new(None),
-            inline_param_arrays,
             forcing_decls,
             declared_forcing_shapes,
             forcing_defaults,
@@ -1975,9 +1973,8 @@ fn lower_inline_array_parameters(
     index_sets: &HashMap<String, IndexSet>,
     external: Option<&HashMap<String, ArrayD<f64>>>,
     keep_at_runtime: bool,
-) -> Result<(HashMap<String, (Vec<usize>, Vec<f64>)>, HashSet<String>), CompileError> {
-    let mut lowered: Vec<(String, JsonValue)> = Vec::new();
-    let mut dense: HashMap<String, (Vec<usize>, Vec<f64>)> = HashMap::new();
+) -> Result<HashSet<String>, CompileError> {
+    let mut lowered: Vec<(String, crate::ConstValue)> = Vec::new();
     let mut kept: HashSet<String> = HashSet::new();
     for (name, var) in &mut model.variables {
         if var.var_type != VariableType::Parameter {
@@ -2032,8 +2029,7 @@ fn lower_inline_array_parameters(
             let values = vec![scalar; want.iter().copied().product::<usize>().max(1)];
             var.var_type = VariableType::Unknown;
             var.default = None;
-            lowered.push((name.clone(), dense_to_json(&want, &values)));
-            dense.insert(name.clone(), (want, values));
+            lowered.push((name.clone(), crate::ConstValue::from_dense(&want, values)));
             continue;
         }
         let (shape, values) = inline_array_default(name, var, default, index_sets)?;
@@ -2042,8 +2038,7 @@ fn lower_inline_array_parameters(
         }
         var.var_type = VariableType::Unknown;
         var.default = None;
-        lowered.push((name.clone(), dense_to_json(&shape, &values)));
-        dense.insert(name.clone(), (shape, values));
+        lowered.push((name.clone(), crate::ConstValue::from_dense(&shape, values)));
     }
     for (name, value) in lowered {
         // A bare-variable LHS makes it an OBSERVED (esm-spec §6.3.1), and a
@@ -2060,7 +2055,7 @@ fn lower_inline_array_parameters(
             comment: None,
         });
     }
-    Ok((dense, kept))
+    Ok(kept)
 }
 
 /// Parameter `name`'s inline array `default` as a dense array, checked
@@ -2153,25 +2148,6 @@ pub(crate) fn inline_parameter_arrays(
         }
     }
     out
-}
-
-/// Re-nest a row-major dense buffer into the nested JSON array a `const` node
-/// carries. The inverse of [`crate::types::InlineValue::to_dense`].
-fn dense_to_json(shape: &[usize], values: &[f64]) -> JsonValue {
-    fn build(shape: &[usize], values: &[f64]) -> JsonValue {
-        let Some((&axis, rest)) = shape.split_first() else {
-            return serde_json::Number::from_f64(values[0])
-                .map(JsonValue::Number)
-                .unwrap_or(JsonValue::Null);
-        };
-        let stride = rest.iter().product::<usize>().max(1);
-        JsonValue::Array(
-            (0..axis)
-                .map(|i| build(rest, &values[i * stride..(i + 1) * stride]))
-                .collect(),
-        )
-    }
-    build(shape, values)
 }
 
 /// (1) Collect state / parameter / observed variables (sorted by name for a
@@ -4138,15 +4114,7 @@ fn collect_scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> Has
 /// variable (a whole-array assignment); the eliminated-state machinery then
 /// materializes it as an ordinary constant observed.
 fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
-    let value = JsonValue::Array(
-        buf.iter()
-            .map(|&v| {
-                serde_json::Number::from_f64(v)
-                    .map(JsonValue::Number)
-                    .unwrap_or(JsonValue::Null)
-            })
-            .collect(),
-    );
+    let value = crate::ConstValue::from_dense(&[buf.len()], buf.to_vec());
     let const_node = Expr::operator(ExpressionNode {
         op: "const".to_string(),
         value: Some(value),
@@ -4455,7 +4423,7 @@ fn without_factor_literals(model: &Model, factors: &HashMap<String, ArrayD<f64>>
         if is_factor {
             eq.rhs = Expr::operator(ExpressionNode {
                 op: "const".into(),
-                value: Some(serde_json::Value::from(0)),
+                value: Some(serde_json::Value::from(0).into()),
                 ..Default::default()
             });
         }
@@ -6548,9 +6516,7 @@ mod updated_array_default_tests {
         )]
         .into_iter()
         .collect();
-        let (dense, _) =
-            lower_inline_array_parameters(&mut model, &sets, Some(&external), false).unwrap();
-        assert!(dense.is_empty());
+        lower_inline_array_parameters(&mut model, &sets, Some(&external), false).unwrap();
         assert_eq!(model.variables["p"].var_type, VariableType::Parameter);
         assert!(model.variables["p"].default.is_some());
         assert!(
@@ -6560,9 +6526,22 @@ mod updated_array_default_tests {
                 .any(|e| e.lhs == Expr::Variable("p".into()))
         );
 
-        // Without the caller's array the default is lowered.
-        let (dense, _) = lower_inline_array_parameters(&mut model, &sets, None, false).unwrap();
-        assert!(dense.contains_key("p"));
+        // Without the caller's array the default is lowered, its data held
+        // dense on the `const` node.
+        lower_inline_array_parameters(&mut model, &sets, None, false).unwrap();
+        let lowered = model
+            .equations
+            .iter()
+            .find(|e| e.lhs == Expr::Variable("p".into()))
+            .expect("p lowered to a const observed");
+        let Expr::Operator(node) = &lowered.rhs else {
+            panic!("expected a const node, got {:?}", lowered.rhs);
+        };
+        let dense = node.value.as_ref().and_then(crate::ConstValue::as_dense);
+        assert_eq!(
+            dense.expect("dense payload").as_slice(),
+            Some(&[1.0, 2.0, 3.0][..])
+        );
     }
 
     /// A data-fed array default on a parameter that declares no `shape` gets

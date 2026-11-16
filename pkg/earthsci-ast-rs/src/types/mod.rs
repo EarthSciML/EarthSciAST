@@ -5,6 +5,7 @@
 //! The types are grouped by concern:
 //! - [`document`]: top-level file structure, metadata, references
 //! - [`expression`]: expression AST nodes and their child-visit machinery
+//! - [`const_value`]: the payload of a `const` node
 //! - [`analysis`]: inline model tests, parameter sweeps, and plot definitions
 //! - [`model`]: models, variables, parameter updates, and equations
 //! - [`events`]: discrete and continuous events
@@ -13,6 +14,7 @@
 
 mod analysis;
 mod components;
+mod const_value;
 mod document;
 mod events;
 mod expression;
@@ -21,6 +23,7 @@ mod subsystem;
 
 pub use analysis::*;
 pub use components::*;
+pub use const_value::ConstValue;
 pub use document::*;
 pub use events::*;
 pub use expression::*;

@@ -32,7 +32,7 @@
 //! * [`Instr::Assemble`] is a whole `eval_vec_makearray`: the zero-filled
 //!   bounding box with every region written in order, in one instruction.
 //! * [`Instr::ConstArray`] materializes an inline array literal: the elements
-//!   `eval_const`/`json_to_value` produce for that node, in row-major order,
+//!   `eval_const` produces for that node, in row-major order,
 //!   already precision-rounded at ingress — the same `f64`s the interpreter
 //!   would have read out of the same `Value::Array`.
 //! * [`Instr::Count`] counts the entries of a rank-1 array window that stand
@@ -1972,11 +1972,10 @@ pub(crate) struct GatherPlan {
 #[derive(Clone, Debug)]
 pub(crate) struct ConstArrayData {
     pub shape: DimU,
-    /// Row-major elements, exactly as `json_to_value` produces them from the
-    /// literal (precision-rounded at ingress under `element_type: "Float32"`)
-    /// — taken from the declared data directly for a lowered shaped-parameter
-    /// default. Shared, so a payload the build already holds (a folded
-    /// contraction's input, bound on every chunk's tape) is not copied.
+    /// Row-major elements, exactly as `eval_const` produces them from the
+    /// literal (precision-rounded at ingress under `element_type: "Float32"`).
+    /// Shared, so a payload the build already holds (a folded contraction's
+    /// input, bound on every chunk's tape) is not copied.
     pub values: std::sync::Arc<Vec<f64>>,
 }
 

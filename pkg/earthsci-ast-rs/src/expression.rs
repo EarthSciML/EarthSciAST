@@ -436,7 +436,7 @@ mod tests {
             Expr::operator(ExpressionNode {
                 op: op.to_string(),
                 args,
-                value,
+                value: value.map(Into::into),
                 ..Default::default()
             })
         };

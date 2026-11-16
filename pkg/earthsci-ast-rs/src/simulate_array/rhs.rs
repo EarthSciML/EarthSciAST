@@ -19,10 +19,6 @@ pub struct RhsScratch {
     state_arrays: ArrMap,
     /// Observed (algebraic) arrays; the container is reused across calls.
     observed_arrays: ArrMap,
-    /// Memo for inline array-valued `const` literals (see
-    /// [`EvalCtx::const_lits`]). Keyed by AST node ADDRESS, so it is
-    /// retargeted whenever the scratch is handed a different rule set.
-    const_lits: ConstLitMemo,
     /// Names of the hoisted STATE-FREE / `t`-free observeds (ess: static-observed
     /// hoist). Their arrays are seeded into `observed_arrays` ONCE by
     /// [`Self::set_static`] and then RETAINED in place across every RHS eval
@@ -60,7 +56,6 @@ impl RhsScratch {
         RhsScratch {
             state_arrays,
             observed_arrays: ArrMap::default(),
-            const_lits: ConstLitMemo::default(),
             static_keys: HashSet::new(),
             tape: None,
             const_arrays: std::sync::Arc::new(ConstArrayScope::default()),
@@ -630,19 +625,11 @@ pub(super) struct RhsCall<'a> {
     /// See [`EvalCtx::declared`] — the compiled model's declared-name set,
     /// carried so the evaluator's fault arm can name the right defect.
     pub(super) declared: &'a HashSet<String>,
-    /// The rule set's identity, from [`next_rule_set_id`]: one id per owner of
-    /// `rhs_rules`/`observed_rules`, drawn when that owner is built.
-    pub(super) rule_set: u64,
 }
 
 impl<'a> RhsCall<'a> {
     /// The evaluation environment of this call over `state_arrays`.
-    fn env<'b>(
-        &self,
-        state_arrays: &'b ArrMap,
-        const_lits: &'b ConstLitMemo,
-        const_arrays: &'b ConstArrayScope,
-    ) -> EvalEnv<'b>
+    fn env<'b>(&self, state_arrays: &'b ArrMap, const_arrays: &'b ConstArrayScope) -> EvalEnv<'b>
     where
         'a: 'b,
     {
@@ -653,29 +640,10 @@ impl<'a> RhsCall<'a> {
             t: self.t,
             derived_extents: empty_derived_extents(),
             forcing: self.forcing,
-            const_lits: Some(const_lits),
             const_arrays,
             declared: self.declared,
         }
     }
-}
-
-/// A fresh rule-set identity for [`RhsCall::rule_set`]. Never reused within a
-/// process, so a rule set built after another was dropped cannot inherit its
-/// identity the way it can inherit its allocation.
-pub(super) fn next_rule_set_id() -> u64 {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-/// The identity of the rule set a scratch's address-keyed inline-`const` memo
-/// was built against.
-///
-/// Not the rule slices' addresses: a model dropped and the next one built may
-/// be handed the very same allocation, with the same rule counts, and a key
-/// derived from it would keep the dropped model's classification alive.
-fn rule_set_key(call: &RhsCall) -> u64 {
-    call.rule_set
 }
 
 /// Evaluate one RHS call: through the tape when the scratch carries one
@@ -694,7 +662,6 @@ pub(super) fn evaluate_rhs_with_scratch(
     match scratch.tape.as_mut() {
         Some(tape) => run_tape_call(tape, call, dy, stats),
         None => {
-            scratch.const_lits.retarget(rule_set_key(call));
             dy.fill(0.0);
             evaluate_rhs_per_cell(call, dy, stats, scratch);
         }
@@ -742,16 +709,15 @@ fn evaluate_rhs_per_cell(
             state_arrays,
             observed_arrays,
             static_keys,
-            const_lits,
             ..
         } = &mut *scratch;
         observed_arrays.retain(|k, _| static_keys.contains(k));
-        let env = call.env(state_arrays, const_lits, const_arrays);
+        let env = call.env(state_arrays, const_arrays);
         materialize_observeds_pass(observed_arrays, observed_rules, &env, stats);
     }
 
     let observed_arrays = &scratch.observed_arrays;
-    let env = call.env(&scratch.state_arrays, &scratch.const_lits, const_arrays);
+    let env = call.env(&scratch.state_arrays, const_arrays);
 
     // (c) Evaluate each RHS rule and write into dy.
     for rule in rhs_rules {

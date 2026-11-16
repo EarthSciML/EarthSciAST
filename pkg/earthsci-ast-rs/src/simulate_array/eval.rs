@@ -385,7 +385,7 @@ fn check_scalar_ops(expr: &Expr) -> Result<(), CompileError> {
         Some(CoreOp::Other(O::Const)) => !node
             .value
             .as_ref()
-            .is_some_and(serde_json::Value::is_number),
+            .is_some_and(crate::ConstValue::is_number),
         // Everything else has a scalar value over scalar operands, or was
         // refused by the gates above.
         Some(CoreOp::Unary(_) | CoreOp::Compare(_)) | None => false,
@@ -556,7 +556,7 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 
         // Inline literal (esm-spec §4): a number → scalar; a nested numeric
         // array → a row-major array.
-        CoreOp::Other(O::Const) => eval_const_memo(node, ctx.const_lits),
+        CoreOp::Other(O::Const) => eval_const(node),
 
         // Array ops.
         CoreOp::Other(O::Index) => eval_index(node, ctx),
@@ -1566,134 +1566,74 @@ mod kernel_equivalence_tests {
         assert_eq!(fold_scalar("+", &[0.1, 0.2, 0.3]).to_bits(), want.to_bits());
     }
 
-    /// A `const` literal is raw JSON, not an `Expr::Number`, so it is the one
-    /// numeric ingress the literal rule does not reach — and a const ARRAY
-    /// would then serve binary64 elements to every gather on it.
+    fn const_node(value: serde_json::Value) -> ExpressionNode {
+        ExpressionNode {
+            op: "const".to_string(),
+            value: Some(value.into()),
+            ..Default::default()
+        }
+    }
+
+    /// A `const` literal is not an `Expr::Number`, so it is the one numeric
+    /// ingress the literal rule does not reach — and a const ARRAY would then
+    /// serve binary64 elements to every gather on it.
     #[test]
     fn const_literals_round_on_materialization() {
         let _g = crate::precision::enter(crate::precision::Precision::Float32);
-        let scalar = json_to_value(&serde_json::json!(0.1)).expect("scalar const");
-        match scalar {
+        match eval_const(&const_node(serde_json::json!(0.1))) {
             Value::Scalar(s) => assert_eq!(s.to_bits(), (0.1_f32 as f64).to_bits()),
             other => panic!("expected a scalar, got {other:?}"),
         }
-        let arr = json_to_value(&serde_json::json!([0.1, 0.2])).expect("array const");
-        match arr {
-            Value::Array(a) => {
-                assert_eq!(a[[0]].to_bits(), (0.1_f32 as f64).to_bits());
-                assert_eq!(a[[1]].to_bits(), (0.2_f32 as f64).to_bits());
-            }
-            other => panic!("expected an array, got {other:?}"),
-        }
-    }
-
-    /// The inline-`const` memo must answer with exactly what the walk produces,
-    /// on the first read and on every later one — it is a pure
-    /// evaluation-count change, never a value change.
-    #[test]
-    fn const_literal_memo_matches_the_direct_walk() {
-        let node = ExpressionNode {
-            op: "const".to_string(),
-            value: Some(serde_json::json!([[1.5, -2.5], [3.25, 4.75]])),
-            ..Default::default()
-        };
-        let want = match json_to_value(node.value.as_ref().unwrap()).expect("array const") {
-            Value::Array(a) => *a,
-            other => panic!("expected an array, got {other:?}"),
-        };
-        let memo = ConstLitMemo::default();
-        let first = memo.get(&node).expect("memoized array");
-        assert_eq!(*first, want);
-        for _ in 0..3 {
-            let got = memo.get(&node).expect("memoized array");
-            assert_eq!(*got, want);
-            // Same allocation, not an equal one: a later read is served from
-            // the table rather than re-walking the payload.
-            assert!(std::sync::Arc::ptr_eq(&first, &got));
-        }
-        // And the memo-aware `const` arm agrees with the un-memoized one.
-        match (
-            eval_const_memo(&node, Some(&memo)),
-            eval_const_memo(&node, None),
-        ) {
-            (Value::Array(a), Value::Array(b)) => assert_eq!(*a, *b),
-            other => panic!("expected two arrays, got {other:?}"),
-        }
-    }
-
-    /// The memo is keyed by working precision as well as by node, because a
-    /// `const` literal rounds on ingress (esm-spec §11.3.1): one node has two
-    /// materializations and serving the wrong one would silently widen a
-    /// binary32 document back to binary64.
-    #[test]
-    fn const_literal_memo_is_keyed_by_precision() {
-        let node = ExpressionNode {
-            op: "const".to_string(),
-            value: Some(serde_json::json!([0.1, 0.2])),
-            ..Default::default()
-        };
-        let memo = ConstLitMemo::default();
-        let f64_first = memo.get(&node).expect("binary64 array")[[0]];
-        let f32_seen = {
-            let _g = crate::precision::enter(crate::precision::Precision::Float32);
-            memo.get(&node).expect("binary32 array")[[0]]
-        };
-        let f64_again = memo.get(&node).expect("binary64 array again")[[0]];
-        assert_eq!(f64_first.to_bits(), 0.1_f64.to_bits());
-        assert_eq!(f32_seen.to_bits(), (0.1_f32 as f64).to_bits());
-        assert_eq!(f64_again.to_bits(), f64_first.to_bits());
-    }
-
-    /// A ragged literal has no array materialization; the memo must report that
-    /// as the NaN sentinel the plain walk reports, not cache a partial array.
-    #[test]
-    fn const_literal_memo_keeps_a_ragged_literal_unevaluable() {
-        let node = ExpressionNode {
-            op: "const".to_string(),
-            value: Some(serde_json::json!([[1.0, 2.0], [3.0]])),
-            ..Default::default()
-        };
-        let memo = ConstLitMemo::default();
-        assert!(memo.get(&node).is_none());
-        for m in [Some(&memo), None] {
-            match eval_const_memo(&node, m) {
-                Value::Scalar(s) => assert!(s.is_nan()),
-                other => panic!("expected the NaN sentinel, got {other:?}"),
+        // A dense payload, and one held as JSON (mixed spelling).
+        for lit in [
+            serde_json::json!([0.1, 0.2]),
+            serde_json::json!([0.1, 0.2, 3]),
+        ] {
+            match eval_const(&const_node(lit)) {
+                Value::Array(a) => {
+                    assert_eq!(a[[0]].to_bits(), (0.1_f32 as f64).to_bits());
+                    assert_eq!(a[[1]].to_bits(), (0.2_f32 as f64).to_bits());
+                }
+                other => panic!("expected an array, got {other:?}"),
             }
         }
     }
 
-    /// Entries are keyed by node ADDRESS, so a scratch handed a different rule
-    /// set must drop them: a later node can land on an address the previous
-    /// rule set used, and serving that node the old array would put a whole
-    /// different lookup table under a gather. `retarget` to a new key must
-    /// therefore leave nothing behind; re-binding the SAME key must not throw
-    /// the table away on every call.
+    /// A literal's array is materialized once per precision and shared by
+    /// every later read, including a read through a clone of the node; the
+    /// binary32 reading is a different array from the binary64 one.
     #[test]
-    fn const_literal_memo_is_dropped_when_the_rule_set_changes() {
-        let node = ExpressionNode {
-            op: "const".to_string(),
-            value: Some(serde_json::json!([1.0, 2.0, 3.0])),
-            ..Default::default()
-        };
-        let memo = ConstLitMemo::default();
-        memo.retarget(0x1234);
-        let first = memo.get(&node).expect("memoized array");
-        assert!(std::sync::Arc::ptr_eq(
-            &first,
-            &memo.get(&node).expect("same rule set, same entry")
-        ));
-        // Re-binding the same key keeps the table.
-        memo.retarget(0x1234);
-        assert!(std::sync::Arc::ptr_eq(
-            &first,
-            &memo.get(&node).expect("same key, same entry")
-        ));
-        // A different key drops it: the next read is a fresh materialization.
-        memo.retarget(0x5678);
-        let after = memo.get(&node).expect("rebuilt array");
-        assert!(!std::sync::Arc::ptr_eq(&first, &after));
-        assert_eq!(*after, *first);
+    fn const_literal_array_is_materialized_once_per_precision() {
+        for lit in [serde_json::json!([0.1, 0.2]), serde_json::json!([0.1, 2])] {
+            let node = const_node(lit);
+            let clone = node.clone();
+            let v = node.value.as_ref().unwrap();
+            let first = v.array().expect("array const");
+            let again = clone.value.as_ref().unwrap().array().expect("array const");
+            assert!(std::sync::Arc::ptr_eq(&first, &again));
+            let f32_seen = {
+                let _g = crate::precision::enter(crate::precision::Precision::Float32);
+                v.array().expect("binary32 array")
+            };
+            assert_eq!(f32_seen[[0]].to_bits(), (0.1_f32 as f64).to_bits());
+            assert_eq!(first[[0]].to_bits(), 0.1_f64.to_bits());
+            match eval_const(&node) {
+                Value::Array(a) => assert_eq!(*a, *first),
+                other => panic!("expected an array, got {other:?}"),
+            }
+        }
+    }
+
+    /// A ragged literal has no array reading: it evaluates to the NaN
+    /// sentinel, never a partial array.
+    #[test]
+    fn const_literal_ragged_is_unevaluable() {
+        let node = const_node(serde_json::json!([[1.0, 2.0], [3.0]]));
+        assert!(node.value.as_ref().unwrap().array().is_none());
+        match eval_const(&node) {
+            Value::Scalar(s) => assert!(s.is_nan()),
+            other => panic!("expected the NaN sentinel, got {other:?}"),
+        }
     }
 }
 
@@ -2305,9 +2245,9 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
     }
     // Inline `const` array literal as the gather target (esm-spec §4.3.3). Read
-    // the one element straight out of the memoized array: the generic path below
-    // re-walks the node's JSON payload and copies the whole table into a `Value`
-    // for every single cell, which on a transcribed lookup table (an RRTM
+    // the one element straight out of the payload's materialized array: the
+    // generic path below copies the whole table into a `Value` for every
+    // single cell, which on a transcribed lookup table (an RRTM
     // k-distribution band is ~14k numbers, gathered once per level per g-point)
     // is the dominant cost of the whole right-hand side. The provenance
     // (`INLINE_CONST_NAME`), the out-of-range policy and `index_into` itself are
@@ -2317,8 +2257,7 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // unobservable: a `const` node reads nothing and latches nothing.
     if let Expr::Operator(lit) = &node.args[0]
         && lit.op == "const"
-        && is_inline_const_array(lit)
-        && let Some(arr) = const_lit_array(lit, ctx.const_lits)
+        && let Some(arr) = lit.value.as_ref().and_then(crate::ConstValue::array)
     {
         let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
         return index_into(
@@ -2381,102 +2320,30 @@ fn gather_kind<'a>(name: &'a str, ctx: &EvalCtx<'a>) -> GatherKind<'a> {
 }
 
 /// Evaluate a `const` op: the inline literal in the node's `value` field. A JSON
-/// number yields a [`Value::Scalar`]; a nested numeric array yields a row-major
-/// [`Value::Array`]. A missing, ragged, or non-numeric literal is unevaluable
-/// (NaN sentinel), matching the evaluator's convention for malformed nodes.
-pub(super) fn eval_const(node: &ExpressionNode) -> Value {
-    node.value
-        .as_ref()
-        .and_then(json_to_value)
-        .unwrap_or(Value::Scalar(f64::NAN))
-}
-
-/// [`eval_const`] served from the inline-literal memo when one is in scope.
+/// number yields a [`Value::Scalar`]; a rectangular numeric array yields a
+/// row-major [`Value::Array`]. A missing, ragged, or non-numeric literal is
+/// unevaluable (NaN sentinel), matching the evaluator's convention for
+/// malformed nodes.
 ///
-/// Only the ARRAY case is memoized: a scalar literal is one `as_f64`, while an
-/// array literal is a recursive JSON walk over (for a transcribed lookup table)
-/// tens of thousands of numbers. The value is identical either way — the memo
-/// stores exactly what [`json_to_value`] produced — so this is a pure
-/// evaluation-count change. See [`EvalCtx::const_lits`].
-pub(super) fn eval_const_memo(node: &ExpressionNode, memo: Option<&ConstLitMemo>) -> Value {
-    // With no memo in scope there is nothing to serve from, and going through
-    // one would only add a copy: fall straight through to the plain walk.
-    if let Some(memo) = memo
-        && is_inline_const_array(node)
-        && let Some(arr) = memo.get(node)
-    {
-        return Value::Array(Box::new((*arr).clone()));
+/// A literal rounds to the working precision on ingress (esm-spec §11.3.1),
+/// once: the scalar here, the array when the payload materializes it
+/// ([`crate::ConstValue`]).
+pub(super) fn eval_const(node: &ExpressionNode) -> Value {
+    let Some(v) = node.value.as_ref() else {
+        return Value::Scalar(f64::NAN);
+    };
+    if let Some(a) = v.array() {
+        return Value::Array(Box::new((*a).clone()));
     }
-    eval_const(node)
+    let scalar = v.as_f64().map(|x| crate::precision::active().round(x));
+    Value::Scalar(scalar.unwrap_or(f64::NAN))
 }
 
-/// Whether this `const` node's payload is a (possibly nested) JSON array — the
-/// literals the memo covers. A scalar payload takes the untouched path.
+/// Whether this `const` node's payload is an array: the literals an `index`
+/// reads whole as its gather source. A scalar payload takes the untouched path.
 #[inline]
 pub(super) fn is_inline_const_array(node: &ExpressionNode) -> bool {
-    matches!(node.value.as_ref(), Some(serde_json::Value::Array(_)))
-}
-
-/// Convert an inline JSON literal to a runtime [`Value`]: a number → scalar; a
-/// (possibly nested) numeric array → a row-major dynamic-rank array. `None` for
-/// a non-numeric leaf or a ragged literal (a row whose length disagrees with its
-/// siblings), so a malformed `const` surfaces as the NaN sentinel.
-pub(super) fn json_to_value(v: &serde_json::Value) -> Option<Value> {
-    use serde_json::Value as J;
-    // A `const` literal is the one numeric ingress that does NOT arrive as an
-    // `Expr::Number` — it is raw JSON hanging off the node — so it would keep
-    // its binary64 value through a Float32 evaluation, and a const ARRAY would
-    // then serve binary64 elements to every gather on it. Round here, once, at
-    // the point of materialization. Identity under Float64.
-    let prec = crate::precision::active();
-    match v {
-        J::Number(n) => Some(Value::Scalar(prec.round(n.as_f64()?))),
-        J::Array(_) => {
-            let mut shape: Vec<usize> = Vec::new();
-            let mut flat: Vec<f64> = Vec::new();
-            collect_json_array(v, 0, &mut shape, &mut flat)?;
-            if prec.is_f32() {
-                for x in &mut flat {
-                    *x = prec.round(*x);
-                }
-            }
-            ArrayD::from_shape_vec(IxDyn(&shape), flat)
-                .ok()
-                .map(|a| Value::Array(Box::new(a)))
-        }
-        _ => None,
-    }
-}
-
-/// Walk a nested JSON numeric array, recording its shape (from the first branch
-/// at each depth) and pushing every leaf number in row-major order. `None` on a
-/// non-numeric leaf or a sub-array whose length disagrees with the recorded
-/// shape at that depth (a ragged literal).
-pub(super) fn collect_json_array(
-    v: &serde_json::Value,
-    depth: usize,
-    shape: &mut Vec<usize>,
-    flat: &mut Vec<f64>,
-) -> Option<()> {
-    use serde_json::Value as J;
-    match v {
-        J::Array(items) => {
-            if depth == shape.len() {
-                shape.push(items.len());
-            } else if shape[depth] != items.len() {
-                return None; // ragged: this row's length disagrees with its siblings
-            }
-            for item in items {
-                collect_json_array(item, depth + 1, shape, flat)?;
-            }
-            Some(())
-        }
-        J::Number(n) => {
-            flat.push(n.as_f64()?);
-            Some(())
-        }
-        _ => None,
-    }
+    node.value.as_ref().is_some_and(crate::ConstValue::is_array)
 }
 
 /// Evaluate a standalone expression against a set of named array inputs, reusing
@@ -2636,7 +2503,6 @@ impl StandaloneScope<'_> {
             t: self.t,
             derived_extents: self.derived_extents,
             forcing: &forcing,
-            const_lits: None,
             const_arrays: self.const_arrays,
             declared: empty_declared_names(),
         })
@@ -6137,7 +6003,6 @@ mod unbound_name_fault_tests {
             t: 0.0,
             derived_extents: empty_derived_extents(),
             forcing: &forcing,
-            const_lits: None,
             const_arrays: ConstArrayScope::empty(),
             declared: &declared,
         };

@@ -1430,15 +1430,13 @@ pub(super) fn eval_vec_index<'a>(
     // the oracle's `eval_index` reads it at. Elsewhere a bare array literal
     // stays declined (`VecOp::Const`): the oracle scalarizes it.
     let arg0 = match &node.args[0] {
-        Expr::Operator(c) if c.op == "const" && is_inline_const_array(c) => {
-            match eval_const_memo(c, ctx.const_lits) {
-                Value::Array(a) => VecValue::Owned {
-                    origin: DimI::from_elem(1, a.ndim()),
-                    data: *a,
-                },
-                Value::Scalar(_) => bail_vec!("index: malformed inline `const` literal"),
-            }
-        }
+        Expr::Operator(c) if c.op == "const" && is_inline_const_array(c) => match eval_const(c) {
+            Value::Array(a) => VecValue::Owned {
+                origin: DimI::from_elem(1, a.ndim()),
+                data: *a,
+            },
+            Value::Scalar(_) => bail_vec!("index: malformed inline `const` literal"),
+        },
         base => eval_vec(base, bx, ctx, pool, ops)?,
     };
     let n = node.args.len() - 1;
