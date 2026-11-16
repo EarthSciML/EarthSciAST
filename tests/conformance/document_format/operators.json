@@ -513,6 +513,24 @@
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(0, 1, 2, 3, 4; 5, 6, 7, 8, 9; 10, 11, 12, 13, 14; 15, 16, 17, 18, 19) thin upright(\"m\") $\n"
     },
     {
+      "id": "const_wide_matrix",
+      "kind": "print",
+      "description": "A matrix of more than 10 columns: LaTeX \\left[\\begin{array}{c…c} … \\right], one c per column (bmatrix holds at most 10); Typst mat(…) as for any matrix.",
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]]}}], "variables": {"y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\left[\\begin{array}{ccccccccccc}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\\\ 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21 \\end{array}\\right]", "typst": "y = mat(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10; 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21)"},
+      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{ccccccccccc}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\\\ 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21 \\end{array}\\right]\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10; 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21) $\n"
+    },
+    {
+      "id": "const_ten_columns",
+      "kind": "print",
+      "description": "A matrix of exactly 10 columns keeps the bmatrix.",
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]]}}], "variables": {"y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\begin{bmatrix}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 \\\\ 10 & 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19\\end{bmatrix}", "typst": "y = mat(0, 1, 2, 3, 4, 5, 6, 7, 8, 9; 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)"},
+      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 \\\\ 10 & 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19\\end{bmatrix}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(0, 1, 2, 3, 4, 5, 6, 7, 8, 9; 10, 11, 12, 13, 14, 15, 16, 17, 18, 19) $\n"
+    },
+    {
       "id": "const_rank3",
       "kind": "print",
       "description": "A rank-3 array prints in the call form, its value as JSON.",
@@ -547,6 +565,22 @@
       "math": {"latex": "y = \\operatorname{duo\\_tile\\_map} + x", "typst": "y = op(\"duo_tile_map\") + x"},
       "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{duo\\_tile\\_map} + x\n$$\n",
       "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"duo_tile_map\") + x $\n"
+    },
+    {
+      "id": "template_zero_params",
+      "kind": "print",
+      "description": "A template in scope with no parameters, applied with no bindings: its call with empty parentheses (the bare name is refused there).",
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {}, "name": "unit_tile", "op": "apply_expression_template"}}], "expression_templates": {"unit_tile": {"body": 1, "params": []}}, "variables": {"y": {"type": "unknown"}}}}},
+      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{unit\\_tile}()\n$$\n\n$$\n\\operatorname{unit\\_tile}() \\coloneqq 1\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"unit_tile\")() $\n\n$ op(\"unit_tile\")() := 1 $\n"
+    },
+    {
+      "id": "template_bare_in_scope",
+      "kind": "print",
+      "description": "A template in scope with parameters, applied with no bindings: its bare name.",
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"y": {"type": "unknown"}}}}},
+      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"arrhenius\") $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
     },
     {
       "id": "template_bare_product",
