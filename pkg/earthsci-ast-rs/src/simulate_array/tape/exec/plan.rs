@@ -27,7 +27,6 @@
 //! any instruction that would split but cannot run share by share.
 
 use super::interp::{Cx, exec_share, exec_straight, shares};
-use super::resolve::rm_strides;
 use super::*;
 
 /// Estimated element-operations a phase must have before it forks: below
@@ -158,59 +157,10 @@ fn place(
     if !ins.may_run_on_worker() || prog.precision.get(pc).is_some() {
         return Place::Loop(1);
     }
-    let split = match ins {
-        Instr::Fused { spec } => super::par::split_ways(&prog.fused[*spec as usize], ways),
-        Instr::Assemble { out, .. } => {
-            let d = &prog.tables.slots[*out as usize];
-            if d.shape.is_empty() {
-                1
-            } else {
-                super::par::ways_for(d.elems(), ways)
-            }
-        }
-        // A scan along the leading axis splits by its lanes.
-        Instr::Scan {
-            axis: 0, src_shape, ..
-        } => {
-            let lanes: usize = src_shape.iter().skip(1).product();
-            if src_shape.len() < 2 {
-                1
-            } else {
-                super::par::lane_split_ways(lanes, src_shape.iter().product(), ways)
-            }
-        }
-        Instr::Gather { out, .. } | Instr::Reduce { out, .. } => {
-            let d = &prog.tables.slots[*out as usize];
-            if d.scalar {
-                1
-            } else {
-                super::par::ways_for(d.elems(), ways)
-            }
-        }
-        // A copy's split is fixed here, on the calling thread: a worker
-        // must not choose it again (a test's forced width is the calling
-        // thread's alone).
-        Instr::Copy { out, .. } => {
-            let d = &prog.tables.slots[*out as usize];
-            if d.scalar {
-                1
-            } else {
-                super::par::copy_ways(ways, &rm_strides(&d.shape), &d.shape)
-            }
-        }
-        Instr::DyWrite { write } => {
-            let w = &prog.tables.dy_writes[*write as usize];
-            if w.scatter.is_some() || w.scalar_flat.is_some() {
-                1
-            } else {
-                let sv = &prog.state_vars[w.var as usize];
-                let shape = &prog.tables.slots[w.slot as usize].shape;
-                let st = dy_strides(prog, &sv.shape);
-                super::par::copy_ways(ways, &st, shape)
-            }
-        }
-        _ => 1,
-    };
+    // A copy's split is fixed here, on the calling thread: a worker must
+    // not choose it again (a test's forced width is the calling thread's
+    // alone).
+    let split = super::par::split_width(prog, ins, ways);
     if split <= 1 {
         Place::Task(0)
     } else if shares(prog, ins) {

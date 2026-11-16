@@ -680,12 +680,7 @@ impl Block {
     /// none. Each instruction is decoded under its own precision. A gather
     /// that may fault is a block of its own, so a fault stops a block before
     /// any other instruction of it.
-    fn build(
-        prog: &TapeProgram,
-        slot_off: &[usize],
-        cuts: &[bool],
-        start: usize,
-    ) -> Option<Block> {
+    fn build(prog: &TapeProgram, slot_off: &[usize], cuts: &[bool], start: usize) -> Option<Block> {
         let mut b = Builder::default();
         let mut pc = start;
         while pc < prog.instrs.len() && !(pc > start && cuts[pc]) {
@@ -824,7 +819,10 @@ impl Block {
                             v[d] = g(subs[d]);
                         }
                         let base = base_ptr(&src);
-                        put(out, gather_one(&gathers[spec as usize], base, &v[..n as usize])?);
+                        put(
+                            out,
+                            gather_one(&gathers[spec as usize], base, &v[..n as usize])?,
+                        );
                     }
                     BlockOp::Count {
                         rel,
@@ -982,7 +980,11 @@ impl Builder {
                 if !sp.shape.is_empty() || sp.subs.len() > 4 {
                     return false;
                 }
-                let Some(subs) = sp.subs.iter().map(src).collect::<Option<SmallVec<[_; 4]>>>()
+                let Some(subs) = sp
+                    .subs
+                    .iter()
+                    .map(src)
+                    .collect::<Option<SmallVec<[_; 4]>>>()
                 else {
                     return false;
                 };
@@ -1172,11 +1174,28 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
         ..
     } = *cx;
     let prog = env.prog;
+    // An instruction that splits under this call's width runs as one
+    // fork-join over its share function, as a call plan's task would.
+    #[cfg(not(target_arch = "wasm32"))]
+    if call_split > 1 && !matches!(ins, Instr::Fused { .. }) && shares(prog, ins) {
+        let ways = super::par::split_width(prog, ins, call_split);
+        if ways > 1
+            && let Some(op) = unsafe { resolve_split(cx, ins, &mut scratch.asm_parts) }
+        {
+            let precision = crate::precision::active();
+            super::pool::run(ways, &|w| {
+                // The caller's precision is thread-local; carry it over.
+                let _p = crate::precision::enter(precision);
+                // SAFETY: the shares of one split write disjoint parts of
+                // its output, and read only what instructions before it
+                // wrote.
+                unsafe { run_split_share(&op, w, ways) }
+            });
+            return;
+        }
+    }
     let Scratch {
-        fregs,
-        fscratch,
-        #[cfg(not(target_arch = "wasm32"))]
-        asm_parts,
+        fregs, fscratch, ..
     } = scratch;
     #[cfg(target_arch = "wasm32")]
     let _ = call_split;
@@ -1258,7 +1277,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             let plan = &prog.tables.plans[*plan as usize];
             let sv = resolve_src(src, env, slab_ptr, slot_off);
             let off = slot_off[*out as usize];
-            unsafe { exec_gather(plan, &sv, slab_ptr.add(off), full, call_split) };
+            unsafe { exec_gather(plan, &sv, slab_ptr.add(off), full) };
         }
         Instr::LoadElem { src, idx, out } => {
             let sv = resolve_src(src, env, slab_ptr, slot_off);
@@ -1318,8 +1337,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 match av {
                     Rv::S(_) => panic!("array Copy from a scalar operand"),
                     Rv::V { ptr, strides } => unsafe {
-                        copy_strided_maybe_split(
-                            call_split,
+                        copy_strided(
                             slab_ptr.add(off),
                             &rm_strides(&desc.shape),
                             ptr,
@@ -1374,53 +1392,21 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             let parts = &prog.tables.assemblies[*table as usize].parts;
             let covered = env.prep.asm_covered[*table as usize];
             let out_rm = rm_strides(&desc.shape);
-            // A large assembly splits across the call's workers, each
-            // assembling its own share of the box (see `par`).
-            #[cfg(not(target_arch = "wasm32"))]
-            let split = super::par::ways_for(desc.elems(), call_split);
-            #[cfg(target_arch = "wasm32")]
-            let split = 1;
-            if split > 1 && !desc.shape.is_empty() {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    asm_parts.clear();
-                    for (src, region) in parts {
-                        let spec = &prog.tables.regions[*region as usize];
-                        let mut dbase = 0i64;
-                        for d in 0..desc.shape.len() {
-                            dbase += out_rm[d] * spec.dest_lo[d] as i64;
-                        }
-                        let rv = resolve_rv(src, &spec.shape, env, slab_ptr, slot_off);
-                        asm_parts.push(super::par::AsmPart::new(*region, dbase, rv));
-                    }
-                    unsafe {
-                        super::par::assemble(
-                            split,
-                            dst,
-                            &desc.shape,
-                            &prog.tables.regions,
-                            asm_parts,
-                            covered,
-                        )
-                    };
+            if !covered {
+                unsafe { std::slice::from_raw_parts_mut(dst, desc.elems()).fill(0.0) };
+            }
+            for (src, region) in parts {
+                let spec = &prog.tables.regions[*region as usize];
+                let mut dbase = 0i64;
+                for d in 0..desc.shape.len() {
+                    dbase += out_rm[d] * spec.dest_lo[d] as i64;
                 }
-            } else {
-                if !covered {
-                    unsafe { std::slice::from_raw_parts_mut(dst, desc.elems()).fill(0.0) };
-                }
-                for (src, region) in parts {
-                    let spec = &prog.tables.regions[*region as usize];
-                    let mut dbase = 0i64;
-                    for d in 0..desc.shape.len() {
-                        dbase += out_rm[d] * spec.dest_lo[d] as i64;
-                    }
-                    let sub_dst = unsafe { dst.offset(dbase as isize) };
-                    match resolve_rv(src, &spec.shape, env, slab_ptr, slot_off) {
-                        Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
-                        Rv::V { ptr, strides } => unsafe {
-                            copy_strided(sub_dst, &out_rm, ptr, &strides, &spec.shape);
-                        },
-                    }
+                let sub_dst = unsafe { dst.offset(dbase as isize) };
+                match resolve_rv(src, &spec.shape, env, slab_ptr, slot_off) {
+                    Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
+                    Rv::V { ptr, strides } => unsafe {
+                        copy_strided(sub_dst, &out_rm, ptr, &strides, &spec.shape);
+                    },
                 }
             }
         }
@@ -1719,8 +1705,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                         sv.flat_offset + sv.shape.iter().product::<usize>().max(1) <= dy_len
                     );
                     unsafe {
-                        copy_strided_maybe_split(
-                            call_split,
+                        copy_strided(
                             dy.offset(dbase as isize),
                             &cm,
                             slab_ptr.add(off) as *const f64,
@@ -1735,13 +1720,16 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
     }
 }
 
-/// Whether [`exec_share`] can run `ins` share by share, and so whether a
-/// split of it can be one task of a call plan (see `plan`).
+/// Whether [`exec_share`] can run `ins` share by share: whether it splits
+/// at all, from the instruction loop or as one task of a call plan (see
+/// `plan`).
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn shares(prog: &TapeProgram, ins: &Instr) -> bool {
     match ins {
         Instr::Fused { .. } | Instr::Assemble { .. } => true,
-        Instr::Copy { out, .. } => !prog.tables.slots[*out as usize].scalar,
+        Instr::Copy { out, .. } | Instr::Gather { out, .. } => {
+            !prog.tables.slots[*out as usize].scalar
+        }
         Instr::Reduce { axes, out, .. } => {
             !prog.tables.slots[*out as usize].scalar
                 && axes.iter().enumerate().all(|(k, &a)| a as usize == k)
@@ -1769,6 +1757,91 @@ pub(super) unsafe fn exec_share(
     w: usize,
     ways: usize,
 ) {
+    if let Instr::Fused { spec } = ins {
+        // SAFETY: the caller's contract.
+        unsafe {
+            super::fused::exec_fused_share(*spec as usize, cx, &mut scratch.fscratch, w, ways)
+        };
+        return;
+    }
+    // SAFETY: the caller's contract.
+    match unsafe { resolve_split(cx, ins, &mut scratch.asm_parts) } {
+        Some(op) => unsafe { run_split_share(&op, w, ways) },
+        // Not the layout a split assumes: one share runs it whole.
+        None if w == 0 => unsafe { exec_straight(cx, ins, scratch, 1) },
+        None => {}
+    }
+}
+
+/// A split instruction other than a fused group, resolved for one call:
+/// what every share of it reads (see [`run_split_share`]).
+#[cfg(not(target_arch = "wasm32"))]
+enum SplitOp<'a> {
+    /// Nothing to do (a `DyWrite` whose fused group stored into `dy`).
+    Skip,
+    Assemble {
+        dst: *mut f64,
+        shape: &'a [usize],
+        regions: &'a [RegionSpec],
+        parts: &'a [super::par::AsmPart],
+        covered: bool,
+    },
+    /// A block copy (`Copy`, `DyWrite`).
+    Copy {
+        dst: *mut f64,
+        dstr: DimI,
+        src: *const f64,
+        sstr: DimI,
+        shape: &'a [usize],
+    },
+    /// The leading axes of a contiguous source folded into `n_out` cells.
+    Reduce {
+        op: BinCode,
+        init: f64,
+        reverse: bool,
+        src: *const f64,
+        rows: usize,
+        n_out: usize,
+        dst: *mut f64,
+    },
+    /// A scan along the leading axis of a contiguous `[len, post]` box.
+    Scan {
+        op: BinCode,
+        init: f64,
+        inclusive: bool,
+        reverse: bool,
+        src: *const f64,
+        len: usize,
+        post: usize,
+        dst: *mut f64,
+    },
+    Gather {
+        plan: &'a GatherPlan,
+        src: super::resolve::SrcView,
+        out: *mut f64,
+        full: bool,
+    },
+}
+
+// SAFETY: the pointers address the slab, the state and `dy`, which outlive
+// the fork-join that shares the resolved instruction; each share writes only
+// its own part of the output (`run_split_share`).
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl Sync for SplitOp<'_> {}
+
+/// `ins` (an instruction [`shares`] admits, not a fused group) resolved for
+/// this call, or `None` when its operands are not in the layout its split
+/// assumes, so it runs whole. An assembly's parts are resolved into
+/// `parts`.
+///
+/// # Safety
+/// As for [`exec_straight`].
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn resolve_split<'a>(
+    cx: &Cx<'a>,
+    ins: &'a Instr,
+    parts: &'a mut Vec<super::par::AsmPart>,
+) -> Option<SplitOp<'a>> {
     let Cx {
         env,
         slab_ptr,
@@ -1778,15 +1851,14 @@ pub(super) unsafe fn exec_share(
         ..
     } = *cx;
     let prog = env.prog;
-    match ins {
-        Instr::Fused { spec } => unsafe {
-            super::fused::exec_fused_share(*spec as usize, cx, &mut scratch.fscratch, w, ways)
-        },
+    let slot = |s: SlotId| slab_ptr.wrapping_add(slot_off[s as usize]);
+    Some(match ins {
         Instr::Assemble { table, out } => {
             let desc = &prog.tables.slots[*out as usize];
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            if desc.shape.is_empty() {
+                return None;
+            }
             let out_rm = rm_strides(&desc.shape);
-            let parts = &mut scratch.asm_parts;
             parts.clear();
             for (src, region) in &prog.tables.assemblies[*table as usize].parts {
                 let spec = &prog.tables.regions[*region as usize];
@@ -1797,21 +1869,51 @@ pub(super) unsafe fn exec_share(
                 let rv = resolve_rv(src, &spec.shape, env, slab_ptr, slot_off);
                 parts.push(super::par::AsmPart::new(*region, dbase, rv));
             }
-            unsafe {
-                super::par::assemble_share(
-                    w,
-                    ways,
-                    dst,
-                    &desc.shape,
-                    &prog.tables.regions,
-                    parts,
-                    env.prep.asm_covered[*table as usize],
-                )
-            };
+            SplitOp::Assemble {
+                dst: slot(*out),
+                shape: &desc.shape,
+                regions: &prog.tables.regions,
+                parts,
+                covered: env.prep.asm_covered[*table as usize],
+            }
         }
-        // The leading axes folded out of a contiguous source: worker `w`
-        // owns a run of output cells and folds each of them whole, row by
-        // row in the serial order.
+        Instr::Copy { a, out } => {
+            let desc = &prog.tables.slots[*out as usize];
+            match resolve_rv(a, &desc.shape, env, slab_ptr, slot_off) {
+                Rv::S(_) => panic!("array Copy from a scalar operand"),
+                Rv::V { ptr, strides } => SplitOp::Copy {
+                    dst: slot(*out),
+                    dstr: rm_strides(&desc.shape),
+                    src: ptr,
+                    sstr: strides,
+                    shape: &desc.shape,
+                },
+            }
+        }
+        Instr::DyWrite { write } => {
+            let wr = &prog.tables.dy_writes[*write as usize];
+            // Its fused group already stored the slot into `dy`.
+            if dy_home[wr.slot as usize] != usize::MAX {
+                return Some(SplitOp::Skip);
+            }
+            if wr.scatter.is_some() || wr.scalar_flat.is_some() {
+                return None;
+            }
+            let desc = &prog.tables.slots[wr.slot as usize];
+            let sv = &prog.state_vars[wr.var as usize];
+            let cm = dy_strides(prog, &sv.shape);
+            let mut dbase = sv.flat_offset as isize;
+            for d in 0..sv.shape.len() {
+                dbase += wr.dest_lo[d] as isize * cm[d] as isize;
+            }
+            SplitOp::Copy {
+                dst: dy.wrapping_offset(dbase),
+                dstr: cm,
+                src: slot(wr.slot),
+                sstr: rm_strides(&desc.shape),
+                shape: &desc.shape,
+            }
+        }
         Instr::Reduce {
             op,
             init,
@@ -1822,37 +1924,19 @@ pub(super) unsafe fn exec_share(
             ..
         } => {
             let sv = resolve_src(src, env, slab_ptr, slot_off);
-            let n_out = prog.tables.slots[*out as usize].elems();
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
             if sv.strides[..] != rm_strides(&sv.shape)[..] {
-                // Not the contiguous layout the split assumes: one worker
-                // runs it whole.
-                if w == 0 {
-                    unsafe { exec_straight(cx, ins, scratch, 1) };
-                }
-                return;
+                return None;
             }
-            let (lo, hi) = super::par::share_at(n_out, w, ways, dst);
-            let rows: usize = sv.shape[..axes.len()].iter().product();
-            unsafe {
-                for k in lo..hi {
-                    *dst.add(k) = *init;
-                }
+            SplitOp::Reduce {
+                op: *op,
+                init: *init,
+                reverse: *reverse,
+                src: sv.ptr,
+                rows: sv.shape[..axes.len()].iter().product(),
+                n_out: prog.tables.slots[*out as usize].elems(),
+                dst: slot(*out),
             }
-            let src = sv.ptr;
-            macro_rules! fold_rows {
-                ($f:expr) => {
-                    for k in 0..rows {
-                        // A reverse fold takes its rows from the last.
-                        let r = if *reverse { rows - 1 - k } else { k };
-                        unsafe { reduce_rows(dst.add(lo), hi - lo, src.add(r * n_out + lo), 1, $f) }
-                    }
-                };
-            }
-            dispatch_bin_kernel!(op, fold_rows);
         }
-        // A scan along the leading axis: worker `w` sweeps the inner
-        // positions (lanes) of its own share, every one whole and in order.
         Instr::Scan {
             op,
             init,
@@ -1864,68 +1948,126 @@ pub(super) unsafe fn exec_share(
             out,
         } => {
             let sv = resolve_src(src, env, slab_ptr, slot_off);
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
             if sv.strides[..] != rm_strides(&sv.shape)[..] || src_shape.is_empty() {
-                if w == 0 {
-                    unsafe { exec_straight(cx, ins, scratch, 1) };
-                }
-                return;
+                return None;
             }
-            let len = src_shape[0];
-            let post: usize = src_shape[1..].iter().product();
-            let (lo, hi) = super::par::share_at(post, w, ways, dst);
-            let (init, inclusive, reverse, src) = (*init, *inclusive, *reverse, sv.ptr);
+            SplitOp::Scan {
+                op: *op,
+                init: *init,
+                inclusive: *inclusive,
+                reverse: *reverse,
+                src: sv.ptr,
+                len: src_shape[0],
+                post: src_shape[1..].iter().product(),
+                dst: slot(*out),
+            }
+        }
+        Instr::Gather { src, plan, out } => SplitOp::Gather {
+            plan: &prog.tables.plans[*plan as usize],
+            src: resolve_src(src, env, slab_ptr, slot_off),
+            out: slot(*out),
+            full: env.prep.plan_full[*plan as usize],
+        },
+        _ => unreachable!("not a split instruction: {}", ins.opcode()),
+    })
+}
+
+/// Share `w` of a split `ways` wide: the same part of the output whichever
+/// thread runs it, and every element computed as the serial arm computes
+/// it.
+///
+/// # Safety
+/// `op` was resolved for the current call, every instruction it depends on
+/// has run, and no other thread writes what this share reads or touches
+/// what it writes.
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn run_split_share(op: &SplitOp, w: usize, ways: usize) {
+    use super::par::{assemble_share, copy_strided_share, share_at};
+    match *op {
+        SplitOp::Skip => {}
+        SplitOp::Assemble {
+            dst,
+            shape,
+            regions,
+            parts,
+            covered,
+        } => unsafe { assemble_share(w, ways, dst, shape, regions, parts, covered) },
+        SplitOp::Copy {
+            dst,
+            ref dstr,
+            src,
+            ref sstr,
+            shape,
+        } => unsafe { copy_strided_share(ways, w, dst, dstr, src, sstr, shape) },
+        // Worker `w` owns a run of output cells and folds each of them whole,
+        // row by row in the serial order.
+        SplitOp::Reduce {
+            op,
+            init,
+            reverse,
+            src,
+            rows,
+            n_out,
+            dst,
+        } => {
+            let (lo, hi) = share_at(n_out, w, ways, dst);
+            // SAFETY: cells `[lo, hi)` are this share's; every row holds
+            // `n_out` cells.
+            unsafe {
+                for k in lo..hi {
+                    *dst.add(k) = init;
+                }
+            }
+            macro_rules! fold_rows {
+                ($f:expr) => {
+                    for k in 0..rows {
+                        // A reverse fold takes its rows from the last.
+                        let r = if reverse { rows - 1 - k } else { k };
+                        unsafe { reduce_rows(dst.add(lo), hi - lo, src.add(r * n_out + lo), 1, $f) }
+                    }
+                };
+            }
+            dispatch_bin_kernel!(&op, fold_rows);
+        }
+        // Worker `w` sweeps the inner positions (lanes) of its own share,
+        // every one whole and in order.
+        SplitOp::Scan {
+            op,
+            init,
+            inclusive,
+            reverse,
+            src,
+            len,
+            post,
+            dst,
+        } => {
+            let (lo, hi) = share_at(post, w, ways, dst);
             macro_rules! scan {
                 ($f:expr) => {
+                    // SAFETY: lanes `[lo, hi)` are this share's.
                     unsafe {
                         scan_leading_cols(dst, src, len, post, init, inclusive, reverse, lo, hi, $f)
                     }
                 };
             }
-            dispatch_bin_kernel!(op, scan);
+            dispatch_bin_kernel!(&op, scan);
         }
-        Instr::Copy { a, out } => {
-            let desc = &prog.tables.slots[*out as usize];
-            match resolve_rv(a, &desc.shape, env, slab_ptr, slot_off) {
-                Rv::S(_) => panic!("array Copy from a scalar operand"),
-                Rv::V { ptr, strides } => unsafe {
-                    super::par::copy_strided_share(
-                        ways,
-                        w,
-                        slab_ptr.add(slot_off[*out as usize]),
-                        &rm_strides(&desc.shape),
-                        ptr,
-                        &strides,
-                        &desc.shape,
-                    )
-                },
-            }
-        }
-        Instr::DyWrite { write } => {
-            let wr = &prog.tables.dy_writes[*write as usize];
-            // Its fused group already stored the slot into `dy`.
-            if dy_home[wr.slot as usize] != usize::MAX {
-                return;
-            }
-            let desc = &prog.tables.slots[wr.slot as usize];
-            let sv = &prog.state_vars[wr.var as usize];
-            let cm = dy_strides(prog, &sv.shape);
-            let mut dbase = sv.flat_offset as i64;
-            for d in 0..sv.shape.len() {
-                dbase += wr.dest_lo[d] as i64 * cm[d];
-            }
-            unsafe {
-                super::par::copy_strided_share(
-                    ways,
-                    w,
-                    dy.offset(dbase as isize),
-                    &cm,
-                    slab_ptr.add(slot_off[wr.slot as usize]) as *const f64,
-                    &rm_strides(&desc.shape),
-                    &desc.shape,
-                )
+        // Share 0 zeroes exactly the ghosts, which no segment copy writes,
+        // and every share copies its part of each segment block.
+        SplitOp::Gather {
+            plan,
+            ref src,
+            out,
+            full,
+        } => unsafe {
+            let zero = if !full && w == 0 {
+                super::kernels::Zero::Exact
+            } else {
+                super::kernels::Zero::No
             };
-        }
-        _ => unreachable!("not a shared instruction: {}", ins.opcode()),
+            super::kernels::gather_with(plan, src, out, zero, |d, ds, s, ss, sh| {
+                copy_strided_share(ways, w, d, ds, s, ss, sh)
+            })
+        },
     }
 }
