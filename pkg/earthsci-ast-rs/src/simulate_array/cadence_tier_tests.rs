@@ -222,7 +222,7 @@ fn forcing_derived_state_free_observed_is_discrete_not_continuous() {
     let compiled = ArrayCompiled::from_file(&file).expect("compile model");
 
     // `f` is the discrete (refreshed) forcing field.
-    let (const_, discrete, continuous) = compiled.cadence_partition(&["f".to_string()]);
+    let (const_, discrete, continuous) = compiled.cadence_partition(&["M.f".to_string()]);
 
     // `g` reaches the discrete forcing `f` but neither `t` nor state → DISCRETE:
     // materialized once per segment, NOT every step.

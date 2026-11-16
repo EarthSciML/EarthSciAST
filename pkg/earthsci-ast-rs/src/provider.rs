@@ -1265,8 +1265,10 @@ mod tests {
                 (6.0, Some(vec![9.0, 8.0, 7.0])),
             ],
         );
-        let providers: HashMap<String, Box<dyn DataProvider>> =
-            HashMap::from([("wind".to_string(), Box::new(met) as Box<dyn DataProvider>)]);
+        let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([(
+            "Forced.wind".to_string(),
+            Box::new(met) as Box<dyn DataProvider>,
+        )]);
         let mut exec =
             RefreshExecutor::new(&class_doc["models"]["Forced"], &class_doc, providers).unwrap();
 

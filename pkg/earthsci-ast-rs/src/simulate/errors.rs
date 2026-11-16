@@ -276,6 +276,81 @@ pub enum SimulateError {
 }
 
 impl SimulateError {
+    /// This error with every name under the namespace `ns` shown without it
+    /// ([`crate::compile_error::unqualify_text`]): how a one-model document's
+    /// build and run report the names they refuse.
+    pub(crate) fn unqualified(self, ns: &str) -> Self {
+        let u = |s: String| crate::compile_error::unqualify_text(&s, ns);
+        let uv = |v: Vec<String>| v.into_iter().map(u).collect::<Vec<_>>();
+        match self {
+            SimulateError::Compile(e) => SimulateError::Compile(e.unqualified(ns)),
+            SimulateError::NotDynamic { details } => SimulateError::NotDynamic {
+                details: u(details),
+            },
+            SimulateError::RangeRestriction { code, message } => SimulateError::RangeRestriction {
+                code,
+                message: u(message),
+            },
+            SimulateError::Strip { code, message } => SimulateError::Strip {
+                code,
+                message: u(message),
+            },
+            SimulateError::UnsubstitutableBinding { name, class } => {
+                SimulateError::UnsubstitutableBinding {
+                    name: u(name),
+                    class,
+                }
+            }
+            SimulateError::InvalidParameter { name } => {
+                SimulateError::InvalidParameter { name: u(name) }
+            }
+            SimulateError::AmbiguousParameter { name, candidates } => {
+                SimulateError::AmbiguousParameter {
+                    name: u(name),
+                    candidates: uv(candidates),
+                }
+            }
+            SimulateError::CollidingParameterKeys { name, keys } => {
+                SimulateError::CollidingParameterKeys {
+                    name: u(name),
+                    keys,
+                }
+            }
+            SimulateError::InvalidInitialCondition { name } => {
+                SimulateError::InvalidInitialCondition { name: u(name) }
+            }
+            SimulateError::AmbiguousInitialCondition { name, candidates } => {
+                SimulateError::AmbiguousInitialCondition {
+                    name: u(name),
+                    candidates: uv(candidates),
+                }
+            }
+            SimulateError::CollidingInitialConditionKeys { name, keys } => {
+                SimulateError::CollidingInitialConditionKeys {
+                    name: u(name),
+                    keys,
+                }
+            }
+            SimulateError::InvalidFieldInitialCondition { name, details } => {
+                SimulateError::InvalidFieldInitialCondition {
+                    name: u(name),
+                    details: u(details),
+                }
+            }
+            SimulateError::IcReadsState { name, details } => SimulateError::IcReadsState {
+                name: u(name),
+                details: u(details),
+            },
+            SimulateError::ProviderError { name, details } => SimulateError::ProviderError {
+                name,
+                details: u(details),
+            },
+            other => other,
+        }
+    }
+}
+
+impl SimulateError {
     /// The diagnostic code this error carries, or `None` for an uncoded
     /// one. A cancelled build has none: [`Self::is_cancelled`] answers it.
     pub fn code(&self) -> Option<&'static str> {

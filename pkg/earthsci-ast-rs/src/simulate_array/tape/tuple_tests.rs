@@ -345,7 +345,7 @@ fn a_branch_join_is_build_time_data_only_when_its_branches_agree() {
     assert!(
         refused
             .iter()
-            .any(|(_, r)| r.contains("ragged offsets factor `cnt`")),
+            .any(|(_, r)| r.contains("ragged offsets factor `M.cnt`")),
         "{refused:?}"
     );
 
@@ -811,7 +811,7 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
             "budget {budget}: chunk programs were built"
         );
         assert!(
-            held.iter().all(|h| !h.iter().any(|n| n == "big")),
+            held.iter().all(|h| !h.iter().any(|n| n == "M.big")),
             "budget {budget}: a chunk program holds `big`: {held:?}"
         );
     }

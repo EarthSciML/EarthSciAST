@@ -416,6 +416,173 @@ pub enum CompileError {
     Flatten(#[from] FlattenError),
 }
 
+/// `text` with every name under the namespace `ns` shown without it: the
+/// `M.` of `M.x`, `M.sub.x` and `'M.x'`, and the `M"."` or `italic("M")"."`
+/// of a printed expression's name, dropped wherever `M` begins a name (it follows no
+/// identifier character and no `.`, and an identifier follows).
+///
+/// A one-model document is built under its model's namespace like any other,
+/// and shown without it: what it reports names its variables as its author
+/// wrote them (`unqualified` on [`CompileError`] and
+/// [`crate::simulate::SimulateError`]).
+pub(crate) fn unqualify_text(text: &str, ns: &str) -> String {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    if ns.is_empty() || !text.contains(ns) {
+        return text.to_string();
+    }
+    // A printed expression spells a multi-letter namespace `italic("M")`.
+    let italic = format!("italic(\"{ns}\")");
+    let mut out = String::with_capacity(text.len());
+    let mut prev: Option<char> = None;
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let starts_name = !prev.is_some_and(|p| is_ident(p) || p == '.');
+        // `M.x` as written, or `M"."x` as a printed expression spells it.
+        if starts_name
+            && let Some(after) = rest
+                .strip_prefix(ns)
+                .and_then(|r| r.strip_prefix('.').or_else(|| r.strip_prefix("\".\"")))
+                .or_else(|| {
+                    rest.strip_prefix(italic.as_str())
+                        .and_then(|r| r.strip_prefix("\".\""))
+                })
+            && after.chars().next().is_some_and(is_ident)
+        {
+            rest = after;
+            prev = Some('.');
+            continue;
+        }
+        out.push(c);
+        prev = Some(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+impl CompileError {
+    /// This error with every name under the namespace `ns` shown without it
+    /// ([`unqualify_text`]).
+    pub(crate) fn unqualified(self, ns: &str) -> Self {
+        let u = |s: String| unqualify_text(&s, ns);
+        let uv = |v: Vec<String>| v.into_iter().map(|s| unqualify_text(&s, ns)).collect();
+        match self {
+            CompileError::UnsupportedConstruct {
+                construct,
+                evaluator,
+                detail,
+            } => CompileError::UnsupportedConstruct {
+                construct,
+                evaluator,
+                detail: u(detail),
+            },
+            CompileError::DoublyDefinedUnknown {
+                name,
+                differential,
+                algebraic,
+            } => CompileError::DoublyDefinedUnknown {
+                name: u(name),
+                differential: u(differential),
+                algebraic: u(algebraic),
+            },
+            CompileError::CompilerRefusedRule {
+                compiler,
+                kind,
+                rule,
+                tier,
+                reason,
+            } => CompileError::CompilerRefusedRule {
+                compiler,
+                kind,
+                rule: u(rule),
+                tier,
+                reason: u(reason),
+            },
+            CompileError::UnsupportedFeatureError { feature, message } => {
+                CompileError::UnsupportedFeatureError {
+                    feature,
+                    message: u(message),
+                }
+            }
+            CompileError::InterpreterBuildError { details } => {
+                CompileError::InterpreterBuildError {
+                    details: u(details),
+                }
+            }
+            CompileError::CodedBuildError { code, details } => CompileError::CodedBuildError {
+                code,
+                details: u(details),
+            },
+            CompileError::MakearrayRegionInvalid { reason } => {
+                CompileError::MakearrayRegionInvalid { reason: u(reason) }
+            }
+            CompileError::InvalidBroadcastFn { reason } => {
+                CompileError::InvalidBroadcastFn { reason: u(reason) }
+            }
+            CompileError::ValueInventionRefused { code, reason } => {
+                CompileError::ValueInventionRefused {
+                    code,
+                    reason: u(reason),
+                }
+            }
+            CompileError::Float32Unsupported { construct, reason } => {
+                CompileError::Float32Unsupported {
+                    construct: u(construct),
+                    reason: u(reason),
+                }
+            }
+            CompileError::ElementTypeUncarried { construct, reason } => {
+                CompileError::ElementTypeUncarried {
+                    construct: u(construct),
+                    reason: u(reason),
+                }
+            }
+            CompileError::MixedElementType {
+                op,
+                lhs_name,
+                lhs_type,
+                rhs_name,
+                rhs_type,
+            } => CompileError::MixedElementType {
+                op,
+                lhs_name: u(lhs_name),
+                lhs_type,
+                rhs_name: u(rhs_name),
+                rhs_type,
+            },
+            CompileError::UnalignableArrayShape {
+                operand,
+                axis,
+                result,
+                result_axes,
+            } => CompileError::UnalignableArrayShape {
+                operand: u(operand),
+                axis,
+                result: u(result),
+                result_axes,
+            },
+            CompileError::ObservedCycle { cycle } => {
+                CompileError::ObservedCycle { cycle: uv(cycle) }
+            }
+            CompileError::MissingData { parameter, detail } => CompileError::MissingData {
+                parameter: u(parameter),
+                detail: u(detail),
+            },
+            CompileError::MissingInitialValue { slot, detail } => {
+                CompileError::MissingInitialValue {
+                    slot: u(slot),
+                    detail: u(detail),
+                }
+            }
+            other @ (CompileError::UnsupportedDimensionalityError { .. }
+            | CompileError::UnloweredOperatorError { .. }
+            | CompileError::InvalidOperatorArity { .. }
+            | CompileError::UnevaluableOperatorError { .. }
+            | CompileError::UnsupportedElementType { .. }
+            | CompileError::Flatten(_)) => other,
+        }
+    }
+}
+
 impl CompileError {
     /// The diagnostic code this refusal carries, or `None` for the uncoded
     /// build failures ([`CompileError::InterpreterBuildError`] and the
@@ -701,5 +868,25 @@ mod tests {
         );
         assert!(msg.contains("discrete event 'double'"), "{msg}");
         assert!(msg.contains(ARRAY_EVALUATOR), "{msg}");
+    }
+
+    /// A one-model document's names are shown without the model's name: as
+    /// written, quoted, nested and printed, and only where the name begins.
+    #[test]
+    fn unqualify_text_drops_the_namespace_where_a_name_begins() {
+        let u = |t: &str| unqualify_text(t, "M");
+        assert_eq!(
+            u("reads 'M.b', which reads M.sub.a"),
+            "reads 'b', which reads sub.a"
+        );
+        assert_eq!(u("(dif M\".\"x)/(dif t) = M\".\"k"), "(dif x)/(dif t) = k");
+        assert_eq!(
+            u("NM.x and Other.M.x and M. alone"),
+            "NM.x and Other.M.x and M. alone"
+        );
+        assert_eq!(
+            unqualify_text("sin(italic(\"Box\")\".\"u_i)", "Box"),
+            "sin(u_i)"
+        );
     }
 }

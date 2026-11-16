@@ -3489,7 +3489,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
             FlatEq::authored(
                 Equation {
                     lhs: ns.expr(&eq.lhs),
-                    rhs: ns.expr(&eq.rhs),
+                    rhs: ns.rhs(&eq.lhs, &eq.rhs),
                     comment: eq.comment.clone(),
                 },
                 TermOrigin::Component {
@@ -3759,6 +3759,17 @@ impl<'a> Namespacer<'a> {
 
     fn expr(&mut self, expr: &Expr) -> Expr {
         self.scoped(expr, 0)
+    }
+
+    /// An equation's right-hand side `rhs`. A `faq` left-hand side (the
+    /// indexed form, `faq{expr: D(index(u, i))} ~ rhs`) binds its loop
+    /// symbols over the right-hand side too, so they stay unqualified there.
+    fn rhs(&mut self, lhs: &Expr, rhs: &Expr) -> Expr {
+        let scope = match lhs {
+            Expr::Operator(node) if crate::faq::is_faq_op(&node.op) => self.child_scope(0, node),
+            _ => 0,
+        };
+        self.scoped(rhs, scope)
     }
 
     /// The scope `parent` extended by the loop symbols `node` binds.

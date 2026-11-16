@@ -361,32 +361,17 @@ pub(super) fn apply_ragged_factor_scope(
     Ok(())
 }
 
-/// The rewrites `flatten` makes to a model's equations that a route reading
-/// the AUTHORED model — the array runtime's single-model route, and the build
-/// pipeline (`crate::prepare`) — must make itself, so every route answers one
-/// document with one number.
+/// The rewrites `flatten` makes to a model's equations, for the build
+/// pipeline's model-local build (`crate::prepare`), which reads the AUTHORED
+/// model rather than a flattened system:
 ///
 /// * esm-spec §4.2, the two halves of the right-hand-side `D` rule (`flatten`'s
 ///   phase 5b′): each RHS structural `D` resolves into the tendency the model
 ///   defines for it, and one that resolves to nothing is refused rather than
-///   answered with `0` (or, through a reference evaluator, `NaN`). The same two
-///   functions, in the same order, as [`ArrayCompiled::from_flattened`].
+///   answered with `0` (or, through a reference evaluator, `NaN`);
 /// * esm-spec §4.8.3 "Angles are the ONE exception" (phase 5g): see
-///   [`normalize_model_angle_arguments`]. Without it `sin(theta)` with `theta`
-///   declared `deg` evaluated `sin(90 radians)` = 0.894 where the scalar and
-///   coupled routes, and the other bindings, returned 1.
-/// * esm-spec §4.3.4, a variable with no declared `shape` whose value is an
-///   array on one arm of an `ifelse` and a scalar on the other takes the array
-///   arm's shape ([`promote_conditional_shapes`]). `flatten` does not record
-///   this shape in its output (esm-libraries-spec §4.7.5), so every build,
-///   from a flattened system or an authored model, gets it here. Returns the
-///   shapes it gave. `index_sets` is the registry the promoted shape must be
-///   sized by, and the index-set axes of every variable as built
-///   ([`refuse_faq_bare_array_operands`]).
-pub(crate) fn apply_flatten_rewrites(
-    model: &mut Model,
-    index_sets: &HashMap<String, IndexSet>,
-) -> Result<(ConditionalShapes, VariableAxes), CompileError> {
+///   [`normalize_model_angle_arguments`].
+pub(crate) fn apply_authored_flatten_rewrites(model: &mut Model) -> Result<(), CompileError> {
     let time_invariant: std::collections::HashSet<String> = model
         .variables
         .iter()
@@ -403,6 +388,21 @@ pub(crate) fn apply_flatten_rewrites(
         });
     }
     normalize_model_angle_arguments(model);
+    Ok(())
+}
+
+/// The shape rewrites every build makes, from a flattened system or an
+/// authored model: esm-spec §4.3.4, a variable with no declared `shape` whose
+/// value is an array on one arm of an `ifelse` and a scalar on the other
+/// takes the array arm's shape ([`promote_conditional_shapes`], after the
+/// elementwise lift). `flatten` does not record this shape in its output
+/// (esm-libraries-spec §4.7.5), so every build gets it here. Returns the
+/// shapes it gave, sized by `index_sets`, and the index-set axes of every
+/// variable as built ([`refuse_faq_bare_array_operands`]).
+pub(crate) fn apply_shape_rewrites(
+    model: &mut Model,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(ConditionalShapes, VariableAxes), CompileError> {
     // After the elementwise lift (inside `promote_conditional_shapes`,
     // esm-spec §9.6.11): the check reads the lifted equations.
     let promoted = promote_conditional_shapes(model, index_sets)?;
@@ -539,12 +539,10 @@ pub(super) fn set_declared_shapes(model: &mut Model, shapes: &BuiltShapes) {
 /// `model`, so the argument reaches the evaluator in RADIANS (esm-spec §4.8.3,
 /// issue #409).
 ///
-/// The array runtime's SINGLE-MODEL route deliberately never flattens
-/// (`ArrayCompiled::from_file`), and neither does the build pipeline
-/// (`crate::prepare`), so `flatten`'s phase 5g
-/// (`crate::flatten::normalize_angle_arguments`) never runs for either. This is
-/// that phase, against the authored model's own declarations, so every route
-/// answers one document with one number.
+/// The build pipeline's model-local build (`crate::prepare`) does not flatten,
+/// so `flatten`'s phase 5g (`crate::flatten::normalize_angle_arguments`) does
+/// not run for it. This is that phase, against the authored model's own
+/// declarations, so every route answers one document with one number.
 fn normalize_model_angle_arguments(model: &mut Model) {
     // A document that declares no angle at a scale other than 1 cannot be
     // rewritten, so decide that from the DECLARATIONS (each distinct unit
@@ -570,6 +568,35 @@ fn normalize_model_angle_arguments(model: &mut Model) {
     }
 }
 
+/// The key of a document's only model, when the document is exactly that model
+/// ([`crate::simulate::whole_document_is_one_model`]).
+fn one_model_name(file: &EsmFile) -> Option<String> {
+    if !crate::simulate::whole_document_is_one_model(file) {
+        return None;
+    }
+    file.models.as_ref()?.keys().next().cloned()
+}
+
+/// `file` reduced to its one model: `from_file` builds that model alone, so a
+/// reaction system and the coupling beside it are not part of the build.
+fn model_alone(mut file: EsmFile) -> EsmFile {
+    file.reaction_systems = None;
+    file.coupling = None;
+    file
+}
+
+/// Refuse a document that is not one model, which `from_file` documents as its
+/// input.
+fn require_one_model(file: &EsmFile) -> Result<(), CompileError> {
+    match file.models.as_ref().map(|m| m.len()) {
+        None | Some(0) => Err(CompileError::build_err("File has no models to simulate")),
+        Some(1) => Ok(()),
+        Some(_) => Err(CompileError::build_err(
+            "Array-op path currently only supports a single model file (no coupling)",
+        )),
+    }
+}
+
 // ============================================================================
 // Compile path: model → ArrayCompiled.
 // ============================================================================
@@ -586,50 +613,19 @@ impl ArrayCompiled {
         runtime_array_parameters: bool,
         compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
-        let Some(models) = &file.models else {
-            return Err(CompileError::build_err("File has no models to simulate"));
-        };
-        if models.len() != 1 {
-            return Err(CompileError::build_err(
-                "Array-op path currently only supports a single model file (no coupling)",
-            ));
-        }
-        let (model_name, model) = models.iter().next().unwrap();
-        // v0.8.0: `index_sets` is document-scoped (one registry shared by all
-        // models), so source it from the file rather than the model.
-        let index_sets: HashMap<String, IndexSet> = file
-            .index_sets
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-        // The build rewrites the model in place, so it takes a clone — the
-        // same shape as `from_file_owned` below, which owns its model
-        // outright.
-        let mut compiled = Self::compile_authored(
-            model.clone(),
-            Some(model_name),
-            index_sets,
+        require_one_model(file)?;
+        let alone = model_alone(file.clone());
+        Self::from_document(
+            std::borrow::Cow::Owned(alone),
             None,
             runtime_array_parameters,
-        )?;
-        // Record the model's namespace so overrides may be keyed `Model.param`
-        // (the scalar/flatten/Julia convention) as well as the raw `param` this
-        // single-model path builds (WS3 override-naming parity).
-        compiled.namespace = Some(model_name.clone());
-        compiled.qualify_data_fed(model_name);
-        compiled.runtime_mode = RuntimeMode::of(compiler);
-        Ok(compiled)
+            compiler,
+        )
     }
 
-    /// [`Self::from_file`], consuming the file. The peak-memory-lean build for
-    /// a large expanded discretization: the single model is MOVED out of the
-    /// file (nothing is cloned), the rest of the document is dropped here, and
-    /// [`Self::compile_pipeline`] then moves each observed body into its
-    /// compiled rule instead of deep-copying it. For `simpleclimate.esm` at
-    /// the production grid the borrowed `from_file` holds three ~1 GiB copies
-    /// live at once (the caller's file, the compile's private model clone, the
-    /// compiled rules); this path holds ~one. Same build stages, same result.
+    /// [`Self::from_file`], consuming the file, which is dropped as soon as it
+    /// is flattened. Both build the document's one model alone: a reaction
+    /// system and the coupling beside it are not part of the build.
     pub fn from_file_owned(file: EsmFile) -> Result<Self, CompileError> {
         Self::from_file_owned_with(file, false, crate::Compiler::Native)
     }
@@ -641,51 +637,64 @@ impl ArrayCompiled {
         runtime_array_parameters: bool,
         compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
-        let Some(models) = file.models else {
-            return Err(CompileError::build_err("File has no models to simulate"));
-        };
-        if models.len() != 1 {
-            return Err(CompileError::build_err(
-                "Array-op path currently only supports a single model file (no coupling)",
-            ));
-        }
-        let index_sets: HashMap<String, IndexSet> =
-            file.index_sets.unwrap_or_default().into_iter().collect();
-        let (model_name, model) = models.into_iter().next().unwrap();
-        let mut compiled = Self::compile_authored(
-            model,
-            Some(&model_name),
-            index_sets,
+        require_one_model(&file)?;
+        Self::from_document(
+            std::borrow::Cow::Owned(model_alone(file)),
             None,
             runtime_array_parameters,
-        )?;
-        compiled.qualify_data_fed(&model_name);
-        compiled.namespace = Some(model_name);
-        compiled.runtime_mode = RuntimeMode::of(compiler);
+            compiler,
+        )
+    }
+
+    /// The one build of a document into the array runtime: refuse an event
+    /// `flatten` would not carry, flatten the document (or take `flattened`,
+    /// its flattened system, when the caller holds it), drop the document, and
+    /// compile the flattened system ([`Self::from_flattened_with`]).
+    ///
+    /// Every name the build makes is the flattened, model-qualified one. A
+    /// document that is exactly one model ([`crate::simulate::whole_document_is_one_model`])
+    /// records that model as [`Self::namespace`], and an error the build
+    /// raises names its variables without it, as the document spells them.
+    pub(crate) fn from_document(
+        file: std::borrow::Cow<'_, EsmFile>,
+        flattened: Option<&FlattenedSystem>,
+        runtime_array_parameters: bool,
+        compiler: crate::Compiler,
+    ) -> Result<Self, CompileError> {
+        let shown = one_model_name(&file);
+        let show = |e: CompileError| match &shown {
+            Some(ns) => e.unqualified(ns),
+            None => e,
+        };
+        // `flatten` lifts only the top-level components' events, so an event a
+        // subsystem owns is refused here, while the document still holds it.
+        if let Some((construct, name)) = crate::compile_error::first_event_in_file(&file) {
+            return Err(show(crate::compile_error::event_refusal(
+                construct,
+                crate::compile_error::ARRAY_EVALUATOR,
+                name.as_deref(),
+            )));
+        }
+        let owned;
+        let flat = match flattened {
+            Some(flat) => flat,
+            None => {
+                owned = crate::flatten::flatten(&file)?;
+                &owned
+            }
+        };
+        drop(file);
+        let mut compiled =
+            Self::from_flattened_with(flat, runtime_array_parameters, compiler).map_err(show)?;
+        compiled.namespace = shown;
         Ok(compiled)
     }
 
-    /// Build from a [`FlattenedSystem`].
-    ///
-    /// [`crate::flatten::flatten`] already merges a coupled, multi-component
-    /// file into a single dot-namespaced system (coupling rules applied, every
-    /// variable reference namespaced). The array path historically only had
-    /// [`Self::from_file`], which rejects `models.len() != 1` outright because
-    /// it operates on a raw [`Model`] and has no coupling machinery of its own.
-    /// This constructor closes that seam: it consumes the already-coupled
-    /// flatten output directly, so a discretized **coupled** spatial model
-    /// compiles + evaluates through the vectorized array runtime, reusing
-    /// `flatten.rs`'s coupling verbatim (no new coupling logic here). The raw
-    /// single-model `from_file` guard is intentionally left intact — the real
-    /// pipeline flattens first and reaches the array runtime through here
-    /// (ess-14f.8).
-    ///
-    /// The flattened system splits variables into typed maps; [`Self::from_model_with_arrays`]
-    /// expects a single registry discriminated by [`ModelVariable::var_type`].
-    /// We merge them back into one synthetic [`Model`] (each variable already
-    /// carries its `var_type`) and delegate, so every downstream stage — shape
-    /// inference, faq lowering, the diffsol RHS build — is shared bit-for-bit
-    /// with the single-model path.
+    /// Build from a [`FlattenedSystem`]: every build into the array runtime
+    /// compiles one. [`crate::flatten::flatten`] mounts every subsystem,
+    /// applies the coupling and qualifies every name with its component, and
+    /// the build compiles the system's variables, merged back into one
+    /// registry ([`model_from_flattened`]), under those names.
     pub fn from_flattened(flat: &FlattenedSystem) -> Result<Self, CompileError> {
         Self::from_flattened_with(flat, false, crate::Compiler::Native)
     }
@@ -713,6 +722,18 @@ impl ArrayCompiled {
         flat: &FlattenedSystem,
         runtime_array_parameters: bool,
         inherited: Option<&BuiltShapes>,
+        compiler: crate::Compiler,
+    ) -> Result<Self, CompileError> {
+        Self::compile_flattened(flat, runtime_array_parameters, inherited, None, compiler)
+    }
+
+    /// [`Self::from_flattened_shaped`], with `vi_arrays` as
+    /// [`Self::from_model_with_arrays`] takes it.
+    fn compile_flattened(
+        flat: &FlattenedSystem,
+        runtime_array_parameters: bool,
+        inherited: Option<&BuiltShapes>,
+        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
         compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
         // A coupling can mix precisions the per-model inference never saw
@@ -766,19 +787,21 @@ impl ArrayCompiled {
         }
 
         // The document `index_sets` registry is carried through flatten
-        // (`FlattenedSystem::index_sets`), so a coupled array system can resolve
-        // `faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
-        // derived-set references exactly as the single-model `from_file` path
-        // does against `file.index_sets`. Empty for a file with no index sets, so
-        // dense `[lo, hi]`-range discretized stencils are unaffected.
+        // (`FlattenedSystem::index_sets`), with every mounted subsystem's sets,
+        // so `faq` `ranges` `{ "from": <set> }`, `join.on` gates and
+        // derived-set references resolve against it.
         let index_sets: HashMap<String, IndexSet> = flat
             .index_sets
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let normalized = normalize(BuildInput::Flattened { flat, inherited }, index_sets)?;
-        let mut compiled =
-            Self::compile_normalized(normalized, &flat.field_ics, None, runtime_array_parameters)?;
+        let mut compiled = Self::compile_normalized(
+            normalized,
+            &flat.field_ics,
+            vi_arrays,
+            runtime_array_parameters,
+        )?;
         // `flatten` routed every `ic` equation out of `flat.equations`, so the
         // synthetic model's stage-(0) walk never saw an initial-condition
         // right-hand side. Walk them here, before anything evaluates one
@@ -831,67 +854,51 @@ impl ArrayCompiled {
         index_sets: &HashMap<String, IndexSet>,
         vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
     ) -> Result<Self, CompileError> {
-        // The rewrite passes below need an owned model; clone so the caller's
-        // model — and its serialized form — is untouched. A caller that can
-        // give up its model avoids this copy via [`Self::compile_pipeline`]
-        // (reached through [`Self::from_file_owned`] / `compile_array`).
-        Self::from_model_owned_with_arrays(model.clone(), index_sets, vi_arrays)
-    }
-
-    /// [`Self::from_model_with_arrays`], consuming the model: the compile
-    /// pipeline's rewrite passes mutate it in place (no private clone), and
-    /// the observed bodies — the dominant allocation of a large expanded
-    /// discretization — are MOVED into the compiled rules rather than
-    /// deep-copied (`build_observed_rules` takes each `var.expression`).
-    /// Behaviourally identical to `from_model`: every stage runs in the same
-    /// order on the same values.
-    fn from_model_owned_with_arrays(
-        model_owned: Model,
-        index_sets: &HashMap<String, IndexSet>,
-        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
-    ) -> Result<Self, CompileError> {
-        Self::compile_authored(model_owned, None, index_sets.clone(), vi_arrays, false)
-    }
-
-    /// The single-model route: refuse an event on the authored model, then
-    /// [`normalize`] it and [`Self::compile_normalized`]. `model_name` names
-    /// the document model; with a name, every self-qualified reference (`M.x`,
-    /// `M.sub.x`) resolves to its local spelling once the subsystems are
-    /// mounted.
-    fn compile_authored(
-        model: Model,
-        model_name: Option<&str>,
-        index_sets: HashMap<String, IndexSet>,
-        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
-        runtime_array_parameters: bool,
-    ) -> Result<Self, CompileError> {
-        // An event, continuous or discrete, is refused before anything is
-        // built. `from_flattened` checks the flattened event lists itself,
-        // because the model it normalizes carries no events. Subsystems are
-        // searched too, since mounting keeps only their variables and
-        // equations.
-        if let Some((construct, name)) = crate::compile_error::first_event(&model) {
-            return Err(crate::compile_error::event_refusal(
+        // The model is built as the one model of a document, under a name of
+        // its own, and shown without it.
+        const NAME: &str = "Model";
+        let mut sets: Vec<(&String, &IndexSet)> = index_sets.iter().collect();
+        sets.sort_by(|a, b| a.0.cmp(b.0));
+        let file = EsmFile {
+            index_sets: Some(
+                sets.into_iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            ),
+            models: Some(IndexMap::from([(NAME.to_string(), model.clone())])),
+            ..Default::default()
+        };
+        let show = |e: CompileError| e.unqualified(NAME);
+        if let Some((construct, name)) = crate::compile_error::first_event_in_file(&file) {
+            return Err(show(crate::compile_error::event_refusal(
                 construct,
                 crate::compile_error::ARRAY_EVALUATOR,
                 name.as_deref(),
-            ));
+            )));
         }
-        let normalized = normalize(
-            BuildInput::Authored {
-                model: Box::new(model),
-                name: model_name,
-            },
-            index_sets,
-        )?;
-        Self::compile_normalized(normalized, &[], vi_arrays, runtime_array_parameters)
+        let flat = crate::flatten::flatten(&file)?;
+        drop(file);
+        let vi_arrays: Option<HashMap<String, ArrayD<f64>>> = vi_arrays.map(|arrays| {
+            arrays
+                .iter()
+                .map(|(k, v)| (crate::problem::qualify(NAME, k), v.clone()))
+                .collect()
+        });
+        let mut compiled = Self::compile_flattened(
+            &flat,
+            false,
+            None,
+            vi_arrays.as_ref(),
+            crate::Compiler::Native,
+        )
+        .map_err(show)?;
+        compiled.namespace = Some(NAME.to_string());
+        Ok(compiled)
     }
 
-    /// Compile a [`NormalizedModel`]; every entry point above reaches the
-    /// array runtime through here. `flat_ics` are the flattened system's `ic`
-    /// right-hand sides (`field_ics`), which flatten moved out of the model's
-    /// equations; empty on the single-model route, whose `ic` equations are
-    /// still in the model.
+    /// Compile a [`NormalizedModel`]. `flat_ics` are the flattened system's
+    /// `ic` right-hand sides (`field_ics`), which flatten moved out of the
+    /// model's equations.
     fn compile_normalized(
         normalized: NormalizedModel,
         flat_ics: &[(String, Expr)],
@@ -992,6 +999,7 @@ impl ArrayCompiled {
             var_shapes,
             state_names: std::cell::OnceCell::new(),
             qualified_state_names: std::cell::OnceCell::new(),
+            shown_param_names: std::cell::OnceCell::new(),
             state_defaults,
             param_names,
             param_index,
@@ -1491,6 +1499,19 @@ pub(crate) fn check_free_variables(
     // columns. Widening the bound set can only ever prevent a false positive,
     // which is this gate's cardinal requirement; the compiled path passes none.
     declared.extend(extra_bound.iter().map(String::as_str));
+    // The components the model's own names are qualified under (`M` of a
+    // flattened `M.x`, `sub` of a mounted `sub.x`). A dotted name under one of
+    // them names this model's variable and must be declared; any other dotted
+    // name is a reference resolved outside this check.
+    let components: HashSet<&str, rustc_hash::FxBuildHasher> = model
+        .variables
+        .keys()
+        .filter_map(|n| n.split_once('.').map(|(head, _)| head))
+        .collect();
+    let checked = |name: &str| {
+        name.split_once('.')
+            .is_none_or(|(head, _)| components.contains(head))
+    };
     let mut bound: NameSet = NameSet::default();
     // Each checked equation's binders, collected in this pass over the
     // equations rather than in a second one.
@@ -1506,7 +1527,7 @@ pub(crate) fn check_free_variables(
         // doc note on `collect_dims_and_index_heads`.
         let mut binders = NameSet::default();
         if is_ic_lhs(&eq.lhs) {
-            crate::binders::collect_bare_symbols(&eq.rhs, &mut bound);
+            crate::binders::collect_symbols(&eq.rhs, &mut bound);
             collect_dims_and_index_heads(&eq.lhs, &mut bound);
             collect_dims_and_index_heads(&eq.rhs, &mut bound);
         } else {
@@ -1522,13 +1543,34 @@ pub(crate) fn check_free_variables(
     // ---- Check every equation (skipping `ic`) and observed expression. -------
     // Each check sees the shared bound set plus its own expression's binders,
     // added for the check and taken back out after it (see `with_binders`).
+    // `flatten` qualifies a loop symbol it does not see bound where it reads
+    // it (`M.k` of `index(M.u, k + 1)`), so a qualified name whose local part
+    // is a loop symbol the model binds is that symbol.
+    let mut loop_symbols: NameSet = NameSet::default();
+    for b in &eq_binders {
+        loop_symbols.extend(b.iter().cloned());
+    }
+    for var in model.variables.values() {
+        var.for_each_expression(&mut |expr| {
+            crate::binders::collect_binders(expr, Binders::ALL, &mut loop_symbols)
+        });
+    }
+    let is_loop_symbol = |name: &str| {
+        name.split_once('.')
+            .is_some_and(|(_, local)| loop_symbols.contains(local))
+    };
     let mut binders: NameSet = NameSet::default();
     for (eq, mut eq_binders) in model.equations.iter().zip(eq_binders) {
         if is_ic_lhs(&eq.lhs) {
             continue;
         }
         with_binders(&mut bound, &mut eq_binders, |scope| {
-            let is_bound = |name: &str| declared.contains(name) || scope.contains(name);
+            let is_bound = |name: &str| {
+                !checked(name)
+                    || declared.contains(name)
+                    || scope.contains(name)
+                    || is_loop_symbol(name)
+            };
             check_expr_free_vars(&eq.lhs, &is_bound)?;
             check_expr_free_vars(&eq.rhs, &is_bound)
         })?;
@@ -1542,7 +1584,10 @@ pub(crate) fn check_free_variables(
             crate::binders::collect_binders(expr, Binders::ALL, &mut binders);
             if let Err(e) = with_binders(&mut bound, &mut binders, |scope| {
                 check_expr_free_vars(expr, &|name: &str| {
-                    declared.contains(name) || scope.contains(name)
+                    !checked(name)
+                        || declared.contains(name)
+                        || scope.contains(name)
+                        || is_loop_symbol(name)
                 })
             }) {
                 failure = Some(e);
@@ -1601,7 +1646,7 @@ fn insert_binders(node: &ExpressionNode, kinds: Binders, out: &mut NameSet) {
 ///   spatial-operator name list (the sugar ops carry no privileged status).
 ///   Defensive: the array path rejects unlowered spatial ops earlier, but a
 ///   coordinate an `ic` RHS shares with a node's `dim` stays creditable;
-/// - the bare name at the HEAD (first arg) of every `index(name, …)` op — an
+/// - the name at the HEAD (first arg) of every `index(name, …)` op — an
 ///   array-valued leaf (a declared state/observed, or a bare, undeclared,
 ///   loader-fed forcing FIELD read at runtime through the forcing buffer).
 ///   Crediting these keeps a legitimate bare forcing field in scope.
@@ -1612,7 +1657,6 @@ fn collect_dims_and_index_heads(expr: &Expr, out: &mut NameSet) {
         }
         if node.op == "index"
             && let Some(Expr::Variable(name)) = node.args.first()
-            && !name.contains('.')
         {
             out.insert(name.clone());
         }
@@ -1644,7 +1688,6 @@ fn collect_dims_heads_and_binders(
     }
     if node.op == "index"
         && let Some(Expr::Variable(name)) = node.args.first()
-        && !name.contains('.')
     {
         credited.insert(name.clone());
     }
@@ -1666,8 +1709,8 @@ fn collect_dims_heads_and_binders(
     });
 }
 
-/// Reject the first bare (non-dotted) variable reference bound in none of the
-/// categories in `scope`, as `Unknown variable '{name}' referenced in
+/// Reject the first variable reference bound in none of the categories in
+/// `scope`, as `Unknown variable '{name}' referenced in
 /// expression`. The full expression-bearing
 /// child set is descended via [`ExpressionNode::for_each_child`] (args plus the
 /// sidecar fields), so a reference hidden in an aggregate body, filter, integral
@@ -1677,9 +1720,9 @@ fn collect_dims_heads_and_binders(
 fn check_expr_free_vars(expr: &Expr, scope: &dyn Fn(&str) -> bool) -> Result<(), CompileError> {
     match expr {
         Expr::Variable(name) => {
-            // A dotted name is a qualified / forcing reference resolved at
-            // runtime; builtins and derivative markers are always valid.
-            if name.contains('.') || is_builtin_function_name(name) || name.starts_with("d(") {
+            // Builtins and derivative markers are always valid; `scope`
+            // decides every other name, dotted or not.
+            if is_builtin_function_name(name) || name.starts_with("d(") {
                 return Ok(());
             }
             if scope(name) {
@@ -6108,25 +6151,25 @@ mod subsystem_ragged_and_inspection_tests {
         assert!((u1[0] - 30.0).abs() < 1e-8, "u[1](1) = {} != 30", u1[0]);
         assert!((u1[1] - 60.0).abs() < 1e-8, "u[2](1) = {} != 60", u1[1]);
         // The state-free rule output is captured EXACTLY at build.
-        let s = insp.setup_arrays.get("s").expect("s captured");
+        let s = insp.setup_arrays.get("M.s").expect("s captured");
         assert_eq!(s.shape(), [2]);
         assert_eq!(s[IxDyn(&[0])], 30.0);
         assert_eq!(s[IxDyn(&[1])], 60.0);
         // Mounted const factors and their aliases are captured too.
         for name in [
-            "mesh.nEdgesOnCell",
-            "mesh.edgesOnCell",
-            "mesh.w",
-            "nEdgesOnCell",
-            "edgesOnCell",
+            "M.mesh.nEdgesOnCell",
+            "M.mesh.edgesOnCell",
+            "M.mesh.w",
+            "M.nEdgesOnCell",
+            "M.edgesOnCell",
         ] {
             assert!(insp.setup_arrays.contains_key(name), "missing '{name}'");
         }
         assert_eq!(
-            insp.setup_arrays["nEdgesOnCell"],
-            insp.setup_arrays["mesh.nEdgesOnCell"]
+            insp.setup_arrays["M.nEdgesOnCell"],
+            insp.setup_arrays["M.mesh.nEdgesOnCell"]
         );
-        assert!(insp.observed_exprs.contains_key("s"));
+        assert!(insp.observed_exprs.contains_key("M.s"));
     }
 
     /// Filling the inspection never changes the run: the trajectory is
@@ -6305,14 +6348,14 @@ mod subsystem_ragged_and_inspection_tests {
         let prob = inspecting_problem(&file);
         crate::problem::solve(&prob, &erk_opts()).expect("solves");
         let insp = prob.take_inspection();
-        let a_ij = insp.setup_arrays.get("A_ij").expect("A_ij captured");
+        let a_ij = insp.setup_arrays.get("R.A_ij").expect("A_ij captured");
         assert_eq!(a_ij.shape(), [2, 1]);
         assert_eq!(a_ij[IxDyn(&[0, 0])], 1.0);
         assert_eq!(a_ij[IxDyn(&[1, 0])], 1.0);
-        let a_j = insp.setup_arrays.get("A_j").expect("A_j captured");
+        let a_j = insp.setup_arrays.get("R.A_j").expect("A_j captured");
         assert_eq!(a_j.shape(), [1]);
         assert_eq!(a_j[IxDyn(&[0])], 2.0);
-        let w_ij = insp.setup_arrays.get("W_ij").expect("W_ij captured");
+        let w_ij = insp.setup_arrays.get("R.W_ij").expect("W_ij captured");
         assert_eq!(w_ij.shape(), [2, 1]);
         assert_eq!(w_ij[IxDyn(&[0, 0])], 0.5);
         assert_eq!(w_ij[IxDyn(&[1, 0])], 0.5);
@@ -6547,8 +6590,11 @@ mod updated_array_default_tests {
             "update": data_fed()
         }));
         let c = ArrayCompiled::from_model_with_arrays(&model, &sets, None).expect("builds");
-        assert!(c.forcing_names().any(|n| n == "p"));
-        let d = c.forcing_default("p").flatten().expect("a default field");
+        assert!(c.forcing_names().any(|n| n == "Model.p"));
+        let d = c
+            .forcing_default("Model.p")
+            .flatten()
+            .expect("a default field");
         assert_eq!(d.iter().copied().collect::<Vec<_>>(), vec![1.0, 2.0, 3.0]);
     }
 
@@ -6651,7 +6697,10 @@ mod updated_array_default_tests {
             "update": data_fed()
         }));
         let c = ArrayCompiled::from_model_with_arrays(&model, &sets, None).expect("builds");
-        let d = c.forcing_default("p").flatten().expect("a default field");
+        let d = c
+            .forcing_default("Model.p")
+            .flatten()
+            .expect("a default field");
         assert_eq!(d.shape(), &[4]);
 
         model.variables.get_mut("p").unwrap().default =

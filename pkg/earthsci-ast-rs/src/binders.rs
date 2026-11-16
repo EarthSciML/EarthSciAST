@@ -233,14 +233,30 @@ fn rename_walk(
 /// Every bare (non-dotted, non-builtin) variable reference in `expr`, at any
 /// depth and regardless of binders, added to `out`.
 pub(crate) fn collect_bare_symbols<S: BuildHasher>(expr: &Expr, out: &mut HashSet<String, S>) {
+    collect_symbols_where(expr, &|name| !name.contains('.'), out);
+}
+
+/// Every non-builtin variable reference in `expr`, dotted or not, at any depth
+/// and regardless of binders, added to `out`: the walk of
+/// [`collect_bare_symbols`] over a model whose own names are qualified (a
+/// flattened system).
+pub(crate) fn collect_symbols<S: BuildHasher>(expr: &Expr, out: &mut HashSet<String, S>) {
+    collect_symbols_where(expr, &|_| true, out);
+}
+
+fn collect_symbols_where<S: BuildHasher>(
+    expr: &Expr,
+    keep: &dyn Fn(&str) -> bool,
+    out: &mut HashSet<String, S>,
+) {
     match expr {
         Expr::Variable(name) => {
-            if !name.contains('.') && !crate::op_registry::is_builtin_function_name(name) {
+            if keep(name) && !crate::op_registry::is_builtin_function_name(name) {
                 out.insert(name.clone());
             }
         }
         Expr::Operator(node) => {
-            node.for_each_child(&mut |child| collect_bare_symbols(child, out));
+            node.for_each_child(&mut |child| collect_symbols_where(child, keep, out));
         }
         Expr::Number(_) | Expr::Integer(_) => {}
     }

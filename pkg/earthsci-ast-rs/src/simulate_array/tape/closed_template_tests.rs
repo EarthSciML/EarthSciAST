@@ -335,7 +335,7 @@ fn nested_faq_over_another_box_is_not_read_at_the_cell() {
         let fault = take_const_array_oob().expect("the oracle latches a fault");
         assert!(
             fault.starts_with("E_TREEWALK_NESTED_BOX_MISMATCH")
-                && fault.contains("the equation for 'q'"),
+                && fault.contains("the equation for 'M.q'"),
             "{nested}: {fault}"
         );
         for (name, v) in names.iter().zip(&dy) {
@@ -343,7 +343,7 @@ fn nested_faq_over_another_box_is_not_read_at_the_cell() {
         }
         let (_, report) = compiled.build_tape_opts(&HashSet::new(), None);
         assert!(
-            report.fallbacks.iter().any(|(rule, _)| rule == "D(q)"),
+            report.fallbacks.iter().any(|(rule, _)| rule == "D(M.q)"),
             "{nested}: the tape refuses the rule: {:?}",
             report.fallbacks
         );

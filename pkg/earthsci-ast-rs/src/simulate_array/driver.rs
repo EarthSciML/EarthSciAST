@@ -606,25 +606,22 @@ impl ArrayCompiled {
     /// `const_arrays` keys checked against them) onto this build's parameters;
     /// see [`ParameterKeyResolver`].
     pub(crate) fn parameter_key_resolver(&self) -> ParameterKeyResolver {
-        let full = |n: &str| match self.namespace.as_deref() {
-            Some(ns) => format!("{ns}.{n}"),
-            None => n.to_string(),
-        };
-        let mut compiled_of: HashMap<String, String> = HashMap::new();
-        for n in self.forcing_decls.keys().chain(self.param_names.iter()) {
-            compiled_of.insert(full(n), n.clone());
-        }
-        let known = crate::simulate::SuffixIndex::new(compiled_of.keys().map(String::as_str));
+        let params: HashSet<String> = self
+            .forcing_decls
+            .keys()
+            .chain(self.param_names.iter())
+            .cloned()
+            .collect();
+        let known = crate::simulate::SuffixIndex::new(params.iter().map(String::as_str));
         let others: HashSet<String> = self
             .var_shapes
             .keys()
             .cloned()
-            .chain(self.observed_variable_names())
-            .map(|n| full(&n))
-            .filter(|n| !compiled_of.contains_key(n))
+            .chain(self.observed_rule_names())
+            .filter(|n| !params.contains(n))
             .collect();
         ParameterKeyResolver {
-            compiled_of,
+            params,
             known,
             others,
             namespaces: self.override_namespaces(),
@@ -665,19 +662,6 @@ impl ArrayCompiled {
         &self.data_fed
     }
 
-    /// Prefix each recorded data-fed name with the single model's namespace.
-    ///
-    /// The single-model build keeps variable names BARE (`k`), while the
-    /// coupled build namespaces them (`Forcing.k`) — and a refusal that named
-    /// `k` would name something the caller cannot find in a document with two
-    /// components. Applied where `namespace` itself is recorded, so the two
-    /// never disagree.
-    pub(crate) fn qualify_data_fed(&mut self, namespace: &str) {
-        for (name, _) in self.data_fed.iter_mut() {
-            *name = format!("{namespace}.{name}");
-        }
-    }
-
     /// Whether this model has anything for the ODE solver to integrate — at
     /// least one `D(var, t) = …` rule.
     ///
@@ -690,21 +674,24 @@ impl ArrayCompiled {
         !self.rhs_rules.is_empty()
     }
 
-    /// The single model's own namespace (the top-level `models` map key), or
-    /// `None` on the flattened path, whose names are already qualified.
-    ///
-    /// The single-model build names its slots BARE (`u[1]`, `k`), because the
-    /// raw `Model` it consumed carries no namespace; the flattened build
-    /// qualifies them (`M.u[1]`). Reported here so
-    /// [`crate::problem::EsmProblem`] can present ONE spelling whichever route
-    /// its document took.
+    /// The model a one-model document is shown under (see the field), or
+    /// `None`.
     pub(crate) fn namespace(&self) -> Option<&str> {
         self.namespace.as_deref()
     }
 
+    /// `name` as this artifact shows it: without the one-model document's
+    /// `M.` ([`Self::namespace`]).
+    pub(crate) fn shown<'a>(&self, name: &'a str) -> &'a str {
+        self.namespace
+            .as_deref()
+            .and_then(|ns| name.strip_prefix(ns))
+            .and_then(|rest| rest.strip_prefix('.'))
+            .unwrap_or(name)
+    }
+
     /// What this build knows of its variables by name
-    /// ([`super::BuiltVariables`]), keyed by the name the build gives each
-    /// (unqualified under a single-model [`Self::namespace`]). A variable
+    /// ([`super::BuiltVariables`]), keyed by the name the build gives each. A variable
     /// declared without a `shape` that the build evaluates over a grid — a
     /// pointwise lift (esm-spec §10.5), a lifted reaction-system species, an
     /// input a `variable_map` binds to a shaped host variable — has the grid's
@@ -713,45 +700,64 @@ impl ArrayCompiled {
         &self.built_variables
     }
 
-    /// The OBSERVED variables this model declares, in dependency order.
-    ///
-    /// What [`crate::problem::observed_trajectories`] resolves a caller's name
-    /// against, with the §5.8 precedence.
+    /// The OBSERVED variables this model declares, in dependency order, as
+    /// this artifact shows them ([`Self::shown`]).
     pub fn observed_variable_names(&self) -> Vec<String> {
-        self.observed_rules
-            .iter()
-            .map(|r| observed_rule_var(r).clone())
+        self.observed_rule_names()
+            .map(|n| self.shown(&n).to_string())
             .collect()
     }
 
-    /// Every state slot's name (`u[2,3]`, or a 0-D state's bare name), in
-    /// flat state-vector order. Built from the slot layout the first time it
-    /// is asked for, then kept.
-    pub fn state_variable_names(&self) -> &[String] {
-        self.state_names
-            .get_or_init(|| super::layout::slot_names(&self.var_shapes))
+    /// The OBSERVED variables this model declares, in dependency order, by
+    /// the names the build gave them. What
+    /// [`crate::problem::observed_trajectories`] resolves a caller's name
+    /// against, with the §5.8 precedence.
+    pub(crate) fn observed_rule_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.observed_rules
+            .iter()
+            .map(|r| observed_rule_var(r).clone())
     }
 
-    /// [`Self::state_variable_names`] under this model's single-model
-    /// namespace (`M.u[2,3]`), the spelling the Problem reports (API_SPEC
-    /// §5.8's qualification rule, `crate::problem::qualify`, applied to each
-    /// variable's name; the cell suffix carries no `.`, so qualifying the
-    /// variable and qualifying the slot name agree). The same names as
-    /// [`Self::state_variable_names`] when the model has no namespace.
-    pub(crate) fn qualified_state_names(&self) -> &[String] {
-        let Some(ns) = self.namespace.as_deref() else {
-            return self.state_variable_names();
-        };
-        self.qualified_state_names.get_or_init(|| {
-            super::layout::slot_names_with(&self.var_shapes, |v| crate::problem::qualify(ns, v))
+    /// Every state slot's name (`u[2,3]`, or a 0-D state's bare name), in
+    /// flat state-vector order, as this artifact shows it ([`Self::shown`]).
+    /// Built from the slot layout the first time it is asked for, then kept.
+    pub fn state_variable_names(&self) -> &[String] {
+        if self.namespace.is_none() {
+            return self.qualified_state_names();
+        }
+        self.state_names.get_or_init(|| {
+            super::layout::slot_names_with(&self.var_shapes, |v| self.shown(v).to_string())
         })
+    }
+
+    /// Every state slot's name as the build made it (`M.u[2,3]`), in flat
+    /// state-vector order: the spelling the Problem reports.
+    pub(crate) fn qualified_state_names(&self) -> &[String] {
+        self.qualified_state_names
+            .get_or_init(|| super::layout::slot_names(&self.var_shapes))
     }
 
     /// The length of the flat state vector.
     pub fn n_states(&self) -> usize {
         self.n_states
     }
+    /// The scalar parameters, in parameter-vector order, as this artifact
+    /// shows them ([`Self::shown`]).
     pub fn parameter_names(&self) -> &[String] {
+        if self.namespace.is_none() {
+            return &self.param_names;
+        }
+        self.shown_param_names.get_or_init(|| {
+            self.param_names
+                .iter()
+                .map(|n| self.shown(n).to_string())
+                .collect()
+        })
+    }
+
+    /// The scalar parameters, in parameter-vector order, by the names the
+    /// build gave them.
+    pub(crate) fn qualified_parameter_names(&self) -> &[String] {
         &self.param_names
     }
 
@@ -903,8 +909,25 @@ impl ArrayCompiled {
 
     /// Resolve a parameter map into the positional parameter vector once, so the
     /// zero-allocation RHS test can pre-build it outside the measured loop.
+    /// Keys are matched as a solve matches them (esm-spec §6.6.2); leniently,
+    /// so a key that designates no parameter is ignored.
     #[doc(hidden)]
     pub fn debug_resolve_params(&self, params: &HashMap<String, f64>) -> Vec<f64> {
+        use crate::simulate::KeyHit;
+        let namespaces = self.override_namespaces();
+        let mut resolved: HashMap<String, f64> = HashMap::new();
+        for (key, &v) in params {
+            match crate::simulate::resolve_key(&self.param_index, &namespaces, key) {
+                KeyHit::Exact(name) => {
+                    resolved.insert(name, v);
+                }
+                KeyHit::Alias(name) => {
+                    resolved.entry(name).or_insert(v);
+                }
+                KeyHit::Ambiguous(_) | KeyHit::Unknown => {}
+            }
+        }
+        let params = &resolved;
         let mut param_vec = vec![0.0f64; self.param_names.len()];
         for (i, name) in self.param_names.iter().enumerate() {
             if let Some(&v) = params.get(name) {
@@ -1714,14 +1737,8 @@ impl ArrayCompiled {
     }
 
     /// The component / subsystem names a rule-2 override key may spell in its
-    /// LEADING segments (esm-spec §6.6.2, §4.6).
-    ///
-    /// The namespace segments the build's own names carry cover a mounted
-    /// subsystem (`sub` in `sub.g`) and, on the `from_flattened` path, every
-    /// contributing component (`Left` in `Left.gain`). [`Self::namespace`]
-    /// supplies the one namespace the names CANNOT show: the enclosing model's
-    /// own, which the single-model path does not qualify its variables with —
-    /// it is exactly what makes `P.sub.g` a legal spelling of `sub.g`.
+    /// LEADING segments (esm-spec §6.6.2, §4.6): every namespace segment the
+    /// build's qualified names carry (`M` and `sub` in `M.sub.g`).
     fn override_namespaces(&self) -> std::collections::HashSet<String> {
         crate::simulate::namespace_scope(
             // A slot name's cell suffix carries no `.`, so the state
@@ -1730,7 +1747,7 @@ impl ArrayCompiled {
                 .iter()
                 .chain(self.var_shapes.keys())
                 .map(String::as_str),
-            self.namespace.as_deref(),
+            [],
         )
     }
 
@@ -2010,25 +2027,73 @@ impl ArrayCompiled {
         params: &HashMap<String, f64>,
         initial_conditions: &HashMap<String, f64>,
         opts: &SolveOptions,
-        inspect: Option<&mut BuildInspection>,
+        mut inspect: Option<&mut BuildInspection>,
     ) -> Result<Solution, SimulateError> {
         // Re-arm the precision this model was compiled under
         // (`crate::precision`); a no-op for a Float64 model.
         let _precision_guard = self.precision.enter();
         // No discrete forcing, so no refresh boundaries.
         let none = HashSet::new();
-        self.solve_run(
-            &super::RunSpec {
-                tspan,
-                params,
-                initial_conditions,
-                discrete_forcing: &none,
-                boundaries: &[],
-            },
-            opts,
-            inspect,
-            &mut |_t| Ok(()),
-        )
+        let sol = self
+            .solve_run(
+                &super::RunSpec {
+                    tspan,
+                    params,
+                    initial_conditions,
+                    discrete_forcing: &none,
+                    boundaries: &[],
+                },
+                opts,
+                inspect.as_deref_mut(),
+                &mut |_t| Ok(()),
+            )
+            .map_err(|e| self.show_error(e))?;
+        if let Some(insp) = inspect {
+            self.show_inspection(insp);
+        }
+        Ok(self.show_solution(sol))
+    }
+
+    /// `insp`, filled by a run of this model, keyed as this artifact shows
+    /// names ([`Self::shown`]).
+    #[cfg(feature = "solve")]
+    fn show_inspection(&self, insp: &mut BuildInspection) {
+        if self.namespace.is_none() {
+            return;
+        }
+        fn rekey<V>(m: &mut HashMap<String, V>, shown: impl Fn(&str) -> String) {
+            *m = std::mem::take(m)
+                .into_iter()
+                .map(|(k, v)| (shown(&k), v))
+                .collect();
+        }
+        rekey(&mut insp.setup_arrays, |k| self.shown(k).to_string());
+        rekey(&mut insp.observed_exprs, |k| self.shown(k).to_string());
+        rekey(&mut insp.params, |k| self.shown(k).to_string());
+    }
+
+    /// `sol`, a run of this model, as this artifact shows it: a one-model
+    /// document's rows without its `M.`, and the solution's
+    /// [`SolutionMetadata::namespace`] naming `M`, so a qualified read still
+    /// finds them.
+    #[cfg(feature = "solve")]
+    fn show_solution(&self, mut sol: Solution) -> Solution {
+        if let Some(ns) = &self.namespace {
+            for name in &mut sol.state_variable_names {
+                *name = self.shown(name).to_string();
+            }
+            sol.metadata.namespace = Some(ns.clone());
+        }
+        sol
+    }
+
+    /// `e`, an error this model raised, as this artifact shows it: naming a
+    /// one-model document's variables without its `M.`.
+    pub(crate) fn show_error(&self, e: SimulateError) -> SimulateError {
+        match &self.namespace {
+            Some(ns) => e.unqualified(ns),
+            None => e,
+        }
     }
 
     /// Three-tier cadence split of the observed rules (cadence.rs lattice
@@ -2211,7 +2276,7 @@ impl ArrayCompiled {
         output_observed: &[String],
         tape: Option<&std::sync::Arc<TapeProgram>>,
     ) -> Result<Solution, SimulateError> {
-        let mut state_variable_names = self.state_variable_names().to_vec();
+        let mut state_variable_names = self.qualified_state_names().to_vec();
         self.append_observed_trajectories(
             &time,
             &mut state,
@@ -2662,7 +2727,6 @@ pub(super) fn solution_metadata(
     solver_name: &str,
     stats: &super::session::SolveStats,
     merged_variable_renames: HashMap<String, String>,
-    namespace: Option<String>,
 ) -> SolutionMetadata {
     SolutionMetadata {
         alg: solver_name.to_string(),
@@ -2673,7 +2737,8 @@ pub(super) fn solution_metadata(
         // Rides to the caller so a name-keyed read of the result can resolve a
         // spelling the merge deleted (issue #230).
         merged_variable_renames,
-        namespace,
+        // Every row is qualified.
+        namespace: None,
     }
 }
 
@@ -2909,7 +2974,7 @@ mod forcing_channel_tests {
         // Refresh #1 — the RHS reads the forcing array live from the buffer.
         forcing
             .borrow_mut()
-            .insert("w".to_string(), arr1(&[10.0, 20.0, 30.0]));
+            .insert("Forced.w".to_string(), arr1(&[10.0, 20.0, 30.0]));
         let (dy1, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         assert_eq!(
             dy1,
@@ -2921,7 +2986,7 @@ mod forcing_channel_tests {
         // is reflected in the RHS output: the channel is live, not build-frozen.
         forcing
             .borrow_mut()
-            .insert("w".to_string(), arr1(&[1.0, 2.0, 3.0]));
+            .insert("Forced.w".to_string(), arr1(&[1.0, 2.0, 3.0]));
         let (dy2, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         assert_eq!(
             dy2,
@@ -2952,7 +3017,7 @@ mod forcing_channel_tests {
         compiled
             .forcing_handle()
             .borrow_mut()
-            .insert("w".to_string(), arr1(&[2.0, 4.0, 6.0]));
+            .insert("Forced.w".to_string(), arr1(&[2.0, 4.0, 6.0]));
         let params = HashMap::new();
         let ics = HashMap::new(); // states default to 0
         let opts = SolveOptions::default();
@@ -3447,7 +3512,7 @@ mod field_ic_memo_tests {
             let prob = loaded(compiler);
             let compiled = prob.debug_array_compiled().expect("an array model");
             compiled.forcing_handle().borrow_mut().insert(
-                "w".to_string(),
+                "M.w".to_string(),
                 ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[3]), vec![1.0, 2.0, 3.0])
                     .expect("shape"),
             );
@@ -3547,60 +3612,45 @@ mod field_ic_memo_tests {
 }
 
 /// Routes caller keys onto a build's parameters (esm-spec §6.6.2) by the rules
-/// a `parameter_overrides` key follows, applied to the parameters' FULL names
-/// (`Fed.s`, which a single-model build compiles as `s`): `Fed.s` is exact,
-/// and a bare `s` or a partial qualification is an alias that an exact key for
-/// the same parameter shadows. Answers in compiled names.
+/// a `parameter_overrides` key follows, applied to the parameters' qualified
+/// names: `Fed.s` is exact, and a bare `s` or a partial qualification is an
+/// alias that an exact key for the same parameter shadows.
 ///
 /// A key that is not a parameter's full name is not routed when it exactly
 /// names a state or observed variable, or is one the caller asks to keep (a
 /// name a coupling reads): such a key, and one that designates no parameter,
 /// is used as given.
 pub(crate) struct ParameterKeyResolver {
-    /// Full name → compiled name, for every forcing and table parameter.
-    compiled_of: HashMap<String, String>,
+    /// Every forcing and table parameter.
+    params: HashSet<String>,
     known: crate::simulate::SuffixIndex,
-    /// Full names of the states and observed variables that are not
-    /// parameters.
+    /// The states and observed variables that are not parameters.
     others: HashSet<String>,
     namespaces: HashSet<String>,
 }
 
 impl ParameterKeyResolver {
     fn routable(&self, key: &str, keep: &HashSet<String>) -> bool {
-        self.compiled_of.contains_key(key) || !(keep.contains(key) || self.others.contains(key))
+        self.params.contains(key) || !(keep.contains(key) || self.others.contains(key))
     }
 
-    /// What one key designates, in compiled names (an ambiguous key's
-    /// candidates too).
+    /// What one key designates (an ambiguous key's candidates too).
     pub(crate) fn resolve(&self, key: &str, keep: &HashSet<String>) -> crate::simulate::KeyHit {
         use crate::simulate::KeyHit;
         if !self.routable(key, keep) {
             return KeyHit::Unknown;
         }
-        match crate::simulate::resolve_key(&self.known, &self.namespaces, key) {
-            KeyHit::Exact(n) => KeyHit::Exact(self.compiled_of[&n].clone()),
-            KeyHit::Alias(n) => KeyHit::Alias(self.compiled_of[&n].clone()),
-            KeyHit::Ambiguous(c) => {
-                KeyHit::Ambiguous(c.iter().map(|n| self.compiled_of[n].clone()).collect())
-            }
-            KeyHit::Unknown => KeyHit::Unknown,
-        }
+        crate::simulate::resolve_key(&self.known, &self.namespaces, key)
     }
 
-    /// Route `keys` together ([`crate::simulate::route_keys`]), with targets
-    /// in compiled names.
+    /// Route `keys` together ([`crate::simulate::route_keys`]).
     pub(crate) fn route<'a>(
         &self,
         keys: impl IntoIterator<Item = &'a str>,
         keep: &HashSet<String>,
     ) -> Result<crate::simulate::KeyRouting, crate::simulate::OverrideKeyError> {
         let routable = keys.into_iter().filter(|k| self.routable(k, keep));
-        let mut routing = crate::simulate::route_keys(&self.known, &self.namespaces, routable)?;
-        for target in routing.targets.values_mut() {
-            *target = self.compiled_of[target.as_str()].clone();
-        }
-        Ok(routing)
+        crate::simulate::route_keys(&self.known, &self.namespaces, routable)
     }
 }
 
@@ -3609,15 +3659,12 @@ mod parameter_key_resolver_tests {
     use super::*;
     use crate::simulate::KeyHit;
 
-    /// A single-model build: compiled names are bare, full names carry `Fed`.
+    /// A one-model build: every name carries `Fed`.
     fn resolver() -> ParameterKeyResolver {
-        let compiled_of: HashMap<String, String> = [("Fed.s", "s"), ("Fed.T", "T")]
-            .into_iter()
-            .map(|(f, c)| (f.to_string(), c.to_string()))
-            .collect();
+        let params: HashSet<String> = ["Fed.s", "Fed.T"].map(String::from).into();
         ParameterKeyResolver {
-            known: crate::simulate::SuffixIndex::new(compiled_of.keys().map(String::as_str)),
-            compiled_of,
+            known: crate::simulate::SuffixIndex::new(params.iter().map(String::as_str)),
+            params,
             others: HashSet::from(["Fed.u".to_string()]),
             namespaces: HashSet::from(["Fed".to_string()]),
         }
@@ -3629,14 +3676,14 @@ mod parameter_key_resolver_tests {
     fn routes_in_compiled_names_and_keeps_coupling_reads() {
         let r = resolver();
         let none = HashSet::new();
-        assert_eq!(r.resolve("Fed.s", &none), KeyHit::Exact("s".into()));
-        assert_eq!(r.resolve("s", &none), KeyHit::Alias("s".into()));
+        assert_eq!(r.resolve("Fed.s", &none), KeyHit::Exact("Fed.s".into()));
+        assert_eq!(r.resolve("s", &none), KeyHit::Alias("Fed.s".into()));
         assert_eq!(r.resolve("Fed.u", &none), KeyHit::Unknown);
         let keep = HashSet::from(["T".to_string(), "Fed.T".to_string()]);
         assert_eq!(r.resolve("T", &keep), KeyHit::Unknown);
-        assert_eq!(r.resolve("Fed.T", &keep), KeyHit::Exact("T".into()));
+        assert_eq!(r.resolve("Fed.T", &keep), KeyHit::Exact("Fed.T".into()));
         let routing = r.route(["T", "s"], &keep).expect("routes");
         assert!(!routing.targets.contains_key("T"));
-        assert_eq!(routing.targets.get("s").map(String::as_str), Some("s"));
+        assert_eq!(routing.targets.get("s").map(String::as_str), Some("Fed.s"));
     }
 }

@@ -1,17 +1,18 @@
 //! The front half every build into the array runtime shares: one function,
-//! [`normalize`], turns what a build reads — one authored model, or a
-//! flattened system — into the model it compiles, with every subsystem
-//! mounted, `flatten`'s rewrites made, each recurrence group stacked and the
-//! shape of every unshaped mixed-rank `ifelse` decided.
+//! [`normalize`], turns what a build reads — a flattened system, or the one
+//! authored model the build pipeline's model-local build reads — into the
+//! model it compiles, with every subsystem mounted, `flatten`'s rewrites made,
+//! each recurrence group stacked and the shape of every unshaped mixed-rank
+//! `ifelse` decided.
 //!
-//! The compile path ([`ArrayCompiled`]'s constructors) and the build pipeline
-//! (`crate::prepare`) both call it, so neither assembles these stages by hand
-//! and they run in one order. Their product, [`NormalizedModel`], is the only
-//! input the later stages accept.
+//! The compile path ([`ArrayCompiled`]'s constructors, which always build from
+//! a flattened system) and the build pipeline (`crate::prepare`) both call it,
+//! so neither assembles these stages by hand and they run in one order. Their
+//! product, [`NormalizedModel`], is the only input the later stages accept.
 
 use super::compile::{
-    VariableAxes, apply_flatten_rewrites, model_from_flattened, mount_subsystems,
-    resolve_model_self_references, set_declared_shapes,
+    VariableAxes, apply_authored_flatten_rewrites, apply_shape_rewrites, model_from_flattened,
+    mount_subsystems, resolve_model_self_references, set_declared_shapes,
 };
 use super::recurrence_group::lower_recurrence_groups;
 use super::{HashMap, IndexSet};
@@ -21,9 +22,10 @@ use crate::types::Model;
 
 /// What a build reads.
 pub(crate) enum BuildInput<'a> {
-    /// One authored document model, owned. `name` is its key in the
-    /// document: with a name, a self-qualified reference (`M.x`, `M.sub.x`)
-    /// resolves to its local spelling once the subsystems are mounted.
+    /// One authored document model, owned, as the build pipeline's
+    /// model-local build reads it. `name` is its key in the document: with a
+    /// name, a self-qualified reference (`M.x`, `M.sub.x`) resolves to its
+    /// local spelling once the subsystems are mounted.
     Authored {
         model: Box<Model>,
         name: Option<&'a str>,
@@ -55,16 +57,16 @@ pub(crate) struct NormalizedModel {
 /// Normalize `input` against the document's `index_sets` registry. The stages
 /// run in this order, and each needs the one before it:
 ///
-/// 1. mount the subsystems (authored input only; a flattened system is
-///    mounted already), so every later stage sees a subsystem's variables
-///    and equations under their mounted names;
-/// 2. resolve self-qualified references, which can only be recognized once
-///    the names they spell are mounted;
-/// 3. `flatten`'s rewrites ([`apply_flatten_rewrites`]): right-hand-side `D`,
-///    angle arguments, the elementwise lift and the shapes of unshaped
-///    mixed-rank `ifelse` variables, then the bare-array-operand check on the
-///    lifted equations;
-/// 4. stack each recurrence group, which reads the shapes step 3 decided.
+/// 1. for authored input only (a flattened system has had all three):
+///    mount the subsystems, so every later stage sees a subsystem's variables
+///    and equations under their mounted names; resolve self-qualified
+///    references, which can only be recognized once the names they spell are
+///    mounted; and make `flatten`'s right-hand-side `D` and angle rewrites
+///    ([`apply_authored_flatten_rewrites`]);
+/// 2. the shape rewrites ([`apply_shape_rewrites`]): the elementwise lift and
+///    the shapes of unshaped mixed-rank `ifelse` variables, then the
+///    bare-array-operand check on the lifted equations;
+/// 3. stack each recurrence group, which reads the shapes step 2 decided.
 pub(crate) fn normalize(
     input: BuildInput<'_>,
     mut index_sets: HashMap<String, IndexSet>,
@@ -76,6 +78,7 @@ pub(crate) fn normalize(
             if let Some(name) = name {
                 resolve_model_self_references(&mut model, name);
             }
+            apply_authored_flatten_rewrites(&mut model)?;
             (model, None)
         }
         BuildInput::Flattened { flat, inherited } => {
@@ -86,7 +89,7 @@ pub(crate) fn normalize(
             (model, inherited)
         }
     };
-    let (mut shapes, axes) = apply_flatten_rewrites(&mut model, &index_sets)?;
+    let (mut shapes, axes) = apply_shape_rewrites(&mut model, &index_sets)?;
     // The inherited shapes were declared before the rewrites ran, so the
     // promotion did not record them; they are the build's all the same.
     if let Some(inherited) = inherited {
