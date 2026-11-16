@@ -20,8 +20,9 @@ using ..MToken
 using ..MUnits: Factor
 import ..MUnits
 using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, is_formula, is_greek, is_letter, op_ok, pieces, Sym
-using ..MPrint: CALL_OPS, CORE_OPS, Ctx, FaqForm, faq_json, formula_raw, ins_kv, mk_node,
-    node, simple_tok, tparams, unesc_k, unesc_t, spell_unit_factors
+using ..MPrint: CALL_OPS, CORE_OPS, FIELD_CALL_OPS, Ctx, FaqForm, MkForm, faq_json,
+    formula_raw, ins_kv, mk_json, mk_node, node, simple_tok, tname_ok, tparams, unesc_k,
+    unesc_t, spell_unit_factors
 using ..MSurface: neg_num
 using ..DLimits: nested, removed_op!, shallow
 
@@ -82,6 +83,10 @@ function atom_start(t::Tok)
     t isa TKw && return t.k in ATOM_KWS
     return false
 end
+
+"""`Math.isTimesLbk`: the region product with its bracket (`\\times [`); outside
+a `makearray` region it reads as `\\times` then `[`."""
+is_times_lbk(t) = iskw(t, KTimesLbk)
 
 """`Math.isLp`: `(` or `\\left(`."""
 is_lp(t) = iskw(t, KLp) || iskw(t, KLpg)
@@ -609,7 +614,33 @@ end
 function with_out(f::FaqForm, outs::Vector{Any}, ors::Kvs)
     rs = copy(ors)
     append!(rs, f.ranges)
-    return FaqForm(f.red, f.marked, outs, sort_kv(rs), f.expr, f.filter)
+    return FaqForm(f.red, f.marked, outs, sort_kv(rs), f.expr, f.filter, f.set)
+end
+
+"""`Math.withSup`: a superscript set read after the output entries replaces the
+reduction's own."""
+with_sup(f::FaqForm, st::Vector{String}) =
+    isempty(st) ? f : FaqForm(f.red, f.marked, f.out, f.ranges, f.expr, f.filter, st)
+
+"""`Math.pSup`: the superscript set of a reduction or of an output form, if
+there is one: LaTeX `^{\\{f, g\\}}`, Typst `^({f, g})`."""
+function p_sup(sf::Sf, r::Toks)
+    open, close = sf == SF_LATEX ? (KLb, KRb) : (KLpg, KRp)
+    (kat(r, 1, KCaret) && kat(r, 2, open) && kat(r, 3, KLset)) || return String[], r
+    x = p_names(sf, tdrop(r, 3))
+    (x !== nothing && kat(x[2], 1, KRset) && kat(x[2], 2, close)) || return nothing
+    return x[1], tdrop(x[2], 2)
+end
+
+"""`Math.mkTail`: the `makearray` node of a table read back, with its subscript
+of output indices if one follows."""
+function mk_tail(sf::Sf, rows, r::Toks)
+    node_of(out) = mk_json(MkForm(out, [x[2] for x in rows], Any[x[1] for x in rows]))
+    open, close = sf == SF_LATEX ? (KLb, KRb) : (KLpg, KRp)
+    (kat(r, 1, KUs) && kat(r, 2, open)) || return node_of(String[]), r
+    x = p_names(sf, tdrop(r, 2))
+    (x !== nothing && kat(x[2], 1, close)) || return nothing
+    return node_of(x[1]), tdrop(x[2])
 end
 
 # ## The level parsers
@@ -761,7 +792,12 @@ function mul_loop(c::Ctx, f::Int, acc::Vector{Any}, ts::Toks)
         f == 0 && return nothing
         f -= 1
         t = tk(ts)
-        if iskw(t, KCdot) || iskw(t, KTimes)
+        if is_times_lbk(t)
+            y = p_not(c, f, vcat(Tok[TKw(KLbk)], tdrop(ts)))
+            y === nothing && return nothing
+            push!(acc, y[1])
+            ts = y[2]
+        elseif iskw(t, KCdot) || iskw(t, KTimes)
             y = p_not(c, f, tdrop(ts))
             y === nothing && return nothing
             push!(acc, y[1])
@@ -1030,12 +1066,15 @@ function nodup_keys(xs)
     return true
 end
 
-"""`Math.pOpn`: `\\operatorname{n}(…)`."""
+"""`Math.pOpn`: `\\operatorname{n}(…)`: a call-form core operator, a deprecated
+one (rewritten), a template (by the symbol table, positional or named), or an
+open operator; a bare `\\operatorname{n}` (no `(` or `_` after it) is a template
+applied with no bindings."""
 function p_opn(c::Ctx, f::Int, n::String, ts::Toks)
     f == 0 && return nothing
     f -= 1
     t0 = tk(ts)
-    t0 === nothing && return nothing
+    t0 === nothing && return tname_ok(n) ? (t_node(n, Kvs()), ts) : nothing
     r = tdrop(ts)
     if is_lp(t0)
         x = p_call_args(c, f, r)
@@ -1072,7 +1111,10 @@ function p_opn(c::Ctx, f::Int, n::String, ts::Toks)
             return nothing
         elseif kat(rr, 1, KSemi)
             r1 = tdrop(rr)
-            (n in REMOVED_OPS || n in CORE_OPS || tparams(c.s, n) !== nothing) && return nothing
+            (
+                n in REMOVED_OPS || (n in CORE_OPS && !(n in FIELD_CALL_OPS)) ||
+                    tparams(c.s, n) !== nothing
+            ) && return nothing
             vs = all_pos(args)
             y = p_fields(c, f, r1)
             (vs !== nothing && y !== nothing && kat(y[2], 1, KRp)) || return nothing
@@ -1082,7 +1124,7 @@ function p_opn(c::Ctx, f::Int, n::String, ts::Toks)
     elseif iskw(t0, KUs)
         return n == "D" ? p_d_call(c, f, r) : nothing
     end
-    return nothing
+    return tname_ok(n) ? (t_node(n, Kvs()), ts) : nothing
 end
 
 """`Math.pDCall`: `\\operatorname{D}_{x}(u, a, b)` after the `_`."""
@@ -1164,6 +1206,12 @@ function p_prim(c::Ctx, f::Int, ts::Toks)
         x = p_cells(KComma, tdrop(ts, 2))
         (x !== nothing && kat(x[2], 1, KRp)) || return nothing
         return const_tail(JArr(Any[n for n in x[1]]), tdrop(x[2]))
+    elseif k1 == KMat && iskw(t2, KLp) && kat(ts, 3, KDelimK) && kat(ts, 4, KColon) &&
+            tk(ts, 5) == TTxt("[") && kat(ts, 6, KComma) && kat(ts, 7, KAugK) &&
+            kat(ts, 8, KColon) && tk(ts, 9) == TCode(JInt(1)) && kat(ts, 10, KComma)
+        x = p_mk_rows(c, f, KComma, KSemi, KRp, tdrop(ts, 10))
+        x === nothing && return nothing
+        return mk_tail(c.sf, x[1], x[2])
     elseif k1 == KMat && t2 !== nothing
         is_lp(t2) || return nothing
         x = p_grid(KComma, KSemi, KRp, tdrop(ts, 2))
@@ -1223,6 +1271,10 @@ function p_prim(c::Ctx, f::Int, ts::Toks)
             return node(k1 == KMin ? "min" : "max", x[1]), tdrop(x[2])
         end
         return p_red(c, f, ts)
+    elseif k1 == KLbkg && iskw(t2, KBarr)
+        x = p_mk_rows(c, f, KAmp, KNl, KEarr, tdrop(ts, 2))
+        (x !== nothing && kat(x[2], 1, KRbkg)) || return nothing
+        return mk_tail(c.sf, x[1], tdrop(x[2]))
     elseif k1 == KSum || k1 == KProd || k1 == KLimits || k1 == KLbkg
         return p_red(c, f, ts)
     elseif k1 == KLr && iskw(t2, KLp) && kat(ts, 3, KLbk)
@@ -1375,7 +1427,11 @@ function p_red_body(c::Ctx, f::Int, red::Symbol, marked::Bool, ts::Toks)
         elseif kat(ts, 1, KUs) && kat(ts, 2, KLb)
             x = p_row(c, f, t -> is_kw(KRb, t), tdrop(ts, 2))
             if x !== nothing && x[1].tag === :filt && kat(x[2], 1, KRb) && kat(x[2], 2, KCaret) &&
-                    kat(x[2], 3, KLb) && lone_eq(x[1].v) !== nothing
+                    kat(x[2], 3, KLb) && lone_eq(x[1].v) !== nothing && kat(x[2], 4, KLset)
+                # A lone equality filter followed by a superscript set is the filter.
+                ([x[1]], tdrop(x[2]))
+            elseif x !== nothing && x[1].tag === :filt && kat(x[2], 1, KRb) &&
+                    kat(x[2], 2, KCaret) && kat(x[2], 3, KLb) && lone_eq(x[1].v) !== nothing
                 k, a = lone_eq(x[1].v)
                 y = p_or(c, f, tdrop(x[2], 3))
                 (y !== nothing && kat(y[2], 1, KRb)) ? ([rng(k, JArr(Any[a, y[1]]))], tdrop(y[2])) :
@@ -1398,10 +1454,12 @@ function p_red_body(c::Ctx, f::Int, red::Symbol, marked::Bool, ts::Toks)
     rows === nothing && return nothing
     rs, r = rows
     pp = row_parts(Row[x for x in rs])
-    body = p_mul(c, f, r)
-    (pp !== nothing && body !== nothing) || return nothing
+    sup = p_sup(c.sf, r)
+    (pp !== nothing && sup !== nothing) || return nothing
+    body = p_mul(c, f, sup[2])
+    body === nothing && return nothing
     rg, fl = pp
-    return FaqForm(red, marked, Any[], rg, body[1], fl), body[2]
+    return FaqForm(red, marked, Any[], rg, body[1], fl, sup[1]), body[2]
 end
 
 function strip_toks(r::Toks, tail::Vector{Tok})
@@ -1412,24 +1470,33 @@ function strip_toks(r::Toks, tail::Vector{Tok})
     return tdrop(r, length(tail))
 end
 
-const LATEX_WRAP_TAIL = Tok[TKw(KRbkg), TKw(KUs), TKw(KLb)]
-const TYPST_WRAP_TAIL = Tok[TKw(KRbk), TKw(KRp), TKw(KUs), TKw(KLpg)]
+const LATEX_WRAP_CLOSE = Tok[TKw(KRbkg)]
+const LATEX_WRAP_SUB = Tok[TKw(KUs), TKw(KLb)]
+const TYPST_WRAP_CLOSE = Tok[TKw(KRbk), TKw(KRp)]
+const TYPST_WRAP_SUB = Tok[TKw(KUs), TKw(KLpg)]
 
-function p_red_wrapped(c::Ctx, f::Int, r::Toks, tail::Vector{Tok}, close::Kw)
+# The bracket form of `Math.pRed`: the reduction, the closing bracket, the
+# superscript set if any, then the output entries in the subscript.
+function p_red_wrapped(c::Ctx, f::Int, r::Toks, wclose::Vector{Tok}, sub::Vector{Tok}, close::Kw)
     h = p_red_head(c.sf, r)
     h === nothing && return nothing
     red, marked, r1 = h
     b = p_red_body(c, f, red, marked, r1)
     b === nothing && return nothing
     form, r2 = b
-    r3 = strip_toks(r2, tail)
+    r3 = strip_toks(r2, wclose)
     r3 === nothing && return nothing
-    e = p_rows(c, f, KComma, close, r3)
+    sp = p_sup(c.sf, r3)
+    sp === nothing && return nothing
+    st, r4 = sp
+    r5 = strip_toks(r4, sub)
+    r5 === nothing && return nothing
+    e = p_rows(c, f, KComma, close, r5)
     e === nothing && return nothing
-    es, r4 = e
+    es, r6 = e
     ep = entry_parts(es)
     ep === nothing && return nothing
-    return faq_json(with_out(form, ep[1], ep[2])), r4
+    return faq_json(with_sup(with_out(form, ep[1], ep[2]), st)), r6
 end
 
 """`Math.pRed`: a rank-0 reduction, or a reduction wrapped with its output
@@ -1438,9 +1505,9 @@ function p_red(c::Ctx, f::Int, ts::Toks)
     f == 0 && return nothing
     f -= 1
     if kat(ts, 1, KLbkg)
-        return p_red_wrapped(c, f, tdrop(ts), LATEX_WRAP_TAIL, KRb)
+        return p_red_wrapped(c, f, tdrop(ts), LATEX_WRAP_CLOSE, LATEX_WRAP_SUB, KRb)
     elseif kat(ts, 1, KLr) && kat(ts, 2, KLp) && kat(ts, 3, KLbk)
-        return p_red_wrapped(c, f, tdrop(ts, 3), TYPST_WRAP_TAIL, KRp)
+        return p_red_wrapped(c, f, tdrop(ts, 3), TYPST_WRAP_CLOSE, TYPST_WRAP_SUB, KRp)
     end
     h = p_red_head(c.sf, ts)
     h === nothing && return nothing
@@ -1562,6 +1629,61 @@ function _p_cases(c::Ctx, f::Int, ts::Toks)
         z = p_cases(c, f, tdrop(r2))
         z === nothing && return nothing
         return node("ifelse", Any[cnd, v, z[1]]), z[2]
+    end
+    return nothing
+end
+
+"""`Math.pPair`: a bound pair after its `[`: `a, b]`."""
+function p_pair(c::Ctx, f::Int, ts::Toks)
+    f == 0 && return nothing
+    f -= 1
+    x = p_or(c, f, ts)
+    (x !== nothing && kat(x[2], 1, KComma)) || return nothing
+    y = p_or(c, f, tdrop(x[2]))
+    (y !== nothing && kat(y[2], 1, KRbk)) || return nothing
+    return (x[1], y[1]), tdrop(y[2])
+end
+
+"""`Math.pRegTail`: the further bound pairs of a region, each after
+`\\times [`."""
+function p_reg_tail(c::Ctx, f::Int, ts::Toks)
+    out = Tuple{Any, Any}[]
+    while true
+        f == 0 && return nothing
+        f -= 1
+        is_times_lbk(tk(ts)) || return out, ts
+        x = p_pair(c, f, tdrop(ts))
+        x === nothing && return nothing
+        push!(out, x[1])
+        ts = x[2]
+    end
+    return nothing
+end
+
+"""`Math.pMkRows`: the rows of a `makearray` table: a value, the cell separator
+`csep`, a region; rows separated by `rsep`, up to `close` (consumed)."""
+function p_mk_rows(c::Ctx, f::Int, csep::Kw, rsep::Kw, close::Kw, ts::Toks)
+    out = Tuple{Any, Vector{Tuple{Any, Any}}}[]
+    while true
+        f == 0 && return nothing
+        f -= 1
+        x = p_or(c, f, ts)
+        (x !== nothing && kat(x[2], 1, csep) && kat(x[2], 2, KLbk)) || return nothing
+        v = x[1]
+        p = p_pair(c, f, tdrop(x[2], 2))
+        p === nothing && return nothing
+        q = p_reg_tail(c, f, p[2])
+        (q !== nothing && tk(q[2]) isa TKw) || return nothing
+        ps, r2 = q
+        push!(out, (v, pushfirst!(ps, p[1])))
+        k2 = r2[1].k
+        if k2 == rsep
+            ts = tdrop(r2)
+        elseif k2 == close
+            return out, tdrop(r2)
+        else
+            return nothing
+        end
     end
     return nothing
 end

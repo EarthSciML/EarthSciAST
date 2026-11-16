@@ -166,7 +166,8 @@ const KW_CHARS = Dict{Kw, String}(
     KBcases => "\\begin{cases}", KEcases => "\\end{cases}", KBmat => "\\begin{bmatrix}",
     KEmat => "\\end{bmatrix}", KSum => "\\sum", KProd => "\\prod", KInn => "\\in",
     KSubstack => "\\substack", KLimitsL => "\\limits", KLbkg => "\\left[",
-    KRbkg => "\\right]",
+    KRbkg => "\\right]", KBarr => "\\begin{array}{l|l}", KEarr => "\\end{array}",
+    KTimesLbk => "\\times [", KLset => "\\{", KRset => "\\}",
 )
 
 """`Latex.kwChars`."""
@@ -238,7 +239,8 @@ pretty(p, t1::Tok, t2::Tok) =
     is_bin(t1) || is_bin(t2) || iskw(t1, KComma) || iskw(t1, KColon) || iskw(t1, KSemi) ||
     (iskw(t2, KMinus) && atom_end(t1)) ||
     (iskw(t1, KMinus) && p !== nothing && atom_end(p)) ||
-    (atom_end(t1) && atom_start(t2) && !(iskw(t2, KLp) || iskw(t2, KLbk)))
+    (atom_end(t1) && atom_start(t2) && !(iskw(t2, KLp) || iskw(t2, KLbk))) ||
+    iskw(t2, KTimesLbk) || iskw(t1, KBarr) || iskw(t2, KEarr)
 
 """`Latex.sp`."""
 sp(p, t1::Tok, t2::Tok) = need_space(t1, t2) || pretty(p, t1, t2)
@@ -273,6 +275,18 @@ const CTRL_KW = Dict{String, Kw}(
     "rceil" => KRceil, "partial" => KPdiff, "dot" => KDotacc, "sum" => KSum,
     "prod" => KProd, "in" => KInn, "substack" => KSubstack, "limits" => KLimitsL,
 )
+
+"""`Latex.timesTok`: `\\times` followed (after white space) by `[`: the region
+product of a `makearray` with the bracket of the next bound pair, one token; any
+other `\\times` is a product."""
+function times_tok(r::Chars)
+    n = 0
+    while is_ws_l(at(r, n + 1))
+        n += 1
+    end
+    at(r, n + 1) == '[' && return TKw(KTimesLbk), drop(r, n + 1)
+    return TKw(KTimes), r
+end
 
 """`Latex.ctrlTok`: after a control word: its token and the rest."""
 function ctrl_tok(w::String, r::Chars)
@@ -311,12 +325,18 @@ function ctrl_tok(w::String, r::Chars)
         r2 = drop_p("{cases}", r)
         r2 !== nothing && return TKw(KBcases), r2
         r2 = drop_p("{bmatrix}", r)
-        return r2 === nothing ? nothing : (TKw(KBmat), r2)
+        r2 !== nothing && return TKw(KBmat), r2
+        r2 = drop_p("{array}{l|l}", r)
+        return r2 === nothing ? nothing : (TKw(KBarr), r2)
     elseif w == "end"
         r2 = drop_p("{cases}", r)
         r2 !== nothing && return TKw(KEcases), r2
         r2 = drop_p("{bmatrix}", r)
-        return r2 === nothing ? nothing : (TKw(KEmat), r2)
+        r2 !== nothing && return TKw(KEmat), r2
+        r2 = drop_p("{array}", r)
+        return r2 === nothing ? nothing : (TKw(KEarr), r2)
+    elseif w == "times"
+        return times_tok(r)
     elseif is_greek(w)
         return TGreek(w), r
     end
@@ -403,6 +423,10 @@ function lex_one(cs::Chars)
             return x === nothing ? nothing : (TUnits(x[1]), x[2])
         elseif d == '\\'
             return TKw(KNl), r
+        elseif d == '{'
+            return TKw(KLset), r
+        elseif d == '}'
+            return TKw(KRset), r
         end
         return nothing
     elseif c == '"'

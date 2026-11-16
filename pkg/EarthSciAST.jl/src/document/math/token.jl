@@ -97,6 +97,17 @@ export Kw, Tok, Sf, SF_LATEX, SF_TYPST,
     KRbkg
     KLr
     KLimitsL
+    # makearray: LaTeX `\begin{array}{l|l}` `\end{array}`; the region product with
+    # the bracket of the next bound pair, LaTeX `\times [`, Typst `times [`; the
+    # Typst named arguments `delim` and `augment` of its `mat(…)`
+    KBarr
+    KEarr
+    KTimesLbk
+    KDelimK
+    KAugK
+    # a set of names, LaTeX `\{` `\}`, Typst `{` `}` (the `args` of a `faq`)
+    KLset
+    KRset
 end
 for k in instances(Kw)
     @eval export $(Symbol(k))
