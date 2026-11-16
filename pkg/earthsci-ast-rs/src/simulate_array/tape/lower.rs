@@ -24,11 +24,10 @@
 //!
 //! ## Value numbering
 //!
-//! The runtime CSE overlay ([`super::super::cse`]) memoizes per `(scope,
-//! structural class)`, with a fresh scope per output box (each faq entry,
-//! each contraction tuple, each makearray region) — and hoists box-pure
-//! subtrees into a persistent store keyed by `(box signature, class)`. The
-//! build-time equivalent here:
+//! Shared subexpressions are numbered per `(scope, structural class)`, with a
+//! fresh scope per output box (each faq entry, each contraction tuple, each
+//! makearray region), and box-pure subtrees are hoisted into a persistent
+//! store keyed by `(box signature, class)`:
 //!
 //! * scope-local numbering keyed by the interned node's `Arc` pointer
 //!   (structural identity IS pointer identity for interned subtrees; the few

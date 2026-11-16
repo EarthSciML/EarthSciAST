@@ -32,9 +32,8 @@ use ndarray::{ArrayViewD, Slice};
 // (API_SPEC §5.8): `interpreter` runs the per-cell oracle everywhere, and the
 // flag below is how a rule reached deep inside an evaluation — a standalone
 // `faq` observed, a `makearray` body — learns which compiler is running.
-// `RhsStats`'s `force_scalar` only gates the two COMPILED-RULE call sites;
-// `eval_faq` and `eval_makearray` reach the overlay without passing through
-// either, so the choice has to travel with the evaluation rather than with the
+// `eval_faq` and `eval_makearray` reach the overlay from deep inside an
+// evaluation, so the choice travels with the evaluation rather than with the
 // rule.
 // ---------------------------------------------------------------------------
 
@@ -49,10 +48,9 @@ pub(super) fn overlay_off() -> bool {
 }
 
 /// Arm the per-cell oracle for as long as this guard lives, restoring the
-/// previous setting on drop. Armed from `force_scalar` at the two evaluation
-/// funnels ([`super::rhs::evaluate_rhs_with_scratch`] and
-/// [`super::rhs::materialize_observeds_pass`]), which is where the compiler's
-/// choice enters the runtime.
+/// previous setting on drop. Armed by the per-cell oracle's two funnels (the
+/// right-hand side and the observed pass in `rhs.rs`) and by the
+/// `interpreter`'s build-time evaluations.
 pub(super) struct OverlayGuard(bool);
 
 impl OverlayGuard {
@@ -355,18 +353,6 @@ pub(super) fn try_eval_faq_vectorized<'a>(
     if folds_from_the_top(output_idx_names, contract_names, filter) {
         bail_vec!("faq: reverse window (folds from the top)");
     }
-    // ess-cse: this box is one CSE scope. Analysing the body is idempotent (it
-    // runs once per distinct body root per scratch); the scope guard closes on
-    // every path, including the `?`/`bail_vec!` early returns below. At the
-    // OUTERMOST entry the guard also recycles the previous evaluation's memo
-    // arrays into `pool` — safe there because no `VecValue` from the previous
-    // top-level evaluation can still be alive (each caller consumes its result
-    // before returning). A nested aggregate re-enters here and gets its own
-    // scope, so a subtree under a different box never shares a memo entry.
-    if let Some(rt) = ctx.cse {
-        rt.analyse(body, output_idx_names, contract_names);
-    }
-    let _cse_scope = ctx.cse.map(|rt| rt.scope(pool));
     let mut ops = 0usize;
     let v = if contract_names.is_empty() {
         let bx = VecBox {
@@ -569,10 +555,6 @@ pub(super) fn eval_vec_contracted<'a>(
     let mut cvals = [0i64; MAXC];
     cvals[..nc].copy_from_slice(&clo[..nc]);
     loop {
-        // ess-cse: each contraction tuple binds `cvals` differently, so it is a
-        // DISTINCT box and therefore a distinct CSE scope — a subtree memoized
-        // at tuple k must not be served at tuple k+1.
-        let _cse_scope = ctx.cse.map(|rt| rt.scope(pool));
         let bx = VecBox {
             syms: output_idx_names,
             lo,
@@ -698,38 +680,11 @@ pub(super) fn eval_vec<'a>(
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
     *ops += 1;
-    // ---- CSE (ess-cse) -----------------------------------------------------
-    // A discretization template is expanded at every reference site, so one
-    // lowered tendency body evaluates the SAME subtree dozens of times under the
-    // same box (482,961 operator-node evaluations collapse to 14,208 distinct
-    // ones for simpleclimate.esm). `class_of` yields a class id only for a node
-    // whose class repeats inside its own scope, and the memo is keyed by
-    // (scope, class) — a fresh scope per `VecBox` — so a hit is the value this
-    // node WOULD have computed, not merely a syntactic twin. See `cse.rs` for
-    // the scoping argument.
-    //
-    // A class id carrying `PURE_BIT` marks a BOX-PURE subtree (ess-lih): one
-    // built only from this box's index symbols and CONST-tier names, so its
-    // value is fixed for the whole solve. `get`/`put` route those to the
-    // PERSISTENT store keyed by the box SIGNATURE instead of the per-evaluation
-    // memo, so a model's grid geometry — coordinate ramps, `sin`/`cos` of a
-    // latitude, metric factors read off an already-hoisted static observed — is
-    // computed once rather than once per RHS call. See `cse.rs` (§ess-lih).
-    let cse_class = ctx.cse.and_then(|c| c.class_of(expr));
-    if let (Some(rt), Some(class)) = (ctx.cse, cse_class)
-        && let Some(hit) = rt.get(class, bx)
-    {
-        return Some(hit);
-    }
-    let r = match expr {
+    match expr {
         Expr::Number(n) => Some(VecValue::Scalar(*n)),
         Expr::Integer(n) => Some(VecValue::Scalar(*n as f64)),
         Expr::Variable(name) => eval_vec_variable(name, bx, ctx, pool),
         Expr::Operator(node) => eval_vec_op(node, bx, ctx, pool, ops),
-    };
-    match (ctx.cse, cse_class, r) {
-        (Some(rt), Some(class), Some(v)) => Some(rt.put(class, v, bx)),
-        (_, _, r) => r,
     }
 }
 
@@ -2073,10 +2028,6 @@ pub(super) fn eval_vec_makearray<'a>(
             pool.give_array(result);
             bail_vec!("makearray: empty region");
         }
-        // ess-cse: a region has its own `lo`/extent, so a coordinate ramp and
-        // every shifted gather mean something different in it — a distinct box,
-        // and so a distinct CSE scope.
-        let _cse_scope = ctx.cse.map(|rt| rt.scope(pool));
         let rbx = VecBox {
             syms: bx.syms,
             lo: &r_lo[..],
@@ -2825,48 +2776,6 @@ mod op_dispatch_equivalence {
                 vec_op_code(op),
                 VecOp::Unsupported,
                 "operator `{op}` must fall back to the per-cell oracle"
-            );
-        }
-    }
-
-    /// The CSE classifier's box-transparency allowlist is documented as being
-    /// "kept in lockstep with `eval_vec_op`". Make that mechanical: every op it
-    /// declares transparent must actually have a dispatch arm here, or the CSE
-    /// pass would keep a node's children in the enclosing scope for a node the
-    /// evaluator never even descends into.
-    #[test]
-    fn cse_box_transparent_ops_all_have_a_dispatch_arm() {
-        for op in super::super::cse::BOX_TRANSPARENT_OPS {
-            assert_ne!(
-                vec_op_code(op),
-                VecOp::Unsupported,
-                "`{op}` is CSE-box-transparent but has no `eval_vec_op` arm"
-            );
-        }
-    }
-
-    /// Both directions: the two ops `eval_vec_op` handles that OPEN a box
-    /// (`faq`, `makearray`) must stay off the transparency list, and
-    /// nothing else with an arm may be missing from it.
-    #[test]
-    fn every_box_transparent_dispatch_arm_is_listed() {
-        let listed = |op: &str| super::super::cse::BOX_TRANSPARENT_OPS.contains(&op);
-        for op in ARITH.iter().chain(CMP).chain(UNARY) {
-            assert!(
-                listed(op),
-                "`{op}` has a dispatch arm but is not CSE-transparent"
-            );
-        }
-        for op in ["neg", "index", "ifelse", "broadcast"] {
-            assert!(
-                listed(op),
-                "`{op}` has a dispatch arm but is not CSE-transparent"
-            );
-        }
-        for op in ["faq", "makearray"] {
-            assert!(
-                !listed(op),
-                "`{op}` rebinds the box and must not be CSE-transparent"
             );
         }
     }

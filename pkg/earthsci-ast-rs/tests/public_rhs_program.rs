@@ -281,7 +281,7 @@ fn eval_into_equals_the_debug_seam() {
                             );
                             dy
                         }
-                        _ => c.debug_eval_rhs(&u, t, &named, true).0,
+                        _ => c.debug_eval_rhs(&u, t, &named).0,
                     }
                 };
                 assert_eq!(bits(&got), bits(&want), "{compiler}: {doc}");

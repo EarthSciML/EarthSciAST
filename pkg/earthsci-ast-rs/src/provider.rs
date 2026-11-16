@@ -1270,7 +1270,7 @@ mod tests {
 
         // Segment boundary t=0: refresh → RHS reads the t=0 forcing field.
         exec.refresh_at(0.0, &forcing).unwrap();
-        let (dy0, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+        let (dy0, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         assert_eq!(
             dy0,
             vec![2.0, 3.0, 4.0],
@@ -1279,7 +1279,7 @@ mod tests {
 
         // Segment boundary t=6: refresh advances the buffer → RHS reflects it.
         exec.refresh_at(6.0, &forcing).unwrap();
-        let (dy6, _) = compiled.debug_eval_rhs(&state, 6.0, &params, false);
+        let (dy6, _) = compiled.debug_eval_rhs(&state, 6.0, &params);
         assert_eq!(
             dy6,
             vec![9.0, 8.0, 7.0],

@@ -3,12 +3,10 @@
 //! array-form tests, and the three A/B harnesses that build a fixture's
 //! fused and unfused programs and run every executor over them:
 //!
-//! * [`ab_check`] against the production interpreter (the whole-array
-//!   overlay with runtime CSE), on warm scratches, row-major and split
-//!   executions included;
-//! * [`ab`] / [`compare_tape_at`] against the per-cell oracle and the
-//!   overlay, on a fresh scratch per evaluation, comparing the latched fault
-//!   too;
+//! * [`ab_check`] against the interpreter, on warm scratches, row-major and
+//!   split executions included;
+//! * [`ab`] / [`compare_tape_at`] against the per-cell oracle, on a fresh
+//!   scratch per evaluation, comparing the latched fault too;
 //! * [`oracle_ab`] against the per-cell oracle under the document's own
 //!   precision environment.
 
@@ -137,7 +135,7 @@ pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram 
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, lo, hi);
         for &t in &[0.0, 0.37, 2.5] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
             for (label, p) in [
                 ("fused", &prog),
                 ("unfused", &prog_uf),
@@ -240,7 +238,7 @@ pub(super) fn scratch_with(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsSc
 }
 
 /// Build the fused and unfused tapes — neither may carry a fallback — and
-/// compare `dy` and the latched fault against the oracle and the overlay at
+/// compare `dy` and the latched fault against the oracle at
 /// several states, times and parameter maps. The fast executor is compared
 /// on a FRESH scratch per evaluation: a CONST-section fault latches when the
 /// section primes, which a warm scratch has already done. Returns the fused
@@ -257,7 +255,7 @@ pub(super) fn ab(compiled: &ArrayCompiled, param_maps: &[HashMap<String, f64>]) 
         for seed in 0..3u64 {
             let state = seeded_state(n, seed, -2.0, 2.0);
             for &t in &[0.0, 0.7] {
-                compare_at(compiled, params, &state, t);
+                compare_tape_at(compiled, params, &state, t);
             }
         }
     }
@@ -265,37 +263,19 @@ pub(super) fn ab(compiled: &ArrayCompiled, param_maps: &[HashMap<String, f64>]) 
 }
 
 /// Compare the fused and unfused tapes, in both executors, against the
-/// oracle and the overlay at one state, time and parameter map: `dy` bit for
-/// bit and the latched fault.
-pub(super) fn compare_at(
-    compiled: &ArrayCompiled,
-    params: &HashMap<String, f64>,
-    state: &[f64],
-    t: f64,
-) {
-    compare_tape_at(compiled, params, state, t, true);
-}
-
-/// [`compare_at`], checking the overlay against the oracle only when
-/// `overlay` is set: the tapes are always compared against the oracle.
+/// oracle at one state, time and parameter map: `dy` bit for bit and the
+/// latched fault.
 pub(super) fn compare_tape_at(
     compiled: &ArrayCompiled,
     params: &HashMap<String, f64>,
     state: &[f64],
     t: f64,
-    overlay: bool,
 ) {
     let n = state.len();
     let pv = compiled.debug_resolve_params(params);
     take_const_array_oob();
-    let (dy_oracle, _) = compiled.debug_eval_rhs(state, t, params, true);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(state, t, params);
     let f_oracle = take_const_array_oob();
-    if overlay {
-        let (dy_overlay, _) = compiled.debug_eval_rhs(state, t, params, false);
-        let f_overlay = take_const_array_oob();
-        assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
-        assert_eq!(f_overlay, f_oracle, "overlay fault");
-    }
     for fused in [true, false] {
         let label = if fused { "fused" } else { "unfused" };
         let p = taped(compiled.build_tape_opts(&HashSet::new(), fused.then(superop_cfg))).0;
@@ -320,7 +300,7 @@ pub(super) fn compare_tape_at(
     }
 }
 
-/// The tape's refusals when it refuses any rule; otherwise [`compare_at`] at
+/// The tape's refusals when it refuses any rule; otherwise [`compare_tape_at`] at
 /// each of `states` under each parameter map, and no refusals.
 pub(super) fn agrees_or_refuses(
     compiled: &ArrayCompiled,
@@ -333,7 +313,7 @@ pub(super) fn agrees_or_refuses(
     }
     for params in param_maps {
         for state in states {
-            compare_at(compiled, params, state, 0.0);
+            compare_tape_at(compiled, params, state, 0.0);
         }
     }
     Vec::new()
@@ -417,7 +397,7 @@ pub(super) fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, 0.25, 2.5);
         for &t in &[0.0, 0.37, 2.5] {
-            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params, true);
+            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params);
             for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
                 let mut dy = vec![0.0f64; n];
                 run_reference(p, &compiled, &state, &param_vec, t, &mut dy);

@@ -1,17 +1,13 @@
-//! Zero-allocation verification for the Rust PDE tier (ess-mro).
+//! Zero-allocation verification for the taped right-hand side.
 //!
-//! The vectorized whole-array stencil evaluator (ess-bdm) is algorithmically
-//! N-independent, but it used to allocate `O(#AST-nodes)` arrays per RHS call.
 //! diffsol's RHS is in-place (`call_inplace` writes the solver-owned `dy`), so
-//! there is no allocation floor: a correct closure can be 100% allocation-free.
-//! `RhsScratch` carries the reusable per-variable state arrays, the observed
-//! container, and a buffer pool across diffsol steps so the steady-state
-//! vectorized RHS performs **zero** heap allocations.
+//! there is no allocation floor: a correct closure can be allocation-free. The
+//! tape's slab and executor state are preallocated when it is installed, so a
+//! steady-state taped evaluation performs **zero** heap allocations.
 //!
 //! This test wraps the global allocator with a counter and asserts that, after
-//! a warm-up, a tight loop of vectorized RHS evaluations allocates nothing — at
-//! **two** grid sizes, so the property is both N-independent and ≈0 (ess-mro
-//! acceptance criterion 1). It lives in its own test binary with a single test
+//! a warm-up, a tight loop of taped RHS evaluations allocates nothing — at
+//! **two** grid sizes, so the property is both N-independent and ≈0. It lives in its own test binary with a single test
 //! so no other test thread perturbs the process-wide allocation counter.
 
 #![cfg(not(target_arch = "wasm32"))]
@@ -191,30 +187,17 @@ fn sample_state(n: usize) -> Vec<f64> {
 /// bracket only the measured loop; the counter reads are atomic loads and
 /// `debug_eval_rhs_into` borrows all its buffers, so nothing else allocates
 /// between them. Returns the allocation count (expected 0 in steady state).
-fn measure_steady_state_allocs(label: &str, compiled: &ArrayCompiled) -> usize {
-    measure_steady_state_allocs_with(label, compiled, false)
-}
-
-/// Like [`measure_steady_state_allocs`] but through a Step 3b TAPED scratch:
-/// the fast tape executor must be allocation-free in steady state too (the
-/// slab and every piece of executor state are preallocated at install time).
 fn measure_taped_steady_state_allocs(label: &str, compiled: &ArrayCompiled) -> usize {
-    measure_steady_state_allocs_with(label, compiled, true)
-}
-
-fn measure_steady_state_allocs_with(label: &str, compiled: &ArrayCompiled, taped: bool) -> usize {
     let n = compiled.state_variable_names().len();
     let state = sample_state(n);
     let params = compiled.debug_resolve_params(&HashMap::new());
-    let mut scratch = if taped {
-        let s = compiled
-            .debug_new_scratch_taped()
-            .expect("the tape lowers every rule");
-        assert!(s.has_tape(), "{label}: taped scratch must carry a tape");
-        s
-    } else {
-        compiled.debug_new_scratch()
-    };
+    let mut scratch = compiled
+        .debug_new_scratch_taped()
+        .expect("the tape lowers every rule");
+    assert!(
+        scratch.has_tape(),
+        "{label}: taped scratch must carry a tape"
+    );
     let mut dy = vec![0.0f64; n];
     let mut stats = RhsStats::default();
 
@@ -224,15 +207,7 @@ fn measure_steady_state_allocs_with(label: &str, compiled: &ArrayCompiled, taped
 
     let mut probe = RhsStats::default();
     compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut probe);
-    if taped {
-        assert!(probe.taped_rules >= 1, "{label}: RHS did not run the tape");
-    } else {
-        assert_eq!(probe.vectorized_rules, 1, "{label}: RHS did not vectorize");
-        assert_eq!(
-            probe.scalar_rules, 0,
-            "{label}: RHS fell back to the oracle"
-        );
-    }
+    assert!(probe.taped_rules >= 1, "{label}: RHS did not run the tape");
 
     let iters = 200usize;
     let before = ALLOC_COUNT.load(Ordering::Relaxed);
@@ -244,20 +219,18 @@ fn measure_steady_state_allocs_with(label: &str, compiled: &ArrayCompiled, taped
     let allocs = ALLOC_COUNT.load(Ordering::Relaxed) - before;
     assert_eq!(
         allocs, 0,
-        "{label}: steady-state vectorized RHS allocated {allocs} times over {iters} calls \
-         (expected 0 — the scratch/pool must recycle every buffer)"
+        "{label}: steady-state taped RHS allocated {allocs} times over {iters} calls \
+         (expected 0)"
     );
     allocs
 }
 
 #[test]
-fn vectorized_rhs_is_allocation_free_in_steady_state() {
-    // Every discretized-PDE stencil shape the vectorizer handles must be
-    // allocation-free in steady state, at two grid sizes each (so the property
-    // is both N-independent and ≈0). Covers the affine-ghost makearray stencil
-    // (ess-bdm) and the two ess-p9s additions: the einsum-contraction fold and
-    // the periodic-wrap gather. One test only — the allocation counter is
-    // process-global, so the cases must run sequentially (no parallel threads).
+fn taped_rhs_is_allocation_free_in_steady_state() {
+    // Each discretized-PDE stencil shape — the affine-ghost makearray stencil,
+    // the einsum-contraction fold and the periodic-wrap gather — at two grid
+    // sizes. One test only: the allocation counter is process-global, so the
+    // cases must run sequentially.
     let cases: [(&str, ArrayCompiled); 6] = [
         ("makearray N=4", compile_json(&heat1d_json(4))),
         ("makearray N=8", compile_json(&heat1d_json(8))),
@@ -266,13 +239,6 @@ fn vectorized_rhs_is_allocation_free_in_steady_state() {
         ("periodic-wrap 4x2", compile_json(&latlon_heat_json(4, 2))),
         ("periodic-wrap 8x2", compile_json(&latlon_heat_json(8, 2))),
     ];
-    for (label, compiled) in &cases {
-        let allocs = measure_steady_state_allocs(label, compiled);
-        assert_eq!(allocs, 0, "{label}: expected zero steady-state allocations");
-    }
-    // Step 3b: the same fixtures through the taped scratch (the production
-    // fast executor) must also be allocation-free in steady state. Run inside
-    // the SAME test so the process-global counter stays single-threaded.
     for (label, compiled) in &cases {
         let allocs = measure_taped_steady_state_allocs(&format!("taped {label}"), compiled);
         assert_eq!(

@@ -67,8 +67,6 @@ mod coupled_array_seam;
 mod coupled_const_array_fold;
 #[path = "coupling_imports.rs"]
 mod coupling_imports;
-#[path = "cse_equivalence.rs"]
-mod cse_equivalence;
 #[path = "cumulative_prefix_scan.rs"]
 mod cumulative_prefix_scan;
 #[path = "dae_contract.rs"]
@@ -241,8 +239,6 @@ mod overlap_gate_live_forcing;
 mod overlap_gate_ring_stack;
 #[path = "override_key_diagnostics_conformance.rs"]
 mod override_key_diagnostics_conformance;
-#[path = "pde_const_hoist.rs"]
-mod pde_const_hoist;
 #[path = "pde_inline_array_overrides_conformance.rs"]
 mod pde_inline_array_overrides_conformance;
 #[path = "pde_inline_dead_observed_conformance.rs"]
@@ -425,8 +421,6 @@ mod value_invention_materialize_conformance;
 mod variable_bounds;
 #[path = "variable_map_expression_transform.rs"]
 mod variable_map_expression_transform;
-#[path = "vec_coverage_frontier.rs"]
-mod vec_coverage_frontier;
 #[path = "wildfire_simulation.rs"]
 mod wildfire_simulation;
 #[path = "wrt_default_omitted.rs"]

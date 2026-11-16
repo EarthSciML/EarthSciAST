@@ -560,6 +560,48 @@ fn the_stepping_lifecycle_reaches_the_same_place_as_solve() {
     );
 }
 
+/// A solution row for a scalar observed is output, not state: stepping past
+/// the first grid interval must not hand it back as an initial condition.
+#[test]
+fn stepping_a_model_with_a_scalar_observed_feeds_back_only_state() {
+    let doc = DECAY
+        .replace(
+            r#""k": { "type": "parameter", "default": -1.0 }"#,
+            r#""k": { "type": "parameter", "default": -1.0 },
+            "z": { "type": "unknown" }"#,
+        )
+        .replace(
+            r#""equations": ["#,
+            r#""equations": [
+            { "lhs": "z", "rhs": { "op": "*", "args": [2.0, "y"] } },"#,
+        );
+    let file = load_string(&doc).expect("load");
+    let prob = esm_problem(
+        &file,
+        (0.0, 2.0),
+        ProblemOptions {
+            rhs: Rhs::Always,
+            ..Default::default()
+        },
+    )
+    .expect("build");
+    let mut integ = init(&prob, &tight(grid(2.0, 4))).expect("init");
+    let sol = integ.solve_to_completion().expect("every step runs");
+    assert_eq!(sol.retcode, ReturnCode::Success);
+    let want = (-2.0f64).exp();
+    let y = sol.final_value("M.y").expect("y");
+    assert!((y - want).abs() < 1e-5, "stepped y(2) = {y}, want {want}");
+    let z = sol
+        .final_value("M.z")
+        .expect("the observed is still reported");
+    assert!((z - 2.0 * want).abs() < 1e-5, "stepped z(2) = {z}");
+    assert!(
+        !integ.u().contains_key("M.z"),
+        "the observed leaked into the state: {:?}",
+        integ.u()
+    );
+}
+
 #[test]
 fn solve_to_completion_runs_the_whole_interval_in_one_call() {
     let prob = decay_problem((0.0, 2.0));

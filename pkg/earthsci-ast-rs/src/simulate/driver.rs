@@ -472,40 +472,69 @@ pub(crate) fn build_array_compiled(
     file: &EsmFile,
     flattened: Option<&crate::flatten::FlattenedSystem>,
     runtime_array_parameters: bool,
+    compiler: crate::Compiler,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
+    build_array(
+        std::borrow::Cow::Borrowed(file),
+        flattened,
+        runtime_array_parameters,
+        compiler,
+    )
+}
+
+/// [`build_array_compiled`] over a borrowed or an owned document. An owned
+/// one is consumed: dropped right after flattening on the coupled route, and
+/// its single model moved into the compiled rules on the single-model route
+/// ([`crate::simulate_array::ArrayCompiled::from_file_owned`]).
+fn build_array(
+    file: std::borrow::Cow<'_, EsmFile>,
+    flattened: Option<&crate::flatten::FlattenedSystem>,
+    runtime_array_parameters: bool,
+    compiler: crate::Compiler,
+) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
+    use crate::simulate_array::ArrayCompiled;
+    use std::borrow::Cow;
     // Arm the document's whole precision environment for the build
     // (`crate::precision`) — its `domain.element_type` AND the per-variable
     // `element_type` overrides under it (esm-spec §11.3.1). These are public
     // entries that do not go through `EsmProblem`, and the compiled artifact
     // records the environment it folded its constants in. Re-arming what
     // `EsmProblem` already set is a no-op.
-    let env = crate::precision_infer::env_of_file(file).map_err(SimulateError::Compile)?;
+    let env = crate::precision_infer::env_of_file(&file).map_err(SimulateError::Compile)?;
     let _precision_guard = env.enter();
     // Under a per-variable element type the equations need their precision
     // boundaries marked before they are lowered, which means working from an
     // annotated COPY (`None`, and no copy at all, for every other document).
-    let annotated = crate::precision_infer::annotated(file).map_err(SimulateError::Compile)?;
-    let flattened = flattened.filter(|_| annotated.is_none());
-    let file = annotated.as_ref().unwrap_or(file);
-    if !whole_document_is_one_model(file) {
-        refuse_coupled_subsystem_event(file)?;
+    let (file, flattened) =
+        match crate::precision_infer::annotated(&file).map_err(SimulateError::Compile)? {
+            Some(annotated) => (Cow::Owned(annotated), None),
+            None => (file, flattened),
+        };
+    if !whole_document_is_one_model(&file) {
+        refuse_coupled_subsystem_event(&file)?;
         let owned;
         let flat = match flattened {
             Some(flat) => flat,
             None => {
-                owned = flatten(file).map_err(CompileError::from)?;
+                owned = flatten(&file).map_err(CompileError::from)?;
                 &owned
             }
         };
-        Ok(crate::simulate_array::ArrayCompiled::from_flattened_with(
+        drop(file);
+        Ok(ArrayCompiled::from_flattened_with(
             flat,
             runtime_array_parameters,
+            compiler,
         )?)
     } else {
-        Ok(crate::simulate_array::ArrayCompiled::from_file_with(
-            file,
-            runtime_array_parameters,
-        )?)
+        Ok(match file {
+            Cow::Borrowed(file) => {
+                ArrayCompiled::from_file_with(file, runtime_array_parameters, compiler)?
+            }
+            Cow::Owned(file) => {
+                ArrayCompiled::from_file_owned_with(file, runtime_array_parameters, compiler)?
+            }
+        })
     }
 }
 
@@ -542,21 +571,10 @@ pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompil
             },
         ));
     }
-    // As `build_array_compiled`: the document's whole precision environment,
-    // and an annotated copy when (and only when) a variable declares its own
-    // `element_type` (esm-spec §11.3.1).
-    let env = crate::precision_infer::env_of_file(&file).map_err(SimulateError::Compile)?;
-    let _precision_guard = env.enter();
-    let file = match crate::precision_infer::annotated(&file).map_err(SimulateError::Compile)? {
-        Some(annotated) => annotated,
-        None => file,
-    };
-    if !whole_document_is_one_model(&file) {
-        refuse_coupled_subsystem_event(&file)?;
-        let flat = flatten(&file).map_err(CompileError::from)?;
-        drop(file);
-        Ok(crate::simulate_array::ArrayCompiled::from_flattened(&flat)?)
-    } else {
-        Ok(crate::simulate_array::ArrayCompiled::from_file_owned(file)?)
-    }
+    build_array(
+        std::borrow::Cow::Owned(file),
+        None,
+        false,
+        crate::Compiler::Native,
+    )
 }

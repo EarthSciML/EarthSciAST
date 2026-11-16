@@ -1,4 +1,4 @@
-//! Ad-hoc per-RHS microbenchmark: legacy scratch vs taped scratch.
+//! Ad-hoc per-RHS microbenchmark: per-cell oracle scratch vs taped scratch.
 //! Usage: rhs_bench <model.esm> [KEY=VALUE ...]
 
 use std::collections::{BTreeMap, HashMap};
@@ -23,7 +23,7 @@ fn main() -> Result<(), String> {
     let mut dy = vec![0.0f64; n];
 
     let only = std::env::var("BENCH_ONLY").unwrap_or_default();
-    for (label, taped) in [("legacy", false), ("taped", true)] {
+    for (label, taped) in [("oracle", false), ("taped", true)] {
         if !only.is_empty() && only != label {
             continue;
         }
@@ -49,10 +49,9 @@ fn main() -> Result<(), String> {
         }
         let dt = t0.elapsed().as_secs_f64();
         eprintln!(
-            "[bench] {label}: {:.3} ms/RHS  (taped_rules={} vec={} scalar={})",
+            "[bench] {label}: {:.3} ms/RHS  (taped_rules={} scalar={})",
             dt / iters as f64 * 1e3,
             stats.taped_rules,
-            stats.vectorized_rules,
             stats.scalar_rules
         );
     }

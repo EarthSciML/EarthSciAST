@@ -72,30 +72,12 @@ impl std::fmt::Display for RhsError {
 
 impl std::error::Error for RhsError {}
 
-/// The fail-closed codes a fault message may lead with.
-const FAULT_CODES: [&str; 8] = [
-    "E_TREEWALK_CONSTARRAY_OOB",
-    "E_TREEWALK_INDEX_ON_SCALAR",
-    "E_TREEWALK_MISSING_DATA",
-    "E_TREEWALK_MISSING_INITIAL_VALUE",
-    "E_TREEWALK_RECUR_UNAVAILABLE",
-    "E_TREEWALK_UNBOUND_NAME",
-    "E_TREEWALK_UNDECLARED_INDEX_SET",
-    "E_TREEWALK_UNRESOLVED_ORDER",
-];
-
-/// The fault a latched message reports, coded by the code it leads with.
-pub(super) fn fault(message: String) -> RhsError {
-    let code = FAULT_CODES
-        .iter()
-        .copied()
-        .find(|c| {
-            message
-                .strip_prefix(c)
-                .is_some_and(|rest| rest.starts_with(':'))
-        })
-        .unwrap_or("rhs_fault");
-    RhsError::Fault { code, message }
+/// The fault a call latched, as the error it reports.
+pub(super) fn fault(f: crate::simulate_array::eval::Fault) -> RhsError {
+    RhsError::Fault {
+        code: f.code,
+        message: f.message,
+    }
 }
 
 pub(super) fn shape(what: &'static str, expected: usize, got: usize) -> RhsError {

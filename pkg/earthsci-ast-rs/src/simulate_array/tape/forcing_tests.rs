@@ -139,9 +139,7 @@ fn forcing_reads_tape_bit_identically_through_every_executor() {
     for seed in 0..3u64 {
         let state = state_of(n, seed);
         for &t in &[0.0, 0.5, 2.0] {
-            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params, true);
-            let (overlay, _) = compiled.debug_eval_rhs(&state, t, &params, false);
-            assert_bits_eq(&overlay, &oracle, "overlay");
+            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params);
             for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
                 let mut dy = vec![0.0; n];
                 run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
@@ -220,7 +218,7 @@ fn a_missing_forcing_entry_faults_as_the_interpreter_does() {
     let param_vec = compiled.debug_resolve_params(&params);
     let state = state_of(n, 1);
     crate::simulate_array::take_const_array_oob();
-    compiled.debug_eval_rhs(&state, 0.0, &params, true);
+    compiled.debug_eval_rhs(&state, 0.0, &params);
     let want = crate::simulate_array::take_const_array_oob().expect("the oracle faults");
     assert!(want.starts_with("E_TREEWALK_UNBOUND_NAME: '"), "{want}");
     let mut scratch = taped_scratch(
@@ -294,7 +292,7 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     let first = fast(&compiled, &mut scratch, &state, t, &param_vec);
     assert_bits_eq(
         &first,
-        &compiled.debug_eval_rhs(&state, t, &params, true).0,
+        &compiled.debug_eval_rhs(&state, t, &params).0,
         "primed",
     );
 
@@ -310,7 +308,7 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     let refreshed = fast(&compiled, &mut scratch, &state, t, &param_vec);
     assert_bits_eq(
         &refreshed,
-        &compiled.debug_eval_rhs(&state, t, &params, true).0,
+        &compiled.debug_eval_rhs(&state, t, &params).0,
         "after the epoch moves",
     );
     assert_ne!(refreshed, first, "the refresh is load-bearing");
@@ -466,7 +464,7 @@ fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
         );
         let n = compiled.state_variable_names().len();
         let state = state_of(n, 3);
-        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         let label = |s: &str| format!("{s}, a first: {a_first}");
         for (l, p) in [("fused", &prog), ("unfused", &prog_uf)] {
             let mut dy = vec![0.0; n];

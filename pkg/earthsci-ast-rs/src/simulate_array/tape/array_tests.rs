@@ -281,8 +281,7 @@ fn makearray_empty_region_is_skipped() {
 
 /// An empty region's value is still evaluated by the oracle, and an ARRAY
 /// value that does not fit the (empty) region poisons the whole makearray
-/// with `NaN`, as a mismatched value in any region does. The overlay agrees,
-/// and the tape, which cannot place that `NaN`, refuses the rule.
+/// with `NaN`, as a mismatched value in any region does, and the tape, which cannot place that `NaN`, refuses the rule.
 #[test]
 fn makearray_empty_region_with_a_mismatched_value_is_the_oracles_nan() {
     let n = 3;
@@ -304,10 +303,8 @@ fn makearray_empty_region_with_a_mismatched_value_is_the_oracles_nan() {
     }));
     let state = vec![0.5, -1.25, 2.0];
     let params = HashMap::new();
-    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
-    let (dy_overlay, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
     assert!(dy_oracle.iter().all(|x| x.is_nan()), "{dy_oracle:?}");
-    assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
     let refused = agrees_or_refuses(&compiled, &no_params(), &[state]);
     assert!(
         !refused.is_empty(),

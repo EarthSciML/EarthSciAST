@@ -51,7 +51,7 @@ fn both(
     let params: HashMap<String, f64> = HashMap::new();
     let pv = compiled.debug_resolve_params(&params);
     let got = prog.eval(state, &pv, t).expect("compiled eval");
-    let (want, _) = compiled.debug_eval_rhs(state, t, &params, true);
+    let (want, _) = compiled.debug_eval_rhs(state, t, &params);
     (got, want)
 }
 

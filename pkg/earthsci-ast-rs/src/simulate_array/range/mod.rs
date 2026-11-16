@@ -677,13 +677,13 @@ impl RhsProgram {
             ForcingSource::Parent(p) => Some(&*p.conditional_shapes),
             ForcingSource::Problem(_) => None,
         };
-        let mut compiled =
-            ArrayCompiled::from_flattened_shaped(&flat, runtime_array_parameters, inherited)?;
+        let mut compiled = ArrayCompiled::from_flattened_shaped(
+            &flat,
+            runtime_array_parameters,
+            inherited,
+            compiler,
+        )?;
         let conditional_shapes = Arc::new(std::mem::take(&mut compiled.conditional_shapes));
-        compiled.runtime_mode = match compiler {
-            Compiler::Interpreter => super::RuntimeMode::Interpreter,
-            _ => super::RuntimeMode::Native,
-        };
         // Every forcing read compiles against the shape the data has.
         let shapes: Vec<(String, Vec<usize>)> = match &forcing {
             ForcingSource::Problem(m) => m
@@ -1223,7 +1223,6 @@ impl RhsProgram {
                         declared: &m.declared_names,
                     },
                     dy,
-                    true,
                     &mut RhsStats::default(),
                     &mut iw.scratch,
                 );

@@ -1641,6 +1641,23 @@ remove. Your code stops compiling (Rust), or raises `UndefVarError` /
 
 ---
 
+## Unreleased
+
+### Rust — `earthsci-ast`
+
+| Old | New | Kind |
+|---|---|---|
+| `Compile` (deprecated alias since 0.2.0) | `Rhs` | `deleted` |
+| `ArrayCompiled::debug_eval_rhs(state, t, params, force_scalar)` | `debug_eval_rhs(state, t, params)`, always the per-cell oracle | `deleted` |
+| `RhsStats::kernel_ops`, `vectorized_rules`, `obs_vectorized_rules` | none: the right-hand side no longer runs on the whole-array overlay | `deleted` |
+
+`compile_array`, the `ArrayCompiled::from_*` constructors and the `debug_*`
+right-hand-side seams build the `native` compiler, the default of
+`esm_problem`: a solve of a model they built runs every rule, and every
+observed pass, on the tape.
+
+---
+
 ## Where the contract lives
 
 - `API_SPEC.md` §6 — the full `stable` surface; §8 — the reconciliation ledger;

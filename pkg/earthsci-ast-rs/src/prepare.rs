@@ -85,8 +85,8 @@ use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
 };
 use crate::simulate_array::{
-    ArrMap, BuiltVariables, ConstArrayScope, Value as EvalValue,
-    eval_expression_with_extents_and_consts_shared, run_value_invention_with_params,
+    ArrMap, BuiltVariables, ConstArrayScope, StandaloneScope, Value as EvalValue,
+    run_value_invention_with_params,
 };
 use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};
@@ -1079,13 +1079,18 @@ fn compile_on_tape(
     recurrence_only: bool,
 ) -> Option<Result<Result<ArrayD<f64>, String>, String>> {
     use crate::simulate_array::StandaloneError;
+    let scope = StandaloneScope {
+        inputs: arrays,
+        params: param_vals,
+        param_names,
+        t: 0.0,
+        derived_extents: crate::faq::empty_derived_extents(),
+        const_arrays,
+    };
     match crate::simulate_array::eval_observed_taped(
         name,
         expr,
-        arrays,
-        param_vals,
-        param_names,
-        const_arrays,
+        &scope,
         fill_shape,
         recurrence_only,
     ) {
@@ -1191,16 +1196,15 @@ fn eval_observed(
     }
     let stop = refuse_per_cell.then(crate::simulate_array::StopAtFirstCell::arm);
     let refused = || stop.is_some() && crate::simulate_array::per_cell_walk_refused();
-    if let Some(res) = crate::simulate_array::eval_observed_recurrence(
-        name,
-        expr,
-        arrays,
-        param_vals,
+    let scope = StandaloneScope {
+        inputs: arrays,
+        params: param_vals,
         param_names,
-        0.0,
-        extents,
+        t: 0.0,
+        derived_extents: extents,
         const_arrays,
-    ) {
+    };
+    if let Some(res) = scope.eval_recurrence(name, expr) {
         if refused() {
             return Ok(Evaluated::Refused(PER_CELL_RECURRENCE.to_string()));
         }
@@ -1210,15 +1214,7 @@ fn eval_observed(
     }
     let walks_before = crate::simulate_array::per_cell_walks();
     crate::simulate_array::take_overlay_decline();
-    let val = eval_expression_with_extents_and_consts_shared(
-        expr,
-        arrays,
-        param_vals,
-        param_names,
-        0.0,
-        extents,
-        const_arrays,
-    );
+    let val = scope.eval(expr);
     // Before the result is read: a stopped walk's value is a placeholder, and
     // so is any error computed from it.
     if refused() {
