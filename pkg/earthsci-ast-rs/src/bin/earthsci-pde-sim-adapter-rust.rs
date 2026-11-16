@@ -1,52 +1,42 @@
 //! Rust adapter for the cross-language PDE-simulation conformance tier (ess-fmw).
 //!
 //! Drives the shared, pre-discretized method-of-lines fixtures in
-//! `tests/conformance/pde_simulation/manifest.json`. For every fixture it:
-//!   * evaluates the discretized RHS f(u, t) at each declared probe state via
-//!     the vectorized faq evaluator (`ArrayCompiled::debug_eval_rhs`, the
-//!     same no-scalarization kernel the simulator uses), and
+//! `tests/conformance/pde_simulation/manifest.json`. For every fixture it
+//! builds one Problem under the compiler the stage names (`--compiler`), then:
+//!   * evaluates the discretized RHS f(u, t) at each declared probe state on
+//!     that Problem's right-hand side, the way the compiler runs it (the tape
+//!     under `native`, the per-cell evaluator under `interpreter`), and
 //!   * integrates the trajectory from the declared initial conditions with the
 //!     pinned diffsol solver (manifest `solver`/`reltol`/`abstol`), sampling at
 //!     the declared output times via dense output.
+//!
+//! A fixture marked `"pipeline": "full"` (the `pde_simulation_pipeline` tier)
+//! is built through the whole lowering pipeline with the manifest's inputs in
+//! its forcing buffer instead; that route builds no Problem, so it names no
+//! compiler.
 //!
 //! Discovered by the runner via `$EARTHSCI_PDE_SIM_ADAPTER_RUST` or on PATH as
 //! `earthsci-pde-sim-adapter-rust`. Emits, to `--output`:
 //!   {"binding":"rust","fixtures":{<id>:{"rhs":{<probe>:{name:val}},
 //!                                       "trajectory":{<tstr>:{name:val}}}}}
-//! with bare `u[i]` / `u[i,j]` element names.
+//! with bare `u[i]` / `u[i,j]` element names. A fixture that fails is its own
+//! `error` entry and makes the process exit non-zero
+//! ([`earthsci_ast::adapter_support::adapter_main`]).
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
 use std::process::ExitCode;
 
-use earthsci_ast::adapter_support::write_report;
-
+use earthsci_ast::adapter_support::{
+    Answer, Manifest, Tier, adapter_main, bare, nearest_index, number, time_key,
+};
 use earthsci_ast::flatten;
-use earthsci_ast::simulate_array::ArrayCompiled;
+use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 use earthsci_ast::{
     Alg, Compiler, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string, solve,
 };
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Map, Value, json};
-
-/// Strip a leading `Model.` namespace so element names match across bindings.
-fn bare(name: &str) -> &str {
-    name.split_once('.').map(|x| x.1).unwrap_or(name)
-}
-
-/// Trajectory time key; the Python harness re-normalizes every key via
-/// `float(k):g`, so this only needs to round-trip as a float.
-fn time_key(t: f64) -> String {
-    format!("{t}")
-}
-
-/// Index of the solution sample closest to `t` (`total_cmp`, so a NaN sample
-/// cannot panic the comparison). `saveat` pins the sample grid, but the
-/// trajectory lookups match defensively by closest time.
-fn nearest_index(times: &[f64], t: f64) -> Option<usize> {
-    (0..times.len()).min_by(|&a, &b| (times[a] - t).abs().total_cmp(&(times[b] - t).abs()))
-}
 
 fn solver_from(name: &str) -> Alg {
     match name {
@@ -56,11 +46,19 @@ fn solver_from(name: &str) -> Alg {
     }
 }
 
+/// Probe states are keyed by BARE element names (`O3[1,1]`), while the
+/// compiled evaluator's slot names may carry a `Model.` namespace; look up by
+/// either.
 fn state_vec(names: &[String], state: &Map<String, Value>) -> Vec<f64> {
-    // Probe states are keyed by the same bare slot names the evaluator uses.
     names
         .iter()
-        .map(|n| state.get(n).and_then(Value::as_f64).unwrap_or(0.0))
+        .map(|n| {
+            state
+                .get(n)
+                .or_else(|| state.get(bare(n)))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+        })
         .collect()
 }
 
@@ -84,62 +82,87 @@ fn state_vec(names: &[String], state: &Map<String, Value>) -> Vec<f64> {
 /// (§5.44) remains the only place `native`'s coverage is measured.
 const TIER_COMPILER: Compiler = Compiler::Native;
 
-/// `--manifest <m> --output <o> [--compiler <value>]`, rejecting anything else.
-///
-/// Its own parser rather than [`earthsci_ast::adapter_support`]'s shared one:
-/// the adapters that build no Problem have no compiler to name and must keep
-/// rejecting the flag.
-fn parse_args() -> Result<(std::path::PathBuf, std::path::PathBuf, Compiler), String> {
-    let mut manifest: Option<std::path::PathBuf> = None;
-    let mut output: Option<std::path::PathBuf> = None;
-    let mut compiler = TIER_COMPILER;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--manifest" => manifest = args.next().map(std::path::PathBuf::from),
-            "--output" => output = args.next().map(std::path::PathBuf::from),
-            "--compiler" => {
-                let v = args.next().ok_or("--compiler needs a value")?;
-                compiler = Compiler::parse_named(&v)?;
-            }
-            other => return Err(format!("unexpected argument {other:?}")),
-        }
+/// This tier under one compiler.
+struct PdeSimulation(Compiler);
+
+impl Tier for PdeSimulation {
+    fn header(&self) -> Option<(&'static str, &'static str)> {
+        None
     }
-    match (manifest, output) {
-        (Some(m), Some(o)) => Ok((m, o, compiler)),
-        _ => Err("--manifest and --output are required".to_string()),
+
+    fn run_fixture(&self, fx: &Value, manifest: &Manifest) -> Result<Answer, String> {
+        if fx.get("pipeline").and_then(Value::as_str) == Some("full") {
+            run_fixture_full(fx, manifest)
+        } else {
+            run_fixture(fx, manifest, self.0)
+        }
+        .map(Answer::Entry)
     }
 }
 
-fn run_fixture(
-    fx: &Value,
-    base: &Path,
-    integ: &Value,
+/// The right-hand side at every probe of `fx`, evaluated the way `compiler`
+/// runs `compiled`: the tape under `native`, the per-cell evaluator under
+/// `interpreter`. Another compiler has no probe route here, and saying so is
+/// that fixture's error rather than a silent substitute.
+fn rhs_at_probes(
+    compiled: &ArrayCompiled,
     compiler: Compiler,
+    params: &HashMap<String, f64>,
+    fx: &Value,
 ) -> Result<Value, String> {
-    let rel = fx["path"].as_str().ok_or("fixture.path missing")?;
-    let json_str = fs::read_to_string(base.join(rel)).map_err(|e| e.to_string())?;
-    let file = load_string(&json_str).map_err(|e| format!("load: {e:?}"))?;
-    let params: HashMap<String, f64> = HashMap::new();
-
-    // --- RHS via the vectorized faq evaluator -------------------------
-    let compiled = ArrayCompiled::from_file(&file).map_err(|e| format!("compile: {e:?}"))?;
     let names: Vec<String> = compiled.state_variable_names().to_vec();
+    let _precision = compiled.debug_precision_env().enter();
+    let mut taped = match compiler {
+        Compiler::Native => Some((
+            compiled
+                .debug_new_scratch_taped()
+                .map_err(|e| format!("native: {e}"))?,
+            compiled.debug_resolve_params(params),
+        )),
+        Compiler::Interpreter => None,
+        other => {
+            return Err(format!(
+                "right-hand-side probes run under `native` or `interpreter`, not `{}`",
+                other.as_str()
+            ));
+        }
+    };
     let mut rhs = Map::new();
     for probe in fx["rhs_probes"].as_array().ok_or("rhs_probes not array")? {
         let pid = probe["id"].as_str().ok_or("probe.id missing")?;
         let state_obj = probe["state"].as_object().ok_or("probe.state missing")?;
         let t = probe["t"].as_f64().unwrap_or(0.0);
         let sv = state_vec(&names, state_obj);
-        let (dy, _stats) = compiled.debug_eval_rhs(&sv, t, &params, false);
+        let dy = match &mut taped {
+            Some((scratch, param_vec)) => {
+                let mut dy = vec![0.0; names.len()];
+                compiled.debug_eval_rhs_into(
+                    &sv,
+                    t,
+                    param_vec,
+                    &mut dy,
+                    scratch,
+                    &mut RhsStats::default(),
+                );
+                dy
+            }
+            None => compiled.debug_eval_rhs(&sv, t, params, true).0,
+        };
         let mut m = Map::new();
         for (i, n) in names.iter().enumerate() {
-            m.insert(bare(n).to_string(), json!(dy[i]));
+            m.insert(bare(n).to_string(), number(dy[i]));
         }
         rhs.insert(pid.to_string(), Value::Object(m));
     }
+    Ok(Value::Object(rhs))
+}
 
-    // --- Trajectory via the pinned diffsol solver -------------------------
+fn run_fixture(fx: &Value, manifest: &Manifest, compiler: Compiler) -> Result<Value, String> {
+    let integ = manifest.integrator();
+    let path = manifest.fixture_path(fx)?;
+    let json_str = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let file = load_string(&json_str).map_err(|e| format!("load: {e:?}"))?;
+
     let tr = &fx["trajectory"];
     let t0 = tr["time_span"]["start"].as_f64().ok_or("time_span.start")?;
     let t1 = tr["time_span"]["end"].as_f64().ok_or("time_span.end")?;
@@ -149,13 +172,10 @@ fn run_fixture(
         .iter()
         .map(|(k, v)| (k.clone(), v.as_f64().unwrap_or(0.0)))
         .collect();
-    // The MANIFEST key is `output_times` -- a shared cross-binding fixture
-    // field written by `scripts/gen_pde_sim_fixtures.py` and read as
-    // `tr.output_times` by the Julia adapter. It is NOT the SciML
-    // `SolveOptions.saveat` field below; phase 4's `output_times` -> `saveat`
-    // rename applied to the OPTIONS struct and was wrongly applied to this
-    // manifest read too, which made every fixture report an error instead of
-    // a trajectory.
+    // The MANIFEST key is `output_times`, a shared cross-binding fixture field
+    // written by `scripts/gen_pde_sim_fixtures.py` and read as
+    // `tr.output_times` by the Julia adapter. It is not the SciML
+    // `SolveOptions.saveat` field below.
     let out_times: Vec<f64> = tr["output_times"]
         .as_array()
         .ok_or("output_times missing")?
@@ -174,7 +194,6 @@ fn run_fixture(
         &file,
         (t0, t1),
         ProblemOptions {
-            p: params,
             u0: ics,
             rhs: Rhs::Always,
             compiler: Some(compiler),
@@ -182,35 +201,26 @@ fn run_fixture(
         },
     )
     .map_err(|e| format!("esm_problem: {e:?}"))?;
-    let sol = solve(&prob, &opts).map_err(|e| format!("solve: {e:?}"))?;
 
+    // --- RHS on the Problem's own right-hand side ----------------------------
+    let compiled = prob
+        .debug_array_compiled()
+        .ok_or("the Problem built no array right-hand side")?;
+    let rhs = rhs_at_probes(&compiled, compiler, prob.p(), fx)?;
+
+    // --- Trajectory via the pinned diffsol solver ----------------------------
+    let sol = solve(&prob, &opts).map_err(|e| format!("solve: {e:?}"))?;
     let mut traj = Map::new();
     for &t in &out_times {
         let idx = nearest_index(&sol.time, t).ok_or("empty solution time grid")?;
         let mut m = Map::new();
         for (row, n) in sol.state_variable_names.iter().enumerate() {
-            m.insert(bare(n).to_string(), json!(sol.state[row][idx]));
+            m.insert(bare(n).to_string(), number(sol.state[row][idx]));
         }
         traj.insert(time_key(t), Value::Object(m));
     }
 
-    Ok(json!({ "rhs": Value::Object(rhs), "trajectory": Value::Object(traj) }))
-}
-
-/// Probe states in the full-pipeline manifest are keyed by BARE element names
-/// (`O3[1,1]`) while the compiled evaluator's slot names carry the `Chemistry.`
-/// namespace; look up by either.
-fn state_vec_bare(names: &[String], state: &Map<String, Value>) -> Vec<f64> {
-    names
-        .iter()
-        .map(|n| {
-            state
-                .get(n)
-                .or_else(|| state.get(bare(n)))
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0)
-        })
-        .collect()
+    Ok(json!({ "rhs": rhs, "trajectory": Value::Object(traj) }))
 }
 
 /// Convert a manifest `inputs` value (nested JSON arrays, row=lon/col=lat) into a
@@ -252,9 +262,10 @@ fn json_to_field(v: &Value) -> Result<ArrayD<f64>, String> {
 /// `<ModelPath>.<param>`, DESIGN §2), and emit the RHS at each probe state plus the
 /// trajectory at each checkpoint. Reuses the Phase-1 machinery of
 /// `tests/loaded_ic_bc_simulation.rs`.
-fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> {
-    let rel = fx["path"].as_str().ok_or("fixture.path missing")?;
-    let json_str = fs::read_to_string(base.join(rel)).map_err(|e| e.to_string())?;
+fn run_fixture_full(fx: &Value, manifest: &Manifest) -> Result<Value, String> {
+    let integ = manifest.integrator();
+    let path = manifest.fixture_path(fx)?;
+    let json_str = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let file = load_string(&json_str).map_err(|e| format!("load: {e:?}"))?;
     let flat = flatten(&file).map_err(|e| format!("flatten: {e:?}"))?;
     let compiled = ArrayCompiled::from_flattened(&flat).map_err(|e| format!("compile: {e:?}"))?;
@@ -283,11 +294,11 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
         let pid = probe["id"].as_str().ok_or("probe.id missing")?;
         let state_obj = probe["state"].as_object().ok_or("probe.state missing")?;
         let t = probe["t"].as_f64().unwrap_or(0.0);
-        let sv = state_vec_bare(&names, state_obj);
+        let sv = state_vec(&names, state_obj);
         let (dy, _stats) = compiled.debug_eval_rhs(&sv, t, &params, false);
         let mut m = Map::new();
         for (i, n) in names.iter().enumerate() {
-            m.insert(bare(n).to_string(), json!(dy[i]));
+            m.insert(bare(n).to_string(), number(dy[i]));
         }
         rhs.insert(pid.to_string(), Value::Object(m));
     }
@@ -318,7 +329,7 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
         let idx = nearest_index(&sol.time, t).ok_or("empty solution time grid")?;
         let mut m = Map::new();
         for (row, n) in sol.state_variable_names.iter().enumerate() {
-            m.insert(bare(n).to_string(), json!(sol.state[row][idx]));
+            m.insert(bare(n).to_string(), number(sol.state[row][idx]));
         }
         traj.insert(time_key(t), Value::Object(m));
     }
@@ -327,53 +338,8 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
 }
 
 fn main() -> ExitCode {
-    let (manifest_path, output_path, compiler) = match parse_args() {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("pde-sim-adapter-rust: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let manifest: Value = match fs::read_to_string(&manifest_path)
-        .map_err(|e| e.to_string())
-        .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
-    {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("pde-sim-adapter-rust: failed to read manifest: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let base = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let integ = manifest
-        .get("integrators")
-        .and_then(|i| i.get("rust"))
-        .cloned()
-        .unwrap_or(Value::Null);
-
-    let empty: Vec<Value> = Vec::new();
-    let mut fixtures = Map::new();
-    for fx in manifest["fixtures"].as_array().unwrap_or(&empty).iter() {
-        let id = fx["id"].as_str().unwrap_or("<unknown>").to_string();
-        let result = if fx.get("pipeline").and_then(Value::as_str) == Some("full") {
-            run_fixture_full(fx, base, &integ)
-        } else {
-            run_fixture(fx, base, &integ, compiler)
-        };
-        let entry = match result {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("fixture {id}: {e}");
-                json!({ "error": e })
-            }
-        };
-        fixtures.insert(id, entry);
-    }
-
-    let payload = json!({ "binding": "rust", "fixtures": Value::Object(fixtures) });
-    if let Err(e) = write_report(&output_path, &payload) {
-        eprintln!("pde-sim-adapter-rust: failed to write output: {e}");
-        return ExitCode::FAILURE;
-    }
-    ExitCode::SUCCESS
+    adapter_main("pde-sim-adapter-rust", Some("--compiler"), |v| {
+        v.map_or(Ok(TIER_COMPILER), Compiler::parse_named)
+            .map(PdeSimulation)
+    })
 }
