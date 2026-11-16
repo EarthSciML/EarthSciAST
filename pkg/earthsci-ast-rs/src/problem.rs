@@ -2259,7 +2259,7 @@ fn build_problem(
             // evaluator whatever the compiler, and under a strict one it
             // stopped at the first observed it had to walk per cell.
             if let Some(r) = &prepared.refused {
-                // The walk stopped at its first cell (`StopAtFirstCell`).
+                // The walk stopped at its first cell (`CellWalks`).
                 let reason = match &r.route {
                     crate::prepare::Route::PerCell(why) => {
                         format!("{why}; {}", crate::simulate_array::ONE_CELL_NOTE)

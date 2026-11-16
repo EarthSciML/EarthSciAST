@@ -301,8 +301,8 @@ pub(super) fn sweep_recurrence<'a>(
             scope.publish(&full, v);
             super::eval::note_per_cell_cell();
             // A strict caller refuses the sweep; its first cell was for the
-            // diagnostic (`super::eval::StopAtFirstCell`).
-            if super::eval::stop_after_first_cell() {
+            // diagnostic (`super::eval::CellWalks`).
+            if ctx.walks.after_first_cell() {
                 break 'sweep;
             }
         }

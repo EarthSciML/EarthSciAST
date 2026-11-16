@@ -810,7 +810,8 @@ enum Evaluated {
     /// The dense field, and the route that evaluated it.
     Field(ArrayD<f64>, Route),
     /// Walked per cell under `refuse_per_cell`, and stopped at the first cell
-    /// (`StopAtFirstCell`): there is no field, only the reason to refuse.
+    /// ([`crate::simulate_array::CellWalks`]): there is no field, only the
+    /// reason to refuse.
     Refused(String),
 }
 
@@ -924,17 +925,19 @@ fn eval_observed(
                 )),
             });
     }
-    let stop = refuse_per_cell.then(crate::simulate_array::StopAtFirstCell::arm);
-    let refused = || stop.is_some() && crate::simulate_array::per_cell_walk_refused();
-    if let Some(res) = scope.eval_recurrence(name, expr) {
-        if refused() {
+    let mut walks = if refuse_per_cell {
+        crate::simulate_array::CellWalks::stopping()
+    } else {
+        crate::simulate_array::CellWalks::default()
+    };
+    if let Some(res) = scope.eval_recurrence(name, expr, &mut walks) {
+        if walks.refused() {
             return Ok(Evaluated::Refused(PER_CELL_RECURRENCE.to_string()));
         }
         return res
             .map(|a| Evaluated::Field(a, Route::PerCell(PER_CELL_RECURRENCE.to_string())))
             .map_err(|e| stage_err(format_args!("evaluate {name}"), e));
     }
-    drop(stop);
     // Under a strict compiler, an observed with a `faq` the reference
     // evaluator would walk per cell is lowered whole on the tape instead,
     // from the same inputs, and refused when the tape declines it.
@@ -2933,18 +2936,22 @@ mod first_cell_stop_tests {
             .collect()
     }
 
+    /// Each of the two observeds is a `faq` the reference evaluator would
+    /// walk per cell, so each costs one walked cell before it goes to the
+    /// tape: two, whatever the size.
     #[test]
-    fn a_large_prefix_scan_is_taped_after_at_most_one_walked_cell() {
+    fn a_large_prefix_scan_is_taped_after_one_walked_cell_per_observed() {
         let (native, cells) = native_cells(&cumulative(LARGE));
         assert!(
-            cells <= 1,
-            "the walk must stop at its first cell, walked {cells}"
+            cells <= 2,
+            "each walk must stop at its first cell, walked {cells}"
         );
 
-        // The reference evaluator still walks every cell, to the same answer.
+        // The reference evaluator still walks every cell of both, to the same
+        // answer.
         let before = per_cell_cells();
         let prob = build(&cumulative(LARGE), Compiler::Interpreter).expect("interpreter");
-        assert_eq!(per_cell_cells() - before, LARGE as u64);
+        assert_eq!(per_cell_cells() - before, 2 * LARGE as u64);
         let cum = crate::problem::observed_field(&prob, "Rel.cum").expect("cum");
         let n = LARGE as f64;
         assert_eq!(cum.iter().last().copied(), Some(5.0 * n * (n + 1.0)));

@@ -97,6 +97,8 @@ pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
 // as the compile path.
 #[cfg(test)]
 pub(crate) use compile::{model_from_flattened, promote_conditional_shapes};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use eval::StandaloneScope;
 #[cfg(test)]
 pub(crate) use eval::check_scalar_evaluable;
 #[cfg(not(target_arch = "wasm32"))]
@@ -104,8 +106,8 @@ pub(crate) use eval::eval_observed_taped;
 #[cfg(test)]
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{
-    BuildEval, BuildRoute, ONE_CELL_NOTE, Routed, StandaloneScope, StopAtFirstCell,
-    eval_buildtime_field_routed, eval_scalar_expression, per_cell_walk_refused,
+    BuildEval, BuildRoute, CellWalks, ONE_CELL_NOTE, Routed, eval_buildtime_field_routed,
+    eval_scalar_expression,
 };
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
@@ -936,6 +938,7 @@ impl<'a> EvalEnv<'a> {
             const_arrays: self.const_arrays,
             recur: None,
             declared: self.declared,
+            walks: CellWalks::default(),
         }
     }
 }
@@ -1017,6 +1020,12 @@ struct EvalCtx<'a> {
     /// compiled model — an empty set never claims a name IS declared, so those
     /// paths keep exactly the diagnosis they had.
     declared: &'a HashSet<String>,
+    /// What this evaluation is told about walking a `faq` cell by cell —
+    /// stop after the first cell — and what it reports back: how many walks
+    /// it took and whether one stopped ([`CellWalks`]). Default on every
+    /// path but the build-time ones that read it
+    /// ([`StandaloneScope::eval_routed`], the build pipeline).
+    walks: CellWalks,
 }
 
 /// The shared empty declared-name set (see [`EvalCtx::declared`]).

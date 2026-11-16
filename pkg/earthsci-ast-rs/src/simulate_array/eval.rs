@@ -1678,32 +1678,6 @@ pub(super) fn lookup_array_ref<'a>(name: &str, ctx: &'a EvalCtx) -> Option<&'a A
     None
 }
 
-thread_local! {
-    /// How many `faq` nodes this thread has evaluated by walking the body once
-    /// per cell (or once per contracted term) rather than through the
-    /// whole-array overlay. See [`per_cell_walks`].
-    static PER_CELL_WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// The running count of per-cell `faq` walks on this thread: the number of
-/// times [`eval_faq`] took its per-cell branch (a prefix scan, the output-tuple
-/// loop, or a rank-0 contraction folded term by term) because the whole-array
-/// overlay did not take the node.
-///
-/// The routes that evaluate a document through this evaluator OUTSIDE the
-/// compiled rule set — the build pipeline's observed graph, a field initial
-/// condition — read the delta across one evaluation to learn whether it was
-/// interpreted per cell, which is what a strict compiler refuses
-/// (esm-libraries-spec §2.5.10). A counter rather than a flag, so a nested
-/// evaluation cannot clear what an enclosing one recorded.
-pub(crate) fn per_cell_walks() -> u64 {
-    PER_CELL_WALKS.with(std::cell::Cell::get)
-}
-
-fn note_per_cell_walk() {
-    PER_CELL_WALKS.with(|c| c.set(c.get().wrapping_add(1)));
-}
-
 #[cfg(test)]
 thread_local! {
     static PER_CELL_CELLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -1722,111 +1696,90 @@ pub(super) fn note_per_cell_cell() {
     PER_CELL_CELLS.with(|c| c.set(c.get() + 1));
 }
 
-/// The state of a [`StopAtFirstCell`] on this thread.
-#[derive(Clone, Copy, Default)]
-struct FirstCellStop {
-    /// A strict caller is listening: a per-cell walk stops after its first cell.
-    armed: bool,
-    /// A walk has stopped. Every value computed since is a placeholder.
-    stopped: bool,
-    /// A document error (a latched out-of-range gather) was already pending
-    /// when the walk stopped, so the evaluation fails with it rather than being
-    /// refused.
-    with_error: bool,
-}
-
-thread_local! {
-    static FIRST_CELL_STOP: std::cell::Cell<FirstCellStop> = const {
-        std::cell::Cell::new(FirstCellStop { armed: false, stopped: false, with_error: false })
-    };
-}
-
-/// Stop every per-cell walk at its first cell, for as long as this guard
-/// lives.
+/// What one evaluation is told about walking a `faq` cell by cell, and what
+/// it reports back ([`EvalCtx::walks`]).
 ///
 /// A strict compiler refuses an evaluation the reference evaluator walks per
 /// cell, so the rest of such a walk is work whose only product is a refusal —
-/// on a gate-driven join over a million cells, minutes of it. Armed around the
-/// evaluation, the first `faq` that goes per cell evaluates ONE cell, for its
-/// diagnostic only (a body no route can evaluate is the document's error, and
-/// an out-of-range gather in it must still say so), and stops; every walk
-/// after it stops before its first cell. The evaluation's value is then a
-/// placeholder, and [`per_cell_walk_refused`] tells the caller to discard it
-/// and refuse.
+/// on a gate-driven join over a million cells, minutes of it. With
+/// `stop_at_first` set, the first `faq` that goes per cell evaluates ONE cell,
+/// for its diagnostic only (a body no route can evaluate is the document's
+/// error, and an out-of-range gather in it must still say so), and stops;
+/// every walk after it stops before its first cell. The evaluation's value is
+/// then a placeholder, and [`Self::refused`] tells the caller to discard it.
 ///
-/// The stop is taken exactly where [`per_cell_walks`] counts a walk, so
-/// whether a refusal happens, and its reason, are what a full walk would have
-/// given; only the work behind them is gone.
-pub(crate) struct StopAtFirstCell(FirstCellStop);
+/// The stop is taken exactly where a walk is counted, so whether a refusal
+/// happens, and its reason, are what a full walk would have given; only the
+/// work behind them is gone.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CellWalks {
+    /// Stop every per-cell walk after its first cell.
+    stop_at_first: bool,
+    /// How many `faq` nodes were evaluated by walking the body once per cell
+    /// (or once per contracted term): a prefix scan, the output-tuple loop,
+    /// or a rank-0 contraction folded term by term.
+    count: u64,
+    /// A walk has stopped. Every value computed since is a placeholder.
+    stopped: bool,
+    /// A document error (a latched out-of-range gather) was already pending
+    /// when the walk stopped, so the evaluation fails with it rather than
+    /// being refused.
+    with_error: bool,
+}
 
-impl StopAtFirstCell {
-    pub(crate) fn arm() -> Self {
-        StopAtFirstCell(FIRST_CELL_STOP.with(|c| {
-            c.replace(FirstCellStop {
-                armed: true,
-                ..FirstCellStop::default()
-            })
-        }))
+impl CellWalks {
+    /// Walks that stop after their first cell.
+    pub(crate) fn stopping() -> Self {
+        CellWalks {
+            stop_at_first: true,
+            ..CellWalks::default()
+        }
     }
 
-    /// Whether any per-cell walk stopped under this guard, error or not: what
-    /// was computed is not the whole answer.
+    /// Whether any `faq` was walked per cell.
+    pub(crate) fn walked(&self) -> bool {
+        self.count > 0
+    }
+
+    /// Whether a walk stopped, error or not: what was computed is not the
+    /// whole answer.
     pub(crate) fn stopped(&self) -> bool {
-        FIRST_CELL_STOP.with(|c| c.get().stopped)
+        self.stopped
+    }
+
+    /// Whether a walk stopped with no document error pending, so that what
+    /// was computed since — a value, or an error raised by reading a
+    /// placeholder — is not the document's, and the evaluation is refused.
+    pub(crate) fn refused(&self) -> bool {
+        self.stopped && !self.with_error
+    }
+
+    fn note_walk(&mut self) {
+        self.count = self.count.wrapping_add(1);
+    }
+
+    /// Called after a per-cell walk's first cell. Under `stop_at_first` it
+    /// records the stop, and whether that cell latched a document error, and
+    /// answers `true`: the walk ends here.
+    pub(super) fn after_first_cell(&mut self) -> bool {
+        if !self.stop_at_first {
+            return false;
+        }
+        if !self.stopped {
+            self.stopped = true;
+            self.with_error = CONST_OOB.with(|l| l.borrow().is_some());
+        }
+        true
     }
 }
 
-impl Drop for StopAtFirstCell {
-    fn drop(&mut self) {
-        FIRST_CELL_STOP.with(|c| c.set(self.0));
-    }
-}
-
-/// What a refusal raised from a walk [`StopAtFirstCell`] stopped says after its
+/// What a refusal raised from a walk [`CellWalks`] stopped says after its
 /// reason, in the words the Julia binding uses for its own: the cells the walk
 /// did not evaluate may still hold a document error (an out-of-range gather at
 /// the last cell of a prefix scan), and only the interpreter would find it.
 pub(crate) const ONE_CELL_NOTE: &str = "only one cell of it was evaluated before this refusal, \
     so a document error in a cell that was not (an out-of-range gather at the last cell, say) \
     is not reported here; the interpreter evaluates every cell and reports it";
-
-/// Whether a per-cell walk on this thread stopped under a [`StopAtFirstCell`]
-/// with no document error pending, so that what was computed since — a value,
-/// or an error raised by reading a placeholder — is not the document's, and
-/// the evaluation is refused.
-pub(crate) fn per_cell_walk_refused() -> bool {
-    let s = FIRST_CELL_STOP.with(std::cell::Cell::get);
-    s.stopped && !s.with_error
-}
-
-/// Whether a per-cell walk has already stopped on this thread, so the next
-/// one need not evaluate even its first cell.
-fn per_cell_walk_stopped() -> bool {
-    FIRST_CELL_STOP.with(|c| c.get().stopped)
-}
-
-/// Whether a [`StopAtFirstCell`] is armed on this thread.
-fn stop_at_first_cell() -> bool {
-    FIRST_CELL_STOP.with(|c| c.get().armed)
-}
-
-/// Called after a per-cell walk's first cell. Under an armed
-/// [`StopAtFirstCell`] it records the stop, and whether that cell latched a
-/// document error, and answers `true`: the walk ends here.
-pub(super) fn stop_after_first_cell() -> bool {
-    FIRST_CELL_STOP.with(|c| {
-        let mut s = c.get();
-        if !s.armed {
-            return false;
-        }
-        if !s.stopped {
-            s.stopped = true;
-            s.with_error = CONST_OOB.with(|l| l.borrow().is_some());
-            c.set(s);
-        }
-        true
-    })
-}
 
 thread_local! {
     /// First `E_TREEWALK_CONSTARRAY_OOB` raised during the current evaluation.
@@ -2537,8 +2490,13 @@ impl StandaloneScope<'_> {
     }
 
     /// Evaluate `expr` (ranges already resolved) in this scope, reporting a
-    /// fault the evaluation latched as the error.
-    pub(crate) fn eval(&self, expr: &Expr) -> Result<Value, CompileError> {
+    /// fault the evaluation latched as the error; its per-cell walks are told
+    /// and reported through `walks`.
+    pub(crate) fn eval_walking(
+        &self,
+        expr: &Expr,
+        walks: &mut CellWalks,
+    ) -> Result<Value, CompileError> {
         check_evaluable(expr)?;
         // A derived range over an unsized producer is refused rather than
         // contracted as empty.
@@ -2553,8 +2511,10 @@ impl StandaloneScope<'_> {
         }
         self.with_env(|env| {
             let mut ctx = env.ctx(self.inputs);
+            ctx.walks = *walks;
             let faults = FaultScope::enter();
             let v = eval(expr, &mut ctx);
+            *walks = ctx.walks;
             match faults.finish() {
                 Some(fault) => Err(CompileError::InterpreterBuildError {
                     details: fault.message,
@@ -2581,7 +2541,7 @@ impl StandaloneScope<'_> {
     /// route `mode` names, and say which evaluator served it.
     ///
     /// Under [`BuildEval::Fast`] the reference evaluator is tried first with
-    /// a [`StopAtFirstCell`] armed: what it evaluates over whole arrays, with
+    /// its walks stopping at their first cell ([`CellWalks::stopping`]): what it evaluates over whole arrays, with
     /// no `faq` walked cell by cell, is its value. Once a walk would go cell
     /// by cell the whole expression is lowered on a standalone tape instead
     /// ([`eval_observed_taped`]), from the same inputs. A tape decline is a
@@ -2595,24 +2555,22 @@ impl StandaloneScope<'_> {
         mode: BuildEval,
     ) -> Result<Routed, CompileError> {
         let walked = |scope: &Self| {
-            let before = per_cell_walks();
-            let v = scope.eval(expr)?;
-            let route = if per_cell_walks() == before {
-                BuildRoute::Whole
-            } else {
+            let mut walks = CellWalks::default();
+            let v = scope.eval_walking(expr, &mut walks)?;
+            let route = if walks.walked() {
                 BuildRoute::PerCell
+            } else {
+                BuildRoute::Whole
             };
             Ok(Routed::Value(v, route))
         };
         let BuildEval::Fast { strict } = mode else {
             return walked(self);
         };
-        let stop = StopAtFirstCell::arm();
-        let v = self.eval(expr);
-        let refused = per_cell_walk_refused();
-        let stopped = stop.stopped();
-        drop(stop);
-        if !refused {
+        let mut walks = CellWalks::stopping();
+        let v = self.eval_walking(expr, &mut walks);
+        let stopped = walks.stopped();
+        if !walks.refused() {
             // A stopped walk here latched a document error in its first
             // cell, which `v` reports.
             return v.map(|v| {
@@ -2663,11 +2621,13 @@ impl StandaloneScope<'_> {
     /// this scope, so a recurrence needs this path as well as the per-step
     /// one. It resolves the frame with the same [`lower_recurrence`] the
     /// compiled path uses and runs the same [`sweep_recurrence`]; only the
-    /// surrounding environment differs.
+    /// surrounding environment differs. The sweep's cells are told and
+    /// reported through `walks`.
     pub(crate) fn eval_recurrence(
         &self,
         name: &str,
         expr: &Expr,
+        walks: &mut CellWalks,
     ) -> Option<Result<ArrayD<f64>, CompileError>> {
         // Cheap structural test first: no self-read, nothing to do, and every
         // document that does not use the construct pays one expression walk.
@@ -2699,14 +2659,17 @@ impl StandaloneScope<'_> {
         let faults = FaultScope::enter();
         let arr = self.with_env(|env| {
             let mut ctx = env.ctx(self.inputs);
-            super::rhs::sweep_recurrence(
+            ctx.walks = *walks;
+            let arr = super::rhs::sweep_recurrence(
                 &scope,
                 &lowered.idx_names,
                 &lowered.ranges,
                 &lowered.body,
                 lowered.axis,
                 &mut ctx,
-            )
+            );
+            *walks = ctx.walks;
+            arr
         });
         // §5.19.4: an unavailable self-read is a FAULT, not a value. The latch is
         // the channel the tree walk has for one, and draining it here is what makes
@@ -2754,6 +2717,7 @@ pub(crate) enum BuildRoute {
     /// The reference evaluator over whole arrays, no `faq` walked per cell.
     Whole,
     /// A standalone tape program.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Tape,
     /// The reference evaluator, with a `faq` walked cell by cell.
     PerCell,
@@ -2796,7 +2760,7 @@ fn value_of_taped(a: ArrayD<f64>) -> Value {
 /// reference evaluator would walk per cell.
 ///
 /// `expr` has its ranges resolved, as for
-/// [`StandaloneScope::eval`]. Every name in `scope.inputs`
+/// [`StandaloneScope::eval_walking`]. Every name in `scope.inputs`
 /// that `expr` mentions is seeded as a known value, and `params` bind
 /// `param_names`. A causal self-reference (esm-spec §4.3.1.1) lowers as the
 /// model's own recurrence rule does, to one ordered sweep; one the lowering
@@ -4989,10 +4953,10 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // contract is a single scalar evaluation, not a walk.
     let is_walk = !shape.is_empty() || !contract_names.is_empty();
     if is_walk {
-        note_per_cell_walk();
+        ctx.walks.note_walk();
         // A strict caller has already been told to refuse (see
-        // [`StopAtFirstCell`]): this walk's value is never read.
-        if per_cell_walk_stopped() {
+        // [`CellWalks`]): this walk's value is never read.
+        if ctx.walks.stopped() {
             return if shape.is_empty() {
                 Value::Scalar(0.0)
             } else {
@@ -5019,7 +4983,7 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 /// rules (`rhs.rs`). It recognizes a forward prefix scan
 /// ([`detect_prefix_scan`]) and sweeps it in O(N); drives the contraction
 /// from resolved join gates when there are any; and honours a
-/// [`StopAtFirstCell`], counting each cell it evaluates.
+/// stop at the first cell ([`CellWalks`]), counting each cell it evaluates.
 pub(super) struct FaqCells<'s> {
     idx_names: &'s [String],
     ranges: &'s [(i64, i64)],
@@ -5121,7 +5085,7 @@ impl<'s> FaqCells<'s> {
                 i_name: &idx_names[scan.axis],
                 j_name: &contract_names[0],
                 // One step of one scan when the walk is to stop at its first cell.
-                bounds: if !stop_at_first_cell() {
+                bounds: if !ctx.walks.stop_at_first {
                     (scan_lo, scan_hi)
                 } else if scan.reverse {
                     (scan_lo.max(scan_hi), scan_hi)
@@ -5143,7 +5107,7 @@ impl<'s> FaqCells<'s> {
                     full[scan.axis] = i;
                     sink(&full, acc, ctx);
                 });
-                if stop_after_first_cell() {
+                if ctx.walks.after_first_cell() {
                     break;
                 }
             }
@@ -5205,7 +5169,7 @@ impl<'s> FaqCells<'s> {
                 sink(tuple, v, ctx);
                 if is_walk {
                     note_per_cell_cell();
-                    if stop_after_first_cell() {
+                    if ctx.walks.after_first_cell() {
                         break;
                     }
                 }
