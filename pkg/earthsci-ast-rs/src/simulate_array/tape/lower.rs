@@ -8198,6 +8198,7 @@ impl<'m> TapeBuilder<'m> {
         self.fault_first = txn.fault_first;
         self.fault_seq = txn.fault_seq;
         self.faults.truncate(txn.faults);
+        self.fault_order.truncate(txn.faults);
         self.lazy_faults.truncate(txn.lazy_faults);
         self.tuples_held = txn.tuples_held;
     }
@@ -8803,6 +8804,11 @@ impl<'m> TapeBuilder<'m> {
         if precision.iter().all(|&p| p == build) {
             precision.clear();
         }
+        debug_assert_eq!(
+            self.faults.len(),
+            self.fault_order.len(),
+            "`fault_order` is parallel to `faults`"
+        );
         let mut prog = TapeProgram {
             instrs,
             precision,
