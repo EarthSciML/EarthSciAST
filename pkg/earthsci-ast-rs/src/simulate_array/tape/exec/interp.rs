@@ -156,15 +156,14 @@ pub(super) fn run_range(
             }
             match scalar.at[pc] {
                 Entry::Block(b) => {
-                    let ScalarCode { blocks, regs, .. } = &mut *scalar;
-                    let b = &blocks[b as usize];
+                    let b = scalar.blocks[b as usize];
                     if b.end > limit {
                         break;
                     }
                     // SAFETY: decoded against this call's layout (`ensure`
                     // above), every instruction before it has run, and the
                     // instruction loop runs on the calling thread alone.
-                    match unsafe { b.run(env, slab, dy, regs) } {
+                    match unsafe { b.run(scalar, env, slab, dy) } {
                         Some(end) => pc = end,
                         // A gather faulted: the general path latches it.
                         None => break,
@@ -505,8 +504,22 @@ enum BlockOut {
 /// Because every store waits for the end, a gather that faults stops the
 /// block having written nothing, and the instruction loop runs the run's
 /// instructions one by one instead, where the fault is latched.
+///
+/// A block's inputs, operations and outputs lie in [`ScalarCode`]'s shared
+/// arrays, `[lo, hi)` each, so the blocks of a program sit together in
+/// program order.
+#[derive(Clone, Copy)]
 struct Block {
     /// One past its last instruction.
+    end: usize,
+    inputs: (u32, u32),
+    ops: (u32, u32),
+    outs: (u32, u32),
+}
+
+/// A block as [`Block::build`] decodes it, before it joins the shared
+/// arrays.
+struct Built {
     end: usize,
     inputs: Vec<(ScalarSrc, u16)>,
     ops: Vec<BlockOp>,
@@ -541,6 +554,9 @@ pub(super) struct ScalarCode {
     key: Option<(u64, crate::precision::Precision)>,
     at: Vec<Entry>,
     blocks: Vec<Block>,
+    inputs: Vec<(ScalarSrc, u16)>,
+    ops: Vec<BlockOp>,
+    outs: Vec<(u16, BlockOut)>,
     /// The blocks' register file.
     regs: Vec<f64>,
 }
@@ -557,6 +573,10 @@ impl ScalarCode {
         self.at.clear();
         self.at.resize(prog.instrs.len(), Entry::None);
         self.blocks.clear();
+        self.inputs.clear();
+        self.ops.clear();
+        self.outs.clear();
+        let mut n_regs = 0;
         let cuts = &prog.prepared().block_cuts;
         let mut pc = 0;
         while pc < prog.instrs.len() {
@@ -580,14 +600,24 @@ impl ScalarCode {
                 Some(b) => {
                     self.at[pc] = Entry::Block(self.blocks.len() as u32);
                     pc = b.end;
-                    self.blocks.push(b);
+                    n_regs = n_regs.max(b.n_regs);
+                    let span = |lo: usize, hi: usize| (lo as u32, hi as u32);
+                    let (i, o, u) = (self.inputs.len(), self.ops.len(), self.outs.len());
+                    self.inputs.extend(b.inputs);
+                    self.ops.extend(b.ops);
+                    self.outs.extend(b.outs);
+                    self.blocks.push(Block {
+                        end: b.end,
+                        inputs: span(i, self.inputs.len()),
+                        ops: span(o, self.ops.len()),
+                        outs: span(u, self.outs.len()),
+                    });
                 }
                 None => pc += 1,
             }
         }
-        let regs = self.blocks.iter().map(|b| b.n_regs).max().unwrap_or(0);
-        if self.regs.len() < regs {
-            self.regs.resize(regs, 0.0);
+        if self.regs.len() < n_regs {
+            self.regs.resize(n_regs, 0.0);
         }
     }
 }
@@ -678,7 +708,7 @@ impl Block {
     /// none. Each instruction is decoded under its own precision. A gather
     /// that may fault is a block of its own, so a fault stops a block before
     /// any other instruction of it.
-    fn build(prog: &TapeProgram, slot_off: &[usize], cuts: &[bool], start: usize) -> Option<Block> {
+    fn build(prog: &TapeProgram, slot_off: &[usize], cuts: &[bool], start: usize) -> Option<Built> {
         let mut b = Builder::default();
         let mut pc = start;
         while pc < prog.instrs.len() && !(pc > start && cuts[pc]) {
@@ -712,7 +742,7 @@ impl Block {
             .map(|&off| (b.at[&off], BlockOut::Slab(off)))
             .collect();
         outs.extend(b.dy.iter().map(|&(r, p)| (r, BlockOut::Dy(p))));
-        Some(Block {
+        Some(Built {
             end: pc,
             inputs: b.inputs,
             ops: b.ops,
@@ -721,18 +751,26 @@ impl Block {
         })
     }
 
-    /// Run the block and return the position after it, or `None`, having
-    /// stored nothing, when its gather faults. `regs` holds at least
-    /// `n_regs` registers.
+    /// Run the block (its parts in `code`'s arrays) and return the position
+    /// after it, or `None`, having stored nothing, when its gather faults.
     ///
     /// # Safety
     /// The block was decoded against `slab`'s slot layout, every
     /// instruction before it has run, and no other thread touches the slab
     /// slots it reads or writes.
     #[inline(never)]
-    unsafe fn run(&self, env: &Env, slab: Slab, dy: &mut [f64], regs: &mut [f64]) -> Option<usize> {
-        debug_assert!(regs.len() >= self.n_regs);
-        let r = regs.as_mut_ptr();
+    unsafe fn run(
+        &self,
+        code: &mut ScalarCode,
+        env: &Env,
+        slab: Slab,
+        dy: &mut [f64],
+    ) -> Option<usize> {
+        let span = |(lo, hi): (u32, u32)| lo as usize..hi as usize;
+        let inputs = &code.inputs[span(self.inputs)];
+        let ops = &code.ops[span(self.ops)];
+        let outs = &code.outs[span(self.outs)];
+        let r = code.regs.as_mut_ptr();
         let base_ptr = |b: &ScalarBase| -> *const f64 {
             match *b {
                 ScalarBase::Slab(o) => slab.at(o),
@@ -741,16 +779,16 @@ impl Block {
         };
         let gathers = &env.prog.tables.data_gathers;
         // SAFETY (every register access below): the builder numbered the
-        // registers below `n_regs`, which `regs` holds; the slab offsets and
+        // registers below its `n_regs`, which `regs` holds (`ensure`); the slab offsets and
         // sources were decoded against this call's layout (the caller's
         // contract), and a decoded window or position lies in its source.
         unsafe {
-            for &(s, i) in &self.inputs {
+            for &(s, i) in inputs {
                 *r.add(i as usize) = scalar_get(&s, env, slab);
             }
             let g = |i: u16| *r.add(i as usize);
             let put = |i: u16, v: f64| *r.add(i as usize) = v;
-            for op in &self.ops {
+            for op in ops {
                 match *op {
                     BlockOp::Add(a, b, o) => put(o, g(a) + g(b)),
                     BlockOp::Sub(a, b, o) => put(o, g(a) - g(b)),
@@ -834,7 +872,7 @@ impl Block {
                     }
                 }
             }
-            for &(i, o) in &self.outs {
+            for &(i, o) in outs {
                 match o {
                     BlockOut::Slab(off) => *slab.at(off) = g(i),
                     BlockOut::Dy(p) => dy[p] = g(i),
