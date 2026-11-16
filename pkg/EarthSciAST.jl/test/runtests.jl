@@ -65,6 +65,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # gate, the four validity rules and the flatten rewrite.
     include("variable_bounds_test.jl")
     include("expression_test.jl")
+    include("show_test.jl")
     include("reactions_test.jl")
     include("reaction_species_order_test.jl")  # species ORDER = declaration order (API_SPEC §5.10)
     include("reaction_lowering_form_test.jl")  # exact lowered tree (esm-libraries-spec §4.6.2)
