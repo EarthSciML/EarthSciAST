@@ -112,9 +112,6 @@ esm simulate model.esm --time 10 --backend integrator -o results.json
 # integrate, only the named fields' dependency cone is evaluated.
 esm simulate model.esm --time 10 --observed flux --format grid -o results.json
 
-# Analyze structure / complexity / coupling
-esm analyze model.esm
-
 # Batch-validate a directory of fixtures
 esm validate-fixtures tests/valid --recursive
 

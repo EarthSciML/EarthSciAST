@@ -2,7 +2,7 @@
 
 The `esm` command-line tool for [EarthSciML](https://github.com/EarthSciML)
 Abstract Syntax Tree Format (`.esm`) documents: validate, convert,
-pretty-print, analyze, test and simulate them. The library underneath is
+pretty-print, inspect, test and simulate them. The library underneath is
 [`earthsci-ast`](https://crates.io/crates/earthsci-ast).
 
 ```bash
@@ -60,7 +60,7 @@ give `step.dt`.
 With a fixed macro step, the integrator reports the state at the start and
 at every macro-step boundary; otherwise at the end of the run. The diffsol
 backend alone evaluates `--observed` fields along the trajectory, and
-`esm test` and `esm benchmark --bench-type simulate` run on diffsol only.
+`esm test` runs on diffsol only.
 
 EarthSciIntegrator depends on `earthsci-ast` by its own version requirement.
 When this crate's version is outside that requirement (one was released before

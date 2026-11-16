@@ -1656,6 +1656,21 @@ feature go with it.
 | wasm export `create_compact_expression` | — | `deleted` |
 | features `parallel`, `simd`, `zero_copy`, `custom_alloc`, `performance`, `cli` | — (the tape executor's threading needs no feature) | `deleted` |
 
+### The `esm` command-line tool
+
+Eight subcommands that printed fixed thresholds and canned recommendations
+rather than anything the format defines are gone, with the library's
+`extension::analysis` helpers that existed only to serve them.
+
+| Before | After | Kind |
+|---|---|---|
+| `esm analyze`, `esm coupling-analysis`, `esm performance-profile`, `esm optimize` | `esm info`, `esm graph`, `esm units` for what the document declares | `deleted` |
+| `esm compare` | `esm diff` | `deleted` |
+| `esm init` | — | `deleted` |
+| `esm benchmark` | — | `deleted` |
+| `esm schema-check` | `esm validate` | `deleted` |
+| `earthsci_ast::extension::analysis::*` | — | `deleted` |
+
 ---
 
 ## Where the contract lives

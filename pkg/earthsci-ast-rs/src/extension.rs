@@ -62,17 +62,6 @@ pub mod aggregate {
     };
 }
 
-/// Pure, I/O-free structural and expression analysis helpers. Written for the
-/// `esm` CLI's `analyze` subcommand, which is a separate crate target.
-pub mod analysis {
-    pub use crate::analysis::{
-        collect_unit_types, collect_variables, contains_common_subexpressions,
-        contains_expensive_operations, contains_redundant_operations, count_expression_nodes,
-        count_numerical_values, count_operations, expression_depth, expressions_numerically_equal,
-        find_longest_dependency_chain, find_strongly_connected_components,
-    };
-}
-
 /// Planar spatial-index broad phase behind the overlap join-gate, plus the
 /// brute-force oracle, the visit counter the scaling tests assert on, and the
 /// driver kill-switch the differential tests flip.

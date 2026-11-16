@@ -54,8 +54,6 @@
 // hidden from the published rustdoc API surface.
 #[doc(hidden)]
 pub mod adapter_support;
-/// Pure, I/O-free structural and expression analysis helpers for the `esm` CLI.
-pub(crate) mod analysis;
 /// Planar spatial-index broad phase (rstar R*-tree + brute-force oracle) for the
 /// projection-pushdown overlap join-gate.
 pub(crate) mod broad_phase;
