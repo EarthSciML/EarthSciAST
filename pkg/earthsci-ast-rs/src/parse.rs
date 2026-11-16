@@ -8,7 +8,6 @@ use crate::flatten::VAR_PLACEHOLDER;
 use jsonschema::error::ValidationErrorKind;
 use jsonschema::{Draft, Validator};
 use serde_json::Value;
-use std::collections::HashSet;
 use std::sync::OnceLock;
 
 /// Library version supported by this implementation (major, minor, patch),
@@ -416,6 +415,23 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         serde_json::from_value(json_value).map_err(EsmError::JsonParse)?
     };
     esm_file.component_templates = component_templates;
+
+    // The reference rules a load refuses on that read the typed document: a
+    // coupling `from` that does not resolve, a cross-scope dependency cycle,
+    // an undeclared event variable. The refusal carries the findings.
+    let findings = crate::structural::load_reference_errors(&esm_file);
+    if let Some(first) = findings.first() {
+        let message = findings
+            .iter()
+            .map(|f| format!("[{}] {}: {}", f.code, f.path, f.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(EsmError::StructuralDiagnostic {
+            code: first.code.as_code(),
+            message: format!("Structural validation failed: {message}"),
+            findings,
+        });
+    }
     // esm-spec §2.2: an EMPTY `solver` block normalizes to absence at load.
     esm_file.solver = crate::solver::normalize_empty(esm_file.solver.take());
     // esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against
@@ -971,8 +987,6 @@ impl ReservedIndexScan {
     }
 }
 
-/// Run every post-schema structural check, collecting errors and returning
-/// `EsmError::StructuralValidation` if any check fires.
 /// A `const` equation payload [`park_const_data`] set aside: component kind,
 /// component name, equation position, and the payload.
 type ParkedConst = (&'static str, String, usize, Value);
@@ -1067,6 +1081,8 @@ fn unpark_const_data(doc: &mut Value, parked: Vec<ParkedConst>) -> Result<(), Es
     Ok(())
 }
 
+/// Run the post-schema checks of the untyped document, collecting errors and
+/// returning `EsmError::StructuralValidation` if any check fires.
 fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
     let mut errors: Vec<String> = Vec::new();
 
@@ -1074,9 +1090,7 @@ fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
         check_version_compatibility(obj, &mut errors);
         check_metadata_formats(obj, &mut errors);
         check_data_loader_temporal_durations(obj, &mut errors);
-        check_coupling_references(obj, &mut errors);
-        check_circular_model_dependencies_typed(json_value, &mut errors);
-        check_event_variable_references(obj, &mut errors);
+        check_coupling_role_references(obj, &mut errors);
         check_reaction_stoichiometries(obj, &mut errors);
     }
 
@@ -1257,47 +1271,6 @@ fn check_data_loader_temporal_durations(
     }
 }
 
-/// Every system named by a coupling entry, read off the RAW JSON.
-///
-/// The typed [`crate::structural::coupled_system_names`] is the same rule, but
-/// these two load-time checks run BEFORE the document is typed, so the set has
-/// to be recovered from the untyped tree. See that function for why a coupled
-/// system's checks relax.
-fn coupled_system_names_raw(obj: &serde_json::Map<String, Value>) -> HashSet<String> {
-    let mut coupled = HashSet::new();
-    let mut add = |name: &str| {
-        if name.is_empty() {
-            return;
-        }
-        coupled.insert(name.to_string());
-        if let Some((root, _)) = name.split_once('.') {
-            coupled.insert(root.to_string());
-        }
-    };
-    for entry in obj
-        .get("coupling")
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flatten()
-    {
-        for key in ["from", "to"] {
-            if let Some(s) = entry.get(key).and_then(|v| v.as_str()) {
-                add(s);
-            }
-        }
-        for s in entry
-            .get("systems")
-            .and_then(|v| v.as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v.as_str())
-        {
-            add(s);
-        }
-    }
-    coupled
-}
-
 /// In a coupling-library file (esm-spec §10.9) a coupling edge's system-naming
 /// segments name declared ROLES, not systems: the library holds no models, so
 /// resolving them against a symbol table would reject every well-formed library.
@@ -1305,12 +1278,17 @@ fn coupled_system_names_raw(obj: &serde_json::Map<String, Value>) -> HashSet<Str
 /// §10.10.2 occurrence site to name a declared role instead
 /// (`coupling_edge_unknown_role`), which is the same check `coupling_imports`
 /// runs when the library is imported — the shared `collect_role_segments` walk
-/// is what keeps the two sites from drifting apart.
-fn check_coupling_role_references(
-    obj: &serde_json::Map<String, Value>,
-    coupling: &[Value],
-    errors: &mut Vec<String>,
-) {
+/// is what keeps the two sites from drifting apart. A document that is not a
+/// coupling library (`coupling_roles` is the sole positive identifier) has its
+/// coupling references judged after typing
+/// ([`crate::structural::load_reference_errors`]).
+fn check_coupling_role_references(obj: &serde_json::Map<String, Value>, errors: &mut Vec<String>) {
+    if !crate::coupling_imports::is_coupling_library_obj(obj) {
+        return;
+    }
+    let Some(coupling) = obj.get("coupling").and_then(|v| v.as_array()) else {
+        return;
+    };
     let roles: std::collections::HashSet<&str> = obj
         .get("coupling_roles")
         .and_then(|v| v.as_object())
@@ -1331,378 +1309,6 @@ fn check_coupling_role_references(
                  (esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)"
             ));
         }
-    }
-}
-
-/// `coupling[].from` and `coupling[].to` must point to variables declared
-/// somewhere in the file. We only enforce `from`, matching Python's lenient
-/// handling of `to` (variable_map can introduce target vars).
-fn check_coupling_references(obj: &serde_json::Map<String, Value>, errors: &mut Vec<String>) {
-    let Some(coupling) = obj.get("coupling").and_then(|v| v.as_array()) else {
-        return;
-    };
-    // A coupling library's refs are role-scoped, not system-scoped (esm-spec
-    // §10.9); `coupling_roles` is the sole positive identifier of the kind.
-    if crate::coupling_imports::is_coupling_library_obj(obj) {
-        check_coupling_role_references(obj, coupling, errors);
-        return;
-    }
-    let tables = build_symbol_tables(obj);
-
-    for (i, c) in coupling.iter().enumerate() {
-        let Some(cobj) = c.as_object() else { continue };
-        let Some(from_ref) = cobj.get("from").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        if !from_ref.contains('.') {
-            continue;
-        }
-        let dot_count = from_ref.chars().filter(|ch| *ch == '.').count();
-        if dot_count > 1 {
-            // Subsystem-nested ref — only verify top-level system exists.
-            let top = from_ref.split('.').next().unwrap_or("");
-            if !tables.all_systems.contains(top) {
-                errors.push(format!(
-                    "coupling[{i}]/from: reference '{from_ref}' to undefined system '{top}'"
-                ));
-            }
-            continue;
-        }
-        let (system, var) = from_ref.split_once('.').unwrap();
-        if !tables.all_systems.contains(system) {
-            errors.push(format!(
-                "coupling[{i}]/from: reference '{from_ref}' to undefined system '{system}'"
-            ));
-            continue;
-        }
-        if !tables.has_variable(system, var) {
-            errors.push(format!(
-                "coupling[{i}]/from: reference '{from_ref}' — variable '{var}' not provided by '{system}'"
-            ));
-        }
-    }
-}
-
-/// Detect a cross-scope cycle among observeds (esm-spec §4.9.7) by delegating
-/// WHOLE-RULE to the typed `crate::structural::check_circular_dependencies_in_models`
-/// — the SAME graph and traversal the typed `validate()` pass runs — instead of
-/// re-deriving it over raw JSON.
-///
-/// The load-time gate needs only the binary reject decision; the pinned
-/// `(circular_dependency, /models)` record is recovered from `validate()` in the
-/// conformance runner, so this is verdict-invariant: no currently-loading
-/// document carries a model cycle (else `validate()` would already class it
-/// invalid), and the rejected fixtures (`circular_coupling.esm`,
-/// `circular_coupling_subsystem.esm`) are caught
-/// identically. Deserializing to `EsmFile` here is safe — schema validation has
-/// already passed at this point; a document that fails to type (e.g. an
-/// unlowered template node) carries no model cycle in the corpus, so skipping it
-/// cannot miss a rejection.
-///
-/// Deserializes THROUGH a borrow of the document (`&Value` is itself a
-/// `Deserializer`) rather than `from_value(json_value.clone())`. This runs
-/// AFTER §9.7 template-import resolution, so `json_value` is the fully expanded
-/// document — orders of magnitude larger than the authored file — and the clone
-/// was a full deep copy of it that existed only to be consumed by the very next
-/// line and dropped. Same typed result, same verdict; one fewer copy of the
-/// expanded AST.
-fn check_circular_model_dependencies_typed(json_value: &Value, errors: &mut Vec<String>) {
-    use serde::Deserialize as _;
-    // The cycle must cross a scope boundary (esm-spec §4.9.7): two top-level
-    // models, or a model and one of its subsystems. A document with neither
-    // has no such cycle to find, and no reason to deserialize the whole
-    // document for it.
-    let Some(models) = json_value.get("models").and_then(|m| m.as_object()) else {
-        return;
-    };
-    if models.len() < 2 && !models.values().any(|m| m.get("subsystems").is_some()) {
-        return;
-    }
-    let Ok(esm_file) = EsmFile::deserialize(json_value) else {
-        return;
-    };
-    let Some(models) = esm_file.models.as_ref() else {
-        return;
-    };
-    let mut typed_errors: Vec<crate::validate::StructuralError> = Vec::new();
-    crate::structural::check_circular_dependencies_in_models(models, &mut typed_errors);
-    for e in typed_errors {
-        // Preserve the load-time wording — the string must name a "cycle" and
-        // list the participating models — by reading the cycle path back off the
-        // typed error's `details`.
-        let cycle = e
-            .details
-            .get("cycle")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" -> ")
-            })
-            .unwrap_or_default();
-        errors.push(format!("circular reference (cycle) detected: {cycle}"));
-    }
-}
-
-/// Every variable referenced by an event — either on the LHS of an
-/// `affects` equation or inside a condition / trigger expression — must be
-/// declared in the host model's `variables` map. Applies to both continuous
-/// and discrete events. Mirrors Python's `_check_event_references` and
-/// Julia's equivalent to keep cross-language error codes aligned per spec
-/// §2.1a (error code: `EventVarUndeclared`).
-fn check_event_variable_references(obj: &serde_json::Map<String, Value>, errors: &mut Vec<String>) {
-    let Some(models) = obj.get("models").and_then(|v| v.as_object()) else {
-        return;
-    };
-
-    // Names declared as document-level template metaparameters (esm-spec §9.7).
-    // They fold to integer constants during `apply_expression_template`
-    // lowering, so a metaparameter name reached through an unlowered node's
-    // `bindings` (which `collect_variable_refs` descends, running BEFORE that
-    // lowering) is NOT an undeclared model variable. Excluding them here keeps
-    // the newly-widened walk from raising a false `EventVarUndeclared`.
-    let metaparameters: std::collections::HashSet<&str> = obj
-        .get("metaparameters")
-        .and_then(|v| v.as_object())
-        .map(|m| m.keys().map(String::as_str).collect())
-        .unwrap_or_default();
-
-    let coupled = coupled_system_names_raw(obj);
-
-    for (mname, mv) in models {
-        let Some(m) = mv.as_object() else { continue };
-        let Some(vars) = m.get("variables").and_then(|v| v.as_object()) else {
-            continue;
-        };
-        let mut declared: std::collections::HashSet<&str> =
-            vars.keys().map(String::as_str).collect();
-
-        // The §6.4 operator placeholder. In an operator-composed / coupled model
-        // `_var` stands for each matching state variable of the system this one
-        // is composed with, and it is substituted at composition — so an event
-        // affect that ASSIGNS to it is legal, exactly as an equation that
-        // differentiates it is. Reporting `_var` as an undeclared event variable
-        // while the very same document's equations are exempt from the reference
-        // check is internally inconsistent, and it rejected the valid
-        // tests/valid/full_coupled.esm. Credited only for a COUPLED model, so a
-        // genuinely undeclared event target is still caught everywhere else.
-        if coupled.contains(mname.as_str()) {
-            declared.insert("_var");
-        }
-
-        // Continuous events: affects[].lhs must be declared; conditions[] expr
-        // bare variable refs must be declared.
-        if let Some(events) = m.get("continuous_events").and_then(|v| v.as_array()) {
-            for (ei, event) in events.iter().enumerate() {
-                let Some(event_obj) = event.as_object() else {
-                    continue;
-                };
-                if let Some(affects) = event_obj.get("affects").and_then(|v| v.as_array()) {
-                    for (ai, affect) in affects.iter().enumerate() {
-                        if let Some(lhs) = affect.get("lhs").and_then(|v| v.as_str())
-                            && !lhs.contains('.')
-                            && !declared.contains(lhs)
-                        {
-                            errors.push(format!(
-                                "models/{mname}/continuous_events[{ei}]/affects[{ai}]/lhs: \
-                                 undeclared variable '{lhs}'"
-                            ));
-                        }
-                    }
-                }
-                if let Some(conditions) = event_obj.get("conditions").and_then(|v| v.as_array()) {
-                    for (ci, cond) in conditions.iter().enumerate() {
-                        let mut refs: Vec<String> = Vec::new();
-                        collect_variable_refs(cond, &mut refs);
-                        for r in refs {
-                            if r.contains('.') || metaparameters.contains(r.as_str()) {
-                                continue;
-                            }
-                            if !declared.contains(r.as_str()) {
-                                errors.push(format!(
-                                    "models/{mname}/continuous_events[{ei}]/conditions[{ci}]: \
-                                     undeclared variable '{r}'"
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Discrete events: affects[].lhs, plus trigger.expression if of type `condition`.
-        if let Some(events) = m.get("discrete_events").and_then(|v| v.as_array()) {
-            for (ei, event) in events.iter().enumerate() {
-                let Some(event_obj) = event.as_object() else {
-                    continue;
-                };
-                if let Some(affects) = event_obj.get("affects").and_then(|v| v.as_array()) {
-                    for (ai, affect) in affects.iter().enumerate() {
-                        if let Some(lhs) = affect.get("lhs").and_then(|v| v.as_str())
-                            && !lhs.contains('.')
-                            && !declared.contains(lhs)
-                        {
-                            errors.push(format!(
-                                "models/{mname}/discrete_events[{ei}]/affects[{ai}]/lhs: \
-                                 undeclared variable '{lhs}'"
-                            ));
-                        }
-                    }
-                }
-                if let Some(trigger) = event_obj.get("trigger").and_then(|v| v.as_object())
-                    && trigger.get("type").and_then(|v| v.as_str()) == Some("condition")
-                    && let Some(expression) = trigger.get("expression")
-                {
-                    let mut refs: Vec<String> = Vec::new();
-                    collect_variable_refs(expression, &mut refs);
-                    for r in refs {
-                        if r.contains('.') || metaparameters.contains(r.as_str()) {
-                            continue;
-                        }
-                        if !declared.contains(r.as_str()) {
-                            errors.push(format!(
-                                "models/{mname}/discrete_events[{ei}]/trigger/expression: \
-                                 undeclared variable '{r}'"
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ---- structural helpers ---------------------------------------------------
-
-/// Collect every bare `Expr::Variable`-style string out of an expression tree.
-///
-/// Descends EXACTLY the expression-bearing operator-node fields visited by the
-/// typed walker [`crate::types::ExpressionNode::for_each_child`], enumerated
-/// here through the shared [`crate::types::EXPR_ARRAY_CHILD_KEYS`] /
-/// [`EXPR_SCALAR_CHILD_KEYS`](crate::types::EXPR_SCALAR_CHILD_KEYS) /
-/// [`EXPR_MAP_CHILD_KEYS`](crate::types::EXPR_MAP_CHILD_KEYS) constants so the
-/// raw-JSON and typed traversals cannot drift: `args`, `values`, `lower`,
-/// `upper`, `expr`, `filter`, `key`, `axes`, and `bindings`. This ensures
-/// references hidden in aggregate bodies, filter predicates, integral bounds,
-/// grouping `key`s, table-lookup `axes`, and template `bindings` are not
-/// missed. Non-expression metadata keys (`ranges`, `output_idx`, `regions`, …)
-/// are deliberately not descended: their strings are index symbols and set
-/// names, not variable references.
-///
-/// This runs at LOAD time, BEFORE `apply_expression_template` lowering — it
-/// feeds `check_event_variable_references`.
-/// It therefore also collects the argument strings inside a `bindings` map and
-/// any bound index symbols inside a `key`/body. A caller that flags bare
-/// undeclared names (`check_event_variable_references`) must exclude names that
-/// are not model variables at this point — notably template metaparameters,
-/// which fold to constants during lowering — rather than relying on this
-/// collector to omit them (see the metaparameter guard there).
-fn collect_variable_refs(expr: &Value, out: &mut Vec<String>) {
-    match expr {
-        Value::String(s) => out.push(s.clone()),
-        Value::Object(obj) => {
-            for key in crate::types::EXPR_ARRAY_CHILD_KEYS {
-                if let Some(items) = obj.get(key).and_then(|v| v.as_array()) {
-                    for a in items {
-                        collect_variable_refs(a, out);
-                    }
-                }
-            }
-            for key in crate::types::EXPR_SCALAR_CHILD_KEYS {
-                if let Some(child) = obj.get(key) {
-                    collect_variable_refs(child, out);
-                }
-            }
-            for key in crate::types::EXPR_MAP_CHILD_KEYS {
-                if let Some(map) = obj.get(key).and_then(|v| v.as_object()) {
-                    for child in map.values() {
-                        collect_variable_refs(child, out);
-                    }
-                }
-            }
-        }
-        Value::Array(arr) => {
-            for a in arr {
-                collect_variable_refs(a, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-struct SymbolTables {
-    /// Names of all top-level systems (models + reaction_systems + data_sources).
-    all_systems: std::collections::HashSet<String>,
-    /// Per-system: the set of variable names declared in that system.
-    per_system: std::collections::HashMap<String, std::collections::HashSet<String>>,
-}
-
-impl SymbolTables {
-    fn has_variable(&self, system: &str, var: &str) -> bool {
-        self.per_system
-            .get(system)
-            .map(|s| s.contains(var))
-            .unwrap_or(false)
-    }
-}
-
-/// Collect the keys of a component's `variables` object as a set of names,
-/// yielding an empty set when the field is absent or not an object.
-fn variable_keys(node: &Value) -> std::collections::HashSet<String> {
-    node.as_object()
-        .and_then(|o| o.get("variables"))
-        .and_then(|v| v.as_object())
-        .map(|vs| vs.keys().cloned().collect())
-        .unwrap_or_default()
-}
-
-fn build_symbol_tables(obj: &serde_json::Map<String, Value>) -> SymbolTables {
-    let mut all_systems: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut per_system: std::collections::HashMap<String, std::collections::HashSet<String>> =
-        std::collections::HashMap::new();
-
-    if let Some(models) = obj.get("models").and_then(|v| v.as_object()) {
-        for (name, m) in models {
-            all_systems.insert(name.clone());
-            per_system.insert(name.clone(), variable_keys(m));
-        }
-    }
-
-    if let Some(rsystems) = obj.get("reaction_systems").and_then(|v| v.as_object()) {
-        for (name, rs) in rsystems {
-            all_systems.insert(name.clone());
-            let mut set: std::collections::HashSet<String> = std::collections::HashSet::new();
-            if let Some(rso) = rs.as_object() {
-                if let Some(sp) = rso.get("species").and_then(|v| v.as_object()) {
-                    set.extend(sp.keys().cloned());
-                }
-                if let Some(params) = rso.get("parameters").and_then(|v| v.as_object()) {
-                    set.extend(params.keys().cloned());
-                }
-            }
-            per_system.insert(name.clone(), set);
-        }
-    }
-
-    // `data_sources` keys are deliberately absent: from esm 1.0.0 a data source
-    // is not a coupling endpoint or a scoped-name root (esm-spec §8). A field it
-    // serves is reached through the data-fed parameter that names it in
-    // `update.from`, so `Met.K` with `Met` a data source resolves to nothing.
-
-    // Operators are also addressable by name (scoped refs may point into
-    // their config.subsystems) so they count as top-level systems for
-    // reference-existence checks, matching Python / Julia.
-    if let Some(operators) = obj.get("operators").and_then(|v| v.as_object()) {
-        for name in operators.keys() {
-            all_systems.insert(name.clone());
-            per_system.entry(name.clone()).or_default();
-        }
-    }
-
-    SymbolTables {
-        all_systems,
-        per_system,
     }
 }
 

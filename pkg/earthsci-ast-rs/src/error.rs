@@ -58,6 +58,10 @@ pub enum EsmError {
         code: &'static str,
         /// The rendered message.
         message: String,
+        /// The structured `(code, path)` findings the refusal located, if any
+        /// (an undeclared event variable, an unresolvable coupling reference
+        /// or a cross-scope dependency cycle, each at its pointer).
+        findings: Vec<crate::validate::StructuralError>,
     },
 }
 
@@ -78,6 +82,7 @@ impl EsmError {
         EsmError::StructuralDiagnostic {
             code: e.code,
             message: e.to_string(),
+            findings: Vec::new(),
         }
     }
 
@@ -95,7 +100,8 @@ impl EsmError {
     /// when it located none.
     pub fn findings(&self) -> &[crate::validate::StructuralError] {
         match self {
-            EsmError::SchemaDiagnostic { findings, .. } => findings,
+            EsmError::SchemaDiagnostic { findings, .. }
+            | EsmError::StructuralDiagnostic { findings, .. } => findings,
             _ => &[],
         }
     }

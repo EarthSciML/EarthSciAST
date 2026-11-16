@@ -288,6 +288,27 @@ pub(crate) fn validate_coupling(
     }
 }
 
+/// The `unresolved_scoped_ref` findings of every `variable_map` entry's `from`
+/// endpoint, at `/coupling/<i>/from`: the part of [`validate_coupling`] a load
+/// refuses on ([`crate::structural::load_reference_errors`]).
+pub(crate) fn variable_map_from_errors(
+    coupling: &[crate::CouplingEntry],
+    system_refs: &HashMap<String, SystemInfo>,
+    errors: &mut Vec<StructuralError>,
+) {
+    for (idx, entry) in coupling.iter().enumerate() {
+        if let crate::CouplingEntry::VariableMap { from, .. } = entry {
+            validate_scoped_reference(
+                from,
+                system_refs,
+                &format!("/coupling/{idx}/from"),
+                "variable_map",
+                errors,
+            );
+        }
+    }
+}
+
 /// The component a `bind` points a role at for `reference`, and the role(s) that
 /// point there. A bind value may be a dotted subsystem path (`Parent.Child`,
 /// esm-spec §10.10.1), so the LONGEST bound component that prefixes the

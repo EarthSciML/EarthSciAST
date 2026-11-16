@@ -311,9 +311,11 @@ pub enum StructuralErrorCode {
 
 use crate::diagnostic::codes;
 
-impl std::fmt::Display for StructuralErrorCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
+impl StructuralErrorCode {
+    /// The stable snake_case diagnostic code (`ERROR_CODES`), which is also
+    /// the [`Display`](std::fmt::Display) form.
+    pub(crate) fn as_code(&self) -> &'static str {
+        match self {
             Self::UndefinedVariable => codes::UNDEFINED_VARIABLE,
             Self::EquationCountMismatch => codes::EQUATION_COUNT_MISMATCH,
             Self::UndefinedSpecies => codes::UNDEFINED_SPECIES,
@@ -361,8 +363,13 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::VariableBoundShapeMismatch => codes::VARIABLE_BOUND_SHAPE_MISMATCH,
             Self::VariableBoundCircular => codes::VARIABLE_BOUND_CIRCULAR,
             Self::VariableBoundsInverted => codes::VARIABLE_BOUNDS_INVERTED,
-        };
-        write!(f, "{s}")
+        }
+    }
+}
+
+impl std::fmt::Display for StructuralErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_code())
     }
 }
 
@@ -626,7 +633,14 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
             };
             // The findings the refusal itself located: the document's own mount
             // edges that do not resolve (`crate::mount_edge_errors`).
-            structural_errors.extend(e.findings().iter().cloned());
+            for finding in e.findings() {
+                if !structural_errors
+                    .iter()
+                    .any(|f| f.path == finding.path && f.code.as_code() == finding.code.as_code())
+                {
+                    structural_errors.push(finding.clone());
+                }
+            }
             ValidationResult {
                 schema_errors,
                 structural_errors,

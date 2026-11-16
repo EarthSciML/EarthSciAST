@@ -6578,6 +6578,56 @@ pub(crate) fn check_circular_dependencies_in_models(
     }
 }
 
+/// The reference findings a load refuses on, read off the typed document in
+/// this order: a `variable_map` whose `from` endpoint does not resolve
+/// (`unresolved_scoped_ref`, skipped for a coupling library, whose refs name
+/// roles and are judged against `coupling_roles` before typing), a
+/// cross-scope dependency cycle (`circular_dependency`), and a top-level
+/// model's event that assigns to, or tests in a condition or condition
+/// trigger, an undeclared variable (`event_var_undeclared` at an `affects`
+/// target, `undefined_variable` in a condition). Each comes from the check
+/// [`crate::validate()`] runs, with the same path and message; the event
+/// checks' other findings (affect right-hand sides, `affect_neg`, a parameter
+/// as target, reaction-system events) are `validate`'s alone.
+pub(crate) fn load_reference_errors(esm_file: &EsmFile) -> Vec<StructuralError> {
+    let mut errors = Vec::new();
+    if esm_file.coupling_roles.is_none()
+        && let Some(coupling) = esm_file.coupling.as_deref()
+        && coupling
+            .iter()
+            .any(|entry| matches!(entry, crate::CouplingEntry::VariableMap { .. }))
+    {
+        let system_refs = crate::validate::build_system_reference_map(esm_file);
+        crate::coupling::variable_map_from_errors(coupling, &system_refs, &mut errors);
+    }
+    let Some(models) = esm_file.models.as_ref() else {
+        return errors;
+    };
+    // A cross-scope cycle needs two top-level models, or a model and one of
+    // its subsystems.
+    if models.len() >= 2 || models.values().any(|m| m.subsystems.is_some()) {
+        check_circular_dependencies_in_models(models, &mut errors);
+    }
+    let (no_refs, no_units) = (HashMap::new(), HashMap::new());
+    for (model_name, model) in models {
+        if model.continuous_events.is_none() && model.discrete_events.is_none() {
+            continue;
+        }
+        let ctx = ModelCtx::new(esm_file, model_name, model, &no_refs, &no_units);
+        let mut found = Vec::new();
+        ctx.check_continuous_events(&mut found);
+        ctx.check_discrete_events(&mut found);
+        errors.extend(found.into_iter().filter(|e| match e.code {
+            StructuralErrorCode::EventVarUndeclared => e.path.contains("/affects/"),
+            StructuralErrorCode::UndefinedVariable => {
+                e.path.contains("/conditions/") || e.path.ends_with("/trigger/expression")
+            }
+            _ => false,
+        }));
+    }
+    errors
+}
+
 #[cfg(test)]
 mod dependency_order_tests {
     use super::*;
