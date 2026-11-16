@@ -19,18 +19,11 @@
 use earthsci_ast::Classification;
 use earthsci_ast::{EsmFile, Model, SystemKind, flatten};
 use serde_json::Value;
-use std::path::PathBuf;
 
-/// Repo root = the crate dir's grandparent (`pkg/earthsci-ast-rs/../..`).
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("repo root resolves")
-}
+use crate::common;
 
 fn load_json(rel: &str) -> Value {
-    let path = repo_root().join(rel);
+    let path = common::repo_root().join(rel);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }

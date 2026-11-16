@@ -98,8 +98,8 @@ pub(super) fn seg_chains(prog: &TapeProgram, slot_off: &[usize]) -> Vec<SegChain
     let guarded = prog.guarded_positions();
     // Slots the continuous section writes: a compacted table may only copy
     // values that hold for every call between two primes.
-    let tables = prog.tables();
-    let mut per_call = vec![false; prog.slots.len()];
+    let tables = prog.slot_tables();
+    let mut per_call = vec![false; prog.tables.slots.len()];
     for ins in &prog.instrs[cont..] {
         ins.for_each_def(&tables, |s| per_call[s as usize] = true);
     }
@@ -149,7 +149,7 @@ fn compact_plan(prog: &TapeProgram, ch: &SegChain, per_call: &[bool]) -> Option<
     };
     let w = match w {
         Operand::Lit(_) | Operand::Param(_) | Operand::Time => None,
-        Operand::Slot(s) if prog.slots[*s as usize].scalar => None,
+        Operand::Slot(s) if prog.tables.slots[*s as usize].scalar => None,
         Operand::Slot(s) if !per_call[*s as usize] => Some(*s),
         _ => return None,
     };
@@ -177,10 +177,10 @@ fn plan_one(
     else {
         return None;
     };
-    let rows = &prog.seg_tables[*table as usize].rows;
+    let rows = &prog.tables.seg_tables[*table as usize].rows;
     let n_out = rows.len().checked_sub(1)?;
     let n_pairs = *rows.last()? as usize;
-    let odesc = &prog.slots[*out as usize];
+    let odesc = &prog.tables.slots[*out as usize];
     if n_out < 2 || odesc.scalar || odesc.elems() != n_out {
         return None;
     }
@@ -228,7 +228,7 @@ fn plan_one(
     }
     // The tuple slots the chain defines, and whether anything but the chain
     // reads them.
-    let tables = prog.tables();
+    let tables = prog.slot_tables();
     let mut defs: Vec<SlotId> = Vec::new();
     for ins in &prog.instrs[start..seg] {
         ins.for_each_def(&tables, |s| defs.push(s));
@@ -265,7 +265,7 @@ fn tuple_instr(prog: &TapeProgram, ins: &Instr, n_pairs: usize, t: &mut Touches)
             let sh = &prog.state_vars[*ix as usize].shape;
             sh.is_empty() || sh[..] == [n_pairs]
         }
-        Operand::Slot(s) if prog.slots[*s as usize].scalar => {
+        Operand::Slot(s) if prog.tables.slots[*s as usize].scalar => {
             t.push((*s, Class::Any, false));
             true
         }
@@ -306,7 +306,7 @@ fn tuple_instr(prog: &TapeProgram, ins: &Instr, n_pairs: usize, t: &mut Touches)
 
 /// Whether slot `s` is an array over the tuple box of `n_pairs`.
 fn tuple_box(prog: &TapeProgram, s: SlotId, n_pairs: usize) -> bool {
-    let d = &prog.slots[s as usize];
+    let d = &prog.tables.slots[s as usize];
     !d.scalar && d.shape[..] == [n_pairs]
 }
 
@@ -352,7 +352,7 @@ fn cell_group(fs: &FusedSpec, n_out: usize, t: &mut Touches) -> bool {
 fn disjoint(prog: &TapeProgram, slot_off: &[usize], touches: &Touches) -> bool {
     let range = |s: SlotId| {
         let off = slot_off[s as usize];
-        (off != usize::MAX).then(|| (off, off + prog.slots[s as usize].elems().max(1)))
+        (off != usize::MAX).then(|| (off, off + prog.tables.slots[s as usize].elems().max(1)))
     };
     for (i, &(s, cs, ws)) in touches.iter().enumerate() {
         let Some((a0, a1)) = range(s) else { continue };
@@ -583,14 +583,14 @@ pub(super) unsafe fn refill_compact(
         let Instr::SegReduce { table, .. } = &prog.instrs[ch.seg] else {
             unreachable!("a chain's reduction is a SegReduce")
         };
-        let rows = &prog.seg_tables[*table as usize].rows;
+        let rows = &prog.tables.seg_tables[*table as usize].rows;
         let n_pairs = *rows.last().expect("a planned chain has cells") as usize;
         let read = |s: SlotId| unsafe {
             std::slice::from_raw_parts(slab_ptr.add(slot_off[s as usize]), n_pairs)
         };
         let mask = read(plan.mask);
         let w = plan.w.map(read);
-        let pos = &prog.gather_tables[plan.table as usize].pos;
+        let pos = &prog.tables.gather_tables[plan.table as usize].pos;
         let c = scratch.compact[ch.id].get_or_insert_with(|| Compacted {
             rows: Vec::with_capacity(rows.len()),
             pos: Vec::with_capacity(n_pairs),
@@ -662,7 +662,7 @@ fn tuple_arg(o: &Operand, env: &Env, slab_ptr: *mut f64, slot_off: &[usize]) -> 
         Operand::Time => Arg::S(env.t),
         Operand::Slot(s) => {
             let p = unsafe { slab_ptr.add(slot_off[*s as usize]) };
-            if env.prog.slots[*s as usize].scalar {
+            if env.prog.tables.slots[*s as usize].scalar {
                 Arg::S(unsafe { *p })
             } else {
                 Arg::P(p)
@@ -735,7 +735,7 @@ pub(super) unsafe fn run_chain(
     else {
         unreachable!("a chain's reduction is a SegReduce")
     };
-    let rows = &prog.seg_tables[*table as usize].rows[..];
+    let rows = &prog.tables.seg_tables[*table as usize].rows[..];
     scratch.ops.clear();
     for ins in &prog.instrs[ch.start..ch.seg] {
         let at = |o: SlotId| unsafe { slab_ptr.add(slot_off[o as usize]) };
@@ -747,7 +747,7 @@ pub(super) unsafe fn run_chain(
                     SrcRef::Slot(s) => at(*s),
                     SrcRef::State(ix) => super::resolve::state_ptr(env, *ix),
                 },
-                pos: prog.gather_tables[*table as usize].pos.as_ptr(),
+                pos: prog.tables.gather_tables[*table as usize].pos.as_ptr(),
             },
             Instr::Bin { op, a, b, out } => match (rvs(a), rvs(b)) {
                 (Some(a), Some(b)) => Op::Bin {

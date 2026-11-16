@@ -20,6 +20,8 @@ use earthsci_ast::{
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
+use crate::common;
+
 fn suite_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/conformance/ic_at_start")
@@ -126,8 +128,7 @@ fn build(
 }
 
 fn manifest() -> Value {
-    serde_json::from_str(&std::fs::read_to_string(suite_dir().join("manifest.json")).unwrap())
-        .unwrap()
+    common::read_json(suite_dir().join("manifest.json"))
 }
 
 #[test]

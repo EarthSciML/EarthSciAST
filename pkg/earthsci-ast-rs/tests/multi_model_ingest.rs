@@ -1,7 +1,7 @@
 //! A document whose build ingests data may hold more than one model.
 //!
 //! The build pipeline — the route every document with a `kind: data`
-//! parameter (or a caller's `build_providers` / `const_arrays`) takes — picked
+//! parameter (or a caller's `providers` / `const_arrays`) takes — picked
 //! ONE model, defaulted to the only one, and refused a document of several
 //! with none selected: `document holds several models; pass model_name`. So
 //! the day a two-model document ingested anything, every assertion in it
@@ -25,13 +25,7 @@ use earthsci_ast::{
     ProviderGate, esm_problem, load_string, observed_field, run_inline_tests_with_options,
 };
 
-struct MockConst(Vec<f64>);
-
-impl DataProvider for MockConst {
-    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
-        Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
-    }
-}
+use crate::common::MockConst;
 
 /// A model with one data-fed column `p` over `rows` and its sum `total`.
 fn ingesting_model() -> Value {

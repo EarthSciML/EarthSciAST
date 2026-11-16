@@ -26,6 +26,8 @@ use serde_json::Value;
 use earthsci_ast::{AxisSel, DataProvider, ProviderError};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 
+use crate::common;
+
 // ---- Lambert conformal conic (unit sphere), plain-Rust ORACLE --------------
 
 struct Lcc {
@@ -107,13 +109,7 @@ impl DataProvider for MockGated {
         self.calls
             .borrow_mut()
             .push(Call::Selection(selection.to_vec()));
-        let mut arr = self.full.clone();
-        for (i, ax) in selection.iter().enumerate() {
-            if let AxisSel::Indices(idx) = ax {
-                arr = arr.select(ndarray::Axis(i), idx);
-            }
-        }
-        Ok(arr)
+        Ok(common::select_axes(&self.full, selection))
     }
 }
 

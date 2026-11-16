@@ -35,11 +35,6 @@ fn fixture_dir() -> PathBuf {
     common::repo_fixture("conformance/build_once_spatial_field")
 }
 
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
 fn approximately_equal(actual: f64, expected: f64, rel: f64, abs: f64) -> bool {
     let diff = (actual - expected).abs();
     if diff <= abs {
@@ -107,7 +102,7 @@ fn build_once_field_flatten_keeps_observeds_and_single_state() {
 #[test]
 fn build_once_spatial_field_trajectory_matches_golden() {
     let fixture = fixture_dir().join("fixtures/build_once_spatial_ode.esm");
-    let golden = read_json(&fixture_dir().join("golden/build_once_spatial_ode.json"));
+    let golden = common::read_json(fixture_dir().join("golden/build_once_spatial_ode.json"));
 
     let json = fs::read_to_string(&fixture).unwrap_or_else(|e| panic!("read {fixture:?}: {e}"));
     let file = load_string(&json).unwrap_or_else(|e| panic!("load {fixture:?}: {e}"));

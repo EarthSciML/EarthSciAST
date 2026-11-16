@@ -137,7 +137,7 @@ pub(crate) enum Operand {
 }
 
 /// An array source for [`Instr::Gather`] / [`Instr::LoadElem`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum SrcRef {
     Slot(SlotId),
     State(u32),
@@ -149,6 +149,97 @@ impl From<SrcRef> for Operand {
         match src {
             SrcRef::Slot(s) => Operand::Slot(s),
             SrcRef::State(i) => Operand::State(i),
+        }
+    }
+}
+
+/// An operand by identity, for comparing and hashing values: a literal by its
+/// bits, so `-0.0` and `0.0` stay apart and a `NaN` equals itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum OperandKey {
+    Slot(SlotId),
+    Lit(u64),
+    Param(u32),
+    Time,
+    State(u32),
+}
+
+impl Operand {
+    /// This operand's identity.
+    pub(crate) fn key(&self) -> OperandKey {
+        match *self {
+            Operand::Slot(s) => OperandKey::Slot(s),
+            Operand::Lit(v) => OperandKey::Lit(v.to_bits()),
+            Operand::Param(p) => OperandKey::Param(p),
+            Operand::Time => OperandKey::Time,
+            Operand::State(i) => OperandKey::State(i),
+        }
+    }
+}
+
+/// The scalar kernel of an elementwise instruction ([`Instr::as_elementwise`])
+/// or micro-op, without its operands. `Mov` is a [`Instr::Fill`] or an
+/// [`Instr::Copy`]: per element, its operand's value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Kernel {
+    Bin(BinCode),
+    Un(UnCode),
+    Neg,
+    Select,
+    Mov,
+}
+
+/// "This kernel on these operands": the identity of an elementwise value,
+/// over whatever names its operands (`R`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ElemKey<R> {
+    pub kernel: Kernel,
+    pub ops: SmallVec<[R; 3]>,
+}
+
+/// An elementwise instruction taken apart: its kernel, its operands in
+/// order and the slot it defines.
+#[derive(Clone, Debug)]
+pub(crate) struct Elementwise {
+    pub kernel: Kernel,
+    pub ops: SmallVec<[Operand; 3]>,
+    pub out: SlotId,
+}
+
+impl Elementwise {
+    /// Its identity, each operand named by `name`.
+    pub(crate) fn key<R>(&self, name: impl FnMut(&Operand) -> R) -> ElemKey<R> {
+        ElemKey {
+            kernel: self.kernel,
+            ops: self.ops.iter().map(name).collect(),
+        }
+    }
+}
+
+impl Kernel {
+    /// The micro-op applying this kernel to `refs` (the operands in order)
+    /// into register `out`.
+    pub(crate) fn to_micro(self, refs: &[MRef], out: GroupIx) -> MicroOp {
+        match self {
+            Kernel::Bin(op) => MicroOp::Bin {
+                op,
+                a: refs[0],
+                b: refs[1],
+                out,
+            },
+            Kernel::Un(op) => MicroOp::Un {
+                op,
+                a: refs[0],
+                out,
+            },
+            Kernel::Neg => MicroOp::Neg { a: refs[0], out },
+            Kernel::Select => MicroOp::Select {
+                cond: refs[0],
+                a: refs[1],
+                b: refs[2],
+                out,
+            },
+            Kernel::Mov => MicroOp::Mov { a: refs[0], out },
         }
     }
 }
@@ -265,7 +356,7 @@ pub(crate) enum Instr {
     /// a straight row-major store of the literal's elements, origin all-1s.
     ///
     /// One instruction regardless of the literal's size — the payload lives in
-    /// [`TapeProgram::const_data`], not in the instruction stream — and it is
+    /// [`ProgramTables::const_data`], not in the instruction stream — and it is
     /// classified CONST, so a solve stores each literal exactly once. (An
     /// XlaBuilder emitter lowers this to a `ConstantLiteral` of the same
     /// row-major buffer.)
@@ -704,6 +795,163 @@ impl Instr {
                 }
             }
         }
+    }
+
+    /// Visit every slot this instruction READS, mutably and in
+    /// [`Instr::for_each_read`]'s order, so a pass can rename what it reads.
+    /// A read held in a program table (a `dy` write's slot, a fused group's
+    /// inputs, a lane program's per-lane slots, …) is renamed in that table,
+    /// which belongs to this one instruction.
+    ///
+    /// The one exception is a causal self-read's coordinates: they are the
+    /// enclosing [`Instr::Sweep`]'s definitions, shared with it, so they are
+    /// visited as copies and must come back unchanged.
+    pub(crate) fn for_each_read_mut(
+        &mut self,
+        t: &mut SlotTablesMut,
+        mut f: impl FnMut(&mut SlotId),
+    ) {
+        fn op(o: &mut Operand, f: &mut impl FnMut(&mut SlotId)) {
+            if let Operand::Slot(s) = o {
+                f(s);
+            }
+        }
+        fn src(s: &mut SrcRef, f: &mut impl FnMut(&mut SlotId)) {
+            if let SrcRef::Slot(s) = s {
+                f(s);
+            }
+        }
+        let f = &mut f;
+        match self {
+            Instr::Bin { a, b, .. } => {
+                op(a, f);
+                op(b, f);
+            }
+            Instr::Un { a, .. } | Instr::Neg { a, .. } => op(a, f),
+            Instr::Select { cond, a, b, .. } => {
+                op(cond, f);
+                op(a, f);
+                op(b, f);
+            }
+            Instr::Gather { src: s, .. }
+            | Instr::LoadElem { src: s, .. }
+            | Instr::Reduce { src: s, .. }
+            | Instr::Scan { src: s, .. }
+            | Instr::TableGather { src: s, .. }
+            | Instr::Reshape { src: s, .. } => src(s, f),
+            Instr::IndexGather { src: s, idx, .. } => {
+                src(s, f);
+                op(idx, f);
+            }
+            Instr::SegReduce { src: s, mask, .. } => {
+                f(s);
+                if let Some(m) = mask {
+                    f(m);
+                }
+            }
+            Instr::Ramp { .. } | Instr::ConstArray { .. } | Instr::LoadForcing { .. } => {}
+            Instr::Lanes { spec } => {
+                let ls = &mut t.lanes[*spec as usize];
+                let lanes = ls.lanes as usize;
+                for inp in ls.inputs.iter_mut().filter(|i| i.kind == LaneKind::Slot) {
+                    let mut ix: Vec<u32> = (0..lanes).map(|l| inp.ix.at(l)).collect();
+                    let before = ix.clone();
+                    for s in &mut ix {
+                        f(s);
+                    }
+                    if ix != before {
+                        inp.ix = LaneIx::of(ix);
+                    }
+                }
+                for sc in &mut ls.scalars {
+                    op(sc, f);
+                }
+            }
+            Instr::Count { axis, x, .. } => {
+                src(axis, f);
+                op(x, f);
+            }
+            Instr::Fill { v, .. } => op(v, f),
+            Instr::Copy { a, .. } => op(a, f),
+            Instr::Region { base, src: s, .. } => {
+                op(s, f);
+                f(base);
+            }
+            Instr::Assemble { table, .. } => {
+                for (s, _) in &mut t.assemblies[*table as usize].parts {
+                    op(s, f);
+                }
+            }
+            Instr::DataGather { src: s, spec, .. } => {
+                src(s, f);
+                for o in &mut t.data_gathers[*spec as usize].subs {
+                    op(o, f);
+                }
+            }
+            Instr::ScalarRead { src: s, spec, .. } => {
+                src(s, f);
+                let sp = &mut t.scalar_reads[*spec as usize];
+                for o in &mut sp.subs {
+                    op(o, f);
+                }
+                if let ScalarReadKind::SelfRead { sweep } = sp.kind {
+                    for &c in &t.sweeps[sweep as usize].coords {
+                        let mut copy = c;
+                        f(&mut copy);
+                        debug_assert_eq!(copy, c, "a sweep's coordinates are its definitions");
+                    }
+                }
+            }
+            Instr::JmpIfZero { cond, .. } => op(cond, f),
+            Instr::Sweep { spec } => op(&mut t.sweeps[*spec as usize].result, f),
+            Instr::Fault { .. } => {}
+            Instr::FaultScan { spec } => {
+                for c in &mut t.fault_scans[*spec as usize].cands {
+                    for pc in &mut c.path {
+                        op(&mut pc.op, f);
+                    }
+                    if let FaultWhat::ConstOob { dims, .. } = &mut c.what {
+                        for od in dims {
+                            if let OobSub::Data { op: o, .. } = &mut od.sub {
+                                op(o, f);
+                            }
+                        }
+                    }
+                }
+            }
+            Instr::Export { slot, .. } => f(slot),
+            Instr::DyWrite { write } => f(&mut t.dy_writes[*write as usize].slot),
+            Instr::Fused { spec } => {
+                let fs = &mut t.fused[*spec as usize];
+                for inp in &mut fs.inputs {
+                    src(&mut inp.src, f);
+                }
+                for sc in &mut fs.scalars {
+                    op(sc, f);
+                }
+                if let Some(PreReduce { src: s, .. }) = &mut fs.pre {
+                    src(s, f);
+                }
+            }
+        }
+    }
+
+    /// The elementwise family taken apart: `Bin`, `Un`, `Neg`, `Select`,
+    /// `Fill` and `Copy`, each a per-element map of its operands; `None` for
+    /// every other instruction.
+    pub(crate) fn as_elementwise(&self) -> Option<Elementwise> {
+        let (kernel, ops, out) = match *self {
+            Instr::Bin { op, a, b, out } => (Kernel::Bin(op), smallvec::smallvec![a, b], out),
+            Instr::Un { op, a, out } => (Kernel::Un(op), smallvec::smallvec![a], out),
+            Instr::Neg { a, out } => (Kernel::Neg, smallvec::smallvec![a], out),
+            Instr::Select { cond, a, b, out } => {
+                (Kernel::Select, smallvec::smallvec![cond, a, b], out)
+            }
+            Instr::Fill { v, out } => (Kernel::Mov, smallvec::smallvec![v], out),
+            Instr::Copy { a, out } => (Kernel::Mov, smallvec::smallvec![a], out),
+            _ => return None,
+        };
+        Some(Elementwise { kernel, ops, out })
     }
 
     /// A short opcode name for diagnostics.
@@ -2237,6 +2485,76 @@ pub(crate) struct SlotTables<'a> {
     pub fault_scans: &'a [FaultScanSpec],
 }
 
+/// [`SlotTables`], mutably ([`Instr::for_each_read_mut`]).
+pub(crate) struct SlotTablesMut<'a> {
+    pub dy_writes: &'a mut [DyWrite],
+    pub fused: &'a mut [FusedSpec],
+    pub assemblies: &'a mut [AssembleSpec],
+    pub sweeps: &'a mut [SweepSpec],
+    pub scalar_reads: &'a mut [ScalarReadSpec],
+    pub data_gathers: &'a mut [DataGatherSpec],
+    pub lanes: &'a mut [LaneSpec],
+    pub fault_scans: &'a mut [FaultScanSpec],
+}
+
+/// Where every slot of a program is defined and read: the one def/use index
+/// the passes over a [`TapeProgram`] share.
+pub(crate) struct DefUse {
+    /// Per slot: how many instructions define it (a branch join's phi slot
+    /// is defined once per branch).
+    pub n_defs: Vec<u32>,
+    /// Per slot: the first instruction that defines it, or [`DefUse::NONE`].
+    pub first_def: Vec<usize>,
+    /// Per slot: the last instruction that defines it, or [`DefUse::NONE`].
+    pub last_def: Vec<usize>,
+    /// Per slot: the instructions that read it, ascending, each once.
+    pub readers: Vec<SmallVec<[u32; 4]>>,
+}
+
+impl DefUse {
+    /// No instruction.
+    pub(crate) const NONE: usize = usize::MAX;
+
+    /// The index of `prog` as it stands.
+    pub(crate) fn of(prog: &TapeProgram) -> Self {
+        let n_slots = prog.tables.slots.len();
+        let mut du = DefUse {
+            n_defs: vec![0; n_slots],
+            first_def: vec![Self::NONE; n_slots],
+            last_def: vec![Self::NONE; n_slots],
+            readers: vec![SmallVec::new(); n_slots],
+        };
+        let t = prog.slot_tables();
+        for (pc, ins) in prog.instrs.iter().enumerate() {
+            ins.for_each_def(&t, |s| {
+                let s = s as usize;
+                du.n_defs[s] += 1;
+                if du.first_def[s] == Self::NONE {
+                    du.first_def[s] = pc;
+                }
+                du.last_def[s] = pc;
+            });
+            ins.for_each_read(&t, |s| {
+                let r = &mut du.readers[s as usize];
+                if r.last() != Some(&(pc as u32)) {
+                    r.push(pc as u32);
+                }
+            });
+        }
+        du
+    }
+
+    /// The instruction defining `s`, when exactly one does.
+    pub(crate) fn single_def(&self, s: SlotId) -> Option<usize> {
+        (self.n_defs[s as usize] == 1).then_some(self.first_def[s as usize])
+    }
+
+    /// The last instruction reading `s`, if any does.
+    pub(crate) fn last_read(&self, s: SlotId) -> Option<usize> {
+        self.readers[s as usize].last().map(|&r| r as usize)
+    }
+}
+
 /// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
 #[derive(Clone, Debug)]
 pub(crate) struct ForcingRef {
@@ -2796,6 +3114,18 @@ impl Bail {
         }
     }
 
+    /// The more informative of two declines of one construct, `self` the
+    /// earlier form's and `later` the next form's: a coded decline (raised as
+    /// its own user-facing error) over an uncoded one, otherwise the earlier,
+    /// which names the form the construct was first meant for.
+    pub(crate) fn or_later(self, later: Bail) -> Bail {
+        if self.code.is_none() && later.code.is_some() {
+            later
+        } else {
+            self
+        }
+    }
+
     /// The decline as reports spell it: the reason, after its code when it
     /// has one.
     pub(crate) fn message(&self) -> String {
@@ -2835,26 +3165,11 @@ pub(crate) struct SlabLayout {
     pub recycled_elems: usize,
 }
 
-/// The compiled tape program.
-pub(crate) struct TapeProgram {
-    /// All instructions: CONST section, then SEGMENT, then CONTINUOUS.
-    pub instrs: Vec<Instr>,
-    /// Per instruction, the precision its kernels run at (esm-spec §11.3.1):
-    /// the precision in force while it was lowered — its observed rule's
-    /// variable's, or a precision-boundary marker's inside it. Every executor
-    /// arms it around the instruction. EMPTY when every instruction runs at
-    /// the precision the program executes under, which is every document that
-    /// declares no per-variable element type.
-    pub precision: Vec<crate::precision::Precision>,
-    /// Instruction count of the CONST section.
-    pub n_const: u32,
-    /// Instruction count of the SEGMENT section.
-    pub n_segment: u32,
-    /// How many leading CONTINUOUS instructions a call whose exports are
-    /// off runs: the ones a derivative or a fault depends on. The rest
-    /// compute observeds only the observed and output passes read
-    /// (`prune`).
-    pub n_rhs: u32,
+/// The tables a program's instructions index, and the slots they define:
+/// one type for the builder that grows them and the program that holds them,
+/// so a rollback names every table by construction ([`ProgramTables::mark`]).
+#[derive(Default)]
+pub(crate) struct ProgramTables {
     pub slots: Vec<SlotDesc>,
     pub plans: Vec<GatherPlan>,
     pub regions: Vec<RegionSpec>,
@@ -2876,19 +3191,139 @@ pub(crate) struct TapeProgram {
     /// in that rule's evaluation order (see
     /// [`crate::simulate_array::eval::latch_ordered_fault`]).
     pub fault_order: Vec<(u32, SmallVec<[i64; 12]>)>,
-    /// Computed-subscript gathers (`Instr::DataGather` indexes here).
-    pub data_gathers: Vec<DataGatherSpec>,
     /// Conditional fault scans (`Instr::FaultScan` indexes here).
     pub fault_scans: Vec<FaultScanSpec>,
     /// Recurrence sweeps (`Instr::Sweep` indexes here).
     pub sweeps: Vec<SweepSpec>,
     /// Run-time-subscript reads (`Instr::ScalarRead` indexes here).
     pub scalar_reads: Vec<ScalarReadSpec>,
+    /// Computed-subscript gathers (`Instr::DataGather` indexes here).
+    pub data_gathers: Vec<DataGatherSpec>,
+    pub dy_writes: Vec<DyWrite>,
+}
+
+/// How long each of a [`ProgramTables`]'s tables was ([`ProgramTables::mark`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TablesMark([usize; 14]);
+
+impl ProgramTables {
+    /// The tables' lengths now.
+    pub(crate) fn mark(&self) -> TablesMark {
+        let ProgramTables {
+            slots,
+            plans,
+            regions,
+            assemblies,
+            const_data,
+            index_gathers,
+            gather_tables,
+            seg_tables,
+            faults,
+            // Parallel to `faults`.
+            fault_order: _,
+            fault_scans,
+            sweeps,
+            scalar_reads,
+            data_gathers,
+            dy_writes,
+        } = self;
+        TablesMark([
+            slots.len(),
+            plans.len(),
+            regions.len(),
+            assemblies.len(),
+            const_data.len(),
+            index_gathers.len(),
+            gather_tables.len(),
+            seg_tables.len(),
+            faults.len(),
+            fault_scans.len(),
+            sweeps.len(),
+            scalar_reads.len(),
+            data_gathers.len(),
+            dy_writes.len(),
+        ])
+    }
+
+    /// Drop every entry added since `mark` was taken.
+    pub(crate) fn truncate_to(&mut self, mark: TablesMark) {
+        let ProgramTables {
+            slots,
+            plans,
+            regions,
+            assemblies,
+            const_data,
+            index_gathers,
+            gather_tables,
+            seg_tables,
+            faults,
+            fault_order,
+            fault_scans,
+            sweeps,
+            scalar_reads,
+            data_gathers,
+            dy_writes,
+        } = self;
+        let [
+            n_slots,
+            n_plans,
+            n_regions,
+            n_assemblies,
+            n_const_data,
+            n_index_gathers,
+            n_gather_tables,
+            n_seg_tables,
+            n_faults,
+            n_fault_scans,
+            n_sweeps,
+            n_scalar_reads,
+            n_data_gathers,
+            n_dy_writes,
+        ] = mark.0;
+        slots.truncate(n_slots);
+        plans.truncate(n_plans);
+        regions.truncate(n_regions);
+        assemblies.truncate(n_assemblies);
+        const_data.truncate(n_const_data);
+        index_gathers.truncate(n_index_gathers);
+        gather_tables.truncate(n_gather_tables);
+        seg_tables.truncate(n_seg_tables);
+        faults.truncate(n_faults);
+        fault_order.truncate(n_faults);
+        fault_scans.truncate(n_fault_scans);
+        sweeps.truncate(n_sweeps);
+        scalar_reads.truncate(n_scalar_reads);
+        data_gathers.truncate(n_data_gathers);
+        dy_writes.truncate(n_dy_writes);
+    }
+}
+
+/// The compiled tape program.
+pub(crate) struct TapeProgram {
+    /// All instructions: CONST section, then SEGMENT, then CONTINUOUS.
+    pub instrs: Vec<Instr>,
+    /// Per instruction, the precision its kernels run at (esm-spec §11.3.1):
+    /// the precision in force while it was lowered — its observed rule's
+    /// variable's, or a precision-boundary marker's inside it. Every executor
+    /// arms it around the instruction. EMPTY when every instruction runs at
+    /// the precision the program executes under, which is every document that
+    /// declares no per-variable element type.
+    pub precision: Vec<crate::precision::Precision>,
+    /// Instruction count of the CONST section.
+    pub n_const: u32,
+    /// Instruction count of the SEGMENT section.
+    pub n_segment: u32,
+    /// How many leading CONTINUOUS instructions a call whose exports are
+    /// off runs: the ones a derivative or a fault depends on. The rest
+    /// compute observeds only the observed and output passes read
+    /// (`prune`).
+    pub n_rhs: u32,
+    /// The tables instructions index ([`ProgramTables`]).
+    pub tables: ProgramTables,
     pub state_vars: Vec<StateRef>,
     /// Forcing-buffer entries the program loads (`Instr::LoadForcing`
     /// indexes here).
     pub forcings: Vec<ForcingRef>,
-    pub dy_writes: Vec<DyWrite>,
     /// Observed values published back into the runtime observed map: names
     /// the samples/observed-trajectory dependency cone reads, or every
     /// observed when the tape serves the observed passes.
@@ -2918,17 +3353,121 @@ pub(crate) struct TapeProgram {
 
 impl TapeProgram {
     /// The tables [`Instr::for_each_read`] and [`Instr::for_each_def`] read.
-    pub(crate) fn tables(&self) -> SlotTables<'_> {
+    pub(crate) fn slot_tables(&self) -> SlotTables<'_> {
         SlotTables {
-            dy_writes: &self.dy_writes,
+            dy_writes: &self.tables.dy_writes,
             fused: &self.fused,
-            assemblies: &self.assemblies,
-            sweeps: &self.sweeps,
-            scalar_reads: &self.scalar_reads,
-            data_gathers: &self.data_gathers,
+            assemblies: &self.tables.assemblies,
+            sweeps: &self.tables.sweeps,
+            scalar_reads: &self.tables.scalar_reads,
+            data_gathers: &self.tables.data_gathers,
             lanes: &self.lanes,
-            fault_scans: &self.fault_scans,
+            fault_scans: &self.tables.fault_scans,
         }
+    }
+
+    /// The instructions and, mutably beside them, the tables
+    /// [`Instr::for_each_read_mut`] renames through.
+    pub(crate) fn instrs_and_tables_mut(&mut self) -> (&mut [Instr], SlotTablesMut<'_>) {
+        (
+            &mut self.instrs,
+            SlotTablesMut {
+                dy_writes: &mut self.tables.dy_writes,
+                fused: &mut self.fused,
+                assemblies: &mut self.tables.assemblies,
+                sweeps: &mut self.tables.sweeps,
+                scalar_reads: &mut self.tables.scalar_reads,
+                data_gathers: &mut self.tables.data_gathers,
+                lanes: &mut self.lanes,
+                fault_scans: &mut self.tables.fault_scans,
+            },
+        )
+    }
+
+    /// The tables [`Instr::for_each_read_mut`] renames through.
+    pub(crate) fn tables_mut(&mut self) -> SlotTablesMut<'_> {
+        self.instrs_and_tables_mut().1
+    }
+
+    /// Which counted part of the program instruction `pc` lies in: the
+    /// CONST section, the SEGMENT section, the CONTINUOUS instructions a
+    /// derivative call runs ([`TapeProgram::n_rhs`]), or the rest.
+    fn part_of(&self, pc: usize) -> usize {
+        match self.section_of(pc) {
+            Cadence::Const => 0,
+            Cadence::Segment => 1,
+            Cadence::Continuous => {
+                let cont = (self.n_const + self.n_segment) as usize;
+                if pc < cont + self.n_rhs as usize {
+                    2
+                } else {
+                    3
+                }
+            }
+        }
+    }
+
+    /// Replace each instruction range of `edits` with its new instructions,
+    /// keeping `instrs`, `provenance`, the optional `precision` and the
+    /// counters `n_const`, `n_segment` and `n_rhs` in step. The ranges are
+    /// ascending, disjoint and non-empty, and none spans a section or the
+    /// end of the derivative part; a range's new instructions (any number,
+    /// none to delete it) land in the part the range stood in. Each new
+    /// instruction is tagged with the old position whose provenance and
+    /// precision it takes.
+    pub(crate) fn splice(
+        &mut self,
+        edits: impl IntoIterator<Item = (std::ops::Range<usize>, Vec<(Instr, usize)>)>,
+    ) {
+        let old = std::mem::take(&mut self.instrs);
+        let old_prov = std::mem::take(&mut self.provenance);
+        let old_prec = std::mem::take(&mut self.precision);
+        let tagged = !old_prec.is_empty();
+        let n = old.len();
+        let mut instrs: Vec<Instr> = Vec::with_capacity(n);
+        let mut prov: Vec<u32> = Vec::with_capacity(n);
+        let mut prec = Vec::with_capacity(if tagged { n } else { 0 });
+        let mut counts = [0u32; 4];
+        let mut edits = edits.into_iter().peekable();
+        let mut old = old.into_iter().enumerate();
+        while let Some((pc, ins)) = old.next() {
+            // The old counters stay in place until the end.
+            let part = self.part_of(pc);
+            let body = match edits.peek() {
+                Some((range, _)) if range.start == pc => {
+                    let (range, body) = edits.next().expect("peeked");
+                    debug_assert!(
+                        !range.is_empty(),
+                        "an edit replaces at least one instruction"
+                    );
+                    debug_assert_eq!(
+                        self.part_of(range.end - 1),
+                        part,
+                        "an edit stays inside one part of the program"
+                    );
+                    for _ in pc + 1..range.end {
+                        old.next();
+                    }
+                    body
+                }
+                _ => vec![(ins, pc)],
+            };
+            for (ins, from) in body {
+                instrs.push(ins);
+                prov.push(old_prov[from]);
+                if tagged {
+                    prec.push(old_prec[from]);
+                }
+                counts[part] += 1;
+            }
+        }
+        debug_assert!(edits.next().is_none(), "every edit lies inside the program");
+        self.instrs = instrs;
+        self.provenance = prov;
+        self.precision = prec;
+        self.n_const = counts[0];
+        self.n_segment = counts[1];
+        self.n_rhs = counts[2];
     }
 
     /// The `[start, end)` instruction range of a section.
@@ -2947,7 +3486,7 @@ impl TapeProgram {
     /// may skip or repeat. The region's header itself is not inside it.
     pub(crate) fn guarded_positions(&self) -> Vec<bool> {
         let mut guarded = vec![false; self.instrs.len()];
-        let tables = self.tables();
+        let tables = self.slot_tables();
         for (pc, ins) in self.instrs.iter().enumerate() {
             let len = ins.region_len(&tables);
             let end = (pc + 1 + len).min(guarded.len());

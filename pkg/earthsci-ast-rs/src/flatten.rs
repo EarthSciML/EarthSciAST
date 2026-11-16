@@ -294,23 +294,6 @@ pub enum FlattenError {
     )]
     CoupleMultiplicativeNoTendency { target: String },
 
-    /// A [`FlattenedSystem`]'s per-equation list
-    /// ([`FlattenedSystem::equation_contributions`] or
-    /// [`FlattenedSystem::equation_lifted`]) has a different number of entries
-    /// than [`FlattenedSystem::equations`]. The lists are paired by position, so
-    /// one out of step cannot say which equation an entry belongs to.
-    #[error(
-        "contributions_out_of_step: FlattenedSystem.{field} has {entries} entries but the system \
-         has {equations} equations (esm-libraries-spec §4.7.5). Add or remove the entry alongside \
-         its equation, or clear the list to treat every right-hand side as one contribution of \
-         unknown origin."
-    )]
-    ContributionsOutOfStep {
-        field: &'static str,
-        entries: usize,
-        equations: usize,
-    },
-
     /// An `operator_compose` entry merged NOTHING (esm-libraries-spec §4.7.1
     /// step 5).
     ///
@@ -387,21 +370,6 @@ pub enum FlattenError {
         target: String,
     },
 
-    /// A model subsystem that structurally declares itself a [`DataSource`](crate::DataSource) —
-    /// it carries the discriminating `kind` / `source` keys — failed to
-    /// deserialize as one. Distinguished from a nested model or a
-    /// `{ "ref": … }` reference, which are legitimately not loaders and are
-    /// left for the array runtime (esm-spec §4.6; RFC `pure-io-data-loaders`
-    /// §4.3).
-    #[error(
-        "Malformed data-loader subsystem '{subsystem}' in model '{system}': carries loader keys but did not deserialize as a DataSource: {reason}"
-    )]
-    MalformedLoaderSubsystem {
-        system: String,
-        subsystem: String,
-        reason: String,
-    },
-
     /// A SURVIVING `expression_templates` registry body names a variable a
     /// coupling rule rewrote out of the flattened equations (esm-spec §9.6.4,
     /// CONFORMANCE_SPEC §5.35).
@@ -442,7 +410,6 @@ impl FlattenError {
             FlattenError::CoupleMultiplicativeNoTendency { .. } => {
                 "couple_multiplicative_no_tendency"
             }
-            FlattenError::ContributionsOutOfStep { .. } => "contributions_out_of_step",
             FlattenError::OperatorComposeNoMerge { .. } => "operator_compose_no_merge",
             FlattenError::OperatorComposeRequireMatchUnmatched { .. } => {
                 "operator_compose_require_match_unmatched"
@@ -463,7 +430,6 @@ impl FlattenError {
             | FlattenError::VariableMapShapeConflict { .. }
             | FlattenError::Reaction(_)
             | FlattenError::MalformedConnectorEquation { .. }
-            | FlattenError::MalformedLoaderSubsystem { .. }
             | FlattenError::Empty => return None,
         })
     }
@@ -5716,7 +5682,7 @@ fn lookup_rsys_units(rsys: &ReactionSystem, name: &str) -> Option<String> {
 
 /// If `lhs` is `ic(target)` — an `ic` operator over a single variable argument —
 /// return the target state name, else `None`. `pub(crate)` so the single-model
-/// array-compile path ([`crate::simulate_array::ArrayCompiled::from_model`])
+/// array-compile path ([`crate::simulate_array::ArrayCompiled::from_model_with_arrays`])
 /// classifies `ic` equations identically to this flatten pass.
 pub(crate) fn extract_ic_target(lhs: &Expr) -> Option<String> {
     let Expr::Operator(node) = lhs else {

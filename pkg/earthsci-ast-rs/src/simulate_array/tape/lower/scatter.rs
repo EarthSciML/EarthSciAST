@@ -790,15 +790,7 @@ impl TapeBuilder<'_> {
             _ => Some(and_of(keep)),
         };
         self.push_scope();
-        let bx = LBox {
-            syms: idx_names,
-            lo: lo.clone(),
-            shape: shape.clone(),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            visit: SmallVec::new(),
-        };
+        let bx = LBox::new(idx_names, lo.clone(), shape.clone());
         let term = self.lower_filtered(&body, keep.as_ref(), &bx, LV::Lit(identity));
         self.pop_scope();
         self.held_exprs.push(body);
@@ -811,14 +803,7 @@ impl TapeBuilder<'_> {
                 Cadence::Const,
             )));
         };
-        if matches!(&term, LV::State(_)) && self.lv_box(&term).is_some() {
-            bail_tape!("scatter: term reduced to a bare whole-array view");
-        }
-        let term = match self.lv_box(&term) {
-            None => self.emit_fill(&term, shape, lo, Cadence::Const),
-            Some((s, o)) if s == *shape && o == *lo => term,
-            Some(_) => bail_tape!("scatter: term box does not match the output box"),
-        };
+        let term = self.fit_term(term, shape, lo, "scatter: term", "the output box")?;
         let combine_op = self.array_combine_op(reduce, "contracted")?;
         self.emit_bin(combine_op, LV::Lit(identity), term).map(Some)
     }

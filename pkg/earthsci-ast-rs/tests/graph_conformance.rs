@@ -20,7 +20,8 @@ use earthsci_ast::{
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+
+use crate::common;
 
 // --- corpus shapes ----------------------------------------------------------
 
@@ -137,17 +138,8 @@ struct Corpus {
 
 // --- fixtures ---------------------------------------------------------------
 
-/// The repository root — `pkg/earthsci-ast-rs/..`/`..`.
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .expect("repository root")
-}
-
 fn corpus() -> Corpus {
-    let path = repo_root().join("tests/conformance/graph/cases.json");
+    let path = common::repo_root().join("tests/conformance/graph/cases.json");
     let json = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     serde_json::from_str(&json).unwrap_or_else(|e| panic!("parsing {}: {e}", path.display()))
@@ -156,7 +148,7 @@ fn corpus() -> Corpus {
 /// Read a fixture through the package's own loader — the same door every
 /// binding's conformance test goes through.
 fn fixture(input_file: &str) -> earthsci_ast::EsmFile {
-    let path = repo_root().join(input_file);
+    let path = common::repo_root().join(input_file);
     load_path(&path).unwrap_or_else(|e| panic!("loading {}: {e}", path.display()))
 }
 

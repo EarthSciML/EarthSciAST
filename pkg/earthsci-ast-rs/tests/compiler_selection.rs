@@ -38,15 +38,10 @@ use earthsci_ast::{
 };
 use serde_json::{Value, json};
 
-fn repo_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR is pkg/earthsci-ast-rs.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-}
+use crate::common;
 
 fn fixture(rel: &str) -> PathBuf {
-    let p = repo_root().join(rel);
+    let p = common::repo_root().join(rel);
     assert!(p.exists(), "fixture {} is missing", p.display());
     p
 }

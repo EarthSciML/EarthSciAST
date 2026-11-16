@@ -5,14 +5,11 @@
 //! sorted, equal the golden's list exactly.
 
 use earthsci_ast::*;
-use std::path::{Path, PathBuf};
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
+use crate::common;
 
 fn validate_repo_file(rel: &str) -> ValidationResult {
-    let path = repo_root().join(rel);
+    let path = common::repo_root().join(rel);
     let json = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
     validate_text(&json, path.parent())
@@ -39,8 +36,8 @@ fn the_code_is_the_cross_binding_string() {
 
 #[test]
 fn warnings_match_the_golden() {
-    let golden_path =
-        repo_root().join("tests/conformance/dimensionless_literal/golden/expected_warnings.json");
+    let golden_path = common::repo_root()
+        .join("tests/conformance/dimensionless_literal/golden/expected_warnings.json");
     let golden: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&golden_path).expect("read golden"))
             .expect("parse golden");

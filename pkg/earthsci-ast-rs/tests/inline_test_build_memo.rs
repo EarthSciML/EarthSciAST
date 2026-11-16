@@ -10,7 +10,7 @@
 //! A memo keyed on too little is a SILENT WRONG ANSWER, so this file is the
 //! invalidation suite, and it works two ways at once:
 //!
-//! 1. **By count.** The `build_providers` FACTORY is called exactly once per
+//! 1. **By count.** The provider FACTORY is called exactly once per
 //!    BUILD (it used to be once per test, which is precisely what the memo
 //!    changes). A counting factory therefore reports the number of builds
 //!    directly, so a key that fails to invalidate is visible as a count that is

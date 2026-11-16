@@ -32,11 +32,6 @@ fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/override_key_diagnostics")
 }
 
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
 fn opts() -> SolveOptions {
     SolveOptions {
         alg: Alg::Erk,
@@ -50,7 +45,7 @@ fn opts() -> SolveOptions {
 #[test]
 fn override_key_outcomes_match_the_manifest() {
     let dir = category_dir();
-    let manifest = read_json(&dir.join("manifest.json"));
+    let manifest = common::read_json(dir.join("manifest.json"));
     assert_eq!(
         manifest["category"].as_str(),
         Some("override_key_diagnostics")

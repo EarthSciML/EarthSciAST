@@ -202,11 +202,11 @@ fn cli_argument_contract() {
     let a = parse_args(argv("--manifest m.json --output o.json")).expect("defaults");
     assert_eq!(a.manifest, PathBuf::from("m.json"));
     assert_eq!(a.output, PathBuf::from("o.json"));
-    assert_eq!(a.engine, Engine::Interpreter);
+    assert_eq!(a.config, Engine::Interpreter);
 
     let a = parse_args(argv("--manifest m.json --output o.json --engine compiled")).expect("ok");
-    assert_eq!(a.engine, Engine::Compiled);
-    assert_eq!(a.engine.as_str(), "compiled");
+    assert_eq!(a.config, Engine::Compiled);
+    assert_eq!(a.config.as_str(), "compiled");
 
     assert!(parse_args(argv("--manifest m.json")).is_err());
     assert!(parse_args(argv("--output o.json")).is_err());

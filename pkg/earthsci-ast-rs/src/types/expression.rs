@@ -32,8 +32,7 @@ pub enum Expr {
     /// occurrence was a full copy. Sharing the payload lets the load-time interner
     /// ([`crate::intern`]) collapse structurally identical subtrees to one
     /// allocation, and makes `Expr::clone` O(1) for operator trees. `Arc`
-    /// rather than `Rc` so `Expr` stays `Send + Sync` (the feature-gated
-    /// `performance::ParallelEvaluator` iterates `&[Expr]` with rayon); the
+    /// rather than `Rc` so `Expr` stays `Send + Sync`; the
     /// atomic refcount is off every evaluation hot path.
     ///
     /// Mutation goes through [`std::sync::Arc::make_mut`] (see

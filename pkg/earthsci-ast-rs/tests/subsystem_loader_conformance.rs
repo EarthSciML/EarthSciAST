@@ -41,11 +41,6 @@ fn fixture_dir() -> PathBuf {
     common::repo_fixture("conformance/subsystem_loader")
 }
 
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
 fn approximately_equal(actual: f64, expected: f64, rel: f64, abs: f64) -> bool {
     let diff = (actual - expected).abs();
     diff <= abs || diff <= rel * expected.abs().max(actual.abs())
@@ -121,7 +116,7 @@ fn subsystem_loader_flattens_to_expressionless_observeds() {
 fn subsystem_loader_trajectory_matches_golden() {
     let file =
         load_path(fixture_dir().join("fixtures/subsystem_loader_ode.esm")).expect("load fixture");
-    let golden = read_json(&fixture_dir().join("golden/subsystem_loader_ode.json"));
+    let golden = common::read_json(fixture_dir().join("golden/subsystem_loader_ode.json"));
 
     let flat = flatten(&file).expect("flatten");
     let compiled = ArrayCompiled::from_flattened(&flat).expect("compile subsystem-loader system");

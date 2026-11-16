@@ -33,12 +33,11 @@
 //!
 //! ## What is NOT here
 //!
-//! Four seams keep their own top-level module path because `API_SPEC.md` §3/§7
+//! Three seams keep their own top-level module path because `API_SPEC.md` §3/§7
 //! already names them that way, and one more is a build-harness detail:
 //!
-//! - [`crate::intern`], [`crate::performance`], [`crate::simulate_array`] —
-//!   named verbatim in §3 as `earthsci_ast::intern::*`, `::performance::*`,
-//!   `::simulate_array::*`.
+//! - [`crate::intern`], [`crate::simulate_array`] — named verbatim in §3 as
+//!   `earthsci_ast::intern::*`, `::simulate_array::*`.
 //! - [`crate::provider`] — §7's "Runtime I/O" family: the provider/refresh
 //!   protocol a host binds to, whose concrete implementations live in
 //!   EarthSciIO.
@@ -60,17 +59,6 @@
 pub mod aggregate {
     pub use crate::faq::{
         ReduceKind, Semiring, resolve_aggregate_ranges, resolve_expr_ranges_with_extents,
-    };
-}
-
-/// Pure, I/O-free structural and expression analysis helpers. Written for the
-/// `esm` CLI's `analyze` subcommand, which is a separate crate target.
-pub mod analysis {
-    pub use crate::analysis::{
-        collect_unit_types, collect_variables, contains_common_subexpressions,
-        contains_expensive_operations, contains_redundant_operations, count_expression_nodes,
-        count_numerical_values, count_operations, expression_depth, expressions_numerically_equal,
-        find_longest_dependency_chain, find_strongly_connected_components,
     };
 }
 

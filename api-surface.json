@@ -77,7 +77,6 @@
         "extension",
         "inline_tests_adapter",
         "intern",
-        "performance",
         "precision",
         "precision_infer",
         "provider",
@@ -95,17 +94,17 @@
     }
   },
   "counts": {
-    "symbols": 982,
+    "symbols": 977,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 353,
       "typescript": 239,
       "python": 270,
-      "rust": 392,
+      "rust": 387,
       "go": 457
     },
     "by_tier": {
-      "extension": 674,
+      "extension": 669,
       "stable": 308
     }
   },
@@ -1912,14 +1911,6 @@
       "tier": "extension",
       "bindings": {
         "typescript": "CommonSubexpression"
-      }
-    },
-    {
-      "name": "compact_expr",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "CompactExpr"
       }
     },
     {
@@ -5194,14 +5185,6 @@
       }
     },
     {
-      "name": "model_allocator",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "ModelAllocator"
-      }
-    },
-    {
       "name": "model_analysis",
       "kind": "type",
       "tier": "extension",
@@ -5624,14 +5607,6 @@
       }
     },
     {
-      "name": "parallel_evaluator",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "ParallelEvaluator"
-      }
-    },
-    {
       "name": "param_map",
       "kind": "function",
       "tier": "extension",
@@ -5934,14 +5909,6 @@
       "tier": "extension",
       "bindings": {
         "julia": "PASS"
-      }
-    },
-    {
-      "name": "performance_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "rust": "PerformanceError"
       }
     },
     {
@@ -7504,14 +7471,6 @@
         "python": "stoichiometric_matrix",
         "rust": "stoichiometric_matrix",
         "typescript": "stoichiometricMatrix"
-      }
-    },
-    {
-      "name": "stoichiometric_matrix_parallel",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "stoichiometric_matrix_parallel"
       }
     },
     {

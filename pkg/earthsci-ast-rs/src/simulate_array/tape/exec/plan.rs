@@ -96,7 +96,7 @@ pub(in crate::simulate_array::tape) struct CallPlan {
 fn dy_written(prog: &TapeProgram, ins: &Instr, dy_home: &[usize]) -> Option<(usize, usize)> {
     match ins {
         Instr::DyWrite { write } => {
-            let w = &prog.dy_writes[*write as usize];
+            let w = &prog.tables.dy_writes[*write as usize];
             if dy_home[w.slot as usize] != usize::MAX {
                 return None;
             }
@@ -125,7 +125,7 @@ fn fused_out(prog: &TapeProgram, s: SlotId, dy_home: &[usize]) -> (bool, Option<
         Some(&UNSTORED) => (false, None),
         Some(&off) if off != usize::MAX => (
             false,
-            Some((off, off + prog.slots[s as usize].elems().max(1))),
+            Some((off, off + prog.tables.slots[s as usize].elems().max(1))),
         ),
         _ => (true, None),
     }
@@ -150,7 +150,7 @@ fn place(
         return Place::Loop(ch.end - pc);
     }
     let ins = &prog.instrs[pc];
-    let region = ins.region_len(&prog.tables());
+    let region = ins.region_len(&prog.slot_tables());
     if region > 0 {
         return Place::Loop(1 + region);
     }
@@ -160,7 +160,7 @@ fn place(
     let split = match ins {
         Instr::Fused { spec } => super::par::split_ways(&prog.fused[*spec as usize], ways),
         Instr::Assemble { out, .. } => {
-            let d = &prog.slots[*out as usize];
+            let d = &prog.tables.slots[*out as usize];
             if d.shape.is_empty() {
                 1
             } else {
@@ -179,7 +179,7 @@ fn place(
             }
         }
         Instr::Gather { out, .. } | Instr::Reduce { out, .. } => {
-            let d = &prog.slots[*out as usize];
+            let d = &prog.tables.slots[*out as usize];
             if d.scalar {
                 1
             } else {
@@ -190,7 +190,7 @@ fn place(
         // must not choose it again (a test's forced width is the calling
         // thread's alone).
         Instr::Copy { out, .. } => {
-            let d = &prog.slots[*out as usize];
+            let d = &prog.tables.slots[*out as usize];
             if d.scalar {
                 1
             } else {
@@ -198,12 +198,12 @@ fn place(
             }
         }
         Instr::DyWrite { write } => {
-            let w = &prog.dy_writes[*write as usize];
+            let w = &prog.tables.dy_writes[*write as usize];
             if w.scatter.is_some() || w.scalar_flat.is_some() {
                 1
             } else {
                 let sv = &prog.state_vars[w.var as usize];
-                let shape = &prog.slots[w.slot as usize].shape;
+                let shape = &prog.tables.slots[w.slot as usize].shape;
                 let st = dy_strides(prog, &sv.shape);
                 super::par::copy_ways(ways, &st, shape)
             }
@@ -221,7 +221,9 @@ fn place(
 
 /// The estimated cost of one task, for balancing whole tasks.
 fn task_cost(prog: &TapeProgram, ins: &Instr) -> usize {
-    let elems = ins.out().map_or(1, |o| prog.slots[o as usize].elems());
+    let elems = ins
+        .out()
+        .map_or(1, |o| prog.tables.slots[o as usize].elems());
     super::par::instr_work(prog, ins).max(elems).max(1)
 }
 
@@ -239,12 +241,12 @@ impl CallPlan {
         if ways < 2 || range.len() > MAX_PLANNED {
             return None;
         }
-        let tables = prog.tables();
+        let tables = prog.slot_tables();
         let n_store = prog.slab.storages.len();
         // Slots defined exactly once, inside the range: the ones the plan
         // may move to storage of their own.
-        let mut defs = vec![0u32; prog.slots.len()];
-        let mut def_in = vec![false; prog.slots.len()];
+        let mut defs = vec![0u32; prog.tables.slots.len()];
+        let mut def_in = vec![false; prog.tables.slots.len()];
         for (pc, ins) in prog.instrs.iter().enumerate() {
             ins.for_each_def(&tables, |s| {
                 defs[s as usize] += 1;
@@ -254,7 +256,7 @@ impl CallPlan {
         let movable = |s: SlotId| defs[s as usize] == 1 && def_in[s as usize];
         // Per slot, the storage the plan gives it (`u32::MAX`: the
         // program's); a moved slot's storage is numbered past the program's.
-        let mut moved = vec![u32::MAX; prog.slots.len()];
+        let mut moved = vec![u32::MAX; prog.tables.slots.len()];
         let mut slot_off = base_off.to_vec();
         let mut slab_len = prog.slab.total_elems;
         let budget = prog.slab.total_elems;
@@ -262,7 +264,7 @@ impl CallPlan {
         let store_of = |moved: &[u32], s: SlotId| -> Option<u32> {
             match moved[s as usize] {
                 u32::MAX => {
-                    let st = prog.slots[s as usize].storage;
+                    let st = prog.tables.slots[s as usize].storage;
                     (st != u32::MAX).then_some(st)
                 }
                 m => Some(m),
@@ -351,7 +353,7 @@ impl CallPlan {
             let ins = &prog.instrs[pc];
             // A `DyWrite` whose group stored the slot into `dy` does nothing.
             if matches!(ins, Instr::DyWrite { write }
-                if dy_home[prog.dy_writes[*write as usize].slot as usize] != usize::MAX)
+                if dy_home[prog.tables.dy_writes[*write as usize].slot as usize] != usize::MAX)
             {
                 pc += 1;
                 continue;
@@ -397,7 +399,7 @@ impl CallPlan {
                     continue;
                 };
                 let wait = last_write[b as usize].max(last_read[b as usize]);
-                let elems = prog.slots[s as usize].elems().max(1);
+                let elems = prog.tables.slots[s as usize].elems().max(1);
                 if wait > phase
                     && movable(s)
                     && elems <= MOVE_MAX_ELEMS

@@ -34,29 +34,11 @@ fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/pde_inline_observed_indexed_lhs")
 }
 
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
 #[test]
 fn indexed_lhs_array_observed_runs() {
     let dir = category_dir();
-    let manifest = read_json(&dir.join("manifest.json"));
-    assert_eq!(
-        manifest["category"].as_str(),
-        Some("pde_inline_observed_indexed_lhs")
-    );
-    assert_eq!(manifest["reference_binding"].as_str(), Some("julia"));
-    let required: Vec<&str> = manifest["bindings_required"]
-        .as_array()
-        .expect("bindings_required")
-        .iter()
-        .map(|v| v.as_str().expect("binding name"))
-        .collect();
-    for b in ["julia", "python", "rust"] {
-        assert!(required.contains(&b), "manifest must require {b}");
-    }
+    let manifest = common::read_json(dir.join("manifest.json"));
+    common::assert_tier_header(&manifest, "pde_inline_observed_indexed_lhs");
 
     let rs = &manifest["integrators"]["rust"];
     assert_eq!(rs["solver"].as_str(), Some("Erk"));
@@ -75,7 +57,7 @@ fn indexed_lhs_array_observed_runs() {
 
     for fx in manifest["fixtures"].as_array().expect("fixtures") {
         let esm_path = dir.join(fx["path"].as_str().expect("path"));
-        let golden = read_json(&dir.join(fx["golden"].as_str().expect("golden")));
+        let golden = common::read_json(dir.join(fx["golden"].as_str().expect("golden")));
         assert_eq!(golden["reference_binding"].as_str(), Some("julia"));
 
         let text =
@@ -140,7 +122,7 @@ fn indexed_lhs_array_observed_runs() {
 #[test]
 fn bare_index_definition_outside_the_runnable_form_is_refused() {
     let dir = category_dir();
-    let manifest = read_json(&dir.join("manifest.json"));
+    let manifest = common::read_json(dir.join("manifest.json"));
     let rs = &manifest["integrators"]["rust"];
     let opts = SolveOptions {
         alg: Alg::Erk,

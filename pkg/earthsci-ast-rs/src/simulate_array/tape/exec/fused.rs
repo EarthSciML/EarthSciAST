@@ -919,8 +919,8 @@ pub(super) struct IndexTable {
 /// none). Sized here, once; [`refill_index_tables`] only overwrites.
 pub(super) fn index_tables_for(prog: &TapeProgram) -> Vec<Vec<Option<IndexTable>>> {
     let prime_end = (prog.n_const + prog.n_segment) as usize;
-    let tables = prog.tables();
-    let mut primed: Vec<bool> = vec![false; prog.slots.len()];
+    let tables = prog.slot_tables();
+    let mut primed: Vec<bool> = vec![false; prog.tables.slots.len()];
     for ins in &prog.instrs[..prime_end] {
         ins.for_each_def(&tables, |s| primed[s as usize] = true);
     }
@@ -1156,7 +1156,7 @@ pub(super) unsafe fn resolve_fused<'a>(
     for inp in &fs.inputs {
         let p: *const f64 = match &inp.src {
             SrcRef::Slot(s) => {
-                debug_assert_eq!(&env.prog.slots[*s as usize].shape, &inp.src_shape);
+                debug_assert_eq!(&env.prog.tables.slots[*s as usize].shape, &inp.src_shape);
                 unsafe { slab_ptr.add(slot_off[*s as usize]) as *const f64 }
             }
             SrcRef::State(ix) => {

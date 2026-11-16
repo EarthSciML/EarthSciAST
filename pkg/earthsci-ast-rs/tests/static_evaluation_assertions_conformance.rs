@@ -22,7 +22,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Alg, SolveOptions, load_string};
+use earthsci_ast::load_string;
 use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::fs;
 use std::path::PathBuf;
@@ -37,52 +37,18 @@ fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/static_evaluation_assertions")
 }
 
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
-fn manifest_opts(manifest: &serde_json::Value) -> SolveOptions {
-    let rs = &manifest["integrators"]["rust"];
-    assert_eq!(rs["solver"].as_str(), Some("Erk"));
-    SolveOptions {
-        alg: Alg::Erk,
-        reltol: Some(rs["reltol"].as_f64().expect("reltol")),
-        abstol: Some(rs["abstol"].as_f64().expect("abstol")),
-        ..Default::default()
-    }
-}
-
 #[test]
 fn static_evaluation_assertions_match_golden() {
     let dir = category_dir();
-    let manifest = read_json(&dir.join("manifest.json"));
-    assert_eq!(
-        manifest["category"].as_str(),
-        Some("static_evaluation_assertions")
-    );
-    assert_eq!(manifest["reference_binding"].as_str(), Some("julia"));
-    let required: Vec<&str> = manifest["bindings_required"]
-        .as_array()
-        .expect("bindings_required")
-        .iter()
-        .map(|v| v.as_str().expect("binding name"))
-        .collect();
-    for b in ["julia", "python", "rust"] {
-        assert!(required.contains(&b), "manifest must require {b}");
-    }
+    let manifest = common::read_json(dir.join("manifest.json"));
+    common::assert_tier_header(&manifest, "static_evaluation_assertions");
 
-    let rtol = manifest["tolerances"]["assertion_rtol"]
-        .as_f64()
-        .expect("rtol");
-    let atol = manifest["tolerances"]["assertion_atol"]
-        .as_f64()
-        .expect("atol");
-    let opts = manifest_opts(&manifest);
+    let (rtol, atol) = common::assertion_tolerances(&manifest);
+    let opts = common::erk_solve_options(&manifest);
 
     for fx in manifest["fixtures"].as_array().expect("fixtures") {
         let esm_path = dir.join(fx["path"].as_str().expect("path"));
-        let golden = read_json(&dir.join(fx["golden"].as_str().expect("golden")));
+        let golden = common::read_json(dir.join(fx["golden"].as_str().expect("golden")));
         assert_eq!(golden["reference_binding"].as_str(), Some("julia"));
 
         let text =

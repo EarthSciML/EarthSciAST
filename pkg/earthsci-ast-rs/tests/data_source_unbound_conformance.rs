@@ -19,17 +19,17 @@
 use earthsci_ast::{Compiler, ProblemInput, ProblemOptions, SolveOptions, esm_problem, load_path};
 use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::common;
 
 fn category_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/data_source_unbound")
+    common::category_dir("data_source_unbound")
 }
 
 /// A missing manifest is a hard failure, not a skip.
 fn manifest() -> Value {
-    let raw = std::fs::read_to_string(category_dir().join("manifest.json"))
-        .expect("the data_source_unbound manifest is readable");
-    serde_json::from_str(&raw).expect("the data_source_unbound manifest parses")
+    common::read_json(category_dir().join("manifest.json"))
 }
 
 /// The codes a case may be refused with. Every case names `data_source_unbound`;

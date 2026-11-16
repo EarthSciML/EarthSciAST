@@ -10,16 +10,16 @@ use earthsci_ast::{
 };
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::common;
 
 fn category_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/strip_and_expose")
+    common::category_dir("strip_and_expose")
 }
 
 fn manifest() -> Value {
-    let raw = std::fs::read_to_string(category_dir().join("manifest.json"))
-        .expect("the strip_and_expose manifest is readable");
-    serde_json::from_str(&raw).expect("the strip_and_expose manifest parses")
+    common::read_json(category_dir().join("manifest.json"))
 }
 
 fn classes(v: &Value) -> StripSet {

@@ -15,30 +15,24 @@
 //! the Python one `pkg/earthsci-ast-py/tests/test_unit_registry_conformance.py`
 //! — same golden.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use earthsci_ast::parse_unit;
 use serde_json::Value;
 
+use crate::common;
+
 fn tests_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
 }
 
-fn read_json(path: &Path) -> Value {
-    serde_json::from_str(
-        &fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display())),
-    )
-    .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
-}
-
 fn golden() -> Value {
     let tests = tests_dir();
-    let manifest = read_json(&tests.join("conformance/unit_registry/manifest.json"));
+    let manifest = common::read_json(tests.join("conformance/unit_registry/manifest.json"));
     let rel = manifest["golden"]
         .as_str()
         .expect("manifest names a golden");
-    read_json(&tests.join(rel))
+    common::read_json(tests.join(rel))
 }
 
 fn entries<'a>(g: &'a Value, key: &str) -> &'a Vec<Value> {

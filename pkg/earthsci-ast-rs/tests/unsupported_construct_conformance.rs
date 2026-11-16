@@ -15,17 +15,17 @@
 use earthsci_ast::load_path;
 use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::common;
 
 fn category_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/unsupported_construct")
+    common::category_dir("unsupported_construct")
 }
 
 /// A missing manifest is a hard failure, not a skip.
 fn manifest() -> Value {
-    let raw = std::fs::read_to_string(category_dir().join("manifest.json"))
-        .expect("the unsupported_construct manifest is readable");
-    serde_json::from_str(&raw).expect("the unsupported_construct manifest parses")
+    common::read_json(category_dir().join("manifest.json"))
 }
 
 /// Which of this binding's evaluators a refusal NAMES.

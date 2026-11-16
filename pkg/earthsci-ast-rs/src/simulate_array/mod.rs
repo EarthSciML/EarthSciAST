@@ -793,7 +793,7 @@ pub struct ArrayCompiled {
     /// [`driver::FieldIcMemo`] checks.
     forcing_generation: std::cell::Cell<u64>,
     /// Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1),
-    /// classified out of the equation list by [`Self::from_model`] (single-model
+    /// classified out of the equation list by [`Self::from_model_with_arrays`] (single-model
     /// path) or carried from [`crate::flatten::FlattenedSystem::field_ics`]
     /// (coupled path). Each entry is `(target_state, rhs)`: at `u0` build time
     /// [`Self::simulate`] resolves the target's grid cells and folds the initial

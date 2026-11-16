@@ -1639,6 +1639,46 @@ remove. Your code stops compiling (Rust), or raises `UndefVarError` /
 | Julia, Python, Rust | the inline-test runner | Now runs **`reaction_systems`** as well as `models`. Both carry `tests` (esm-spec §6.6); only `models` were run before. | More result rows, from components that previously reported none. A gate counting rows sees the count rise — that is the bug being fixed, not a regression. |
 | Julia, Python, Rust | the inline-test runner | A **batch** input (an iterable or a directory) records an unreadable document as one ERROR row instead of raising. A single-document call still raises. | A corpus run no longer aborts on one bad file. |
 
+## Unreleased
+
+### Rust — `earthsci-ast`
+
+The `performance` module is deleted with its five Cargo features. No
+production path used it: it carried its own expression evaluator, separate from
+the one every build runs, with different semantics. The optional dependencies
+only it used (`wide`, `bumpalo`, `simd-json`, `bytemuck`) and the empty `cli`
+feature go with it.
+
+| Before | After | Kind |
+|---|---|---|
+| `earthsci_ast::performance::*` (`CompactExpr`, `PerformanceError`, `ParallelEvaluator`, `ModelAllocator`, `fast_parse`, `simd_math`) | — | `deleted` |
+| `stoichiometric_matrix_parallel` (feature `parallel`) | `stoichiometric_matrix` | `deleted` |
+| wasm export `create_compact_expression` | — | `deleted` |
+| features `parallel`, `simd`, `zero_copy`, `custom_alloc`, `performance`, `cli` | — (the tape executor's threading needs no feature) | `deleted` |
+
+### The `esm` command-line tool
+
+Eight subcommands that printed fixed thresholds and canned recommendations
+rather than anything the format defines are gone, with the library's
+`extension::analysis` helpers that existed only to serve them.
+
+| Before | After | Kind |
+|---|---|---|
+| `esm analyze`, `esm coupling-analysis`, `esm performance-profile`, `esm optimize` | `esm info`, `esm graph`, `esm units` for what the document declares | `deleted` |
+| `esm compare` | `esm diff` | `deleted` |
+| `esm init` | — | `deleted` |
+| `esm benchmark` | — | `deleted` |
+| `esm schema-check` | `esm validate` | `deleted` |
+| `earthsci_ast::extension::analysis::*` | — | `deleted` |
+
+### Never-constructed error variants and `ArrayCompiled::from_model`
+
+| Before | After | Kind |
+|---|---|---|
+| `EsmError::ExpressionEvaluation`, `EsmError::UnitValidation`, `EsmError::Other` | — (nothing returned them) | `deleted` |
+| `FlattenError::ContributionsOutOfStep`, `FlattenError::MalformedLoaderSubsystem` | — (nothing returned them) | `deleted` |
+| `simulate_array::ArrayCompiled::from_model(model, index_sets)` | `ArrayCompiled::from_model_with_arrays(model, index_sets, None)` | `deleted` |
+
 ---
 
 ## The plain-text expression surface is retired

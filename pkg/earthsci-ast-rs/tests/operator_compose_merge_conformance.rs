@@ -30,18 +30,18 @@ use earthsci_ast::{
     FlattenError, FlattenedSystem, capture_coupling_diagnostics, flatten, load_path,
 };
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::common;
 
 fn category_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/operator_compose_merge")
+    common::category_dir("operator_compose_merge")
 }
 
 /// A missing manifest is a hard failure, not a skip: the manifest IS the
 /// contract this file exists to enforce.
 fn manifest() -> Value {
-    let raw = std::fs::read_to_string(category_dir().join("manifest.json"))
-        .expect("the operator_compose_merge manifest is readable");
-    serde_json::from_str(&raw).expect("the operator_compose_merge manifest parses")
+    common::read_json(category_dir().join("manifest.json"))
 }
 
 fn cases(m: &Value) -> &Vec<Value> {

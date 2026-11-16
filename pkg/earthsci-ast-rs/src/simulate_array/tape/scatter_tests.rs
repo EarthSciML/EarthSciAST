@@ -177,5 +177,5 @@ fn a_ragged_range_under_a_free_index_scatters_per_free_cell() {
     assert_eq!(opcount(&prog, "SegReduce"), 1);
     // The admitted points only, Σ_a min(|row a|, 3) = 3 + 1 + 3 + 2, not the
     // 3 · (3 + 1 + 4 + 2) pairs the dense tuple list masks at run time.
-    assert_eq!(prog.seg_tables[0].rows.last(), Some(&9));
+    assert_eq!(prog.tables.seg_tables[0].rows.last(), Some(&9));
 }

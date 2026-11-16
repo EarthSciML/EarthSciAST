@@ -1,5 +1,5 @@
 //! The opt-in EarthSciIO bridge (`--features esio`) really serves an ESS
-//! `CadenceProvider` from a real `earthsciio::Provider`.
+//! `DataProvider` from a real `earthsciio::Provider`.
 //!
 //! Everything here runs against a local Zarr **v2** store over the `file`
 //! transport — no network, no fixture corpus. Two properties matter and are
