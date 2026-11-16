@@ -70,9 +70,7 @@ fn bare_index_definition_outside_the_runnable_form_is_refused() {
                 solve: opts.clone(),
                 base_dir: Some(dir.clone()),
                 ..Default::default()
-            },
-            None,
-        );
+            });
         assert_eq!(
             results.len() as u64,
             rf["assertion_count"].as_u64().expect("assertion_count"),

@@ -1756,6 +1756,10 @@ time derivative. A flattened name with a dot prints as a quoted name joined by
 | a coded refusal raised inside the build pipeline as `CompileError::InterpreterBuildError` text | the typed error itself (`SimulateError::Compile(CompileError::ValueInventionRefused { .. })`, …), so its code survives | `changed` |
 | — | `code()` on `CompileError`, `FlattenError` and `SimulateError`; `StructuralErrorCode::as_str()` | `added` |
 | a `faq`-valued `initialization_equations` entry seeded the initial state only for a document of one model | `FlattenedSystem::initialization_faqs` carries them, namespaced, from every component and subsystem, and every build seeds them; a struct literal of `FlattenedSystem` names the new field | `added` |
+| `run_inline_tests_with_options(file, opts, build_providers)` | `run_inline_tests_with_options(file, opts)`; the factory goes in `InlineTestOptions::providers` (an `Arc<BuildProviderFactory<'static>>`) | `changed` |
+| `BuildProviderFactory`, exported only with the `solve` feature | exported in every build (it is `bind_data_sources`'s factory type) | `changed` |
+| the `esm` tool's own data-source binding (sample the sources that measure their extent, re-load with those metaparameters closed, build the providers) | `bind_data_sources(file, cache_root, reload) -> Result<BoundDocument, ProviderError>`, which a build without the `esio` feature answers with a refusal naming the sources | `added` |
+| the build refusals `E_TREEWALK_JOIN_OVERLAP`, `unbound_index_symbol`, `indexed_definition_unsupported_form`, `recurrence_unsupported_form` (and the other recurrence refusals), `equation_defines_parameter`, and a coded load refusal of the authored document, as `CompileError::InterpreterBuildError` with the code only in the text | `CompileError::CodedBuildError { code, details }`, rendering the same text; `code()` returns the code | `changed` |
 
 `compile_array`, the `ArrayCompiled::from_*` constructors and the `debug_*`
 right-hand-side seams build the `native` compiler, the default of

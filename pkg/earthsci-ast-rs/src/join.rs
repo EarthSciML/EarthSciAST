@@ -81,6 +81,10 @@ use crate::compile_error::CompileError;
 use crate::faq::is_faq_op;
 use crate::types::{Expr, ExpressionNode, IndexSet, JoinClause, Model, RangeSpec, RegionBound};
 
+/// The code an overlap join's envelope refusal carries (Julia's
+/// `E_TREEWALK_JOIN_OVERLAP`; CONFORMANCE_SPEC §5.5.6).
+pub(crate) const JOIN_OVERLAP: &str = "E_TREEWALK_JOIN_OVERLAP";
+
 /// One component of a join / group-by key. Exact-equality types only (§5.3):
 /// an integer ID or a categorical member. **Floats are forbidden in keys**
 /// (§5.7 rule 1) — they never reach this enum; [`JoinKey::from_json`] rejects
@@ -940,7 +944,7 @@ pub fn resolve_overlap_join_syms(model: &mut Model) {
 /// §5.5.6: a list whose length is not 1, 2 or 4, or a factor whose declared
 /// rank does not match its list's ([`crate::broad_phase::overlap_env_rank`]).
 /// Every factor of both sides is checked, not only the first. Raised under
-/// Julia's code, `E_TREEWALK_JOIN_OVERLAP` (its `_overlap_env_sym`).
+/// Julia's code, [`JOIN_OVERLAP`] (its `_overlap_env_sym`).
 ///
 /// A factor with no declared shape is not checked here: its rank is not known
 /// until it is evaluated, and the resolver leaves its gate undriven.
@@ -962,12 +966,15 @@ pub fn check_overlap_factor_ranks(
     {
         for (side, env) in [("src_env", &ov.src_env), ("tgt_env", &ov.tgt_env)] {
             let Some(rank) = crate::broad_phase::overlap_env_rank(env.len()) else {
-                return Err(CompileError::build_err(format!(
-                    "E_TREEWALK_JOIN_OVERLAP: overlap join `{side}` must name 1 (a [pos, verts, \
+                return Err(CompileError::coded_build_err(
+                    JOIN_OVERLAP,
+                    format!(
+                        "E_TREEWALK_JOIN_OVERLAP: overlap join `{side}` must name 1 (a [pos, verts, \
                      coord] ring stack), 2 (point [x, y]) or 4 (rect [xmin, ymin, xmax, ymax]) \
                      factors; got {}: {env:?} (CONFORMANCE_SPEC §5.5.6)",
-                    env.len()
-                )));
+                        env.len()
+                    ),
+                ));
             };
             for name in env {
                 if let Some(shape) = var_shapes.get(name)
@@ -978,12 +985,15 @@ pub fn check_overlap_factor_ranks(
                     } else {
                         "a [pos, verts, coord] 3-D ring stack"
                     };
-                    return Err(CompileError::build_err(format!(
-                        "E_TREEWALK_JOIN_OVERLAP: overlap join `{side}` factor `{name}` must be \
+                    return Err(CompileError::coded_build_err(
+                        JOIN_OVERLAP,
+                        format!(
+                            "E_TREEWALK_JOIN_OVERLAP: overlap join `{side}` factor `{name}` must be \
                          {want} for a {}-name list, whose first shape index set names the join \
                          range; its declared shape is {shape:?} (CONFORMANCE_SPEC §5.5.6)",
-                        env.len()
-                    )));
+                            env.len()
+                        ),
+                    ));
                 }
             }
         }
@@ -2082,9 +2092,10 @@ mod tests {
         ]);
         let rank_error = |src: &[&str], tgt: &[&str]| -> String {
             let e = overlap_gated_expr(src, tgt);
-            check_overlap_factor_ranks(&e, &shapes)
-                .expect_err("a wrong-rank factor must be refused")
-                .to_string()
+            let err = check_overlap_factor_ranks(&e, &shapes)
+                .expect_err("a wrong-rank factor must be refused");
+            assert_eq!(err.code(), Some(JOIN_OVERLAP));
+            err.to_string()
         };
 
         let mut e = overlap_gated_expr(&["col"], &["ring", "ring2"]);

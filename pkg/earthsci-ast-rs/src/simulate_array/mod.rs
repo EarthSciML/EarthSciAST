@@ -65,7 +65,6 @@ mod compile;
 mod driver;
 #[cfg(feature = "solve")]
 pub(crate) use driver::IcStart;
-pub(crate) use driver::ParameterKeyResolver;
 mod eval;
 mod gate_walk;
 mod layout;

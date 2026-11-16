@@ -77,26 +77,7 @@ use serde::Serialize;
 use crate::problem::{EsmProblem, ProblemOptions, esm_problem, solve};
 use crate::simulate::{Solution, SolveOptions};
 
-/// The build-time data providers one inline-test BUILD consumes, produced on
-/// demand.
-///
-/// A factory rather than a set because [`crate::problem::ProblemOptions`] takes
-/// its `providers` BY VALUE: one shared map would be moved out by the
-/// first build and missing from the second. Called once per BUILD, so a
-/// document whose tests share a [`BuildKey`] reads its `data_sources` once
-/// rather than once per test. `Err` carries a message naming what could not be
-/// constructed; it is recorded as an assertion ERROR, never ignored.
-///
-/// See [`InlineTestOptions::providers`].
-#[cfg(not(target_arch = "wasm32"))]
-pub type BuildProviderFactory<'a> =
-    dyn Fn() -> Result<Vec<(String, Box<dyn crate::provider::DataProvider>)>, String> + 'a;
-
-/// The wasm32 build has no build pipeline (`crate::prepare` is native-only), so
-/// there is no provider contract to satisfy: a factory passed here is refused,
-/// and every assertion of a test that needs one is recorded as an ERROR.
-#[cfg(target_arch = "wasm32")]
-pub type BuildProviderFactory<'a> = dyn Fn() -> Result<(), String> + 'a;
+use crate::provider::BuildProviderFactory;
 
 /// Qualify a test's override keys with the component that OWNS the test.
 ///
@@ -2427,9 +2408,9 @@ fn build_for_test(
     t: &crate::types::ModelTest,
     retain_data_fields: Vec<String>,
     topts: &InlineTestOptions,
-    build_providers: Option<&BuildProviderFactory<'_>>,
 ) -> BuiltModel {
     let base_dir = topts.base_dir.as_deref();
+    let build_providers = topts.providers.as_deref();
     // esm-spec §9.7.10 form C: a test that injects a discretization runs
     // against an EPHEMERAL instance of this component with the test's
     // imports appended to its scope and its rewrite-targets lowered; the
@@ -2763,7 +2744,6 @@ fn run_component_tests(
     tolerance: Option<&Tolerance>,
     index_sets: &HashMap<String, IndexSet>,
     topts: &InlineTestOptions,
-    build_providers: Option<&BuildProviderFactory<'_>>,
     results: &mut Vec<AssertionResult>,
 ) {
     let opts = &topts.solve;
@@ -2794,15 +2774,7 @@ fn run_component_tests(
                 .collect();
             retain.sort();
             retain.dedup();
-            memo = Some(build_for_test(
-                key,
-                file,
-                model_name,
-                t,
-                retain,
-                topts,
-                build_providers,
-            ));
+            memo = Some(build_for_test(key, file, model_name, t, retain, topts));
         }
         let cached = memo.as_ref().expect("just built");
         let run_file: &EsmFile = cached.ephemeral.as_ref().unwrap_or(file);
@@ -3077,7 +3049,6 @@ pub fn run_inline_tests(
             solve: opts.clone(),
             ..Default::default()
         },
-        None,
     )
 }
 
@@ -3090,22 +3061,14 @@ pub fn run_inline_tests(
 /// `opts.base_dir` is used as given: unlike [`run_inline_tests_paths`], there
 /// is no path here to fall back to, so a caller with `from_file` references
 /// must set it.
-///
-/// `build_providers` is the provider factory passed beside the options rather
-/// than in them; it wins over [`InlineTestOptions::providers`] when both are
-/// given. It exists for callers not yet moved to the options field and goes
-/// once they are.
 pub fn run_inline_tests_with_options(
     file: &EsmFile,
     opts: &InlineTestOptions,
-    build_providers: Option<&BuildProviderFactory<'_>>,
 ) -> Vec<AssertionResult> {
-    let providers = build_providers.or(opts.providers.as_deref());
-    run_inline_tests_seeded(file, None, opts, providers)
+    run_inline_tests_seeded(file, None, opts)
 }
 
-/// Run the inline tests of `file` under `opts`, with `build_providers` the
-/// provider factory in effect.
+/// Run the inline tests of `file` under `opts`.
 ///
 /// Both kinds of test-bearing component run here: `models` first, then
 /// `reaction_systems`, each in sorted name order for deterministic output. The
@@ -3119,7 +3082,6 @@ fn run_inline_tests_seeded(
     file: &EsmFile,
     source: Option<&Path>,
     opts: &InlineTestOptions,
-    build_providers: Option<&BuildProviderFactory<'_>>,
 ) -> Vec<AssertionResult> {
     let model_name = opts.model_name.as_deref();
     let mut results = Vec::new();
@@ -3175,7 +3137,6 @@ fn run_inline_tests_seeded(
             tolerance,
             &index_sets,
             opts,
-            build_providers,
             &mut results,
         );
     }
@@ -3369,12 +3330,7 @@ pub fn run_inline_tests_paths(
                 .or_else(|| path.parent().map(Path::to_path_buf)),
             ..opts
         };
-        results.extend(run_inline_tests_seeded(
-            &file,
-            Some(&path),
-            &opts,
-            opts.providers.as_deref(),
-        ));
+        results.extend(run_inline_tests_seeded(&file, Some(&path), &opts));
     }
     results
 }
@@ -4792,7 +4748,6 @@ mod tests {
                 base_dir: Some(dir.path().to_path_buf()),
                 ..Default::default()
             },
-            None,
         );
         assert_eq!(results.len(), 2);
         // Identical evaluation machinery seeded the ic, so the diff is 0.
@@ -4827,7 +4782,6 @@ mod tests {
                 base_dir: Some(dir.path().to_path_buf()),
                 ..Default::default()
             },
-            None,
         )[0];
         assert!(!r.passed);
         assert!(
@@ -4860,7 +4814,6 @@ mod tests {
                 base_dir: Some(dir.path().to_path_buf()),
                 ..Default::default()
             },
-            None,
         )[0];
         assert!(!r.passed);
         assert!(
@@ -4889,7 +4842,6 @@ mod tests {
                 base_dir: Some(dir.path().to_path_buf()),
                 ..Default::default()
             },
-            None,
         )[0];
         assert!(!r.passed);
         assert!(
@@ -4915,7 +4867,6 @@ mod tests {
                 base_dir: Some(dir.path().to_path_buf()),
                 ..Default::default()
             },
-            None,
         )[0];
         assert!(!r.passed);
         assert!(
@@ -4944,7 +4895,6 @@ mod tests {
                 base_dir: fixture.parent().map(|p| p.to_path_buf()),
                 ..Default::default()
             },
-            None,
         );
         assert_eq!(results.len(), 7);
         for r in &results {
@@ -5372,7 +5322,6 @@ mod tests {
                 compiler: Some(crate::problem::Compiler::Interpreter),
                 ..Default::default()
             },
-            None,
         );
         let builds = BUILD_PIPELINE_BUILDS.with(std::cell::Cell::get) - before;
         // Non-vacuity: every test must actually have reached the dead end and
@@ -5448,7 +5397,6 @@ mod tests {
                 compiler: Some(crate::problem::Compiler::Native),
                 ..Default::default()
             },
-            None,
         );
         let builds = BUILD_PIPELINE_BUILDS.with(std::cell::Cell::get) - before;
         assert_eq!(results.len(), 2, "{results:?}");
@@ -5780,7 +5728,6 @@ mod tests {
                 providers: Some(data_fed_element_providers()),
                 ..Default::default()
             },
-            None,
         );
         let summary = summarize(&results);
         assert_eq!(results.len(), 1, "{summary:?}");

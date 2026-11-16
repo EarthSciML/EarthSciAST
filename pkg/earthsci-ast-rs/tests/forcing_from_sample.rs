@@ -348,9 +348,8 @@ fn esm_problem_refuses_a_discrete_sample_of_the_wrong_shape() {
 #[test]
 fn forcing_from_sample_of_a_converted_source_is_the_problems_buffer() {
     use earthsci_ast::esio_provider::providers_from_document;
-    use std::path::Path;
 
-    let tests = common::repo_tests_dir();
+    let tests = crate::common::repo_tests_dir();
     let dir = tests.join("conformance/loader_unit_conversion");
     let mut doc: Value = serde_json::from_str(
         &std::fs::read_to_string(dir.join("fixtures/loader_unit_conversion.esm")).expect("read"),

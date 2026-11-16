@@ -61,7 +61,6 @@ fn const_array_gathers_out_of_range_fail_with_the_spec_code() {
                     compiler: Some(compiler),
                     ..Default::default()
                 },
-                None,
             );
             assert_eq!(results.len(), 1, "{id}: expected one assertion result");
             results.into_iter().next().expect("one result")

@@ -63,7 +63,6 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
                 base_dir: Some(common::category_dir("unsupported_construct")),
                 ..Default::default()
             },
-            None,
         );
         assert!(!results.is_empty(), "{id}: ran no assertions");
         match case["expect"].as_str() {

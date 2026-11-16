@@ -189,7 +189,6 @@ fn a_mixed_or_uncarried_precision_is_refused_at_build() {
                 compiler: Some(earthsci_ast::Compiler::Interpreter),
                 ..Default::default()
             },
-            None,
         );
         assert!(
             results.iter().any(|r| r.message.contains(code)),

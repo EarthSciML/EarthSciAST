@@ -25,7 +25,8 @@
 use earthsci_ast::{AssertionResult, BuildProviderFactory, SolveOptions, load_string};
 use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use serde_json::{Value, json};
-use std::cell::Cell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn opts() -> SolveOptions {
     SolveOptions {
@@ -69,13 +70,14 @@ fn test_entry(id: &str, start: f64, end: f64, at: f64, expected: f64) -> Value {
 /// number of times the factory was called, i.e. the number of BUILDS.
 fn run_counting(file_json: &Value, filter: Option<&str>) -> (Vec<AssertionResult>, usize) {
     let file = load_string(&file_json.to_string()).expect("document loads");
-    let builds = Cell::new(0usize);
+    let builds = Arc::new(AtomicUsize::new(0));
     // An EMPTY provider set: this document reads no `data_sources`, and the
     // factory is here to be counted, not to feed anything. It still puts the
     // runner on the with-providers path, which is the path every real
     // invocation of `esm test` takes.
-    let make: Box<BuildProviderFactory<'_>> = Box::new(|| {
-        builds.set(builds.get() + 1);
+    let counter = Arc::clone(&builds);
+    let make: Arc<BuildProviderFactory<'static>> = Arc::new(move || {
+        counter.fetch_add(1, Ordering::Relaxed);
         Ok(Vec::new())
     });
     let results = run_inline_tests_with_options(
@@ -83,11 +85,11 @@ fn run_counting(file_json: &Value, filter: Option<&str>) -> (Vec<AssertionResult
         &InlineTestOptions {
             solve: opts(),
             test_filter: filter.map(str::to_string),
+            providers: Some(make),
             ..Default::default()
         },
-        Some(&*make),
     );
-    (results, builds.get())
+    (results, builds.load(Ordering::Relaxed))
 }
 
 fn actual(results: &[AssertionResult], id: &str) -> f64 {
@@ -272,7 +274,6 @@ fn rebuilds_when_expression_template_imports_differ() {
                 base_dir: Some(dir.path().to_path_buf()),
                 ..Default::default()
             },
-            None,
         )
     };
 
@@ -373,19 +374,20 @@ fn unfiltered_entry_point_runs_everything() {
         .to_string(),
     )
     .expect("document loads");
-    let builds = Cell::new(0usize);
-    let make: Box<BuildProviderFactory<'_>> = Box::new(|| {
-        builds.set(builds.get() + 1);
+    let builds = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&builds);
+    let make: Arc<BuildProviderFactory<'static>> = Arc::new(move || {
+        counter.fetch_add(1, Ordering::Relaxed);
         Ok(Vec::new())
     });
     let results = run_inline_tests_with_options(
         &file,
         &InlineTestOptions {
             solve: opts(),
+            providers: Some(make),
             ..Default::default()
         },
-        Some(&*make),
     );
     assert_eq!(results.len(), 2);
-    assert_eq!(builds.get(), 1);
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
 }
