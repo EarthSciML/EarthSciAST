@@ -43,8 +43,10 @@ from conftest import CONFORMANCE_DIR, FIXTURES_ROOT
 from earthsci_ast import (
     DocumentFormat,
     canonicalize_document,
+    expression_names,
     parse_document,
     parse_markdown,
+    parse_math,
     parse_typst,
     print_document,
     print_markdown,
@@ -171,7 +173,8 @@ def test_print_math_reproduces_the_display(case):
     declares (the keys of its variables, species and parameters, and the
     document's index sets) gives it in both formats. A case whose model or
     document declares expression templates is skipped: no template is in scope
-    for ``print_math``."""
+    for ``print_math``. ``parse_math`` reads each back to the equation, in
+    canonical form."""
     esm = case["esm"]
     models = esm.get("models", {})
     assert len(models) == 1, "a math case has one model"
@@ -184,6 +187,49 @@ def test_print_math_reproduces_the_display(case):
     ] + list(esm.get("index_sets", {}))
     assert print_math(eq, names, "markdown") == case["math"]["latex"]
     assert print_math(eq, names, DocumentFormat.TYPST) == case["math"]["typst"]
+    want = _typed(canonicalize_document(eq))
+    assert _typed(parse_math(case["math"]["latex"], names, "markdown")) == want
+    assert _typed(parse_math(case["math"]["typst"], names, DocumentFormat.TYPST)) == want
+
+
+def test_parse_math_reads_an_expression_or_an_equation():
+    names = ["RT", "k", "y"]
+    assert _typed(parse_math("RT + k", names, "markdown")) == _typed(
+        {"op": "+", "args": ["RT", "k"]}
+    )
+    # With its letters declared instead, a run of letters in LaTeX is their
+    # product; with neither, it is not read.
+    assert _typed(parse_math("RT", ["R", "T"], "markdown")) == _typed(
+        {"op": "*", "args": ["R", "T"]}
+    )
+    with pytest.raises(ParseError):
+        parse_math("RT", [], "markdown")
+    assert _typed(parse_math("y = 2 k", names, "typst")) == _typed(
+        {"lhs": "y", "rhs": {"op": "*", "args": [2, "k"]}}
+    )
+    for text, fmt in (("y = k", "markdown"), ("(dif y)/(dif t) = -k y", "typst")):
+        assert print_math(parse_math(text, names, fmt), names, fmt) == text
+
+
+def test_parse_math_refuses_as_a_document_read_does():
+    names = ["k"]
+    deep = "(" * 50_000 + "k" + ")" * 50_000
+    for text, fmt, code in (
+        ("k +", "markdown", "parse_error"),
+        ("1.0e400 k", "typst", "parse_error"),
+        ("\\operatorname{arrayop}(k)", "markdown", "removed_op"),
+        (deep, "typst", "parse_error"),
+    ):
+        with pytest.raises(ParseError) as info:
+            parse_math(text, names, fmt)
+        assert info.value.code == code, str(info.value)
+
+
+def test_expression_names_lists_names_in_order_of_first_use():
+    eq = {"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": {"op": "*", "args": [2, "k", "y"]}}
+    assert expression_names(eq) == ["y", "k"]
+    assert expression_names(3.5) == []
+    assert expression_names("x") == ["x"]
 
 
 def test_fixture_files_are_nonempty():

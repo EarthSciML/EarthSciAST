@@ -777,7 +777,6 @@ describe('Graph export functions', () => {
       expect(dotOutput).toContain('style=dashed')
 
       // Component graph shows component names, not variable names
-      // Chemical subscripts would appear in variable mapping edge labels or expression graphs
       expect(dotOutput).toContain('label="temperature"')
     })
 
@@ -796,8 +795,8 @@ describe('Graph export functions', () => {
       const dotOutput = toDot(graph)
 
       expect(dotOutput).toContain('digraph ExpressionGraph {')
-      expect(dotOutput).toContain('CO₂')
-      expect(dotOutput).toContain('H₂O')
+      expect(dotOutput).toContain('CO2')
+      expect(dotOutput).toContain('H2O')
       expect(dotOutput).toContain('->')
       // The variable graph is where both shapes appear: a state is a box, a
       // parameter an ellipse.
@@ -824,7 +823,6 @@ describe('Graph export functions', () => {
       expect(mermaidOutput).toContain('-.->')
 
       // Component graph shows component names, not variable names
-      // Chemical subscripts would appear in variable mapping edge labels or expression graphs
       expect(mermaidOutput).toContain('|temperature|')
     })
 
@@ -853,7 +851,7 @@ describe('Graph export functions', () => {
       const mermaidOutput = toMermaid(graph)
 
       expect(mermaidOutput).toContain('graph TD')
-      expect(mermaidOutput).toContain('((NH₃))') // Species render as circles
+      expect(mermaidOutput).toContain('((NH3))') // Species render as circles
     })
   })
 
@@ -932,8 +930,8 @@ describe('Graph export functions', () => {
     })
   })
 
-  describe('Chemical subscript formatting', () => {
-    it('should format chemical formulas correctly in expression graphs', () => {
+  describe('labels are names, verbatim', () => {
+    it('expression graph labels are the variable names', () => {
       const model: Model = {
         variables: {
           H2SO4: { type: 'unknown', units: 'mol/mol', default: 1e-12 },
@@ -946,16 +944,15 @@ describe('Graph export functions', () => {
 
       const graph = expressionGraph(model)
 
-      // Test DOT format - should show variable names with subscripts.
-      // "Ca2plus" is not a pure chemical formula ("plus" is not an element),
-      // so the element-aware formatter leaves it unchanged.
+      // DOT and Mermaid labels are the names as written: no chemical
+      // subscripts are applied.
       const dotOutput = toDot(graph)
-      expect(dotOutput).toContain('H₂SO₄')
+      expect(dotOutput).toContain('H2SO4')
       expect(dotOutput).toContain('Ca2plus')
 
       // Test Mermaid format
       const mermaidOutput = toMermaid(graph)
-      expect(mermaidOutput).toContain('H₂SO₄')
+      expect(mermaidOutput).toContain('H2SO4')
       expect(mermaidOutput).toContain('Ca2plus')
 
       // JSON format should preserve original names in node data
@@ -966,7 +963,7 @@ describe('Graph export functions', () => {
       expect(h2so4Node.kind).toBe('state')
     })
 
-    it('should format chemical formulas in variable mapping edge labels', () => {
+    it('variable mapping edge labels are the variable names', () => {
       const mockFile: EsmFile = {
         esm: '1.0.0',
         metadata: { name: 'Chemical Test', authors: [] },
@@ -987,13 +984,13 @@ describe('Graph export functions', () => {
 
       const graph = componentGraph(mockFile)
 
-      // Test DOT format - should show formatted chemical in edge label
+      // The edge label is the mapped variable's name as written
       const dotOutput = toDot(graph)
-      expect(dotOutput).toContain('O₃')
+      expect(dotOutput).toContain('O3')
 
       // Test Mermaid format
       const mermaidOutput = toMermaid(graph)
-      expect(mermaidOutput).toContain('O₃')
+      expect(mermaidOutput).toContain('O3')
     })
   })
 })

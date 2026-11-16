@@ -55,6 +55,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from ._show import show_equation
 from . import op_registry
 from . import strip as _strip
 from .classification import is_implicit_lhs
@@ -76,7 +77,6 @@ from .expression import DataSourceUnboundError, UnsupportedConstructError, free_
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
-    _expr_to_string,
     _has_array_op,
     flatten,
     infer_variable_shapes,
@@ -1649,7 +1649,7 @@ def _refuse_parameter_definition(flat: FlattenedSystem) -> None:
         if name is not None and name in flat.parameters:
             raise SimulationError(
                 f"equation_defines_parameter: the equation "
-                f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}` defines "
+                f"`{show_equation(eq.lhs, eq.rhs)}` defines "
                 f"{name!r}, which is a parameter; an equation defines unknowns only "
                 f"(esm-spec §6.3.1)"
             )
@@ -1684,7 +1684,7 @@ def _refuse_faq_bare_array_operands(flat: FlattenedSystem) -> None:
             field_name, name, axes = found[0]
             raise SimulationError(
                 f"{FAQ_BARE_ARRAY_OPERAND}: the equation "
-                f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`: "
+                f"`{show_equation(eq.lhs, eq.rhs)}`: "
                 + faq_bare_array_operand_message(field_name, name, axes)
             )
 
@@ -1811,8 +1811,8 @@ def _assert_no_doubly_defined_state(flat: FlattenedSystem) -> None:
     bare_eq = bare_targets[name]
     raise _unbalanced(
         f"unknown {name!r} is defined twice — by "
-        f"`{_expr_to_string(diff_eq.lhs)} ~ {_expr_to_string(diff_eq.rhs)}` and by "
-        f"`{_expr_to_string(bare_eq.lhs)} ~ {_expr_to_string(bare_eq.rhs)}`. "
+        f"`{show_equation(diff_eq.lhs, diff_eq.rhs)}` and by "
+        f"`{show_equation(bare_eq.lhs, bare_eq.rhs)}`. "
         f"esm-spec §4.9.4 counts an equation whichever form its LHS takes, so this "
         f"system has one more equation than it has unknowns to bind; keeping the "
         f"derivative and dropping the constraint would run a model the document does "
@@ -1843,8 +1843,8 @@ def _assert_no_redundant_definition(flat: FlattenedSystem) -> None:
     _kind, first, second, name, _undetermined = found
     raise _unbalanced(
         f"unknown {name!r} is defined twice — by "
-        f"`{_expr_to_string(first.lhs)} ~ {_expr_to_string(first.rhs)}` and by "
-        f"`{_expr_to_string(second.lhs)} ~ {_expr_to_string(second.rhs)}`. "
+        f"`{show_equation(first.lhs, first.rhs)}` and by "
+        f"`{show_equation(second.lhs, second.rhs)}`. "
         f"esm-spec §4.9.4 counts an equation whichever form its LHS takes, and the "
         f"second binds no unknown the first did not, so this system has one more "
         f"equation than it has unknowns to bind. Remove one of the two definitions."
@@ -2075,7 +2075,7 @@ def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) 
         if is_implicit_lhs(eq.lhs):
             raise UnsupportedConstructError(
                 "implicit equation",
-                f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`",
+                f"`{show_equation(eq.lhs, eq.rhs)}`",
                 evaluator,
             )
     # A Wiener-noise parameter (``update.kind = "wiener"``) makes the document an

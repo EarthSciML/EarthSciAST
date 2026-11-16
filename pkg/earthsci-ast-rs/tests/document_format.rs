@@ -16,7 +16,7 @@
 
 use crate::common::repo_tests_dir;
 use earthsci_ast::{
-    DocumentFormat, canonicalize_document, parse_document, print_document, print_math,
+    DocumentFormat, canonicalize_document, parse_document, parse_math, print_document, print_math,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -243,6 +243,14 @@ fn print_math_reproduces_the_display() {
                 let want = math[key].as_str().expect("math text");
                 if got != want {
                     failures.push(format!("{id}: print_math {key} = {got:?}, want {want:?}"));
+                }
+                let eq = canonicalize_document(&eqs[0]);
+                match parse_math(want, &names, format) {
+                    Ok(read) if read == eq => {}
+                    Ok(read) => {
+                        failures.push(format!("{id}: parse_math {key} = {read}, want {eq}"))
+                    }
+                    Err(e) => failures.push(format!("{id}: parse_math {key} refused: {e:?}")),
                 }
             }
             checked += 1;

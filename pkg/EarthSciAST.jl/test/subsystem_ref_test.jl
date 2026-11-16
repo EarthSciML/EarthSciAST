@@ -2,6 +2,10 @@ using Test
 using EarthSciAST
 using JSON3
 
+if !isdefined(Main, :ESM_TESTUTILS_LOADED)
+    include("testutils.jl")
+end
+
 @testset "Subsystem Reference Resolution Tests" begin
 
     @testset "SubsystemRefError construction" begin
@@ -750,10 +754,8 @@ using JSON3
                     collect(keys(fp.state_variables))
                 @test collect(keys(other.parameters)) == collect(keys(fp.parameters))
                 @test length(other.equations) == length(fp.equations)
-                @test [to_ascii(e.lhs) for e in other.equations] ==
-                    [to_ascii(e.lhs) for e in fp.equations]
-                @test [to_ascii(e.rhs) for e in other.equations] ==
-                    [to_ascii(e.rhs) for e in fp.equations]
+                @test [canonical_expr_json(e) for e in other.equations] ==
+                    [canonical_expr_json(e) for e in fp.equations]
             end
         finally
             rm(tmp_dir, recursive = true, force = true)

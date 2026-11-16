@@ -506,7 +506,7 @@ function _collect_algebraic!(s::StrippedConstructs, flat::FlattenedSystem)
             err isa ArgumentError || rethrow()
             throw(
                 SimulateError(
-                    "the residual of `$(to_ascii(eq))`: $(err.msg)",
+                    "the residual of `$(eq)`: $(err.msg)",
                     ERROR_CODES.KERNEL_OUTPUT_UNRESOLVED
                 )
             )

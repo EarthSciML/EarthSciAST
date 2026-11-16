@@ -1,39 +1,51 @@
-//! Build and parse expressions, list their free variables, substitute,
-//! simplify and evaluate.
+//! Read expressions from math, build them as values, list their free
+//! variables, substitute, simplify and evaluate.
 
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Expr, canonical_json, contains, evaluate, free_variables, parse_equation, parse_expression,
-    simplify, substitute, to_ascii,
+    DocumentFormat, Equation, Expr, canonical_json, contains, evaluate, free_variables, parse_math,
+    simplify, substitute,
 };
 
+/// Read Typst math under the declared names into an `Expr`: parse_math
+/// returns the JSON form.
+fn read(text: &str, names: &[&str]) -> Expr {
+    let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+    let value = parse_math(text, &names, DocumentFormat::Typst).expect("readable math");
+    serde_json::from_value(value).expect("an expression")
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // region: expressions ops=parse_expression,parse_equation,free_variables,substitute
-    // Parse the text form (the same syntax `to_ascii` prints) ...
-    let rate = parse_expression("k * A - x")?;
-    assert_eq!(to_ascii(&rate), "k * A - x");
+    // region: expressions ops=parse_math,free_variables,substitute
+    // Read Typst math (or LaTeX, with DocumentFormat::Markdown) under the
+    // names it uses: the inverse of print_math.
+    let names = ["k".to_string(), "A".to_string(), "x".to_string()];
+    let value = parse_math("k A - x", &names, DocumentFormat::Typst)?;
+    let rate: Expr = serde_json::from_value(value)?;
+    assert_eq!(rate.to_string(), "k A - x");
 
-    // ... or a whole equation.
-    let eq = parse_equation("D(x)/Dt = k * A - x")?;
-    assert_eq!(to_ascii(&eq.lhs), "D(x)/Dt");
+    // Text whose top is `=` reads as an equation.
+    let value = parse_math("(dif x)/(dif t) = k A - x", &names, DocumentFormat::Typst)?;
+    let eq: Equation = serde_json::from_value(value)?;
+    assert_eq!(eq.lhs.to_string(), "(dif x)/(dif t)");
 
-    let mut names: Vec<String> = free_variables(&rate).into_iter().collect();
-    names.sort();
-    assert_eq!(names, ["A", "k", "x"]);
+    let mut free: Vec<String> = free_variables(&rate).into_iter().collect();
+    free.sort();
+    assert_eq!(free, ["A", "k", "x"]);
 
-    // Replace `k` with `2 * j`.
-    let subs = HashMap::from([("k".to_string(), parse_expression("2 * j")?)]);
+    // Replace `k` with `2 j`.
+    let subs = HashMap::from([("k".to_string(), read("2 j", &["j"]))]);
     let replaced = substitute(&rate, &subs);
-    assert_eq!(to_ascii(&replaced), "2 * j * A - x");
+    assert_eq!(replaced.to_string(), "(2 j) A - x");
 
     // Expressions are also plain Rust values.
     let one = Expr::Variable("x".to_string());
-    assert_eq!(to_ascii(&one), "x");
+    assert_eq!(one.to_string(), "x");
     // endregion
 
     // region: evaluate ops=evaluate,simplify,contains
-    let expr = parse_expression("k * A - x")?;
+    let expr = read("k A - x", &["k", "A", "x"]);
     let bindings = HashMap::from([
         ("k".to_string(), 2.0),
         ("A".to_string(), 3.0),
@@ -48,13 +60,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(unbound, ["A", "x"]);
 
     assert!(contains(&expr, "A") && !contains(&expr, "B"));
-    assert_eq!(to_ascii(&simplify(&parse_expression("x * 1 + 0")?)), "x");
+    // simplify folds numbers: with k = 2 and A = 3, k A is 6.
+    let numbers = HashMap::from([
+        ("k".to_string(), Expr::Number(2.0)),
+        ("A".to_string(), Expr::Number(3.0)),
+    ]);
+    assert_eq!(simplify(&substitute(&expr, &numbers)).to_string(), "6 - x");
     // endregion
 
     // region: canonical_json ops=canonical_json
     // Two spellings of the same sum serialize identically once canonicalized.
-    let a = canonical_json(&parse_expression("x + y + 1")?)?;
-    let b = canonical_json(&parse_expression("1 + y + x")?)?;
+    let a = canonical_json(&read("x + y + 1", &["x", "y"]))?;
+    let b = canonical_json(&read("1 + y + x", &["x", "y"]))?;
     assert_eq!(a, b);
     println!("{a}");
     // endregion

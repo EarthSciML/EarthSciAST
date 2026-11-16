@@ -138,37 +138,6 @@ def run_validation(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return results
 
 
-_RENDERERS = {
-    "unicode": earthsci_ast.to_unicode,
-    "latex": earthsci_ast.to_latex,
-    "ascii": earthsci_ast.to_ascii,
-}
-
-
-def run_display(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Render every manifest display case in all three formats.
-
-    The cases are handed to us already expanded and id'd, so every binding
-    renders the SAME 424 cases in the same order — the comparator can then
-    demand byte-equality per case id instead of scoring an empty intersection
-    as agreement (audit C2).
-    """
-    print("Running display sweep...")
-    results: dict[str, dict[str, Any]] = {}
-
-    for case in manifest["display_cases"]:
-        record: dict[str, Any] = {}
-        for fmt, render in _RENDERERS.items():
-            try:
-                record[fmt] = render(case["input"])
-            except Exception as exc:
-                record[fmt] = None
-                record.setdefault("errors", {})[fmt] = str(exc)
-        results[case["id"]] = record
-
-    return results
-
-
 def _canonicalize_numbers(obj: Any) -> Any:
     """Apply the §5.5.3.1 integral-float→int rule to every scalar in a dict-form
     AST. ``substitute`` preserves numbers verbatim (an in-memory ``2.0`` stays a
@@ -236,7 +205,6 @@ def main() -> None:
 
     errors: list[str] = []
     validation_results: dict[str, Any] = {}
-    display_results: dict[str, Any] = {}
     substitution_results: dict[str, Any] = {}
 
     try:
@@ -246,13 +214,6 @@ def main() -> None:
         errors.append(f"Validation sweep crashed: {exc}")
         print(f"✗ Validation sweep crashed: {exc}")
         print(traceback.format_exc())
-
-    try:
-        display_results = run_display(manifest)
-        print(f"✓ Display sweep completed ({len(display_results)} cases)")
-    except Exception as exc:
-        errors.append(f"Display sweep crashed: {exc}")
-        print(f"✗ Display sweep crashed: {exc}")
 
     try:
         substitution_results = run_substitution(manifest)
@@ -269,7 +230,6 @@ def main() -> None:
                 "language": "python",
                 "timestamp": datetime.now().isoformat(),
                 "validation_results": validation_results,
-                "display_results": display_results,
                 "substitution_results": substitution_results,
                 "errors": errors,
             },

@@ -3,7 +3,7 @@
  * §5.48, issue #539).
  *
  * The flatten corpus (`flatten-conformance.test.ts`) pins every equation's
- * rendered contribution list. This suite checks what a rendering cannot:
+ * contribution list. This suite checks what that record cannot:
  *
  * - the INVARIANT, by evaluation: the body of each equation evaluates bit for
  *   bit to the LEFT-FOLD sum of its contributions' values at sampled non-default
@@ -19,8 +19,9 @@ import { flatten, type FlattenedEquation, type FlattenedSystem } from './flatten
 import { equationBody, equationFrom, mapContributions } from './flatten-contributions.js'
 import { evaluateExpression } from './codegen.js'
 import { freeVariables } from './expression.js'
-import { toAscii } from './pretty-print.js'
-import { fixturesDir, loadFixture, readFixture } from './test-helpers.js'
+import { canonicalizeDocument } from './canonicalize.js'
+import { expressionNames, printMath } from './document/index.js'
+import { canonicalJson, fixturesDir, loadFixture, readFixture, sameExpr } from './test-helpers.js'
 import type { Contribution, TermOrigin } from './index.js'
 
 const TP_FIXTURES = readdirSync(fixturesDir('conformance', 'term_provenance', 'fixtures'))
@@ -34,8 +35,14 @@ function flattenTp(name: string): FlattenedSystem {
   return flatten(loadFixture('conformance', 'term_provenance', 'fixtures', name))
 }
 
-function equation(flat: FlattenedSystem, lhs: string): FlattenedEquation {
-  const matches = flat.equations.filter((eq) => toAscii(eq.lhs) === lhs)
+/** An expression as Typst math, for a failure message. */
+const show = (e: unknown): string => printMath(e, expressionNames(e), 'typst')
+
+/** `D(x)/Dt`. */
+const D = (x: string) => ({ op: 'D', args: [x], wrt: 't' })
+
+function equation(flat: FlattenedSystem, lhs: unknown): FlattenedEquation {
+  const matches = flat.equations.filter((eq) => sameExpr(eq.lhs, lhs))
   expect(matches).toHaveLength(1)
   return matches[0]
 }
@@ -97,7 +104,7 @@ function checkInvariant(eq: FlattenedEquation): InvariantResult {
     const fold = parts.slice(1).reduce((acc, p) => acc + p, parts[0])
     expect(
       sameBits(body, fold),
-      `${toAscii(eq.lhs)}: body ${body} != left fold ${fold} of [${parts.join(', ')}]`,
+      `${show(eq.lhs)}: body ${body} != left fold ${fold} of [${parts.join(', ')}]`,
     ).toBe(true)
     const right = parts.slice(0, -1).reduceRight((acc, p) => p + acc, parts[parts.length - 1])
     discriminating ||= !sameBits(right, fold)
@@ -117,7 +124,7 @@ describe('the body is the left fold of the contributions (§4.7.5 invariant)', (
       evaluated += 1
       // With three or more contributions the check must be able to see the order.
       if (eq.contributions.length >= 3) {
-        expect(result.discriminating, `${toAscii(eq.lhs)} cannot tell sum orders apart`).toBe(true)
+        expect(result.discriminating, `${show(eq.lhs)} cannot tell sum orders apart`).toBe(true)
       }
     }
     // Out of the scalar evaluator's reach entirely: `grad` with no
@@ -148,24 +155,24 @@ describe('the body is the left fold of the contributions (§4.7.5 invariant)', (
   })
 })
 
-// --- rows of the step table a rendering cannot state -------------------------
+// --- rows of the step table the corpus record cannot state ------------------
 
 describe('per-term provenance rows', () => {
   it('systems order changes the order of the contributions, not their origins', () => {
     const pairs = (eq: FlattenedEquation) =>
-      eq.contributions.map((c) => [toAscii(c.expr), origins(c)] as const)
-    const ab = pairs(equation(flattenTp('systems_order_ab.esm'), 'D(Chem.O3)/Dt'))
-    const ba = pairs(equation(flattenTp('systems_order_ba.esm'), 'D(Chem.O3)/Dt'))
-    const key = (p: readonly [string, TermOrigin[]]) => JSON.stringify(p)
+      eq.contributions.map((c) => [canonicalizeDocument(c.expr), origins(c)] as const)
+    const ab = pairs(equation(flattenTp('systems_order_ab.esm'), D('Chem.O3')))
+    const ba = pairs(equation(flattenTp('systems_order_ba.esm'), D('Chem.O3')))
+    const key = (p: readonly [unknown, TermOrigin[]]) => JSON.stringify(p)
     expect(ab.map(key).sort()).toEqual(ba.map(key).sort())
     expect(ab.map(([, o]) => o)).toEqual([[{ component: 'Chem' }], [{ component: 'Sink' }]])
     expect(ba.map(([, o]) => o)).toEqual([[{ component: 'Sink' }], [{ component: 'Chem' }]])
   })
 
   it('two structurally identical contributions stay two', () => {
-    const eq = equation(flattenTp('non_vacuity.esm'), 'D(Chem.O3)/Dt')
+    const eq = equation(flattenTp('non_vacuity.esm'), D('Chem.O3'))
     const tail = eq.contributions.slice(1)
-    expect(tail.map((c) => toAscii(c.expr))).toEqual(['Emis.flux', 'Emis.flux'])
+    expect(tail.map((c) => canonicalJson(c.expr))).toEqual(['Emis.flux', 'Emis.flux'])
     expect(tail.map(origins)).toEqual([[{ component: 'OpA' }], [{ component: 'OpB' }]])
   })
 

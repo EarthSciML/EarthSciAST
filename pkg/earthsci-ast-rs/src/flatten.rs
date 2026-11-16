@@ -6114,10 +6114,14 @@ fn index_node(name: &str, loops: &[String]) -> Expr {
     })
 }
 
-/// Build `index(<makearray>, loops…)`.
+/// Build `index(<makearray>, loops…)`, the makearray tagged with the grid's
+/// loop symbols as its `output_idx`, in grid order, as every binding's lift
+/// writes it (the flatten corpus pins the tag).
 fn index_makearray(ma: &ExpressionNode, loops: &[String]) -> Expr {
+    let mut tagged = ma.clone();
+    tagged.output_idx = Some(loops.to_vec());
     let mut args = Vec::with_capacity(loops.len() + 1);
-    args.push(Expr::operator(ma.clone()));
+    args.push(Expr::operator(tagged));
     for l in loops {
         args.push(Expr::Variable(l.clone()));
     }

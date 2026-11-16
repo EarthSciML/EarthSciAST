@@ -5,26 +5,15 @@
  * 1. Round-trip tests for all valid ESM fixtures
  * 2. Schema validation tests for all invalid fixtures
  * 3. Structural validation tests for structural error cases
- * 4. Pretty-print conformance tests against display fixtures
- * 5. Substitution conformance tests against substitution fixtures
- * 6. Expression operation tests (freeVariables, contains, evaluate)
- * 7. Integration test with MinimalChemAdvection
+ * 4. Substitution conformance tests against substitution fixtures
+ * 5. Expression operation tests (freeVariables, contains, evaluate)
+ * 6. Integration test with MinimalChemAdvection
  */
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, basename, dirname } from 'path'
-import {
-  loadString,
-  toJson,
-  validateText,
-  toUnicode,
-  toLatex,
-  toAscii,
-  substitute,
-  freeVariables,
-  contains,
-} from './index.js'
+import { loadString, toJson, validateText, substitute, freeVariables, contains } from './index.js'
 import * as toolkit from './index.js'
 import { fixturesDir } from './test-helpers.js'
 import type { Expr, Expression, ReactionSystem } from './types.js'
@@ -422,49 +411,6 @@ describe('Conformance Test Suite', () => {
     )
   })
 
-  describe('Pretty-print conformance tests', () => {
-    const displayFiles = findJsonFiles(join(testsDir, 'display'))
-
-    it.each(displayFiles)('should match display fixtures from %s', (filePath) => {
-      const fixtures = loadJsonFixture<any>(filePath)
-
-      // Handle different fixture file structures
-      if (Array.isArray(fixtures)) {
-        // Array of test groups or direct tests
-        for (const fixture of fixtures) {
-          if (fixture.tests) {
-            // Handle grouped test structure
-            for (const test of fixture.tests) {
-              if (test.unicode) {
-                expect(toUnicode(test.input)).toBe(test.unicode)
-              }
-              if (test.latex) {
-                expect(toLatex(test.input)).toBe(test.latex)
-              }
-              if (test.ascii) {
-                expect(toAscii(test.input)).toBe(test.ascii)
-              }
-            }
-          } else if (fixture.input) {
-            // Handle direct test structure
-            if (fixture.unicode) {
-              expect(toUnicode(fixture.input)).toBe(fixture.unicode)
-            }
-            if (fixture.latex) {
-              expect(toLatex(fixture.input)).toBe(fixture.latex)
-            }
-            if (fixture.ascii) {
-              expect(toAscii(fixture.input)).toBe(fixture.ascii)
-            }
-          }
-        }
-      } else if (fixtures.input_file) {
-        // Summary/model structure fixture - skip pretty-print tests for these
-        console.warn(`Skipping model summary fixture: ${filePath}`)
-      }
-    })
-  })
-
   describe('Substitution conformance tests', () => {
     const substitutionFiles = findJsonFiles(join(testsDir, 'substitution'))
 
@@ -571,16 +517,7 @@ describe('Conformance Test Suite', () => {
       expect(validationResult.schema_errors).toHaveLength(0)
       expect(validationResult.structural_errors).toHaveLength(0)
 
-      // 3. Pretty-print in all formats
-      const unicodeOutput = toUnicode('MinimalChemAdvection')
-      const latexOutput = toLatex('MinimalChemAdvection')
-      const asciiOutput = toAscii('MinimalChemAdvection')
-
-      expect(unicodeOutput).toBeDefined()
-      expect(latexOutput).toBeDefined()
-      expect(asciiOutput).toBeDefined()
-
-      // 4. Substitute T=300
+      // 3. Substitute T=300
       // Find a temperature parameter in the model and substitute it
       let substitutedModel = model
       // SimpleOzone is an inline reaction system here, not a `{ref}` stub.
@@ -613,12 +550,12 @@ describe('Conformance Test Suite', () => {
         }
       }
 
-      // 5. Re-validate after substitution
+      // 4. Re-validate after substitution
       const serializedSubstituted = toJson(substitutedModel)
       const revalidationResult = validateText(serializedSubstituted)
       expect(revalidationResult.is_valid).toBe(true)
 
-      // 6. Verify model structure is preserved
+      // 5. Verify model structure is preserved
       expect(substitutedModel.esm).toBe(model.esm)
       expect(substitutedModel.metadata.name).toBe(model.metadata.name)
       expect(Object.keys(substitutedModel.reaction_systems || {})).toEqual(

@@ -43,7 +43,6 @@ fi
 # Test categories
 VALID_TESTS_DIR="$TESTS_DIR/valid"
 INVALID_TESTS_DIR="$TESTS_DIR/invalid"
-DISPLAY_TESTS_DIR="$TESTS_DIR/display"
 SUBSTITUTION_TESTS_DIR="$TESTS_DIR/substitution"
 GRAPHS_TESTS_DIR="$TESTS_DIR/graphs"
 
@@ -55,7 +54,7 @@ RUST_OUTPUT="$OUTPUT_DIR/rust"
 GO_OUTPUT="$OUTPUT_DIR/go"
 
 # The shared CORPUS MANIFEST: the ONE recursive sweep of tests/valid, tests/invalid
-# and lib, plus the expanded display / substitution case lists. Every producer is
+# and lib, plus the expanded substitution case list. Every producer is
 # handed this file and emits a record per entry; the comparator then asserts that
 # each binding covered every entry. Producers no longer enumerate the corpus
 # themselves — four hand-rolled non-recursive walks are what let 69 fixtures go

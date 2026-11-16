@@ -42,17 +42,6 @@ Fields:
   `+` demands commensurate operands, …) or none. Derives the five op-class
   sets units.jl's `_DIMENSION_RULES` is populated from (via
   [`_ops_with_dim_class`](@ref)).
-- `display_prec::Union{Int,Nothing}` — display-notation infix precedence
-  (1 loosest `or` … 7 tightest `^`, mirrors pretty-print.ts); `nothing` for
-  ops that render as function calls (they bind atom-tight,
-  `_DISPLAY_FUNCTION_PRECEDENCE`). Derives display.jl's
-  `_DISPLAY_OP_PRECEDENCE`.
-- `infix_sep::Union{NTuple{3,String},Nothing}` — the op's infix separator as
-  an `(ascii, unicode, latex)` triple; `nothing` for non-infix ops AND for
-  infix ops whose rendering is not a plain separator join (`+`/`<`/`>` are
-  uniform across formats, `/` renders `\\frac`, `^` superscripts — all
-  handled directly in `_format_infix_op`). Derives display.jl's
-  `_INFIX_SEPARATORS`.
 - flag fields — see [`_OP_FLAG_NAMES`](@ref).
 """
 struct _OpSpec
@@ -61,8 +50,6 @@ struct _OpSpec
     category::Symbol
     scalar_fn::Union{Function, Nothing}
     dim_class::Union{Symbol, Nothing}
-    display_prec::Union{Int, Nothing}
-    infix_sep::Union{NTuple{3, String}, Nothing}
     ws4_foldable::Bool
     cse_opaque::Bool
     stencil_elementwise::Bool
@@ -79,15 +66,13 @@ end
 _op(
     name::String; arity = nothing, category::Symbol, fn = nothing,
     dimclass::Union{Symbol, Nothing} = nothing,
-    prec::Union{Int, Nothing} = nothing,
-    sep::Union{NTuple{3, String}, Nothing} = nothing,
     ws4::Bool = false, cse::Bool = false, stencil::Bool = false,
     geo::Bool = false, known::Bool = false,
     arrprod::Bool = false, selfidx::Bool = false,
     builtin::Bool = false, xcse::Bool = false
 ) =
     _OpSpec(
-    name, arity, category, fn, dimclass, prec, sep,
+    name, arity, category, fn, dimclass,
     ws4, cse, stencil, geo, known,
     arrprod, selfidx, builtin, xcse
 )
@@ -150,12 +135,6 @@ hand:
   [`_ops_with_dim_class`](@ref)); `_TRANSCENDENTAL_OPS` additionally unions
   spec-adjacent spellings with no registry row (`ln`/`log2`/`expm1` — see the
   note at its definition site).
-- `_DISPLAY_OP_PRECEDENCE` / `_INFIX_SEPARATORS` (src/display.jl) — the
-  display-notation infix precedence and separator lookups (from the
-  `display_prec` / `infix_sep` columns), each extended at the derivation
-  site with the wire alias `"="` ↦ the `"=="` row's values (`=` is
-  deliberately NOT a registry row: `_op_in_T` classifies unregistered ops as
-  open-namespace rewrite targets, and a row would change that).
 - [`_UNARY_ELEMENTWISE_OPS`](@ref), [`_COMPARISON_ELEMENTWISE_OPS`](@ref),
   [`_BINARY_ELEMENTWISE_OPS`](@ref), [`_NARY_MINMAX_OPS`](@ref) — the ordered
   mechanical ladder-arm tables the evaluator ladders generate their arms from
@@ -173,29 +152,24 @@ const _OP_TABLE = _OpSpec[
     # ── Arithmetic (esm-spec §4.2; `neg`/`pow` are the DEPRECATED word
     #    spellings of unary `-` / `^` (see `_DEPRECATED_OPS`): the loader rewrites
     #    them away, so they reach the evaluator only from an AST built in code) ──
-    #    Display: `+`/`<`/`>` have a precedence but no `sep` (uniform
-    #    separator handled directly in `_format_infix_op`), `/` renders
-    #    `\frac`, `^` superscripts; `pow`/`neg` render as function calls.
     _op(
-        "+"; arity = 1:typemax(Int), category = :arithmetic, fn = (+), prec = 4,
+        "+"; arity = 1:typemax(Int), category = :arithmetic, fn = (+),
         ws4 = true, stencil = true, geo = true, known = true
     ),
     _op(
-        "-"; arity = 1:2, category = :arithmetic, fn = (-), prec = 4,
-        sep = (" - ", " − ", " - "),
+        "-"; arity = 1:2, category = :arithmetic, fn = (-),
         ws4 = true, stencil = true, geo = true, known = true
     ),
     _op(
-        "*"; arity = 1:typemax(Int), category = :arithmetic, fn = (*), prec = 5,
-        sep = (" * ", "·", " \\cdot "),
+        "*"; arity = 1:typemax(Int), category = :arithmetic, fn = (*),
         ws4 = true, stencil = true, geo = true, known = true
     ),
     _op(
-        "/"; arity = 2:2, category = :arithmetic, fn = (/), prec = 5,
+        "/"; arity = 2:2, category = :arithmetic, fn = (/),
         ws4 = true, stencil = true, geo = true, known = true
     ),
     _op(
-        "^"; arity = 2:2, category = :arithmetic, fn = (^), prec = 7,
+        "^"; arity = 2:2, category = :arithmetic, fn = (^),
         ws4 = true, stencil = true, geo = true, known = true, xcse = true
     ),
     _op(
@@ -210,30 +184,26 @@ const _OP_TABLE = _OpSpec[
     # ── Comparisons → 1.0/0.0 (spec comparison semantics) ──
     _op(
         "<"; arity = 2:2, category = :comparison, fn = (<), dimclass = :comparison,
-        prec = 3, stencil = true, geo = true, known = true
+        stencil = true, geo = true, known = true
     ),
     _op(
         "<="; arity = 2:2, category = :comparison, fn = (<=), dimclass = :comparison,
-        prec = 3, sep = (" <= ", " ≤ ", " \\leq "),
         stencil = true, geo = true, known = true
     ),
     _op(
         ">"; arity = 2:2, category = :comparison, fn = (>), dimclass = :comparison,
-        prec = 3, stencil = true, geo = true, known = true
+        stencil = true, geo = true, known = true
     ),
     _op(
         ">="; arity = 2:2, category = :comparison, fn = (>=), dimclass = :comparison,
-        prec = 3, sep = (" >= ", " ≥ ", " \\geq "),
         stencil = true, geo = true, known = true
     ),
     _op(
         "=="; arity = 2:2, category = :comparison, fn = (==), dimclass = :comparison,
-        prec = 3, sep = (" == ", " = ", " = "),
         stencil = true, geo = true, known = true
     ),
     _op(
         "!="; arity = 2:2, category = :comparison, fn = (!=), dimclass = :comparison,
-        prec = 3, sep = (" != ", " ≠ ", " \\neq "),
         stencil = true, geo = true, known = true
     ),
 
@@ -247,16 +217,16 @@ const _OP_TABLE = _OpSpec[
     # `:and` / `:or` / `:not` arms; only the vocabulary gate was missing.
     _op(
         "and"; arity = 2:typemax(Int), category = :logical, dimclass = :boolean,
-        prec = 2, sep = (" and ", " ∧ ", " \\land "), stencil = true, geo = true
+        stencil = true, geo = true
     ),
     _op(
         "or"; arity = 2:typemax(Int), category = :logical, dimclass = :boolean,
-        prec = 1, sep = (" or ", " ∨ ", " \\lor "), stencil = true, geo = true
+        stencil = true, geo = true
     ),
     _op(
         "not"; arity = 1:1, category = :logical, dimclass = :boolean,
-        prec = 6, stencil = true, geo = true
-    ),  # prec 6: unary, binds tighter than infix
+        stencil = true, geo = true
+    ),
 
     # ── Control (`ifelse` tests its condition `!= 0`; `Pre` is the MTK
     #    previous-value marker, a pass-through on the tree-walk path) ──

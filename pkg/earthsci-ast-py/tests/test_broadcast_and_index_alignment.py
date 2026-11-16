@@ -380,17 +380,20 @@ def test_canonicalize_output_is_evaluable() -> None:
     assert eval_expr(node, ctx) == pytest.approx(-3.0)
 
 
-def test_neg_renders_exactly_like_unary_minus() -> None:
-    """The deprecated ``neg`` (built in code) reads exactly as unary ``-``."""
-    from earthsci_ast import display
+def test_neg_prints_exactly_like_unary_minus() -> None:
+    """The deprecated ``neg`` (built in code) prints exactly as unary ``-``."""
+    from earthsci_ast import print_math
+    from earthsci_ast.serialize import _serialize_expression
 
     for build in (
         lambda op: ExprNode(op=op, args=["x"]),
         lambda op: ExprNode(op="*", args=[2.0, ExprNode(op=op, args=["x"])]),
         lambda op: ExprNode(op="+", args=["a", ExprNode(op=op, args=["b"])]),
     ):
-        for render in (display.to_ascii, display.to_unicode, display.to_latex):
-            assert render(build("neg")) == render(build("-"))
+        for fmt in ("markdown", "typst"):
+            assert print_math(_serialize_expression(build("neg")), ["a", "b", "x"], fmt) == (
+                print_math(_serialize_expression(build("-")), ["a", "b", "x"], fmt)
+            )
 
 
 # ===========================================================================

@@ -53,8 +53,11 @@ Every file is `{"$comment", "oracle", "area", "cases": [...]}`. Each case has an
   canonical form; `canonicalize(written) == esm`.
 - `markdown`, `typst`: the exact texts the printer writes for it.
 - `math` (expression cases only): `{"latex", "typst"}`, the math of the case's
-  equation display, copied from the two texts for reading. It is not a separate
-  contract.
+  equation display, copied from the two texts. Under the names the case's model
+  declares (its variables, species and parameters, and the document's index
+  sets), a binding's `print_math` of the equation writes it and its `parse_math`
+  reads it back to the equation in canonical form; a case with a template in
+  scope is skipped.
 
 A binding MUST satisfy, byte for byte for the texts and as JSON values for the
 documents:

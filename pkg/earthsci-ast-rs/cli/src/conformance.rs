@@ -25,7 +25,6 @@ use std::fs;
 #[derive(serde::Deserialize)]
 pub(crate) struct ConformanceManifest {
     validation_files: Vec<ManifestValidationEntry>,
-    display_cases: Vec<ManifestDisplayCase>,
     substitution_cases: Vec<ManifestSubstitutionCase>,
 }
 
@@ -33,17 +32,6 @@ pub(crate) struct ConformanceManifest {
 pub(crate) struct ManifestValidationEntry {
     id: String,
     path: String,
-}
-
-#[derive(serde::Deserialize)]
-pub(crate) struct ManifestDisplayCase {
-    id: String,
-    // The manifest's `kind` ("formula" | "expression") is deliberately not read
-    // here: `Expr` deserializes a bare string as `Expr::Variable`, and the
-    // renderers chemical-subscript a variable name exactly as they do a formula,
-    // so both kinds take the same path. Bindings whose renderer dispatches on a
-    // static type (Julia, Go) do need the tag. Serde ignores the extra key.
-    input: serde_json::Value,
 }
 
 #[derive(serde::Deserialize)]
@@ -375,13 +363,11 @@ pub(crate) fn run_conformance_test(
         .ok_or("Could not locate repo root by walking up from the current directory")?;
 
     let validation = conformance_validation_sweep(&manifest, &repo_root);
-    let display = conformance_display_results(&manifest);
     let substitution = conformance_substitution_results(&manifest)?;
 
     let results = json!({
         "language": "rust",
         "validation_results": validation,
-        "display_results": display,
         "substitution_results": substitution,
         "errors": Vec::<String>::new(),
     });
@@ -393,9 +379,8 @@ pub(crate) fn run_conformance_test(
         results_file.display()
     );
     println!(
-        "✓ Validation sweep completed ({} files); display {} cases; substitution {} cases",
+        "✓ Validation sweep completed ({} files); substitution {} cases",
         manifest.validation_files.len(),
-        manifest.display_cases.len(),
         manifest.substitution_cases.len()
     );
 
@@ -534,46 +519,6 @@ pub(crate) fn conformance_validation_record(
         json!(if is_valid { "valid" } else { "invalid" }),
     );
     record
-}
-
-/// Display phase: render every manifest case in all three formats.
-///
-/// The producer used to emit a literal `"display_results": {}` here, which the
-/// comparator scored as a category with zero divergences — a permanent,
-/// structurally unfailable 1.00 that diluted the one real category (audit C2).
-pub(crate) fn conformance_display_results(
-    manifest: &ConformanceManifest,
-) -> std::collections::BTreeMap<String, serde_json::Value> {
-    use serde_json::{Value, json};
-
-    let mut display: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
-    for case in &manifest.display_cases {
-        let parsed: Result<earthsci_ast::Expr, _> = serde_json::from_value(case.input.clone());
-        match parsed {
-            Ok(expr) => {
-                display.insert(
-                    case.id.clone(),
-                    json!({
-                        "unicode": earthsci_ast::to_unicode(&expr),
-                        "latex": earthsci_ast::to_latex(&expr),
-                        "ascii": earthsci_ast::to_ascii(&expr),
-                    }),
-                );
-            }
-            Err(e) => {
-                display.insert(
-                    case.id.clone(),
-                    json!({
-                        "unicode": Value::Null,
-                        "latex": Value::Null,
-                        "ascii": Value::Null,
-                        "errors": { "parse": e.to_string() },
-                    }),
-                );
-            }
-        }
-    }
-    display
 }
 
 /// Substitution phase.

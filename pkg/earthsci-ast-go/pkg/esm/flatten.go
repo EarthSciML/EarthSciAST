@@ -39,26 +39,6 @@ import (
 // The cross-language contract is tests/conformance/flatten/cases.json, generated
 // from the Python oracle; flatten_conformance_test.go drives it.
 
-// intExactCutoff is the magnitude below which every integer-valued float64 is
-// representable exactly (2^52 < 1e15 < 2^53). Above it, consecutive integers are
-// no longer all representable, so int64(v) could silently misround; such
-// coefficients fall back to the general float rendering instead.
-const intExactCutoff = 1e15
-
-// formatStoich renders a stoichiometric coefficient using the shortest form
-// that round-trips exactly through JSON: integer-valued coefficients emit
-// without a decimal (e.g. "2"), fractional coefficients use the canonical
-// minimal float representation (e.g. "0.87").
-func formatStoich(v float64) string {
-	if math.IsInf(v, 0) || math.IsNaN(v) {
-		return strconv.FormatFloat(v, 'g', -1, 64)
-	}
-	if v == math.Trunc(v) && math.Abs(v) < intExactCutoff {
-		return strconv.FormatInt(int64(v), 10)
-	}
-	return strconv.FormatFloat(v, 'g', -1, 64)
-}
-
 // ============================================================================
 // Errors (esm-libraries-spec §4.7.6.10)
 // ============================================================================
@@ -404,10 +384,7 @@ type LiftedShape struct {
 // FlattenedEquation is a single equation of the flattened system, with
 // dot-namespaced Expression TREES on both sides.
 //
-// LHS/RHS were strings rendered by a flatten-local pretty printer, which made
-// every downstream pass re-parse text and made Go's equation rendering
-// disagree with the shared display corpus. They are trees now; render them with
-// ToASCII / ToUnicode / ToLatex, which is what the cross-language fixtures pin.
+// LHSString and RHSString show a side as Typst math (PrintMath).
 //
 // SourceSystem is the equation's SLOT OWNER: the component whose equation list
 // it sits in, which decides what a later operator_compose entry can see
@@ -429,13 +406,13 @@ type FlattenedEquation struct {
 	Lifted        bool
 }
 
-// LHSString renders the equation's left-hand side with the shared ASCII
-// renderer (the one tests/display and tests/conformance/flatten pin).
-func (e FlattenedEquation) LHSString() string { return ToASCII(e.LHS) }
+// LHSString shows the equation's left-hand side as Typst math under its own
+// names (PrintMath, ExpressionNames).
+func (e FlattenedEquation) LHSString() string { return mathText(e.LHS) }
 
-// RHSString renders the equation's right-hand side with the shared ASCII
-// renderer.
-func (e FlattenedEquation) RHSString() string { return ToASCII(e.RHS) }
+// RHSString shows the equation's right-hand side as Typst math under its own
+// names (PrintMath, ExpressionNames).
+func (e FlattenedEquation) RHSString() string { return mathText(e.RHS) }
 
 // FlattenMetadata records provenance information about the flattening operation.
 type FlattenMetadata struct {
@@ -3268,7 +3245,7 @@ func assembleSystem(file *ESMFile, components map[string]*componentSystem, order
 		isArrayEq := exprHasArrayOp(eq.LHS) || exprHasArrayOp(eq.RHS)
 		if dep != "" && !isArrayEq {
 			if existing, ok := seen[dep]; ok {
-				if ToASCII(existing.RHS) == ToASCII(eq.RHS) {
+				if sameExpression(existing.RHS, eq.RHS) {
 					continue
 				}
 				// A single source system that authored two equations with the

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -150,8 +151,8 @@ func TestMergedRenameReachFlattenCases(t *testing.T) {
 					}
 				}
 				for _, eq := range flat.Equations {
-					rendered := ToASCII(eq.LHS) + " = " + ToASCII(eq.RHS)
-					if strings.Contains(rendered, gone) {
+					rendered := showJSON(eq.LHS) + " = " + showJSON(eq.RHS)
+					if strings.Contains(rendered, strconv.Quote(gone)) {
 						t.Errorf("equation still references the merged-away %q: %s", gone, rendered)
 					}
 				}
@@ -165,7 +166,7 @@ func TestMergedRenameReachFlattenCases(t *testing.T) {
 			found := false
 			for _, eq := range flat.Equations {
 				if lhsDependentVar(eq.LHS) == tc.TendencyOf {
-					rhs = ToASCII(eq.RHS)
+					rhs = showJSON(eq.RHS)
 					found = true
 					break
 				}
@@ -174,7 +175,7 @@ func TestMergedRenameReachFlattenCases(t *testing.T) {
 				t.Fatalf("no equation defines %s", tc.TendencyOf)
 			}
 			for _, name := range tc.TendencyReferences {
-				if !strings.Contains(rhs, name) {
+				if !strings.Contains(rhs, strconv.Quote(name)) {
 					t.Errorf("D(%s) must reference %q, got %s", tc.TendencyOf, name, rhs)
 				}
 			}

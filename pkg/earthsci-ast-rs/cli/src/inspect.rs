@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::args::{ConvertFormat, DisplayFormat, GraphFormat, GraphLevel};
+use crate::args::{ConvertFormat, GraphFormat, GraphLevel, MathFormat};
 use crate::esm_impl::{fail, fail_silent};
 use crate::input::{collect_esm_files, load_at, read_input};
 
@@ -283,17 +283,14 @@ pub(crate) fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn s
     Ok(())
 }
 
-pub(crate) fn run_pretty(
-    file: PathBuf,
-    format: DisplayFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_pretty(file: PathBuf, format: MathFormat) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
     let esm_file = load_at(&file, &content)?;
 
-    let render = |expr: &earthsci_ast::Expr| match format {
-        DisplayFormat::Unicode => earthsci_ast::to_unicode(expr),
-        DisplayFormat::Latex => earthsci_ast::to_latex(expr),
-        DisplayFormat::Ascii => earthsci_ast::to_ascii(expr),
+    // An expression or an equation, printed with its own names declared.
+    let render = |value: serde_json::Value| {
+        let names = earthsci_ast::expression_names(&value);
+        earthsci_ast::print_math(&value, &names, format.into())
     };
 
     println!("Displaying expressions in {}:", file.display());
@@ -307,9 +304,11 @@ pub(crate) fn run_pretty(
                 model.name.as_deref().unwrap_or("unnamed")
             );
             for (i, equation) in model.equations.iter().enumerate() {
-                let lhs = render(&equation.lhs);
-                let rhs = render(&equation.rhs);
-                println!("  Eq {}: {} = {}", i + 1, lhs, rhs);
+                let equation = serde_json::json!({
+                    "lhs": serde_json::to_value(&equation.lhs)?,
+                    "rhs": serde_json::to_value(&equation.rhs)?,
+                });
+                println!("  Eq {}: {}", i + 1, render(equation));
             }
         }
     }
@@ -319,7 +318,7 @@ pub(crate) fn run_pretty(
         for (rs_id, rs) in reaction_systems {
             println!("\nReaction System: {rs_id}");
             for (i, reaction) in rs.reactions.iter().enumerate() {
-                let rate = render(&reaction.rate);
+                let rate = render(serde_json::to_value(&reaction.rate)?);
                 println!("  Reaction {}: rate = {}", i + 1, rate);
             }
         }
@@ -551,6 +550,16 @@ pub(crate) fn run_convert(
     let output_content = match to {
         ConvertFormat::Json => to_json(&esm_file)?,
         ConvertFormat::CompactJson => to_json_compact(&esm_file)?,
+        ConvertFormat::Markdown | ConvertFormat::Typst => {
+            let format = match to {
+                ConvertFormat::Markdown => earthsci_ast::DocumentFormat::Markdown,
+                _ => earthsci_ast::DocumentFormat::Typst,
+            };
+            match serde_json::from_str::<serde_json::Value>(&to_json(&esm_file)?)? {
+                serde_json::Value::Object(doc) => earthsci_ast::print_document(&doc, format),
+                _ => return Err(fail("the document is not a JSON object")),
+            }
+        }
     };
 
     if let Some(output_path) = output {

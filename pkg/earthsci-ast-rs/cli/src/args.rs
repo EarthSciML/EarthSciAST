@@ -24,15 +24,16 @@ pub(crate) enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Pretty-print mathematical expressions in an ESM file
+    /// Pretty-print the equations and reaction rates in an ESM file as math
     #[command(visible_alias = "display")]
     Pretty {
         /// Path to the ESM file
         #[arg(value_name = "FILE")]
         file: PathBuf,
-        /// Output format (unicode, latex, ascii)
-        #[arg(short, long, default_value = "unicode")]
-        format: DisplayFormat,
+        /// Math notation: typst (Typst math) or markdown (LaTeX math, as the
+        /// ESM Markdown format writes it)
+        #[arg(short, long, default_value = "typst")]
+        format: MathFormat,
     },
     /// Extract a single component from an ESM file
     Extract {
@@ -87,7 +88,8 @@ pub(crate) enum Commands {
         /// Output file (or stdout if not specified)
         #[arg(short, long, value_name = "OUTPUT")]
         output: Option<PathBuf>,
-        /// Target format (json, compact-json)
+        /// Target format: json, compact-json, or a source format, markdown (ESM
+        /// Markdown) or typst (ESM Typst)
         #[arg(long, default_value = "json")]
         to: ConvertFormat,
     },
@@ -291,6 +293,10 @@ pub(crate) enum SimulateFormat {
 pub(crate) enum ConvertFormat {
     Json,
     CompactJson,
+    /// The ESM Markdown source format (`print_markdown`).
+    Markdown,
+    /// The ESM Typst source format (`print_typst`).
+    Typst,
 }
 
 /// `test --solver`. [`earthsci_ast::Alg`] is a library type and cannot derive
@@ -315,10 +321,21 @@ impl From<SolverAlg> for earthsci_ast::Alg {
 
 // === CLI helpers ===========================================================
 
-/// The three expression rendering formats accepted by `pretty --format`.
+/// The math notations accepted by `pretty --format`: those of the two source
+/// formats.
 #[derive(Clone, Copy, ValueEnum)]
-pub(crate) enum DisplayFormat {
-    Unicode,
-    Latex,
-    Ascii,
+pub(crate) enum MathFormat {
+    /// Typst math.
+    Typst,
+    /// LaTeX math, as the ESM Markdown format writes it.
+    Markdown,
+}
+
+impl From<MathFormat> for earthsci_ast::DocumentFormat {
+    fn from(format: MathFormat) -> Self {
+        match format {
+            MathFormat::Typst => earthsci_ast::DocumentFormat::Typst,
+            MathFormat::Markdown => earthsci_ast::DocumentFormat::Markdown,
+        }
+    }
 }

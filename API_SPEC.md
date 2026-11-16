@@ -361,6 +361,8 @@ reproduces byte for byte.
 | `parse_typst` | Typst text → document | `parse_typst` | `parseTypst` | `parse_typst` | `parse_typst` | `ParseTypst` |
 | `parse_document` | either, by format | `parse_document` | `parseDocument` | `parse_document` | `parse_document` | `ParseDocument` |
 | `print_math` | one expression or equation → LaTeX or Typst math | `print_math` | `printMath` | `print_math` | `print_math` | `PrintMath` |
+| `parse_math` | LaTeX or Typst math → one expression or equation | `parse_math` | `parseMath` | `parse_math` | `parse_math` | `ParseMath` |
+| `expression_names` | the names an expression uses, in order of first use | `expression_names` | `expressionNames` | `expression_names` | `expression_names` | `ExpressionNames` |
 | `document_format` | the format selector | `:markdown` / `:typst` | `'markdown' \| 'typst'` | `DocumentFormat` (or the string) | `DocumentFormat` | `DocumentMarkdown` / `DocumentTypst` |
 
 Like `canonicalize_document`, these take and return the decoded JSON document,
@@ -376,6 +378,22 @@ math for `typst`. `names` plays the part of the names a component declares
 in it prints in its declared shape and the printer avoids spellings that would
 collide with it. No template is in scope. The golden set's `math` field is
 `print_math` of the case's equation under its model's names.
+
+`parse_math(text, names, format)` is its inverse:
+`parse_math(print_math(e, names, f), names, f) == canonicalize_document(e)`. It
+reads one expression, or one equation, with the document readers' math parser
+(`Math.parseLatex` / `Math.parseTypst`) under the same declared names, no
+template in scope, and inside the same reader bounds as a document read. Text
+whose top is `=` reads as an equation (`{lhs, rhs}`), as a display does; any
+other text reads as an expression. It refuses as the document readers do, with
+`removed_op` or `parse_error` (below). `expression_names(expr)` lists the
+names an expression or equation uses (its string leaves under `lhs`, `rhs` and
+`args`), in order of first use: the `names` to show an expression on its own.
+
+These replace the plain-text expression surface (`parse_expression`,
+`parse_equation`, `to_ascii`, `to_unicode`, `to_latex`), which is removed from
+every binding. A binding that quotes an expression in a message, or shows one
+as a string, prints it with `print_math(e, expression_names(e), typst)`.
 
 A text a reader refuses raises the binding's diagnostic error with one of two
 codes:
@@ -518,8 +536,6 @@ Divergences:
 | `free_variables(expr) -> {str}` | free variable names | no, anywhere |
 | `simplify(expr) -> Expr` | algebraic simplification | no, anywhere |
 | `substitute(expr, bindings) -> Expr` | capture-free substitution | no, anywhere |
-| `parse_expression(text) -> Expr` | inverse of `to_ascii` | yes, `ExpressionParseError` |
-| `parse_equation(text) -> Equation` | inverse of `to_ascii` on an equation | yes, `ExpressionParseError` |
 | `canonicalize(expr) -> Expr` | RFC §5.4 canonical form | yes, `CanonicalizeError` |
 | `canonical_json(expr) -> str` | canonical serialization | yes, `CanonicalizeError` |
 | `canonicalize_document(doc) -> doc` | every units string of a decoded JSON document in the canonical unit spelling (esm-spec §4.8.2), the deprecated `neg`/`pow` rewritten to `-`/`^` (esm-spec §4.2), every number in canonical form (CONFORMANCE_SPEC §5.5.3.1); nothing else changes | no, anywhere |
@@ -553,21 +569,22 @@ Divergences:
 - **Canonicalization error point.** Go gates emissible fields on the *input*
   tree; TypeScript and Julia gate the *canonicalized* tree. Same error code,
   different detection point.
-- **`parse_equation` return.** Go returns `*Equation`; everyone else a value.
 
 ### 5.5 Display
 
-`to_ascii(target) -> str`, `to_unicode(target) -> str`, `to_latex(target) -> str`.
+**Canonical.** An expression or an equation displays as math through
+`print_math` (§5.1, "documents as source text"); a whole document displays as
+its Markdown or Typst source through `print_markdown` / `print_typst`. Where a
+language shows a value as a string (`Display`, `show`, `__str__`, `String()`,
+`toString`), an expression or an equation shows as
+`print_math(e, expression_names(e), typst)`. Expressions are read back from
+text with `parse_math`.
 
-**Canonical.** All three accept the full render domain: `Expr`, `Equation`,
-`Model`, `ReactionSystem`, `EsmFile`. Total.
-
-**Today** all five accept the full domain in all three renderers (§8 item 18);
-TypeScript additionally accepts a single `Reaction`. A container has no
-mathematical notation, so a `Model`, `ReactionSystem` or `EsmFile` renders as
-its esm-spec §6.3 text summary. Rust takes any `T: TextRenderable`, which
-`Expr`, `Equation` and the three containers implement; Go takes its untyped
-`Expression` and switches on the dynamic type.
+The plain-text, Unicode and old LaTeX renderers (`to_ascii`, `to_unicode`,
+`to_latex`), the text summary of a model, reaction system or file they gave,
+and the plain-text parsers (`parse_expression`, `parse_equation`, and
+TypeScript's `parseReaction`) are removed from every binding; MIGRATION.md
+lists each removed function and its replacement.
 
 ### 5.6 Flatten
 
@@ -2028,7 +2045,7 @@ reading that as a gap.
 | `derive_odes` | function | `derive_odes` | `deriveODEs` / `deriveOdes` | `derive_odes` | `derive_odes` | `DeriveODEs` |
 | `discrete_parameters` | function | `discrete_parameters` | `discreteParameters` | `discrete_parameters` | `discrete_parameters` | `DiscreteParameters` |
 | `enum_lowering_error` | error | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` |
-| `expression_parse_error` | error | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` |
+| `expression_names` | function | `expression_names` | `expressionNames` | `expression_names` | `expression_names` | `ExpressionNames` |
 | `flatten` | function | `flatten` | `flatten` | `flatten` | `flatten` | `Flatten` |
 | `flatten_metadata` | type | `FlattenMetadata` | `FlattenMetadata` | `FlattenMetadata` | `FlattenMetadata` | `FlattenMetadata` |
 | `flattened_system` | type | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` |
@@ -2045,9 +2062,8 @@ reading that as a gap.
 | `observed_unknowns` | function | `observed_unknowns` | `observedUnknowns` | `observed_unknowns` | `observed_unknowns` | `ObservedUnknowns` |
 | `ode_states` | function | `ode_states` | `odeStates` | `ode_states` | `ode_states` | `ODEStates` |
 | `parse_document` | function | `parse_document` | `parseDocument` | `parse_document` | `parse_document` | `ParseDocument` |
-| `parse_equation` | function | `parse_equation` | `parseEquation` | `parse_equation` | `parse_equation` | `ParseEquation` |
-| `parse_expression` | function | `parse_expression` | `parseExpression` | `parse_expression` | `parse_expression` | `ParseExpression` |
 | `parse_markdown` | function | `parse_markdown` | `parseMarkdown` | `parse_markdown` | `parse_markdown` | `ParseMarkdown` |
+| `parse_math` | function | `parse_math` | `parseMath` | `parse_math` | `parse_math` | `ParseMath` |
 | `parse_typst` | function | `parse_typst` | `parseTypst` | `parse_typst` | `parse_typst` | `ParseTypst` |
 | `print_document` | function | `print_document` | `printDocument` | `print_document` | `print_document` | `PrintDocument` |
 | `print_markdown` | function | `print_markdown` | `printMarkdown` | `print_markdown` | `print_markdown` | `PrintMarkdown` |
@@ -2077,14 +2093,11 @@ reading that as a gap.
 | `supported_migration_targets` | function | `supported_migration_targets` | `getSupportedMigrationTargets` / `supportedMigrationTargets` | `supported_migration_targets` | `get_supported_migration_targets` / `supported_migration_targets` | `SupportedMigrationTargets` |
 | `system_kind` | function | `system_kind` | `systemKind` | `system_kind` | `system_kind` | `SystemKind` |
 | `term_origin` | type | `TermOrigin` | `TermOrigin` | `TermOrigin` | `TermOrigin` | `TermOrigin` |
-| `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToASCII` |
 | `to_dot` | function | `to_dot` | `toDot` | `to_dot` | `to_dot` | `ToDOT` |
 | `to_json` | function | `to_json` | `toJson` | `to_json` | `to_json` | `ToJSON` |
 | `to_json_compact` | function | `to_json_compact` | `toJsonCompact` | `to_json_compact` | `to_json_compact` | `ToJSONCompact` |
 | `to_json_graph` | function | `to_json_graph` | `toJsonGraph` | `to_json_graph` | `to_json_graph` | `ToJSONGraph` |
-| `to_latex` | function | `to_latex` | `toLatex` | `to_latex` | `to_latex` | `ToLatex` |
 | `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | `to_mermaid` | `ToMermaid` |
-| `to_unicode` | function | `to_unicode` | `toUnicode` | `to_unicode` | `to_unicode` | `ToUnicode` |
 | `unit_warning` | type | `UnitWarning` | `UnitWarning` | `UnitWarning` | `UnitWarning` | `UnitWarning` |
 | `validate` | function | `validate` | `validate` | `validate` | `validate` | `Validate` |
 | `validate_text` | function | `validate_text` | `validateText` | `validate_text` | `validate_complete` / `validate_text` | `ValidateText` |

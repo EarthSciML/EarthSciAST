@@ -488,7 +488,7 @@ func TestVariableBoundsFlatten(t *testing.T) {
 				continue
 			}
 			for i, got := range []any{goBoundRecord(v.LB), goBoundRecord(v.UB)} {
-				if !sameBound(got, w[i]) {
+				if !sameExpression(got, w[i]) {
 					t.Errorf("%s.%s = %#v, want %#v", v.Name, boundNames[i], got, w[i])
 				}
 			}
@@ -525,7 +525,7 @@ func TestVariableBoundsFlattenScaledReplacement(t *testing.T) {
 	if !ok {
 		t.Fatal("A.x missing")
 	}
-	if got := ToASCII(v.UB); got != ToASCII(ExprNode{Op: "*", Args: []any{2.0, "B.src"}}) {
-		t.Fatalf("A.x ub = %s, want the scaled replacement", got)
+	if !sameExpression(v.UB, ExprNode{Op: "*", Args: []any{2.0, "B.src"}}) {
+		t.Fatalf("A.x ub = %s, want the scaled replacement", showJSON(v.UB))
 	}
 }

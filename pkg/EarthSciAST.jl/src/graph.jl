@@ -618,7 +618,7 @@ its own, so every free variable in it feeds a synthetic `expr_result` node.
 ```julia
 graph = expression_graph(file)         # every component, scoped names
 graph = expression_graph(model)        # one model, bare names
-graph = expression_graph(parse_expression("k * (T_wall - T_air)"))
+graph = expression_graph(expression_from_json(parse_math("k (T_(upright(\"wall\")) - T_(upright(\"air\")))", ["k", "T_wall", "T_air"], :typst)))
 [e.source.name for e in graph.edges]   # the three free variables
 ```
 """
@@ -688,42 +688,6 @@ function expression_graph(expr::ASTExpr)::Graph{VariableNode, DependencyEdge}
         )
     end
     return _graph(b)
-end
-
-# Chemical subscript rendering utilities
-
-"""
-    render_chemical_formula(formula::String) -> String
-
-Convert chemical formula to format with subscripts for visualization.
-
-Thin wrapper over display.jl's element-aware
-[`format_chemical_subscripts`](@ref) (`:unicode` form), so graph exports render
-species exactly like the display formatters: digits become subscripts only when
-they follow a recognized chemical element symbol.
-
-# Examples
-```julia
-render_chemical_formula("CO2") # "CO₂"
-render_chemical_formula("H2SO4") # "H₂SO₄"
-render_chemical_formula("CH3OH") # "CH₃OH"
-```
-"""
-render_chemical_formula(formula::String)::String =
-    format_chemical_subscripts(formula, :unicode)
-
-"""
-    format_node_label(name::String) -> String
-
-Format node label with chemical subscript rendering if applicable.
-Detects chemical formulas and applies subscript formatting.
-"""
-function format_node_label(name::String)::String
-    # Check if this looks like a chemical formula (has letters followed by digits)
-    if occursin(r"[A-Za-z]+\d+", name)
-        return render_chemical_formula(name)
-    end
-    return name
 end
 
 # Export formats
@@ -806,8 +770,7 @@ function to_dot(graph::Graph{ComponentNode, CouplingEdge})::String
     # Add nodes with colors based on type
     for node in graph.nodes
         color = _component_node_style(node.type).dot_fillcolor
-        label = format_node_label(node.name)
-        push!(lines, "  \"$(_dot_escape(node.id))\" [label=\"$(_dot_escape(label))\", fillcolor=$color, style=filled];")
+        push!(lines, "  \"$(_dot_escape(node.id))\" [label=\"$(_dot_escape(node.name))\", fillcolor=$color, style=filled];")
     end
 
     # Add edges with colors based on coupling type
@@ -826,8 +789,7 @@ function to_dot(graph::Graph{VariableNode, DependencyEdge})::String
     # Add nodes with shapes based on variable kind
     for node in graph.nodes
         shape = _variable_node_style(node.kind).dot_shape
-        label = format_node_label(node.name)
-        push!(lines, "  \"$(_dot_escape(node.name))\" [label=\"$(_dot_escape(label))\", shape=$shape];")
+        push!(lines, "  \"$(_dot_escape(node.name))\" [label=\"$(_dot_escape(node.name))\", shape=$shape];")
     end
 
     # Add edges with styles based on relationship
@@ -855,8 +817,7 @@ function to_mermaid(graph::Graph{ComponentNode, CouplingEdge})::String
     # Add nodes
     for node in graph.nodes
         shape_open, shape_close = _component_node_style(node.type).mermaid
-        label = format_node_label(node.name)
-        push!(lines, "    $(_mermaid_id(node.id))$shape_open\"$(_mermaid_label(label))\"$shape_close")
+        push!(lines, "    $(_mermaid_id(node.id))$shape_open\"$(_mermaid_label(node.name))\"$shape_close")
     end
 
     # Add edges
@@ -874,8 +835,7 @@ function to_mermaid(graph::Graph{VariableNode, DependencyEdge})::String
     # Add nodes
     for node in graph.nodes
         shape_open, shape_close = _variable_node_style(node.kind).mermaid
-        label = format_node_label(node.name)
-        push!(lines, "    $(_mermaid_id(node.name))$shape_open\"$(_mermaid_label(label))\"$shape_close")
+        push!(lines, "    $(_mermaid_id(node.name))$shape_open\"$(_mermaid_label(node.name))\"$shape_close")
     end
 
     # Add edges

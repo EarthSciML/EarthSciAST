@@ -19,7 +19,7 @@ func Example_edit() {
 	}
 	defer os.RemoveAll(dir)
 
-	// region: edit ops=load_path,add_variable,add_equation,parse_equation,validate,to_json,write_path
+	// region: edit ops=load_path,add_variable,add_equation,parse_math,validate,to_json,write_path
 	doc, err := esm.LoadPath(fixture("decay.esm"))
 	if err != nil {
 		log.Fatal(err)
@@ -29,11 +29,14 @@ func Example_edit() {
 	model := esm.AddVariable(doc.Models["Decay"], "decayed", esm.ModelVariable{
 		Type: "unknown", Units: &units, Description: &desc,
 	})
-	eq, err := esm.ParseEquation("decayed = 100 - N")
+	// Typst math under the names it uses; an `=` at the top makes it an
+	// equation, a map with `lhs` and `rhs`.
+	read, err := esm.ParseMath("decayed = 100 - N", []string{"decayed", "N"}, esm.DocumentTypst)
 	if err != nil {
 		log.Fatal(err)
 	}
-	model = esm.AddEquation(model, *eq)
+	sides := read.(map[string]any)
+	model = esm.AddEquation(model, esm.Equation{LHS: sides["lhs"], RHS: sides["rhs"]})
 	doc.Models["Decay"] = model
 	fmt.Println(len(model.Equations), esm.Validate(doc).IsValid)
 

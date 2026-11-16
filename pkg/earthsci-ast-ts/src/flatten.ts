@@ -382,7 +382,7 @@ export interface LoaderField {
  *
  * `lhs` / `rhs` are canonical Expression ASTs — what every other binding
  * carries and what the shared corpus pins. A caller that wants text calls
- * `toAscii` on them.
+ * `printMath` on them.
  */
 export interface FlattenedEquation {
   /** Dot-namespaced LHS, e.g. `D(Atmos.O3, t)` or a bare `Atmos.total`. */

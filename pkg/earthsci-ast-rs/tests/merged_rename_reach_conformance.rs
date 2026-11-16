@@ -25,11 +25,17 @@
 //! Like `operator_compose_merge` the category carries no golden: what it pins is
 //! REACH, asserted as structure.
 
-use earthsci_ast::{FlattenedSystem, flatten, load_path, to_ascii};
+use earthsci_ast::{FlattenedSystem, expression_names, flatten, load_path};
 use serde_json::Value;
 use std::path::PathBuf;
 
 use crate::common;
+
+/// The variable names an expression (or equation) reads, space-separated, in
+/// order of first use: what the reach assertions below search.
+fn names_text<T: serde::Serialize + ?Sized>(value: &T) -> String {
+    expression_names(&crate::common::canon(value)).join(" ")
+}
 
 fn category_dir() -> PathBuf {
     common::category_dir("merged_rename_reach")
@@ -154,7 +160,7 @@ fn the_merged_away_name_survives_nowhere() {
             assert!(!flat.parameters.contains_key(gone));
             assert!(!flat.observed_variables.contains_key(gone));
             for eq in &flat.equations {
-                let rendered = format!("{} = {}", to_ascii(&eq.lhs), to_ascii(&eq.rhs));
+                let rendered = names_text(eq);
                 assert!(
                     !rendered.contains(gone),
                     "{}: equation still references the merged-away {gone}: {rendered}",
@@ -178,7 +184,7 @@ fn the_later_entry_lands_on_the_survivor() {
             .iter()
             .find(|e| dependent(&e.lhs).as_deref() == Some(target))
             .unwrap_or_else(|| panic!("{}: no equation defines {target}", case["id"]));
-        let rendered = to_ascii(&eq.rhs);
+        let rendered = names_text(&eq.rhs);
         for name in case["tendency_references"]
             .as_array()
             .expect("`tendency_references` is an array")
@@ -329,12 +335,12 @@ fn the_rename_reaches_events_and_variable_updates() {
         let mut affects: Vec<(String, String)> = Vec::new();
         for ev in &flat.continuous_events {
             for a in &ev.affects {
-                affects.push((a.lhs.clone(), to_ascii(&a.rhs)));
+                affects.push((a.lhs.clone(), names_text(&a.rhs)));
             }
         }
         for ev in &flat.discrete_events {
             for a in ev.affects.iter().flatten() {
-                affects.push((a.lhs.clone(), to_ascii(&a.rhs)));
+                affects.push((a.lhs.clone(), names_text(&a.rhs)));
             }
         }
         let want = case["event_affects"]
@@ -380,7 +386,7 @@ fn the_rename_reaches_events_and_variable_updates() {
             // drift as the rule union grows.
             let mut rendered = String::new();
             var.for_each_expression(&mut |expr| {
-                rendered.push_str(&to_ascii(expr));
+                rendered.push_str(&names_text(expr));
                 rendered.push(' ');
             });
             for name in wanted.as_array().expect("wanted is an array") {
