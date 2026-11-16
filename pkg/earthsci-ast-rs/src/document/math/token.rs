@@ -91,14 +91,10 @@ pub enum Kw {
     Lr,
     /// The LaTeX marker `\limits`.
     LimitsL,
-    // makearray: LaTeX `\begin{array}{l|l}` `\end{array}`; the region product
-    // with the bracket of the next bound pair, LaTeX `\times [`, Typst
-    // `times [`; the Typst named arguments `delim` and `augment` of its `mat(…)`
+    // makearray: LaTeX `\begin{array}{l|l}`; LaTeX `\end{array}`, which also
+    // closes a wide constant matrix ([`Tok::Carr`])
     Barr,
     Earr,
-    TimesLbk,
-    DelimK,
-    AugK,
     // a set of names, LaTeX `\{` `\}`, Typst `{` `}` (the `args` of a `faq`)
     Lset,
     Rset,
@@ -124,6 +120,9 @@ pub enum Tok {
     Esc(String),
     /// Typst `#value`.
     Code(Json),
+    /// LaTeX `\begin{array}{c…c}` with this many columns: a constant matrix
+    /// wider than `bmatrix` allows.
+    Carr(usize),
     /// The unit after a quantity's number.
     Units(Vec<Factor>),
     Kw(Kw),

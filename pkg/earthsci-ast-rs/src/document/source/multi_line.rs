@@ -16,16 +16,9 @@ use crate::document::math::{Sym, parse_toks};
 pub fn delta(t: &Tok) -> i64 {
     match t {
         Tok::Kw(
-            Kw::Lp
-            | Kw::Lpg
-            | Kw::Lb
-            | Kw::Lbk
-            | Kw::Bcases
-            | Kw::Bmat
-            | Kw::Lbkg
-            | Kw::Barr
-            | Kw::TimesLbk,
-        ) => 1,
+            Kw::Lp | Kw::Lpg | Kw::Lb | Kw::Lbk | Kw::Bcases | Kw::Bmat | Kw::Lbkg | Kw::Barr,
+        )
+        | Tok::Carr(_) => 1,
         Tok::Kw(
             Kw::Rp | Kw::Rpg | Kw::Rb | Kw::Rbk | Kw::Ecases | Kw::Emat | Kw::Rbkg | Kw::Earr,
         ) => -1,

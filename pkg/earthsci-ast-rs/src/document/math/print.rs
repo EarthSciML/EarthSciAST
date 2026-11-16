@@ -33,6 +33,7 @@ use super::token::{Kw, Sf, Tok};
 use super::units::{self, Factor};
 use crate::document::json::{JNum, Json};
 use crate::document::number;
+use crate::template_imports::NODE_HEADER_KEYS;
 
 // ## Text pieces
 
@@ -446,15 +447,57 @@ pub fn opn_ok(s: &str) -> bool {
     }
 }
 
-/// `Math.annotKeys`: the fields that annotate a node
-/// (`Notation.annotatedNodeFields`).
-pub const ANNOT_KEYS: &[&str] = &["id", "expect_cadence"];
-
 /// `Math.callFormOK`: an operator prints in the call form: an open operator,
-/// or a core operator of [`FIELD_CALL_OPS`] none of whose fields annotates it.
+/// or a core operator of [`FIELD_CALL_OPS`] none of whose fields is a node
+/// header field (`Notation.annotatedNodeFields`; `op` is never among the
+/// fields).
 pub fn call_form_ok(o: &str, fs: &[(String, Json)]) -> bool {
     !CORE_OPS.contains(&o)
-        || (FIELD_CALL_OPS.contains(&o) && fs.iter().all(|kv| !ANNOT_KEYS.contains(&kv.0.as_str())))
+        || (FIELD_CALL_OPS.contains(&o)
+            && fs
+                .iter()
+                .all(|kv| !NODE_HEADER_KEYS.contains(&kv.0.as_str())))
+}
+
+/// The printer writes the node `kvs` of operator `o` and fields `fs` in the
+/// call form `\operatorname{o}(…)`: the call form applies ([`call_form_ok`],
+/// [`opn_ok`], no template of that name in scope) and no native spelling
+/// does. Field keys are not checked: a key the printer would escape still reads
+/// in the call form. The reader accepts a call written with fields only when
+/// this holds.
+pub fn prints_as_call(c: Ctx, o: &str, fs: &[(String, Json)], kvs: &[(String, Json)]) -> bool {
+    call_form_ok(o, fs) && opn_ok(o) && tparams(c.s, o).is_none() && !native_form(c.sf, kvs)
+}
+
+/// The node prints in a native spelling of `faq`, `makearray` or a constant
+/// array or quantity (the cases [`pr`] tries before the call form for a node
+/// with fields).
+pub fn native_form(sf: Sf, kvs: &[(String, Json)]) -> bool {
+    faq_form(kvs).is_some_and(|f| faq_ok(&f))
+        || mk_form(kvs).is_some_and(|m| mk_ok(&m))
+        || const_native(sf, kvs)
+}
+
+/// The `const` cases of [`pr`]: an array with a native spelling, or a number or
+/// such an array with a unit the surface spells.
+pub fn const_native(sf: Sf, kvs: &[(String, Json)]) -> bool {
+    let field = |i: usize, k: &str| kvs.get(i).filter(|kv| kv.0 == k).map(|kv| &kv.1);
+    let empty_args = matches!(field(0, "args"), Some(Json::Arr(a)) if a.is_empty());
+    let is_const = matches!(field(1, "op"), Some(Json::Str(o)) if o == "const");
+    if !(empty_args && is_const) {
+        return false;
+    }
+    match kvs.len() {
+        3 => matches!(field(2, "value"), Some(v @ Json::Arr(_)) if arr_form(v).is_some()),
+        4 => match (field(2, "units"), field(3, "value")) {
+            (Some(Json::Str(u)), Some(Json::Num(_))) => units_ok(sf, u),
+            (Some(Json::Str(u)), Some(v @ Json::Arr(_))) => {
+                arr_form(v).is_some() && units_ok(sf, u)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// `Math.mathKeys`: the fields of a core operator in the call form that hold
@@ -1198,6 +1241,10 @@ pub fn arr_form(j: &Json) -> Option<AForm> {
     }
 }
 
+/// The most columns a LaTeX `bmatrix` takes (amsmath `MaxMatrixCols`); a wider
+/// matrix is written as a bracketed `array`.
+pub const BMAT_MAX_COLS: usize = 10;
+
 /// `Math.numToks`.
 pub fn num_toks(ns: &[JNum]) -> Vec<Vec<Tok>> {
     ns.iter().map(|n| vec![Tok::Num(n.clone())]).collect()
@@ -1216,16 +1263,24 @@ pub fn arr_toks(sf: Sf, a: &AForm) -> Vec<Tok> {
             &sep_by(&[kw(Kw::Comma)], num_toks(ns)),
             &[kw(Kw::Rp)],
         ]),
-        (AForm::Mat(rs), Sf::Latex) => cat(&[
-            &[kw(Kw::Bmat)],
-            &sep_by(
+        (AForm::Mat(rs), Sf::Latex) => {
+            let body = sep_by(
                 &[kw(Kw::Nl)],
                 rs.iter()
                     .map(|r| sep_by(&[kw(Kw::Amp)], num_toks(r)))
                     .collect(),
-            ),
-            &[kw(Kw::Emat)],
-        ]),
+            );
+            let n = rs[0].len();
+            if n > BMAT_MAX_COLS {
+                cat(&[
+                    &[kw(Kw::Lbkg), Tok::Carr(n)],
+                    &body,
+                    &[kw(Kw::Earr), kw(Kw::Rbkg)],
+                ])
+            } else {
+                cat(&[&[kw(Kw::Bmat)], &body, &[kw(Kw::Emat)]])
+            }
+        }
         (AForm::Mat(rs), Sf::Typst) => cat(&[
             &[kw(Kw::Mat), kw(Kw::Lp)],
             &sep_by(
@@ -1869,7 +1924,10 @@ pub fn pair_toks(c: Ctx, p: &(Json, Json)) -> Vec<Tok> {
 pub fn reg_toks(c: Ctx, r: &[(Json, Json)]) -> Vec<Tok> {
     let mut out = Vec::new();
     for (i, p) in r.iter().enumerate() {
-        out.push(kw(if i == 0 { Kw::Lbk } else { Kw::TimesLbk }));
+        if i > 0 {
+            out.push(kw(Kw::Times));
+        }
+        out.push(kw(Kw::Lbk));
         out.extend(pair_toks(c, p));
         out.push(kw(Kw::Rbk));
     }
@@ -1886,11 +1944,11 @@ pub fn mat_head() -> Vec<Tok> {
     vec![
         kw(Kw::Mat),
         kw(Kw::Lp),
-        kw(Kw::DelimK),
+        Tok::Word("delim".into()),
         kw(Kw::Colon),
         Tok::Txt("[".into()),
         kw(Kw::Comma),
-        kw(Kw::AugK),
+        Tok::Word("augment".into()),
         kw(Kw::Colon),
         Tok::Code(Json::Num(JNum::Int(1))),
         kw(Kw::Comma),

@@ -103,9 +103,6 @@ pub fn kw_chars(k: Kw) -> &'static str {
         Kw::Limits => "limits",
         Kw::Lr => "lr",
         Kw::Nl => "\\",
-        Kw::TimesLbk => "times [",
-        Kw::DelimK => "delim",
-        Kw::AugK => "augment",
         Kw::Lset => "{",
         Kw::Rset => "}",
         Kw::Rpg
@@ -171,7 +168,7 @@ pub fn tok_chars(t: &Tok) -> Vec<char> {
         Tok::Code(j) => std::iter::once('#').chain(typst_dict::encode(j)).collect(),
         Tok::Units(l) => unit_chars(l),
         Tok::Kw(k) => kw_chars(*k).chars().collect(),
-        Tok::Rm(_) | Tok::Jstr(_) | Tok::Esc(_) => vec![],
+        Tok::Rm(_) | Tok::Jstr(_) | Tok::Esc(_) | Tok::Carr(_) => vec![],
     }
 }
 
@@ -243,7 +240,6 @@ pub fn pretty(p: Option<&Tok>, t1: &Tok, t2: &Tok) -> bool {
         || (matches!(t1, Tok::Kw(Kw::Minus)) && p.is_some_and(atom_end))
         || (atom_end(t1) && atom_start(t2))
         || matches!(t2, Tok::Units(_))
-        || matches!(t2, Tok::Kw(Kw::TimesLbk))
 }
 
 /// `Typst.sp`: no space before a call parenthesis, nor before the `[` of an
@@ -313,8 +309,6 @@ pub const IDENT_KW: &[(&str, Kw)] = &[
     ("in", Kw::Inn),
     ("limits", Kw::Limits),
     ("lr", Kw::Lr),
-    ("delim", Kw::DelimK),
-    ("augment", Kw::AugK),
 ];
 
 /// `Typst.quotedArg`: `("…")` after a function name.
@@ -445,10 +439,6 @@ pub fn lex_ident(cs: &[char]) -> Option<(Tok, &[char])> {
             let node: Vec<char> = ".node".chars().collect();
             drop_p(&node, rest).map(|r| (Tok::Kw(Kw::Esmnode), r))
         }
-        "times" => match skip(rest) {
-            ['[', r @ ..] => Some((Tok::Kw(Kw::TimesLbk), r)),
-            _ => Some((Tok::Kw(Kw::Times), rest)),
-        },
         _ => match IDENT_KW.iter().find(|p| p.0 == ws) {
             Some(p) => Some((Tok::Kw(p.1), rest)),
             None => {
