@@ -306,11 +306,45 @@ pub(crate) fn make_declined_report(
 impl DeclinedTape {
     /// `(rule name, reason)` for every rule that did not lower, in rule order.
     pub(crate) fn declined_rules(&self) -> Vec<(String, String)> {
+        self.declines()
+            .map(|(r, why)| (r.name.clone(), why.message()))
+            .collect()
+    }
+
+    /// Every rule that did not lower, with its decline, in rule order.
+    pub(crate) fn declines(&self) -> impl Iterator<Item = (&RuleInfo, &Bail)> {
         self.rules
             .iter()
             .zip(&self.reasons)
-            .filter_map(|(r, why)| why.as_ref().map(|why| (r.name.clone(), why.clone())))
-            .collect()
+            .filter_map(|(r, why)| why.as_ref().map(|why| (r, why)))
+    }
+
+    /// The strict compilers' refusal of this build (`compiler_refused_rule`
+    /// under `compiler`), naming the first declined rule and its decline,
+    /// put in `context` when its message does not already mention it.
+    pub(crate) fn refusal(
+        &self,
+        compiler: &'static str,
+        context: Option<&str>,
+    ) -> crate::simulate::SimulateError {
+        let (rule, why) = self
+            .declines()
+            .next()
+            .expect("a declined tape names at least one rule");
+        let message = why.message();
+        let reason = match context {
+            Some(what) if !message.contains(what) => format!("{what}: {message}"),
+            _ => message,
+        };
+        crate::simulate::SimulateError::Compile(
+            crate::compile_error::CompileError::CompilerRefusedRule {
+                compiler,
+                kind: rule.kind_name(),
+                rule: rule.name.clone(),
+                tier: rule.cadence_name(),
+                reason,
+            },
+        )
     }
 }
 
@@ -452,26 +486,12 @@ impl ArrayCompiled {
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> Result<std::sync::Arc<TapeProgram>, crate::simulate::SimulateError> {
-        let declined = match self.tape(discrete_forcing).0 {
-            Ok(prog) => return Ok(prog),
-            Err(declined) => declined,
-        };
-        let (k, reason) = declined
-            .reasons
-            .iter()
-            .enumerate()
-            .find_map(|(k, why)| why.clone().map(|why| (k, why)))
-            .expect("a declined tape names at least one rule");
-        let rule = &declined.rules[k];
-        Err(crate::simulate::SimulateError::Compile(
-            crate::compile_error::CompileError::CompilerRefusedRule {
-                compiler: if self.is_xla() { "xla" } else { "native" },
-                kind: rule.kind_name(),
-                rule: rule.name.clone(),
-                tier: rule.cadence_name(),
-                reason,
-            },
-        ))
+        match self.tape(discrete_forcing).0 {
+            Ok(prog) => Ok(prog),
+            Err(declined) => {
+                Err(declined.refusal(if self.is_xla() { "xla" } else { "native" }, None))
+            }
+        }
     }
 
     /// Every entry the forcing buffer holds, as `(name, shape)` sorted by name:
@@ -687,7 +707,7 @@ impl ArrayCompiled {
     ) -> (Vec<TapeRuleRecord>, TapeBuildReport) {
         let (prog, report) = self.tape(discrete_forcing);
         let report = (*report).clone();
-        let (rules, reasons): (&[RuleInfo], &[Option<String>]) = match &prog {
+        let (rules, reasons): (&[RuleInfo], &[Option<Bail>]) = match &prog {
             Ok(prog) => (&prog.rules, &[]),
             Err(declined) => (&declined.rules, &declined.reasons),
         };
@@ -698,7 +718,7 @@ impl ArrayCompiled {
                 name: r.name.clone(),
                 kind: r.kind_name(),
                 cadence: r.cadence_name(),
-                fallback_reason: reasons.get(k).cloned().flatten(),
+                fallback_reason: reasons.get(k).and_then(|b| b.as_ref().map(Bail::message)),
             })
             .collect();
         (records, report)

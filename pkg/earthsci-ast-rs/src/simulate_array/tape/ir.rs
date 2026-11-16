@@ -2767,9 +2767,43 @@ pub(crate) struct DeclinedTape {
     /// Every rule of the model, in the order a program would have run them.
     pub rules: Vec<RuleInfo>,
     /// Parallel to `rules`: `None` for a rule that lowered, else the DEEPEST
-    /// decline reason reached while trying (the overlay's `note_bail`
-    /// taxonomy). At least one entry is `Some`.
-    pub reasons: Vec<Option<String>>,
+    /// decline reached while trying (the overlay's `note_bail` taxonomy). At
+    /// least one entry is `Some`.
+    pub reasons: Vec<Option<Bail>>,
+}
+
+/// Why a rule could not be lowered. Carries the DEEPEST bail site, mirroring
+/// the overlay's `note_bail` convention (the first log entry is the actual
+/// unsupported construct).
+#[derive(Clone, Debug)]
+pub(crate) struct Bail {
+    /// The diagnostic code a decline that is a user-facing error carries (a
+    /// range restriction's `range_*`), raised as that error rather than as
+    /// `compiler_refused_rule`.
+    pub code: Option<&'static str>,
+    pub reason: String,
+}
+
+impl Bail {
+    pub(crate) fn new(reason: String) -> Self {
+        Bail { code: None, reason }
+    }
+
+    pub(crate) fn coded(code: &'static str, reason: String) -> Self {
+        Bail {
+            code: Some(code),
+            reason,
+        }
+    }
+
+    /// The decline as reports spell it: the reason, after its code when it
+    /// has one.
+    pub(crate) fn message(&self) -> String {
+        match self.code {
+            Some(code) => format!("{code}: {}", self.reason),
+            None => self.reason.clone(),
+        }
+    }
 }
 
 /// One storage bucket of the slab: several slots may share it (recycling).

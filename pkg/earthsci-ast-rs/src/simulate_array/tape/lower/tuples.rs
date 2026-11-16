@@ -351,8 +351,10 @@ impl TapeBuilder<'_> {
         let room = budget
             .saturating_sub(self.tuples_held)
             .min(MAX_PROMOTED_ELEMS as u64) as usize;
-        let too_long = || Bail {
-            reason: format!("contracted: tuple list too long (over {MAX_PROMOTED_ELEMS} tuples)"),
+        let too_long = || {
+            Bail::new(format!(
+                "contracted: tuple list too long (over {MAX_PROMOTED_ELEMS} tuples)"
+            ))
         };
         let list = match self.walk_tuple_contraction(&spec, room, combine_op)? {
             Walked::Listed(list) => list,
@@ -678,9 +680,7 @@ impl TapeBuilder<'_> {
             .try_fold(1usize, |acc, (l, h)| {
                 acc.checked_mul((h - l + 1).max(0) as usize)
             })
-            .ok_or_else(|| Bail {
-                reason: "aggregate: a nested contraction window too large".into(),
-            })?;
+            .ok_or_else(|| Bail::new("aggregate: a nested contraction window too large".into()))?;
         let total = m.checked_mul(per).filter(|&n| n <= MAX_PROMOTED_ELEMS);
         let Some(total) = total else {
             bail_tape!("contracted: nested tuple list too long (over {MAX_PROMOTED_ELEMS} tuples)");
@@ -734,9 +734,10 @@ impl TapeBuilder<'_> {
                     }
                 }
             }
-            rows.push(u32::try_from((t + 1) * per).map_err(|_| Bail {
-                reason: "contracted: nested tuple list too long".into(),
-            })?);
+            rows.push(
+                u32::try_from((t + 1) * per)
+                    .map_err(|_| Bail::new("contracted: nested tuple list too long".into()))?,
+            );
         }
         self.tuples_held = self.tuples_held.saturating_add(total as u64);
         let idx_names: Vec<String> = names[..outer.len()].to_vec();
@@ -1202,19 +1203,17 @@ impl TapeBuilder<'_> {
                             } else if let Some(i) = contract_names.iter().position(|n| n == p) {
                                 Ok(Parent::Contracted(i))
                             } else {
-                                Err(Bail {
-                                    reason: format!(
-                                        "contracted: ragged bound's parent `{p}` is not an index \
+                                Err(Bail::new(format!(
+                                    "contracted: ragged bound's parent `{p}` is not an index \
                                          of the node"
-                                    ),
-                                })
+                                )))
                             }
                         })
                         .collect::<LResult<Vec<Parent>>>()?;
-                    let (shape, vals) = self.known_named(offsets).ok_or_else(|| Bail {
-                        reason: format!(
+                    let (shape, vals) = self.known_named(offsets).ok_or_else(|| {
+                        Bail::new(format!(
                             "contracted: ragged offsets factor `{offsets}` is not build-time data"
-                        ),
+                        ))
                     })?;
                     DimBound::Ragged {
                         shape,
@@ -1312,12 +1311,12 @@ impl TapeBuilder<'_> {
                                 )
                                 .ok()
                             })
-                            .ok_or_else(|| Bail {
-                                reason: format!(
+                            .ok_or_else(|| {
+                                Bail::new(format!(
                                     "aggregate: join key column `{name}` is not build-time \
                                      data{}",
                                     self.not_foldable_note(name)
-                                ),
+                                ))
                             })?;
                         let col = if exact_ints {
                             data_key_column(&a)
@@ -1337,8 +1336,10 @@ impl TapeBuilder<'_> {
             Ok(Some(parts))
         };
         let pair = |l, r| {
-            composite_pair_keys(l, r).map(Some).ok_or_else(|| Bail {
-                reason: "aggregate: a composite join key's columns disagree in length".to_string(),
+            composite_pair_keys(l, r).map(Some).ok_or_else(|| {
+                Bail::new(
+                    "aggregate: a composite join key's columns disagree in length".to_string(),
+                )
             })
         };
         let sides = match (side(&g.cols_l, true)?, side(&g.cols_r, true)?) {
@@ -1381,17 +1382,16 @@ impl TapeBuilder<'_> {
                     };
                     let a =
                         ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), (*vals).clone())
-                            .map_err(|e| Bail {
-                                reason: format!(
+                            .map_err(|e| {
+                                Bail::new(format!(
                                     "aggregate: overlap join gate factor `{name}`: {e}"
-                                ),
+                                ))
                             })?;
                     arrays.insert(name.clone(), a);
                 }
                 let env = |names: &[String]| {
-                    crate::broad_phase::envelope_vectors(names, &arrays).map_err(|e| Bail {
-                        reason: format!("aggregate: overlap join gate: {e}"),
-                    })
+                    crate::broad_phase::envelope_vectors(names, &arrays)
+                        .map_err(|e| Bail::new(format!("aggregate: overlap join gate: {e}")))
                 };
                 let (src, tgt) = (env(&ov.src_env)?, env(&ov.tgt_env)?);
                 let pairs =

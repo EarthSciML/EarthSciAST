@@ -64,17 +64,9 @@ use std::sync::Arc;
 // Bail plumbing.
 // ---------------------------------------------------------------------------
 
-/// Why a rule could not be lowered. Carries the DEEPEST bail site, mirroring
-/// the overlay's `note_bail` convention (the first log entry is the actual
-/// unsupported construct).
-#[derive(Debug)]
-pub(crate) struct Bail {
-    pub reason: String,
-}
-
 macro_rules! bail_tape {
     ($($t:tt)*) => {
-        return Err(Bail { reason: format!($($t)*) })
+        return Err(Bail::new(format!($($t)*)))
     };
 }
 
@@ -83,11 +75,11 @@ macro_rules! bail_tape {
 /// table that outgrows that refuses the rule by name rather than wrapping onto
 /// another entry.
 fn tape_index(n: usize, table: &str) -> LResult<u32> {
-    u32::try_from(n).map_err(|_| Bail {
-        reason: format!(
+    u32::try_from(n).map_err(|_| {
+        Bail::new(format!(
             "tape index overflow: the program has more than {} {table}",
             u32::MAX
-        ),
+        ))
     })
 }
 
@@ -987,7 +979,7 @@ pub(crate) struct TapeBuilder<'m> {
     rules: Vec<RuleInfo>,
     /// Parallel to `rules`: the deepest decline reason of each rule that did
     /// not lower. Any `Some` means the build yields no program.
-    declined: Vec<Option<String>>,
+    declined: Vec<Option<Bail>>,
     /// Per-section chunk streams (index = Cadence as usize).
     streams: [Vec<Chunk>; 3],
     /// Home-stream chunk index per rule ordinal (for export insertion).
@@ -1717,13 +1709,15 @@ impl<'m> TapeBuilder<'m> {
             .get(self.cur_rule as usize)
             .map(|r| r.name.as_str())
             .unwrap_or("?");
-        bail_tape!(
-            "{}: rule `{rule}` reads `{name}` along `{}` at cells {lo}..{hi}, which its \
-             storage box {box_lo}..{} does not hold",
+        Err(Bail::coded(
             crate::diagnostic::codes::RANGE_HALO_INSUFFICIENT,
-            dom.set,
-            box_lo + box_len - 1
-        )
+            format!(
+                "rule `{rule}` reads `{name}` along `{}` at cells {lo}..{hi}, which its \
+                 storage box {box_lo}..{} does not hold",
+                dom.set,
+                box_lo + box_len - 1
+            ),
+        ))
     }
 
     /// `index(src, …)` of a range-restricted source with every subscript an
@@ -1883,11 +1877,13 @@ impl<'m> TapeBuilder<'m> {
         let dom = &axes[data_d];
         let whole = src_origin[data_d] == dom.lo && src_shape[data_d] as i64 == dom.hi - dom.lo + 1;
         if !whole {
-            bail_tape!(
-                "{}: `{name}` is read at a computed subscript along the decomposed axis `{}`",
+            return Err(Bail::coded(
                 crate::diagnostic::codes::RANGE_GLOBAL_LOCALITY,
-                dom.set
-            );
+                format!(
+                    "`{name}` is read at a computed subscript along the decomposed axis `{}`",
+                    dom.set
+                ),
+            ));
         }
         if dom.lo != 1 {
             bail_tape!(
@@ -6012,9 +6008,8 @@ impl<'m> TapeBuilder<'m> {
             out,
             coords: coords.clone(),
             shape,
-            axis: u8::try_from(axis).map_err(|_| Bail {
-                reason: format!("observed: recurrence axis {axis} out of range"),
-            })?,
+            axis: u8::try_from(axis)
+                .map_err(|_| Bail::new(format!("observed: recurrence axis {axis} out of range")))?,
             body_len: 0,
             result: Operand::Lit(f64::NAN),
         });
@@ -7352,9 +7347,8 @@ impl<'m> TapeBuilder<'m> {
                 return self.lower_prefix_scan_steps(c, ranges, scan, combine_op);
             }
         };
-        let axis = u8::try_from(scan.axis).map_err(|_| Bail {
-            reason: "scan: axis index out of range".into(),
-        })?;
+        let axis = u8::try_from(scan.axis)
+            .map_err(|_| Bail::new("scan: axis index out of range".into()))?;
         let sec = self.placement(self.lv_cadence(&term));
         let out = self.new_slot(&full_shape, &full_lo, false, sec);
         let instr = Instr::Scan {
@@ -7812,7 +7806,7 @@ pub(super) fn build_tape_program(
             }
             Err(bail) => {
                 b.rollback(txn);
-                b.declined[b.cur_rule as usize] = Some(bail.reason);
+                b.declined[b.cur_rule as usize] = Some(bail);
                 b.obs_defined.insert(name, ObsVal::Declined);
             }
         }
@@ -7850,7 +7844,7 @@ pub(super) fn build_tape_program(
             Ok(()) => {}
             Err(bail) => {
                 b.rollback(txn);
-                b.declined[b.cur_rule as usize] = Some(bail.reason);
+                b.declined[b.cur_rule as usize] = Some(bail);
             }
         }
         b.end_rule();
@@ -8167,7 +8161,7 @@ impl<'m> TapeBuilder<'m> {
     /// its decline.
     fn take_tile_violation(&mut self) -> LResult<()> {
         match self.tile_violation.take() {
-            Some(reason) => Err(Bail { reason }),
+            Some(reason) => Err(Bail::new(reason)),
             None => Ok(()),
         }
     }
