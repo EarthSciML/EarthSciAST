@@ -491,9 +491,11 @@ fn lower_node_joins(
             Some([sl, sr]) => {
                 for s in [sl, sr] {
                     if !declared.contains(s.as_str()) {
+                        let mut symbols: Vec<&str> = declared.iter().copied().collect();
+                        symbols.sort_unstable();
                         return Err(CompileError::build_err(format!(
                             "`join.syms` names '{s}', which is not a range symbol of this \
-                             aggregate ({declared:?}); both entries must name one of its \
+                             aggregate ({symbols:?}); both entries must name one of its \
                              `ranges` (CONFORMANCE_SPEC §5.5.8)"
                         )));
                     }
