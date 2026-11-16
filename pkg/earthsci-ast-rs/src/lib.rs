@@ -59,6 +59,7 @@ pub mod adapter_support;
 pub(crate) mod broad_phase;
 pub(crate) mod cadence;
 pub(crate) mod canonicalize;
+pub(crate) mod causal_self_read;
 pub(crate) mod classification;
 /// Core of the `compiled_rhs` conformance adapter. In the library, not in
 /// `src/bin/`, so the integration test drives the binary's exact code path
