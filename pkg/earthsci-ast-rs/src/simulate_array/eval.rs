@@ -2417,14 +2417,16 @@ pub fn eval_expression(
     param_names: &[String],
     t: f64,
 ) -> Result<Value, CompileError> {
-    eval_expression_with_extents(
-        expr,
-        inputs,
+    let inputs: ArrMap = inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    StandaloneScope {
+        inputs: &inputs,
         params,
         param_names,
         t,
-        crate::faq::empty_derived_extents(),
-    )
+        derived_extents: crate::faq::empty_derived_extents(),
+        const_arrays: ConstArrayScope::empty(),
+    }
+    .eval(expr)
 }
 
 /// [`eval_expression`] with the build-time **value-invention derived extents**
@@ -2469,15 +2471,16 @@ pub fn eval_expression_with_extents(
     t: f64,
     derived_extents: &HashMap<String, i64>,
 ) -> Result<Value, CompileError> {
-    eval_expression_with_extents_and_consts(
-        expr,
-        inputs,
+    let inputs: ArrMap = inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    StandaloneScope {
+        inputs: &inputs,
         params,
         param_names,
         t,
         derived_extents,
-        ConstArrayScope::empty(),
-    )
+        const_arrays: ConstArrayScope::empty(),
+    }
+    .eval(expr)
 }
 
 /// [`eval_expression_with_extents`] with an explicit CONST-ARRAY registry
@@ -2507,118 +2510,146 @@ pub fn eval_expression_with_extents_and_consts(
     // callers whose maps carry provider slabs must NOT take this boundary —
     // prepare's observed-graph loop holds an [`ArrMap`] and calls the shared
     // variant below, because deep-cloning a map that holds fifteen
-    // hundreds-of-MB SR slabs once per observed dominated the whole build
-    // (measured: ~87% of a warm ISRM prepare was memmove).
+    // hundreds-of-MB SR slabs once per observed dominated the whole build.
     let inputs: ArrMap = inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    eval_expression_with_extents_and_consts_shared(
-        expr,
-        &inputs,
+    StandaloneScope {
+        inputs: &inputs,
         params,
         param_names,
         t,
         derived_extents,
         const_arrays,
-    )
+    }
+    .eval(expr)
 }
 
-/// [`eval_expression_with_extents_and_consts`] minus the input-map rehash: the
-/// caller already holds the interpreter's own [`ArrMap`] and the arrays are
-/// borrowed for the duration of the call, byte-identically — no copy of any
-/// input array is made.
-/// Evaluate one observed that is a CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1),
-/// or report that it is not one.
-///
-/// `None` — `expr` contains no `index(name, …)` self-read, so the caller
-/// evaluates it exactly as it did before this existed. `Some(Ok(_))` — the
-/// sequential sweep ran and this is the finished array. `Some(Err(_))` — the
-/// self-read is there but is not a well-founded causal read, or a read reached
-/// a cell the sweep had not published.
-///
-/// **Why this exists on the build-pipeline path at all.** A recurrence has two
-/// evaluation routes in this runtime: the per-step observed materialization,
-/// and the build pipeline that materializes a relational document's whole
-/// observed graph up front. The construct originally implemented only the
-/// first, so it evaluated correctly under `esm test` and was DEAD wherever the
-/// pipeline build was taken — which is any document that ingests, and every
-/// document under `esm simulate`. Dead silently: the self-read fell through to
-/// an unbound-name `NaN`, and a body containing `max(x, 0)` — which the
-/// motivating fold's body is — turned that `NaN` into `0.0`, because IEEE-754
-/// `max` returns the non-NaN operand. The result was finite, plausible,
-/// monotone and wrong, with nothing logged at any level.
-///
-/// So this is not a second implementation. It resolves the frame with the same
-/// [`lower_recurrence`] the compiled path uses and runs the same
-/// [`sweep_recurrence`]; only the surrounding environment differs.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn eval_observed_recurrence(
-    name: &str,
-    expr: &Expr,
-    inputs: &ArrMap,
-    params: &[f64],
-    param_names: &[String],
-    t: f64,
-    derived_extents: &HashMap<String, i64>,
-    const_arrays: &ConstArrayScope,
-) -> Option<Result<ArrayD<f64>, CompileError>> {
-    // Cheap structural test first: no self-read, nothing to do, and every
-    // document that does not use the construct pays one expression walk.
-    if !expr_reads_self(expr, name) {
-        return None;
+/// The scope a standalone expression is evaluated in, outside any compiled
+/// model: named input arrays (borrowed, never copied), positional parameters,
+/// the time, the build-time value-invention extents and the const-array
+/// registry. With no model behind it, it vouches for no declared name (see
+/// [`EvalCtx::declared`]) and carries no loader forcing.
+#[derive(Clone, Copy)]
+pub(crate) struct StandaloneScope<'a> {
+    pub(crate) inputs: &'a ArrMap,
+    pub(crate) params: &'a [f64],
+    pub(crate) param_names: &'a [String],
+    pub(crate) t: f64,
+    pub(crate) derived_extents: &'a HashMap<String, i64>,
+    pub(crate) const_arrays: &'a ConstArrayScope,
+}
+
+impl StandaloneScope<'_> {
+    /// Run `f` with an evaluation environment over this scope.
+    fn with_env<R>(&self, f: impl FnOnce(&EvalEnv) -> R) -> R {
+        let empty: ArrMap = ArrMap::default();
+        let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+        f(&EvalEnv {
+            state_arrays: &empty,
+            params: self.params,
+            param_names: self.param_names,
+            t: self.t,
+            derived_extents: self.derived_extents,
+            forcing: &forcing,
+            const_lits: None,
+            const_arrays: self.const_arrays,
+            declared: empty_declared_names(),
+        })
     }
-    let lhs = Expr::Variable(name.to_string());
-    let lowered = match super::compile::lower_recurrence(name, &lhs, expr) {
-        Ok(Some(l)) => l,
-        // A self-read the lowering does not recognize as a recurrence. It must
-        // NOT fall through to a wholesale evaluation, which is what laundered
-        // it into a plausible number before.
-        Ok(None) => {
-            return Some(Err(CompileError::InterpreterBuildError {
-                details: format!(
-                    "recurrence_unsupported_form: '{name}' reads itself through `index` in its \
+
+    /// Evaluate `expr` (ranges already resolved) in this scope, reporting a
+    /// fault the evaluation latched as the error.
+    pub(crate) fn eval(&self, expr: &Expr) -> Result<Value, CompileError> {
+        check_evaluable(expr)?;
+        // A derived range over an unsized producer is refused rather than
+        // contracted as empty.
+        if let Some(from_faq) =
+            super::compile::first_unmaterialized_derived_range(expr, self.derived_extents)
+        {
+            return Err(super::compile::unmaterialized_derived_error(
+                &from_faq,
+                &HashMap::new(),
+                None,
+            ));
+        }
+        self.with_env(|env| {
+            let mut ctx = env.ctx(self.inputs);
+            let faults = FaultScope::enter();
+            let v = eval(expr, &mut ctx);
+            match faults.finish() {
+                Some(fault) => Err(CompileError::InterpreterBuildError {
+                    details: fault.message,
+                }),
+                None => Ok(v),
+            }
+        })
+    }
+
+    /// Evaluate the observed `name := expr` in this scope if it is a CAUSAL
+    /// SELF-REFERENCE (esm-spec §4.3.1.1).
+    ///
+    /// `None` — `expr` contains no `index(name, …)` self-read, so the caller
+    /// evaluates it as any other expression. `Some(Ok(_))` — the sequential
+    /// sweep ran and this is the finished array. `Some(Err(_))` — the
+    /// self-read is there but is not a well-founded causal read, or a read
+    /// reached a cell the sweep had not published.
+    ///
+    /// The build pipeline materializes a document's observed graph through
+    /// this scope, so a recurrence needs this path as well as the per-step
+    /// one. It resolves the frame with the same [`lower_recurrence`] the
+    /// compiled path uses and runs the same [`sweep_recurrence`]; only the
+    /// surrounding environment differs.
+    pub(crate) fn eval_recurrence(
+        &self,
+        name: &str,
+        expr: &Expr,
+    ) -> Option<Result<ArrayD<f64>, CompileError>> {
+        // Cheap structural test first: no self-read, nothing to do, and every
+        // document that does not use the construct pays one expression walk.
+        if !expr_reads_self(expr, name) {
+            return None;
+        }
+        let lhs = Expr::Variable(name.to_string());
+        let lowered = match super::compile::lower_recurrence(name, &lhs, expr) {
+            Ok(Some(l)) => l,
+            // A self-read the lowering does not recognize as a recurrence. It must
+            // NOT fall through to a wholesale evaluation, which is what laundered
+            // it into a plausible number before.
+            Ok(None) => {
+                return Some(Err(CompileError::InterpreterBuildError {
+                    details: format!(
+                        "recurrence_unsupported_form: '{name}' reads itself through `index` in its \
                      own definition, but the build pipeline could not resolve a cell frame to \
                      sweep. Evaluating it wholesale would resolve the self-read to an unbound \
                      name, and a body containing `max(x, 0)` would turn the resulting NaN into \
                      a plausible zero (esm-spec §4.3.1.1; CONFORMANCE_SPEC §5.19.4)."
-                ),
-            }));
+                    ),
+                }));
+            }
+            Err(e) => return Some(Err(e)),
+        };
+        let (shape, origin) = super::rhs::recur_frame(&lowered.ranges);
+        let scope = RecurScope::new(name, shape, origin);
+        let faults = FaultScope::enter();
+        let arr = self.with_env(|env| {
+            let mut ctx = env.ctx(self.inputs);
+            super::rhs::sweep_recurrence(
+                &scope,
+                &lowered.idx_names,
+                &lowered.ranges,
+                &lowered.body,
+                lowered.axis,
+                &mut ctx,
+            )
+        });
+        // §5.19.4: an unavailable self-read is a FAULT, not a value. The latch is
+        // the channel the tree walk has for one, and draining it here is what makes
+        // this path fail closed rather than hand back an array built on a sentinel.
+        match faults.finish() {
+            Some(fault) => Some(Err(CompileError::InterpreterBuildError {
+                details: fault.message,
+            })),
+            None => Some(Ok(arr)),
         }
-        Err(e) => return Some(Err(e)),
-    };
-    let empty: ArrMap = ArrMap::default();
-    let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-    let env = EvalEnv {
-        state_arrays: &empty,
-        params,
-        param_names,
-        t,
-        derived_extents,
-        forcing: &forcing,
-        const_lits: None,
-        const_arrays,
-        declared: empty_declared_names(),
-    };
-    let (shape, origin) = super::rhs::recur_frame(&lowered.ranges);
-    let scope = RecurScope::new(name, shape, origin);
-    let faults = FaultScope::enter();
-    let arr = {
-        let mut ctx = env.ctx(inputs);
-        super::rhs::sweep_recurrence(
-            &scope,
-            &lowered.idx_names,
-            &lowered.ranges,
-            &lowered.body,
-            lowered.axis,
-            &mut ctx,
-        )
-    };
-    // §5.19.4: an unavailable self-read is a FAULT, not a value. The latch is
-    // the channel the tree walk has for one, and draining it here is what makes
-    // this path fail closed rather than hand back an array built on a sentinel.
-    match faults.finish() {
-        Some(fault) => Some(Err(CompileError::InterpreterBuildError {
-            details: fault.message,
-        })),
-        None => Some(Ok(arr)),
     }
 }
 
@@ -2628,7 +2659,7 @@ pub(crate) fn eval_observed_recurrence(
 /// overlay declines, in place of walking it per cell.
 ///
 /// `expr` has its ranges resolved, as for
-/// [`eval_expression_with_extents_and_consts_shared`]. Every name in `inputs`
+/// [`StandaloneScope::eval`]. Every name in `scope.inputs`
 /// that `expr` mentions is seeded as a known value, and `params` bind
 /// `param_names`. A causal self-reference (esm-spec §4.3.1.1) lowers as the
 /// model's own recurrence rule does, to one ordered sweep; one the lowering
@@ -2639,14 +2670,10 @@ pub(crate) fn eval_observed_recurrence(
 /// fills it, as the reference evaluator's does. With none, a scalar value
 /// comes back as a 0-d array.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn eval_observed_taped(
     name: &str,
     expr: &Expr,
-    inputs: &ArrMap,
-    params: &[f64],
-    param_names: &[String],
-    const_arrays: &ConstArrayScope,
+    scope: &StandaloneScope,
     fill_shape: Option<&[usize]>,
     recurrence_only: bool,
 ) -> Option<Result<ArrayD<f64>, super::tape::StandaloneError>> {
@@ -2668,7 +2695,7 @@ pub(crate) fn eval_observed_taped(
                 lag_proven: r.lag_proven,
             },
             // Not a recurrence the lowering recognizes: the caller's own path
-            // reports it (`eval_observed_recurrence`'s diagnostics).
+            // reports it ([`StandaloneScope::eval_recurrence`]'s diagnostics).
             Ok(None) | Err(_) if recurrence_only => return None,
             Ok(None) | Err(_) => {
                 return Some(Err(StandaloneError::Declined(
@@ -2686,7 +2713,8 @@ pub(crate) fn eval_observed_taped(
     };
     let mut mentioned = HashSet::new();
     super::tape::collect_variable_names(expr, &mut mentioned);
-    let mut seeded: Vec<(&str, &ArrayD<f64>)> = inputs
+    let mut seeded: Vec<(&str, &ArrayD<f64>)> = scope
+        .inputs
         .iter()
         .filter(|(k, _)| k.as_str() != name && mentioned.contains(k.as_str()))
         .map(|(k, a)| (k.as_str(), a))
@@ -2695,9 +2723,9 @@ pub(crate) fn eval_observed_taped(
     Some(super::tape::eval_standalone_rule(
         &rule,
         &seeded,
-        param_names,
-        params,
-        const_arrays,
+        scope.param_names,
+        scope.params,
+        scope.const_arrays,
         true,
     ))
 }
@@ -2728,57 +2756,6 @@ fn expr_reads_self(expr: &Expr, name: &str) -> bool {
             .values
             .as_ref()
             .is_some_and(|vs| vs.iter().any(|v| expr_reads_self(v, name)))
-}
-
-pub(crate) fn eval_expression_with_extents_and_consts_shared(
-    expr: &Expr,
-    inputs: &ArrMap,
-    params: &[f64],
-    param_names: &[String],
-    t: f64,
-    derived_extents: &HashMap<String, i64>,
-    const_arrays: &ConstArrayScope,
-) -> Result<Value, CompileError> {
-    check_evaluable(expr)?;
-    // A derived range over an unsized producer is refused rather than
-    // contracted as empty.
-    if let Some(from_faq) =
-        super::compile::first_unmaterialized_derived_range(expr, derived_extents)
-    {
-        return Err(super::compile::unmaterialized_derived_error(
-            &from_faq,
-            &HashMap::new(),
-            None,
-        ));
-    }
-    let empty: ArrMap = ArrMap::default();
-    // Standalone expression evaluation carries no loader forcing — an empty
-    // buffer keeps the channel byte-identical here.
-    let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-    let env = EvalEnv {
-        state_arrays: &empty,
-        params,
-        param_names,
-        t,
-        derived_extents,
-        forcing: &forcing,
-        // Standalone one-shot evaluation: no CSE memo (nothing to amortize the
-        // structural analysis over), so this path is unchanged.
-        const_lits: None,
-        const_arrays,
-        // No compiled model behind this entry point, so it vouches for no name
-        // (see [`EvalCtx::declared`]).
-        declared: empty_declared_names(),
-    };
-    let mut ctx = env.ctx(inputs);
-    let faults = FaultScope::enter();
-    let v = eval(expr, &mut ctx);
-    match faults.finish() {
-        Some(fault) => Err(CompileError::InterpreterBuildError {
-            details: fault.message,
-        }),
-        None => Ok(v),
-    }
 }
 
 /// The output-index box of the aggregate currently being evaluated: the index

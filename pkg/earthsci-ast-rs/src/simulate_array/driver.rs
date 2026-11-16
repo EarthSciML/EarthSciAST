@@ -67,18 +67,7 @@ impl TapedObserveds {
     /// static hoist existed to provide.
     fn at(&mut self, compiled: &ArrayCompiled, state: &[f64], params: &[f64], t: f64) -> &ArrMap {
         evaluate_rhs_with_scratch(
-            &RhsCall {
-                rhs_rules: &compiled.rhs_rules,
-                observed_rules: &compiled.observed_rules,
-                var_shapes: &compiled.var_shapes,
-                param_names: &compiled.param_names,
-                state,
-                params,
-                forcing: &compiled.forcing,
-                t,
-                declared: &compiled.declared_names,
-                rule_set: compiled.rule_set,
-            },
+            &compiled.rhs_call(state, params, t),
             &mut self.dy,
             &mut RhsStats::default(),
             &mut self.scratch,
@@ -94,7 +83,7 @@ impl TapedObserveds {
 /// the per-cell oracle under `interpreter`.
 #[cfg(feature = "solve")]
 enum ObservedReadout {
-    Taped(TapedObserveds),
+    Taped(Box<TapedObserveds>),
     /// The CONST observeds seeded once and retained; `rules` (the varying
     /// ones a caller needs) re-materialized at every call.
     PerCell {
@@ -122,17 +111,7 @@ impl ObservedReadout {
                 materialize_observeds_pass(
                     obs,
                     rules,
-                    &EvalEnv {
-                        state_arrays,
-                        params,
-                        param_names: &compiled.param_names,
-                        t,
-                        derived_extents: empty_derived_extents(),
-                        forcing: &compiled.forcing,
-                        const_lits: None,
-                        const_arrays: &compiled.const_scope,
-                        declared: &compiled.declared_names,
-                    },
+                    &compiled.eval_env(state_arrays, params, t),
                     &mut RhsStats::default(),
                 );
                 obs
@@ -161,7 +140,7 @@ impl ArrayCompiled {
         rules: Vec<AlgebraicRule>,
     ) -> ObservedReadout {
         match tape {
-            Some(tape) => ObservedReadout::Taped(TapedObserveds::new(self, tape)),
+            Some(tape) => ObservedReadout::Taped(Box::new(TapedObserveds::new(self, tape))),
             None => ObservedReadout::PerCell {
                 rules,
                 static_keys: static_obs.keys().cloned().collect(),
@@ -348,7 +327,7 @@ enum SolveRhs<'a> {
         forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
     },
     /// `interpreter`: the per-cell oracle.
-    PerCell(PerCellRhs<'a>),
+    PerCell(Box<PerCellRhs<'a>>),
     /// `xla`: the compiled executable. A device failure lands in `fault`
     /// (first one wins) and leaves the derivative NaN so the solver stops.
     #[cfg(feature = "xla")]
@@ -403,16 +382,9 @@ impl SolveRhs<'_> {
                 let c = pc.compiled;
                 evaluate_rhs_with_scratch(
                     &RhsCall {
-                        rhs_rules: &c.rhs_rules,
                         observed_rules: pc.continuous_rules,
-                        var_shapes: &c.var_shapes,
-                        param_names: &c.param_names,
-                        state,
-                        params,
-                        forcing: &c.forcing,
-                        t,
-                        declared: &c.declared_names,
                         rule_set: pc.rule_set,
+                        ..c.rhs_call(state, params, t)
                     },
                     out,
                     &mut RhsStats::default(),
@@ -842,23 +814,49 @@ impl ArrayCompiled {
         let mut stats = RhsStats::default();
         let mut scratch = self.new_scratch();
         evaluate_rhs_with_scratch(
-            &RhsCall {
-                rhs_rules: &self.rhs_rules,
-                observed_rules: &self.observed_rules,
-                var_shapes: &self.var_shapes,
-                param_names: &self.param_names,
-                state,
-                params: &param_vec,
-                forcing: &self.forcing,
-                t,
-                declared: &self.declared_names,
-                rule_set: self.rule_set,
-            },
+            &self.rhs_call(state, &param_vec, t),
             &mut dy,
             &mut stats,
             &mut scratch,
         );
         (dy, stats)
+    }
+
+    /// The inputs of one right-hand-side call over this model's full rule set.
+    pub(super) fn rhs_call<'a>(
+        &'a self,
+        state: &'a [f64],
+        params: &'a [f64],
+        t: f64,
+    ) -> RhsCall<'a> {
+        RhsCall {
+            rhs_rules: &self.rhs_rules,
+            observed_rules: &self.observed_rules,
+            var_shapes: &self.var_shapes,
+            param_names: &self.param_names,
+            state,
+            params,
+            forcing: &self.forcing,
+            t,
+            declared: &self.declared_names,
+            rule_set: self.rule_set,
+        }
+    }
+
+    /// An evaluation environment over this model at `state_arrays`, `params`
+    /// and `t`, with no inline-`const` memo.
+    fn eval_env<'a>(&'a self, state_arrays: &'a ArrMap, params: &'a [f64], t: f64) -> EvalEnv<'a> {
+        EvalEnv {
+            state_arrays,
+            params,
+            param_names: &self.param_names,
+            t,
+            derived_extents: empty_derived_extents(),
+            forcing: &self.forcing,
+            const_lits: None,
+            const_arrays: &self.const_scope,
+            declared: &self.declared_names,
+        }
     }
 
     /// A scratch sized to this model, with its const-array registry installed.
@@ -891,17 +889,7 @@ impl ArrayCompiled {
         materialize_observeds_pass(
             &mut seed,
             segment_static_rules,
-            &EvalEnv {
-                state_arrays: &sa_seg,
-                params: param_vec,
-                param_names: &self.param_names,
-                t: t0,
-                derived_extents: empty_derived_extents(),
-                forcing: &self.forcing,
-                const_lits: None,
-                const_arrays: &self.const_scope,
-                declared: &self.declared_names,
-            },
+            &self.eval_env(&sa_seg, param_vec, t0),
             &mut RhsStats::default(),
         );
         seed
@@ -969,23 +957,7 @@ impl ArrayCompiled {
         scratch: &mut RhsScratch,
         stats: &mut RhsStats,
     ) {
-        evaluate_rhs_with_scratch(
-            &RhsCall {
-                rhs_rules: &self.rhs_rules,
-                observed_rules: &self.observed_rules,
-                var_shapes: &self.var_shapes,
-                param_names: &self.param_names,
-                state,
-                params: param_vec,
-                forcing: &self.forcing,
-                t,
-                declared: &self.declared_names,
-                rule_set: self.rule_set,
-            },
-            dy,
-            stats,
-            scratch,
-        );
+        evaluate_rhs_with_scratch(&self.rhs_call(state, param_vec, t), dy, stats, scratch);
     }
 
     /// Whether every observed rule is a plain scalar expression: a
@@ -1108,18 +1080,7 @@ impl ArrayCompiled {
         let faults = FaultScope::enter();
         for (k, &t) in times.iter().enumerate() {
             evaluate_rhs_with_scratch(
-                &RhsCall {
-                    rhs_rules: &self.rhs_rules,
-                    observed_rules: &self.observed_rules,
-                    var_shapes: &self.var_shapes,
-                    param_names: &self.param_names,
-                    state: &[],
-                    params: &param_vec,
-                    forcing: &self.forcing,
-                    t,
-                    declared: &self.declared_names,
-                    rule_set: self.rule_set,
-                },
+                &self.rhs_call(&[], &param_vec, t),
                 &mut dy,
                 &mut RhsStats::default(),
                 &mut scratch,
@@ -2186,9 +2147,7 @@ impl ArrayCompiled {
                     t_end,
                     &ic_vec,
                     &param_vec,
-                    &setup.static_obs,
-                    &setup.cadence.segment_static_rules,
-                    &setup.cadence.continuous_rules,
+                    &setup,
                     opts,
                     program.as_ref(),
                 )
@@ -2339,17 +2298,7 @@ impl ArrayCompiled {
         materialize_observeds_pass(
             &mut static_obs,
             &cadence.static_rules,
-            &EvalEnv {
-                state_arrays: &sa0,
-                params: param_vec,
-                param_names: &self.param_names,
-                t: t0,
-                derived_extents: empty_derived_extents(),
-                forcing: &self.forcing,
-                const_lits: None,
-                const_arrays: &self.const_scope,
-                declared: &self.declared_names,
-            },
+            &self.eval_env(&sa0, param_vec, t0),
             &mut RhsStats::default(),
         );
         SolveSetup {
@@ -2506,17 +2455,7 @@ impl ArrayCompiled {
                 ..opts.clone()
             };
             let (seg_time, seg_state, seg_stats, seg_retcode) = self
-                .run_one_segment(
-                    a,
-                    b,
-                    &u0,
-                    param_vec,
-                    &setup.static_obs,
-                    &setup.cadence.segment_static_rules,
-                    &setup.cadence.continuous_rules,
-                    &seg_opts,
-                    program,
-                )
+                .run_one_segment(a, b, &u0, param_vec, setup, &seg_opts, program)
                 .map_err(|e| fault_first(faults, e))?;
             stats += seg_stats;
             // A segment that stopped early ends the whole run: the state at its
@@ -2576,9 +2515,7 @@ impl ArrayCompiled {
             &mut state,
             &mut state_variable_names,
             param_vec,
-            &setup.static_obs,
-            &setup.cadence.static_names,
-            &setup.cadence.varying_rules,
+            setup,
             output_observed,
             tape,
         );
@@ -2599,17 +2536,15 @@ impl ArrayCompiled {
     /// between segments. Builds a fresh RHS/Jacobian closure pair (each scratch
     /// pre-seeded with the already-materialized `static_obs`) and a fresh diffsol
     /// problem, returning the states at `opts.saveat`.
-    #[allow(clippy::too_many_arguments)]
     #[cfg(feature = "solve")]
+    #[allow(clippy::too_many_arguments)]
     fn run_one_segment(
         &self,
         t0: f64,
         t_end: f64,
         u0: &[f64],
         param_vec: &[f64],
-        static_obs: &ArrMap,
-        segment_static_rules: &[AlgebraicRule],
-        continuous_rules: &[AlgebraicRule],
+        setup: &SolveSetup,
         opts: &SolveOptions,
         // The solve's taped program under `native`, kept across segments.
         program: Option<&SolveProgram>,
@@ -2642,14 +2577,20 @@ impl ArrayCompiled {
                 program: program.expect("a native solve builds its program"),
                 forcing: &self.forcing,
             },
-            RuntimeMode::Interpreter => SolveRhs::PerCell(PerCellRhs {
+            RuntimeMode::Interpreter => SolveRhs::PerCell(Box::new(PerCellRhs {
                 compiled: self,
-                continuous_rules,
+                continuous_rules: &setup.cadence.continuous_rules,
                 rule_set: next_rule_set_id(),
-                seed: self.segment_seed(static_obs, segment_static_rules, u0, param_vec, t0),
+                seed: self.segment_seed(
+                    &setup.static_obs,
+                    &setup.cadence.segment_static_rules,
+                    u0,
+                    param_vec,
+                    t0,
+                ),
                 rhs: RefCell::new(None),
                 jac: RefCell::new(None),
-            }),
+            })),
             #[cfg(feature = "xla")]
             RuntimeMode::Xla => SolveRhs::Xla {
                 program: self.xla_program().ok_or_else(xla_not_installed)?,
@@ -2823,12 +2764,13 @@ impl ArrayCompiled {
         state: &mut Vec<Vec<f64>>,
         state_variable_names: &mut Vec<String>,
         param_vec: &[f64],
-        static_obs: &ArrMap,
-        static_names: &HashSet<String>,
-        varying_rules: &[AlgebraicRule],
+        setup: &SolveSetup,
         requested: &[String],
         tape: Option<&std::sync::Arc<TapeProgram>>,
     ) {
+        let static_obs = &setup.static_obs;
+        let static_names = &setup.cadence.static_names;
+        let varying_rules = &setup.cadence.varying_rules[..];
         if self.observed_rules.is_empty() || time.is_empty() {
             return;
         }

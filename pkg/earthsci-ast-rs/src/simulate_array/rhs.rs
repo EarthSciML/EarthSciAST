@@ -639,6 +639,31 @@ pub(super) struct RhsCall<'a> {
     pub(super) rule_set: u64,
 }
 
+impl<'a> RhsCall<'a> {
+    /// The evaluation environment of this call over `state_arrays`.
+    fn env<'b>(
+        &self,
+        state_arrays: &'b ArrMap,
+        const_lits: &'b ConstLitMemo,
+        const_arrays: &'b ConstArrayScope,
+    ) -> EvalEnv<'b>
+    where
+        'a: 'b,
+    {
+        EvalEnv {
+            state_arrays,
+            params: self.params,
+            param_names: self.param_names,
+            t: self.t,
+            derived_extents: empty_derived_extents(),
+            forcing: self.forcing,
+            const_lits: Some(const_lits),
+            const_arrays,
+            declared: self.declared,
+        }
+    }
+}
+
 /// A fresh rule-set identity for [`RhsCall::rule_set`]. Never reused within a
 /// process, so a rule set built after another was dropped cannot inherit its
 /// identity the way it can inherit its allocation.
@@ -694,13 +719,8 @@ fn evaluate_rhs_per_cell(
         rhs_rules,
         observed_rules,
         var_shapes,
-        param_names,
         state,
-        params,
-        forcing,
-        t,
-        declared,
-        rule_set: _,
+        ..
     } = call;
     // (a) Refill the persistent per-variable state arrays in place from the
     //     flat state vector (no per-call allocation).
@@ -730,32 +750,12 @@ fn evaluate_rhs_per_cell(
             ..
         } = &mut *scratch;
         observed_arrays.retain(|k, _| static_keys.contains(k));
-        let env = EvalEnv {
-            state_arrays,
-            params,
-            param_names,
-            t,
-            derived_extents: empty_derived_extents(),
-            forcing,
-            const_lits: Some(&*const_lits),
-            const_arrays,
-            declared,
-        };
+        let env = call.env(state_arrays, const_lits, const_arrays);
         materialize_observeds_pass(observed_arrays, observed_rules, &env, stats);
     }
 
     let observed_arrays = &scratch.observed_arrays;
-    let env = EvalEnv {
-        state_arrays: &scratch.state_arrays,
-        params,
-        param_names,
-        t,
-        derived_extents: empty_derived_extents(),
-        forcing,
-        const_lits: Some(&scratch.const_lits),
-        const_arrays,
-        declared,
-    };
+    let env = call.env(&scratch.state_arrays, &scratch.const_lits, const_arrays);
 
     // (c) Evaluate each RHS rule and write into dy.
     for rule in rhs_rules {

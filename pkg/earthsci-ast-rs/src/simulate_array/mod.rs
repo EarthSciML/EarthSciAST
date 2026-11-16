@@ -108,8 +108,8 @@ pub(crate) use eval::eval_observed_taped;
 #[cfg(test)]
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{
-    ONE_CELL_NOTE, StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression,
-    per_cell_walk_refused, per_cell_walks,
+    ONE_CELL_NOTE, StandaloneScope, StopAtFirstCell, eval_scalar_expression, per_cell_walk_refused,
+    per_cell_walks,
 };
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
@@ -123,7 +123,7 @@ pub(crate) use vectorized::take_overlay_decline;
 // the vectorized overlay); re-exported crate-wide so a caller outside the
 // runtime that needs one operator's numeric meaning (the expression
 // simplifier) routes through the SAME definition.
-pub(crate) use eval::{apply_binary, eval_expression_with_extents_and_consts_shared};
+pub(crate) use eval::apply_binary;
 pub use rhs::RhsScratch;
 
 /// The names `expr` reads that no enclosing `faq` binds (strip and expose,
