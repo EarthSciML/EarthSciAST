@@ -108,8 +108,8 @@ pub(crate) type SlotId = u32;
 /// in order; CONST runs once per solve, SEGMENT once per integration segment,
 /// CONTINUOUS on every RHS call. Classification is *structural only* in this
 /// step (no epoch/invalidation machinery): an instruction lands in the
-/// earliest section its operands allow, mirroring the driver's
-/// `classify_static_observeds` / `classify_segment_invariant_observeds` tiers
+/// earliest section its operands allow, mirroring the observed tiers of the
+/// driver's `observed_dependencies` (`crate::dependency`)
 /// and the CSE overlay's box-pure (ess-lih) hoist.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Cadence {

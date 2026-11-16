@@ -92,6 +92,7 @@ pub(crate) mod data_output;
 /// esm-spec §8.2.1: load-time resolution of a data source's
 /// `source.url_template` against the referencing document's own directory.
 pub(crate) mod data_source_urls;
+pub(crate) mod dependency;
 pub(crate) mod diagnostic;
 pub(crate) mod display;
 /// ESM documents as Markdown and Typst source text, ported from the Lean model

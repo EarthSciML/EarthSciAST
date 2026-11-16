@@ -300,7 +300,7 @@ fn mentions_free(expr: &Expr, name: &str) -> bool {
 }
 
 /// The independent (time) variable, as an expression spells it.
-const TIME_VARIABLE: &str = "t";
+const TIME_VARIABLE: &str = crate::dependency::TIME;
 
 /// The refusal for a §6.6.5 analytic `reference` that mentions `t`.
 ///
@@ -1850,33 +1850,27 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
 /// all, and an implicit constraint defines no single name.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn time_dependent_observeds(model: &Model) -> std::collections::BTreeSet<String> {
-    let bodies: Vec<(String, &Expr)> = model
+    use crate::dependency::{DependencySummaries, Leaf, Reads};
+    let mut defs: HashMap<String, Reads> = HashMap::new();
+    for eq in &model.equations {
+        if let crate::classification::LhsForm::Bare(name) = crate::classification::lhs_form(&eq.lhs)
+        {
+            let reads = Reads::of(&eq.rhs);
+            let entry = defs.entry(name).or_default();
+            entry.names.extend(reads.names);
+            entry.join_names.extend(reads.join_names);
+        }
+    }
+    let deps = DependencySummaries::new(defs, |_| Leaf::Const);
+    model
         .equations
         .iter()
         .filter_map(|eq| match crate::classification::lhs_form(&eq.lhs) {
-            crate::classification::LhsForm::Bare(name) => Some((name, &eq.rhs)),
+            crate::classification::LhsForm::Bare(name) => Some(name),
             _ => None,
         })
-        .collect();
-    let mut dependent: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    // Fixpoint over the read-graph. Each pass adds at least one name or stops,
-    // so it runs at most `bodies.len() + 1` times.
-    loop {
-        let before = dependent.len();
-        for (name, body) in &bodies {
-            if dependent.contains(name) {
-                continue;
-            }
-            if mentions_free(body, TIME_VARIABLE)
-                || dependent.iter().any(|d| mentions_free(body, d))
-            {
-                dependent.insert(name.clone());
-            }
-        }
-        if dependent.len() == before {
-            return dependent;
-        }
-    }
+        .filter(|name| deps.get(name).is_some_and(|s| s.reads_t))
+        .collect()
 }
 
 /// The refusal for an assertion this runner cannot answer on a document with

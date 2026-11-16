@@ -1140,7 +1140,10 @@ impl EsmProblem {
         let discrete = &self.discrete_forcing;
         #[cfg(target_arch = "wasm32")]
         let discrete = &std::collections::HashSet::new();
-        Some(c.classify_static_observeds(discrete))
+        Some(
+            c.observed_dependencies(discrete)
+                .at_most(crate::cadence::Cadence::Const),
+        )
     }
 
     /// Every build-time field this EsmProblem's construction materialized, keyed

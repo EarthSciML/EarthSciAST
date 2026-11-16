@@ -768,21 +768,18 @@ impl ArrayCompiled {
         discrete_forcing: &[String],
     ) -> (Vec<String>, Vec<String>, Vec<String>) {
         let df: HashSet<String> = discrete_forcing.iter().cloned().collect();
-        let const_set = self.classify_static_observeds(&df);
-        let leq_discrete = self.classify_segment_invariant_observeds(&df, true);
-        let mut const_: Vec<String> = const_set.iter().cloned().collect();
-        let mut discrete: Vec<String> = leq_discrete
-            .iter()
-            .filter(|n| !const_set.contains(*n))
-            .cloned()
-            .collect();
-        let mut continuous: Vec<String> = self
-            .observed_rules
-            .iter()
-            .map(observed_rule_var)
-            .filter(|n| !leq_discrete.contains(*n))
-            .cloned()
-            .collect();
+        let deps = self.observed_dependencies(&df);
+        let tier = |c: crate::cadence::Cadence| -> Vec<String> {
+            self.observed_rules
+                .iter()
+                .map(observed_rule_var)
+                .filter(|n| deps.get(n).is_some_and(|s| s.cadence() == c))
+                .cloned()
+                .collect()
+        };
+        let mut const_ = tier(crate::cadence::Cadence::Const);
+        let mut discrete = tier(crate::cadence::Cadence::Discrete);
+        let mut continuous = tier(crate::cadence::Cadence::Continuous);
         const_.sort();
         discrete.sort();
         continuous.sort();
@@ -2061,8 +2058,9 @@ impl ArrayCompiled {
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> ObservedCadence {
-        let static_names = self.classify_static_observeds(discrete_forcing);
-        let seg_invariant_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
+        let deps = self.observed_dependencies(discrete_forcing);
+        let static_names = deps.at_most(crate::cadence::Cadence::Const);
+        let seg_invariant_names = deps.at_most(crate::cadence::Cadence::Discrete);
         let static_rules: Vec<AlgebraicRule> = self
             .observed_rules
             .iter()
@@ -2438,89 +2436,57 @@ impl ArrayCompiled {
             .collect()
     }
 
-    /// Names of the observeds that are STATE-FREE and `t`-free: their transitive
-    /// references reach no state variable and no `t` (each reference is a
-    /// parameter, a loop index, an external forcing entry, or an already-static
-    /// observed). Because `observed_rules` is dependency-ordered (Kahn sweep at
-    /// build), one forward pass classifies each rule after its references; a
-    /// cycle survivor's unplaced reference correctly disqualifies it.
+    /// The dependency summary of every observed rule, given the forcing
+    /// names the driver refreshes between segments (`discrete_forcing`).
     ///
-    /// These are the observeds the RHS hoists out of the per-step loop and the
-    /// build-once products a [`BuildInspection`] records. Unlike a strict
-    /// "state-free" set, an external **forcing** reference is ALLOWED: a CONST
-    /// loader field is constant within a `simulate` call (the free `simulate`
-    /// never refreshes the forcing buffer mid-run), so an observed reaching only
-    /// params + forcing + static observeds is constant across the whole solve.
-    /// The regridded terrain (`elev_xy`) and its slopes — forcing-derived but
-    /// state-free — thus hoist and land in `setup_arrays`, matching the Julia /
-    /// Python `BuildInspection`.
-    pub(crate) fn classify_static_observeds(
+    /// A rule's [`Cadence`](crate::cadence::Cadence) is its tier:
+    ///
+    /// * CONST — reaches no state, no `t` and no discrete forcing: constant
+    ///   for the whole solve, materialized ONCE at setup (the hoisted
+    ///   `static_obs`), and recorded in a [`BuildInspection`]'s
+    ///   `setup_arrays`. A CONST loader field read through the forcing buffer
+    ///   is constant within a `simulate` call (the free `simulate` never
+    ///   refreshes it mid-run), so an observed reaching only parameters, CONST
+    ///   forcing and other CONST observeds is constant across the whole solve:
+    ///   regridded terrain and its slopes hoist, matching the Julia / Python
+    ///   `BuildInspection`.
+    /// * DISCRETE — reaches a discrete forcing buffer but no state and no
+    ///   `t`. The driver refreshes forcing only between segments, never
+    ///   inside a solver step, so it is constant within a segment and
+    ///   materialized once per segment rather than every RHS step.
+    /// * CONTINUOUS — reaches a state or `t`, or cannot be ordered.
+    ///
+    /// A RECURRENCE rule's body reads the variable the rule DEFINES (esm-spec
+    /// §4.3.1.1). That self-edge is an ordering within the one rule, not a
+    /// dependency on another observed, so it is dropped, as
+    /// `dependency_order_observed` drops it. Only for that rule kind: a
+    /// self-reference the recurrence lowering did not recognize reads a name
+    /// nothing binds, and hoisting it as a build-once constant would freeze
+    /// that, so it stays an edge and the rule is CONTINUOUS.
+    pub(crate) fn observed_dependencies(
         &self,
         discrete_forcing: &HashSet<String>,
-    ) -> HashSet<String> {
-        // CONST tier: state-free, `t`-free, AND forcing-free.
-        self.classify_segment_invariant_observeds(discrete_forcing, false)
-    }
-
-    /// Classify the observeds that are invariant *within a cadence segment* — the
-    /// cadence lattice's `≤ DISCRETE` set (`CONST ⊏ DISCRETE`, `cadence.rs`): their
-    /// transitive references reach neither `t` nor any state variable.
-    ///
-    /// * `allow_forcing = false` → the CONST set (also forcing-free): constant for
-    ///   the entire solve, materialized ONCE at setup (the hoisted `static_obs`).
-    /// * `allow_forcing = true` → CONST ∪ DISCRETE: an observed may reach a
-    ///   discrete forcing buffer. Since the driver refreshes forcing only *between*
-    ///   segments (never inside a solver step), such an observed is constant
-    ///   *within* a segment — so the DISCRETE remainder is materialized ONCE per
-    ///   segment rather than re-evaluated every RHS step. This is the fix for a
-    ///   coupled model whose per-cell conservative-regrid observeds (state-free,
-    ///   `t`-free, forcing-fed) were previously recomputed every step.
-    ///
-    /// `observed_rules` are dependency-ordered, so the transitive
-    /// `set.contains(r)` check resolves against already-classified predecessors.
-    pub(super) fn classify_segment_invariant_observeds(
-        &self,
-        discrete_forcing: &HashSet<String>,
-        allow_forcing: bool,
-    ) -> HashSet<String> {
-        let observed_names: HashSet<&String> =
-            self.observed_rules.iter().map(observed_rule_var).collect();
-        let mut set: HashSet<String> = HashSet::new();
-        for rule in &self.observed_rules {
-            let mut refs = HashSet::new();
-            collect_expr_var_refs(observed_rule_body(rule), &mut refs);
-            // A RECURRENCE rule's body reads the variable the rule DEFINES
-            // (esm-spec §4.3.1.1). That self-edge is not a dependency on
-            // another observed — it is an ordering within this one — so it is
-            // dropped, exactly as `dependency_order_observed` drops it. Leaving
-            // it in made the rule classify as non-static and never be hoisted,
-            // which is why a state-free recurrence materialized nowhere at all
-            // before this feature landed.
-            //
-            // Conditioned on the rule KIND, not applied to every rule: a
-            // self-reference the recurrence lowering did not recognize is not
-            // an ordering, it is a rule that reads a name nothing binds, and
-            // hoisting it as a build-once constant would freeze that. The
-            // exemption belongs to the construct that earns it.
-            if matches!(rule, AlgebraicRule::Recurrence { .. }) {
-                let self_name = observed_rule_var(rule);
-                refs.retain(|r| r != self_name);
+    ) -> crate::dependency::DependencySummaries {
+        use crate::dependency::{DependencySummaries, Leaf, Reads};
+        let defs = self.observed_rules.iter().map(|rule| {
+            let var = observed_rule_var(rule);
+            let reads = Reads::of(observed_rule_body(rule));
+            let reads = if matches!(rule, AlgebraicRule::Recurrence { .. }) {
+                reads.without(var)
+            } else {
+                reads
+            };
+            (var.clone(), reads)
+        });
+        DependencySummaries::new(defs, |name| {
+            if self.var_shapes.contains_key(name) {
+                Leaf::State
+            } else if discrete_forcing.contains(name) {
+                Leaf::Discrete
+            } else {
+                Leaf::Const
             }
-            let ok = refs.iter().all(|r| {
-                r != "t"
-                    && !self.var_shapes.contains_key(r)
-                    // A DISCRETE (hourly) forcing buffer is a LIVE field the driver
-                    // refreshes between segments. Excluded from the CONST tier (it
-                    // must not freeze at setup), but ALLOWED in the ≤DISCRETE tier
-                    // (constant *within* a segment, so hoistable to per-segment).
-                    && (allow_forcing || !discrete_forcing.contains(r))
-                    && (!observed_names.contains(r) || set.contains(r))
-            });
-            if ok {
-                set.insert(observed_rule_var(rule).clone());
-            }
-        }
-        set
+        })
     }
 
     /// Fill a [`BuildInspection`] sink from the already-hoisted static observeds:
