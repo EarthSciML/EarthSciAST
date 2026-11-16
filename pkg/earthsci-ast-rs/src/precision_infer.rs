@@ -104,7 +104,7 @@ use serde::Deserialize;
 /// inserted by [`annotate_model`] AFTER the typed parse and is never written to
 /// a document, so no authored file and no `parse → emit` round trip ever
 /// contains one.
-pub const MARKER_OP: &str = "__precision";
+pub const MARKER_OP: &str = crate::op_registry::OtherOp::Precision.name();
 
 /// Read the precision off a [`MARKER_OP`] node.
 ///

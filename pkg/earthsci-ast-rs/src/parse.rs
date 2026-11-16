@@ -1780,7 +1780,7 @@ fn is_iso8601_duration(s: &str) -> bool {
 /// [`REMOVED_AT_V2`], `aggregate` among them) is rejected by name with
 /// `removed_op`, `faq` is refused in a document declaring esm below 1.1.0, and
 /// the deprecated spellings `neg` and `pow`
-/// ([`crate::op_registry::DEPRECATED_OPS`]) are rewritten
+/// ([`crate::op_registry::deprecated_op`]) are rewritten
 /// to unary `-` and `^` with one `deprecated_op` warning (esm-spec §4.2).
 pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), EsmError> {
     prepare_document_ops_scanned(value).map(|_| ())

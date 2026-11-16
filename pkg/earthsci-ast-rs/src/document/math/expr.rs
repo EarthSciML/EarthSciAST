@@ -249,7 +249,9 @@ pub const REMOVED_OPS: &[&str] = &[
 ];
 
 /// `Math.deprecatedOps`: read in the call form and rewritten, never printed.
-pub const DEPRECATED_OPS: &[&str] = &["neg", "pow"];
+pub fn is_deprecated_op(o: &str) -> bool {
+    crate::op_registry::deprecated_op(o).is_some()
+}
 
 /// `Math.opOK`: `[A-Za-z_][A-Za-z0-9_.]*` or `[-+*/^<>=!]+`.
 pub fn op_ok(s: &str) -> bool {
@@ -272,7 +274,7 @@ pub fn look<'a>(k: &str, kvs: &'a [(String, Json)]) -> Option<&'a Json> {
 pub fn op_field_ok(kvs: &[(String, Json)]) -> bool {
     match look("op", kvs) {
         Some(Json::Str(o)) => {
-            op_ok(o) && !REMOVED_OPS.contains(&o.as_str()) && !DEPRECATED_OPS.contains(&o.as_str())
+            op_ok(o) && !REMOVED_OPS.contains(&o.as_str()) && !is_deprecated_op(o)
         }
         _ => false,
     }

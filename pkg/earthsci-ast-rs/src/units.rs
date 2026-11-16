@@ -904,26 +904,42 @@ fn propagate_operator_dim(
     env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
-    match op.op.as_str() {
-        "+" | "-" => propagate_additive_dim(op, env, findings),
-        "*" | "/" => propagate_multiplicative_dim(op, env, findings),
-        "^" | "power" | "pow" => propagate_power_dim(op, env, findings),
-        "D" | "ic" => propagate_calculus_dim(op, env, findings),
-        "exp" | "log" | "log10" | "ln" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
-        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
-            propagate_transcendental_dim(op, env, findings)
-        }
-        "sqrt" => propagate_sqrt_dim(op, env, findings),
+    use crate::op_registry::{CoreOp, OtherOp as O, UnaryFn as F};
+    let Some(core) = op.core_op() else {
+        return propagate_open_tier_dim(op, env, findings);
+    };
+    match core {
+        CoreOp::Other(O::Add | O::Sub) => propagate_additive_dim(op, env, findings),
+        CoreOp::Other(O::Mul | O::Div) => propagate_multiplicative_dim(op, env, findings),
+        CoreOp::Other(O::Pow | O::PowWord) => propagate_power_dim(op, env, findings),
+        CoreOp::Other(O::D | O::Ic) => propagate_calculus_dim(op, env, findings),
+        CoreOp::Unary(
+            F::Exp
+            | F::Log
+            | F::Log10
+            | F::Sin
+            | F::Cos
+            | F::Tan
+            | F::Asin
+            | F::Acos
+            | F::Atan
+            | F::Sinh
+            | F::Cosh
+            | F::Tanh
+            | F::Asinh
+            | F::Acosh
+            | F::Atanh,
+        ) => propagate_transcendental_dim(op, env, findings),
+        CoreOp::Unary(F::Sqrt) => propagate_sqrt_dim(op, env, findings),
         // abs/floor/ceil preserve dimensions; `Pre` is an initial-value
         // marker — same dimensions as its argument.
-        "abs" | "floor" | "ceil" | "round" | "Pre" => {
-            if !require_arity(op, 1, findings) {
-                return Dim::Unknown;
-            }
-            propagate_dim(&op.args[0], env, findings)
+        CoreOp::Unary(F::Abs | F::Floor | F::Ceil) | CoreOp::Other(O::Pre) => {
+            propagate_first_operand_dim(op, env, findings)
         }
-        "min" | "max" => propagate_matching_dim(op, env, findings, AngleRule::Applies),
-        "atan2" => {
+        CoreOp::Other(O::Min | O::Max) => {
+            propagate_matching_dim(op, env, findings, AngleRule::Applies)
+        }
+        CoreOp::Other(O::Atan2) => {
             if !require_arity(op, 2, findings) {
                 return Dim::Unknown;
             }
@@ -933,8 +949,8 @@ fn propagate_operator_dim(
             propagate_matching_dim(op, env, findings, AngleRule::Strict);
             Dim::Known(radian())
         }
-        "ifelse" => propagate_ifelse_dim(op, env, findings),
-        ">" | "<" | ">=" | "<=" | "==" | "!=" => {
+        CoreOp::Other(O::Ifelse) => propagate_ifelse_dim(op, env, findings),
+        CoreOp::Compare(_) => {
             if !require_arity(op, 2, findings) {
                 return Dim::Known(Unit::dimensionless());
             }
@@ -942,7 +958,7 @@ fn propagate_operator_dim(
             propagate_matching_dim(op, env, findings, AngleRule::Applies);
             Dim::Known(Unit::dimensionless())
         }
-        "sign" => {
+        CoreOp::Unary(F::Sign) => {
             // A dimensionless -1/0/+1 whatever the argument's unit, but the
             // argument is walked so a finding inside it (`sign(exp(T [K]))`)
             // is reported (esm-spec §4.8.3).
@@ -951,7 +967,7 @@ fn propagate_operator_dim(
             }
             Dim::Known(Unit::dimensionless())
         }
-        "and" | "or" | "not" => {
+        CoreOp::Other(O::And | O::Or | O::Not) => {
             // A boolean connective's result is a dimensionless boolean. Its
             // operands carry no unit requirement of their own, but they are
             // walked so a mismatch inside one (`not(x [m] > z [kg])`) is
@@ -960,32 +976,77 @@ fn propagate_operator_dim(
             Dim::Known(Unit::dimensionless())
         }
         // Array operators: propagate the element dimension. Shape and
-        // indexing are orthogonal to dimension (see gt-t5c / gt-vt3 — shapes
-        // are a separate concern from unit checking).
-        "faq" | "makearray" | "index" | "reshape" | "transpose" | "concat" | "broadcast" => {
-            propagate_array_dim(op, env, findings)
-        }
+        // indexing are orthogonal to dimension.
+        CoreOp::Other(
+            O::Faq | O::Makearray | O::Index | O::Reshape | O::Transpose | O::Concat | O::Broadcast,
+        ) => propagate_array_dim(op, env, findings),
         // A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
         // without `units` it is undeterminable, like a bare literal. An
         // unresolvable string is reported at the containing expression field by
         // `structural.rs` (see [`unresolvable_const_units`]), not here.
-        "const" => match op.units.as_deref().map(parse_unit) {
+        CoreOp::Other(O::Const) => match op.units.as_deref().map(parse_unit) {
             Some(Ok(unit)) => Dim::Known(unit),
             Some(Err(_)) => Dim::Unknown,
             None => literal_dim(op.value.as_ref().and_then(serde_json::Value::as_f64), env),
         },
-        // No dimensional rule for this operator — an unregistered user op, or a
-        // rewrite-target sugar op (`grad`/`div`/`laplacian`/
-        // `godunov_hamiltonian`/…) whose dimension is UNDETERMINABLE until a
-        // discretization rule lowers it (esm-spec §4.8.4). The checker reports
-        // UNKNOWN and SKIPS: it emits NO finding, matching the other four
-        // bindings (Julia/TS/Python/Go), which return an unknown dimension and
-        // let their callers skip the check. The node's dimension is `Unknown` —
-        // NOT a silent `dimensionless`, which would manufacture false mismatches
-        // in the enclosing expression. `findings` is left untouched so nothing
-        // is singled out; `_` treats `grad` exactly like any other no-rule op.
+        // No dimensional rule: the deprecated `neg` (the loader rewrites it to
+        // `-` before any check runs), the boolean literals, the load-time ops
+        // `enum` and `apply_expression_template`, the build-time `distinct`
+        // and the engine-internal precision marker. The node's dimension is
+        // UNDETERMINABLE and no finding is emitted (esm-spec §4.8.4).
+        CoreOp::Other(
+            O::Neg
+            | O::True
+            | O::False
+            | O::Enum
+            | O::ApplyExpressionTemplate
+            | O::Distinct
+            | O::Precision,
+        ) => Dim::Unknown,
+    }
+}
+
+/// The dimension of a node whose `op` is not an evaluable-core operator.
+///
+/// An unregistered user op, or a rewrite-target sugar op (`grad`/`div`/
+/// `laplacian`/`godunov_hamiltonian`/…), has a dimension that is
+/// UNDETERMINABLE until a discretization rule lowers it (esm-spec §4.8.4). The
+/// checker reports UNKNOWN and SKIPS: it emits NO finding, matching the other
+/// four bindings, which return an unknown dimension and let their callers skip
+/// the check. The node's dimension is `Unknown` — NOT a silent
+/// `dimensionless`, which would manufacture false mismatches in the enclosing
+/// expression.
+///
+/// Three open-tier names nevertheless have a rule here: `ln` (checked like
+/// `log`), `power` (like `^`) and `round` (like `abs`). esm-spec §4.8.3 says
+/// `ln` "is not an operator" and an `ln` node is a rewrite target like any
+/// other unknown op, but all five bindings' unit checkers accept it as a
+/// transcendental. `power` and `round` have a rule in this binding only.
+/// Each is a unit verdict other bindings can observe, so it is kept until the
+/// bindings change together.
+fn propagate_open_tier_dim(
+    op: &ExpressionNode,
+    env: &dyn UnitEnv,
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    match op.op.as_str() {
+        "ln" => propagate_transcendental_dim(op, env, findings),
+        "power" => propagate_power_dim(op, env, findings),
+        "round" => propagate_first_operand_dim(op, env, findings),
         _ => Dim::Unknown,
     }
+}
+
+/// A unary operator whose result carries its operand's dimension.
+fn propagate_first_operand_dim(
+    op: &ExpressionNode,
+    env: &dyn UnitEnv,
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    if !require_arity(op, 1, findings) {
+        return Dim::Unknown;
+    }
+    propagate_dim(&op.args[0], env, findings)
 }
 
 /// Whether an agreement position admits an angle meeting a pure number (esm-spec
