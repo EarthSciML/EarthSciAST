@@ -1084,8 +1084,8 @@ mod tests {
         ));
     }
 
-    /// The in-tree authored idiom (`canonicalize.rs`, `tests/display/
-    /// structural_ops.json`): a ONE-operand `broadcast` of a unary function.
+    /// The in-tree authored idiom (`canonicalize.rs`): a ONE-operand
+    /// `broadcast` of a unary function.
     #[test]
     fn one_operand_unary_broadcast_stays_legal() {
         check_expr(&node(serde_json::json!({
@@ -1095,7 +1095,7 @@ mod tests {
         check_expr(&node(serde_json::json!({
             "op": "broadcast", "fn": "exp", "args": ["A"]
         })))
-        .expect("`broadcast(fn=\"exp\", [A])` is pinned by tests/display/structural_ops.json");
+        .expect("`broadcast(fn=\"exp\", [A])` is the authored unary spelling");
     }
 
     /// [`is_elementwise_node`] sees through a `broadcast` to its `args`, because

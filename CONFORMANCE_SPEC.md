@@ -41,7 +41,6 @@ Test fixtures are organized by test category under the `tests/` directory:
 tests/
 ├── valid/                    # ESM files that should parse and validate successfully
 ├── invalid/                  # ESM files that should fail validation with specific errors
-├── display/                  # Display formatting test cases (Unicode, LaTeX, ASCII)
 ├── substitution/             # Expression substitution test cases
 ├── simulation/               # Simulation test cases with expected trajectories
 ├── version_compatibility/    # Version migration and compatibility tests
@@ -376,7 +375,6 @@ Test runners write results using this naming convention:
 ```
 <output-dir>/
 ├── <language>_validation_results.json      # Validation test results
-├── <language>_display_results.json         # Display formatting results
 ├── <language>_substitution_results.json    # Substitution test results
 ├── <language>_graph_results.json           # Graph generation results
 ├── <language>_simulation_results.json      # Simulation results (Julia/Python)

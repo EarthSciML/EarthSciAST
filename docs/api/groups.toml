@@ -103,6 +103,16 @@ profile = "core"
 ops = ["print_math", "expression_names", "to_julia_code"]
 
 [[group]]
+id = "source-formats"
+title = "Source formats"
+description = "Writing and reading a whole document as Markdown (LaTeX math) or Typst source, losslessly, and the canonical form both start from."
+profile = "core"
+ops = [
+  "print_markdown", "print_typst", "print_document",
+  "parse_markdown", "parse_typst", "parse_document", "canonicalize_document",
+]
+
+[[group]]
 id = "editing"
 title = "Editing"
 description = "Adding, removing and renaming the parts of a document, and composing, merging and extracting components."

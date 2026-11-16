@@ -1002,39 +1002,11 @@ capability and no binding is exempt.
 
 ## 7. DISPLAY FORMAT REQUIREMENTS
 
-### DISPLAY-06-A: Unicode Display
-| ID | Requirement | Spec Reference | Testable | Test Category |
-|---|---|---|---|---|
-| DISPLAY-06-A-001 | MUST use element-aware tokenizer for chemical subscripts | esm-libraries-spec.md:1453 | Yes | display |
-| DISPLAY-06-A-002 | MUST recognize 118 chemical element symbols | esm-libraries-spec.md:1458 | Yes | display |
-| DISPLAY-06-A-003 | MUST convert trailing digits to Unicode subscripts | esm-libraries-spec.md:1459 | Yes | display |
-| DISPLAY-06-A-004 | O3 MUST render as O₃ | esm-libraries-spec.md:1465 | Yes | display |
-| DISPLAY-06-A-005 | NO2 MUST render as NO₂ | esm-libraries-spec.md:1466 | Yes | display |
-| DISPLAY-06-A-006 | CH2O MUST render as CH₂O | esm-libraries-spec.md:1467 | Yes | display |
-
-### DISPLAY-06-B: Number Formatting
-| ID | Requirement | Spec Reference | Testable | Test Category |
-|---|---|---|---|---|
-| DISPLAY-06-B-001 | Integers MUST use plain format | esm-libraries-spec.md:1479 | Yes | display |
-| DISPLAY-06-B-002 | 1-4 sig digits MUST use decimal notation | esm-libraries-spec.md:1481 | Yes | display |
-| DISPLAY-06-B-003 | |value| < 0.01 or ≥ 10000 MUST use scientific notation | esm-libraries-spec.md:1482 | Yes | display |
-| DISPLAY-06-B-004 | Scientific notation MUST use Unicode superscripts | esm-libraries-spec.md:1482 | Yes | display |
-
-### DISPLAY-06-C: Operator Display
-| ID | Requirement | Spec Reference | Testable | Test Category |
-|---|---|---|---|---|
-| DISPLAY-06-C-001 | D(x,t) MUST render as ∂x/∂t | esm-libraries-spec.md:1491 | Yes | display |
-| DISPLAY-06-C-002 | grad(x,y) MUST render as ∂x/∂y | esm-libraries-spec.md:1492 | Yes | display |
-| DISPLAY-06-C-003 | a * b MUST render as a·b | esm-libraries-spec.md:1493 | Yes | display |
-| DISPLAY-06-C-004 | -a (unary) MUST render as −a with minus sign | esm-libraries-spec.md:1494 | Yes | display |
-
-### DISPLAY-06-D: LaTeX Display
-| ID | Requirement | Spec Reference | Testable | Test Category |
-|---|---|---|---|---|
-| DISPLAY-06-D-001 | MUST use standard LaTeX math conventions | esm-libraries-spec.md:1508 | Yes | display |
-| DISPLAY-06-D-002 | Fractions MUST use \frac{}{} | esm-libraries-spec.md:1510 | Yes | display |
-| DISPLAY-06-D-003 | Derivatives MUST use \frac{\partial}{\partial t} | esm-libraries-spec.md:1510 | Yes | display |
-| DISPLAY-06-D-004 | Species names MUST use \mathrm{} | esm-libraries-spec.md:1511 | Yes | display |
+The Unicode and plain-text display requirements of this section (DISPLAY-06,
+chemical subscripts, display number formatting and operator symbols) are
+retired with the renderers they described. Math display is now `print_math` /
+`parse_math`, pinned byte for byte by `tests/conformance/document_format/`
+(CONFORMANCE_SPEC §5.58, §5.59).
 
 ---
 

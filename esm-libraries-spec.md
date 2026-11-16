@@ -20,7 +20,7 @@ This document specifies the requirements and architecture for libraries that rea
 ### 1.1 Design Goals
 
 1. **Fidelity** — Round-trip an `.esm` file through load → manipulate → save without information loss.
-2. **Readability** — Render models as human-readable mathematical notation (Unicode, LaTeX, or MathML).
+2. **Readability** — Render models as mathematical notation: LaTeX and Typst math, and whole documents as Markdown or Typst source.
 3. **Editability** — Programmatic manipulation of models: substitution, simplification, adding/removing components.
 4. **Validation** — Schema validation, structural consistency checks, and unit analysis.
 5. **Interoperability** — Libraries in different languages produce and consume identical `.esm` files.
@@ -183,26 +183,23 @@ The expression engine is the heart of every library. It must support:
 - Build expressions programmatically: `Var("O3")`, `Op("+", [Var("a"), Num(1)])`.
 - Parse from ESM JSON (the `Expression` type in the schema).
 
-#### 2.3.2 Pretty-printing
+#### 2.3.2 Math display
 
-Render an expression tree as a human-readable string. Multiple output formats:
+Show an expression or an equation as math, and read it back:
+`print_math(e, names, format)` writes LaTeX (format `markdown`) or Typst math
+(format `typst`), and `parse_math(text, names, format)` is its exact inverse
+under the same names (API_SPEC §5.1). For `D(O3, t) = (-k) * O3 * NO + j * NO2`
+with every name declared:
 
-| Format | Example output for `D(O3, t) = -k * O3 * NO + j * NO2` |
+| Format | Output |
 |---|---|
-| Unicode | `∂O₃/∂t = −k·O₃·NO + j·NO₂` |
-| LaTeX | `\frac{\partial \mathrm{O_3}}{\partial t} = -k \cdot \mathrm{O_3} \cdot \mathrm{NO} + j \cdot \mathrm{NO_2}` |
-| ASCII | `D(O3)/Dt = -k * O3 * NO + j * NO2` |
-| Code (language-native) | Julia: `D(O3) ~ -k * O3 * NO + j * NO2` |
+| LaTeX | `\frac{\mathrm{d} \mathrm{O_{3}}}{\mathrm{d} t} = \left(-k\right) \mathrm{O_{3}} \mathrm{NO} + j \mathrm{NO_{2}}` |
+| Typst | `(dif upright("O")_3)/(dif t) = (-k) upright("O")_3 upright("NO") + j upright("NO")_2` |
 
-Minimum requirement: **Unicode** and **LaTeX**. Language-native code output is desired.
-
-Pretty-printing must handle:
-
-- Operator precedence and associativity (minimize parentheses).
-- Subscripts for chemical species (O₃, NO₂, CH₂O).
-- Fractions: display `a/b` as `\frac{a}{b}` in LaTeX.
-- The `Pre` operator: render as `Pre(x)` or `x⁻` depending on format.
-- Calculus operators: `D(x, t)` → `∂x/∂t`, `grad(x, y)` → `∂x/∂y`.
+The exact spellings are the Lean model's
+(`Esm.Document.Math.*`) and are pinned byte for byte by
+`tests/conformance/document_format/`. Language-native code output (Julia:
+`D(O3) ~ -k * O3 * NO + j * NO2`) is desired.
 
 #### 2.3.3 Substitution
 
@@ -2406,7 +2403,7 @@ initial-condition map that was already declared in the ESM model.
 
 **Tier: Core + Analysis**
 
-`@earthsciml/ast` is pure TypeScript with zero framework dependencies: types, parsing, validation, substitution, LaTeX/Unicode string generation. Usable in any JS/TS environment (Node, Deno, Bun, browser, web workers).
+`@earthsciml/ast` is pure TypeScript with zero framework dependencies: types, parsing, validation, substitution, LaTeX and Typst math and document source text. Usable in any JS/TS environment (Node, Deno, Bun, browser, web workers).
 
 #### 5.2.1 `@earthsciml/ast` — Pure TypeScript Library
 
@@ -2948,10 +2945,7 @@ tests/
 │   ├── equation_count_mismatch.esm    # more states than equations
 │   ├── invalid_trigger_type.esm       # bad discrete event trigger
 │   └── circular_coupling.esm          # coupling references nonexistent system
-├── display/
-│   ├── expr_precedence.json           # expression → expected Unicode/LaTeX
-│   ├── chemical_subscripts.json       # species name → expected display
-│   └── model_summary.json            # file → expected summary string
+├── conformance/document_format/    # documents and math → exact Markdown / Typst text
 ├── substitution/
 │   ├── simple_var_replace.json        # input expr + bindings → expected output
 │   ├── nested_substitution.json
@@ -2979,7 +2973,7 @@ The conformance test suite must be authored as a standalone, language-independen
 1. **`valid/minimal_chemistry.esm`** — The `MinimalChemAdvection` example from the format spec (Section 13). This is the baseline test: every library must parse, validate, pretty-print, and round-trip this file identically.
 2. **`valid/events_all_types.esm`** — A file exercising continuous events (with `affect_neg`, `root_find`), discrete events (condition, periodic, preset_times), discrete parameters, and a functional affect.
 3. **`invalid/missing_esm_version.esm`** and **`invalid/unknown_variable_ref.esm`** — Minimal files that fail schema and structural validation respectively, with expected error codes documented in a companion `expected_errors.json`.
-4. **`display/expr_precedence.json`** — Array of `{input: Expression, unicode: string, latex: string}` triples covering: operator precedence (nested `+`/`*`/`^`), chemical subscripts, derivatives, Pre operator, scientific notation numbers.
+4. **`conformance/document_format/`** — The Lean-generated golden set: each document, its exact Markdown and Typst text, and each equation's LaTeX and Typst math (CONFORMANCE_SPEC §5.58).
 5. **`substitution/simple_var_replace.json`** — Array of `{input: Expression, bindings: object, expected: Expression}` triples.
 
 Each expected output must be reviewed and agreed upon before being committed, since it defines the conformance standard.
@@ -3082,8 +3076,8 @@ The following items are acknowledged gaps in this specification. They do not blo
 |---|---|---|---|---|---|
 | Parse / serialize | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Schema validation | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Unicode pretty-print | ✓ | ✓ (string) | ✓ | ✓ | ✓ |
-| LaTeX pretty-print | ✓ | ✓ (string) | ✓ | ✓ | ✓ |
+| Math display (`print_math` / `parse_math`, LaTeX and Typst) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Markdown / Typst source documents | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Substitution | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Structural validation | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Unit validation | ✓ | ✓ | ✓ | ✓ | ✓ |
