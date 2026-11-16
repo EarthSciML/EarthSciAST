@@ -305,8 +305,7 @@ an optional keyword (default `nothing`) that only some operators use. The
   (metaparameters are folded on the raw tree before typed coercion,
   esm-spec §9.7.6), but the schema admits any `MetaparameterExpression`, so a
   bound MAY also be an `ASTExpr` — that is how a still-open bound such as
-  `NLON - 1` survives `parse_expression` of the text form
-  `makearray([2:NLON - 1, …] = …)`.
+  `NLON - 1` survives the typed round-trip.
 - `values`: for `makearray`, one sub-expression per entry in `regions`.
 - `shape`: for `reshape`, target shape; entries are `Int` (concrete length)
   or `String` (symbolic dimension).

@@ -1,4 +1,0 @@
-{
-  "input_file": "minimal_chemistry.esm",
-  "expected_summary": "ESM v0.1.0: MinimalChemAdvection\n  \"O3-NO-NO2 chemistry with advection and external meteorology\"\n  Authors: Chris Tessum\n\n  Reaction Systems:\n    SimpleOzone (3 species, 3 parameters, 2 reactions)\n      R1: NO + O\u2083 \u2192 NO\u2082    rate: 1.8\u00d710\u207b\u00b9\u00b2 \u00b7 exp(\u22121370/T) \u00b7 M\n      R2: NO\u2082 \u2192 NO + O\u2083    rate: jNO\u2082\n\n  Models:\n    Advection (2 parameters, 1 equation)\n      \u2202_var/\u2202t = \u2212u_wind\u00b7\u2202_var/\u2202x \u2212 v_wind\u00b7\u2202_var/\u2202y\n\n  Data Loaders:\n    GEOSFP: u, v, T (gridded_data)\n\n  Coupling:\n    1. operator_compose: SimpleOzone + Advection\n    2. variable_map: GEOSFP.T \u2192 SimpleOzone.T\n    3. variable_map: GEOSFP.u \u2192 Advection.u_wind\n    4. variable_map: GEOSFP.v \u2192 Advection.v_wind\n\n  Domain: lon [\u2212130, \u2212100] (\u03940.3125\u00b0), 2024-05-01 to 2024-05-03"
-}

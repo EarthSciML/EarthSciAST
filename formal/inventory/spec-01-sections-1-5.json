@@ -144,35 +144,6 @@
       "note": "For any JSON object x, metadata.x_esd = x survives emit(load d) unchanged and no verdict depends on its contents."
     },
     {
-      "id": "spec.4.1.1.text-surface-single-reading",
-      "section": "4.1.1",
-      "quote": "That surface is normative for those APIs: `parse_expression` is the inverse of `to_ascii`, and all five bindings MUST agree on the reading of any given text.",
-      "class": "semantic",
-      "phase": 2,
-      "area": "round_trip",
-      "note": "parse_expression is a function of the text, and parse_expression(to_ascii e) = e for every expression e (up to the stated normalizations).",
-      "concern": "'parse_expression is the inverse of to_ascii' cannot hold for all trees: §4.1.1 itself says a parser flattens `a + (b + c)` into one n-ary `+` (so a nested `+` tree does not round-trip), and a `-` before a numeric literal is read as part of the literal (so a unary-minus node on a literal does not round-trip); the class of trees on which it is an inverse is not stated."
-    },
-    {
-      "id": "spec.4.1.1.printer-parenthesize-negated-sum",
-      "section": "4.1.1",
-      "quote": "Because a unary-minus operand extends only to the next `+` or binary `-`, a printer MUST parenthesize a negated sum or difference",
-      "class": "semantic",
-      "phase": 2,
-      "area": "round_trip",
-      "note": "to_ascii of a unary minus over a + or binary - node parenthesizes the operand, so the text re-parses to the same tree."
-    },
-    {
-      "id": "spec.4.1.1.printer-parenthesize-same-level-right",
-      "section": "4.1.1",
-      "quote": "because every level groups to the LEFT, a printer MUST parenthesize a right operand at the same level unless it is the same associative operator",
-      "class": "semantic",
-      "phase": 2,
-      "area": "round_trip",
-      "note": "to_ascii parenthesizes a right operand of equal precedence unless it is the same associative n-ary operator, so parse(to_ascii e) = e.",
-      "concern": "'every level groups to the LEFT' contradicts the precedence table, where level 7 `^` is right-associative and level 6 `not` is prefix; for `^` the rule as written parenthesizes the wrong side (a right `^` operand needs none, a left one does)."
-    },
-    {
       "id": "spec.4.2.rewrite-target-eliminated-before-eval",
       "section": "4.2",
       "quote": "A rewrite-target op has **no** evaluator; it MUST be eliminated by a rewrite rule (§9.6) before evaluation.",

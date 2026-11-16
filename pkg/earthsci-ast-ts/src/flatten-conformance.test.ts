@@ -19,9 +19,11 @@
  * the bottom states that explicitly, so a regression names the rule it broke
  * instead of dumping a diff.
  *
- * Equations are compared through `toAscii` — the same renderer the shared
- * display fixtures and the expression-parse corpus use, and the one the
- * generator recorded with.
+ * Every expression (an equation side, a summand, an event condition or affect
+ * side, a bound or default that is an expression, a field initial condition)
+ * is recorded in the canonical JSON of CONFORMANCE §5.4 and compared as a JSON
+ * value with every number in its canonical kind (§5.5.3.1): see
+ * {@link canonicalJson}.
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -34,8 +36,7 @@ import {
   VariableMapShapeConflictError,
 } from './flatten.js'
 import { updateRules } from './classification.js'
-import { toAscii } from './pretty-print.js'
-import { loadFixture, readFixture } from './test-helpers.js'
+import { canonicalJson, loadFixture, numberKinds, readFixture } from './test-helpers.js'
 import type { AffectEquation, ContinuousEvent, DiscreteEvent, Expression } from './types.js'
 
 // --- the corpus's JSON shape -------------------------------------------------
@@ -49,23 +50,23 @@ interface VariableCase {
   update_kinds: string[]
   distribution_kind: string | null
   source_system: string | null
-  lb: number | string | null
-  ub: number | string | null
+  lb: unknown
+  ub: unknown
 }
 interface ContributionCase {
-  rhs: string
+  rhs: unknown
   origins: Array<{ component: string } | { coupling: number }>
 }
 interface EquationCase {
-  lhs: string
-  rhs: string
+  lhs: unknown
+  rhs: unknown
   source_system: string
   contributions: ContributionCase[]
 }
 interface EventCase {
   name: string | null
-  conditions: string[]
-  affects: string[]
+  conditions: unknown[]
+  affects: Array<{ lhs: unknown; rhs: unknown }>
 }
 interface LoaderFieldCase {
   name: string
@@ -103,7 +104,7 @@ interface FlattenCase {
   }
   index_sets: string[]
   template_registry: string[]
-  field_ics: Array<{ state: string; expr: string }>
+  field_ics: Array<{ state: string; expr: unknown }>
   loader_fields: LoaderFieldCase[]
   lifted_shapes: Record<string, number[]>
 }
@@ -132,7 +133,7 @@ function variableRecord(v: FlattenedVariable): VariableCase {
     name: v.name,
     role: v.type,
     units: v.units ?? null,
-    default: v.default ?? null,
+    default: defaultRecord(v.default ?? null),
     shape: v.shape !== undefined && v.shape.length > 0 ? v.shape : null,
     update_kinds: updateRules(v.update).map((r) => r.kind),
     distribution_kind: (v.distribution as { kind?: string } | undefined)?.kind ?? null,
@@ -143,30 +144,41 @@ function variableRecord(v: FlattenedVariable): VariableCase {
 }
 
 /**
- * A flattened bound as the corpus records it (esm-libraries-spec §4.7.5):
- * `null` when absent, the number itself, otherwise the flattened bound rendered
- * with `toAscii`, so a reference is its namespaced name.
+ * A default as the corpus records it: an expression node is `{ expr }` with the
+ * expression in canonical JSON, an array element-wise, anything else itself.
  */
-function boundRecord(bound: Expression | undefined): number | string | null {
+function defaultRecord(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(defaultRecord)
+  if (value !== null && typeof value === 'object' && 'op' in value) {
+    return { expr: canonicalJson(value) }
+  }
+  return numberKinds(value)
+}
+
+/**
+ * A flattened bound as the corpus records it (esm-libraries-spec §4.7.5):
+ * `null` when absent, the number itself, otherwise the flattened bound in
+ * canonical JSON, so a reference is its namespaced name.
+ */
+function boundRecord(bound: Expression | undefined): unknown {
   if (bound === undefined) return null
-  if (typeof bound === 'number') return bound
-  return toAscii(bound)
+  return canonicalJson(bound)
 }
 
 function variableRecords(map: FlattenedVariableMap): VariableCase[] {
   return Object.values(map).map(variableRecord)
 }
 
-function affectString(a: AffectEquation): string {
-  return `${toAscii(a.lhs as Expression)} = ${toAscii(a.rhs)}`
+function affectRecord(a: AffectEquation): { lhs: unknown; rhs: unknown } {
+  return { lhs: canonicalJson(a.lhs), rhs: canonicalJson(a.rhs) }
 }
 
 function eventRecord(e: ContinuousEvent | DiscreteEvent): EventCase {
   const conditions = (e as ContinuousEvent).conditions ?? []
   return {
     name: e.name ?? null,
-    conditions: conditions.map((c) => toAscii(c)),
-    affects: (e.affects ?? []).map(affectString),
+    conditions: conditions.map(canonicalJson),
+    affects: (e.affects ?? []).map(affectRecord),
   }
 }
 
@@ -248,15 +260,17 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // hide the exact defect this corpus exists to catch.
 
     it('state_variables (ordered, with metadata)', () => {
-      expect(variableRecords(flat.stateVariables)).toEqual(expected.state_variables)
+      expect(variableRecords(flat.stateVariables)).toEqual(numberKinds(expected.state_variables))
     })
 
     it('parameters (ordered, with metadata)', () => {
-      expect(variableRecords(flat.parameters)).toEqual(expected.parameters)
+      expect(variableRecords(flat.parameters)).toEqual(numberKinds(expected.parameters))
     })
 
     it('observed_variables (ordered, with metadata)', () => {
-      expect(variableRecords(flat.observedVariables)).toEqual(expected.observed_variables)
+      expect(variableRecords(flat.observedVariables)).toEqual(
+        numberKinds(expected.observed_variables),
+      )
     })
 
     // --- the §6.3.1 SUBSETS -------------------------------------------------
@@ -292,26 +306,32 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
 
     // --- equations, events, registries --------------------------------------
 
-    it('equations (ordered, rendered with toAscii), with their contributions', () => {
+    it('equations (ordered, in canonical JSON), with their contributions', () => {
       // `contributions` is per-term provenance (§4.7.5): compared exactly and in
       // order — the expressions, the origins and their order — for every case.
       const rendered: EquationCase[] = flat.equations.map((eq) => ({
-        lhs: toAscii(eq.lhs),
-        rhs: toAscii(eq.rhs),
+        lhs: canonicalJson(eq.lhs),
+        rhs: canonicalJson(eq.rhs),
         source_system: eq.sourceSystem,
         contributions: eq.contributions.map((c) => ({
-          rhs: toAscii(c.expr),
+          rhs: canonicalJson(c.expr),
           origins: c.origins,
         })),
       }))
-      expect(rendered).toEqual(expected.equations)
+      const want = expected.equations.map((eq) => ({
+        ...eq,
+        lhs: numberKinds(eq.lhs),
+        rhs: numberKinds(eq.rhs),
+        contributions: eq.contributions.map((c) => ({ ...c, rhs: numberKinds(c.rhs) })),
+      }))
+      expect(rendered).toEqual(want)
       expect(flat.equations.length).toBe(expected.equation_count)
     })
 
     it('field_ics (ordered) and their removal from equations', () => {
-      expect(flat.fieldIcs.map((ic) => ({ state: ic.state, expr: toAscii(ic.expr) }))).toEqual(
-        expected.field_ics,
-      )
+      expect(
+        flat.fieldIcs.map((ic) => ({ state: ic.state, expr: canonicalJson(ic.expr) })),
+      ).toEqual(numberKinds(expected.field_ics))
       // Normative: an `ic` is a datum, not an equation of motion, so no
       // surviving equation may still carry an `ic` LHS.
       for (const eq of flat.equations) {
@@ -321,8 +341,10 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     })
 
     it('continuous_events / discrete_events (ordered)', () => {
-      expect(flat.continuousEvents.map(eventRecord)).toEqual(expected.continuous_events)
-      expect(flat.discreteEvents.map(eventRecord)).toEqual(expected.discrete_events)
+      expect(flat.continuousEvents.map(eventRecord)).toEqual(
+        numberKinds(expected.continuous_events),
+      )
+      expect(flat.discreteEvents.map(eventRecord)).toEqual(numberKinds(expected.discrete_events))
     })
 
     it('independent_variables and the derived system_kind', () => {

@@ -1,9 +1,9 @@
 """Public-API integrity tests.
 
 Guards against the failure mode where an exported name silently breaks or
-disappears: every ``__all__`` entry must resolve, and the display entry
-points must work on a real, non-empty ``EsmFile`` (not just on dicts or
-empty files, which is how earlier breakage went unnoticed).
+disappears: every ``__all__`` entry must resolve, and the Jupyter display hook
+must work on a real, non-empty ``EsmFile`` (not just on dicts or empty files,
+which is how earlier breakage went unnoticed).
 
 esm 1.0.0 moved two whole families of names, so both are pinned by name here:
 the DERIVED classification API (which replaced the ``state`` / ``observed`` /
@@ -11,11 +11,13 @@ the DERIVED classification API (which replaced the ``state`` / ``observed`` /
 ``DataSource*`` rename.
 """
 
+import json
+
 import pytest
 from conftest import VALID_DIR
 
 import earthsci_ast
-from earthsci_ast import load_string, to_ascii, to_latex, to_unicode
+from earthsci_ast import load_string
 
 _FIXTURE = VALID_DIR / "events_all_types.esm"
 
@@ -102,16 +104,74 @@ def test_data_sources_module_replaces_data_loaders():
         import earthsci_ast.data_loaders  # noqa: F401
 
 
-def test_display_formats_on_real_file():
-    """to_unicode/to_latex/to_ascii must render a real non-empty EsmFile."""
-    esm_file = load_string(_FIXTURE.read_text())
-    assert esm_file.models or esm_file.reaction_systems
-    for fmt in (to_unicode, to_latex, to_ascii):
-        rendered = fmt(esm_file)
-        assert isinstance(rendered, str) and rendered
-
-
 def test_repr_latex_on_real_file():
     """The _repr_latex_ hook patched onto EsmFile must work on real files."""
     esm_file = load_string(_FIXTURE.read_text())
-    assert esm_file._repr_latex_()
+    assert esm_file.models or esm_file.reaction_systems
+    shown = esm_file._repr_latex_()
+    assert shown.startswith("$$") and shown.endswith("$$")
+    for model in esm_file.models.values():
+        if model.equations:
+            assert model._repr_latex_().startswith("$$")
+            assert model.equations[0]._repr_latex_().startswith("$$")
+
+
+def test_repr_latex_shows_reactions_and_equations():
+    """A reaction shows as substrates, an arrow labelled with the rate, and
+    products; a model's equations print with ``print_math``."""
+    esm_file = load_string(
+        """{"esm": "2.3.0", "metadata": {"name": "x"},
+        "reaction_systems": {"rs": {"species": {"NO": {}, "O3": {}, "NO2": {}},
+          "parameters": {"k": {}},
+          "reactions": [{"id": "R1",
+            "substrates": [{"species": "NO", "stoichiometry": 1},
+                           {"species": "O3", "stoichiometry": 1}],
+            "products": [{"species": "NO2", "stoichiometry": 2}], "rate": "k"}]}},
+        "models": {"m": {"variables": {"x": {"type": "unknown"}, "k": {"type": "parameter"}},
+          "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                         "rhs": {"op": "*", "args": ["k", "x"]}}]}}}"""
+    )
+    rs = esm_file.reaction_systems["rs"]._repr_latex_()
+    assert "\\mathrm{NO} + \\mathrm{O_{3}} \\xrightarrow{k} 2\\,\\mathrm{NO_{2}}" in rs
+    m = esm_file.models["m"]._repr_latex_()
+    assert "\\frac{\\mathrm{d} x}{\\mathrm{d} t} = k x" in m
+    whole = esm_file._repr_latex_()
+    assert "\\textbf{m}" in whole and "\\textbf{rs}" in whole
+
+
+@pytest.mark.parametrize(
+    ("name", "title"),
+    [
+        ("NOx%chem", r"\textbf{NOx}\%\textbf{chem}"),
+        ("A&B", r"\textbf{A}\&\textbf{B}"),
+        ("a$b", r"\textbf{a}\$\textbf{b}"),
+        ("c#d", r"\textbf{c}\#\textbf{d}"),
+        ("e_f", r"\textbf{e}\_\textbf{f}"),
+        ("g^h", r"\textbf{g}\hat{}\textbf{h}"),
+        ("i~j", r"\textbf{i}\tilde{}\textbf{j}"),
+        ("k\\l", r"\textbf{k}\backslash \textbf{l}"),
+        ("m{n}", r"\textbf{m}\{\textbf{n}\}"),
+        ("two words", r"\textbf{two words}"),
+    ],
+)
+def test_repr_latex_title_prints_every_character_of_the_name(name, title):
+    """A component name heads its rows as written: each TeX special in it is
+    the math-mode symbol that prints it (MathJax reads ``\\textbf``'s argument
+    literally, so text-mode escapes would show their backslashes there), and
+    the rest stays bold text."""
+    esm_file = load_string(
+        json.dumps(
+            {
+                "esm": "2.3.0",
+                "metadata": {"name": "x"},
+                "models": {
+                    name: {
+                        "variables": {"x": {"type": "unknown"}},
+                        "equations": [{"lhs": {"op": "D", "args": ["x"]}, "rhs": 1}],
+                    }
+                },
+            }
+        )
+    )
+    rows = esm_file._repr_latex_().removeprefix("$$\\begin{gathered}\n").split(" \\\\\n")
+    assert rows[0] == title

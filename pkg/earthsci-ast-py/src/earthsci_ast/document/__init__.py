@@ -29,7 +29,7 @@ The golden set every binding reproduces is ``tests/conformance/document_format/`
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from enum import Enum
 from typing import Any
 
@@ -38,14 +38,17 @@ from . import math as _math
 from . import limits
 from .math.expr import Sym
 from .number import print_num
+from .source.items import eq_sides
 from .source.markdown import parse_md, print_md
 from .source.typst import parse_typ, print_typ
 from .value import MISSING, Obj, from_plain, look, sort_obj, to_plain
 
 __all__ = [
     "DocumentFormat",
+    "expression_names",
     "parse_document",
     "parse_markdown",
+    "parse_math",
     "parse_typst",
     "print_document",
     "print_markdown",
@@ -155,6 +158,31 @@ def print_math(expr: Any, names: Iterable[str], format: DocumentFormat | str) ->
     return _math.print_typst(sym, e)
 
 
+def expression_names(expr: Any) -> list[str]:
+    """The variable names an expression or an equation uses, in order of first
+    use: its string leaves under ``lhs``, ``rhs`` and ``args``. These are the
+    ``names`` to give :func:`print_math` to show an expression on its own, with
+    its names declared.
+
+    ``expr`` is an expression or equation in its JSON form (a number, a str, a
+    list or a dict).
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    stack = [expr]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, str):
+            if v not in seen:
+                seen.add(v)
+                out.append(v)
+        elif isinstance(v, (list, tuple)):
+            stack.extend(reversed(v))
+        elif isinstance(v, dict):
+            stack.extend(v[k] for k in ("args", "rhs", "lhs") if k in v)
+    return out
+
+
 def _error(code: str, message: str) -> ParseError:
     err = ParseError(f"{code}: {message}")
     err.code = code  # type: ignore[attr-defined]
@@ -174,24 +202,25 @@ def _refusal(removed_op: str | None, fmt: DocumentFormat) -> ParseError:
     return _error(PARSE_ERROR, f"not an ESM {what} document")
 
 
-def _read(text: str, fmt: DocumentFormat) -> dict:
-    from ..error_handling import PARSE_ERROR
-
-    if not isinstance(text, str):
-        raise TypeError("a document source is a str")
+def _with_headroom(f: Callable[[], Any]) -> tuple[Any, limits.Findings]:
+    """Run one read inside the reader limits, with :data:`_READ_FRAMES` of
+    stack above the caller."""
     need = _stack_depth() + _READ_FRAMES
     old = sys.getrecursionlimit()
     if old < need:
         sys.setrecursionlimit(need)
     try:
-        d, found = limits.reading(
-            lambda: parse_md(text) if fmt is DocumentFormat.MARKDOWN else parse_typ(text)
-        )
+        return limits.reading(f)
     finally:
         if old < need:
             sys.setrecursionlimit(old)
-    if type(d) is not Obj:
-        d = None
+
+
+def _checked(d: Any, found: limits.Findings, fmt: DocumentFormat) -> Any:
+    """The plain value of a read's result, or the diagnostic for a read that ran
+    past a reader limit or was refused (``None``)."""
+    from ..error_handling import PARSE_ERROR
+
     if found.too_deep or (d is not None and limits.json_depth(d) > limits.MAX_JSON_DEPTH):
         raise _error(
             PARSE_ERROR,
@@ -205,6 +234,60 @@ def _read(text: str, fmt: DocumentFormat) -> dict:
     if big is not None:
         raise _error(PARSE_ERROR, f"the number `{print_num(big)}` is outside the binary64 range")
     return to_plain(d)
+
+
+def _read(text: str, fmt: DocumentFormat) -> dict:
+    if not isinstance(text, str):
+        raise TypeError("a document source is a str")
+    d, found = _with_headroom(
+        lambda: parse_md(text) if fmt is DocumentFormat.MARKDOWN else parse_typ(text)
+    )
+    if type(d) is not Obj:
+        d = None
+    return _checked(d, found, fmt)
+
+
+def parse_math(text: str, names: Iterable[str], format: DocumentFormat | str) -> Any:
+    """Read one expression, or one equation, written as math under a set of
+    declared names: LaTeX for ``"markdown"`` (``Math.parseLatex``), Typst math
+    for ``"typst"`` (``Math.parseTypst``). The inverse of :func:`print_math`:
+    ``parse_math(print_math(e, names, f), names, f)`` is ``e`` in canonical form.
+
+    ``text`` is what a document display holds, without its delimiters. Text whose
+    top is ``=`` reads as an equation, a dict with ``lhs`` and ``rhs``, as a
+    display does (``Source.eqSides``); any other text reads as an expression (a
+    number, a name or an operator node, in canonical form). ``names`` plays the
+    part of the variables a component declares: it decides how a run of letters
+    reads (in LaTeX, ``RT`` is the name ``RT`` when it is declared, the product
+    of ``R`` and ``T`` when they are). No template is in scope.
+
+    Raises :class:`~earthsci_ast.errors.ParseError` whose ``code`` is
+    ``removed_op`` when the math uses an operator removed from the format (spec
+    §4.2), and ``parse_error`` for any other text that is not math, and for one
+    past a bound of the reader (:mod:`.limits`): nested too deeply, or holding a
+    number beyond the binary64 range.
+    """
+    from ..error_handling import PARSE_ERROR
+
+    if not isinstance(text, str):
+        raise TypeError("a math source is a str")
+    fmt = _format(format)
+    sym = Sym(frozenset(names), ())
+    e, found = _with_headroom(
+        lambda: (
+            _math.parse_latex(sym, text)
+            if fmt is DocumentFormat.MARKDOWN
+            else _math.parse_typst(sym, text)
+        )
+    )
+    if e is not None:
+        sides = eq_sides(e)
+        if sides is not None:
+            e = Obj([("lhs", sides[0]), ("rhs", sides[1])])
+    elif found.removed_op is None and not found.too_deep:
+        what = "LaTeX" if fmt is DocumentFormat.MARKDOWN else "Typst"
+        raise _error(PARSE_ERROR, f"not an ESM expression in {what} math")
+    return _checked(e, found, fmt)
 
 
 def parse_markdown(text: str) -> dict:

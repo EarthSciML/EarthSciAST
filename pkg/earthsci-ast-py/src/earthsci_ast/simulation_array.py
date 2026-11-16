@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from ._show import show_equation, show_expr
 from . import compiler as _compiler
 from .classification import _derivative_targets, is_implicit_lhs
 from .compiler import (
@@ -39,7 +40,6 @@ from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
     _expand_range,
-    _expr_to_string,
     _integrated_state_names,
     flatten,
     infer_variable_shapes,
@@ -722,7 +722,7 @@ def _apply_equation_to_dy(
         )
     raise UnsupportedConstructError(
         "algebraic equation",
-        f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`, whose left-hand "
+        f"`{show_equation(eq.lhs, eq.rhs)}`, whose left-hand "
         f"side is neither a state derivative nor a name this build resolved to an "
         f"observed definition,",
         "Python array interpreter",
@@ -884,7 +884,7 @@ def _assert_no_unsolved_algebraic_constraint(
         "algebraic constraint",
         # The detail reads into the class's own "... is not supported by the
         # <evaluator>", so it ends on a noun phrase rather than a sentence.
-        f"`{_expr_to_string(second.lhs)} ~ {_expr_to_string(second.rhs)}` is a second "
+        f"`{show_equation(second.lhs, second.rhs)}` is a second "
         f"definition of {name!r}, so what it actually determines is {target!r} — which "
         f"has no defining equation of its own. Inverting it for {target!r} needs "
         f"algebraic elimination; without it {target!r} would stay at its declared "
@@ -914,7 +914,7 @@ def _assert_driver_equations_are_appliable(
         if is_implicit_lhs(lhs):
             raise UnsupportedConstructError(
                 "implicit equation",
-                f"`{_expr_to_string(lhs)} ~ {_expr_to_string(eq.rhs)}`",
+                f"`{show_equation(lhs, eq.rhs)}`",
                 "Python array interpreter",
             )
         target = _differentiated_lhs_target(lhs)
@@ -922,7 +922,7 @@ def _assert_driver_equations_are_appliable(
             continue
         raise UnsupportedConstructError(
             "algebraic equation",
-            f"`{_expr_to_string(lhs)} ~ {_expr_to_string(eq.rhs)}`, whose left-hand "
+            f"`{show_equation(lhs, eq.rhs)}`, whose left-hand "
             f"side is neither a derivative of an integrated state nor a definition "
             f"this build resolved to an observed,",
             "Python array interpreter",
@@ -1095,7 +1095,7 @@ def rule_label(eq: FlattenedEquation) -> str:
     target = _differentiated_lhs_target(eq.lhs)
     if target is not None:
         return f"equation D({target})"
-    return f"equation {_expr_to_string(eq.lhs)}"
+    return f"equation {show_expr(eq.lhs)}"
 
 
 def _materialize_one_observed(name: str, rhs: Expr, ctx: EvalContext) -> Any:

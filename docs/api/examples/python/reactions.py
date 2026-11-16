@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 
 import earthsci_ast
+from earthsci_ast import ExprNode
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
@@ -16,14 +17,19 @@ assert [s.name for s in system.species] == ["O3", "NO", "NO2"]
 assert [r.id for r in system.reactions] == ["R1", "R2"]
 
 odes = earthsci_ast.derive_odes(system)
-for eq in odes.equations:
-    print(earthsci_ast.to_ascii(eq))
 
 # One equation per species, in declaration order; rate constants become parameters.
 assert earthsci_ast.ode_states(odes) == ["NO", "NO2", "O3"]
 assert [eq.lhs.args[0] for eq in odes.equations] == ["O3", "NO", "NO2"]
 assert odes.variables["k1"].type == "parameter"
-assert earthsci_ast.to_ascii(odes.equations[2]) == "D(NO2)/Dt = k1 * NO * O3 + -1 * jNO2 * NO2"
+# d[NO2]/dt = k1 [NO][O3] - jNO2 [NO2]
+assert odes.equations[2].rhs == ExprNode(
+    op="+",
+    args=[
+        ExprNode(op="*", args=["k1", "NO", "O3"]),
+        ExprNode(op="*", args=[-1, ExprNode(op="*", args=["jNO2", "NO2"])]),
+    ],
+)
 # endregion
 
 

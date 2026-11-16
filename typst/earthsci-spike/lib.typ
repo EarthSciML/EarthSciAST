@@ -9,8 +9,10 @@
 /// The plugin's crate version.
 #let version() = str(_p.version())
 
-/// Parse an equation in the text syntax; returns (ascii:, unicode:, latex:).
-#let render(eq) = _call(_p.render_equation, eq)
+/// Print one expression, or one equation (a dictionary with `lhs` and `rhs`),
+/// given as its `.esm` JSON value; returns (latex:, typst:), the core's
+/// `print_math` under the names the expression uses.
+#let render(expr) = _call(_p.render_equation, json.encode(expr))
 
 /// Validate an `.esm` document given as a JSON string.
 #let validate(esm) = _call(_p.validate, esm)

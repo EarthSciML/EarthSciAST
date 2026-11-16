@@ -64,10 +64,9 @@ include("types.jl")
 include("classification.jl")
 # Operator-vocabulary registry — single source of truth for the derived op
 # sets (tree-walk fold/CSE/stencil/geometry whitelists, the MTK-ext known-op
-# set, validate.jl's builtin names, units.jl's dimensional-rule classes, and
-# display.jl's infix precedence/separator lookups). Pure data, no AST
-# dependency; must precede validate.jl/display.jl/units.jl and tree_walk.jl,
-# whose derived consts are computed at include time.
+# set, validate.jl's builtin names, and units.jl's dimensional-rule classes).
+# Pure data, no AST dependency; must precede validate.jl, units.jl and
+# tree_walk.jl, whose derived consts are computed at include time.
 include("op_registry.jl")
 include("validate.jl")
 include("validate_inline_tests.jl")
@@ -118,11 +117,6 @@ include("expression.jl")
 include("expression_fields.jl")
 # Structural interning (hash-consing) of the expression AST — perf plan A1.
 include("intern.jl")
-include("display.jl")
-# The INFIX-TEXT expression parser — the inverse of `to_ascii`, so it must
-# follow display.jl (it sources operator precedence from the same registry
-# lookup the printer uses).
-include("parse_expression_text.jl")
 include("graph.jl")
 include("units.jl")
 include("variable_bounds.jl")  # esm-spec §6.3.2 lb / ub: gate, validity, flatten rewrite
@@ -270,10 +264,6 @@ export
     # supported target. `supported_migration_targets` drops the `get` prefix
     # its TypeScript twin carries.
     migrate, can_migrate, supported_migration_targets, MigrationError,
-    # Infix-text expression parsing (src/parse_expression_text.jl) — the
-    # inverse of `to_ascii`. Distinct from `expression_from_json`, which
-    # decodes the JSON wire form.
-    parse_expression, parse_equation, ExpressionParseError,
     # Subsystem reference resolution
     resolve_subsystem_refs!, SubsystemRefError,
     # Coupling serialization functions
@@ -303,8 +293,6 @@ export
     # a deprecated alias of `to_json_graph`, kept one minor per §10; they
     # dispatch on the argument type and render byte-identical output.
     to_json,
-    # Chemical subscript rendering
-    render_chemical_formula, format_node_label,
     # Unit validation
     parse_units, parse_units_reason, get_expression_dimensions, validate_equation_dimensions,
     validate_model_dimensions, validate_reaction_system_dimensions, validate_file_dimensions,
@@ -326,15 +314,12 @@ export
     extract,
     # Code generation
     to_julia_code,
-    # Text display formats
-    to_ascii, format_expression_ascii,
-    to_unicode, to_latex,
     # Canonical AST form (RFC §5.4)
     canonicalize, canonical_json, format_canonical_float, CanonicalizeError,
     canonicalize_document,
     # Markdown and Typst document source formats (CONFORMANCE §5.58)
     print_markdown, print_typst, print_document, print_math,
-    parse_markdown, parse_typst, parse_document,
+    parse_markdown, parse_typst, parse_document, parse_math, expression_names,
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,
     # Planar spatial-index broad phase (projection-pushdown Phase 3a)

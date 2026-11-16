@@ -1,5 +1,6 @@
 # Reading, validating, inspecting and displaying a document.
 using EarthSciAST
+using JSON3
 
 const FIXTURES = joinpath(@__DIR__, "..", "fixtures")
 
@@ -65,16 +66,22 @@ model = doc.models["Decay"]
 @assert algebraic_unknowns(model) == String[]      # none solved implicitly
 
 defs = observed_definitions(model)
-@assert to_ascii(defs["half_life"]) == "log(2) / lambda"
+@assert string(defs["half_life"]) == "ln(2)/lambda"  # its Typst math
 # endregion
 
-# region: display ops=to_unicode,to_latex,to_ascii
-decay_eq = model.equations[1]
-println(to_unicode(decay_eq))
-@assert to_unicode(decay_eq) == "∂N/∂t = (−λ)·N"
-@assert to_latex(decay_eq) == raw"\frac{\partial N}{\partial t} = (-\lambda) \cdot N"
-@assert to_ascii(decay_eq) == "D(N)/Dt = (-lambda) * N"
+# region: display ops=print_math,expression_names
+# print_math takes an expression or equation in its JSON form, as in the
+# decoded document, and the names it may use: a run of letters is one name
+# only when it is declared.
+decoded = JSON3.read(to_json(doc), Dict{String, Any})
+decay_eq = decoded["models"]["Decay"]["equations"][1]
+names = expression_names(decay_eq)
+@assert names == ["N", "lambda"]
+println(print_math(decay_eq, names, :markdown))
+@assert print_math(decay_eq, names, :markdown) == raw"\frac{\mathrm{d} N}{\mathrm{d} t} = \left(-\lambda\right) N"
+@assert print_math(decay_eq, names, :typst) == "(dif N)/(dif t) = (-lambda) N"
 
-# Expressions display the same way.
-@assert to_unicode(model.equations[2].rhs) == "ln(2)/λ"
+# `show` of a typed expression or equation is its Typst math.
+@assert string(model.equations[1]) == "(dif N)/(dif t) = (-lambda) N"
+@assert string(model.equations[2].rhs) == "ln(2)/lambda"
 # endregion

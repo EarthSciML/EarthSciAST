@@ -24,7 +24,7 @@ fn decay() -> Value {
             {"kind": "var", "name": "N", "default": 100, "units": "mol",
              "description": "Amount of nitrogen", "source": {"file": "decay.md", "line": 3, "column": 9}},
             {"kind": "param", "name": "lambda", "default": 0.1, "units": "1/s"},
-            {"kind": "eq", "text": "D(N, t) = -lambda*N", "label": "eq-decay"},
+            {"kind": "eq", "math": "(dif N)/(dif t) = -lambda N", "label": "eq-decay"},
             {"kind": "test", "id": "half-life", "time_span": {"start": 0, "end": 10},
              "assertions": [{"variable": "N", "time": 6.931471805599453, "expected": 50,
                              "tolerance": {"rel": 1e-3}}]},
@@ -46,10 +46,7 @@ fn decay_builds_clean() {
     assert_eq!(out.elements.len(), 7);
 
     let n = out.elements[1].math.as_ref().unwrap();
-    assert_eq!(
-        (n.typst.as_str(), n.latex.as_str(), n.unicode.as_str()),
-        ("N", "N", "N")
-    );
+    assert_eq!((n.typst.as_str(), n.latex.as_str()), ("N", "N"));
     // The core's printers, the notation of the ESM Markdown and Typst formats.
     let eq = out.elements[3].math.as_ref().unwrap();
     assert!(eq.typst.starts_with("(dif N)/(dif t) = "), "{}", eq.typst);
@@ -102,7 +99,7 @@ fn problems_land_on_their_elements() {
     let elements = doc["elements"].as_array_mut().unwrap();
     // A test that fails, a misspelled name, and an element with a bad field.
     elements[4]["assertions"][0]["expected"] = json!(60);
-    elements[3]["text"] = json!("D(N, t) = -lambda*N - lamda");
+    elements[3]["math"] = json!("(dif N)/(dif t) = -lambda N - L");
     elements.push(json!({"kind": "var", "nmae": "Q", "source": {"line": 40}}));
     let out = run(doc, false);
     assert!(!out.ok);
@@ -156,11 +153,11 @@ fn two_box_exchange() {
         "version": 1,
         "elements": [
             {"kind": "model", "name": "TwoBox"},
-            // A leading minus negates only its own term (esm-spec §4.1.1); read
-            // as `-(k_ab*A + k_ba*B)`, both boxes would drain and the
-            // equilibrium test below would fail.
-            {"kind": "eq", "text": "D(A, t) = -k_ab*A + k_ba*B"},
-            {"kind": "eq", "text": "D(B, t) = k_ab*A - k_ba*B"},
+            // A leading minus negates only its own term; read as
+            // `-(k_ab A + k_ba B)`, both boxes would drain and the equilibrium
+            // test below would fail.
+            {"kind": "eq", "math": "(dif A)/(dif t) = -k_(upright(\"ab\")) A + k_(upright(\"ba\")) B"},
+            {"kind": "eq", "math": "(dif B)/(dif t) = k_(upright(\"ab\")) A - k_(upright(\"ba\")) B"},
             {"kind": "var", "name": "A", "default": 1, "units": "mol"},
             {"kind": "var", "name": "B", "default": 0, "units": "mol"},
             {"kind": "param", "name": "k_ab", "default": 0.3, "units": "1/s"},

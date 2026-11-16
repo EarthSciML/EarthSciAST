@@ -19,10 +19,13 @@ There is no separate runner. Each fixture is a case of the flatten corpus,
 it. The corpus records each equation's `contributions` as
 
 ```json
-{"rhs": "<to_ascii of the expression>", "origins": [{"component": "Chem"}]}
+{"rhs": <the expression, in canonical JSON>, "origins": [{"component": "Chem"}]}
 ```
 
-and a binding compares the list exactly and in order, for every case of the corpus, not
+where the `rhs` is the expression AST itself in canonical JSON (CONFORMANCE_SPEC §5.5.3),
+compared as a JSON value with each number in its canonical kind (§5.5.3.1: an integral
+value that fits Int64 is an integer, anything else a binary64).
+A binding compares the list exactly and in order, for every case of the corpus, not
 just these. The Python oracle generates it (`scripts/generate-flatten-corpus.py`).
 
 Two checks need more than the corpus, and live in each binding's own suite:

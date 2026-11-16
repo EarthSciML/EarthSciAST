@@ -77,7 +77,7 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
                     "{id}: `{unknown}` not named in: {msg}"
                 );
                 assert!(
-                    msg.contains("D(") && msg.contains("§4.9.4"),
+                    msg.contains("(dif ") && msg.contains("§4.9.4"),
                     "{id}: both equations and the rule must be named in: {msg}"
                 );
                 // …and `validate` says the same, which is what makes the

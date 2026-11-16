@@ -18,8 +18,8 @@ description: "+ - * / ^ and the relational and boolean operators."
 arguments, not as nested pairs. Canonicalization flattens and sorts them anyway,
 so `(a+b)+c` and `a+(b+c)` have the same canonical form.
 
-**Text**
-```text
+**LaTeX**
+```latex
 a + b + c
 ```
 **JSON**
@@ -28,9 +28,9 @@ a + b + c
 ```
 With `a=1, b=2, c=3` this evaluates to `6.0`.
 
-**Text**
-```text
-k * A * B
+**LaTeX**
+```latex
+k A B
 ```
 **JSON**
 ```json
@@ -40,8 +40,8 @@ With `k=2, A=3, B=4` → `24.0`.
 
 `-` is the one operator whose arity changes its meaning:
 
-**Text**
-```text
+**LaTeX**
+```latex
 -a
 ```
 **JSON**
@@ -50,8 +50,8 @@ With `k=2, A=3, B=4` → `24.0`.
 ```
 With `a=5` → `-5.0` (negation).
 
-**Text**
-```text
+**LaTeX**
+```latex
 a - b
 ```
 **JSON**
@@ -60,9 +60,9 @@ a - b
 ```
 With `a=5, b=2` → `3.0` (difference).
 
-**Text**
-```text
-a / b
+**LaTeX**
+```latex
+\frac{a}{b}
 ```
 **JSON**
 ```json
@@ -70,9 +70,9 @@ a / b
 ```
 With `a=7, b=2` → `3.5`. Division is always binary — there is no n-ary form.
 
-**Text**
-```text
-x^2
+**LaTeX**
+```latex
+x^{2}
 ```
 **JSON**
 ```json
@@ -101,8 +101,8 @@ exponent.
 Comparisons return `1.0` for true and `0.0` for false. They do not return a
 boolean type; there is no boolean type in the value domain.
 
-**Text**
-```text
+**LaTeX**
+```latex
 a < b
 ```
 **JSON**
@@ -112,19 +112,20 @@ a < b
 With `a=1, b=2` → `1.0`. With the same values,
 `{"op": ">=", "args": ["a","b"]}` → `0.0`.
 
-**Text**
-```text
-a == b
+**LaTeX**
+```latex
+a = b
 ```
 **JSON**
 ```json
 { "op": "==", "args": ["a", "b"] }
 ```
-With `a=2, b=2` → `1.0`.
+With `a=2, b=2` → `1.0`. At the top of a display, `=` separates an equation's
+two sides; inside a larger expression it is this comparison.
 
-**Text**
-```text
-a != b
+**LaTeX**
+```latex
+a \ne b
 ```
 **JSON**
 ```json
@@ -146,9 +147,9 @@ dimensionless.
 Operands are numbers, and the convention is the comparison convention: zero is
 false, non-zero is true.
 
-**Text**
-```text
-a < b and b > 0
+**LaTeX**
+```latex
+a < b \land b > 0
 ```
 **JSON**
 ```json
@@ -162,9 +163,9 @@ a < b and b > 0
 ```
 With `a=1, b=2` → `1.0`.
 
-**Text**
-```text
-a < b or b > 99
+**LaTeX**
+```latex
+a < b \lor b > 99
 ```
 **JSON**
 ```json
@@ -178,9 +179,9 @@ a < b or b > 99
 ```
 With `a=9, b=2` → `0.0` — neither disjunct holds.
 
-**Text**
-```text
-not (a < b)
+**LaTeX**
+```latex
+\lnot\left(a < b\right)
 ```
 **JSON**
 ```json

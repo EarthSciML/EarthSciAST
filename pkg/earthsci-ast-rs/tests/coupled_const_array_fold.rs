@@ -99,11 +99,13 @@ fn coupling_reaches_the_gather_index() {
     let plnk = flat
         .equations
         .iter()
-        .find(|eq| eq.lhs.to_string() == "Rtrn.plnk")
+        .find(|eq| matches!(&eq.lhs, earthsci_ast::Expr::Variable(v) if v == "Rtrn.plnk"))
         .expect("the flattened system defines Rtrn.plnk");
-    let rhs = plnk.rhs.to_string();
+    let rhs = crate::common::canon(&plnk.rhs);
     assert!(
-        rhs.contains("Atm.T"),
+        earthsci_ast::expression_names(&rhs)
+            .iter()
+            .any(|n| n == "Atm.T"),
         "the gather index must read the coupled variable, not the removed \
          parameter; got `{rhs}`"
     );

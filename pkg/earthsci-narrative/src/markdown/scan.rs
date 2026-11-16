@@ -780,8 +780,8 @@ Done.
 
     #[test]
     fn brackets_and_escapes_inside_content() {
-        let found = directives("::eq[D(c[i], t) = -k*c[i]]{#eq-i}\n");
-        assert_eq!(found[0].content, "D(c[i], t) = -k*c[i]");
+        let found = directives("::esm-example[c[i] + \\left[k\\right]]{#ex-i}\n");
+        assert_eq!(found[0].content, "c[i] + \\left[k\\right]");
         let found = directives("Text :var[x]{description=\"a \\] bracket\"} more.\n");
         assert_eq!(found[0].attrs["description"], "a \\] bracket");
     }

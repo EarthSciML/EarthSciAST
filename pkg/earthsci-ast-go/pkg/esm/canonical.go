@@ -49,10 +49,21 @@ var jsonNumberType = reflect.TypeOf(json.Number(""))
 // are passed through untouched so that prior canonicalization inside
 // interface{} slots is preserved.
 func canonicalizeForJSON(v any) (any, error) {
-	return canonicalizeValue(reflect.ValueOf(v))
+	return canonicalizeValue(reflect.ValueOf(v), false)
 }
 
-func canonicalizeValue(rv reflect.Value) (any, error) {
+// jsonTree is v as the same walk yields it, except that a non-finite float,
+// which no JSON holds, stays a float64 instead of failing the walk. It is the
+// in-memory tree of a typed value, not a value to serialize.
+func jsonTree(v any) any {
+	tree, _ := canonicalizeValue(reflect.ValueOf(v), true)
+	return tree
+}
+
+// canonicalizeValue is the walk behind canonicalizeForJSON and jsonTree;
+// keepNonFinite keeps a NaN or infinite float as a float64 rather than
+// returning an error.
+func canonicalizeValue(rv reflect.Value, keepNonFinite bool) (any, error) {
 	if !rv.IsValid() {
 		return nil, nil
 	}
@@ -81,10 +92,10 @@ func canonicalizeValue(rv reflect.Value) (any, error) {
 		if rv.IsNil() {
 			return nil, nil
 		}
-		return canonicalizeValue(rv.Elem())
+		return canonicalizeValue(rv.Elem(), keepNonFinite)
 
 	case reflect.Struct:
-		return canonicalizeStruct(rv)
+		return canonicalizeStruct(rv, keepNonFinite)
 
 	case reflect.Map:
 		if rv.IsNil() {
@@ -100,7 +111,7 @@ func canonicalizeValue(rv reflect.Value) (any, error) {
 			} else {
 				ks = fmt.Sprintf("%v", key.Interface())
 			}
-			val, err := canonicalizeValue(iter.Value())
+			val, err := canonicalizeValue(iter.Value(), keepNonFinite)
 			if err != nil {
 				return nil, err
 			}
@@ -112,12 +123,15 @@ func canonicalizeValue(rv reflect.Value) (any, error) {
 		if rv.IsNil() {
 			return nil, nil
 		}
-		return canonicalizeSequence(rv)
+		return canonicalizeSequence(rv, keepNonFinite)
 
 	case reflect.Array:
-		return canonicalizeSequence(rv)
+		return canonicalizeSequence(rv, keepNonFinite)
 
 	case reflect.Float32, reflect.Float64:
+		if f := rv.Float(); keepNonFinite && (math.IsNaN(f) || math.IsInf(f, 0)) {
+			return f, nil
+		}
 		s, err := canonicalFloat64String(rv.Float())
 		if err != nil {
 			return nil, err
@@ -140,7 +154,7 @@ func canonicalizeValue(rv reflect.Value) (any, error) {
 	return rv.Interface(), nil
 }
 
-func canonicalizeSequence(rv reflect.Value) (any, error) {
+func canonicalizeSequence(rv reflect.Value, keepNonFinite bool) (any, error) {
 	// []byte is a special case: encoding/json emits it as a base64 string.
 	if rv.Type().Elem().Kind() == reflect.Uint8 {
 		if rv.Kind() == reflect.Slice {
@@ -155,7 +169,7 @@ func canonicalizeSequence(rv reflect.Value) (any, error) {
 	}
 	result := make([]any, rv.Len())
 	for i := 0; i < rv.Len(); i++ {
-		val, err := canonicalizeValue(rv.Index(i))
+		val, err := canonicalizeValue(rv.Index(i), keepNonFinite)
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +178,7 @@ func canonicalizeSequence(rv reflect.Value) (any, error) {
 	return result, nil
 }
 
-func canonicalizeStruct(rv reflect.Value) (any, error) {
+func canonicalizeStruct(rv reflect.Value, keepNonFinite bool) (any, error) {
 	t := rv.Type()
 	result := make(map[string]any, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
@@ -180,7 +194,7 @@ func canonicalizeStruct(rv reflect.Value) (any, error) {
 		if omitempty && isEmptyValue(fv) && !keepsEmptyContainer(field, fv) {
 			continue
 		}
-		val, err := canonicalizeValue(fv)
+		val, err := canonicalizeValue(fv, keepNonFinite)
 		if err != nil {
 			return nil, err
 		}

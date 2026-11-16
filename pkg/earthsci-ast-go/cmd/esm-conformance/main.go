@@ -34,12 +34,6 @@ type validationEntry struct {
 	Expect   string `json:"expect"`
 }
 
-type displayCase struct {
-	ID    string `json:"id"`
-	Kind  string `json:"kind"`
-	Input any    `json:"input"`
-}
-
 type substitutionCase struct {
 	ID       string         `json:"id"`
 	Input    any            `json:"input"`
@@ -48,7 +42,6 @@ type substitutionCase struct {
 
 type manifest struct {
 	ValidationFiles   []validationEntry  `json:"validation_files"`
-	DisplayCases      []displayCase      `json:"display_cases"`
 	SubstitutionCases []substitutionCase `json:"substitution_cases"`
 }
 
@@ -209,33 +202,6 @@ func decodeExpression(input any) (esm.Expression, error) {
 	return esm.UnmarshalExpression(blob)
 }
 
-func runDisplay(m *manifest) map[string]any {
-	results := make(map[string]any, len(m.DisplayCases))
-
-	for _, c := range m.DisplayCases {
-		// A "formula" case is a bare chemical-formula string ("O3" → "O₃"); an
-		// "expression" case is a dict-form Expression.
-		target := c.Input
-		record := map[string]any{}
-		if c.Kind != "formula" {
-			decoded, err := decodeExpression(c.Input)
-			if err != nil {
-				record["unicode"], record["latex"], record["ascii"] = nil, nil, nil
-				record["errors"] = map[string]any{"decode": err.Error()}
-				results[c.ID] = record
-				continue
-			}
-			target = decoded
-		}
-		record["unicode"] = esm.ToUnicode(target)
-		record["latex"] = esm.ToLatex(target)
-		record["ascii"] = esm.ToASCII(target)
-		results[c.ID] = record
-	}
-
-	return results
-}
-
 func runSubstitution(m *manifest) map[string]any {
 	results := make(map[string]any, len(m.SubstitutionCases))
 
@@ -321,8 +287,6 @@ func main() {
 
 	validation := runValidation(root, m)
 	fmt.Printf("✓ Validation sweep completed (%d files)\n", len(validation))
-	display := runDisplay(m)
-	fmt.Printf("✓ Display sweep completed (%d cases)\n", len(display))
 	substitution := runSubstitution(m)
 	fmt.Printf("✓ Substitution sweep completed (%d cases)\n", len(substitution))
 
@@ -333,7 +297,6 @@ func main() {
 	out := map[string]any{
 		"language":             "go",
 		"validation_results":   validation,
-		"display_results":      display,
 		"substitution_results": substitution,
 		"errors":               []string{},
 	}

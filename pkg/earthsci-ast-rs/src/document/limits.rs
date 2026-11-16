@@ -24,7 +24,8 @@
 //!
 //! The readers stay ports of the Lean functions, which return `None` for every
 //! refusal; [`reading`] collects what a read ran into, so the refusal can say
-//! which bound it hit, and which removed operator its math names.
+//! which bound it hit, which removed operator its math names, and how far
+//! into its tokens the math parser got.
 
 use std::cell::Cell;
 
@@ -43,6 +44,10 @@ struct State {
     depth: usize,
     too_deep: bool,
     removed_op: Option<&'static str>,
+    /// The address of the token list [`reached`] measures against, and its
+    /// length.
+    tokens: Option<(usize, usize)>,
+    reach: Option<usize>,
 }
 
 thread_local! {
@@ -51,6 +56,8 @@ thread_local! {
             depth: 0,
             too_deep: false,
             removed_op: None,
+            tokens: None,
+            reach: None,
         })
     };
 }
@@ -64,6 +71,11 @@ pub struct Findings {
     /// The first removed operator (esm-spec §4.2) the math parser met in a
     /// call or escape form.
     pub removed_op: Option<&'static str>,
+    /// When the read [`track`]ed a token list, the index of the furthest
+    /// token in it the math parser began or finished an operand at (the
+    /// list's length when it got to the end). A refused math text went wrong
+    /// at or about that token.
+    pub reach: Option<usize>,
 }
 
 /// Run one read and collect its [`Findings`].
@@ -76,6 +88,7 @@ pub fn reading<T>(f: impl FnOnce() -> T) -> (T, Findings) {
         Findings {
             too_deep: st.too_deep,
             removed_op: st.removed_op,
+            reach: st.reach,
         },
     )
 }
@@ -97,6 +110,29 @@ pub fn too_deep() {
 pub fn removed_op(op: &'static str) {
     update(|st| {
         st.removed_op.get_or_insert(op);
+    });
+}
+
+/// Measure [`reached`] against `tokens` for the rest of the read.
+pub fn track<T>(tokens: &[T]) {
+    update(|st| st.tokens = Some((tokens.as_ptr() as usize, tokens.len())));
+}
+
+/// Record that the math parser reached the start of `rest`, a part of the
+/// [`track`]ed token list (the furthest is kept). Nothing is recorded for a
+/// list nothing tracks.
+pub fn reached<T>(rest: &[T]) {
+    let size = std::mem::size_of::<T>();
+    let addr = rest.as_ptr() as usize;
+    update(|st| {
+        if let Some((base, len)) = st.tokens
+            && size > 0
+            && addr >= base
+            && addr <= base + len * size
+        {
+            let at = (addr - base) / size;
+            st.reach = Some(st.reach.map_or(at, |r| r.max(at)));
+        }
     });
 }
 

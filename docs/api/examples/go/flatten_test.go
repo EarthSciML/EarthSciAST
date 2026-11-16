@@ -10,7 +10,7 @@ import (
 // Flatten a coupled document into one system with dot-namespaced names, and
 // list its variables and equations.
 func Example_flatten() {
-	// region: flatten ops=load_path,flatten,to_ascii
+	// region: flatten ops=load_path,flatten,print_math
 	doc, err := esm.LoadPath(fixture("coupled.esm"))
 	if err != nil {
 		log.Fatal(err)
@@ -26,7 +26,7 @@ func Example_flatten() {
 		fmt.Println("parameter:", v.Name)
 	}
 	for _, eq := range flat.Equations {
-		fmt.Println(esm.ToASCII(eq.LHS), "=", esm.ToASCII(eq.RHS))
+		fmt.Println(eq.LHSString(), "=", eq.RHSString())
 	}
 	// endregion
 
@@ -35,6 +35,6 @@ func Example_flatten() {
 	// state: Box.T_air
 	// parameter: Heater.rate
 	// parameter: Box.k
-	// D(Heater.T)/Dt = Heater.rate
-	// D(Box.T_air)/Dt = Box.k * (Heater.T - Box.T_air)
+	// (dif italic("Heater")"."T)/(dif t) = italic("Heater")"."italic("rate")
+	// (dif italic("Box")"."T_(upright("air")))/(dif t) = italic("Box")"."k (italic("Heater")"."T - italic("Box")"."T_(upright("air")))
 }

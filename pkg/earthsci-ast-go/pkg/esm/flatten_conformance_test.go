@@ -22,9 +22,11 @@ import (
 // test existed, emitting [OU.Bw, OU.sigma, OU.theta] where the document declares
 // [OU.theta, OU.sigma, OU.Bw].
 //
-// Equations are compared through ToASCII, the same renderer the shared display
-// fixtures and the expression-parse corpus use, so an equation mismatch is a
-// mismatch of the TREE and not of a private pretty-printer.
+// Every expression (equation sides, contributions, event conditions and
+// affects, expression bounds and defaults, field initial conditions) is
+// compared in canonical JSON (CONFORMANCE §5.4), numbers in their canonical
+// kind (§5.5.3.1): the corpus records each one that way, so an expression
+// mismatch is a mismatch of the TREE and not of a printer.
 
 type flattenCorpus struct {
 	Cases    []flattenCase `json:"cases"`
@@ -45,30 +47,31 @@ type flattenVarRecord struct {
 	DistributionKind *string  `json:"distribution_kind"`
 	SourceSystem     *string  `json:"source_system"`
 	// LB and UB are the flattened bounds (esm-libraries-spec §4.7.5): null
-	// when absent, the number, or the flattened bound rendered with ToASCII.
+	// when absent, else the bound expression.
 	LB any `json:"lb"`
 	UB any `json:"ub"`
 }
 
 type flattenEqRecord struct {
-	LHS           string                      `json:"lhs"`
-	RHS           string                      `json:"rhs"`
+	LHS           any                         `json:"lhs"`
+	RHS           any                         `json:"rhs"`
 	SourceSystem  *string                     `json:"source_system"`
 	Contributions []flattenContributionRecord `json:"contributions"`
 }
 
 // flattenContributionRecord is one entry of an equation's per-term provenance
-// (esm-libraries-spec §4.7.5), in the corpus form: the contribution rendered
-// with ToASCII, and its origins.
+// (esm-libraries-spec §4.7.5), in the corpus form: the contribution's
+// expression, and its origins.
 type flattenContributionRecord struct {
-	RHS     string       `json:"rhs"`
+	RHS     any          `json:"rhs"`
 	Origins []TermOrigin `json:"origins"`
 }
 
 type flattenEventRecord struct {
-	Name       *string  `json:"name"`
-	Conditions []string `json:"conditions"`
-	Affects    []string `json:"affects"`
+	Name       *string `json:"name"`
+	Conditions []any   `json:"conditions"`
+	// Affects are objects with `lhs` and `rhs`.
+	Affects []any `json:"affects"`
 }
 
 type flattenDomainRecord struct {
@@ -86,7 +89,7 @@ type flattenMetadataRecord struct {
 
 type flattenICRecord struct {
 	State string `json:"state"`
-	Expr  string `json:"expr"`
+	Expr  any    `json:"expr"`
 }
 
 type flattenLoaderRecord struct {
@@ -170,28 +173,19 @@ func goVarRecord(v FlattenedVariable) flattenVarRecord {
 	}
 }
 
-// goBoundRecord projects a flattened bound into the corpus form: nil, the
-// number, or the ToASCII rendering of the (renamed) reference.
+// goBoundRecord projects a flattened bound into the corpus form: nil, or the
+// (renamed) bound expression.
 func goBoundRecord(b Expression) any {
 	if b == nil {
 		return nil
 	}
-	if n, ok := exprNumber(b); ok {
-		return n
-	}
-	return ToASCII(b)
+	return b
 }
 
-// sameBound compares two projected bounds: numbers numerically (the corpus
-// writes an integral bound as a JSON integer), everything else exactly.
-func sameBound(a, b any) bool {
-	an, aok := exprNumber(a)
-	bn, bok := exprNumber(b)
-	if aok || bok {
-		return aok && bok && an == bn
-	}
-	return a == b
-}
+// canonExpr is an expression, decoded or typed, in canonical JSON form
+// (CanonicalizeDocument), numbers in their canonical kind: the form the corpus
+// records every expression in.
+func canonExpr(v any) any { return CanonicalizeDocument(decodedValue(v)) }
 
 func goVarRecords(vs []FlattenedVariable) []flattenVarRecord {
 	out := make([]flattenVarRecord, 0, len(vs))
@@ -210,13 +204,13 @@ func goVarNames(vs []FlattenedVariable) []string {
 }
 
 func goEventRecord(name *string, conditions []Expression, affects []AffectEquation) flattenEventRecord {
-	conds := []string{}
+	conds := []any{}
 	for _, c := range conditions {
-		conds = append(conds, ToASCII(c))
+		conds = append(conds, canonExpr(c))
 	}
-	acts := []string{}
+	acts := []any{}
 	for _, a := range affects {
-		acts = append(acts, fmt.Sprintf("%s = %s", ToASCII(a.LHS), ToASCII(a.RHS)))
+		acts = append(acts, canonExpr(a))
 	}
 	return flattenEventRecord{Name: name, Conditions: conds, Affects: acts}
 }
@@ -227,10 +221,10 @@ func goFlattenCase(flat *FlattenedSystem) flattenCase {
 		src := eq.SourceSystem
 		contributions := make([]flattenContributionRecord, len(eq.Contributions))
 		for i, c := range eq.Contributions {
-			contributions[i] = flattenContributionRecord{RHS: ToASCII(c.Expr), Origins: c.Origins}
+			contributions[i] = flattenContributionRecord{RHS: canonExpr(c.Expr), Origins: c.Origins}
 		}
 		eqs = append(eqs, flattenEqRecord{
-			LHS: ToASCII(eq.LHS), RHS: ToASCII(eq.RHS), SourceSystem: &src, Contributions: contributions,
+			LHS: canonExpr(eq.LHS), RHS: canonExpr(eq.RHS), SourceSystem: &src, Contributions: contributions,
 		})
 	}
 	continuous := []flattenEventRecord{}
@@ -264,7 +258,7 @@ func goFlattenCase(flat *FlattenedSystem) flattenCase {
 	}
 	ics := []flattenICRecord{}
 	for _, ic := range flat.FieldICs {
-		ics = append(ics, flattenICRecord{State: ic.State, Expr: ToASCII(ic.Expr)})
+		ics = append(ics, flattenICRecord{State: ic.State, Expr: canonExpr(ic.Expr)})
 	}
 	loaders := []flattenLoaderRecord{}
 	for _, lf := range flat.LoaderFields {
@@ -307,32 +301,22 @@ func goFlattenCase(flat *FlattenedSystem) flattenCase {
 
 // --- comparison --------------------------------------------------------------
 
-// sameDefault compares two declared `default` values. Numeric values compare
-// NUMERICALLY: the corpus is JSON produced by Python, where an integer default
-// is an int and a float default a float, while Go's decoder hands every
-// non-Expression `default` back as a float64 — an int/float WIRE distinction
-// that is not what step 4 pins. Anything else compares by its JSON encoding.
+// sameDefault compares two declared `default` values in canonical form, so
+// numbers compare in their canonical kind: the corpus is JSON produced by
+// Python, where an integral float default is written `1.0`, while Go's decoder
+// hands every non-Expression `default` back as a float64 — an int/float WIRE
+// distinction that is not what step 4 pins. An expression-valued default is
+// pinned by the corpus as {"expr": <expression>}.
 func sameDefault(a, b any) bool {
-	an, aok := exprNumber(a)
-	bn, bok := exprNumber(b)
-	if aok && bok {
-		return an == bn
-	}
-	if aok != bok {
-		return false
-	}
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	// An expression-valued default is pinned by the corpus as {"expr": <ascii>}.
-	if m, ok := b.(map[string]any); ok {
-		if want, ok := m["expr"].(string); ok {
-			return ToASCII(a) == want
+	if m, ok := b.(map[string]any); ok && len(m) == 1 {
+		if want, ok := m["expr"]; ok {
+			return sameExpression(a, want)
 		}
 	}
-	aj, _ := json.Marshal(a)
-	bj, _ := json.Marshal(b)
-	return string(aj) == string(bj)
+	return sameExpression(a, b)
 }
 
 func diffVarRecords(t *testing.T, field string, got, want []flattenVarRecord) {
@@ -356,7 +340,7 @@ func diffVarRecords(t *testing.T, field string, got, want []flattenVarRecord) {
 			t.Errorf("%s[%d] %s: units %v, want %v", field, i, w.Name, showStr(g.Units), showStr(w.Units))
 		}
 		if !sameDefault(g.Default, w.Default) {
-			t.Errorf("%s[%d] %s: default %#v, want %#v", field, i, w.Name, g.Default, w.Default)
+			t.Errorf("%s[%d] %s: default %s, want %s", field, i, w.Name, showJSON(g.Default), showJSON(w.Default))
 		}
 		if !sameStrSlice(g.Shape, w.Shape) {
 			t.Errorf("%s[%d] %s: shape %v, want %v", field, i, w.Name, g.Shape, w.Shape)
@@ -372,11 +356,11 @@ func diffVarRecords(t *testing.T, field string, got, want []flattenVarRecord) {
 			t.Errorf("%s[%d] %s: source system %v, want %v",
 				field, i, w.Name, showStr(g.SourceSystem), showStr(w.SourceSystem))
 		}
-		if !sameBound(g.LB, w.LB) {
-			t.Errorf("%s[%d] %s: lb %#v, want %#v", field, i, w.Name, g.LB, w.LB)
+		if !sameExpression(g.LB, w.LB) {
+			t.Errorf("%s[%d] %s: lb %s, want %s", field, i, w.Name, showJSON(g.LB), showJSON(w.LB))
 		}
-		if !sameBound(g.UB, w.UB) {
-			t.Errorf("%s[%d] %s: ub %#v, want %#v", field, i, w.Name, g.UB, w.UB)
+		if !sameExpression(g.UB, w.UB) {
+			t.Errorf("%s[%d] %s: ub %s, want %s", field, i, w.Name, showJSON(g.UB), showJSON(w.UB))
 		}
 	}
 }
@@ -387,6 +371,15 @@ func varNamesOf(vs []flattenVarRecord) []string {
 		out = append(out, v.Name)
 	}
 	return out
+}
+
+// showJSON is a value in canonical JSON, for a failure message.
+func showJSON(v any) string {
+	b, err := json.Marshal(canonExpr(v))
+	if err != nil {
+		return fmt.Sprintf("%#v", v)
+	}
+	return string(b)
 }
 
 func showStr(p *string) string {
@@ -455,20 +448,18 @@ func TestFlattenConformance(t *testing.T) {
 			}
 			for i := 0; i < len(want.Equations) && i < len(got.Equations); i++ {
 				g, w := got.Equations[i], want.Equations[i]
-				if g.LHS != w.LHS || g.RHS != w.RHS || !sameStrPtr(g.SourceSystem, w.SourceSystem) {
+				if !sameExpression(g.LHS, w.LHS) || !sameExpression(g.RHS, w.RHS) || !sameStrPtr(g.SourceSystem, w.SourceSystem) {
 					t.Errorf("equations[%d]:\n  got  %s | %s ~ %s\n  want %s | %s ~ %s",
-						i, showStr(g.SourceSystem), g.LHS, g.RHS,
-						showStr(w.SourceSystem), w.LHS, w.RHS)
+						i, showStr(g.SourceSystem), showJSON(g.LHS), showJSON(g.RHS),
+						showStr(w.SourceSystem), showJSON(w.LHS), showJSON(w.RHS))
 				}
 				// Per-term provenance (§4.7.5): compared exactly and in order —
 				// the expressions, the origins and their order — for every case.
-				// Compared in the corpus's JSON form, so a TermOrigin with both or
-				// neither field set cannot pass.
-				gotJSON, _ := json.Marshal(g.Contributions)
-				wantJSON, _ := json.Marshal(w.Contributions)
-				if string(gotJSON) != string(wantJSON) {
+				// Compared in the corpus's canonical JSON form, so a TermOrigin with
+				// both or neither field set cannot pass.
+				if !sameExpression(g.Contributions, w.Contributions) {
 					t.Errorf("equations[%d] %s contributions:\n  got  %s\n  want %s",
-						i, w.LHS, gotJSON, wantJSON)
+						i, showJSON(w.LHS), showJSON(g.Contributions), showJSON(w.Contributions))
 				}
 			}
 
@@ -490,7 +481,8 @@ func TestFlattenConformance(t *testing.T) {
 					len(got.FieldICs), len(want.FieldICs), got.FieldICs, want.FieldICs)
 			} else {
 				for i := range want.FieldICs {
-					if got.FieldICs[i] != want.FieldICs[i] {
+					g, w := got.FieldICs[i], want.FieldICs[i]
+					if g.State != w.State || !sameExpression(g.Expr, w.Expr) {
 						t.Errorf("field_ics[%d] = %+v, want %+v", i, got.FieldICs[i], want.FieldICs[i])
 					}
 				}
@@ -655,8 +647,14 @@ func diffEvents(t *testing.T, field string, got, want []flattenEventRecord) {
 		if !sameStrPtr(got[i].Name, want[i].Name) {
 			t.Errorf("%s[%d]: name %v, want %v", field, i, showStr(got[i].Name), showStr(want[i].Name))
 		}
-		diffStrSeq(t, fmt.Sprintf("%s[%d].conditions", field, i), got[i].Conditions, want[i].Conditions)
-		diffStrSeq(t, fmt.Sprintf("%s[%d].affects", field, i), got[i].Affects, want[i].Affects)
+		if !sameExpression(got[i].Conditions, want[i].Conditions) {
+			t.Errorf("%s[%d].conditions:\n  got:  %s\n  want: %s",
+				field, i, showJSON(got[i].Conditions), showJSON(want[i].Conditions))
+		}
+		if !sameExpression(got[i].Affects, want[i].Affects) {
+			t.Errorf("%s[%d].affects:\n  got:  %s\n  want: %s",
+				field, i, showJSON(got[i].Affects), showJSON(want[i].Affects))
+		}
 	}
 }
 

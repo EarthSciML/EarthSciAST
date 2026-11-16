@@ -27,14 +27,9 @@ tests/
 │   ├── unresolved_scoped_ref.esm
 │   ├── event_var_undeclared.esm
 │   └── event_error_conditions.esm # Invalid event configurations for error testing
-├── display/                  # Expected pretty-printing outputs
-│   ├── expr_precedence.json  # Expression → Unicode/LaTeX/ASCII
-│   ├── chemical_subscripts.json # Basic chemical species formatting test cases
-│   ├── chemical_subscripts_comprehensive.json # Comprehensive chemical species formatting (all elements, complex formulas, edge cases)
-│   ├── chemical_subscripts_edge_cases.json # Additional edge cases and negative test cases
-│   └── model_summary.json
 ├── substitution/             # Expression substitution tests
 │   └── simple_var_replace.json
+├── conformance/document_format/ # Markdown and Typst source formats (CONFORMANCE_SPEC §5.58)
 ├── conformance/graph/        # Graph generation conformance corpus
 │   ├── cases.json            # GENERATED; component + expression graphs, all bindings
 │   └── README.md             # what it pins, and what it deliberately does not
@@ -50,16 +45,14 @@ tests/
 - **Schema Validation**: All invalid files must produce expected schema errors
 - **Structural Validation**: Invalid files must produce expected structural error codes
 
-### Display Formats
-- **Unicode**: Chemical subscripts, mathematical notation, operator precedence
-- **LaTeX**: Proper mathematical typesetting
-- **ASCII**: Fallback plain-text representation
-- **Model Summary**: Structured overview of entire ESM files
+### Document Source Formats
+- **Markdown (LaTeX math) and Typst**: lossless printing and parsing of whole documents, and of
+  single expressions and equations (`print_math` / `parse_math`), pinned by
+  `conformance/document_format/` (CONFORMANCE_SPEC §5.58/§5.59)
 
 ### Expression Engine
 - **Substitution**: Variable replacement in expressions
 - **Evaluation**: Numerical evaluation with variable bindings
-- **Pretty-printing**: Consistent formatting across languages
 
 ### Graph Generation
 - **System Graph**: Component-level coupling visualization
@@ -92,7 +85,7 @@ Based on libraries specification Section 3.4:
 1. **Baseline Test**: All libraries must parse `minimal_chemistry.esm`
 2. **Round-Trip**: `load(save(load(file))) == load(file)` for all valid files
 3. **Validation Consistency**: Same error codes for same invalid files across languages
-4. **Display Consistency**: Identical Unicode/LaTeX output for same expressions
+4. **Document Format Consistency**: Identical Markdown/Typst text for the same document
 5. **Graph Consistency**: Same nodes/edges for system and expression graphs
 
 ## Usage
@@ -101,7 +94,7 @@ Each language library should implement tests that:
 
 1. Load all files in `valid/` and verify they parse successfully
 2. Load all files in `invalid/` and verify they produce the expected errors from `expected_errors.json`
-3. Test pretty-printing by comparing outputs to `display/` fixtures
+3. Test the Markdown/Typst printers and readers against `conformance/document_format/`
 4. Test substitution using `substitution/` fixtures
 5. Test graph generation using the `conformance/graph/cases.json` corpus
 
@@ -112,7 +105,6 @@ Each language library should implement tests that:
 - ✅ Baseline directory structure
 - ✅ Schema validation errors (3 cases)
 - ✅ Structural validation errors (7 cases + 9 event system error cases)
-- ✅ Display format fixtures (18 expression cases, 18 basic + 150+ comprehensive chemical subscript cases)
 - ✅ Substitution fixtures (8 cases)
 - ✅ System graph fixtures (1 case)
 - ✅ Event system fixtures (3 comprehensive files: basic functionality, edge cases, timing/synchronization)

@@ -617,13 +617,7 @@ pub fn doubly_defined_unknown_refusal(
     differential: &crate::types::Equation,
     algebraic: &crate::types::Equation,
 ) -> CompileError {
-    let render = |eq: &crate::types::Equation| {
-        format!(
-            "{} ~ {}",
-            crate::to_ascii(&eq.lhs),
-            crate::to_ascii(&eq.rhs)
-        )
-    };
+    let render = |eq: &crate::types::Equation| eq.to_string();
     CompileError::DoublyDefinedUnknown {
         name: name.to_string(),
         differential: render(differential),
@@ -639,11 +633,7 @@ pub fn implicit_equation_refusal(
     CompileError::UnsupportedConstruct {
         construct: IMPLICIT_EQUATION,
         evaluator,
-        detail: format!(
-            "`{} ~ {}`",
-            crate::to_ascii(&equation.lhs),
-            crate::to_ascii(&equation.rhs)
-        ),
+        detail: format!("`{equation}`"),
     }
 }
 

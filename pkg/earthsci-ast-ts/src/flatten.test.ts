@@ -9,12 +9,23 @@
  * Since `esm 1.0.0` the flattened maps are ORDERED `name -> variable` records
  * carrying full metadata (esm-libraries-spec §4.7.5 step 4), not bare name
  * lists, and `equations` carry Expression TREES rather than pretty-printed
- * strings — so these assertions read `Object.keys(...)` and compare ASTs.
+ * strings — so these assertions read `Object.keys(...)` and compare ASTs in
+ * canonical JSON.
  */
 import { describe, it, expect } from 'vitest'
 import { flatten, CoupleMultiplicativeNoTendencyError, FlattenError } from './flatten.js'
-import { toAscii } from './pretty-print.js'
+import { canonicalJson, sameExpr } from './test-helpers.js'
 import type { EsmFile } from './types.js'
+
+/** `D(x)/Dt`. */
+const D = (x: string) => ({ op: 'D', args: [x], wrt: 't' })
+const mul = (...args: unknown[]) => ({ op: '*', args })
+const add = (...args: unknown[]) => ({ op: '+', args })
+
+/** Compare two expressions in canonical JSON. */
+function expectExpr(actual: unknown, expected: unknown): void {
+  expect(canonicalJson(actual)).toEqual(canonicalJson(expected))
+}
 
 describe('flatten', () => {
   it('namespaces variables from a single model', () => {
@@ -54,8 +65,8 @@ describe('flatten', () => {
     })
     expect(flat.equations).toHaveLength(1)
     expect(flat.equations[0]!.sourceSystem).toBe('Atmos')
-    expect(toAscii(flat.equations[0]!.lhs)).toBe('D(Atmos.T)/Dt')
-    expect(toAscii(flat.equations[0]!.rhs)).toBe('Atmos.k * Atmos.T')
+    expectExpr(flat.equations[0]!.lhs, D('Atmos.T'))
+    expectExpr(flat.equations[0]!.rhs, mul('Atmos.k', 'Atmos.T'))
   })
 
   it('namespaces species and parameters from a reaction system', () => {
@@ -88,7 +99,7 @@ describe('flatten', () => {
     // One species, one net-consuming reaction: exactly one derived ODE, with the
     // `-1 * rate` form every binding renders (not a unary minus).
     expect(flat.equations).toHaveLength(1)
-    expect(toAscii(flat.equations[0]!.rhs)).toBe('-1 * Chem.k1 * Chem.O3 * Chem.O3')
+    expectExpr(flat.equations[0]!.rhs, mul(-1, mul(mul('Chem.k1', 'Chem.O3'), 'Chem.O3')))
   })
 
   it('records coupling rules in metadata', () => {
@@ -120,7 +131,7 @@ describe('flatten', () => {
     // `identity` does NOT promote, so `B.y` stays a parameter — but the
     // substitution still runs, so the equation set names the canonical source.
     expect(Object.keys(flat.parameters)).toContain('B.y')
-    expect(toAscii(flat.equations[1]!.rhs)).toBe('A.x')
+    expectExpr(flat.equations[1]!.rhs, 'A.x')
   })
 
   // A wrapper model whose SUBSYSTEM owns the coupling target: `Src.T` feeds the
@@ -158,9 +169,9 @@ describe('flatten', () => {
     // endpoint resolver cannot express (issue #198 item 1).
     const flat = flatten(subsystemMapFile('Wrap.inner.gain'))
     expect(Object.keys(flat.parameters)).not.toContain('Wrap.inner.gain')
-    const nested = flat.equations.find((e) => toAscii(e.lhs) === 'D(Wrap.inner.x)/Dt')
+    const nested = flat.equations.find((e) => sameExpr(e.lhs, D('Wrap.inner.x')))
     expect(nested).toBeDefined()
-    expect(toAscii(nested!.rhs)).toBe('Src.T')
+    expectExpr(nested!.rhs, 'Src.T')
   })
 
   it('refuses a variable_map endpoint that resolves to nothing', () => {
@@ -212,8 +223,8 @@ describe('flatten', () => {
     expect(Object.keys(flat.parameters)).toEqual(['Sink.offset'])
     expect(Object.keys(flat.observedVariables)).toEqual(['Sink.y'])
     expect(flat.equations).toHaveLength(1)
-    expect(toAscii(flat.equations[0]!.lhs)).toBe('Sink.y')
-    expect(toAscii(flat.equations[0]!.rhs)).toBe('2 * Src.F + Sink.offset')
+    expectExpr(flat.equations[0]!.lhs, 'Sink.y')
+    expectExpr(flat.equations[0]!.rhs, add(mul(2, 'Src.F'), 'Sink.offset'))
   })
 
   it('applies the factor scaling for additive/multiplicative/conversion_factor transforms', () => {
@@ -237,17 +248,17 @@ describe('flatten', () => {
     const substituted = (
       transform: 'additive' | 'multiplicative' | 'conversion_factor',
       factor?: number,
-    ) => toAscii(flatten(makeFile(transform, factor)).equations[0]!.rhs)
+    ) => canonicalJson(flatten(makeFile(transform, factor)).equations[0]!.rhs)
 
     // Factor applies uniformly across every scaling transform (mirrors Rust /
     // Python / Go: `factor * from`, additive and multiplicative alike).
-    expect(substituted('multiplicative', 2.5)).toBe('2.5 * A.x')
-    expect(substituted('additive', 3)).toBe('3 * A.x')
-    expect(substituted('conversion_factor', 1000)).toBe('1000 * A.x')
+    expect(substituted('multiplicative', 2.5)).toEqual(canonicalJson(mul(2.5, 'A.x')))
+    expect(substituted('additive', 3)).toEqual(canonicalJson(mul(3, 'A.x')))
+    expect(substituted('conversion_factor', 1000)).toEqual(canonicalJson(mul(1000, 'A.x')))
 
     // A factor of 1 (or absent) is a no-op identity map.
-    expect(substituted('multiplicative', 1)).toBe('A.x')
-    expect(substituted('additive')).toBe('A.x')
+    expect(substituted('multiplicative', 1)).toEqual(canonicalJson('A.x'))
+    expect(substituted('additive')).toEqual(canonicalJson('A.x'))
   })
 
   it('produces nested dot-namespacing for subsystems', () => {
@@ -316,8 +327,8 @@ describe('flatten', () => {
     expect(Object.keys(flat.brownianParameters)).toEqual(['Box.W'])
     expect(flat.systemKind).toBe('sde')
     // The observed's DEFINING EXPRESSION is its equation, not a side table.
-    expect(toAscii(flat.equations[1]!.lhs)).toBe('Box.C')
-    expect(toAscii(flat.equations[1]!.rhs)).toBe('Box.k * Box.S')
+    expectExpr(flat.equations[1]!.lhs, 'Box.C')
+    expectExpr(flat.equations[1]!.rhs, mul('Box.k', 'Box.S'))
   })
 
   it('refuses a document with no models and no reaction systems', () => {
@@ -363,11 +374,11 @@ describe('operator_compose translate direction (§10.2 / §4.7.1 step 2)', () =>
     const flat = flatten(differentlyNamed({ 'A.x': 'B.y' }))
     // One merged equation, not two: B's `D(y)` was consumed into A's `D(x)`.
     expect(flat.equations).toHaveLength(1)
-    expect(toAscii(flat.equations[0]!.lhs)).toBe('D(A.x)/Dt')
+    expectExpr(flat.equations[0]!.lhs, D('A.x'))
     // §4.7.1 step 4: B's dependent variable is rewritten to A's target
     // throughout `rhs_B`. Leaving `B.y` here would strand it as an unknown
     // nothing defines — its defining equation was just consumed.
-    expect(toAscii(flat.equations[0]!.rhs)).toBe('A.k * A.x + B.u * A.x')
+    expectExpr(flat.equations[0]!.rhs, add(mul('A.k', 'A.x'), mul('B.u', 'A.x')))
     // `B.y` does NOT survive as a declaration. §4.7.1 step 4's last bullet and
     // esm-spec §10.2 now settle what an earlier revision left open: a
     // translation match consumes the merged-away name, because an unknown whose
@@ -382,7 +393,7 @@ describe('operator_compose translate direction (§10.2 / §4.7.1 step 2)', () =>
     expect(flat.equations).toHaveLength(1)
     // `*` is left-associative and flat in the printer, so the factor node reads
     // without parentheses; the TREE is `2 * (B.u * A.x)`.
-    expect(toAscii(flat.equations[0]!.rhs)).toBe('A.k * A.x + 2 * B.u * A.x')
+    expectExpr(flat.equations[0]!.rhs, add(mul('A.k', 'A.x'), mul(2, mul('B.u', 'A.x'))))
   })
 
   it('keeps a redundant `B._var` translate value harmless (§10.2)', () => {
@@ -418,9 +429,9 @@ describe('operator_compose translate direction (§10.2 / §4.7.1 step 2)', () =>
 
     const bare = flatten(withPlaceholder())
     const redundant = flatten(withPlaceholder({ 'A.x': 'B._var' }))
-    expect(toAscii(redundant.equations[0]!.lhs)).toBe(toAscii(bare.equations[0]!.lhs))
-    expect(toAscii(redundant.equations[0]!.rhs)).toBe(toAscii(bare.equations[0]!.rhs))
-    expect(toAscii(bare.equations[0]!.rhs)).toBe('A.k * A.x + B.u * A.x')
+    expectExpr(redundant.equations[0]!.lhs, bare.equations[0]!.lhs)
+    expectExpr(redundant.equations[0]!.rhs, bare.equations[0]!.rhs)
+    expectExpr(bare.equations[0]!.rhs, add(mul('A.k', 'A.x'), mul('B.u', 'A.x')))
     expect(bare.equations).toHaveLength(1)
     expect(redundant.equations).toHaveLength(1)
   })
@@ -481,9 +492,9 @@ describe('couple multiplicative requires an existing tendency (§10.3)', () => {
 
   it('multiplies normally when `to` DOES carry a tendency', () => {
     const flat = flatten(coupled('A.x', 'multiplicative'))
-    const eq = flat.equations.find((e) => toAscii(e.lhs) === 'D(A.x)/Dt')
+    const eq = flat.equations.find((e) => sameExpr(e.lhs, D('A.x')))
     expect(eq).toBeDefined()
-    expect(toAscii(eq!.rhs)).toBe('A.x * B.y')
+    expectExpr(eq!.rhs, mul('A.x', 'B.y'))
   })
 
   it('scales the D(to) tendency, never a later bare `to ~ g` equation', () => {
@@ -492,12 +503,12 @@ describe('couple multiplicative requires an existing tendency (§10.3)', () => {
     }
     file.models.A.equations.push({ lhs: 'x', rhs: 3 })
     const flat = flatten(file as unknown as EsmFile)
-    const tendency = flat.equations.find((e) => toAscii(e.lhs) === 'D(A.x)/Dt')
-    const algebraic = flat.equations.find((e) => toAscii(e.lhs) === 'A.x')
+    const tendency = flat.equations.find((e) => sameExpr(e.lhs, D('A.x')))
+    const algebraic = flat.equations.find((e) => sameExpr(e.lhs, 'A.x'))
     expect(tendency).toBeDefined()
     expect(algebraic).toBeDefined()
-    expect(toAscii(tendency!.rhs)).toBe('A.x * B.y')
-    expect(toAscii(algebraic!.rhs)).toBe('3')
+    expectExpr(tendency!.rhs, mul('A.x', 'B.y'))
+    expectExpr(algebraic!.rhs, 3)
   })
 
   it('does NOT raise for `additive` against an absent tendency', () => {

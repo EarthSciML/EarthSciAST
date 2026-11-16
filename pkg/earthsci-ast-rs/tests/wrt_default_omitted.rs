@@ -100,22 +100,3 @@ fn a_shaped_state_integrates_with_wrt_omitted_exactly_as_with_it() {
         ),
     );
 }
-
-/// The display path reads the same default: `D(x)` prints as `∂x/∂t`, exactly
-/// as the explicitly-spelled node does. Requiring `Some(_)` printed the bare
-/// call form `D(x)` for a node Julia, Python and TypeScript all print as
-/// `∂x/∂t` — the same missing default, on a consumer the issue did not name.
-#[test]
-fn the_display_path_applies_the_same_default() {
-    use earthsci_ast::{to_ascii, to_latex, to_unicode};
-
-    let omitted: earthsci_ast::Expr =
-        serde_json::from_value(serde_json::json!({"op": "D", "args": ["x"]})).unwrap();
-    let explicit: earthsci_ast::Expr =
-        serde_json::from_value(serde_json::json!({"op": "D", "args": ["x"], "wrt": "t"})).unwrap();
-
-    assert_eq!(to_unicode(&omitted), "∂x/∂t");
-    assert_eq!(to_unicode(&omitted), to_unicode(&explicit));
-    assert_eq!(to_latex(&omitted), to_latex(&explicit));
-    assert_eq!(to_ascii(&omitted), to_ascii(&explicit));
-}

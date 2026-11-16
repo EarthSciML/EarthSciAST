@@ -12,8 +12,7 @@
 #
 # The DOT and Mermaid HEADER lines are pinned (§4.8.3 requires both formats and
 # specifies neither, so the tie-break is the majority of the five bindings). The
-# rest of their bytes is not: every node line carries a label run through the
-# chemical-subscript formatter, which two of the five bindings do not have. See
+# rest of their bytes is not: the node labels differ across the bindings. See
 # the corpus README.
 
 using Test
@@ -296,9 +295,8 @@ if _require_fixture(_GRAPH_CORPUS_PATH)
                 )
 
                 # The DOT and Mermaid HEADER lines (esm-libraries-spec §4.8.3).
-                # The corpus pins only the first line of each: the rest carries
-                # node labels run through the chemical-subscript formatter,
-                # which two of the five bindings do not have. See
+                # The corpus pins only the first line of each: the node labels
+                # in the rest differ across the bindings. See
                 # tests/conformance/graph/README.md.
                 for (what, text, expected) in (
                         (
