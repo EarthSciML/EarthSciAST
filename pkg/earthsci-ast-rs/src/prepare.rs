@@ -163,7 +163,7 @@ pub enum PreparePhase {
     MemberFactors,
     /// The post-value-invention pre-sliced fetch of the gated providers. One
     /// unit per REQUEST, which is one per provider unless
-    /// [`PrepareOptions::gated_fetch_batch`] splits it further.
+    /// [`crate::problem::ProblemOptions::gated_fetch_batch`] splits it further.
     GatedFetch,
     /// Dependency-ordered evaluation of the observed graph, one unit per
     /// observed.
@@ -259,115 +259,24 @@ impl PrepareProgress<'_> {
 /// wasm host to accommodate and no reason to make native callers pay for one.
 pub type PrepareProgressFn = Arc<dyn Fn(&PrepareProgress<'_>) -> Flow + Send + Sync>;
 
-/// Build-time options for [`run_build_pipeline`]. Crate-internal: the public
-/// spelling of every one of these is a field of
-/// [`crate::problem::ProblemOptions`].
-#[derive(Clone, Default)]
-pub(crate) struct PrepareOptions {
-    /// Select one model when the document holds several; it is then built
-    /// alone, its names model-local. `None` builds the only model, or a
-    /// document of several WHOLE (see `BuildState::whole_document`).
-    pub model_name: Option<String>,
-    /// Metaparameter bindings closed at load (esm-spec §9.7.6 site 4).
-    pub metaparameters: BTreeMap<String, i64>,
-    /// Base path anchoring relative `{ref}`s.
-    pub base_path: Option<PathBuf>,
-    /// Opt in to the automatic projection-pushdown desugar.
-    pub pushdown_rewrite: bool,
-    /// Scalar parameter overrides (exact or bare names), baked into the build.
-    pub parameters: HashMap<String, f64>,
+/// What one run of the pipeline reads: the Problem's options, borrowed, and
+/// the two things construction decides for it.
+pub(crate) struct BuildContext<'o> {
+    /// The options the Problem is being built with. The pipeline reads
+    /// `model_name`, `metaparameters`, `base_path`, `pushdown_rewrite`, `p`
+    /// (scalar overrides, exact or bare names, baked into the build),
+    /// `verbose`, `progress`, `gated_fetch_batch` and `observed_cone`.
+    pub problem: &'o crate::problem::ProblemOptions,
     /// The construction sample time (`sample_time`, else the start of the
     /// time span): the `t` every build-time observed is evaluated at, as the
     /// static route evaluates it.
     pub t0: f64,
-    /// Per-step progress lines on stdout.
-    ///
-    /// This is the built-in observer: it prints at the same points
-    /// [`crate::problem::ProblemOptions::progress`] is called, and the two are independent —
-    /// setting both prints and observes.
-    pub verbose: bool,
-
-    /// If `Some`, called at every phase boundary and at every unit of work
-    /// inside [`PreparePhase::GatedFetch`] and [`PreparePhase::Observeds`].
-    /// Returning [`Flow::Cancel`] abandons the build with
-    /// [`SimulateError::Cancelled`].
-    ///
-    /// **Called unthrottled, deliberately**, for the same reason
-    /// [`crate::simulate::SolveOptions::progress`] is: `prepare` has no
-    /// portable clock to throttle against, and rate limiting therefore belongs
-    /// to the host, which does. Keep the observer cheap — a document with
-    /// hundreds of observeds reports hundreds of times in a build that may take
-    /// milliseconds.
-    ///
-    /// ## What this is for
-    ///
-    /// A dispatched static evaluation — a document with no ODEs, which
-    /// no solver ever touches — is otherwise a black box for as long as it
-    /// runs: no progress, no cancel, and no way for a caller to enforce a
-    /// resource cap except by killing the process. A watchdog thread is not a
-    /// substitute: it stops at an arbitrary point with no attributable elapsed
-    /// time, and cannot interrupt a single long fetch at all. Going through the
-    /// observer means the stopping point is a named phase and a named item.
-    pub progress: Option<PrepareProgressFn>,
-
-    /// Split a gated provider's pre-sliced fetch into requests of at most this
-    /// many native indices along the gated axis.
-    ///
-    /// `None` (the default) issues ONE request per gated provider, exactly as
-    /// before this option existed. That is the right default and also the
-    /// reason this option exists: one request is one
-    /// [`PreparePhase::GatedFetch`] report, and on the InMAP ISRM document that
-    /// single request is 15–25 GB over the network and the longest thing the
-    /// build does. A host that wants a moving bar — or a cancel that lands in
-    /// under several minutes — sets this and gets one report per batch instead.
-    ///
-    /// The result is IDENTICAL either way: the gated axis' index list is split
-    /// into contiguous runs and the pieces are written back in order into one
-    /// pre-allocated slab, so nothing is reordered and nothing is copied twice.
-    /// The cost of a small batch is at the seams — a chunked store re-reads the
-    /// chunk straddling each boundary, so `batches - 1` extra chunk reads —
-    /// which is why the library does not pick a size on the caller's behalf.
-    pub gated_fetch_batch: Option<usize>,
-
     /// Stop at the first evaluation that is interpreted PER CELL and hand it
     /// back as [`PreparedBuild::refused`] — set when the Problem's compiler is
     /// strict (esm-libraries-spec §2.5.10), so a `native` build refuses the
     /// document naming the observed instead of walking it. The walk itself
     /// stops at its first cell, so the refusal costs one cell, not the field.
     pub refuse_per_cell: bool,
-
-    /// Evaluate only the dependency cone of these observeds. See
-    /// [`crate::problem::ProblemOptions::observed_cone`].
-    pub observed_cone: Option<Vec<String>>,
-}
-
-// Hand-written because `PrepareProgressFn` is a trait object: it cannot derive
-// `Debug`, and a `PrepareOptions` that no longer prints would be a regression
-// for every existing `{:?}` on a build error path. Mirrors the same treatment
-// `SolveOptions` needed when it grew an observer.
-impl fmt::Debug for PrepareOptions {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PrepareOptions")
-            .field("model_name", &self.model_name)
-            .field("metaparameters", &self.metaparameters)
-            .field("base_path", &self.base_path)
-            .field("pushdown_rewrite", &self.pushdown_rewrite)
-            .field("parameters", &self.parameters)
-            .field("t0", &self.t0)
-            .field("verbose", &self.verbose)
-            .field(
-                "progress",
-                &self
-                    .progress
-                    .as_ref()
-                    .map(|_| "<observer>")
-                    .unwrap_or("None"),
-            )
-            .field("gated_fetch_batch", &self.gated_fetch_batch)
-            .field("refuse_per_cell", &self.refuse_per_cell)
-            .field("observed_cone", &self.observed_cone)
-            .finish()
-    }
 }
 
 /// The product of [`run_build_pipeline`]: every build-time-evaluable observed of the
@@ -392,36 +301,29 @@ pub struct PreparedBuild {
     /// again. `None` for a one-model build, and when the build bound
     /// metaparameters at load.
     pub(crate) flattened: Option<crate::flatten::FlattenedSystem>,
-    /// Observed name → build-time field (dependency-complete).
-    pub fields: HashMap<String, ArrayD<f64>>,
+    /// What the Problem keeps of this build: the observed fields, the
+    /// value-invention members and extents, the gated provider keys and the
+    /// built variables. The rest of [`crate::problem::BuildProducts`] is
+    /// construction's to fill.
+    pub(crate) products: crate::problem::BuildProducts,
     /// Data-fed parameter name (model-local) → the values its provider
     /// supplied, as the build read them. A data-fed parameter is not an
-    /// observed, so it is not in [`Self::fields`], but it is as observable:
+    /// observed, so it is not in `products.fields`, but it is as observable:
     /// an inline-test assertion or an `observed_field` request may name it
     /// (finding F43).
     pub data_fields: HashMap<String, ArrayD<f64>>,
-    /// Value-invention producer id (`from_faq`) → sorted-distinct member ids.
-    pub members: HashMap<String, Vec<i64>>,
-    /// Value-invention producer id → derived index-set extent.
-    pub extents: HashMap<String, i64>,
-    /// Provider keys that were deferred + fetched pre-sliced (sorted).
-    pub gated_provider_keys: Vec<String>,
     /// Every evaluation the pipeline performed, in the order it performed
     /// them — what the Problem's compiler report shows for this route.
     pub rules: Vec<PipelineRule>,
     /// The per-cell evaluation that stopped the build, when
-    /// [`PrepareOptions::refuse_per_cell`] was set. `fields` then holds only
+    /// [`BuildContext::refuse_per_cell`] was set. `fields` then holds only
     /// what was evaluated before it.
     pub refused: Option<PipelineRule>,
-    /// Whether [`PrepareOptions::observed_cone`] narrowed a non-empty
-    /// observed graph. [`Self::fields`] is then this build's answer even when
+    /// Whether [`crate::problem::ProblemOptions::observed_cone`] narrowed a non-empty
+    /// observed graph. `products.fields` is then this build's answer even when
     /// it is empty (the request named only a data-fed parameter), so nothing
     /// re-evaluates the document to fill it.
     pub(crate) observed_cone_applied: bool,
-    /// What this build knows of the variables of the model it evaluated, by
-    /// name, spelled like [`Self::fields`]
-    /// ([`BuiltVariables`]).
-    pub(crate) built_variables: BuiltVariables,
 }
 
 /// One evaluation the build pipeline performed, and HOW: by the reference
@@ -536,10 +438,7 @@ fn observed_order(
 fn observed_defs(model: &Model) -> HashMap<String, Expr> {
     crate::classification::observed_definitions(model)
         .into_iter()
-        .filter(|(_, def)| {
-            serde_json::to_value(def)
-                .is_ok_and(|raw| !crate::value_invention::is_value_invention_assignment(&raw))
-        })
+        .filter(|(_, def)| !crate::value_invention::is_value_invention_expr(def))
         .collect()
 }
 
@@ -1260,15 +1159,15 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
 /// quarter of an hour. [`crate::problem::ProblemOptions::progress`] observes it as it goes —
 /// per gated request and per observed, not merely per phase — and returning
 /// [`Flow::Cancel`] stops it at a named point. Pair it with
-/// [`PrepareOptions::gated_fetch_batch`] so the fetch itself is interruptible.
+/// [`crate::problem::ProblemOptions::gated_fetch_batch`] so the fetch itself is interruptible.
 pub(crate) fn run_prepare(
     doc: &JsonValue,
     const_arrays: HashMap<String, ArrayD<f64>>,
     providers: Vec<(String, Box<dyn DataProvider>)>,
-    opts: &PrepareOptions,
+    opts: &BuildContext<'_>,
 ) -> Result<PreparedBuild, SimulateError> {
     let mut providers = providers;
-    let mut metaparameters = opts.metaparameters.clone();
+    let mut metaparameters = opts.problem.metaparameters.clone();
     let discovered = discover_loader_extents(&mut providers, opts, &mut metaparameters)?;
 
     let resolved = resolve_pushdown_imports(doc, opts, &metaparameters)?;
@@ -1300,9 +1199,9 @@ pub(crate) fn run_prepare(
     Ok(st.finish(rw.rewritten.into_owned()))
 }
 
-/// Verbose-mode narration; a no-op unless [`PrepareOptions::verbose`] is set.
-fn vlog(opts: &PrepareOptions, msg: &str) {
-    if opts.verbose {
+/// Verbose-mode narration; a no-op unless [`crate::problem::ProblemOptions::verbose`] is set.
+fn vlog(opts: &BuildContext<'_>, msg: &str) {
+    if opts.problem.verbose {
         println!("{msg}");
     }
 }
@@ -1317,13 +1216,13 @@ fn vlog(opts: &PrepareOptions, msg: &str) {
 /// cancel is attributable to a point in the build rather than to a wall
 /// clock the library does not have.
 fn report_progress(
-    opts: &PrepareOptions,
+    opts: &BuildContext<'_>,
     phase: PreparePhase,
     done: usize,
     total: Option<usize>,
     item: &str,
 ) -> Result<(), SimulateError> {
-    let Some(cb) = &opts.progress else {
+    let Some(cb) = &opts.problem.progress else {
         return Ok(());
     };
     let p = PrepareProgress {
@@ -1366,7 +1265,7 @@ fn report_progress(
 /// derives in the check after the rewrite.
 fn discover_loader_extents(
     providers: &mut [(String, Box<dyn DataProvider>)],
-    opts: &PrepareOptions,
+    opts: &BuildContext<'_>,
     metaparameters: &mut BTreeMap<String, i64>,
 ) -> Result<HashMap<String, ArrayD<f64>>, SimulateError> {
     let mut discovered: HashMap<String, ArrayD<f64>> = HashMap::new();
@@ -1423,14 +1322,15 @@ fn discover_loader_extents(
 /// silently and fetch every provider-backed array whole.
 fn resolve_pushdown_imports(
     doc: &JsonValue,
-    opts: &PrepareOptions,
+    opts: &BuildContext<'_>,
     metaparameters: &BTreeMap<String, i64>,
 ) -> Result<Option<JsonValue>, SimulateError> {
     report_progress(opts, PreparePhase::Rewrite, 0, None, "")?;
-    if opts.pushdown_rewrite && has_template_import_edge(doc) {
+    if opts.problem.pushdown_rewrite && has_template_import_edge(doc) {
         resolve_template_machinery(
             doc,
-            opts.base_path
+            opts.problem
+                .base_path
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .as_path(),
@@ -1457,11 +1357,11 @@ struct RewriteOutcome<'a> {
 /// metadata off the rewritten document.
 fn apply_pushdown_rewrite<'a>(
     doc: &'a JsonValue,
-    opts: &PrepareOptions,
+    opts: &BuildContext<'_>,
     provider_keys: &[String],
 ) -> Result<RewriteOutcome<'a>, SimulateError> {
-    let rewritten = if opts.pushdown_rewrite {
-        desugar_pushdown_for_build(doc, opts.model_name.as_deref())?
+    let rewritten = if opts.problem.pushdown_rewrite {
+        desugar_pushdown_for_build(doc, opts.problem.model_name.as_deref())?
     } else {
         std::borrow::Cow::Borrowed(doc)
     };
@@ -1556,7 +1456,7 @@ fn check_discovered_gate_conflict(
 /// artifacts each phase deposits for the phases after it. One method per
 /// phase; [`run_prepare`] is the phase list.
 struct BuildState<'o> {
-    opts: &'o PrepareOptions,
+    opts: &'o BuildContext<'o>,
     /// The typed model under build: the selected (or only) model, or the
     /// whole document's flattened system.
     model: Model,
@@ -1668,7 +1568,7 @@ impl<'o> BuildState<'o> {
     /// Typed load (metaparameters closed at the loader API).
     fn load_document(
         rewritten: &JsonValue,
-        opts: &'o PrepareOptions,
+        opts: &'o BuildContext<'o>,
         metaparameters: BTreeMap<String, i64>,
     ) -> Result<Self, SimulateError> {
         report_progress(opts, PreparePhase::Load, 0, None, "")?;
@@ -1694,7 +1594,7 @@ impl<'o> BuildState<'o> {
         };
         let unbound_load = metaparameters.is_empty();
         let load_opts = LoadOptions {
-            base_path: opts.base_path.clone(),
+            base_path: opts.problem.base_path.clone(),
             metaparameters: metaparameters.clone(),
         };
         let file = crate::parse::load_string_with_options(&text, &load_opts)
@@ -1709,7 +1609,7 @@ impl<'o> BuildState<'o> {
             .models
             .as_ref()
             .ok_or_else(|| err("document has no models"))?;
-        let spelling = match &opts.model_name {
+        let spelling = match &opts.problem.model_name {
             Some(n) => Spelling::ModelLocal(n.clone()),
             None if models.len() == 1 => {
                 Spelling::ModelLocal(models.keys().next().cloned().unwrap_or_default())
@@ -1743,7 +1643,7 @@ impl<'o> BuildState<'o> {
         let built_variables = BuiltVariables::new(axes, bound_inputs.unwrap_or_default());
         let data_shaped = shapes.data_shaped;
 
-        let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.parameters)?;
+        let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.problem.p)?;
 
         Ok(BuildState {
             opts,
@@ -1835,7 +1735,7 @@ impl<'o> BuildState<'o> {
         Ok((flat, index_sets))
     }
 
-    /// Record one evaluation. Under [`PrepareOptions::refuse_per_cell`] a
+    /// Record one evaluation. Under [`BuildContext::refuse_per_cell`] a
     /// per-cell one also stops the build, and the caller returns as soon as
     /// this answers `true`.
     fn record(&mut self, rule: PipelineRule) -> bool {
@@ -2291,7 +2191,7 @@ impl<'o> BuildState<'o> {
             &self.model,
             &self.index_sets,
             Some(&self.arrays),
-            &self.opts.parameters,
+            &self.opts.problem.p,
         )
         .map_err(|e| stage_err("value invention", e))?;
         // A member id is needed where a set feeds one back (a `member_factor`,
@@ -2386,7 +2286,13 @@ impl<'o> BuildState<'o> {
                 match &plan.selection[plan.gated_pos] {
                     AxisSel::Indices(idx) => idx
                         .len()
-                        .div_ceil(self.opts.gated_fetch_batch.unwrap_or(usize::MAX).max(1))
+                        .div_ceil(
+                            self.opts
+                                .problem
+                                .gated_fetch_batch
+                                .unwrap_or(usize::MAX)
+                                .max(1),
+                        )
                         .max(1),
                     // Neither is a support set, so `run_gated_fetch` refuses them —
                     // but it refuses them THERE, with a message naming the provider.
@@ -2412,7 +2318,7 @@ impl<'o> BuildState<'o> {
                 &key,
                 prov.as_mut(),
                 &plan,
-                opts.gated_fetch_batch,
+                opts.problem.gated_fetch_batch,
                 &mut issued,
                 total_requests,
                 &mut report,
@@ -2462,7 +2368,7 @@ impl<'o> BuildState<'o> {
     }
 
     /// Narrow the observed graph to the dependency cone of
-    /// [`PrepareOptions::observed_cone`], when the built model has nothing to
+    /// [`crate::problem::ProblemOptions::observed_cone`], when the built model has nothing to
     /// integrate.
     ///
     /// Runs AFTER the coordinate pre-pass, value invention and member-factor
@@ -2494,7 +2400,7 @@ impl<'o> BuildState<'o> {
     /// right-hand side, and which of them it reads is the compiler's business,
     /// not the request's.
     fn prune_to_observed_cone(&mut self) {
-        let Some(requested) = &self.opts.observed_cone else {
+        let Some(requested) = &self.opts.problem.observed_cone else {
             return;
         };
         let class = crate::classification::Classification::of(&self.model);
@@ -2751,15 +2657,18 @@ impl<'o> BuildState<'o> {
             },
             metaparameters: self.metaparameters,
             flattened: self.flattened,
-            fields: self.fields,
+            products: crate::problem::BuildProducts {
+                fields: self.fields,
+                members: self.members,
+                extents: self.extents,
+                gated_provider_keys: self.gated_keys,
+                built_variables: self.built_variables,
+                ..Default::default()
+            },
             data_fields,
-            members: self.members,
-            extents: self.extents,
-            gated_provider_keys: self.gated_keys,
             rules: self.rules,
             refused: self.refused,
             observed_cone_applied: self.cone_applied,
-            built_variables: self.built_variables,
         }
     }
 }
@@ -2768,9 +2677,7 @@ impl<'o> BuildState<'o> {
 // The adapter EsmProblem construction goes through.
 // --------------------------------------------------------------------------- //
 
-/// Run the build pipeline for [`crate::problem::esm_problem`], translating
-/// [`crate::problem::ProblemOptions`] into this module's internal option
-/// struct.
+/// Run the build pipeline for [`crate::problem::esm_problem`] over `opts`.
 ///
 /// Consumes `opts`'s CONST providers and const arrays: they are moved into the
 /// pipeline, which is the one place they are used.
@@ -2779,19 +2686,6 @@ pub(crate) fn run_build_pipeline(
     t0: f64,
     opts: &mut crate::problem::ProblemOptions,
 ) -> Result<PreparedBuild, crate::simulate::SimulateError> {
-    let internal = PrepareOptions {
-        t0,
-        model_name: opts.model_name.clone(),
-        metaparameters: opts.metaparameters.clone(),
-        base_path: opts.base_path.clone(),
-        pushdown_rewrite: opts.pushdown_rewrite,
-        parameters: opts.p.clone(),
-        verbose: opts.verbose,
-        progress: opts.progress.clone(),
-        gated_fetch_batch: opts.gated_fetch_batch,
-        refuse_per_cell: opts.compiler.unwrap_or_default().is_strict(),
-        observed_cone: opts.observed_cone.clone(),
-    };
     let const_arrays = std::mem::take(&mut opts.const_arrays);
     // The CONST providers, in key order, when the caller asked for this
     // pipeline; the run-time executor takes the rest.
@@ -2810,7 +2704,12 @@ pub(crate) fn run_build_pipeline(
             (k, p)
         })
         .collect();
-    run_prepare(doc, const_arrays, providers, &internal)
+    let ctx = BuildContext {
+        problem: opts,
+        t0,
+        refuse_per_cell: opts.compiler.unwrap_or_default().is_strict(),
+    };
+    run_prepare(doc, const_arrays, providers, &ctx)
 }
 
 /// Whether `doc` still carries an unresolved §4.7 mount — a `models.<k>` /
@@ -3317,7 +3216,7 @@ mod whole_document_tests {
     //! The whole-document build (several models, none selected): how its names
     //! are spelled, and the flattened system it hands the compile path.
 
-    use super::{PrepareOptions, Spelling, run_prepare};
+    use super::{BuildContext, Spelling, run_prepare};
     use crate::simulate::KeyMatch;
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -3372,7 +3271,12 @@ mod whole_document_tests {
 
     #[test]
     fn the_whole_document_build_hands_its_flattened_system_forward() {
-        let opts = PrepareOptions::default();
+        let problem = crate::problem::ProblemOptions::default();
+        let opts = BuildContext {
+            problem: &problem,
+            t0: 0.0,
+            refuse_per_cell: false,
+        };
         let two = doc(json!({"A": model(1.0), "B": model(2.0)}));
         let prepared = run_prepare(&two, HashMap::new(), Vec::new(), &opts).unwrap();
         assert_eq!(prepared.model_name, None);

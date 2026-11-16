@@ -14,9 +14,8 @@ use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
 use crate::types::{Subsystem, TreeOrder, component_tree};
-use crate::value_invention::{ValueInventionResult, materialize_value_invention};
+use crate::value_invention::{Factors, ValueInventionResult, invent_values};
 use indexmap::IndexMap;
-use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 // ============================================================================
@@ -4281,12 +4280,7 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
 /// channel — the front door a Rust runner needs, and the one the in-tree build
 /// path (`materialize_derived_extents`) uses internally.
 ///
-/// [`materialize_value_invention`] itself takes a raw `serde_json::Value` and a
-/// finished array map, which leaves a caller holding a typed model with two
-/// chores it has no library support for: assembling the JSON view the engine
-/// expects (model + registry merged as a sibling), and gathering the factor
-/// arrays. This does both. Concretely it is what turns an ISRM document plus
-/// loaded `X`/`Y`/`W`/`S`/`E`/`N` into
+/// It is what turns an ISRM document plus loaded `X`/`Y`/`W`/`S`/`E`/`N` into
 /// [`ValueInventionResult::extents`](crate::ValueInventionResult::extents) — the
 /// map that then sizes every `emis_src_cells` axis through
 /// [`crate::faq::resolve_aggregate_ranges_with_extents`] and
@@ -4301,9 +4295,9 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
 ///
 /// # Errors
 ///
-/// [`CompileError::InterpreterBuildError`] if the model or registry cannot be
-/// serialized to the engine's JSON view, or if the engine rejects the document
-/// (e.g. a producer that classifies CONTINUOUS, §5.7 guard 2).
+/// [`CompileError::InterpreterBuildError`] if the engine rejects the document
+/// (e.g. a producer that classifies CONTINUOUS, §5.7 guard 2), or
+/// [`CompileError::ValueInventionRefused`] for a NaN key.
 pub fn run_value_invention<S: std::hash::BuildHasher>(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
@@ -4321,26 +4315,13 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
     overrides: &HashMap<String, f64>,
 ) -> Result<ValueInventionResult, CompileError> {
-    let const_arrays = vi_factor_arrays(model, caller_arrays);
+    let own = collect_const_factor_arrays(model);
+    let factors = match caller_arrays {
+        Some(caller) => Factors::overlaid(&own, caller),
+        None => Factors::of(&own),
+    };
     let params = collect_scalar_params(model, overrides);
-
-    // The engine walks the RAW `serde_json::Value` document (it preserves the
-    // aggregate `key`/`distinct`/`arg` fields), with the document-scoped
-    // `index_sets` registry merged down as a sibling — mirroring the engine's own
-    // `model_json` fixture helper and `crate::cadence`.
-    let mut model_json = serde_json::to_value(model).map_err(|e| {
-        CompileError::build_err(format!("value-invention: could not serialize model: {e}"))
-    })?;
-    if let JsonValue::Object(m) = &mut model_json {
-        let is_json = serde_json::to_value(index_sets).map_err(|e| {
-            CompileError::build_err(format!(
-                "value-invention: could not serialize index_sets: {e}"
-            ))
-        })?;
-        m.insert("index_sets".to_string(), is_json);
-    }
-
-    materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new()).map_err(|e| {
+    invent_values(model, index_sets, &factors, &params, &HashMap::new()).map_err(|e| {
         // A NaN key or join column already names its column (esm-spec §9.6.6).
         match e.code {
             Some(code) => CompileError::ValueInventionRefused {
@@ -4386,8 +4367,7 @@ fn materialize_derived_extents(
         .any(|is| is.kind == "derived" && is.from_faq.is_some());
     if needs_value_invention {
         let factors = value_invention_factors(model, index_sets, caller_arrays);
-        let lean = without_factor_literals(model, &factors);
-        match run_value_invention(&lean, index_sets, Some(&factors)) {
+        match run_value_invention(model, index_sets, Some(&factors)) {
             Ok(result) => {
                 out.member_factors = member_factor_columns(index_sets, &result, caller_arrays);
                 out.extents = result.extents;
@@ -4545,26 +4525,6 @@ fn value_invention_factors(
         derive(&mut cx, t, 0);
     }
     cx.scope
-}
-
-/// `model` with the literal of every `const` equation whose variable is
-/// already one of `factors` replaced by a placeholder. Value invention reads
-/// factors from its array map, never from the document's literals, and the
-/// literals are most of what serializing the model for it would cost.
-fn without_factor_literals(model: &Model, factors: &HashMap<String, ArrayD<f64>>) -> Model {
-    let mut lean = model.clone();
-    for eq in &mut lean.equations {
-        let is_factor = matches!(&eq.rhs, Expr::Operator(n) if n.op == "const")
-            && equation_defined_var(&eq.lhs).is_some_and(|v| factors.contains_key(&v));
-        if is_factor {
-            eq.rhs = Expr::operator(ExpressionNode {
-                op: "const".into(),
-                value: Some(serde_json::Value::from(0).into()),
-                ..Default::default()
-            });
-        }
-    }
-    lean
 }
 
 /// The `from_faq` of the first range in `expr` over a derived set that

@@ -795,7 +795,7 @@ pub(crate) struct BuildProducts {
     /// Observed name → build-time field (dependency-complete).
     pub fields: HashMap<String, ArrayD<f64>>,
     /// Data-fed parameter name → the values the build pipeline's provider
-    /// supplied ([`crate::prepare::PreparedBuild::data_fields`]), for the
+    /// supplied (`crate::prepare::PreparedBuild::data_fields`), for the
     /// parameters [`ProblemOptions::retain_data_fields`] names only. Kept apart
     /// from `fields` so the default `esm simulate` output (every observed) is
     /// unchanged, while [`observed_field`] and the inline-test runner can
@@ -824,7 +824,7 @@ pub(crate) struct BuildProducts {
     /// `E_TREEWALK_CONSTARRAY_OOB` — so [`observed_field`] can name the cause
     /// instead of only the name it cannot answer.
     pub static_eval_error: Option<String>,
-    /// The build pipeline's [`crate::prepare::PreparedBuild::built_variables`],
+    /// The build pipeline's built variables,
     /// read by [`EsmProblem::built_variables`] when there is no compiled model
     /// to answer instead. Empty when the pipeline did not run.
     pub built_variables: crate::simulate_array::BuiltVariables,
@@ -2268,7 +2268,7 @@ fn build_problem(
             // `None`: its names are qualified already, as on the compile path.
             model_name = prepared.model_name;
             pipeline_flat = prepared.flattened;
-            build.fields = prepared.fields;
+            build = prepared.products;
             pipeline_evaluated_cone = prepared.observed_cone_applied;
             retained_data_keys = retained_data_keys_of(
                 prepared.data_fields.keys(),
@@ -2276,10 +2276,6 @@ fn build_problem(
                 &opts.retain_data_fields,
             );
             ingested = prepared.data_fields;
-            build.members = prepared.members;
-            build.extents = prepared.extents;
-            build.gated_provider_keys = prepared.gated_provider_keys;
-            build.built_variables = prepared.built_variables;
             build.baked_parameters = opts.p.keys().cloned().collect();
             build.baked_parameters.sort();
         }
