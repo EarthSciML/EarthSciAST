@@ -1699,6 +1699,9 @@ time derivative. A flattened name with a dot prints as a quoted name joined by
 | a coded load refusal (a reference, template-import, version-gate or other diagnostic with a code) as `EsmError::SchemaValidation(String)` / `StructuralValidation(String)` | `EsmError::SchemaDiagnostic { code, message, findings }` / `StructuralDiagnostic { code, message }`, rendering the same text; `EsmError::code()` and `EsmError::findings()` read them | `changed` |
 | — | `mount_edge_errors(document, base_dir)`: a document's own mount edges that do not resolve, as `(code, path)` findings | `added` |
 | `SolutionMetadata::tape_fallbacks`, and `metadata.tapeFallbacks` in the wasm/JS `solve` result (always empty) | none: a rule the tape cannot compile refuses the solve with `compiler_refused_rule`; `compiler_report` and the `tape_report` entry point name such rules without solving | `deleted` |
+| `PrepareError::is_cancelled`, `PrepareError::CANCELLED_PREFIX` | `SimulateError::is_cancelled` (a cancelled build is `SimulateError::Cancelled`, whose details no longer repeat the prefix) | `deleted` |
+| a coded refusal raised inside the build pipeline as `CompileError::InterpreterBuildError` text | the typed error itself (`SimulateError::Compile(CompileError::ValueInventionRefused { .. })`, …), so its code survives | `changed` |
+| — | `code()` on `CompileError`, `FlattenError` and `SimulateError`; `StructuralErrorCode::as_str()` | `added` |
 
 `compile_array`, the `ArrayCompiled::from_*` constructors and the `debug_*`
 right-hand-side seams build the `native` compiler, the default of

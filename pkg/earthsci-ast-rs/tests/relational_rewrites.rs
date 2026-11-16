@@ -588,5 +588,25 @@ fn an_out_of_range_key_component_is_refused_naming_the_column() {
             "[{}]: rewrapped: {e}",
             compiler.as_str()
         );
+        // The build pipeline hands the refusal on typed, its code intact.
+        let mut doc = doc.clone();
+        common::supply_state_defaults(&mut doc);
+        let opts = ProblemOptions {
+            compiler: Some(compiler),
+            rhs: Rhs::Auto,
+            const_arrays: case_arrays(case),
+            p: case_params(case),
+            build_pipeline: true,
+            ..Default::default()
+        };
+        let Err(e) = esm_problem(&doc, (0.0, 1.0), opts) else {
+            panic!("[{}]: an out-of-range key built", compiler.as_str());
+        };
+        assert_eq!(
+            e.code(),
+            Some("value_invention_key_out_of_range"),
+            "[{}]: {e}",
+            compiler.as_str()
+        );
     }
 }

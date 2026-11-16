@@ -276,6 +276,22 @@ pub enum SimulateError {
 }
 
 impl SimulateError {
+    /// The diagnostic code this error carries, or `None` for an uncoded
+    /// one. A cancelled build has none: [`Self::is_cancelled`] answers it.
+    pub fn code(&self) -> Option<&'static str> {
+        use crate::diagnostic::codes;
+        match self {
+            SimulateError::Compile(e) => e.code(),
+            SimulateError::CompilerUnavailable { .. } => Some(codes::COMPILER_UNAVAILABLE),
+            SimulateError::RangeRestriction { code, .. } | SimulateError::Strip { code, .. } => {
+                Some(code)
+            }
+            SimulateError::DataSourceUnbound { .. } => Some(codes::DATA_SOURCE_UNBOUND),
+            SimulateError::IcReadsState { .. } => Some("ic_reads_state"),
+            _ => None,
+        }
+    }
+
     /// Whether this is a build progress observer's own [`Flow::Cancel`] rather
     /// than something going wrong — the counterpart of reading
     /// [`ReturnCode::Terminated`] off a [`Solution`].
