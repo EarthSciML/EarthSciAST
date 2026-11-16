@@ -5,9 +5,11 @@
 
 Plugin version: #version()
 
-#let eq = render("D(N, t) = -lambda*N")
-- ASCII: #raw(eq.ascii)
-- Unicode: #eq.unicode
+#let eq = render((
+  lhs: (op: "D", args: ("N",), wrt: "t"),
+  rhs: (op: "*", args: ((op: "-", args: ("lambda",)), "N")),
+))
+- Typst: #raw(eq.typst), set as #eval(eq.typst, mode: "math")
 - LaTeX: #raw(eq.latex)
 
 #let model = read("decay.esm")

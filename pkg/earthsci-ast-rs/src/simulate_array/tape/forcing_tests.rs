@@ -11,6 +11,7 @@ use super::super::{ArrayCompiled, RhsScratch, RhsStats};
 use super::ir::*;
 use super::refexec::run_reference;
 use super::taped;
+use super::test_support::{assert_bits_eq, opcount};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -81,25 +82,10 @@ fn feed(compiled: &ArrayCompiled, n: usize, scale: f64, k: f64) {
     buf.insert("k".into(), ArrayD::from_elem(IxDyn(&[]), k));
 }
 
-fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
-}
-
 fn state_of(n: usize, seed: u64) -> Vec<f64> {
     (0..n)
         .map(|i| 0.25 + ((i as u64 * 7 + seed * 13) % 11) as f64 * 0.19)
         .collect()
-}
-
-fn assert_bits(got: &[f64], want: &[f64], label: &str) {
-    assert_eq!(got.len(), want.len(), "{label}: length");
-    for (k, (a, b)) in got.iter().zip(want).enumerate() {
-        assert_eq!(
-            a.to_bits(),
-            b.to_bits(),
-            "{label}: dy[{k}] {a:?} vs interpreter {b:?}"
-        );
-    }
 }
 
 fn taped_scratch(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
@@ -154,19 +140,17 @@ fn forcing_reads_tape_bit_identically_through_every_executor() {
         let state = state_of(n, seed);
         for &t in &[0.0, 0.5, 2.0] {
             let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params);
-            let (overlay, _) = compiled.debug_eval_rhs(&state, t, &params);
-            assert_bits(&overlay, &oracle, "overlay");
             for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
                 let mut dy = vec![0.0; n];
                 run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
-                assert_bits(&dy, &oracle, &format!("reference executor, {label}"));
+                assert_bits_eq(&dy, &oracle, &format!("reference executor, {label}"));
             }
-            assert_bits(
+            assert_bits_eq(
                 &fast(&compiled, &mut fused, &state, t, &param_vec),
                 &oracle,
                 "fast executor, fused",
             );
-            assert_bits(
+            assert_bits_eq(
                 &fast(&compiled, &mut unfused, &state, t, &param_vec),
                 &oracle,
                 "fast executor, unfused",
@@ -306,7 +290,7 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     let state = state_of(n, 2);
     let t = 2.0;
     let first = fast(&compiled, &mut scratch, &state, t, &param_vec);
-    assert_bits(
+    assert_bits_eq(
         &first,
         &compiled.debug_eval_rhs(&state, t, &params).0,
         "primed",
@@ -315,14 +299,14 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     // A refresh of the DISCRETE forcing: served stale until the epoch moves,
     // and after it exactly as the interpreter reads the refreshed buffer.
     feed(&compiled, n, 3.0, 0.7);
-    assert_bits(
+    assert_bits_eq(
         &fast(&compiled, &mut scratch, &state, t, &param_vec),
         &first,
         "before the epoch moves",
     );
     scratch.bump_forcing_epoch();
     let refreshed = fast(&compiled, &mut scratch, &state, t, &param_vec);
-    assert_bits(
+    assert_bits_eq(
         &refreshed,
         &compiled.debug_eval_rhs(&state, t, &params).0,
         "after the epoch moves",
@@ -333,7 +317,7 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     // not re-run it: nothing refreshes a CONST forcing inside a solve.
     feed(&compiled, n, 3.0, -1.5);
     scratch.bump_forcing_epoch();
-    assert_bits(
+    assert_bits_eq(
         &fast(&compiled, &mut scratch, &state, t, &param_vec),
         &refreshed,
         "a CONST forcing is loaded once per scratch",
@@ -389,7 +373,7 @@ fn a_segmented_native_solve_refreshes_through_the_forcing_epoch() {
     let (got, (full, seg)) = segmented_solve(RuntimeMode::Native, &[1.0, 2.0]);
     assert_eq!(got.time, want.time);
     for (row, (g, w)) in got.state.iter().zip(&want.state).enumerate() {
-        assert_bits(g, w, &format!("state row {row}"));
+        assert_bits_eq(g, w, &format!("state row {row}"));
     }
     // Every segment after the first re-runs SEGMENT without CONST, and the
     // number of full primes does not grow with the number of segments.
@@ -485,9 +469,9 @@ fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
         for (l, p) in [("fused", &prog), ("unfused", &prog_uf)] {
             let mut dy = vec![0.0; n];
             run_reference(p, &compiled, &state, &param_vec, 0.0, &mut dy);
-            assert_bits(&dy, &oracle, &label(&format!("reference executor, {l}")));
+            assert_bits_eq(&dy, &oracle, &label(&format!("reference executor, {l}")));
         }
-        assert_bits(
+        assert_bits_eq(
             &fast(&compiled, &mut fused, &state, 0.0, &param_vec),
             &oracle,
             &label("fast executor"),

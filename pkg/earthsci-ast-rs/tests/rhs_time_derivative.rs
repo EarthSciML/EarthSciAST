@@ -205,13 +205,15 @@ fn the_flattened_form_carries_the_substituted_tendency() {
         .iter()
         .find(|eq| matches!(&eq.lhs, earthsci_ast::Expr::Variable(v) if v == "M.dxdt"))
         .expect("the observed equation survives flattening");
-    let rendered = format!("{}", dxdt.rhs);
+    let canon = common::canon(&dxdt.rhs);
+    let rendered = canon.to_string();
     assert!(
-        !rendered.contains("D("),
+        common::nodes_with_op(&canon, "D").is_empty(),
         "flatten must resolve the RHS derivative, got `{rendered}`"
     );
+    let names = earthsci_ast::expression_names(&canon);
     assert!(
-        rendered.contains("M.k") && rendered.contains("M.x"),
+        names.iter().any(|n| n == "M.k") && names.iter().any(|n| n == "M.x"),
         "the substituted body should be the tendency `-k*x`, got `{rendered}`"
     );
 }
@@ -244,9 +246,12 @@ fn a_spatial_derivative_is_left_for_the_discretization_rule() {
     });
     let file = load_string(&doc.to_string()).expect("document loads");
     let flat = flatten(&file).expect("flattens");
-    let rendered = format!("{}", flat.equations[0].rhs);
+    let canon = common::canon(&flat.equations[0].rhs);
+    let rendered = canon.to_string();
     assert!(
-        rendered.contains("∂M.u/∂x"),
+        common::nodes_with_op(&canon, "D")
+            .iter()
+            .any(|d| d["wrt"] == "x" && d["args"] == json!(["M.u"])),
         "the spatial derivative must survive flatten, got `{rendered}`"
     );
     assert!(
@@ -413,21 +418,24 @@ fn the_shipped_linearity_fixture_resolves_both_sides() {
             .iter()
             .find(|eq| matches!(&eq.lhs, earthsci_ast::Expr::Variable(v) if v == name))
             .unwrap_or_else(|| panic!("no defining equation for {name}"));
-        format!("{}", eq.rhs)
+        common::canon(&eq.rhs)
     };
     for name in [
         "LinearityTest.derivative_of_combination",
         "LinearityTest.combination_of_derivatives",
     ] {
-        let body = rendered(name);
+        let canon = rendered(name);
+        let body = canon.to_string();
+        let names = earthsci_ast::expression_names(&canon);
         assert!(
-            !body.contains("D("),
+            common::nodes_with_op(&canon, "D").is_empty(),
             "{name} must resolve to an ordinary expression, got `{body}`"
         );
         // Non-vacuous: the resolved body has to mention the states it depends
         // on, so a binding that folded both sides to a constant fails here.
         assert!(
-            body.contains("LinearityTest.u") && body.contains("LinearityTest.v"),
+            names.iter().any(|n| n == "LinearityTest.u")
+                && names.iter().any(|n| n == "LinearityTest.v"),
             "{name} should depend on both states, got `{body}`"
         );
     }

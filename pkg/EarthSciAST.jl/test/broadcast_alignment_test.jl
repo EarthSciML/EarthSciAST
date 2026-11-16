@@ -469,16 +469,6 @@ _bc_oracle(name, body) = _bc_model(
         )
     end
 
-    @testset "degenerate 1-operand `+`/`*` renders in call form" begin
-        # Cross-binding display pin (Rust `join_or_call`: infix only at ≥ 2 args).
-        x = E.VarExpr("x")
-        for op in ("+", "*")
-            n = E.OpExpr(op, E.ASTExpr[x])
-            @test E.format_expression(n, :ascii) == "$op(x)"
-            @test E.format_expression(n, :unicode) == "$op(x)"
-        end
-    end
-
     @testset "op registry: the scalar-operator predicate behind `fn`" begin
         for n in [
                 "+", "-", "*", "/", "^", "neg", "pow", "sin", "log", "min", "max",

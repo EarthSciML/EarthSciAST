@@ -670,48 +670,15 @@ ExprNode := { "op": string, "args": [Expr, ...], ...optional_fields }
 - **Strings** are variable/parameter references: `"O3"`, `"k1"`
 - **ExprNodes** are operations
 
-#### 4.1.1 Infix text surface and its precedence
+#### 4.1.1 Expressions as text
 
-An `.esm` document always carries the JSON tree above — that tree is the format, and it is
-unambiguous. Every binding *additionally* exposes an infix **text surface** through the
-`to_ascii` / `parse_expression` pair (API_SPEC.md §5.4), used by printers, diagnostics,
-authoring tools and the shared corpus at `tests/conformance/expression_parse/cases.json`.
-That surface is normative for those APIs: `parse_expression` is the inverse of `to_ascii`,
-and all five bindings MUST agree on the reading of any given text.
-
-Operators bind in this order, **loosest first**:
-
-| Level | Operators | Associativity |
-|---|---|---|
-| 1 | `or` | left |
-| 2 | `and` | left |
-| 3 | `==` `!=` `<` `>` `<=` `>=` | left (non-associative in practice) |
-| 4 | `+`, binary `-` | left; `-` is non-associative on the right (`a - (b - c)` keeps its parentheses) |
-| 5 | `*` `/`, **unary `-`** | left; `/` is non-associative on the right |
-| 6 | `not` | prefix |
-| 7 | `^` | right |
-| 8 | function calls, `[…]` indexing, atoms | — |
-
-**Unary `-` binds tighter than `+` and binary `-`, and looser than `^`** — the standard
-mathematical reading. So `-k_ab * A + k_ba * B` is `(-(k_ab * A)) + (k_ba * B)`, **not**
-`-(k_ab * A + k_ba * B)`; `-a^2` is `-(a^2)`, not `(-a)^2`; and `-a * b` is `-(a * b)`,
-which is numerically identical to `(-a) * b`. A `-` directly in front of a numeric literal
-is part of the literal, not a unary-minus node, which is what lets `2^-3` and
-`(300 / T)^-1.3` parse without parentheses.
-
-Because a unary-minus operand extends only to the next `+` or binary `-`, a printer MUST
-parenthesize a negated sum or difference — `-(a + b)`, `-(a - b)` — or the text it emits
-reads back as a different expression. For the same reason, because every level groups
-to the LEFT, a printer MUST parenthesize a right operand at the same level unless it is
-the same associative operator (`+`, `*`, `and`, `or`, which a parser flattens into one
-n-ary node): `a * (b / c)`, `a + (b - c)`, `a == (b < c)`. A parser reads `a and b and c`
-as one n-ary `and`, exactly as it reads `a + b + c` as one n-ary `+`. The full printing
-contract, including the text spelling of every `faq` field (join clauses with `syms` or an
-`overlap` gate), is
-`tests/display/RENDERING_CONTRACT.md`.
-
-This section documents the text surface only; it places no requirement on `.esm`
-documents, whose expressions are JSON, and it is therefore not gated on the `esm` version.
+An `.esm` document always carries the JSON tree above; that tree is the format.
+An expression is written as text only as math in a document source format
+(§1.2): LaTeX math in Markdown, Typst math in Typst. The math grammars, their
+precedence and their printers and parsers are the Lean modules
+`Esm.Document.Math.*`, and every binding exposes them for one expression
+through `print_math` and `parse_math` (API_SPEC.md §5.1). There is no other
+normative text surface for expressions.
 
 ### 4.2 Operators
 
@@ -1070,10 +1037,8 @@ EVERY document a load touches — the root, a `{ref}`-loaded child, a template
 library, a coupling library. Doing it per call site is what let `arrayop`
 survive its own 0.8.0 removal.
 
-The **text surface is unchanged**. The head keyword in the text form is the
-⊕-word (`sum`, `prod`, `max`, `min`, `any`) chosen from `semiring` / `reduce`
-— the ASCII spelling of the big operator in the unicode and LaTeX renderings —
-not the node's name. See `tests/display/RENDERING_CONTRACT.md`.
+In document math (§1.2) the big operator is chosen from `semiring` /
+`reduce`, not from the node's name.
 
 See `docs/content/rfcs/faq-node-rename.md`.
 

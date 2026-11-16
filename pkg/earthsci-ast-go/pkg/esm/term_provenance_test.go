@@ -44,11 +44,14 @@ func flattenFixture(t *testing.T, path string) *FlattenedSystem {
 	return flat
 }
 
+// dChemO3 is the canonical JSON of the left-hand side D(Chem.O3), wrt t.
+const dChemO3 = `{"args":["Chem.O3"],"op":"D","wrt":"t"}`
+
 func equationByLHS(t *testing.T, flat *FlattenedSystem, lhs string) FlattenedEquation {
 	t.Helper()
 	var found []FlattenedEquation
 	for _, eq := range flat.Equations {
-		if ToASCII(eq.LHS) == lhs {
+		if showJSON(eq.LHS) == lhs {
 			found = append(found, eq)
 		}
 	}
@@ -115,7 +118,7 @@ func checkProvenanceInvariant(t *testing.T, eq FlattenedEquation) (evaluated, di
 			fold += p
 		}
 		if math.Float64bits(body) != math.Float64bits(fold) {
-			t.Errorf("%s: body %v != left fold %v of %v", ToASCII(eq.LHS), body, fold, parts)
+			t.Errorf("%s: body %v != left fold %v of %v", showJSON(eq.LHS), body, fold, parts)
 		}
 		right := parts[len(parts)-1]
 		for i := len(parts) - 2; i >= 0; i-- {
@@ -161,7 +164,7 @@ func TestTermProvenanceInvariant(t *testing.T) {
 				// With three or more contributions the check must be able to see
 				// the order.
 				if len(eq.Contributions) >= 3 && !discriminating {
-					t.Errorf("%s cannot tell sum orders apart", ToASCII(eq.LHS))
+					t.Errorf("%s cannot tell sum orders apart", showJSON(eq.LHS))
 				}
 			}
 			if evaluated == 0 && !scalarUnreachable[name] {
@@ -183,19 +186,19 @@ func TestTermProvenanceCorpus(t *testing.T) {
 			for _, eq := range flat.Equations {
 				checkProvenanceInvariant(t, eq)
 				if len(eq.Contributions) == 0 {
-					t.Errorf("%s records no contributions", ToASCII(eq.LHS))
+					t.Errorf("%s records no contributions", showJSON(eq.LHS))
 				}
 				for _, contribution := range eq.Contributions {
 					if len(contribution.Origins) == 0 {
-						t.Errorf("%s has an unattributed term", ToASCII(eq.LHS))
+						t.Errorf("%s has an unattributed term", showJSON(eq.LHS))
 					}
 					for _, o := range contribution.Origins {
 						if (o.Component == "") == (o.Coupling == nil) {
-							t.Errorf("%s: malformed origin %+v", ToASCII(eq.LHS), o)
+							t.Errorf("%s: malformed origin %+v", showJSON(eq.LHS), o)
 						}
 					}
 					if len(unionOrigins([]Contribution{contribution})) != len(contribution.Origins) {
-						t.Errorf("%s: repeated origin in %s", ToASCII(eq.LHS), originsJSON(contribution))
+						t.Errorf("%s: repeated origin in %s", showJSON(eq.LHS), originsJSON(contribution))
 					}
 				}
 			}
@@ -207,12 +210,12 @@ func TestTermProvenanceSystemsOrder(t *testing.T) {
 	pairs := func(eq FlattenedEquation) []string {
 		out := make([]string, len(eq.Contributions))
 		for i, c := range eq.Contributions {
-			out[i] = ToASCII(c.Expr) + " " + originsJSON(c)
+			out[i] = showJSON(c.Expr) + " " + originsJSON(c)
 		}
 		return out
 	}
-	ab := equationByLHS(t, flattenFixture(t, filepath.Join(termProvenanceDir(), "systems_order_ab.esm")), "D(Chem.O3)/Dt")
-	ba := equationByLHS(t, flattenFixture(t, filepath.Join(termProvenanceDir(), "systems_order_ba.esm")), "D(Chem.O3)/Dt")
+	ab := equationByLHS(t, flattenFixture(t, filepath.Join(termProvenanceDir(), "systems_order_ab.esm")), dChemO3)
+	ba := equationByLHS(t, flattenFixture(t, filepath.Join(termProvenanceDir(), "systems_order_ba.esm")), dChemO3)
 	abPairs, baPairs := pairs(ab), pairs(ba)
 	sortedAB := append([]string(nil), abPairs...)
 	sortedBA := append([]string(nil), baPairs...)
@@ -237,9 +240,9 @@ func TestTermProvenanceSystemsOrder(t *testing.T) {
 }
 
 func TestTermProvenanceNonVacuity(t *testing.T) {
-	eq := equationByLHS(t, flattenFixture(t, filepath.Join(termProvenanceDir(), "non_vacuity.esm")), "D(Chem.O3)/Dt")
+	eq := equationByLHS(t, flattenFixture(t, filepath.Join(termProvenanceDir(), "non_vacuity.esm")), dChemO3)
 	tail := eq.Contributions[1:]
-	if len(tail) != 2 || ToASCII(tail[0].Expr) != "Emis.flux" || ToASCII(tail[1].Expr) != "Emis.flux" {
+	if len(tail) != 2 || !sameExpression(tail[0].Expr, "Emis.flux") || !sameExpression(tail[1].Expr, "Emis.flux") {
 		t.Fatalf("want two Emis.flux contributions after the first, got %+v", tail)
 	}
 	if originsJSON(tail[0]) != `[{"component":"OpA"}]` || originsJSON(tail[1]) != `[{"component":"OpB"}]` {
@@ -260,7 +263,7 @@ func TestTermProvenanceLift(t *testing.T) {
 	}
 	node, ok := asExprNode(lifted[0].RHS)
 	if !ok || node.Op != "faq" {
-		t.Fatalf("lifted rhs is not an faq: %s", ToASCII(lifted[0].RHS))
+		t.Fatalf("lifted rhs is not an faq: %s", showJSON(lifted[0].RHS))
 	}
 	var got []string
 	for _, c := range lifted[0].Contributions {
@@ -282,16 +285,16 @@ func TestTermProvenanceEmptyContributionList(t *testing.T) {
 	if len(mapped.Contributions) != 1 {
 		t.Fatalf("contributions = %d, want 1", len(mapped.Contributions))
 	}
-	if got := ToASCII(mapped.RHS); got != ToASCII(eq.RHS) {
-		t.Errorf("RHS = %q, want %q", got, ToASCII(eq.RHS))
+	if !sameExpression(mapped.RHS, eq.RHS) {
+		t.Errorf("RHS = %s, want %s", showJSON(mapped.RHS), showJSON(eq.RHS))
 	}
 	if got := originsJSON(mapped.Contributions[0]); got != "[]" {
 		t.Errorf("origins = %s, want []", got)
 	}
 
 	rebuilt := equationFrom(eq, nil, eq.LHS)
-	if got := ToASCII(rebuilt.RHS); got != ToASCII(eq.RHS) {
-		t.Errorf("equationFrom(nil) RHS = %q, want %q", got, ToASCII(eq.RHS))
+	if !sameExpression(rebuilt.RHS, eq.RHS) {
+		t.Errorf("equationFrom(nil) RHS = %s, want %s", showJSON(rebuilt.RHS), showJSON(eq.RHS))
 	}
 	if len(rebuilt.Contributions) != 1 {
 		t.Errorf("equationFrom(nil) contributions = %d, want 1", len(rebuilt.Contributions))

@@ -33,10 +33,18 @@ import pytest
 from conftest import CONFORMANCE_DIR
 
 from earthsci_ast import flatten, load_path
-from earthsci_ast.flatten import _expr_to_string, _lhs_dependent_var
+from earthsci_ast.flatten import _lhs_dependent_var
 from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.json_walk import ExpressionTemplateError
 from earthsci_ast.problem import esm_problem, solve
+from earthsci_ast.serialize import _serialize_expression
+
+
+def _names(*exprs) -> str:
+    """The expressions as JSON text, for a check that a name is (or is not)
+    referenced anywhere in them, in any child slot."""
+    return " ".join(json.dumps(_serialize_expression(e)) for e in exprs)
+
 
 CATEGORY_DIR = CONFORMANCE_DIR / "merged_rename_reach"
 MANIFEST_FILE = CATEGORY_DIR / "manifest.json"
@@ -111,7 +119,7 @@ def test_the_merged_away_name_survives_nowhere(case):
         assert gone not in flat.parameters
         assert gone not in flat.observed_variables
         for eq in flat.equations:
-            rendered = f"{_expr_to_string(eq.lhs)} = {_expr_to_string(eq.rhs)}"
+            rendered = _names(eq.lhs, eq.rhs)
             assert gone not in rendered, (
                 f"{case['id']}: equation still references the merged-away {gone!r}: {rendered}"
             )
@@ -128,7 +136,7 @@ def test_the_later_entry_lands_on_the_survivor(case):
     target = case["tendency_of"]
     tendencies = [eq for eq in flat.equations if _lhs_dependent_var(eq.lhs) == target]
     assert tendencies, f"{case['id']}: no equation defines {target}"
-    rendered = _expr_to_string(tendencies[0].rhs)
+    rendered = _names(tendencies[0].rhs)
     for name in case["tendency_references"]:
         assert name in rendered, (
             f"{case['id']}: D({target}) must reference {name!r}, got {rendered}"
@@ -205,7 +213,7 @@ def test_the_rename_reaches_events_and_variable_updates(case):
             f"{case['id']}: the affect writes to {affect.lhs!r}, not {want['lhs']!r} — "
             "an affect `lhs` is a plain NAME string, not an expression"
         )
-        rendered = _expr_to_string(affect.rhs)
+        rendered = _names(affect.rhs)
         for name in want["rhs_references"]:
             assert name in rendered, f"{case['id']}: affect RHS must reference {name!r}"
 
@@ -213,9 +221,7 @@ def test_the_rename_reaches_events_and_variable_updates(case):
         var = flat.parameters.get(var_name) or flat.state_variables.get(var_name)
         assert var is not None, f"{case['id']}: no variable {var_name!r}"
         rules = var.update if isinstance(var.update, list) else [var.update]
-        rendered = " ".join(
-            _expr_to_string(r.expression) for r in rules if r.expression is not None
-        )
+        rendered = " ".join(_names(r.expression) for r in rules if r.expression is not None)
         for name in wanted:
             assert name in rendered, (
                 f"{case['id']}: {var_name}'s update must reference {name!r}, got {rendered}"
@@ -225,10 +231,10 @@ def test_the_rename_reaches_events_and_variable_updates(case):
     # name a collect-time namespacing would have carried through, and not the
     # bare local a coupling-time one would have left behind.
     haystack = " ".join(
-        [_expr_to_string(a.rhs) for a in affects]
+        [_names(a.rhs) for a in affects]
         + [a.lhs for a in affects]
         + [
-            _expr_to_string(r.expression)
+            _names(r.expression)
             for v in list(flat.parameters.values()) + list(flat.state_variables.values())
             for r in (v.update if isinstance(v.update, list) else [v.update])
             if r is not None and r.expression is not None

@@ -99,13 +99,4 @@ end
             fb = _WRT_SHAPED_EXPLICIT
         )
     end
-
-    @testset "display applies the same default" begin
-        omitted = OpExpr("D", ASTExpr[VarExpr("x")])
-        explicit = OpExpr("D", ASTExpr[VarExpr("x")]; wrt = "t")
-        @test to_unicode(omitted) == "∂x/∂t"
-        @test to_unicode(omitted) == to_unicode(explicit)
-        @test to_latex(omitted) == to_latex(explicit)
-        @test to_ascii(omitted) == to_ascii(explicit)
-    end
 end

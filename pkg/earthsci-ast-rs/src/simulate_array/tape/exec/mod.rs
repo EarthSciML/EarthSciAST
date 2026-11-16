@@ -228,21 +228,6 @@ pub(crate) struct TapeExec {
     sblock_at: Vec<u32>,
     /// The blocks' register file.
     sregs: Vec<f64>,
-    /// Row-major mirror of the flat state vector for a program stored
-    /// row-major ([`TapeProgram::col_major`] false), refilled once per call
-    /// for the variables `mirror` marks (each column-major block transposed
-    /// in place at the SAME flat offset), so reads of state run over
-    /// contiguous memory. Pure data movement, so bit-identical to reading the
-    /// strided view directly. Empty when no variable needs it.
-    state_rm: Vec<f64>,
-    /// Per state variable: whether reads go through `state_rm`. False for a
-    /// column-major program (its boxes ARE the state's layout) and for a
-    /// variable whose two layouts are the same walk; those read the caller's
-    /// state in place.
-    mirror: Vec<bool>,
-    /// The variables `mirror` marks, so a call's refill does not walk every
-    /// state variable (a 0-d state model has one per state).
-    mirror_vars: Vec<u32>,
     /// The `[start, end)` ranges of `dy` no `DyWrite` is certain to write,
     /// which each call zeroes, for a `dy` of `dy_zero_len` elements
     /// (`usize::MAX` until the first call computes them).
@@ -363,19 +348,6 @@ impl TapeExec {
                 Some((name.clone(), ArrayD::<f64>::zeros(IxDyn(&shape))))
             })
             .collect();
-        let mirror: Vec<bool> = prog
-            .state_vars
-            .iter()
-            .map(|sv| !prog.col_major && !super::layout::order_free(&sv.shape))
-            .collect();
-        let n_state: usize = prog
-            .state_vars
-            .iter()
-            .zip(&mirror)
-            .filter(|(_, m)| **m)
-            .map(|(sv, _)| sv.flat_offset + sv.shape.iter().product::<usize>().max(1))
-            .max()
-            .unwrap_or(0);
         let plan_full = prog
             .plans
             .iter()
@@ -398,7 +370,7 @@ impl TapeExec {
         let max_fregs = prog
             .fused
             .iter()
-            .map(|f| f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize)
+            .map(|f| f.n_regs as usize + f.n_load_regs as usize)
             .max()
             .unwrap_or(0);
         #[cfg(not(target_arch = "wasm32"))]
@@ -416,11 +388,6 @@ impl TapeExec {
             sblocks: Vec::new(),
             sblock_at: Vec::new(),
             sregs: Vec::new(),
-            state_rm: vec![0.0f64; n_state],
-            mirror_vars: (0..mirror.len() as u32)
-                .filter(|&i| mirror[i as usize])
-                .collect(),
-            mirror,
             dy_zero: Vec::new(),
             dy_zero_len: usize::MAX,
             dy_home: Vec::new(),
@@ -493,9 +460,56 @@ fn assemblies_covered(prog: &TapeProgram) -> Vec<bool> {
 
 /// The compiled-tape context a [`super::super::RhsScratch`] carries. `None`
 /// on a scratch means "legacy interpreter path".
+/// Row-major mirror of the flat state vector for a program stored row-major
+/// ([`TapeProgram::col_major`] false), refilled once per call for the
+/// variables `mirror` marks (each column-major block transposed in place at
+/// the SAME flat offset), so reads of state run over contiguous memory. Pure
+/// data movement, so bit-identical to reading the strided view directly.
+///
+/// Kept beside the [`TapeExec`] rather than inside it: a call borrows it
+/// shared (through [`Env`]) while the executor is borrowed mutably.
+pub(in crate::simulate_array) struct StateMirror {
+    /// The mirrored values. Empty when no variable needs it.
+    state_rm: Vec<f64>,
+    /// Per state variable: whether reads go through `state_rm`. False for a
+    /// column-major program (its boxes ARE the state's layout) and for a
+    /// variable whose two layouts are the same walk; those read the caller's
+    /// state in place.
+    mirror: Vec<bool>,
+    /// The variables `mirror` marks, so a call's refill does not walk every
+    /// state variable (a 0-d state model has one per state).
+    mirror_vars: Vec<u32>,
+}
+
+impl StateMirror {
+    fn new(prog: &TapeProgram) -> Self {
+        let mirror: Vec<bool> = prog
+            .state_vars
+            .iter()
+            .map(|sv| !prog.col_major && !super::layout::order_free(&sv.shape))
+            .collect();
+        let n_state: usize = prog
+            .state_vars
+            .iter()
+            .zip(&mirror)
+            .filter(|(_, m)| **m)
+            .map(|(sv, _)| sv.flat_offset + sv.shape.iter().product::<usize>().max(1))
+            .max()
+            .unwrap_or(0);
+        StateMirror {
+            state_rm: vec![0.0f64; n_state],
+            mirror_vars: (0..mirror.len() as u32)
+                .filter(|&i| mirror[i as usize])
+                .collect(),
+            mirror,
+        }
+    }
+}
+
 pub(in crate::simulate_array) struct TapeCtx {
     pub(crate) prog: Arc<TapeProgram>,
     pub(crate) exec: TapeExec,
+    mirror: StateMirror,
     /// Step 4 epoch counters (see `run_tape_call`). The parameter epoch is
     /// bumped whenever the caller's params slice differs, bit for bit, from
     /// the one the last call saw (the slice is the only channel callers have,
@@ -511,9 +525,11 @@ pub(in crate::simulate_array) struct TapeCtx {
 impl TapeCtx {
     pub(in crate::simulate_array) fn new(prog: Arc<TapeProgram>) -> Self {
         let exec = TapeExec::new(&prog);
+        let mirror = StateMirror::new(&prog);
         TapeCtx {
             prog,
             exec,
+            mirror,
             param_epoch: 0,
             forcing_epoch: 1,
             last_params: None,
@@ -569,9 +585,9 @@ struct Env<'a> {
     prog: &'a TapeProgram,
     forcing: ForcingView<'a>,
     state: &'a [f64],
-    /// Row-major per-variable mirror of `state` (see `TapeExec::state_rm`).
+    /// Row-major per-variable mirror of `state` (see [`StateMirror`]).
     state_rm: &'a [f64],
-    /// Per state variable: read through `state_rm` (see `TapeExec::mirror`).
+    /// Per state variable: read through `state_rm` (see [`StateMirror`]).
     mirror: &'a [bool],
     params: &'a [f64],
     t: f64,
@@ -1004,8 +1020,10 @@ pub(in crate::simulate_array) fn run_tape_inputs(
         }
     }
     let (param_epoch, forcing_epoch) = (ctx.param_epoch, ctx.forcing_epoch);
-    let prog = &*ctx.prog;
-    let exec = &mut ctx.exec;
+    let TapeCtx {
+        prog, exec, mirror, ..
+    } = ctx;
+    let prog = &**prog;
     #[cfg(not(target_arch = "wasm32"))]
     {
         let (ways, threads) = if exec.serial {
@@ -1035,14 +1053,14 @@ pub(in crate::simulate_array) fn run_tape_inputs(
     // Refill the row-major state mirror: one strided pass per mirrored
     // variable block (column-major flat -> row-major at the same offset).
     let ways = call_ways(exec);
-    for &i in &exec.mirror_vars {
+    for &i in &mirror.mirror_vars {
         let sv = &prog.state_vars[i as usize];
         let rm = rm_strides(&sv.shape);
         let cm = cm_strides(&sv.shape);
         unsafe {
             copy_strided_maybe_split(
                 ways,
-                exec.state_rm.as_mut_ptr().add(sv.flat_offset),
+                mirror.state_rm.as_mut_ptr().add(sv.flat_offset),
                 &rm,
                 state.as_ptr().add(sv.flat_offset),
                 &cm,
@@ -1050,14 +1068,12 @@ pub(in crate::simulate_array) fn run_tape_inputs(
             );
         }
     }
-    let state_rm = std::mem::take(&mut exec.state_rm);
-    let mirror = std::mem::take(&mut exec.mirror);
     let env = Env {
         prog,
         forcing,
         state,
-        state_rm: &state_rm,
-        mirror: &mirror,
+        state_rm: &mirror.state_rm,
+        mirror: &mirror.mirror,
         params,
         t,
         declared,
@@ -1114,6 +1130,4 @@ pub(in crate::simulate_array) fn run_tape_inputs(
         prime_end + prog.n_rhs as usize
     };
     run_continuous(&env, prime_end..end, exec, dy);
-    exec.state_rm = state_rm;
-    exec.mirror = mirror;
 }

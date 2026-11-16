@@ -8,9 +8,8 @@
 
 use super::super::{ArrayCompiled, RhsStats};
 use super::ir::*;
-use super::refexec::run_reference;
 use super::taped;
-use super::tests::seeded_state;
+use super::test_support::*;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
@@ -68,94 +67,6 @@ fn doc(name: &str, variables: Value, equations: Vec<Value>, domain: Option<Value
         d["domain"] = dom;
     }
     d
-}
-
-/// Build `doc` under its own precision environment, require that the tape
-/// lowers every rule, and require that the reference executor and the fast
-/// executor, over the fused and the unfused program, write the per-cell
-/// oracle's `dy` bit for bit. Returns the fused program and the unfused one's
-/// length.
-pub(super) fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
-    let file = crate::parse::load_string(&doc.to_string()).expect("fixture document loads");
-    let env = crate::precision_infer::env_of_file(&file).expect("precision environment");
-    let file = crate::precision_infer::annotated(&file)
-        .expect("precision inference")
-        .unwrap_or(file);
-    let _env = env.enter();
-    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
-    let cfg = super::fuse::SuperopCfg {
-        bin3: false,
-        ext_pairs: true,
-    };
-    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(cfg)));
-    let (prog_uf, report_uf) = taped(compiled.build_tape_opts(&HashSet::new(), None));
-    let unfused_len = prog_uf.instrs.len();
-    for rep in [&report, &report_uf] {
-        assert!(
-            rep.fallbacks.is_empty(),
-            "the tape must lower every rule: {:?}",
-            rep.fallbacks
-        );
-    }
-    let n = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast = compiled
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_uf.install_tape(std::sync::Arc::new(
-        taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
-    ));
-    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
-    for seed in 0..4u64 {
-        let state = seeded_state(n, seed, 0.25, 2.5);
-        for &t in &[0.0, 0.37, 2.5] {
-            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params);
-            for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
-                let mut dy = vec![0.0f64; n];
-                run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
-                assert_eq!(
-                    bits(&dy),
-                    bits(&oracle),
-                    "seed {seed} t {t}: {label} reference executor"
-                );
-            }
-            for (label, scratch) in [("fused", &mut fast), ("unfused", &mut fast_uf)] {
-                let mut dy = vec![0.0f64; n];
-                compiled.debug_eval_rhs_into(
-                    &state,
-                    t,
-                    &param_vec,
-                    &mut dy,
-                    scratch,
-                    &mut RhsStats::default(),
-                );
-                assert_eq!(
-                    bits(&dy),
-                    bits(&oracle),
-                    "seed {seed} t {t}: {label} fast executor"
-                );
-            }
-        }
-    }
-    (prog, unfused_len)
-}
-
-/// [`oracle_ab`] at two grid sizes, requiring the same lowered program length
-/// (the unfused one: fusion's grouping may differ with the box size).
-pub(super) fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> TapeProgram {
-    let (_, a) = oracle_ab(make(small));
-    let (b, b_len) = oracle_ab(make(large));
-    assert_eq!(
-        a, b_len,
-        "the program must not grow with the grid ({small} vs {large} cells)"
-    );
-    b
-}
-
-pub(super) fn count(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
 }
 
 /// More than four contracted indices: five at once, over a rank-1 output (the
@@ -219,7 +130,7 @@ fn five_contracted_indices() {
     };
     let prog = flat_in_n(make, 3, 40);
     // Fusion absorbs a reduction into the group that computes its terms.
-    let folds = count(&prog, "Reduce") + prog.fused.iter().filter(|f| f.reduce.is_some()).count();
+    let folds = opcount(&prog, "Reduce") + prog.fused.iter().filter(|f| f.reduce.is_some()).count();
     assert!(
         folds >= 2,
         "both contractions fold on the tape, none unrolled"
@@ -556,17 +467,6 @@ fn query() -> Value {
     ix("u", vec![json!("l")])
 }
 
-/// The `Instr::Count`s of `prog`, as `(rel, sorted)`.
-pub(super) fn counts(prog: &TapeProgram) -> Vec<(CountRel, bool)> {
-    prog.instrs
-        .iter()
-        .filter_map(|i| match i {
-            Instr::Count { rel, sorted, .. } => Some((*rel, *sorted)),
-            _ => None,
-        })
-        .collect()
-}
-
 /// Every comparison, with the axis on either side, over a literal axis
 /// (bisected without a check), a parameter-built one (checked once per call,
 /// then bisected) and a state in no order (counted entry by entry): one
@@ -598,7 +498,7 @@ fn counted_bracket_every_relation_and_axis() {
                 vec![(rel, axis == "zc")],
                 "{axis} {cmp} (axis left: {axis_left})"
             );
-            assert_eq!(count(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
+            assert_eq!(opcount(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
         }
     }
 }
@@ -626,7 +526,7 @@ fn counted_bracket_complement() {
             };
             let prog = flat_in_n(make, 5, 37);
             assert_eq!(counts(&prog), vec![(rel, axis == "zc")], "{axis} {cmp}");
-            assert_eq!(count(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
+            assert_eq!(opcount(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
         }
     }
     let nan = op(
@@ -824,7 +724,7 @@ fn counted_bracket_unsorted_literal_axis() {
                     let c = counts(&prog);
                     assert_eq!(c.len(), 1, "{label}");
                     assert!(c[0].1, "{label}: the sorted copy is bisected");
-                    assert_eq!(count(&prog, "Reduce"), 0, "{label}: no fold is left");
+                    assert_eq!(opcount(&prog, "Reduce"), 0, "{label}: no fold is left");
                 }
             }
         }
@@ -1151,7 +1051,7 @@ fn count_rewrite_is_a_build_option() {
     compiled.rewrites.count_fold = false;
     let off = tape(&compiled);
     assert!(counts(&off).is_empty(), "the general fold");
-    assert!(count(&off, "Reduce") > 0);
+    assert!(opcount(&off, "Reduce") > 0);
     compiled.rewrites.count_fold = true;
     assert!(
         std::sync::Arc::ptr_eq(&on, &tape(&compiled)),
@@ -1200,9 +1100,9 @@ fn const_gather_declined_bracket_leaves_no_trace() {
     d["models"]["M"]["equations"][2]["rhs"]["expr"] =
         ix("zc", vec![ix("assign", vec![json!("l")])]);
     let prog = oracle_ab(d).0;
-    assert_eq!(count(&prog, "TableGather"), 1);
+    assert_eq!(opcount(&prog, "TableGather"), 1);
     for op in ["Gather", "IndexGather", "DataGather", "Count", "FaultScan"] {
-        assert_eq!(count(&prog, op), 0, "{op}");
+        assert_eq!(opcount(&prog, op), 0, "{op}");
     }
     assert_eq!(faulting_gathers(&prog), 0);
 }
@@ -1251,7 +1151,7 @@ fn wholesale_rule_shares_repeated_subtrees() {
     let prog = unfused(&doc_);
     assert_eq!(un(&prog), 1, "sin(s) is computed once");
     assert!(
-        count(&prog, "ConstArray") <= 1,
+        opcount(&prog, "ConstArray") <= 1,
         "the table is materialized at most once"
     );
     // In both arms of a run-time branch, and after it: once per arm and once

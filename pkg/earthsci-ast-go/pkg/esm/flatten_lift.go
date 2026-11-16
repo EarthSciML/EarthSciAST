@@ -950,11 +950,11 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 		idxSpecies := ExprNode{Op: "index", Args: indexArgs(target, loops)}
 		out = append(out, FlattenedEquation{
 			LHS: ExprNode{
-				Op: "faq", OutputIdx: outputIdx, Ranges: ranges,
+				Op: "faq", OutputIdx: outputIdx, Ranges: ranges, Args: []any{},
 				Expr: ExprNode{Op: OpDerivative, Args: []any{idxSpecies}, Wrt: &wrt},
 			},
 			RHS: ExprNode{
-				Op: "faq", OutputIdx: outputIdx, Ranges: ranges,
+				Op: "faq", OutputIdx: outputIdx, Ranges: ranges, Args: []any{},
 				Expr: foldContributions(contributions),
 			},
 			SourceSystem:  eq.SourceSystem,

@@ -9,9 +9,9 @@ Arity 3: `ifelse(condition, then, else)`. The condition follows the usual
 convention — zero is false, non-zero is true — and the result is `then` when it
 holds, `else` otherwise.
 
-**Text**
-```text
-ifelse(a >= 0, sqrt(a), 0)
+**LaTeX**
+```latex
+\begin{cases}\sqrt{a} & \text{if } a \ge 0 \\ 0 & \text{otherwise}\end{cases}
 ```
 **JSON**
 ```json
@@ -34,9 +34,9 @@ are evaluated, so `ifelse` will *not* protect `sqrt` from a negative input. This
 is a deliberate, documented divergence between the scalar and array paths —
 write the guard into the argument instead:
 
-**Text**
-```text
-sqrt(max(a, 0))
+**LaTeX**
+```latex
+\sqrt{\max(a, 0)}
 ```
 **JSON**
 ```json
@@ -54,9 +54,9 @@ event fired, so an affect can reference the pre-event state while assigning the
 post-event one. It has no meaning outside an event context. See
 [coupling and events](../../coupling/).
 
-**Text**
-```text
-Pre(x)
+**LaTeX**
+```latex
+\operatorname{Pre}(x)
 ```
 **JSON**
 ```json
@@ -69,9 +69,9 @@ The nullary boolean literal. `args` must be empty. Its use is as an
 always-true predicate — the body of an index-set-producing
 [`faq`](../aggregation/), or a join gate that admits everything.
 
-**Text**
-```text
-true
+**LaTeX**
+```latex
+\text{true}
 ```
 **JSON**
 ```json
@@ -85,9 +85,9 @@ There is no `false` operator; write `0`.
 `args` MUST be empty; the value lives in a `value` field, which may be any JSON
 value — a number, an integer, or a nested array.
 
-**Text**
-```text
-[0, 0.5, 1]
+**LaTeX**
+```latex
+\begin{bmatrix}0 \\ 0.5 \\ 1\end{bmatrix}
 ```
 **JSON**
 ```json
@@ -118,8 +118,8 @@ It is lowered at load to the integer, exactly as if you had written
 `{"op": "const", "value": 9}`. An unknown enum or symbol is rejected at load
 with `unknown_enum` / `unknown_enum_symbol`.
 
-`enum` has no distinct text form: it prints as a dotted name, which re-parses as
-a scoped variable reference.
+In document math `enum` prints as an operator applied to its two names,
+`\operatorname{enum}(\mathit{land\_use\_class}, \mathit{water})`.
 
 The idiomatic use is a categorical index into a tabulated array:
 

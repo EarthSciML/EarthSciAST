@@ -104,7 +104,7 @@ fn the_regrid_apply_is_one_split_chain() {
         .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
     let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
-    let compiled = crate::simulate_array::tape::tests::compile(doc);
+    let compiled = crate::simulate_array::tape::test_support::compile(doc);
     let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
     let exec = super::TapeExec::new(&prog);
     assert_eq!(exec.seg_chains.len(), 1, "one chain");
@@ -153,7 +153,7 @@ fn the_regrid_chain_folds_only_admitted_pairs() {
         .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
     let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
-    let compiled = crate::simulate_array::tape::tests::compile(doc);
+    let compiled = crate::simulate_array::tape::test_support::compile(doc);
     let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
     let exec = super::TapeExec::new(&prog);
     assert!(
@@ -215,7 +215,7 @@ fn the_ragged_chain_runs_its_tuples_through_block_buffers() {
     );
     let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
-    let compiled = crate::simulate_array::tape::tests::compile(doc);
+    let compiled = crate::simulate_array::tape::test_support::compile(doc);
     let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
     let exec = super::TapeExec::new(&prog);
     assert_eq!(exec.seg_chains.len(), 1, "one chain");

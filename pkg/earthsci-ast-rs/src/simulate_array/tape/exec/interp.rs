@@ -243,19 +243,20 @@ pub(super) fn run_range(
                 .filter(|c| c.start == pc && c.end <= range.end)
             {
                 next_chain += 1;
+                let cx = Cx {
+                    env,
+                    slab_ptr,
+                    slot_off,
+                    plan_full,
+                    asm_covered,
+                    idx_tables,
+                    simd,
+                    dy_home,
+                    dy: dy.as_mut_ptr(),
+                    dy_len: dy.len(),
+                };
                 let split = unsafe {
-                    super::chain::run_chain(
-                        ch,
-                        env,
-                        slab_ptr,
-                        slot_off,
-                        chain_scratch,
-                        &mut scratch.fscratch,
-                        idx_tables,
-                        simd,
-                        dy_home,
-                        dy.as_mut_ptr(),
-                    )
+                    super::chain::run_chain(ch, &cx, chain_scratch, &mut scratch.fscratch)
                 };
                 if split {
                     pc = ch.end;
@@ -402,20 +403,7 @@ pub(super) fn run_range(
                     }
                 }
             }
-            Instr::Lanes { spec } => unsafe {
-                super::lanes::exec_lanes(
-                    *spec as usize,
-                    &prog.lanes[*spec as usize],
-                    env,
-                    slab_ptr,
-                    slot_off,
-                    lscratch,
-                    dy,
-                    simd,
-                    call_split,
-                )
-            },
-            _ => {
+            ins => {
                 let cx = Cx {
                     env,
                     slab_ptr,
@@ -428,7 +416,12 @@ pub(super) fn run_range(
                     dy: dy.as_mut_ptr(),
                     dy_len: dy.len(),
                 };
-                unsafe { exec_straight(&cx, &prog.instrs[pc], scratch, call_split) };
+                match ins {
+                    Instr::Lanes { spec } => unsafe {
+                        super::lanes::exec_lanes(*spec as usize, &cx, lscratch, call_split)
+                    },
+                    _ => unsafe { exec_straight(&cx, ins, scratch, call_split) },
+                }
             }
         }
         pc += 1;
@@ -1189,26 +1182,7 @@ pub(super) struct Cx<'a> {
     pub(super) dy_len: usize,
 }
 
-/// Whether `ins` is straight-line: it reads and writes only slab slots, the
-/// state, the parameters, `t` and `dy`, moves no control and publishes
-/// nothing, so [`exec_straight`] runs it on any thread.
-#[cfg(not(target_arch = "wasm32"))]
-pub(super) fn is_straight(ins: &Instr) -> bool {
-    !matches!(
-        ins,
-        Instr::LoadForcing { .. }
-            | Instr::Fault { .. }
-            | Instr::FaultScan { .. }
-            | Instr::Sweep { .. }
-            | Instr::ScalarRead { .. }
-            | Instr::DataGather { faults: true, .. }
-            | Instr::JmpIfZero { .. }
-            | Instr::Export { .. }
-            | Instr::Lanes { .. }
-    )
-}
-
-/// Execute one straight-line instruction (see [`is_straight`]) with this
+/// Execute one straight-line instruction (see [`Instr::may_run_on_worker`]) with this
 /// thread's `scratch`, splitting it under width `call_split`.
 ///
 /// # Safety
@@ -1221,11 +1195,10 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
         slot_off,
         plan_full,
         asm_covered,
-        idx_tables,
-        simd,
         dy_home,
         dy,
         dy_len,
+        ..
     } = *cx;
     let prog = env.prog;
     let Scratch {
@@ -1741,23 +1714,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
             unsafe { copy_strided(dst, &rm_strides(&sv.shape), sv.ptr, &sv.strides, &sv.shape) };
         }
-        Instr::Fused { spec } => {
-            let idx = &idx_tables[*spec as usize];
-            unsafe {
-                exec_fused(
-                    *spec as usize,
-                    env,
-                    slab_ptr,
-                    slot_off,
-                    fregs,
-                    fscratch,
-                    idx,
-                    simd,
-                    dy_home,
-                    dy,
-                )
-            };
-        }
+        Instr::Fused { spec } => unsafe { exec_fused(*spec as usize, cx, fregs, fscratch) },
         Instr::DyWrite { write } => {
             let w = &prog.dy_writes[*write as usize];
             // Its fused group already stored the slot into `dy`.
@@ -1847,8 +1804,6 @@ pub(super) unsafe fn exec_share(
         slab_ptr,
         slot_off,
         asm_covered,
-        idx_tables,
-        simd,
         dy_home,
         dy,
         ..
@@ -1856,19 +1811,7 @@ pub(super) unsafe fn exec_share(
     let prog = env.prog;
     match ins {
         Instr::Fused { spec } => unsafe {
-            super::fused::exec_fused_share(
-                *spec as usize,
-                env,
-                slab_ptr,
-                slot_off,
-                &mut scratch.fscratch,
-                &idx_tables[*spec as usize],
-                simd,
-                dy_home,
-                dy,
-                w,
-                ways,
-            )
+            super::fused::exec_fused_share(*spec as usize, cx, &mut scratch.fscratch, w, ways)
         },
         Instr::Assemble { table, out } => {
             let desc = &prog.slots[*out as usize];

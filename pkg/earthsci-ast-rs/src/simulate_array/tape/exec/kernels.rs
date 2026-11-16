@@ -386,16 +386,19 @@ pub(super) unsafe fn ew_select(dst: *mut f64, shape: &[usize], cond: &Rv, a: &Rv
     let tot = total(shape);
     if is_contig(cstr, shape) && is_contig(astr, shape) && is_contig(bstr, shape) {
         unsafe {
-            let d = std::slice::from_raw_parts_mut(dst, tot);
             let dc = dst as *const f64;
             let anyal = std::ptr::eq(cp, dc) || std::ptr::eq(ap, dc) || std::ptr::eq(bp, dc);
             if anyal {
+                // An operand is `dst` itself: every access stays a raw
+                // pointer, so no `&mut` slice over `dst` is live while the
+                // operands read the same memory.
                 for k in 0..tot {
                     let c = *cp.add(k);
                     let v = if c != 0.0 { *ap.add(k) } else { *bp.add(k) };
-                    *d.get_unchecked_mut(k) = v;
+                    *dst.add(k) = v;
                 }
             } else {
+                let d = std::slice::from_raw_parts_mut(dst, tot);
                 let c = std::slice::from_raw_parts(cp, tot);
                 let a = std::slice::from_raw_parts(ap, tot);
                 let b = std::slice::from_raw_parts(bp, tot);

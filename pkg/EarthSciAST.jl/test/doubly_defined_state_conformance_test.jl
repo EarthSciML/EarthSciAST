@@ -57,7 +57,7 @@ const _DD_MANIFEST = JSON3.read(read(joinpath(_DD_DIR, "manifest.json"), String)
                     # The unknown and BOTH equations are named, so the author can
                     # see which of the two definitions to remove.
                     @test err !== nothing && occursin(unknown, err.detail)
-                    @test err !== nothing && occursin("D(", err.detail)
+                    @test err !== nothing && occursin("(dif ", err.detail)
                     @test err !== nothing && occursin("§4.9.4", err.detail)
                 end
 

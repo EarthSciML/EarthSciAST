@@ -177,15 +177,6 @@ export type {
   AnalysisOptions,
 } from './analysis/index.js'
 
-// Export pretty-printing utilities
-export { toUnicode, toLatex, toAscii, toMathML, formatChemicalName } from './pretty-print.js'
-
-// Export the expression text-form parser (inverse of toAscii for the scalar tier)
-export { parseExpression, parseEquation, ExpressionParseError } from './parse-expression.js'
-
-// Export the reaction text-form parser (inverse of toAscii for a single reaction)
-export { parseReaction } from './parse-reaction.js'
-
 // Export substitution utilities
 export { substitute, substituteInModel, substituteInReactionSystem } from './substitute.js'
 
@@ -354,6 +345,8 @@ export {
   printTypst,
   printDocument,
   printMath,
+  expressionNames,
+  parseMath,
   parseMarkdown,
   parseTypst,
   parseDocument,

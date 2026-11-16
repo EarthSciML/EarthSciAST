@@ -143,10 +143,7 @@ fn operands_mut(op: &mut MicroOp, mut f: impl FnMut(&mut MRef)) {
             f(a);
             f(b);
         }
-        MicroOp::Bin2 { .. }
-        | MicroOp::Bin3 { .. }
-        | MicroOp::Scan { .. }
-        | MicroOp::Load { .. } => {
+        MicroOp::Bin2 { .. } | MicroOp::Scan { .. } | MicroOp::Load { .. } => {
             unreachable!("a lane program holds no superops, scans or loads")
         }
     }
@@ -160,7 +157,6 @@ fn out_mut(op: &mut MicroOp) -> &mut GroupIx {
         | MicroOp::Mov { out, .. }
         | MicroOp::Select { out, .. }
         | MicroOp::Bin2 { out, .. }
-        | MicroOp::Bin3 { out, .. }
         | MicroOp::Load { out, .. }
         | MicroOp::Scan { out, .. } => out,
     }

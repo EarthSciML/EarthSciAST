@@ -20,9 +20,7 @@
 
 use std::fmt::Write as _;
 
-use earthsci_ast::{
-    DocumentFormat, expression_names, parse_equation, parse_expression, print_math,
-};
+use earthsci_ast::{DocumentFormat, parse_math, print_math};
 use serde_json::Value;
 
 use crate::assemble::{QuantityInfo, Role};
@@ -390,7 +388,7 @@ fn whole(d: &Directive, out: &BuildOutput, opts: &RenderOptions, in_scope: Optio
             ),
             None => String::new(),
         },
-        "esm-example" => example_block(&d.content),
+        "esm-example" => example_block(&d.content, &example_names(d)),
         _ => String::new(),
     }
 }
@@ -434,42 +432,37 @@ fn variables_table(quantities: &[&QuantityInfo]) -> String {
     out
 }
 
-/// One expression in each of its forms: as written in the text syntax, as the
-/// mathematics the ESM Markdown format writes for it (the core's printer,
-/// with the expression's own names declared), and as the JSON the format
-/// stores. Parsing it here is what keeps a reference page from drifting away
-/// from the parser.
-fn example_block(text: &str) -> String {
-    // An equation and a bare expression are different types, and each is
-    // written to JSON the way an `.esm` file stores it.
-    let parsed = if text.contains('=') {
-        parse_equation(text)
-            .map(|eq| serde_json::to_value(&eq))
-            .map_err(|e| e.message)
-    } else {
-        parse_expression(text)
-            .map(|expr| serde_json::to_value(&expr))
-            .map_err(|e| e.message)
-    };
-    let parsed = parsed.map(|json| {
-        let json = json.unwrap_or_default();
-        let names = expression_names(&json);
-        (
-            print_math(&json, &names, DocumentFormat::Markdown),
-            serde_json::to_string_pretty(&json).unwrap_or_default(),
-        )
-    });
-    let (latex, json) = match parsed {
-        Ok((latex, json)) => (latex, json),
-        Err(message) => {
+/// The names an `::esm-example` declares: its `names` attribute, a
+/// space-separated list (`{names="E_a k_0"}`). A name of one letter reads as
+/// itself without being declared; a longer one must be.
+fn example_names(d: &Directive) -> Vec<String> {
+    d.attrs
+        .get("names")
+        .and_then(Value::as_str)
+        .map(|names| names.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// One expression in each of its forms: the LaTeX math it is written in, that
+/// math as the core prints it (the ESM Markdown format's notation, with
+/// `names` declared), and the JSON the format stores. Reading it here is what
+/// keeps a reference page from drifting away from the reader.
+fn example_block(latex: &str, names: &[String]) -> String {
+    // An equation reads as an object with `lhs` and `rhs`, a bare expression
+    // as itself, each the way an `.esm` file stores it.
+    let json = match parse_math(latex, names, DocumentFormat::Markdown) {
+        Ok(json) => json,
+        Err(e) => {
             return problem_block(&[Diagnostic::error(
-                "parse_error",
-                format!("`{text}` does not parse: {message}"),
+                e.code,
+                format!("`{latex}` does not read as LaTeX math: {}", e.message),
             )]);
         }
     };
+    let printed = print_math(&json, names, DocumentFormat::Markdown);
+    let json = serde_json::to_string_pretty(&json).unwrap_or_default();
     format!(
-        "<div class=\"esm-example\">\n\n```text\n{text}\n```\n\n\\[\n{latex}\n\\]\n\n<details class=\"esm-example__json\"><summary>As JSON</summary>\n\n```json\n{json}\n```\n\n</details>\n\n</div>\n"
+        "<div class=\"esm-example\">\n\n```latex\n{latex}\n```\n\n\\[\n{printed}\n\\]\n\n<details class=\"esm-example__json\"><summary>As JSON</summary>\n\n```json\n{json}\n```\n\n</details>\n\n</div>\n"
     )
 }
 
@@ -599,21 +592,38 @@ mod tests {
 
     #[test]
     fn an_example_shows_three_forms() {
-        let block = example_block("D(N, t) = -lambda*N");
+        let latex = "\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -\\lambda \\cdot N";
+        let block = example_block(latex, &["lambda".to_string()]);
         assert!(
-            block.contains("```text\nD(N, t) = -lambda*N\n```"),
+            block.contains(&format!("```latex\n{latex}\n```")),
             "{block}"
         );
+        // The core's printing, which writes a product by juxtaposition.
         assert!(
-            block.contains("\\frac{\\mathrm{d} N}{\\mathrm{d} t}"),
+            block.contains("\\[\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -\\lambda N\n\\]"),
             "{block}"
         );
-        assert!(block.contains("```json"), "{block}");
+        assert!(block.contains("\"lhs\""), "{block}");
+        assert!(block.contains("\"wrt\": \"t\""), "{block}");
     }
 
     #[test]
-    fn an_unparsable_example_says_so() {
-        let block = example_block("D(N, ");
-        assert!(block.contains("does not parse"), "{block}");
+    fn an_example_declares_its_long_names() {
+        let latex = "\\exp(-E_{\\mathrm{a}} / RT)";
+        let undeclared = example_block(latex, &[]);
+        assert!(
+            undeclared.contains("does not read as LaTeX math"),
+            "{undeclared}"
+        );
+        let block = example_block(latex, &["E_a".to_string(), "RT".to_string()]);
+        assert!(block.contains("\"E_a\""), "{block}");
+        assert!(block.contains("\"RT\""), "{block}");
+    }
+
+    #[test]
+    fn an_unreadable_example_says_so() {
+        let block = example_block("\\frac{N}{", &[]);
+        assert!(block.contains("does not read as LaTeX math"), "{block}");
+        assert!(block.contains("parse_error"), "{block}");
     }
 }

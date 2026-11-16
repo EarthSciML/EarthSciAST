@@ -2,8 +2,7 @@
 //! executors — the slow reference executor ([`super::refexec`], which pins the
 //! LOWERING) and the production fast executor ([`super::exec`], Step 3b,
 //! reached through a taped scratch + `debug_eval_rhs_into`) — and assert
-//! **bitwise** equality of `dy` against `evaluate_rhs_with_scratch`, the full
-//! legacy production path (vectorized overlay + runtime CSE), at several
+//! **bitwise** equality of `dy` against the interpreter at several
 //! random-but-seeded states and times. The fast-executor arm reuses ONE warm
 //! scratch across every state/time, so slab recycling, CONST-section
 //! retention and the section re-run discipline are all exercised.
@@ -12,216 +11,9 @@ use super::super::{ArrayCompiled, DimU, RhsStats};
 use super::ir::*;
 use super::refexec::{RefVal, run_reference};
 use super::taped;
-use crate::types::EsmFile;
+use super::test_support::*;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-
-fn typed(doc: serde_json::Value) -> EsmFile {
-    // Through `load`, not `serde_json::from_value`: load activates the AST
-    // interner, so structurally identical subtrees share one `Arc` — the
-    // property the pointer-keyed value numbering exploits (exactly as the
-    // production `load_path_with_options` path does).
-    crate::parse::load_string(&doc.to_string()).expect("fixture document loads")
-}
-
-pub(super) fn compile(doc: serde_json::Value) -> ArrayCompiled {
-    ArrayCompiled::from_file(&typed(doc)).expect("fixture compiles")
-}
-
-/// The production superop configuration (env-independent for tests).
-fn default_cfg() -> super::fuse::SuperopCfg {
-    super::fuse::SuperopCfg {
-        bin3: false,
-        ext_pairs: true,
-    }
-}
-
-/// Every superop enabled (the Bin3 A/B arm).
-fn all_superops_cfg() -> super::fuse::SuperopCfg {
-    super::fuse::SuperopCfg {
-        bin3: true,
-        ext_pairs: true,
-    }
-}
-
-/// Deterministic pseudo-random state in `[lo, hi)` (xorshift-style LCG).
-pub(super) fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
-    let mut x = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
-    (0..n)
-        .map(|_| {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            let u = (x >> 11) as f64 / (1u64 << 53) as f64;
-            lo + u * (hi - lo)
-        })
-        .collect()
-}
-
-/// The counterpart of [`ab_check`] for a document the tape cannot lower:
-/// BOTH builds (fused and unfused) must decline and leave no program, and a
-/// scratch asked for a tape must be refused, naming the declined rule — never
-/// handed back without a tape to run the legacy evaluator. Returns the fused
-/// build's decline.
-pub(super) fn declined_check(doc: serde_json::Value) -> DeclinedTape {
-    let compiled = compile(doc);
-    let (fused, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
-    let (unfused, _) = compiled.build_tape_opts(&HashSet::new(), None);
-    let Err(declined) = fused else {
-        panic!("the fixture must decline a rule:\n{report}");
-    };
-    assert!(unfused.is_err(), "the unfused build must decline too");
-    assert_refused(&compiled, &declined);
-    declined
-}
-
-/// A scratch asked of a model whose tape declined is refused with
-/// `compiler_refused_rule`, naming the first declined rule and its reason.
-fn assert_refused(compiled: &ArrayCompiled, declined: &DeclinedTape) {
-    let (rule, reason) = declined
-        .declined_rules()
-        .into_iter()
-        .next()
-        .expect("a declined tape names at least one rule");
-    match compiled.debug_new_scratch_taped() {
-        Ok(_) => panic!("a declined build must not hand back a scratch"),
-        Err(crate::simulate::SimulateError::Compile(
-            crate::compile_error::CompileError::CompilerRefusedRule {
-                rule: r,
-                reason: why,
-                ..
-            },
-        )) => {
-            assert_eq!(r, rule);
-            assert_eq!(why, reason);
-        }
-        Err(e) => panic!("expected compiler_refused_rule, got {e:?}"),
-    }
-}
-
-/// Build BOTH tapes (fused and unfused), each of which must lower every rule,
-/// and assert bitwise `dy` equality against the production interpreter over
-/// several seeded states and times — for BOTH executors on BOTH programs:
-/// the reference executor (fresh run per state) and the Step 3b fast
-/// executor (one warm taped scratch per program across all of them). Returns
-/// the FUSED program.
-pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram {
-    let compiled = compile(doc);
-    let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
-    let (prog_uf, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
-    assert!(
-        prog_uf.fused.is_empty() && prog_uf.fuse_stats.n_groups == 0,
-        "the unfused build must not fuse"
-    );
-    assert!(
-        prog.instrs.len() <= prog_uf.instrs.len(),
-        "fusion must not grow the program"
-    );
-    let n = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast_scratch = compiled
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    assert!(fast_scratch.has_tape(), "fixture scratch must carry a tape");
-    // A second warm fast scratch carrying the UNFUSED program.
-    let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_uf.install_tape(std::sync::Arc::new(prog_uf));
-    let prog_uf = {
-        // Rebuild for the reference arm (the scratch consumed the first).
-        taped(compiled.build_tape_opts(&HashSet::new(), None)).0
-    };
-    // The fused program as lowered, without the state-layout alignment
-    // (`layout`), which `prog` may carry: both storage orders must agree.
-    let rm_build =
-        || taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0;
-    let prog_rm = rm_build();
-    assert!(!prog_rm.col_major);
-    let mut fast_rm = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_rm.install_tape(std::sync::Arc::new(rm_build()));
-    let mut fast_stats = RhsStats::default();
-    for seed in 0..4u64 {
-        let state = seeded_state(n, seed, lo, hi);
-        for &t in &[0.0, 0.37, 2.5] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
-            for (label, p) in [
-                ("fused", &prog),
-                ("unfused", &prog_uf),
-                ("row-major fused", &prog_rm),
-            ] {
-                let mut dy = vec![0.0f64; n];
-                run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
-                for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
-                    assert_eq!(
-                        a.to_bits(),
-                        b.to_bits(),
-                        "seed {seed} t {t}: dy[{k}] diverged: {label} tape-ref {a:?} \
-                         ({:016x}) vs interpreter {b:?} ({:016x})",
-                        a.to_bits(),
-                        b.to_bits()
-                    );
-                }
-            }
-            for (label, scratch) in [
-                ("fused", &mut fast_scratch),
-                ("unfused", &mut fast_uf),
-                ("row-major fused", &mut fast_rm),
-            ] {
-                let mut dy_fast = vec![0.0f64; n];
-                compiled.debug_eval_rhs_into(
-                    &state,
-                    t,
-                    &param_vec,
-                    &mut dy_fast,
-                    scratch,
-                    &mut fast_stats,
-                );
-                for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
-                    assert_eq!(
-                        a.to_bits(),
-                        b.to_bits(),
-                        "seed {seed} t {t}: dy[{k}] diverged: {label} FAST exec {a:?} \
-                         ({:016x}) vs interpreter {b:?} ({:016x})",
-                        a.to_bits(),
-                        b.to_bits()
-                    );
-                }
-            }
-            // Every instruction split three wide, whatever its size, is the
-            // serial executor bit for bit.
-            #[cfg(not(target_arch = "wasm32"))]
-            for (label, scratch) in [
-                ("fused split", &mut fast_scratch),
-                ("row-major fused split", &mut fast_rm),
-            ] {
-                let mut dy_split = vec![0.0f64; n];
-                super::exec::force_split(Some(3));
-                compiled.debug_eval_rhs_into(
-                    &state,
-                    t,
-                    &param_vec,
-                    &mut dy_split,
-                    scratch,
-                    &mut fast_stats,
-                );
-                super::exec::force_split(None);
-                for (k, (a, b)) in dy_split.iter().zip(dy_ref.iter()).enumerate() {
-                    assert_eq!(
-                        a.to_bits(),
-                        b.to_bits(),
-                        "seed {seed} t {t}: dy[{k}] diverged: {label} exec {a:?} vs \
-                         interpreter {b:?}"
-                    );
-                }
-            }
-        }
-    }
-    assert!(
-        fast_stats.taped_rules > 0,
-        "the fast executor must have run"
-    );
-    prog
-}
 
 /// The periodic-wrap index idiom the lat-lon discretization emits:
 /// `ifelse(inner < lo, inner + P, ifelse(inner > hi, inner - P, inner))`.
@@ -1575,7 +1367,7 @@ fn makearray_prefix_scan_region_is_linear_in_the_column() {
     let n = 3000;
     for variant in ["from_bottom", "to_top", "shifted"] {
         let compiled = compile(makearray_scan_doc(n, 0, variant));
-        let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
+        let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg())));
         let widest = prog.slots.iter().map(|s| s.elems()).max().unwrap_or(0);
         assert!(
             widest <= n as usize + 1,
@@ -2041,7 +1833,7 @@ fn ab_pre_reduction_absorbed_only_for_own_column_reads() {
         .join("../../tests/conformance/scaling/fixtures/column_sum/column_sum_N1000.esm");
     let file = crate::parse::load_path(&path).expect("scaling fixture loads");
     let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
-    let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0;
+    let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0;
     assert!(
         prog.fused.iter().any(|f| f.pre.is_some()),
         "column_sum: the column sum is absorbed"
@@ -2608,18 +2400,17 @@ fn export_demotion_skips_unread_publishes() {
     );
 }
 
-/// Step 4b superop composition: arith three-op chains must merge into `Bin3`
-/// and the extended (mask / clamp) pairs into `Bin2`, with bitwise `dy`
-/// equality across fused/unfused programs on BOTH executors (the fixture
-/// A/B) — the superops apply the identical scalar kernels in the identical
-/// order, so no bit may move.
+/// Superop composition: arith chains and the extended (mask / clamp) pairs
+/// merge into `Bin2`, with bitwise `dy` equality across fused/unfused
+/// programs on BOTH executors (the fixture A/B) — a superop applies the
+/// identical scalar kernels in the identical order, so no bit may move.
 #[test]
-fn ab_superop_bin3_and_extended_pairs() {
+fn ab_superop_extended_pairs() {
     let n = 9;
     let u = idx("u", json!("i"));
     let v = idx("v", json!("i"));
     // ((u * 2.5 + v) * u - 1.5) / (v + 3.0): a four-op arith chain plus a
-    // divisor — long enough that a Bin3 must form.
+    // divisor.
     let chain = json!({"op": "/", "args": [
         {"op": "-", "args": [
             {"op": "*", "args": [
@@ -2651,14 +2442,9 @@ fn ab_superop_bin3_and_extended_pairs() {
             ]
         }}
     });
-    // Default configuration (ext pairs on, Bin3 off) through the standard
-    // fixture A/B: fused + unfused × reference + fast executors.
-    let prog = ab_check(doc.clone(), -3.0, 3.0);
-    let has_bin3 = |p: &TapeProgram| {
-        p.fused
-            .iter()
-            .any(|f| f.micro.iter().any(|m| matches!(m, MicroOp::Bin3 { .. })))
-    };
+    // Default configuration (ext pairs on) through the standard fixture
+    // A/B: fused + unfused × reference + fast executors.
+    let prog = ab_check(doc, -3.0, 3.0);
     let has_ext_bin2 = prog.fused.iter().any(|f| {
         f.micro.iter().any(|m| {
             matches!(m, MicroOp::Bin2 { op1, op2, .. }
@@ -2671,67 +2457,6 @@ fn ab_superop_bin3_and_extended_pairs() {
         has_ext_bin2,
         "expected an extended-pair Bin2 ((Mul,Gt) or (Min,Max)) in the fused program"
     );
-    assert!(
-        !has_bin3(&prog),
-        "Bin3 must stay off in the default configuration"
-    );
-
-    // The Bin3 arm (`all_superops_cfg`, the `ESS_TAPE_BIN3=1` threshold): the
-    // three-op chain must merge, splat registers must be provisioned, and
-    // BOTH executors must stay bitwise equal to the production interpreter.
-    let compiled = compile(doc);
-    let (prog3, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg())));
-    assert!(
-        has_bin3(&prog3),
-        "expected a Bin3 superop with bin3 enabled"
-    );
-    for f in &prog3.fused {
-        let has3 = f.micro.iter().any(|m| matches!(m, MicroOp::Bin3 { .. }));
-        if has3 {
-            assert_eq!(f.n_splat_regs as usize, f.scalars.len() + 1);
-        } else {
-            assert_eq!(f.n_splat_regs, 0);
-        }
-    }
-    let n_state = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast3 = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast3.install_tape(std::sync::Arc::new(
-        taped(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg()))).0,
-    ));
-    let mut stats = RhsStats::default();
-    for seed in 0..4u64 {
-        let state = seeded_state(n_state, seed, -3.0, 3.0);
-        for &t in &[0.0, 0.37, 2.5] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
-            let mut dy = vec![0.0f64; n_state];
-            run_reference(&prog3, &compiled, &state, &param_vec, t, &mut dy);
-            for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "seed {seed} t {t}: dy[{k}] diverged: bin3 tape-ref vs interpreter"
-                );
-            }
-            let mut dy_fast = vec![0.0f64; n_state];
-            compiled.debug_eval_rhs_into(
-                &state,
-                t,
-                &param_vec,
-                &mut dy_fast,
-                &mut fast3,
-                &mut stats,
-            );
-            for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "seed {seed} t {t}: dy[{k}] diverged: bin3 FAST exec vs interpreter"
-                );
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2760,15 +2485,13 @@ fn bcast_doc(name: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
     })
 }
 
-/// `dy` from all three evaluation paths: the per-cell oracle (`force_scalar`),
-/// the whole-array vectorized overlay, and the tape (reference executor over
-/// the FUSED program). Returns them in that order.
-fn dy_three_ways(doc: serde_json::Value, state: &[f64]) -> [Vec<f64>; 3] {
+/// `dy` from both evaluation paths: the interpreter and the tape (reference
+/// executor over the FUSED program). Returns them in that order.
+fn dy_two_ways(doc: serde_json::Value, state: &[f64]) -> [Vec<f64>; 2] {
     let compiled = compile(doc);
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let (dy_oracle, _) = compiled.debug_eval_rhs(state, 0.0, &params);
-    let (dy_vec, _) = compiled.debug_eval_rhs(state, 0.0, &params);
     let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(
         report.fallbacks.is_empty(),
@@ -2777,31 +2500,18 @@ fn dy_three_ways(doc: serde_json::Value, state: &[f64]) -> [Vec<f64>; 3] {
     );
     let mut dy_tape = vec![0.0f64; state.len()];
     run_reference(&prog, &compiled, state, &param_vec, 0.0, &mut dy_tape);
-    [dy_oracle, dy_vec, dy_tape]
-}
-
-fn assert_bits_eq(a: &[f64], b: &[f64], what: &str) {
-    assert_eq!(a.len(), b.len(), "{what}: length");
-    for (k, (x, y)) in a.iter().zip(b.iter()).enumerate() {
-        assert_eq!(
-            x.to_bits(),
-            y.to_bits(),
-            "{what}: dy[{k}] diverged: {x:?} ({:016x}) vs {y:?} ({:016x})",
-            x.to_bits(),
-            y.to_bits()
-        );
-    }
+    [dy_oracle, dy_tape]
 }
 
 /// The regression itself. For each unary scalar operator `F`, the tendency
 /// `broadcast(fn = F, [s])` must be BIT-IDENTICAL to the bare `F(s)` — on the
-/// per-cell oracle, on the vectorized overlay, and on the tape.
+/// interpreter and on the tape.
 ///
-/// Before the fix all three folded `args` through the BINARY kernel table, so a
+/// Before the fix every path folded `args` through the BINARY kernel table, so a
 /// single-element fold degenerated to the identity and every one of these
 /// returned `s` unchanged (issue #101).
 #[test]
-fn unary_broadcast_matches_the_bare_node_on_all_three_paths() {
+fn unary_broadcast_matches_the_bare_node_on_both_paths() {
     let n = 6i64;
     // `s = 0.5 * u` and `u ∈ [0.25, 3)`, so every operand is inside the domain
     // of `log`/`sqrt` and no NaN can mask a divergence.
@@ -2815,20 +2525,18 @@ fn unary_broadcast_matches_the_bare_node_on_all_three_paths() {
         let bare = json!({"op": f, "args": [operand]});
         let bcast = json!({"op": "broadcast", "fn": f, "args": [operand]});
 
-        let [o_bare, v_bare, t_bare] = dy_three_ways(bcast_doc("bare", n, bare), &state);
-        let [o_bc, v_bc, t_bc] = dy_three_ways(bcast_doc("bcast", n, bcast), &state);
+        let [o_bare, t_bare] = dy_two_ways(bcast_doc("bare", n, bare), &state);
+        let [o_bc, t_bc] = dy_two_ways(bcast_doc("bcast", n, bcast), &state);
 
         // Each path agrees with itself across the two spellings …
         assert_bits_eq(&o_bc, &o_bare, &format!("fn `{f}`: oracle"));
-        assert_bits_eq(&v_bc, &v_bare, &format!("fn `{f}`: vectorized overlay"));
         assert_bits_eq(&t_bc, &t_bare, &format!("fn `{f}`: tape"));
-        // … and the three paths agree with each other.
-        assert_bits_eq(&v_bc, &o_bc, &format!("fn `{f}`: overlay vs oracle"));
+        // … and the two paths agree with each other.
         assert_bits_eq(&t_bc, &o_bc, &format!("fn `{f}`: tape vs oracle"));
 
         // Guard against a vacuous pass: `F` must actually CHANGE the operand,
         // otherwise "broadcast == bare" would hold even with the bug present.
-        let [o_id, _, _] = dy_three_ways(bcast_doc("id", n, idx("s", json!("i"))), &state);
+        let [o_id, _] = dy_two_ways(bcast_doc("id", n, idx("s", json!("i"))), &state);
         assert!(
             o_bare
                 .iter()
@@ -2884,10 +2592,9 @@ fn n_ary_broadcast_folds_are_unchanged() {
         ),
     ];
     for (label, bcast, bare) in cases {
-        let [o_bare, v_bare, t_bare] = dy_three_ways(bcast_doc("bare", n, bare), &state);
-        let [o_bc, v_bc, t_bc] = dy_three_ways(bcast_doc("bcast", n, bcast), &state);
+        let [o_bare, t_bare] = dy_two_ways(bcast_doc("bare", n, bare), &state);
+        let [o_bc, t_bc] = dy_two_ways(bcast_doc("bcast", n, bcast), &state);
         assert_bits_eq(&o_bc, &o_bare, &format!("{label}: oracle"));
-        assert_bits_eq(&v_bc, &v_bare, &format!("{label}: vectorized overlay"));
         assert_bits_eq(&t_bc, &t_bare, &format!("{label}: tape"));
     }
 }
@@ -2900,7 +2607,7 @@ fn unary_broadcast_minus_negates() {
     let n = 3i64;
     let state = vec![1.0, 2.0, 4.0];
     let rhs = json!({"op": "broadcast", "fn": "-", "args": [idx("s", json!("i"))]});
-    for dy in dy_three_ways(bcast_doc("neg_check", n, rhs), &state) {
+    for dy in dy_two_ways(bcast_doc("neg_check", n, rhs), &state) {
         assert_bits_eq(&dy, &[-0.5, -1.0, -2.0], "broadcast(fn=\"-\") must negate");
     }
 }
@@ -2909,11 +2616,6 @@ fn unary_broadcast_minus_negates() {
 // Phase 2 tape growth: `Instr::ConstArray`, `Instr::Reduce`, and the observed
 // shapes that let a reader of a per-cell-produced observed stay on the tape.
 // ---------------------------------------------------------------------------
-
-/// How many instructions of a given opcode the program carries.
-fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
-}
 
 /// Every fold of the program, as `(source box, folded leading axes, output
 /// slot)`: an `Instr::Reduce`, or one a fused group absorbed (which folds its
@@ -3170,7 +2872,7 @@ fn ab_elementwise_observed_gather_fixture() {
     );
     let file = crate::parse::load_path(&path).expect("corpus fixture loads");
     let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
-    for (label, fuse) in [("fused", Some(default_cfg())), ("unfused", None)] {
+    for (label, fuse) in [("fused", Some(superop_cfg())), ("unfused", None)] {
         let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), fuse));
         assert!(
             report.fallbacks.is_empty(),
@@ -3319,7 +3021,7 @@ fn ab_fused_box_past_u16_splits_into_groups() {
         "the fixture must put more scalar operands on the box than one group can index ({scalars})"
     );
     for f in &prog.fused {
-        let regs = f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize;
+        let regs = f.n_regs as usize + f.n_load_regs as usize;
         assert!(
             f.micro.len() < GroupIx::MAX as usize
                 && f.scalars.len() < GroupIx::MAX as usize
@@ -3502,7 +3204,7 @@ fn ab_float32_variables_beside_float64_neighbours() {
         .expect("the fixture declares element types");
     let _env = env.enter();
     let compiled = ArrayCompiled::from_file(&annotated).expect("fixture compiles");
-    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
+    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg())));
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
     assert_eq!(prog.precision.len(), prog.instrs.len());
     assert!(prog.precision.contains(&Precision::Float32));
@@ -3519,9 +3221,7 @@ fn ab_float32_variables_beside_float64_neighbours() {
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, -1.0, 1.0);
         let (want, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
-        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
-        assert_eq!(bits(&want), bits(&oracle), "seed {seed}: overlay vs oracle");
         for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
             let mut dy = vec![0.0f64; n];
             run_reference(p, &compiled, &state, &param_vec, 0.0, &mut dy);
@@ -3722,9 +3422,9 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let progs = [
-        taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+        taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0,
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
-        taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0,
+        taped(compiled.build_tape_layout(&HashSet::new(), Some(superop_cfg()), false)).0,
     ];
     assert!(
         progs[0]
@@ -3760,10 +3460,10 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
             );
             let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
             scratch.install_tape(std::sync::Arc::new(match k {
-                0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+                0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0,
                 1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
                 _ => {
-                    taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0
+                    taped(compiled.build_tape_layout(&HashSet::new(), Some(superop_cfg()), false)).0
                 }
             }));
             let mut dy_fast = vec![0.0f64; n];
@@ -3839,9 +3539,9 @@ fn assert_fault_parity(doc: serde_json::Value, times: &[f64]) -> TapeProgram {
     let n = compiled.state_variable_names().len();
     let param_vec = compiled.debug_resolve_params(&HashMap::new());
     let build = |k: usize| match k {
-        0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+        0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0,
         1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
-        _ => taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0,
+        _ => taped(compiled.build_tape_layout(&HashSet::new(), Some(superop_cfg()), false)).0,
     };
     let state = seeded_state(n, 7, -1.0, 1.0);
     for &t in times {

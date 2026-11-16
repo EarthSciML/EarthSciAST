@@ -10,7 +10,7 @@ import (
 // List a document's models and variables, then classify the variables
 // (esm-spec §6.3.1): ODE states, observed and algebraic unknowns, parameters.
 func Example_inspect() {
-	// region: inspect ops=load_path,ode_states,observed_unknowns,algebraic_unknowns,constant_parameters,is_ode_state,observed_definition,to_ascii
+	// region: inspect ops=load_path,ode_states,observed_unknowns,algebraic_unknowns,constant_parameters,is_ode_state,observed_definition,print_math
 	doc, err := esm.LoadPath(fixture("decay.esm"))
 	if err != nil {
 		log.Fatal(err)
@@ -26,7 +26,7 @@ func Example_inspect() {
 
 		fmt.Println(esm.IsODEState(&model, "N"), esm.IsODEState(&model, "half_life"))
 		if def, ok := esm.ObservedDefinition(&model, "half_life"); ok {
-			fmt.Println("half_life =", esm.ToASCII(def))
+			fmt.Println("half_life =", esm.PrintMath(def, esm.ExpressionNames(def), esm.DocumentTypst))
 		}
 	}
 	// endregion
@@ -38,5 +38,5 @@ func Example_inspect() {
 	// algebraic: []
 	// constant parameters: [lambda]
 	// true false
-	// half_life = log(2) / lambda
+	// half_life = ln(2)/lambda
 }

@@ -330,8 +330,8 @@ mod tests {
         // The unknown and BOTH competing equations are named, so the author can
         // see which two definitions to choose between.
         assert!(msg.contains("'x'"), "{msg}");
-        assert!(msg.contains("D(x)/Dt ~ k"), "{msg}");
-        assert!(msg.contains("x ~ k * 2"), "{msg}");
+        assert!(msg.contains("(dif x)/(dif t) = k"), "{msg}");
+        assert!(msg.contains("x = k dot 2"), "{msg}");
         // The array runtime refuses on its flattened entry too, not just through
         // `esm_problem`.
         let flat = crate::flatten(&file).expect("flatten fixture");

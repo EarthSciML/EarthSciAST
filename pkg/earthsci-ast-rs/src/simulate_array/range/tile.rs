@@ -161,32 +161,12 @@ pub(super) fn refused(reason: String) -> SimulateError {
 /// A declined restricted tape, as the error its first decline names: a
 /// range diagnostic when the lowering raised one, else `compiler_refused_rule`.
 pub(super) fn declined_error(d: &DeclinedTape, what: &str) -> SimulateError {
-    let declined: Vec<(usize, &String)> = d
-        .reasons
-        .iter()
-        .enumerate()
-        .filter_map(|(k, r)| r.as_ref().map(|r| (k, r)))
-        .collect();
     for code in [codes::RANGE_HALO_INSUFFICIENT, codes::RANGE_GLOBAL_LOCALITY] {
-        if let Some((k, r)) = declined.iter().find(|(_, r)| r.starts_with(code)) {
-            let msg = r.trim_start_matches(code).trim_start_matches(':').trim();
-            return range_error(code, format!("{} (rule `{}`)", msg, d.rules[*k].name));
+        if let Some((rule, why)) = d.declines().find(|(_, why)| why.code == Some(code)) {
+            return range_error(code, format!("{} (rule `{}`)", why.reason, rule.name));
         }
     }
-    let (k, reason) = declined[0];
-    let rule = &d.rules[k];
-    let reason = if reason.contains(what) {
-        reason.clone()
-    } else {
-        format!("{what}: {reason}")
-    };
-    SimulateError::Compile(crate::compile_error::CompileError::CompilerRefusedRule {
-        compiler: "native",
-        kind: rule.kind_name(),
-        rule: rule.name.clone(),
-        tier: rule.cadence_name(),
-        reason,
-    })
+    d.refusal("native", Some(what))
 }
 
 /// The per-cut-set owned and storage ranges of a validated box.

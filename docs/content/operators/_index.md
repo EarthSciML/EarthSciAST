@@ -16,9 +16,9 @@ An operator node always has `op` and `args`. Some operators take extra named
 fields — `wrt` on `D`, `output_idx`/`ranges` on `faq`, `regions`/`values`
 on `makearray` — which are listed on each operator's page.
 
-**Text**
-```text
-k * A * B
+**LaTeX**
+```latex
+k A B
 ```
 **JSON**
 ```json
@@ -42,25 +42,30 @@ A rewrite-target operator gets no privileges: its result dimension is unknown
 until it is lowered, and no binding may special-case its name. A custom op
 carries its scheme parameters in `attrs` rather than in dedicated fields.
 
-## Text form
+## Document math
 
-Every example on these pages is one expression shown two ways: a block labelled
-**Text**, the notation an author writes, followed by a block labelled **JSON**,
-the node it denotes. They are not two different examples, and they are not
-independent — each pair is checked with the shipped `parse_expression` and
-`to_ascii`, which are inverses, so the text parses to exactly the JSON shown and
-the JSON prints back to exactly the text.
+Most examples on these pages are one expression shown two ways: a block
+labelled **LaTeX**, the math an ESM Markdown document writes for it (the
+content of a `$$` display), followed by a block labelled **JSON**, the node it
+denotes. They are not two different examples: the LaTeX is what
+`print_math(json, expression_names(json), markdown)` prints for the JSON, and
+`parse_math` reads it back to exactly that JSON (a top-level `=` reads back as
+an equation's two sides). The pairs were produced by the printer, and nothing
+checks them automatically afterwards; the JSON is the definition. A Typst
+document writes the same expression in Typst math (`print_math` with format
+`typst`).
 
-Multiplication is always explicit (`k * A`, never `kA`), because identifiers are
-multi-letter.
+A name of more than one letter is read only when the component declares it, so
+juxtaposition is multiplication (`k A B`), and a multi-letter name prints
+italic (`\mathit{lat}`) or with an upright subscript (`x_{\mathrm{min}}`).
 
-A **JSON block with no Text partner** is a form the text notation cannot spell
-today. `broadcast` and `enum` have no surface of their own — the first prints as
-the operator it applies, the second as a dotted name that re-parses as a scoped
-variable reference. And a few forms lose
-a field on the way out: a `D` carrying trailing boundary operands, a `grad`
-carrying `dim`, and an `overlap` join. Whole `.esm` documents are shown as JSON
-throughout; the text notation covers expressions and equations, not files.
+A **JSON block with no LaTeX partner** is a node the math notation has no
+notation of its own for: `broadcast`, `makearray`, `reshape`, `transpose`,
+`concat`, a `faq` with a non-default semiring or a `join`, and a few others. A
+document still spells such a node losslessly, with the generic
+`\esm{op}{fields}{args}` form, which carries the node's fields as JSON; the
+page shows the JSON alone. Whole `.esm` documents are shown as JSON
+throughout.
 
 ## Index
 

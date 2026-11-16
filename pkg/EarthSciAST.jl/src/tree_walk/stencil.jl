@@ -923,8 +923,7 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
         kvals = Int[_eval_const_int(a, ctx.idx_env, ctx.const_arrays) for a in kargs]
         r, region = _select_region(producer, kvals)
         r == 0 && return NumExpr(0.0)   # no region covers → makearray default
-        values = producer.values === nothing ? ASTExpr[] : producer.values
-        sel = values[r]
+        sel = _bind_makearray_loop(producer, producer.values[r], kargs)
         if _is_array_producer(sel)
             re = sel::OpExpr
             rank = re.op == "makearray" ?
@@ -1239,8 +1238,7 @@ function _branch_key_indexed!(
         r, region = _select_region(producer, kvals)
         print(io, 'M', r, ';')
         r == 0 && return
-        values = producer.values === nothing ? ASTExpr[] : producer.values
-        sel = values[r]
+        sel = _bind_makearray_loop(producer, producer.values[r], kargs)
         if _is_array_producer(sel)
             re = sel::OpExpr
             # §9.6.8 reduced-rank region value: key it at the region's

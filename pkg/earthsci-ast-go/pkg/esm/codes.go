@@ -668,19 +668,6 @@ const (
 	LevelWarning = "warning"
 )
 
-// --- Render format discriminator (display.go; compared ~50× as a bare
-// string). ---
-const (
-	FmtUnicode = "unicode"
-	FmtLatex   = "latex"
-	FmtASCII   = "ascii"
-	// FmtUnicodeSpaced is FmtUnicode with the multiplication operator rendered
-	// as " · " (spaced) instead of "·". The spacing is applied where the
-	// operator is emitted, so it never touches a "·" occurring inside a
-	// variable name or chemical formula.
-	FmtUnicodeSpaced = "unicode_spaced"
-)
-
 // DiagnosticError is implemented by the package's code-bearing error types
 // (EvaluationError, ExpressionTemplateError, RuleEngineError, EnumLoweringError,
 // CoupleMultiplicativeNoTendencyError, OperatorComposeNoMergeError,

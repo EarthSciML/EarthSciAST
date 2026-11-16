@@ -14,9 +14,9 @@ All of these are elementwise: applied to an array operand they act per element.
 | `log10` | 1 | base-10 logarithm |
 | `sqrt` | 1 | square root |
 
-**Text**
-```text
-exp(0)
+**LaTeX**
+```latex
+\exp(0)
 ```
 **JSON**
 ```json
@@ -24,9 +24,9 @@ exp(0)
 ```
 → `1.0`.
 
-**Text**
-```text
-sqrt(9)
+**LaTeX**
+```latex
+\sqrt{9}
 ```
 **JSON**
 ```json
@@ -36,9 +36,9 @@ sqrt(9)
 
 `log` is the natural logarithm — here a log-pressure vertical coordinate:
 
-**Text**
-```text
-log(p0 / p)
+**LaTeX**
+```latex
+\ln(\frac{\mathit{p0}}{p})
 ```
 **JSON**
 ```json
@@ -47,9 +47,9 @@ log(p0 / p)
 
 `log10` is base 10 — here pH from hydrogen-ion activity:
 
-**Text**
-```text
--log10(H_plus)
+**LaTeX**
+```latex
+-\log_{10}(H_{\mathrm{plus}})
 ```
 **JSON**
 ```json
@@ -58,9 +58,9 @@ log(p0 / p)
 
 The classic Arrhenius rate:
 
-**Text**
-```text
-A * exp((-Ea) / (R * T))
+**LaTeX**
+```latex
+A \exp(\frac{-\mathit{Ea}}{R T})
 ```
 **JSON**
 ```json
@@ -89,9 +89,9 @@ return a dimensionless result. `sqrt` halves its argument's dimension.
 
 The cosine of the solar zenith angle, the canonical use of the circular family:
 
-**Text**
-```text
-sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(hour)
+**LaTeX**
+```latex
+\sin(\mathit{lat}) \sin(\mathit{dec}) + \cos(\mathit{lat}) \cos(\mathit{dec}) \cos(\mathit{hour})
 ```
 **JSON**
 ```json
@@ -107,9 +107,9 @@ sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(hour)
 }
 ```
 
-**Text**
-```text
-tan(slope)
+**LaTeX**
+```latex
+\tan(\mathit{slope})
 ```
 **JSON**
 ```json
@@ -118,27 +118,27 @@ tan(slope)
 
 The inverses go the other way — an angle out of a dimensionless ratio:
 
-**Text**
-```text
-acos(cos_sza)
+**LaTeX**
+```latex
+\arccos(\mathit{cos\_sza})
 ```
 **JSON**
 ```json
 { "op": "acos", "args": ["cos_sza"] }
 ```
 
-**Text**
-```text
-asin(z / r)
+**LaTeX**
+```latex
+\arcsin(\frac{z}{r})
 ```
 **JSON**
 ```json
 { "op": "asin", "args": [{ "op": "/", "args": ["z", "r"] }] }
 ```
 
-**Text**
-```text
-atan(dz_dx)
+**LaTeX**
+```latex
+\arctan(\mathit{dz\_dx})
 ```
 **JSON**
 ```json
@@ -147,9 +147,9 @@ atan(dz_dx)
 
 `atan2` is the quadrant-aware form, and takes `y` first:
 
-**Text**
-```text
-atan2(y, x)
+**LaTeX**
+```latex
+\operatorname{atan2}(y, x)
 ```
 **JSON**
 ```json
@@ -170,18 +170,18 @@ angle.
 transcendental, so all require a dimensionless argument and return a
 dimensionless result.
 
-**Text**
-```text
-tanh(z)
+**LaTeX**
+```latex
+\tanh(z)
 ```
 **JSON**
 ```json
 { "op": "tanh", "args": ["z"] }
 ```
 
-**Text**
-```text
-sinh(z) / cosh(z)
+**LaTeX**
+```latex
+\frac{\sinh(z)}{\cosh(z)}
 ```
 **JSON**
 ```json
@@ -194,27 +194,27 @@ sinh(z) / cosh(z)
 `asinh` is defined for all reals, which makes it a useful signed log-like
 transform for a quantity that changes sign:
 
-**Text**
-```text
-asinh(x / x0)
+**LaTeX**
+```latex
+\operatorname{asinh}(\frac{x}{\mathit{x0}})
 ```
 **JSON**
 ```json
 { "op": "asinh", "args": [{ "op": "/", "args": ["x", "x0"] }] }
 ```
 
-**Text**
-```text
-acosh(g)
+**LaTeX**
+```latex
+\operatorname{acosh}(g)
 ```
 **JSON**
 ```json
 { "op": "acosh", "args": ["g"] }
 ```
 
-**Text**
-```text
-atanh(r)
+**LaTeX**
+```latex
+\operatorname{atanh}(r)
 ```
 **JSON**
 ```json
@@ -235,9 +235,9 @@ specification. The same is true of `asin`/`acos` outside `[-1, 1]`.
 | `abs` | 1 | absolute value |
 | `sign` | 1 | `-1.0`, `0.0`, or `1.0` |
 
-**Text**
-```text
-floor(x)
+**LaTeX**
+```latex
+\lfloor x\rfloor
 ```
 **JSON**
 ```json
@@ -245,9 +245,9 @@ floor(x)
 ```
 With `x=2.7` → `2.0`.
 
-**Text**
-```text
-ceil(x)
+**LaTeX**
+```latex
+\lceil x\rceil
 ```
 **JSON**
 ```json
@@ -255,9 +255,9 @@ ceil(x)
 ```
 With `x=2.7` → `3.0`.
 
-**Text**
-```text
-abs(x)
+**LaTeX**
+```latex
+\left|x\right|
 ```
 **JSON**
 ```json
@@ -265,9 +265,9 @@ abs(x)
 ```
 With `x=-3` → `3.0`.
 
-**Text**
-```text
-sign(x)
+**LaTeX**
+```latex
+\operatorname{sign}(x)
 ```
 **JSON**
 ```json
@@ -292,9 +292,9 @@ compare by exact equality, so the float must be reduced to an integer first.
 Both are **n-ary with arity ≥ 2**; a binding must reject a one-argument `min` or
 `max`.
 
-**Text**
-```text
-min(a, b, c)
+**LaTeX**
+```latex
+\min(a, b, c)
 ```
 **JSON**
 ```json
@@ -302,9 +302,9 @@ min(a, b, c)
 ```
 With `a=3, b=1, c=2` → `1.0`.
 
-**Text**
-```text
-max(a, b)
+**LaTeX**
+```latex
+\max(a, b)
 ```
 **JSON**
 ```json
@@ -316,9 +316,9 @@ With `a=3, b=1` → `3.0`.
 this way rather than as a template or new operator that
 re-implements it:
 
-**Text**
-```text
-min(max(x, lo), hi)
+**LaTeX**
+```latex
+\min(\max(x, \mathit{lo}), \mathit{hi})
 ```
 **JSON**
 ```json

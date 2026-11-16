@@ -27,10 +27,17 @@ import * as path from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { canonicalizeDocument } from './canonicalize.js'
-import { parseDocument, printDocument, printMath, type DocumentFormat } from './document/index.js'
+import {
+  expressionNames,
+  parseDocument,
+  parseMath,
+  printDocument,
+  printMath,
+  type DocumentFormat,
+} from './document/index.js'
 import { EsmDiagnosticError } from './errors.js'
-import { intLit, isIntLit, isNumericLiteral } from './numeric-literal.js'
-import { fixturesDir, readFixture } from './test-helpers.js'
+import { intLit } from './numeric-literal.js'
+import { fixturesDir, numberKinds, readFixture } from './test-helpers.js'
 
 const FILES = [
   'operators.json',
@@ -56,29 +63,8 @@ interface Case {
   math?: { latex: string; typst: string }
 }
 
-const INT64_BOUND = 2 ** 63
-
-/**
- * A JSON value with every number as its kind and value, an integer as a
- * `bigint`. A `NumericLiteral` keeps its kind, and a `bigint` (an integer past
- * 2^53) is an int; a plain number (an expected value) is an int when it is
- * integral and in Int64.
- */
-function typed(value: unknown): unknown {
-  if (typeof value === 'bigint') return { int: value }
-  if (isNumericLiteral(value)) {
-    return isIntLit(value) ? { int: BigInt(value.value) } : { float: value.value }
-  }
-  if (typeof value === 'number') {
-    const int = Number.isInteger(value) && value >= -INT64_BOUND && value < INT64_BOUND
-    return int ? { int: BigInt(value) } : { float: Object.is(value, -0) ? 0 : value }
-  }
-  if (Array.isArray(value)) return value.map(typed)
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, typed(v)]))
-  }
-  return value
-}
+/** Every number as its kind and value (see {@link numberKinds}). */
+const typed = numberKinds
 
 const parseTyped = (text: string, format: DocumentFormat): unknown =>
   typed(parseDocument(text, format, { canonical: true }))
@@ -125,9 +111,82 @@ describe('printMath reproduces the math of a display', () => {
         ]
         expect(printMath(eqs[0], names, 'markdown')).toBe(c.math!.latex)
         expect(printMath(eqs[0], names, 'typst')).toBe(c.math!.typst)
+        // ... and `parseMath` reads that math back to the equation.
+        const eq = typed(canonicalizeDocument(eqs[0]))
+        expect(typed(parseMath(c.math!.latex, names, 'markdown', { canonical: true }))).toEqual(eq)
+        expect(typed(parseMath(c.math!.typst, names, 'typst', { canonical: true }))).toEqual(eq)
       })
     }
   }
+})
+
+/** The diagnostic code `parseMath` raises, or `undefined` when it reads. */
+function mathRefusalCode(
+  text: string,
+  names: string[],
+  format: DocumentFormat,
+): string | undefined {
+  try {
+    parseMath(text, names, format)
+    return undefined
+  } catch (e) {
+    if (e instanceof EsmDiagnosticError) return e.code
+    throw e
+  }
+}
+
+describe('parseMath', () => {
+  it('reads an expression or an equation', () => {
+    const names = ['RT', 'k', 'y']
+    expect(parseMath('RT + k', names, 'markdown')).toEqual({ op: '+', args: ['RT', 'k'] })
+    // With its letters declared instead, a run of letters in LaTeX is their
+    // product; with neither, it is not read.
+    expect(parseMath('RT', ['R', 'T'], 'markdown')).toEqual({ op: '*', args: ['R', 'T'] })
+    expect(mathRefusalCode('RT', [], 'markdown')).toBe('parse_error')
+    expect(parseMath('y = 2 k', names, 'typst')).toEqual({
+      lhs: 'y',
+      rhs: { op: '*', args: [2, 'k'] },
+    })
+    for (const [text, format] of [
+      ['y = k', 'markdown'],
+      ['(dif y)/(dif t) = -k y', 'typst'],
+    ] as const) {
+      expect(printMath(parseMath(text, names, format), names, format)).toBe(text)
+    }
+  })
+
+  it('refuses as a document read does', () => {
+    const names = ['k']
+    expect(mathRefusalCode('k +', names, 'markdown')).toBe('parse_error')
+    expect(mathRefusalCode('1.0e400 k', names, 'typst')).toBe('parse_error')
+    expect(mathRefusalCode('\\operatorname{arrayop}(k)', names, 'markdown')).toBe('removed_op')
+    const deep = `${'('.repeat(50_000)}k${')'.repeat(50_000)}`
+    expect(mathRefusalCode(deep, names, 'typst')).toBe('parse_error')
+  })
+
+  it('gives numbers as the document readers do', () => {
+    const z = 2n ** 63n - 1n
+    const read = parseMath(`${z} k`, ['k'], 'typst', { canonical: true }) as { args: unknown[] }
+    expect(read.args[0]).toBe(z)
+    expect(typed(parseMath('2.0 k', ['k'], 'typst', { canonical: true }))).toEqual(
+      typed({ op: '*', args: [intLit(2), 'k'] }),
+    )
+  })
+})
+
+describe('expressionNames', () => {
+  it('lists the names under lhs, rhs and args in order of first use', () => {
+    const eq = {
+      lhs: { op: 'D', args: ['x'], wrt: 't' },
+      rhs: { op: '+', args: [{ op: '*', args: ['k', 'x'] }, 3, 'k', 'Emis.flux'] },
+    }
+    expect(expressionNames(eq)).toEqual(['x', 'k', 'Emis.flux'])
+    expect(expressionNames('y')).toEqual(['y'])
+    expect(expressionNames(2)).toEqual([])
+    expect(printMath(eq, expressionNames(eq), 'typst')).toBe(
+      printMath(eq, ['x', 'k', 'Emis.flux'], 'typst'),
+    )
+  })
 })
 
 describe('document format fixtures', () => {

@@ -18,8 +18,20 @@ from earthsci_ast import (
     substitute,
     validate,
 )
-from earthsci_ast.display import to_unicode, to_latex
+from earthsci_ast import expression_names, print_math, print_typst
+from earthsci_ast.serialize import _serialize_expression
 from earthsci_ast.parse import SchemaValidationError
+
+
+def _show(expr, fmt: str) -> str:
+    """An expression as math (``print_math``) under the names it uses."""
+    e = _serialize_expression(expr)
+    return print_math(e, expression_names(e), fmt)
+
+
+def _show_document(esm_file) -> str:
+    """A whole loaded file as Typst document text."""
+    return print_typst(json.loads(to_json(esm_file)))
 
 
 class TestFullWorkflowIntegration:
@@ -77,13 +89,11 @@ class TestFullWorkflowIntegration:
         assert ode_states(simple_model) == ["x"]
         assert observed_unknowns(simple_model) == ["y"]
         y_variable = observed_definitions(simple_model)["y"]
-        unicode_display = to_unicode(y_variable)
-        latex_display = to_latex(y_variable)
+        typst_display = _show(y_variable, "typst")
+        latex_display = _show(y_variable, "markdown")
 
-        assert unicode_display is not None
-        assert latex_display is not None
-        assert "+" in unicode_display
-        assert "x" in unicode_display and "param2" in unicode_display
+        assert "+" in typst_display and "+" in latex_display
+        assert "x" in typst_display and "param2" in typst_display
 
         # 4. Apply substitutions (test the basic substitute function)
         equation_rhs = simple_model.equations[0].rhs
@@ -142,13 +152,11 @@ class TestFullWorkflowIntegration:
         # 3. Display reaction rates
         rs = loaded_model.reaction_systems["simple_chemistry"]
         r2_rate = rs.reactions[1].rate_constant
-        unicode_rate = to_unicode(r2_rate)
-        latex_rate = to_latex(r2_rate)
+        typst_rate = _show(r2_rate, "typst")
+        latex_rate = _show(r2_rate, "markdown")
 
-        assert "k2" in unicode_rate and "B" in unicode_rate
-        # LaTeX renders a single letter followed by digits as a subscript
-        # (`k2` → `k_2`), matching the rendering contract (see `x1` → `x_1`).
-        assert "k_2" in latex_rate and "B" in latex_rate
+        assert "k" in typst_rate and "B" in typst_rate
+        assert "k" in latex_rate and "B" in latex_rate
 
         # 4. Save and re-validate (verify roundtrip)
         saved_json = to_json(loaded_model)
@@ -226,8 +234,8 @@ class TestFullWorkflowIntegration:
         # Schema validation should pass (structural warnings may exist)
         assert len(validation_result.schema_errors) == 0
 
-        # Rendering the model as text must work end-to-end
-        rendered = to_unicode(loaded_model)
+        # Printing the model as a document must work end-to-end
+        rendered = _show_document(loaded_model)
         assert rendered
 
         # Save and reload
@@ -275,8 +283,8 @@ class TestWorkflowRobustness:
         # Empty models may or may not be considered valid depending on validation rules
         assert validation_result is not None
 
-        # Should be able to render an empty model
-        rendered = to_unicode(loaded_model)
+        # Should be able to print an empty model
+        rendered = _show_document(loaded_model)
         assert rendered
 
     def test_large_model_workflow_performance(self):
@@ -364,11 +372,8 @@ class TestWorkflowRobustness:
 
         # Display the nested expression
         equation_rhs = loaded_model.models["nested"].equations[0].rhs
-        unicode_result = to_unicode(equation_rhs)
-        latex_result = to_latex(equation_rhs)
-
-        assert unicode_result is not None
-        assert latex_result is not None
+        assert _show(equation_rhs, "typst")
+        assert _show(equation_rhs, "markdown")
 
     def test_workflow_with_unicode_content(self):
         """Test workflow with Unicode characters in content."""
@@ -391,9 +396,9 @@ class TestWorkflowRobustness:
         validation_result = validate(loaded_model)
         assert validation_result.is_valid
 
-        # Display should preserve Unicode
-        rendered = to_unicode(loaded_model)
-        assert rendered
+        # Printing should preserve Unicode
+        rendered = _show_document(loaded_model)
+        assert "CO₂" in rendered
 
 
 class TestWorkflowErrorHandling:
@@ -446,25 +451,6 @@ class TestWorkflowErrorHandling:
         except Exception:
             # Exception during substitution is acceptable
             pass
-
-    def test_display_error_handling(self):
-        """Test error handling in display functions."""
-        # These should not crash
-        problematic_expressions = [
-            None,
-            {"op": "unknown", "args": []},
-            {"malformed": "expression"},
-            {"op": "+"},  # Missing args
-            {"op": "+", "args": None},  # None args
-        ]
-
-        for expr in problematic_expressions:
-            unicode_result = to_unicode(expr)
-            latex_result = to_latex(expr)
-
-            # Should not crash and should return something
-            assert unicode_result is not None
-            assert latex_result is not None
 
     def test_roundtrip_consistency(self):
         """Test that load(to_json(load(content))) gives consistent results."""

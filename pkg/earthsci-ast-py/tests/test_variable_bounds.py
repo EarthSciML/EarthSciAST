@@ -8,9 +8,9 @@ import copy
 import json
 
 import pytest
-from conftest import FIXTURES_ROOT, INVALID_DIR, VALID_DIR
+from conftest import FIXTURES_ROOT, INVALID_DIR, VALID_DIR, canonical_expr
 
-from earthsci_ast import flatten, load_document, load_path, to_ascii, validate
+from earthsci_ast import flatten, load_document, load_path, validate
 from earthsci_ast.serialize import to_json
 from earthsci_ast.validation import validate_path, validate_text
 
@@ -368,8 +368,8 @@ def _flat_bounds(flat) -> dict[str, tuple]:
     for table in (flat.state_variables, flat.parameters, flat.observed_variables):
         for name, var in table.items():
             out[name] = (
-                var.lb if var.lb is None or isinstance(var.lb, (int, float)) else to_ascii(var.lb),
-                var.ub if var.ub is None or isinstance(var.ub, (int, float)) else to_ascii(var.ub),
+                None if var.lb is None else json.loads(canonical_expr(var.lb)),
+                None if var.ub is None else json.loads(canonical_expr(var.ub)),
             )
     return out
 

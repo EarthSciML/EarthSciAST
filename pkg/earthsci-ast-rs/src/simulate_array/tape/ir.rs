@@ -153,6 +153,29 @@ impl From<SrcRef> for Operand {
     }
 }
 
+/// What running an instruction does besides defining its slots
+/// ([`Instr::effect`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Effect {
+    /// A map of its operands into its own slots: it may run wherever its
+    /// operands are available, and dropping it when nothing reads its slots
+    /// changes nothing.
+    Pure,
+    /// May latch the evaluation's fail-closed fault.
+    Faults,
+    /// Chooses which of the instructions after it run ([`Instr::JmpIfZero`]).
+    Branch,
+    /// Runs the instructions after it once per cell ([`Instr::Sweep`]).
+    Recurrence,
+    /// Publishes into the runtime observed map ([`Instr::Export`]).
+    Publishes,
+    /// Writes `dy`.
+    WritesDy,
+    /// Runs a lane program ([`Instr::Lanes`]), which writes slots, `dy`
+    /// positions, or both ([`LaneSpec::writes_dy`]).
+    Lanes,
+}
+
 /// One tape instruction. See the module docs for the semantics contract.
 #[derive(Clone, Debug)]
 pub(crate) enum Instr {
@@ -718,6 +741,168 @@ impl Instr {
             Instr::Lanes { .. } => "Lanes",
         }
     }
+
+    /// What running this instruction does besides defining its slots.
+    pub(crate) fn effect(&self) -> Effect {
+        match self {
+            Instr::Bin { .. }
+            | Instr::Un { .. }
+            | Instr::Neg { .. }
+            | Instr::Select { .. }
+            | Instr::Gather { .. }
+            | Instr::LoadElem { .. }
+            | Instr::Ramp { .. }
+            | Instr::Fill { .. }
+            | Instr::Copy { .. }
+            | Instr::Region { .. }
+            | Instr::Assemble { .. }
+            | Instr::ConstArray { .. }
+            | Instr::Count { .. }
+            | Instr::Reduce { .. }
+            | Instr::Scan { .. }
+            | Instr::IndexGather { .. }
+            | Instr::TableGather { .. }
+            | Instr::DataGather { faults: false, .. }
+            | Instr::SegReduce { .. }
+            | Instr::Reshape { .. }
+            | Instr::Fused { .. } => Effect::Pure,
+            Instr::LoadForcing { .. }
+            | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
+            | Instr::ScalarRead { .. }
+            | Instr::DataGather { faults: true, .. } => Effect::Faults,
+            Instr::JmpIfZero { .. } => Effect::Branch,
+            Instr::Sweep { .. } => Effect::Recurrence,
+            Instr::Export { .. } => Effect::Publishes,
+            Instr::DyWrite { .. } => Effect::WritesDy,
+            Instr::Lanes { .. } => Effect::Lanes,
+        }
+    }
+
+    /// How many instructions after this one form its region: a
+    /// [`Instr::JmpIfZero`]'s two branches, a [`Instr::Sweep`]'s body, 0
+    /// for every other instruction.
+    pub(crate) fn region_len(&self, t: &SlotTables) -> usize {
+        match self {
+            Instr::JmpIfZero {
+                n_true, n_false, ..
+            } => (*n_true + *n_false) as usize,
+            Instr::Sweep { spec } => t.sweeps[*spec as usize].body_len as usize,
+            Instr::Bin { .. }
+            | Instr::Un { .. }
+            | Instr::Neg { .. }
+            | Instr::Select { .. }
+            | Instr::Gather { .. }
+            | Instr::LoadElem { .. }
+            | Instr::Ramp { .. }
+            | Instr::Fill { .. }
+            | Instr::Copy { .. }
+            | Instr::Region { .. }
+            | Instr::Assemble { .. }
+            | Instr::ConstArray { .. }
+            | Instr::LoadForcing { .. }
+            | Instr::Count { .. }
+            | Instr::Reduce { .. }
+            | Instr::Scan { .. }
+            | Instr::IndexGather { .. }
+            | Instr::TableGather { .. }
+            | Instr::DataGather { .. }
+            | Instr::SegReduce { .. }
+            | Instr::Reshape { .. }
+            | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
+            | Instr::ScalarRead { .. }
+            | Instr::Export { .. }
+            | Instr::DyWrite { .. }
+            | Instr::Fused { .. }
+            | Instr::Lanes { .. } => 0,
+        }
+    }
+
+    /// Whether a slot this instruction defines may take over the storage of
+    /// a source that dies here. True only where element `k` of the output
+    /// is written after the last read of element `k` of every source and of
+    /// nothing else: an index-aligned elementwise map, or an instruction
+    /// that defines no array. A gather, region write, reduction or fused
+    /// group reads its sources at other offsets than the one it writes.
+    pub(crate) fn may_overwrite_source(&self) -> bool {
+        match self {
+            Instr::Bin { .. }
+            | Instr::Un { .. }
+            | Instr::Neg { .. }
+            | Instr::Select { .. }
+            | Instr::LoadElem { .. }
+            | Instr::Ramp { .. }
+            | Instr::Fill { .. }
+            | Instr::Copy { .. }
+            | Instr::ConstArray { .. }
+            | Instr::LoadForcing { .. }
+            | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
+            | Instr::JmpIfZero { .. }
+            | Instr::Export { .. }
+            | Instr::DyWrite { .. } => true,
+            Instr::Gather { .. }
+            | Instr::Region { .. }
+            | Instr::Assemble { .. }
+            | Instr::Count { .. }
+            | Instr::Reduce { .. }
+            | Instr::Scan { .. }
+            | Instr::IndexGather { .. }
+            | Instr::TableGather { .. }
+            | Instr::DataGather { .. }
+            | Instr::SegReduce { .. }
+            | Instr::Reshape { .. }
+            | Instr::Sweep { .. }
+            | Instr::ScalarRead { .. }
+            | Instr::Fused { .. }
+            | Instr::Lanes { .. } => false,
+        }
+    }
+
+    /// Whether the executors may run this instruction on any thread, as a
+    /// straight-line instruction: it reads and writes only slab slots, the
+    /// state, the parameters, `t` and `dy`, moves no control, latches no
+    /// fault and publishes nothing.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn may_run_on_worker(&self) -> bool {
+        match self {
+            Instr::Bin { .. }
+            | Instr::Un { .. }
+            | Instr::Neg { .. }
+            | Instr::Select { .. }
+            | Instr::Gather { .. }
+            | Instr::LoadElem { .. }
+            | Instr::Ramp { .. }
+            | Instr::Fill { .. }
+            | Instr::Copy { .. }
+            | Instr::Region { .. }
+            | Instr::Assemble { .. }
+            | Instr::ConstArray { .. }
+            | Instr::Count { .. }
+            | Instr::Reduce { .. }
+            | Instr::Scan { .. }
+            | Instr::IndexGather { .. }
+            | Instr::TableGather { .. }
+            | Instr::DataGather { faults: false, .. }
+            | Instr::SegReduce { .. }
+            | Instr::Reshape { .. }
+            | Instr::DyWrite { .. }
+            | Instr::Fused { .. } => true,
+            // Latches a fault, which the calling thread orders.
+            Instr::LoadForcing { .. }
+            | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
+            | Instr::ScalarRead { .. }
+            | Instr::DataGather { faults: true, .. } => false,
+            // Moves control over the instructions after it.
+            Instr::JmpIfZero { .. } | Instr::Sweep { .. } => false,
+            // Publishes into the observed map.
+            Instr::Export { .. } => false,
+            // Runs through the lane executor, which owns its register file.
+            Instr::Lanes { .. } => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -794,27 +979,6 @@ pub(crate) enum MicroOp {
         swap: bool,
         out: GroupIx,
     },
-    /// Step 4b superop: a three-op `+ - * /` chain whose two intermediates
-    /// each have exactly one consumer (the next op):
-    /// `t1 = kernel(op1)(a, b); t2 = swap2 ? kernel(op2)(c, t1) :
-    /// kernel(op2)(t1, c); out = swap3 ? kernel(op3)(d, t2) :
-    /// kernel(op3)(t2, d)`. Element semantics are EXACTLY the three
-    /// constituent kernels applied in order — never a hardware FMA, which
-    /// would change bits. Executed all-pointer: scalar operands read from
-    /// splat registers, ghost inputs from the zero register (identical
-    /// values, so identical bits).
-    Bin3 {
-        op1: BinCode,
-        a: MRef,
-        b: MRef,
-        op2: BinCode,
-        c: MRef,
-        swap2: bool,
-        op3: BinCode,
-        d: MRef,
-        swap3: bool,
-        out: GroupIx,
-    },
     /// An absorbed [`Instr::Scan`] along one axis of the group box: `row`
     /// steps along that axis, each `post` flat elements apart (the extent of
     /// the axes after it). Lane `q = flat % post` keeps its running fold of
@@ -871,8 +1035,8 @@ pub(crate) struct FusedInput {
     /// broadcast along the box's innermost axis). Meaningful only for shifted
     /// inputs.
     pub elem_stride: i64,
-    /// For a shifted input with `elem_stride` other than 1 and 0 (and 0 too in
-    /// a group with a `Bin3` superop): the chunk register the executor
+    /// For a shifted input with `elem_stride` other than 1 and 0: the chunk
+    /// register the executor
     /// pre-loads this input into (`GroupIx::MAX` otherwise; a zero-stride
     /// input is then read as the run's one element). A folded data-subscript
     /// gather is always pre-loaded.
@@ -1340,11 +1504,6 @@ pub(crate) struct FusedSpec {
     /// pre-loads (`FusedInput::load_reg` indexes into `n_regs..n_regs +
     /// n_load_regs`).
     pub n_load_regs: GroupIx,
-    /// Step 4b: registers appended after the load registers for the
-    /// all-pointer superops ([`MicroOp::Bin3`]): one splat register per
-    /// entry of `scalars` (filled once per call) plus a trailing zero
-    /// register (the ghost read). 0 when the micro-program has no Bin3.
-    pub n_splat_regs: GroupIx,
     /// `(register, slot)` live-outs stored back to the slab.
     pub outputs: SmallVec<[(GroupIx, SlotId); 2]>,
     /// `(micro-op, output)`: the micro-op writes that entry of `outputs`
@@ -2567,6 +2726,13 @@ pub(crate) struct LaneSpec {
     pub direct: Vec<(u32, u32)>,
 }
 
+impl LaneSpec {
+    /// Whether any write stores to `dy` (rather than to a slot).
+    pub(crate) fn writes_dy(&self) -> bool {
+        self.writes.iter().any(|w| matches!(w.dst, LaneDst::Dy(_)))
+    }
+}
+
 /// What kind of source rule a program rule entry describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuleKind {
@@ -2601,9 +2767,43 @@ pub(crate) struct DeclinedTape {
     /// Every rule of the model, in the order a program would have run them.
     pub rules: Vec<RuleInfo>,
     /// Parallel to `rules`: `None` for a rule that lowered, else the DEEPEST
-    /// decline reason reached while trying (the overlay's `note_bail`
-    /// taxonomy). At least one entry is `Some`.
-    pub reasons: Vec<Option<String>>,
+    /// decline reached while trying (the overlay's `note_bail` taxonomy). At
+    /// least one entry is `Some`.
+    pub reasons: Vec<Option<Bail>>,
+}
+
+/// Why a rule could not be lowered. Carries the DEEPEST bail site, mirroring
+/// the overlay's `note_bail` convention (the first log entry is the actual
+/// unsupported construct).
+#[derive(Clone, Debug)]
+pub(crate) struct Bail {
+    /// The diagnostic code a decline that is a user-facing error carries (a
+    /// range restriction's `range_*`), raised as that error rather than as
+    /// `compiler_refused_rule`.
+    pub code: Option<&'static str>,
+    pub reason: String,
+}
+
+impl Bail {
+    pub(crate) fn new(reason: String) -> Self {
+        Bail { code: None, reason }
+    }
+
+    pub(crate) fn coded(code: &'static str, reason: String) -> Self {
+        Bail {
+            code: Some(code),
+            reason,
+        }
+    }
+
+    /// The decline as reports spell it: the reason, after its code when it
+    /// has one.
+    pub(crate) fn message(&self) -> String {
+        match self.code {
+            Some(code) => format!("{code}: {}", self.reason),
+            None => self.reason.clone(),
+        }
+    }
 }
 
 /// One storage bucket of the slab: several slots may share it (recycling).
@@ -2747,14 +2947,9 @@ impl TapeProgram {
     /// may skip or repeat. The region's header itself is not inside it.
     pub(crate) fn guarded_positions(&self) -> Vec<bool> {
         let mut guarded = vec![false; self.instrs.len()];
+        let tables = self.tables();
         for (pc, ins) in self.instrs.iter().enumerate() {
-            let len = match ins {
-                Instr::JmpIfZero {
-                    n_true, n_false, ..
-                } => (*n_true + *n_false) as usize,
-                Instr::Sweep { spec } => self.sweeps[*spec as usize].body_len as usize,
-                _ => 0,
-            };
+            let len = ins.region_len(&tables);
             let end = (pc + 1 + len).min(guarded.len());
             guarded[pc + 1..end].fill(true);
         }

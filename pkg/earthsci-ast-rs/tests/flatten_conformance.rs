@@ -31,9 +31,9 @@
 //! axes are discovered by scanning, not declared — and the comparison is an
 //! ordered one, so a binding that emitted them in scan order would fail here.
 
+use crate::common::canon;
 use earthsci_ast::SystemKind;
 use earthsci_ast::load_path;
-use earthsci_ast::to_ascii;
 use earthsci_ast::{FlattenError, FlattenedSystem, flatten};
 use earthsci_ast::{ModelVariable, ParameterUpdateSpec, VariableBound};
 use serde_json::Value;
@@ -138,13 +138,13 @@ fn variable_record(
 
 /// A flattened `lb` / `ub` as the corpus records it (esm-libraries-spec
 /// §4.7.5): `null` when absent, the number as authored, otherwise the bound
-/// rendered with `to_ascii` (a reference renders as its namespaced name).
+/// in canonical JSON (a reference is its namespaced name).
 fn bound_record(bound: Option<&VariableBound>) -> Value {
     match bound {
         None => Value::Null,
         Some(VariableBound::Number(n)) => Value::Number(n.clone()),
         Some(VariableBound::Reference(name)) => Value::String(name.clone()),
-        Some(VariableBound::Expression(expr)) => Value::String(to_ascii(expr)),
+        Some(VariableBound::Expression(expr)) => canon(expr),
     }
 }
 
@@ -187,8 +187,8 @@ fn kind_str(k: SystemKind) -> &'static str {
 }
 
 /// The equations with their per-term provenance (esm-libraries-spec §4.7.5),
-/// as the corpus records them: each contribution's expression rendered by
-/// `to_ascii` and its origins in serde's untagged `{"component": …}` /
+/// as the corpus records them: each expression in canonical JSON
+/// (CONFORMANCE §5.4) and each contribution's origins in serde's untagged `{"component": …}` /
 /// `{"coupling": …}` form, which is the corpus form.
 fn equations(flat: &FlattenedSystem) -> Vec<Value> {
     assert_eq!(
@@ -201,12 +201,12 @@ fn equations(flat: &FlattenedSystem) -> Vec<Value> {
         .zip(&flat.equation_contributions)
         .map(|(e, contributions)| {
             serde_json::json!({
-                "lhs": to_ascii(&e.lhs),
-                "rhs": to_ascii(&e.rhs),
+                "lhs": canon(&e.lhs),
+                "rhs": canon(&e.rhs),
                 "contributions": contributions
                     .iter()
                     .map(|c| serde_json::json!({
-                        "rhs": to_ascii(&c.expr),
+                        "rhs": canon(&c.expr),
                         "origins": c.origins,
                     }))
                     .collect::<Vec<_>>(),
@@ -255,11 +255,11 @@ fn record(flat: &FlattenedSystem, reaction_systems: &BTreeSet<String>) -> Value 
             .iter()
             .map(|e| serde_json::json!({
                 "name": e.name,
-                "conditions": e.conditions.iter().map(to_ascii).collect::<Vec<_>>(),
+                "conditions": e.conditions.iter().map(canon).collect::<Vec<_>>(),
                 "affects": e
                     .affects
                     .iter()
-                    .map(|a| format!("{} = {}", a.lhs, to_ascii(&a.rhs)))
+                    .map(|a| serde_json::json!({"lhs": a.lhs, "rhs": canon(&a.rhs)}))
                     .collect::<Vec<_>>(),
             }))
             .collect::<Vec<_>>(),
@@ -274,7 +274,7 @@ fn record(flat: &FlattenedSystem, reaction_systems: &BTreeSet<String>) -> Value 
         "field_ics": flat
             .field_ics
             .iter()
-            .map(|(s, e)| serde_json::json!({"state": s, "expr": to_ascii(e)}))
+            .map(|(s, e)| serde_json::json!({"state": s, "expr": canon(e)}))
             .collect::<Vec<_>>(),
         "loader_fields": flat
             .loader_fields

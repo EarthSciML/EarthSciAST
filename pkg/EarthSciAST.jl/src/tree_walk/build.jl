@@ -1891,7 +1891,7 @@ function _refuse_parameter_definitions(equations, variables::AbstractDict)
         throw(
             TreeWalkError(
                 ERROR_CODES.EQUATION_DEFINES_PARAMETER,
-                "equation `$(first(to_ascii(eq), 200))` defines '$(dn)', which is a " *
+                "equation `$(first(string(eq), 200))` defines '$(dn)', which is a " *
                     "parameter; an equation defines unknowns only, and a parameter takes its " *
                     "value from its default, an override, its update or a coupling " *
                     "(esm-spec §6.3.1)"
@@ -1925,7 +1925,7 @@ function _split_ic_equations(equations::Vector{Equation}, model::Model)
                 TreeWalkError(
                     "E_TREEWALK_UNSUPPORTED_EQUATION",
                     "ic(...) LHS must name a single state variable; got " *
-                        "$(first(to_ascii(eq.lhs), 200))"
+                        "$(first(string(eq.lhs), 200))"
                 )
             )
             vn = (lop.args[1]::VarExpr).name
@@ -2558,7 +2558,7 @@ function _split_observed_and_derivatives(
             throw(
                 TreeWalkError(
                     ERROR_CODES.UNSUPPORTED_CONSTRUCT,
-                    "implicit equation `$(to_ascii(eq))` is not " *
+                    "implicit equation `$(eq)` is not " *
                         "supported by the Julia tree-walk evaluator; refusing " *
                         "the build rather than running the model without it"
                 )
@@ -2568,7 +2568,7 @@ function _split_observed_and_derivatives(
             throw(
                 TreeWalkError(
                     "E_TREEWALK_UNSUPPORTED_EQUATION",
-                    "equation `$(first(to_ascii(eq), 200))`: its left-hand side " *
+                    "equation `$(first(string(eq), 200))`: its left-hand side " *
                         "'$((eq.lhs::VarExpr).name)' " *
                         "is not an unknown this equation can define (esm-spec §6.3.1): an " *
                         "equation defines an unknown, and a parameter takes its value from " *
@@ -7474,7 +7474,8 @@ function _makearray_region_equations(
     (ma isa OpExpr && (ma::OpExpr).op == "makearray") || return nothing
     ma = ma::OpExpr
     (ma.regions === nothing || ma.values === nothing) && return nothing
-    regions, values = ma.regions, ma.values
+    regions = ma.regions
+    values = _bind_makearray_loops(ma, ma.values, ASTExpr[VarExpr(l) for l in idx_names])
     (isempty(regions) || length(regions) != length(values)) && return nothing
     all(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
     elo = Int[first(r) for r in range_iters]

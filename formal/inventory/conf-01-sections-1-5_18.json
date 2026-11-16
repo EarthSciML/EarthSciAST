@@ -29,14 +29,6 @@
       "note": "substitute is total on operator nodes with empty or missing args and returns a structurally equal node."
     },
     {
-      "id": "conf.5.2.display-byte-identical",
-      "section": "5.2",
-      "quote": "\"All language implementations MUST produce byte-identical output, verified by the shared fixtures in this directory\"",
-      "class": "out_of_scope",
-      "area": "api",
-      "note": "Display rendering (unicode/latex/ascii) is a presentation feature governed by tests/display/RENDERING_CONTRACT.md, outside the two spec files the model covers; the MUST is quoted from that contract."
-    },
-    {
       "id": "conf.5.5.pure-function-of-total-order",
       "section": "5.5",
       "quote": "Every emitted set, key, and dense ID MUST be a **pure function of a defined total order over tuples**.",

@@ -2,13 +2,13 @@
 //! document.
 
 use earthsci_ast::{
-    ModelVariable, VariableType, add_equation, add_variable, load_path, load_string,
-    parse_equation, remove_variable, to_json, write_path,
+    DocumentFormat, Equation, ModelVariable, VariableType, add_equation, add_variable, load_path,
+    load_string, parse_math, remove_variable, to_json, write_path,
 };
 use earthsci_ast_api_examples::fixture;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // region: edit ops=add_variable,add_equation,to_json,write_path
+    // region: edit ops=add_variable,add_equation,parse_math,to_json,write_path
     let mut doc = load_path(fixture("decay.esm"))?;
     let model = &doc.models.as_ref().unwrap()["Decay"];
 
@@ -29,7 +29,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ub: None,
     };
     let model = add_variable(model, "M", product)?;
-    let model = add_equation(&model, parse_equation("D(M)/Dt = lambda * N")?)?;
+    // The new equation, read from Typst math under the names it uses.
+    let names = ["M", "N", "lambda"].map(String::from);
+    let eq = parse_math("(dif M)/(dif t) = lambda N", &names, DocumentFormat::Typst)?;
+    let model = add_equation(&model, serde_json::from_value::<Equation>(eq)?)?;
     assert_eq!(model.variables.len(), 4);
     assert_eq!(model.equations.len(), 3);
 

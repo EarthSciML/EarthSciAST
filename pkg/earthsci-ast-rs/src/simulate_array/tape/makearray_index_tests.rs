@@ -8,7 +8,7 @@
 //! must refuse rather than answer differently.
 
 use super::super::ArrayCompiled;
-use super::array_tests::{ab, compare_tape_at, compile, idx, lit, no_params, opcount, plus};
+use super::test_support::{ab, compare_tape_at, compile, idx, lit, no_params, opcount, plus};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
@@ -63,9 +63,9 @@ fn states(n: usize) -> Vec<Vec<f64>> {
     ]
 }
 
-/// The tape's refusals, or none after comparing it against the oracle (and,
-/// with `overlay`, the overlay against the oracle) at a few states.
-fn refusals(compiled: &ArrayCompiled, overlay: bool) -> Vec<(String, String)> {
+/// The tape's refusals, or none after comparing it against the oracle at a
+/// few states.
+fn refusals(compiled: &ArrayCompiled) -> Vec<(String, String)> {
     let (prog, report) = compiled.build_tape_opts(&HashSet::new(), None);
     if prog.is_err() || !report.fallbacks.is_empty() {
         assert!(!report.fallbacks.is_empty(), "{report}");
@@ -73,7 +73,7 @@ fn refusals(compiled: &ArrayCompiled, overlay: bool) -> Vec<(String, String)> {
     }
     for state in states(compiled.state_variable_names().len()) {
         for t in [0.0, 0.7] {
-            compare_tape_at(compiled, &HashMap::new(), &state, t, overlay);
+            compare_tape_at(compiled, &HashMap::new(), &state, t);
         }
     }
     Vec::new()
@@ -82,7 +82,7 @@ fn refusals(compiled: &ArrayCompiled, overlay: bool) -> Vec<(String, String)> {
 /// Lowers, and agrees with the oracle and the overlay.
 fn agrees(doc: Value) {
     let compiled = compile(doc);
-    let refused = refusals(&compiled, true);
+    let refused = refusals(&compiled);
     assert!(refused.is_empty(), "refused: {refused:?}");
 }
 
@@ -170,7 +170,7 @@ fn same_rank_permuted_and_shifted_subscripts() {
         (3, vec![json!("k"), json!("i")]),
     ] {
         let compiled = compile(ki_doc(3, n_ion, idx(m.clone(), &subs), json!({})));
-        let refused = refusals(&compiled, false);
+        let refused = refusals(&compiled);
         assert!(refused.is_empty(), "refused: {refused:?}");
     }
     // A reversed subscript is no unit shift: refused, not answered.
@@ -180,7 +180,7 @@ fn same_rank_permuted_and_shifted_subscripts() {
         idx(m, &[minus(json!(4), json!("k")), json!("i")]),
         json!({}),
     ));
-    assert!(!refusals(&compiled, false).is_empty());
+    assert!(!refusals(&compiled).is_empty());
 }
 
 /// A rank-2 makearray read inside a rank-1 box, at a box axis and a
@@ -219,7 +219,7 @@ fn rank2_makearray_in_a_rank1_box() {
             ]
         }}
     }));
-    let refused = refusals(&compiled, true);
+    let refused = refusals(&compiled);
     assert!(refused.is_empty(), "refused: {refused:?}");
 }
 
@@ -236,7 +236,7 @@ fn whole_array_region_value_is_not_one_number_per_cell() {
         &[json!("i")],
     );
     let compiled = compile(ki_doc(3, 3, body, json!({})));
-    assert!(!refusals(&compiled, true).is_empty());
+    assert!(!refusals(&compiled).is_empty());
 }
 
 /// A bounding box that starts past 1: the oracle's makearray is 1-based over

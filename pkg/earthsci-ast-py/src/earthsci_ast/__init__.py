@@ -220,14 +220,20 @@ from .canonicalize import canonicalize_document
 # Typst text, printed and read back losslessly.
 from .document import (
     DocumentFormat,
+    expression_names,
     parse_document,
     parse_markdown,
+    parse_math,
     parse_typst,
     print_document,
     print_markdown,
     print_math,
     print_typst,
 )
+
+# Jupyter rich display (esm-libraries-spec §5.3.6): installs `_repr_latex_` on
+# Equation, Model, ReactionSystem and EsmFile, built on `print_math`.
+from . import jupyter as _jupyter  # noqa: F401
 
 # The esm 1.0.0 classification API (esm-spec §6.3.1) — the ONE sanctioned way
 # to recover the finer categories a solver needs from the two declared variable
@@ -418,21 +424,6 @@ from .migration import (
     can_migrate,
     migrate,
     supported_migration_targets,
-)
-
-# Display and pretty-printing (Core tier requirement)
-from .display import (
-    to_unicode,
-    to_latex,
-    to_ascii,
-)
-
-# Text-form expression authoring: the INVERSE of `to_ascii` (esm-spec §4.2).
-# Unrelated to the private JSON decoder `parse._parse_expression`.
-from .parse_expression import (
-    ExpressionParseError,
-    parse_equation,
-    parse_expression,
 )
 
 # Code generation (for interoperability)
@@ -643,8 +634,10 @@ __all__ = [
     "canonicalize_document",
     # Document source formats (Markdown / Typst)
     "DocumentFormat",
+    "expression_names",
     "parse_document",
     "parse_markdown",
+    "parse_math",
     "parse_typst",
     "print_document",
     "print_markdown",
@@ -726,14 +719,6 @@ __all__ = [
     "can_migrate",
     "supported_migration_targets",
     "MigrationError",
-    # Display and pretty-printing
-    "to_unicode",
-    "to_latex",
-    "to_ascii",
-    # Text-form expression parsing (the inverse of `to_ascii`)
-    "parse_expression",
-    "parse_equation",
-    "ExpressionParseError",
     # Code generation
     "to_julia_code",
     "to_python_code",

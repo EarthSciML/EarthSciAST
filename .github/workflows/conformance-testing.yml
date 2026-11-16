@@ -992,7 +992,6 @@ jobs:
                 // must be readable.
                 const sections = [
                   ['validation', analysis.validation_analysis],
-                  ['display', analysis.display_analysis],
                   ['substitution', analysis.substitution_analysis],
                 ];
                 comment += `### Sections\n`;

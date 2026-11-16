@@ -57,10 +57,6 @@ source × target product. `A_ij` is the shared area of each surviving pair:
 The row-sum normalizer drops slivers with a `filter`, which is where the
 tolerance lives — in the document, not in the template:
 
-**Text**
-```text
-sum[j] (A_ij[i, j]) where {i in src_cells, j in tgt_cells} join(src_bin=tgt_bin) if A_ij[i, j] > atol
-```
 **JSON**
 ```json
 {
@@ -81,14 +77,14 @@ computed from the cell geometry the document already carries.
 
 ## Pruning the pair set
 
-Both `faq` nodes above carry `join(src_bin=tgt_bin)`. Without it the `faq`
+Both `faq` nodes above carry a `join` on `src_bin` = `tgt_bin`. Without it the `faq`
 visits the full source × target product; with it, the cost is proportional to
 the number of candidate pairs. The bin keys are themselves computed — quantize
 each cell's representative coordinate:
 
-**Text**
-```text
-sum[i] (floor(src_lon[i] / dx)) where {i in src_cells}
+**LaTeX**
+```latex
+\left[\sum\limits\lfloor\frac{\mathit{src\_lon}_{i}}{\mathit{dx}}\rfloor\right]_{i \in \mathit{src\_cells}}
 ```
 **JSON**
 ```json

@@ -191,10 +191,10 @@ Text after the plot.
 #[test]
 fn a_page_with_no_model_still_renders_examples() {
     let (page, out, md) =
-        build("---\ntitle: \"Examples\"\n---\n\nText.\n\n::esm-example[a + b*c]\n");
+        build("---\ntitle: \"Examples\"\n---\n\nText.\n\n::esm-example[a + b c]\n");
     assert!(page.elements.is_empty());
     assert!(out.ok, "{:#?}", out.diagnostics);
-    assert!(md.contains("```text\na + b*c\n```"), "{md}");
+    assert!(md.contains("```latex\na + b c\n```"), "{md}");
     assert!(md.contains("a + b c"), "{md}");
     assert!(md.contains("\"op\": \"+\""), "{md}");
 }

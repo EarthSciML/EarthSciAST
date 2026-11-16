@@ -4,7 +4,11 @@
 # scripts/generate-flatten-corpus.py from the PYTHON oracle. The corpus pins the
 # canonical `FlattenedSystem` field set: the ordered contents of every map, the
 # per-variable metadata (units, default, shape, update kinds, distribution kind),
-# every equation rendered with `to_ascii`, and the derived `system_kind`.
+# every equation, and the derived `system_kind`. Every expression is in the form
+# `canonicalize_document` writes (API_SPEC §5.4), numbers in their canonical kind
+# (CONFORMANCE §5.5.3.1), and compares as a JSON value: both sides are written
+# as compact JSON with sorted keys (`canonical_expr_json`), so an integer `1` and
+# a float `1.0` differ.
 #
 # ORDER IS THE POINT. §4.7.5 step 4 makes DOCUMENT ORDER normative — components
 # in the order the file declares them, variables in the order their component
@@ -77,6 +81,16 @@ using EarthSciAST
 if !isdefined(Main, :ESM_TESTUTILS_LOADED)
     include("testutils.jl")
 end
+
+# The local pins below write their expected expressions as JSON values:
+# `_fe("*", "A.x", 2; dim = "x")` is `{"op": "*", "args": ["A.x", 2], "dim": "x"}`,
+# a name is a string, and `_feq` gives an equation's canonical JSON.
+_fe(op, args...; kw...) =
+    Dict{String, Any}("op" => op, "args" => Any[args...], (String(k) => v for (k, v) in kw)...)
+_fD(x; wrt = "t") = _fe("D", x; wrt)
+_feq(lhs, rhs) = canonical_expr_json(Dict{String, Any}("lhs" => lhs, "rhs" => rhs))
+_fjson(eqs) = String[canonical_expr_json(eq) for eq in eqs]
+_flhs(eqs) = String[canonical_expr_json(eq.lhs) for eq in eqs]
 
 const _FLATTEN_CORPUS_PATH =
     joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "flatten", "cases.json")
@@ -286,10 +300,17 @@ _fc_compare(id, key) = !(key in _fc_skips(id))
 
 # ── recording: the Julia flattened system, in the corpus's language-neutral form ──
 
+"""
+An expression as the comparison sees it: [`canonical_expr_json`](@ref)
+(testutils.jl), its canonical JSON with every number in its canonical kind,
+written as compact JSON with sorted keys.
+"""
+_fc_expr(v) = canonical_expr_json(v)
+
 """A default / literal in the corpus's JSON-safe form."""
 _fc_scalar(::Nothing) = nothing
 _fc_scalar(v::Real) = v
-_fc_scalar(v::ASTExpr) = Dict{String, Any}("expr" => to_ascii(v))
+_fc_scalar(v::ASTExpr) = Dict{String, Any}("expr" => _fc_expr(v))
 # An array default (a shaped parameter's inline values) keeps its nesting.
 _fc_scalar(v::AbstractArray) = Any[_fc_scalar(x) for x in v]
 
@@ -322,12 +343,11 @@ function _fc_variable(name::AbstractString, v::ModelVariable, role::AbstractStri
     )
 end
 
-"""A flattened bound as the corpus records it: the number, or `to_ascii` of the
-reference (a namespaced name) or of a scaled replacement expression."""
+"""A flattened bound as the corpus records it: the number, or the reference (a
+namespaced name) or scaled replacement expression in canonical JSON."""
 _fc_bound(::Nothing) = nothing
 _fc_bound(b::Real) = b
-_fc_bound(b::String) = b
-_fc_bound(b::ASTExpr) = to_ascii(b)
+_fc_bound(b::Union{String, ASTExpr}) = _fc_expr(b)
 
 """
 Every entry of one flattened map, in the corpus's record shape.
@@ -349,15 +369,17 @@ _fc_variable_map(m, role; observed = nothing) =
 
 _fc_event(ev::ContinuousEvent) = Dict{String, Any}(
     "name" => ev.name,
-    "conditions" => String[to_ascii(c) for c in ev.conditions],
-    "affects" => String["$(a.lhs) = $(to_ascii(a.rhs))" for a in ev.affects],
+    "conditions" => String[_fc_expr(c) for c in ev.conditions],
+    "affects" => [_fc_affect(a) for a in ev.affects],
 )
 _fc_event(ev::DiscreteEvent) = Dict{String, Any}(
     "name" => ev.name,
     "conditions" => ev.trigger isa ConditionTrigger ?
-        String[to_ascii(ev.trigger.expression)] : String[],
-    "affects" => String["$(a.lhs) = $(to_ascii(a.rhs))" for a in ev.affects],
+        String[_fc_expr(ev.trigger.expression)] : String[],
+    "affects" => [_fc_affect(a) for a in ev.affects],
 )
+_fc_affect(a) = Dict{String, Any}("lhs" => _fc_expr(a.lhs), "rhs" => _fc_expr(a.rhs))
+_fc_affect(a::AbstractDict) = Dict{String, Any}("lhs" => _fc_expr(a["lhs"]), "rhs" => _fc_expr(a["rhs"]))
 
 """
 The whole §4.7.5 step-4 field set of `flat`, in the corpus's shape.
@@ -383,8 +405,8 @@ function _fc_record(flat)
         "equation_count" => length(flat.equations),
         "equations" => [
             Dict{String, Any}(
-                "lhs" => to_ascii(eq.lhs),
-                "rhs" => to_ascii(eq.rhs),
+                "lhs" => _fc_expr(eq.lhs),
+                "rhs" => _fc_expr(eq.rhs),
                 "contributions" => _fc_contributions(cs)
             )
                 for (eq, cs) in zip(
@@ -417,7 +439,7 @@ function _fc_record(flat)
         "index_sets" => String[k for k in keys(flat.index_sets)],
         "template_registry" => String[String(k) for k in keys(flat.template_registry)],
         "field_ics" => [
-            Dict{String, Any}("state" => st, "expr" => to_ascii(ex))
+            Dict{String, Any}("state" => st, "expr" => _fc_expr(ex))
                 for (st, ex) in flat.field_ics
         ],
         "loader_fields" => [
@@ -444,7 +466,7 @@ _fc_origin(o::TermOrigin) = o.component === nothing ?
 """An equation's per-term provenance in the corpus's shape (CONFORMANCE_SPEC §5.48)."""
 _fc_contributions(cs) = [
     Dict{String, Any}(
-        "rhs" => to_ascii(c.expr),
+        "rhs" => _fc_expr(c.expr),
         "origins" => Any[_fc_origin(o) for o in c.origins]
     )
         for c in cs
@@ -456,6 +478,40 @@ _fc_contributions(cs) = [
 _fc_plain(v::JSON3.Object) = Dict{String, Any}(String(k) => _fc_plain(x) for (k, x) in pairs(v))
 _fc_plain(v::JSON3.Array) = Any[_fc_plain(x) for x in v]
 _fc_plain(v) = v
+
+"""
+A corpus case with every expression in it written as [`_fc_expr`](@ref) writes
+the recorded ones: equation sides, each contribution's `rhs`, event conditions
+and affect sides, a bound that is not a number, a default `{"expr": …}`, and
+each `field_ics[].expr`.
+"""
+function _fc_expected(case)
+    exp = _fc_plain(case)
+    _scalar(v) = v isa AbstractDict && haskey(v, "expr") ?
+        Dict{String, Any}("expr" => _fc_expr(v["expr"])) :
+        v isa AbstractVector ? Any[_scalar(x) for x in v] : v
+    _bound(v) = (v === nothing || v isa Real) ? v : _fc_expr(v)
+    for key in ("state_variables", "parameters", "observed_variables"), var in exp[key]
+        var["default"] = _scalar(var["default"])
+        var["lb"] = _bound(var["lb"])
+        var["ub"] = _bound(var["ub"])
+    end
+    for eq in exp["equations"]
+        eq["lhs"] = _fc_expr(eq["lhs"])
+        eq["rhs"] = _fc_expr(eq["rhs"])
+        for c in eq["contributions"]
+            c["rhs"] = _fc_expr(c["rhs"])
+        end
+    end
+    for key in ("continuous_events", "discrete_events"), ev in exp[key]
+        ev["conditions"] = String[_fc_expr(c) for c in ev["conditions"]]
+        ev["affects"] = [_fc_affect(a) for a in ev["affects"]]
+    end
+    for ic in exp["field_ics"]
+        ic["expr"] = _fc_expr(ic["expr"])
+    end
+    return exp
+end
 
 """Numbers compare by VALUE: the corpus writes `1` where Julia holds `1.0`."""
 _fc_eq(a::Real, b::Real) = (a isa Bool || b isa Bool) ? a === b : a == b
@@ -514,8 +570,9 @@ end
         @test isfile(path)
         isfile(path) || continue
 
-        exp = _fc_plain(case)
-        act = _fc_record(flatten(load_path(path)))
+        exp = _fc_expected(case)
+        flat = flatten(load_path(path))
+        act = _fc_record(flat)
 
         @test (id, "system_kind", act["system_kind"]) ==
             (id, "system_kind", exp["system_kind"])
@@ -639,7 +696,7 @@ end
         # No `ic` equation may survive in `equations` (§4.7.5 step 4, normative).
         @test (
             id, "no ic left in equations",
-            !any(startswith(e["lhs"], "ic(") for e in act["equations"]),
+            !any(eq.lhs isa OpExpr && eq.lhs.op == "ic" for eq in flat.equations),
         ) ==
             (id, "no ic left in equations", true)
 
@@ -793,32 +850,34 @@ end
         # algebraic case is the one with no operator at all, pinned separately in
         # `reactions_test.jl`.
         @test isempty(flat.algebraic_variables)
-        eqs = String[to_ascii(eq) for eq in flat.equations]
+        eqs = flat.equations
         @test length(eqs) == 4
         # Position: OH FIRST, in `models` order ahead of the reaction system —
         # agreeing with the corpus, where Julia used to have it last.
-        @test String[String(split(e, " = ")[1]) for e in eqs] ==
-            [
-            "D(AtmosphericChemistry.OH)/Dt", "D(AtmosphericChemistry.O3)/Dt",
-            "D(AtmosphericChemistry.NO)/Dt", "D(AtmosphericChemistry.NO2)/Dt",
-        ]
+        @test _flhs(eqs) ==
+            [canonical_expr_json(_fD("AtmosphericChemistry.$s")) for s in ("OH", "O3", "NO", "NO2")]
         # Transport alone, with no leading `0 +`.
-        @test eqs[1] == "D(AtmosphericChemistry.OH)/Dt = " *
-            "(-Transport.u) * grad(AtmosphericChemistry.OH) + " *
-            "(-Transport.v) * grad(AtmosphericChemistry.OH) + " *
-            "(-Transport.w) * grad(AtmosphericChemistry.OH) + " *
-            "Transport.K_h * laplacian(AtmosphericChemistry.OH) + " *
-            "Transport.K_v * laplacian(AtmosphericChemistry.OH)"
-        # ... and every equation is byte-identical to what the shared corpus
-        # records. The `-1 * rate` vs `-rate` rendering that used to separate O3
+        oh = "AtmosphericChemistry.OH"
+        @test canonical_expr_json(eqs[1]) == _feq(
+            _fD(oh),
+            _fe(
+                "+",
+                _fe("*", _fe("-", "Transport.u"), _fe("grad", oh; dim = "lon")),
+                _fe("*", _fe("-", "Transport.v"), _fe("grad", oh; dim = "lat")),
+                _fe("*", _fe("-", "Transport.w"), _fe("grad", oh; dim = "lev")),
+                _fe("*", "Transport.K_h", _fe("laplacian", oh; dim = "lon")),
+                _fe("*", "Transport.K_v", _fe("laplacian", oh; dim = "lev")),
+            )
+        )
+        # ... and every equation is the one the shared corpus records. The `-1 * rate` vs `-rate` rendering that used to separate O3
         # and NO is gone: esm-libraries-spec §4.6.2 writes a loss of 1 as
         # `-1 * rate` in every binding.
         corpus_case = first(
             c for c in JSON3.read(read(_FLATTEN_CORPUS_PATH, String)).cases
                 if String(c.id) == "full_coupled"
         )
-        corpus_eqs = String["$(e.lhs) = $(e.rhs)" for e in corpus_case.equations]
-        @test eqs == corpus_eqs
+        corpus_eqs = String[_feq(e.lhs, e.rhs) for e in corpus_case.equations]
+        @test _fjson(eqs) == corpus_eqs
     end
 
     @testset "operator_compose tier: the composed equations, in full" begin
@@ -834,16 +893,31 @@ end
                 )
             )
         )
-        chem = "-1 * 1.8e-12 * exp(-1370 / SimpleOzone.T) * SimpleOzone.M * " *
-            "SimpleOzone.NO * SimpleOzone.O3 + SimpleOzone.jNO2 * SimpleOzone.NO2"
-        adv(v) = " + (-Advection.u_wind) * grad(SimpleOzone.$(v))" *
-            " + (-Advection.v_wind) * grad(SimpleOzone.$(v))"
-        @test String[to_ascii(eq) for eq in flat.equations] == [
-            "D(SimpleOzone.O3)/Dt = " * chem * adv("O3"),
-            "D(SimpleOzone.NO)/Dt = " * chem * adv("NO"),
-            "D(SimpleOzone.NO2)/Dt = 1.8e-12 * exp(-1370 / SimpleOzone.T) * " *
-                "SimpleOzone.M * SimpleOzone.NO * SimpleOzone.O3 + -1 * " *
-                "SimpleOzone.jNO2 * SimpleOzone.NO2" * adv("NO2"),
+        # The rate `1.8e-12 * exp(-1370 / T) * M` of NO + O3, the loss of 1 of
+        # NO2 by photolysis, and the advection a state `v` gains.
+        k(c, m...) = _fe(
+            "*", 1.8e-12, _fe("exp", _fe("/", -1370, "$c.T")), ("$c.$x" for x in m)...
+        )
+        chem(c, m...) = _fe(
+            "+",
+            _fe("*", -1, _fe("*", k(c, m...), "$c.NO", "$c.O3")),
+            _fe("*", "$c.jNO2", "$c.NO2"),
+        )
+        no2(c, m...) = _fe(
+            "+",
+            _fe("*", k(c, m...), "$c.NO", "$c.O3"),
+            _fe("*", -1, _fe("*", "$c.jNO2", "$c.NO2")),
+        )
+        adv(a, c, v) = _fe(
+            "+",
+            _fe("*", _fe("-", "$a.u_wind"), _fe("grad", "$c.$v"; dim = "x")),
+            _fe("*", _fe("-", "$a.v_wind"), _fe("grad", "$c.$v"; dim = "y")),
+        )
+        o = "SimpleOzone"
+        @test _fjson(flat.equations) == [
+            _feq(_fD("$o.O3"), _fe("+", chem(o, "M"), adv("Advection", o, "O3"))),
+            _feq(_fD("$o.NO"), _fe("+", chem(o, "M"), adv("Advection", o, "NO"))),
+            _feq(_fD("$o.NO2"), _fe("+", no2(o, "M"), adv("Advection", o, "NO2"))),
         ]
 
         flat = flatten(
@@ -854,18 +928,27 @@ end
                 )
             )
         )
-        chem2 = "-1 * 1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * " *
-            "AtmosphericChemistry.NO * AtmosphericChemistry.O3 + " *
-            "AtmosphericChemistry.jNO2 * AtmosphericChemistry.NO2"
-        adv2(v) = " + (-AdvectionTransport.u_wind) * grad(AtmosphericChemistry.$(v))" *
-            " + (-AdvectionTransport.v_wind) * grad(AtmosphericChemistry.$(v))"
-        @test String[to_ascii(eq) for eq in flat.equations] == [
-            "D(AtmosphericChemistry.O3)/Dt = " * chem2 * adv2("O3"),
-            "D(AtmosphericChemistry.NO)/Dt = " * chem2 * adv2("NO"),
-            "D(AtmosphericChemistry.NO2)/Dt = 1.8e-12 * " *
-                "exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.NO * " *
-                "AtmosphericChemistry.O3 + -1 * AtmosphericChemistry.jNO2 * " *
-                "AtmosphericChemistry.NO2" * adv2("NO2"),
+        # This document writes the activation temperature with its units, as
+        # a `const` node.
+        ka(c) = _fe(
+            "*", 1.8e-12,
+            _fe("exp", _fe("/", _fe("const"; units = "K", value = -1370), "$c.T"))
+        )
+        chem2(c) = _fe(
+            "+",
+            _fe("*", -1, _fe("*", ka(c), "$c.NO", "$c.O3")),
+            _fe("*", "$c.jNO2", "$c.NO2"),
+        )
+        no22(c) = _fe(
+            "+",
+            _fe("*", ka(c), "$c.NO", "$c.O3"),
+            _fe("*", -1, _fe("*", "$c.jNO2", "$c.NO2")),
+        )
+        a, c = "AdvectionTransport", "AtmosphericChemistry"
+        @test _fjson(flat.equations) == [
+            _feq(_fD("$c.O3"), _fe("+", chem2(c), adv(a, c, "O3"))),
+            _feq(_fD("$c.NO"), _fe("+", chem2(c), adv(a, c, "NO"))),
+            _feq(_fD("$c.NO2"), _fe("+", no22(c), adv(a, c, "NO2"))),
         ]
     end
 
@@ -884,23 +967,34 @@ end
                 )
             )
         )
-        diff(v) = " + DiffusionSystem.kh * laplacian(ChemistrySystem.$(v))" *
-            " + DiffusionSystem.kv * D(ChemistrySystem.$(v))/Dz"
-        @test String[to_ascii(eq) for eq in flat.equations] == [
-            "D(ChemistrySystem.O3)/Dt = -1 * ChemistrySystem.k1 * " *
-                "ChemistrySystem.O3" * diff("O3"),
-            "D(ChemistrySystem.NO)/Dt = ChemistrySystem.k2 * " *
-                "ChemistrySystem.NO2" * diff("NO"),
+        c = "ChemistrySystem"
+        diff(v) = _fe(
+            "+",
+            _fe("*", "DiffusionSystem.kh", _fe("laplacian", "$c.$v")),
+            _fe("*", "DiffusionSystem.kv", _fD("$c.$v"; wrt = "z")),
+        )
+        @test _fjson(flat.equations) == [
+            _feq(_fD("$c.O3"), _fe("+", _fe("*", -1, "$c.k1", "$c.O3"), diff("O3"))),
+            _feq(_fD("$c.NO"), _fe("+", _fe("*", "$c.k2", "$c.NO2"), diff("NO"))),
             # NO2 has no diffusion counterpart in the fixture: unmatched, so
             # untouched.
-            "D(ChemistrySystem.NO2)/Dt = -1 * ChemistrySystem.k2 * ChemistrySystem.NO2",
+            _feq(_fD("$c.NO2"), _fe("*", -1, "$c.k2", "$c.NO2")),
             # `AdvectionSystem` writes `D(u)` for its OWN unknown `u`, so neither
             # entry naming it ever matches and its equation survives whole.
-            "D(AdvectionSystem.u)/Dt = (-AdvectionSystem.u) * grad(AdvectionSystem.u) + " *
-                "(-AdvectionSystem.v) * grad(AdvectionSystem.u)",
+            _feq(
+                _fD("AdvectionSystem.u"),
+                _fe(
+                    "+",
+                    _fe("*", _fe("-", "AdvectionSystem.u"), _fe("grad", "AdvectionSystem.u"; dim = "x")),
+                    _fe("*", _fe("-", "AdvectionSystem.v"), _fe("grad", "AdvectionSystem.u"; dim = "y")),
+                )
+            ),
             # The one equation the oracle namespaces differently (`O3` vs
             # `DepositionSystem.O3`); the rest of it is pinned here.
-            "DepositionSystem.surface_flux = DepositionSystem.deposition_velocity * O3",
+            _feq(
+                "DepositionSystem.surface_flux",
+                _fe("*", "DepositionSystem.deposition_velocity", "O3")
+            ),
         ]
         # The prune: `DiffusionSystem.ozone_conc` / `.nitrogen_oxide` were merged
         # away and must not survive as unconstrained unknowns.
@@ -940,10 +1034,9 @@ end
                        "translate": {"A.x": "T.z"}}]}
         """
         flat = flatten(load_string(doc))
-        @test String[to_ascii(eq) for eq in flat.equations] ==
-            ["D(A.x)/Dt = -A.x + T.w * A.x"]
+        @test _fjson(flat.equations) == [_feq(_fD("A.x"), _fe("+", _fe("-", "A.x"), _fe("*", "T.w", "A.x")))]
         # The rewrite is the point: `T.z` must not survive in the merged RHS.
-        @test !occursin("T.z", to_ascii(flat.equations[1]))
+        @test !("T.z" in expression_names(flat.equations[1]))
         # ... and the PRUNE is its other half (§4.7.1 step 4, esm-spec §10.2):
         # `T.z`'s defining equation is gone, so keeping its declaration would
         # leave an unknown with no constraint — an ALGEBRAIC unknown (§6.3.1),
@@ -981,13 +1074,13 @@ end
          "coupling": [{"type": "operator_compose", "systems": ["A", "T"],
                        "translate": {"$(k)": "$(v)"}}]}
         """
-        render(f) = String[to_ascii(eq) for eq in f.equations]
+        render(f) = _fjson(f.equations)
         scoped = flatten(load_string(doc("A.x", "T.z")))
         bare = flatten(load_string(doc("x", "z")))
         mixed = flatten(load_string(doc("x", "T.z")))
         @test render(bare) == render(scoped)
         @test render(mixed) == render(scoped)
-        @test render(bare) == ["D(A.x)/Dt = -A.x + T.w * A.x"]
+        @test render(bare) == [_feq(_fD("A.x"), _fe("+", _fe("-", "A.x"), _fe("*", "T.w", "A.x")))]
         @test collect(keys(bare.state_variables)) == ["A.x"]
     end
 
@@ -1019,12 +1112,12 @@ end
                        "translate": {"A.x": "T.z"}}]}
         """
         flat = flatten(load_string(doc))
-        @test String[to_ascii(eq) for eq in flat.equations] ==
-            ["D(A.x)/Dt = -A.x + T.w * A.x", "C.flux = C.vd * A.x"]
+        @test _fjson(flat.equations) ==
+            [_feq(_fD("A.x"), _fe("+", _fe("-", "A.x"), _fe("*", "T.w", "A.x"))), _feq("C.flux", _fe("*", "C.vd", "A.x"))]
         @test collect(keys(flat.state_variables)) == ["A.x"]
         @test collect(keys(flat.observed_variables)) == ["C.flux"]
         # No `T.z` anywhere: not as a declaration, not as a reference.
-        @test !any(occursin("T.z", to_ascii(eq)) for eq in flat.equations)
+        @test !any("T.z" in expression_names(eq) for eq in flat.equations)
     end
 
     @testset "operator_compose: a `_var` translate value stays harmless" begin
@@ -1045,11 +1138,9 @@ end
         )
         @test length(flat.equations) == 4
         @test isempty(flat.algebraic_variables)
-        @test String[String(split(to_ascii(eq), " = ")[1]) for eq in flat.equations] ==
-            [
-            "D(SimpleChemistry.O3)/Dt", "D(SimpleChemistry.NO)/Dt",
-            "D(SimpleChemistry.NO2)/Dt",
-            "D(SimpleChemistry.Photochemistry.NO2_photo)/Dt",
+        @test _flhs(flat.equations) == [
+            canonical_expr_json(_fD("SimpleChemistry.$s"))
+                for s in ("O3", "NO", "NO2", "Photochemistry.NO2_photo")
         ]
     end
 
@@ -1083,11 +1174,23 @@ end
         # POSITIONS are the merge trail: each merge keeps the surviving A
         # equation's document slot, so NO's chain ends at the sink's slot and
         # O3's at the source's (its last matching A).
-        @test String[to_ascii(eq) for eq in flat.equations] == [
-            "D(Chem.NO)/Dt = (-Sink.kd) * Chem.NO + (-Chem.k2) * Chem.NO + " *
-                "(-Adv.wind) * grad(Chem.NO)",
-            "D(Chem.O3)/Dt = Src.e + (-Sink.kd) * Chem.O3 + " *
-                "(-Chem.k1) * Chem.O3 + (-Adv.wind) * grad(Chem.O3)",
+        loss(k, v) = _fe("*", _fe("-", k), "Chem.$v")
+        adv(v) = _fe("*", _fe("-", "Adv.wind"), _fe("grad", "Chem.$v"))
+        # Each right-hand side is the left fold of its contributions
+        # (esm-libraries-spec §4.7.5).
+        @test _fjson(flat.equations) == [
+            _feq(
+                _fD("Chem.NO"),
+                _fe("+", _fe("+", loss("Sink.kd", "NO"), loss("Chem.k2", "NO")), adv("NO"))
+            ),
+            _feq(
+                _fD("Chem.O3"),
+                _fe(
+                    "+",
+                    _fe("+", _fe("+", "Src.e", loss("Sink.kd", "O3")), loss("Chem.k1", "O3")),
+                    adv("O3")
+                )
+            ),
         ]
         @test sort(collect(keys(flat.state_variables))) == ["Chem.NO", "Chem.O3"]
         @test isempty(flat.algebraic_variables)
@@ -1138,16 +1241,24 @@ end
         permuted = flatten(load_string(doc([compose, couple, varmap])))
 
         # Same flattened equations, whichever order the author typed them in.
-        @test String[to_ascii(eq) for eq in declared.equations] ==
-            String[to_ascii(eq) for eq in permuted.equations]
+        @test _fjson(declared.equations) == _fjson(permuted.equations)
         # ... and it is the BY-KIND answer: `operator_compose` runs first, so
         # advection is summed onto the tendency and only then is the whole sum
         # scaled by the multiplicative connector. Declaration order would have
         # scaled the bare reaction term and added advection outside the product.
         @test length(declared.equations) == 1
-        @test to_ascii(declared.equations[1]) ==
-            "D(Chem.O3)/Dt = ((-Scale.factor) * Chem.O3 + " *
-            "(-Adv.wind) * grad(Chem.O3)) * Scale.factor"
+        @test canonical_expr_json(declared.equations[1]) == _feq(
+            _fD("Chem.O3"),
+            _fe(
+                "*",
+                _fe(
+                    "+",
+                    _fe("*", _fe("-", "Scale.factor"), "Chem.O3"),
+                    _fe("*", _fe("-", "Adv.wind"), _fe("grad", "Chem.O3")),
+                ),
+                "Scale.factor",
+            )
+        )
 
         # METADATA still reports DECLARATION order — application order and
         # reporting order are separate, which is why these two disagree.
@@ -1178,10 +1289,8 @@ end
         @test String[a.lhs for a in ev.affects] ==
             ["SimpleChemistry.Photochemistry.photolysis_rate"]
         @test ev.trigger isa EarthSciAST.ConditionTrigger
-        @test occursin(
-            "SimpleChemistry.Photochemistry.solar_zenith",
-            to_ascii(ev.trigger.expression)
-        )
+        @test "SimpleChemistry.Photochemistry.solar_zenith" in
+            expression_names(ev.trigger.expression)
     end
 
     @testset "operator_compose: the placeholder ranges over STATES only" begin
@@ -1198,10 +1307,11 @@ end
                 )
             )
         )
-        @test any(
-            to_ascii(eq) == "Chemistry.deposition_flux = Chemistry.O3 * 1.0e-3"
-                for eq in flat.equations
+        flux = _feq(
+            "Chemistry.deposition_flux",
+            _fe("*", "Chemistry.O3", _fe("const"; units = "mol/(m^2*s)", value = 1.0e-3))
         )
+        @test flux in _fjson(flat.equations)
     end
 
     @testset "couple `multiplicative` onto something with no tendency" begin

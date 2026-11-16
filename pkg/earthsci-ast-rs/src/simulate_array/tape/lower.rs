@@ -63,17 +63,9 @@ use std::sync::Arc;
 // Bail plumbing.
 // ---------------------------------------------------------------------------
 
-/// Why a rule could not be lowered. Carries the DEEPEST bail site, mirroring
-/// the overlay's `note_bail` convention (the first log entry is the actual
-/// unsupported construct).
-#[derive(Debug)]
-pub(crate) struct Bail {
-    pub reason: String,
-}
-
 macro_rules! bail_tape {
     ($($t:tt)*) => {
-        return Err(Bail { reason: format!($($t)*) })
+        return Err(Bail::new(format!($($t)*)))
     };
 }
 
@@ -82,11 +74,11 @@ macro_rules! bail_tape {
 /// table that outgrows that refuses the rule by name rather than wrapping onto
 /// another entry.
 fn tape_index(n: usize, table: &str) -> LResult<u32> {
-    u32::try_from(n).map_err(|_| Bail {
-        reason: format!(
+    u32::try_from(n).map_err(|_| {
+        Bail::new(format!(
             "tape index overflow: the program has more than {} {table}",
             u32::MAX
-        ),
+        ))
     })
 }
 
@@ -226,6 +218,79 @@ const MAX_RANK: usize = 8;
 /// term each): beyond it the contraction stays unrolled rather than
 /// materialize its terms.
 const MAX_PROMOTED_ELEMS: usize = 1 << 27;
+
+/// The parts of a contraction (`faq`) every lowering form reads: the output
+/// index names, the body, the contracted names and their ranges, the
+/// reduction and the filter. The output box and a join, which only some
+/// forms take, are passed beside it.
+#[derive(Clone, Copy)]
+pub(super) struct Contraction<'a> {
+    pub(super) idx_names: &'a [String],
+    pub(super) body: &'a Expr,
+    pub(super) contract_names: &'a [String],
+    pub(super) contract_dims: &'a [ContractDim],
+    pub(super) reduce: ReduceKind,
+    pub(super) filter: Option<&'a Expr>,
+}
+
+impl<'a> Contraction<'a> {
+    fn of(spec: &'a ArrayOpSpec<'a>) -> Self {
+        Contraction {
+            idx_names: spec.idx_names,
+            body: spec.body,
+            contract_names: &spec.contract_names,
+            contract_dims: &spec.contract_dims,
+            reduce: spec.reduce,
+            filter: spec.filter,
+        }
+    }
+
+    /// An elementwise map over the output box: nothing contracted, no
+    /// filter.
+    fn map(idx_names: &'a [String], body: &'a Expr) -> Self {
+        Contraction {
+            idx_names,
+            body,
+            contract_names: &[],
+            contract_dims: &[],
+            reduce: ReduceKind::Sum,
+            filter: None,
+        }
+    }
+}
+
+/// An `index` read whose subscripts are classified against the box it is
+/// read over ([`TapeBuilder::lower_index`]): the source's box, per output
+/// axis the source axis its symbol subscripts (and how), every constant
+/// subscript as `(source dim, 1-based index)`, and the one source axis whose
+/// subscript is data, if any.
+#[derive(Clone, Copy)]
+struct IndexRead<'r> {
+    src_shape: &'r [usize],
+    src_origin: &'r [i64],
+    mapped: &'r [Option<(usize, AxisIndex)>],
+    fixed_raw: &'r [(usize, i64)],
+    data_axis: Option<usize>,
+}
+
+impl IndexRead<'_> {
+    /// The constant subscripts as 0-based source positions (0 where out of
+    /// range), and whether any is out of range.
+    fn fixed_positions(&self) -> (SmallVec<[(usize, i64); 4]>, bool) {
+        let mut fixed: SmallVec<[(usize, i64); 4]> = SmallVec::new();
+        let mut any_oob = false;
+        for &(d, idx1) in self.fixed_raw {
+            let i0 = idx1 - self.src_origin[d];
+            if i0 < 0 || i0 >= self.src_shape[d] as i64 {
+                any_oob = true;
+                fixed.push((d, 0));
+            } else {
+                fixed.push((d, i0));
+            }
+        }
+        (fixed, any_oob)
+    }
+}
 
 /// A static contraction window: the contracted names and their inclusive
 /// bounds, in `contract_names` order.
@@ -913,7 +978,7 @@ pub(crate) struct TapeBuilder<'m> {
     rules: Vec<RuleInfo>,
     /// Parallel to `rules`: the deepest decline reason of each rule that did
     /// not lower. Any `Some` means the build yields no program.
-    declined: Vec<Option<String>>,
+    declined: Vec<Option<Bail>>,
     /// Per-section chunk streams (index = Cadence as usize).
     streams: [Vec<Chunk>; 3],
     /// Home-stream chunk index per rule ordinal (for export insertion).
@@ -1513,29 +1578,7 @@ impl<'m> TapeBuilder<'m> {
     /// neither fault nor touch anything outside its own slot, so it may run
     /// where its operands are available rather than where it was lowered.
     fn hoistable(instr: &Instr) -> bool {
-        matches!(
-            instr,
-            Instr::Bin { .. }
-                | Instr::Un { .. }
-                | Instr::Neg { .. }
-                | Instr::Select { .. }
-                | Instr::Gather { .. }
-                | Instr::LoadElem { .. }
-                | Instr::Ramp { .. }
-                | Instr::Fill { .. }
-                | Instr::Copy { .. }
-                | Instr::Region { .. }
-                | Instr::Assemble { .. }
-                | Instr::ConstArray { .. }
-                | Instr::Count { .. }
-                | Instr::Reduce { .. }
-                | Instr::Scan { .. }
-                | Instr::IndexGather { .. }
-                | Instr::TableGather { .. }
-                | Instr::DataGather { faults: false, .. }
-                | Instr::SegReduce { .. }
-                | Instr::Reshape { .. }
-        )
+        instr.effect() == Effect::Pure
     }
 
     // -- LV helpers -----------------------------------------------------------
@@ -1665,31 +1708,36 @@ impl<'m> TapeBuilder<'m> {
             .get(self.cur_rule as usize)
             .map(|r| r.name.as_str())
             .unwrap_or("?");
-        bail_tape!(
-            "{}: rule `{rule}` reads `{name}` along `{}` at cells {lo}..{hi}, which its \
-             storage box {box_lo}..{} does not hold",
+        Err(Bail::coded(
             crate::diagnostic::codes::RANGE_HALO_INSUFFICIENT,
-            dom.set,
-            box_lo + box_len - 1
-        )
+            format!(
+                "rule `{rule}` reads `{name}` along `{}` at cells {lo}..{hi}, which its \
+                 storage box {box_lo}..{} does not hold",
+                dom.set,
+                box_lo + box_len - 1
+            ),
+        ))
     }
 
     /// `index(src, …)` of a range-restricted source with every subscript an
     /// affine map of one output axis, a periodic wrap of one, or a constant:
     /// each position is resolved by [`Self::tile_resolve`] and the runs that
     /// read consecutive source cells become the gather's copy segments.
-    #[allow(clippy::too_many_arguments)]
     fn lower_tile_gather(
         &mut self,
         bx: &LBox,
         arg0: &LV,
         name: &str,
         axes: &[TileAxisDom],
-        src_shape: &[usize],
-        src_origin: &[i64],
-        mapped: &[Option<(usize, AxisIndex)>],
-        fixed_raw: &[(usize, i64)],
+        read: &IndexRead,
     ) -> LResult<LV> {
+        let IndexRead {
+            src_shape,
+            src_origin,
+            mapped,
+            fixed_raw,
+            ..
+        } = *read;
         let out_ndim = bx.shape.len();
         let mut fixed: SmallVec<[(usize, i64); 4]> = SmallVec::new();
         let mut any_ghost = false;
@@ -1808,7 +1856,6 @@ impl<'m> TapeBuilder<'m> {
     /// `range_global_locality`. Every other subscript is classified as
     /// [`Self::lower_tile_gather`] classifies it, and must read one run of
     /// stored cells.
-    #[allow(clippy::too_many_arguments)]
     fn lower_tile_index_gather(
         &mut self,
         node: &Arc<ExpressionNode>,
@@ -1816,20 +1863,26 @@ impl<'m> TapeBuilder<'m> {
         arg0: &LV,
         name: &str,
         axes: &[TileAxisDom],
-        src_shape: &[usize],
-        src_origin: &[i64],
-        data_d: usize,
-        mapped: &[Option<(usize, AxisIndex)>],
-        fixed_raw: &[(usize, i64)],
+        read: &IndexRead,
     ) -> LResult<LV> {
+        let IndexRead {
+            src_shape,
+            src_origin,
+            mapped,
+            fixed_raw,
+            ..
+        } = *read;
+        let data_d = read.data_axis.expect("a read with a computed subscript");
         let dom = &axes[data_d];
         let whole = src_origin[data_d] == dom.lo && src_shape[data_d] as i64 == dom.hi - dom.lo + 1;
         if !whole {
-            bail_tape!(
-                "{}: `{name}` is read at a computed subscript along the decomposed axis `{}`",
+            return Err(Bail::coded(
                 crate::diagnostic::codes::RANGE_GLOBAL_LOCALITY,
-                dom.set
-            );
+                format!(
+                    "`{name}` is read at a computed subscript along the decomposed axis `{}`",
+                    dom.set
+                ),
+            ));
         }
         if dom.lo != 1 {
             bail_tape!(
@@ -2996,58 +3049,25 @@ impl<'m> TapeBuilder<'m> {
                 _ => return self.lower_data_gather(node, bx, &arg0),
             }
         }
+        let read = IndexRead {
+            src_shape: &src_shape,
+            src_origin: &src_origin,
+            mapped: &mapped,
+            fixed_raw: &fixed_raw,
+            data_axis,
+        };
         if let Some((name, axes)) = self.tile_source(&arg0) {
-            if let Some(d) = data_axis {
-                return self.lower_tile_index_gather(
-                    node,
-                    bx,
-                    &arg0,
-                    &name,
-                    &axes,
-                    &src_shape,
-                    &src_origin,
-                    d,
-                    &mapped,
-                    &fixed_raw,
-                );
+            if data_axis.is_some() {
+                return self.lower_tile_index_gather(node, bx, &arg0, &name, &axes, &read);
             }
-            return self.lower_tile_gather(
-                bx,
-                &arg0,
-                &name,
-                &axes,
-                &src_shape,
-                &src_origin,
-                &mapped,
-                &fixed_raw,
-            );
+            return self.lower_tile_gather(bx, &arg0, &name, &axes, &read);
         }
         if const_base {
-            return self.lower_const_gather(
-                node,
-                bx,
-                arg0,
-                &src_shape,
-                &src_origin,
-                &mapped,
-                &fixed_raw,
-            );
+            return self.lower_const_gather(node, bx, arg0, &read);
         }
-        let mut fixed: SmallVec<[(usize, i64); 4]> = SmallVec::new();
-        let mut any_fixed_oob = false;
-        for &(d, idx1) in &fixed_raw {
-            let i0 = idx1 - src_origin[d];
-            if i0 < 0 || i0 >= src_shape[d] as i64 {
-                any_fixed_oob = true;
-                fixed.push((d, 0));
-            } else {
-                fixed.push((d, i0));
-            }
-        }
-        if let Some(d) = data_axis {
-            if let Some(v) =
-                self.lower_index_gather(node, bx, &arg0, d, &mapped, &fixed, any_fixed_oob)?
-            {
+        let (fixed, any_fixed_oob) = read.fixed_positions();
+        if data_axis.is_some() {
+            if let Some(v) = self.lower_index_gather(node, bx, &arg0, &read)? {
                 return Ok(v);
             }
             return self.lower_data_gather(node, bx, &arg0);
@@ -3611,7 +3631,14 @@ impl<'m> TapeBuilder<'m> {
         if !inside {
             return Ok(None);
         }
-        self.lower_index_gather(node, bx, base, 0, &[None], &[], false)
+        let read = IndexRead {
+            src_shape: &[len],
+            src_origin: &[1],
+            mapped: &[None],
+            fixed_raw: &[],
+            data_axis: Some(0),
+        };
+        self.lower_index_gather(node, bx, base, &read)
     }
 
     /// `index(base, s…)` with every subscript evaluated per element of the
@@ -4174,17 +4201,20 @@ impl<'m> TapeBuilder<'m> {
     /// plain gather when every read is in range, else an [`Instr::Assemble`]
     /// of per-run sub-gathers over a `NaN` fill: at most three runs per axis,
     /// so its size does not depend on the box.
-    #[allow(clippy::too_many_arguments)]
     fn lower_const_gather(
         &mut self,
         node: &Arc<ExpressionNode>,
         bx: &LBox,
         src: LV,
-        src_shape: &[usize],
-        src_origin: &[i64],
-        mapped: &[Option<(usize, AxisIndex)>],
-        fixed_raw: &[(usize, i64)],
+        read: &IndexRead,
     ) -> LResult<LV> {
+        let IndexRead {
+            src_shape,
+            src_origin,
+            mapped,
+            fixed_raw,
+            ..
+        } = *read;
         if src_origin.iter().any(|&o| o != 1) {
             // A const array is a literal or a materialized observed, both
             // served at origin 1; the policy arithmetic below assumes it.
@@ -4253,8 +4283,7 @@ impl<'m> TapeBuilder<'m> {
                 .iter()
                 .any(|rs| rs.iter().any(|(_, _, r)| matches!(r, ConstRun::Oob)));
         if any_oob {
-            let msg =
-                self.const_oob_first(bx, name, src_shape, mapped, fixed_raw, fixed_oob, &runs);
+            let msg = self.const_oob_first(bx, name, read, fixed_oob, &runs);
             let cell = msg.0;
             // Which cells fault, for a read the oracle evaluates at only some
             // of them: per source dim, its subscript at each cell.
@@ -4439,17 +4468,17 @@ impl<'m> TapeBuilder<'m> {
     /// than mixed with a data subscript). A const-array base never reaches
     /// here: its out-of-range rule is the factor's boundary policy, which
     /// needs the subscript values to decide.
-    #[allow(clippy::too_many_arguments)]
     fn lower_index_gather(
         &mut self,
         node: &Arc<ExpressionNode>,
         bx: &LBox,
         base: &LV,
-        data_d: usize,
-        mapped: &[Option<(usize, AxisIndex)>],
-        fixed: &[(usize, i64)],
-        any_fixed_oob: bool,
+        read: &IndexRead,
     ) -> LResult<Option<LV>> {
+        let data_d = read.data_axis.expect("a read with a computed subscript");
+        let mapped = read.mapped;
+        let (fixed, any_fixed_oob) = read.fixed_positions();
+        let fixed = &fixed[..];
         let (src_shape, src_origin) = self.lv_box(base).expect("an array base");
         if src_origin.iter().any(|&o| o != 1) {
             bail_tape!("index: data subscript into a base that is not origin-1");
@@ -4526,17 +4555,20 @@ impl<'m> TapeBuilder<'m> {
     /// faults in the oracle's visiting order, and the message it latches
     /// there: `index_into` checks the source dims in order and reports the
     /// first one out of range with no policy.
-    #[allow(clippy::too_many_arguments)]
     fn const_oob_first(
         &self,
         bx: &LBox,
         name: &str,
-        src_shape: &[usize],
-        mapped: &[Option<(usize, AxisIndex)>],
-        fixed_raw: &[(usize, i64)],
+        read: &IndexRead,
         fixed_oob: bool,
         runs: &[SmallVec<[(usize, usize, ConstRun); 3]>],
     ) -> (SmallVec<[i64; 4]>, String) {
+        let IndexRead {
+            src_shape,
+            mapped,
+            fixed_raw,
+            ..
+        } = *read;
         let nd = bx.shape.len();
         // Every out-of-range cell set is a union of axis-aligned slabs, so its
         // first cell in any visiting order is one slab's corner: the origin
@@ -5282,27 +5314,10 @@ impl<'m> TapeBuilder<'m> {
         }
         // A join gate drives the contraction: the tuple-list form.
         if spec.has_drivable_overlap() {
-            return self.lower_tuple_contraction(
-                spec.idx_names,
-                &spec.ranges,
-                spec.body,
-                &spec.contract_names,
-                &spec.contract_dims,
-                spec.reduce,
-                spec.filter,
-                spec.join,
-            );
+            return self.lower_tuple_contraction(&Contraction::of(&spec), &spec.ranges, spec.join);
         }
         let level = self.enter_fault_level(Some(bx));
-        let v = self.lower_faq(
-            spec.idx_names,
-            &spec.ranges,
-            spec.body,
-            &spec.contract_names,
-            &spec.contract_dims,
-            spec.reduce,
-            spec.filter,
-        );
+        let v = self.lower_faq(&Contraction::of(&spec), &spec.ranges);
         self.leave_fault_level(level);
         v
     }
@@ -5581,17 +5596,15 @@ impl<'m> TapeBuilder<'m> {
 
     // -- faq (the try_eval_faq_vectorized mirror) ---------------------
 
-    #[allow(clippy::too_many_arguments)]
-    fn lower_faq(
-        &mut self,
-        idx_names: &[String],
-        ranges: &[(i64, i64)],
-        body: &Expr,
-        contract_names: &[String],
-        contract_dims: &[ContractDim],
-        reduce: ReduceKind,
-        filter: Option<&Expr>,
-    ) -> LResult<LV> {
+    fn lower_faq(&mut self, c: &Contraction, ranges: &[(i64, i64)]) -> LResult<LV> {
+        let Contraction {
+            idx_names,
+            body,
+            contract_names,
+            contract_dims,
+            reduce,
+            filter,
+        } = *c;
         let lo: DimI = ranges.iter().map(|(l, _)| *l).collect();
         let shape: DimU = ranges
             .iter()
@@ -5618,14 +5631,7 @@ impl<'m> TapeBuilder<'m> {
             body,
             filter,
         ) {
-            return self.lower_prefix_scan(
-                idx_names,
-                ranges,
-                scan,
-                &contract_names[0],
-                body,
-                reduce,
-            );
+            return self.lower_prefix_scan(c, ranges, scan);
         }
         // A filter that pins an output index by equality: one pass over the
         // contracted box, each admitted term scattered into its cell
@@ -5633,16 +5639,7 @@ impl<'m> TapeBuilder<'m> {
         // lower keeps the dense lowering below.
         if !contract_names.is_empty() && filter.is_some() {
             let txn = self.sub_txn();
-            match self.lower_equality_scatter(
-                idx_names,
-                &lo,
-                &shape,
-                body,
-                contract_names,
-                contract_dims,
-                reduce,
-                filter,
-            ) {
+            match self.lower_equality_scatter(c, &lo, &shape) {
                 Ok(Some(v)) => return Ok(v),
                 Ok(None) => {}
                 Err(_) => self.sub_rollback(txn),
@@ -5668,16 +5665,7 @@ impl<'m> TapeBuilder<'m> {
             self.pop_scope();
             r?
         } else {
-            let r = self.lower_contracted(
-                idx_names,
-                &lo,
-                &shape,
-                body,
-                contract_names,
-                contract_dims,
-                reduce,
-                filter,
-            );
+            let r = self.lower_contracted(c, &lo, &shape);
             self.pop_scope();
             r?
         };
@@ -5703,18 +5691,15 @@ impl<'m> TapeBuilder<'m> {
     /// instruction whatever the window's length
     /// ([`Self::lower_contracted_box`]). A body that form cannot lower keeps
     /// the unrolled form ([`Self::lower_contracted_unrolled`]).
-    #[allow(clippy::too_many_arguments)]
-    fn lower_contracted(
-        &mut self,
-        idx_names: &[String],
-        lo: &DimI,
-        shape: &DimU,
-        body: &Expr,
-        contract_names: &[String],
-        contract_dims: &[ContractDim],
-        reduce: ReduceKind,
-        filter: Option<&Expr>,
-    ) -> LResult<LV> {
+    fn lower_contracted(&mut self, c: &Contraction, lo: &DimI, shape: &DimU) -> LResult<LV> {
+        let Contraction {
+            idx_names,
+            contract_names,
+            contract_dims,
+            reduce,
+            filter,
+            ..
+        } = *c;
         let combine_op = self.array_combine_op(reduce, "contracted")?;
         let nc = contract_names.len();
         if nc == 0 {
@@ -5732,16 +5717,7 @@ impl<'m> TapeBuilder<'m> {
                 .zip(shape)
                 .map(|(&l, &n)| (l, l + n as i64 - 1))
                 .collect();
-            return self.lower_tuple_contraction(
-                idx_names,
-                &ranges,
-                body,
-                contract_names,
-                contract_dims,
-                reduce,
-                filter,
-                None,
-            );
+            return self.lower_tuple_contraction(c, &ranges, None);
         }
         let mut clo: SmallVec<[i64; 4]> = SmallVec::from_elem(0, nc);
         let mut chi: SmallVec<[i64; 4]> = SmallVec::from_elem(0, nc);
@@ -5765,15 +5741,11 @@ impl<'m> TapeBuilder<'m> {
             hi: &chi[..nc],
         };
         let txn = self.sub_txn();
-        match self.lower_contracted_box(
-            idx_names, lo, shape, body, &window, combine_op, identity, filter,
-        ) {
+        match self.lower_contracted_box(c, lo, shape, &window, combine_op) {
             Ok(v) => Ok(v),
             Err(_) => {
                 self.sub_rollback(txn);
-                self.lower_contracted_unrolled(
-                    idx_names, lo, shape, body, &window, combine_op, identity, filter,
-                )
+                self.lower_contracted_unrolled(c, lo, shape, &window, combine_op)
             }
         }
     }
@@ -5789,18 +5761,21 @@ impl<'m> TapeBuilder<'m> {
     ///
     /// The promoted box holds one term per (tuple, output cell); a window
     /// whose box would exceed [`MAX_PROMOTED_ELEMS`] stays unrolled.
-    #[allow(clippy::too_many_arguments)]
     fn lower_contracted_box(
         &mut self,
-        idx_names: &[String],
+        c: &Contraction,
         lo: &DimI,
         shape: &DimU,
-        body: &Expr,
         window: &ContractWindow,
         combine_op: BinCode,
-        identity: f64,
-        filter: Option<&Expr>,
     ) -> LResult<LV> {
+        let Contraction {
+            idx_names,
+            body,
+            filter,
+            ..
+        } = *c;
+        let identity = c.reduce.identity();
         let nc = window.names.len();
         let ns = shape.len();
         if shape.is_empty() || ns + nc > MAX_RANK {
@@ -5911,18 +5886,21 @@ impl<'m> TapeBuilder<'m> {
     /// the window; it serves only bodies the looped form cannot lower (a
     /// read whose index mixes an output and a contracted symbol, such as a
     /// stencil window `u[i + k]`).
-    #[allow(clippy::too_many_arguments)]
     fn lower_contracted_unrolled(
         &mut self,
-        idx_names: &[String],
+        c: &Contraction,
         lo: &DimI,
         shape: &DimU,
-        body: &Expr,
         window: &ContractWindow,
         combine_op: BinCode,
-        identity: f64,
-        filter: Option<&Expr>,
     ) -> LResult<LV> {
+        let Contraction {
+            idx_names,
+            body,
+            filter,
+            ..
+        } = *c;
+        let identity = c.reduce.identity();
         let nc = window.names.len();
         let contract_names = window.names;
         let (clo, chi) = (window.lo, window.hi);
@@ -6029,9 +6007,8 @@ impl<'m> TapeBuilder<'m> {
             out,
             coords: coords.clone(),
             shape,
-            axis: u8::try_from(axis).map_err(|_| Bail {
-                reason: format!("observed: recurrence axis {axis} out of range"),
-            })?,
+            axis: u8::try_from(axis)
+                .map_err(|_| Bail::new(format!("observed: recurrence axis {axis} out of range")))?,
             body_len: 0,
             result: Operand::Lit(f64::NAN),
         });
@@ -6849,43 +6826,20 @@ impl<'m> TapeBuilder<'m> {
             spec.body,
             spec.filter,
         ) {
-            let v = self.lower_prefix_scan(
-                spec.idx_names,
-                &spec.ranges,
-                scan,
-                &spec.contract_names[0],
-                spec.body,
-                spec.reduce,
-            )?;
+            let v = self.lower_prefix_scan(&Contraction::of(&spec), &spec.ranges, scan)?;
             return Ok(self.reorigin_to_one(v));
         }
         // A join gate drives the contraction (`eval_faq` resolves its gates
         // for everything but a prefix scan): the tuple-list form.
         if spec.has_drivable_overlap() {
-            let v = self.lower_tuple_contraction(
-                spec.idx_names,
-                &spec.ranges,
-                spec.body,
-                &spec.contract_names,
-                &spec.contract_dims,
-                spec.reduce,
-                spec.filter,
-                spec.join,
-            )?;
+            let v =
+                self.lower_tuple_contraction(&Contraction::of(&spec), &spec.ranges, spec.join)?;
             return Ok(self.reorigin_to_one(v));
         }
         if spec.ranges.is_empty() {
             return self.lower_scalar_reduction(&spec);
         }
-        let v = self.lower_faq(
-            spec.idx_names,
-            &spec.ranges,
-            spec.body,
-            &spec.contract_names,
-            &spec.contract_dims,
-            spec.reduce,
-            spec.filter,
-        )?;
+        let v = self.lower_faq(&Contraction::of(&spec), &spec.ranges)?;
         Ok(self.reorigin_to_one(v))
     }
 
@@ -6937,13 +6891,8 @@ impl<'m> TapeBuilder<'m> {
                 }
                 _ => {
                     return self.lower_tuple_contraction(
-                        spec.idx_names,
+                        &Contraction::of(spec),
                         &spec.ranges,
-                        spec.body,
-                        &spec.contract_names,
-                        &spec.contract_dims,
-                        spec.reduce,
-                        spec.filter,
                         None,
                     );
                 }
@@ -7342,13 +7291,17 @@ impl<'m> TapeBuilder<'m> {
     /// a constant.
     fn lower_prefix_scan(
         &mut self,
-        idx_names: &[String],
+        c: &Contraction,
         ranges: &[(i64, i64)],
         scan: PrefixScan,
-        j_name: &str,
-        body: &Expr,
-        reduce: ReduceKind,
     ) -> LResult<LV> {
+        let Contraction {
+            idx_names,
+            body,
+            reduce,
+            ..
+        } = *c;
+        let j_name = c.contract_names[0].as_str();
         let combine_op = self.array_combine_op(reduce, "scan")?;
         let full_lo: DimI = ranges.iter().map(|(l, _)| *l).collect();
         let full_shape: DimU = ranges
@@ -7390,14 +7343,11 @@ impl<'m> TapeBuilder<'m> {
             Ok(t) => t,
             Err(_) => {
                 self.sub_rollback(txn);
-                return self.lower_prefix_scan_steps(
-                    idx_names, ranges, scan, j_name, body, combine_op, reduce,
-                );
+                return self.lower_prefix_scan_steps(c, ranges, scan, combine_op);
             }
         };
-        let axis = u8::try_from(scan.axis).map_err(|_| Bail {
-            reason: "scan: axis index out of range".into(),
-        })?;
+        let axis = u8::try_from(scan.axis)
+            .map_err(|_| Bail::new("scan: axis index out of range".into()))?;
         let sec = self.placement(self.lv_cadence(&term));
         let out = self.new_slot(&full_shape, &full_lo, false, sec);
         let instr = Instr::Scan {
@@ -7418,17 +7368,20 @@ impl<'m> TapeBuilder<'m> {
     /// scanned position with the step bound as a constant, each written into
     /// the result by a full-box region write. Its length grows with the
     /// scanned extent; it serves only bodies the whole-box form cannot lower.
-    #[allow(clippy::too_many_arguments)]
     fn lower_prefix_scan_steps(
         &mut self,
-        idx_names: &[String],
+        c: &Contraction,
         ranges: &[(i64, i64)],
         scan: PrefixScan,
-        j_name: &str,
-        body: &Expr,
         combine_op: BinCode,
-        reduce: ReduceKind,
     ) -> LResult<LV> {
+        let Contraction {
+            idx_names,
+            body,
+            reduce,
+            ..
+        } = *c;
+        let j_name = c.contract_names[0].as_str();
         let full_lo: DimI = ranges.iter().map(|(l, _)| *l).collect();
         let full_shape: DimU = ranges
             .iter()
@@ -7852,7 +7805,7 @@ pub(super) fn build_tape_program(
             }
             Err(bail) => {
                 b.rollback(txn);
-                b.declined[b.cur_rule as usize] = Some(bail.reason);
+                b.declined[b.cur_rule as usize] = Some(bail);
                 b.obs_defined.insert(name, ObsVal::Declined);
             }
         }
@@ -7890,7 +7843,7 @@ pub(super) fn build_tape_program(
             Ok(()) => {}
             Err(bail) => {
                 b.rollback(txn);
-                b.declined[b.cur_rule as usize] = Some(bail.reason);
+                b.declined[b.cur_rule as usize] = Some(bail);
             }
         }
         b.end_rule();
@@ -8197,6 +8150,7 @@ impl<'m> TapeBuilder<'m> {
         self.fault_first = txn.fault_first;
         self.fault_seq = txn.fault_seq;
         self.faults.truncate(txn.faults);
+        self.fault_order.truncate(txn.faults);
         self.lazy_faults.truncate(txn.lazy_faults);
         self.tuples_held = txn.tuples_held;
     }
@@ -8206,7 +8160,7 @@ impl<'m> TapeBuilder<'m> {
     /// its decline.
     fn take_tile_violation(&mut self) -> LResult<()> {
         match self.tile_violation.take() {
-            Some(reason) => Err(Bail { reason }),
+            Some(reason) => Err(Bail::new(reason)),
             None => Ok(()),
         }
     }
@@ -8248,27 +8202,14 @@ impl<'m> TapeBuilder<'m> {
         };
         let out = match need.pieces.as_slice() {
             [] => self.emit_zero_array(&shape, &origin),
-            [p] if whole(p) => self.lower_faq(
-                output_idx_names,
-                &p.ranges,
-                &p.body,
-                &[],
-                &[],
-                ReduceKind::Sum,
-                None,
-            )?,
+            [p] if whole(p) => {
+                self.lower_faq(&Contraction::map(output_idx_names, &p.body), &p.ranges)?
+            }
             pieces => {
                 let mut acc = self.emit_zero_array(&shape, &origin);
                 for p in pieces {
-                    let v = self.lower_faq(
-                        output_idx_names,
-                        &p.ranges,
-                        &p.body,
-                        &[],
-                        &[],
-                        ReduceKind::Sum,
-                        None,
-                    )?;
+                    let v =
+                        self.lower_faq(&Contraction::map(output_idx_names, &p.body), &p.ranges)?;
                     let region_ix = self.regions.len() as u32;
                     self.regions.push(RegionSpec {
                         dest_lo: p.dest_lo.iter().copied().collect(),
@@ -8354,15 +8295,7 @@ impl<'m> TapeBuilder<'m> {
                     // No cell to evaluate: the zeros the oracle materializes.
                     return Ok(ObsVal::Taped(self.emit_zero_array(&padded_shape, &ones)));
                 }
-                let v = self.lower_faq(
-                    output_idx_names,
-                    output_ranges,
-                    body,
-                    &[],
-                    &[],
-                    ReduceKind::Sum,
-                    None,
-                )?;
+                let v = self.lower_faq(&Contraction::map(output_idx_names, body), output_ranges)?;
                 if output_ranges.iter().all(|(lo, _)| *lo == 1) {
                     return Ok(ObsVal::Taped(v));
                 }
@@ -8543,15 +8476,15 @@ impl<'m> TapeBuilder<'m> {
                         )?),
                     ),
                 };
-                let v = self.lower_faq(
-                    output_idx_names,
-                    output_ranges,
+                let c = Contraction {
+                    idx_names: output_idx_names,
                     body,
                     contract_names,
                     contract_dims,
-                    *reduce,
-                    filter.as_deref(),
-                )?;
+                    reduce: *reduce,
+                    filter: filter.as_deref(),
+                };
+                let v = self.lower_faq(&c, output_ranges)?;
                 let s = self.ensure_slot(&v);
                 let var_ix = tape_index(
                     *self
@@ -8802,6 +8735,11 @@ impl<'m> TapeBuilder<'m> {
         if precision.iter().all(|&p| p == build) {
             precision.clear();
         }
+        debug_assert_eq!(
+            self.faults.len(),
+            self.fault_order.len(),
+            "`fault_order` is parallel to `faults`"
+        );
         let mut prog = TapeProgram {
             instrs,
             precision,
@@ -8955,24 +8893,7 @@ fn color_slab(prog: &mut TapeProgram) {
         // later runs — so out must not reuse a source buffer freed by this
         // very instruction. Release dying operands BEFORE allocating out only
         // for alias-safe (index-aligned elementwise) instructions.
-        let alias_safe = !matches!(
-            prog.instrs[i],
-            Instr::Gather { .. }
-                | Instr::Region { .. }
-                | Instr::Fused { .. }
-                | Instr::Lanes { .. }
-                | Instr::Reduce { .. }
-                | Instr::Count { .. }
-                | Instr::Scan { .. }
-                | Instr::Assemble { .. }
-                | Instr::IndexGather { .. }
-                | Instr::TableGather { .. }
-                | Instr::DataGather { .. }
-                | Instr::SegReduce { .. }
-                | Instr::Reshape { .. }
-                | Instr::Sweep { .. }
-                | Instr::ScalarRead { .. }
-        );
+        let alias_safe = prog.instrs[i].may_overwrite_source();
         let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();
         prog.instrs[i].for_each_def(&prog.tables(), |o| {
             if def[o as usize] == i {

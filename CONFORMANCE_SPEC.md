@@ -41,7 +41,6 @@ Test fixtures are organized by test category under the `tests/` directory:
 tests/
 ├── valid/                    # ESM files that should parse and validate successfully
 ├── invalid/                  # ESM files that should fail validation with specific errors
-├── display/                  # Display formatting test cases (Unicode, LaTeX, ASCII)
 ├── substitution/             # Expression substitution test cases
 ├── simulation/               # Simulation test cases with expected trajectories
 ├── version_compatibility/    # Version migration and compatibility tests
@@ -75,35 +74,14 @@ Examples:
 - `circular_coupling.esm` - Invalid file whose models' observeds read each other (`circular_dependency`)
 - `equation_count_mismatch.esm` - Invalid file with state/equation imbalance
 
-#### 2.2.2 Display Format Tests (`tests/display/`)
+#### 2.2.2 Display Format Tests (removed)
 
-**Purpose:** Verify consistent pretty-printing across implementations.
-
-**File format:** JSON arrays with test case objects:
-
-```json
-[
-  {
-    "input": "O3",
-    "unicode": "O₃",
-    "latex": "\\mathrm{O_3}",
-    "reasoning": "O is oxygen, 3 becomes subscript"
-  },
-  {
-    "input": {"op": "D", "args": ["O3"], "wrt": "t"},
-    "unicode": "∂O₃/∂t",
-    "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
-    "reasoning": "Partial derivative with respect to time"
-  }
-]
-```
-
-**Test case structure:**
-- `input`: The expression to format (string for variables, object for AST nodes)
-- `unicode`: Expected Unicode mathematical output
-- `latex`: Expected LaTeX output
-- `ascii`: Expected ASCII output (optional)
-- `reasoning`: Human-readable explanation of formatting rules applied
+The display tier (`tests/display/`), which pinned the plain-text, Unicode and
+old LaTeX renderings of expressions, is retired with those renderers. Math
+text is now the document source formats' (§5.58): the golden set
+`tests/conformance/document_format/` pins every binding's `print_math` and
+`parse_math`, byte for byte, and the gate of §5.59 checks every printer
+against every reader.
 
 #### 2.2.3 Substitution Tests (`tests/substitution/`)
 
@@ -284,40 +262,10 @@ All implementations must produce validation results in this standard format:
 }
 ```
 
-### 3.2 Display Results
+### 3.2 Display Results (removed)
 
-Display formatting tests expect this output structure:
-
-```json
-{
-  "language": "julia|typescript|python|rust",
-  "timestamp": "2026-02-18T10:30:00Z",
-  "test_file": "tests/display/chemical_subscripts.json",
-  "results": [
-    {
-      "input": "O3",
-      "output_unicode": "O₃",
-      "output_latex": "\\mathrm{O_3}",
-      "output_ascii": "O3",
-      "success": true,
-      "error": null
-    },
-    {
-      "input": {"op": "D", "args": ["O3"], "wrt": "t"},
-      "output_unicode": "∂O₃/∂t",
-      "output_latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
-      "output_ascii": "D(O3)/Dt",
-      "success": true,
-      "error": null
-    }
-  ],
-  "summary": {
-    "total_tests": 15,
-    "passed": 14,
-    "failed": 1
-  }
-}
-```
+Retired with the display tier (§2.2.2). A binding's conformance output has no
+`display_results` section.
 
 ### 3.3 Substitution Results
 
@@ -427,7 +375,6 @@ Test runners write results using this naming convention:
 ```
 <output-dir>/
 ├── <language>_validation_results.json      # Validation test results
-├── <language>_display_results.json         # Display formatting results
 ├── <language>_substitution_results.json    # Substitution test results
 ├── <language>_graph_results.json           # Graph generation results
 ├── <language>_simulation_results.json      # Simulation results (Julia/Python)
@@ -517,7 +464,6 @@ The categories a divergence can be scored against, and what "agree" means in eac
 | Test Category | Requirement | Notes |
 |---|---|---|
 | **Validation** | Exact | Every binding must reach the fixture's DECLARED outcome (`tests/valid/**` and `lib/**` valid; `tests/invalid/**` rejected) and emit the `(code, path)` pairs pinned in `tests/invalid/expected_errors.json` (§7.1.2). Mutual agreement between bindings is checked too, but SEPARATELY — five bindings can agree on the wrong answer, and did (audit F4). |
-| **Display (unicode / latex / ascii)** | Byte-identical | `tests/display/RENDERING_CONTRACT.md` is normative and already said so: "All language implementations MUST produce byte-identical output, verified by the shared fixtures in this directory". Every fixture case is rendered by every binding and compared to the pinned rendering AND across bindings. Number formatting is part of the contract, not an excusable "minor difference" — it is what a reader of the model sees. |
 | **Substitution** | Byte-identical AST | Compared as the serialized expression, not as a rendering. |
 | **Expression round-trip (property corpus)** | Byte-identical canonical form | §5.5.3. A divergence here is a different *document*. |
 | **Graph Structure** | Node / edge sets identical (as multisets) | Enforced by `tests/conformance/graph/cases.json`, which every binding drives. Node and edge ORDER is not a conformance property — bindings iterate their own maps — so lists compare as sorted multisets. The DOT / Mermaid BYTES are excluded: §4.8.3 requires both formats and specifies neither, and the bindings do not split in a way any tie-break resolves (see that corpus's README). |
@@ -3193,7 +3139,7 @@ arithmetic. In the Rust binding the audit found **five** places that compute
 | `apply_binary` / `apply_unary`, `binary_kernel_of` / `unary_kernel_of` | the shared tables — precision-aware |
 | `vectorized::vec_combine`'s monomorphized arms | hand-copied f64 closures; **this is the one the witness document actually executed** |
 | `tape::exec::fused`'s `dispatch_bin_kernel!` / `dispatch_un_kernel!` | hand-copied f64 closures |
-| `tape::exec::fused`'s `MicroOp::Bin2` / `Bin3` compositions | hand-copied f64 closures |
+| `tape::exec::fused`'s `MicroOp::Bin2` compositions | hand-copied f64 closures |
 | `vectorized::eval_vec_contracted`'s sum-of-products fusion | hand-written `*o += x * s` |
 
 Each was there for a good reason (removing an indirect call from an element
@@ -7131,18 +7077,18 @@ carries
 ```json
 "contributions": [
   {"rhs": "Src.e", "origins": [{"component": "Src"}]},
-  {"rhs": "(-Sink.kd) * Chem.O3", "origins": [{"component": "Sink"}]}
+  {"rhs": {"op": "*", "args": [{"op": "-", "args": ["Sink.kd"]}, "Chem.O3"]},
+   "origins": [{"component": "Sink"}]}
 ]
 ```
 
-with `rhs` the `to_ascii` rendering of the contribution's expression, the
-renderer the corpus already uses for `equations`. Every binding's flatten-corpus
-test compares the list EXACTLY and IN ORDER — the expressions, the origins and
-their order. The origins (their count and order per equation) are compared for
-every case with no exception. The rendered `rhs` of a contribution is compared
-wherever the binding compares the equation's own rendering: a case a binding
-already records as an equation-rendering divergence diverges in its
-contributions the same way, and only that rendering is excused. The Python oracle
+with `rhs` the contribution's expression as `canonicalize_document` writes it
+(API_SPEC §5.4), the
+form the corpus uses for every expression (`equations`, event conditions and
+affects, expression bounds and defaults, field initial conditions), compared as
+a JSON value with every number in its canonical kind (§5.5.3.1). Every
+binding's flatten-corpus test compares the list EXACTLY and IN ORDER — the
+expressions, the origins and their order. The Python oracle
 generates it (`scripts/generate-flatten-corpus.py`), which also refuses a case in
 which an equation has no contribution, or a contribution has no origin, a
 malformed origin or a repeated one.
@@ -7768,9 +7714,11 @@ round trip is generated at run time from `tests/` and is never committed.
 
 **Adapters.** All five bindings implement the document format API (API_SPEC
 §5.1: `print_markdown`, `parse_markdown`, `print_typst`, `parse_typst`,
-`print_document`, `parse_document`, `print_math`) and run the golden set, the
-`math` field of every expression case through `print_math` (a case whose
-display depends on a template is skipped, as no template is in scope there),
+`print_document`, `parse_document`, `print_math`, `parse_math`) and run the
+golden set, the `math` field of every expression case through `print_math` and
+back through `parse_math` to the case's equation in canonical form (a case
+whose display depends on a template is skipped, as no template is in scope
+there),
 and the whole-corpus round trip, in one test file each:
 `pkg/EarthSciAST.jl/test/document_format_test.jl` (Julia),
 `pkg/earthsci-ast-ts/src/document-format.test.ts` (TypeScript),

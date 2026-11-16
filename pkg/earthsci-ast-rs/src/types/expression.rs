@@ -273,11 +273,8 @@ impl Serialize for CanonicalJson<'_> {
 ///
 /// The [`RegionBound::Expr`] variant exists for the PRE-load form the schema
 /// admits (`"regions": [[[2, {"op": "-", "args": ["NLON", 1]}]]]`, whose bound
-/// pairs are `MetaparameterExpression`s) and which
-/// [`crate::parse_expression`] reconstructs from the text surface
-/// `makearray([2:NLON - 1, …] = …)`. Without it the Rust AST could not hold —
-/// and the printer could not reproduce — a document the other bindings load
-/// unchanged.
+/// pairs are `MetaparameterExpression`s). Without it the Rust AST could not
+/// hold a document the other bindings load unchanged.
 ///
 /// [`RegionBound::Int`] is listed FIRST in this untagged enum so a JSON integer
 /// still binds to it (and round-trips as an integer), exactly as before.
