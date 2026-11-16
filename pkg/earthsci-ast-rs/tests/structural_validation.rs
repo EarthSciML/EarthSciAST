@@ -2091,7 +2091,10 @@ fn esm_problem_refuses_an_equation_defining_a_parameter() {
                 },
             ) {
                 Ok(_) => panic!("{compiler:?}/{rhs:?} built a parameter-defining equation"),
-                Err(e) => e.to_string(),
+                Err(e) => {
+                    assert_eq!(e.code(), Some("equation_defines_parameter"), "{e}");
+                    e.to_string()
+                }
             };
             assert!(
                 err.contains("equation_defines_parameter") && err.contains("Top.sub.L"),
@@ -2099,4 +2102,36 @@ fn esm_problem_refuses_an_equation_defining_a_parameter() {
             );
         }
     }
+}
+
+/// `esm_problem` refuses a left-hand-side subscript no `faq` binds with the
+/// code `code()` returns, not only in its message.
+#[test]
+fn esm_problem_refuses_an_unbound_index_symbol_with_its_code() {
+    // An observed defined at `index(y, j)` with `j` bound by nothing; the
+    // right-hand `faq` binds `i`.
+    let raw = serde_json::json!({
+        "esm": SCHEMA_VERSION,
+        "metadata": {"name": "unbound_lhs", "authors": ["t"]},
+        "index_sets": {"cells": {"kind": "interval", "size": 4}},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "units": "1", "shape": ["cells"], "default": 1.0},
+                "y": {"type": "unknown", "units": "1", "shape": ["cells"]}
+            },
+            "equations": [
+                {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                 "rhs": {"op": "*", "args": [-1.0, "u"]}},
+                {"lhs": {"op": "index", "args": ["y", "j"]},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                         "ranges": {"i": {"from": "cells"}},
+                         "expr": {"op": "index", "args": ["u", "i"]}}}
+            ]
+        }}
+    });
+    let Err(err) = esm_problem(&raw, (0.0, 1.0), ProblemOptions::default()) else {
+        panic!("an unbound index symbol must be refused");
+    };
+    assert_eq!(err.code(), Some("unbound_index_symbol"), "{err}");
+    assert!(err.to_string().contains("unbound_index_symbol"), "{err}");
 }

@@ -1713,13 +1713,16 @@ impl ArrayCompiled {
             let why = leaf(name).or_else(|| live.get(name.as_str()).cloned());
             if let Some(why) = why {
                 return Err(SimulateError::Compile(
-                    crate::compile_error::CompileError::build_err(format!(
-                        "E_TREEWALK_JOIN_OVERLAP: overlap join env factor `{name}` is not \
+                    crate::compile_error::CompileError::coded_build_err(
+                        crate::join::JOIN_OVERLAP,
+                        format!(
+                            "E_TREEWALK_JOIN_OVERLAP: overlap join env factor `{name}` is not \
                      build-time data: it reads {why}. An envelope factor must be a const \
                      array, a const observed or setup geometry, not a live forcing / \
                      data-loader array or a state, because the gate's candidate pairs are \
                      built once (CONFORMANCE_SPEC §5.5.6)"
-                    )),
+                        ),
+                    ),
                 ));
             }
         }
