@@ -175,6 +175,61 @@ pub(crate) fn free_names(expr: &Expr, kinds: Binders) -> HashSet<String> {
     out
 }
 
+/// Rename every free variable reference of `expr` in ONE pass: a reference
+/// `n` that no enclosing node binds as one of `kinds` becomes `rename(n)` when
+/// that is `Some`. The plain-string references a node's `join` clauses carry
+/// ([`crate::types::JoinClause::map_reference_names`]) follow the same rule,
+/// so a join column naming one of the node's own loop symbols is left alone.
+///
+/// One pass over a whole renaming is what keeps a renaming capture-free: a
+/// name produced by one entry is never seen again by another, as it would be
+/// by a sequence of single-name passes.
+pub(crate) fn rename_free_names(
+    expr: &Expr,
+    kinds: Binders,
+    rename: &dyn Fn(&str) -> Option<String>,
+) -> Expr {
+    let mut bound: Vec<String> = Vec::new();
+    rename_walk(expr, kinds, rename, &mut bound)
+}
+
+fn rename_walk(
+    expr: &Expr,
+    kinds: Binders,
+    rename: &dyn Fn(&str) -> Option<String>,
+    bound: &mut Vec<String>,
+) -> Expr {
+    let renamed = |n: &str, bound: &[String]| {
+        if bound.iter().any(|b| b == n) {
+            None
+        } else {
+            rename(n)
+        }
+    };
+    match expr {
+        Expr::Variable(v) => renamed(v, bound).map_or_else(|| expr.clone(), Expr::Variable),
+        Expr::Operator(node) => {
+            let depth = bound.len();
+            node.for_each_binder(kinds, |n| bound.push(n.to_string()));
+            let mut out = node.map_children(&mut |c| rename_walk(c, kinds, rename, bound));
+            if let Some(join) = &out.join {
+                out.join = Some(
+                    join.iter()
+                        .map(|c| {
+                            c.map_reference_names(|n| {
+                                renamed(n, bound).unwrap_or_else(|| n.clone())
+                            })
+                        })
+                        .collect(),
+                );
+            }
+            bound.truncate(depth);
+            Expr::operator(out)
+        }
+        Expr::Number(_) | Expr::Integer(_) => expr.clone(),
+    }
+}
+
 /// Every bare (non-dotted, non-builtin) variable reference in `expr`, at any
 /// depth and regardless of binders, added to `out`.
 pub(crate) fn collect_bare_symbols<S: BuildHasher>(expr: &Expr, out: &mut HashSet<String, S>) {

@@ -11,7 +11,7 @@ use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
 use crate::flatten::{BuiltShapes, ConditionalShapes, FlattenedSystem};
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
-use crate::types::{EsmFile, ExpressionNode, JoinClause, Model, ModelVariable, VariableType};
+use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
 use crate::value_invention::{ValueInventionResult, materialize_value_invention};
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
@@ -277,17 +277,15 @@ pub(crate) fn mount_subsystems(
         for (k, v) in sub_sets {
             index_sets.entry(k).or_insert(v);
         }
-        let siblings: Vec<String> = {
-            let mut s: Vec<String> = sub_model.variables.keys().cloned().collect();
-            s.sort();
-            s
-        };
+        // Every sibling reference is prefixed in ONE pass, so a nested
+        // subsystem that repeats this one's name (`s.b` beside a local `b`)
+        // cannot have the local's new name renamed again as the nested one.
+        // A loop symbol spelled like a sibling shadows it.
+        let siblings: HashSet<&str> = sub_model.variables.keys().map(String::as_str).collect();
         let rename_all = |expr: &Expr| -> Expr {
-            let mut out = expr.clone();
-            for s in &siblings {
-                out = rename_free_symbol(&out, s, &format!("{sub_name}.{s}"));
-            }
-            out
+            crate::binders::rename_free_names(expr, Binders::LOOP, &|n| {
+                siblings.contains(n).then(|| format!("{sub_name}.{n}"))
+            })
         };
         for (vname, var) in &sub_model.variables {
             let mounted = format!("{sub_name}.{vname}");
@@ -4850,10 +4848,10 @@ fn self_qualified_references(model: &Model, model_name: &str) -> Vec<(String, St
 /// Apply the `(qualified, local)` rewrites of [`self_qualified_references`] to
 /// every expression of `model`, in ONE capture-aware pass.
 ///
-/// Capture-aware in BOTH directions, which is why this is not a loop over
-/// [`rename_free_symbol`]. That helper shadows on the name it renames FROM,
-/// which for a `<model>.`-qualified source is never a loop symbol; the direction
-/// that matters here is the TARGET. A node that binds the LOCAL name — model
+/// Capture-aware in BOTH directions, which is why this is not
+/// [`crate::binders::rename_free_names`]. That helper shadows on the name it
+/// renames FROM, which for a `<model>.`-qualified source is never a loop
+/// symbol; the direction that matters here is the TARGET. A node that binds the LOCAL name — model
 /// variable `i` read as `M.i` inside `aggregate(i from x; …)` — would otherwise
 /// capture the rewritten reference and silently read the loop index instead of
 /// the variable. The rewrite is therefore dropped for that subtree and the
@@ -4900,7 +4898,7 @@ fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
             let mut out = node.map_children(&mut |a| rewrite_self_qualified(a, sub));
             // `map_children` preserves `join` verbatim, so the node's
             // string-encoded variable references catch up with its child ones
-            // here — see [`rename_join_names`].
+            // here, through [`crate::types::JoinClause::map_reference_names`].
             if let Some(join) = &out.join {
                 out.join = Some(
                     join.iter()
@@ -4917,56 +4915,6 @@ fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
         }
         Expr::Number(_) | Expr::Integer(_) => expr.clone(),
     }
-}
-
-/// Capture-aware rename of a free loop symbol: every free `Variable(from)`
-/// becomes `Variable(to)`; a node that BINDS `from` itself (its `output_idx`
-/// or `ranges` declare it) shadows the outer symbol and is left untouched.
-///
-/// Renames the plain-string names a `join` clause carries as well — see
-/// [`rename_join_names`]. That is not an extra: `map_children` is an
-/// `Expr`-CHILD walker, and a `join.on` key column or an `overlap` envelope
-/// factor is a variable reference that happens to be encoded as a string on the
-/// node (CONFORMANCE_SPEC §5.5.6), so a walker that skipped them would rename
-/// half of what one node says about the same variable.
-pub(super) fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
-    match expr {
-        Expr::Variable(v) if v == from => Expr::Variable(to.to_string()),
-        Expr::Operator(node) => {
-            if node.binds(Binders::LOOP, from) {
-                return expr.clone();
-            }
-            let mut out = node.map_children(&mut |a| rename_free_symbol(a, from, to));
-            // `map_children` preserves `join` verbatim, so this is where the
-            // node's string-encoded references catch up with its child ones.
-            // The binder test above has already returned for a node that binds
-            // `from`, which is the shadowing rule an `on` key column needs: a
-            // column naming one of THIS node's own loop symbols resolves against
-            // its `ranges` (`join.rs::resolve_side`), never against the variable
-            // registry, so renaming it would make it resolve to nothing.
-            if let Some(join) = &out.join {
-                out.join = Some(rename_join_names(join, from, to));
-            }
-            Expr::operator(out)
-        }
-        _ => expr.clone(),
-    }
-}
-
-/// Rename `from` → `to` in every plain-string VARIABLE REFERENCE a node's
-/// `join` clauses carry (CONFORMANCE_SPEC §5.5.6): each `on` key column, each
-/// `overlap` envelope factor, and the data-column names of an already-resolved
-/// `on_gate`. The array-runtime twin of `flatten.rs::rename_join_names`, which
-/// does the same job for a `variable_map` that removes a parameter.
-///
-/// A clause's LOOP SYMBOLS are left alone — `OverlapClause::sym_src` /
-/// `sym_tgt` and the `on_gate`'s two gated symbols are binders of the node, not
-/// references into the variable registry. (`map_column_names` renames the gate's
-/// COLUMNS only, for exactly that reason.)
-fn rename_join_names(join: &[JoinClause], from: &str, to: &str) -> Vec<JoinClause> {
-    join.iter()
-        .map(|c| c.map_reference_names(|n| if n == from { to.to_string() } else { n.clone() }))
-        .collect()
 }
 
 /// Inline a `makearray`'s ARRAY-VALUED aggregate region values into the
@@ -5014,13 +4962,17 @@ pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) 
                         _ => return value.clone(),
                     }
                 }
-                let mut inlined = body.as_ref().clone();
-                for (sym, loop_name) in idx.iter().zip(loops.iter()) {
-                    if sym != loop_name {
-                        inlined = rename_free_symbol(&inlined, sym, loop_name);
-                    }
-                }
-                inlined
+                // One pass, so an output symbol renamed onto a name another
+                // output symbol carries (`[i, j]` onto `[j, i]`) is not renamed
+                // again.
+                let renames: HashMap<&str, &str> = idx
+                    .iter()
+                    .zip(loops.iter())
+                    .map(|(sym, loop_name)| (sym.as_str(), loop_name.as_str()))
+                    .collect();
+                crate::binders::rename_free_names(body, Binders::LOOP, &|n| {
+                    renames.get(n).map(|l| (*l).to_string())
+                })
             })
             .collect(),
     );
@@ -6029,6 +5981,59 @@ mod subsystem_ragged_and_inspection_tests {
             .expect("overlap survives");
         assert_eq!(ov.src_env, vec!["Geo.X".to_string()]);
         assert_eq!(ov.tgt_env, vec!["Geo.W".to_string()]);
+    }
+
+    /// A nested subsystem that repeats its parent's name: inside `s`, the
+    /// local `b` and the nested `s.b` are two variables, and mounting `s`
+    /// must prefix each exactly once. Renaming one name at a time would turn
+    /// the local `b` into `s.b` and then rename it again with the nested one.
+    #[test]
+    fn mounting_a_nested_subsystem_that_repeats_its_parents_name() {
+        let mut m = model(json!({
+            "variables": { "out": { "type": "unknown" } },
+            "equations": [ { "lhs": "out", "rhs": "s.b" } ],
+            "subsystems": { "s": {
+                "variables": { "b": { "type": "unknown" } },
+                "equations": [ { "lhs": "b", "rhs": { "op": "*", "args": [3, "s.b"] } } ],
+                "subsystems": { "s": {
+                    "variables": { "b": { "type": "unknown" } },
+                    "equations": [ { "lhs": "b", "rhs": 2 } ]
+                }}
+            }}
+        }));
+        let mut sets: HashMap<String, IndexSet> = HashMap::new();
+        mount_subsystems(&mut m, &mut sets).expect("mounts");
+
+        let eqs: Vec<serde_json::Value> =
+            m.equations.iter().map(|e| json!([e.lhs, e.rhs])).collect();
+        assert!(
+            eqs.contains(&json!(["s.b", { "op": "*", "args": [3, "s.s.b"] }])),
+            "the parent subsystem's own `b` is `s.b` and reads the nested `s.s.b`: {eqs:?}"
+        );
+        assert!(
+            eqs.contains(&json!(["s.s.b", 2])),
+            "the nested `b` is `s.s.b`: {eqs:?}"
+        );
+    }
+
+    /// Inlining a region value renames all of its output symbols at once, so
+    /// a symbol renamed onto a name another output symbol carries is not
+    /// renamed a second time.
+    #[test]
+    fn inlining_a_region_value_swaps_its_output_symbols() {
+        let node: ExpressionNode = serde_json::from_value(json!({
+            "op": "makearray", "args": [],
+            "regions": [[[1, 3], [1, 2]]],
+            "values": [{ "op": "faq", "args": [], "output_idx": ["i", "j"],
+                         "ranges": { "i": [1, 3], "j": [1, 2] },
+                         "expr": { "op": "index", "args": ["u", "i", "j"] } }]
+        }))
+        .expect("node parses");
+        let out = inline_region_aggregates(&node, &["j".to_string(), "i".to_string()]);
+        assert_eq!(
+            json!(out.values.expect("values")[0]),
+            json!({ "op": "index", "args": ["u", "j", "i"] })
+        );
     }
 
     fn erk_opts() -> SolveOptions {
