@@ -40,7 +40,7 @@
 
 use crate::lower_expression_templates::{
     ExpressionTemplateError, collect_apply_names as compose_collect_apply_names,
-    reject_expression_templates_pre_v04, validate_template_body_references, validate_templates,
+    validate_template_body_references, validate_templates,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
@@ -251,30 +251,26 @@ use crate::diagnostic::{codes, err};
 /// (template-library files), and `metaparameters` arrive at `esm: 0.8.0`;
 /// files declaring an earlier version that carry any of them are rejected
 /// with `template_import_version_too_old` (esm-spec §9.6.5). Mirrors
-/// [`reject_expression_templates_pre_v04`] for the §9.7 constructs.
+/// [`crate::lower_expression_templates::reject_expression_templates_pre_v04`]
+/// for the §9.7 constructs.
 pub fn reject_template_imports_pre_v08(view: &Value) -> Result<(), ExpressionTemplateError> {
-    let Some(obj) = view.as_object() else {
-        return Ok(());
-    };
-    let Some(esm) = obj.get("esm").and_then(|v| v.as_str()) else {
-        return Ok(());
-    };
-    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
-        return Ok(());
-    };
-    if !(major == 0 && minor < 8) {
-        return Ok(());
-    }
+    crate::version_gates::VERSIONED[crate::version_gates::TEMPLATE_IMPORTS].check_document(view)
+}
 
+/// Every §9.7 construct in `view` (top-level `expression_templates`,
+/// `metaparameters`, `expression_template_imports` at the top level or on a
+/// component), joined for the gate's message, or `None` when it spells none.
+pub(crate) fn template_import_offences(view: &Value) -> Option<String> {
+    let obj = view.as_object()?;
     let mut offences: Vec<String> = Vec::new();
-    if obj.contains_key("expression_templates") {
-        offences.push("/expression_templates".to_string());
-    }
-    if obj.contains_key("metaparameters") {
-        offences.push("/metaparameters".to_string());
-    }
-    if obj.contains_key("expression_template_imports") {
-        offences.push("/expression_template_imports".to_string());
+    for key in [
+        "expression_templates",
+        "metaparameters",
+        "expression_template_imports",
+    ] {
+        if obj.contains_key(key) {
+            offences.push(format!("/{key}"));
+        }
     }
     for compkind in COMPONENT_KINDS {
         if let Some(comps) = obj.get(compkind).and_then(|v| v.as_object()) {
@@ -287,17 +283,7 @@ pub fn reject_template_imports_pre_v08(view: &Value) -> Result<(), ExpressionTem
             }
         }
     }
-    if offences.is_empty() {
-        return Ok(());
-    }
-    Err(err(
-        codes::TEMPLATE_IMPORT_VERSION_TOO_OLD,
-        format!(
-            "expression_template_imports / top-level expression_templates / metaparameters \
-             require esm >= 0.8.0; file declares {esm}. Offending paths: {}",
-            offences.join(", ")
-        ),
-    ))
+    (!offences.is_empty()).then(|| offences.join(", "))
 }
 
 /// True when `raw` has the template-library-file FORM (top-level
@@ -1995,7 +1981,7 @@ fn load_import_raw(
     ref_str: &str,
     base_dir: &Path,
     origin: &str,
-) -> Result<(Value, PathBuf), ExpressionTemplateError> {
+) -> Result<(Value, PathBuf, crate::parse::AuthoredFacts), ExpressionTemplateError> {
     // esm-spec §4.7: expand before classifying, so a variable holding a URL is
     // rejected as the remote ref it expands to rather than joined onto
     // `base_dir` as a path segment.
@@ -2046,7 +2032,7 @@ fn load_import_raw(
     // A template library is a document too, and its template BODIES carry
     // expression nodes — so it needs the same wire-boundary treatment as the
     // root (docs/content/rfcs/faq-node-rename.md §5.2).
-    crate::parse::prepare_document_ops(&mut raw).map_err(|e| {
+    let authored = crate::parse::prepare_document_ops_scanned(&mut raw).map_err(|e| {
         err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!("{origin}: {}: {e}", path.display()),
@@ -2056,7 +2042,7 @@ fn load_import_raw(
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| base_dir.to_path_buf());
-    Ok((raw, dir))
+    Ok((raw, dir, authored))
 }
 
 /// Resolve ONE `expression_template_imports` entry (esm-spec §9.7.2): load
@@ -2102,10 +2088,17 @@ fn resolve_import_entry(
         ));
     }
 
-    let (raw, target_dir) = load_import_raw(ref_str, base_dir, origin)?;
-    // Version gates on the target (esm-spec §9.6.5).
-    reject_expression_templates_pre_v04(&raw)?;
-    reject_template_imports_pre_v08(&raw)?;
+    let (raw, target_dir, authored) = load_import_raw(ref_str, base_dir, origin)?;
+    // Version gates on the target, judged against the library's own `esm`
+    // (esm-spec §9.6.5, §4.7 "Each file is held to its own declared `esm`
+    // version"): the template-machinery constructs, and declared `units` on
+    // an expression node in a template body (§4.8.5 item 6).
+    crate::version_gates::check_file_gates(
+        &raw,
+        crate::version_gates::DocKind::TemplateLibrary,
+        None,
+        &authored,
+    )?;
 
     // Library purity (esm-spec §9.7.1): the reference mechanisms are disjoint —
     // a coupling-library file (top-level `coupling_roles`) is imported via a

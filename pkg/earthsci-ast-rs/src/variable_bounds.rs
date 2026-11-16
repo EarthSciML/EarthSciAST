@@ -7,7 +7,7 @@
 //! applies to equations ([`crate::flatten`], esm-libraries-spec §4.7.5).
 
 use crate::EsmFile;
-use crate::diagnostic::{DiagnosticError, codes, err};
+use crate::diagnostic::DiagnosticError;
 use crate::structural::{
     ObservedScope, document_observeds, for_each_model_node, referenced_names, resolve_observed_ref,
     resolve_scoped_ref,
@@ -55,25 +55,7 @@ pub(crate) fn reject_variable_bounds_pre_v21(
     view: &Value,
     offending: impl FnOnce() -> Option<String>,
 ) -> Result<(), DiagnosticError> {
-    let Some(esm) = view.get("esm").and_then(Value::as_str) else {
-        return Ok(());
-    };
-    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
-        return Ok(());
-    };
-    if (major, minor) >= (2, 1) {
-        return Ok(());
-    }
-    match offending() {
-        None => Ok(()),
-        Some(path) => Err(err(
-            codes::VARIABLE_BOUNDS_VERSION_TOO_OLD,
-            format!(
-                "variable bounds (`lb` / `ub`) require esm >= 2.1.0; file declares {esm}. \
-                 Offending path: {path}"
-            ),
-        )),
-    }
+    crate::version_gates::VERSIONED[crate::version_gates::VARIABLE_BOUNDS].check(view, offending)
 }
 
 /// A bounded variable's declared shape, for comparison: `None` is scalar

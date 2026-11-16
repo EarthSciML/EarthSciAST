@@ -2556,25 +2556,7 @@ pub(crate) fn reject_const_units_pre_v12(
     view: &serde_json::Value,
     offending: impl FnOnce() -> Option<String>,
 ) -> Result<(), crate::diagnostic::DiagnosticError> {
-    let Some(esm) = view.get("esm").and_then(|v| v.as_str()) else {
-        return Ok(());
-    };
-    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
-        return Ok(());
-    };
-    if (major, minor) >= (1, 2) {
-        return Ok(());
-    }
-    match offending() {
-        None => Ok(()),
-        Some(path) => Err(crate::diagnostic::err(
-            crate::diagnostic::codes::CONST_UNITS_VERSION_TOO_OLD,
-            format!(
-                "declared `units` on an expression node require esm >= 1.2.0; file declares \
-                 {esm}. Offending path: {path}"
-            ),
-        )),
-    }
+    crate::version_gates::VERSIONED[crate::version_gates::CONST_UNITS].check(view, offending)
 }
 
 /// Parse a unit string into a Unit struct

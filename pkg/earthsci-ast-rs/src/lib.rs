@@ -146,6 +146,7 @@ pub(crate) mod unit_conversion;
 pub(crate) mod units;
 pub(crate) mod validate;
 pub(crate) mod variable_bounds;
+pub(crate) mod version_gates;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;

@@ -462,21 +462,20 @@ fn load_ref_document(
         // (docs/content/rfcs/faq-node-rename.md §5.2).
         let authored = crate::parse::prepare_document_ops_scanned(&mut parsed)
             .map_err(|e| err(noun.code, format!("{}: {e}", canonical.display())))?;
-        // The const-units gate (esm-spec §4.8.5 item 6) judges this file's
-        // own nodes against this file's own `esm` (§4.7 "Each file is held to
-        // its own declared `esm` version"), never the mounting document's,
-        // and so does the variable-bounds gate (esm-spec §6.3.2).
-        // The `solver` gate (§2.2.4) likewise reads this file's own `esm`: a
-        // leaf's block does not cross the mount edge, but it must still be
-        // legal in the file that carries it.
-        crate::units::reject_const_units_pre_v12(&parsed, || authored.op_with_units)
-            .and_then(|()| {
-                crate::variable_bounds::reject_variable_bounds_pre_v21(&parsed, || {
-                    authored.variable_bound
-                })
-            })
-            .and_then(|()| crate::solver::reject_solver_pre_v11(&parsed))
-            .map_err(|e| err(e.code, format!("{}: {}", canonical.display(), e.message)))?;
+        // Every version gate that applies to a mounted file
+        // (`crate::version_gates::VERSIONED`) judges this file's own nodes
+        // against this file's own `esm` (§4.7 "Each file is held to its own
+        // declared `esm` version"), never the mounting document's. The
+        // `solver` gate (§2.2.4) is among them: a leaf's block does not cross
+        // the mount edge, but it must still be legal in the file that
+        // carries it.
+        crate::version_gates::check_file_gates(
+            &parsed,
+            crate::version_gates::DocKind::MountedLeaf,
+            None,
+            &authored,
+        )
+        .map_err(|e| err(e.code, format!("{}: {}", canonical.display(), e.message)))?;
         Ok(parsed)
     })();
 
@@ -798,9 +797,8 @@ struct MountedLeaf {
 /// In order:
 ///
 /// 1. the referenced document loads ([`load_ref_document`], which runs the
-///    per-file version gates against the leaf's own `esm`), passes the
-///    template-machinery version gates, and must not be a template or
-///    coupling library;
+///    version gates against the leaf's own `esm`), and must not be a template
+///    or coupling library;
 /// 2. the leaf resolves in its OWN scope (esm-spec §4.7 "Edge pipeline" step
 ///    1): this edge closes its metaparameters ([`close_mount_edge`]), its own
 ///    nested refs of either form are inlined in its directory FIRST
@@ -832,7 +830,9 @@ fn resolve_mount_edge(
     // Read before anything below can consume the leaf's `domain`.
     let precision = declared_element_type(&comp);
     let leaf_dir = canonical.parent().unwrap_or(scope.base_path).to_path_buf();
-    let result = resolve_loaded_leaf(&mut comp, &leaf_dir, &canonical, edge, ref_str, nouns, scope, visited);
+    let result = resolve_loaded_leaf(
+        &mut comp, &leaf_dir, &canonical, edge, ref_str, nouns, scope, visited,
+    );
     visited.remove(&canonical);
     let data_sources = result?;
     Ok(MountedLeaf {
@@ -858,8 +858,6 @@ fn resolve_loaded_leaf(
     scope: &MountScope<'_>,
     visited: &mut HashSet<PathBuf>,
 ) -> Result<Option<Value>, DiagnosticError> {
-    crate::lower_expression_templates::reject_expression_templates_pre_v04(comp)?;
-    crate::template_imports::reject_template_imports_pre_v08(comp)?;
     // A §4.7 mount MUST NOT target a template-library file — the two reference
     // mechanisms are disjoint (esm-spec §9.7.1) — nor a coupling-library file,
     // which is imported via a `coupling_import` coupling entry (§10.9).

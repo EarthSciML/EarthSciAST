@@ -1123,19 +1123,14 @@ fn find_apply_paths(view: &Value, hits: &mut Vec<String>) {
 /// in files declaring `esm` < 0.4.0. Mirrors the equivalent TS / Python /
 /// Julia / Go checks for cross-binding-uniform diagnostics.
 pub fn reject_expression_templates_pre_v04(view: &Value) -> Result<(), ExpressionTemplateError> {
-    let Some(obj) = view.as_object() else {
-        return Ok(());
-    };
-    let Some(esm) = obj.get("esm").and_then(|v| v.as_str()) else {
-        return Ok(());
-    };
-    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
-        return Ok(());
-    };
-    if !(major == 0 && minor < 4) {
-        return Ok(());
-    }
+    crate::version_gates::VERSIONED[crate::version_gates::EXPRESSION_TEMPLATES].check_document(view)
+}
 
+/// Every `expression_templates` block on a component and every
+/// `apply_expression_template` node in `view`, joined for the gate's message,
+/// or `None` when it spells neither.
+pub(crate) fn expression_template_offences(view: &Value) -> Option<String> {
+    let obj = view.as_object()?;
     let mut offences: Vec<String> = Vec::new();
     for compkind in ["models", "reaction_systems"] {
         if let Some(comps) = obj.get(compkind).and_then(|v| v.as_object()) {
@@ -1149,18 +1144,7 @@ pub fn reject_expression_templates_pre_v04(view: &Value) -> Result<(), Expressio
         }
     }
     find_apply_paths(view, &mut offences);
-
-    if !offences.is_empty() {
-        return Err(err(
-            codes::APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
-            format!(
-                "expression_templates / apply_expression_template require esm >= 0.4.0; \
-                 file declares {esm}. Offending paths: {}",
-                offences.join(", ")
-            ),
-        ));
-    }
-    Ok(())
+    (!offences.is_empty()).then(|| offences.join(", "))
 }
 
 /// A per-component rewrite registry captured during model / reaction-system

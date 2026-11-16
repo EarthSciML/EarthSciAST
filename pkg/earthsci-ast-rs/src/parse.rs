@@ -237,35 +237,33 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     crate::data_source_urls::resolve_data_source_urls(&mut json_value, &base)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
-    // v0.4.0 expression_templates / apply_expression_template are rejected
-    // when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate).
-    crate::lower_expression_templates::reject_expression_templates_pre_v04(&json_value)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
-
-    // v0.8.0 §9.7 constructs (expression_template_imports, top-level
-    // expression_templates, metaparameters) are rejected when the file
-    // declares esm < 0.8.0 (esm-spec §9.6.5).
-    crate::template_imports::reject_template_imports_pre_v08(&json_value)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    // The version gates (`crate::version_gates::VERSIONED`) run in three
+    // groups at the root, each at its own place among the other passes. First
+    // the template-machinery constructs: v0.4.0 expression_templates /
+    // apply_expression_template, and the v0.8.0 §9.7 constructs
+    // (expression_template_imports, top-level expression_templates,
+    // metaparameters; esm-spec §9.6.5).
+    use crate::version_gates::{DocKind, Group, check_file_gates};
+    check_file_gates(
+        &json_value,
+        DocKind::Root,
+        Some(Group::Templates),
+        &authored,
+    )
+    .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
     // Top-level `expression_templates` beside a component payload is a
     // template-library payload no component can see (esm-spec §9.7.1).
     crate::template_imports::reject_impure_template_library(&json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
-    // The top-level `solver` block arrives at esm 1.1.0; a file declaring an
-    // earlier version that carries one is rejected (esm-spec §2.2.4).
-    crate::solver::reject_solver_pre_v11(&json_value).map_err(
-        |e: crate::diagnostic::DiagnosticError| EsmError::SchemaValidation(e.to_string()),
-    )?;
-
-    // `solver.external` arrives at esm 1.3.0, and a `${` in it is never
-    // expanded (esm-spec §2.2.4, §2.2.6). Only the ROOT's block is read: a
-    // mounted leaf's `solver` block does not cross the mount edge (§4.7).
-    // `solver.time_span` likewise arrives at esm 1.3.0 and must describe an
-    // interval (§2.2.7); its check runs after the `${` refusal, root-only.
-    crate::solver::reject_solver_external_pre_v13(&json_value)
-        .and_then(|()| crate::solver::reject_solver_time_span_pre_v13(&json_value))
+    // The `solver` group: the top-level block arrives at esm 1.1.0 (esm-spec
+    // §2.2.4), `solver.external` and `solver.time_span` at 1.3.0. Only the
+    // ROOT's block is read for the two fields: a mounted leaf's `solver` block
+    // does not cross the mount edge (§4.7). Then a `${` in `external` is
+    // refused (it is never expanded, §2.2.6) and `time_span` must describe an
+    // interval (§2.2.7).
+    check_file_gates(&json_value, DocKind::Root, Some(Group::Solver), &authored)
         .and_then(|()| crate::solver::reject_solver_external_unresolved(&json_value))
         .and_then(|()| crate::solver::reject_solver_time_span_invalid(&json_value))
         .map_err(|e: crate::diagnostic::DiagnosticError| {
@@ -280,15 +278,8 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // leaf that carries unit-bearing `const` nodes.
     // Variable `lb` / `ub` arrive at esm 2.1.0 (esm-spec §6.3.2), judged the
     // same way: this file's own variables, before a mount spliced any in.
-    crate::units::reject_const_units_pre_v12(&json_value, || authored.op_with_units)
-        .and_then(|()| {
-            crate::variable_bounds::reject_variable_bounds_pre_v21(&json_value, || {
-                authored.variable_bound
-            })
-        })
-        .map_err(|e: crate::diagnostic::DiagnosticError| {
-            EsmError::SchemaValidation(e.to_string())
-        })?;
+    check_file_gates(&json_value, DocKind::Root, Some(Group::Content), &authored)
+        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
     // Validate against schema
     if mounts_marked {
@@ -1932,11 +1923,8 @@ pub(crate) fn prepare_document_ops_scanned(
     // document: it finds the first removed op node and the first `faq` node
     // (looked for only when the declared version is below 1.1.0, the one case
     // the gate can fire), in pre-order.
-    let faq_too_old = value
-        .get("esm")
-        .and_then(|v| v.as_str())
-        .and_then(crate::diagnostic::parse_semver)
-        .is_some_and(|(major, minor, _)| (major, minor) < (1, 1));
+    use crate::version_gates::{FAQ, VARIABLE_BOUNDS, VERSIONED};
+    let faq_too_old = VERSIONED[FAQ].predates(value);
     let esm_declared = value
         .get("esm")
         .and_then(|v| v.as_str())
@@ -1956,11 +1944,7 @@ pub(crate) fn prepare_document_ops_scanned(
     // the gate runs after ref resolution may have spliced a mounted file's
     // variables in (esm-spec §4.7 "Each file is held to its own declared
     // `esm` version").
-    let bounds_too_old = value
-        .get("esm")
-        .and_then(|v| v.as_str())
-        .and_then(crate::diagnostic::parse_semver)
-        .is_some_and(|(major, minor, _)| (major, minor) < (2, 1));
+    let bounds_too_old = VERSIONED[VARIABLE_BOUNDS].predates(value);
     let facts = AuthoredFacts {
         op_with_units: scan.op_with_units.take(),
         variable_bound: if bounds_too_old {
@@ -1979,11 +1963,9 @@ pub(crate) fn prepare_document_ops_scanned(
     if let Some(path) = scan.faq
         && let Some(esm) = esm_declared
     {
-        return Err(EsmError::SchemaValidation(format!(
-            "faq_version_too_old at {path}: the `faq` op arrives at esm 1.1.0; file \
-             declares {esm}. Raise the declared version. \
-             See docs/content/rfcs/faq-node-rename.md."
-        )));
+        return Err(EsmError::SchemaValidation(
+            VERSIONED[FAQ].message(&esm, &path),
+        ));
     }
     // 3. Deprecated spellings (esm-spec §4.2 "Deprecated ops"): the walk
     //    already rewrote them; the document loads with ONE warning naming
