@@ -3602,6 +3602,20 @@ pub(crate) fn eval_buildtime_field_in_scope(
     .map(super::eval::Routed::into_value)
 }
 
+/// One `ic` target's evaluation across its cells
+/// ([`resolve_field_ic_cell`]).
+pub(super) struct IcTargetMemo {
+    /// How a case-(3) expression is evaluated.
+    pub(super) mode: super::eval::BuildEval,
+    /// The case-(2) constant or the case-(3) whole-field evaluation (both
+    /// cell-independent), so the expression is evaluated once per target
+    /// rather than once per cell. `None` until the first cell fills it.
+    pub(super) field: Option<Value>,
+    /// The evaluator that served the case-(3) evaluation, or the tape's
+    /// refusal under a strict `mode` (the cell's value is then meaningless).
+    pub(super) route: Option<Result<super::eval::BuildRoute, String>>,
+}
+
 /// Resolve one grid cell's initial value for a scoped-reference / array `ic`
 /// equation (esm-spec §11.4.1). `cell` is the 0-based multi-index of the element
 /// within the target's grid shape. Supported RHS forms, in order:
@@ -3631,17 +3645,14 @@ pub(super) fn resolve_field_ic_cell(
     forcing: &HashMap<String, ArrayD<f64>>,
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
-    // How a case-(3) expression is evaluated.
-    mode: super::eval::BuildEval,
-    // Per-target memo of the case-(2) constant and the case-(3) whole-field
-    // evaluation (both cell-independent), so the expression is evaluated once
-    // per target rather than once per cell. `None` on entry for the first cell;
-    // filled on first use.
-    cached_field: &mut Option<Value>,
-    // The evaluator that served the case-(3) evaluation, or the tape's
-    // refusal under a strict `mode` (the cell's value is then meaningless).
-    route: &mut Option<Result<super::eval::BuildRoute, String>>,
+    memo: &mut IcTargetMemo,
 ) -> Result<f64, SimulateError> {
+    let IcTargetMemo {
+        mode,
+        field: cached_field,
+        route,
+    } = memo;
+    let mode = *mode;
     // (1) Loaded field served through the provider forcing buffer.
     if let Expr::Variable(name) = rhs
         && let Some(arr) = forcing.get(name)

@@ -74,7 +74,16 @@ fn build_standalone_program(
     pipeline: bool,
 ) -> LResult<TapeProgram> {
     let name = observed_rule_var(rule);
-    with_standalone_builder(name, param_names, const_arrays, pipeline, |mut b| {
+    // A rule that reads the time is homed where a time read lands; the
+    // program runs once either way.
+    let mut reads = HashSet::new();
+    collect_variable_names(observed_rule_body(rule), &mut reads);
+    let home = if reads.contains("t") {
+        Cadence::Continuous
+    } else {
+        Cadence::Const
+    };
+    with_standalone_builder(name, param_names, const_arrays, pipeline, home, |mut b| {
         let _rule_precision = crate::precision::has_variable_overrides()
             .then(|| crate::precision::enter(crate::precision::of_variable(name)));
         for (input, value) in inputs {
@@ -95,8 +104,8 @@ fn build_standalone_program(
     })
 }
 
-/// Run `f` on a fresh builder for the CONST observed `name` alone, inside its
-/// rule: no states, no forcing inputs, and only the parameters
+/// Run `f` on a fresh builder for the observed `name` alone, inside its rule
+/// homed at `home`: no states, no forcing inputs, and only the parameters
 /// `param_names`. `f` binds the inputs, lowers, and finishes the program
 /// ([`TapeBuilder::finish_standalone`]).
 pub(super) fn with_standalone_builder<R>(
@@ -104,6 +113,7 @@ pub(super) fn with_standalone_builder<R>(
     param_names: &[String],
     const_arrays: &ConstArrayScope,
     pipeline: bool,
+    home: Cadence,
     f: impl for<'b> FnOnce(TapeBuilder<'b>) -> R,
 ) -> R {
     let var_shapes: IndexMap<String, VarShape> = IndexMap::new();
@@ -114,13 +124,13 @@ pub(super) fn with_standalone_builder<R>(
         discrete: &discrete,
     };
     let mut obs_tier: FxHashMap<String, Cadence> = FxHashMap::default();
-    obs_tier.insert(name.to_string(), Cadence::Const);
+    obs_tier.insert(name.to_string(), home);
     let mut b = TapeBuilder::new(&var_shapes, param_names, obs_tier, const_arrays, &forcing);
     b.array_bool_reductions = pipeline;
     b.begin_rule(RuleInfo {
         name: name.to_string(),
         kind: RuleKind::Observed(0),
-        cadence: Cadence::Const,
+        cadence: home,
     });
     f(b)
 }

@@ -1282,8 +1282,11 @@ impl ArrayCompiled {
             // full-field evaluations for an O(cells)-sized result. Resolve it
             // once per target and let every cell index the cached field. The
             // cell-independent cases (1 loaded field / 2 constant) ignore it.
-            let mut cached_field: Option<Value> = None;
-            let mut route: Option<Result<BuildRoute, String>> = None;
+            let mut memo = super::compile::IcTargetMemo {
+                mode,
+                field: None,
+                route: None,
+            };
             for flat in 0..total {
                 let multi = flat_to_multi_col_major(flat, &vs.shape);
                 let slot = vs.flat_offset + flat;
@@ -1294,11 +1297,9 @@ impl ArrayCompiled {
                     forcing,
                     &self.index_sets,
                     params,
-                    mode,
-                    &mut cached_field,
-                    &mut route,
+                    &mut memo,
                 );
-                if let Some(Err(why)) = route {
+                if let Some(Err(why)) = memo.route {
                     // As for the scope above: the tape's decline is the
                     // refusal.
                     return refuse_field_ic(
@@ -1318,7 +1319,7 @@ impl ArrayCompiled {
                 sink.push(FieldIcRecord {
                     name: target.clone(),
                     kind: "initial condition",
-                    route: route.unwrap_or(Ok(BuildRoute::Whole)),
+                    route: memo.route.unwrap_or(Ok(BuildRoute::Whole)),
                 });
             }
         }
@@ -3260,9 +3261,7 @@ mod field_ic_memo_tests {
     //! and the report need it), and the first solve takes that resolution
     //! instead of computing it again. Counted with the resolver's test hook.
     use super::field_ic_resolutions;
-    use crate::compile_error::CompileError;
     use crate::problem::{Compiler, ProblemOptions, Remake, esm_problem, remake, solve};
-    use crate::simulate::SimulateError;
     use crate::simulate_array::per_cell_cells;
     use crate::{SolveOptions, load_string};
     use serde_json::{Value, json};
@@ -3408,48 +3407,46 @@ mod field_ic_memo_tests {
         assert_eq!(first_column(&sol), [0.5, 1.0, 1.5]);
     }
 
-    /// A strict compiler refuses an `ic` the reference evaluator walks per
-    /// cell, and refuses it after one cell of the walk.
+    /// A strict compiler lowers an `ic` the reference evaluator would walk
+    /// per cell on a standalone tape, after one cell of the walk, and agrees
+    /// with the interpreter's full walk bit for bit.
     #[test]
-    fn a_large_per_cell_initial_condition_is_refused_after_one_cell() {
+    fn a_large_per_cell_initial_condition_is_taped_after_one_cell() {
         let cumulative = json!({"op": "faq", "args": [], "output_idx": ["i"],
                                 "ranges": {"i": {"from": "x"}, "j": {"from": "x"}},
                                 "filter": {"op": "<=", "args": ["j", "i"]},
                                 "expr": 1.0});
-        let refusal = |n: usize, ic: Value| {
+        let n = 100_000;
+        let tier_and_u0 = |ic: Value, compiler: Compiler| {
             let file = with_ic(n, ic);
             let before = per_cell_cells();
-            let err = esm_problem(&file, (0.0, 1.0), opts(Compiler::Native)).expect_err("per cell");
+            let prob = esm_problem(&file, (0.0, 1.0), opts(compiler)).expect("builds");
             let cells = per_cell_cells() - before;
-            match err {
-                SimulateError::Compile(CompileError::CompilerRefusedRule {
-                    kind,
-                    rule,
-                    reason,
-                    ..
-                }) => ((kind, rule, reason), cells),
-                other => panic!("expected compiler_refused_rule, got {other:?}"),
-            }
+            let tier = prob
+                .compiler_report()
+                .rules()
+                .iter()
+                .find(|r| r.kind == "initial condition")
+                .expect("an ic row")
+                .tier;
+            let u0: Vec<u64> = crate::problem::initial_state(&prob)
+                .expect("u0")
+                .iter()
+                .map(|x| x.to_bits())
+                .collect();
+            (tier, cells, u0)
         };
-        let (small, _) = refusal(3, cumulative.clone());
-        let (large, cells) = refusal(100_000, cumulative.clone());
-        assert_eq!(large, small);
-        assert_eq!(large.0, "initial condition");
-        assert!(
-            large.2.ends_with(crate::simulate_array::ONE_CELL_NOTE),
-            "{}",
-            large.2
-        );
-        assert_eq!(cells, 1, "the walk must stop at its first cell");
-
         // What the rest of the expression makes of the stopped walk's
-        // placeholder is not the document's either: `1 / Σ` over a walk that
-        // stopped reads a zero, and the infinity that follows must not turn
-        // the refusal into an unresolvable-ic failure.
-        let reciprocal = json!({"op": "/", "args": [1.0, cumulative]});
-        let (large, cells) = refusal(100_000, reciprocal);
-        assert_eq!(large, small);
-        assert_eq!(cells, 1);
+        // placeholder is not the value either: `1 / Σ` over a walk that
+        // stopped reads a zero, and the infinity that follows must not leak.
+        let reciprocal = json!({"op": "/", "args": [1.0, cumulative.clone()]});
+        for ic in [cumulative, reciprocal] {
+            let (tier, cells, native) = tier_and_u0(ic.clone(), Compiler::Native);
+            assert_eq!(tier, "taped");
+            assert_eq!(cells, 1, "the walk must stop at its first cell");
+            let (_, _, interp) = tier_and_u0(ic, Compiler::Interpreter);
+            assert_eq!(native, interp);
+        }
     }
 
     /// A CONST provider serving `w` as zeros over three cells.
