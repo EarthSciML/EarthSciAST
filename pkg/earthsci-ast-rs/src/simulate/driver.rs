@@ -472,6 +472,7 @@ pub(crate) fn build_array_compiled(
     file: &EsmFile,
     flattened: Option<&crate::flatten::FlattenedSystem>,
     runtime_array_parameters: bool,
+    compiler: crate::Compiler,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
     // Arm the document's whole precision environment for the build
     // (`crate::precision`) — its `domain.element_type` AND the per-variable
@@ -500,11 +501,13 @@ pub(crate) fn build_array_compiled(
         Ok(crate::simulate_array::ArrayCompiled::from_flattened_with(
             flat,
             runtime_array_parameters,
+            compiler,
         )?)
     } else {
         Ok(crate::simulate_array::ArrayCompiled::from_file_with(
             file,
             runtime_array_parameters,
+            compiler,
         )?)
     }
 }

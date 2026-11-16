@@ -5,44 +5,23 @@
 use super::tape::{TapeCtx, TapeProgram, run_tape_call};
 use super::*;
 use crate::simulate::CompileError;
+#[cfg(test)]
 use ndarray::ArrayViewD;
 use std::collections::HashSet;
 
-// ============================================================================
-// Zero-allocation RHS scratch (ess-mro).
-//
-// The vectorized stencil evaluator used to allocate `O(#AST-nodes)` arrays per
-// RHS call (one owned `ArrayD` per `index`/combine/`makearray` node, a fresh
-// per-variable state map, and a column-major scatter `Vec`). diffsol's RHS is
-// in-place (`call_inplace` writes the solver-owned `dy`), so there is no
-// allocation floor. `RhsScratch` carries the reusable buffers across diffsol
-// steps so the steady-state vectorized RHS performs **zero** heap allocations:
-//   * `state_arrays` — one persistent logical array per variable, refilled in
-//     place from the flat state each call;
-//   * `observed_arrays` — reused container for algebraic observeds;
-//   * `pool` — a free-list of `f64` buffers recycling kernel intermediates.
-// ============================================================================
-
-/// Persistent per-call scratch for [`evaluate_rhs_with_scratch`] (ess-mro). One
-/// is owned per RHS closure (the FD Jacobian closure carries its own), guarded
-/// by a `RefCell` because diffsol's RHS is an `Fn`, not `FnMut`.
+/// Persistent per-call scratch for [`evaluate_rhs_with_scratch`]: either a
+/// compiled tape, or the per-cell oracle's reusable state and observed arrays.
+/// One is owned per evaluator (the Jacobian carries its own), guarded by a
+/// `RefCell` because diffsol's RHS is an `Fn`, not `FnMut`.
 pub struct RhsScratch {
     /// Per-variable state arrays, logical row-major over each variable's shape,
     /// refilled in place from the flat state slice each call.
     state_arrays: ArrMap,
     /// Observed (algebraic) arrays; the container is reused across calls.
     observed_arrays: ArrMap,
-    /// Recycled `f64` buffers for vectorized kernel intermediates.
-    pool: Pool,
-    /// Common-subexpression memo for the vectorized overlay (ess-cse). Lives
-    /// here because it is keyed by AST node ADDRESS and must therefore share the
-    /// lifetime of the (cloned) rule bodies this scratch is evaluated against —
-    /// which is exactly the RHS closure that co-owns both.
-    cse: CseRt,
     /// Memo for inline array-valued `const` literals (see
-    /// [`EvalCtx::const_lits`]). Lives here for the same reason `cse` does: it
-    /// is keyed by AST node ADDRESS, so it must share the lifetime of the rule
-    /// bodies it is evaluated against, and it is retargeted on the same key.
+    /// [`EvalCtx::const_lits`]). Keyed by AST node ADDRESS, so it is
+    /// retargeted whenever the scratch is handed a different rule set.
     const_lits: ConstLitMemo,
     /// Names of the hoisted STATE-FREE / `t`-free observeds (ess: static-observed
     /// hoist). Their arrays are seeded into `observed_arrays` ONCE by
@@ -57,10 +36,8 @@ pub struct RhsScratch {
     /// points leave it empty and pass the full rule set, so a plain `clear` +
     /// full materialize is recovered — byte-identical to the un-hoisted path).
     static_keys: HashSet<String>,
-    /// Step 3b: the compiled tape context, installed by the driver on the
-    /// production RHS closure's scratch ([`Self::install_tape`]). `None` (the
-    /// default, and the state of every debug/oracle/Jacobian scratch) means
-    /// [`evaluate_rhs_with_scratch`] runs the legacy interpreter path.
+    /// The compiled tape context ([`Self::install_tape`]). `None` means
+    /// [`evaluate_rhs_with_scratch`] runs the per-cell oracle.
     tape: Option<TapeCtx>,
     /// The model's CONST-ARRAY provenance (CONFORMANCE_SPEC §5.5.5), installed
     /// by [`Self::set_const_arrays`]. Carried on the scratch rather than passed
@@ -83,8 +60,6 @@ impl RhsScratch {
         RhsScratch {
             state_arrays,
             observed_arrays: ArrMap::default(),
-            pool: Pool::default(),
-            cse: CseRt::default(),
             const_lits: ConstLitMemo::default(),
             static_keys: HashSet::new(),
             tape: None,
@@ -114,6 +89,7 @@ impl RhsScratch {
     /// The forcing buffer was refreshed: an installed tape re-runs its
     /// SEGMENT section on the next call. No-op on a scratch with no tape,
     /// which reads the buffer on every call.
+    #[cfg(test)]
     pub(super) fn bump_forcing_epoch(&mut self) {
         if let Some(tape) = self.tape.as_mut() {
             tape.bump_forcing_epoch();
@@ -157,10 +133,6 @@ impl RhsScratch {
     /// the debug entry points never call it, so they clear + materialize the full
     /// rule set every call as before.
     pub(super) fn set_static(&mut self, static_observeds: ArrMap) {
-        // ess-lih: the persistent box-pure store may hold values derived from
-        // the PREVIOUS static observeds, and the CONST-name set is computed from
-        // their keys. Both are being replaced here, so drop both.
-        self.cse.invalidate_consts();
         self.static_keys = static_observeds.keys().cloned().collect();
         for (name, arr) in static_observeds {
             self.observed_arrays.insert(name, arr);
@@ -215,6 +187,7 @@ pub(super) fn refill_state_arrays(
 /// vs.shape[d]`, guaranteed by [`subblock_dest`]). This is the placement for an
 /// affine-shifted LHS `D(u[i+c]) = …`; the bare-index method-of-lines case is
 /// `dest_lo = 0…` with `arr` spanning the whole variable box.
+#[cfg(test)]
 pub(super) fn scatter_col_major_offset(
     arr: ArrayViewD<f64>,
     dy: &mut [f64],
@@ -482,21 +455,6 @@ pub(super) fn build_state_arrays(var_shapes: &IndexMap<String, VarShape>, state:
     state_arrays
 }
 
-/// One observed-materialization pass: the rule-invariant evaluation
-/// environment plus the oracle switch, grouped so
-/// [`materialize_observeds_pass`] takes named fields instead of a dozen
-/// positional arguments.
-pub(super) struct ObsPass<'a> {
-    /// The rule-invariant evaluation environment.
-    pub(super) env: EvalEnv<'a>,
-    /// When true, evaluate array observeds via the per-cell oracle (the
-    /// correctness reference), skipping the vectorized whole-array fast path.
-    /// Production passes `false`; the equivalence test passes `true` to obtain
-    /// the reference values — mirroring the `force_scalar` contract the
-    /// RHS-rule driver already honours (see [`RhsStats`]).
-    pub(super) force_scalar: bool,
-}
-
 /// Materialize `observed_rules` into `dst` WITHOUT clearing it first — the
 /// rules are evaluated and their outputs inserted on top of whatever is already
 /// there. This is what lets the RHS seed the hoisted static observeds (ess:
@@ -505,9 +463,21 @@ pub(super) struct ObsPass<'a> {
 /// may reference an already-seeded static observed by name (they are read from
 /// `dst`), so the seed must be in place before this runs.
 ///
-/// `stats` records how each array observed was materialized (vectorized vs
-/// per-cell), mirroring the `vectorized_rules`/`scalar_rules` split for state
-/// rules.
+/// Every rule is evaluated by the per-cell oracle, with the whole-array
+/// overlay off for any `faq` reached inside a body. `stats` counts the
+/// array-shaped observeds.
+pub(super) fn materialize_observeds_pass(
+    dst: &mut ArrMap,
+    observed_rules: &[AlgebraicRule],
+    env: &EvalEnv,
+    stats: &mut RhsStats,
+) {
+    let _overlay = super::vectorized::OverlayGuard::armed(true);
+    for rule in observed_rules {
+        materialize_observed(dst, rule, env, stats);
+    }
+}
+
 /// Arm the working precision of one algebraic rule for as long as the returned
 /// guard lives (esm-spec §11.3.1).
 ///
@@ -526,194 +496,127 @@ fn precision_of_rule(rule: &AlgebraicRule) -> Option<crate::precision::Precision
     Some(crate::precision::enter(crate::precision::of_variable(var)))
 }
 
-pub(super) fn materialize_observeds_pass(
+/// Materialize one observed rule into `dst` (see [`materialize_observeds_pass`]).
+fn materialize_observed(
     dst: &mut ArrMap,
-    observed_rules: &[AlgebraicRule],
-    pass: &ObsPass,
+    rule: &AlgebraicRule,
+    env: &EvalEnv,
     stats: &mut RhsStats,
 ) {
-    let ObsPass { env, force_scalar } = pass;
-    let force_scalar = *force_scalar;
-    // `interpreter` reaching the runtime: the rules below that materialize
-    // through `eval_faq` rather than through a compiled call site read it here
-    // (see [`super::vectorized::OverlayGuard`]).
-    let _overlay = super::vectorized::OverlayGuard::armed(force_scalar);
-    for rule in observed_rules {
-        // The rule's own working precision (esm-spec §11.3.1). An equation is
-        // evaluated at the element type of the variable it defines, which is
-        // the document's unless that variable declared its own — so this is a
-        // thread-local read and a no-op swap for every document that declares
-        // none. Held for the whole rule, which is the scope its expression is
-        // evaluated in; any subtree inside that differs carries its own
-        // `precision_infer::MARKER_OP` and re-arms.
-        let _rule_precision = precision_of_rule(rule);
-        match rule {
-            AlgebraicRule::Scalar { var, body, .. } => {
-                // `derived_extents` is EMPTY on every compiled-RHS context in
-                // this file, and deliberately so: `ArrayCompiled::from_model`
-                // densifies each value-invented derived set to an `interval`
-                // (via `rewrite_derived_index_sets`) BEFORE resolving ranges,
-                // so a compiled rule's axes are already static bounds and no
-                // `DerivedDyn` survives to consult the map. The channel earns
-                // its keep on the standalone `eval_expression_with_extents`
-                // entry point instead. See `EvalCtx::derived_extents`.
+    // The rule's own working precision (esm-spec §11.3.1). An equation is
+    // evaluated at the element type of the variable it defines, which is
+    // the document's unless that variable declared its own — so this is a
+    // thread-local read and a no-op swap for every document that declares
+    // none. Held for the whole rule, which is the scope its expression is
+    // evaluated in; any subtree inside that differs carries its own
+    // `precision_infer::MARKER_OP` and re-arms.
+    let _rule_precision = precision_of_rule(rule);
+    match rule {
+        AlgebraicRule::Scalar { var, body, .. } => {
+            // `derived_extents` is EMPTY on every compiled-RHS context in
+            // this file, and deliberately so: `ArrayCompiled::from_model`
+            // densifies each value-invented derived set to an `interval`
+            // (via `rewrite_derived_index_sets`) BEFORE resolving ranges,
+            // so a compiled rule's axes are already static bounds and no
+            // `DerivedDyn` survives to consult the map. The channel earns
+            // its keep on the standalone `eval_expression_with_extents`
+            // entry point instead. See `EvalCtx::derived_extents`.
+            let mut ctx = env.ctx(&*dst);
+            let arr = match eval(body, &mut ctx) {
+                Value::Array(a) => *a,
+                // A scalar fills the rule's shape (esm-spec §4.3.4): its
+                // declared one, or the one the data bound to its data-fed
+                // parameters has — the same buffer the tape's build reads.
+                Value::Scalar(s) => {
+                    let shape = rule
+                        .fill_shape(|n| ctx.forcing.borrow().get(n).map(|a| a.shape().to_vec()))
+                        .unwrap_or_default();
+                    ArrayD::from_elem(IxDyn(&shape), s)
+                }
+            };
+            dst.insert(var.clone(), arr);
+        }
+        // Causal self-reference (esm-spec §4.3.1.1). The one rule kind whose
+        // output cells are NOT independent, so the sweep is factored into
+        // `sweep_recurrence` and shared with the BUILD-PIPELINE path
+        // (`prepare::eval_observed`). That sharing is not tidiness: the two
+        // paths having separate implementations is exactly how the
+        // construct came to work under `esm test` and be dead under
+        // `esm simulate`, so there is now one sweep and both callers use it.
+        AlgebraicRule::Recurrence {
+            var,
+            output_idx_names,
+            output_ranges,
+            body,
+            axis,
+            max_lag: _,
+            lag_proven: _,
+        } => {
+            stats.obs_scalar_rules += 1;
+            let (shape, origin) = recur_frame(output_ranges);
+            let scope = RecurScope::new(var.as_str(), shape, origin);
+            let arr = {
                 let mut ctx = env.ctx(&*dst);
-                let arr = match eval(body, &mut ctx) {
-                    Value::Array(a) => *a,
-                    // A scalar fills the rule's shape (esm-spec §4.3.4): its
-                    // declared one, or the one the data bound to its data-fed
-                    // parameters has — the same buffer the tape's build reads.
-                    Value::Scalar(s) => {
-                        let shape = rule
-                            .fill_shape(|n| ctx.forcing.borrow().get(n).map(|a| a.shape().to_vec()))
-                            .unwrap_or_default();
-                        ArrayD::from_elem(IxDyn(&shape), s)
-                    }
-                };
-                dst.insert(var.clone(), arr);
-            }
-            // Causal self-reference (esm-spec §4.3.1.1). The one rule kind whose
-            // output cells are NOT independent, so the sweep is factored into
-            // `sweep_recurrence` and shared with the BUILD-PIPELINE path
-            // (`prepare::eval_observed`). That sharing is not tidiness: the two
-            // paths having separate implementations is exactly how the
-            // construct came to work under `esm test` and be dead under
-            // `esm simulate`, so there is now one sweep and both callers use it.
-            AlgebraicRule::Recurrence {
-                var,
-                output_idx_names,
-                output_ranges,
-                body,
-                axis,
-                max_lag: _,
-                lag_proven: _,
-            } => {
-                stats.obs_scalar_rules += 1;
-                let (shape, origin) = recur_frame(output_ranges);
-                let scope = RecurScope::new(var.as_str(), shape, origin);
-                let arr = {
-                    let mut ctx = env.oracle_ctx(&*dst);
-                    sweep_recurrence(
-                        &scope,
-                        output_idx_names,
-                        output_ranges,
-                        body,
-                        *axis,
-                        &mut ctx,
-                    )
-                };
-                dst.insert(var.clone(), arr);
-            }
-            AlgebraicRule::ArrayLoop {
-                var,
-                output_idx_names,
-                output_ranges,
-                body,
-            } => {
-                let padded_shape: Vec<usize> =
-                    output_ranges.iter().map(|(_, hi)| *hi as usize).collect();
+                sweep_recurrence(
+                    &scope,
+                    output_idx_names,
+                    output_ranges,
+                    body,
+                    *axis,
+                    &mut ctx,
+                )
+            };
+            dst.insert(var.clone(), arr);
+        }
+        AlgebraicRule::ArrayLoop {
+            var,
+            output_idx_names,
+            output_ranges,
+            body,
+        } => {
+            let padded_shape: Vec<usize> =
+                output_ranges.iter().map(|(_, hi)| *hi as usize).collect();
 
-                // ---- Vectorized (whole-array) fast path --------------------
-                // A pure-map observed (output_idx over `ranges`, no contraction
-                // or filter) is structurally a `RhsRule::ArrayLoop` with no
-                // contracted index — a whole-array map. Evaluate it through the
-                // same verified vectorized overlay (`try_eval_faq_vectorized`
-                // → `eval_vec`) the state-derivative rules use, instead of
-                // walking the body once per grid cell. This is the dominant cost
-                // for models with time/space-varying observeds (a coupled
-                // behaviour stack re-materialized every RHS step); the level-set
-                // stencil already vectorized, but observeds never had this path.
-                //
-                // Guarded to 1-origin ranges so the produced `[lo, shape]` box
-                // equals the padded `[1, hi]` array the per-cell path below
-                // materializes (an observed array is 1-based over its full shape,
-                // so this holds in practice; a non-unit origin falls through to
-                // the oracle). Bit-identical to the per-cell result by the same
-                // overlay-equivalence argument that covers the RHS rules
-                // (downstream reads are logical `index`/`lookup`, so the pooled
-                // row-major storage is immaterial).
-                if !force_scalar
-                    && !output_ranges.is_empty()
-                    && output_ranges.iter().all(|(lo, _)| *lo == 1)
-                    && !padded_shape.contains(&0)
-                {
-                    let materialized = {
-                        let ctx = env.ctx(&*dst);
-                        // The THREAD's persistent pool, not a fresh one per
-                        // observed: a model with dozens of array observeds
-                        // re-materialized every step got an empty pool on each
-                        // one, so every kernel intermediate hit the allocator.
-                        with_faq_pool(|pool| {
-                            try_eval_faq_vectorized(
-                                output_idx_names,
-                                output_ranges,
-                                body,
-                                &[],
-                                &[],
-                                ReduceKind::Sum,
-                                None,
-                                &ctx,
-                                pool,
-                            )
-                            .map(|(val, _ops)| {
-                                let arr = val
-                                    .view()
-                                    .expect("vectorized observed value has a view")
-                                    .to_owned();
-                                val.release(pool);
-                                arr
-                            })
-                        })
-                    };
-                    if let Some(arr) = materialized {
-                        dst.insert(var.clone(), arr);
-                        stats.obs_vectorized_rules += 1;
-                        continue;
+            stats.obs_scalar_rules += 1;
+            let padded_origin: Vec<i64> = vec![1i64; padded_shape.len()];
+            let total = padded_shape.iter().copied().product::<usize>().max(1);
+            let mut buf = vec![0.0f64; total];
+            {
+                // One eval context for the whole cell loop (scoped so its
+                // read borrow of `dst` releases before the write below). The
+                // output index names are the same every cell, so `set_bind`
+                // rebinds in place — no per-cell `IdxMap` alloc or key clone.
+                let mut ctx = env.ctx(&*dst);
+                let output_origin: Vec<i64> = output_ranges.iter().map(|(lo, _)| *lo).collect();
+                let cellbox = CellBox {
+                    names: output_idx_names,
+                    origin: &output_origin,
+                    ranges: output_ranges,
+                    rule: Some(var.as_str()),
+                };
+                let mut tuples = CartesianTuples::new(output_ranges);
+                while let Some(tuple) = tuples.next() {
+                    for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
+                        set_bind(&mut ctx.loop_binds, name, *val);
+                    }
+                    let v = eval(body, &mut ctx);
+                    let v = cell_term(v, body, Some(&cellbox), &ctx);
+                    let flat = multi_to_flat_col_major(tuple, &padded_shape, &padded_origin);
+                    if flat < buf.len() {
+                        buf[flat] = v;
                     }
                 }
-
-                // ---- Per-cell oracle (fallback) ----------------------------
-                stats.obs_scalar_rules += 1;
-                let padded_origin: Vec<i64> = vec![1i64; padded_shape.len()];
-                let total = padded_shape.iter().copied().product::<usize>().max(1);
-                let mut buf = vec![0.0f64; total];
-                {
-                    // One eval context for the whole cell loop (scoped so its
-                    // read borrow of `dst` releases before the write below). The
-                    // output index names are the same every cell, so `set_bind`
-                    // rebinds in place — no per-cell `IdxMap` alloc or key clone.
-                    let mut ctx = env.oracle_ctx(&*dst);
-                    let output_origin: Vec<i64> = output_ranges.iter().map(|(lo, _)| *lo).collect();
-                    let cellbox = CellBox {
-                        names: output_idx_names,
-                        origin: &output_origin,
-                        ranges: output_ranges,
-                        rule: Some(var.as_str()),
-                    };
-                    let mut tuples = CartesianTuples::new(output_ranges);
-                    while let Some(tuple) = tuples.next() {
-                        for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
-                            set_bind(&mut ctx.loop_binds, name, *val);
-                        }
-                        let v = eval(body, &mut ctx);
-                        let v = cell_term(v, body, Some(&cellbox), &ctx);
-                        let flat = multi_to_flat_col_major(tuple, &padded_shape, &padded_origin);
-                        if flat < buf.len() {
-                            buf[flat] = v;
-                        }
-                    }
-                }
-                let arr = col_major_to_arrayd(&buf, &padded_shape);
-                dst.insert(var.clone(), arr);
             }
+            let arr = col_major_to_arrayd(&buf, &padded_shape);
+            dst.insert(var.clone(), arr);
         }
     }
 }
 
 /// The per-call RHS inputs shared by every evaluation path — the compiled
 /// rules, the model tables, and the solver-supplied state/parameter/time
-/// slices — grouped so the dispatcher, the legacy interpreter and the tape
-/// executor stop threading a dozen positional arguments.
+/// slices — grouped so the per-cell oracle and the tape executor take one
+/// argument instead of a dozen.
 pub(super) struct RhsCall<'a> {
     pub(super) rhs_rules: &'a [RhsRule],
     pub(super) observed_rules: &'a [AlgebraicRule],
@@ -744,11 +647,8 @@ pub(super) fn next_rule_set_id() -> u64 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-/// The identity of the rule set a scratch's address-keyed tables (the CSE class
-/// table, the inline-`const` memo) were built against.
-///
-/// One definition, two consumers: they are invalidated together or one of them
-/// serves an answer for a node the other has already forgotten.
+/// The identity of the rule set a scratch's address-keyed inline-`const` memo
+/// was built against.
 ///
 /// Not the rule slices' addresses: a model dropped and the next one built may
 /// be handed the very same allocation, with the same rule counts, and a key
@@ -757,62 +657,39 @@ fn rule_set_key(call: &RhsCall) -> u64 {
     call.rule_set
 }
 
-/// Evaluate one RHS call. Step 3b dispatcher: when the scratch carries a
-/// compiled tape ([`RhsScratch::install_tape`]) and the caller is not asking
-/// for the per-cell oracle, the call runs through the fast tape executor;
-/// otherwise the legacy interpreter path runs, byte-identical to the pre-tape
-/// driver.
+/// Evaluate one RHS call: through the tape when the scratch carries one
+/// ([`RhsScratch::install_tape`]), otherwise through the per-cell oracle, the
+/// reference the tape is checked against.
 ///
 /// Every element of `dy` is written: a state no rule writes reads zero. The
 /// caller need not clear it; the tape zeroes only the elements it does not
 /// write.
-///
-/// `force_scalar` is [`crate::Compiler::Interpreter`] reaching the runtime, so
-/// it also arms the per-cell oracle for the evaluations that do not pass
-/// through a compiled rule — a standalone `faq` observed, a `makearray` body
-/// (see [`super::vectorized::OverlayGuard`]).
 pub(super) fn evaluate_rhs_with_scratch(
     call: &RhsCall,
     dy: &mut [f64],
-    force_scalar: bool,
     stats: &mut RhsStats,
     scratch: &mut RhsScratch,
 ) {
-    let _overlay = super::vectorized::OverlayGuard::armed(force_scalar);
-    if force_scalar || scratch.tape.is_none() {
-        // ess-cse / inline-const memo: both tables are keyed by AST node
-        // ADDRESS, so a scratch handed a DIFFERENT rule set must discard them
-        // rather than answer for a node that no longer exists. `cse` is
-        // retargeted inside the legacy arm, the const-literal memo here, on
-        // the same key.
-        scratch.const_lits.retarget(rule_set_key(call));
-        dy.fill(0.0);
-        evaluate_rhs_legacy(call, dy, force_scalar, stats, scratch);
-        return;
+    match scratch.tape.as_mut() {
+        Some(tape) => run_tape_call(tape, call, dy, stats),
+        None => {
+            scratch.const_lits.retarget(rule_set_key(call));
+            dy.fill(0.0);
+            evaluate_rhs_per_cell(call, dy, stats, scratch);
+        }
     }
-    // The tape reads the flat state directly through strided views, and the
-    // interpreter's per-variable state arrays are not handed to it.
-    let tape = scratch.tape.as_mut().expect("tape checked Some");
-    run_tape_call(tape, call, dy, stats);
 }
 
-/// The legacy interpreter RHS path (pre-Step-3b `evaluate_rhs_with_scratch`),
-/// unchanged: the oracle for `debug_eval_rhs*`, [`crate::Compiler::Interpreter`],
-/// and every scratch without an installed tape.
-fn evaluate_rhs_legacy(
+/// The per-cell oracle's right-hand side: every observed and every state rule
+/// walked cell by cell, with the whole-array overlay off for any `faq`
+/// reached inside a body.
+fn evaluate_rhs_per_cell(
     call: &RhsCall,
     dy: &mut [f64],
-    // When true, skip the vectorized fast path and evaluate every array-op
-    // derivative via the per-cell oracle. Production always passes `false`
-    // (vectorized); the equivalence test passes `true` to obtain the
-    // reference values. See [`RhsStats`].
-    force_scalar: bool,
     stats: &mut RhsStats,
-    // Reused buffers (ess-mro): persistent per-variable state arrays + observed
-    // container + kernel buffer pool, so the steady-state vectorized RHS does
-    // not allocate.
     scratch: &mut RhsScratch,
 ) {
+    let _overlay = super::vectorized::OverlayGuard::armed(true);
     let &RhsCall {
         rhs_rules,
         observed_rules,
@@ -834,55 +711,6 @@ fn evaluate_rhs_legacy(
     let const_scope = std::sync::Arc::clone(scratch.const_arrays());
     let const_arrays: &ConstArrayScope = &const_scope;
 
-    // ess-cse: bind the CSE class table to THIS rule set. Its keys are AST node
-    // addresses, so handing the same scratch a different rule set must discard
-    // it rather than reuse stale classification.
-    scratch.cse.retarget(rule_set_key(call));
-
-    // ess-lih: a box-pure value may be built from CONST-tier leaves, so the
-    // persistent store is only valid while those hold still. `bind_params`
-    // discards it if the caller handed us a different parameter vector.
-    scratch.cse.bind_params(params);
-
-    // ess-lih: the CONST-tier leaf names for the box-pure analysis — everything
-    // whose value is already fixed for this scratch's whole lifetime:
-    //
-    //   * the hoisted static observeds (`static_keys`), seeded once by
-    //     `set_static` and retained in place across every call, and
-    //   * the scalar parameters, fixed by `simulate`'s parameter vector —
-    //     EXCEPT any name an observed or a state variable also carries, because
-    //     `eval_vec_variable` resolves those from the observed/state arrays
-    //     first and they are not constant.
-    //
-    // Both are re-established when the driver builds a fresh `RhsScratch` per
-    // integration segment, which is exactly when they can change. Built at most
-    // once per `retarget`.
-    scratch.cse.set_const_names(|| {
-        let mut all: rustc_hash::FxHashSet<String> = scratch.static_keys.iter().cloned().collect();
-        let varying: HashSet<&str> = observed_rules
-            .iter()
-            .map(|r| observed_rule_var(r).as_str())
-            .collect();
-        for p in param_names {
-            if !varying.contains(p.as_str()) && !var_shapes.contains_key(p) && !all.contains(p) {
-                all.insert(p.clone());
-            }
-        }
-        // Only the ARRAY-valued CONSTs make a pure subtree worth a memo slot.
-        let arrays: rustc_hash::FxHashSet<String> = scratch
-            .static_keys
-            .iter()
-            .filter(|k| {
-                scratch
-                    .observed_arrays
-                    .get(*k)
-                    .is_some_and(|a| a.ndim() > 0)
-            })
-            .cloned()
-            .collect();
-        (all, arrays)
-    });
-
     // (b) Materialize observed algebraic rules (dependency-ordered at build time)
     //     into the reused observed container before the state derivatives read
     //     them. RETAIN the hoisted STATE-FREE/`t`-free observeds in place (seeded
@@ -898,38 +726,24 @@ fn evaluate_rhs_legacy(
             state_arrays,
             observed_arrays,
             static_keys,
-            cse,
             const_lits,
             ..
         } = &mut *scratch;
         observed_arrays.retain(|k, _| static_keys.contains(k));
-        let pass = ObsPass {
-            env: EvalEnv {
-                state_arrays,
-                params,
-                param_names,
-                t,
-                derived_extents: empty_derived_extents(),
-                forcing,
-                // ess-cse: the observed bodies are where the expanded
-                // discretization subtrees live, so this is the memo's main
-                // beneficiary.
-                cse: Some(&*cse),
-                const_lits: Some(&*const_lits),
-                const_arrays,
-                declared,
-            },
-            // Honour the oracle contract: `force_scalar` runs observeds per-cell
-            // too, so the reference trajectory is fully un-vectorized.
-            force_scalar,
+        let env = EvalEnv {
+            state_arrays,
+            params,
+            param_names,
+            t,
+            derived_extents: empty_derived_extents(),
+            forcing,
+            const_lits: Some(&*const_lits),
+            const_arrays,
+            declared,
         };
-        materialize_observeds_pass(observed_arrays, observed_rules, &pass, stats);
+        materialize_observeds_pass(observed_arrays, observed_rules, &env, stats);
     }
 
-    // Emit observed shapes we need for downstream variable lookups.
-
-    // Split the scratch into disjoint field borrows: the state/observed arrays
-    // are read (shared) while the buffer pool is checked out (exclusive).
     let observed_arrays = &scratch.observed_arrays;
     let env = EvalEnv {
         state_arrays: &scratch.state_arrays,
@@ -938,12 +752,10 @@ fn evaluate_rhs_legacy(
         t,
         derived_extents: empty_derived_extents(),
         forcing,
-        cse: Some(&scratch.cse),
         const_lits: Some(&scratch.const_lits),
         const_arrays,
         declared,
     };
-    let pool = &mut scratch.pool;
 
     // (c) Evaluate each RHS rule and write into dy.
     for rule in rhs_rules {
@@ -972,56 +784,6 @@ fn evaluate_rhs_legacy(
                 let vs = &var_shapes[var_name];
                 let filter = filter.as_deref();
 
-                // ---- Vectorized (whole-array) fast path (ess-bdm, ess-p9s) --
-                // A discretized spatial derivative whose LHS addresses the state
-                // by a constant per-axis shift of the output indices
-                // (`D(u[i+c])`, `c` constant; the bare-index method-of-lines
-                // case is `c = 0`) is evaluated as whole-array kernels:
-                //   * shifted slices for affine-ghost neighbours `index(u,i±k)`,
-                //   * cyclic rolls for periodic-wrap neighbours,
-                //   * a small static fold over einsum contraction indices,
-                //   * region sub-range writes for boundary makearrays,
-                //   * broadcast arithmetic for coefficients,
-                // then the dy sub-block is scattered in place. No per-element
-                // scalar loop walks the body, and (ess-mro) no heap allocation
-                // occurs: intermediates come from `pool`. A static `filter` is
-                // carried by masking each term with the reduction identity
-                // (`try_eval_faq_vectorized`); a ragged/derived-bound filter
-                // (dynamic contraction window) bails to the per-cell oracle.
-                let lhs_shifts = lhs_constant_shifts(lhs_idx_exprs, output_idx_names);
-                if !force_scalar {
-                    if let Some(dest_lo) = lhs_shifts
-                        .as_ref()
-                        .and_then(|shifts| subblock_dest(vs, output_ranges, shifts))
-                    {
-                        let ctx = env.ctx(observed_arrays);
-                        if let Some((val, ops)) = try_eval_faq_vectorized(
-                            output_idx_names,
-                            output_ranges,
-                            body,
-                            contract_names,
-                            contract_dims,
-                            *reduce,
-                            filter,
-                            &ctx,
-                            pool,
-                        ) {
-                            let total = vs.shape.iter().copied().product::<usize>().max(1);
-                            if vs.flat_offset + total <= dy.len() {
-                                if let Some(view) = val.view() {
-                                    scatter_col_major_offset(view, dy, vs, &dest_lo);
-                                }
-                                val.release(pool);
-                                stats.kernel_ops += ops;
-                                stats.vectorized_rules += 1;
-                                continue;
-                            }
-                            val.release(pool);
-                        }
-                    }
-                }
-
-                // ---- Per-cell oracle (fallback / forced reference) ---------
                 stats.scalar_rules += 1;
                 // Hoist the eval context and the static contraction bounds out of
                 // the per-cell loop: the bound key set (output_idx + contract
@@ -1030,10 +792,9 @@ fn evaluate_rhs_legacy(
                 // range re-derivation on every output tuple.
                 let static_ranges = static_contract_ranges(contract_dims);
                 // Origin of the output box — the alignment an ARRAY-valued §5.3
-                // `filter` is resolved against, so a per-cell mask means the same
-                // thing here as it does on the vectorized path.
+                // `filter` is resolved against.
                 let output_origin: Vec<i64> = output_ranges.iter().map(|(lo, _)| *lo).collect();
-                let mut ctx = env.oracle_ctx(observed_arrays);
+                let mut ctx = env.ctx(observed_arrays);
                 // ---- Forward prefix scan (O(N) instead of the O(N²) triangle)
                 // A cumulative reduction (esm-spec §4.3.1) is a triangular double
                 // loop that re-sums, for every output cell, the window the

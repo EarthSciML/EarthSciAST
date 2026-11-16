@@ -2508,7 +2508,6 @@ pub(crate) fn eval_observed_recurrence(
         t,
         derived_extents,
         forcing: &forcing,
-        cse: None,
         const_lits: None,
         const_arrays,
         declared: empty_declared_names(),
@@ -2678,7 +2677,6 @@ pub(crate) fn eval_expression_with_extents_and_consts_shared(
         forcing: &forcing,
         // Standalone one-shot evaluation: no CSE memo (nothing to amortize the
         // structural analysis over), so this path is unchanged.
-        cse: None,
         const_lits: None,
         const_arrays,
         // No compiled model behind this entry point, so it vouches for no name
@@ -5888,7 +5886,6 @@ mod unbound_name_fault_tests {
             t: 0.0,
             derived_extents: empty_derived_extents(),
             forcing: &forcing,
-            cse: None,
             const_lits: None,
             const_arrays: ConstArrayScope::empty(),
             declared: &declared,

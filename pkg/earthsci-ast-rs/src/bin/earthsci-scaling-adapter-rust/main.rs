@@ -862,7 +862,7 @@ fn measure_one(one: &One) -> Map<String, Value> {
         ) {
             Ok(ip) => match ip.debug_array_compiled() {
                 Some(ic) if ic.state_variable_names() == names.as_slice() => {
-                    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, ip.p(), true);
+                    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, ip.p());
                     r.insert(
                         "interpreter_max_abs_diff".into(),
                         json!(max_abs_diff(&idy, &native_dy)),
@@ -951,7 +951,7 @@ fn check_hand_loop_against_interpreter(one: &One, family: &str, r: &mut Map<Stri
         let names = ic.state_variable_names().to_vec();
         let (perm, canon_state) = layout(&names, &canonical_vars(family, &doc)?)?;
         let state: Vec<f64> = perm.iter().map(|&k| canon_state[k]).collect();
-        let (idy, _) = ic.debug_eval_rhs(&state, 0.0, ip.p(), true);
+        let (idy, _) = ic.debug_eval_rhs(&state, 0.0, ip.p());
         let mut interp_canon = vec![0.0f64; idy.len()];
         for (p, &k) in perm.iter().enumerate() {
             interp_canon[k] = idy[p];

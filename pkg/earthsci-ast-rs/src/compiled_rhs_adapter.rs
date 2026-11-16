@@ -367,7 +367,7 @@ fn run_fixture(fx: &Value, manifest_dir: &Path, engine: Engine) -> Result<Value,
         let state_obj = probe["state"].as_object().ok_or("probe.state missing")?;
         let t = probe["t"].as_f64().unwrap_or(0.0);
         let sv = state_vec(&names, state_obj).map_err(|e| format!("probe {pid}: {e}"))?;
-        let (dy, _stats) = compiled.debug_eval_rhs(&sv, t, &params, false);
+        let (dy, _stats) = compiled.debug_eval_rhs(&sv, t, &params);
         let mut m = Map::new();
         for (i, n) in names.iter().enumerate() {
             m.insert(bare(n).to_string(), num(dy[i]));

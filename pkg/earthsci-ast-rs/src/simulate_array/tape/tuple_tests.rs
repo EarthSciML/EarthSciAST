@@ -1223,7 +1223,7 @@ fn an_all_negative_zero_ragged_row_sums_to_positive_zero() {
         assert_eq!(count(&prog, "SegReduce"), 1);
         let compiled = super::array_tests::compile(doc);
         for state in states() {
-            let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+            let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
             assert!(dy.iter().all(|v| v.to_bits() == 0), "{dy:?}");
         }
     }
@@ -1330,7 +1330,7 @@ fn a_ragged_range_whose_parent_is_contracted_folds_the_parent_outer() {
         } else {
             vec![1.0]
         };
-        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
         let expect: Vec<f64> = state.iter().map(|&v| want * v).collect();
         assert_eq!(dy, expect, "free output: {free_output}");
     }

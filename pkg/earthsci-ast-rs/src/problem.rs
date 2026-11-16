@@ -3102,11 +3102,8 @@ fn static_observed_fields(
     // The same gates the array route runs — the evaluable-core operator gate
     // (esm-spec §9.6.3 constraint 6), events, operator arity — fire here too:
     // a state-free document is evaluated, so it is built.
-    let mut compiled = ArrayCompiled::from_flattened(flat).map_err(SimulateError::Compile)?;
-    compiled.runtime_mode = match compiler {
-        Compiler::Interpreter => crate::simulate_array::RuntimeMode::Interpreter,
-        _ => crate::simulate_array::RuntimeMode::Native,
-    };
+    let mut compiled = ArrayCompiled::from_flattened_with(flat, false, compiler)
+        .map_err(SimulateError::Compile)?;
     compiled.rewrites = rewrites;
     let compiled = Rc::new(compiled);
     let report = rule_report(
@@ -3492,14 +3489,6 @@ fn compile_backend(
             "the caller asked for Rhs::Never".to_string(),
         ));
     }
-    // The array runtime's own mode, carried on the compiled artifact so the
-    // driver reads WHICH compiler it is serving rather than re-deciding per
-    // call (`crate::simulate_array::RuntimeMode`).
-    let runtime_mode = match compiler {
-        Compiler::Interpreter => crate::simulate_array::RuntimeMode::Interpreter,
-        Compiler::Xla => crate::simulate_array::RuntimeMode::Xla,
-        _ => crate::simulate_array::RuntimeMode::Native,
-    };
     if let Some(flat) = flat {
         // Same rule the typed-document branch applies below, on the input that
         // states it most directly: a flattened system with no state variables
@@ -3514,8 +3503,8 @@ fn compile_backend(
         let mut compiled = crate::simulate_array::ArrayCompiled::from_flattened_with(
             flat,
             runtime_array_parameters,
+            compiler,
         )?;
-        compiled.runtime_mode = runtime_mode;
         compiled.rewrites = rewrites;
         return Ok(Backend::Array(Rc::new(compiled)));
     }
@@ -3566,9 +3555,12 @@ fn compile_backend(
     // content: a scalar document and a gridded one are built by the same
     // machinery, so that what ran is a property of the name and not of the
     // input." So every document, scalar or gridded, builds the array runtime.
-    let mut compiled =
-        crate::simulate::build_array_compiled(file, file_flattened, runtime_array_parameters)?;
-    compiled.runtime_mode = runtime_mode;
+    let mut compiled = crate::simulate::build_array_compiled(
+        file,
+        file_flattened,
+        runtime_array_parameters,
+        compiler,
+    )?;
     compiled.rewrites = rewrites;
     Ok(Backend::Array(Rc::new(compiled)))
 }

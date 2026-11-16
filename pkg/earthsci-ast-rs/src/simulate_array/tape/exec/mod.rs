@@ -34,8 +34,7 @@
 //! uniform.
 //!
 //! **Sections/invalidation**: the CONST section runs once per scratch and
-//! parameter vector, guarded by a `bind_params`-style parameter-generation
-//! hash mirroring `cse.rs`: a caller that reuses one scratch across a
+//! parameter vector, guarded by a parameter-generation hash: a caller that reuses one scratch across a
 //! parameter change (a sweep through `debug_eval_rhs_into`) re-primes instead
 //! of being served stale CONST values. The SEGMENT section also re-runs when
 //! the forcing epoch moves, which the driver bumps after each forcing refresh

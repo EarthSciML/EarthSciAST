@@ -256,7 +256,7 @@ fn rhs_at(
         assert!(scratch.has_tape(), "{label}: the tape declined a rule");
         dy
     } else {
-        comp.debug_eval_rhs(&state, 0.0, prob.p(), true).0
+        comp.debug_eval_rhs(&state, 0.0, prob.p()).0
     };
     (names, dy)
 }

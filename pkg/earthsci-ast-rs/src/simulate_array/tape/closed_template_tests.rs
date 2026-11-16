@@ -561,7 +561,7 @@ fn nested_face_sum_through_connectivity_matches_the_oracle() {
             let compiled = ArrayCompiled::from_file(&file).expect("compiles");
             let n = compiled.state_variable_names().len();
             let state = seeded_state(n, 1, 0.25, 2.5);
-            let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+            let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
             assert!(
                 dy.iter().all(|x| x.is_finite()),
                 "the per-cell oracle answers every face: {dy:?}"
@@ -613,7 +613,7 @@ fn nested_faq_over_another_box_is_not_read_at_the_cell() {
         let names = compiled.state_variable_names();
         let state = seeded_state(names.len(), 1, 0.25, 2.5);
         take_const_array_oob();
-        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
         let fault = take_const_array_oob().expect("the oracle latches a fault");
         assert!(
             fault.starts_with("E_TREEWALK_NESTED_BOX_MISMATCH")

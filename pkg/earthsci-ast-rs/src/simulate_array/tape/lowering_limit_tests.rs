@@ -111,7 +111,7 @@ pub(super) fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, 0.25, 2.5);
         for &t in &[0.0, 0.37, 2.5] {
-            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params, true);
+            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params);
             for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
                 let mut dy = vec![0.0f64; n];
                 run_reference(p, &compiled, &state, &param_vec, t, &mut dy);

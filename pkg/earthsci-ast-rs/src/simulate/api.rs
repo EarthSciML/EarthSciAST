@@ -498,10 +498,8 @@ pub struct SolutionMetadata {
     /// Number of rejected integrator steps (best-effort).
     pub n_rejected_steps: usize,
     /// `(rule name, reason)` for every rule the array driver could NOT compile
-    /// onto the vectorized tape. Always empty: a model with any such rule has
-    /// no tape, and every routing that builds one — the strict compilers at
-    /// construction, the historical routing (`compile_array`) at the start of
-    /// the solve — refuses it with
+    /// onto the tape. Always empty: a model with any such rule has no tape,
+    /// and a strict compiler refuses it with
     /// [`crate::CompileError::CompilerRefusedRule`] naming the
     /// rule and the reason, rather than running the whole model on another
     /// evaluator. Kept so the metadata shape (and `metadata.tapeFallbacks`

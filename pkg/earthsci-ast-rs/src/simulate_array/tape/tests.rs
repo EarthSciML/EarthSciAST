@@ -143,7 +143,7 @@ pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram 
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, lo, hi);
         for &t in &[0.0, 0.37, 2.5] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
             for (label, p) in [
                 ("fused", &prog),
                 ("unfused", &prog_uf),
@@ -639,7 +639,7 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let state = seeded_state(nstates, 7, 0.5, 2.0);
-    let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+    let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
     let mut dy = vec![0.0f64; nstates];
     let run = run_reference(&prog, &compiled, &state, &param_vec, 0.0, &mut dy);
     for (a, b) in dy.iter().zip(dy_ref.iter()) {
@@ -699,7 +699,7 @@ fn ab_select_nan_semantics() {
     for seed in 0..4u64 {
         let state = seeded_state(nstates, seed, -2.0, 2.0);
         assert!(state.iter().any(|&x| x < 0.0), "fixture needs negatives");
-        let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+        let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         let mut dy = vec![0.0f64; nstates];
         run_reference(&prog, &compiled, &state, &param_vec, 0.0, &mut dy);
         for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
@@ -1306,9 +1306,9 @@ fn tape_build_is_side_effect_free() {
     });
     let compiled = compile(doc);
     let state = seeded_state(n as usize, 3, -1.0, 1.0);
-    let (before, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (before, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
     let _ = compiled.build_tape(&HashSet::new());
-    let (after, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (after, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
     for (a, b) in before.iter().zip(after.iter()) {
         assert_eq!(a.to_bits(), b.to_bits());
     }
@@ -1875,7 +1875,7 @@ fn ab_scan_fused_with_its_neighbours() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let state = seeded_state(3 * n, 7, -2.0, 2.0);
-    let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+    let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
     let mut ctx = super::exec::TapeCtx::new(std::sync::Arc::new(prog));
     for publish in [false, true, false] {
         ctx.set_exports_active(publish);
@@ -2322,7 +2322,7 @@ fn ab_model_file_if_available() {
         let noise = seeded_state(n, seed, -0.01, 0.01);
         let state: Vec<f64> = u0.iter().zip(&noise).map(|(u, e)| u * (1.0 + e)).collect();
         for &t in &[0.0, 1234.5] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
             let mut dy = vec![0.0f64; n];
             run_reference(&prog, &compiled, &state, &param_vec, t, &mut dy);
             let mut diverged = 0usize;
@@ -2704,7 +2704,7 @@ fn ab_superop_bin3_and_extended_pairs() {
     for seed in 0..4u64 {
         let state = seeded_state(n_state, seed, -3.0, 3.0);
         for &t in &[0.0, 0.37, 2.5] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
             let mut dy = vec![0.0f64; n_state];
             run_reference(&prog3, &compiled, &state, &param_vec, t, &mut dy);
             for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
@@ -2767,8 +2767,8 @@ fn dy_three_ways(doc: serde_json::Value, state: &[f64]) -> [Vec<f64>; 3] {
     let compiled = compile(doc);
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let (dy_oracle, _) = compiled.debug_eval_rhs(state, 0.0, &params, true);
-    let (dy_vec, _) = compiled.debug_eval_rhs(state, 0.0, &params, false);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(state, 0.0, &params);
+    let (dy_vec, _) = compiled.debug_eval_rhs(state, 0.0, &params);
     let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(
         report.fallbacks.is_empty(),
@@ -3188,7 +3188,7 @@ fn ab_elementwise_observed_gather_fixture() {
         for seed in 0..3u64 {
             let state = seeded_state(n, seed, -2.0, 2.0);
             for &t in &[0.0, 1.0] {
-                let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+                let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
                 let mut dy = vec![0.0f64; n];
                 run_reference(&prog, &compiled, &state, &param_vec, t, &mut dy);
                 for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
@@ -3211,7 +3211,7 @@ fn ab_elementwise_observed_gather_fixture() {
     for seed in 0..3u64 {
         let state = seeded_state(n, seed, -2.0, 2.0);
         for &t in &[0.0, 1.0] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
             assert_fast_matches(
                 &compiled,
                 &mut fast,
@@ -3377,7 +3377,7 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let state = seeded_state(n, 7, -2.0, 2.0);
-    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
     let mut scratch = compiled
         .debug_new_scratch_taped()
         .expect("the tape lowers every rule");
@@ -3518,8 +3518,8 @@ fn ab_float32_variables_beside_float64_neighbours() {
     assert!(fast.has_tape());
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, -1.0, 1.0);
-        let (want, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
-        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+        let (want, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
+        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
         assert_eq!(bits(&want), bits(&oracle), "seed {seed}: overlay vs oracle");
         for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
@@ -3747,7 +3747,7 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
     let mut fired = [false; 2];
     for state in &states {
         crate::simulate_array::take_const_array_oob();
-        let (dy_ref, _) = compiled.debug_eval_rhs(state, 0.0, &params, true);
+        let (dy_ref, _) = compiled.debug_eval_rhs(state, 0.0, &params);
         let want = crate::simulate_array::take_const_array_oob();
         fired[usize::from(want.is_some())] = true;
         for (k, prog) in progs.iter().enumerate() {
@@ -3846,7 +3846,7 @@ fn assert_fault_parity(doc: serde_json::Value, times: &[f64]) -> TapeProgram {
     let state = seeded_state(n, 7, -1.0, 1.0);
     for &t in times {
         crate::simulate_array::take_const_array_oob();
-        compiled.debug_eval_rhs(&state, t, &HashMap::new(), true);
+        compiled.debug_eval_rhs(&state, t, &HashMap::new());
         let want = crate::simulate_array::take_const_array_oob();
         assert!(want.is_some(), "the oracle faults at t = {t}");
         for k in 0..3 {
@@ -4029,7 +4029,7 @@ fn ab_an_all_negative_zero_sum_is_positive_zero() {
         let compiled = compile(doc);
         let n = compiled.state_variable_names().len();
         let state = seeded_state(n, 1, -2.0, 2.0);
-        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
         for (k, v) in dy.iter().enumerate() {
             assert_eq!(v.to_bits(), 0, "[{variant}] dy[{k}] = {v:?}, not +0.0");
         }
