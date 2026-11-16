@@ -3958,27 +3958,9 @@ mod field_ic_memo_tests {
     /// A CONST provider serving `w` as zeros over three cells.
     struct Zeros;
 
-    impl crate::provider::CadenceProvider for Zeros {
-        fn materialize(
-            &mut self,
-        ) -> Result<
-            std::collections::HashMap<String, crate::provider::NativeField>,
-            crate::provider::ProviderError,
-        > {
-            let zeros = ndarray::ArrayD::zeros(ndarray::IxDyn(&[3]));
-            Ok([("w".to_string(), crate::provider::NativeField::new(zeros))].into())
-        }
-        fn refresh(
-            &mut self,
-            _t: f64,
-        ) -> Result<
-            Option<std::collections::HashMap<String, crate::provider::NativeField>>,
-            crate::provider::ProviderError,
-        > {
-            Ok(None)
-        }
-        fn refresh_times(&self) -> Vec<f64> {
-            Vec::new()
+    impl crate::provider::DataProvider for Zeros {
+        fn sample(&mut self) -> Result<ndarray::ArrayD<f64>, crate::provider::ProviderError> {
+            Ok(ndarray::ArrayD::zeros(ndarray::IxDyn(&[3])))
         }
     }
 
@@ -3987,7 +3969,7 @@ mod field_ic_memo_tests {
         let options = ProblemOptions {
             providers: [(
                 "w".to_string(),
-                Box::new(Zeros) as Box<dyn crate::provider::CadenceProvider>,
+                Box::new(Zeros) as Box<dyn crate::provider::DataProvider>,
             )]
             .into(),
             ..opts(compiler)
@@ -4025,26 +4007,15 @@ mod field_ic_memo_tests {
     /// A DISCRETE provider serving the scalar `b = 1` at every time.
     struct One;
 
-    impl crate::provider::CadenceProvider for One {
-        fn materialize(
-            &mut self,
-        ) -> Result<
-            std::collections::HashMap<String, crate::provider::NativeField>,
-            crate::provider::ProviderError,
-        > {
-            unreachable!("a discrete provider is not materialized")
+    impl crate::provider::DataProvider for One {
+        fn sample(&mut self) -> Result<ndarray::ArrayD<f64>, crate::provider::ProviderError> {
+            unreachable!("a discrete provider is not sampled whole")
         }
         fn refresh(
             &mut self,
             _t: f64,
-        ) -> Result<
-            Option<std::collections::HashMap<String, crate::provider::NativeField>>,
-            crate::provider::ProviderError,
-        > {
-            let one = ndarray::ArrayD::from_elem(ndarray::IxDyn(&[]), 1.0);
-            Ok(Some(
-                [("b".to_string(), crate::provider::NativeField::new(one))].into(),
-            ))
+        ) -> Result<Option<ndarray::ArrayD<f64>>, crate::provider::ProviderError> {
+            Ok(Some(ndarray::ArrayD::from_elem(ndarray::IxDyn(&[]), 1.0)))
         }
         fn refresh_times(&self) -> Vec<f64> {
             vec![0.5]
@@ -4083,7 +4054,7 @@ mod field_ic_memo_tests {
             let options = ProblemOptions {
                 providers: [(
                     "b".to_string(),
-                    Box::new(One) as Box<dyn crate::provider::CadenceProvider>,
+                    Box::new(One) as Box<dyn crate::provider::DataProvider>,
                 )]
                 .into(),
                 ..opts(compiler)

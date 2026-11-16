@@ -125,7 +125,7 @@ fn tier_shapes_agree_on_the_build_pipeline() {
 fn ingested_shapes_agree() {
     use std::collections::HashMap;
 
-    use earthsci_ast::PrepareProvider;
+    use earthsci_ast::DataProvider;
     use earthsci_ast::esio_provider::providers_from_document;
 
     let dir = tier_dir().join("ingest");
@@ -165,7 +165,7 @@ fn ingested_shapes_agree() {
                 providers_from_document(&doc, &cache, None, &overrides)
                     .map(|v| {
                         v.into_iter()
-                            .map(|(k, p)| (k, Box::new(p) as Box<dyn PrepareProvider>))
+                            .map(|(k, p)| (k, Box::new(p) as Box<dyn DataProvider>))
                             .collect()
                     })
                     .map_err(|e| e.to_string())

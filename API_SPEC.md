@@ -147,7 +147,7 @@ name:
   (`build_refresh_callback`, `build_output_callback`,
   `build_checkpoint_callback`), the sink protocol (`AbstractSink`,
   `build_zarr_sink`, `zarr_restart_state`), and the provider constructors
-  (`providers_from_document`, `PrepareProvider`).
+  (`providers_from_document`, `DataProvider`).
 
 Rust's `pub mod` list is pinned at module granularity only: a module's interior
 is an extension seam, and `api-surface.json` records the module list rather than
@@ -1112,7 +1112,7 @@ here except where that section says otherwise.
 | forcing slots | `forcing_slots(x) -> Vector{ForcingSlot}` | `forcing_slots(&self) -> &[ForcingSlot]` on each program type | — |
 | forcing set | `forcing_set(x, bufs) -> ForcingSet` | `ForcingSet::new(&RhsProgram, Vec<Arc<[f64]>>) -> Result<ForcingSet, RhsError>` | raises `compiler_unavailable` |
 | default forcing | `default_forcing_set(x) -> ForcingSet` | `RhsProgram::default_forcing(&self) -> ForcingSet` | raises `compiler_unavailable` |
-| from a provider sample | `forcing_from_sample(sample, slot::ForcingSlot) -> Vector{Float64}`, `forcing_from_sample(sample, name; shape = nothing) -> Array{Float64}` | `forcing_from_sample(&HashMap<String, NativeField>, &ForcingSlot) -> Result<Arc<[f64]>, ProviderError>` | — |
+| from a provider sample | `forcing_from_sample(sample, slot::ForcingSlot) -> Vector{Float64}`, `forcing_from_sample(sample, name; shape = nothing) -> Array{Float64}` | `forcing_from_sample(&ArrayD<f64>, &ForcingSlot) -> Result<Arc<[f64]>, ProviderError>` | — |
 | refresh | `replace_forcing(fs, slot, buf) -> ForcingSet` | `ForcingSet::replace(&self, slot: usize, Arc<[f64]>) -> Result<ForcingSet, RhsError>` | — |
 | epoch | `forcing_epoch(fs) -> UInt64` | `ForcingSet::epoch(&self) -> u64` | — |
 | evaluate | `rhs!(du, x, ws, u, aux, p, t, fs) -> du` | `eval_into(&self, u, aux, p, t, forcing: &ForcingSet, du, ws) -> Result<(), RhsError>` on `RhsProgram` and `TileProgram` | — |
@@ -1290,14 +1290,13 @@ gather failed, or that were never gathered, are `NotGathered`. Build-time calls 
   it binds whole (a const provider, a discrete provider at each refresh, and,
   in Julia, a provider that discovers a loader extent), so a caller that
   builds its own sets from provider samples (Julia `provider_sample(p, t)`;
-  Rust `CadenceProvider::materialize()` or `refresh(t)`) gets, bit for bit,
+  Rust `DataProvider::sample()` or `refresh(t)`) gets, bit for bit,
   the buffer the Problem holds for the same sample. Which field of the sample
   is taken follows each binding's provider contract: Julia samples are keyed
   by flattened parameter name and the slot's entry is taken (a bare array or
   number is a single-variable sample, the field itself; a missing entry is a
-  `RefreshError`); a Rust `providers=` provider feeds under its own field name,
-  so the sample must hold exactly one field, which is taken whatever it is
-  called, and a sample of any other size is a `ProviderError`.
+  `RefreshError`); a Rust `DataProvider` feeds the one parameter its key
+  names, so its sample is that field's array.
   That field's dimensions, in the order the provider delivered them (a
   source's file order, the record dimension first when two records are
   delivered), must be the slot's shape, axis by axis, and a 0-d slot takes one

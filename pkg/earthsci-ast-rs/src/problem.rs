@@ -590,8 +590,9 @@ pub struct ProblemOptions {
     /// also turns the build pipeline on.
     #[cfg(not(target_arch = "wasm32"))]
     pub pushdown_rewrite: bool,
-    /// Run-time data providers, keyed by the forcing VARIABLE name they feed.
-    /// A key spells the parameter as a `p` key may (esm-spec §6.6.2): its full
+    /// Data providers, keyed by the parameter each feeds
+    /// ([`crate::provider::DataProvider`]). A key spells the parameter as a
+    /// `p` key may (esm-spec §6.6.2): its full
     /// name (`Fed.s`), its bare name (`s`) or a partial qualification. An
     /// exact key wins over the others for the same parameter, whose providers
     /// are not read; two non-exact keys for one parameter, an ambiguous key,
@@ -600,8 +601,13 @@ pub struct ProblemOptions {
     /// state or observed variable, or is read by a `variable_map` coupling is
     /// used as given.
     ///
-    /// CONST providers are materialized ONCE, here, at construction — the
-    /// "gated fetch" §2.5.2 puts in the build half. DISCRETE providers are
+    /// When the build pipeline is asked for ([`Self::build_pipeline`] or
+    /// [`Self::pushdown_rewrite`]), it consumes every CONST provider (one with
+    /// no refresh times): its key is then
+    /// `"<ModelPath>.<param>"`, a gate defers its fetch past value invention,
+    /// and its extent may close a metaparameter. Otherwise CONST providers
+    /// are materialized ONCE, here, at construction — the "gated fetch"
+    /// §2.5.2 puts in the build half. DISCRETE providers are
     /// sampled once at construction too, after every construction check, at
     /// [`Self::sample_time`] (the record in effect there, see
     /// [`crate::provider::RefreshExecutor::sample_at`]), so the Problem's
@@ -612,17 +618,19 @@ pub struct ProblemOptions {
     /// [`solve`] segments the integration on: a solve samples them at its own
     /// start and refreshes them at each boundary, with or without `saveat`.
     #[cfg(not(target_arch = "wasm32"))]
-    pub providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>>,
-    /// Build-time array providers consumed by the pushdown / gated-fetch
-    /// pipeline, keyed by provider key. Supplying any turns the build pipeline
-    /// on.
+    pub providers: HashMap<String, Box<dyn crate::provider::DataProvider>>,
+    /// Providers moved into [`Self::providers`] at construction, turning the
+    /// build pipeline on. Kept only until the `esm` command sets
+    /// `providers` and `build_pipeline` itself; it then goes.
     #[cfg(not(target_arch = "wasm32"))]
-    pub build_providers: Vec<(String, Box<dyn crate::prepare::PrepareProvider>)>,
+    #[doc(hidden)]
+    pub build_providers: Vec<(String, Box<dyn crate::provider::DataProvider>)>,
     /// Constant arrays injected into the build-time evaluation scope.
     #[cfg(not(target_arch = "wasm32"))]
     pub const_arrays: HashMap<String, ArrayD<f64>>,
-    /// Force the deterministic build pipeline on (it is on automatically when
-    /// `pushdown_rewrite`, `build_providers` or `const_arrays` is set).
+    /// Run the deterministic build pipeline (it is on automatically when
+    /// `pushdown_rewrite` or `const_arrays` is set). Set, or with
+    /// `pushdown_rewrite`, it consumes the CONST [`Self::providers`].
     #[cfg(not(target_arch = "wasm32"))]
     pub build_pipeline: bool,
     /// Split a gated provider's pre-sliced fetch into requests of at most this
@@ -1945,11 +1953,33 @@ pub fn esm_problem<'a>(
     mut opts: ProblemOptions,
 ) -> Result<EsmProblem, SimulateError> {
     let input = input.into();
+    #[cfg(not(target_arch = "wasm32"))]
+    merge_build_providers(&mut opts)?;
     let set = std::mem::take(&mut opts.strip);
     if set.is_empty() {
         return build_problem(input, tspan, opts, set);
     }
     strip_and_build(input, tspan, opts, set)
+}
+
+/// Move [`ProblemOptions::build_providers`] into [`ProblemOptions::providers`],
+/// turning the build pipeline on when there are any.
+#[cfg(not(target_arch = "wasm32"))]
+fn merge_build_providers(opts: &mut ProblemOptions) -> Result<(), SimulateError> {
+    if opts.build_providers.is_empty() {
+        return Ok(());
+    }
+    opts.build_pipeline = true;
+    for (key, provider) in std::mem::take(&mut opts.build_providers) {
+        if opts.providers.insert(key.clone(), provider).is_some() {
+            return Err(SimulateError::ProviderError {
+                name: key,
+                details: "supplied twice, in `providers` and in `build_providers`; pass one"
+                    .to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// [`esm_problem`] with `strip` non-empty (API_SPEC §5.8): load the document,
@@ -2209,14 +2239,14 @@ fn build_problem(
     let mut pipeline_evaluated_cone = false;
 
     // What the caller supplied for the document's shaped parameters, captured
-    // before the build pipeline consumes `const_arrays` and `build_providers`:
+    // before the build pipeline consumes `const_arrays` and the providers it consumes:
     // the compiled model binds the arrays too (stage 3d), and the missing-data
     // gate asks which names any channel serves.
     let supplied = SuppliedData::capture(&mut opts, owned_json.as_ref(), owned_file.as_ref());
 
     // A TYPED document is a legitimate input to the build pipeline, and it used
     // to be the one input shape that silently was not: the pipeline reads raw
-    // JSON, so `ProblemInput::File` skipped it entirely — `build_providers`,
+    // JSON, so `ProblemInput::File` skipped it entirely — `providers`,
     // `const_arrays` and `pushdown_rewrite` were accepted and then DROPPED,
     // with no error, and the caller got a document evaluated against every
     // data-fed parameter's `default`. Re-serializing here routes it through the
@@ -2841,11 +2871,15 @@ fn nesting_within(v: &JsonValue, limit: usize) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Whether the build pipeline consumes the CONST providers: when the caller
+/// asked for it, not when `const_arrays` alone turned it on.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn pipeline_takes_providers(opts: &ProblemOptions) -> bool {
+    opts.build_pipeline || opts.pushdown_rewrite
+}
+
 fn wants_build_pipeline(opts: &ProblemOptions) -> bool {
-    opts.build_pipeline
-        || opts.pushdown_rewrite
-        || !opts.build_providers.is_empty()
-        || !opts.const_arrays.is_empty()
+    opts.build_pipeline || opts.pushdown_rewrite || !opts.const_arrays.is_empty()
 }
 
 /// The compiled model of a problem with **nothing to integrate** whose
@@ -4107,16 +4141,16 @@ fn inline_value_of(a: &ArrayD<f64>) -> crate::types::InlineValue {
 
 /// The data a caller supplied for a document's shaped parameters, captured at
 /// the top of [`esm_problem`] because the build pipeline consumes
-/// `const_arrays` and `build_providers`.
+/// `const_arrays` and `providers`.
 #[derive(Default)]
 struct SuppliedData {
     /// Each `const_arrays` entry whose key names a shaped parameter of the
     /// document, as `Model.param` or as the bare `param`.
     #[cfg(not(target_arch = "wasm32"))]
     arrays: HashMap<String, ArrayD<f64>>,
-    /// The keys of the run-time providers and of the build-time providers.
+    /// The keys of every provider.
     provider_keys: HashMap<String, ()>,
-    /// The keys of the build-time providers alone.
+    /// The keys of the providers the build pipeline consumes.
     build_provider_keys: HashMap<String, ()>,
     /// Every `const_arrays` key, sorted, which a run-time provider may not
     /// also feed.
@@ -4144,10 +4178,6 @@ impl SuppliedData {
         {
             out.provider_keys
                 .extend(opts.providers.keys().map(|k| (k.clone(), ())));
-            out.provider_keys
-                .extend(opts.build_providers.iter().map(|(k, _)| (k.clone(), ())));
-            out.build_provider_keys
-                .extend(opts.build_providers.iter().map(|(k, _)| (k.clone(), ())));
             out.const_keys = opts.const_arrays.keys().cloned().collect();
             out.const_keys.sort();
             if !opts.const_arrays.is_empty() {
@@ -4155,7 +4185,6 @@ impl SuppliedData {
                 let only_trigger = raw.is_some_and(declares_derivative)
                     && !opts.build_pipeline
                     && !opts.pushdown_rewrite
-                    && opts.build_providers.is_empty()
                     && opts.const_arrays.keys().all(|k| shaped.contains(k));
                 if only_trigger {
                     out.arrays = std::mem::take(&mut opts.const_arrays);
@@ -4166,6 +4195,15 @@ impl SuppliedData {
                         }
                     }
                 }
+            }
+            // The providers the build pipeline will consume.
+            if pipeline_takes_providers(opts) {
+                out.build_provider_keys.extend(
+                    opts.providers
+                        .iter()
+                        .filter(|(_, p)| p.refresh_times().is_empty())
+                        .map(|(k, _)| (k.clone(), ())),
+                );
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -4636,7 +4674,7 @@ fn bind_providers(
         .route(keys.iter().map(String::as_str), keep)
         .map_err(provider_key_error)?;
     refuse_provider_const_overlap(&resolver, &routing.targets, const_keys, keep)?;
-    let mut providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>> = HashMap::new();
+    let mut providers: HashMap<String, Box<dyn crate::provider::DataProvider>> = HashMap::new();
     let mut given: HashMap<String, String> = HashMap::new();
     for key in keys {
         let provider = opts.providers.remove(&key).expect("a key of the map");
@@ -4671,7 +4709,7 @@ fn bind_providers(
     let discrete: std::collections::HashSet<String> = exec
         .bindings()
         .filter(|b| b.cadence == crate::cadence::Cadence::Discrete)
-        .flat_map(|b| b.variables.iter().cloned())
+        .flat_map(|b| b.variables)
         .collect();
 
     // Every refresh time inside the span is a segment boundary, including one

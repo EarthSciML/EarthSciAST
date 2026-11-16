@@ -243,7 +243,6 @@ fn off_the_end_flat_gather_through_prepare_fails_closed() {
         (0.0, 0.0),
         ProblemOptions {
             const_arrays: m_arrays(),
-            build_providers: Vec::new(),
             ..opts
         },
     ) {

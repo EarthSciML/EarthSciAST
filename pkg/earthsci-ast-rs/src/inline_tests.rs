@@ -82,7 +82,7 @@ use crate::simulate::{Solution, SolveOptions};
 /// demand.
 ///
 /// A factory rather than a set because [`crate::problem::ProblemOptions`] takes
-/// its `build_providers` BY VALUE: one shared vector would be moved out by the
+/// its `providers` BY VALUE: one shared map would be moved out by the
 /// first build and missing from the second. Called once per BUILD, so a
 /// document whose tests share a [`BuildKey`] reads its `data_sources` once
 /// rather than once per test. `Err` carries a message naming what could not be
@@ -91,7 +91,7 @@ use crate::simulate::{Solution, SolveOptions};
 /// See [`InlineTestOptions::providers`].
 #[cfg(not(target_arch = "wasm32"))]
 pub type BuildProviderFactory<'a> =
-    dyn Fn() -> Result<Vec<(String, Box<dyn crate::prepare::PrepareProvider>)>, String> + 'a;
+    dyn Fn() -> Result<Vec<(String, Box<dyn crate::provider::DataProvider>)>, String> + 'a;
 
 /// The wasm32 build has no build pipeline (`crate::prepare` is native-only), so
 /// there is no provider contract to satisfy: a factory passed here is refused,
@@ -2574,7 +2574,7 @@ fn build_for_test(
     if let Some(make) = build_providers {
         match make() {
             Ok(provs) => {
-                popts.build_providers = provs;
+                popts.providers = provs.into_iter().collect();
                 popts.build_pipeline = true;
                 // Keep the ingested columns an assertion of a test sharing
                 // this build may name (finding F43), and only those.
@@ -5732,8 +5732,8 @@ mod tests {
 
     struct ConstColumn(Vec<f64>);
 
-    impl crate::prepare::PrepareProvider for ConstColumn {
-        fn sample(&mut self) -> Result<ndarray::ArrayD<f64>, crate::prepare::PrepareError> {
+    impl crate::provider::DataProvider for ConstColumn {
+        fn sample(&mut self) -> Result<ndarray::ArrayD<f64>, crate::provider::ProviderError> {
             Ok(
                 ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[self.0.len()]), self.0.clone())
                     .unwrap(),
@@ -5773,7 +5773,7 @@ mod tests {
             Ok(vec![(
                 "p".to_string(),
                 Box::new(ConstColumn(vec![3.0, 5.0, 7.0]))
-                    as Box<dyn crate::prepare::PrepareProvider>,
+                    as Box<dyn crate::provider::DataProvider>,
             )])
         })
     }

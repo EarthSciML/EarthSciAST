@@ -23,9 +23,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::flatten;
-use earthsci_ast::provider::{
-    CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
-};
+use earthsci_ast::provider::{DataProvider, ForcingBuffer, ProviderError, RefreshExecutor};
 use earthsci_ast::simulate_array::{ArrayCompiled, BuildInspection};
 use earthsci_ast::{Alg, Solution, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
@@ -71,30 +69,28 @@ fn by_anchor(field: &Value, anchor: f64) -> Vec<f64> {
 
 /// An offline provider seeded from the golden's `native_fields`, standing in for
 /// the EarthSciIO provider. A DISCRETE loader has per-anchor fields; a CONST
-/// loader has a single materialize baseline. `out_key` is the namespaced
-/// forcing-buffer key the RHS reads (e.g. `"M.F_src"`).
+/// loader has a single materialize baseline.
 struct GoldenProvider {
-    out_key: String,
     const_value: Option<Vec<f64>>,
     schedule: Vec<(f64, Vec<f64>)>,
 }
 
-fn native(v: &[f64]) -> NativeField {
-    NativeField::new(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap())
+fn native(v: &[f64]) -> ArrayD<f64> {
+    ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap()
 }
 
-impl CadenceProvider for GoldenProvider {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+impl DataProvider for GoldenProvider {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         let v = self
             .const_value
             .clone()
             .expect("materialize on a provider with no CONST baseline");
-        Ok(HashMap::from([(self.out_key.clone(), native(&v))]))
+        Ok(native(&v))
     }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         for (anchor, value) in &self.schedule {
             if (*anchor - t).abs() < 1e-9 {
-                return Ok(Some(HashMap::from([(self.out_key.clone(), native(value))])));
+                return Ok(Some(native(value)));
             }
         }
         Ok(None)
@@ -127,7 +123,6 @@ fn build_executor(raw: &Value, golden: &Value) -> RefreshExecutor {
         .map(|k| k.parse::<f64>().unwrap())
         .collect();
     let emis = GoldenProvider {
-        out_key: "M.F_src".to_string(),
         const_value: None,
         schedule: anchors
             .iter()
@@ -135,18 +130,17 @@ fn build_executor(raw: &Value, golden: &Value) -> RefreshExecutor {
             .collect(),
     };
     let factors = GoldenProvider {
-        out_key: "M.scale_src".to_string(),
         const_value: Some(f64_vec(&nf["M.scale_src"]["values"])),
         schedule: Vec::new(),
     };
-    let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([
+    let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([
         (
-            "emis".to_string(),
-            Box::new(emis) as Box<dyn CadenceProvider>,
+            "M.F_src".to_string(),
+            Box::new(emis) as Box<dyn DataProvider>,
         ),
         (
-            "factors".to_string(),
-            Box::new(factors) as Box<dyn CadenceProvider>,
+            "M.scale_src".to_string(),
+            Box::new(factors) as Box<dyn DataProvider>,
         ),
     ]);
     RefreshExecutor::new(&raw["models"]["M"], raw, providers).expect("classify + pair providers")

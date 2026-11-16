@@ -22,14 +22,13 @@ use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
 use earthsci_ast::{
-    Compiler, PrepareError, PrepareProvider, ProblemOptions, esm_problem, load_string,
-    observed_field,
+    Compiler, DataProvider, ProblemOptions, ProviderError, esm_problem, load_string, observed_field,
 };
 
 struct MockConst(Vec<f64>);
 
-impl PrepareProvider for MockConst {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+impl DataProvider for MockConst {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
     }
 }
@@ -103,12 +102,13 @@ fn build_and_read_all(
         ProblemOptions {
             compiler: Some(Compiler::Interpreter),
             model_name: Some(model.to_string()),
-            build_providers: providers
+            build_pipeline: true,
+            providers: providers
                 .iter()
                 .map(|(key, values)| {
                     (
                         (*key).to_string(),
-                        Box::new(MockConst(values.to_vec())) as Box<dyn PrepareProvider>,
+                        Box::new(MockConst(values.to_vec())) as Box<dyn DataProvider>,
                     )
                 })
                 .collect(),

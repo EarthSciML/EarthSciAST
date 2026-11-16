@@ -7,7 +7,7 @@
 //! them rather than sitting beside them. What survives here is the pipeline
 //! itself ([`run_build_pipeline`], crate-internal) and the two things a caller
 //! genuinely reaches for — the build-time provider contract
-//! ([`PrepareProvider`]) and the build-observability seam ([`PreparePhase`],
+//! ([`DataProvider`]) and the build-observability seam ([`PreparePhase`],
 //! [`PrepareProgress`]), both extension seam under `API_SPEC.md` §3, neither
 //! stable API.
 //!
@@ -25,7 +25,7 @@
 //! are sampled once up front (never twice), and the surviving length binds the
 //! metaparameter every dependent index set is sized by. The caller no longer
 //! counts rows and passes the number in — see
-//! [`PrepareProvider::extent_metaparameter`].
+//! [`DataProvider::extent_metaparameter`].
 //!
 //! Those arrows are also [`PreparePhase`], and a host can watch them go by:
 //! [`crate::problem::ProblemOptions::progress`] is the build-time counterpart of
@@ -82,6 +82,8 @@ use crate::classification::DeclaredRank;
 use crate::compile_error::CompileError;
 use crate::faq::resolve_expr_ranges_with_extents;
 use crate::parse::LoadOptions;
+pub use crate::provider::AxisSel;
+use crate::provider::DataProvider;
 use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
 };
@@ -106,20 +108,7 @@ pub use crate::simulate::Flow;
 
 /// A gated provider deferred by [`BuildState::inject_providers`]: its key, the
 /// provider itself, and the gate its fetch is planned against.
-type GatedProvider = (String, Box<dyn PrepareProvider>, ProviderGate);
-
-/// A build-time provider's failure: what a [`PrepareProvider`] returns when
-/// it cannot deliver. The build reports it naming the provider.
-#[derive(Debug, Clone)]
-pub struct PrepareError(pub String);
-
-impl fmt::Display for PrepareError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PrepareError: {}", self.0)
-    }
-}
-
-impl std::error::Error for PrepareError {}
+type GatedProvider = (String, Box<dyn DataProvider>, ProviderGate);
 
 /// An uncoded build failure of the pipeline, as the compile path reports
 /// one.
@@ -134,97 +123,6 @@ fn stage_err(context: impl fmt::Display, e: CompileError) -> SimulateError {
         SimulateError::Compile(e)
     } else {
         err(format!("{context}: {e}"))
-    }
-}
-
-/// One axis of the NEUTRAL per-axis selection handed to a gated provider —
-/// the Rust spelling of the Python engine's `"all" | [0-based indices]` form.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AxisSel {
-    /// The full native axis.
-    All,
-    /// The listed 0-based native indices, in order.
-    Indices(Vec<usize>),
-    /// The half-open strided range `[start, stop)` by `step` (`step >= 1`) —
-    /// the contiguous form, kept whole rather than expanded to indices so a
-    /// store-backed reader can push a slice down instead of a 52,411-long
-    /// index list.
-    Range {
-        /// Inclusive first index (0-based).
-        start: usize,
-        /// Exclusive last index.
-        stop: usize,
-        /// Stride (>= 1).
-        step: usize,
-    },
-}
-
-impl AxisSel {
-    /// The 0-based indices this selector picks over an axis of length
-    /// `dim_len` (the engine-side fallback for a provider that cannot push a
-    /// selection down).
-    pub fn indices(&self, dim_len: usize) -> Vec<usize> {
-        match self {
-            AxisSel::All => (0..dim_len).collect(),
-            AxisSel::Indices(v) => v.clone(),
-            AxisSel::Range { start, stop, step } => {
-                (*start..(*stop).min(dim_len)).step_by(*step).collect()
-            }
-        }
-    }
-}
-
-/// The CONST data-provider contract the build pipeline consumes: one provider feeds
-/// ONE field (the `providers["<ModelPath>.<param>"]` convention shared with the
-/// Julia/Python bindings). A gated provider may additionally honour a pushed-
-/// down per-axis selection; one that cannot is fetched whole and sliced
-/// engine-side (the fallback matches the pushdown result exactly).
-pub trait PrepareProvider {
-    /// CONST whole-field sample.
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError>;
-
-    /// Whether [`PrepareProvider::sample_with_selection`] pushes the selection
-    /// down to the reader (fetching only what intersects it).
-    fn supports_selection(&self) -> bool {
-        false
-    }
-
-    /// Sample with a per-axis selection pushed down. EVERY requested axis is
-    /// present in the result (a fixed axis comes back length-1 and is dropped
-    /// by the engine).
-    fn sample_with_selection(
-        &mut self,
-        _selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, PrepareError> {
-        Err(PrepareError(
-            "provider does not support selection pushdown".to_string(),
-        ))
-    }
-
-    /// `false` for a DISCRETE provider (non-empty refresh times) — rejected by
-    /// the build pipeline, which is build-time-only.
-    fn is_const(&self) -> bool {
-        true
-    }
-
-    /// A provider-declared gate (the fallback protocol mirroring Julia's
-    /// `provider_gate_spec`); the record-derived gate takes precedence.
-    fn gate_spec(&self) -> Option<ProviderGate> {
-        None
-    }
-
-    /// The metaparameter this provider's own extent BINDS (esm-spec §8.9): a
-    /// loader that discovers its record count at read time — an FF10 point
-    /// inventory whose surviving-row count is not knowable until the table is
-    /// decoded and filtered — declares `extent: {"metaparameter": "N_REC"}`,
-    /// and the build closes that metaparameter with the length of this
-    /// provider's leading axis BEFORE the typed load, instead of the caller
-    /// counting rows and passing the number in.
-    ///
-    /// Every provider naming the same metaparameter must agree, which is also
-    /// the alignment check across a table's columns.
-    fn extent_metaparameter(&self) -> Option<String> {
-        None
     }
 }
 
@@ -1291,7 +1189,7 @@ type ReportFn<'a> =
 #[allow(clippy::too_many_arguments)]
 fn run_gated_fetch(
     key: &str,
-    prov: &mut dyn PrepareProvider,
+    prov: &mut dyn DataProvider,
     plan: &GatedFetchPlan,
     batch: Option<usize>,
     issued: &mut usize,
@@ -1452,7 +1350,7 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
 /// artifact.
 ///
 /// `providers` maps the CONSUMING PARAMETER's namespaced name
-/// (`"<ModelPath>.<param>"`) to a CONST [`PrepareProvider`]; an entry the
+/// (`"<ModelPath>.<param>"`) to a CONST [`DataProvider`]; an entry the
 /// rewrite record's gate routes onto a gated array is DEFERRED and fetched
 /// pre-sliced after value-invention. From esm 1.0.0 a data source declares no
 /// variables, so the consuming parameter is the only spelling that names one
@@ -1477,7 +1375,7 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
 pub(crate) fn run_prepare(
     doc: &JsonValue,
     const_arrays: HashMap<String, ArrayD<f64>>,
-    providers: Vec<(String, Box<dyn PrepareProvider>)>,
+    providers: Vec<(String, Box<dyn DataProvider>)>,
     opts: &PrepareOptions,
 ) -> Result<PreparedBuild, SimulateError> {
     let mut providers = providers;
@@ -1578,7 +1476,7 @@ fn report_progress(
 /// provider's OWN declared gate is caught here, the gate the rewrite record
 /// derives in the check after the rewrite.
 fn discover_loader_extents(
-    providers: &mut [(String, Box<dyn PrepareProvider>)],
+    providers: &mut [(String, Box<dyn DataProvider>)],
     opts: &PrepareOptions,
     metaparameters: &mut BTreeMap<String, i64>,
 ) -> Result<HashMap<String, ArrayD<f64>>, SimulateError> {
@@ -2091,7 +1989,7 @@ impl<'o> BuildState<'o> {
     fn inject_providers(
         &mut self,
         const_arrays: HashMap<String, ArrayD<f64>>,
-        providers: Vec<(String, Box<dyn PrepareProvider>)>,
+        providers: Vec<(String, Box<dyn DataProvider>)>,
         mut discovered: HashMap<String, ArrayD<f64>>,
         pd_gates: &HashMap<String, ProviderGate>,
     ) -> Result<Vec<GatedProvider>, SimulateError> {
@@ -2124,11 +2022,6 @@ impl<'o> BuildState<'o> {
             } else if let Some(gate) = prov.gate_spec() {
                 // Provider-declared gate (the fallback protocol) — also deferred.
                 gated.push((k, prov, gate));
-            } else if !prov.is_const() {
-                return Err(err(format!(
-                    "prepare: provider '{k}' is DISCRETE (non-empty refresh times); \
-                     prepare() is build-time-only"
-                )));
             } else {
                 let a = prov
                     .sample()
@@ -3020,7 +2913,7 @@ impl<'o> BuildState<'o> {
 /// [`crate::problem::ProblemOptions`] into this module's internal option
 /// struct.
 ///
-/// Consumes `opts`'s build providers and const arrays: they are moved into the
+/// Consumes `opts`'s CONST providers and const arrays: they are moved into the
 /// pipeline, which is the one place they are used.
 pub(crate) fn run_build_pipeline(
     doc: &JsonValue,
@@ -3041,7 +2934,23 @@ pub(crate) fn run_build_pipeline(
         observed_cone: opts.observed_cone.clone(),
     };
     let const_arrays = std::mem::take(&mut opts.const_arrays);
-    let providers = std::mem::take(&mut opts.build_providers);
+    // The CONST providers, in key order, when the caller asked for this
+    // pipeline; the run-time executor takes the rest.
+    let takes = crate::problem::pipeline_takes_providers(opts);
+    let mut keys: Vec<String> = opts
+        .providers
+        .iter()
+        .filter(|(_, p)| takes && p.refresh_times().is_empty())
+        .map(|(k, _)| k.clone())
+        .collect();
+    keys.sort();
+    let providers = keys
+        .into_iter()
+        .map(|k| {
+            let p = opts.providers.remove(&k).expect("a key of the map");
+            (k, p)
+        })
+        .collect();
     run_prepare(doc, const_arrays, providers, &internal)
 }
 

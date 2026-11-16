@@ -710,7 +710,7 @@ The geometry-op operand-ring requirements (padding, degenerate vertices) belonge
 > STATE-FREE document would read an emptied record); -006/-007 are
 > `InlineTestOptions::test_filter`, which the CLI's `--filter` now sets instead of filtering
 > the returned `Vec`. Gate: `earthsci-ast-rs/tests/inline_test_build_memo.rs` — the
-> `build_providers` factory is called once per build, so a counting factory reports the
+> provider factory is called once per build, so a counting factory reports the
 > build count directly, and every case is ALSO built so that a missing key field gives a
 > wrong number rather than merely a fast one. Sabotage-verified: dropping each of the
 > four fields from `BuildKey::of` in turn turns the suite red (1, 1, 4 and 1 tests

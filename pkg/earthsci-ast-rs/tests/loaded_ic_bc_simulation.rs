@@ -7,7 +7,7 @@
 //! every loaded field injected **through the data-Provider seam** — never as a raw
 //! const array keyed by an internal consumer name (DESIGN §2, R1/R2).
 //!
-//! A static stub [`CadenceProvider`] serves the manifest `inputs`
+//! A static stub [`DataProvider`] serves the manifest `inputs`
 //! (`tests/conformance/pde_simulation_pipeline/manifest.json`), keyed
 //! `<Loader>.<variable>`. Its CONST fields are materialized once into the model's
 //! forcing buffer; the scoped-`ic` equations then fold `InitialConditions.*` into
@@ -20,7 +20,7 @@
 
 use earthsci_ast::flatten;
 use earthsci_ast::load_path;
-use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
+use earthsci_ast::provider::{DataProvider, ProviderError, RefreshExecutor};
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{Alg, Solution, SolveOptions, check_assertion};
 use ndarray::{ArrayD, IxDyn};
@@ -70,25 +70,13 @@ fn manifest_inputs() -> HashMap<String, ArrayD<f64>> {
     m
 }
 
-/// Static stub provider serving the manifest `inputs`. All fields are CONST
-/// (materialized once at setup); no discrete refresh.
-struct StubProvider {
-    fields: HashMap<String, ArrayD<f64>>,
-}
+/// Static stub provider serving one manifest `input`: CONST (materialized
+/// once at setup), no discrete refresh.
+struct StubProvider(ArrayD<f64>);
 
-impl CadenceProvider for StubProvider {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
-        Ok(self
-            .fields
-            .iter()
-            .map(|(k, v)| (k.clone(), NativeField::new(v.clone())))
-            .collect())
-    }
-    fn refresh(&mut self, _t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
-        Ok(None)
-    }
-    fn refresh_times(&self) -> Vec<f64> {
-        Vec::new()
+impl DataProvider for StubProvider {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        Ok(self.0.clone())
     }
 }
 
@@ -140,17 +128,13 @@ fn loaded_ic_bc_simulation_provider_injection() {
     // loaded field IS a model parameter carrying a `data` update, so the seam
     // is keyed by that parameter's FLATTENED name (`<Model>.<param>`) rather
     // than by the old `<Loader>.<var>` pair.
-    let mut provider = StubProvider {
-        fields: manifest_inputs(),
-    };
-    let materialized = provider.materialize().expect("materialize const fields");
-    {
-        let forcing = compiled.forcing_handle();
-        let mut buf = forcing.borrow_mut();
-        for (k, f) in materialized {
-            buf.insert(k, f.array);
-        }
-    }
+    let providers: HashMap<String, Box<dyn DataProvider>> = manifest_inputs()
+        .into_iter()
+        .map(|(k, a)| (k, Box::new(StubProvider(a)) as Box<dyn DataProvider>))
+        .collect();
+    RefreshExecutor::from_providers(providers)
+        .materialize_const(&compiled.forcing_handle())
+        .expect("materialize const fields");
 
     // ---- Simulate 0 -> 600 ---------------------------------------------------
     let opts = SolveOptions {

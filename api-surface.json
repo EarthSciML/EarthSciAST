@@ -95,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 985,
+    "symbols": 982,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 353,
       "typescript": 239,
       "python": 270,
-      "rust": 395,
+      "rust": 392,
       "go": 457
     },
     "by_tier": {
-      "extension": 677,
+      "extension": 674,
       "stable": 308
     }
   },
@@ -2472,6 +2472,14 @@
       "bindings": {
         "go": "DAEInfo",
         "rust": "DaeInfo"
+      }
+    },
+    {
+      "name": "data_provider",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DataProvider"
       }
     },
     {
@@ -6006,14 +6014,6 @@
       }
     },
     {
-      "name": "prepare_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "rust": "PrepareError"
-      }
-    },
-    {
       "name": "prepare_phase",
       "kind": "type",
       "tier": "extension",
@@ -6148,6 +6148,14 @@
       "tier": "extension",
       "bindings": {
         "go": "PropagateDimension"
+      }
+    },
+    {
+      "name": "provider_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ProviderError"
       }
     },
     {

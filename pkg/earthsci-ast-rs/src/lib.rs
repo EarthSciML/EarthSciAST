@@ -213,7 +213,7 @@ pub(crate) mod problem;
 // Strip and expose (API_SPEC §5.8, RFC U6).
 pub(crate) mod strip;
 
-// OPT-IN EarthSciIO bridge: a `CadenceProvider` backed by a real EarthSciIO
+// OPT-IN EarthSciIO bridge: a `DataProvider` backed by a real EarthSciIO
 // `Provider`. Behind the `esio` feature so the default build does not link
 // EarthSciIO — the two rigs stay decoupled, exactly as on the Python side
 // (`earthsci_ast.data_sources.esio_provider`), and a caller opts in.
@@ -358,9 +358,13 @@ pub use pushdown_rewrite::{
 // — replaced by `esm_problem` / `EsmProblem` / `ProblemOptions`); what remains is
 // the build-time provider contract and the build-observability seam.
 #[cfg(not(target_arch = "wasm32"))]
-pub use prepare::{
-    AxisSel, PrepareError, PreparePhase, PrepareProgress, PrepareProgressFn, PrepareProvider,
-};
+pub use prepare::{PreparePhase, PrepareProgress, PrepareProgressFn};
+/// The name [`DataProvider`] had while the build half of a provider was a
+/// trait of its own. Kept only until the `esm` command names `DataProvider`;
+/// it then goes.
+#[doc(hidden)]
+pub use provider::DataProvider as PrepareProvider;
+pub use provider::{AxisSel, DataProvider, ProviderError};
 
 pub use edit::{
     EditError, add_coupling, add_equation, add_model, add_reaction, add_reaction_system,
