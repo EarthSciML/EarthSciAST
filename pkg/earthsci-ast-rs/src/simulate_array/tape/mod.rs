@@ -85,6 +85,7 @@ mod scan_shift;
 #[cfg(test)]
 mod scatter_tests;
 mod sink;
+mod slab;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
