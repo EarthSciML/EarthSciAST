@@ -170,7 +170,7 @@ fn run_time_subscript_under_a_boundary_policy() {
             std::sync::Arc::new(ConstArrayScope::default().with_boundary("C", vec![kind]));
         let prog = ab(&compiled, &no_params());
         assert!(
-            prog.data_gathers.iter().all(|g| g.order.is_none()),
+            prog.tables.data_gathers.iter().all(|g| g.order.is_none()),
             "{kind:?}: a resolving policy cannot fault"
         );
     }

@@ -78,7 +78,7 @@ pub(super) fn resolve_scalar(
         Operand::Time => env.t,
         Operand::Slot(s) => {
             debug_assert!(
-                env.prog.slots[*s as usize].scalar,
+                env.prog.tables.slots[*s as usize].scalar,
                 "scalar read of array slot"
             );
             unsafe { *slab_ptr.add(slot_off[*s as usize]) }
@@ -104,7 +104,7 @@ pub(super) fn resolve_rv(
         Operand::Param(p) => Rv::S(env.params[*p as usize]),
         Operand::Time => Rv::S(env.t),
         Operand::Slot(s) => {
-            let desc = &env.prog.slots[*s as usize];
+            let desc = &env.prog.tables.slots[*s as usize];
             let off = slot_off[*s as usize];
             if desc.scalar {
                 Rv::S(unsafe { *slab_ptr.add(off) })
@@ -143,7 +143,7 @@ pub(super) fn src_base<'a>(
     match src {
         SrcRef::Slot(s) => (
             unsafe { slab_ptr.add(slot_off[*s as usize]) },
-            &env.prog.slots[*s as usize].shape[..],
+            &env.prog.tables.slots[*s as usize].shape[..],
         ),
         SrcRef::State(ix) => (
             state_ptr(env, *ix),
@@ -161,7 +161,7 @@ pub(super) fn resolve_src(
 ) -> SrcView {
     match src {
         SrcRef::Slot(s) => {
-            let desc = &env.prog.slots[*s as usize];
+            let desc = &env.prog.tables.slots[*s as usize];
             SrcView {
                 ptr: unsafe { slab_ptr.add(slot_off[*s as usize]) },
                 shape: desc.shape.clone(),

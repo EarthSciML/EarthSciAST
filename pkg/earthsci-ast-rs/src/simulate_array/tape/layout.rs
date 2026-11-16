@@ -83,7 +83,7 @@ fn transpose_values(values: &[f64], shape: &[usize]) -> Vec<f64> {
 
 fn src_shape<'a>(prog: &'a TapeProgram, src: &SrcRef) -> &'a [usize] {
     match src {
-        SrcRef::Slot(s) => &prog.slots[*s as usize].shape,
+        SrcRef::Slot(s) => &prog.tables.slots[*s as usize].shape,
         SrcRef::State(ix) => &prog.state_vars[*ix as usize].shape,
     }
 }
@@ -91,7 +91,7 @@ fn src_shape<'a>(prog: &'a TapeProgram, src: &SrcRef) -> &'a [usize] {
 /// Whether every instruction means the same thing in reversed coordinates
 /// (see the module docs for what declines).
 fn reversible(prog: &TapeProgram) -> bool {
-    let slot_free = |s: SlotId| order_free(&prog.slots[s as usize].shape);
+    let slot_free = |s: SlotId| order_free(&prog.tables.slots[s as usize].shape);
     prog.instrs.iter().all(|i| match i {
         Instr::Bin { .. }
         | Instr::Un { .. }
@@ -120,7 +120,7 @@ fn reversible(prog: &TapeProgram) -> bool {
         Instr::SegReduce { out, .. } => slot_free(*out),
         Instr::Reshape { src, out } => order_free(src_shape(prog, src)) && slot_free(*out),
         Instr::ScalarRead { src, .. } => order_free(src_shape(prog, src)),
-        Instr::DyWrite { write } => match &prog.dy_writes[*write as usize].scatter {
+        Instr::DyWrite { write } => match &prog.tables.dy_writes[*write as usize].scatter {
             Some(pos) => {
                 let mut seen = pos.clone();
                 seen.sort_unstable();
@@ -136,86 +136,117 @@ fn reversible(prog: &TapeProgram) -> bool {
 
 /// Rewrite every axis-bearing part of `prog` into reversed coordinates.
 /// Reads only ORIGINAL shapes until the slot and state tables are reversed
-/// last.
+/// last. Every instruction and every table is named, so a new one has to
+/// say whether it carries axes.
 fn reverse(prog: &mut TapeProgram) {
+    let TapeProgram {
+        instrs,
+        precision: _,
+        n_const: _,
+        n_segment: _,
+        n_rhs: _,
+        tables:
+            ProgramTables {
+                slots,
+                plans,
+                regions,
+                assemblies: _,
+                const_data,
+                index_gathers,
+                gather_tables,
+                seg_tables: _,
+                faults: _,
+                fault_order: _,
+                data_gathers,
+                // In LOGICAL coordinates (`FaultCand`), which the reversal leaves.
+                fault_scans: _,
+                // Declined by `reversible`.
+                sweeps: _,
+                // Their sources are order-free (`reversible`), so a subscript
+                // tuple means the same element either way.
+                scalar_reads: _,
+                dy_writes,
+            },
+        state_vars,
+        // The forcing load transposes at the boundary (module docs).
+        forcings: _,
+        exports: _,
+        rules: _,
+        slab: _,
+        provenance: _,
+        params_len: _,
+        // The pass runs ahead of fusion and rerolling.
+        fused: _,
+        lanes: _,
+        fuse_stats: _,
+        col_major: _,
+    } = prog;
+
     // Instructions: the axis fields that live inline.
-    for idx in 0..prog.instrs.len() {
-        let instr = &prog.instrs[idx];
-        let rewritten = match instr {
-            Instr::Ramp { axis, lo, out } => {
-                let n = prog.slots[*out as usize].shape.len() as u8;
-                Some(Instr::Ramp {
-                    axis: n - 1 - *axis,
-                    lo: *lo,
-                    out: *out,
-                })
+    for instr in instrs.iter_mut() {
+        match instr {
+            Instr::Ramp { axis, out, .. } => {
+                let n = slots[*out as usize].shape.len() as u8;
+                *axis = n - 1 - *axis;
             }
-            Instr::LoadElem { src, idx, out } => Some(Instr::LoadElem {
-                src: *src,
-                idx: rev(idx),
-                out: *out,
-            }),
+            Instr::LoadElem { idx, .. } => *idx = rev(idx),
             Instr::Reduce {
-                op,
-                init,
-                src,
-                axes,
-                reverse,
-                src_shape,
-                out,
+                axes, src_shape, ..
             } => {
                 let n = src_shape.len() as u8;
-                Some(Instr::Reduce {
-                    op: *op,
-                    init: *init,
-                    src: *src,
-                    axes: axes.iter().map(|&a| n - 1 - a).collect(),
-                    reverse: *reverse,
-                    src_shape: rev(src_shape),
-                    out: *out,
-                })
+                *axes = axes.iter().map(|&a| n - 1 - a).collect();
+                *src_shape = rev(src_shape);
             }
             Instr::Scan {
-                op,
-                init,
-                src,
-                axis,
-                inclusive,
-                reverse,
-                src_shape,
-                out,
+                axis, src_shape, ..
             } => {
                 let n = src_shape.len() as u8;
-                Some(Instr::Scan {
-                    op: *op,
-                    init: *init,
-                    src: *src,
-                    axis: n - 1 - *axis,
-                    inclusive: *inclusive,
-                    reverse: *reverse,
-                    src_shape: rev(src_shape),
-                    out: *out,
-                })
+                *axis = n - 1 - *axis;
+                *src_shape = rev(src_shape);
             }
-            _ => None,
-        };
-        if let Some(r) = rewritten {
-            prog.instrs[idx] = r;
+            // Elementwise, or every axis lives in a table reversed below.
+            Instr::Bin { .. }
+            | Instr::Un { .. }
+            | Instr::Neg { .. }
+            | Instr::Select { .. }
+            | Instr::Fill { .. }
+            | Instr::Copy { .. }
+            | Instr::Gather { .. }
+            | Instr::Region { .. }
+            | Instr::Assemble { .. }
+            | Instr::ConstArray { .. }
+            | Instr::LoadForcing { .. }
+            | Instr::IndexGather { .. }
+            | Instr::TableGather { .. }
+            | Instr::DataGather { .. }
+            | Instr::DyWrite { .. } => {}
+            // A rank-1 axis, the same either way.
+            Instr::Count { .. } => {}
+            // An order-free output or source (`reversible`).
+            Instr::SegReduce { .. } | Instr::Reshape { .. } | Instr::ScalarRead { .. } => {}
+            // No axes.
+            Instr::Fault { .. }
+            | Instr::FaultScan { .. }
+            | Instr::JmpIfZero { .. }
+            | Instr::Export { .. } => {}
+            Instr::Sweep { .. } | Instr::Fused { .. } | Instr::Lanes { .. } => {
+                unreachable!("`reversible` declines a program holding one")
+            }
         }
     }
 
-    for plan in &mut prog.plans {
+    for plan in plans.iter_mut() {
         reverse_plan(plan);
     }
-    for r in &mut prog.regions {
+    for r in regions.iter_mut() {
         r.dest_lo = rev(&r.dest_lo);
         r.shape = rev(&r.shape);
     }
-    for d in &mut prog.const_data {
+    for d in const_data.iter_mut() {
         d.values = std::sync::Arc::new(transpose_values(&d.values, &d.shape));
         d.shape = rev(&d.shape);
     }
-    for g in &mut prog.index_gathers {
+    for g in index_gathers.iter_mut() {
         let n_out = g.shape.len() as u8;
         g.axes = g
             .axes
@@ -232,7 +263,7 @@ fn reverse(prog: &mut TapeProgram) {
         g.src_shape = rev(&g.src_shape);
         g.shape = rev(&g.shape);
     }
-    for g in &mut prog.data_gathers {
+    for g in data_gathers.iter_mut() {
         let n_out = g.shape.len() as u8;
         g.subs = rev(&g.subs);
         if let ScalarReadKind::ConstArray { policy, .. } = &mut g.kind {
@@ -246,7 +277,7 @@ fn reverse(prog: &mut TapeProgram) {
             o.lo = rev(&o.lo);
         }
     }
-    for t in &mut prog.gather_tables {
+    for t in gather_tables.iter_mut() {
         if !order_free(&t.src_shape) {
             for p in t.pos.iter_mut().filter(|p| **p != GATHER_GHOST) {
                 *p = reversed_flat(*p as usize, &t.src_shape) as u32;
@@ -254,10 +285,10 @@ fn reverse(prog: &mut TapeProgram) {
         }
         t.src_shape = rev(&t.src_shape);
     }
-    for w in &mut prog.dy_writes {
+    for w in dy_writes.iter_mut() {
         w.dest_lo = rev(&w.dest_lo);
         if let Some(pos) = &mut w.scatter {
-            let shape = &prog.slots[w.slot as usize].shape;
+            let shape = &slots[w.slot as usize].shape;
             if !order_free(shape) {
                 let mut out = vec![0usize; pos.len()];
                 for (k, &p) in pos.iter().enumerate() {
@@ -268,11 +299,11 @@ fn reverse(prog: &mut TapeProgram) {
         }
     }
 
-    for s in &mut prog.slots {
+    for s in slots.iter_mut() {
         s.shape = rev(&s.shape);
         s.origin = rev(&s.origin);
     }
-    for sv in &mut prog.state_vars {
+    for sv in state_vars.iter_mut() {
         sv.shape = rev(&sv.shape);
         sv.origin = rev(&sv.origin);
     }

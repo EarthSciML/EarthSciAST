@@ -243,7 +243,8 @@ fn derivative_lhs_that_is_not_a_constant_shift() {
     };
     let prog = flat_in_n(make, 6, 40);
     assert_eq!(
-        prog.dy_writes
+        prog.tables
+            .dy_writes
             .iter()
             .filter(|w| w.scatter.is_some())
             .count(),

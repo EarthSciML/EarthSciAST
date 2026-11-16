@@ -320,6 +320,7 @@ impl TapeExec {
     pub(crate) fn new(prog: &TapeProgram) -> Self {
         let slab = vec![0.0f64; prog.slab.total_elems];
         let slot_off: Vec<usize> = prog
+            .tables
             .slots
             .iter()
             .map(|s| {
@@ -335,7 +336,7 @@ impl TapeExec {
             .exports
             .iter()
             .map(|(name, slot)| {
-                let desc = &prog.slots[*slot as usize];
+                let desc = &prog.tables.slots[*slot as usize];
                 // The published array is logical: a column-major program's
                 // box is stored reversed.
                 let shape: Vec<usize> = if desc.scalar {
@@ -349,6 +350,7 @@ impl TapeExec {
             })
             .collect();
         let plan_full = prog
+            .tables
             .plans
             .iter()
             .map(|plan| {
@@ -427,16 +429,16 @@ impl TapeExec {
 /// Per assembly of `prog`, whether its regions cover every element of the box
 /// it assembles (for every `Assemble` that uses it).
 fn assemblies_covered(prog: &TapeProgram) -> Vec<bool> {
-    let mut covered = vec![true; prog.assemblies.len()];
+    let mut covered = vec![true; prog.tables.assemblies.len()];
     for ins in &prog.instrs {
         let Instr::Assemble { table, out } = ins else {
             continue;
         };
-        let shape = &prog.slots[*out as usize].shape;
+        let shape = &prog.tables.slots[*out as usize].shape;
         let rm = rm_strides(shape);
         let mut hit = vec![false; shape.iter().product::<usize>().max(1)];
-        for (_, region) in &prog.assemblies[*table as usize].parts {
-            let spec = &prog.regions[*region as usize];
+        for (_, region) in &prog.tables.assemblies[*table as usize].parts {
+            let spec = &prog.tables.regions[*region as usize];
             let n: usize = spec.shape.iter().product();
             let mut idx: DimU = SmallVec::from_elem(0, spec.shape.len());
             for _ in 0..n {
@@ -782,7 +784,7 @@ fn dy_zero_ranges(prog: &TapeProgram, n: usize) -> Vec<(usize, usize)> {
             }
             _ => continue,
         };
-        let w = &prog.dy_writes[*write as usize];
+        let w = &prog.tables.dy_writes[*write as usize];
         if let Some(pos) = &w.scatter {
             for &p in pos {
                 written[p] = true;
@@ -791,7 +793,7 @@ fn dy_zero_ranges(prog: &TapeProgram, n: usize) -> Vec<(usize, usize)> {
             written[flat] = true;
         } else {
             let sv = &prog.state_vars[w.var as usize];
-            let shape = &prog.slots[w.slot as usize].shape;
+            let shape = &prog.tables.slots[w.slot as usize].shape;
             let st = dy_strides(prog, &sv.shape);
             let total: usize = shape.iter().product();
             let nd = shape.len();
@@ -837,11 +839,11 @@ fn dy_zero_ranges(prog: &TapeProgram, n: usize) -> Vec<(usize, usize)> {
 /// then stores the derivative where the `DyWrite` would have copied it (the
 /// same values, one pass fewer), and that `DyWrite` does nothing.
 fn dy_homes(prog: &TapeProgram, n: usize) -> Vec<usize> {
-    let mut home = vec![usize::MAX; prog.slots.len()];
-    let tables = prog.tables();
-    let mut readers = vec![0u32; prog.slots.len()];
-    let mut defs = vec![0u32; prog.slots.len()];
-    let mut def_pc = vec![usize::MAX; prog.slots.len()];
+    let mut home = vec![usize::MAX; prog.tables.slots.len()];
+    let tables = prog.slot_tables();
+    let mut readers = vec![0u32; prog.tables.slots.len()];
+    let mut defs = vec![0u32; prog.tables.slots.len()];
+    let mut def_pc = vec![usize::MAX; prog.tables.slots.len()];
     for (pc, i) in prog.instrs.iter().enumerate() {
         i.for_each_read(&tables, |s| readers[s as usize] += 1);
         i.for_each_def(&tables, |s| {
@@ -855,7 +857,7 @@ fn dy_homes(prog: &TapeProgram, n: usize) -> Vec<usize> {
         let Instr::DyWrite { write } = &prog.instrs[pc] else {
             continue;
         };
-        let w = &prog.dy_writes[*write as usize];
+        let w = &prog.tables.dy_writes[*write as usize];
         let s = w.slot as usize;
         if conditional[pc] || w.scatter.is_some() || w.scalar_flat.is_some() {
             continue;
@@ -869,7 +871,7 @@ fn dy_homes(prog: &TapeProgram, n: usize) -> Vec<usize> {
         let fs = &prog.fused[*spec as usize];
         // A stored output over the group's box, or an absorbed reduction's
         // accumulator (folded in place, so straight into `dy`).
-        let desc = &prog.slots[s];
+        let desc = &prog.tables.slots[s];
         let fits = match &fs.reduce {
             Some(r) if r.out as usize == s => desc.elems() == r.n_inner,
             _ => fs.outputs.iter().any(|&(_, o)| o as usize == s) && desc.shape[..] == fs.shape[..],
@@ -904,9 +906,9 @@ fn quiet_homes(prog: &TapeProgram, home: &[usize]) -> Vec<usize> {
     let mut quiet = home.to_vec();
     let rhs_end = (prog.n_const + prog.n_segment + prog.n_rhs) as usize;
     let cont = prog.section_range(Cadence::Continuous);
-    let tables = prog.tables();
+    let tables = prog.slot_tables();
     // Per slot: whether any instruction a quiet call runs reads it.
-    let mut read_early = vec![false; prog.slots.len()];
+    let mut read_early = vec![false; prog.tables.slots.len()];
     for i in prog.instrs.iter().take(rhs_end) {
         i.for_each_read(&tables, |s| read_early[s as usize] = true);
     }
