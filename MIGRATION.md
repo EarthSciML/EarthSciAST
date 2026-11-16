@@ -1641,6 +1641,52 @@ remove. Your code stops compiling (Rust), or raises `UndefVarError` /
 
 ---
 
+## The plain-text expression surface is retired
+
+Expressions as text are now only the math of the document source formats
+(esm-spec §1.2): LaTeX math for Markdown, Typst math for Typst. Every binding
+loses its plain-text expression and equation parsers and its ASCII, Unicode and
+old LaTeX renderers, and gains `parse_math` and `expression_names` beside the
+existing `print_math` (API_SPEC §5.1). `.esm` documents do not change.
+
+To show an expression `e`: `print_math(e, expression_names(e), format)`, with
+format `typst` or `markdown` (LaTeX). To read one: `parse_math(text, names,
+format)`, the exact inverse of `print_math` under the same names; text whose
+top is `=` reads as an equation `{lhs, rhs}`. A run of letters is one name only
+when `names` declares it (in LaTeX, `RT` undeclared is not read; with `R` and
+`T` declared it is their product). `print_math` and `parse_math` take and return
+the decoded JSON form of an expression, as the document functions do. A refusal
+raises the binding's diagnostic error with code `parse_error` or `removed_op`.
+
+| Binding | Removed | Replacement | Kind |
+|---|---|---|---|
+| all | `parse_expression` / `parse_equation` (`parseExpression` / `parseEquation`, `ParseExpression` / `ParseEquation`) and `ExpressionParseError` | `parse_math(text, names, format)`; errors are the diagnostic error with code `parse_error` or `removed_op` | `deleted` |
+| all | `to_ascii`, `to_unicode`, `to_latex` (`toAscii` …, `ToASCII` …) on an expression or equation | `print_math(e, expression_names(e), format)` | `deleted` |
+| all | `to_ascii` / `to_unicode` / `to_latex` on a model, reaction system or file (the text summary) | `print_markdown` / `print_typst` of the decoded document | `deleted` |
+| all | — | `parse_math`, `expression_names` (`parseMath` / `expressionNames`, `ParseMath` / `ExpressionNames`) | `new` |
+| all | a string display of an expression or equation (`show`, `__str__`, `Display`, `String()`) printed plain text | it prints Typst math, `print_math(e, expression_names(e), typst)`; so do error messages that quote an expression | `semantics` |
+| all | DOT / Mermaid graph labels were chemical-subscripted (`O₃`) in Julia, Python and TypeScript | the name as written (`O3`), as in Rust | `semantics` |
+| Julia | `format_expression_ascii`, `render_chemical_formula`, `format_node_label`; the `show` summaries of `Model`, `ReactionSystem` and `EsmFile`; the `text/latex` and `text/ascii` shows of an expression | `print_math` / `print_typst`; those types use Julia's default `show` | `deleted` |
+| TypeScript | `parseReaction` (the reaction text syntax) | write the reaction in JSON, or in a Markdown or Typst document | `deleted` |
+| TypeScript | `toMathML`, `formatChemicalName` | `printMath` (LaTeX or Typst) | `deleted` |
+| Python | `FlattenedEquation.lhs_str` / `.rhs_str` | `print_math` of the side | `deleted` |
+| Python | Jupyter `_repr_latex_` used the old LaTeX renderer | rebuilt on `print_math` (LaTeX) in `earthsci_ast.jupyter` | `semantics` |
+| Rust | `TextRenderable`, `Expr::to_unicode`, `impl Display` for `Model` / `ReactionSystem` / `EsmFile` | `print_math`; `Display` for `Expr` and `Equation` prints Typst math | `deleted` |
+| Rust (wasm) | the `to_ascii` / `to_unicode` / `to_latex` exports | `print_math(expr_json, format)` / `parse_math(text, names_json, format)` | `deleted` |
+| Rust (`esm` CLI) | `esm pretty --format unicode\|latex\|ascii` | `--format typst` (default) or `markdown`; `esm convert --to markdown\|typst` writes the source formats | `deleted` |
+| Rust (`earthsci-narrative`) | an `eq` element's plain-text `text` field | `math`, in Typst math; `::esm-example[…]` content is LaTeX math, multi-letter names declared with `{names="…"}` | `deleted` |
+| Go | `ToUnicodeSpaced`, `ModelSummary`, the `FmtUnicode` / `FmtLatex` / `FmtASCII` / `FmtUnicodeSpaced` constants | `PrintMath` / `PrintTypst` | `deleted` |
+| Go | `FlattenedEquation.LHSString` / `RHSString` printed plain text | they print Typst math | `semantics` |
+
+**What to check.** Code that compared expressions by rendering them should
+compare the expressions (their canonical JSON, `canonicalize_document`)
+instead. A `D` with no `wrt` and one with `wrt: "t"` are different documents to
+the lossless printer and print differently; the old renderers showed both as a
+time derivative. A flattened name with a dot prints as a quoted name joined by
+`"."` in Typst math.
+
+---
+
 ## Unreleased
 
 ### Rust — `earthsci-ast`

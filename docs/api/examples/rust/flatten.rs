@@ -1,10 +1,10 @@
 //! Flatten a coupled document into one system and list what it contains.
 
-use earthsci_ast::{flatten, load_path, to_ascii};
+use earthsci_ast::{DocumentFormat, expression_names, flatten, load_path, print_math};
 use earthsci_ast_api_examples::fixture;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // region: flatten ops=flatten
+    // region: flatten ops=flatten,print_math
     let doc = load_path(fixture("coupled.esm"))?;
     let flat = flatten(&doc)?;
 
@@ -19,12 +19,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // parameter Box.T_wall with the heater's state Heater.T: the parameter
     // is gone, and the box's equation reads Heater.T instead.
     assert!(!flat.parameters.contains_key("Box.T_wall"));
-    for eq in &flat.equations {
-        println!("{}", to_ascii(eq));
+    // LaTeX prints the dotted names more readably than Typst does.
+    let latex: Vec<String> = flat
+        .equations
+        .iter()
+        .map(|eq| {
+            let eq = serde_json::to_value(eq).unwrap();
+            print_math(&eq, &expression_names(&eq), DocumentFormat::Markdown)
+        })
+        .collect();
+    for eq in &latex {
+        println!("{eq}");
     }
-    assert_eq!(flat.equations.len(), 2);
-    let box_eq = to_ascii(&flat.equations[1]);
-    assert_eq!(box_eq, "D(Box.T_air)/Dt = Box.k * (Heater.T - Box.T_air)");
+    assert_eq!(latex.len(), 2);
+    assert_eq!(
+        latex[1],
+        r"\frac{\mathrm{d} \mathit{Box}.T_{\mathrm{air}}}{\mathrm{d} t} = \mathit{Box}.k \left(\mathit{Heater}.T - \mathit{Box}.T_{\mathrm{air}}\right)"
+    );
     // endregion
 
     Ok(())

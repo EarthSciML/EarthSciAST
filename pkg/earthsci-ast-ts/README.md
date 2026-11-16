@@ -57,13 +57,24 @@ const json = toJson(doc);
 ### Working with Expressions
 
 ```typescript
-import { toUnicode, toLatex, substitute, freeVariables } from '@earthsciml/ast';
+import {
+  expressionNames,
+  freeVariables,
+  parseMath,
+  printMath,
+  substitute,
+} from '@earthsciml/ast';
 import type { Expression } from '@earthsciml/ast';
 
-// Pretty-print mathematical expressions
+// Show an expression as Typst or LaTeX math, with its names declared
 const expr: Expression = { op: '+', args: ['x', { op: '^', args: ['y', 2] }] };
-console.log(toUnicode(expr)); // "x + y²"
-console.log(toLatex(expr));   // "x + y^{2}"
+const names = expressionNames(expr); // ["x", "y"]
+console.log(printMath(expr, names, 'typst'));    // "x + y^2"
+console.log(printMath(expr, names, 'markdown')); // "x + y^{2}"
+
+// Read math back: an expression, or an equation `{ lhs, rhs }` when the top is `=`
+parseMath('x + y^2', ['x', 'y'], 'typst'); // the expression above
+parseMath('y = 2 k', ['y', 'k'], 'typst'); // { lhs: "y", rhs: { op: "*", args: [2, "k"] } }
 
 // Analyze expressions
 const variables = freeVariables(expr); // Set { "x", "y" }
@@ -133,9 +144,10 @@ The package provides complete TypeScript type definitions for:
 
 ### Expression Utilities
 
-- **`toUnicode(expr): string`** - Render as Unicode mathematical notation (also accepts an equation, model, reaction system, reaction or whole document)
-- **`toLatex(expr): string`** - Render as LaTeX
-- **`toAscii(expr): string`** - Render as plain ASCII text
+- **`printMath(expr, names: readonly string[], format: 'markdown' | 'typst'): string`** - Print an expression or an equation as LaTeX (`'markdown'`) or Typst math, under the declared `names`
+- **`parseMath(text: string, names: readonly string[], format, options?): unknown`** - The inverse of `printMath`: read one expression, or one equation (`{ lhs, rhs }`), from LaTeX or Typst math; throws an `EsmDiagnosticError` (`parse_error`, or `removed_op` for an operator removed from the format)
+- **`expressionNames(expr): string[]`** - The variable names an expression or equation uses, in order of first use: the `names` to give `printMath` to show it on its own
+- **`printMarkdown` / `printTypst` / `parseMarkdown` / `parseTypst`** - A whole document as Markdown (LaTeX math) or Typst source, losslessly
 - **`substitute(expr: Expression, bindings: Record<string, Expression>): Expression`** - Replace variables with expressions
 - **`freeVariables(expr: Expression): Set<string>`** - Collect the variable names an expression references
 - **`simplify(expr: Expression): Expression`** - Algebraic simplification

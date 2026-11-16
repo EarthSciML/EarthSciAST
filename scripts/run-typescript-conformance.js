@@ -135,41 +135,6 @@ async function runValidation(manifest) {
     return results
 }
 
-/**
- * Render every manifest display case in all three formats.
- *
- * This producer used to look for top-level `chemical_formulas` / `expressions`
- * keys that NO fixture in `tests/display/` has, so it emitted nothing at all and
- * the comparator scored the empty intersection as 100% consistent (audit C2).
- * The manifest now hands over already-expanded, id'd cases.
- */
-function runDisplay(manifest) {
-    console.log('Running display sweep...')
-    const results = {}
-
-    for (const testCase of manifest.display_cases) {
-        const record = {}
-        const errors = {}
-        const renderers = {
-            unicode: esm.toUnicode,
-            latex: esm.toLatex,
-            ascii: esm.toAscii,
-        }
-        for (const [fmt, render] of Object.entries(renderers)) {
-            try {
-                record[fmt] = render(testCase.input)
-            } catch (error) {
-                record[fmt] = null
-                errors[fmt] = error.message
-            }
-        }
-        if (Object.keys(errors).length > 0) record.errors = errors
-        results[testCase.id] = record
-    }
-
-    return results
-}
-
 /** Apply `substitute` to every manifest substitution case. */
 function runSubstitution(manifest) {
     console.log('Running substitution sweep...')
@@ -225,7 +190,6 @@ async function main() {
 
     const errors = []
     let validationResults = {}
-    let displayResults = {}
     let substitutionResults = {}
 
     try {
@@ -234,14 +198,6 @@ async function main() {
     } catch (error) {
         errors.push(`Validation sweep crashed: ${error.message}`)
         console.log(`✗ Validation sweep crashed: ${error.message}`)
-    }
-
-    try {
-        displayResults = runDisplay(manifest)
-        console.log(`✓ Display sweep completed (${Object.keys(displayResults).length} cases)`)
-    } catch (error) {
-        errors.push(`Display sweep crashed: ${error.message}`)
-        console.log(`✗ Display sweep crashed: ${error.message}`)
     }
 
     try {
@@ -258,7 +214,6 @@ async function main() {
         language: 'typescript',
         timestamp: new Date().toISOString(),
         validation_results: validationResults,
-        display_results: displayResults,
         substitution_results: substitutionResults,
         errors,
     }, null, 2))

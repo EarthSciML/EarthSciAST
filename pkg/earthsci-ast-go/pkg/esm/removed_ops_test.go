@@ -154,18 +154,18 @@ func TestRemovedOpsSpareKeptNames(t *testing.T) {
 	}
 }
 
-// The text form refuses a removed op spelled as a call, and a dotted callee
-// (the closed-function spelling), rather than reading either as an open op.
-func TestParseExpressionRefusesRemovedCallees(t *testing.T) {
+// The math reader refuses a removed op spelled as a call by name
+// (removed_op), rather than reading it as an open op.
+func TestParseMathRefusesRemovedCallees(t *testing.T) {
+	names := []string{"a", "b", "S"}
 	for _, src := range []string{
-		"datetime.year(t)", "interp.linear(tbl, ax, x)", "skolem(a, b)", "rank(S)",
-		"argmin(a)", "table_lookup(a)", "polygon_intersection_area(a, b)",
+		`\operatorname{skolem}(a, b)`, `\operatorname{rank}(S)`, `\operatorname{argmin}(a)`,
+		`\operatorname{table_lookup}(a)`, `\operatorname{polygon_intersection_area}(a, b)`,
 	} {
-		if _, err := ParseExpression(src); err == nil || !strings.Contains(err.Error(), "removed_op") {
-			t.Errorf("ParseExpression(%q) = %v, want a removed_op refusal", src, err)
+		_, err := ParseMath(src, names, DocumentMarkdown)
+		var de *DocumentFormatError
+		if !errors.As(err, &de) || de.Code != codeRemovedOp {
+			t.Errorf("ParseMath(%q) = %v, want a removed_op refusal", src, err)
 		}
-	}
-	if _, err := ParseExpression("argmin<f = d, n = 3>"); err != nil {
-		t.Errorf("the esm:std argmin template application must still parse: %v", err)
 	}
 }

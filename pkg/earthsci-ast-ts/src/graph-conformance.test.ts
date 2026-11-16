@@ -206,10 +206,8 @@ describe('graph conformance corpus — whole documents', () => {
         )
       })
 
-      // The corpus pins only the FIRST LINE of the DOT and Mermaid exports: the
-      // rest carries node labels run through the chemical-subscript formatter,
-      // which two of the five bindings do not have. See
-      // tests/conformance/graph/README.md.
+      // The corpus pins only the FIRST LINE of the DOT and Mermaid exports.
+      // See tests/conformance/graph/README.md.
       it('DOT and Mermaid headers', () => {
         const cg = componentGraph(file())
         const eg = expressionGraph(file())

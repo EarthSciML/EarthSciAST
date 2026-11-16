@@ -1271,7 +1271,7 @@ function _bind_sub(
         cut === nothing || throw(
             _global_locality(
                 rule, dimset,
-                "its subscript `$(format_expression(s, :ascii))` is data-dependent"
+                "its subscript `$(s)` is data-dependent"
             )
         )
         return _Bind(_ISet(), "", 1, 0, false, true)
@@ -1292,7 +1292,7 @@ function _bind_sub(
     n = prod((length(env[v].cells) for v in vars); init = 1)
     n > _IMAGE_LIMIT && _refuse_rule(
         _rule_display(rule),
-        "tile restriction: the subscript `$(format_expression(s, :ascii))` ranges over " *
+        "tile restriction: the subscript `$(s)` ranges over " *
             "$n index combinations"
     )
     evalat() = try
@@ -1302,7 +1302,7 @@ function _bind_sub(
         cut === nothing || throw(
             _global_locality(
                 rule, dimset,
-                "its subscript `$(format_expression(s, :ascii))` has no value at build time"
+                "its subscript `$(s)` has no value at build time"
             )
         )
         nothing
@@ -2206,7 +2206,7 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
                     _refuse_rule(
                         _rule_display(rule),
                         "tile restriction: its left-hand side subscript " *
-                            "`$(format_expression(a, :ascii))` is neither a loop index nor a constant"
+                            "`$(a)` is neither a loop index nor a constant"
                     )
                 end
                 cells, axis = _output_cells(ctx, v, d, Any[g, g])
@@ -2908,7 +2908,7 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
             if sh[d] in spec.sets
                 ok = s isa VarExpr && get(sc.lanevars, (s::VarExpr).name, "") == sh[d]
                 ok || _lane_refuse(
-                    rule, "it reads '$n' at `$(format_expression(s, :ascii))` " *
+                    rule, "it reads '$n' at `$(s)` " *
                         "along the lane set '$(sh[d])', which leaves the " *
                         (spec.kind === :cells ? "cell" : "column")
                 )

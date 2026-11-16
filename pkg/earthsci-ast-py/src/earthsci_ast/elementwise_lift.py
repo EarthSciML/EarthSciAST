@@ -298,7 +298,6 @@ def lift_elementwise_applications(flat: FlattenedSystem) -> FlattenedSystem:
             equations[k] = dataclasses.replace(
                 eq,
                 rhs=rhs,
-                rhs_str="",
                 contributions=[Contribution(rhs, _union_origins(eq.contributions))],
             )
             if not declared:

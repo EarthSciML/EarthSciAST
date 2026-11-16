@@ -221,6 +221,17 @@ end
                     got = print_math(eqs[1], names, format)
                     want = String(case["math"][key])
                     got == want || push!(failures, "$id: print_math $key = $(repr(got)), want $(repr(want))")
+                    # ... and `parse_math`, its inverse, reads the math back to
+                    # the equation in canonical form.
+                    eq = canonicalize_document(eqs[1])
+                    try
+                        read = parse_math(want, names, format)
+                        _docfmt_jeq(read, eq) ||
+                            push!(failures, "$id: parse_math $key = $(repr(read)), want $(repr(eq))")
+                    catch e
+                        e isa ParseError || rethrow()
+                        push!(failures, "$id: parse_math $key refused: $(e.message)")
+                    end
                 end
                 checked += 1
             end
@@ -231,6 +242,43 @@ end
         @test isempty(failures)
         @test checked > 0
         @test_throws ArgumentError print_math("x", String[], :latex)
+    end
+
+    @testset "parse_math reads an expression or an equation" begin
+        names = ["RT", "k", "y"]
+        e = parse_math("RT + k", names, :markdown)
+        @test _docfmt_jeq(e, Dict("op" => "+", "args" => Any["RT", "k"]))
+        # With its letters declared instead, a run of letters in LaTeX is their
+        # product; with neither, it is not read.
+        e = parse_math("RT", ["R", "T"], :markdown)
+        @test _docfmt_jeq(e, Dict("op" => "*", "args" => Any["R", "T"]))
+        @test_throws ParseError parse_math("RT", String[], :markdown)
+        e = parse_math("y = 2 k", names, :typst)
+        @test _docfmt_jeq(
+            e, Dict("lhs" => "y", "rhs" => Dict("op" => "*", "args" => Any[2, "k"]))
+        )
+        for (text, format) in (("y = k", :markdown), ("(dif y)/(dif t) = -k y", :typst))
+            @test print_math(parse_math(text, names, format), names, format) == text
+        end
+        @test expression_names(Dict("lhs" => "y", "rhs" => Dict("op" => "*", "args" => Any["k", "y"]))) ==
+            ["y", "k"]
+        @test_throws ArgumentError parse_math("k", ["k"], :latex)
+    end
+
+    @testset "parse_math refuses as a document read does" begin
+        code(f) = try
+            f()
+            nothing
+        catch e
+            e isa ParseError || rethrow()
+            e.code
+        end
+        names = ["k"]
+        @test code(() -> parse_math("k +", names, :markdown)) == "parse_error"
+        @test code(() -> parse_math("1.0e400 k", names, :typst)) == "parse_error"
+        @test code(() -> parse_math("\\operatorname{arrayop}(k)", names, :markdown)) == "removed_op"
+        deep = "("^50_000 * "k" * ")"^50_000
+        @test code(() -> parse_math(deep, names, :typst)) == "parse_error"
     end
 
     @testset "reader limits (limits.json)" begin

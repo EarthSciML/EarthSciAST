@@ -7,26 +7,28 @@ import (
 	"github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm"
 )
 
-// Render an equation for people: Unicode, LaTeX and plain ASCII.
+// Show an equation as math, LaTeX or Typst, under the names it uses.
 func Example_display() {
-	// region: display ops=to_unicode,to_latex,to_ascii
+	// region: display ops=print_math,expression_names
 	doc, err := esm.LoadPath(fixture("decay.esm"))
 	if err != nil {
 		log.Fatal(err)
 	}
 	model := doc.Models["Decay"]
 	decay := model.Equations[0]
-	fmt.Println(esm.ToUnicode(decay))
-	fmt.Println(esm.ToLatex(decay))
-	fmt.Println(esm.ToASCII(decay))
+	names := esm.ExpressionNames(decay)
+	fmt.Println(names)
+	fmt.Println(esm.PrintMath(decay, names, esm.DocumentMarkdown))
+	fmt.Println(esm.PrintMath(decay, names, esm.DocumentTypst))
 
-	// A single expression renders the same way.
-	fmt.Println(esm.ToUnicode(model.Equations[1].RHS))
+	// A single expression prints the same way.
+	rhs := model.Equations[1].RHS
+	fmt.Println(esm.PrintMath(rhs, esm.ExpressionNames(rhs), esm.DocumentTypst))
 	// endregion
 
 	// Output:
-	// ∂N/∂t = (−λ)·N
-	// \frac{\partial N}{\partial t} = (-\lambda) \cdot N
-	// D(N)/Dt = (-lambda) * N
-	// ln(2)/λ
+	// [N lambda]
+	// \frac{\mathrm{d} N}{\mathrm{d} t} = \left(-\lambda\right) N
+	// (dif N)/(dif t) = (-lambda) N
+	// ln(2)/lambda
 }

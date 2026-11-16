@@ -2,6 +2,7 @@ package esm
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -122,18 +123,21 @@ func TestDeriveODEs(t *testing.T) {
 	// gets none.
 	var lhs []string
 	for _, eq := range model.Equations {
-		lhs = append(lhs, ToASCII(eq.LHS))
+		if n, ok := asExprNode(eq.LHS); !ok || n.Op != OpDerivative {
+			t.Errorf("equation LHS %s is not a time derivative", showJSON(eq.LHS))
+		}
+		lhs = append(lhs, lhsDependentVar(eq.LHS))
 	}
-	wantLHS := []string{"D(NO)/Dt", "D(NO2)/Dt", "D(O3)/Dt"}
+	wantLHS := []string{"NO", "NO2", "O3"}
 	if !reflect.DeepEqual(lhs, wantLHS) {
 		t.Errorf("equation LHSs = %v, want %v", lhs, wantLHS)
 	}
 
 	// The rate law is the coefficient TIMES the substrate product (§7.4): `rate`
 	// is the rate COEFFICIENT, not the whole law.
-	no2 := ToASCII(model.Equations[1].RHS)
-	if !strings.Contains(no2, "k1") || !strings.Contains(no2, "NO") || !strings.Contains(no2, "O3") {
-		t.Errorf("d[NO2]/dt = %q, want the mass-action law k1·[NO]·[O3] less the r2 loss", no2)
+	no2 := ExpressionNames(model.Equations[1].RHS)
+	if !slices.Contains(no2, "k1") || !slices.Contains(no2, "NO") || !slices.Contains(no2, "O3") {
+		t.Errorf("d[NO2]/dt = %s, want the mass-action law k1·[NO]·[O3] less the r2 loss", showJSON(model.Equations[1].RHS))
 	}
 
 	// The derived unknowns must be exactly the ODE states the §6.3.1
@@ -166,17 +170,18 @@ func TestDeriveODEsAgreesWithFlatten(t *testing.T) {
 
 	direct := make(map[string]string, len(model.Equations))
 	for _, eq := range model.Equations {
-		direct[ToASCII(eq.LHS)] = ToASCII(eq.RHS)
+		direct[showJSON(eq.LHS)] = showJSON(eq.RHS)
 	}
 	seen := 0
 	for _, eq := range flat.Equations {
-		key := strings.ReplaceAll(ToASCII(eq.LHS), "R.", "")
+		// The flattened names carry the system's `R.` prefix.
+		key := strings.ReplaceAll(showJSON(eq.LHS), `"R.`, `"`)
 		want, ok := direct[key]
 		if !ok {
 			continue
 		}
 		seen++
-		if got := strings.ReplaceAll(ToASCII(eq.RHS), "R.", ""); got != want {
+		if got := strings.ReplaceAll(showJSON(eq.RHS), `"R.`, `"`); got != want {
 			t.Errorf("%s: flatten gives %q, DeriveODEs gives %q", key, got, want)
 		}
 	}

@@ -4,7 +4,7 @@ Rust implementation of the EarthSciML Abstract Syntax Tree Format (ESM).
 
 ## Features
 
-- **Core**: Parse, serialize, pretty-print, substitute, validate (schema + structural)
+- **Core**: Parse, serialize, Markdown and Typst source text, substitute, validate (schema + structural)
 - **Analysis**: Unit checking, stoichiometric matrices, structural validation, component graphs
 - **Simulation**: diffsol-backed ODE integration plus a vectorized array/PDE runtime
 - **CLI Tool**: `esm` command-line interface for validation, conversion, analysis, and simulation
@@ -96,8 +96,8 @@ esm validate model.esm
 # Convert to compact JSON
 esm convert model.esm -o model_compact.json --to compact-json
 
-# Pretty print expressions (unicode, latex, or ascii)
-esm pretty model.esm -f latex
+# Print the equations as math: typst (the default) or markdown (LaTeX)
+esm pretty model.esm -f markdown
 
 # Run a simulation
 esm simulate model.esm --time 10 -o results.json

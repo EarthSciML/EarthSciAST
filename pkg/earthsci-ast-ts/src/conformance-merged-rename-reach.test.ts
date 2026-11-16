@@ -25,7 +25,7 @@ import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { describe, expect, it } from 'vitest'
-import { flatten, loadString, toAscii } from './index'
+import { flatten, freeVariables, loadString } from './index'
 import type { FlattenedSystem, FlattenedVariable } from './flatten'
 import type { AffectEquation, Expression } from './types'
 
@@ -91,8 +91,13 @@ function allAffects(flat: FlattenedSystem): AffectEquation[] {
   return out
 }
 
-/** The rendered EXPRESSION slots of a variable's `update` rules. */
-function updateText(variable: FlattenedVariable): string[] {
+/** The variable names an expression references. */
+function names(expr: Expression): string[] {
+  return [...freeVariables(expr)]
+}
+
+/** The names the EXPRESSION slots of a variable's `update` rules reference. */
+function updateNames(variable: FlattenedVariable): string[] {
   const spec = variable.update
   if (spec === undefined) return []
   const rules = Array.isArray(spec) ? spec : [spec]
@@ -101,30 +106,30 @@ function updateText(variable: FlattenedVariable): string[] {
     const r = rule as unknown as Record<string, unknown>
     for (const key of ['when', 'expression']) {
       const value = r[key]
-      if (value !== undefined && value !== null) out.push(toAscii(value as Expression))
+      if (value !== undefined && value !== null) out.push(...names(value as Expression))
     }
   }
   return out
 }
 
 /**
- * Every name-bearing rendering of the flattened events and update rules — the
- * surfaces §4.7.1 step 4's retarget has to reach beyond the equation pool.
+ * Every name the flattened events and update rules reference — the surfaces
+ * §4.7.1 step 4's retarget has to reach beyond the equation pool.
  */
-function eventAndUpdateText(flat: FlattenedSystem): string[] {
+function eventAndUpdateNames(flat: FlattenedSystem): string[] {
   const out: string[] = []
   for (const event of flat.discreteEvents) {
     const trigger = event.trigger as { type: string; expression?: Expression }
     if (trigger.type === 'condition' && trigger.expression !== undefined) {
-      out.push(toAscii(trigger.expression))
+      out.push(...names(trigger.expression))
     }
   }
   for (const event of flat.continuousEvents) {
-    for (const condition of event.conditions) out.push(toAscii(condition))
+    for (const condition of event.conditions) out.push(...names(condition))
   }
-  for (const affect of allAffects(flat)) out.push(affect.lhs, toAscii(affect.rhs))
+  for (const affect of allAffects(flat)) out.push(affect.lhs, ...names(affect.rhs))
   for (const table of [flat.stateVariables, flat.parameters, flat.observedVariables]) {
-    for (const variable of Object.values(table)) out.push(...updateText(variable))
+    for (const variable of Object.values(table)) out.push(...updateNames(variable))
   }
   return out
 }
@@ -170,8 +175,8 @@ describe('conformance: merged_rename_reach (esm-libraries-spec §4.7.1 step 4)',
           expect(flat.parameters[gone]).toBeUndefined()
           expect(flat.observedVariables[gone]).toBeUndefined()
           for (const eq of flat.equations) {
-            const rendered = `${toAscii(eq.lhs)} = ${toAscii(eq.rhs)}`
-            expect(rendered, `equation still references ${gone}`).not.toContain(gone)
+            const referenced = [...names(eq.lhs), ...names(eq.rhs)]
+            expect(referenced, `equation still references ${gone}`).not.toContain(gone)
           }
         }
       })
@@ -184,9 +189,9 @@ describe('conformance: merged_rename_reach (esm-libraries-spec §4.7.1 step 4)',
         const target = c.tendency_of as string
         const eq = flat.equations.find((e) => dependentVar(e.lhs) === target)
         expect(eq, `no equation defines ${target}`).toBeDefined()
-        const rendered = toAscii(eq!.rhs)
+        const referenced = names(eq!.rhs)
         for (const name of c.tendency_references ?? []) {
-          expect(rendered, `D(${target}) must reference ${name}`).toContain(name)
+          expect(referenced, `D(${target}) must reference ${name}`).toContain(name)
         }
       })
     })
@@ -213,15 +218,15 @@ describe('conformance: merged_rename_reach (esm-libraries-spec §4.7.1 step 4)',
         expect(affects.length).toBe(wanted.length)
         wanted.forEach((want, i) => {
           expect(affects[i]!.lhs).toBe(want.lhs)
-          const rendered = toAscii(affects[i]!.rhs)
-          for (const name of want.rhs_references ?? []) expect(rendered).toContain(name)
+          const referenced = names(affects[i]!.rhs)
+          for (const name of want.rhs_references ?? []) expect(referenced).toContain(name)
         })
         for (const [name, references] of Object.entries(c.variable_updates ?? {})) {
           const variable =
             flat.parameters[name] ?? flat.stateVariables[name] ?? flat.observedVariables[name]
           expect(variable, `no variable named ${name}`).toBeDefined()
-          const rendered = updateText(variable!).join(' ; ')
-          for (const reference of references) expect(rendered).toContain(reference)
+          const referenced = updateNames(variable!)
+          for (const reference of references) expect(referenced).toContain(reference)
         }
       })
 
@@ -231,9 +236,10 @@ describe('conformance: merged_rename_reach (esm-libraries-spec §4.7.1 step 4)',
         // this only means something beside the assertion above.
         const flat = flattenCase(c)
         for (const gone of c.absent_from_events_and_updates ?? []) {
-          for (const text of eventAndUpdateText(flat)) {
-            expect(text, `'${text}' still references ${gone}`).not.toContain(gone)
-          }
+          expect(
+            eventAndUpdateNames(flat),
+            `an event or update still references ${gone}`,
+          ).not.toContain(gone)
         }
       })
     })

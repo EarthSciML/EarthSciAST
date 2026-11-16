@@ -8,8 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { flatten } from './flatten.js'
-import { toAscii } from './pretty-print.js'
-import { loadFixture } from './test-helpers.js'
+import { canonicalJson, loadFixture } from './test-helpers.js'
 import { loadDocument } from './parse.js'
 import type { Expression } from './types.js'
 
@@ -23,25 +22,43 @@ function rhsOf(fixture: string, lhs: string): Expression {
   return eq!.rhs
 }
 
+const D = (x: unknown) => ({ op: 'D', args: [x], wrt: 't' })
+const mul = (...args: unknown[]) => ({ op: '*', args })
+const neg = (x: unknown) => ({ op: '-', args: [x] })
+const idx = (a: unknown, i: string) => ({ op: 'index', args: [a, i] })
+/** A pointwise-lifted `faq` over `lev` with the loop symbol `_p0`. */
+const faq = (expr: unknown) => ({
+  op: 'faq',
+  args: [],
+  output_idx: ['_p0'],
+  ranges: { _p0: { from: 'lev' } },
+  expr,
+})
+
+/** Compare two expressions in canonical JSON. */
+function expectExpr(actual: unknown, expected: unknown): void {
+  expect(canonicalJson(actual)).toEqual(canonicalJson(expected))
+}
+
 describe('flatten resolves a right-hand-side structural D (esm-spec §4.2)', () => {
   it.each([
     // Chain rule through an observed's definition.
-    ['d_of_observed.esm', 'M.dcombo', '(-M.k) * M.x * 2'],
+    ['d_of_observed.esm', 'M.dcombo', mul(mul(neg('M.k'), 'M.x'), 2)],
     // Product rule, with the parameter factor's derivative folded away.
-    ['d_of_compound.esm', 'M.dscaled', '(-M.k) * M.x * M.scale'],
+    ['d_of_compound.esm', 'M.dscaled', mul(mul(neg('M.k'), 'M.x'), 'M.scale')],
     // A time-invariant name is the literal 0.
-    ['d_of_parameter.esm', 'M.dk', '0'],
+    ['d_of_parameter.esm', 'M.dk', 0],
   ])('%s', (fixture, lhs, want) => {
-    expect(toAscii(rhsOf(fixture, lhs))).toBe(want)
+    expectExpr(rhsOf(fixture, lhs), want)
   })
 
   it.each([
     // A self-referential tendency: the guard stops the substitution.
-    ['d_of_cycle.esm', 'M.dx', 'M.k * D(M.x)/Dt'],
+    ['d_of_cycle.esm', 'M.dx', mul('M.k', D('M.x'))],
     // `^` is outside the closed set the resolution distributes through.
-    ['d_of_unsupported.esm', 'M.dsq', 'D(M.x^2)/Dt'],
+    ['d_of_unsupported.esm', 'M.dsq', D({ op: '^', args: ['M.x', 2] })],
   ])('%s is left standing', (fixture, lhs, want) => {
-    expect(toAscii(rhsOf(fixture, lhs))).toBe(want)
+    expectExpr(rhsOf(fixture, lhs), want)
   })
 })
 
@@ -74,12 +91,11 @@ describe('a lifted state resolves to its lifted right-hand side (esm-libraries-s
   it('D(index(x, l)) is that cell of the lifted faq', () => {
     const flat = flatten(loadDocument(doc))
     expect(flat.liftedShapes).toEqual({ 'M.A': [3], 'M.B': [3] })
-    expect(flat.equations.map((e) => `${toAscii(e.lhs)} ~ ${toAscii(e.rhs)}`)).toEqual([
-      'sum[_p0] (D(M.A[_p0])/Dt) where {_p0 in lev} ~ ' +
-        'sum[_p0] ((-M.km[_p0]) * M.A[_p0]) where {_p0 in lev}',
-      'sum[_p0] (D(M.B[_p0])/Dt) where {_p0 in lev} ~ ' +
-        'sum[_p0] ((sum[_p0] ((-M.km[_p0]) * M.A[_p0]) where {_p0 in lev})[_p0]) ' +
-        'where {_p0 in lev}',
-    ])
+    const rhsA = faq(mul(neg(idx('M.km', '_p0')), idx('M.A', '_p0')))
+    expect(flat.equations).toHaveLength(2)
+    expectExpr(flat.equations[0].lhs, faq(D(idx('M.A', '_p0'))))
+    expectExpr(flat.equations[0].rhs, rhsA)
+    expectExpr(flat.equations[1].lhs, faq(D(idx('M.B', '_p0'))))
+    expectExpr(flat.equations[1].rhs, faq(idx(rhsA, '_p0')))
   })
 })

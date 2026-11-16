@@ -626,15 +626,24 @@ pub fn skip_ws(cs: &[char]) -> &[char] {
 
 /// `Latex.lex`: read LaTeX math into tokens (`lexAux`).
 pub fn lex(cs: &[char]) -> Option<Vec<Tok>> {
+    lex_at(cs).ok().map(|(toks, _)| toks)
+}
+
+/// [`lex`], with the character offset in `cs` where each token starts; on a
+/// refusal, the offset where no token reads.
+pub fn lex_at(cs: &[char]) -> Result<(Vec<Tok>, Vec<usize>), usize> {
     let mut out = Vec::new();
-    let mut cs = cs;
+    let mut starts = Vec::new();
+    let mut rest = cs;
     loop {
-        let cs2 = skip_ws(cs);
+        let cs2 = skip_ws(rest);
+        let at = cs.len() - cs2.len();
         if cs2.is_empty() {
-            return Some(out);
+            return Ok((out, starts));
         }
-        let (t, r) = lex_one(cs2)?;
+        let (t, r) = lex_one(cs2).ok_or(at)?;
         out.push(t);
-        cs = r;
+        starts.push(at);
+        rest = r;
     }
 }

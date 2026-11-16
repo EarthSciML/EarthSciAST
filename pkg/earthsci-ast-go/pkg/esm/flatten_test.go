@@ -3,6 +3,7 @@ package esm
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -187,33 +188,46 @@ func TestFlatten_VariableMapSubstitutionIsTokenExact(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 	for _, eq := range flat.Equations {
-		rhs := eq.RHSString()
-		if !strings.Contains(rhs, "B.y2") {
+		names := ExpressionNames(eq.RHS)
+		if !slices.Contains(names, "B.y2") {
 			continue
 		}
-		if strings.Contains(rhs, "A.x2") || !strings.Contains(rhs, "A.x") {
-			t.Errorf("variable_map rewrote the wrong tokens: %q", rhs)
+		if slices.Contains(names, "A.x2") || !slices.Contains(names, "A.x") {
+			t.Errorf("variable_map rewrote the wrong tokens: %s", showJSON(eq.RHS))
 		}
 		return
 	}
 	t.Fatal("no flattened equation referenced the mapped variables")
 }
 
-// TestFlattenEquationRendering_PowIsLeftAssociative pins that a flattened
-// equation renders through the SHARED display renderer: (a^b)^c must not come
-// out as a^b^c, which reparses right-associatively. Flatten used to carry its own
-// pretty-printer, which is why this assertion lived on that printer; the trees
-// now render with ToASCII, which the cross-language display corpus pins.
-func TestFlattenEquationRendering_PowIsLeftAssociative(t *testing.T) {
+// TestFlattenEquationRendering_ReadsBack pins that a flattened equation's sides
+// show as Typst math under their own names (PrintMath), which ParseMath reads
+// back to the same tree: (a^b)^c and a^(b^c) both keep their grouping.
+func TestFlattenEquationRendering_ReadsBack(t *testing.T) {
 	inner := ExprNode{Op: "^", Args: []any{"a", "b"}}
-	eq := FlattenedEquation{RHS: ExprNode{Op: "^", Args: []any{inner, "c"}}}
-	if got := eq.RHSString(); !strings.HasPrefix(got, "(") {
-		t.Errorf("RHSString = %q; a pow base must be parenthesized", got)
+	for _, eq := range []FlattenedEquation{
+		{LHS: ExprNode{Op: "D", Args: []any{"y"}, Wrt: strPtr("t")}, RHS: ExprNode{Op: "^", Args: []any{inner, "c"}}},
+		{LHS: "y", RHS: ExprNode{Op: "^", Args: []any{"a", ExprNode{Op: "^", Args: []any{"b", "c"}}}}},
+	} {
+		for _, side := range []struct {
+			text string
+			want Expression
+		}{{eq.LHSString(), eq.LHS}, {eq.RHSString(), eq.RHS}} {
+			names := ExpressionNames(side.want)
+			if side.text != PrintMath(decodedValue(side.want), names, DocumentTypst) {
+				t.Errorf("%q is not PrintMath of %s", side.text, showJSON(side.want))
+			}
+			got, err := ParseMath(side.text, names, DocumentTypst)
+			if err != nil || !sameExpression(got, side.want) {
+				t.Errorf("ParseMath(%q) = %s, %v; want %s", side.text, showJSON(got), err, showJSON(side.want))
+			}
+		}
 	}
-	eq2 := FlattenedEquation{RHS: ExprNode{Op: "^", Args: []any{"a", ExprNode{Op: "^", Args: []any{"b", "c"}}}}}
-	if got := eq2.RHSString(); strings.HasPrefix(got, "(") {
-		t.Errorf("RHSString = %q; a pow exponent needs no parentheses", got)
-	}
+}
+
+// timeDerivative is the expression D(name), wrt t.
+func timeDerivative(name string) map[string]any {
+	return map[string]any{"op": "D", "args": []any{name}, "wrt": "t"}
 }
 
 // containsVar reports whether an ordered flattened-variable map holds `needle`.
@@ -283,18 +297,18 @@ func TestFlattenOperatorCompose_TranslateIsAKeyedBValued(t *testing.T) {
 			len(flat.Equations), flat.Equations)
 	}
 	eq := flat.Equations[0]
-	if got := ToASCII(eq.LHS); got != "D(A.x)/Dt" {
-		t.Errorf("merged LHS = %q, want %q (A's spelling survives)", got, "D(A.x)/Dt")
+	if !sameExpression(eq.LHS, timeDerivative("A.x")) {
+		t.Errorf("merged LHS = %s, want D(A.x) (A's spelling survives)", showJSON(eq.LHS))
 	}
 	// §4.7.1 step 4: on a TRANSLATION match B's dependent variable is rewritten
 	// to A's target throughout rhs_B. Leaving `B.y` there would strand it as an
 	// unknown nothing defines — its own equation was just consumed by the merge.
-	rhs := ToASCII(eq.RHS)
-	if strings.Contains(rhs, "B.y") {
-		t.Errorf("merged RHS = %q; B's dependent variable must be rewritten to A.x", rhs)
+	names := ExpressionNames(eq.RHS)
+	if slices.Contains(names, "B.y") {
+		t.Errorf("merged RHS = %s; B's dependent variable must be rewritten to A.x", showJSON(eq.RHS))
 	}
-	if !strings.Contains(rhs, "A.k") || !strings.Contains(rhs, "B.d") {
-		t.Errorf("merged RHS = %q; both systems' terms must be summed", rhs)
+	if !slices.Contains(names, "A.k") || !slices.Contains(names, "B.d") {
+		t.Errorf("merged RHS = %s; both systems' terms must be summed", showJSON(eq.RHS))
 	}
 	// B's PARAMETER keeps its own name — only the dependent variable is renamed.
 	if !containsVar(flat.Parameters, "B.d") {
@@ -314,8 +328,8 @@ func TestFlattenOperatorCompose_TranslateFactorScalesBsRHS(t *testing.T) {
 	if len(flat.Equations) != 1 {
 		t.Fatalf("expected one merged equation, got %d", len(flat.Equations))
 	}
-	if rhs := ToASCII(flat.Equations[0].RHS); !strings.Contains(rhs, "1.0e-9") {
-		t.Errorf("merged RHS = %q; the translate factor must scale B's RHS", rhs)
+	if rhs := showJSON(flat.Equations[0].RHS); !strings.Contains(rhs, "1e-9") && !strings.Contains(rhs, "1e-09") {
+		t.Errorf("merged RHS = %s; the translate factor must scale B's RHS", rhs)
 	}
 }
 
@@ -366,7 +380,7 @@ func TestFlattenOperatorCompose_DirectMatchBeatsTranslate(t *testing.T) {
 		t.Fatalf("expected one merged equation either way, got %d and %d",
 			len(plain.Equations), len(redundant.Equations))
 	}
-	if a, b := ToASCII(redundant.Equations[0].RHS), ToASCII(plain.Equations[0].RHS); a != b {
+	if a, b := showJSON(redundant.Equations[0].RHS), showJSON(plain.Equations[0].RHS); a != b {
 		t.Errorf("the redundant translate entry changed the result:\n  with:    %s\n  without: %s", a, b)
 	}
 }
@@ -484,12 +498,12 @@ func TestFlattenVariableMap_IntoSubsystemParameter(t *testing.T) {
 	}
 	var found bool
 	for _, eq := range flat.Equations {
-		if ToASCII(eq.LHS) != "D(Wrap.inner.x)/Dt" {
+		if !sameExpression(eq.LHS, timeDerivative("Wrap.inner.x")) {
 			continue
 		}
 		found = true
-		if got := ToASCII(eq.RHS); got != "Src.T" {
-			t.Errorf("nested ODE RHS = %q, want %q", got, "Src.T")
+		if !sameExpression(eq.RHS, "Src.T") {
+			t.Errorf("nested ODE RHS = %s, want %q", showJSON(eq.RHS), "Src.T")
 		}
 	}
 	if !found {
@@ -548,11 +562,11 @@ func TestFlattenCouple_MultiplicativeWithTendencyScalesIt(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 	for _, eq := range flat.Equations {
-		if ToASCII(eq.LHS) != "D(A.x)/Dt" {
+		if !sameExpression(eq.LHS, timeDerivative("A.x")) {
 			continue
 		}
-		if rhs := ToASCII(eq.RHS); !strings.Contains(rhs, "B.s") {
-			t.Errorf("D(A.x) RHS = %q; the multiplicative term must be applied", rhs)
+		if !slices.Contains(ExpressionNames(eq.RHS), "B.s") {
+			t.Errorf("D(A.x) RHS = %s; the multiplicative term must be applied", showJSON(eq.RHS))
 		}
 		return
 	}
@@ -593,16 +607,16 @@ func TestFlattenCouple_MultiplicativeScalesTheTendencyNotALaterAlgebraic(t *test
 	}
 	var sawTendency, sawAlgebraic bool
 	for _, eq := range flat.Equations {
-		switch ToASCII(eq.LHS) {
-		case "D(A.x)/Dt":
+		switch {
+		case sameExpression(eq.LHS, timeDerivative("A.x")):
 			sawTendency = true
-			if rhs := ToASCII(eq.RHS); !strings.Contains(rhs, "B.s") {
-				t.Errorf("D(A.x) RHS = %q; the multiplicative factor must scale the tendency", rhs)
+			if !slices.Contains(ExpressionNames(eq.RHS), "B.s") {
+				t.Errorf("D(A.x) RHS = %s; the multiplicative factor must scale the tendency", showJSON(eq.RHS))
 			}
-		case "A.x":
+		case sameExpression(eq.LHS, "A.x"):
 			sawAlgebraic = true
-			if rhs := ToASCII(eq.RHS); strings.Contains(rhs, "B.s") {
-				t.Errorf("A.x RHS = %q; the algebraic equation must not be scaled", rhs)
+			if slices.Contains(ExpressionNames(eq.RHS), "B.s") {
+				t.Errorf("A.x RHS = %s; the algebraic equation must not be scaled", showJSON(eq.RHS))
 			}
 		}
 	}

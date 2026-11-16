@@ -1,22 +1,22 @@
-// Render equations and expressions for people.
+// Print equations and expressions as math for people: LaTeX or Typst.
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
-import { loadPath, toUnicode, toLatex, toAscii } from '@earthsciml/ast'
+import { loadPath, printMath, expressionNames } from '@earthsciml/ast'
 
 const fixture = (name: string): string => fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))
 
-// region: display ops=to_unicode,to_latex,to_ascii
+// region: display ops=print_math,expression_names
 const model = loadPath(fixture('decay.esm')).models!.Decay
 assert.ok(!('ref' in model)) // hide
 const [decay, halfLife] = model.equations
 
-assert.equal(toUnicode(decay), '∂N/∂t = (−λ)·N')
-assert.equal(toLatex(decay), '\\frac{\\partial N}{\\partial t} = (-\\lambda) \\cdot N')
-assert.equal(toAscii(decay), 'D(N)/Dt = (-lambda) * N')
+// printMath takes an expression or equation and the names it may use: a run
+// of letters is one name only when it is declared.
+const names = expressionNames(decay)
+assert.deepEqual(names, ['N', 'lambda'])
+assert.equal(printMath(decay, names, 'markdown'), '\\frac{\\mathrm{d} N}{\\mathrm{d} t} = \\left(-\\lambda\\right) N')
+assert.equal(printMath(decay, names, 'typst'), '(dif N)/(dif t) = (-lambda) N')
 
-// A single expression renders the same way.
-assert.equal(toUnicode(halfLife.rhs), 'ln(2)/λ')
-
-// So does a whole model: a summary line followed by its equations.
-assert.equal(toUnicode(model).split('\n').length, 3)
+// A single expression prints the same way.
+assert.equal(printMath(halfLife.rhs, expressionNames(halfLife.rhs), 'typst'), 'ln(2)/lambda')
 // endregion

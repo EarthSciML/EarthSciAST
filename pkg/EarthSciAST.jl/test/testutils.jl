@@ -59,6 +59,48 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
         EarthSciAST.ASTExpr[]; value = val
     )
 
+    # ---------------------------------------------------------------------------
+    # Expressions from math text, and expressions compared as canonical JSON.
+    # ---------------------------------------------------------------------------
+    # A typed expression (or `Equation`) read from Typst math under the names it
+    # uses (`parse_math`).
+    function typst_expr(text::AbstractString, names)
+        v = parse_math(text, names, :typst)
+        if v isa AbstractDict && haskey(v, "lhs") && haskey(v, "rhs")
+            return EarthSciAST.Equation(
+                EarthSciAST.expression_from_json(v["lhs"]),
+                EarthSciAST.expression_from_json(v["rhs"])
+            )
+        end
+        return EarthSciAST.expression_from_json(v)
+    end
+
+    # An expression or equation in the form `canonicalize_document` writes
+    # (API_SPEC §5.4), numbers in their canonical kind (CONFORMANCE §5.5.3.1),
+    # as compact JSON with sorted keys: two expressions are the same exactly
+    # when these strings are equal, so an integer `1` and a float `1.0` differ. Takes a typed expression or equation, or a decoded JSON value.
+    function canonical_expr_json(x)
+        v = x isa EarthSciAST.Equation ?
+            Dict{String, Any}(
+                "lhs" => EarthSciAST.serialize_expression(x.lhs),
+                "rhs" => EarthSciAST.serialize_expression(x.rhs)
+            ) :
+            x isa EarthSciAST.ASTExpr ? EarthSciAST.serialize_expression(x) : x
+        return _sorted_json(
+            EarthSciAST._canonical_document_numbers(
+                EarthSciAST._canonicalize_document_value(v, false)
+            )
+        )
+    end
+    function _sorted_json(v)
+        if v isa AbstractDict
+            ks = sort!([String(k) for k in keys(v)])
+            return "{" * join(["$(JSON3.write(k)):$(_sorted_json(v[k]))" for k in ks], ",") * "}"
+        end
+        v isa AbstractVector && return "[" * join([_sorted_json(x) for x in v], ",") * "]"
+        return JSON3.write(v)
+    end
+
     # 1-D second-difference stencil faq over the FULL range, so the two end
     # cells gather an out-of-range (ghost) neighbour and form their own boundary
     # kernels — the canonical "interior kernel + boundary kernels" decomposition.

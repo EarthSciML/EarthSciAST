@@ -16,15 +16,16 @@ then records the choice in the same three places:
 
 - the lifted state's `shape` in `state_variables` names the index sets;
 - `lifted_shapes` records their sizes;
-- both lifted `faq` nodes range each loop as `{"from": <index set>}`, which `to_ascii`
-  prints as `i in <index set>`.
+- both lifted `faq` nodes range each loop as `{"from": <index set>}`; the corpus holds
+  each lifted equation in canonical JSON, so its `ranges` map is pinned as exactly that
+  object, e.g. `"ranges": {"i": {"from": "cell"}}`.
 
 ## How the fixtures are run
 
 There is no separate runner. Each fixture is a case of the flatten corpus,
 `tests/conformance/flatten/cases.json`, under the tier `pointwise_lift`, so every
 binding's flatten-corpus test checks it: the state's `shape`, `lifted_shapes`,
-`index_sets` (in order, synthetic sets included) and the rendered equations. The Python
+`index_sets` (in order, synthetic sets included) and the equations, in canonical JSON. The Python
 oracle generates the corpus (`scripts/generate-flatten-corpus.py`).
 
 The other corpus cases with a lift (`advection_reaction_loaded_ic_bc`,

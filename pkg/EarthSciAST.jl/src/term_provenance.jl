@@ -102,14 +102,19 @@ function _union_origins(
 end
 
 """
-The expression a contribution list stands for: its single expression, or one
-n-ary `+` over the contribution expressions, which every evaluator folds left
-to right — the left fold the invariant names.
+The expression a contribution list stands for: the LEFT fold of the contribution
+expressions under binary `+` (esm-libraries-spec §4.7.5, the provenance
+invariant), `+(+(a, b), c)`, as the other bindings build it. A literal-zero
+operand is dropped from the tree; its contribution stays recorded.
 """
 function _fold_contributions(contributions::AbstractVector{Contribution})::ASTExpr
     isempty(contributions) && throw(ArgumentError("an equation has at least one contribution"))
-    length(contributions) == 1 && return contributions[1].expr
-    return OpExpr("+", ASTExpr[c.expr for c in contributions])
+    rhs = contributions[1].expr
+    for c in @view contributions[2:end]
+        rhs = _is_zero_expr(rhs) ? c.expr :
+            _is_zero_expr(c.expr) ? rhs : OpExpr("+", ASTExpr[rhs, c.expr])
+    end
+    return rhs
 end
 
 """
@@ -219,10 +224,22 @@ _same_expr(a::ASTExpr, b::ASTExpr)::Bool =
 """True when `contributions` still fold to `body` (the sum the equation carries now)."""
 function _folds_to(contributions::AbstractVector{Contribution}, body::ASTExpr)::Bool
     length(contributions) == 1 && return _same_expr(contributions[1].expr, body)
-    if body isa OpExpr && body.op == "+" && length(body.args) == length(contributions)
-        all(i -> body.args[i] === contributions[i].expr, eachindex(contributions)) && return true
-    end
+    _is_fold_of(contributions, body) && return true
     return _same_expr(_fold_contributions(contributions), body)
+end
+
+# The cheap check: `body` is the left fold `+(+(c1, c2), c3)` of these very
+# contribution expressions (by identity), with no operand dropped.
+function _is_fold_of(contributions::AbstractVector{Contribution}, body::ASTExpr)::Bool
+    node = body
+    for i in length(contributions):-1:2
+        (
+            node isa OpExpr && node.op == "+" && length(node.args) == 2 &&
+                node.args[2] === contributions[i].expr
+        ) || return false
+        node = node.args[1]
+    end
+    return node === contributions[1].expr
 end
 
 """
