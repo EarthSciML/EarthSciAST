@@ -60,7 +60,6 @@ fn run_with(name: &str, compiler: earthsci_ast::Compiler) -> Vec<AssertionResult
             compiler: Some(compiler),
             ..Default::default()
         },
-        None,
     )
 }
 

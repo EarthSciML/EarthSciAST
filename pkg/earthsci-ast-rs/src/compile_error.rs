@@ -126,6 +126,18 @@ pub enum CompileError {
         details: String,
     },
 
+    /// A build refusal that carries a diagnostic code, rendered exactly as
+    /// [`CompileError::InterpreterBuildError`] is: `details` spells the code
+    /// in its own text, and [`CompileError::code`] returns it.
+    #[error("Interpreter build failed: {details}")]
+    CodedBuildError {
+        /// The diagnostic code (a `crate::diagnostic::codes` value, or a
+        /// binding code such as `E_TREEWALK_JOIN_OVERLAP`).
+        code: &'static str,
+        /// Human-readable failure description.
+        details: String,
+    },
+
     /// A rewrite-target operator (a spatial / right-hand-side `D`, or the
     /// optional sugar ops `grad` / `div` / `laplacian` / ...) survived the
     /// lowering fixpoint into an evaluation position (esm-spec §4.2 / §9.6.8).
@@ -490,6 +502,10 @@ impl CompileError {
                     details: u(details),
                 }
             }
+            CompileError::CodedBuildError { code, details } => CompileError::CodedBuildError {
+                code,
+                details: u(details),
+            },
             CompileError::MakearrayRegionInvalid { reason } => {
                 CompileError::MakearrayRegionInvalid { reason: u(reason) }
             }
@@ -577,6 +593,7 @@ impl CompileError {
             CompileError::InvalidBroadcastFn { .. } => codes::INVALID_BROADCAST_FN,
             CompileError::UnevaluableOperatorError { .. } => codes::UNEVALUABLE_OPERATOR,
             CompileError::ValueInventionRefused { code, .. } => code,
+            CompileError::CodedBuildError { code, .. } => code,
             CompileError::UnsupportedElementType { .. } => "unsupported_element_type",
             CompileError::Float32Unsupported { .. } => "float32_unsupported",
             CompileError::ElementTypeUncarried { .. } => codes::ELEMENT_TYPE_UNCARRIED,
@@ -597,6 +614,14 @@ impl CompileError {
     /// otherwise repeated at every raise site.
     pub fn build_err(details: impl Into<String>) -> Self {
         CompileError::InterpreterBuildError {
+            details: details.into(),
+        }
+    }
+
+    /// Shorthand constructor for [`CompileError::CodedBuildError`].
+    pub fn coded_build_err(code: &'static str, details: impl Into<String>) -> Self {
+        CompileError::CodedBuildError {
+            code,
             details: details.into(),
         }
     }

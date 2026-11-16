@@ -131,9 +131,7 @@ impl Tier {
                 base_dir: Some(self.dir.clone()),
                 compiler,
                 ..Default::default()
-            },
-            None,
-        );
+            });
         (results, golden)
     }
 

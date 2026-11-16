@@ -51,7 +51,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 
 fn run_fixture(name: &str) -> Vec<AssertionResult> {
     let file = load_path(fixture(name)).expect("fixture parses");
-    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None));
     assert!(!results.is_empty(), "{name}: the fixture asserts nothing");
     results
 }
@@ -323,7 +323,7 @@ fn doc_with_body(body: Value) -> String {
 /// from a compile refusal or a runtime fault.
 fn probe_message(body: Value) -> String {
     let file = load_string(&doc_with_body(body)).expect("probe parses");
-    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None));
     assert_eq!(results.len(), 1, "one assertion: {results:?}");
     let r = &results[0];
     assert!(
@@ -512,7 +512,7 @@ fn self_read_offset_on_two_axes_is_rejected() {
     })
     .to_string();
     let file = load_string(&doc).expect("probe parses");
-    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None));
     assert_eq!(results.len(), 1);
     let msg = &results[0].message;
     assert!(
@@ -552,13 +552,25 @@ fn makearray_region_self_read_is_refused_as_unsupported_form() {
     })
     .to_string();
     let file = load_string(&doc).expect("probe parses");
-    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None));
     assert_eq!(results.len(), 1);
     let msg = &results[0].message;
     assert!(
         msg.contains("recurrence_unsupported_form"),
         "expected `recurrence_unsupported_form`, got: {msg}"
     );
+    // The code is the refusal's own, not only text in its message.
+    let Err(err) = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 0.0),
+        earthsci_ast::ProblemOptions {
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            ..Default::default()
+        },
+    ) else {
+        panic!("the makearray self-read must be refused");
+    };
+    assert_eq!(err.code(), Some("recurrence_unsupported_form"), "{err}");
 }
 
 // ---------------------------------------------------------------------------
@@ -783,7 +795,7 @@ fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
         "a two-variable cycle is not a recurrence diagnosis, got {codes:?}"
     );
     let file = load_string(&cyclic).expect("probe parses");
-    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None));
     assert_eq!(results.len(), 1);
     assert!(
         results[0].actual.is_none() && !results[0].passed,

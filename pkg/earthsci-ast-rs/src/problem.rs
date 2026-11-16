@@ -620,12 +620,6 @@ pub struct ProblemOptions {
     /// start and refreshes them at each boundary, with or without `saveat`.
     #[cfg(not(target_arch = "wasm32"))]
     pub providers: HashMap<String, Box<dyn crate::provider::DataProvider>>,
-    /// Providers moved into [`Self::providers`] at construction, turning the
-    /// build pipeline on. Kept only until the `esm` command sets
-    /// `providers` and `build_pipeline` itself; it then goes.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub build_providers: Vec<(String, Box<dyn crate::provider::DataProvider>)>,
     /// Constant arrays injected into the build-time evaluation scope.
     #[cfg(not(target_arch = "wasm32"))]
     pub const_arrays: HashMap<String, ArrayD<f64>>,
@@ -756,14 +750,6 @@ impl std::fmt::Debug for ProblemOptions {
         #[cfg(not(target_arch = "wasm32"))]
         d.field("pushdown_rewrite", &self.pushdown_rewrite)
             .field("providers", &self.providers.keys().collect::<Vec<_>>())
-            .field(
-                "build_providers",
-                &self
-                    .build_providers
-                    .iter()
-                    .map(|(k, _)| k)
-                    .collect::<Vec<_>>(),
-            )
             .field(
                 "const_arrays",
                 &self.const_arrays.keys().collect::<Vec<_>>(),
@@ -1918,33 +1904,11 @@ pub fn esm_problem<'a>(
     mut opts: ProblemOptions,
 ) -> Result<EsmProblem, SimulateError> {
     let input = input.into();
-    #[cfg(not(target_arch = "wasm32"))]
-    merge_build_providers(&mut opts)?;
     let set = std::mem::take(&mut opts.strip);
     if set.is_empty() {
         return build_problem(input, tspan, opts, set);
     }
     strip_and_build(input, tspan, opts, set)
-}
-
-/// Move [`ProblemOptions::build_providers`] into [`ProblemOptions::providers`],
-/// turning the build pipeline on when there are any.
-#[cfg(not(target_arch = "wasm32"))]
-fn merge_build_providers(opts: &mut ProblemOptions) -> Result<(), SimulateError> {
-    if opts.build_providers.is_empty() {
-        return Ok(());
-    }
-    opts.build_pipeline = true;
-    for (key, provider) in std::mem::take(&mut opts.build_providers) {
-        if opts.providers.insert(key.clone(), provider).is_some() {
-            return Err(SimulateError::ProviderError {
-                name: key,
-                details: "supplied twice, in `providers` and in `build_providers`; pass one"
-                    .to_string(),
-            });
-        }
-    }
-    Ok(())
 }
 
 /// [`esm_problem`] with `strip` non-empty (API_SPEC §5.8): load the document,
@@ -2243,6 +2207,7 @@ fn build_problem(
         std::collections::HashSet::new();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(raw) = owned_json.as_mut().filter(|_| wants_build_pipeline(&opts)) {
+        refuse_pipeline_provider_const_overlap(raw, &opts, &supplied.const_keys)?;
         {
             let prepared = crate::prepare::run_build_pipeline(raw, tspan.0, &mut opts)?;
             // The pipeline evaluates the observed graph through the reference
@@ -2376,11 +2341,13 @@ fn build_problem(
                     // silently accept an invalid file, and a Problem built
                     // from one would answer for a document that does not load.
                     if !rewritten_by_pipeline {
-                        return Err(SimulateError::Compile(
-                            crate::compile_error::CompileError::build_err(format!(
-                                "loading the document: {e}"
-                            )),
-                        ));
+                        let details = format!("loading the document: {e}");
+                        return Err(SimulateError::Compile(match e.code() {
+                            Some(code) => {
+                                crate::compile_error::CompileError::coded_build_err(code, details)
+                            }
+                            None => crate::compile_error::CompileError::build_err(details),
+                        }));
                     }
                     // A document the build pipeline rewrote may no longer be a
                     // *typed* ESM document (the pushdown desugar emits engine
@@ -2835,7 +2802,6 @@ fn nesting_within(v: &JsonValue, limit: usize) -> bool {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// Whether the build pipeline consumes the CONST providers: when the caller
 /// asked for it, not when `const_arrays` alone turned it on.
 #[cfg(not(target_arch = "wasm32"))]
@@ -2843,6 +2809,7 @@ pub(crate) fn pipeline_takes_providers(opts: &ProblemOptions) -> bool {
     opts.build_pipeline || opts.pushdown_rewrite
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn wants_build_pipeline(opts: &ProblemOptions) -> bool {
     opts.build_pipeline || opts.pushdown_rewrite || !opts.const_arrays.is_empty()
 }
@@ -3579,10 +3546,13 @@ fn refuse_parameter_definitions(
     flat: Option<&FlattenedSystem>,
 ) -> Result<(), SimulateError> {
     let refuse = |path: &str, message: &str| {
-        SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
-            "[{}] {path}: {message} (esm-spec §6.3.1)",
-            crate::diagnostic::codes::EQUATION_DEFINES_PARAMETER
-        )))
+        SimulateError::Compile(crate::compile_error::CompileError::coded_build_err(
+            crate::diagnostic::codes::EQUATION_DEFINES_PARAMETER,
+            format!(
+                "[{}] {path}: {message} (esm-spec §6.3.1)",
+                crate::diagnostic::codes::EQUATION_DEFINES_PARAMETER
+            ),
+        ))
     };
     if let Some(file) = file
         && let Some(e) = crate::structural::parameter_definition_errors(file).first()
@@ -4618,7 +4588,11 @@ fn bind_providers(
     let routing = resolver
         .route(keys.iter().map(String::as_str), keep)
         .map_err(provider_key_error)?;
-    refuse_provider_const_overlap(&resolver, &routing.targets, const_keys, keep)?;
+    refuse_provider_const_overlap(
+        |k: &str| resolver.resolve(k, keep),
+        &routing.targets,
+        const_keys,
+    )?;
     let mut providers: HashMap<String, Box<dyn crate::provider::DataProvider>> = HashMap::new();
     let mut given: HashMap<String, String> = HashMap::new();
     for key in keys {
@@ -4733,12 +4707,14 @@ fn provider_key_error(e: crate::simulate::OverrideKeyError) -> SimulateError {
 /// value. A `const_arrays` key two parameters carry, one of them provider-fed,
 /// is refused as ambiguous. The counterpart of Julia's
 /// `_refuse_provider_registry_overlap`.
+///
+/// `targets` maps each provider key to the parameter it designates, and
+/// `resolve` says what a `const_arrays` key designates, in the same names.
 #[cfg(not(target_arch = "wasm32"))]
 fn refuse_provider_const_overlap(
-    resolver: &crate::simulate_array::ParameterKeyResolver,
+    resolve: impl Fn(&str) -> crate::simulate::KeyHit,
     targets: &HashMap<String, String>,
     const_keys: &[String],
-    keep: &std::collections::HashSet<String>,
 ) -> Result<(), SimulateError> {
     use crate::simulate::KeyHit;
     if targets.is_empty() || const_keys.is_empty() {
@@ -4749,7 +4725,7 @@ fn refuse_provider_const_overlap(
         fed.insert(target.as_str(), key.as_str());
     }
     for rk in const_keys {
-        match resolver.resolve(rk, keep) {
+        match resolve(rk) {
             KeyHit::Exact(name) | KeyHit::Alias(name) => {
                 if let Some(pk) = fed.get(name.as_str()) {
                     return Err(SimulateError::ProviderError {
@@ -4779,6 +4755,76 @@ fn refuse_provider_const_overlap(
         }
     }
     Ok(())
+}
+
+/// [`refuse_provider_const_overlap`] for the CONST providers the build
+/// pipeline consumes, which never reach [`bind_providers`]. Keys resolve
+/// against the parameters `raw` declares, by their flattened names
+/// (`Model.param`, `Model.sub.param`).
+#[cfg(not(target_arch = "wasm32"))]
+fn refuse_pipeline_provider_const_overlap(
+    raw: &JsonValue,
+    opts: &ProblemOptions,
+    const_keys: &[String],
+) -> Result<(), SimulateError> {
+    use crate::simulate::KeyHit;
+    if const_keys.is_empty() || !pipeline_takes_providers(opts) {
+        return Ok(());
+    }
+    let consumed: Vec<&String> = opts
+        .providers
+        .iter()
+        .filter(|(_, p)| p.refresh_times().is_empty())
+        .map(|(k, _)| k)
+        .collect();
+    if consumed.is_empty() {
+        return Ok(());
+    }
+    let names = declared_parameter_names(raw);
+    let known = crate::simulate::SuffixIndex::new(names.iter().map(String::as_str));
+    let namespaces = crate::simulate::namespace_scope(names.iter().map(String::as_str), []);
+    let resolve = |k: &str| crate::simulate::resolve_key(&known, &namespaces, k);
+    let targets: HashMap<String, String> = consumed
+        .into_iter()
+        .filter_map(|k| match resolve(k) {
+            KeyHit::Exact(n) | KeyHit::Alias(n) => Some((k.clone(), n)),
+            KeyHit::Ambiguous(_) | KeyHit::Unknown => None,
+        })
+        .collect();
+    refuse_provider_const_overlap(resolve, &targets, const_keys)
+}
+
+/// The flattened name of every parameter `raw` declares: a model's
+/// `parameter` variables and a reaction system's `parameters`, in every
+/// inline subsystem.
+#[cfg(not(target_arch = "wasm32"))]
+fn declared_parameter_names(raw: &JsonValue) -> Vec<String> {
+    fn visit(node: &JsonValue, prefix: &str, out: &mut Vec<String>) {
+        if let Some(vars) = node.get("variables").and_then(JsonValue::as_object) {
+            for (v, var) in vars {
+                if var.get("type").and_then(JsonValue::as_str) == Some("parameter") {
+                    out.push(format!("{prefix}.{v}"));
+                }
+            }
+        }
+        if let Some(params) = node.get("parameters").and_then(JsonValue::as_object) {
+            out.extend(params.keys().map(|p| format!("{prefix}.{p}")));
+        }
+        if let Some(subs) = node.get("subsystems").and_then(JsonValue::as_object) {
+            for (s, sub) in subs {
+                visit(sub, &format!("{prefix}.{s}"), out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for section in ["models", "reaction_systems"] {
+        if let Some(components) = raw.get(section).and_then(JsonValue::as_object) {
+            for (name, component) in components {
+                visit(component, name, &mut out);
+            }
+        }
+    }
+    out
 }
 
 /// Sample the DISCRETE providers at construction, at `sample_time`

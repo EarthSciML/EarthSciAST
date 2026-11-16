@@ -144,8 +144,12 @@ name:
 - **Host/runtime integration seams** — the callback constructors
   (`build_refresh_callback`, `build_output_callback`,
   `build_checkpoint_callback`), the sink protocol (`AbstractSink`,
-  `build_zarr_sink`, `zarr_restart_state`), and the provider constructors
-  (`providers_from_document`, `DataProvider`).
+  `build_zarr_sink`, `zarr_restart_state`), the provider constructors
+  (`providers_from_document`, `DataProvider`), and Rust's binding of a
+  document's `data_sources` to readers (`bind_data_sources`, returning a
+  `BoundDocument`: the document re-loaded with every metaparameter a source's
+  `extent` measured closed, esm-spec §8.9.4, and a `BuildProviderFactory`; a
+  build without the `esio` feature refuses a document that consumes a source).
 
 Rust's `pub mod` list is pinned at module granularity only: a module's interior
 is an extension seam, and `api-surface.json` records the module list rather than

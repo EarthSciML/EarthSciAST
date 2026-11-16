@@ -2648,10 +2648,8 @@ pub(super) struct RecurLowering {
     pub(super) lag_proven: bool,
 }
 
-fn recur_err(code: &str, detail: String) -> CompileError {
-    CompileError::InterpreterBuildError {
-        details: format!("{code}: {detail}"),
-    }
+fn recur_err(code: &'static str, detail: String) -> CompileError {
+    CompileError::coded_build_err(code, format!("{code}: {detail}"))
 }
 
 /// The build error for a causal self-read that is not well founded.
@@ -3137,13 +3135,14 @@ fn check_bare_index_definition(
                 && !frame.iter().any(|b| names_binder(sub, b))
             {
                 let sym = v.strip_prefix(prefix).unwrap_or(v);
-                return Err(CompileError::InterpreterBuildError {
-                    details: format!(
+                return Err(CompileError::coded_build_err(
+                    crate::diagnostic::codes::UNBOUND_INDEX_SYMBOL,
+                    format!(
                         "{}: equation defining '{name}' subscripts its left-hand side with \
                          '{sym}', which no faq binds (esm-spec §6.3.1)",
                         crate::diagnostic::codes::UNBOUND_INDEX_SYMBOL
                     ),
-                });
+                ));
             }
         }
         gather = match g.args.first() {
@@ -3169,13 +3168,14 @@ fn check_bare_index_definition(
     if head_is_the_variable && binds_subscripts && rank_agrees {
         return Ok(());
     }
-    Err(CompileError::InterpreterBuildError {
-        details: format!(
+    Err(CompileError::coded_build_err(
+        crate::diagnostic::codes::INDEXED_DEFINITION_UNSUPPORTED_FORM,
+        format!(
             "indexed_definition_unsupported_form: '{name}' is defined by a bare-index LHS that \
              is not runnable; the RHS must be a `faq` whose `output_idx` names the LHS \
              subscripts in order (esm-spec §6.3.1)"
         ),
-    })
+    ))
 }
 
 /// Wrap one algebraic body — a declared observed's `expression`, or the RHS of

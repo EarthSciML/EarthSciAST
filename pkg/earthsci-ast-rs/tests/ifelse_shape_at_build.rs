@@ -63,7 +63,7 @@ fn scalar_arm_fixtures_agree(stem: &str, model: &str) {
                 compiler: Some(compiler),
                 ..Default::default()
             };
-            run_inline_tests_with_options(&file, &opts, None)
+            run_inline_tests_with_options(&file, &opts)
         };
         let [interp, native] = COMPILERS.map(run);
         assert!(!interp.is_empty(), "{kind}: no assertions");

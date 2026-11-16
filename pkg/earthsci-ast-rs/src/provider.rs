@@ -73,6 +73,25 @@ use std::rc::Rc;
 /// the bare message.
 pub type ProviderError = crate::error::MessageError;
 
+/// Builds a document's data providers, once per build, keyed as
+/// [`crate::problem::ProblemOptions::providers`] keys them.
+///
+/// A factory rather than a set because `ProblemOptions` takes its `providers`
+/// BY VALUE: one shared map would be moved out by the first build and missing
+/// from the second. `Err` carries a message naming what could not be
+/// constructed. [`crate::bind_data_sources`] returns one for a document's
+/// `data_sources`, and `InlineTestOptions::providers` takes one.
+#[cfg(not(target_arch = "wasm32"))]
+pub type BuildProviderFactory<'a> =
+    dyn Fn() -> Result<Vec<(String, Box<dyn DataProvider>)>, String> + 'a;
+
+/// The wasm32 build has no build pipeline (`crate::prepare` is native-only), so
+/// there is no provider contract to satisfy: a factory passed to the inline-test
+/// runner is refused, and every assertion of a test that needs one is recorded
+/// as an ERROR.
+#[cfg(target_arch = "wasm32")]
+pub type BuildProviderFactory<'a> = dyn Fn() -> Result<(), String> + 'a;
+
 fn err(msg: impl Into<String>) -> ProviderError {
     // Construct via the underlying newtype: a `pub type` alias to a tuple struct
     // cannot itself be used as a constructor.

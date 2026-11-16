@@ -213,9 +213,9 @@ fn every_inline_assertion_of_a_two_model_ingesting_document_passes() {
         &file,
         &InlineTestOptions {
             compiler: Some(Compiler::Interpreter),
+            providers: Some(std::sync::Arc::new(factory)),
             ..Default::default()
         },
-        Some(&factory),
     );
     assert_eq!(results.len(), 3, "{results:#?}");
     for r in &results {

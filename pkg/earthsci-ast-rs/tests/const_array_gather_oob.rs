@@ -171,7 +171,6 @@ fn an_inline_const_gather_over_a_whole_axis_fails_closed() {
                 compiler: Some(compiler),
                 ..Default::default()
             },
-            None,
         );
         assert_eq!(results.len(), 1);
         results.into_iter().next().unwrap()
@@ -307,7 +306,6 @@ fn a_const_gather_at_an_out_of_range_data_subscript_fails_closed_under_native() 
                 compiler: Some(compiler),
                 ..Default::default()
             },
-            None,
         );
         assert_eq!(results.len(), 1);
         results.into_iter().next().unwrap()

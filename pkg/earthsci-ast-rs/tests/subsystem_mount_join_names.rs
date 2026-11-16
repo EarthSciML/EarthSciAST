@@ -55,7 +55,6 @@ fn assert_inline_tests_pass(path: &Path, expected: f64) {
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
-        None,
     );
     assert_eq!(
         results.len(),

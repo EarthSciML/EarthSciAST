@@ -352,7 +352,7 @@ mod integrator {
     }
 
     /// The integrator re-reads the document from disk, so it never sees a
-    /// metaparameter this command closed from the document's data (`close_declared_extents`). Refuse when an
+    /// metaparameter this command closed from the document's data (`earthsci_ast::bind_data_sources`). Refuse when an
     /// index set the integrator planned over has a different size than the
     /// one the Problem was built with, rather than integrate another grid.
     fn same_index_sets(
