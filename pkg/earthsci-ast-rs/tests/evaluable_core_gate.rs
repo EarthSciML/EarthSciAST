@@ -77,7 +77,6 @@ fn a_true_body_counts_instead_of_panicking() {
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
-        None,
     );
     assert_eq!(results.len(), 2, "two inline assertions: {results:?}");
     for r in &results {

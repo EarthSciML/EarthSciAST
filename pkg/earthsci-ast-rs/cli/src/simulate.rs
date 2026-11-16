@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::args::SimulateFormat;
-use crate::data_sources::close_declared_extents;
+use crate::data_sources::cache_root;
 use crate::esm_impl::fail;
 use crate::input::{load_at, read_input};
 
@@ -55,11 +55,14 @@ pub(crate) fn run_simulate(
     // a trajectory that looks like an answer and is not one.
     //
     // A FACTORY, because the build below may happen twice (`ProblemOptions`
-    // consumes its providers by value). `close_declared_extents` also re-loads
-    // the document with every metaparameter its sources measure closed, so an
+    // consumes its providers by value). `bind_data_sources` also re-loads the
+    // document with every metaparameter its sources measure closed, so an
     // index set sized by one is sized by the data rather than by the
     // declaration's placeholder default.
-    let (esm_file, providers) = close_declared_extents(esm_file, |mp| {
+    let earthsci_ast::BoundDocument {
+        file: esm_file,
+        providers,
+    } = earthsci_ast::bind_data_sources(esm_file, &cache_root(), |mp| {
         earthsci_ast::load_string_with_options(
             &content,
             &earthsci_ast::LoadOptions {
@@ -67,9 +70,8 @@ pub(crate) fn run_simulate(
                 metaparameters: mp.clone(),
             },
         )
-        .map_err(|e| format!("re-loading with the discovered source extents: {e}"))
     })
-    .map_err(fail)?;
+    .map_err(|e| fail(e.0))?;
     let ingesting = providers.is_some();
     let mut rewrites = earthsci_ast::simulate_array::tape::CompilerRewrites::default();
     rewrites.count_fold = !no_count_fold;
@@ -95,7 +97,7 @@ pub(crate) fn run_simulate(
             ..Default::default()
         };
         if let Some(make) = &providers {
-            popts.build_providers = make()?;
+            popts.providers = make()?.into_iter().collect();
             popts.build_pipeline = true;
         }
         earthsci_ast::esm_problem(&esm_file, (0.0, time), popts)

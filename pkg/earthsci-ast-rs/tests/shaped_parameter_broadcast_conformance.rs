@@ -80,9 +80,7 @@ fn bare_whole_array_derivative_over_a_broadcast_parameter() {
             model_name: Some("Column".to_string()),
             solve: opts.clone(),
             ..Default::default()
-        },
-        None,
-    );
+        });
     assert_eq!(results.len(), 1);
     let r = &results[0];
     assert!(r.passed, "{}", r.message);

@@ -15,7 +15,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use earthsci_ast::{
     AssertionResult, BuildProviderFactory, Compiler, InlineTestOptions, SolveOptions,
@@ -24,12 +25,16 @@ use earthsci_ast::{
 
 use crate::common;
 
+fn tier_dir() -> PathBuf {
+    common::repo_fixture("conformance/native_model_shapes")
+}
+
 fn run(
     file: &earthsci_ast::EsmFile,
     model: &str,
     base_dir: &Path,
     compiler: Compiler,
-    providers: &BuildProviderFactory<'_>,
+    providers: &Arc<BuildProviderFactory<'static>>,
 ) -> Vec<AssertionResult> {
     let opts = InlineTestOptions {
         model_name: Some(model.to_string()),
@@ -41,9 +46,10 @@ fn run(
         },
         base_dir: Some(base_dir.to_path_buf()),
         compiler: Some(compiler),
+        providers: Some(Arc::clone(providers)),
         ..Default::default()
     };
-    run_inline_tests_with_options(file, &opts, Some(providers))
+    run_inline_tests_with_options(file, &opts)
 }
 
 /// Both compilers pass every assertion, and native's value is the
@@ -82,13 +88,13 @@ fn check(id: &str, interp: &[AssertionResult], native: &[AssertionResult]) -> Ve
 /// Every tier document, with the build pipeline on.
 #[test]
 fn tier_shapes_agree_on_the_build_pipeline() {
-    let dir = common::category_dir("native_model_shapes");
+    let dir = tier_dir();
     let manifest = common::read_json(dir.join("manifest.json"));
     let fixtures = manifest["fixtures"].as_array().expect("fixtures");
     assert!(!fixtures.is_empty());
     // No data sources: an empty provider set still routes the build through
     // the pipeline, which is the route an ingesting document's rules take.
-    let none: &BuildProviderFactory<'_> = &|| Ok(Vec::new());
+    let none: Arc<BuildProviderFactory<'static>> = Arc::new(|| Ok(Vec::new()));
     let mut bad = Vec::new();
     for fx in fixtures {
         let id = fx["id"].as_str().expect("id");
@@ -99,8 +105,8 @@ fn tier_shapes_agree_on_the_build_pipeline() {
         ));
         let model = fx["model"].as_str().expect("model");
         let base = path.parent().expect("parent");
-        let interp = run(&file, model, base, Compiler::Interpreter, none);
-        let native = run(&file, model, base, Compiler::Native, none);
+        let interp = run(&file, model, base, Compiler::Interpreter, &none);
+        let native = run(&file, model, base, Compiler::Native, &none);
         bad.extend(check(id, &interp, &native));
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
@@ -116,7 +122,7 @@ fn ingested_shapes_agree() {
     use earthsci_ast::esio_provider::providers_from_document;
     use serde_json::Value;
 
-    let dir = common::category_dir("native_model_shapes").join("ingest");
+    let dir = tier_dir().join("ingest");
     let manifest = common::read_json(dir.join("manifest.json"));
     let fixtures = manifest["fixtures"].as_array().expect("fixtures");
     assert!(!fixtures.is_empty());
@@ -159,7 +165,8 @@ fn ingested_shapes_agree() {
                     .map_err(|e| e.to_string())
             }
         };
-        let make = factory(doc.clone(), cache.path().join("cache"), overrides);
+        let make: Arc<BuildProviderFactory<'static>> =
+            Arc::new(factory(doc.clone(), cache.path().join("cache"), overrides));
         let model = fx["model"].as_str().expect("model");
         let interp = run(&file, model, &dir, Compiler::Interpreter, &make);
         let native = run(&file, model, &dir, Compiler::Native, &make);

@@ -33,10 +33,8 @@ use crate::types::{Equation, Expr, ExpressionNode, IndexSet, Model, ModelVariabl
 /// lowering admits a constant index on an axis of this name, and only there.
 pub(crate) const MEMBER_SYM: &str = "__esm_recurrence_member";
 
-fn group_err(code: &str, detail: String) -> CompileError {
-    CompileError::InterpreterBuildError {
-        details: format!("{code}: {detail}"),
-    }
+fn group_err(code: &'static str, detail: String) -> CompileError {
+    CompileError::coded_build_err(code, format!("{code}: {detail}"))
 }
 
 /// One member, decomposed: its equation, the frame it sweeps and its cell body.

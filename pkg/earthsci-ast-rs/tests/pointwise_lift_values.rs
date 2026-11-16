@@ -30,7 +30,6 @@ fn assert_passes(name: &str, expected_assertions: usize) {
                 compiler: Some(compiler),
                 ..Default::default()
             },
-            None,
         );
         assert_eq!(
             results.len(),

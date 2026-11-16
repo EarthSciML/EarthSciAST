@@ -207,3 +207,91 @@ fn faq_initialization_equations_seed_in_order_on_both_compilers() {
         assert_eq!(value(&native, "v[4]"), 2.0, "outside v's ranges");
     }
 }
+
+/// esm-spec §6.2: a `faq`-valued initialization equation seeds the initial
+/// state on every build route. A document of two models is flattened before it
+/// is compiled, so the equation reaches the build through the flattened
+/// system, under its namespaced names (`M.u`); a subsystem's is mounted with
+/// it. The seeded cells are the ones the one-model document gets.
+#[test]
+fn faq_initialization_equations_seed_a_flattened_document() {
+    use earthsci_ast::{ProblemOptions, Rhs, esm_problem, solve};
+    let faq = |expr: serde_json::Value| {
+        serde_json::json!({"op": "faq", "args": [], "output_idx": ["i"],
+                           "ranges": {"i": {"from": "x"}}, "expr": expr})
+    };
+    let idx = |v: &str| serde_json::json!({"op": "index", "args": [v, "i"]});
+    let d = |v: &str| serde_json::json!({"op": "D", "wrt": "t", "args": [idx(v)]});
+    let model = |init_rhs: serde_json::Value| {
+        serde_json::json!({
+            "variables": {
+                "A": {"type": "parameter", "units": "1", "default": 0.25},
+                "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0}
+            },
+            "equations": [{"lhs": faq(d("u")), "rhs": faq(serde_json::json!(0))}],
+            "initialization_equations": [{"lhs": "u", "rhs": faq(init_rhs)}]
+        })
+    };
+    let mut m = model(serde_json::json!({"op": "*", "args": ["A", "i"]}));
+    m["subsystems"] = serde_json::json!({
+        "Sub": model(serde_json::json!({"op": "+", "args": ["A", "i"]}))
+    });
+    let doc = |two: bool| {
+        let mut models = serde_json::json!({"M": m.clone()});
+        if two {
+            models["Other"] = serde_json::json!({
+                "variables": {"y": {"type": "unknown", "units": "1", "default": 5.0}},
+                "equations": [{"lhs": {"op": "D", "wrt": "t", "args": ["y"]}, "rhs": 0}]
+            });
+        }
+        serde_json::json!({
+            "esm": "2.0.0",
+            "metadata": {"name": "faq_init_flattened"},
+            "index_sets": {"x": {"kind": "interval", "size": 3}},
+            "models": models
+        })
+    };
+    let u0 = |two: bool| -> Vec<(String, f64)> {
+        let file = load_string(&doc(two).to_string()).expect("document loads");
+        let prob = esm_problem(
+            &file,
+            (0.0, 1.0),
+            ProblemOptions {
+                rhs: Rhs::Always,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("builds (two models: {two}): {e}"));
+        let sol = solve(
+            &prob,
+            &SolveOptions {
+                saveat: Some(vec![0.0]),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("solves (two models: {two}): {e}"));
+        sol.state_variable_names
+            .iter()
+            .zip(&sol.state)
+            .filter(|(n, _)| n.starts_with("M."))
+            .map(|(n, row)| (n.clone(), row[0]))
+            .collect()
+    };
+    let expected: Vec<(String, f64)> = [
+        ("M.u[1]", 0.25),
+        ("M.u[2]", 0.5),
+        ("M.u[3]", 0.75),
+        ("M.Sub.u[1]", 1.25),
+        ("M.Sub.u[2]", 2.25),
+        ("M.Sub.u[3]", 3.25),
+    ]
+    .iter()
+    .map(|(n, v)| (n.to_string(), *v))
+    .collect();
+    let sorted = |mut v: Vec<(String, f64)>| {
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    };
+    assert_eq!(sorted(u0(false)), sorted(expected.clone()), "one model");
+    assert_eq!(sorted(u0(true)), sorted(expected), "two models");
+}

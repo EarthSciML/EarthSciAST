@@ -161,7 +161,6 @@ fn the_controls_still_run() {
                 base_dir: Some(common::category_dir("data_source_unbound")),
                 ..Default::default()
             },
-            None,
         );
         assert!(!results.is_empty(), "{id}: ran no assertions");
         for r in &results {
@@ -195,7 +194,6 @@ fn the_inline_test_runner_reports_the_refusal_rather_than_a_number() {
                 base_dir: Some(common::category_dir("data_source_unbound")),
                 ..Default::default()
             },
-            None,
         );
         assert!(!results.is_empty(), "{id}: ran no assertions");
         for r in &results {

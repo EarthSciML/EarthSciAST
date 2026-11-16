@@ -271,11 +271,23 @@ fn build(
     providers: Vec<(&str, Box<dyn DataProvider>)>,
     const_arrays: &[(&str, f64)],
 ) -> Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError> {
+    build_with(doc, providers, const_arrays, false)
+}
+
+/// [`build`], with the build pipeline asked for when `pipeline` is set: it
+/// then consumes the CONST providers itself.
+fn build_with(
+    doc: &Value,
+    providers: Vec<(&str, Box<dyn DataProvider>)>,
+    const_arrays: &[(&str, f64)],
+    pipeline: bool,
+) -> Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError> {
     esm_problem(
         doc,
         (0.0, 1.0),
         ProblemOptions {
             compiler: Some(Compiler::Native),
+            build_pipeline: pipeline,
             providers: providers
                 .into_iter()
                 .map(|(k, p)| (k.to_string(), p))
@@ -511,6 +523,38 @@ fn a_provider_and_a_const_array_for_one_parameter_are_refused() {
         &[("Other.s", 9.0)],
     )
     .expect("no overlap");
+}
+
+/// The same refusal when the build pipeline is asked for and consumes the
+/// CONST provider itself, for a CONST and a DISCRETE provider alike.
+#[test]
+fn a_provider_and_a_const_array_for_one_parameter_are_refused_on_the_build_pipeline() {
+    for times in [&[][..], &[0.5][..]] {
+        for (pk, ck) in [("s", "Fed.s"), ("Fed.s", "s"), ("Fed.s", "Fed.s")] {
+            let err = build_with(
+                &fixture(),
+                vec![(pk, constant(pk, times, 3.0))],
+                &[(ck, 9.0)],
+                true,
+            )
+            .expect_err("two sources");
+            let (name, details) = provider_error(err);
+            assert_eq!(name, pk, "{times:?}");
+            assert!(
+                details.contains("both supply the parameter"),
+                "{times:?} {pk} / {ck}: {details}"
+            );
+        }
+    }
+    let err = build_with(
+        &two_models(true),
+        vec![("Fed.s", constant("Fed.s", &[], 3.0))],
+        &[("s", 9.0)],
+        true,
+    )
+    .expect_err("ambiguous const key");
+    let msg = err.to_string();
+    assert!(msg.contains("Fed.s") && msg.contains("Other.s"), "{msg}");
 }
 
 /// A provider that fails at a refresh inside a solve is named by the key

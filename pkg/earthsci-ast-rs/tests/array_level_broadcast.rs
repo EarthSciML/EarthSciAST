@@ -72,7 +72,6 @@ fn run_shared_fixture(name: &str) {
             solve: opts(),
             ..Default::default()
         },
-        None,
     );
     assert!(!results.is_empty(), "{name}: no inline assertions ran");
     for r in &results {

@@ -11,7 +11,7 @@
 #![cfg(feature = "esio")]
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use earthsci_ast::DataProvider;
 use earthsci_ast::esio_provider::providers_from_document;
