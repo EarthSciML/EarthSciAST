@@ -101,6 +101,17 @@ RBKG = "Rbkg"
 LR = "Lr"
 #: The LaTeX marker ``\\limits``.
 LIMITS_L = "LimitsL"
+# makearray: LaTeX ``\\begin{array}{l|l}`` ``\\end{array}``; the region product with
+# the bracket of the next bound pair, LaTeX ``\\times [``, Typst ``times [``; the Typst
+# named arguments ``delim`` and ``augment`` of its ``mat(…)``
+BARR = "Barr"
+EARR = "Earr"
+TIMES_LBK = "TimesLbk"
+DELIM_K = "DelimK"
+AUG_K = "AugK"
+# a set of names, LaTeX ``\\{`` ``\\}``, Typst ``{`` ``}`` (the ``args`` of a ``faq``)
+LSET = "Lset"
+RSET = "Rset"
 
 #: ``Math.Sf``: the two surfaces.
 LATEX = "latex"

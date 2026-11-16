@@ -156,10 +156,8 @@ def pr_mx(pr_e: Callable, pr_r: Callable, s: Sym, m: tuple) -> tuple:
         return m
     t = m[1]
     sc = t.scope(s)
-    return (
-        "tm",
-        Tm(t.name, t.params, None if t.lhs is None else pr_r(sc, t.lhs), pr_r(sc, t.body), t.attrs),
-    )
+    lhs = None if t.lhs is None else pr_r(t.mscope(s), t.lhs)
+    return ("tm", Tm(t.name, t.params, lhs, pr_r(sc, t.body), t.attrs))
 
 
 def ck_mx(ck_e: Callable, ck_r: Callable, s: Sym, m: tuple):
@@ -178,7 +176,7 @@ def ck_mx(ck_e: Callable, ck_r: Callable, s: Sym, m: tuple):
     sc = t.scope(s)
     lhs = None
     if t.lhs is not None:
-        lhs = ck_r(sc, t.lhs)
+        lhs = ck_r(t.mscope(s), t.lhs)
         if lhs is None:
             return None
     body = ck_r(sc, t.body)
@@ -340,8 +338,8 @@ def p_side(r: RSurf, s: str, i: int):
 
 # ## Multi-line equations (MultiLine.lean)
 
-_OPEN_KW = frozenset({K.LP, K.LPG, K.LB, K.LBK, K.BCASES, K.BMAT, K.LBKG})
-_CLOSE_KW = frozenset({K.RP, K.RPG, K.RB, K.RBK, K.ECASES, K.EMAT, K.RBKG})
+_OPEN_KW = frozenset({K.LP, K.LPG, K.LB, K.LBK, K.BCASES, K.BMAT, K.LBKG, K.BARR, K.TIMES_LBK})
+_CLOSE_KW = frozenset({K.RP, K.RPG, K.RB, K.RBK, K.ECASES, K.EMAT, K.RBKG, K.EARR})
 
 
 def _delta(t: Any) -> int:
