@@ -4745,7 +4745,6 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
 /// compiles — for the build pipeline, which reads the same authored model.
 /// Run it after [`mount_subsystems`], so a reference authored inside a
 /// subsystem body is resolved too.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn resolve_model_self_references(model: &mut Model, model_name: &str) {
     resolve_self_references(model, model_name);
 }
