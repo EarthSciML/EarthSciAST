@@ -276,8 +276,9 @@ pub(crate) struct PrepareOptions {
     pub pushdown_rewrite: bool,
     /// Scalar parameter overrides (exact or bare names), baked into the build.
     pub parameters: HashMap<String, f64>,
-    /// The start of the time span: the `t` every build-time observed is
-    /// evaluated at, as the static route evaluates it.
+    /// The construction sample time (`sample_time`, else the start of the
+    /// time span): the `t` every build-time observed is evaluated at, as the
+    /// static route evaluates it.
     pub t0: f64,
     /// Per-step progress lines on stdout.
     ///

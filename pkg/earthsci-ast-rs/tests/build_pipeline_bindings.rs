@@ -1,7 +1,8 @@
 //! The bindings a caller hands `esm_problem` reach the build pipeline exactly
 //! as they reach the static route: metaparameters size the compiled model too,
 //! a partially qualified parameter key designates what the static route says
-//! it does, observeds are evaluated at the start of the time span, and a baked
+//! it does, observeds are evaluated at the start of the time span (or at an
+//! explicit `sample_time`), and a baked
 //! parameter refuses a `remake` under any spelling of its name.
 
 use std::collections::{BTreeMap, HashMap};
@@ -120,6 +121,18 @@ fn observeds_are_evaluated_at_the_start_of_the_time_span() {
     assert_eq!(scalar(&static_route, "y"), 6.0);
     let prob = esm_problem(&doc, (5.0, 6.0), pipeline(&[])).expect("build");
     assert_eq!(scalar(&prob, "y"), 6.0);
+
+    // An explicit `sample_time` moves the construction sample, and the static
+    // route evaluates the observed graph there; so does the pipeline.
+    let at = |opts: ProblemOptions| ProblemOptions {
+        sample_time: Some(5.5),
+        ..opts
+    };
+    let static_route =
+        esm_problem(&doc, (5.0, 6.0), at(ProblemOptions::default())).expect("static");
+    assert_eq!(scalar(&static_route, "y"), 6.5);
+    let prob = esm_problem(&doc, (5.0, 6.0), at(pipeline(&[]))).expect("build");
+    assert_eq!(scalar(&prob, "y"), 6.5);
 }
 
 #[test]

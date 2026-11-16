@@ -2248,7 +2248,10 @@ fn build_problem(
     if let Some(raw) = owned_json.as_mut().filter(|_| wants_build_pipeline(&opts)) {
         refuse_pipeline_provider_const_overlap(raw, &opts, &supplied.const_keys)?;
         {
-            let prepared = crate::prepare::run_build_pipeline(raw, tspan.0, &mut opts)?;
+            // The pipeline's observeds are evaluated where the static route
+            // evaluates them: at the construction sample.
+            let sample_time = opts.sample_time.unwrap_or(tspan.0);
+            let prepared = crate::prepare::run_build_pipeline(raw, sample_time, &mut opts)?;
             // The pipeline evaluates the observed graph through the reference
             // evaluator whatever the compiler, and under a strict one it
             // stopped at the first observed it had to walk per cell.
