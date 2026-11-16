@@ -1750,9 +1750,22 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
         counts
     };
 
+    // A baked parameter is recorded under the spelling the build saw; a key
+    // refuses when it and that spelling designate one parameter, either one
+    // spelling the other (esm-spec §6.6.2).
+    let model = prob.model_name.as_deref();
+    let same_parameter = |a: &str, b: &str| {
+        crate::simulate::key_spells(a, b, model).is_some()
+            || crate::simulate::key_spells(b, a, model).is_some()
+    };
     for name in changes.p.keys() {
-        if prob.build.baked_parameters.iter().any(|b| b == name) {
-            let class = if prob.build.join_baked_parameters.contains(name) {
+        if let Some(baked) = prob
+            .build
+            .baked_parameters
+            .iter()
+            .find(|b| same_parameter(b, name))
+        {
+            let class = if prob.build.join_baked_parameters.contains(baked) {
                 "baked into the build as a load-time constant, because a join reads it — an \
                  `on` key column or an `overlap` envelope factor such as a cell ring, \
                  directly or through observeds — and the match set or candidate pairs it \
@@ -2054,6 +2067,10 @@ fn build_problem(
     // may fail the typed parse and still build (see stage (3)).
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut rewritten_by_pipeline = false;
+    // The metaparameters the build pipeline closed its load with; the load
+    // of the document it returns closes them again.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut pipeline_metaparameters: BTreeMap<String, i64> = BTreeMap::new();
 
     // The file's text, while `owned_json` is still exactly its parse.
     let mut source_text: Option<String> = None;
@@ -2232,7 +2249,7 @@ fn build_problem(
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(raw) = owned_json.as_mut().filter(|_| wants_build_pipeline(&opts)) {
         {
-            let prepared = crate::prepare::run_build_pipeline(raw, &mut opts)?;
+            let prepared = crate::prepare::run_build_pipeline(raw, tspan.0, &mut opts)?;
             // The pipeline evaluates the observed graph through the reference
             // evaluator whatever the compiler, and under a strict one it
             // stopped at the first observed it had to walk per cell.
@@ -2286,6 +2303,7 @@ fn build_problem(
             json_from_text = false;
             source_text = None;
             rewritten_by_pipeline = true;
+            pipeline_metaparameters = prepared.metaparameters;
             // The whole-document build (several models, none selected) keeps
             // `None`: its names are qualified already, as on the compile path.
             model_name = prepared.model_name;
@@ -2322,12 +2340,14 @@ fn build_problem(
             // refusal. A document parsed from a file's text and not rewritten
             // since is within that limit already.
             // The loader-API metaparameters close the AUTHORED document
-            // (esm-spec §9.7.6 site 4); a pipeline-rewritten one has had them
-            // closed already, and may no longer declare the names.
+            // (esm-spec §9.7.6 site 4). A pipeline-rewritten one is closed
+            // with what the pipeline closed its own load with — the caller's
+            // bindings and the discovered loader extents that it still
+            // declares — so both loads size every index set alike.
             let load_opts = crate::parse::LoadOptions {
                 base_path: opts.base_path.clone(),
                 metaparameters: if rewritten_by_pipeline {
-                    BTreeMap::new()
+                    std::mem::take(&mut pipeline_metaparameters)
                 } else {
                     opts.metaparameters.clone()
                 },

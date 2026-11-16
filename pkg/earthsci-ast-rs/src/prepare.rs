@@ -84,6 +84,7 @@ use crate::parse::LoadOptions;
 use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
 };
+use crate::simulate::{KeyMatch, key_spells};
 use crate::simulate_array::{
     ArrMap, BuiltVariables, ConstArrayScope, StandaloneScope, Value as EvalValue,
     run_value_invention_with_params,
@@ -395,6 +396,9 @@ pub(crate) struct PrepareOptions {
     pub pushdown_rewrite: bool,
     /// Scalar parameter overrides (exact or bare names), baked into the build.
     pub parameters: HashMap<String, f64>,
+    /// The start of the time span: the `t` every build-time observed is
+    /// evaluated at, as the static route evaluates it.
+    pub t0: f64,
     /// Per-step progress lines on stdout.
     ///
     /// This is the built-in observer: it prints at the same points
@@ -468,6 +472,7 @@ impl fmt::Debug for PrepareOptions {
             .field("base_path", &self.base_path)
             .field("pushdown_rewrite", &self.pushdown_rewrite)
             .field("parameters", &self.parameters)
+            .field("t0", &self.t0)
             .field("verbose", &self.verbose)
             .field(
                 "progress",
@@ -494,6 +499,11 @@ pub struct PreparedBuild {
     /// document: several models and none selected, built as one
     /// dot-namespaced system whose names (`Model.var`) are already qualified.
     pub model_name: Option<String>,
+    /// The metaparameter bindings the build closed [`Self::doc`] with at
+    /// load: the caller's and the discovered loader extents, each one the
+    /// document still declares. Loading [`Self::doc`] again needs the same
+    /// bindings to size its index sets as the build sized them.
+    pub(crate) metaparameters: BTreeMap<String, i64>,
     /// The whole-document build's flattened system, when the typed document
     /// it was flattened from is exactly what loading [`Self::doc`] with no
     /// loader-API metaparameters gives — the load the Problem makes next — so
@@ -785,61 +795,38 @@ enum Spelling {
     Qualified,
 }
 
-/// How a key names a declared variable, strongest first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum KeyMatch {
-    /// The key is the declared name.
-    Exact,
-    /// The key is the declared name under the built model's own prefix
-    /// (`Model.x` for `x`, `Model.Sub.x` for `Sub.x`).
-    ModelPrefixed,
-    /// The key is bare and is the declared name's last segment.
-    BareTail,
-}
-
 impl Spelling {
     /// The names among `declared` that `key` spells, each with how.
     ///
-    /// Model-local, a bare key reaches every name it is the last segment of,
-    /// the model's own scope. In the whole-document build a bare key that is
-    /// the last segment of several names of different models is refused,
-    /// naming them, rather than applied to all of them: the caller has to say
-    /// which one it means.
+    /// A key that is not a name reaches the names it is a dotted suffix of
+    /// (the static route's rule, esm-spec §6.6.2). Model-local, it reaches
+    /// every such name, the model's own scope. In the whole-document build a
+    /// key that is the suffix of several names is refused, naming them,
+    /// rather than applied to all of them: the caller has to say which one it
+    /// means.
     fn resolve<'n>(
         &self,
         key: &str,
         declared: impl IntoIterator<Item = &'n String>,
     ) -> Result<Vec<(&'n str, KeyMatch)>, PrepareError> {
-        let prefix = match self {
-            Spelling::ModelLocal(m) => Some(format!("{m}.")),
+        let model = match self {
+            Spelling::ModelLocal(m) => Some(m.as_str()),
             Spelling::Qualified => None,
         };
-        let local = prefix.as_deref().and_then(|p| key.strip_prefix(p));
-        let bare = !key.contains('.');
         let mut out: Vec<(&'n str, KeyMatch)> = declared
             .into_iter()
-            .filter_map(|n| {
-                if n == key {
-                    Some((n.as_str(), KeyMatch::Exact))
-                } else if local == Some(n.as_str()) {
-                    Some((n.as_str(), KeyMatch::ModelPrefixed))
-                } else if bare && n.rsplit('.').next() == Some(key) {
-                    Some((n.as_str(), KeyMatch::BareTail))
-                } else {
-                    None
-                }
-            })
+            .filter_map(|n| Some((n.as_str(), key_spells(key, n, model)?)))
             .collect();
         // Strongest first, then by name.
         out.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
         if matches!(self, Spelling::Qualified)
             && out.len() > 1
-            && out.iter().all(|(_, m)| *m == KeyMatch::BareTail)
+            && out.iter().all(|(_, m)| *m == KeyMatch::Suffix)
         {
             let names: Vec<&str> = out.iter().map(|(n, _)| *n).collect();
             return Err(err(format!(
-                "'{key}' is a bare name and this document builds several models whose \
-                 variables it could mean; qualify it as one of: {}",
+                "'{key}' ends the names of several variables of the models this \
+                 document builds; qualify it as one of: {}",
                 names.join(", ")
             )));
         }
@@ -1067,25 +1054,17 @@ enum Evaluated {
 /// the observed is not a recurrence the tape's sweep takes. Otherwise the outer
 /// `Err` is a fault the run latched — the interpreter's own diagnostic for the
 /// same document — and the inner one the tape's decline reason.
-#[allow(clippy::too_many_arguments)]
 fn compile_on_tape(
     name: &str,
     expr: &Expr,
-    arrays: &ArrMap,
-    param_vals: &[f64],
-    param_names: &[String],
-    const_arrays: &ConstArrayScope,
+    scope: &StandaloneScope<'_>,
     fill_shape: Option<&[usize]>,
     recurrence_only: bool,
 ) -> Option<Result<Result<ArrayD<f64>, String>, String>> {
     use crate::simulate_array::StandaloneError;
     let scope = StandaloneScope {
-        inputs: arrays,
-        params: param_vals,
-        param_names,
-        t: 0.0,
         derived_extents: crate::faq::empty_derived_extents(),
-        const_arrays,
+        ..*scope
     };
     match crate::simulate_array::eval_observed_taped(
         name,
@@ -1134,15 +1113,10 @@ fn resolve_observed(
 /// Under `refuse_per_cell` a per-cell walk stops at its first cell, so a
 /// document the strict compiler refuses is refused for the price of one cell
 /// rather than the whole reference evaluation.
-#[allow(clippy::too_many_arguments)]
 fn eval_observed(
     name: &str,
     expr: &Expr,
-    arrays: &ArrMap,
-    param_vals: &[f64],
-    param_names: &[String],
-    extents: &HashMap<String, i64>,
-    const_arrays: &ConstArrayScope,
+    scope: &StandaloneScope<'_>,
     fill_shape: Option<&[usize]>,
     scalar_shape: &[usize],
     refuse_per_cell: bool,
@@ -1173,18 +1147,7 @@ fn eval_observed(
     // finite, plausible and wrong with nothing logged.
     // Under a strict compiler a recurrence goes to the tape's ordered sweep
     // first (`compile_on_tape`), and is refused only if the tape declines it.
-    if refuse_per_cell
-        && let Some(tape) = compile_on_tape(
-            name,
-            expr,
-            arrays,
-            param_vals,
-            param_names,
-            const_arrays,
-            fill_shape,
-            true,
-        )
-    {
+    if refuse_per_cell && let Some(tape) = compile_on_tape(name, expr, scope, fill_shape, true) {
         return tape
             .map_err(|why| err(format!("evaluate {name}: {why}")))
             .map(|r| match r {
@@ -1196,14 +1159,6 @@ fn eval_observed(
     }
     let stop = refuse_per_cell.then(crate::simulate_array::StopAtFirstCell::arm);
     let refused = || stop.is_some() && crate::simulate_array::per_cell_walk_refused();
-    let scope = StandaloneScope {
-        inputs: arrays,
-        params: param_vals,
-        param_names,
-        t: 0.0,
-        derived_extents: extents,
-        const_arrays,
-    };
     if let Some(res) = scope.eval_recurrence(name, expr) {
         if refused() {
             return Ok(Evaluated::Refused(PER_CELL_RECURRENCE.to_string()));
@@ -1223,17 +1178,8 @@ fn eval_observed(
         let overlay = crate::simulate_array::take_overlay_decline()
             .unwrap_or("a construct it has no whole-array form for");
         drop(stop);
-        let tape = compile_on_tape(
-            name,
-            expr,
-            arrays,
-            param_vals,
-            param_names,
-            const_arrays,
-            fill_shape,
-            false,
-        )
-        .expect("a non-recurrence always reaches the tape");
+        let tape = compile_on_tape(name, expr, scope, fill_shape, false)
+            .expect("a non-recurrence always reaches the tape");
         return match tape {
             Err(fault) => Err(err(format!("evaluate {name}: {fault}"))),
             Ok(Ok(a)) => Ok(Evaluated::Field(
@@ -1853,6 +1799,8 @@ struct BuildState<'o> {
     /// How the built model's names are spelled: model-local for one model,
     /// `Model.var` for the whole document (see [`PreparedBuild::model_name`]).
     spelling: Spelling,
+    /// See [`PreparedBuild::metaparameters`].
+    metaparameters: BTreeMap<String, i64>,
     /// See [`PreparedBuild::flattened`].
     flattened: Option<crate::flatten::FlattenedSystem>,
     index_sets: HashMap<String, IndexSet>,
@@ -1927,6 +1875,20 @@ impl<'o> BuildState<'o> {
         vlog(self.opts, msg);
     }
 
+    /// The evaluation scope an observed is evaluated in: the namespace, the
+    /// scalar parameters, and `t` at the start of the time span, as the
+    /// static route evaluates it.
+    fn scope<'s>(&'s self, extents: &'s HashMap<String, i64>) -> StandaloneScope<'s> {
+        StandaloneScope {
+            inputs: &self.arrays,
+            params: &self.param_vals,
+            param_names: &self.param_names,
+            t: self.opts.t0,
+            derived_extents: extents,
+            const_arrays: &self.const_scope,
+        }
+    }
+
     fn report(
         &self,
         phase: PreparePhase,
@@ -1967,7 +1929,7 @@ impl<'o> BuildState<'o> {
         let unbound_load = metaparameters.is_empty();
         let load_opts = LoadOptions {
             base_path: opts.base_path.clone(),
-            metaparameters,
+            metaparameters: metaparameters.clone(),
         };
         let file = crate::parse::load_string_with_options(&text, &load_opts)
             .map_err(|e| err(format!("load rewritten document: {e}")))?;
@@ -2030,6 +1992,7 @@ impl<'o> BuildState<'o> {
             opts,
             model,
             spelling,
+            metaparameters,
             flattened,
             index_sets,
             param_vals,
@@ -2533,11 +2496,7 @@ impl<'o> BuildState<'o> {
                     eval_observed(
                         &name,
                         &expr,
-                        &self.arrays,
-                        &self.param_vals,
-                        &self.param_names,
-                        &no_extents,
-                        &self.const_scope,
+                        &self.scope(&no_extents),
                         self.fill_shape(&name).as_deref(),
                         &self.scalar_shape(&name),
                         self.opts.refuse_per_cell,
@@ -2932,11 +2891,7 @@ impl<'o> BuildState<'o> {
             let (a, route) = match eval_observed(
                 name,
                 &expr,
-                &self.arrays,
-                &self.param_vals,
-                &self.param_names,
-                &self.extents,
-                &self.const_scope,
+                &self.scope(&self.extents),
                 self.fill_shape(name).as_deref(),
                 &self.scalar_shape(name),
                 self.opts.refuse_per_cell,
@@ -3023,11 +2978,7 @@ impl<'o> BuildState<'o> {
         let res = eval_observed(
             name,
             &plan.expr,
-            &self.arrays,
-            &self.param_vals,
-            &self.param_names,
-            &self.extents,
-            &self.const_scope,
+            &self.scope(&self.extents),
             fill.as_deref(),
             &scalar,
             self.opts.refuse_per_cell,
@@ -3066,6 +3017,7 @@ impl<'o> BuildState<'o> {
                 Spelling::ModelLocal(m) => Some(m),
                 Spelling::Qualified => None,
             },
+            metaparameters: self.metaparameters,
             flattened: self.flattened,
             fields: self.fields,
             data_fields,
@@ -3092,9 +3044,11 @@ impl<'o> BuildState<'o> {
 /// pipeline, which is the one place they are used.
 pub(crate) fn run_build_pipeline(
     doc: &JsonValue,
+    t0: f64,
     opts: &mut crate::problem::ProblemOptions,
 ) -> Result<PreparedBuild, crate::simulate::SimulateError> {
     let internal = PrepareOptions {
+        t0,
         model_name: opts.model_name.clone(),
         metaparameters: opts.metaparameters.clone(),
         base_path: opts.base_path.clone(),
@@ -3622,7 +3576,8 @@ mod whole_document_tests {
     //! The whole-document build (several models, none selected): how its names
     //! are spelled, and the flattened system it hands the compile path.
 
-    use super::{KeyMatch, PrepareOptions, Spelling, run_prepare};
+    use super::{PrepareOptions, Spelling, run_prepare};
+    use crate::simulate::KeyMatch;
     use serde_json::{Value, json};
     use std::collections::HashMap;
 
@@ -3639,8 +3594,8 @@ mod whole_document_tests {
             got,
             vec![
                 ("k", KeyMatch::Exact),
-                ("Leaf.k", KeyMatch::BareTail),
-                ("Other.k", KeyMatch::BareTail)
+                ("Leaf.k", KeyMatch::Suffix),
+                ("Other.k", KeyMatch::Suffix)
             ]
         );
         assert_eq!(
@@ -3657,6 +3612,8 @@ mod whole_document_tests {
         assert_eq!(s.resolve_one("m", &declared).unwrap(), Some("A.m"));
         assert_eq!(s.resolve_one("A.k", &declared).unwrap(), Some("A.k"));
         assert_eq!(s.resolve_one("nothing", &declared).unwrap(), None);
+        let nested = names(&["P.sub.g", "Q.g"]);
+        assert_eq!(s.resolve_one("sub.g", &nested).unwrap(), Some("P.sub.g"));
         let e = s.resolve("k", &declared).unwrap_err().0;
         assert!(e.contains("qualify it as one of: A.k, B.k"), "{e}");
     }
