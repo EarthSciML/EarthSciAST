@@ -158,7 +158,8 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
 
 /// The flattened system as one synthetic [`Model`]: the typed variable maps
 /// re-merged into a single registry (each variable already carries its
-/// `var_type`) over the flattened equations, every name dot-namespaced.
+/// `var_type`) over the flattened equations and initialization equations,
+/// every name dot-namespaced.
 ///
 /// The maps are disjoint by construction (a variable has exactly one
 /// `var_type`), so no key collides. `parameters` is the WHOLE parameter set of
@@ -185,9 +186,23 @@ pub(crate) fn model_from_flattened(flat: &FlattenedSystem) -> Model {
     {
         variables.insert(name.clone(), var.clone());
     }
+    // The `faq`-valued initialization equations go back into the model's own
+    // block, so every later stage resolves their ranges and joins as it does
+    // an authored model's.
+    let initialization_equations = (!flat.initialization_faqs.is_empty()).then(|| {
+        flat.initialization_faqs
+            .iter()
+            .map(|(target, rhs)| crate::types::Equation {
+                lhs: Expr::Variable(target.clone()),
+                rhs: rhs.clone(),
+                comment: None,
+            })
+            .collect()
+    });
     Model {
         variables,
         equations: flat.equations.clone(),
+        initialization_equations,
         ..Default::default()
     }
 }
@@ -254,6 +269,18 @@ pub(crate) fn mount_subsystems(model: &mut Model) -> Result<(), CompileError> {
                 rhs: rename_all(&eq.rhs),
                 comment: eq.comment.clone(),
             });
+        }
+        // Its initialization equations follow the parent's, as `flatten`
+        // orders them.
+        for eq in sub_model.initialization_equations.iter().flatten() {
+            model
+                .initialization_equations
+                .get_or_insert_with(Vec::new)
+                .push(crate::types::Equation {
+                    lhs: rename_all(&eq.lhs),
+                    rhs: rename_all(&eq.rhs),
+                    comment: eq.comment.clone(),
+                });
         }
     }
     Ok(())
@@ -3194,26 +3221,17 @@ fn classify_field_ics(model: &Model) -> Vec<(String, Expr)> {
     field_ics
 }
 
-/// The `faq`-valued initialization equations (esm-spec §6.2, "equations that
-/// hold only at t=0"): `u ~ faq(…)` with a bare-variable left-hand side and an
-/// array-valued right-hand side, in document order. Each assigns the cells of
-/// its ranges at `u0` build time ([`ArrayCompiled::seed_initialization_faqs`]);
-/// the other spellings name no cells to assign and are not evaluated, as in
-/// the Julia reference's `_seed_faq_init_u0!`.
+/// The `faq`-valued initialization equations (esm-spec §6.2) of an authored
+/// model, in document order ([`crate::flatten::initialization_faq`]); a
+/// flattened system carries its own
+/// ([`FlattenedSystem::initialization_faqs`]).
 fn classify_initialization_faqs(model: &Model) -> Vec<(String, Expr)> {
     model
         .initialization_equations
         .iter()
         .flatten()
-        .filter_map(|eq| match (&eq.lhs, &eq.rhs) {
-            (Expr::Variable(target), Expr::Operator(node))
-                if is_faq_op(&node.op)
-                    && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
-            {
-                Some((target.clone(), eq.rhs.clone()))
-            }
-            _ => None,
-        })
+        .filter_map(crate::flatten::initialization_faq)
+        .map(|(target, rhs)| (target.to_string(), rhs.clone()))
         .collect()
 }
 

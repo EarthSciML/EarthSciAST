@@ -620,6 +620,15 @@ pub struct FlattenedSystem {
     /// equations, so the ordinary ODE path is unaffected.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_ics: Vec<(String, Expr)>,
+    /// The `faq`-valued initialization equations (esm-spec §6.2, equations
+    /// that hold at t = 0) of every component and subsystem, as ordered,
+    /// namespaced `(target_state, faq)` pairs ([`initialization_faq`]). Each
+    /// assigns the cells of its ranges when the initial state is built. The
+    /// other spellings of an initialization equation name no cells and are
+    /// not carried. Empty (and omitted when serialized) for a system with
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub initialization_faqs: Vec<(String, Expr)>,
     /// Flattened equations in processing order. Every variable reference is
     /// dot-namespaced.
     pub equations: Vec<Equation>,
@@ -1078,6 +1087,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         parameters,
         observed_variables,
         field_ics,
+        initialization_faqs,
         equations,
         continuous_events,
         discrete_events,
@@ -1109,6 +1119,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         brownian_parameters,
         discrete_parameters,
         field_ics,
+        initialization_faqs,
         equations,
         equation_contributions,
         equation_lifted,
@@ -2457,6 +2468,7 @@ struct AssembledParts {
     parameters: IndexMap<String, ModelVariable>,
     observed_variables: IndexMap<String, ModelVariable>,
     field_ics: Vec<(String, Expr)>,
+    initialization_faqs: Vec<(String, Expr)>,
     equations: Vec<FlatEq>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
@@ -2474,6 +2486,7 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
         parameters: IndexMap::new(),
         observed_variables: IndexMap::new(),
         field_ics: Vec::new(),
+        initialization_faqs: Vec::new(),
         equations: Vec::new(),
         continuous_events: Vec::new(),
         discrete_events: Vec::new(),
@@ -2491,6 +2504,7 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
             parts.observed_variables.insert(name, var);
         }
         parts.equations.extend(block.equations);
+        parts.initialization_faqs.extend(block.initialization_faqs);
         parts.continuous_events.extend(block.continuous_events);
         parts.discrete_events.extend(block.discrete_events);
     }
@@ -3353,8 +3367,27 @@ struct SystemBlock {
     /// block an equation sits in is its slot owner (§4.7.1 step 4), not its
     /// provenance: a reattributed equation moves here with its list.
     equations: Vec<FlatEq>,
+    /// The component's `faq`-valued initialization equations, namespaced.
+    initialization_faqs: Vec<(String, Expr)>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
+}
+
+/// The `faq`-valued initialization equation `eq` as `(target, faq)` (esm-spec
+/// §6.2): `u ~ faq(…)` with a bare-variable left-hand side and an array-valued
+/// right-hand side. Each assigns the cells of its ranges when the initial
+/// state is built; the other spellings name no cells to assign and are not
+/// evaluated, as in the Julia reference's `_seed_faq_init_u0!`.
+pub(crate) fn initialization_faq(eq: &Equation) -> Option<(&str, &Expr)> {
+    match (&eq.lhs, &eq.rhs) {
+        (Expr::Variable(target), Expr::Operator(node))
+            if crate::faq::is_faq_op(&node.op)
+                && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
+        {
+            Some((target.as_str(), &eq.rhs))
+        }
+        _ => None,
+    }
 }
 
 fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, FlattenError> {
@@ -3484,12 +3517,31 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .map(|e| namespace_discrete_event(e, system_name, &sub_keys, &locals))
         .collect();
 
+    // The `faq`-valued initialization equations, namespaced in the same
+    // scope as the equations.
+    let initialization_faqs = model
+        .initialization_equations
+        .iter()
+        .flatten()
+        .filter(|eq| initialization_faq(eq).is_some())
+        .map(
+            |eq| match namespace_expr(&eq.lhs, system_name, &sub_keys, &locals) {
+                Expr::Variable(target) => (
+                    target,
+                    namespace_expr(&eq.rhs, system_name, &sub_keys, &locals),
+                ),
+                _ => unreachable!("an initialization faq's left-hand side is a variable"),
+            },
+        )
+        .collect();
+
     let mut block = SystemBlock {
         name: system_name.to_string(),
         state_vars,
         parameters,
         observed_vars,
         equations,
+        initialization_faqs,
         continuous_events,
         discrete_events,
     };
@@ -3520,6 +3572,9 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         block.parameters.extend(sub_block.parameters);
         block.observed_vars.extend(sub_block.observed_vars);
         block.equations.extend(sub_block.equations);
+        block
+            .initialization_faqs
+            .extend(sub_block.initialization_faqs);
     }
 
     Ok(block)
@@ -3635,6 +3690,7 @@ fn build_reaction_block(
         parameters,
         observed_vars: IndexMap::new(),
         equations,
+        initialization_faqs: Vec::new(),
         continuous_events,
         discrete_events,
     })
@@ -5120,6 +5176,7 @@ fn apply_couple(
             parameters: IndexMap::new(),
             observed_vars: IndexMap::new(),
             equations: new_equations,
+            initialization_faqs: Vec::new(),
             continuous_events: Vec::new(),
             discrete_events: Vec::new(),
         });
