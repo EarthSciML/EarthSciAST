@@ -3200,9 +3200,6 @@ fn solution_metadata(
         n_jacobian_calls: stats.n_jacobian_calls,
         n_accepted_steps: stats.n_accepted_steps,
         n_rejected_steps: stats.n_rejected_steps,
-        // A rule the tape declined is a refusal before any solve
-        // ([`ArrayCompiled::strict_tape`]), so a finished solve has none.
-        tape_fallbacks: Vec::new(),
         // Rides to the caller so a name-keyed read of the result can resolve a
         // spelling the merge deleted (issue #230).
         merged_variable_renames,

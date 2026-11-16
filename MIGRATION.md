@@ -1698,6 +1698,7 @@ time derivative. A flattened name with a dot prints as a quoted name joined by
 | `RhsStats::kernel_ops`, `vectorized_rules`, `obs_vectorized_rules` | none: the right-hand side no longer runs on the whole-array overlay | `deleted` |
 | a coded load refusal (a reference, template-import, version-gate or other diagnostic with a code) as `EsmError::SchemaValidation(String)` / `StructuralValidation(String)` | `EsmError::SchemaDiagnostic { code, message, findings }` / `StructuralDiagnostic { code, message }`, rendering the same text; `EsmError::code()` and `EsmError::findings()` read them | `changed` |
 | — | `mount_edge_errors(document, base_dir)`: a document's own mount edges that do not resolve, as `(code, path)` findings | `added` |
+| `SolutionMetadata::tape_fallbacks`, and `metadata.tapeFallbacks` in the wasm/JS `solve` result (always empty) | none: a rule the tape cannot compile refuses the solve with `compiler_refused_rule`; `compiler_report` and the `tape_report` entry point name such rules without solving | `deleted` |
 
 `compile_array`, the `ArrayCompiled::from_*` constructors and the `debug_*`
 right-hand-side seams build the `native` compiler, the default of

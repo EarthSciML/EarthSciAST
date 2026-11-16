@@ -443,13 +443,6 @@ fn metadata_json(sol: &crate::simulate::Solution) -> serde_json::Value {
         "nJacobianCalls": sol.metadata.n_jacobian_calls,
         "nAcceptedSteps": sol.metadata.n_accepted_steps,
         "nRejectedSteps": sol.metadata.n_rejected_steps,
-        // Rules the vectorized tape could not compile: `[{rule, reason}, …]`.
-        // Always empty here: `solve` builds through `esm_problem`, whose
-        // strict compilers refuse such a model at construction, and the
-        // `interpreter` builds no tape. Kept so the metadata shape is stable.
-        "tapeFallbacks": sol.metadata.tape_fallbacks.iter()
-            .map(|(rule, reason)| serde_json::json!({"rule": rule, "reason": reason}))
-            .collect::<Vec<_>>(),
     })
 }
 
@@ -527,10 +520,9 @@ pub fn observed_fields(
 /// Compile a document's RHS onto the vectorized tape and report which rules
 /// did NOT make it — WITHOUT integrating anything.
 ///
-/// The companion to [`solve`]'s `metadata.tapeFallbacks`, for the case that
-/// motivated it: a model with a fallback in a tendency equation may take hours,
-/// so the metadata that would have named the culprit never arrives. This runs
-/// the build alone (milliseconds) and answers the same question up front.
+/// A rule the tape cannot compile makes [`solve`] refuse with
+/// `compiler_refused_rule`, naming the first such rule. This runs the build
+/// alone and names every one of them, without integrating anything.
 ///
 /// Returns `{ nRules, nTaped, fallbacks: [{ rule, reason }, …] }`. A non-empty
 /// `fallbacks` means the model has no tape at all: `native` (the default

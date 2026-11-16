@@ -5439,7 +5439,6 @@ impl Integrator<'_> {
         self.metadata.n_jacobian_calls += sol.metadata.n_jacobian_calls;
         self.metadata.n_accepted_steps += sol.metadata.n_accepted_steps;
         self.metadata.n_rejected_steps += sol.metadata.n_rejected_steps;
-        self.metadata.tape_fallbacks = sol.metadata.tape_fallbacks.clone();
 
         if self.state.is_empty() {
             self.names = sol.state_variable_names.clone();

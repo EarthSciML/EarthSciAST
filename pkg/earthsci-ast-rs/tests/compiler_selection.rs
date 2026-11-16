@@ -453,8 +453,7 @@ fn assert_native_agrees(rel: &str, u0: &[(&str, f64)]) {
 
 #[test]
 fn the_report_names_every_rule_not_only_the_declines() {
-    // The half `SolutionMetadata::tape_fallbacks` cannot answer: a document
-    // with no declines reports an empty fallback list and says nothing about
+    // A document with no declines solves, and the solve says nothing about
     // the rules that DID lower, nor at which cadence they run.
     let path = fixture("tests/conformance/output_derivation/fixtures/gridded.esm");
     let prob = build_rhs(&path, Compiler::Native, Rhs::Always).expect("builds");
