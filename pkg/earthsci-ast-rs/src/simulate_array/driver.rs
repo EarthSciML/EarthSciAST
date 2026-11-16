@@ -2564,7 +2564,7 @@ impl ArrayCompiled {
                         const_arrays: &self.const_scope,
                         declared: &self.declared_names,
                     },
-                    force_scalar: false,
+                    force_scalar: self.is_interpreter(),
                 },
                 &mut RhsStats::default(),
             );

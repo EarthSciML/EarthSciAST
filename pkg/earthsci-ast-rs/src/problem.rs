@@ -5297,6 +5297,9 @@ pub struct Integrator<'a> {
     next: usize,
     t: f64,
     u: HashMap<String, f64>,
+    /// How many leading solution rows are state. The rows after them are the
+    /// observeds a solve appends, which are output and never fed back.
+    n_state_rows: usize,
     time: Vec<f64>,
     state: Vec<Vec<f64>>,
     names: Vec<String>,
@@ -5360,6 +5363,7 @@ pub fn init<'a>(
                 .collect()
         }
     };
+    let names = prob.state_variable_names();
     Ok(Integrator {
         prob,
         // esm-spec §2.2.2: caller > the document's `solver` block > binding
@@ -5372,9 +5376,10 @@ pub fn init<'a>(
         next: 0,
         t: t0,
         u: prob.u0.clone(),
+        n_state_rows: names.len(),
         time: Vec::new(),
         state: Vec::new(),
-        names: prob.state_variable_names(),
+        names,
         retcode: crate::simulate::ReturnCode::Success,
         metadata: crate::simulate::SolutionMetadata::default(),
     })
@@ -5448,7 +5453,9 @@ impl Integrator<'_> {
                     if r < self.state.len() {
                         self.state[r].push(*v);
                     }
-                    if let Some(name) = self.names.get(r) {
+                    if r < self.n_state_rows
+                        && let Some(name) = self.names.get(r)
+                    {
                         self.u.insert(name.clone(), *v);
                     }
                 }

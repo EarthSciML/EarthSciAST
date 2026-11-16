@@ -73,11 +73,13 @@ impl std::fmt::Display for RhsError {
 impl std::error::Error for RhsError {}
 
 /// The fail-closed codes a fault message may lead with.
-const FAULT_CODES: [&str; 8] = [
+const FAULT_CODES: [&str; 10] = [
     "E_TREEWALK_CONSTARRAY_OOB",
+    "E_TREEWALK_FILTER_UNALIGNED",
     "E_TREEWALK_INDEX_ON_SCALAR",
     "E_TREEWALK_MISSING_DATA",
     "E_TREEWALK_MISSING_INITIAL_VALUE",
+    "E_TREEWALK_NESTED_BOX_MISMATCH",
     "E_TREEWALK_RECUR_UNAVAILABLE",
     "E_TREEWALK_UNBOUND_NAME",
     "E_TREEWALK_UNDECLARED_INDEX_SET",
@@ -324,4 +326,23 @@ fn check_len(slot: &ForcingSlot, buf: &[f64]) -> Result<(), RhsError> {
         return Err(shape("forcing", slot.len(), buf.len()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fault_code_tests {
+    use super::*;
+
+    /// Every code the evaluators latch is recovered from its message.
+    #[test]
+    fn every_latched_code_is_recovered() {
+        for code in [
+            "E_TREEWALK_FILTER_UNALIGNED",
+            "E_TREEWALK_NESTED_BOX_MISMATCH",
+        ] {
+            match fault(format!("{code}: detail")) {
+                RhsError::Fault { code: got, .. } => assert_eq!(got, code),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
 }
