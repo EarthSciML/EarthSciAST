@@ -21,17 +21,17 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
-use earthsci_ast::{AxisSel, DataProvider, Flow, PreparePhase, PrepareProgress, ProviderError};
+use earthsci_ast::{AxisSel, DataProvider, Flow, PreparePhase, PrepareProgress};
 use earthsci_ast::{ProblemOptions, esm_problem};
 
 use crate::common;
+use crate::common::{Fetch, FetchLog, MockConst, MockGated};
 
 // ---- Lambert conformal conic (unit sphere), to place points inside cells ----
 
@@ -71,37 +71,6 @@ fn lcc_inv(x: f64, y: f64, c: &Lcc) -> (f64, f64) {
 }
 
 // ---- provider mocks ---------------------------------------------------------
-
-struct MockConst(Vec<f64>);
-
-impl DataProvider for MockConst {
-    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
-        Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
-    }
-}
-
-struct MockGated {
-    full: ArrayD<f64>, // native [layer, src, rcv]
-    calls: Rc<RefCell<Vec<Vec<AxisSel>>>>,
-}
-
-impl DataProvider for MockGated {
-    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
-        panic!("the gated mock must never be fetched wholesale");
-    }
-
-    fn supports_selection(&self) -> bool {
-        true
-    }
-
-    fn sample_with_selection(
-        &mut self,
-        selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, ProviderError> {
-        self.calls.borrow_mut().push(selection.to_vec());
-        Ok(common::select_axes(&self.full, selection))
-    }
-}
 
 // ---- one recorded report ----------------------------------------------------
 
@@ -217,7 +186,7 @@ fn run(
         ("ISRM.is_SOx".into(), Box::new(MockConst(is_sox.to_vec()))),
         ("ISRM.is_PM25".into(), Box::new(MockConst(is_pm25.to_vec()))),
     ];
-    let mut call_logs: HashMap<String, Rc<RefCell<Vec<Vec<AxisSel>>>>> = HashMap::new();
+    let mut call_logs: HashMap<String, FetchLog> = HashMap::new();
     for v in LVARS {
         let mut a = ArrayD::zeros(IxDyn(&[N_LAYER, GRID, N_RCV]));
         for l in 0..N_LAYER {
@@ -234,7 +203,11 @@ fn run(
         call_logs.insert(format!("ISRM.SR_{v}"), calls.clone());
         providers.push((
             format!("ISRM.SR_{v}"),
-            Box::new(MockGated { full: a, calls }),
+            Box::new(MockGated {
+                full: a,
+                calls,
+                refuse_wholesale: true,
+            }),
         ));
     }
 
@@ -247,8 +220,7 @@ fn run(
     .into_iter()
     .collect();
 
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/pushdown/fixtures/pushdown_l1.esm");
+    let fixture = common::repo_fixture("conformance/pushdown/fixtures/pushdown_l1.esm");
     let doc: Value =
         serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
             .expect("parse pushdown_l1.esm");
@@ -278,7 +250,17 @@ fn run(
 
     let seen = call_logs
         .into_iter()
-        .map(|(k, v)| (k, v.borrow().clone()))
+        .map(|(k, v)| {
+            let selections = v
+                .borrow()
+                .iter()
+                .map(|f| match f {
+                    Fetch::Selection(sel) => sel.clone(),
+                    Fetch::Wholesale => unreachable!("the gated mock refuses wholesale"),
+                })
+                .collect();
+            (k, selections)
+        })
         .collect();
     (prep, seen)
 }

@@ -38,11 +38,13 @@ use earthsci_ast::{FlattenError, FlattenedSystem, flatten};
 use earthsci_ast::{ModelVariable, ParameterUpdateSpec, VariableBound};
 use serde_json::Value;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::common;
 
 /// Repo-root `tests/` directory — the corpus's own path root.
 fn tests_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
+    common::repo_tests_dir()
 }
 
 fn corpus() -> Value {

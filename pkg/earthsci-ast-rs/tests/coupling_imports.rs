@@ -13,6 +13,8 @@ use earthsci_ast::{
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+use crate::common;
+
 /// A coupling-library file: roles + role-scoped edges, no models/loaders.
 fn lib() -> Value {
     json!({
@@ -429,9 +431,7 @@ fn unresolved_when_the_ref_is_a_remote_url_under_the_default_loader() {
 
 /// The conformance corpus directory, from this crate's manifest.
 fn coupling_corpus(name: &str) -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/coupling_libraries")
-        .join(name)
+    common::repo_fixture("coupling_libraries").join(name)
 }
 
 /// A relative `coupling_import` `ref` names a file relative to the IMPORTING

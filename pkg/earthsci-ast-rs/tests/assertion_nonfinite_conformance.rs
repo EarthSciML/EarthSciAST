@@ -26,13 +26,8 @@
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/assertion_nonfinite")
-}
 
 /// The class the manifest names for one actual value.
 fn class_of(v: f64) -> &'static str {
@@ -49,7 +44,7 @@ fn class_of(v: f64) -> &'static str {
 
 #[test]
 fn nonfinite_actuals_fail_every_finite_expectation() {
-    let dir = category_dir();
+    let dir = common::category_dir("assertion_nonfinite");
     let manifest = common::read_json(dir.join("manifest.json"));
     common::assert_tier_header(&manifest, "assertion_nonfinite");
 

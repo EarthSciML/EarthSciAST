@@ -24,13 +24,8 @@ use earthsci_ast::SimulateError;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/override_key_diagnostics")
-}
 
 fn opts() -> SolveOptions {
     SolveOptions {
@@ -44,7 +39,7 @@ fn opts() -> SolveOptions {
 
 #[test]
 fn override_key_outcomes_match_the_manifest() {
-    let dir = category_dir();
+    let dir = common::category_dir("override_key_diagnostics");
     let manifest = common::read_json(dir.join("manifest.json"));
     assert_eq!(
         manifest["category"].as_str(),

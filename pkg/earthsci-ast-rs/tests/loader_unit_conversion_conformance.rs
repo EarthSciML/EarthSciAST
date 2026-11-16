@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::common;
 
 fn tests_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
+    common::repo_tests_dir()
 }
 
 /// f64 bit patterns — the comparison the manifest asks for, so `0.0`/`-0.0` and

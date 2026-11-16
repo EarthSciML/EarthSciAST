@@ -14,14 +14,6 @@ use std::path::{Path, PathBuf};
 
 use crate::common;
 
-fn suite_dir() -> PathBuf {
-    common::repo_root().join("tests/conformance/url_substitutions")
-}
-
-fn manifest() -> Value {
-    common::read_json(suite_dir().join("manifest.json"))
-}
-
 /// Lexical dot-segment removal, so a `repo_path` pin compares with the
 /// resolved (lexically normalized) URL.
 fn normalize(p: &Path) -> PathBuf {
@@ -51,12 +43,13 @@ fn expected(pin: &Value) -> String {
 
 #[test]
 fn every_fixture_loads_or_is_refused_as_the_shared_manifest_says() {
-    let m = manifest();
+    let m = common::tier_manifest("url_substitutions");
     let fixtures = m["fixtures"].as_array().expect("fixtures");
     assert!(!fixtures.is_empty());
     for f in fixtures {
         let id = f["id"].as_str().expect("id");
-        let path = suite_dir().join(f["path"].as_str().expect("path"));
+        let path =
+            common::category_dir("url_substitutions").join(f["path"].as_str().expect("path"));
         let loaded = earthsci_ast::load_path(&path);
         match f["expect"].as_str().expect("expect") {
             "accepted" => {
@@ -116,7 +109,7 @@ fn every_fixture_loads_or_is_refused_as_the_shared_manifest_says() {
 
 #[test]
 fn the_edge_does_not_survive_parse_emit_and_the_emitted_form_is_a_fixed_point() {
-    let path = suite_dir().join("mount_toplevel.esm");
+    let path = common::category_dir("url_substitutions").join("mount_toplevel.esm");
     let first = earthsci_ast::load_path(&path).expect("loads");
     let emitted = earthsci_ast::to_json(&first).expect("emits");
     assert!(

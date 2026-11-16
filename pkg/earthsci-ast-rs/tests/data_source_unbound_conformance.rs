@@ -19,18 +19,8 @@
 use earthsci_ast::{Compiler, ProblemInput, ProblemOptions, SolveOptions, esm_problem, load_path};
 use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use serde_json::Value;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::category_dir("data_source_unbound")
-}
-
-/// A missing manifest is a hard failure, not a skip.
-fn manifest() -> Value {
-    common::read_json(category_dir().join("manifest.json"))
-}
 
 /// The codes a case may be refused with. Every case names `data_source_unbound`;
 /// `unresolvable_source` additionally admits `data_source_undefined`, because a
@@ -51,7 +41,7 @@ fn accepted(case: &Value) -> Vec<String> {
 
 #[test]
 fn the_manifest_names_the_registered_code() {
-    let m = manifest();
+    let m = common::tier_manifest("data_source_unbound");
     let code = m["code"].as_str().expect("`code` is a string");
     assert_eq!(code, "data_source_unbound");
     assert!(
@@ -76,13 +66,13 @@ fn the_manifest_names_the_registered_code() {
 /// tier was written to end.
 #[test]
 fn both_compilers_refuse_an_unbound_data_feed_with_the_same_code() {
-    let m = manifest();
+    let m = common::tier_manifest("data_source_unbound");
     for case in m["cases"].as_array().unwrap() {
         if case["expect"] != "refuse" {
             continue;
         }
         let id = case["id"].as_str().unwrap();
-        let path = category_dir().join(case["path"].as_str().unwrap());
+        let path = common::category_dir("data_source_unbound").join(case["path"].as_str().unwrap());
         let parameter = case["parameter"].as_str().unwrap();
         let source = case["source"].as_str().unwrap();
         let codes = accepted(case);
@@ -125,7 +115,8 @@ fn both_compilers_refuse_an_unbound_data_feed_with_the_same_code() {
 /// `exp(-0.5)` and `exp(-0.1)` tell them apart at the third digit.
 #[test]
 fn a_pinned_parameter_builds_and_its_value_is_the_one_that_runs() {
-    let path = category_dir().join("fixtures/unbound_scalar_forcing.esm");
+    let path =
+        common::category_dir("data_source_unbound").join("fixtures/unbound_scalar_forcing.esm");
     for compiler in [Compiler::Native, Compiler::Interpreter] {
         let mut opts = ProblemOptions {
             compiler: Some(compiler),
@@ -156,18 +147,18 @@ fn a_pinned_parameter_builds_and_its_value_is_the_one_that_runs() {
 /// author actually uses.
 #[test]
 fn the_controls_still_run() {
-    let m = manifest();
+    let m = common::tier_manifest("data_source_unbound");
     for case in m["cases"].as_array().unwrap() {
         if case["expect"] != "run" {
             continue;
         }
         let id = case["id"].as_str().unwrap();
-        let path = category_dir().join(case["path"].as_str().unwrap());
+        let path = common::category_dir("data_source_unbound").join(case["path"].as_str().unwrap());
         let file = load_path(&path).unwrap_or_else(|e| panic!("{id}: does not load: {e}"));
         let results = run_inline_tests_with_options(
             &file,
             &InlineTestOptions {
-                base_dir: Some(category_dir()),
+                base_dir: Some(common::category_dir("data_source_unbound")),
                 ..Default::default()
             },
             None,
@@ -184,13 +175,13 @@ fn the_controls_still_run() {
 /// default-valued trajectory as a passing assertion.
 #[test]
 fn the_inline_test_runner_reports_the_refusal_rather_than_a_number() {
-    let m = manifest();
+    let m = common::tier_manifest("data_source_unbound");
     for case in m["cases"].as_array().unwrap() {
         if case["expect"] != "refuse" {
             continue;
         }
         let id = case["id"].as_str().unwrap();
-        let path = category_dir().join(case["path"].as_str().unwrap());
+        let path = common::category_dir("data_source_unbound").join(case["path"].as_str().unwrap());
         let codes = accepted(case);
         let Ok(file) = load_path(&path) else {
             // A binding whose LOAD runs structural validation refuses there —
@@ -201,7 +192,7 @@ fn the_inline_test_runner_reports_the_refusal_rather_than_a_number() {
         let results = run_inline_tests_with_options(
             &file,
             &InlineTestOptions {
-                base_dir: Some(category_dir()),
+                base_dir: Some(common::category_dir("data_source_unbound")),
                 ..Default::default()
             },
             None,

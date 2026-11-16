@@ -12,21 +12,12 @@ use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use earthsci_ast::{LoadOptions, SolveOptions, load_string_with_options};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
 
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/value_invention_materialize")
-}
-
-fn manifest() -> serde_json::Value {
-    common::read_json(category_dir().join("manifest.json"))
-}
-
 #[test]
 fn manifest_requires_rust_and_both_halves() {
-    let m = manifest();
+    let m = common::tier_manifest("value_invention_materialize");
     assert_eq!(m["category"].as_str(), Some("value_invention_materialize"));
     let required: Vec<&str> = m["bindings_required"]
         .as_array()
@@ -47,8 +38,8 @@ fn manifest_requires_rust_and_both_halves() {
 
 #[test]
 fn value_invention_materialize_outcomes_match_the_manifest() {
-    let dir = category_dir();
-    let m = manifest();
+    let dir = common::category_dir("value_invention_materialize");
+    let m = common::tier_manifest("value_invention_materialize");
     let opts = SolveOptions::default();
 
     for fx in m["fixtures"].as_array().expect("fixtures") {

@@ -21,11 +21,11 @@ use earthsci_ast::{
     CompileError, Compiler, EsmProblem, ProblemOptions, SimulateError, esm_problem,
 };
 
+use crate::common;
+
 fn fixture(rel: &str) -> PathBuf {
     // CARGO_MANIFEST_DIR is pkg/earthsci-ast-rs.
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(rel);
+    let p = common::repo_root().join(rel);
     assert!(p.exists(), "fixture {} is missing", p.display());
     p
 }

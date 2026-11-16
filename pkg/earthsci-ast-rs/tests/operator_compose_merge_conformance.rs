@@ -30,19 +30,8 @@ use earthsci_ast::{
     FlattenError, FlattenedSystem, capture_coupling_diagnostics, flatten, load_path,
 };
 use serde_json::Value;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::category_dir("operator_compose_merge")
-}
-
-/// A missing manifest is a hard failure, not a skip: the manifest IS the
-/// contract this file exists to enforce.
-fn manifest() -> Value {
-    common::read_json(category_dir().join("manifest.json"))
-}
 
 fn cases(m: &Value) -> &Vec<Value> {
     m["cases"].as_array().expect("`cases` is an array")
@@ -75,7 +64,7 @@ fn refusal_code(err: &FlattenError) -> &'static str {
 /// Flatten the fixture at `rel`, returning the result and only this category's
 /// diagnostics.
 fn flatten_capturing(rel: &str) -> (Result<FlattenedSystem, FlattenError>, Vec<String>) {
-    let path = category_dir().join(rel);
+    let path = common::category_dir("operator_compose_merge").join(rel);
     let file = load_path(path.to_str().expect("fixture path is UTF-8")).expect("fixture loads");
     let (out, diagnostics) = capture_coupling_diagnostics(|| flatten(&file));
     let diagnostics = diagnostics
@@ -109,7 +98,7 @@ fn outcome_of(case: &Value) -> String {
 fn the_manifest_is_not_empty_and_covers_this_binding() {
     // A manifest that silently listed zero cases would make every assertion in
     // this file vacuously green.
-    let m = manifest();
+    let m = common::tier_manifest("operator_compose_merge");
     assert!(!cases(&m).is_empty(), "the manifest recorded no cases");
     assert!(
         m["bindings_required"]
@@ -141,7 +130,7 @@ fn the_manifest_is_not_empty_and_covers_this_binding() {
 
 #[test]
 fn the_manifest_outcomes_hold() {
-    let m = manifest();
+    let m = common::tier_manifest("operator_compose_merge");
     for case in cases(&m) {
         let id = case["id"].as_str().expect("case id");
         let rel = case["path"].as_str().expect("case path");
@@ -236,7 +225,7 @@ fn check_states(id: &str, case: &Value, system: &FlattenedSystem) {
 /// a binding could get wrong without failing anything.
 #[test]
 fn the_require_match_truth_table_is_covered() {
-    let m = manifest();
+    let m = common::tier_manifest("operator_compose_merge");
     let covered: Vec<String> = cases(&m)
         .iter()
         .map(|c| {
@@ -279,7 +268,7 @@ fn the_require_match_truth_table_is_covered() {
 /// disagreement even if both were re-recorded.
 #[test]
 fn flipping_the_systems_order_changes_nothing_observable() {
-    let m = manifest();
+    let m = common::tier_manifest("operator_compose_merge");
     for (left, right) in [
         ("ambiguous_bare_name", "ambiguous_bare_name_flipped"),
         (
@@ -312,7 +301,7 @@ fn flipping_the_systems_order_changes_nothing_observable() {
 /// by refusing the whole bare-name fallback.
 #[test]
 fn the_ambiguity_refusal_is_not_a_blanket_ban_on_bare_names() {
-    let m = manifest();
+    let m = common::tier_manifest("operator_compose_merge");
     for (id, state, default) in [
         ("ambiguous_resolved_by_translate", "Chem.O3", 30.0),
         ("owner_rename_state_wins_observed_first", "Sink.O3", 40.0),
@@ -339,7 +328,9 @@ fn the_ambiguity_refusal_is_not_a_blanket_ban_on_bare_names() {
 #[test]
 fn require_match_round_trips_including_an_explicit_false() {
     let emitted = |name: &str| -> Value {
-        let path = category_dir().join("fixtures").join(name);
+        let path = common::category_dir("operator_compose_merge")
+            .join("fixtures")
+            .join(name);
         let file = load_path(path.to_str().expect("path is UTF-8")).expect("fixture loads");
         serde_json::to_value(&file).expect("the loaded file serializes")
     };

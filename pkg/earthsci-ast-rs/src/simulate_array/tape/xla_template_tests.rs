@@ -342,7 +342,7 @@ fn every_template_family_lowers_and_matches_the_oracle() {
     if !runtime_available() {
         return;
     }
-    use super::closed_template_tests as ct;
+    use super::template_fixtures as ct;
     let cases: Vec<(&str, Value, f64)> = vec![
         ("calendar", ct::calendar_doc(1.6e9), 1e-13),
         ("planar overlap", ct::overlap_doc(false), 1e-11),
@@ -355,7 +355,7 @@ fn every_template_family_lowers_and_matches_the_oracle() {
         let prog = program(&compiled);
         assert_close(&compiled, &prog, tol, 1e-14, what);
     }
-    for d in super::interp_template_tests::all_template_models() {
+    for d in super::template_fixtures::all_template_models() {
         let compiled = compile(d);
         let prog = program(&compiled);
         assert_close(&compiled, &prog, 1e-13, 1e-300, "interp template");
@@ -393,7 +393,7 @@ fn a_gather_over_compile_time_data_is_evaluated_ahead_of_the_program() {
     }
     // The planar overlap template over literal rings: its areas are a
     // constant of the program.
-    let compiled = compile(super::closed_template_tests::overlap_doc(false));
+    let compiled = compile(super::template_fixtures::overlap_doc(false));
     let prog = program(&compiled);
     assert_close(&compiled, &prog, 1e-11, 1e-14, "planar overlap, hoisted");
 }

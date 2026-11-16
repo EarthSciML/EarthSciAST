@@ -6,6 +6,8 @@
 use earthsci_ast::*;
 use serde_json::Value;
 
+use crate::common;
+
 #[test]
 fn enums_categorical_lookup_fixture_lowers_enum_ops() {
     let fixture = include_str!("../../../tests/valid/enums_categorical_lookup.esm");
@@ -229,7 +231,7 @@ fn zero_and_negative_enum_members_round_trip() {
 /// `expected_errors.json`, so the pin follows the corpus.
 #[test]
 fn duplicate_enum_values_are_refused_at_load_with_the_pinned_code() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/invalid");
+    let dir = common::repo_fixture("invalid").display().to_string();
     let expected: Value = serde_json::from_str(
         &std::fs::read_to_string(format!("{dir}/expected_errors.json")).expect("read"),
     )

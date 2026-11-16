@@ -18,16 +18,11 @@
 
 use earthsci_ast::check_assertion;
 use serde_json::Value;
-use std::path::PathBuf;
 
 use crate::common;
 
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/assertion_tolerance")
-}
-
 fn read_json(name: &str) -> Value {
-    let path = category_dir().join(name);
+    let path = common::category_dir("assertion_tolerance").join(name);
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing {}: {e}", path.display()))

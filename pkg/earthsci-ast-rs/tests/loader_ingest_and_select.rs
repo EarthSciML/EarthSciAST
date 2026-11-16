@@ -39,6 +39,8 @@ use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 use ndarray::ArrayD;
 use serde_json::{Value, json};
 
+use crate::common;
+
 // --------------------------------------------------------------------------- //
 // Fixtures
 // --------------------------------------------------------------------------- //
@@ -156,8 +158,7 @@ fn write_grid_store(dir: &Path, n: usize) -> String {
 
 /// The committed fixture with its two placeholder URLs pointed at `dir`.
 fn document(dir: &Path) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/valid/data_sources_ingest_and_select.esm");
+    let path = common::repo_fixture("valid/data_sources_ingest_and_select.esm");
     let mut doc: Value = serde_json::from_str(
         &fs::read_to_string(&path).expect("read data_sources_ingest_and_select.esm"),
     )

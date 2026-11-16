@@ -4,6 +4,8 @@
 
 use earthsci_ast::*;
 
+use crate::common;
+
 /// Table-driven guard for invalid fixtures whose rejection is STRUCTURAL:
 /// the contract in tests/invalid/expected_errors.json pins `schema_errors: []`
 /// for each of them, so `load_string` must succeed and `validate()` must
@@ -411,8 +413,7 @@ fn test_coupling_library_refs_resolve_against_roles_not_systems() {
 /// `lib_unknown_role_edge.esm` must be rejected naming its undeclared role.
 #[test]
 fn test_coupling_library_corpus_validates_standalone() {
-    let corpus =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/coupling_libraries");
+    let corpus = common::repo_fixture("coupling_libraries");
     // `full_surface_lib.esm` exercises every §10.10.2 occurrence site, so it is
     // what proves the shared walk raises no FALSE positive off `variable_map`.
     for name in ["rothermel_fuel.esm", "full_surface_lib.esm"] {

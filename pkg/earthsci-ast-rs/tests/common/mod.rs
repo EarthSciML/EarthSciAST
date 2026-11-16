@@ -13,7 +13,11 @@
 
 pub use crate::portable::rhs;
 
+pub mod tier;
+
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use earthsci_ast::{Alg, AxisSel, DataProvider, ProviderError, SolveOptions};
 use ndarray::{ArrayD, IxDyn};
@@ -29,7 +33,7 @@ pub fn repo_root() -> PathBuf {
 
 /// The repo-root `tests/` directory (the cross-binding fixture tree).
 pub fn repo_tests_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests")
+    repo_root().join("tests")
 }
 
 /// Absolute path of a fixture given its path relative to the repo-root
@@ -111,6 +115,129 @@ pub struct MockConst(pub Vec<f64>);
 impl DataProvider for MockConst {
     fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
+    }
+}
+
+/// One fetch a [`MockGated`] served.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Fetch {
+    /// The whole array.
+    Wholesale,
+    /// The pushdown selection it was asked for.
+    Selection(Vec<AxisSel>),
+}
+
+/// The fetches a [`MockGated`] served, in order, shared with the test.
+pub type FetchLog = Rc<RefCell<Vec<Fetch>>>;
+
+/// A pushdown-capable provider over `full`: it records each fetch, a
+/// selection or the whole array, in `calls`, and with `refuse_wholesale`
+/// panics when asked for the whole array.
+pub struct MockGated {
+    pub full: ArrayD<f64>,
+    pub calls: FetchLog,
+    pub refuse_wholesale: bool,
+}
+
+impl MockGated {
+    /// A mock serving `full` either way, recording into `calls`.
+    pub fn new(full: ArrayD<f64>, calls: FetchLog) -> Self {
+        MockGated {
+            full,
+            calls,
+            refuse_wholesale: false,
+        }
+    }
+}
+
+impl DataProvider for MockGated {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        assert!(
+            !self.refuse_wholesale,
+            "the gated mock must never be fetched wholesale"
+        );
+        self.calls.borrow_mut().push(Fetch::Wholesale);
+        Ok(self.full.clone())
+    }
+
+    fn supports_selection(&self) -> bool {
+        true
+    }
+
+    fn sample_with_selection(
+        &mut self,
+        selection: &[AxisSel],
+    ) -> Result<ArrayD<f64>, ProviderError> {
+        self.calls
+            .borrow_mut()
+            .push(Fetch::Selection(selection.to_vec()));
+        Ok(select_axes(&self.full, selection))
+    }
+}
+
+/// A JSON array of numbers.
+pub fn floats(v: &Value) -> Vec<f64> {
+    v.as_array()
+        .expect("an array")
+        .iter()
+        .map(|x| x.as_f64().expect("a number"))
+        .collect()
+}
+
+/// A manifest's provider: one field, `base + slope * t` elementwise,
+/// refreshed at `times`.
+pub struct LinearProvider {
+    pub key: String,
+    pub times: Vec<f64>,
+    pub shape: Vec<usize>,
+    /// Row-major.
+    pub base: Vec<f64>,
+    pub slope: f64,
+}
+
+impl LinearProvider {
+    /// The provider a manifest entry describes (`key`, `refresh_times`,
+    /// `shape`, nested `base`, `slope`).
+    pub fn from_manifest(p: &Value) -> Self {
+        fn flatten(v: &Value, out: &mut Vec<f64>) {
+            match v {
+                Value::Array(a) => a.iter().for_each(|x| flatten(x, out)),
+                x => out.push(x.as_f64().expect("a number")),
+            }
+        }
+        let mut base = Vec::new();
+        flatten(&p["base"], &mut base);
+        LinearProvider {
+            key: p["key"].as_str().unwrap().to_string(),
+            times: floats(&p["refresh_times"]),
+            shape: p["shape"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| d.as_u64().unwrap() as usize)
+                .collect(),
+            base,
+            slope: p["slope"].as_f64().unwrap(),
+        }
+    }
+
+    /// The field at `t`.
+    pub fn at(&self, t: f64) -> ArrayD<f64> {
+        let values = self.base.iter().map(|b| b + self.slope * t).collect();
+        ArrayD::from_shape_vec(IxDyn(&self.shape), values).expect("field")
+    }
+}
+
+impl DataProvider for LinearProvider {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        assert!(self.slope == 0.0, "only a const provider is materialized");
+        Ok(self.at(0.0))
+    }
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
+        Ok(Some(self.at(t)))
+    }
+    fn refresh_times(&self) -> Vec<f64> {
+        self.times.clone()
     }
 }
 

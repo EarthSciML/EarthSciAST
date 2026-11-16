@@ -12,7 +12,6 @@
 //! 5. assert INPUT PURITY: the input document is not mutated.
 
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -20,13 +19,6 @@ use earthsci_ast::desugar_pushdown;
 use earthsci_ast::extension::pushdown_rewrite::pushdown_diagnostics;
 
 use crate::common;
-
-fn corpus_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/pushdown")
-        .canonicalize()
-        .expect("conformance corpus tests/conformance/pushdown exists at the repo root")
-}
 
 /// Deep equality with numbers compared BY VALUE (`0 == 0.0`), per the corpus
 /// comparison contract. On mismatch, returns the JSON-pointer-ish path of the
@@ -76,7 +68,7 @@ fn deep_equal(a: &Value, b: &Value, path: &str) -> Result<(), String> {
 
 #[test]
 fn pushdown_goldens_match_and_rewrite_is_idempotent_and_pure() {
-    let dir = corpus_dir();
+    let dir = common::category_dir("pushdown");
     let manifest = common::read_json(dir.join("manifest.json"));
     let fixtures = manifest["fixtures"]
         .as_array()
@@ -148,7 +140,7 @@ fn pushdown_goldens_match_and_rewrite_is_idempotent_and_pure() {
 /// hash seed and could not be compared as an ordered array at all.
 #[test]
 fn equation_order_is_canonical_not_input_order() {
-    let dir = corpus_dir();
+    let dir = common::category_dir("pushdown");
     let path = dir.join("fixtures/pushdown_l1.esm");
     let input = common::read_json(&path);
 

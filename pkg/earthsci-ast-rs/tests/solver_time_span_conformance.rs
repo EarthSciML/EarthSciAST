@@ -8,22 +8,8 @@
 //! the diagnostic code and the substrings its message must carry.
 
 use serde_json::Value;
-use std::path::{Path, PathBuf};
 
 use crate::common;
-
-fn suite_dir() -> PathBuf {
-    // <repo>/pkg/earthsci-ast-rs/tests/this_file.rs
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("the crate sits two levels under the repository root")
-        .join("tests/conformance/solver_time_span")
-}
-
-fn manifest() -> Value {
-    common::read_json(suite_dir().join("manifest.json"))
-}
 
 fn fixtures(m: &Value, expect: &str) -> Vec<Value> {
     m["fixtures"]
@@ -36,7 +22,9 @@ fn fixtures(m: &Value, expect: &str) -> Vec<Value> {
 }
 
 fn load(f: &Value) -> Result<earthsci_ast::EsmFile, earthsci_ast::EsmError> {
-    earthsci_ast::load_path(suite_dir().join(f["path"].as_str().expect("path")))
+    earthsci_ast::load_path(
+        common::category_dir("solver_time_span").join(f["path"].as_str().expect("path")),
+    )
 }
 
 /// JSON equality with every number compared by its binary64 value, so an
@@ -67,7 +55,7 @@ fn pair(v: &Value) -> Option<(f64, f64)> {
 
 #[test]
 fn every_accepted_fixture_converts_and_emits_as_the_shared_manifest_says() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_time_span");
     let accepted = fixtures(&m, "accepted");
     assert!(!accepted.is_empty(), "the manifest pins accepted fixtures");
     for f in accepted {
@@ -95,7 +83,7 @@ fn every_accepted_fixture_converts_and_emits_as_the_shared_manifest_says() {
 
 #[test]
 fn every_refused_fixture_fails_with_the_pinned_code_and_message() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_time_span");
     let refused = fixtures(&m, "refused");
     assert!(!refused.is_empty(), "the manifest pins refused fixtures");
     for f in refused {
@@ -125,7 +113,7 @@ fn every_refused_fixture_fails_with_the_pinned_code_and_message() {
 
 #[test]
 fn an_explicit_call_site_interval_wins_both_bounds() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_time_span");
     let cases = m["call_site"]["cases"].as_array().expect("call_site.cases");
     assert!(!cases.is_empty(), "the manifest pins call-site cases");
     for c in cases {
@@ -322,7 +310,7 @@ fn fixture_by_id(m: &Value, id: &str) -> Value {
 
 #[test]
 fn time_origin_is_the_instant_the_document_names() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_time_span");
     for (id, want) in [
         ("timestamps_posix", 0.0),
         ("timestamps_reference_time", 1_561_939_200.0),
@@ -342,7 +330,7 @@ fn time_origin_is_the_instant_the_document_names() {
 
 #[test]
 fn timestamp_to_seconds_agrees_with_resolve_time_span_on_every_fixture() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_time_span");
     for f in fixtures(&m, "accepted") {
         let id = f["id"].as_str().expect("id");
         let span = &f["solver"]["time_span"];
@@ -367,7 +355,7 @@ fn timestamp_to_seconds_agrees_with_resolve_time_span_on_every_fixture() {
 
 #[test]
 fn timestamp_to_seconds_counts_from_the_document_origin() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_time_span");
     let reference = load(&fixture_by_id(&m, "timestamps_reference_time")).expect("loads");
     assert_eq!(
         earthsci_ast::timestamp_to_seconds(&reference, "2019-07-01T00:00:00Z").expect("converts"),
@@ -392,7 +380,7 @@ fn timestamp_to_seconds_counts_from_the_document_origin() {
 
 #[test]
 fn the_origin_and_converter_are_consistent_for_exactly_representable_timestamps() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_time_span");
     let posix = load(&fixture_by_id(&m, "timestamps_posix")).expect("loads");
     let reference = load(&fixture_by_id(&m, "timestamps_reference_time")).expect("loads");
     let origin = earthsci_ast::time_origin(&reference).expect("an origin");
@@ -452,7 +440,7 @@ fn a_bad_timestamp_is_reported_before_a_bad_origin() {
 
 #[test]
 fn the_accessors_refuse_a_bad_origin_or_timestamp() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_time_span");
     // A present origin that is not a date-time: built in memory, so the schema
     // format has no chance to refuse it first.
     let bad: earthsci_ast::EsmFile = serde_json::from_str(&decay_doc(
@@ -550,7 +538,7 @@ fn check_clock_case<S: earthsci_ast::TimeOriginSource + ?Sized>(
 
 #[test]
 fn the_clock_accessors_on_a_domain() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_time_span");
     let clock = &m["clock"];
     assert!(
         clock["bindings_required"]

@@ -20,7 +20,7 @@ fn suite_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("RANGE_RESTRICTED_RHS_DIR") {
         return PathBuf::from(dir);
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/range_restricted_rhs")
+    common::repo_fixture("conformance/range_restricted_rhs")
 }
 
 fn manifest() -> Value {

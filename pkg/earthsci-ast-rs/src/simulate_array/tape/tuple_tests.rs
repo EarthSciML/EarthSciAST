@@ -273,7 +273,7 @@ fn a_ragged_gather_of_a_two_dimensional_state_reads_it_in_place() {
 // Build-time data and laziness inside a tuple-list body.
 // ---------------------------------------------------------------------------
 
-use super::test_support::{agrees_or_refuses, idx};
+use super::test_support::{agrees_or_refuses, idx, konst};
 use std::collections::HashMap;
 
 /// A ragged contraction `v' = Σ_{k ∈ nz(i)} body` over three rows whose
@@ -315,10 +315,6 @@ fn ragged_doc(cnt: Value, body: Value, filter: Option<Value>) -> Value {
     })
 }
 
-fn cnst(v: Value) -> Value {
-    json!({"op": "const", "args": [], "value": v})
-}
-
 fn p_positive() -> Value {
     json!({"op": ">", "args": ["p", 0]})
 }
@@ -343,7 +339,7 @@ fn states() -> Vec<Vec<f64>> {
 /// agree exactly still are.
 #[test]
 fn a_branch_join_is_build_time_data_only_when_its_branches_agree() {
-    let cnt = json!({"op": "ifelse", "args": [p_positive(), cnst(json!([2, 3, 1])), cnst(json!([1, 1, 1]))]});
+    let cnt = json!({"op": "ifelse", "args": [p_positive(), konst(json!([2, 3, 1])), konst(json!([1, 1, 1]))]});
     let compiled = super::test_support::compile(ragged_doc(cnt, wv(), None));
     let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
     assert!(
@@ -353,7 +349,7 @@ fn a_branch_join_is_build_time_data_only_when_its_branches_agree() {
         "{refused:?}"
     );
 
-    let cnt = json!({"op": "ifelse", "args": [p_positive(), cnst(json!([2, 3, 1])), cnst(json!([2, 3, 1]))]});
+    let cnt = json!({"op": "ifelse", "args": [p_positive(), konst(json!([2, 3, 1])), konst(json!([2, 3, 1]))]});
     let compiled = super::test_support::compile(ragged_doc(cnt, wv(), None));
     super::test_support::ab(&compiled, &both_branches());
 }
@@ -365,7 +361,7 @@ fn a_branch_join_subscript_is_not_build_time_data() {
     let body = json!({"op": "*", "args": [
         idx(json!("w"), &[json!("i"), json!("k")]),
         idx(json!("v"), &[json!({"op": "ifelse", "args": [p_positive(), "i", "k"]})])]});
-    let compiled = super::test_support::compile(ragged_doc(cnst(json!([2, 3, 1])), body, None));
+    let compiled = super::test_support::compile(ragged_doc(konst(json!([2, 3, 1])), body, None));
     let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
     assert!(
         refused
@@ -382,7 +378,7 @@ fn a_loop_symbol_first_read_in_a_branch_is_defined_on_both_paths() {
     let body = json!({"op": "*", "args": [
         {"op": "ifelse", "args": [p_positive(), "k", {"op": "*", "args": [2, "k"]}]},
         wv()]});
-    let compiled = super::test_support::compile(ragged_doc(cnst(json!([2, 3, 1])), body, None));
+    let compiled = super::test_support::compile(ragged_doc(konst(json!([2, 3, 1])), body, None));
     super::test_support::ab(&compiled, &both_branches());
 }
 
@@ -394,12 +390,12 @@ fn a_loop_symbol_first_read_in_a_branch_is_defined_on_both_paths() {
 #[test]
 fn a_fault_in_a_filtered_tuple_body_is_not_certain() {
     let base =
-        json!({"op": "+", "args": [cnst(json!([1.0, 2.0, 3.0])), idx(json!("p"), &[json!(1)])]});
+        json!({"op": "+", "args": [konst(json!([1.0, 2.0, 3.0])), idx(json!("p"), &[json!(1)])]});
     let body =
         json!({"op": "*", "args": [idx(base, &[json!("k")]), idx(json!("v"), &[json!("k")])]});
     let filter = json!({"op": ">", "args": [idx(json!("v"), &[json!("k")]), 0]});
     let compiled =
-        super::test_support::compile(ragged_doc(cnst(json!([2, 3, 1])), body, Some(filter)));
+        super::test_support::compile(ragged_doc(konst(json!([2, 3, 1])), body, Some(filter)));
     let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
     assert!(
         refused
@@ -419,14 +415,14 @@ fn a_tuple_gather_from_an_empty_const_axis_is_refused_under_any_policy() {
     use crate::value_invention::BoundaryKind;
     for kind in [BoundaryKind::Periodic, BoundaryKind::Clamp] {
         let body = json!({"op": "*", "args": [idx(json!("C"), &[json!("k")]), idx(json!("v"), &[json!("i")])]});
-        let mut doc = ragged_doc(cnst(json!([2, 3, 1])), body, None);
+        let mut doc = ragged_doc(konst(json!([2, 3, 1])), body, None);
         doc["index_sets"]["none"] = json!({"kind": "interval", "size": 0});
         doc["models"]["M"]["variables"]["C"] =
             json!({"type": "unknown", "units": "1", "shape": ["none"]});
         doc["models"]["M"]["equations"]
             .as_array_mut()
             .unwrap()
-            .push(json!({"lhs": "C", "rhs": cnst(json!([]))}));
+            .push(json!({"lhs": "C", "rhs": konst(json!([]))}));
         let mut compiled = super::test_support::compile(doc);
         let scope: ConstArrayScope = (*compiled.const_scope).clone();
         compiled.const_scope = std::sync::Arc::new(scope.with_boundary("C", vec![kind]));
@@ -482,10 +478,10 @@ fn star_join_doc(
                 "y": {"type": "unknown", "units": "1", "shape": ["outs", "frees"], "default": 1.0}
             },
             "equations": [
-                {"lhs": "key", "rhs": cnst(json!(key))},
-                {"lhs": "val", "rhs": cnst(json!(val))},
-                {"lhs": "okey", "rhs": cnst(json!(okey))},
-                {"lhs": "w", "rhs": cnst(json!(w))},
+                {"lhs": "key", "rhs": konst(json!(key))},
+                {"lhs": "val", "rhs": konst(json!(val))},
+                {"lhs": "okey", "rhs": konst(json!(okey))},
+                {"lhs": "w", "rhs": konst(json!(w))},
                 {"lhs": "total", "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
                     "output_idx": ["o", "f"],
                     "ranges": {"o": {"from": "outs"}, "f": {"from": "frees"}, "a": {"from": "bigs"}},
@@ -729,11 +725,11 @@ fn hot_soak_doc(n_g: usize, n_v: usize, n_i: usize, n_s: usize, n_h: usize) -> V
                 "y": {"type": "unknown", "units": "1", "shape": ["gs", "vs", "hs"], "default": 1.0}
             },
             "equations": [
-                {"lhs": "day", "rhs": cnst(json!(day))},
-                {"lhs": "vday", "rhs": cnst(json!(vday))},
-                {"lhs": "hour", "rhs": cnst(json!(hour))},
-                {"lhs": "hod", "rhs": cnst(json!(hod))},
-                {"lhs": "big", "rhs": cnst(json!(big))},
+                {"lhs": "day", "rhs": konst(json!(day))},
+                {"lhs": "vday", "rhs": konst(json!(vday))},
+                {"lhs": "hour", "rhs": konst(json!(hour))},
+                {"lhs": "hod", "rhs": konst(json!(hod))},
+                {"lhs": "big", "rhs": konst(json!(big))},
                 {"lhs": "total", "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
                     "output_idx": ["g", "v", "h"],
                     "ranges": {"g": {"from": "gs"}, "v": {"from": "vs"}, "h": {"from": "hs"},
@@ -891,7 +887,7 @@ fn with_unmatched_outputs(mut doc: Value, n_out: usize, n_key: usize) -> Value {
         .collect();
     let eqs = doc["models"]["M"]["equations"].as_array_mut().unwrap();
     assert_eq!(eqs[2]["lhs"], json!("okey"));
-    eqs[2]["rhs"] = cnst(json!(okey));
+    eqs[2]["rhs"] = konst(json!(okey));
     doc
 }
 
@@ -1070,10 +1066,10 @@ fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
                 "total": {"type": "unknown", "units": "1", "default": 0.0}
             },
             "equations": [
-                {"lhs": "kl", "rhs": cnst(json!(kl))},
-                {"lhs": "kr", "rhs": cnst(json!(kr))},
-                {"lhs": "cl", "rhs": cnst(json!(ones))},
-                {"lhs": "cr", "rhs": cnst(json!(ones))},
+                {"lhs": "kl", "rhs": konst(json!(kl))},
+                {"lhs": "kr", "rhs": konst(json!(kr))},
+                {"lhs": "cl", "rhs": konst(json!(ones))},
+                {"lhs": "cr", "rhs": konst(json!(ones))},
                 {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
                          "expr": {"op": "D", "args": [idx(json!("v"), &[json!("j")])], "wrt": "t"},
                          "ranges": {"j": {"from": "rs"}}},
@@ -1139,10 +1135,10 @@ fn two_on_clauses_over_one_symbol_pair_are_one_composite_gate() {
                 "total": {"type": "unknown", "units": "1", "default": 0.0}
             },
             "equations": [
-                {"lhs": "kl", "rhs": cnst(json!(kl))},
-                {"lhs": "kr", "rhs": cnst(json!(kr))},
-                {"lhs": "cl", "rhs": cnst(json!(ones))},
-                {"lhs": "cr", "rhs": cnst(json!(ones))},
+                {"lhs": "kl", "rhs": konst(json!(kl))},
+                {"lhs": "kr", "rhs": konst(json!(kr))},
+                {"lhs": "cl", "rhs": konst(json!(ones))},
+                {"lhs": "cr", "rhs": konst(json!(ones))},
                 {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
                          "expr": {"op": "D", "args": [idx(json!("v"), &[json!("j")])], "wrt": "t"},
                          "ranges": {"j": {"from": "rs"}}},
@@ -1212,8 +1208,8 @@ fn a_constant_key_clause_and_a_float_column_clause_stay_separate_gates() {
                 "total": {"type": "unknown", "units": "1", "default": 0.0}
             },
             "equations": [
-                {"lhs": "kl", "rhs": cnst(json!(kl))},
-                {"lhs": "kr", "rhs": cnst(json!(kr))},
+                {"lhs": "kl", "rhs": konst(json!(kl))},
+                {"lhs": "kr", "rhs": konst(json!(kr))},
                 {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
                          "expr": {"op": "D", "args": [idx(json!("v"), &[json!("j")])], "wrt": "t"},
                          "ranges": {"j": {"from": "rs"}}},
@@ -1241,7 +1237,7 @@ fn an_all_negative_zero_ragged_row_sums_to_positive_zero() {
     let body = json!({"op": "-", "args": [{"op": "*", "args": [0.0, {"op": "exp", "args": [
         idx(json!("v"), &[idx(json!("cols"), &[json!("i"), json!("k")])])]}]}]});
     for cnt in [json!([2, 3, 1]), json!([1, 1, 1])] {
-        let doc = ragged_doc(cnst(cnt), body.clone(), None);
+        let doc = ragged_doc(konst(cnt), body.clone(), None);
         let prog = ab_check(doc.clone(), -2.0, 2.0);
         assert_eq!(opcount(&prog, "SegReduce"), 1);
         let compiled = super::test_support::compile(doc);
@@ -1302,10 +1298,10 @@ fn contracted_parent_doc(free_output: bool) -> Value {
                 "v": {"type": "unknown", "units": "1", "shape": v_shape, "default": 1.0}
             },
             "equations": [
-                {"lhs": "cnt", "rhs": cnst(json!(CP_CNT))},
-                {"lhs": "cols", "rhs": cnst(json!(CP_COLS))},
-                {"lhs": "w", "rhs": cnst(json!(CP_W))},
-                {"lhs": "g", "rhs": cnst(json!(CP_G))},
+                {"lhs": "cnt", "rhs": konst(json!(CP_CNT))},
+                {"lhs": "cols", "rhs": konst(json!(CP_COLS))},
+                {"lhs": "w", "rhs": konst(json!(CP_W))},
+                {"lhs": "g", "rhs": konst(json!(CP_G))},
                 {"lhs": lhs, "rhs": rhs}
             ]
         }}

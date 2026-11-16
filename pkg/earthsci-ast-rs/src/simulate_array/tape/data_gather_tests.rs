@@ -9,16 +9,12 @@
 
 use super::taped;
 use super::test_support::{
-    ab, agrees_or_refuses, compile, d_eq, doc, idx, lit, no_params, opcount, plus,
+    ab, agrees_or_refuses, compile, d_eq, doc, idx, lit, minus, no_params, opcount, plus,
 };
 use crate::simulate_array::ConstArrayScope;
 use crate::value_invention::BoundaryKind;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-
-fn minus(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
-    json!({"op": "-", "args": [a, b]})
-}
 
 fn floor(a: serde_json::Value) -> serde_json::Value {
     json!({"op": "floor", "args": [a]})
