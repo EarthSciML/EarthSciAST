@@ -1189,26 +1189,7 @@ pub(super) struct Cx<'a> {
     pub(super) dy_len: usize,
 }
 
-/// Whether `ins` is straight-line: it reads and writes only slab slots, the
-/// state, the parameters, `t` and `dy`, moves no control and publishes
-/// nothing, so [`exec_straight`] runs it on any thread.
-#[cfg(not(target_arch = "wasm32"))]
-pub(super) fn is_straight(ins: &Instr) -> bool {
-    !matches!(
-        ins,
-        Instr::LoadForcing { .. }
-            | Instr::Fault { .. }
-            | Instr::FaultScan { .. }
-            | Instr::Sweep { .. }
-            | Instr::ScalarRead { .. }
-            | Instr::DataGather { faults: true, .. }
-            | Instr::JmpIfZero { .. }
-            | Instr::Export { .. }
-            | Instr::Lanes { .. }
-    )
-}
-
-/// Execute one straight-line instruction (see [`is_straight`]) with this
+/// Execute one straight-line instruction (see [`Instr::may_run_on_worker`]) with this
 /// thread's `scratch`, splitting it under width `call_split`.
 ///
 /// # Safety

@@ -198,13 +198,10 @@ impl Analysis {
         }
         let mut fixed = vec![false; n];
         for (pc, ins) in prog.instrs.iter().enumerate() {
-            let len = match ins {
-                Instr::JmpIfZero {
-                    n_true, n_false, ..
-                } => (*n_true + *n_false) as usize,
-                Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
-                _ => continue,
-            };
+            if !matches!(ins.effect(), Effect::Branch | Effect::Recurrence) {
+                continue;
+            }
+            let len = ins.region_len(&tables);
             for f in &mut fixed[pc..(pc + 1 + len).min(n)] {
                 *f = true;
             }

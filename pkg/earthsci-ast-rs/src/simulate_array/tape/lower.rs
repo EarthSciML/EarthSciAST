@@ -1514,29 +1514,7 @@ impl<'m> TapeBuilder<'m> {
     /// neither fault nor touch anything outside its own slot, so it may run
     /// where its operands are available rather than where it was lowered.
     fn hoistable(instr: &Instr) -> bool {
-        matches!(
-            instr,
-            Instr::Bin { .. }
-                | Instr::Un { .. }
-                | Instr::Neg { .. }
-                | Instr::Select { .. }
-                | Instr::Gather { .. }
-                | Instr::LoadElem { .. }
-                | Instr::Ramp { .. }
-                | Instr::Fill { .. }
-                | Instr::Copy { .. }
-                | Instr::Region { .. }
-                | Instr::Assemble { .. }
-                | Instr::ConstArray { .. }
-                | Instr::Count { .. }
-                | Instr::Reduce { .. }
-                | Instr::Scan { .. }
-                | Instr::IndexGather { .. }
-                | Instr::TableGather { .. }
-                | Instr::DataGather { faults: false, .. }
-                | Instr::SegReduce { .. }
-                | Instr::Reshape { .. }
-        )
+        instr.effect() == Effect::Pure
     }
 
     // -- LV helpers -----------------------------------------------------------
@@ -8962,24 +8940,7 @@ fn color_slab(prog: &mut TapeProgram) {
         // later runs — so out must not reuse a source buffer freed by this
         // very instruction. Release dying operands BEFORE allocating out only
         // for alias-safe (index-aligned elementwise) instructions.
-        let alias_safe = !matches!(
-            prog.instrs[i],
-            Instr::Gather { .. }
-                | Instr::Region { .. }
-                | Instr::Fused { .. }
-                | Instr::Lanes { .. }
-                | Instr::Reduce { .. }
-                | Instr::Count { .. }
-                | Instr::Scan { .. }
-                | Instr::Assemble { .. }
-                | Instr::IndexGather { .. }
-                | Instr::TableGather { .. }
-                | Instr::DataGather { .. }
-                | Instr::SegReduce { .. }
-                | Instr::Reshape { .. }
-                | Instr::Sweep { .. }
-                | Instr::ScalarRead { .. }
-        );
+        let alias_safe = prog.instrs[i].may_overwrite_source();
         let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();
         prog.instrs[i].for_each_def(&prog.tables(), |o| {
             if def[o as usize] == i {

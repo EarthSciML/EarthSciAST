@@ -153,6 +153,29 @@ impl From<SrcRef> for Operand {
     }
 }
 
+/// What running an instruction does besides defining its slots
+/// ([`Instr::effect`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Effect {
+    /// A map of its operands into its own slots: it may run wherever its
+    /// operands are available, and dropping it when nothing reads its slots
+    /// changes nothing.
+    Pure,
+    /// May latch the evaluation's fail-closed fault.
+    Faults,
+    /// Chooses which of the instructions after it run ([`Instr::JmpIfZero`]).
+    Branch,
+    /// Runs the instructions after it once per cell ([`Instr::Sweep`]).
+    Recurrence,
+    /// Publishes into the runtime observed map ([`Instr::Export`]).
+    Publishes,
+    /// Writes `dy`.
+    WritesDy,
+    /// Runs a lane program ([`Instr::Lanes`]), which writes slots, `dy`
+    /// positions, or both ([`LaneSpec::writes_dy`]).
+    Lanes,
+}
+
 /// One tape instruction. See the module docs for the semantics contract.
 #[derive(Clone, Debug)]
 pub(crate) enum Instr {
@@ -716,6 +739,168 @@ impl Instr {
             Instr::DyWrite { .. } => "DyWrite",
             Instr::Fused { .. } => "Fused",
             Instr::Lanes { .. } => "Lanes",
+        }
+    }
+
+    /// What running this instruction does besides defining its slots.
+    pub(crate) fn effect(&self) -> Effect {
+        match self {
+            Instr::Bin { .. }
+            | Instr::Un { .. }
+            | Instr::Neg { .. }
+            | Instr::Select { .. }
+            | Instr::Gather { .. }
+            | Instr::LoadElem { .. }
+            | Instr::Ramp { .. }
+            | Instr::Fill { .. }
+            | Instr::Copy { .. }
+            | Instr::Region { .. }
+            | Instr::Assemble { .. }
+            | Instr::ConstArray { .. }
+            | Instr::Count { .. }
+            | Instr::Reduce { .. }
+            | Instr::Scan { .. }
+            | Instr::IndexGather { .. }
+            | Instr::TableGather { .. }
+            | Instr::DataGather { faults: false, .. }
+            | Instr::SegReduce { .. }
+            | Instr::Reshape { .. }
+            | Instr::Fused { .. } => Effect::Pure,
+            Instr::LoadForcing { .. }
+            | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
+            | Instr::ScalarRead { .. }
+            | Instr::DataGather { faults: true, .. } => Effect::Faults,
+            Instr::JmpIfZero { .. } => Effect::Branch,
+            Instr::Sweep { .. } => Effect::Recurrence,
+            Instr::Export { .. } => Effect::Publishes,
+            Instr::DyWrite { .. } => Effect::WritesDy,
+            Instr::Lanes { .. } => Effect::Lanes,
+        }
+    }
+
+    /// How many instructions after this one form its region: a
+    /// [`Instr::JmpIfZero`]'s two branches, a [`Instr::Sweep`]'s body, 0
+    /// for every other instruction.
+    pub(crate) fn region_len(&self, t: &SlotTables) -> usize {
+        match self {
+            Instr::JmpIfZero {
+                n_true, n_false, ..
+            } => (*n_true + *n_false) as usize,
+            Instr::Sweep { spec } => t.sweeps[*spec as usize].body_len as usize,
+            Instr::Bin { .. }
+            | Instr::Un { .. }
+            | Instr::Neg { .. }
+            | Instr::Select { .. }
+            | Instr::Gather { .. }
+            | Instr::LoadElem { .. }
+            | Instr::Ramp { .. }
+            | Instr::Fill { .. }
+            | Instr::Copy { .. }
+            | Instr::Region { .. }
+            | Instr::Assemble { .. }
+            | Instr::ConstArray { .. }
+            | Instr::LoadForcing { .. }
+            | Instr::Count { .. }
+            | Instr::Reduce { .. }
+            | Instr::Scan { .. }
+            | Instr::IndexGather { .. }
+            | Instr::TableGather { .. }
+            | Instr::DataGather { .. }
+            | Instr::SegReduce { .. }
+            | Instr::Reshape { .. }
+            | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
+            | Instr::ScalarRead { .. }
+            | Instr::Export { .. }
+            | Instr::DyWrite { .. }
+            | Instr::Fused { .. }
+            | Instr::Lanes { .. } => 0,
+        }
+    }
+
+    /// Whether a slot this instruction defines may take over the storage of
+    /// a source that dies here. True only where element `k` of the output
+    /// is written after the last read of element `k` of every source and of
+    /// nothing else: an index-aligned elementwise map, or an instruction
+    /// that defines no array. A gather, region write, reduction or fused
+    /// group reads its sources at other offsets than the one it writes.
+    pub(crate) fn may_overwrite_source(&self) -> bool {
+        match self {
+            Instr::Bin { .. }
+            | Instr::Un { .. }
+            | Instr::Neg { .. }
+            | Instr::Select { .. }
+            | Instr::LoadElem { .. }
+            | Instr::Ramp { .. }
+            | Instr::Fill { .. }
+            | Instr::Copy { .. }
+            | Instr::ConstArray { .. }
+            | Instr::LoadForcing { .. }
+            | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
+            | Instr::JmpIfZero { .. }
+            | Instr::Export { .. }
+            | Instr::DyWrite { .. } => true,
+            Instr::Gather { .. }
+            | Instr::Region { .. }
+            | Instr::Assemble { .. }
+            | Instr::Count { .. }
+            | Instr::Reduce { .. }
+            | Instr::Scan { .. }
+            | Instr::IndexGather { .. }
+            | Instr::TableGather { .. }
+            | Instr::DataGather { .. }
+            | Instr::SegReduce { .. }
+            | Instr::Reshape { .. }
+            | Instr::Sweep { .. }
+            | Instr::ScalarRead { .. }
+            | Instr::Fused { .. }
+            | Instr::Lanes { .. } => false,
+        }
+    }
+
+    /// Whether the executors may run this instruction on any thread, as a
+    /// straight-line instruction: it reads and writes only slab slots, the
+    /// state, the parameters, `t` and `dy`, moves no control, latches no
+    /// fault and publishes nothing.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn may_run_on_worker(&self) -> bool {
+        match self {
+            Instr::Bin { .. }
+            | Instr::Un { .. }
+            | Instr::Neg { .. }
+            | Instr::Select { .. }
+            | Instr::Gather { .. }
+            | Instr::LoadElem { .. }
+            | Instr::Ramp { .. }
+            | Instr::Fill { .. }
+            | Instr::Copy { .. }
+            | Instr::Region { .. }
+            | Instr::Assemble { .. }
+            | Instr::ConstArray { .. }
+            | Instr::Count { .. }
+            | Instr::Reduce { .. }
+            | Instr::Scan { .. }
+            | Instr::IndexGather { .. }
+            | Instr::TableGather { .. }
+            | Instr::DataGather { faults: false, .. }
+            | Instr::SegReduce { .. }
+            | Instr::Reshape { .. }
+            | Instr::DyWrite { .. }
+            | Instr::Fused { .. } => true,
+            // Latches a fault, which the calling thread orders.
+            Instr::LoadForcing { .. }
+            | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
+            | Instr::ScalarRead { .. }
+            | Instr::DataGather { faults: true, .. } => false,
+            // Moves control over the instructions after it.
+            Instr::JmpIfZero { .. } | Instr::Sweep { .. } => false,
+            // Publishes into the observed map.
+            Instr::Export { .. } => false,
+            // Runs through the lane executor, which owns its register file.
+            Instr::Lanes { .. } => false,
         }
     }
 }
@@ -2541,6 +2726,13 @@ pub(crate) struct LaneSpec {
     pub direct: Vec<(u32, u32)>,
 }
 
+impl LaneSpec {
+    /// Whether any write stores to `dy` (rather than to a slot).
+    pub(crate) fn writes_dy(&self) -> bool {
+        self.writes.iter().any(|w| matches!(w.dst, LaneDst::Dy(_)))
+    }
+}
+
 /// What kind of source rule a program rule entry describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuleKind {
@@ -2721,14 +2913,9 @@ impl TapeProgram {
     /// may skip or repeat. The region's header itself is not inside it.
     pub(crate) fn guarded_positions(&self) -> Vec<bool> {
         let mut guarded = vec![false; self.instrs.len()];
+        let tables = self.tables();
         for (pc, ins) in self.instrs.iter().enumerate() {
-            let len = match ins {
-                Instr::JmpIfZero {
-                    n_true, n_false, ..
-                } => (*n_true + *n_false) as usize,
-                Instr::Sweep { spec } => self.sweeps[*spec as usize].body_len as usize,
-                _ => 0,
-            };
+            let len = ins.region_len(&tables);
             let end = (pc + 1 + len).min(guarded.len());
             guarded[pc + 1..end].fill(true);
         }

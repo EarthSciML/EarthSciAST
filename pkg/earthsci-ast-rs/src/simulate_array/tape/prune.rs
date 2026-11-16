@@ -35,13 +35,7 @@ pub(super) fn split_output_only(prog: &mut TapeProgram) {
     let mut units: Vec<std::ops::Range<usize>> = Vec::new();
     let mut pc = sec.start;
     while pc < sec.end {
-        let len = match &prog.instrs[pc] {
-            Instr::JmpIfZero {
-                n_true, n_false, ..
-            } => 1 + (*n_true + *n_false) as usize,
-            Instr::Sweep { spec } => 1 + prog.sweeps[*spec as usize].body_len as usize,
-            _ => 1,
-        };
+        let len = 1 + prog.instrs[pc].region_len(&tables);
         let end = (pc + len).min(sec.end);
         units.push(pc..end);
         pc = end;
@@ -54,23 +48,15 @@ pub(super) fn split_output_only(prog: &mut TapeProgram) {
             ins.for_each_def(&tables, |s| def_unit[s as usize] = u as u32);
         }
     }
-    let root = |ins: &Instr| {
-        if let Instr::Lanes { spec } = ins {
-            return tables.lanes[*spec as usize]
-                .writes
-                .iter()
-                .any(|w| matches!(w.dst, LaneDst::Dy(_)));
-        }
-        matches!(
-            ins,
-            Instr::DyWrite { .. }
-                | Instr::Fault { .. }
-                | Instr::FaultScan { .. }
-                | Instr::ScalarRead { .. }
-                | Instr::DataGather { faults: true, .. }
-                | Instr::LoadForcing { .. }
-                | Instr::Sweep { .. }
-        )
+    // A root has an effect beyond its slots that a call must keep: a
+    // fault, a `dy` write, or a recurrence sweep.
+    let root = |ins: &Instr| match ins.effect() {
+        Effect::Faults | Effect::WritesDy | Effect::Recurrence => true,
+        Effect::Lanes => match ins {
+            Instr::Lanes { spec } => tables.lanes[*spec as usize].writes_dy(),
+            _ => unreachable!("only `Lanes` runs a lane program"),
+        },
+        Effect::Pure | Effect::Branch | Effect::Publishes => false,
     };
     let mut needed = vec![false; units.len()];
     for u in (0..units.len()).rev() {

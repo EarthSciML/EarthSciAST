@@ -26,7 +26,7 @@
 //! one dispatch), a lane program, an instruction with its own precision, and
 //! any instruction that would split but cannot run share by share.
 
-use super::interp::{Cx, exec_share, exec_straight, is_straight, shares};
+use super::interp::{Cx, exec_share, exec_straight, shares};
 use super::resolve::rm_strides;
 use super::*;
 
@@ -150,16 +150,11 @@ fn place(
         return Place::Loop(ch.end - pc);
     }
     let ins = &prog.instrs[pc];
-    match ins {
-        Instr::JmpIfZero {
-            n_true, n_false, ..
-        } => return Place::Loop(1 + (*n_true + *n_false) as usize),
-        Instr::Sweep { spec } => {
-            return Place::Loop(1 + prog.sweeps[*spec as usize].body_len as usize);
-        }
-        _ => {}
+    let region = ins.region_len(&prog.tables());
+    if region > 0 {
+        return Place::Loop(1 + region);
     }
-    if !is_straight(ins) || prog.precision.get(pc).is_some() {
+    if !ins.may_run_on_worker() || prog.precision.get(pc).is_some() {
         return Place::Loop(1);
     }
     let split = match ins {
