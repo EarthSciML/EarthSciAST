@@ -17,6 +17,7 @@
 //! derivative runs are each read or written once per strip, in order.
 
 use super::fused::{MSrc, dispatch_bin_kernel, dispatch_un_kernel, fch_sel, fch1, fch2};
+use super::interp::Cx;
 use super::lane_fold::{
     B_DY, B_PARAM, B_REG, B_SPLAT, B_STATE, LOp, LaneCode, N_BASES, R_OTHER, ROp, RTerm, SSTRIDE,
     STRIP, strip_fold,
@@ -134,21 +135,23 @@ impl LaneScratch {
 
 /// Execute one lane program; under call split width `ways` (see `par`) its
 /// lanes are divided between workers, each lane whole on one of them.
-#[allow(clippy::too_many_arguments)]
-pub(super) unsafe fn exec_lanes(
-    spec: usize,
-    ls: &LaneSpec,
-    env: &Env,
-    slab_ptr: *mut f64,
-    slot_off: &[usize],
-    scratch: &mut LaneScratch,
-    dy: &mut [f64],
-    simd: SimdLevel,
-    ways: usize,
-) {
+///
+/// # Safety
+/// `cx` must describe the current call (its `dy` the call's whole `dy`),
+/// and every instruction this one depends on must have run.
+pub(super) unsafe fn exec_lanes(spec: usize, cx: &Cx, scratch: &mut LaneScratch, ways: usize) {
     #[cfg(target_arch = "wasm32")]
     let _ = ways;
+    let Cx {
+        env,
+        slab_ptr,
+        slot_off,
+        simd,
+        ..
+    } = *cx;
+    let ls = &env.prog.lanes[spec];
     if ls.lanes == 1 && ls.inputs.is_empty() {
+        let dy = unsafe { std::slice::from_raw_parts_mut(cx.dy, cx.dy_len) };
         unsafe { exec_one_lane(ls, env, slab_ptr, slot_off, scratch, dy) };
         return;
     }
@@ -202,8 +205,8 @@ pub(super) unsafe fn exec_lanes(
         slot_off,
     };
     let out = Out {
-        ptr: dy.as_mut_ptr(),
-        len: dy.len(),
+        ptr: cx.dy,
+        len: cx.dy_len,
     };
     let lanes = ls.lanes as usize;
     #[cfg(not(target_arch = "wasm32"))]

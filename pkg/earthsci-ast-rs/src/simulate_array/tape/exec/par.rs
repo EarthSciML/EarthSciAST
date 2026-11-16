@@ -23,8 +23,8 @@
 //! workers, which do the actual work.
 
 use super::fused::{
-    IndexTable, PAD_BYTES, PreTile, RunCursor, Window, fill_whole, n_scans, n_shifted,
-    run_fused_window, run_pre_tiled, seeds_itself,
+    Group, PAD_BYTES, RunCursor, Window, fill_whole, n_scans, n_shifted, run_fused_window,
+    run_pre_tiled, seeds_itself,
 };
 use super::pool;
 use super::resolve::{Rv, rm_strides};
@@ -713,20 +713,12 @@ pub(in crate::simulate_array::tape) struct FusedWorkers {
     scans: usize,
 }
 
-/// The resolved operands of one group, shared read-only by its workers.
+/// The resolved operands of one group, shared read-only by its workers,
+/// with the calling thread's precision.
 #[derive(Clone, Copy)]
 struct Shared<'a> {
-    fs: &'a FusedSpec,
-    svals: &'a [f64],
-    bases: &'a [*const f64],
-    whole_src: &'a [*const f64],
-    outs: &'a [(GroupIx, *mut f64)],
-    red: *mut f64,
-    idx: &'a [Option<IndexTable>],
-    node_elems: &'a [usize],
-    simd: SimdLevel,
+    g: Group<'a>,
     precision: crate::precision::Precision,
-    pre: Option<PreTile>,
 }
 
 // SAFETY: the pointers address the slab, the state and the observed arrays,
@@ -750,49 +742,26 @@ impl FusedWorkers {
         }
     }
 
-    /// Run fused group `fs` split into `ways` windows, one per worker.
+    /// Run fused group `g` split into `ways` windows, one per worker.
     ///
     /// # Safety
-    /// As for [`run_fused_window`]: `bases` and `outs` must be the group's
-    /// resolved operands, valid for its whole box; `whole_src` as for
-    /// [`fill_whole`] (each worker reads its own window of them).
-    #[allow(clippy::too_many_arguments)]
-    pub(super) unsafe fn run_split(
-        &mut self,
-        fs: &FusedSpec,
-        svals: &[f64],
-        bases: &[*const f64],
-        whole_src: &[*const f64],
-        outs: &[(GroupIx, *mut f64)],
-        red: *mut f64,
-        idx: &[Option<IndexTable>],
-        node_elems: &[usize],
-        simd: SimdLevel,
-        ways: usize,
-        pre: Option<PreTile>,
-    ) {
+    /// As for [`run_fused_window`]: `g.bases` and `g.outs` must be the
+    /// group's resolved operands, valid for its whole box; `g.whole_src` as
+    /// for [`fill_whole`] (each worker reads its own window of them).
+    pub(super) unsafe fn run_split(&mut self, g: &Group, ways: usize) {
         self.grow(ways);
-        let g = SplitGeom::of(fs, outs, red, ways);
-        if g.init.is_some() {
+        let geom = SplitGeom::of(g.fs, g.outs, g.red, ways);
+        if geom.init.is_some() {
             for (w, wk) in self.workers[..ways].iter_mut().enumerate() {
-                let (lo, hi) = g.cut(w);
+                let (lo, hi) = geom.cut(w);
                 if wk.acc.len() < hi.saturating_sub(lo) {
                     wk.acc = padded(hi - lo);
                 }
             }
         }
         let sh = Shared {
-            fs,
-            svals,
-            bases,
-            whole_src,
-            outs,
-            red,
-            idx,
-            node_elems,
-            simd,
+            g: *g,
             precision: crate::precision::active(),
-            pre,
         };
         let ws = WorkersPtr(self.workers.as_mut_ptr());
         pool::run(ways, &move |w| {
@@ -800,53 +769,29 @@ impl FusedWorkers {
             // SAFETY: share `w` runs exactly once per dispatch, so each
             // worker state has one user.
             let wk = unsafe { &mut *ws.0.add(w) };
-            unsafe { fused_share(&sh, wk, &g, w) };
+            unsafe { fused_share(&sh, wk, &geom, w) };
         });
     }
 
-    /// Run share `w` of fused group `fs` split `ways` wide on this thread,
+    /// Run share `w` of fused group `g` split `ways` wide on this thread,
     /// with this thread's own worker state: the window [`Self::run_split`]
     /// gives worker `w`.
     ///
     /// # Safety
     /// As for [`Self::run_split`].
-    #[allow(clippy::too_many_arguments)]
-    pub(super) unsafe fn run_own_share(
-        &mut self,
-        fs: &FusedSpec,
-        svals: &[f64],
-        bases: &[*const f64],
-        whole_src: &[*const f64],
-        outs: &[(GroupIx, *mut f64)],
-        red: *mut f64,
-        idx: &[Option<IndexTable>],
-        node_elems: &[usize],
-        simd: SimdLevel,
-        w: usize,
-        ways: usize,
-        pre: Option<PreTile>,
-    ) {
+    pub(super) unsafe fn run_own_share(&mut self, g: &Group, w: usize, ways: usize) {
         self.grow(1);
-        let g = SplitGeom::of(fs, outs, red, ways);
-        let (lo, hi) = g.cut(w);
+        let geom = SplitGeom::of(g.fs, g.outs, g.red, ways);
+        let (lo, hi) = geom.cut(w);
         let wk = &mut self.workers[0];
-        if g.init.is_some() && wk.acc.len() < hi.saturating_sub(lo) {
+        if geom.init.is_some() && wk.acc.len() < hi.saturating_sub(lo) {
             wk.acc = padded(hi - lo);
         }
         let sh = Shared {
-            fs,
-            svals,
-            bases,
-            whole_src,
-            outs,
-            red,
-            idx,
-            node_elems,
-            simd,
+            g: *g,
             precision: crate::precision::active(),
-            pre,
         };
-        unsafe { fused_share(&sh, wk, &g, w) };
+        unsafe { fused_share(&sh, wk, &geom, w) };
     }
 }
 
@@ -909,94 +854,62 @@ impl SplitGeom {
 
 /// Share `w` of a split fused group, on worker state `wk` (whose `acc` holds
 /// at least the share's accumulator cells).
-unsafe fn fused_share(sh: &Shared, wk: &mut FusedWorker, g: &SplitGeom, w: usize) {
-    let (lo, hi) = g.cut(w);
+unsafe fn fused_share(sh: &Shared, wk: &mut FusedWorker, geom: &SplitGeom, w: usize) {
+    let (lo, hi) = geom.cut(w);
     if lo >= hi {
         return;
     }
-    let period = g.period;
+    let period = geom.period;
+    let g = &sh.g;
     // The caller's precision is thread-local; carry it over.
     let _p = crate::precision::enter(sh.precision);
     // A reduction's cells `[lo, hi)` live in the worker's own buffer,
     // addressed as if it started at cell 0.
-    let red = match g.init {
+    let red = match geom.init {
         Some(init) => {
             let acc = &mut wk.acc[..hi - lo];
-            if !g.seeded {
+            if !geom.seeded {
                 acc.fill(init);
             }
             acc.as_mut_ptr().wrapping_sub(lo)
         }
-        None => sh.red,
+        None => g.red,
     };
-    if let Some(pt) = sh.pre {
-        unsafe {
-            run_pre_tiled(
-                sh.simd,
-                sh.fs,
-                pt,
-                sh.svals,
-                sh.bases,
-                sh.whole_src,
-                sh.outs,
-                red,
-                sh.idx,
-                &mut wk.fregs,
-                &mut wk.cursor,
-                sh.node_elems,
-                lo,
-                hi,
-            )
-        };
+    if let Some(pt) = g.pre {
+        unsafe { run_pre_tiled(g, pt, red, &mut wk.fregs, &mut wk.cursor, lo, hi) };
         return;
     }
     unsafe {
-        fill_whole(sh.fs, sh.bases, sh.whole_src, lo, hi, period);
+        fill_whole(g.fs, g.bases, g.whole_src, lo, hi, period);
         // A group with a reverse scan visits its rows from the last: the
         // share's columns of each row, one row at a time.
-        if let Some((rows, len)) = sh.fs.rows_reversed() {
+        if let Some((rows, len)) = g.fs.rows_reversed() {
             debug_assert_eq!(period, len, "a reverse group splits by columns");
             for r in (0..rows).rev() {
                 let win = Window {
                     lo: r * len + lo,
                     hi: r * len + hi,
                     period: 0,
-                    node_elems: sh.node_elems,
+                    node_elems: g.node_elems,
                 };
-                run_fused_window(
-                    sh.simd,
-                    sh.fs,
-                    sh.svals,
-                    sh.bases,
-                    sh.outs,
-                    red,
-                    sh.idx,
-                    &mut wk.fregs,
-                    &mut wk.cursor,
-                    win,
-                );
+                run_fused_window(g, red, &mut wk.fregs, &mut wk.cursor, win);
             }
             return;
         }
         run_fused_window(
-            sh.simd,
-            sh.fs,
-            sh.svals,
-            sh.bases,
-            sh.outs,
+            g,
             red,
-            sh.idx,
             &mut wk.fregs,
             &mut wk.cursor,
             Window {
                 lo,
                 hi,
                 period,
-                node_elems: sh.node_elems,
+                node_elems: g.node_elems,
             },
         );
-        if g.init.is_some() {
-            std::ptr::copy_nonoverlapping(wk.acc.as_ptr(), sh.red.add(lo), hi - lo);
+        if geom.init.is_some() {
+            std::ptr::copy_nonoverlapping(wk.acc.as_ptr(), g.red.add(lo), hi - lo);
         }
     }
 }

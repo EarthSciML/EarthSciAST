@@ -17,9 +17,10 @@
 //! gather-product-sum run as a single pass (see `SumOfProducts`).
 
 use super::fused::{
-    FusedScratch, IndexTable, Window, dispatch_bin_kernel, dispatch_un_kernel, fill_whole,
+    FusedScratch, Group, Window, dispatch_bin_kernel, dispatch_un_kernel, fill_whole,
     resolve_fused, run_fused_window,
 };
+use super::interp::Cx;
 use super::kernels::{ew1, ew2, seg_reduce, table_gather};
 use super::par::FusedWorkers;
 use super::resolve::{Rv, SrcView};
@@ -625,7 +626,8 @@ struct Job<'a> {
     seg_dst: *mut f64,
     n_out: usize,
     ways: usize,
-    fused: Option<(&'a FusedSpec, super::fused::Resolved<'a>)>,
+    /// The cell group over the chain's output cells, resolved.
+    fused: Option<Group<'a>>,
     /// The tuple instructions and the reduction as one pass, when they are
     /// a gather, a product and a sum.
     sop: Option<SumOfProducts>,
@@ -641,8 +643,6 @@ struct Job<'a> {
     bufs: &'a [(*const f64, usize)],
     tmp: *mut f64,
     tmp_stride: usize,
-    idx: &'a [Option<IndexTable>],
-    simd: SimdLevel,
     precision: crate::precision::Precision,
 }
 
@@ -705,22 +705,21 @@ fn chain_ways(ch: &SegChain, threads: usize) -> usize {
 /// as the chain needs it, so the instructions run one by one instead.
 ///
 /// # Safety
-/// `slab_ptr` must be the slab `slot_off` lays out, `dy` the call's `dy`
-/// with `dy_home` its homes, and every instruction before `ch.start` of this
+/// `cx` must describe the current call, and every instruction before
+/// `ch.start` of this
 /// call already run.
-#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn run_chain(
     ch: &SegChain,
-    env: &Env,
-    slab_ptr: *mut f64,
-    slot_off: &[usize],
+    cx: &Cx,
     scratch: &mut ChainScratch,
     fscratch: &mut FusedScratch,
-    idx_tables: &[Vec<Option<IndexTable>>],
-    simd: SimdLevel,
-    dy_home: &[usize],
-    dy: *mut f64,
 ) -> bool {
+    let Cx {
+        env,
+        slab_ptr,
+        slot_off,
+        ..
+    } = *cx;
     // A serial call runs the chain too (its one share on this thread): the
     // single pass below is quicker than the instructions one by one.
     let ways = chain_ways(ch, fscratch.workers.threads);
@@ -778,20 +777,10 @@ pub(super) unsafe fn run_chain(
     let seg_src = unsafe { slab_ptr.add(slot_off[*src as usize]) as *const f64 };
     let seg_mask = mask.map(|m| unsafe { slab_ptr.add(slot_off[m as usize]) as *const f64 });
     let seg_dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
-    let (resolved, workers) = match ch.fused {
+    let (group, workers) = match ch.fused {
         Some(spec) => {
-            let (r, w) = unsafe {
-                resolve_fused(
-                    spec as usize,
-                    env,
-                    slab_ptr,
-                    slot_off,
-                    fscratch,
-                    dy_home,
-                    dy,
-                )
-            };
-            (Some((&prog.fused[spec as usize], r)), w)
+            let (g, _cursor, w) = unsafe { resolve_fused(spec as usize, cx, fscratch) };
+            (Some(g), w)
         }
         None => (None, &mut fscratch.workers),
     };
@@ -835,7 +824,6 @@ pub(super) unsafe fn run_chain(
         seg_dst,
         n_out: ch.n_out,
         ways,
-        idx: ch.fused.map_or(&[][..], |s| &idx_tables[s as usize][..]),
         sop,
         cap,
         // A quarter of a share more, at most the cells of the work the
@@ -844,8 +832,7 @@ pub(super) unsafe fn run_chain(
         bufs: &scratch.bufs,
         tmp,
         tmp_stride,
-        fused: resolved,
-        simd,
+        fused: group,
         precision: crate::precision::active(),
     };
     unsafe { run_job(workers, &job) };
@@ -886,8 +873,8 @@ unsafe fn run_job(workers: &mut FusedWorkers, job: &Job) {
         let (mask, init) = (job.seg_mask, job.init);
         if let Some(sp) = &job.sop {
             unsafe { sp.run(rows, mask, init, dst) };
-            if let Some((fs, r)) = &job.fused {
-                unsafe { cell_window(job, fs, r, fregs, cursor, c0, c1) };
+            if let Some(g) = &job.fused {
+                unsafe { cell_window(g, fregs, cursor, c0, c1) };
             }
             return;
         }
@@ -917,8 +904,8 @@ unsafe fn run_job(workers: &mut FusedWorkers, job: &Job) {
                 };
             }
             dispatch_bin_kernel!(&job.seg_op, fold);
-            if let Some((fs, r)) = &job.fused {
-                unsafe { cell_window(job, fs, r, fregs, cursor, b0, b1) };
+            if let Some(g) = &job.fused {
+                unsafe { cell_window(g, fregs, cursor, b0, b1) };
             }
             b0 = b1;
         }
@@ -988,36 +975,29 @@ impl Op {
 /// group at a time (more when one cell folds more).
 const CHAIN_BLOCK: usize = 512;
 
-/// The chain's cell group over cells `[c0, c1)`.
+/// The chain's cell group `g` over cells `[c0, c1)`.
 ///
 /// # Safety
-/// As for [`run_fused_window`], with `r` the group's resolved operands.
+/// As for [`run_fused_window`].
 unsafe fn cell_window(
-    job: &Job,
-    fs: &FusedSpec,
-    r: &super::fused::Resolved,
+    g: &Group,
     fregs: &mut [f64],
     cursor: &mut super::fused::RunCursor,
     c0: usize,
     c1: usize,
 ) {
     unsafe {
-        fill_whole(fs, r.bases, r.whole_src, c0, c1, 0);
+        fill_whole(g.fs, g.bases, g.whole_src, c0, c1, 0);
         run_fused_window(
-            job.simd,
-            fs,
-            r.svals,
-            r.bases,
-            r.outs,
+            g,
             std::ptr::null_mut(),
-            job.idx,
             fregs,
             cursor,
             Window {
                 lo: c0,
                 hi: c1,
                 period: 0,
-                node_elems: r.node_elems,
+                node_elems: g.node_elems,
             },
         );
     }
