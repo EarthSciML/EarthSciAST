@@ -186,7 +186,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
             .collect::<Vec<_>>()
             .join("; ");
         return Err(EsmError::StructuralDiagnostic {
-            code: first.code.as_code(),
+            code: first.code.as_str(),
             message: format!("Structural validation failed: {message}"),
             findings,
         });

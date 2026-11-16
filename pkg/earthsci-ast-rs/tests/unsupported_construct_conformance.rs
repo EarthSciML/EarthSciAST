@@ -12,7 +12,8 @@
 //! refusal case must now fail with `unsupported_construct` naming the construct
 //! and the evaluator; the control must still run.
 
-use earthsci_ast::{SolveOptions, load_path, run_inline_tests_with_base_dir};
+use earthsci_ast::load_path;
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -66,11 +67,13 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
         let id = case["id"].as_str().expect("`id` is a string");
         let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
         let file = load_path(&path).unwrap_or_else(|e| panic!("{id}: does not load: {e}"));
-        let results = run_inline_tests_with_base_dir(
+        let results = run_inline_tests_with_options(
             &file,
+            &InlineTestOptions {
+                base_dir: Some(category_dir()),
+                ..Default::default()
+            },
             None,
-            &SolveOptions::default(),
-            Some(category_dir().as_path()),
         );
         assert!(!results.is_empty(), "{id}: ran no assertions");
         match case["expect"].as_str() {

@@ -1,5 +1,5 @@
 //! The opt-in EarthSciIO bridge (`--features esio`) really serves an ESS
-//! `CadenceProvider` from a real `earthsciio::Provider`.
+//! `DataProvider` from a real `earthsciio::Provider`.
 //!
 //! Everything here runs against a local Zarr **v2** store over the `file`
 //! transport — no network, no fixture corpus. Two properties matter and are
@@ -15,13 +15,12 @@
 
 #![cfg(feature = "esio")]
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
 use earthsci_ast::esio_provider::EsioProvider;
-use earthsci_ast::provider::CadenceProvider;
+use earthsci_ast::provider::DataProvider;
 use earthsciio::format::{AxisSelect, Selection};
 use earthsciio::{Cache, DataSource};
 
@@ -98,7 +97,7 @@ fn materialize_renames_to_the_model_variable() {
         .build()
         .expect("provider builds");
 
-    let fields = p.materialize().expect("materialize");
+    let fields = p.materialize_fields().expect("materialize");
 
     assert!(
         fields.contains_key("SR_SOA"),
@@ -127,7 +126,7 @@ fn an_undeclared_variable_keeps_its_on_disk_name() {
         .build()
         .expect("provider builds");
 
-    let fields = p.materialize().expect("materialize");
+    let fields = p.materialize_fields().expect("materialize");
     assert!(fields.contains_key("SOA"));
 }
 
@@ -151,7 +150,7 @@ fn a_selection_is_pushed_down_to_the_reader() {
         "a store-backed zarr reader must report that it can honour a pushdown"
     );
 
-    let fields = p.materialize().expect("materialize");
+    let fields = p.materialize_fields().expect("materialize");
     let f = &fields["SR_SOA"];
     assert_eq!(
         f.array.shape(),
@@ -174,7 +173,7 @@ fn a_const_loader_schedules_no_refreshes() {
         .expect("provider builds");
 
     // No `temporal` block => CONST => contributes no driver tstop.
-    assert!(CadenceProvider::refresh_times(&p).is_empty());
+    assert!(DataProvider::refresh_times(&p).is_empty());
 }
 
 #[test]
@@ -201,10 +200,9 @@ fn an_unknown_format_fails_at_construction_not_mid_solve() {
     );
 }
 
-/// A HashMap of model-variable -> array is exactly what the refresh executor
-/// consumes, so the adapter is usable through the trait object the executor holds.
+/// The adapter is usable through the trait object the executor holds.
 #[test]
-fn usable_as_a_boxed_cadence_provider() {
+fn usable_as_a_boxed_data_provider() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let base = fixture(tmp.path());
     let loader = DataSource::new("ISRM_SR", "zarr", base).variables(["SOA"]);
@@ -213,7 +211,6 @@ fn usable_as_a_boxed_cadence_provider() {
         .build()
         .expect("provider builds");
 
-    let mut boxed: Box<dyn CadenceProvider> = Box::new(p);
-    let fields: HashMap<_, _> = boxed.materialize().expect("materialize");
-    assert_eq!(fields["SR_SOA"].array.len(), 12);
+    let mut boxed: Box<dyn DataProvider> = Box::new(p);
+    assert_eq!(boxed.sample().expect("sample").len(), 12);
 }

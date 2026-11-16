@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
+use earthsci_ast::provider::{DataProvider, ProviderError};
 use earthsci_ast::{
     Compiler, ProblemOptions, SolveOptions, esm_problem, initial_state, remake, solve,
 };
@@ -81,19 +81,18 @@ impl Linear {
         }
     }
 
-    fn at(&self, t: f64) -> HashMap<String, NativeField> {
+    fn at(&self, t: f64) -> ArrayD<f64> {
         let values = self.base.iter().map(|b| b + self.slope * t).collect();
-        let a = ArrayD::from_shape_vec(IxDyn(&self.shape), values).expect("field");
-        HashMap::from([(self.key.clone(), NativeField::new(a))])
+        ArrayD::from_shape_vec(IxDyn(&self.shape), values).expect("field")
     }
 }
 
-impl CadenceProvider for Linear {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+impl DataProvider for Linear {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         assert!(self.slope == 0.0, "only a const provider is materialized");
         Ok(self.at(0.0))
     }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         Ok(Some(self.at(t)))
     }
     fn refresh_times(&self) -> Vec<f64> {
@@ -105,13 +104,13 @@ fn build(
     c: &Value,
     tspan: (f64, f64),
 ) -> Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError> {
-    let providers: HashMap<String, Box<dyn CadenceProvider>> = c["providers"]
+    let providers: HashMap<String, Box<dyn DataProvider>> = c["providers"]
         .as_array()
         .unwrap()
         .iter()
         .map(|p| {
             let p = Linear::from_manifest(p);
-            (p.key.clone(), Box::new(p) as Box<dyn CadenceProvider>)
+            (p.key.clone(), Box::new(p) as Box<dyn DataProvider>)
         })
         .collect();
     let path = suite_dir().join(c["fixture"].as_str().unwrap());
@@ -237,11 +236,11 @@ struct Stateful {
     asks: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
-impl CadenceProvider for Stateful {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
-        self.inner.materialize()
+impl DataProvider for Stateful {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        self.inner.sample()
     }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         self.asks.set(self.asks.get() + 1);
         let Some(a) = self
             .inner
@@ -287,7 +286,7 @@ fn build_stateful(
     HashMap<String, std::rc::Rc<std::cell::Cell<usize>>>,
 ) {
     let mut asks = HashMap::new();
-    let providers: HashMap<String, Box<dyn CadenceProvider>> = c["providers"]
+    let providers: HashMap<String, Box<dyn DataProvider>> = c["providers"]
         .as_array()
         .unwrap()
         .iter()
@@ -304,7 +303,7 @@ fn build_stateful(
                 anchor: None,
                 asks: count,
             };
-            (key, Box::new(p) as Box<dyn CadenceProvider>)
+            (key, Box::new(p) as Box<dyn DataProvider>)
         })
         .collect();
     let path = suite_dir().join(c["fixture"].as_str().unwrap());

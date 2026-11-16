@@ -254,6 +254,38 @@ fn dotted_suffix_hit<'k, K: KnownNames + ?Sized>(
     None
 }
 
+/// How a caller key spells a declared name, strongest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum KeyMatch {
+    /// The key is the declared name.
+    Exact,
+    /// The key is the declared name under the built model's own prefix
+    /// (`Model.x` for `x`, `Model.Sub.x` for `Sub.x`).
+    ModelPrefixed,
+    /// The key is a proper dotted suffix of the declared name: its last
+    /// segment (`k` for `Sub.k`) or a partial qualification (`sub.g` for
+    /// `P.sub.g`), as a `parameter_overrides` key may be (esm-spec §6.6.2).
+    Suffix,
+}
+
+/// How `key` spells `name`, a name of the model `model` built alone (its
+/// names model-local) or, with `None`, of a whole-document build (its names
+/// qualified); `None` when it does not spell it.
+pub(crate) fn key_spells(key: &str, name: &str, model: Option<&str>) -> Option<KeyMatch> {
+    if key == name {
+        return Some(KeyMatch::Exact);
+    }
+    if let Some(m) = model
+        && key.strip_prefix(m).and_then(|r| r.strip_prefix('.')) == Some(name)
+    {
+        return Some(KeyMatch::ModelPrefixed);
+    }
+    (name.len() > key.len()
+        && name.ends_with(key)
+        && name.as_bytes()[name.len() - key.len() - 1] == b'.')
+        .then_some(KeyMatch::Suffix)
+}
+
 /// A set of names indexed by every proper dotted suffix, so both
 /// [`KnownNames`] questions are one hash lookup.
 pub(crate) struct SuffixIndex {

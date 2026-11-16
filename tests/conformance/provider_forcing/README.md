@@ -32,7 +32,7 @@ provider, and otherwise it is discrete with those refresh times.
 
 - Julia: `provider_sample(p, t)` returns `Dict(key => field)` (a 0-d field as a
   one-element vector) and `provider_refresh_times(p)` the times.
-- Rust: a `CadenceProvider` whose `materialize()` returns the field (const
+- Rust: a `DataProvider` whose `sample()` returns the field (const
   providers only, `slope = 0`), whose `refresh(t)` returns `Some` of the field
   at `t`, and whose `refresh_times()` returns the times.
 

@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use earthsci_ast::{Alg, AxisSel, PrepareError, PrepareProvider, SolveOptions};
+use earthsci_ast::{Alg, AxisSel, DataProvider, ProviderError, SolveOptions};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
@@ -106,8 +106,8 @@ pub fn close(actual: f64, want: f64, rtol: f64, atol: f64) -> bool {
 /// A data provider that serves one fixed 1-D array, wholesale.
 pub struct MockConst(pub Vec<f64>);
 
-impl PrepareProvider for MockConst {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+impl DataProvider for MockConst {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
     }
 }

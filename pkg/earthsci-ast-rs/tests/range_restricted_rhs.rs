@@ -806,27 +806,14 @@ fn an_observed_read_across_a_periodic_seam_is_computed_over_its_need() {
 }
 
 /// Feeds one 4-cell field once.
-struct Feed(String);
+struct Feed;
 
-type Fields = std::collections::HashMap<String, earthsci_ast::provider::NativeField>;
-
-impl earthsci_ast::provider::CadenceProvider for Feed {
-    fn materialize(&mut self) -> Result<Fields, earthsci_ast::provider::ProviderError> {
-        let a = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![0.25, 1.5, 2.75, 4.0])
-            .expect("field");
-        Ok(Fields::from([(
-            self.0.clone(),
-            earthsci_ast::provider::NativeField::new(a),
-        )]))
-    }
-    fn refresh(
-        &mut self,
-        _t: f64,
-    ) -> Result<Option<Fields>, earthsci_ast::provider::ProviderError> {
-        Ok(None)
-    }
-    fn refresh_times(&self) -> Vec<f64> {
-        Vec::new()
+impl earthsci_ast::provider::DataProvider for Feed {
+    fn sample(&mut self) -> Result<ndarray::ArrayD<f64>, earthsci_ast::provider::ProviderError> {
+        Ok(
+            ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![0.25, 1.5, 2.75, 4.0])
+                .expect("field"),
+        )
     }
 }
 
@@ -859,12 +846,12 @@ fn forced_program(compiler: Compiler, k: usize) -> RhsProgram {
         json!({"src": {"kind": "grid", "source": {"url_template": "file:///data/f.nc"}}});
     let providers: std::collections::HashMap<
         String,
-        Box<dyn earthsci_ast::provider::CadenceProvider>,
+        Box<dyn earthsci_ast::provider::DataProvider>,
     > = (1..=k)
         .map(|f| {
             (
                 format!("f{f}"),
-                Box::new(Feed(format!("f{f}"))) as Box<dyn earthsci_ast::provider::CadenceProvider>,
+                Box::new(Feed) as Box<dyn earthsci_ast::provider::DataProvider>,
             )
         })
         .collect();

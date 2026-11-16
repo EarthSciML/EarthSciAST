@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
-use earthsci_ast::{AxisSel, Flow, PrepareError, PreparePhase, PrepareProgress, PrepareProvider};
+use earthsci_ast::{AxisSel, DataProvider, Flow, PreparePhase, PrepareProgress, ProviderError};
 use earthsci_ast::{ProblemOptions, esm_problem};
 
 use crate::common;
@@ -74,8 +74,8 @@ fn lcc_inv(x: f64, y: f64, c: &Lcc) -> (f64, f64) {
 
 struct MockConst(Vec<f64>);
 
-impl PrepareProvider for MockConst {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+impl DataProvider for MockConst {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
     }
 }
@@ -85,8 +85,8 @@ struct MockGated {
     calls: Rc<RefCell<Vec<Vec<AxisSel>>>>,
 }
 
-impl PrepareProvider for MockGated {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+impl DataProvider for MockGated {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         panic!("the gated mock must never be fetched wholesale");
     }
 
@@ -97,7 +97,7 @@ impl PrepareProvider for MockGated {
     fn sample_with_selection(
         &mut self,
         selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, PrepareError> {
+    ) -> Result<ArrayD<f64>, ProviderError> {
         self.calls.borrow_mut().push(selection.to_vec());
         Ok(common::select_axes(&self.full, selection))
     }
@@ -196,7 +196,7 @@ fn run(
 
     let arr1 = |v: &[f64]| ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap();
 
-    let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
+    let mut providers: Vec<(String, Box<dyn DataProvider>)> = vec![
         (
             "ISRM.TotalPop".into(),
             Box::new(MockConst(total_pop.to_vec())),
@@ -270,7 +270,8 @@ fn run(
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: ca,
-            build_providers: providers,
+            providers: providers.into_iter().collect(),
+            build_pipeline: true,
             ..opts
         },
     );

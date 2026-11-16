@@ -7,7 +7,7 @@
 //! them rather than sitting beside them. What survives here is the pipeline
 //! itself ([`run_build_pipeline`], crate-internal) and the two things a caller
 //! genuinely reaches for — the build-time provider contract
-//! ([`PrepareProvider`]) and the build-observability seam ([`PreparePhase`],
+//! ([`DataProvider`]) and the build-observability seam ([`PreparePhase`],
 //! [`PrepareProgress`]), both extension seam under `API_SPEC.md` §3, neither
 //! stable API.
 //!
@@ -25,7 +25,7 @@
 //! are sampled once up front (never twice), and the surviving length binds the
 //! metaparameter every dependent index set is sized by. The caller no longer
 //! counts rows and passes the number in — see
-//! [`PrepareProvider::extent_metaparameter`].
+//! [`DataProvider::extent_metaparameter`].
 //!
 //! Those arrows are also [`PreparePhase`], and a host can watch them go by:
 //! [`crate::problem::ProblemOptions::progress`] is the build-time counterpart of
@@ -79,11 +79,15 @@ use ndarray::{ArrayD, Axis, IxDyn, Slice};
 use serde_json::Value as JsonValue;
 
 use crate::classification::DeclaredRank;
+use crate::compile_error::CompileError;
 use crate::faq::resolve_expr_ranges_with_extents;
 use crate::parse::LoadOptions;
+pub use crate::provider::AxisSel;
+use crate::provider::DataProvider;
 use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
 };
+use crate::simulate::{KeyMatch, SimulateError, key_spells};
 use crate::simulate_array::{
     ArrMap, BuiltVariables, ConstArrayScope, StandaloneScope, Value as EvalValue,
     run_value_invention_with_params,
@@ -104,144 +108,21 @@ pub use crate::simulate::Flow;
 
 /// A gated provider deferred by [`BuildState::inject_providers`]: its key, the
 /// provider itself, and the gate its fetch is planned against.
-type GatedProvider = (String, Box<dyn PrepareProvider>, ProviderGate);
+type GatedProvider = (String, Box<dyn DataProvider>, ProviderGate);
 
-/// A build-time preparation failure.
-#[derive(Debug, Clone)]
-pub struct PrepareError(pub String);
-
-impl PrepareError {
-    /// The prefix every observer-requested cancellation carries. Public so
-    /// [`PrepareError::is_cancelled`] rests on a documented contract rather
-    /// than a private convention.
-    pub const CANCELLED_PREFIX: &'static str = "cancelled by the caller during";
-
-    /// Whether this error is a build progress observer's own
-    /// [`Flow::Cancel`] rather than something going wrong — the counterpart of
-    /// matching [`crate::simulate::SimulateError::Cancelled`].
-    ///
-    /// ## Why a message prefix and not a variant
-    ///
-    /// `PrepareError` is a public single-field tuple struct: an out-of-crate
-    /// [`PrepareProvider`] constructs one as `PrepareError(msg)` and reads it
-    /// back as `e.0` (the in-repo `esio_provider` bridge does both). Turning it
-    /// into an enum, or adding a second field, breaks every one of them, while
-    /// adding a field to `PrepareOptions` breaks none — so the source-compatible
-    /// route wins, and the marker lives in the message, which is also the only
-    /// place a host that merely logs the error would ever see it.
-    ///
-    /// ## A host still records WHY it cancelled
-    ///
-    /// This reports that a cancel happened, not what the observer wanted. A
-    /// dispatcher distinguishing "the user pressed stop" from "the run hit its
-    /// billing cap" must record that inside the observer, because only the
-    /// observer knows — exactly as `earthscilab`'s `dispatch::solve` already
-    /// does around a solve, where the two bill differently. The message
-    /// names the phase and the item, so whichever it was, the stopping point is
-    /// attributable rather than "somewhere in the last eight minutes".
-    pub fn is_cancelled(&self) -> bool {
-        self.0.starts_with(Self::CANCELLED_PREFIX)
-    }
+/// An uncoded build failure of the pipeline, as the compile path reports
+/// one.
+fn err(msg: impl Into<String>) -> SimulateError {
+    SimulateError::Compile(CompileError::build_err(msg))
 }
 
-impl fmt::Display for PrepareError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PrepareError: {}", self.0)
-    }
-}
-
-impl std::error::Error for PrepareError {}
-
-fn err(msg: impl Into<String>) -> PrepareError {
-    PrepareError(msg.into())
-}
-
-/// One axis of the NEUTRAL per-axis selection handed to a gated provider —
-/// the Rust spelling of the Python engine's `"all" | [0-based indices]` form.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AxisSel {
-    /// The full native axis.
-    All,
-    /// The listed 0-based native indices, in order.
-    Indices(Vec<usize>),
-    /// The half-open strided range `[start, stop)` by `step` (`step >= 1`) —
-    /// the contiguous form, kept whole rather than expanded to indices so a
-    /// store-backed reader can push a slice down instead of a 52,411-long
-    /// index list.
-    Range {
-        /// Inclusive first index (0-based).
-        start: usize,
-        /// Exclusive last index.
-        stop: usize,
-        /// Stride (>= 1).
-        step: usize,
-    },
-}
-
-impl AxisSel {
-    /// The 0-based indices this selector picks over an axis of length
-    /// `dim_len` (the engine-side fallback for a provider that cannot push a
-    /// selection down).
-    pub fn indices(&self, dim_len: usize) -> Vec<usize> {
-        match self {
-            AxisSel::All => (0..dim_len).collect(),
-            AxisSel::Indices(v) => v.clone(),
-            AxisSel::Range { start, stop, step } => {
-                (*start..(*stop).min(dim_len)).step_by(*step).collect()
-            }
-        }
-    }
-}
-
-/// The CONST data-provider contract the build pipeline consumes: one provider feeds
-/// ONE field (the `providers["<ModelPath>.<param>"]` convention shared with the
-/// Julia/Python bindings). A gated provider may additionally honour a pushed-
-/// down per-axis selection; one that cannot is fetched whole and sliced
-/// engine-side (the fallback matches the pushdown result exactly).
-pub trait PrepareProvider {
-    /// CONST whole-field sample.
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError>;
-
-    /// Whether [`PrepareProvider::sample_with_selection`] pushes the selection
-    /// down to the reader (fetching only what intersects it).
-    fn supports_selection(&self) -> bool {
-        false
-    }
-
-    /// Sample with a per-axis selection pushed down. EVERY requested axis is
-    /// present in the result (a fixed axis comes back length-1 and is dropped
-    /// by the engine).
-    fn sample_with_selection(
-        &mut self,
-        _selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, PrepareError> {
-        Err(err("provider does not support selection pushdown"))
-    }
-
-    /// `false` for a DISCRETE provider (non-empty refresh times) — rejected by
-    /// the build pipeline, which is build-time-only.
-    fn is_const(&self) -> bool {
-        true
-    }
-
-    /// A provider-declared gate (the fallback protocol mirroring Julia's
-    /// `provider_gate_spec`); the record-derived gate takes precedence.
-    fn gate_spec(&self) -> Option<ProviderGate> {
-        None
-    }
-
-    /// The metaparameter this provider's own extent BINDS (esm-spec §8.9): a
-    /// loader that discovers its record count at read time — an FF10 point
-    /// inventory whose surviving-row count is not knowable until the table is
-    /// decoded and filtered — declares `extent: {"metaparameter": "N_REC"}`,
-    /// and the build closes that metaparameter with the length of this
-    /// provider's leading axis BEFORE the typed load, instead of the caller
-    /// counting rows and passing the number in.
-    ///
-    /// Every provider naming the same metaparameter must agree, which is also
-    /// the alignment check across a table's columns.
-    fn extent_metaparameter(&self) -> Option<String> {
-        None
+/// A stage's typed refusal: a coded one keeps its identity (and its code), an
+/// uncoded one is reported with `context` naming what the stage was doing.
+fn stage_err(context: impl fmt::Display, e: CompileError) -> SimulateError {
+    if e.code().is_some() {
+        SimulateError::Compile(e)
+    } else {
+        err(format!("{context}: {e}"))
     }
 }
 
@@ -395,6 +276,9 @@ pub(crate) struct PrepareOptions {
     pub pushdown_rewrite: bool,
     /// Scalar parameter overrides (exact or bare names), baked into the build.
     pub parameters: HashMap<String, f64>,
+    /// The start of the time span: the `t` every build-time observed is
+    /// evaluated at, as the static route evaluates it.
+    pub t0: f64,
     /// Per-step progress lines on stdout.
     ///
     /// This is the built-in observer: it prints at the same points
@@ -404,8 +288,8 @@ pub(crate) struct PrepareOptions {
 
     /// If `Some`, called at every phase boundary and at every unit of work
     /// inside [`PreparePhase::GatedFetch`] and [`PreparePhase::Observeds`].
-    /// Returning [`Flow::Cancel`] abandons the build with a [`PrepareError`]
-    /// for which [`PrepareError::is_cancelled`] is true.
+    /// Returning [`Flow::Cancel`] abandons the build with
+    /// [`SimulateError::Cancelled`].
     ///
     /// **Called unthrottled, deliberately**, for the same reason
     /// [`crate::simulate::SolveOptions::progress`] is: `prepare` has no
@@ -468,6 +352,7 @@ impl fmt::Debug for PrepareOptions {
             .field("base_path", &self.base_path)
             .field("pushdown_rewrite", &self.pushdown_rewrite)
             .field("parameters", &self.parameters)
+            .field("t0", &self.t0)
             .field("verbose", &self.verbose)
             .field(
                 "progress",
@@ -494,6 +379,11 @@ pub struct PreparedBuild {
     /// document: several models and none selected, built as one
     /// dot-namespaced system whose names (`Model.var`) are already qualified.
     pub model_name: Option<String>,
+    /// The metaparameter bindings the build closed [`Self::doc`] with at
+    /// load: the caller's and the discovered loader extents, each one the
+    /// document still declares. Loading [`Self::doc`] again needs the same
+    /// bindings to size its index sets as the build sized them.
+    pub(crate) metaparameters: BTreeMap<String, i64>,
     /// The whole-document build's flattened system, when the typed document
     /// it was flattened from is exactly what loading [`Self::doc`] with no
     /// loader-API metaparameters gives — the load the Problem makes next — so
@@ -693,7 +583,7 @@ fn state_dependent_observeds(model: &Model, defs: &HashMap<String, Expr>) -> Has
 
 /// Dependency order over observed definitions: an observed follows every
 /// observed it names. A cycle is a malformed model and is a hard error.
-fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareError> {
+fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, SimulateError> {
     let deps: HashMap<String, HashSet<String>> = defs
         .iter()
         .map(|(n, e)| {
@@ -785,61 +675,38 @@ enum Spelling {
     Qualified,
 }
 
-/// How a key names a declared variable, strongest first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum KeyMatch {
-    /// The key is the declared name.
-    Exact,
-    /// The key is the declared name under the built model's own prefix
-    /// (`Model.x` for `x`, `Model.Sub.x` for `Sub.x`).
-    ModelPrefixed,
-    /// The key is bare and is the declared name's last segment.
-    BareTail,
-}
-
 impl Spelling {
     /// The names among `declared` that `key` spells, each with how.
     ///
-    /// Model-local, a bare key reaches every name it is the last segment of,
-    /// the model's own scope. In the whole-document build a bare key that is
-    /// the last segment of several names of different models is refused,
-    /// naming them, rather than applied to all of them: the caller has to say
-    /// which one it means.
+    /// A key that is not a name reaches the names it is a dotted suffix of
+    /// (the static route's rule, esm-spec §6.6.2). Model-local, it reaches
+    /// every such name, the model's own scope. In the whole-document build a
+    /// key that is the suffix of several names is refused, naming them,
+    /// rather than applied to all of them: the caller has to say which one it
+    /// means.
     fn resolve<'n>(
         &self,
         key: &str,
         declared: impl IntoIterator<Item = &'n String>,
-    ) -> Result<Vec<(&'n str, KeyMatch)>, PrepareError> {
-        let prefix = match self {
-            Spelling::ModelLocal(m) => Some(format!("{m}.")),
+    ) -> Result<Vec<(&'n str, KeyMatch)>, SimulateError> {
+        let model = match self {
+            Spelling::ModelLocal(m) => Some(m.as_str()),
             Spelling::Qualified => None,
         };
-        let local = prefix.as_deref().and_then(|p| key.strip_prefix(p));
-        let bare = !key.contains('.');
         let mut out: Vec<(&'n str, KeyMatch)> = declared
             .into_iter()
-            .filter_map(|n| {
-                if n == key {
-                    Some((n.as_str(), KeyMatch::Exact))
-                } else if local == Some(n.as_str()) {
-                    Some((n.as_str(), KeyMatch::ModelPrefixed))
-                } else if bare && n.rsplit('.').next() == Some(key) {
-                    Some((n.as_str(), KeyMatch::BareTail))
-                } else {
-                    None
-                }
-            })
+            .filter_map(|n| Some((n.as_str(), key_spells(key, n, model)?)))
             .collect();
         // Strongest first, then by name.
         out.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
         if matches!(self, Spelling::Qualified)
             && out.len() > 1
-            && out.iter().all(|(_, m)| *m == KeyMatch::BareTail)
+            && out.iter().all(|(_, m)| *m == KeyMatch::Suffix)
         {
             let names: Vec<&str> = out.iter().map(|(n, _)| *n).collect();
             return Err(err(format!(
-                "'{key}' is a bare name and this document builds several models whose \
-                 variables it could mean; qualify it as one of: {}",
+                "'{key}' ends the names of several variables of the models this \
+                 document builds; qualify it as one of: {}",
                 names.join(", ")
             )));
         }
@@ -852,7 +719,7 @@ impl Spelling {
         &self,
         key: &str,
         declared: impl IntoIterator<Item = &'n String>,
-    ) -> Result<Option<&'n str>, PrepareError> {
+    ) -> Result<Option<&'n str>, SimulateError> {
         let found = self.resolve(key, declared)?;
         let Some(&(first, best)) = found.first() else {
             return Ok(None);
@@ -888,7 +755,7 @@ fn scalar_params(
     model: &Model,
     spelling: &Spelling,
     overrides: &HashMap<String, f64>,
-) -> Result<(Vec<f64>, Vec<String>), PrepareError> {
+) -> Result<(Vec<f64>, Vec<String>), SimulateError> {
     // Every scalar parameter: one with no `default` takes its value from an
     // override alone, and is left out without one.
     let mut names: Vec<String> = model
@@ -1067,25 +934,17 @@ enum Evaluated {
 /// the observed is not a recurrence the tape's sweep takes. Otherwise the outer
 /// `Err` is a fault the run latched — the interpreter's own diagnostic for the
 /// same document — and the inner one the tape's decline reason.
-#[allow(clippy::too_many_arguments)]
 fn compile_on_tape(
     name: &str,
     expr: &Expr,
-    arrays: &ArrMap,
-    param_vals: &[f64],
-    param_names: &[String],
-    const_arrays: &ConstArrayScope,
+    scope: &StandaloneScope<'_>,
     fill_shape: Option<&[usize]>,
     recurrence_only: bool,
 ) -> Option<Result<Result<ArrayD<f64>, String>, String>> {
     use crate::simulate_array::StandaloneError;
     let scope = StandaloneScope {
-        inputs: arrays,
-        params: param_vals,
-        param_names,
-        t: 0.0,
         derived_extents: crate::faq::empty_derived_extents(),
-        const_arrays,
+        ..*scope
     };
     match crate::simulate_array::eval_observed_taped(
         name,
@@ -1121,10 +980,10 @@ fn resolve_observed(
     def: &Expr,
     index_sets: &HashMap<String, IndexSet>,
     extents: &HashMap<String, i64>,
-) -> Result<Expr, PrepareError> {
+) -> Result<Expr, SimulateError> {
     let mut expr = def.clone();
     resolve_expr_ranges_with_extents(&mut expr, index_sets, extents)
-        .map_err(|e| err(format!("resolve ranges for {name}: {e}")))?;
+        .map_err(|e| stage_err(format_args!("resolve ranges for {name}"), e))?;
     Ok(expr)
 }
 
@@ -1134,19 +993,14 @@ fn resolve_observed(
 /// Under `refuse_per_cell` a per-cell walk stops at its first cell, so a
 /// document the strict compiler refuses is refused for the price of one cell
 /// rather than the whole reference evaluation.
-#[allow(clippy::too_many_arguments)]
 fn eval_observed(
     name: &str,
     expr: &Expr,
-    arrays: &ArrMap,
-    param_vals: &[f64],
-    param_names: &[String],
-    extents: &HashMap<String, i64>,
-    const_arrays: &ConstArrayScope,
+    scope: &StandaloneScope<'_>,
     fill_shape: Option<&[usize]>,
     scalar_shape: &[usize],
     refuse_per_cell: bool,
-) -> Result<Evaluated, PrepareError> {
+) -> Result<Evaluated, SimulateError> {
     // The observed is evaluated at the element type of the variable it defines
     // (esm-spec §11.3.1) — the document's unless that variable declared its
     // own. This is where the build pipeline materializes a relational
@@ -1173,18 +1027,7 @@ fn eval_observed(
     // finite, plausible and wrong with nothing logged.
     // Under a strict compiler a recurrence goes to the tape's ordered sweep
     // first (`compile_on_tape`), and is refused only if the tape declines it.
-    if refuse_per_cell
-        && let Some(tape) = compile_on_tape(
-            name,
-            expr,
-            arrays,
-            param_vals,
-            param_names,
-            const_arrays,
-            fill_shape,
-            true,
-        )
-    {
+    if refuse_per_cell && let Some(tape) = compile_on_tape(name, expr, scope, fill_shape, true) {
         return tape
             .map_err(|why| err(format!("evaluate {name}: {why}")))
             .map(|r| match r {
@@ -1196,21 +1039,13 @@ fn eval_observed(
     }
     let stop = refuse_per_cell.then(crate::simulate_array::StopAtFirstCell::arm);
     let refused = || stop.is_some() && crate::simulate_array::per_cell_walk_refused();
-    let scope = StandaloneScope {
-        inputs: arrays,
-        params: param_vals,
-        param_names,
-        t: 0.0,
-        derived_extents: extents,
-        const_arrays,
-    };
     if let Some(res) = scope.eval_recurrence(name, expr) {
         if refused() {
             return Ok(Evaluated::Refused(PER_CELL_RECURRENCE.to_string()));
         }
         return res
             .map(|a| Evaluated::Field(a, Route::PerCell(PER_CELL_RECURRENCE.to_string())))
-            .map_err(|e| err(format!("evaluate {name}: {e}")));
+            .map_err(|e| stage_err(format_args!("evaluate {name}"), e));
     }
     let walks_before = crate::simulate_array::per_cell_walks();
     crate::simulate_array::take_overlay_decline();
@@ -1223,17 +1058,8 @@ fn eval_observed(
         let overlay = crate::simulate_array::take_overlay_decline()
             .unwrap_or("a construct it has no whole-array form for");
         drop(stop);
-        let tape = compile_on_tape(
-            name,
-            expr,
-            arrays,
-            param_vals,
-            param_names,
-            const_arrays,
-            fill_shape,
-            false,
-        )
-        .expect("a non-recurrence always reaches the tape");
+        let tape = compile_on_tape(name, expr, scope, fill_shape, false)
+            .expect("a non-recurrence always reaches the tape");
         return match tape {
             Err(fault) => Err(err(format!("evaluate {name}: {fault}"))),
             Ok(Ok(a)) => Ok(Evaluated::Field(
@@ -1246,7 +1072,7 @@ fn eval_observed(
             ))),
         };
     }
-    let val = val.map_err(|e| err(format!("evaluate {name}: {e}")))?;
+    let val = val.map_err(|e| stage_err(format_args!("evaluate {name}"), e))?;
     let per_cell =
         (crate::simulate_array::per_cell_walks() != walks_before).then(|| PER_CELL_FAQ.to_string());
     let field = match val {
@@ -1282,7 +1108,7 @@ fn gated_fetch_plan(
     index_sets: &HashMap<String, IndexSet>,
     members: &HashMap<String, Vec<i64>>,
     extents: &HashMap<String, i64>,
-) -> Result<GatedFetchPlan, PrepareError> {
+) -> Result<GatedFetchPlan, SimulateError> {
     let mut selection: Vec<AxisSel> = Vec::with_capacity(gate.axes.len());
     let mut drop_axes: Vec<usize> = Vec::new();
     let mut gated_pos: Option<usize> = None;
@@ -1349,7 +1175,7 @@ fn gated_fetch_plan(
 /// The build pipeline's internal observation sink, erased so a helper can report
 /// without knowing whether an observer is attached or what it captured.
 type ReportFn<'a> =
-    dyn FnMut(PreparePhase, usize, Option<usize>, &str) -> Result<(), PrepareError> + 'a;
+    dyn FnMut(PreparePhase, usize, Option<usize>, &str) -> Result<(), SimulateError> + 'a;
 
 /// Run a gate's plan, reporting through `report` and honouring a cancel.
 ///
@@ -1363,13 +1189,13 @@ type ReportFn<'a> =
 #[allow(clippy::too_many_arguments)]
 fn run_gated_fetch(
     key: &str,
-    prov: &mut dyn PrepareProvider,
+    prov: &mut dyn DataProvider,
     plan: &GatedFetchPlan,
     batch: Option<usize>,
     issued: &mut usize,
     total_requests: usize,
     report: &mut ReportFn<'_>,
-) -> Result<ArrayD<f64>, PrepareError> {
+) -> Result<ArrayD<f64>, SimulateError> {
     // A provider that cannot push the selection down fetches the WHOLE field in
     // one indivisible call and is sliced engine-side; there is no seam to batch
     // and reporting per batch would be a lie about work already done.
@@ -1441,7 +1267,7 @@ fn drop_fixed_axes(
     key: &str,
     arr: ArrayD<f64>,
     drop_axes: &[usize],
-) -> Result<ArrayD<f64>, PrepareError> {
+) -> Result<ArrayD<f64>, SimulateError> {
     if drop_axes.is_empty() {
         return Ok(arr);
     }
@@ -1524,7 +1350,7 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
 /// artifact.
 ///
 /// `providers` maps the CONSUMING PARAMETER's namespaced name
-/// (`"<ModelPath>.<param>"`) to a CONST [`PrepareProvider`]; an entry the
+/// (`"<ModelPath>.<param>"`) to a CONST [`DataProvider`]; an entry the
 /// rewrite record's gate routes onto a gated array is DEFERRED and fetched
 /// pre-sliced after value-invention. From esm 1.0.0 a data source declares no
 /// variables, so the consuming parameter is the only spelling that names one
@@ -1549,9 +1375,9 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
 pub(crate) fn run_prepare(
     doc: &JsonValue,
     const_arrays: HashMap<String, ArrayD<f64>>,
-    providers: Vec<(String, Box<dyn PrepareProvider>)>,
+    providers: Vec<(String, Box<dyn DataProvider>)>,
     opts: &PrepareOptions,
-) -> Result<PreparedBuild, PrepareError> {
+) -> Result<PreparedBuild, SimulateError> {
     let mut providers = providers;
     let mut metaparameters = opts.metaparameters.clone();
     let discovered = discover_loader_extents(&mut providers, opts, &mut metaparameters)?;
@@ -1607,7 +1433,7 @@ fn report_progress(
     done: usize,
     total: Option<usize>,
     item: &str,
-) -> Result<(), PrepareError> {
+) -> Result<(), SimulateError> {
     let Some(cb) = &opts.progress else {
         return Ok(());
     };
@@ -1619,21 +1445,22 @@ fn report_progress(
     };
     match cb(&p) {
         Flow::Continue => Ok(()),
-        Flow::Cancel => Err(err(format!(
-            "{} {phase}{}",
-            PrepareError::CANCELLED_PREFIX,
-            if item.is_empty() {
-                match total {
-                    Some(t) => format!(" ({done} of {t} done)"),
-                    None => String::new(),
+        Flow::Cancel => Err(SimulateError::Cancelled {
+            details: format!(
+                "{phase}{}",
+                if item.is_empty() {
+                    match total {
+                        Some(t) => format!(" ({done} of {t} done)"),
+                        None => String::new(),
+                    }
+                } else {
+                    match total {
+                        Some(t) => format!(" at '{item}' ({} of {t})", done + 1),
+                        None => format!(" at '{item}'"),
+                    }
                 }
-            } else {
-                match total {
-                    Some(t) => format!(" at '{item}' ({} of {t})", done + 1),
-                    None => format!(" at '{item}'"),
-                }
-            }
-        ))),
+            ),
+        }),
     }
 }
 
@@ -1649,10 +1476,10 @@ fn report_progress(
 /// provider's OWN declared gate is caught here, the gate the rewrite record
 /// derives in the check after the rewrite.
 fn discover_loader_extents(
-    providers: &mut [(String, Box<dyn PrepareProvider>)],
+    providers: &mut [(String, Box<dyn DataProvider>)],
     opts: &PrepareOptions,
     metaparameters: &mut BTreeMap<String, i64>,
-) -> Result<HashMap<String, ArrayD<f64>>, PrepareError> {
+) -> Result<HashMap<String, ArrayD<f64>>, SimulateError> {
     let mut discovered: HashMap<String, ArrayD<f64>> = HashMap::new();
     let mut discovered_by: BTreeMap<String, (i64, String)> = BTreeMap::new();
     for (key, prov) in providers.iter_mut() {
@@ -1709,7 +1536,7 @@ fn resolve_pushdown_imports(
     doc: &JsonValue,
     opts: &PrepareOptions,
     metaparameters: &BTreeMap<String, i64>,
-) -> Result<Option<JsonValue>, PrepareError> {
+) -> Result<Option<JsonValue>, SimulateError> {
     report_progress(opts, PreparePhase::Rewrite, 0, None, "")?;
     if opts.pushdown_rewrite && has_template_import_edge(doc) {
         resolve_template_machinery(
@@ -1743,7 +1570,7 @@ fn apply_pushdown_rewrite<'a>(
     doc: &'a JsonValue,
     opts: &PrepareOptions,
     provider_keys: &[String],
-) -> Result<RewriteOutcome<'a>, PrepareError> {
+) -> Result<RewriteOutcome<'a>, SimulateError> {
     let rewritten = if opts.pushdown_rewrite {
         desugar_pushdown_for_build(doc, opts.model_name.as_deref())?
     } else {
@@ -1786,7 +1613,7 @@ fn apply_pushdown_rewrite<'a>(
 fn desugar_pushdown_for_build<'a>(
     doc: &'a JsonValue,
     model_name: Option<&str>,
-) -> Result<std::borrow::Cow<'a, JsonValue>, PrepareError> {
+) -> Result<std::borrow::Cow<'a, JsonValue>, SimulateError> {
     let models: Vec<&String> = match (model_name, doc.get("models").and_then(|m| m.as_object())) {
         (None, Some(models)) if models.len() > 1 => {
             let mut names: Vec<&String> = models.keys().collect();
@@ -1823,7 +1650,7 @@ fn desugar_pushdown_for_build<'a>(
 fn check_discovered_gate_conflict(
     discovered: &HashMap<String, ArrayD<f64>>,
     pd_gates: &HashMap<String, ProviderGate>,
-) -> Result<(), PrepareError> {
+) -> Result<(), SimulateError> {
     for key in discovered.keys() {
         if pd_gates.contains_key(key) {
             return Err(err(format!(
@@ -1853,6 +1680,8 @@ struct BuildState<'o> {
     /// How the built model's names are spelled: model-local for one model,
     /// `Model.var` for the whole document (see [`PreparedBuild::model_name`]).
     spelling: Spelling,
+    /// See [`PreparedBuild::metaparameters`].
+    metaparameters: BTreeMap<String, i64>,
     /// See [`PreparedBuild::flattened`].
     flattened: Option<crate::flatten::FlattenedSystem>,
     index_sets: HashMap<String, IndexSet>,
@@ -1927,13 +1756,27 @@ impl<'o> BuildState<'o> {
         vlog(self.opts, msg);
     }
 
+    /// The evaluation scope an observed is evaluated in: the namespace, the
+    /// scalar parameters, and `t` at the start of the time span, as the
+    /// static route evaluates it.
+    fn scope<'s>(&'s self, extents: &'s HashMap<String, i64>) -> StandaloneScope<'s> {
+        StandaloneScope {
+            inputs: &self.arrays,
+            params: &self.param_vals,
+            param_names: &self.param_names,
+            t: self.opts.t0,
+            derived_extents: extents,
+            const_arrays: &self.const_scope,
+        }
+    }
+
     fn report(
         &self,
         phase: PreparePhase,
         done: usize,
         total: Option<usize>,
         item: &str,
-    ) -> Result<(), PrepareError> {
+    ) -> Result<(), SimulateError> {
         report_progress(self.opts, phase, done, total, item)
     }
 
@@ -1942,7 +1785,7 @@ impl<'o> BuildState<'o> {
         rewritten: &JsonValue,
         opts: &'o PrepareOptions,
         metaparameters: BTreeMap<String, i64>,
-    ) -> Result<Self, PrepareError> {
+    ) -> Result<Self, SimulateError> {
         report_progress(opts, PreparePhase::Load, 0, None, "")?;
         let text = serde_json::to_string(rewritten)
             .map_err(|e| err(format!("serialize rewritten document: {e}")))?;
@@ -1967,7 +1810,7 @@ impl<'o> BuildState<'o> {
         let unbound_load = metaparameters.is_empty();
         let load_opts = LoadOptions {
             base_path: opts.base_path.clone(),
-            metaparameters,
+            metaparameters: metaparameters.clone(),
         };
         let file = crate::parse::load_string_with_options(&text, &load_opts)
             .map_err(|e| err(format!("load rewritten document: {e}")))?;
@@ -1996,7 +1839,7 @@ impl<'o> BuildState<'o> {
             Spelling::Qualified => {
                 let flat = Self::whole_document(&file, &mut index_sets)?;
                 crate::compile_error::refuse_reserved_lifting(&flat)
-                    .map_err(|e| err(e.to_string()))?;
+                    .map_err(SimulateError::Compile)?;
                 let mut model = crate::simulate_array::model_from_flattened(&flat);
                 // The shape an unshaped mixed-rank `ifelse` is built at
                 // (esm-spec §4.3.4); the model-local route gets it from
@@ -2005,9 +1848,9 @@ impl<'o> BuildState<'o> {
                 // the bare-operand check reads the lifted equations.
                 let shapes =
                     crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
-                        .map_err(|e| err(e.to_string()))?;
+                        .map_err(SimulateError::Compile)?;
                 let axes = crate::simulate_array::refuse_faq_bare_array_operands(&model)
-                    .map_err(|e| err(e.to_string()))?;
+                    .map_err(SimulateError::Compile)?;
                 let built = BuiltVariables::new(axes, flat.metadata.bound_inputs.clone());
                 (
                     model,
@@ -2022,7 +1865,7 @@ impl<'o> BuildState<'o> {
         // route applies (CONFORMANCE_SPEC §5.19.3b).
         let mut model = model;
         crate::simulate_array::lower_recurrence_groups(&mut model, &mut index_sets)
-            .map_err(|e| err(e.to_string()))?;
+            .map_err(SimulateError::Compile)?;
 
         let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.parameters)?;
 
@@ -2030,6 +1873,7 @@ impl<'o> BuildState<'o> {
             opts,
             model,
             spelling,
+            metaparameters,
             flattened,
             index_sets,
             param_vals,
@@ -2072,16 +1916,16 @@ impl<'o> BuildState<'o> {
         models: &IndexMap<String, Model>,
         name: &str,
         index_sets: &mut HashMap<String, IndexSet>,
-    ) -> Result<AuthoredModel, PrepareError> {
+    ) -> Result<AuthoredModel, SimulateError> {
         let mut model = models
             .get(name)
             .ok_or_else(|| err(format!("model '{name}' not found in the document")))?
             .clone();
         crate::simulate_array::mount_subsystems(&mut model)
-            .map_err(|e| err(format!("model '{name}': {e}")))?;
+            .map_err(|e| stage_err(format_args!("model '{name}'"), e))?;
         crate::simulate_array::resolve_model_self_references(&mut model, name);
         let (shapes, axes) = crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)
-            .map_err(|e| err(format!("model '{name}': {e}")))?;
+            .map_err(|e| stage_err(format_args!("model '{name}'"), e))?;
         Ok((
             model,
             shapes.data_shaped,
@@ -2105,9 +1949,14 @@ impl<'o> BuildState<'o> {
     fn whole_document(
         file: &crate::EsmFile,
         index_sets: &mut HashMap<String, IndexSet>,
-    ) -> Result<crate::flatten::FlattenedSystem, PrepareError> {
-        let flat = crate::flatten::flatten(file)
-            .map_err(|e| err(format!("flatten the document's models: {e}")))?;
+    ) -> Result<crate::flatten::FlattenedSystem, SimulateError> {
+        let flat = crate::flatten::flatten(file).map_err(|e| {
+            if e.code().is_some() {
+                SimulateError::Compile(CompileError::Flatten(e))
+            } else {
+                err(format!("flatten the document's models: {e}"))
+            }
+        })?;
         // The flattened registry carries every mounted subsystem's index sets
         // as well as the document's own; the document's declaration wins.
         for (k, v) in &flat.index_sets {
@@ -2140,10 +1989,10 @@ impl<'o> BuildState<'o> {
     fn inject_providers(
         &mut self,
         const_arrays: HashMap<String, ArrayD<f64>>,
-        providers: Vec<(String, Box<dyn PrepareProvider>)>,
+        providers: Vec<(String, Box<dyn DataProvider>)>,
         mut discovered: HashMap<String, ArrayD<f64>>,
         pd_gates: &HashMap<String, ProviderGate>,
-    ) -> Result<Vec<GatedProvider>, PrepareError> {
+    ) -> Result<Vec<GatedProvider>, SimulateError> {
         self.arrays = ArrMap::default();
         for (k, a) in const_arrays {
             let name = self.array_name(&k)?;
@@ -2173,11 +2022,6 @@ impl<'o> BuildState<'o> {
             } else if let Some(gate) = prov.gate_spec() {
                 // Provider-declared gate (the fallback protocol) — also deferred.
                 gated.push((k, prov, gate));
-            } else if !prov.is_const() {
-                return Err(err(format!(
-                    "prepare: provider '{k}' is DISCRETE (non-empty refresh times); \
-                     prepare() is build-time-only"
-                )));
             } else {
                 let a = prov
                     .sample()
@@ -2217,7 +2061,7 @@ impl<'o> BuildState<'o> {
         key: &str,
         name: &str,
         a: &ArrayD<f64>,
-    ) -> Result<(), PrepareError> {
+    ) -> Result<(), SimulateError> {
         let vars = &self.model.variables;
         let Some(var) = vars
             .get(name)
@@ -2254,7 +2098,7 @@ impl<'o> BuildState<'o> {
     /// [`Self::alias_pushdown_names`] publishes the model-local spellings
     /// beside it. A key that names no declared variable (a whole source's
     /// provider, a coupling's source side) is held as it is.
-    fn array_name(&self, key: &str) -> Result<String, PrepareError> {
+    fn array_name(&self, key: &str) -> Result<String, SimulateError> {
         Ok(match &self.spelling {
             Spelling::Qualified => self
                 .spelling
@@ -2339,7 +2183,7 @@ impl<'o> BuildState<'o> {
         key: &str,
         gate: &ProviderGate,
         pd_coupling: &[(String, String)],
-    ) -> Result<String, PrepareError> {
+    ) -> Result<String, SimulateError> {
         let routed = pd_coupling
             .iter()
             .find(|(frm, to)| frm == key || to == key)
@@ -2367,7 +2211,7 @@ impl<'o> BuildState<'o> {
         &mut self,
         gated: &[GatedProvider],
         pd_coupling: &[(String, String)],
-    ) -> Result<(), PrepareError> {
+    ) -> Result<(), SimulateError> {
         let targets: HashSet<String> = gated
             .iter()
             .map(|(k, _, g)| self.gated_target(k, g, pd_coupling))
@@ -2425,7 +2269,7 @@ impl<'o> BuildState<'o> {
     /// into `arrays` later by [`Self::feed_member_factors`], so it cannot be
     /// read off the map yet). Widening the bound set can only prevent a false
     /// positive, which is this gate's cardinal requirement.
-    fn check_free_names(&self) -> Result<(), PrepareError> {
+    fn check_free_names(&self) -> Result<(), SimulateError> {
         let mut extra: Vec<String> = self.arrays.keys().cloned().collect();
         extra.extend(self.param_names.iter().cloned());
         extra.extend(
@@ -2434,16 +2278,8 @@ impl<'o> BuildState<'o> {
                 .filter_map(|is| is.member_factor.clone()),
         );
         crate::simulate_array::check_free_variables(&self.model, &self.index_sets, &extra)
-            // The DETAILS, not the rendered error: `run_build_pipeline` re-wraps
-            // a `PrepareError` in `InterpreterBuildError`, so passing the whole
-            // `Display` through would print that prefix twice. The message the
-            // author reads is then byte-identical to the compile path's.
-            .map_err(|e| match e {
-                crate::compile_error::CompileError::InterpreterBuildError { details } => {
-                    err(details)
-                }
-                other => err(other.to_string()),
-            })
+            // The compile path's own refusal, unchanged.
+            .map_err(SimulateError::Compile)
     }
 
     /// Observed definitions + the join-free partition.
@@ -2465,7 +2301,7 @@ impl<'o> BuildState<'o> {
     ///   predicate nor the gate — an unfiltered full product, silently. A
     ///   genuinely unresolvable key column is a build error, as it is on the
     ///   compiled path.
-    fn collect_observed_defs(&mut self) -> Result<(), PrepareError> {
+    fn collect_observed_defs(&mut self) -> Result<(), SimulateError> {
         let mut defs = observed_defs(&self.model);
         let state_dependent = state_dependent_observeds(&self.model, &defs);
         {
@@ -2473,9 +2309,9 @@ impl<'o> BuildState<'o> {
             for e in defs.values_mut() {
                 crate::join::resolve_overlap_syms_expr(e, &var_shapes);
                 crate::join::check_overlap_factor_ranks(e, &var_shapes)
-                    .map_err(|e| err(format!("resolve join: {e}")))?;
+                    .map_err(|e| stage_err("resolve join", e))?;
                 crate::join::resolve_expr_joins(e, &self.index_sets, &var_shapes)
-                    .map_err(|e| err(format!("resolve join: {e}")))?;
+                    .map_err(|e| stage_err("resolve join", e))?;
             }
         }
         self.join_free = defs
@@ -2498,7 +2334,7 @@ impl<'o> BuildState<'o> {
     /// (The Rust analogue of Julia's `_derive_binning_coords` general-eval
     /// seeding; tolerant — an unresolved coordinate degrades to the engine's
     /// own fail-closed contract downstream, exactly as in Python.)
-    fn eval_buildtime_coordinates(&mut self) -> Result<(), PrepareError> {
+    fn eval_buildtime_coordinates(&mut self) -> Result<(), SimulateError> {
         let seeds: Vec<&Expr> = self
             .model
             .equations
@@ -2533,11 +2369,7 @@ impl<'o> BuildState<'o> {
                     eval_observed(
                         &name,
                         &expr,
-                        &self.arrays,
-                        &self.param_vals,
-                        &self.param_names,
-                        &no_extents,
-                        &self.const_scope,
+                        &self.scope(&no_extents),
                         self.fill_shape(&name).as_deref(),
                         &self.scalar_shape(&name),
                         self.opts.refuse_per_cell,
@@ -2572,7 +2404,7 @@ impl<'o> BuildState<'o> {
                     // needed this coordinate.
                     self.log(&format!(
                         "  [prepare] build-time coordinate {name} skipped ({})",
-                        e.0
+                        e
                     ));
                 }
             }
@@ -2582,7 +2414,7 @@ impl<'o> BuildState<'o> {
     }
 
     /// VALUE INVENTION: the graph derives its own support set.
-    fn invent_values(&mut self) -> Result<(), PrepareError> {
+    fn invent_values(&mut self) -> Result<(), SimulateError> {
         self.report(PreparePhase::ValueInvention, 0, None, "")?;
         let vi = run_value_invention_with_params(
             &self.model,
@@ -2590,7 +2422,7 @@ impl<'o> BuildState<'o> {
             Some(&self.arrays),
             &self.opts.parameters,
         )
-        .map_err(|e| err(format!("value invention: {e}")))?;
+        .map_err(|e| stage_err("value invention", e))?;
         // A member id is needed where a set feeds one back (a `member_factor`,
         // a gated fetch). Every key is a scalar integer.
         let members: HashMap<String, Vec<i64>> = vi
@@ -2626,7 +2458,7 @@ impl<'o> BuildState<'o> {
     /// Collected and SORTED first, so both the observed event stream and the
     /// verbose narration are deterministic; `index_sets` is a `HashMap` and
     /// iterating it directly made the order vary run to run.
-    fn feed_member_factors(&mut self) -> Result<(), PrepareError> {
+    fn feed_member_factors(&mut self) -> Result<(), SimulateError> {
         let mut mf_sets: Vec<(&String, &String, &Vec<i64>)> = self
             .index_sets
             .iter()
@@ -2666,7 +2498,7 @@ impl<'o> BuildState<'o> {
         &mut self,
         gated: Vec<GatedProvider>,
         pd_coupling: &[(String, String)],
-    ) -> Result<(), PrepareError> {
+    ) -> Result<(), SimulateError> {
         let mut plans: Vec<GatedFetchPlan> = Vec::with_capacity(gated.len());
         for (key, prov, gate) in &gated {
             if gate.applies_to.len() != 1 {
@@ -2846,7 +2678,7 @@ impl<'o> BuildState<'o> {
         &mut self,
         gated: &[GatedProvider],
         pd_coupling: &[(String, String)],
-    ) -> Result<(), PrepareError> {
+    ) -> Result<(), SimulateError> {
         // A gate that does not name exactly one variable is refused by the
         // fetch itself, with its own message; nothing is moved ahead of that.
         if gated.is_empty() || gated.iter().any(|(_, _, g)| g.applies_to.len() != 1) {
@@ -2877,14 +2709,14 @@ impl<'o> BuildState<'o> {
     /// Every observed that still needs evaluating, counted up front: `order`
     /// includes the coordinate pre-pass's products, and a `total` that a `continue`
     /// silently makes unreachable is a bar that never fills.
-    fn eval_observed_graph(&mut self) -> Result<(), PrepareError> {
+    fn eval_observed_graph(&mut self) -> Result<(), SimulateError> {
         self.eval_observeds(&HashSet::new(), true)
     }
 
     /// One pass over the pending observeds, skipping `skip` and what an
     /// earlier pass evaluated. The last pass (`last`) moves every evaluated
     /// observed into `fields`; so does any pass that ends in a refusal.
-    fn eval_observeds(&mut self, skip: &HashSet<String>, last: bool) -> Result<(), PrepareError> {
+    fn eval_observeds(&mut self, skip: &HashSet<String>, last: bool) -> Result<(), SimulateError> {
         let pending: Vec<String> = self
             .order
             .iter()
@@ -2932,11 +2764,7 @@ impl<'o> BuildState<'o> {
             let (a, route) = match eval_observed(
                 name,
                 &expr,
-                &self.arrays,
-                &self.param_vals,
-                &self.param_names,
-                &self.extents,
-                &self.const_scope,
+                &self.scope(&self.extents),
                 self.fill_shape(name).as_deref(),
                 &self.scalar_shape(name),
                 self.opts.refuse_per_cell,
@@ -2995,7 +2823,7 @@ impl<'o> BuildState<'o> {
         &mut self,
         name: &str,
         expr: &Expr,
-    ) -> Result<Option<(ArrayD<f64>, Route)>, PrepareError> {
+    ) -> Result<Option<(ArrayD<f64>, Route)>, SimulateError> {
         // Only under a strict compiler: the reference interpreter is the
         // oracle the fast tiers are checked against, and promises nothing
         // about speed.
@@ -3023,11 +2851,7 @@ impl<'o> BuildState<'o> {
         let res = eval_observed(
             name,
             &plan.expr,
-            &self.arrays,
-            &self.param_vals,
-            &self.param_names,
-            &self.extents,
-            &self.const_scope,
+            &self.scope(&self.extents),
             fill.as_deref(),
             &scalar,
             self.opts.refuse_per_cell,
@@ -3066,6 +2890,7 @@ impl<'o> BuildState<'o> {
                 Spelling::ModelLocal(m) => Some(m),
                 Spelling::Qualified => None,
             },
+            metaparameters: self.metaparameters,
             flattened: self.flattened,
             fields: self.fields,
             data_fields,
@@ -3086,15 +2911,17 @@ impl<'o> BuildState<'o> {
 
 /// Run the build pipeline for [`crate::problem::esm_problem`], translating
 /// [`crate::problem::ProblemOptions`] into this module's internal option
-/// struct and its error into [`SimulateError`].
+/// struct.
 ///
-/// Consumes `opts`'s build providers and const arrays: they are moved into the
+/// Consumes `opts`'s CONST providers and const arrays: they are moved into the
 /// pipeline, which is the one place they are used.
 pub(crate) fn run_build_pipeline(
     doc: &JsonValue,
+    t0: f64,
     opts: &mut crate::problem::ProblemOptions,
 ) -> Result<PreparedBuild, crate::simulate::SimulateError> {
     let internal = PrepareOptions {
+        t0,
         model_name: opts.model_name.clone(),
         metaparameters: opts.metaparameters.clone(),
         base_path: opts.base_path.clone(),
@@ -3107,19 +2934,24 @@ pub(crate) fn run_build_pipeline(
         observed_cone: opts.observed_cone.clone(),
     };
     let const_arrays = std::mem::take(&mut opts.const_arrays);
-    let providers = std::mem::take(&mut opts.build_providers);
-    run_prepare(doc, const_arrays, providers, &internal).map_err(|e| {
-        // A cancel keeps its own identity across the boundary: `is_cancelled`
-        // must still answer "the caller stopped this" rather than "the build
-        // failed", which is the whole point of the marker.
-        if e.is_cancelled() {
-            crate::simulate::SimulateError::Cancelled { details: e.0 }
-        } else {
-            crate::simulate::SimulateError::Compile(
-                crate::compile_error::CompileError::InterpreterBuildError { details: e.0 },
-            )
-        }
-    })
+    // The CONST providers, in key order, when the caller asked for this
+    // pipeline; the run-time executor takes the rest.
+    let takes = crate::problem::pipeline_takes_providers(opts);
+    let mut keys: Vec<String> = opts
+        .providers
+        .iter()
+        .filter(|(_, p)| takes && p.refresh_times().is_empty())
+        .map(|(k, _)| k.clone())
+        .collect();
+    keys.sort();
+    let providers = keys
+        .into_iter()
+        .map(|k| {
+            let p = opts.providers.remove(&k).expect("a key of the map");
+            (k, p)
+        })
+        .collect();
+    run_prepare(doc, const_arrays, providers, &internal)
 }
 
 /// Whether `doc` still carries an unresolved §4.7 mount — a `models.<k>` /
@@ -3622,7 +3454,8 @@ mod whole_document_tests {
     //! The whole-document build (several models, none selected): how its names
     //! are spelled, and the flattened system it hands the compile path.
 
-    use super::{KeyMatch, PrepareOptions, Spelling, run_prepare};
+    use super::{PrepareOptions, Spelling, run_prepare};
+    use crate::simulate::KeyMatch;
     use serde_json::{Value, json};
     use std::collections::HashMap;
 
@@ -3639,8 +3472,8 @@ mod whole_document_tests {
             got,
             vec![
                 ("k", KeyMatch::Exact),
-                ("Leaf.k", KeyMatch::BareTail),
-                ("Other.k", KeyMatch::BareTail)
+                ("Leaf.k", KeyMatch::Suffix),
+                ("Other.k", KeyMatch::Suffix)
             ]
         );
         assert_eq!(
@@ -3657,7 +3490,9 @@ mod whole_document_tests {
         assert_eq!(s.resolve_one("m", &declared).unwrap(), Some("A.m"));
         assert_eq!(s.resolve_one("A.k", &declared).unwrap(), Some("A.k"));
         assert_eq!(s.resolve_one("nothing", &declared).unwrap(), None);
-        let e = s.resolve("k", &declared).unwrap_err().0;
+        let nested = names(&["P.sub.g", "Q.g"]);
+        assert_eq!(s.resolve_one("sub.g", &nested).unwrap(), Some("P.sub.g"));
+        let e = s.resolve("k", &declared).unwrap_err().to_string();
         assert!(e.contains("qualify it as one of: A.k, B.k"), "{e}");
     }
 

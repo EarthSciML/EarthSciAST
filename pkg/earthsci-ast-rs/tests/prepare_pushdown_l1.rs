@@ -23,7 +23,7 @@ use std::rc::Rc;
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
-use earthsci_ast::{AxisSel, PrepareError, PrepareProvider};
+use earthsci_ast::{AxisSel, DataProvider, ProviderError};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 
 use crate::common;
@@ -75,8 +75,8 @@ fn lcc_inv(x: f64, y: f64, c: &Lcc) -> (f64, f64) {
 
 struct MockConst(Vec<f64>);
 
-impl PrepareProvider for MockConst {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+impl DataProvider for MockConst {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
     }
 }
@@ -92,8 +92,8 @@ struct MockGated {
     calls: Rc<RefCell<Vec<Call>>>,
 }
 
-impl PrepareProvider for MockGated {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+impl DataProvider for MockGated {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         self.calls.borrow_mut().push(Call::Wholesale);
         Ok(self.full.clone())
     }
@@ -105,7 +105,7 @@ impl PrepareProvider for MockGated {
     fn sample_with_selection(
         &mut self,
         selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, PrepareError> {
+    ) -> Result<ArrayD<f64>, ProviderError> {
         self.calls
             .borrow_mut()
             .push(Call::Selection(selection.to_vec()));
@@ -303,7 +303,7 @@ fn l1_against_the_oracle(with_bystander: bool) {
     }
 
     // ---- providers: mocks only, keyed by the document's loader variables ----
-    let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
+    let mut providers: Vec<(String, Box<dyn DataProvider>)> = vec![
         (
             "ISRM.TotalPop".into(),
             Box::new(MockConst(total_pop.to_vec())),
@@ -363,7 +363,8 @@ fn l1_against_the_oracle(with_bystander: bool) {
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: ca,
-            build_providers: providers,
+            providers: providers.into_iter().collect(),
+            build_pipeline: true,
             ..opts
         },
     )
@@ -550,7 +551,7 @@ fn prepare_pushdown_l1_single_member_support_set() {
         serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
             .expect("parse pushdown_l1.esm");
 
-    let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
+    let mut providers: Vec<(String, Box<dyn DataProvider>)> = vec![
         (
             "ISRM.TotalPop".into(),
             Box::new(MockConst(total_pop.to_vec())),
@@ -608,7 +609,8 @@ fn prepare_pushdown_l1_single_member_support_set() {
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: ca,
-            build_providers: providers,
+            providers: providers.into_iter().collect(),
+            build_pipeline: true,
             ..opts
         },
     )
@@ -698,7 +700,7 @@ fn l1_build(
             .iter()
             .map(|&(x, y)| lcc_inv(x, y, &c))
             .unzip();
-    let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
+    let mut providers: Vec<(String, Box<dyn DataProvider>)> = vec![
         (
             "ISRM.TotalPop".into(),
             Box::new(MockConst(vec![100.0, 200.0, 300.0, 400.0])),
@@ -763,7 +765,8 @@ fn l1_build(
             model_name: Some("ISRM".to_string()),
             pushdown_rewrite: true,
             const_arrays: ca,
-            build_providers: providers,
+            providers: providers.into_iter().collect(),
+            build_pipeline: true,
             ..Default::default()
         },
     );

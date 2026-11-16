@@ -1,11 +1,10 @@
 //! Adapter: serve an ESS data loader through a real EarthSciIO [`Provider`].
 //!
-//! [`CadenceProvider`]'s own documentation specifies this seam — *"ESS does not
-//! link the EarthSciIO crate; a thin adapter at the integration boundary
-//! implements this trait by delegating to the real `Provider` (and converting an
-//! f64 anchor to the [`OffsetDateTime`] the upstream `refresh` wants)"*. This
-//! module is that adapter, behind the optional `esio` feature so the default
-//! build still does not link EarthSciIO.
+//! ESS does not link the EarthSciIO crate: [`crate::provider::DataProvider`] is
+//! implemented here by delegating to the real `Provider` (and converting an f64
+//! time to the [`OffsetDateTime`] the upstream `refresh` wants). This module is
+//! that adapter, behind the optional `esio` feature so the default build still
+//! does not link EarthSciIO.
 //!
 //! It mirrors the Python binding's `earthsci_ast.data_sources.esio_provider`:
 //! opt-in, caller-selected, never the default. Wiring it unconditionally would
@@ -45,7 +44,7 @@ use indexmap::IndexMap;
 use ndarray::{ArrayD, Axis, IxDyn};
 use time::OffsetDateTime;
 
-use crate::provider::{CadenceProvider, NativeField, ProviderError};
+use crate::provider::{NativeField, ProviderError};
 use crate::pushdown_rewrite::GateAxis;
 use crate::types::UnitConversion;
 use crate::unit_conversion::{apply_unit_conversion, parse_unit_conversion};
@@ -599,7 +598,7 @@ enum SelectApplication {
     /// Honoured engine-side rather than by the reader: applied after decode
     /// (whole-file reader, or after a record filter), or — when an axis gates
     /// on a derived set — DEFERRED, surfaced by
-    /// [`PrepareProvider::gate_spec`](crate::prepare::PrepareProvider::gate_spec)
+    /// [`DataProvider::gate_spec`](crate::provider::DataProvider::gate_spec)
     /// and fetched pre-sliced after value-invention. This is the only arm that
     /// may carry a [`GateAxis::GatedBy`].
     Engine(Vec<GateAxis>),
@@ -649,7 +648,7 @@ impl EsioProviderBuilder {
 
     /// The UTC instant model time `0` stands for, in Unix seconds (esm-spec
     /// §2.2.7's time origin). A refresh at model time `t` reads the instant
-    /// `time_origin + t`, and [`CadenceProvider::refresh_times`] reports
+    /// `time_origin + t`, and [`DataProvider::refresh_times`](crate::provider::DataProvider::refresh_times) reports
     /// anchors on the model clock (`unix - time_origin`).
     ///
     /// Defaults to `0.0`, the POSIX epoch, so model time IS Unix seconds for a
@@ -806,7 +805,7 @@ impl EsioProviderBuilder {
     }
 }
 
-/// An ESS [`CadenceProvider`] backed by a real EarthSciIO [`Provider`].
+/// An ESS [`DataProvider`](crate::provider::DataProvider) backed by a real EarthSciIO [`Provider`].
 pub struct EsioProvider {
     inner: Provider,
     var_map: IndexMap<String, String>,
@@ -974,7 +973,7 @@ impl EsioProvider {
 
 // --------------------------------------------------------------------------- //
 // `prepare` integration (Phase 4 clean consolidation): the build-time
-// [`crate::prepare::PrepareProvider`] contract, so the engine's record-derived
+// [`crate::provider::DataProvider`] contract, so the engine's record-derived
 // gated deferral can drive a REAL EarthSciIO fetch pre-sliced to the invented
 // support set — the runner's hand-built `Selection::Orthogonal` moved into the
 // engine.
@@ -1013,12 +1012,12 @@ pub struct DocumentProviderOptions {
 #[cfg(not(target_arch = "wasm32"))]
 mod prepare_impl {
     use super::*;
-    use crate::prepare::{AxisSel, PrepareError, PrepareProvider};
+    use crate::provider::{AxisSel, DataProvider};
     use crate::pushdown_rewrite::ProviderGate;
     use earthsciio::format::AxisSelect;
 
-    fn perr(msg: impl Into<String>) -> PrepareError {
-        PrepareError(msg.into())
+    fn perr(msg: impl Into<String>) -> ProviderError {
+        err(msg)
     }
 
     /// A `select.axes` declaration on a loader or one of its variables.
@@ -1031,7 +1030,7 @@ mod prepare_impl {
         doc: &serde_json::Value,
         ctx: &str,
         node: &serde_json::Value,
-    ) -> Result<Option<Vec<GateAxis>>, PrepareError> {
+    ) -> Result<Option<Vec<GateAxis>>, ProviderError> {
         let Some(sel) = node.get("select") else {
             return Ok(None);
         };
@@ -1053,7 +1052,7 @@ mod prepare_impl {
         doc: &serde_json::Value,
         ctx: &str,
         ax: &serde_json::Value,
-    ) -> Result<serde_json::Value, PrepareError> {
+    ) -> Result<serde_json::Value, ProviderError> {
         let Some(range) = ax.get("range").and_then(serde_json::Value::as_object) else {
             return Ok(ax.clone());
         };
@@ -1079,7 +1078,7 @@ mod prepare_impl {
     }
 
     /// A loader variable's `codes` map (string column → number).
-    fn parse_codes(ctx: &str, vd: &serde_json::Value) -> Result<Option<CodeMap>, PrepareError> {
+    fn parse_codes(ctx: &str, vd: &serde_json::Value) -> Result<Option<CodeMap>, ProviderError> {
         let Some(codes) = vd.get("codes") else {
             return Ok(None);
         };
@@ -1124,12 +1123,12 @@ mod prepare_impl {
 
     /// The single field of a `materialize` result (the `prepare` providers
     /// contract is one provider per fed variable).
-    fn single_field(fields: HashMap<String, NativeField>) -> Result<ArrayD<f64>, PrepareError> {
+    fn single_field(fields: HashMap<String, NativeField>) -> Result<ArrayD<f64>, ProviderError> {
         if fields.len() != 1 {
             let mut keys: Vec<_> = fields.keys().cloned().collect();
             keys.sort();
             return Err(perr(format!(
-                "prepare provider expects exactly one field per provider, got {keys:?}; \
+                "a provider feeds one parameter, but this one reads {keys:?}; \
                  construct one EsioProvider per variable (providers_from_document does)"
             )));
         }
@@ -1159,7 +1158,7 @@ mod prepare_impl {
         key: &str,
         arr: ArrayD<f64>,
         selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, PrepareError> {
+    ) -> Result<ArrayD<f64>, ProviderError> {
         if selection.len() != arr.ndim() {
             return Err(perr(format!(
                 "provider '{key}': the selection has {} axes but the array is rank {} ({:?})",
@@ -1190,14 +1189,14 @@ mod prepare_impl {
     }
 
     impl EsioProvider {
-        /// [`PrepareProvider::sample_with_selection`] for a provider that
+        /// [`DataProvider::sample_with_selection`] for a provider that
         /// cannot push a selection down: the record a time-less sample reads
         /// (`prime`), sampled statelessly and whole, then sliced here — never
         /// a reader-side select, which would address the file's record axis.
         fn sample_then_select(
             &mut self,
             selection: &[AxisSel],
-        ) -> Result<ArrayD<f64>, PrepareError> {
+        ) -> Result<ArrayD<f64>, ProviderError> {
             self.sample_then_select_at(self.prime, selection)
         }
 
@@ -1206,7 +1205,7 @@ mod prepare_impl {
             &mut self,
             at: OffsetDateTime,
             selection: &[AxisSel],
-        ) -> Result<ArrayD<f64>, PrepareError> {
+        ) -> Result<ArrayD<f64>, ProviderError> {
             let pe = |e: ProviderError| perr(e.to_string());
             let fields = if self.table.is_some() {
                 self.table_fields(at).map_err(pe)?.1
@@ -1237,10 +1236,17 @@ mod prepare_impl {
         }
     }
 
-    impl PrepareProvider for EsioProvider {
-        fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
-            let fields = CadenceProvider::materialize(self).map_err(|e| perr(e.to_string()))?;
-            single_field(fields)
+    impl DataProvider for EsioProvider {
+        fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+            single_field(self.materialize_fields()?)
+        }
+
+        fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
+            self.refresh_fields(t)?.map(single_field).transpose()
+        }
+
+        fn refresh_times(&self) -> Vec<f64> {
+            self.model_refresh_times()
         }
 
         fn supports_selection(&self) -> bool {
@@ -1250,7 +1256,7 @@ mod prepare_impl {
         fn sample_with_selection(
             &mut self,
             selection: &[AxisSel],
-        ) -> Result<ArrayD<f64>, PrepareError> {
+        ) -> Result<ArrayD<f64>, ProviderError> {
             if self.table.is_some() || self.time_varying {
                 // Never pushed (see `supports_selection`): read the record a
                 // time-less sample primes at whole, and select engine-side.
@@ -1270,10 +1276,6 @@ mod prepare_impl {
                 .convert_units(fields)
                 .map_err(|e| perr(e.to_string()))?;
             single_field(fields)
-        }
-
-        fn is_const(&self) -> bool {
-            CadenceProvider::refresh_times(self).is_empty()
         }
 
         fn gate_spec(&self) -> Option<ProviderGate> {
@@ -1302,7 +1304,7 @@ mod prepare_impl {
 
     impl EsioProvider {
         /// The sample at model time `t` (seconds from the time origin, the
-        /// scale of [`refresh_times`](CadenceProvider::refresh_times)) with a
+        /// scale of [`refresh_times`](DataProvider::refresh_times)) with a
         /// resolved per-axis `selection` over the parameter's DELIVERED axes
         /// (for two records per sample the first entry addresses the record
         /// axis).
@@ -1312,15 +1314,14 @@ mod prepare_impl {
         /// engine-side, since a reader select is positional over the file's
         /// dimensions, time included. A time-invariant provider has one
         /// sample, so `t` is not consulted and the selection goes through
-        /// [`PrepareProvider::sample_with_selection`].
+        /// [`DataProvider::sample_with_selection`].
         pub fn sample_with_selection_at(
             &mut self,
             t: f64,
             selection: &[AxisSel],
         ) -> Result<ArrayD<f64>, ProviderError> {
             if !self.time_varying {
-                return PrepareProvider::sample_with_selection(self, selection)
-                    .map_err(|e| err(e.0));
+                return DataProvider::sample_with_selection(self, selection).map_err(|e| err(e.0));
             }
             let at = self.instant(t)?;
             self.sample_then_select_at(at, selection)
@@ -1456,7 +1457,7 @@ mod prepare_impl {
     fn document_time_origin(
         doc: &serde_json::Value,
         window: Option<Window>,
-    ) -> Result<f64, PrepareError> {
+    ) -> Result<f64, ProviderError> {
         if let Some(temporal) = doc
             .pointer("/domain/temporal")
             .and_then(serde_json::Value::as_object)
@@ -1504,7 +1505,7 @@ mod prepare_impl {
         cache_root: &std::path::Path,
         loaders: Option<&[&str]>,
         url_overrides: &HashMap<String, String>,
-    ) -> Result<Vec<(String, EsioProvider)>, PrepareError> {
+    ) -> Result<Vec<(String, EsioProvider)>, ProviderError> {
         providers_from_document_with(
             doc,
             cache_root,
@@ -1524,7 +1525,7 @@ mod prepare_impl {
         key: &str,
         origin: &str,
         value: Option<&serde_json::Value>,
-    ) -> Result<Option<u32>, PrepareError> {
+    ) -> Result<Option<u32>, ProviderError> {
         let Some(v) = value.filter(|v| !v.is_null()) else {
             return Ok(None);
         };
@@ -1632,7 +1633,7 @@ mod prepare_impl {
         ctx: &RawRecordContext<'_>,
         key: &str,
         shape: Option<&serde_json::Value>,
-    ) -> Result<Option<u32>, PrepareError> {
+    ) -> Result<Option<u32>, ProviderError> {
         let as_dims = |v: &serde_json::Value| -> Vec<String> {
             v.as_array()
                 .map(|a| {
@@ -1713,7 +1714,7 @@ mod prepare_impl {
         doc: &serde_json::Value,
         cache_root: &std::path::Path,
         opts: &DocumentProviderOptions,
-    ) -> Result<Vec<(String, EsioProvider)>, PrepareError> {
+    ) -> Result<Vec<(String, EsioProvider)>, ProviderError> {
         let loaders = opts.loaders.as_deref();
         // esm-spec §2.2.7 / §8.3: the instant model time 0 stands for, and the
         // run window — the caller's, else the document's `solver.time_span`
@@ -1723,7 +1724,7 @@ mod prepare_impl {
             Some(w) => Some(w),
             None => crate::solver::raw_time_span_seconds(doc)
                 .map_err(|e| perr(format!("providers_from_document: {e}")))?
-                .map(|(start, end)| -> Result<Window, PrepareError> {
+                .map(|(start, end)| -> Result<Window, ProviderError> {
                     let at = |s: f64| {
                         unix_instant(time_origin + s).map_err(|why| {
                             perr(format!(
@@ -2090,8 +2091,10 @@ impl EsioProvider {
     }
 }
 
-impl CadenceProvider for EsioProvider {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+impl EsioProvider {
+    /// Every field this provider reads, time-less: the record a time-less
+    /// sample primes at, keyed by the model variable each feeds.
+    pub fn materialize_fields(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
         // A record-table loader serves its columns from ONE shared decode,
         // here the record a time-less sample primes at.
         if self.table.is_some() {
@@ -2107,7 +2110,12 @@ impl CadenceProvider for EsioProvider {
         self.deliver(fields)
     }
 
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    /// Every field at model time `t`: `None` when the record has not advanced
+    /// since this provider last delivered.
+    pub fn refresh_fields(
+        &mut self,
+        t: f64,
+    ) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
         // `t` is MODEL time; the data is read at the instant `origin + t`.
         let at = self.instant(t)?;
         if let Some((table, _)) = &self.table {
@@ -2135,7 +2143,7 @@ impl CadenceProvider for EsioProvider {
     }
 
     /// EarthSciIO's anchors (Unix seconds) moved onto the model clock.
-    fn refresh_times(&self) -> Vec<f64> {
+    pub fn model_refresh_times(&self) -> Vec<f64> {
         self.inner
             .refresh_times()
             .into_iter()

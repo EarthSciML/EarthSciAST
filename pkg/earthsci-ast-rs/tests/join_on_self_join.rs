@@ -200,7 +200,6 @@ fn run(t: &Table, key_col: &str, spelling: Spelling, gate: bool) -> (Vec<f64>, u
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             model_name: Some("S".into()),
             const_arrays: t.const_arrays(),
-            build_providers: Vec::new(),
             ..Default::default()
         },
     );
@@ -224,7 +223,6 @@ fn build_err(d: &Value, n: usize) -> String {
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             model_name: Some("S".into()),
             const_arrays: t.const_arrays(),
-            build_providers: Vec::new(),
             ..Default::default()
         },
     ) {
@@ -425,7 +423,6 @@ fn the_answer_is_invariant_under_a_permutation_of_the_stored_rows() {
                 compiler: Some(earthsci_ast::Compiler::Interpreter),
                 model_name: Some("S".into()),
                 const_arrays: arrays,
-                build_providers: Vec::new(),
                 ..Default::default()
             },
         )
@@ -488,7 +485,6 @@ fn three_ranges_are_spellable_with_explicit_syms() {
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             model_name: Some("S".into()),
             const_arrays: t.const_arrays(),
-            build_providers: Vec::new(),
             ..Default::default()
         },
     )

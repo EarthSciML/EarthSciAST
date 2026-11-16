@@ -1,7 +1,7 @@
 //! A document whose build ingests data may hold more than one model.
 //!
 //! The build pipeline — the route every document with a `kind: data`
-//! parameter (or a caller's `build_providers` / `const_arrays`) takes — picked
+//! parameter (or a caller's `providers` / `const_arrays`) takes — picked
 //! ONE model, defaulted to the only one, and refused a document of several
 //! with none selected: `document holds several models; pass model_name`. So
 //! the day a two-model document ingested anything, every assertion in it
@@ -21,7 +21,7 @@ use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
 use earthsci_ast::{
-    AxisSel, Compiler, GateAxis, InlineTestOptions, PrepareError, PrepareProvider, ProblemOptions,
+    AxisSel, Compiler, DataProvider, GateAxis, InlineTestOptions, ProblemOptions, ProviderError,
     ProviderGate, esm_problem, load_string, observed_field, run_inline_tests_with_options,
 };
 
@@ -98,14 +98,14 @@ fn document(models: Value) -> Value {
     })
 }
 
-type Providers = Vec<(String, Box<dyn PrepareProvider>)>;
+type Providers = Vec<(String, Box<dyn DataProvider>)>;
 
 fn providers(cols: &[(&str, &[f64])]) -> Providers {
     cols.iter()
         .map(|(k, v)| {
             (
                 (*k).to_string(),
-                Box::new(MockConst(v.to_vec())) as Box<dyn PrepareProvider>,
+                Box::new(MockConst(v.to_vec())) as Box<dyn DataProvider>,
             )
         })
         .collect()
@@ -125,7 +125,8 @@ fn build_and_read(
         ProblemOptions {
             compiler: Some(Compiler::Interpreter),
             model_name: model_name.map(str::to_string),
-            build_providers: providers(cols),
+            providers: providers(cols).into_iter().collect(),
+            build_pipeline: true,
             ..Default::default()
         },
     )
@@ -238,8 +239,8 @@ struct MockGated {
     full: Vec<f64>,
 }
 
-impl PrepareProvider for MockGated {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+impl DataProvider for MockGated {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         Ok(ArrayD::from_shape_vec(IxDyn(&[self.full.len()]), self.full.clone()).unwrap())
     }
 
@@ -250,9 +251,11 @@ impl PrepareProvider for MockGated {
     fn sample_with_selection(
         &mut self,
         selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, PrepareError> {
+    ) -> Result<ArrayD<f64>, ProviderError> {
         let AxisSel::Indices(idx) = &selection[0] else {
-            return Err(PrepareError("expected an index selection".to_string()));
+            return Err(ProviderError::new(
+                "expected an index selection".to_string(),
+            ));
         };
         let v: Vec<f64> = idx.iter().map(|&i| self.full[i]).collect();
         Ok(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v).unwrap())
@@ -312,12 +315,14 @@ fn a_gated_slab_binds_under_its_qualified_name_in_a_whole_document_build() {
         (0.0, 0.0),
         ProblemOptions {
             compiler: Some(Compiler::Interpreter),
-            build_providers: vec![(
+            build_pipeline: true,
+            providers: [(
                 "Gated.sr".to_string(),
                 Box::new(MockGated {
                     full: vec![10.0, 20.0, 30.0, 40.0],
-                }) as Box<dyn PrepareProvider>,
-            )],
+                }) as Box<dyn DataProvider>,
+            )]
+            .into(),
             ..Default::default()
         },
     )

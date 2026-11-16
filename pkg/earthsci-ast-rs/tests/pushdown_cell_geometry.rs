@@ -24,7 +24,7 @@ use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
 use earthsci_ast::desugar_pushdown;
-use earthsci_ast::{AxisSel, PrepareError, PrepareProvider};
+use earthsci_ast::{AxisSel, DataProvider, ProviderError};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 
 use crate::common;
@@ -380,8 +380,8 @@ struct MockGated {
     calls: Rc<RefCell<Vec<Option<Vec<AxisSel>>>>>,
 }
 
-impl PrepareProvider for MockGated {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+impl DataProvider for MockGated {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         self.calls.borrow_mut().push(None);
         Ok(self.full.clone())
     }
@@ -393,7 +393,7 @@ impl PrepareProvider for MockGated {
     fn sample_with_selection(
         &mut self,
         selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, PrepareError> {
+    ) -> Result<ArrayD<f64>, ProviderError> {
         self.calls.borrow_mut().push(Some(selection.to_vec()));
         Ok(common::select_axes(&self.full, selection))
     }
@@ -411,7 +411,6 @@ fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: const_arrays(),
-            build_providers: Vec::new(),
             ..ProblemOptions {
                 model_name: Some("Binned".into()),
                 ..Default::default()
@@ -430,7 +429,7 @@ fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
     let mut ca = const_arrays();
     let sr = ca.remove("SR_PM25").unwrap();
     let calls = Rc::new(RefCell::new(Vec::new()));
-    let providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![(
+    let providers: Vec<(String, Box<dyn DataProvider>)> = vec![(
         "Binned.SR_PM25".into(),
         Box::new(MockGated {
             full: sr,
@@ -445,7 +444,8 @@ fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: ca,
-            build_providers: providers,
+            providers: providers.into_iter().collect(),
+            build_pipeline: true,
             ..ProblemOptions {
                 model_name: Some("Binned".into()),
                 pushdown_rewrite: true,

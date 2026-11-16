@@ -10,7 +10,7 @@
 //! A memo keyed on too little is a SILENT WRONG ANSWER, so this file is the
 //! invalidation suite, and it works two ways at once:
 //!
-//! 1. **By count.** The `build_providers` FACTORY is called exactly once per
+//! 1. **By count.** The provider FACTORY is called exactly once per
 //!    BUILD (it used to be once per test, which is precisely what the memo
 //!    changes). A counting factory therefore reports the number of builds
 //!    directly, so a key that fails to invalidate is visible as a count that is
@@ -22,13 +22,10 @@
 //! `BuildKey::of` in `src/inline_tests.rs` and the matching
 //! `rebuilds_when_*` test fails on both counts.
 
-use earthsci_ast::{
-    AssertionResult, BuildProviderFactory, SolveOptions, load_string, run_inline_tests_filtered,
-    run_inline_tests_with_base_dir, run_inline_tests_with_providers,
-};
+use earthsci_ast::{AssertionResult, BuildProviderFactory, SolveOptions, load_string};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use serde_json::{Value, json};
 use std::cell::Cell;
-use std::path::Path;
 
 fn opts() -> SolveOptions {
     SolveOptions {
@@ -81,7 +78,15 @@ fn run_counting(file_json: &Value, filter: Option<&str>) -> (Vec<AssertionResult
         builds.set(builds.get() + 1);
         Ok(Vec::new())
     });
-    let results = run_inline_tests_filtered(&file, None, &opts(), None, Some(&*make), filter);
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            solve: opts(),
+            test_filter: filter.map(str::to_string),
+            ..Default::default()
+        },
+        Some(&*make),
+    );
     (results, builds.get())
 }
 
@@ -260,7 +265,15 @@ fn rebuilds_when_expression_template_imports_differ() {
         let base = dir.path().join("model.esm");
         std::fs::write(&base, leaf_doc(tests).to_string()).expect("write model");
         let file = earthsci_ast::load_path(&base).expect("model loads");
-        run_inline_tests_with_base_dir(&file, None, &opts(), Some(dir.path()))
+        run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                solve: opts(),
+                base_dir: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            None,
+        )
     };
 
     let fwd = run(json!([two.clone(), three.clone()]));
@@ -349,8 +362,7 @@ fn filter_matching_nothing_builds_nothing() {
     assert_eq!(builds, 0);
 }
 
-/// The unfiltered entry points keep their meaning: `run_inline_tests_with_providers`
-/// is `run_inline_tests_filtered(.., None)`.
+/// No `test_filter` runs every test.
 #[test]
 fn unfiltered_entry_point_runs_everything() {
     let file = load_string(
@@ -366,8 +378,14 @@ fn unfiltered_entry_point_runs_everything() {
         builds.set(builds.get() + 1);
         Ok(Vec::new())
     });
-    let results =
-        run_inline_tests_with_providers(&file, None, &opts(), None::<&Path>, Some(&*make));
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            solve: opts(),
+            ..Default::default()
+        },
+        Some(&*make),
+    );
     assert_eq!(results.len(), 2);
     assert_eq!(builds.get(), 1);
 }

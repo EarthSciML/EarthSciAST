@@ -21,7 +21,7 @@
 use serde_json::{Value, json};
 
 use earthsci_ast::{
-    Compiler, PrepareProvider, ProblemOptions, esm_problem, load_string, observed_field,
+    Compiler, DataProvider, ProblemOptions, esm_problem, load_string, observed_field,
 };
 
 use crate::common::MockConst;
@@ -95,12 +95,13 @@ fn build_and_read_all(
         ProblemOptions {
             compiler: Some(Compiler::Interpreter),
             model_name: Some(model.to_string()),
-            build_providers: providers
+            build_pipeline: true,
+            providers: providers
                 .iter()
                 .map(|(key, values)| {
                     (
                         (*key).to_string(),
-                        Box::new(MockConst(values.to_vec())) as Box<dyn PrepareProvider>,
+                        Box::new(MockConst(values.to_vec())) as Box<dyn DataProvider>,
                     )
                 })
                 .collect(),

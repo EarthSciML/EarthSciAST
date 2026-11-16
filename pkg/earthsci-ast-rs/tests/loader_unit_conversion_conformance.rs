@@ -11,10 +11,9 @@
 #![cfg(feature = "esio")]
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use earthsci_ast::PrepareProvider;
+use earthsci_ast::DataProvider;
 use earthsci_ast::esio_provider::providers_from_document;
 use serde_json::Value;
 
@@ -53,7 +52,7 @@ struct Case {
 fn cases() -> Vec<Case> {
     let tests = tests_dir();
     let manifest =
-        common::read_json(&tests.join("conformance/loader_unit_conversion/manifest.json"));
+        common::read_json(tests.join("conformance/loader_unit_conversion/manifest.json"));
     let fixtures = manifest["fixtures"]
         .as_array()
         .expect("manifest has a fixtures array");
@@ -62,9 +61,8 @@ fn cases() -> Vec<Case> {
         .iter()
         .map(|f| {
             let id = f["id"].as_str().expect("fixture id").to_string();
-            let doc =
-                common::read_json(&tests.join(f["document"].as_str().expect("document path")));
-            let golden = common::read_json(&tests.join(f["golden"].as_str().expect("golden path")));
+            let doc = common::read_json(tests.join(f["document"].as_str().expect("document path")));
+            let golden = common::read_json(tests.join(f["golden"].as_str().expect("golden path")));
             let mut overrides: HashMap<String, String> = HashMap::new();
             if let Some(map) = f.get("url_overrides").and_then(Value::as_object) {
                 for (loader, rel) in map {

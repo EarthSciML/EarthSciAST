@@ -15,7 +15,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
+use earthsci_ast::provider::{DataProvider, ProviderError};
 use earthsci_ast::{
     Compiler, ForcingSlot, ProblemOptions, RhsProgram, SlotKind, esm_problem, forcing_from_sample,
     rhs_program,
@@ -35,21 +35,9 @@ struct Fixed {
     array: ArrayD<f64>,
 }
 
-impl Fixed {
-    fn sample(&self) -> HashMap<String, NativeField> {
-        HashMap::from([(self.key.clone(), NativeField::new(self.array.clone()))])
-    }
-}
-
-impl CadenceProvider for Fixed {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
-        Ok(self.sample())
-    }
-    fn refresh(&mut self, _t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
-        Ok(None)
-    }
-    fn refresh_times(&self) -> Vec<f64> {
-        Vec::new()
+impl DataProvider for Fixed {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        Ok(self.array.clone())
     }
 }
 
@@ -129,7 +117,7 @@ fn fed_providers(nx: usize, ny: usize) -> Vec<Fixed> {
 fn fed_problem(
     nx: usize,
     ny: usize,
-    providers: HashMap<String, Box<dyn CadenceProvider>>,
+    providers: HashMap<String, Box<dyn DataProvider>>,
 ) -> Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError> {
     esm_problem(
         &fed_doc(nx, ny),
@@ -142,10 +130,10 @@ fn fed_problem(
     )
 }
 
-fn boxed(providers: Vec<Fixed>) -> HashMap<String, Box<dyn CadenceProvider>> {
+fn boxed(providers: Vec<Fixed>) -> HashMap<String, Box<dyn DataProvider>> {
     providers
         .into_iter()
-        .map(|p| (p.key.clone(), Box::new(p) as Box<dyn CadenceProvider>))
+        .map(|p| (p.key.clone(), Box::new(p) as Box<dyn DataProvider>))
         .collect()
 }
 
@@ -158,7 +146,7 @@ fn fed_program(nx: usize, ny: usize) -> RhsProgram {
 /// Every slot of `prog`, from the matching sample, equals its default buffer.
 fn assert_default_is_forcing_from_sample(
     prog: &RhsProgram,
-    samples: &HashMap<String, HashMap<String, NativeField>>,
+    samples: &HashMap<String, ArrayD<f64>>,
 ) {
     let d = prog.default_forcing();
     for (k, slot) in prog.forcing_slots().iter().enumerate() {
@@ -194,9 +182,9 @@ fn forcing_from_sample_is_the_problems_buffer() {
             ("M.s".to_string(), vec![]),
         ]
     );
-    let samples: HashMap<String, HashMap<String, NativeField>> = fed_providers(nx, ny)
+    let samples: HashMap<String, ArrayD<f64>> = fed_providers(nx, ny)
         .iter()
-        .map(|p| (format!("M.{}", p.key), p.sample()))
+        .map(|p| (format!("M.{}", p.key), p.array.clone()))
         .collect();
     assert_default_is_forcing_from_sample(&prog, &samples);
 
@@ -217,33 +205,19 @@ fn forcing_from_sample_refuses_a_sample_that_does_not_fit_the_slot() {
         shape: vec![3, 4],
         kind: SlotKind::Forcing,
     };
-    let wrong = HashMap::from([("M.E".to_string(), NativeField::new(field(&[4, 3], 0.0)))]);
+    let wrong = field(&[4, 3], 0.0);
     let err = forcing_from_sample(&wrong, &slot).expect_err("transposed shape");
     assert!(err.to_string().contains("[4, 3]"), "{err}");
-    // A one-field sample is the field, whatever it is called, as `esm_problem`
-    // binds it.
-    let one = HashMap::from([("F".to_string(), NativeField::new(field(&[3, 4], 0.0)))]);
-    assert_eq!(
-        forcing_from_sample(&one, &slot).expect("one field").len(),
-        12
-    );
-    // More than one field is refused, even when one of them is named after
-    // the slot: `esm_problem` binds exactly one.
-    let named = HashMap::from([
-        ("M.E".to_string(), NativeField::new(field(&[3, 4], 0.0))),
-        ("M.G".to_string(), NativeField::new(field(&[3, 4], 0.0))),
-    ]);
-    let err = forcing_from_sample(&named, &slot).expect_err("two fields");
-    assert!(err.to_string().contains("fed 2 fields"), "{err}");
-    assert!(forcing_from_sample(&HashMap::new(), &slot).is_err());
+    let fits = field(&[3, 4], 0.0);
+    assert_eq!(forcing_from_sample(&fits, &slot).expect("fits").len(), 12);
     let scalar = ForcingSlot {
         name: "M.s".into(),
         shape: vec![],
         kind: SlotKind::Forcing,
     };
-    let two = HashMap::from([("M.s".to_string(), NativeField::new(field(&[2], 0.0)))]);
+    let two = field(&[2], 0.0);
     assert!(forcing_from_sample(&two, &scalar).is_err());
-    let one_value = HashMap::from([("M.s".to_string(), NativeField::new(field(&[1, 1], 4.0)))]);
+    let one_value = field(&[1, 1], 4.0);
     assert_eq!(
         bits(&forcing_from_sample(&one_value, &scalar).expect("one value")),
         bits(&[4.0])
@@ -280,12 +254,12 @@ fn esm_problem_refuses_a_provider_of_the_wrong_shape() {
 struct Discrete(Fixed);
 
 #[cfg(feature = "solve")]
-impl CadenceProvider for Discrete {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
-        Ok(self.0.sample())
+impl DataProvider for Discrete {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        Ok(self.0.array.clone())
     }
-    fn refresh(&mut self, _t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
-        Ok(Some(self.0.sample()))
+    fn refresh(&mut self, _t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
+        Ok(Some(self.0.array.clone()))
     }
     fn refresh_times(&self) -> Vec<f64> {
         vec![10.0]
@@ -413,16 +387,17 @@ fn forcing_from_sample_of_a_converted_source_is_the_problems_buffer() {
     };
     // The document's providers reach `esm_problem` the way the `esm` command
     // passes them: as build-time providers.
-    let build_providers: Vec<(String, Box<dyn earthsci_ast::PrepareProvider>)> = build()
+    let build_providers: Vec<(String, Box<dyn earthsci_ast::DataProvider>)> = build()
         .into_iter()
-        .map(|(k, p)| (k, Box::new(p) as Box<dyn earthsci_ast::PrepareProvider>))
+        .map(|(k, p)| (k, Box::new(p) as Box<dyn earthsci_ast::DataProvider>))
         .collect();
     let prob = esm_problem(
         &doc,
         (0.0, 1.0),
         ProblemOptions {
             compiler: Some(Compiler::Native),
-            build_providers,
+            providers: build_providers.into_iter().collect(),
+            build_pipeline: true,
             ..Default::default()
         },
     )
@@ -431,7 +406,7 @@ fn forcing_from_sample_of_a_converted_source_is_the_problems_buffer() {
     assert_eq!(prog.forcing_slots().len(), 4);
     let mut samples = HashMap::new();
     for (k, mut p) in build() {
-        let s = p.materialize().expect("sample");
+        let s = DataProvider::sample(&mut p).expect("sample");
         samples.insert(k, s);
     }
     assert_default_is_forcing_from_sample(&prog, &samples);

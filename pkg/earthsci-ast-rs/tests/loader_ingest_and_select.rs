@@ -34,8 +34,7 @@ use std::rc::Rc;
 
 use earthsci_ast::GateAxis;
 use earthsci_ast::esio_provider::{EsioProvider, providers_from_document};
-use earthsci_ast::provider::CadenceProvider;
-use earthsci_ast::{AxisSel, PrepareError, PrepareProvider};
+use earthsci_ast::{AxisSel, DataProvider, ProviderError};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 use ndarray::ArrayD;
 use serde_json::{Value, json};
@@ -234,7 +233,7 @@ fn every_variable_of_a_filtered_loader_declares_the_same_extent() {
     let provs = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
         .expect("providers build");
     for (key, p) in &provs {
-        let declared = PrepareProvider::extent_metaparameter(p);
+        let declared = DataProvider::extent_metaparameter(p);
         // `extent` is the SOURCE's, inherited by every parameter that reads it.
         // A provider key names the consuming parameter, so the source comes from
         // that parameter's own `update` rather than from a prefix on the key.
@@ -257,8 +256,8 @@ fn prepare_discovers_n_rec_and_the_graph_is_sized_by_it() {
     let providers = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
         .expect("providers build")
         .into_iter()
-        .map(|(k, p)| (k, Box::new(p) as Box<dyn PrepareProvider>))
-        .collect();
+        .map(|(k, p)| (k, Box::new(p) as Box<dyn DataProvider>))
+        .collect::<HashMap<_, _>>();
 
     // NOTE the empty metaparameters: the caller passes NO N_REC. The document
     // declares that the loader knows it.
@@ -267,7 +266,8 @@ fn prepare_discovers_n_rec_and_the_graph_is_sized_by_it() {
         (0.0, 0.0),
         ProblemOptions {
             const_arrays: HashMap::new(),
-            build_providers: providers,
+            providers,
+            build_pipeline: true,
             ..ProblemOptions {
                 metaparameters: BTreeMap::new(),
                 pushdown_rewrite: true,
@@ -303,8 +303,8 @@ fn a_caller_binding_that_contradicts_the_discovered_extent_is_an_error() {
     let providers = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
         .expect("providers build")
         .into_iter()
-        .map(|(k, p)| (k, Box::new(p) as Box<dyn PrepareProvider>))
-        .collect();
+        .map(|(k, p)| (k, Box::new(p) as Box<dyn DataProvider>))
+        .collect::<HashMap<_, _>>();
     let mut metaparameters = BTreeMap::new();
     metaparameters.insert("N_REC".to_string(), 5); // the RAW row count, a stale guess
     let msg = match esm_problem(
@@ -312,7 +312,8 @@ fn a_caller_binding_that_contradicts_the_discovered_extent_is_an_error() {
         (0.0, 0.0),
         ProblemOptions {
             const_arrays: HashMap::new(),
-            build_providers: providers,
+            providers,
+            build_pipeline: true,
             ..ProblemOptions {
                 metaparameters,
                 pushdown_rewrite: true,
@@ -395,14 +396,15 @@ fn a_truncated_table_re_discovers_its_own_smaller_extent() {
     let providers = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
         .expect("providers build")
         .into_iter()
-        .map(|(k, p)| (k, Box::new(p) as Box<dyn PrepareProvider>))
-        .collect();
+        .map(|(k, p)| (k, Box::new(p) as Box<dyn DataProvider>))
+        .collect::<HashMap<_, _>>();
     let prep = esm_problem(
         &doc,
         (0.0, 0.0),
         ProblemOptions {
             const_arrays: HashMap::new(),
-            build_providers: providers,
+            providers,
+            build_pipeline: true,
             ..ProblemOptions {
                 pushdown_rewrite: true,
                 ..Default::default()
@@ -432,14 +434,15 @@ fn the_selected_prefix_reaches_the_model_as_its_own_axis() {
     let providers = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
         .expect("providers build")
         .into_iter()
-        .map(|(k, p)| (k, Box::new(p) as Box<dyn PrepareProvider>))
-        .collect();
+        .map(|(k, p)| (k, Box::new(p) as Box<dyn DataProvider>))
+        .collect::<HashMap<_, _>>();
     let prep = esm_problem(
         &doc,
         (0.0, 0.0),
         ProblemOptions {
             const_arrays: HashMap::new(),
-            build_providers: providers,
+            providers,
+            build_pipeline: true,
             ..ProblemOptions {
                 pushdown_rewrite: true,
                 ..Default::default()
@@ -538,28 +541,28 @@ struct SpyProvider {
     calls: Rc<RefCell<Vec<Fetch>>>,
 }
 
-impl PrepareProvider for SpyProvider {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+impl DataProvider for SpyProvider {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         self.calls.borrow_mut().push(Fetch::Whole);
         self.inner.sample()
     }
 
     fn supports_selection(&self) -> bool {
-        PrepareProvider::supports_selection(&self.inner)
+        DataProvider::supports_selection(&self.inner)
     }
 
     fn sample_with_selection(
         &mut self,
         selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, PrepareError> {
+    ) -> Result<ArrayD<f64>, ProviderError> {
         self.calls
             .borrow_mut()
             .push(Fetch::Selection(selection.to_vec()));
         self.inner.sample_with_selection(selection)
     }
 
-    fn is_const(&self) -> bool {
-        self.inner.is_const()
+    fn refresh_times(&self) -> Vec<f64> {
+        DataProvider::refresh_times(&self.inner)
     }
 
     fn gate_spec(&self) -> Option<earthsci_ast::ProviderGate> {
@@ -567,7 +570,7 @@ impl PrepareProvider for SpyProvider {
     }
 
     fn extent_metaparameter(&self) -> Option<String> {
-        PrepareProvider::extent_metaparameter(&self.inner)
+        DataProvider::extent_metaparameter(&self.inner)
     }
 }
 
@@ -578,7 +581,7 @@ fn spied_providers(
     doc: &Value,
     cache_root: &Path,
 ) -> (
-    Vec<(String, Box<dyn PrepareProvider>)>,
+    HashMap<String, Box<dyn DataProvider>>,
     HashMap<String, Rc<RefCell<Vec<Fetch>>>>,
 ) {
     let mut logs = HashMap::new();
@@ -588,7 +591,7 @@ fn spied_providers(
         .map(|(k, p)| {
             let calls = Rc::new(RefCell::new(Vec::new()));
             logs.insert(k.clone(), calls.clone());
-            let spy: Box<dyn PrepareProvider> = Box::new(SpyProvider { inner: p, calls });
+            let spy: Box<dyn DataProvider> = Box::new(SpyProvider { inner: p, calls });
             (k, spy)
         })
         .collect();
@@ -603,7 +606,7 @@ fn a_gated_select_is_reported_as_a_gate_not_pushed_to_the_reader() {
         .expect("providers build");
 
     for (key, p) in &provs {
-        let gate = PrepareProvider::gate_spec(p);
+        let gate = DataProvider::gate_spec(p);
         if key == "Ingest.emis_W" {
             let gate = gate.unwrap_or_else(|| {
                 panic!(
@@ -651,7 +654,8 @@ fn a_gated_fetch_asks_for_the_support_set_and_never_the_full_axis() {
         (0.0, 0.0),
         ProblemOptions {
             const_arrays: HashMap::new(),
-            build_providers: providers,
+            providers,
+            build_pipeline: true,
             ..ProblemOptions {
                 pushdown_rewrite: true,
                 ..Default::default()
@@ -708,7 +712,8 @@ fn the_ungated_siblings_are_still_read_eagerly_and_whole() {
         (0.0, 0.0),
         ProblemOptions {
             const_arrays: HashMap::new(),
-            build_providers: providers,
+            providers,
+            build_pipeline: true,
             ..ProblemOptions {
                 pushdown_rewrite: true,
                 ..Default::default()
@@ -771,7 +776,9 @@ fn a_declared_cadence_reaches_the_provider() {
     let provs = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
         .expect("providers build");
     assert!(
-        provs.iter().all(|(_, p)| PrepareProvider::is_const(p)),
+        provs
+            .iter()
+            .all(|(_, p)| DataProvider::refresh_times(p).is_empty()),
         "a document with no temporal block declares no cadence"
     );
 
@@ -788,16 +795,19 @@ fn a_declared_cadence_reaches_the_provider() {
     for (key, p) in &provs {
         if source_of(&doc, key) == "Grid" {
             assert!(
-                !PrepareProvider::is_const(p),
+                !DataProvider::refresh_times(p).is_empty(),
                 "{key} reads an hourly source and cannot be CONST"
             );
             assert_eq!(
-                CadenceProvider::refresh_times(p),
+                DataProvider::refresh_times(p),
                 vec![1_451_606_400.0, 1_451_610_000.0, 1_451_613_600.0],
                 "{key} refreshes on the declared hourly anchors, in epoch seconds"
             );
         } else {
-            assert!(PrepareProvider::is_const(p), "{key} reads a static source");
+            assert!(
+                DataProvider::refresh_times(p).is_empty(),
+                "{key} reads a static source"
+            );
         }
     }
 }

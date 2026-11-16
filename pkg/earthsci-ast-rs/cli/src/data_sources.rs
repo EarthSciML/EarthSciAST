@@ -13,7 +13,7 @@ use std::path::PathBuf;
 //
 // A document whose parameters declare `update: {kind: "data", …}` reads its
 // numbers off disk (esm-spec §8.9). Nothing in the library opens a file on its
-// own: the build-time provider contract `earthsci_ast::PrepareProvider` is
+// own: the build-time provider contract `earthsci_ast::DataProvider` is
 // supplied by the CALLER, and until this module existed the `esm` binary
 // supplied none — so `esm test` and `esm simulate` evaluated every data-fed
 // parameter at its `default` and reported the result as if it were the
@@ -132,7 +132,7 @@ pub(crate) fn no_reader_diagnostic(consumed: &BTreeMap<String, Vec<String>>) -> 
 /// is exported only with the library's solver (`earthsci-ast/solve`), and the
 /// `integrator` solver builds without it.
 pub(crate) type ProviderFactory =
-    dyn Fn() -> Result<Vec<(String, Box<dyn earthsci_ast::PrepareProvider>)>, String>;
+    dyn Fn() -> Result<Vec<(String, Box<dyn earthsci_ast::DataProvider>)>, String>;
 
 /// Close every metaparameter a `data_sources` `extent` binds, by SAMPLING the
 /// sources that measure themselves, and re-load the document with the sizes the
@@ -175,7 +175,7 @@ pub(crate) fn close_declared_extents(
 
     let mut extents: BTreeMap<String, i64> = BTreeMap::new();
     for (key, mut prov) in provs {
-        let Some(mp) = earthsci_ast::PrepareProvider::extent_metaparameter(&*prov) else {
+        let Some(mp) = earthsci_ast::DataProvider::extent_metaparameter(&*prov) else {
             continue;
         };
         let Ok(arr) = prov.sample() else {
@@ -237,7 +237,7 @@ fn data_source_providers(doc: &serde_json::Value) -> Option<Box<ProviderFactory>
         .map(|provs| {
             provs
                 .into_iter()
-                .map(|(k, p)| (k, Box::new(p) as Box<dyn earthsci_ast::PrepareProvider>))
+                .map(|(k, p)| (k, Box::new(p) as Box<dyn earthsci_ast::DataProvider>))
                 .collect()
         })
         .map_err(|e| format!("data_sources ingest failed for {summary}: {}", e.0))

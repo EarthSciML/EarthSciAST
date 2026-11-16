@@ -4161,7 +4161,7 @@ went from 153.2 s / 156.9 s to 0.98 s / 0.97 s for the same rows.
 #### 5.25.5 Gate
 
 **Rust** — `pkg/earthsci-ast-rs/tests/inline_test_build_memo.rs`. The runner's
-`build_providers` factory is called exactly once per build, so a counting
+provider factory is called exactly once per build, so a counting
 factory reports the build count directly: the suite pins one build for three
 same-key tests, two for each keyed field varied in turn (a fifth case varies the
 imports and reads two different lowered right-hand sides), equal answers under a

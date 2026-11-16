@@ -405,6 +405,36 @@ pub enum CompileError {
 }
 
 impl CompileError {
+    /// The diagnostic code this refusal carries, or `None` for the uncoded
+    /// build failures ([`CompileError::InterpreterBuildError`] and the
+    /// unsupported-feature variants).
+    pub fn code(&self) -> Option<&'static str> {
+        use crate::diagnostic::codes;
+        Some(match self {
+            CompileError::UnsupportedConstruct { .. } => codes::UNSUPPORTED_CONSTRUCT,
+            CompileError::DoublyDefinedUnknown { .. } => codes::EQUATION_COUNT_MISMATCH,
+            CompileError::CompilerRefusedRule { .. } => codes::COMPILER_REFUSED_RULE,
+            CompileError::UnloweredOperatorError { .. } => codes::UNLOWERED_OPERATOR,
+            CompileError::InvalidOperatorArity { .. } => "invalid_operator_arity",
+            CompileError::MakearrayRegionInvalid { .. } => codes::MAKEARRAY_REGION_INVERTED,
+            CompileError::InvalidBroadcastFn { .. } => codes::INVALID_BROADCAST_FN,
+            CompileError::UnevaluableOperatorError { .. } => codes::UNEVALUABLE_OPERATOR,
+            CompileError::ValueInventionRefused { code, .. } => code,
+            CompileError::UnsupportedElementType { .. } => "unsupported_element_type",
+            CompileError::Float32Unsupported { .. } => "float32_unsupported",
+            CompileError::ElementTypeUncarried { .. } => codes::ELEMENT_TYPE_UNCARRIED,
+            CompileError::MixedElementType { .. } => "mixed_element_type",
+            CompileError::UnalignableArrayShape { .. } => codes::ARRAY_SHAPE_MISMATCH,
+            CompileError::ObservedCycle { .. } => codes::OBSERVED_CYCLE,
+            CompileError::MissingData { .. } => "E_TREEWALK_MISSING_DATA",
+            CompileError::MissingInitialValue { .. } => "E_TREEWALK_MISSING_INITIAL_VALUE",
+            CompileError::Flatten(e) => return e.code(),
+            CompileError::UnsupportedFeatureError { .. }
+            | CompileError::UnsupportedDimensionalityError { .. }
+            | CompileError::InterpreterBuildError { .. } => return None,
+        })
+    }
+
     /// Shorthand constructor for [`CompileError::InterpreterBuildError`], the
     /// catch-all build failure, whose `{ details: format!(…) }` spelling is
     /// otherwise repeated at every raise site.
@@ -635,7 +665,12 @@ mod tests {
 
     #[test]
     fn unsupported_construct_carries_its_registered_code() {
-        let msg = discrete_event_refusal(ARRAY_EVALUATOR, Some("double")).to_string();
+        let e = discrete_event_refusal(ARRAY_EVALUATOR, Some("double"));
+        assert_eq!(
+            e.code(),
+            Some(crate::diagnostic::codes::UNSUPPORTED_CONSTRUCT)
+        );
+        let msg = e.to_string();
         assert!(
             msg.starts_with(&format!(
                 "{}:",

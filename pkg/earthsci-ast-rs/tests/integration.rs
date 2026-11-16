@@ -39,6 +39,8 @@ mod assertion_tolerance_conformance;
 mod basic_functionality;
 #[path = "build_once_spatial_field_conformance.rs"]
 mod build_once_spatial_field_conformance;
+#[path = "build_pipeline_bindings.rs"]
+mod build_pipeline_bindings;
 #[path = "build_time_computed_gathers.rs"]
 mod build_time_computed_gathers;
 #[path = "build_time_tape_route.rs"]

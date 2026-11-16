@@ -398,6 +398,45 @@ pub enum FlattenError {
     Empty,
 }
 
+impl FlattenError {
+    /// The diagnostic code this refusal carries, or `None` for an uncoded
+    /// one.
+    pub fn code(&self) -> Option<&'static str> {
+        use crate::diagnostic::codes;
+        Some(match self {
+            FlattenError::UnloweredOperator { .. } => codes::UNLOWERED_OPERATOR,
+            FlattenError::DomainUnitMismatch { .. } => codes::DOMAIN_UNIT_MISMATCH,
+            FlattenError::CouplingImport(d)
+            | FlattenError::ExpressionTemplate(d)
+            | FlattenError::RecordsPerSample(d) => d.code,
+            FlattenError::CoupleMultiplicativeNoTendency { .. } => {
+                "couple_multiplicative_no_tendency"
+            }
+            FlattenError::OperatorComposeNoMerge { .. } => "operator_compose_no_merge",
+            FlattenError::OperatorComposeRequireMatchUnmatched { .. } => {
+                "operator_compose_require_match_unmatched"
+            }
+            FlattenError::OperatorComposeAmbiguousBareName { .. } => {
+                "operator_compose_ambiguous_bare_name"
+            }
+            FlattenError::ConflictingDerivative { .. }
+            | FlattenError::DimensionPromotion { .. }
+            | FlattenError::UnmappedDomain { .. }
+            | FlattenError::UnsupportedMapping { .. }
+            | FlattenError::DomainExtentMismatch { .. }
+            | FlattenError::SliceOutOfDomain { .. }
+            | FlattenError::CyclicPromotion { .. }
+            | FlattenError::VariableMapFactorWithExpression { .. }
+            | FlattenError::VariableMapExpressionMissingFrom { .. }
+            | FlattenError::VariableMapUnresolvedEndpoint { .. }
+            | FlattenError::VariableMapShapeConflict { .. }
+            | FlattenError::Reaction(_)
+            | FlattenError::MalformedConnectorEquation { .. }
+            | FlattenError::Empty => return None,
+        })
+    }
+}
+
 // ============================================================================
 // Output types — spec §4.7.5 FlattenedSystem shape
 // ============================================================================

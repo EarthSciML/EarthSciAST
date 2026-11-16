@@ -94,17 +94,17 @@
     }
   },
   "counts": {
-    "symbols": 981,
+    "symbols": 978,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 353,
       "typescript": 239,
       "python": 270,
-      "rust": 392,
+      "rust": 389,
       "go": 457
     },
     "by_tier": {
-      "extension": 672,
+      "extension": 669,
       "stable": 309
     }
   },
@@ -2463,6 +2463,14 @@
       "bindings": {
         "go": "DAEInfo",
         "rust": "DaeInfo"
+      }
+    },
+    {
+      "name": "data_provider",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DataProvider"
       }
     },
     {
@@ -5981,14 +5989,6 @@
       }
     },
     {
-      "name": "prepare_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "rust": "PrepareError"
-      }
-    },
-    {
       "name": "prepare_phase",
       "kind": "type",
       "tier": "extension",
@@ -6010,14 +6010,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "PrepareProgressFn"
-      }
-    },
-    {
-      "name": "prepare_provider",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "PrepareProvider"
       }
     },
     {
@@ -6123,6 +6115,14 @@
       "tier": "extension",
       "bindings": {
         "go": "PropagateDimension"
+      }
+    },
+    {
+      "name": "provider_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ProviderError"
       }
     },
     {
@@ -6954,14 +6954,6 @@
       }
     },
     {
-      "name": "run_inline_tests_filtered",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "run_inline_tests_filtered"
-      }
-    },
-    {
       "name": "run_inline_tests_paths",
       "kind": "function",
       "tier": "extension",
@@ -6970,27 +6962,11 @@
       }
     },
     {
-      "name": "run_inline_tests_with_base_dir",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "run_inline_tests_with_base_dir"
-      }
-    },
-    {
       "name": "run_inline_tests_with_options",
       "kind": "function",
       "tier": "extension",
       "bindings": {
         "rust": "run_inline_tests_with_options"
-      }
-    },
-    {
-      "name": "run_inline_tests_with_providers",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "run_inline_tests_with_providers"
       }
     },
     {

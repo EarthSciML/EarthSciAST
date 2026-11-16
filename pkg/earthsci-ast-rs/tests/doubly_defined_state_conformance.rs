@@ -9,9 +9,8 @@
 //! `validate` uses, naming the unknown and both equations. The controls are the
 //! same documents with the algebraic equation removed and must still run.
 
-use earthsci_ast::{
-    ProblemOptions, SolveOptions, esm_problem, load_path, run_inline_tests_with_base_dir, validate,
-};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
+use earthsci_ast::{ProblemOptions, esm_problem, load_path, validate};
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -95,11 +94,13 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
                     report.structural_errors
                 );
                 // An inline test reports the refusal rather than a number.
-                let results = run_inline_tests_with_base_dir(
+                let results = run_inline_tests_with_options(
                     &file,
+                    &InlineTestOptions {
+                        base_dir: Some(category_dir()),
+                        ..Default::default()
+                    },
                     None,
-                    &SolveOptions::default(),
-                    Some(category_dir().as_path()),
                 );
                 assert!(!results.is_empty(), "{id}: ran no assertions");
                 for r in &results {
@@ -118,11 +119,13 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
                 }
             }
             Some("run") => {
-                let results = run_inline_tests_with_base_dir(
+                let results = run_inline_tests_with_options(
                     &file,
+                    &InlineTestOptions {
+                        base_dir: Some(category_dir()),
+                        ..Default::default()
+                    },
                     None,
-                    &SolveOptions::default(),
-                    Some(category_dir().as_path()),
                 );
                 assert!(!results.is_empty(), "{id}: ran no assertions");
                 for r in &results {

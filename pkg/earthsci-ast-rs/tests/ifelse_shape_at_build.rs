@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
+use earthsci_ast::provider::{DataProvider, ProviderError};
 use earthsci_ast::{
     Compiler, InlineTestOptions, ProblemOptions, SolveOptions, esm_problem,
     run_inline_tests_with_options,
@@ -88,12 +88,12 @@ struct FixedF;
 
 const F_DATA: [f64; 3] = [1.5, -2.0, 0.75];
 
-impl CadenceProvider for FixedF {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+impl DataProvider for FixedF {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         let a = ArrayD::from_shape_vec(IxDyn(&[3]), F_DATA.to_vec()).expect("shape");
-        Ok(HashMap::from([("F".to_string(), NativeField::new(a))]))
+        Ok(a)
     }
-    fn refresh(&mut self, _t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    fn refresh(&mut self, _t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         Ok(None)
     }
     fn refresh_times(&self) -> Vec<f64> {
@@ -116,7 +116,7 @@ fn problem(doc: &Value, compiler: Compiler) -> earthsci_ast::EsmProblem {
             compiler: Some(compiler),
             providers: HashMap::from([(
                 "F".to_string(),
-                Box::new(FixedF) as Box<dyn CadenceProvider>,
+                Box::new(FixedF) as Box<dyn DataProvider>,
             )]),
             ..Default::default()
         },

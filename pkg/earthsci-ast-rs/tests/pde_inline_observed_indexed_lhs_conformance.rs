@@ -23,7 +23,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests_with_base_dir};
+use earthsci_ast::{Alg, SolveOptions, load_string};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::fs;
 use std::path::PathBuf;
 
@@ -63,8 +64,16 @@ fn indexed_lhs_array_observed_runs() {
             fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
         let file = load_string(&text)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: fx["model"].as_str().map(str::to_string),
+                solve: opts.clone(),
+                base_dir: Some(dir.clone()),
+                ..Default::default()
+            },
+            None,
+        );
 
         let goldens = golden["assertions"].as_array().expect("golden assertions");
         assert_eq!(
@@ -129,8 +138,16 @@ fn bare_index_definition_outside_the_runnable_form_is_refused() {
         let text =
             fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
         let file = load_string(&text).unwrap_or_else(|e| panic!("{id} does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, rf["model"].as_str(), &opts, Some(dir.as_path()));
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: rf["model"].as_str().map(str::to_string),
+                solve: opts.clone(),
+                base_dir: Some(dir.clone()),
+                ..Default::default()
+            },
+            None,
+        );
         assert_eq!(
             results.len() as u64,
             rf["assertion_count"].as_u64().expect("assertion_count"),

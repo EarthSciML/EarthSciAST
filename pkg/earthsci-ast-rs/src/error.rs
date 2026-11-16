@@ -126,6 +126,13 @@ impl EsmError {
 #[error("{0}")]
 pub struct MessageError(pub String);
 
+impl MessageError {
+    /// An error carrying `msg`.
+    pub fn new(msg: impl Into<String>) -> Self {
+        MessageError(msg.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::MessageError;

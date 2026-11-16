@@ -45,9 +45,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::flatten;
-use earthsci_ast::provider::{
-    CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
-};
+use earthsci_ast::provider::{DataProvider, ForcingBuffer, ProviderError, RefreshExecutor};
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{Alg, Solution, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
@@ -221,41 +219,39 @@ fn classification_doc() -> Value {
     })
 }
 
-/// An in-memory [`CadenceProvider`] feeding ONE forcing variable, standing in
-/// for the EarthSciIO Rust Provider a real driver would wrap. `out_key` is the
-/// post-flatten forcing-buffer key the RHS looks up (e.g. `"Box.src"`).
+/// An in-memory [`DataProvider`] feeding ONE forcing variable, standing in
+/// for the EarthSciIO Rust Provider a real driver would wrap. Its key in the
+/// provider map is the post-flatten forcing-buffer key the RHS looks up (e.g.
+/// `"Box.src"`).
 struct ScheduledProvider {
-    out_key: String,
     const_value: Option<Vec<f64>>,
     schedule: Vec<(f64, Vec<f64>)>,
 }
 
 impl ScheduledProvider {
-    fn const_loader(out_key: &str, value: [f64; 3]) -> Self {
+    fn const_loader(value: [f64; 3]) -> Self {
         Self {
-            out_key: out_key.to_string(),
             const_value: Some(value.to_vec()),
             schedule: Vec::new(),
         }
     }
-    fn discrete_loader(out_key: &str, schedule: &[(f64, [f64; 3])]) -> Self {
+    fn discrete_loader(schedule: &[(f64, [f64; 3])]) -> Self {
         Self {
-            out_key: out_key.to_string(),
             const_value: None,
             schedule: schedule.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
         }
     }
 }
 
-impl CadenceProvider for ScheduledProvider {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+impl DataProvider for ScheduledProvider {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         let v = self.const_value.clone().expect("CONST baseline");
-        Ok(HashMap::from([(self.out_key.clone(), field(&v))]))
+        Ok(field(&v))
     }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         for (anchor, value) in &self.schedule {
             if *anchor == t {
-                return Ok(Some(HashMap::from([(self.out_key.clone(), field(value))])));
+                return Ok(Some(field(value)));
             }
         }
         Ok(None)
@@ -265,8 +261,8 @@ impl CadenceProvider for ScheduledProvider {
     }
 }
 
-fn field(v: &[f64]) -> NativeField {
-    NativeField::new(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap())
+fn field(v: &[f64]) -> ArrayD<f64> {
+    ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap()
 }
 
 /// The driver: integrate `compiled` across the DISCRETE cadence anchors,
@@ -377,16 +373,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (1.0, [2.0, 2.0, 2.0]),
         (2.0, [3.0, 3.0, 3.0]),
     ];
-    let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([
+    let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([
         (
-            "emis".to_string(),
-            Box::new(ScheduledProvider::discrete_loader("Box.src", &src_at))
-                as Box<dyn CadenceProvider>,
+            "Box.src".to_string(),
+            Box::new(ScheduledProvider::discrete_loader(&src_at)) as Box<dyn DataProvider>,
         ),
         (
-            "factors".to_string(),
-            Box::new(ScheduledProvider::const_loader("Box.scale", scale))
-                as Box<dyn CadenceProvider>,
+            "Box.scale".to_string(),
+            Box::new(ScheduledProvider::const_loader(scale)) as Box<dyn DataProvider>,
         ),
     ]);
     let mut exec = RefreshExecutor::new(&doc["models"]["Box"], &doc, providers)?;

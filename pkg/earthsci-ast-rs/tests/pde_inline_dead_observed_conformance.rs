@@ -24,7 +24,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::load_string;
-use earthsci_ast::run_inline_tests_with_base_dir;
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::fs;
 use std::path::PathBuf;
 
@@ -52,8 +52,16 @@ fn dead_observed_matches_golden() {
             fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
         let file = load_string(&text)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: fx["model"].as_str().map(str::to_string),
+                solve: opts.clone(),
+                base_dir: Some(dir.clone()),
+                ..Default::default()
+            },
+            None,
+        );
 
         let expected = golden["assertions"].as_array().expect("golden assertions");
         assert_eq!(results.len(), expected.len());
