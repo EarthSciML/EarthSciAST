@@ -66,10 +66,10 @@ mod driver;
 #[cfg(feature = "solve")]
 pub(crate) use driver::IcStart;
 pub(crate) use driver::ParameterKeyResolver;
-pub(crate) use recurrence_group::lower_recurrence_groups;
 mod eval;
 mod gate_walk;
 mod layout;
+mod normalize;
 pub(crate) mod range;
 mod recurrence_group;
 mod rhs;
@@ -100,13 +100,10 @@ pub(crate) use compile::inline_parameter_arrays;
 pub(crate) use compile::resolve_declared_shape;
 pub(crate) use compile::{BuiltVariables, model_tree_any};
 pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
-// The build pipeline reads the authored model, as the single-model route does,
-// so it applies the same stand-ins for `flatten`'s rewrites.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use compile::{
-    apply_flatten_rewrites, model_from_flattened, mount_subsystems, promote_conditional_shapes,
-    refuse_faq_bare_array_operands, resolve_model_self_references,
-};
+// The build pipeline normalizes what it builds through the same front half
+// as the compile path.
+#[cfg(test)]
+pub(crate) use compile::{model_from_flattened, promote_conditional_shapes};
 #[cfg(test)]
 pub(crate) use eval::check_scalar_evaluable;
 #[cfg(not(target_arch = "wasm32"))]
@@ -121,6 +118,8 @@ pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
     take_const_array_oob,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use normalize::{BuildInput, NormalizedModel, normalize};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use tape::StandaloneError;
 #[cfg(not(target_arch = "wasm32"))]

@@ -620,6 +620,15 @@ pub struct FlattenedSystem {
     /// equations, so the ordinary ODE path is unaffected.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_ics: Vec<(String, Expr)>,
+    /// The `faq`-valued initialization equations (esm-spec §6.2, equations
+    /// that hold at t = 0) of every component and subsystem, as ordered,
+    /// namespaced `(target_state, faq)` pairs ([`initialization_faq`]). Each
+    /// assigns the cells of its ranges when the initial state is built. The
+    /// other spellings of an initialization equation name no cells and are
+    /// not carried. Empty (and omitted when serialized) for a system with
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub initialization_faqs: Vec<(String, Expr)>,
     /// Flattened equations in processing order. Every variable reference is
     /// dot-namespaced.
     pub equations: Vec<Equation>,
@@ -1078,6 +1087,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         parameters,
         observed_variables,
         field_ics,
+        initialization_faqs,
         equations,
         continuous_events,
         discrete_events,
@@ -1109,6 +1119,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         brownian_parameters,
         discrete_parameters,
         field_ics,
+        initialization_faqs,
         equations,
         equation_contributions,
         equation_lifted,
@@ -2457,6 +2468,7 @@ struct AssembledParts {
     parameters: IndexMap<String, ModelVariable>,
     observed_variables: IndexMap<String, ModelVariable>,
     field_ics: Vec<(String, Expr)>,
+    initialization_faqs: Vec<(String, Expr)>,
     equations: Vec<FlatEq>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
@@ -2474,6 +2486,7 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
         parameters: IndexMap::new(),
         observed_variables: IndexMap::new(),
         field_ics: Vec::new(),
+        initialization_faqs: Vec::new(),
         equations: Vec::new(),
         continuous_events: Vec::new(),
         discrete_events: Vec::new(),
@@ -2491,6 +2504,7 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
             parts.observed_variables.insert(name, var);
         }
         parts.equations.extend(block.equations);
+        parts.initialization_faqs.extend(block.initialization_faqs);
         parts.continuous_events.extend(block.continuous_events);
         parts.discrete_events.extend(block.discrete_events);
     }
@@ -3353,8 +3367,27 @@ struct SystemBlock {
     /// block an equation sits in is its slot owner (§4.7.1 step 4), not its
     /// provenance: a reattributed equation moves here with its list.
     equations: Vec<FlatEq>,
+    /// The component's `faq`-valued initialization equations, namespaced.
+    initialization_faqs: Vec<(String, Expr)>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
+}
+
+/// The `faq`-valued initialization equation `eq` as `(target, faq)` (esm-spec
+/// §6.2): `u ~ faq(…)` with a bare-variable left-hand side and an array-valued
+/// right-hand side. Each assigns the cells of its ranges when the initial
+/// state is built; the other spellings name no cells to assign and are not
+/// evaluated, as in the Julia reference's `_seed_faq_init_u0!`.
+pub(crate) fn initialization_faq(eq: &Equation) -> Option<(&str, &Expr)> {
+    match (&eq.lhs, &eq.rhs) {
+        (Expr::Variable(target), Expr::Operator(node))
+            if crate::faq::is_faq_op(&node.op)
+                && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
+        {
+            Some((target.as_str(), &eq.rhs))
+        }
+        _ => None,
+    }
 }
 
 fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, FlattenError> {
@@ -3393,6 +3426,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // Which unknowns are ODE states and which are observed is DERIVED from
     // this model's equations (esm-spec §6.3.1), once, before namespacing.
     let class = crate::classification::Classification::of(model);
+    let mut ns = Namespacer::new(system_name, &sub_keys, &locals);
 
     // DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, "Ordering"): the
     // component's variables in the order the component declares them. A
@@ -3404,14 +3438,10 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         // A parameter's `update` carries Expressions (trigger, value,
         // unit conversion) over the model's own symbols, so they namespace
         // exactly as the equations do.
-        cloned.for_each_expression_mut(&mut |expr| {
-            *expr = namespace_expr(expr, system_name, &sub_keys, &locals);
-        });
+        cloned.for_each_expression_mut(&mut |expr| *expr = ns.expr(expr));
         // A reference `lb` / `ub` names a variable exactly as an equation does,
         // so it is namespaced by the same map (esm-libraries-spec §4.7.5).
-        cloned.map_bound_references(&mut |expr| {
-            namespace_expr(expr, system_name, &sub_keys, &locals)
-        });
+        cloned.map_bound_references(&mut |expr| ns.expr(expr));
         match var.var_type {
             // The two maps are NOT a partition (esm-libraries-spec §4.7.5
             // step 4). `observed_variables` is the §6.3.1 CLASSIFICATION —
@@ -3458,8 +3488,8 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .map(|eq| {
             FlatEq::authored(
                 Equation {
-                    lhs: namespace_expr(&eq.lhs, system_name, &sub_keys, &locals),
-                    rhs: namespace_expr(&eq.rhs, system_name, &sub_keys, &locals),
+                    lhs: ns.expr(&eq.lhs),
+                    rhs: ns.expr(&eq.rhs),
                     comment: eq.comment.clone(),
                 },
                 TermOrigin::Component {
@@ -3484,12 +3514,26 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .map(|e| namespace_discrete_event(e, system_name, &sub_keys, &locals))
         .collect();
 
+    // The `faq`-valued initialization equations, namespaced in the same
+    // scope as the equations.
+    let initialization_faqs = model
+        .initialization_equations
+        .iter()
+        .flatten()
+        .filter(|eq| initialization_faq(eq).is_some())
+        .map(|eq| match ns.expr(&eq.lhs) {
+            Expr::Variable(target) => (target, ns.expr(&eq.rhs)),
+            _ => unreachable!("an initialization faq's left-hand side is a variable"),
+        })
+        .collect();
+
     let mut block = SystemBlock {
         name: system_name.to_string(),
         state_vars,
         parameters,
         observed_vars,
         equations,
+        initialization_faqs,
         continuous_events,
         discrete_events,
     };
@@ -3520,6 +3564,9 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         block.parameters.extend(sub_block.parameters);
         block.observed_vars.extend(sub_block.observed_vars);
         block.equations.extend(sub_block.equations);
+        block
+            .initialization_faqs
+            .extend(sub_block.initialization_faqs);
     }
 
     Ok(block)
@@ -3635,6 +3682,7 @@ fn build_reaction_block(
         parameters,
         observed_vars: IndexMap::new(),
         equations,
+        initialization_faqs: Vec::new(),
         continuous_events,
         discrete_events,
     })
@@ -3674,7 +3722,159 @@ fn namespace_expr(
     subsys: &HashSet<String>,
     locals: &HashSet<String>,
 ) -> Expr {
-    namespace_expr_scoped(expr, system_name, &HashSet::new(), subsys, locals)
+    Namespacer::new(system_name, subsys, locals).expr(expr)
+}
+
+/// One component's namespacing ([`namespace_expr`]), remembered per shared
+/// subtree. A loaded document shares structurally identical subtrees
+/// ([`crate::intern`]); the namespacer answers each shared node once per
+/// enclosing loop-symbol scope and hands every other occurrence the same
+/// result, so the flattened system shares exactly what the document shared.
+/// Without it each occurrence is rebuilt, and an expanded discretization that
+/// repeats one subtree in every cell holds one copy per cell.
+struct Namespacer<'a> {
+    system_name: &'a str,
+    subsys: &'a HashSet<String>,
+    locals: &'a HashSet<String>,
+    /// Each distinct set of enclosing loop symbols, by id; id 0 is the empty
+    /// set.
+    scopes: Vec<HashSet<String>>,
+    scope_ids: HashMap<Vec<String>, usize>,
+    /// (node address, scope id) → (the node, its namespaced form). The node
+    /// itself is held so its address cannot be reused while the memo lives.
+    memo: HashMap<(*const ExpressionNode, usize), (Expr, Expr)>,
+}
+
+impl<'a> Namespacer<'a> {
+    fn new(system_name: &'a str, subsys: &'a HashSet<String>, locals: &'a HashSet<String>) -> Self {
+        Namespacer {
+            system_name,
+            subsys,
+            locals,
+            scopes: vec![HashSet::new()],
+            scope_ids: HashMap::from([(Vec::new(), 0)]),
+            memo: HashMap::new(),
+        }
+    }
+
+    fn expr(&mut self, expr: &Expr) -> Expr {
+        self.scoped(expr, 0)
+    }
+
+    /// The scope `parent` extended by the loop symbols `node` binds.
+    fn child_scope(&mut self, parent: usize, node: &ExpressionNode) -> usize {
+        let mut added: Vec<String> = Vec::new();
+        node.for_each_binder(Binders::SCOPE, |n| {
+            if !self.scopes[parent].contains(n) {
+                added.push(n.to_string());
+            }
+        });
+        if added.is_empty() {
+            return parent;
+        }
+        let mut key: Vec<String> = self.scopes[parent].iter().cloned().collect();
+        key.extend(added);
+        key.sort();
+        key.dedup();
+        if let Some(&id) = self.scope_ids.get(&key) {
+            return id;
+        }
+        let id = self.scopes.len();
+        self.scopes.push(key.iter().cloned().collect());
+        self.scope_ids.insert(key, id);
+        id
+    }
+
+    fn scoped(&mut self, expr: &Expr, scope: usize) -> Expr {
+        let Expr::Operator(node) = expr else {
+            return namespace_leaf(expr, self.system_name, &self.scopes[scope], self.subsys);
+        };
+        let key = (std::sync::Arc::as_ptr(node), scope);
+        if let Some((_, out)) = self.memo.get(&key) {
+            return out.clone();
+        }
+        let out = self.node(node, scope);
+        self.memo.insert(key, (expr.clone(), out.clone()));
+        out
+    }
+
+    fn node(&mut self, node: &ExpressionNode, scope: usize) -> Expr {
+        let system_name = self.system_name;
+        let locals = self.locals;
+        // The loop symbols this node introduces are bound in its body,
+        // filter and bound expressions: `ranges` keys cover both the output
+        // and contracted indices of an `faq`, and an `integral` binds its
+        // `int_var`.
+        let child = self.child_scope(scope, node);
+
+        // Every expression-bearing child, through the crate's one child
+        // walker (`ExpressionNode::map_children`), which clones the node first
+        // and so keeps every structural and metadata field.
+        let mut out = node.map_children(&mut |c| self.scoped(c, child));
+
+        // `wrt` is a differentiation-variable *string*, not a child `Expr`.
+        // A SPATIAL `wrt` names a document-scoped AXIS (esm-libraries-spec
+        // §4.7.6 harvests it as an independent variable), so it is prefixed
+        // only when it names one of this component's own locals — the same
+        // rule `namespace_join_names` applies to a plain string that may be a
+        // document-scoped index set.
+        let child_bound = &self.scopes[child];
+        out.wrt = node.wrt.as_ref().map(|w| {
+            if w.contains('.')
+                || w == "t"
+                || w == VAR_PLACEHOLDER
+                || child_bound.contains(w)
+                || !locals.contains(w)
+            {
+                w.clone()
+            } else {
+                format!("{system_name}.{w}")
+            }
+        });
+        // `join` carries variable references as plain strings (§5.5.6); the
+        // names inside it follow the registry they resolve against. The
+        // binder set is THIS node's own loop symbols, not the enclosing
+        // scope: a join column is resolved against this node's `ranges`, so
+        // its own binders are the exact shadowing set, and keeping the set
+        // node-local lets every binding implement the rule without threading
+        // a scope.
+        if let Some(join) = &node.join {
+            let binders: HashSet<&str> = node.binders(Binders::LOOP).into_iter().collect();
+            if let Some(ns) = namespace_join_names(join, &binders, system_name, locals) {
+                out.join = Some(ns);
+            }
+        }
+        Expr::operator(out)
+    }
+}
+
+/// A leaf's namespaced form: `t` and the §6.4 `_var` placeholder are global,
+/// a bound loop symbol is left alone, a dotted reference is already
+/// qualified unless its head is a local subsystem, and any other name takes
+/// the component's prefix.
+fn namespace_leaf(
+    expr: &Expr,
+    system_name: &str,
+    bound: &HashSet<String>,
+    subsys: &HashSet<String>,
+) -> Expr {
+    match expr {
+        Expr::Variable(name) => {
+            if name == "t" || name == VAR_PLACEHOLDER || bound.contains(name) {
+                Expr::Variable(name.clone())
+            } else if name.contains('.') {
+                let head = name.split('.').next().unwrap_or("");
+                if subsys.contains(head) {
+                    Expr::Variable(format!("{system_name}.{name}"))
+                } else {
+                    Expr::Variable(name.clone())
+                }
+            } else {
+                Expr::Variable(format!("{system_name}.{name}"))
+            }
+        }
+        other => other.clone(),
+    }
 }
 
 /// Dot-prefix the plain-string names carried by a node's `join` clauses
@@ -3724,103 +3924,6 @@ fn namespace_join_names(
     // it is covered so the two orders agree).
     let out: Vec<JoinClause> = join.iter().map(|c| c.map_reference_names(ns)).collect();
     (out != join).then_some(out)
-}
-
-fn namespace_expr_scoped(
-    expr: &Expr,
-    system_name: &str,
-    bound: &HashSet<String>,
-    subsys: &HashSet<String>,
-    locals: &HashSet<String>,
-) -> Expr {
-    match expr {
-        Expr::Number(n) => Expr::Number(*n),
-        Expr::Integer(n) => Expr::Integer(*n),
-        Expr::Variable(name) => {
-            // `t` is the independent variable and `_var` the §6.4 operator
-            // placeholder; both are global symbols, neither is component-scoped.
-            if name == "t" || name == VAR_PLACEHOLDER || bound.contains(name) {
-                Expr::Variable(name.clone())
-            } else if name.contains('.') {
-                // A dotted reference is already-namespaced UNLESS its head is a
-                // subsystem key, in which case it is a subsystem-local reference
-                // (`raw.k`) that must be lifted to `<system>.raw.k`.
-                let head = name.split('.').next().unwrap_or("");
-                if subsys.contains(head) {
-                    Expr::Variable(format!("{system_name}.{name}"))
-                } else {
-                    Expr::Variable(name.clone())
-                }
-            } else {
-                Expr::Variable(format!("{system_name}.{name}"))
-            }
-        }
-        Expr::Operator(node) => {
-            // Extend the bound-index set with the loop symbols this node
-            // introduces so its body / filter / bound expressions skip them.
-            // `ranges` keys cover both the output and contracted indices of an
-            // `faq`; `output_idx` is added defensively; an
-            // `integral` binds its `int_var`.
-            let mut child_bound = bound.clone();
-            node.for_each_binder(Binders::SCOPE, |n| {
-                child_bound.insert(n.to_string());
-            });
-
-            // Re-namespace every expression-bearing child through the crate's
-            // ONE canonical child-walker (`ExpressionNode::map_children`) rather
-            // than hand-listing fields. `map_children` clones the node first —
-            // preserving EVERY structural/metadata field verbatim, just like the
-            // old explicit clone — and covers the FULL child set, including the
-            // aggregate grouping `key` and template `bindings` that the previous
-            // hand-rolled enumeration silently omitted (leaving their variable
-            // references un-namespaced when flattening a coupled system).
-            let mut out = node.map_children(&mut |c| {
-                namespace_expr_scoped(c, system_name, &child_bound, subsys, locals)
-            });
-
-            // `wrt` is a differentiation-variable *string*, not a child `Expr`,
-            // so it is a node-local rewrite the child-walker does not (and must
-            // not) cover; apply it to the rebuilt node exactly as before.
-            // `wrt` is a differentiation-variable *string*, not a child `Expr`.
-            // A SPATIAL `wrt` names a document-scoped AXIS (esm-libraries-spec
-            // §4.7.6 harvests it as an independent variable), so it is prefixed
-            // only when it actually names one of this component's own locals —
-            // the same whitelist rule `namespace_join_names` applies to a plain
-            // string that may be a document-scoped index set. Prefixing it
-            // unconditionally produced axes like `m.x` in
-            // `independent_variables`; nothing observed that before, because an
-            // undiscretized spatial `D` could not reach a FlattenedSystem at all
-            // until flatten stopped refusing PDEs.
-            out.wrt = node.wrt.as_ref().map(|w| {
-                if w.contains('.')
-                    || w == "t"
-                    || w == VAR_PLACEHOLDER
-                    || child_bound.contains(w)
-                    || !locals.contains(w)
-                {
-                    w.clone()
-                } else {
-                    format!("{system_name}.{w}")
-                }
-            });
-            // `join` likewise carries variable references as plain strings
-            // (§5.5.6). The child-walker preserves the field verbatim; the
-            // names inside it must follow the registry they resolve against.
-            //
-            // The binder set is THIS node's own loop symbols, not `child_bound`
-            // (which also holds enclosing nodes'). A join column is resolved
-            // against this node's `ranges`, so its own binders are the exact
-            // shadowing set — and keeping the set node-local is what lets every
-            // binding implement the identical rule without threading a scope.
-            if let Some(join) = &node.join {
-                let binders: HashSet<&str> = node.binders(Binders::LOOP).into_iter().collect();
-                if let Some(ns) = namespace_join_names(join, &binders, system_name, locals) {
-                    out.join = Some(ns);
-                }
-            }
-            Expr::operator(out)
-        }
-    }
 }
 
 fn namespace_continuous_event(
@@ -5120,6 +5223,7 @@ fn apply_couple(
             parameters: IndexMap::new(),
             observed_vars: IndexMap::new(),
             equations: new_equations,
+            initialization_faqs: Vec::new(),
             continuous_events: Vec::new(),
             discrete_events: Vec::new(),
         });

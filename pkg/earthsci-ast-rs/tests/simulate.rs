@@ -945,6 +945,7 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
         brownian_parameters: IndexMap::new(),
         discrete_parameters: Default::default(),
         field_ics: Vec::new(),
+        initialization_faqs: Vec::new(),
         equations: vec![Equation {
             comment: None,
             lhs: Expr::operator(ExpressionNode {
@@ -1208,6 +1209,7 @@ fn dummy_flat() -> FlattenedSystem {
         brownian_parameters: IndexMap::new(),
         discrete_parameters: Default::default(),
         field_ics: Vec::new(),
+        initialization_faqs: Vec::new(),
         equations: Vec::new(),
         equation_contributions: Vec::new(),
         equation_lifted: Vec::new(),

@@ -89,8 +89,8 @@ use crate::pushdown_rewrite::{
 };
 use crate::simulate::{KeyMatch, SimulateError, key_spells};
 use crate::simulate_array::{
-    ArrMap, BuiltVariables, ConstArrayScope, StandaloneScope, Value as EvalValue,
-    run_value_invention_with_params,
+    ArrMap, BuildInput, BuiltVariables, ConstArrayScope, NormalizedModel, StandaloneScope,
+    Value as EvalValue, run_value_invention_with_params,
 };
 use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};
@@ -1663,12 +1663,6 @@ fn check_discovered_gate_conflict(
     Ok(())
 }
 
-/// [`BuildState::authored_model`]'s result: the model with `flatten`'s
-/// rewrites applied, the variables whose shape their data decides
-/// ([`crate::flatten::ConditionalShapes::data_shaped`]), and what the build
-/// knows of its variables by name.
-type AuthoredModel = (Model, HashMap<String, Vec<String>>, BuiltVariables);
-
 /// The build pipeline's accumulator state: the evaluation namespace plus the
 /// artifacts each phase deposits for the phases after it. One method per
 /// phase; [`run_prepare`] is the phase list.
@@ -1814,7 +1808,7 @@ impl<'o> BuildState<'o> {
         };
         let file = crate::parse::load_string_with_options(&text, &load_opts)
             .map_err(|e| err(format!("load rewritten document: {e}")))?;
-        let mut index_sets: HashMap<String, IndexSet> = file
+        let index_sets: HashMap<String, IndexSet> = file
             .index_sets
             .clone()
             .unwrap_or_default()
@@ -1831,41 +1825,32 @@ impl<'o> BuildState<'o> {
             }
             None => Spelling::Qualified,
         };
-        let (model, flattened, data_shaped, built_variables) = match &spelling {
-            Spelling::ModelLocal(n) => {
-                let (model, data_shaped, built) = Self::authored_model(models, n, &mut index_sets)?;
-                (model, None, data_shaped, built)
-            }
+        let (normalized, flattened, bound_inputs) = match &spelling {
+            Spelling::ModelLocal(n) => (Self::authored_model(models, n, index_sets)?, None, None),
             Spelling::Qualified => {
-                let flat = Self::whole_document(&file, &mut index_sets)?;
+                let (flat, index_sets) = Self::whole_document(&file, index_sets)?;
                 crate::compile_error::refuse_reserved_lifting(&flat)
                     .map_err(SimulateError::Compile)?;
-                let mut model = crate::simulate_array::model_from_flattened(&flat);
-                // The shape an unshaped mixed-rank `ifelse` is built at
-                // (esm-spec §4.3.4); the model-local route gets it from
-                // `apply_flatten_rewrites`.
-                // The elementwise lift runs inside it (esm-spec §9.6.11), so
-                // the bare-operand check reads the lifted equations.
-                let shapes =
-                    crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
-                        .map_err(SimulateError::Compile)?;
-                let axes = crate::simulate_array::refuse_faq_bare_array_operands(&model)
-                    .map_err(SimulateError::Compile)?;
-                let built = BuiltVariables::new(axes, flat.metadata.bound_inputs.clone());
-                (
-                    model,
-                    unbound_load.then_some(flat),
-                    shapes.data_shaped,
-                    built,
+                let normalized = crate::simulate_array::normalize(
+                    BuildInput::Flattened {
+                        flat: &flat,
+                        inherited: None,
+                    },
+                    index_sets,
                 )
+                .map_err(SimulateError::Compile)?;
+                let bound = flat.metadata.bound_inputs.clone();
+                (normalized, unbound_load.then_some(flat), Some(bound))
             }
         };
-        // esm-spec §4.3.1.2: a recurrence group is swept as its stacked single
-        // recurrence on this route too, through the same rewrite the compiled
-        // route applies (CONFORMANCE_SPEC §5.19.3b).
-        let mut model = model;
-        crate::simulate_array::lower_recurrence_groups(&mut model, &mut index_sets)
-            .map_err(SimulateError::Compile)?;
+        let NormalizedModel {
+            model,
+            index_sets,
+            shapes,
+            axes,
+        } = normalized;
+        let built_variables = BuiltVariables::new(axes, bound_inputs.unwrap_or_default());
+        let data_shaped = shapes.data_shaped;
 
         let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.parameters)?;
 
@@ -1898,16 +1883,12 @@ impl<'o> BuildState<'o> {
         })
     }
 
-    /// The model `name` as authored, with the rewrites `flatten` would have
-    /// made applied in place: a self-qualified `M.a` resolves to `a`, a
-    /// right-hand-side `D` to the tendency it names (or a refusal, never a
-    /// `NaN`), a `sin` of a `deg` angle takes radians — without that one
-    /// `sin(40 deg)` evaluated as `sin(40)` here and nowhere else — and an
-    /// unshaped variable whose `ifelse` arms differ in rank takes the array
-    /// arm's shape. The
-    /// rewrites run after the subsystems are mounted, as on the array runtime,
-    /// so a mounted subsystem's equations and declarations are in scope under
-    /// their mounted names (`D(North.u)`, a `deg` `North.theta`).
+    /// The model `name` as authored, normalized
+    /// ([`crate::simulate_array::normalize`]): its subsystems mounted, a
+    /// self-qualified `M.a` resolved to `a`, a right-hand-side `D` to the
+    /// tendency it names (or a refusal, never a `NaN`), a `sin` of a `deg`
+    /// angle taking radians, and an unshaped variable whose `ifelse` arms
+    /// differ in rank taking the array arm's shape.
     ///
     /// Names resolve in this model's scope, model-locally: an explicit
     /// selection builds that model alone, so a name another top-level model
@@ -1915,22 +1896,20 @@ impl<'o> BuildState<'o> {
     fn authored_model(
         models: &IndexMap<String, Model>,
         name: &str,
-        index_sets: &mut HashMap<String, IndexSet>,
-    ) -> Result<AuthoredModel, SimulateError> {
-        let mut model = models
+        index_sets: HashMap<String, IndexSet>,
+    ) -> Result<NormalizedModel, SimulateError> {
+        let model = models
             .get(name)
             .ok_or_else(|| err(format!("model '{name}' not found in the document")))?
             .clone();
-        crate::simulate_array::mount_subsystems(&mut model)
-            .map_err(|e| stage_err(format_args!("model '{name}'"), e))?;
-        crate::simulate_array::resolve_model_self_references(&mut model, name);
-        let (shapes, axes) = crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)
-            .map_err(|e| stage_err(format_args!("model '{name}'"), e))?;
-        Ok((
-            model,
-            shapes.data_shaped,
-            BuiltVariables::new(axes, Default::default()),
-        ))
+        crate::simulate_array::normalize(
+            BuildInput::Authored {
+                model: Box::new(model),
+                name: Some(name),
+            },
+            index_sets,
+        )
+        .map_err(|e| stage_err(format_args!("model '{name}'"), e))
     }
 
     /// A document of several models, with none selected, built WHOLE — the
@@ -1944,12 +1923,13 @@ impl<'o> BuildState<'o> {
     /// provider key is `"<ModelPath>.<param>"`, which is exactly the flattened
     /// name, so every model's data-fed parameters bind.
     ///
-    /// `flatten` makes the rewrites [`Self::authored_model`] stands in for
-    /// (the right-hand-side `D` resolution and the angle normalization) itself.
+    /// Returns the system and the registry it is built against: the
+    /// flattened registry carries every mounted subsystem's index sets as well
+    /// as the document's own, and the document's declaration wins.
     fn whole_document(
         file: &crate::EsmFile,
-        index_sets: &mut HashMap<String, IndexSet>,
-    ) -> Result<crate::flatten::FlattenedSystem, SimulateError> {
+        mut index_sets: HashMap<String, IndexSet>,
+    ) -> Result<(crate::flatten::FlattenedSystem, HashMap<String, IndexSet>), SimulateError> {
         let flat = crate::flatten::flatten(file).map_err(|e| {
             if e.code().is_some() {
                 SimulateError::Compile(CompileError::Flatten(e))
@@ -1957,12 +1937,10 @@ impl<'o> BuildState<'o> {
                 err(format!("flatten the document's models: {e}"))
             }
         })?;
-        // The flattened registry carries every mounted subsystem's index sets
-        // as well as the document's own; the document's declaration wins.
         for (k, v) in &flat.index_sets {
             index_sets.entry(k.clone()).or_insert_with(|| v.clone());
         }
-        Ok(flat)
+        Ok((flat, index_sets))
     }
 
     /// Record one evaluation. Under [`PrepareOptions::refuse_per_cell`] a

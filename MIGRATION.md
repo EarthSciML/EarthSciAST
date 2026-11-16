@@ -1755,6 +1755,7 @@ time derivative. A flattened name with a dot prints as a quoted name joined by
 | `PrepareError::is_cancelled`, `PrepareError::CANCELLED_PREFIX` | `SimulateError::is_cancelled` (a cancelled build is `SimulateError::Cancelled`, whose details no longer repeat the prefix) | `deleted` |
 | a coded refusal raised inside the build pipeline as `CompileError::InterpreterBuildError` text | the typed error itself (`SimulateError::Compile(CompileError::ValueInventionRefused { .. })`, …), so its code survives | `changed` |
 | — | `code()` on `CompileError`, `FlattenError` and `SimulateError`; `StructuralErrorCode::as_str()` | `added` |
+| a `faq`-valued `initialization_equations` entry seeded the initial state only for a document of one model | `FlattenedSystem::initialization_faqs` carries them, namespaced, from every component and subsystem, and every build seeds them; a struct literal of `FlattenedSystem` names the new field | `added` |
 
 `compile_array`, the `ArrayCompiled::from_*` constructors and the `debug_*`
 right-hand-side seams build the `native` compiler, the default of
