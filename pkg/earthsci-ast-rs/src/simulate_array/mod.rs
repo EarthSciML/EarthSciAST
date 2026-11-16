@@ -60,7 +60,6 @@
 )]
 
 mod compile;
-mod cse;
 mod driver;
 #[cfg(feature = "solve")]
 pub(crate) use driver::IcStart;
@@ -109,8 +108,8 @@ pub(crate) use eval::eval_observed_taped;
 #[cfg(test)]
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{
-    ONE_CELL_NOTE, StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression,
-    per_cell_walk_refused, per_cell_walks,
+    ONE_CELL_NOTE, StandaloneScope, StopAtFirstCell, eval_scalar_expression, per_cell_walk_refused,
+    per_cell_walks,
 };
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
@@ -124,7 +123,7 @@ pub(crate) use vectorized::take_overlay_decline;
 // the vectorized overlay); re-exported crate-wide so a caller outside the
 // runtime that needs one operator's numeric meaning (the expression
 // simplifier) routes through the SAME definition.
-pub(crate) use eval::{apply_binary, eval_expression_with_extents_and_consts_shared};
+pub(crate) use eval::apply_binary;
 pub use rhs::RhsScratch;
 
 /// The names `expr` reads that no enclosing `faq` binds (strip and expose,
@@ -159,7 +158,6 @@ pub(crate) fn row_major_to_column_major(shape: &[usize], values: &[f64]) -> Vec<
 }
 
 use compile::*;
-use cse::*;
 use eval::*;
 use layout::*;
 use rhs::*;
@@ -369,44 +367,17 @@ enum RhsRule {
     },
 }
 
-/// Instrumentation for one `evaluate_rhs` call: how the spatial array-op
-/// derivatives were evaluated. The load-bearing field for the
-/// no-scalarization contract (ess-bdm) is [`RhsStats::kernel_ops`] — the
-/// number of AST-node evaluations performed by the **vectorized** whole-array
-/// path. It is a function of the discretized RHS *expression* only, so it is
-/// **independent of the grid size N**: the same stencil evaluated on a 4-cell
-/// and an 8-cell grid visits the same number of array kernels (one shifted
-/// slice per neighbour, one broadcast per arithmetic node — not `O(N)` scalar
-/// sub-expressions). The per-cell oracle, by contrast, re-walks the body once
-/// per grid cell, so its `kernel_ops` scales with N. A test asserts the
-/// vectorized count is N-independent (criterion 3 of ess-bdm).
+/// Instrumentation for one right-hand-side evaluation: which evaluator ran
+/// the rules.
 #[derive(Debug, Clone, Default)]
 pub struct RhsStats {
-    /// AST-node evaluations performed by the vectorized (whole-array) path.
-    /// N-independent for a fixed discretized RHS.
-    pub kernel_ops: usize,
-    /// Number of array-op derivative rules evaluated vectorized (shifted-slice
-    /// stencils + region-materialized boundary makearrays, no per-cell loop).
-    pub vectorized_rules: usize,
-    /// Number of array-op derivative rules that fell back to the per-cell
-    /// oracle (general semiring contraction, non-affine indexing, periodic
-    /// wrap, …). The vectorized path is a verified-equivalent overlay; the
-    /// per-cell path remains the correctness reference.
+    /// Array-op derivative rules the per-cell oracle evaluated.
     pub scalar_rules: usize,
-    /// Number of array-shaped *observed* (algebraic) rules materialized via the
-    /// vectorized whole-array overlay rather than the per-cell oracle. For a
-    /// coupled model with a time/space-varying behaviour stack this is the
-    /// dominant per-step cost, so keeping it vectorized (not `obs_scalar_rules`)
-    /// is what makes the observed materialization N-independent.
-    pub obs_vectorized_rules: usize,
-    /// Number of array-shaped observed rules that fell back to the per-cell
-    /// oracle (a body op the vectorizer does not yet cover, a non-unit origin,
-    /// or a forced-scalar reference run).
+    /// Array-shaped observed rules the per-cell oracle materialized.
     pub obs_scalar_rules: usize,
-    /// Step 3b: number of rules (observed + RHS) executed through the compiled
-    /// tape's fast executor on this call: every rule of the model, since a
-    /// tape exists only when every rule lowered. Zero on the legacy
-    /// interpreter path.
+    /// Rules (observed and right-hand side) the compiled tape executed: every
+    /// rule of the model, since a tape exists only when every rule lowered.
+    /// Zero on the per-cell oracle.
     pub taped_rules: usize,
 }
 
@@ -422,9 +393,8 @@ pub struct RhsStats {
 /// the production grid). Cloning a rule now shares the immutable body
 /// instead of deep-copying it, collapsing what used to be five simultaneous
 /// full copies at solve time into one. Sharing also keeps every `Expr` node
-/// address stable for the whole run, which the address-keyed CSE overlay
-/// ([`CseRt`] / `AddrClasses`) relies on; bodies are never mutated after
-/// compile, so no copy-on-write can move them mid-solve.
+/// address stable for the whole run, which the address-keyed inline-`const`
+/// memo relies on; bodies are never mutated after compile.
 #[derive(Debug, Clone)]
 enum AlgebraicRule {
     /// `var := body` — pure scalar algebraic.
@@ -679,52 +649,58 @@ pub struct RecurrenceInfo {
     pub lag_proven: bool,
 }
 
-/// Which compiler this compiled model is serving (API_SPEC §5.8).
+/// Which compiler this compiled model is serving (API_SPEC §5.8), fixed at
+/// construction ([`RuntimeMode::of`]).
 ///
-/// The array runtime has three evaluation tiers under it — the tape, the
-/// whole-array overlay and the per-cell oracle — and the historical routing
-/// walks down them silently. A named compiler fixes which of them may run, so
-/// that what ran is a property of the NAME and not of the input.
+/// The array runtime has three evaluators under it — the tape, the per-cell
+/// oracle, and the XLA executable emitted from the tape — and the compiler
+/// names which one evaluates the right-hand side and the observeds, so that
+/// what ran is a property of the NAME and not of the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum RuntimeMode {
-    /// The historical routing: the tape where it lowers, the overlay and the
-    /// per-cell oracle beneath it. Every entry point that is not
-    /// [`crate::problem::esm_problem`] — `compile_array`, the `debug_*` seams,
-    /// the adapters — builds this.
-    #[default]
-    Legacy,
     /// [`crate::Compiler::Native`]: the tape and nothing under it. Every rule
-    /// is taped (construction refused otherwise), so the build-time and
-    /// output-time observed passes are served from the tape rather than from
-    /// the overlay.
+    /// is taped (a solve refuses the document otherwise), so the right-hand
+    /// side, the build-time and per-segment observed passes and the observeds
+    /// reported at output times all run on the tape. The default: every
+    /// entry point that names no compiler (`compile_array`, the `from_*`
+    /// constructors, the `debug_*` seams) builds this.
+    #[default]
     Native,
-    /// [`crate::Compiler::Interpreter`]: no tape and no overlay — the per-cell
-    /// oracle everywhere, as the reference the other compilers are checked
-    /// against.
+    /// [`crate::Compiler::Interpreter`]: no tape — the per-cell oracle for the
+    /// right-hand side and every observed pass. The field initial conditions
+    /// and initialization equations evaluate with the whole-array overlay off
+    /// as well, so every `faq` in them is walked per cell.
     Interpreter,
-    /// [`crate::Compiler::Xla`]: the specialty compiler that needs a heavy
-    /// external dependency. The tape is lowered to a StableHLO computation by
-    /// `tape::xla_emit` and run through PJRT (`crate::xla_runtime::CompiledRhs`),
-    /// so the right-hand side — and the
-    /// finite-difference Jacobian built out of it — are the compiled
-    /// executable, not the tape's own interpreter.
+    /// [`crate::Compiler::Xla`]: the tape lowered to a StableHLO computation by
+    /// `tape::xla_emit` and run through PJRT
+    /// (`crate::xla_runtime::CompiledRhs`), which evaluates the right-hand side
+    /// and the finite-difference Jacobian differenced out of it.
     ///
-    /// It is as STRICT as [`Self::Native`] and strict twice over: every rule
-    /// must lower to the tape (or construction refuses it), and the whole tape
-    /// must lower to XLA (or construction refuses that, naming the rule). The
-    /// passes the tape serves under `native` — the build-time materialization,
-    /// the per-segment seed, the inspection snapshot and the observeds
-    /// reported at output times — are served from the tape here too, because
-    /// the emitted program's only output is `du`. That is one evaluator, not
-    /// two: the same tape both feeds the emitter and answers those passes.
+    /// Every rule must lower to the tape and the whole tape must lower to XLA,
+    /// or construction refuses the document naming the rule. The observed
+    /// passes run on the tape the emitter was built from, because the
+    /// emitted program's only output is `du`.
     Xla,
+}
+
+impl RuntimeMode {
+    /// The mode a compiler builds: the one place the mapping is spelled.
+    pub(crate) fn of(compiler: crate::Compiler) -> RuntimeMode {
+        match compiler {
+            crate::Compiler::Native => RuntimeMode::Native,
+            crate::Compiler::Interpreter => RuntimeMode::Interpreter,
+            crate::Compiler::Xla => RuntimeMode::Xla,
+            // Not compilers of this binding: `esm_problem` answers
+            // `compiler_unavailable` for them before anything is built.
+            crate::Compiler::Mtk | crate::Compiler::Sympy => RuntimeMode::Native,
+        }
+    }
 }
 
 /// Compiled, parameter-sweep-ready ODE model for array-op models.
 pub struct ArrayCompiled {
-    /// Which compiler this model serves. See [`RuntimeMode`]; set by
-    /// [`crate::problem::esm_problem`] right after the build, and
-    /// [`RuntimeMode::Legacy`] for every other entry point.
+    /// Which compiler this model serves. See [`RuntimeMode`]; set by the
+    /// constructor that builds it.
     pub(crate) runtime_mode: RuntimeMode,
     /// The compiler rewrites a tape build of this model applies; set by
     /// [`crate::problem::esm_problem`] from
@@ -1050,8 +1026,6 @@ struct EvalEnv<'a> {
     derived_extents: &'a HashMap<String, i64>,
     /// See [`EvalCtx::forcing`].
     forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
-    /// See [`EvalCtx::cse`].
-    cse: Option<&'a CseRt>,
     /// See [`EvalCtx::const_lits`].
     const_lits: Option<&'a ConstLitMemo>,
     /// See [`EvalCtx::const_arrays`].
@@ -1073,20 +1047,10 @@ impl<'a> EvalEnv<'a> {
             t: self.t,
             derived_extents: self.derived_extents,
             forcing: self.forcing,
-            cse: self.cse,
             const_lits: self.const_lits,
             const_arrays: self.const_arrays,
             recur: None,
             declared: self.declared,
-        }
-    }
-
-    /// Like [`Self::ctx`] but with no CSE memo — the per-cell oracle loops
-    /// evaluate without one.
-    fn oracle_ctx(&self, observed_arrays: &'a ArrMap) -> EvalCtx<'a> {
-        EvalCtx {
-            cse: None,
-            ..self.ctx(observed_arrays)
         }
     }
 }
@@ -1121,12 +1085,6 @@ struct EvalCtx<'a> {
     /// entry here (see [`lookup_variable`]). Empty for models with no loader
     /// forcing, so the scalar-`p` path reads identically.
     forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
-    /// Common-subexpression memo for the vectorized overlay (ess-cse). `None`
-    /// on the entry points that evaluate a one-off expression (`eval_expression`,
-    /// the build-time observed materialization), where there is nothing to amortize
-    /// a structural analysis over; the overlay then behaves exactly as it did
-    /// before. See [`cse`] for the scoping rule that makes sharing sound.
-    cse: Option<&'a CseRt>,
     /// Per-model memo for INLINE array-valued `const` literals (esm-spec §4.3.3),
     /// keyed by the literal node's address and the active working precision.
     ///
@@ -1150,8 +1108,7 @@ struct EvalCtx<'a> {
     /// answer exactly the same values; the output-node pass repeats the same
     /// bodies per node and would benefit from a memo of its own, which it does
     /// not yet have. The memo itself lives on [`RhsScratch`], whose lifetime is
-    /// the rule set's, and is retargeted on the same key [`CseRt::retarget`]
-    /// uses.
+    /// the rule set's, and is retargeted when the rule set changes.
     const_lits: Option<&'a ConstLitMemo>,
     /// The CONST-ARRAY provenance of this evaluation (CONFORMANCE_SPEC §5.5.5).
     ///
@@ -1222,9 +1179,9 @@ pub(crate) const INLINE_CONST_NAME: &str = "inline const";
 ///
 /// Keyed by `(node address, working precision)`. The address is the payload
 /// address of the `Arc<ExpressionNode>` the rule set holds, so it is stable and
-/// unique for exactly as long as that rule set is alive — the same identity
-/// argument the CSE class table rests on, and [`Self::retarget`] discards the
-/// table on the same key when a scratch is handed a different rule set.
+/// unique for exactly as long as that rule set is alive, and
+/// [`Self::retarget`] discards the table when a scratch is handed a different
+/// rule set.
 /// Precision is part of the key because a `const` literal rounds on ingress
 /// (esm-spec §11.3.1), so the binary32 materialization is a different array.
 #[derive(Default)]
@@ -1234,7 +1191,7 @@ pub(super) struct ConstLitMemo {
 
 #[derive(Default)]
 struct ConstLitInner {
-    /// The rule-set key this table was built against (see [`CseRt::retarget`]).
+    /// The rule-set key this table was built against.
     key: u64,
     /// `None` marks a payload with no array materialization — a ragged or
     /// non-numeric literal. Recorded rather than left absent so a repeat read

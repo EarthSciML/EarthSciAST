@@ -1922,14 +1922,6 @@
       }
     },
     {
-      "name": "compile",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "Compile"
-      }
-    },
-    {
       "name": "compile_array",
       "kind": "function",
       "tier": "extension",

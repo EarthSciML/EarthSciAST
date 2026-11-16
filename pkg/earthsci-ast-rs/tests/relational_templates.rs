@@ -86,7 +86,7 @@ fn template_values(op: &str, values: &[Value], label: &str) -> [f64; 2] {
         report.fallbacks
     );
     let u = vec![0.0; compiled.state_variable_names().len()];
-    let (oracle, _) = compiled.debug_eval_rhs(&u, 0.0, &HashMap::new(), true);
+    let (oracle, _) = compiled.debug_eval_rhs(&u, 0.0, &HashMap::new());
     let mut taped = vec![0.0; u.len()];
     let mut scratch = compiled
         .debug_new_scratch_taped()

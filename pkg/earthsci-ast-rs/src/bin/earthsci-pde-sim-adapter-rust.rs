@@ -146,7 +146,7 @@ fn rhs_at_probes(
                 );
                 dy
             }
-            None => compiled.debug_eval_rhs(&sv, t, params, true).0,
+            None => compiled.debug_eval_rhs(&sv, t, params).0,
         };
         let mut m = Map::new();
         for (i, n) in names.iter().enumerate() {
@@ -295,7 +295,7 @@ fn run_fixture_full(fx: &Value, manifest: &Manifest) -> Result<Value, String> {
         let state_obj = probe["state"].as_object().ok_or("probe.state missing")?;
         let t = probe["t"].as_f64().unwrap_or(0.0);
         let sv = state_vec(&names, state_obj);
-        let (dy, _stats) = compiled.debug_eval_rhs(&sv, t, &params, false);
+        let (dy, _stats) = compiled.debug_eval_rhs(&sv, t, &params);
         let mut m = Map::new();
         for (i, n) in names.iter().enumerate() {
             m.insert(bare(n).to_string(), number(dy[i]));

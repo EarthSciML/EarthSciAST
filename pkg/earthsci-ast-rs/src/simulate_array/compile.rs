@@ -605,14 +605,15 @@ fn normalize_model_angle_arguments(model: &mut Model) {
 
 impl ArrayCompiled {
     pub fn from_file(file: &EsmFile) -> Result<Self, CompileError> {
-        Self::from_file_with(file, false)
+        Self::from_file_with(file, false, crate::Compiler::Native)
     }
 
     /// [`Self::from_file`], with `runtime_array_parameters` as
-    /// [`Self::from_flattened_with`] takes it.
+    /// [`Self::from_flattened_with`] takes it, serving `compiler`.
     pub(crate) fn from_file_with(
         file: &EsmFile,
         runtime_array_parameters: bool,
+        compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
         let Some(models) = &file.models else {
             return Err(CompileError::build_err("File has no models to simulate"));
@@ -649,6 +650,7 @@ impl ArrayCompiled {
         // single-model path builds (WS3 override-naming parity).
         compiled.namespace = Some(model_name.clone());
         compiled.qualify_data_fed(model_name);
+        compiled.runtime_mode = RuntimeMode::of(compiler);
         Ok(compiled)
     }
 
@@ -661,6 +663,16 @@ impl ArrayCompiled {
     /// live at once (the caller's file, the compile's private model clone, the
     /// compiled rules); this path holds ~one. Same build stages, same result.
     pub fn from_file_owned(file: EsmFile) -> Result<Self, CompileError> {
+        Self::from_file_owned_with(file, false, crate::Compiler::Native)
+    }
+
+    /// [`Self::from_file_owned`], with `runtime_array_parameters` as
+    /// [`Self::from_flattened_with`] takes it, serving `compiler`.
+    pub(crate) fn from_file_owned_with(
+        file: EsmFile,
+        runtime_array_parameters: bool,
+        compiler: crate::Compiler,
+    ) -> Result<Self, CompileError> {
         let Some(models) = file.models else {
             return Err(CompileError::build_err("File has no models to simulate"));
         };
@@ -672,10 +684,17 @@ impl ArrayCompiled {
         let index_sets: HashMap<String, IndexSet> =
             file.index_sets.unwrap_or_default().into_iter().collect();
         let (model_name, model) = models.into_iter().next().unwrap();
-        let mut compiled =
-            Self::compile_pipeline(model, &[], &index_sets, None, Some(&model_name), false)?;
+        let mut compiled = Self::compile_pipeline(
+            model,
+            &[],
+            &index_sets,
+            None,
+            Some(&model_name),
+            runtime_array_parameters,
+        )?;
         compiled.qualify_data_fed(&model_name);
         compiled.namespace = Some(model_name);
+        compiled.runtime_mode = RuntimeMode::of(compiler);
         Ok(compiled)
     }
 
@@ -701,18 +720,19 @@ impl ArrayCompiled {
     /// inference, faq lowering, the diffsol RHS build — is shared bit-for-bit
     /// with the single-model path.
     pub fn from_flattened(flat: &FlattenedSystem) -> Result<Self, CompileError> {
-        Self::from_flattened_with(flat, false)
+        Self::from_flattened_with(flat, false, crate::Compiler::Native)
     }
 
     /// [`Self::from_flattened`], with every shaped parameter that has a value
     /// and no `update` left as a run-time input read from the forcing
     /// buffer (`runtime_array_parameters`, API_SPEC §5.8) rather than lowered
-    /// into build-time data.
+    /// into build-time data, serving `compiler`.
     pub(crate) fn from_flattened_with(
         flat: &FlattenedSystem,
         runtime_array_parameters: bool,
+        compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
-        Self::from_flattened_shaped(flat, runtime_array_parameters, None)
+        Self::from_flattened_shaped(flat, runtime_array_parameters, None, compiler)
     }
 
     /// [`Self::from_flattened_with`], building each variable `inherited`
@@ -726,6 +746,7 @@ impl ArrayCompiled {
         flat: &FlattenedSystem,
         runtime_array_parameters: bool,
         inherited: Option<&BuiltShapes>,
+        compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
         // A coupling can mix precisions the per-model inference never saw
         // (esm-spec §4.7 "Working precision crosses a mount", §11.3.1).
@@ -833,6 +854,7 @@ impl ArrayCompiled {
             std::mem::take(&mut compiled.built_variables.axes),
             flat.metadata.bound_inputs.clone(),
         );
+        compiled.runtime_mode = RuntimeMode::of(compiler);
         Ok(compiled)
     }
 
@@ -1243,7 +1265,7 @@ impl ArrayCompiled {
             .collect();
 
         Ok(ArrayCompiled {
-            runtime_mode: crate::simulate_array::RuntimeMode::default(),
+            runtime_mode: crate::simulate_array::RuntimeMode::Native,
             rewrites: crate::problem::CompilerRewrites::default(),
             #[cfg(feature = "xla")]
             xla_rhs: std::cell::OnceCell::new(),
@@ -6783,7 +6805,7 @@ mod subsystem_ragged_and_inspection_tests {
         state[at("A.x")] = 1.0;
         state[at("A.C.z")] = 3.0;
         state[at("B.C.z")] = 5.0;
-        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
         assert_eq!(dy[at("A.x")], 10.0, "D(A.x) = k * B.C.z");
         assert_eq!(dy[at("A.C.z")], -1.0, "D(A.C.z) = -A.x");
         assert_eq!(dy[at("B.C.z")], 6.0, "D(B.C.z) = k * A.C.z");

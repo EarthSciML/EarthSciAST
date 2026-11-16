@@ -259,7 +259,7 @@ fn assert_rhs_agrees(label: &str, native: &EsmProblem, interp: &EsmProblem) {
     let mut stats = RhsStats::default();
     nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     assert!(scratch.has_tape(), "{label}: the tape declined a rule");
-    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p(), true);
+    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p());
     assert_eq!(
         bits(dy.clone()),
         bits(idy.clone()),

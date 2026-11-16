@@ -65,7 +65,7 @@ fn values(rhs: &[Value]) -> Vec<f64> {
     let compiled = ArrayCompiled::from_file(&file).expect("compile");
     let names = compiled.state_variable_names().to_vec();
     let u = vec![0.0; names.len()];
-    let (du, _) = compiled.debug_eval_rhs(&u, 0.0, &HashMap::new(), true);
+    let (du, _) = compiled.debug_eval_rhs(&u, 0.0, &HashMap::new());
     (0..rhs.len())
         .map(|k| {
             let bare = format!("out_{k}");

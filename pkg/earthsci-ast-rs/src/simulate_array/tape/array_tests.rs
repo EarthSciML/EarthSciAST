@@ -110,10 +110,10 @@ pub(super) fn compare_tape_at(
     let n = state.len();
     let pv = compiled.debug_resolve_params(params);
     take_const_array_oob();
-    let (dy_oracle, _) = compiled.debug_eval_rhs(state, t, params, true);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(state, t, params);
     let f_oracle = take_const_array_oob();
     if overlay {
-        let (dy_overlay, _) = compiled.debug_eval_rhs(state, t, params, false);
+        let (dy_overlay, _) = compiled.debug_eval_rhs(state, t, params);
         let f_overlay = take_const_array_oob();
         assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
         assert_eq!(f_overlay, f_oracle, "overlay fault");
@@ -487,8 +487,8 @@ fn makearray_empty_region_with_a_mismatched_value_is_the_oracles_nan() {
     }));
     let state = vec![0.5, -1.25, 2.0];
     let params = HashMap::new();
-    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
-    let (dy_overlay, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
+    let (dy_overlay, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
     assert!(dy_oracle.iter().all(|x| x.is_nan()), "{dy_oracle:?}");
     assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
     let refused = agrees_or_refuses(&compiled, &no_params(), &[state]);

@@ -163,7 +163,7 @@ fn run_fixture(fx: &Value) -> Outcome {
                     .unwrap_or_else(|| panic!("{rel} probe {pid}: no state for {bare}"))
             })
             .collect();
-        let (want, _) = compiled.debug_eval_rhs(&u, t, &params, false);
+        let (want, _) = compiled.debug_eval_rhs(&u, t, &params);
         let got = program.eval(&u, &param_vec, t).expect("compiled eval");
         assert_eq!(got.len(), want.len(), "{rel} probe {pid}: length");
         let scale = want.iter().fold(0.0f64, |m, v| m.max(v.abs()));
@@ -605,7 +605,7 @@ fn scans_assemblies_and_promoted_contractions_lower() {
         let u: Vec<f64> = (0..m)
             .map(|k| ((k * 7 + seed * 3) % 11) as f64 * 0.37 - 1.5)
             .collect();
-        let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, true);
+        let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params);
         let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
         let scale = want.iter().fold(0.0f64, |a, v| a.max(v.abs()));
         for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
@@ -701,7 +701,7 @@ fn scan_lowering_is_flat_in_the_scanned_length() {
     let u: Vec<f64> = (0..m)
         .map(|k| ((k * 37) % 101) as f64 * 0.013 - 0.61)
         .collect();
-    let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, true);
+    let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params);
     let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
     for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
         assert_eq!(
@@ -804,7 +804,7 @@ fn forcing_reads_lower_and_follow_the_buffer() {
     };
     for scale in [1.0, 3.0] {
         feed_forced(&compiled, n, scale, 0.7);
-        let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, false);
+        let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params);
         let got = program.eval(&u, &param_vec, 0.0).expect("compiled eval");
         close(&got, &want, &format!("scale {scale}"));
         let mut dev = program.on_device(&u, &param_vec).expect("upload");
@@ -818,7 +818,7 @@ fn forcing_reads_lower_and_follow_the_buffer() {
 
     compiled.forcing_handle().borrow_mut().remove("bc");
     earthsci_ast::simulate_array::take_const_array_oob();
-    compiled.debug_eval_rhs(&u, 0.0, &params, true);
+    compiled.debug_eval_rhs(&u, 0.0, &params);
     let want = earthsci_ast::simulate_array::take_const_array_oob().expect("the oracle faults");
     let got = program.eval(&u, &param_vec, 0.0).expect("compiled eval");
     let fault = earthsci_ast::simulate_array::take_const_array_oob().expect("the program faults");
@@ -891,7 +891,7 @@ fn phase3_array_forms_lower() {
             let u: Vec<f64> = (0..m)
                 .map(|k| ((k * 7 + seed * 3) % 11) as f64 * 0.37 - 1.5)
                 .collect();
-            let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, true);
+            let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params);
             let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
             let scale = want.iter().fold(0.0f64, |a, v| a.max(v.abs()));
             for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
@@ -972,7 +972,7 @@ fn geometry_and_data_subscript_gathers_lower() {
             let u: Vec<f64> = (0..m)
                 .map(|k| 1.0 + 0.1 * ((k * 7 + seed * 3) as f64 * 0.37).sin())
                 .collect();
-            let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params, true);
+            let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params);
             let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
             let scale = want.iter().fold(0.0f64, |a, v| a.max(v.abs()));
             for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {

@@ -150,7 +150,7 @@ impl Probe {
         for (q, v) in queries {
             u[self.slot(q)] = *v;
         }
-        let (oracle, _) = self.compiled.debug_eval_rhs(&u, 0.0, &HashMap::new(), true);
+        let (oracle, _) = self.compiled.debug_eval_rhs(&u, 0.0, &HashMap::new());
         let mut taped = vec![0.0; self.names.len()];
         let mut scratch = self
             .compiled

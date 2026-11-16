@@ -74,7 +74,7 @@ fn rhs_both(rel: &str, arrays: &[(&str, ArrayD<f64>)], p: &[(&str, f64)]) -> Has
             assert!(scratch.has_tape(), "{rel}: the tape declined a rule");
             dy
         } else {
-            comp.debug_eval_rhs(&state, 0.0, prob.p(), true).0
+            comp.debug_eval_rhs(&state, 0.0, prob.p()).0
         };
         out.push((names.to_vec(), dy));
     }

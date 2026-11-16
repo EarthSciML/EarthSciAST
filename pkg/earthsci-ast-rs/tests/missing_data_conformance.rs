@@ -86,7 +86,7 @@ fn rhs_at_probe(prob: &earthsci_ast::EsmProblem, compiler: Compiler, id: &str) -
         .map(|k| 1.0 + 0.1 * (0.37 * k as f64).sin())
         .collect();
     let dy = if compiler == Compiler::Interpreter {
-        compiled.debug_eval_rhs(&state, 0.0, prob.p(), true).0
+        compiled.debug_eval_rhs(&state, 0.0, prob.p()).0
     } else {
         let params = compiled.debug_resolve_params(prob.p());
         let mut dy = vec![0.0; n];

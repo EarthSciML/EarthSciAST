@@ -71,7 +71,7 @@ fn rhs(prob: &EsmProblem, compiler: Compiler) -> Vec<(String, f64)> {
             assert!(scratch.has_tape(), "the tape declined a rule");
             dy
         }
-        _ => ac.debug_eval_rhs(&u, 0.0, prob.p(), true).0,
+        _ => ac.debug_eval_rhs(&u, 0.0, prob.p()).0,
     };
     names.into_iter().zip(dy).collect()
 }

@@ -411,7 +411,7 @@ fn assert_rhs_agrees(
     let mut stats = RhsStats::default();
     nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     assert!(scratch.has_tape(), "{label}: the tape declined a rule");
-    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p(), true);
+    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p());
     if let Some((i, a, b)) = first_bit_difference(&dy, &idy) {
         panic!(
             "{label}: native dy differs from the interpreter's at {} ({a} vs {b})",
@@ -597,7 +597,7 @@ pub fn check_geometry_doc(id: &str, text: &str) {
     let mut stats = RhsStats::default();
     nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     assert!(scratch.has_tape(), "{id}: the tape declined a rule");
-    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p(), true);
+    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p());
     if let Some((i, a, b)) = first_bit_difference(&dy, &idy) {
         panic!(
             "{id}: native dy differs from the interpreter's at {} ({a} vs {b})",

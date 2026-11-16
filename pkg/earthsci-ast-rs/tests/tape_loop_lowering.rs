@@ -65,7 +65,7 @@ fn check(doc: &Value) -> Checked {
     let n = compiled.state_variable_names().len();
     let state = probe_state(n);
     let params: HashMap<String, f64> = HashMap::new();
-    let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+    let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
 
     let param_vec = compiled.debug_resolve_params(&params);
     let mut scratch = compiled

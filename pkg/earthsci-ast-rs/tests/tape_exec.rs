@@ -102,7 +102,7 @@ fn taped_rhs_matches_the_interpreter_on_every_call() {
         for step in 0..6 {
             let s = state(nstates, 0.3 * step as f64);
             compiled.debug_eval_rhs_into(&s, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-            let (oracle, _) = compiled.debug_eval_rhs(&s, 0.0, &HashMap::new(), false);
+            let (oracle, _) = compiled.debug_eval_rhs(&s, 0.0, &HashMap::new());
             assert_eq!(
                 hex(&dy),
                 hex(&oracle),
@@ -154,12 +154,8 @@ fn a_parameter_change_reprimes_the_const_section() {
     let at_hi_fresh = hex(&dy);
 
     // And the interpreter oracle agrees with the fresh taped scratch.
-    let (oracle, _) = compiled.debug_eval_rhs(
-        &s,
-        0.0,
-        &HashMap::from([("a_geom".to_string(), 11.0)]),
-        false,
-    );
+    let (oracle, _) =
+        compiled.debug_eval_rhs(&s, 0.0, &HashMap::from([("a_geom".to_string(), 11.0)]));
     assert_eq!(at_hi_fresh, hex(&oracle), "fresh taped scratch vs oracle");
 
     assert_ne!(

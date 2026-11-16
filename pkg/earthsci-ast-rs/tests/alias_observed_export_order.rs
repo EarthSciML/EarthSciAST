@@ -66,7 +66,7 @@ fn taped_rhs(c: &ArrayCompiled, state: &[f64], t: f64) -> Vec<f64> {
 
 /// The per-cell oracle — the legacy interpreter, unchanged by #255.
 fn oracle_rhs(c: &ArrayCompiled, state: &[f64], t: f64) -> Vec<f64> {
-    let (dy, _) = c.debug_eval_rhs(state, t, &HashMap::new(), true);
+    let (dy, _) = c.debug_eval_rhs(state, t, &HashMap::new());
     dy
 }
 

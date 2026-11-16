@@ -76,11 +76,14 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
     if let Some(scope) = ctx.recur
         && scope.name == name
     {
-        latch_gather_fault(format!(
-            "E_TREEWALK_RECUR_UNAVAILABLE: '{name}' is read BARE inside its own recurrence \
+        latch_fault(
+            fault_code::RECUR_UNAVAILABLE,
+            format!(
+                "E_TREEWALK_RECUR_UNAVAILABLE: '{name}' is read BARE inside its own recurrence \
              definition — the whole array does not exist during the sweep. Read it through \
              `index` at a strictly earlier position instead (esm-spec §4.3.1.1)."
-        ));
+            ),
+        );
         return Value::Scalar(f64::NAN);
     }
     if let Some(v) = ctx.loop_binds.get(name) {
@@ -140,15 +143,18 @@ pub(super) fn latch_unbound_read(name: &str, declared: &HashSet<String>) {
     //     declared, defined and referenced perfectly well, and had nothing to
     //     do with the cycle. Bisecting from that message costs an afternoon.
     if declared.contains(name) {
-        latch_gather_fault(format!(
-            "E_TREEWALK_UNRESOLVED_ORDER: '{name}' IS declared in this model, but nothing had \
+        latch_fault(
+            fault_code::UNRESOLVED_ORDER,
+            format!(
+                "E_TREEWALK_UNRESOLVED_ORDER: '{name}' IS declared in this model, but nothing had \
              produced a value for it at the point this expression was evaluated. For an observed \
              that means its defining rule had not run yet — the usual cause is a dependency \
              cycle among observed variables, which no evaluation order satisfies (esm-spec \
              §4.9.6). Run `esm validate`: it reports the cycle as `observed_cycle` and names the \
              observeds on it. This is NOT an undeclared name — see E_TREEWALK_UNBOUND_NAME for \
              that (CONFORMANCE_SPEC §5.23)."
-        ));
+            ),
+        );
         return;
     }
     // (2) NOTHING bound this name — not `t`, not a loop binder, not a state, not
@@ -165,15 +171,18 @@ pub(super) fn latch_unbound_read(name: &str, declared: &HashSet<String>) {
     // point drains it, so the read surfaces as a named build/solve failure
     // instead of a number. The `NaN` returned alongside is only what the walk
     // carries until the drain.
-    latch_gather_fault(format!(
-        "E_TREEWALK_UNBOUND_NAME: '{name}' is referenced in an expression but bound by \
+    latch_fault(
+        fault_code::UNBOUND_NAME,
+        format!(
+            "E_TREEWALK_UNBOUND_NAME: '{name}' is referenced in an expression but bound by \
          NOTHING in scope — it is not the independent variable, a loop index, a state, an \
          observed, a parameter, or a forcing channel. A name declared nowhere in the \
          document is a structural error (`esm validate` reports it against the equation); \
          reaching evaluation means one route skipped that gate. Fail-closed per \
          CONFORMANCE_SPEC §5.23: never a NaN sentinel, which `max(x, floor)` or any \
          comparison would launder into a plausible number by dropping the operand."
-    ));
+        ),
+    );
 }
 
 /// Latch the fault for a forcing-buffer entry whose shape is not the box a
@@ -182,12 +191,15 @@ pub(super) fn latch_unbound_read(name: &str, declared: &HashSet<String>) {
 /// build, so it cannot, and says so rather than reading the entry through the
 /// wrong box.
 pub(super) fn latch_forcing_shape_mismatch(name: &str, built: &[usize], held: &[usize]) {
-    latch_gather_fault(format!(
-        "the forcing buffer holds '{name}' with shape {held:?}, but the compiled program \
+    latch_fault(
+        fault_code::UNCODED,
+        format!(
+            "the forcing buffer holds '{name}' with shape {held:?}, but the compiled program \
          reads it as {built:?} (the shape the buffer held, or else the variable declared, \
          when the program was built). A compiled program's boxes are fixed at build: a \
          forcing field that changes shape between refreshes cannot be read by it."
-    ));
+        ),
+    );
 }
 
 /// Bind (or rebind) a loop index in `binds` without reallocating the key on the
@@ -1802,33 +1814,78 @@ thread_local! {
     static CONST_OOB: RefCell<Option<LatchedFault>> = const { RefCell::new(None) };
 }
 
+/// The codes of the fail-closed faults the evaluators latch, each the
+/// prefix of its message (`"<code>: …"`).
+pub(crate) mod fault_code {
+    macro_rules! codes {
+        ($($name:ident),* $(,)?) => {
+            $(pub(crate) const $name: &str = concat!("E_TREEWALK_", stringify!($name));)*
+            /// Every code above.
+            pub(crate) const ALL: &[&str] = &[$($name),*];
+        };
+    }
+    codes!(
+        CONSTARRAY_OOB,
+        FILTER_UNALIGNED,
+        INDEX_ON_SCALAR,
+        NESTED_BOX_MISMATCH,
+        RECUR_UNAVAILABLE,
+        UNBOUND_NAME,
+        UNRESOLVED_ORDER,
+    );
+    /// The code of a fault whose message leads with none of [`ALL`].
+    pub(crate) const UNCODED: &str = "rhs_fault";
+
+    /// The code `message` leads with, for a message latched without one
+    /// (the tape latches the texts the evaluator's message builders made).
+    pub(crate) fn of(message: &str) -> &'static str {
+        ALL.iter()
+            .copied()
+            .find(|c| {
+                message
+                    .strip_prefix(c)
+                    .is_some_and(|rest| rest.starts_with(':'))
+            })
+            .unwrap_or(UNCODED)
+    }
+}
+
+/// A fail-closed fault an evaluation latched: its code
+/// ([`fault_code`]) and its message.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Fault {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+}
+
 /// The latched fault and, for one the tape latched through
 /// [`latch_ordered_fault`], where it sits in its rule's evaluation order.
 struct LatchedFault {
-    msg: String,
+    fault: Fault,
     order: Option<(u32, SmallVec<[i64; 12]>)>,
 }
 
-/// Take (and clear) the pending fail-closed gather diagnostic, if any.
+/// Take (and clear) the pending fail-closed fault's message, if any.
 ///
 /// Named for the first fault that used this channel
-/// (`E_TREEWALK_CONSTARRAY_OOB`); it now also carries
-/// `E_TREEWALK_RECUR_UNAVAILABLE` (CONFORMANCE_SPEC §5.19.4),
-/// `E_TREEWALK_UNBOUND_NAME` / `E_TREEWALK_UNRESOLVED_ORDER` (§5.23) and
-/// `E_TREEWALK_INDEX_ON_SCALAR` (§7.1). All of them are "fail closed, do not
-/// silently substitute a number" faults with the same drain sites, so they
-/// share one latch rather than adding a second one that a future drain site
-/// could forget.
+/// (`E_TREEWALK_CONSTARRAY_OOB`); it carries every code in [`fault_code`].
+/// All of them are "fail closed, do not silently substitute a number" faults
+/// with the same drain sites, so they share one latch.
 pub fn take_const_array_oob() -> Option<String> {
-    CONST_OOB.with(|c| c.borrow_mut().take().map(|l| l.msg))
+    take_fault().map(|f| f.message)
 }
 
-/// The fault latch of one program call ([`crate::RhsProgram::eval_into`]):
-/// made on entry, it holds whatever the caller had latched and leaves the
-/// latch empty for the call; [`Self::finish`] takes the call's own fault and
-/// puts the caller's back. A call runs on one thread and starts no other, so
-/// nothing it latches is visible outside it, and nothing latched outside it
-/// is reported as its own.
+/// Take (and clear) the pending fail-closed fault, if any.
+pub(crate) fn take_fault() -> Option<Fault> {
+    CONST_OOB.with(|c| c.borrow_mut().take().map(|l| l.fault))
+}
+
+/// The fault latch of one evaluation: made on entry, it holds whatever the
+/// caller had latched and leaves the latch empty for the evaluation;
+/// [`Self::take`] and [`Self::finish`] read the evaluation's own fault, and
+/// the caller's is put back when the scope ends. An evaluation runs on one
+/// thread and starts no other, so nothing it latches is visible outside it,
+/// and nothing latched outside it is reported as its own.
 pub(crate) struct FaultScope {
     prev: Option<LatchedFault>,
 }
@@ -1840,31 +1897,46 @@ impl FaultScope {
         }
     }
 
-    /// The fault the call latched, if any; the caller's latch is restored.
-    pub(crate) fn finish(mut self) -> Option<String> {
+    /// Take the fault latched so far in this scope, if any, leaving the latch
+    /// empty for the rest of it.
+    pub(crate) fn take(&self) -> Option<Fault> {
+        take_fault()
+    }
+
+    /// The fault the evaluation latched, if any; the caller's latch is
+    /// restored.
+    pub(crate) fn finish(mut self) -> Option<Fault> {
         let prev = self.prev.take();
-        CONST_OOB.with(|c| std::mem::replace(&mut *c.borrow_mut(), prev).map(|l| l.msg))
+        CONST_OOB.with(|c| std::mem::replace(&mut *c.borrow_mut(), prev).map(|l| l.fault))
     }
 }
 
 impl Drop for FaultScope {
     fn drop(&mut self) {
-        if let Some(prev) = self.prev.take() {
-            CONST_OOB.with(|c| *c.borrow_mut() = Some(prev));
-        }
+        let prev = self.prev.take();
+        CONST_OOB.with(|c| *c.borrow_mut() = prev);
     }
 }
 
-/// Latch the FIRST fail-closed gather diagnostic of this evaluation. The
-/// tape's `Instr::Fault` latches through here too, so both evaluators keep
-/// the same first-wins record.
-pub(crate) fn latch_gather_fault(msg: String) {
+/// Latch the FIRST fail-closed fault of this evaluation, with its code.
+pub(crate) fn latch_fault(code: &'static str, message: String) {
+    debug_assert!(code == fault_code::UNCODED || message.starts_with(code));
     CONST_OOB.with(|c| {
         let mut slot = c.borrow_mut();
         if slot.is_none() {
-            *slot = Some(LatchedFault { msg, order: None });
+            *slot = Some(LatchedFault {
+                fault: Fault { code, message },
+                order: None,
+            });
         }
     });
+}
+
+/// Latch the FIRST fail-closed fault of this evaluation, coded by the code
+/// its message leads with. The tape's `Instr::Fault` latches through here
+/// too, so both evaluators keep the same first-wins record.
+pub(crate) fn latch_gather_fault(msg: String) {
+    latch_fault(fault_code::of(&msg), msg);
 }
 
 /// Latch a fault the tape raises in rule `rule` at `key`, the position the
@@ -1887,8 +1959,12 @@ pub(crate) fn latch_ordered_fault(rule: u32, key: &[i64], msg: impl FnOnce() -> 
             Some(_) => false,
         };
         if replace {
+            let message = msg();
             *slot = Some(LatchedFault {
-                msg: msg(),
+                fault: Fault {
+                    code: fault_code::of(&message),
+                    message,
+                },
                 order: Some((rule, key.iter().copied().collect())),
             });
         }
@@ -1898,7 +1974,10 @@ pub(crate) fn latch_ordered_fault(rule: u32, key: &[i64], msg: impl FnOnce() -> 
 /// Latch an unavailable causal self-read (esm-spec §4.3.1.1): the position is
 /// outside the recurrence axis, or names a cell the sweep has not published.
 fn latch_recur_unavailable(name: &str, raw: &[i64]) {
-    latch_gather_fault(recur_unavailable_message(name, raw));
+    latch_fault(
+        fault_code::RECUR_UNAVAILABLE,
+        recur_unavailable_message(name, raw),
+    );
 }
 
 /// The text [`latch_recur_unavailable`] latches, shared with the tape's
@@ -1929,7 +2008,10 @@ pub(crate) fn recur_unavailable_message(name: &str, raw: &[i64]) -> String {
 /// goes on to apply — the document then reports a number that was never
 /// computed.
 fn latch_index_on_scalar(base: &Expr, subscripts: usize) {
-    latch_gather_fault(index_on_scalar_message(base, subscripts));
+    latch_fault(
+        fault_code::INDEX_ON_SCALAR,
+        index_on_scalar_message(base, subscripts),
+    );
 }
 
 /// The text [`latch_index_on_scalar`] latches, shared with the tape lowering,
@@ -1952,7 +2034,10 @@ pub(crate) fn index_on_scalar_message(base: &Expr, subscripts: usize) -> String 
 
 /// Latch the FIRST const-array out-of-range diagnostic of this evaluation.
 fn latch_const_oob(name: &str, one_based: i64, n: i64, d: usize) {
-    latch_gather_fault(const_oob_message(name, one_based, n, d));
+    latch_fault(
+        fault_code::CONSTARRAY_OOB,
+        const_oob_message(name, one_based, n, d),
+    );
 }
 
 /// The text [`latch_const_oob`] latches, shared with the tape lowering.
@@ -2332,14 +2417,16 @@ pub fn eval_expression(
     param_names: &[String],
     t: f64,
 ) -> Result<Value, CompileError> {
-    eval_expression_with_extents(
-        expr,
-        inputs,
+    let inputs: ArrMap = inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    StandaloneScope {
+        inputs: &inputs,
         params,
         param_names,
         t,
-        crate::faq::empty_derived_extents(),
-    )
+        derived_extents: crate::faq::empty_derived_extents(),
+        const_arrays: ConstArrayScope::empty(),
+    }
+    .eval(expr)
 }
 
 /// [`eval_expression`] with the build-time **value-invention derived extents**
@@ -2384,15 +2471,16 @@ pub fn eval_expression_with_extents(
     t: f64,
     derived_extents: &HashMap<String, i64>,
 ) -> Result<Value, CompileError> {
-    eval_expression_with_extents_and_consts(
-        expr,
-        inputs,
+    let inputs: ArrMap = inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    StandaloneScope {
+        inputs: &inputs,
         params,
         param_names,
         t,
         derived_extents,
-        ConstArrayScope::empty(),
-    )
+        const_arrays: ConstArrayScope::empty(),
+    }
+    .eval(expr)
 }
 
 /// [`eval_expression_with_extents`] with an explicit CONST-ARRAY registry
@@ -2422,117 +2510,146 @@ pub fn eval_expression_with_extents_and_consts(
     // callers whose maps carry provider slabs must NOT take this boundary —
     // prepare's observed-graph loop holds an [`ArrMap`] and calls the shared
     // variant below, because deep-cloning a map that holds fifteen
-    // hundreds-of-MB SR slabs once per observed dominated the whole build
-    // (measured: ~87% of a warm ISRM prepare was memmove).
+    // hundreds-of-MB SR slabs once per observed dominated the whole build.
     let inputs: ArrMap = inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    eval_expression_with_extents_and_consts_shared(
-        expr,
-        &inputs,
+    StandaloneScope {
+        inputs: &inputs,
         params,
         param_names,
         t,
         derived_extents,
         const_arrays,
-    )
+    }
+    .eval(expr)
 }
 
-/// [`eval_expression_with_extents_and_consts`] minus the input-map rehash: the
-/// caller already holds the interpreter's own [`ArrMap`] and the arrays are
-/// borrowed for the duration of the call, byte-identically — no copy of any
-/// input array is made.
-/// Evaluate one observed that is a CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1),
-/// or report that it is not one.
-///
-/// `None` — `expr` contains no `index(name, …)` self-read, so the caller
-/// evaluates it exactly as it did before this existed. `Some(Ok(_))` — the
-/// sequential sweep ran and this is the finished array. `Some(Err(_))` — the
-/// self-read is there but is not a well-founded causal read, or a read reached
-/// a cell the sweep had not published.
-///
-/// **Why this exists on the build-pipeline path at all.** A recurrence has two
-/// evaluation routes in this runtime: the per-step observed materialization,
-/// and the build pipeline that materializes a relational document's whole
-/// observed graph up front. The construct originally implemented only the
-/// first, so it evaluated correctly under `esm test` and was DEAD wherever the
-/// pipeline build was taken — which is any document that ingests, and every
-/// document under `esm simulate`. Dead silently: the self-read fell through to
-/// an unbound-name `NaN`, and a body containing `max(x, 0)` — which the
-/// motivating fold's body is — turned that `NaN` into `0.0`, because IEEE-754
-/// `max` returns the non-NaN operand. The result was finite, plausible,
-/// monotone and wrong, with nothing logged at any level.
-///
-/// So this is not a second implementation. It resolves the frame with the same
-/// [`lower_recurrence`] the compiled path uses and runs the same
-/// [`sweep_recurrence`]; only the surrounding environment differs.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn eval_observed_recurrence(
-    name: &str,
-    expr: &Expr,
-    inputs: &ArrMap,
-    params: &[f64],
-    param_names: &[String],
-    t: f64,
-    derived_extents: &HashMap<String, i64>,
-    const_arrays: &ConstArrayScope,
-) -> Option<Result<ArrayD<f64>, CompileError>> {
-    // Cheap structural test first: no self-read, nothing to do, and every
-    // document that does not use the construct pays one expression walk.
-    if !expr_reads_self(expr, name) {
-        return None;
+/// The scope a standalone expression is evaluated in, outside any compiled
+/// model: named input arrays (borrowed, never copied), positional parameters,
+/// the time, the build-time value-invention extents and the const-array
+/// registry. With no model behind it, it vouches for no declared name (see
+/// [`EvalCtx::declared`]) and carries no loader forcing.
+#[derive(Clone, Copy)]
+pub(crate) struct StandaloneScope<'a> {
+    pub(crate) inputs: &'a ArrMap,
+    pub(crate) params: &'a [f64],
+    pub(crate) param_names: &'a [String],
+    pub(crate) t: f64,
+    pub(crate) derived_extents: &'a HashMap<String, i64>,
+    pub(crate) const_arrays: &'a ConstArrayScope,
+}
+
+impl StandaloneScope<'_> {
+    /// Run `f` with an evaluation environment over this scope.
+    fn with_env<R>(&self, f: impl FnOnce(&EvalEnv) -> R) -> R {
+        let empty: ArrMap = ArrMap::default();
+        let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+        f(&EvalEnv {
+            state_arrays: &empty,
+            params: self.params,
+            param_names: self.param_names,
+            t: self.t,
+            derived_extents: self.derived_extents,
+            forcing: &forcing,
+            const_lits: None,
+            const_arrays: self.const_arrays,
+            declared: empty_declared_names(),
+        })
     }
-    let lhs = Expr::Variable(name.to_string());
-    let lowered = match super::compile::lower_recurrence(name, &lhs, expr) {
-        Ok(Some(l)) => l,
-        // A self-read the lowering does not recognize as a recurrence. It must
-        // NOT fall through to a wholesale evaluation, which is what laundered
-        // it into a plausible number before.
-        Ok(None) => {
-            return Some(Err(CompileError::InterpreterBuildError {
-                details: format!(
-                    "recurrence_unsupported_form: '{name}' reads itself through `index` in its \
+
+    /// Evaluate `expr` (ranges already resolved) in this scope, reporting a
+    /// fault the evaluation latched as the error.
+    pub(crate) fn eval(&self, expr: &Expr) -> Result<Value, CompileError> {
+        check_evaluable(expr)?;
+        // A derived range over an unsized producer is refused rather than
+        // contracted as empty.
+        if let Some(from_faq) =
+            super::compile::first_unmaterialized_derived_range(expr, self.derived_extents)
+        {
+            return Err(super::compile::unmaterialized_derived_error(
+                &from_faq,
+                &HashMap::new(),
+                None,
+            ));
+        }
+        self.with_env(|env| {
+            let mut ctx = env.ctx(self.inputs);
+            let faults = FaultScope::enter();
+            let v = eval(expr, &mut ctx);
+            match faults.finish() {
+                Some(fault) => Err(CompileError::InterpreterBuildError {
+                    details: fault.message,
+                }),
+                None => Ok(v),
+            }
+        })
+    }
+
+    /// Evaluate the observed `name := expr` in this scope if it is a CAUSAL
+    /// SELF-REFERENCE (esm-spec §4.3.1.1).
+    ///
+    /// `None` — `expr` contains no `index(name, …)` self-read, so the caller
+    /// evaluates it as any other expression. `Some(Ok(_))` — the sequential
+    /// sweep ran and this is the finished array. `Some(Err(_))` — the
+    /// self-read is there but is not a well-founded causal read, or a read
+    /// reached a cell the sweep had not published.
+    ///
+    /// The build pipeline materializes a document's observed graph through
+    /// this scope, so a recurrence needs this path as well as the per-step
+    /// one. It resolves the frame with the same [`lower_recurrence`] the
+    /// compiled path uses and runs the same [`sweep_recurrence`]; only the
+    /// surrounding environment differs.
+    pub(crate) fn eval_recurrence(
+        &self,
+        name: &str,
+        expr: &Expr,
+    ) -> Option<Result<ArrayD<f64>, CompileError>> {
+        // Cheap structural test first: no self-read, nothing to do, and every
+        // document that does not use the construct pays one expression walk.
+        if !expr_reads_self(expr, name) {
+            return None;
+        }
+        let lhs = Expr::Variable(name.to_string());
+        let lowered = match super::compile::lower_recurrence(name, &lhs, expr) {
+            Ok(Some(l)) => l,
+            // A self-read the lowering does not recognize as a recurrence. It must
+            // NOT fall through to a wholesale evaluation, which is what laundered
+            // it into a plausible number before.
+            Ok(None) => {
+                return Some(Err(CompileError::InterpreterBuildError {
+                    details: format!(
+                        "recurrence_unsupported_form: '{name}' reads itself through `index` in its \
                      own definition, but the build pipeline could not resolve a cell frame to \
                      sweep. Evaluating it wholesale would resolve the self-read to an unbound \
                      name, and a body containing `max(x, 0)` would turn the resulting NaN into \
                      a plausible zero (esm-spec §4.3.1.1; CONFORMANCE_SPEC §5.19.4)."
-                ),
-            }));
+                    ),
+                }));
+            }
+            Err(e) => return Some(Err(e)),
+        };
+        let (shape, origin) = super::rhs::recur_frame(&lowered.ranges);
+        let scope = RecurScope::new(name, shape, origin);
+        let faults = FaultScope::enter();
+        let arr = self.with_env(|env| {
+            let mut ctx = env.ctx(self.inputs);
+            super::rhs::sweep_recurrence(
+                &scope,
+                &lowered.idx_names,
+                &lowered.ranges,
+                &lowered.body,
+                lowered.axis,
+                &mut ctx,
+            )
+        });
+        // §5.19.4: an unavailable self-read is a FAULT, not a value. The latch is
+        // the channel the tree walk has for one, and draining it here is what makes
+        // this path fail closed rather than hand back an array built on a sentinel.
+        match faults.finish() {
+            Some(fault) => Some(Err(CompileError::InterpreterBuildError {
+                details: fault.message,
+            })),
+            None => Some(Ok(arr)),
         }
-        Err(e) => return Some(Err(e)),
-    };
-    let empty: ArrMap = ArrMap::default();
-    let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-    let env = EvalEnv {
-        state_arrays: &empty,
-        params,
-        param_names,
-        t,
-        derived_extents,
-        forcing: &forcing,
-        cse: None,
-        const_lits: None,
-        const_arrays,
-        declared: empty_declared_names(),
-    };
-    let (shape, origin) = super::rhs::recur_frame(&lowered.ranges);
-    let scope = RecurScope::new(name, shape, origin);
-    take_const_array_oob(); // discard any latch left by an earlier failed call
-    let arr = {
-        let mut ctx = env.ctx(inputs);
-        super::rhs::sweep_recurrence(
-            &scope,
-            &lowered.idx_names,
-            &lowered.ranges,
-            &lowered.body,
-            lowered.axis,
-            &mut ctx,
-        )
-    };
-    // §5.19.4: an unavailable self-read is a FAULT, not a value. The latch is
-    // the channel the tree walk has for one, and draining it here is what makes
-    // this path fail closed rather than hand back an array built on a sentinel.
-    match take_const_array_oob() {
-        Some(details) => Some(Err(CompileError::InterpreterBuildError { details })),
-        None => Some(Ok(arr)),
     }
 }
 
@@ -2542,7 +2659,7 @@ pub(crate) fn eval_observed_recurrence(
 /// overlay declines, in place of walking it per cell.
 ///
 /// `expr` has its ranges resolved, as for
-/// [`eval_expression_with_extents_and_consts_shared`]. Every name in `inputs`
+/// [`StandaloneScope::eval`]. Every name in `scope.inputs`
 /// that `expr` mentions is seeded as a known value, and `params` bind
 /// `param_names`. A causal self-reference (esm-spec §4.3.1.1) lowers as the
 /// model's own recurrence rule does, to one ordered sweep; one the lowering
@@ -2553,14 +2670,10 @@ pub(crate) fn eval_observed_recurrence(
 /// fills it, as the reference evaluator's does. With none, a scalar value
 /// comes back as a 0-d array.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn eval_observed_taped(
     name: &str,
     expr: &Expr,
-    inputs: &ArrMap,
-    params: &[f64],
-    param_names: &[String],
-    const_arrays: &ConstArrayScope,
+    scope: &StandaloneScope,
     fill_shape: Option<&[usize]>,
     recurrence_only: bool,
 ) -> Option<Result<ArrayD<f64>, super::tape::StandaloneError>> {
@@ -2582,7 +2695,7 @@ pub(crate) fn eval_observed_taped(
                 lag_proven: r.lag_proven,
             },
             // Not a recurrence the lowering recognizes: the caller's own path
-            // reports it (`eval_observed_recurrence`'s diagnostics).
+            // reports it ([`StandaloneScope::eval_recurrence`]'s diagnostics).
             Ok(None) | Err(_) if recurrence_only => return None,
             Ok(None) | Err(_) => {
                 return Some(Err(StandaloneError::Declined(
@@ -2600,7 +2713,8 @@ pub(crate) fn eval_observed_taped(
     };
     let mut mentioned = HashSet::new();
     super::tape::collect_variable_names(expr, &mut mentioned);
-    let mut seeded: Vec<(&str, &ArrayD<f64>)> = inputs
+    let mut seeded: Vec<(&str, &ArrayD<f64>)> = scope
+        .inputs
         .iter()
         .filter(|(k, _)| k.as_str() != name && mentioned.contains(k.as_str()))
         .map(|(k, a)| (k.as_str(), a))
@@ -2609,9 +2723,9 @@ pub(crate) fn eval_observed_taped(
     Some(super::tape::eval_standalone_rule(
         &rule,
         &seeded,
-        param_names,
-        params,
-        const_arrays,
+        scope.param_names,
+        scope.params,
+        scope.const_arrays,
         true,
     ))
 }
@@ -2642,56 +2756,6 @@ fn expr_reads_self(expr: &Expr, name: &str) -> bool {
             .values
             .as_ref()
             .is_some_and(|vs| vs.iter().any(|v| expr_reads_self(v, name)))
-}
-
-pub(crate) fn eval_expression_with_extents_and_consts_shared(
-    expr: &Expr,
-    inputs: &ArrMap,
-    params: &[f64],
-    param_names: &[String],
-    t: f64,
-    derived_extents: &HashMap<String, i64>,
-    const_arrays: &ConstArrayScope,
-) -> Result<Value, CompileError> {
-    check_evaluable(expr)?;
-    // A derived range over an unsized producer is refused rather than
-    // contracted as empty.
-    if let Some(from_faq) =
-        super::compile::first_unmaterialized_derived_range(expr, derived_extents)
-    {
-        return Err(super::compile::unmaterialized_derived_error(
-            &from_faq,
-            &HashMap::new(),
-            None,
-        ));
-    }
-    let empty: ArrMap = ArrMap::default();
-    // Standalone expression evaluation carries no loader forcing — an empty
-    // buffer keeps the channel byte-identical here.
-    let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-    let env = EvalEnv {
-        state_arrays: &empty,
-        params,
-        param_names,
-        t,
-        derived_extents,
-        forcing: &forcing,
-        // Standalone one-shot evaluation: no CSE memo (nothing to amortize the
-        // structural analysis over), so this path is unchanged.
-        cse: None,
-        const_lits: None,
-        const_arrays,
-        // No compiled model behind this entry point, so it vouches for no name
-        // (see [`EvalCtx::declared`]).
-        declared: empty_declared_names(),
-    };
-    let mut ctx = env.ctx(inputs);
-    take_const_array_oob(); // discard any latch left by an earlier failed call
-    let v = eval(expr, &mut ctx);
-    match take_const_array_oob() {
-        Some(details) => Err(CompileError::InterpreterBuildError { details }),
-        None => Ok(v),
-    }
 }
 
 /// The output-index box of the aggregate currently being evaluated: the index
@@ -2765,13 +2829,16 @@ pub(super) fn filter_excludes(
                 return a.first().copied().unwrap_or(0.0) == 0.0;
             }
             let unaligned = |why: String| {
-                latch_gather_fault(format!(
-                    "E_TREEWALK_FILTER_UNALIGNED: a `faq` filter evaluated to an array of shape \
+                latch_fault(
+                    fault_code::FILTER_UNALIGNED,
+                    format!(
+                        "E_TREEWALK_FILTER_UNALIGNED: a `faq` filter evaluated to an array of shape \
                      {:?}, {why}, so it does not say which index tuple each element gates. \
                      Read the filter's operands through `index` at the node's symbols \
                      (esm-spec §4.3.1).",
-                    a.shape()
-                ));
+                        a.shape()
+                    ),
+                );
                 true
             };
             let Some(cell) = cell else {
@@ -2914,7 +2981,10 @@ pub(super) fn cell_term(v: Value, body: &Expr, cell: Option<&CellBox>, ctx: &Eva
             match nested_faq_box(body, cell) {
                 NestedBox::Same => cell_element(&a, cell, ctx).unwrap_or(f64::NAN),
                 NestedBox::Other(what) => {
-                    latch_gather_fault(nested_box_message(cell, &what));
+                    latch_fault(
+                        fault_code::NESTED_BOX_MISMATCH,
+                        nested_box_message(cell, &what),
+                    );
                     f64::NAN
                 }
                 NestedBox::None => f64::NAN,
@@ -4785,10 +4855,6 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     let origin: DimI = ranges.iter().map(|(lo, _)| *lo).collect();
     let total = shape.iter().copied().product::<usize>().max(1);
 
-    // Hoist cell-independent (all-static) contraction bounds out of the per-cell
-    // loop; ragged/derived dims are re-derived per output tuple inside.
-    let static_ranges = static_contract_ranges(&contract_dims);
-
     // ---- Forward prefix scan (O(N) instead of the O(N²) triangle) -----------
     // A cumulative reduction (esm-spec §4.3.1) reaches here as a full triangular
     // double loop: N output cells × N contracted terms, each re-summing a window
@@ -4803,18 +4869,22 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // start accepting these, which regressed
     // `forward_scan_work_grows_linearly_not_quadratically`.) A non-cumulative
     // aggregate returns `None` here and goes to the overlay as before.
-    let scan = detect_prefix_scan(
+    let cells = FaqCells::new(
         idx_names,
         &ranges,
-        &contract_names,
-        static_ranges.as_deref(),
         body,
+        &contract_names,
+        &contract_dims,
+        reduce,
         filter,
+        None,
+        &gates,
     );
+    let scan = cells.scan;
 
     // ---- Vectorized fast path (whole-array) --------------------------------
-    // Evaluate the aggregate with the same verified `eval_vec` overlay the
-    // compiled-RHS stencil path uses, instead of walking the body once per cell:
+    // Evaluate the aggregate with the whole-array `eval_vec` overlay (off
+    // under the per-cell oracle), instead of walking the body once per cell:
     //   * a pure MAP (out == ranges — e.g. a level-set Godunov `|∇φ|` stencil, a
     //     pointwise behaviour-stack field),
     //   * a static einsum CONTRACTION (`eval_vec_contracted` folds the window as
@@ -4884,7 +4954,7 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         && scan.is_none()
         && gates.is_empty()
         && ctx.recur.is_none()
-        && let Some(box_ranges) = static_ranges.as_deref()
+        && let Some(box_ranges) = cells.static_ranges.as_deref()
     {
         let terms = with_faq_pool(|pool| {
             try_eval_faq_vectorized(
@@ -4944,148 +5014,241 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
     }
     let mut buf = vec![0.0f64; total];
-    let saved_binds: Vec<(String, Option<i64>)> = idx_names
-        .iter()
-        .chain(contract_names.iter())
-        .map(|n| (n.clone(), ctx.loop_binds.get(n).copied()))
-        .collect();
-    if let Some(scan) = scan {
-        let (scan_lo, scan_hi) = ranges[scan.axis];
-        // Sweep the scanned axis inside; every OTHER output axis is an
-        // independent scan and forms the outer loop.
-        let outer_ranges: Vec<(i64, i64)> = ranges
-            .iter()
-            .enumerate()
-            .filter(|(d, _)| *d != scan.axis)
-            .map(|(_, r)| *r)
-            .collect();
-        // Axis position and symbol name of each outer axis, paired once so the
-        // per-tuple loop binds the symbol and records the coordinate together.
-        let outer_axes: Vec<(usize, &String)> = idx_names
-            .iter()
-            .enumerate()
-            .filter(|(d, _)| *d != scan.axis)
-            .collect();
-        let sweep = ScanSweep {
-            scan,
-            i_name: &idx_names[scan.axis],
-            j_name: &contract_names[0],
-            // One step of one scan when the walk is to stop at its first cell.
-            bounds: if !stop_at_first_cell() {
-                (scan_lo, scan_hi)
-            } else if scan.reverse {
-                (scan_lo.max(scan_hi), scan_hi)
-            } else {
-                (scan_lo, scan_hi.min(scan_lo))
-            },
-            body,
-            reduce,
-        };
-        let mut full = vec![0i64; ranges.len()];
-        let mut outer = CartesianTuples::new(&outer_ranges);
-        while let Some(otuple) = outer.next() {
-            for ((d, name), val) in outer_axes.iter().zip(otuple.iter()) {
-                set_bind(&mut ctx.loop_binds, name, *val);
-                full[*d] = *val;
-            }
-            run_prefix_scan(&sweep, ctx, |i, acc, _| {
-                note_per_cell_cell();
-                full[scan.axis] = i;
-                buf[multi_to_flat_col_major(&full, &shape, &origin)] = acc;
-            });
-            if stop_after_first_cell() {
-                break;
-            }
-        }
-    } else {
-        let cellbox = CellBox {
-            names: idx_names,
-            origin: &origin,
-            ranges: &ranges,
-            rule: None,
-        };
-        let spec = ReduceSpec {
-            contract_names: &contract_names,
-            body,
-            reduce,
-            filter,
-            cell: Some(&cellbox),
-        };
-        // Per-node cost accounting. The counter is thread-local and bumped
-        // only on the gate-driven unroll, so the delta across this output loop
-        // is exactly the leaves THIS aggregate enumerated.
-        let stats_from = (!gates.is_empty() && crate::broad_phase::join_gate_log_enabled())
-            .then(crate::broad_phase::overlap_enum_visits);
-        // The gated walk's cell-independent plan and its per-cell buffers,
-        // built once for the whole output loop.
-        let gate_plan = GatePlan::new(
-            contract_names.len(),
-            gates.iter().map(|(g, p)| (&*g.index, p.src, p.tgt)),
-        );
-        let mut gate_bufs = gate_plan.bufs();
-        let mut tuples = CartesianTuples::new(&ranges);
-        while let Some(tuple) = tuples.next() {
-            for (name, val) in idx_names.iter().zip(tuple.iter()) {
-                set_bind(&mut ctx.loop_binds, name, *val);
-            }
-            let v = if gates.is_empty() {
-                reduce_contraction(&spec, &contract_dims, static_ranges.as_deref(), ctx)
-            } else {
-                // This cell's contraction bounds: the hoisted static ones when
-                // every dim is cell-independent, else re-derived here exactly
-                // as `reduce_contraction` does.
-                let derived: SmallVec<[(i64, i64); 4]>;
-                let cell_ranges: &[(i64, i64)] = match static_ranges.as_deref() {
-                    Some(r) => r,
-                    None => {
-                        derived = contract_dims.iter().map(|d| d.concrete(ctx)).collect();
-                        &derived
-                    }
-                };
-                reduce_contraction_gated(
-                    &spec,
-                    cell_ranges,
-                    &gates,
-                    &gate_plan,
-                    &mut gate_bufs,
-                    ctx,
-                )
-            };
-            let flat = multi_to_flat_col_major(tuple, &shape, &origin);
-            buf[flat] = v;
-            if is_walk {
-                note_per_cell_cell();
-                if stop_after_first_cell() {
-                    break;
-                }
-            }
-        }
-        if let Some(before) = stats_from {
-            let desc = gates
-                .iter()
-                .map(|(g, _)| format!("{}~{}:{}", g.sym_src, g.sym_tgt, g.index.len()))
-                .collect::<Vec<_>>()
-                .join(",");
-            eprintln!(
-                "[join-gate] gates={desc} cells={total} leaves={}",
-                crate::broad_phase::overlap_enum_visits().wrapping_sub(before),
-            );
-        }
-    }
-    for (name, saved) in saved_binds {
-        match saved {
-            Some(v) => {
-                ctx.loop_binds.insert(name, v);
-            }
-            None => {
-                ctx.loop_binds.remove(&name);
-            }
-        }
-    }
+    cells.walk(ctx, |cell, v, _| {
+        buf[multi_to_flat_col_major(cell, &shape, &origin)] = v;
+    });
     if shape.is_empty() {
         Value::Scalar(buf[0])
     } else {
         Value::Array(Box::new(col_major_to_arrayd(&buf, &shape)))
+    }
+}
+
+/// One `faq`'s per-cell walk: every output cell's ⊕-reduced value, handed to
+/// a sink with the cell's output tuple, in the oracle's visiting order.
+///
+/// The one evaluation order of the construct, shared by a standalone `faq`
+/// ([`eval_faq`]) and the per-cell oracle's state-derivative and observed
+/// rules (`rhs.rs`). It recognizes a forward prefix scan
+/// ([`detect_prefix_scan`]) and sweeps it in O(N); drives the contraction
+/// from resolved join gates when there are any; and honours a
+/// [`StopAtFirstCell`], counting each cell it evaluates.
+pub(super) struct FaqCells<'s> {
+    idx_names: &'s [String],
+    ranges: &'s [(i64, i64)],
+    body: &'s Expr,
+    contract_names: &'s [String],
+    contract_dims: &'s [ContractDim],
+    reduce: ReduceKind,
+    filter: Option<&'s Expr>,
+    /// The variable the rule being walked defines, for a diagnostic to name.
+    rule: Option<&'s str>,
+    gates: &'s [(JoinGate, GatePlacement)],
+    /// The contraction bounds when every contracted dim is cell-independent,
+    /// hoisted out of the cell loop.
+    pub(super) static_ranges: Option<RangeVec>,
+    /// The prefix scan the walk sweeps instead of the triangular product.
+    pub(super) scan: Option<PrefixScan>,
+}
+
+impl<'s> FaqCells<'s> {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new(
+        idx_names: &'s [String],
+        ranges: &'s [(i64, i64)],
+        body: &'s Expr,
+        contract_names: &'s [String],
+        contract_dims: &'s [ContractDim],
+        reduce: ReduceKind,
+        filter: Option<&'s Expr>,
+        rule: Option<&'s str>,
+        gates: &'s [(JoinGate, GatePlacement)],
+    ) -> Self {
+        let static_ranges = static_contract_ranges(contract_dims);
+        let scan = detect_prefix_scan(
+            idx_names,
+            ranges,
+            contract_names,
+            static_ranges.as_deref(),
+            body,
+            filter,
+        );
+        FaqCells {
+            idx_names,
+            ranges,
+            body,
+            contract_names,
+            contract_dims,
+            reduce,
+            filter,
+            rule,
+            gates,
+            static_ranges,
+            scan,
+        }
+    }
+
+    /// Walk every cell, calling `sink(cell, value, ctx)` with the cell's
+    /// output tuple and its reduced value; `ctx` has the cell's output (and,
+    /// in a scan, contracted) symbols bound. The binds `ctx` held for these
+    /// symbols are restored afterwards.
+    pub(super) fn walk(&self, ctx: &mut EvalCtx, mut sink: impl FnMut(&[i64], f64, &EvalCtx)) {
+        let &FaqCells {
+            idx_names,
+            ranges,
+            body,
+            contract_names,
+            contract_dims,
+            reduce,
+            filter,
+            rule,
+            gates,
+            ref static_ranges,
+            scan,
+        } = self;
+        // A rank-0 node with nothing to contract is a single evaluation, not
+        // a walk: it neither counts a cell nor stops.
+        let is_walk = !idx_names.is_empty() || !contract_names.is_empty();
+        let saved_binds: Vec<(String, Option<i64>)> = idx_names
+            .iter()
+            .chain(contract_names.iter())
+            .map(|n| (n.clone(), ctx.loop_binds.get(n).copied()))
+            .collect();
+        if let Some(scan) = scan {
+            let (scan_lo, scan_hi) = ranges[scan.axis];
+            // Sweep the scanned axis inside; every OTHER output axis is an
+            // independent scan and forms the outer loop.
+            let outer_ranges: Vec<(i64, i64)> = ranges
+                .iter()
+                .enumerate()
+                .filter(|(d, _)| *d != scan.axis)
+                .map(|(_, r)| *r)
+                .collect();
+            let outer_axes: Vec<(usize, &String)> = idx_names
+                .iter()
+                .enumerate()
+                .filter(|(d, _)| *d != scan.axis)
+                .collect();
+            let sweep = ScanSweep {
+                scan,
+                i_name: &idx_names[scan.axis],
+                j_name: &contract_names[0],
+                // One step of one scan when the walk is to stop at its first cell.
+                bounds: if !stop_at_first_cell() {
+                    (scan_lo, scan_hi)
+                } else if scan.reverse {
+                    (scan_lo.max(scan_hi), scan_hi)
+                } else {
+                    (scan_lo, scan_hi.min(scan_lo))
+                },
+                body,
+                reduce,
+            };
+            let mut full = vec![0i64; ranges.len()];
+            let mut outer = CartesianTuples::new(&outer_ranges);
+            while let Some(otuple) = outer.next() {
+                for ((d, name), val) in outer_axes.iter().zip(otuple.iter()) {
+                    set_bind(&mut ctx.loop_binds, name, *val);
+                    full[*d] = *val;
+                }
+                run_prefix_scan(&sweep, ctx, |i, acc, ctx| {
+                    note_per_cell_cell();
+                    full[scan.axis] = i;
+                    sink(&full, acc, ctx);
+                });
+                if stop_after_first_cell() {
+                    break;
+                }
+            }
+        } else {
+            let origin: DimI = ranges.iter().map(|(lo, _)| *lo).collect();
+            let cellbox = CellBox {
+                names: idx_names,
+                origin: &origin,
+                ranges,
+                rule,
+            };
+            let spec = ReduceSpec {
+                contract_names,
+                body,
+                reduce,
+                filter,
+                cell: Some(&cellbox),
+            };
+            // Per-node cost accounting. The counter is thread-local and bumped
+            // only on the gate-driven unroll, so the delta across this output
+            // loop is exactly the leaves THIS aggregate enumerated.
+            let stats_from = (!gates.is_empty() && crate::broad_phase::join_gate_log_enabled())
+                .then(crate::broad_phase::overlap_enum_visits);
+            // The gated walk's cell-independent plan and its per-cell buffers,
+            // built once for the whole output loop.
+            let gate_plan = GatePlan::new(
+                contract_names.len(),
+                gates.iter().map(|(g, p)| (&*g.index, p.src, p.tgt)),
+            );
+            let mut gate_bufs = gate_plan.bufs();
+            let mut tuples = CartesianTuples::new(ranges);
+            while let Some(tuple) = tuples.next() {
+                for (name, val) in idx_names.iter().zip(tuple.iter()) {
+                    set_bind(&mut ctx.loop_binds, name, *val);
+                }
+                let v = if gates.is_empty() {
+                    reduce_contraction(&spec, contract_dims, static_ranges.as_deref(), ctx)
+                } else {
+                    // This cell's contraction bounds: the hoisted static ones
+                    // when every dim is cell-independent, else re-derived here
+                    // exactly as `reduce_contraction` does.
+                    let derived: SmallVec<[(i64, i64); 4]>;
+                    let cell_ranges: &[(i64, i64)] = match static_ranges.as_deref() {
+                        Some(r) => r,
+                        None => {
+                            derived = contract_dims.iter().map(|d| d.concrete(ctx)).collect();
+                            &derived
+                        }
+                    };
+                    reduce_contraction_gated(
+                        &spec,
+                        cell_ranges,
+                        gates,
+                        &gate_plan,
+                        &mut gate_bufs,
+                        ctx,
+                    )
+                };
+                sink(tuple, v, ctx);
+                if is_walk {
+                    note_per_cell_cell();
+                    if stop_after_first_cell() {
+                        break;
+                    }
+                }
+            }
+            if let Some(before) = stats_from {
+                let total: usize = ranges
+                    .iter()
+                    .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+                    .product();
+                let desc = gates
+                    .iter()
+                    .map(|(g, _)| format!("{}~{}:{}", g.sym_src, g.sym_tgt, g.index.len()))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                eprintln!(
+                    "[join-gate] gates={desc} cells={total} leaves={}",
+                    crate::broad_phase::overlap_enum_visits().wrapping_sub(before),
+                );
+            }
+        }
+        for (name, saved) in saved_binds {
+            match saved {
+                Some(v) => {
+                    ctx.loop_binds.insert(name, v);
+                }
+                None => {
+                    ctx.loop_binds.remove(&name);
+                }
+            }
+        }
     }
 }
 
@@ -5888,7 +6051,6 @@ mod unbound_name_fault_tests {
             t: 0.0,
             derived_extents: empty_derived_extents(),
             forcing: &forcing,
-            cse: None,
             const_lits: None,
             const_arrays: ConstArrayScope::empty(),
             declared: &declared,

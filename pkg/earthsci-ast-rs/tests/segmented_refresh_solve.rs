@@ -626,8 +626,8 @@ fn forcing_is_constant_within_a_segment_so_rhs_is_pure() {
     let names = compiled.state_variable_names().to_vec();
     let state = vec![0.0f64; names.len()];
     let params = HashMap::new();
-    let (dy_at_0, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
-    let (dy_at_half, _) = compiled.debug_eval_rhs(&state, 0.5, &params, false);
+    let (dy_at_0, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
+    let (dy_at_half, _) = compiled.debug_eval_rhs(&state, 0.5, &params);
     assert_eq!(
         dy_at_0, dy_at_half,
         "forcing is frozen within the segment → the RHS is time-invariant here (pure)"
