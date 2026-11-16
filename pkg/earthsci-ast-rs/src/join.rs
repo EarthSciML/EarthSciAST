@@ -78,6 +78,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::Value;
 
 use crate::compile_error::CompileError;
+use crate::dependency::Reads;
 use crate::faq::is_faq_op;
 use crate::types::{Expr, ExpressionNode, IndexSet, JoinClause, Model, RangeSpec, RegionBound};
 
@@ -1309,37 +1310,6 @@ fn code_lookup(positions: &[i64], codes: &[i64], sym: &str) -> Expr {
     })
 }
 
-/// The names a node's own join clauses read: its `on` key columns and its
-/// `overlap` envelope factors.
-fn clause_names(n: &ExpressionNode, out: &mut Vec<String>) {
-    for clause in n.join.iter().flatten() {
-        out.extend(clause.on.iter().flatten().cloned());
-        if let Some(ov) = &clause.overlap {
-            out.extend(ov.src_env.iter().chain(&ov.tgt_env).cloned());
-        }
-    }
-}
-
-/// The join-clause names of every node in `e` (the cone's seeds).
-fn join_clause_names(e: &Expr, out: &mut Vec<String>) {
-    if let Expr::Operator(n) = e {
-        clause_names(n, out);
-        n.for_each_child(&mut |c| join_clause_names(c, out));
-    }
-}
-
-/// Every name `e` reads: its variables and the names its join clauses read.
-fn expr_reads(e: &Expr, out: &mut Vec<String>) {
-    match e {
-        Expr::Variable(v) => out.push(v.clone()),
-        Expr::Operator(n) => {
-            clause_names(n, out);
-            n.for_each_child(&mut |c| expr_reads(c, out));
-        }
-        _ => {}
-    }
-}
-
 /// Every name read, directly or through the observeds they are defined by, by
 /// the KEY COLUMNS of the `on` joins in `roots` (CONFORMANCE_SPEC §5.5.8) and
 /// by the ENVELOPE FACTORS of their `overlap` joins (§5.5.6), which carry the
@@ -1355,17 +1325,17 @@ pub(crate) fn join_key_cone<'e>(
     roots: impl IntoIterator<Item = &'e Expr>,
     definition: impl Fn(&str) -> Option<&'e Expr>,
 ) -> HashSet<String> {
-    let mut frontier: Vec<String> = Vec::new();
-    for r in roots {
-        join_clause_names(r, &mut frontier);
-    }
+    let mut frontier: Vec<String> = roots
+        .into_iter()
+        .flat_map(|r| Reads::of(r).join_names)
+        .collect();
     let mut seen: HashSet<String> = HashSet::new();
     while let Some(name) = frontier.pop() {
         if !seen.insert(name.clone()) {
             continue;
         }
         if let Some(def) = definition(&name) {
-            expr_reads(def, &mut frontier);
+            frontier.extend(Reads::of(def).all().cloned());
         }
     }
     seen
@@ -1409,11 +1379,10 @@ pub(crate) fn join_key_parameters(
     };
     let mut frontier: Vec<(String, String)> = Vec::new();
     for (m, model) in models {
-        let mut names = Vec::new();
         for eq in &model.equations {
-            join_clause_names(&eq.rhs, &mut names);
+            let names = Reads::of(&eq.rhs).join_names;
+            frontier.extend(names.iter().filter_map(|n| resolve(m, n)));
         }
-        frontier.extend(names.iter().filter_map(|n| resolve(m, n)));
     }
     let mut seen: HashSet<(String, String)> = HashSet::new();
     while let Some(key) = frontier.pop() {
@@ -1421,9 +1390,8 @@ pub(crate) fn join_key_parameters(
             continue;
         }
         if let Some(def) = defs[key.0.as_str()].get(&key.1) {
-            let mut reads = Vec::new();
-            expr_reads(def, &mut reads);
-            frontier.extend(reads.iter().filter_map(|n| resolve(&key.0, n)));
+            let reads = Reads::of(def);
+            frontier.extend(reads.all().filter_map(|n| resolve(&key.0, n)));
         }
         seen.insert(key);
     }

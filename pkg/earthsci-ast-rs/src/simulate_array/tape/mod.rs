@@ -580,8 +580,9 @@ impl ArrayCompiled {
         fuse: Option<fuse::SuperopCfg>,
         align_layout: bool,
     ) -> (Result<TapeProgram, DeclinedTape>, TapeBuildReport) {
-        let const_names = self.classify_static_observeds(discrete_forcing);
-        let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
+        let deps = self.observed_dependencies(discrete_forcing);
+        let const_names = deps.at_most(crate::cadence::Cadence::Const);
+        let seg_names = deps.at_most(crate::cadence::Cadence::Discrete);
         let forcing = self.forcing_inputs(discrete_forcing);
         let (prog, vn_hits) = build_tape_program(
             self,
@@ -609,8 +610,9 @@ impl ArrayCompiled {
     /// reads one, is in the SEGMENT section, re-run when the set changes.
     pub(crate) fn build_tile_tape(&self, tile: &TileLowering) -> Result<TapeProgram, DeclinedTape> {
         let discrete: HashSet<String> = self.forcing_decls.keys().cloned().collect();
-        let const_names = self.classify_static_observeds(&discrete);
-        let seg_names = self.classify_segment_invariant_observeds(&discrete, true);
+        let deps = self.observed_dependencies(&discrete);
+        let const_names = deps.at_most(crate::cadence::Cadence::Const);
+        let seg_names = deps.at_most(crate::cadence::Cadence::Discrete);
         let forcing = self.forcing_inputs(&discrete);
         build_tape_program(
             self,

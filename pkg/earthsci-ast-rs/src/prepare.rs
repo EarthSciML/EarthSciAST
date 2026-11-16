@@ -276,8 +276,9 @@ pub(crate) struct PrepareOptions {
     pub pushdown_rewrite: bool,
     /// Scalar parameter overrides (exact or bare names), baked into the build.
     pub parameters: HashMap<String, f64>,
-    /// The start of the time span: the `t` every build-time observed is
-    /// evaluated at, as the static route evaluates it.
+    /// The construction sample time (`sample_time`, else the start of the
+    /// time span): the `t` every build-time observed is evaluated at, as the
+    /// static route evaluates it.
     pub t0: f64,
     /// Per-step progress lines on stdout.
     ///
@@ -479,162 +480,50 @@ const PER_CELL_RECURRENCE: &str = "a causal self-reference (esm-spec §4.3.1.1),
     build pipeline sweeps cell by cell through the reference evaluator";
 
 // --------------------------------------------------------------------------- //
-// Dependency order over the observeds (shared with the pushdown-era runner).
+// Dependency order over the observeds.
 // --------------------------------------------------------------------------- //
 
-/// The factor names an expression declares it reads (`aggregate.args` plus
-/// every gather / bare reference), gathered recursively. The dependency edges
-/// come from the MODEL, not from a re-derivation here. A subtree shared by
-/// several parents (an expanded template's body) is walked once.
-fn declared_args(expr: &Expr, out: &mut HashSet<String>) {
-    fn walk(
-        expr: &Expr,
-        out: &mut HashSet<String>,
-        seen: &mut HashSet<*const crate::types::ExpressionNode>,
-    ) {
-        match expr {
-            Expr::Variable(name) if !out.contains(name) => {
-                out.insert(name.clone());
-            }
-            Expr::Operator(node) => {
-                if !seen.insert(std::sync::Arc::as_ptr(node)) {
-                    return;
-                }
-                for a in &node.args {
-                    walk(a, out, seen);
-                }
-                node.for_each_child(&mut |c| walk(c, out, seen));
-            }
-            _ => {}
-        }
-    }
-    walk(expr, out, &mut HashSet::new());
-}
-
-/// The key columns and envelope factors every `join` in `expr` names. They
-/// are strings on the clause rather than expressions, so [`declared_args`]
-/// does not see them.
-fn join_names(expr: &Expr, out: &mut HashSet<String>) {
-    fn walk(
-        expr: &Expr,
-        out: &mut HashSet<String>,
-        seen: &mut HashSet<*const crate::types::ExpressionNode>,
-    ) {
-        if let Expr::Operator(node) = expr {
-            if !seen.insert(std::sync::Arc::as_ptr(node)) {
-                return;
-            }
-            for clause in node.join.iter().flatten() {
-                out.extend(clause.on.iter().flatten().cloned());
-                if let Some(ov) = &clause.overlap {
-                    out.extend(ov.src_env.iter().chain(ov.tgt_env.iter()).cloned());
-                }
-            }
-            for a in &node.args {
-                walk(a, out, seen);
-            }
-            node.for_each_child(&mut |c| walk(c, out, seen));
-        }
-    }
-    walk(expr, out, &mut HashSet::new());
-}
-
-/// The observeds whose definitions read a state, directly or through another
-/// observed.
-///
-/// The build-time observed pass does not evaluate these: there is no state at
-/// build time, so a read of one is unbound there. They are evaluated at run
-/// time like every other observed, by the compiler the Problem names. This
-/// includes a mounted subsystem's observeds, which join the model's own once
-/// the subsystem is mounted.
-fn state_dependent_observeds(model: &Model, defs: &HashMap<String, Expr>) -> HashSet<String> {
+/// The dependency summaries of the observed definitions `defs`
+/// ([`crate::dependency`]). A state of `model` (an unknown that is not an
+/// observed) is the one input that varies: the build-time observed pass does
+/// not evaluate an observed that reads one, directly or through another
+/// observed, because there is no state at build time. Those are evaluated at
+/// run time like every other observed, by the compiler the Problem names. A
+/// self-read is dropped: it is not an edge to another observed.
+fn observed_dependencies(
+    model: &Model,
+    defs: &HashMap<String, Expr>,
+) -> crate::dependency::DependencySummaries {
+    use crate::dependency::{DependencySummaries, Leaf, Reads};
     let class = crate::classification::Classification::of(model);
-    let states: HashSet<&str> = model
-        .variables
-        .iter()
-        .filter(|(name, var)| var.var_type == VariableType::Unknown && !class.is_observed(name))
-        .map(|(name, _)| name.as_str())
-        .collect();
-    let refs: HashMap<&str, HashSet<String>> = defs
-        .iter()
-        .map(|(name, e)| {
-            let mut a = HashSet::new();
-            declared_args(e, &mut a);
-            (name.as_str(), a)
-        })
-        .collect();
-    let mut dependent: HashSet<String> = HashSet::new();
-    loop {
-        let before = dependent.len();
-        for (name, reads) in &refs {
-            if !dependent.contains(*name)
-                && reads
-                    .iter()
-                    .any(|r| states.contains(r.as_str()) || dependent.contains(r))
-            {
-                dependent.insert((*name).to_string());
+    DependencySummaries::new(
+        defs.iter()
+            .map(|(n, e)| (n.clone(), Reads::of(e).without(n))),
+        |name| match model.variables.get(name) {
+            Some(var) if var.var_type == VariableType::Unknown && !class.is_observed(name) => {
+                Leaf::State
             }
-        }
-        if dependent.len() == before {
-            return dependent;
-        }
-    }
+            _ => Leaf::Const,
+        },
+    )
 }
 
 /// Dependency order over observed definitions: an observed follows every
 /// observed it names. A cycle is a malformed model and is a hard error.
-fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, SimulateError> {
-    let deps: HashMap<String, HashSet<String>> = defs
-        .iter()
-        .map(|(n, e)| {
-            let mut a = HashSet::new();
-            declared_args(e, &mut a);
-            a.retain(|x| defs.contains_key(x) && x != n);
-            (n.clone(), a)
-        })
-        .collect();
-
-    let mut ordered = Vec::new();
-    let mut done: HashSet<String> = HashSet::new();
-    let mut pending: HashSet<String> = defs.keys().cloned().collect();
-    while !pending.is_empty() {
-        let mut ready: Vec<String> = pending
-            .iter()
-            .filter(|n| deps[*n].iter().all(|d| done.contains(d)))
-            .cloned()
-            .collect();
-        if ready.is_empty() {
-            // Name the CYCLE, not the residue. "cyclic observed dependency
-            // among [a, b, c, d, e]" tells an author that five observeds are
-            // implicated and nothing about which edges close the loop; the
-            // whole value of this diagnostic is the path (esm-spec §4.9.6).
-            // Sorted roots and successors so the same cycle is named every run.
-            let mut stuck: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
-                std::collections::BTreeMap::new();
-            for n in &pending {
-                stuck.insert(n.clone(), deps[n].iter().cloned().collect());
-            }
-            let cycle = crate::classification::first_observed_cycle(&stuck)
-                // Unreachable in practice — the residue is non-empty precisely
-                // because nothing in it became ready, which requires an
-                // unsatisfied dependency inside it — but naming the residue
-                // beats a panic if that invariant ever moves.
-                .unwrap_or_else(|| stuck.keys().cloned().collect());
-            return Err(err(format!(
-                "observed_cycle: dependency cycle among observed variables: {}. Each is defined \
-                 in terms of the next, so no evaluation order satisfies every definition \
-                 (esm-spec §4.9.6). `esm validate` reports this cycle before any build.",
-                cycle.join(" -> ")
-            )));
-        }
-        ready.sort(); // deterministic tie-break
-        for n in ready {
-            ordered.push(n.clone());
-            done.insert(n.clone());
-            pending.remove(&n);
-        }
+fn observed_order(
+    deps: &crate::dependency::DependencySummaries,
+) -> Result<Vec<String>, SimulateError> {
+    // Name the CYCLE, not the residue: the whole value of this diagnostic is
+    // the path (esm-spec §4.9.6).
+    if let Some(cycle) = deps.cycle() {
+        return Err(err(format!(
+            "observed_cycle: dependency cycle among observed variables: {}. Each is defined \
+             in terms of the next, so no evaluation order satisfies every definition \
+             (esm-spec §4.9.6). `esm validate` reports this cycle before any build.",
+            cycle.join(" -> ")
+        )));
     }
-    Ok(ordered)
+    Ok(deps.order().to_vec())
 }
 
 /// name → defining expression, for every OBSERVED unknown of `model` that this
@@ -886,14 +775,14 @@ fn inject_aliases(arrays: &mut ArrMap, coupling: &[(String, String)]) {
 /// reference, i.e. the build-time coordinate closure.
 fn producer_seed_closure(
     seeds: &[&Expr],
-    defs: &HashMap<String, Expr>,
+    deps: &crate::dependency::DependencySummaries,
     join_free: &HashSet<String>,
 ) -> HashSet<String> {
     let mut needed: HashSet<String> = HashSet::new();
     let mut frontier: Vec<String> = Vec::new();
     let mut refs = HashSet::new();
     for s in seeds {
-        declared_args(s, &mut refs);
+        refs.extend(crate::dependency::Reads::of(s).names);
         // A producer's `join.on` columns that are plain observeds (the
         // per-component integer bin columns of a lib/relational.esm rewrite)
         // seed the closure too, so the coordinates they read are evaluated.
@@ -909,11 +798,12 @@ fn producer_seed_closure(
         }
     }
     while let Some(cur) = frontier.pop() {
-        let mut refs = HashSet::new();
-        declared_args(&defs[&cur], &mut refs);
-        for r in refs {
-            if join_free.contains(&r) && needed.insert(r.clone()) {
-                frontier.push(r);
+        let Some(summary) = deps.get(&cur) else {
+            continue;
+        };
+        for r in &summary.reads.names {
+            if join_free.contains(r) && needed.insert(r.clone()) {
+                frontier.push(r.clone());
             }
         }
     }
@@ -1688,8 +1578,10 @@ struct BuildState<'o> {
     arrays: ArrMap,
     /// The CONST-ARRAY registry (see [`BuildState::seal_const_registry`]).
     const_scope: ConstArrayScope,
-    /// Observed definitions, their join-free partition, and dependency order.
+    /// Observed definitions, their dependency summaries, their join-free
+    /// partition, and dependency order.
     defs: HashMap<String, Expr>,
+    deps: crate::dependency::DependencySummaries,
     join_free: HashSet<String>,
     order: Vec<String>,
     /// Evaluated observed fields — the [`PreparedBuild::fields`] payload.
@@ -1866,6 +1758,7 @@ impl<'o> BuildState<'o> {
             arrays: ArrMap::default(),
             const_scope: ConstArrayScope::default(),
             defs: HashMap::new(),
+            deps: Default::default(),
             join_free: HashSet::new(),
             order: Vec::new(),
             fields: HashMap::new(),
@@ -2281,7 +2174,6 @@ impl<'o> BuildState<'o> {
     ///   compiled path.
     fn collect_observed_defs(&mut self) -> Result<(), SimulateError> {
         let mut defs = observed_defs(&self.model);
-        let state_dependent = state_dependent_observeds(&self.model, &defs);
         {
             let var_shapes = crate::join::declared_var_shapes(&self.model);
             for e in defs.values_mut() {
@@ -2300,10 +2192,12 @@ impl<'o> BuildState<'o> {
             })
             .map(|(n, _)| n.clone())
             .collect();
-        self.order = observed_order(&defs)?;
+        let deps = observed_dependencies(&self.model, &defs);
+        self.order = observed_order(&deps)?;
         self.order
-            .retain(|name| !state_dependent.contains(name.as_str()));
+            .retain(|name| deps.get(name).is_none_or(|s| !s.reads_state));
         self.defs = defs;
+        self.deps = deps;
         Ok(())
     }
 
@@ -2331,7 +2225,7 @@ impl<'o> BuildState<'o> {
         if seeds.is_empty() {
             return Ok(());
         }
-        let needed = producer_seed_closure(&seeds, &self.defs, &self.join_free);
+        let needed = producer_seed_closure(&seeds, &self.deps, &self.join_free);
         let no_extents: HashMap<String, i64> = HashMap::new();
         let coords: Vec<String> = self
             .order
@@ -2662,23 +2556,11 @@ impl<'o> BuildState<'o> {
         if gated.is_empty() || gated.iter().any(|(_, _, g)| g.applies_to.len() != 1) {
             return Ok(());
         }
-        let mut after: HashSet<String> = gated
+        let gated_targets: HashSet<String> = gated
             .iter()
             .map(|(key, _, gate)| self.gated_target(key, gate, pd_coupling))
             .collect::<Result<_, _>>()?;
-        let seeds = after.clone();
-        // `order` is dependency order, so one pass closes the set.
-        for name in &self.order {
-            let mut reads = HashSet::new();
-            declared_args(&self.defs[name], &mut reads);
-            join_names(&self.defs[name], &mut reads);
-            if reads.iter().any(|r| after.contains(r)) {
-                after.insert(name.clone());
-            }
-        }
-        for s in &seeds {
-            after.remove(s);
-        }
+        let after = self.deps.reaching(&gated_targets);
         self.eval_observeds(&after, false)
     }
 
