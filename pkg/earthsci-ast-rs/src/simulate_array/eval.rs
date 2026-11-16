@@ -4883,8 +4883,8 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     let scan = cells.scan;
 
     // ---- Vectorized fast path (whole-array) --------------------------------
-    // Evaluate the aggregate with the same verified `eval_vec` overlay the
-    // compiled-RHS stencil path uses, instead of walking the body once per cell:
+    // Evaluate the aggregate with the whole-array `eval_vec` overlay (off
+    // under the per-cell oracle), instead of walking the body once per cell:
     //   * a pure MAP (out == ranges — e.g. a level-set Godunov `|∇φ|` stencil, a
     //     pointwise behaviour-stack field),
     //   * a static einsum CONTRACTION (`eval_vec_contracted` folds the window as

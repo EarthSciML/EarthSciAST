@@ -668,8 +668,8 @@ pub(crate) enum RuntimeMode {
     Native,
     /// [`crate::Compiler::Interpreter`]: no tape — the per-cell oracle for the
     /// right-hand side and every observed pass. The field initial conditions
-    /// and the build pipeline evaluate with the whole-array overlay off as
-    /// well, so every `faq` is walked per cell.
+    /// and initialization equations evaluate with the whole-array overlay off
+    /// as well, so every `faq` in them is walked per cell.
     Interpreter,
     /// [`crate::Compiler::Xla`]: the tape lowered to a StableHLO computation by
     /// `tape::xla_emit` and run through PJRT

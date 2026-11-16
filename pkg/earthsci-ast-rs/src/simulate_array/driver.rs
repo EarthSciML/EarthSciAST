@@ -2553,7 +2553,7 @@ impl ArrayCompiled {
         // before any closure, scratch buffer or diffsol problem is built
         // (issue #438): building the solver materializes a dense Jacobian,
         // which the matrix-free finite-difference Jacobian below pays for in
-        // full right-hand-side evaluations, one pair per state column, each one
+        // full right-hand-side evaluations, one per state column, each one
         // materializing every varying observed — recurrence sweeps included —
         // for a trajectory that is the untouched initial state. See
         // [`crate::simulate::nonadvancing_trajectory`], which also makes the
