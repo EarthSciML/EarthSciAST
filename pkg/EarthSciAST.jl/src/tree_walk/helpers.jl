@@ -394,12 +394,10 @@ function _binds_any(expr::OpExpr, bindings::Dict{String, ASTExpr})
             haskey(bindings, k) && return true
         end
     end
-    # A `makearray`'s `output_idx` binds nothing here. The pointwise lift is
-    # what writes one: it tags the operator's makearray with the lift's own
-    # loop symbols (esm-libraries-spec §4.7.5), which name the cell being read,
-    # i.e. the enclosing `faq`'s loop symbols, so a substitution for them must
-    # reach the region values.
-    oi = expr.op == "makearray" ? nothing : expr.output_idx
+    # A `makearray`'s `output_idx` binds too: its region values read those
+    # symbols at the cell being assembled, and `_resolve_index_of_makearray`
+    # binds them to the subscripts the makearray is read at.
+    oi = expr.output_idx
     if oi !== nothing
         for x in oi
             x isa AbstractString && haskey(bindings, String(x)) && return true
