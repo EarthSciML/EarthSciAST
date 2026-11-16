@@ -1015,15 +1015,7 @@ impl TapeBuilder<'_> {
                 self.emit_fill(&LV::Lit(identity), &shape, &lo, Cadence::Const)
             });
         }
-        let bx = LBox {
-            syms: idx_names,
-            lo: lo.clone(),
-            shape: shape.clone(),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            visit: SmallVec::new(),
-        };
+        let bx = LBox::new(idx_names, lo.clone(), shape.clone());
         let Some(keep) = keep.filter(|k| !k.iter().all(|&k| k != 0.0)) else {
             // The output box is its own value-numbering scope, as every box
             // lowering's is: the enclosing frame is a whole-body rule's (which
@@ -1123,15 +1115,7 @@ impl TapeBuilder<'_> {
         let cbody = subst_shared(body, &subs, &mut memo);
         let cfilter = filter.map(|f| subst_shared(f, &subs, &mut memo));
         let syms = [PW_SYM.to_string()];
-        let cbx = LBox {
-            syms: &syms,
-            lo: DimI::from_elem(1, 1),
-            shape: DimU::from_elem(m, 1),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            visit: SmallVec::new(),
-        };
+        let cbx = LBox::new(&syms, DimI::from_elem(1, 1), DimU::from_elem(m, 1));
         self.push_scope();
         let term = self.lower_filtered(&cbody, cfilter.as_ref(), &cbx, LV::Lit(identity));
         self.pop_scope();

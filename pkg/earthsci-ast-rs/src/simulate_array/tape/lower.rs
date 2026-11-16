@@ -300,6 +300,133 @@ struct ContractWindow<'a> {
     hi: &'a [i64],
 }
 
+/// Which entry point a contraction's promoted box serves
+/// ([`PromotedPlan`]). The forms differ in where the contracted axes go,
+/// which box the result lives on, and in what order the per-cell oracle
+/// visits the box's cells.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PromotedKind {
+    /// A rank-0 reduction nested in a box whose every axis its body reads
+    /// ([`TapeBuilder::lower_nested_scalar_reduction`]): the box's axes,
+    /// then the contracted ones; one result per cell of the box.
+    PerCell,
+    /// A contraction over an output box
+    /// ([`TapeBuilder::lower_contracted_box`]): the contracted axes lead, or
+    /// trail in a program stored axis-reversed; one result per output cell.
+    Output,
+    /// A standalone rank-0 reduction
+    /// ([`TapeBuilder::lower_scalar_reduction`]): the contraction box alone,
+    /// one scalar result.
+    Scalar,
+}
+
+/// The box one contraction's term is lowered over, and how it folds away:
+/// the one shape [`TapeBuilder::lower_promoted`] lowers for every form.
+struct PromotedPlan {
+    kind: PromotedKind,
+    syms: Vec<String>,
+    lo: DimI,
+    shape: DimU,
+    /// The contracted axes [`Instr::Reduce`] folds, ascending.
+    axes: SmallVec<[u8; 4]>,
+    /// The oracle's visiting order ([`LBox::visit`]).
+    visit: SmallVec<[u8; 4]>,
+    /// The result's box (`shape`, `lo`); `None` for one scalar.
+    out: Option<(DimU, DimI)>,
+    /// How a refusal names the construct.
+    what: &'static str,
+}
+
+impl PromotedPlan {
+    /// The promoted box of the window `names` (`wlo`, `wshape`) for `kind`:
+    /// `out_syms` over `out_lo`/`out_shape` is the enclosing or output box
+    /// (empty for [`PromotedKind::Scalar`]), `out_visit` its visiting order,
+    /// and `trailing` puts an output box's contracted axes last.
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        kind: PromotedKind,
+        out_syms: &[String],
+        out_lo: &DimI,
+        out_shape: &DimU,
+        out_visit: impl Iterator<Item = u8>,
+        names: &[String],
+        wlo: &[i64],
+        wshape: &[usize],
+        trailing: bool,
+    ) -> Self {
+        let (nb, nc) = (out_shape.len(), names.len());
+        // Contracted axes after the box's, or before them.
+        let after = kind != PromotedKind::Output || trailing;
+        let cat = |a: &[String], b: &[String]| a.iter().chain(b).cloned().collect::<Vec<_>>();
+        let (syms, lo, shape, out_axes, axes): (
+            Vec<String>,
+            DimI,
+            DimU,
+            Vec<u8>,
+            SmallVec<[u8; 4]>,
+        ) = if after {
+            (
+                cat(out_syms, names),
+                out_lo.iter().chain(wlo).copied().collect(),
+                out_shape.iter().chain(wshape).copied().collect(),
+                out_visit.collect(),
+                (nb as u8..(nb + nc) as u8).collect(),
+            )
+        } else {
+            (
+                cat(names, out_syms),
+                wlo.iter().chain(out_lo.iter()).copied().collect(),
+                wshape.iter().chain(out_shape.iter()).copied().collect(),
+                out_visit.map(|a| a + nc as u8).collect(),
+                (0..nc as u8).collect(),
+            )
+        };
+        // The oracle walks the box's cells, then each cell's tuples; a
+        // standalone reduction's box is its tuples, row-major.
+        let visit = match kind {
+            PromotedKind::Scalar => SmallVec::new(),
+            _ => out_axes.iter().chain(axes.iter()).copied().collect(),
+        };
+        let (out, what) = match kind {
+            PromotedKind::PerCell => (
+                Some((out_shape.clone(), out_lo.clone())),
+                "aggregate: a rank-0 output's",
+            ),
+            PromotedKind::Output => (Some((out_shape.clone(), out_lo.clone())), "contracted:"),
+            PromotedKind::Scalar => (None, "reduction:"),
+        };
+        PromotedPlan {
+            kind,
+            syms,
+            lo,
+            shape,
+            axes,
+            visit,
+            out,
+            what,
+        }
+    }
+
+    /// Refuse a box the program cannot hold: its rank (an output box needs
+    /// an axis of its own), then its element count.
+    fn check(&self) -> LResult<()> {
+        let what = self.what;
+        let no_out_axis = matches!(&self.out, Some((s, _)) if s.is_empty());
+        if no_out_axis || self.shape.len() > MAX_RANK {
+            bail_tape!("{what} promoted box rank out of range");
+        }
+        let elems = self
+            .shape
+            .iter()
+            .try_fold(1usize, |acc, &n| acc.checked_mul(n))
+            .filter(|&n| n <= MAX_PROMOTED_ELEMS);
+        if elems.is_none() {
+            bail_tape!("{what} promoted box is too large");
+        }
+        Ok(())
+    }
+}
+
 /// One run of output positions along an axis of a const-array gather, with
 /// the read its boundary policy resolves it to ([`TapeBuilder::lower_const_gather`]).
 #[derive(Clone, Debug)]
@@ -549,6 +676,20 @@ struct LBox<'a> {
 }
 
 impl<'a> LBox<'a> {
+    /// A plain box: `syms` over `lo` and `shape`, nothing contracted or bound
+    /// to a tuple list, visited row-major.
+    fn new(syms: &'a [String], lo: DimI, shape: DimU) -> Self {
+        LBox {
+            syms,
+            lo,
+            shape,
+            cnames: &[],
+            cvals: SmallVec::new(),
+            tuple: 0,
+            visit: SmallVec::new(),
+        }
+    }
+
     /// Axis `k` of the visiting order (see [`LBox::visit`]).
     fn visit_axis(&self, k: usize) -> usize {
         if self.visit.is_empty() {
@@ -2407,15 +2548,7 @@ impl<'m> TapeBuilder<'m> {
             }
             // Anything else a tuple-list body reads is one value for every
             // tuple; a whole array there is not an element of the list.
-            let plain = LBox {
-                syms: &[],
-                lo: DimI::new(),
-                shape: DimU::new(),
-                cnames: &[],
-                cvals: SmallVec::new(),
-                tuple: 0,
-                visit: SmallVec::new(),
-            };
+            let plain = LBox::new(&[], DimI::new(), DimU::new());
             let v = self.resolve_var(name, &plain)?;
             if self.lv_box(&v).is_some() {
                 bail_tape!("variable: whole array `{name}` read inside a tuple-list body");
@@ -5399,11 +5532,8 @@ impl<'m> TapeBuilder<'m> {
         // The box's axes, then the contracted ones: a read of the body that
         // follows the box (`u[i, j, l]`) is then the source's own layout, not
         // a transposing gather.
-        let nb = bx.shape.len();
-        let mut ext_syms: Vec<String> = bx.syms.to_vec();
-        ext_syms.extend(spec.contract_names.iter().cloned());
-        let mut ext_lo: DimI = bx.lo.clone();
-        let mut ext_shape: DimU = bx.shape.clone();
+        let mut wlo: DimI = DimI::new();
+        let mut wshape: DimU = DimU::new();
         for d in &spec.contract_dims {
             let (l, n) = match d {
                 ContractDim::Static(l, h) => (*l, (h - l + 1).max(0) as usize),
@@ -5412,37 +5542,25 @@ impl<'m> TapeBuilder<'m> {
                      non-static contraction dim ({other:?})"
                 ),
             };
-            ext_lo.push(l);
-            ext_shape.push(n);
+            wlo.push(l);
+            wshape.push(n);
         }
         // An empty window enumerates no tuple: the fold is the identity.
-        if ext_shape[nb..].contains(&0) {
+        if wshape.contains(&0) {
             return Ok(self.emit_fill(&LV::Lit(identity), &bx.shape, &bx.lo, Cadence::Const));
         }
-        if nc + nb > MAX_RANK {
-            bail_tape!("aggregate: a rank-0 output's promoted box rank out of range");
-        }
-        let elems = ext_shape
-            .iter()
-            .try_fold(1usize, |acc, &n| acc.checked_mul(n))
-            .filter(|&n| n <= MAX_PROMOTED_ELEMS);
-        if elems.is_none() {
-            bail_tape!("aggregate: a rank-0 output's promoted box is too large");
-        }
-        // The oracle walks the box's cells, then each cell's tuples.
-        let visit: SmallVec<[u8; 4]> = (0..nb)
-            .map(|k| bx.visit_axis(k) as u8)
-            .chain((nb..nb + nc).map(|a| a as u8))
-            .collect();
-        let ebx = LBox {
-            syms: &ext_syms,
-            lo: ext_lo.clone(),
-            shape: ext_shape.clone(),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            visit,
-        };
+        let plan = PromotedPlan::new(
+            PromotedKind::PerCell,
+            bx.syms,
+            &bx.lo,
+            &bx.shape,
+            (0..bx.shape.len()).map(|k| bx.visit_axis(k) as u8),
+            &spec.contract_names,
+            &wlo,
+            &wshape,
+            false,
+        );
+        plan.check()?;
         let skip = match spec.reduce {
             ReduceKind::Sum => -0.0,
             other => other.identity(),
@@ -5450,46 +5568,15 @@ impl<'m> TapeBuilder<'m> {
         // A fault here would sort by the promoted box's cells, which do not
         // place it among the enclosing box's own faults: refused instead.
         let notes = self.fault_notes;
-        self.push_scope();
-        let term = self.lower_filtered(spec.body, spec.filter, &ebx, LV::Lit(skip));
-        self.pop_scope();
-        let term = term?;
-        if self.fault_notes != notes {
-            bail_tape!(
-                "fault: a fail-closed fault inside a rank-0 output that reads its enclosing box"
-            );
-        }
-        let Some(term) = term else {
-            // The filter is the literal false: no tuple is kept.
-            return Ok(self.emit_fill(&LV::Lit(identity), &bx.shape, &bx.lo, Cadence::Const));
-        };
-        if matches!(&term, LV::State(_)) && self.lv_box(&term).is_some() {
-            bail_tape!("aggregate: a rank-0 output's term reduced to a bare whole-array view");
-        }
-        let src = match self.lv_box(&term) {
-            None => self.emit_fill(&term, &ext_shape, &ext_lo, Cadence::Const),
-            Some((s, o)) if s == ext_shape && o == ext_lo => term,
-            Some(_) => bail_tape!("aggregate: a rank-0 output's term box does not match its box"),
-        };
-        let sec = self.placement(self.lv_cadence(&src));
-        // A term that is the state array read whole, in its own layout (the
-        // column sum `u[i, j, l]`), is folded from the state in place.
-        let src_ref = match self.identity_state_gather(&src) {
-            Some(ix) => SrcRef::State(ix),
-            None => self.src_of(&src),
-        };
-        let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
-        let instr = Instr::Reduce {
-            op: combine_op,
-            init: identity,
-            src: src_ref,
-            axes: (nb as u8..(nb + nc) as u8).collect(),
-            reverse: false,
-            src_shape: ext_shape,
-            out,
-        };
-        self.emit(instr, sec);
-        Ok(LV::Arr(out))
+        self.lower_promoted(plan, combine_op, identity, false, |s, ebx| {
+            let term = s.lower_filtered(spec.body, spec.filter, ebx, LV::Lit(skip))?;
+            if s.fault_notes != notes {
+                bail_tape!(
+                    "fault: a fail-closed fault inside a rank-0 output that reads its enclosing box"
+                );
+            }
+            Ok(term)
+        })
     }
 
     /// The state array `lv` copies element for element, when the instruction
@@ -5531,6 +5618,112 @@ impl<'m> TapeBuilder<'m> {
             return whole.then_some(*ix);
         }
         None
+    }
+
+    /// Whether `lv` is a whole state array read as a value, which the
+    /// per-cell oracle scalarizes where a body reduces to one: every form
+    /// that lowers a body over a box refuses it.
+    fn is_bare_view(&self, lv: &LV) -> bool {
+        matches!(lv, LV::State(_)) && self.lv_box(lv).is_some()
+    }
+
+    /// `term` as an array over `shape`/`lo`: a scalar broadcast over it, an
+    /// array over it kept; a bare whole-array view, or an array over any
+    /// other box, refused, naming `what` and the box as `target`.
+    fn fit_term(
+        &mut self,
+        term: LV,
+        shape: &DimU,
+        lo: &DimI,
+        what: &str,
+        target: &str,
+    ) -> LResult<LV> {
+        if self.is_bare_view(&term) {
+            bail_tape!("{what} reduced to a bare whole-array view");
+        }
+        match self.lv_box(&term) {
+            None => Ok(self.emit_fill(&term, shape, lo, Cadence::Const)),
+            Some((s, o)) if s == *shape && o == *lo => Ok(term),
+            Some(_) => bail_tape!("{what} box does not match {target}"),
+        }
+    }
+
+    /// Lower a contraction over its promoted box (`plan`, already
+    /// [checked](PromotedPlan::check)): the term over the box, `None` when
+    /// the filter keeps no tuple, fitted to the box, then one
+    /// [`Instr::Reduce`] folding the contracted axes away with `op` from
+    /// `identity`, its one axis from the top when `reverse`. Its row-major
+    /// walk folds each result's terms in the oracle's order.
+    fn lower_promoted(
+        &mut self,
+        plan: PromotedPlan,
+        op: BinCode,
+        identity: f64,
+        reverse: bool,
+        term: impl FnOnce(&mut Self, &LBox) -> LResult<Option<LV>>,
+    ) -> LResult<LV> {
+        let what = plan.what;
+        let ebx = LBox {
+            visit: plan.visit.clone(),
+            ..LBox::new(&plan.syms, plan.lo.clone(), plan.shape.clone())
+        };
+        self.push_scope();
+        let t = term(self, &ebx);
+        self.pop_scope();
+        let t = match (t?, plan.kind) {
+            (Some(t), _) => t,
+            // No tuple is kept: every result is the identity.
+            (None, PromotedKind::PerCell) => {
+                let (s, o) = plan.out.as_ref().expect("a per-cell result has a box");
+                return Ok(self.emit_fill(&LV::Lit(identity), s, o, Cadence::Const));
+            }
+            (None, PromotedKind::Output) => LV::Lit(identity),
+            (None, PromotedKind::Scalar) => return Ok(LV::Lit(identity)),
+        };
+        let src = self.fit_term(
+            t,
+            &plan.shape,
+            &plan.lo,
+            &format!("{what} term"),
+            "the promoted box",
+        )?;
+        let sec = self.placement(self.lv_cadence(&src));
+        let src_ref = match plan.kind {
+            // A term that is the state array read whole, in its own layout
+            // (the column sum `u[i, j, l]`), is folded from the state in place.
+            PromotedKind::PerCell => match self.identity_state_gather(&src) {
+                Some(ix) => SrcRef::State(ix),
+                None => self.src_of(&src),
+            },
+            PromotedKind::Output => self.src_of(&src),
+            PromotedKind::Scalar => match src {
+                LV::Arr(s) => SrcRef::Slot(s),
+                _ => unreachable!("the reduction source is an array slot"),
+            },
+        };
+        let (out, result) = match &plan.out {
+            Some((s, o)) => {
+                let out = self.new_slot(s, o, false, sec);
+                (out, LV::Arr(out))
+            }
+            None => {
+                let out = self.new_slot(&[], &[], true, sec);
+                (out, LV::Scalar(out))
+            }
+        };
+        self.emit(
+            Instr::Reduce {
+                op,
+                init: identity,
+                src: src_ref,
+                axes: plan.axes,
+                reverse,
+                src_shape: plan.shape,
+                out,
+            },
+            sec,
+        );
+        Ok(result)
     }
 
     /// [`Self::lower_nested_scalar_reduction`] over the sub-box of `bx`'s
@@ -5647,15 +5840,7 @@ impl<'m> TapeBuilder<'m> {
         }
         self.push_scope();
         let v = if contract_names.is_empty() {
-            let bx = LBox {
-                syms: idx_names,
-                lo: lo.clone(),
-                shape: shape.clone(),
-                cnames: &[],
-                cvals: SmallVec::new(),
-                tuple: 0,
-                visit: SmallVec::new(),
-            };
+            let bx = LBox::new(idx_names, lo.clone(), shape.clone());
             let identity = LV::Lit(reduce.identity());
             let r = self
                 .lower_filtered(body, filter, &bx, identity.clone())
@@ -5671,19 +5856,7 @@ impl<'m> TapeBuilder<'m> {
         };
         // Mirror of the top-level bare-View bail: the oracle scalarizes a bare
         // whole-array body, so the overlay refuses it — and so do we.
-        if matches!(&v, LV::State(_)) && self.lv_box(&v).is_some() {
-            bail_tape!("faq: body reduced to a bare whole-array view (oracle scalarizes it)");
-        }
-        match self.lv_box(&v) {
-            None => Ok(self.emit_fill(&v, &shape, &lo, Cadence::Const)),
-            Some((s, o)) => {
-                if s == shape && o == lo {
-                    Ok(v)
-                } else {
-                    bail_tape!("faq: result box does not match the output box");
-                }
-            }
-        }
+        self.fit_term(v, &shape, &lo, "faq: body", "the output box")
     }
 
     /// A static contraction: the body over the output box EXTENDED by the
@@ -5777,10 +5950,6 @@ impl<'m> TapeBuilder<'m> {
         } = *c;
         let identity = c.reduce.identity();
         let nc = window.names.len();
-        let ns = shape.len();
-        if shape.is_empty() || ns + nc > MAX_RANK {
-            bail_tape!("contracted: promoted box rank out of range");
-        }
         // Where the contracted axes go. Leading, a fold over them is one
         // contiguous row per tuple. A program whose state is stored
         // axis-reversed (`layout`) stores a box reversed too, so there they
@@ -5795,87 +5964,25 @@ impl<'m> TapeBuilder<'m> {
         let win_shape: DimU = (0..nc)
             .map(|i| (window.hi[i] - window.lo[i] + 1) as usize)
             .collect();
-        let (ext_syms, ext_lo, ext_shape): (Vec<String>, DimI, DimU) = if trailing {
-            (
-                idx_names
-                    .iter()
-                    .chain(window.names.iter())
-                    .cloned()
-                    .collect(),
-                lo.iter().chain(window.lo.iter()).copied().collect(),
-                shape.iter().chain(win_shape.iter()).copied().collect(),
-            )
-        } else {
-            (
-                window
-                    .names
-                    .iter()
-                    .chain(idx_names.iter())
-                    .cloned()
-                    .collect(),
-                window.lo.iter().chain(lo.iter()).copied().collect(),
-                win_shape.iter().chain(shape.iter()).copied().collect(),
-            )
-        };
-        let (out_axes, red_axes): (Vec<u8>, SmallVec<[u8; 4]>) = if trailing {
-            (
-                (0..ns as u8).collect(),
-                (ns as u8..(ns + nc) as u8).collect(),
-            )
-        } else {
-            (
-                (nc as u8..(ns + nc) as u8).collect(),
-                (0..nc as u8).collect(),
-            )
-        };
-        let elems = ext_shape
-            .iter()
-            .try_fold(1usize, |acc, &n| acc.checked_mul(n))
-            .filter(|&n| n <= MAX_PROMOTED_ELEMS);
-        if elems.is_none() {
-            bail_tape!("contracted: promoted box too large");
-        }
-        self.push_scope();
-        let bx = LBox {
-            syms: &ext_syms,
-            lo: ext_lo.clone(),
-            shape: ext_shape.clone(),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            // The oracle walks the output cells, and each cell's tuples.
-            visit: out_axes.iter().chain(red_axes.iter()).copied().collect(),
-        };
-        let term = self
-            .lower_filtered(body, filter, &bx, LV::Lit(identity))
-            .map(|t| t.unwrap_or(LV::Lit(identity)));
-        self.pop_scope();
-        let term = term?;
-        if matches!(&term, LV::State(_)) && self.lv_box(&term).is_some() {
-            bail_tape!("contracted: term reduced to a bare whole-array view");
-        }
-        let src = match self.lv_box(&term) {
-            None => self.emit_fill(&term, &ext_shape, &ext_lo, Cadence::Const),
-            Some((s, o)) if s == ext_shape && o == ext_lo => term,
-            Some(_) => bail_tape!("contracted: term box does not match the promoted box"),
-        };
-        let sec = self.placement(self.lv_cadence(&src));
-        let out = self.new_slot(shape, lo, false, sec);
+        let plan = PromotedPlan::new(
+            PromotedKind::Output,
+            idx_names,
+            lo,
+            shape,
+            0..shape.len() as u8,
+            window.names,
+            window.lo,
+            &win_shape,
+            trailing,
+        );
+        plan.check()?;
         // A reverse window the scan lowering did not claim (its body reads
         // the output index, or its range is not the output axis's) folds
         // each cell's suffix from its high end (esm-spec §4.3.1).
         let reverse = folds_from_the_top(idx_names, window.names, filter);
-        let instr = Instr::Reduce {
-            op: combine_op,
-            init: identity,
-            src: self.src_of(&src),
-            axes: red_axes,
-            reverse,
-            src_shape: ext_shape,
-            out,
-        };
-        self.emit(instr, sec);
-        Ok(LV::Arr(out))
+        self.lower_promoted(plan, combine_op, identity, reverse, |s, bx| {
+            s.lower_filtered(body, filter, bx, LV::Lit(identity))
+        })
     }
 
     /// The unrolled form of a static contraction: one term per contraction
@@ -6027,15 +6134,7 @@ impl<'m> TapeBuilder<'m> {
             body_slots,
             body: Vec::new(),
         });
-        let cell = LBox {
-            syms: &[],
-            lo: DimI::new(),
-            shape: DimU::new(),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            visit: SmallVec::new(),
-        };
+        let cell = LBox::new(&[], DimI::new(), DimU::new());
         self.push_scope();
         let v = self.lower_expr(body, &cell);
         self.pop_scope();
@@ -6908,34 +7007,39 @@ impl<'m> TapeBuilder<'m> {
         let txn = self.sub_txn();
         let query = self.wholesale_count_query(spec);
         self.push_scope();
-        let bx = LBox {
-            syms: &spec.contract_names,
-            lo: lo.clone(),
-            shape: shape.clone(),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            visit: SmallVec::new(),
-        };
-        if let Some(v) = self.try_lower_indicator_count(spec, &bx, false, query.clone()) {
-            self.pop_scope();
+        let bx = LBox::new(&spec.contract_names, lo.clone(), shape.clone());
+        let count = self.try_lower_indicator_count(spec, &bx, false, query.clone());
+        self.pop_scope();
+        if let Some(v) = count {
             return Ok(v);
         }
         if query.is_some() {
-            self.pop_scope();
             self.sub_rollback(txn);
-            self.push_scope();
         }
-        let lowered = (|| -> LResult<Option<LV>> {
+        let plan = PromotedPlan::new(
+            PromotedKind::Scalar,
+            &[],
+            &DimI::new(),
+            &DimU::new(),
+            std::iter::empty(),
+            &spec.contract_names,
+            &lo,
+            &shape,
+            false,
+        );
+        plan.check()?;
+        // A body constant over the window still contributes one term PER
+        // tuple: `lower_promoted` broadcasts it over the box and folds that.
+        self.lower_promoted(plan, combine_op, identity, false, |s, bx| {
             let keep = match spec.filter {
                 None => None,
                 Some(f) => {
-                    let fv = self.lower_expr(f, &bx)?;
+                    let fv = s.lower_expr(f, bx)?;
                     match fv {
                         // No tuple is kept: the body never runs.
                         LV::Lit(0.0) => return Ok(None),
                         LV::Lit(_) => None,
-                        LV::State(_) if self.lv_box(&fv).is_some() => {
+                        fv if s.is_bare_view(&fv) => {
                             bail_tape!("reduction: filter reduced to a bare whole-array view")
                         }
                         fv => Some(fv),
@@ -6944,11 +7048,11 @@ impl<'m> TapeBuilder<'m> {
             };
             // A kept-only body is evaluated by the oracle at kept tuples alone.
             let v = match &keep {
-                None => self.lower_expr(spec.body, &bx),
+                None => s.lower_expr(spec.body, bx),
                 Some(fv) => {
-                    self.lazy_depth += 1;
-                    let v = self.reached_where(fv, true, |s| s.lower_expr(spec.body, &bx));
-                    self.lazy_depth -= 1;
+                    s.lazy_depth += 1;
+                    let v = s.reached_where(fv, true, |s| s.lower_expr(spec.body, bx));
+                    s.lazy_depth -= 1;
                     v
                 }
             };
@@ -6956,7 +7060,7 @@ impl<'m> TapeBuilder<'m> {
             // Same bail as `lower_faq`: the oracle scalarizes a bare
             // whole-array body (`eval(body).as_scalar()` ⇒ NaN), which this
             // box lowering does not reproduce.
-            if matches!(&v, LV::State(_)) && self.lv_box(&v).is_some() {
+            if s.is_bare_view(&v) {
                 bail_tape!("reduction: body reduced to a bare whole-array view");
             }
             Ok(Some(match keep {
@@ -6966,43 +7070,10 @@ impl<'m> TapeBuilder<'m> {
                         ReduceKind::Sum => -0.0,
                         other => other.identity(),
                     };
-                    self.emit_select(fv, v, LV::Lit(skip))?
+                    s.emit_select(fv, v, LV::Lit(skip))?
                 }
             }))
-        })();
-        self.pop_scope();
-        let Some(v) = lowered? else {
-            return Ok(LV::Lit(identity));
-        };
-        // A body constant over the window still contributes one term PER
-        // tuple, so broadcast it over the box and fold that.
-        let src = match self.lv_box(&v) {
-            None => self.emit_fill(&v, &shape, &lo, Cadence::Const),
-            Some((s, o)) => {
-                if s != shape || o != lo {
-                    bail_tape!("reduction: body box does not match the contraction window");
-                }
-                v
-            }
-        };
-        let LV::Arr(src_slot) = src else {
-            unreachable!("the reduction source is an array slot");
-        };
-        let sec = self.placement(self.slots[src_slot as usize].cadence);
-        let out = self.new_slot(&[], &[], true, sec);
-        self.emit(
-            Instr::Reduce {
-                op: combine_op,
-                init: identity,
-                src: SrcRef::Slot(src_slot),
-                axes: (0..shape.len() as u8).collect(),
-                reverse: false,
-                src_shape: shape,
-                out,
-            },
-            sec,
-        );
-        Ok(LV::Scalar(out))
+        })
     }
 
     /// A rank-0 `faq` that counts the entries of a rank-1 axis standing in one
@@ -7316,21 +7387,13 @@ impl<'m> TapeBuilder<'m> {
         let mut syms: Vec<String> = idx_names.to_vec();
         syms[scan.axis] = j_name.to_string();
         self.push_scope();
-        let bx = LBox {
-            syms: &syms,
-            lo: full_lo.clone(),
-            shape: full_shape.clone(),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            visit: SmallVec::new(),
-        };
+        let bx = LBox::new(&syms, full_lo.clone(), full_shape.clone());
         let term = self.lower_expr(body, &bx);
         self.pop_scope();
         let term = term.and_then(|v| {
             // The oracle scalarizes a bare whole-array body (NaN); see the
             // same bail in `lower_faq`.
-            if matches!(&v, LV::State(_)) && self.lv_box(&v).is_some() {
+            if self.is_bare_view(&v) {
                 bail_tape!("scan: body reduced to a bare whole-array view");
             }
             match self.lv_box(&v) {
