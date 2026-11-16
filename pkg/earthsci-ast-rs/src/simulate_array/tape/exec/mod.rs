@@ -221,18 +221,11 @@ pub(crate) struct TapeExec {
     /// Pending `(resume_pc, skip)` records for taken `JmpIfZero` branches
     /// (the reference executor's discipline). Capacity preallocated.
     pending: Vec<(u32, u32)>,
-    /// Per instruction, its scalar form when it has one (see
-    /// [`interp::ScalarOp`]), decoded by the first call against `slot_off`
-    /// and cleared whenever `slot_off` changes.
-    scode: Vec<interp::ScalarOp>,
-    /// The decoded one-lane programs `scode` refers to.
-    slanes: Vec<interp::ScalarLane>,
-    /// Straight runs of `scode` run as one program each, and per instruction
-    /// the block starting there (`u32::MAX`: none). Decoded with `scode`.
-    sblocks: Vec<interp::ScalarBlock>,
-    sblock_at: Vec<u32>,
-    /// The blocks' register file.
-    sregs: Vec<f64>,
+    /// The decoded form of the scalar instructions (see
+    /// [`interp::ScalarCode`]), for the slot layout of generation `layout`.
+    scalar: interp::ScalarCode,
+    /// Bumped whenever `slot_off` changes, so `scalar` is decoded again.
+    layout: u64,
     /// Step 4 epochs: the parameter / forcing epochs the CONST resp. SEGMENT
     /// sections last primed under (0 = never primed; live epochs start at 1).
     /// Checked per call as two integer compares — see `run_tape_call`.
@@ -325,11 +318,8 @@ impl TapeExec {
             obs,
             parked,
             pending: Vec::with_capacity(16),
-            scode: Vec::new(),
-            slanes: Vec::new(),
-            sblocks: Vec::new(),
-            sblock_at: Vec::new(),
-            sregs: Vec::new(),
+            scalar: interp::ScalarCode::default(),
+            layout: 0,
             primed_param_epoch: 0,
             primed_forcing_epoch: 0,
             scratch: Scratch {
@@ -607,8 +597,8 @@ fn run_continuous(env: &Env, range: std::ops::Range<usize>, exec: &mut TapeExec,
                         exec.slab.resize(p.slab_len, 0.0);
                     }
                     exec.slot_off.clone_from(&p.slot_off);
-                    // The scalar forms hold slab offsets of the old layout.
-                    exec.scode.clear();
+                    // The scalar code holds slab offsets of the old layout.
+                    exec.layout += 1;
                 }
             }
             if let Some(p) = exec.plan.take() {

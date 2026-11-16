@@ -44,6 +44,14 @@ pub(in crate::simulate_array::tape) struct Prepared {
     /// output box of every `Assemble` that uses it, so its zero fill can be
     /// skipped (every element is overwritten by a part).
     pub(in crate::simulate_array::tape) asm_covered: Vec<bool>,
+    /// Per instruction position (and one past the last), whether a straight
+    /// run of decoded scalar instructions may not continue through it: the
+    /// start of a section, of a conditional region, of its false arm or past
+    /// its end (a jump or a pending skip lands there), the start or end of a
+    /// recurrence body (the instruction loop publishes a cell there), or the
+    /// start of a segmented-reduction chain (which runs through its own
+    /// path).
+    pub(in crate::simulate_array::tape) block_cuts: Vec<bool>,
     /// Per fused group, [`node_elems`] of its schedule: what lets a worker
     /// step straight to the start of its share of the group.
     pub(in crate::simulate_array::tape) node_elems: Vec<Vec<usize>>,
@@ -73,9 +81,38 @@ impl Prepared {
                     .flatten()
             })
             .collect();
+        #[cfg(not(target_arch = "wasm32"))]
+        let seg_chains = chains::seg_chains(prog, &slot_off, &guarded);
+        let mut block_cuts = vec![false; prog.instrs.len() + 1];
+        let n = prog.instrs.len();
+        for c in [Cadence::Const, Cadence::Segment, Cadence::Continuous] {
+            block_cuts[prog.section_range(c).start.min(n)] = true;
+        }
+        let tables = prog.slot_tables();
+        for (pc, ins) in prog.instrs.iter().enumerate() {
+            if let Instr::JmpIfZero {
+                n_true, n_false, ..
+            } = ins
+            {
+                let t = pc + 1 + *n_true as usize;
+                for b in [pc + 1, t, t + *n_false as usize] {
+                    block_cuts[b.min(n)] = true;
+                }
+            }
+            let len = ins.region_len(&tables);
+            if len > 0 {
+                block_cuts[pc + 1] = true;
+                block_cuts[(pc + 1 + len).min(n)] = true;
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        for ch in &seg_chains {
+            block_cuts[ch.start] = true;
+        }
         Prepared {
             #[cfg(not(target_arch = "wasm32"))]
-            seg_chains: chains::seg_chains(prog, &slot_off, &guarded),
+            seg_chains,
+            block_cuts,
             dy: dy::DyPlacement::of(prog, &guarded),
             plan_full: plans_full(prog),
             asm_covered: assemblies_covered(prog),
