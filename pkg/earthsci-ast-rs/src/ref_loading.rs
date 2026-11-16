@@ -367,7 +367,8 @@ const REACTION_SYSTEM_MOUNT: TopLevelMountForm = TopLevelMountForm {
 /// Load a document a §4.7 mount edge references: locate and read it through
 /// [`crate::ref_reader`] (which owns `${VAR}` expansion, the bundled standard
 /// library, the remote refusal and file identity), guard against a cycle, mark
-/// it visited, then give it the per-file wire treatment and version gates.
+/// it visited, then open it ([`crate::ref_reader::open`]: the wire treatment
+/// and the version gates a mounted file gets).
 /// Returns the file's identity (still marked visited) and the parsed JSON.
 ///
 /// On success the CALLER owns the visited mark: it recurses into the loaded
@@ -425,31 +426,23 @@ fn load_ref_document(
     }
     visited.insert(canonical.clone());
 
-    let loaded = (|| -> Result<Value, DiagnosticError> {
-        let mut parsed = crate::ref_reader::read(&located).map_err(read_error)?;
-        // A REFERENCED document is a document: it gets the same wire-boundary
-        // treatment as the root (removed-op rejection, the `faq` version gate,
-        // and the deprecated-op rewrite). Without this a removed op survives a
-        // `{ref}` all the way into `emit` (docs/content/rfcs/faq-node-rename.md
-        // §5.2).
-        let authored = crate::parse::prepare_document_ops_scanned(&mut parsed)
-            .map_err(|e| err(noun.code, format!("{}: {e}", canonical.display())))?;
-        // Every version gate that applies to a mounted file
-        // (`crate::version_gates::VERSIONED`) judges this file's own nodes
-        // against this file's own `esm` (§4.7 "Each file is held to its own
-        // declared `esm` version"), never the mounting document's. The
-        // `solver` gate (§2.2.4) is among them: a leaf's block does not cross
-        // the mount edge, but it must still be legal in the file that
-        // carries it.
-        crate::version_gates::check_file_gates(
-            &parsed,
-            crate::version_gates::DocKind::MountedLeaf,
-            None,
-            &authored,
-        )
-        .map_err(|e| err(e.code, format!("{}: {}", canonical.display(), e.message)))?;
-        Ok(parsed)
-    })();
+    // A REFERENCED document is a document: it gets the root's wire-boundary
+    // treatment (without it a removed op would survive a `{ref}` into `emit`,
+    // docs/content/rfcs/faq-node-rename.md §5.2), and it is held to its own
+    // `esm` version by every gate that applies to it (§4.7 "Each file is held
+    // to its own declared `esm` version"), never the mounting document's. The
+    // `solver` gate (§2.2.4) is among them: a leaf's block does not cross the
+    // mount edge, but it must still be legal in the file that carries it.
+    let loaded = crate::ref_reader::open(&located, crate::version_gates::DocKind::MountedLeaf)
+        .map_err(|e| match e {
+            crate::ref_reader::OpenError::Ref(e) => read_error(e),
+            crate::ref_reader::OpenError::Wire(e) => {
+                err(noun.code, format!("{}: {e}", canonical.display()))
+            }
+            crate::ref_reader::OpenError::Gate(e) => {
+                err(e.code, format!("{}: {}", canonical.display(), e.message))
+            }
+        });
 
     match loaded {
         Ok(parsed) => Ok((canonical, parsed)),

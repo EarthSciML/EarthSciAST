@@ -1952,7 +1952,7 @@ fn load_import_raw(
     ref_str: &str,
     base_dir: &Path,
     origin: &str,
-) -> Result<(Value, PathBuf, crate::parse::AuthoredFacts), ExpressionTemplateError> {
+) -> Result<(Value, PathBuf), ExpressionTemplateError> {
     use crate::ref_reader::RefError;
     // esm-spec §4.7: expand before classifying, so a variable holding a URL is
     // rejected as the remote ref it expands to rather than joined onto
@@ -1989,17 +1989,23 @@ fn load_import_raw(
         ),
     };
     let located = crate::ref_reader::locate(ref_str, base_dir).map_err(read_error)?;
-    let mut raw = crate::ref_reader::read(&located).map_err(read_error)?;
-    // A template library is a document too, and its template BODIES carry
-    // expression nodes — so it needs the same wire-boundary treatment as the
-    // root (docs/content/rfcs/faq-node-rename.md §5.2).
-    let authored = crate::parse::prepare_document_ops_scanned(&mut raw).map_err(|e| {
-        err(
-            codes::TEMPLATE_IMPORT_UNRESOLVED,
-            format!("{origin}: {}: {e}", located.identity.display()),
-        )
-    })?;
-    Ok((raw, located.dir, authored))
+    // Version gates on the target, judged against the library's own `esm`
+    // (esm-spec §9.6.5, §4.7 "Each file is held to its own declared `esm`
+    // version"): the template-machinery constructs, and declared `units` on
+    // an expression node in a template body (§4.8.5 item 6).
+    let raw = crate::ref_reader::open(&located, crate::version_gates::DocKind::TemplateLibrary)
+        .map_err(|e| match e {
+            crate::ref_reader::OpenError::Ref(e) => read_error(e),
+            // A template library is a document too, and its template BODIES
+            // carry expression nodes — so it gets the same wire-boundary
+            // treatment as the root (docs/content/rfcs/faq-node-rename.md §5.2).
+            crate::ref_reader::OpenError::Wire(e) => err(
+                codes::TEMPLATE_IMPORT_UNRESOLVED,
+                format!("{origin}: {}: {e}", located.identity.display()),
+            ),
+            crate::ref_reader::OpenError::Gate(e) => e,
+        })?;
+    Ok((raw, located.dir))
 }
 
 /// Resolve ONE `expression_template_imports` entry (esm-spec §9.7.2): load
@@ -2045,17 +2051,7 @@ fn resolve_import_entry(
         ));
     }
 
-    let (raw, target_dir, authored) = load_import_raw(ref_str, base_dir, origin)?;
-    // Version gates on the target, judged against the library's own `esm`
-    // (esm-spec §9.6.5, §4.7 "Each file is held to its own declared `esm`
-    // version"): the template-machinery constructs, and declared `units` on
-    // an expression node in a template body (§4.8.5 item 6).
-    crate::version_gates::check_file_gates(
-        &raw,
-        crate::version_gates::DocKind::TemplateLibrary,
-        None,
-        &authored,
-    )?;
+    let (raw, target_dir) = load_import_raw(ref_str, base_dir, origin)?;
 
     // Library purity (esm-spec §9.7.1): the reference mechanisms are disjoint —
     // a coupling-library file (top-level `coupling_roles`) is imported via a

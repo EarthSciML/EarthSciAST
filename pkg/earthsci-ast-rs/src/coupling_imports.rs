@@ -327,17 +327,18 @@ fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticE
     };
     let located =
         crate::ref_reader::locate(ref_str, std::path::Path::new(base_path)).map_err(read_error)?;
-    let path = located.identity.clone();
-    let mut raw = crate::ref_reader::read(&located).map_err(read_error)?;
     // A coupling library is a document too — same wire-boundary treatment as
     // the root (docs/content/rfcs/faq-node-rename.md §5.2).
-    crate::parse::prepare_document_ops(&mut raw).map_err(|e| {
-        err(
-            codes::COUPLING_IMPORT_UNRESOLVED,
-            format!("{}: {e}", path.display()),
-        )
-    })?;
-    Ok(raw)
+    crate::ref_reader::open(&located, crate::version_gates::DocKind::CouplingLibrary).map_err(|e| {
+        match e {
+            crate::ref_reader::OpenError::Ref(e) => read_error(e),
+            crate::ref_reader::OpenError::Wire(e) => err(
+                codes::COUPLING_IMPORT_UNRESOLVED,
+                format!("{}: {e}", located.identity.display()),
+            ),
+            crate::ref_reader::OpenError::Gate(e) => e,
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------

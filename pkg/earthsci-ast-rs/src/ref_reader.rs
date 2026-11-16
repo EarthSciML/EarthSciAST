@@ -128,6 +128,46 @@ pub(crate) fn read(located: &Located) -> Result<Value, RefError> {
     Ok(parsed)
 }
 
+/// Why a referenced document could not be opened.
+pub(crate) enum OpenError {
+    /// It could not be read ([`read`]).
+    Ref(RefError),
+    /// The wire-boundary op checks refused it (`parse::prepare_document_ops`).
+    Wire(crate::EsmError),
+    /// A version gate for its kind refused it.
+    Gate(crate::diagnostic::DiagnosticError),
+}
+
+/// The passes every document a load reaches by reference runs first, in
+/// order, whatever its kind: read and parse ([`read`]), the wire-boundary op
+/// checks (`parse::prepare_document_ops`: removed ops, the `faq` gate, the
+/// deprecated-op rewrite), and the version gates its kind gets
+/// ([`crate::version_gates::check_file_gates`]). Each kind's own passes follow
+/// at its caller:
+///
+/// * a mounted leaf ([`crate::version_gates::DocKind::MountedLeaf`],
+///   `ref_loading::resolve_mount_edge`): the library-target refusals, the edge
+///   close, its nested mounts, the edge injection, its §9.7 machinery,
+///   lowering and expansion, enum lowering, the nested merge, the edge's
+///   index-set rename, its data sources;
+/// * a template library (`template_imports::resolve_import_entry`): the
+///   library-purity checks, schema validation, its own imports, the edge
+///   bindings and `only` filter;
+/// * a coupling library (`coupling_imports`): its §10.11 validation and
+///   expansion.
+///
+/// The root document runs the same three first passes in `parse::load_value`,
+/// with its version gates in three groups among its other passes.
+pub(crate) fn open(
+    located: &Located,
+    kind: crate::version_gates::DocKind,
+) -> Result<Value, OpenError> {
+    let mut doc = read(located).map_err(OpenError::Ref)?;
+    let authored = crate::parse::prepare_document_ops_scanned(&mut doc).map_err(OpenError::Wire)?;
+    crate::version_gates::check_file_gates(&doc, kind, None, &authored).map_err(OpenError::Gate)?;
+    Ok(doc)
+}
+
 fn parse(text: &str, path: &Path) -> Result<Value, RefError> {
     serde_json::from_str(text).map_err(|err| RefError::Parse {
         path: path.to_path_buf(),

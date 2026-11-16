@@ -102,6 +102,7 @@ pub(crate) const SOLVER_EXTERNAL: usize = 4;
 /// Index of the `solver.time_span` gate.
 pub(crate) const SOLVER_TIME_SPAN: usize = 5;
 /// Index of the unit-bearing expression node gate.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const CONST_UNITS: usize = 6;
 /// Index of the variable bounds gate.
 pub(crate) const VARIABLE_BOUNDS: usize = 7;
