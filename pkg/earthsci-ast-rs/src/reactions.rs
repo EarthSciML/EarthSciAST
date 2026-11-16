@@ -419,46 +419,6 @@ pub fn stoichiometric_matrix(system: &ReactionSystem) -> Vec<Vec<f64>> {
     matrix
 }
 
-/// Generate a stoichiometric matrix from a reaction system using parallel computation
-///
-/// This function provides parallel computation for generating stoichiometric matrices,
-/// which can significantly improve performance for large reaction systems.
-///
-/// # Arguments
-///
-/// * `system` - The reaction system to analyze
-///
-/// # Returns
-///
-/// * `Result<Vec<Vec<f64>>, crate::performance::PerformanceError>` - Matrix with species as rows and reactions as columns
-///
-/// # Features
-///
-/// This function requires the `parallel` feature to be enabled.
-///
-/// # Example
-///
-/// ```rust
-/// # #[cfg(feature = "parallel")]
-/// # {
-/// use earthsci_ast::{ReactionSystem, stoichiometric_matrix_parallel};
-///
-/// // Assuming you have a reaction system
-/// let reaction_system = ReactionSystem::default();
-///
-/// let matrix = stoichiometric_matrix_parallel(&reaction_system).unwrap();
-/// # }
-/// ```
-#[cfg(feature = "parallel")]
-pub fn stoichiometric_matrix_parallel(
-    system: &ReactionSystem,
-) -> Result<Vec<Vec<f64>>, crate::performance::PerformanceError> {
-    use crate::performance::ParallelEvaluator;
-
-    let evaluator = ParallelEvaluator::new(None)?;
-    evaluator.compute_stoichiometric_matrix_parallel(system)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1068,61 +1028,5 @@ mod tests {
             });
             assert!(found, "Should have equation for species {species_name}");
         }
-    }
-
-    #[test]
-    #[cfg(feature = "parallel")]
-    fn test_stoichiometric_matrix_parallel() {
-        let system = ReactionSystem {
-            species: [
-                create_test_species("A"),
-                create_test_species("B"),
-                create_test_species("C"),
-            ]
-            .into_iter()
-            .collect::<IndexMap<_, _>>(),
-            parameters: IndexMap::new(),
-            reactions: vec![
-                // A -> B
-                create_test_reaction(
-                    vec![("A", 1.0)],
-                    vec![("B", 1.0)],
-                    Expr::Variable("k1".to_string()),
-                ),
-                // B -> C
-                create_test_reaction(
-                    vec![("B", 1.0)],
-                    vec![("C", 1.0)],
-                    Expr::Variable("k2".to_string()),
-                ),
-            ],
-            ..Default::default()
-        };
-
-        // Test the parallel version
-        let parallel_matrix = crate::reactions::stoichiometric_matrix_parallel(&system)
-            .expect("Parallel stoichiometric matrix should work");
-
-        // Test the sequential version for comparison
-        let sequential_matrix = stoichiometric_matrix(&system);
-
-        // Both should produce the same result
-        assert_eq!(parallel_matrix.len(), sequential_matrix.len());
-        assert_eq!(parallel_matrix[0].len(), sequential_matrix[0].len());
-
-        for (i, row) in parallel_matrix.iter().enumerate() {
-            for (j, &val) in row.iter().enumerate() {
-                assert_eq!(
-                    val, sequential_matrix[i][j],
-                    "Parallel and sequential results should match at position [{i}, {j}]"
-                );
-            }
-        }
-
-        // Verify specific values
-        assert_eq!(parallel_matrix[0][0], -1.0, "A consumed in reaction 1");
-        assert_eq!(parallel_matrix[1][0], 1.0, "B produced in reaction 1");
-        assert_eq!(parallel_matrix[1][1], -1.0, "B consumed in reaction 2");
-        assert_eq!(parallel_matrix[2][1], 1.0, "C produced in reaction 2");
     }
 }

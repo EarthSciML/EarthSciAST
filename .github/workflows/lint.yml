@@ -36,9 +36,9 @@ jobs:
       # The Typst plugin only builds for wasm32
       # (its .cargo/config.toml sets the target).
       rust-clippy: >-
-        [{"dir": "pkg/earthsci-ast-rs", "args": "--features conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio,integrator"},
+        [{"dir": "pkg/earthsci-ast-rs", "args": "--features conformance-adapters,wasm,benchmarks,esio,integrator"},
          {"dir": "pkg/earthsci-ast-rs", "targets": "--bins", "args": "--no-default-features --features integrator"},
-         {"dir": "pkg/earthsci-ast-rs", "target": "aarch64-unknown-linux-gnu", "targets": "--lib", "args": "--features simd"},
+         {"dir": "pkg/earthsci-ast-rs", "target": "aarch64-unknown-linux-gnu", "targets": "--lib"},
          {"dir": "pkg/earthsci-narrative"},
          {"dir": "pkg/earthsci-typst-plugin", "target": "wasm32-unknown-unknown"}]
       python-dir: pkg/earthsci-ast-py

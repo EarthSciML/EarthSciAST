@@ -150,8 +150,6 @@ pub(crate) mod variable_bounds;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
-pub mod performance;
-
 // Non-gated: the `CompileError` type is also named by the WASM-compiled
 // `faq` / `join` passes, so it cannot live inside the gated solver module.
 pub(crate) mod compile_error;
@@ -390,9 +388,6 @@ pub use inline_tests::{
     run_inline_tests_filtered, run_inline_tests_paths, run_inline_tests_with_base_dir,
     run_inline_tests_with_options, run_inline_tests_with_providers, state_cells,
 };
-pub use performance::{CompactExpr, PerformanceError};
-#[cfg(feature = "parallel")]
-pub use reactions::stoichiometric_matrix_parallel;
 pub use simulate::{
     Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ReturnCode, SimulateError,
     Solution, SolutionMetadata, SolveOptions, compile_array,
@@ -434,12 +429,6 @@ pub use units::{
     check_expression_dimensions, convert_units, equation_dimension_verdict, model_unit_env,
     parse_unit, validate_equation_dimensions,
 };
-
-#[cfg(feature = "parallel")]
-pub use performance::ParallelEvaluator;
-
-#[cfg(feature = "custom_alloc")]
-pub use performance::ModelAllocator;
 
 /// This crate's OWN version — NOT the `.esm` format version, which is
 /// [`SCHEMA_VERSION`]. The two are unrelated numbers. Every binding exposes

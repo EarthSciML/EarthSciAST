@@ -139,10 +139,8 @@ name:
 - **Julia's forcing-buffer surface** (the live forcing buffers of a **Problem**,
   and the hook that mirrors a host refresh into a compiled program's argument
   arrays) — `forcing_buffers`, `forcing_buffer_index`, `sync_forcing!`.
-- **Rust's `intern` / `performance` / `simulate_array` internals** —
-  `CompactExpr`, `PerformanceError`, `ParallelEvaluator`, `ModelAllocator`,
-  `compile_array`, `stoichiometric_matrix_parallel`, and the module paths
-  `earthsci_ast::intern::*`, `::performance::*`, `::simulate_array::*`.
+- **Rust's `intern` / `simulate_array` internals** — `compile_array`, and the
+  module paths `earthsci_ast::intern::*`, `::simulate_array::*`.
 - **Host/runtime integration seams** — the callback constructors
   (`build_refresh_callback`, `build_output_callback`,
   `build_checkpoint_callback`), the sink protocol (`AbstractSink`,
@@ -2354,7 +2352,7 @@ allowed to differ.
 | Julia build/inspection | Julia | `BuildInspection` exposes the tree-walk evaluator's internals so downstream analysers (EarthSciASTDiff) can differentiate the expanded tree. There is no cross-language analogue to harmonize against. `build_evaluator` is deprecated and leaves the surface at its removal (§8 item 23); `BuildInspection` remains because `esm_problem`'s `inspect` keyword takes one, and the compiler half of what it carried is `compiler_report`, which both an `EsmProblem` and a `BuildInspection` answer. |
 | Julia forcing buffers | Julia | The compiled program's argument ABI, now read off an `EsmProblem` (`forcing_buffers(prob)`) rather than off an out-of-place build product. Its shape is dictated by the compiled program's argument arrays and will change with the emitter. |
 | Julia MTK/Catalyst export | Julia | `mtk2esm`, `mtk2esm_gaps`, `GapReport` — migration tooling for one host ecosystem. |
-| Rust `intern` / `performance` | Rust | Hash-consing and allocator knobs. Feature-gated (`parallel`, `custom_alloc`) and performance-shaped, not semantics-shaped. |
+| Rust `intern` | Rust | Hash-consing of expression subtrees. Performance-shaped, not semantics-shaped. |
 | Rust `simulate_array` | Rust | The native-only spatial/PDE backend. Its surface tracks the backend, not the format. |
 | Runtime I/O | Julia, Python, Rust | Providers, refresh callbacks, sinks, checkpoints. The concrete implementations live in EarthSciIO; these are the protocol the host binds to. |
 | Go diagnostic codes | Go | The `Code*` / `Error*` / `Role*` / `SystemKind*` constants. Their *values* are conformance-pinned by the shared fixture corpus; their Go *identifiers* are not. |

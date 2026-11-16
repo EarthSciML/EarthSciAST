@@ -90,7 +90,7 @@ jobs:
       - name: Build the adapter (release)
         env:
           RUSTFLAGS: -C llvm-args=-align-loops=64
-        run: cargo build --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust
+        run: cargo build --release --features conformance-adapters --bin earthsci-scaling-adapter-rust
 
       - name: Generate the ladder
         run: |

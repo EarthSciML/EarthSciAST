@@ -8,8 +8,8 @@
 
 use crate::{
     EsmFile, graph::component_graph as rust_component_graph, load_string as rust_load_string,
-    performance::CompactExpr, stoichiometric_matrix, substitute_in_model,
-    substitute_in_reaction_system, to_json as rust_to_json, validate as rust_validate,
+    stoichiometric_matrix, substitute_in_model, substitute_in_reaction_system,
+    to_json as rust_to_json, validate as rust_validate,
 };
 use wasm_bindgen::prelude::*;
 
@@ -181,16 +181,6 @@ pub fn substitute(json_str: &str, bindings_str: &str) -> Result<String, JsValue>
 
     // Convert back to JSON string
     rust_to_json(&result_file).map_err(js_err("Save error"))
-}
-
-/// Create a compact expression for fast evaluation (WASM version)
-#[wasm_bindgen]
-pub fn create_compact_expression(expr_str: &str) -> Result<JsValue, JsValue> {
-    // Parse expression from JSON string
-    let expr: crate::Expr = serde_json::from_str(expr_str).map_err(js_err("Parse error"))?;
-
-    let compact = CompactExpr::from_expr(&expr);
-    to_js(&compact)
 }
 
 /// Compute stoichiometric matrix (WASM version)

@@ -33,12 +33,11 @@
 //!
 //! ## What is NOT here
 //!
-//! Four seams keep their own top-level module path because `API_SPEC.md` §3/§7
+//! Three seams keep their own top-level module path because `API_SPEC.md` §3/§7
 //! already names them that way, and one more is a build-harness detail:
 //!
-//! - [`crate::intern`], [`crate::performance`], [`crate::simulate_array`] —
-//!   named verbatim in §3 as `earthsci_ast::intern::*`, `::performance::*`,
-//!   `::simulate_array::*`.
+//! - [`crate::intern`], [`crate::simulate_array`] — named verbatim in §3 as
+//!   `earthsci_ast::intern::*`, `::simulate_array::*`.
 //! - [`crate::provider`] — §7's "Runtime I/O" family: the provider/refresh
 //!   protocol a host binds to, whose concrete implementations live in
 //!   EarthSciIO.

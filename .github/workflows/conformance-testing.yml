@@ -469,7 +469,7 @@ jobs:
       # the two packages' features differ. Off the MSRV leg each step appends
       # $FEATURES_ESIO (see the test step for why not there).
       FEATURES: >-
-        earthsci-ast/conformance-adapters,earthsci-ast/wasm,earthsci-ast/parallel,earthsci-ast/simd,earthsci-ast/zero_copy,earthsci-ast/custom_alloc,earthsci-ast/benchmarks,earthsci-ast/performance
+        earthsci-ast/conformance-adapters,earthsci-ast/wasm,earthsci-ast/benchmarks
       FEATURES_ESIO: earthsci-ast/esio,earthsci-ast-cli/esio,earthsci-ast-cli/integrator
     defaults:
       run:
@@ -610,7 +610,7 @@ jobs:
         env:
           RUSTFLAGS: -C llvm-args=-align-loops=64
         run: |
-          cargo run --release --features conformance-adapters,parallel \
+          cargo run --release --features conformance-adapters \
             --bin earthsci-scaling-adapter-rust -- \
             --index ../../tests/conformance/scaling/fixtures/index.json --output scaling-rust.json
           python3 ../../tests/conformance/scaling/check.py scaling-rust.json \

@@ -1639,6 +1639,23 @@ remove. Your code stops compiling (Rust), or raises `UndefVarError` /
 | Julia, Python, Rust | the inline-test runner | Now runs **`reaction_systems`** as well as `models`. Both carry `tests` (esm-spec §6.6); only `models` were run before. | More result rows, from components that previously reported none. A gate counting rows sees the count rise — that is the bug being fixed, not a regression. |
 | Julia, Python, Rust | the inline-test runner | A **batch** input (an iterable or a directory) records an unreadable document as one ERROR row instead of raising. A single-document call still raises. | A corpus run no longer aborts on one bad file. |
 
+## Unreleased
+
+### Rust — `earthsci-ast`
+
+The `performance` module is deleted with its five Cargo features. No
+production path used it: it carried its own expression evaluator, separate from
+the one every build runs, with different semantics. The optional dependencies
+only it used (`wide`, `bumpalo`, `simd-json`, `bytemuck`) and the empty `cli`
+feature go with it.
+
+| Before | After | Kind |
+|---|---|---|
+| `earthsci_ast::performance::*` (`CompactExpr`, `PerformanceError`, `ParallelEvaluator`, `ModelAllocator`, `fast_parse`, `simd_math`) | — | `deleted` |
+| `stoichiometric_matrix_parallel` (feature `parallel`) | `stoichiometric_matrix` | `deleted` |
+| wasm export `create_compact_expression` | — | `deleted` |
+| features `parallel`, `simd`, `zero_copy`, `custom_alloc`, `performance`, `cli` | — (the tape executor's threading needs no feature) | `deleted` |
+
 ---
 
 ## Where the contract lives
