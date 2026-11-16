@@ -160,7 +160,7 @@ def coreOps : List OpRow := [
   { op := "const", shape := "scalar", tier := native,
     latex := r"the number; with units 3\,\mathrm{m/s}", typst := r#"3 thin upright("m") thin upright("s")^(-1)"# },
   { op := "const", shape := "array of rank 1 or 2, any size, every entry a number", tier := native,
-    latex := r"bmatrix (a column for rank 1); with units, a thin space and the unit after it, as for a scalar: \begin{bmatrix}1\\2\end{bmatrix}\,\mathrm{m}",
+    latex := r"bmatrix (a column for rank 1; a matrix of more than 10 columns, which bmatrix cannot hold, \left[\begin{array}{c…c} … \end{array}\right] with one c per column); with units, a thin space and the unit after it, as for a scalar: \begin{bmatrix}1\\2\end{bmatrix}\,\mathrm{m}",
     typst := r#"vec(…), mat(…); with units vec(1, 2) thin upright("m")"# },
   { op := "const", shape := "any other const: rank 3 or more, non-number entries, units without a typeset form",
     tier := call,
