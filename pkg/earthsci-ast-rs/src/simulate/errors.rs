@@ -281,7 +281,7 @@ impl SimulateError {
     /// build and run report the names they refuse.
     pub(crate) fn unqualified(self, ns: &str) -> Self {
         let u = |s: String| crate::compile_error::unqualify_text(&s, ns);
-        let uv = |v: Vec<String>| v.into_iter().map(|s| u(s)).collect::<Vec<_>>();
+        let uv = |v: Vec<String>| v.into_iter().map(u).collect::<Vec<_>>();
         match self {
             SimulateError::Compile(e) => SimulateError::Compile(e.unqualified(ns)),
             SimulateError::NotDynamic { details } => SimulateError::NotDynamic {

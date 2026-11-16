@@ -446,7 +446,7 @@ pub(crate) fn unqualify_text(text: &str, ns: &str) -> String {
                     rest.strip_prefix(italic.as_str())
                         .and_then(|r| r.strip_prefix("\".\""))
                 })
-            && after.chars().next().is_some_and(|n| is_ident(n))
+            && after.chars().next().is_some_and(is_ident)
         {
             rest = after;
             prev = Some('.');
