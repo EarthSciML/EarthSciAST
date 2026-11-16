@@ -182,6 +182,56 @@ fn hand_written_json_strings() {
     );
 }
 
+#[test]
+fn hand_written_array_notation() {
+    let sy = hw();
+    let (x, k, a) = (s("x"), s("k"), s("a"));
+    // A bare `\operatorname{n}` is a template applied with no bindings; with
+    // `()` it is an open operator with no operands.
+    let bare = super::parse::t_node("dlon", vec![]);
+    reads_l(&sy, "\\operatorname{dlon}", bare.clone());
+    reads_l(&sy, "\\operatorname{dlon}()", node("dlon", vec![]));
+    reads_t(&sy, "op(\"dlon\")", bare);
+    reads_t(&sy, "op(\"dlon\")()", node("dlon", vec![]));
+    // `\times [` outside a region is still a product with a bracket group.
+    let prod = node("*", vec![a.clone(), node("+", vec![x.clone(), int(1)])]);
+    reads_l(&sy, "a \\times [x + 1]", prod.clone());
+    reads_l(&sy, "a \\times[x + 1]", prod.clone());
+    reads_t(&sy, "a times [x + 1]", prod);
+    // A `makearray` table, the region product spaced any way.
+    let table = print::mk_json(&print::MkForm {
+        out: vec![],
+        regions: vec![
+            vec![(int(1), s("N"))],
+            vec![(int(1), int(1)), (int(2), int(2))],
+        ],
+        values: vec![x.clone(), int(0)],
+    });
+    reads_l(
+        &sy,
+        "\\left[\\begin{array}{l|l} x & [1, N] \\\\ 0 & [1, 1]\\times[2, 2] \\end{array}\\right]",
+        table.clone(),
+    );
+    reads_t(
+        &sy,
+        "mat(delim: \"[\", augment: #1, x, [1, N]; 0, [1, 1] times [2, 2])",
+        table.clone(),
+    );
+    reads_l(&sy, &print_latex(&sy, &table), table.clone());
+    reads_t(&sy, &print_typst(&sy, &table), table);
+    // A lone equality filter followed by a superscript set is the filter, not
+    // a dense range.
+    let filt_set = Json::Obj(vec![
+        ("args".into(), Json::Arr(vec![a])),
+        ("expr".into(), x),
+        ("filter".into(), node("==", vec![k, int(1)])),
+        ("op".into(), s("faq")),
+        ("output_idx".into(), Json::Arr(vec![])),
+    ]);
+    reads_l(&sy, "\\sum_{k = 1}^{\\{a\\}} x", filt_set.clone());
+    reads_l(&sy, &print_latex(&sy, &filt_set), filt_set);
+}
+
 // ## The golden set
 
 fn keys_of(v: Option<&serde_json::Value>) -> Vec<String> {

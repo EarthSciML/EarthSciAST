@@ -14,8 +14,8 @@
 
 use super::expr::{DEPRECATED_OPS, REMOVED_OPS, is_formula, is_greek, is_letter, op_ok, pieces};
 use super::print::{
-    CALL_OPS, CORE_OPS, Ctx, FaqForm, RedK, faq_json, formula_raw, ins_kv, mk_node, node,
-    simple_tok, tparams, unesc_k, unesc_t,
+    CALL_OPS, CORE_OPS, Ctx, FIELD_CALL_OPS, FaqForm, MkForm, RedK, faq_json, formula_raw, ins_kv,
+    mk_json, mk_node, node, simple_tok, tname_ok, tparams, unesc_k, unesc_t,
 };
 use super::surface::neg_num;
 use super::token::{Kw, Sf, Tok};
@@ -801,6 +801,75 @@ pub fn with_out(f: FaqForm, outs: Vec<Json>, ors: Vec<(String, Json)>) -> FaqFor
     }
 }
 
+/// `Math.withSup`: a superscript set read after the output entries replaces
+/// the reduction's own.
+pub fn with_sup(f: FaqForm, st: Vec<String>) -> FaqForm {
+    if st.is_empty() {
+        f
+    } else {
+        FaqForm { set: st, ..f }
+    }
+}
+
+/// `Math.pSup`: the superscript set of a reduction or of an output form, if
+/// there is one: LaTeX `^{\{f, g\}}`, Typst `^({f, g})`.
+pub fn p_sup(sf: Sf, r: &[Tok]) -> P<'_, Vec<String>> {
+    match (sf, r) {
+        (
+            Sf::Latex,
+            [
+                Tok::Kw(Kw::Caret),
+                Tok::Kw(Kw::Lb),
+                Tok::Kw(Kw::Lset),
+                r1 @ ..,
+            ],
+        ) => match p_names(sf, r1)? {
+            (ns, [Tok::Kw(Kw::Rset), Tok::Kw(Kw::Rb), r2 @ ..]) => Some((ns, r2)),
+            _ => None,
+        },
+        (
+            Sf::Typst,
+            [
+                Tok::Kw(Kw::Caret),
+                Tok::Kw(Kw::Lpg),
+                Tok::Kw(Kw::Lset),
+                r1 @ ..,
+            ],
+        ) => match p_names(sf, r1)? {
+            (ns, [Tok::Kw(Kw::Rset), Tok::Kw(Kw::Rp), r2 @ ..]) => Some((ns, r2)),
+            _ => None,
+        },
+        _ => Some((vec![], r)),
+    }
+}
+
+/// A row of a `makearray` table: the value and the region it fills.
+pub type MkRow = (Json, Vec<(Json, Json)>);
+
+/// `Math.mkTail`: the `makearray` node of a table read back, with its
+/// subscript of output indices if one follows.
+pub fn mk_tail(sf: Sf, rows: Vec<MkRow>, r: &[Tok]) -> P<'_, Json> {
+    let node_of = |out: Vec<String>| {
+        let (values, regions): (Vec<Json>, Vec<Vec<(Json, Json)>>) = rows.into_iter().unzip();
+        mk_json(&MkForm {
+            out,
+            regions,
+            values,
+        })
+    };
+    match (sf, r) {
+        (Sf::Latex, [Tok::Kw(Kw::Us), Tok::Kw(Kw::Lb), r1 @ ..]) => match p_names(sf, r1)? {
+            (ns, [Tok::Kw(Kw::Rb), r2 @ ..]) => Some((node_of(ns), r2)),
+            _ => None,
+        },
+        (Sf::Typst, [Tok::Kw(Kw::Us), Tok::Kw(Kw::Lpg), r1 @ ..]) => match p_names(sf, r1)? {
+            (ns, [Tok::Kw(Kw::Rp), r2 @ ..]) => Some((node_of(ns), r2)),
+            _ => None,
+        },
+        _ => Some((node_of(vec![]), r)),
+    }
+}
+
 // ## The level parsers
 
 /// `Math.pOr`: level 1, an `or` chain.
@@ -957,6 +1026,16 @@ pub fn mul_loop<'a>(c: Ctx, f: usize, acc: Vec<Json>, ts: &'a [Tok]) -> P<'a, Js
                 } else {
                     return Some((close("*", acc), ts));
                 }
+            }
+            [Tok::Kw(Kw::TimesLbk), r @ ..] => {
+                let mut r1 = Vec::with_capacity(r.len() + 1);
+                r1.push(Tok::Kw(Kw::Lbk));
+                r1.extend_from_slice(r);
+                let (y, rest) = p_not(c, f, &r1)?;
+                // the parse consumed at least the bracket
+                let n = rest.len();
+                acc.push(y);
+                ts = &r[r.len() - n.min(r.len())..];
             }
             [t, ..] => {
                 if atom_start(t) && !neg_tok(t) {
@@ -1251,10 +1330,13 @@ fn nodup_keys(xs: &[(String, Json)]) -> bool {
         .all(|(i, x)| !xs[..i].iter().any(|y| y.0 == x.0))
 }
 
-/// `Math.pOpn`: `\operatorname{n}(…)`.
+/// `Math.pOpn`: `\operatorname{n}(…)`; a bare `\operatorname{n}` (not
+/// followed by `(` or `_`) is a template applied with no bindings.
 pub fn p_opn<'a>(c: Ctx, f: usize, n: &str, ts: &'a [Tok]) -> P<'a, Json> {
     let f = f.checked_sub(1)?;
-    let [t0, r @ ..] = ts else { return None };
+    let [t0, r @ ..] = ts else {
+        return tname_ok(n).then(|| (t_node(n, vec![]), ts));
+    };
     if is_lp(t0) {
         match p_call_args(c, f, r) {
             Some((args, [Tok::Kw(Kw::Rp), r2 @ ..])) => {
@@ -1294,7 +1376,10 @@ pub fn p_opn<'a>(c: Ctx, f: usize, n: &str, ts: &'a [Tok]) -> P<'a, Json> {
                 }
             }
             Some((args, [Tok::Kw(Kw::Semi), r1 @ ..])) => {
-                if REMOVED_OPS.contains(&n) || CORE_OPS.contains(&n) || tparams(c.s, n).is_some() {
+                if REMOVED_OPS.contains(&n)
+                    || (CORE_OPS.contains(&n) && !FIELD_CALL_OPS.contains(&n))
+                    || tparams(c.s, n).is_some()
+                {
                     None
                 } else {
                     match (all_pos(&args), p_fields(c, f, r1)) {
@@ -1309,6 +1394,8 @@ pub fn p_opn<'a>(c: Ctx, f: usize, n: &str, ts: &'a [Tok]) -> P<'a, Json> {
         }
     } else if matches!(t0, Tok::Kw(Kw::Us)) {
         if n == "D" { p_d_call(c, f, r) } else { None }
+    } else if tname_ok(n) {
+        Some((t_node(n, vec![]), ts))
     } else {
         None
     }
@@ -1418,6 +1505,22 @@ fn prim<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
                 None
             }
         }
+        [
+            Tok::Kw(Kw::Mat),
+            Tok::Kw(Kw::Lp),
+            Tok::Kw(Kw::DelimK),
+            Tok::Kw(Kw::Colon),
+            Tok::Txt(d),
+            Tok::Kw(Kw::Comma),
+            Tok::Kw(Kw::AugK),
+            Tok::Kw(Kw::Colon),
+            Tok::Code(Json::Num(JNum::Int(1))),
+            Tok::Kw(Kw::Comma),
+            r @ ..,
+        ] if d == "[" => {
+            let (rows, r2) = p_mk_rows(c, f, Kw::Comma, Kw::Semi, Kw::Rp, r)?;
+            mk_tail(c.sf, rows, r2)
+        }
         [Tok::Kw(Kw::Mat), t, r @ ..] => {
             if is_lp(t) {
                 let (rows, r2) = p_grid(Kw::Comma, Kw::Semi, Kw::Rp, r)?;
@@ -1504,6 +1607,12 @@ fn prim<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
                 }
             } else {
                 p_red(c, f, ts)
+            }
+        }
+        [Tok::Kw(Kw::Lbkg), Tok::Kw(Kw::Barr), r @ ..] => {
+            match p_mk_rows(c, f, Kw::Amp, Kw::Nl, Kw::Earr, r) {
+                Some((rows, [Tok::Kw(Kw::Rbkg), r2 @ ..])) => mk_tail(c.sf, rows, r2),
+                _ => None,
             }
         }
         [Tok::Kw(Kw::Sum | Kw::Prod | Kw::Limits | Kw::Lbkg), ..] => p_red(c, f, ts),
@@ -1697,11 +1806,18 @@ pub fn p_red_body<'a>(c: Ctx, f: usize, red: RedK, marked: bool, ts: &'a [Tok]) 
                         ],
                     )) if lone_eq(&x).is_some() => {
                         let (k, a) = lone_eq(&x).unwrap();
-                        match p_or(c, f, r2) {
-                            Some((b, [Tok::Kw(Kw::Rb), r3 @ ..])) => {
-                                Some((vec![Row::Rng(k, Json::Arr(vec![a, b]))], r3))
+                        match r2 {
+                            // a superscript set follows: the row is the filter
+                            [Tok::Kw(Kw::Lset), ..] => {
+                                let back = &ts[ts.len() - r2.len() - 2..];
+                                Some((vec![Row::Filt(x)], back))
                             }
-                            _ => None,
+                            _ => match p_or(c, f, r2) {
+                                Some((b, [Tok::Kw(Kw::Rb), r3 @ ..])) => {
+                                    Some((vec![Row::Rng(k, Json::Arr(vec![a, b]))], r3))
+                                }
+                                _ => None,
+                            },
                         }
                     }
                     Some((row, [Tok::Kw(Kw::Rb), r2 @ ..])) => Some((vec![row], r2)),
@@ -1716,20 +1832,21 @@ pub fn p_red_body<'a>(c: Ctx, f: usize, red: RedK, marked: bool, ts: &'a [Tok]) 
         },
     };
     let (rs, r) = rows?;
-    match (row_parts(rs), p_mul(c, f, r)) {
-        (Some((rg, fl)), Some((body, r2))) => Some((
-            FaqForm {
-                red,
-                marked,
-                out: vec![],
-                ranges: rg,
-                expr: body,
-                filter: fl,
-            },
-            r2,
-        )),
-        _ => None,
-    }
+    let (rg, fl) = row_parts(rs)?;
+    let (st, r1) = p_sup(c.sf, r)?;
+    let (body, r2) = p_mul(c, f, r1)?;
+    Some((
+        FaqForm {
+            red,
+            marked,
+            out: vec![],
+            ranges: rg,
+            expr: body,
+            filter: fl,
+            set: st,
+        },
+        r2,
+    ))
 }
 
 /// The `.obj [("args", .arr [.str k, a]), ("op", .str "==")]` pattern of
@@ -1755,27 +1872,24 @@ fn lone_eq(x: &Json) -> Option<(String, Json)> {
 /// entries.
 pub fn p_red<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     let f = f.checked_sub(1)?;
-    let wrapped = |r: &'a [Tok], tail: &[Tok], close: Kw| -> P<'a, Json> {
+    let wrapped = |r: &'a [Tok], tail: &[Tok], sub: &[Tok], close: Kw| -> P<'a, Json> {
         let (red, marked, r1) = p_red_head(c.sf, r)?;
         let (form, r2) = p_red_body(c, f, red, marked, r1)?;
-        let r3 = r2.strip_prefix(tail)?;
-        let (es, r4) = p_rows(c, f, Kw::Comma, close, r3)?;
-        entry_parts(es).map(|(outs, ors)| (faq_json(&with_out(form, outs, ors)), r4))
+        let (st, r3) = p_sup(c.sf, r2.strip_prefix(tail)?)?;
+        let (es, r4) = p_rows(c, f, Kw::Comma, close, r3.strip_prefix(sub)?)?;
+        entry_parts(es).map(|(outs, ors)| (faq_json(&with_sup(with_out(form, outs, ors), st)), r4))
     };
     match ts {
         [Tok::Kw(Kw::Lbkg), r @ ..] => wrapped(
             r,
-            &[Tok::Kw(Kw::Rbkg), Tok::Kw(Kw::Us), Tok::Kw(Kw::Lb)],
+            &[Tok::Kw(Kw::Rbkg)],
+            &[Tok::Kw(Kw::Us), Tok::Kw(Kw::Lb)],
             Kw::Rb,
         ),
         [Tok::Kw(Kw::Lr), Tok::Kw(Kw::Lp), Tok::Kw(Kw::Lbk), r @ ..] => wrapped(
             r,
-            &[
-                Tok::Kw(Kw::Rbk),
-                Tok::Kw(Kw::Rp),
-                Tok::Kw(Kw::Us),
-                Tok::Kw(Kw::Lpg),
-            ],
+            &[Tok::Kw(Kw::Rbk), Tok::Kw(Kw::Rp)],
+            &[Tok::Kw(Kw::Us), Tok::Kw(Kw::Lpg)],
             Kw::Rp,
         ),
         _ => {
@@ -1962,6 +2076,70 @@ pub fn p_cases<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// `Math.pPair`: a bound pair after its `[`: `a, b]`.
+pub fn p_pair<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, (Json, Json)> {
+    let f = f.checked_sub(1)?;
+    match p_or(c, f, ts)? {
+        (a, [Tok::Kw(Kw::Comma), r @ ..]) => match p_or(c, f, r)? {
+            (b, [Tok::Kw(Kw::Rbk), r2 @ ..]) => Some(((a, b), r2)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `Math.pRegTail`: the further bound pairs of a region, each after
+/// `\times [`.
+pub fn p_reg_tail<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Vec<(Json, Json)>> {
+    let mut out = Vec::new();
+    let mut f = f;
+    let mut ts = ts;
+    loop {
+        f = f.checked_sub(1)?;
+        match ts {
+            [Tok::Kw(Kw::TimesLbk), r @ ..] => {
+                let (p, r2) = p_pair(c, f, r)?;
+                out.push(p);
+                ts = r2;
+            }
+            _ => return Some((out, ts)),
+        }
+    }
+}
+
+/// `Math.pMkRows`: the rows of a `makearray` table: a value, the cell
+/// separator `csep`, a region; rows separated by `rsep`, up to `close`
+/// (consumed).
+pub fn p_mk_rows<'a>(
+    c: Ctx,
+    f: usize,
+    csep: Kw,
+    rsep: Kw,
+    close: Kw,
+    ts: &'a [Tok],
+) -> P<'a, Vec<MkRow>> {
+    let mut out = Vec::new();
+    let mut f = f;
+    let mut ts = ts;
+    loop {
+        f = f.checked_sub(1)?;
+        let (v, r) = match p_or(c, f, ts)? {
+            (v, [Tok::Kw(k), Tok::Kw(Kw::Lbk), r @ ..]) if *k == csep => (v, r),
+            _ => return None,
+        };
+        let (p, r1) = p_pair(c, f, r)?;
+        let (ps, r2) = p_reg_tail(c, f, r1)?;
+        let mut region = vec![p];
+        region.extend(ps);
+        out.push((v, region));
+        match r2 {
+            [Tok::Kw(k2), r3 @ ..] if *k2 == rsep => ts = r3,
+            [Tok::Kw(k2), r3 @ ..] if *k2 == close => return Some((out, r3)),
+            _ => return None,
+        }
     }
 }
 

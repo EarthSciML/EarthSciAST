@@ -18,7 +18,9 @@
 //! | 10 | atoms |
 //!
 //! Which notation a node gets is decided from its exact JSON shape; anything
-//! without a native or call notation prints in the generic escape form.
+//! without a native or call notation (an annotated node, a field key that is
+//! not an identifier, a shape no notation covers) prints in the generic escape
+//! form.
 //!
 //! Not ported: `Math.AForm.json`. No executable path uses it; only the Lean
 //! proofs do.
@@ -356,6 +358,19 @@ pub const CMP_KW: &[(&str, Kw)] = &[
 /// `Math.callOps`: core operators in the call form.
 pub const CALL_OPS: &[&str] = &["sign", "atan2", "asinh", "acosh", "atanh", "Pre", "enum"];
 
+/// `Math.fieldCallOps`: core operators with no notation of their own that
+/// print in the call form, their fields as named arguments after `;` (when no
+/// field annotates the node).
+pub const FIELD_CALL_OPS: &[&str] = &[
+    "broadcast",
+    "reshape",
+    "transpose",
+    "concat",
+    "faq",
+    "makearray",
+    "const",
+];
+
 /// `Math.reservedOpn`: names `\operatorname{…}` never means a template or an
 /// open operator by.
 pub fn reserved_opn(n: &str) -> bool {
@@ -429,6 +444,28 @@ pub fn opn_ok(s: &str) -> bool {
         None => false,
         Some(c) => is_id_start(c) && it.all(|d| is_id_char(d) || d == '.'),
     }
+}
+
+/// `Math.annotKeys`: the fields that annotate a node
+/// (`Notation.annotatedNodeFields`).
+pub const ANNOT_KEYS: &[&str] = &["id", "expect_cadence"];
+
+/// `Math.callFormOK`: an operator prints in the call form: an open operator,
+/// or a core operator of [`FIELD_CALL_OPS`] none of whose fields annotates it.
+pub fn call_form_ok(o: &str, fs: &[(String, Json)]) -> bool {
+    !CORE_OPS.contains(&o)
+        || (FIELD_CALL_OPS.contains(&o) && fs.iter().all(|kv| !ANNOT_KEYS.contains(&kv.0.as_str())))
+}
+
+/// `Math.mathKeys`: the fields of a core operator in the call form that hold
+/// an expression; the others print as JSON, even a string that is a name.
+pub const MATH_KEYS: &[&str] = &["expr", "filter", "key"];
+
+/// `Math.mathField`: a field of a call-form node prints as math: its value is
+/// an expression and, for a core operator, the field holds one. An open
+/// operator's fields are all read as math when they can be.
+pub fn math_field(o: &str, kv: &(String, Json)) -> bool {
+    is_e(&kv.1) && (!CORE_OPS.contains(&o) || MATH_KEYS.contains(&kv.0.as_str()))
 }
 
 /// `Math.keyOK`: a field key printed upright in a call: an identifier.
@@ -1134,12 +1171,14 @@ pub enum AForm {
     Mat(Vec<Vec<JNum>>),
 }
 
-/// `Math.arrForm`: a constant array printed natively.
+/// `Math.arrForm`: a constant array printed natively: a column for rank 1, or
+/// a matrix of at least two columns, of any size, every entry a well-formed
+/// number.
 pub fn arr_form(j: &Json) -> Option<AForm> {
     let Json::Arr(xs) = j else { return None };
     match nums_of(xs) {
         Some(ns) => {
-            if !ns.is_empty() && ns.len() <= 16 {
+            if !ns.is_empty() {
                 Some(AForm::Col(ns))
             } else {
                 None
@@ -1148,10 +1187,7 @@ pub fn arr_form(j: &Json) -> Option<AForm> {
         None => match rows_of(xs) {
             Some(rs) if !rs.is_empty() => {
                 let r = &rs[0];
-                if 2 <= r.len()
-                    && rs[1..].iter().all(|q| q.len() == r.len())
-                    && rs.len() * r.len() <= 16
-                {
+                if 2 <= r.len() && rs[1..].iter().all(|q| q.len() == r.len()) {
                     Some(AForm::Mat(rs))
                 } else {
                     None
@@ -1288,6 +1324,8 @@ impl RedK {
 }
 
 /// `Math.FaqForm`: a `faq` node with a native spelling, by its parts.
+/// `marked`: `args` lists the arrays the body indexes; otherwise `args` is
+/// `set` (empty, or names printed as a superscript set).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FaqForm {
     pub red: RedK,
@@ -1296,17 +1334,30 @@ pub struct FaqForm {
     pub ranges: Vec<(String, Json)>,
     pub expr: Json,
     pub filter: Option<Json>,
+    pub set: Vec<String>,
+}
+
+impl FaqForm {
+    /// `Math.FaqForm.args`: the `args` of a native `faq`.
+    pub fn args(&self) -> Vec<Json> {
+        if self.marked {
+            bases(&self.expr).into_iter().map(Json::Str).collect()
+        } else {
+            self.set.iter().cloned().map(Json::Str).collect()
+        }
+    }
+
+    /// `Math.FaqForm.sup`: the names a superscript set shows: `set` when
+    /// `args` is not the body's arrays.
+    pub fn sup(&self) -> &[String] {
+        if self.marked { &[] } else { &self.set }
+    }
 }
 
 /// `Math.faqJson`.
 pub fn faq_json(f: &FaqForm) -> Json {
-    let args = if f.marked {
-        bases(&f.expr).into_iter().map(Json::Str).collect()
-    } else {
-        vec![]
-    };
     let mut kvs = vec![
-        ("args".to_string(), Json::Arr(args)),
+        ("args".to_string(), Json::Arr(f.args())),
         ("expr".to_string(), f.expr.clone()),
     ];
     if let Some(x) = &f.filter {
@@ -1319,6 +1370,17 @@ pub fn faq_json(f: &FaqForm) -> Json {
     }
     kvs.extend(f.red.field());
     Json::Obj(kvs)
+}
+
+/// `Math.strsOf`: the strings of a list of JSON values, when they are all
+/// strings.
+pub fn strs_of(xs: &[Json]) -> Option<Vec<String>> {
+    xs.iter()
+        .map(|x| match x {
+            Json::Str(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `Math.faqCand`: the parts a `faq` node would have.
@@ -1341,13 +1403,24 @@ pub fn faq_cand(kvs: &[(String, Json)]) -> Option<FaqForm> {
                 None => Some(vec![]),
                 _ => None,
             }?;
+            let (marked, set) = if args.is_empty() {
+                (false, vec![])
+            } else if jbeq(
+                &Json::Arr(args.clone()),
+                &Json::Arr(bases(e).into_iter().map(Json::Str).collect()),
+            ) {
+                (true, vec![])
+            } else {
+                (false, strs_of(args)?)
+            };
             Some(FaqForm {
                 red,
-                marked: !args.is_empty(),
+                marked,
                 out: out.clone(),
                 ranges: rs,
                 expr: e.clone(),
                 filter: look("filter", kvs).cloned(),
+                set,
             })
         }
         _ => None,
@@ -1418,6 +1491,7 @@ pub fn faq_ok(f: &FaqForm) -> bool {
         && f.filter.as_ref().is_none_or(is_e)
         && f.out.iter().all(out_ok)
         && nodup(&names)
+        && f.set.iter().all(|n| name_ok(n))
         && keys_sorted(&f.ranges)
         && f.ranges.iter().all(|(k, v)| {
             name_ok(k)
@@ -1508,10 +1582,11 @@ pub fn head_toks(sf: Sf, f: &FaqForm) -> Vec<Tok> {
     }
 }
 
-/// `Math.subToksL`: the LaTeX subscript.
+/// `Math.subToksL`: the LaTeX subscript: none, one row, a lone dense range
+/// `_{k=a}^{b}` (not when `args` is a superscript set), or `\substack`.
 pub fn sub_toks_l(c: Ctx, f: &FaqForm) -> Vec<Tok> {
     let rr = red_ranges(f);
-    if let ([(k, Json::Arr(ab))], None) = (rr.as_slice(), &f.filter)
+    if let ([(k, Json::Arr(ab))], None, []) = (rr.as_slice(), &f.filter, f.sup())
         && ab.len() == 2
     {
         return cat(&[
@@ -1558,9 +1633,50 @@ pub fn sub_toks(c: Ctx, f: &FaqForm) -> Vec<Tok> {
     }
 }
 
-/// `Math.redToks`: operator, subscript, body at level 5.
+/// `Math.supToks`: the superscript set of names: LaTeX `^{\{f, g\}}`, Typst
+/// `^({f, g})`.
+pub fn sup_toks(c: Ctx, ns: &[String]) -> Vec<Tok> {
+    let names = sep_by(
+        &[kw(Kw::Comma)],
+        ns.iter().map(|n| name_toks(c, n)).collect(),
+    );
+    match c.sf {
+        Sf::Latex => cat(&[
+            &[kw(Kw::Caret), kw(Kw::Lb), kw(Kw::Lset)],
+            &names,
+            &[kw(Kw::Rset), kw(Kw::Rb)],
+        ]),
+        Sf::Typst => cat(&[
+            &[kw(Kw::Caret), kw(Kw::Lpg), kw(Kw::Lset)],
+            &names,
+            &[kw(Kw::Rset), kw(Kw::Rp)],
+        ]),
+    }
+}
+
+/// `Math.supT`: the `args` set of a `faq`, as a superscript, when it is one.
+pub fn sup_t(c: Ctx, f: &FaqForm) -> Vec<Tok> {
+    if f.sup().is_empty() {
+        vec![]
+    } else {
+        sup_toks(c, f.sup())
+    }
+}
+
+/// `Math.redToks`: operator, subscript, the superscript set (on the operator
+/// only when there are no output indices), body at level 5.
 pub fn red_toks(c: Ctx, f: &FaqForm) -> Vec<Tok> {
-    cat(&[&head_toks(c.sf, f), &sub_toks(c, f), &pa(c, 5, &f.expr)])
+    let sup = if f.out.is_empty() {
+        sup_t(c, f)
+    } else {
+        vec![]
+    };
+    cat(&[
+        &head_toks(c.sf, f),
+        &sub_toks(c, f),
+        &sup,
+        &pa(c, 5, &f.expr),
+    ])
 }
 
 /// `Math.entryToks`: an output entry: its range row when it has one.
@@ -1575,7 +1691,9 @@ pub fn entry_toks(c: Ctx, f: &FaqForm, j: &Json) -> Vec<Tok> {
 }
 
 /// `Math.faqOut`: the native `faq`, wrapped with its output indices when it has
-/// some.
+/// some. A superscript set goes on the bracket, before its subscript; the form
+/// is then a power's level (a power of it, or an index into it, is
+/// parenthesized: no double superscript).
 ///
 /// Lean passes the printer of the sub-expressions as a table (`tableP` over
 /// `faqSubs`); every lookup is of a member of `faqSubs`, so the port calls
@@ -1588,26 +1706,240 @@ pub fn faq_out(c: Ctx, f: &FaqForm) -> Out {
         &[kw(Kw::Comma)],
         f.out.iter().map(|j| entry_toks(c, f, j)).collect(),
     );
+    let sup = sup_t(c, f);
+    let l = if sup.is_empty() { 10 } else { 8 };
     match c.sf {
         Sf::Latex => mk_out(
-            10,
+            l,
             cat(&[
                 &[kw(Kw::Lbkg)],
                 &red_toks(c, f),
-                &[kw(Kw::Rbkg), kw(Kw::Us), kw(Kw::Lb)],
+                &[kw(Kw::Rbkg)],
+                &sup,
+                &[kw(Kw::Us), kw(Kw::Lb)],
                 &es,
                 &[kw(Kw::Rb)],
             ]),
         ),
         Sf::Typst => mk_out(
-            10,
+            l,
             cat(&[
                 &[kw(Kw::Lr), kw(Kw::Lp), kw(Kw::Lbk)],
                 &red_toks(c, f),
-                &[kw(Kw::Rbk), kw(Kw::Rp), kw(Kw::Us), kw(Kw::Lpg)],
+                &[kw(Kw::Rbk), kw(Kw::Rp)],
+                &sup,
+                &[kw(Kw::Us), kw(Kw::Lpg)],
                 &es,
                 &[kw(Kw::Rp)],
             ]),
+        ),
+    }
+}
+
+// ## Block assembly (`makearray`)
+
+/// `Math.MkForm`: a `makearray` node with a native spelling, by its parts: the
+/// output indices (empty when the node has no `output_idx`), and the regions
+/// with their values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MkForm {
+    pub out: Vec<String>,
+    pub regions: Vec<Vec<(Json, Json)>>,
+    pub values: Vec<Json>,
+}
+
+/// `Math.mkJson` (with `pairJson`, `regionJson`).
+pub fn mk_json(m: &MkForm) -> Json {
+    let mut kvs = vec![
+        ("args".to_string(), Json::Arr(vec![])),
+        ("op".to_string(), Json::str("makearray")),
+    ];
+    if !m.out.is_empty() {
+        kvs.push((
+            "output_idx".into(),
+            Json::Arr(m.out.iter().cloned().map(Json::Str).collect()),
+        ));
+    }
+    let regions = m
+        .regions
+        .iter()
+        .map(|r| {
+            Json::Arr(
+                r.iter()
+                    .map(|(a, b)| Json::Arr(vec![a.clone(), b.clone()]))
+                    .collect(),
+            )
+        })
+        .collect();
+    kvs.push(("regions".into(), Json::Arr(regions)));
+    kvs.push(("values".into(), Json::Arr(m.values.clone())));
+    Json::Obj(kvs)
+}
+
+/// `Math.pairsOf`: the bound pairs of a region.
+pub fn pairs_of(xs: &[Json]) -> Option<Vec<(Json, Json)>> {
+    xs.iter()
+        .map(|x| match x {
+            Json::Arr(ab) => match ab.as_slice() {
+                [a, b] => Some((a.clone(), b.clone())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// `Math.regionsOf`: the regions of a `regions` list.
+pub fn regions_of(xs: &[Json]) -> Option<Vec<Vec<(Json, Json)>>> {
+    xs.iter()
+        .map(|x| match x {
+            Json::Arr(ps) => pairs_of(ps),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `Math.mkCand`: the parts a `makearray` node would have.
+pub fn mk_cand(kvs: &[(String, Json)]) -> Option<MkForm> {
+    match (look("regions", kvs), look("values", kvs)) {
+        (Some(Json::Arr(rs)), Some(Json::Arr(vs))) => {
+            let out = match look("output_idx", kvs) {
+                None => vec![],
+                Some(Json::Arr(os)) => strs_of(os)?,
+                Some(_) => return None,
+            };
+            Some(MkForm {
+                out,
+                regions: regions_of(rs)?,
+                values: vs.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// `Math.mkForm`: the parts of a `makearray` node, when it is exactly the node
+/// they rebuild: `args` empty, `regions` and `values`, and an `output_idx` of
+/// names or none.
+pub fn mk_form(kvs: &[(String, Json)]) -> Option<MkForm> {
+    let m = mk_cand(kvs)?;
+    if jbeq(&mk_json(&m), &Json::Obj(kvs.to_vec())) {
+        Some(m)
+    } else {
+        None
+    }
+}
+
+/// `Math.mkOK`: the conditions under which the native spelling reads back: one
+/// value per region, at least one region, each region a nonempty list of
+/// bound pairs, values and bounds expressions, output indices names.
+pub fn mk_ok(m: &MkForm) -> bool {
+    !m.values.is_empty()
+        && m.regions.len() == m.values.len()
+        && m.values.iter().all(is_e)
+        && m.regions
+            .iter()
+            .all(|r| !r.is_empty() && r.iter().all(|(a, b)| is_e(a) && is_e(b)))
+        && m.out.iter().all(|n| name_ok(n))
+}
+
+/// `Math.cellSep`: the cell separator of the table.
+pub fn cell_sep(sf: Sf) -> Kw {
+    match sf {
+        Sf::Latex => Kw::Amp,
+        Sf::Typst => Kw::Comma,
+    }
+}
+
+/// `Math.rowSep`: the row separator of the table.
+pub fn row_sep(sf: Sf) -> Kw {
+    match sf {
+        Sf::Latex => Kw::Nl,
+        Sf::Typst => Kw::Semi,
+    }
+}
+
+/// `Math.pairToks`: a bound pair: `a, b` (its brackets are written around it).
+pub fn pair_toks(c: Ctx, p: &(Json, Json)) -> Vec<Tok> {
+    cat(&[&pa(c, 1, &p.0), &[kw(Kw::Comma)], &pa(c, 1, &p.1)])
+}
+
+/// `Math.regToks`: a region: `[a, b] \times [c, d]`, one bound pair per
+/// dimension.
+pub fn reg_toks(c: Ctx, r: &[(Json, Json)]) -> Vec<Tok> {
+    let mut out = Vec::new();
+    for (i, p) in r.iter().enumerate() {
+        out.push(kw(if i == 0 { Kw::Lbk } else { Kw::TimesLbk }));
+        out.extend(pair_toks(c, p));
+        out.push(kw(Kw::Rbk));
+    }
+    out
+}
+
+/// `Math.mkRow`: a row of the table: the value, then the region it fills.
+pub fn mk_row(c: Ctx, v: &Json, r: &[(Json, Json)]) -> Vec<Tok> {
+    cat(&[&pa(c, 1, v), &[kw(cell_sep(c.sf))], &reg_toks(c, r)])
+}
+
+/// `Math.matHead`: the Typst table head: `mat(delim: "[", augment: #1,`.
+pub fn mat_head() -> Vec<Tok> {
+    vec![
+        kw(Kw::Mat),
+        kw(Kw::Lp),
+        kw(Kw::DelimK),
+        kw(Kw::Colon),
+        Tok::Txt("[".into()),
+        kw(Kw::Comma),
+        kw(Kw::AugK),
+        kw(Kw::Colon),
+        Tok::Code(Json::Num(JNum::Int(1))),
+        kw(Kw::Comma),
+    ]
+}
+
+/// `Math.mkSub`: the output indices as the bracket's subscript.
+pub fn mk_sub(c: Ctx, out: &[String]) -> Vec<Tok> {
+    if out.is_empty() {
+        return vec![];
+    }
+    let names = sep_by(
+        &[kw(Kw::Comma)],
+        out.iter().map(|n| name_toks(c, n)).collect(),
+    );
+    match c.sf {
+        Sf::Latex => cat(&[&[kw(Kw::Us), kw(Kw::Lb)], &names, &[kw(Kw::Rb)]]),
+        Sf::Typst => cat(&[&[kw(Kw::Us), kw(Kw::Lpg)], &names, &[kw(Kw::Rp)]]),
+    }
+}
+
+/// `Math.mkOutT`: the native `makearray`: a bracketed two-column table, value
+/// then region, one row per region in order; LaTeX
+/// `\left[\begin{array}{l|l} v & [a, b] \\ … \end{array}\right]`, Typst
+/// `mat(delim: "[", augment: #1, v, [a, b]; …)`; the output indices as its
+/// subscript. As for [`faq_out`], the port calls [`pr`] directly where Lean
+/// looks the sub-expressions up in a table.
+pub fn mk_out_t(c: Ctx, m: &MkForm) -> Out {
+    let rows = sep_by(
+        &[kw(row_sep(c.sf))],
+        m.values
+            .iter()
+            .zip(&m.regions)
+            .map(|(v, r)| mk_row(c, v, r))
+            .collect(),
+    );
+    match c.sf {
+        Sf::Latex => mk_out(
+            10,
+            cat(&[
+                &[kw(Kw::Lbkg), kw(Kw::Barr)],
+                &rows,
+                &[kw(Kw::Earr), kw(Kw::Rbkg)],
+                &mk_sub(c, &m.out),
+            ]),
+        ),
+        Sf::Typst => mk_out(
+            10,
+            cat(&[&mat_head(), &rows, &[kw(Kw::Rp)], &mk_sub(c, &m.out)]),
         ),
     }
 }
@@ -1651,10 +1983,18 @@ pub fn pr(c: Ctx, e: &Json) -> Out {
             None
         }
     };
+    let mk = || -> Option<Out> {
+        let m = mk_form(kvs)?;
+        if mk_ok(&m) {
+            Some(mk_out_t(c, &m))
+        } else {
+            None
+        }
+    };
     let opn = || match (look("op", kvs), look("args", kvs)) {
         (Some(Json::Str(o)), Some(Json::Arr(args))) => {
             let fs = fields_of(kvs);
-            if !CORE_OPS.contains(&o.as_str())
+            if call_form_ok(o, &fs)
                 && opn_ok(o)
                 && tparams(c.s, o).is_none()
                 && fs.iter().all(|kv| key_ok(&kv.0))
@@ -1666,11 +2006,12 @@ pub fn pr(c: Ctx, e: &Json) -> Out {
                         o,
                         args.iter().map(|a| pa(c, 4, a)).collect(),
                         fs.iter()
-                            .map(|(k, v)| {
+                            .map(|kv| {
+                                let (k, v) = kv;
                                 cat(&[
                                     &key_toks(sf, k),
                                     &[kw(Kw::Eq)],
-                                    &if is_e(v) {
+                                    &if math_field(o, kv) {
                                         pa(c, 4, v)
                                     } else {
                                         json_val(sf, v)
@@ -1747,7 +2088,7 @@ pub fn pr(c: Ctx, e: &Json) -> Out {
                         return if units_ok(sf, u) {
                             mk_out(7, qty_toks(n, factors_of(u)))
                         } else {
-                            esc()
+                            opn()
                         };
                     }
                     Some(Json::Arr(xs)) => {
@@ -1756,10 +2097,10 @@ pub fn pr(c: Ctx, e: &Json) -> Out {
                                 if units_ok(sf, u) {
                                     mk_out(7, cat(&[&arr_toks(sf, &af), &unit_toks(factors_of(u))]))
                                 } else {
-                                    esc()
+                                    opn()
                                 }
                             }
-                            None => esc(),
+                            None => opn(),
                         };
                     }
                     _ => {}
@@ -1779,7 +2120,10 @@ pub fn pr(c: Ctx, e: &Json) -> Out {
     }
     match fq() {
         Some(o) => o,
-        None => opn(),
+        None => match mk() {
+            Some(o) => o,
+            None => opn(),
+        },
     }
 }
 
@@ -1950,6 +2294,8 @@ fn pr_template(c: Ctx, n: &str, bs: &[(String, Json)], esc: &dyn Fn() -> Out) ->
                             .collect(),
                     ),
                 )
+            } else if bs.is_empty() {
+                mk_out(5, vec![Tok::Opn(n.into())])
             } else {
                 esc()
             }

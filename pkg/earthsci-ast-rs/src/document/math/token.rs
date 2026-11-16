@@ -91,6 +91,17 @@ pub enum Kw {
     Lr,
     /// The LaTeX marker `\limits`.
     LimitsL,
+    // makearray: LaTeX `\begin{array}{l|l}` `\end{array}`; the region product
+    // with the bracket of the next bound pair, LaTeX `\times [`, Typst
+    // `times [`; the Typst named arguments `delim` and `augment` of its `mat(…)`
+    Barr,
+    Earr,
+    TimesLbk,
+    DelimK,
+    AugK,
+    // a set of names, LaTeX `\{` `\}`, Typst `{` `}` (the `args` of a `faq`)
+    Lset,
+    Rset,
 }
 
 /// `Math.Tok`.

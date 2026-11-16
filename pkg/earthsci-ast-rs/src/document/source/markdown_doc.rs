@@ -209,7 +209,15 @@ impl Caps for CapsMd {
         item_ok(&RItem::Tm(Tm {
             name: t.name.clone(),
             params: t.params.clone(),
-            lhs: t.lhs.as_ref().map(|j| print_latex(s, j)),
+            lhs: t.lhs.as_ref().map(|j| {
+                print_latex(
+                    &Sym {
+                        names: s.names.clone(),
+                        templates: vec![],
+                    },
+                    j,
+                )
+            }),
             body: print_latex(s, &t.body),
             attrs: t.attrs.clone(),
         })) && t.attrs.iter().all(|kv| dq_ok(&kv.1))

@@ -15,8 +15,20 @@ use crate::document::math::{Sym, parse_toks};
 /// `Source.delta`: how a token changes the delimiter depth.
 pub fn delta(t: &Tok) -> i64 {
     match t {
-        Tok::Kw(Kw::Lp | Kw::Lpg | Kw::Lb | Kw::Lbk | Kw::Bcases | Kw::Bmat | Kw::Lbkg) => 1,
-        Tok::Kw(Kw::Rp | Kw::Rpg | Kw::Rb | Kw::Rbk | Kw::Ecases | Kw::Emat | Kw::Rbkg) => -1,
+        Tok::Kw(
+            Kw::Lp
+            | Kw::Lpg
+            | Kw::Lb
+            | Kw::Lbk
+            | Kw::Bcases
+            | Kw::Bmat
+            | Kw::Lbkg
+            | Kw::Barr
+            | Kw::TimesLbk,
+        ) => 1,
+        Tok::Kw(
+            Kw::Rp | Kw::Rpg | Kw::Rb | Kw::Rbk | Kw::Ecases | Kw::Emat | Kw::Rbkg | Kw::Earr,
+        ) => -1,
         _ => 0,
     }
 }
