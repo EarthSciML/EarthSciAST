@@ -12,7 +12,7 @@ func mlDelta(t *Tok) int64 {
 		return 0
 	}
 	switch t.W {
-	case KwLp, KwLpg, KwLb, KwLbk, KwBcases, KwBmat, KwLbkg, KwBarr, KwTimesLbk:
+	case KwLp, KwLpg, KwLb, KwLbk, KwBcases, KwBmat, KwLbkg, KwBarr:
 		return 1
 	case KwRp, KwRpg, KwRb, KwRbk, KwEcases, KwEmat, KwRbkg, KwEarr:
 		return -1

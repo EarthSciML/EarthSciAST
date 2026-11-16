@@ -39,8 +39,8 @@ var typKwTable = map[Kw]string{
 	KwCosh: "cosh", KwTanh: "tanh", KwMin: "min", KwMax: "max", KwAbs: "abs",
 	KwFloor: "floor", KwCeil: "ceil", KwPdiff: "partial", KwDif: "dif", KwCases: "cases",
 	KwEsmnode: "esm.node", KwVec: "vec", KwMat: "mat", KwSum: "sum", KwProd: "product",
-	KwInn: "in", KwLimits: "limits", KwLr: "lr", KwNl: "\\", KwTimesLbk: "times [",
-	KwDelimK: "delim", KwAugK: "augment", KwLset: "{", KwRset: "}",
+	KwInn: "in", KwLimits: "limits", KwLr: "lr", KwNl: "\\",
+	KwLset: "{", KwRset: "}",
 }
 
 // typKwChars is `Typst.kwChars` (empty for the LaTeX-only keywords).
@@ -194,7 +194,7 @@ func typPretty(p *Tok, t1, t2 Tok) bool {
 		(t2.isKw(KwMinus) && typAtomEnd(t1)) ||
 		(t1.isKw(KwMinus) && p != nil && typAtomEnd(*p)) ||
 		(typAtomEnd(t1) && psAtomStart(t2)) ||
-		t2.K == TUnits || t2.isKw(KwTimesLbk)
+		t2.K == TUnits
 }
 
 // typSp is `Typst.sp`: no space before a call parenthesis, nor before the `[`
@@ -241,7 +241,7 @@ var typIdentKw = map[string]Kw{
 	"cosh": KwCosh, "tanh": KwTanh, "min": KwMin, "max": KwMax, "abs": KwAbs,
 	"floor": KwFloor, "ceil": KwCeil, "partial": KwPdiff, "dif": KwDif, "cases": KwCases,
 	"vec": KwVec, "mat": KwMat, "sum": KwSum, "product": KwProd, "in": KwInn,
-	"limits": KwLimits, "lr": KwLr, "delim": KwDelimK, "augment": KwAugK,
+	"limits": KwLimits, "lr": KwLr,
 }
 
 // typQuotedArg is `Typst.quotedArg`: `("…")` after a function name.
@@ -419,11 +419,6 @@ func typLexIdent(cs []rune) (Tok, []rune, bool) {
 			return Tok{}, nil, false
 		}
 		return tKw(KwEsmnode), r, true
-	case "times":
-		if r := typSkip(rest); len(r) > 0 && r[0] == '[' {
-			return tKw(KwTimesLbk), r[1:], true
-		}
-		return tKw(KwTimes), rest, true
 	}
 	if k, ok := typIdentKw[ws]; ok {
 		return tKw(k), rest, true

@@ -98,14 +98,9 @@ const (
 	KwRbkg
 	KwLr
 	KwLimitsL
-	// makearray: LaTeX `\begin{array}{l|l}` `\end{array}`; the region product
-	// with the bracket of the next bound pair, LaTeX `\times [`, Typst
-	// `times [`; the Typst named arguments `delim` and `augment` of its `mat(…)`
+	// makearray: LaTeX `\begin{array}{l|l}` `\end{array}`
 	KwBarr
 	KwEarr
-	KwTimesLbk
-	KwDelimK
-	KwAugK
 	// a set of names, LaTeX `\{` `\}`, Typst `{` `}` (the `args` of a `faq`)
 	KwLset
 	KwRset

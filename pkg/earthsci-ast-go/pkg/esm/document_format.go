@@ -282,17 +282,12 @@ func sameExpression(a, b any) bool {
 	return expressionKey(a) == expressionKey(b)
 }
 
-// expressionNodeAnnotations are the operator-node fields that annotate a node
-// without changing the value it computes: the `id` a derived index set names
-// and the author's `expect_cadence`. A rewrite-target op's `attrs` are its
-// scheme parameters, so they stay in the key.
-var expressionNodeAnnotations = []string{"id", "expect_cadence"}
-
 // expressionKey is the comparison key of an expression or an equation,
 // decoded or typed: its canonical form (CanonicalizeDocument; numbers in their
 // canonical kind, CONFORMANCE §5.5.3.1) with every `D` that names no `wrt`
 // given the independent variable it means (esm-spec §4.2), and with the
-// expressionNodeAnnotations of every operator node dropped, written out as
+// docfmt.NodeAnnotations of every operator node dropped (a rewrite-target op's
+// `attrs` are its scheme parameters, so they stay), written out as
 // text. Everything else is kept, and a non-finite number is written out as
 // well, so a NaN constant has the same key as itself.
 func expressionKey(v any) string {
@@ -335,7 +330,7 @@ func writeExpressionKey(b *strings.Builder, v any) {
 					x["wrt"] = DefaultIndepVar
 				}
 			}
-			for _, k := range expressionNodeAnnotations {
+			for _, k := range docfmt.NodeAnnotations {
 				delete(x, k)
 			}
 		}

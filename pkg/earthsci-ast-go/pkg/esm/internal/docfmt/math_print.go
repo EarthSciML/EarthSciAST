@@ -397,10 +397,6 @@ func prOpnOk(s string) bool {
 	return s != ""
 }
 
-// prAnnotKeys is `Math.annotKeys`: the fields that annotate a node
-// (`Notation.annotatedNodeFields`).
-var prAnnotKeys = []string{"id", "expect_cadence"}
-
 // prCallFormOk is `Math.callFormOK`: an operator prints in the call form: an
 // open operator, or a core operator of prFieldCallOps none of whose fields
 // annotates it.
@@ -412,7 +408,7 @@ func prCallFormOk(o string, fs Obj) bool {
 		return false
 	}
 	for _, kv := range fs {
-		if slices.Contains(prAnnotKeys, kv.K) {
+		if slices.Contains(NodeAnnotations, kv.K) {
 			return false
 		}
 	}
@@ -1709,7 +1705,7 @@ func prRegToks(c Ctx, r []Pair) []Tok {
 		if i == 0 {
 			out = append(out, tKw(KwLbk))
 		} else {
-			out = append(out, tKw(KwTimesLbk))
+			out = append(out, tKw(KwTimes), tKw(KwLbk))
 		}
 		out = append(out, prPairToks(c, p)...)
 		out = append(out, tKw(KwRbk))
@@ -1726,8 +1722,8 @@ func prMkRow(c Ctx, v Json, r []Pair) []Tok {
 // prMatHead is `Math.matHead`: the Typst table head: `mat(delim: "[",
 // augment: #1,`.
 func prMatHead() []Tok {
-	return []Tok{tKw(KwMat), tKw(KwLp), tKw(KwDelimK), tKw(KwColon), tTxt("["), tKw(KwComma),
-		tKw(KwAugK), tKw(KwColon), tCode(IntNum(1)), tKw(KwComma)}
+	return []Tok{tKw(KwMat), tKw(KwLp), tWord("delim"), tKw(KwColon), tTxt("["), tKw(KwComma),
+		tWord("augment"), tKw(KwColon), tCode(IntNum(1)), tKw(KwComma)}
 }
 
 // prMkSub is `Math.mkSub`: the output indices as the bracket's subscript.

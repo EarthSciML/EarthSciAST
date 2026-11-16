@@ -94,10 +94,6 @@ func psAtomStart(t Tok) bool {
 	return false
 }
 
-// psIsTimesLbk is `Math.isTimesLbk`: the region product with its bracket
-// (`\times [`); outside a `makearray` region it reads as `\times` then `[`.
-func psIsTimesLbk(t Tok) bool { return t.isKw(KwTimesLbk) }
-
 // psIsLp is `Math.isLp`: `(` or `\left(`.
 func psIsLp(t Tok) bool { return t.isKw(KwLp) || t.isKw(KwLpg) }
 
@@ -754,12 +750,10 @@ func psWithOut(f FaqForm, outs []Json, ors Obj) FaqForm {
 	return f
 }
 
-// psWithSup is `Math.withSup`: a superscript set read after the output
-// entries replaces the reduction's own.
+// psWithSup is `Math.withSup`: the superscript set read after the output
+// entries is the reduction's set (the wrapped reduction carries none).
 func psWithSup(f FaqForm, st []string) FaqForm {
-	if len(st) > 0 {
-		f.set = st
-	}
+	f.set = st
 	return f
 }
 
@@ -1003,19 +997,6 @@ func psMulLoop(c Ctx, f int, acc []Json, ts []Tok) (Json, []Tok, bool) {
 			}
 			acc = append(acc, y)
 			ts = r2
-		case len(ts) > 0 && psIsTimesLbk(ts[0]):
-			// `\times [` outside a region: `\times`, then a bracket group.
-			// The rest is a suffix of the input's tail (the group reads its
-			// `[` at least), mapped back onto the input.
-			r1 := make([]Tok, 0, len(ts))
-			r1 = append(r1, tKw(KwLbk))
-			r1 = append(r1, ts[1:]...)
-			y, r2, ok := psPNot(c, f, r1)
-			if !ok {
-				return nil, nil, false
-			}
-			acc = append(acc, y)
-			ts = ts[len(ts)-len(r2):]
 		case at(ts, 0, KwSlash):
 			if c.sf != SfLatex {
 				return psClose("*", acc), ts, true
@@ -1912,7 +1893,9 @@ func psPRedBody(c Ctx, f int, red RedK, marked bool, ts []Tok) (FaqForm, []Tok, 
 	}
 	rg, fl, hasFl, ok1 := psRowParts(rs)
 	st, r1, ok2 := psPSup(c.sf, r)
-	if !ok1 || !ok2 {
+	// a marked head lists the body's arrays as `args`, so a set there has no
+	// meaning: refused rather than dropped
+	if !ok1 || !ok2 || (marked && len(st) > 0) {
 		return FaqForm{}, nil, false
 	}
 	body, r2, ok := psPMul(c, f, r1)
@@ -1957,11 +1940,13 @@ func psPRed(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 			return nil, nil, false
 		}
 		form, r2, ok := psPRedBody(c, f, red, marked, r1)
-		if !ok || !atKws(r2, bracket...) {
+		// the printer writes an output form's set on the bracket, never on the
+		// reduction inside it
+		if !ok || len(form.set) > 0 || !atKws(r2, bracket...) {
 			return nil, nil, false
 		}
 		st, r3, ok := psPSup(c.sf, r2[len(bracket):])
-		if !ok || !atKws(r3, KwUs, open) {
+		if !ok || (marked && len(st) > 0) || !atKws(r3, KwUs, open) {
 			return nil, nil, false
 		}
 		es, r4, ok := psPRows(c, f, KwComma, closeK, r3[2:])
@@ -2181,7 +2166,7 @@ func psPPair(c Ctx, f int, ts []Tok) (Pair, []Tok, bool) {
 }
 
 // psPRegTail is `Math.pRegTail`: the further bound pairs of a region, each
-// after `\times [`.
+// after `\times` `[`.
 func psPRegTail(c Ctx, f int, ts []Tok) ([]Pair, []Tok, bool) {
 	var out []Pair
 	for {
@@ -2189,10 +2174,10 @@ func psPRegTail(c Ctx, f int, ts []Tok) ([]Pair, []Tok, bool) {
 			return nil, nil, false
 		}
 		f--
-		if !at(ts, 0, KwTimesLbk) {
+		if !atKws(ts, KwTimes, KwLbk) {
 			return out, ts, true
 		}
-		p, r, ok := psPPair(c, f, ts[1:])
+		p, r, ok := psPPair(c, f, ts[2:])
 		if !ok {
 			return nil, nil, false
 		}
