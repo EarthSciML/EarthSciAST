@@ -267,7 +267,7 @@ pub enum Compiler {
     #[default]
     Native,
     /// The reference, and only the reference: the array runtime with the tape
-    /// AND the whole-array overlay off, so every rule is evaluated by the
+    /// off, so every rule is evaluated by the
     /// per-cell oracle. Complete over the evaluable core, and carrying no
     /// performance promise of any kind. A caller selects it to CHECK another
     /// compiler, not to run a model.
@@ -411,8 +411,10 @@ pub struct CompilerRuleReport {
     /// per-cell oracle beneath the tape, reachable only outside a strict
     /// compiler), or `"oracle"` (every rule under [`Compiler::Interpreter`],
     /// by design). An evaluation outside the compiled rule set is
-    /// `"vectorized"` when the whole-array overlay served it and `"oracle"`
-    /// when it was walked per cell, which a strict compiler refuses. A
+    /// `"vectorized"` when the reference evaluator evaluated it over whole
+    /// arrays with no cell walked, `"taped"` when a standalone tape did
+    /// (what a strict compiler does with one the reference evaluator would
+    /// walk per cell), and `"oracle"` under the interpreter. A
     /// `"value invention"` row is `"relational"`: the producer's member set,
     /// computed once at setup by the relational engine from build-time factors
     /// (CONFORMANCE_SPEC §5.7.6 keeps that engine off the hot path), under
@@ -498,8 +500,9 @@ impl CompilerReport {
             .count()
     }
 
-    /// How many evaluations outside the compiled rule set the whole-array
-    /// overlay served (tier `"vectorized"`).
+    /// How many evaluations outside the compiled rule set the reference
+    /// evaluator served over whole arrays, walking no cell (tier
+    /// `"vectorized"`).
     pub fn n_vectorized(&self) -> usize {
         self.rules.iter().filter(|r| r.tier == "vectorized").count()
     }
@@ -530,7 +533,7 @@ impl std::fmt::Display for CompilerReport {
             write!(f, ", {} lowered into the XLA program", self.n_xla())?;
         }
         if self.n_vectorized() > 0 {
-            write!(f, ", {} on the whole-array overlay", self.n_vectorized())?;
+            write!(f, ", {} evaluated over whole arrays", self.n_vectorized())?;
         }
         let n_relational = self.rules.iter().filter(|r| r.tier == "relational").count();
         if n_relational > 0 {
@@ -2220,7 +2223,7 @@ fn build_problem(
             // evaluator whatever the compiler, and under a strict one it
             // stopped at the first observed it had to walk per cell.
             if let Some(r) = &prepared.refused {
-                // The walk stopped at its first cell (`StopAtFirstCell`).
+                // The walk stopped at its first cell (`CellWalks`).
                 let reason = match &r.route {
                     crate::prepare::Route::PerCell(why) => {
                         format!("{why}; {}", crate::simulate_array::ONE_CELL_NOTE)
@@ -2237,33 +2240,24 @@ fn build_problem(
                     },
                 ));
             }
-            // The pipeline keeps the whole-array overlay under every compiler,
-            // `interpreter` included, so its rows say which observeds the
-            // overlay served.
             route_rows.extend(prepared.rules.iter().map(|r| {
+                use crate::simulate_array::BuildRoute;
                 let rule = qualify(prepared.model_name.as_deref().unwrap_or(""), &r.name);
-                match &r.route {
-                    crate::prepare::Route::Relational => CompilerRuleReport {
-                        rule,
-                        kind: r.kind,
-                        cadence: "const",
-                        tier: "relational",
-                        reason: None,
-                    },
-                    crate::prepare::Route::Overlay => {
-                        outside_rule_row(compiler, rule, r.kind, None, false)
+                let route = match &r.route {
+                    crate::prepare::Route::Relational => {
+                        return CompilerRuleReport {
+                            rule,
+                            kind: r.kind,
+                            cadence: "const",
+                            tier: "relational",
+                            reason: None,
+                        };
                     }
-                    crate::prepare::Route::Tape => CompilerRuleReport {
-                        rule,
-                        kind: r.kind,
-                        cadence: "const",
-                        tier: "taped",
-                        reason: None,
-                    },
-                    crate::prepare::Route::PerCell(why) => {
-                        outside_rule_row(compiler, rule, r.kind, Some(why.clone()), false)
-                    }
-                }
+                    crate::prepare::Route::Whole => BuildRoute::Whole,
+                    crate::prepare::Route::Tape => BuildRoute::Tape,
+                    crate::prepare::Route::PerCell(_) => BuildRoute::PerCell,
+                };
+                build_time_row(compiler, rule, r.kind, route)
             }));
             *raw = prepared.doc;
             json_from_text = false;
@@ -3128,8 +3122,7 @@ fn static_observed_fields(
 /// times" all under the refusal. In this binding every one of those is an
 /// evaluation of the SAME rule set, so one gate over the rule set covers them
 /// all — and the driver then SERVES those passes from the tape under both
-/// strict compilers (`simulate_array::driver`) instead of from the whole-array
-/// overlay, which is what makes the gate honest rather than merely necessary.
+/// strict compilers (`simulate_array::driver`), which is what makes the gate honest rather than merely necessary.
 ///
 /// `xla` is gated HERE as well as by its emitter, and the order matters: this
 /// gate names the rule, its component and its cadence tier, while an emitter
@@ -3158,10 +3151,11 @@ fn build_compiler_report(
         .map_err(|e| compiled.show_error(e))?;
     #[cfg_attr(not(feature = "solve"), allow(unused_mut))]
     let mut report = rule_report(compiled, model_name, compiler, discrete_forcing, true)?;
-    // The field initial conditions are evaluated by the reference evaluator
-    // under every compiler — no tier has a form for initial-state assembly —
-    // so they are exercised HERE, where a strict compiler refuses one it would
-    // have to walk per cell, and reported ahead of the model's rules.
+    // The field initial conditions are evaluated outside the compiled rule
+    // set — the interpreter walks them per cell, the other compilers lower
+    // what it would walk on a standalone tape — so they are exercised HERE,
+    // where a strict compiler refuses one the tape declines, and reported
+    // ahead of the model's rules.
     #[cfg(feature = "solve")]
     {
         let model = model_name.unwrap_or("");
@@ -3171,32 +3165,30 @@ fn build_compiler_report(
         compiled
             .refuse_ic_state_reads()
             .map_err(|e| compiled.show_error(e))?;
-        for r in compiled.field_ic_records(p, compiler.is_strict(), t0, discrete_forcing) {
-            let reason = r.per_cell.then(|| {
-                "evaluated by the reference evaluator at setup, and a `faq` in it is not one \
-                 the whole-array overlay takes, so it was walked once per cell"
-                    .to_string()
-            });
-            if compiler.is_strict()
-                && let Some(reason) = reason
-            {
-                // The walk stopped at its first cell (`field_ic_records`).
-                return Err(SimulateError::Compile(
-                    crate::compile_error::CompileError::CompilerRefusedRule {
-                        compiler: compiler.as_str(),
-                        kind: r.kind,
-                        rule: qualify(model, &r.name),
-                        tier: "const",
-                        reason: format!("{reason}; {}", crate::simulate_array::ONE_CELL_NOTE),
-                    },
-                ));
-            }
-            ic_rows.push(outside_rule_row(
+        for r in compiled.field_ic_records(p, t0, discrete_forcing) {
+            let route = match r.route {
+                Ok(route) => route,
+                Err(declined) => {
+                    return Err(SimulateError::Compile(
+                        crate::compile_error::CompileError::CompilerRefusedRule {
+                            compiler: compiler.as_str(),
+                            kind: r.kind,
+                            rule: qualify(model, &r.name),
+                            tier: "const",
+                            reason: format!(
+                                "evaluated at setup, and a `faq` in it would be walked once \
+                                 per cell; the tape declined it: {declined}; {}",
+                                crate::simulate_array::ONE_CELL_NOTE
+                            ),
+                        },
+                    ));
+                }
+            };
+            ic_rows.push(build_time_row(
                 compiler,
                 qualify(model, &r.name),
                 r.kind,
-                reason,
-                compiler == Compiler::Interpreter,
+                route,
             ));
         }
         report.rules.splice(0..0, ic_rows);
@@ -3205,37 +3197,31 @@ fn build_compiler_report(
 }
 
 /// The report row of one evaluation construction performs OUTSIDE the
-/// compiled model's rule set, at setup (`"const"`). `per_cell` is why it was
-/// walked per cell, if it was; `overlay_off` says the evaluation ran with the
-/// whole-array overlay off, as a field `ic` does under
-/// [`Compiler::Interpreter`].
+/// compiled model's rule set, at setup (`"const"`), served by `route`.
 ///
-/// The tier says what happened: the per-cell oracle, or the whole-array
-/// overlay. Under the interpreter a per-cell walk is that compiler's design
-/// rather than a decline, so its rows carry no reason, exactly as its rule
-/// rows do.
-fn outside_rule_row(
+/// Under [`Compiler::Interpreter`] every such row is the per-cell oracle, by
+/// design, and carries no reason, exactly as its rule rows do. Elsewhere the
+/// tier says what served it: `"vectorized"` for the reference evaluator over
+/// whole arrays with no cell walked, `"taped"` for a standalone tape.
+fn build_time_row(
     compiler: Compiler,
     rule: String,
     kind: &'static str,
-    per_cell: Option<String>,
-    overlay_off: bool,
+    route: crate::simulate_array::BuildRoute,
 ) -> CompilerRuleReport {
-    let tier = if overlay_off || per_cell.is_some() {
-        "oracle"
-    } else {
-        "vectorized"
-    };
-    let reason = match compiler {
-        Compiler::Interpreter => None,
-        _ => per_cell,
+    use crate::simulate_array::BuildRoute;
+    let tier = match route {
+        _ if compiler == Compiler::Interpreter => "oracle",
+        BuildRoute::Whole => "vectorized",
+        BuildRoute::Tape => "taped",
+        BuildRoute::PerCell => "oracle",
     };
     CompilerRuleReport {
         rule,
         kind,
         cadence: "const",
         tier,
-        reason,
+        reason: None,
     }
 }
 

@@ -424,8 +424,9 @@ pub struct PreparedBuild {
     pub(crate) built_variables: BuiltVariables,
 }
 
-/// One evaluation the build pipeline performed, and HOW: through the
-/// whole-array overlay, interpreted per cell by the oracle, or — for value
+/// One evaluation the build pipeline performed, and HOW: by the reference
+/// evaluator over whole arrays, on a standalone tape, interpreted per cell by
+/// the oracle, or — for value
 /// invention — by the relational engine.
 ///
 /// The pipeline evaluates the document's observed graph with the reference
@@ -447,10 +448,12 @@ pub(crate) struct PipelineRule {
 /// tier names.
 #[derive(Clone, Debug)]
 pub(crate) enum Route {
-    /// The whole-array overlay (tier `"vectorized"`).
-    Overlay,
-    /// A standalone tape: under a strict compiler, an observed the overlay
-    /// declines is lowered on the tape and run once (tier `"taped"`).
+    /// The reference evaluator over whole arrays, no `faq` walked per cell
+    /// (tier `"vectorized"`).
+    Whole,
+    /// A standalone tape: under a strict compiler, an observed the reference
+    /// evaluator would walk per cell is lowered on the tape and run once
+    /// (tier `"taped"`).
     Tape,
     /// The reference evaluator, walking cells one at a time, and why (tier
     /// `"oracle"`). The one route a strict compiler refuses.
@@ -464,17 +467,9 @@ pub(crate) enum Route {
     Relational,
 }
 
-impl Route {
-    /// An observed's route, from the per-cell reason its evaluation gave.
-    fn observed(per_cell: Option<String>) -> Route {
-        per_cell.map_or(Route::Overlay, Route::PerCell)
-    }
-}
-
-/// Why an observed the overlay did not take was walked per cell.
+/// Why an observed was walked per cell.
 const PER_CELL_FAQ: &str = "the build pipeline evaluated it through the reference evaluator, \
-    and a `faq` in it is not one the whole-array overlay takes, so its body was walked \
-    once per cell";
+    which walks a `faq` body once per cell";
 /// Why a causal self-reference is walked per cell.
 const PER_CELL_RECURRENCE: &str = "a causal self-reference (esm-spec §4.3.1.1), which the \
     build pipeline sweeps cell by cell through the reference evaluator";
@@ -815,7 +810,8 @@ enum Evaluated {
     /// The dense field, and the route that evaluated it.
     Field(ArrayD<f64>, Route),
     /// Walked per cell under `refuse_per_cell`, and stopped at the first cell
-    /// (`StopAtFirstCell`): there is no field, only the reason to refuse.
+    /// ([`crate::simulate_array::CellWalks`]): there is no field, only the
+    /// reason to refuse.
     Refused(String),
 }
 
@@ -877,12 +873,14 @@ fn resolve_observed(
     Ok(expr)
 }
 
-/// Evaluate one observed, its ranges already resolved ([`resolve_observed`]),
-/// through the full evaluator; returns the dense field.
+/// Evaluate one observed, its ranges already resolved ([`resolve_observed`]);
+/// returns the dense field.
 ///
-/// Under `refuse_per_cell` a per-cell walk stops at its first cell, so a
-/// document the strict compiler refuses is refused for the price of one cell
-/// rather than the whole reference evaluation.
+/// Under `refuse_per_cell` (a strict compiler) what the reference evaluator
+/// would walk per cell goes to the tape, and a walk stops at its first cell
+/// on the way, so a document the strict compiler refuses is refused for the
+/// price of one cell rather than the whole reference evaluation. Otherwise
+/// (the interpreter) the reference evaluator walks it.
 fn eval_observed(
     name: &str,
     expr: &Expr,
@@ -927,49 +925,50 @@ fn eval_observed(
                 )),
             });
     }
-    let stop = refuse_per_cell.then(crate::simulate_array::StopAtFirstCell::arm);
-    let refused = || stop.is_some() && crate::simulate_array::per_cell_walk_refused();
-    if let Some(res) = scope.eval_recurrence(name, expr) {
-        if refused() {
+    let mut walks = if refuse_per_cell {
+        crate::simulate_array::CellWalks::stopping()
+    } else {
+        crate::simulate_array::CellWalks::default()
+    };
+    if let Some(res) = scope.eval_recurrence(name, expr, &mut walks) {
+        if walks.refused() {
             return Ok(Evaluated::Refused(PER_CELL_RECURRENCE.to_string()));
         }
         return res
             .map(|a| Evaluated::Field(a, Route::PerCell(PER_CELL_RECURRENCE.to_string())))
             .map_err(|e| stage_err(format_args!("evaluate {name}"), e));
     }
-    let walks_before = crate::simulate_array::per_cell_walks();
-    crate::simulate_array::take_overlay_decline();
-    let val = scope.eval(expr);
-    // Before the result is read: a stopped walk's value is a placeholder, and
-    // so is any error computed from it.
-    if refused() {
-        // The overlay declined a `faq` of this observed: lower the whole
-        // observed on the tape instead, from the same inputs.
-        let overlay = crate::simulate_array::take_overlay_decline()
-            .unwrap_or("a construct it has no whole-array form for");
-        drop(stop);
-        let tape = compile_on_tape(name, expr, scope, fill_shape, false)
-            .expect("a non-recurrence always reaches the tape");
-        return match tape {
-            Err(fault) => Err(err(format!("evaluate {name}: {fault}"))),
-            Ok(Ok(a)) => Ok(Evaluated::Field(
-                shape_like_interpreter(a, scalar_shape),
-                Route::Tape,
-            )),
-            Ok(Err(declined)) => Ok(Evaluated::Refused(format!(
-                "the whole-array overlay declined a `faq` in it ({overlay}), and the tape \
-                 declined it: {declined}"
-            ))),
-        };
-    }
-    let val = val.map_err(|e| stage_err(format_args!("evaluate {name}"), e))?;
-    let per_cell =
-        (crate::simulate_array::per_cell_walks() != walks_before).then(|| PER_CELL_FAQ.to_string());
+    // Under a strict compiler, an observed with a `faq` the reference
+    // evaluator would walk per cell is lowered whole on the tape instead,
+    // from the same inputs, and refused when the tape declines it.
+    use crate::simulate_array::{BuildEval, BuildRoute, Routed};
+    let mode = if refuse_per_cell {
+        BuildEval::Fast { strict: true }
+    } else {
+        BuildEval::PerCell
+    };
+    let routed = scope
+        .eval_routed(name, expr, fill_shape, mode)
+        .map_err(|e| stage_err(format_args!("evaluate {name}"), e))?;
+    let (val, route) = match routed {
+        Routed::Refused(declined) => {
+            return Ok(Evaluated::Refused(format!(
+                "a `faq` in it would be walked once per cell, and the tape declined it: \
+                 {declined}"
+            )));
+        }
+        Routed::Value(v, route) => (v, route),
+    };
     let field = match val {
         EvalValue::Array(a) => *a,
         EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(scalar_shape), s),
     };
-    Ok(Evaluated::Field(field, Route::observed(per_cell)))
+    let route = match route {
+        BuildRoute::Whole => Route::Whole,
+        BuildRoute::Tape => Route::Tape,
+        BuildRoute::PerCell => Route::PerCell(PER_CELL_FAQ.to_string()),
+    };
+    Ok(Evaluated::Field(field, route))
 }
 
 // --------------------------------------------------------------------------- //
@@ -2673,8 +2672,8 @@ impl<'o> BuildState<'o> {
 
     /// [`crate::row_dedup`]: evaluate `name` over one representative row per
     /// distinct key signature and scatter the result back, or `None` to
-    /// evaluate it as written. Only a rule the tape or the whole-array overlay
-    /// takes is kept; a per-cell walk or a refusal is evaluated as written, so
+    /// evaluate it as written. Only a rule the tape or the reference evaluator
+    /// takes over whole arrays is kept; a per-cell walk or a refusal is evaluated as written, so
     /// what is recorded or refused is what it would have been. That second
     /// evaluation happens only on a refusal, which ends the pipeline; the
     /// syntactic [`crate::row_dedup::plan`] declines every other rule before
@@ -2720,7 +2719,7 @@ impl<'o> BuildState<'o> {
             self.arrays.remove(n);
         }
         Ok(match res {
-            Ok(Evaluated::Field(a, route @ (Route::Tape | Route::Overlay))) => {
+            Ok(Evaluated::Field(a, route @ (Route::Tape | Route::Whole))) => {
                 let out = crate::row_dedup::expand(&plan, a).map(|a| (a, route));
                 if out.is_some() {
                     crate::row_dedup::note_applied();
@@ -2937,18 +2936,22 @@ mod first_cell_stop_tests {
             .collect()
     }
 
+    /// Each of the two observeds is a `faq` the reference evaluator would
+    /// walk per cell, so each costs one walked cell before it goes to the
+    /// tape: two, whatever the size.
     #[test]
-    fn a_large_prefix_scan_is_taped_after_at_most_one_walked_cell() {
+    fn a_large_prefix_scan_is_taped_after_one_walked_cell_per_observed() {
         let (native, cells) = native_cells(&cumulative(LARGE));
         assert!(
-            cells <= 1,
-            "the walk must stop at its first cell, walked {cells}"
+            cells <= 2,
+            "each walk must stop at its first cell, walked {cells}"
         );
 
-        // The reference evaluator still walks every cell, to the same answer.
+        // The reference evaluator still walks every cell of both, to the same
+        // answer.
         let before = per_cell_cells();
         let prob = build(&cumulative(LARGE), Compiler::Interpreter).expect("interpreter");
-        assert_eq!(per_cell_cells() - before, LARGE as u64);
+        assert_eq!(per_cell_cells() - before, 2 * LARGE as u64);
         let cum = crate::problem::observed_field(&prob, "Rel.cum").expect("cum");
         let n = LARGE as f64;
         assert_eq!(cum.iter().last().copied(), Some(5.0 * n * (n + 1.0)));

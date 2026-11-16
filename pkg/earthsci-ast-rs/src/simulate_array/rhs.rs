@@ -301,8 +301,8 @@ pub(super) fn sweep_recurrence<'a>(
             scope.publish(&full, v);
             super::eval::note_per_cell_cell();
             // A strict caller refuses the sweep; its first cell was for the
-            // diagnostic (`super::eval::StopAtFirstCell`).
-            if super::eval::stop_after_first_cell() {
+            // diagnostic (`super::eval::CellWalks`).
+            if ctx.walks.after_first_cell() {
                 break 'sweep;
             }
         }
@@ -458,8 +458,7 @@ pub(super) fn build_state_arrays(var_shapes: &IndexMap<String, VarShape>, state:
 /// may reference an already-seeded static observed by name (they are read from
 /// `dst`), so the seed must be in place before this runs.
 ///
-/// Every rule is evaluated by the per-cell oracle, with the whole-array
-/// overlay off for any `faq` reached inside a body. `stats` counts the
+/// Every rule is evaluated by the per-cell oracle. `stats` counts the
 /// array-shaped observeds.
 pub(super) fn materialize_observeds_pass(
     dst: &mut ArrMap,
@@ -467,7 +466,6 @@ pub(super) fn materialize_observeds_pass(
     env: &EvalEnv,
     stats: &mut RhsStats,
 ) {
-    let _overlay = super::vectorized::OverlayGuard::armed(true);
     for rule in observed_rules {
         materialize_observed(dst, rule, env, stats);
     }
@@ -669,15 +667,13 @@ pub(super) fn evaluate_rhs_with_scratch(
 }
 
 /// The per-cell oracle's right-hand side: every observed and every state rule
-/// walked cell by cell, with the whole-array overlay off for any `faq`
-/// reached inside a body.
+/// walked cell by cell.
 fn evaluate_rhs_per_cell(
     call: &RhsCall,
     dy: &mut [f64],
     stats: &mut RhsStats,
     scratch: &mut RhsScratch,
 ) {
-    let _overlay = super::vectorized::OverlayGuard::armed(true);
     let &RhsCall {
         rhs_rules,
         observed_rules,

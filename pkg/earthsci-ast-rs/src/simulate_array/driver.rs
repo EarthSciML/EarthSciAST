@@ -415,8 +415,36 @@ pub(crate) struct FieldIcRecord {
     /// `"initial condition"`, `"initial-condition scope"` or
     /// `"initialization equation"`.
     pub kind: &'static str,
-    /// Whether the reference evaluator walked a `faq` in it cell by cell.
-    pub per_cell: bool,
+    /// The evaluator that served it, or — under a strict compiler — the
+    /// tape's reason for declining what the reference evaluator would have
+    /// walked per cell: the refusal.
+    pub route: Result<BuildRoute, String>,
+}
+
+/// A strict compiler's refusal of a build-time field evaluation `name` of
+/// `kind`: recorded in `records` when construction is exercising the
+/// evaluations, and otherwise (a solve) raised.
+#[cfg(feature = "solve")]
+fn refuse_field_ic(
+    records: Option<&mut Vec<FieldIcRecord>>,
+    name: &str,
+    kind: &'static str,
+    why: String,
+) -> Result<(), SimulateError> {
+    match records {
+        Some(sink) => {
+            sink.push(FieldIcRecord {
+                name: name.to_string(),
+                kind,
+                route: Err(why),
+            });
+            Ok(())
+        }
+        None => Err(SimulateError::InvalidFieldInitialCondition {
+            name: name.to_string(),
+            details: format!("the tape declined it: {why}"),
+        }),
+    }
 }
 
 /// The field initial conditions construction resolved, held for the first
@@ -1124,10 +1152,9 @@ impl ArrayCompiled {
         };
         #[cfg(test)]
         FIELD_IC_RESOLUTIONS.with(|c| c.set(c.get() + 1));
-        let walks = crate::simulate_array::per_cell_walks;
         // `interpreter` runs these on the per-cell oracle like every other
-        // evaluation it performs; the other compilers leave the overlay on.
-        let _overlay = OverlayGuard::armed(self.is_interpreter());
+        // evaluation it performs; the other compilers evaluate whole arrays.
+        let mode = BuildEval::of_compiler(self.is_interpreter());
         // esm-spec §6.6.5 build-time scope: materialize the STATE-FREE
         // observeds an `ic` RHS reads (a `const` gather, a parameter-only
         // expression) over the provider forcing buffer. A provider-served field
@@ -1202,9 +1229,8 @@ impl ArrayCompiled {
                 if !live.contains(def.name.as_str()) {
                     continue;
                 }
-                // Never evaluated with a read missing: the overlay cannot
-                // resolve an absent name, so it would fall to a per-cell walk —
-                // which a strict compiler refuses — only to fail anyway.
+                // Never evaluated with a read missing: an absent name does not
+                // resolve, so the evaluation could only fail.
                 if let Some(missing) = def
                     .needs
                     .iter()
@@ -1217,40 +1243,44 @@ impl ArrayCompiled {
                     skipped.insert(&def.name, why);
                     continue;
                 }
-                let before = walks();
-                let value =
-                    eval_buildtime_field_in_scope(&def.body, &self.index_sets, &bound, &built);
-                if per_cell_walk_refused() {
-                    // A strict caller's walk stopped at its first cell
-                    // (`StopAtFirstCell`): this evaluation is the refusal,
-                    // and nothing computed from its placeholder counts —
-                    // not even a failure. Only construction arms the stop.
-                    if let Some(sink) = records.as_deref_mut() {
-                        sink.push(FieldIcRecord {
-                            name: def.name.clone(),
-                            kind: "initial-condition scope",
-                            per_cell: true,
-                        });
+                let routed = eval_buildtime_field_routed(
+                    Some(&def.name),
+                    &def.body,
+                    &self.index_sets,
+                    &bound,
+                    &built,
+                    mode,
+                );
+                let route = match routed {
+                    Ok(Routed::Refused(why)) => {
+                        // A strict compiler's refusal: the tape declined
+                        // what the reference evaluator would walk per cell.
+                        return refuse_field_ic(
+                            records.as_deref_mut(),
+                            &def.name,
+                            "initial-condition scope",
+                            why,
+                        )
+                        .map(|()| out);
                     }
-                    return Ok(out);
-                }
-                match value {
-                    Ok(Value::Array(arr)) => {
+                    Ok(Routed::Value(Value::Array(arr), route)) => {
                         built.insert(def.name.clone(), *arr);
+                        route
                     }
-                    Ok(Value::Scalar(v)) => {
+                    Ok(Routed::Value(Value::Scalar(v), route)) => {
                         bound.insert(def.name.clone(), v);
+                        route
                     }
                     Err(e) => {
                         skipped.insert(&def.name, format!("does not evaluate at build time: {e}"));
                         continue;
                     }
-                }
+                };
                 if let Some(sink) = records.as_deref_mut() {
                     sink.push(FieldIcRecord {
                         name: def.name.clone(),
                         kind: "initial-condition scope",
-                        per_cell: walks() != before,
+                        route: Ok(route),
                     });
                 }
             }
@@ -1270,13 +1300,16 @@ impl ArrayCompiled {
             })?;
             let total = vs.shape.iter().copied().product::<usize>().max(1);
             // Coordinate-expression ICs (case 3 in `resolve_field_ic_cell`)
-            // evaluate the WHOLE field with one `eval_buildtime_field` call and
+            // evaluate the WHOLE field with one build-time evaluation and
             // then read a single cell — so recomputing it per cell was O(cells)
             // full-field evaluations for an O(cells)-sized result. Resolve it
             // once per target and let every cell index the cached field. The
             // cell-independent cases (1 loaded field / 2 constant) ignore it.
-            let mut cached_field: Option<Value> = None;
-            let before = walks();
+            let mut memo = super::compile::IcTargetMemo {
+                mode,
+                field: None,
+                route: None,
+            };
             for flat in 0..total {
                 let multi = flat_to_multi_col_major(flat, &vs.shape);
                 let slot = vs.flat_offset + flat;
@@ -1287,18 +1320,18 @@ impl ArrayCompiled {
                     forcing,
                     &self.index_sets,
                     params,
-                    &mut cached_field,
+                    &mut memo,
                 );
-                if per_cell_walk_refused() {
-                    // As for the scope above: the stopped walk is the refusal.
-                    if let Some(sink) = records.as_deref_mut() {
-                        sink.push(FieldIcRecord {
-                            name: target.clone(),
-                            kind: "initial condition",
-                            per_cell: true,
-                        });
-                    }
-                    return Ok(out);
+                if let Some(Err(why)) = memo.route {
+                    // As for the scope above: the tape's decline is the
+                    // refusal.
+                    return refuse_field_ic(
+                        records.as_deref_mut(),
+                        target,
+                        "initial condition",
+                        why,
+                    )
+                    .map(|()| out);
                 }
                 out.insert(
                     slot,
@@ -1309,7 +1342,7 @@ impl ArrayCompiled {
                 sink.push(FieldIcRecord {
                     name: target.clone(),
                     kind: "initial condition",
-                    per_cell: walks() != before,
+                    route: memo.route.unwrap_or(Ok(BuildRoute::Whole)),
                 });
             }
         }
@@ -1350,9 +1383,10 @@ impl ArrayCompiled {
     /// follows.
     ///
     /// The whole `faq` is one build-time field evaluation, as a field `ic`'s
-    /// coordinate expression is: the interpreter walks it cell by cell, the
-    /// other compilers take the whole-array overlay, and a strict compiler's
-    /// walk stops at its first cell (`records` then carries the refusal).
+    /// coordinate expression is ([`BuildEval::of_compiler`]): the interpreter
+    /// walks it cell by cell, and the other compilers lower it on a standalone
+    /// tape, refusing it when the tape declines (`records` then carries the
+    /// refusal).
     #[cfg(feature = "solve")]
     pub(crate) fn seed_initialization_faqs(
         &self,
@@ -1365,8 +1399,7 @@ impl ArrayCompiled {
         if self.init_faqs.is_empty() {
             return Ok(assigned);
         }
-        let walks = crate::simulate_array::per_cell_walks;
-        let _overlay = OverlayGuard::armed(self.is_interpreter());
+        let mode = BuildEval::of_compiler(self.is_interpreter());
         for (target, rhs) in &self.init_faqs {
             let rule = format!("init({target})");
             let invalid = |details: String| SimulateError::InvalidFieldInitialCondition {
@@ -1416,25 +1449,38 @@ impl ArrayCompiled {
                     vs.shape.len()
                 )));
             }
-            let before = walks();
-            let value = eval_buildtime_field_in_scope(&resolved, &self.index_sets, params, &scope);
-            if per_cell_walk_refused() {
-                if let Some(sink) = records.as_deref_mut() {
-                    sink.push(FieldIcRecord {
-                        name: rule,
-                        kind: "initialization equation",
-                        per_cell: true,
-                    });
+            // Unnamed: the scope binds `target` itself, as seeded so far, and
+            // a read of it is not a self-reference.
+            let value = eval_buildtime_field_routed(
+                None,
+                &resolved,
+                &self.index_sets,
+                params,
+                &scope,
+                mode,
+            );
+            let value = match value {
+                Ok(Routed::Refused(why)) => {
+                    return refuse_field_ic(
+                        records.as_deref_mut(),
+                        &rule,
+                        "initialization equation",
+                        why,
+                    )
+                    .map(|()| assigned);
                 }
-                return Ok(assigned);
-            }
-            if let Some(sink) = records.as_deref_mut() {
-                sink.push(FieldIcRecord {
-                    name: rule.clone(),
-                    kind: "initialization equation",
-                    per_cell: walks() != before,
-                });
-            }
+                Ok(Routed::Value(v, route)) => {
+                    if let Some(sink) = records.as_deref_mut() {
+                        sink.push(FieldIcRecord {
+                            name: rule.clone(),
+                            kind: "initialization equation",
+                            route: Ok(route),
+                        });
+                    }
+                    Ok(v)
+                }
+                Err(e) => Err(e),
+            };
             let arr = match value {
                 Ok(Value::Array(a)) if a.ndim() == ranges.len() => a,
                 Ok(_) => return Err(invalid("the `faq` did not evaluate to its box".to_string())),
@@ -1492,10 +1538,10 @@ impl ArrayCompiled {
     /// initial conditions cannot be resolved yet: `solve` resolves them again
     /// and raises the diagnostic there, where it always has been.
     ///
-    /// `strict` is the compiler's: the first per-cell walk then stops at its
-    /// first cell (see `StopAtFirstCell`), because its record is a refusal and
-    /// the rest of the walk would buy nothing. A resolution that walked no cell
-    /// is kept for the first solve ([`FieldIcMemo`]).
+    /// Under a strict compiler an evaluation the tape declines is recorded as
+    /// a refusal ([`FieldIcRecord::route`]) and ends the resolution. A
+    /// resolution nothing refused is kept for the first solve
+    /// ([`FieldIcMemo`]).
     ///
     /// `t0` is the start of the run, where the `ic` right-hand sides are
     /// evaluated (esm-spec §11.4.2). The DISCRETE-cadence fields
@@ -1506,7 +1552,6 @@ impl ArrayCompiled {
     pub(crate) fn field_ic_records(
         &self,
         params: &HashMap<String, f64>,
-        strict: bool,
         t0: f64,
         discrete_forcing: &HashSet<String>,
     ) -> Vec<FieldIcRecord> {
@@ -1524,7 +1569,6 @@ impl ArrayCompiled {
             .collect();
         let _precision_guard = self.precision.enter();
         let mut records = Vec::new();
-        let stop = strict.then(crate::simulate_array::StopAtFirstCell::arm);
         // No discrete-cadence field is in the buffer before the first refresh:
         // each stands in at its declared default.
         let discrete_read: Vec<String> = self
@@ -1546,7 +1590,7 @@ impl ArrayCompiled {
             exclude: discrete_forcing,
         };
         let result = self.resolve_field_ics(&resolved, Some(&mut records), &start);
-        let stopped = stop.as_ref().is_some_and(|s| s.stopped());
+        let stopped = records.iter().any(|r| r.route.is_err());
         if let Ok(slots) = &result
             && !stopped
             && !self.init_faqs.is_empty()
@@ -3282,9 +3326,7 @@ mod field_ic_memo_tests {
     //! and the report need it), and the first solve takes that resolution
     //! instead of computing it again. Counted with the resolver's test hook.
     use super::field_ic_resolutions;
-    use crate::compile_error::CompileError;
     use crate::problem::{Compiler, ProblemOptions, Remake, esm_problem, remake, solve};
-    use crate::simulate::SimulateError;
     use crate::simulate_array::per_cell_cells;
     use crate::{SolveOptions, load_string};
     use serde_json::{Value, json};
@@ -3430,48 +3472,46 @@ mod field_ic_memo_tests {
         assert_eq!(first_column(&sol), [0.5, 1.0, 1.5]);
     }
 
-    /// A strict compiler refuses an `ic` the reference evaluator walks per
-    /// cell, and refuses it after one cell of the walk.
+    /// A strict compiler lowers an `ic` the reference evaluator would walk
+    /// per cell on a standalone tape, after one cell of the walk, and agrees
+    /// with the interpreter's full walk bit for bit.
     #[test]
-    fn a_large_per_cell_initial_condition_is_refused_after_one_cell() {
+    fn a_large_per_cell_initial_condition_is_taped_after_one_cell() {
         let cumulative = json!({"op": "faq", "args": [], "output_idx": ["i"],
                                 "ranges": {"i": {"from": "x"}, "j": {"from": "x"}},
                                 "filter": {"op": "<=", "args": ["j", "i"]},
                                 "expr": 1.0});
-        let refusal = |n: usize, ic: Value| {
+        let n = 100_000;
+        let tier_and_u0 = |ic: Value, compiler: Compiler| {
             let file = with_ic(n, ic);
             let before = per_cell_cells();
-            let err = esm_problem(&file, (0.0, 1.0), opts(Compiler::Native)).expect_err("per cell");
+            let prob = esm_problem(&file, (0.0, 1.0), opts(compiler)).expect("builds");
             let cells = per_cell_cells() - before;
-            match err {
-                SimulateError::Compile(CompileError::CompilerRefusedRule {
-                    kind,
-                    rule,
-                    reason,
-                    ..
-                }) => ((kind, rule, reason), cells),
-                other => panic!("expected compiler_refused_rule, got {other:?}"),
-            }
+            let tier = prob
+                .compiler_report()
+                .rules()
+                .iter()
+                .find(|r| r.kind == "initial condition")
+                .expect("an ic row")
+                .tier;
+            let u0: Vec<u64> = crate::problem::initial_state(&prob)
+                .expect("u0")
+                .iter()
+                .map(|x| x.to_bits())
+                .collect();
+            (tier, cells, u0)
         };
-        let (small, _) = refusal(3, cumulative.clone());
-        let (large, cells) = refusal(100_000, cumulative.clone());
-        assert_eq!(large, small);
-        assert_eq!(large.0, "initial condition");
-        assert!(
-            large.2.ends_with(crate::simulate_array::ONE_CELL_NOTE),
-            "{}",
-            large.2
-        );
-        assert_eq!(cells, 1, "the walk must stop at its first cell");
-
         // What the rest of the expression makes of the stopped walk's
-        // placeholder is not the document's either: `1 / Σ` over a walk that
-        // stopped reads a zero, and the infinity that follows must not turn
-        // the refusal into an unresolvable-ic failure.
-        let reciprocal = json!({"op": "/", "args": [1.0, cumulative]});
-        let (large, cells) = refusal(100_000, reciprocal);
-        assert_eq!(large, small);
-        assert_eq!(cells, 1);
+        // placeholder is not the value either: `1 / Σ` over a walk that
+        // stopped reads a zero, and the infinity that follows must not leak.
+        let reciprocal = json!({"op": "/", "args": [1.0, cumulative.clone()]});
+        for ic in [cumulative, reciprocal] {
+            let (tier, cells, native) = tier_and_u0(ic.clone(), Compiler::Native);
+            assert_eq!(tier, "taped");
+            assert_eq!(cells, 1, "the walk must stop at its first cell");
+            let (_, _, interp) = tier_and_u0(ic, Compiler::Interpreter);
+            assert_eq!(native, interp);
+        }
     }
 
     /// A CONST provider serving `w` as zeros over three cells.

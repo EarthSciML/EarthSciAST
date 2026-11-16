@@ -36,8 +36,8 @@
 //!   `from_model` lowering, and shape-inference / LHS-parsing helpers.
 //! * `eval` — the per-cell oracle interpreter (the correctness reference),
 //!   including the geometry leaf ops and standalone [`eval_expression`].
-//! * [`vectorized`] — the vectorized whole-array stencil overlay (ess-bdm):
-//!   shifted-slice `index` gathers, broadcast kernels, einsum folds.
+//! * [`vectorized`] — the `index` axis analyses the tape lowering and the
+//!   range-restricted programs share.
 //! * [`rhs`] — per-call RHS evaluation: the zero-allocation scratch/buffer
 //!   pool (ess-mro), observed-rule materialization, and the rule driver.
 //! * [`driver`] — diffsol solver plumbing (`solve`/`solve_inspect`,
@@ -48,7 +48,7 @@
 //! This file keeps the shared data model: [`Value`], the per-variable
 //! [`VarShape`] table, the compiled rule types ([`RhsRule`],
 //! [`AlgebraicRule`], [`ContractDim`]), the compiled model [`ArrayCompiled`],
-//! the kernel buffer [`Pool`], and the evaluation context [`EvalCtx`].
+//! and the evaluation context [`EvalCtx`].
 
 // This runtime is compiled for wasm too (EarthSciAST-akz): its solver is the
 // diffsol/Faer path, which is pure Rust — so no native-only dependency remains,
@@ -79,12 +79,6 @@ pub(crate) use session::{RunSpec, SolveSession};
 pub mod tape;
 mod vectorized;
 
-// `inline_tests` consumes `eval_buildtime_field` on every target; only the
-// native-only `area_faq` needs the scoped form, so it is gated to avoid an
-// unused-import warning on wasm.
-pub(crate) use compile::eval_buildtime_field;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use compile::eval_buildtime_field_in_scope;
 pub use compile::{
     file_has_array_ops, file_has_spatial_model, run_value_invention,
     run_value_invention_with_params,
@@ -103,6 +97,8 @@ pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
 // as the compile path.
 #[cfg(test)]
 pub(crate) use compile::{model_from_flattened, promote_conditional_shapes};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use eval::StandaloneScope;
 #[cfg(test)]
 pub(crate) use eval::check_scalar_evaluable;
 #[cfg(not(target_arch = "wasm32"))]
@@ -110,8 +106,8 @@ pub(crate) use eval::eval_observed_taped;
 #[cfg(test)]
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{
-    ONE_CELL_NOTE, StandaloneScope, StopAtFirstCell, eval_scalar_expression, per_cell_walk_refused,
-    per_cell_walks,
+    BuildEval, BuildRoute, CellWalks, ONE_CELL_NOTE, Routed, eval_buildtime_field_routed,
+    eval_scalar_expression,
 };
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
@@ -121,8 +117,6 @@ pub use eval::{
 pub(crate) use normalize::{BuildInput, NormalizedModel, normalize};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use tape::StandaloneError;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use vectorized::take_overlay_decline;
 // The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
 // the vectorized overlay); re-exported crate-wide so a caller outside the
 // runtime that needs one operator's numeric meaning (the expression
@@ -672,8 +666,8 @@ pub(crate) enum RuntimeMode {
     Native,
     /// [`crate::Compiler::Interpreter`]: no tape — the per-cell oracle for the
     /// right-hand side and every observed pass. The field initial conditions
-    /// and initialization equations evaluate with the whole-array overlay off
-    /// as well, so every `faq` in them is walked per cell.
+    /// and initialization equations are walked per cell as well
+    /// ([`BuildEval::of_compiler`]).
     Interpreter,
     /// [`crate::Compiler::Xla`]: the tape lowered to a StableHLO computation by
     /// `tape::xla_emit` and run through PJRT
@@ -903,102 +897,6 @@ pub struct ArrayCompiled {
     tape_cache: tape::TapeCache,
 }
 
-/// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.
-/// `take_array*`/`give_array` recycle buffers; after a warm-up call the pool
-/// holds enough output-box-sized buffers that no further allocation occurs.
-///
-/// Recycling is **shape-bucketed**: [`Pool::give_array`] parks the whole
-/// [`ArrayD`] (buffer *plus* its already-built `IxDyn` dim and strides) in the
-/// bucket for its exact shape, and [`Pool::take_array_uninit`] pops it straight
-/// back out. In a steady-state RHS the same handful of output-box shapes repeat
-/// on every call, so the common checkout is a hash lookup and a `Vec::pop` —
-/// neither the `memset` that a `Vec::resize`-based refill costs nor the
-/// `IxDyn(shape)` / `from_shape_vec` shape+stride reconstruction that a
-/// buffer-only pool has to redo per checkout (both were measurable shares of
-/// the solve: ~9.5% and ~8.3% respectively on the simpleclimate PPM core).
-///
-/// `free` is the spill list for the cases the buckets cannot serve: a
-/// first-of-its-shape checkout, and a returned array that is not in standard
-/// layout (so its buffer, but not its shape, is reusable).
-#[derive(Default)]
-struct Pool {
-    /// Whole recycled arrays, bucketed by exact shape. Keyed by [`DimU`], which
-    /// hashes and compares as a `[usize]` slice, so the hot lookup borrows the
-    /// caller's `&[usize]` with no key materialization.
-    shaped: HashMap<DimU, Vec<ArrayD<f64>>, FxBuildHasher>,
-    /// Bare buffers with no usable shape attached.
-    free: Vec<Vec<f64>>,
-}
-
-impl Pool {
-    /// Check out a zero-filled buffer of `len` elements, reusing a free buffer
-    /// whose capacity already covers `len` (no reallocation in steady state).
-    fn take(&mut self, len: usize) -> Vec<f64> {
-        if let Some(pos) = self.free.iter().position(|b| b.capacity() >= len) {
-            let mut b = self.free.swap_remove(pos);
-            b.clear();
-            b.resize(len, 0.0);
-            b
-        } else if let Some(mut b) = self.free.pop() {
-            // A free buffer exists but is too small; grow it (warm-up only).
-            b.clear();
-            b.resize(len, 0.0);
-            b
-        } else {
-            vec![0.0; len]
-        }
-    }
-
-    /// Check out an owned `ArrayD` of the given row-major `shape` whose element
-    /// contents are **unspecified** — whatever the previous holder of the
-    /// recycled buffer left there.
-    ///
-    /// For kernels that write every element of the box before anything reads it
-    /// (an elementwise `Zip`, a `fill`, a coordinate ramp, an `assign` of a
-    /// same-shape source). A caller that writes only PART of the box — a
-    /// Dirichlet-ghost gather, a reduction accumulator seeded with the identity,
-    /// a region-tiled `makearray` — must use [`Pool::take_array`] instead, or it
-    /// will read the previous kernel's data.
-    fn take_array_uninit(&mut self, shape: &[usize]) -> ArrayD<f64> {
-        if let Some(bucket) = self.shaped.get_mut(shape) {
-            if let Some(arr) = bucket.pop() {
-                // Recycled whole: right shape, right strides, right length —
-                // nothing to rebuild and nothing to refill.
-                return arr;
-            }
-        }
-        let len = shape.iter().copied().product::<usize>().max(1);
-        let buf = self.take(len);
-        ArrayD::from_shape_vec(IxDyn(shape), buf).expect("pool buffer length matches shape")
-    }
-
-    /// Check out a zero-filled owned `ArrayD` of the given row-major `shape`,
-    /// backed by a pooled buffer.
-    fn take_array(&mut self, shape: &[usize]) -> ArrayD<f64> {
-        let mut arr = self.take_array_uninit(shape);
-        arr.fill(0.0);
-        arr
-    }
-
-    /// Return an owned `ArrayD` to the pool, preserving its buffer capacity and
-    /// — when it is in standard (contiguous, row-major) layout, as every buffer
-    /// this module hands out is and the in-place kernels keep it — its built
-    /// shape and strides too, so the next same-shape checkout rebuilds nothing.
-    fn give_array(&mut self, arr: ArrayD<f64>) {
-        if arr.is_standard_layout() {
-            if let Some(bucket) = self.shaped.get_mut(arr.shape()) {
-                bucket.push(arr);
-                return;
-            }
-            let shape: DimU = arr.shape().iter().copied().collect();
-            self.shaped.insert(shape, vec![arr]);
-            return;
-        }
-        let (buf, _offset) = arr.into_raw_vec_and_offset();
-        self.free.push(buf);
-    }
-}
-
 /// The rule-invariant slice of an evaluation environment: everything an
 /// [`EvalCtx`] carries EXCEPT the observed-array map (whose borrow must be
 /// re-taken after each observed rule writes its output) and the per-loop
@@ -1041,6 +939,7 @@ impl<'a> EvalEnv<'a> {
             const_arrays: self.const_arrays,
             recur: None,
             declared: self.declared,
+            walks: CellWalks::default(),
         }
     }
 }
@@ -1122,6 +1021,12 @@ struct EvalCtx<'a> {
     /// compiled model — an empty set never claims a name IS declared, so those
     /// paths keep exactly the diagnosis they had.
     declared: &'a HashSet<String>,
+    /// What this evaluation is told about walking a `faq` cell by cell —
+    /// stop after the first cell — and what it reports back: how many walks
+    /// it took and whether one stopped ([`CellWalks`]). Default on every
+    /// path but the build-time ones that read it
+    /// ([`StandaloneScope::eval_routed`], the build pipeline).
+    walks: CellWalks,
 }
 
 /// The shared empty declared-name set (see [`EvalCtx::declared`]).

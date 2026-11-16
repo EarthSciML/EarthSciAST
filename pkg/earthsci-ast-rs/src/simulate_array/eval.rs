@@ -2,7 +2,7 @@
 //! expression node (arithmetic, transcendentals, array ops, `faq`
 //! contractions with ragged/derived bounds) plus the
 //! standalone [`eval_expression`] entry point. This path is the correctness
-//! reference the vectorized overlay is verified against.
+//! reference the tape is verified against.
 
 use super::gate_walk::{CellBufs, GatePlan, TupleSink};
 use super::*;
@@ -1288,7 +1288,7 @@ pub(crate) fn unary_kernel_f32_of(op: UnCode) -> fn(f64) -> f64 {
 
 #[cfg(test)]
 mod kernel_equivalence_tests {
-    //! The whole-array overlay resolves an operator name to a kernel ONCE per
+    //! The tape resolves an operator name to a kernel ONCE per
     //! AST node ([`binary_kernel`]/[`unary_kernel`]) where the per-cell oracle
     //! re-matches it per element ([`apply_binary`]/[`apply_unary`]). The two
     //! paths must stay bit-identical, so pin them here rather than trusting two
@@ -1678,32 +1678,6 @@ pub(super) fn lookup_array_ref<'a>(name: &str, ctx: &'a EvalCtx) -> Option<&'a A
     None
 }
 
-thread_local! {
-    /// How many `faq` nodes this thread has evaluated by walking the body once
-    /// per cell (or once per contracted term) rather than through the
-    /// whole-array overlay. See [`per_cell_walks`].
-    static PER_CELL_WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// The running count of per-cell `faq` walks on this thread: the number of
-/// times [`eval_faq`] took its per-cell branch (a prefix scan, the output-tuple
-/// loop, or a rank-0 contraction folded term by term) because the whole-array
-/// overlay did not take the node.
-///
-/// The routes that evaluate a document through this evaluator OUTSIDE the
-/// compiled rule set — the build pipeline's observed graph, a field initial
-/// condition — read the delta across one evaluation to learn whether it was
-/// interpreted per cell, which is what a strict compiler refuses
-/// (esm-libraries-spec §2.5.10). A counter rather than a flag, so a nested
-/// evaluation cannot clear what an enclosing one recorded.
-pub(crate) fn per_cell_walks() -> u64 {
-    PER_CELL_WALKS.with(std::cell::Cell::get)
-}
-
-fn note_per_cell_walk() {
-    PER_CELL_WALKS.with(|c| c.set(c.get().wrapping_add(1)));
-}
-
 #[cfg(test)]
 thread_local! {
     static PER_CELL_CELLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -1722,111 +1696,90 @@ pub(super) fn note_per_cell_cell() {
     PER_CELL_CELLS.with(|c| c.set(c.get() + 1));
 }
 
-/// The state of a [`StopAtFirstCell`] on this thread.
-#[derive(Clone, Copy, Default)]
-struct FirstCellStop {
-    /// A strict caller is listening: a per-cell walk stops after its first cell.
-    armed: bool,
-    /// A walk has stopped. Every value computed since is a placeholder.
-    stopped: bool,
-    /// A document error (a latched out-of-range gather) was already pending
-    /// when the walk stopped, so the evaluation fails with it rather than being
-    /// refused.
-    with_error: bool,
-}
-
-thread_local! {
-    static FIRST_CELL_STOP: std::cell::Cell<FirstCellStop> = const {
-        std::cell::Cell::new(FirstCellStop { armed: false, stopped: false, with_error: false })
-    };
-}
-
-/// Stop every per-cell walk at its first cell, for as long as this guard
-/// lives.
+/// What one evaluation is told about walking a `faq` cell by cell, and what
+/// it reports back ([`EvalCtx::walks`]).
 ///
 /// A strict compiler refuses an evaluation the reference evaluator walks per
 /// cell, so the rest of such a walk is work whose only product is a refusal —
-/// on a gate-driven join over a million cells, minutes of it. Armed around the
-/// evaluation, the first `faq` that goes per cell evaluates ONE cell, for its
-/// diagnostic only (a body no route can evaluate is the document's error, and
-/// an out-of-range gather in it must still say so), and stops; every walk
-/// after it stops before its first cell. The evaluation's value is then a
-/// placeholder, and [`per_cell_walk_refused`] tells the caller to discard it
-/// and refuse.
+/// on a gate-driven join over a million cells, minutes of it. With
+/// `stop_at_first` set, the first `faq` that goes per cell evaluates ONE cell,
+/// for its diagnostic only (a body no route can evaluate is the document's
+/// error, and an out-of-range gather in it must still say so), and stops;
+/// every walk after it stops before its first cell. The evaluation's value is
+/// then a placeholder, and [`Self::refused`] tells the caller to discard it.
 ///
-/// The stop is taken exactly where [`per_cell_walks`] counts a walk, so
-/// whether a refusal happens, and its reason, are what a full walk would have
-/// given; only the work behind them is gone.
-pub(crate) struct StopAtFirstCell(FirstCellStop);
+/// The stop is taken exactly where a walk is counted, so whether a refusal
+/// happens, and its reason, are what a full walk would have given; only the
+/// work behind them is gone.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CellWalks {
+    /// Stop every per-cell walk after its first cell.
+    stop_at_first: bool,
+    /// How many `faq` nodes were evaluated by walking the body once per cell
+    /// (or once per contracted term): a prefix scan, the output-tuple loop,
+    /// or a rank-0 contraction folded term by term.
+    count: u64,
+    /// A walk has stopped. Every value computed since is a placeholder.
+    stopped: bool,
+    /// A document error (a latched out-of-range gather) was already pending
+    /// when the walk stopped, so the evaluation fails with it rather than
+    /// being refused.
+    with_error: bool,
+}
 
-impl StopAtFirstCell {
-    pub(crate) fn arm() -> Self {
-        StopAtFirstCell(FIRST_CELL_STOP.with(|c| {
-            c.replace(FirstCellStop {
-                armed: true,
-                ..FirstCellStop::default()
-            })
-        }))
+impl CellWalks {
+    /// Walks that stop after their first cell.
+    pub(crate) fn stopping() -> Self {
+        CellWalks {
+            stop_at_first: true,
+            ..CellWalks::default()
+        }
     }
 
-    /// Whether any per-cell walk stopped under this guard, error or not: what
-    /// was computed is not the whole answer.
+    /// Whether any `faq` was walked per cell.
+    pub(crate) fn walked(&self) -> bool {
+        self.count > 0
+    }
+
+    /// Whether a walk stopped, error or not: what was computed is not the
+    /// whole answer.
     pub(crate) fn stopped(&self) -> bool {
-        FIRST_CELL_STOP.with(|c| c.get().stopped)
+        self.stopped
+    }
+
+    /// Whether a walk stopped with no document error pending, so that what
+    /// was computed since — a value, or an error raised by reading a
+    /// placeholder — is not the document's, and the evaluation is refused.
+    pub(crate) fn refused(&self) -> bool {
+        self.stopped && !self.with_error
+    }
+
+    fn note_walk(&mut self) {
+        self.count = self.count.wrapping_add(1);
+    }
+
+    /// Called after a per-cell walk's first cell. Under `stop_at_first` it
+    /// records the stop, and whether that cell latched a document error, and
+    /// answers `true`: the walk ends here.
+    pub(super) fn after_first_cell(&mut self) -> bool {
+        if !self.stop_at_first {
+            return false;
+        }
+        if !self.stopped {
+            self.stopped = true;
+            self.with_error = CONST_OOB.with(|l| l.borrow().is_some());
+        }
+        true
     }
 }
 
-impl Drop for StopAtFirstCell {
-    fn drop(&mut self) {
-        FIRST_CELL_STOP.with(|c| c.set(self.0));
-    }
-}
-
-/// What a refusal raised from a walk [`StopAtFirstCell`] stopped says after its
+/// What a refusal raised from a walk [`CellWalks`] stopped says after its
 /// reason, in the words the Julia binding uses for its own: the cells the walk
 /// did not evaluate may still hold a document error (an out-of-range gather at
 /// the last cell of a prefix scan), and only the interpreter would find it.
 pub(crate) const ONE_CELL_NOTE: &str = "only one cell of it was evaluated before this refusal, \
     so a document error in a cell that was not (an out-of-range gather at the last cell, say) \
     is not reported here; the interpreter evaluates every cell and reports it";
-
-/// Whether a per-cell walk on this thread stopped under a [`StopAtFirstCell`]
-/// with no document error pending, so that what was computed since — a value,
-/// or an error raised by reading a placeholder — is not the document's, and
-/// the evaluation is refused.
-pub(crate) fn per_cell_walk_refused() -> bool {
-    let s = FIRST_CELL_STOP.with(std::cell::Cell::get);
-    s.stopped && !s.with_error
-}
-
-/// Whether a per-cell walk has already stopped on this thread, so the next
-/// one need not evaluate even its first cell.
-fn per_cell_walk_stopped() -> bool {
-    FIRST_CELL_STOP.with(|c| c.get().stopped)
-}
-
-/// Whether a [`StopAtFirstCell`] is armed on this thread.
-fn stop_at_first_cell() -> bool {
-    FIRST_CELL_STOP.with(|c| c.get().armed)
-}
-
-/// Called after a per-cell walk's first cell. Under an armed
-/// [`StopAtFirstCell`] it records the stop, and whether that cell latched a
-/// document error, and answers `true`: the walk ends here.
-pub(super) fn stop_after_first_cell() -> bool {
-    FIRST_CELL_STOP.with(|c| {
-        let mut s = c.get();
-        if !s.armed {
-            return false;
-        }
-        if !s.stopped {
-            s.stopped = true;
-            s.with_error = CONST_OOB.with(|l| l.borrow().is_some());
-            c.set(s);
-        }
-        true
-    })
-}
 
 thread_local! {
     /// First `E_TREEWALK_CONSTARRAY_OOB` raised during the current evaluation.
@@ -2339,13 +2292,6 @@ pub(super) fn eval_const(node: &ExpressionNode) -> Value {
     Value::Scalar(scalar.unwrap_or(f64::NAN))
 }
 
-/// Whether this `const` node's payload is an array: the literals an `index`
-/// reads whole as its gather source. A scalar payload takes the untouched path.
-#[inline]
-pub(super) fn is_inline_const_array(node: &ExpressionNode) -> bool {
-    node.value.as_ref().is_some_and(crate::ConstValue::is_array)
-}
-
 /// Evaluate a standalone expression against a set of named array inputs, reusing
 /// the array evaluator — in particular the M1 `faq` machinery in
 /// [`eval_faq`]: supply the arrays the expression reads in `inputs`, with
@@ -2379,7 +2325,7 @@ pub fn eval_expression(
         derived_extents: crate::faq::empty_derived_extents(),
         const_arrays: ConstArrayScope::empty(),
     }
-    .eval(expr)
+    .eval_fast(expr)
 }
 
 /// [`eval_expression`] with the build-time **value-invention derived extents**
@@ -2433,7 +2379,7 @@ pub fn eval_expression_with_extents(
         derived_extents,
         const_arrays: ConstArrayScope::empty(),
     }
-    .eval(expr)
+    .eval_fast(expr)
 }
 
 /// [`eval_expression_with_extents`] with an explicit CONST-ARRAY registry
@@ -2473,7 +2419,42 @@ pub fn eval_expression_with_extents_and_consts(
         derived_extents,
         const_arrays,
     }
-    .eval(expr)
+    .eval_fast(expr)
+}
+
+/// A state-free build-time expression (a field `ic`'s right-hand side, a
+/// definition of its scope, an initialization equation) evaluated by the
+/// route `mode` names, over the build-time ARRAY scope `scope` bound by name
+/// (where state arrays would bind) and the parameters `params` (name →
+/// value). Ranges are resolved against `index_sets` first. `name` is the
+/// variable the expression defines, if any.
+///
+/// The independent variable is `params["t"]` where the scope binds it — the
+/// start of the run for an `ic` right-hand side (esm-spec §11.4.2) — and `0`
+/// otherwise.
+pub(crate) fn eval_buildtime_field_routed(
+    name: Option<&str>,
+    expr: &Expr,
+    index_sets: &HashMap<String, crate::types::IndexSet>,
+    params: &HashMap<String, f64>,
+    scope: &HashMap<String, ArrayD<f64>>,
+    mode: BuildEval,
+) -> Result<Routed, CompileError> {
+    let mut resolved = expr.clone();
+    crate::faq::resolve_expr_ranges(&mut resolved, index_sets)?;
+    let param_names: Vec<String> = params.keys().cloned().collect();
+    let param_vec: Vec<f64> = param_names.iter().map(|n| params[n]).collect();
+    let t = params.get("t").copied().unwrap_or(0.0);
+    let inputs: ArrMap = scope.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    StandaloneScope {
+        inputs: &inputs,
+        params: &param_vec,
+        param_names: &param_names,
+        t,
+        derived_extents: crate::faq::empty_derived_extents(),
+        const_arrays: ConstArrayScope::empty(),
+    }
+    .eval_routed(name.unwrap_or(STANDALONE_EXPRESSION), &resolved, None, mode)
 }
 
 /// The scope a standalone expression is evaluated in, outside any compiled
@@ -2509,8 +2490,13 @@ impl StandaloneScope<'_> {
     }
 
     /// Evaluate `expr` (ranges already resolved) in this scope, reporting a
-    /// fault the evaluation latched as the error.
-    pub(crate) fn eval(&self, expr: &Expr) -> Result<Value, CompileError> {
+    /// fault the evaluation latched as the error; its per-cell walks are told
+    /// and reported through `walks`.
+    pub(crate) fn eval_walking(
+        &self,
+        expr: &Expr,
+        walks: &mut CellWalks,
+    ) -> Result<Value, CompileError> {
         check_evaluable(expr)?;
         // A derived range over an unsized producer is refused rather than
         // contracted as empty.
@@ -2525,8 +2511,10 @@ impl StandaloneScope<'_> {
         }
         self.with_env(|env| {
             let mut ctx = env.ctx(self.inputs);
+            ctx.walks = *walks;
             let faults = FaultScope::enter();
             let v = eval(expr, &mut ctx);
+            *walks = ctx.walks;
             match faults.finish() {
                 Some(fault) => Err(CompileError::InterpreterBuildError {
                     details: fault.message,
@@ -2534,6 +2522,90 @@ impl StandaloneScope<'_> {
                 None => Ok(v),
             }
         })
+    }
+
+    /// Evaluate `expr` (ranges resolved) over whole arrays where it can be:
+    /// [`Self::eval_routed`]'s non-strict [`BuildEval::Fast`] route, for an
+    /// expression that defines no variable.
+    pub(crate) fn eval_fast(&self, expr: &Expr) -> Result<Value, CompileError> {
+        self.eval_routed(
+            STANDALONE_EXPRESSION,
+            expr,
+            None,
+            BuildEval::Fast { strict: false },
+        )
+        .map(Routed::into_value)
+    }
+
+    /// Evaluate the build-time value `name := expr` (ranges resolved) by the
+    /// route `mode` names, and say which evaluator served it.
+    ///
+    /// Under [`BuildEval::Fast`] the reference evaluator is tried first with
+    /// its walks stopping at their first cell ([`CellWalks::stopping`]): what it evaluates over whole arrays, with
+    /// no `faq` walked cell by cell, is its value. Once a walk would go cell
+    /// by cell the whole expression is lowered on a standalone tape instead
+    /// ([`eval_observed_taped`]), from the same inputs. A tape decline is a
+    /// refusal when `strict`, and otherwise the reference evaluator's full
+    /// per-cell walk. [`BuildEval::PerCell`] is the reference evaluator alone.
+    pub(crate) fn eval_routed(
+        &self,
+        name: &str,
+        expr: &Expr,
+        fill_shape: Option<&[usize]>,
+        mode: BuildEval,
+    ) -> Result<Routed, CompileError> {
+        let walked = |scope: &Self| {
+            let mut walks = CellWalks::default();
+            let v = scope.eval_walking(expr, &mut walks)?;
+            let route = if walks.walked() {
+                BuildRoute::PerCell
+            } else {
+                BuildRoute::Whole
+            };
+            Ok(Routed::Value(v, route))
+        };
+        let BuildEval::Fast { strict } = mode else {
+            return walked(self);
+        };
+        let mut walks = CellWalks::stopping();
+        let v = self.eval_walking(expr, &mut walks);
+        let stopped = walks.stopped();
+        if !walks.refused() {
+            // A stopped walk here latched a document error in its first
+            // cell, which `v` reports.
+            return v.map(|v| {
+                let route = if stopped {
+                    BuildRoute::PerCell
+                } else {
+                    BuildRoute::Whole
+                };
+                Routed::Value(v, route)
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use super::tape::StandaloneError;
+            match eval_observed_taped(name, expr, self, fill_shape, false)
+                .expect("a non-recurrence always reaches the tape")
+            {
+                Ok(a) => Ok(Routed::Value(value_of_taped(a), BuildRoute::Tape)),
+                Err(StandaloneError::Fault(details)) => {
+                    Err(CompileError::InterpreterBuildError { details })
+                }
+                Err(StandaloneError::Declined(why)) if strict => Ok(Routed::Refused(why)),
+                Err(StandaloneError::Declined(_)) => walked(self),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (name, fill_shape);
+            if strict {
+                return Ok(Routed::Refused(
+                    "this build has no tape to lower it on".to_string(),
+                ));
+            }
+            walked(self)
+        }
     }
 
     /// Evaluate the observed `name := expr` in this scope if it is a CAUSAL
@@ -2549,11 +2621,13 @@ impl StandaloneScope<'_> {
     /// this scope, so a recurrence needs this path as well as the per-step
     /// one. It resolves the frame with the same [`lower_recurrence`] the
     /// compiled path uses and runs the same [`sweep_recurrence`]; only the
-    /// surrounding environment differs.
+    /// surrounding environment differs. The sweep's cells are told and
+    /// reported through `walks`.
     pub(crate) fn eval_recurrence(
         &self,
         name: &str,
         expr: &Expr,
+        walks: &mut CellWalks,
     ) -> Option<Result<ArrayD<f64>, CompileError>> {
         // Cheap structural test first: no self-read, nothing to do, and every
         // document that does not use the construct pays one expression walk.
@@ -2585,14 +2659,17 @@ impl StandaloneScope<'_> {
         let faults = FaultScope::enter();
         let arr = self.with_env(|env| {
             let mut ctx = env.ctx(self.inputs);
-            super::rhs::sweep_recurrence(
+            ctx.walks = *walks;
+            let arr = super::rhs::sweep_recurrence(
                 &scope,
                 &lowered.idx_names,
                 &lowered.ranges,
                 &lowered.body,
                 lowered.axis,
                 &mut ctx,
-            )
+            );
+            *walks = ctx.walks;
+            arr
         });
         // §5.19.4: an unavailable self-read is a FAULT, not a value. The latch is
         // the channel the tree walk has for one, and draining it here is what makes
@@ -2606,13 +2683,84 @@ impl StandaloneScope<'_> {
     }
 }
 
+/// The name a standalone expression is lowered under on the tape: no
+/// document variable can spell it, so no input is mistaken for a self-read.
+const STANDALONE_EXPRESSION: &str = "\u{0}expression";
+
+/// How [`StandaloneScope::eval_routed`] evaluates a build-time value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuildEval {
+    /// The reference evaluator, walking every `faq` cell by cell: what the
+    /// `interpreter` does, and an inline test's reference.
+    PerCell,
+    /// Whole arrays: the reference evaluator where it walks no cell, the tape
+    /// where it would. `strict` refuses what the tape declines rather than
+    /// walking it per cell.
+    Fast { strict: bool },
+}
+
+impl BuildEval {
+    /// The route a compiler takes: per cell under the `interpreter`, and
+    /// strict everywhere else.
+    pub(crate) fn of_compiler(interpreter: bool) -> BuildEval {
+        if interpreter {
+            BuildEval::PerCell
+        } else {
+            BuildEval::Fast { strict: true }
+        }
+    }
+}
+
+/// Which evaluator served a build-time value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuildRoute {
+    /// The reference evaluator over whole arrays, no `faq` walked per cell.
+    Whole,
+    /// A standalone tape program.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Tape,
+    /// The reference evaluator, with a `faq` walked cell by cell.
+    PerCell,
+}
+
+/// What [`StandaloneScope::eval_routed`] produced.
+#[derive(Debug)]
+pub(crate) enum Routed {
+    /// The value, and the evaluator that served it.
+    Value(Value, BuildRoute),
+    /// Strict, and the tape declined what would have been walked per cell:
+    /// the tape's reason.
+    Refused(String),
+}
+
+impl Routed {
+    /// The value of a non-strict route, which refuses nothing.
+    pub(crate) fn into_value(self) -> Value {
+        match self {
+            Routed::Value(v, _) => v,
+            Routed::Refused(_) => unreachable!("a non-strict route refuses nothing"),
+        }
+    }
+}
+
+/// A standalone tape's value as the reference evaluator gives it: a 0-d array
+/// is a scalar.
+#[cfg(not(target_arch = "wasm32"))]
+fn value_of_taped(a: ArrayD<f64>) -> Value {
+    if a.ndim() == 0 {
+        Value::Scalar(a[IxDyn(&[])])
+    } else {
+        Value::Array(Box::new(a))
+    }
+}
+
 /// Evaluate the build-time observed `name := expr` on a standalone tape
 /// (`tape::eval_standalone_rule`) rather than through the reference
-/// evaluator: what a strict compiler does with an observed the whole-array
-/// overlay declines, in place of walking it per cell.
+/// evaluator: what [`StandaloneScope::eval_routed`] does with a value the
+/// reference evaluator would walk per cell.
 ///
 /// `expr` has its ranges resolved, as for
-/// [`StandaloneScope::eval`]. Every name in `scope.inputs`
+/// [`StandaloneScope::eval_walking`]. Every name in `scope.inputs`
 /// that `expr` mentions is seeded as a known value, and `params` bind
 /// `param_names`. A causal self-reference (esm-spec §4.3.1.1) lowers as the
 /// model's own recurrence rule does, to one ordered sweep; one the lowering
@@ -2678,6 +2826,7 @@ pub(crate) fn eval_observed_taped(
         &seeded,
         scope.param_names,
         scope.params,
+        scope.t,
         scope.const_arrays,
         true,
     ))
@@ -4618,42 +4767,10 @@ pub(super) fn ragged_upper_bound(offsets: &str, of: &[String], ctx: &EvalCtx) ->
     arr.get(IxDyn(&idx)).map(|v| v.round() as i64).unwrap_or(0)
 }
 
-thread_local! {
-    /// Kernel-buffer pool for the vectorized overlay reached OUTSIDE the
-    /// compiled-rule driver: a standalone `faq` materialized by
-    /// [`eval_faq`], and an `AlgebraicRule::ArrayLoop` observed. Both used
-    /// to build a `Pool::default()` per call, so their pool was empty every
-    /// time and every kernel intermediate hit the allocator — the RHS-rule path
-    /// has recycled through [`RhsScratch`]'s pool since ess-mro, but the
-    /// observed path (where a stencil-heavy model does most of its work) never
-    /// did.
-    ///
-    /// Thread-local rather than a field on `EvalCtx`: the overlay takes the
-    /// pool by `&mut` while `EvalCtx` is borrowed shared, and the observed and
-    /// aggregate call sites construct their contexts independently.
-    static ARRAYOP_POOL: RefCell<Pool> = RefCell::new(Pool::default());
-}
-
-/// Run `f` with this thread's persistent kernel-buffer pool.
-///
-/// Re-entrancy is possible in principle — an outer aggregate whose vectorized
-/// attempt FAILED falls back to the per-cell oracle, which may evaluate an
-/// inner aggregate — but only after the outer borrow has been released, since
-/// the borrow spans just the overlay attempt. The `try_borrow_mut` fallback to
-/// a private pool makes that structural claim unnecessary: a nested use loses
-/// the recycling, never correctness, and never panics.
-pub(super) fn with_faq_pool<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
-    ARRAYOP_POOL.with(|p| match p.try_borrow_mut() {
-        Ok(mut pool) => f(&mut pool),
-        Err(_) => f(&mut Pool::default()),
-    })
-}
-
 /// The evaluation parameters of a standalone `faq` node.
 ///
-/// Extracted in ONE place so the per-cell oracle ([`eval_faq`]) and the
-/// vectorized overlay's nested-aggregate arm ([`eval_vec_nested_aggregate`])
-/// derive them from the same code. A divergence here (a different contracted-
+/// Extracted in ONE place so the per-cell oracle ([`eval_faq`]) and the tape
+/// lowering derive them from the same code. A divergence here (a different contracted-
 /// index order, a different `reduce` default) would silently make the fast path
 /// compute a *different* array while both look correct in isolation.
 pub(super) struct ArrayOpSpec<'n> {
@@ -4681,8 +4798,7 @@ impl ArrayOpSpec<'_> {
     /// at build time — an OVERLAP gate (§5.5.6) or a value-equality `on` gate
     /// (§5.5.8) — i.e. one the driver can act on?
     ///
-    /// The whole-array overlay and the tape lowering both consult this and
-    /// decline: they evaluate the FULL product as shifted whole-array slices,
+    /// The tape lowering consults this and declines: they evaluate the FULL product as shifted whole-array slices,
     /// which is bit-identical but reinstates exactly the `O(∏ranges)` cost the
     /// gate exists to remove.
     pub(super) fn has_drivable_overlap(&self) -> bool {
@@ -4814,14 +4930,6 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // the previous cell already summed. Recognized, it becomes one sweep with a
     // running accumulator — bit-identical, because both fold the window ascending
     // in the same association (see [`PrefixScan`]).
-    //
-    // Detected BEFORE the whole-array overlay is tried, because the two race and
-    // the scan must win: the overlay would evaluate a cumulative aggregate as an
-    // N-tuple fold of N-element arrays — correct, and bit-identical, but O(N²)
-    // where the scan is O(N). (A widening of the overlay's index coverage made it
-    // start accepting these, which regressed
-    // `forward_scan_work_grows_linearly_not_quadratically`.) A non-cumulative
-    // aggregate returns `None` here and goes to the overlay as before.
     let cells = FaqCells::new(
         idx_names,
         &ranges,
@@ -4833,107 +4941,7 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         None,
         &gates,
     );
-    let scan = cells.scan;
 
-    // ---- Vectorized fast path (whole-array) --------------------------------
-    // Evaluate the aggregate with the whole-array `eval_vec` overlay (off
-    // under the per-cell oracle), instead of walking the body once per cell:
-    //   * a pure MAP (out == ranges — e.g. a level-set Godunov `|∇φ|` stencil, a
-    //     pointwise behaviour-stack field),
-    //   * a static einsum CONTRACTION (`eval_vec_contracted` folds the window as
-    //     shifted whole-array slices — e.g. a conservative-regrid `sum_product`
-    //     over the source cells),
-    //   * a §5.3 `filter` (a per-cell fuel gate, a `overlap > 0` regrid sparsity),
-    //     carried by masking each term with the reduction identity.
-    // The kernels reuse the identical `apply_binary`/`apply_unary` kernels
-    // functions and ghost-0 convention, so the result is bit-identical to the
-    // per-cell oracle below; any op / ragged-bound the overlay does not handle
-    // returns `None` and we fall through. A local `Pool` recycles intermediates.
-    // `ctx.recur.is_none()`: CONFORMANCE_SPEC §5.19.2 forbids evaluating anything
-    // inside a recurrence sweep through the whole-array overlay. The overlay
-    // resolves names through the state/observed tables, which do not hold the
-    // array being swept, and it batches cells the sweep must order — so it would
-    // be both wrong and unordered. Declining is conservative: a nested aggregate
-    // that does NOT read the swept array would also be correct vectorized, but
-    // telling the two apart per node buys nothing on an inherently sequential
-    // rule.
-    if !shape.is_empty() && scan.is_none() && gates.is_empty() && ctx.recur.is_none() {
-        // The pool is the THREAD's, not a fresh one per call: a stencil-heavy
-        // model materializes dozens of standalone aggregates per RHS evaluation
-        // and a per-call `Pool::default()` started empty every time, so every
-        // kernel intermediate went to the allocator.
-        let materialized = with_faq_pool(|pool| {
-            try_eval_faq_vectorized(
-                idx_names,
-                &ranges,
-                body,
-                &contract_names,
-                &contract_dims,
-                reduce,
-                filter,
-                &*ctx,
-                pool,
-            )
-            .map(|(vv, _ops)| {
-                // `try_eval_faq_vectorized` already verified the value covers
-                // the output box exactly (bailing to `None` otherwise) and lifted
-                // a bare scalar into an owned box buffer, so a plain view→owned
-                // suffices.
-                let out = vv.view().expect("vectorized faq has a view").to_owned();
-                vv.release(pool);
-                out
-            })
-        });
-        if let Some(out) = materialized {
-            return Value::Array(Box::new(out));
-        }
-    }
-
-    // ---- Rank-0 contraction as a whole-array map, then one fold -----------
-    // A fully contracted node (`total = Σ_r x[r]`) has no output box for the
-    // overlay above to evaluate over, so it used to be folded term by term,
-    // one tree walk per term. Its body is a pure map over the CONTRACTION box
-    // instead: evaluate that once through the overlay, with the contracted
-    // symbols bound as the box's axes, and fold the resulting array. The fold
-    // visits the terms in row-major order — the order `CartesianTuples` walks
-    // the contraction odometer, last index fastest — starting from the
-    // identity with the same `combine`, so the result is bit-identical to the
-    // loop below. Declined (to that loop) for a filter, which the loop SKIPS
-    // rather than folding the identity (not bit-identical for signed zeros),
-    // for bounds that vary, and wherever the overlay above is declined.
-    if shape.is_empty()
-        && !contract_names.is_empty()
-        && filter.is_none()
-        && scan.is_none()
-        && gates.is_empty()
-        && ctx.recur.is_none()
-        && let Some(box_ranges) = cells.static_ranges.as_deref()
-    {
-        let terms = with_faq_pool(|pool| {
-            try_eval_faq_vectorized(
-                &contract_names,
-                box_ranges,
-                body,
-                &[],
-                &[],
-                reduce,
-                None,
-                &*ctx,
-                pool,
-            )
-            .map(|(vv, _ops)| {
-                let out = vv.view().expect("vectorized faq has a view").to_owned();
-                vv.release(pool);
-                out
-            })
-        });
-        if let Some(terms) = terms {
-            let acc = terms
-                .iter()
-                .fold(reduce.identity(), |acc, &t| reduce.combine(acc, t));
-            return Value::Scalar(acc);
-        }
-    }
     // An EMPTY output box (a size-0 index set) has no cell to evaluate: the
     // result is the empty array of that box. The buffer below is sized
     // `max(1)` for the rank-0 case, and reshaping its one element into a box
@@ -4945,20 +4953,10 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // contract is a single scalar evaluation, not a walk.
     let is_walk = !shape.is_empty() || !contract_names.is_empty();
     if is_walk {
-        if !gates.is_empty() {
-            super::vectorized::note_overlay_decline(
-                "faq: a join gate (the overlay takes no gated `faq`; the gate drives a \
-                 per-cell enumeration)",
-            );
-        } else if ctx.recur.is_some() {
-            super::vectorized::note_overlay_decline(
-                "faq: inside a recurrence sweep (CONFORMANCE_SPEC §5.19.2)",
-            );
-        }
-        note_per_cell_walk();
+        ctx.walks.note_walk();
         // A strict caller has already been told to refuse (see
-        // [`StopAtFirstCell`]): this walk's value is never read.
-        if per_cell_walk_stopped() {
+        // [`CellWalks`]): this walk's value is never read.
+        if ctx.walks.stopped() {
             return if shape.is_empty() {
                 Value::Scalar(0.0)
             } else {
@@ -4985,7 +4983,7 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 /// rules (`rhs.rs`). It recognizes a forward prefix scan
 /// ([`detect_prefix_scan`]) and sweeps it in O(N); drives the contraction
 /// from resolved join gates when there are any; and honours a
-/// [`StopAtFirstCell`], counting each cell it evaluates.
+/// stop at the first cell ([`CellWalks`]), counting each cell it evaluates.
 pub(super) struct FaqCells<'s> {
     idx_names: &'s [String],
     ranges: &'s [(i64, i64)],
@@ -5087,7 +5085,7 @@ impl<'s> FaqCells<'s> {
                 i_name: &idx_names[scan.axis],
                 j_name: &contract_names[0],
                 // One step of one scan when the walk is to stop at its first cell.
-                bounds: if !stop_at_first_cell() {
+                bounds: if !ctx.walks.stop_at_first {
                     (scan_lo, scan_hi)
                 } else if scan.reverse {
                     (scan_lo.max(scan_hi), scan_hi)
@@ -5109,7 +5107,7 @@ impl<'s> FaqCells<'s> {
                     full[scan.axis] = i;
                     sink(&full, acc, ctx);
                 });
-                if stop_after_first_cell() {
+                if ctx.walks.after_first_cell() {
                     break;
                 }
             }
@@ -5171,7 +5169,7 @@ impl<'s> FaqCells<'s> {
                 sink(tuple, v, ctx);
                 if is_walk {
                     note_per_cell_cell();
-                    if stop_after_first_cell() {
+                    if ctx.walks.after_first_cell() {
                         break;
                     }
                 }
@@ -5203,45 +5201,6 @@ impl<'s> FaqCells<'s> {
             }
         }
     }
-}
-
-/// Would the per-cell [`eval_faq`] path recognize this `makearray` region
-/// value as a forward prefix scan (esm-spec §4.3.1)?
-///
-/// The whole-array overlay evaluates a region value through
-/// `eval_vec_nested_aggregate` → `try_eval_faq_vectorized`, which does NOT
-/// consult [`detect_prefix_scan`]: a cumulative aggregate would come out
-/// bit-identical but as an O(N²) triangular fold where the scan is O(N) — the
-/// exact regression `forward_scan_work_grows_linearly_not_quadratically` pins.
-/// So the overlay is declined for a `makearray` whose region value the scan
-/// would have claimed. Only the region values themselves need this test: an
-/// aggregate nested DEEPER already reaches the overlay's nested arm on the
-/// existing paths, scan-detection included or not, and this change does not
-/// alter that.
-///
-/// The check is one field test (`detect_prefix_scan` needs a `filter`) for the
-/// unfiltered region values that make up every stencil template, so the
-/// expensive spec build never runs on the hot path.
-pub(super) fn region_value_is_prefix_scan(value: &Expr) -> bool {
-    let Expr::Operator(n) = value else {
-        return false;
-    };
-    if n.filter.is_none() {
-        return false;
-    }
-    let Some(spec) = faq_spec(n) else {
-        return false;
-    };
-    let static_ranges = static_contract_ranges(&spec.contract_dims);
-    detect_prefix_scan(
-        spec.idx_names,
-        &spec.ranges,
-        &spec.contract_names,
-        static_ranges.as_deref(),
-        spec.body,
-        spec.filter,
-    )
-    .is_some()
 }
 
 pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
@@ -5285,77 +5244,6 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         .map(|d| (hi[d] - lo[d] + 1).max(0) as usize)
         .collect();
     let origin = lo.clone();
-
-    // ---- Vectorized fast path (whole-array region writes) ------------------
-    // A `makearray` used as an observed's whole body — every boundary-dispatch
-    // stencil a discretization template expands to — reaches the evaluator HERE,
-    // not through `eval_faq`, so it had no overlay entry at all: its region
-    // values vectorized (they are `faq`s, which try the overlay
-    // themselves) but the assembly around them stayed a per-cell
-    // `CartesianTuples` walk writing through bounds-checked dynamic-stride
-    // `ArrayD` indexing.
-    //
-    // `eval_vec_makearray` is the same region-sub-range-write assembly the
-    // compiled-rule path already uses (pinned bit-identical by
-    // `covered_makearray_region_dispatch`), so routing to it keeps the answer
-    // identical while making the work N-independent and pool-backed.
-    //
-    // Gated on `loop_binds` being empty. That gate USED to be pure
-    // cost-avoidance — "inside a per-cell loop the nested aggregates depend on
-    // the enclosing bindings and the overlay would bail anyway, once per cell,
-    // which is pure loss". Since `nested_aggregate_capture` learned to see
-    // through shadowing, the bail is no longer certain, so the gate now earns
-    // its keep on CORRECTNESS instead, and must stay:
-    //
-    // nothing below tests the region values against `ctx.loop_binds`. A nested
-    // aggregate is still guarded (`eval_vec_nested_aggregate` scans those keys
-    // itself), but a region value that names an enclosing per-cell index
-    // DIRECTLY is not: the box carries no symbols, so `eval_vec_variable` walks
-    // past `cbind` and `syms` straight into the state/observed/parameter
-    // tables, and a loop index sharing a name with one of those would silently
-    // resolve to the wrong value. Admitting non-empty `loop_binds` therefore
-    // requires an `expr_mentions` scan of every region value against every
-    // bound name — which is exactly the per-axis, per-region body walk costed
-    // below, now paid once per cell — to buy a speed-up that only applies
-    // inside a loop something else already fell back to.
-    //
-    // The box carries NO output-index symbols, because a `makearray` reached
-    // here is not a cell of an enclosing `faq`: nothing is bound around it,
-    // and each region value is evaluated exactly once (not once per cell), so
-    // `eval_vec_nested_aggregate`'s hoisting precondition — "the nested body
-    // must not depend on an enclosing bound index" — is vacuously satisfied and
-    // its `expr_mentions` scan has nothing to test. That is not cosmetic:
-    // placeholder names cost one full walk of the region body PER AXIS PER
-    // REGION, and on a 7-region PPM template that scan alone was 43% of the run.
-    if !overlay_off()
-        && ctx.loop_binds.is_empty()
-        && !shape.contains(&0)
-        && !values.iter().any(region_value_is_prefix_scan)
-        // See the same gate in `eval_faq`: CONFORMANCE_SPEC §5.19.2.
-        && ctx.recur.is_none()
-    {
-        let bx = VecBox {
-            syms: &[],
-            lo: &lo,
-            shape: &shape,
-            cnames: &[],
-            cvals: &[],
-        };
-        let materialized = with_faq_pool(|pool| {
-            let mut ops = 0usize;
-            eval_vec_makearray(node, &bx, &*ctx, pool, &mut ops).map(|vv| {
-                let out = vv
-                    .view()
-                    .expect("vectorized makearray has a view")
-                    .to_owned();
-                vv.release(pool);
-                out
-            })
-        });
-        if let Some(out) = materialized {
-            return Value::Array(Box::new(out));
-        }
-    }
 
     let mut arr = ArrayD::<f64>::zeros(IxDyn(&shape));
     for (region, value_expr) in regions.iter().zip(values.iter()) {

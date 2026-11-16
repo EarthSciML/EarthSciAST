@@ -325,6 +325,21 @@ impl TapeBuilder<'_> {
             bail_tape!("faq: empty output box");
         }
         let bounds = self.tuple_dim_bounds(idx_names, contract_names, contract_dims)?;
+        // A contracted range that is empty — a zero-length table, as an
+        // ingesting document has before its data is read — has no term in
+        // any cell, so every cell is the semiring's identity, as the
+        // interpreter's fold over no terms gives. The gate and the body read
+        // the table's columns, which have no values to read.
+        if bounds
+            .iter()
+            .any(|b| matches!(b, DimBound::Static(l, h) if h < l))
+        {
+            let identity = LV::Lit(reduce.identity());
+            if ranges.is_empty() {
+                return Ok(identity);
+            }
+            return Ok(self.emit_fill(&identity, &shape, &lo, Cadence::Const));
+        }
         let gates = match join {
             Some(j) => self.build_join_gates(j)?,
             None => Vec::new(),
@@ -905,6 +920,7 @@ impl TapeBuilder<'_> {
             &[],
             self.const_arrays,
             self.array_bool_reductions,
+            Cadence::Const,
             |mut b| {
                 b.defer_consts = true;
                 for FoldInput { name, shape, vals } in inputs {
@@ -962,7 +978,7 @@ impl TapeBuilder<'_> {
                         .collect();
                     c.borrow_mut().push(held);
                 });
-                let a = standalone::run_standalone_export(prog, name, &[], &[]).ok()?;
+                let a = standalone::run_standalone_export(prog, name, &[], &[], 0.0).ok()?;
                 Some(a.iter().copied().collect())
             },
         )

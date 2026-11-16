@@ -6,8 +6,10 @@
 //!
 //! * the build pipeline (`crate::prepare`), which evaluates a document's
 //!   state-free observeds before the model is compiled. Under a strict
-//!   compiler, an observed the whole-array overlay declines is lowered here
-//!   instead of being walked by the reference evaluator: its inputs (ingested
+//!   compiler, an observed the reference evaluator would walk per cell is
+//!   lowered here instead (and so is a field initial condition, an
+//!   initialization equation and a standalone expression, by
+//!   `StandaloneScope::eval_routed`): its inputs (ingested
 //!   columns, the build-time fields evaluated before it) are seeded as known
 //!   [`Instr::ConstArray`] slots, the rule is lowered exactly as the model's
 //!   own tape would lower it, and the program runs once;
@@ -41,7 +43,8 @@ pub(crate) enum StandaloneError {
 
 /// Lower `rule` alone, with each of `inputs` bound to its known value, and
 /// run it once. `params` are the values of `param_names`; a name read that is
-/// neither an input, a parameter nor a loop symbol declines.
+/// neither an input, a parameter nor a loop symbol declines. `t` is the
+/// independent variable's value.
 ///
 /// `pipeline` is the build pipeline's route, which lowers an array-valued
 /// `bool_and_or` reduction as its reference evaluator walks it
@@ -54,12 +57,13 @@ pub(in crate::simulate_array) fn eval_standalone_rule(
     inputs: &[(&str, &ndarray::ArrayD<f64>)],
     param_names: &[String],
     params: &[f64],
+    t: f64,
     const_arrays: &ConstArrayScope,
     pipeline: bool,
 ) -> Result<ndarray::ArrayD<f64>, StandaloneError> {
     let prog = build_standalone_program(rule, inputs, param_names, const_arrays, pipeline)
         .map_err(|b| StandaloneError::Declined(b.reason))?;
-    run_standalone_program(prog, rule, param_names, params)
+    run_standalone_program(prog, rule, param_names, params, t)
 }
 
 fn build_standalone_program(
@@ -70,7 +74,16 @@ fn build_standalone_program(
     pipeline: bool,
 ) -> LResult<TapeProgram> {
     let name = observed_rule_var(rule);
-    with_standalone_builder(name, param_names, const_arrays, pipeline, |mut b| {
+    // A rule that reads the time is homed where a time read lands; the
+    // program runs once either way.
+    let mut reads = HashSet::new();
+    collect_variable_names(observed_rule_body(rule), &mut reads);
+    let home = if reads.contains("t") {
+        Cadence::Continuous
+    } else {
+        Cadence::Const
+    };
+    with_standalone_builder(name, param_names, const_arrays, pipeline, home, |mut b| {
         let _rule_precision = crate::precision::has_variable_overrides()
             .then(|| crate::precision::enter(crate::precision::of_variable(name)));
         for (input, value) in inputs {
@@ -91,8 +104,8 @@ fn build_standalone_program(
     })
 }
 
-/// Run `f` on a fresh builder for the CONST observed `name` alone, inside its
-/// rule: no states, no forcing inputs, and only the parameters
+/// Run `f` on a fresh builder for the observed `name` alone, inside its rule
+/// homed at `home`: no states, no forcing inputs, and only the parameters
 /// `param_names`. `f` binds the inputs, lowers, and finishes the program
 /// ([`TapeBuilder::finish_standalone`]).
 pub(super) fn with_standalone_builder<R>(
@@ -100,6 +113,7 @@ pub(super) fn with_standalone_builder<R>(
     param_names: &[String],
     const_arrays: &ConstArrayScope,
     pipeline: bool,
+    home: Cadence,
     f: impl for<'b> FnOnce(TapeBuilder<'b>) -> R,
 ) -> R {
     let var_shapes: IndexMap<String, VarShape> = IndexMap::new();
@@ -110,13 +124,13 @@ pub(super) fn with_standalone_builder<R>(
         discrete: &discrete,
     };
     let mut obs_tier: FxHashMap<String, Cadence> = FxHashMap::default();
-    obs_tier.insert(name.to_string(), Cadence::Const);
+    obs_tier.insert(name.to_string(), home);
     let mut b = TapeBuilder::new(&var_shapes, param_names, obs_tier, const_arrays, &forcing);
     b.array_bool_reductions = pipeline;
     b.begin_rule(RuleInfo {
         name: name.to_string(),
         kind: RuleKind::Observed(0),
-        cadence: Cadence::Const,
+        cadence: home,
     });
     f(b)
 }
@@ -235,16 +249,19 @@ fn run_standalone_program(
     rule: &AlgebraicRule,
     param_names: &[String],
     params: &[f64],
+    t: f64,
 ) -> Result<ndarray::ArrayD<f64>, StandaloneError> {
-    run_standalone_export(prog, observed_rule_var(rule), param_names, params)
+    run_standalone_export(prog, observed_rule_var(rule), param_names, params, t)
 }
 
-/// Run a standalone `prog` once and return the array it exports as `name`.
+/// Run a standalone `prog` once, at time `t`, and return the array it exports
+/// as `name`.
 pub(super) fn run_standalone_export(
     prog: TapeProgram,
     name: &str,
     param_names: &[String],
     params: &[f64],
+    t: f64,
 ) -> Result<ndarray::ArrayD<f64>, StandaloneError> {
     let var_shapes: IndexMap<String, VarShape> = IndexMap::new();
     let forcing: RefCell<HashMap<String, ndarray::ArrayD<f64>>> = RefCell::new(HashMap::new());
@@ -261,7 +278,7 @@ pub(super) fn run_standalone_export(
             state: &[],
             params,
             forcing: &forcing,
-            t: 0.0,
+            t,
             declared: empty_declared_names(),
         },
         &mut [],
@@ -331,7 +348,8 @@ impl TapeBuilder<'_> {
         let inputs: Vec<(&str, &ndarray::ArrayD<f64>)> =
             values.iter().map(|(n, a)| (n.as_str(), a)).collect();
         // No parameters beyond the baked ones.
-        let a = eval_standalone_rule(rule, &inputs, &[], &[], self.const_arrays, false).ok()?;
+        let a =
+            eval_standalone_rule(rule, &inputs, &[], &[], 0.0, self.const_arrays, false).ok()?;
         let shape: DimU = a.shape().iter().copied().collect();
         Some((shape, Arc::new(a.iter().copied().collect())))
     }
