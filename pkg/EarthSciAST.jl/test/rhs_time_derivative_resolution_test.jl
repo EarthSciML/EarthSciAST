@@ -94,16 +94,16 @@ end
         rhs = rhs_of("M.dxdt")
         @test rhs !== nothing
         @test isempty(_structural_ds(rhs))
-        rendered = string(rhs)
-        @test occursin("M.kx", rendered) && occursin("M.x", rendered)
+        names = EarthSciAST.expression_names(rhs)
+        @test "M.kx" in names && "M.x" in names
     end
 
     @testset "chained form: D(l)/dt ~ sla*D(b)/dt resolves transitively" begin
         rhs = d_rhs_of("M.l")
         @test rhs !== nothing
         @test isempty(_structural_ds(rhs))
-        rendered = string(rhs)
-        @test occursin("M.sla", rendered) && occursin("M.growth", rendered)
+        names = EarthSciAST.expression_names(rhs)
+        @test "M.sla" in names && "M.growth" in names
     end
 
     @testset "scoped form: D(Chem.A, t) is the mechanism's mass-action tendency" begin
@@ -112,8 +112,8 @@ end
         rhs = rhs_of("M.dAdt")
         @test rhs !== nothing
         @test isempty(_structural_ds(rhs))
-        rendered = string(rhs)
-        @test occursin("Chem.k", rendered) && occursin("Chem.A", rendered)
+        names = EarthSciAST.expression_names(rhs)
+        @test "Chem.k" in names && "Chem.A" in names
     end
 
     @testset "left-hand sides are never rewritten" begin
@@ -133,8 +133,8 @@ end
         rhs = _rhs_of(f, "M.dcombo")
         @test rhs !== nothing
         @test isempty(_structural_ds(rhs))
-        rendered = string(rhs)
-        @test occursin("M.k", rendered) && occursin("M.x", rendered)
+        names = EarthSciAST.expression_names(rhs)
+        @test "M.k" in names && "M.x" in names
     end
 
     @testset "product rule: D of a COMPOUND resolves, with a parameter factor at 0" begin
@@ -142,7 +142,7 @@ end
         rhs = _rhs_of(f, "M.dscaled")
         @test rhs !== nothing
         @test isempty(_structural_ds(rhs))
-        @test occursin("M.scale", string(rhs))
+        @test "M.scale" in EarthSciAST.expression_names(rhs)
     end
 
     @testset "a TIME-INVARIANT name differentiates to a literal 0" begin
