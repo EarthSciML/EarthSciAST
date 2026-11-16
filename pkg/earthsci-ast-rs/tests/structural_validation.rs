@@ -300,27 +300,33 @@ fn test_unknown_without_equation() {
 
 /// Test unresolved scoped references.
 ///
-/// This binding rejects unresolvable coupling references at LOAD time (the
-/// load-time layer's `check_coupling_references`), so `load_string` itself
-/// fails and must name the missing system or variable.
+/// This binding rejects an unresolvable coupling `from` reference at LOAD time
+/// (after typing, with `validate`'s own finding), so `load_string` itself
+/// fails and must carry the pinned code at the pinned pointer.
 #[test]
 fn test_unresolved_scoped_reference() {
     assert_fixture_load_rejected(
         "unresolved_scoped_ref",
         include_str!("../../../tests/invalid/unresolved_scoped_ref.esm"),
-        &["coupling[0]/from", "undefined system 'NonExistentSystem'"],
+        &[
+            "[unresolved_scoped_ref] /coupling/0/from",
+            "'NonExistentSystem.T'",
+        ],
     );
     assert_fixture_load_rejected(
         "unresolved_scoped_ref_missing_system",
         include_str!("../../../tests/invalid/unresolved_scoped_ref_missing_system.esm"),
-        &["coupling[0]/from", "undefined system 'NonExistentModel'"],
+        &[
+            "[unresolved_scoped_ref] /coupling/0/from",
+            "'NonExistentModel.MissingSubsystem.temperature'",
+        ],
     );
     assert_fixture_load_rejected(
         "unresolved_scoped_ref_missing_variable",
         include_str!("../../../tests/invalid/unresolved_scoped_ref_missing_variable.esm"),
         &[
-            "coupling[0]/from",
-            "variable 'nonexistent_variable' not provided by 'ModelB'",
+            "[unresolved_scoped_ref] /coupling/0/from",
+            "'ModelB.nonexistent_variable'",
         ],
     );
     // A `data_sources` key is not a coupling endpoint or a scoped-name root
@@ -328,7 +334,7 @@ fn test_unresolved_scoped_reference() {
     assert_fixture_load_rejected(
         "variable_map_from_data_source",
         include_str!("../../../tests/invalid/variable_map_from_data_source.esm"),
-        &["coupling[0]/from", "undefined system 'Met'"],
+        &["[unresolved_scoped_ref] /coupling/0/from", "'Met.K'"],
     );
     // …and the validator recovers the pinned `(code, path)` record from it.
     let result = validate_text(
@@ -426,9 +432,9 @@ fn test_coupling_library_corpus_validates_standalone() {
 
 /// Test event variable undeclared errors.
 ///
-/// This binding rejects undeclared event variables at LOAD time (the
-/// load-time layer's `check_event_variable_references`), so `load_string`
-/// itself fails and must name the undeclared variable.
+/// This binding rejects undeclared event variables at LOAD time (after
+/// typing, with `validate`'s own finding), so `load_string` itself fails and
+/// must name the undeclared variable at the pinned pointer.
 ///
 /// `event_var_undeclared_condition.esm` is NOT here: expected_errors.json
 /// pins it as a SCHEMA-layer rejection (its `continuous_events/0` lacks the
@@ -440,16 +446,16 @@ fn test_event_variable_undeclared() {
         "event_var_undeclared",
         include_str!("../../../tests/invalid/event_var_undeclared.esm"),
         &[
-            "continuous_events[0]/affects[0]/lhs",
-            "undeclared variable 'undefined_velocity'",
+            "[event_var_undeclared] /models/TestModel/continuous_events/0/affects/0/lhs",
+            "'undefined_velocity'",
         ],
     );
     assert_fixture_load_rejected(
         "event_var_undeclared_affects",
         include_str!("../../../tests/invalid/event_var_undeclared_affects.esm"),
         &[
-            "discrete_events[0]/affects[0]/lhs",
-            "undeclared variable 'undefined_parameter'",
+            "[event_var_undeclared] /models/TestModel/discrete_events/0/affects/0/lhs",
+            "'undefined_parameter'",
         ],
     );
 }
@@ -711,13 +717,20 @@ fn test_circular_dependency_detection() {
             serde_json::json!(["ModelN.Sub.c", "ModelN.a", "ModelN.Sub.c"]),
         ),
     ] {
-        let msg = load_string(fixture)
+        let err = load_string(fixture)
             .err()
-            .unwrap_or_else(|| panic!("{name} must be refused at load"))
-            .to_string();
+            .unwrap_or_else(|| panic!("{name} must be refused at load"));
+        let msg = err.to_string();
         assert!(
-            msg.contains("cycle") && msg.contains(cycle[0].as_str().unwrap()),
+            msg.contains("[circular_dependency] /models")
+                && msg.contains(cycle[0].as_str().unwrap()),
             "{name}: the load refusal must name the cycle, got: {msg}"
+        );
+        let carried: Vec<_> = err.findings().iter().map(|f| f.details.clone()).collect();
+        assert_eq!(
+            carried,
+            vec![serde_json::json!({ "cycle": cycle })],
+            "{name}: the refusal carries the finding"
         );
 
         // The load gate refuses it, so read the typed document directly.

@@ -2,7 +2,7 @@
 //!
 //! This module owns the public [`ValidationResult`] / [`SchemaError`] /
 //! [`StructuralError`] types and the orchestrator entry points
-//! ([`validate`], [`validate_complete`], [`validate_with_schema`]). The
+//! ([`validate`], [`validate_text`], [`validate_complete`]). The
 //! actual checks are delegated to:
 //!
 //! - [`crate::structural`] — equation balance, model references, reactions,
@@ -14,7 +14,7 @@
 //! shared input both submodules consume.
 
 use crate::EsmFile;
-use crate::parse::{LoadOptions, load_string, load_string_with_options};
+use crate::parse::LoadOptions;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -311,9 +311,11 @@ pub enum StructuralErrorCode {
 
 use crate::diagnostic::codes;
 
-impl std::fmt::Display for StructuralErrorCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
+impl StructuralErrorCode {
+    /// The stable snake_case diagnostic code (`ERROR_CODES`), which is also
+    /// the [`Display`](std::fmt::Display) form.
+    pub(crate) fn as_code(&self) -> &'static str {
+        match self {
             Self::UndefinedVariable => codes::UNDEFINED_VARIABLE,
             Self::EquationCountMismatch => codes::EQUATION_COUNT_MISMATCH,
             Self::UndefinedSpecies => codes::UNDEFINED_SPECIES,
@@ -361,8 +363,13 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::VariableBoundShapeMismatch => codes::VARIABLE_BOUND_SHAPE_MISMATCH,
             Self::VariableBoundCircular => codes::VARIABLE_BOUND_CIRCULAR,
             Self::VariableBoundsInverted => codes::VARIABLE_BOUNDS_INVERTED,
-        };
-        write!(f, "{s}")
+        }
+    }
+}
+
+impl std::fmt::Display for StructuralErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_code())
     }
 }
 
@@ -565,68 +572,50 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
 ///
 /// * `ValidationResult` - Comprehensive validation results with both schema and structural errors
 pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> ValidationResult {
-    // First try to parse the JSON and ESM file, anchoring relative refs at the
-    // caller-provided base directory (mirrors Python's `validate(base_path=…)`).
-    let loaded = match base_path {
-        Some(base) => load_string_with_options(
-            json_str,
-            &LoadOptions {
-                base_path: Some(base.to_path_buf()),
-                ..Default::default()
-            },
-        ),
-        None => load_string(json_str),
-    };
-    match loaded {
-        Ok(esm_file) => {
-            // If parsing/schema validation succeeded, do structural validation
-            validate_with_schema(json_str, &esm_file)
-        }
-        Err(e) => {
-            // Load failed — but a load failure is usually a SCHEMA violation, and
-            // the wire contract (CONFORMANCE_SPEC.md §7.1.2) wants ONE record per
-            // violation, not a single collapsed blob. Re-parse the raw JSON and
-            // enumerate the individual schema errors so each pinned `(keyword,
-            // path)` surfaces. Only if the JSON itself is unparseable, or the
-            // document is schema-valid but failed a LATER load stage (structural /
-            // ref resolution), do we fall back to a single diagnostic record.
-            let schema_errors = match serde_json::from_str::<Value>(json_str) {
-                Ok(json_value) => {
-                    let mut errs = crate::parse::collect_schema_errors(&json_value);
-                    if errs.is_empty() {
-                        errs.push(SchemaError {
-                            path: "".to_string(),
-                            message: format!("Failed to load ESM file: {e}"),
-                            keyword: "parse".to_string(),
-                        });
-                    }
-                    errs
-                }
-                Err(je) => vec![SchemaError {
+    let json_value = match serde_json::from_str::<Value>(json_str) {
+        Ok(value) => value,
+        Err(je) => {
+            return ValidationResult {
+                schema_errors: vec![SchemaError {
                     path: "".to_string(),
                     message: format!("Invalid JSON: {je}"),
                     keyword: "format".to_string(),
                 }],
+                structural_errors: vec![],
+                unit_warnings: vec![],
+                is_valid: false,
             };
-            // A load rejection must STILL surface its structured `(code, path)`
-            // structural findings (CONFORMANCE_SPEC §7.1.2) rather than collapsing
-            // to an EMPTY `structural_errors` — otherwise a document rejected at
-            // load records `is_valid:false` with no structural records and every
-            // pin on it silently misses. Some structural defects (an undeclared
-            // event target, an invalid discrete parameter, a coupling cycle, an
-            // unresolvable coupling scoped ref) reject the load BEFORE the typed
-            // `validate()` pass runs, yet the document is otherwise deserializable
-            // — so run the typed structural pass on a best-effort raw parse and
-            // populate `structural_errors` from it. This never flips the verdict:
-            // `is_valid` stays false; it only recovers the `(code, path)` records.
-            // (Mirrors the conformance runner's recovery in the `esm` CLI, `cli/`.)
-            let structural_errors = match serde_json::from_str::<EsmFile>(json_str) {
-                Ok(esm_file) => validate(&esm_file).structural_errors,
-                Err(_) => vec![],
-            };
+        }
+    };
+    // Relative refs anchor at the caller-provided base directory (mirrors
+    // Python's `validate(base_path=…)`), or the working directory without one.
+    let options = LoadOptions {
+        base_path: base_path.map(std::path::Path::to_path_buf),
+        ..Default::default()
+    };
+    match crate::parse::load_document_with_options(&json_value, &options) {
+        Ok(esm_file) => validate_with_schema(&json_value, &esm_file),
+        Err(e) => {
+            // The wire contract (CONFORMANCE_SPEC.md §7.1.2) wants ONE schema
+            // record per violation of the document as written, not the load's
+            // collapsed message. A document the schema accepts was refused by a
+            // later load stage: one record carries the refusal, keyed by its
+            // diagnostic code when it has one.
+            let mut schema_errors = crate::parse::collect_schema_errors(&json_value);
+            if schema_errors.is_empty() {
+                schema_errors.push(SchemaError {
+                    path: "".to_string(),
+                    message: format!("Failed to load ESM file: {e}"),
+                    keyword: e.code().unwrap_or("parse").to_string(),
+                });
+            }
+            // The structured `(code, path)` findings the refusal located (a
+            // mount edge that does not resolve, an undeclared event variable,
+            // an unresolvable coupling reference, a cross-scope cycle), so a
+            // document refused at load still reports its pinned records.
             ValidationResult {
                 schema_errors,
-                structural_errors,
+                structural_errors: e.findings().to_vec(),
                 unit_warnings: vec![],
                 is_valid: false,
             }
@@ -647,42 +636,18 @@ pub fn validate_complete(json_str: &str, base_path: Option<&std::path::Path>) ->
     validate_text(json_str, base_path)
 }
 
-/// Validate an ESM file including schema validation
-///
-/// This function combines schema and structural validation.
-/// Note: Consider using `validate_text()` instead for a simpler API.
-pub fn validate_with_schema(json_str: &str, esm_file: &EsmFile) -> ValidationResult {
-    let mut schema_errors = Vec::new();
-    let mut structural_errors = Vec::new();
-    let mut unit_warnings = Vec::new();
-
-    // Schema validation
-    match serde_json::from_str::<Value>(json_str) {
-        Err(e) => {
-            schema_errors.push(SchemaError {
-                path: "".to_string(),
-                message: format!("Invalid JSON: {e}"),
-                keyword: "format".to_string(),
-            });
-        }
-        Ok(json_value) => {
-            // One record PER schema violation (RFC-6901 pointer + standard
-            // keyword), not a single collapsed blob (CONFORMANCE_SPEC.md §7.1.2).
-            schema_errors.extend(crate::parse::collect_schema_errors(&json_value));
-        }
-    }
-
-    // Continue with structural validation even if schema fails
+/// Schema and structural validation of a loaded document: one schema record
+/// PER violation of the document as written (RFC-6901 pointer + standard
+/// keyword, not a single collapsed blob; CONFORMANCE_SPEC.md §7.1.2), then
+/// [`validate`] of the typed file.
+fn validate_with_schema(json_value: &Value, esm_file: &EsmFile) -> ValidationResult {
+    let schema_errors = crate::parse::collect_schema_errors(json_value);
     let result = validate(esm_file);
-    structural_errors.extend(result.structural_errors);
-    unit_warnings.extend(result.unit_warnings);
-
-    let is_valid = schema_errors.is_empty() && structural_errors.is_empty();
-
+    let is_valid = schema_errors.is_empty() && result.structural_errors.is_empty();
     ValidationResult {
         schema_errors,
-        structural_errors,
-        unit_warnings,
+        structural_errors: result.structural_errors,
+        unit_warnings: result.unit_warnings,
         is_valid,
     }
 }
@@ -1593,9 +1558,9 @@ mod tests {
         );
         // The pinned `(code, path)` record must be present. Per §7.1.2 the pin is
         // a REQUIRED SUBSET of what the binding emits, so a load-Err document may
-        // additionally carry a `keyword:"parse"` load diagnostic in
-        // `schema_errors` — that is existing behavior and is not asserted here;
-        // what matters is that the structural pin is recovered rather than lost.
+        // additionally carry the load refusal in `schema_errors`, keyed by its
+        // diagnostic code — not asserted here; what matters is that the
+        // structural pin is carried by the refusal rather than lost.
         assert!(
             result.structural_errors.iter().any(|e| matches!(
                 e.code,

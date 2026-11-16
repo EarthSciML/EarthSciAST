@@ -1736,7 +1736,8 @@ time derivative. A flattened name with a dot prints as a quoted name joined by
 | `Compile` (deprecated alias since 0.2.0) | `Rhs` | `deleted` |
 | `ArrayCompiled::debug_eval_rhs(state, t, params, force_scalar)` | `debug_eval_rhs(state, t, params)`, always the per-cell oracle | `deleted` |
 | `RhsStats::kernel_ops`, `vectorized_rules`, `obs_vectorized_rules` | none: the right-hand side no longer runs on the whole-array overlay | `deleted` |
-| a coded load refusal (a reference, template-import, version-gate or other diagnostic with a code) as `EsmError::SchemaValidation(String)` / `StructuralValidation(String)` | `EsmError::SchemaDiagnostic { code, message, findings }` / `StructuralDiagnostic { code, message }`, rendering the same text; `EsmError::code()` and `EsmError::findings()` read them | `changed` |
+| a coded load refusal (a reference, template-import, version-gate or other diagnostic with a code) as `EsmError::SchemaValidation(String)` / `StructuralValidation(String)` | `EsmError::SchemaDiagnostic { code, message, findings }` / `StructuralDiagnostic { code, message, findings }`, rendering the same text; `EsmError::code()` and `EsmError::findings()` read them | `changed` |
+| a load refused for an unresolvable coupling `from`, a cross-scope dependency cycle or an undeclared event variable: `StructuralValidation("Structural validation failed: coupling[0]/from: reference … to undefined system …")` | `StructuralDiagnostic` carrying `validate`'s own findings (`unresolved_scoped_ref`, `circular_dependency`, `event_var_undeclared` / `undefined_variable`), each rendered `[code] /pointer: message` | `changed` |
 | — | `mount_edge_errors(document, base_dir)`: a document's own mount edges that do not resolve, as `(code, path)` findings | `added` |
 
 `compile_array`, the `ArrayCompiled::from_*` constructors and the `debug_*`
