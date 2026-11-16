@@ -1286,10 +1286,66 @@ def prints_call_form(c: Ctx, kvs: Obj) -> bool:
     fs = fields_of(kvs)
     if not (call_form_ok(o, fs) and opn_ok(o) and tparams(c.s, o) is None):
         return False
-    if not all(key_ok(k) for k, _ in fs):
-        return True
-    ts = pr(c, kvs).toks
-    return bool(ts) and ts[0] == ("opn", o)
+    return not native_form(c.sf, kvs)
+
+
+def native_form(sf: str, kvs: Obj) -> bool:
+    """A node :func:`call_form_ok` admits that :func:`pr` nevertheless writes in a
+    native spelling: a ``faq``, a ``makearray`` or a ``const``. Decided from the
+    node's own fields, without printing its operands; the other operators
+    :func:`call_form_ok` admits have no native spelling."""
+    o = look("op", kvs)
+    if o == "faq":
+        f = faq_form(kvs)
+        return f is not None and faq_ok(f)
+    if o == "makearray":
+        m = mk_form(kvs)
+        return m is not None and mk_ok(m)
+    if o == "const":
+        return const_native(sf, kvs) is not None
+    return False
+
+
+def const_native(sf: str, kvs: Obj):
+    """The native spelling of a ``const`` node, if it has one: an array (rank 1 or
+    2) of numbers, or a number or such an array with typeset units. ``None`` when
+    the node prints in the call form."""
+    n = len(kvs)
+    if n == 3:
+        (k0, args), (k1, o), (k2, v) = kvs
+        if (
+            k0 == "args"
+            and type(args) is list
+            and not args
+            and k1 == "op"
+            and o == "const"
+            and k2 == "value"
+        ):
+            if type(v) is list:
+                af = arr_form(v)
+                if af is not None:
+                    return Out(10, arr_toks(sf, af))
+    elif n == 4:
+        (k0, args), (k1, o), (k2, u), (k3, v) = kvs
+        if (
+            k0 == "args"
+            and type(args) is list
+            and not args
+            and k1 == "op"
+            and o == "const"
+            and k2 == "units"
+            and type(u) is str
+            and k3 == "value"
+            and units_ok(sf, u)
+        ):
+            tv = type(v)
+            if tv is int or tv is Dec:
+                return Out(7, [("num", v), ("units", factors_of(u))])
+            if tv is list:
+                af = arr_form(v)
+                if af is not None:
+                    return Out(7, [*arr_toks(sf, af), ("units", factors_of(u))])
+    return None
 
 
 def pr(c: Ctx, e: Any) -> Out:
@@ -1339,10 +1395,8 @@ def pr(c: Ctx, e: Any) -> Out:
             and k2 == "value"
             and type(v2) is list
         ):
-            af = arr_form(v2)
-            if af is not None:
-                return Out(10, arr_toks(sf, af))
-            return _opn(c, kvs)
+            out = const_native(sf, kvs)
+            return out if out is not None else _opn(c, kvs)
     elif n == 4:
         (k0, args), (k1, v1), (k2, v2), (k3, v3) = kvs
         empty_args = k0 == "args" and type(args) is list and not args
@@ -1354,17 +1408,10 @@ def pr(c: Ctx, e: Any) -> Out:
             and type(v2) is str
             and k3 == "value"
         ):
-            u = v2
             tv = type(v3)
-            if tv is int or tv is Dec:
-                if units_ok(sf, u):
-                    return Out(7, [("num", v3), ("units", factors_of(u))])
-                return _opn(c, kvs)
-            if tv is list:
-                af = arr_form(v3)
-                if af is not None and units_ok(sf, u):
-                    return Out(7, [*arr_toks(sf, af), ("units", factors_of(u))])
-                return _opn(c, kvs)
+            if tv is int or tv is Dec or tv is list:
+                out = const_native(sf, kvs)
+                return out if out is not None else _opn(c, kvs)
         if (
             empty_args
             and k1 == "bindings"

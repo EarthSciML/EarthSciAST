@@ -325,3 +325,31 @@ def test_call_form_refuses_repeated_or_reserved_keys_typst():
     assert parse_typst(S, 'op("custom")(x; upright("op") = #"g")') is None
     assert parse_typst(S, 'op("custom")(x; upright("args") = #(1,))') is None
     assert parse_typst(S, 'op("custom")(x; upright("a") = 1, upright("a") = 2)') is None
+
+
+def test_call_form_check_prints_nothing(monkeypatch):
+    # the native-spelling check reads the node's own fields; printing the operands
+    # at every nesting level would make reading nested call forms quadratic
+    from earthsci_ast.document.math import printer
+
+    def no_print(*_a, **_k):
+        raise AssertionError("the reader printed a node")
+
+    monkeypatch.setattr(printer, "pr", no_print)
+    nested = "x"
+    for _ in range(50):
+        nested = r"\operatorname{custom}(" + nested + r"; \mathrm{a} = 1)"
+    e = parse_latex(S, nested)
+    assert e is not None and e[2] == ("op", "custom")
+    assert parse_latex(S, r"\operatorname{const}(; \mathrm{value} = [1, 2])") is None
+    assert (
+        parse_latex(S, r"\operatorname{faq}(; \mathrm{expr} = x, \mathrm{output\_idx} = [])")
+        is None
+    )
+    assert (
+        parse_latex(
+            S,
+            r"\operatorname{makearray}(; \mathrm{regions} = [[[1, 2]]], \mathrm{values} = [x])",
+        )
+        is None
+    )
