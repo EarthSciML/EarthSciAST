@@ -577,6 +577,14 @@ fn one_model_name(file: &EsmFile) -> Option<String> {
     file.models.as_ref()?.keys().next().cloned()
 }
 
+/// `file` reduced to its one model: `from_file` builds that model alone, so a
+/// reaction system and the coupling beside it are not part of the build.
+fn model_alone(mut file: EsmFile) -> EsmFile {
+    file.reaction_systems = None;
+    file.coupling = None;
+    file
+}
+
 /// Refuse a document that is not one model, which `from_file` documents as its
 /// input.
 fn require_one_model(file: &EsmFile) -> Result<(), CompileError> {
@@ -606,8 +614,9 @@ impl ArrayCompiled {
         compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
         require_one_model(file)?;
+        let alone = model_alone(file.clone());
         Self::from_document(
-            std::borrow::Cow::Borrowed(file),
+            std::borrow::Cow::Owned(alone),
             None,
             runtime_array_parameters,
             compiler,
@@ -615,7 +624,8 @@ impl ArrayCompiled {
     }
 
     /// [`Self::from_file`], consuming the file, which is dropped as soon as it
-    /// is flattened.
+    /// is flattened. Both build the document's one model alone: a reaction
+    /// system and the coupling beside it are not part of the build.
     pub fn from_file_owned(file: EsmFile) -> Result<Self, CompileError> {
         Self::from_file_owned_with(file, false, crate::Compiler::Native)
     }
@@ -629,7 +639,7 @@ impl ArrayCompiled {
     ) -> Result<Self, CompileError> {
         require_one_model(&file)?;
         Self::from_document(
-            std::borrow::Cow::Owned(file),
+            std::borrow::Cow::Owned(model_alone(file)),
             None,
             runtime_array_parameters,
             compiler,

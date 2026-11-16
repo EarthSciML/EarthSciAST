@@ -417,8 +417,8 @@ pub enum CompileError {
 }
 
 /// `text` with every name under the namespace `ns` shown without it: the
-/// `M.` of `M.x`, `M.sub.x` and `'M.x'`, and the `M"."` of a printed
-/// expression's `M"."x`, dropped wherever `M` begins a name (it follows no
+/// `M.` of `M.x`, `M.sub.x` and `'M.x'`, and the `M"."` or `italic("M")"."`
+/// of a printed expression's name, dropped wherever `M` begins a name (it follows no
 /// identifier character and no `.`, and an identifier follows).
 ///
 /// A one-model document is built under its model's namespace like any other,
@@ -430,6 +430,8 @@ pub(crate) fn unqualify_text(text: &str, ns: &str) -> String {
     if ns.is_empty() || !text.contains(ns) {
         return text.to_string();
     }
+    // A printed expression spells a multi-letter namespace `italic("M")`.
+    let italic = format!("italic(\"{ns}\")");
     let mut out = String::with_capacity(text.len());
     let mut prev: Option<char> = None;
     let mut rest = text;
@@ -440,6 +442,10 @@ pub(crate) fn unqualify_text(text: &str, ns: &str) -> String {
             && let Some(after) = rest
                 .strip_prefix(ns)
                 .and_then(|r| r.strip_prefix('.').or_else(|| r.strip_prefix("\".\"")))
+                .or_else(|| {
+                    rest.strip_prefix(italic.as_str())
+                        .and_then(|r| r.strip_prefix("\".\""))
+                })
             && after.chars().next().is_some_and(|n| is_ident(n))
         {
             rest = after;
@@ -862,5 +868,25 @@ mod tests {
         );
         assert!(msg.contains("discrete event 'double'"), "{msg}");
         assert!(msg.contains(ARRAY_EVALUATOR), "{msg}");
+    }
+
+    /// A one-model document's names are shown without the model's name: as
+    /// written, quoted, nested and printed, and only where the name begins.
+    #[test]
+    fn unqualify_text_drops_the_namespace_where_a_name_begins() {
+        let u = |t: &str| unqualify_text(t, "M");
+        assert_eq!(
+            u("reads 'M.b', which reads M.sub.a"),
+            "reads 'b', which reads sub.a"
+        );
+        assert_eq!(u("(dif M\".\"x)/(dif t) = M\".\"k"), "(dif x)/(dif t) = k");
+        assert_eq!(
+            u("NM.x and Other.M.x and M. alone"),
+            "NM.x and Other.M.x and M. alone"
+        );
+        assert_eq!(
+            unqualify_text("sin(italic(\"Box\")\".\"u_i)", "Box"),
+            "sin(u_i)"
+        );
     }
 }
