@@ -19,12 +19,10 @@
 //!   and `±(2^52 - 0.5)` are checked against an exact integer
 //!   proleptic-Gregorian computation (§9.8.2), and `±2^52` against NaN.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use earthsci_ast::load_string;
-use earthsci_ast::simulate_array::ArrayCompiled;
+use earthsci_ast::{Compiler, ProblemOptions, Rhs, esm_problem, load_string};
 use serde_json::{Value, json};
 
 use crate::common;
@@ -92,7 +90,10 @@ fn agrees(actual: f64, expected: f64, tol: Tolerance) -> bool {
 /// One document importing `name` from `library`, with `D(out_k) = rhs[k]` and
 /// every name of `queries` a state in `units` with `D(q) = 0`, built once.
 struct Probe {
-    compiled: ArrayCompiled,
+    /// The per-cell oracle and the strict native tape, each through the
+    /// public program.
+    oracle: common::rhs::ProblemRhs,
+    taped: common::rhs::ProblemRhs,
     names: Vec<String>,
     outs: usize,
 }
@@ -127,11 +128,28 @@ impl Probe {
         })
         .to_string();
         let file = load_string(&doc).unwrap_or_else(|e| panic!("{name}: load: {e}"));
-        let compiled =
-            ArrayCompiled::from_file(&file).unwrap_or_else(|e| panic!("{name}: compile: {e:?}"));
-        let names = compiled.state_variable_names().to_vec();
+        let build = |compiler: Compiler| {
+            let prob = esm_problem(
+                &file,
+                (0.0, 1.0),
+                ProblemOptions {
+                    compiler: Some(compiler),
+                    rhs: Rhs::Always,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|e| panic!("{name}: build under {compiler}: {e}"));
+            (
+                prob.state_variable_names(),
+                common::rhs::ProblemRhs::new(&prob),
+            )
+        };
+        let (names, oracle) = build(Compiler::Interpreter);
+        let (native_names, taped) = build(Compiler::Native);
+        assert_eq!(names, native_names, "{name}: state order");
         Probe {
-            compiled,
+            oracle,
+            taped,
             names,
             outs: rhs.len(),
         }
@@ -145,25 +163,13 @@ impl Probe {
     }
 
     /// `(interpreter, native)` values of every `out_k` with the queries set.
-    fn eval(&self, queries: &[(String, f64)]) -> Vec<(f64, f64)> {
+    fn eval(&mut self, queries: &[(String, f64)]) -> Vec<(f64, f64)> {
         let mut u = vec![0.0; self.names.len()];
         for (q, v) in queries {
             u[self.slot(q)] = *v;
         }
-        let (oracle, _) = self.compiled.debug_eval_rhs(&u, 0.0, &HashMap::new());
-        let mut taped = vec![0.0; self.names.len()];
-        let mut scratch = self
-            .compiled
-            .debug_new_scratch_taped()
-            .unwrap_or_else(|e| panic!("strict native: {e}"));
-        self.compiled.debug_eval_rhs_into(
-            &u,
-            0.0,
-            &self.compiled.debug_resolve_params(&HashMap::new()),
-            &mut taped,
-            &mut scratch,
-            &mut Default::default(),
-        );
+        let oracle = self.oracle.eval(&u, 0.0);
+        let taped = self.taped.eval(&u, 0.0);
         (0..self.outs)
             .map(|k| {
                 let s = self.slot(&format!("out_{k}"));
@@ -232,7 +238,7 @@ fn interp_scenarios_through_the_stdlib_templates() {
             queries.extend(q);
         }
         let names: Vec<String> = queries.iter().map(|(q, _)| q.clone()).collect();
-        let probe = Probe::new("esm:std/interp.esm", &name, &rhs, &names, "1");
+        let mut probe = Probe::new("esm:std/interp.esm", &name, &rhs, &names, "1");
         for (sc, (interp, native)) in scenarios.iter().zip(probe.eval(&queries)) {
             let want = decode(&sc["expected"]);
             for (who, got) in [("interpreter", interp), ("native", native)] {
@@ -376,7 +382,7 @@ fn datetime_scenarios_through_the_stdlib_templates() {
         }
         let call = json!({"op": "apply_expression_template", "args": [], "name": field,
                           "bindings": {"t": "tq"}});
-        let probe = Probe::new(
+        let mut probe = Probe::new(
             "esm:std/calendar.esm",
             &field,
             &[call],

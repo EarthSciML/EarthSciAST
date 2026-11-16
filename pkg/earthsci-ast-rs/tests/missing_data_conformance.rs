@@ -78,29 +78,13 @@ fn numbers(v: &Value) -> Vec<f64> {
 /// compiler that built it: the interpreter's per-cell walk, or native's taped
 /// program (which must keep every rule on the tape).
 fn rhs_at_probe(prob: &earthsci_ast::EsmProblem, compiler: Compiler, id: &str) -> Vec<f64> {
-    let compiled = prob
-        .debug_array_compiled()
-        .unwrap_or_else(|| panic!("{id} [{compiler}]: no right-hand side"));
-    let n = compiled.state_variable_names().len();
+    let n = prob.state_variable_names().len();
     let state: Vec<f64> = (0..n)
         .map(|k| 1.0 + 0.1 * (0.37 * k as f64).sin())
         .collect();
-    let dy = if compiler == Compiler::Interpreter {
-        compiled.debug_eval_rhs(&state, 0.0, prob.p()).0
-    } else {
-        let params = compiled.debug_resolve_params(prob.p());
-        let mut dy = vec![0.0; n];
-        let mut scratch = compiled
-            .debug_new_scratch_taped()
-            .expect("the tape lowers every rule");
-        let mut stats = earthsci_ast::simulate_array::RhsStats::default();
-        compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-        assert!(
-            scratch.has_tape(),
-            "{id}: the tape declined a rule under native"
-        );
-        dy
-    };
+    let mut rhs = common::rhs::ProblemRhs::new(prob);
+    assert_eq!(rhs.program().compiler(), compiler, "{id}: compiler");
+    let dy = rhs.eval(&state, 0.0);
     assert!(
         dy.iter().all(|v| v.is_finite()),
         "{id} [{compiler}]: non-finite right-hand side {dy:?}"

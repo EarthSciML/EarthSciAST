@@ -11,6 +11,8 @@
 //! use are expected — hence the allow.
 #![allow(dead_code)]
 
+pub use crate::portable::rhs;
+
 use std::path::{Path, PathBuf};
 
 use earthsci_ast::{Alg, AxisSel, PrepareError, PrepareProvider, SolveOptions};

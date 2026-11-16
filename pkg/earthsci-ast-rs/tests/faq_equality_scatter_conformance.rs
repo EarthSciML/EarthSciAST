@@ -12,7 +12,6 @@
 
 use std::fs;
 
-use earthsci_ast::simulate_array::RhsStats;
 use earthsci_ast::{Compiler, EsmProblem, ProblemOptions, Rhs, esm_problem, initial_state};
 use serde_json::Value;
 
@@ -50,30 +49,20 @@ fn build(doc: &Value, compiler: Compiler) -> Result<EsmProblem, String> {
 }
 
 /// The right-hand side at the initial state, keyed by unqualified element
-/// name (`w[2]`, `v[1,3]`, `g`).
+/// name (`w[2]`, `v[1,3]`, `g`), through the Problem's public program
+/// (native's is the strict tape).
 fn rhs(prob: &EsmProblem, compiler: Compiler) -> Vec<(String, f64)> {
-    let ac = prob
-        .debug_array_compiled()
-        .expect("the problem has a right-hand side");
-    let _precision = ac.debug_precision_env().enter();
     let u = initial_state(prob).expect("the initial state builds");
-    let names = ac.state_variable_names().to_vec();
+    let names = prob.state_variable_names();
     assert_eq!(names.len(), u.len());
-    let dy = match compiler {
-        Compiler::Native => {
-            let params = ac.debug_resolve_params(prob.p());
-            let mut dy = vec![f64::NAN; u.len()];
-            let mut scratch = ac
-                .debug_new_scratch_taped()
-                .expect("the tape lowers every rule");
-            let mut stats = RhsStats::default();
-            ac.debug_eval_rhs_into(&u, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-            assert!(scratch.has_tape(), "the tape declined a rule");
-            dy
-        }
-        _ => ac.debug_eval_rhs(&u, 0.0, prob.p()).0,
-    };
-    names.into_iter().zip(dy).collect()
+    let mut rhs = common::rhs::ProblemRhs::new(prob);
+    assert_eq!(rhs.program().compiler(), compiler);
+    let dy = rhs.eval(&u, 0.0);
+    names
+        .iter()
+        .map(|n| common::rhs::bare_slot(n).to_string())
+        .zip(dy)
+        .collect()
 }
 
 #[test]

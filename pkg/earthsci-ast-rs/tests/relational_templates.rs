@@ -8,9 +8,6 @@
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 
-use std::collections::HashMap;
-
-use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{
     Compiler, LoadOptions, ProblemOptions, Rhs, esm_problem, load_string_with_options,
     observed_field,
@@ -77,28 +74,25 @@ fn template_values(op: &str, values: &[Value], label: &str) -> [f64; 2] {
     };
     let file =
         load_string_with_options(&doc, &options).unwrap_or_else(|e| panic!("{label}: load: {e}"));
-    let compiled =
-        ArrayCompiled::from_file(&file).unwrap_or_else(|e| panic!("{label}: compile: {e:?}"));
-    let report = compiled.debug_build_tape_report();
-    assert!(
-        report.fallbacks.is_empty(),
-        "{label}: rules left the tape: {:?}",
-        report.fallbacks
-    );
-    let u = vec![0.0; compiled.state_variable_names().len()];
-    let (oracle, _) = compiled.debug_eval_rhs(&u, 0.0, &HashMap::new());
-    let mut taped = vec![0.0; u.len()];
-    let mut scratch = compiled
-        .debug_new_scratch_taped()
-        .unwrap_or_else(|e| panic!("{label}: strict native: {e}"));
-    compiled.debug_eval_rhs_into(
-        &u,
-        0.0,
-        &compiled.debug_resolve_params(&HashMap::new()),
-        &mut taped,
-        &mut scratch,
-        &mut Default::default(),
-    );
+    // Each through the public program; native's is the strict tape, which
+    // refuses the program if any rule leaves it.
+    let rhs_under = |compiler: Compiler| {
+        let prob = esm_problem(
+            &file,
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(compiler),
+                rhs: Rhs::Always,
+                base_path: options.base_path.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{label}: build under {compiler}: {e}"));
+        let u = vec![0.0; prob.state_variable_names().len()];
+        common::rhs::ProblemRhs::new(&prob).eval(&u, 0.0)
+    };
+    let oracle = rhs_under(Compiler::Interpreter);
+    let taped = rhs_under(Compiler::Native);
     [oracle[0], taped[0]]
 }
 

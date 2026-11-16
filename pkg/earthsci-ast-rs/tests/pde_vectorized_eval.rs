@@ -4,8 +4,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{Alg, SolveOptions, load_string};
+use crate::common::rhs::{ProblemRhs, bare_slot};
+use earthsci_ast::{Alg, Compiler, EsmProblem, ProblemOptions, Rhs, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -15,9 +15,21 @@ fn fixture(name: &str) -> PathBuf {
     common::repo_fixture("fixtures/faq").join(name)
 }
 
-fn compile_json(json: &str) -> ArrayCompiled {
-    let file = load_string(json).expect("load json model");
-    ArrayCompiled::from_file(&file).expect("compile json model")
+/// The model's Problem under the per-cell oracle, right-hand side forced on.
+fn oracle_problem(json: &str) -> EsmProblem {
+    // The probe passes the state explicitly; any starting value builds it.
+    let mut doc: serde_json::Value = serde_json::from_str(json).expect("parse json model");
+    common::supply_state_defaults(&mut doc);
+    earthsci_ast::esm_problem(
+        &doc,
+        (0.0, 1.0),
+        ProblemOptions {
+            compiler: Some(Compiler::Interpreter),
+            rhs: Rhs::Always,
+            ..Default::default()
+        },
+    )
+    .expect("build json model")
 }
 
 /// A 1-D linear upwind advection `∂u/∂t = -v ∂u/∂x` discretized first-order
@@ -271,8 +283,8 @@ fn array_filter_json() -> String {
 /// genuine per-cell gate.
 #[test]
 fn array_valued_filter_is_a_per_cell_mask() {
-    let compiled = compile_json(&array_filter_json());
-    let names = compiled.state_variable_names();
+    let prob = oracle_problem(&array_filter_json());
+    let names = prob.state_variable_names();
     assert_eq!(names.len(), 6, "expected u[3] + mask[3], got {names:?}");
 
     // Slot order follows `state_variable_names`; build the state from it so the
@@ -288,7 +300,7 @@ fn array_valued_filter_is_a_per_cell_mask() {
         })
         .collect();
 
-    let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
+    let dy = ProblemRhs::new(&prob).eval(&state, 0.0);
 
     let u_of = |dy: &[f64]| -> Vec<f64> {
         names
@@ -354,23 +366,23 @@ fn unary_broadcast_conformance_fixture_matches_its_inline_assertions() {
         saveat: Some(vec![1.0]),
         ..Default::default()
     };
-    let sol = earthsci_ast::esm_problem(
+    let prob = earthsci_ast::esm_problem(
         &file,
         (0.0, 1.0),
-        earthsci_ast::ProblemOptions {
+        ProblemOptions {
             p: HashMap::new().clone(),
             u0: ic.clone(),
-            rhs: earthsci_ast::Rhs::Always,
+            rhs: Rhs::Always,
             // The unary `broadcast` this fixture is about has no wholesale
             // tape lowering, so `native` refuses it by NAME (API_SPEC §5.8).
             // The fixture is about the broadcast's VALUES, which is the
             // reference evaluator's answer to give.
-            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            compiler: Some(Compiler::Interpreter),
             ..Default::default()
         },
     )
-    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
-    .expect("simulate fixture");
+    .expect("build fixture");
+    let sol = earthsci_ast::solve(&prob, &opts).expect("simulate fixture");
     let last = sol.time.len() - 1;
     for (name, want) in &expected {
         let j = sol
@@ -387,13 +399,16 @@ fn unary_broadcast_conformance_fixture_matches_its_inline_assertions() {
     }
 
     // The tendencies are constants, so `dy` at t = 0 IS the assertion vector.
-    let compiled = ArrayCompiled::from_file(&file).expect("compile fixture");
-    let names = compiled.state_variable_names();
+    let names: Vec<String> = prob
+        .state_variable_names()
+        .iter()
+        .map(|n| bare_slot(n).to_string())
+        .collect();
     let state: Vec<f64> = names
         .iter()
         .map(|n| ic.get(n).copied().unwrap_or(0.0))
         .collect();
-    let (dy_vec, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
+    let dy_vec = ProblemRhs::new(&prob).eval(&state, 0.0);
     for (name, want) in &expected {
         let k = names.iter().position(|n| n == name).expect("probe slot");
         assert_eq!(

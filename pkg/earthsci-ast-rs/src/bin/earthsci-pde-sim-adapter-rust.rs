@@ -4,7 +4,8 @@
 //! `tests/conformance/pde_simulation/manifest.json`. For every fixture it
 //! builds one Problem under the compiler the stage names (`--compiler`), then:
 //!   * evaluates the discretized RHS f(u, t) at each declared probe state on
-//!     that Problem's right-hand side, the way the compiler runs it (the tape
+//!     that Problem's public program (`rhs_program`), the way the compiler
+//!     runs it (the tape
 //!     under `native`, the per-cell evaluator under `interpreter`), and
 //!   * integrates the trajectory from the declared initial conditions with the
 //!     pinned diffsol solver (manifest `solver`/`reltol`/`abstol`), sampling at
@@ -31,9 +32,10 @@ use earthsci_ast::adapter_support::{
     Answer, Manifest, Tier, adapter_main, bare, nearest_index, number, time_key,
 };
 use earthsci_ast::flatten;
-use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
+use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{
-    Alg, Compiler, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string, solve,
+    Alg, Compiler, EsmProblem, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string,
+    rhs_program, solve,
 };
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Map, Value, json};
@@ -100,54 +102,81 @@ impl Tier for PdeSimulation {
     }
 }
 
-/// The right-hand side at every probe of `fx`, evaluated the way `compiler`
-/// runs `compiled`: the tape under `native`, the per-cell evaluator under
-/// `interpreter`. Another compiler has no probe route here, and saying so is
-/// that fixture's error rather than a silent substitute.
-fn rhs_at_probes(
-    compiled: &ArrayCompiled,
-    compiler: Compiler,
-    params: &HashMap<String, f64>,
-    fx: &Value,
-) -> Result<Value, String> {
-    let names: Vec<String> = compiled.state_variable_names().to_vec();
-    let _precision = compiled.debug_precision_env().enter();
-    let mut taped = match compiler {
-        Compiler::Native => Some((
-            compiled
-                .debug_new_scratch_taped()
-                .map_err(|e| format!("native: {e}"))?,
-            compiled.debug_resolve_params(params),
-        )),
-        Compiler::Interpreter => None,
-        other => {
-            return Err(format!(
-                "right-hand-side probes run under `native` or `interpreter`, not `{}`",
-                other.as_str()
-            ));
-        }
-    };
+/// Whether `a` and `b` name the same variable, one possibly carrying a
+/// namespace prefix the other lacks.
+fn same_variable(a: &str, b: &str) -> bool {
+    a == b || a.ends_with(&format!(".{b}")) || b.ends_with(&format!(".{a}"))
+}
+
+/// The right-hand side at every probe of `fx`, through the Problem's public
+/// program ([`rhs_program`]) under the compiler that built it: the tape under
+/// `native`, the per-cell evaluator under `interpreter`. Another compiler has
+/// no probe route here, and saying so is that fixture's error rather than a
+/// silent substitute.
+fn rhs_at_probes(prob: &EsmProblem, fx: &Value) -> Result<Value, String> {
+    let compiler = prob.compiler();
+    if !matches!(compiler, Compiler::Native | Compiler::Interpreter) {
+        return Err(format!(
+            "right-hand-side probes run under `native` or `interpreter`, not `{}`",
+            compiler.as_str()
+        ));
+    }
+    let prog = rhs_program(prob).map_err(|e| format!("{}: {e}", compiler.as_str()))?;
+    let names = prob.state_variable_names();
+    let var_of = |n: &str| n.split_once('[').map_or(n, |(v, _)| v).to_string();
+    // Each variable is one column-major block in the Problem's state order and
+    // in the program's layout: `(Problem offset, program offset, length)`.
+    let mut blocks = Vec::new();
+    for b in prog.state_layout() {
+        let len = b.shape.iter().product::<usize>().max(1);
+        let at = names
+            .iter()
+            .position(|n| var_of(n) == b.name)
+            .or_else(|| {
+                names
+                    .iter()
+                    .position(|n| same_variable(&var_of(n), &b.name))
+            })
+            .ok_or_else(|| format!("the Problem has no state for `{}`", b.name))?;
+        blocks.push((at, b.flat_offset, len));
+    }
+    let p: Vec<f64> = prog
+        .parameters()
+        .iter()
+        .map(|slot| {
+            prob.p()
+                .get(&slot.name)
+                .or_else(|| {
+                    prob.p()
+                        .iter()
+                        .find(|(k, _)| same_variable(&slot.name, k))
+                        .map(|(_, v)| v)
+                })
+                .copied()
+                .or(slot.default)
+                .unwrap_or(0.0)
+        })
+        .collect();
+    let (_, aux) = prog.default_state();
+    let forcing = prog.default_forcing();
+    let mut ws = prog.new_workspace();
+    let mut u = vec![0.0; prog.n_states()];
+    let mut du = vec![0.0; prog.n_states()];
     let mut rhs = Map::new();
     for probe in fx["rhs_probes"].as_array().ok_or("rhs_probes not array")? {
         let pid = probe["id"].as_str().ok_or("probe.id missing")?;
         let state_obj = probe["state"].as_object().ok_or("probe.state missing")?;
         let t = probe["t"].as_f64().unwrap_or(0.0);
         let sv = state_vec(&names, state_obj);
-        let dy = match &mut taped {
-            Some((scratch, param_vec)) => {
-                let mut dy = vec![0.0; names.len()];
-                compiled.debug_eval_rhs_into(
-                    &sv,
-                    t,
-                    param_vec,
-                    &mut dy,
-                    scratch,
-                    &mut RhsStats::default(),
-                );
-                dy
-            }
-            None => compiled.debug_eval_rhs(&sv, t, params).0,
-        };
+        for &(at, off, len) in &blocks {
+            u[off..off + len].copy_from_slice(&sv[at..at + len]);
+        }
+        prog.eval_into(&u, &aux, &p, t, &forcing, &mut du, &mut ws)
+            .map_err(|e| format!("probe {pid}: {e}"))?;
+        let mut dy = vec![0.0; names.len()];
+        for &(at, off, len) in &blocks {
+            dy[at..at + len].copy_from_slice(&du[off..off + len]);
+        }
         let mut m = Map::new();
         for (i, n) in names.iter().enumerate() {
             m.insert(bare(n).to_string(), number(dy[i]));
@@ -202,11 +231,11 @@ fn run_fixture(fx: &Value, manifest: &Manifest, compiler: Compiler) -> Result<Va
     )
     .map_err(|e| format!("esm_problem: {e:?}"))?;
 
-    // --- RHS on the Problem's own right-hand side ----------------------------
-    let compiled = prob
-        .debug_array_compiled()
-        .ok_or("the Problem built no array right-hand side")?;
-    let rhs = rhs_at_probes(&compiled, compiler, prob.p(), fx)?;
+    // --- RHS through the Problem's public program ---------------------------
+    if !prob.is_dynamic() {
+        return Err("the Problem built no array right-hand side".into());
+    }
+    let rhs = rhs_at_probes(&prob, fx)?;
 
     // --- Trajectory via the pinned diffsol solver ----------------------------
     let sol = solve(&prob, &opts).map_err(|e| format!("solve: {e:?}"))?;

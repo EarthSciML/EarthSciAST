@@ -25,7 +25,8 @@
 
 #![allow(dead_code)]
 
-use earthsci_ast::simulate_array::RhsStats;
+pub mod rhs;
+
 use earthsci_ast::{Alg, Compiler, ProblemOptions, Rhs, SolveOptions, esm_problem, solve};
 use serde_json::Value;
 
@@ -381,41 +382,25 @@ pub fn check_native_rhs_doc(id: &str, text: &str) {
     assert_rhs_agrees(id, &native, &interp);
 }
 
-/// The two problems' right-hand sides at one state, compared bit for bit.
+/// The two problems' right-hand sides at one state, compared bit for bit,
+/// each through its public program: native's is the strict tape (a rule off
+/// the tape refuses the program), the interpreter's the per-cell oracle.
 fn assert_rhs_agrees(
     label: &str,
     native: &earthsci_ast::EsmProblem,
     interp: &earthsci_ast::EsmProblem,
 ) {
-    let nc = native
-        .debug_array_compiled()
-        .expect("native has a right-hand side");
-    let ic = interp
-        .debug_array_compiled()
-        .expect("the interpreter has a right-hand side");
-    // What a solve arms for its whole run: the document's element types.
-    let _precision = nc.debug_precision_env().enter();
-    assert_eq!(
-        nc.state_variable_names(),
-        ic.state_variable_names(),
-        "{label}: state order"
-    );
-    let state: Vec<f64> = (0..nc.state_variable_names().len())
+    let names = native.state_variable_names();
+    assert_eq!(names, interp.state_variable_names(), "{label}: state order");
+    let state: Vec<f64> = (0..names.len())
         .map(|p| 1.0 + 0.1 * (0.37 * p as f64).sin())
         .collect();
-    let params = nc.debug_resolve_params(native.p());
-    let mut dy = vec![0.0f64; state.len()];
-    let mut scratch = nc
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    let mut stats = RhsStats::default();
-    nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-    assert!(scratch.has_tape(), "{label}: the tape declined a rule");
-    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p());
+    let dy = rhs::ProblemRhs::new(native).eval(&state, 0.0);
+    let idy = rhs::ProblemRhs::new(interp).eval(&state, 0.0);
     if let Some((i, a, b)) = first_bit_difference(&dy, &idy) {
         panic!(
             "{label}: native dy differs from the interpreter's at {} ({a} vs {b})",
-            nc.state_variable_names()[i]
+            names[i]
         );
     }
 }
@@ -577,33 +562,10 @@ pub fn check_geometry_doc(id: &str, text: &str) {
             panic!("{id}: build-time field {name}[{i}]: interpreter {x}, native {y}");
         }
     }
-    let (Some(nc), Some(ic)) = (native.debug_array_compiled(), interp.debug_array_compiled())
-    else {
+    if !native.is_dynamic() || !interp.is_dynamic() {
         return;
-    };
-    assert_eq!(
-        nc.state_variable_names(),
-        ic.state_variable_names(),
-        "{id}: state order"
-    );
-    let state: Vec<f64> = (0..nc.state_variable_names().len())
-        .map(|p| 1.0 + 0.1 * (0.37 * p as f64).sin())
-        .collect();
-    let params = nc.debug_resolve_params(native.p());
-    let mut dy = vec![0.0f64; state.len()];
-    let mut scratch = nc
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    let mut stats = RhsStats::default();
-    nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-    assert!(scratch.has_tape(), "{id}: the tape declined a rule");
-    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p());
-    if let Some((i, a, b)) = first_bit_difference(&dy, &idy) {
-        panic!(
-            "{id}: native dy differs from the interpreter's at {} ({a} vs {b})",
-            nc.state_variable_names()[i]
-        );
     }
+    assert_rhs_agrees(id, &native, &interp);
 }
 
 /// Give every ODE state (a `D` target on some equation's left-hand side) that
