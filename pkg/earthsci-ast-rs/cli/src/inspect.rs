@@ -283,7 +283,10 @@ pub(crate) fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn s
     Ok(())
 }
 
-pub(crate) fn run_pretty(file: PathBuf, format: MathFormat) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_pretty(
+    file: PathBuf,
+    format: MathFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
     let esm_file = load_at(&file, &content)?;
 
