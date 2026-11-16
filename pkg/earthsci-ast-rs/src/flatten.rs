@@ -3687,7 +3687,7 @@ fn namespace_join_names(
     // alone. A resolved `on` gate's data columns are namespaced by the same
     // rule (resolution runs after flattening, so the gate is normally `None` —
     // it is covered so the two orders agree).
-    let out: Vec<JoinClause> = join.iter().map(|c| c.map_reference_names(&ns)).collect();
+    let out: Vec<JoinClause> = join.iter().map(|c| c.map_reference_names(ns)).collect();
     (out != join).then_some(out)
 }
 
