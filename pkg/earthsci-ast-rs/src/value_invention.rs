@@ -199,7 +199,9 @@ pub fn is_value_invention_assignment(rhs: &Value) -> bool {
                 == Some("distinct"))
 }
 
-/// [`is_value_invention_assignment`] on a typed expression.
+/// [`is_value_invention_assignment`] on a typed expression. Read by the build
+/// pipeline, which wasm32 does not have.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn is_value_invention_expr(rhs: &Expr) -> bool {
     vi_node_kind(rhs) != NodeKind::None
 }
