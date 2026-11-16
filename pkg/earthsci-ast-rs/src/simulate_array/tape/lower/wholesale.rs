@@ -3,6 +3,7 @@
 //! concatenation, index, aggregate), and the standalone scalar reduction.
 
 use super::*;
+use crate::op_registry::{CoreOp, OtherOp as O};
 
 impl<'m> TapeBuilder<'m> {
     // -- wholesale-body lowering (the per-cell `eval` mirror) -----------------
@@ -88,14 +89,28 @@ impl<'m> TapeBuilder<'m> {
         op: &str,
         node: &Arc<ExpressionNode>,
     ) -> LResult<LV> {
-        match op {
-            "+" | "-" | "*" | "/" | "^" | "pow" | "min" | "max" | "and" | "or" | "neg" | "exp"
-            | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin" | "cos"
-            | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh"
-            | "atanh" | "not" | "atan2" | "==" | "!=" | "<" | "<=" | ">" | ">=" => {
-                self.lower_wholesale_elementwise(op, node, None)
-            }
-            "ifelse" => {
+        let Some(core) = CoreOp::from_name(op) else {
+            bail_tape!("wholesale: unsupported op `{op}`");
+        };
+        match core {
+            CoreOp::Unary(_)
+            | CoreOp::Compare(_)
+            | CoreOp::Other(
+                O::Add
+                | O::Sub
+                | O::Mul
+                | O::Div
+                | O::Pow
+                | O::PowWord
+                | O::Min
+                | O::Max
+                | O::And
+                | O::Or
+                | O::Neg
+                | O::Not
+                | O::Atan2,
+            ) => self.lower_wholesale_elementwise(op, node, None),
+            CoreOp::Other(O::Ifelse) => {
                 if node.args.len() != 3 {
                     return Ok(LV::Lit(f64::NAN));
                 }
@@ -129,21 +144,21 @@ impl<'m> TapeBuilder<'m> {
             // this used to emit was the third of three evaluators agreeing on a
             // wrong number; `NaN` is the sentinel that cannot be mistaken for a
             // result.
-            "D" => Ok(LV::Lit(f64::NAN)),
-            "Pre" => match node.args.first() {
+            CoreOp::Other(O::D) => Ok(LV::Lit(f64::NAN)),
+            CoreOp::Other(O::Pre) => match node.args.first() {
                 None => Ok(LV::Lit(f64::NAN)),
                 Some(a) => self.lower_wholesale(a),
             },
-            "const" => match eval_const(node) {
+            CoreOp::Other(O::Const) => match eval_const(node) {
                 Value::Scalar(s) => Ok(LV::Lit(s)),
                 // The wholesale `eval` serves an inline array literal as the
                 // whole array, origin-blind — which is exactly a materialized
                 // 1-origin box. `Instr::ConstArray` stores it once per solve.
                 Value::Array(a) => self.const_literal_array(node, &a, None),
             },
-            "true" => Ok(LV::Lit(1.0)),
-            "false" => Ok(LV::Lit(0.0)),
-            "broadcast" => {
+            CoreOp::Other(O::True) => Ok(LV::Lit(1.0)),
+            CoreOp::Other(O::False) => Ok(LV::Lit(0.0)),
+            CoreOp::Other(O::Broadcast) => {
                 let Some(fn_name) = node.broadcast_fn.as_deref() else {
                     bail_tape!("wholesale: `broadcast` with no `fn`");
                 };
@@ -152,17 +167,19 @@ impl<'m> TapeBuilder<'m> {
                 }
                 self.lower_wholesale_op_named(fn_name, node)
             }
-            crate::precision_infer::MARKER_OP => {
+            CoreOp::Other(O::Precision) => {
                 let (arg, _precision) = self.marker_operand(node)?;
                 self.lower_wholesale(arg)
             }
-            "reshape" => self.lower_wholesale_reshape(node),
-            "transpose" => self.lower_wholesale_transpose(node),
-            "concat" => self.lower_wholesale_concat(node),
-            "index" => self.lower_wholesale_index(node),
-            "faq" => self.lower_wholesale_aggregate(node),
-            "makearray" => self.lower_wholesale_makearray(node),
-            other => bail_tape!("wholesale: unsupported op `{other}`"),
+            CoreOp::Other(O::Reshape) => self.lower_wholesale_reshape(node),
+            CoreOp::Other(O::Transpose) => self.lower_wholesale_transpose(node),
+            CoreOp::Other(O::Concat) => self.lower_wholesale_concat(node),
+            CoreOp::Other(O::Index) => self.lower_wholesale_index(node),
+            CoreOp::Other(O::Faq) => self.lower_wholesale_aggregate(node),
+            CoreOp::Other(O::Makearray) => self.lower_wholesale_makearray(node),
+            CoreOp::Other(O::Ic | O::Enum | O::ApplyExpressionTemplate | O::Distinct) => {
+                bail_tape!("wholesale: unsupported op `{op}`")
+            }
         }
     }
 
@@ -181,37 +198,49 @@ impl<'m> TapeBuilder<'m> {
         node: &Arc<ExpressionNode>,
         shape: Option<&[usize]>,
     ) -> LResult<LV> {
-        match op {
+        let Some(core) = CoreOp::from_name(op) else {
+            bail_tape!("wholesale: `{op}` is not an elementwise op");
+        };
+        match core {
             // n-ary arithmetic + logical connectives: `eval_arith` is a left
             // fold of `apply_binary` over scalars AND arrays (the all-scalar
             // `fold_scalar` and the `and`/`or` all/any forms agree with the
             // left fold at every legal arity), so a chained `Bin` reproduces
             // it bit for bit — for equal-shape operands.
-            "+" | "-" | "*" | "/" | "^" | "pow" | "min" | "max" | "and" | "or" => {
+            CoreOp::Other(
+                O::Add
+                | O::Sub
+                | O::Mul
+                | O::Div
+                | O::Pow
+                | O::PowWord
+                | O::Min
+                | O::Max
+                | O::And
+                | O::Or,
+            ) => {
                 let Some((first, rest)) = node.args.split_first() else {
                     return Ok(LV::Lit(f64::NAN)); // fold_scalar's empty-arity sentinel
                 };
-                if op == "-" && rest.is_empty() {
+                if core == CoreOp::Other(O::Sub) && rest.is_empty() {
                     let v = self.lower_wholesale_operand(shape, first)?;
                     return self.emit_neg(v);
                 }
                 let mut acc = self.lower_wholesale_operand(shape, first)?;
                 for a in rest {
                     let v = self.lower_wholesale_operand(shape, a)?;
-                    acc = self.emit_bin_wholesale(BinCode::of(op), acc, v)?;
+                    acc = self.emit_bin_wholesale(BinCode::from_core(core), acc, v)?;
                 }
                 Ok(acc)
             }
-            "neg" => {
+            CoreOp::Other(O::Neg) => {
                 if node.args.len() != 1 {
                     return Ok(LV::Lit(f64::NAN));
                 }
                 let v = self.lower_wholesale_operand(shape, &node.args[0])?;
                 self.emit_neg(v)
             }
-            "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
-            | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
-            | "acosh" | "atanh" | "not" => {
+            CoreOp::Unary(_) | CoreOp::Other(O::Not) => {
                 // `eval_unary` evaluates args[0] only; no args ⇒ NaN sentinel.
                 let Some(first) = node.args.first() else {
                     return Ok(LV::Lit(f64::NAN));
@@ -219,7 +248,7 @@ impl<'m> TapeBuilder<'m> {
                 let v = self.lower_wholesale_operand(shape, first)?;
                 Ok(self.emit_un(UnCode::of(op), v))
             }
-            "atan2" => {
+            CoreOp::Other(O::Atan2) => {
                 // `eval_binary`: first two args, NaN sentinel below arity 2.
                 let ([a, b] | [a, b, ..]) = &node.args[..] else {
                     return Ok(LV::Lit(f64::NAN));
@@ -228,15 +257,34 @@ impl<'m> TapeBuilder<'m> {
                 let bv = self.lower_wholesale_operand(shape, b)?;
                 self.emit_bin_wholesale(BinCode::Atan2, av, bv)
             }
-            "==" | "!=" | "<" | "<=" | ">" | ">=" => {
+            CoreOp::Compare(_) => {
                 if node.args.len() != 2 {
                     return Ok(LV::Lit(f64::NAN));
                 }
                 let av = self.lower_wholesale_operand(shape, &node.args[0])?;
                 let bv = self.lower_wholesale_operand(shape, &node.args[1])?;
-                self.emit_bin_wholesale(BinCode::of(op), av, bv)
+                self.emit_bin_wholesale(BinCode::from_core(core), av, bv)
             }
-            other => bail_tape!("wholesale: `{other}` is not an elementwise op"),
+            CoreOp::Other(
+                O::Precision
+                | O::Ifelse
+                | O::D
+                | O::Ic
+                | O::Pre
+                | O::Const
+                | O::True
+                | O::False
+                | O::Enum
+                | O::ApplyExpressionTemplate
+                | O::Faq
+                | O::Makearray
+                | O::Index
+                | O::Broadcast
+                | O::Reshape
+                | O::Transpose
+                | O::Concat
+                | O::Distinct,
+            ) => bail_tape!("wholesale: `{op}` is not an elementwise op"),
         }
     }
 

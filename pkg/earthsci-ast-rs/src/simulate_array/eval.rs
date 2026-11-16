@@ -236,33 +236,37 @@ pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
 ///   `"expp"`, a user op) — must be lowered to a stencil first.
 #[must_use]
 pub fn is_evaluable_op(op: &str) -> bool {
-    matches!(
-        op,
-        // Arithmetic. `pow` is the word spelling of `^`.
-        "+" | "-" | "*" | "/" | "^" | "pow" | "neg"
-        // Elementary functions.
-        | "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
-        | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
-        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh"
-        | "atan2" | "min" | "max"
-        // Comparisons and booleans.
-        | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not"
-        | "ifelse"
-        // Form ops with a defined runtime meaning here. `true` is a nullary
-        // boolean LITERAL (esm-spec §4.2: "an always-true join / `filter`
-        // predicate"), not something a lowering pass consumes — the natural body
-        // for a semi-join, and the one op in the §4.2 table this evaluator used
-        // to have no answer for while `value_invention::vi_eval`, Python's
-        // `numpy_interpreter` and Julia's `_geo_compile` all evaluated it.
-        | "D" | "Pre" | "const" | "true" | "false"
-        // Array ops.
-        | "index" | "faq" | "makearray" | "reshape" | "transpose" | "concat"
-        | "broadcast"
-        // The engine-internal precision-boundary marker
-        // (`crate::precision_infer::MARKER_OP`): a transparent wrapper that
-        // evaluates its one operand at a stated element type. Never authored.
-        | crate::precision_infer::MARKER_OP
-    )
+    use crate::op_registry::{CoreOp, OtherOp as O};
+    let Some(core) = CoreOp::from_name(op) else {
+        return false;
+    };
+    match core {
+        CoreOp::Unary(_) | CoreOp::Compare(_) => true,
+        CoreOp::Other(o) => match o {
+            // Arithmetic, including the deprecated word spellings.
+            O::Add | O::Sub | O::Mul | O::Div | O::Pow | O::PowWord | O::Neg => true,
+            O::Atan2 | O::Min | O::Max => true,
+            O::And | O::Or | O::Not | O::Ifelse => true,
+            // Form ops with a defined runtime meaning here. `true` is a
+            // nullary boolean LITERAL (esm-spec §4.2: "an always-true join /
+            // `filter` predicate"), not something a lowering pass consumes.
+            O::D | O::Pre | O::Const | O::True | O::False => true,
+            // Array ops.
+            O::Index
+            | O::Faq
+            | O::Makearray
+            | O::Reshape
+            | O::Transpose
+            | O::Concat
+            | O::Broadcast => true,
+            // A transparent wrapper that evaluates its one operand at a stated
+            // element type. Never authored.
+            O::Precision => true,
+            // Consumed before evaluation: the load-time ops and the build-time
+            // query op.
+            O::Ic | O::Enum | O::ApplyExpressionTemplate | O::Distinct => false,
+        },
+    }
 }
 
 /// Reject every operator in `expr` that the array interpreter cannot evaluate.
@@ -366,15 +370,49 @@ fn check_scalar_ops(expr: &Expr) -> Result<(), CompileError> {
     let Expr::Operator(node) = expr else {
         return Ok(());
     };
-    let no_scalar_value = match node.op.as_str() {
-        "D" | "index" | "faq" | "makearray" | "reshape" | "transpose" | "concat" | "broadcast" => {
-            true
-        }
-        "const" => !node
+    use crate::op_registry::{CoreOp, OtherOp as O};
+    let no_scalar_value = match node.core_op() {
+        Some(CoreOp::Other(
+            O::D
+            | O::Index
+            | O::Faq
+            | O::Makearray
+            | O::Reshape
+            | O::Transpose
+            | O::Concat
+            | O::Broadcast,
+        )) => true,
+        Some(CoreOp::Other(O::Const)) => !node
             .value
             .as_ref()
             .is_some_and(serde_json::Value::is_number),
-        _ => false,
+        // Everything else has a scalar value over scalar operands, or was
+        // refused by the gates above.
+        Some(CoreOp::Unary(_) | CoreOp::Compare(_)) | None => false,
+        Some(CoreOp::Other(
+            O::Add
+            | O::Sub
+            | O::Mul
+            | O::Div
+            | O::Pow
+            | O::PowWord
+            | O::Neg
+            | O::Precision
+            | O::Atan2
+            | O::Min
+            | O::Max
+            | O::Ifelse
+            | O::And
+            | O::Or
+            | O::Not
+            | O::Ic
+            | O::Pre
+            | O::True
+            | O::False
+            | O::Enum
+            | O::ApplyExpressionTemplate
+            | O::Distinct,
+        )) => false,
     };
     if no_scalar_value {
         return Err(CompileError::UnevaluableOperatorError {
@@ -402,12 +440,31 @@ pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 /// gets the same semantics without cloning `args` per cell — this is the
 /// hottest node in the per-cell profile.)
 fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    match op {
+    use crate::op_registry::{CoreOp, OtherOp as O};
+    // Unreachable by construction: EVERY path into this evaluator is gated.
+    // The compiled-model path gates in `from_model` (`check_no_spatial_ops`),
+    // and the public `eval_expression` gates with `check_evaluable`, which
+    // additionally rejects the evaluable-core ops with no rule here. A NaN
+    // sentinel would be indistinguishable from a legitimate numerical result,
+    // so reaching an unknown name means a gate was bypassed — a bug in THIS
+    // crate — and it fails loudly rather than corrupting the answer.
+    let unreachable_op = || -> ! {
+        unreachable!(
+            "operator '{op}' reached eval_op without an evaluation rule; \
+             every entry point must gate with check_evaluable() first"
+        )
+    };
+    let Some(core) = CoreOp::from_name(op) else {
+        unreachable_op()
+    };
+    match core {
         // Elementwise / scalar arithmetic. If any operand is an array,
         // return an array (with ndarray broadcasting).
-        "+" | "-" | "*" | "/" | "^" => eval_arith(op, &node.args, ctx),
+        CoreOp::Other(O::Add | O::Sub | O::Mul | O::Div | O::Pow) => {
+            eval_arith(op, &node.args, ctx)
+        }
         // The word spelling of `^`, folded through the `^` kernel itself.
-        "pow" => eval_arith("^", &node.args, ctx),
+        CoreOp::Other(O::PowWord) => eval_arith("^", &node.args, ctx),
 
         // The deprecated word spelling of unary `-` (esm-spec §4.2): the loader
         // rewrites it away, but an expression built in code can still reach
@@ -415,7 +472,7 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // through `negate` — the same primitive the unary-minus arm of
         // `eval_arith` uses — so oracle and overlay agree. Unary only; a
         // non-unary `neg` is malformed ⇒ the NaN sentinel.
-        "neg" => {
+        CoreOp::Other(O::Neg) => {
             if node.args.len() != 1 {
                 return Value::Scalar(f64::NAN);
             }
@@ -427,7 +484,7 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // type it names, then hand the value back unchanged. Widening
         // binary32 → binary64 is exact, so the carrier stays invisible; the
         // marker only decides which kernel table the subtree resolves.
-        crate::precision_infer::MARKER_OP => {
+        CoreOp::Other(O::Precision) => {
             if node.args.len() != 1 {
                 return Value::Scalar(f64::NAN);
             }
@@ -441,23 +498,20 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
 
         // Unary / scalar transcendentals.
-        "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin" | "cos"
-        | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh"
-        | "atanh" => eval_unary(op, &node.args, ctx),
+        CoreOp::Unary(_) => eval_unary(op, &node.args, ctx),
 
-        "atan2" => eval_binary(op, &node.args, ctx),
+        CoreOp::Other(O::Atan2) => eval_binary(op, &node.args, ctx),
 
         // n-ary min/max (esm-spec §4.2 — arity ≥ 2). Reuse the n-ary
         // arithmetic combiner so array operands broadcast through the same
         // ndarray path as `+`/`*`.
-        "min" | "max" => eval_arith(op, &node.args, ctx),
+        CoreOp::Other(O::Min | O::Max) => eval_arith(op, &node.args, ctx),
 
-        // Comparison operators — return 1.0 (true) or 0.0 (false) via the same
-        // [`scalar_compare`] kernel the vectorized overlay uses (bit-identity by
-        // construction). BROADCAST when either operand is an array, so a per-cell
+        // Comparison operators — return 1.0 (true) or 0.0 (false) via the
+        // [`BinCode`] kernels the vectorized overlay uses. BROADCAST when either operand is an array, so a per-cell
         // predicate like `code >= 1` over an [x,y] fuel grid yields an [x,y] mask
         // rather than collapsing to a scalar NaN.
-        "==" | "!=" | "<" | "<=" | ">" | ">=" => {
+        CoreOp::Compare(_) => {
             if node.args.len() != 2 {
                 return Value::Scalar(f64::NAN);
             }
@@ -467,10 +521,10 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Logical connectives (esm-spec §4.2): nonzero is true, the result is a
         // strict 1.0/0.0 flag, broadcast over array operands like arithmetic —
         // e.g. `and(code >= 1, code <= 13)` over an [x,y] fuel grid.
-        "and" | "or" => eval_arith(op, &node.args, ctx),
-        "not" => eval_unary(op, &node.args, ctx),
+        CoreOp::Other(O::And | O::Or) => eval_arith(op, &node.args, ctx),
+        CoreOp::Other(O::Not) => eval_unary(op, &node.args, ctx),
 
-        "ifelse" => eval_ifelse(node, ctx),
+        CoreOp::Other(O::Ifelse) => eval_ifelse(node, ctx),
 
         // Derivative operator. Unreachable, and the sentinel says so.
         //
@@ -486,13 +540,13 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // `ic`, so delisting `D` would reject every document that states a
         // differential equation. Teaching that gate to unwrap a structural `D`
         // LHS as it unwraps `ic` would let this arm go too.
-        "D" => Value::Scalar(f64::NAN),
+        CoreOp::Other(O::D) => Value::Scalar(f64::NAN),
 
         // `Pre` (previous-value marker) is only meaningful under event handling;
         // on the RHS it passes its argument through. Guard the arity so a
         // malformed `Pre` node from `eval_expression` yields the NaN sentinel
         // rather than panicking on `args[0]`.
-        "Pre" => {
+        CoreOp::Other(O::Pre) => {
             if node.args.is_empty() {
                 Value::Scalar(f64::NAN)
             } else {
@@ -502,21 +556,21 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 
         // Inline literal (esm-spec §4): a number → scalar; a nested numeric
         // array → a row-major array.
-        "const" => eval_const_memo(node, ctx.const_lits),
+        CoreOp::Other(O::Const) => eval_const_memo(node, ctx.const_lits),
 
         // Array ops.
-        "index" => eval_index(node, ctx),
-        "faq" => eval_faq(node, ctx),
-        "makearray" => eval_makearray(node, ctx),
-        "reshape" => eval_reshape(node, ctx),
-        "transpose" => eval_transpose(node, ctx),
-        "concat" => eval_concat(node, ctx),
+        CoreOp::Other(O::Index) => eval_index(node, ctx),
+        CoreOp::Other(O::Faq) => eval_faq(node, ctx),
+        CoreOp::Other(O::Makearray) => eval_makearray(node, ctx),
+        CoreOp::Other(O::Reshape) => eval_reshape(node, ctx),
+        CoreOp::Other(O::Transpose) => eval_transpose(node, ctx),
+        CoreOp::Other(O::Concat) => eval_concat(node, ctx),
 
         // Element-wise application of the scalar operator named in `fn`
         // (esm-spec §4.3.4). Re-enter with that name against the SAME node —
         // see [`eval_op_named`]. Because the scalar-operator set excludes
         // `broadcast` itself, this recursion is one level deep.
-        "broadcast" => eval_broadcast(node, ctx),
+        CoreOp::Other(O::Broadcast) => eval_broadcast(node, ctx),
 
         // The nullary boolean literal (esm-spec §4.2). This evaluator's boolean
         // convention is already 1.0 / 0.0 — every comparison and `and`/`or`/
@@ -527,26 +581,14 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // produce. In a `sum_product` contraction it is the multiplicative
         // identity, so `faq{expr: true}` COUNTS the admitted tuples —
         // which is exactly what a semi-join wants to say.
-        "true" => Value::Scalar(1.0),
+        CoreOp::Other(O::True) => Value::Scalar(1.0),
         // Its counterpart, in the same encoding (a false comparison is 0.0).
-        "false" => Value::Scalar(0.0),
+        CoreOp::Other(O::False) => Value::Scalar(0.0),
 
-        // Unreachable by construction: EVERY path into this evaluator is gated.
-        // The compiled-model path gates in `from_model` (`check_no_spatial_ops`),
-        // and the public `eval_expression` gates with `check_evaluable`, which
-        // additionally rejects evaluable-core ops with no arm here (`ic`,
-        // `enum`, `distinct`, …).
-        //
-        // This used to be `_ => Value::Scalar(f64::NAN)`. A NaN sentinel is
-        // indistinguishable from a legitimate numerical result, so a typo'd op
-        // ("expp") or an op an earlier stage failed to eliminate produced a
-        // silently poisoned solution instead of a diagnosable failure. Reaching
-        // this arm now means a gate was bypassed — a bug in THIS crate — so it
-        // fails loudly rather than corrupting the answer.
-        other => unreachable!(
-            "operator '{other}' reached eval_op without an evaluation rule; \
-             every entry point must gate with check_evaluable() first"
-        ),
+        // Consumed before evaluation; `check_evaluable` refuses them.
+        CoreOp::Other(O::Ic | O::Enum | O::ApplyExpressionTemplate | O::Distinct) => {
+            unreachable_op()
+        }
     }
 }
 
@@ -729,21 +771,28 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
     if crate::precision::is_f32() {
         return binary_kernel_f32_of(BinCode::of(op))(x, y);
     }
-    match op {
-        "+" => x + y,
-        "-" => x - y,
-        "*" => x * y,
-        "/" => x / y,
-        "^" | "pow" => x.powf(y),
-        "atan2" => x.atan2(y),
-        "min" => crate::faq::nan_min(x, y),
-        "max" => crate::faq::nan_max(x, y),
+    match BinCode::of(op) {
+        BinCode::Add => x + y,
+        BinCode::Sub => x - y,
+        BinCode::Mul => x * y,
+        BinCode::Div => x / y,
+        BinCode::Pow => x.powf(y),
+        BinCode::Atan2 => x.atan2(y),
+        BinCode::Min => crate::faq::nan_min(x, y),
+        BinCode::Max => crate::faq::nan_max(x, y),
         // Comparison + logical kernels, so the broadcast paths (`combine` /
-        // `broadcast_binary`) carry array operands elementwise.
-        "==" | "!=" | "<" | "<=" | ">" | ">=" => scalar_compare(op, x, y),
-        "and" => (x != 0.0 && y != 0.0) as i32 as f64,
-        "or" => (x != 0.0 || y != 0.0) as i32 as f64,
-        _ => f64::NAN,
+        // `broadcast_binary`) carry array operands elementwise. `==`/`!=`
+        // test EXACT equality with the native relops — the pinned
+        // cross-binding semantic, including `inf == inf ⇒ true`.
+        BinCode::Eq => (x == y) as i32 as f64,
+        BinCode::Ne => (x != y) as i32 as f64,
+        BinCode::Lt => (x < y) as i32 as f64,
+        BinCode::Le => (x <= y) as i32 as f64,
+        BinCode::Gt => (x > y) as i32 as f64,
+        BinCode::Ge => (x >= y) as i32 as f64,
+        BinCode::And => (x != 0.0 && y != 0.0) as i32 as f64,
+        BinCode::Or => (x != 0.0 || y != 0.0) as i32 as f64,
+        BinCode::Unknown => f64::NAN,
     }
 }
 
@@ -803,36 +852,64 @@ pub(crate) enum BinCode {
 }
 
 impl BinCode {
-    /// Resolve an operator name. The arms are exactly [`apply_binary`]'s.
+    /// Resolve an operator name.
     pub(crate) fn of(op: &str) -> BinCode {
+        crate::op_registry::CoreOp::from_name(op).map_or(BinCode::Unknown, BinCode::from_core)
+    }
+
+    /// The binary kernel a core operator folds with, or [`BinCode::Unknown`]
+    /// for one that has none. `pow` shares `^`'s kernel; `-` is subtraction.
+    pub(crate) const fn from_core(op: crate::op_registry::CoreOp) -> BinCode {
+        use crate::op_registry::{Comparison as C, CoreOp, OtherOp as O};
         match op {
-            "+" => BinCode::Add,
-            "-" => BinCode::Sub,
-            "*" => BinCode::Mul,
-            "/" => BinCode::Div,
-            "^" | "pow" => BinCode::Pow,
-            "atan2" => BinCode::Atan2,
-            "min" => BinCode::Min,
-            "max" => BinCode::Max,
-            "==" => BinCode::Eq,
-            "!=" => BinCode::Ne,
-            "<" => BinCode::Lt,
-            "<=" => BinCode::Le,
-            ">" => BinCode::Gt,
-            ">=" => BinCode::Ge,
-            "and" => BinCode::And,
-            "or" => BinCode::Or,
-            _ => BinCode::Unknown,
+            CoreOp::Compare(c) => match c {
+                C::Eq => BinCode::Eq,
+                C::Ne => BinCode::Ne,
+                C::Lt => BinCode::Lt,
+                C::Le => BinCode::Le,
+                C::Gt => BinCode::Gt,
+                C::Ge => BinCode::Ge,
+            },
+            CoreOp::Unary(_) => BinCode::Unknown,
+            CoreOp::Other(o) => match o {
+                O::Add => BinCode::Add,
+                O::Sub => BinCode::Sub,
+                O::Mul => BinCode::Mul,
+                O::Div => BinCode::Div,
+                O::Pow | O::PowWord => BinCode::Pow,
+                O::Atan2 => BinCode::Atan2,
+                O::Min => BinCode::Min,
+                O::Max => BinCode::Max,
+                O::And => BinCode::And,
+                O::Or => BinCode::Or,
+                O::Neg
+                | O::Precision
+                | O::Ifelse
+                | O::Not
+                | O::D
+                | O::Ic
+                | O::Pre
+                | O::Const
+                | O::True
+                | O::False
+                | O::Enum
+                | O::ApplyExpressionTemplate
+                | O::Faq
+                | O::Makearray
+                | O::Index
+                | O::Broadcast
+                | O::Reshape
+                | O::Transpose
+                | O::Concat
+                | O::Distinct => BinCode::Unknown,
+            },
         }
     }
 }
 
 /// [`binary_kernel`] with the name already resolved to a [`BinCode`].
 ///
-/// The comparison arms inline the relop rather than calling `scalar_compare(op,
-/// …)` — which would re-match the operator NAME once per element — but compute
-/// the identical value: `scalar_compare` is itself `if a <relop> b { 1.0 } else
-/// { 0.0 }`. `binary_kernel` delegates here, so
+/// `binary_kernel` delegates here, so
 /// `binary_kernels_match_apply_binary` pins this table to `apply_binary` bit for
 /// bit over every op name and a spread of operands.
 ///
@@ -1007,13 +1084,13 @@ pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
     if crate::precision::is_f32() {
         return unary_kernel_f32_of(UnCode::of(op))(x);
     }
-    match op {
-        "exp" => x.exp(),
-        "log" => x.ln(),
-        "log10" => x.log10(),
-        "sqrt" => x.sqrt(),
-        "abs" => x.abs(),
-        "sign" => {
+    match UnCode::of(op) {
+        UnCode::Exp => x.exp(),
+        UnCode::Ln => x.ln(),
+        UnCode::Log10 => x.log10(),
+        UnCode::Sqrt => x.sqrt(),
+        UnCode::Abs => x.abs(),
+        UnCode::Sign => {
             if x > 0.0 {
                 1.0
             } else if x < 0.0 {
@@ -1022,22 +1099,22 @@ pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
                 0.0
             }
         }
-        "floor" => x.floor(),
-        "ceil" => x.ceil(),
-        "sin" => x.sin(),
-        "cos" => x.cos(),
-        "tan" => x.tan(),
-        "asin" => x.asin(),
-        "acos" => x.acos(),
-        "atan" => x.atan(),
-        "sinh" => x.sinh(),
-        "cosh" => x.cosh(),
-        "tanh" => x.tanh(),
-        "asinh" => x.asinh(),
-        "acosh" => x.acosh(),
-        "atanh" => x.atanh(),
-        "not" => (x == 0.0) as i32 as f64,
-        _ => f64::NAN,
+        UnCode::Floor => x.floor(),
+        UnCode::Ceil => x.ceil(),
+        UnCode::Sin => x.sin(),
+        UnCode::Cos => x.cos(),
+        UnCode::Tan => x.tan(),
+        UnCode::Asin => x.asin(),
+        UnCode::Acos => x.acos(),
+        UnCode::Atan => x.atan(),
+        UnCode::Sinh => x.sinh(),
+        UnCode::Cosh => x.cosh(),
+        UnCode::Tanh => x.tanh(),
+        UnCode::Asinh => x.asinh(),
+        UnCode::Acosh => x.acosh(),
+        UnCode::Atanh => x.atanh(),
+        UnCode::Not => (x == 0.0) as i32 as f64,
+        UnCode::Unknown => f64::NAN,
     }
 }
 
@@ -1079,32 +1156,41 @@ pub(crate) enum UnCode {
 }
 
 impl UnCode {
-    /// Resolve an operator name. The arms are exactly [`apply_unary`]'s
-    /// (including the `log`/`ln` alias).
+    /// Resolve an operator name: a unary function, `not`, or
+    /// [`UnCode::Unknown`].
     pub(crate) fn of(op: &str) -> UnCode {
-        match op {
-            "exp" => UnCode::Exp,
-            "log" => UnCode::Ln,
-            "log10" => UnCode::Log10,
-            "sqrt" => UnCode::Sqrt,
-            "abs" => UnCode::Abs,
-            "sign" => UnCode::Sign,
-            "floor" => UnCode::Floor,
-            "ceil" => UnCode::Ceil,
-            "sin" => UnCode::Sin,
-            "cos" => UnCode::Cos,
-            "tan" => UnCode::Tan,
-            "asin" => UnCode::Asin,
-            "acos" => UnCode::Acos,
-            "atan" => UnCode::Atan,
-            "sinh" => UnCode::Sinh,
-            "cosh" => UnCode::Cosh,
-            "tanh" => UnCode::Tanh,
-            "asinh" => UnCode::Asinh,
-            "acosh" => UnCode::Acosh,
-            "atanh" => UnCode::Atanh,
-            "not" => UnCode::Not,
-            _ => UnCode::Unknown,
+        use crate::op_registry::{CoreOp, OtherOp};
+        match CoreOp::from_name(op) {
+            Some(CoreOp::Unary(f)) => UnCode::from_unary(f),
+            Some(CoreOp::Other(OtherOp::Not)) => UnCode::Not,
+            Some(CoreOp::Compare(_) | CoreOp::Other(_)) | None => UnCode::Unknown,
+        }
+    }
+
+    /// The kernel code of a unary function.
+    pub(crate) const fn from_unary(f: crate::op_registry::UnaryFn) -> UnCode {
+        use crate::op_registry::UnaryFn as F;
+        match f {
+            F::Exp => UnCode::Exp,
+            F::Log => UnCode::Ln,
+            F::Log10 => UnCode::Log10,
+            F::Sqrt => UnCode::Sqrt,
+            F::Abs => UnCode::Abs,
+            F::Sign => UnCode::Sign,
+            F::Floor => UnCode::Floor,
+            F::Ceil => UnCode::Ceil,
+            F::Sin => UnCode::Sin,
+            F::Cos => UnCode::Cos,
+            F::Tan => UnCode::Tan,
+            F::Asin => UnCode::Asin,
+            F::Acos => UnCode::Acos,
+            F::Atan => UnCode::Atan,
+            F::Sinh => UnCode::Sinh,
+            F::Cosh => UnCode::Cosh,
+            F::Tanh => UnCode::Tanh,
+            F::Asinh => UnCode::Asinh,
+            F::Acosh => UnCode::Acosh,
+            F::Atanh => UnCode::Atanh,
         }
     }
 }
@@ -4892,7 +4978,7 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     //     over the source cells),
     //   * a §5.3 `filter` (a per-cell fuel gate, a `overlap > 0` regrid sparsity),
     //     carried by masking each term with the reduction identity.
-    // The kernels reuse the identical `apply_binary`/`apply_unary`/`scalar_compare`
+    // The kernels reuse the identical `apply_binary`/`apply_unary` kernels
     // functions and ghost-0 convention, so the result is bit-identical to the
     // per-cell oracle below; any op / ragged-bound the overlay does not handle
     // returns `None` and we fall through. A local `Pool` recycles intermediates.

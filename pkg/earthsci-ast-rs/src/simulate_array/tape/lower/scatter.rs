@@ -256,34 +256,22 @@ impl TapeBuilder<'_> {
                 }
             }
             Expr::Operator(n) if is_plain(n) => {
-                let op: &'static str = match n.op.as_str() {
-                    "+" => "+",
-                    "-" => "-",
-                    "*" => "*",
-                    "/" => "/",
-                    "and" => "and",
-                    "or" => "or",
-                    "==" => "==",
-                    "!=" => "!=",
-                    "<" => "<",
-                    "<=" => "<=",
-                    ">" => ">",
-                    ">=" => ">=",
-                    "index" => return self.ix_compile_index(n, syms),
-                    "floor" | "ceil" | "abs" | "sign" => {
-                        let op: &'static str = match n.op.as_str() {
-                            "floor" => "floor",
-                            "ceil" => "ceil",
-                            "abs" => "abs",
-                            _ => "sign",
-                        };
+                use crate::op_registry::{CoreOp, OtherOp as O, UnaryFn as F};
+                let core = n.core_op()?;
+                match core {
+                    CoreOp::Other(O::Index) => return self.ix_compile_index(n, syms),
+                    CoreOp::Unary(F::Floor | F::Ceil | F::Abs | F::Sign) => {
                         let [a] = &n.args[..] else {
                             return None;
                         };
-                        return Some(IxNode::Un(op, Box::new(self.ix_compile(a, syms)?)));
+                        return Some(IxNode::Un(core.name(), Box::new(self.ix_compile(a, syms)?)));
                     }
+                    CoreOp::Other(O::Add | O::Sub | O::Mul | O::Div | O::And | O::Or)
+                    | CoreOp::Compare(_) => {}
+                    // Not folded here.
                     _ => return None,
-                };
+                }
+                let op = core.name();
                 if n.args.is_empty() {
                     return None;
                 }

@@ -377,68 +377,8 @@ mod tests {
     /// otherwise come back as the oracle's `NaN` sentinel.
     #[test]
     fn the_evaluate_gap_is_pinned() {
-        const CORE: &[&str] = &[
-            "+",
-            "-",
-            "*",
-            "/",
-            "^",
-            "neg",
-            "exp",
-            "log",
-            "log10",
-            "sqrt",
-            "abs",
-            "sign",
-            "floor",
-            "ceil",
-            "sin",
-            "cos",
-            "tan",
-            "asin",
-            "acos",
-            "atan",
-            "sinh",
-            "cosh",
-            "tanh",
-            "asinh",
-            "acosh",
-            "atanh",
-            "atan2",
-            "min",
-            "max",
-            "ifelse",
-            "==",
-            "!=",
-            "<",
-            "<=",
-            ">",
-            ">=",
-            "and",
-            "or",
-            "not",
-            "D",
-            "ic",
-            "Pre",
-            "const",
-            "true",
-            "enum",
-            "apply_expression_template",
-            "faq",
-            "makearray",
-            "index",
-            "broadcast",
-            "reshape",
-            "transpose",
-            "concat",
-            "distinct",
-        ];
         let mut gap: Vec<&str> = Vec::new();
-        for op in CORE {
-            assert!(
-                crate::op_registry::is_core_op(op),
-                "{op} is listed here but the registry does not carry it"
-            );
+        for op in crate::op_registry::CoreOp::all().map(crate::op_registry::CoreOp::name) {
             match crate::simulate_array::check_scalar_evaluable(&node_with_legal_arity(op)) {
                 Ok(()) => {}
                 Err(crate::compile_error::CompileError::UnevaluableOperatorError { op: got }) => {

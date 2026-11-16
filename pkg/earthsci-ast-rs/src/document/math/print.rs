@@ -328,98 +328,25 @@ fn json_toks_into(j: &Json, out: &mut Vec<Tok>) {
 
 // ## Operator tables
 
-/// `Math.fnKw`: unary functions with a native spelling, and their keyword.
-pub const FN_KW: &[(&str, Kw)] = &[
-    ("exp", Kw::Exp),
-    ("log", Kw::Ln),
-    ("sin", Kw::Sin),
-    ("cos", Kw::Cos),
-    ("tan", Kw::Tan),
-    ("asin", Kw::Asin),
-    ("acos", Kw::Acos),
-    ("atan", Kw::Atan),
-    ("sinh", Kw::Sinh),
-    ("cosh", Kw::Cosh),
-    ("tanh", Kw::Tanh),
-];
-
-/// `Math.cmpKw`: comparisons and their token.
-pub const CMP_KW: &[(&str, Kw)] = &[
-    ("<", Kw::Lt),
-    ("<=", Kw::Le),
-    (">", Kw::Gt),
-    (">=", Kw::Ge),
-    ("==", Kw::Eq),
-    ("!=", Kw::Ne),
-];
-
 /// `Math.callOps`: core operators in the call form.
-pub const CALL_OPS: &[&str] = &["sign", "atan2", "asinh", "acosh", "atanh", "Pre", "enum"];
+pub fn is_call_op(o: &str) -> bool {
+    kind_of(o) == OpK::Call
+}
 
 /// `Math.reservedOpn`: names `\operatorname{…}` never means a template or an
 /// open operator by.
 pub fn reserved_opn(n: &str) -> bool {
-    CALL_OPS.contains(&n) || ["D", "neg", "pow"].contains(&n) || REMOVED_OPS.contains(&n)
+    is_call_op(n) || ["D", "neg", "pow"].contains(&n) || REMOVED_OPS.contains(&n)
 }
 
-/// `Math.coreOps` (`coreOpNames` of `Notation`).
-pub const CORE_OPS: &[&str] = &[
-    "+",
-    "-",
-    "*",
-    "/",
-    "^",
-    "pow",
-    "neg",
-    "<",
-    "<=",
-    ">",
-    ">=",
-    "==",
-    "!=",
-    "and",
-    "or",
-    "not",
-    "true",
-    "false",
-    "ifelse",
-    "exp",
-    "log",
-    "log10",
-    "sqrt",
-    "abs",
-    "sign",
-    "floor",
-    "ceil",
-    "sin",
-    "cos",
-    "tan",
-    "asin",
-    "acos",
-    "atan",
-    "sinh",
-    "cosh",
-    "tanh",
-    "asinh",
-    "acosh",
-    "atanh",
-    "atan2",
-    "min",
-    "max",
-    "D",
-    "ic",
-    "Pre",
-    "enum",
-    "const",
-    "faq",
-    "makearray",
-    "index",
-    "broadcast",
-    "reshape",
-    "transpose",
-    "concat",
-    "apply_expression_template",
-];
+/// `Math.coreOps` (`coreOpNames` of `Notation`): the evaluable-core operators
+/// other than the engine-internal precision marker and the build-time
+/// `distinct`, which print in the open-operator form.
+pub fn is_notation_core(o: &str) -> bool {
+    use crate::op_registry::{CoreOp, OtherOp};
+    CoreOp::from_name(o)
+        .is_some_and(|c| !matches!(c, CoreOp::Other(OtherOp::Precision | OtherOp::Distinct)))
+}
 
 /// `Math.opnOK`: a name `\operatorname{…}` can carry: identifier characters and
 /// dots.
@@ -624,56 +551,74 @@ pub enum OpK {
     Other,
 }
 
-/// `Math.unKw`: unary functions with a native spelling (`log10` is
-/// `\log_{10}`).
-pub fn un_kw(o: &str) -> Option<Kw> {
-    FN_KW
-        .iter()
-        .chain(&[
-            ("log10", Kw::Log),
-            ("sqrt", Kw::Sqrt),
-            ("abs", Kw::Abs),
-            ("floor", Kw::Floor),
-            ("ceil", Kw::Ceil),
-        ])
-        .find(|p| p.0 == o)
-        .map(|p| p.1)
-}
-
-/// `Math.kindTable`: the plain-node operators with their own notation.
-pub const KIND_TABLE: &[(&str, OpK)] = &[
-    ("-", OpK::Minus),
-    ("/", OpK::Div),
-    ("^", OpK::Pow),
-    ("not", OpK::Lnot),
-    ("true", OpK::Tru),
-    ("false", OpK::Fls),
-    ("ifelse", OpK::Ite),
-    ("ic", OpK::Ic),
-    ("index", OpK::Index),
-    ("+", OpK::Plus),
-    ("*", OpK::Times),
-    ("and", OpK::Land),
-    ("or", OpK::Lor),
-    ("min", OpK::Mm(Kw::Min)),
-    ("max", OpK::Mm(Kw::Max)),
-];
-
-/// `Math.kindOf`.
+/// `Math.kindOf` (with `Math.fnKw`, `Math.unKw`, `Math.cmpKw`,
+/// `Math.kindTable` and `Math.callOps`): the notation each core operator
+/// prints in. Unary functions with a native spelling get their keyword
+/// (`log10` is `\log_{10}`); an open-tier name is [`OpK::Other`].
 pub fn kind_of(o: &str) -> OpK {
-    if let Some(p) = CMP_KW.iter().find(|p| p.0 == o) {
-        return OpK::Cmp(p.1);
-    }
-    if let Some(k) = un_kw(o) {
-        return OpK::Un(k);
-    }
-    if let Some(p) = KIND_TABLE.iter().find(|p| p.0 == o) {
-        return p.1;
-    }
-    if CALL_OPS.contains(&o) {
-        OpK::Call
-    } else {
-        OpK::Other
+    use crate::op_registry::{Comparison as C, CoreOp, OtherOp as O, UnaryFn as F};
+    let Some(core) = CoreOp::from_name(o) else {
+        return OpK::Other;
+    };
+    match core {
+        CoreOp::Unary(f) => match f {
+            F::Exp => OpK::Un(Kw::Exp),
+            F::Log => OpK::Un(Kw::Ln),
+            F::Sin => OpK::Un(Kw::Sin),
+            F::Cos => OpK::Un(Kw::Cos),
+            F::Tan => OpK::Un(Kw::Tan),
+            F::Asin => OpK::Un(Kw::Asin),
+            F::Acos => OpK::Un(Kw::Acos),
+            F::Atan => OpK::Un(Kw::Atan),
+            F::Sinh => OpK::Un(Kw::Sinh),
+            F::Cosh => OpK::Un(Kw::Cosh),
+            F::Tanh => OpK::Un(Kw::Tanh),
+            F::Log10 => OpK::Un(Kw::Log),
+            F::Sqrt => OpK::Un(Kw::Sqrt),
+            F::Abs => OpK::Un(Kw::Abs),
+            F::Floor => OpK::Un(Kw::Floor),
+            F::Ceil => OpK::Un(Kw::Ceil),
+            F::Sign | F::Asinh | F::Acosh | F::Atanh => OpK::Call,
+        },
+        CoreOp::Compare(c) => OpK::Cmp(match c {
+            C::Lt => Kw::Lt,
+            C::Le => Kw::Le,
+            C::Gt => Kw::Gt,
+            C::Ge => Kw::Ge,
+            C::Eq => Kw::Eq,
+            C::Ne => Kw::Ne,
+        }),
+        CoreOp::Other(o) => match o {
+            O::Sub => OpK::Minus,
+            O::Div => OpK::Div,
+            O::Pow => OpK::Pow,
+            O::Not => OpK::Lnot,
+            O::True => OpK::Tru,
+            O::False => OpK::Fls,
+            O::Ifelse => OpK::Ite,
+            O::Ic => OpK::Ic,
+            O::Index => OpK::Index,
+            O::Add => OpK::Plus,
+            O::Mul => OpK::Times,
+            O::And => OpK::Land,
+            O::Or => OpK::Lor,
+            O::Min => OpK::Mm(Kw::Min),
+            O::Max => OpK::Mm(Kw::Max),
+            O::Atan2 | O::Pre | O::Enum => OpK::Call,
+            O::PowWord
+            | O::Neg
+            | O::Precision
+            | O::D
+            | O::Const
+            | O::ApplyExpressionTemplate
+            | O::Faq
+            | O::Makearray
+            | O::Broadcast
+            | O::Reshape
+            | O::Transpose
+            | O::Concat
+            | O::Distinct => OpK::Other,
+        },
     }
 }
 
@@ -1654,7 +1599,7 @@ pub fn pr(c: Ctx, e: &Json) -> Out {
     let opn = || match (look("op", kvs), look("args", kvs)) {
         (Some(Json::Str(o)), Some(Json::Arr(args))) => {
             let fs = fields_of(kvs);
-            if !CORE_OPS.contains(&o.as_str())
+            if !is_notation_core(o)
                 && opn_ok(o)
                 && tparams(c.s, o).is_none()
                 && fs.iter().all(|kv| key_ok(&kv.0))
