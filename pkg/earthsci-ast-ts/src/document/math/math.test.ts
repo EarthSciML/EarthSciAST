@@ -344,6 +344,14 @@ describe('math: array notation reads only what it prints', () => {
     ) as Json
     expect(mk).toBeDefined()
     expect(printLatex(sy, mk).startsWith('\\left[')).toBe(true)
+    expect(
+      parseLatex(
+        sy,
+        '\\operatorname{makearray}(; \\mathrm{output\\_idx} = [\\text{"i"}], \\mathrm{regions} = [[[1, 2]]], \\mathrm{values} = [0])',
+      ),
+    ).toBeUndefined()
+    // With no region the table has no native spelling: the call form reads.
+    roundL('\\operatorname{makearray}(; \\mathrm{regions} = [], \\mathrm{values} = [])')
     // Field keys are read in any spelling; the printer escapes this node.
     const pct = mkNode('foo', [s('x')], [['a%b', int(1)]])
     readsL(sy, '\\operatorname{foo}(x; \\mathrm{a{\\char037}b} = 1)', pct)

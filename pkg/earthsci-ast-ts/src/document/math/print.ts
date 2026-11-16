@@ -70,7 +70,6 @@ import {
   tUnits,
   tUps,
   tWord,
-  tokEq,
   type Kw,
   type Sf,
   type Tok,
@@ -189,11 +188,6 @@ export function unescK(s: string): string {
 export interface Ctx {
   readonly sf: Sf
   readonly s: Sym
-  /**
-   * Field keys need not be identifiers for the call form (set only by
-   * {@link printsAsCall}, whose reader accepts any key spelling there).
-   */
-  readonly anyKey?: boolean
 }
 
 /** `Math.rpG`: the closing token of a grouping parenthesis. */
@@ -1648,7 +1642,7 @@ export function pr(c: Ctx, e: Json): Out {
       !callFormOk(o.s, fs) ||
       !opnOk(o.s) ||
       tparams(c.s, o.s) !== undefined ||
-      !(c.anyKey === true || fs.every((kv) => keyOk(kv[0])))
+      !fs.every((kv) => keyOk(kv[0]))
     ) {
       return esc()
     }
@@ -1710,24 +1704,13 @@ export function pr(c: Ctx, e: Json): Out {
         }
         return esc()
       }
-      const v = field(2, 'value')
-      if (emptyArgs() && strAt(1, 'op', 'const') && v?.t === 'arr') {
-        const af = arrForm(v)
-        return af !== undefined ? mkOut(10, arrToks(sf, af)) : opn()
-      }
+      const cn = constNative(sf, kvs)
+      if (cn !== undefined) return cn
       break
     }
     case 4: {
-      const u = field(2, 'units')
-      if (emptyArgs() && strAt(1, 'op', 'const') && u?.t === 'str') {
-        const v = field(3, 'value')
-        if (v?.t === 'num') return unitsOk(sf, u.s) ? mkOut(7, qtyToks(v.n, factorsOf(u.s))) : opn()
-        if (v?.t === 'arr') {
-          const af = arrForm(v)
-          if (af === undefined) return opn()
-          return unitsOk(sf, u.s) ? mkOut(7, cat(arrToks(sf, af), unitToks(factorsOf(u.s)))) : opn()
-        }
-      }
+      const cn = constNative(sf, kvs)
+      if (cn !== undefined) return cn
       if (emptyArgs()) {
         const bs = field(1, 'bindings')
         const n = field(2, 'name')
@@ -1881,16 +1864,53 @@ function prTemplate(c: Ctx, n: string, bs: Kvs, esc: () => Out): Out {
 }
 
 /**
- * The printer writes node `e` in the call form of operator `o`
- * (`\operatorname{o}(…; …)`): {@link callFormOk} and the other conditions of the
- * call form hold and no native spelling of the node applies. The reader accepts
- * the call form only for such a node, so each node has one spelling; the one
- * exception is the field keys, read in any spelling ({@link keyOk} is not
- * required).
+ * `Math.constNative`: the native spelling of a constant, `{args: [], op:
+ * "const", value}` with an array value or `{args: [], op: "const", units, value}`
+ * with a number or array value and a unit the surface spells; undefined when
+ * the node has none. Only numbers and units are printed, no subexpression.
  */
-export function printsAsCall(c: Ctx, o: string, e: Json): boolean {
-  const ts = pr({ ...c, anyKey: true }, e).toks
-  return ts.length > 1 && ts[0].t === 'opn' && ts[0].s === o && tokEq(ts[1], lpC(c.sf))
+export function constNative(sf: Sf, kvs: Kvs): Out | undefined {
+  const at = (i: number, k: string): Json | undefined =>
+    i < kvs.length && kvs[i][0] === k ? kvs[i][1] : undefined
+  const args = at(0, 'args')
+  const o = at(1, 'op')
+  if (!(args?.t === 'arr' && args.xs.length === 0 && o?.t === 'str' && o.s === 'const'))
+    return undefined
+  if (kvs.length === 3) {
+    const v = at(2, 'value')
+    const af = v?.t === 'arr' ? arrForm(v) : undefined
+    return af && mkOut(10, arrToks(sf, af))
+  }
+  const u = at(2, 'units')
+  const v = at(3, 'value')
+  if (kvs.length !== 4 || u?.t !== 'str' || !unitsOk(sf, u.s)) return undefined
+  if (v?.t === 'num') return mkOut(7, qtyToks(v.n, factorsOf(u.s)))
+  const af = v?.t === 'arr' ? arrForm(v) : undefined
+  return af && mkOut(7, cat(arrToks(sf, af), unitToks(factorsOf(u.s))))
+}
+
+/**
+ * The printer writes node `kvs`, of operator `o` with fields `fs`, in the call
+ * form `\operatorname{o}(…; …)`: {@link callFormOk}, a name {@link opnOk}, no
+ * template of that name in scope, and no native spelling (a constant, a `faq`
+ * or a `makearray`). The `D` and template nodes with their own spellings are
+ * core operators {@link callFormOk} already excludes. The field keys are not
+ * checked ({@link keyOk}): the reader takes any key spelling. Nothing is
+ * printed; only a `faq` or `makearray` node is walked, by the same shape tests
+ * the printer applies to it.
+ */
+export function callFormNode(c: Ctx, o: string, fs: readonly Kv[], kvs: Kvs): boolean {
+  if (!(callFormOk(o, fs) && opnOk(o) && tparams(c.s, o) === undefined)) return false
+  if (o === 'const') return constNative(c.sf, kvs) === undefined
+  if (o === 'faq') {
+    const f = faqForm(kvs)
+    return !(f !== undefined && faqOk(f))
+  }
+  if (o === 'makearray') {
+    const m = mkForm(kvs)
+    return !(m !== undefined && mkOk(m))
+  }
+  return true
 }
 
 /** `Math.pa`: the tokens of an expression for a position needing level `L`. */

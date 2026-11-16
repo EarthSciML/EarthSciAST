@@ -50,7 +50,7 @@ import {
   tnameOk,
   tparams,
   BMAT_MAX_COLS,
-  printsAsCall,
+  callFormNode,
   unescK,
   unescT,
   type Ctx,
@@ -1145,7 +1145,7 @@ export function pOpn(c: Ctx, f: number, n: string, ts: Toks, i: number): P<Json>
       if (!nodupKeys(fs[0]) || fs[0].some((kv) => kv[0] === 'op' || kv[0] === 'args'))
         return undefined
       const e = mkNode(n, vs, fs[0])
-      return printsAsCall(c, n, e) ? [e, fs[1] + 1] : undefined
+      return e.t === 'obj' && callFormNode(c, n, fs[0], e.kvs) ? [e, fs[1] + 1] : undefined
     }
     return undefined
   }
