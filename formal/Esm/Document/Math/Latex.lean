@@ -23,7 +23,7 @@ backslash, any character that is not plain printable ASCII as `{\char NNN}`), so
 KaTeX's text mode and is safe inside a Markdown math span. The earlier spelling, the string
 double-quoted with JSON escapes in math mode, is still read.
 
-Accepted on input and never written: `\leq`, `\geq`, `\neq`, `\times`, `\bigl(`,
+Accepted on input and never written: `\leq`, `\geq`, `\neq`, `\times` (outside a region), `\bigl(`,
 `\bigr)`, the spacing commands `\;`, `\:`, `\!`, `\ `, `\quad`, `\qquad` and `\,` (skipped
 like spaces; `\,` is the unit separator only right before a `\mathrm{…}` that spells a
 unit), and JSON numbers with an `e` exponent.
@@ -134,9 +134,9 @@ def kwChars : Kw → List Char
   | .substack => "\\substack".toList | .limitsL => "\\limits".toList
   | .lbkg => "\\left[".toList | .rbkg => "\\right]".toList
   | .barr => "\\begin{array}{l|l}".toList | .earr => "\\end{array}".toList
-  | .timesLbk => "\\times [".toList | .lset => ['\\', '{'] | .rset => ['\\', '}']
-  | .abs | .floor | .ceil | .dif | .cases | .esmnode | .vec | .mat | .lr | .limits
-  | .delimK | .augK => []
+  | .barrC n => "\\begin{array}{".toList ++ List.replicate n 'c' ++ ['}']
+  | .lset => ['\\', '{'] | .rset => ['\\', '}']
+  | .abs | .floor | .ceil | .dif | .cases | .esmnode | .vec | .mat | .lr | .limits => []
 
 def tokChars : Tok → List Char
   | .num n => numChars n
@@ -193,7 +193,7 @@ def pretty (p : Option Tok) (t1 t2 : Tok) : Bool :=
   ((t2 matches .kw .minus) && atomEnd t1) ||
   ((t1 matches .kw .minus) && (match p with | some q => atomEnd q | none => false)) ||
   (atomEnd t1 && atomStart t2 && !(t2 matches .kw .lp) && !(t2 matches .kw .lbk)) ||
-  (t2 matches .kw .timesLbk) || (t1 matches .kw .barr) || (t2 matches .kw .earr)
+  (t1 matches .kw .barr) || (t2 matches .kw .earr)
 
 def sp (p : Option Tok) (t1 t2 : Tok) : Bool := needSpace t1 t2 || pretty p t1 t2
 
@@ -217,13 +217,6 @@ def ctrlKw : List (String × Kw) :=
     ("max", .max), ("lfloor", .lfloor), ("rfloor", .rfloor), ("lceil", .lceil),
     ("rceil", .rceil), ("partial", .pdiff), ("dot", .dotacc),
     ("sum", .sum), ("prod", .prod), ("in", .inn), ("substack", .substack), ("limits", .limitsL)]
-
-/-- `\times` followed (after white space) by `[`: the region product of a `makearray`
-with the bracket of the next bound pair, one token; any other `\times` is a product. -/
-def timesTok (r : List Char) : Tok × List Char :=
-  match r.dropWhile (fun c => c == ' ' || c == '\n' || c == '\t' || c == '\r') with
-  | '[' :: r' => (.kw .timesLbk, r')
-  | _ => (.kw .times, r)
 
 /-- After a control word: its token. -/
 def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
@@ -254,7 +247,17 @@ def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
     | none =>
       match dropP "{bmatrix}".toList r with
       | some r' => some (.kw .bmat, r')
-      | none => (dropP "{array}{l|l}".toList r).map (.kw .barr, ·)
+      | none =>
+        match dropP "{array}{l|l}".toList r with
+        | some r' => some (.kw .barr, r')
+        | none =>
+          match dropP "{array}{".toList r with
+          | some r1 =>
+            let n := (r1.takeWhile (· == 'c')).length
+            match r1.dropWhile (· == 'c') with
+            | '}' :: r2 => if 0 < n then some (.kw (.barrC n), r2) else none
+            | _ => none
+          | none => none
   else if w = "end" then
     match dropP "{cases}".toList r with
     | some r' => some (.kw .ecases, r')
@@ -262,7 +265,6 @@ def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
       match dropP "{bmatrix}".toList r with
       | some r' => some (.kw .emat, r')
       | none => (dropP "{array}".toList r).map (.kw .earr, ·)
-  else if w = "times" then some (timesTok r)
   else if isGreek w.toList then some (.greek w, r)
   else (ctrlKw.lookup w).map (.kw ·, r)
 

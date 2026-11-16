@@ -185,13 +185,24 @@ theorem callForm_facts {o : String} {fs : List (String × Json)} (h : callFormOK
     rcases this with rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
       exact ⟨by decide, by decide, by decide, by decide, by decide⟩
 
+theorem fieldsOK_of {kvs : List (String × Json)} (hs : keysSorted kvs = true) :
+    fieldsOK (fieldsOf kvs) = true := by
+  have hp : (fieldsOf kvs).Pairwise KeyLt := (keysSorted_pairwise kvs hs).filter _
+  unfold fieldsOK
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
+  refine ⟨?_, fun kv hkv => ?_⟩
+  · rw [List.Nodup, List.pairwise_map]
+    exact hp.imp (fun {a b} h e => by unfold KeyLt at h; rw [e] at h; exact String.lt_irrefl _ h)
+  · unfold fieldsOf at hkv
+    simpa using (List.mem_filter.1 hkv).2
+
 theorem M_openop (c : Ctx) (kvs : List (String × Json)) (o : String) (as : List Json)
     (hop : look "op" kvs = some (.str o)) (hargs : look "args" kvs = some (.arr as))
     (hs : keysSorted kvs = true) (hx : ∀ x ∈ as, M c x)
     (hj : ∀ kv ∈ fieldsOf kvs, jwf kv.2 = true)
     (hfM : ∀ kv ∈ fieldsOf kvs, isE kv.2 = true → M c kv.2)
-    (hcf : callFormOK o (fieldsOf kvs) = true) (htp : tparams c.S o = none)
-    (hrem : removedOps.contains o = false)
+    (hcf : callFormOK o (fieldsOf kvs) = true) (hopn : opnOK o = true) (htp : tparams c.S o = none)
+    (hnat : nativeK c.sf kvs = false) (hrem : removedOps.contains o = false)
     (hpr : pr c (.obj kvs) = mkOut c.sf 10 (openToks c.sf o (as.map fun x => (pr c x).at c.sf 4)
         ((fieldsOf kvs).map (fieldToks c o)))) :
     M c (.obj kvs) := by
@@ -231,7 +242,11 @@ theorem M_openop (c : Ctx) (kvs : List (String × Json)) (o : String) (as : List
         simp only [hcore, hrem, htp, Option.isSome_none, Bool.or_self, Bool.false_eq_true,
           ↓reduceIte, allPos_map]
         rw [hfl]
-        simp only [hmk]
+        have hcc : callCond c o (insKV ("args", .arr as) (insKV ("op", .str o) (fieldsOf kvs))) = true := by
+          have e : insKV ("args", .arr as) (insKV ("op", .str o) (fieldsOf kvs)) = kvs := by
+            unfold mkNode at hmk; injection hmk
+          rw [e]; simp [callCond, hcf, hopn, htp, hnat]
+        simp only [fieldsOK_of hs, hcc, Bool.and_self, ↓reduceIte, hmk]
     · rw [hpr]; simp [mkOut]
     · rw [hpr]; simp [mkOut]
   · rw [hpr]; simp only [mkOut, openToks, List.cons_append, List.append_assoc]

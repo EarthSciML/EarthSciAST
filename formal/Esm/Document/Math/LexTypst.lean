@@ -18,12 +18,13 @@ open Esm.Document Esm.Document.Math
 
 /-! ## Tokens -/
 
-/-- Typst keywords: the ones with a Typst spelling, except `times` (the printer
-never writes it; it would run into the `times 10^…` of a scientific number). -/
+/-- Typst keywords: the ones with a Typst spelling, except `times`, which the printer
+writes only before a bracket (`Adj`: after a number, `times 10^…` would be its scientific
+tail). -/
 def kwOK : Kw → Bool
   | .times | .rpg | .lb | .rb | .frac | .labs | .rabs | .lfloor | .rfloor
   | .lceil | .rceil | .dotacc | .bcases | .ecases | .bmat | .emat
-  | .substack | .lbkg | .rbkg | .limitsL | .barr | .earr => false
+  | .substack | .lbkg | .rbkg | .limitsL | .barr | .earr | .barrC _ => false
   | _ => true
 
 /-- The Typst tokens: what the Typst printer writes. -/
@@ -37,7 +38,8 @@ def tokOK : Tok → Prop
   | .code j => j.WF
   | .units l => l ≠ [] ∧ ∀ f ∈ l, Esm.Units.symOK f.1 = true ∧ f.2 ≠ 0
   | .kw k => kwOK k = true
-  | .word _ | .rm _ | .jstr _ | .esc _ => False
+  | .word s => s = "delim" ∨ s = "augment"
+  | .rm _ | .jstr _ | .esc _ => False
 
 def isNum : Tok → Bool
   | .num _ => true
@@ -554,30 +556,6 @@ theorem lexOne_kw (prev : Option Char) (k : Kw) (hk : kwOK k = true) (hlp : k �
     rw [idRun_append _ _ (by decide) hX']
     rfl
   case limitsL => exact absurd hk (by decide)
-  case delimK =>
-    have hc : kwChars .delimK = "delim".toList := by decide
-    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
-      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
-    rw [hc, show "delim".toList ++ X = 'd' :: ("elim".toList ++ X) by simp,
-      lexOne_letter _ _ _ (by decide), ← show "delim".toList ++ X = 'd' :: ("elim".toList ++ X) by simp]
-    unfold lexIdent
-    rw [idRun_append _ _ (by decide) hX']
-    rfl
-  case augK =>
-    have hc : kwChars .augK = "augment".toList := by decide
-    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
-      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
-    rw [hc, show "augment".toList ++ X = 'a' :: ("ugment".toList ++ X) by simp,
-      lexOne_letter _ _ _ (by decide), ← show "augment".toList ++ X = 'a' :: ("ugment".toList ++ X) by simp]
-    unfold lexIdent
-    rw [idRun_append _ _ (by decide) hX']
-    rfl
-  case timesLbk =>
-    have hc : kwChars .timesLbk ++ X = 't' :: ("imes".toList ++ (' ' :: '[' :: X)) := by simp [kwChars]
-    rw [hc, lexOne_letter _ _ _ (by decide), ← List.cons_append]
-    unfold lexIdent
-    rw [idRun_append _ _ (by decide) (by simp; decide)]
-    simp [isWsT]
   case lset =>
     exact lexOne_punct prev '{' .lset X rfl (by decide) (by decide) (by decide) (by intro h; cases h) (by intro h; cases h)
       (by decide) (by decide) (by decide) (by intro h; cases h)
@@ -586,6 +564,34 @@ theorem lexOne_kw (prev : Option Char) (k : Kw) (hk : kwOK k = true) (hlp : k �
       (by decide) (by decide) (by decide) (by intro h; cases h)
   case barr => exact absurd hk (by decide)
   case earr => exact absurd hk (by decide)
+  case barrC => simp [kwOK] at hk
+
+/-- An identifier the lexer reads as one word: the named arguments of the `makearray`
+table head. -/
+theorem lexOne_word (prev : Option Char) (s : String) (hs : s = "delim" ∨ s = "augment") (X : List Char)
+    (hX : ∀ c ∈ X.head?, isIdC c = false) : lexOne prev (s.toList ++ X) = some (.word s, X) := by
+  rcases hs with rfl | rfl
+  · rw [show "delim".toList ++ X = 'd' :: ("elim".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "delim".toList ++ X = 'd' :: ("elim".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX]
+    rfl
+  · rw [show "augment".toList ++ X = 'a' :: ("ugment".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "augment".toList ++ X = 'a' :: ("ugment".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX]
+    rfl
+
+/-- `times`: read as the keyword (the printer writes it before a bracket). -/
+theorem lexOne_times (prev : Option Char) (X : List Char) (hX : ∀ c ∈ X.head?, merges (.kw .times) c = false) :
+    lexOne prev (tokChars (.kw .times) ++ X) = some (.kw .times, X) := by
+  have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+    intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
+  rw [show tokChars (.kw .times) ++ X = 't' :: ("imes".toList ++ X) by simp [tokChars, kwChars],
+    lexOne_letter _ _ _ (by decide), ← show "times".toList ++ X = 't' :: ("imes".toList ++ X) by simp]
+  unfold lexIdent
+  rw [idRun_append _ _ (by decide) hX']
+  rfl
 
 /-! ## Numbers -/
 
@@ -982,7 +988,11 @@ theorem lexOne_tok (prev : Option Char) (t : Tok) (ht : tokOK t) (hl : t ≠ .kw
     rw [hp]
     rfl
   | kw k => exact lexOne_kw prev k ht (fun e => hl (by rw [e])) (fun e => hlg (by rw [e])) X hX.1
-  | word _ => exact absurd ht id
+  | word s =>
+    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+      intro d hd; have := hX.1 d hd
+      rcases ht with rfl | rfl <;> simp [merges, tokChars] at this <;> first | exact this | exact this (by decide)
+    exact lexOne_word prev s ht X hX'
   | rm _ => exact absurd ht id
   | jstr _ => exact absurd ht id
   | esc _ => exact absurd ht id
@@ -1032,9 +1042,11 @@ theorem tok_head (t : Tok) (ht : tokOK t) :
   | kw k =>
     have hk : kwOK k = true := ht
     refine ⟨?_, ?_⟩
-    · simp only [tokChars]; cases k <;> first | exact absurd hk (by decide) | decide
-    · simp only [tokChars]; cases k <;> first | exact absurd hk (by decide) | (intro c hc; cases hc; decide)
-  | word _ => exact absurd ht id
+    · simp only [tokChars]; cases k <;> first | (exfalso; simp [kwOK] at hk; done) | exact absurd hk (by decide) | decide
+    · simp only [tokChars]; cases k <;> first | (exfalso; simp [kwOK] at hk; done) | exact absurd hk (by decide) | (intro c hc; cases hc; decide)
+  | word s =>
+    rcases ht with rfl | rfl <;>
+      exact ⟨by simp [tokChars], fun c hc => by simp [tokChars] at hc; subst hc; decide⟩
   | rm _ => exact absurd ht id
   | jstr _ => exact absurd ht id
   | esc _ => exact absurd ht id
@@ -1075,8 +1087,8 @@ theorem sciNone (t : Tok) (ht : tokOK t) (hlt : t ≠ .letter 't') (Y : List Cha
   | units l => simp [tokChars, unitChars, sciExp, isWsT, dropP]
   | kw k =>
     have hk : kwOK k = true := ht
-    cases k <;> first | exact absurd hk (by decide) | simp [tokChars, kwChars, sciExp, isWsT, dropP]
-  | word _ => exact absurd ht id
+    cases k <;> first | (exfalso; simp [kwOK] at hk; done) | exact absurd hk (by decide) | simp [tokChars, kwChars, sciExp, isWsT, dropP]
+  | word s => rcases ht with rfl | rfl <;> simp [tokChars, sciExp, isWsT, dropP]
   | rm _ => exact absurd ht id
   | jstr _ => exact absurd ht id
   | esc _ => exact absurd ht id
@@ -1114,9 +1126,10 @@ theorem noGlue (t : Tok) (ht : tokOK t) (hlt : t ≠ .letter 't') (Y : List Char
   | units l => exact fun h => by simp [isUnits] at h
   | kw k =>
     have hk : kwOK k = true := ht
-    cases k <;> first | exact absurd hk (by decide) |
+    cases k <;> first | (exfalso; simp [kwOK] at hk; done) | exact absurd hk (by decide) |
       exact fun _ => by simp [tokChars, kwChars, Esm.Units.thinSep, List.dropPrefix?]
-  | word _ => exact absurd ht id
+  | word s =>
+    rcases ht with rfl | rfl <;> exact fun _ => by simp [tokChars, Esm.Units.thinSep, List.dropPrefix?]
   | rm _ => exact absurd ht id
   | jstr _ => exact absurd ht id
   | esc _ => exact absurd ht id
@@ -1137,8 +1150,26 @@ theorem merges_lparen (t : Tok) : merges t '(' = false := by
 parenthesis, and a unit block never follows a unit block. -/
 def Adj : List Tok → Prop
   | t1 :: t2 :: r => (t2 = .kw .lp → callEnd t1 = true) ∧
-      (isUnits t1 = true → isUnits t2 = false) ∧ Adj (t2 :: r)
-  | _ => True
+      (isUnits t1 = true → isUnits t2 = false) ∧ (t1 = .kw .times → t2 = .kw .lbk) ∧ Adj (t2 :: r)
+  | [t] => t ≠ .kw .times
+  | [] => True
+
+theorem tok_ne_times {t : Tok} (h : tokOK t) : t ≠ .kw .times := by
+  rintro rfl; have h' : kwOK .times = true := h; exact absurd h' (by decide)
+
+theorem tok_headL (t : Tok) (ht : tokOK t ∨ t = .kw .times) :
+    tokChars t ≠ [] ∧ ∀ c ∈ (tokChars t).head?, isWsT c = false ∧ c ≠ '.' := by
+  rcases ht with ht | rfl
+  · exact tok_head t ht
+  · exact ⟨by simp [tokChars, kwChars], fun c hc => by simp [tokChars, kwChars] at hc; subst hc; decide⟩
+
+/-- `times` before a bracket: no scientific tail, no unit separator. -/
+theorem noGlue_times (S W : List Char) (hS : S = [] ∨ S = [' ']) :
+    sciExp (tokChars (.kw .times) ++ (S ++ '[' :: W)) = none ∧
+      (' ' :: (tokChars (.kw .times) ++ (S ++ '[' :: W))).dropPrefix? Esm.Units.thinSep = none := by
+  rcases hS with rfl | rfl <;>
+    simp (config := {decide := true}) [tokChars, kwChars, sciExp, isWsT, dropP, isIdC,
+      Esm.Units.thinSep, List.dropPrefix?]
 
 /-- What the lexer needs to tell the first token's parenthesis right. -/
 def HC (t : Tok) (S : List Char) (prev : Option Char) : Prop :=
@@ -1153,9 +1184,12 @@ theorem needSpace_false {t1 t2 : Tok} (h : needSpace t1 t2 = false) (c : Char)
   · simp [tokChars, kwChars] at hc; subst hc; exact merges_lparen t1
   · rw [hc] at h; exact h
 
-theorem lexOne_first (prev : Option Char) (t : Tok) (ht : tokOK t) (S : List Char) (hS : S = [] ∨ S = [' '])
-    (hc : HC t S prev) (X : List Char) (hX : Sep t X) :
+theorem lexOne_first (prev : Option Char) (t : Tok) (ht : tokOK t ∨ t = .kw .times) (S : List Char)
+    (hS : S = [] ∨ S = [' ']) (hc : HC t S prev) (X : List Char) (hX : Sep t X) :
     lexOne (if S = [] then prev else none) (tokChars t ++ X) = some (t, X) := by
+  rcases ht with ht | rfl
+  swap
+  · exact lexOne_times _ X hX.1
   by_cases hlp : t = .kw .lp
   · subst hlp
     obtain ⟨rfl, d, rfl, hd⟩ := hc.1 rfl
@@ -1175,9 +1209,9 @@ theorem lexOne_first (prev : Option Char) (t : Tok) (ht : tokOK t) (S : List Cha
   · exact lexOne_tok _ t ht hlp hlpg X hX
 
 theorem step (f : Nat) (prev : Option Char) (S : List Char) (hS : S = [] ∨ S = [' ']) (t : Tok)
-    (ht : tokOK t) (hc : HC t S prev) (X : List Char) (hX : Sep t X) :
+    (ht : tokOK t ∨ t = .kw .times) (hc : HC t S prev) (X : List Char) (hX : Sep t X) :
     lexAux (f + 1) prev (S ++ (tokChars t ++ X)) = (lexAux f (tokChars t).getLast? X).map (t :: ·) := by
-  obtain ⟨hne, hh⟩ := tok_head t ht
+  obtain ⟨hne, hh⟩ := tok_headL t ht
   obtain ⟨c, r, he⟩ := List.exists_cons_of_ne_nil hne
   have hcw : isWsT c = false := (hh c (by rw [he]; rfl)).1
   have hd : (S ++ (tokChars t ++ X)).dropWhile isWsT = tokChars t ++ X := by
@@ -1205,7 +1239,7 @@ theorem renderAux_head (p : Option Tok) (t : Tok) (r : List Tok) :
     exact ⟨(if sp p t t2 then [' '] else []) ++ renderAux (some t) (t2 :: r),
       by simp only [renderAux, List.append_assoc]⟩
 
-theorem after_t (p : Option Tok) (r : List Tok) (hok : ∀ t ∈ r, tokOK t) :
+theorem after_t (p : Option Tok) (r : List Tok) (hok : ∀ t ∈ r, tokOK t ∨ t = .kw .times) :
     ∃ Z, renderAux p (.letter 't' :: r) = 't' :: Z ∧ ∀ c ∈ Z.head?, c = ' ' ∨ isIdC c = false := by
   cases r with
   | nil => exact ⟨[], by simp [renderAux, tokChars], by simp⟩
@@ -1220,7 +1254,7 @@ theorem after_t (p : Option Tok) (r : List Tok) (hok : ∀ t ∈ r, tokOK t) :
       have hn : needSpace (.letter 't') t3 = false := by
         simp only [sp, Bool.or_eq_true, not_or] at hsp; simpa using hsp.1
       obtain ⟨Y, hY⟩ := renderAux_head (some (.letter 't')) t3 r'
-      obtain ⟨hne, -⟩ := tok_head t3 (hok t3 (by simp))
+      obtain ⟨hne, -⟩ := tok_headL t3 (hok t3 (by simp))
       obtain ⟨c3, r3, he3⟩ := List.exists_cons_of_ne_nil hne
       rw [List.nil_append, hY, he3] at hc
       simp at hc; subst hc
@@ -1244,7 +1278,7 @@ theorem not_i_h {Z : List Char} (hZ : ∀ c ∈ Z.head?, c = ' ' ∨ isIdC c = f
     exact ⟨sciExp_t _ (fun d hd => by simp at hd; subst hd; exact hi),
       by simp [Esm.Units.thinSep, List.dropPrefix?, hh]⟩
 
-theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t) → Adj ts → ∀ (p : Option Tok)
+theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t ∨ t = .kw .times) → Adj ts → ∀ (p : Option Tok)
     (prev : Option Char) (S : List Char), (S = [] ∨ S = [' ']) → (∀ t r, ts = t :: r → HC t S prev) →
     ∀ f, ts.length < f → lexAux f prev (S ++ renderAux p ts) = some ts
   | [], _, _, p, prev, S, hS, _, f, hf => by
@@ -1265,8 +1299,8 @@ theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t) → Adj ts 
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp at hf; omega⟩
     have ht1 := hok t1 (by simp)
     have ht2 := hok t2 (by simp)
-    obtain ⟨hlp, hun, hadj'⟩ := hadj
-    obtain ⟨hne2, hh2⟩ := tok_head t2 ht2
+    obtain ⟨hlp, hun, -, hadj'⟩ := hadj
+    obtain ⟨hne2, hh2⟩ := tok_headL t2 ht2
     obtain ⟨c2, r2, he2⟩ := List.exists_cons_of_ne_nil hne2
     have hc2 := hh2 c2 (by rw [he2]; rfl)
     obtain ⟨Y, hY⟩ := renderAux_head (some t1) t2 r
@@ -1277,12 +1311,27 @@ theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t) → Adj ts 
       · exact Or.inl rfl
     have hc2sp : c2 ≠ ' ' := by intro e; subst e; simp [isWsT] at hc2
     -- the separation after `t1`
+    -- `times` comes before a bracket
+    have htimes : t2 = .kw .times → ∃ S W, (S = [] ∨ S = [' ']) ∧
+        renderAux (some t1) (t2 :: r) = tokChars (.kw .times) ++ (S ++ '[' :: W) := by
+      intro e; subst e
+      cases r with
+      | nil => exact absurd rfl hadj'
+      | cons u r' =>
+        have hu : u = .kw .lbk := hadj'.2.2.1 rfl
+        subst hu
+        obtain ⟨W', hW'⟩ := renderAux_head (some (.kw .times)) (.kw .lbk) r'
+        refine ⟨if sp (some t1) (.kw .times) (.kw .lbk) then [' '] else [], W', by split <;> simp, ?_⟩
+        rw [renderAux.eq_3, hW', List.append_assoc]; rfl
     have hsci : sciExp (renderAux (some t1) (t2 :: r)) = none := by
       by_cases ht : t2 = .letter 't'
       · subst ht
         obtain ⟨Z, hZ, hZh⟩ := after_t (some t1) r (fun t htm => hok t (by simp [htm]))
         rw [hZ]; exact (not_i_h hZh).1
-      · rw [hY]; exact (noGlue t2 ht2 ht Y).1
+      · rcases ht2 with ht2 | rfl
+        · rw [hY]; exact (noGlue t2 ht2 ht Y).1
+        · obtain ⟨S2, W, hS2, he⟩ := htimes rfl
+          rw [he]; exact (noGlue_times S2 W hS2).1
     have hglue : S' = [' '] → sciExp (S' ++ renderAux (some t1) (t2 :: r)) = none ∧
         (isUnits t2 = false →
           (S' ++ renderAux (some t1) (t2 :: r)).dropPrefix? Esm.Units.thinSep = none) := by
@@ -1293,8 +1342,11 @@ theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t) → Adj ts 
         obtain ⟨Z, hZ, hZh⟩ := after_t (some t1) r (fun t htm => hok t (by simp [htm]))
         rw [List.singleton_append, hZ]
         exact fun _ => (not_i_h hZh).2
-      · rw [List.singleton_append, hY]
-        exact (noGlue t2 ht2 ht Y).2
+      · rcases ht2 with ht2 | rfl
+        · rw [List.singleton_append, hY]
+          exact (noGlue t2 ht2 ht Y).2
+        · obtain ⟨S2, W, hS2, he⟩ := htimes rfl
+          rw [List.singleton_append, he]; exact fun _ => (noGlue_times S2 W hS2).2
     have hnosp : S' = [] → ∀ c ∈ (S' ++ renderAux (some t1) (t2 :: r)).head?, c = c2 := by
       intro h c hc; rw [h, List.nil_append, hY, he2] at hc; simp at hc; exact hc.symm
     have hsep : Sep t1 (S' ++ renderAux (some t1) (t2 :: r)) := by
@@ -1315,7 +1367,7 @@ theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t) → Adj ts 
     have hc' : ∀ t r', t2 :: r = t :: r' → HC t S' (tokChars t1).getLast? := by
       intro t r' e
       simp only [List.cons.injEq] at e; obtain ⟨rfl, rfl⟩ := e
-      obtain ⟨hne1, -⟩ := tok_head t1 ht1
+      obtain ⟨hne1, -⟩ := tok_headL t1 ht1
       obtain ⟨d, hd⟩ : ∃ d, (tokChars t1).getLast? = some d := by
         cases h : (tokChars t1).getLast? with
         | none => simp at h; exact absurd h hne1
@@ -1343,22 +1395,24 @@ theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t) → Adj ts 
       (tokChars t1).getLast? S' hS' hc' g (by simp at hf ⊢; omega)
     rw [ih]; rfl
 
-theorem length_renderAux : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t) → ∀ p, ts.length ≤ (renderAux p ts).length
+theorem length_renderAux : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t ∨ t = .kw .times) → ∀ p,
+    ts.length ≤ (renderAux p ts).length
   | [], _, _ => by simp
   | [t], hok, p => by
-    obtain ⟨hne, -⟩ := tok_head t (hok t (by simp))
+    obtain ⟨hne, -⟩ := tok_headL t (hok t (by simp))
     obtain ⟨c, r, he⟩ := List.exists_cons_of_ne_nil hne
     simp [renderAux, he]
   | t1 :: t2 :: r, hok, p => by
-    obtain ⟨hne, -⟩ := tok_head t1 (hok t1 (by simp))
+    obtain ⟨hne, -⟩ := tok_headL t1 (hok t1 (by simp))
     obtain ⟨c, r1, he⟩ := List.exists_cons_of_ne_nil hne
     have := length_renderAux (t2 :: r) (fun t ht => hok t (by simp [ht])) (some t1)
     simp only [renderAux, List.length_append, he, List.length_cons] at this ⊢
     omega
 
-/-- The Typst lexer lemma: a list of Typst tokens whose call parentheses each follow a
-name-like token, and whose unit blocks are not adjacent, reads back from its rendering. -/
-theorem lex_render (ts : List Tok) (h : ∀ t ∈ ts, tokOK t) (ha : Adj ts)
+/-- The Typst lexer lemma: a list of Typst tokens (and `times` before a bracket) whose
+call parentheses each follow a name-like token, and whose unit blocks are not adjacent,
+reads back from its rendering. -/
+theorem lex_render (ts : List Tok) (h : ∀ t ∈ ts, tokOK t ∨ t = .kw .times) (ha : Adj ts)
     (hfirst : ∀ r, ts ≠ .kw .lp :: r) : lex (render ts) = some ts := by
   unfold lex render
   have := lexAux_render ts h ha none none [] (Or.inl rfl)

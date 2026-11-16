@@ -1,4 +1,5 @@
 import Esm.Document.Math.Surface
+import Esm.Document.Notation
 
 /-!
 # The printer: expressions to tokens
@@ -248,8 +249,8 @@ def opnOK (s : String) : Bool :=
   | [] => false
   | c :: cs => isIdStart c && cs.all (fun d => isIdChar d || d == '.')
 
-/-- The fields that annotate a node (`Notation.annotatedNodeFields`). -/
-def annotKeys : List String := ["id", "expect_cadence"]
+/-- The fields that annotate a node. -/
+abbrev annotKeys : List String := Notation.annotatedNodeFields
 
 /-- An operator prints in the call form: an open operator, or a core operator of
 `fieldCallOps` none of whose fields annotates it. -/
@@ -627,7 +628,11 @@ def AForm.json : AForm → Json
 
 def numToks (ns : List JNum) : List (List Tok) := ns.map fun n => [.num n]
 
-/-- The array: LaTeX `bmatrix`, Typst `vec(…)` / `mat(…)`. -/
+/-- The most columns a LaTeX `bmatrix` takes (amsmath's `MaxMatrixCols`). -/
+def bmatCols : Nat := 10
+
+/-- The array: LaTeX `bmatrix`, or for a matrix wider than `bmatCols`
+`\left[\begin{array}{c…c} … \end{array}\right]`; Typst `vec(…)` / `mat(…)`. -/
 def arrToks (sf : Sf) : AForm → List Tok
   | .col ns =>
     match sf with
@@ -635,7 +640,11 @@ def arrToks (sf : Sf) : AForm → List Tok
     | .typst => [.kw .vec, .kw .lp] ++ sepBy [.kw .comma] (numToks ns) ++ [.kw .rp]
   | .mat rs =>
     match sf with
-    | .latex => .kw .bmat :: sepBy [.kw .nl] (rs.map fun r => sepBy [.kw .amp] (numToks r)) ++ [.kw .emat]
+    | .latex =>
+      if bmatCols < (rs.headD []).length then
+        [.kw .lbkg, .kw (.barrC (rs.headD []).length)] ++
+          sepBy [.kw .nl] (rs.map fun r => sepBy [.kw .amp] (numToks r)) ++ [.kw .earr, .kw .rbkg]
+      else .kw .bmat :: sepBy [.kw .nl] (rs.map fun r => sepBy [.kw .amp] (numToks r)) ++ [.kw .emat]
     | .typst => [.kw .mat, .kw .lp] ++ sepBy [.kw .semi] (rs.map fun r => sepBy [.kw .comma] (numToks r)) ++
         [.kw .rp]
 
@@ -1090,7 +1099,7 @@ def pairToks (c : Ctx) (P : Json → Out) (p : Json × Json) : List Tok :=
 def regToks (c : Ctx) (P : Json → Out) : List (Json × Json) → List Tok
   | [] => []
   | p :: ps => .kw .lbk :: pairToks c P p ++ .kw .rbk ::
-      ps.flatMap (fun q => .kw .timesLbk :: pairToks c P q ++ [.kw .rbk])
+      ps.flatMap (fun q => .kw .times :: .kw .lbk :: pairToks c P q ++ [.kw .rbk])
 
 /-- A row of the table: the value, then the region it fills. -/
 def mkRow (c : Ctx) (P : Json → Out) (vr : Json × List (Json × Json)) : List Tok :=
@@ -1098,7 +1107,7 @@ def mkRow (c : Ctx) (P : Json → Out) (vr : Json × List (Json × Json)) : List
 
 /-- The Typst table head: `mat(delim: "[", augment: #1,`. -/
 def matHead : List Tok :=
-  [.kw .mat, .kw .lp, .kw .delimK, .kw .colon, .txt "[", .kw .comma, .kw .augK, .kw .colon,
+  [.kw .mat, .kw .lp, .word "delim", .kw .colon, .txt "[", .kw .comma, .word "augment", .kw .colon,
     .code (.num (.int 1)), .kw .comma]
 
 /-- The output indices as the bracket's subscript. -/
@@ -1165,6 +1174,33 @@ theorem mkSubs_lt {kvs : List (String × Json)} {M : MkForm} (h : mkForm kvs = s
 name. -/
 def tnameOK (n : String) : Bool := opnOK n && !(reservedOpn.contains n)
 
+/-- A bare `\operatorname{n}` is a template applied with no bindings, unless a template
+`n` with no parameters is in scope (that application prints `\operatorname{n}()`). -/
+def bareOK (S : Sym) (n : String) : Bool := tnameOK n && tparams S n != some []
+
+/-- The node has a native spelling the printer writes before the call form: a `faq`,
+a `makearray`, a constant array or a quantity. -/
+def nativeK (sf : Sf) (kvs : List (String × Json)) : Bool :=
+  (match faqForm kvs with | some F => faqOK F | none => false) ||
+  (match mkForm kvs with | some M => mkOK M | none => false) ||
+  (match kvs with
+    | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num _)] => unitsOK sf u
+    | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)] =>
+      (arrForm (.arr xs)).isSome && unitsOK sf u
+    | [("args", .arr []), ("op", .str "const"), ("value", .arr xs)] => (arrForm (.arr xs)).isSome
+    | _ => false)
+
+/-- Fields a node can carry: distinct keys, none of them `op` or `args`. -/
+def fieldsOK (fs : List (String × Json)) : Bool :=
+  decide (fs.map Prod.fst).Nodup && fs.all (fun kv => kv.1 != "op" && kv.1 != "args")
+
+/-- The node with operator `o` prints in the call form (its field keys aside): the call
+form fits it (`callFormOK`), `o` is a name `\operatorname{…}` holds, no template `o`
+is in scope, and it has no native spelling. The reader accepts the call form with
+fields only for such a node. -/
+def callCond (c : Ctx) (o : String) (kvs : List (String × Json)) : Bool :=
+  callFormOK o (fieldsOf kvs) && opnOK o && (tparams c.S o).isNone && !(nativeK c.sf kvs)
+
 /-- The printer. -/
 def pr (c : Ctx) (e : Json) : Out :=
   match e with
@@ -1192,8 +1228,7 @@ def pr (c : Ctx) (e : Json) : Out :=
     let opn : Unit → Out := fun _ =>
       match look "op" kvs, _hk : look "args" kvs with
       | some (.str o), some (.arr as) =>
-        if callFormOK o (fieldsOf kvs) && opnOK o && (tparams c.S o).isNone &&
-            (fieldsOf kvs).all (fun kv => keyOK kv.1) then
+        if callCond c o kvs && (fieldsOf kvs).all (fun kv => keyOK kv.1) then
           mkOut sf 10 (openToks sf o (as.attach.map fun ⟨a, _⟩ => (pr c a).at sf 4)
             ((fieldsOf kvs).attach.map fun ⟨kv, _⟩ =>
               keyToks sf kv.1 ++ .kw .eq :: (if mathField o kv then (pr c kv.2).at sf 4 else jsonVal sf kv.2)))

@@ -22,7 +22,7 @@ names involved to the explicit form). -/
 theorem parseLatex_printLatex (S : Sym) (e : Json) (he : isE e = true) :
     parseLatex S (printLatex S e) = some e := by
   unfold parseLatex printLatex
-  rw [String.toList_ofList, Latex.lex_render _ (Latex.print_tokOK S e he)]
+  rw [String.toList_ofList, Latex.lex_render _ (Latex.print_tokL S e he)]
   exact parseToks_print .latex S e he
 
 end Esm.Document.Math

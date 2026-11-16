@@ -67,12 +67,6 @@ def atomStart : Tok → Bool
     | _ => false
   | _ => false
 
-/-- The region product with its bracket (`\times [`); outside a `makearray` region it
-reads as `\times` then `[`. -/
-def isTimesLbk : Tok → Bool
-  | .kw .timesLbk => true
-  | _ => false
-
 /-- An opening parenthesis: `(` or `\left(`; the parser reads them alike. -/
 def isLp : Tok → Bool
   | .kw .lp | .kw .lpg => true
@@ -402,9 +396,16 @@ def entryParts : List Row → Option (List Json × List (String × Json))
 def withOut (F : FaqForm) (outs : List Json) (ors : List (String × Json)) : FaqForm :=
   { F with out := outs, ranges := sortKV (ors ++ F.ranges) }
 
-/-- A superscript set read after the output entries replaces the reduction's own. -/
+/-- The superscript set read after the output entries (the reduction inside the bracket
+carries none, `bracketSetOK`). -/
 def withSup (F : FaqForm) (st : List String) : FaqForm :=
   if st.isEmpty then F else { F with set := st }
+
+/-- The sets of an output form as the printer writes them: none on the reduction inside
+the bracket (the printer writes the set on the bracket), and none at all when the
+operator is marked (`args` lists the body's arrays). -/
+def bracketSetOK (F : FaqForm) (st : List String) : Bool :=
+  F.set.isEmpty && !(F.marked && !st.isEmpty)
 
 /-- The superscript set of a reduction or of an output form, if there is one: LaTeX
 `^{\{f, g\}}`, Typst `^({f, g})`. -/
@@ -546,11 +547,7 @@ def mulLoop (c : Ctx) : Nat → List Json → List Tok → Option (Json × List 
       | none => none
     else some (close "*" acc, .kw .slash :: r)
   | f + 1, acc, t :: r =>
-    if isTimesLbk t then
-      match pNot c f (.kw .lbk :: r) with
-      | some (y, r') => mulLoop c f (acc ++ [y]) r'
-      | none => none
-    else if atomStart t && !negTok t then
+    if atomStart t && !negTok t then
       match pNot c f (t :: r) with
       | some (y, r') => mulLoop c f (acc ++ [y]) r'
       | none => none
@@ -744,14 +741,17 @@ def pOpn (c : Ctx) : Nat → String → List Tok → Option (Json × List Tok)
             (tparams c.S n).isSome then none
         else
           match allPos args, pFields c f r1 with
-          | some vs, some (fs, .kw .rp :: r2) => some (mkNode n vs fs, r2)
+          | some vs, some (fs, .kw .rp :: r2) =>
+            if fieldsOK fs && callCond c n (insKV ("args", .arr vs) (insKV ("op", .str n) fs)) then
+              some (mkNode n vs fs, r2)
+            else none
           | _, _ => none
       | _ => none
     else if t0 matches .kw .us then
       if n = "D" then pDCall c f r else none
-    else if tnameOK n then some (tNode n [], t0 :: r)
+    else if bareOK c.S n then some (tNode n [], t0 :: r)
     else none
-  | _ + 1, n, [] => if tnameOK n then some (tNode n [], []) else none
+  | _ + 1, n, [] => if bareOK c.S n then some (tNode n [], []) else none
 
 /-- `\operatorname{D}_{x}(u, a, b)` after the `_`. -/
 def pDCall (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
@@ -788,15 +788,22 @@ def pPrim (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
       | _ => some (.num n, r)
     | .kw .bmat :: r =>
       match pGrid .amp .nl .emat (r.length + 1) r with
-      | some (rows, r') => constTail (gridJson rows) r'
+      | some (rows, r') => if rows.all (·.length ≤ bmatCols) then constTail (gridJson rows) r' else none
       | none => none
+    | .kw .lbkg :: .kw (.barrC n) :: r =>
+      match pGrid .amp .nl .earr (r.length + 1) r with
+      | some (rows, .kw .rbkg :: r') =>
+        if bmatCols < n && rows.all (·.length == n) then
+          constTail (.arr (rows.map fun q => .arr (q.map .num))) r'
+        else none
+      | _ => none
     | .kw .vec :: t :: r =>
       if isLp t then
         match pCells .comma r with
         | some (ns, .kw .rp :: r') => constTail (.arr (ns.map .num)) r'
         | _ => none
       else none
-    | .kw .mat :: .kw .lp :: .kw .delimK :: .kw .colon :: .txt "[" :: .kw .comma :: .kw .augK ::
+    | .kw .mat :: .kw .lp :: .word "delim" :: .kw .colon :: .txt "[" :: .kw .comma :: .word "augment" ::
         .kw .colon :: .code (.num (.int 1)) :: .kw .comma :: r =>
       match pMkRows c f .comma .semi .rp r with
       | some (rows, r') => mkTail c.sf rows r'
@@ -1003,9 +1010,11 @@ def pRedBody (c : Ctx) : Nat → RedK → Bool → List Tok → Option (FaqForm 
     | some (rs, r) =>
       match rowParts rs, pSup c.sf r with
       | some (rg, fl), some (st, r1) =>
-        match pMul c f r1 with
-        | some (body, r') => some (⟨red, marked, [], rg, body, fl, st⟩, r')
-        | none => none
+        if marked && !st.isEmpty then none
+        else
+          match pMul c f r1 with
+          | some (body, r') => some (⟨red, marked, [], rg, body, fl, st⟩, r')
+          | none => none
       | _, _ => none
     | none => none
 
@@ -1022,7 +1031,10 @@ def pRed (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
           match pSup c.sf r1 with
           | some (st, .kw .us :: .kw .lb :: r2) =>
             match pRows c f .comma .rb r2 with
-            | some (es, r3) => (entryParts es).map fun p => (faqJson (withSup (withOut F p.1 p.2) st), r3)
+            | some (es, r3) =>
+              if bracketSetOK F st then
+                (entryParts es).map fun p => (faqJson (withSup (withOut F p.1 p.2) st), r3)
+              else none
             | none => none
           | _ => none
         | _ => none
@@ -1035,7 +1047,10 @@ def pRed (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
           match pSup c.sf r1 with
           | some (st, .kw .us :: .kw .lpg :: r2) =>
             match pRows c f .comma .rp r2 with
-            | some (es, r3) => (entryParts es).map fun p => (faqJson (withSup (withOut F p.1 p.2) st), r3)
+            | some (es, r3) =>
+              if bracketSetOK F st then
+                (entryParts es).map fun p => (faqJson (withSup (withOut F p.1 p.2) st), r3)
+              else none
             | none => none
           | _ => none
         | _ => none
@@ -1147,7 +1162,7 @@ def pPair (c : Ctx) : Nat → List Tok → Option ((Json × Json) × List Tok)
 /-- The further bound pairs of a region, each after `\times [`. -/
 def pRegTail (c : Ctx) : Nat → List Tok → Option (List (Json × Json) × List Tok)
   | 0, _ => none
-  | f + 1, .kw .timesLbk :: r =>
+  | f + 1, .kw .times :: .kw .lbk :: r =>
     match pPair c f r with
     | some (p, r') => (pRegTail c f r').map fun q => (p :: q.1, q.2)
     | none => none

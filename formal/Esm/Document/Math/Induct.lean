@@ -82,16 +82,16 @@ theorem M_all (c : Ctx) : ∀ n e, sizeOf e < n → isE e = true → M c e
       exact M_faq c kvs F hF hok P hP hpr (fun x hx => IH x (faqSubs_lt hF hx) (faqSubs_isE hok x hx))
     | mk kvs A hA hok P hP hpr =>
       exact M_mk c kvs A hA hok P hP hpr (fun x hx => IH x (mkSubs_lt hA hx) (mkSubs_isE hok x hx))
-    | tbare m hm hpr => exact M_tbare c m hm hpr
+    | tbare m hm hps hpr => exact M_tbare c m hm hps hpr
     | tpos m bs ps hm hsb hb hps hpr =>
       exact M_tpos c m bs ps hm hsb (fun kv hkv => IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) hps hpr
     | tnamed m bs hm hks hb hps hne hk hkn hpr =>
       exact M_tnamed c m bs hm hks (fun kv hkv => IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) hne hk hpr
-    | openop kvs o as hop hargs hsk hx hf hcf hopn htp hkey hsz hszf hpr =>
+    | openop kvs o as hop hargs hsk hx hf hcf hopn htp hnat hkey hsz hszf hpr =>
       obtain ⟨o', hop', -, hrem, -⟩ := isE_op he
       rw [hop] at hop'; cases hop'
       exact M_openop c kvs o as hop hargs hsk (fun x hm => IH x (hsz x hm) (hx x hm)) hf
-        (fun kv hkv hkve => IH kv.2 (hszf kv hkv) hkve) hcf htp hrem hpr
+        (fun kv hkv hkve => IH kv.2 (hszf kv hkv) hkve) hcf hopn htp hnat hrem hpr
     | esc kvs o as hop hargs hsk hx hf hoOK hrem hdep hsz hpr =>
       exact M_esc c kvs o as hop hargs hsk (fun x hm => IH x (hsz x hm) (hx x hm)) hoOK hrem hdep hpr
 

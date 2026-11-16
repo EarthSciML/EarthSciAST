@@ -36,7 +36,7 @@ def conts (sf : Sf) (L : Nat) : Tok → Bool
   | .kw .lbk => decide (L ≤ 9)
   | .kw .caret => decide (L ≤ 8)
   | .kw .slash => decide (L ≤ (match sf with | .typst => 7 | .latex => 5))
-  | .kw .cdot | .kw .times | .kw .timesLbk => decide (L ≤ 5)
+  | .kw .cdot | .kw .times => decide (L ≤ 5)
   | .kw .plus | .kw .minus => decide (L ≤ 4)
   | .kw .land => decide (L ≤ 2)
   | .kw .lor => decide (L ≤ 1)
@@ -188,10 +188,7 @@ theorem lift_mul {c : Ctx} {f : Nat} {ts r : List Tok} {x : Json} (h : pNot c f 
       · simp [conts, hsf] at ht
       · simp; rfl
     · rw [mulLoop.eq_5 _ _ _ _ _ h1 h2 h3]
-      have h5 : isTimesLbk t = false := by
-        cases t <;> try rfl
-        rename_i k; cases k <;> first | rfl | simp [conts] at ht
-      simp [h4, h5]; rfl
+      simp [h4]; rfl
 
 theorem lift_not {c : Ctx} {f : Nat} {ts r : List Tok} {x : Json} (h : pFrac c f ts = some (x, r)) :
     pNot c (f + 1) ts = some (x, r) := by

@@ -5,8 +5,8 @@ import Esm.Document.Math.Faq
 
 A native `makearray` is a bracketed two-column table, one row per region (the value,
 then the region as bound pairs joined by `\times`), with its output indices as the
-bracket's subscript. A template applied with no bindings and no known parameter list is
-its bare name, `\operatorname{n}`.
+bracket's subscript. A template applied with no bindings, unless the symbol table knows
+it with no parameters, is its bare name, `\operatorname{n}`.
 -/
 
 namespace Esm.Document.Math
@@ -15,8 +15,20 @@ open Esm.Document
 
 /-! ## A bare template -/
 
-theorem M_tbare (c : Ctx) (n : String) (hn : tnameOK n = true)
+theorem bareOK_of (S : Sym) (n : String) (hn : tnameOK n = true) (hps : positional S n [] = none) :
+    bareOK S n = true := by
+  unfold bareOK
+  rw [hn, Bool.true_and]
+  cases ht : tparams S n with
+  | none => rfl
+  | some ps =>
+    cases ps with
+    | nil => simp [positional, ht] at hps
+    | cons p ps => rfl
+
+theorem M_tbare (c : Ctx) (n : String) (hn : tnameOK n = true) (hps : positional c.S n [] = none)
     (hpr : pr c (tNode n []) = mkOut c.sf 5 [.opn n]) : M c (tNode n []) := by
+  have hb := bareOK_of c.S n hn hps
   refine M_of_toksL c _ 5 _ hpr (by omega) (by omega) (by omega) (by unfold addAcc tNode; simp)
     (⟨by simp, by simp, by simp, by simp, by simp, Or.inl rfl⟩) ?_
   intro rest hr f hf
@@ -24,13 +36,13 @@ theorem M_tbare (c : Ctx) (n : String) (hn : tnameOK n = true)
   rw [pPrim.eq_def]; simp only [List.cons_append, List.nil_append]
   rw [pOpn.eq_def]
   cases rest with
-  | nil => simp [hn]
+  | nil => simp [hb]
   | cons t r =>
     have ht := hr _ _ rfl
     have h1 : isLp t = false := by
       cases t <;> try rfl
       rename_i k; cases k <;> first | rfl | simp [conts, atomStart] at ht
-    simp only [h1, Bool.false_eq_true, ↓reduceIte, hn]
+    simp only [h1, Bool.false_eq_true, ↓reduceIte, hb]
     split
     · exfalso; simp [conts] at ht
     · rfl
@@ -55,9 +67,9 @@ theorem pPair_read (c : Ctx) (P : Json → Out) (p : Json × Json) (h1 : GoodX c
   rw [pOr_at hb _ (fol1_kw _ .rbk (by simp) _) f (by unfold need; omega)]
 
 def tailToks (c : Ctx) (P : Json → Out) (ps : List (Json × Json)) : List Tok :=
-  ps.flatMap (fun q => .kw .timesLbk :: pairToks c P q ++ [.kw .rbk])
+  ps.flatMap (fun q => .kw .times :: .kw .lbk :: pairToks c P q ++ [.kw .rbk])
 
-theorem pRegTail_read (c : Ctx) (P : Json → Out) (X : List Tok) (hX : ∀ r, X ≠ .kw .timesLbk :: r) :
+theorem pRegTail_read (c : Ctx) (P : Json → Out) (X : List Tok) (hX : ∀ r, X ≠ .kw .times :: .kw .lbk :: r) :
     ∀ (ps : List (Json × Json)), (∀ p ∈ ps, GoodX c P p.1 ∧ GoodX c P p.2) → ∀ f,
       30 * (tailToks c P ps).length + 15 ≤ f →
       pRegTail c (f + 1) (tailToks c P ps ++ X) = some (ps, X)
@@ -70,9 +82,9 @@ theorem pRegTail_read (c : Ctx) (P : Json → Out) (X : List Tok) (hX : ∀ r, X
     have hq := hg q (by simp)
     have ih := pRegTail_read c P X hX ps (fun p hp => hg p (by simp [hp]))
     have e : tailToks c P (q :: ps) ++ X =
-        .kw .timesLbk :: (pairToks c P q ++ .kw .rbk :: (tailToks c P ps ++ X)) := by
+        .kw .times :: .kw .lbk :: (pairToks c P q ++ .kw .rbk :: (tailToks c P ps ++ X)) := by
       simp [tailToks]
-    have hl : (tailToks c P (q :: ps)).length = (pairToks c P q).length + 2 + (tailToks c P ps).length := by
+    have hl : (tailToks c P (q :: ps)).length = (pairToks c P q).length + 3 + (tailToks c P ps).length := by
       simp [tailToks]; omega
     rw [e, pRegTail.eq_def]; simp only
     rw [pPair_read c P q hq.1 hq.2 _ g (by omega)]
@@ -96,7 +108,7 @@ theorem length_mkRow (c : Ctx) (P : Json → Out) (vr : Json × List (Json × Js
   simp [mkRow]; omega
 
 theorem pMkRows_read (c : Ctx) (P : Json → Out) (close : Kw) (hcl : close ≠ rowSep c.sf)
-    (hct : close ≠ .timesLbk) (hrt : rowSep c.sf ≠ .timesLbk) (X : List Tok) :
+    (hct : close ≠ .times) (hrt : rowSep c.sf ≠ .times) (X : List Tok) :
     ∀ (rows : List (Json × List (Json × Json))), rows ≠ [] →
       (∀ vr ∈ rows, GoodX c P vr.1 ∧ vr.2 ≠ [] ∧ ∀ p ∈ vr.2, GoodX c P p.1 ∧ GoodX c P p.2) → ∀ f,
       30 * (rowsToksM c P rows).length + 20 ≤ f →
@@ -122,7 +134,7 @@ theorem pMkRows_read (c : Ctx) (P : Json → Out) (close : Kw) (hcl : close ≠ 
       intro Y k hk g hg
       simp only [mkRow, regToks_eq, List.length_append, List.length_cons] at hg
       obtain ⟨g', rfl⟩ : ∃ g', g = g' + 1 := ⟨g - 1, by omega⟩
-      have hkt : k ≠ .timesLbk := by rcases hk with rfl | rfl <;> assumption
+      have hkt : k ≠ .times := by rcases hk with rfl | rfl <;> assumption
       refine ⟨?_, pPair_read c P p hp.1 hp.2 _ g' (by omega),
         pRegTail_read c P _ (fun _ e => hkt (by cases e; rfl)) ps hps' g' (by omega)⟩
       rw [hPv]

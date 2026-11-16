@@ -13,7 +13,7 @@ namespace Esm.Document.Math.Typst
 
 open Esm.Document Esm.Document.Math
 
-def Good (ts : List Tok) : Prop := (∀ t ∈ ts, tokOK t) ∧ Adj ts
+def Good (ts : List Tok) : Prop := (∀ t ∈ ts, tokOK t ∨ t = .kw .times) ∧ Adj ts
 
 /-- A list that may follow anything: it does not start with a call parenthesis or a
 unit block. -/
@@ -23,55 +23,67 @@ def LastCall (ts : List Tok) : Prop := ts ≠ [] ∧ ∀ t ∈ ts.getLast?, call
 
 theorem good_nil : Good [] := ⟨by simp, trivial⟩
 
-theorem adj_cons (t : Tok) (B : List Tok) (hB : Adj B)
+theorem adj_cons (t : Tok) (B : List Tok) (hB : Adj B) (ht : t ≠ .kw .times)
     (h : ∀ u ∈ B.head?, (u = .kw .lp → callEnd t = true) ∧ (isUnits t = true → isUnits u = false)) :
     Adj (t :: B) := by
   cases B with
-  | nil => trivial
-  | cons u r => exact ⟨(h u rfl).1, (h u rfl).2, hB⟩
+  | nil => exact ht
+  | cons u r => exact ⟨(h u rfl).1, (h u rfl).2, fun e => absurd e ht, hB⟩
 
 theorem adj_tail {t : Tok} {B : List Tok} (h : Adj (t :: B)) : Adj B := by
   cases B with
   | nil => trivial
-  | cons u r => exact h.2.2
+  | cons u r => exact h.2.2.2
 
 theorem adj_append : ∀ (A B : List Tok), Adj A → Adj B → Nice B → Adj (A ++ B)
   | [], B, _, hB, _ => hB
-  | [t], B, _, hB, hn => adj_cons t B hB (fun u hu => ⟨fun e => absurd e (hn u hu).1,
+  | [t], B, hA, hB, hn => adj_cons t B hB hA (fun u hu => ⟨fun e => absurd e (hn u hu).1,
       fun _ => (hn u hu).2⟩)
   | t :: t' :: r, B, hA, hB, hn => by
-    refine ⟨hA.1, hA.2.1, ?_⟩
-    exact adj_append (t' :: r) B hA.2.2 hB hn
+    refine ⟨hA.1, hA.2.1, hA.2.2.1, ?_⟩
+    exact adj_append (t' :: r) B hA.2.2.2 hB hn
 
 theorem good_append {A B : List Tok} (hA : Good A) (hB : Good B) (hn : Nice B) : Good (A ++ B) :=
   ⟨fun t ht => (List.mem_append.1 ht).elim (hA.1 t) (hB.1 t), adj_append A B hA.2 hB.2 hn⟩
 
+theorem good_single {t : Tok} (h : tokOK t) : Good [t] :=
+  ⟨fun u hu => by simp only [List.mem_singleton] at hu; subst hu; exact Or.inl h, tok_ne_times h⟩
+
 theorem good_cons {t : Tok} {B : List Tok} (ht : tokOK t) (hB : Good B) (hn : Nice B) : Good (t :: B) :=
-  good_append (A := [t]) ⟨by simpa using ht, trivial⟩ hB hn
+  good_append (A := [t]) (good_single ht) hB hn
+
+/-- `times` and the bracket after it. -/
+theorem good_times {B : List Tok} (hB : Good (.kw .lbk :: B)) : Good (.kw .times :: .kw .lbk :: B) := by
+  refine ⟨fun u hu => ?_, ⟨(fun e => by cases e), (fun h => by simp [isUnits] at h), (fun _ => rfl), hB.2⟩⟩
+  simp only [List.mem_cons] at hu
+  rcases hu with rfl | hu
+  · exact Or.inr rfl
+  · exact hB.1 u (by simpa using hu)
 
 theorem good_cons_lp {t : Tok} {B : List Tok} (ht : tokOK t) (hc : callEnd t = true) (hB : Good B)
     (hn : Nice B) : Good (t :: .kw .lp :: B) := by
-  refine ⟨fun u hu => ?_, ⟨fun _ => hc, fun h => by simp [isUnits] at h ⊢, adj_cons _ B hB.2
+  refine ⟨fun u hu => ?_, ⟨fun _ => hc, fun h => by simp [isUnits] at h ⊢, fun e => absurd e (tok_ne_times ht),
+    adj_cons _ B hB.2 (by intro e; cases e)
     (fun u hu => ⟨fun e => absurd e (hn u hu).1, fun h => by simp [isUnits] at h⟩)⟩⟩
   simp only [List.mem_cons] at hu
   rcases hu with rfl | rfl | hu
-  · exact ht
-  · rfl
+  · exact Or.inl ht
+  · exact Or.inl rfl
   · exact hB.1 u hu
 
 theorem good_append_lp : ∀ {A B : List Tok}, Good A → LastCall A → Good B → Nice B →
     Good (A ++ .kw .lp :: B)
   | [], _, _, hl, _, _ => absurd rfl hl.1
-  | [t], B, hA, hl, hB, hn => good_cons_lp (hA.1 t (by simp)) (hl.2 t rfl) hB hn
+  | [t], B, hA, hl, hB, hn => good_cons_lp ((hA.1 t (by simp)).resolve_right hA.2) (hl.2 t rfl) hB hn
   | t :: t' :: r, B, hA, hl, hB, hn => by
-    have ih := good_append_lp (A := t' :: r) (B := B) ⟨fun u hu => hA.1 u (by simp [hu]), hA.2.2.2⟩
+    have ih := good_append_lp (A := t' :: r) (B := B) ⟨fun u hu => hA.1 u (by simp [hu]), hA.2.2.2.2⟩
       ⟨by simp, fun u hu => hl.2 u (by simpa using hu)⟩ hB hn
     exact ⟨fun u hu => by
         simp only [List.cons_append, List.mem_cons] at hu
         rcases hu with rfl | hu
         · exact hA.1 u (by simp)
         · exact ih.1 u (by simpa using hu),
-      ⟨hA.2.1, hA.2.2.1, ih.2⟩⟩
+      ⟨hA.2.1, hA.2.2.1, hA.2.2.2.1, ih.2⟩⟩
 
 theorem nice_cons {t : Tok} (r : List Tok) (h1 : t ≠ .kw .lp) (h2 : isUnits t = false) : Nice (t :: r) :=
   fun u hu => by cases hu; exact ⟨h1, h2⟩
@@ -194,22 +206,24 @@ theorem good_segToks (g : List Char) :
   split
   · rename_i hs
     obtain ⟨h1, h2, h3, h4⟩ := tokOK_baseTok g hs
-    exact ⟨⟨(by simpa using h1), trivial⟩, nice_cons _ h3 h4, (by simp), (by simpa using h2)⟩
+    exact ⟨good_single (by simpa using h1), nice_cons _ h3 h4, (by simp), (by simpa using h2)⟩
   · split
     · rename_i b r hsp
       obtain ⟨h1, -, h3, h4⟩ := tokOK_baseTok b (subParts_spec hsp).2.1
       have hu : tokOK (.ups [(String.ofList r, "")]) := ⟨(by simp), fun p hp => by simp at hp; subst hp; left; rfl⟩
       refine ⟨?_, nice_cons _ h3 h4, (by simp [subTxt]), (fun t ht => by simp [subTxt] at ht; subst ht; rfl)⟩
       simp only [subTxt]
-      refine ⟨fun t ht => ?_, ⟨(fun e => by cases e), (fun h => ?_), ⟨(fun e => by cases e), (fun _ => rfl),
-        ⟨(fun e => by cases e), (fun _ => rfl), ⟨(fun e => by cases e), (fun _ => rfl), trivial⟩⟩⟩⟩⟩
+      refine ⟨fun t ht => ?_, ⟨(fun e => by cases e), (fun h => ?_), (fun e => absurd e (tok_ne_times h1)),
+        ⟨(fun e => by cases e), (fun _ => rfl), (fun e => by cases e),
+        ⟨(fun e => by cases e), (fun _ => rfl), (fun e => by cases e),
+        ⟨(fun e => by cases e), (fun _ => rfl), (fun e => by cases e), (fun e => by cases e)⟩⟩⟩⟩⟩
       · simp only [List.mem_cons, List.not_mem_nil, or_false] at ht
         rcases ht with rfl | rfl | rfl | rfl | rfl
-        · exact h1
-        · rfl
-        · rfl
-        · exact hu
-        · rfl
+        · exact Or.inl h1
+        · exact Or.inl rfl
+        · exact Or.inl rfl
+        · exact Or.inl hu
+        · exact Or.inl rfl
       · rfl
     · split
       · rename_i hf
@@ -227,9 +241,9 @@ theorem good_segToks (g : List Char) :
           · right
             refine ⟨by simpa using h2, ?_⟩
             rw [String.toList_ofList]; exact List.all_eq_true.2 hd
-        exact ⟨⟨(by simpa [formTok] using hu), trivial⟩, nice_cons _ (by simp [formTok]) rfl, (by simp [formTok]),
+        exact ⟨good_single (by simpa [formTok] using hu), nice_cons _ (by simp [formTok]) rfl, (by simp [formTok]),
           fun t ht => by simp [formTok] at ht; subst ht; exact callEnd_ups _ hu⟩
-      · refine ⟨⟨(by simp; trivial), trivial⟩, nice_cons _ (by simp) rfl, (by simp), ?_⟩
+      · refine ⟨good_single trivial, nice_cons _ (by simp) rfl, (by simp), ?_⟩
         intro t ht; simp at ht; subst ht
         simp only [callEnd, tokChars, Strings.quote]
         rw [show "italic(".toList ++ ('"' :: Strings.escape true (String.ofList g).toList ++ ['"']) ++ [')'] =
@@ -254,7 +268,7 @@ theorem good_nameToks (c : Ctx) (hc : c.sf = .typst) (s : String) :
     Good (nameToks c s) ∧ Nice (nameToks c s) ∧ LastCall (nameToks c s) := by
   unfold nameToks
   split
-  · refine ⟨⟨(by simp; trivial), trivial⟩, nice_cons _ (by simp) rfl, (by simp), ?_⟩
+  · refine ⟨good_single trivial, nice_cons _ (by simp) rfl, (by simp), ?_⟩
     intro t ht; simp at ht; subst ht
     simp only [callEnd, tokChars, Strings.quote]
     rw [show "italic(".toList ++ ('"' :: Strings.escape true s.toList ++ ['"']) ++ [')'] =
@@ -279,7 +293,7 @@ theorem nice_of_head {c : Ctx} {ts : List Tok} (h : HeadOK c ts) : Nice ts ∧ t
 
 theorem good_grp {ts : List Tok} (h : Good ts) (hn : Nice ts) : Good (grp .typst ts) := by
   simp only [grp, reduceCtorEq, ↓reduceIte]
-  exact good_cons rfl (good_append h ⟨by simp; rfl, trivial⟩ (nice_cons _ (by simp) rfl)) (by
+  exact good_cons rfl (good_append h (good_single rfl) (nice_cons _ (by simp) rfl)) (by
     cases ts with
     | nil => exact nice_cons _ (by simp) rfl
     | cons t r => exact fun u hu => hn u (by simpa using hu))
@@ -329,7 +343,7 @@ theorem good_callToks (head : List Tok) (hh : Good head) (hl : LastCall head) (h
     Good (callToks .typst head args) ∧ Nice (callToks .typst head args) := by
   obtain ⟨hs1, hs2⟩ := good_sepBy .comma rfl (by simp) args ha
   simp only [callToks, lpC, List.append_assoc, List.singleton_append]
-  refine ⟨good_append_lp hh hl (good_append hs1 ⟨by simp; rfl, trivial⟩ (nice_cons _ (by simp) rfl)) ?_,
+  refine ⟨good_append_lp hh hl (good_append hs1 (good_single rfl) (nice_cons _ (by simp) rfl)) ?_,
     nice_append _ hn hl.1⟩
   by_cases he : sepBy [.kw .comma] args = []
   · rw [he]; exact nice_cons _ (by simp) rfl
@@ -350,7 +364,9 @@ theorem simpleE_ok (c : Ctx) (hc : c.sf = .typst) (x : Json) (hx : isE x = true)
       split at h
       · rename_i hs
         cases h
-        have hg := (good_nameToks c hc s).1.1 t (by rw [he]; simp)
+        have hgood := (good_nameToks c hc s).1
+        have hg := (hgood.1 t (by rw [he]; simp)).resolve_right (by
+          rintro rfl; have := hgood.2; rw [he] at this; exact absurd rfl this)
         refine ⟨hg, ?_, ?_⟩
         · rintro rfl; simp [simpleTok] at hs
         · cases t <;> simp_all [simpleTok, isUnits]
@@ -360,10 +376,9 @@ theorem simpleE_ok (c : Ctx) (hc : c.sf = .typst) (x : Json) (hx : isE x = true)
 
 theorem mk_ok {T : List Tok} (h : Good T) (hn : Nice T) (hne : T ≠ []) :
     Good T ∧ Good (T ++ [.kw .amp, .txt "otherwise"]) ∧ Nice (T ++ [.kw .amp, .txt "otherwise"]) :=
-  ⟨h, good_append h ⟨(by simp; exact ⟨rfl, tokOK_txt _ (by decide)⟩), ⟨(fun e => by cases e), (fun _ => rfl), trivial⟩⟩
+  ⟨h, good_append h (good_cons rfl (good_single (tokOK_txt _ (by decide))) (nice_cons _ (by simp) rfl))
     (nice_cons _ (by simp) rfl), nice_append _ hn hne⟩
 
-theorem good_single {t : Tok} (h : tokOK t) : Good [t] := ⟨by simpa using h, trivial⟩
 
 theorem jwf_obj_fields {kvs : List (String × Json)} (hs : keysSorted kvs = true)
     (hf : ∀ kv ∈ fieldsOf kvs, jwf kv.2 = true) : (Json.obj (fieldsOf kvs)).WF := by
@@ -400,11 +415,11 @@ theorem good_simple : ∀ (l : List Tok), (∀ t ∈ l, tokOK t ∧ t ≠ .kw .l
 /-- The fixed tokens of a printed template. -/
 macro "fixed" : tactic => `(tactic| (apply good_simple; simp (config := {decide := true}) [tokOK, kwOK, isUnits, isLetter]))
 
-theorem adj_snoc : ∀ (A : List Tok) (u : Tok), Adj A → u ≠ .kw .lp →
+theorem adj_snoc : ∀ (A : List Tok) (u : Tok), Adj A → u ≠ .kw .lp → u ≠ .kw .times →
     (∀ t ∈ A.getLast?, isUnits t = false) → Adj (A ++ [u])
-  | [], _, _, _, _ => trivial
-  | [t], u, _, hu, hl => ⟨fun e => absurd e hu, fun h => by simp [hl t rfl] at h, trivial⟩
-  | t :: t' :: r, u, hA, hu, hl => ⟨hA.1, hA.2.1, adj_snoc (t' :: r) u hA.2.2 hu
+  | [], _, _, _, hut, _ => hut
+  | [t], u, hA, hu, hut, hl => ⟨fun e => absurd e hu, fun h => by simp [hl t rfl] at h, fun e => absurd e hA, hut⟩
+  | t :: t' :: r, u, hA, hu, hut, hl => ⟨hA.1, hA.2.1, hA.2.2.1, adj_snoc (t' :: r) u hA.2.2.2 hu hut
       (fun x hx => hl x (by simpa using hx))⟩
 
 theorem good_numToks (ns : List JNum) (h : ∀ n ∈ ns, numOK n = true) :
@@ -426,7 +441,7 @@ theorem good_arr (af : AForm) (h : AOK af) : Good (arrToks .typst af) ∧ Nice (
   | mat rs =>
     have hS := good_sepBy .semi rfl (by simp) (rs.map fun r => sepBy [.kw .comma] (numToks r)) (fun y hy => by
       obtain ⟨r, hr, rfl⟩ := List.mem_map.1 hy
-      exact good_sepBy .comma rfl (by simp) _ (good_numToks r (h.2.2 r hr)))
+      exact good_sepBy .comma rfl (by simp) _ (good_numToks r (h.2.2.1 r hr)))
     simp only [arrToks, List.cons_append, List.nil_append]
     refine ⟨good_cons_lp rfl rfl (good_append hS.1 (good_single rfl) (nice_cons _ (by simp) rfl)) ?_,
       nice_cons _ (by simp) rfl, fun t ht => ?_⟩
@@ -600,6 +615,13 @@ theorem gn_cat {A B : List Tok} (hA : GN A) (hB : GN B) : GN (A ++ B) :=
 theorem gn_kw {k : Kw} {B : List Tok} (hk : kwOK k = true) (hl : k ≠ .lp) (hB : GN B) : GN (.kw k :: B) :=
   ⟨good_cons hk hB.1 hB.2, nice_cons _ (by simp [hl]) rfl⟩
 
+theorem gn_tok {t : Tok} {B : List Tok} (ht : tokOK t) (hl : t ≠ .kw .lp) (hu : isUnits t = false)
+    (hB : GN B) : GN (t :: B) :=
+  ⟨good_cons ht hB.1 hB.2, nice_cons _ hl hu⟩
+
+theorem gn_times {B : List Tok} (hB : GN (.kw .lbk :: B)) : GN (.kw .times :: .kw .lbk :: B) :=
+  ⟨good_times hB.1, nice_cons _ (by simp) rfl⟩
+
 theorem gn_flatMap {α : Type} (f : α → List Tok) : ∀ (xs : List α), (∀ x ∈ xs, GN (f x)) → GN (xs.flatMap f)
   | [], _ => gn_nil
   | x :: xs, h => by
@@ -624,8 +646,8 @@ theorem good_mkOutT (c : Ctx) (hc : c.sf = .typst) (M : MkForm) (P : Json → Ou
     cases r with
     | nil => exact gn_nil
     | cons p ps =>
-      have hps := gn_flatMap (fun q => .kw .timesLbk :: pairToks c P q ++ [.kw .rbk]) ps (fun q hq =>
-        gn_kw rfl (by simp) (gn_cat (hPair _ hr q (by simp [hq])) (gn_kw rfl (by simp) gn_nil)))
+      have hps := gn_flatMap (fun q => .kw .times :: .kw .lbk :: pairToks c P q ++ [.kw .rbk]) ps (fun q hq =>
+        gn_times (gn_kw rfl (by simp) (gn_cat (hPair _ hr q (by simp [hq])) (gn_kw rfl (by simp) gn_nil))))
       simp only [regToks]
       exact gn_kw rfl (by simp) (gn_cat (hPair _ hr p (by simp)) (gn_kw rfl (by simp) hps))
   have hRows := good_sepBy .semi rfl (by simp) ((M.values.zip M.regions).map (mkRow c P)) (by
@@ -644,12 +666,11 @@ theorem good_mkOutT (c : Ctx) (hc : c.sf = .typst) (M : MkForm) (P : Json → Ou
       exact gn_kw rfl (by simp) (gn_kw rfl (by simp) (gn_cat ⟨hL1, hL2⟩ (gn_kw rfl (by simp) gn_nil)))
   have hTail : GN (List.drop 2 matHead) := by
     simp only [matHead, List.drop]
-    refine gn_kw rfl (by simp) (gn_kw rfl (by simp) ?_)
-    refine ⟨good_cons (tokOK_txt _ (by decide)) ?_ ?_, nice_cons _ (by simp) rfl⟩
-    · exact (gn_kw rfl (by simp) (gn_kw rfl (by simp) (gn_kw rfl (by simp)
-        ⟨good_cons (t := .code (.num (.int 1))) (jwf_sound (.num (.int 1)) rfl) (gn_kw rfl (by simp) gn_nil).1 (gn_kw rfl (by simp) gn_nil).2,
-          nice_cons _ (by simp) rfl⟩))).1
-    · exact nice_cons _ (by simp) rfl
+    exact gn_tok (Or.inl rfl) (by simp) rfl (gn_kw rfl (by simp)
+      (gn_tok (tokOK_txt _ (by decide)) (by simp) rfl (gn_kw rfl (by simp)
+        (gn_tok (Or.inr rfl) (by simp) rfl (gn_kw rfl (by simp)
+          (gn_tok (t := .code (.num (.int 1))) (jwf_sound (.num (.int 1)) rfl) (by simp) rfl
+            (gn_kw rfl (by simp) gn_nil)))))))
   have hHead : GN matHead :=
     ⟨good_cons_lp (t := .kw .mat) rfl rfl hTail.1 hTail.2, nice_cons _ (by simp) rfl⟩
   unfold mkOutT
@@ -935,7 +956,12 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
         exact ⟨hu.1.1.1, fun f hf => hu.1.2 f hf⟩
       rw [hpr] at hselfN ⊢; simp only [mkOut, qtyToks] at hselfN ⊢
       have hT : Good [Tok.num k, .units (factorsOf u)] :=
-        ⟨(by simp; exact ⟨hk, hl⟩), ⟨(fun e => by cases e), (fun h => by simp [isUnits] at h), trivial⟩⟩
+        ⟨fun t ht => by
+            simp only [List.mem_cons, List.not_mem_nil, or_false] at ht
+            rcases ht with rfl | rfl
+            · exact Or.inl hk
+            · exact Or.inl hl,
+          ⟨(fun e => by cases e), (fun h => by simp [isUnits] at h), (fun e => by cases e), (by intro e; cases e)⟩⟩
       exact mk_ok hT hselfN.1 hselfN.2
     | arr xs af haf hpr =>
       simp only [hc] at hpr
@@ -950,10 +976,10 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
         exact ⟨hu.1.1.1, fun f hf => hu.1.2 f hf⟩
       have hT : Good (arrToks .typst af ++ unitToks (factorsOf u)) := by
         simp only [unitToks]
-        refine ⟨fun t ht => ?_, adj_snoc _ _ hA.2 (by simp) hl⟩
+        refine ⟨fun t ht => ?_, adj_snoc _ _ hA.2 (by simp) (by simp) hl⟩
         rcases List.mem_append.1 ht with ht | ht
         · exact hA.1 t ht
-        · simp at ht; subst ht; exact hlf
+        · simp at ht; subst ht; exact Or.inl hlf
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok hT hselfN.1 hselfN.2
     | faq kvs F hF hok P hP hpr =>
@@ -970,7 +996,7 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
       have hm := mk_ok hT hselfN.1 hselfN.2
       rw [mkOutT_crow]
       exact ⟨hT, hm.2.1, hm.2.2⟩
-    | tbare m hm hpr =>
+    | tbare m hm _ hpr =>
       simp only [hc] at hpr
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok (good_single trivial) hselfN.1 hselfN.2
@@ -999,7 +1025,7 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
           exact ⟨good_append hN (good_cons rfl hV hVn) (nice_cons _ (by simp) rfl), nice_append _ hNn hNl.1⟩)
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok hS.1 hselfN.1 hselfN.2
-    | openop kvs o as hop hargs hsk hx hf hcore hopn htp hkey hsz hszf hpr =>
+    | openop kvs o as hop hargs hsk hx hf hcore hopn htp _ hkey hsz hszf hpr =>
       simp only [hc] at hpr
       have hA := good_sepBy .comma rfl (by simp) (as.map fun x => (pr c x).at .typst 4) (fun y hy => by
         obtain ⟨x, hm, rfl⟩ := List.mem_map.1 hy
@@ -1077,7 +1103,8 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
 /-- Every token the Typst printer writes for a well-formed expression is a Typst token,
 in an order the Typst lexer reads back. -/
 theorem print_ok (S : Sym) (e : Json) (he : isE e = true) :
-    (∀ t ∈ print .typst S e, tokOK t) ∧ Adj (print .typst S e) ∧ ∀ r, print .typst S e ≠ .kw .lp :: r := by
+    (∀ t ∈ print .typst S e, tokOK t ∨ t = .kw .times) ∧ Adj (print .typst S e) ∧
+      ∀ r, print .typst S e ≠ .kw .lp :: r := by
   have h := TP_all ⟨.typst, S⟩ rfl _ e (Nat.lt_succ_self _) he
   have hm := M_of_isE ⟨.typst, S⟩ e he
   have hh := headOK_at hm 1

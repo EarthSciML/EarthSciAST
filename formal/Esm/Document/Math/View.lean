@@ -136,6 +136,7 @@ inductive V (c : Ctx) : Json → Prop where
       (hs : keysSorted kvs = true) (hx : ∀ x ∈ as, isE x = true)
       (hf : ∀ kv ∈ fieldsOf kvs, jwf kv.2 = true)
       (hcf : callFormOK o (fieldsOf kvs) = true) (hopn : opnOK o = true) (htp : tparams c.S o = none)
+      (hnat : nativeK c.sf kvs = false)
       (hkey : ∀ kv ∈ fieldsOf kvs, keyOK kv.1 = true)
       (hsz : ∀ x ∈ as, sizeOf x < sizeOf (Json.obj kvs))
       (hszf : ∀ kv ∈ fieldsOf kvs, sizeOf kv.2 < sizeOf (Json.obj kvs))
@@ -149,7 +150,7 @@ inductive V (c : Ctx) : Json → Prop where
   | mk (kvs : List (String × Json)) (M : MkForm) (hM : mkForm kvs = some M) (hok : mkOK M = true)
       (P : Json → Out) (hP : ∀ x ∈ mkSubs M, P x = pr c x)
       (hpr : pr c (.obj kvs) = mkOutT c P M) : V c (.obj kvs)
-  | tbare (n : String) (hn : tnameOK n = true)
+  | tbare (n : String) (hn : tnameOK n = true) (hps : positional c.S n [] = none)
       (hpr : pr c (tNode n []) = mkOut c.sf 5 [.opn n]) : V c (tNode n [])
   | esc (kvs : List (String × Json)) (o : String) (as : List Json)
       (hop : look "op" kvs = some (.str o)) (hargs : look "args" kvs = some (.arr as))
@@ -302,8 +303,7 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
     have fbOpn : ∀ X : Out, pr c (.obj kvs) = X →
         X = (match look "op" kvs, _hk : look "args" kvs with
           | some (.str o), some (.arr as) =>
-            if callFormOK o (fieldsOf kvs) && opnOK o && (tparams c.S o).isNone &&
-                (fieldsOf kvs).all (fun kv => keyOK kv.1) then
+            if callCond c o kvs && (fieldsOf kvs).all (fun kv => keyOK kv.1) then
               mkOut c.sf 10 (openToks c.sf o (as.attach.map fun x => (pr c x.1).at c.sf 4)
                 ((fieldsOf kvs).attach.map fun x =>
                   keyToks c.sf x.1.1 ++ .kw .eq :: (if mathField o x.1 then (pr c x.1.2).at c.sf 4 else jsonVal c.sf x.1.2)))
@@ -321,10 +321,10 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
       · rename_i o as hop hargs
         split at hX
         · rename_i hcond
-          simp only [Bool.and_eq_true, Option.isNone_iff_eq_none,
+          simp only [callCond, Bool.and_eq_true, Option.isNone_iff_eq_none, Bool.not_eq_true',
             List.all_eq_true] at hcond
-          obtain ⟨⟨⟨hc1, hc2⟩, hc3⟩, hc4⟩ := hcond
-          refine V.openop kvs o as hop hargs hs0 (isE_args h hargs) hf0 hc1 hc2 hc3 hc4
+          obtain ⟨⟨⟨⟨hc1, hc2⟩, hc3⟩, hnat⟩, hc4⟩ := hcond
+          refine V.openop kvs o as hop hargs hs0 (isE_args h hargs) hf0 hc1 hc2 hc3 hnat hc4
             (sizeOf_obj_lt hargs) sizeOf_fields_lt ?_
           rw [hX, attach_map_eq as (fun x => Out.at c.sf 4 (pr c x)),
             attach_map_eq (fieldsOf kvs) (fun kv =>
@@ -454,7 +454,7 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
             unfold tNode; rw [hpr, attach_map_eq bs (fun kv => (kv.1, Out.at c.sf 4 (pr c kv.2))), List.map_map]
             rfl
           · split at hpr
-            · rename_i hbs; subst hbs; exact V.tbare n hn hpr
+            · rename_i hbs; subst hbs; exact V.tbare n hn hps hpr
             · exact fbEsc _ hpr rfl
       · exact fbEsc _ hpr rfl
     · split at hpr

@@ -250,11 +250,17 @@ def bodyOf (c : Ctx) (f : Nat) (red : RedK) (marked : Bool) (rows : Option (List
   | some (rs, r) =>
     match rowParts rs, pSup c.sf r with
     | some (rg, fl), some (st, r1) =>
-      match pMul c f r1 with
-      | some (body, r') => some (⟨red, marked, [], rg, body, fl, st⟩, r')
-      | none => none
+      if marked && !st.isEmpty then none
+      else
+        match pMul c f r1 with
+        | some (body, r') => some (⟨red, marked, [], rg, body, fl, st⟩, r')
+        | none => none
     | _, _ => none
   | none => none
+
+/-- A marked operator shows no superscript set. -/
+theorem marked_sup (F : FaqForm) : (F.marked && !F.sup.isEmpty) = false := by
+  unfold FaqForm.sup; cases F.marked <;> simp
 
 theorem pRedBody_latex {c : Ctx} (h : c.sf = .latex) (f : Nat) (red : RedK) (marked : Bool) (ts : List Tok) :
     pRedBody c (f + 1) red marked ts = bodyOf c f red marked (rowsL c f ts) := by
@@ -621,7 +627,8 @@ theorem afterSub_sup {c : Ctx} {S : List Tok} {st : List String} (hS : SupOK c S
     · exact Or.inr (Or.inr ⟨_, rfl⟩)
 
 theorem bodyOf_eq {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (S : List Tok) (st : List String)
-    (hS : SupOK c S st) (red : RedK) (marked : Bool) (rest : List Tok) (hr : Fol c.sf 5 rest) (f : Nat)
+    (hS : SupOK c S st) (red : RedK) (marked : Bool) (hms : (marked && !st.isEmpty) = false)
+    (rest : List Tok) (hr : Fol c.sf 5 rest) (f : Nat)
     (hf : need 5 ((P F.expr).at c.sf 5).length ≤ f) :
     bodyOf c f red marked (some ((faqRows c P F).map Prod.fst, S ++ ((P F.expr).at c.sf 5 ++ rest))) =
       some (⟨red, marked, [], redRanges F, F.expr, F.filter, st⟩, rest) := by
@@ -633,12 +640,13 @@ theorem bodyOf_eq {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (S
   unfold bodyOf
   simp only
   rw [faqRows_fst, pSup_read c S st hS _ hY]
-  simp only
+  simp only [hms, Bool.false_eq_true, ↓reduceIte]
   rw [pMul_body h rest hr f hf]
 
 /-- The subscript, the superscript set and the body read back. -/
 theorem pRedBody_read {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (S : List Tok)
-    (st : List String) (hS : SupOK c S st) (rest : List Tok) (hr : Fol c.sf 5 rest) (f : Nat)
+    (st : List String) (hS : SupOK c S st) (hms : (F.marked && !st.isEmpty) = false)
+    (rest : List Tok) (hr : Fol c.sf 5 rest) (f : Nat)
     (hf : 30 * (subToks c P F ++ (P F.expr).at c.sf 5).length + 25 ≤ f) :
     pRedBody c (f + 1) F.red F.marked (subToks c P F ++ (S ++ ((P F.expr).at c.sf 5 ++ rest))) =
       some (⟨F.red, F.marked, [], redRanges F, F.expr, F.filter, st⟩, rest) := by
@@ -650,11 +658,11 @@ theorem pRedBody_read {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P
   · have e : subToks c P F = subToksL c P F := by unfold subToks; rw [hsf]
     rw [e] at hf ⊢
     rw [pRedBody_latex hsf, rowsL_read h _ hZ f (by omega)]
-    exact bodyOf_eq h S st hS F.red F.marked rest hr f (by unfold need; omega)
+    exact bodyOf_eq h S st hS F.red F.marked hms rest hr f (by unfold need; omega)
   · have e : subToks c P F = subToksT c P F := by unfold subToks; rw [hsf]
     rw [e] at hf ⊢
     rw [pRedBody_typst hsf, rowsT_read h _ (afterSub_us hZ) f (by omega)]
-    exact bodyOf_eq h S st hS F.red F.marked rest hr f (by unfold need; omega)
+    exact bodyOf_eq h S st hS F.red F.marked hms rest hr f (by unfold need; omega)
 
 /-! ## Operator, entries, ranges -/
 
@@ -866,6 +874,13 @@ theorem withOut_eta (F : FaqForm) (hS : keysSorted F.ranges = true) (hNd : (outN
     rw [this]
   · rfl
 
+theorem bracketSetOK_eta (F : FaqForm) :
+    bracketSetOK ⟨F.red, F.marked, [], redRanges F, F.expr, F.filter, []⟩ F.sup = true := by
+  unfold bracketSetOK
+  have := marked_sup F
+  simp only [List.isEmpty_nil, Bool.true_and] at this ⊢
+  simp [this]
+
 theorem addAcc_faq (F : FaqForm) : addAcc (faqJson F) = [faqJson F] := by
   unfold addAcc faqJson
   split
@@ -1006,7 +1021,7 @@ theorem M_faq (c : Ctx) (kvs : List (String × Json)) (F : FaqForm) (hF : faqFor
     rw [List.append_assoc, List.append_assoc, List.append_assoc, he, pPrim_red c F _ t r ht1, ← he, pRed_head,
       pRedHead_read c.sf F _ (by rw [he]; intro r' e; cases e; exact ht2 rfl)]
     simp only
-    rw [pRedBody_read h _ _ hSup rest hr g (by simp only [List.length_append]; unfold need at hf; omega)]
+    rw [pRedBody_read h _ _ hSup (marked_sup F) rest hr g (by simp only [List.length_append]; unfold need at hf; omega)]
     simp only [Option.map_some]
     rw [faqJson_eta F hout, hj]
   · have hbody : ∀ (Y : List Tok) (k : Kw), conts c.sf 5 (.kw k) = false → ∀ g,
@@ -1016,7 +1031,7 @@ theorem M_faq (c : Ctx) (kvs : List (String × Json)) (F : FaqForm) (hF : faqFor
         pRedBody c (g + 1) F.red F.marked (subToks c P F ++ ([] ++ ((P F.expr).at c.sf 5 ++ .kw k :: Y))) =
           some (⟨F.red, F.marked, [], redRanges F, F.expr, F.filter, []⟩, .kw k :: Y) := by
       intro Y k hk g hg
-      refine ⟨pRedHead_read c.sf F _ ?_, pRedBody_read h [] [] (supOK_nil c) _ (fol_kw _ 5 k _ hk) g hg⟩
+      refine ⟨pRedHead_read c.sf F _ ?_, pRedBody_read h [] [] (supOK_nil c) (by simp) _ (fol_kw _ 5 k _ hk) g hg⟩
       obtain ⟨t, r, he, -, ht2⟩ := sub_body_head h [] [] (supOK_nil c) (.kw k :: Y)
       rw [he]; intro r' e; cases e; exact ht2 rfl
     have hsupN : ∀ Y, pSup c.sf (supT c F ++ .kw .us :: Y) = some (F.sup, .kw .us :: Y) :=
@@ -1046,7 +1061,7 @@ theorem M_faq (c : Ctx) (kvs : List (String × Json)) (F : FaqForm) (hF : faqFor
       rw [h1]; simp only
       rw [h2]; simp only
       rw [hsupN]; simp only
-      rw [h3]; simp only
+      rw [h3]; simp only [bracketSetOK_eta F, ↓reduceIte]
       rw [entryParts_out F hO]; simp only [Option.map_some]; rw [withOut_eta F hS hNd, hj]
     · have hpr' : pr c (.obj kvs) = mkOut c.sf (if supT c F = [] then 10 else 8)
           ([.kw .lr, .kw .lp, .kw .lbk] ++ redToks c P F ++ [.kw .rbk, .kw .rp] ++ supT c F ++
@@ -1072,7 +1087,7 @@ theorem M_faq (c : Ctx) (kvs : List (String × Json)) (F : FaqForm) (hF : faqFor
       rw [h1]; simp only
       rw [h2]; simp only
       rw [hsupT]; simp only
-      rw [h3]; simp only
+      rw [h3]; simp only [bracketSetOK_eta F, ↓reduceIte]
       rw [entryParts_out F hO]; simp only [Option.map_some]; rw [withOut_eta F hS hNd, hj]
 
 end Esm.Document.Math

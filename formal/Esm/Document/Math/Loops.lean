@@ -52,10 +52,7 @@ theorem mulLoop_stop (c : Ctx) (f : Nat) (acc : List Json) (r : List Tok) (hr : 
       · simp [conts, hsf] at ht
       · simp
     · rw [mulLoop.eq_5 _ _ _ _ _ h1 h2 h3]
-      have h5 : isTimesLbk t = false := by
-        cases t <;> try rfl
-        rename_i k; cases k <;> first | rfl | simp [conts] at ht
-      simp [h4, h5]
+      simp [h4]
 
 theorem fracLoop_stop (c : Ctx) (f : Nat) (x : Json) (r : List Tok) (hr : Fol c.sf 7 r) :
     fracLoop c (f + 1) x r = some (x, r) := by

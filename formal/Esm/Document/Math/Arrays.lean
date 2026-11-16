@@ -3,7 +3,8 @@ import Esm.Document.Math.Derivs
 /-!
 # Round trip, case by case: constant arrays
 
-A column for rank 1 and a matrix of at least two columns, LaTeX `bmatrix`, Typst
+A column for rank 1 and a matrix of at least two columns, LaTeX `bmatrix` (a matrix of
+more than `bmatCols` columns `\left[\begin{array}{c…c} … \end{array}\right]`), Typst
 `vec(…)` / `mat(…)`, with units after them as for a scalar.
 -/
 
@@ -57,7 +58,8 @@ theorem rowsOf_spec : ∀ (xs : List Json) (rs : List (List JNum)), rowsOf xs = 
 /-- What a printed array shape guarantees. -/
 def AOK : AForm → Prop
   | .col ns => ns ≠ [] ∧ ∀ n ∈ ns, numOK n = true
-  | .mat rs => rs ≠ [] ∧ (∀ r ∈ rs, 2 ≤ r.length) ∧ ∀ r ∈ rs, ∀ n ∈ r, numOK n = true
+  | .mat rs => rs ≠ [] ∧ (∀ r ∈ rs, 2 ≤ r.length) ∧ (∀ r ∈ rs, ∀ n ∈ r, numOK n = true) ∧
+      ∀ r ∈ rs, r.length = (rs.headD []).length
 
 theorem arrForm_spec {v : Json} {af : AForm} (h : arrForm v = some af) : af.json = v ∧ AOK af := by
   unfold arrForm at h
@@ -78,12 +80,17 @@ theorem arrForm_spec {v : Json} {af : AForm} (h : arrForm v = some af) : af.json
           cases h
           obtain ⟨e, hn⟩ := rowsOf_spec xs (r :: rs) hrs
           obtain ⟨h2, hall⟩ := hc
-          refine ⟨by simp [AForm.json, e], by simp, fun q hq => ?_, hn⟩
-          simp only [List.mem_cons] at hq
-          rcases hq with rfl | hq
-          · exact h2
-          · have := List.all_eq_true.1 hall q hq
-            simp at this; omega
+          refine ⟨by simp [AForm.json, e], by simp, fun q hq => ?_, hn, fun q hq => ?_⟩
+          · simp only [List.mem_cons] at hq
+            rcases hq with rfl | hq
+            · exact h2
+            · have := List.all_eq_true.1 hall q hq
+              simp at this; omega
+          · simp only [List.mem_cons] at hq
+            rcases hq with rfl | hq
+            · rfl
+            · have := List.all_eq_true.1 hall q hq
+              simpa using this
         · cases h
       · cases h
   · cases h
@@ -171,19 +178,31 @@ theorem pPrim_arr (c : Ctx) (af : AForm) (haf : AOK af) (rest : List Tok) (f : N
       rw [pPrim.eq_def]; simp only [List.nil_append]
       rw [numToks_col, pGrid_read .amp .nl .emat (by decide) (by decide) (by decide) rest _ hrows hrne _
         (by rw [← numToks_col]; simp [numToks] at hS ⊢; omega)]
-      simp only [AForm.json, gridJson_col]
+      have hall : ((ns.map fun n => [n]).all fun q => decide (q.length ≤ bmatCols)) = true := by
+        simp [bmatCols]
+      simp only [hall, ↓reduceIte, AForm.json, gridJson_col]
     | mat rs =>
-      obtain ⟨hne, hlen, -⟩ := haf
+      obtain ⟨hne, hlen, -, heq⟩ := haf
       have hrne : ∀ r ∈ rs, r ≠ [] := fun r hr => by have := hlen r hr; intro e; subst e; simp at this
       have hS := length_le_sepBy [.kw .nl] (by simp) (rs.map fun r => sepBy [.kw .amp] (numToks r)) (by
         intro x hx; obtain ⟨r, hr, rfl⟩ := List.mem_map.1 hx
         obtain ⟨n, r', rfl⟩ := List.exists_cons_of_ne_nil (hrne r hr)
         cases r' <;> simp [numToks, sepBy])
-      simp only [arrToks, hsf, List.cons_append, List.append_assoc]
-      rw [pPrim.eq_def]; simp only [List.nil_append]
-      rw [pGrid_read .amp .nl .emat (by decide) (by decide) (by decide) rest _ hne hrne _
-        (by simp at hS ⊢; omega)]
-      simp only [AForm.json, gridJson_mat rs hlen hne]
+      by_cases hw : bmatCols < (rs.headD []).length
+      · have hall : (rs.all fun q => q.length == (rs.headD []).length) = true := by
+          simp only [List.all_eq_true, beq_iff_eq]; exact heq
+        simp only [arrToks, hsf, hw, ↓reduceIte, List.cons_append, List.append_assoc, List.nil_append]
+        rw [pPrim.eq_def]; simp only
+        rw [pGrid_read .amp .nl .earr (by decide) (by decide) (by decide) _ _ hne hrne _
+          (by simp at hS ⊢; omega)]
+        simp only [hw, hall, decide_true, Bool.and_self, ↓reduceIte, AForm.json]
+      · have hall : (rs.all fun q => decide (q.length ≤ bmatCols)) = true := by
+          simp only [List.all_eq_true, decide_eq_true_eq]; intro q hq; rw [heq q hq]; omega
+        simp only [arrToks, hsf, hw, ↓reduceIte, List.cons_append, List.append_assoc]
+        rw [pPrim.eq_def]; simp only [List.nil_append]
+        rw [pGrid_read .amp .nl .emat (by decide) (by decide) (by decide) rest _ hne hrne _
+          (by simp at hS ⊢; omega)]
+        simp only [hall, ↓reduceIte, AForm.json, gridJson_mat rs hlen hne]
   · cases af with
     | col ns =>
       obtain ⟨hne, -⟩ := haf
@@ -192,7 +211,7 @@ theorem pPrim_arr (c : Ctx) (af : AForm) (haf : AOK af) (rest : List Tok) (f : N
       rw [pCells_read .comma .rp (by decide) rest ns hne]
       rfl
     | mat rs =>
-      obtain ⟨hne, hlen, -⟩ := haf
+      obtain ⟨hne, hlen, -, -⟩ := haf
       have hrne : ∀ r ∈ rs, r ≠ [] := fun r hr => by have := hlen r hr; intro e; subst e; simp at this
       have hS := length_le_sepBy [.kw .semi] (by simp) (rs.map fun r => sepBy [.kw .comma] (numToks r)) (by
         intro x hx; obtain ⟨r, hr, rfl⟩ := List.mem_map.1 hx
@@ -211,7 +230,15 @@ theorem pPrim_arr (c : Ctx) (af : AForm) (haf : AOK af) (rest : List Tok) (f : N
 
 theorem arrToks_head (sf : Sf) (af : AForm) :
     ∃ k r, arrToks sf af = .kw k :: r ∧ startA (.kw k) = true ∧ k ≠ .dif ∧ k ≠ .pdiff := by
-  cases af <;> cases sf <;> exact ⟨_, _, rfl, rfl, by decide, by decide⟩
+  cases af with
+  | col ns => cases sf <;> exact ⟨_, _, rfl, rfl, by decide, by decide⟩
+  | mat rs =>
+    cases sf
+    · simp only [arrToks]
+      split
+      · exact ⟨.lbkg, _, rfl, rfl, by decide, by decide⟩
+      · exact ⟨.bmat, _, rfl, rfl, by decide, by decide⟩
+    · exact ⟨_, _, rfl, rfl, by decide, by decide⟩
 
 theorem M_arr (c : Ctx) (xs : List Json) (af : AForm) (haf : arrForm (.arr xs) = some af)
     (hpr : pr c (.obj [("args", .arr []), ("op", .str "const"), ("value", .arr xs)]) =

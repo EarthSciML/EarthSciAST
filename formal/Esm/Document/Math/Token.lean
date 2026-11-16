@@ -39,10 +39,11 @@ inductive Kw where
   | sum | prod | inn | substack | limits | lbkg | rbkg | lr
   -- the LaTeX marker `\limits` (Typst writes `limits(…)` around the operator)
   | limitsL
-  -- makearray: LaTeX `\begin{array}{l|l}` `\end{array}`; the region product with the
-  -- bracket of the next bound pair, LaTeX `\times [`, Typst `times [`; the Typst named
-  -- arguments `delim` and `augment` of its `mat(…)`
-  | barr | earr | timesLbk | delimK | augK
+  -- makearray: LaTeX `\begin{array}{l|l}` `\end{array}`
+  | barr | earr
+  -- a constant matrix wider than `bmatrix` allows: LaTeX `\begin{array}{c…c}`, one `c` per
+  -- column (`n` of them), closed by `\end{array}`
+  | barrC (n : Nat)
   -- a set of names, LaTeX `\{` `\}`, Typst `{` `}` (the `args` of a `faq`)
   | lset | rset
   deriving DecidableEq, Repr
