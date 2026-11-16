@@ -1014,6 +1014,9 @@ def _p_opn(c: Ctx, f: int, n: str, ts: list, i: int):
             fr = _p_fields(c, f, ts, j + 1)
             if vs is None or fr is None or _at(ts, fr[1]) != K.RP:
                 return None
+            ks = [k for k, _ in fr[0]]
+            if "op" in ks or "args" in ks or not _nodup_keys(fr[0]):
+                return None
             x = mk_node(n, vs, fr[0])
             # canonical only: the node the printer writes in this call form
             return (x, fr[1] + 1) if prints_call_form(c, x) else None

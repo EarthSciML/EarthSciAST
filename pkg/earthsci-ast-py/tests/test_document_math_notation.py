@@ -306,3 +306,22 @@ def test_call_form_reads_a_key_the_printer_escapes():
     # call form still reads it
     e = j({"op": "custom", "args": ["x"], "a%b": 1})
     assert parse_latex(S, r"\operatorname{custom}(x; \mathrm{a{\char037}b} = 1)") == e
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        r"\mathrm{args} = [], \mathrm{expr} = x",
+        r'\mathrm{op} = \text{"g"}',
+        r'\mathrm{op} = \text{"g"}, \mathrm{scheme} = 1',
+        r"\mathrm{scheme} = 1, \mathrm{scheme} = 2",
+    ],
+)
+def test_call_form_refuses_repeated_or_reserved_keys(fields):
+    assert parse_latex(S, r"\operatorname{custom}(x; " + fields + ")") is None
+
+
+def test_call_form_refuses_repeated_or_reserved_keys_typst():
+    assert parse_typst(S, 'op("custom")(x; upright("op") = #"g")') is None
+    assert parse_typst(S, 'op("custom")(x; upright("args") = #(1,))') is None
+    assert parse_typst(S, 'op("custom")(x; upright("a") = 1, upright("a") = 2)') is None
