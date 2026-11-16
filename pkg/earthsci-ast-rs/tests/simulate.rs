@@ -1087,7 +1087,11 @@ fn test_error_grad_in_array_simulator_rejected() {
             rhs: faq_body,
         }],
     );
-    let err = match ArrayCompiled::from_model(&model, &std::collections::HashMap::new()) {
+    let err = match ArrayCompiled::from_model_with_arrays(
+        &model,
+        &std::collections::HashMap::new(),
+        None,
+    ) {
         Ok(_) => panic!("expected error, got Ok"),
         Err(e) => e,
     };
@@ -1168,7 +1172,11 @@ fn test_error_unknown_variable_in_array_model_rejected() {
         system_kind: None,
     };
 
-    let err = match ArrayCompiled::from_model(&model, &std::collections::HashMap::new()) {
+    let err = match ArrayCompiled::from_model_with_arrays(
+        &model,
+        &std::collections::HashMap::new(),
+        None,
+    ) {
         Ok(_) => panic!("expected error for undeclared variable, got Ok"),
         Err(e) => e,
     };

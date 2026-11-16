@@ -1,6 +1,6 @@
 //! Compile path: model → [`ArrayCompiled`]. Array-op / spatial-model file
 //! detection, subsystem mounting (esm-spec §4.6), ragged keyed-factor scope
-//! resolution (RFC §5.4), the staged [`ArrayCompiled::from_model`] build, the
+//! resolution (RFC §5.4), the staged [`ArrayCompiled::from_model_with_arrays`] build, the
 //! build-time field evaluators, and the shape-inference / LHS-parsing
 //! lowering helpers.
 
@@ -694,7 +694,7 @@ impl ArrayCompiled {
     /// pipeline flattens first and reaches the array runtime through here
     /// (ess-14f.8).
     ///
-    /// The flattened system splits variables into typed maps; [`Self::from_model`]
+    /// The flattened system splits variables into typed maps; [`Self::from_model_with_arrays`]
     /// expects a single registry discriminated by [`ModelVariable::var_type`].
     /// We merge them back into one synthetic [`Model`] (each variable already
     /// carries its `var_type`) and delegate, so every downstream stage — shape
@@ -837,19 +837,11 @@ impl ArrayCompiled {
     }
 
     /// Build from a single [`Model`] and the document-scoped `index_sets`
-    /// registry (RFC semiring-faq-unified-ir §5.2, v0.8.0). The registry lives
-    /// on the top-level document and is shared by all models, so it is passed in
-    /// explicitly; pass an empty map for a model with no `{ "from": <set> }`
-    /// range references.
-    pub fn from_model(
-        model: &Model,
-        index_sets: &HashMap<String, IndexSet>,
-    ) -> Result<Self, CompileError> {
-        Self::from_model_with_arrays(model, index_sets, None)
-    }
-
-    /// [`from_model`](Self::from_model) with a caller-supplied factor-array
-    /// channel for the build-time value-invention engine.
+    /// registry (RFC semiring-faq-unified-ir §5.2), with a caller-supplied
+    /// factor-array channel for the build-time value-invention engine. The
+    /// registry lives on the top-level document and is shared by all models,
+    /// so it is passed in explicitly; pass an empty map for a model with no
+    /// `{ "from": <set> }` range references.
     ///
     /// `vi_arrays` is overlaid on the `const`-literal factors the document
     /// carries (caller wins on a name collision — see `vi_factor_arrays`) and
@@ -860,8 +852,7 @@ impl ArrayCompiled {
     /// without this channel the gate has no envelopes to build and the producer
     /// invents nothing.
     ///
-    /// `None` is exactly [`from_model`](Self::from_model) — every existing
-    /// caller is unaffected.
+    /// `None` supplies no arrays beyond the document's own.
     pub fn from_model_with_arrays(
         model: &Model,
         index_sets: &HashMap<String, IndexSet>,
@@ -1300,7 +1291,7 @@ impl ArrayCompiled {
 // ============================================================================
 // `from_model` build stages. Each function is one numbered stage of the
 // compile pipeline (its number matches the stage comment in
-// [`ArrayCompiled::from_model`], which composes them in order); the bodies are
+// [`ArrayCompiled::from_model_with_arrays`], which composes them in order); the bodies are
 // extracted verbatim from the former inline implementation.
 // ============================================================================
 
@@ -3514,7 +3505,7 @@ fn lower_algebraic_body(
 /// classification — a single-model (`from_file`) build must fold
 /// coordinate-expression / broadcast-constant ics into `u0` exactly as the
 /// coupled path does. The RHS collected here has already been range-resolved
-/// against the document registry by [`ArrayCompiled::from_model`].
+/// against the document registry by [`ArrayCompiled::from_model_with_arrays`].
 fn classify_field_ics(model: &Model) -> Vec<(String, Expr)> {
     let mut field_ics: Vec<(String, Expr)> = Vec::new();
     for eq in &model.equations {
@@ -6889,7 +6880,7 @@ mod updated_array_default_tests {
     }
 
     fn build_err(model: &Model, index_sets: &HashMap<String, IndexSet>) -> String {
-        match ArrayCompiled::from_model(model, index_sets) {
+        match ArrayCompiled::from_model_with_arrays(model, index_sets, None) {
             Ok(_) => panic!("the build must fail"),
             Err(e) => format!("{e:?}"),
         }
@@ -6928,7 +6919,7 @@ mod updated_array_default_tests {
             "type": "parameter", "shape": ["x"], "default": [1.0, 2.0, 3.0],
             "update": data_fed()
         }));
-        let c = ArrayCompiled::from_model(&model, &sets).expect("builds");
+        let c = ArrayCompiled::from_model_with_arrays(&model, &sets, None).expect("builds");
         assert!(c.forcing_names().any(|n| n == "p"));
         let d = c.forcing_default("p").flatten().expect("a default field");
         assert_eq!(d.iter().copied().collect::<Vec<_>>(), vec![1.0, 2.0, 3.0]);
@@ -7021,7 +7012,7 @@ mod updated_array_default_tests {
             "type": "parameter", "shape": ["z"], "default": [1.0, 2.0, 3.0, 4.0],
             "update": data_fed()
         }));
-        let c = ArrayCompiled::from_model(&model, &sets).expect("builds");
+        let c = ArrayCompiled::from_model_with_arrays(&model, &sets, None).expect("builds");
         let d = c.forcing_default("p").flatten().expect("a default field");
         assert_eq!(d.shape(), &[4]);
 

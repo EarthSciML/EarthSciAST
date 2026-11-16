@@ -918,7 +918,7 @@ impl ArrayCompiled {
     /// (esm-spec §11.4.1) into per-slot initial values keyed by flat state slot.
     /// A loaded-field RHS (`InitialConditions.O3_init`) is read from the
     /// provider-seeded forcing buffer and folded into the lifted grid state's cells
-    /// (column-major, matching the slot enumeration in [`Self::from_model`]); a
+    /// (column-major, matching the slot enumeration in [`Self::from_model_with_arrays`]); a
     /// constant RHS broadcasts to every cell. Empty on the non-`ic` path.
     ///
     /// `records`, when given, receives one [`FieldIcRecord`] per evaluation

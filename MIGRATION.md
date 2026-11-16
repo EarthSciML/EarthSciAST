@@ -1671,6 +1671,14 @@ rather than anything the format defines are gone, with the library's
 | `esm schema-check` | `esm validate` | `deleted` |
 | `earthsci_ast::extension::analysis::*` | — | `deleted` |
 
+### Never-constructed error variants and `ArrayCompiled::from_model`
+
+| Before | After | Kind |
+|---|---|---|
+| `EsmError::ExpressionEvaluation`, `EsmError::UnitValidation`, `EsmError::Other` | — (nothing returned them) | `deleted` |
+| `FlattenError::ContributionsOutOfStep`, `FlattenError::MalformedLoaderSubsystem` | — (nothing returned them) | `deleted` |
+| `simulate_array::ArrayCompiled::from_model(model, index_sets)` | `ArrayCompiled::from_model_with_arrays(model, index_sets, None)` | `deleted` |
+
 ---
 
 ## Where the contract lives
